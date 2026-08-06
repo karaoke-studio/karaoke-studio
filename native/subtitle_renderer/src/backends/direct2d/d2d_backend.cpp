@@ -2958,6 +2958,20 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cached.rubies.push_back(std::move(ruby));
             }
         }
+        // Ruby annotations are stored in source-file order.  RL exports do not
+        // guarantee that @RubyN entries follow their target characters' visual
+        // order (for example, 出 may be listed before 逃 in 逃げ出したいと).
+        // The interference pass below compares neighbouring ruby boxes and
+        // shifts all text from the current target onward, so feeding it source
+        // order can mistake a right-to-left jump for an overlap and move the
+        // whole line underneath the wrong annotation.  Painter sorts the same
+        // pass by target index; keep Direct2D on that shared layout semantic.
+        std::stable_sort(
+            cached.rubies.begin(), cached.rubies.end(),
+            [](const Impl::CachedRuby &left, const Impl::CachedRuby &right) {
+                return left.firstCharIndex < right.firstCharIndex;
+            }
+        );
         if (!style.vertical && !style.rightToLeft && cached.rubies.size() > 1) {
             auto translateGeometryX = [&](Microsoft::WRL::ComPtr<ID2D1Geometry> &geometry,
                                           float offsetX,

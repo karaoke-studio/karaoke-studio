@@ -260,6 +260,14 @@ class RubyAnnotation:
     - ``reading_part_ms``：mora 时间戳序列（毫秒，与原始 ``[t]`` 数量相同）
     - ``reading_parts``：被内嵌时间戳分开的原始读音 part；连续时间戳会保留空 part
     - ``pos_start_ms`` / ``pos_end_ms``：本条注音在歌曲时间轴上的生效区间
+    - ``target_char_start`` / ``target_char_end``：目标正文字符的**行内**半开区间
+
+    ``target_*`` 是加载时定死的权威目标。``.sug`` 的逐字注音本来就带精确索引，
+    RL / nicokara 的 ``@RubyN`` 则在解析时按 N3 的位置驱动算法解析一次。两者都填
+    这两个字段后，渲染侧不再需要按 ``kanji`` 回头做文本搜索——那套搜索只能返回
+    一个出现，同一基字在一行内重复时（``ケロケロケロ…``）会把全部注音叠到第一个
+    出现上，长短基字重叠时（``呼`` 与 ``呼吸``）又会两条都画出来。
+    ``None`` 表示旧数据，此时回落到历史的文本 + 时间匹配。
     """
 
     kanji: str
@@ -268,6 +276,8 @@ class RubyAnnotation:
     pos_start_ms: int = 0
     pos_end_ms: int = 0
     reading_parts: list[str] = field(default_factory=list)
+    target_char_start: Optional[int] = None
+    target_char_end: Optional[int] = None
 
 
 @dataclass

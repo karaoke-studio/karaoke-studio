@@ -4449,8 +4449,15 @@ def test_gpu_n3_adjacent_ruby_interference_shifts_following_text(monkeypatch) ->
                 pos_start_ms=start,
                 pos_end_ms=start + 1_000,
             )
-            for char, start in (("A", 0), ("B", 1_000), ("C", 2_000))
+            # RL keeps @RubyN in declaration order, which need not match the
+            # targets' visual order.  Direct2D must sort its interference pass
+            # by target position just like Painter does.
+            for char, start in (("C", 2_000), ("B", 1_000), ("A", 0))
         ],
+    )
+    visually_sorted_track = TimingTrack(
+        lines=[line],
+        rubies=list(reversed(track.rubies)),
     )
     style = _g1_style(
         layout_semantics="n3_1074",
@@ -4479,8 +4486,16 @@ def test_gpu_n3_adjacent_ruby_interference_shifts_following_text(monkeypatch) ->
         _, gpu = _render_g1_frames(
             renderer, style, (1_500,), force_warp=True, track=track
         )
+        _, visually_sorted_gpu = _render_g1_frames(
+            renderer,
+            style,
+            (1_500,),
+            force_warp=True,
+            track=visually_sorted_track,
+        )
     painter = _render_painter_oracle(style, t_ms=1_500, track=track)
 
+    assert gpu == visually_sorted_gpu
     gpu_bounds = _payload_alpha_bounds(gpu[0])
     painter_bounds = _payload_alpha_bounds(painter)
     assert all(

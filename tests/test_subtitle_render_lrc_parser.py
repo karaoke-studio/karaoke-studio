@@ -233,7 +233,15 @@ def test_ruby_with_mora_timestamps_in_reading():
     assert r.pos_end_ms == 5000
 
 
-def test_ruby_entry_without_position_is_kept_as_global_annotation():
+def test_ruby_entry_without_position_resolves_to_its_occurrence():
+    """A position-less entry is still pinned to the character it landed on.
+
+    N3 runs every entry -- bounded or not -- through the same position-driven
+    scan, so the annotation ends up owning a concrete character range and its
+    own wipe interval.  Leaving it "global" is what let a short entry's reading
+    be drawn on top of a longer entry's base text.
+    """
+
     text = (
         "[00:03:00]哀[00:04:00]\n"
         "\n"
@@ -246,8 +254,9 @@ def test_ruby_entry_without_position_is_kept_as_global_annotation():
     assert r.reading == "かな"
     assert r.reading_part_ms == [290]
     assert r.reading_parts == ["か", "な"]
-    assert r.pos_start_ms == 0
-    assert r.pos_end_ms == 0
+    assert r.pos_start_ms == 3000
+    assert r.pos_end_ms == 4000
+    assert (r.target_char_start, r.target_char_end) == (0, 1)
 
 
 def test_ruby_consecutive_timestamps_preserve_empty_parts():
@@ -274,6 +283,26 @@ def test_multiple_ruby_entries():
     assert len(track.rubies) == 2
     assert track.rubies[0].kanji == "漢"
     assert track.rubies[1].kanji == "字"
+
+
+def test_rl_open_ruby_ranges_include_boundary_and_later_entry_wins():
+    text = (
+        "[00:01:00]子[00:02:00]\n"
+        "[00:03:00]迷[00:04:00]子[00:05:00]\n"
+        "\n"
+        "@Ruby1=子,こ,,[00:04:00]\n"
+        "@Ruby2=子,ご,[00:04:00]\n"
+    )
+
+    track = parse_nicokara_lrc(text)
+
+    assert [
+        (ruby.reading, ruby.pos_start_ms, ruby.pos_end_ms)
+        for ruby in track.rubies
+    ] == [
+        ("こ", 1_000, 2_000),
+        ("ご", 4_000, 5_000),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -579,3 +608,60 @@ def test_load_lrc_applies_single_visible_emoji_token_inline(tmp_path):
     symbol = track.lines[0].inline_guide_symbols[0]
     assert symbol.kind == "bitmap"
     assert symbol.bitmap_before_path == str(tmp_path / "note.png")
+
+
+def test_longer_ruby_base_wins_and_blocks_the_shorter_entry():
+    """``呼吸`` claims both characters, so ``呼``'s own reading cannot join it.
+
+    N3 sorts entries by base length descending and skips any shorter candidate
+    once a longer one matched, then jumps past the whole group.  Searching the
+    line per entry instead let both annotations resolve onto 呼 and drew
+    「よ」「い」「き」 side by side above 呼吸.  ``呼`` must still win where it
+    stands alone.
+    """
+
+    text = (
+        "[00:01:00]呼[00:01:20]ん[00:01:40]で[00:02:00]\n"
+        "[00:03:00]呼吸[00:03:40]も[00:04:00]\n"
+        "\n"
+        "@Ruby1=呼,よ\n"
+        "@Ruby2=呼吸,い[00:00:17]き\n"
+    )
+
+    track = parse_nicokara_lrc(text)
+
+    assert [
+        (
+            ruby.kanji,
+            ruby.reading,
+            ruby.target_char_start,
+            ruby.target_char_end,
+        )
+        for ruby in track.rubies
+    ] == [
+        ("呼", "よ", 0, 1),
+        ("呼吸", "いき", 0, 2),
+    ]
+    assert track.rubies[0].pos_start_ms == 1_000
+    assert track.rubies[1].pos_start_ms == 3_000
+
+
+def test_repeated_ruby_base_in_one_line_gets_one_annotation_each():
+    """Every repeat of a base text owns its own annotation and character range.
+
+    A single entry used to resolve to one occurrence only, so a line built from
+    the same pair over and over stacked all of its readings on the first match.
+    """
+
+    text = (
+        "[00:01:00]ケ[00:01:20]ロ[00:01:40]ケ[00:01:60]ロ[00:02:00]\n"
+        "\n"
+        "@Ruby1=ケ,け\n"
+        "@Ruby2=ロ,ろ\n"
+    )
+
+    track = parse_nicokara_lrc(text)
+
+    assert sorted(
+        (ruby.target_char_start, ruby.reading) for ruby in track.rubies
+    ) == [(0, "け"), (1, "ろ"), (2, "け"), (3, "ろ")]

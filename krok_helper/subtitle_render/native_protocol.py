@@ -315,6 +315,14 @@ def ruby_to_ir(ruby: RubyAnnotation) -> dict[str, Any]:
         "reading_parts": list(ruby.reading_parts),
         "pos_start_ms": int(ruby.pos_start_ms),
         "pos_end_ms": int(ruby.pos_end_ms),
+        # Loader-resolved target; -1 means "not resolved, search by text" so the
+        # sidecar keeps Painter's fallback for projects saved before this field.
+        "target_char_start": (
+            -1 if ruby.target_char_start is None else int(ruby.target_char_start)
+        ),
+        "target_char_end": (
+            -1 if ruby.target_char_end is None else int(ruby.target_char_end)
+        ),
     }
 
 

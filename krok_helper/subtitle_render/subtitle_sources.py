@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import re
 import unicodedata
 from pathlib import Path
@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     TimingTrackMeta,
 )
+from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 
 # 时间戳：``[MM:SS:CC]``（冒号厘秒，nicokara）/ ``[MM:SS.CC]``（点号厘秒，标准 LRC）/
 # ``[MM:SS.mmm]``（点号毫秒，3 位）。秒与子秒间允许 ``:`` 或 ``.``；子秒 2 位=厘秒、3 位=毫秒。
@@ -49,6 +50,21 @@ _EMOJI_TAG_RE = re.compile(r"^@Emoji\d*=(.*)$", re.IGNORECASE)
 # 等行被当成正文（幻影空行 + 丢失歌手定义）。正文行总以 ``【…】`` 或 ``[ts]`` 开头，
 # 不以 ``@`` 开头，故按 ``@key=`` 判定边界是安全的。
 _META_PATTERN = re.compile(r"^\s*@\w+\s*=", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class _ParsedRubyEntry:
+    """An ``@RubyN`` entry plus its optional RL occurrence filter.
+
+    RhythmicaLyrics uses the trailing positions to select occurrences, not as
+    the ruby wipe interval.  Either edge may be omitted and both edges are
+    inclusive.  Keeping ``None`` here is essential: collapsing a start-only
+    range to ``[start, start]`` drops the exact boundary occurrence.
+    """
+
+    ruby: RubyAnnotation
+    position_start_ms: Optional[int]
+    position_end_ms: Optional[int]
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +91,8 @@ def parse_nicokara_lrc(text: str) -> TimingTrack:
     body_lines, tail_lines = _split_body_tail(_normalized_lines(text))
 
     timing_lines = _parse_body_lines(body_lines)
-    meta, rubies = _parse_tail(tail_lines)
+    meta, ruby_entries = _parse_tail(tail_lines)
+    rubies = _resolve_positioned_rubies(timing_lines, ruby_entries)
     # LRC 本身不保存分页和段落边界。这里只恢复歌词、空行和计时语义，
     # 进入字幕项目后再由该字幕源的加载设置统一生成 page_plan。
     return TimingTrack(meta=meta, lines=timing_lines, rubies=rubies)
@@ -624,9 +641,9 @@ def _text_elements(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _parse_tail(tail_lines: Iterable[str]) -> Tuple[TimingTrackMeta, list[RubyAnnotation]]:
+def _parse_tail(tail_lines: Iterable[str]) -> Tuple[TimingTrackMeta, list[_ParsedRubyEntry]]:
     meta = TimingTrackMeta()
-    rubies: list[RubyAnnotation] = []
+    rubies: list[_ParsedRubyEntry] = []
     for raw in tail_lines:
         ln = raw.strip()
         if ln == "":
@@ -684,7 +701,7 @@ def _parse_signed_int(value: str, default: int) -> int:
     return sign * n
 
 
-def _parse_ruby_entry(payload: str) -> Optional[RubyAnnotation]:
+def _parse_ruby_entry(payload: str) -> Optional[_ParsedRubyEntry]:
     """解析单条 ``@RubyN`` 的右值：``漢字,読み[t1][t2]...,pos1,pos2``。
 
     - ``pos1`` / ``pos2`` 是 ``[MM:SS:CC]`` 格式（含中括号）
@@ -712,16 +729,22 @@ def _parse_ruby_entry(payload: str) -> Optional[RubyAnnotation]:
     reading_parts.append(reading_raw[cursor:])
     reading = "".join(reading_parts)
 
-    pos_start_ms = _extract_first_ts(pos1_raw) or 0
-    pos_end_ms = _extract_first_ts(pos2_raw) or pos_start_ms
+    position_start_ms = _extract_first_ts(pos1_raw)
+    position_end_ms = _extract_first_ts(pos2_raw)
+    stored_start_ms = position_start_ms or 0
+    stored_end_ms = position_end_ms if position_end_ms is not None else stored_start_ms
 
-    return RubyAnnotation(
-        kanji=kanji,
-        reading=reading,
-        reading_part_ms=reading_part_ms,
-        pos_start_ms=pos_start_ms,
-        pos_end_ms=pos_end_ms,
-        reading_parts=reading_parts,
+    return _ParsedRubyEntry(
+        ruby=RubyAnnotation(
+            kanji=kanji,
+            reading=reading,
+            reading_part_ms=reading_part_ms,
+            pos_start_ms=stored_start_ms,
+            pos_end_ms=stored_end_ms,
+            reading_parts=reading_parts,
+        ),
+        position_start_ms=position_start_ms,
+        position_end_ms=position_end_ms,
     )
 
 
@@ -730,3 +753,140 @@ def _extract_first_ts(raw: str) -> Optional[int]:
     if not m:
         return None
     return _ts_to_ms(*m.groups())
+
+
+# N3 ``LyricsRubyInfo`` 的 EndTime 缺省值（99:59:99）：等价于「没有上界」。
+_RL_OPEN_END_MS = 5_999_990
+
+
+def _resolve_positioned_rubies(
+    lines: list[TimingLine], entries: list[_ParsedRubyEntry]
+) -> list[RubyAnnotation]:
+    """Assign the ``@RubyN`` entries position by position, the way N3 does.
+
+    N3's ``LyricsInfosComplementer.ComplementRubies`` sorts entries by base-text
+    length descending and then walks every lyrics line left to right.  At each
+    character position it takes the longest entry whose base text is a prefix
+    there and whose ``[BeginTime, EndTime]`` *contains* the base group's own
+    span, records it, and jumps past the whole group.
+
+    Three consequences matter, and none of them fall out of searching the line
+    for each entry's text instead:
+
+    * a shorter entry never competes with a longer one that matched, so ``呼吸``
+      claims both characters and ``呼``'s own reading cannot also land there;
+    * a character can only ever receive one annotation;
+    * every repeat of one base text in a line gets its own annotation, which is
+      what a line like ``ケロケロケロ…`` needs.
+
+    Each resolved annotation carries the exact ``target_char_*`` range, so the
+    renderers consume it directly rather than re-deriving it by text search.
+    Entries that match nowhere are kept unchanged: the parser stays lossless for
+    metadata round-trips, and they remain subject to the historical fallback.
+    """
+
+    # Longest base first; ``sorted`` is stable so equal lengths keep file order,
+    # which is how N3's strict `<` score comparison breaks ties as well.
+    ranked = sorted(
+        enumerate(entries),
+        key=lambda item: -len(item[1].ruby.kanji),
+    )
+    resolved: list[tuple[int, RubyAnnotation]] = []
+    matched_orders: set[int] = set()
+
+    for line in lines:
+        if not line.chars:
+            continue
+        intervals = compute_char_intervals(line)
+        index = 0
+        while index < len(line.chars):
+            best: Optional[tuple[int, _ParsedRubyEntry, int, int, int]] = None
+            for order, entry in ranked:
+                ruby = entry.ruby
+                if not ruby.kanji or not ruby.reading:
+                    continue
+                span = _base_char_span(line, index, ruby.kanji)
+                if span is None:
+                    continue
+                group_start = intervals[index][0]
+                group_end = intervals[index + span - 1][1]
+                begin_bound = (
+                    0 if entry.position_start_ms is None else entry.position_start_ms
+                )
+                end_bound = (
+                    _RL_OPEN_END_MS
+                    if entry.position_end_ms is None
+                    else entry.position_end_ms
+                )
+                if begin_bound > group_start or end_bound < group_end:
+                    continue
+                if best is None:
+                    best = (order, entry, span, group_start, group_end)
+                    continue
+                if best[2] != span:
+                    # N3 skips any entry shorter than the one already chosen.
+                    continue
+                best_entry = best[1]
+                best_begin = (
+                    0
+                    if best_entry.position_start_ms is None
+                    else best_entry.position_start_ms
+                )
+                best_end = (
+                    _RL_OPEN_END_MS
+                    if best_entry.position_end_ms is None
+                    else best_entry.position_end_ms
+                )
+                if (group_start - begin_bound) < (group_start - best_begin) or (
+                    (group_start - begin_bound) == (group_start - best_begin)
+                    and (end_bound - group_end) < (best_end - group_end)
+                ):
+                    best = (order, entry, span, group_start, group_end)
+            if best is None:
+                index += 1
+                continue
+            order, entry, span, group_start, group_end = best
+            matched_orders.add(order)
+            resolved.append(
+                (
+                    order,
+                    replace(
+                        entry.ruby,
+                        pos_start_ms=group_start,
+                        pos_end_ms=group_end,
+                        target_char_start=index,
+                        target_char_end=index + span,
+                    ),
+                )
+            )
+            index += span
+
+    unmatched = [
+        (order, entry.ruby)
+        for order, entry in enumerate(entries)
+        if order not in matched_orders
+    ]
+    combined = unmatched + resolved
+    combined.sort(key=lambda item: item[0])
+    return [ruby for _order, ruby in combined]
+
+
+def _base_char_span(line: TimingLine, index: int, kanji: str) -> Optional[int]:
+    """Characters consumed if ``kanji`` is a prefix at ``index``, else ``None``.
+
+    The base text has to land on character boundaries: our characters are N3
+    text elements (a combining sequence is one character), so a partial overlap
+    is not a match rather than a fractional one.
+    """
+
+    remaining = kanji
+    count = 0
+    while remaining and index + count < len(line.chars):
+        text = line.chars[index + count].text
+        if not text or not remaining.startswith(text):
+            return None
+        remaining = remaining[len(text):]
+        count += 1
+    if remaining or count == 0:
+        return None
+    return count

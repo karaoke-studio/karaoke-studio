@@ -130,6 +130,10 @@ struct RubyAnnotation {
     int posEndMs = 0;
     int sourceIndex = 0;
     int sourceOffsetMs = 0;
+    // Loader-resolved, line-local, half-open target range; -1 = unresolved, in
+    // which case the historical text search runs (see rubyTargetIndices).
+    int targetCharStart = -1;
+    int targetCharEnd = -1;
 };
 
 struct PaintFillSpec {
@@ -2653,6 +2657,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             }
             ruby.posStartMs = intValue(rubyObject, QStringLiteral("pos_start_ms"), 0);
             ruby.posEndMs = intValue(rubyObject, QStringLiteral("pos_end_ms"), 0);
+            ruby.targetCharStart = intValue(
+                rubyObject, QStringLiteral("target_char_start"), -1
+            );
+            ruby.targetCharEnd = intValue(
+                rubyObject, QStringLiteral("target_char_end"), -1
+            );
             ruby.sourceIndex = static_cast<int>(sourceIndex);
             ruby.sourceOffsetMs = sourceOffsetMs;
             cfg.rubies.push_back(std::move(ruby));
@@ -3829,6 +3839,29 @@ std::vector<int> rubyTargetIndices(
     const TimingLine &line,
     const std::vector<std::pair<int, int>> &intervals
 ) {
+    // Mirrors Painter's _ruby_explicit_target_indices: the loader already knows
+    // the exact characters for .sug per-character ruby, and searching by text
+    // instead collapses every repeat of one base onto its first occurrence.
+    // Both guards below keep an annotation resolved against different line
+    // contents from landing on an unrelated character.
+    if (ruby.targetCharStart >= 0
+        && ruby.targetCharEnd > ruby.targetCharStart
+        && ruby.targetCharEnd <= static_cast<int>(line.chars.size())) {
+        QString targetText;
+        for (int index = ruby.targetCharStart; index < ruby.targetCharEnd; ++index) {
+            targetText += line.chars[static_cast<std::size_t>(index)].text;
+        }
+        if (ruby.kanji.isEmpty() || targetText == ruby.kanji) {
+            std::vector<int> explicitIndices;
+            explicitIndices.reserve(
+                static_cast<std::size_t>(ruby.targetCharEnd - ruby.targetCharStart)
+            );
+            for (int index = ruby.targetCharStart; index < ruby.targetCharEnd; ++index) {
+                explicitIndices.push_back(index);
+            }
+            return explicitIndices;
+        }
+    }
     const auto timeIndices = rubyTimeIndices(ruby, intervals);
     if (!ruby.kanji.isEmpty()) {
         const auto span = findRubyTextSpan(ruby.kanji, line, timeIndices);
@@ -3893,6 +3926,30 @@ std::optional<std::pair<double, double>> rubyTargetXRange(
     const LineLayout &layout,
     const std::vector<std::pair<int, int>> &intervals
 ) {
+    // Same precedence as rubyTargetIndices: an explicit loader target wins over
+    // the text search so repeats of one base keep their own x.
+    const auto resolved = rubyTargetIndices(ruby, line, intervals);
+    if (!resolved.empty()
+        && ruby.targetCharStart >= 0
+        && ruby.targetCharEnd > ruby.targetCharStart
+        && resolved.front() == ruby.targetCharStart) {
+        double left = std::numeric_limits<double>::max();
+        double right = std::numeric_limits<double>::lowest();
+        for (int index : resolved) {
+            if (index < 0 || index >= static_cast<int>(layout.charLefts.size())) {
+                continue;
+            }
+            left = std::min(left, layout.charLefts[static_cast<std::size_t>(index)]);
+            right = std::max(
+                right,
+                layout.charLefts[static_cast<std::size_t>(index)]
+                    + layout.charWidths[static_cast<std::size_t>(index)]
+            );
+        }
+        if (left <= right) {
+            return std::make_pair(left, right);
+        }
+    }
     if (!ruby.kanji.isEmpty()) {
         const auto timeIndices = rubyTimeIndices(ruby, intervals);
         const auto span = findRubyTextSpan(ruby.kanji, line, timeIndices);

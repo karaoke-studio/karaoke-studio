@@ -355,6 +355,11 @@ def _ruby_annotation_for_group(
         pos_start_ms=start_ms,
         pos_end_ms=end_ms,
         reading_parts=reading_parts,
+        # ``.sug`` stores ruby per character, so the group bounds are exact.
+        # Keeping them is what stops a line like ケロケロケロ… from stacking
+        # every け on the first ケ once the renderer has to guess by text.
+        target_char_start=start,
+        target_char_end=end,
     )
 
 

@@ -12572,10 +12572,38 @@ def _ruby_target_indices(
     line: TimingLine,
     intervals: list[tuple[int, int]],
 ) -> list[int]:
+    explicit = _ruby_explicit_target_indices(ruby, line)
+    if explicit is not None:
+        return explicit
     time_indices = _ruby_time_indices(ruby, intervals)
     if ruby.kanji:
         return _find_ruby_text_indices(ruby.kanji, line, preferred_indices=time_indices)
     return time_indices
+
+
+def _ruby_explicit_target_indices(
+    ruby: RubyAnnotation,
+    line: TimingLine,
+) -> list[int] | None:
+    """Return the loader-resolved target, or ``None`` to fall back to search.
+
+    The range is line-local and half-open.  It is rejected when it does not fit
+    the line or when the base text no longer matches, so a track whose lines
+    changed after the annotation was resolved still renders through the historical
+    text/time matching instead of landing on an unrelated character.
+    """
+
+    start = ruby.target_char_start
+    end = ruby.target_char_end
+    if start is None or end is None:
+        return None
+    if start < 0 or end <= start or end > len(line.chars):
+        return None
+    if ruby.kanji:
+        target_text = "".join(char.text for char in line.chars[start:end])
+        if target_text != ruby.kanji:
+            return None
+    return list(range(start, end))
 
 
 def _resolve_char_ruby_groups(
@@ -12652,7 +12680,16 @@ def _effective_ruby_for_target(
         return ruby
     start = min(intervals[index][0] for index in valid_indices)
     end = max(intervals[index][1] for index in valid_indices)
-    if ruby.pos_end_ms > ruby.pos_start_ms and start < ruby.pos_end_ms < end:
+    # Only trust the exported end when the annotation's own clock starts with the
+    # target.  A ``.sug`` ruby carries the raw per-character timestamps, which can
+    # disagree with the recomputed intervals (pauses, multi-character blocks); once
+    # the loader pins the target explicitly, such a stale window would otherwise
+    # shrink the wipe to a few milliseconds and make the base text jump to full.
+    if (
+        ruby.pos_end_ms > ruby.pos_start_ms
+        and ruby.pos_start_ms >= start
+        and start < ruby.pos_end_ms < end
+    ):
         end = ruby.pos_end_ms
     if start == ruby.pos_start_ms and end == ruby.pos_end_ms:
         return ruby
@@ -15960,6 +15997,12 @@ def _ruby_target_x_range(
     intervals: list[tuple[int, int]],
     char_x_ranges: list[tuple[int, int]],
 ) -> tuple[int, int] | None:
+    explicit = _ruby_explicit_target_indices(ruby, line)
+    if explicit is not None:
+        return (
+            min(char_x_ranges[index][0] for index in explicit),
+            max(char_x_ranges[index][1] for index in explicit),
+        )
     time_indices = _ruby_time_indices(ruby, intervals)
     if ruby.kanji:
         text_span = _find_ruby_text_span(ruby.kanji, line, preferred_indices=time_indices)

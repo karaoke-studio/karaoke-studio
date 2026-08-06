@@ -630,3 +630,53 @@ def test_sug_ruby_ignores_configured_pause_char_and_preserves_timing(
     assert ruby.reading_parts == ["い", "", "み"]
     assert ruby.reading_part_ms == [100, 200]
     assert all("~" not in item.reading for item in track.rubies)
+
+
+def test_sug_per_character_ruby_keeps_its_own_target(tmp_path):
+    """``.sug`` stores ruby per character, so each repeat keeps its own range.
+
+    Deriving the target by searching the line for the base text collapses every
+    け onto the first ケ in a line like ケロケロケロ…, because that search can
+    only return one occurrence.
+    """
+
+    import json
+
+    from krok_helper.subtitle_render.sug_project import load_sug_timing_track
+
+    characters = []
+    for index, char in enumerate("ケロケロケロ"):
+        characters.append(
+            {
+                "char": char,
+                "timestamps": [1_000 + index * 100],
+                "sentence_end_ts": 1_600 if index == 5 else None,
+                "linked_to_next": False,
+                "ruby": {"parts": [{"text": "け" if char == "ケ" else "ろ",
+                                    "offset_ms": 0}]},
+            }
+        )
+    payload = {
+        "version": "0.3.0",
+        "metadata": {"title": "", "artist": ""},
+        "audio_duration_ms": 5_000,
+        "singers": [{"id": "s1", "name": "x", "is_default": True}],
+        "sentences": [{"id": "l1", "singer_id": "s1", "characters": characters}],
+        "global_offset_ms": 0,
+    }
+    path = tmp_path / "kero.sug"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    track = load_sug_timing_track(path)
+
+    assert [
+        (ruby.target_char_start, ruby.target_char_end, ruby.reading)
+        for ruby in track.rubies
+    ] == [
+        (0, 1, "け"),
+        (1, 2, "ろ"),
+        (2, 3, "け"),
+        (3, 4, "ろ"),
+        (4, 5, "け"),
+        (5, 6, "ろ"),
+    ]
