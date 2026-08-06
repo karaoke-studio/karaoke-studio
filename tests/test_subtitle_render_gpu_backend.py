@@ -8689,3 +8689,59 @@ def test_gpu_export_pipeline_matches_serial_frames(monkeypatch) -> None:
     assert len(pipelined) == total
     assert sum(frame[3::4].count(0) < len(frame) // 4 for frame in pipelined) > 0
     assert pipelined == serial
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("margin_px", [0, -40])
+def test_gpu_negative_margins_clamp_like_painter(monkeypatch, margin_px: int) -> None:
+    """Both backends clamp the layout margins at zero, and must keep agreeing.
+
+    ``style_from_dict`` keeps a negative margin verbatim and an ``.n3proj`` import
+    or a hand-edited project can carry one, even though the property panel's
+    spin boxes stop at zero.  Painter guards every use with ``max(margin, 0)``
+    and the sidecar clamps while parsing the scene (``std::max(0, intValue(...))``
+    for the global config and for each per-line layout override).  Pin that pair
+    so dropping either guard shows up as a preview/export divergence.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(char, 0), TimingChar("B", 500)],
+                end_ms=1_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            )
+            for char in "AC"
+        ],
+        page_plan=TrackPagePlan([TrackSection([TrackPage(2, "default")])]),
+    )
+    style = _g1_style(
+        dual_line_layout=True,
+        line_y_position="bottom",
+        line_horizontal_layout="asymmetric",
+        smart_horizontal="none",
+        line_alignments=["left", "right"],
+        line_y_margin_px=margin_px,
+        horizontal_margin_px=margin_px,
+        upper_line_left_margin_px=margin_px,
+        lower_line_right_margin_px=margin_px,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        entry_anim="none",
+        exit_anim="none",
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1_200,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_200, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(frames[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 4
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
