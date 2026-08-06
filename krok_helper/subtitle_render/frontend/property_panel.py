@@ -833,6 +833,11 @@ class ScreenColorPicker(QWidget):
         self._active = True
         self._last_hovered_rgba: Optional[int] = None
         self._screens: list[tuple[QRect, QImage]] = []
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setInterval(16)
+        self._hover_timer.timeout.connect(
+            lambda: self._emit_hovered_color(QCursor.pos())
+        )
         desktop_geometry = QRect()
         for screen in QApplication.screens():
             geometry = screen.geometry()
@@ -854,7 +859,12 @@ class ScreenColorPicker(QWidget):
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.grabMouse()
         self.grabKeyboard()
-        QTimer.singleShot(0, lambda: self._emit_hovered_color(QCursor.pos()))
+        self._emit_hovered_color(QCursor.pos())
+        # Windows may stop delivering hover-only mouseMoveEvent events after
+        # the cursor leaves the application even though the final captured
+        # click still arrives. Poll the global cursor while picking so the
+        # inline swatch keeps previewing colors across the virtual desktop.
+        self._hover_timer.start()
 
     def color_at(self, global_position: QPoint) -> QColor:
         for geometry, image in self._screens:
@@ -910,6 +920,7 @@ class ScreenColorPicker(QWidget):
         if not self._active:
             return
         self._active = False
+        self._hover_timer.stop()
         self.releaseMouse()
         self.releaseKeyboard()
         self.hide()

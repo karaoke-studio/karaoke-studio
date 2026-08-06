@@ -15,6 +15,7 @@ from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import (  # noqa: E402
     QColor,
     QContextMenuEvent,
+    QCursor,
     QFont,
     QFocusEvent,
     QImage,
@@ -5192,6 +5193,36 @@ def test_direct_screen_picker_maps_virtual_desktop_coordinates(qapp):
 
     picker.cancel()
     qapp.processEvents()
+
+
+def test_direct_screen_picker_polls_global_cursor_without_mouse_move(
+    qapp, monkeypatch
+):
+    picker = ScreenColorPicker()
+    image = QImage(2, 2, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#123456"))
+    image.setPixelColor(1, 1, QColor("#ABCDEF"))
+    picker._screens = [(QRect(100, 200, 20, 20), image)]
+    monkeypatch.setattr(QCursor, "pos", staticmethod(lambda: QPoint(115, 215)))
+    for method_name in (
+        "show",
+        "raise_",
+        "activateWindow",
+        "setFocus",
+        "grabMouse",
+        "grabKeyboard",
+    ):
+        monkeypatch.setattr(picker, method_name, lambda *_args: None)
+
+    hovered: list[str] = []
+    picker.colorHovered.connect(lambda color: hovered.append(color.name().upper()))
+
+    picker.start()
+    assert picker._hover_timer.isActive()
+    assert hovered == ["#ABCDEF"]
+
+    picker.cancel()
+    assert not picker._hover_timer.isActive()
 
 
 def test_color_control_screen_action_requests_direct_screen_pick(qapp, monkeypatch):
