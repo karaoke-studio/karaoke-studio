@@ -209,10 +209,14 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
 
 ### 关键约束
 
-- **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
-- GPU 属于新增的 Windows 可选后端，不推翻上条约束；Windows 交互会话默认使用 G5
-  shared-memory/QImage 预览并默认启用 GPU 字幕导出。G6 DirectComposition 已按用户决定停止且产品
-  入口硬关闭，后续不得继续或重新开放；CPU QPainter 必须永久保留为 oracle 与 fallback。
+- **引擎选型已定**：离屏栅格化 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
+- **GPU（Direct2D）是主渲染口径**：Windows 交互会话默认使用 G5 shared-memory 预览并默认
+  启用 GPU 字幕导出，改动以 GPU 表现为准。CPU QPainter 保留为 fallback（无 GPU / 非 Windows /
+  GPU 初始化失败）与离线校验路径，**不再是判定正确性的 oracle**。G6 DirectComposition 已按用户
+  决定停止且产品入口硬关闭，后续不得继续或重新开放。
+- **两条后端必须给出同一布局结果**，出现分歧时按 `layout_semantics` 对应的语义判对错
+  （`n3_1074` 以 N3 10.74 逆向结论为准，`legacy` 以旧工程既有画面为准），不要因为"GPU 是主口径"
+  就直接把 GPU 的现状当成正确答案——行网格属于页级量，任何依赖行内容的实现都要先存疑。
 - **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
 - **只输出 MP4、只支持 60/120fps**；不做 30fps 原样输出、AVI 或 ARGB/透明 PNG 序列。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
