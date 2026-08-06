@@ -98,6 +98,8 @@ _DISPLAY_LINES_CACHE: (
     "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
 ) = OrderedDict()
 _LAYOUT_PASS = thread_local()
+# Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
+_OPACITY_LAYER_LOCAL = thread_local()
 _PAGE_PLACEMENT_CACHE_MAX = 24
 _PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[tuple[int, int, float, float], ...]]]" = (
     OrderedDict()
@@ -6668,29 +6670,119 @@ def _paint_line(
     )
     if animation.opacity <= 0.0:
         return
+
+    def draw(target: QPainter) -> None:
+        target.save()
+        try:
+            if animation.dx or animation.dy:
+                target.translate(animation.dx, animation.dy)
+            _paint_line_static(
+                target,
+                img_w,
+                img_h,
+                track,
+                line,
+                t_ms,
+                style,
+                baseline_y=baseline_y,
+                line_x=line_x,
+                lane=lane,
+                display_start_ms=display_start_ms,
+                display_end_ms=display_end_ms,
+                layout_cache_sig=layout_cache_sig,
+            )
+        finally:
+            target.restore()
+
+    if animation.opacity < 1.0:
+        _paint_through_opacity_layer(painter, animation.opacity, draw)
+        return
+    draw(painter)
+
+
+def _paint_through_opacity_layer(
+    painter: QPainter,
+    opacity: float,
+    draw,
+) -> None:
+    """Compose ``draw`` at full opacity, then blend the result once.
+
+    Mirrors N3's ``LineFade`` → ``PushOpacityLayer`` (Direct2D
+    ``PushLayer(LayerParameters{Opacity})``).  Setting the opacity on the painter
+    instead applies it to every single draw call, so a glyph body stops covering
+    its own edge, glow and shadow: those lower layers show through the
+    semi-transparent body and the line appears to change colour mid-animation.
+
+    The scratch buffer matches the target's device resolution and carries the
+    same world transform, so the rasterization is identical to drawing straight
+    onto the target -- only the final alpha blend differs.
+    """
+
+    device = painter.device()
+    physical_w = max(int(device.width()), 1)
+    physical_h = max(int(device.height()), 1)
+    buffer = _opacity_layer_buffer(physical_w, physical_h)
+    if buffer is None:
+        # Nothing sane to compose into; keep drawing rather than dropping the
+        # line, accepting the legacy per-call blending for this frame.
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * opacity)
+            draw(painter)
+        finally:
+            painter.restore()
+        return
+    buffer.setDevicePixelRatio(_device_pixel_ratio(device))
+    buffer.fill(0)
+    inner = QPainter(buffer)
+    try:
+        inner.setRenderHints(painter.renderHints())
+        inner.setTransform(painter.transform())
+        draw(inner)
+    finally:
+        inner.end()
     painter.save()
     try:
-        if animation.opacity < 1.0:
-            painter.setOpacity(painter.opacity() * animation.opacity)
-        if animation.dx or animation.dy:
-            painter.translate(animation.dx, animation.dy)
-        _paint_line_static(
-            painter,
-            img_w,
-            img_h,
-            track,
-            line,
-            t_ms,
-            style,
-            baseline_y=baseline_y,
-            line_x=line_x,
-            lane=lane,
-            display_start_ms=display_start_ms,
-            display_end_ms=display_end_ms,
-            layout_cache_sig=layout_cache_sig,
-        )
+        painter.setOpacity(painter.opacity() * opacity)
+        painter.resetTransform()
+        painter.drawImage(QPointF(0.0, 0.0), buffer)
     finally:
         painter.restore()
+
+
+def _device_pixel_ratio(device) -> float:
+    getter = getattr(device, "devicePixelRatioF", None)
+    if getter is None:
+        getter = getattr(device, "devicePixelRatio", None)
+    try:
+        return max(float(getter()), 0.01) if getter is not None else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _opacity_layer_buffer(physical_w: int, physical_h: int) -> QImage | None:
+    """Return a reusable scratch image, avoiding a per-frame allocation.
+
+    Entry/exit animations run for a few hundred milliseconds at a time, so one
+    cached buffer per size per thread keeps the steady state allocation-free.
+    """
+
+    cache = getattr(_OPACITY_LAYER_LOCAL, "buffers", None)
+    if cache is None:
+        cache = {}
+        _OPACITY_LAYER_LOCAL.buffers = cache
+    key = (physical_w, physical_h)
+    buffer = cache.get(key)
+    if buffer is None:
+        buffer = QImage(
+            physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied
+        )
+        if buffer.isNull():
+            return None
+        if len(cache) >= 4:
+            cache.clear()
+        cache[key] = buffer
+    return buffer
 
 
 def _paint_line_static(

@@ -441,6 +441,79 @@ std::pair<float, float> verticalGlyphOffset(
     return {0.0f, 0.0f};
 }
 
+// Mirrors N3's LineFade -> SubtitleAction.PushOpacityLayer: everything drawn
+// inside the layer is composed at full opacity and the finished result is
+// blended once.  Multiplying the opacity into every brush instead applies it to
+// each draw call, so a glyph body stops covering its own edge, glow and shadow;
+// those lower layers bleed through and the line looks like it changes colour
+// mid-animation.
+//
+// A Direct2D layer cannot survive SetTarget/EndDraw, and the line loop renders
+// glow into intermediate bitmaps first, so ``prepare`` (CreateLayer, which is
+// target independent) is decided up front while ``push`` waits until the final
+// target's BeginDraw and ``pop`` runs before its EndDraw.  N3 avoids the split
+// by handing its glow a second device context (DrawLineInfoBefore's workBitmap).
+class OpacityLayerScope {
+public:
+    OpacityLayerScope() = default;
+    OpacityLayerScope(const OpacityLayerScope &) = delete;
+    OpacityLayerScope &operator=(const OpacityLayerScope &) = delete;
+
+    ~OpacityLayerScope() {
+        pop();
+    }
+
+    bool prepare(ID2D1DeviceContext *context, float opacity) {
+        if (context == nullptr) {
+            return false;
+        }
+        Microsoft::WRL::ComPtr<ID2D1Layer> layer;
+        if (FAILED(context->CreateLayer(nullptr, &layer)) || !layer) {
+            return false;
+        }
+        context_ = context;
+        layer_ = std::move(layer);
+        opacity_ = opacity;
+        return true;
+    }
+
+    void push() {
+        if (context_ == nullptr || pushed_) {
+            return;
+        }
+        // InfiniteRect keeps the bounds independent of whatever transform is
+        // current; N3 can use the movie rect because its context is identity.
+        context_->PushLayer(
+            D2D1::LayerParameters(
+                D2D1::InfiniteRect(),
+                nullptr,
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                D2D1::IdentityMatrix(),
+                opacity_
+            ),
+            layer_.Get()
+        );
+        pushed_ = true;
+    }
+
+    void pop() {
+        if (context_ != nullptr && pushed_) {
+            context_->PopLayer();
+            pushed_ = false;
+        }
+    }
+
+    bool prepared() const {
+        return context_ != nullptr && !pushed_;
+    }
+
+private:
+    ID2D1DeviceContext *context_ = nullptr;
+    Microsoft::WRL::ComPtr<ID2D1Layer> layer_;
+    float opacity_ = 1.0f;
+    bool pushed_ = false;
+};
+
 bool paintNeedsBodyProtection(const PaintStyle &paint) {
     if (paint.mode == "image") {
         return true;
@@ -3995,7 +4068,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         if (animation.opacity <= 0.0f) {
             continue;
         }
-        const float globalOpacity = overlayOpacityAt(*line) * animation.opacity;
+        // Fade the composed line, not every brush inside it (see
+        // OpacityLayerScope).  If the layer cannot be created, fall back to the
+        // legacy per-brush opacity rather than dropping the line.
+        OpacityLayerScope lineOpacityLayer;
+        float lineAnimationOpacity = animation.opacity;
+        if (lineAnimationOpacity < 1.0f
+            && lineOpacityLayer.prepare(context, lineAnimationOpacity)) {
+            lineAnimationOpacity = 1.0f;
+        }
+        const float globalOpacity = overlayOpacityAt(*line) * lineAnimationOpacity;
         const TextStyle &style = line->style;
         // Painter restores the viewport transform before drawing the title
         // overlay, so static title lines stay in screen coordinates.
@@ -6680,6 +6762,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         if (!renderedAnyLine) {
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
         }
+        // Everything the line puts on the final target belongs inside the
+        // opacity layer; Clear must stay outside it.
+        if (lineOpacityLayer.prepared()) {
+            count(frameDiagnostics.layerPush);
+            lineOpacityLayer.push();
+        }
         for (RubyGlowLayer &layer : rubyGlowLayers) {
             context->SetTransform(
                 withViewport(
@@ -7751,6 +7839,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
+        // The layer must close before EndDraw; a Direct2D layer cannot outlive
+        // the draw it was pushed in.
+        lineOpacityLayer.pop();
         endDrawMeasured(
             "ID2D1DeviceContext::EndDraw(frame layers)",
             frameDiagnostics.endDrawFrameLayersMs,

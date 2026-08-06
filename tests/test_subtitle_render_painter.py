@@ -9869,3 +9869,144 @@ def test_page_sync_boundary_scans_past_non_colliding_intermediate_page():
         )
         == []
     )
+
+
+def _line_fade_style(**changes) -> Style:
+    """White body over a wide red edge: any bleed-through is unmistakable."""
+
+    white = _solid_fill("#FFFFFF")
+    red = _solid_fill("#FF0000")
+    colors = KaraokeColors(
+        before=KaraokeColorState(text=white, stroke=red, stroke2=red, shadow=red),
+        after=KaraokeColorState(text=white, stroke=red, stroke2=red, shadow=red),
+    )
+    style = replace(
+        Style(),
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=160,
+        font_reference_height=450,
+        layout_reference_height=450,
+        stroke_width_px=24,
+        stroke2_enabled=True,
+        stroke2_width_px=8,
+        decoration_kind="glow",
+        glow_radius_px=6,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_y_position="center",
+        karaoke_colors=colors,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        entry_anim="none",
+        exit_anim="fade",
+        exit_fade_ms=400,
+        # utopia keeps the wipe per-character, so the line cannot collapse into
+        # one baked blit -- the same dynamic path every real project uses.
+        karaoke_anim="utopia",
+    )
+    return replace(style, **changes)
+
+
+def _body_core_pixels(img: QImage) -> list[tuple[int, int]]:
+    """Fully opaque pure-white pixels: the glyph body away from its edge."""
+
+    out = []
+    for y in range(img.height()):
+        for x in range(img.width()):
+            color = QColor(img.pixelColor(x, y))
+            if (
+                color.alpha() == 255
+                and color.red() > 245
+                and color.green() > 245
+                and color.blue() > 245
+            ):
+                out.append((x, y))
+    return out
+
+
+def _mean_rgb(img: QImage, pixels: list[tuple[int, int]]) -> tuple[int, int, int]:
+    total = [0, 0, 0]
+    for x, y in pixels:
+        color = QColor(img.pixelColor(x, y))
+        total[0] += color.red()
+        total[1] += color.green()
+        total[2] += color.blue()
+    count = max(len(pixels), 1)
+    return tuple(value // count for value in total)
+
+
+def test_line_level_exit_opacity_composes_before_fading(qapp):
+    """A faded line must not blend its own layers into each other.
+
+    N3 wraps the whole line in a Direct2D opacity layer (LineFade →
+    PushOpacityLayer), so the body is composited over its edge at full opacity
+    and only the finished line is faded.  Applying the opacity per draw call
+    instead lets the wide red edge show through the semi-transparent white body,
+    which reads as the palette changing colour mid-animation.
+    """
+
+    # ``fade`` keeps the line still, so one pixel mask stays valid across the
+    # animation.  ``rise`` / ``slide_out`` share this exact opacity path.
+    style = _line_fade_style()
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("あ", 0)],
+                end_ms=1_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            )
+        ]
+    )
+
+    stable = _blank()
+    subtitle_painter.paint_frame(stable, track, 1_200, style)
+    core = _body_core_pixels(stable)
+    assert len(core) > 400, len(core)
+    assert _mean_rgb(stable, core) == (255, 255, 255)
+
+    # 2_000 - 400 == 1_600 starts the exit; sample it half way through.
+    faded = _blank()
+    subtitle_painter.paint_frame(faded, track, 1_800, style)
+    red, green, blue = _mean_rgb(faded, core)
+    assert green == blue, (red, green, blue)
+    assert red - green <= 6, (red, green, blue)
+
+
+def test_per_char_exit_opacity_composes_before_fading(qapp):
+    """Per-character fades must compose the character before fading it.
+
+    N3 cannot reuse one line-level opacity layer here, so its
+    ``CharFadeInFadeOut`` clips the edge draws out of the glyph body instead.  We
+    reach the same result differently: the glyph run is baked into an image at
+    full opacity and that image is blitted with the character's opacity, which
+    also keeps glow and shadow from bleeding -- N3 leaves those unprotected.
+
+    ``char_fade`` is the pure per-character opacity case.  Effects that also
+    transform the glyph (``spin_flip`` scales it toward zero) cannot be pinned
+    with a static pixel mask, and they share this code path.
+    """
+
+    style = _line_fade_style(exit_anim="char_fade", exit_fade_ms=400)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("あ", 0)],
+                end_ms=1_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            )
+        ]
+    )
+
+    stable = _blank()
+    subtitle_painter.paint_frame(stable, track, 1_200, style)
+    core = _body_core_pixels(stable)
+    assert len(core) > 400, len(core)
+
+    faded = _blank()
+    subtitle_painter.paint_frame(faded, track, 1_800, style)
+    red, green, blue = _mean_rgb(faded, core)
+    assert green == blue, (red, green, blue)
+    assert red - green <= 6, (red, green, blue)
