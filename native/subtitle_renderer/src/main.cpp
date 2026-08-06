@@ -2294,7 +2294,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             intValue(style, QStringLiteral("ruby_glow_concentration_level"), 0), 0, 2
         );
     }
-    cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
+    cfg.lineYMarginPx = intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx);
     cfg.layoutSemantics = stringValue(
         style, QStringLiteral("layout_semantics"), cfg.layoutSemantics
     );
@@ -2316,9 +2316,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.syncEnding = style.value(QStringLiteral("sync_ending")).isBool()
         ? style.value(QStringLiteral("sync_ending")).toBool()
         : cfg.syncEnding;
-    cfg.upperLineLeftMarginPx = std::max(0, intValue(style, QStringLiteral("upper_line_left_margin_px"), cfg.upperLineLeftMarginPx));
-    cfg.lowerLineRightMarginPx = std::max(0, intValue(style, QStringLiteral("lower_line_right_margin_px"), cfg.lowerLineRightMarginPx));
-    cfg.horizontalMarginPx = std::max(0, intValue(style, QStringLiteral("horizontal_margin_px"), cfg.horizontalMarginPx));
+    cfg.upperLineLeftMarginPx = intValue(style, QStringLiteral("upper_line_left_margin_px"), cfg.upperLineLeftMarginPx);
+    cfg.lowerLineRightMarginPx = intValue(style, QStringLiteral("lower_line_right_margin_px"), cfg.lowerLineRightMarginPx);
+    cfg.horizontalMarginPx = intValue(style, QStringLiteral("horizontal_margin_px"), cfg.horizontalMarginPx);
     cfg.smartHorizontal = stringValue(style, QStringLiteral("smart_horizontal"), cfg.smartHorizontal);
     const QJsonArray lineAlignments = style.value(QStringLiteral("line_alignments")).toArray();
     if (!lineAlignments.isEmpty()) {
@@ -2495,11 +2495,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                     layoutObject, QStringLiteral("line_y_position"),
                     line.layout.lineYPosition
                 );
-                line.layout.lineYMarginPx = std::max(
-                    0, intValue(
-                        layoutObject, QStringLiteral("line_y_margin_px"),
-                        line.layout.lineYMarginPx
-                    )
+                line.layout.lineYMarginPx = intValue(
+                    layoutObject, QStringLiteral("line_y_margin_px"),
+                    line.layout.lineYMarginPx
                 );
                 line.layout.lineGapPx = intValue(
                     layoutObject, QStringLiteral("line_gap_px"),
@@ -2509,11 +2507,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                     layoutObject, QStringLiteral("smart_horizontal"),
                     line.layout.smartHorizontal
                 );
-                line.layout.horizontalMarginPx = std::max(
-                    0, intValue(
-                        layoutObject, QStringLiteral("horizontal_margin_px"),
-                        line.layout.horizontalMarginPx
-                    )
+                line.layout.horizontalMarginPx = intValue(
+                    layoutObject, QStringLiteral("horizontal_margin_px"),
+                    line.layout.horizontalMarginPx
                 );
                 const QJsonArray layoutAlignments = layoutObject.value(
                     QStringLiteral("line_alignments")

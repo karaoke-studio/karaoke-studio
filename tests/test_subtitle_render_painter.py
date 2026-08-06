@@ -3049,6 +3049,20 @@ def test_dual_line_x_positions_use_asymmetric_margins(qapp):
     assert _resolve_line_x(1920, 600, style, 1) == 1270
 
 
+def test_negative_layout_margins_move_lines_beyond_frame_edges(qapp):
+    style = Style(
+        line_y_position="bottom",
+        line_y_margin_px=-40,
+        horizontal_margin_px=-50,
+        smart_horizontal="none",
+    )
+    metrics = QFontMetrics(_build_font(style))
+
+    assert _resolve_baseline_y(metrics, 1080, style) > 1080 - metrics.descent()
+    assert _resolve_line_x(1920, 600, style, 0) == -50
+    assert _resolve_line_x(1920, 600, style, 1) == 1370
+
+
 def test_dual_line_x_positions_can_be_centered(qapp):
     style = Style(line_horizontal_layout="center")
 

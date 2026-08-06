@@ -5532,7 +5532,7 @@ def _resolve_baseline_y(
     ruby_metrics: QFontMetrics | None = None,
 ) -> int:
     pos = style.line_y_position
-    margin = max(style.line_y_margin_px, 0)
+    margin = style.line_y_margin_px
     if style.layout_semantics == "n3_1074":
         main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
         if pos == "top":
@@ -5599,7 +5599,7 @@ def _resolve_display_baselines(
 
     main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
     gap = int(style.line_gap_px)
-    margin = max(style.line_y_margin_px, 0)
+    margin = style.line_y_margin_px
     lanes = _lane_count(style)
     step = main_h + gap
 
@@ -5732,7 +5732,7 @@ def _resolve_vertical_columns(
     """
     metrics = QFontMetrics(_build_font(style))
     cell_w = _vertical_cell_width(metrics)
-    margin = max(style.line_y_margin_px, 0)
+    margin = style.line_y_margin_px
     gap = max(style.line_gap_px, 0)  # 竖排列距不允许负值（列重叠无意义）
     ruby_w = _vertical_ruby_allowance(track, style)
     # 右列：列右侧留出 ruby 宽度（ruby 排在基字右边）。列数随 lane 数扩展，
@@ -5755,7 +5755,7 @@ def _vertical_ruby_allowance(track: TimingTrack, style: Style) -> int:
 
 def _resolve_vertical_top(img_h: int, block_h: int, style: Style) -> int:
     """竖排列的纵向起点 y（列整体上/中/下锚定，复用 line_y_position）。"""
-    margin = max(style.line_y_margin_px, 0)
+    margin = style.line_y_margin_px
     pos = style.line_y_position
     if pos == "top":
         return margin
@@ -6423,7 +6423,7 @@ def _layout_vertical_line(
     resolved_column_x = (
         column_x
         if column_x is not None
-        else int(round(img_w - max(style.line_y_margin_px, 0) - cell_w / 2))
+        else int(round(img_w - style.line_y_margin_px - cell_w / 2))
     )
     block_h = cell_h * len(chars)
     y_top = _resolve_vertical_top(img_h, block_h, style)
@@ -7706,7 +7706,7 @@ def _resolve_role_baseline_y(
     ruby_extra: int = 0,
 ) -> int:
     pos = style.line_y_position
-    margin = max(style.line_y_margin_px, 0)
+    margin = style.line_y_margin_px
     pad = _role_visual_text_padding(layout)
     ruby_extra = max(int(ruby_extra), 0)
     if pos == "top":
@@ -13407,7 +13407,7 @@ def _resolve_line_x(
         return (img_w - total_w) // 2
     if style.dual_line_layout and lane is not None:
         align = _lane_alignment(style, lane, page_line_count)
-        margin = max(style.horizontal_margin_px, 0)
+        margin = style.horizontal_margin_px
         if align == "left":
             return margin
         if align == "right":
@@ -13749,7 +13749,7 @@ def _smart_horizontal_dx(
     own_align = _lane_alignment(style, lane, page_rows)
     if own_align == "center":
         return 0
-    margin = max(style.horizontal_margin_px, 0)
+    margin = style.horizontal_margin_px
     font = _n3_smart_font_size(line, style)
     base_x = _resolve_line_x(
         img_w, total_w, style, lane, center_override=False, page_line_count=page_rows
@@ -14027,8 +14027,8 @@ def check_layout_margins(
         if not line.chars:
             continue
         line_style = _style_for_line(style, line)
-        margin_left = max(line_style.horizontal_margin_px, 0)
-        margin_right = max(line_style.horizontal_margin_px, 0)
+        margin_left = line_style.horizontal_margin_px
+        margin_right = line_style.horizontal_margin_px
         total_w = _line_total_width(line, line_style, track.rubies)
         lane = display_line.lane if line_style.dual_line_layout else None
         x0 = _resolve_line_x_smart(

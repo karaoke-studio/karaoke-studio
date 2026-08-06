@@ -6527,7 +6527,7 @@ class PropertyPanel(QWidget):
         )
 
         self._horizontal_margin_spin = _spin(
-            0, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
         )
         # 三位数 + 单位足够；必须改回 Fixed 策略——_compact_control 的
         # Ignored 策略在带对齐的网格单元里会让 sizeHint 归零挤扁控件
@@ -6576,7 +6576,9 @@ class PropertyPanel(QWidget):
         # QScrollArea 会缓存过大的最小宽度，320px 窄面板将产生横向溢出。
         self._layout_schematic.setFixedWidth(round(150 * 16 / 9))
 
-        self._line_margin_spin = _spin(0, _LAYOUT_SIZE_MAX_PX, suffix=" px")
+        self._line_margin_spin = _spin(
+            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+        )
         self._line_margin_spin.setFixedWidth(120)
         self._line_margin_spin.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed

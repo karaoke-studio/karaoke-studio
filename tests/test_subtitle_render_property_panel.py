@@ -3452,6 +3452,18 @@ def test_property_panel_preserves_high_resolution_n3_layout_values(qapp):
     assert panel._ruby_gap_spin.value() == -180
 
 
+def test_property_panel_accepts_negative_layout_margins(qapp):
+    panel = PropertyPanel()
+
+    panel._line_margin_spin.setValue(-123)
+    panel._horizontal_margin_spin.setValue(-234)
+
+    assert panel._line_margin_spin.value() == -123
+    assert panel._horizontal_margin_spin.value() == -234
+    assert panel._style.line_y_margin_px == -123
+    assert panel._style.horizontal_margin_px == -234
+
+
 def test_property_panel_line_layout_directly_controls_rows(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
