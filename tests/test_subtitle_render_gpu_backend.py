@@ -49,11 +49,42 @@ MEFISTO_N3PROJ = Path.cwd().parent / "songs" / "メフィスト" / "1.n3proj"
 RUN_REAL_GPU_AB = os.environ.get("KROK_RUN_REAL_GPU_AB", "0") == "1"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _clear_application_fonts_after_gpu_tests():
-    yield
-    from PyQt6.QtGui import QFontDatabase
+#: Every family this module names, with the file DirectWrite resolves the same
+#: way.  Qt's offscreen platform plugin does not enumerate system fonts, so a
+#: family nobody registered silently falls back to whichever application font
+#: happens to be loaded -- which made GPU/Painter comparisons depend on test
+#: execution order.  Registering the whole set once keeps resolution stable.
+_GPU_TEST_FONT_FILES = (
+    "times.ttf",
+    "meiryo.ttc",
+    "arial.ttf",
+    "comic.ttf",
+    "msgothic.ttc",
+)
+_GPU_TEST_FONT_FAMILIES = (
+    "Times New Roman",
+    "Meiryo",
+    "Arial",
+    "Comic Sans MS",
+    "MS Gothic",
+)
 
+
+@pytest.fixture(scope="module", autouse=True)
+def _gpu_test_application_fonts():
+    from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo
+    from PyQt6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    for font_file in _GPU_TEST_FONT_FILES:
+        assert (
+            QFontDatabase.addApplicationFont(rf"C:\Windows\Fonts\{font_file}") >= 0
+        ), font_file
+    # A silent fallback must fail here rather than produce a plausible-looking
+    # frame that no longer matches what DirectWrite drew.
+    for family in _GPU_TEST_FONT_FAMILIES:
+        assert QFontInfo(QFont(family)).family() == family, family
+    yield
     QFontDatabase.removeAllApplicationFonts()
 
 
@@ -657,7 +688,7 @@ def _render_painter_oracle(
     height: int = 360,
     extra_tracks: list[TimingTrack] | None = None,
 ) -> bytes:
-    from PyQt6.QtGui import QFontDatabase, QImage
+    from PyQt6.QtGui import QImage
     from PyQt6.QtWidgets import QApplication
 
     from krok_helper.subtitle_render.engine.painter import (
@@ -667,10 +698,8 @@ def _render_painter_oracle(
 
     app = QApplication.instance() or QApplication([])
     assert app is not None
-    # Qt's offscreen Windows plugin does not enumerate system fonts by itself.
-    # Load deterministic files that DirectWrite resolves to the same families.
-    assert QFontDatabase.addApplicationFont(r"C:\Windows\Fonts\times.ttf") >= 0
-    assert QFontDatabase.addApplicationFont(r"C:\Windows\Fonts\meiryo.ttc") >= 0
+    # Fonts come from the module-scoped _gpu_test_application_fonts fixture;
+    # registering them per call made family resolution order dependent.
     image = QImage(width, height, QImage.Format.Format_RGBA8888)
     image.fill(0)
     clear_before_layer_cache()
@@ -5347,11 +5376,6 @@ def test_gpu_legacy_lane_grid_ignores_mixed_font_line_content(monkeypatch) -> No
     """
 
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PyQt6.QtGui import QFontDatabase
-
-    for font_file in ("msgothic.ttc", "comic.ttf"):
-        assert QFontDatabase.addApplicationFont(rf"C:\Windows\Fonts\{font_file}") >= 0
-
     white = KaraokeColors(
         before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
         after=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
