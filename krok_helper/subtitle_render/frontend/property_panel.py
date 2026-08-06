@@ -2745,7 +2745,7 @@ class StylePresetManagerDialog(QDialog):
         )
         self._preset_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._preset_list.currentItemChanged.connect(lambda _cur, _old: self._sync_buttons())
-        self._preset_list.itemChanged.connect(lambda _item: self._sync_buttons())
+        self._preset_list.itemChanged.connect(self._on_preset_item_changed)
         layout.addWidget(self._preset_list, 1)
 
         selection_row = QHBoxLayout()
@@ -2937,6 +2937,17 @@ class StylePresetManagerDialog(QDialog):
         self._selection_stats.setText(
             f"已选 {checked_count}/{self._preset_list.count()}"
         )
+
+    def _on_preset_item_changed(self, item: QListWidgetItem) -> None:
+        """勾选预设时同步「应用」所使用的当前行。
+
+        复选框原本只服务于批量导入，而「应用到当前目标」只读
+        ``currentItem()``。Qt 点击复选框不会自动切换 current item，
+        导致界面勾选 B 却应用了旧高亮项 A。
+        """
+        if item.checkState() == Qt.CheckState.Checked:
+            self._preset_list.setCurrentItem(item)
+        self._sync_buttons()
 
     def _selected_name(self) -> Optional[str]:
         item = self._preset_list.currentItem()

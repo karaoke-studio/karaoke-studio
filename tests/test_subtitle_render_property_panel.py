@@ -4201,6 +4201,45 @@ def test_style_preset_manager_dialog_saves_current_scheme(qapp):
     assert dialog._preset_list.count() == 1
 
 
+def test_style_preset_manager_checked_item_is_applied_after_reopening(qapp):
+    presets = {
+        "preset-a": StylePreset(
+            name="方案 A",
+            preset_id="preset-a",
+            scheme=SubtitleStyleScheme(font_family="Arial", fill_color="#AA0000"),
+        ),
+        "preset-b": StylePreset(
+            name="方案 B",
+            preset_id="preset-b",
+            scheme=SubtitleStyleScheme(font_family="Consolas", fill_color="#00BB00"),
+        ),
+    }
+
+    first = StylePresetManagerDialog(
+        presets=presets,
+        current_scheme=SubtitleStyleScheme(),
+        target_label="当前角色",
+    )
+    first._preset_list.setCurrentRow(0)
+    first._on_apply()
+    assert first.applied_scheme().font_family == "Arial"
+
+    reopened = StylePresetManagerDialog(
+        presets=presets,
+        current_scheme=first.applied_scheme(),
+        target_label="当前角色",
+    )
+    assert reopened._selected_name() == "preset-a"
+
+    reopened._preset_list.item(1).setCheckState(Qt.CheckState.Checked)
+    assert reopened._selected_name() == "preset-b"
+
+    reopened._on_apply()
+    applied = reopened.applied_scheme()
+    assert applied.font_family == "Consolas"
+    assert applied.fill_color == "#00BB00"
+
+
 def test_style_preset_library_forms_use_fluent_controls(qapp):
     details = _StylePresetDetailsDialog(
         name="A", group="作品一", groups=["作品一", "作品二"]
