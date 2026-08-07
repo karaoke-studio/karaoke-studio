@@ -25,6 +25,7 @@ from .backend import (
     FLOW_REMAP_MSST,
     FLOW_REUSE_MSST,
     FLOW_UPGRADE,
+    CatalogModel,
     ExternalModelCandidate,
     ResultFile,
     SeparationBackend,
@@ -42,7 +43,14 @@ from .integration import (
     runtime_manifest_url,
 )
 from .msst import ExternalModelRegistry, scan_msst_models
-from .presets import SeparationStep, TASK_PRESETS
+from .presets import (
+    SeparationStep,
+    TASK_MODEL_OVERRIDES_KEY,
+    TASK_PRESETS,
+    effective_steps,
+    task_override,
+)
+from .stems import parse_model_stems
 from .runtime import (
     ManagedRuntimeInstaller,
     RuntimeStatus,
@@ -373,7 +381,7 @@ class RealSeparationBackend(SeparationBackend):
             else:
                 missing_steps: dict[str, SeparationStep] = {
                     step.model: step
-                    for step in TASK_PRESETS[task].steps
+                    for step in self._steps_for_task(task)
                     if step.model not in downloaded_models
                 }
                 missing_size = sum(step.size_bytes for step in missing_steps.values())
@@ -685,6 +693,94 @@ class RealSeparationBackend(SeparationBackend):
         with self._lock:
             self._rebuild_dependencies()
         self._emit()
+
+    # ── 设置：按任务自选模型与输出轨 ──────────────────────────────
+    def request_catalog_models(self) -> None:
+        client = self._client
+        if client is None:
+            self.catalogModelsFailed.emit("请先启动 PyMSS 服务，再选择模型。")
+            return
+        def operation() -> list[CatalogModel]:
+            rows = client.catalog_models(supported=True)
+            models: list[CatalogModel] = []
+            for row in rows:
+                info = row.get("pymss") if isinstance(row, dict) else None
+                if not isinstance(info, dict):
+                    continue
+                name = str(info.get("name") or "").strip()
+                if not name:
+                    continue
+                local = info.get("local") if isinstance(info.get("local"), dict) else {}
+                models.append(
+                    CatalogModel(
+                        name=name,
+                        category=str(info.get("category") or ""),
+                        architecture=str(info.get("architecture") or ""),
+                        size_bytes=int(info.get("size_bytes") or 0),
+                        downloaded=bool(local.get("complete")),
+                    )
+                )
+            models.sort(key=lambda item: (item.category, item.name))
+            return models
+
+        self._submit(
+            operation,
+            lambda models: self.catalogModelsFinished.emit(models),
+            lambda exc: self.catalogModelsFailed.emit(
+                f"读取模型列表失败：{exc}".strip()
+            ),
+            detached=bool(self._external_url),
+        )
+
+    def request_model_stems(self, model: str) -> None:
+        name = str(model or "").strip()
+        if not name:
+            return
+        client = self._client
+        if client is None:
+            self.modelStemsFailed.emit(name, "请先启动 PyMSS 服务。")
+            return
+        source = self._download_source()
+        model_dir = str(Path(self._snap.install_dir) / "models") if self._snap.install_dir else ""
+
+        def operation() -> tuple[str, ...]:
+            text = client.model_config_text(name, source=source, model_dir=model_dir or None)
+            return parse_model_stems(text)
+
+        def success(stems: tuple[str, ...]) -> None:
+            if stems:
+                self.modelStemsFinished.emit(name, stems)
+            else:
+                # 宁可让用户换一个模型，也不给出可能错误的轨名。
+                self.modelStemsFailed.emit(
+                    name, "无法从该模型的配置中读出输出轨，请换一个模型。"
+                )
+
+        self._submit(
+            operation,
+            success,
+            lambda exc: self.modelStemsFailed.emit(name, f"读取模型配置失败：{exc}".strip()),
+            detached=bool(self._external_url),
+        )
+
+    def set_task_model(self, task: TaskType, model: str, stem: str, size_bytes: int) -> None:
+        raw = self._settings.get(TASK_MODEL_OVERRIDES_KEY)
+        overrides = dict(raw) if isinstance(raw, dict) else {}
+        name, track = str(model or "").strip(), str(stem or "").strip()
+        if not name or not track:
+            if overrides.pop(task.value, None) is None:
+                return
+            self._log(f"{TASK_SPECS[task].title}已恢复为推荐模型。")
+        else:
+            overrides[task.value] = {
+                "model": name,
+                "stem": track,
+                "size_bytes": max(0, int(size_bytes or 0)),
+            }
+            self._log(f"{TASK_SPECS[task].title}改用模型 {name}（输出轨 {track}）。")
+        self._settings[TASK_MODEL_OVERRIDES_KEY] = overrides
+        self._persist()
+        self._refresh_remote_model_status()
 
     def finish_external_mapping(self) -> None:
         """Make PyMSS reload its process-local user-model registry cache."""
@@ -1280,6 +1376,9 @@ class RealSeparationBackend(SeparationBackend):
             for preset in TASK_PRESETS.values()
             for step in preset.steps
         }
+        # 用户覆盖的模型同样要查本地状态，否则它的下载徽标永远不更新。
+        for task in TaskType:
+            model_names.update(step.model for step in self._steps_for_task(task))
         for model in model_names:
             try:
                 detail = self._client.catalog_model(
@@ -1588,7 +1687,7 @@ class RealSeparationBackend(SeparationBackend):
     def _steps_for_task(self, task: TaskType) -> tuple[SeparationStep, ...]:
         binding = self._external_bindings().get(task)
         if not binding:
-            return TASK_PRESETS[task].steps
+            return effective_steps(self._settings, task)
         if task is TaskType.VOCAL:
             return (SeparationStep(binding, ("vocals",), ("人声",), 0),)
         if task is TaskType.INSTRUMENTAL:

@@ -116,6 +116,67 @@ class PyMSSClient:
             raise PyMSSAPIError(response.status_code, "invalid_response", "模型目录响应无效。")
         return payload
 
+    def catalog_models(
+        self,
+        *,
+        supported: bool = True,
+        category: str = "",
+        query: str = "",
+    ) -> list[dict]:
+        """列出 catalog 中的模型条目（用于设置里的模型选择）。"""
+        params: dict[str, str] = {"supported": "true" if supported else "false"}
+        if category:
+            params["category"] = category
+        if query:
+            params["q"] = query
+        response = self.session.get(
+            f"{self.base_url}/v1/catalog/models",
+            headers=self._headers(),
+            params=params,
+            timeout=self.timeout,
+        )
+        self._raise_api_error(response)
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        return data if isinstance(data, list) else []
+
+    def model_config_text(
+        self,
+        model: str,
+        *,
+        source: str = "modelscope",
+        model_dir: str | Path | None = None,
+    ) -> str:
+        """取模型的 YAML 配置文本（只有 1 KB 左右，不需要下载权重）。
+
+        已下载的模型直接读本地文件（``model_dir`` + catalog 的 ``relpath``）；
+        否则按 catalog 给出的 ``remote_url`` 拉取。供
+        :func:`stems.parse_model_stems` 解析真实输出轨名。
+        """
+        detail = self.catalog_model(model, source=source)
+        files = (detail.get("pymss") or {}).get("files") or []
+        config = next(
+            (f for f in files if isinstance(f, dict) and f.get("role") == "config"),
+            None,
+        )
+        if config is None:
+            raise PyMSSAPIError(0, "config_not_found", f"模型 {model} 没有配置文件。")
+
+        relpath = str(config.get("relpath") or "")
+        if config.get("exists") and model_dir and relpath:
+            candidate = Path(model_dir) / relpath
+            try:
+                return candidate.read_text(encoding="utf-8")
+            except OSError:
+                pass  # 本地文件读不了就退回远端。
+
+        url = str(config.get("remote_url") or "")
+        if not url:
+            raise PyMSSAPIError(0, "config_not_found", f"模型 {model} 的配置无下载地址。")
+        response = self.session.get(url, timeout=self.timeout)
+        self._raise_api_error(response)
+        return response.text
+
     def download_model(
         self,
         model: str,

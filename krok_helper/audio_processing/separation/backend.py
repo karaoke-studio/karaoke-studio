@@ -89,6 +89,17 @@ class TaskResult:
 
 
 @dataclass(frozen=True)
+class CatalogModel:
+    """设置里可供选择的一个 catalog 模型。"""
+
+    name: str
+    category: str = ""
+    architecture: str = ""
+    size_bytes: int = 0
+    downloaded: bool = False
+
+
+@dataclass(frozen=True)
 class ExternalModelCandidate:
     """One model discovered in an existing MSST installation.
 
@@ -133,6 +144,12 @@ class SeparationBackend(QObject):
     existingCheckStarted = pyqtSignal()
     existingCheckFinished = pyqtSignal(object)  # list[tuple[str, bool, str]]
     existingCheckFailed = pyqtSignal(str)
+    #: 设置里挑模型用：catalog 列表与「某模型的真实输出轨」都要联网/读盘，
+    #: 一律异步，GUI 只连信号（§1.5：界面不直接依赖 HTTP 字段）。
+    catalogModelsFinished = pyqtSignal(object)   # list[CatalogModel]
+    catalogModelsFailed = pyqtSignal(str)
+    modelStemsFinished = pyqtSignal(str, object)  # model, tuple[str, ...]
+    modelStemsFailed = pyqtSignal(str, str)       # model, 中文原因
 
     def snapshot(self) -> SeparationSnapshot:
         raise NotImplementedError
@@ -170,6 +187,23 @@ class SeparationBackend(QObject):
 
     def unbind_external_model(self, task: TaskType) -> None:
         """Remove one app-owned reference without touching the source files."""
+        raise NotImplementedError
+
+    # ── 设置：按任务自选模型与输出轨 ──────────────────────────────
+    def request_catalog_models(self) -> None:
+        """异步列出 catalog 中受支持的模型，完成后发 catalogModelsFinished。"""
+        raise NotImplementedError
+
+    def request_model_stems(self, model: str) -> None:
+        """异步取某模型真实声明的输出轨名，完成后发 modelStemsFinished。
+
+        必须来自模型自己的配置（``training.instruments``），不能用 catalog 的
+        ``target_stem``——后者与实际不符，会让用户选到不存在的轨。
+        """
+        raise NotImplementedError
+
+    def set_task_model(self, task: TaskType, model: str, stem: str, size_bytes: int) -> None:
+        """覆盖某任务使用的模型与输出轨；``model`` 为空表示恢复推荐预设。"""
         raise NotImplementedError
 
     def finish_external_mapping(self) -> None:
@@ -501,6 +535,72 @@ class MockSeparationBackend(SeparationBackend):
         raw = self._settings.get("external_bindings")
         if isinstance(raw, dict):
             raw.pop(task.value, None)
+        self._rebuild_dependencies()
+        self._emit()
+
+    #: 模拟 catalog：覆盖真实世界里四种不同的 stem 命名，供 UI 测试。
+    MOCK_CATALOG: tuple[tuple[str, str, tuple[str, ...], int], ...] = (
+        ("inst_v1e", "vocal/vocal_instrumental_dual", ("other", "vocals"), 913_102_724),
+        ("inst_v1e_plus", "vocal/vocal_instrumental_dual", ("other", "vocals"), 913_102_724),
+        (
+            "model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956",
+            "karaoke",
+            ("karaoke", "other"),
+            913_096_801,
+        ),
+        ("mel_band_roformer_karaoke_becruily", "karaoke", ("Vocals", "Instrumental"), 1_719_139_254),
+    )
+
+    def request_catalog_models(self) -> None:
+        from krok_helper.audio_processing.separation.backend import CatalogModel
+
+        models = [
+            CatalogModel(
+                name=name,
+                category=category,
+                architecture="mel_band_roformer",
+                size_bytes=size,
+                downloaded=name in {step.model for step in self._preset_steps()},
+            )
+            for name, category, _stems, size in self.MOCK_CATALOG
+        ]
+        self._delay(120, lambda: self.catalogModelsFinished.emit(models))
+
+    def request_model_stems(self, model: str) -> None:
+        name = str(model or "").strip()
+        entry = next((row for row in self.MOCK_CATALOG if row[0] == name), None)
+        if entry is None:
+            self._delay(
+                80,
+                lambda: self.modelStemsFailed.emit(
+                    name, "无法从该模型的配置中读出输出轨，请换一个模型。"
+                ),
+            )
+            return
+        self._delay(80, lambda: self.modelStemsFinished.emit(name, entry[2]))
+
+    def _preset_steps(self):
+        from krok_helper.audio_processing.separation.presets import TASK_PRESETS
+
+        return [step for preset in TASK_PRESETS.values() for step in preset.steps]
+
+    def set_task_model(self, task: TaskType, model: str, stem: str, size_bytes: int) -> None:
+        from krok_helper.audio_processing.separation.presets import (
+            TASK_MODEL_OVERRIDES_KEY,
+        )
+
+        raw = self._settings.get(TASK_MODEL_OVERRIDES_KEY)
+        overrides = dict(raw) if isinstance(raw, dict) else {}
+        name, track = str(model or "").strip(), str(stem or "").strip()
+        if not name or not track:
+            overrides.pop(task.value, None)
+        else:
+            overrides[task.value] = {
+                "model": name,
+                "stem": track,
+                "size_bytes": max(0, int(size_bytes or 0)),
+            }
+        self._settings[TASK_MODEL_OVERRIDES_KEY] = overrides
         self._rebuild_dependencies()
         self._emit()
 

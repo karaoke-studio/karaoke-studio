@@ -687,3 +687,121 @@ class TestCardHeightStability:
         assert card._reason.text() == ""
         assert not card._reason.isHidden(), "原因行不应被隐藏，否则卡片高度会跳"
         assert card._reason.minimumHeight() > 0
+
+
+class TestTaskModelSelection:
+    """设置里按任务自选模型与输出轨（输出轨只能从模型真实声明的名字里选）。"""
+
+    KARAOKE = "model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956"
+
+    def _dialog(self, settings: AppSettings, backend):
+        from krok_helper.audio_processing.separation.settings_dialog import (
+            SeparationSettingsDialog,
+        )
+
+        return SeparationSettingsDialog(backend, settings.pymss, lambda: None)
+
+    def test_override_changes_effective_steps(self) -> None:
+        from krok_helper.audio_processing.separation.presets import (
+            TASK_PRESETS,
+            effective_steps,
+        )
+
+        ns: dict = {}
+        assert effective_steps(ns, TaskType.VOCAL) == TASK_PRESETS[TaskType.VOCAL].steps
+
+        ns["task_model_overrides"] = {
+            "vocal": {"model": self.KARAOKE, "stem": "karaoke", "size_bytes": 913_096_801}
+        }
+        steps = effective_steps(ns, TaskType.VOCAL)
+        assert len(steps) == 1
+        assert steps[0].model == self.KARAOKE
+        assert steps[0].stems == ("karaoke",)
+        # 输出文件名仍沿用任务自己的中文标签。
+        assert steps[0].output_labels == ("人声",)
+
+    def test_incomplete_override_is_ignored(self) -> None:
+        """只有模型没有输出轨的记录不能拿来跑任务，必须退回推荐预设。"""
+        from krok_helper.audio_processing.separation.presets import (
+            TASK_PRESETS,
+            effective_steps,
+            task_override,
+        )
+
+        for broken in ({"model": self.KARAOKE}, {"stem": "karaoke"}, {}, "nonsense"):
+            ns = {"task_model_overrides": {"vocal": broken}}
+            assert task_override(ns, TaskType.VOCAL) is None
+            assert effective_steps(ns, TaskType.VOCAL) == TASK_PRESETS[TaskType.VOCAL].steps
+
+    def test_backend_records_and_clears_override(self) -> None:
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        backend.set_task_model(TaskType.VOCAL, self.KARAOKE, "karaoke", 913_096_801)
+        assert settings.pymss["task_model_overrides"]["vocal"]["stem"] == "karaoke"
+
+        backend.set_task_model(TaskType.VOCAL, "", "", 0)
+        assert "vocal" not in settings.pymss["task_model_overrides"]
+
+    def test_settings_page_shows_recommended_then_custom(self) -> None:
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        dialog = self._dialog(settings, backend)
+
+        card, reset = dialog._model_cards[TaskType.VOCAL]
+        assert "推荐模型" in card.contentLabel.text()
+        assert "inst_v1e" in card.contentLabel.text()
+        assert not reset.isEnabled(), "没有自定义时「恢复推荐」应不可用"
+
+        backend.set_task_model(TaskType.VOCAL, self.KARAOKE, "karaoke", 913_096_801)
+        dialog._refresh_model_cards()
+        card, reset = dialog._model_cards[TaskType.VOCAL]
+        assert "自定义" in card.contentLabel.text()
+        assert "karaoke" in card.contentLabel.text()
+        assert reset.isEnabled()
+
+    def test_picker_offers_only_real_stems_and_blocks_until_chosen(self) -> None:
+        """核心诉求：输出轨是选出来的，不是填出来的。"""
+        from krok_helper.audio_processing.separation.settings_dialog import (
+            ModelPickerDialog,
+        )
+
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        picker = ModelPickerDialog(backend, TaskType.HARMONY, "", "")
+        QApplication.instance().processEvents()
+
+        assert picker._list.count() > 0
+        assert not picker._ok.isEnabled(), "未选模型时不能确定"
+
+        # 选中 karaoke 模型 → 下拉里只出现它自己声明的两个轨
+        for index in range(picker._list.count()):
+            if picker._list.item(index).data(Qt.ItemDataRole.UserRole) == self.KARAOKE:
+                picker._list.setCurrentRow(index)
+                break
+        QApplication.instance().processEvents()
+
+        stems = [picker._stem_combo.itemText(i) for i in range(picker._stem_combo.count())]
+        assert stems == ["karaoke", "other"], f"应只列出模型真实的输出轨，实际 {stems}"
+        assert "vocals" not in stems, "不能出现该模型没有的轨名"
+        assert picker._ok.isEnabled()
+        assert picker.selection()[0] == self.KARAOKE
+
+    def test_picker_refuses_when_stems_cannot_be_read(self) -> None:
+        """读不出输出轨时必须挡住，而不是让用户手填。"""
+        from krok_helper.audio_processing.separation.settings_dialog import (
+            ModelPickerDialog,
+        )
+
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        picker = ModelPickerDialog(backend, TaskType.VOCAL, "", "")
+        QApplication.instance().processEvents()
+
+        picker._selected_model = "unknown-model"
+        backend.request_model_stems("unknown-model")
+        QApplication.instance().processEvents()
+
+        assert picker._stem_combo.count() == 0
+        assert not picker._stem_combo.isEnabled()
+        assert not picker._ok.isEnabled()
+        assert "换一个模型" in picker._hint.text()

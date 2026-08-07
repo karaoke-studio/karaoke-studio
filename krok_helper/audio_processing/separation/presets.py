@@ -81,4 +81,58 @@ TASK_PRESETS: dict[TaskType, TaskPreset] = {
 }
 
 
-__all__ = ["PRESET_VERSION", "SeparationStep", "TASK_PRESETS", "TaskPreset"]
+#: 用户在设置里覆盖任务模型时写入的 namespace 键。
+TASK_MODEL_OVERRIDES_KEY = "task_model_overrides"
+
+
+def task_override(settings_ns: dict, task: TaskType) -> dict | None:
+    """取某个任务的用户模型覆盖；格式不完整一律视为没有覆盖。
+
+    只认「模型 + stem」都齐全的记录：stem 必须是用户从该模型真实输出轨里选出来的，
+    缺一半的记录不能拿来跑任务（§8.2 预设必须完整）。
+    """
+    raw = settings_ns.get(TASK_MODEL_OVERRIDES_KEY)
+    if not isinstance(raw, dict):
+        return None
+    entry = raw.get(task.value)
+    if not isinstance(entry, dict):
+        return None
+    model = str(entry.get("model") or "").strip()
+    stem = str(entry.get("stem") or "").strip()
+    if not model or not stem:
+        return None
+    return {
+        "model": model,
+        "stem": stem,
+        "size_bytes": max(0, int(entry.get("size_bytes") or 0)),
+    }
+
+
+def effective_steps(settings_ns: dict, task: TaskType) -> tuple[SeparationStep, ...]:
+    """任务实际要跑的步骤：有用户覆盖就用覆盖，否则用推荐预设。
+
+    覆盖一律是单步——设置界面只让用户为一个任务挑一个模型和一个输出轨。
+    """
+    override = task_override(settings_ns, task)
+    if override is None:
+        return TASK_PRESETS[task].steps
+    label = TASK_PRESETS[task].steps[-1].output_labels[-1]
+    return (
+        SeparationStep(
+            override["model"],
+            (override["stem"],),
+            (label,),
+            override["size_bytes"],
+        ),
+    )
+
+
+__all__ = [
+    "PRESET_VERSION",
+    "TASK_MODEL_OVERRIDES_KEY",
+    "SeparationStep",
+    "TASK_PRESETS",
+    "TaskPreset",
+    "effective_steps",
+    "task_override",
+]

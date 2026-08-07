@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QListWidget,
+    QListWidgetItem,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -25,7 +27,9 @@ from qfluentwidgets import (
     CaptionLabel,
     ComboBox,
     FluentIcon as FIF,
+    LineEdit,
     Pivot,
+    PrimaryPushButton,
     PlainTextEdit,
     PushButton,
     ScrollArea as FluentScrollArea,
@@ -36,7 +40,8 @@ from qfluentwidgets import (
 )
 
 from krok_helper.audio_processing.separation.backend import SeparationBackend
-from krok_helper.audio_processing.separation.states import STATE_META, TASK_SPECS
+from krok_helper.audio_processing.separation.presets import TASK_PRESETS, task_override
+from krok_helper.audio_processing.separation.states import STATE_META, TASK_SPECS, TaskType
 from krok_helper.qfluent_compat import ask_fluent_confirm, show_fluent_info
 
 _DOWNLOAD_SOURCES = (
@@ -70,6 +75,171 @@ def _build_settings_page(parent: QWidget, groups: list[SettingCardGroup]) -> Flu
     layout.addStretch(1)
     page.setWidget(content)
     return page
+
+
+class ModelPickerDialog(QDialog):
+    """给一个任务挑模型与输出轨。
+
+    输出轨永远来自所选模型自己声明的名字（后端读 ``training.instruments``），
+    用户只能从下拉里选，不能手填——同一个概念在不同模型里可能叫 ``vocals`` /
+    ``other`` / ``karaoke`` / ``Instrumental``，手填必错。
+    """
+
+    def __init__(
+        self,
+        backend: SeparationBackend,
+        task,
+        current_model: str,
+        current_stem: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._backend = backend
+        self._task = task
+        self._models: list = []
+        self._selected_model = ""
+        self._stems: tuple[str, ...] = ()
+
+        self.setWindowTitle(f"{TASK_SPECS[task].title} · 选择模型")
+        self.resize(620, 560)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        layout.addWidget(SubtitleLabel(f"{TASK_SPECS[task].title} 使用的模型", self))
+
+        self._search = LineEdit(self)
+        self._search.setPlaceholderText("搜索模型名或分类")
+        self._search.textChanged.connect(self._apply_filter)
+        layout.addWidget(self._search)
+
+        self._list = QListWidget(self)
+        self._list.currentItemChanged.connect(self._on_model_selected)
+        layout.addWidget(self._list, 1)
+
+        stem_row = QHBoxLayout()
+        stem_row.setContentsMargins(0, 0, 0, 0)
+        stem_row.setSpacing(8)
+        stem_row.addWidget(BodyLabel("输出轨", self))
+        self._stem_combo = ComboBox(self)
+        self._stem_combo.setMinimumWidth(220)
+        self._stem_combo.setEnabled(False)
+        self._stem_combo.currentIndexChanged.connect(lambda _i: self._refresh_ok())
+        stem_row.addWidget(self._stem_combo)
+        stem_row.addStretch(1)
+        layout.addLayout(stem_row)
+
+        self._hint = CaptionLabel("请选择一个模型。", self)
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addStretch(1)
+        cancel = PushButton("取消", self)
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+        self._ok = PrimaryPushButton("确定", self)
+        self._ok.setEnabled(False)
+        self._ok.clicked.connect(self.accept)
+        footer.addWidget(self._ok)
+        layout.addLayout(footer)
+
+        self._pending_model = current_model
+        self._pending_stem = current_stem
+        backend.catalogModelsFinished.connect(self._on_models)
+        backend.catalogModelsFailed.connect(self._on_models_failed)
+        backend.modelStemsFinished.connect(self._on_stems)
+        backend.modelStemsFailed.connect(self._on_stems_failed)
+        self._hint.setText("正在读取模型列表…")
+        backend.request_catalog_models()
+
+    # ── 结果 ─────────────────────────────────────────────────────
+    def selection(self) -> tuple[str, str, int]:
+        size = next(
+            (m.size_bytes for m in self._models if m.name == self._selected_model), 0
+        )
+        return self._selected_model, self._stem_combo.currentText(), size
+
+    # ── 列表 ─────────────────────────────────────────────────────
+    def _on_models(self, models) -> None:
+        self._models = list(models)
+        self._apply_filter()
+        if not self._models:
+            self._hint.setText("模型列表为空。")
+            return
+        self._hint.setText("请选择一个模型。")
+        if self._pending_model:
+            for index in range(self._list.count()):
+                if self._list.item(index).data(Qt.ItemDataRole.UserRole) == self._pending_model:
+                    self._list.setCurrentRow(index)
+                    break
+
+    def _on_models_failed(self, reason: str) -> None:
+        self._hint.setText(reason)
+
+    def _apply_filter(self) -> None:
+        keyword = self._search.text().strip().lower()
+        selected = self._selected_model
+        self._list.blockSignals(True)
+        self._list.clear()
+        for model in self._models:
+            haystack = f"{model.name} {model.category} {model.architecture}".lower()
+            if keyword and keyword not in haystack:
+                continue
+            size = f"{model.size_bytes / 1024 ** 3:.2f} GB" if model.size_bytes else "—"
+            mark = "✓ 已下载" if model.downloaded else size
+            item = QListWidgetItem(f"{model.name}\n{model.category} · {mark}")
+            item.setData(Qt.ItemDataRole.UserRole, model.name)
+            self._list.addItem(item)
+        self._list.blockSignals(False)
+        if selected:
+            for index in range(self._list.count()):
+                if self._list.item(index).data(Qt.ItemDataRole.UserRole) == selected:
+                    self._list.setCurrentRow(index)
+                    break
+
+    def _on_model_selected(self, current, _previous) -> None:
+        if current is None:
+            return
+        self._selected_model = str(current.data(Qt.ItemDataRole.UserRole) or "")
+        self._stems = ()
+        self._stem_combo.clear()
+        self._stem_combo.setEnabled(False)
+        self._refresh_ok()
+        self._hint.setText("正在读取该模型的输出轨…")
+        self._backend.request_model_stems(self._selected_model)
+
+    # ── 输出轨 ───────────────────────────────────────────────────
+    def _on_stems(self, model: str, stems) -> None:
+        if model != self._selected_model:
+            return
+        self._stems = tuple(stems)
+        self._stem_combo.clear()
+        for stem in self._stems:
+            self._stem_combo.addItem(stem)
+        self._stem_combo.setEnabled(bool(self._stems))
+        if self._pending_stem in self._stems:
+            self._stem_combo.setCurrentIndex(self._stems.index(self._pending_stem))
+            self._pending_stem = ""
+        self._hint.setText(
+            "输出轨来自该模型自己的配置，只能从上面这几个里选。"
+            if self._stems
+            else "该模型没有可用的输出轨。"
+        )
+        self._refresh_ok()
+
+    def _on_stems_failed(self, model: str, reason: str) -> None:
+        if model != self._selected_model:
+            return
+        self._stems = ()
+        self._stem_combo.clear()
+        self._stem_combo.setEnabled(False)
+        self._hint.setText(reason)
+        self._refresh_ok()
+
+    def _refresh_ok(self) -> None:
+        self._ok.setEnabled(bool(self._selected_model) and bool(self._stem_combo.count()))
 
 
 class SeparationSettingsDialog(QDialog):
@@ -113,6 +283,7 @@ class SeparationSettingsDialog(QDialog):
 
         pages = [
             ("runtime", "安装与 Runtime", self._build_runtime_page()),
+            ("models", "模型与输出轨", self._build_models_page()),
             ("service", "服务与下载", self._build_service_page()),
             ("diagnostics", "诊断与日志", self._build_diagnostics_page()),
             ("repair", "修复与重置", self._build_repair_page()),
@@ -169,6 +340,59 @@ class SeparationSettingsDialog(QDialog):
         group.addSettingCard(self._version_card)
 
         return _build_settings_page(self, [group])
+
+    # ── 模型与输出轨 ────────────────────────────────────────────
+    def _build_models_page(self) -> QWidget:
+        group = SettingCardGroup("每个任务使用的模型", self)
+        self._model_cards: dict = {}
+        for task in TaskType:
+            card = SettingCard(FIF.LIBRARY, TASK_SPECS[task].title, "", group)
+            change = PushButton("更换…", card)
+            change.clicked.connect(lambda _c=False, t=task: self._pick_model(t))
+            reset = PushButton("恢复推荐", card)
+            reset.clicked.connect(lambda _c=False, t=task: self._reset_model(t))
+            _add_card_actions(card, change, reset)
+            group.addSettingCard(card)
+            self._model_cards[task] = (card, reset)
+        self._refresh_model_cards()
+        return _build_settings_page(self, [group])
+
+    def _refresh_model_cards(self) -> None:
+        for task, (card, reset) in self._model_cards.items():
+            override = task_override(self._settings, task)
+            if override is None:
+                step = TASK_PRESETS[task].steps[-1]
+                card.setContent(f"推荐模型：{step.model} · 输出轨 {step.stems[-1]}")
+                reset.setEnabled(False)
+            else:
+                card.setContent(
+                    f"自定义：{override['model']} · 输出轨 {override['stem']}"
+                )
+                reset.setEnabled(True)
+
+    def _pick_model(self, task) -> None:
+        override = task_override(self._settings, task)
+        step = TASK_PRESETS[task].steps[-1]
+        dialog = ModelPickerDialog(
+            self._backend,
+            task,
+            override["model"] if override else step.model,
+            override["stem"] if override else step.stems[-1],
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        model, stem, size = dialog.selection()
+        if not model or not stem:
+            return
+        self._backend.set_task_model(task, model, stem, size)
+        self._save_settings()
+        self._refresh_model_cards()
+
+    def _reset_model(self, task) -> None:
+        self._backend.set_task_model(task, "", "", 0)
+        self._save_settings()
+        self._refresh_model_cards()
 
     # ── 服务与下载 ────────────────────────────────────────────────
     def _build_service_page(self) -> QWidget:
