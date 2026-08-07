@@ -1,0 +1,4 @@
+# .bat 必须是 CRLF：cmd.exe 在 LF 行尾下会误解析 ^ 续行符，
+# 把 build_windows.bat 拆成碎片执行（每处丢一个字符）导致构建失败。
+# 仓库其余源文件保持 LF，git 里存的也仍是 LF，只有检出到工作区时转 CRLF。
+*.bat text eol=crlf
