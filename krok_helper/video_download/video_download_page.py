@@ -97,6 +97,9 @@ CONCURRENT_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 TIMEOUT_OPTIONS = ("5", "10", "15")
 RETRY_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 VIDEO_DETAILS_CARD_HEIGHT = 340
+DOWNLOAD_TABLE_ROW_HEIGHT = 44
+DOWNLOAD_TABLE_ACTION_COLUMN = 6
+DOWNLOAD_PROGRESS_REFRESH_MS = 100
 TASK_SWITCH_COMBO_WIDTH = 720
 TASK_SWITCH_TITLE_PIXELS = 610
 PLATFORM_STATUS_LOGGED_IN = "#22c55e"
@@ -742,6 +745,13 @@ class VideoDownloadPage(QWidget):
         self._format_table_updating = False
         self._per_video_controls_updating = False
         self._selection_syncing = False
+        self._action_widget_state: dict[int, tuple[str, str]] = {}
+        self._task_switcher_signature: tuple = ()
+        self._progress_refresh_pending = False
+        self._progress_refresh_timer = QTimer(self)
+        self._progress_refresh_timer.setInterval(DOWNLOAD_PROGRESS_REFRESH_MS)
+        self._progress_refresh_timer.setSingleShot(True)
+        self._progress_refresh_timer.timeout.connect(self._flush_progress_refresh)
         self._bilibili_profile: BilibiliAccountProfile | None = None
         self._youtube_profile: BilibiliAccountProfile | None = None
         self._recent_bilibili_login_deadline = 0.0
@@ -2158,14 +2168,19 @@ class VideoDownloadPage(QWidget):
         if not hasattr(self, "task_switch_combo"):
             return
         self._selection_syncing = True
-        self.task_switch_combo.clear()
-        for row, task in enumerate(self._tasks):
-            title = task.title or "未命名视频"
-            display_text = self._task_switcher_text(row, title)
-            self.task_switch_combo.addItem(
-                display_text,
-                self._status_dot_icon(self._task_status_color(task)),
-            )
+        signature = tuple(
+            (task.task_id, task.title or "未命名视频", self._task_status_color(task)) for task in self._tasks
+        )
+        if signature != self._task_switcher_signature:
+            self._task_switcher_signature = signature
+            self.task_switch_combo.clear()
+            for row, task in enumerate(self._tasks):
+                title = task.title or "未命名视频"
+                display_text = self._task_switcher_text(row, title)
+                self.task_switch_combo.addItem(
+                    display_text,
+                    self._status_dot_icon(self._task_status_color(task)),
+                )
         current_row = self._current_task_row()
         if current_row >= 0:
             self.task_switch_combo.setCurrentIndex(current_row)
@@ -2449,62 +2464,126 @@ class VideoDownloadPage(QWidget):
         self.format_value_labels["filesize"].setText(format_bytes(option.filesize))
 
     def _refresh_download_table(self) -> None:
+        """Rebuild the whole table: row count, every cell, action widgets and selection.
+
+        Progress ticks must not come through here — they use
+        :meth:`_schedule_progress_refresh`, which only rewrites the cells whose
+        text actually changed.
+        """
+        self._progress_refresh_pending = False
         self.download_table.setRowCount(len(self._tasks))
         self.download_hint_label.setText("暂无下载任务。" if not self._tasks else f"共 {len(self._tasks)} 个任务。")
 
+        for row in [row for row in self._action_widget_state if row >= len(self._tasks)]:
+            self._action_widget_state.pop(row, None)
+
         for row, task in enumerate(self._tasks):
-            resolution = task.selected_format.resolution if task.selected_format else "-"
-            if task.status == TASK_STATUS_COMPLETED:
-                progress_text = "100%"
-            elif task.progress_merge_active:
-                progress_text = "合并中"
-            else:
-                progress_text = f"{task.progress:.0f}%"
+            self._write_task_row(row, task)
+            self.download_table.setRowHeight(row, DOWNLOAD_TABLE_ROW_HEIGHT)
 
-            status_item = QTableWidgetItem(task.status)
-            status_item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
-            if task.error_message:
-                status_item.setToolTip(task.error_message)
-
-            title_text = task.title or "-"
-            title_item = QTableWidgetItem(title_text)
-            title_item.setTextAlignment(int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
-            title_item.setToolTip(title_text)
-
-            source_item = QTableWidgetItem(task.source)
-            source_item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
-
-            resolution_item = QTableWidgetItem(resolution)
-            resolution_item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
-            resolution_item.setToolTip(resolution)
-
-            progress_item = QTableWidgetItem(progress_text)
-            progress_item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
-            progress_tooltip = " / ".join(part for part in (task.progress_phase_name, task.speed_text) if part)
-            if progress_tooltip:
-                progress_item.setToolTip(progress_tooltip)
-
-            size_item = QTableWidgetItem(format_bytes(task.filesize))
-            size_item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
-
-            self.download_table.setItem(row, 0, status_item)
-            self.download_table.setItem(row, 1, title_item)
-            self.download_table.setItem(row, 2, source_item)
-            self.download_table.setItem(row, 3, resolution_item)
-            self.download_table.setItem(row, 4, progress_item)
-            self.download_table.setItem(row, 5, size_item)
-            self.download_table.setCellWidget(row, 6, self._build_task_action_button(task))
-            self.download_table.setRowHeight(row, 44)
-
-        if self._current_task_id:
-            for row, task in enumerate(self._tasks):
-                if task.task_id == self._current_task_id:
-                    self._selection_syncing = True
-                    self.download_table.selectRow(row)
-                    self._selection_syncing = False
-                    break
+        self._sync_table_selection()
         self._refresh_download_actions()
         self._refresh_task_switcher()
+
+    def _write_task_row(self, row: int, task: DownloadTask) -> None:
+        resolution = task.selected_format.resolution if task.selected_format else "-"
+        if task.status == TASK_STATUS_COMPLETED:
+            progress_text = "100%"
+        elif task.progress_merge_active:
+            progress_text = "合并中"
+        else:
+            progress_text = f"{task.progress:.0f}%"
+        title_text = task.title or "-"
+        progress_tooltip = " / ".join(part for part in (task.progress_phase_name, task.speed_text) if part)
+
+        center = Qt.AlignmentFlag.AlignCenter
+        self._write_task_cell(row, 0, task.status, center, task.error_message)
+        self._write_task_cell(
+            row,
+            1,
+            title_text,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            title_text,
+        )
+        self._write_task_cell(row, 2, task.source, center)
+        self._write_task_cell(row, 3, resolution, center, resolution)
+        self._write_task_cell(row, 4, progress_text, center, progress_tooltip)
+        self._write_task_cell(row, 5, format_bytes(task.filesize), center)
+        self._sync_task_action_widget(row, task)
+
+    def _write_task_cell(
+        self,
+        row: int,
+        column: int,
+        text: str,
+        alignment: Qt.AlignmentFlag,
+        tooltip: str = "",
+    ) -> None:
+        """Update a cell in place, so unchanged cells never trigger a repaint."""
+        item = self.download_table.item(row, column)
+        if item is None:
+            item = QTableWidgetItem()
+            item.setTextAlignment(int(alignment))
+            self.download_table.setItem(row, column, item)
+        if item.text() != text:
+            item.setText(text)
+        if item.toolTip() != tooltip:
+            item.setToolTip(tooltip)
+
+    def _sync_task_action_widget(self, row: int, task: DownloadTask) -> None:
+        """Rebuild the 操作 cell only when the buttons it needs actually change.
+
+        Recreating it on every progress tick made the 取消 button blink, because
+        ``setCellWidget`` destroys the old widget and the replacement is only
+        shown and laid out on the next event-loop pass.
+        """
+        signature = (task.task_id, task.status)
+        cached = self._action_widget_state.get(row)
+        if cached == signature and self.download_table.cellWidget(row, DOWNLOAD_TABLE_ACTION_COLUMN) is not None:
+            return
+        self._action_widget_state[row] = signature
+        self.download_table.setCellWidget(
+            row,
+            DOWNLOAD_TABLE_ACTION_COLUMN,
+            self._build_task_action_button(task),
+        )
+
+    def _sync_table_selection(self) -> None:
+        if not self._current_task_id:
+            return
+        row = next(
+            (index for index, task in enumerate(self._tasks) if task.task_id == self._current_task_id),
+            -1,
+        )
+        if row < 0:
+            return
+        if {index.row() for index in self.download_table.selectedIndexes()} == {row}:
+            return
+        self._selection_syncing = True
+        self.download_table.selectRow(row)
+        self._selection_syncing = False
+
+    def _schedule_progress_refresh(self) -> None:
+        """Coalesce yt-dlp progress ticks into at most one repaint per interval."""
+        if self._progress_refresh_timer.isActive():
+            self._progress_refresh_pending = True
+            return
+        self._repaint_task_progress()
+        self._progress_refresh_timer.start()
+
+    def _flush_progress_refresh(self) -> None:
+        if not self._progress_refresh_pending:
+            return
+        self._progress_refresh_pending = False
+        self._repaint_task_progress()
+        self._progress_refresh_timer.start()
+
+    def _repaint_task_progress(self) -> None:
+        if self.download_table.rowCount() != len(self._tasks):
+            self._refresh_download_table()
+            return
+        for row, task in enumerate(self._tasks):
+            self._write_task_row(row, task)
 
     def _refresh_download_actions(self) -> None:
         has_tasks = bool(self._tasks)
@@ -2801,7 +2880,7 @@ class VideoDownloadPage(QWidget):
             task.filesize = learned_total
         task.progress = max(task.progress, self._compose_task_progress(task))
         self._update_task_speed_text(task, payload)
-        self._refresh_download_table()
+        self._schedule_progress_refresh()
 
     def _handle_download_success(self, task_id: str) -> None:
         task = self._task_index.get(task_id)
