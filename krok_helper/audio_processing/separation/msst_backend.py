@@ -450,6 +450,15 @@ class MsstSeparationBackend(SeparationBackend):
                 self._set_state(ServiceState.PROCESSING)
                 self.taskProgressChanged.emit(copy.deepcopy(self._progress))
 
+        def progress(done: float, total: float) -> None:
+            """MSST 的分块进度（秒）。与 PyMSS 同单位，面板直接给确定进度条。"""
+            if total <= 0:
+                return
+            self._progress.show_processing = True
+            self._progress.processing_done = done
+            self._progress.processing_total = total
+            self.taskProgressChanged.emit(copy.deepcopy(self._progress))
+
         def operation() -> list[ResultFile]:
             staging = target_dir / ".krok-msst-staging"
             produced = worker.separate(
@@ -465,7 +474,9 @@ class MsstSeparationBackend(SeparationBackend):
                     "device": "auto",
                 },
                 on_stage=stage,
+                on_progress=progress,
             )
+            self._progress.show_processing = False
             self._progress.stage_index = STAGE_SAVE
             self.taskProgressChanged.emit(copy.deepcopy(self._progress))
             label = spec.output_labels[-1]

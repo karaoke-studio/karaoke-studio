@@ -256,3 +256,29 @@ class TestWizardCopyMatchesTheMode:
             meta = STATE_META[state]
             assert "PyMSS" not in meta.detail, f"{state.value} 的说明写死了 PyMSS"
             assert "PyMSS" not in meta.label, f"{state.value} 的标题写死了 PyMSS"
+
+
+class TestSeparationProgress:
+    """MSST 自身只把分块进度打到终端，工作台在桥接进程内替换 tqdm 取出来。"""
+
+    def test_bridge_installs_a_progress_hook(self, tmp_path) -> None:
+        source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
+        assert "_install_progress_hook" in source
+        assert "_mss_utils.tqdm = _ProgressBar" in source
+        assert '"event": "progress"' in source
+
+    def test_progress_is_reported_in_seconds(self, tmp_path) -> None:
+        """面板用 format_elapsed 显示，单位必须是秒而不是样本数。"""
+        source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
+        assert "self.total / rate" in source
+        assert 'sample_rate' in source
+
+    def test_progress_never_exceeds_one_hundred_percent(self, tmp_path) -> None:
+        """回归：demix 的 tqdm 建在补零之后，最后一块会冲过 total（实测 102%）。"""
+        source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
+        assert "(self.total * ratio) / rate" in source, "上报前必须按 ratio 截断"
+
+    def test_progress_is_throttled(self, tmp_path) -> None:
+        """每个分块都发会刷屏，必须节流。"""
+        source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
+        assert "0.005" in source and "0.3" in source

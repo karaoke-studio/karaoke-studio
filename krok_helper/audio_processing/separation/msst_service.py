@@ -49,9 +49,77 @@ _separator = None
 _signature = None
 
 
+_progress_state = {"job": None, "rate": 44100, "last": 0.0, "ratio": -1.0}
+
+
 def _reply(payload):
     _protocol.write(json.dumps(payload, ensure_ascii=False) + "\n")
     _protocol.flush()
+
+
+class _ProgressBar:
+    """替换 MSST demix 里的 tqdm，把分块进度回传给工作台。
+
+    ``demix_track`` 只用到 total / update / close，这里实现这几项即可。
+    不改 MSST 的代码，只在本进程内替换 ``utils.utils`` 的 tqdm 引用。
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.total = kwargs.get("total") or 0
+        self.n = 0
+        _progress_state["ratio"] = -1.0
+
+    def update(self, step=1):
+        self.n += step
+        self._emit()
+
+    def _emit(self):
+        import time as _time
+
+        if not self.total:
+            return
+        ratio = min(1.0, self.n / float(self.total))
+        now = _time.time()
+        # 每个分块都发会刷屏：变化不足 0.5% 且间隔不到 0.3 秒就跳过。
+        if ratio - _progress_state["ratio"] < 0.005 and now - _progress_state["last"] < 0.3:
+            return
+        _progress_state["ratio"] = ratio
+        _progress_state["last"] = now
+        rate = float(_progress_state["rate"] or 44100)
+        # demix 的 tqdm 建在补零之后，最后一块的 update 会冲过 total（实测 102%）。
+        # 上报前按 ratio 截断，避免界面出现超过 100% 的进度。
+        _reply(
+            {
+                "event": "progress",
+                "id": _progress_state["job"],
+                "done": (self.total * ratio) / rate,
+                "total": self.total / rate,
+            }
+        )
+
+    def close(self):
+        self.n = self.total
+        _progress_state["ratio"] = -1.0
+
+    def set_postfix(self, *args, **kwargs):
+        return
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def _install_progress_hook():
+    """把分块进度接出来：MSST 自己只往终端打 tqdm，没有回调接口。"""
+    import utils.utils as _mss_utils
+
+    if getattr(_mss_utils, "_krok_patched", False):
+        return
+    _mss_utils.tqdm = _ProgressBar
+    _mss_utils._krok_patched = True
 
 
 def _ensure_separator(job):
@@ -89,6 +157,11 @@ def _ensure_separator(job):
         debug=False,
     )
     _signature = signature
+    _install_progress_hook()
+    try:
+        _progress_state["rate"] = int(_separator.config.audio.get("sample_rate", 44100))
+    except Exception:
+        _progress_state["rate"] = 44100
     return _separator
 
 
@@ -139,6 +212,8 @@ def main():
             break
         job_id = job.get("id")
         try:
+            _progress_state["job"] = job_id
+            _progress_state["ratio"] = -1.0
             _reply({"event": "stage", "id": job_id, "stage": "load"})
             path = _run(job)
             _reply({"event": "done", "id": job_id, "ok": True, "path": path})
@@ -252,7 +327,7 @@ class MsstWorker:
         self.stop()
         raise TimeoutError(f"MSST 桥接进程在 {timeout:.0f} 秒内没有就绪。详见日志：{log_path}")
 
-    def separate(self, job: dict, *, on_stage=None) -> str:
+    def separate(self, job: dict, *, on_stage=None, on_progress=None) -> str:
         """提交一个分离任务并等待完成，返回产出的文件路径。"""
         with self._lock:
             if not self.running or self.process.stdin is None or self.process.stdout is None:
@@ -271,6 +346,13 @@ class MsstWorker:
                 if event == "stage":
                     if on_stage is not None:
                         on_stage(str(payload.get("stage") or ""))
+                    continue
+                if event == "progress":
+                    if on_progress is not None:
+                        on_progress(
+                            float(payload.get("done") or 0.0),
+                            float(payload.get("total") or 0.0),
+                        )
                     continue
                 if event == "done":
                     if payload.get("ok"):
