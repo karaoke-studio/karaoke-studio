@@ -54,11 +54,18 @@ def _scan_via_catalog(
     folder: Path,
     install_dir: str | Path,
     *,
+    catalog_types: dict[str, str] | None = None,
     cancelled=None,
 ) -> list[ExternalModelCandidate]:
-    """按 catalog 文件名反查架构，处理没有 MSST 映射的目录。"""
+    """按 catalog 文件名反查架构，处理没有 MSST 映射的目录。
+
+    ``catalog_types``（模型名/别名 → ``model_type``）由调用方从**正在运行的服务**
+    取得。外部 PyMSS 环境没有托管安装目录，读不到内置的 ``model_catalog.json``，
+    只靠本地文件会一个都匹配不上。
+    """
     catalog = load_catalog(install_dir) if install_dir else {}
-    if not catalog:
+    types = dict(catalog_types or {})
+    if not catalog and not types:
         return []
 
     results: list[ExternalModelCandidate] = []
@@ -68,21 +75,20 @@ def _scan_via_catalog(
         if not weight.is_file() or weight.suffix.lower() not in WEIGHT_SUFFIXES:
             continue
         entry = catalog.get(weight.name) or catalog.get(weight.stem)
-        if entry is None:
-            continue  # 不在 catalog 里就无从得知架构，交给「无法识别」。
-        model_type = getattr(entry, "model_type", "") or _catalog_model_type(
-            install_dir, entry.name
-        )
+        model_type = types.get(weight.name) or types.get(weight.stem) or ""
+        if not model_type and entry is not None:
+            model_type = _catalog_model_type(install_dir, entry.name)
         if not model_type:
-            continue
+            continue  # 无从得知架构就不猜，跳过（§8.7 同一原则）。
         config = guess_config_path(weight)
-        if config is None and entry.config_relpath:
+        if config is None and entry is not None and entry.config_relpath and install_dir:
             candidate_config = Path(install_dir) / "models" / entry.config_relpath
             config = candidate_config if candidate_config.is_file() else None
         from .local_import import read_stems
 
         instruments = read_stems(config)
-        for task in _suggest_tasks(weight.name, entry.relpath, instruments):
+        category = entry.relpath if entry is not None else str(weight.parent.name)
+        for task in _suggest_tasks(weight.name, category, instruments):
             results.append(
                 build_candidate(
                     name=weight.name,
@@ -126,6 +132,7 @@ def scan_folder(
     folder: str | Path,
     *,
     install_dir: str | Path = "",
+    catalog_types: dict[str, str] | None = None,
     cancelled=None,
 ) -> list[ExternalModelCandidate]:
     """扫描一个文件夹，返回其中可绑定的模型候选（同一模型可对应多个任务）。"""
@@ -141,7 +148,9 @@ def scan_folder(
             for candidate in scan_msst_models(root, cancelled=cancelled)
             if candidate.model_path and _is_under(Path(candidate.model_path), base)
         ]
-    return _scan_via_catalog(base, install_dir, cancelled=cancelled)
+    return _scan_via_catalog(
+        base, install_dir, catalog_types=catalog_types, cancelled=cancelled
+    )
 
 
 def match_tasks(

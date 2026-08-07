@@ -306,3 +306,62 @@ class TestFolderOneClickImport:
 
         with pytest.raises(FileNotFoundError):
             scan_folder(tmp_path / "nope")
+
+
+class TestFolderScanWithoutManagedInstall:
+    """外部 PyMSS 环境没有托管安装目录，架构信息只能来自正在运行的服务。"""
+
+    def _models_dir(self, tmp_path):
+        folder = tmp_path / "models" / "vocal"
+        folder.mkdir(parents=True)
+        weight = folder / "inst_v1e.ckpt"
+        weight.write_bytes(b"w" * 64)
+        (folder / "inst_v1e.yaml").write_text(
+            "training:\n  instruments:\n  - other\n  - vocals\n", encoding="utf-8"
+        )
+        return tmp_path / "models"
+
+    def test_without_install_dir_or_catalog_nothing_matches(self, tmp_path) -> None:
+        """回归现场：选「使用已有 PyMSS」后扫 models 目录一个也扫不出来。"""
+        from krok_helper.audio_processing.separation.folder_import import scan_folder
+
+        assert scan_folder(self._models_dir(tmp_path), install_dir="") == []
+
+    def test_service_supplied_catalog_types_make_it_work(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.folder_import import (
+            match_tasks,
+            scan_folder,
+        )
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        candidates = scan_folder(
+            self._models_dir(tmp_path),
+            install_dir="",
+            catalog_types={"inst_v1e.ckpt": "mel_band_roformer"},
+        )
+        assert candidates, "服务给出架构后应当能匹配"
+        matched = match_tasks(candidates, {TaskType.VOCAL: "inst_v1e"})
+        assert matched[TaskType.VOCAL].display_name == "inst_v1e.ckpt"
+        assert matched[TaskType.VOCAL].model_type == "mel_band_roformer"
+        assert matched[TaskType.VOCAL].target_stem == "other/vocals"
+
+    def test_alias_without_extension_also_matches(self, tmp_path) -> None:
+        """catalog 的别名不带 .ckpt 后缀，两种写法都要能命中。"""
+        from krok_helper.audio_processing.separation.folder_import import scan_folder
+
+        candidates = scan_folder(
+            self._models_dir(tmp_path),
+            install_dir="",
+            catalog_types={"inst_v1e": "mel_band_roformer"},
+        )
+        assert candidates
+
+    def test_unknown_model_is_skipped_not_guessed(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.folder_import import scan_folder
+
+        folder = tmp_path / "models"
+        folder.mkdir(parents=True)
+        (folder / "mystery.ckpt").write_bytes(b"w" * 64)
+        assert scan_folder(
+            folder, install_dir="", catalog_types={"inst_v1e": "mel_band_roformer"}
+        ) == []

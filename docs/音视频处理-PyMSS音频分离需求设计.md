@@ -639,7 +639,7 @@ MSST-WebUI 自己的 map 文件。二者都覆盖不到「手上就有一个 `.c
 | 目录类型 | 架构与配置来源 |
 |---|---|
 | MSST-WebUI 的 `pretrain`（含子目录） | 从所选目录**逐级向上**找到 MSST 根，复用其 `data/msst_model_map.json`，再筛出物理位于所选目录下的条目 |
-| 按 catalog 结构摆放的 `models/` | 无 MSST 映射，按**文件名**反查托管 Runtime 内置的 `model_catalog.json` |
+| 按 catalog 结构摆放的 `models/` | 无 MSST 映射，按**文件名**反查 catalog。架构优先问**正在运行的服务**（`/v1/catalog/models`），拿不到再退回托管 Runtime 内置的 `model_catalog.json` |
 
 两条路径都取不到架构的文件不会被猜测，直接不列入候选（与 §8.7 同一原则）。
 
@@ -647,6 +647,9 @@ MSST-WebUI 自己的 map 文件。二者都覆盖不到「手上就有一个 `.c
 稳定。每个任务一行，可下拉改选同任务的其他候选，也可以选「不绑定」。确认后走既有的
 `bind_external_model` 落定——原文件保持原地，只登记引用。
 
+> 外部 PyMSS 环境（「使用已有 PyMSS」）没有托管安装目录，读不到内置的 catalog，
+> 因此架构必须问服务；只依赖本地 catalog 会在这种模式下一个模型都匹配不上。
+>
 > MSST 的 `.ckpt` 旁边没有 `.yaml`（配置在 `configs/` 里），所以这类目录必须靠映射文件
 > 而不是「同名配置」来解析，这也是为什么不能简单套用 §8.7 的单文件逻辑。
 

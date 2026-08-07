@@ -741,8 +741,31 @@ class RealSeparationBackend(SeparationBackend):
         }
         self.folderScanStarted.emit()
 
+        client = self._client
+
         def operation():
-            candidates = scan_folder(target, install_dir=install_dir)
+            # 架构信息优先问正在运行的服务：外部 PyMSS 环境没有托管安装目录，
+            # 读不到内置的 model_catalog.json，只靠本地文件会一个都匹配不上。
+            catalog_types: dict[str, str] = {}
+            if client is not None:
+                try:
+                    for row in client.catalog_models(supported=True):
+                        info = row.get("pymss") if isinstance(row, dict) else None
+                        if not isinstance(info, dict):
+                            continue
+                        model_type = str(info.get("model_type") or "")
+                        if not model_type:
+                            continue
+                        for key in [info.get("name"), *(info.get("aliases") or [])]:
+                            name = str(key or "").strip()
+                            if name:
+                                catalog_types[name] = model_type
+                                catalog_types.setdefault(Path(name).stem, model_type)
+                except Exception:
+                    catalog_types = {}  # 拿不到就退回本地 catalog
+            candidates = scan_folder(
+                target, install_dir=install_dir, catalog_types=catalog_types
+            )
             return candidates, match_tasks(candidates, preferred)
 
         def success(result) -> None:
