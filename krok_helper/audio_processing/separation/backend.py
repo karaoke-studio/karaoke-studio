@@ -152,6 +152,9 @@ class SeparationBackend(QObject):
     modelStemsFailed = pyqtSignal(str, str)       # model, 中文原因
     localImportFinished = pyqtSignal(object)      # ExternalModelCandidate
     localImportFailed = pyqtSignal(str)           # 中文原因
+    folderScanStarted = pyqtSignal()
+    folderScanFinished = pyqtSignal(object, object)  # list[候选], dict[TaskType, candidate_id]
+    folderScanFailed = pyqtSignal(str)
 
     def snapshot(self) -> SeparationSnapshot:
         raise NotImplementedError
@@ -221,6 +224,14 @@ class SeparationBackend(QObject):
 
         原文件保持原地：只在工作台自己的用户模型清单里登记引用，不复制、不移动、
         不修改（与 MSST 映射同一条约束，§4.5）。
+        """
+        raise NotImplementedError
+
+    def start_folder_scan(self, folder: str) -> None:
+        """一键导入：扫描一个文件夹并为三个任务各匹配一个模型（异步）。
+
+        完成后发 folderScanFinished(候选列表, 建议映射)；候选会进入后端缓存，
+        界面确认后按 candidate_id 调 :meth:`bind_external_model` 落定。
         """
         raise NotImplementedError
 
@@ -621,6 +632,29 @@ class MockSeparationBackend(SeparationBackend):
         self._settings[TASK_MODEL_OVERRIDES_KEY] = overrides
         self._rebuild_dependencies()
         self._emit()
+
+    def start_folder_scan(self, folder: str) -> None:
+        from krok_helper.audio_processing.separation.folder_import import (
+            match_tasks,
+            scan_folder,
+        )
+        from krok_helper.audio_processing.separation.presets import TASK_PRESETS
+
+        self.folderScanStarted.emit()
+
+        def run() -> None:
+            try:
+                candidates = scan_folder(folder, install_dir=self._snap.install_dir)
+            except Exception as exc:
+                self.folderScanFailed.emit(str(exc).strip() or type(exc).__name__)
+                return
+            preferred = {t: TASK_PRESETS[t].steps[-1].model for t in TaskType}
+            matched = match_tasks(candidates, preferred)
+            self.folderScanFinished.emit(
+                candidates, {t: c.candidate_id for t, c in matched.items()}
+            )
+
+        self._delay(80, run)
 
     def import_local_model(
         self,

@@ -50,6 +50,7 @@ from .presets import (
     effective_steps,
     task_override,
 )
+from .folder_import import match_tasks, scan_folder
 from .local_import import build_local_candidate
 from .local_models import scan_local_models
 from .stems import parse_model_stems
@@ -698,6 +699,36 @@ class RealSeparationBackend(SeparationBackend):
             self._rebuild_dependencies()
         self._emit()
         self._log(f"已将 {candidate.display_name} 映射到{TASK_SPECS[task].title}。")
+
+    def start_folder_scan(self, folder: str) -> None:
+        target = str(folder or "").strip()
+        if not target:
+            return
+        install_dir = str(self._snap.install_dir or "")
+        preferred = {
+            task: TASK_PRESETS[task].steps[-1].model for task in TaskType
+        }
+        self.folderScanStarted.emit()
+
+        def operation():
+            candidates = scan_folder(target, install_dir=install_dir)
+            return candidates, match_tasks(candidates, preferred)
+
+        def success(result) -> None:
+            candidates, matched = result
+            # 候选进缓存，界面确认后按 candidate_id 走既有的绑定路径。
+            self._scan_candidates.update(
+                {item.candidate_id: item for item in candidates}
+            )
+            self.folderScanFinished.emit(
+                candidates, {task: item.candidate_id for task, item in matched.items()}
+            )
+
+        self._submit(
+            operation,
+            success,
+            lambda exc: self.folderScanFailed.emit(str(exc).strip() or type(exc).__name__),
+        )
 
     def import_local_model(
         self,

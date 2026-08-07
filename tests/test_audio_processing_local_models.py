@@ -208,3 +208,101 @@ class TestMsstParserConsolidation:
             "training:\n  instruments:\n    - vocals\n    - other\n", encoding="utf-8"
         )
         assert _config_instruments(path) == ("vocals", "other")
+
+
+class TestFolderOneClickImport:
+    """一键导入：扫描文件夹并为三个任务各匹配一个模型。"""
+
+    def _msst_tree(self, tmp_path):
+        """最小 MSST-WebUI 结构：映射文件 + pretrain 权重 + configs 配置。"""
+        import json as _json
+
+        root = tmp_path / "MSST"
+        (root / "data").mkdir(parents=True)
+        (root / "configs").mkdir(parents=True)
+        (root / "pretrain" / "vocal_models").mkdir(parents=True)
+
+        (root / "configs" / "inst.yaml").write_text(
+            "training:\n  instruments:\n  - other\n  - vocals\n", encoding="utf-8"
+        )
+        (root / "configs" / "kara.yaml").write_text(
+            "training:\n  instruments:\n  - karaoke\n  - other\n", encoding="utf-8"
+        )
+        (root / "pretrain" / "vocal_models" / "inst_v1e.ckpt").write_bytes(b"w" * 64)
+        (root / "pretrain" / "vocal_models" / "mel_band_roformer_karaoke_test.ckpt").write_bytes(b"w" * 64)
+        (root / "data" / "msst_model_map.json").write_text(
+            _json.dumps(
+                {
+                    "vocal_models": [
+                        {
+                            "name": "inst_v1e.ckpt",
+                            "model_type": "mel_band_roformer",
+                            "config_path": "configs/inst.yaml",
+                        },
+                        {
+                            "name": "mel_band_roformer_karaoke_test.ckpt",
+                            "model_type": "mel_band_roformer",
+                            "config_path": "configs/kara.yaml",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return root
+
+    def test_finds_msst_root_from_a_nested_folder(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.folder_import import find_msst_root
+
+        root = self._msst_tree(tmp_path)
+        assert find_msst_root(root / "pretrain" / "vocal_models") == root.resolve()
+        assert find_msst_root(root / "pretrain") == root.resolve()
+
+    def test_scans_msst_pretrain_and_matches_tasks(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.folder_import import (
+            match_tasks,
+            scan_folder,
+        )
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        root = self._msst_tree(tmp_path)
+        candidates = scan_folder(root / "pretrain")
+        matched = match_tasks(candidates, {TaskType.VOCAL: "inst_v1e"})
+
+        assert matched[TaskType.VOCAL].display_name == "inst_v1e.ckpt"
+        assert matched[TaskType.HARMONY].display_name == "mel_band_roformer_karaoke_test.ckpt"
+        assert all(item.model_type == "mel_band_roformer" for item in matched.values())
+
+    def test_only_returns_models_under_the_chosen_folder(self, tmp_path) -> None:
+        """选了子目录就不该把同一 MSST 树里别处的模型也算进来。"""
+        from krok_helper.audio_processing.separation.folder_import import scan_folder
+
+        root = self._msst_tree(tmp_path)
+        (root / "pretrain" / "other_models").mkdir()
+        names = {
+            item.display_name
+            for item in scan_folder(root / "pretrain" / "other_models")
+        }
+        assert names == set()
+
+    def test_prefers_the_recommended_model_when_several_fit(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.folder_import import (
+            match_tasks,
+            scan_folder,
+        )
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        root = self._msst_tree(tmp_path)
+        candidates = scan_folder(root / "pretrain")
+        vocal_options = [c for c in candidates if c.task is TaskType.VOCAL and c.bindable]
+        assert len(vocal_options) >= 1
+        matched = match_tasks(candidates, {TaskType.VOCAL: "inst_v1e"})
+        assert matched[TaskType.VOCAL].display_name == "inst_v1e.ckpt"
+
+    def test_missing_folder_raises(self, tmp_path) -> None:
+        import pytest
+
+        from krok_helper.audio_processing.separation.folder_import import scan_folder
+
+        with pytest.raises(FileNotFoundError):
+            scan_folder(tmp_path / "nope")

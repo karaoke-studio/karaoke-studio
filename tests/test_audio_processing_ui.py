@@ -880,3 +880,96 @@ class TestLocalModelImportDialog:
         QApplication.instance().processEvents()
         assert dialog._hint.text() == "模拟失败原因"
         assert dialog._ok.isEnabled(), "失败后应允许改参数重试"
+
+
+class TestFolderImportDialog:
+    """一键导入文件夹的界面流程。"""
+
+    def _fixture(self, tmp_path):
+        import json as _json
+
+        from krok_helper.audio_processing.separation.settings_dialog import (
+            FolderImportDialog,
+        )
+
+        root = tmp_path / "MSST"
+        (root / "data").mkdir(parents=True)
+        (root / "configs").mkdir(parents=True)
+        (root / "pretrain" / "vocal_models").mkdir(parents=True)
+        (root / "configs" / "inst.yaml").write_text(
+            "training:\n  instruments:\n  - other\n  - vocals\n", encoding="utf-8"
+        )
+        (root / "configs" / "kara.yaml").write_text(
+            "training:\n  instruments:\n  - karaoke\n  - other\n", encoding="utf-8"
+        )
+        (root / "pretrain" / "vocal_models" / "inst_v1e.ckpt").write_bytes(b"w" * 64)
+        (root / "pretrain" / "vocal_models" / "mel_band_roformer_karaoke_x.ckpt").write_bytes(
+            b"w" * 64
+        )
+        (root / "data" / "msst_model_map.json").write_text(
+            _json.dumps(
+                {
+                    "vocal_models": [
+                        {
+                            "name": "inst_v1e.ckpt",
+                            "model_type": "mel_band_roformer",
+                            "config_path": "configs/inst.yaml",
+                        },
+                        {
+                            "name": "mel_band_roformer_karaoke_x.ckpt",
+                            "model_type": "mel_band_roformer",
+                            "config_path": "configs/kara.yaml",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        return FolderImportDialog(backend), backend, root
+
+    def test_blocks_before_scanning(self, tmp_path) -> None:
+        dialog, _backend, _root = self._fixture(tmp_path)
+        assert not dialog._ok.isEnabled()
+
+    def test_scan_fills_every_task_row(self, tmp_path) -> None:
+        dialog, backend, root = self._fixture(tmp_path)
+        backend.start_folder_scan(str(root / "pretrain"))
+        QApplication.instance().processEvents()
+
+        vocal_card, vocal_combo = dialog._rows[TaskType.VOCAL]
+        harmony_card, _ = dialog._rows[TaskType.HARMONY]
+        assert "inst_v1e" in vocal_card.contentLabel.text()
+        assert "karaoke" in harmony_card.contentLabel.text()
+        assert vocal_combo.isEnabled()
+        assert vocal_combo.itemText(0) == "不绑定", "必须允许某个任务不绑定"
+        assert dialog._ok.isEnabled()
+
+    def test_selection_skips_unbound_rows(self, tmp_path) -> None:
+        dialog, backend, root = self._fixture(tmp_path)
+        backend.start_folder_scan(str(root / "pretrain"))
+        QApplication.instance().processEvents()
+
+        dialog._rows[TaskType.INSTRUMENTAL][1].setCurrentIndex(0)  # 不绑定
+        chosen = dialog.selection()
+        assert TaskType.INSTRUMENTAL not in chosen
+        assert TaskType.VOCAL in chosen
+
+    def test_apply_binds_selected_tasks(self, tmp_path) -> None:
+        dialog, backend, root = self._fixture(tmp_path)
+        backend.start_folder_scan(str(root / "pretrain"))
+        QApplication.instance().processEvents()
+
+        dialog._apply()
+        QApplication.instance().processEvents()
+        assert backend.bound_external_candidate(TaskType.VOCAL)
+        assert backend.bound_external_candidate(TaskType.HARMONY)
+
+    def test_scan_failure_is_surfaced(self, tmp_path) -> None:
+        dialog, backend, _root = self._fixture(tmp_path)
+        backend.start_folder_scan(str(tmp_path / "does-not-exist"))
+        QApplication.instance().processEvents()
+        assert "不存在" in dialog._hint.text()
+        assert not dialog._ok.isEnabled()

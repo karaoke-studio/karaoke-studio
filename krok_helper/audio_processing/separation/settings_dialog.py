@@ -401,6 +401,153 @@ class LocalModelImportDialog(QDialog):
         self._ok.setEnabled(True)
 
 
+class FolderImportDialog(QDialog):
+    """一键导入：选一个文件夹，自动为三个任务各匹配一个模型。
+
+    支持 MSST-WebUI 的 ``pretrain``（架构来自 MSST 自己的映射文件）和按 catalog
+    结构摆放的 ``models/``（按文件名反查 catalog）。匹配结果可逐行改选或不绑定。
+    """
+
+    def __init__(self, backend: SeparationBackend, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._backend = backend
+        self._candidates: list = []
+
+        self.setWindowTitle("一键导入模型文件夹")
+        self.resize(700, 480)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+        layout.addWidget(SubtitleLabel("一键导入模型文件夹", self))
+
+        folder_row = QHBoxLayout()
+        folder_row.setContentsMargins(0, 0, 0, 0)
+        folder_row.setSpacing(8)
+        folder_row.addWidget(BodyLabel("文件夹", self))
+        self._folder_edit = LineEdit(self)
+        self._folder_edit.setReadOnly(True)
+        self._folder_edit.setPlaceholderText("PyMSS 的 models 目录，或 MSST 的 pretrain 目录")
+        folder_row.addWidget(self._folder_edit, 1)
+        browse = PushButton(FIF.FOLDER, "浏览", self)
+        browse.clicked.connect(self._browse)
+        folder_row.addWidget(browse)
+        layout.addLayout(folder_row)
+
+        group = SettingCardGroup("匹配到的模型", self)
+        self._rows: dict = {}
+        for task in TaskType:
+            card = SettingCard(FIF.LIBRARY, TASK_SPECS[task].title, "尚未扫描", group)
+            combo = ComboBox(card)
+            combo.setMinimumWidth(260)
+            combo.setEnabled(False)
+            _add_card_actions(card, combo)
+            group.addSettingCard(card)
+            self._rows[task] = (card, combo)
+        layout.addWidget(group)
+
+        self._hint = CaptionLabel("选择文件夹后自动扫描；原文件保持原地，只登记引用。", self)
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
+        layout.addStretch(1)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addStretch(1)
+        cancel = PushButton("取消", self)
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+        self._ok = PrimaryPushButton("导入并绑定", self)
+        self._ok.setEnabled(False)
+        self._ok.clicked.connect(self._apply)
+        footer.addWidget(self._ok)
+        layout.addLayout(footer)
+
+        backend.folderScanStarted.connect(self._on_started)
+        backend.folderScanFinished.connect(self._on_finished)
+        backend.folderScanFailed.connect(self._on_failed)
+
+    def _browse(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择模型文件夹")
+        if not folder:
+            return
+        self._folder_edit.setText(folder)
+        self._backend.start_folder_scan(folder)
+
+    def _on_started(self) -> None:
+        self._hint.setText("正在扫描…")
+        self._ok.setEnabled(False)
+
+    def _on_finished(self, candidates, matched) -> None:
+        self._candidates = list(candidates)
+        any_match = False
+        for task, (card, combo) in self._rows.items():
+            options = [
+                item
+                for item in self._candidates
+                if item.task is task and item.bindable
+            ]
+            combo.blockSignals(True)
+            combo.clear()
+            # qfluentwidgets 的 ComboBox 用 addItem(..., userData=) 带数据，
+            # 其 setItemData/currentData 不接受 Qt 的 role 参数。
+            combo.addItem("不绑定", userData="")
+            for item in options:
+                combo.addItem(item.display_name, userData=item.candidate_id)
+            combo.blockSignals(False)
+            combo.setEnabled(bool(options))
+
+            chosen = matched.get(task, "")
+            if chosen:
+                for index in range(combo.count()):
+                    if combo.itemData(index) == chosen:
+                        combo.setCurrentIndex(index)
+                        break
+                picked = next(
+                    (item for item in options if item.candidate_id == chosen), None
+                )
+                card.setContent(
+                    f"{picked.display_name} · {picked.model_type} · 输出轨 {picked.target_stem}"
+                    if picked
+                    else "已匹配"
+                )
+                any_match = True
+            else:
+                card.setContent("这个文件夹里没有适合该任务的模型")
+        self._ok.setEnabled(any_match)
+        total = len({item.candidate_id for item in self._candidates if item.bindable})
+        self._hint.setText(
+            f"扫描完成：可用候选 {total} 个。原文件保持原地，只登记引用。"
+            if total
+            else "扫描完成，但没有找到可用的模型。"
+        )
+
+    def _on_failed(self, reason: str) -> None:
+        self._hint.setText(reason)
+        self._ok.setEnabled(False)
+
+    def selection(self) -> dict:
+        """返回用户确认后的 {任务: candidate_id}（不含「不绑定」）。"""
+        result = {}
+        for task, (_card, combo) in self._rows.items():
+            candidate_id = combo.currentData()
+            if candidate_id:
+                result[task] = str(candidate_id)
+        return result
+
+    def _apply(self) -> None:
+        chosen = self.selection()
+        if not chosen:
+            self._hint.setText("请至少为一个任务选择模型。")
+            return
+        for task, candidate_id in chosen.items():
+            try:
+                self._backend.bind_external_model(task, candidate_id)
+            except Exception as exc:
+                self._hint.setText(f"绑定失败：{exc}")
+                return
+        self.accept()
+
+
 class SeparationSettingsDialog(QDialog):
     """音频分离设置。所有改动直接写 settings_ns 并触发 save_settings。"""
 
@@ -502,6 +649,18 @@ class SeparationSettingsDialog(QDialog):
 
     # ── 模型与输出轨 ────────────────────────────────────────────
     def _build_models_page(self) -> QWidget:
+        quick = SettingCardGroup("批量导入", self)
+        quick_card = SettingCard(
+            FIF.FOLDER,
+            "一键导入模型文件夹",
+            "选 PyMSS 的 models 目录或 MSST 的 pretrain 目录，自动为三个任务匹配模型",
+            quick,
+        )
+        quick_button = PushButton("选择文件夹…", quick_card)
+        quick_button.clicked.connect(self._import_folder)
+        _add_card_actions(quick_card, quick_button)
+        quick.addSettingCard(quick_card)
+
         group = SettingCardGroup("每个任务使用的模型", self)
         self._model_cards: dict = {}
         for task in TaskType:
@@ -516,7 +675,7 @@ class SeparationSettingsDialog(QDialog):
             group.addSettingCard(card)
             self._model_cards[task] = (card, reset)
         self._refresh_model_cards()
-        return _build_settings_page(self, [group])
+        return _build_settings_page(self, [quick, group])
 
     def _refresh_model_cards(self) -> None:
         for task, (card, reset) in self._model_cards.items():
@@ -548,6 +707,13 @@ class SeparationSettingsDialog(QDialog):
         if not model or not stem:
             return
         self._backend.set_task_model(task, model, stem, size)
+        self._save_settings()
+        self._refresh_model_cards()
+
+    def _import_folder(self) -> None:
+        dialog = FolderImportDialog(self._backend, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
         self._save_settings()
         self._refresh_model_cards()
 
