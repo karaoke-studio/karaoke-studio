@@ -1,0 +1,103 @@
+name: Build PyMSS runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish or replace the pinned runtime release assets
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [windows-cpu, windows-cu128]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          cache: pip
+      - name: Build portable runtime
+        shell: powershell
+        run: >-
+          ./scripts/build_pymss_runtime.ps1
+          -Variant "${{ matrix.variant }}"
+          -HostPython python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pymss-runtime-${{ matrix.variant }}
+          path: dist/pymss-runtime-${{ matrix.variant }}/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    if: ${{ inputs.publish }}
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PYMSS_RUNTIME_RELEASE_TOKEN }}
+      RUNTIME_REPOSITORY: karaoke-studio/karaoke-studio-runtime
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pymss-runtime-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create or update runtime release
+        shell: bash
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "缺少 PYMSS_RUNTIME_RELEASE_TOKEN，无法发布到独立 Runtime 仓库。" >&2
+            exit 1
+          fi
+          mapfile -t contracts < <(
+            find release-assets -type f -name 'KaraokeStudio-PyMSS-*.json' -print0 \
+              | xargs -0 -r jq -r '"\(.pymss_version) \(.runtime_version)"' \
+              | sort -u
+          )
+          if [ "${#contracts[@]}" -ne 1 ]; then
+            printf 'Runtime manifests disagree or are missing:\n%s\n' "${contracts[*]}" >&2
+            exit 1
+          fi
+          read -r pymss_version runtime_version <<< "${contracts[0]}"
+          runtime_tag="pymss-runtime-v${pymss_version}-r${runtime_version}"
+          if ! gh release view "$runtime_tag" --repo "$RUNTIME_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$runtime_tag" \
+              --repo "$RUNTIME_REPOSITORY" \
+              --target main \
+              --title "PyMSS managed runtime v${pymss_version} r${runtime_version}" \
+              --notes "Karaoke Studio 托管 PyMSS 底座；由版本化清单校验并安装，不包含 torch 或音频分离模型。客户端按设备从 PyTorch 官方源单独下载并校验 torch。"
+            find release-assets -type f -print0 \
+              | xargs -0 gh release upload "$runtime_tag" --repo "$RUNTIME_REPOSITORY"
+            exit 0
+          fi
+
+          mkdir -p existing-assets
+          gh release download "$runtime_tag" --repo "$RUNTIME_REPOSITORY" --dir existing-assets || true
+          while IFS= read -r -d '' asset; do
+            name="$(basename "$asset")"
+            existing="existing-assets/$name"
+            if [ -f "$existing" ]; then
+              if ! cmp -s "$asset" "$existing"; then
+                echo "拒绝覆盖不可变资产 $name；请递增 PYMSS_RUNTIME_VERSION。" >&2
+                exit 1
+              fi
+              echo "已存在且内容一致，跳过：$name"
+            else
+              gh release upload "$runtime_tag" "$asset" --repo "$RUNTIME_REPOSITORY"
+            fi
+          done < <(find release-assets -type f -print0)

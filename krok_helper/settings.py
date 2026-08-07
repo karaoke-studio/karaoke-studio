@@ -109,6 +109,12 @@ class AppSettings:
     # 输出目录、硬编偏好、最近样式预设等）在模块 P0-A8 输出 MP4 时落地。
     subtitle_render: dict = field(default_factory=dict)
 
+    # ── 「音视频处理」模块（音频分离 / PyMSS）的设置 namespace ──
+    # 需求文档 docs/音视频处理-PyMSS音频分离需求设计.md §10：模块内部以 dict
+    # 形式读写，保存安装位置、运行时来源、任务模型绑定、输出设置与
+    # last_internal_tab 等。API key 不写入本 namespace（每次启动临时生成）。
+    pymss: dict = field(default_factory=dict)
+
 
 def _settings_path_for_app_name(app_name: str) -> Path:
     appdata = os.getenv("APPDATA")
@@ -261,6 +267,7 @@ def load_app_settings() -> AppSettings:
         lyrics_timing_migrated_v1=bool(payload.get(LYRICS_TIMING_MIGRATED_KEY, False)),
         workflow_compact=bool(payload.get("workflow_compact", False)),
         subtitle_render=_safe_dict(payload.get("subtitle_render")),
+        pymss=_safe_dict(payload.get("pymss")),
     )
 
 

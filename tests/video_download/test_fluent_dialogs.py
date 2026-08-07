@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtWidgets import QApplication
-from qfluentwidgets import MessageBox, MessageBoxBase
+from qfluentwidgets import MessageBoxBase
 
+from krok_helper.qfluent_compat import HostFluentMessageDialog
 from krok_helper.settings import AppSettings
 from krok_helper.video_download.download_task import (
     DownloadTask,
@@ -44,7 +45,7 @@ def test_module_has_no_native_message_dialogs() -> None:
 def test_delete_running_task_asks_with_fluent_box(page, monkeypatch) -> None:
     seen: list[tuple[str, str, str]] = []
     monkeypatch.setattr(
-        MessageBox,
+        HostFluentMessageDialog,
         "exec",
         lambda self: seen.append((self.titleLabel.text(), self.yesButton.text(), self.cancelButton.text())) or 0,
     )
@@ -61,7 +62,11 @@ def test_delete_running_task_asks_with_fluent_box(page, monkeypatch) -> None:
 
 def test_clear_list_while_downloading_shows_fluent_info(page, monkeypatch) -> None:
     seen: list[str] = []
-    monkeypatch.setattr(MessageBox, "exec", lambda self: seen.append(self.titleLabel.text()) or 0)
+    monkeypatch.setattr(
+        HostFluentMessageDialog,
+        "exec",
+        lambda self: seen.append(self.titleLabel.text()) or 0,
+    )
     page._running_workers = {"t1": object()}
     page._tasks.append(DownloadTask(task_id="t1", url="u", title="标题", source="Bilibili"))
 

@@ -60,6 +60,10 @@ EXCLUDED_MODULES=(
   matplotlib
   pandas
   pytest
+  torch
+  pymss
+  pymss_core
+  pip
   PIL
 )
 
@@ -324,6 +328,16 @@ for component in "QtMultimedia.framework" "QtMultimediaWidgets.framework" "libff
   fi
 done
 if [ "$missing" -ne 0 ]; then
+  exit 1
+fi
+for forbidden_dir in torch functorch torchgen pymss pymss_core pip; do
+  if find "$APP_INTERNAL" -type d -name "$forbidden_dir" -print -quit | grep -q .; then
+    echo "$forbidden_dir must not be bundled in Karaoke Studio"
+    exit 1
+  fi
+done
+if find "$APP_INTERNAL" -type d \( -name 'torch-*' -o -name 'pymss-*' -o -name 'pymss_core-*' -o -name 'pip-*' \) -print -quit | grep -q .; then
+  echo "PyMSS/torch/pip package metadata must not be bundled in Karaoke Studio"
   exit 1
 fi
 warn_file="$(find "$WORK_PATH" -name 'warn-*.txt' -type f -print -quit || true)"

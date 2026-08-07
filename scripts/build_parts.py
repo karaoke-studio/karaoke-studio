@@ -76,7 +76,9 @@ LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 # v3: 随包分发 aria2c（_internal/tools/aria2/），B 站下载走多连接。新增的是纯二进制，
 #     既不改 pip freeze 也不改 dist-info，指纹会照旧匹配 —— 不撞 profile 的话 CI 会
 #     原样复用上一版 runtime zip，aria2c 会被静默丢掉。
-RUNTIME_PROFILE = "aria2c-v3"
+# v4: 主程序明确排除 torch；PyMSS 私有运行时在首次配置时单独安装 torch。禁止复用任何
+#     可能由旧构建环境意外收集了 torch 的 runtime zip。
+RUNTIME_PROFILE = "pymss-no-torch-v4"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {

@@ -2,13 +2,76 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
+
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtWidgets import QWidget
+from qfluentwidgets import Dialog
 
 
 _PATCH_MARKER = "_krok_menu_lifetime_safe"
 _TOOLTIP_PATCH_MARKER = "_krok_parentless_tooltip"
 _TOOLTIP_SHADOW_PATCH_MARKER = "_krok_slim_tooltip_shadow"
 _manual_tooltips = {}
+
+
+class _DimOverlay(QWidget):
+    """Non-interactive dim layer below a top-level Fluent dialog."""
+
+    def __init__(self, anchor_window: QWidget) -> None:
+        super().__init__(anchor_window)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setGeometry(0, 0, anchor_window.width(), anchor_window.height())
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 96))
+        finally:
+            painter.end()
+
+
+class HostFluentMessageDialog(Dialog):
+    """Clickable Fluent dialog for pages embedded in the workbench window.
+
+    ``qfluentwidgets.MessageBox`` is itself a child-sized mask dialog.  In the
+    workbench's stacked-page hierarchy that mask can remain above its content
+    and consume mouse input.  A real top-level ``Dialog`` plus a separate dim
+    layer keeps modality and visual treatment without putting a mask over the
+    buttons.
+    """
+
+    def __init__(self, title: str, content: str, parent=None) -> None:
+        anchor = resolve_fluent_dialog_parent(parent)
+        super().__init__(title, content, anchor)
+        self.setTitleBarVisible(False)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self._anchor_window = anchor
+        self._dim: Optional[_DimOverlay] = None
+
+    def _ensure_active(self) -> None:
+        self.raise_()
+        self.activateWindow()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._ensure_active()
+        QTimer.singleShot(0, self._ensure_active)
+
+    def exec(self) -> int:
+        anchor = self._anchor_window
+        if anchor is not None and anchor.isVisible():
+            self._dim = _DimOverlay(anchor)
+            self._dim.show()
+            self._dim.raise_()
+        try:
+            return super().exec()
+        finally:
+            if self._dim is not None:
+                self._dim.hide()
+                self._dim.deleteLater()
+                self._dim = None
 
 
 def apply_qfluent_menu_lifetime_patch() -> None:
@@ -190,11 +253,9 @@ def resolve_fluent_dialog_parent(parent):
 def show_fluent_info(parent, text: str, *, title: str = "", yes_text: str = "确定") -> None:
     """以 Fluent 风格弹一个只有确认按钮的提示框（替代 ``QMessageBox.information``）。"""
 
-    from qfluentwidgets import MessageBox
-
     from krok_helper.config import APP_TITLE
 
-    box = MessageBox(title or APP_TITLE, text, resolve_fluent_dialog_parent(parent))
+    box = HostFluentMessageDialog(title or APP_TITLE, text, parent)
     box.yesButton.setText(yes_text)
     box.cancelButton.hide()
     box.exec()
@@ -210,11 +271,9 @@ def ask_fluent_confirm(
 ) -> bool:
     """以 Fluent 风格弹确认框（替代 ``QMessageBox.question``）；点 ``yes_text`` 返回 True。"""
 
-    from qfluentwidgets import MessageBox
-
     from krok_helper.config import APP_TITLE
 
-    box = MessageBox(title or APP_TITLE, text, resolve_fluent_dialog_parent(parent))
+    box = HostFluentMessageDialog(title or APP_TITLE, text, parent)
     box.yesButton.setText(yes_text)
     box.cancelButton.setText(cancel_text)
     return bool(box.exec())

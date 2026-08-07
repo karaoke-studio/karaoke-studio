@@ -1430,7 +1430,7 @@ class WorkflowStepItem:
 
 WORKFLOW_STEPS = [
     WorkflowStepItem(WORKFLOW_VIDEO_DOWNLOAD, 1, "视频下载", "下载在线视频", False),
-    WorkflowStepItem(WORKFLOW_WAVEFORM_ALIGN, 2, "波形对齐", "音频与视频对齐", True),
+    WorkflowStepItem(WORKFLOW_WAVEFORM_ALIGN, 2, "音视频处理", "波形对齐与音频分离", True),
     WorkflowStepItem(WORKFLOW_LYRICS_SEARCH, 3, "歌词检索", "搜索并获取歌词", True),
     WorkflowStepItem(WORKFLOW_LYRICS_TIMING, 4, "歌词打轴", "逐字 / 逐句打轴", False),
     WorkflowStepItem(WORKFLOW_SUBTITLE_RENDER, 5, "字幕视频生成", "渲染字幕样式", False),
@@ -3088,6 +3088,19 @@ class KrokHelperQtApp(QMainWindow):
 
         self.video_download_page = VideoDownloadPage(self.settings, self._save_all_settings, self)
         self.align_page = self._build_alignment_page()
+        # 第 2 步「音视频处理」= Pivot 容器（波形对齐 / 音频分离），模块 ID 不变。
+        from krok_helper.audio_processing import AudioProcessingPage, AudioSeparationPage
+
+        self.audio_separation_page = AudioSeparationPage(
+            self.settings, self._save_all_settings, parent=self.page_stack
+        )
+        self.audio_processing_page = AudioProcessingPage(
+            self.align_page,
+            self.audio_separation_page,
+            self.settings,
+            self._save_all_settings,
+            parent=self.page_stack,
+        )
         self.lyrics_page = self._build_lyrics_page()
         self._sync_lyrics_timing_host_paths()
         ensure_sug_src_path()
@@ -3151,14 +3164,14 @@ class KrokHelperQtApp(QMainWindow):
         self.hires_page = self._build_hires_page()
         self.module_pages = {
             WORKFLOW_VIDEO_DOWNLOAD: self.video_download_page,
-            WORKFLOW_WAVEFORM_ALIGN: self.align_page,
+            WORKFLOW_WAVEFORM_ALIGN: self.audio_processing_page,
             WORKFLOW_LYRICS_SEARCH: self.lyrics_page,
             WORKFLOW_LYRICS_TIMING: self.lyrics_timing_page,
             WORKFLOW_SUBTITLE_RENDER: self.subtitle_render_page,
             WORKFLOW_HIRES_MIX: self.hires_page,
         }
         self.page_stack.addWidget(self.video_download_page)
-        self.page_stack.addWidget(self.align_page)
+        self.page_stack.addWidget(self.audio_processing_page)
         self.page_stack.addWidget(self.lyrics_page)
         self.page_stack.addWidget(self.lyrics_timing_page)
         self.page_stack.addWidget(self.subtitle_render_page)
@@ -8832,6 +8845,10 @@ class KrokHelperQtApp(QMainWindow):
             self._stop_alignment_preview(log_message=False)
         except Exception:
             pass
+        if not self._shutdown_audio_separation(timeout_ms=3000):
+            logging.getLogger(__name__).warning(
+                "更新强制退出前停止 PyMSS 服务失败"
+            )
         try:
             self._save_all_settings()
         except Exception:
@@ -8859,6 +8876,8 @@ class KrokHelperQtApp(QMainWindow):
             return
         subtitle_page = getattr(self, "subtitle_render_page", None)
         subtitle_busy = False
+        audio_separation_page = getattr(self, "audio_separation_page", None)
+        audio_separation_busy = False
         try:
             subtitle_busy = bool(
                 subtitle_page is not None
@@ -8867,18 +8886,57 @@ class KrokHelperQtApp(QMainWindow):
             )
         except Exception:
             subtitle_busy = False
+        try:
+            audio_separation_busy = bool(
+                audio_separation_page is not None
+                and hasattr(audio_separation_page, "is_busy")
+                and audio_separation_page.is_busy()
+            )
+        except Exception:
+            audio_separation_busy = False
         if self._running_background_tasks() or subtitle_busy:
             QMessageBox.information(self, APP_TITLE, "当前后台任务仍在运行，请等待完成后再关闭窗口。")
             event.ignore()
             return
+        if audio_separation_busy and not ask_fluent_confirm(
+            self,
+            "音频分离任务仍在运行。现在退出会停止当前任务并关闭工作台启动的 PyMSS 服务，"
+            "外部服务中的请求可能仍会继续。是否停止任务并退出？",
+            yes_text="停止任务并退出",
+        ):
+            event.ignore()
+            return
         self._stop_alignment_preview(log_message=False)
         if not self._shutdown_project_modules(event):
+            return
+        if not self._shutdown_audio_separation():
+            QMessageBox.warning(
+                self,
+                APP_TITLE,
+                "PyMSS 服务未能正常停止，请稍后重试或先在音频分离页面停止服务。",
+            )
+            event.ignore()
             return
         try:
             self._save_all_settings()
         except Exception:
             pass
         super().closeEvent(event)
+
+    def _shutdown_audio_separation(self, *, timeout_ms: int = 5000) -> bool:
+        """Stop the managed PyMSS backend without touching external services."""
+        page = getattr(self, "audio_separation_page", None)
+        shutdown = getattr(page, "shutdown", None) if page is not None else None
+        if not callable(shutdown):
+            return True
+        try:
+            result = shutdown(timeout_ms=timeout_ms)
+            return result is not False
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "停止 PyMSS 服务失败", exc_info=True
+            )
+            return False
 
     def _shutdown_project_modules(self, event) -> bool:
         """Confirm all dirty embedded projects, then release module resources."""

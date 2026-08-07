@@ -46,6 +46,7 @@ krok_helper/updater_app/*.spec
 
 # Runtime outputs
 output/
+/pymss/
 %TEMP%/
 tmp-pycache/
 tmp-test/

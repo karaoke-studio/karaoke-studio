@@ -151,6 +151,10 @@ echo Building Windows package...
     --exclude-module matplotlib ^
     --exclude-module pandas ^
     --exclude-module pytest ^
+    --exclude-module torch ^
+    --exclude-module pymss ^
+    --exclude-module pymss_core ^
+    --exclude-module pip ^
     --exclude-module PIL ^
     --exclude-module PySide6 ^
     --exclude-module PyQt5 ^
@@ -315,6 +319,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "foreach ($rel in $required) { $base = if ($rel -in @('Updater.exe','krok_subtitle_renderer.exe')) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
     "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^
     "foreach ($name in $multimediaRequired) { if (-not (Get-ChildItem -LiteralPath $internal -Recurse -File -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += ('Qt Multimedia component: ' + $name) } };" ^
+    "$forbiddenRuntimeDirs = @('torch','functorch','torchgen','pymss','pymss_core','pip');" ^
+    "foreach ($name in $forbiddenRuntimeDirs) { if (Get-ChildItem -LiteralPath $internal -Recurse -Directory -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1) { $missing += ($name + ' must not be bundled in Karaoke Studio') } };" ^
+    "$forbiddenMetadataPrefixes = @('torch-','pymss-','pymss_core-','pip-');" ^
+    "foreach ($dir in Get-ChildItem -LiteralPath $internal -Recurse -Directory -ErrorAction SilentlyContinue) { $lower = $dir.Name.ToLowerInvariant(); foreach ($prefix in $forbiddenMetadataPrefixes) { if ($lower.StartsWith($prefix)) { $missing += ($dir.FullName + ' must not be bundled in Karaoke Studio'); break } } };" ^
     "if ($missing.Count) { Write-Host 'Missing package files:'; $missing | ForEach-Object { Write-Host ('  ' + $_) }; exit 1 };" ^
     "$warnRoot = Join-Path '%WORK_PATH%' '%BUILD_NAME%';" ^
     "$warn = if (Test-Path $warnRoot) { Get-ChildItem -LiteralPath $warnRoot -Recurse -Filter 'warn-*.txt' -File -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null };" ^
