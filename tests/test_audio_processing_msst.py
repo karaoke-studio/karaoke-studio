@@ -1,200 +1,223 @@
+"""MSST 模式：环境探测、桥接脚本、后端行为与页面选型。
+
+这些用例不需要真实 MSST 安装——用构造出来的目录结构覆盖判定逻辑。真实环境上的
+端到端验证在开发期单独跑过（见文档 §8.10 记录的耗时数据）。
+"""
+
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
-import pytest
-
-from krok_helper.audio_processing.separation.msst import (
-    ExternalModelRegistry,
-    scan_msst_models,
+from krok_helper.audio_processing.separation.msst_env import (
+    check_environment,
+    find_python,
+    locate_root,
 )
-from krok_helper.audio_processing.separation.states import TaskType
+from krok_helper.audio_processing.separation.msst_service import write_bridge
+from krok_helper.audio_processing.separation.states import ServiceState, TaskType
 
 
-def _write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def _msst_tree(tmp_path, *, with_map=True, with_infer=True):
+    root = tmp_path / "MSST"
+    (root / "workenv").mkdir(parents=True)
+    (root / "workenv" / "python.exe").write_bytes(b"fake")
+    (root / "utils").mkdir(parents=True)
+    (root / "utils" / "constant.py").write_text("MODEL_TYPE = []\n", encoding="utf-8")
+    if with_infer:
+        (root / "inference").mkdir(parents=True)
+        (root / "inference" / "msst_infer.py").write_text("", encoding="utf-8")
+    if with_map:
+        (root / "data").mkdir(parents=True)
+        (root / "data" / "msst_model_map.json").write_text(
+            json.dumps({"vocal_models": []}), encoding="utf-8"
+        )
+    (root / "pretrain" / "vocal_models").mkdir(parents=True)
+    return root
 
 
-def _legacy_msst_tree(root: Path) -> Path:
-    config = root / "configs" / "vocal.yaml"
-    config.parent.mkdir(parents=True)
-    config.write_text(
-        "training:\n  instruments:\n    - vocals\n    - instrumental\n",
-        encoding="utf-8",
+def _backend(settings=None):
+    from krok_helper.audio_processing.separation.msst_backend import (
+        MsstSeparationBackend,
     )
-    weight = root / "pretrain" / "vocal_models" / "shared.ckpt"
-    weight.parent.mkdir(parents=True)
-    weight.write_bytes(b"model-weight")
-    _write_json(
-        root / "data" / "msst_model_map.json",
-        {
-            "vocal_models": [
-                {
-                    "name": "shared.ckpt",
-                    "config_path": "configs/vocal.yaml",
-                    "model_type": "mel_band_roformer",
+
+    return MsstSeparationBackend(settings if settings is not None else {})
+
+
+class TestEnvironmentDetection:
+    def test_locates_root_from_the_root_itself(self, tmp_path) -> None:
+        root = _msst_tree(tmp_path)
+        assert locate_root(root) == root.resolve()
+
+    def test_locates_root_from_a_subdirectory(self, tmp_path) -> None:
+        """用户很可能选中 pretrain 而不是根目录。"""
+        root = _msst_tree(tmp_path)
+        assert locate_root(root / "pretrain" / "vocal_models") == root.resolve()
+
+    def test_rejects_an_unrelated_directory(self, tmp_path) -> None:
+        (tmp_path / "random").mkdir()
+        assert locate_root(tmp_path / "random") is None
+
+    def test_finds_bundled_interpreter(self, tmp_path) -> None:
+        root = _msst_tree(tmp_path)
+        assert find_python(root) == root / "workenv" / "python.exe"
+
+    def test_missing_inference_module_is_reported(self, tmp_path) -> None:
+        root = _msst_tree(tmp_path, with_infer=False)
+        checks = check_environment(root)
+        assert not all(ok for _n, ok, _d in checks)
+
+    def test_missing_model_map_is_reported(self, tmp_path) -> None:
+        root = _msst_tree(tmp_path, with_map=False)
+        assert locate_root(root) == root.resolve()
+        results = {name: ok for name, ok, _d in check_environment(root)}
+        assert results["模型映射"] is False
+
+
+class TestBridgeScript:
+    def test_bridge_is_written_into_our_own_workdir(self, tmp_path) -> None:
+        """§4.4：绝不能把脚本写进用户的 MSST 目录。"""
+        work = tmp_path / "krok-work"
+        path = write_bridge(work)
+        assert path.parent == work
+        assert path.name == "msst_bridge.py"
+
+    def test_bridge_source_is_valid_python(self, tmp_path) -> None:
+        path = write_bridge(tmp_path / "work")
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+    def test_protocol_is_isolated_from_polluted_stdout(self, tmp_path) -> None:
+        """MSST 的日志与 tqdm 会写 stdout，协议必须与之分离。"""
+        source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
+        assert "_protocol = sys.stdout" in source
+        assert "sys.stdout = sys.stderr" in source
+
+    def test_rewrite_is_idempotent(self, tmp_path) -> None:
+        work = tmp_path / "work"
+        first = write_bridge(work).read_text(encoding="utf-8")
+        assert write_bridge(work).read_text(encoding="utf-8") == first
+
+
+class TestMsstBackend:
+    def test_starts_unconfigured_without_a_root(self) -> None:
+        backend = _backend()
+        try:
+            assert backend.snapshot().state is ServiceState.UNCONFIGURED
+        finally:
+            backend.shutdown()
+
+    def test_restores_a_saved_root(self, tmp_path) -> None:
+        root = _msst_tree(tmp_path)
+        backend = _backend({"msst_root": str(root)})
+        try:
+            assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
+            assert backend.snapshot().install_dir == str(root.resolve())
+        finally:
+            backend.shutdown()
+
+    def test_unbound_task_says_so(self, tmp_path) -> None:
+        backend = _backend({"msst_root": str(_msst_tree(tmp_path))})
+        try:
+            dep = backend.snapshot().dependencies[TaskType.VOCAL]
+            assert not dep.ready
+            assert "选择 MSST 模型" in dep.reason
+        finally:
+            backend.shutdown()
+
+    def test_missing_weight_file_is_reported(self, tmp_path) -> None:
+        backend = _backend(
+            {
+                "msst_root": str(_msst_tree(tmp_path)),
+                "msst_bindings": {
+                    "vocal": {
+                        "name": "gone.ckpt",
+                        "model_type": "mel_band_roformer",
+                        "model_path": str(tmp_path / "gone.ckpt"),
+                        "config_path": "",
+                        "stem": "vocals",
+                    }
                 },
-                {
-                    "name": "missing.ckpt",
-                    "config_path": "configs/vocal.yaml",
-                    "model_type": "mel_band_roformer",
-                },
-                {
-                    "name": "unsupported.ckpt",
-                    "config_path": "configs/vocal.yaml",
-                    "model_type": "unknown_architecture",
-                },
-            ]
-        },
-    )
-    (root / "pretrain" / "vocal_models" / "unsupported.ckpt").write_bytes(b"x")
-    return weight
-
-
-def test_scan_legacy_msst_is_read_only_and_returns_stable_candidates(tmp_path) -> None:
-    root = tmp_path / "MSST-WebUI"
-    weight = _legacy_msst_tree(root)
-    before = {
-        path.relative_to(root): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
-
-    first = scan_msst_models(root)
-    second = scan_msst_models(root)
-
-    after = {
-        path.relative_to(root): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
-    assert after == before
-    assert [item.candidate_id for item in first] == [item.candidate_id for item in second]
-    shared = [item for item in first if Path(item.model_path) == weight.resolve()]
-    assert {item.task for item in shared} == {TaskType.VOCAL, TaskType.INSTRUMENTAL}
-    assert all(item.bindable for item in shared)
-    assert all(item.model_type == "mel_band_roformer" for item in shared)
-    assert all(item.sha256 for item in shared)
-    assert any(not item.bindable and "模型文件缺失" in item.status for item in first)
-    assert any(not item.bindable and "暂不支持" in item.status for item in first)
-
-
-def test_scan_vr_models_uses_configured_external_directory(tmp_path) -> None:
-    root = tmp_path / "MSST-WebUI"
-    external = tmp_path / "uvr-models"
-    external.mkdir()
-    model = external / "karaoke.pth"
-    model.write_bytes(b"vr-weight")
-    _write_json(
-        root / "data" / "webui_config.json",
-        {"settings": {"uvr_model_dir": str(external)}},
-    )
-    _write_json(
-        root / "data" / "vr_model_map.json",
-        {
-            "karaoke.pth": {
-                "primary_stem": "Vocals",
-                "secondary_stem": "Instrumental",
-                "is_karaoke": True,
             }
-        },
-    )
+        )
+        try:
+            dep = backend.snapshot().dependencies[TaskType.VOCAL]
+            assert not dep.ready
+            assert "找不到模型文件" in dep.reason
+        finally:
+            backend.shutdown()
 
-    candidates = scan_msst_models(root)
+    def test_binding_without_a_stem_is_not_runnable(self, tmp_path) -> None:
+        """轨名定不下来就不能跑，否则 MSST 会直接拒绝。"""
+        weight = tmp_path / "m.ckpt"
+        weight.write_bytes(b"w")
+        backend = _backend(
+            {
+                "msst_root": str(_msst_tree(tmp_path)),
+                "msst_bindings": {
+                    "vocal": {
+                        "name": "m.ckpt",
+                        "model_type": "mel_band_roformer",
+                        "model_path": str(weight),
+                        "config_path": "",
+                        "stem": "",
+                    }
+                },
+            }
+        )
+        try:
+            dep = backend.snapshot().dependencies[TaskType.VOCAL]
+            assert not dep.ready
+            assert "输出轨" in dep.reason
+        finally:
+            backend.shutdown()
 
-    assert len(candidates) == 1
-    candidate = candidates[0]
-    assert candidate.task is TaskType.HARMONY
-    assert candidate.bindable
-    assert Path(candidate.model_path) == model.resolve()
-    assert candidate.model_type == "vr"
+    def test_download_is_not_offered_in_this_mode(self, tmp_path) -> None:
+        backend = _backend({"msst_root": str(_msst_tree(tmp_path))})
+        try:
+            backend.start_model_download()
+            snapshot = backend.snapshot()
+            assert snapshot.state is ServiceState.ERROR
+            assert "不下载模型" in snapshot.error
+        finally:
+            backend.shutdown()
 
-
-def test_external_registry_does_not_write_to_msst_and_revalidates_files(tmp_path) -> None:
-    root = tmp_path / "MSST-WebUI"
-    weight = _legacy_msst_tree(root)
-    candidate = next(
-        item
-        for item in scan_msst_models(root)
-        if item.task is TaskType.VOCAL and item.bindable
-    )
-    registry_path = tmp_path / "managed" / "manifests" / "external-models.json"
-    registry = ExternalModelRegistry(registry_path)
-
-    registered_name = registry.bind(TaskType.VOCAL, candidate)
-
-    assert registered_name.startswith("krok_msst_vocal_")
-    payload = registry.load()
-    assert payload["models"][0]["model_path"] == str(weight.resolve())
-    fingerprint = payload["models"][0]["krok"]
-    assert fingerprint["mtime_ns"] == weight.stat().st_mtime_ns
-    assert fingerprint["sha256"] == candidate.sha256
-    assert fingerprint["config_sha256"] == candidate.config_sha256
-    assert registry.validate() == {TaskType.VOCAL: "pending"}
-    assert not list(root.rglob("external-models.json"))
-
-    registry.mark_verified(TaskType.VOCAL)
-    assert registry.validate() == {TaskType.VOCAL: "ready"}
-
-    registry.mark_unsupported(TaskType.VOCAL, "加载器拒绝该配置")
-    assert registry.validate() == {TaskType.VOCAL: "unsupported"}
-    assert registry.validation_error(TaskType.VOCAL) == "加载器拒绝该配置"
-
-    registry.unbind(TaskType.VOCAL)
-    assert registry.validate() == {}
-    assert weight.is_file()
-    registry.bind(TaskType.VOCAL, candidate)
-
-    weight.write_bytes(b"changed-size-and-content")
-    assert registry.validate() == {TaskType.VOCAL: "changed"}
-    weight.unlink()
-    assert registry.validate() == {TaskType.VOCAL: "missing"}
-
-
-def test_external_registry_detects_same_size_weight_and_config_changes(tmp_path) -> None:
-    root = tmp_path / "MSST-WebUI"
-    weight = _legacy_msst_tree(root)
-    candidate = next(
-        item
-        for item in scan_msst_models(root)
-        if item.task is TaskType.VOCAL and item.bindable
-    )
-    registry = ExternalModelRegistry(tmp_path / "external-models.json")
-    registry.bind(TaskType.VOCAL, candidate)
-
-    original_mtime = weight.stat().st_mtime_ns
-    weight.write_bytes(b"changed-byte")
-    assert weight.stat().st_size == candidate.size_bytes
-    assert weight.stat().st_mtime_ns != original_mtime
-    assert registry.validate() == {TaskType.VOCAL: "changed"}
-
-    weight.write_bytes(b"model-weight")
-    os.utime(weight, ns=(weight.stat().st_atime_ns, original_mtime + 1))
-    assert registry.validate() == {TaskType.VOCAL: "pending"}
-    assert registry.load()["models"][0]["krok"]["mtime_ns"] == weight.stat().st_mtime_ns
-
-    config = root / "configs" / "vocal.yaml"
-    config.write_text(
-        "training:\n  instruments:\n    - violin\n    - instrumental\n",
-        encoding="utf-8",
-    )
-    assert registry.validate() == {TaskType.VOCAL: "changed"}
+    def test_removing_configuration_keeps_the_users_msst_intact(self, tmp_path) -> None:
+        root = _msst_tree(tmp_path)
+        settings = {"msst_root": str(root), "mode": "msst"}
+        backend = _backend(settings)
+        try:
+            backend.remove_configuration()
+            assert backend.snapshot().state is ServiceState.UNCONFIGURED
+            assert "msst_root" not in settings
+            assert (root / "inference" / "msst_infer.py").is_file(), "不得删改用户目录"
+        finally:
+            backend.shutdown()
 
 
-def test_scan_rejects_non_directory_and_honours_cancellation(tmp_path) -> None:
-    with pytest.raises(FileNotFoundError):
-        scan_msst_models(tmp_path / "missing")
+class TestPageBackendSelection:
+    def test_mode_selects_the_msst_backend(self) -> None:
+        from krok_helper.audio_processing.separation.msst_backend import (
+            MsstSeparationBackend,
+        )
+        from krok_helper.audio_processing.separation.page import AudioSeparationPage
+        from krok_helper.settings import AppSettings
 
-    root = tmp_path / "MSST-WebUI"
-    _legacy_msst_tree(root)
+        settings = AppSettings()
+        settings.pymss["mode"] = "msst"
+        page = AudioSeparationPage(settings, lambda: None)
+        try:
+            assert isinstance(page._backend, MsstSeparationBackend)
+        finally:
+            page._backend.shutdown()
 
-    class _Cancelled:
-        @staticmethod
-        def is_set() -> bool:
-            return True
+    def test_default_mode_keeps_the_pymss_backend(self) -> None:
+        from krok_helper.audio_processing.separation.page import AudioSeparationPage
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+        from krok_helper.settings import AppSettings
 
-    with pytest.raises(InterruptedError):
-        scan_msst_models(root, cancelled=_Cancelled())
+        page = AudioSeparationPage(AppSettings(), lambda: None)
+        try:
+            assert isinstance(page._backend, RealSeparationBackend)
+        finally:
+            page._backend.shutdown()

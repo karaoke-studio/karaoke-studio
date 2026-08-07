@@ -31,6 +31,7 @@ FLOW_REUSE_MSST = "reuse_msst"  # 仅安装 PyMSS，复用 MSST 模型
 FLOW_EXISTING = "existing"    # 使用已有 PyMSS
 FLOW_REMAP_MSST = "remap_msst"  # 已安装后重新扫描/映射 MSST 模型
 FLOW_UPGRADE = "upgrade"      # 保留目录和模型，升级托管 Runtime
+FLOW_MSST = "msst"            # 直接驱动用户已有的 MSST-WebUI 环境
 
 
 @dataclass

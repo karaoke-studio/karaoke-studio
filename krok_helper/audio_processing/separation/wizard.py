@@ -44,6 +44,7 @@ from krok_helper.audio_processing.separation.backend import (
     ExternalModelCandidate,
     FLOW_EXISTING,
     FLOW_FULL,
+    FLOW_MSST,
     FLOW_REMAP_MSST,
     FLOW_REUSE_MSST,
     FLOW_UPGRADE,
@@ -179,8 +180,14 @@ class WelcomeView(QWidget):
                 "电脑上已有兼容环境，或服务已在运行。",
                 self,
             ),
+            EntryCard(
+                FIF.ALBUM,
+                "使用已有 MSST",
+                "已经装了 MSST-WebUI，直接用它跑，不必再下一份运行时。",
+                self,
+            ),
         )
-        flows = (FLOW_FULL, FLOW_REUSE_MSST, FLOW_EXISTING)
+        flows = (FLOW_FULL, FLOW_REUSE_MSST, FLOW_EXISTING, FLOW_MSST)
         self._cards: list[EntryCard] = []
         for card, flow in zip(entries, flows):
             card.clicked.connect(lambda f=flow: self.flowSelected.emit(f))
@@ -758,6 +765,70 @@ class ConnectStep(WizardStep):
         return bool(target["executable"] or target["server_url"])
 
 
+class MsstConnectStep(WizardStep):
+    """选择已有的 MSST-WebUI 安装目录。"""
+
+    title = "选择 MSST 安装目录"
+    step_label = "选择目录"
+    hint = "工作台只读取该目录并用它自带的 Python 运行分离，不会修改其中任何文件。"
+    primary_label = "下一步"
+
+    def __init__(self, wizard: "WizardView") -> None:
+        super().__init__(wizard)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(10)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(BodyLabel("MSST 目录", self))
+        self._root_edit = LineEdit(self)
+        self._root_edit.setReadOnly(True)
+        self._root_edit.setPlaceholderText("选择 MSST-WebUI 根目录（含 workenv 与 inference）")
+        self._root_edit.textChanged.connect(lambda _t: self.wizard.refresh_footer())
+        row.addWidget(self._root_edit, 1)
+        browse = PushButton(FIF.FOLDER, "浏览", self)
+        browse.clicked.connect(self._browse)
+        row.addWidget(browse)
+        layout.addLayout(row)
+
+        self._checks = InfoGrid(self)
+        layout.addWidget(self._checks)
+        layout.addWidget(
+            HintBox(
+                [
+                    "使用 MSST 自带的运行环境，不需要再下载 PyMSS Runtime。",
+                    "模型仍取自你的 MSST 目录；工作台不会复制、移动或修改它们。",
+                ],
+                self,
+            )
+        )
+        layout.addStretch(1)
+
+    def _browse(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择 MSST-WebUI 根目录")
+        if not directory:
+            return
+        from krok_helper.audio_processing.separation.msst_env import (
+            check_environment,
+            locate_root,
+        )
+
+        root = locate_root(directory)
+        self._root_edit.setText(str(root) if root else "")
+        self._checks.set_rows(
+            [(name, ("✓ " if ok else "✗ ") + detail) for name, ok, detail in check_environment(directory)]
+        )
+        self.wizard.refresh_footer()
+
+    def target(self) -> dict[str, str]:
+        return {"executable": self._root_edit.text().strip(), "server_url": "", "api_key": ""}
+
+    def can_proceed(self) -> bool:
+        return bool(self._root_edit.text().strip())
+
+
 class CapabilityStep(WizardStep):
     """能力检测（需求文档 §4.4 的五项验证）。"""
 
@@ -955,6 +1026,15 @@ class WizardView(QWidget):
 
         backend.snapshotChanged.connect(self._on_snapshot)
 
+    def rebind(self, backend: SeparationBackend) -> None:
+        """换后端实现时把向导重新挂到新后端上（MSST 与 PyMSS 是并列实现）。"""
+        try:
+            self.backend.snapshotChanged.disconnect(self._on_snapshot)
+        except TypeError:
+            pass
+        self.backend = backend
+        backend.snapshotChanged.connect(self._on_snapshot)
+
     # ── 流程组装 ──────────────────────────────────────────────────
     def start_flow(self, flow: str) -> None:
         self.flow = flow
@@ -964,7 +1044,10 @@ class WizardView(QWidget):
         self._steps = []
         self.step_connect = None
 
-        if flow == FLOW_EXISTING:
+        if flow == FLOW_MSST:
+            self.step_connect = MsstConnectStep(self)
+            self._steps = [self.step_connect, CapabilityStep(self), DoneStep(self)]
+        elif flow == FLOW_EXISTING:
             self.step_connect = ConnectStep(self)
             self._steps = [self.step_connect, CapabilityStep(self), DoneStep(self)]
         elif flow == FLOW_REUSE_MSST:

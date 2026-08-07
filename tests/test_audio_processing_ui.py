@@ -494,8 +494,8 @@ class TestAcceptanceCriteria:
         assert step2.description == "波形对齐与音频分离"
         assert step2.module_id == WORKFLOW_WAVEFORM_ALIGN
 
-    def test_welcome_page_offers_three_entries(self) -> None:
-        """§14.1：首次配置页明确提供三个入口。"""
+    def test_welcome_page_offers_every_entry(self) -> None:
+        """§14.1：首次配置页明确列出全部入口（含直接使用已有 MSST）。"""
         page = _make_separation_page()
         assert page.current_view() == "welcome"
         titles = [card._title.text() for card in page._welcome._cards]
@@ -503,6 +503,7 @@ class TestAcceptanceCriteria:
             "安装 PyMSS 和推荐模型",
             "仅安装 PyMSS，复用 MSST 模型",
             "使用已有 PyMSS",
+            "使用已有 MSST",
         ]
 
     def test_state_changes_preserve_inputs_and_results(self, tmp_path) -> None:

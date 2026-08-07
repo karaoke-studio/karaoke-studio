@@ -111,16 +111,7 @@ class AudioSeparationPage(QWidget):
             setattr(settings, "pymss", settings_ns)
         self._settings_ns = settings_ns
         if backend is None:
-            from krok_helper.audio_processing.separation.real_backend import (
-                RealSeparationBackend,
-            )
-
-            backend = RealSeparationBackend(
-                self._settings_ns,
-                self._save_settings,
-                ffmpeg_dir=str(getattr(settings, "ffmpeg_dir", "")),
-                parent=self,
-            )
+            backend = self._create_backend(str(self._settings_ns.get("mode", "")))
         self._backend = backend
         self._wizard_active = False
         self._panel_mode: str | None = None  # None / "task" / "runtime"
@@ -154,6 +145,45 @@ class AudioSeparationPage(QWidget):
 
         self._restore_workspace_inputs()
         self._apply_snapshot(self._backend.snapshot())
+
+    def _create_backend(self, mode: str) -> SeparationBackend:
+        """按模式建后端。MSST 模式驱动用户已有环境，与 PyMSS 是并列实现。"""
+        if mode == "msst":
+            from krok_helper.audio_processing.separation.msst_backend import (
+                MsstSeparationBackend,
+            )
+
+            return MsstSeparationBackend(self._settings_ns, self._save_settings, parent=self)
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+
+        return RealSeparationBackend(
+            self._settings_ns,
+            self._save_settings,
+            ffmpeg_dir=str(getattr(self._settings, "ffmpeg_dir", "")),
+            parent=self,
+        )
+
+    def _switch_backend(self, mode: str) -> None:
+        """切换后端实现：拆掉旧的信号与进程，再把新后端接到同一套界面上。"""
+        old = self._backend
+        try:
+            old.snapshotChanged.disconnect(self._apply_snapshot)
+            old.taskProgressChanged.disconnect(self._on_task_progress)
+            old.resultReady.disconnect(self._on_result_ready)
+        except TypeError:
+            pass
+        try:
+            old.shutdown()
+        except Exception:
+            pass
+
+        self._backend = self._create_backend(mode)
+        self._wizard.rebind(self._backend)
+        self._backend.snapshotChanged.connect(self._apply_snapshot)
+        self._backend.taskProgressChanged.connect(self._on_task_progress)
+        self._backend.resultReady.connect(self._on_result_ready)
 
     # ── 工作区组装 ────────────────────────────────────────────────
     def _build_workspace(self) -> QWidget:
@@ -437,6 +467,13 @@ class AudioSeparationPage(QWidget):
 
     # ── 向导 ─────────────────────────────────────────────────────
     def _start_flow(self, flow: str) -> None:
+        from krok_helper.audio_processing.separation.backend import FLOW_MSST
+
+        # MSST 是另一套后端实现，必须在向导开始前换掉，否则向导操作的是 PyMSS 后端。
+        wanted = "msst" if flow == FLOW_MSST else ""
+        if wanted != str(self._settings_ns.get("mode", "")):
+            self._settings_ns["mode"] = wanted
+            self._switch_backend(wanted)
         self._wizard_active = True
         self._wizard.start_flow(flow)
         self._backend.start_wizard(flow)
