@@ -181,7 +181,28 @@ def _download(job):
     return {"model": job["model"], "ok": True}
 
 
-_ACTIONS = {"catalog": _catalog, "download": _download}
+def _capability(job):
+    """能力探测：报告版本与关键组件是否可用（替代 HTTP 的端点检查）。"""
+    import pymss
+    from pymss import MSSeparator  # noqa: F401  仅验证可导入
+    from pymss.model_registry import list_models
+
+    try:
+        import torch
+
+        torch_version = torch.__version__
+        cuda = bool(torch.cuda.is_available())
+    except Exception:
+        torch_version, cuda = "", False
+    return {
+        "pymss_version": getattr(pymss, "__version__", ""),
+        "models": len(list_models(supported=True)),
+        "torch": torch_version,
+        "cuda": cuda,
+    }
+
+
+_ACTIONS = {"catalog": _catalog, "download": _download, "capability": _capability}
 
 
 def main():
@@ -463,6 +484,30 @@ class PyMSSBridgeEngine:
         return self._call(
             {"action": "download", "model": model, "source": source}, on_progress=on_progress
         )
+
+    def capability_checks(self) -> list[tuple[str, bool, str]]:
+        """与 :meth:`PyMSSClient.capability_checks` 同名同形。
+
+        桥接模式没有 HTTP 端点可查，改为验证真正决定能否干活的东西：进程在跑、
+        pymss 与推理类可导入、模型目录能列出。
+        """
+        if not self._worker.running:
+            return [("PyMSS 推理进程", False, "桥接进程未运行")]
+        try:
+            info = self._call({"action": "capability"}) or {}
+        except Exception as exc:
+            return [("PyMSS 推理环境", False, str(exc))]
+
+        models = int(info.get("models") or 0)
+        torch_version = str(info.get("torch") or "")
+        device = "CUDA 可用" if info.get("cuda") else "仅 CPU"
+        # 版本不在这里查：调用方（_probe_executable）已经用解释器直接问过并核对了
+        # 兼容范围；pymss 包本身没有 __version__，在这里再查一次只会假失败。
+        return [
+            ("PyMSS 推理进程", True, "已就绪（不经 HTTP 服务）"),
+            ("推理与模型目录", models > 0, f"可用模型 {models} 个" if models else "无法列出模型目录"),
+            ("运行设备", bool(torch_version), f"torch {torch_version}，{device}" if torch_version else "无法加载 torch"),
+        ]
 
     def separate_file(self, *, model: str, stem: str, input_path: str, output_dir: str,
                       output_format: str = "wav", device: str = "auto",

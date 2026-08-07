@@ -70,6 +70,8 @@ class TestEngineIsADropInForTheHttpClient:
         "catalog_models",
         "model_config_text",
         "download_model",
+        # 漏了这个，「使用已有 PyMSS」的能力检测会直接抛 AttributeError。
+        "capability_checks",
     )
 
     def test_shares_the_client_method_names(self) -> None:
@@ -86,6 +88,24 @@ class TestEngineIsADropInForTheHttpClient:
         signature = inspect.signature(PyMSSBridgeEngine.separate_file)
         for expected in ("model", "stem", "input_path", "output_dir"):
             assert expected in signature.parameters
+
+    def test_capability_checks_never_touches_http(self) -> None:
+        """桥接模式没有端点可查，检查项必须换成真正决定能否干活的东西。"""
+        source = inspect.getsource(PyMSSBridgeEngine.capability_checks)
+        assert "endpoint" not in source.lower()
+        assert "推理与模型目录" in source
+
+    def test_capability_checks_reports_a_dead_worker_instead_of_raising(self) -> None:
+        class _Worker:
+            running = False
+
+        rows = PyMSSBridgeEngine(_Worker()).capability_checks()
+        assert rows and not rows[0][1]
+
+    def test_capability_checks_does_not_recheck_the_version(self) -> None:
+        """pymss 包没有 __version__，版本由调用方直接问解释器；在这里再查只会假失败。"""
+        source = inspect.getsource(PyMSSBridgeEngine.capability_checks)
+        assert "pymss_version" not in source
 
     def test_health_reflects_the_worker_state(self) -> None:
         class _Worker:
