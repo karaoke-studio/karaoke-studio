@@ -115,7 +115,9 @@ class AudioSeparationPage(QWidget):
         self._backend = backend
         self._wizard_active = False
         self._panel_mode: str | None = None  # None / "task" / "runtime"
+        self._panel_title = ""
         self._first_show_checked = False
+        self._was_busy = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -310,18 +312,30 @@ class AudioSeparationPage(QWidget):
                     queue_label=queue_label,
                 )
 
+        # 整批结束时清空勾选：否则残留哪张卡取决于它在队列里的位置（最后一个会留下），
+        # 结果随时序而定。跑完就重新选，状态也更确定。
+        busy = snapshot.state in _TASK_PANEL_STATES
+        if self._was_busy and not busy:
+            for card in self._task_cards.values():
+                card.set_selected(False, emit=False)
+        self._was_busy = busy
+
         self._refresh_run_bar(snapshot)
         self._sync_task_panel(snapshot)
 
     def _sync_task_panel(self, snapshot) -> None:
         if snapshot.state in _TASK_PANEL_STATES:
+            title = TASK_SPECS[snapshot.pending_task].title if snapshot.pending_task else ""
+            if snapshot.queue_total > 1:
+                title = f"{title}（第 {snapshot.queue_done + 1} / 共 {snapshot.queue_total} 个）"
             if self._panel_mode != "task":
                 self._panel_mode = "task"
                 self._task_panel.set_stage_names(TASK_STAGES)
-                title = TASK_SPECS[snapshot.pending_task].title if snapshot.pending_task else ""
-                if snapshot.queue_total > 1:
-                    title = f"{title}（第 {snapshot.queue_done + 1} / 共 {snapshot.queue_total} 个）"
                 self._task_panel.start(title)
+            elif title != self._panel_title:
+                # 队列换到下一个任务：标题要跟着走，之前只在首次进入时设过一次。
+                self._task_panel.set_title(title)
+            self._panel_title = title
             self._task_panel.setVisible(True)
             return
         if snapshot.state in _RUNTIME_PANEL_STATES and not self._wizard_active:

@@ -1118,3 +1118,82 @@ class TestTaskQueue:
             )
         )
         assert panel.group_count() == 1
+
+
+class TestQueueSelectionAndPanelTitle:
+    """队列跑完后的选中态，以及队列换任务时的面板标题。"""
+
+    def _ready_page(self):
+        settings = AppSettings()
+        settings.pymss["install_dir"] = "D:/demo/pymss"
+        settings.pymss["downloaded_models"] = [t.value for t in TaskType]
+        page = _make_separation_page(settings)
+        page._backend.start_service()
+        QApplication.instance().processEvents()
+        page._input_card.set_path("D:/demo/song.flac", emit=False)
+        return page, page._backend
+
+    def _run_queue(self, page, backend, order):
+        """按真实时序推进一遍队列：逐个 pending，最后回到就绪。"""
+        snapshot = backend.snapshot()
+        snapshot.state = ServiceState.PROCESSING
+        snapshot.queue_total = len(order)
+        for index, task in enumerate(order):
+            snapshot.pending_task = task
+            snapshot.queued_tasks = tuple(order[index + 1 :])
+            snapshot.queue_done = index
+            page._apply_snapshot(snapshot)
+            yield task
+        snapshot.state = ServiceState.SERVICE_READY
+        snapshot.pending_task = None
+        snapshot.queued_tasks = ()
+        snapshot.queue_done = len(order)
+        page._apply_snapshot(snapshot)
+
+    def test_no_task_stays_selected_after_the_batch(self) -> None:
+        """回归：残留选中的是队列里最后一个任务，结果随时序而定。"""
+        page, backend = self._ready_page()
+        page._task_cards[TaskType.VOCAL].set_selected(True)
+        page._task_cards[TaskType.INSTRUMENTAL].set_selected(True)
+
+        list(self._run_queue(page, backend, [TaskType.VOCAL, TaskType.INSTRUMENTAL]))
+
+        assert page._selected_tasks() == [], "整批结束后不应残留任何勾选"
+
+    def test_last_task_in_order_does_not_linger(self) -> None:
+        """和声伴奏排在固定顺序最后，此前每次跑完都会留在选中态。"""
+        page, backend = self._ready_page()
+        for task in TaskType:
+            page._task_cards[task].set_selected(True)
+
+        list(self._run_queue(page, backend, list(TaskType)))
+
+        assert not page._task_cards[TaskType.HARMONY].is_selected()
+        assert page._selected_tasks() == []
+
+    def test_panel_title_follows_the_queue(self) -> None:
+        """回归：标题只在首次进入任务面板时设过一次，换任务后不更新。"""
+        page, backend = self._ready_page()
+        titles = []
+        for _task in self._run_queue(
+            page, backend, [TaskType.VOCAL, TaskType.INSTRUMENTAL]
+        ):
+            titles.append(page._task_panel._title.text())
+
+        assert "分离人声" in titles[0] and "第 1 / 共 2 个" in titles[0]
+        assert "分离伴奏" in titles[1] and "第 2 / 共 2 个" in titles[1]
+        assert titles[0] != titles[1], "换到下一个任务时标题必须跟着变"
+
+    def test_single_task_title_has_no_queue_counter(self) -> None:
+        page, backend = self._ready_page()
+        list(self._run_queue(page, backend, [TaskType.VOCAL]))
+        # 单任务批次不显示「第 n / 共 m 个」
+        page._task_panel._title.setText("")
+        snapshot = backend.snapshot()
+        snapshot.state = ServiceState.PROCESSING
+        snapshot.pending_task = TaskType.VOCAL
+        snapshot.queue_total, snapshot.queue_done = 1, 0
+        snapshot.queued_tasks = ()
+        page._panel_mode = None
+        page._apply_snapshot(snapshot)
+        assert "共" not in page._task_panel._title.text()

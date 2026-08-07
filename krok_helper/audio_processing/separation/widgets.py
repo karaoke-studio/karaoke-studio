@@ -963,6 +963,10 @@ class CurrentTaskPanel(CardWidget):
             self._stage_labels.append(label)
         self._current_stage = -1
 
+    def set_title(self, title: str) -> None:
+        """只换标题，不重置阶段与计时——队列换到下一个任务时用。"""
+        self._title.setText(f"当前任务：{title}")
+
     def start(self, title: str) -> None:
         self._title.setText(f"当前任务：{title}")
         self._current_stage = -1
