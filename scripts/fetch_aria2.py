@@ -19,6 +19,18 @@
 
 幂等
     目标文件已存在且哈希正确就直接跳过，不重复下载。
+
+升级 aria2 版本
+    版本是**故意钉死**的：构建产物可复现，也没人能悄悄换掉随包分发的二进制。
+    要升级得同时改三处，缺一不可：
+
+    1. ``ARIA2_VERSION`` —— 换成新的 release tag
+    2. ``ARIA2C_SHA256`` —— 换成新版**解压后 aria2c.exe** 的 SHA-256
+    3. ``scripts/build_parts.py`` 里的 ``RUNTIME_PROFILE`` —— 撞一位
+
+    第 3 步最容易漏：换 aria2 既不改 pip freeze 也不改 dist-info，runtime 复用
+    的指纹会照旧匹配，CI 会原样复用上一版 runtime zip，新版 aria2c 直接被静默
+    丢掉——构建不报错，但发出去的包里还是旧的。
 """
 
 from __future__ import annotations
@@ -38,8 +50,8 @@ ARIA2_ARCHIVE = f"aria2-{ARIA2_VERSION}-win-64bit-build1"
 ARIA2_URL = (
     f"https://github.com/aria2/aria2/releases/download/release-{ARIA2_VERSION}/{ARIA2_ARCHIVE}.zip"
 )
-# 解压后 aria2c.exe 的 SHA-256（见模块 docstring 的「校验」一节）
-ARIA2C_SHA256 = ""
+# 解压后 aria2c.exe 的 SHA-256（见模块 docstring 的「校验」与「升级」两节）
+ARIA2C_SHA256 = "be2099c214f63a3cb4954b09a0becd6e2e34660b886d4c898d260febfe9d70c2"
 ARIA2C_EXPECTED_SIZE = 5_649_408
 
 VENDOR_SUBDIR = Path("build") / "vendor" / "aria2"
