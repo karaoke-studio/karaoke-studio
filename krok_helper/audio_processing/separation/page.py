@@ -79,7 +79,7 @@ _RUNTIME_PANEL_STATES = frozenset(
     }
 )
 
-_RUNTIME_STAGES = ("下载运行时", "校验并切换运行时")
+_RUNTIME_STAGES = ("下载 Runtime", "校验并切换 Runtime")
 
 
 class AudioSeparationPage(QWidget):
@@ -339,7 +339,7 @@ class AudioSeparationPage(QWidget):
         elif action == ACTION_REPAIR:
             if ask_fluent_confirm(
                 self,
-                "修复会根据当前设备重新获取缺失或损坏的运行时文件（CPU 约数百 MB；"
+                "修复会根据当前设备重新获取缺失或损坏的 Runtime 文件（CPU 约数百 MB；"
                 "NVIDIA CUDA 最多约 3–4 GB），不会删除模型、MSST 映射或缓存。是否继续？",
                 yes_text="修复安装",
             ):

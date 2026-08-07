@@ -86,11 +86,11 @@ class RuntimePackage:
     @classmethod
     def from_payload(cls, payload: dict) -> "RuntimePackage":
         if not isinstance(payload, dict) or payload.get("schema") != _MANIFEST_SCHEMA:
-            raise ValueError("PyMSS 运行时清单格式不受支持。")
+            raise ValueError("PyMSS Runtime 清单格式不受支持。")
         archive = payload.get("archive")
         raw_files = payload.get("files")
         if not isinstance(archive, dict) or not isinstance(raw_files, list):
-            raise ValueError("PyMSS 运行时清单缺少 archive 或 files。")
+            raise ValueError("PyMSS Runtime 清单缺少 archive 或 files。")
         files = tuple(
             RuntimeFile(
                 path=_safe_relative_path(item.get("path", "")),
@@ -101,12 +101,12 @@ class RuntimePackage:
             if isinstance(item, dict)
         )
         if not files:
-            raise ValueError("PyMSS 运行时清单没有文件记录。")
+            raise ValueError("PyMSS Runtime 清单没有文件记录。")
         raw_parts = archive.get("parts")
         if raw_parts is None:
             raw_parts = [archive]
         if not isinstance(raw_parts, list) or not raw_parts:
-            raise ValueError("PyMSS 运行时清单没有下载分片。")
+            raise ValueError("PyMSS Runtime 清单没有下载分片。")
         parts = tuple(
             RuntimeArchivePart(
                 url=str(item.get("url", "")).strip(),
@@ -117,21 +117,21 @@ class RuntimePackage:
             if isinstance(item, dict)
         )
         if not parts or any(not item.url for item in parts):
-            raise ValueError("PyMSS 运行时清单的下载分片地址无效。")
+            raise ValueError("PyMSS Runtime 清单的下载分片地址无效。")
         archive_size = _positive_int(archive.get("size"), "archive.size")
         if sum(item.size for item in parts) != archive_size:
-            raise ValueError("PyMSS 运行时清单的分片总大小与压缩包大小不一致。")
+            raise ValueError("PyMSS Runtime 清单的分片总大小与压缩包大小不一致。")
         torch_payload = payload.get("torch")
         torch_wheel = None
         if torch_payload is not None:
             if not isinstance(torch_payload, dict) or not isinstance(
                 torch_payload.get("wheel"), dict
             ):
-                raise ValueError("PyMSS 运行时清单的 torch 依赖格式无效。")
+                raise ValueError("PyMSS Runtime 清单的 torch 依赖格式无效。")
             wheel = torch_payload["wheel"]
             filename = str(wheel.get("filename", "")).strip()
             if not filename.lower().endswith(".whl") or Path(filename).name != filename:
-                raise ValueError("PyMSS 运行时清单的 torch wheel 文件名无效。")
+                raise ValueError("PyMSS Runtime 清单的 torch wheel 文件名无效。")
             torch_wheel = RuntimeDependencyWheel(
                 name="torch",
                 version=str(torch_payload.get("version", "")).strip(),
@@ -141,7 +141,7 @@ class RuntimePackage:
                 sha256=_sha256_text(wheel.get("sha256"), "torch.wheel.sha256"),
             )
             if not torch_wheel.version or not torch_wheel.url:
-                raise ValueError("PyMSS 运行时清单的 torch wheel 信息不完整。")
+                raise ValueError("PyMSS Runtime 清单的 torch wheel 信息不完整。")
         return cls(
             runtime_version=str(payload.get("runtime_version", "")).strip(),
             pymss_version=str(payload.get("pymss_version", "")).strip(),
@@ -193,9 +193,9 @@ def _positive_int(value, field: str) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"PyMSS 运行时清单字段 {field} 无效。") from exc
+        raise ValueError(f"PyMSS Runtime 清单字段 {field} 无效。") from exc
     if parsed <= 0:
-        raise ValueError(f"PyMSS 运行时清单字段 {field} 必须大于 0。")
+        raise ValueError(f"PyMSS Runtime 清单字段 {field} 必须大于 0。")
     return parsed
 
 
@@ -203,16 +203,16 @@ def _nonnegative_int(value, field: str) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"PyMSS 运行时清单字段 {field} 无效。") from exc
+        raise ValueError(f"PyMSS Runtime 清单字段 {field} 无效。") from exc
     if parsed < 0:
-        raise ValueError(f"PyMSS 运行时清单字段 {field} 不能小于 0。")
+        raise ValueError(f"PyMSS Runtime 清单字段 {field} 不能小于 0。")
     return parsed
 
 
 def _sha256_text(value, field: str) -> str:
     text = str(value or "").strip().lower()
     if len(text) != 64 or any(ch not in "0123456789abcdef" for ch in text):
-        raise ValueError(f"PyMSS 运行时清单字段 {field} 不是有效 SHA-256。")
+        raise ValueError(f"PyMSS Runtime 清单字段 {field} 不是有效 SHA-256。")
     return text
 
 
@@ -220,7 +220,7 @@ def _safe_relative_path(value: str) -> str:
     text = str(value or "").replace("\\", "/").strip()
     path = PurePosixPath(text)
     if not text or path.is_absolute() or ".." in path.parts or path.parts[0] != "runtime":
-        raise ValueError(f"PyMSS 运行时清单包含不安全路径：{value!r}")
+        raise ValueError(f"PyMSS Runtime 清单包含不安全路径：{value!r}")
     return path.as_posix()
 
 
@@ -248,25 +248,25 @@ def fetch_runtime_package(
     package = RuntimePackage.from_payload(response.json())
     if package.pymss_version != PYMSS_VERSION:
         raise ValueError(
-            f"运行时清单要求 PyMSS {package.pymss_version}，工作台要求 {PYMSS_VERSION}。"
+            f"Runtime 清单要求 PyMSS {package.pymss_version}，工作台要求 {PYMSS_VERSION}。"
         )
     if package.runtime_version != PYMSS_RUNTIME_VERSION:
         raise ValueError(
-            "运行时清单修订不匹配："
+            "Runtime 清单修订不匹配："
             f"得到 r{package.runtime_version}，工作台要求 r{PYMSS_RUNTIME_VERSION}。"
         )
     if package.python_version != PYMSS_PYTHON_VERSION:
         raise ValueError(
-            f"运行时清单要求 Python {package.python_version}，"
+            f"Runtime 清单要求 Python {package.python_version}，"
             f"工作台要求 {PYMSS_PYTHON_VERSION}。"
         )
     if package.torch_wheel is None or package.torch_wheel.version != PYMSS_TORCH_VERSION:
         raise ValueError(
-            f"运行时清单必须提供 torch {PYMSS_TORCH_VERSION} 官方 wheel。"
+            f"Runtime 清单必须提供 torch {PYMSS_TORCH_VERSION} 官方 wheel。"
         )
     expected_wheel = TORCH_WHEELS.get(package.variant)
     if expected_wheel is None:
-        raise ValueError(f"运行时清单包含不支持的类型：{package.variant}。")
+        raise ValueError(f"Runtime 清单包含不支持的类型：{package.variant}。")
     actual_wheel = package.torch_wheel
     expected_fields = {
         "url": str(expected_wheel["url"]),
@@ -281,7 +281,7 @@ def fetch_runtime_package(
         "sha256": actual_wheel.sha256,
     }
     if actual_fields != expected_fields:
-        raise ValueError("运行时清单中的 torch wheel 与工作台固定的 PyTorch 官方文件不一致。")
+        raise ValueError("Runtime 清单中的 torch wheel 与工作台固定的 PyTorch 官方文件不一致。")
     forbidden_roots = {"torch", "functorch", "torchgen"}
     for item in package.files:
         parts = PurePosixPath(item.path).parts
@@ -306,7 +306,7 @@ def load_installed_package(install_dir: Path) -> RuntimePackage:
     with path.open("r", encoding="utf-8") as stream:
         payload = json.load(stream)
     if not payload.get("complete"):
-        raise ValueError("PyMSS 运行时安装尚未完成。")
+        raise ValueError("PyMSS Runtime 安装尚未完成。")
     # Installed manifests intentionally omit the archive. Supply validated
     # placeholders so one parser defines all version/file invariants.
     parsed = dict(payload)
@@ -329,7 +329,7 @@ def validate_runtime(
         return RuntimeValidation(RuntimeStatus.MISSING, "PyMSS 安装目录不存在。")
     manifest = _installed_manifest_path(root)
     if not manifest.is_file():
-        return RuntimeValidation(RuntimeStatus.DAMAGED, "缺少 PyMSS 运行时清单。")
+        return RuntimeValidation(RuntimeStatus.DAMAGED, "缺少 PyMSS Runtime 清单。")
     try:
         package = load_installed_package(root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -343,7 +343,7 @@ def validate_runtime(
     if package.runtime_version != PYMSS_RUNTIME_VERSION:
         return RuntimeValidation(
             RuntimeStatus.INCOMPATIBLE,
-            f"已安装运行时修订 r{package.runtime_version}，需要 r{PYMSS_RUNTIME_VERSION}。",
+            f"已安装 Runtime 修订 r{package.runtime_version}，需要 r{PYMSS_RUNTIME_VERSION}。",
             package=package,
         )
     if package.python_version != PYMSS_PYTHON_VERSION:
@@ -355,7 +355,7 @@ def validate_runtime(
     if expected_variant and package.variant != expected_variant:
         return RuntimeValidation(
             RuntimeStatus.INCOMPATIBLE,
-            f"运行时类型为 {package.variant}，当前需要 {expected_variant}。",
+            f"Runtime 类型为 {package.variant}，当前需要 {expected_variant}。",
             package=package,
         )
     missing: list[str] = []
@@ -375,12 +375,12 @@ def validate_runtime(
     if missing or damaged:
         return RuntimeValidation(
             RuntimeStatus.DAMAGED,
-            "PyMSS 运行时文件缺失或损坏。",
+            "PyMSS Runtime 文件缺失或损坏。",
             tuple(missing),
             tuple(damaged),
             package,
         )
-    return RuntimeValidation(RuntimeStatus.READY, "PyMSS 运行时可用。", package=package)
+    return RuntimeValidation(RuntimeStatus.READY, "PyMSS Runtime 可用。", package=package)
 
 
 def _path_is_within(path: Path, parent: Path) -> bool:
@@ -526,7 +526,7 @@ class ManagedRuntimeInstaller:
                 )
                 if final_validation.status is not RuntimeStatus.READY:
                     raise RuntimeError(
-                        f"PyMSS 新运行时切换后复检失败：{final_validation.message}"
+                        f"PyMSS 新 Runtime 切换后复检失败：{final_validation.message}"
                     )
                 if post_install_check is not None:
                     post_install_check(root)
@@ -592,18 +592,18 @@ class ManagedRuntimeInstaller:
                             progress(done, package.download_size)
                 if part_done != part.size:
                     raise ValueError(
-                        f"PyMSS 运行时第 {index} 个分片大小不符：得到 {part_done}，应为 {part.size}。"
+                        f"PyMSS Runtime 第 {index} 个分片大小不符：得到 {part_done}，应为 {part.size}。"
                     )
                 if part_digest.hexdigest() != part.sha256:
-                    raise ValueError(f"PyMSS 运行时第 {index} 个分片校验失败。")
+                    raise ValueError(f"PyMSS Runtime 第 {index} 个分片校验失败。")
             stream.flush()
             os.fsync(stream.fileno())
         if done != package.archive_size:
             raise ValueError(
-                f"PyMSS 运行时下载大小不符：得到 {done}，应为 {package.archive_size}。"
+                f"PyMSS Runtime 下载大小不符：得到 {done}，应为 {package.archive_size}。"
             )
         if archive_digest.hexdigest() != package.archive_sha256:
-            raise ValueError("PyMSS 运行时下载校验失败（SHA-256 不匹配）。")
+            raise ValueError("PyMSS Runtime 下载校验失败（SHA-256 不匹配）。")
 
     def _download_wheel(self, package, destination, *, progress=None, cancelled=None) -> None:
         dependency = package.torch_wheel
@@ -781,9 +781,9 @@ class ManagedRuntimeInstaller:
                 rel = PurePosixPath(member.filename)
                 mode = member.external_attr >> 16
                 if rel.is_absolute() or ".." in rel.parts or stat.S_ISLNK(mode):
-                    raise ValueError(f"PyMSS 运行时压缩包包含不安全路径：{member.filename!r}")
+                    raise ValueError(f"PyMSS Runtime 压缩包包含不安全路径：{member.filename!r}")
                 if not rel.parts or rel.parts[0] != "runtime":
-                    raise ValueError("PyMSS 运行时压缩包必须只包含 runtime/ 目录。")
+                    raise ValueError("PyMSS Runtime 压缩包必须只包含 runtime/ 目录。")
                 target = destination.joinpath(*rel.parts)
                 if member.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -806,12 +806,12 @@ class ManagedRuntimeInstaller:
         if missing or damaged:
             return RuntimeValidation(
                 RuntimeStatus.DAMAGED,
-                "解压后的 PyMSS 运行时文件不完整。",
+                "解压后的 PyMSS Runtime 文件不完整。",
                 tuple(missing),
                 tuple(damaged),
                 package,
             )
-        return RuntimeValidation(RuntimeStatus.READY, "PyMSS 运行时包校验通过。", package=package)
+        return RuntimeValidation(RuntimeStatus.READY, "PyMSS Runtime 包校验通过。", package=package)
 
 
 def _atomic_json_write(path: Path, payload: dict) -> None:

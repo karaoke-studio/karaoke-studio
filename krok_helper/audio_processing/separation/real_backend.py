@@ -497,7 +497,7 @@ class RealSeparationBackend(SeparationBackend):
             if not self._stop_owned_service(5.0):
                 raise RuntimeError("无法停止正在运行的 PyMSS 服务，请稍后重试。")
             manifest_url = runtime_manifest_url(variant)
-            self._log(f"PyMSS 运行时清单：{manifest_url}")
+            self._log(f"PyMSS Runtime 清单：{manifest_url}")
             package = fetch_runtime_package(manifest_url)
             for index, part in enumerate(package.archive_parts, start=1):
                 self._log(f"PyMSS 底座分片 {index}：{part.url}")
@@ -536,7 +536,7 @@ class RealSeparationBackend(SeparationBackend):
                 self._apply_runtime_validation(result)
                 self._rebuild_dependencies()
             self._emit()
-            self._log(f"PyMSS {PYMSS_VERSION} 托管运行时安装完成。")
+            self._log(f"PyMSS {PYMSS_VERSION} 托管 Runtime 安装完成。")
 
         def failure(exc: Exception) -> None:
             if self._install_cancel.is_set():
@@ -550,11 +550,11 @@ class RealSeparationBackend(SeparationBackend):
                     self._emit()
                 else:
                     self._set_state(ServiceState.LOCATION_REQUIRED)
-                self._log("PyMSS 运行时安装已取消，原有安装保持不变。")
+                self._log("PyMSS Runtime 安装已取消，原有安装保持不变。")
             else:
                 self._fail(exc)
 
-        self._log(f"开始下载 PyMSS 托管运行时（{variant}）。")
+        self._log(f"开始下载 PyMSS 托管 Runtime（{variant}）。")
         self._submit(operation, success, failure)
 
     def _post_install_smoke(self, install_dir: Path) -> None:
@@ -581,7 +581,7 @@ class RealSeparationBackend(SeparationBackend):
 
     def cancel_install(self) -> None:
         self._install_cancel.set()
-        self._log("正在取消 PyMSS 运行时下载……")
+        self._log("正在取消 PyMSS Runtime 下载……")
 
     def cleanup_incomplete(self) -> None:
         self._install_cancel.set()
@@ -1054,20 +1054,21 @@ class RealSeparationBackend(SeparationBackend):
         if not root:
             self._fail("尚未配置可启动的 PyMSS 环境。")
             return
-        if not executable:
-            # Starting inference is the trust boundary: verify every managed
-            # runtime file by digest, not only by presence and size.  This also
-            # catches same-size edits or a partially overwritten torch DLL.
-            validation = validate_runtime(root, full=True)
-            if validation.status is not RuntimeStatus.READY:
-                with self._lock:
-                    self._apply_runtime_validation(validation)
-                self._emit()
-                return
         self._service_cancel = threading.Event()
         self._set_state(ServiceState.SERVICE_STARTING)
 
         def operation():
+            validation = None
+            if not executable:
+                # Starting inference is the trust boundary: verify every
+                # managed Runtime file by digest, not only by presence and
+                # size. Torch makes this expensive, so it must not run on the
+                # Qt GUI thread.
+                validation = validate_runtime(root, full=True)
+                if self._service_cancel.is_set():
+                    raise InterruptedError("PyMSS 服务启动已取消。")
+                if validation.status is not RuntimeStatus.READY:
+                    return None, "", validation
             external_version = self._require_external_version(executable) if executable else ""
             service = self._service_factory.start(
                 root,
@@ -1081,10 +1082,16 @@ class RealSeparationBackend(SeparationBackend):
             if self._service_cancel.is_set():
                 service.stop(timeout_seconds=2.0)
                 raise InterruptedError("PyMSS 服务启动已取消。")
-            return service, external_version
+            return service, external_version, validation
 
         def success(result) -> None:
-            service, external_version = result
+            service, external_version, validation = result
+            if validation is not None and validation.status is not RuntimeStatus.READY:
+                with self._lock:
+                    self._apply_runtime_validation(validation)
+                    self._rebuild_dependencies()
+                self._emit()
+                return
             if self._service_cancel.is_set():
                 service.stop(timeout_seconds=2.0)
                 self._set_state(ServiceState.INSTALLED_STOPPED)

@@ -111,7 +111,7 @@ class AppSettings:
 
     # ── 「音视频处理」模块（音频分离 / PyMSS）的设置 namespace ──
     # 需求文档 docs/音视频处理-PyMSS音频分离需求设计.md §10：模块内部以 dict
-    # 形式读写，保存安装位置、运行时来源、任务模型绑定、输出设置与
+    # 形式读写，保存安装位置、Runtime 来源、任务模型绑定、输出设置与
     # last_internal_tab 等。API key 不写入本 namespace（每次启动临时生成）。
     pymss: dict = field(default_factory=dict)
 

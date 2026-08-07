@@ -30,7 +30,7 @@ FLOW_FULL = "full"            # 安装 PyMSS 和推荐模型
 FLOW_REUSE_MSST = "reuse_msst"  # 仅安装 PyMSS，复用 MSST 模型
 FLOW_EXISTING = "existing"    # 使用已有 PyMSS
 FLOW_REMAP_MSST = "remap_msst"  # 已安装后重新扫描/映射 MSST 模型
-FLOW_UPGRADE = "upgrade"      # 保留目录和模型，升级托管运行时
+FLOW_UPGRADE = "upgrade"      # 保留目录和模型，升级托管 Runtime
 
 
 @dataclass
@@ -356,7 +356,7 @@ class MockSeparationBackend(SeparationBackend):
     def _load_downloaded_models(self) -> None:
         """从设置恢复已下载模型集合。
 
-        安装运行时不附带任何模型（§8.4），所以这里绝不能因为「有安装目录」就
+        安装 Runtime 不附带任何模型（§8.4），所以这里绝不能因为「有安装目录」就
         认为模型齐全；只恢复此前真正下载过的部分。
         """
         raw = self._settings.get("downloaded_models") or []
@@ -391,7 +391,7 @@ class MockSeparationBackend(SeparationBackend):
         self._snap.download_total = self.MOCK_RUNTIME_DOWNLOAD_BYTES
         self._phase = "runtime_download"
         self._set_state(ServiceState.RUNTIME_DOWNLOADING)
-        self._log("开始下载 PyMSS 托管运行时（模拟）")
+        self._log("开始下载 PyMSS 托管 Runtime（模拟）")
         if self._simulate_delays:
             self._timer.start()
         else:
@@ -421,7 +421,7 @@ class MockSeparationBackend(SeparationBackend):
 
     def _finish_runtime_download(self) -> None:
         self._set_state(ServiceState.RUNTIME_VERIFYING)
-        self._log("校验运行时文件（模拟）")
+        self._log("校验 Runtime 文件（模拟）")
         self._delay(500, self._finish_install)
 
     def _finish_install(self) -> None:

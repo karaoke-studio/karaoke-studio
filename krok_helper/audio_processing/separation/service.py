@@ -114,7 +114,7 @@ class ManagedServiceProcess:
         managed_runtime = executable is None
         exe = Path(executable) if executable else runtime_python(root)
         if not exe.is_file():
-            raise FileNotFoundError(f"找不到 PyMSS 运行时入口：{exe}")
+            raise FileNotFoundError(f"找不到 PyMSS Runtime 入口：{exe}")
         models = Path(model_dir) if model_dir else root / "models"
         manifests = root / "manifests"
         logs = root / "logs"

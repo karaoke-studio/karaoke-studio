@@ -20,6 +20,7 @@ from krok_helper.audio_processing.separation.real_backend import RealSeparationB
 from krok_helper.audio_processing.separation.runtime import (
     RuntimeStatus,
     RuntimeValidation,
+    validate_runtime,
 )
 from krok_helper.audio_processing.separation.states import ServiceState, TaskType
 from krok_helper.settings import AppSettings
@@ -355,6 +356,44 @@ def test_first_full_refresh_detects_same_size_runtime_tampering(tmp_path) -> Non
         assert "损坏" in backend.snapshot().error
     finally:
         backend.shutdown()
+
+
+def test_managed_service_start_verifies_runtime_off_the_gui_thread(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=_FakeServiceFactory
+    )
+    validation_started = threading.Event()
+    release_validation = threading.Event()
+    original_validate = validate_runtime
+
+    def slow_validate(path, *, full=False):
+        if full:
+            validation_started.set()
+            assert release_validation.wait(3.0)
+        return original_validate(path, full=full)
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.validate_runtime",
+        slow_validate,
+    )
+    try:
+        began = time.monotonic()
+        backend.start_service()
+        elapsed = time.monotonic() - began
+
+        assert elapsed < 0.2
+        assert validation_started.wait(1.0)
+        assert backend.snapshot().state is ServiceState.SERVICE_STARTING
+
+        release_validation.set()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+    finally:
+        release_validation.set()
+        assert backend.shutdown()
 
 
 def test_production_page_uses_real_backend_by_default() -> None:

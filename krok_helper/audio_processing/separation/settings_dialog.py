@@ -1,6 +1,6 @@
 """音频分离设置对话框（需求文档 §3.3「设置入口」/ §3.7）。
 
-独立对话框 + Pivot 四页：安装与运行时 / 服务与下载 / 诊断与日志 / 修复与重置。
+独立对话框 + Pivot 四页：安装与 Runtime / 服务与下载 / 诊断与日志 / 修复与重置。
 写法对齐全局设置（``gui_qt._open_global_settings_window``），但不 import gui_qt，
 保持音频分离包可独立测试。
 """
@@ -112,7 +112,7 @@ class SeparationSettingsDialog(QDialog):
         outer.addWidget(self._stack, 1)
 
         pages = [
-            ("runtime", "安装与运行时", self._build_runtime_page()),
+            ("runtime", "安装与 Runtime", self._build_runtime_page()),
             ("service", "服务与下载", self._build_service_page()),
             ("diagnostics", "诊断与日志", self._build_diagnostics_page()),
             ("repair", "修复与重置", self._build_repair_page()),
@@ -130,12 +130,12 @@ class SeparationSettingsDialog(QDialog):
         self._backend.snapshotChanged.connect(self._apply_snapshot)
         self._apply_snapshot(self._backend.snapshot())
 
-    # ── 安装与运行时 ──────────────────────────────────────────────
+    # ── 安装与 Runtime ──────────────────────────────────────────────
     def _build_runtime_page(self) -> QWidget:
-        group = SettingCardGroup("安装与运行时", self)
+        group = SettingCardGroup("安装与 Runtime", self)
 
         self._install_dir_card = SettingCard(
-            FIF.FOLDER, "安装位置", "PyMSS 托管运行时的安装目录", group
+            FIF.FOLDER, "安装位置", "PyMSS 托管 Runtime 的安装目录", group
         )
         self._install_dir_label = CaptionLabel("—", self._install_dir_card)
         self._install_dir_label.setMaximumWidth(260)
@@ -271,7 +271,7 @@ class SeparationSettingsDialog(QDialog):
             (
                 FIF.UPDATE,
                 "重新完整安装",
-                "重新下载运行时；默认保留校验通过的模型",
+                "重新下载 Runtime；默认保留校验通过的模型",
                 "重新安装",
                 self._on_reinstall,
             ),
@@ -307,7 +307,7 @@ class SeparationSettingsDialog(QDialog):
         for button in self._managed_action_buttons:
             button.setEnabled(managed)
         if snapshot.install_dir:
-            self._mode_label.setText("托管运行时")
+            self._mode_label.setText("托管 Runtime")
         elif self._settings.get("external_server_url"):
             self._mode_label.setText("外部服务")
         elif self._settings.get("external_executable"):
@@ -361,7 +361,7 @@ class SeparationSettingsDialog(QDialog):
             self,
             f"当前状态：{state_text}\n"
             f"PyMSS 版本：{snap.pymss_version or '—'}\n"
-            f"运行时类型：{self._settings.get('runtime_variant', '外部/自动')}\n"
+            f"Runtime 类型：{self._settings.get('runtime_variant', '外部/自动')}\n"
             f"当前设备：{snap.device or '—'}\n"
             f"当前模型：{snap.current_model or '—'}\n"
             f"安装位置：{snap.install_dir or '—'}\n"
@@ -382,7 +382,7 @@ class SeparationSettingsDialog(QDialog):
     def _on_repair(self) -> None:
         if ask_fluent_confirm(
             self,
-            "修复会根据当前设备重新获取缺失或损坏的运行时文件（CPU 约数百 MB；"
+            "修复会根据当前设备重新获取缺失或损坏的 Runtime 文件（CPU 约数百 MB；"
             "NVIDIA CUDA 最多约 3–4 GB），不会删除模型、MSST 映射或缓存。是否继续？",
             yes_text="修复安装",
         ):
@@ -396,7 +396,7 @@ class SeparationSettingsDialog(QDialog):
     def _on_reinstall(self) -> None:
         if ask_fluent_confirm(
             self,
-            "将根据当前设备重新下载 PyMSS 运行时（CPU 约数百 MB；NVIDIA CUDA 约 3–4 GB），"
+            "将根据当前设备重新下载 PyMSS Runtime（CPU 约数百 MB；NVIDIA CUDA 约 3–4 GB），"
             "已下载且校验通过的模型会保留。是否继续？",
             yes_text="重新安装",
         ):

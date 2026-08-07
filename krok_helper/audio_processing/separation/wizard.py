@@ -147,7 +147,7 @@ class WelcomeView(QWidget):
             EntryCard(
                 FIF.CLOUD_DOWNLOAD,
                 "安装 PyMSS 和推荐模型",
-                "首次使用。由工作台下载并管理 PyMSS 运行时。",
+                "首次使用。由工作台下载并管理 PyMSS Runtime。",
                 self,
             ),
             EntryCard(
@@ -358,7 +358,7 @@ class ConfirmStep(WizardStep):
             ]
         rows = [
             ("安装目录", snap.install_dir),
-            ("安装内容", "PyMSS 托管运行时（独立 Python，不影响系统环境）"),
+            ("安装内容", "PyMSS 托管 Runtime（独立 Python，不影响系统环境）"),
             *choice_rows,
         ]
         if reuse:
@@ -866,7 +866,7 @@ class DoneStep(WizardStep):
             self._text.setText("MSST 模型映射已更新；托管服务会重新加载模型清单。")
         elif self.wizard.flow == FLOW_UPGRADE:
             self._text.setText(
-                f"PyMSS 托管运行时已更新：{snap.install_dir}\n"
+                f"PyMSS 托管 Runtime 已更新：{snap.install_dir}\n"
                 "已有模型、MSST 映射、缓存与日志均已保留。"
             )
         else:

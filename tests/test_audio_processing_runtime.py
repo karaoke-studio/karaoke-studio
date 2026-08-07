@@ -190,7 +190,7 @@ def test_fetch_runtime_rejects_old_runtime_revision_and_python_abi() -> None:
 
     old_revision = _production_manifest()
     old_revision["runtime_version"] = "obsolete"
-    with pytest.raises(ValueError, match="运行时清单修订不匹配"):
+    with pytest.raises(ValueError, match="Runtime 清单修订不匹配"):
         fetch_runtime_package(
             "https://example.invalid/manifest", session=ManifestSession(old_revision)
         )

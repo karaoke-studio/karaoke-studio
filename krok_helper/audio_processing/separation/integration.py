@@ -80,7 +80,7 @@ def nvidia_driver_available() -> bool:
 def managed_runtime_variant(*, prefer_cuda: bool | None = None) -> str:
     """Return the supported managed-runtime variant for this host."""
     if platform.system().lower() != "windows":
-        raise RuntimeError("首版 PyMSS 托管运行时仅支持 Windows。")
+        raise RuntimeError("首版 PyMSS 托管 Runtime 仅支持 Windows。")
     override = os.environ.get("KROK_PYMSS_RUNTIME_VARIANT", "").strip()
     if override in {PYMSS_CUDA_VARIANT, PYMSS_CPU_VARIANT}:
         return override
