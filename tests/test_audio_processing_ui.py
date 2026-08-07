@@ -1197,3 +1197,102 @@ class TestQueueSelectionAndPanelTitle:
         page._panel_mode = None
         page._apply_snapshot(snapshot)
         assert "共" not in page._task_panel._title.text()
+
+
+class TestDropZoneFeedback:
+    """音频素材拖放区的四档视觉反馈（§9.1）。"""
+
+    SONG = "D:/a/song.flac"
+    #: 事件不持有 QMimeData，构造完就被回收会让 Qt 读到野指针（真实拖拽由 Qt 自己
+    #: 管生命周期，只有测试里手搓事件才会踩到）。
+    _KEEP_ALIVE: list = []
+
+    @staticmethod
+    def _card():
+        from krok_helper.audio_processing.separation.widgets import AudioInputCard
+
+        card = AudioInputCard()
+        card.resize(360, 200)
+        return card
+
+    @classmethod
+    def _drag(cls, path: str):
+        from PyQt6.QtCore import QMimeData, QPoint, QUrl
+        from PyQt6.QtGui import QDragEnterEvent
+
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(path)])
+        cls._KEEP_ALIVE.append(mime)
+        return QDragEnterEvent(
+            QPoint(10, 10),
+            Qt.DropAction.CopyAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+    def test_the_four_states_look_different(self) -> None:
+        """空闲/悬停/拖拽经过/已载入必须各自可辨，否则用户得不到任何提示。"""
+        card = self._card()
+        zone = card._drop_zone
+        seen = {"idle": zone.styleSheet()}
+
+        zone._hovered = True
+        zone._apply_style()
+        seen["hover"] = zone.styleSheet()
+        zone._hovered = False
+
+        zone.dragEnterEvent(self._drag(self.SONG))
+        seen["drag"] = zone.styleSheet()
+        zone._set_dragging(False)
+
+        card.set_path(self.SONG, emit=False)
+        seen["filled"] = zone.styleSheet()
+
+        assert len(set(seen.values())) == 4, seen
+        assert "transparent" in seen["idle"]
+        # 除空闲外都要有底色：只改边框颜色太不显眼。
+        for key in ("hover", "drag", "filled"):
+            assert "rgba(" in seen[key], key
+
+    def test_drag_over_changes_the_wording_too(self) -> None:
+        """只靠颜色不够：拖到框上时要明说「松手就收」。"""
+        card = self._card()
+        card._drop_zone.dragEnterEvent(self._drag(self.SONG))
+        assert card._zone_label.text() == "松开即可载入"
+
+    def test_leaving_without_dropping_restores_the_previous_look(self) -> None:
+        from PyQt6.QtGui import QDragLeaveEvent
+
+        card = self._card()
+        card.set_path(self.SONG, emit=False)
+        before = card._drop_zone.styleSheet()
+
+        card._drop_zone.dragEnterEvent(self._drag("D:/a/other.wav"))
+        card._drop_zone.dragLeaveEvent(QDragLeaveEvent())
+
+        assert card._drop_zone.styleSheet() == before
+        assert card._zone_label.text() == "song.flac"
+
+    def test_a_non_audio_drag_is_refused(self) -> None:
+        card = self._card()
+        event = self._drag("D:/a/note.txt")
+        card._drop_zone.dragEnterEvent(event)
+        assert not event.isAccepted()
+        assert not card._drop_zone._dragging
+
+    def test_the_labels_stay_transparent(self) -> None:
+        """标签一旦带上白底，悬停时拖放区的浅色底会被盖出两道横条。"""
+        card = self._card()
+        for label in (card._zone_label, card._zone_hint):
+            assert "background: transparent" in label.styleSheet()
+
+    def test_switching_states_never_changes_the_zone_height(self) -> None:
+        """卡片等高是硬要求：三档只换图标与文字，不增删控件。"""
+        card = self._card()
+        heights = {card._drop_zone.sizeHint().height()}
+        card._refresh_zone(dragging=True)
+        heights.add(card._drop_zone.sizeHint().height())
+        card._refresh_zone()
+        heights.add(card._drop_zone.sizeHint().height())
+        assert len(heights) == 1, heights

@@ -494,11 +494,26 @@ class StatusActionBar(CardWidget):
         self._detail_fields["当前模型"].setText(snapshot.current_model or "—")
 
 
+def _tint(color: str, alpha: float) -> str:
+    """把调色板里的颜色调成半透明底色，用于悬停/拖拽经过的填充。"""
+    from PyQt6.QtGui import QColor
+
+    c = QColor(color)
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha:.2f})"
+
+
 class _DropZoneFrame(QFrame):
-    """素材卡内的拖放区：可点击选择，也可拖入音频文件。"""
+    """素材卡内的拖放区：可点击选择，也可拖入音频文件。
+
+    四档视觉状态各自可辨（§9.1）：空闲是灰色虚线；鼠标悬停加一层浅色底并把边框
+    提到强调色；拖拽经过时边框加粗、底色加深，明确「松手就收」；已载入则换成实线
+    强调色边框，与「还是空的」一眼可分。
+    """
 
     clicked = pyqtSignal()
     fileDropped = pyqtSignal(str)
+    #: 拖拽经过 / 离开，供素材卡同步换图标与文案。
+    dragActiveChanged = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -508,28 +523,87 @@ class _DropZoneFrame(QFrame):
         self.setMinimumHeight(96)
         # 卡片被拉高时由拖放区吸收多余高度，而不是把标题和提示撑散。
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self._hovered = False
+        self._dragging = False
+        self._filled = False
+        self._apply_style()
+
+    # ── 视觉状态 ────────────────────────────────────────────────
+    def set_filled(self, filled: bool) -> None:
+        if filled != self._filled:
+            self._filled = filled
+            self._apply_style()
+
+    def _apply_style(self) -> None:
+        p = _palette()
+        if self._dragging:
+            border, width, style = p.accent_primary, 2, "dashed"
+            background = _tint(p.accent_primary, 0.16)
+        elif self._filled:
+            border, width, style = p.accent_primary, 1, "solid"
+            background = _tint(p.accent_primary, 0.07)
+        elif self._hovered:
+            border, width, style = p.accent_hover, 1, "dashed"
+            background = _tint(p.accent_primary, 0.07)
+        else:
+            # 用输入框的悬停描边色：card_border 太淡，虚线框会几乎看不见。
+            border, width, style = p.input_border_hover, 1, "dashed"
+            background = "transparent"
         self.setStyleSheet(
-            "#SeparationDropZone { border: 1px dashed rgba(128,128,128,0.55); "
-            "border-radius: 8px; background: transparent; }"
+            f"#SeparationDropZone {{ border: {width}px {style} {border}; "
+            f"border-radius: 8px; background: {background}; }}"
         )
+
+    # ── 鼠标 ────────────────────────────────────────────────────
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self._apply_style()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self._apply_style()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
 
+    # ── 拖放 ────────────────────────────────────────────────────
+    @staticmethod
+    def _first_audio(mime) -> str:
+        for url in mime.urls():
+            local = url.toLocalFile()
+            if local and Path(local).suffix.lower() in ACCEPTED_AUDIO_EXTENSIONS:
+                return local
+        return ""
+
+    def _set_dragging(self, dragging: bool) -> None:
+        if dragging == self._dragging:
+            return
+        self._dragging = dragging
+        self._apply_style()
+        self.dragActiveChanged.emit(dragging)
+
     def dragEnterEvent(self, event) -> None:
-        urls = event.mimeData().urls()
-        if any(Path(u.toLocalFile()).suffix.lower() in ACCEPTED_AUDIO_EXTENSIONS for u in urls):
-            event.acceptProposedAction()
+        if not self._first_audio(event.mimeData()):
+            # 明确拒绝：光标显示禁止符号，而不是让用户以为能放。
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._set_dragging(True)
+
+    def dragLeaveEvent(self, event) -> None:
+        self._set_dragging(False)
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
-        for url in event.mimeData().urls():
-            local = url.toLocalFile()
-            if Path(local).suffix.lower() in ACCEPTED_AUDIO_EXTENSIONS:
-                self.fileDropped.emit(local)
-                event.acceptProposedAction()
-                return
+        self._set_dragging(False)
+        local = self._first_audio(event.mimeData())
+        if local:
+            event.acceptProposedAction()
+            self.fileDropped.emit(local)
 
 
 class AudioInputCard(CardWidget):
@@ -561,32 +635,69 @@ class AudioInputCard(CardWidget):
         self._zone_icon = IconWidget(FIF.MUSIC.icon(), self._drop_zone)
         self._zone_icon.setFixedSize(26, 26)
         zone_layout.addWidget(self._zone_icon, 0, Qt.AlignmentFlag.AlignHCenter)
-        self._zone_label = BodyLabel("点击选择文件，或拖拽音频文件到此处", self._drop_zone)
+        self._zone_label = BodyLabel(self._EMPTY_LABEL, self._drop_zone)
         self._zone_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         zone_layout.addWidget(self._zone_label)
-        self._zone_hint = CaptionLabel(
-            "支持 wav / flac / mp3 / m4a / aac / ape / alac", self._drop_zone
-        )
+        self._zone_hint = CaptionLabel(self._FORMAT_HINT, self._drop_zone)
         self._zone_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         zone_layout.addWidget(self._zone_hint)
         layout.addWidget(self._drop_zone)
 
+        # 图标与文字不吃鼠标事件：否则鼠标划过它们时拖放区会收到 Leave，悬停态闪烁。
+        for child in (self._zone_icon, self._zone_label, self._zone_hint):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
         self._drop_zone.clicked.connect(self._browse)
         self._drop_zone.fileDropped.connect(self.set_path)
+        self._drop_zone.dragActiveChanged.connect(
+            lambda active: self._refresh_zone(dragging=active)
+        )
+        # 立刻刷一次：标签默认是不透明的，不抹成透明底，悬停时拖放区的浅色底会被
+        # 文字行的白块盖出两道横条。
+        self._refresh_zone()
 
     def path(self) -> str:
         return self._path
+
+    _EMPTY_LABEL = "点击选择文件，或拖拽音频文件到此处"
+    _FORMAT_HINT = "支持 wav / flac / mp3 / m4a / aac / ape / alac"
+
+    def _refresh_zone(self, *, dragging: bool = False) -> None:
+        """按「拖拽经过 / 已载入 / 空」三种情形刷新图标与文案。
+
+        三者都只改一个图标和两行文字、不增删控件，卡片高度因此不会跳。
+        """
+        from PyQt6.QtGui import QColor
+
+        accent = _palette().accent_primary
+        # 一给标签设 QSS，qfluentwidgets 原本的透明底就没了，会露出一块白底；
+        # 因此每一档都显式写上 background: transparent。
+        emphasis = f"color: {accent}; font-weight: 600; background: transparent;"
+        plain = "background: transparent;"
+        self._zone_hint.setStyleSheet(plain)
+        if dragging:
+            self._zone_icon.setIcon(FIF.DOWNLOAD.icon(color=QColor(accent)))
+            self._zone_label.setText("松开即可载入")
+            self._zone_label.setStyleSheet(emphasis)
+            self._zone_hint.setText(self._FORMAT_HINT)
+        elif self._path:
+            # 载入后整块换装：对勾图标 + 强调色文件名，跟「还是空的」一眼可分。
+            self._zone_icon.setIcon(FIF.COMPLETED.icon(color=QColor(accent)))
+            self._zone_label.setText(Path(self._path).name)
+            self._zone_label.setStyleSheet(emphasis)
+            self._zone_hint.setText(self._path)
+        else:
+            self._zone_icon.setIcon(FIF.MUSIC.icon())
+            self._zone_label.setText(self._EMPTY_LABEL)
+            self._zone_label.setStyleSheet(plain)
+            self._zone_hint.setText(self._FORMAT_HINT)
 
     def set_path(self, path: str, *, emit: bool = True) -> None:
         self._path = path
         has = bool(path)
         self._clear_button.setVisible(has)
-        if has:
-            self._zone_label.setText(Path(path).name)
-            self._zone_hint.setText(path)
-        else:
-            self._zone_label.setText("点击选择文件，或拖拽音频文件到此处")
-            self._zone_hint.setText("支持 wav / flac / mp3 / m4a / aac / ape / alac")
+        self._drop_zone.set_filled(has)
+        self._refresh_zone()
         if emit and has:
             self.fileSelected.emit(path)
 
