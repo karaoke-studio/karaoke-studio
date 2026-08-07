@@ -729,10 +729,23 @@ class TaskCard(CardWidget):
             self.triggered.emit()
         super().mouseReleaseEvent(event)
 
-    def set_dependency(self, dep: TaskDependency, *, service_ready: bool) -> None:
+    def set_dependency(
+        self,
+        dep: TaskDependency,
+        *,
+        service_ready: bool,
+        unavailable_reason: str = "",
+    ) -> None:
         if not service_ready:
             self._pill.set_state("", StateLevel.INFO)
             self._reason.setText("需要先启动服务")
+            self._reason.setVisible(True)
+            self._action_button.setText("开始分离")
+            self._action_button.setEnabled(False)
+            return
+        if unavailable_reason:
+            self._pill.set_state(dep.badge or "处理中", StateLevel.INFO)
+            self._reason.setText(unavailable_reason)
             self._reason.setVisible(True)
             self._action_button.setText("开始分离")
             self._action_button.setEnabled(False)

@@ -1598,7 +1598,7 @@ class RealSeparationBackend(SeparationBackend):
                         progress(STAGE_LOAD, step.model)
                         external_task = external_tasks.get(step.model)
                         try:
-                            client.load_model(
+                            load_result = client.load_model(
                                 step.model,
                                 source=self._download_source(),
                                 inference_params=step.params(),
@@ -1611,14 +1611,28 @@ class RealSeparationBackend(SeparationBackend):
                             registry = self._registry()
                             if registry is not None:
                                 registry.mark_verified(external_task)
-                        self._snap.current_model = step.model
+                        model_card = (
+                            load_result.get("model", {})
+                            if isinstance(load_result, dict)
+                            else {}
+                        )
+                        loaded_model_id = str(
+                            model_card.get("id", "")
+                            if isinstance(model_card, dict)
+                            else ""
+                        ).strip() or step.model
+                        if loaded_model_id != step.model:
+                            self._log(
+                                f"模型 {step.model} 已加载为服务内部 ID：{loaded_model_id}"
+                            )
+                        self._snap.current_model = loaded_model_id
                         self._emit()
                         progress(STAGE_SEPARATE, step.model)
                         archive = work / f"step-{index}.zip"
                         client.separate_pcm(
                             pcm,
                             archive,
-                            model=step.model,
+                            model=loaded_model_id,
                             sample_rate=44100,
                             channels=2,
                             stems=step.stems,

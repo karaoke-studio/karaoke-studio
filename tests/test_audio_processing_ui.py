@@ -153,6 +153,31 @@ class TestManagedUpgradeFlow:
 
 
 class TestMockBackendFlow:
+    def test_active_task_does_not_claim_service_is_stopped(self) -> None:
+        page = _make_separation_page()
+        backend = page._backend
+        backend.confirm_install_location("D:/demo/pymss")
+        backend.start_install()
+        backend.start_service()
+        snapshot = backend.snapshot()
+        snapshot.state = ServiceState.MODEL_DOWNLOADING
+        snapshot.pending_task = TaskType.INSTRUMENTAL
+
+        page._apply_snapshot(snapshot)
+
+        for card in page._task_cards.values():
+            assert card._reason.text() == "当前任务进行中"
+            assert "需要先启动" not in card._reason.text()
+            assert not card._action_button.isEnabled()
+
+        snapshot.state = ServiceState.ERROR
+        snapshot.error = "模拟任务错误"
+        page._apply_snapshot(snapshot)
+        for card in page._task_cards.values():
+            assert card._reason.text() == "请先处理上方错误"
+            assert "需要先启动" not in card._reason.text()
+            assert not card._action_button.isEnabled()
+
     def test_full_install_to_result_chain(self) -> None:
         backend = MockSeparationBackend({}, simulate_delays=False)
         results: list[TaskResult] = []

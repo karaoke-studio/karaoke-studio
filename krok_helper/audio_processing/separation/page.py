@@ -230,10 +230,24 @@ class AudioSeparationPage(QWidget):
         self._status_bar.apply_snapshot(snapshot)
 
         tasks_operable = snapshot.state in TASK_CAPABLE_STATES
+        task_active = snapshot.state in _TASK_PANEL_STATES
+        task_error = (
+            snapshot.state is ServiceState.ERROR and snapshot.pending_task is not None
+        )
         for task, card in self._task_cards.items():
             dep = snapshot.dependencies.get(task)
             if dep is not None:
-                card.set_dependency(dep, service_ready=tasks_operable)
+                card.set_dependency(
+                    dep,
+                    service_ready=tasks_operable or task_active or task_error,
+                    unavailable_reason=(
+                        "当前任务进行中"
+                        if task_active
+                        else "请先处理上方错误"
+                        if task_error
+                        else ""
+                    ),
+                )
 
         self._sync_task_panel(snapshot)
 

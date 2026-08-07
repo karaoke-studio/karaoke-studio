@@ -458,6 +458,59 @@ def test_managed_service_and_real_separation_pipeline(tmp_path, monkeypatch) -> 
         assert backend.shutdown()
 
 
+def test_pipeline_uses_canonical_model_id_returned_by_load(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+
+    class CanonicalClient(_FakeClient):
+        def load_model(self, model: str, **_kwargs):
+            self.loaded.append(model)
+            return {
+                "model_loaded": True,
+                "model": {"id": f"{model}.ckpt"},
+            }
+
+    class CanonicalFactory:
+        client = CanonicalClient()
+
+        @classmethod
+        def start(cls, *_args, **_kwargs):
+            return _FakeService(cls.client)
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=CanonicalFactory
+    )
+
+    def fake_prepare(_source, work_dir, **_kwargs):
+        path = Path(work_dir) / "input.f32le"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"pcm")
+        return path, 1.0
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.prepare_pcm", fake_prepare
+    )
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"input")
+    results = []
+    backend.resultReady.connect(results.append)
+    try:
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+        backend.request_task(
+            TaskType.INSTRUMENTAL,
+            input_path=str(source),
+            output_dir=str(tmp_path / "output"),
+            output_format="wav",
+        )
+        _wait_until(lambda: bool(results))
+
+        assert CanonicalFactory.client.loaded[-1] == "inst_v1e"
+        assert CanonicalFactory.client.separated[-1] == "inst_v1e.ckpt"
+    finally:
+        assert backend.shutdown()
+
+
 def test_managed_model_download_reports_partial_file_progress(tmp_path) -> None:
     root = tmp_path / "pymss"
     _installed_runtime(root)
