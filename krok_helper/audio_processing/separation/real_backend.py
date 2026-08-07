@@ -50,6 +50,7 @@ from .presets import (
     effective_steps,
     task_override,
 )
+from .local_import import build_local_candidate
 from .local_models import scan_local_models
 from .stems import parse_model_stems
 from .runtime import (
@@ -697,6 +698,57 @@ class RealSeparationBackend(SeparationBackend):
             self._rebuild_dependencies()
         self._emit()
         self._log(f"已将 {candidate.display_name} 映射到{TASK_SPECS[task].title}。")
+
+    def import_local_model(
+        self,
+        task: TaskType,
+        *,
+        weight_path: str,
+        config_path: str,
+        model_type: str,
+        display_name: str = "",
+    ) -> None:
+        registry = self._registry()
+        if registry is None:
+            self.localImportFailed.emit("请先安装 PyMSS 底座，再导入本地模型。")
+            return
+
+        def operation() -> ExternalModelCandidate:
+            # 哈希大文件可能要几秒，放到工作线程，别卡住 GUI。
+            return build_local_candidate(
+                weight_path=weight_path,
+                config_path=config_path or None,
+                model_type=model_type,
+                task=task,
+                display_name=display_name,
+            )
+
+        def success(candidate: ExternalModelCandidate) -> None:
+            if not candidate.bindable:
+                self.localImportFailed.emit(
+                    f"{candidate.status}：{candidate.detail}".strip("：")
+                )
+                return
+            name = registry.bind(task, candidate)
+            raw = self._settings.setdefault("external_bindings", {})
+            raw[task.value] = name
+            # 本地导入的模型直接顶掉该任务的 catalog 覆盖，避免两套配置打架。
+            self._scan_candidates[candidate.candidate_id] = candidate
+            self._persist()
+            with self._lock:
+                self._rebuild_dependencies()
+            self._emit()
+            self._log(
+                f"已导入本地模型 {candidate.display_name} 并绑定到"
+                f"{TASK_SPECS[task].title}；原文件未被复制或修改。"
+            )
+            self.localImportFinished.emit(candidate)
+
+        self._submit(
+            operation,
+            success,
+            lambda exc: self.localImportFailed.emit(str(exc).strip() or type(exc).__name__),
+        )
 
     def unbind_external_model(self, task: TaskType) -> None:
         registry = self._registry()

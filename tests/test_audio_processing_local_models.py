@@ -100,3 +100,111 @@ class TestInstallPathResolution:
         (root / "manifests").mkdir(parents=True)
         (root / "manifests" / "runtime-manifest.json").write_text("{}", encoding="utf-8")
         assert resolve_install_path(root) == root
+
+
+class TestLocalFileImport:
+    """从任意文件夹导入模型：候选构造与失败拦截。"""
+
+    def _model(self, tmp_path, *, config: str | None = "training:\n  instruments:\n  - karaoke\n  - other\n"):
+        folder = tmp_path / "my-models"
+        folder.mkdir(parents=True, exist_ok=True)
+        weight = folder / "third_party.ckpt"
+        weight.write_bytes(b"w" * 256)
+        if config is not None:
+            (folder / "third_party.yaml").write_text(config, encoding="utf-8")
+        return weight
+
+    def test_guesses_sibling_config(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.local_import import guess_config_path
+
+        weight = self._model(tmp_path)
+        assert guess_config_path(weight).name == "third_party.yaml"
+
+    def test_no_config_returns_none_instead_of_guessing(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.local_import import guess_config_path
+
+        weight = self._model(tmp_path, config=None)
+        (weight.parent / "unrelated.yaml").write_text("training:\n", encoding="utf-8")
+        assert guess_config_path(weight) is None, "不能把不相干的配置套到模型上"
+
+    def test_builds_bindable_candidate_with_real_stems(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.local_import import build_local_candidate
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        weight = self._model(tmp_path)
+        candidate = build_local_candidate(
+            weight_path=weight,
+            config_path=weight.with_suffix(".yaml"),
+            model_type="mel_band_roformer",
+            task=TaskType.HARMONY,
+        )
+        assert candidate.bindable
+        assert candidate.candidate_id.startswith("local:harmony:")
+        assert candidate.target_stem == "karaoke/other"
+        assert candidate.model_path == str(weight.resolve())
+        assert candidate.sha256, "应记录权重摘要以便检测文件变化"
+
+    def test_rejects_unsupported_architecture(self, tmp_path) -> None:
+        import pytest
+
+        from krok_helper.audio_processing.separation.local_import import build_local_candidate
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        weight = self._model(tmp_path)
+        with pytest.raises(ValueError):
+            build_local_candidate(
+                weight_path=weight,
+                config_path=weight.with_suffix(".yaml"),
+                model_type="not_a_real_arch",
+                task=TaskType.VOCAL,
+            )
+
+    def test_rejects_missing_weight(self, tmp_path) -> None:
+        import pytest
+
+        from krok_helper.audio_processing.separation.local_import import build_local_candidate
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        with pytest.raises(FileNotFoundError):
+            build_local_candidate(
+                weight_path=tmp_path / "nope.ckpt",
+                config_path=None,
+                model_type="vr",
+                task=TaskType.VOCAL,
+            )
+
+    def test_missing_config_is_not_bindable_for_config_required_arch(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.local_import import build_local_candidate
+        from krok_helper.audio_processing.separation.states import TaskType
+
+        weight = self._model(tmp_path, config=None)
+        candidate = build_local_candidate(
+            weight_path=weight,
+            config_path=None,
+            model_type="mel_band_roformer",
+            task=TaskType.VOCAL,
+        )
+        assert not candidate.bindable
+        assert "配置" in candidate.status
+
+
+class TestMsstParserConsolidation:
+    """msst 与 stems 两处解析已统一（原实现读不出同缩进写法）。"""
+
+    def test_msst_reads_pymss_style_config(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.msst import _config_instruments
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "training:\n  instruments:\n  - other\n  - vocals\n", encoding="utf-8"
+        )
+        assert _config_instruments(path) == ("other", "vocals")
+
+    def test_msst_still_reads_indented_style(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.msst import _config_instruments
+
+        path = tmp_path / "c.yaml"
+        path.write_text(
+            "training:\n  instruments:\n    - vocals\n    - other\n", encoding="utf-8"
+        )
+        assert _config_instruments(path) == ("vocals", "other")

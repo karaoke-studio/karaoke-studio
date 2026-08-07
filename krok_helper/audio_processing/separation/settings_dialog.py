@@ -40,6 +40,13 @@ from qfluentwidgets import (
 )
 
 from krok_helper.audio_processing.separation.backend import SeparationBackend
+from krok_helper.audio_processing.separation.local_import import (
+    WEIGHT_SUFFIXES,
+    guess_config_path,
+    read_stems,
+    requires_config,
+    supported_model_types,
+)
 from krok_helper.audio_processing.separation.presets import TASK_PRESETS, task_override
 from krok_helper.audio_processing.separation.states import STATE_META, TASK_SPECS, TaskType
 from krok_helper.qfluent_compat import ask_fluent_confirm, show_fluent_info
@@ -242,6 +249,158 @@ class ModelPickerDialog(QDialog):
         self._ok.setEnabled(bool(self._selected_model) and bool(self._stem_combo.count()))
 
 
+class LocalModelImportDialog(QDialog):
+    """从任意文件夹导入一个模型并绑定给某个任务。
+
+    原文件保持原地，只在工作台自己的清单里登记引用（§4.5）。架构无法从配置推断，
+    因此让用户从 PyMSS 支持的列表里选——同样是选而不是填。
+    """
+
+    def __init__(self, backend: SeparationBackend, task, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._backend = backend
+        self._task = task
+
+        self.setWindowTitle(f"{TASK_SPECS[task].title} · 导入本地模型")
+        self.resize(640, 420)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+        layout.addWidget(SubtitleLabel("导入本地模型", self))
+
+        weight_row = QHBoxLayout()
+        weight_row.setContentsMargins(0, 0, 0, 0)
+        weight_row.setSpacing(8)
+        weight_row.addWidget(BodyLabel("权重文件", self))
+        self._weight_edit = LineEdit(self)
+        self._weight_edit.setReadOnly(True)
+        self._weight_edit.setPlaceholderText("选择 .ckpt / .pth 等权重文件")
+        weight_row.addWidget(self._weight_edit, 1)
+        browse = PushButton(FIF.FOLDER, "浏览", self)
+        browse.clicked.connect(self._browse_weight)
+        weight_row.addWidget(browse)
+        layout.addLayout(weight_row)
+
+        config_row = QHBoxLayout()
+        config_row.setContentsMargins(0, 0, 0, 0)
+        config_row.setSpacing(8)
+        config_row.addWidget(BodyLabel("配置文件", self))
+        self._config_edit = LineEdit(self)
+        self._config_edit.setReadOnly(True)
+        self._config_edit.setPlaceholderText("留空表示该架构不需要配置")
+        config_row.addWidget(self._config_edit, 1)
+        pick_config = PushButton(FIF.FOLDER, "浏览", self)
+        pick_config.clicked.connect(self._browse_config)
+        config_row.addWidget(pick_config)
+        layout.addLayout(config_row)
+
+        type_row = QHBoxLayout()
+        type_row.setContentsMargins(0, 0, 0, 0)
+        type_row.setSpacing(8)
+        type_row.addWidget(BodyLabel("模型架构", self))
+        self._type_combo = ComboBox(self)
+        self._type_combo.setMinimumWidth(240)
+        for name in supported_model_types():
+            self._type_combo.addItem(name)
+        self._type_combo.setCurrentIndex(
+            max(0, [*supported_model_types()].index("mel_band_roformer"))
+            if "mel_band_roformer" in supported_model_types()
+            else 0
+        )
+        self._type_combo.currentIndexChanged.connect(lambda _i: self._refresh())
+        type_row.addWidget(self._type_combo)
+        type_row.addStretch(1)
+        layout.addLayout(type_row)
+
+        self._stems_label = BodyLabel("", self)
+        self._stems_label.setWordWrap(True)
+        layout.addWidget(self._stems_label)
+
+        self._hint = CaptionLabel("先选择权重文件；同目录下的同名 .yaml 会被自动识别。", self)
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
+        layout.addStretch(1)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addStretch(1)
+        cancel = PushButton("取消", self)
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+        self._ok = PrimaryPushButton("导入并绑定", self)
+        self._ok.setEnabled(False)
+        self._ok.clicked.connect(self._submit)
+        footer.addWidget(self._ok)
+        layout.addLayout(footer)
+
+        backend.localImportFinished.connect(self._on_finished)
+        backend.localImportFailed.connect(self._on_failed)
+
+    # ── 选择文件 ─────────────────────────────────────────────────
+    def _browse_weight(self) -> None:
+        patterns = " ".join(f"*{suffix}" for suffix in WEIGHT_SUFFIXES)
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型权重", "", f"模型权重 ({patterns})")
+        if not path:
+            return
+        self._weight_edit.setText(path)
+        guessed = guess_config_path(path)
+        self._config_edit.setText(str(guessed) if guessed else "")
+        self._refresh()
+
+    def _browse_config(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型配置", "", "YAML 配置 (*.yaml *.yml)")
+        if path:
+            self._config_edit.setText(path)
+            self._refresh()
+
+    # ── 状态 ─────────────────────────────────────────────────────
+    def _refresh(self) -> None:
+        weight = self._weight_edit.text().strip()
+        config = self._config_edit.text().strip()
+        model_type = self._type_combo.currentText()
+
+        if not weight:
+            self._stems_label.setText("")
+            self._ok.setEnabled(False)
+            return
+
+        stems = read_stems(config) if config else ()
+        if stems:
+            self._stems_label.setText("该模型声明的输出轨：" + "、".join(stems))
+        elif config:
+            self._stems_label.setText("未能从配置中读出输出轨。")
+        else:
+            self._stems_label.setText("")
+
+        if requires_config(model_type) and not config:
+            self._hint.setText(f"{model_type} 架构需要 YAML 配置文件，请选择。")
+            self._ok.setEnabled(False)
+            return
+        if requires_config(model_type) and not stems:
+            self._hint.setText("配置里读不出输出轨，无法确定该模型能产出什么，请检查配置文件。")
+            self._ok.setEnabled(False)
+            return
+        self._hint.setText("导入后会登记为本地模型引用；原文件不会被复制或修改。")
+        self._ok.setEnabled(True)
+
+    def _submit(self) -> None:
+        self._ok.setEnabled(False)
+        self._hint.setText("正在校验模型…")
+        self._backend.import_local_model(
+            self._task,
+            weight_path=self._weight_edit.text().strip(),
+            config_path=self._config_edit.text().strip(),
+            model_type=self._type_combo.currentText(),
+        )
+
+    def _on_finished(self, _candidate) -> None:
+        self.accept()
+
+    def _on_failed(self, reason: str) -> None:
+        self._hint.setText(reason)
+        self._ok.setEnabled(True)
+
+
 class SeparationSettingsDialog(QDialog):
     """音频分离设置。所有改动直接写 settings_ns 并触发 save_settings。"""
 
@@ -349,9 +508,11 @@ class SeparationSettingsDialog(QDialog):
             card = SettingCard(FIF.LIBRARY, TASK_SPECS[task].title, "", group)
             change = PushButton("更换…", card)
             change.clicked.connect(lambda _c=False, t=task: self._pick_model(t))
+            imp = PushButton("从文件导入…", card)
+            imp.clicked.connect(lambda _c=False, t=task: self._import_local(t))
             reset = PushButton("恢复推荐", card)
             reset.clicked.connect(lambda _c=False, t=task: self._reset_model(t))
-            _add_card_actions(card, change, reset)
+            _add_card_actions(card, change, imp, reset)
             group.addSettingCard(card)
             self._model_cards[task] = (card, reset)
         self._refresh_model_cards()
@@ -387,6 +548,13 @@ class SeparationSettingsDialog(QDialog):
         if not model or not stem:
             return
         self._backend.set_task_model(task, model, stem, size)
+        self._save_settings()
+        self._refresh_model_cards()
+
+    def _import_local(self, task) -> None:
+        dialog = LocalModelImportDialog(self._backend, task, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
         self._save_settings()
         self._refresh_model_cards()
 

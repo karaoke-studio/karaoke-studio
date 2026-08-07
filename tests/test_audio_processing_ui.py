@@ -805,3 +805,78 @@ class TestTaskModelSelection:
         assert not picker._stem_combo.isEnabled()
         assert not picker._ok.isEnabled()
         assert "换一个模型" in picker._hint.text()
+
+
+class TestLocalModelImportDialog:
+    """从文件导入模型的界面流程。"""
+
+    def _dialog(self, tmp_path, *, with_config=True):
+        from krok_helper.audio_processing.separation.settings_dialog import (
+            LocalModelImportDialog,
+        )
+
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        dialog = LocalModelImportDialog(backend, TaskType.HARMONY)
+
+        folder = tmp_path / "models"
+        folder.mkdir(parents=True, exist_ok=True)
+        weight = folder / "third_party.ckpt"
+        weight.write_bytes(b"w" * 128)
+        if with_config:
+            (folder / "third_party.yaml").write_text(
+                "training:\n  instruments:\n  - karaoke\n  - other\n", encoding="utf-8"
+            )
+        return dialog, backend, settings, weight
+
+    def test_blocks_until_a_weight_is_chosen(self, tmp_path) -> None:
+        dialog, _backend, _settings, _weight = self._dialog(tmp_path)
+        assert not dialog._ok.isEnabled()
+
+    def test_shows_declared_stems_and_enables_import(self, tmp_path) -> None:
+        dialog, _backend, _settings, weight = self._dialog(tmp_path)
+        dialog._weight_edit.setText(str(weight))
+        dialog._config_edit.setText(str(weight.with_suffix(".yaml")))
+        dialog._refresh()
+
+        assert "karaoke" in dialog._stems_label.text()
+        assert "other" in dialog._stems_label.text()
+        assert dialog._ok.isEnabled()
+
+    def test_config_required_arch_without_config_is_blocked(self, tmp_path) -> None:
+        """缺配置时不能导入——读不出输出轨就无法确定模型产出什么。"""
+        dialog, _backend, _settings, weight = self._dialog(tmp_path, with_config=False)
+        dialog._weight_edit.setText(str(weight))
+        dialog._config_edit.setText("")
+        dialog._type_combo.setCurrentText("mel_band_roformer")
+        dialog._refresh()
+
+        assert not dialog._ok.isEnabled()
+        assert "需要 YAML 配置" in dialog._hint.text()
+
+    def test_import_binds_the_task(self, tmp_path) -> None:
+        dialog, backend, _settings, weight = self._dialog(tmp_path)
+        dialog._weight_edit.setText(str(weight))
+        dialog._config_edit.setText(str(weight.with_suffix(".yaml")))
+        dialog._type_combo.setCurrentText("mel_band_roformer")
+        dialog._refresh()
+
+        done: list = []
+        backend.localImportFinished.connect(done.append)
+        dialog._submit()
+        QApplication.instance().processEvents()
+
+        assert done, "导入成功应发出 localImportFinished"
+        assert done[0].candidate_id.startswith("local:harmony:")
+        assert backend.bound_external_candidate(TaskType.HARMONY) == done[0].candidate_id
+
+    def test_failure_is_surfaced_and_button_restored(self, tmp_path) -> None:
+        dialog, backend, _settings, weight = self._dialog(tmp_path)
+        dialog._weight_edit.setText(str(weight))
+        dialog._config_edit.setText(str(weight.with_suffix(".yaml")))
+        dialog._refresh()
+
+        backend.localImportFailed.emit("模拟失败原因")
+        QApplication.instance().processEvents()
+        assert dialog._hint.text() == "模拟失败原因"
+        assert dialog._ok.isEnabled(), "失败后应允许改参数重试"

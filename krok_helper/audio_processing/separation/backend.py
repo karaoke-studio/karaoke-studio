@@ -150,6 +150,8 @@ class SeparationBackend(QObject):
     catalogModelsFailed = pyqtSignal(str)
     modelStemsFinished = pyqtSignal(str, object)  # model, tuple[str, ...]
     modelStemsFailed = pyqtSignal(str, str)       # model, 中文原因
+    localImportFinished = pyqtSignal(object)      # ExternalModelCandidate
+    localImportFailed = pyqtSignal(str)           # 中文原因
 
     def snapshot(self) -> SeparationSnapshot:
         raise NotImplementedError
@@ -204,6 +206,22 @@ class SeparationBackend(QObject):
 
     def set_task_model(self, task: TaskType, model: str, stem: str, size_bytes: int) -> None:
         """覆盖某任务使用的模型与输出轨；``model`` 为空表示恢复推荐预设。"""
+        raise NotImplementedError
+
+    def import_local_model(
+        self,
+        task: TaskType,
+        *,
+        weight_path: str,
+        config_path: str,
+        model_type: str,
+        display_name: str = "",
+    ) -> None:
+        """把任意目录下的一份权重导入并绑定给某任务（异步）。
+
+        原文件保持原地：只在工作台自己的用户模型清单里登记引用，不复制、不移动、
+        不修改（与 MSST 映射同一条约束，§4.5）。
+        """
         raise NotImplementedError
 
     def finish_external_mapping(self) -> None:
@@ -603,6 +621,43 @@ class MockSeparationBackend(SeparationBackend):
         self._settings[TASK_MODEL_OVERRIDES_KEY] = overrides
         self._rebuild_dependencies()
         self._emit()
+
+    def import_local_model(
+        self,
+        task: TaskType,
+        *,
+        weight_path: str,
+        config_path: str,
+        model_type: str,
+        display_name: str = "",
+    ) -> None:
+        from krok_helper.audio_processing.separation.local_import import (
+            build_local_candidate,
+        )
+
+        def run() -> None:
+            try:
+                candidate = build_local_candidate(
+                    weight_path=weight_path,
+                    config_path=config_path or None,
+                    model_type=model_type,
+                    task=task,
+                    display_name=display_name,
+                )
+            except Exception as exc:
+                self.localImportFailed.emit(str(exc).strip() or type(exc).__name__)
+                return
+            if not candidate.bindable:
+                self.localImportFailed.emit(
+                    f"{candidate.status}：{candidate.detail}".strip("：")
+                )
+                return
+            self._external_bindings[task] = candidate.candidate_id
+            self._rebuild_dependencies()
+            self._emit()
+            self.localImportFinished.emit(candidate)
+
+        self._delay(80, run)
 
     def finish_external_mapping(self) -> None:
         self._log("外部模型映射已刷新（模拟）")

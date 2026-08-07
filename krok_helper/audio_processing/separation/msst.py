@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from .backend import ExternalModelCandidate
+from .stems import parse_model_stems
 from .runtime import sha256_file
 from .states import TaskType
 
@@ -46,10 +47,15 @@ def _first_existing(root: Path, *relative_paths: str) -> Path | None:
     )
 
 
-def _stable_candidate_id(model_path: Path, task: TaskType) -> str:
+def stable_candidate_id(model_path: Path, task: TaskType, *, source: str = "msst") -> str:
+    """同一个文件 + 同一个任务恒定得到同一个 id；``source`` 区分发现方式。"""
     normalized = os.path.normcase(str(model_path.resolve()))
     digest = hashlib.sha256(f"{normalized}|{task.value}".encode("utf-8")).hexdigest()[:20]
-    return f"msst:{task.value}:{digest}"
+    return f"{source}:{task.value}:{digest}"
+
+
+def _stable_candidate_id(model_path: Path, task: TaskType) -> str:
+    return stable_candidate_id(model_path, task)
 
 
 def _registry_name(candidate_id: str) -> str:
@@ -64,50 +70,17 @@ def _normalize_model_type(value: str) -> str:
 
 
 def _config_instruments(path: Path) -> tuple[str, ...]:
-    """Extract the simple ``training.instruments`` YAML list without PyYAML."""
+    """读取 ``training.instruments``（委托给统一实现）。
+
+    这里原先自带一份解析，但它要求序列项比 ``instruments:`` 缩进更深，因而读不出
+    「序列项与键同缩进」的写法——而 PyMSS catalog 下发的配置正是这种。统一到
+    :func:`stems.parse_model_stems` 后两种写法都支持。
+    """
     try:
-        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return ()
-    in_training = False
-    training_indent = -1
-    in_instruments = False
-    instruments_indent = -1
-    values: list[str] = []
-    for raw in lines:
-        line = raw.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        indent = len(line) - len(line.lstrip())
-        stripped = line.strip()
-        if stripped == "training:":
-            in_training = True
-            training_indent = indent
-            in_instruments = False
-            continue
-        if in_training and indent <= training_indent:
-            in_training = False
-            in_instruments = False
-        if not in_training:
-            continue
-        if re.match(r"^instruments\s*:", stripped):
-            in_instruments = True
-            instruments_indent = indent
-            inline = stripped.split(":", 1)[1].strip()
-            if inline.startswith("[") and inline.endswith("]"):
-                values.extend(
-                    item.strip().strip("'\"")
-                    for item in inline[1:-1].split(",")
-                    if item.strip()
-                )
-            continue
-        if in_instruments:
-            if indent <= instruments_indent:
-                break
-            match = re.match(r"^-\s*(.+?)\s*$", stripped)
-            if match:
-                values.append(match.group(1).strip().strip("'\""))
-    return tuple(value for value in values if value)
+    return parse_model_stems(text)
 
 
 def _suggest_tasks(name: str, category: str, instruments: tuple[str, ...], *, karaoke=False):
@@ -127,7 +100,7 @@ def _suggest_tasks(name: str, category: str, instruments: tuple[str, ...], *, ka
     return tuple(dict.fromkeys(tasks or (TaskType.VOCAL,)))
 
 
-def _candidate(
+def build_candidate(
     *,
     name: str,
     category: str,
@@ -137,7 +110,12 @@ def _candidate(
     task: TaskType,
     instruments: tuple[str, ...],
     cancelled=None,
+    source: str = "msst",
 ) -> ExternalModelCandidate:
+    """由一份权重 + 配置构造候选（MSST 扫描与本地文件导入共用）。
+
+    只做静态可读性判定；能否真正跑起来仍以后续的真实加载验证为准。
+    """
     normalized_type = _normalize_model_type(model_type)
     missing_model = not model_path.is_file()
     config_required = normalized_type not in {
@@ -170,13 +148,17 @@ def _candidate(
     if bindable:
         detail_parts.append("权重、配置和模型类型可由 PyMSS 读取；首次使用时执行真实加载验证。")
     elif missing_model:
-        detail_parts.append("映射中存在记录，但模型权重不在预期位置。")
+        detail_parts.append(
+            "映射中存在记录，但模型权重不在预期位置。"
+            if source == "msst"
+            else "所选权重文件不存在。"
+        )
     elif missing_config:
         detail_parts.append("该架构需要 YAML 配置文件。")
     else:
         detail_parts.append(f"PyMSS {normalized_type or model_type} 加载器不受支持。")
     return ExternalModelCandidate(
-        candidate_id=_stable_candidate_id(model_path, task),
+        candidate_id=stable_candidate_id(model_path, task, source=source),
         display_name=name,
         task=task,
         status=status,
@@ -226,7 +208,7 @@ def scan_msst_models(root: str | os.PathLike, *, cancelled=None) -> list[Externa
                 instruments = _config_instruments(config_path) if config_path else ()
                 for task in _suggest_tasks(name, str(category), instruments):
                     candidates.append(
-                        _candidate(
+                        build_candidate(
                             name=name,
                             category=str(category),
                             model_type=str(item.get("model_type", "")),
@@ -284,7 +266,7 @@ def _scan_vr_models(base: Path, *, cancelled=None) -> list[ExternalModelCandidat
                 str(name), "VR_Models", stems, karaoke=bool(item.get("is_karaoke"))
             ):
                 found.append(
-                    _candidate(
+                    build_candidate(
                         name=str(name),
                         category="VR_Models",
                         model_type="vr",
@@ -327,7 +309,7 @@ class ExternalModelRegistry:
                 "krok": {
                     "task": task.value,
                     "candidate_id": candidate.candidate_id,
-                    "source": "msst",
+                    "source": candidate.candidate_id.split(":", 1)[0] or "msst",
                     "validation_status": "pending",
                     "validation_error": "",
                     "size": candidate.size_bytes,
