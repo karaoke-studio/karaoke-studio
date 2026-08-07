@@ -55,6 +55,7 @@ class _FallbackPalette:
     text_primary: str = "#1f2937"
     text_secondary: str = "#667085"
     text_hint: str = "#64748B"
+    text_disabled: str = "#94A3B8"
     card_bg: str = "#FFFFFF"
     card_border: str = "#E5EAF2"
     input_border: str = "#D9DEE8"

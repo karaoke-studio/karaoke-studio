@@ -130,6 +130,10 @@ class RealSeparationBackend(SeparationBackend):
         self._existing_check_cache: tuple[tuple[str, str, str], PyMSSClient | None, str] | None = None
         self._scan_candidates: dict[str, ExternalModelCandidate] = {}
         self._task_context: dict[str, str] = {}
+        #: 待执行的任务队列（不含正在跑的那个）。
+        self._task_queue: list[TaskType] = []
+        #: 是否处在一批队列中；单独调 request_task 时按「一项的批次」处理。
+        self._queue_active = False
         self._progress = TaskProgress()
         self._health_future: Future | None = None
         self._runtime_check_future: Future | None = None
@@ -1567,6 +1571,70 @@ class RealSeparationBackend(SeparationBackend):
         self._health_future = self._submit(operation, success, failure)
 
     # ---- model download and separation -------------------------------
+    def request_tasks(
+        self,
+        tasks,
+        *,
+        input_path: str,
+        output_dir: str,
+        output_format: str,
+    ) -> None:
+        ordered = [task for task in TaskType if task in set(tasks)]
+        if not ordered:
+            return
+        self._queue_active = True
+        self._task_queue = ordered[1:]
+        with self._lock:
+            self._snap.queue_total = len(ordered)
+            self._snap.queue_done = 0
+            self._snap.queued_tasks = tuple(self._task_queue)
+        self.request_task(
+            ordered[0],
+            input_path=input_path,
+            output_dir=output_dir,
+            output_format=output_format,
+        )
+
+    def _finish_queue_item(self) -> bool:
+        """一个任务结束（成功或失败）后推进队列；返回 True 表示已启动下一个。"""
+        with self._lock:
+            self._snap.queue_done += 1
+            remaining = list(self._task_queue)
+        if not remaining or self._task_cancel.is_set():
+            self._task_queue = []
+            self._queue_active = False
+            with self._lock:
+                self._snap.queued_tasks = ()
+            return False
+        nxt, self._task_queue = remaining[0], remaining[1:]
+        with self._lock:
+            self._snap.queued_tasks = tuple(self._task_queue)
+        context = dict(self._task_context)
+        # 队列内的下一个任务复用同一批输入与输出设置。
+        self.request_task(
+            nxt,
+            input_path=context.get("input_path", ""),
+            output_dir=context.get("output_dir", ""),
+            output_format=context.get("output_format", "wav"),
+        )
+        return True
+
+    def _report_task_failure(self, task: TaskType, reason: str) -> None:
+        """把单个任务的失败作为一条结果上报，然后继续跑剩余任务。"""
+        self._snap.pending_task = None
+        self.resultReady.emit(
+            TaskResult(
+                task=task,
+                title=TASK_SPECS[task].title,
+                finished_at=time.strftime("%H:%M:%S"),
+                files=[],
+                error=reason,
+            )
+        )
+        self._log(f"{TASK_SPECS[task].title}失败：{reason}")
+        if not self._finish_queue_item():
+            self._set_ready_state()
+
     def request_task(
         self,
         task: TaskType,
@@ -1575,6 +1643,13 @@ class RealSeparationBackend(SeparationBackend):
         output_dir: str,
         output_format: str,
     ) -> None:
+        if not self._queue_active:
+            # 单独提交也按「一项的批次」记账，界面统一显示 (n/共 m 个)。
+            self._task_queue = []
+            with self._lock:
+                self._snap.queue_total = 1
+                self._snap.queue_done = 0
+                self._snap.queued_tasks = ()
         if not Path(input_path).is_file():
             self._fail("所选音频素材不存在。")
             return
@@ -2048,7 +2123,6 @@ class RealSeparationBackend(SeparationBackend):
             self._snap.pending_task = None
             self._snap.download_done = 0
             self._snap.download_total = 0
-            self._set_ready_state()
             self.resultReady.emit(
                 TaskResult(
                     task=task,
@@ -2058,6 +2132,8 @@ class RealSeparationBackend(SeparationBackend):
                 )
             )
             self._log(f"{TASK_SPECS[task].title}完成。")
+            if not self._finish_queue_item():
+                self._set_ready_state()
 
         def failure(exc: Exception) -> None:
             if self._task_cancel.is_set():
@@ -2077,7 +2153,8 @@ class RealSeparationBackend(SeparationBackend):
             if self._progress.stage_index in {STAGE_LOAD, STAGE_SEPARATE}:
                 self._diagnose_managed_runtime_failure(exc)
                 return
-            self._fail(exc)
+            # 任务级失败只记这一项，队列继续跑剩下的（三个任务相互独立）。
+            self._report_task_failure(task, str(exc).strip() or type(exc).__name__)
 
         self._submit(operation, success, failure, detached=self._external_url)
 

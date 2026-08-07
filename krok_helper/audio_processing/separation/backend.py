@@ -47,6 +47,11 @@ class SeparationSnapshot:
     download_total: int = 0
     pending_task: TaskType | None = None
     dependencies: dict[TaskType, TaskDependency] = field(default_factory=dict)
+    #: 队列中尚未开始的任务（按执行顺序）。
+    queued_tasks: tuple[TaskType, ...] = ()
+    #: 本批次的总任务数与已结束（成功或失败）数，用于「第 n / 共 m 个」。
+    queue_total: int = 0
+    queue_done: int = 0
 
 
 @dataclass
@@ -86,6 +91,12 @@ class TaskResult:
     title: str
     finished_at: str
     files: list[ResultFile] = field(default_factory=list)
+    #: 失败原因；非空表示这一项没有产出文件（队列会继续跑剩下的任务）。
+    error: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.error)
 
 
 @dataclass(frozen=True)
@@ -275,6 +286,21 @@ class SeparationBackend(QObject):
     # ── 任务 ────────────────────────────────────────────────────
     def request_task(self, task: TaskType, *, input_path: str, output_dir: str, output_format: str) -> None:
         """任务卡主操作：模型缺失时先下载再继续（需求文档 §8.4）。"""
+        raise NotImplementedError
+
+    def request_tasks(
+        self,
+        tasks,
+        *,
+        input_path: str,
+        output_dir: str,
+        output_format: str,
+    ) -> None:
+        """按用户勾选的顺序依次执行多个分离任务。
+
+        单个任务失败只记录并继续跑剩余任务（失败项通过 resultReady 带 error 上报），
+        不把整页打成错误态——三个任务相互独立，一个失败不该阻塞其他。
+        """
         raise NotImplementedError
 
     def start_model_download(self) -> None:
@@ -762,7 +788,43 @@ class MockSeparationBackend(SeparationBackend):
         self._emit()
 
     # ── 任务 ─────────────────────────────────────────────────────
+    def request_tasks(self, tasks, *, input_path: str, output_dir: str, output_format: str) -> None:
+        ordered = [task for task in TaskType if task in set(tasks)]
+        if not ordered:
+            return
+        self._queue = ordered[1:]
+        self._snap.queue_total = len(ordered)
+        self._snap.queue_done = 0
+        self._snap.queued_tasks = tuple(self._queue)
+        self.request_task(
+            ordered[0],
+            input_path=input_path,
+            output_dir=output_dir,
+            output_format=output_format,
+        )
+
+    def _advance_queue(self) -> bool:
+        self._snap.queue_done += 1
+        queue = getattr(self, "_queue", [])
+        if not queue:
+            self._snap.queued_tasks = ()
+            return False
+        nxt, self._queue = queue[0], queue[1:]
+        self._snap.queued_tasks = tuple(self._queue)
+        context = dict(self._task_context)
+        self.request_task(
+            nxt,
+            input_path=context.get("input", ""),
+            output_dir=context.get("output_dir", ""),
+            output_format=context.get("format", "wav"),
+        )
+        return True
+
     def request_task(self, task: TaskType, *, input_path: str, output_dir: str, output_format: str) -> None:
+        if not getattr(self, "_queue", None) and self._snap.queue_done >= self._snap.queue_total:
+            self._snap.queue_total = 1
+            self._snap.queue_done = 0
+            self._snap.queued_tasks = ()
         self._task_context = {
             "input": input_path,
             "output_dir": output_dir,
@@ -848,7 +910,6 @@ class MockSeparationBackend(SeparationBackend):
             for label in spec.output_labels
         ]
         self._snap.pending_task = None
-        self._set_state(ServiceState.SERVICE_READY)
         self.resultReady.emit(
             TaskResult(
                 task=task,
@@ -858,6 +919,8 @@ class MockSeparationBackend(SeparationBackend):
             )
         )
         self._log("任务完成（模拟）")
+        if not self._advance_queue():
+            self._set_state(ServiceState.SERVICE_READY)
 
     def _run_pipeline(self, task: TaskType) -> None:
         self._progress.stage_index = STAGE_PREPARE

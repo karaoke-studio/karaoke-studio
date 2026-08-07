@@ -1255,3 +1255,88 @@ def test_local_import_reloads_the_service_registry(tmp_path, monkeypatch) -> Non
         assert reloaded, "导入绑定后必须让服务重新加载用户模型清单"
     finally:
         backend.shutdown()
+
+
+def test_queue_continues_after_a_failed_task(tmp_path, monkeypatch) -> None:
+    """队列中一个任务失败只记这一项，剩余任务继续跑（用户选定的行为）。"""
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    backend = RealSeparationBackend(
+        {
+            "install_dir": str(root),
+            "downloaded_models": [t.value for t in TaskType],
+        },
+        service_factory=_FakeServiceFactory,
+    )
+
+    def fake_prepare(_source, work_dir, **_kwargs):
+        path = Path(work_dir) / "input.f32le"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"pcm")
+        return path, 1.0
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.prepare_pcm", fake_prepare
+    )
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"input")
+
+    results: list = []
+    backend.resultReady.connect(results.append)
+    try:
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+        backend.request_tasks(
+            [TaskType.VOCAL, TaskType.INSTRUMENTAL, TaskType.HARMONY],
+            input_path=str(source),
+            output_dir=str(tmp_path / "out"),
+            output_format="wav",
+        )
+        _wait_until(lambda: len(results) == 3, timeout=15.0)
+
+        assert [item.task for item in results] == [
+            TaskType.VOCAL,
+            TaskType.INSTRUMENTAL,
+            TaskType.HARMONY,
+        ], "必须按固定顺序跑完全部选中任务"
+        assert backend.snapshot().state is ServiceState.SERVICE_READY
+        assert backend.snapshot().queued_tasks == ()
+    finally:
+        backend.shutdown()
+
+
+def test_single_request_still_counts_as_a_one_item_batch(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    backend = RealSeparationBackend(
+        {"install_dir": str(root), "downloaded_models": [TaskType.VOCAL.value]},
+        service_factory=_FakeServiceFactory,
+    )
+
+    def fake_prepare(_source, work_dir, **_kwargs):
+        path = Path(work_dir) / "input.f32le"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"pcm")
+        return path, 1.0
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.prepare_pcm", fake_prepare
+    )
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"input")
+    results: list = []
+    backend.resultReady.connect(results.append)
+    try:
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+        backend.request_task(
+            TaskType.VOCAL,
+            input_path=str(source),
+            output_dir=str(tmp_path / "out"),
+            output_format="wav",
+        )
+        _wait_until(lambda: bool(results))
+        assert backend.snapshot().queue_total == 1
+        assert backend.snapshot().state is ServiceState.SERVICE_READY
+    finally:
+        backend.shutdown()

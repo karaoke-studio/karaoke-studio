@@ -167,9 +167,8 @@ class TestMockBackendFlow:
         page._apply_snapshot(snapshot)
 
         for card in page._task_cards.values():
-            assert card._reason.text() == "当前任务进行中"
             assert "需要先启动" not in card._reason.text()
-            assert not card._action_button.isEnabled()
+            assert not card.is_selectable(), "任务进行中不允许改选"
 
         snapshot.state = ServiceState.ERROR
         snapshot.error = "模拟任务错误"
@@ -177,7 +176,7 @@ class TestMockBackendFlow:
         for card in page._task_cards.values():
             assert card._reason.text() == "请先处理上方错误"
             assert "需要先启动" not in card._reason.text()
-            assert not card._action_button.isEnabled()
+            assert not card.is_selectable()
 
     def test_full_install_to_result_chain(self) -> None:
         backend = MockSeparationBackend({}, simulate_delays=False)
@@ -278,8 +277,10 @@ class TestSeparationPageStates:
         QApplication.instance().processEvents()
         card = page._task_cards[TaskType.VOCAL]
         assert "需下载" in card._pill.text()
-        assert "下载并继续" in card._action_button.text()
-        assert card._action_button.isEnabled()
+        assert card.is_selectable(), "缺模型的任务仍可勾选，开始时统一确认下载"
+        card.set_selected(True)
+        assert card.download_bytes() > 0
+        assert "需要先下载" in page._run_hint.text()
 
     def test_wizard_cancel_returns_to_welcome(self) -> None:
         page = _make_separation_page()
@@ -1022,3 +1023,97 @@ class TestExternalBindingReloadsRegistry:
         QApplication.instance().processEvents()
 
         assert calls == [True], "整批绑定后只应重载一次，不是每个模型重启一次服务"
+
+
+class TestTaskQueue:
+    """多选任务 + 顺序执行队列。"""
+
+    def _ready_page(self):
+        settings = AppSettings()
+        settings.pymss["install_dir"] = "D:/demo/pymss"
+        settings.pymss["downloaded_models"] = [t.value for t in TaskType]
+        page = _make_separation_page(settings)
+        page._backend.start_service()
+        QApplication.instance().processEvents()
+        page._input_card.set_path("D:/demo/song.flac", emit=False)
+        return page, page._backend
+
+    def test_cards_are_selectable_not_click_to_run(self) -> None:
+        page, _backend = self._ready_page()
+        card = page._task_cards[TaskType.VOCAL]
+        assert card.is_selectable()
+        assert not card.is_selected()
+
+        card.set_selected(True)
+        assert card.is_selected()
+        assert page._selected_tasks() == [TaskType.VOCAL]
+
+    def test_run_bar_reflects_selection(self) -> None:
+        page, _backend = self._ready_page()
+        assert not page._run_button.isEnabled(), "未勾选时不能开始"
+
+        page._task_cards[TaskType.VOCAL].set_selected(True)
+        page._task_cards[TaskType.HARMONY].set_selected(True)
+        assert page._run_button.isEnabled()
+        assert "已选 2 项" in page._run_button.text()
+
+    def test_queue_runs_every_selected_task_in_order(self) -> None:
+        page, backend = self._ready_page()
+        results = []
+        backend.resultReady.connect(results.append)
+
+        for task in (TaskType.VOCAL, TaskType.INSTRUMENTAL, TaskType.HARMONY):
+            page._task_cards[task].set_selected(True)
+        page._start_selected_tasks()
+        QApplication.instance().processEvents()
+
+        assert [item.task for item in results] == [
+            TaskType.VOCAL,
+            TaskType.INSTRUMENTAL,
+            TaskType.HARMONY,
+        ]
+        assert backend.snapshot().state is ServiceState.SERVICE_READY
+
+    def test_partial_selection_only_runs_those(self) -> None:
+        page, backend = self._ready_page()
+        results = []
+        backend.resultReady.connect(results.append)
+
+        page._task_cards[TaskType.VOCAL].set_selected(True)
+        page._task_cards[TaskType.HARMONY].set_selected(True)
+        page._start_selected_tasks()
+        QApplication.instance().processEvents()
+
+        assert [item.task for item in results] == [TaskType.VOCAL, TaskType.HARMONY]
+
+    def test_queue_position_is_shown_and_cards_lock(self) -> None:
+        page, backend = self._ready_page()
+        snapshot = backend.snapshot()
+        snapshot.state = ServiceState.PROCESSING
+        snapshot.pending_task = TaskType.VOCAL
+        snapshot.queued_tasks = (TaskType.INSTRUMENTAL, TaskType.HARMONY)
+        snapshot.queue_total = 3
+        snapshot.queue_done = 0
+        page._apply_snapshot(snapshot)
+
+        assert page._task_cards[TaskType.VOCAL]._pill.text() == "进行中"
+        assert "第 1 位" in page._task_cards[TaskType.INSTRUMENTAL]._pill.text()
+        assert "第 2 位" in page._task_cards[TaskType.HARMONY]._pill.text()
+        assert all(not c.is_selectable() for c in page._task_cards.values())
+        assert not page._run_button.isEnabled()
+        assert "第 1 / 共 3 个" in page._run_hint.text()
+
+    def test_failed_item_is_recorded_in_results(self) -> None:
+        from krok_helper.audio_processing.separation.backend import TaskResult
+
+        panel = ResultsPanel()
+        panel.add_result(
+            TaskResult(
+                task=TaskType.INSTRUMENTAL,
+                title="分离伴奏",
+                finished_at="12:00:00",
+                files=[],
+                error="显存不足",
+            )
+        )
+        assert panel.group_count() == 1

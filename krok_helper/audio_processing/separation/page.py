@@ -10,8 +10,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QStackedWidget, QVBoxLayout, QWidget
-from qfluentwidgets import ScrollArea as FluentScrollArea
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+from qfluentwidgets import (
+    CaptionLabel,
+    PrimaryPushButton,
+    ScrollArea as FluentScrollArea,
+)
 
 from krok_helper.audio_processing.responsive import ResponsiveGrid
 from krok_helper.audio_processing.separation.backend import (
@@ -180,12 +190,25 @@ class AudioSeparationPage(QWidget):
         cards = []
         for task in TaskType:
             card = TaskCard(task, content)
-            card.triggered.connect(lambda t=task: self._on_task_triggered(t))
+            card.selectionChanged.connect(lambda: self._refresh_run_bar())
             self._task_cards[task] = card
             cards.append(card)
         self._tasks_grid = ResponsiveGrid(min_column_width=260, max_columns=3, parent=content)
         self._tasks_grid.set_widgets(cards)
         layout.addWidget(self._tasks_grid)
+
+        # 底部统一操作栏：勾选若干任务后一次提交，按顺序执行。
+        run_row = QHBoxLayout()
+        run_row.setContentsMargins(2, 0, 2, 0)
+        run_row.setSpacing(10)
+        self._run_hint = CaptionLabel("", content)
+        self._run_hint.setWordWrap(True)
+        run_row.addWidget(self._run_hint, 1)
+        self._run_button = PrimaryPushButton("开始分离", content)
+        self._run_button.setMinimumWidth(190)
+        self._run_button.clicked.connect(self._start_selected_tasks)
+        run_row.addWidget(self._run_button, 0)
+        layout.addLayout(run_row)
 
         self._task_panel = CurrentTaskPanel(content)
         self._task_panel.cancelRequested.connect(self._on_task_cancel)
@@ -234,21 +257,30 @@ class AudioSeparationPage(QWidget):
         task_error = (
             snapshot.state is ServiceState.ERROR and snapshot.pending_task is not None
         )
+        queued = list(snapshot.queued_tasks or ())
         for task, card in self._task_cards.items():
             dep = snapshot.dependencies.get(task)
             if dep is not None:
+                if task_active and snapshot.pending_task is task:
+                    queue_label = "进行中"
+                elif task in queued:
+                    queue_label = f"排队中 · 第 {queued.index(task) + 1} 位"
+                else:
+                    queue_label = ""
                 card.set_dependency(
                     dep,
                     service_ready=tasks_operable or task_active or task_error,
                     unavailable_reason=(
-                        "当前任务进行中"
+                        "当前有任务在进行"
                         if task_active
                         else "请先处理上方错误"
                         if task_error
                         else ""
                     ),
+                    queue_label=queue_label,
                 )
 
+        self._refresh_run_bar(snapshot)
         self._sync_task_panel(snapshot)
 
     def _sync_task_panel(self, snapshot) -> None:
@@ -257,6 +289,8 @@ class AudioSeparationPage(QWidget):
                 self._panel_mode = "task"
                 self._task_panel.set_stage_names(TASK_STAGES)
                 title = TASK_SPECS[snapshot.pending_task].title if snapshot.pending_task else ""
+                if snapshot.queue_total > 1:
+                    title = f"{title}（第 {snapshot.queue_done + 1} / 共 {snapshot.queue_total} 个）"
                 self._task_panel.start(title)
             self._task_panel.setVisible(True)
             return
@@ -283,44 +317,74 @@ class AudioSeparationPage(QWidget):
             self._task_panel.setVisible(False)
 
     # ── 任务触发 ──────────────────────────────────────────────────
-    def _on_task_triggered(self, task: TaskType) -> None:
+    # ── 多选与批量执行 ────────────────────────────────────────────
+    def _selected_tasks(self) -> list[TaskType]:
+        return [task for task in TaskType if self._task_cards[task].is_selected()]
+
+    def _refresh_run_bar(self, snapshot=None) -> None:
+        # 必须用本次渲染的同一份快照，否则底部栏会和任务卡显示的状态打架。
+        if snapshot is None:
+            snapshot = self._backend.snapshot()
+        busy = snapshot.state in _TASK_PANEL_STATES
+        if busy:
+            done, total = snapshot.queue_done, max(1, snapshot.queue_total)
+            self._run_button.setEnabled(False)
+            self._run_button.setText("正在分离…")
+            self._run_hint.setText(f"正在执行第 {min(done + 1, total)} / 共 {total} 个任务")
+            return
+
+        selected = self._selected_tasks()
+        self._run_button.setEnabled(bool(selected))
+        self._run_button.setText(
+            f"开始分离（已选 {len(selected)} 项）" if selected else "开始分离"
+        )
+        if not selected:
+            self._run_hint.setText(
+                "勾选要执行的任务；可以多选，将按人声 → 伴奏 → 和声伴奏的顺序依次完成。"
+            )
+            return
+        pending = sum(self._task_cards[task].download_bytes() for task in selected)
+        self._run_hint.setText(
+            f"将依次执行 {len(selected)} 个任务；需要先下载 {format_size(pending)} 模型。"
+            if pending
+            else f"将依次执行 {len(selected)} 个任务。"
+        )
+
+    def _start_selected_tasks(self) -> None:
+        selected = self._selected_tasks()
+        if not selected:
+            return
         snapshot = self._backend.snapshot()
+        if snapshot.state in _TASK_PANEL_STATES:
+            show_fluent_info(self, "当前已有分离任务在进行，请等待完成或先停止。")
+            return
         if snapshot.state not in TASK_CAPABLE_STATES:
             show_fluent_info(self, "请先启动 PyMSS 服务。")
-            return
-        dep = snapshot.dependencies.get(task)
-        if dep is None:
-            return
-        if not dep.ready and dep.download_bytes > 0:
-            spec = TASK_SPECS[task]
-            if not ask_fluent_confirm(
-                self,
-                f"「{spec.title}」需要下载推荐模型（{format_size(dep.download_bytes)}），"
-                "下载完成后自动开始任务。是否继续？",
-                yes_text="下载并继续",
-            ):
-                return
-        elif not dep.ready:
-            show_fluent_info(
-                self,
-                (dep.reason or "该任务当前不可用。")
-                + "\n可在设置对话框的「修复与重置」页处理，或重新运行迁移向导。",
-            )
             return
 
         input_path = self._input_card.path()
         if not input_path:
             show_fluent_info(self, "请先选择待处理的音频素材。")
             return
+
+        pending = sum(self._task_cards[task].download_bytes() for task in selected)
+        if pending and not ask_fluent_confirm(
+            self,
+            f"所选任务需要先下载 {format_size(pending)} 的模型，"
+            "下载完成后会自动继续。是否继续？",
+            yes_text="下载并继续",
+        ):
+            return
+
         output_dir = self._output_card.output_dir() or str(Path(input_path).parent)
-        self._backend.request_task(
-            task,
+        self._backend.request_tasks(
+            selected,
             input_path=input_path,
             output_dir=output_dir,
             output_format=self._output_card.output_format(),
         )
-        if dep.download_bytes > 0 and not dep.ready:
-            # 用户已确认体积，直接开始按需下载（需求文档 §8.4）。
+        # 模型缺失时后端会停在 MODEL_REQUIRED，等这里确认后再开始下载（§8.4）。
+        if self._backend.snapshot().state is ServiceState.MODEL_REQUIRED:
             self._backend.start_model_download()
 
     def _on_task_cancel(self) -> None:
@@ -401,9 +465,9 @@ class AudioSeparationPage(QWidget):
 
     # ── 输入/输出持久化（§3.4：两张卡都保留最近一次有效选择） ──────
     def _restore_workspace_inputs(self) -> None:
-        last_input = str(self._settings_ns.get("last_input", ""))
-        if last_input and Path(last_input).is_file():
-            self._input_card.set_path(last_input, emit=False)
+        # 音频素材是「这一首歌」的临时选择，不是设置：重开软件应当是空的。
+        # 输出目录与格式是偏好，继续保留。
+        self._settings_ns.pop("last_input", None)
         output_dir = str(self._settings_ns.get("output_dir", ""))
         if output_dir:
             self._output_card.set_output_dir(output_dir, emit=False)
@@ -411,7 +475,8 @@ class AudioSeparationPage(QWidget):
         self._output_card.set_output_format(output_format)
 
     def _persist_inputs(self) -> None:
-        self._settings_ns["last_input"] = self._input_card.path()
+        # 只持久化偏好类设置；音频素材不写盘，重开软件从空白开始。
+        self._settings_ns.pop("last_input", None)
         self._settings_ns["output_dir"] = self._output_card.output_dir()
         self._settings_ns["output_format"] = self._output_card.output_format()
         self._save_settings()

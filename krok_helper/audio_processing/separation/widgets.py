@@ -684,23 +684,79 @@ class OutputSettingsCard(CardWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.output_dir()))
 
 
-class TaskCard(CardWidget):
-    """任务卡（需求文档 §3.4-3）：卡片本体即主操作，可用性直接说明原因。"""
+class _CheckIndicator(QWidget):
+    """任务卡左侧的自绘复选框（跟随主题色）。"""
 
-    triggered = pyqtSignal()
+    _SIZE = 18
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(self._SIZE, self._SIZE)
+        self._checked = False
+        self._enabled = True
+
+    def set_checked(self, checked: bool) -> None:
+        self._checked = checked
+        self.update()
+
+    def set_enabled_look(self, enabled: bool) -> None:
+        self._enabled = enabled
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QColor, QPainter, QPen
+
+        p = _palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(1.0, 1.0, self._SIZE - 2.0, self._SIZE - 2.0)
+        radius = 4.0
+        if self._checked and self._enabled:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(p.accent_primary))
+            painter.drawRoundedRect(rect, radius, radius)
+            pen = QPen(QColor("#FFFFFF"), 2.0)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(
+                int(rect.left() + 4), int(rect.center().y()),
+                int(rect.center().x() - 1), int(rect.bottom() - 5),
+            )
+            painter.drawLine(
+                int(rect.center().x() - 1), int(rect.bottom() - 5),
+                int(rect.right() - 4), int(rect.top() + 5),
+            )
+        else:
+            painter.setPen(QPen(QColor(p.input_border if self._enabled else p.text_disabled), 1.4))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect, radius, radius)
+
+
+class TaskCard(CardWidget):
+    """任务卡（需求文档 §3.4-3）：可勾选，多选后由底部操作栏统一执行。
+
+    卡片本体即选择区；能否勾选与原因一律直接用中文说明，不只是置灰。
+    """
+
+    selectionChanged = pyqtSignal()
 
     def __init__(self, task: TaskType, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.task = task
         spec = TASK_SPECS[task]
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._selected = False
+        self._selectable = False
+        self._download_bytes = 0
 
         layout = self.createVBoxLayout()
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(10)
+        self._check = _CheckIndicator(self)
+        header.addWidget(self._check, 0, Qt.AlignmentFlag.AlignVCenter)
         icon = IconWidget(spec.icon.icon(), self)
         icon.setFixedSize(26, 26)
         header.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -718,60 +774,110 @@ class TaskCard(CardWidget):
         outputs.setWordWrap(True)
         layout.addWidget(outputs)
 
-        # 原因行始终占位（哪怕没内容）：否则「就绪 ↔ 需下载 ↔ 需要先启动服务」
-        # 之间切换会让整张卡忽高忽低。预留两行，容得下当前所有归一化原因文案。
+        # 原因行始终占位（哪怕没内容）：否则状态切换会让整张卡忽高忽低。
         self._reason = CaptionLabel("", self)
         self._reason.setWordWrap(True)
         self._reason.setMinimumHeight(self._reason.fontMetrics().lineSpacing() * 2)
-        self._reason.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
+        self._reason.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self._reason)
-
         layout.addStretch(1)
-        self._action_button = PrimaryPushButton("开始分离", self)
-        self._action_button.clicked.connect(self.triggered.emit)
-        layout.addWidget(self._action_button)
+        self._apply_look()
+
+    # ── 选择状态 ─────────────────────────────────────────────────
+    def is_selected(self) -> bool:
+        return self._selected and self._selectable
+
+    def is_selectable(self) -> bool:
+        return self._selectable
+
+    def download_bytes(self) -> int:
+        return self._download_bytes if self.is_selected() else 0
+
+    def set_selected(self, selected: bool, *, emit: bool = True) -> None:
+        target = bool(selected) and self._selectable
+        if target == self._selected:
+            return
+        self._selected = target
+        self._apply_look()
+        if emit:
+            self.selectionChanged.emit()
+
+    def _apply_look(self) -> None:
+        self._check.set_checked(self._selected)
+        self._check.set_enabled_look(self._selectable)
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if self._selectable
+            else Qt.CursorShape.ArrowCursor
+        )
+        p = _palette()
+        border = p.accent_primary if self.is_selected() else p.card_border
+        width = 2 if self.is_selected() else 1
+        self.setObjectName("SeparationTaskCard")
+        self.setStyleSheet(
+            f"#SeparationTaskCard {{ background: {p.card_bg}; "
+            f"border: {width}px solid {border}; border-radius: 10px; }}"
+        )
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._apply_look()
 
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
-            self.triggered.emit()
+        if (
+            self._selectable
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.rect().contains(event.pos())
+        ):
+            self.set_selected(not self._selected)
         super().mouseReleaseEvent(event)
 
+    # ── 依赖与队列状态 ───────────────────────────────────────────
     def set_dependency(
         self,
         dep: TaskDependency,
         *,
         service_ready: bool,
         unavailable_reason: str = "",
+        queue_label: str = "",
     ) -> None:
+        """刷新卡片。``queue_label`` 非空表示这张卡正在跑或已排队，禁止改选。"""
+        self._download_bytes = 0
+        if queue_label:
+            self._pill.set_state(queue_label, StateLevel.BUSY)
+            self._reason.setText("任务进行中，无法更改选择")
+            self._selectable = False
+            self._apply_look()
+            return
         if not service_ready:
             self._pill.set_state("", StateLevel.INFO)
             self._reason.setText("需要先启动服务")
-            self._action_button.setText("开始分离")
-            self._action_button.setEnabled(False)
+            self._selectable = False
+            self._selected = False
+            self._apply_look()
             return
         if unavailable_reason:
-            self._pill.set_state(dep.badge or "处理中", StateLevel.INFO)
+            self._pill.set_state(dep.badge or "不可用", StateLevel.INFO)
             self._reason.setText(unavailable_reason)
-            self._action_button.setText("开始分离")
-            self._action_button.setEnabled(False)
+            self._selectable = False
+            self._selected = False
+            self._apply_look()
             return
         if dep.ready:
             self._pill.set_state(dep.badge or "就绪", StateLevel.SUCCESS)
             self._reason.setText("")
-            self._action_button.setText("开始分离")
-            self._action_button.setEnabled(True)
+            self._selectable = True
         elif dep.download_bytes > 0:
             self._pill.set_state(dep.badge, StateLevel.WARNING)
-            self._reason.setText(dep.reason)
-            self._action_button.setText(f"下载并继续（{format_size(dep.download_bytes)}）")
-            self._action_button.setEnabled(True)
+            self._reason.setText(dep.reason or "开始时会先下载所需模型")
+            self._download_bytes = dep.download_bytes
+            self._selectable = True
         else:
             self._pill.set_state(dep.badge or "不可用", StateLevel.ERROR)
             self._reason.setText(dep.reason or "当前不可用")
-            self._action_button.setText("查看处理方式")
-            self._action_button.setEnabled(True)
+            self._selectable = False
+            self._selected = False
+        self._apply_look()
 
 
 class CurrentTaskPanel(CardWidget):
@@ -950,9 +1056,11 @@ class ResultsPanel(CardWidget):
         group_layout.setContentsMargins(0, 0, 0, 0)
         group_layout.setSpacing(4)
 
+        failed = bool(getattr(result, "error", ""))
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
-        head.addWidget(BodyLabel(f"{result.title} · {result.finished_at}", group))
+        mark = "✗" if failed else "✓"
+        head.addWidget(BodyLabel(f"{mark} {result.title} · {result.finished_at}", group))
         head.addStretch(1)
         remove_button = ToolButton(FIF.CLOSE, group)
         remove_button.setToolTip("移除该组结果（不删除文件）")
@@ -960,6 +1068,12 @@ class ResultsPanel(CardWidget):
         head.addWidget(remove_button)
         group_layout.addLayout(head)
 
+        if failed:
+            # 队列里失败的任务也记一条，否则用户只看到「少了一个结果」。
+            reason = CaptionLabel(str(result.error), group)
+            reason.setWordWrap(True)
+            reason.setStyleSheet(f"color: {_level_color(StateLevel.ERROR)};")
+            group_layout.addWidget(reason)
         for file in result.files:
             group_layout.addLayout(self._build_file_row(group, file))
         self._list_col.addWidget(group)
