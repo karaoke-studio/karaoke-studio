@@ -1340,3 +1340,54 @@ def test_single_request_still_counts_as_a_one_item_batch(tmp_path, monkeypatch) 
         assert backend.snapshot().state is ServiceState.SERVICE_READY
     finally:
         backend.shutdown()
+
+
+def test_external_executable_can_register_models(tmp_path) -> None:
+    """回归：选「使用已有 PyMSS」后一键导入报「请先安装 PyMSS 底座」。
+
+    外部可执行环境的服务同样由工作台启动，用的是 service.py 传给它的
+    PYMSS_USER_MODELS，因此工作台完全可以往同一份清单里注册模型。
+    """
+    executable = tmp_path / "python.exe"
+    executable.write_bytes(b"external-python")
+    user_models = tmp_path / "user_models.json"
+    backend = RealSeparationBackend(
+        {
+            "external_executable": str(executable),
+            "external_user_models": str(user_models),
+        }
+    )
+    try:
+        assert backend._registry_path() == user_models
+        assert backend._registry() is not None, "外部环境必须支持注册模型"
+    finally:
+        backend.shutdown()
+
+
+def test_registry_path_matches_what_the_service_is_told_to_read(tmp_path) -> None:
+    """注册文件必须与传给服务的 PYMSS_USER_MODELS 是同一个，否则服务读不到。"""
+    executable = tmp_path / "python.exe"
+    executable.write_bytes(b"external-python")
+    user_models = tmp_path / "user_models.json"
+    backend = RealSeparationBackend(
+        {
+            "external_executable": str(executable),
+            "external_user_models": str(user_models),
+        }
+    )
+    try:
+        assert backend._registry_path() == backend._existing_user_models_path()
+    finally:
+        backend.shutdown()
+
+
+def test_remote_only_service_explains_why_it_cannot_register(tmp_path) -> None:
+    """直接连一个已在运行的服务：进程不归工作台管，说明原因而不是让用户去装底座。"""
+    backend = RealSeparationBackend({"external_server_url": "http://127.0.0.1:9999"})
+    try:
+        assert backend._registry_path() is None
+        reason = backend._registry_unavailable_reason()
+        assert "无法为它注册模型" in reason
+        assert "请先安装 PyMSS 底座" not in reason
+    finally:
+        backend.shutdown()

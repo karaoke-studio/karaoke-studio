@@ -285,14 +285,36 @@ class RealSeparationBackend(SeparationBackend):
         self._snap.error = "" if result.status is RuntimeStatus.READY else result.message
         self._snap.pymss_version = result.package.pymss_version if result.package else ""
 
-    def _registry(self) -> ExternalModelRegistry | None:
+    def _registry_path(self) -> Path | None:
+        """工作台自己的用户模型清单路径；返回 None 表示当前模式不支持注册模型。
+
+        托管安装放在安装目录下；**外部可执行环境的服务同样由工作台启动**，用的是
+        ``service.py`` 传给它的 ``PYMSS_USER_MODELS``，因此必须用同一个文件，否则
+        写进去的模型服务读不到。只有「直接连一个已在运行的服务地址」这一种模式不
+        支持——那个进程不归工作台管，也无从得知它读哪份清单。
+        """
         install_dir = str(self._snap.install_dir or "").strip()
-        if not install_dir:
-            return None
-        return ExternalModelRegistry(Path(install_dir) / "manifests" / "external-models.json")
+        if install_dir:
+            return Path(install_dir) / "manifests" / "external-models.json"
+        if str(self._settings.get("external_executable", "")).strip():
+            return self._existing_user_models_path()
+        return None
+
+    def _registry_unavailable_reason(self) -> str:
+        """当前模式为什么不能注册模型（中文，直接给用户看）。"""
+        if self._external_url or str(self._settings.get("external_server_url", "")).strip():
+            return (
+                "当前连接的是一个已在运行的外部 PyMSS 服务，工作台无法为它注册模型。"
+                "请改用「选择已有的 PyMSS 环境」由工作台启动服务，或改用自动安装。"
+            )
+        return "请先完成 PyMSS 配置，再导入或映射模型。"
+
+    def _registry(self) -> ExternalModelRegistry | None:
+        path = self._registry_path()
+        return ExternalModelRegistry(path) if path is not None else None
 
     def _external_bindings(self) -> dict[TaskType, str]:
-        if not str(self._snap.install_dir or "").strip():
+        if self._registry_path() is None:
             return {}
         raw = self._settings.get("external_bindings")
         if not isinstance(raw, dict):
@@ -699,7 +721,7 @@ class RealSeparationBackend(SeparationBackend):
             raise ValueError("所选 MSST 模型不是当前任务的有效候选。")
         registry = self._registry()
         if registry is None:
-            raise RuntimeError("请先安装 PyMSS 底座，再映射 MSST 模型。")
+            raise RuntimeError(self._registry_unavailable_reason())
         name = registry.bind(task, candidate)
         raw = self._settings.setdefault("external_bindings", {})
         raw[task.value] = name
@@ -750,7 +772,7 @@ class RealSeparationBackend(SeparationBackend):
     ) -> None:
         registry = self._registry()
         if registry is None:
-            self.localImportFailed.emit("请先安装 PyMSS 底座，再导入本地模型。")
+            self.localImportFailed.emit(self._registry_unavailable_reason())
             return
 
         def operation() -> ExternalModelCandidate:
