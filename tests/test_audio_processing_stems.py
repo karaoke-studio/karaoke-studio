@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from krok_helper.audio_processing.separation.stems import parse_model_stems
+from krok_helper.audio_processing.separation.stems import (
+    choose_stem_for_task,
+    parse_model_stems,
+)
 
 # 真实样本：pymss catalog 的 inst_v1e.yaml（instruments 在 training 块首）
 INST_V1E = """audio:
@@ -86,3 +89,35 @@ class TestNormalisation:
     def test_deduplicates_preserving_order(self) -> None:
         text = "training:\n  instruments:\n  - other\n  - vocals\n  - other\n"
         assert parse_model_stems(text) == ("other", "vocals")
+
+
+class TestStemForTask:
+    """外部模型上「某任务用哪条轨」必须从模型实际声明的轨里挑，不能写死。"""
+
+    def test_inst_v1e_naming(self) -> None:
+        """回归：曾写死 'instrumental'，被服务拒绝
+        (Invalid stem 'instrumental'. Valid stems: ['other', 'vocals'])。"""
+        stems = ("other", "vocals")
+        assert choose_stem_for_task("vocal", stems) == "vocals"
+        assert choose_stem_for_task("instrumental", stems) == "other"
+
+    def test_karaoke_naming(self) -> None:
+        stems = ("karaoke", "other")
+        assert choose_stem_for_task("harmony", stems) == "other"
+
+    def test_capitalised_naming_is_preserved(self) -> None:
+        """becruily / anvuew 用的是首字母大写，返回值必须保持原样。"""
+        stems = ("Vocals", "Instrumental")
+        assert choose_stem_for_task("vocal", stems) == "Vocals"
+        assert choose_stem_for_task("instrumental", stems) == "Instrumental"
+
+    def test_two_stem_fallback_picks_the_non_vocal_track(self) -> None:
+        stems = ("weird_name", "vocals")
+        assert choose_stem_for_task("instrumental", stems) == "weird_name"
+        assert choose_stem_for_task("vocal", stems) == "vocals"
+
+    def test_returns_empty_when_undecidable(self) -> None:
+        """三条都不认识时不猜，返回空让上层提示用户改选。"""
+        assert choose_stem_for_task("instrumental", ("a", "b", "c")) == ""
+        assert choose_stem_for_task("vocal", ("a", "b")) == ""
+        assert choose_stem_for_task("vocal", ()) == ""

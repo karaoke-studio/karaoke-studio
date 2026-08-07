@@ -53,7 +53,7 @@ from .presets import (
 from .folder_import import match_tasks, scan_folder
 from .local_import import build_local_candidate
 from .local_models import scan_local_models
-from .stems import parse_model_stems
+from .stems import choose_stem_for_task, parse_model_stems
 from .runtime import (
     ManagedRuntimeInstaller,
     RuntimeStatus,
@@ -388,6 +388,11 @@ class RealSeparationBackend(SeparationBackend):
                     badge = "外部模型 · 待首次加载"
                 elif not service_on:
                     reason = "需要先启动 PyMSS 服务"
+                stem_problem = self._external_stem_problem(task)
+                if stem_problem:
+                    # 轨名定不下来就不能提交任务，否则服务会直接拒绝请求。
+                    ready = False
+                    reason, badge = stem_problem, "输出轨无法确定"
                 # 和声伴奏任务改为单阶段（karaoke 模型直接处理原曲取 other），
                 # 不再依赖人声模型做二级分离，因此没有额外的前置下载。
                 download_bytes = 0
@@ -1541,7 +1546,9 @@ class RealSeparationBackend(SeparationBackend):
                 self._external_url = True
                 self._log("检测到外部 PyMSS 服务已恢复。")
             self._snap.device = str(health.get("device") or self._snap.device or "自动选择")
-            if self._snap.state is ServiceState.EXTERNAL_OFFLINE:
+            # 服务是健康的，就不该继续停在错误态：任务级失败（例如 stem 不对）
+            # 之前会把界面永久卡在「出现错误」，「重试」也走到这里但什么都不做。
+            if self._snap.state in {ServiceState.EXTERNAL_OFFLINE, ServiceState.ERROR}:
                 self._set_ready_state()
 
         def failure(exc: Exception) -> None:
@@ -1678,6 +1685,12 @@ class RealSeparationBackend(SeparationBackend):
         if task is None or client is None:
             return
         steps = self._steps_for_task(task)
+        if not steps:
+            self._fail(
+                self._external_stem_problem(task)
+                or f"无法确定{TASK_SPECS[task].title}要使用的模型。"
+            )
+            return
         external_names = set(self._external_bindings().values())
         installed_names = self._downloaded_model_names()
         downloadable_by_name = {
@@ -1790,12 +1803,48 @@ class RealSeparationBackend(SeparationBackend):
         binding = self._external_bindings().get(task)
         if not binding:
             return effective_steps(self._settings, task)
-        if task is TaskType.VOCAL:
-            return (SeparationStep(binding, ("vocals",), ("人声",), 0),)
-        if task is TaskType.INSTRUMENTAL:
-            return (SeparationStep(binding, ("instrumental",), ("伴奏",), 0),)
-        # 和声伴奏：karaoke 模型直接处理原曲，残余轨即「去掉主唱、保留和声」的伴奏。
-        return (SeparationStep(binding, ("other",), ("和声伴奏",), 0),)
+        label = TASK_PRESETS[task].steps[-1].output_labels[-1]
+        stem = self._external_stem(task, binding)
+        if not stem:
+            # 不抛异常：依赖计算和后端构造都会走到这里，抛出会让整页报错。
+            # 返回空步骤，由任务卡显示原因、提交任务时再明确失败。
+            return ()
+        return (SeparationStep(binding, (stem,), (label,), 0),)
+
+    def _external_stem_problem(self, task: TaskType) -> str:
+        """外部绑定无法确定输出轨时的中文原因；正常时返回空串。"""
+        binding = self._external_bindings().get(task)
+        if not binding or self._external_stem(task, binding):
+            return ""
+        declared = "、".join(self._external_model_stems(binding)) or "未知"
+        return (
+            f"无法确定该外部模型上要保存哪条输出轨（模型声明的轨：{declared}）。"
+            "请在设置的「模型与输出轨」里改用其他模型。"
+        )
+
+    def _external_model_stems(self, binding: str) -> tuple[str, ...]:
+        """外部模型在自己配置里声明的输出轨（导入时记录进注册表）。"""
+        registry = self._registry()
+        if registry is None:
+            return ()
+        try:
+            models = registry.load()["models"]
+        except Exception:
+            return ()
+        for model in models:
+            if isinstance(model, dict) and model.get("name") == binding:
+                raw = str(model.get("target_stem") or "")
+                return tuple(part for part in raw.split("/") if part.strip())
+        return ()
+
+    def _external_stem(self, task: TaskType, binding: str) -> str:
+        """外部模型上该任务应保存哪条轨。
+
+        绝不能写死 ``vocals`` / ``instrumental``：不同模型的命名各不相同，硬编码会
+        直接被服务拒绝（``Invalid stem 'instrumental'. Valid stems: ['other', 'vocals']``）。
+        一律在模型实际声明的轨里挑。
+        """
+        return choose_stem_for_task(task.value, self._external_model_stems(binding))
 
     def _start_pipeline(self, task: TaskType) -> None:
         client = self._client

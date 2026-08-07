@@ -1105,3 +1105,115 @@ def test_external_msst_model_load_failure_is_persisted_as_unsupported(
         assert "配置张量尺寸不兼容" in dependency.reason
     finally:
         backend.shutdown()
+
+
+def test_external_binding_uses_the_models_declared_stem(tmp_path) -> None:
+    """回归：外部模型的 stem 曾写死为 vocals/instrumental，被服务拒绝。
+
+    实机报错：Invalid stem 'instrumental'. Valid stems: ['other', 'vocals']
+    """
+    import json as _json
+
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    registry_path = root / "manifests" / "external-models.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "models": [
+                    {
+                        "name": "krok_local_instrumental_x",
+                        "model_type": "mel_band_roformer",
+                        "model_path": str(tmp_path / "m.ckpt"),
+                        "config_path": str(tmp_path / "m.yaml"),
+                        "target_stem": "other/vocals",
+                        "krok": {"task": "instrumental", "source": "local"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    backend = RealSeparationBackend(
+        {
+            "install_dir": str(root),
+            "external_bindings": {"instrumental": "krok_local_instrumental_x"},
+        },
+        service_factory=_FakeServiceFactory,
+    )
+    try:
+        steps = backend._steps_for_task(TaskType.INSTRUMENTAL)
+        assert steps[0].stems == ("other",), "必须用模型声明的 other，而不是写死的 instrumental"
+        assert steps[0].output_labels == ("伴奏",)
+    finally:
+        backend.shutdown()
+
+
+def test_unresolvable_external_stem_explains_instead_of_guessing(tmp_path) -> None:
+    import json as _json
+
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    registry_path = root / "manifests" / "external-models.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "models": [
+                    {
+                        "name": "krok_local_weird",
+                        "model_type": "mel_band_roformer",
+                        "target_stem": "a/b/c",
+                        "krok": {"task": "instrumental", "source": "local"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    backend = RealSeparationBackend(
+        {
+            "install_dir": str(root),
+            "external_bindings": {"instrumental": "krok_local_weird"},
+        },
+        service_factory=_FakeServiceFactory,
+    )
+    try:
+        # 不抛异常：依赖计算与后端构造都会走到这里，抛出会让整页报错。
+        assert backend._steps_for_task(TaskType.INSTRUMENTAL) == ()
+        message = backend._external_stem_problem(TaskType.INSTRUMENTAL)
+        assert "无法确定" in message
+        assert "a、b、c" in message, "应把该模型真实声明的轨列给用户"
+
+        # 任务卡上直接说明原因，而不是让用户提交后被服务拒绝。
+        dep = backend.snapshot().dependencies[TaskType.INSTRUMENTAL]
+        assert not dep.ready
+        assert "无法确定" in dep.reason
+    finally:
+        backend.shutdown()
+
+
+def test_healthy_service_clears_a_stuck_error_state(tmp_path) -> None:
+    """回归：任务失败后界面永久停在「出现错误」，点重试也没有反应。"""
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    backend = RealSeparationBackend(
+        {"install_dir": str(root), "downloaded_models": [TaskType.VOCAL.value]},
+        service_factory=_FakeServiceFactory,
+    )
+    try:
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+
+        backend._set_state(ServiceState.ERROR, error="模拟任务失败")
+        assert backend.snapshot().state is ServiceState.ERROR
+
+        backend.refresh()  # 界面上的「重试」
+        _wait_until(lambda: backend.snapshot().state is not ServiceState.ERROR)
+        assert backend.snapshot().state is ServiceState.SERVICE_READY
+        assert not backend.snapshot().error
+    finally:
+        backend.shutdown()

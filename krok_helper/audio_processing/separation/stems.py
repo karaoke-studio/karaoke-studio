@@ -113,4 +113,51 @@ def parse_model_stems(config_text: str) -> tuple[str, ...]:
     return ()
 
 
-__all__ = ["parse_model_stems"]
+#: 各任务偏好的 stem 名，按优先级排列（大小写不敏感）。
+#:
+#: 不同模型对同一概念的命名不统一：``inst_v1e`` 是 ``other``/``vocals``，
+#: karaoke 模型是 ``karaoke``/``other``，becruily 与 anvuew 则是首字母大写的
+#: ``Vocals``/``Instrumental``。因此不能写死名字，只能按优先级在模型**实际声明**
+#: 的轨里挑。
+_TASK_STEM_PREFERENCE: dict[str, tuple[str, ...]] = {
+    "vocal": ("vocals", "vocal", "lead", "lead_vocals"),
+    "instrumental": ("instrumental", "other", "accompaniment", "inst", "karaoke"),
+    # 与推荐预设保持一致：karaoke 模型上取 other。
+    "harmony": ("other", "karaoke", "instrumental"),
+}
+
+_VOCAL_TOKENS = ("vocal", "lead")
+
+
+def choose_stem_for_task(task_value: str, stems) -> str:
+    """在模型实际声明的轨里，为某个任务挑一条。
+
+    Args:
+        task_value: ``TaskType`` 的值（``vocal`` / ``instrumental`` / ``harmony``）。
+        stems: 该模型 ``training.instruments`` 里的真实轨名。
+
+    Returns:
+        选中的轨名（保持模型里的原始大小写）；无法确定时返回空字符串，
+        由调用方给出明确提示，**不猜**。
+    """
+    available = [str(item).strip() for item in stems if str(item).strip()]
+    if not available:
+        return ""
+    lowered = {item.lower(): item for item in available}
+
+    for wanted in _TASK_STEM_PREFERENCE.get(str(task_value), ()):
+        if wanted in lowered:
+            return lowered[wanted]
+
+    def is_vocal(name: str) -> bool:
+        low = name.lower()
+        return any(token in low for token in _VOCAL_TOKENS) and "instrumental" not in low
+
+    if str(task_value) == "vocal":
+        return next((item for item in available if is_vocal(item)), "")
+    # 伴奏与和声伴奏都要「非人声」的那一路；双轨模型据此可唯一确定。
+    non_vocal = [item for item in available if not is_vocal(item)]
+    return non_vocal[0] if len(non_vocal) == 1 else ""
+
+
+__all__ = ["choose_stem_for_task", "parse_model_stems"]
