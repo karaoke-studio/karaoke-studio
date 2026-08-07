@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .states import TaskType
 
-PRESET_VERSION = 1
+PRESET_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ TASK_PRESETS: dict[TaskType, TaskPreset] = {
         (
             SeparationStep(
                 "inst_v1e",
-                ("instrumental",),
+                ("other",),
                 ("伴奏",),
                 913_102_724,
             ),
@@ -68,7 +68,7 @@ TASK_PRESETS: dict[TaskType, TaskPreset] = {
         (
             SeparationStep(
                 "mel_band_roformer_karaoke_becruily",
-                ("vocals", "instrumental"),
+                ("Vocals", "Instrumental"),
                 ("主唱", ""),
                 1_719_139_254,
             ),
@@ -80,7 +80,7 @@ TASK_PRESETS: dict[TaskType, TaskPreset] = {
                 ("vocals",),
                 ("和声",),
                 913_102_724,
-                input_from_previous="instrumental",
+                input_from_previous="Instrumental",
             ),
         ),
     ),

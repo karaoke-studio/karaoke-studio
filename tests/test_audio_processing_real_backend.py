@@ -463,12 +463,21 @@ def test_pipeline_uses_canonical_model_id_returned_by_load(tmp_path, monkeypatch
     _installed_runtime(root)
 
     class CanonicalClient(_FakeClient):
+        requested_stems: list[tuple[str, ...]] = []
+
         def load_model(self, model: str, **_kwargs):
             self.loaded.append(model)
             return {
                 "model_loaded": True,
-                "model": {"id": f"{model}.ckpt"},
+                "model": {
+                    "id": f"{model}.ckpt",
+                    "pymss": {"instruments": ["other", "vocals"]},
+                },
             }
+
+        def separate_pcm(self, *args, stems=(), **kwargs):
+            self.requested_stems.append(tuple(stems))
+            return super().separate_pcm(*args, stems=stems, **kwargs)
 
     class CanonicalFactory:
         client = CanonicalClient()
@@ -507,6 +516,7 @@ def test_pipeline_uses_canonical_model_id_returned_by_load(tmp_path, monkeypatch
 
         assert CanonicalFactory.client.loaded[-1] == "inst_v1e"
         assert CanonicalFactory.client.separated[-1] == "inst_v1e.ckpt"
+        assert CanonicalFactory.client.requested_stems[-1] == ("other",)
     finally:
         assert backend.shutdown()
 
