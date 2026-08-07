@@ -354,6 +354,28 @@ class TestSwitcherAndWidgets:
         assert page._wizard._stepper._titles == ["安装位置", "确认", "下载安装", "完成"]
         assert page._wizard._stepper._current == 0
 
+    def test_install_progress_explains_post_download_work(self) -> None:
+        from krok_helper.audio_processing.separation.wizard import ProgressStep
+
+        page = _make_separation_page()
+        page._welcome.flowSelected.emit(FLOW_FULL)
+        step = page._wizard._steps[2]
+        assert isinstance(step, ProgressStep)
+        assert "音频分离组件" in step.hint
+        assert "可能需要几分钟" in step.layout().itemAt(2).widget().text()
+
+        snapshot = page._backend.snapshot()
+        snapshot.state = ServiceState.RUNTIME_DOWNLOADING
+        snapshot.download_done = 3_273_024_349
+        snapshot.download_total = 3_273_024_349
+        step.apply_snapshot(snapshot)
+        assert "下载完成" in step._status.text()
+        assert "正在解压并安装" in step._status.text()
+
+        snapshot.state = ServiceState.RUNTIME_VERIFYING
+        step.apply_snapshot(snapshot)
+        assert step._status.text() == "正在校验安装并启动服务检查…"
+
     def test_install_confirmation_freezes_device_and_download_estimate(self) -> None:
         page = _make_separation_page()
         page._welcome.flowSelected.emit(FLOW_FULL)

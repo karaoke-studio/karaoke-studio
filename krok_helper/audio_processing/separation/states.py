@@ -87,22 +87,23 @@ STATE_META: dict[ServiceState, StateMeta] = {
         "待确认安装目录", StateLevel.INFO, "请在向导中确认安装位置",
     ),
     ServiceState.RUNTIME_DOWNLOADING: StateMeta(
-        "正在下载运行时", StateLevel.BUSY, "PyMSS 运行时下载中，可随时取消",
+        "正在安装音频分离组件", StateLevel.BUSY,
+        "正在下载、解压或配置 PyMSS 组件，可随时取消",
         ACTION_CANCEL_INSTALL, "取消",
     ),
     ServiceState.RUNTIME_VERIFYING: StateMeta(
-        "正在校验安装", StateLevel.BUSY, "校验文件完整性并切换运行时，请稍候",
+        "正在完成安装", StateLevel.BUSY, "校验组件并启动服务检查，请稍候",
     ),
     ServiceState.INSTALL_MISSING: StateMeta(
         "安装缺失", StateLevel.WARNING, "安装目录已被删除或移动",
         ACTION_REPAIR, "修复安装",
     ),
     ServiceState.INSTALL_DAMAGED: StateMeta(
-        "安装损坏", StateLevel.WARNING, "运行时文件不完整或被修改",
+        "安装损坏", StateLevel.WARNING, "PyMSS 组件文件不完整或被修改",
         ACTION_REPAIR, "修复安装",
     ),
     ServiceState.VERSION_INCOMPATIBLE: StateMeta(
-        "PyMSS 需要更新", StateLevel.WARNING, "托管运行时版本与当前工作台不兼容",
+        "PyMSS 需要更新", StateLevel.WARNING, "已安装的 PyMSS 组件与当前工作台不兼容",
         ACTION_UPDATE_RUNTIME, "更新 PyMSS",
     ),
     ServiceState.EXTERNAL_VERSION_INCOMPATIBLE: StateMeta(

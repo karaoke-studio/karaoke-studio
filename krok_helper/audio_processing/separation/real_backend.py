@@ -13,6 +13,7 @@ import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from PyQt6.QtCore import QObject, QTimer
 
@@ -741,6 +742,86 @@ class RealSeparationBackend(SeparationBackend):
             dict.fromkeys((selected, "modelscope", "huggingface", "hf-mirror"))
         )
 
+    def _local_model_dir(self) -> Path | None:
+        """Return the model directory only when it is visible on this computer."""
+        if self._external_url:
+            return None
+        if str(self._settings.get("external_executable", "")).strip():
+            return self._existing_model_dir()
+        install_dir = str(self._snap.install_dir or "").strip()
+        return Path(install_dir) / "models" if install_dir else None
+
+    @staticmethod
+    def _catalog_file_names(files: object) -> set[str]:
+        names: set[str] = set()
+        if not isinstance(files, list):
+            return names
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            for key in ("filename", "path", "local_path", "remote_url"):
+                value = str(item.get(key, "")).strip()
+                if not value:
+                    continue
+                path = unquote(urlsplit(value).path) if "://" in value else value
+                name = Path(path.replace("\\", "/")).name
+                if name:
+                    names.add(name.removesuffix(".part"))
+        return names
+
+    @staticmethod
+    def _downloaded_file_bytes(model_dir: Path, file_names: set[str]) -> int:
+        """Measure the currently retained bytes for one catalog model."""
+        if not model_dir.is_dir():
+            return 0
+        total = 0
+        try:
+            paths = model_dir.rglob("*")
+            for path in paths:
+                try:
+                    if not path.is_file():
+                        continue
+                    base_name = path.name.removesuffix(".part")
+                    if file_names and base_name not in file_names:
+                        continue
+                    if not file_names and not path.name.endswith(".part"):
+                        continue
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            return 0
+        return total
+
+    def _set_model_download_progress(self, done: int, total: int) -> None:
+        with self._lock:
+            if self._snap.state is not ServiceState.MODEL_DOWNLOADING:
+                return
+            bounded = min(max(0, int(done)), max(0, int(total)))
+            if bounded == self._snap.download_done:
+                return
+            self._snap.download_done = bounded
+            self._progress.download_done = bounded
+            progress = copy.deepcopy(self._progress)
+        self._emit()
+        if not self._shutdown_requested:
+            self.taskProgressChanged.emit(progress)
+
+    def _monitor_model_download(
+        self,
+        *,
+        model_dir: Path,
+        file_names: set[str],
+        completed_before: int,
+        expected_bytes: int,
+        total_bytes: int,
+        stopped: threading.Event,
+    ) -> None:
+        while not stopped.wait(0.2):
+            retained = self._downloaded_file_bytes(model_dir, file_names)
+            current = completed_before + min(retained, expected_bytes)
+            self._set_model_download_progress(current, total_bytes)
+
     def _existing_model_dir(self) -> Path:
         configured = str(self._settings.get("external_model_dir", "")).strip()
         environment = os.environ.get("PYMSS_MODEL_DIR", "").strip()
@@ -1343,12 +1424,35 @@ class RealSeparationBackend(SeparationBackend):
                         self._log(f"模型 {step.model} 下载源：{source}")
                         for url in urls:
                             self._log(f"模型 {step.model} 文件：{url}")
-                        client.download_model(
-                            step.model,
-                            source=source,
-                            verify=True,
-                            timeout_seconds=1800,
-                        )
+                        monitor_stop = threading.Event()
+                        model_dir = self._local_model_dir()
+                        monitor = None
+                        if model_dir is not None:
+                            monitor = threading.Thread(
+                                target=self._monitor_model_download,
+                                kwargs={
+                                    "model_dir": model_dir,
+                                    "file_names": self._catalog_file_names(files),
+                                    "completed_before": done,
+                                    "expected_bytes": step.size_bytes,
+                                    "total_bytes": total_bytes,
+                                    "stopped": monitor_stop,
+                                },
+                                name=f"pymss-model-progress-{step.model}",
+                                daemon=True,
+                            )
+                            monitor.start()
+                        try:
+                            client.download_model(
+                                step.model,
+                                source=source,
+                                verify=True,
+                                timeout_seconds=1800,
+                            )
+                        finally:
+                            monitor_stop.set()
+                            if monitor is not None:
+                                monitor.join(timeout=1.0)
                         if self._task_cancel.is_set():
                             raise InterruptedError("模型下载已取消。")
                         self._log(f"模型 {step.model} 已通过 {source} 下载并校验。")
@@ -1361,10 +1465,7 @@ class RealSeparationBackend(SeparationBackend):
                     raise last_error
                 seen.add(step.model)
                 done += step.size_bytes
-                self._snap.download_done = min(done, total_bytes)
-                self._progress.download_done = self._snap.download_done
-                self._emit()
-                self.taskProgressChanged.emit(copy.deepcopy(self._progress))
+                self._set_model_download_progress(done, total_bytes)
             return task
 
         def success(completed_task: TaskType) -> None:

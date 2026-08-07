@@ -380,7 +380,7 @@ class ProgressStep(WizardStep):
 
     title = "下载与安装"
     step_label = "下载安装"
-    hint = "正在获取托管运行时。完成后会自动进入下一步。"
+    hint = "正在下载并安装音频分离组件。完成后会自动进入下一步。"
     primary_label = "正在安装…"
 
     def __init__(self, wizard: "WizardView") -> None:
@@ -394,7 +394,11 @@ class ProgressStep(WizardStep):
         self._status = CaptionLabel("准备下载…", self)
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
-        hint = CaptionLabel("点击底部「取消」可中止下载，不会留下被识别为完整安装的半成品。", self)
+        hint = CaptionLabel(
+            "下载完成后还需要解压、安装和校验，可能需要几分钟；"
+            "点击底部「取消」可中止安装。",
+            self,
+        )
         hint.setWordWrap(True)
         layout.addWidget(hint)
         layout.addStretch(1)
@@ -412,13 +416,18 @@ class ProgressStep(WizardStep):
         if snapshot.state == ServiceState.RUNTIME_DOWNLOADING and snapshot.download_total:
             ratio = snapshot.download_done / snapshot.download_total
             self._bar.setValue(int(ratio * 1000))
-            self._status.setText(
-                f"正在下载运行时：{format_size(snapshot.download_done)} / "
-                f"{format_size(snapshot.download_total)}"
-            )
+            if snapshot.download_done >= snapshot.download_total:
+                self._status.setText(
+                    "下载完成，正在解压并安装音频分离组件，请耐心等待…"
+                )
+            else:
+                self._status.setText(
+                    f"正在下载音频分离组件：{format_size(snapshot.download_done)} / "
+                    f"{format_size(snapshot.download_total)}"
+                )
         elif snapshot.state == ServiceState.RUNTIME_VERIFYING:
             self._bar.setValue(1000)
-            self._status.setText("正在校验文件完整性…")
+            self._status.setText("正在校验安装并启动服务检查…")
         elif snapshot.state == ServiceState.LOCATION_REQUIRED:
             self._status.setText("下载已取消。")
         elif snapshot.state == ServiceState.ERROR:

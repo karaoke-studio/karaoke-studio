@@ -419,6 +419,61 @@ def test_managed_service_and_real_separation_pipeline(tmp_path, monkeypatch) -> 
         assert backend.shutdown()
 
 
+def test_managed_model_download_reports_partial_file_progress(tmp_path) -> None:
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    download_started = threading.Event()
+    release_download = threading.Event()
+    completed: list[TaskType] = []
+
+    class DownloadClient:
+        def catalog_model(self, model: str, **_kwargs):
+            assert model == "inst_v1e"
+            return {
+                "pymss": {
+                    "files": [
+                        {"remote_url": "https://models.example/inst_v1e.ckpt"}
+                    ]
+                }
+            }
+
+        def download_model(self, model: str, **_kwargs):
+            assert model == "inst_v1e"
+            target = (
+                root
+                / "models"
+                / "vocal"
+                / "vocal_instrumental_dual"
+                / "inst_v1e.ckpt.part"
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"x" * (2 * 1024**2))
+            download_started.set()
+            assert release_download.wait(3.0)
+            target.replace(target.with_suffix(""))
+            return {"object": "model.download"}
+
+    backend = RealSeparationBackend({"install_dir": str(root)})
+    backend._client = DownloadClient()
+    backend._snap.pending_task = TaskType.INSTRUMENTAL
+    backend._start_pipeline = completed.append
+    try:
+        backend.start_model_download()
+        assert download_started.wait(1.0)
+        _wait_until(lambda: backend.snapshot().download_done == 2 * 1024**2)
+
+        snapshot = backend.snapshot()
+        assert snapshot.state is ServiceState.MODEL_DOWNLOADING
+        assert 0 < snapshot.download_done < snapshot.download_total
+
+        release_download.set()
+        _wait_until(lambda: completed == [TaskType.INSTRUMENTAL])
+        assert backend.snapshot().download_done == backend.snapshot().download_total
+    finally:
+        release_download.set()
+        assert backend.shutdown()
+
+
 def test_async_msst_scan_can_bind_without_touching_source(tmp_path) -> None:
     root = tmp_path / "managed"
     _installed_runtime(root)
