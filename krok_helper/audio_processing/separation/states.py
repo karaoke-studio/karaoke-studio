@@ -80,7 +80,7 @@ class StateMeta:
 
 STATE_META: dict[ServiceState, StateMeta] = {
     ServiceState.UNCONFIGURED: StateMeta(
-        "未配置", StateLevel.INFO, "尚未安装或连接 PyMSS，请先完成首次配置",
+        "未配置", StateLevel.INFO, "尚未完成首次配置，请先选择使用方式",
         ACTION_CONFIGURE, "开始配置",
     ),
     ServiceState.LOCATION_REQUIRED: StateMeta(
@@ -112,11 +112,11 @@ STATE_META: dict[ServiceState, StateMeta] = {
         ACTION_RESELECT_ENV, "重新选择环境",
     ),
     ServiceState.INSTALLED_STOPPED: StateMeta(
-        "已安装，服务未启动", StateLevel.INFO, "启动本地 PyMSS 服务后即可开始分离",
+        "已安装，服务未启动", StateLevel.INFO, "启动分离服务后即可开始分离",
         ACTION_START_SERVICE, "启动服务",
     ),
     ServiceState.SERVICE_STARTING: StateMeta(
-        "服务启动中", StateLevel.BUSY, "正在等待服务健康检查通过",
+        "服务启动中", StateLevel.BUSY, "正在启动，等待环境就绪",
         ACTION_CANCEL_START, "取消启动",
     ),
     ServiceState.SERVICE_READY: StateMeta(

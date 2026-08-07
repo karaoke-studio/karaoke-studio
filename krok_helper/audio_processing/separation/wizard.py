@@ -1,9 +1,10 @@
 """首次配置与迁移向导（需求文档 §3.5）。
 
-三个入口：
+四个入口：
 - 安装 PyMSS 和推荐模型（FLOW_FULL）
 - 仅安装 PyMSS，复用 MSST 模型（FLOW_REUSE_MSST）
 - 使用已有 PyMSS（FLOW_EXISTING）
+- 使用已有 MSST，直接驱动其自带环境（FLOW_MSST，见 msst_backend）
 
 向导在当前 Tab 内以步骤页展示：顶部步骤指示、返回、取消与当前步骤主按钮；
 取消后回到首次配置页，并通过 ``backend.cleanup_incomplete()`` 清理半成品。
@@ -151,7 +152,7 @@ class WelcomeView(QWidget):
         icon = IconWidget(FIF.MIX_VOLUMES.icon(), column)
         icon.setFixedSize(40, 40)
         layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(TitleLabel("音频分离（PyMSS）", column), 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(TitleLabel("音频分离", column), 0, Qt.AlignmentFlag.AlignHCenter)
         intro = BodyLabel(
             "把歌曲拆成人声、伴奏与和声。首次使用请先选择一种方式：",
             column,
@@ -194,6 +195,11 @@ class WelcomeView(QWidget):
             layout.addWidget(card)
             self._cards.append(card)
         layout.addStretch(1)
+
+
+def environment_label(flow: str) -> str:
+    """当前流程操作的是哪套环境；文案里不能写死 PyMSS。"""
+    return "MSST" if flow == FLOW_MSST else "PyMSS"
 
 
 class WizardStep(QWidget):
@@ -885,7 +891,9 @@ class CapabilityStep(WizardStep):
     def _on_check_started(self) -> None:
         self._clear_rows()
         row = QHBoxLayout()
-        row.addWidget(BodyLabel("正在检测 PyMSS 环境与服务能力…", self))
+        name = environment_label(self.wizard.flow)
+        detail = "环境与推理能力" if name == "MSST" else "环境与服务能力"
+        row.addWidget(BodyLabel(f"正在检测 {name} {detail}…", self))
         row.addStretch(1)
         self._rows.addLayout(row)
 
@@ -948,7 +956,12 @@ class DoneStep(WizardStep):
 
     def on_enter(self) -> None:
         snap = self.backend.snapshot()
-        if self.wizard.flow == FLOW_EXISTING:
+        if self.wizard.flow == FLOW_MSST:
+            self._text.setText(
+                "已接入你的 MSST 环境，三个任务已按推荐模型自动映射。\n"
+                "接下来在工作区启动即可开始分离；模型仍留在 MSST 目录，未被复制或修改。"
+            )
+        elif self.wizard.flow == FLOW_EXISTING:
             self._text.setText("已连接已有 PyMSS 环境，服务就绪。")
         elif self.wizard.flow == FLOW_REMAP_MSST:
             self._text.setText("MSST 模型映射已更新；托管服务会重新加载模型清单。")

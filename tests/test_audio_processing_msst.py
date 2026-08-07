@@ -221,3 +221,38 @@ class TestPageBackendSelection:
             assert isinstance(page._backend, RealSeparationBackend)
         finally:
             page._backend.shutdown()
+
+
+class TestWizardCopyMatchesTheMode:
+    """MSST 流程里的文案不能写死 PyMSS。"""
+
+    def test_environment_label_follows_the_flow(self) -> None:
+        from krok_helper.audio_processing.separation.backend import (
+            FLOW_EXISTING,
+            FLOW_FULL,
+            FLOW_MSST,
+        )
+        from krok_helper.audio_processing.separation.wizard import environment_label
+
+        assert environment_label(FLOW_MSST) == "MSST"
+        assert environment_label(FLOW_EXISTING) == "PyMSS"
+        assert environment_label(FLOW_FULL) == "PyMSS"
+
+    def test_states_shared_by_both_modes_do_not_name_pymss(self) -> None:
+        """MSST 模式会经过这些状态，状态条文案必须两种模式都成立。"""
+        from krok_helper.audio_processing.separation.states import STATE_META
+
+        shared = [
+            ServiceState.UNCONFIGURED,
+            ServiceState.INSTALLED_STOPPED,
+            ServiceState.SERVICE_STARTING,
+            ServiceState.SERVICE_READY,
+            ServiceState.SERVICE_STOPPING,
+            ServiceState.MODEL_LOADING,
+            ServiceState.PROCESSING,
+            ServiceState.ERROR,
+        ]
+        for state in shared:
+            meta = STATE_META[state]
+            assert "PyMSS" not in meta.detail, f"{state.value} 的说明写死了 PyMSS"
+            assert "PyMSS" not in meta.label, f"{state.value} 的标题写死了 PyMSS"
