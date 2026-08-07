@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -67,6 +68,8 @@ from krok_helper.audio_processing.separation.widgets import (
 )
 from krok_helper.audio_processing.separation.wizard import WelcomeView, WizardView
 from krok_helper.qfluent_compat import ask_fluent_confirm, show_fluent_info
+
+log = logging.getLogger(__name__)
 
 _VIEW_WELCOME = "welcome"
 _VIEW_WIZARD = "wizard"
@@ -181,7 +184,13 @@ class AudioSeparationPage(QWidget):
         except Exception:
             pass
 
-        self._backend = self._create_backend(mode)
+        try:
+            self._backend = self._create_backend(mode)
+        except Exception:
+            # 旧后端已经断连并 shutdown 了，界面此刻挂在一个半死的后端上；至少把原因
+            # 留进日志，否则只能看到「选了 PyMSS 却在检测 MSST」这种转了几道弯的表象。
+            log.exception("切换音频分离后端失败 mode=%r，仍在使用 %s", mode, type(old).__name__)
+            raise
         self._wizard.rebind(self._backend)
         self._backend.snapshotChanged.connect(self._apply_snapshot)
         self._backend.taskProgressChanged.connect(self._on_task_progress)
@@ -480,13 +489,27 @@ class AudioSeparationPage(QWidget):
             backend.refresh()
 
     # ── 向导 ─────────────────────────────────────────────────────
+    def _backend_matches(self, mode: str) -> bool:
+        """当前后端是不是这个模式该用的实现。"""
+        from krok_helper.audio_processing.separation.msst_backend import (
+            MsstSeparationBackend,
+        )
+
+        is_msst = isinstance(self._backend, MsstSeparationBackend)
+        return is_msst if mode == "msst" else not is_msst
+
     def _start_flow(self, flow: str) -> None:
         from krok_helper.audio_processing.separation.backend import FLOW_MSST
 
         # MSST 是另一套后端实现，必须在向导开始前换掉，否则向导操作的是 PyMSS 后端。
+        #
+        # 判断依据必须是**当前后端本身**，不能拿设置里的 mode 字符串当替身：那只是
+        # 真实状态的一个副本，一旦两者不同步（mode 已经是目标值、后端却还是旧的），
+        # 这里就会跳过切换，向导挂在错的后端上——选「使用已有 PyMSS」却跑出 MSST 的
+        # 能力检测。更糟的是它自我维持：mode 已等于目标值，之后每次重进都照样跳过。
         wanted = "msst" if flow == FLOW_MSST else ""
-        if wanted != str(self._settings_ns.get("mode", "")):
-            self._settings_ns["mode"] = wanted
+        self._settings_ns["mode"] = wanted
+        if not self._backend_matches(wanted):
             self._switch_backend(wanted)
         self._wizard_active = True
         self._wizard.start_flow(flow)

@@ -357,3 +357,73 @@ class TestPyMSSCancellationIsDetached:
 
         source = inspect.getsource(RealSeparationBackend.cancel_task)
         assert "detached=True" in source
+
+
+class TestFlowAlwaysGetsItsOwnBackend:
+    """向导用的后端必须由 flow 决定，不能被设置里的 mode 字符串带偏。
+
+    实际踩到的表现：选「使用已有 PyMSS」，能力检测却报「所选目录里没有找到
+    MSST」——那句话只有 MsstSeparationBackend 会产生。
+    """
+
+    @staticmethod
+    def _page():
+        from krok_helper.audio_processing.separation.page import AudioSeparationPage
+
+        class _Settings:
+            ffmpeg_dir = ""
+
+            def __init__(self):
+                self.pymss = {}
+
+        return AudioSeparationPage(_Settings(), lambda: None)
+
+    @staticmethod
+    def _capability_backend(page):
+        # 三步流程里第 2 步就是能力检测。
+        return page._wizard._steps[1].backend
+
+    def _is_msst(self, backend) -> bool:
+        from krok_helper.audio_processing.separation.msst_backend import (
+            MsstSeparationBackend,
+        )
+
+        return isinstance(backend, MsstSeparationBackend)
+
+    def test_pymss_flow_is_not_hijacked_by_a_stale_msst_backend(self) -> None:
+        """mode 与后端不同步时（切换中途失败就会这样），旧判断会跳过切换并一直卡住。"""
+        from krok_helper.audio_processing.separation.backend import FLOW_EXISTING
+
+        page = self._page()
+        page._switch_backend("msst")
+        page._settings_ns["mode"] = ""  # 人为制造错位
+
+        page._start_flow(FLOW_EXISTING)
+
+        assert not self._is_msst(self._capability_backend(page))
+        page._backend.shutdown()
+
+    def test_msst_flow_still_gets_the_msst_backend(self) -> None:
+        from krok_helper.audio_processing.separation.backend import FLOW_MSST
+
+        page = self._page()
+        page._start_flow(FLOW_MSST)
+        assert self._is_msst(self._capability_backend(page))
+        page._backend.shutdown()
+
+    def test_switching_back_and_forth_keeps_working(self) -> None:
+        from krok_helper.audio_processing.separation.backend import (
+            FLOW_EXISTING,
+            FLOW_MSST,
+        )
+
+        page = self._page()
+        for flow, expect_msst in (
+            (FLOW_MSST, True),
+            (FLOW_EXISTING, False),
+            (FLOW_MSST, True),
+            (FLOW_EXISTING, False),
+        ):
+            page._start_flow(flow)
+            assert self._is_msst(self._capability_backend(page)) is expect_msst, flow
+        page._backend.shutdown()
