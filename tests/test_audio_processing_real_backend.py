@@ -179,9 +179,8 @@ def test_cancelled_managed_repair_restores_persisted_runtime_state(
 class _FakeClient:
     def __init__(self) -> None:
         self.downloaded = {
-            "big_beta5e",
             "inst_v1e",
-            "mel_band_roformer_karaoke_becruily",
+            "model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956",
         }
         self.loaded: list[str] = []
         self.separated: list[str] = []
@@ -585,7 +584,7 @@ def test_managed_service_and_real_separation_pipeline(tmp_path, monkeypatch) -> 
         assert backend.snapshot().state is ServiceState.SERVICE_READY
         assert results[0].files[0].label == "人声"
         assert Path(results[0].files[0].path).read_bytes() == b"separated-audio"
-        assert "big_beta5e" in _FakeServiceFactory.client.loaded
+        assert "inst_v1e" in _FakeServiceFactory.client.loaded
         assert saved
     finally:
         assert backend.shutdown()
@@ -825,9 +824,8 @@ def test_msst_scan_cancellation_stops_hash_work_without_emitting_failure(
         backend.shutdown()
 
 
-def test_harmony_pipeline_combines_lead_from_first_step_and_harmony_from_second(
-    tmp_path, monkeypatch
-) -> None:
+def test_harmony_pipeline_runs_a_single_karaoke_pass(tmp_path, monkeypatch) -> None:
+    """和声伴奏改为单阶段：karaoke 模型直接处理原曲，取 other 残余轨。"""
     root = tmp_path / "pymss"
     _installed_runtime(root)
     backend = RealSeparationBackend(
@@ -861,37 +859,11 @@ def test_harmony_pipeline_combines_lead_from_first_step_and_harmony_from_second(
         )
         _wait_until(lambda: bool(results))
 
-        assert [item.label for item in results[0].files] == ["主唱", "和声"]
-        assert _FakeServiceFactory.client.loaded[start:] == [
-            "mel_band_roformer_karaoke_becruily",
-            "inst_v1e",
-        ]
-        assert _FakeServiceFactory.client.separated[separate_start:] == [
-            "mel_band_roformer_karaoke_becruily",
-            "inst_v1e",
-        ]
+        karaoke = "model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956"
+        assert [item.label for item in results[0].files] == ["和声伴奏"]
+        assert _FakeServiceFactory.client.loaded[start:] == [karaoke]
+        assert _FakeServiceFactory.client.separated[separate_start:] == [karaoke]
         assert all(Path(item.path).is_file() for item in results[0].files)
-
-        # The completed first stage is persisted with an input/preset/model
-        # fingerprint.  Running the same request again safely skips only that
-        # intermediate stage and still performs the final harmony extraction.
-        backend.request_task(
-            TaskType.HARMONY,
-            input_path=str(source),
-            output_dir=str(tmp_path / "result"),
-            output_format="wav",
-        )
-        _wait_until(lambda: len(results) == 2)
-        assert _FakeServiceFactory.client.loaded[start:] == [
-            "mel_band_roformer_karaoke_becruily",
-            "inst_v1e",
-            "inst_v1e",
-        ]
-        assert _FakeServiceFactory.client.separated[separate_start:] == [
-            "mel_band_roformer_karaoke_becruily",
-            "inst_v1e",
-            "inst_v1e",
-        ]
     finally:
         backend.shutdown()
 

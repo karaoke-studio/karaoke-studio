@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from .states import TaskType
 
-PRESET_VERSION = 2
+#: 预设变更后必须递增：缓存键含预设版本，否则会错误复用旧模型产出的中间/最终文件（§8.2）。
+PRESET_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -35,16 +36,17 @@ class TaskPreset:
 
 
 TASK_PRESETS: dict[TaskType, TaskPreset] = {
+    # 人声与伴奏共用同一个双输出模型：装一次 inst_v1e，两个任务都可用。
     TaskType.VOCAL: TaskPreset(
-        "karaoke-vocal-big-beta5e",
+        "karaoke-vocal-inst-v1e",
         PRESET_VERSION,
         TaskType.VOCAL,
         (
             SeparationStep(
-                "big_beta5e",
+                "inst_v1e",
                 ("vocals",),
                 ("人声",),
-                1_479_749_810,
+                913_102_724,
             ),
         ),
     ),
@@ -61,26 +63,18 @@ TASK_PRESETS: dict[TaskType, TaskPreset] = {
             ),
         ),
     ),
+    # Karaoke 模型直接处理原曲：残余轨 other 是「去掉主唱、保留和声」的伴奏，
+    # 因此这里产出的是和声伴奏，不是纯和声——命名与文案必须如实反映（§8.1）。
     TaskType.HARMONY: TaskPreset(
-        "karaoke-harmony-becruily-inst-v1e",
+        "karaoke-harmony-inst-aufr33-viperx",
         PRESET_VERSION,
         TaskType.HARMONY,
         (
             SeparationStep(
-                "mel_band_roformer_karaoke_becruily",
-                ("Vocals", "Instrumental"),
-                ("主唱", ""),
-                1_719_139_254,
-            ),
-            # The karaoke residual contains accompaniment plus backing
-            # vocals.  A vocal/instrumental model extracts the backing vocal
-            # from that residual while the lead output above remains intact.
-            SeparationStep(
-                "inst_v1e",
-                ("vocals",),
-                ("和声",),
-                913_102_724,
-                input_from_previous="Instrumental",
+                "model_mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956",
+                ("other",),
+                ("和声伴奏",),
+                913_096_801,
             ),
         ),
     ),

@@ -229,11 +229,11 @@ TASK_SPECS: dict[TaskType, TaskSpec] = {
     ),
     TaskType.HARMONY: TaskSpec(
         TaskType.HARMONY,
-        "提取和声",
+        "提取和声伴奏",
         FIF.PEOPLE,
-        "经过两阶段处理，得到主唱与和声两轨。",
-        "预计输出 2 个文件：*_主唱、*_和声",
-        ("主唱", "和声"),
+        "去掉主唱，保留伴奏与和声。",
+        "预计输出 1 个文件：*_和声伴奏",
+        ("和声伴奏",),
     ),
 }
 

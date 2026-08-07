@@ -359,18 +359,9 @@ class RealSeparationBackend(SeparationBackend):
                     badge = "外部模型 · 待首次加载"
                 elif not service_on:
                     reason = "需要先启动 PyMSS 服务"
+                # 和声伴奏任务改为单阶段（karaoke 模型直接处理原曲取 other），
+                # 不再依赖人声模型做二级分离，因此没有额外的前置下载。
                 download_bytes = 0
-                if task is TaskType.HARMONY and status in {"pending", "ready"}:
-                    if TaskType.VOCAL in bindings:
-                        vocal_status = external_status.get(TaskType.VOCAL, "missing")
-                        if vocal_status not in {"pending", "ready"}:
-                            ready = False
-                            reason = "和声任务依赖的外部人声模型不可用，请重新扫描映射"
-                    elif "big_beta5e" not in downloaded_models:
-                        ready = False
-                        download_bytes = TASK_PRESETS[TaskType.VOCAL].steps[0].size_bytes
-                        reason = "需先下载人声提取模型，供外部去和声模型进行二级分离"
-                        badge = f"外部模型 · 需下载 {format_size(download_bytes)}"
                 dependencies[task] = TaskDependency(
                     task,
                     ready,
@@ -1602,19 +1593,8 @@ class RealSeparationBackend(SeparationBackend):
             return (SeparationStep(binding, ("vocals",), ("人声",), 0),)
         if task is TaskType.INSTRUMENTAL:
             return (SeparationStep(binding, ("instrumental",), ("伴奏",), 0),)
-        vocal_binding = self._external_bindings().get(TaskType.VOCAL)
-        first_model = vocal_binding or "big_beta5e"
-        first_size = 0 if vocal_binding else TASK_PRESETS[TaskType.VOCAL].steps[0].size_bytes
-        return (
-            SeparationStep(first_model, ("vocals",), ("",), first_size),
-            SeparationStep(
-                binding,
-                ("vocals", "instrumental"),
-                ("主唱", "和声"),
-                0,
-                input_from_previous="vocals",
-            ),
-        )
+        # 和声伴奏：karaoke 模型直接处理原曲，残余轨即「去掉主唱、保留和声」的伴奏。
+        return (SeparationStep(binding, ("other",), ("和声伴奏",), 0),)
 
     def _start_pipeline(self, task: TaskType) -> None:
         client = self._client

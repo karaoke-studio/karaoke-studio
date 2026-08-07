@@ -203,7 +203,7 @@ class TestMockBackendFlow:
 
         assert len(results) == 1
         labels = [f.label for f in results[0].files]
-        assert labels == ["主唱", "和声"], "提取和声必须输出主唱 + 和声两个文件"
+        assert labels == ["和声伴奏"], "和声伴奏为单阶段任务，只输出一个文件"
 
     def test_ready_task_runs_without_download(self) -> None:
         backend = MockSeparationBackend({}, simulate_delays=False)
