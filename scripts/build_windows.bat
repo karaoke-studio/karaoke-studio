@@ -65,6 +65,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Fetching aria2c (bundled multi-connection downloader for Bilibili)...
+%PYTHON_BIN% scripts\fetch_aria2.py
+if errorlevel 1 (
+    echo.
+    echo aria2c fetch/verify failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 if not exist "%DIST_PATH%" mkdir "%DIST_PATH%"
 if not exist "%WORK_PATH%" mkdir "%WORK_PATH%"
 if not exist "%SPEC_PATH%" mkdir "%SPEC_PATH%"
@@ -98,6 +107,11 @@ echo Building Windows package...
     --add-data "%SUG_PACKAGE%\config;strange_uta_game\config" ^
     --add-data "%SUG_PACKAGE%\resource;strange_uta_game\resource" ^
     --add-data "%SUG_PACKAGE%\bass;strange_uta_game\bass" ^
+    --add-binary "%CD%\build\vendor\aria2\aria2c.exe;tools\aria2" ^
+    --add-data "%CD%\build\vendor\aria2\COPYING;tools\aria2" ^
+    --add-data "%CD%\build\vendor\aria2\LICENSE.OpenSSL;tools\aria2" ^
+    --add-data "%CD%\build\vendor\aria2\AUTHORS;tools\aria2" ^
+    --upx-exclude "aria2c.exe" ^
     --collect-all qfluentwidgets ^
     --collect-all yt_dlp ^
     --collect-all sounddevice ^

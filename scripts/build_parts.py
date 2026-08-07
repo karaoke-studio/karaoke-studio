@@ -73,7 +73,10 @@ LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 # Updater 不读取 build 字段，因此该值不影响存量客户端协议。
 # v2: build_windows.bat 新增 Qt6\bin MSVC 运行时刷新（替换 14.26 旧 DLL），
 #     必须阻止复用仍携带旧运行时的 v1 runtime zip。
-RUNTIME_PROFILE = "qt-multimedia-v2"
+# v3: 随包分发 aria2c（_internal/tools/aria2/），B 站下载走多连接。新增的是纯二进制，
+#     既不改 pip freeze 也不改 dist-info，指纹会照旧匹配 —— 不撞 profile 的话 CI 会
+#     原样复用上一版 runtime zip，aria2c 会被静默丢掉。
+RUNTIME_PROFILE = "aria2c-v3"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {

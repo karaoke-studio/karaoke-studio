@@ -25,3 +25,25 @@ Karaoke Helper / 卡拉OK工作台
 仓库整体的协议以根目录 LICENSE 为准。
 
 作者列表与各模块的责任归属见 AUTHORS.md。
+
+
+随包分发的第三方二进制
+======================
+
+Windows 发行包在 `_internal/tools/aria2/` 下附带 aria2c，
+用于视频下载模块的 B 站多连接下载（未随包分发时会自动
+退回 yt-dlp 内建的 HTTP 分块下载）。
+
+  aria2 1.37.0
+  上游：https://github.com/aria2/aria2
+  Copyright (C) Tatsuhiro Tsujikawa 及 aria2 贡献者
+  协议：GNU General Public License v2 或更高版本
+        （附带 OpenSSL 链接例外）
+
+aria2c 以官方 release 的未修改二进制形式分发，许可全文
+与作者列表随附在同一目录下的 `COPYING`、`LICENSE.OpenSSL`
+和 `AUTHORS`。对应源码可从上述上游仓库的
+`release-1.37.0` tag 获取。
+
+构建时由 `scripts/fetch_aria2.py` 从官方 release 拉取并按
+固定 SHA-256 校验，校验不通过则中断构建。
