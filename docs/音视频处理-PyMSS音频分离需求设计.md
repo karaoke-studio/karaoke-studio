@@ -719,6 +719,33 @@ PyMSS 后端并列，不是它的分支）：
 `demix` 的 tqdm 建在补零之后，最后一块的 `update` 会冲过 `total`（实测 102%），
 因此上报前按比例截断。
 
+### 8.11 PyMSS 不再经 HTTP（§9.3 的 P1 落地）
+
+托管安装与外部可执行环境两种模式改为**常驻桥接进程 + 文件路径 IPC**，不再启动
+`pymss serve`。「连接一个已在运行的服务地址」仍然只能走 HTTP —— 那个进程不归工作台管。
+
+§9.3 列出的四个问题据此消除：整段 PCM 不再进入 HTTP 请求体、输出不再打成内存里的
+ZIP、进度由 pymss 自带的 `progress_callback` 直接给出（它已按 `sample_rate` 换算成秒）、
+取消可以直接终止我们自己的进程。
+
+**耦合反而更小**：原先的桥接是补丁 `pymss.server.app._run_separation_sync`（私有函数），
+现在用的是公开类 `MSSeparator`。`from_model_name` 同时解析 catalog 模型与用户注册模型，
+外部 MSST 映射走同一条路，不需要额外分支。
+
+**改动面之所以小**，靠两处同形替换：
+
+- `PyMSSBridgeEngine` 与 `PyMSSClient` 同名同形。后端只用到 client 的 8 个方法，鸭子
+  类型顶替让绝大多数调用点不必改动；唯一没有对应物的是 `separate_pcm`——那正是要去掉
+  的东西，改用 `separate_file` 交换文件路径。
+- `BridgeServiceProcess` 与 `ManagedServiceProcess` 同形（后端只用 `client` /
+  `running` / `stop` / `port` 四项），`start_service` 那条路几乎原样保留。
+
+流水线里桥接分支同时跳过中间结果缓存——那套缓存存的就是 ZIP，文件路径模式下不再产生。
+当前三个预设均为单步，该缓存本就未被使用（§8.1）。
+
+真实托管安装验证：`start_service` 5.5 秒到就绪，两任务队列 3.5 秒完成，产出按中文标签
+命名，进度事件正常。
+
 ## 9. 输入、输出与任务体验
 
 ### 9.1 输入

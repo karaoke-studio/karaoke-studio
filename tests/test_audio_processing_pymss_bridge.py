@@ -103,3 +103,66 @@ class TestCancellation:
         source = inspect.getsource(PyMSSWorker.stop)
         assert "force" in source
         assert "if not force" in source
+
+
+class TestBridgeServiceProcessDropsIn:
+    """服务对象也要与 ManagedServiceProcess 同形，start_service 那条路才不用改。"""
+
+    def test_shares_the_managed_service_shape(self) -> None:
+        from krok_helper.audio_processing.separation.pymss_service import (
+            BridgeServiceProcess,
+        )
+        from krok_helper.audio_processing.separation.service import (
+            ManagedServiceProcess,
+        )
+
+        # 后端只用到这四项
+        for name in ("client", "running", "stop", "port"):
+            assert hasattr(ManagedServiceProcess, name) or name in getattr(
+                ManagedServiceProcess, "__annotations__", {}
+            )
+            assert hasattr(BridgeServiceProcess, name) or name in getattr(
+                BridgeServiceProcess, "__annotations__", {}
+            ), f"桥接服务对象缺少 {name}"
+
+    def test_start_signature_matches_the_factory_call(self) -> None:
+        """_service_factory.start(...) 的关键字必须都能接住。"""
+        from krok_helper.audio_processing.separation.pymss_service import (
+            BridgeServiceProcess,
+        )
+
+        signature = inspect.signature(BridgeServiceProcess.start)
+        for expected in (
+            "executable",
+            "model_dir",
+            "user_models_path",
+            "source",
+            "device",
+            "startup_timeout",
+            "cancelled",
+            "popen_factory",
+        ):
+            assert expected in signature.parameters, f"缺少参数 {expected}"
+
+    def test_backend_defaults_to_the_bridge(self) -> None:
+        from krok_helper.audio_processing.separation.pymss_service import (
+            BridgeServiceProcess,
+        )
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+
+        default = inspect.signature(RealSeparationBackend.__init__).parameters[
+            "service_factory"
+        ].default
+        assert default is BridgeServiceProcess
+
+    def test_pipeline_takes_the_file_path_branch(self) -> None:
+        """有 separate_file 就走文件路径，跳过 PCM 传输、ZIP 与中间缓存。"""
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+
+        source = inspect.getsource(RealSeparationBackend._start_pipeline)
+        assert 'hasattr(client, "separate_file")' in source
+        assert "client.separate_file(" in source

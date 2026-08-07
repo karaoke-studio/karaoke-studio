@@ -61,6 +61,7 @@ from .runtime import (
     preflight_install_destination,
     validate_runtime,
 )
+from .pymss_service import BridgeServiceProcess
 from .service import ManagedServiceProcess, build_server_command
 from .states import (
     STAGE_DOWNLOAD,
@@ -102,7 +103,7 @@ class RealSeparationBackend(SeparationBackend):
         parent: QObject | None = None,
         executor: ThreadPoolExecutor | None = None,
         runtime_installer_factory=ManagedRuntimeInstaller,
-        service_factory=ManagedServiceProcess,
+        service_factory=BridgeServiceProcess,
         ffmpeg_dir: str = "",
     ) -> None:
         super().__init__(parent)
@@ -2005,6 +2006,37 @@ class RealSeparationBackend(SeparationBackend):
                 for index, step in enumerate(steps):
                     if self._task_cancel.is_set():
                         raise InterruptedError("音频分离已取消。")
+
+                    # 桥接（无 HTTP）：直接交换文件路径，不做 PCM 传输、不生成 ZIP，
+                    # 因此也不需要中间结果缓存那一套（缓存存的就是 ZIP）。
+                    if hasattr(client, "separate_file"):
+                        progress(STAGE_LOAD, step.model)
+                        self._snap.current_model = step.model
+                        self._emit()
+                        progress(STAGE_SEPARATE, step.model)
+                        step_out = work / f"step-{index}-out"
+                        produced: dict[str, Path] = {}
+                        for stem, label in zip(step.stems, step.output_labels):
+                            path = client.separate_file(
+                                model=step.model,
+                                stem=stem,
+                                input_path=str(current_input),
+                                output_dir=str(step_out),
+                                output_format=output_format,
+                                device=str(self._settings.get("device", "auto")),
+                                on_progress=self._set_separation_progress,
+                            )
+                            produced[stem] = Path(path)
+                            if label:
+                                collected[label] = Path(path)
+                        if index < len(steps) - 1:
+                            wanted = (
+                                step.input_from_previous
+                                or steps[index + 1].input_from_previous
+                            )
+                            current_input = self._stem_path(produced, wanted)
+                        continue
+
                     cache = self._intermediate_cache() if index < len(steps) - 1 else None
                     cache_metadata = None
                     cached_archive = None

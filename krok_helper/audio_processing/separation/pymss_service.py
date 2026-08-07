@@ -485,4 +485,72 @@ class PyMSSBridgeEngine:
         )
 
 
-__all__ = ["PyMSSBridgeEngine", "PyMSSWorker", "write_bridge"]
+@dataclass
+class BridgeServiceProcess:
+    """与 ``ManagedServiceProcess`` 同形，但不起 HTTP 服务。
+
+    后端只用到服务对象的 ``client`` / ``running`` / ``stop`` / ``port`` 四项，
+    因此这里可以直接顶替，``start_service`` 那条路几乎不用改。
+    """
+
+    worker: PyMSSWorker
+    client: PyMSSBridgeEngine
+    port: int = 0
+
+    @property
+    def running(self) -> bool:
+        return self.worker.running
+
+    def stop(self, timeout_seconds: float = 5.0, *, force: bool = False) -> bool:
+        return self.worker.stop(timeout_seconds, force=force)
+
+    @classmethod
+    def start(
+        cls,
+        install_dir,
+        *,
+        executable=None,
+        model_dir=None,
+        user_models_path=None,
+        source: str = "modelscope",
+        device: str = "auto",
+        startup_timeout: float = 45.0,
+        cancelled=None,
+        popen_factory=subprocess.Popen,
+    ) -> "BridgeServiceProcess":
+        root = Path(install_dir)
+        if executable is not None:
+            # 外部环境：install_dir 传进来的已经是工作台自己的工作目录（§4.4）。
+            python = Path(executable)
+            models = Path(model_dir) if model_dir else ""
+            registry = Path(user_models_path) if user_models_path else ""
+            work = root
+        else:
+            python = root / "runtime" / "python.exe"
+            if not python.is_file():
+                python = root / "runtime" / "bin" / "python3"
+            models = root / "models"
+            registry = root / "manifests" / "external-models.json"
+            work = root / "manifests"
+
+        worker = PyMSSWorker.start(
+            python,
+            work,
+            model_dir=models,
+            user_models=registry,
+            popen_factory=popen_factory,
+            ready_timeout=max(30.0, startup_timeout * 4),
+        )
+        if cancelled is not None and cancelled.is_set():
+            worker.stop(force=True)
+            raise InterruptedError("PyMSS 服务启动已取消。")
+        engine = PyMSSBridgeEngine(worker, model_dir=str(models or ""), source=source)
+        return cls(worker=worker, client=engine)
+
+
+__all__ = [
+    "BridgeServiceProcess",
+    "PyMSSBridgeEngine",
+    "PyMSSWorker",
+    "write_bridge",
+]
