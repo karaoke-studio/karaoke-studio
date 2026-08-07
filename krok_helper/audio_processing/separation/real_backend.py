@@ -50,6 +50,7 @@ from .presets import (
     effective_steps,
     task_override,
 )
+from .local_models import scan_local_models
 from .stems import parse_model_stems
 from .runtime import (
     ManagedRuntimeInstaller,
@@ -319,7 +320,25 @@ class RealSeparationBackend(SeparationBackend):
             except (KeyError, ValueError):
                 continue
             names.update(step.model for step in preset.steps)
+        names.update(self._locally_present_models())
         return names
+
+    def _locally_present_models(self) -> set[str]:
+        """用户手动放进 models/ 的模型也算已下载（自动导入）。
+
+        离线判断，服务没启动时也有效——否则明明有权重，任务卡仍会显示「需下载」。
+        外部服务/外部环境不由工作台管理目录，不做此扫描。
+        """
+        if self._external_url or str(self._settings.get("external_executable", "")).strip():
+            return set()
+        install_dir = str(self._snap.install_dir or "").strip()
+        if not install_dir:
+            return set()
+        wanted = {step.model for task in TaskType for step in self._steps_for_task(task)}
+        try:
+            return scan_local_models(install_dir, wanted)
+        except Exception:  # 扫描永远不能拖垮状态刷新
+            return set()
 
     def _save_downloaded_model_names(self, names: set[str]) -> None:
         clean = {str(name) for name in names if str(name).strip()}

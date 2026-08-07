@@ -69,6 +69,23 @@ from krok_helper.audio_processing.separation.widgets import (
 WIZARD_COLUMN_MAX_WIDTH = 780
 
 
+def resolve_install_path(directory: str | Path) -> Path:
+    """把用户选中的目录换算成最终安装路径。
+
+    默认在所选目录下建独立的 ``pymss`` 子目录（§4.2），但两种情况不再套一层，
+    否则会得到 ``…\\pymss\\pymss`` 这种嵌套目录，模型放在外层就再也扫不到：
+
+    1. 选中的目录本身就叫 ``pymss``；
+    2. 选中的目录已经是一个托管安装（有 ``manifests/runtime-manifest.json``）。
+    """
+    path = Path(directory)
+    if path.name.lower() == "pymss":
+        return path
+    if (path / "manifests" / "runtime-manifest.json").is_file():
+        return path
+    return path / "pymss"
+
+
 def default_install_root() -> Path:
     """「软件根目录」默认安装位置（需求文档 §4.2）：冻结后为 exe 所在目录。"""
     if getattr(sys, "frozen", False):
@@ -305,7 +322,7 @@ class InstallLocationStep(WizardStep):
     def _browse(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "选择安装目录")
         if directory:
-            self._path_edit.setText(str(Path(directory) / "pymss"))
+            self._path_edit.setText(str(resolve_install_path(directory)))
         self._refresh_info()
         self.wizard.refresh_footer()
 

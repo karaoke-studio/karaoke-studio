@@ -362,13 +362,14 @@ class SeparationSettingsDialog(QDialog):
             override = task_override(self._settings, task)
             if override is None:
                 step = TASK_PRESETS[task].steps[-1]
-                card.setContent(f"推荐模型：{step.model} · 输出轨 {step.stems[-1]}")
+                text = f"推荐模型：{step.model} · 输出轨 {step.stems[-1]}"
                 reset.setEnabled(False)
             else:
-                card.setContent(
-                    f"自定义：{override['model']} · 输出轨 {override['stem']}"
-                )
+                text = f"自定义：{override['model']} · 输出轨 {override['stem']}"
                 reset.setEnabled(True)
+            card.setContent(text)
+            # catalog 模型名很长，卡片一行放不下会被裁掉，补一个完整内容的悬浮提示。
+            card.setToolTip(text)
 
     def _pick_model(self, task) -> None:
         override = task_override(self._settings, task)
