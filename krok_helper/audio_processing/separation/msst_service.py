@@ -359,17 +359,25 @@ class MsstWorker:
                         return str(payload.get("path") or "")
                     raise RuntimeError(str(payload.get("error") or "MSST 分离失败。"))
 
-    def stop(self, timeout_seconds: float = 5.0) -> bool:
+    def stop(self, timeout_seconds: float = 5.0, *, force: bool = False) -> bool:
+        """停止桥接进程。
+
+        ``force=True`` 用于取消任务：此时桥接正卡在一次不可中断的推理里，根本不会
+        去读 stdin，礼貌地发 shutdown 只会白等一个超时，直接终止进程。
+        """
         try:
-            if self.process.poll() is None and self.process.stdin is not None:
-                try:
-                    self.process.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
-                    self.process.stdin.flush()
-                except (OSError, ValueError):
-                    pass
-                try:
-                    self.process.wait(timeout=timeout_seconds)
-                except subprocess.TimeoutExpired:
+            if self.process.poll() is None:
+                if not force and self.process.stdin is not None:
+                    try:
+                        self.process.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
+                        self.process.stdin.flush()
+                    except (OSError, ValueError):
+                        pass
+                    try:
+                        self.process.wait(timeout=timeout_seconds)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if self.process.poll() is None:
                     self.process.terminate()
                     try:
                         self.process.wait(timeout=2.0)

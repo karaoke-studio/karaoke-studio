@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from krok_helper.audio_processing.separation.msst_env import (
     check_environment,
@@ -282,3 +283,77 @@ class TestSeparationProgress:
         """每个分块都发会刷屏，必须节流。"""
         source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
         assert "0.005" in source and "0.3" in source
+
+
+class TestCancellation:
+    """取消必须立刻生效，不能排在正在跑的推理后面。"""
+
+    class _FakeWorker:
+        def __init__(self) -> None:
+            self.stopped_force = None
+            self.running = True
+
+        def stop(self, timeout_seconds=5.0, *, force=False):
+            self.stopped_force = force
+            self.running = False
+            return True
+
+    def test_cancel_does_not_queue_behind_the_running_task(self, tmp_path) -> None:
+        """回归：停止提交给了只有一个工作线程的任务执行器，任务跑完才真的停。"""
+        import threading
+
+        backend = _backend({"msst_root": str(_msst_tree(tmp_path))})
+        worker = self._FakeWorker()
+        backend._worker = worker
+        try:
+            # 占满任务执行器，模拟正在跑的推理
+            blocking = threading.Event()
+            backend._submit(lambda: blocking.wait(30))
+
+            backend.cancel_task()
+            for _ in range(200):  # 最多等 2 秒
+                if worker.stopped_force is not None:
+                    break
+                time.sleep(0.01)
+            assert worker.stopped_force is True, "取消时应强制终止，且不等任务执行器空闲"
+        finally:
+            blocking.set()
+            backend.shutdown()
+
+    def test_cancel_clears_the_queue(self, tmp_path) -> None:
+        backend = _backend({"msst_root": str(_msst_tree(tmp_path))})
+        backend._worker = self._FakeWorker()
+        try:
+            backend._task_queue = [TaskType.INSTRUMENTAL, TaskType.HARMONY]
+            backend._queue_active = True
+            backend.cancel_task()
+            assert backend._task_queue == []
+            assert backend.snapshot().queued_tasks == ()
+            assert backend.snapshot().pending_task is None
+        finally:
+            backend.shutdown()
+
+    def test_force_stop_skips_the_graceful_handshake(self, tmp_path) -> None:
+        """桥接正卡在推理里不会读 stdin，礼貌关闭只会白等一个超时。"""
+        source = write_bridge(tmp_path / "work").read_text(encoding="utf-8")
+        assert "action" in source  # 协议里仍保留正常关闭
+        from krok_helper.audio_processing.separation import msst_service
+
+        import inspect
+
+        stop_src = inspect.getsource(msst_service.MsstWorker.stop)
+        assert "force" in stop_src
+        assert "if not force" in stop_src, "force 时必须跳过 shutdown 握手"
+
+
+class TestPyMSSCancellationIsDetached:
+    def test_cancel_task_stops_off_the_task_executor(self) -> None:
+        """PyMSS 侧同样不能让停止排在任务后面。"""
+        import inspect
+
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+
+        source = inspect.getsource(RealSeparationBackend.cancel_task)
+        assert "detached=True" in source

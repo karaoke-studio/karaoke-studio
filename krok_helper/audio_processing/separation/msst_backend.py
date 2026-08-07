@@ -142,6 +142,24 @@ class MsstSeparationBackend(SeparationBackend):
         future.add_done_callback(finished)
         return future
 
+    def _run_detached(self, operation, on_done=None) -> None:
+        """在独立线程上执行。
+
+        任务执行器只有一个工作线程，停止/取消如果也提交给它，就会排在正在跑的推理
+        后面——表现为「点了停止，等任务跑完才真的停」。
+        """
+
+        def run() -> None:
+            try:
+                result = operation()
+            except Exception as exc:  # 停止失败不该让界面卡在中间态
+                self._log(f"停止失败：{exc}")
+                result = False
+            if on_done is not None and not self._shutdown_requested:
+                on_done(result)
+
+        threading.Thread(target=run, name="krok-msst-stop", daemon=True).start()
+
     def _fail(self, error) -> None:
         message = str(error).strip() or type(error).__name__
         self._set_state(ServiceState.ERROR, error=message)
@@ -364,7 +382,7 @@ class MsstSeparationBackend(SeparationBackend):
         worker, self._worker = self._worker, None
         if worker is not None:
             self._set_state(ServiceState.SERVICE_STOPPING)
-            self._submit(lambda: worker.stop(5.0), lambda _ok: self._after_stop())
+            self._run_detached(lambda: worker.stop(5.0), lambda _ok: self._after_stop())
         else:
             self._after_stop()
 
@@ -557,9 +575,23 @@ class MsstSeparationBackend(SeparationBackend):
             self._task_queue = []
             self._snap.queued_tasks = ()
         self._queue_active = False
-        # 桥接进程正在跑一次不可中断的推理，只能整体重启来真正释放显存。
-        self.stop_service()
-        self._log("已停止任务；MSST 推理环境将重新启动。")
+        worker, self._worker = self._worker, None
+        self._set_state(ServiceState.SERVICE_STOPPING)
+        self._log("正在停止当前任务…")
+
+        def stopped(_ok) -> None:
+            with self._lock:
+                self._rebuild_dependencies()
+            self._set_state(ServiceState.INSTALLED_STOPPED)
+            self._log("已停止任务；重新启动 MSST 推理环境。")
+            if not self._shutdown_requested:
+                self.start_service()
+
+        # 推理无法中断，只能终止进程；force 跳过那次注定超时的礼貌关闭。
+        self._run_detached(
+            lambda: worker.stop(2.0, force=True) if worker is not None else True,
+            stopped,
+        )
 
     # ── 该模式下不适用的能力 ─────────────────────────────────────
     def start_wizard(self, flow: str) -> None:

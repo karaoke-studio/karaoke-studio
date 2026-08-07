@@ -2279,7 +2279,8 @@ class RealSeparationBackend(SeparationBackend):
             if not self._shutdown_requested:
                 self.start_service()
 
-        self._submit(lambda: self._stop_owned_service(2.0), restart)
+        # detached：停止绝不能排在正在跑的分离后面，否则「点了停止要等任务跑完」。
+        self._submit(lambda: self._stop_owned_service(2.0), restart, detached=True)
         self._log("已停止当前任务，正在重启 PyMSS 服务。")
 
     # ---- host shutdown ------------------------------------------------
