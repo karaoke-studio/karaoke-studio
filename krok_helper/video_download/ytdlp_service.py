@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,6 +41,61 @@ YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=android_vr,web"
 YOUTUBE_DISABLE_COOKIE_HINT = "no_cookie"
 YOUTUBE_HINT_SEPARATOR = "|"
 
+# ── B 站海外线路的抗断流参数 ───────────────────────────────────────────────
+# B 站分给海外客户端的 upos CDN 会间歇性卡死单条 TCP 连接。整段视频只用一条连接
+# 顺序拉时，那条连接一死整个下载就死——用户侧表现为"速度突然掉到 0 → 断连 → 失败"。
+# 实测同一个 URL、同一个 host：单连接卡死在 4MB 处超时，8 条 Range 并发则完成
+# （8 条里有 2~3 条同样卡死，但其余照常跑完）。BBDown 之所以稳，正是因为它默认
+# 多线程分块下载 + 整体失败自动重试。
+#
+# 下面按优先级两档兜底：
+#   aria2c 可用   → 多连接下载，既抗断流又提速（对齐 BBDown 的 -mt）
+#   aria2c 不可用 → HTTP 分块 Range，仍是单连接但卡死只损失一个分块且能单独重试
+BILIBILI_HTTP_CHUNK_SIZE = 4 * 1024 * 1024
+# 界面上的"重试次数"是任务级语义（用户理解成"整体重试几次"），不该被直接当作
+# yt-dlp 的 HTTP 级重试上限——抖动线路上 3 次太少。yt-dlp 自己的默认就是 10。
+MIN_HTTP_RETRIES = 10
+# 这些参数排在 yt-dlp 自带的 ``-x16 -j16 -s16`` 之后，同名项以这里为准。
+# 注意别加 ``--lowest-speed-limit``：实测它会把"慢但活着"的连接一并掐掉，而 aria2
+# 不会重新补上分片，连接数从 16 一路掉到 1，尾段反而更慢。只掐真正卡死的连接
+# （``--timeout`` 读超时），慢连接留着继续跑。
+ARIA2C_DOWNLOAD_ARGS = (
+    "--max-tries=10",
+    "--retry-wait=2",
+    "--connect-timeout=10",
+    "--timeout=10",
+    # aria2 默认走 c-ares 自己做 DNS，会绕开系统的地址选择策略（RFC 6724）：
+    # 没有 IPv6 出口的机器照样会拿到 akamaized.net 的 AAAA 记录并去连，直接
+    # WSAENETUNREACH "unreachable network" 报错退出（B 站的音频流经常落在
+    # akamai 上，所以很容易踩到）。交给系统解析器就和 yt-dlp 自身行为一致了；
+    # 注意别用 --disable-ipv6，那会把真有 IPv6 的用户也一起断掉。
+    "--async-dns=false",
+    # 控制文件默认 60 秒才落盘一次，进度条会一分钟才动一下。
+    # _read_aria2_control 靠它算真实进度，所以压到 1 秒。
+    "--auto-save-interval=1",
+    # 无头 GUI 里没有可写的 stdout，关掉进度回显（进度由 _start_part_progress_watcher 提供）
+    "--show-console-readout=false",
+    "--summary-interval=0",
+    "--console-log-level=error",
+)
+# yt-dlp 走外部下载器时只在结束时回调一次 progress_hook，进度条会整段卡住不动。
+# 轮询 ``.part`` 文件大小把进度补回来。
+ARIA2C_PROGRESS_POLL_SECONDS = 0.5
+PART_SUFFIX = ".part"
+ARIA2C_CONTROL_SUFFIX = ".aria2"
+
+# ── 下载完成后的完整性校验 ────────────────────────────────────────────────
+# 抖动线路上出现过「yt-dlp 报 100%、合并也没报错，但产出的视频轨只有 10 秒
+# （音轨 240 秒）」这种静默损坏。这类文件比一个干脆的失败危险得多——它会被
+# 当成正常素材喂给后面的对齐/渲染步骤。
+#
+# 注意必须逐流核对：上面那个坏文件的**容器**时长是 240 秒（跟着音轨走），
+# 只看 format.duration 根本发现不了，得看 video 流自己的 duration。
+DURATION_TOLERANCE_RATIO = 0.15
+MIN_DURATION_TOLERANCE_SECONDS = 3.0
+FFPROBE_TIMEOUT_SECONDS = 60
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\[[0-9;]*m")
+
 
 class VideoDownloadError(RuntimeError):
     """Raised when yt-dlp operations fail."""
@@ -69,6 +125,7 @@ class YtDlpService:
         self._app_settings = app_settings
         self._cli_version_cache: dict[str, str] = {}
         self._cli_path_cache = ""
+        self._aria2c_path_cache: str | None = None
 
     def _settings(self):
         return self._app_settings or load_current_app_settings()
@@ -78,6 +135,109 @@ class YtDlpService:
         if not value or value == ".":
             return ""
         return find_tool("ffmpeg", Path(value).expanduser())
+
+    # ── 抗断流：重试 / 分块 / 多连接 ────────────────────────────────────────
+    def _http_retries(self, options: DownloadOptions) -> int:
+        return max(int(options.retry_count), MIN_HTTP_RETRIES)
+
+    def find_aria2c(self) -> str:
+        """返回可用的 aria2c 路径；找不到返回空串。结果缓存在实例上。
+
+        查找顺序：随包分发的副本 > 系统 PATH。打包版优先用自带的那份——版本
+        确定、参数行为可预期；用户 PATH 上那个可能是很老的构建。源码运行时没有
+        随包副本，自然落到 PATH。
+        """
+        if self._aria2c_path_cache is not None:
+            return self._aria2c_path_cache
+
+        names = ("aria2c.exe",) if os.name == "nt" else ("aria2c",)
+        for base, subdir in self._aria2c_search_locations():
+            for name in names:
+                candidate = base.joinpath(*subdir, name)
+                if candidate.is_file():
+                    self._aria2c_path_cache = str(candidate.resolve())
+                    return self._aria2c_path_cache
+
+        resolved = shutil.which("aria2c")
+        self._aria2c_path_cache = str(Path(resolved).resolve()) if resolved else ""
+        return self._aria2c_path_cache
+
+    def _aria2c_search_locations(self) -> list[tuple[Path, tuple[str, ...]]]:
+        """(根目录, 子路径) 列表，按优先级排列。"""
+        bases: list[Path] = []
+        # 打包版：PyInstaller onedir 把 --add-binary 的内容放在 _internal/ 下，
+        # 也就是 sys._MEIPASS。这一份属于 runtime part（见 scripts/build_parts.py）。
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            bases.append(Path(meipass))
+        for candidate_base in (Path(sys.executable).parent, Path(__file__).resolve().parents[2]):
+            try:
+                bases.append(candidate_base.resolve())
+            except OSError:
+                continue
+
+        locations: list[tuple[Path, tuple[str, ...]]] = []
+        for base in dict.fromkeys(bases):
+            locations.append((base, ("tools", "aria2")))
+            # 源码运行时用 scripts/fetch_aria2.py 的产出目录，省得开发机再单独装一份
+            locations.append((base, ("build", "vendor", "aria2")))
+        return locations
+
+    def _use_aria2c_for(self, url: str, options: DownloadOptions) -> str:
+        # 只对 B 站开：YouTube 走 yt-dlp 自己的分片下载器已经是多连接的，
+        # 换成 aria2c 反而更容易触发限速。
+        if self.detect_source(url) != SOURCE_BILIBILI:
+            return ""
+        if not getattr(options, "use_aria2c", True):
+            return ""
+        return self.find_aria2c()
+
+    def _download_resilience_opts(self, url: str, options: DownloadOptions) -> dict[str, Any]:
+        """Python API 侧的抗断流选项。"""
+        retries = self._http_retries(options)
+        opts: dict[str, Any] = {
+            "retries": retries,
+            "fragment_retries": retries,
+            "socket_timeout": max(1, int(options.timeout)),
+        }
+        aria2c = self._use_aria2c_for(url, options)
+        if aria2c:
+            opts["external_downloader"] = {"default": aria2c}
+            opts["external_downloader_args"] = {"aria2c": list(ARIA2C_DOWNLOAD_ARGS)}
+        elif self.detect_source(url) == SOURCE_BILIBILI:
+            opts["http_chunk_size"] = BILIBILI_HTTP_CHUNK_SIZE
+        return opts
+
+    def _should_retry_without_aria2c(self, url: str, options: DownloadOptions, message: str) -> bool:
+        """aria2c 起不来时降级到内置分块下载器重试一次。
+
+        aria2c 失败的原因往往和视频本身无关（没有 IPv6 出口、被杀软拦、二进制损坏
+        等等），此时内置分块下载器多半是能跑通的——手上有可用退路就不该让用户直接
+        看到一个硬失败。
+        """
+        if not self._use_aria2c_for(url, options):
+            return False
+        lower = ANSI_ESCAPE_PATTERN.sub("", message).lower()
+        return "aria2c" in lower
+
+    def _download_resilience_cli_args(self, url: str, options: DownloadOptions) -> list[str]:
+        """CLI 侧的等价参数。"""
+        retries = str(self._http_retries(options))
+        args = [
+            "--retries",
+            retries,
+            "--fragment-retries",
+            retries,
+            "--socket-timeout",
+            str(max(1, int(options.timeout))),
+        ]
+        aria2c = self._use_aria2c_for(url, options)
+        if aria2c:
+            args.extend(["--downloader", aria2c])
+            args.extend(["--downloader-args", f"aria2c:{' '.join(ARIA2C_DOWNLOAD_ARGS)}"])
+        elif self.detect_source(url) == SOURCE_BILIBILI:
+            args.extend(["--http-chunk-size", str(BILIBILI_HTTP_CHUNK_SIZE)])
+        return args
 
     def get_ytdlp_version(self) -> str:
         try:
@@ -245,25 +405,9 @@ class YtDlpService:
         preexisting_outputs = self._snapshot_output_candidates(save_dir, output_stem)
 
         youtube_dl = self._import_ytdlp()
-        if self._should_prefer_cli_backend(task.url):
-            try:
-                self._download_with_cli_retry(
-                    task,
-                    options,
-                    progress_callback,
-                    save_dir=save_dir,
-                    output_stem=output_stem,
-                    outtmpl=outtmpl,
-                    selected_format=selected_format,
-                    extractor_args_hint=extractor_args_hint,
-                )
-            except DownloadCancelledError:
-                self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
-                raise
-            return
-
-        if youtube_dl is not None:
-            try:
+        use_python_backend = youtube_dl is not None and not self._should_prefer_cli_backend(task.url)
+        try:
+            if use_python_backend:
                 self._download_with_python_retry(
                     youtube_dl,
                     task,
@@ -275,25 +419,22 @@ class YtDlpService:
                     selected_format=selected_format,
                     extractor_args_hint=extractor_args_hint,
                 )
-            except DownloadCancelledError:
-                self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
-                raise
-            return
-
-        try:
-            self._download_with_cli_retry(
-                task,
-                options,
-                progress_callback,
-                save_dir=save_dir,
-                output_stem=output_stem,
-                outtmpl=outtmpl,
-                selected_format=selected_format,
-                extractor_args_hint=extractor_args_hint,
-            )
+            else:
+                self._download_with_cli_retry(
+                    task,
+                    options,
+                    progress_callback,
+                    save_dir=save_dir,
+                    output_stem=output_stem,
+                    outtmpl=outtmpl,
+                    selected_format=selected_format,
+                    extractor_args_hint=extractor_args_hint,
+                )
         except DownloadCancelledError:
             self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
             raise
+
+        self._verify_downloaded_media(task)
 
     def _extract_info_with_best_backend(
         self,
@@ -532,6 +673,20 @@ class YtDlpService:
                     extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                 )
                 return
+            if self._should_retry_without_aria2c(task.url, options, str(exc)):
+                self._clear_partial_downloads(save_dir, output_stem)
+                self._download_with_python_api(
+                    youtube_dl,
+                    task,
+                    replace(options, use_aria2c=False),
+                    progress_callback,
+                    save_dir=save_dir,
+                    output_stem=output_stem,
+                    outtmpl=outtmpl,
+                    selected_format=selected_format,
+                    extractor_args_hint=extractor_args_hint,
+                )
+                return
             raise
 
     def _download_with_python_api(
@@ -554,13 +709,12 @@ class YtDlpService:
             "outtmpl": outtmpl,
             "format": selected_format,
             "overwrites": True,
-            "retries": max(0, int(options.retry_count)),
-            "socket_timeout": max(1, int(options.timeout)),
             "progress_hooks": [self._build_hook(task, progress_callback)],
             "writethumbnail": bool(options.download_thumbnail),
             "writesubtitles": bool(options.download_subtitle),
             "writeautomaticsub": bool(options.download_subtitle),
         }
+        ydl_opts.update(self._download_resilience_opts(task.url, options))
         if extractor_args_hint:
             ydl_opts["extractor_args"] = self._build_python_extractor_args(extractor_args_hint)
         if options.merge_video_audio:
@@ -578,6 +732,12 @@ class YtDlpService:
         before_pids = self._snapshot_child_pids()
         done_event = threading.Event()
         watcher = self._start_cancel_watcher(task, done_event, before_pids)
+        # 外部下载器不回调逐字节进度，靠轮询 .part 把进度条喂活
+        progress_watcher = (
+            self._start_part_progress_watcher(save_dir, output_stem, done_event, progress_callback)
+            if "external_downloader" in ydl_opts
+            else None
+        )
         try:
             with youtube_dl(ydl_opts) as ydl:
                 result = ydl.extract_info(task.url, download=True)
@@ -592,6 +752,8 @@ class YtDlpService:
         finally:
             done_event.set()
             watcher.join(timeout=1)
+            if progress_watcher is not None:
+                progress_watcher.join(timeout=1)
 
     def _download_with_cli_retry(
         self,
@@ -655,10 +817,7 @@ class YtDlpService:
             outtmpl,
             "--format",
             selected_format,
-            "--retries",
-            str(max(0, int(options.retry_count))),
-            "--socket-timeout",
-            str(max(1, int(options.timeout))),
+            *self._download_resilience_cli_args(task.url, options),
             "--progress-template",
             (
                 f"download:{progress_marker}"
@@ -1185,6 +1344,206 @@ class YtDlpService:
         except subprocess.TimeoutExpired:
             process.kill()
 
+    def _start_part_progress_watcher(
+        self,
+        save_dir: Path,
+        output_stem: str,
+        done_event: threading.Event,
+        progress_callback: Callable[[dict[str, Any]], None],
+    ) -> threading.Thread:
+        """轮询 ``.part`` 文件大小，替外部下载器补出进度回调。
+
+        aria2c 这类外部下载器只在整段结束时回调一次 progress_hook，进度条会从 0
+        直接跳到 100。这里按固定间隔上报当前 ``.part`` 的字节数，上层
+        ``_update_task_download_phase`` 用 ``filename`` 区分视频/音频两个阶段。
+        """
+
+        def watch() -> None:
+            while not done_event.wait(ARIA2C_PROGRESS_POLL_SECONDS):
+                newest = self._newest_part_file(save_dir, output_stem)
+                if newest is None:
+                    continue
+                path, _size = newest
+                progress = self._read_aria2_control(path)
+                if progress is None:
+                    # 控制文件还没写出来（或格式不认识）——宁可不报，也不能拿
+                    # 文件大小冒充进度，那是 aria2 写到过的最大偏移，不是下载量。
+                    continue
+                downloaded, total = progress
+                progress_callback(
+                    {
+                        "status": "downloading",
+                        "downloaded_bytes": downloaded,
+                        "total_bytes": total,
+                        "total_bytes_estimate": 0,
+                        "speed": 0.0,
+                        "eta": None,
+                        "fragment_index": 0,
+                        "fragment_count": 0,
+                        "filename": str(path)[: -len(PART_SUFFIX)],
+                    }
+                )
+
+        thread = threading.Thread(target=watch, name="krok-download-part-progress", daemon=True)
+        thread.start()
+        return thread
+
+    def _clear_partial_downloads(self, save_dir: Path, output_stem: str) -> None:
+        """删掉 aria2c 留下的半成品，让降级重试从零开始。
+
+        aria2c 是多分片并发写的，``.part`` 的文件大小等于「写到过的最大偏移」，
+        不是「已连续下好的字节数」——yt-dlp 内置下载器会拿这个大小当断点续传的
+        起点发 ``Range: bytes=<size>-``，分片一旦触到过文件末尾就直接 HTTP 416。
+        同名的 ``.aria2`` 控制文件也一并清掉，否则 aria2c 下次会拿它续传。
+        """
+        for path in self._iter_output_candidates(save_dir, output_stem):
+            if not path.name.endswith((PART_SUFFIX, ARIA2C_CONTROL_SUFFIX)):
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    # ── 完整性校验 ─────────────────────────────────────────────────────────
+    def _verify_downloaded_media(self, task: DownloadTask) -> None:
+        """核对产出文件的时长；明显短于预期就判失败并删掉坏文件。
+
+        只在能确定「预期时长」且 ffprobe 可用时才拦截。探测不了就放行——校验的
+        职责是挡住已经证实损坏的文件，不是给正常下载添堵。
+        """
+        path = task.local_file
+        expected = float(task.info.duration) if task.info and task.info.duration else 0.0
+        if path is None or not path.is_file() or expected <= 0:
+            return
+
+        actual = self._probe_shortest_stream_duration(path)
+        if actual is None:
+            return
+
+        tolerance = max(MIN_DURATION_TOLERANCE_SECONDS, expected * DURATION_TOLERANCE_RATIO)
+        if actual >= expected - tolerance:
+            return
+
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        task.local_file = None
+        raise VideoDownloadError(
+            f"下载的文件不完整：实际时长仅 {actual:.0f} 秒，应为约 {expected:.0f} 秒。"
+            "损坏文件已删除，请重试；如果反复出现，可在下载设置里换一个清晰度。"
+        )
+
+    def _probe_shortest_stream_duration(self, path: Path) -> float | None:
+        """返回文件里最短的一条流的时长；探测失败返回 None。
+
+        取**最短流**而不是容器时长：静默损坏的典型形态是视频轨被截断、音轨完整，
+        此时 ``format.duration`` 跟着音轨走，看起来完全正常。
+        """
+        try:
+            ffprobe = find_tool("ffprobe", Path(str(getattr(self._settings(), "ffmpeg_dir", "") or ".")).expanduser())
+        except Exception:  # noqa: BLE001 - 没有 ffprobe 就不做这项校验
+            return None
+
+        try:
+            completed = subprocess.run(
+                [
+                    ffprobe,
+                    "-v", "error",
+                    "-show_entries", "stream=codec_type,duration",
+                    "-of", "json",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                check=False,
+                timeout=FFPROBE_TIMEOUT_SECONDS,
+                env=subprocess_env_for_app_settings(self._settings()),
+                creationflags=self._subprocess_creationflags(),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if completed.returncode != 0:
+            return None
+
+        try:
+            streams = (json.loads(completed.stdout or "{}") or {}).get("streams") or []
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+        durations: list[float] = []
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            # 只看音视频轨；封面图会被当成一条没有时长的 video 流，自然被下面过滤掉
+            if stream.get("codec_type") not in ("video", "audio"):
+                continue
+            try:
+                duration = float(stream.get("duration"))
+            except (TypeError, ValueError):
+                continue
+            if duration > 0:
+                durations.append(duration)
+        return min(durations) if durations else None
+
+    def _read_aria2_control(self, part_path: Path) -> tuple[int, int] | None:
+        """从 aria2 的 ``.aria2`` 控制文件读出 (已下载字节, 总字节)。
+
+        为什么不能直接用 ``.part`` 的文件大小：aria2 把文件切成 16 段并发下，第 16
+        段一开工就写到 15/16 处，文件长度**一秒内**就涨到总大小的 ~94%。拿它当进度
+        会让进度条一开始就停在 80~90%（也正是 HTTP 416 那个 bug 的同一个成因）。
+
+        控制文件（version 1）布局：
+            version(2) extension(4) infohash_len(4) infohash(N)
+            piece_len(4) total_len(8) upload_len(8) bitfield_len(4) bitfield(N)
+        bitfield 里每个置位的 bit 代表一个已完成的分片。正在下载中的分片不计入，
+        所以这个读数偏保守——但它是单调的，也不会骗人。
+        """
+        try:
+            data = (part_path.parent / f"{part_path.name}{ARIA2C_CONTROL_SUFFIX}").read_bytes()
+        except OSError:
+            return None
+
+        try:
+            offset = 0
+            version = int.from_bytes(data[offset:offset + 2], "big")
+            if version != 1:
+                return None
+            offset += 2 + 4  # version + extension
+            infohash_len = int.from_bytes(data[offset:offset + 4], "big")
+            offset += 4 + infohash_len
+            piece_length = int.from_bytes(data[offset:offset + 4], "big")
+            offset += 4
+            total_length = int.from_bytes(data[offset:offset + 8], "big")
+            offset += 8 + 8  # total + upload
+            bitfield_length = int.from_bytes(data[offset:offset + 4], "big")
+            offset += 4
+            bitfield = data[offset:offset + bitfield_length]
+        except (IndexError, ValueError):
+            return None
+
+        if len(bitfield) != bitfield_length or piece_length <= 0 or total_length <= 0:
+            return None
+        completed_pieces = sum(bin(byte).count("1") for byte in bitfield)
+        return min(completed_pieces * piece_length, total_length), total_length
+
+    def _newest_part_file(self, save_dir: Path, output_stem: str) -> tuple[Path, int] | None:
+        newest: tuple[Path, int] | None = None
+        newest_mtime = -1.0
+        for path in self._iter_output_candidates(save_dir, output_stem):
+            if not path.name.endswith(PART_SUFFIX):
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_mtime_ns / 1e9 > newest_mtime:
+                newest_mtime = stat.st_mtime_ns / 1e9
+                newest = (path, stat.st_size)
+        return newest
+
     def _snapshot_child_pids(self) -> set[int]:
         try:
             import psutil
@@ -1233,7 +1592,7 @@ class YtDlpService:
                 name = child.name().lower()
             except Exception:
                 name = ""
-            if "ffmpeg" in name or "yt-dlp" in name:
+            if "ffmpeg" in name or "yt-dlp" in name or "aria2c" in name:
                 targets.append(child)
 
         for child in targets:
@@ -1308,8 +1667,15 @@ class YtDlpService:
         )
 
     def _normalize_error_message(self, exc: Exception) -> str:
-        message = str(exc).strip() or exc.__class__.__name__
+        # yt-dlp 会给 "ERROR:" 加 ANSI 颜色码，直接塞进 Qt label 会显示成
+        # ``[0;31mERROR:[0m`` 这种乱码。
+        message = ANSI_ESCAPE_PATTERN.sub("", str(exc)).strip() or exc.__class__.__name__
         lower = message.lower()
+        if "aria2c" in lower and "exited with code" in lower:
+            return (
+                "多线程下载器 aria2c 启动失败。已自动改用内置分块下载重试；"
+                "如果仍然失败，可以在下载设置里关掉「B 站使用多线程下载（aria2c）」。"
+            )
         if "ffmpeg" in lower and ("not found" in lower or "not installed" in lower):
             return "未找到 ffmpeg，无法合并音视频或处理封面。请先安装 ffmpeg 并加入 PATH。"
         if "requested format is not available" in lower:

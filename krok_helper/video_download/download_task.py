@@ -19,6 +19,11 @@ NAMING_RULE_TITLE = "使用标题"
 NAMING_RULE_TITLE_UPLOADER = "标题 + 作者"
 NAMING_RULE_CUSTOM = "自定义模板"
 
+# 下载超时（秒）的合法取值。settings 的校验和界面下拉框共用这一份，避免各写一份走偏
+# ——之前 settings 里硬编码 (5, 10, 15)，下拉框加了新选项后会被静默重置回 5。
+TIMEOUT_CHOICES: tuple[int, ...] = (5, 10, 15, 30, 60)
+DEFAULT_TIMEOUT = 10
+
 
 @dataclass(slots=True)
 class FormatOption:
@@ -99,6 +104,8 @@ class DownloadOptions:
     download_thumbnail: bool = False
     download_subtitle: bool = False
     concurrent_count: int = 3
-    timeout: int = 30
+    timeout: int = 10
     retry_count: int = 3
     cookie_file: str = ""
+    # B 站走多连接下载（aria2c，找不到时自动退回 HTTP 分块），见 ytdlp_service 顶部注释
+    use_aria2c: bool = True

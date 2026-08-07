@@ -18,7 +18,12 @@ from krok_helper.audio_alignment import (
 )
 from krok_helper.pipeline import DEFAULT_OFF_NAME_TEMPLATE, DEFAULT_ON_NAME_TEMPLATE, OUTPUT_NAME_MODE_FIXED
 from krok_helper.lyrics import DEFAULT_LYRICS_PROVIDER_IDS, LYRICS_LANGUAGE_ORIGINAL, LYRICS_PREVIEW_LINE
-from krok_helper.video_download.download_task import NAMING_RULE_TITLE, SOURCE_YOUTUBE
+from krok_helper.video_download.download_task import (
+    DEFAULT_TIMEOUT,
+    NAMING_RULE_TITLE,
+    SOURCE_YOUTUBE,
+    TIMEOUT_CHOICES,
+)
 
 
 SETTINGS_FILE_NAME = "settings.json"
@@ -67,8 +72,11 @@ class AppSettings:
     video_download_download_thumbnail: bool = False
     video_download_download_subtitle: bool = False
     video_download_concurrent_count: int = 3
-    video_download_timeout: int = 5
+    # 5 秒对海外线路太紧：B 站 CDN 抖一下就判超时。10 秒配合分块/多连接重试更稳。
+    video_download_timeout: int = DEFAULT_TIMEOUT
     video_download_retry_count: int = 3
+    # B 站下载走 aria2c 多连接（检测不到 aria2c 时自动退回 HTTP 分块 Range）
+    video_download_use_aria2c: bool = True
     video_download_cookie_path: str = ""
     video_download_source: str = SOURCE_YOUTUBE
     updater: dict = field(default_factory=dict)
@@ -236,11 +244,12 @@ def load_app_settings() -> AppSettings:
         video_download_download_subtitle=bool(payload.get("video_download_download_subtitle", False)),
         video_download_concurrent_count=min(5, max(1, int(payload.get("video_download_concurrent_count", 3) or 3))),
         video_download_timeout=(
-            int(payload.get("video_download_timeout", 5) or 5)
-            if int(payload.get("video_download_timeout", 5) or 5) in (5, 10, 15)
-            else 5
+            int(payload.get("video_download_timeout", DEFAULT_TIMEOUT) or DEFAULT_TIMEOUT)
+            if int(payload.get("video_download_timeout", DEFAULT_TIMEOUT) or DEFAULT_TIMEOUT) in TIMEOUT_CHOICES
+            else DEFAULT_TIMEOUT
         ),
         video_download_retry_count=min(5, max(1, int(payload.get("video_download_retry_count", 3) or 3))),
+        video_download_use_aria2c=bool(payload.get("video_download_use_aria2c", True)),
         video_download_cookie_path=str(payload.get("video_download_cookie_path", "")),
         video_download_source=str(payload.get("video_download_source", SOURCE_YOUTUBE)),
         updater=_safe_dict(payload.get("updater")),

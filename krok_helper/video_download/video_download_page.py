@@ -51,6 +51,7 @@ log = logging.getLogger(__name__)
 from .bilibili_auth import BilibiliQrLoginService
 from .cookie_manager import BilibiliAccountProfile, CookieManager
 from .download_task import (
+    DEFAULT_TIMEOUT,
     DownloadOptions,
     DownloadTask,
     FormatOption,
@@ -64,6 +65,7 @@ from .download_task import (
     TASK_STATUS_DOWNLOADING,
     TASK_STATUS_FAILED,
     TASK_STATUS_WAITING,
+    TIMEOUT_CHOICES,
     VideoInfo,
 )
 from .format_parser import format_bytes
@@ -94,7 +96,7 @@ def _create_delete_button(tooltip: str) -> PushButton:
 
 DEFAULT_CUSTOM_TEMPLATE = "{title}"
 CONCURRENT_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
-TIMEOUT_OPTIONS = ("5", "10", "15")
+TIMEOUT_OPTIONS = tuple(str(value) for value in TIMEOUT_CHOICES)
 RETRY_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 VIDEO_DETAILS_CARD_HEIGHT = 340
 DOWNLOAD_TABLE_ROW_HEIGHT = 44
@@ -1759,6 +1761,15 @@ class VideoDownloadPage(QWidget):
         except Exception as exc:  # noqa: BLE001
             return f"未检测到：{exc}"
 
+    def _aria2c_availability_text(self) -> str:
+        try:
+            path = YtDlpService(app_settings=self.settings).find_aria2c()
+        except Exception:  # noqa: BLE001
+            path = ""
+        if path:
+            return f"已检测到 aria2c：{path}"
+        return "未检测到 aria2c，将自动退回 HTTP 分块下载（较慢但同样抗断流）。"
+
     def _safe_set_widget_enabled(self, widget: QWidget, enabled: bool) -> None:
         try:
             widget.setEnabled(enabled)
@@ -1847,7 +1858,7 @@ class VideoDownloadPage(QWidget):
         timeout_combo = StyledComboBox()
         timeout_combo.setMinimumHeight(40)
         timeout_combo.addItems(TIMEOUT_OPTIONS)
-        self._set_combo_text_or_default(timeout_combo, str(self._settings_int_value("video_download_timeout", 5)), "5")
+        self._set_combo_text_or_default(timeout_combo, str(self._settings_int_value("video_download_timeout", DEFAULT_TIMEOUT)), str(DEFAULT_TIMEOUT))
         self._install_single_click_combo_behavior(timeout_combo)
         form_layout.addWidget(timeout_combo)
 
@@ -1858,6 +1869,13 @@ class VideoDownloadPage(QWidget):
         self._set_combo_text_or_default(retry_combo, str(self._settings_int_value("video_download_retry_count", 3)), "3")
         self._install_single_click_combo_behavior(retry_combo)
         form_layout.addWidget(retry_combo)
+
+        aria2c_checkbox = CheckBox("B 站使用多线程下载（aria2c）")
+        aria2c_checkbox.setChecked(bool(getattr(self.settings, "video_download_use_aria2c", True)))
+        aria2c_hint = CaptionLabel(self._aria2c_availability_text())
+        aria2c_hint.setStyleSheet("color: #64748b;")
+        form_layout.addWidget(aria2c_checkbox)
+        form_layout.addWidget(aria2c_hint)
 
         form_layout.addWidget(self._create_section_title("yt-dlp"))
         ytdlp_row = QHBoxLayout()
@@ -1884,8 +1902,9 @@ class VideoDownloadPage(QWidget):
         def save_settings_from_dialog() -> None:
             self.settings.video_download_save_dir = save_dir_edit.text().strip() or str(Path.home() / "Downloads")
             self.settings.video_download_concurrent_count = self._combo_int_value(concurrent_combo, 3)
-            self.settings.video_download_timeout = self._combo_int_value(timeout_combo, 5)
+            self.settings.video_download_timeout = self._combo_int_value(timeout_combo, DEFAULT_TIMEOUT)
             self.settings.video_download_retry_count = self._combo_int_value(retry_combo, 3)
+            self.settings.video_download_use_aria2c = bool(aria2c_checkbox.isChecked())
             self._persist_settings()
             dialog.accept()
 
@@ -1910,8 +1929,9 @@ class VideoDownloadPage(QWidget):
         if not getattr(self.settings, "video_download_custom_template", ""):
             self.settings.video_download_custom_template = DEFAULT_CUSTOM_TEMPLATE
         self.settings.video_download_concurrent_count = self._settings_int_value("video_download_concurrent_count", 3)
-        self.settings.video_download_timeout = self._settings_int_value("video_download_timeout", 5)
+        self.settings.video_download_timeout = self._settings_int_value("video_download_timeout", DEFAULT_TIMEOUT)
         self.settings.video_download_retry_count = self._settings_int_value("video_download_retry_count", 3)
+        self.settings.video_download_use_aria2c = bool(getattr(self.settings, "video_download_use_aria2c", True))
         self.settings.video_download_cookie_path = ""
         if save:
             self._save_settings()
@@ -2817,9 +2837,10 @@ class VideoDownloadPage(QWidget):
             download_thumbnail=bool(task.download_thumbnail if task is not None else False),
             download_subtitle=False,
             concurrent_count=self._settings_int_value("video_download_concurrent_count", 3),
-            timeout=self._settings_int_value("video_download_timeout", 5),
+            timeout=self._settings_int_value("video_download_timeout", DEFAULT_TIMEOUT),
             retry_count=self._settings_int_value("video_download_retry_count", 3),
             cookie_file=cookie_file,
+            use_aria2c=bool(getattr(self.settings, "video_download_use_aria2c", True)),
         )
 
     def _start_all_downloads(self) -> None:
