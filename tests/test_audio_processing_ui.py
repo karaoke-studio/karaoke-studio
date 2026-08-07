@@ -973,3 +973,52 @@ class TestFolderImportDialog:
         QApplication.instance().processEvents()
         assert "不存在" in dialog._hint.text()
         assert not dialog._ok.isEnabled()
+
+
+class TestExternalBindingReloadsRegistry:
+    """一键导入绑完整批后必须让服务重载清单，否则 PyMSS 报 Unknown pymss model。"""
+
+    def test_folder_import_finishes_mapping_once(self, tmp_path, monkeypatch) -> None:
+        import json as _json
+
+        from krok_helper.audio_processing.separation.settings_dialog import (
+            FolderImportDialog,
+        )
+
+        root = tmp_path / "MSST"
+        (root / "data").mkdir(parents=True)
+        (root / "configs").mkdir(parents=True)
+        (root / "pretrain" / "vocal_models").mkdir(parents=True)
+        (root / "configs" / "inst.yaml").write_text(
+            "training:\n  instruments:\n  - other\n  - vocals\n", encoding="utf-8"
+        )
+        (root / "pretrain" / "vocal_models" / "inst_v1e.ckpt").write_bytes(b"w" * 64)
+        (root / "data" / "msst_model_map.json").write_text(
+            _json.dumps(
+                {
+                    "vocal_models": [
+                        {
+                            "name": "inst_v1e.ckpt",
+                            "model_type": "mel_band_roformer",
+                            "config_path": "configs/inst.yaml",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        settings = AppSettings()
+        backend = MockSeparationBackend(settings.pymss, simulate_delays=False)
+        calls: list[bool] = []
+        monkeypatch.setattr(
+            type(backend), "finish_external_mapping", lambda self: calls.append(True)
+        )
+
+        dialog = FolderImportDialog(backend)
+        backend.start_folder_scan(str(root / "pretrain"))
+        QApplication.instance().processEvents()
+        dialog._apply()
+        QApplication.instance().processEvents()
+
+        assert calls == [True], "整批绑定后只应重载一次，不是每个模型重启一次服务"

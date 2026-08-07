@@ -779,6 +779,9 @@ class RealSeparationBackend(SeparationBackend):
                 f"{TASK_SPECS[task].title}；原文件未被复制或修改。"
             )
             self.localImportFinished.emit(candidate)
+            # PyMSS 在进程内缓存用户模型清单，不重载就会报
+            # "Unknown pymss model: krok_local_..."。
+            self.finish_external_mapping()
 
         self._submit(
             operation,

@@ -1217,3 +1217,41 @@ def test_healthy_service_clears_a_stuck_error_state(tmp_path) -> None:
         assert not backend.snapshot().error
     finally:
         backend.shutdown()
+
+
+def test_local_import_reloads_the_service_registry(tmp_path, monkeypatch) -> None:
+    """回归：绑定后不重载清单，PyMSS 会报 Unknown pymss model: krok_local_...
+
+    用户模型清单是 PyMSS 进程内缓存的，只有 finish_external_mapping 会让它重新加载。
+    此前只有 MSST 向导调用它，设置里的导入路径没有，导致导入完立刻用就失败。
+    """
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    weight = tmp_path / "third_party.ckpt"
+    weight.write_bytes(b"w" * 128)
+    (tmp_path / "third_party.yaml").write_text(
+        "training:\n  instruments:\n  - other\n  - vocals\n", encoding="utf-8"
+    )
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=_FakeServiceFactory
+    )
+    reloaded: list[bool] = []
+    monkeypatch.setattr(
+        type(backend),
+        "finish_external_mapping",
+        lambda self: reloaded.append(True),
+    )
+    done: list = []
+    backend.localImportFinished.connect(done.append)
+    try:
+        backend.import_local_model(
+            TaskType.INSTRUMENTAL,
+            weight_path=str(weight),
+            config_path=str(tmp_path / "third_party.yaml"),
+            model_type="mel_band_roformer",
+        )
+        _wait_until(lambda: bool(done))
+        assert reloaded, "导入绑定后必须让服务重新加载用户模型清单"
+    finally:
+        backend.shutdown()

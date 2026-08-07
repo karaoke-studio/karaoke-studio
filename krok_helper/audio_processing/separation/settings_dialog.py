@@ -545,6 +545,9 @@ class FolderImportDialog(QDialog):
             except Exception as exc:
                 self._hint.setText(f"绑定失败：{exc}")
                 return
+        # 整批绑完再收尾一次：PyMSS 在进程内缓存用户模型清单，不重载会报
+        # "Unknown pymss model"。逐个重启服务没有必要，这里只做一次。
+        self._backend.finish_external_mapping()
         self.accept()
 
 
