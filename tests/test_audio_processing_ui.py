@@ -19,6 +19,7 @@ from krok_helper.audio_processing.separation.backend import (
     FLOW_REUSE_MSST,
     FLOW_UPGRADE,
     MockSeparationBackend,
+    TaskProgress,
     TaskResult,
     ResultFile,
 )
@@ -372,6 +373,27 @@ class TestSwitcherAndWidgets:
         assert grid._grid.count() == 6
         grid.set_rows([("A", "1")])
         assert grid._grid.count() == 2
+
+    def test_current_task_panel_shows_real_audio_processing_progress(self) -> None:
+        from krok_helper.audio_processing.separation.widgets import CurrentTaskPanel
+
+        panel = CurrentTaskPanel()
+        panel.start("分离伴奏")
+        panel.update_progress(
+            TaskProgress(
+                title="分离伴奏",
+                stage_index=3,
+                current_file="inst_v1e",
+                processing_done=30,
+                processing_total=120,
+                show_processing=True,
+            )
+        )
+
+        assert not panel._download_row.isHidden()
+        assert panel._busy_bar.isHidden()
+        assert panel._download_bar.value() == 250
+        assert panel._download_text.text() == "已处理 00:30 / 02:00（25%）"
 
     def test_stepper_labels_follow_flow(self) -> None:
         page = _make_separation_page()

@@ -576,6 +576,45 @@ def test_managed_model_download_reports_partial_file_progress(tmp_path) -> None:
         assert backend.shutdown()
 
 
+def test_local_separation_progress_file_is_forwarded_to_ui(tmp_path) -> None:
+    root = tmp_path / "pymss"
+    _installed_runtime(root)
+    backend = RealSeparationBackend({"install_dir": str(root)})
+    progress_path = root / "logs" / "separation-progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    stopped = threading.Event()
+    updates = []
+    backend.taskProgressChanged.connect(updates.append)
+    monitor = threading.Thread(
+        target=backend._monitor_separation_progress,
+        args=(progress_path, stopped),
+        daemon=True,
+    )
+    try:
+        monitor.start()
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "done": 42,
+                    "total": 120,
+                    "message": "Processing audio",
+                    "status": "running",
+                    "updated_at": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        _wait_until(lambda: bool(updates))
+
+        assert updates[-1].show_processing
+        assert updates[-1].processing_done == 42
+        assert updates[-1].processing_total == 120
+    finally:
+        stopped.set()
+        monitor.join(timeout=1.0)
+        assert backend.shutdown()
+
+
 def test_async_msst_scan_can_bind_without_touching_source(tmp_path) -> None:
     root = tmp_path / "managed"
     _installed_runtime(root)

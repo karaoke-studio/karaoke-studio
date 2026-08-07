@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import shutil
@@ -822,6 +823,53 @@ class RealSeparationBackend(SeparationBackend):
             current = completed_before + min(retained, expected_bytes)
             self._set_model_download_progress(current, total_bytes)
 
+    def _separation_progress_path(self) -> Path | None:
+        if self._external_url:
+            return None
+        service_root = getattr(self._service, "install_dir", None)
+        if service_root:
+            return Path(service_root) / "logs" / "separation-progress.json"
+        install_dir = str(self._snap.install_dir or "").strip()
+        return (
+            Path(install_dir) / "logs" / "separation-progress.json"
+            if install_dir
+            else None
+        )
+
+    def _set_separation_progress(self, done: int, total: int) -> None:
+        with self._lock:
+            bounded_total = max(1, int(total))
+            bounded_done = min(max(0, int(done)), bounded_total)
+            if (
+                bounded_done == self._progress.processing_done
+                and bounded_total == self._progress.processing_total
+                and self._progress.show_processing
+            ):
+                return
+            self._progress.processing_done = bounded_done
+            self._progress.processing_total = bounded_total
+            self._progress.show_processing = True
+            progress = copy.deepcopy(self._progress)
+        if not self._shutdown_requested:
+            self.taskProgressChanged.emit(progress)
+
+    def _monitor_separation_progress(
+        self, progress_path: Path, stopped: threading.Event
+    ) -> None:
+        last_updated = 0.0
+        while not stopped.wait(0.2):
+            try:
+                payload = json.loads(progress_path.read_text(encoding="utf-8"))
+                updated = float(payload.get("updated_at", 0))
+                if updated <= last_updated or payload.get("status") != "running":
+                    continue
+                last_updated = updated
+                self._set_separation_progress(
+                    int(payload.get("done", 0)), int(payload.get("total", 1))
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+
     def _existing_model_dir(self) -> Path:
         configured = str(self._settings.get("external_model_dir", "")).strip()
         environment = os.environ.get("PYMSS_MODEL_DIR", "").strip()
@@ -1521,11 +1569,16 @@ class RealSeparationBackend(SeparationBackend):
             return
         self._task_cancel = threading.Event()
         self._progress.show_download = False
+        self._progress.show_processing = False
+        self._progress.processing_done = 0
+        self._progress.processing_total = 0
         self._set_state(ServiceState.MODEL_LOADING)
 
         def progress(stage: int, model: str = "") -> None:
             self._progress.stage_index = stage
             self._progress.current_file = model
+            if stage != STAGE_SEPARATE:
+                self._progress.show_processing = False
             self.taskProgressChanged.emit(copy.deepcopy(self._progress))
 
         def operation():
@@ -1629,16 +1682,42 @@ class RealSeparationBackend(SeparationBackend):
                         self._emit()
                         progress(STAGE_SEPARATE, step.model)
                         archive = work / f"step-{index}.zip"
-                        client.separate_pcm(
-                            pcm,
-                            archive,
-                            model=loaded_model_id,
-                            sample_rate=44100,
-                            channels=2,
-                            stems=step.stems,
-                            output_audio_format=output_format,
-                            cancelled=self._task_cancel,
-                        )
+                        progress_path = self._separation_progress_path()
+                        monitor_stop = threading.Event()
+                        monitor = None
+                        if progress_path is not None:
+                            try:
+                                progress_path.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                            processing_total = max(1, int(_duration + 0.999))
+                            self._set_separation_progress(0, processing_total)
+                            monitor = threading.Thread(
+                                target=self._monitor_separation_progress,
+                                args=(progress_path, monitor_stop),
+                                name="pymss-separation-progress",
+                                daemon=True,
+                            )
+                            monitor.start()
+                        try:
+                            client.separate_pcm(
+                                pcm,
+                                archive,
+                                model=loaded_model_id,
+                                sample_rate=44100,
+                                channels=2,
+                                stems=step.stems,
+                                output_audio_format=output_format,
+                                cancelled=self._task_cancel,
+                            )
+                            if progress_path is not None:
+                                self._set_separation_progress(
+                                    processing_total, processing_total
+                                )
+                        finally:
+                            monitor_stop.set()
+                            if monitor is not None:
+                                monitor.join(timeout=1.0)
                         if cache is not None and cache_metadata is not None:
                             try:
                                 cache.store(

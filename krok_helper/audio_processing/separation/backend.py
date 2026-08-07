@@ -60,10 +60,17 @@ class TaskProgress:
     download_done: int = 0
     download_total: int = 0
     show_download: bool = False
+    processing_done: int = 0
+    processing_total: int = 0
+    show_processing: bool = False
 
     @property
     def is_download_stage(self) -> bool:
         return self.show_download and self.download_total > 0
+
+    @property
+    def is_processing_stage(self) -> bool:
+        return self.show_processing and self.processing_total > 0
 
 
 @dataclass

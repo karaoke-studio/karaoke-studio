@@ -855,6 +855,8 @@ class CurrentTaskPanel(CardWidget):
     def start(self, title: str) -> None:
         self._title.setText(f"当前任务：{title}")
         self._current_stage = -1
+        self._busy_bar.setVisible(True)
+        self._download_row.setVisible(False)
         self._elapsed.start()
         self._elapsed_timer.start()
         self._update_elapsed()
@@ -863,12 +865,21 @@ class CurrentTaskPanel(CardWidget):
 
     def update_progress(self, progress) -> None:
         self._refresh_stages(progress.stage_index)
-        self._download_row.setVisible(progress.is_download_stage)
+        determinate = progress.is_download_stage or progress.is_processing_stage
+        self._busy_bar.setVisible(not determinate)
+        self._download_row.setVisible(determinate)
         if progress.is_download_stage and progress.download_total > 0:
             ratio = progress.download_done / progress.download_total
             self._download_bar.setValue(int(ratio * 1000))
             self._download_text.setText(
                 f"{format_size(progress.download_done)} / {format_size(progress.download_total)}"
+            )
+        elif progress.is_processing_stage and progress.processing_total > 0:
+            ratio = progress.processing_done / progress.processing_total
+            self._download_bar.setValue(int(ratio * 1000))
+            self._download_text.setText(
+                f"已处理 {format_elapsed(progress.processing_done)} / "
+                f"{format_elapsed(progress.processing_total)}（{ratio:.0%}）"
             )
         self._file_label.setVisible(bool(progress.current_file))
         if progress.current_file:

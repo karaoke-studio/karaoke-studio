@@ -77,6 +77,14 @@ def test_managed_service_sets_private_registry_and_stops_owned_process(tmp_path,
     assert captured["env"]["PYMSS_USER_MODELS"].endswith(
         "pymss\\manifests\\external-models.json"
     )
+    assert captured["env"]["KARAOKE_STUDIO_PYMSS_PROGRESS"].endswith(
+        "pymss\\logs\\separation-progress.json"
+    )
+    bridge = tmp_path / "pymss" / "manifests" / "karaoke_studio_server.py"
+    assert captured["command"][1] == str(bridge)
+    bridge_source = bridge.read_text(encoding="utf-8")
+    assert "progress_callback" in bridge_source
+    compile(bridge_source, str(bridge), "exec")
     assert captured["env"]["PYTHONNOUSERSITE"] == "1"
     assert captured["stdin"] is not None
     assert handle.stop(timeout_seconds=0.1)
