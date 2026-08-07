@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget
 from qfluentwidgets import MessageBoxBase
 
 from krok_helper.audio_processing import AudioProcessingPage, AudioSeparationPage
@@ -1296,3 +1296,38 @@ class TestDropZoneFeedback:
         card._refresh_zone()
         heights.add(card._drop_zone.sizeHint().height())
         assert len(heights) == 1, heights
+
+    def test_picking_a_file_never_resizes_the_card(self) -> None:
+        """选中音频不许让卡片长高：清除按钮一出现，标题行会从 14px 跳到 32px，
+        同一行的输出设置卡跟着一起跳（实测修复前 159 → 172 → 159）。"""
+        from krok_helper.audio_processing.responsive import ResponsiveGrid
+        from krok_helper.audio_processing.separation.widgets import (
+            AudioInputCard,
+            OutputSettingsCard,
+        )
+
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        grid = ResponsiveGrid(min_column_width=360, max_columns=2, parent=host)
+        card, output = AudioInputCard(grid), OutputSettingsCard(grid)
+        grid.set_widgets([card, output])
+        layout.addWidget(grid)
+        layout.addStretch(1)
+        host.resize(1000, 400)
+        host.show()
+        QApplication.processEvents()
+
+        def heights() -> tuple[int, int]:
+            QApplication.processEvents()
+            return card.height(), output.height()
+
+        empty = heights()
+        card.set_path(self.SONG, emit=False)
+        filled = heights()
+        card.clear()
+        cleared = heights()
+
+        assert empty == filled == cleared, (empty, filled, cleared)
+        # 同一行两张卡还要保持等高（§3.4）。
+        assert empty[0] == empty[1], empty

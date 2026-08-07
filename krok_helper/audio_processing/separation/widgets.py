@@ -624,6 +624,11 @@ class AudioInputCard(CardWidget):
         self._clear_button = ToolButton(FIF.CLOSE, self)
         self._clear_button.setToolTip("清除已选音频")
         self._clear_button.setVisible(False)
+        # 隐藏时仍然占位：否则标题行会在 14px（只有文字）和 32px（按钮出现）之间跳，
+        # 选中音频的一瞬间整张卡片跟着长高 18px。
+        policy = self._clear_button.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self._clear_button.setSizePolicy(policy)
         self._clear_button.clicked.connect(self.clear)
         header.addWidget(self._clear_button)
         layout.addLayout(header)
