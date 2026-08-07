@@ -85,6 +85,38 @@ def _write_server_bridge(root: Path) -> Path:
     return bridge
 
 
+#: 服务日志里明显是失败原因的行（参数错误、异常、端口占用等）。
+_FAILURE_MARKERS = (
+    "error:",
+    "Error:",
+    "Traceback",
+    "ModuleNotFoundError",
+    "ImportError",
+    "usage:",
+    "OSError",
+    "address already in use",
+)
+
+
+def _startup_failure_message(log_path: Path, exit_code: int) -> str:
+    """进程启动即退出时，从日志尾部挑出真正的原因拼成中文提示。"""
+    reason = ""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    for line in reversed(lines[-80:]):
+        text = line.strip()
+        if text and any(marker in text for marker in _FAILURE_MARKERS):
+            reason = text
+            break
+    detail = f"：{reason}" if reason else ""
+    return (
+        f"PyMSS 服务进程启动后立即退出（退出码 {exit_code}）{detail}"
+        f"\n完整日志：{log_path}"
+    )
+
+
 def reserve_local_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -129,8 +161,11 @@ def build_server_command(
         host,
         "--port",
         str(port),
-        "--api-key",
-        api_key,
+        # 必须用 --opt=value 形式：api key 是随机 token_urlsafe，约 1.5% 的概率以
+        # '-' 开头，分成两个参数时 argparse 会把它当成另一个选项，报
+        # "argument --api-key: expected one argument" 并直接退出——表现为服务
+        # 间歇性起不来、健康检查连接被拒。
+        f"--api-key={api_key}",
         "--source",
         source,
         "--device",
@@ -246,9 +281,22 @@ class ManagedServiceProcess:
             handle = cls(root, process, client, api_key, port, log_stream)
             try:
                 client.wait_until_healthy(startup_timeout, cancelled=cancelled)
-            except Exception:
+            except InterruptedError:
                 handle.stop(timeout_seconds=2.0)
                 raise
+            except Exception as exc:
+                exited = process.poll()
+                handle.stop(timeout_seconds=2.0)
+                # 进程已经退出时，连接被拒只是症状；真正的原因在服务日志里
+                # （例如参数解析失败）。把它带出来，不要只丢一个 HTTP 连接栈。
+                if exited is not None:
+                    raise RuntimeError(
+                        _startup_failure_message(log_path, exited)
+                    ) from exc
+                raise RuntimeError(
+                    f"PyMSS 服务在 {startup_timeout:.0f} 秒内没有就绪。"
+                    f"进程仍在运行但健康检查未通过，详见日志：{log_path}"
+                ) from exc
             return handle
         except Exception:
             if not log_stream.closed:
