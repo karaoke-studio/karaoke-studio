@@ -162,7 +162,9 @@ class SeparationSettingsDialog(QDialog):
         )
         self._version_label = CaptionLabel("—", self._version_card)
         refresh_button = PushButton(FIF.SYNC, "重新检测", self._version_card)
-        refresh_button.clicked.connect(self._backend.refresh)
+        refresh_button.clicked.connect(
+            lambda _checked=False: self._backend.refresh(full=True)
+        )
         _add_card_actions(self._version_card, self._version_label, refresh_button)
         group.addSettingCard(self._version_card)
 

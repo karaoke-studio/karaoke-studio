@@ -92,7 +92,7 @@ STATE_META: dict[ServiceState, StateMeta] = {
         ACTION_CANCEL_INSTALL, "取消",
     ),
     ServiceState.RUNTIME_VERIFYING: StateMeta(
-        "正在完成安装", StateLevel.BUSY, "校验组件并启动服务检查，请稍候",
+        "正在校验 Runtime", StateLevel.BUSY, "正在检查 Runtime 文件完整性，请稍候",
     ),
     ServiceState.INSTALL_MISSING: StateMeta(
         "安装缺失", StateLevel.WARNING, "安装目录已被删除或移动",

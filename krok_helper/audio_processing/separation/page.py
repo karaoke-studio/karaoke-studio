@@ -79,7 +79,7 @@ _RUNTIME_PANEL_STATES = frozenset(
     }
 )
 
-_RUNTIME_STAGES = ("下载 Runtime", "校验并切换 Runtime")
+_RUNTIME_STAGES = ("下载 Runtime", "校验并完成安装")
 
 
 class AudioSeparationPage(QWidget):
@@ -439,7 +439,6 @@ class AudioSeparationPage(QWidget):
         if self._first_show_checked:
             return
         self._first_show_checked = True
-        # The constructor performs only a cheap presence/size check so the
-        # main window opens quickly.  The first actual visit performs the full
-        # manifest hash verification asynchronously.
-        self._backend.refresh()
+        # Normal visits perform only the cheap manifest/version/size check.
+        # Full hashing is reserved for explicit diagnostics and failures.
+        self._backend.refresh(full=False)

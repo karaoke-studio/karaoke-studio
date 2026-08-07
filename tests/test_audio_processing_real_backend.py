@@ -340,7 +340,33 @@ def test_shutdown_does_not_wait_for_uncancellable_external_request() -> None:
         release.set()
 
 
-def test_first_full_refresh_detects_same_size_runtime_tampering(tmp_path) -> None:
+def test_normal_refresh_skips_full_runtime_hash(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    executable = root / "runtime" / "python.exe"
+    original = executable.read_bytes()
+    executable.write_bytes(b"X" * len(original))
+    backend = RealSeparationBackend({"install_dir": str(root)})
+    calls: list[bool] = []
+    original_validate = validate_runtime
+
+    def recording_validate(path, *, full=False):
+        calls.append(full)
+        return original_validate(path, full=full)
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.validate_runtime",
+        recording_validate,
+    )
+    try:
+        backend.refresh()
+        _wait_until(lambda: calls == [False])
+        assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
+    finally:
+        backend.shutdown()
+
+
+def test_explicit_full_refresh_detects_same_size_runtime_tampering(tmp_path) -> None:
     root = tmp_path / "managed"
     _installed_runtime(root)
     executable = root / "runtime" / "python.exe"
@@ -348,17 +374,17 @@ def test_first_full_refresh_detects_same_size_runtime_tampering(tmp_path) -> Non
     executable.write_bytes(b"X" * len(original))
     backend = RealSeparationBackend({"install_dir": str(root)})
     try:
-        # Startup remains lightweight (presence + size); the first page visit
-        # requests an asynchronous full digest check.
+        # Startup remains lightweight (presence + size); an explicit manual
+        # check requests the asynchronous full digest verification.
         assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
-        backend.refresh()
+        backend.refresh(full=True)
         _wait_until(lambda: backend.snapshot().state is ServiceState.INSTALL_DAMAGED)
         assert "损坏" in backend.snapshot().error
     finally:
         backend.shutdown()
 
 
-def test_managed_service_start_verifies_runtime_off_the_gui_thread(
+def test_managed_service_start_uses_lightweight_validation_off_the_gui_thread(
     tmp_path, monkeypatch
 ) -> None:
     root = tmp_path / "managed"
@@ -370,10 +396,12 @@ def test_managed_service_start_verifies_runtime_off_the_gui_thread(
     release_validation = threading.Event()
     original_validate = validate_runtime
 
+    validation_modes: list[bool] = []
+
     def slow_validate(path, *, full=False):
-        if full:
-            validation_started.set()
-            assert release_validation.wait(3.0)
+        validation_modes.append(full)
+        validation_started.set()
+        assert release_validation.wait(3.0)
         return original_validate(path, full=full)
 
     monkeypatch.setattr(
@@ -391,8 +419,113 @@ def test_managed_service_start_verifies_runtime_off_the_gui_thread(
 
         release_validation.set()
         _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+        assert validation_modes == [False]
     finally:
         release_validation.set()
+        assert backend.shutdown()
+
+
+def test_managed_service_failure_full_hashes_runtime_and_detects_damage(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    executable = root / "runtime" / "python.exe"
+    original = executable.read_bytes()
+    executable.write_bytes(b"X" * len(original))
+
+    class FailingServiceFactory:
+        @classmethod
+        def start(cls, *_args, **_kwargs):
+            raise RuntimeError("模拟服务启动失败")
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=FailingServiceFactory
+    )
+    modes: list[bool] = []
+    original_validate = validate_runtime
+
+    def recording_validate(path, *, full=False):
+        modes.append(full)
+        return original_validate(path, full=full)
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.validate_runtime",
+        recording_validate,
+    )
+    try:
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.INSTALL_DAMAGED)
+        assert modes == [False, True]
+        assert backend.snapshot().pending_task is None
+    finally:
+        assert backend.shutdown()
+
+
+def test_model_load_failure_full_hashes_runtime_and_detects_damage(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+
+    class LoadFailureClient(_FakeClient):
+        def load_model(self, model: str, **_kwargs):
+            raise RuntimeError(f"模拟模型加载失败：{model}")
+
+    class LoadFailureFactory:
+        client = LoadFailureClient()
+
+        @classmethod
+        def start(cls, *_args, **_kwargs):
+            return _FakeService(cls.client)
+
+    def fake_prepare(_source, work_dir, **_kwargs):
+        path = Path(work_dir) / "input.f32le"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"pcm")
+        return path, 1.0
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.prepare_pcm", fake_prepare
+    )
+    backend = RealSeparationBackend(
+        {
+            "install_dir": str(root),
+            "downloaded_models": [TaskType.INSTRUMENTAL.value],
+        },
+        service_factory=LoadFailureFactory,
+    )
+    modes: list[bool] = []
+    original_validate = validate_runtime
+
+    def recording_validate(path, *, full=False):
+        modes.append(full)
+        return original_validate(path, full=full)
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.validate_runtime",
+        recording_validate,
+    )
+    source = tmp_path / "song.wav"
+    source.write_bytes(b"input")
+    try:
+        backend.start_service()
+        _wait_until(lambda: backend.snapshot().state is ServiceState.SERVICE_READY)
+
+        executable = root / "runtime" / "python.exe"
+        original = executable.read_bytes()
+        executable.write_bytes(b"X" * len(original))
+        backend.request_task(
+            TaskType.INSTRUMENTAL,
+            input_path=str(source),
+            output_dir=str(tmp_path / "output"),
+            output_format="wav",
+        )
+
+        _wait_until(lambda: backend.snapshot().state is ServiceState.INSTALL_DAMAGED)
+        assert modes == [False, True]
+        assert backend.snapshot().pending_task is None
+    finally:
         assert backend.shutdown()
 
 

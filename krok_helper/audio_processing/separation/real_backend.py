@@ -1108,11 +1108,10 @@ class RealSeparationBackend(SeparationBackend):
         def operation():
             validation = None
             if not executable:
-                # Starting inference is the trust boundary: verify every
-                # managed Runtime file by digest, not only by presence and
-                # size. Torch makes this expensive, so it must not run on the
-                # Qt GUI thread.
-                validation = validate_runtime(root, full=True)
+                # Normal startup checks the manifest, versions, presence and
+                # sizes only. Full hashing of multi-GB Torch files is reserved
+                # for explicit diagnostics and failure recovery.
+                validation = validate_runtime(root, full=False)
                 if self._service_cancel.is_set():
                     raise InterruptedError("PyMSS 服务启动已取消。")
                 if validation.status is not RuntimeStatus.READY:
@@ -1164,6 +1163,8 @@ class RealSeparationBackend(SeparationBackend):
                 self._log("PyMSS 服务启动已取消。")
             elif isinstance(exc, _ExternalVersionMismatch):
                 self._set_state(ServiceState.EXTERNAL_VERSION_INCOMPATIBLE, error=str(exc))
+            elif not executable:
+                self._diagnose_managed_runtime_failure(exc)
             else:
                 self._fail(exc)
 
@@ -1201,10 +1202,16 @@ class RealSeparationBackend(SeparationBackend):
             lambda _r: self._set_state(ServiceState.INSTALLED_STOPPED),
         )
 
-    def refresh(self) -> None:
+    def refresh(self, *, full: bool = False) -> None:
+        service_available = self._service_available()
+        managed_service = (
+            service_available
+            and not self._external_url
+            and not str(self._settings.get("external_executable", "")).strip()
+        )
         if (
             (self._external_url and self._client is not None)
-            or self._service_available()
+            or (service_available and not (full and managed_service))
             or self._settings.get("external_server_url")
         ):
             # Never perform network health checks on the Qt GUI thread.
@@ -1214,17 +1221,64 @@ class RealSeparationBackend(SeparationBackend):
             if self._runtime_check_future is not None and not self._runtime_check_future.done():
                 return
             install_dir = self._snap.install_dir
-            self._set_state(ServiceState.RUNTIME_VERIFYING)
+            if full:
+                self._set_state(ServiceState.RUNTIME_VERIFYING)
 
             def success(result) -> None:
                 with self._lock:
                     self._apply_runtime_validation(result)
                     self._rebuild_dependencies()
+                    if result.status is RuntimeStatus.READY and managed_service:
+                        self._snap.state = self._ready_state()
                 self._emit()
 
             self._runtime_check_future = self._submit(
-                lambda: validate_runtime(install_dir, full=True), success, self._fail
+                lambda: validate_runtime(install_dir, full=full), success, self._fail
             )
+
+    def _diagnose_managed_runtime_failure(self, error: Exception | str) -> None:
+        """Hash the managed Runtime after a real execution failure."""
+        install_dir = str(self._snap.install_dir or "").strip()
+        if (
+            not install_dir
+            or self._external_url
+            or str(self._settings.get("external_executable", "")).strip()
+        ):
+            self._fail(error)
+            return
+        active_check = self._runtime_check_future
+        if active_check is not None and not active_check.done():
+            original_error = str(error).strip() or type(error).__name__
+            self._log("已有 Runtime 检查正在进行，完成后继续执行故障完整校验。")
+            self._set_state(ServiceState.RUNTIME_VERIFYING)
+            active_check.add_done_callback(
+                lambda _future: self._diagnose_managed_runtime_failure(original_error)
+            )
+            return
+
+        original_error = str(error).strip() or type(error).__name__
+        self._log(f"运行失败，正在完整校验 PyMSS Runtime：{original_error}")
+        self._set_state(ServiceState.RUNTIME_VERIFYING)
+
+        def success(result) -> None:
+            if result.status is RuntimeStatus.READY:
+                self._log("PyMSS Runtime 完整校验通过，保留原始运行错误。")
+                self._fail(original_error)
+                return
+            with self._lock:
+                self._snap.pending_task = None
+                self._apply_runtime_validation(result)
+                self._rebuild_dependencies()
+            self._log(f"PyMSS Runtime 完整校验失败：{result.message}")
+            self._emit()
+
+        def failure(diagnostic_error: Exception) -> None:
+            self._log(f"PyMSS Runtime 诊断失败：{diagnostic_error}")
+            self._fail(original_error)
+
+        self._runtime_check_future = self._submit(
+            lambda: validate_runtime(install_dir, full=True), success, failure
+        )
 
     def _refresh_remote_model_status(self) -> None:
         if self._client is None:
@@ -1786,6 +1840,9 @@ class RealSeparationBackend(SeparationBackend):
                     f"外部模型未通过真实加载验证：{TASK_SPECS[exc.task].title}：{exc}"
                 )
                 self._set_state(ServiceState.EXTERNAL_MODEL_UNSUPPORTED, error=str(exc))
+                return
+            if self._progress.stage_index in {STAGE_LOAD, STAGE_SEPARATE}:
+                self._diagnose_managed_runtime_failure(exc)
                 return
             self._fail(exc)
 

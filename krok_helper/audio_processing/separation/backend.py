@@ -205,8 +205,8 @@ class SeparationBackend(QObject):
     def cancel_start(self) -> None:
         raise NotImplementedError
 
-    def refresh(self) -> None:
-        """重新检测安装/服务/模型状态。"""
+    def refresh(self, *, full: bool = False) -> None:
+        """重新检测安装/服务/模型状态；完整哈希仅在明确请求时执行。"""
         raise NotImplementedError
 
     # ── 任务 ────────────────────────────────────────────────────
@@ -567,7 +567,8 @@ class MockSeparationBackend(SeparationBackend):
         self._rebuild_dependencies()
         self._set_state(ServiceState.INSTALLED_STOPPED)
 
-    def refresh(self) -> None:
+    def refresh(self, *, full: bool = False) -> None:
+        del full
         self._rebuild_dependencies()
         self._emit()
 
