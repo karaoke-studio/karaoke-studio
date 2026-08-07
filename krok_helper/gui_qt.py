@@ -83,7 +83,6 @@ from qfluentwidgets import (
     HyperlinkCard,
     LineEdit as QLineEdit,
     ListWidget as FluentListWidget,
-    MessageBox,
     MessageBoxBase,
     PlainTextEdit as QPlainTextEdit,
     Pivot,
@@ -112,6 +111,8 @@ from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 from krok_helper.qfluent_compat import (
     apply_qfluent_menu_lifetime_patch,
     apply_qfluent_tooltip_parent_patch,
+    ask_fluent_confirm,
+    show_fluent_info,
     show_fluent_tooltip,
 )
 from krok_helper.audio_alignment import (
@@ -842,22 +843,6 @@ class AlignmentHandoffDialog(QDialog):
 
     def selections(self) -> tuple[bool, bool]:
         return self.subtitle_check.isChecked(), self.hires_check.isChecked()
-
-
-def show_fluent_info(parent: QWidget, text: str, *, yes_text: str = "确定") -> None:
-    """以 Fluent 风格弹一个只有确认按钮的提示框。"""
-    box = MessageBox(APP_TITLE, text, parent)
-    box.yesButton.setText(yes_text)
-    box.cancelButton.hide()
-    box.exec()
-
-
-def ask_fluent_confirm(parent: QWidget, text: str, *, yes_text: str, cancel_text: str = "取消") -> bool:
-    """以 Fluent 风格弹确认框，用户点 ``yes_text`` 返回 True。"""
-    box = MessageBox(APP_TITLE, text, parent)
-    box.yesButton.setText(yes_text)
-    box.cancelButton.setText(cancel_text)
-    return bool(box.exec())
 
 
 class ElidedLabel(QLabel):

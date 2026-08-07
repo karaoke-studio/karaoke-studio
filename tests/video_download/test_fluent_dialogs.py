@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from PyQt6.QtWidgets import QApplication
+from qfluentwidgets import MessageBox, MessageBoxBase
+
+from krok_helper.settings import AppSettings
+from krok_helper.video_download.download_task import (
+    DownloadTask,
+    TASK_STATUS_DOWNLOADING,
+    VideoInfo,
+)
+from krok_helper.video_download.video_download_page import VideoDownloadPage
+
+
+MODULE_PATH = Path(__file__).resolve().parents[2] / "krok_helper" / "video_download"
+
+
+@pytest.fixture
+def page(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    for name in ("_refresh_cookie_status", "_refresh_youtube_cookie_status", "_ensure_qr_login"):
+        monkeypatch.setattr(VideoDownloadPage, name, lambda _self: None)
+    widget = VideoDownloadPage(AppSettings(), lambda: None)
+    yield widget
+    widget.close()
+    widget.deleteLater()
+    app.processEvents()
+
+
+def test_module_has_no_native_message_dialogs() -> None:
+    """整个模块不该再出现原生弹窗（QFileDialog 例外，qfluentwidgets 没有对应实现）。"""
+    offenders = []
+    for path in MODULE_PATH.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in ("QMessageBox", "QInputDialog", "QErrorMessage", "QProgressDialog"):
+            if name in text:
+                offenders.append(f"{path.name}: {name}")
+    assert offenders == []
+
+
+def test_delete_running_task_asks_with_fluent_box(page, monkeypatch) -> None:
+    seen: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        MessageBox,
+        "exec",
+        lambda self: seen.append((self.titleLabel.text(), self.yesButton.text(), self.cancelButton.text())) or 0,
+    )
+    task = DownloadTask(task_id="t1", url="u", title="标题", source="Bilibili", status=TASK_STATUS_DOWNLOADING)
+    page._tasks.append(task)
+    page._task_index["t1"] = task
+
+    page._delete_task("t1")
+
+    assert seen == [("删除下载任务", "删除", "取消")]
+    # exec 返回 0（用户取消）时任务必须留着
+    assert "t1" in page._task_index
+
+
+def test_clear_list_while_downloading_shows_fluent_info(page, monkeypatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(MessageBox, "exec", lambda self: seen.append(self.titleLabel.text()) or 0)
+    page._running_workers = {"t1": object()}
+    page._tasks.append(DownloadTask(task_id="t1", url="u", title="标题", source="Bilibili"))
+
+    page._clear_task_list()
+
+    assert seen == ["视频下载"]
+    assert page._tasks, "有任务在跑时不该清空列表"
+
+
+def test_settings_dialog_is_message_box_base(page, monkeypatch) -> None:
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        MessageBoxBase,
+        "exec",
+        lambda self: seen.append((self.yesButton.text(), self.cancelButton.text())) or 0,
+    )
+
+    page._open_download_settings_dialog()
+
+    assert seen == [("保存", "取消")]
+
+
+def test_settings_dialog_cancel_keeps_settings(page, monkeypatch) -> None:
+    monkeypatch.setattr(MessageBoxBase, "exec", lambda self: 0)  # 用户点取消
+    page.settings.video_download_concurrent_count = 5
+    persisted: list[bool] = []
+    monkeypatch.setattr(page, "_persist_settings", lambda *a, **k: persisted.append(True))
+
+    page._open_download_settings_dialog()
+
+    assert persisted == [], "取消时不该写回设置"
+    assert page.settings.video_download_concurrent_count == 5
+
+
+def test_part_picker_is_message_box_base_and_returns_selection(page, monkeypatch) -> None:
+    infos = [
+        VideoInfo(url=f"u{i}", source="Bilibili", title=f"P{i}", uploader="", duration=1.0)
+        for i in range(3)
+    ]
+
+    monkeypatch.setattr(MessageBoxBase, "exec", lambda self: 0)  # 取消
+    assert page._choose_bilibili_parts(infos) == []
+
+    # 确认：默认只勾第一个分 P
+    monkeypatch.setattr(MessageBoxBase, "exec", lambda self: 1)
+    chosen = page._choose_bilibili_parts(infos)
+    assert [info.title for info in chosen] == ["P0"]

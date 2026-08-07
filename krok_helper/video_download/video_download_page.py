@@ -12,14 +12,12 @@ from typing import Callable
 from PyQt6.QtCore import QRectF, QThread, Qt, QTimer, QUrl, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
-    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QSizePolicy,
     QStackedWidget,
     QTableWidgetItem,
@@ -34,16 +32,23 @@ from qfluentwidgets import (
     ComboBox,
     FluentIcon as FIF,
     LineEdit,
+    MessageBoxBase,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
+    SubtitleLabel,
     TableWidget,
     ToolButton,
     ToolTipPosition,
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
-from krok_helper.qfluent_compat import install_fluent_tooltip
+from krok_helper.qfluent_compat import (
+    ask_fluent_confirm,
+    install_fluent_tooltip,
+    resolve_fluent_dialog_parent,
+    show_fluent_info,
+)
 
 
 log = logging.getLogger(__name__)
@@ -1817,16 +1822,16 @@ class VideoDownloadPage(QWidget):
         custom_template_edit.setVisible(naming_rule_combo.currentText() == NAMING_RULE_CUSTOM)
 
     def _open_download_settings_dialog(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("下载设置")
-        dialog.resize(560, 430)
+        # MessageBoxBase 自带卡片外观和 yes/cancel 按钮，所以不再套 PanelCard、
+        # 也不自己拼按钮行；parent 必须是顶层窗口，遮罩才盖得住整个界面。
+        dialog = MessageBoxBase(resolve_fluent_dialog_parent(self))
+        dialog.widget.setMinimumWidth(560)
+        dialog.yesButton.setText("保存")
+        dialog.cancelButton.setText("取消")
 
-        shell = QVBoxLayout(dialog)
-        shell.setContentsMargins(16, 16, 16, 16)
-        shell.setSpacing(12)
-
-        form_card = PanelCard(dialog, padding=(16, 16, 16, 16), spacing=12)
-        form_layout = form_card.create_vbox()
+        form_layout = dialog.viewLayout
+        form_layout.setSpacing(12)
+        form_layout.addWidget(SubtitleLabel("下载设置"))
         form_layout.addWidget(CaptionLabel("保存路径"))
 
         save_path_row = QHBoxLayout()
@@ -1889,31 +1894,14 @@ class VideoDownloadPage(QWidget):
         ytdlp_row.addWidget(ytdlp_update_button, 0)
         form_layout.addLayout(ytdlp_row)
 
-        shell.addWidget(form_card, 1)
-
-        button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
-        button_row.setSpacing(10)
-        button_row.addStretch(1)
-        cancel_button = PushButton("取消")
-        save_button = PrimaryPushButton("保存")
-        cancel_button.clicked.connect(dialog.reject)
-
-        def save_settings_from_dialog() -> None:
-            self.settings.video_download_save_dir = save_dir_edit.text().strip() or str(Path.home() / "Downloads")
-            self.settings.video_download_concurrent_count = self._combo_int_value(concurrent_combo, 3)
-            self.settings.video_download_timeout = self._combo_int_value(timeout_combo, DEFAULT_TIMEOUT)
-            self.settings.video_download_retry_count = self._combo_int_value(retry_combo, 3)
-            self.settings.video_download_use_aria2c = bool(aria2c_checkbox.isChecked())
-            self._persist_settings()
-            dialog.accept()
-
-        save_button.clicked.connect(save_settings_from_dialog)
-        button_row.addWidget(cancel_button, 0)
-        button_row.addWidget(save_button, 0)
-        shell.addLayout(button_row)
-
-        dialog.exec()
+        if not dialog.exec():
+            return
+        self.settings.video_download_save_dir = save_dir_edit.text().strip() or str(Path.home() / "Downloads")
+        self.settings.video_download_concurrent_count = self._combo_int_value(concurrent_combo, 3)
+        self.settings.video_download_timeout = self._combo_int_value(timeout_combo, DEFAULT_TIMEOUT)
+        self.settings.video_download_retry_count = self._combo_int_value(retry_combo, 3)
+        self.settings.video_download_use_aria2c = bool(aria2c_checkbox.isChecked())
+        self._persist_settings()
 
     def _persist_settings(self, *args, save: bool = True) -> None:
         del args
@@ -2035,21 +2023,21 @@ class VideoDownloadPage(QWidget):
         return selected
 
     def _choose_bilibili_parts(self, infos: list[VideoInfo]) -> list[VideoInfo]:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("选择要下载的分 P")
-        dialog.resize(620, 420)
+        dialog = MessageBoxBase(resolve_fluent_dialog_parent(self))
+        dialog.widget.setMinimumWidth(620)
+        dialog.yesButton.setText("添加选中分 P")
+        dialog.cancelButton.setText("取消")
 
-        shell = QVBoxLayout(dialog)
-        shell.setContentsMargins(16, 16, 16, 16)
+        shell = dialog.viewLayout
         shell.setSpacing(12)
-        shell.addWidget(self._create_section_title("选择要添加到下载列表的分 P"))
+        shell.addWidget(SubtitleLabel("选择要添加到下载列表的分 P"))
 
         hint = CaptionLabel("检测到这是一个 Bilibili 多分 P 视频。勾选需要下载的分 P 后再添加到下载列表。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #64748b;")
         shell.addWidget(hint)
 
-        scroll_area = QScrollArea(dialog)
+        scroll_area = QScrollArea(dialog.widget)
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; }")
         content = QWidget(scroll_area)
@@ -2067,6 +2055,7 @@ class VideoDownloadPage(QWidget):
             checkboxes.append(checkbox)
         content_layout.addStretch(1)
         scroll_area.setWidget(content)
+        scroll_area.setMinimumHeight(260)
         shell.addWidget(scroll_area, 1)
 
         tool_row = QHBoxLayout()
@@ -2080,18 +2069,7 @@ class VideoDownloadPage(QWidget):
         tool_row.addStretch(1)
         shell.addLayout(tool_row)
 
-        button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
-        button_row.addStretch(1)
-        cancel_button = PushButton("取消")
-        add_button = PrimaryPushButton("添加选中分 P")
-        cancel_button.clicked.connect(dialog.reject)
-        add_button.clicked.connect(dialog.accept)
-        button_row.addWidget(cancel_button)
-        button_row.addWidget(add_button)
-        shell.addLayout(button_row)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if not dialog.exec():
             return []
         return [info for info, checkbox in zip(infos, checkboxes, strict=False) if checkbox.isChecked()]
 
@@ -2972,14 +2950,13 @@ class VideoDownloadPage(QWidget):
         if task is None:
             return
         if task.status == TASK_STATUS_DOWNLOADING:
-            result = QMessageBox.question(
+            confirmed = ask_fluent_confirm(
                 self,
-                "删除下载任务",
                 "该视频正在下载，删除会取消下载并清理临时文件。确定要删除吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                title="删除下载任务",
+                yes_text="删除",
             )
-            if result != QMessageBox.StandardButton.Yes:
+            if not confirmed:
                 return
             task.cancel_requested = True
 
@@ -3032,7 +3009,7 @@ class VideoDownloadPage(QWidget):
 
     def _clear_task_list(self) -> None:
         if self._running_workers:
-            QMessageBox.information(self, "视频下载", "当前还有下载任务在进行中，请先取消。")
+            show_fluent_info(self, "当前还有下载任务在进行中，请先取消。", title="视频下载")
             return
         self._tasks.clear()
         self._task_index.clear()

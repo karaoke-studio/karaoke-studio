@@ -157,3 +157,64 @@ def hide_fluent_tooltip(*, parent=None) -> None:
             tooltip.hide()
         except RuntimeError:
             _manual_tooltips.pop(key, None)
+
+
+def resolve_fluent_dialog_parent(parent):
+    """把控件解析成它的顶层窗口，供遮罩式 Fluent 对话框使用。
+
+    ``MessageBox`` / ``MessageBoxBase`` 都继承 ``MaskDialogBase``：遮罩只覆盖传入
+    的 parent。直接传内层页面（比如 QStackedWidget 里的某一页）的话，遮罩盖不住
+    导航栏，视觉上像是弹窗漏在半个界面上；而且 parent 为 ``None`` 时构造会直接崩
+    （内部要访问 ``parent.width()``）。这里统一升到顶层窗口，并对 None 兜底。
+    """
+
+    from PyQt6.QtWidgets import QApplication
+
+    if parent is not None:
+        try:
+            window = parent.window()
+            if window is not None:
+                return window
+        except (AttributeError, RuntimeError):
+            pass
+
+    app = QApplication.instance()
+    if app is None:
+        return parent
+    active = app.activeWindow()
+    if active is not None:
+        return active
+    return next((widget for widget in app.topLevelWidgets() if widget.isVisible()), parent)
+
+
+def show_fluent_info(parent, text: str, *, title: str = "", yes_text: str = "确定") -> None:
+    """以 Fluent 风格弹一个只有确认按钮的提示框（替代 ``QMessageBox.information``）。"""
+
+    from qfluentwidgets import MessageBox
+
+    from krok_helper.config import APP_TITLE
+
+    box = MessageBox(title or APP_TITLE, text, resolve_fluent_dialog_parent(parent))
+    box.yesButton.setText(yes_text)
+    box.cancelButton.hide()
+    box.exec()
+
+
+def ask_fluent_confirm(
+    parent,
+    text: str,
+    *,
+    title: str = "",
+    yes_text: str,
+    cancel_text: str = "取消",
+) -> bool:
+    """以 Fluent 风格弹确认框（替代 ``QMessageBox.question``）；点 ``yes_text`` 返回 True。"""
+
+    from qfluentwidgets import MessageBox
+
+    from krok_helper.config import APP_TITLE
+
+    box = MessageBox(title or APP_TITLE, text, resolve_fluent_dialog_parent(parent))
+    box.yesButton.setText(yes_text)
+    box.cancelButton.setText(cancel_text)
+    return bool(box.exec())
