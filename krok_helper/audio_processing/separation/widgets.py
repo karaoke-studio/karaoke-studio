@@ -506,6 +506,8 @@ class _DropZoneFrame(QFrame):
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(96)
+        # 卡片被拉高时由拖放区吸收多余高度，而不是把标题和提示撑散。
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(
             "#SeparationDropZone { border: 1px dashed rgba(128,128,128,0.55); "
             "border-radius: 8px; background: transparent; }"
@@ -650,6 +652,8 @@ class OutputSettingsCard(CardWidget):
         format_row.addWidget(self._format_combo)
         format_row.addStretch(1)
         layout.addLayout(format_row)
+        # 与素材卡等高后多出来的高度收在底部，内容保持顶对齐。
+        layout.addStretch(1)
 
     def output_dir(self) -> str:
         return self._dir_edit.text().strip()
@@ -714,9 +718,14 @@ class TaskCard(CardWidget):
         outputs.setWordWrap(True)
         layout.addWidget(outputs)
 
+        # 原因行始终占位（哪怕没内容）：否则「就绪 ↔ 需下载 ↔ 需要先启动服务」
+        # 之间切换会让整张卡忽高忽低。预留两行，容得下当前所有归一化原因文案。
         self._reason = CaptionLabel("", self)
         self._reason.setWordWrap(True)
-        self._reason.setVisible(False)
+        self._reason.setMinimumHeight(self._reason.fontMetrics().lineSpacing() * 2)
+        self._reason.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
         layout.addWidget(self._reason)
 
         layout.addStretch(1)
@@ -739,32 +748,28 @@ class TaskCard(CardWidget):
         if not service_ready:
             self._pill.set_state("", StateLevel.INFO)
             self._reason.setText("需要先启动服务")
-            self._reason.setVisible(True)
             self._action_button.setText("开始分离")
             self._action_button.setEnabled(False)
             return
         if unavailable_reason:
             self._pill.set_state(dep.badge or "处理中", StateLevel.INFO)
             self._reason.setText(unavailable_reason)
-            self._reason.setVisible(True)
             self._action_button.setText("开始分离")
             self._action_button.setEnabled(False)
             return
         if dep.ready:
             self._pill.set_state(dep.badge or "就绪", StateLevel.SUCCESS)
-            self._reason.setVisible(False)
+            self._reason.setText("")
             self._action_button.setText("开始分离")
             self._action_button.setEnabled(True)
         elif dep.download_bytes > 0:
             self._pill.set_state(dep.badge, StateLevel.WARNING)
             self._reason.setText(dep.reason)
-            self._reason.setVisible(bool(dep.reason))
             self._action_button.setText(f"下载并继续（{format_size(dep.download_bytes)}）")
             self._action_button.setEnabled(True)
         else:
             self._pill.set_state(dep.badge or "不可用", StateLevel.ERROR)
             self._reason.setText(dep.reason or "当前不可用")
-            self._reason.setVisible(True)
             self._action_button.setText("查看处理方式")
             self._action_button.setEnabled(True)
 

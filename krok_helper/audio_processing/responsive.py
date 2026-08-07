@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGridLayout, QWidget
 
 
@@ -70,9 +69,6 @@ class ResponsiveGrid(QWidget):
         for column in range(columns):
             self._grid.setColumnStretch(column, 1)
         for index, widget in enumerate(self._widgets):
-            self._grid.addWidget(
-                widget,
-                index // columns,
-                index % columns,
-                Qt.AlignmentFlag.AlignTop,
-            )
+            # 不加 AlignTop：带对齐标志的子件只按自身 sizeHint 取高，同一行的卡片
+            # 就会参差不齐。不指定对齐时子件填满单元格，同行卡片自然等高。
+            self._grid.addWidget(widget, index // columns, index % columns)

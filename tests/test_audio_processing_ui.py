@@ -598,3 +598,92 @@ class TestAcceptanceCriteria:
             page._workspace.horizontalScrollBarPolicy()
             == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
+
+
+class TestCardHeightStability:
+    """卡片等高与跨状态高度稳定（避免状态切换时卡片忽高忽低）。"""
+
+    _GB = 1024 ** 3
+
+    #: 覆盖 TaskCard.set_dependency 的全部分支，徽标与原因文案各不相同。
+    _SCENARIOS = [
+        ("服务未启动", {"service_ready": False}, (False, "", "", int(1.38 * _GB), False)),
+        ("缺模型需下载", {"service_ready": True}, (False, "需下载 1.38 GB", "推荐模型尚未下载", int(1.38 * _GB), False)),
+        ("已就绪", {"service_ready": True}, (True, "就绪", "", 0, False)),
+        ("外部模型可用", {"service_ready": True}, (True, "外部模型", "", 0, True)),
+        ("外部模型失效", {"service_ready": True}, (False, "不可用", "所选外部模型路径失效", 0, False)),
+        ("任务进行中", {"service_ready": True, "unavailable_reason": "当前任务进行中"}, (True, "处理中", "", 0, False)),
+        ("需先处理错误", {"service_ready": True, "unavailable_reason": "请先处理上方错误"}, (False, "不可用", "", 0, False)),
+    ]
+
+    def _build(self):
+        from krok_helper.audio_processing.separation.widgets import (
+            AudioInputCard,
+            OutputSettingsCard,
+            TaskCard,
+        )
+
+        host = QWidget()
+        host.resize(1460, 900)
+
+        materials = ResponsiveGrid(min_column_width=360, max_columns=2, parent=host)
+        input_card, output_card = AudioInputCard(host), OutputSettingsCard(host)
+        materials.set_widgets([input_card, output_card])
+        materials.resize(1420, 300)
+        materials._relayout()
+
+        tasks = ResponsiveGrid(min_column_width=260, max_columns=3, parent=host)
+        cards = {t: TaskCard(t, host) for t in TaskType}
+        tasks.set_widgets(list(cards.values()))
+        tasks.resize(1420, 300)
+        tasks._relayout()
+        return host, (input_card, output_card), cards, materials, tasks
+
+    def test_material_and_output_cards_are_equal_height(self) -> None:
+        host, (input_card, output_card), _, materials, _ = self._build()
+        host.show()
+        QApplication.instance().processEvents()
+        materials._relayout()
+        QApplication.instance().processEvents()
+        assert input_card.height() == output_card.height()
+
+    def test_task_cards_equal_height_and_stable_across_states(self) -> None:
+        from krok_helper.audio_processing.separation.states import TaskDependency
+
+        host, _, cards, _, tasks = self._build()
+        host.show()
+        app = QApplication.instance()
+        app.processEvents()
+
+        seen_heights: set[int] = set()
+        seen_reasons: set[str] = set()
+        for _label, kwargs, (ready, badge, reason, size, external) in self._SCENARIOS:
+            for task, card in cards.items():
+                card.set_dependency(
+                    TaskDependency(task, ready, badge, reason, size, external),
+                    **kwargs,
+                )
+            tasks._relayout()
+            app.processEvents()
+
+            heights = [c.height() for c in cards.values()]
+            assert len(set(heights)) == 1, f"{_label}: 同行三卡不等高 {heights}"
+            seen_heights.add(heights[0])
+            seen_reasons.add(cards[TaskType.VOCAL]._reason.text())
+
+        # 场景确实各不相同（否则「高度稳定」是假通过）。
+        assert len(seen_reasons) > 1, "各场景原因文案没有区别，测试无效"
+        assert len(seen_heights) == 1, f"任务卡高度随状态变化: {sorted(seen_heights)}"
+
+    def test_reason_label_always_reserves_space(self) -> None:
+        """原因行常驻：为空时也占位，否则切换状态会让卡片跳动。"""
+        from krok_helper.audio_processing.separation.states import TaskDependency
+        from krok_helper.audio_processing.separation.widgets import TaskCard
+
+        card = TaskCard(TaskType.VOCAL)
+        card.set_dependency(
+            TaskDependency(TaskType.VOCAL, True, "就绪", ""), service_ready=True
+        )
+        assert card._reason.text() == ""
+        assert not card._reason.isHidden(), "原因行不应被隐藏，否则卡片高度会跳"
+        assert card._reason.minimumHeight() > 0

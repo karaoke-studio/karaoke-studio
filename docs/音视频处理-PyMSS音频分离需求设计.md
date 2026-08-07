@@ -1086,3 +1086,28 @@ PyMSS 集成源码约 0.3 MiB，只导入标准库及工作台已有的 PyQt6、
 远端资产发布属于独立资产仓库的 Release 操作，不进入主程序 Release 列表。首次资产已经发布，
 正式用户的 CPU/CUDA 清单和底座分卷 URL 均可匿名访问；后续版本必须先发布不可变 Runtime
 资产，再发布引用该版本契约的工作台更新。
+
+### 16.9 卡片高度稳定（2026-08-07）
+
+用户反馈：素材/输出两张卡与三张任务卡会随状态变化忽高忽低。查出三个独立成因：
+
+1. **同一行卡片不等高** —— `ResponsiveGrid` 用 `AlignTop` 加子件。带对齐标志的子件只按
+   自身 sizeHint 取高，不填满单元格；去掉对齐标志后同行子件自然等高。
+2. **任务卡随状态跳动** —— `TaskCard._reason` 在 `setVisible(True/False)` 之间切换，
+   占位忽有忽无。改为常驻（仅切换文本），并预留两行高度
+   （`fontMetrics().lineSpacing() * 2`），容得下当前全部归一化原因文案。
+3. **卡片被拉伸后内容散开** —— `OutputSettingsCard` 补尾部 `addStretch(1)` 让内容保持
+   顶对齐；`_DropZoneFrame` 设为垂直 `Expanding`，由拖放区吸收多余高度，而不是把标题
+   和提示撑散。
+
+验证方式：直接对 `TaskCard.set_dependency` 施加 7 种依赖状态（服务未启动 / 缺模型 /
+就绪 / 外部模型可用 / 外部模型失效 / 任务进行中 / 需先处理错误），逐一比对徽标与原因
+文案确实不同，再测高度 —— 三卡恒为同一高度且跨状态不变。
+
+> 踩坑记录：第一版验证是通过后端 `_set_state` + `_downloaded_models` 间接驱动的，但页面
+> 现在默认用 `RealSeparationBackend`，它不读 `_downloaded_models`（那是 Mock 专有字段），
+> 所以七种「状态」其实一次都没切换，五行测量数字相同是**假通过**。测 UI 状态时应当直接
+> 驱动组件入口（`set_dependency`），而不是依赖某个后端实现的内部字段；测试里也要断言
+> 「各场景确实不同」，否则稳定性断言可能在无变化的情况下空转通过。
+
+对应回归测试：`tests/test_audio_processing_ui.py::TestCardHeightStability`（三项）。
