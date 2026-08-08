@@ -392,6 +392,16 @@ class TestHandoffDialogLooksLikeTheAlignmentOne:
         assert dialog.findChild(TitleLabel) is not None
         assert dialog.findChild(BodyLabel) is not None
 
+    def test_both_buttons_have_the_same_metrics(self, tmp_path) -> None:
+        """裸 QPushButton 的高度和内边距跟 PrimaryPushButton 对不上，会矮一圈。"""
+        from qfluentwidgets import PrimaryPushButton, PushButton
+
+        dialog = self._dialog(tmp_path)
+        assert isinstance(dialog.yesButton, PrimaryPushButton)
+        assert isinstance(dialog.cancelButton, PushButton)
+        dialog.show()
+        assert dialog.yesButton.height() == dialog.cancelButton.height()
+
     def test_the_shared_folder_is_lifted_into_the_summary(self, tmp_path) -> None:
         """两条伴奏通常同目录，路径提到说明里，勾选项只留文件名。"""
         from qfluentwidgets import BodyLabel

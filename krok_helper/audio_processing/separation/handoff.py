@@ -11,8 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CheckBox, PrimaryPushButton, TitleLabel
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CheckBox, PrimaryPushButton, PushButton, TitleLabel
 
 from krok_helper.audio_processing.separation.states import TaskType
 
@@ -100,7 +100,9 @@ class AccompanimentHandoffDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.setSpacing(12)
         self.yesButton = PrimaryPushButton("放入并前往 Hi-Res 混流", self)
-        self.cancelButton = QPushButton("暂不放入", self)
+        # 必须也是 qfluentwidgets 的按钮：裸 QPushButton 的高度和内边距跟
+        # PrimaryPushButton 对不上，并排放会明显矮一圈。
+        self.cancelButton = PushButton("暂不放入", self)
         self.yesButton.clicked.connect(self.accept)
         self.cancelButton.clicked.connect(self.reject)
         buttons.addWidget(self.yesButton, 1)
