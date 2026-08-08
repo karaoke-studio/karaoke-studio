@@ -70,7 +70,10 @@ def _up_to_date(vendor_dir: Path) -> bool:
 
 
 def _download(url: str) -> bytes:
-    print(f"  下载 {url}")
+    # GitHub's Windows runner can expose stdout as CP1252 even though the
+    # checked-out script is UTF-8. Keep build-time console output ASCII-only so
+    # logging cannot fail before the network request starts.
+    print(f"  Downloading {url}")
     request = urllib.request.Request(url, headers={"User-Agent": "karaoke-studio-build"})
     with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 - 固定的官方 release 地址
         return response.read()
@@ -96,7 +99,7 @@ def fetch(project_root: Path, *, force: bool = False) -> Path:
 
     vendor_dir = project_root / VENDOR_SUBDIR
     if not force and _up_to_date(vendor_dir):
-        print(f"  aria2c 已就位且哈希一致，跳过下载：{vendor_dir}")
+        print("  aria2c is present and verified; skipping download")
         return vendor_dir / "aria2c.exe"
 
     vendor_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +116,7 @@ def fetch(project_root: Path, *, force: bool = False) -> Path:
             f"  实际: {digest}"
         )
 
-    print(f"  aria2c {ARIA2_VERSION} 就位：{exe}（{exe.stat().st_size:,} 字节）")
+    print(f"  aria2c {ARIA2_VERSION} is ready ({exe.stat().st_size:,} bytes)")
     return exe
 
 
