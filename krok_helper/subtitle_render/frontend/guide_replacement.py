@@ -29,6 +29,7 @@ from qfluentwidgets import (
     StrongBodyLabel,
     TableWidget,
 )
+from krok_helper.qfluent_compat import ModelessDialog
 
 from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_button_row
 from krok_helper.subtitle_render.models import (
@@ -229,7 +230,7 @@ def _format_time(ms: int) -> str:
     return f"{minutes:02d}:{seconds:02d}.{cs:02d}"
 
 
-class GuideRoleSchemeDialog(QDialog):
+class GuideRoleSchemeDialog(ModelessDialog):
     """Choose an existing project role scheme for selected guide candidates."""
 
     def __init__(
@@ -242,7 +243,7 @@ class GuideRoleSchemeDialog(QDialog):
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
         self.setWindowTitle("批量应用角色方案")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(460)
 
         layout = QVBoxLayout(self)
@@ -311,7 +312,7 @@ def choose_guide_role_scheme(
     return dialog.role_name()
 
 
-class GuidePrefixReplaceDialog(QDialog):
+class GuidePrefixReplaceDialog(ModelessDialog):
     """Fluent batch-review dialog for SVG replacement and marker role batching."""
 
     roleSchemeApplyRequested = Signal(object, str)
@@ -333,7 +334,7 @@ class GuidePrefixReplaceDialog(QDialog):
         self._matches: list[GuidePrefixMatch] = []
         self._row_checks: list[QTableWidgetItem] = []
         self.setWindowTitle("批量识别导唱标记")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumSize(820, 560)
 
         layout = QVBoxLayout(self)

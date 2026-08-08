@@ -111,6 +111,7 @@ from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
 from krok_helper.notifications import play_completion_sound
 from krok_helper.qfluent_compat import (
+    ModelessDialog,
     apply_qfluent_menu_lifetime_patch,
     apply_qfluent_tooltip_parent_patch,
 )
@@ -367,7 +368,7 @@ class _LayoutIssue:
     warning: LayoutMarginWarning
 
 
-class _LayoutIssuesDialog(QDialog):
+class _LayoutIssuesDialog(ModelessDialog):
     """Modeless, clickable list of the current lyrics layout issues."""
 
     issueActivated = Signal(int, int)
@@ -460,7 +461,7 @@ class _LayoutIssuesDialog(QDialog):
             self.issueActivated.emit(target[0], target[1])
 
 
-class _ExportLocationDialog(QDialog):
+class _ExportLocationDialog(ModelessDialog):
     """字幕视频导出目录与文件名偏好。"""
 
     def __init__(
@@ -473,7 +474,7 @@ class _ExportLocationDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("导出视频位置与命名")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -595,7 +596,7 @@ class _ExportLocationDialog(QDialog):
         return self.name_template_edit.text().strip() or DEFAULT_EXPORT_NAME_TEMPLATE
 
 
-class _GuideSymbolSettingsDialog(QDialog):
+class _GuideSymbolSettingsDialog(ModelessDialog):
     """Configure how many inline guide glyphs precede a lyric line."""
 
     def __init__(
@@ -607,7 +608,7 @@ class _GuideSymbolSettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
         self.setWindowTitle("导唱符设置")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(460)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -640,7 +641,7 @@ class _GuideSymbolSettingsDialog(QDialog):
         return int(self.count_spin.value()), int(self.interval_spin.value())
 
 
-class _AutoSaveSettingsDialog(QDialog):
+class _AutoSaveSettingsDialog(ModelessDialog):
     """Project auto-save and history-backup settings."""
 
     def __init__(
@@ -652,7 +653,7 @@ class _AutoSaveSettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("项目保存与备份")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -840,7 +841,7 @@ class _AspectRatioBox(QWidget):
         self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
 
 
-class _SubtitleLoadingSettingsDialog(QDialog):
+class _SubtitleLoadingSettingsDialog(ModelessDialog):
     """Source-loading settings card, positioned to the right of its gear button."""
 
     def __init__(
@@ -854,7 +855,8 @@ class _SubtitleLoadingSettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("加载字幕设置")
-        self.setModal(True)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(390)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)

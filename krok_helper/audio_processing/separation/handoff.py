@@ -11,10 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CheckBox, PrimaryPushButton, PushButton, TitleLabel
 
 from krok_helper.audio_processing.separation.states import TaskType
+from krok_helper.qfluent_compat import ModelessDialog
 
 #: 哪些任务的产物算「伴奏」，以及在对话框里怎么称呼。
 ACCOMPANIMENT_TASKS: dict[TaskType, str] = {
@@ -44,7 +45,7 @@ def collect_accompaniments(results) -> list[tuple[str, Path]]:
     return picked
 
 
-class AccompanimentHandoffDialog(QDialog):
+class AccompanimentHandoffDialog(ModelessDialog):
     """问用户把哪几条伴奏放进 Hi-Res 混流。
 
     版式对齐波形对齐模块的导出完成弹窗（``gui_qt.AlignmentHandoffDialog``）：同样

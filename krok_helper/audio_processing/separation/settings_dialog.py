@@ -49,7 +49,7 @@ from krok_helper.audio_processing.separation.local_import import (
 )
 from krok_helper.audio_processing.separation.presets import TASK_PRESETS, task_override
 from krok_helper.audio_processing.separation.states import STATE_META, TASK_SPECS, TaskType
-from krok_helper.qfluent_compat import ask_fluent_confirm, show_fluent_info
+from krok_helper.qfluent_compat import ModelessDialog, ask_fluent_confirm, show_fluent_info
 
 _DOWNLOAD_SOURCES = (
     ("ModelScope（推荐）", "modelscope"),
@@ -84,7 +84,7 @@ def _build_settings_page(parent: QWidget, groups: list[SettingCardGroup]) -> Flu
     return page
 
 
-class ModelPickerDialog(QDialog):
+class ModelPickerDialog(ModelessDialog):
     """给一个任务挑模型与输出轨。
 
     输出轨永远来自所选模型自己声明的名字（后端读 ``training.instruments``），
@@ -249,7 +249,7 @@ class ModelPickerDialog(QDialog):
         self._ok.setEnabled(bool(self._selected_model) and bool(self._stem_combo.count()))
 
 
-class LocalModelImportDialog(QDialog):
+class LocalModelImportDialog(ModelessDialog):
     """从任意文件夹导入一个模型并绑定给某个任务。
 
     原文件保持原地，只在工作台自己的清单里登记引用（§4.5）。架构无法从配置推断，
@@ -401,7 +401,7 @@ class LocalModelImportDialog(QDialog):
         self._ok.setEnabled(True)
 
 
-class FolderImportDialog(QDialog):
+class FolderImportDialog(ModelessDialog):
     """一键导入：选一个文件夹，自动为三个任务各匹配一个模型。
 
     支持 MSST-WebUI 的 ``pretrain``（架构来自 MSST 自己的映射文件）和按 catalog
@@ -551,7 +551,7 @@ class FolderImportDialog(QDialog):
         self.accept()
 
 
-class SeparationSettingsDialog(QDialog):
+class SeparationSettingsDialog(ModelessDialog):
     """音频分离设置。所有改动直接写 settings_ns 并触发 save_settings。"""
 
     reconfigureRequested = pyqtSignal()

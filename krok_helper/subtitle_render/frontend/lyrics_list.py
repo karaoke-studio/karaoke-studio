@@ -69,7 +69,7 @@ from qfluentwidgets import (
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
-from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
+from krok_helper.qfluent_compat import ModelessDialog, hide_fluent_tooltip, show_fluent_tooltip
 from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
 )
@@ -174,7 +174,7 @@ def _animation_summary(style: Style, override: Optional[LineAnimationOverride]) 
     return summary
 
 
-class _LineAnimationDialog(QDialog):
+class _LineAnimationDialog(ModelessDialog):
     """歌词列表逐行动画的紧凑编辑弹窗。"""
 
     def __init__(
@@ -860,7 +860,7 @@ class _CharChipsView(QWidget):
         painter.end()
 
 
-class _CharRoleDialog(QDialog):
+class _CharRoleDialog(ModelessDialog):
     """行内逐字符角色编辑器：拖选字符块 → 点角色按钮应用 → 确定写回。"""
 
     def __init__(

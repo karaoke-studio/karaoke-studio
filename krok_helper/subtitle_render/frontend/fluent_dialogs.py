@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Callable, Mapping, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QApplication, QDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -20,22 +19,7 @@ from qfluentwidgets import (
     PushButton,
     SpinBox,
 )
-
-
-class _DimOverlay(QWidget):
-    """Non-interactive dim layer below a top-level Fluent dialog."""
-
-    def __init__(self, anchor_window: QWidget) -> None:
-        super().__init__(anchor_window)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setGeometry(0, 0, anchor_window.width(), anchor_window.height())
-
-    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
-        painter = QPainter(self)
-        try:
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 96))
-        finally:
-            painter.end()
+from krok_helper.qfluent_compat import ModelessDialog, exec_modeless_dialog, show_modeless_dialog
 
 
 def _resolve_window(parent: Optional[QWidget]) -> Optional[QWidget]:
@@ -55,15 +39,14 @@ def _resolve_window(parent: Optional[QWidget]) -> Optional[QWidget]:
 
 
 class FluentMessageDialog(Dialog):
-    """Clickable Fluent message dialog that also works in embedded mode."""
+    """Mask-free Fluent message dialog that also works in embedded mode."""
 
     def __init__(self, title: str, content: str, parent: Optional[QWidget] = None):
         anchor = _resolve_window(parent)
         super().__init__(title, content, anchor)
         self.setTitleBarVisible(False)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self._anchor_window = anchor
-        self._dim: Optional[_DimOverlay] = None
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
 
     def _ensure_active(self) -> None:
         self.raise_()
@@ -75,18 +58,7 @@ class FluentMessageDialog(Dialog):
         QTimer.singleShot(0, self._ensure_active)
 
     def exec(self) -> int:
-        anchor = self._anchor_window
-        if anchor is not None and anchor.isVisible():
-            self._dim = _DimOverlay(anchor)
-            self._dim.show()
-            self._dim.raise_()
-        try:
-            return super().exec()
-        finally:
-            if self._dim is not None:
-                self._dim.hide()
-                self._dim.deleteLater()
-                self._dim = None
+        return exec_modeless_dialog(self)
 
 
 def fluent_info(
@@ -103,7 +75,7 @@ def fluent_info(
     dialog.hideCancelButton()
     if copyable:
         dialog.setContentCopyable(True)
-    dialog.exec()
+    show_modeless_dialog(dialog)
 
 
 # qfluentwidgets Dialog has no severity icon area. Keep semantic aliases so
@@ -214,7 +186,7 @@ def fluent_button_row(
     return row, ok_button, cancel_button
 
 
-class FluentTextInputDialog(QDialog):
+class FluentTextInputDialog(ModelessDialog):
     """Small Fluent text or editable-choice input dialog."""
 
     def __init__(
@@ -229,7 +201,7 @@ class FluentTextInputDialog(QDialog):
     ) -> None:
         super().__init__(_resolve_window(parent))
         self.setWindowTitle(title)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(400)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -260,7 +232,7 @@ class FluentTextInputDialog(QDialog):
         return self.control.text().strip()
 
 
-class FluentIntInputDialog(QDialog):
+class FluentIntInputDialog(ModelessDialog):
     """Small Fluent integer input dialog backed by a qfluentwidgets SpinBox."""
 
     def __init__(
@@ -276,7 +248,7 @@ class FluentIntInputDialog(QDialog):
     ) -> None:
         super().__init__(_resolve_window(parent))
         self.setWindowTitle(title)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(400)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -306,7 +278,7 @@ def fluent_get_text(
     dialog = FluentTextInputDialog(
         title, label, text=text, placeholder=placeholder, parent=parent
     )
-    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
     return dialog.value(), accepted
 
 
@@ -329,7 +301,7 @@ def fluent_get_int(
         step=step,
         parent=parent,
     )
-    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
     return dialog.value(), accepted
 
 
@@ -350,5 +322,5 @@ def fluent_get_editable_choice(
         placeholder=placeholder,
         parent=parent,
     )
-    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
     return dialog.value(), accepted

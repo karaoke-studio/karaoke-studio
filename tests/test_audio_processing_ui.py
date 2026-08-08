@@ -83,7 +83,8 @@ class TestManagedUpgradeFlow:
 
         assert not isinstance(dialog, MessageBoxBase)
         assert dialog.parentWidget() is host
-        assert dialog.windowModality() == Qt.WindowModality.ApplicationModal
+        assert dialog.windowModality() == Qt.WindowModality.NonModal
+        assert host.isEnabled()
 
         QTimer.singleShot(
             0,
@@ -94,7 +95,7 @@ class TestManagedUpgradeFlow:
             ),
         )
         assert dialog.exec() == 1
-        assert dialog._dim is None
+        assert host.isEnabled()
         host.close()
 
     def test_incompatible_managed_runtime_uses_confirmed_upgrade_wizard(self) -> None:

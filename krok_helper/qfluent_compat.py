@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QPainter
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import QEventLoop, Qt, QTimer
+from PyQt6.QtWidgets import QDialog, QWidget
 from qfluentwidgets import Dialog
 
 
@@ -14,41 +13,94 @@ _PATCH_MARKER = "_krok_menu_lifetime_safe"
 _TOOLTIP_PATCH_MARKER = "_krok_parentless_tooltip"
 _TOOLTIP_SHADOW_PATCH_MARKER = "_krok_slim_tooltip_shadow"
 _manual_tooltips = {}
+_modeless_dialogs: set[QDialog] = set()
 
 
-class _DimOverlay(QWidget):
-    """Non-interactive dim layer below a top-level Fluent dialog."""
+def _prepare_modeless_dialog(dialog: QDialog) -> None:
+    """Keep a dialog top-level and interactive without disabling the workbench."""
 
-    def __init__(self, anchor_window: QWidget) -> None:
-        super().__init__(anchor_window)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setGeometry(0, 0, anchor_window.width(), anchor_window.height())
+    dialog.setModal(False)
+    dialog.setWindowModality(Qt.WindowModality.NonModal)
+    dialog.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
 
-    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
-        painter = QPainter(self)
-        try:
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 96))
-        finally:
-            painter.end()
+
+def show_modeless_dialog(dialog: QDialog) -> QDialog:
+    """Show a dialog without a mask and retain it until the user closes it."""
+
+    _prepare_modeless_dialog(dialog)
+    _modeless_dialogs.add(dialog)
+
+    def release(*_args) -> None:
+        _modeless_dialogs.discard(dialog)
+
+    def release_finished(*_args) -> None:
+        release()
+        dialog.deleteLater()
+
+    dialog.finished.connect(release_finished)
+    dialog.destroyed.connect(release)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    return dialog
+
+
+def exec_modeless_dialog(dialog: QDialog) -> int:
+    """Wait for a modeless dialog while keeping the whole workbench usable.
+
+    This preserves the return-value contract of the old ``QDialog.exec()``
+    call sites without enabling Qt modality or a Fluent mask.  The nested event
+    loop only pauses the caller; other pages and the main window keep receiving
+    input.
+    """
+
+    _prepare_modeless_dialog(dialog)
+    loop = QEventLoop()
+    result = int(QDialog.DialogCode.Rejected)
+    finished = False
+
+    def finish(code: int = int(QDialog.DialogCode.Rejected)) -> None:
+        nonlocal result, finished
+        result = int(code)
+        finished = True
+        if loop.isRunning():
+            loop.quit()
+
+    dialog.finished.connect(finish)
+    dialog.destroyed.connect(loop.quit)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    if dialog.isVisible() and not finished:
+        loop.exec()
+    return result
+
+
+class ModelessDialog(QDialog):
+    """QDialog whose synchronous API does not disable the workbench."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        _prepare_modeless_dialog(self)
+
+    def exec(self) -> int:
+        return exec_modeless_dialog(self)
 
 
 class HostFluentMessageDialog(Dialog):
-    """Clickable Fluent dialog for pages embedded in the workbench window.
+    """Modeless Fluent dialog for pages embedded in the workbench window.
 
     ``qfluentwidgets.MessageBox`` is itself a child-sized mask dialog.  In the
     workbench's stacked-page hierarchy that mask can remain above its content
-    and consume mouse input.  A real top-level ``Dialog`` plus a separate dim
-    layer keeps modality and visual treatment without putting a mask over the
-    buttons.
+    and consume mouse input.  A real top-level ``Dialog`` without Qt modality
+    or a dim layer keeps both the dialog and the rest of the workbench usable.
     """
 
     def __init__(self, title: str, content: str, parent=None) -> None:
         anchor = resolve_fluent_dialog_parent(parent)
         super().__init__(title, content, anchor)
         self.setTitleBarVisible(False)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self._anchor_window = anchor
-        self._dim: Optional[_DimOverlay] = None
+        _prepare_modeless_dialog(self)
 
     def _ensure_active(self) -> None:
         self.raise_()
@@ -60,18 +112,7 @@ class HostFluentMessageDialog(Dialog):
         QTimer.singleShot(0, self._ensure_active)
 
     def exec(self) -> int:
-        anchor = self._anchor_window
-        if anchor is not None and anchor.isVisible():
-            self._dim = _DimOverlay(anchor)
-            self._dim.show()
-            self._dim.raise_()
-        try:
-            return super().exec()
-        finally:
-            if self._dim is not None:
-                self._dim.hide()
-                self._dim.deleteLater()
-                self._dim = None
+        return exec_modeless_dialog(self)
 
 
 def apply_qfluent_menu_lifetime_patch() -> None:
@@ -258,7 +299,7 @@ def show_fluent_info(parent, text: str, *, title: str = "", yes_text: str = "确
     box = HostFluentMessageDialog(title or APP_TITLE, text, parent)
     box.yesButton.setText(yes_text)
     box.cancelButton.hide()
-    box.exec()
+    show_modeless_dialog(box)
 
 
 def ask_fluent_confirm(

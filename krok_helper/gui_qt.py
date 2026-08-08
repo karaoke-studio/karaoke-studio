@@ -84,7 +84,6 @@ from qfluentwidgets import (
     HyperlinkCard,
     LineEdit as QLineEdit,
     ListWidget as FluentListWidget,
-    MessageBoxBase,
     PlainTextEdit as QPlainTextEdit,
     Pivot,
     PrimaryPushButton,
@@ -110,9 +109,11 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
 from krok_helper.qfluent_compat import (
+    ModelessDialog,
     apply_qfluent_menu_lifetime_patch,
     apply_qfluent_tooltip_parent_patch,
     ask_fluent_confirm,
+    exec_modeless_dialog,
     show_fluent_info,
     show_fluent_tooltip,
 )
@@ -294,7 +295,7 @@ class KrokHelperSettingsBridge:
         cursor[keys[-1]] = deepcopy(value)
 
 
-class WorkbenchUpdateDialog(QDialog):
+class WorkbenchUpdateDialog(ModelessDialog):
     """Update prompt that shows the GitHub Release body directly."""
 
     def __init__(
@@ -310,7 +311,8 @@ class WorkbenchUpdateDialog(QDialog):
         self.user_choice = "later"
         self._release = release
         self.setWindowTitle(APP_TITLE)
-        self.setModal(True)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumSize(720, 560)
         self._build_ui(release, local_version, source_label, all_releases or [])
 
@@ -688,7 +690,7 @@ def build_settings_tab_page(parent: QWidget, groups: list[SettingCardGroup]) -> 
     return page
 
 
-class UpdateSourceOrderDialog(MessageBoxBase):
+class UpdateSourceOrderDialog(ModelessDialog):
     """更新源优先级编辑弹窗（拖拽重排 + 上移 / 下移 / 恢复默认）。
 
     确定后从 :attr:`order` 读出最终顺序（已 ``normalize_order``）。
@@ -697,19 +699,27 @@ class UpdateSourceOrderDialog(MessageBoxBase):
     def __init__(self, current_order: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.order: list[str] = normalize_order(current_order)
+        self.setWindowTitle("更新源优先级")
+        self.setMinimumWidth(540)
+        if parent is not None:
+            self.setWindowIcon(parent.windowIcon())
 
-        title = TitleLabel("更新源优先级", self.widget)
-        self.viewLayout.addWidget(title)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 20)
+        root.setSpacing(12)
+
+        title = TitleLabel("更新源优先级", self)
+        root.addWidget(title)
 
         hint = BodyLabel(
             "按顺序尝试，前一项失败时自动降级到下一项。\n"
             "可以直接拖动条目，或选中后用右侧按钮微调。",
-            self.widget,
+            self,
         )
         hint.setWordWrap(True)
-        self.viewLayout.addWidget(hint)
+        root.addWidget(hint)
 
-        body = QWidget(self.widget)
+        body = QWidget(self)
         body_layout = QHBoxLayout(body)
         body_layout.setContentsMargins(0, 4, 0, 4)
         body_layout.setSpacing(12)
@@ -742,11 +752,17 @@ class UpdateSourceOrderDialog(MessageBoxBase):
         column_layout.addStretch(1)
         body_layout.addWidget(button_column, 0)
 
-        self.viewLayout.addWidget(body, 1)
+        root.addWidget(body, 1)
 
-        self.yesButton.setText("确定")
-        self.cancelButton.setText("取消")
-        self.widget.setMinimumWidth(540)
+        button_row = QHBoxLayout()
+        button_row.setSpacing(12)
+        self.yesButton = PrimaryPushButton("确定", self)
+        self.cancelButton = QPushButton("取消", self)
+        self.yesButton.clicked.connect(self.accept)
+        self.cancelButton.clicked.connect(self.reject)
+        button_row.addWidget(self.yesButton, 1)
+        button_row.addWidget(self.cancelButton, 1)
+        root.addLayout(button_row)
 
     def _selected_row(self) -> int:
         items = self.order_list.selectedItems()
@@ -6963,7 +6979,7 @@ class KrokHelperQtApp(QMainWindow):
                 )
 
     def _open_settings_window(self, context: str) -> None:
-        dialog = QDialog(self)
+        dialog = ModelessDialog(self)
         title = "波形对齐设置" if context == "align" else "Hi-Res 生成设置"
         dialog.setWindowTitle(f"{APP_TITLE} - {title}")
         dialog.resize(860, 540)
@@ -7250,7 +7266,7 @@ class KrokHelperQtApp(QMainWindow):
 
     def _open_global_settings_window(self) -> None:
         updater_settings = ensure_updater_settings(self.settings)
-        dialog = QDialog(self)
+        dialog = ModelessDialog(self)
         dialog.setWindowTitle(f"{APP_TITLE} - 全局设置")
         dialog.resize(880, 640)
         dialog.setMinimumSize(820, 560)
@@ -7551,7 +7567,7 @@ class KrokHelperQtApp(QMainWindow):
         def edit_source_order() -> None:
             nonlocal source_order
             order_dialog = UpdateSourceOrderDialog(source_order, dialog)
-            if order_dialog.exec():
+            if exec_modeless_dialog(order_dialog):
                 source_order = order_dialog.order
                 refresh_source_order_label()
 

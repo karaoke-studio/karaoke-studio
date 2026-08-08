@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QScrollArea, QWidget
 
 from krok_helper import gui_qt
@@ -42,7 +43,7 @@ def _open_global_settings_dialog(monkeypatch):
         app.processEvents()
         return 0
 
-    monkeypatch.setattr(gui_qt.QDialog, "exec", capture_dialog)
+    monkeypatch.setattr(gui_qt.ModelessDialog, "exec", capture_dialog)
 
     host = _SettingsHost()
     gui_qt.KrokHelperQtApp._open_global_settings_window(host)
@@ -138,3 +139,18 @@ def test_set_ffmpeg_dir_accepts_none_as_system_path() -> None:
 
     assert host.ffmpeg_dir_text == ""
     host.close()
+
+
+def test_update_source_order_dialog_is_mask_free_and_modeless() -> None:
+    app = QApplication.instance() or QApplication([])
+    host = QWidget()
+    dialog = gui_qt.UpdateSourceOrderDialog(["github", "ghproxy"], host)
+
+    assert isinstance(dialog, gui_qt.ModelessDialog)
+    assert not dialog.isModal()
+    assert dialog.windowModality() == Qt.WindowModality.NonModal
+    assert host.isEnabled()
+
+    dialog.close()
+    host.close()
+    app.processEvents()

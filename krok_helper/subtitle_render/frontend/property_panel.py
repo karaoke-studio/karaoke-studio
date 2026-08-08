@@ -87,6 +87,7 @@ from qfluentwidgets import (
     ToolButton as FluentToolButton,
     TransparentToolButton as FluentTransparentToolButton,
 )
+from krok_helper.qfluent_compat import ModelessDialog
 
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_button_row,
@@ -2011,13 +2012,13 @@ class GradientStopsEditor(QWidget):
         self.stopsChanged.emit(list(self._stops))
 
 
-class _GradientStopsPasteDialog(QDialog):
+class _GradientStopsPasteDialog(ModelessDialog):
     """Import portable gradient-stop JSON into the current gradient bar."""
 
     def __init__(self, text: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent.window() if parent is not None else None)
         self.setWindowTitle("粘贴渐变信息")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumSize(520, 360)
         self._stops: list[tuple[float, str]] = []
 
@@ -2563,7 +2564,7 @@ class _DynamicStackedWidget(QStackedWidget):
         return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
 
 
-class _StylePresetDetailsDialog(QDialog):
+class _StylePresetDetailsDialog(ModelessDialog):
     """Fluent form for a preset name and optional organizational group."""
 
     def __init__(
@@ -2576,7 +2577,7 @@ class _StylePresetDetailsDialog(QDialog):
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
         self.setWindowTitle("保存到软件预设库")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(440)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -2615,7 +2616,7 @@ class _StylePresetDetailsDialog(QDialog):
         return self.name_edit.text().strip(), self.group_combo.text().strip()
 
 
-class _RolePresetGroupDialog(QDialog):
+class _RolePresetGroupDialog(ModelessDialog):
     """Resolve cross-group preset-name collisions one imported role at a time."""
 
     def __init__(
@@ -2625,7 +2626,7 @@ class _RolePresetGroupDialog(QDialog):
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
         self.setWindowTitle("选择角色预设分组")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumWidth(520)
         self._combos: dict[str, FluentComboBox] = {}
 
@@ -2682,7 +2683,7 @@ class _RolePresetGroupDialog(QDialog):
         }
 
 
-class StylePresetManagerDialog(QDialog):
+class StylePresetManagerDialog(ModelessDialog):
     """Manage independent, grouped subtitle style presets."""
 
     presetLibraryChanged = Signal(dict)
