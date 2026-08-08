@@ -6,9 +6,10 @@ import os
 import secrets
 import socket
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from krok_helper.windows import hidden_subprocess_kwargs
 
 from .client import PyMSSClient
 
@@ -264,9 +265,6 @@ class ManagedServiceProcess:
             env["PYTHONNOUSERSITE"] = "1"
         log_path = logs / "server.log"
         log_stream = log_path.open("a", encoding="utf-8", errors="replace")
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             process = popen_factory(
                 command,
@@ -275,7 +273,7 @@ class ManagedServiceProcess:
                 stdin=subprocess.DEVNULL,
                 stdout=log_stream,
                 stderr=subprocess.STDOUT,
-                creationflags=creationflags,
+                **hidden_subprocess_kwargs(),
             )
             client = PyMSSClient(f"http://127.0.0.1:{port}", api_key=api_key)
             handle = cls(root, process, client, api_key, port, log_stream)

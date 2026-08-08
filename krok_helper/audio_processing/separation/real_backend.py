@@ -18,6 +18,8 @@ from urllib.parse import unquote, urlsplit
 
 from PyQt6.QtCore import QObject, QTimer
 
+from krok_helper.windows import hidden_subprocess_kwargs
+
 from .audio_io import extract_result_stems, prepare_pcm
 from .backend import (
     FLOW_EXISTING,
@@ -1223,6 +1225,7 @@ class RealSeparationBackend(SeparationBackend):
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            **hidden_subprocess_kwargs(),
         )
         output = (completed.stdout + " " + completed.stderr).strip()
         match = re.search(r"(?<!\d)(\d+\.\d+\.\d+)(?!\d)", output)
@@ -1246,6 +1249,7 @@ class RealSeparationBackend(SeparationBackend):
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            **hidden_subprocess_kwargs(),
         )
         output = (completed.stdout + " " + completed.stderr).strip()
         match = re.search(r"(?<!\d)(\d+\.\d+\.\d+)(?!\d)", output)

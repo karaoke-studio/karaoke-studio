@@ -7,6 +7,8 @@ import platform
 import shutil
 import subprocess
 
+from krok_helper.windows import hidden_subprocess_kwargs
+
 PYMSS_VERSION = "2.0.18"
 PYMSS_CORE_VERSION = "0.1.6"
 PYMSS_RUNTIME_VERSION = "1"
@@ -50,7 +52,6 @@ def nvidia_driver_available() -> bool:
     if not executable:
         return False
     try:
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         result = subprocess.run(
             [
                 executable,
@@ -61,7 +62,7 @@ def nvidia_driver_available() -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=5,
-            creationflags=creationflags,
+            **hidden_subprocess_kwargs(),
             text=True,
         )
         if result.returncode != 0:

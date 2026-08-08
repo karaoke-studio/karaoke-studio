@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from krok_helper.windows import hidden_subprocess_kwargs
+
 #: 桥接脚本源码。由工作台写入自己的目录，用 PyMSS 运行时的解释器执行。
 _BRIDGE_SOURCE = r'''"""Karaoke Studio 的 PyMSS 桥接进程（由工作台生成，请勿手工修改）。"""
 from __future__ import annotations
@@ -298,8 +300,6 @@ class PyMSSWorker:
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONNOUSERSITE"] = "1"
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-
         process = popen_factory(
             [str(python), str(bridge)],
             cwd=str(work),
@@ -311,7 +311,7 @@ class PyMSSWorker:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            creationflags=creationflags,
+            **hidden_subprocess_kwargs(),
         )
         worker = cls(process=process, log_stream=log_stream, _lock=threading.Lock())
         worker._await_ready(ready_timeout, log_path)

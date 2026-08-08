@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from krok_helper.audio_processing.separation import service
 
 
@@ -87,6 +89,9 @@ def test_managed_service_sets_private_registry_and_stops_owned_process(tmp_path,
     compile(bridge_source, str(bridge), "exec")
     assert captured["env"]["PYTHONNOUSERSITE"] == "1"
     assert captured["stdin"] is not None
+    if sys.platform == "win32":
+        assert captured["creationflags"]
+        assert captured["startupinfo"].dwFlags
     assert handle.stop(timeout_seconds=0.1)
     assert process.terminated
 

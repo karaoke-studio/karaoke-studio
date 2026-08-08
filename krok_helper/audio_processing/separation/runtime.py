@@ -19,6 +19,8 @@ from typing import Callable
 
 import requests
 
+from krok_helper.windows import hidden_subprocess_kwargs
+
 from .integration import (
     PYMSS_PYTHON_VERSION,
     PYMSS_RUNTIME_VERSION,
@@ -706,7 +708,6 @@ class ManagedRuntimeInstaller:
         environment = os.environ.copy()
         environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         process = subprocess.Popen(
             command,
             cwd=str(runtime),
@@ -714,7 +715,7 @@ class ManagedRuntimeInstaller:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
+            **hidden_subprocess_kwargs(),
         )
         try:
             while process.poll() is None:
@@ -750,7 +751,7 @@ class ManagedRuntimeInstaller:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=60,
-            creationflags=creationflags,
+            **hidden_subprocess_kwargs(),
         )
         if smoke.returncode != 0:
             raise RuntimeError("torch 安装后导入冒烟失败。")

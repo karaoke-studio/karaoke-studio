@@ -6,10 +6,12 @@ import threading
 import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from PyQt6.QtWidgets import QApplication
 
 from krok_helper.audio_processing.separation.page import AudioSeparationPage
+from krok_helper.audio_processing.separation import real_backend as real_backend_module
 from krok_helper.audio_processing.separation.backend import FLOW_UPGRADE
 from krok_helper.audio_processing.separation.integration import (
     PYMSS_PYTHON_VERSION,
@@ -61,6 +63,55 @@ def _installed_runtime(root: Path) -> None:
     path = root / "manifests" / "runtime-manifest.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_external_environment_probes_hide_the_windows_console(
+    tmp_path, monkeypatch
+) -> None:
+    executable = tmp_path / "python.exe"
+    executable.write_bytes(b"fake")
+    startupinfo = object()
+    calls: list[dict] = []
+
+    def run(_command, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(stdout=f"{PYMSS_VERSION}\n", stderr="", returncode=0)
+
+    class Client:
+        @staticmethod
+        def capability_checks():
+            return [("PyMSS 推理环境", True, "正常")]
+
+    class Service:
+        client = Client()
+
+        @staticmethod
+        def stop():
+            return True
+
+    class Factory:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            return Service()
+
+    monkeypatch.setattr(real_backend_module.subprocess, "run", run)
+    monkeypatch.setattr(
+        real_backend_module,
+        "hidden_subprocess_kwargs",
+        lambda: {"creationflags": 0x08000000, "startupinfo": startupinfo},
+    )
+    backend = RealSeparationBackend({}, service_factory=Factory)
+    try:
+        assert backend._require_external_version(str(executable)) == PYMSS_VERSION
+        checks, version = backend._probe_executable(str(executable))
+        assert version == PYMSS_VERSION
+        assert all(ok for _name, ok, _detail in checks)
+    finally:
+        backend.shutdown()
+
+    assert len(calls) == 2
+    assert all(call["creationflags"] == 0x08000000 for call in calls)
+    assert all(call["startupinfo"] is startupinfo for call in calls)
 
 
 def test_managed_repair_stops_service_and_smokes_new_runtime(
