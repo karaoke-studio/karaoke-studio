@@ -38,7 +38,10 @@ class TestOffVocalOutputNaming:
         )
         assert [path.name for path in outputs] == ["残酷な天使のテーゼ-伴奏.mkv"]
 
-    def test_several_accompaniments_are_named_after_the_audio(self, tmp_path, video) -> None:
+    def test_several_accompaniments_keep_the_naming_scheme_and_add_the_audio(
+        self, tmp_path, video
+    ) -> None:
+        """跟随视频名走的是默认模板 {video_name}_off，多条时在其后补音频名区分。"""
         outputs = resolve_off_output_paths(
             video,
             tmp_path,
@@ -47,8 +50,8 @@ class TestOffVocalOutputNaming:
             [tmp_path / "s_伴奏.flac", tmp_path / "s_和声伴奏.flac"],
         )
         assert [path.name for path in outputs] == [
-            "残酷な天使のテーゼ_s_伴奏.mkv",
-            "残酷な天使のテーゼ_s_和声伴奏.mkv",
+            "残酷な天使のテーゼ_off_s_伴奏.mkv",
+            "残酷な天使のテーゼ_off_s_和声伴奏.mkv",
         ]
 
     def test_same_named_files_from_different_folders_do_not_collide(self, tmp_path, video) -> None:
@@ -435,3 +438,82 @@ class TestHandoffDoesNotNavigate:
         item.write_bytes(b"x")
         dialog = AccompanimentHandoffDialog([("伴奏", item)])
         assert "前往" not in dialog.yesButton.text()
+
+
+class TestAudioNamePlaceholder:
+    """模板里的 {audio_name}：多条伴奏时用它区分各自的输出。"""
+
+    SONG = "D:/a/song_伴奏.flac"
+    HARMONY = "D:/a/song_和声伴奏.flac"
+
+    def test_a_custom_template_is_still_honoured_with_several(self, tmp_path, video) -> None:
+        """踩过的坑：多条时直接绕开模板，用户特意配的命名就被丢了。"""
+        outputs = resolve_off_output_paths(
+            video,
+            tmp_path,
+            OUTPUT_NAME_MODE_TEMPLATE,
+            "{video_name}_karaoke",
+            [Path(self.SONG), Path(self.HARMONY)],
+        )
+        assert [p.name for p in outputs] == [
+            "残酷な天使のテーゼ_karaoke_song_伴奏.mkv",
+            "残酷な天使のテーゼ_karaoke_song_和声伴奏.mkv",
+        ]
+
+    def test_the_placeholder_position_is_respected(self, tmp_path, video) -> None:
+        outputs = resolve_off_output_paths(
+            video,
+            tmp_path,
+            OUTPUT_NAME_MODE_TEMPLATE,
+            "KTV_{audio_name}_{video_name}",
+            [Path(self.SONG), Path(self.HARMONY)],
+        )
+        assert [p.name for p in outputs] == [
+            "KTV_song_伴奏_残酷な天使のテーゼ.mkv",
+            "KTV_song_和声伴奏_残酷な天使のテーゼ.mkv",
+        ]
+
+    def test_a_template_without_the_placeholder_keeps_single_naming(self, tmp_path, video) -> None:
+        """只放一条时命名不能因为新占位符而改变。"""
+        outputs = resolve_off_output_paths(
+            video, tmp_path, OUTPUT_NAME_MODE_TEMPLATE, "{video_name}_karaoke", [Path(self.SONG)]
+        )
+        assert [p.name for p in outputs] == ["残酷な天使のテーゼ_karaoke.mkv"]
+
+    def test_the_placeholder_also_applies_to_a_single_file(self, tmp_path, video) -> None:
+        """写了 {audio_name} 就该生效，哪怕只放一条。"""
+        outputs = resolve_off_output_paths(
+            video, tmp_path, OUTPUT_NAME_MODE_TEMPLATE, "{video_name}_{audio_name}", [Path(self.SONG)]
+        )
+        assert [p.name for p in outputs] == ["残酷な天使のテーゼ_song_伴奏.mkv"]
+
+    def test_it_works_on_the_vocal_side_too(self, tmp_path, video) -> None:
+        from krok_helper.pipeline import resolve_output_paths
+
+        on_output, _ = resolve_output_paths(
+            video,
+            tmp_path,
+            OUTPUT_NAME_MODE_TEMPLATE,
+            on_name_template="{video_name}_{audio_name}",
+            include_on=True,
+            include_off=False,
+            on_audio_path=Path("D:/a/原曲.flac"),
+        )
+        assert on_output.name == "残酷な天使のテーゼ_原曲.mkv"
+
+    def test_an_unknown_placeholder_is_still_refused(self, tmp_path, video) -> None:
+        with pytest.raises(ProcessingError) as excinfo:
+            resolve_off_output_paths(
+                video, tmp_path, OUTPUT_NAME_MODE_TEMPLATE, "{video_name}_{bad}", [Path(self.SONG)]
+            )
+        assert "audio_name" in str(excinfo.value)
+
+    def test_fixed_mode_has_no_template_to_honour(self, tmp_path, video) -> None:
+        """默认命名模式没有模板，多条时只能退回视频名 + 音频名。"""
+        outputs = resolve_off_output_paths(
+            video, tmp_path, OUTPUT_NAME_MODE_FIXED, None, [Path(self.SONG), Path(self.HARMONY)]
+        )
+        assert [p.name for p in outputs] == [
+            "残酷な天使のテーゼ_song_伴奏.mkv",
+            "残酷な天使のテーゼ_song_和声伴奏.mkv",
+        ]

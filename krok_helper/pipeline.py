@@ -19,7 +19,9 @@ OUTPUT_NAME_MODE_TEMPLATE = "template"
 OUTPUT_NAME_MODE_VIDEO_NAME = "video_name"
 DEFAULT_ON_NAME_TEMPLATE = "{video_name}_on"
 DEFAULT_OFF_NAME_TEMPLATE = "{video_name}_off"
-SUPPORTED_TEMPLATE_FIELDS = {"video_name"}
+#: 模板可用的占位符。``audio_name`` 是这一条音频自己的文件名（不含扩展名），
+#: 放多条伴奏时用它区分各自的输出。
+SUPPORTED_TEMPLATE_FIELDS = {"video_name", "audio_name"}
 WINDOWS_INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 FORMATTER = Formatter()
 
@@ -108,16 +110,33 @@ def validate_output_name_template(template: str, label: str) -> str:
         if field_name and field_name not in SUPPORTED_TEMPLATE_FIELDS:
             raise ProcessingError(
                 f"{label} 输出模板包含不支持的占位符: {field_name}。"
-                "当前只支持 {video_name}。"
+                "当前支持 {video_name} 和 {audio_name}。"
             )
 
     return normalized
 
 
-def render_output_stem(template: str, video_path: Path, label: str) -> str:
+def template_uses_audio_name(template: str) -> bool:
+    """模板里是否写了 ``{audio_name}``。"""
+    try:
+        fields = list(FORMATTER.parse(template or ""))
+    except ValueError:
+        return False
+    return any(field_name == "audio_name" for _, field_name, _, _ in fields)
+
+
+def render_output_stem(
+    template: str,
+    video_path: Path,
+    label: str,
+    audio_path: Path | None = None,
+) -> str:
     normalized = validate_output_name_template(template, label)
     try:
-        rendered = normalized.format(video_name=video_path.stem).strip()
+        rendered = normalized.format(
+            video_name=video_path.stem,
+            audio_name=audio_path.stem if audio_path is not None else "",
+        ).strip()
     except Exception as exc:  # noqa: BLE001
         raise ProcessingError(f"{label} 输出模板无法生成文件名: {exc}") from exc
 
@@ -322,6 +341,8 @@ def resolve_output_paths(
     *,
     include_on: bool = True,
     include_off: bool = True,
+    on_audio_path: Path | None = None,
+    off_audio_path: Path | None = None,
 ) -> tuple[Path | None, Path | None]:
     if not include_on and not include_off:
         raise ProcessingError("至少需要生成原唱或伴奏中的一个输出文件。")
@@ -342,12 +363,12 @@ def resolve_output_paths(
 
         if include_on:
             on_template = on_name_template or DEFAULT_ON_NAME_TEMPLATE
-            on_stem = render_output_stem(on_template, video_path, "原唱")
+            on_stem = render_output_stem(on_template, video_path, "原唱", on_audio_path)
             on_output = output_dir / f"{on_stem}.mkv"
 
         if include_off:
             off_template = off_name_template or DEFAULT_OFF_NAME_TEMPLATE
-            off_stem = render_output_stem(off_template, video_path, "伴奏")
+            off_stem = render_output_stem(off_template, video_path, "伴奏", off_audio_path)
             off_output = output_dir / f"{off_stem}.mkv"
 
         return on_output, off_output
@@ -371,7 +392,19 @@ def resolve_off_output_paths(
     if not off_vocal_paths:
         return []
 
-    if len(off_vocal_paths) == 1:
+    template = off_name_template
+    if output_name_mode == OUTPUT_NAME_MODE_VIDEO_NAME:
+        template = DEFAULT_OFF_NAME_TEMPLATE
+    elif output_name_mode == OUTPUT_NAME_MODE_TEMPLATE:
+        template = template or DEFAULT_OFF_NAME_TEMPLATE
+    else:
+        template = None  # 固定名模式没有模板可用
+
+    single = len(off_vocal_paths) == 1
+    uses_audio = bool(template) and template_uses_audio_name(template)
+
+    # 只有一条、且模板没用到 {audio_name} 时，命名跟以前完全一样。
+    if single and not uses_audio:
         _, off_output = resolve_output_paths(
             video_path,
             output_dir,
@@ -386,8 +419,15 @@ def resolve_off_output_paths(
     outputs: list[Path] = []
     taken: set[str] = set()
     for audio_path in off_vocal_paths:
-        stem = sanitize_output_stem(f"{video_path.stem}_{audio_path.stem}", "伴奏")
-        # 不同目录下的同名伴奏会撞车，补一个序号而不是互相覆盖。
+        if template is None:
+            # 固定名模式：off_vocal 区分不了多条，只能退回视频名 + 音频名。
+            stem = sanitize_output_stem(f"{video_path.stem}_{audio_path.stem}", "伴奏")
+        else:
+            stem = render_output_stem(template, video_path, "伴奏", audio_path)
+            if not uses_audio:
+                # 模板里没写 {audio_name}，多条会重名，末尾补上音频名。
+                stem = sanitize_output_stem(f"{stem}_{audio_path.stem}", "伴奏")
+        # 不同目录下的同名伴奏仍会撞车，补一个序号而不是互相覆盖。
         candidate, index = stem, 2
         while candidate.lower() in taken:
             candidate = f"{stem}_{index}"
@@ -487,6 +527,7 @@ def run_pipeline(
             on_name_template=on_name_template,
             include_on=True,
             include_off=False,
+            on_audio_path=on_vocal_path,
         )
     off_outputs = resolve_off_output_paths(
         video_path, output_dir, output_name_mode, off_name_template, off_paths

@@ -7109,10 +7109,19 @@ class KrokHelperQtApp(QMainWindow):
             template_radio.toggled.connect(lambda _checked: sync_template_enabled())
             sync_template_enabled()
 
-            naming_help_1 = QLabel("支持占位符 {video_name}。不用写 .mkv。示例: {video_name}_karaoke_on")
+            naming_help_1 = QLabel(
+                "支持占位符 {video_name} 和 {audio_name}（这条音频自己的文件名）。"
+                "不用写 .mkv。示例: {video_name}_karaoke_on"
+            )
+            naming_help_1.setWordWrap(True)
             from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
             _wb_th(naming_help_1, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-            naming_help_2 = QLabel("默认: 原唱 on_vocal.mkv；伴奏 off_vocal.mkv。")
+            naming_help_2 = QLabel(
+                "默认: 原唱 on_vocal.mkv；伴奏 off_vocal.mkv。\n"
+                "放多条伴奏时每条各出一个视频：模板里写了 {audio_name} 就按你写的位置放，"
+                "没写则自动在末尾补上音频文件名以免重名。"
+            )
+            naming_help_2.setWordWrap(True)
             from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
             _wb_th(naming_help_2, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
             naming_layout.addWidget(naming_title, 0, 0)
@@ -8153,6 +8162,7 @@ class KrokHelperQtApp(QMainWindow):
                     on_name_template=on_template,
                     include_on=True,
                     include_off=False,
+                    on_audio_path=on_vocal_path,
                 )
             off_outputs = resolve_off_output_paths(
                 video_path, output_dir, output_name_mode, off_template, off_vocal_paths
