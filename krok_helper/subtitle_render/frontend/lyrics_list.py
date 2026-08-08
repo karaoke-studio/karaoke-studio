@@ -151,15 +151,27 @@ _EXIT_EFFECTS = (
     ("spin_flip", "翻转"),
     ("utopia", "Utopia"),
 )
+#: 唱字特效比入退场多一档「跟随全局」——覆盖这一行的入退场时，唱字往往仍想跟着
+#: 主字幕走，不该被迫二选一。
+_KARAOKE_EFFECTS = (
+    ("inherit", "跟随全局"),
+    ("none", "无"),
+    ("utopia", "Utopia"),
+)
 _ENTRY_LABELS = dict(_ENTRY_EFFECTS)
 _EXIT_LABELS = dict(_EXIT_EFFECTS)
+_KARAOKE_LABELS = dict(_KARAOKE_EFFECTS)
 
 
 def _animation_summary(style: Style, override: Optional[LineAnimationOverride]) -> str:
     prefix = "全局：" if override is None else ""
     entry = style.entry_anim if override is None else override.entry_anim
     exit_ = style.exit_anim if override is None else override.exit_anim
-    return f"{prefix}{_ENTRY_LABELS.get(entry, entry)} / {_EXIT_LABELS.get(exit_, exit_)}"
+    summary = f"{prefix}{_ENTRY_LABELS.get(entry, entry)} / {_EXIT_LABELS.get(exit_, exit_)}"
+    # 唱字只在这一行真的改了它时才标出来，免得每行都拖一截重复文字。
+    if override is not None and override.karaoke_anim != "inherit":
+        summary += f" · 唱字{_KARAOKE_LABELS.get(override.karaoke_anim, override.karaoke_anim)}"
+    return summary
 
 
 class _LineAnimationDialog(QDialog):
@@ -201,6 +213,9 @@ class _LineAnimationDialog(QDialog):
             self._entry_combo.addItem(label, userData=value)
         for value, label in _EXIT_EFFECTS:
             self._exit_combo.addItem(label, userData=value)
+        self._karaoke_combo = _StableFluentComboBox(self)
+        for value, label in _KARAOKE_EFFECTS:
+            self._karaoke_combo.addItem(label, userData=value)
         self._entry_duration = FluentSpinBox(self)
         self._exit_duration = FluentSpinBox(self)
         for spin in (self._entry_duration, self._exit_duration):
@@ -212,8 +227,10 @@ class _LineAnimationDialog(QDialog):
         exit_ = style.exit_anim if override is None else override.exit_anim
         entry_ms = style.entry_lead_ms if override is None else override.entry_duration_ms
         exit_ms = style.exit_fade_ms if override is None else override.exit_duration_ms
+        karaoke = style.karaoke_anim if override is None else override.karaoke_anim
         self._set_combo_value(self._entry_combo, entry)
         self._set_combo_value(self._exit_combo, exit_)
+        self._set_combo_value(self._karaoke_combo, karaoke)
         self._entry_duration.setValue(max(int(entry_ms), 0))
         self._exit_duration.setValue(max(int(exit_ms), 0))
         form.addRow("快捷组合", self._preset_combo)
@@ -221,6 +238,7 @@ class _LineAnimationDialog(QDialog):
         form.addRow("入场时长", self._entry_duration)
         form.addRow("退场", self._exit_combo)
         form.addRow("退场时长", self._exit_duration)
+        form.addRow("唱字特效", self._karaoke_combo)
         root.addLayout(form)
 
         buttons = QHBoxLayout()
@@ -249,6 +267,7 @@ class _LineAnimationDialog(QDialog):
             self._entry_duration,
             self._exit_combo,
             self._exit_duration,
+            self._karaoke_combo,
         ):
             widget.setEnabled(not inherit)
 
@@ -276,6 +295,7 @@ class _LineAnimationDialog(QDialog):
             entry_duration_ms=self._entry_duration.value(),
             exit_anim=str(self._exit_combo.currentData() or "none"),
             exit_duration_ms=self._exit_duration.value(),
+            karaoke_anim=str(self._karaoke_combo.currentData() or "inherit"),
         )
 
 

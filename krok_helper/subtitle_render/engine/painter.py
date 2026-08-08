@@ -14162,6 +14162,8 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
             int(override.entry_duration_ms),
             override.exit_anim,
             int(override.exit_duration_ms),
+            # 唱字动画也在键里：只有它不同的两行，否则会命中同一份缓存样式。
+            override.karaoke_anim,
         ),
     )
     hit = cache.get(cache_key)

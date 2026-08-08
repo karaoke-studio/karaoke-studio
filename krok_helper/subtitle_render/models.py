@@ -159,12 +159,15 @@ class TimingChar:
 
 @dataclass(frozen=True)
 class LineAnimationOverride:
-    """一行歌词对全局入场/退场动画的完整覆盖。"""
+    """一行歌词对全局入场/退场/唱字动画的完整覆盖。"""
 
     entry_anim: EntryAnimation = "none"
     entry_duration_ms: int = 300
     exit_anim: ExitAnimation = "none"
     exit_duration_ms: int = 300
+    karaoke_anim: KaraokeAnimation = "inherit"
+    """唱字动画。``inherit`` 沿用全局推导（与 Style 同义），让次字幕这类行能单独
+    关掉或打开唱字特效，而不必跟着主字幕走。"""
 
 
 @dataclass
@@ -1283,13 +1286,18 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
     override = line.animation_override
     if override is None:
         return style
-    return replace(
-        style,
-        entry_anim=override.entry_anim,
-        entry_lead_ms=max(int(override.entry_duration_ms), 0),
-        exit_anim=override.exit_anim,
-        exit_fade_ms=max(int(override.exit_duration_ms), 0),
-    )
+    changes: dict[str, object] = {
+        "entry_anim": override.entry_anim,
+        "entry_lead_ms": max(int(override.entry_duration_ms), 0),
+        "exit_anim": override.exit_anim,
+        "exit_fade_ms": max(int(override.exit_duration_ms), 0),
+    }
+    if override.karaoke_anim != "inherit":
+        # inherit 表示「保持全局那一档」，必须原样留下 style.karaoke_anim。
+        # 若把 "inherit" 写进行样式，effective_karaoke_animation 会转而去看这一行
+        # 被覆盖后的入退场——全局显式设的 utopia 就这么丢了。
+        changes["karaoke_anim"] = override.karaoke_anim
+    return replace(style, **changes)
 
 
 def effective_karaoke_animation(style: Style) -> Literal["none", "utopia"]:
@@ -1602,12 +1610,17 @@ def line_animation_override_to_dict(
 ) -> Optional[dict[str, object]]:
     if override is None:
         return None
-    return {
+    data: dict[str, object] = {
         "entry_anim": override.entry_anim,
         "entry_duration_ms": max(int(override.entry_duration_ms), 0),
         "exit_anim": override.exit_anim,
         "exit_duration_ms": max(int(override.exit_duration_ms), 0),
     }
+    # inherit 不落盘：它不带信息，而且没用这个功能的项目重新保存后文件不该平白多
+    # 出一个键（读回时缺键本来就按 inherit 处理）。
+    if override.karaoke_anim != "inherit":
+        data["karaoke_anim"] = override.karaoke_anim
+    return data
 
 
 def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOverride]:
@@ -1630,11 +1643,16 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
         except (TypeError, ValueError):
             return fallback
 
+    karaoke = value.get("karaoke_anim")
+    if karaoke not in {"inherit", "none", "utopia"}:
+        # 旧项目没有这一项，按继承处理——渲染结果与加这个字段之前一致。
+        karaoke = "inherit"
     return LineAnimationOverride(
         entry_anim=entry,
         entry_duration_ms=duration("entry_duration_ms", 300),
         exit_anim=exit_,
         exit_duration_ms=duration("exit_duration_ms", 300),
+        karaoke_anim=karaoke,
     )
 
 
