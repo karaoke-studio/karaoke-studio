@@ -7,8 +7,10 @@ from PyQt6.QtWidgets import QApplication
 
 from krok_helper.settings import AppSettings
 from krok_helper.video_download.download_task import (
+    TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_DOWNLOADING,
+    TASK_STATUS_FAILED,
     TASK_STATUS_WAITING,
 )
 from krok_helper.video_download.video_download_page import (
@@ -97,6 +99,33 @@ def test_status_change_rebuilds_action_widget(page: VideoDownloadPage) -> None:
 
     assert page.download_table.cellWidget(0, DOWNLOAD_TABLE_ACTION_COLUMN) is not before
     assert _action_button_texts(page, 0)[0] == "打开"
+
+
+def test_download_hint_shows_completed_count(page: VideoDownloadPage) -> None:
+    assert page.download_hint_label.text() == "共 2 个任务。已结束 0/2（成功 0，失败 0）"
+
+    page._tasks[0].status = TASK_STATUS_COMPLETED
+    page._refresh_download_table()
+
+    assert page.download_hint_label.text() == "共 2 个任务。已结束 1/2（成功 1，失败 0）"
+
+
+def test_download_hint_counts_failures_and_cancellations(page: VideoDownloadPage) -> None:
+    page._tasks[0].status = TASK_STATUS_FAILED
+    page._tasks[1].status = TASK_STATUS_CANCELLED
+
+    page._refresh_download_table()
+
+    assert page.download_hint_label.text() == "共 2 个任务。已结束 2/2（成功 0，失败 1，取消 1）"
+
+
+def test_download_hint_shows_all_completed(page: VideoDownloadPage) -> None:
+    for task in page._tasks:
+        task.status = TASK_STATUS_COMPLETED
+
+    page._refresh_download_table()
+
+    assert page.download_hint_label.text() == "共 2 个任务。全部完成"
 
 
 def test_removing_a_task_rebinds_shifted_action_widget(page: VideoDownloadPage) -> None:

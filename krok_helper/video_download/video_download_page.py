@@ -2497,7 +2497,7 @@ class VideoDownloadPage(QWidget):
         """
         self._progress_refresh_pending = False
         self.download_table.setRowCount(len(self._tasks))
-        self.download_hint_label.setText("暂无下载任务。" if not self._tasks else f"共 {len(self._tasks)} 个任务。")
+        self.download_hint_label.setText(self._download_list_hint())
 
         for row in [row for row in self._action_widget_state if row >= len(self._tasks)]:
             self._action_widget_state.pop(row, None)
@@ -2509,6 +2509,24 @@ class VideoDownloadPage(QWidget):
         self._sync_table_selection()
         self._refresh_download_actions()
         self._refresh_task_switcher()
+
+    def _download_list_hint(self) -> str:
+        """Return the task count and a breakdown of terminal task states."""
+        total = len(self._tasks)
+        if total == 0:
+            return "暂无下载任务。"
+
+        completed = sum(task.status == TASK_STATUS_COMPLETED for task in self._tasks)
+        failed = sum(task.status == TASK_STATUS_FAILED for task in self._tasks)
+        cancelled = sum(task.status == TASK_STATUS_CANCELLED for task in self._tasks)
+        finished = completed + failed + cancelled
+        if completed == total:
+            return f"共 {total} 个任务。全部完成"
+
+        details = [f"成功 {completed}", f"失败 {failed}"]
+        if cancelled:
+            details.append(f"取消 {cancelled}")
+        return f"共 {total} 个任务。已结束 {finished}/{total}（{'，'.join(details)}）"
 
     def _write_task_row(self, row: int, task: DownloadTask) -> None:
         resolution = task.selected_format.resolution if task.selected_format else "-"
