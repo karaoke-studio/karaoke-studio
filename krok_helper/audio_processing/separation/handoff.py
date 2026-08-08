@@ -11,8 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, PrimaryPushButton, PushButton, SubtitleLabel
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CheckBox, PrimaryPushButton, TitleLabel
 
 from krok_helper.audio_processing.separation.states import TaskType
 
@@ -47,8 +47,13 @@ def collect_accompaniments(results) -> list[tuple[str, Path]]:
 class AccompanimentHandoffDialog(QDialog):
     """问用户把哪几条伴奏放进 Hi-Res 混流。
 
-    即使只有一条也用勾选框：两条时必须能选，一条时保持同一套交互，用户不用重新
-    认一遍界面。
+    版式对齐波形对齐模块的导出完成弹窗（``gui_qt.AlignmentHandoffDialog``）：同样
+    是「标题 + 一段说明 + 若干勾选项 + 确认/取消」，用户在两处看到的是同一种东西。
+
+    勾选框用 qfluentwidgets 的 ``CheckBox`` 而不是裸 ``QCheckBox``——工作台的全局
+    QSS 只给 QCheckBox 设了透明背景、没管指示器，勾上以后那个对勾根本看不见。
+
+    即使只有一条也用勾选框：两条时必须能选，一条时保持同一套交互。
     """
 
     def __init__(
@@ -57,59 +62,55 @@ class AccompanimentHandoffDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._checks: list[tuple[QCheckBox, Path]] = []
+        self._checks: list[tuple[CheckBox, Path]] = []
 
         self.setWindowTitle("音频分离完成")
         if parent is not None:
             self.setWindowIcon(parent.windowIcon())
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
-        layout.addWidget(SubtitleLabel("音频分离完成", self))
+        layout.addWidget(TitleLabel("音频分离完成", self))
 
+        # 两条伴奏几乎总在同一个目录，把目录提到说明里，勾选项只留文件名，
+        # 免得每一项都拖一条长路径。
+        folders = {path.parent for _label, path in candidates}
+        location = f"文件已保存到：\n{folders.pop()}\n\n" if len(folders) == 1 else ""
         summary = BodyLabel(
-            "已生成伴奏音频。勾选要放进第 6 步 Hi-Res 混流的伴奏："
-            if len(candidates) > 1
-            else "已生成伴奏音频。是否放进第 6 步 Hi-Res 混流？",
-            self,
+            f"{location}请选择要放进第 6 步 Hi-Res 混流的伴奏音频：", self
         )
         summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(summary)
 
         for label, path in candidates:
-            check = QCheckBox(f"{label}：{path.name}", self)
+            check = CheckBox(f"{label}：{path.name}", self)
             check.setChecked(True)
             check.setToolTip(str(path))
             layout.addWidget(check)
-            hint = CaptionLabel(str(path), self)
-            hint.setWordWrap(True)
-            hint.setIndent(24)
-            layout.addWidget(hint)
             self._checks.append((check, path))
 
         if len(candidates) > 1:
-            layout.addWidget(
-                CaptionLabel("放入多条伴奏时，Hi-Res 会为每条各生成一个混流视频。", self)
-            )
+            note = BodyLabel("放入多条伴奏时，Hi-Res 会为每条各生成一个混流视频。", self)
+            note.setWordWrap(True)
+            layout.addWidget(note)
 
-        layout.addSpacing(4)
+        layout.addSpacing(8)
         buttons = QHBoxLayout()
         buttons.setSpacing(12)
-        buttons.addStretch(1)
-        self.cancelButton = PushButton("暂不放入", self)
-        self.cancelButton.clicked.connect(self.reject)
         self.yesButton = PrimaryPushButton("放入并前往 Hi-Res 混流", self)
+        self.cancelButton = QPushButton("暂不放入", self)
         self.yesButton.clicked.connect(self.accept)
-        self.yesButton.setDefault(True)
-        buttons.addWidget(self.cancelButton)
-        buttons.addWidget(self.yesButton)
+        self.cancelButton.clicked.connect(self.reject)
+        buttons.addWidget(self.yesButton, 1)
+        buttons.addWidget(self.cancelButton, 1)
         layout.addLayout(buttons)
 
         for check, _path in self._checks:
             check.toggled.connect(self._sync_confirm_enabled)
         self._sync_confirm_enabled()
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(620)
 
     def _sync_confirm_enabled(self) -> None:
         # 一条都没勾还点确认没有意义。

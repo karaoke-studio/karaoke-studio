@@ -359,3 +359,47 @@ class TestFlipAnimation:
         for _ in range(4):
             zone._flip_to((zone._index + 1) % len(files))
         assert zone.path in files
+
+
+class TestHandoffDialogLooksLikeTheAlignmentOne:
+    """版式与控件对齐波形对齐模块的导出完成弹窗。"""
+
+    @staticmethod
+    def _dialog(tmp_path):
+        from krok_helper.audio_processing.separation.handoff import (
+            AccompanimentHandoffDialog,
+        )
+
+        inst = tmp_path / "s_伴奏.wav"
+        harmony = tmp_path / "s_和声伴奏.wav"
+        for item in (inst, harmony):
+            item.write_bytes(b"x")
+        return AccompanimentHandoffDialog([("伴奏", inst), ("和声伴奏", harmony)])
+
+    def test_checkboxes_are_fluent_not_raw_qt(self, tmp_path) -> None:
+        """裸 QCheckBox 的指示器没被工作台 QSS 管，勾上以后对勾是看不见的。"""
+        from qfluentwidgets import CheckBox
+
+        dialog = self._dialog(tmp_path)
+        assert dialog._checks
+        for check, _path in dialog._checks:
+            assert isinstance(check, CheckBox)
+
+    def test_it_uses_the_same_heading_and_body_widgets(self, tmp_path) -> None:
+        from qfluentwidgets import BodyLabel, TitleLabel
+
+        dialog = self._dialog(tmp_path)
+        assert dialog.findChild(TitleLabel) is not None
+        assert dialog.findChild(BodyLabel) is not None
+
+    def test_the_shared_folder_is_lifted_into_the_summary(self, tmp_path) -> None:
+        """两条伴奏通常同目录，路径提到说明里，勾选项只留文件名。"""
+        from qfluentwidgets import BodyLabel
+
+        dialog = self._dialog(tmp_path)
+        summary = dialog.findChild(BodyLabel)
+        assert str(tmp_path) in summary.text()
+        for check, path in dialog._checks:
+            assert path.name in check.text()
+            assert str(tmp_path) not in check.text()
+            assert check.toolTip() == str(path)
