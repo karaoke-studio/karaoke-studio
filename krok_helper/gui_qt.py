@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from string import Formatter
-from typing import Callable
+from typing import Callable, Sequence
 
 from krok_helper import ensure_sug_src_path
 
@@ -35,6 +35,7 @@ from PyQt6.QtCore import (
     QEvent,
     QPropertyAnimation,
     QRect,
+    QRectF,
     QSize,
     QThread,
     QTimer,
@@ -169,6 +170,7 @@ from krok_helper.pipeline import (
     OUTPUT_NAME_MODE_TEMPLATE,
     OUTPUT_NAME_MODE_VIDEO_NAME,
     resolve_output_dir,
+    resolve_off_output_paths,
     resolve_output_paths,
     run_pipeline,
     validate_output_name_template,
@@ -1928,8 +1930,81 @@ class PlaceholderPage(QWidget):
         shell.addWidget(card, 1)
 
 
+class CornerBadge(QLabel):
+    """卡片右上角的小角标；左右键分别发不同的信号。"""
+
+    clicked = Signal()
+    rightClicked = Signal()
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self.rightClicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        # 右键已经用来翻上一条了，别再弹系统菜单。
+        event.accept()
+
+
+class CardFlipOverlay(QWidget):
+    """卡片翻页时的翻转覆盖层。
+
+    把切换前的样子拍成位图，横向压扁到 0 再展开成新的一张，看起来像卡片翻了个面。
+    覆盖层自己铺满整张卡并填上卡片底色，压住下面真实的控件——否则位图缩窄时会露出
+    底下没变的内容，动画就白做了。
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._pixmap = QPixmap()
+        self._scale = 1.0
+        self._background = QColor("#ffffff")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    def prepare(self, pixmap: QPixmap, background: QColor) -> None:
+        self._pixmap = pixmap
+        self._background = background
+
+    def _get_scale(self) -> float:
+        return self._scale
+
+    def _set_scale(self, value: float) -> None:
+        self._scale = float(value)
+        self.update()
+
+    scale = pyqtProperty(float, fget=_get_scale, fset=_set_scale)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self._background)
+        if self._pixmap.isNull() or self._scale <= 0.001:
+            return
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        ratio = self._pixmap.devicePixelRatio() or 1.0
+        width = self._pixmap.width() / ratio
+        height = self._pixmap.height() / ratio
+        painter.translate(self.width() / 2.0, 0.0)
+        painter.scale(max(0.0, self._scale), 1.0)
+        painter.drawPixmap(QRectF(-width / 2.0, 0.0, width, height), self._pixmap,
+                           QRectF(0, 0, self._pixmap.width(), self._pixmap.height()))
+
+
 class DropZoneCard(CardWidget):
     pathChanged = Signal(Path)
+    #: 多文件模式下条目增删（翻页不发）。
+    pathsChanged = Signal()
     browseRequested = Signal()
 
     def __init__(
@@ -1942,12 +2017,16 @@ class DropZoneCard(CardWidget):
         icon_text: str = "",
         placeholder_icon: str = "",
         accent_bg: str = "#f6f8fb",
+        multiple: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.extensions = {ext.lower() for ext in extensions}
         self.accent_bg = accent_bg
-        self.path: Path | None = None
+        #: 唯一真相；单文件模式下最多一个元素，``path`` 只是它的视图。
+        self.paths: list[Path] = []
+        self.multiple = multiple
+        self._index = 0
         self._hovered = False
         self._drag_state = "idle"
         self._default_action_text = "点击选择文件，或直接拖进这个区域"
@@ -1980,6 +2059,7 @@ class DropZoneCard(CardWidget):
         title_row.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addWidget(self.title_label, 1, Qt.AlignmentFlag.AlignVCenter)
 
+        self._base_hint = hint
         self.hint_label = QLabel(hint)
         self.hint_label.setObjectName("DropZoneHint")
         self.hint_label.setWordWrap(True)
@@ -2020,6 +2100,25 @@ class DropZoneCard(CardWidget):
         )
         self._status_badge.hide()
 
+        # ── 多文件：序号角标 + 移除按钮 ───────────────────────────
+        self._page_badge = CornerBadge("1 / 1", self)
+        self._page_badge.setObjectName("DropZonePageBadge")
+        self._page_badge.setFixedHeight(22)
+        self._page_badge.setMinimumWidth(46)
+        self._page_badge.clicked.connect(self.show_next)
+        self._page_badge.rightClicked.connect(self.show_previous)
+        self._page_badge.hide()
+
+        self._remove_badge = CornerBadge("✕", self)
+        self._remove_badge.setObjectName("DropZoneRemoveBadge")
+        self._remove_badge.setFixedSize(22, 22)
+        self._remove_badge.setToolTip("移除当前这条")
+        self._remove_badge.clicked.connect(self._on_remove_clicked)
+        self._remove_badge.hide()
+
+        self._flip_overlay = CardFlipOverlay(self)
+        self._flip_anim: QPropertyAnimation | None = None
+
         layout.addLayout(title_row)
         layout.addWidget(self.hint_label)
         layout.addStretch(1)
@@ -2038,20 +2137,141 @@ class DropZoneCard(CardWidget):
         except RuntimeError:
             pass
 
+    def _current_background(self) -> str:
+        return getattr(self, "_background_color", "#FFFFFF")
+
+    @property
+    def path(self) -> Path | None:
+        """当前显示的那条；多文件模式下随序号变化。"""
+        if not self.paths:
+            return None
+        return self.paths[min(self._index, len(self.paths) - 1)]
+
     def accepts(self, path: Path) -> bool:
         return path.is_file() and path.suffix.lower() in self.extensions
 
     def set_path(self, path: Path) -> None:
-        self.path = path
-        self.path_label.setText(str(path))
+        """设为唯一一条（多文件模式下等于清空后重放）。"""
+        self.paths = [path]
+        self._index = 0
         self._drag_state = "idle"
-        self._refresh_style()
+        self._refresh_paths_ui()
+
+    def add_paths(self, paths: Sequence[Path]) -> list[Path]:
+        """追加若干条并跳到第一条新加入的；返回真正加进去的（去重后）。"""
+        if not self.multiple:
+            if paths:
+                self.set_path(Path(paths[-1]))
+                return [Path(paths[-1])]
+            return []
+        existing = {str(item).lower() for item in self.paths}
+        added = [Path(item) for item in paths if str(item).lower() not in existing]
+        if not added:
+            return []
+        first_new = len(self.paths)
+        self.paths.extend(added)
+        self._drag_state = "idle"
+        self._go_to(first_new, animate=bool(first_new))
+        return added
+
+    def remove_current(self) -> None:
+        """移除当前显示的这条，停在原位（即自动落到下一条）。"""
+        if not self.paths:
+            return
+        index = min(self._index, len(self.paths) - 1)
+        self.paths.pop(index)
+        self._index = min(index, max(0, len(self.paths) - 1))
+        self._refresh_paths_ui()
 
     def clear_path(self) -> None:
-        self.path = None
-        self.path_label.setText("未选择文件")
+        self.paths = []
+        self._index = 0
         self._drag_state = "idle"
+        self._refresh_paths_ui()
+
+    # ── 多文件翻页 ────────────────────────────────────────────────
+    def _go_to(self, index: int, *, animate: bool = True) -> None:
+        if not self.paths:
+            return
+        index %= len(self.paths)
+        if index == self._index:
+            self._refresh_paths_ui()
+            return
+        if not animate or not self.isVisible():
+            self._index = index
+            self._refresh_paths_ui()
+            return
+        self._flip_to(index)
+
+    def show_next(self) -> None:
+        self._go_to(self._index + 1)
+
+    def show_previous(self) -> None:
+        self._go_to(self._index - 1)
+
+    def _refresh_paths_ui(self) -> None:
+        current = self.path
+        self.path_label.setText(str(current) if current is not None else "未选择文件")
+        total = len(self.paths)
+        show_pager = self.multiple and total > 1
+        self._page_badge.setVisible(show_pager)
+        if show_pager:
+            self._page_badge.setText(f"{min(self._index, total - 1) + 1} / {total}")
+            self._page_badge.setToolTip("左键下一条，右键上一条")
+        self._remove_badge.setVisible(self.multiple and total > 0)
+        if self.multiple and total > 1:
+            self.hint_label.setText(f"已放入 {total} 个伴奏音频，将各生成一个混流视频。")
+        else:
+            self.hint_label.setText(self._base_hint)
         self._refresh_style()
+        self._position_status_badge()
+
+    def _flip_to(self, index: int) -> None:
+        anim, self._flip_anim = self._flip_anim, None
+        try:
+            # 动画用的是 DeleteWhenStopped，跑完 C++ 对象就没了；这里可能拿到一个
+            # 已经析构的壳子（连点翻页就会撞上），所以要兜住 RuntimeError。
+            if anim is not None and anim.state() == QAbstractAnimation.State.Running:
+                anim.stop()
+        except RuntimeError:
+            pass
+
+        overlay = self._flip_overlay
+        overlay.setGeometry(self.rect())
+        overlay.prepare(self.grab(), QColor(self._current_background()))
+        overlay.show()
+        overlay.raise_()
+
+        forward = QPropertyAnimation(overlay, b"scale", self)
+        forward.setDuration(110)
+        forward.setStartValue(1.0)
+        forward.setEndValue(0.0)
+        forward.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        def _swap() -> None:
+            self._index = index
+            self._refresh_paths_ui()
+            overlay.hide()  # 抓图时别把覆盖层自己也抓进去
+            overlay.prepare(self.grab(), QColor(self._current_background()))
+            overlay.show()
+            overlay.raise_()
+            back = QPropertyAnimation(overlay, b"scale", self)
+            back.setDuration(130)
+            back.setStartValue(0.0)
+            back.setEndValue(1.0)
+            back.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+            def _done() -> None:
+                overlay.hide()
+                self._flip_anim = None  # 别留下指向已析构对象的引用
+
+            back.finished.connect(_done)
+            self._flip_anim = back
+            back.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+        forward.finished.connect(_swap)
+        self._flip_anim = forward
+        forward.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hovered = True
@@ -2074,15 +2294,16 @@ class DropZoneCard(CardWidget):
             return
         super().mousePressEvent(event)
 
+    def _accepted_drops(self, mime) -> list[Path]:
+        """拖进来的东西里挑出能收的；单文件模式只取第一个。"""
+        paths = [Path(url.toLocalFile()).expanduser() for url in mime.urls()]
+        usable = [path for path in paths if str(path) and self.accepts(path)]
+        if not self.multiple:
+            return usable[:1]
+        return usable
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        urls = event.mimeData().urls()
-        if not urls:
-            self._drag_state = "reject"
-            self._refresh_style()
-            event.ignore()
-            return
-        path = Path(urls[0].toLocalFile()).expanduser()
-        if self.accepts(path):
+        if self._accepted_drops(event.mimeData()):
             self._drag_state = "accept"
             self._refresh_style()
             event.acceptProposedAction()
@@ -2097,25 +2318,38 @@ class DropZoneCard(CardWidget):
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        urls = event.mimeData().urls()
-        if not urls:
-            self._drag_state = "idle"
+        accepted = self._accepted_drops(event.mimeData())
+        self._drag_state = "idle"
+        if not accepted:
             self._refresh_style()
             event.ignore()
             return
-        path = Path(urls[0].toLocalFile()).expanduser()
-        if not self.accepts(path):
-            self._drag_state = "reject"
-            self._refresh_style()
-            event.ignore()
-            return
-        self.set_path(path)
-        self.pathChanged.emit(path)
+        added = self.add_paths(accepted)
         event.acceptProposedAction()
+        if added:
+            self.pathChanged.emit(added[0])
+
+    def _on_remove_clicked(self) -> None:
+        self.remove_current()
+        self.pathsChanged.emit()
 
     def _position_status_badge(self) -> None:
-        self._status_badge.move(max(0, self.width() - 32), 10)
+        right = max(0, self.width() - 32)
+        self._status_badge.move(right, 10)
         self._status_badge.raise_()
+        # 角标从右往左排：✓ 之后是序号，再往左是移除按钮。
+        cursor = right
+        if self._status_badge.isVisibleTo(self):
+            cursor -= 6
+        if self._page_badge.isVisibleTo(self):
+            cursor -= self._page_badge.width()
+            self._page_badge.move(max(0, cursor), 10)
+            self._page_badge.raise_()
+            cursor -= 6
+        if self._remove_badge.isVisibleTo(self):
+            cursor -= self._remove_badge.width()
+            self._remove_badge.move(max(0, cursor), 10)
+            self._remove_badge.raise_()
 
     def _refresh_style(self) -> None:
         from krok_helper.theme_workbench import palette
@@ -2181,6 +2415,41 @@ class DropZoneCard(CardWidget):
         self.action_label.setText(action_text)
         self.placeholder_label.setVisible(self.path is None and bool(self.placeholder_label.text()))
         self._status_badge.setVisible(selected)
+        # 翻转覆盖层要用卡片当前底色铺满，才能压住下面没变的内容。
+        self._background_color = background
+        total = len(self.paths)
+        self._page_badge.setVisible(self.multiple and total > 1)
+        self._remove_badge.setVisible(self.multiple and total > 0)
+        self._page_badge.setStyleSheet(
+            f"""
+            QLabel#DropZonePageBadge {{
+                background: {accent};
+                color: white;
+                border-radius: 11px;
+                padding: 0 8px;
+                font-family: "Microsoft YaHei UI";
+                font-size: 9.5pt;
+                font-weight: 700;
+            }}
+            """
+        )
+        self._remove_badge.setStyleSheet(
+            f"""
+            QLabel#DropZoneRemoveBadge {{
+                background: transparent;
+                border: 1px solid {border};
+                border-radius: 11px;
+                color: {_hint_color};
+                font-size: 10pt;
+                font-weight: 700;
+            }}
+            QLabel#DropZoneRemoveBadge:hover {{
+                background: {_reject_bg};
+                border-color: {_reject_border};
+                color: {_reject_accent};
+            }}
+            """
+        )
 
         self.setStyleSheet(
             f"""
@@ -3092,7 +3361,10 @@ class KrokHelperQtApp(QMainWindow):
         from krok_helper.audio_processing import AudioProcessingPage, AudioSeparationPage
 
         self.audio_separation_page = AudioSeparationPage(
-            self.settings, self._save_all_settings, parent=self.page_stack
+            self.settings,
+            self._save_all_settings,
+            parent=self.page_stack,
+            workflow_context=self,
         )
         self.audio_processing_page = AudioProcessingPage(
             self.align_page,
@@ -3301,6 +3573,12 @@ class KrokHelperQtApp(QMainWindow):
     def accept_subtitle_video(self, path: Path) -> None:
         self.set_video_path(path)
         self._show_module(WORKFLOW_HIRES_MIX)
+
+    def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
+        """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。"""
+        added = self.add_off_vocal_paths(paths)
+        self._show_module(WORKFLOW_HIRES_MIX)
+        return added
 
     def _export_lyrics_timing_to_next(self) -> None:
         """确保 SUG 项目落盘后，从该文件加载字幕并切换到第 5 步。"""
@@ -4526,15 +4804,17 @@ class KrokHelperQtApp(QMainWindow):
 
         self.off_vocal_zone = DropZoneCard(
             title="伴奏音频",
-            hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可单独生成伴奏 Hi-Res 视频，也可和原唱一起生成。",
+            hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可放入多条伴奏，每条各出一个视频；也可只放原唱。",
             extensions=HIRES_AUDIO_EXTENSIONS,
             min_height=190,
             icon_text="🎵",
             placeholder_icon="♪",
             accent_bg="#EAF7F4",
+            multiple=True,
         )
         self.off_vocal_zone.browseRequested.connect(self._choose_off_audio)
-        self.off_vocal_zone.pathChanged.connect(self.set_off_vocal_path)
+        # 不接 pathChanged -> set_off_vocal_path：多文件卡在拖放里已经把自己更新好了，
+        # 再回写一次等于 set_path，会把整份列表塌成一条。
         for drop_zone in (self.video_zone, self.on_vocal_zone, self.off_vocal_zone):
             apply_card_shadow(drop_zone)
 
@@ -6432,6 +6712,10 @@ class KrokHelperQtApp(QMainWindow):
     def set_off_vocal_path(self, path: Path) -> None:
         self.off_vocal_zone.set_path(path)
 
+    def add_off_vocal_paths(self, paths: Sequence[Path]) -> list[Path]:
+        """追加伴奏（不覆盖已有的）；音频分离的转交也走这里。"""
+        return self.off_vocal_zone.add_paths(list(paths))
+
     def set_align_video_path(self, path: Path) -> None:
         self.align_video_zone.set_path(path)
         self.align_video_info_label.setText(self._build_media_info(path, "字幕视频"))
@@ -6576,14 +6860,15 @@ class KrokHelperQtApp(QMainWindow):
             self.set_on_vocal_path(Path(path))
 
     def _choose_off_audio(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        # 伴奏可以有多条，每条各出一个混流视频，所以这里允许多选。
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "选择伴奏音频",
+            "选择伴奏音频（可多选）",
             "",
             "音频文件 (*.flac *.wav *.mp3 *.m4a *.aac *.ape *.alac *.mkv *.mp4);;所有文件 (*.*)",
         )
-        if path:
-            self.set_off_vocal_path(Path(path))
+        if paths:
+            self.add_off_vocal_paths([Path(item) for item in paths])
 
     def _choose_align_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择用于对齐的字幕视频", "", "视频文件 (*.mkv *.mp4 *.mov *.avi);;所有文件 (*.*)")
@@ -7740,10 +8025,10 @@ class KrokHelperQtApp(QMainWindow):
 
     def _validate_hires_inputs(
         self,
-    ) -> tuple[Path, Path | None, Path | None, Path, Path | None, str, str | None, str | None]:
+    ) -> tuple[Path, Path | None, list[Path], Path, Path | None, str, str | None, str | None]:
         video_path = self.video_zone.path
         on_vocal_path = self.on_vocal_zone.path
-        off_vocal_path = self.off_vocal_zone.path
+        off_vocal_paths = list(self.off_vocal_zone.paths)
         ffmpeg_dir = self._resolve_ffmpeg_dir()
         output_name_mode = self._resolve_output_name_mode()
 
@@ -7752,20 +8037,18 @@ class KrokHelperQtApp(QMainWindow):
             missing.append("字幕视频")
         if on_vocal_path is not None and not on_vocal_path.is_file():
             missing.append("原唱音频")
-        if off_vocal_path is not None and not off_vocal_path.is_file():
+        if any(not path.is_file() for path in off_vocal_paths):
             missing.append("伴奏音频")
         if missing:
             raise ProcessingError(f"请先选择有效的文件: {', '.join(missing)}")
         assert video_path is not None
 
-        if on_vocal_path is None and off_vocal_path is None:
+        if on_vocal_path is None and not off_vocal_paths:
             raise ProcessingError("请至少选择原唱音频或伴奏音频中的一个。")
-        if (
-            on_vocal_path is not None
-            and off_vocal_path is not None
-            and on_vocal_path.resolve() == off_vocal_path.resolve()
-        ):
-            raise ProcessingError("原唱音频和伴奏音频不能是同一个文件。")
+        if on_vocal_path is not None:
+            on_resolved = on_vocal_path.resolve()
+            if any(path.resolve() == on_resolved for path in off_vocal_paths):
+                raise ProcessingError("原唱音频和伴奏音频不能是同一个文件。")
 
         output_dir = resolve_output_dir(video_path)
         if output_name_mode == OUTPUT_NAME_MODE_TEMPLATE:
@@ -7776,7 +8059,7 @@ class KrokHelperQtApp(QMainWindow):
         return (
             video_path,
             on_vocal_path,
-            off_vocal_path,
+            off_vocal_paths,
             output_dir,
             ffmpeg_dir,
             output_name_mode,
@@ -7850,7 +8133,7 @@ class KrokHelperQtApp(QMainWindow):
         (
             video_path,
             on_vocal_path,
-            off_vocal_path,
+            off_vocal_paths,
             output_dir,
             _ffmpeg_dir,
             output_name_mode,
@@ -7860,34 +8143,39 @@ class KrokHelperQtApp(QMainWindow):
         # 这里才会用真实的视频文件名渲染模板，可能因文件名导致生成的输出名为空
         # 等情况抛 ProcessingError；必须在主线程上兜住，否则异常会逃逸出 Qt 槽。
         try:
-            on_output, off_output = resolve_output_paths(
-                video_path,
-                output_dir,
-                output_name_mode,
-                on_name_template=on_template,
-                off_name_template=off_template,
-                include_on=on_vocal_path is not None,
-                include_off=off_vocal_path is not None,
+            on_output: Path | None = None
+            if on_vocal_path is not None:
+                on_output, _ = resolve_output_paths(
+                    video_path,
+                    output_dir,
+                    output_name_mode,
+                    on_name_template=on_template,
+                    include_on=True,
+                    include_off=False,
+                )
+            off_outputs = resolve_off_output_paths(
+                video_path, output_dir, output_name_mode, off_template, off_vocal_paths
             )
         except ProcessingError as exc:
             QMessageBox.critical(self, APP_TITLE, str(exc))
             return
         self._hires_cancel_requested = False
         self._hires_process = None
-        self._hires_expected_outputs = [path for path in (on_output, off_output) if path is not None]
+        self._hires_expected_outputs = ([on_output] if on_output is not None else []) + off_outputs
         self._hires_completed_outputs = []
         self._hires_preexisting_outputs = {path for path in self._hires_expected_outputs if path.exists()}
         self.hires_start_button.setEnabled(False)
         self.hires_cancel_button.setEnabled(True)
         self.hires_progress.setRange(0, 0)
-        self.hires_status_label.setText("处理中…")
+        total = len(self._hires_expected_outputs)
+        self.hires_status_label.setText("处理中…" if total < 2 else f"处理中…（共 {total} 个输出）")
         self._set_hires_status_color("#2f6fed")
 
         def runner(logger: Callable[[str], None]) -> list[Path]:
             (
                 video_path,
                 on_vocal_path,
-                off_vocal_path,
+                off_vocal_paths,
                 output_dir,
                 ffmpeg_dir,
                 output_name_mode,
@@ -7897,7 +8185,7 @@ class KrokHelperQtApp(QMainWindow):
             outputs = run_pipeline(
                 video_path=video_path,
                 on_vocal_path=on_vocal_path,
-                off_vocal_path=off_vocal_path,
+                off_vocal_paths=off_vocal_paths,
                 output_dir=output_dir,
                 ffmpeg_dir=ffmpeg_dir,
                 output_name_mode=output_name_mode,

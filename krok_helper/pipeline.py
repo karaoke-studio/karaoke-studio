@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from string import Formatter
 from tempfile import TemporaryDirectory
-from typing import Callable
+from typing import Callable, Sequence
 
 from krok_helper.config import DURATION_WARNING_SECONDS, MIN_HIRES_SAMPLE_RATE
 from krok_helper.errors import ExportCancelled, ProcessingError
@@ -355,19 +355,87 @@ def resolve_output_paths(
     raise ProcessingError(f"不支持的输出命名模式: {output_name_mode}")
 
 
+def resolve_off_output_paths(
+    video_path: Path,
+    output_dir: Path,
+    output_name_mode: str,
+    off_name_template: str | None,
+    off_vocal_paths: Sequence[Path],
+) -> list[Path]:
+    """一条伴奏对应一个输出文件。
+
+    只放一条时沿用原来的命名（模板 / 固定名），免得改变已有用户的输出习惯；放了多条
+    才需要区分，此时用 ``{video_name}_{伴奏文件名}``——伴奏文件名本身就说明了这是哪
+    一条，比在模板结果后面再堆一截更好认。
+    """
+    if not off_vocal_paths:
+        return []
+
+    if len(off_vocal_paths) == 1:
+        _, off_output = resolve_output_paths(
+            video_path,
+            output_dir,
+            output_name_mode,
+            off_name_template=off_name_template,
+            include_on=False,
+            include_off=True,
+        )
+        assert off_output is not None
+        return [off_output]
+
+    outputs: list[Path] = []
+    taken: set[str] = set()
+    for audio_path in off_vocal_paths:
+        stem = sanitize_output_stem(f"{video_path.stem}_{audio_path.stem}", "伴奏")
+        # 不同目录下的同名伴奏会撞车，补一个序号而不是互相覆盖。
+        candidate, index = stem, 2
+        while candidate.lower() in taken:
+            candidate = f"{stem}_{index}"
+            index += 1
+        taken.add(candidate.lower())
+        outputs.append(output_dir / f"{candidate}.mkv")
+    return outputs
+
+
+def sanitize_output_stem(stem: str, label: str) -> str:
+    """按输出文件名的规则校验一个已经拼好的名字（不经过模板）。"""
+    cleaned = stem.strip().rstrip(". ")
+    if not cleaned:
+        raise ProcessingError(f"{label} 输出文件名为空。")
+    invalid_chars = sorted({char for char in cleaned if char in WINDOWS_INVALID_FILENAME_CHARS})
+    if invalid_chars:
+        joined = " ".join(invalid_chars)
+        raise ProcessingError(f"{label} 输出文件名包含非法字符: {joined}")
+    return cleaned
+
+
 def run_pipeline(
     video_path: Path,
     on_vocal_path: Path | None,
-    off_vocal_path: Path | None,
-    output_dir: Path | None,
-    ffmpeg_dir: Path | None,
-    output_name_mode: str,
-    on_name_template: str | None,
-    off_name_template: str | None,
-    logger: Logger,
+    off_vocal_path: Path | None = None,
+    output_dir: Path | None = None,
+    ffmpeg_dir: Path | None = None,
+    output_name_mode: str = OUTPUT_NAME_MODE_VIDEO_NAME,
+    on_name_template: str | None = None,
+    off_name_template: str | None = None,
+    logger: Logger = lambda _message: None,
     should_cancel: Callable[[], bool] | None = None,
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
+    *,
+    off_vocal_paths: Sequence[Path] | None = None,
 ) -> list[Path]:
+    """把字幕视频和音频混流成 Hi-Res 视频。
+
+    ``off_vocal_paths`` 可以给多条伴奏，每条各出一个视频；``off_vocal_path`` 是它的
+    单条写法，两者只能给一个。原唱始终最多一条。
+    """
+    if off_vocal_paths is not None and off_vocal_path is not None:
+        raise ProcessingError("off_vocal_path 与 off_vocal_paths 只能提供一个。")
+    off_paths: list[Path] = (
+        list(off_vocal_paths)
+        if off_vocal_paths is not None
+        else ([off_vocal_path] if off_vocal_path is not None else [])
+    )
     ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)
     ffprobe_path = find_tool("ffprobe.exe", ffmpeg_dir)
 
@@ -378,47 +446,53 @@ def run_pipeline(
     if should_cancel is not None and should_cancel():
         raise ExportCancelled("生成已取消。")
 
-    if on_vocal_path is None and off_vocal_path is None:
+    if on_vocal_path is None and not off_paths:
         raise ProcessingError("至少需要提供原唱音频或伴奏音频中的一个。")
 
     video_info = probe_media(ffprobe_path, video_path)
     on_vocal_info = probe_media(ffprobe_path, on_vocal_path) if on_vocal_path is not None else None
-    off_vocal_info = probe_media(ffprobe_path, off_vocal_path) if off_vocal_path is not None else None
+    off_vocal_infos = [probe_media(ffprobe_path, path) for path in off_paths]
 
     if video_info.video_streams == 0:
         raise ProcessingError("字幕视频里没有检测到视频流。")
     if on_vocal_info is not None and on_vocal_info.audio_streams == 0:
         raise ProcessingError("原唱无损文件里没有检测到音频流。")
-    if off_vocal_info is not None and off_vocal_info.audio_streams == 0:
-        raise ProcessingError("伴奏无损文件里没有检测到音频流。")
+    for info in off_vocal_infos:
+        if info.audio_streams == 0:
+            raise ProcessingError(f"伴奏无损文件里没有检测到音频流：{info.path.name}")
 
     log_media_summary(logger, "字幕视频", video_info)
     if on_vocal_info is not None:
         log_media_summary(logger, "原唱无损", on_vocal_info)
-    if off_vocal_info is not None:
-        log_media_summary(logger, "伴奏无损", off_vocal_info)
-    log_audio_format_mismatch(logger, on_vocal_info, off_vocal_info)
+    for info in off_vocal_infos:
+        log_media_summary(logger, "伴奏无损", info)
+    for info in off_vocal_infos:
+        log_audio_format_mismatch(logger, on_vocal_info, info)
 
     if on_vocal_info is not None:
         warn_duration_mismatch(logger, video_info, on_vocal_info, "原唱无损")
-    if off_vocal_info is not None:
-        warn_duration_mismatch(logger, video_info, off_vocal_info, "伴奏无损")
+    for info in off_vocal_infos:
+        warn_duration_mismatch(logger, video_info, info, "伴奏无损")
     if should_cancel is not None and should_cancel():
         raise ExportCancelled("生成已取消。")
 
     output_dir = resolve_output_dir(video_path, output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    on_output, off_output = resolve_output_paths(
-        video_path,
-        output_dir,
-        output_name_mode,
-        on_name_template=on_name_template,
-        off_name_template=off_name_template,
-        include_on=on_vocal_info is not None,
-        include_off=off_vocal_info is not None,
+    on_output: Path | None = None
+    if on_vocal_info is not None:
+        on_output, _ = resolve_output_paths(
+            video_path,
+            output_dir,
+            output_name_mode,
+            on_name_template=on_name_template,
+            include_on=True,
+            include_off=False,
+        )
+    off_outputs = resolve_off_output_paths(
+        video_path, output_dir, output_name_mode, off_name_template, off_paths
     )
     logger(f"输出命名模式: {output_name_mode}")
-    target_names = [path.name for path in (on_output, off_output) if path is not None]
+    target_names = [path.name for path in ([on_output] if on_output else []) + off_outputs]
     logger(f"目标文件名: {' / '.join(target_names)}")
 
     with TemporaryDirectory(prefix="krok-helper-") as temp_dir_raw:
@@ -440,16 +514,18 @@ def run_pipeline(
                 )
             )
 
-        if off_vocal_info is not None and off_output is not None:
+        for index, (info, off_output) in enumerate(zip(off_vocal_infos, off_outputs)):
+            if len(off_outputs) > 1:
+                logger(f"伴奏 {index + 1}/{len(off_outputs)}: {info.path.name}")
             outputs.append(
                 process_output(
                     ffmpeg_path,
                     logger,
                     video_info,
-                    off_vocal_info,
+                    info,
                     off_output,
-                    temp_dir / "off_vocal.normalized.flac",
-                    "Off Vocal",
+                    temp_dir / f"off_vocal.{index}.normalized.flac",
+                    "Off Vocal" if len(off_outputs) == 1 else f"Off Vocal {index + 1}",
                     should_cancel=should_cancel,
                     on_process_started=on_process_started,
                 )

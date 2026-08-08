@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QStackedWidget,
@@ -104,10 +105,15 @@ class AudioSeparationPage(QWidget):
         save_settings,
         parent: QWidget | None = None,
         backend: SeparationBackend | None = None,
+        workflow_context=None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
         self._save_settings = save_settings
+        #: 主窗口（用来把产物交给后续模块）；独立运行分离页时可以是 None。
+        self._workflow_context = workflow_context
+        #: 本批任务已产出的结果，整批结束时用来问要不要转交 Hi-Res。
+        self._batch_results: list = []
         settings_ns = getattr(settings, "pymss", None)
         if not isinstance(settings_ns, dict):
             settings_ns = {}
@@ -324,9 +330,12 @@ class AudioSeparationPage(QWidget):
         # 整批结束时清空勾选：否则残留哪张卡取决于它在队列里的位置（最后一个会留下），
         # 结果随时序而定。跑完就重新选，状态也更确定。
         busy = snapshot.state in _TASK_PANEL_STATES
+        if busy and not self._was_busy:
+            self._batch_results = []
         if self._was_busy and not busy:
             for card in self._task_cards.values():
                 card.set_selected(False, emit=False)
+            self._offer_accompaniment_handoff()
         self._was_busy = busy
 
         self._refresh_run_bar(snapshot)
@@ -451,9 +460,33 @@ class AudioSeparationPage(QWidget):
         if self._panel_mode == "task":
             self._task_panel.update_progress(progress)
 
+    # ── 与后续模块的联动 ──────────────────────────────────────────
+    def _offer_accompaniment_handoff(self) -> None:
+        """整批分离结束后，问用户要不要把伴奏交给第 6 步 Hi-Res 混流。"""
+        from krok_helper.audio_processing.separation.handoff import (
+            AccompanimentHandoffDialog,
+            collect_accompaniments,
+        )
+
+        results, self._batch_results = self._batch_results, []
+        accept = getattr(self._workflow_context, "accept_separated_accompaniment", None)
+        if not callable(accept):
+            return
+        candidates = collect_accompaniments(results)
+        if not candidates:
+            return
+
+        dialog = AccompanimentHandoffDialog(candidates, self.window())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = dialog.selected_paths()
+        if selected:
+            accept(selected)
+
     def _on_result_ready(self, result) -> None:
         self._results_panel.add_result(result)
         self._results_panel.setVisible(True)
+        self._batch_results.append(result)
 
     # ── 状态条动作分发 ─────────────────────────────────────────────
     def _dispatch_action(self, action: str) -> None:
