@@ -800,8 +800,8 @@ def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path)
     assert win._export_dir_edit.text() == str(first_dir)
     assert win._export_name_edit.text() == "Dark spiral journey_yurika出力"
 
-    # 新视频会同时更新来源目录与输出文件名。
-    win.load_video(second_dir / "second.mp4")
+    # 从预览区的真实信号入口换视频，也会同时更新来源目录与输出文件名。
+    win._preview_panel.pathDropped.emit(second_dir / "second.mp4")
     assert win._export_dir_edit.text() == str(second_dir)
     assert win._export_name_edit.text() == "second_yurika出力"
 
@@ -820,6 +820,50 @@ def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path)
     win.load_video(tmp_path / "fourth.mp4")
     assert win._export_dir_edit.text() == str(fixed_dir)
     assert win._export_name_edit.text() == "fourth_yurika出力"
+
+
+def test_dropped_video_syncs_export_before_preview_window_request(
+    qapp, monkeypatch, tmp_path
+):
+    """预览窗口链路不能成为导出页同步的前置条件。"""
+    win = _make_window(qapp, monkeypatch)
+    win._set_export_directory_settings(
+        mw.EXPORT_DIR_SOURCE_VIDEO,
+        "",
+        persist=False,
+    )
+    video = tmp_path / "new" / "replacement.mp4"
+    video.parent.mkdir()
+    video.write_bytes(b"fake")
+    monkeypatch.setattr(
+        mw,
+        "probe_media",
+        lambda probe, path: MediaInfo(
+            path=path,
+            duration=5.0,
+            video_streams=1,
+            audio_streams=0,
+            subtitle_streams=0,
+            video_width=320,
+            video_height=180,
+            video_fps=60.0,
+        ),
+    )
+
+    export_state_at_preview_request = []
+    monkeypatch.setattr(
+        win,
+        "_request_preview_window",
+        lambda: export_state_at_preview_request.append(
+            (win._export_dir_edit.text(), win._export_name_edit.text())
+        ),
+    )
+
+    win._preview_panel.pathDropped.emit(video)
+
+    assert export_state_at_preview_request == [
+        (str(video.parent), "replacement_yurika出力")
+    ]
 
 
 def test_loading_project_video_keeps_saved_output_name(qapp, monkeypatch, tmp_path):

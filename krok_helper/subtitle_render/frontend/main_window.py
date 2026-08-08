@@ -4717,6 +4717,11 @@ class SubtitleRenderWindow(QWidget):
         if not self._loading_project:
             self._sync_output_size_to_video(info)
         self._background_source = BackgroundSource(kind="video", path=str(path))
+        # Export state belongs to the loaded media model, not to the floating
+        # preview window.  Keep it in sync before touching preview widgets: a
+        # preview show/layout failure must not leave the export page pointing
+        # at the previous video.
+        self._prefill_export_output(force_name=not self._loading_project)
         if not self._loading_project:
             self._resolve_unresolved_resource_labels(
                 {"背景视频", "背景图片", "背景图片序列", "独立音频"}
@@ -4725,7 +4730,6 @@ class SubtitleRenderWindow(QWidget):
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
         self._request_preview_window()
-        self._prefill_export_output(force_name=not self._loading_project)
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
         if info.audio_streams > 0:
             self._audio_path = path
@@ -4812,6 +4816,9 @@ class SubtitleRenderWindow(QWidget):
             self._audio_info = None
             self._transport_bar.set_audio_source(None)
         self._background_source = source
+        # As with video backgrounds, resolve export state from the model before
+        # preview-window work so the two pages cannot diverge on a UI failure.
+        self._prefill_export_output()
         if not self._loading_project:
             self._resolve_unresolved_resource_labels(
                 {"背景视频", "背景图片", "背景图片序列"}
@@ -4822,7 +4829,6 @@ class SubtitleRenderWindow(QWidget):
         if source.path:
             self._preview_window.set_media_title(Path(source.path))
         self._request_preview_window()
-        self._prefill_export_output()
         self._refresh_transport_duration()
         self._mark_project_dirty()
 
