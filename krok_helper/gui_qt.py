@@ -3575,10 +3575,11 @@ class KrokHelperQtApp(QMainWindow):
         self._show_module(WORKFLOW_HIRES_MIX)
 
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
-        """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。"""
-        added = self.add_off_vocal_paths(paths)
-        self._show_module(WORKFLOW_HIRES_MIX)
-        return added
+        """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。
+
+        只放素材、不切页面：用户往往还要在第 2 步接着分下一首，跳走反而打断。
+        """
+        return self.add_off_vocal_paths(paths)
 
     def _export_lyrics_timing_to_next(self) -> None:
         """确保 SUG 项目落盘后，从该文件加载字幕并切换到第 5 步。"""

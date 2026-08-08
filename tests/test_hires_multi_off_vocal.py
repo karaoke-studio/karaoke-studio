@@ -413,3 +413,25 @@ class TestHandoffDialogLooksLikeTheAlignmentOne:
             assert path.name in check.text()
             assert str(tmp_path) not in check.text()
             assert check.toolTip() == str(path)
+
+
+class TestHandoffDoesNotNavigate:
+    def test_accepting_only_fills_the_card(self) -> None:
+        """只放素材、不切页面：用户往往还要在第 2 步接着分下一首。"""
+        import inspect
+
+        from krok_helper.gui_qt import KrokHelperQtApp
+
+        source = inspect.getsource(KrokHelperQtApp.accept_separated_accompaniment)
+        assert "add_off_vocal_paths" in source
+        assert "_show_module" not in source
+
+    def test_the_button_no_longer_promises_to_navigate(self, tmp_path) -> None:
+        from krok_helper.audio_processing.separation.handoff import (
+            AccompanimentHandoffDialog,
+        )
+
+        item = tmp_path / "s_伴奏.wav"
+        item.write_bytes(b"x")
+        dialog = AccompanimentHandoffDialog([("伴奏", item)])
+        assert "前往" not in dialog.yesButton.text()

@@ -99,7 +99,7 @@ class AccompanimentHandoffDialog(QDialog):
         layout.addSpacing(8)
         buttons = QHBoxLayout()
         buttons.setSpacing(12)
-        self.yesButton = PrimaryPushButton("放入并前往 Hi-Res 混流", self)
+        self.yesButton = PrimaryPushButton("放入 Hi-Res 混流", self)
         # 必须也是 qfluentwidgets 的按钮：裸 QPushButton 的高度和内边距跟
         # PrimaryPushButton 对不上，并排放会明显矮一圈。
         self.cancelButton = PushButton("暂不放入", self)
