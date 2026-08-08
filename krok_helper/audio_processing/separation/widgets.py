@@ -948,6 +948,20 @@ class TaskCard(CardWidget):
             self.set_selected(not self._selected)
         super().mouseReleaseEvent(event)
 
+    def _set_reason(self, text: str, *, level: StateLevel | None = None) -> None:
+        """设置卡片底部那行说明；``level`` 非空时按状态色强调。
+
+        必须走同一个入口：只在某一条分支里 setStyleSheet，红色会残留到后面的状态上。
+        另外给 qfluent 标签设 QSS 会顶掉它原本的透明底，得显式写回去。
+        """
+        self._reason.setText(text)
+        if level is None:
+            self._reason.setStyleSheet("background: transparent;")
+        else:
+            self._reason.setStyleSheet(
+                f"color: {_level_color(level)}; background: transparent;"
+            )
+
     # ── 依赖与队列状态 ───────────────────────────────────────────
     def set_dependency(
         self,
@@ -961,36 +975,37 @@ class TaskCard(CardWidget):
         self._download_bytes = 0
         if queue_label:
             self._pill.set_state(queue_label, StateLevel.BUSY)
-            self._reason.setText("任务进行中，无法更改选择")
+            self._set_reason("任务进行中，无法更改选择")
             self._selectable = False
             self._apply_look()
             return
         if not service_ready:
             self._pill.set_state("", StateLevel.INFO)
-            self._reason.setText("需要先启动服务")
+            # 服务没起时三张卡全都点不动，这行是唯一的解释，用错误色让它显眼。
+            self._set_reason("需要先启动服务", level=StateLevel.ERROR)
             self._selectable = False
             self._selected = False
             self._apply_look()
             return
         if unavailable_reason:
             self._pill.set_state(dep.badge or "不可用", StateLevel.INFO)
-            self._reason.setText(unavailable_reason)
+            self._set_reason(unavailable_reason)
             self._selectable = False
             self._selected = False
             self._apply_look()
             return
         if dep.ready:
             self._pill.set_state(dep.badge or "就绪", StateLevel.SUCCESS)
-            self._reason.setText("")
+            self._set_reason("")
             self._selectable = True
         elif dep.download_bytes > 0:
             self._pill.set_state(dep.badge, StateLevel.WARNING)
-            self._reason.setText(dep.reason or "开始时会先下载所需模型")
+            self._set_reason(dep.reason or "开始时会先下载所需模型")
             self._download_bytes = dep.download_bytes
             self._selectable = True
         else:
             self._pill.set_state(dep.badge or "不可用", StateLevel.ERROR)
-            self._reason.setText(dep.reason or "当前不可用")
+            self._set_reason(dep.reason or "当前不可用")
             self._selectable = False
             self._selected = False
         self._apply_look()

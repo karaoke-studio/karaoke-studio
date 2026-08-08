@@ -1331,3 +1331,44 @@ class TestDropZoneFeedback:
         assert empty == filled == cleared, (empty, filled, cleared)
         # 同一行两张卡还要保持等高（§3.4）。
         assert empty[0] == empty[1], empty
+
+
+class TestServiceNotStartedReason:
+    """服务没起时三张卡都点不动，那行说明得显眼。"""
+
+    @staticmethod
+    def _card():
+        from krok_helper.audio_processing.separation.states import (
+            TaskDependency,
+            TaskType,
+        )
+        from krok_helper.audio_processing.separation.widgets import TaskCard
+
+        card = TaskCard(TaskType.INSTRUMENTAL)
+        dep = TaskDependency(task=TaskType.INSTRUMENTAL, ready=True, badge="就绪")
+        return card, dep
+
+    def test_it_is_shown_in_the_error_colour(self) -> None:
+        from krok_helper.audio_processing.separation.states import StateLevel
+        from krok_helper.audio_processing.separation.widgets import _level_color
+
+        card, dep = self._card()
+        card.set_dependency(dep, service_ready=False)
+        assert card._reason.text() == "需要先启动服务"
+        assert _level_color(StateLevel.ERROR) in card._reason.styleSheet()
+
+    def test_the_colour_does_not_linger_once_the_service_is_up(self) -> None:
+        """只在一条分支里 setStyleSheet，红色会跟着标签留到后面的状态上。"""
+        from krok_helper.audio_processing.separation.states import StateLevel
+        from krok_helper.audio_processing.separation.widgets import _level_color
+
+        card, dep = self._card()
+        card.set_dependency(dep, service_ready=False)
+        card.set_dependency(dep, service_ready=True)
+        assert _level_color(StateLevel.ERROR) not in card._reason.styleSheet()
+
+    def test_the_label_keeps_a_transparent_background(self) -> None:
+        """给 qfluent 标签设 QSS 会顶掉它原本的透明底，卡片上会多出一块白条。"""
+        card, dep = self._card()
+        card.set_dependency(dep, service_ready=False)
+        assert "background: transparent" in card._reason.styleSheet()
