@@ -45,6 +45,15 @@ SUBTITLE_SOURCE_SUFFIX = ".sug"
 # N3 自动命名的「_ニコカラメーカー3出力」映射成它。
 DEFAULT_OUTPUT_NAME_SUFFIX = "_yurika出力"
 
+#: 导出文件名模板可用的占位符 → 面向用户的说明。
+EXPORT_NAME_TEMPLATE_FIELDS = {
+    "source_name": "素材名（视频 > 背景素材 > 字幕文件，与导出目录同源）",
+    "video_name": "视频文件名",
+    "subtitle_name": "字幕文件名",
+}
+#: 默认模板；渲染结果与改造前完全一致，不动老用户的输出习惯。
+DEFAULT_EXPORT_NAME_TEMPLATE = f"{{source_name}}{DEFAULT_OUTPUT_NAME_SUFFIX}"
+
 
 # ---------------------------------------------------------------------------
 # 字幕源（SUG / Nicokara LRC）中间表示

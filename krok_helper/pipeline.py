@@ -80,7 +80,17 @@ def log_audio_format_mismatch(
     logger("检测到原唱和伴奏的文件格式不一致，将先分别标准化为临时 FLAC，再进行封装。")
 
 
-def validate_output_name_template(template: str, label: str) -> str:
+def validate_output_name_template(
+    template: str,
+    label: str,
+    allowed_fields: set[str] | None = None,
+) -> str:
+    """校验一条输出命名模板并返回规范化后的字符串。
+
+    ``allowed_fields`` 让不同模块用各自的占位符词表（Hi-Res 用 video_name /
+    audio_name，字幕渲染用素材名等），校验规则本身只此一份。
+    """
+    allowed = SUPPORTED_TEMPLATE_FIELDS if allowed_fields is None else allowed_fields
     normalized = template.strip()
     if normalized.lower().endswith(".mkv"):
         normalized = normalized[:-4].rstrip()
@@ -107,10 +117,10 @@ def validate_output_name_template(template: str, label: str) -> str:
         ) from exc
 
     for _, field_name, _, _ in fields:
-        if field_name and field_name not in SUPPORTED_TEMPLATE_FIELDS:
+        if field_name and field_name not in allowed:
+            supported = "、".join(f"{{{name}}}" for name in sorted(allowed))
             raise ProcessingError(
-                f"{label} 输出模板包含不支持的占位符: {field_name}。"
-                "当前支持 {video_name} 和 {audio_name}。"
+                f"{label} 输出模板包含不支持的占位符: {field_name}。当前支持 {supported}。"
             )
 
     return normalized
@@ -123,6 +133,16 @@ def template_uses_audio_name(template: str) -> bool:
     except ValueError:
         return False
     return any(field_name == "audio_name" for _, field_name, _, _ in fields)
+
+
+def render_name_template(template: str, label: str, values: dict[str, str]) -> str:
+    """按给定的占位符取值渲染模板，并做与输出文件名一致的合法性校验。"""
+    normalized = validate_output_name_template(template, label, set(values))
+    try:
+        rendered = normalized.format(**values).strip()
+    except Exception as exc:  # noqa: BLE001
+        raise ProcessingError(f"{label} 输出模板无法生成文件名: {exc}") from exc
+    return sanitize_output_stem(rendered, label)
 
 
 def render_output_stem(

@@ -195,7 +195,9 @@ from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.models import (
     BackgroundSource,
+    DEFAULT_EXPORT_NAME_TEMPLATE,
     DEFAULT_OUTPUT_NAME_SUFFIX,
+    EXPORT_NAME_TEMPLATE_FIELDS,
     GuideSymbol,
     LineAnimationOverride,
     LYRICS_LAYOUT_FIELDS,
@@ -459,7 +461,7 @@ class _LayoutIssuesDialog(QDialog):
 
 
 class _ExportLocationDialog(QDialog):
-    """字幕视频导出目录偏好。"""
+    """字幕视频导出目录与文件名偏好。"""
 
     def __init__(
         self,
@@ -467,11 +469,12 @@ class _ExportLocationDialog(QDialog):
         custom_dir: str,
         initial_dir: Path,
         parent: Optional[QWidget] = None,
+        name_template: str = DEFAULT_EXPORT_NAME_TEMPLATE,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("导出视频位置")
+        self.setWindowTitle("导出视频位置与命名")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
@@ -504,6 +507,30 @@ class _ExportLocationDialog(QDialog):
         )
         layout.addWidget(hint)
 
+        layout.addSpacing(6)
+        layout.addWidget(StrongBodyLabel("默认文件名", self))
+        self.name_template_edit = FluentLineEdit(self)
+        self.name_template_edit.setPlaceholderText(DEFAULT_EXPORT_NAME_TEMPLATE)
+        self.name_template_edit.setText(name_template)
+        layout.addWidget(self.name_template_edit)
+
+        placeholder_lines = "；".join(
+            f"{{{name}}} {desc}" for name, desc in EXPORT_NAME_TEMPLATE_FIELDS.items()
+        )
+        name_hint = CaptionLabel(
+            f"可用占位符：{placeholder_lines}。不用写 .mp4。\n"
+            f"留空则用默认：{DEFAULT_EXPORT_NAME_TEMPLATE}。"
+            "改动只影响之后新载入的素材，不会改掉你已经手填的文件名。",
+            self,
+        )
+        name_hint.setWordWrap(True)
+        layout.addWidget(name_hint)
+        self.name_error_label = CaptionLabel("", self)
+        self.name_error_label.setWordWrap(True)
+        self.name_error_label.setVisible(False)
+        layout.addWidget(self.name_error_label)
+        self.name_template_edit.textChanged.connect(self._sync_controls)
+
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         cancel_button = FluentPushButton("取消", self)
@@ -532,17 +559,40 @@ class _ExportLocationDialog(QDialog):
             self.custom_radio.setChecked(True)
             self._sync_controls()
 
+    def _name_template_error(self) -> str:
+        """模板不合法时的原因；空串表示可用。留空视为用默认。"""
+        from krok_helper.errors import ProcessingError
+        from krok_helper.pipeline import validate_output_name_template
+
+        template = self.name_template_edit.text().strip()
+        if not template:
+            return ""
+        try:
+            validate_output_name_template(
+                template, "导出文件名", set(EXPORT_NAME_TEMPLATE_FIELDS)
+            )
+        except ProcessingError as exc:
+            return str(exc)
+        return ""
+
     def _sync_controls(self) -> None:
         custom = self.custom_radio.isChecked()
         self.directory_edit.setEnabled(custom)
         self.browse_button.setEnabled(custom)
+        # 模板写错就在这里拦住，别等到点了导出才报错。
+        error = self._name_template_error()
+        self.name_error_label.setText(error)
+        self.name_error_label.setVisible(bool(error))
         self.ok_button.setEnabled(
-            not custom or bool(self.directory_edit.text().strip())
+            (not custom or bool(self.directory_edit.text().strip())) and not error
         )
 
     def selection(self) -> tuple[str, str]:
         mode = EXPORT_DIR_CUSTOM if self.custom_radio.isChecked() else EXPORT_DIR_SOURCE_VIDEO
         return mode, self.directory_edit.text().strip()
+
+    def name_template(self) -> str:
+        return self.name_template_edit.text().strip() or DEFAULT_EXPORT_NAME_TEMPLATE
 
 
 class _GuideSymbolSettingsDialog(QDialog):
@@ -1906,6 +1956,7 @@ class SubtitleRenderWindow(QWidget):
         self._layout_assignment_preference: Optional[dict[str, object]] = None
         self._export_dir_mode = EXPORT_DIR_SOURCE_VIDEO
         self._export_custom_dir = ""
+        self._export_name_template = DEFAULT_EXPORT_NAME_TEMPLATE
         self._project_path: Optional[Path] = None
         self._project_dirty = False
         self._project_saving = False
@@ -2986,6 +3037,9 @@ class SubtitleRenderWindow(QWidget):
             ):
                 self._export_dir_mode = str(directory_mode)
                 self._export_custom_dir = str(custom_directory or "").strip()
+        name_template = output.get("name_template")
+        if isinstance(name_template, str) and name_template.strip():
+            self._export_name_template = name_template.strip()
         encoder = output.get("encoder_mode")
         if encoder is not None:
             idx = self._export_encoder_combo.findData(encoder)
@@ -3806,7 +3860,7 @@ class SubtitleRenderWindow(QWidget):
 
         # 卡片 1：输出文件（第一行选文件夹，第二行文件名，扩展名固定 .mp4）
         self._export_location_settings_button = FluentToolButton(FIF.SETTING)
-        self._export_location_settings_button.setToolTip("导出视频位置设置")
+        self._export_location_settings_button.setToolTip("导出视频位置与默认文件名设置")
         self._export_location_settings_button.setFixedSize(30, 30)
         self._export_location_settings_button.setIconSize(QSize(16, 16))
         self._export_location_settings_button.clicked.connect(
@@ -4253,13 +4307,23 @@ class SubtitleRenderWindow(QWidget):
             self._export_custom_dir,
             self._default_export_dir(),
             self,
+            name_template=self._export_name_template,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         mode, custom_dir = dialog.selection()
+        template_changed = dialog.name_template() != self._export_name_template
+        self._export_name_template = dialog.name_template()
         self._set_export_directory_settings(mode, custom_dir, persist=True)
+        if template_changed:
+            # 只重刷「还是自动生成」的那份文件名；用户手填过的不动。
+            current = self._normalized_export_name()
+            if not current or current == self._export_auto_name:
+                name = self._default_export_name()
+                self._export_name_edit.setText(name)
+                self._export_auto_name = name
         InfoBar.success(
-            title="导出位置已保存",
+            title="导出设置已保存",
             content=(
                 "将保存在指定目录。"
                 if mode == EXPORT_DIR_CUSTOM
@@ -7871,6 +7935,7 @@ class SubtitleRenderWindow(QWidget):
             output["gpu_export_default_version"] = GPU_EXPORT_DEFAULT_VERSION
             output["directory_mode"] = self._export_dir_mode
             output["custom_directory"] = self._export_custom_dir
+            output["name_template"] = self._export_name_template
             local_output = self._local_output_preferences
             output["encoder_mode"] = str(
                 local_output.get("encoder_mode") or ENCODER_CPU
@@ -8058,10 +8123,30 @@ class SubtitleRenderWindow(QWidget):
         if persist:
             self._save_persisted_state()
 
-    def _default_export_name(self) -> str:
+    def _export_name_template_values(self) -> dict[str, str]:
+        """模板占位符取值；素材缺席时留空，由渲染后的兜底补上。"""
         base = self._export_output_base()
-        stem = base.stem if base is not None else "subtitle_render"
-        return f"{stem}{DEFAULT_OUTPUT_NAME_SUFFIX}"
+        return {
+            "source_name": base.stem if base is not None else "",
+            "video_name": self._video_path.stem if self._video_path is not None else "",
+            "subtitle_name": (
+                self._subtitle_path.stem if self._subtitle_path is not None else ""
+            ),
+        }
+
+    def _default_export_name(self) -> str:
+        """按命名模板生成默认文件名；模板出问题时退回内置默认，不打断导出。"""
+        from krok_helper.pipeline import render_name_template
+
+        values = self._export_name_template_values()
+        for template in (self._export_name_template, DEFAULT_EXPORT_NAME_TEMPLATE):
+            try:
+                rendered = render_name_template(template, "导出文件名", values)
+            except Exception:
+                continue
+            if rendered:
+                return rendered
+        return f"subtitle_render{DEFAULT_OUTPUT_NAME_SUFFIX}"
 
     def _normalized_export_name(self) -> str:
         """文件名输入框内容（用户手滑带上 .mp4 时剥掉，扩展名由拼装统一补）。"""
