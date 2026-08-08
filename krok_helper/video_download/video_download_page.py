@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QTableWidgetItem,
     QScrollArea,
@@ -105,6 +106,8 @@ CONCURRENT_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 TIMEOUT_OPTIONS = tuple(str(value) for value in TIMEOUT_CHOICES)
 RETRY_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 VIDEO_DETAILS_CARD_HEIGHT = 340
+# 「视频信息与下载设置」折叠后仅保留标题栏；另外两个面板严格复用此高度。
+VIDEO_INFO_COLLAPSED_HEIGHT = 64
 DOWNLOAD_TABLE_ROW_HEIGHT = 44
 DOWNLOAD_TABLE_ACTION_COLUMN = 6
 DOWNLOAD_PROGRESS_REFRESH_MS = 100
@@ -763,6 +766,12 @@ class VideoDownloadPage(QWidget):
         self._bilibili_profile: BilibiliAccountProfile | None = None
         self._youtube_profile: BilibiliAccountProfile | None = None
         self._recent_bilibili_login_deadline = 0.0
+        self._panel_cards: dict[str, QWidget] = {}
+        self._panel_contents: dict[str, tuple[QWidget, ...]] = {}
+        self._panel_collapse_buttons: dict[str, ToolButton] = {}
+        self._panel_expanded_min_heights: dict[str, int] = {}
+        self._panel_last_expanded_sizes: dict[str, int] = {}
+        self._collapsed_panels: set[str] = set()
 
         self._build_ui()
         self._load_settings()
@@ -779,15 +788,34 @@ class VideoDownloadPage(QWidget):
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(0)
 
         left_panel = self._build_left_panel()
         center_panel = self._build_center_panel()
 
-        left_panel.setFixedWidth(320)
+        left_panel.setMinimumWidth(240)
+        center_panel.setMinimumWidth(620)
 
-        root.addWidget(left_panel, 0)
-        root.addWidget(center_panel, 1)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self._configure_splitter(self.main_splitter)
+        self.main_splitter.addWidget(left_panel)
+        self.main_splitter.addWidget(center_panel)
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([320, 1100])
+        root.addWidget(self.main_splitter, 1)
+
+    @staticmethod
+    def _configure_splitter(splitter: QSplitter) -> None:
+        """Configure a visible live-resizing divider."""
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(12)
+        splitter.setOpaqueResize(True)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background: transparent; }"
+            "QSplitter::handle:hover { background: rgba(244, 63, 94, 0.18); border-radius: 4px; }"
+            "QSplitter::handle:pressed { background: rgba(244, 63, 94, 0.30); border-radius: 4px; }"
+        )
 
     def _page_qss(self) -> str:
         from krok_helper.theme_workbench import palette as _wb_pal
@@ -861,19 +889,30 @@ class VideoDownloadPage(QWidget):
         panel = QWidget(self)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
+
+        self.content_splitter = QSplitter(Qt.Orientation.Vertical, panel)
+        self._configure_splitter(self.content_splitter)
 
         input_card = PanelCard(panel)
-        input_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        input_card.setMinimumHeight(145)
+        input_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         input_layout = input_card.create_vbox()
-        input_layout.addWidget(self._create_panel_title("视频链接输入"))
+        input_title_row = QHBoxLayout()
+        input_title_row.setContentsMargins(0, 0, 0, 0)
+        input_title_row.setSpacing(8)
+        input_title_row.addWidget(self._create_panel_title("视频链接输入"), 1)
+        input_collapse_button = self._create_panel_collapse_button("input")
+        input_title_row.addWidget(input_collapse_button, 0)
+        input_layout.addLayout(input_title_row)
 
         input_row = QHBoxLayout()
         input_row.setContentsMargins(0, 0, 0, 0)
         input_row.setSpacing(12)
         self.link_input = PlainTextEdit()
         self.link_input.setPlaceholderText("粘贴 YouTube 或 Bilibili 视频链接，每行一个链接")
-        self.link_input.setFixedHeight(76)
+        self.link_input.setMinimumHeight(76)
+        self.link_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         input_row.addWidget(self.link_input, 1)
 
         input_buttons = QVBoxLayout()
@@ -894,8 +933,8 @@ class VideoDownloadPage(QWidget):
         input_layout.addWidget(self.parse_status_label)
 
         info_card = PanelCard(panel)
-        info_card.setFixedHeight(VIDEO_DETAILS_CARD_HEIGHT)
-        info_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        info_card.setMinimumHeight(260)
+        info_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         info_layout = info_card.create_vbox()
         info_title_row = QHBoxLayout()
         info_title_row.setContentsMargins(0, 0, 0, 0)
@@ -904,6 +943,8 @@ class VideoDownloadPage(QWidget):
         self.delete_current_task_button = _create_delete_button("从列表删除当前视频")
         self.delete_current_task_button.clicked.connect(self._delete_current_task)
         info_title_row.addWidget(self.delete_current_task_button, 0)
+        info_collapse_button = self._create_panel_collapse_button("info")
+        info_title_row.addWidget(info_collapse_button, 0)
         info_layout.addLayout(info_title_row)
 
         self.video_details_stack = QStackedWidget(info_card)
@@ -913,6 +954,7 @@ class VideoDownloadPage(QWidget):
         info_layout.addWidget(self.video_details_stack, 1)
 
         download_card = PanelCard(panel)
+        download_card.setMinimumHeight(180)
         download_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         download_layout = download_card.create_vbox()
         download_title_row = QHBoxLayout()
@@ -928,6 +970,8 @@ class VideoDownloadPage(QWidget):
         )
         self.download_settings_button.clicked.connect(self._open_download_settings_dialog)
         download_title_row.addWidget(self.download_settings_button, 0)
+        download_collapse_button = self._create_panel_collapse_button("download")
+        download_title_row.addWidget(download_collapse_button, 0)
         download_layout.addLayout(download_title_row)
 
         self.download_table = TableWidget()
@@ -979,10 +1023,128 @@ class VideoDownloadPage(QWidget):
         action_row.addStretch(1)
         download_layout.addLayout(action_row)
 
-        layout.addWidget(input_card)
-        layout.addWidget(info_card)
-        layout.addWidget(download_card, 1)
+        self.content_splitter.addWidget(input_card)
+        self.content_splitter.addWidget(info_card)
+        self.content_splitter.addWidget(download_card)
+        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.setStretchFactor(1, 2)
+        self.content_splitter.setStretchFactor(2, 2)
+        self.content_splitter.setSizes([170, VIDEO_DETAILS_CARD_HEIGHT, 300])
+        self._register_collapsible_panel(
+            "input",
+            input_card,
+            (self.link_input, self.parse_button, self.clear_input_button, self.parse_status_label),
+            input_collapse_button,
+            145,
+        )
+        self._register_collapsible_panel(
+            "info",
+            info_card,
+            (self.video_details_stack,),
+            info_collapse_button,
+            260,
+        )
+        self._register_collapsible_panel(
+            "download",
+            download_card,
+            (
+                self.download_table,
+                self.download_hint_label,
+                self.start_all_button,
+                self.pause_all_button,
+                self.cancel_all_button,
+                self.open_folder_button,
+                self.clear_list_button,
+            ),
+            download_collapse_button,
+            180,
+        )
+        self._refresh_panel_collapse_buttons()
+        layout.addWidget(self.content_splitter, 1)
         return panel
+
+    def _create_panel_collapse_button(self, panel_key: str) -> ToolButton:
+        button = ToolButton(FIF.UP)
+        button.setFixedSize(30, 30)
+        button.setToolTip("折叠面板")
+        button.clicked.connect(lambda _checked=False, key=panel_key: self._toggle_panel_collapsed(key))
+        return button
+
+    def _register_collapsible_panel(
+        self,
+        panel_key: str,
+        card: QWidget,
+        contents: tuple[QWidget, ...],
+        button: ToolButton,
+        expanded_min_height: int,
+    ) -> None:
+        self._panel_cards[panel_key] = card
+        self._panel_contents[panel_key] = contents
+        self._panel_collapse_buttons[panel_key] = button
+        self._panel_expanded_min_heights[panel_key] = expanded_min_height
+
+    def _toggle_panel_collapsed(self, panel_key: str) -> None:
+        if panel_key not in self._panel_cards:
+            return
+        if panel_key in self._collapsed_panels:
+            self._expand_panel(panel_key)
+            return
+        if len(self._collapsed_panels) >= len(self._panel_cards) - 1:
+            return
+        self._collapse_panel(panel_key)
+
+    def _collapse_panel(self, panel_key: str) -> None:
+        card = self._panel_cards[panel_key]
+        panel_index = self.content_splitter.indexOf(card)
+        sizes = self.content_splitter.sizes()
+        self._panel_last_expanded_sizes[panel_key] = max(
+            self._panel_expanded_min_heights[panel_key],
+            sizes[panel_index],
+        )
+        for content in self._panel_contents[panel_key]:
+            content.hide()
+        card.setMinimumHeight(0)
+        card.setFixedHeight(VIDEO_INFO_COLLAPSED_HEIGHT)
+        self._collapsed_panels.add(panel_key)
+        sizes[panel_index] = VIDEO_INFO_COLLAPSED_HEIGHT
+        self.content_splitter.setSizes(sizes)
+        self._refresh_panel_collapse_buttons()
+
+    def _expand_panel(self, panel_key: str) -> None:
+        card = self._panel_cards[panel_key]
+        panel_index = self.content_splitter.indexOf(card)
+        card.setMinimumHeight(self._panel_expanded_min_heights[panel_key])
+        card.setMaximumHeight(16777215)
+        for content in self._panel_contents[panel_key]:
+            content.show()
+        self._collapsed_panels.discard(panel_key)
+        sizes = self.content_splitter.sizes()
+        sizes[panel_index] = self._panel_last_expanded_sizes.get(
+            panel_key,
+            self._panel_expanded_min_heights[panel_key],
+        )
+        self.content_splitter.setSizes(sizes)
+        self._refresh_panel_collapse_buttons()
+
+    def _refresh_panel_collapse_buttons(self) -> None:
+        expanded_count = len(self._panel_cards) - len(self._collapsed_panels)
+        for panel_key, button in self._panel_collapse_buttons.items():
+            collapsed = panel_key in self._collapsed_panels
+            can_toggle = collapsed or expanded_count > 1
+            if collapsed:
+                button.setIcon(FIF.DOWN)
+            elif can_toggle:
+                button.setIcon(FIF.UP)
+            else:
+                from krok_helper.theme_workbench import palette as _wb_pal
+
+                button.setIcon(FIF.UP.icon(color=QColor(_wb_pal().text_disabled)))
+            button.setEnabled(can_toggle)
+            button.setToolTip(
+                "展开面板"
+                if collapsed
+                else ("至少保留一个面板展开" if expanded_count == 1 else "折叠面板")
+            )
 
     def _build_video_empty_state(self, parent: QWidget) -> QWidget:
         empty = QWidget(parent)
@@ -1025,7 +1187,9 @@ class VideoDownloadPage(QWidget):
         self.prev_task_button.setFixedSize(30, 30)
         self.prev_task_button.clicked.connect(lambda: self._move_task_selection(-1))
         self.task_switch_combo = StyledComboBox()
-        self.task_switch_combo.setFixedWidth(TASK_SWITCH_COMBO_WIDTH)
+        self.task_switch_combo.setMinimumWidth(220)
+        self.task_switch_combo.setMaximumWidth(TASK_SWITCH_COMBO_WIDTH)
+        self.task_switch_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.task_switch_combo.setFixedHeight(32)
         self.task_switch_combo.currentIndexChanged.connect(self._handle_task_switch_combo_changed)
         self._install_single_click_combo_behavior(self.task_switch_combo)
@@ -1036,7 +1200,7 @@ class VideoDownloadPage(QWidget):
         self.next_task_button.setFixedSize(30, 30)
         self.next_task_button.clicked.connect(lambda: self._move_task_selection(1))
         switch_row.addWidget(self.prev_task_button, 0)
-        switch_row.addWidget(self.task_switch_combo, 0)
+        switch_row.addWidget(self.task_switch_combo, 1)
         switch_row.addWidget(self.task_total_label, 0, Qt.AlignmentFlag.AlignVCenter)
         switch_row.addWidget(self.next_task_button, 0)
         switch_row.addStretch(1)
