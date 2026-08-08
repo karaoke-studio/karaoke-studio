@@ -8124,10 +8124,15 @@ class SubtitleRenderWindow(QWidget):
             self._save_persisted_state()
 
     def _export_name_template_values(self) -> dict[str, str]:
-        """模板占位符取值；素材缺席时留空，由渲染后的兜底补上。"""
+        """模板占位符取值。
+
+        ``source_name`` 在什么素材都没有时退回 ``subtitle_render``——这是改成模板
+        之前就有的兜底，缺了它默认名会变成孤零零的 ``_yurika出力``。另外两个是用户
+        显式选的占位符，素材没到位就留空。
+        """
         base = self._export_output_base()
         return {
-            "source_name": base.stem if base is not None else "",
+            "source_name": base.stem if base is not None else "subtitle_render",
             "video_name": self._video_path.stem if self._video_path is not None else "",
             "subtitle_name": (
                 self._subtitle_path.stem if self._subtitle_path is not None else ""

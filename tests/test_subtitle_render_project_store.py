@@ -431,7 +431,10 @@ def test_export_location_preference_persists_and_overrides_project_path(
     monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
     custom_dir = tmp_path / "exports"
     win = _make_window(qapp, monkeypatch)
-    assert win._export_location_settings_button.toolTip() == "导出视频位置设置"
+    assert (
+        win._export_location_settings_button.toolTip()
+        == "导出视频位置与默认文件名设置"
+    )
 
     win._set_export_directory_settings(
         mw.EXPORT_DIR_CUSTOM,
