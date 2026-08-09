@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import QApplication, QWidget
 
 from krok_helper.global_settings.page import SettingsDialogs
 from krok_helper.settings import AppSettings
-from krok_helper.theme_workbench import ThemeMode, theme as wb_theme
+from krok_helper.theme_workbench import ThemeMode
 from krok_helper.ui_kit import StyledComboBox
 
 
@@ -60,6 +60,13 @@ def test_the_dialog_owner_is_a_qobject() -> None:
 
 
 def test_choosing_a_theme_actually_switches_it(monkeypatch) -> None:
+    """选了主题，页面就该把新模式推给主题单例。
+
+    这里**不动真的全局主题**：真切一次会让 SUG 去 polish 所有顶层控件，在整套
+    测试里会碰到别的用例遗留的、C++ 侧已销毁的控件，直接把 pytest 进程带崩。
+    所以换成假的主题对象，测的是"预览回调有没有跑到、推了什么值" —— 当初坏掉
+    的正是这一段（回调在信号槽里抛 TypeError 被吞掉）。
+    """
     from krok_helper.global_settings import page as settings_page
     from krok_helper.updater.settings import UpdaterSettings
 
@@ -71,8 +78,16 @@ def test_choosing_a_theme_actually_switches_it(monkeypatch) -> None:
         settings_page.ModelessDialog, "exec", lambda dialog: (built.append(dialog), 0)[1]
     )
 
+    class _FakeTheme:
+        def __init__(self) -> None:
+            self.mode = ThemeMode.AUTO
+
+    fake_theme = _FakeTheme()
+    import krok_helper.theme_workbench as workbench
+
+    monkeypatch.setattr(workbench, "theme", fake_theme)
+
     host = _Host()
-    original_mode = wb_theme.mode
     dialogs = SettingsDialogs(host=host, parent=host)
     try:
         dialogs.open_global_settings()
@@ -86,14 +101,13 @@ def test_choosing_a_theme_actually_switches_it(monkeypatch) -> None:
         combo.setCurrentIndex(2)  # 深色
         # 预览是防抖的（200ms），得真的等，光转事件循环不行。
         for _ in range(40):
-            if wb_theme.mode is ThemeMode.DARK:
+            if fake_theme.mode is ThemeMode.DARK:
                 break
             QTest.qWait(50)
 
-        assert wb_theme.mode is ThemeMode.DARK, "选了深色但主题没切 —— 预览回调多半炸在信号槽里"
+        assert fake_theme.mode is ThemeMode.DARK, "选了深色但没推给主题 —— 预览回调多半炸在信号槽里"
         assert host.settings.ui_theme == "dark"
     finally:
-        wb_theme.mode = original_mode
         for dialog in built:
             dialog.close()
         host.close()
