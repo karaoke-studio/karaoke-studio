@@ -71,9 +71,7 @@ from krok_helper.alignment import AlignmentHandoffDialog
 from krok_helper.alignment.page import AlignmentPageMixin
 from krok_helper.global_settings.page import GlobalSettingsMixin
 from krok_helper.hires.page import DropZoneCard, HiResPage
-from krok_helper.lyrics_search.page import (
-    LyricsSearchPageMixin,
-)
+from krok_helper.lyrics_search.page import LyricsSearchPage
 from krok_helper.config import (
     APP_LOGO_PATH,
     APP_TITLE,
@@ -85,11 +83,6 @@ from krok_helper.config import (
 )
 from krok_helper.errors import ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media
-from krok_helper.lyrics import (
-    DEFAULT_LYRICS_PROVIDER_IDS,
-    LyricsSearchCandidate,
-    LyricsSearchService,
-)
 from krok_helper.pipeline import (
     DEFAULT_OFF_NAME_TEMPLATE,
     DEFAULT_ON_NAME_TEMPLATE,
@@ -283,7 +276,6 @@ class PageTransitionOverlay(QWidget):
 class KrokHelperQtApp(
     AlignmentPageMixin,
     GlobalSettingsMixin,
-    LyricsSearchPageMixin,
     QMainWindow,
 ):
     """工作台主窗口（外壳）。
@@ -291,7 +283,6 @@ class KrokHelperQtApp(
     三个工作流页面与设置对话框分别住在
     :class:`~krok_helper.alignment.page.AlignmentPageMixin`、
     :class:`~krok_helper.hires.page.HiResPageMixin` 和
-    :class:`~krok_helper.lyrics_search.page.LyricsSearchPageMixin`、
     :class:`~krok_helper.global_settings.page.GlobalSettingsMixin`，混进来共用
     同一个 ``self`` —— 各自的模块文档里列了它们还依赖宿主的哪些成员。
     """
@@ -307,23 +298,11 @@ class KrokHelperQtApp(
             self.settings.lyrics_timing_migrated_v1 != lyrics_timing_migrated
         ):
             save_app_settings(self.settings)
-        self.lyrics_search_task: BackgroundTask | None = None
-        self.lyrics_fetch_task: BackgroundTask | None = None
         self._update_checker: UpdateChecker | None = None
         self._update_launch_worker = None
         self._update_progress_win = None
         self._force_quitting_for_update = False
         self._update_exit_prepared = False
-        self.lyrics_search_service = LyricsSearchService()
-        self.lyrics_search_results: list[LyricsSearchCandidate] = []
-        self.lyrics_pending_results: list[LyricsSearchCandidate] = []
-        self.lyrics_selected_candidate: LyricsSearchCandidate | None = None
-        self.lyrics_search_keyword = ""
-        self.lyrics_search_provider_ids: tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
-        self.lyrics_next_provider_pages: dict[str, int] = {}
-        self.lyrics_has_more_results = False
-        self._lyrics_loading_more = False
-        self._lyrics_loading_key = ""
         self._hires_cancel_requested = False
         self._hires_process: subprocess.Popen | None = None
         self._hires_expected_outputs: list[Path] = []
@@ -392,6 +371,14 @@ class KrokHelperQtApp(
         task.finished.connect(task.deleteLater)
         return task
 
+    # ── LyricsSearchHost 实现 ────────────────────────────────────
+
+    def install_single_click_combo_behavior(self, combo) -> None:
+        self._install_single_click_combo_behavior(combo)
+
+    def import_current_lyrics_to_timing(self) -> None:
+        self._import_current_lyrics_to_timing()
+
     def resolve_ffmpeg_dir(self) -> Path | None:
         return self._resolve_ffmpeg_dir()
 
@@ -426,8 +413,6 @@ class KrokHelperQtApp(
 
     def _running_background_tasks(self) -> list[BackgroundTask]:
         task_attrs = (
-            "lyrics_search_task",
-            "lyrics_fetch_task",
             "align_analysis_task",
             "align_auto_task",
             "align_export_task",
@@ -438,7 +423,7 @@ class KrokHelperQtApp(
             if task is not None and task.isRunning():
                 tasks.append(task)
         # 已经对象化的页面自己持有任务，问它们要；还是 mixin 的那几页仍走上面的槽位。
-        for page in (getattr(self, "hires_page", None),):
+        for page in (getattr(self, "hires_page", None), getattr(self, "lyrics_page", None)):
             running = getattr(page, "running_tasks", None)
             if callable(running):
                 tasks.extend(running())
@@ -467,7 +452,9 @@ class KrokHelperQtApp(
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._refresh_lyrics_layout_direction()
+        page = getattr(self, "lyrics_page", None)
+        if page is not None:
+            page.refresh_layout_direction()
 
     def _apply_startup_window_geometry(self) -> None:
         self._restore_windowed_geometry_centered()
@@ -551,10 +538,10 @@ class KrokHelperQtApp(
                     self._update_head_mode_buttons(self._head_mode_current)
                 except Exception:
                     pass
-            if hasattr(self, "lyrics_results_table") and self.lyrics_search_results:
+            lyrics_page = getattr(self, "lyrics_page", None)
+            if lyrics_page is not None:
                 try:
-                    selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
-                    self._render_lyrics_results_table(selected_key=selected_key)
+                    lyrics_page.rerender_results()
                 except Exception:
                     pass
         except Exception:
@@ -635,7 +622,7 @@ class KrokHelperQtApp(
             self._save_all_settings,
             parent=self.page_stack,
         )
-        self.lyrics_page = self._build_lyrics_page()
+        self.lyrics_page = LyricsSearchPage(host=self, parent=self.page_stack)
         self._sync_lyrics_timing_host_paths()
         ensure_sug_src_path()
         apply_sug_compat_patches()
@@ -1290,31 +1277,17 @@ class KrokHelperQtApp(
                 self._sync_alignment_zoom_slider()
                 return True
             return False
-        if (
-            hasattr(self, "lyrics_results_table")
-            and watched is self.lyrics_results_table
-            and event.type() in {QEvent.Type.Resize, QEvent.Type.Show}
-        ):
-            QTimer.singleShot(0, self._resize_lyrics_results_columns)
-        if (
-            hasattr(self, "lyrics_preview_panel")
-            and watched is self.lyrics_preview_panel
-            and event.type() in {QEvent.Type.Resize, QEvent.Type.Show}
-        ):
-            QTimer.singleShot(0, self._position_lyrics_import_button)
         return super().eventFilter(watched, event)
 
 
     def _import_current_lyrics_to_timing(self) -> None:
-        candidate = self.lyrics_selected_candidate
-        if candidate is None or candidate.load_error or not candidate.lyrics_loaded:
-            show_fluent_info(self, "请先选择并加载一条歌词。")
-            return
-        preview = self._build_current_lyrics_preview(candidate)
-        lyrics_text = preview.text.strip()
-        if not lyrics_text:
-            show_fluent_info(self, "当前筛选结果没有可导入的歌词。")
-            self._refresh_lyrics_import_button(preview)
+        """把歌词检索页选中的那条交给第 4 步打轴。
+
+        "有没有可导入的歌词"由检索页自己判断（它持有候选与预览）；这里只管
+        装进打轴模块并切页。
+        """
+        lyrics_text = self.lyrics_page.current_lyrics_for_timing()
+        if lyrics_text is None:
             return
         lyrics_timing_page = getattr(self, "lyrics_timing_page", None)
         if lyrics_timing_page is None or not hasattr(lyrics_timing_page, "import_lyrics_from_text"):
@@ -1339,7 +1312,9 @@ class KrokHelperQtApp(
         self.set_output_name_mode(self.settings.output_name_mode)
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
         self._load_alignment_settings()
-        self._restore_lyrics_preferences()
+        lyrics_page = getattr(self, "lyrics_page", None)
+        if lyrics_page is not None:
+            lyrics_page.restore_preferences()
         self._loading_settings_into_ui = False
 
     def _install_single_click_combo_behavior(self, combo: QComboBox) -> None:

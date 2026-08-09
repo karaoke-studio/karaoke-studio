@@ -1,38 +1,46 @@
-"""歌词检索页与宿主之间的边界。
+"""歌词检索页与外壳之间的边界。
 
-同 ``test_alignment_page_boundary``：mixin 还混在 ``KrokHelperQtApp`` 上，
-``self`` 是同一个对象，所以要有一份写死的清单挡住"顺手再摸一个宿主成员"。
-清单只该变短。
+这一页**已经是独立对象**：搜索服务、两个后台任务、结果与选中态都挂在自己身上，
+能碰到的外部东西只有构造时注入的 ``_host``。查两件事：静态上不绕过 ``_host``，
+动态上能脱离主窗口构造。
 """
 
 from __future__ import annotations
 
 import ast
 import pathlib
+from types import SimpleNamespace
+
+import pytest
+from PyQt6.QtWidgets import QApplication
+
+from krok_helper.lyrics_search.page import LyricsSearchHost, LyricsSearchPage
+from krok_helper.settings import AppSettings
 
 PAGE = pathlib.Path(__file__).resolve().parents[1] / "krok_helper" / "lyrics_search" / "page.py"
 
-#: 页面调用的宿主服务 —— 变成独立对象时，这些要么跟着搬，要么进宿主接口。
-HOST_SERVICES = {
-    "settings",  # 配置读写
-    "_track_background_task",  # 搜索/抓取跑在后台线程
-    "_install_single_click_combo_behavior",  # 下拉框单击即选
-    "_import_current_lyrics_to_timing",  # 把歌词交给第 4 步打轴
-    "width",  # QWidget 自己的
-}
 
-#: 由外壳 ``__init__`` 建、页面读写的任务槽位 —— 应当跟着页面一起搬，
-#: 现在留在外壳只是因为它们和其他模块的任务槽位并排声明。
-HOST_OWNED_STATE = {
-    "lyrics_search_task",
-    "lyrics_fetch_task",
-    "lyrics_search_service",
-}
+def _fake_host(calls: list) -> SimpleNamespace:
+    return SimpleNamespace(
+        settings=AppSettings(),
+        track_background_task=lambda task: task,
+        install_single_click_combo_behavior=lambda combo: calls.append("combo"),
+        import_current_lyrics_to_timing=lambda: calls.append("import"),
+    )
 
 
-def _foreign_members() -> set[str]:
+@pytest.fixture
+def page():
+    QApplication.instance() or QApplication([])
+    calls: list = []
+    widget = LyricsSearchPage(host=_fake_host(calls))
+    yield widget, calls
+    widget.deleteLater()
+
+
+def test_the_page_reaches_outside_only_through_the_host() -> None:
     tree = ast.parse(PAGE.read_text(encoding="utf-8"))
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "LyricsSearchPageMixin")
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "LyricsSearchPage")
     own = {n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
     assigned: set[str] = set()
@@ -40,22 +48,54 @@ def _foreign_members() -> set[str]:
     for node in ast.walk(cls):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
             (assigned if isinstance(node.ctx, ast.Store) else read).add(node.attr)
-    return read - own - assigned
+
+    inherited = {name for name in read if hasattr(LyricsSearchPage.__mro__[1], name)}
+    outside = read - own - assigned - inherited
+
+    assert not outside, "页面绕过 _host 摸了外部成员：" + "、".join(sorted(outside))
 
 
-def test_the_page_only_reaches_for_the_declared_host_surface() -> None:
-    unexpected = _foreign_members() - HOST_SERVICES - HOST_OWNED_STATE
-
-    assert not unexpected, (
-        "歌词检索页多摸了宿主成员：" + "、".join(sorted(unexpected)) + "。"
-        "先判断它该跟着页面搬、还是该走显式宿主接口，再决定要不要加进清单。"
-    )
+def test_a_fake_host_satisfies_the_contract() -> None:
+    assert isinstance(_fake_host([]), LyricsSearchHost)
 
 
-def test_the_declared_surface_has_not_gone_stale() -> None:
-    stale = (HOST_SERVICES | HOST_OWNED_STATE) - _foreign_members()
+def test_the_page_builds_without_the_main_window(page) -> None:
+    widget, calls = page
 
-    assert not stale, "清单里这些已经不再被引用，可以删了：" + "、".join(sorted(stale))
+    assert widget.lyrics_keyword_edit is not None
+    assert widget.lyrics_results_table is not None
+    assert widget.running_tasks() == []
+    assert calls.count("combo") == 3, "三个下拉框都该装上单击即选"
+
+
+def test_preferences_round_trip(page) -> None:
+    widget, _ = page
+
+    widget.persist_preferences()
+    widget.restore_preferences()
+
+    assert widget._current_lyrics_source_ids()
+    assert widget._current_lyrics_preview_mode()
+    assert widget._current_lyrics_language()
+
+
+def test_restoring_preferences_suppresses_write_back(page) -> None:
+    """灌设置期间控件会变，那时回写会把偏好覆盖成中间态。
+
+    页面自己管这面旗（以前是问外壳要 ``_loading_settings_into_ui``）。
+    """
+    widget, _ = page
+    seen: list[bool] = []
+    original = widget._persist_lyrics_preferences
+    widget._persist_lyrics_preferences = lambda: seen.append(widget._restoring_preferences)
+
+    try:
+        widget.restore_preferences()
+    finally:
+        widget._persist_lyrics_preferences = original
+
+    assert all(seen), "恢复过程中触发的回写都该看到旗是举起来的"
+    assert not widget._restoring_preferences, "恢复结束后旗要放下"
 
 
 def test_the_page_does_not_import_the_shell() -> None:

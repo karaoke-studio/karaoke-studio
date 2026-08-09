@@ -3,20 +3,14 @@
 与 :mod:`krok_helper.alignment.page` 同样的形态：整页从 ``KrokHelperQtApp``
 搬出来，以 mixin 混回同一个对象 —— 物理拆分，``self`` 语义不变、调用点不用改。
 
-页面目前还依赖宿主的这些成员（清单由 ``tests/test_lyrics_search_boundary.py``
-钉住，只许变短）：
-
-* ``settings`` / ``_loading_settings_into_ui`` —— 配置读写与"灌设置期间别回写"
-* ``_track_background_task`` —— 搜索/抓取跑在后台线程
-* ``_install_single_click_combo_behavior`` —— 下拉框单击即选（外壳的通用行为）
-* ``_import_current_lyrics_to_timing`` —— 把歌词交给第 4 步打轴
-* ``width`` —— QWidget 自己的
+**这一页已经是独立对象**：搜索服务、两个后台任务、结果与选中态都挂在自己身上，
+与外壳的往来只有构造时注入的 :class:`LyricsSearchHost`。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol, runtime_checkable
 
 from PyQt6.QtCore import QSize, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPalette
@@ -57,6 +51,7 @@ from krok_helper.lyrics import (
     LyricsPreview,
     LyricsSearchBatch,
     LyricsSearchCandidate,
+    LyricsSearchService,
     UTATEN_RUBY_MARKER,
     build_lyrics_preview,
     extract_lyrics_query_from_file,
@@ -79,8 +74,29 @@ __all__ = [
     "LYRICS_SOURCE_OPTIONS",
     "LyricsKeywordLineEdit",
     "LyricsResultsDelegate",
-    "LyricsSearchPageMixin",
+    "LyricsSearchHost",
+    "LyricsSearchPage",
 ]
+
+
+@runtime_checkable
+class LyricsSearchHost(Protocol):
+    """歌词检索页需要外壳提供的全部能力。"""
+
+    #: 应用配置对象，页面读写自己那几项检索偏好。
+    settings: object
+
+    def track_background_task(self, task: BackgroundTask) -> BackgroundTask:
+        """登记后台任务，让外壳在关窗/强退时统一收尾。"""
+        ...
+
+    def install_single_click_combo_behavior(self, combo: object) -> None:
+        """下拉框单击即选 —— 全局统一的交互，外壳提供。"""
+        ...
+
+    def import_current_lyrics_to_timing(self) -> None:
+        """把当前这条歌词交给第 4 步打轴（外壳负责切页与装载）。"""
+        ...
 
 
 LYRICS_SOURCE_OPTIONS = [
@@ -211,14 +227,88 @@ class LyricsKeywordLineEdit(QLineEdit):
         event.acceptProposedAction()
 
 
-class LyricsSearchPageMixin:
-    """歌词检索页。混入 ``KrokHelperQtApp``，不单独实例化。"""
+class LyricsSearchPage(QWidget):
+    """歌词检索页 —— 独立控件，不再是混进主窗口的 mixin。
+
+    与外壳的全部往来都经过 :class:`LyricsSearchHost`。
+    """
+
+    def __init__(self, *, host: LyricsSearchHost, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._host = host
+        self._search_service = LyricsSearchService()
+        self._search_task: BackgroundTask | None = None
+        self._fetch_task: BackgroundTask | None = None
+        self.lyrics_search_results: list[LyricsSearchCandidate] = []
+        self.lyrics_pending_results: list[LyricsSearchCandidate] = []
+        self.lyrics_selected_candidate: LyricsSearchCandidate | None = None
+        self.lyrics_search_keyword = ""
+        self.lyrics_search_provider_ids: tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
+        self.lyrics_next_provider_pages: dict[str, int] = {}
+        self.lyrics_has_more_results = False
+        self._lyrics_loading_more = False
+        self._lyrics_loading_key = ""
+        #: 正在把设置灌进控件 —— 期间控件变化不该回写，否则会把偏好覆盖成中间态。
+        self._restoring_preferences = False
+        self._build_ui()
+        self.restore_preferences()
+
+    # ── 外壳会调的公开入口 ────────────────────────────────────────
+
+    def refresh_layout_direction(self) -> None:
+        """窗口尺寸变化时由外壳调 —— 窄了就把左右两栏改成上下。"""
+        self._refresh_lyrics_layout_direction()
+
+    def restore_preferences(self) -> None:
+        self._restoring_preferences = True
+        try:
+            self._restore_lyrics_preferences()
+        finally:
+            self._restoring_preferences = False
+
+    def persist_preferences(self) -> None:
+        self._persist_lyrics_preferences()
+
+    def rerender_results(self) -> None:
+        """主题切换后重画结果表 —— 表格单元格的配色是自绘的。"""
+        if not self.lyrics_search_results:
+            return
+        selected = self.lyrics_selected_candidate
+        self._render_lyrics_results_table(selected_key=selected.key if selected is not None else "")
+
+    def current_lyrics_for_timing(self) -> str | None:
+        """当前选中歌词的正文，供外壳交给第 4 步打轴。
+
+        取不到就地弹提示并返回 ``None`` —— "有没有可导入的歌词"是本页的判断，
+        "怎么交给打轴模块"才是外壳的事。
+        """
+        candidate = self.lyrics_selected_candidate
+        if candidate is None or candidate.load_error or not candidate.lyrics_loaded:
+            show_fluent_info(self, "请先选择并加载一条歌词。")
+            return None
+        preview = self._build_current_lyrics_preview(candidate)
+        text = preview.text.strip()
+        if not text:
+            show_fluent_info(self, "当前筛选结果没有可导入的歌词。")
+            self._refresh_lyrics_import_button(preview)
+            return None
+        return text
+
+    def running_tasks(self) -> list[BackgroundTask]:
+        return [t for t in (self._search_task, self._fetch_task) if t is not None and t.isRunning()]
+
+    def _register_task(self, slot: str, task: BackgroundTask) -> BackgroundTask:
+        setattr(self, slot, task)
+        task.finished.connect(lambda slot=slot: setattr(self, slot, None))
+        return self._host.track_background_task(task)
 
     def _refresh_lyrics_layout_direction(self) -> None:
         layout = getattr(self, "lyrics_content_layout", None)
         if layout is None:
             return
-        narrow = self.width() < 1220
+        # 阈值当初是照主窗口宽度调的；页面自身还要减去页栈边距，
+        # 所以这里仍按所在窗口的宽度判断，独立运行时 window() 就是自己。
+        narrow = self.window().width() < 1220
         target_direction = QBoxLayout.Direction.TopToBottom if narrow else QBoxLayout.Direction.LeftToRight
         if layout.direction() != target_direction:
             layout.setDirection(target_direction)
@@ -229,10 +319,9 @@ class LyricsSearchPageMixin:
             layout.setStretch(0, 7)
             layout.setStretch(1, 6)
 
-    def _build_lyrics_page(self) -> QWidget:
-        page = QWidget()
-        page.setObjectName("LyricsPage")
-        shell = QVBoxLayout(page)
+    def _build_ui(self) -> None:
+        self.setObjectName("LyricsPage")
+        shell = QVBoxLayout(self)
         shell.setContentsMargins(18, 18, 18, 18)
         shell.setSpacing(14)
 
@@ -262,7 +351,7 @@ class LyricsSearchPageMixin:
         self.lyrics_source_combo.setFont(build_lyrics_ui_font(point_size=10.5))
         self.lyrics_source_combo.setFixedWidth(156)
         self.lyrics_source_combo.setFixedHeight(42)
-        self._install_single_click_combo_behavior(self.lyrics_source_combo)
+        self._host.install_single_click_combo_behavior(self.lyrics_source_combo)
         self.lyrics_source_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
 
         self.lyrics_keyword_edit = LyricsKeywordLineEdit()
@@ -376,7 +465,7 @@ class LyricsSearchPageMixin:
         self.lyrics_language_combo.setToolTip("切换原文 / 中文译文（无译文时禁用）")
         self.lyrics_language_combo.currentIndexChanged.connect(lambda _: self._refresh_lyrics_preview())
         self.lyrics_language_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
-        self._install_single_click_combo_behavior(self.lyrics_language_combo)
+        self._host.install_single_click_combo_behavior(self.lyrics_language_combo)
         preview_controls.addWidget(self.lyrics_language_combo)
         self.lyrics_preview_mode_combo = StyledComboBox()
         self.lyrics_preview_mode_combo.setObjectName("LyricsPreviewModeCombo")
@@ -385,13 +474,13 @@ class LyricsSearchPageMixin:
         self.lyrics_preview_mode_combo.setFixedHeight(36)
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(lambda _: self._refresh_lyrics_preview())
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
-        self._install_single_click_combo_behavior(self.lyrics_preview_mode_combo)
+        self._host.install_single_click_combo_behavior(self.lyrics_preview_mode_combo)
         preview_controls.addWidget(self.lyrics_preview_mode_combo)
         self.import_lyrics_to_timing_button = QPushButton("导入到打轴", preview_panel)
         self.import_lyrics_to_timing_button.setObjectName("LyricsImportButton")
         self.import_lyrics_to_timing_button.setIcon(FIF.SEND.icon())
         self.import_lyrics_to_timing_button.setIconSize(QSize(16, 16))
-        self.import_lyrics_to_timing_button.clicked.connect(self._import_current_lyrics_to_timing)
+        self.import_lyrics_to_timing_button.clicked.connect(self._host.import_current_lyrics_to_timing)
         self.import_lyrics_to_timing_button.setFixedSize(138, 36)
         self.import_lyrics_to_timing_button.raise_()
         preview_header.addLayout(preview_controls)
@@ -433,10 +522,9 @@ class LyricsSearchPageMixin:
         shell.addLayout(content, 1)
         self._refresh_lyrics_layout_direction()
         self._clear_lyrics_results()
-        return page
 
     def _start_lyrics_search(self, *, load_more: bool = False) -> None:
-        if self.lyrics_search_task is not None and self.lyrics_search_task.isRunning():
+        if self._search_task is not None and self._search_task.isRunning():
             return
         if load_more and not self.lyrics_has_more_results:
             return
@@ -466,7 +554,7 @@ class LyricsSearchPageMixin:
             _ = logger
             return (
                 load_more,
-                self.lyrics_search_service.search_batch(
+                self._search_service.search_batch(
                     keyword,
                     provider_ids=provider_ids,
                     limit=DEFAULT_LYRICS_SEARCH_LIMIT,
@@ -474,7 +562,7 @@ class LyricsSearchPageMixin:
                 ),
             )
 
-        task = self._track_background_task("lyrics_search_task", BackgroundTask(runner))
+        task = self._register_task("_search_task", BackgroundTask(runner))
         task.task_succeeded.connect(self._finish_lyrics_search_success)
         task.task_failed.connect(self._finish_lyrics_search_failure)
         task.start()
@@ -611,7 +699,7 @@ class LyricsSearchPageMixin:
     def _maybe_load_more_lyrics_results(self) -> None:
         if not self.lyrics_has_more_results or self._lyrics_loading_more:
             return
-        if self.lyrics_search_task is not None and self.lyrics_search_task.isRunning():
+        if self._search_task is not None and self._search_task.isRunning():
             return
         scrollbar = self.lyrics_results_table.verticalScrollBar()
         if scrollbar.maximum() <= 0:
@@ -789,16 +877,16 @@ class LyricsSearchPageMixin:
         candidate = self.lyrics_selected_candidate
         if candidate is None or candidate.lyrics_loaded:
             return
-        if self.lyrics_fetch_task is not None and self.lyrics_fetch_task.isRunning():
+        if self._fetch_task is not None and self._fetch_task.isRunning():
             return
 
         self._lyrics_loading_key = candidate.key
 
         def runner(logger: Callable[[str], None]) -> LyricsSearchCandidate:
             _ = logger
-            return self.lyrics_search_service.fetch_lyrics(candidate)
+            return self._search_service.fetch_lyrics(candidate)
 
-        task = self._track_background_task("lyrics_fetch_task", BackgroundTask(runner))
+        task = self._register_task("_fetch_task", BackgroundTask(runner))
         task.task_succeeded.connect(self._finish_lyrics_fetch_success)
         task.task_failed.connect(self._finish_lyrics_fetch_failure)
         task.start()
@@ -844,7 +932,7 @@ class LyricsSearchPageMixin:
         self._refresh_lyrics_preview()
 
     def _restore_lyrics_preferences(self) -> None:
-        saved_source_ids = tuple(str(item) for item in (self.settings.lyrics_source_ids or DEFAULT_LYRICS_PROVIDER_IDS) if str(item))
+        saved_source_ids = tuple(str(item) for item in (self._host.settings.lyrics_source_ids or DEFAULT_LYRICS_PROVIDER_IDS) if str(item))
         if not saved_source_ids:
             saved_source_ids = DEFAULT_LYRICS_PROVIDER_IDS
         for index, (label, provider_ids) in enumerate(LYRICS_SOURCE_OPTIONS):
@@ -852,17 +940,17 @@ class LyricsSearchPageMixin:
                 self.lyrics_source_combo.setCurrentIndex(index)
                 break
 
-        saved_preview_mode = str(self.settings.lyrics_preview_mode or LYRICS_PREVIEW_LINE)
+        saved_preview_mode = str(self._host.settings.lyrics_preview_mode or LYRICS_PREVIEW_LINE)
         for index, (label, mode) in enumerate(LYRICS_PREVIEW_MODE_OPTIONS):
             if mode == saved_preview_mode:
                 self.lyrics_preview_mode_combo.setCurrentIndex(index)
                 break
-        saved_language = str(self.settings.lyrics_language or LYRICS_LANGUAGE_ORIGINAL)
+        saved_language = str(self._host.settings.lyrics_language or LYRICS_LANGUAGE_ORIGINAL)
         for index, (label, value) in enumerate(LYRICS_LANGUAGE_OPTIONS):
             if value == saved_language:
                 self.lyrics_language_combo.setCurrentIndex(index)
                 break
-        self.lyrics_strip_intro_checkbox.setChecked(bool(self.settings.lyrics_strip_intro_lines))
+        self.lyrics_strip_intro_checkbox.setChecked(bool(self._host.settings.lyrics_strip_intro_lines))
 
     def _current_lyrics_source_ids(self) -> tuple[str, ...]:
         return LYRICS_SOURCE_MAP.get(self.lyrics_source_combo.currentText(), DEFAULT_LYRICS_PROVIDER_IDS)
@@ -906,24 +994,24 @@ class LyricsSearchPageMixin:
             and not has_translation
             and self._current_lyrics_language() == LYRICS_LANGUAGE_TRANSLATION
         ):
-            previous = self._loading_settings_into_ui
-            self._loading_settings_into_ui = True
+            previous = self._restoring_preferences
+            self._restoring_preferences = True
             try:
                 for index, (_label, value) in enumerate(LYRICS_LANGUAGE_OPTIONS):
                     if value == LYRICS_LANGUAGE_ORIGINAL:
                         combo.setCurrentIndex(index)
                         break
             finally:
-                self._loading_settings_into_ui = previous
+                self._restoring_preferences = previous
 
     def _persist_lyrics_preferences(self, *_args) -> None:
-        if self._loading_settings_into_ui:
+        if self._restoring_preferences:
             return
         source_ids = self._current_lyrics_source_ids()
         preview_mode = self._current_lyrics_preview_mode()
         language = self._current_lyrics_language()
-        self.settings.lyrics_source_ids = tuple(source_ids)
-        self.settings.lyrics_preview_mode = preview_mode
-        self.settings.lyrics_language = language
-        self.settings.lyrics_strip_intro_lines = self.lyrics_strip_intro_checkbox.isChecked()
-        save_app_settings(self.settings)
+        self._host.settings.lyrics_source_ids = tuple(source_ids)
+        self._host.settings.lyrics_preview_mode = preview_mode
+        self._host.settings.lyrics_language = language
+        self._host.settings.lyrics_strip_intro_lines = self.lyrics_strip_intro_checkbox.isChecked()
+        save_app_settings(self._host.settings)

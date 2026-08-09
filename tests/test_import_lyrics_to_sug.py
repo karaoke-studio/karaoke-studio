@@ -6,6 +6,7 @@ import pytest
 
 import krok_helper  # noqa: F401 - installs bundled SUG src path
 from krok_helper.gui_qt import KrokHelperQtApp, WORKFLOW_LYRICS_TIMING
+from krok_helper.lyrics_search.page import LyricsSearchPage
 from krok_helper.lyrics import (
     LYRICS_LANGUAGE_TRANSLATION,
     LYRICS_PREVIEW_LINE,
@@ -45,16 +46,25 @@ def test_import_current_lyrics_to_timing_uses_filtered_preview() -> None:
     )
     timing_page = _FakeTimingPage()
     shown_modules: list[str] = []
-    app = SimpleNamespace(
+    # "有没有可导入的歌词"由检索页判断，"交给打轴"才是外壳的事 —— 两边各搭一个替身。
+    lyrics_page = SimpleNamespace(
         lyrics_selected_candidate=candidate,
         lyrics_strip_intro_checkbox=SimpleNamespace(isChecked=lambda: True),
-        lyrics_timing_page=timing_page,
         _current_lyrics_preview_mode=lambda: LYRICS_PREVIEW_LINE,
         _current_lyrics_language=lambda: LYRICS_LANGUAGE_TRANSLATION,
         _refresh_lyrics_import_button=lambda _preview: None,
+    )
+    lyrics_page._build_current_lyrics_preview = (
+        lambda selected: LyricsSearchPage._build_current_lyrics_preview(lyrics_page, selected)
+    )
+    lyrics_page.current_lyrics_for_timing = (
+        lambda: LyricsSearchPage.current_lyrics_for_timing(lyrics_page)
+    )
+    app = SimpleNamespace(
+        lyrics_page=lyrics_page,
+        lyrics_timing_page=timing_page,
         _show_module=shown_modules.append,
     )
-    app._build_current_lyrics_preview = lambda selected: KrokHelperQtApp._build_current_lyrics_preview(app, selected)
 
     KrokHelperQtApp._import_current_lyrics_to_timing(app)
 
