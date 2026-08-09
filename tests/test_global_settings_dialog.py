@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QScrollArea, QWidget
 
 from krok_helper import gui_qt
+from krok_helper.global_settings import page as settings_page
 from krok_helper.settings import AppSettings
 from krok_helper.updater.settings import UpdaterSettings
 
@@ -29,21 +30,21 @@ class _SettingsHost(QWidget):
 
 def _open_global_settings_dialog(monkeypatch):
     app = QApplication.instance() or QApplication([])
-    captured: dict[str, gui_qt.QDialog] = {}
+    captured: dict[str, settings_page.QDialog] = {}
 
     monkeypatch.setattr(
-        gui_qt,
+        settings_page,
         "ensure_updater_settings",
         lambda _settings: UpdaterSettings(),
     )
 
-    def capture_dialog(dialog: gui_qt.QDialog) -> int:
+    def capture_dialog(dialog: settings_page.QDialog) -> int:
         captured["dialog"] = dialog
         dialog.show()
         app.processEvents()
         return 0
 
-    monkeypatch.setattr(gui_qt.ModelessDialog, "exec", capture_dialog)
+    monkeypatch.setattr(settings_page.ModelessDialog, "exec", capture_dialog)
 
     host = _SettingsHost()
     gui_qt.KrokHelperQtApp._open_global_settings_window(host)
@@ -54,7 +55,7 @@ def _open_global_settings_dialog(monkeypatch):
 def test_global_settings_actions_stay_outside_scroll_area(monkeypatch) -> None:
     _app, dialog, host = _open_global_settings_dialog(monkeypatch)
     scroll_areas = dialog.findChildren(QScrollArea)
-    buttons = {button.text(): button for button in dialog.findChildren(gui_qt.QPushButton)}
+    buttons = {button.text(): button for button in dialog.findChildren(settings_page.QPushButton)}
 
     assert scroll_areas
     save_button = buttons["保存设置"]
@@ -64,7 +65,7 @@ def test_global_settings_actions_stay_outside_scroll_area(monkeypatch) -> None:
         assert not scroll.isAncestorOf(save_button)
         assert not scroll.isAncestorOf(close_button)
 
-    settings_stack = dialog.findChild(gui_qt.QStackedWidget)
+    settings_stack = dialog.findChild(settings_page.QStackedWidget)
     assert settings_stack is not None
     stack_top = settings_stack.mapTo(dialog, settings_stack.rect().topLeft()).y()
     save_center = save_button.mapTo(dialog, save_button.rect().center())
@@ -79,18 +80,18 @@ def test_global_settings_actions_stay_outside_scroll_area(monkeypatch) -> None:
 
 def test_application_update_controls_use_setting_cards(monkeypatch) -> None:
     app, dialog, host = _open_global_settings_dialog(monkeypatch)
-    settings_stack = dialog.findChild(gui_qt.QStackedWidget)
+    settings_stack = dialog.findChild(settings_page.QStackedWidget)
     assert settings_stack is not None
     settings_stack.setCurrentIndex(2)
     app.processEvents()
 
     update_group = next(
         group
-        for group in dialog.findChildren(gui_qt.SettingCardGroup)
+        for group in dialog.findChildren(settings_page.SettingCardGroup)
         if group.titleLabel.text() == "应用更新"
     )
     # ExpandLayout.count() 不报告 widget 数量，改为按创建顺序遍历子 SettingCard。
-    cards = update_group.findChildren(gui_qt.SettingCard)
+    cards = update_group.findChildren(settings_page.SettingCard)
     assert [card.titleLabel.text() for card in cards] == [
         "启用工作台自动更新",
         "启动时静默检查更新",
@@ -100,14 +101,14 @@ def test_application_update_controls_use_setting_cards(monkeypatch) -> None:
     ]
 
     # 两个开关卡使用 SwitchButton；间隔 / 顺序 / 立即检查卡保留原有控件。
-    assert len(update_group.findChildren(gui_qt.SwitchButton)) == 2
+    assert len(update_group.findChildren(settings_page.SwitchButton)) == 2
 
-    buttons = {button.text() for button in update_group.findChildren(gui_qt.QPushButton)}
+    buttons = {button.text() for button in update_group.findChildren(settings_page.QPushButton)}
     assert {"编辑顺序", "检查更新"} <= buttons
 
     interval_edits = [
         edit
-        for edit in update_group.findChildren(gui_qt.QLineEdit)
+        for edit in update_group.findChildren(settings_page.QLineEdit)
         if edit.text() == str(UpdaterSettings().min_check_interval_hours)
     ]
     assert interval_edits
@@ -119,7 +120,7 @@ def test_application_update_controls_use_setting_cards(monkeypatch) -> None:
 def test_using_system_path_saves_empty_ffmpeg_directory(monkeypatch) -> None:
     app, dialog, host = _open_global_settings_dialog(monkeypatch)
     monkeypatch.setattr(UpdaterSettings, "save", lambda self, settings: None)
-    buttons = {button.text(): button for button in dialog.findChildren(gui_qt.QPushButton)}
+    buttons = {button.text(): button for button in dialog.findChildren(settings_page.QPushButton)}
 
     buttons["使用系统 PATH"].click()
     buttons["保存设置"].click()
@@ -144,9 +145,9 @@ def test_set_ffmpeg_dir_accepts_none_as_system_path() -> None:
 def test_update_source_order_dialog_is_mask_free_and_modeless() -> None:
     app = QApplication.instance() or QApplication([])
     host = QWidget()
-    dialog = gui_qt.UpdateSourceOrderDialog(["github", "ghproxy"], host)
+    dialog = settings_page.UpdateSourceOrderDialog(["github", "ghproxy"], host)
 
-    assert isinstance(dialog, gui_qt.ModelessDialog)
+    assert isinstance(dialog, settings_page.ModelessDialog)
     assert not dialog.isModal()
     assert dialog.windowModality() == Qt.WindowModality.NonModal
     assert host.isEnabled()

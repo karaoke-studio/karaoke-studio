@@ -175,7 +175,8 @@ class TestHostWrappers:
         assert path == tmp_path / "MV原盘_原唱.wav"
 
     def test_custom_output_dir_mode_is_honoured(self, tmp_path: Path) -> None:
-        from krok_helper.gui_qt import ALIGN_OUTPUT_DIR_CUSTOM, KrokHelperQtApp
+        from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.settings import ALIGN_OUTPUT_DIR_CUSTOM
 
         host, _ = self._host()
         host.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_CUSTOM
@@ -184,7 +185,8 @@ class TestHostWrappers:
         assert KrokHelperQtApp._resolve_alignment_output_dir(host, Path("D:/elsewhere/a.mkv")) == tmp_path
 
     def test_blank_custom_dir_is_rejected(self) -> None:
-        from krok_helper.gui_qt import ALIGN_OUTPUT_DIR_CUSTOM, KrokHelperQtApp
+        from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.settings import ALIGN_OUTPUT_DIR_CUSTOM
 
         host, _ = self._host()
         host.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_CUSTOM

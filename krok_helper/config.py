@@ -1,3 +1,5 @@
+from pathlib import Path
+
 APP_NAME = "Karaoke Studio"
 APP_VERSION = "4.2.3"
 APP_TITLE = "卡拉OK工作台"
@@ -10,3 +12,6 @@ WINDOW_MIN_HEIGHT = 820
 
 #: ffmpeg 目录留空时各处输入框/标签的统一占位文案。
 FFMPEG_DIR_PLACEHOLDER = "未设置，将优先使用系统 PATH 中的 ffmpeg"
+
+#: 关于页与任务栏图标用的产品 logo。
+APP_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "logo.jpg"
