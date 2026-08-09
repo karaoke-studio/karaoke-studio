@@ -63,3 +63,8 @@ def hidden_subprocess_kwargs() -> dict[str, object]:
         "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
         "startupinfo": startupinfo,
     }
+
+
+def open_in_explorer(path) -> None:
+    """在资源管理器里打开目录。各页的「打开输出目录」都走这里。"""
+    subprocess.Popen(["explorer", str(path)])

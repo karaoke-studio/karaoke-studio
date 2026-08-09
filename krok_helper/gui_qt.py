@@ -192,7 +192,23 @@ from krok_helper.settings import (
     migrate_strange_uta_game_settings,
     save_app_settings,
 )
+from krok_helper.background import BackgroundTask
+from krok_helper.media_formats import (
+    ALIGN_AUDIO_EXTENSIONS,
+    AUDIO_EXTENSIONS,
+    HIRES_AUDIO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    format_media_duration,
+)
 from krok_helper.sug_compat import apply_sug_compat_patches
+from krok_helper.workflow import (
+    WORKFLOW_HIRES_MIX,
+    WORKFLOW_LYRICS_SEARCH,
+    WORKFLOW_LYRICS_TIMING,
+    WORKFLOW_SUBTITLE_RENDER,
+    WORKFLOW_VIDEO_DOWNLOAD,
+    WORKFLOW_WAVEFORM_ALIGN,
+)
 from krok_helper.ui_kit import (
     CardWidget,
     ControlBar,
@@ -204,25 +220,15 @@ from krok_helper.updater import CheckResult, UpdateChecker, ensure_updater_setti
 from krok_helper.updater.settings import UpdaterSettings
 from krok_helper.updater.sources import SOURCE_IDS, SOURCE_LABELS, normalize_order
 from krok_helper.video_download import VideoDownloadPage
-from krok_helper.windows import set_explicit_app_user_model_id
+from krok_helper.windows import open_in_explorer, set_explicit_app_user_model_id
 
 apply_qfluent_menu_lifetime_patch()
 apply_qfluent_tooltip_parent_patch()
 
 
-VIDEO_EXTENSIONS = {".mkv", ".mp4", ".mov", ".avi"}
-AUDIO_EXTENSIONS = {".flac", ".wav", ".mp3", ".m4a", ".aac", ".ape", ".alac", ".mkv"}
-HIRES_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
-ALIGN_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
 FFMPEG_DIR_PLACEHOLDER = "未设置，将优先使用系统 PATH 中的 ffmpeg"
 #: 换页动画 240ms；转交提示要等它跑完再弹，否则 InfoBar 的滑入动画会被卡住。
 PAGE_TRANSITION_SETTLE_MS = 320
-WORKFLOW_VIDEO_DOWNLOAD = "video_download"
-WORKFLOW_WAVEFORM_ALIGN = "waveform_align"
-WORKFLOW_LYRICS_SEARCH = "lyrics_search"
-WORKFLOW_LYRICS_TIMING = "lyrics_timing"
-WORKFLOW_SUBTITLE_RENDER = "subtitle_render"
-WORKFLOW_HIRES_MIX = "hires_mix"
 LYRICS_SOURCE_OPTIONS = [
     ("聚合", DEFAULT_LYRICS_PROVIDER_IDS),
     ("QQ音乐", ("qm",)),
@@ -485,10 +491,6 @@ def combo_box_view_qss() -> str:
         color: {selected_text};
     }}
     """
-def open_in_explorer(path: Path) -> None:
-    subprocess.Popen(["explorer", str(path)])
-
-
 def load_app_icon() -> QIcon | None:
     if not APP_LOGO_PATH.exists():
         return None
@@ -531,17 +533,6 @@ def build_lyrics_ui_font(*, point_size: float = 10.5, bold: bool = False) -> QFo
 
 def sync_fluent_ui_fonts() -> None:
     qconfig.set(qconfig.fontFamilies, DEFAULT_UI_FONT_FAMILIES, save=False)
-
-
-def format_media_duration(seconds: float | None) -> str:
-    if seconds is None or seconds <= 0:
-        return "时长未知"
-
-    minutes = int(seconds // 60)
-    remainder = seconds - minutes * 60
-    if minutes:
-        return f"{minutes}:{remainder:06.3f}"
-    return f"{seconds:.3f}s"
 
 
 class WhiteComboBoxMenu(ComboBoxMenu):
@@ -1863,33 +1854,6 @@ class DropZoneCard(CardWidget):
         )
         self._position_status_badge()
 
-
-class BackgroundTask(QThread):
-    log_message = Signal(str)
-    task_succeeded = Signal(object)
-    task_failed = Signal(str)
-
-    def __init__(self, runner: Callable[[Callable[[str], None]], object]) -> None:
-        super().__init__()
-        self._runner = runner
-        self._task_name = getattr(runner, "__qualname__", getattr(runner, "__name__", "unknown"))
-
-    def run(self) -> None:  # noqa: D401
-        task_log = logging.getLogger("krok_helper.background_task")
-        task_log.info("后台任务开始: %s", self._task_name)
-
-        def emit_log(message: str) -> None:
-            task_log.info("%s: %s", self._task_name, message)
-            self.log_message.emit(message)
-
-        try:
-            result = self._runner(emit_log)
-        except Exception as exc:  # noqa: BLE001
-            task_log.exception("后台任务失败: %s", self._task_name)
-            self.task_failed.emit(str(exc))
-            return
-        task_log.info("后台任务完成: %s", self._task_name)
-        self.task_succeeded.emit(result)
 
 
 class LyricsKeywordLineEdit(QLineEdit):
