@@ -130,11 +130,22 @@ class _FakeAudioEngine:
 
 
 def _fake_app(module_id: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        active_module=module_id,
+    """外壳只管跨模块的 Ctrl+S；另外三个归对齐页自己，外壳只告诉它当前是否前台。"""
+    page = SimpleNamespace(
         shortcut_space=_FakeShortcut(),
         shortcut_auto=_FakeShortcut(),
         shortcut_drag_mode=_FakeShortcut(),
+    )
+    page.sync_shortcut_scope = lambda active: [
+        setattr(getattr(page, name), "enabled", active)
+        for name in ("shortcut_space", "shortcut_auto", "shortcut_drag_mode")
+    ]
+    return SimpleNamespace(
+        active_module=module_id,
+        align_page=page,
+        shortcut_space=page.shortcut_space,
+        shortcut_auto=page.shortcut_auto,
+        shortcut_drag_mode=page.shortcut_drag_mode,
         shortcut_export=_FakeShortcut(),
     )
 

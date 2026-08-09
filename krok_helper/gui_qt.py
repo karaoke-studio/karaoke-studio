@@ -68,7 +68,7 @@ from krok_helper.qfluent_compat import (
     show_fluent_warning,
 )
 from krok_helper.alignment import AlignmentHandoffDialog
-from krok_helper.alignment.page import AlignmentPageMixin
+from krok_helper.alignment.page import AlignmentPage
 from krok_helper.global_settings.page import SettingsDialogs
 from krok_helper.hires.page import DropZoneCard, HiResPage
 from krok_helper.lyrics_search.page import LyricsSearchPage
@@ -273,14 +273,16 @@ class PageTransitionOverlay(QWidget):
         painter.drawPixmap(int(self._offset), 0, self._new_pixmap)
 
 
-class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
+class KrokHelperQtApp(QMainWindow):
     """工作台主窗口（外壳）。
 
-    三个工作流页面与设置对话框分别住在
-    :class:`~krok_helper.alignment.page.AlignmentPageMixin`、
-    :class:`~krok_helper.hires.page.HiResPageMixin` 和
-    :class:`~krok_helper.global_settings.page.GlobalSettingsMixin`，混进来共用
-    同一个 ``self`` —— 各自的模块文档里列了它们还依赖宿主的哪些成员。
+    只负责壳的事：工作流步条与换页、主题、快捷键作用域、崩溃恢复、更新检查，
+    以及把各页产物在步骤之间转交。
+
+    四个页面都是独立对象（``align_page`` / ``lyrics_page`` / ``hires_page``
+    与 ``_settings_dialogs``），本类同时实现它们各自的宿主契约 ——
+    ``AlignmentHost`` / ``LyricsSearchHost`` / ``HiResHost`` / ``SettingsHost``，
+    页面只能透过这些接口回头找外壳。
     """
     def __init__(self) -> None:
         super().__init__()
@@ -311,7 +313,6 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         self.on_name_template_value = DEFAULT_ON_NAME_TEMPLATE
         self.off_name_template_value = DEFAULT_OFF_NAME_TEMPLATE
         self.ffmpeg_dir_text = ""
-        self._init_alignment_state()
         self._media_duration_cache: dict[Path, str] = {}
         self._suppress_preview_seek_restart = False
         self._restoring_from_maximized = False
@@ -365,6 +366,17 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         task.finished.connect(task.deleteLater)
         return task
 
+    # ── AlignmentHost 实现 ───────────────────────────────────────
+
+    def set_panel_enabled(self, panel, enabled: bool) -> None:
+        self._set_panel_enabled(panel, enabled)
+
+    def build_media_info(self, path: Path, label: str) -> str:
+        return self._build_media_info(path, label)
+
+    def focused_widget_is_text_input(self) -> bool:
+        return self._focused_widget_is_text_input()
+
     # ── SettingsHost 实现 ────────────────────────────────────────
 
     def sync_ffmpeg_labels(self) -> None:
@@ -389,15 +401,52 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         )
 
     def collect_alignment_settings(self) -> None:
-        self._collect_alignment_settings()
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.collect_settings()
 
     def update_alignment_preferences_from_ui(self) -> None:
-        self._update_alignment_preferences_from_ui()
+        self.align_page._update_alignment_preferences_from_ui()
 
     def validate_alignment_name_template(self, template, label, *, allowed_fields, extensions):
-        return self._validate_alignment_name_template(
+        return self.align_page.validate_name_template(
             template, label, allowed_fields=allowed_fields, extensions=extensions
         )
+
+    # 设置对话框读写对齐页的那几项 —— 转调到页面自己的窄接口，
+    # 不再让对话框隔空改它的属性。
+    @property
+    def align_video_name_template_value(self) -> str:
+        return self.align_page.name_templates()[0]
+
+    @align_video_name_template_value.setter
+    def align_video_name_template_value(self, value: str) -> None:
+        _video, audio = self.align_page.name_templates()
+        self.align_page.set_name_templates(value, audio)
+
+    @property
+    def align_audio_name_template_value(self) -> str:
+        return self.align_page.name_templates()[1]
+
+    @align_audio_name_template_value.setter
+    def align_audio_name_template_value(self, value: str) -> None:
+        video, _audio = self.align_page.name_templates()
+        self.align_page.set_name_templates(video, value)
+
+    @property
+    def align_output_dir_mode_value(self) -> str:
+        return self.align_page.output_dir_settings()[0]
+
+    @property
+    def align_output_custom_dir_text(self) -> str:
+        return self.align_page.output_dir_settings()[1]
+
+    @property
+    def align_video_zone(self):
+        return self.align_page.align_video_zone
+
+    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None:
+        self.align_page.set_alignment_output_dir_settings(mode, custom_dir)
 
     # ── LyricsSearchHost 实现 ────────────────────────────────────
 
@@ -444,18 +493,13 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         return self.hires_page.accept_separated_accompaniment(paths)
 
     def _running_background_tasks(self) -> list[BackgroundTask]:
-        task_attrs = (
-            "align_analysis_task",
-            "align_auto_task",
-            "align_export_task",
-        )
         tasks: list[BackgroundTask] = []
-        for attr_name in task_attrs:
-            task = getattr(self, attr_name, None)
-            if task is not None and task.isRunning():
-                tasks.append(task)
-        # 已经对象化的页面自己持有任务，问它们要；还是 mixin 的那几页仍走上面的槽位。
-        for page in (getattr(self, "hires_page", None), getattr(self, "lyrics_page", None)):
+        # 每个页面自己持有后台任务，关窗前挨个问。
+        for page in (
+            getattr(self, "hires_page", None),
+            getattr(self, "lyrics_page", None),
+            getattr(self, "align_page", None),
+        ):
             running = getattr(page, "running_tasks", None)
             if callable(running):
                 tasks.extend(running())
@@ -637,7 +681,7 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         self._page_stack_container_layout.addWidget(self.page_stack)
 
         self.video_download_page = VideoDownloadPage(self.settings, self._save_all_settings, self)
-        self.align_page = self._build_alignment_page()
+        self.align_page = AlignmentPage(host=self, parent=self.page_stack)
         # 第 2 步「音视频处理」= Pivot 容器（波形对齐 / 音频分离），模块 ID 不变。
         from krok_helper.audio_processing import AudioProcessingPage, AudioSeparationPage
 
@@ -1256,29 +1300,32 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         self.settings.output_name_mode = self.output_name_mode_value
         self.settings.on_name_template = self.on_name_template_value
         self.settings.off_name_template = self.off_name_template_value
-        self._collect_alignment_settings()
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.collect_settings()
         self.settings.ffmpeg_dir = self.ffmpeg_dir_text
         self._sync_lyrics_timing_host_paths()
         if not self._loading_settings_into_ui:
-            self._update_alignment_preferences_from_ui()
+            align_page = getattr(self, "align_page", None)
+            if align_page is not None:
+                align_page.collect_settings()
         return save_app_settings(self.settings)
 
     def _bind_shortcuts(self) -> None:
-        # Ctrl+S 是跨模块的（对齐导出 / 打轴保存），留在外壳；其余三个只在
-        # 波形对齐页有意义，归 _bind_alignment_shortcuts。
+        # Ctrl+S 是跨模块的（对齐导出 / 打轴保存），留在外壳；
+        # 其余三个只在波形对齐页有意义，由页面自己绑。
         self.shortcut_export = QShortcut(QKeySequence("Ctrl+S"), self)
         self.shortcut_export.activated.connect(self._handle_export_or_save_shortcut)
-        self._bind_alignment_shortcuts()
         self._sync_workflow_shortcut_scope()
 
     def _sync_workflow_shortcut_scope(self) -> None:
-        if not hasattr(self, "shortcut_space"):
+        if not hasattr(self, "shortcut_export"):
             return
         align_active = self.active_module == WORKFLOW_WAVEFORM_ALIGN
         timing_active = self.active_module == WORKFLOW_LYRICS_TIMING
-        self.shortcut_space.setEnabled(align_active)
-        self.shortcut_auto.setEnabled(align_active)
-        self.shortcut_drag_mode.setEnabled(align_active)
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.sync_shortcut_scope(align_active)
         self.shortcut_export.setEnabled(align_active or timing_active)
 
     def _focused_widget_is_text_input(self) -> bool:
@@ -1303,12 +1350,6 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         ):
             # 快照是按旧尺寸拍的，拉伸后继续播只会拉花，直接收尾露出真实页面
             self._end_page_transition()
-        if event.type() == QEvent.Type.Wheel and self._should_route_alignment_wheel(watched, event):
-            self.waveform_view.wheelEvent(event)
-            if event.isAccepted():
-                self._sync_alignment_zoom_slider()
-                return True
-            return False
         return super().eventFilter(watched, event)
 
 
@@ -1343,7 +1384,9 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         self.set_ffmpeg_dir(Path(self.settings.ffmpeg_dir) if self.settings.ffmpeg_dir.strip() else None)
         self.set_output_name_mode(self.settings.output_name_mode)
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
-        self._load_alignment_settings()
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.load_settings()
         lyrics_page = getattr(self, "lyrics_page", None)
         if lyrics_page is not None:
             lyrics_page.restore_preferences()
@@ -1370,7 +1413,9 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         page = getattr(self, "hires_page", None)
         if page is not None:
             page.set_ffmpeg_dir_text(self.ffmpeg_dir_text)
-        self._refresh_media_info_labels()
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.refresh_media_info()
 
     def set_ffmpeg_dir(self, path: Path | None) -> None:
         self.ffmpeg_dir_text = str(path) if path is not None else ""

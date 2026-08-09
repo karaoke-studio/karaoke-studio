@@ -134,7 +134,7 @@ class TestHostWrappers:
     def _host(self):
         from types import SimpleNamespace
 
-        from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.alignment.page import AlignmentPage
 
         return SimpleNamespace(
             align_video_name_template_value="{video_name}_对齐.mp4",
@@ -142,9 +142,9 @@ class TestHostWrappers:
             align_output_dir_mode_value="source_video",
             align_output_custom_dir_text="",
             _validate_alignment_name_template=(
-                lambda *a, **k: KrokHelperQtApp._validate_alignment_name_template(None, *a, **k)
+                lambda *a, **k: AlignmentPage._validate_alignment_name_template(None, *a, **k)
             ),
-        ), KrokHelperQtApp
+        ), AlignmentPage
 
     def test_renders_the_video_target_path(self, tmp_path: Path) -> None:
         host, cls = self._host()
@@ -175,21 +175,21 @@ class TestHostWrappers:
         assert path == tmp_path / "MV原盘_原唱.wav"
 
     def test_custom_output_dir_mode_is_honoured(self, tmp_path: Path) -> None:
-        from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.alignment.page import AlignmentPage
         from krok_helper.settings import ALIGN_OUTPUT_DIR_CUSTOM
 
         host, _ = self._host()
         host.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_CUSTOM
         host.align_output_custom_dir_text = str(tmp_path)
 
-        assert KrokHelperQtApp._resolve_alignment_output_dir(host, Path("D:/elsewhere/a.mkv")) == tmp_path
+        assert AlignmentPage._resolve_alignment_output_dir(host, Path("D:/elsewhere/a.mkv")) == tmp_path
 
     def test_blank_custom_dir_is_rejected(self) -> None:
-        from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.alignment.page import AlignmentPage
         from krok_helper.settings import ALIGN_OUTPUT_DIR_CUSTOM
 
         host, _ = self._host()
         host.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_CUSTOM
 
         with pytest.raises(ProcessingError, match="选择对齐导出的保存目录"):
-            KrokHelperQtApp._resolve_alignment_output_dir(host, Path("D:/elsewhere/a.mkv"))
+            AlignmentPage._resolve_alignment_output_dir(host, Path("D:/elsewhere/a.mkv"))

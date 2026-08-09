@@ -26,6 +26,7 @@ from krok_helper.gui_qt import (  # noqa: E402
     WORKFLOW_HIRES_MIX,
     WORKFLOW_SUBTITLE_RENDER,
 )
+from krok_helper.alignment.page import AlignmentPage  # noqa: E402
 from krok_helper.hires.page import HiResPage  # noqa: E402
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
     SubtitleProjectState,
@@ -366,24 +367,26 @@ def test_alignment_handoff_dialog_keeps_gui_responsive(
                 load_video=lambda path: calls.append(("subtitle", path))
             )
 
-        def set_on_vocal_path(self, path):
-            calls.append(("hires", path))
-
-        def _notify_handoff(self, title, content):
-            pass  # 提示条另有专测（test_handoff_toasts.py）
+        @property
+        def _host(self):
+            # 对齐页现在经 host 把原唱交给第 6 步、发转交提示
+            return SimpleNamespace(
+                set_on_vocal_path=lambda path: calls.append(("hires", path)),
+                notify_handoff=lambda title, content: None,
+            )
 
         def _apply_alignment_handoff(self):
-            KrokHelperQtApp._apply_alignment_handoff(self)
+            AlignmentPage._apply_alignment_handoff(self)
 
         def _clear_alignment_handoff_dialog(self, result):
-            KrokHelperQtApp._clear_alignment_handoff_dialog(self, result)
+            AlignmentPage._clear_alignment_handoff_dialog(self, result)
 
     host = HandoffHost()
     host.show()
     output = tmp_path / "aligned.wav"
     source_video = tmp_path / "source.mp4"
     source_audio = tmp_path / "source.flac"
-    KrokHelperQtApp._offer_alignment_handoff(
+    AlignmentPage._offer_alignment_handoff(
         host,
         is_video_target=False,
         output_path=output,
@@ -498,16 +501,18 @@ def test_alignment_handoff_maps_assets_without_switching_modules(
         subtitle_render_page=SimpleNamespace(
             load_video=lambda path: calls.append(("subtitle", path))
         ),
-        set_on_vocal_path=lambda path: calls.append(("hires", path)),
-        # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
-        _notify_handoff=lambda title, content: None,
+        _host=SimpleNamespace(
+            set_on_vocal_path=lambda path: calls.append(("hires", path)),
+            # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
+            notify_handoff=lambda title, content: None,
+        ),
     )
-    app._apply_alignment_handoff = lambda: KrokHelperQtApp._apply_alignment_handoff(app)
+    app._apply_alignment_handoff = lambda: AlignmentPage._apply_alignment_handoff(app)
     app._clear_alignment_handoff_dialog = (
-        lambda result: KrokHelperQtApp._clear_alignment_handoff_dialog(app, result)
+        lambda result: AlignmentPage._clear_alignment_handoff_dialog(app, result)
     )
 
-    KrokHelperQtApp._offer_alignment_handoff(
+    AlignmentPage._offer_alignment_handoff(
         app,
         is_video_target=is_video_target,
         output_path=output,
@@ -568,13 +573,15 @@ def test_alignment_handoff_respects_unchecked_options_and_cancel(
         subtitle_render_page=SimpleNamespace(
             load_video=lambda path: calls.append(("subtitle", path))
         ),
-        set_on_vocal_path=lambda path: calls.append(("hires", path)),
-        # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
-        _notify_handoff=lambda title, content: None,
+        _host=SimpleNamespace(
+            set_on_vocal_path=lambda path: calls.append(("hires", path)),
+            # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
+            notify_handoff=lambda title, content: None,
+        ),
     )
-    app._apply_alignment_handoff = lambda: KrokHelperQtApp._apply_alignment_handoff(app)
+    app._apply_alignment_handoff = lambda: AlignmentPage._apply_alignment_handoff(app)
     app._clear_alignment_handoff_dialog = (
-        lambda result: KrokHelperQtApp._clear_alignment_handoff_dialog(app, result)
+        lambda result: AlignmentPage._clear_alignment_handoff_dialog(app, result)
     )
     kwargs = {
         "is_video_target": True,
@@ -583,8 +590,8 @@ def test_alignment_handoff_respects_unchecked_options_and_cancel(
         "source_audio_path": tmp_path / "source.flac",
     }
 
-    KrokHelperQtApp._offer_alignment_handoff(app, **kwargs)
-    KrokHelperQtApp._offer_alignment_handoff(app, **kwargs)
+    AlignmentPage._offer_alignment_handoff(app, **kwargs)
+    AlignmentPage._offer_alignment_handoff(app, **kwargs)
 
     assert calls == [("hires", tmp_path / "source.flac")]
 
@@ -622,7 +629,7 @@ def test_alignment_export_success_opens_handoff_with_frozen_source_paths(
         _offer_alignment_handoff=lambda **kwargs: handoffs.append(kwargs),
     )
 
-    KrokHelperQtApp._finish_aligned_export(
+    AlignmentPage._finish_aligned_export(
         app,
         True,
         "",
@@ -652,7 +659,7 @@ def test_alignment_export_completion_is_queued_to_gui_thread(
     observed: list[tuple[QThread, tuple[object, ...], dict[str, object]]] = []
 
     class CompletionProbe(QObject):
-        _finish_aligned_export_success = KrokHelperQtApp._finish_aligned_export_success
+        _finish_aligned_export_success = AlignmentPage._finish_aligned_export_success
 
         def __init__(self) -> None:
             super().__init__()

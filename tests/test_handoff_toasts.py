@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from krok_helper.gui_qt import KrokHelperQtApp
+from krok_helper.alignment.page import AlignmentPage
 from krok_helper.hires.page import HiResPage
 
 
@@ -71,26 +72,32 @@ def test_no_toast_when_every_accompaniment_was_a_duplicate() -> None:
     assert toasts == []
 
 
-def _alignment_host(*, selections, payload, **extra):
-    host, toasts = _host(
+def _alignment_page(*, selections, payload, vocals=None, **extra):
+    """对齐页替身：转交提示与"交原唱给第 6 步"现在都经 ``_host``。"""
+    toasts: list[tuple[str, str]] = []
+    page = SimpleNamespace(
         _alignment_handoff_dialog=SimpleNamespace(selections=lambda: selections),
         _alignment_handoff_payload=payload,
+        _host=SimpleNamespace(
+            notify_handoff=lambda title, content: toasts.append((title, content)),
+            set_on_vocal_path=(vocals.append if vocals is not None else (lambda _p: None)),
+        ),
         **extra,
     )
-    return host, toasts
+    return page, toasts
 
 
 def test_alignment_handoff_reports_both_targets() -> None:
     loaded: list[Path] = []
     vocals: list[Path] = []
-    host, toasts = _alignment_host(
+    page, toasts = _alignment_page(
         selections=(True, True),
         payload=(True, Path("D:/tmp/对齐后.mp4"), Path("D:/tmp/源.mkv"), Path("D:/tmp/原唱.flac")),
+        vocals=vocals,
         subtitle_render_page=SimpleNamespace(load_video=loaded.append),
-        set_on_vocal_path=vocals.append,
     )
 
-    KrokHelperQtApp._apply_alignment_handoff(host)
+    AlignmentPage._apply_alignment_handoff(page)
 
     assert loaded == [Path("D:/tmp/对齐后.mp4")]
     assert vocals == [Path("D:/tmp/原唱.flac")]
@@ -101,14 +108,14 @@ def test_alignment_handoff_reports_both_targets() -> None:
 
 def test_alignment_handoff_only_reports_what_was_ticked() -> None:
     vocals: list[Path] = []
-    host, toasts = _alignment_host(
+    page, toasts = _alignment_page(
         selections=(False, True),
         payload=(True, Path("D:/tmp/对齐后.mp4"), Path("D:/tmp/源.mkv"), Path("D:/tmp/原唱.flac")),
+        vocals=vocals,
         subtitle_render_page=SimpleNamespace(load_video=lambda _p: None),
-        set_on_vocal_path=vocals.append,
     )
 
-    KrokHelperQtApp._apply_alignment_handoff(host)
+    AlignmentPage._apply_alignment_handoff(page)
 
     assert len(toasts) == 1
     assert "Hi-Res" in toasts[0][0]
@@ -116,13 +123,12 @@ def test_alignment_handoff_only_reports_what_was_ticked() -> None:
 
 def test_alignment_handoff_stays_quiet_without_a_source_path() -> None:
     """音频目标下没有源视频可交，那一路应当既不投放也不提示。"""
-    host, toasts = _alignment_host(
+    page, toasts = _alignment_page(
         selections=(True, False),
         payload=(False, Path("D:/tmp/对齐后.wav"), None, Path("D:/tmp/原唱.flac")),
         subtitle_render_page=SimpleNamespace(load_video=lambda _p: None),
-        set_on_vocal_path=lambda _p: None,
     )
 
-    KrokHelperQtApp._apply_alignment_handoff(host)
+    AlignmentPage._apply_alignment_handoff(page)
 
     assert toasts == []

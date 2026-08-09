@@ -29,9 +29,9 @@ import math
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol, runtime_checkable
 
-from PyQt6.QtCore import QTimer, Qt, pyqtSlot as Slot
+from PyQt6.QtCore import QEvent, QTimer, Qt, pyqtSlot as Slot
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -84,7 +84,6 @@ from krok_helper.audio_alignment import (
     format_offset,
 )
 from krok_helper.background import BackgroundTask
-from krok_helper.config import APP_TITLE
 from krok_helper.errors import ProcessingError
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
 from krok_helper.media_formats import (
@@ -103,11 +102,123 @@ from krok_helper.ui_kit import CardWidget, build_app_ui_font
 from krok_helper.windows import open_in_explorer
 from krok_helper.workflow import WORKFLOW_WAVEFORM_ALIGN
 
-__all__ = ["AlignmentPageMixin"]
+__all__ = ["AlignmentHost", "AlignmentPage"]
 
 
-class AlignmentPageMixin:
-    """波形对齐页。混入 ``KrokHelperQtApp``，不单独实例化。"""
+@runtime_checkable
+class AlignmentHost(Protocol):
+    """波形对齐页需要外壳提供的全部能力。五个页面里最后一份宿主契约。"""
+
+    #: 应用配置对象。
+    settings: object
+
+    #: 当前在哪一步 —— 快捷键只在本页前台时才该响应。
+    active_module: str
+
+    def track_background_task(self, task: BackgroundTask) -> BackgroundTask:
+        """登记后台任务，让外壳在关窗/强退时统一收尾。"""
+        ...
+
+    def resolve_ffmpeg_dir(self) -> Path | None: ...
+
+    def build_media_info(self, path: Path, label: str) -> str:
+        """素材信息文案（带时长/分辨率），Hi-Res 页也在用，所以留在外壳。"""
+        ...
+
+    def set_panel_enabled(self, panel, enabled: bool) -> None:
+        """忙碌时把整块面板禁用。"""
+        ...
+
+    def focused_widget_is_text_input(self) -> bool:
+        """焦点在输入框里就别抢按键。"""
+        ...
+
+    def notify_handoff(self, title: str, content: str) -> None: ...
+
+    def open_settings_window(self, context: str) -> None: ...
+
+    def set_on_vocal_path(self, path: Path) -> None:
+        """把原唱交给第 6 步 Hi-Res 混流。"""
+        ...
+
+
+class AlignmentPage(QWidget):
+    """波形对齐页 —— 独立控件，与外壳的往来只经 :class:`AlignmentHost`。"""
+
+    def __init__(self, *, host: AlignmentHost, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._host = host
+        self._init_alignment_state()
+        self._build_ui()
+        self._bind_alignment_shortcuts()
+
+    # ── 外壳会调的公开入口 ────────────────────────────────────────
+
+    def load_settings(self) -> None:
+        self._load_alignment_settings()
+
+    def collect_settings(self) -> None:
+        self._collect_alignment_settings()
+
+    def sync_shortcut_scope(self, active: bool) -> None:
+        """只有本页在前台时那三个快捷键才该响应。"""
+        for name in ("shortcut_space", "shortcut_auto", "shortcut_drag_mode"):
+            shortcut = getattr(self, name, None)
+            if shortcut is not None:
+                shortcut.setEnabled(active)
+
+    def running_tasks(self) -> list[BackgroundTask]:
+        tasks = (self.align_analysis_task, self.align_auto_task, self.align_export_task)
+        return [t for t in tasks if t is not None and t.isRunning()]
+
+    def is_busy(self) -> bool:
+        return bool(self.running_tasks())
+
+    def refresh_media_info(self) -> None:
+        self._refresh_media_info_labels()
+
+    def rerender_after_theme_change(self) -> None:
+        self._refresh_alignment_material_inputs()
+        self._apply_alignment_mode_styles()
+        self._refresh_alignment_export_panels()
+        head_mode = getattr(self, "_head_mode_current", None)
+        if head_mode is not None:
+            self._update_head_mode_buttons(head_mode)
+
+    # ── 设置对话框要的那一小段（原先它直接改本页属性）───────────
+
+    def name_templates(self) -> tuple[str, str]:
+        return self.align_video_name_template_value, self.align_audio_name_template_value
+
+    def set_name_templates(self, video_template: str, audio_template: str) -> None:
+        self.align_video_name_template_value = video_template
+        self.align_audio_name_template_value = audio_template
+
+    def output_dir_settings(self) -> tuple[str, str]:
+        return self.align_output_dir_mode_value, self.align_output_custom_dir_text
+
+    def current_video_path(self):
+        zone = getattr(self, "align_video_zone", None)
+        return getattr(zone, "path", None)
+
+    def validate_name_template(self, template: str, label: str, *, allowed_fields, extensions) -> str:
+        return self._validate_alignment_name_template(
+            template, label, allowed_fields=allowed_fields, extensions=extensions
+        )
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        """滚轮落在波形区时交给波形画布缩放。
+
+        过滤器是本页装在自己的滚动区上的，接收端也必须在本页 —— 留在外壳的话
+        滚轮缩放会静默失效（歌词页的浮动按钮就栽过这一次）。
+        """
+        if event.type() == QEvent.Type.Wheel and self._should_route_alignment_wheel(watched, event):
+            self.waveform_view.wheelEvent(event)
+            if event.isAccepted():
+                self._sync_alignment_zoom_slider()
+                return True
+            return False
+        return super().eventFilter(watched, event)
 
     _ZOOM_SLIDER_MIN = 1
     _ZOOM_SLIDER_MAX = 800
@@ -213,8 +324,8 @@ class AlignmentPageMixin:
         self.align_output_custom_dir_text = ""
         self._align_lead_fill_selection = LEAD_FILL_BLACK
         self._align_encode_selection = (
-            self.settings.align_encode_mode
-            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            self._host.settings.align_encode_mode
+            if self._host.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
             else ENCODE_MODE_SOFTWARE
         )
         #: 正在把设置灌进控件 —— 期间控件变化不该回写，否则会把偏好覆盖成中间态。
@@ -242,7 +353,7 @@ class AlignmentPageMixin:
         self.shortcut_drag_mode.activated.connect(self._handle_align_drag_mode_shortcut)
 
     def _handle_align_space_shortcut(self) -> None:
-        if self.active_module != WORKFLOW_WAVEFORM_ALIGN or self._focused_widget_is_text_input():
+        if self._host.active_module != WORKFLOW_WAVEFORM_ALIGN or self._host.focused_widget_is_text_input():
             return
         if self.align_preview_process is not None and self.align_preview_process.is_running():
             self._stop_alignment_preview()
@@ -253,12 +364,12 @@ class AlignmentPageMixin:
             self._start_alignment_analysis()
 
     def _handle_align_auto_shortcut(self) -> None:
-        if self.active_module != WORKFLOW_WAVEFORM_ALIGN or self._focused_widget_is_text_input():
+        if self._host.active_module != WORKFLOW_WAVEFORM_ALIGN or self._host.focused_widget_is_text_input():
             return
         self._auto_align_waveforms()
 
     def _handle_align_drag_mode_shortcut(self) -> None:
-        if self.active_module != WORKFLOW_WAVEFORM_ALIGN or self._focused_widget_is_text_input():
+        if self._host.active_module != WORKFLOW_WAVEFORM_ALIGN or self._host.focused_widget_is_text_input():
             return
         if self.align_drag_pan_radio.isChecked():
             self.align_drag_offset_radio.setChecked(True)
@@ -299,7 +410,7 @@ class AlignmentPageMixin:
             self.align_zoom_slider.setValue(self._pps_to_slider(self.waveform_view.pixels_per_second))
             self.align_zoom_slider.blockSignals(False)
 
-    def _build_alignment_page(self) -> QWidget:
+    def _build_ui(self) -> None:
         from PyQt6.QtCore import QSize
 
         class AlignmentExportProxyButton(PrimaryPushButton):
@@ -319,8 +430,8 @@ class AlignmentPageMixin:
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.installEventFilter(self)
 
-        page = QWidget()
-        shell = QVBoxLayout(page)
+        content = QWidget()
+        shell = QVBoxLayout(content)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(14)
 
@@ -436,7 +547,7 @@ class AlignmentPageMixin:
         self.align_material_settings_button.setToolTip("波形对齐设置")
         self.align_material_settings_button.setFixedSize(30, 30)
         self.align_material_settings_button.setIconSize(QSize(16, 16))
-        self.align_material_settings_button.clicked.connect(lambda: self._open_settings_window("align"))
+        self.align_material_settings_button.clicked.connect(lambda: self._host.open_settings_window("align"))
 
         material_header.addWidget(material_title)
         material_header.addWidget(self.align_material_status_label)
@@ -585,8 +696,11 @@ class AlignmentPageMixin:
         self._refresh_align_target_ui()
         self._on_alignment_target_changed()
         self._refresh_alignment_preview_controls()
-        scroll.setWidget(page)
-        return scroll
+        scroll.setWidget(content)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(scroll)
 
     def _build_waveform_toolbar(self) -> QWidget:
         from PyQt6.QtCore import QSize
@@ -1160,8 +1274,8 @@ class AlignmentPageMixin:
         self._refresh_align_target_ui()
         is_subtitle_target = self.rb_adjust_subtitle.isChecked()
         if self.subtitle_adjust_card is not self.original_adjust_card:
-            self._set_panel_enabled(self.subtitle_adjust_card, is_subtitle_target)
-            self._set_panel_enabled(self.original_adjust_card, not is_subtitle_target)
+            self._host.set_panel_enabled(self.subtitle_adjust_card, is_subtitle_target)
+            self._host.set_panel_enabled(self.original_adjust_card, not is_subtitle_target)
         has_waveforms = self.waveform_view.video_waveform is not None and self.waveform_view.audio_waveform is not None
         if hasattr(self, "align_control_placeholder"):
             self.align_control_placeholder.setVisible(not has_waveforms)
@@ -1339,7 +1453,7 @@ class AlignmentPageMixin:
         if self._restoring_alignment_settings:
             return
         self._update_alignment_preferences_from_ui()
-        save_app_settings(self.settings)
+        save_app_settings(self._host.settings)
 
     def _handle_alignment_encode_mode_toggled(self, encode_mode: str, checked: bool) -> None:
         if not checked:
@@ -1371,29 +1485,29 @@ class AlignmentPageMixin:
         """
         self._restoring_alignment_settings = True
         try:
-            self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
-            self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+            self.align_video_name_template_value = self._host.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
+            self.align_audio_name_template_value = self._host.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
             self.align_output_dir_mode_value = (
-                self.settings.align_output_dir_mode
-                if self.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
+                self._host.settings.align_output_dir_mode
+                if self._host.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
                 else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
             )
-            self.align_output_custom_dir_text = self.settings.align_output_custom_dir.strip()
-            if self.settings.align_target == ALIGN_TARGET_AUDIO:
+            self.align_output_custom_dir_text = self._host.settings.align_output_custom_dir.strip()
+            if self._host.settings.align_target == ALIGN_TARGET_AUDIO:
                 self.align_target_audio_radio.setChecked(True)
             else:
                 self.align_target_video_radio.setChecked(True)
             self._align_encode_selection = (
-                self.settings.align_encode_mode
-                if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+                self._host.settings.align_encode_mode
+                if self._host.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
                 else ENCODE_MODE_SOFTWARE
             )
             if self._align_encode_selection == ENCODE_MODE_HARDWARE:
                 self.align_encode_hardware_radio.setChecked(True)
             else:
                 self.align_encode_software_radio.setChecked(True)
-            self.align_force_1080p60_check.setChecked(bool(self.settings.align_force_1080p60))
-            self.align_use_video_audio_check.setChecked(bool(self.settings.align_export_use_video_audio))
+            self.align_force_1080p60_check.setChecked(bool(self._host.settings.align_force_1080p60))
+            self.align_use_video_audio_check.setChecked(bool(self._host.settings.align_export_use_video_audio))
         finally:
             self._restoring_alignment_settings = False
 
@@ -1404,31 +1518,31 @@ class AlignmentPageMixin:
         它只在「不是正在把设置灌进界面」时才跑 —— 灌的过程中控件是中间态，
         回写会把用户设置盖成半成品。这里的模板值不读控件，所以无条件写。
         """
-        self.settings.align_video_name_template = self.align_video_name_template_value
-        self.settings.align_audio_name_template = self.align_audio_name_template_value
+        self._host.settings.align_video_name_template = self.align_video_name_template_value
+        self._host.settings.align_audio_name_template = self.align_audio_name_template_value
 
     def _update_alignment_preferences_from_ui(self) -> None:
         if hasattr(self, "align_target_video_radio"):
-            self.settings.align_target = (
+            self._host.settings.align_target = (
                 ALIGN_TARGET_VIDEO if self.align_target_video_radio.isChecked() else ALIGN_TARGET_AUDIO
             )
-        self.settings.align_encode_mode = self._current_alignment_encode_mode()
+        self._host.settings.align_encode_mode = self._current_alignment_encode_mode()
         if hasattr(self, "align_force_1080p60_check"):
-            self.settings.align_force_1080p60 = self.align_force_1080p60_check.isChecked()
+            self._host.settings.align_force_1080p60 = self.align_force_1080p60_check.isChecked()
         if hasattr(self, "align_use_video_audio_check"):
-            self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
-        self.settings.align_output_dir_mode = self.align_output_dir_mode_value
-        self.settings.align_output_custom_dir = self.align_output_custom_dir_text
+            self._host.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
+        self._host.settings.align_output_dir_mode = self.align_output_dir_mode_value
+        self._host.settings.align_output_custom_dir = self.align_output_custom_dir_text
 
     def set_align_video_path(self, path: Path) -> None:
         self.align_video_zone.set_path(path)
-        self.align_video_info_label.setText(self._build_media_info(path, "字幕视频"))
+        self.align_video_info_label.setText(self._host.build_media_info(path, "字幕视频"))
         self._invalidate_alignment_waveforms()
         self._refresh_alignment_material_inputs()
 
     def set_align_audio_path(self, path: Path) -> None:
         self.align_audio_zone.set_path(path)
-        self.align_audio_info_label.setText(self._build_media_info(path, "原唱音源"))
+        self.align_audio_info_label.setText(self._host.build_media_info(path, "原唱音源"))
         self._invalidate_alignment_waveforms()
         self._refresh_alignment_material_inputs()
 
@@ -1449,8 +1563,8 @@ class AlignmentPageMixin:
             self.set_align_audio_path(Path(path))
 
     def _refresh_media_info_labels(self) -> None:
-        self.align_video_info_label.setText(self._build_media_info(self.align_video_zone.path, "字幕视频"))
-        self.align_audio_info_label.setText(self._build_media_info(self.align_audio_zone.path, "原唱音源"))
+        self.align_video_info_label.setText(self._host.build_media_info(self.align_video_zone.path, "字幕视频"))
+        self.align_audio_info_label.setText(self._host.build_media_info(self.align_audio_zone.path, "原唱音源"))
         if hasattr(self, "align_material_status_label"):
             self._refresh_alignment_material_inputs()
 
@@ -1553,7 +1667,7 @@ class AlignmentPageMixin:
     def _validate_alignment_inputs(self) -> tuple[Path, Path, Path | None]:
         video_path = self.align_video_zone.path
         audio_path = self.align_audio_zone.path
-        ffmpeg_dir = self._resolve_ffmpeg_dir()
+        ffmpeg_dir = self._host.resolve_ffmpeg_dir()
         if video_path is None or not video_path.is_file():
             raise ProcessingError("请先选择有效的字幕视频。")
         if audio_path is None or not audio_path.is_file():
@@ -1605,7 +1719,7 @@ class AlignmentPageMixin:
             audio_waveform = extract_waveform(audio_path, ffmpeg_dir, logger, label="原唱音源")
             return video_waveform, audio_waveform
 
-        task = self._track_background_task("align_analysis_task", BackgroundTask(runner))
+        task = self._host.track_background_task("align_analysis_task", BackgroundTask(runner))
         task.log_message.connect(self._append_align_log)
         task.task_succeeded.connect(self._finish_alignment_analysis_success)
         task.task_failed.connect(self._finish_alignment_analysis_failure)
@@ -1667,7 +1781,7 @@ class AlignmentPageMixin:
                 audio_start_seconds=audio_start_seconds,
             )
 
-        task = self._track_background_task("align_auto_task", BackgroundTask(runner))
+        task = self._host.track_background_task("align_auto_task", BackgroundTask(runner))
         task.task_succeeded.connect(self._finish_auto_align_success)
         task.task_failed.connect(self._finish_auto_align_failure)
         task.start()
@@ -2184,7 +2298,7 @@ class AlignmentPageMixin:
                 self._align_export_completed_outputs.append(outputs[-1])
             return outputs
 
-        task = self._track_background_task("align_export_task", BackgroundTask(runner))
+        task = self._host.track_background_task("align_export_task", BackgroundTask(runner))
         task.log_message.connect(self._append_align_log)
         # Connect to bound QObject methods so Qt queues completion back to this
         # window's GUI thread. A lambda runs in BackgroundTask's worker thread
@@ -2314,7 +2428,7 @@ class AlignmentPageMixin:
             load_video = getattr(render_page, "load_video", None)
             if background_path is not None and callable(load_video):
                 load_video(Path(background_path))
-                self._notify_handoff(
+                self._host.notify_handoff(
                     "背景素材已交给字幕渲染",
                     f"「{Path(background_path).name}」已放入第 5 步字幕视频生成。",
                 )
@@ -2322,8 +2436,8 @@ class AlignmentPageMixin:
         if send_to_hires:
             vocal_path = source_audio_path if is_video_target else output_path
             if vocal_path is not None:
-                self.set_on_vocal_path(Path(vocal_path))
-                self._notify_handoff(
+                self._host.set_on_vocal_path(Path(vocal_path))
+                self._host.notify_handoff(
                     "原唱音源已交给 Hi-Res",
                     f"「{Path(vocal_path).name}」已放入第 6 步 Hi-Res 混流的原唱卡。",
                 )
