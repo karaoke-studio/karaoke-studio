@@ -14,7 +14,7 @@ import math
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from PyQt6.QtCore import QTimer, QUrl, Qt
+from PyQt6.QtCore import QObject, QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices, QIcon, QTextDocument
 from PyQt6.QtWidgets import (
     QApplication,
@@ -224,10 +224,17 @@ def build_settings_tab_page(parent: QWidget, groups: list[SettingCardGroup]) -> 
     return page
 
 
-class SettingsDialogs:
-    """按需搭建并弹出两个设置对话框。"""
+class SettingsDialogs(QObject):
+    """按需搭建并弹出两个设置对话框。
+
+    是 ``QObject`` 而不是普通对象：主题预览要用 ``schedule_theme_refresh`` 挂一个
+    ``QTimer(self)``，Qt 的这类管道都要求宿主是 QObject。以前 ``self`` 是主窗口，
+    天然满足；对象化之后如果只是个普通对象，换主题会在信号槽里静默抛 TypeError ——
+    表现就是"选了主题没反应"。
+    """
 
     def __init__(self, *, host: SettingsHost, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
         self._host = host
         #: 对话框的父窗口，只用于定位与继承图标 —— 和 ``host`` 分开传，
         #: 这样 ``SettingsHost`` 不必顺带要求"你还得是个 QWidget"。
