@@ -41,7 +41,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持模块可独立运行
-    from krok_helper.workflow_host import WorkflowHost
+    from krok_helper.workflow_host import SubtitleVideoSink
 
 from PyQt6.QtCore import (
     QEvent,
@@ -1927,7 +1927,7 @@ class SubtitleRenderWindow(QWidget):
         self,
         embedded: bool = False,
         settings_provider: Optional[Any] = None,
-        workflow_context: "WorkflowHost | None" = None,
+        workflow_context: "SubtitleVideoSink | None" = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -8470,13 +8470,13 @@ class SubtitleRenderWindow(QWidget):
             sticky={0: lambda: self._open_export_folder(output_path)},
         )
         if choice == 1:
-            from krok_helper.workflow_host import WorkflowHost
+            from krok_helper.workflow_host import SubtitleVideoSink
 
             host = self._workflow_context
             if host is None:
                 # 字幕渲染模块被单独拉起来跑，没有下一步可交。
                 return
-            if not isinstance(host, WorkflowHost):
+            if not isinstance(host, SubtitleVideoSink):
                 # 宿主改了方法名的话，以前这里静默什么也不做。
                 logging.getLogger(__name__).warning(
                     "工作台宿主缺少 accept_subtitle_video，成片无法转交下一步"
@@ -8530,7 +8530,7 @@ class SubtitleRenderWindow(QWidget):
     def for_embedding(
         parent: Optional[QWidget] = None,
         settings_provider: Optional[Any] = None,
-        workflow_context: "WorkflowHost | None" = None,
+        workflow_context: "SubtitleVideoSink | None" = None,
     ) -> "SubtitleRenderWindow":
         """创建嵌入工作台用的实例。"""
         instance = SubtitleRenderWindow(

@@ -5,15 +5,21 @@
 ``getattr(ctx, "accept_xxx", None)`` 的鸭子类型：宿主一改名就静默失效，
 用户点完「转交下一步」什么也不会发生，也不报错。
 
-这里把那层契约写成显式 :class:`WorkflowHost`：
+这里把那层契约写成显式 Protocol。**按能力拆开**，每个页面只依赖自己真正
+调用的那一条：
 
-* 页面侧把 ``workflow_context`` 标注成 ``WorkflowHost | None`` —— ``None``
-  表示页面被单独拉起来跑（没有工作台外壳），此时跳过转交是正确行为；
-* ``@runtime_checkable`` 让测试能断言 ``KrokHelperQtApp`` 仍然满足契约，
-  宿主改名会在 CI 里当场炸掉，而不是变成线上静默失灵。
+* :class:`SubtitleVideoSink` —— 第 5 步字幕渲染交成片；
+* :class:`AccompanimentSink` —— 第 2 步音频分离交伴奏；
+* :class:`WorkflowHost` —— 工作台主窗口，两样都实现。
 
-注意 ``runtime_checkable`` 的 ``isinstance`` 只查方法**存在**、不查签名，
-所以它是"防改名"而不是"防改参数"；参数变动仍然要靠类型检查和测试。
+拆开而不是让每个调用点都去校验整个 :class:`WorkflowHost`，是因为宿主不一定
+"全能"：测试里的替身、以及将来只想接一种产物的容器，都只会实现其中一条。
+校验整份契约会把这些合法的宿主一并挡掉。
+
+``@runtime_checkable`` 让测试能断言 ``KrokHelperQtApp`` 仍然满足契约，宿主
+改名会在 CI 里当场炸掉，而不是变成线上静默失灵。注意它的 ``isinstance``
+只查方法**存在**、不查签名，所以是"防改名"而不是"防改参数"；参数变动仍然
+要靠类型检查和测试。
 """
 
 from __future__ import annotations
@@ -21,17 +27,27 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, Sequence, runtime_checkable
 
-__all__ = ["WorkflowHost"]
+__all__ = ["AccompanimentSink", "SubtitleVideoSink", "WorkflowHost"]
 
 
 @runtime_checkable
-class WorkflowHost(Protocol):
-    """页面把产物交回工作台时用到的那部分宿主能力。"""
+class SubtitleVideoSink(Protocol):
+    """能接收第 5 步渲染好的字幕视频。"""
 
     def accept_subtitle_video(self, path: Path) -> None:
-        """接收第 5 步渲染好的字幕视频，并切到第 6 步 Hi-Res 混流。"""
+        """接收成片，并切到第 6 步 Hi-Res 混流。"""
         ...
 
+
+@runtime_checkable
+class AccompanimentSink(Protocol):
+    """能接收第 2 步分离出的伴奏。"""
+
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
-        """把第 2 步分离出的伴奏追加到第 6 步的伴奏卡，返回实际接收的路径。"""
+        """把伴奏追加到第 6 步的伴奏卡，返回实际接收的路径。"""
         ...
+
+
+@runtime_checkable
+class WorkflowHost(SubtitleVideoSink, AccompanimentSink, Protocol):
+    """完整的工作台宿主 —— 主窗口实现全部转交能力。"""

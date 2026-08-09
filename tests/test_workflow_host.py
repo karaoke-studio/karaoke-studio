@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
 
-from krok_helper.workflow_host import WorkflowHost
+from krok_helper.workflow_host import AccompanimentSink, SubtitleVideoSink, WorkflowHost
 
 
 class _FullHost:
@@ -40,7 +40,20 @@ def test_a_complete_host_satisfies_the_contract() -> None:
 
 
 def test_a_renamed_method_breaks_the_contract() -> None:
+    assert not isinstance(_RenamedHost(), AccompanimentSink)
     assert not isinstance(_RenamedHost(), WorkflowHost)
+
+
+def test_capabilities_are_checked_one_by_one() -> None:
+    """只实现一条能力的宿主是合法的：字幕渲染页不该因为它不收伴奏而拒绝转交。"""
+
+    class SubtitleOnly:
+        def accept_subtitle_video(self, path: Path) -> None: ...
+
+    host = SubtitleOnly()
+    assert isinstance(host, SubtitleVideoSink)
+    assert not isinstance(host, AccompanimentSink)
+    assert not isinstance(host, WorkflowHost)
 
 
 def test_separation_page_skips_handoff_without_a_host(monkeypatch) -> None:

@@ -25,7 +25,7 @@ from qfluentwidgets import (
     ScrollArea as FluentScrollArea,
 )
 
-from krok_helper.workflow_host import WorkflowHost
+from krok_helper.workflow_host import AccompanimentSink
 from krok_helper.audio_processing.responsive import ResponsiveGrid
 from krok_helper.audio_processing.separation.backend import (
     FLOW_EXISTING,
@@ -106,7 +106,7 @@ class AudioSeparationPage(QWidget):
         save_settings,
         parent: QWidget | None = None,
         backend: SeparationBackend | None = None,
-        workflow_context: WorkflowHost | None = None,
+        workflow_context: AccompanimentSink | None = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -474,7 +474,7 @@ class AudioSeparationPage(QWidget):
         if host is None:
             # 分离页被单独拉起来跑（没有工作台外壳），没有下一步可交。
             return
-        if not isinstance(host, WorkflowHost):
+        if not isinstance(host, AccompanimentSink):
             # 有宿主却不满足契约 —— 多半是宿主侧改了方法名。以前这里是
             # ``getattr(..., None)`` 静默返回，用户点完转交什么也不会发生
             # 且无迹可寻；记一条日志好歹能查。
