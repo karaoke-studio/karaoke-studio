@@ -2015,9 +2015,6 @@ class KrokHelperQtApp(QMainWindow):
         self.hires_task: BackgroundTask | None = None
         self.lyrics_search_task: BackgroundTask | None = None
         self.lyrics_fetch_task: BackgroundTask | None = None
-        self.align_analysis_task: BackgroundTask | None = None
-        self.align_auto_task: BackgroundTask | None = None
-        self.align_export_task: BackgroundTask | None = None
         self._update_checker: UpdateChecker | None = None
         self._update_launch_worker = None
         self._update_progress_win = None
@@ -2033,49 +2030,25 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_has_more_results = False
         self._lyrics_loading_more = False
         self._lyrics_loading_key = ""
-        self.align_preview_process = None
-        self.align_preview_started_at = 0.0
-        self.align_preview_start_seconds = 0.0
         self._hires_cancel_requested = False
         self._hires_process: subprocess.Popen | None = None
         self._hires_expected_outputs: list[Path] = []
         self._hires_completed_outputs: list[Path] = []
         self._hires_preexisting_outputs: set[Path] = set()
-        self._align_export_cancel_requested = False
-        self._align_export_process: subprocess.Popen | None = None
-        self._align_export_expected_outputs: list[Path] = []
-        self._align_export_completed_outputs: list[Path] = []
-        self._align_export_handoff_context: tuple[bool, Path, Path, str] | None = None
-        self._alignment_handoff_dialog: AlignmentHandoffDialog | None = None
-        self._alignment_handoff_payload: tuple[bool, Path, Path | None, Path | None] | None = None
         self.active_module = WORKFLOW_VIDEO_DOWNLOAD
         self._loading_settings_into_ui = True
 
         self.output_name_mode_value = OUTPUT_NAME_MODE_FIXED
         self.on_name_template_value = DEFAULT_ON_NAME_TEMPLATE
         self.off_name_template_value = DEFAULT_OFF_NAME_TEMPLATE
-        self.align_video_name_template_value = DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
-        self.align_audio_name_template_value = DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
-        self.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_SOURCE_VIDEO
-        self.align_output_custom_dir_text = ""
         self.ffmpeg_dir_text = ""
-        self._align_lead_fill_selection = LEAD_FILL_BLACK
-        self._align_encode_selection = (
-            self.settings.align_encode_mode
-            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
-            else ENCODE_MODE_SOFTWARE
-        )
+        self._init_alignment_state()
         self._media_duration_cache: dict[Path, str] = {}
         self._suppress_preview_seek_restart = False
         self._restoring_from_maximized = False
         self._startup_geometry_applied = False
         self._page_transition_overlay: PageTransitionOverlay | None = None
         self._page_switch_anim: QPropertyAnimation | None = None
-        self.align_control_panel: QFrame | None = None
-        self.align_open_output_button: QPushButton | None = None
-        self.align_clear_button: QPushButton | None = None
-        self.align_jump_to_end_button: QPushButton | None = None
-        self.align_reset_view_button: QPushButton | None = None
 
         # 主题：``apply_settings_theme`` 已在 ``cli.run_gui`` 启动期把
         # qfluentwidgets Theme + QApplication palette settle 到目标模式
@@ -2105,6 +2078,42 @@ class KrokHelperQtApp(QMainWindow):
         QTimer.singleShot(1500, self._notify_settings_corruption_if_any)
         QTimer.singleShot(2500, self._check_for_workbench_update_on_startup)
 
+
+    def _init_alignment_state(self) -> None:
+        """波形对齐页的全部实例状态。
+
+        单独一个方法，是为了让「外壳」和「对齐页」的边界看得见：这些属性
+        将来要跟着页面一起搬进 ``krok_helper.alignment``，届时这里改成调
+        页面对象的同名入口即可，``__init__`` 不必再跟着动。
+        """
+        self.align_analysis_task: BackgroundTask | None = None
+        self.align_auto_task: BackgroundTask | None = None
+        self.align_export_task: BackgroundTask | None = None
+        self.align_preview_process = None
+        self.align_preview_started_at = 0.0
+        self.align_preview_start_seconds = 0.0
+        self._align_export_cancel_requested = False
+        self._align_export_process: subprocess.Popen | None = None
+        self._align_export_expected_outputs: list[Path] = []
+        self._align_export_completed_outputs: list[Path] = []
+        self._align_export_handoff_context: tuple[bool, Path, Path, str] | None = None
+        self._alignment_handoff_dialog: AlignmentHandoffDialog | None = None
+        self._alignment_handoff_payload: tuple[bool, Path, Path | None, Path | None] | None = None
+        self.align_video_name_template_value = DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
+        self.align_audio_name_template_value = DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+        self.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+        self.align_output_custom_dir_text = ""
+        self._align_lead_fill_selection = LEAD_FILL_BLACK
+        self._align_encode_selection = (
+            self.settings.align_encode_mode
+            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            else ENCODE_MODE_SOFTWARE
+        )
+        self.align_control_panel: QFrame | None = None
+        self.align_open_output_button: QPushButton | None = None
+        self.align_clear_button: QPushButton | None = None
+        self.align_jump_to_end_button: QPushButton | None = None
+        self.align_reset_view_button: QPushButton | None = None
     def _track_background_task(self, attr_name: str, task: BackgroundTask) -> BackgroundTask:
         task.setObjectName(attr_name)
         setattr(self, attr_name, task)
@@ -2957,8 +2966,7 @@ class KrokHelperQtApp(QMainWindow):
         self.settings.output_name_mode = self.output_name_mode_value
         self.settings.on_name_template = self.on_name_template_value
         self.settings.off_name_template = self.off_name_template_value
-        self.settings.align_video_name_template = self.align_video_name_template_value
-        self.settings.align_audio_name_template = self.align_audio_name_template_value
+        self._collect_alignment_settings()
         self.settings.ffmpeg_dir = self.ffmpeg_dir_text
         self._sync_lyrics_timing_host_paths()
         if not self._loading_settings_into_ui:
@@ -2966,15 +2974,26 @@ class KrokHelperQtApp(QMainWindow):
         return save_app_settings(self.settings)
 
     def _bind_shortcuts(self) -> None:
-        self.shortcut_space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
-        self.shortcut_space.activated.connect(self._handle_align_space_shortcut)
+        # Ctrl+S 是跨模块的（对齐导出 / 打轴保存），留在外壳；其余三个只在
+        # 波形对齐页有意义，归 _bind_alignment_shortcuts。
         self.shortcut_export = QShortcut(QKeySequence("Ctrl+S"), self)
         self.shortcut_export.activated.connect(self._handle_export_or_save_shortcut)
+        self._bind_alignment_shortcuts()
+        self._sync_workflow_shortcut_scope()
+
+    def _bind_alignment_shortcuts(self) -> None:
+        """波形对齐页独有的快捷键。
+
+        启用/禁用由 :meth:`_sync_workflow_shortcut_scope` 按当前模块统一切换 ——
+        快捷键挂在主窗口上是全局的，不按模块关掉的话，在别的页面按空格会误触
+        对齐页的播放。
+        """
+        self.shortcut_space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        self.shortcut_space.activated.connect(self._handle_align_space_shortcut)
         self.shortcut_auto = QShortcut(QKeySequence("Ctrl+D"), self)
         self.shortcut_auto.activated.connect(self._handle_align_auto_shortcut)
         self.shortcut_drag_mode = QShortcut(QKeySequence("Alt+V"), self)
         self.shortcut_drag_mode.activated.connect(self._handle_align_drag_mode_shortcut)
-        self._sync_workflow_shortcut_scope()
 
     def _sync_workflow_shortcut_scope(self) -> None:
         if not hasattr(self, "shortcut_space"):
@@ -5067,29 +5086,7 @@ class KrokHelperQtApp(QMainWindow):
         self.set_ffmpeg_dir(Path(self.settings.ffmpeg_dir) if self.settings.ffmpeg_dir.strip() else None)
         self.set_output_name_mode(self.settings.output_name_mode)
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
-        self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
-        self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
-        self.align_output_dir_mode_value = (
-            self.settings.align_output_dir_mode
-            if self.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
-            else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
-        )
-        self.align_output_custom_dir_text = self.settings.align_output_custom_dir.strip()
-        if self.settings.align_target == ALIGN_TARGET_AUDIO:
-            self.align_target_audio_radio.setChecked(True)
-        else:
-            self.align_target_video_radio.setChecked(True)
-        self._align_encode_selection = (
-            self.settings.align_encode_mode
-            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
-            else ENCODE_MODE_SOFTWARE
-        )
-        if self._align_encode_selection == ENCODE_MODE_HARDWARE:
-            self.align_encode_hardware_radio.setChecked(True)
-        else:
-            self.align_encode_software_radio.setChecked(True)
-        self.align_force_1080p60_check.setChecked(bool(self.settings.align_force_1080p60))
-        self.align_use_video_audio_check.setChecked(bool(self.settings.align_export_use_video_audio))
+        self._load_alignment_settings()
         self._restore_lyrics_preferences()
         self._loading_settings_into_ui = False
 
@@ -5221,6 +5218,42 @@ class KrokHelperQtApp(QMainWindow):
             if self._align_encode_selection in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
             else ENCODE_MODE_SOFTWARE
         )
+
+    def _load_alignment_settings(self) -> None:
+        """settings -> 对齐页（读方向）。与 :meth:`_collect_alignment_settings` 成对。"""
+        self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
+        self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+        self.align_output_dir_mode_value = (
+            self.settings.align_output_dir_mode
+            if self.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
+            else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+        )
+        self.align_output_custom_dir_text = self.settings.align_output_custom_dir.strip()
+        if self.settings.align_target == ALIGN_TARGET_AUDIO:
+            self.align_target_audio_radio.setChecked(True)
+        else:
+            self.align_target_video_radio.setChecked(True)
+        self._align_encode_selection = (
+            self.settings.align_encode_mode
+            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            else ENCODE_MODE_SOFTWARE
+        )
+        if self._align_encode_selection == ENCODE_MODE_HARDWARE:
+            self.align_encode_hardware_radio.setChecked(True)
+        else:
+            self.align_encode_software_radio.setChecked(True)
+        self.align_force_1080p60_check.setChecked(bool(self.settings.align_force_1080p60))
+        self.align_use_video_audio_check.setChecked(bool(self.settings.align_export_use_video_audio))
+
+    def _collect_alignment_settings(self) -> None:
+        """对齐页 -> settings（写方向，命名模板部分）。
+
+        控件当前值那部分在 :meth:`_update_alignment_preferences_from_ui`，
+        它只在「不是正在把设置灌进界面」时才跑 —— 灌的过程中控件是中间态，
+        回写会把用户设置盖成半成品。这里的模板值不读控件，所以无条件写。
+        """
+        self.settings.align_video_name_template = self.align_video_name_template_value
+        self.settings.align_audio_name_template = self.align_audio_name_template_value
 
     def _update_alignment_preferences_from_ui(self) -> None:
         if hasattr(self, "align_target_video_radio"):
@@ -6491,8 +6524,7 @@ class KrokHelperQtApp(QMainWindow):
         self.settings.output_name_mode = self.output_name_mode_value
         self.settings.on_name_template = self.on_name_template_value
         self.settings.off_name_template = self.off_name_template_value
-        self.settings.align_video_name_template = self.align_video_name_template_value
-        self.settings.align_audio_name_template = self.align_audio_name_template_value
+        self._collect_alignment_settings()
         self.settings.ffmpeg_dir = self.ffmpeg_dir_text
         self._sync_lyrics_timing_host_paths()
         self._update_alignment_preferences_from_ui()
