@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
-from PyQt6.QtCore import QSize, QTimer, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QEvent, QSize, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPalette
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -293,6 +293,26 @@ class LyricsSearchPage(QWidget):
             self._refresh_lyrics_import_button(preview)
             return None
         return text
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        """结果表与预览面板的尺寸变化 —— 列宽和「导入到打轴」按钮要跟着重排。
+
+        对象化之前这段住在主窗口的 ``eventFilter`` 里（那时 ``self`` 就是窗口）。
+        页面在 ``_build_ui`` 里给这两个控件装了过滤器，接收端也得跟过来，否则
+        按钮只在首次布局那一下摆过位置，一直到选中歌曲才被重排——表现就是没搜索
+        时按钮压在「歌词预览」标题上。
+        """
+        if watched is getattr(self, "lyrics_results_table", None) and event.type() in {
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        }:
+            QTimer.singleShot(0, self._resize_lyrics_results_columns)
+        if watched is getattr(self, "lyrics_preview_panel", None) and event.type() in {
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        }:
+            QTimer.singleShot(0, self._position_lyrics_import_button)
+        return super().eventFilter(watched, event)
 
     def running_tasks(self) -> list[BackgroundTask]:
         return [t for t in (self._search_task, self._fetch_task) if t is not None and t.isRunning()]
