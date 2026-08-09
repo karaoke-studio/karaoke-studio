@@ -2532,8 +2532,12 @@ class KrokHelperQtApp(QMainWindow):
                 self._page_transition_overlay = None
 
     def accept_subtitle_video(self, path: Path) -> None:
+        """第 5 步渲染好的成片放进第 6 步的视频卡。
+
+        只放素材、不切页面 —— 与 ``accept_separated_accompaniment`` 一致：
+        用户往往还要在第 5 步接着调样式再渲一版，跳走反而打断。
+        """
         self.set_video_path(path)
-        self._show_module(WORKFLOW_HIRES_MIX)
 
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。
