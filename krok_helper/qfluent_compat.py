@@ -302,6 +302,29 @@ def show_fluent_info(parent, text: str, *, title: str = "", yes_text: str = "确
     show_modeless_dialog(box)
 
 
+def show_fluent_error(parent, text: str, *, title: str = "", yes_text: str = "确定") -> None:
+    """以 Fluent 风格弹一个报错框（替代 ``QMessageBox.critical``）。
+
+    走 :func:`show_modeless_dialog`：**不加遮罩、不开 Qt 模态、也不起嵌套事件
+    循环**。带遮罩的 ``MessageBox`` 在工作台的堆叠页层级里会盖住内容并吃掉鼠标
+    事件，整个界面看着就像卡死了；嵌套循环则会让调用方停在原地。报错本身只是
+    告知，调用处一般紧接着 ``return``，不需要等用户点确认。
+    """
+
+    from krok_helper.config import APP_TITLE
+
+    box = HostFluentMessageDialog(title or APP_TITLE, text, parent)
+    box.yesButton.setText(yes_text)
+    box.cancelButton.hide()
+    show_modeless_dialog(box)
+
+
+def show_fluent_warning(parent, text: str, *, title: str = "", yes_text: str = "确定") -> None:
+    """以 Fluent 风格弹一个警告框（替代 ``QMessageBox.warning``）。"""
+
+    show_fluent_error(parent, text, title=title, yes_text=yes_text)
+
+
 def ask_fluent_confirm(
     parent,
     text: str,

@@ -41,7 +41,6 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -61,6 +60,7 @@ from qfluentwidgets import (
     ToolButton,
 )
 
+from krok_helper.qfluent_compat import show_fluent_error, show_fluent_info
 from krok_helper.alignment import export_naming
 from krok_helper.alignment.drop_card import AlignmentDropCard
 from krok_helper.alignment.handoff_dialog import AlignmentHandoffDialog
@@ -1592,12 +1592,12 @@ class AlignmentPageMixin:
 
     def _start_alignment_analysis(self) -> None:
         if self.align_analysis_task is not None and self.align_analysis_task.isRunning():
-            QMessageBox.information(self, APP_TITLE, "当前波形任务还在处理中，请稍等。")
+            show_fluent_info(self, "当前波形任务还在处理中，请稍等。")
             return
         try:
             video_path, audio_path, ffmpeg_dir = self._validate_alignment_inputs()
         except ProcessingError as exc:
-            QMessageBox.critical(self, APP_TITLE, str(exc))
+            show_fluent_error(self, str(exc))
             return
 
         self.align_log.clear()
@@ -1643,14 +1643,14 @@ class AlignmentPageMixin:
         self.align_status_label.setText("波形生成失败")
         self._append_align_log(f"波形生成失败: {message}")
         self._refresh_alignment_preview_controls()
-        QMessageBox.critical(self, APP_TITLE, message)
+        show_fluent_error(self, message)
 
     def _auto_align_waveforms(self) -> None:
         if self.align_auto_task is not None and self.align_auto_task.isRunning():
-            QMessageBox.information(self, APP_TITLE, "当前自动对齐任务还在处理中，请稍等。")
+            show_fluent_info(self, "当前自动对齐任务还在处理中，请稍等。")
             return
         if self.waveform_view.video_waveform is None or self.waveform_view.audio_waveform is None:
-            QMessageBox.critical(self, APP_TITLE, "请先生成波形。")
+            show_fluent_error(self, "请先生成波形。")
             return
 
         video_start_seconds, audio_start_seconds = self.waveform_view.source_starts()
@@ -1710,7 +1710,7 @@ class AlignmentPageMixin:
         self.align_analyze_button.setEnabled(True)
         self.align_status_label.setText("自动对齐失败")
         self._refresh_alignment_preview_controls()
-        QMessageBox.critical(self, APP_TITLE, message)
+        show_fluent_error(self, message)
 
     def _handle_align_target_changed(self) -> None:
         target_track = ALIGN_TARGET_VIDEO if self.align_target_video_radio.isChecked() else ALIGN_TARGET_AUDIO
@@ -1961,12 +1961,12 @@ class AlignmentPageMixin:
 
     def _start_alignment_preview(self) -> None:
         if self.waveform_view.video_waveform is None or self.waveform_view.audio_waveform is None:
-            QMessageBox.critical(self, APP_TITLE, "请先生成波形并完成对齐。")
+            show_fluent_error(self, "请先生成波形并完成对齐。")
             return
         try:
             video_path, audio_path, ffmpeg_dir = self._validate_alignment_inputs()
         except ProcessingError as exc:
-            QMessageBox.critical(self, APP_TITLE, str(exc))
+            show_fluent_error(self, str(exc))
             return
 
         self._stop_alignment_preview(log_message=False)
@@ -2024,7 +2024,7 @@ class AlignmentPageMixin:
         except Exception as exc:  # noqa: BLE001
             self.align_preview_process = None
             self._append_align_log(f"播放预览失败: {exc}")
-            QMessageBox.critical(self, APP_TITLE, f"播放预览失败:\n{exc}")
+            show_fluent_error(self, f"播放预览失败:\n{exc}")
             self._refresh_alignment_preview_controls()
             return
 
@@ -2095,10 +2095,10 @@ class AlignmentPageMixin:
 
     def _start_aligned_export(self) -> None:
         if self.align_export_task is not None and self.align_export_task.isRunning():
-            QMessageBox.information(self, APP_TITLE, "当前导出任务还在处理中，请稍等。")
+            show_fluent_info(self, "当前导出任务还在处理中，请稍等。")
             return
         if self.waveform_view.video_waveform is None or self.waveform_view.audio_waveform is None:
-            QMessageBox.critical(self, APP_TITLE, "请先生成波形并完成对齐。")
+            show_fluent_error(self, "请先生成波形并完成对齐。")
             return
         try:
             video_path, audio_path, ffmpeg_dir = self._validate_alignment_inputs()
@@ -2124,7 +2124,7 @@ class AlignmentPageMixin:
                     "WAV 音频 (*.wav);;所有文件 (*.*)",
                 )
         except ProcessingError as exc:
-            QMessageBox.critical(self, APP_TITLE, str(exc))
+            show_fluent_error(self, str(exc))
             return
 
         if not output_path_text:
@@ -2280,7 +2280,7 @@ class AlignmentPageMixin:
             )
             return
         self._append_align_log(f"导出失败: {message}")
-        QMessageBox.critical(self, APP_TITLE, message)
+        show_fluent_error(self, message)
 
     def _offer_alignment_handoff(
         self,
@@ -2351,7 +2351,7 @@ class AlignmentPageMixin:
             or (self.align_auto_task is not None and self.align_auto_task.isRunning())
             or (self.align_export_task is not None and self.align_export_task.isRunning())
         ):
-            QMessageBox.information(self, APP_TITLE, "当前对齐任务还在处理中，请稍等。")
+            show_fluent_info(self, "当前对齐任务还在处理中，请稍等。")
             return
         self._stop_alignment_preview(log_message=False)
         self.align_video_zone.clear_path()
@@ -2367,12 +2367,12 @@ class AlignmentPageMixin:
         video_path = self.align_video_zone.path
         source_path = video_path or self.align_audio_zone.path
         if source_path is None:
-            QMessageBox.information(self, APP_TITLE, "请先选择文件。")
+            show_fluent_info(self, "请先选择文件。")
             return
         try:
             output_dir = self._resolve_alignment_output_dir(video_path) if video_path is not None else source_path.parent
         except ProcessingError as exc:
-            QMessageBox.critical(self, APP_TITLE, str(exc))
+            show_fluent_error(self, str(exc))
             return
         output_dir.mkdir(parents=True, exist_ok=True)
         open_in_explorer(output_dir)

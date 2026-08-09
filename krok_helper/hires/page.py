@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -49,6 +48,7 @@ from qfluentwidgets import (
     PushButton as QPushButton,
 )
 
+from krok_helper.qfluent_compat import show_fluent_error, show_fluent_info
 from krok_helper.background import BackgroundTask
 from krok_helper.config import APP_TITLE, FFMPEG_DIR_PLACEHOLDER
 from krok_helper.errors import ProcessingError
@@ -1002,13 +1002,13 @@ class HiResPageMixin:
 
     def _start_hires(self) -> None:
         if self._is_hires_running():
-            QMessageBox.information(self, APP_TITLE, "当前任务还在处理中，请稍等。")
+            show_fluent_info(self, "当前任务还在处理中，请稍等。")
             return
 
         try:
             args = self._validate_hires_inputs()
         except ProcessingError as exc:
-            QMessageBox.critical(self, APP_TITLE, str(exc))
+            show_fluent_error(self, str(exc))
             return
 
         self.hires_log.clear()
@@ -1040,7 +1040,7 @@ class HiResPageMixin:
                 video_path, output_dir, output_name_mode, off_template, off_vocal_paths
             )
         except ProcessingError as exc:
-            QMessageBox.critical(self, APP_TITLE, str(exc))
+            show_fluent_error(self, str(exc))
             return
         self._hires_cancel_requested = False
         self._hires_process = None
@@ -1138,11 +1138,11 @@ class HiResPageMixin:
         self._set_hires_status_color("#EF4444")
         self._reset_hires_cancel_state()
         self._append_hires_log(f"处理失败: {message}")
-        QMessageBox.critical(self, APP_TITLE, message)
+        show_fluent_error(self, message)
 
     def _clear_hires_inputs(self) -> None:
         if self.hires_task is not None and self.hires_task.isRunning():
-            QMessageBox.information(self, APP_TITLE, "当前生成任务还在处理中，请稍等。")
+            show_fluent_info(self, "当前生成任务还在处理中，请稍等。")
             return
         self.video_zone.clear_path()
         self.on_vocal_zone.clear_path()
@@ -1154,7 +1154,7 @@ class HiResPageMixin:
     def _open_hires_output_dir(self) -> None:
         video_path = self.video_zone.path
         if video_path is None:
-            QMessageBox.information(self, APP_TITLE, "请先选择字幕视频。")
+            show_fluent_info(self, "请先选择字幕视频。")
             return
         output_dir = resolve_output_dir(video_path)
         output_dir.mkdir(parents=True, exist_ok=True)

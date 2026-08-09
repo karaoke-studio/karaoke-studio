@@ -27,7 +27,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMessageBox,
     QStyle,
     QStyleOptionViewItem,
     QStyledItemDelegate,
@@ -63,7 +62,11 @@ from krok_helper.lyrics import (
     extract_lyrics_query_from_file,
 )
 from krok_helper.media_formats import format_media_duration
-from krok_helper.qfluent_compat import show_fluent_tooltip
+from krok_helper.qfluent_compat import (
+    show_fluent_error,
+    show_fluent_info,
+    show_fluent_tooltip,
+)
 from krok_helper.settings import save_app_settings
 from krok_helper.ui_kit import CardWidget, ElidedLabel, StyledComboBox, build_lyrics_ui_font
 
@@ -439,7 +442,7 @@ class LyricsSearchPageMixin:
             return
         keyword = self.lyrics_search_keyword if load_more else self.lyrics_keyword_edit.text().strip()
         if not keyword:
-            QMessageBox.information(self, APP_TITLE, "请输入搜索关键词。")
+            show_fluent_info(self, "请输入搜索关键词。")
             return
 
         self.lyrics_search_button.setEnabled(False)
@@ -530,7 +533,7 @@ class LyricsSearchPageMixin:
             selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
             self._render_lyrics_results_table(selected_key=selected_key)
         self.lyrics_status_label.setText("歌词搜索失败。")
-        QMessageBox.critical(self, APP_TITLE, message or "歌词搜索失败。")
+        show_fluent_error(self, message or "歌词搜索失败。")
 
     def _resize_lyrics_results_columns(self) -> None:
         viewport_width = self.lyrics_results_table.viewport().width()

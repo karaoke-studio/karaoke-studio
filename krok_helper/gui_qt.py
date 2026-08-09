@@ -62,7 +62,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QTextBrowser,
     QScrollArea,
     QSizePolicy,
@@ -115,8 +114,10 @@ from krok_helper.qfluent_compat import (
     apply_qfluent_tooltip_parent_patch,
     ask_fluent_confirm,
     exec_modeless_dialog,
+    show_fluent_error,
     show_fluent_info,
     show_fluent_tooltip,
+    show_fluent_warning,
 )
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
@@ -1977,24 +1978,23 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
         if suffix == ".yurika":
             self.open_subtitle_render_project(project_path)
             return
-        QMessageBox.critical(
+        show_fluent_error(
             self,
-            APP_TITLE,
             f"不支持的项目文件：\n{project_path}\n\n支持 .sug 和 .yurika 项目。",
         )
 
     def open_lyrics_timing_project(self, project_path: Path) -> None:
         project_path = project_path.expanduser()
         if project_path.suffix.lower() != ".sug":
-            QMessageBox.critical(self, APP_TITLE, f"不支持的项目文件:\n{project_path}")
+            show_fluent_error(self, f"不支持的项目文件:\n{project_path}")
             return
         if not project_path.is_file():
-            QMessageBox.critical(self, APP_TITLE, f"项目文件不存在:\n{project_path}")
+            show_fluent_error(self, f"项目文件不存在:\n{project_path}")
             return
 
         lyrics_timing_page = getattr(self, "lyrics_timing_page", None)
         if lyrics_timing_page is None or not hasattr(lyrics_timing_page, "open_initial_project"):
-            QMessageBox.critical(self, APP_TITLE, "打轴模块尚未准备好，无法打开 .sug 项目。")
+            show_fluent_error(self, "打轴模块尚未准备好，无法打开 .sug 项目。")
             return
 
         self._show_module(WORKFLOW_LYRICS_TIMING)
@@ -2003,19 +2003,18 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
     def open_subtitle_render_project(self, project_path: Path) -> None:
         project_path = project_path.expanduser()
         if project_path.suffix.lower() != ".yurika":
-            QMessageBox.critical(self, APP_TITLE, f"不支持的项目文件:\n{project_path}")
+            show_fluent_error(self, f"不支持的项目文件:\n{project_path}")
             return
         if not project_path.is_file():
-            QMessageBox.critical(self, APP_TITLE, f"项目文件不存在:\n{project_path}")
+            show_fluent_error(self, f"项目文件不存在:\n{project_path}")
             return
 
         subtitle_render_page = getattr(self, "subtitle_render_page", None)
         if subtitle_render_page is None or not hasattr(
             subtitle_render_page, "open_initial_project"
         ):
-            QMessageBox.critical(
+            show_fluent_error(
                 self,
-                APP_TITLE,
                 "字幕渲染模块尚未准备好，无法打开 .yurika 项目。",
             )
             return
@@ -2148,22 +2147,22 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
     def _import_current_lyrics_to_timing(self) -> None:
         candidate = self.lyrics_selected_candidate
         if candidate is None or candidate.load_error or not candidate.lyrics_loaded:
-            QMessageBox.information(self, APP_TITLE, "请先选择并加载一条歌词。")
+            show_fluent_info(self, "请先选择并加载一条歌词。")
             return
         preview = self._build_current_lyrics_preview(candidate)
         lyrics_text = preview.text.strip()
         if not lyrics_text:
-            QMessageBox.information(self, APP_TITLE, "当前筛选结果没有可导入的歌词。")
+            show_fluent_info(self, "当前筛选结果没有可导入的歌词。")
             self._refresh_lyrics_import_button(preview)
             return
         lyrics_timing_page = getattr(self, "lyrics_timing_page", None)
         if lyrics_timing_page is None or not hasattr(lyrics_timing_page, "import_lyrics_from_text"):
-            QMessageBox.critical(self, APP_TITLE, "打轴模块尚未准备好，无法导入歌词。")
+            show_fluent_error(self, "打轴模块尚未准备好，无法导入歌词。")
             return
         try:
             imported = bool(lyrics_timing_page.import_lyrics_from_text(lyrics_text))
         except Exception as exc:
-            QMessageBox.critical(self, APP_TITLE, f"导入到打轴失败：\n{exc}")
+            show_fluent_error(self, f"导入到打轴失败：\n{exc}")
             return
         if not imported:
             return
@@ -2219,17 +2218,14 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
         if backup is None:
             return
         self._settings_corruption_backup = None
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle(APP_TITLE)
-        msg.setText("检测到上次的配置文件 settings.json 损坏，已使用默认值重建。")
-        msg.setInformativeText(
+        # Fluent 对话框没有 informativeText 那一层，正文直接拼在一起。
+        show_fluent_warning(
+            self,
+            "检测到上次的配置文件 settings.json 损坏，已使用默认值重建。\n\n"
             f"原文件已备份到：\n{backup}\n\n"
             "打轴模块的设置 / 词典 / 演唱者 / 网络词典缓存如丢失，可在「全局设置 → "
-            "工具 → 打轴模块数据导入」从原 StrangeUtaGame 目录或备份中恢复。"
+            "工具 → 打轴模块数据导入」从原 StrangeUtaGame 目录或备份中恢复。",
         )
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        msg.exec()
 
     def _check_lyrics_timing_crash_recovery(self) -> None:
         """启动时让嵌入的歌词打轴模块检查闪退恢复文件。
@@ -2548,11 +2544,11 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
                     ffmpeg_dir_text=self.ffmpeg_dir_text,
                 )
             except ProcessingError as exc:
-                QMessageBox.critical(dialog, APP_TITLE, str(exc))
+                show_fluent_error(dialog, str(exc))
                 return
 
             status_label.setText("设置已保存到本地。")
-            QMessageBox.information(dialog, APP_TITLE, f"设置已保存：\n{saved_path}")
+            show_fluent_info(dialog, f"设置已保存：\n{saved_path}")
 
         save_button.clicked.connect(save_settings_from_dialog)
         controls.addWidget(save_button)
@@ -3130,7 +3126,7 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
     ) -> None:
         if not isinstance(result, CheckResult):
             if manual:
-                QMessageBox.critical(self, APP_TITLE, "检查更新失败：返回结果无效。")
+                show_fluent_error(self, "检查更新失败：返回结果无效。")
             return
         checker_settings.save(self.settings)
         if result.skipped_due_to_cooldown:
@@ -3145,14 +3141,14 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
                     f"[{'OK' if not err else 'FAIL'}] {source} - {url}\n{err}"
                     for source, url, err in result.attempts
                 )
-                QMessageBox.critical(self, APP_TITLE, f"{result.error}\n\n{details}" if details else result.error)
+                show_fluent_error(self, f"{result.error}\n\n{details}" if details else result.error)
             return
         if not result.has_update or result.release is None:
             if status_label is not None:
                 remote = result.release.version if result.release is not None else APP_VERSION
                 status_label.setText(f"已是最新版本。当前 v{APP_VERSION}，远端 v{remote}。")
             elif manual:
-                QMessageBox.information(self, APP_TITLE, f"当前已经是最新版本：v{APP_VERSION}")
+                show_fluent_info(self, f"当前已经是最新版本：v{APP_VERSION}")
             return
         if status_label is not None:
             status_label.setText(f"发现新版本 v{result.release.version}")
@@ -3181,44 +3177,48 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
         if dialog.user_choice == "update":
             self._launch_workbench_updater(result)
             return
-        message = QMessageBox(self)
-        message.setWindowTitle(APP_TITLE)
-        message.setIcon(QMessageBox.Icon.Information)
-        source_label = SOURCE_LABELS.get(result.primary_source, result.primary_source)
-        message.setText(f"发现工作台新版本 v{release.version}")
-        message.setInformativeText(
-            f"当前版本 v{APP_VERSION}\n发布于 {release.published_at[:10] or '未知日期'}\n下载源：{source_label}"
-        )
-        if release.body.strip():
-            message.setDetailedText(release.body.strip())
-        update_button = message.addButton("立即更新", QMessageBox.ButtonRole.AcceptRole)
-        skip_button = message.addButton("跳过此版本", QMessageBox.ButtonRole.DestructiveRole)
-        later_button = message.addButton("稍后再说", QMessageBox.ButtonRole.RejectRole)
-        message.exec()
+        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_choice
 
-        clicked = message.clickedButton()
-        if clicked is skip_button:
+        source_label = SOURCE_LABELS.get(result.primary_source, result.primary_source)
+        body = release.body.strip()
+        # Fluent 对话框没有 QMessageBox 的 informativeText / detailedText 分层，
+        # 版本信息直接拼进正文；更新说明太长会撑爆弹窗，截断后引导去 Release 页看。
+        if len(body) > 600:
+            body = body[:600].rstrip() + "\n……（完整更新说明见 Release 页面）"
+        content = (
+            f"当前版本 v{APP_VERSION}\n"
+            f"发布于 {release.published_at[:10] or '未知日期'}\n"
+            f"下载源：{source_label}"
+        )
+        if body:
+            content += f"\n\n{body}"
+        choice = fluent_choice(
+            self,
+            f"发现工作台新版本 v{release.version}",
+            content,
+            ("立即更新", "跳过此版本", "稍后再说"),
+            default=0,
+        )
+        if choice == 1:
             settings.skipped_version = release.version
             settings.save(self.settings)
             return
-        if clicked is later_button:
-            return
-        if clicked is update_button:
+        if choice == 0:
             self._launch_workbench_updater(result)
 
     def _launch_workbench_updater(self, result: CheckResult) -> None:
         if not result.release or not result.download_candidates:
-            QMessageBox.critical(self, APP_TITLE, "缺少更新下载信息，请到 GitHub Release 手动下载。")
+            show_fluent_error(self, "缺少更新下载信息，请到 GitHub Release 手动下载。")
             return
         try:
             from krok_helper.updater import installer
             from krok_helper.updater.progress_window import UpdateProgressWindow
             from krok_helper.updater.worker import LaunchUpdaterWorker
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, APP_TITLE, f"无法加载更新器：\n{exc}")
+            show_fluent_error(self, f"无法加载更新器：\n{exc}")
             return
         if not installer.is_updater_available():
-            QMessageBox.information(self, APP_TITLE, "缺少 Updater.exe。请到 GitHub Release 手动下载最新版本。")
+            show_fluent_info(self, "缺少 Updater.exe。请到 GitHub Release 手动下载最新版本。")
             return
         proxy_settings = UpdaterSettings.load(self.settings)
         from krok_helper.network import resolve_proxy
@@ -3254,8 +3254,8 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
             if getattr(lr, "reason", "") == "用户取消更新":
                 return
             if not getattr(lr, "launched", False):
-                QMessageBox.critical(
-                    self, APP_TITLE, f"无法启动 Updater：\n{getattr(lr, 'reason', '未知错误')}"
+                show_fluent_error(
+                    self, f"无法启动 Updater：\n{getattr(lr, 'reason', '未知错误')}"
                 )
                 return
             self.request_force_quit()
@@ -3430,7 +3430,7 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
         except Exception:
             audio_separation_busy = False
         if self._running_background_tasks() or subtitle_busy:
-            QMessageBox.information(self, APP_TITLE, "当前后台任务仍在运行，请等待完成后再关闭窗口。")
+            show_fluent_info(self, "当前后台任务仍在运行，请等待完成后再关闭窗口。")
             event.ignore()
             return
         if audio_separation_busy and not ask_fluent_confirm(
@@ -3445,9 +3445,8 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
         if not self._shutdown_project_modules(event):
             return
         if not self._shutdown_audio_separation():
-            QMessageBox.warning(
+            show_fluent_warning(
                 self,
-                APP_TITLE,
                 "PyMSS 服务未能正常停止，请稍后重试或先在音频分离页面停止服务。",
             )
             event.ignore()
@@ -3570,7 +3569,7 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
         """Save one embedded page and wait for SUG's asynchronous save result."""
         trigger_save = getattr(page, "trigger_save", None)
         if not callable(trigger_save):
-            QMessageBox.critical(self, APP_TITLE, f"{label}模块无法保存当前项目。")
+            show_fluent_error(self, f"{label}模块无法保存当前项目。")
             return False
 
         store = getattr(page, "_store", None)
@@ -3615,9 +3614,8 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
                     time.sleep(0.01)
 
             if state["timeout"]:
-                QMessageBox.critical(
+                show_fluent_error(
                     self,
-                    APP_TITLE,
                     f"等待{label}项目保存完成超时，工作台将保持打开。",
                 )
                 return False
@@ -3632,7 +3630,7 @@ class KrokHelperQtApp(AlignmentPageMixin, HiResPageMixin, LyricsSearchPageMixin,
             except Exception:
                 return bool(state["finished"] or result is True)
         except Exception as exc:
-            QMessageBox.critical(self, APP_TITLE, f"{label}项目保存失败：\n{exc}")
+            show_fluent_error(self, f"{label}项目保存失败：\n{exc}")
             return False
         finally:
             if supports_async_wait:
@@ -3745,9 +3743,8 @@ def _install_global_excepthook() -> None:
                             logging.getLogger(__name__).warning(
                                 "未处理异常后写字幕恢复数据失败", exc_info=True
                             )
-                QMessageBox.critical(
+                show_fluent_error(
                     None,
-                    APP_TITLE,
                     f"发生未处理的错误，操作已中断：\n\n{exc_type.__name__}: {exc_value}",
                 )
         except Exception:
