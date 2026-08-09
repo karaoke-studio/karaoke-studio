@@ -389,9 +389,9 @@ def test_exit_stays_open_when_project_save_raises(monkeypatch) -> None:
     )
     errors: list[str] = []
     monkeypatch.setattr(
-        gui_qt.QMessageBox,
-        "critical",
-        lambda _parent, _title, content: errors.append(content),
+        gui_qt,
+        "show_fluent_error",
+        lambda _parent, content: errors.append(content),
     )
     page = _FakeProjectPage()
 
@@ -437,9 +437,9 @@ def test_async_sug_save_error_keeps_window_open() -> None:
 def test_subtitle_export_in_progress_blocks_host_close(monkeypatch) -> None:
     notices: list[str] = []
     monkeypatch.setattr(
-        gui_qt.QMessageBox,
-        "information",
-        lambda _parent, _title, content: notices.append(content),
+        gui_qt,
+        "show_fluent_info",
+        lambda _parent, content: notices.append(content),
     )
     app = SimpleNamespace(
         _force_quitting_for_update=False,
