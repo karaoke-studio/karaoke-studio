@@ -11,7 +11,6 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from string import Formatter
 from typing import Callable, Sequence
 
 from krok_helper import ensure_sug_src_path
@@ -137,6 +136,7 @@ from krok_helper.audio_alignment import (
     start_alignment_preview,
 )
 from krok_helper.alignment import AlignmentDropCard, AlignmentHandoffDialog, WaveformView
+from krok_helper.alignment import export_naming
 from krok_helper.config import (
     APP_NAME,
     APP_TITLE,
@@ -212,8 +212,6 @@ VIDEO_EXTENSIONS = {".mkv", ".mp4", ".mov", ".avi"}
 AUDIO_EXTENSIONS = {".flac", ".wav", ".mp3", ".m4a", ".aac", ".ape", ".alac", ".mkv"}
 HIRES_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
 ALIGN_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
-WINDOWS_INVALID_FILENAME_CHARS = '<>:"/\\|?*'
-ALIGNMENT_TEMPLATE_FORMATTER = Formatter()
 FFMPEG_DIR_PLACEHOLDER = "未设置，将优先使用系统 PATH 中的 ffmpeg"
 WORKFLOW_VIDEO_DOWNLOAD = "video_download"
 WORKFLOW_WAVEFORM_ALIGN = "waveform_align"
@@ -6474,29 +6472,12 @@ class KrokHelperQtApp(QMainWindow):
         allowed_fields: set[str],
         extensions: tuple[str, ...],
     ) -> str:
-        normalized = template.strip()
-        for extension in extensions:
-            if normalized.lower().endswith(extension):
-                normalized = normalized[: -len(extension)].rstrip()
-                break
-        if not normalized:
-            raise ProcessingError(f"{label}模板不能为空。")
-        # 覆盖 Windows 不允许的全部字符（\ / : * ? " < > |），而非只挡路径分隔符。
-        invalid_chars = sorted({char for char in normalized if char in WINDOWS_INVALID_FILENAME_CHARS})
-        if invalid_chars:
-            joined = " ".join(invalid_chars)
-            raise ProcessingError(f"{label}模板包含非法字符: {joined}")
-        # 不配对的大括号会让 parse 抛 ValueError；转成 ProcessingError，避免从只
-        # 捕获 ProcessingError 的调用处逃逸导致闪退。
-        try:
-            fields = list(ALIGNMENT_TEMPLATE_FORMATTER.parse(normalized))
-        except ValueError as exc:
-            raise ProcessingError(f"{label}模板的大括号不配对，请检查占位符是否写完整。") from exc
-        for _, field_name, _, _ in fields:
-            if field_name and field_name not in allowed_fields:
-                supported = "、".join(f"{{{name}}}" for name in sorted(allowed_fields))
-                raise ProcessingError(f"{label}模板包含不支持的占位符 {field_name}。当前支持 {supported}。")
-        return normalized
+        return export_naming.validate_name_template(
+            template,
+            label,
+            allowed_fields=allowed_fields,
+            extensions=extensions,
+        )
 
     def _resolve_ffmpeg_dir(self) -> Path | None:
         if not self.ffmpeg_dir_text.strip():
@@ -7276,15 +7257,12 @@ class KrokHelperQtApp(QMainWindow):
         self._refresh_alignment_preview_controls()
 
     def _resolve_alignment_output_dir(self, video_path: Path) -> Path:
-        if self.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM:
-            custom_dir = self.align_output_custom_dir_text.strip()
-            if not custom_dir:
-                raise ProcessingError("请先在波形对齐设置中选择对齐导出的保存目录。")
-            output_dir = Path(custom_dir).expanduser()
-            if not output_dir.is_dir():
-                raise ProcessingError("波形对齐设置中的保存目录无效，请重新选择。")
-            return output_dir
-        return video_path.parent
+        custom_dir = (
+            self.align_output_custom_dir_text
+            if self.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM
+            else None
+        )
+        return export_naming.resolve_output_dir(video_path, custom_dir=custom_dir)
 
     def _render_alignment_output_path(
         self,
@@ -7294,21 +7272,14 @@ class KrokHelperQtApp(QMainWindow):
         is_video_target: bool,
     ) -> Path:
         video_template, audio_template = self._resolve_alignment_name_templates(require_valid=True)
-        template = video_template if is_video_target else audio_template
-        extension = ".mp4" if is_video_target else ".wav"
-        try:
-            stem = template.format(video_name=video_path.stem, audio_name=audio_path.stem).strip()
-        except Exception as exc:  # noqa: BLE001
-            label = "对齐后视频" if is_video_target else "对齐后音频"
-            raise ProcessingError(f"{label}模板无法生成文件名: {exc}") from exc
-
-        stem = stem.rstrip(". ")
-        if not stem:
-            raise ProcessingError("导出文件名不能为空。")
-        invalid_chars = sorted({char for char in stem if char in WINDOWS_INVALID_FILENAME_CHARS})
-        if invalid_chars:
-            raise ProcessingError(f"文件名包含非法字符: {' '.join(invalid_chars)}")
-        return self._resolve_alignment_output_dir(video_path) / f"{stem}{extension}"
+        return export_naming.render_output_path(
+            template=video_template if is_video_target else audio_template,
+            video_path=video_path,
+            audio_path=audio_path,
+            extension=".mp4" if is_video_target else ".wav",
+            label="对齐后视频" if is_video_target else "对齐后音频",
+            output_dir=self._resolve_alignment_output_dir(video_path),
+        )
 
     def _start_aligned_export(self) -> None:
         if self.align_export_task is not None and self.align_export_task.isRunning():

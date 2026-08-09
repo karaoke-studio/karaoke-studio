@@ -25,6 +25,7 @@ from qfluentwidgets import (
     ScrollArea as FluentScrollArea,
 )
 
+from krok_helper.workflow_host import WorkflowHost
 from krok_helper.audio_processing.responsive import ResponsiveGrid
 from krok_helper.audio_processing.separation.backend import (
     FLOW_EXISTING,
@@ -105,7 +106,7 @@ class AudioSeparationPage(QWidget):
         save_settings,
         parent: QWidget | None = None,
         backend: SeparationBackend | None = None,
-        workflow_context=None,
+        workflow_context: WorkflowHost | None = None,
     ) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -469,8 +470,17 @@ class AudioSeparationPage(QWidget):
         )
 
         results, self._batch_results = self._batch_results, []
-        accept = getattr(self._workflow_context, "accept_separated_accompaniment", None)
-        if not callable(accept):
+        host = self._workflow_context
+        if host is None:
+            # 分离页被单独拉起来跑（没有工作台外壳），没有下一步可交。
+            return
+        if not isinstance(host, WorkflowHost):
+            # 有宿主却不满足契约 —— 多半是宿主侧改了方法名。以前这里是
+            # ``getattr(..., None)`` 静默返回，用户点完转交什么也不会发生
+            # 且无迹可寻；记一条日志好歹能查。
+            logging.getLogger(__name__).warning(
+                "工作台宿主缺少 accept_separated_accompaniment，伴奏无法转交下一步"
+            )
             return
         candidates = collect_accompaniments(results)
         if not candidates:
@@ -481,7 +491,7 @@ class AudioSeparationPage(QWidget):
             return
         selected = dialog.selected_paths()
         if selected:
-            accept(selected)
+            host.accept_separated_accompaniment(selected)
 
     def _on_result_ready(self, result) -> None:
         self._results_panel.add_result(result)
