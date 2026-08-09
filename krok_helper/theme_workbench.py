@@ -51,6 +51,7 @@ __all__ = [
     "theme",
     "apply_settings_theme",
     "build_app_qss",
+    "detach_fluent_qss",
     "drop_card_palette",
     "DropCardPalette",
     "WorkbenchPalette",
@@ -488,6 +489,40 @@ def themed(widget, qss_factory: Callable[[], str]) -> None:
         _disconnect()
         return
     theme.changed.connect(_on_theme_changed)
+
+
+def detach_fluent_qss(*widgets) -> None:
+    """让这些控件脱离 qfluentwidgets 的样式表托管。
+
+    qfluentwidgets 把每个 Fluent 控件（``ToolButton`` / ``BodyLabel`` …）
+    登记进 ``styleSheetManager``，主题刷新时用 ``widget.setStyleSheet()``
+    **整块重写** —— 我们自绘写进去的 QSS 会被原样抹掉。两条抹除路径：
+
+    * ``setTheme(lazy=False)``：当场重写所有登记控件。SUG
+      ``_reapply_win11_appearance``（``theme.mode`` setter 的 double-
+      singleShot）在启动期就会走这条，时点正好在 ``_build_ui()`` 之后；
+    * ``setTheme/setThemeColor(lazy=True)``：**隐藏**控件只打上
+      ``dirty-qss`` 标记，等控件第一次 paint 时由 ``DirtyStyleSheetWatcher``
+      重写。于是隐藏页第一次切出来才被打回 Fluent 默认样式，鼠标划一下
+      （重跑自绘样式）又恢复正常 —— 波形对齐两张素材卡片的表现即此。
+
+    对于样式完全由我们自绘、不依赖 Fluent 主题 QSS 的控件，注销登记即可
+    根治：``updateStyleSheet`` 会跳过它们，watcher 也因 ``obj not in
+    styleSheetManager.widgets`` 而空转。代价是主题切换时 Fluent 不再帮忙
+    刷新，需由调用方在 ``theme.changed`` 回调里重跑自绘样式（本仓库的用法
+    本来就是这样，见 ``AlignmentDropCard._apply_theme_refresh``）。
+    """
+    try:
+        from qfluentwidgets.common.style_sheet import styleSheetManager
+    except ImportError:  # qfluentwidgets 内部结构变动时不要拖垮 UI 构建
+        return
+    for widget in widgets:
+        try:
+            styleSheetManager.deregister(widget)
+            # 注销前可能已被标记为 dirty；不清掉的话首次 paint 仍会重写。
+            widget.setProperty("dirty-qss", False)
+        except (RuntimeError, TypeError):
+            continue
 
 
 def schedule_theme_refresh(receiver, callback: Callable[[], None], *, timer_attr: str = "_theme_refresh_timer") -> None:

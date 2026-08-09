@@ -5100,6 +5100,22 @@ class KrokHelperQtApp(QMainWindow):
                     self.header_actions.addWidget(button)
                 self.file_name_label.setText("未选择文件")
                 self.detail_label.setText(self._empty_detail_text)
+                # 下面这些 Fluent 子控件的 QSS 全部由 ``_refresh_style_modern``
+                # 自绘。若继续留在 qfluentwidgets 的 styleSheetManager 里，本页
+                # 隐藏期间被打上的 ``dirty-qss`` 会在首次 paint 时把自绘样式抹回
+                # Fluent 默认（标题变黑、图标底色丢失），直到鼠标移入重跑一次
+                # ``_refresh_style`` 才恢复 —— 注销托管即可根治。
+                from krok_helper.theme_workbench import detach_fluent_qss
+                detach_fluent_qss(
+                    self.icon_button,
+                    self.action_icon,
+                    self.action_label,
+                    self.title_label,
+                    self.hint_label,
+                    self.file_name_label,
+                    self.ready_duration_label,
+                    self.detail_label,
+                )
                 self._refresh_style()
                 # 主题切换：重算 variant×is_dark palette + 重 apply QSS。
                 from krok_helper.theme_workbench import theme as _wb_theme
