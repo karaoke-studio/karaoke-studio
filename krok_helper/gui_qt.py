@@ -376,8 +376,20 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
     def sync_lyrics_timing_host_paths(self) -> None:
         self._sync_lyrics_timing_host_paths()
 
-    def start_workbench_update_check(self, *, manual: bool) -> None:
-        self._start_workbench_update_check(manual=manual)
+    def start_workbench_update_check(
+        self,
+        *,
+        manual: bool,
+        updater_settings=None,
+        status_label=None,
+        trigger_button=None,
+    ) -> None:
+        self._start_workbench_update_check(
+            manual=manual,
+            updater_settings=updater_settings,
+            status_label=status_label,
+            trigger_button=trigger_button,
+        )
 
     def collect_alignment_settings(self) -> None:
         self._collect_alignment_settings()

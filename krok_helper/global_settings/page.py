@@ -110,7 +110,16 @@ class SettingsHost(Protocol):
 
     def install_single_click_combo_behavior(self, combo: object) -> None: ...
 
-    def start_workbench_update_check(self, *, manual: bool) -> None: ...
+    def start_workbench_update_check(
+        self,
+        *,
+        manual: bool,
+        updater_settings=None,
+        status_label=None,
+        trigger_button=None,
+    ) -> None:
+        """跑一次更新检查。手动触发时会把状态标签与触发按钮交给它自己管。"""
+        ...
 
     #: 命名模板与输出模式 —— 设置的读写生命周期留在外壳，这里读它、写回它。
     output_name_mode_value: str
