@@ -323,9 +323,9 @@ class TestDroppingSeveralFilesKeepsThemAll:
     def test_the_hires_page_does_not_write_the_list_back(self) -> None:
         import inspect
 
-        from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.hires.page import HiResPage
 
-        source = inspect.getsource(KrokHelperQtApp._build_hires_page)
+        source = inspect.getsource(HiResPage._build_ui)
         assert "off_vocal_zone.pathChanged.connect" not in source
 
     def test_a_single_file_zone_still_takes_only_one(self, tmp_path) -> None:
@@ -424,10 +424,13 @@ class TestHandoffDoesNotNavigate:
         import inspect
 
         from krok_helper.gui_qt import KrokHelperQtApp
+        from krok_helper.hires.page import HiResPage
 
-        source = inspect.getsource(KrokHelperQtApp.accept_separated_accompaniment)
+        source = inspect.getsource(HiResPage.accept_separated_accompaniment)
         assert "add_off_vocal_paths" in source
         assert "_show_module" not in source
+        # 外壳只是转调，同样不该在这条链上切页面
+        assert "_show_module" not in inspect.getsource(KrokHelperQtApp.accept_separated_accompaniment)
 
     def test_the_button_no_longer_promises_to_navigate(self, tmp_path) -> None:
         from krok_helper.audio_processing.separation.handoff import (

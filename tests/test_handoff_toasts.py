@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from krok_helper.gui_qt import KrokHelperQtApp
+from krok_helper.hires.page import HiResPage
 
 
 def _host(**extra):
@@ -19,6 +20,16 @@ def _host(**extra):
         **extra,
     )
     return host, toasts
+
+
+def _hires_page(**extra):
+    """Hi-Res 页的替身：伴奏转交的提示由它自己经 ``_host`` 发出。"""
+    toasts: list[tuple[str, str]] = []
+    page = SimpleNamespace(
+        _host=SimpleNamespace(notify_handoff=lambda title, content: toasts.append((title, content))),
+        **extra,
+    )
+    return page, toasts
 
 
 def test_subtitle_video_handoff_reports_the_file() -> None:
@@ -35,27 +46,27 @@ def test_subtitle_video_handoff_reports_the_file() -> None:
 
 def test_single_accompaniment_handoff_names_the_file() -> None:
     accepted = [Path("D:/tmp/伴奏.wav")]
-    host, toasts = _host(add_off_vocal_paths=lambda _p: accepted)
+    page, toasts = _hires_page(add_off_vocal_paths=lambda _p: accepted)
 
-    assert KrokHelperQtApp.accept_separated_accompaniment(host, accepted) == accepted
+    assert HiResPage.accept_separated_accompaniment(page, accepted) == accepted
     assert len(toasts) == 1
     assert "伴奏.wav" in toasts[0][1]
 
 
 def test_multiple_accompaniment_handoff_reports_a_count() -> None:
     accepted = [Path("D:/tmp/a.wav"), Path("D:/tmp/b.wav"), Path("D:/tmp/c.wav")]
-    host, toasts = _host(add_off_vocal_paths=lambda _p: accepted)
+    page, toasts = _hires_page(add_off_vocal_paths=lambda _p: accepted)
 
-    KrokHelperQtApp.accept_separated_accompaniment(host, accepted)
+    HiResPage.accept_separated_accompaniment(page, accepted)
 
     assert "3 个伴奏" in toasts[0][1]
 
 
 def test_no_toast_when_every_accompaniment_was_a_duplicate() -> None:
     """伴奏卡去重后一个都没加进去 —— 这时候报「已放入」是骗人的。"""
-    host, toasts = _host(add_off_vocal_paths=lambda _p: [])
+    page, toasts = _hires_page(add_off_vocal_paths=lambda _p: [])
 
-    KrokHelperQtApp.accept_separated_accompaniment(host, [Path("D:/tmp/dup.wav")])
+    HiResPage.accept_separated_accompaniment(page, [Path("D:/tmp/dup.wav")])
 
     assert toasts == []
 

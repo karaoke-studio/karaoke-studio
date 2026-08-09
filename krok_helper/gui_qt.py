@@ -8,7 +8,7 @@ import threading
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from krok_helper import ensure_sug_src_path
 
@@ -70,7 +70,7 @@ from krok_helper.qfluent_compat import (
 from krok_helper.alignment import AlignmentHandoffDialog
 from krok_helper.alignment.page import AlignmentPageMixin
 from krok_helper.global_settings.page import GlobalSettingsMixin
-from krok_helper.hires.page import DropZoneCard, HiResPageMixin
+from krok_helper.hires.page import DropZoneCard, HiResPage
 from krok_helper.lyrics_search.page import (
     LyricsSearchPageMixin,
 )
@@ -78,7 +78,6 @@ from krok_helper.config import (
     APP_LOGO_PATH,
     APP_TITLE,
     APP_VERSION,
-    FFMPEG_DIR_PLACEHOLDER,
     WINDOW_HEIGHT,
     WINDOW_MIN_HEIGHT,
     WINDOW_MIN_WIDTH,
@@ -284,7 +283,6 @@ class PageTransitionOverlay(QWidget):
 class KrokHelperQtApp(
     AlignmentPageMixin,
     GlobalSettingsMixin,
-    HiResPageMixin,
     LyricsSearchPageMixin,
     QMainWindow,
 ):
@@ -309,7 +307,6 @@ class KrokHelperQtApp(
             self.settings.lyrics_timing_migrated_v1 != lyrics_timing_migrated
         ):
             save_app_settings(self.settings)
-        self.hires_task: BackgroundTask | None = None
         self.lyrics_search_task: BackgroundTask | None = None
         self.lyrics_fetch_task: BackgroundTask | None = None
         self._update_checker: UpdateChecker | None = None
@@ -387,9 +384,48 @@ class KrokHelperQtApp(
         if getattr(self, attr_name, None) is task:
             setattr(self, attr_name, None)
 
+    # ── HiResHost 实现 ───────────────────────────────────────────
+    # 这几个是「页面 → 外壳」的公开接口（见 krok_helper.hires.page.HiResHost）。
+    # 其余还是 mixin 的页面仍直接用下划线私有方法，等它们各自对象化时一并收口。
+
+    def track_background_task(self, task: BackgroundTask) -> BackgroundTask:
+        task.finished.connect(task.deleteLater)
+        return task
+
+    def resolve_ffmpeg_dir(self) -> Path | None:
+        return self._resolve_ffmpeg_dir()
+
+    def resolve_output_name_mode(self) -> str:
+        return self._resolve_output_name_mode()
+
+    def resolve_output_name_templates(self, *, require_valid: bool = False) -> tuple[str, str]:
+        return self._resolve_output_name_templates(require_valid=require_valid)
+
+    def notify_handoff(self, title: str, content: str) -> None:
+        self._notify_handoff(title, content)
+
+    def open_settings_window(self, context: str) -> None:
+        self._open_settings_window(context)
+
+    # ── 工作流转交入口（WorkflowHost）：素材落在 Hi-Res 页 ──────────
+
+    def set_video_path(self, path: Path) -> None:
+        self.hires_page.set_video_path(path)
+
+    def set_on_vocal_path(self, path: Path) -> None:
+        self.hires_page.set_on_vocal_path(path)
+
+    def set_off_vocal_path(self, path: Path) -> None:
+        self.hires_page.set_off_vocal_path(path)
+
+    def add_off_vocal_paths(self, paths: Sequence[Path]) -> list[Path]:
+        return self.hires_page.add_off_vocal_paths(paths)
+
+    def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
+        return self.hires_page.accept_separated_accompaniment(paths)
+
     def _running_background_tasks(self) -> list[BackgroundTask]:
         task_attrs = (
-            "hires_task",
             "lyrics_search_task",
             "lyrics_fetch_task",
             "align_analysis_task",
@@ -401,6 +437,11 @@ class KrokHelperQtApp(
             task = getattr(self, attr_name, None)
             if task is not None and task.isRunning():
                 tasks.append(task)
+        # 已经对象化的页面自己持有任务，问它们要；还是 mixin 的那几页仍走上面的槽位。
+        for page in (getattr(self, "hires_page", None),):
+            running = getattr(page, "running_tasks", None)
+            if callable(running):
+                tasks.extend(running())
         return tasks
 
     def showEvent(self, event) -> None:  # noqa: N802
@@ -654,7 +695,7 @@ class KrokHelperQtApp(
             )
         except Exception:
             pass
-        self.hires_page = self._build_hires_page()
+        self.hires_page = HiResPage(host=self, parent=self.page_stack)
         self.module_pages = {
             WORKFLOW_VIDEO_DOWNLOAD: self.video_download_page,
             WORKFLOW_WAVEFORM_ALIGN: self.audio_processing_page,
@@ -1319,7 +1360,9 @@ class KrokHelperQtApp(
             hide_popup()
 
     def _sync_ffmpeg_labels(self) -> None:
-        self.hires_ffmpeg_label.setText(self.ffmpeg_dir_text or FFMPEG_DIR_PLACEHOLDER)
+        page = getattr(self, "hires_page", None)
+        if page is not None:
+            page.set_ffmpeg_dir_text(self.ffmpeg_dir_text)
         self._refresh_media_info_labels()
 
     def set_ffmpeg_dir(self, path: Path | None) -> None:

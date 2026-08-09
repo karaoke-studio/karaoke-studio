@@ -1,33 +1,55 @@
-"""Hi-Res 混流页与宿主之间的边界。
+"""Hi-Res 混流页与外壳之间的边界。
 
-同前两页：mixin 还混在 ``KrokHelperQtApp`` 上，清单挡住"顺手再摸一个宿主
-成员"，且只该变短。
+这一页**已经是独立对象**了，边界不再是"清单描述现状"，而是真的封闭：页面能碰到
+的外部东西只有构造时注入的 ``_host``，而 ``_host`` 能提供什么由
+:class:`~krok_helper.hires.page.HiResHost` 说了算。
+
+所以这里查两件事：
+* 页面除了 ``_host`` 不再摸任何外部成员（静态）；
+* 它真的能脱离主窗口构造、把素材接进来（动态）—— 这正是对象化换来的东西。
 """
 
 from __future__ import annotations
 
 import ast
 import pathlib
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from PyQt6.QtWidgets import QApplication
+
+from krok_helper.hires.page import HiResHost, HiResPage
+from krok_helper.settings import AppSettings
 
 PAGE = pathlib.Path(__file__).resolve().parents[1] / "krok_helper" / "hires" / "page.py"
 
-#: 页面调用的宿主服务 —— 变成独立对象时，这些要么跟着搬，要么进宿主接口。
-HOST_SERVICES = {
-    "_track_background_task",  # 混流跑在后台线程
-    "_resolve_ffmpeg_dir",  # 全局设置：ffmpeg 位置
-    "_resolve_output_name_mode",  # 全局设置：输出命名模式
-    "_resolve_output_name_templates",  # 全局设置：命名模板
-    "_notify_handoff",  # 接收伴奏时的右下角提示
-    "_open_settings_window",  # 打开全局设置的对应分页
-}
 
-#: 由外壳 ``__init__`` 建、页面读写的任务槽位 —— 应当跟着页面一起搬。
-HOST_OWNED_STATE = {"hires_task"}
+def _fake_host(calls: list) -> SimpleNamespace:
+    return SimpleNamespace(
+        settings=AppSettings(),
+        track_background_task=lambda task: task,
+        resolve_ffmpeg_dir=lambda: None,
+        resolve_output_name_mode=lambda: "fixed",
+        resolve_output_name_templates=lambda: ("{video_name}_on", "{video_name}_off"),
+        notify_handoff=lambda title, content: calls.append(("toast", title)),
+        open_settings_window=lambda context: calls.append(("settings", context)),
+    )
 
 
-def _foreign_members() -> set[str]:
+@pytest.fixture
+def page():
+    QApplication.instance() or QApplication([])
+    calls: list = []
+    widget = HiResPage(host=_fake_host(calls))
+    yield widget, calls
+    widget.deleteLater()
+
+
+def test_the_page_reaches_outside_only_through_the_host() -> None:
+    """静态检查：``self.X`` 里除了自己建的成员和 ``_host``，不该再有别的。"""
     tree = ast.parse(PAGE.read_text(encoding="utf-8"))
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "HiResPageMixin")
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "HiResPage")
     own = {n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
     assigned: set[str] = set()
@@ -35,22 +57,41 @@ def _foreign_members() -> set[str]:
     for node in ast.walk(cls):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
             (assigned if isinstance(node.ctx, ast.Store) else read).add(node.attr)
-    return read - own - assigned
+
+    # QWidget 自己的方法不算外部依赖。
+    inherited = {name for name in read if hasattr(HiResPage.__mro__[1], name)}
+    outside = read - own - assigned - inherited
+
+    assert not outside, "页面绕过 _host 摸了外部成员：" + "、".join(sorted(outside))
 
 
-def test_the_page_only_reaches_for_the_declared_host_surface() -> None:
-    unexpected = _foreign_members() - HOST_SERVICES - HOST_OWNED_STATE
+def test_a_fake_host_satisfies_the_contract() -> None:
+    assert isinstance(_fake_host([]), HiResHost)
 
-    assert not unexpected, (
-        "Hi-Res 页多摸了宿主成员：" + "、".join(sorted(unexpected)) + "。"
-        "先判断它该跟着页面搬、还是该走显式宿主接口，再决定要不要加进清单。"
+
+def test_the_page_builds_without_the_main_window(page) -> None:
+    """对象化换来的核心能力：不用造主窗口就能有这一页。"""
+    widget, _ = page
+
+    assert widget.video_zone is not None
+    assert widget.hires_log is not None
+    assert not widget.is_busy()
+    assert widget.running_tasks() == []
+
+
+def test_material_handoff_lands_in_the_cards(page) -> None:
+    widget, calls = page
+
+    widget.set_video_path(Path("D:/tmp/成片.mp4"))
+    widget.set_on_vocal_path(Path("D:/tmp/原唱.flac"))
+    accepted = widget.accept_separated_accompaniment(
+        [Path("D:/tmp/伴奏1.wav"), Path("D:/tmp/伴奏2.wav")]
     )
 
-
-def test_the_declared_surface_has_not_gone_stale() -> None:
-    stale = (HOST_SERVICES | HOST_OWNED_STATE) - _foreign_members()
-
-    assert not stale, "清单里这些已经不再被引用，可以删了：" + "、".join(sorted(stale))
+    assert widget.video_zone.path == Path("D:/tmp/成片.mp4")
+    assert widget.on_vocal_zone.path == Path("D:/tmp/原唱.flac")
+    assert len(accepted) == 2
+    assert ("toast", "伴奏已交给下一步") in calls
 
 
 def test_the_page_does_not_import_the_shell() -> None:
@@ -65,12 +106,9 @@ def test_the_page_does_not_import_the_shell() -> None:
     assert not any(m == "krok_helper.gui_qt" or m.startswith("krok_helper.gui_qt.") for m in imported)
 
 
-def test_the_handoff_entry_points_live_on_this_page() -> None:
-    """其他页转交产物的落点就在本页，宿主契约靠它满足。"""
+def test_the_shell_still_satisfies_the_workflow_contract() -> None:
+    """外壳把转交入口转调给本页，对外契约不变。"""
     from krok_helper.gui_qt import KrokHelperQtApp
-    from krok_helper.hires.page import HiResPageMixin
     from krok_helper.workflow_host import WorkflowHost
 
     assert issubclass(KrokHelperQtApp, WorkflowHost)
-    for entry in ("accept_separated_accompaniment", "set_video_path", "set_on_vocal_path"):
-        assert getattr(KrokHelperQtApp, entry).__qualname__.startswith(HiResPageMixin.__name__)

@@ -26,6 +26,7 @@ from krok_helper.gui_qt import (  # noqa: E402
     WORKFLOW_HIRES_MIX,
     WORKFLOW_SUBTITLE_RENDER,
 )
+from krok_helper.hires.page import HiResPage  # noqa: E402
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
     SubtitleProjectState,
     SubtitleRenderWindow,
@@ -282,7 +283,7 @@ def test_hires_success_plays_sound_and_uses_fluent_dialog(
         show_info,
     )
 
-    KrokHelperQtApp._finish_hires_success(app, [output])
+    HiResPage._finish_hires_success(app, [output])
 
     assert ("sound",) in calls
     dialog_call = next(call for call in calls if call[0] == "dialog")

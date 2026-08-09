@@ -1,19 +1,14 @@
 """Hi-Res 混流页（工作流第 6 步）。
 
-与前两页同款：整页从 ``KrokHelperQtApp`` 搬出来，以 mixin 混回同一个对象 ——
-物理拆分，``self`` 语义不变、调用点不用改。
+**这一页已经是独立对象**，不再是混进主窗口的 mixin：它自己的 15 个属性挂在
+自己身上，和外壳的全部往来只有一条路 —— 构造时注入的 :class:`HiResHost`。
 
-本页同时是工作流的产物终点：``accept_separated_accompaniment`` /
-``set_video_path`` / ``set_on_vocal_path`` 这些被其他页调用的入口就在这里，
-所以 ``KrokHelperQtApp`` 依旧满足 :mod:`krok_helper.workflow_host` 的契约。
+本页是工作流的产物终点：``set_video_path`` / ``set_on_vocal_path`` /
+``add_off_vocal_paths`` 是其他步骤把素材交过来的入口，外壳的
+:mod:`krok_helper.workflow_host` 契约转调它们。
 
-页面还依赖宿主的成员（清单由 ``tests/test_hires_page_boundary.py`` 钉住）：
-
-* ``_track_background_task`` —— 混流跑在后台线程
-* ``_resolve_ffmpeg_dir`` / ``_resolve_output_name_mode`` /
-  ``_resolve_output_name_templates`` —— 全局设置里的三项
-* ``_notify_handoff`` —— 接收伴奏时的右下角提示
-* ``_open_settings_window`` —— 打开全局设置的对应分页
+后台任务由本页自己持有（``running_tasks`` / ``is_busy`` 供外壳关窗前查询），
+不再往宿主身上挂 ``hires_task`` 槽位。
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence, runtime_checkable
 
 from PyQt6.QtCore import (
     QAbstractAnimation,
@@ -50,7 +45,7 @@ from qfluentwidgets import (
 
 from krok_helper.qfluent_compat import show_fluent_error, show_fluent_info
 from krok_helper.background import BackgroundTask
-from krok_helper.config import APP_TITLE, FFMPEG_DIR_PLACEHOLDER
+from krok_helper.config import FFMPEG_DIR_PLACEHOLDER
 from krok_helper.errors import ProcessingError
 from krok_helper.ffmpeg import terminate_process
 from krok_helper.media_formats import HIRES_AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
@@ -70,7 +65,46 @@ from krok_helper.ui_kit import (
 )
 from krok_helper.windows import open_in_explorer
 
-__all__ = ["CardFlipOverlay", "CornerBadge", "DropZoneCard", "HiResPageMixin"]
+__all__ = ["CardFlipOverlay", "CornerBadge", "DropZoneCard", "HiResHost", "HiResPage"]
+
+
+@runtime_checkable
+class HiResHost(Protocol):
+    """Hi-Res 页需要外壳提供的全部能力 —— 这一页只能碰到这些。
+
+    这是页面对象化之后 host 面的完整形态：清单从"测试描述现状"变成了真接口，
+    页面拿不到接口之外的任何东西。
+    """
+
+    #: 应用配置对象，页面读写自己那几项。
+    settings: object
+
+    def track_background_task(self, task: BackgroundTask) -> BackgroundTask:
+        """登记后台任务，让外壳在关窗/强退时统一收尾。"""
+        ...
+
+    def resolve_ffmpeg_dir(self) -> Path | None:
+        """全局设置里的 ffmpeg 目录（未设置时返回 None，走系统 PATH）。"""
+        ...
+
+    def resolve_output_name_mode(self) -> str:
+        """输出命名模式：固定名 / 模板。"""
+        ...
+
+    def resolve_output_name_templates(self, *, require_valid: bool = False) -> tuple[str, str]:
+        """原唱 / 伴奏两个输出文件名模板。
+
+        ``require_valid=True`` 时会校验模板，非法直接抛 ``ProcessingError``。
+        """
+        ...
+
+    def notify_handoff(self, title: str, content: str) -> None:
+        """右下角提示：素材从别的步骤转交过来了。"""
+        ...
+
+    def open_settings_window(self, context: str) -> None:
+        """打开全局设置对话框的指定分页。"""
+        ...
 
 
 class CornerBadge(QLabel):
@@ -648,8 +682,41 @@ class DropZoneCard(CardWidget):
         self._position_status_badge()
 
 
-class HiResPageMixin:
-    """Hi-Res 混流页。混入 ``KrokHelperQtApp``，不单独实例化。"""
+class HiResPage(QWidget):
+    """Hi-Res 混流页 —— 独立控件，不再混进主窗口。
+
+    与外壳的全部往来都经过 :class:`HiResHost`；除此之外它只碰自己的成员。
+    """
+
+    def __init__(self, *, host: HiResHost, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._host = host
+        self._task: BackgroundTask | None = None
+        self._hires_cancel_requested = False
+        self._hires_process: subprocess.Popen | None = None
+        self._hires_expected_outputs: list[Path] = []
+        self._hires_completed_outputs: list[Path] = []
+        self._hires_preexisting_outputs: set[Path] = set()
+        self._build_ui()
+
+    def _register_task(self, task: BackgroundTask) -> BackgroundTask:
+        self._task = task
+        task.finished.connect(self._forget_task)
+        return self._host.track_background_task(task)
+
+    def _forget_task(self) -> None:
+        self._task = None
+
+    def set_ffmpeg_dir_text(self, text: str) -> None:
+        """外壳改了 ffmpeg 目录后调一次 —— 页面上那行说明文字跟着更新。"""
+        self.hires_ffmpeg_label.setText(text or FFMPEG_DIR_PLACEHOLDER)
+
+    def is_busy(self) -> bool:
+        """本页是否有活儿在跑 —— 外壳关窗前会问。"""
+        return self._is_hires_running()
+
+    def running_tasks(self) -> list[BackgroundTask]:
+        return [self._task] if self._task is not None and self._task.isRunning() else []
 
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。
@@ -663,12 +730,11 @@ class HiResPageMixin:
                 if len(accepted) == 1
                 else f"{len(accepted)} 个伴奏已放入第 6 步 Hi-Res 混流的伴奏卡。"
             )
-            self._notify_handoff("伴奏已交给下一步", detail)
+            self._host.notify_handoff("伴奏已交给下一步", detail)
         return accepted
 
-    def _build_hires_page(self) -> QWidget:
-        page = QWidget()
-        shell = QVBoxLayout(page)
+    def _build_ui(self) -> None:
+        shell = QVBoxLayout(self)
         shell.setContentsMargins(20, 20, 20, 20)
         shell.setSpacing(16)
 
@@ -718,7 +784,7 @@ class HiResPageMixin:
             color=_wb_pal().text_secondary,
             hover=_wb_pal().secondary_button_hover_bg,
         ))
-        settings_button.clicked.connect(lambda: self._open_settings_window("hires"))
+        settings_button.clicked.connect(lambda: self._host.open_settings_window("hires"))
         settings_layout.addWidget(output_label, 0, 0)
         settings_layout.addWidget(self.output_dir_label, 0, 1)
         settings_layout.addWidget(settings_button, 0, 2)
@@ -863,7 +929,6 @@ class HiResPageMixin:
         controls.addWidget(self.hires_status_label)
         controls_bar.apply_button_metrics(self.hires_start_button, self.hires_cancel_button, clear_button, open_output_button)
         shell.addWidget(controls_bar)
-        return page
 
     def set_video_path(self, path: Path) -> None:
         self.video_zone.set_path(path)
@@ -911,8 +976,8 @@ class HiResPageMixin:
         video_path = self.video_zone.path
         on_vocal_path = self.on_vocal_zone.path
         off_vocal_paths = list(self.off_vocal_zone.paths)
-        ffmpeg_dir = self._resolve_ffmpeg_dir()
-        output_name_mode = self._resolve_output_name_mode()
+        ffmpeg_dir = self._host.resolve_ffmpeg_dir()
+        output_name_mode = self._host.resolve_output_name_mode()
 
         missing: list[str] = []
         if video_path is None or not video_path.is_file():
@@ -934,7 +999,7 @@ class HiResPageMixin:
 
         output_dir = resolve_output_dir(video_path)
         if output_name_mode == OUTPUT_NAME_MODE_TEMPLATE:
-            on_template, off_template = self._resolve_output_name_templates(require_valid=True)
+            on_template, off_template = self._host.resolve_output_name_templates(require_valid=True)
         else:
             on_template, off_template = None, None
 
@@ -964,7 +1029,7 @@ class HiResPageMixin:
         QApplication.clipboard().setText(self.hires_log.toPlainText())
 
     def _is_hires_running(self) -> bool:
-        return self.hires_task is not None and self.hires_task.isRunning()
+        return self._task is not None and self._task.isRunning()
 
     def _register_hires_process(self, process: subprocess.Popen | None) -> None:
         self._hires_process = process
@@ -1081,7 +1146,7 @@ class HiResPageMixin:
             self._hires_completed_outputs.extend(outputs)
             return outputs
 
-        task = self._track_background_task("hires_task", BackgroundTask(runner))
+        task = self._register_task(BackgroundTask(runner))
         task.log_message.connect(self._append_hires_log)
         task.task_succeeded.connect(self._finish_hires_success)
         task.task_failed.connect(self._finish_hires_failure)
@@ -1141,7 +1206,7 @@ class HiResPageMixin:
         show_fluent_error(self, message)
 
     def _clear_hires_inputs(self) -> None:
-        if self.hires_task is not None and self.hires_task.isRunning():
+        if self._task is not None and self._task.isRunning():
             show_fluent_info(self, "当前生成任务还在处理中，请稍等。")
             return
         self.video_zone.clear_path()
