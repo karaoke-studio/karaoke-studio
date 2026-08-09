@@ -215,6 +215,8 @@ AUDIO_EXTENSIONS = {".flac", ".wav", ".mp3", ".m4a", ".aac", ".ape", ".alac", ".
 HIRES_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
 ALIGN_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
 FFMPEG_DIR_PLACEHOLDER = "未设置，将优先使用系统 PATH 中的 ffmpeg"
+#: 换页动画 240ms；转交提示要等它跑完再弹，否则 InfoBar 的滑入动画会被卡住。
+PAGE_TRANSITION_SETTLE_MS = 320
 WORKFLOW_VIDEO_DOWNLOAD = "video_download"
 WORKFLOW_WAVEFORM_ALIGN = "waveform_align"
 WORKFLOW_LYRICS_SEARCH = "lyrics_search"
@@ -2546,26 +2548,48 @@ class KrokHelperQtApp(QMainWindow):
         InfoBar 的滑入动画不推进（``slideAni`` 一直停在 currentTime=0），提示
         条就卡在起始位置 —— 也就是窗口右边缘之外 —— 用户什么也看不到。挂
         ``page_stack`` 动画正常，位置也更合理：贴在内容区右下角。
+
+        换页动画在跑的时候同样会把滑入动画卡住（``accept_subtitle_video`` 就是
+        先跳页再提示），所以这种情况下等它跑完再弹。
         """
+        if getattr(self, "_page_switch_anim", None) is not None:
+            QTimer.singleShot(
+                PAGE_TRANSITION_SETTLE_MS,
+                lambda: self._show_handoff_toast(title, content),
+            )
+            return
+        self._show_handoff_toast(title, content)
+
+    def _show_handoff_toast(self, title: str, content: str) -> None:
         host = getattr(self, "page_stack", None) or self
         try:
-            InfoBar.success(
+            bar = InfoBar.success(
                 title=title,
                 content=content,
                 parent=host,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=3000,
             )
+            # 保险：Fluent 的滑入动画在本工作台里时灵时不灵（换页刚跑完那一小段
+            # 尤其明显，实测能拖到两秒后才推进第一帧），期间提示条一直停在起始
+            # 位置 —— 也就是内容区右边缘之外，等于没弹。这里直接把它摆到动画
+            # 自己算好的终点：动画真跑起来也是走到同一个位置，不冲突，多条并存
+            # 时的堆叠偏移也由库算好了。
+            ani = bar.property("slideAni")
+            if ani is not None and ani.endValue() is not None:
+                bar.move(ani.endValue())
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).debug("转交提示弹出失败", exc_info=True)
 
     def accept_subtitle_video(self, path: Path) -> None:
-        """第 5 步渲染好的成片放进第 6 步的视频卡。
+        """第 5 步渲染好的成片放进第 6 步的视频卡，并切到第 6 步。
 
-        只放素材、不切页面 —— 与 ``accept_separated_accompaniment`` 一致：
-        用户往往还要在第 5 步接着调样式再渲一版，跳走反而打断。
+        **这条链路是要跳页的**，与另外几条（对齐、分离）刻意不同：渲染完成
+        意味着这一版成片已经定稿，下一步就是混流；而分离/对齐往往还要在原地
+        接着处理下一首，跳走反而打断。
         """
         self.set_video_path(path)
+        self._show_module(WORKFLOW_HIRES_MIX)
         self._notify_handoff("成片已交给下一步", f"「{path.name}」已放入第 6 步 Hi-Res 混流的视频卡。")
 
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:

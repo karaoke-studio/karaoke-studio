@@ -23,6 +23,7 @@ from krok_helper.gui_qt import (  # noqa: E402
     AlignmentHandoffDialog,
     BackgroundTask,
     KrokHelperQtApp,
+    WORKFLOW_HIRES_MIX,
     WORKFLOW_SUBTITLE_RENDER,
 )
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
@@ -202,7 +203,7 @@ def test_subtitle_render_success_prompts_for_post_export_action(
     assert args[1] == "视频导出完成"
     assert str(output) in args[2]
     assert "本次导出耗时：2 分 5 秒" in args[2]
-    assert args[3] == ("打开文件夹", "交给下一步", "取消")
+    assert args[3] == ("打开文件夹", "进入下一步", "取消")
     assert kwargs["default"] == 1
     assert set(kwargs["sticky"]) == {0}
     assert set(kwargs) == {"default", "sticky"}
@@ -292,8 +293,8 @@ def test_hires_success_plays_sound_and_uses_fluent_dialog(
     assert kwargs == {"ok_text": "确定", "copyable": True}
 
 
-def test_accept_subtitle_video_fills_hires_video_without_switching_page(tmp_path: Path) -> None:
-    """只放素材、不跳页 —— 用户往往还要在第 5 步接着调样式再渲一版。"""
+def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Path) -> None:
+    """渲染完成即定稿，下一步就是混流 —— 这条链路要跳页，与对齐/分离不同。"""
     output = tmp_path / "subtitle.mp4"
     calls: list[object] = []
 
@@ -305,7 +306,11 @@ def test_accept_subtitle_video_fills_hires_video_without_switching_page(tmp_path
 
     KrokHelperQtApp.accept_subtitle_video(app, output)
 
-    assert calls == [("video", output), ("toast", "成片已交给下一步")]
+    assert calls == [
+        ("video", output),
+        ("show", WORKFLOW_HIRES_MIX),
+        ("toast", "成片已交给下一步"),
+    ]
 
 
 @pytest.mark.parametrize(

@@ -8462,11 +8462,9 @@ class SubtitleRenderWindow(QWidget):
             (
                 f"视频已成功导出：\n{output_path}"
                 f"\n\n本次导出耗时：{elapsed_text}"
-                "\n\n是否把这个成片交给第 6 步 Hi-Res 混流？"
+                "\n\n是否自动进入下一步？"
             ),
-            # 只把素材放进第 6 步、不跳页面，所以按钮写「交给下一步」而不是
-            # 「进入下一步」—— 点完还留在本页，文案得对得上。
-            ("打开文件夹", "交给下一步", "取消"),
+            ("打开文件夹", "进入下一步", "取消"),
             default=1,
             # 「打开文件夹」保持弹窗不关，方便检查完成片后再决定下一步。
             sticky={0: lambda: self._open_export_folder(output_path)},

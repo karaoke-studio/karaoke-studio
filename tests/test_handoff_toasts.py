@@ -22,7 +22,7 @@ def _host(**extra):
 
 
 def test_subtitle_video_handoff_reports_the_file() -> None:
-    host, toasts = _host(set_video_path=lambda _p: None)
+    host, toasts = _host(set_video_path=lambda _p: None, _show_module=lambda _m: None)
 
     KrokHelperQtApp.accept_subtitle_video(host, Path("D:/tmp/成片.mp4"))
 
