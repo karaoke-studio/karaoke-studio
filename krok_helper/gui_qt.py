@@ -81,6 +81,8 @@ from qfluentwidgets import (
     ComboBox as QComboBox,
     FluentIcon as FIF,
     HyperlinkCard,
+    InfoBar,
+    InfoBarPosition,
     LineEdit as QLineEdit,
     ListWidget as FluentListWidget,
     PlainTextEdit as QPlainTextEdit,
@@ -2531,6 +2533,32 @@ class KrokHelperQtApp(QMainWindow):
             except RuntimeError:
                 self._page_transition_overlay = None
 
+    def _notify_handoff(self, title: str, content: str) -> None:
+        """转交产物时右下角提示一条。
+
+        各条转交链路都只放素材、不跳页面，界面上因此没有任何动静 —— 用户点完
+        「交给下一步」会怀疑到底有没有生效。这条提示就是唯一的反馈。
+
+        提示本身不属于转交流程，弹不出来（窗口正在关、Fluent 内部状态异常）
+        也不该把素材投放一起带崩，所以整体兜底。
+
+        **挂在 ``page_stack`` 上，不要挂主窗口或 centralWidget**：实测那两处
+        InfoBar 的滑入动画不推进（``slideAni`` 一直停在 currentTime=0），提示
+        条就卡在起始位置 —— 也就是窗口右边缘之外 —— 用户什么也看不到。挂
+        ``page_stack`` 动画正常，位置也更合理：贴在内容区右下角。
+        """
+        host = getattr(self, "page_stack", None) or self
+        try:
+            InfoBar.success(
+                title=title,
+                content=content,
+                parent=host,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=3000,
+            )
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).debug("转交提示弹出失败", exc_info=True)
+
     def accept_subtitle_video(self, path: Path) -> None:
         """第 5 步渲染好的成片放进第 6 步的视频卡。
 
@@ -2538,13 +2566,22 @@ class KrokHelperQtApp(QMainWindow):
         用户往往还要在第 5 步接着调样式再渲一版，跳走反而打断。
         """
         self.set_video_path(path)
+        self._notify_handoff("成片已交给下一步", f"「{path.name}」已放入第 6 步 Hi-Res 混流的视频卡。")
 
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。
 
         只放素材、不切页面：用户往往还要在第 2 步接着分下一首，跳走反而打断。
         """
-        return self.add_off_vocal_paths(paths)
+        accepted = self.add_off_vocal_paths(paths)
+        if accepted:
+            detail = (
+                f"「{accepted[0].name}」已放入第 6 步 Hi-Res 混流的伴奏卡。"
+                if len(accepted) == 1
+                else f"{len(accepted)} 个伴奏已放入第 6 步 Hi-Res 混流的伴奏卡。"
+            )
+            self._notify_handoff("伴奏已交给下一步", detail)
+        return accepted
 
     def _export_lyrics_timing_to_next(self) -> None:
         """确保 SUG 项目落盘后，从该文件加载字幕并切换到第 5 步。"""
@@ -7518,11 +7555,19 @@ class KrokHelperQtApp(QMainWindow):
             load_video = getattr(render_page, "load_video", None)
             if background_path is not None and callable(load_video):
                 load_video(Path(background_path))
+                self._notify_handoff(
+                    "背景素材已交给字幕渲染",
+                    f"「{Path(background_path).name}」已放入第 5 步字幕视频生成。",
+                )
 
         if send_to_hires:
             vocal_path = source_audio_path if is_video_target else output_path
             if vocal_path is not None:
                 self.set_on_vocal_path(Path(vocal_path))
+                self._notify_handoff(
+                    "原唱音源已交给 Hi-Res",
+                    f"「{Path(vocal_path).name}」已放入第 6 步 Hi-Res 混流的原唱卡。",
+                )
 
     @Slot(int)
     def _clear_alignment_handoff_dialog(self, _result: int) -> None:

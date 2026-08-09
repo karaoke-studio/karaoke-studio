@@ -300,11 +300,12 @@ def test_accept_subtitle_video_fills_hires_video_without_switching_page(tmp_path
     app = SimpleNamespace(
         set_video_path=lambda path: calls.append(("video", path)),
         _show_module=lambda module_id: calls.append(("show", module_id)),
+        _notify_handoff=lambda title, content: calls.append(("toast", title)),
     )
 
     KrokHelperQtApp.accept_subtitle_video(app, output)
 
-    assert calls == [("video", output)]
+    assert calls == [("video", output), ("toast", "成片已交给下一步")]
 
 
 @pytest.mark.parametrize(
@@ -361,6 +362,9 @@ def test_alignment_handoff_dialog_keeps_gui_responsive(
 
         def set_on_vocal_path(self, path):
             calls.append(("hires", path))
+
+        def _notify_handoff(self, title, content):
+            pass  # 提示条另有专测（test_handoff_toasts.py）
 
         def _apply_alignment_handoff(self):
             KrokHelperQtApp._apply_alignment_handoff(self)
@@ -489,6 +493,8 @@ def test_alignment_handoff_maps_assets_without_switching_modules(
             load_video=lambda path: calls.append(("subtitle", path))
         ),
         set_on_vocal_path=lambda path: calls.append(("hires", path)),
+        # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
+        _notify_handoff=lambda title, content: None,
     )
     app._apply_alignment_handoff = lambda: KrokHelperQtApp._apply_alignment_handoff(app)
     app._clear_alignment_handoff_dialog = (
@@ -557,6 +563,8 @@ def test_alignment_handoff_respects_unchecked_options_and_cancel(
             load_video=lambda path: calls.append(("subtitle", path))
         ),
         set_on_vocal_path=lambda path: calls.append(("hires", path)),
+        # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
+        _notify_handoff=lambda title, content: None,
     )
     app._apply_alignment_handoff = lambda: KrokHelperQtApp._apply_alignment_handoff(app)
     app._clear_alignment_handoff_dialog = (
