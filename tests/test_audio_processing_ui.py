@@ -1373,3 +1373,43 @@ class TestServiceNotStartedReason:
         card, dep = self._card()
         card.set_dependency(dep, service_ready=False)
         assert "background: transparent" in card._reason.styleSheet()
+
+
+class TestDropZoneFollowsTheme:
+    """拖放区的音符图标是按当时主题烘好的位图，主题切换必须重取一次。
+
+    不重取的话，浅色下建出来的深色音符切到深色主题后压在深色卡片上几乎看不见，
+    要等拖拽或载入文件触发 ``_refresh_zone`` 才恢复。
+    """
+
+    def _card(self):
+        from krok_helper.audio_processing.separation.widgets import AudioInputCard
+
+        host = QWidget()
+        card = AudioInputCard(host)
+        return host, card
+
+    def test_theme_change_reruns_zone_refresh(self) -> None:
+        from krok_helper.theme_workbench import theme
+
+        _host, card = self._card()
+        calls: list[int] = []
+        card._refresh_zone = lambda **_kw: calls.append(1)  # type: ignore[method-assign]
+
+        theme.changed.emit()
+        deadline = 0
+        while not calls and deadline < 60:
+            QTest.qWait(20)
+            deadline += 1
+
+        assert calls, "theme.changed 之后应当重跑 _refresh_zone"
+
+    def test_zone_icon_is_refetched_on_refresh(self) -> None:
+        """空态刷新要重新取一次图标（而不是沿用构造期烘好的那张）。"""
+        _host, card = self._card()
+        seen: list[object] = []
+        card._zone_icon.setIcon = lambda icon: seen.append(icon)  # type: ignore[method-assign]
+
+        card._refresh_zone()
+
+        assert seen, "空态 _refresh_zone 应当重新 setIcon"

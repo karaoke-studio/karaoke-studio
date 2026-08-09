@@ -661,6 +661,25 @@ class AudioInputCard(CardWidget):
         # 文字行的白块盖出两道横条。
         self._refresh_zone()
 
+        # 主题切换要重跑一次 —— ``FIF.MUSIC.icon()`` 是按调用时的主题烘好的位图，
+        # 不重新取一次的话，浅色下建出来的深色音符切到深色主题后几乎看不见
+        # （深色图标压在深色卡片上），得等拖拽或载入文件触发 ``_refresh_zone``
+        # 才恢复。延迟调度是为了避开 SUG 主题刷新链上的 polish 重入窗口。
+        from krok_helper.theme_workbench import theme as _wb_theme
+
+        _wb_theme.changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self) -> None:
+        from krok_helper.theme_workbench import schedule_theme_refresh
+
+        schedule_theme_refresh(self, self._apply_theme_refresh)
+
+    def _apply_theme_refresh(self) -> None:
+        try:
+            self._refresh_zone()
+        except RuntimeError:  # C++ 侧已销毁
+            pass
+
     def path(self) -> str:
         return self._path
 
