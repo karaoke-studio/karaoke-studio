@@ -103,3 +103,12 @@ def test_theme_refresh_reapplies_styles(card) -> None:
 
     assert card._theme_palette["accent"] in card.title_label.styleSheet()
     assert card._theme_palette["icon_background"] in card.icon_button.styleSheet()
+
+
+def test_action_buttons_are_fluent_widgets(card) -> None:
+    """「更换」「移除」必须是 Fluent 按钮 —— ``gui_qt`` 里 ``QPushButton`` 是
+    ``PushButton`` 的别名，搬模块时导成 PyQt 原生按钮会矮 6px、画风也不一致。"""
+    from qfluentwidgets import PushButton
+
+    assert isinstance(card.replace_button, PushButton)
+    assert isinstance(card.remove_button, PushButton)

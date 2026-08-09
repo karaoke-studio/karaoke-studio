@@ -17,12 +17,20 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import BodyLabel, FluentIcon as FIF, StrongBodyLabel, ToolButton
+
+# ``PushButton as QPushButton`` 沿用 ``gui_qt`` 的别名 —— 卡片上的「更换」
+# 「移除」是 Fluent 按钮，换成 PyQt 原生的会和整页控件不是一套外观。
+from qfluentwidgets import (
+    BodyLabel,
+    FluentIcon as FIF,
+    PushButton as QPushButton,
+    StrongBodyLabel,
+    ToolButton,
+)
 
 from krok_helper.ui_kit import CardWidget, build_app_ui_font
 

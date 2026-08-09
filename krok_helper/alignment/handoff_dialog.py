@@ -5,8 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QCheckBox, QDialog, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, PrimaryPushButton, TitleLabel
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QWidget
+
+# 勾选框与「取消」必须用 qfluentwidgets 的实现 —— ``gui_qt`` 里这两个名字是
+# ``CheckBox as QCheckBox`` / ``PushButton as QPushButton`` 的别名。换成
+# PyQt 原生控件会和同一行的 ``PrimaryPushButton``（Fluent）高度对不齐，
+# 「取消」看着比「确认」矮一截。
+from qfluentwidgets import (
+    BodyLabel,
+    CheckBox as QCheckBox,
+    PrimaryPushButton,
+    PushButton as QPushButton,
+    TitleLabel,
+)
 
 __all__ = ["AlignmentHandoffDialog"]
 
