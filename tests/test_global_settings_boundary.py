@@ -1,10 +1,11 @@
-"""设置对话框与宿主之间的边界。
+"""设置对话框与外壳之间的边界。
 
-和三个工作流页面同样的做法：清单写死，只许变短。
+这一块**已经是独立对象**（`SettingsDialogs`，不是 QWidget —— 它不常驻界面，
+只按需搭对话框）。能碰到的外部东西只有构造时注入的 ``_host``。
 
-这一份比页面那三份长，因为设置对话框天然要横跨各域——它读写 ffmpeg 目录、
-对齐导出命名、更新器偏好。真正做对象化时，这里多半不是"搬走"，而是让各页
-自己提供"设置片段"，由对话框拼装。
+``SettingsHost`` 里那组「波形对齐页的设置片段」是**明摆着的欠账**：对话框现在
+直接读写对齐页的状态。等对齐页也对象化，那一组应当收敛成"向对齐页要一段设置
+界面"。这里把这笔账单独断言出来，免得它悄悄长大。
 """
 
 from __future__ import annotations
@@ -12,34 +13,75 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import pytest
+from PyQt6.QtWidgets import QApplication, QWidget
+
+from krok_helper.global_settings.page import SettingsDialogs, SettingsHost
+from krok_helper.settings import AppSettings
+
 PAGE = pathlib.Path(__file__).resolve().parents[1] / "krok_helper" / "global_settings" / "page.py"
 
-#: 宿主服务：设置的读写生命周期留在外壳，对话框调它们落盘 / 刷新界面。
-HOST_SERVICES = {
-    "settings",
-    "set_ffmpeg_dir",
-    "_sync_ffmpeg_labels",
-    "_sync_lyrics_timing_host_paths",
-    "_install_single_click_combo_behavior",
-    "_start_workbench_update_check",
-}
-
-#: 波形对齐页的设置片段 —— 对话框直接读写了对齐页的状态与接缝。
-#: 对象化时这一组应当换成"向对齐页要一段设置界面"，而不是隔空改它的属性。
+#: 对齐页的设置片段 —— 对齐页对象化后这一组应当消失。
 ALIGNMENT_REACH_THROUGH = {
+    "align_video_name_template_value",
+    "align_audio_name_template_value",
     "align_output_custom_dir_text",
     "align_output_dir_mode_value",
     "align_video_zone",
     "set_alignment_output_dir_settings",
-    "_collect_alignment_settings",
-    "_update_alignment_preferences_from_ui",
-    "_validate_alignment_name_template",
+    "collect_alignment_settings",
+    "update_alignment_preferences_from_ui",
+    "validate_alignment_name_template",
 }
 
 
-def _foreign_members() -> set[str]:
+class _Host(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.settings = AppSettings()
+        self.ffmpeg_dir_text = ""
+        self.output_name_mode_value = "fixed"
+        self.on_name_template_value = "{video_name}_on"
+        self.off_name_template_value = "{video_name}_off"
+        self.align_video_name_template_value = "{video_name}_aligned"
+        self.align_audio_name_template_value = "{audio_name}_aligned"
+        self.align_output_custom_dir_text = ""
+        self.align_output_dir_mode_value = "source_video"
+        self.align_video_zone = None
+
+    def set_ffmpeg_dir(self, path) -> None:
+        self.ffmpeg_dir_text = str(path) if path is not None else ""
+
+    def sync_ffmpeg_labels(self) -> None: ...
+
+    def sync_lyrics_timing_host_paths(self) -> None: ...
+
+    def install_single_click_combo_behavior(self, combo) -> None: ...
+
+    def start_workbench_update_check(self, *, manual: bool) -> None: ...
+
+    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None: ...
+
+    def collect_alignment_settings(self) -> None: ...
+
+    def update_alignment_preferences_from_ui(self) -> None: ...
+
+    def validate_alignment_name_template(self, template, label, **_kwargs):
+        return template
+
+
+@pytest.fixture
+def host():
+    QApplication.instance() or QApplication([])
+    widget = _Host()
+    yield widget
+    widget.close()
+    widget.deleteLater()
+
+
+def test_the_dialogs_reach_outside_only_through_the_host() -> None:
     tree = ast.parse(PAGE.read_text(encoding="utf-8"))
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "GlobalSettingsMixin")
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SettingsDialogs")
     own = {n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
     assigned: set[str] = set()
@@ -47,25 +89,51 @@ def _foreign_members() -> set[str]:
     for node in ast.walk(cls):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
             (assigned if isinstance(node.ctx, ast.Store) else read).add(node.attr)
-    return read - own - assigned
+
+    assert not (read - own - assigned), "对话框绕过 _host 摸了外部成员"
 
 
-def test_the_dialog_only_reaches_for_the_declared_host_surface() -> None:
-    unexpected = _foreign_members() - HOST_SERVICES - ALIGNMENT_REACH_THROUGH
+def test_a_minimal_host_satisfies_the_contract(host) -> None:
+    assert isinstance(host, SettingsHost)
 
-    assert not unexpected, (
-        "设置对话框多摸了宿主成员：" + "、".join(sorted(unexpected)) + "。"
-        "先判断它该跟着搬、还是该走显式接口，再决定要不要加进清单。"
+
+def test_the_dialogs_build_without_the_main_window(host, monkeypatch) -> None:
+    """对象化换来的能力：不用造主窗口就能开设置对话框。"""
+    from krok_helper.global_settings import page as settings_page
+    from krok_helper.updater.settings import UpdaterSettings
+
+    monkeypatch.setattr(settings_page, "ensure_updater_settings", lambda _s: UpdaterSettings())
+    built: list = []
+    monkeypatch.setattr(
+        settings_page.ModelessDialog,
+        "exec",
+        lambda dialog: (built.append(dialog), 0)[1],
+    )
+
+    dialogs = SettingsDialogs(host=host, parent=host)
+    dialogs.open_page_settings("align")
+    dialogs.open_global_settings()
+
+    assert len(built) == 2
+    assert "波形对齐设置" in built[0].windowTitle()
+    assert "全局设置" in built[1].windowTitle()
+
+
+def test_the_alignment_reach_through_has_not_grown() -> None:
+    """对齐页那笔欠账只该变小。多一条就说明又隔空改了对齐页的东西。"""
+    import re
+
+    source = PAGE.read_text(encoding="utf-8")
+    # 取 self._host.<名字> 里的第一段标识符（后面还可能跟 .path 之类）。
+    touched = set(re.findall(r"self\._host\.(\w+)", source))
+    alignment_touched = {name for name in touched if "align" in name}
+
+    assert alignment_touched <= ALIGNMENT_REACH_THROUGH, (
+        "对齐页的设置片段又长出了新的一条：" + "、".join(sorted(alignment_touched - ALIGNMENT_REACH_THROUGH))
     )
 
 
-def test_the_declared_surface_has_not_gone_stale() -> None:
-    stale = (HOST_SERVICES | ALIGNMENT_REACH_THROUGH) - _foreign_members()
-
-    assert not stale, "清单里这些已经不再被引用，可以删了：" + "、".join(sorted(stale))
-
-
-def test_the_dialog_does_not_import_the_shell() -> None:
+def test_the_dialogs_do_not_import_the_shell() -> None:
     tree = ast.parse(PAGE.read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):

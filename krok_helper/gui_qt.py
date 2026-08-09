@@ -69,7 +69,7 @@ from krok_helper.qfluent_compat import (
 )
 from krok_helper.alignment import AlignmentHandoffDialog
 from krok_helper.alignment.page import AlignmentPageMixin
-from krok_helper.global_settings.page import GlobalSettingsMixin
+from krok_helper.global_settings.page import SettingsDialogs
 from krok_helper.hires.page import DropZoneCard, HiResPage
 from krok_helper.lyrics_search.page import LyricsSearchPage
 from krok_helper.config import (
@@ -273,11 +273,7 @@ class PageTransitionOverlay(QWidget):
         painter.drawPixmap(int(self._offset), 0, self._new_pixmap)
 
 
-class KrokHelperQtApp(
-    AlignmentPageMixin,
-    GlobalSettingsMixin,
-    QMainWindow,
-):
+class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
     """工作台主窗口（外壳）。
 
     三个工作流页面与设置对话框分别住在
@@ -322,6 +318,7 @@ class KrokHelperQtApp(
         self._startup_geometry_applied = False
         self._page_transition_overlay: PageTransitionOverlay | None = None
         self._page_switch_anim: QPropertyAnimation | None = None
+        self._settings_dialogs = SettingsDialogs(host=self, parent=self)
 
         # 主题：``apply_settings_theme`` 已在 ``cli.run_gui`` 启动期把
         # qfluentwidgets Theme + QApplication palette settle 到目标模式
@@ -371,6 +368,28 @@ class KrokHelperQtApp(
         task.finished.connect(task.deleteLater)
         return task
 
+    # ── SettingsHost 实现 ────────────────────────────────────────
+
+    def sync_ffmpeg_labels(self) -> None:
+        self._sync_ffmpeg_labels()
+
+    def sync_lyrics_timing_host_paths(self) -> None:
+        self._sync_lyrics_timing_host_paths()
+
+    def start_workbench_update_check(self, *, manual: bool) -> None:
+        self._start_workbench_update_check(manual=manual)
+
+    def collect_alignment_settings(self) -> None:
+        self._collect_alignment_settings()
+
+    def update_alignment_preferences_from_ui(self) -> None:
+        self._update_alignment_preferences_from_ui()
+
+    def validate_alignment_name_template(self, template, label, *, allowed_fields, extensions):
+        return self._validate_alignment_name_template(
+            template, label, allowed_fields=allowed_fields, extensions=extensions
+        )
+
     # ── LyricsSearchHost 实现 ────────────────────────────────────
 
     def install_single_click_combo_behavior(self, combo) -> None:
@@ -391,8 +410,12 @@ class KrokHelperQtApp(
     def notify_handoff(self, title: str, content: str) -> None:
         self._notify_handoff(title, content)
 
+    def _open_settings_window(self, context: str) -> None:
+        # 对齐页还是 mixin，仍用这个私有名字；它对象化后改走 open_settings_window。
+        self._settings_dialogs.open_page_settings(context)
+
     def open_settings_window(self, context: str) -> None:
-        self._open_settings_window(context)
+        self._settings_dialogs.open_page_settings(context)
 
     # ── 工作流转交入口（WorkflowHost）：素材落在 Hi-Res 页 ──────────
 
@@ -583,7 +606,7 @@ class KrokHelperQtApp(
         self.global_settings_button.setToolTip("全局设置")
         self.global_settings_button.setFixedSize(48, 48)
         self.global_settings_button.setIconSize(QSize(20, 20))
-        self.global_settings_button.clicked.connect(self._open_global_settings_window)
+        self.global_settings_button.clicked.connect(self._settings_dialogs.open_global_settings)
         self._workflow_bar_layout.addWidget(self.global_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         workflow_bar_container = QWidget()

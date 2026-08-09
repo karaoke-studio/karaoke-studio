@@ -1,19 +1,18 @@
 """全局设置与波形对齐设置两个对话框。
 
-和三个工作流页面同款：整块从 ``KrokHelperQtApp`` 搬出来，以 mixin 混回同一个
-对象 —— 物理拆分，``self`` 语义不变、调用点不用改。
+**这已经是独立对象**（不是 QWidget —— 它不常驻界面，只是按需搭对话框），
+与外壳的往来全部经过构造时注入的 :class:`SettingsHost`。
 
 设置的**读写生命周期**（``_load_settings_into_ui`` / ``_save_all_settings`` /
 ``set_ffmpeg_dir`` 这些）仍留在外壳：它们要把各页的设置接缝串起来，是外壳的活。
-这里只装「设置对话框」本身。
-
-页面还依赖宿主的成员（清单由 ``tests/test_global_settings_boundary.py`` 钉住）。
+这里只负责「设置对话框」本身。
 """
 
 from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from PyQt6.QtCore import QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices, QIcon, QTextDocument
@@ -82,11 +81,59 @@ from krok_helper.updater.settings import UpdaterSettings
 from krok_helper.updater.sources import SOURCE_LABELS, normalize_order
 
 __all__ = [
-    "GlobalSettingsMixin",
+    "SettingsDialogs",
+    "SettingsHost",
     "add_setting_card_actions",
     "build_settings_tab_page",
     "relax_setting_card_height",
 ]
+
+
+@runtime_checkable
+class SettingsHost(Protocol):
+    """设置对话框需要外壳提供的能力。
+
+    分两组。前一组是普通的宿主服务；后一组是**波形对齐页的设置片段** ——
+    对话框目前直接读写对齐页的状态，等对齐页也对象化之后，这一组应当收敛成
+    "向对齐页要一段设置界面"，而不是隔空改它的属性。分组写在这里，是为了让
+    那笔欠账看得见。
+    """
+
+    # ── 普通宿主服务 ──
+    settings: object
+
+    def set_ffmpeg_dir(self, path: Path | None) -> None: ...
+
+    def sync_ffmpeg_labels(self) -> None: ...
+
+    def sync_lyrics_timing_host_paths(self) -> None: ...
+
+    def install_single_click_combo_behavior(self, combo: object) -> None: ...
+
+    def start_workbench_update_check(self, *, manual: bool) -> None: ...
+
+    #: 命名模板与输出模式 —— 设置的读写生命周期留在外壳，这里读它、写回它。
+    output_name_mode_value: str
+    on_name_template_value: str
+    off_name_template_value: str
+    ffmpeg_dir_text: str
+
+    # ── 波形对齐页的设置片段（待对齐页对象化后收敛）──
+    align_video_name_template_value: str
+    align_audio_name_template_value: str
+    align_output_custom_dir_text: str
+    align_output_dir_mode_value: str
+    align_video_zone: object
+
+    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None: ...
+
+    def collect_alignment_settings(self) -> None: ...
+
+    def update_alignment_preferences_from_ui(self) -> None: ...
+
+    def validate_alignment_name_template(
+        self, template: str, label: str, *, allowed_fields: set[str], extensions: tuple[str, ...]
+    ) -> str: ...
 
 
 def relax_setting_card_height(
@@ -168,11 +215,17 @@ def build_settings_tab_page(parent: QWidget, groups: list[SettingCardGroup]) -> 
     return page
 
 
-class GlobalSettingsMixin:
-    """全局设置 / 波形对齐设置对话框。混入 ``KrokHelperQtApp``，不单独实例化。"""
+class SettingsDialogs:
+    """按需搭建并弹出两个设置对话框。"""
 
-    def _open_settings_window(self, context: str) -> None:
-        dialog = ModelessDialog(self)
+    def __init__(self, *, host: SettingsHost, parent: QWidget | None = None) -> None:
+        self._host = host
+        #: 对话框的父窗口，只用于定位与继承图标 —— 和 ``host`` 分开传，
+        #: 这样 ``SettingsHost`` 不必顺带要求"你还得是个 QWidget"。
+        self._parent = parent
+
+    def open_page_settings(self, context: str) -> None:
+        dialog = ModelessDialog(self._parent)
         title = "波形对齐设置" if context == "align" else "Hi-Res 生成设置"
         dialog.setWindowTitle(f"{APP_TITLE} - {title}")
         dialog.resize(860, 540)
@@ -207,9 +260,9 @@ class GlobalSettingsMixin:
             naming_title = QLabel("对齐导出命名")
             naming_title.setObjectName("PanelTitle")
             video_template_edit = QLineEdit(dialog)
-            video_template_edit.setText(self.align_video_name_template_value)
+            video_template_edit.setText(self._host.align_video_name_template_value)
             audio_template_edit = QLineEdit(dialog)
-            audio_template_edit.setText(self.align_audio_name_template_value)
+            audio_template_edit.setText(self._host.align_audio_name_template_value)
             naming_help_1 = QLabel("默认: 对齐后视频 {video_name}_aligned.mp4；对齐后音频 {audio_name}_aligned.wav。")
             from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
             _wb_th(naming_help_1, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
@@ -239,20 +292,20 @@ class GlobalSettingsMixin:
             output_custom_radio = QRadioButton("保存在指定目录")
             output_mode_group.addButton(output_source_radio)
             output_mode_group.addButton(output_custom_radio)
-            if self.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM:
+            if self._host.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM:
                 output_custom_radio.setChecked(True)
             else:
                 output_source_radio.setChecked(True)
             output_dir_edit = QLineEdit(dialog)
             output_dir_edit.setReadOnly(True)
             output_dir_edit.setPlaceholderText("点击选择保存文件夹")
-            output_dir_edit.setText(self.align_output_custom_dir_text)
+            output_dir_edit.setText(self._host.align_output_custom_dir_text)
             output_dir_button = QPushButton("选择文件夹")
 
             def choose_align_output_dir() -> None:
                 init_dir = output_dir_edit.text().strip()
-                if not init_dir and self.align_video_zone.path is not None:
-                    init_dir = str(self.align_video_zone.path.parent)
+                if not init_dir and self._host.align_video_zone.path is not None:
+                    init_dir = str(self._host.align_video_zone.path.parent)
                 if not init_dir:
                     init_dir = str(Path.home())
                 path = QFileDialog.getExistingDirectory(dialog, "选择对齐导出保存目录", init_dir)
@@ -300,14 +353,14 @@ class GlobalSettingsMixin:
             template_radio = QRadioButton("自定义模板: 使用你自己的命名样式")
             mode_group.addButton(fixed_radio)
             mode_group.addButton(template_radio)
-            if self.output_name_mode_value == OUTPUT_NAME_MODE_TEMPLATE:
+            if self._host.output_name_mode_value == OUTPUT_NAME_MODE_TEMPLATE:
                 template_radio.setChecked(True)
             else:
                 fixed_radio.setChecked(True)
             on_template_edit = QLineEdit(dialog)
-            on_template_edit.setText(self.on_name_template_value)
+            on_template_edit.setText(self._host.on_name_template_value)
             off_template_edit = QLineEdit(dialog)
-            off_template_edit.setText(self.off_name_template_value)
+            off_template_edit.setText(self._host.off_name_template_value)
 
             def sync_template_enabled() -> None:
                 enabled = template_radio.isChecked()
@@ -355,13 +408,13 @@ class GlobalSettingsMixin:
 
         def save_settings_from_dialog() -> None:
             try:
-                mode = self.output_name_mode_value
-                on_template = self.on_name_template_value
-                off_template = self.off_name_template_value
-                align_video_template = self.align_video_name_template_value
-                align_audio_template = self.align_audio_name_template_value
-                align_output_dir_mode = self.align_output_dir_mode_value
-                align_output_custom_dir = self.align_output_custom_dir_text
+                mode = self._host.output_name_mode_value
+                on_template = self._host.on_name_template_value
+                off_template = self._host.off_name_template_value
+                align_video_template = self._host.align_video_name_template_value
+                align_audio_template = self._host.align_audio_name_template_value
+                align_output_dir_mode = self._host.align_output_dir_mode_value
+                align_output_custom_dir = self._host.align_output_custom_dir_text
                 if context == "align":
                     align_video_template = video_template_edit.text().strip() or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
                     align_audio_template = audio_template_edit.text().strip() or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
@@ -387,7 +440,7 @@ class GlobalSettingsMixin:
                     align_audio_template=align_audio_template,
                     align_output_dir_mode=align_output_dir_mode,
                     align_output_custom_dir=align_output_custom_dir,
-                    ffmpeg_dir_text=self.ffmpeg_dir_text,
+                    ffmpeg_dir_text=self._host.ffmpeg_dir_text,
                 )
             except ProcessingError as exc:
                 show_fluent_error(dialog, str(exc))
@@ -428,8 +481,8 @@ class GlobalSettingsMixin:
             return
 
         try:
-            report = import_legacy_sug_settings(src, self.settings)
-            save_app_settings(self.settings)
+            report = import_legacy_sug_settings(src, self._host.settings)
+            save_app_settings(self._host.settings)
         except Exception as exc:
             show_fluent_info(parent, f"导入失败：\n{exc}")
             return
@@ -457,9 +510,9 @@ class GlobalSettingsMixin:
 
         show_fluent_info(parent, "\n".join(lines))
 
-    def _open_global_settings_window(self) -> None:
-        updater_settings = ensure_updater_settings(self.settings)
-        dialog = ModelessDialog(self)
+    def open_global_settings(self) -> None:
+        updater_settings = ensure_updater_settings(self._host.settings)
+        dialog = ModelessDialog(self._parent)
         dialog.setWindowTitle(f"{APP_TITLE} - 全局设置")
         dialog.resize(880, 640)
         dialog.setMinimumSize(820, 560)
@@ -512,13 +565,13 @@ class GlobalSettingsMixin:
         theme_combo = StyledComboBox(theme_card)
         _theme_options = [("跟随系统", _T_AUTO), ("浅色", _T_LIGHT), ("深色", _T_DARK)]
         theme_combo.addItems([label for label, _v in _theme_options])
-        _initial_theme = getattr(self.settings, "ui_theme", _T_AUTO)
+        _initial_theme = getattr(self._host.settings, "ui_theme", _T_AUTO)
         for _i, (_lbl, _val) in enumerate(_theme_options):
             if _val == _initial_theme:
                 theme_combo.setCurrentIndex(_i)
                 break
         theme_combo.setMinimumWidth(150)
-        self._install_single_click_combo_behavior(theme_combo)
+        self._host.install_single_click_combo_behavior(theme_combo)
         add_setting_card_actions(theme_card, theme_combo)
         theme_group.addSettingCard(theme_card)
 
@@ -537,10 +590,10 @@ class GlobalSettingsMixin:
 
         def _apply_theme_combo_preview() -> None:
             value = _pending_theme_value[0]
-            if self.settings.ui_theme != value:
-                self.settings.ui_theme = value
+            if self._host.settings.ui_theme != value:
+                self._host.settings.ui_theme = value
                 try:
-                    save_app_settings(self.settings)
+                    save_app_settings(self._host.settings)
                 except Exception:
                     import logging
                     logging.getLogger(__name__).warning("保存界面主题设置失败", exc_info=True)
@@ -569,7 +622,7 @@ class GlobalSettingsMixin:
             tools_group,
         )
         ffmpeg_display = QLineEdit(ffmpeg_card)
-        ffmpeg_display.setText(self.ffmpeg_dir_text)
+        ffmpeg_display.setText(self._host.ffmpeg_dir_text)
         ffmpeg_display.setPlaceholderText(FFMPEG_DIR_PLACEHOLDER)
         ffmpeg_display.setMinimumWidth(260)
         choose_button = QPushButton("选择目录", ffmpeg_card)
@@ -608,7 +661,7 @@ class GlobalSettingsMixin:
                 proxy_combo.setCurrentIndex(index)
                 break
         proxy_combo.setMinimumWidth(170)
-        self._install_single_click_combo_behavior(proxy_combo)
+        self._host.install_single_click_combo_behavior(proxy_combo)
         add_setting_card_actions(proxy_mode_card, proxy_combo)
         proxy_group.addSettingCard(proxy_mode_card)
 
@@ -775,7 +828,7 @@ class GlobalSettingsMixin:
             except ValueError:
                 update_status_label.setText("启动检查间隔必须是 0 或正整数。")
                 return None
-            updated = UpdaterSettings.load(self.settings)
+            updated = UpdaterSettings.load(self._host.settings)
             updated.enabled = updater_enabled_check.isChecked()
             updated.check_on_startup = startup_check.isChecked()
             updated.min_check_interval_hours = interval
@@ -788,7 +841,7 @@ class GlobalSettingsMixin:
             settings_for_check = current_update_settings_from_ui()
             if settings_for_check is None:
                 return
-            self._start_workbench_update_check(
+            self._host.start_workbench_update_check(
                 manual=True,
                 updater_settings=settings_for_check,
                 status_label=update_status_label,
@@ -902,22 +955,22 @@ class GlobalSettingsMixin:
                 show_fluent_info(dialog, str(exc))
                 return
 
-            self.set_ffmpeg_dir(ffmpeg_dir)
-            self.settings.ffmpeg_dir = self.ffmpeg_dir_text
+            self._host.set_ffmpeg_dir(ffmpeg_dir)
+            self._host.settings.ffmpeg_dir = self._host.ffmpeg_dir_text
             # 写入新选择的界面主题。``UpdaterSettings.save`` 内部
-            # 会调 ``save_app_settings(self.settings)``，连同 ``ui_theme``
+            # 会调 ``save_app_settings(self._host.settings)``，连同 ``ui_theme``
             # 一起持久化。这里只需更新 in-memory 字段即可。
             _selected_idx = theme_combo.currentIndex()
             if 0 <= _selected_idx < len(_theme_options):
-                self.settings.ui_theme = _theme_options[_selected_idx][1]
-            updated = UpdaterSettings.load(self.settings)
+                self._host.settings.ui_theme = _theme_options[_selected_idx][1]
+            updated = UpdaterSettings.load(self._host.settings)
             updated.enabled = updater_enabled_check.isChecked()
             updated.check_on_startup = startup_check.isChecked()
             updated.min_check_interval_hours = interval
             updated.proxy_mode = current_proxy_mode()
             updated.proxy_manual_url = proxy_manual_edit.text().strip()
             updated.source_order = normalize_order(source_order)
-            updated.save(self.settings)
+            updated.save(self._host.settings)
             update_status_label.setText("设置已保存到本地。")
 
         save_button.clicked.connect(save_global_settings)
@@ -955,35 +1008,35 @@ class GlobalSettingsMixin:
             on_template = validate_output_name_template(on_template, "原唱")
             off_template = validate_output_name_template(off_template, "伴奏")
 
-        align_video_template = self._validate_alignment_name_template(
+        align_video_template = self._host.validate_alignment_name_template(
             align_video_template,
             "对齐后视频",
             allowed_fields={"video_name"},
             extensions=(".mp4", ".mkv"),
         )
-        align_audio_template = self._validate_alignment_name_template(
+        align_audio_template = self._host.validate_alignment_name_template(
             align_audio_template,
             "对齐后音频",
             allowed_fields={"audio_name", "video_name"},
             extensions=(".wav",),
         )
 
-        self.output_name_mode_value = output_name_mode
-        self.on_name_template_value = on_template
-        self.off_name_template_value = off_template
-        self.align_video_name_template_value = align_video_template
-        self.align_audio_name_template_value = align_audio_template
-        self.set_alignment_output_dir_settings(
+        self._host.output_name_mode_value = output_name_mode
+        self._host.on_name_template_value = on_template
+        self._host.off_name_template_value = off_template
+        self._host.align_video_name_template_value = align_video_template
+        self._host.align_audio_name_template_value = align_audio_template
+        self._host.set_alignment_output_dir_settings(
             align_output_dir_mode,
             str(align_output_dir) if align_output_dir is not None else "",
         )
-        self.ffmpeg_dir_text = str(ffmpeg_dir) if ffmpeg_dir else ""
-        self._sync_ffmpeg_labels()
-        self.settings.output_name_mode = self.output_name_mode_value
-        self.settings.on_name_template = self.on_name_template_value
-        self.settings.off_name_template = self.off_name_template_value
-        self._collect_alignment_settings()
-        self.settings.ffmpeg_dir = self.ffmpeg_dir_text
-        self._sync_lyrics_timing_host_paths()
-        self._update_alignment_preferences_from_ui()
-        return save_app_settings(self.settings)
+        self._host.ffmpeg_dir_text = str(ffmpeg_dir) if ffmpeg_dir else ""
+        self._host.sync_ffmpeg_labels()
+        self._host.settings.output_name_mode = self._host.output_name_mode_value
+        self._host.settings.on_name_template = self._host.on_name_template_value
+        self._host.settings.off_name_template = self._host.off_name_template_value
+        self._host.collect_alignment_settings()
+        self._host.settings.ffmpeg_dir = self._host.ffmpeg_dir_text
+        self._host.sync_lyrics_timing_host_paths()
+        self._host.update_alignment_preferences_from_ui()
+        return save_app_settings(self._host.settings)

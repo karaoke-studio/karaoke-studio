@@ -10,22 +10,49 @@ from krok_helper.updater.settings import UpdaterSettings
 
 
 class _SettingsHost(QWidget):
+    """满足 ``SettingsHost`` 的最小替身 —— 对话框只能碰到这些。"""
+
     def __init__(self) -> None:
         super().__init__()
         self.settings = AppSettings()
         self.ffmpeg_dir_text = ""
+        self.output_name_mode_value = "fixed"
+        self.on_name_template_value = "{video_name}_on"
+        self.off_name_template_value = "{video_name}_off"
+        self.align_video_name_template_value = "{video_name}_aligned"
+        self.align_audio_name_template_value = "{audio_name}_aligned"
+        self.align_output_custom_dir_text = ""
+        self.align_output_dir_mode_value = "source_video"
+        self.align_video_zone = None
 
-    def _install_single_click_combo_behavior(self, _combo: QWidget) -> None:
+    def install_single_click_combo_behavior(self, _combo: QWidget) -> None:
         pass
 
     def set_ffmpeg_dir(self, path) -> None:
-        gui_qt.KrokHelperQtApp.set_ffmpeg_dir(self, path)
+        # 与外壳的实现同义：None 表示"走系统 PATH"，记成空串。
+        self.ffmpeg_dir_text = str(path) if path is not None else ""
 
-    def _sync_ffmpeg_labels(self) -> None:
+    def sync_ffmpeg_labels(self) -> None:
         pass
 
-    def _sync_lyrics_timing_host_paths(self) -> None:
+    def sync_lyrics_timing_host_paths(self) -> None:
         pass
+
+    def start_workbench_update_check(self, *, manual: bool) -> None:
+        pass
+
+    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None:
+        self.align_output_dir_mode_value = mode
+        self.align_output_custom_dir_text = custom_dir
+
+    def collect_alignment_settings(self) -> None:
+        pass
+
+    def update_alignment_preferences_from_ui(self) -> None:
+        pass
+
+    def validate_alignment_name_template(self, template, label, **_kwargs):
+        return template
 
 
 def _open_global_settings_dialog(monkeypatch):
@@ -47,7 +74,7 @@ def _open_global_settings_dialog(monkeypatch):
     monkeypatch.setattr(settings_page.ModelessDialog, "exec", capture_dialog)
 
     host = _SettingsHost()
-    gui_qt.KrokHelperQtApp._open_global_settings_window(host)
+    settings_page.SettingsDialogs(host=host, parent=host).open_global_settings()
 
     return app, captured["dialog"], host
 
