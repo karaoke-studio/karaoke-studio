@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
+import ctypes
+
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -22,8 +24,22 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+# ``QComboBox`` 这个名字在本仓库一律指 qfluentwidgets 的 ``ComboBox``；
+# 换成 PyQt 原生的会让下拉框退回系统外观，和整页对不上。
+from qfluentwidgets import ComboBox as QComboBox
+from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
+from qfluentwidgets.components.widgets.menu import MenuAnimationType
+
+#: Win11 圆角策略：下拉菜单自绘边框，交给 DWM 会多一层描边。
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_DONOTROUND = 1
+
 __all__ = [
     "CardWidget",
+    "StyledComboBox",
+    "WhiteComboBoxMenu",
+    "build_lyrics_ui_font",
+    "combo_box_view_qss",
     "ControlBar",
     "DEFAULT_UI_FONT_FAMILIES",
     "ElidedLabel",
@@ -140,3 +156,99 @@ class ControlBar(CardWidget):
         for button in buttons:
             if hasattr(button, "setMinimumHeight"):
                 button.setMinimumHeight(34)
+
+
+def combo_box_view_qss() -> str:
+    from krok_helper.theme_workbench import palette
+
+    p = palette()
+    selected_bg = "#3A2A2C" if p.is_dark else "#FFF1F2"
+    selected_text = p.text_primary if p.is_dark else "#111827"
+    hover_bg = p.input_hover_bg if p.is_dark else "#F8FAFC"
+    return f"""
+    QAbstractItemView {{
+        background-color: transparent;
+        border: none;
+        border-radius: 0px;
+        padding: 4px;
+        outline: none;
+        color: {p.text_primary};
+        selection-background-color: {selected_bg};
+        selection-color: {selected_text};
+    }}
+
+    QAbstractItemView::item {{
+        height: 32px;
+        padding: 0 12px;
+        border-radius: 6px;
+        color: {p.text_primary};
+    }}
+
+    QAbstractItemView::item:hover {{
+        background-color: {hover_bg};
+    }}
+
+    QAbstractItemView::item:selected {{
+        background-color: {selected_bg};
+        color: {selected_text};
+    }}
+    """
+
+
+def build_lyrics_ui_font(*, point_size: float = 10.5, bold: bool = False) -> QFont:
+    return build_app_ui_font(point_size=point_size, bold=bold)
+
+
+class WhiteComboBoxMenu(ComboBoxMenu):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.NoDropShadowWindowHint)
+        # 保留 qfluentwidgets 默认的透明顶层窗口，不要关闭 WA_TranslucentBackground
+        self.view.setStyleSheet(combo_box_view_qss())
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
+        self.hBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.hBoxLayout.setSpacing(0)
+        self.view.setViewportMargins(0, 0, 0, 0)
+        self.setShadowEffect(blurRadius=0, offset=(0, 0), color=QColor(0, 0, 0, 0))
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        try:
+            preference = ctypes.c_int(DWMWCP_DONOTROUND)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                int(self.winId()),
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(preference),
+                ctypes.sizeof(preference),
+            )
+        except Exception:
+            pass
+
+    def exec(self, pos, ani=True, aniType=MenuAnimationType.DROP_DOWN):
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.adjustSize(pos, aniType)
+
+        overflow = self.view.verticalScrollBar().maximum()
+        if overflow > 0:
+            self.view.setFixedHeight(self.view.height() + overflow + 8)
+
+        self.adjustSize()
+        return super().exec(pos, ani, aniType)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from krok_helper.theme_workbench import palette
+
+        p = palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(p.input_border), 1))
+        painter.setBrush(QColor(p.input_bg))
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
+
+
+class StyledComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+    def _createComboMenu(self):
+        return WhiteComboBoxMenu(self)
