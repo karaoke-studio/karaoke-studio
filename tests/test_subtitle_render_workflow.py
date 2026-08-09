@@ -492,7 +492,7 @@ def test_alignment_handoff_maps_assets_without_switching_modules(
         def selections(self):
             return True, True
 
-    monkeypatch.setattr("krok_helper.gui_qt.AlignmentHandoffDialog", AcceptedDialog)
+    monkeypatch.setattr("krok_helper.alignment.page.AlignmentHandoffDialog", AcceptedDialog)
     app = SimpleNamespace(
         subtitle_render_page=SimpleNamespace(
             load_video=lambda path: calls.append(("subtitle", path))
@@ -562,7 +562,7 @@ def test_alignment_handoff_respects_unchecked_options_and_cancel(
         def selections(self):
             return self.selected
 
-    monkeypatch.setattr("krok_helper.gui_qt.AlignmentHandoffDialog", ControlledDialog)
+    monkeypatch.setattr("krok_helper.alignment.page.AlignmentHandoffDialog", ControlledDialog)
     app = SimpleNamespace(
         subtitle_render_page=SimpleNamespace(
             load_video=lambda path: calls.append(("subtitle", path))
