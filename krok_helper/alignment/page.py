@@ -190,6 +190,10 @@ class AlignmentPageMixin:
         将来要跟着页面一起搬进 ``krok_helper.alignment``，届时这里改成调
         页面对象的同名入口即可，``__init__`` 不必再跟着动。
         """
+        #: 对齐预览的轮询定时器 —— 只服务本页，以前建在外壳 __init__ 里。
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setInterval(300)
+        self.preview_timer.timeout.connect(self._poll_alignment_preview)
         self.align_analysis_task: BackgroundTask | None = None
         self.align_auto_task: BackgroundTask | None = None
         self.align_export_task: BackgroundTask | None = None
@@ -213,6 +217,10 @@ class AlignmentPageMixin:
             if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
             else ENCODE_MODE_SOFTWARE
         )
+        #: 正在把设置灌进控件 —— 期间控件变化不该回写，否则会把偏好覆盖成中间态。
+        #: 以前读的是外壳的 ``_loading_settings_into_ui``，那是整机加载的旗，
+        #: 本页只关心自己恢复设置的那一小段。
+        self._restoring_alignment_settings = False
         self.align_control_panel: QFrame | None = None
         self.align_open_output_button: QPushButton | None = None
         self.align_clear_button: QPushButton | None = None
@@ -1106,29 +1114,12 @@ class AlignmentPageMixin:
             self._update_head_mode_buttons("black")
 
     def _set_alignment_nudge_step(self, seconds: float) -> None:
+        """记下微调步长。
+
+        原本后面还有一段给「小步/大步」两个按钮上色的代码，但那两个控件是早期
+        布局的遗留、全仓从未创建，被 ``hasattr`` 守卫挡着恒不执行，已一并删除。
+        """
         self._align_nudge_step = seconds
-        if not hasattr(self, "align_step_small_button") or not hasattr(self, "align_step_large_button"):
-            return
-        from krok_helper.theme_workbench import palette as _wb_pal
-        p = _wb_pal()
-        button_map = {
-            self.align_step_small_button: seconds == 0.01,
-            self.align_step_large_button: seconds == 0.1,
-        }
-        for button, checked in button_map.items():
-            button.setChecked(checked)
-            button.setFont(build_app_ui_font(point_size=10.5, bold=checked))
-            if checked:
-                if p.is_dark:
-                    qss = "background: #4A1A22; border: 1px solid #FF5A6F; color: #FF9CAB;"
-                else:
-                    qss = "background: #fff1f2; border: 1px solid #ff4d5e; color: #ff2947;"
-            else:
-                qss = (
-                    f"background: {p.input_bg}; border: 1px solid {p.input_border};"
-                    f" color: {p.text_primary};"
-                )
-            button.setStyleSheet(qss)
 
     def _trigger_alignment_export(self, target: str) -> None:
         if target == ALIGN_TARGET_VIDEO:
@@ -1178,14 +1169,6 @@ class AlignmentPageMixin:
             self.align_video_options_widget.setVisible(has_waveforms and is_subtitle_target)
         if hasattr(self, "align_audio_offset_widget"):
             self.align_audio_offset_widget.setVisible(has_waveforms and not is_subtitle_target)
-        if hasattr(self, "subtitle_accent_bar"):
-            self.subtitle_accent_bar.setVisible(is_subtitle_target)
-        if hasattr(self, "original_accent_bar"):
-            self.original_accent_bar.setVisible(not is_subtitle_target)
-        if hasattr(self, "subtitle_adjust_badge"):
-            self.subtitle_adjust_badge.setEnabled(False)
-        if hasattr(self, "original_adjust_badge"):
-            self.original_adjust_badge.setEnabled(False)
         if not is_subtitle_target and hasattr(self, "align_lead_trim_radio"):
             self.align_lead_trim_radio.setChecked(False)
             if hasattr(self, "align_head_trim_row_widget"):
@@ -1353,7 +1336,7 @@ class AlignmentPageMixin:
             self._apply_alignment_mode_styles()
 
     def _persist_alignment_preferences(self, *_args) -> None:
-        if self._loading_settings_into_ui:
+        if self._restoring_alignment_settings:
             return
         self._update_alignment_preferences_from_ui()
         save_app_settings(self.settings)
@@ -1380,30 +1363,39 @@ class AlignmentPageMixin:
         )
 
     def _load_alignment_settings(self) -> None:
-        """settings -> 对齐页（读方向）。与 :meth:`_collect_alignment_settings` 成对。"""
-        self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
-        self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
-        self.align_output_dir_mode_value = (
-            self.settings.align_output_dir_mode
-            if self.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
-            else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
-        )
-        self.align_output_custom_dir_text = self.settings.align_output_custom_dir.strip()
-        if self.settings.align_target == ALIGN_TARGET_AUDIO:
-            self.align_target_audio_radio.setChecked(True)
-        else:
-            self.align_target_video_radio.setChecked(True)
-        self._align_encode_selection = (
-            self.settings.align_encode_mode
-            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
-            else ENCODE_MODE_SOFTWARE
-        )
-        if self._align_encode_selection == ENCODE_MODE_HARDWARE:
-            self.align_encode_hardware_radio.setChecked(True)
-        else:
-            self.align_encode_software_radio.setChecked(True)
-        self.align_force_1080p60_check.setChecked(bool(self.settings.align_force_1080p60))
-        self.align_use_video_audio_check.setChecked(bool(self.settings.align_export_use_video_audio))
+        """settings -> 对齐页（读方向）。与 :meth:`_collect_alignment_settings` 成对。
+
+        灌值期间举旗：控件被 setChecked 会发信号，那时回写会把用户设置覆盖成
+        中间态。以前读的是外壳的 ``_loading_settings_into_ui``（整机加载旗），
+        本页只关心自己这一小段。
+        """
+        self._restoring_alignment_settings = True
+        try:
+            self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
+            self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+            self.align_output_dir_mode_value = (
+                self.settings.align_output_dir_mode
+                if self.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
+                else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+            )
+            self.align_output_custom_dir_text = self.settings.align_output_custom_dir.strip()
+            if self.settings.align_target == ALIGN_TARGET_AUDIO:
+                self.align_target_audio_radio.setChecked(True)
+            else:
+                self.align_target_video_radio.setChecked(True)
+            self._align_encode_selection = (
+                self.settings.align_encode_mode
+                if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+                else ENCODE_MODE_SOFTWARE
+            )
+            if self._align_encode_selection == ENCODE_MODE_HARDWARE:
+                self.align_encode_hardware_radio.setChecked(True)
+            else:
+                self.align_encode_software_radio.setChecked(True)
+            self.align_force_1080p60_check.setChecked(bool(self.settings.align_force_1080p60))
+            self.align_use_video_audio_check.setChecked(bool(self.settings.align_export_use_video_audio))
+        finally:
+            self._restoring_alignment_settings = False
 
     def _collect_alignment_settings(self) -> None:
         """对齐页 -> settings（写方向，命名模板部分）。
@@ -1721,10 +1713,6 @@ class AlignmentPageMixin:
     def _refresh_align_target_ui(self) -> None:
         is_video_target = self._is_align_video_target()
         has_waveforms = self.waveform_view.video_waveform is not None and self.waveform_view.audio_waveform is not None
-        if hasattr(self, "align_target_video_card"):
-            self.align_target_video_card.sync_ui()
-        if hasattr(self, "align_target_audio_card"):
-            self.align_target_audio_card.sync_ui()
         self._handle_waveform_offset_changed(self.waveform_view.offset_seconds)
         self.align_drag_offset_radio.setText("移动字幕视频" if is_video_target else "移动原唱音源")
         self.align_export_button.setText("导出对齐视频" if is_video_target else "导出对齐音频")

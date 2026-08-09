@@ -27,23 +27,12 @@ HOST_SERVICES = {
     "_open_settings_window",  # 打开全局设置的对齐分页
     "active_module",  # 快捷键是否该响应
     "_focused_widget_is_text_input",  # 同上：焦点在输入框里就别抢按键
-    "_loading_settings_into_ui",  # 灌设置期间抑制回写
-    "preview_timer",  # 只服务本页，改对象时应当跟着搬
     "hide",  # QWidget 自己的
 }
 
-#: 只在 ``hasattr`` 保护下出现、全仓从未赋值的旧控件名 —— 早期版本的遗留，
-#: 现在恒为假分支。留着不动是因为删除等于改行为路径；单独清理更安全。
-DEAD_WIDGET_NAMES = {
-    "align_step_small_button",
-    "align_step_large_button",
-    "align_target_video_card",
-    "align_target_audio_card",
-    "subtitle_accent_bar",
-    "original_accent_bar",
-    "subtitle_adjust_badge",
-    "original_adjust_badge",
-}
+#: 早期布局遗留的旧控件名曾经列在这里（只在 ``hasattr`` 保护下出现、全仓从未
+#: 赋值），现已连同它们守着的恒假分支一并删除，所以这份清单是空的。
+DEAD_WIDGET_NAMES: set[str] = set()
 
 
 def _foreign_members() -> set[str]:

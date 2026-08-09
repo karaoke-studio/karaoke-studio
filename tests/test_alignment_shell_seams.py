@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from PyQt6.QtCore import QObject
+
 import pytest
 
 from krok_helper.gui_qt import KrokHelperQtApp
@@ -22,6 +24,17 @@ from krok_helper.settings import (
     ENCODE_MODE_HARDWARE,
     ENCODE_MODE_SOFTWARE,
 )
+
+
+class _QtHost(QObject):
+    """``_init_alignment_state`` 现在会建 ``QTimer(self)`` —— 预览定时器归页面了，
+    所以替身必须是 QObject，纯 ``SimpleNamespace`` 不够。"""
+
+    def __init__(self, settings: AppSettings) -> None:
+        super().__init__()
+        self.settings = settings
+
+    def _poll_alignment_preview(self) -> None: ...
 
 
 class _Toggle:
@@ -51,7 +64,7 @@ def _page_host(settings: AppSettings) -> SimpleNamespace:
 
 class TestInitAlignmentState:
     def test_every_alignment_attribute_starts_empty(self) -> None:
-        host = SimpleNamespace(settings=AppSettings())
+        host = _QtHost(AppSettings())
 
         KrokHelperQtApp._init_alignment_state(host)
 
@@ -67,14 +80,14 @@ class TestInitAlignmentState:
         assert host.align_output_custom_dir_text == ""
 
     def test_encode_mode_falls_back_when_settings_are_garbage(self) -> None:
-        host = SimpleNamespace(settings=AppSettings(align_encode_mode="nonsense"))
+        host = _QtHost(AppSettings(align_encode_mode="nonsense"))
 
         KrokHelperQtApp._init_alignment_state(host)
 
         assert host._align_encode_selection == ENCODE_MODE_SOFTWARE
 
     def test_encode_mode_is_kept_when_valid(self) -> None:
-        host = SimpleNamespace(settings=AppSettings(align_encode_mode=ENCODE_MODE_HARDWARE))
+        host = _QtHost(AppSettings(align_encode_mode=ENCODE_MODE_HARDWARE))
 
         KrokHelperQtApp._init_alignment_state(host)
 

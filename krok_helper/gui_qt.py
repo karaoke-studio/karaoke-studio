@@ -340,9 +340,6 @@ class KrokHelperQtApp(AlignmentPageMixin, QMainWindow):
         self._load_settings_into_ui()
         self._bind_shortcuts()
 
-        self.preview_timer = QTimer(self)
-        self.preview_timer.setInterval(300)
-        self.preview_timer.timeout.connect(self._poll_alignment_preview)
         QTimer.singleShot(800, self._check_lyrics_timing_crash_recovery)
         QTimer.singleShot(1200, self._check_subtitle_render_crash_recovery)
         QTimer.singleShot(1500, self._notify_settings_corruption_if_any)
