@@ -13,9 +13,10 @@ from __future__ import annotations
 import ctypes
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,8 @@ DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND = 1
 
 __all__ = [
+    "apply_card_shadow",
+    "apply_safe_label_metrics",
     "CardWidget",
     "StyledComboBox",
     "WhiteComboBoxMenu",
@@ -252,3 +255,24 @@ class StyledComboBox(QComboBox):
 
     def _createComboMenu(self):
         return WhiteComboBoxMenu(self)
+
+
+def apply_safe_label_metrics(
+    label: QLabel,
+    font: QFont,
+    *,
+    top_padding: int = 3,
+    bottom_padding: int = 2,
+) -> None:
+    margins = label.contentsMargins()
+    label.setContentsMargins(margins.left(), top_padding, margins.right(), bottom_padding)
+    label.setMinimumHeight(QFontMetrics(font).height() + top_padding + bottom_padding)
+
+
+def apply_card_shadow(widget: QWidget, *, alpha: int = 20) -> None:
+    shadow = QGraphicsDropShadowEffect(widget)
+    shadow.setBlurRadius(12)
+    shadow.setXOffset(0)
+    shadow.setYOffset(2)
+    shadow.setColor(QColor(16, 24, 40, alpha))
+    widget.setGraphicsEffect(shadow)

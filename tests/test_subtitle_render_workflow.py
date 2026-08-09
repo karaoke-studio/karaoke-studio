@@ -270,7 +270,7 @@ def test_hires_success_plays_sound_and_uses_fluent_dialog(
         _reset_hires_cancel_state=lambda: calls.append(("reset",)),
     )
     monkeypatch.setattr(
-        "krok_helper.gui_qt.play_completion_sound",
+        "krok_helper.hires.page.play_completion_sound",
         lambda: calls.append(("sound",)),
     )
 

@@ -1,0 +1,5 @@
+"""Hi-Res 混流页（工作流第 6 步）。"""
+
+from krok_helper.hires.page import HiResPageMixin
+
+__all__ = ["HiResPageMixin"]

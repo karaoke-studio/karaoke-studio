@@ -7,3 +7,6 @@ WINDOW_WIDTH = 1480
 WINDOW_HEIGHT = 960
 WINDOW_MIN_WIDTH = 1180
 WINDOW_MIN_HEIGHT = 820
+
+#: ffmpeg 目录留空时各处输入框/标签的统一占位文案。
+FFMPEG_DIR_PLACEHOLDER = "未设置，将优先使用系统 PATH 中的 ffmpeg"
