@@ -10,18 +10,23 @@
 
 from __future__ import annotations
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 __all__ = [
     "CardWidget",
+    "ControlBar",
     "DEFAULT_UI_FONT_FAMILIES",
+    "ElidedLabel",
     "build_app_ui_font",
 ]
 
@@ -83,3 +88,55 @@ class CardWidget(QFrame):
         layout.setHorizontalSpacing(self._default_spacing)
         layout.setVerticalSpacing(self._default_spacing)
         return layout
+
+
+class ElidedLabel(QLabel):
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setWordWrap(False)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full_text = str(text or "")
+        self.setToolTip(self._full_text)
+        self._sync_elided_text()
+
+    def setFont(self, font: QFont) -> None:  # noqa: N802
+        super().setFont(font)
+        self._sync_elided_text()
+
+    def setMaximumWidth(self, maxw: int) -> None:  # noqa: N802
+        super().setMaximumWidth(maxw)
+        self._sync_elided_text()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_elided_text()
+
+    def _sync_elided_text(self) -> None:
+        width = max(0, self.width())
+        if width <= 0 and self.maximumWidth() < 16_777_215:
+            width = self.maximumWidth()
+        if width <= 0:
+            display = self._full_text
+        else:
+            display = self.fontMetrics().elidedText(
+                self._full_text,
+                Qt.TextElideMode.ElideRight,
+                width,
+            )
+        if super().text() != display:
+            super().setText(display)
+
+
+class ControlBar(CardWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent, radius=10, padding=(14, 12, 14, 12), spacing=10)
+
+    def apply_button_metrics(self, *buttons: QWidget) -> None:
+        for button in buttons:
+            if hasattr(button, "setMinimumHeight"):
+                button.setMinimumHeight(34)
