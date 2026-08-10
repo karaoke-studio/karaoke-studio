@@ -1086,6 +1086,9 @@ class GpuAsyncSubtitleRenderer(QObject):
         if self._renderer is None:
             self._renderer = NativeRendererProcess(
                 response_timeout_s=2.0,
+                startup_timeout_s=5.0,
+                configure_timeout_s=10.0,
+                gpu_configure_timeout_s=30.0,
                 close_timeout_s=1.0,
             )
             self._renderer.start()
@@ -1620,7 +1623,13 @@ class NativeAsyncSubtitleRenderer(QObject):
 
     def _ensure_renderer(self) -> NativeRendererProcess:
         if self._renderer is None:
-            self._renderer = NativeRendererProcess(response_timeout_s=2.0, close_timeout_s=1.0)
+            self._renderer = NativeRendererProcess(
+                response_timeout_s=2.0,
+                startup_timeout_s=5.0,
+                configure_timeout_s=10.0,
+                gpu_configure_timeout_s=30.0,
+                close_timeout_s=1.0,
+            )
             self._renderer.start()
             self._needs_configure = True
             self._shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"

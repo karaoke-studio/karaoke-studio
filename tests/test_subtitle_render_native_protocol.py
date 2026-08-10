@@ -781,6 +781,8 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
 
             mode = {mode!r}
 
+            if mode == "slow_stages":
+                time.sleep(0.2)
             sys.stdout.write("qt debug noise before ready\\n")
             sys.stdout.flush()
             for i in range(160):
@@ -793,8 +795,12 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
                 command = request.get("cmd")
                 if mode == "hang_after_ready":
                     time.sleep(30)
+                if mode == "slow_stages" and command in {{"configure", "gpu_configure"}}:
+                    time.sleep(0.2)
                 if command == "configure":
                     print(json.dumps({{"ok": True, "event": "configured"}}), flush=True)
+                elif command == "gpu_configure":
+                    print(json.dumps({{"ok": True, "event": "gpu_configured"}}), flush=True)
                 elif command == "render_frame":
                     print(json.dumps({{"ok": True, "event": "frame_ready", "checksum": "fake", "render_ms": 1.25}}), flush=True)
                 elif command == "render_frame_stats":
@@ -1271,14 +1277,46 @@ def test_native_gpu_title_uses_project_timeline_and_independent_segment_fades(
 
 def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):
     sidecar = _write_fake_sidecar(tmp_path, mode="hang_after_ready")
-    renderer = NativeRendererProcess(sidecar, response_timeout_s=0.3, close_timeout_s=1.0)
+    renderer = NativeRendererProcess(
+        sidecar,
+        response_timeout_s=0.1,
+        startup_timeout_s=1.0,
+        configure_timeout_s=0.3,
+        close_timeout_s=0.1,
+    )
 
     renderer.start()
-    with pytest.raises(NativeRendererError, match="timed out"):
+    with pytest.raises(NativeRendererError, match="timed out") as exc_info:
         renderer.configure(TimingTrack(), Style(), width=640, height=360, fps=60)
+    assert "after 0.3s" in str(exc_info.value)
+    assert "waiting for 'configured'" in str(exc_info.value)
 
     renderer.close()
     assert renderer.is_running is False
+
+
+def test_native_renderer_process_uses_stage_specific_timeouts(tmp_path):
+    sidecar = _write_fake_sidecar(tmp_path, mode="slow_stages")
+    renderer = NativeRendererProcess(
+        sidecar,
+        response_timeout_s=0.1,
+        startup_timeout_s=0.5,
+        configure_timeout_s=0.5,
+        gpu_configure_timeout_s=0.5,
+        close_timeout_s=0.5,
+    )
+
+    try:
+        assert renderer.start()["event"] == "ready"
+        assert renderer.configure_gpu(
+            TimingTrack(),
+            Style(),
+            width=640,
+            height=360,
+            fps=60,
+        )["event"] == "gpu_configured"
+    finally:
+        renderer.close()
 
 
 def test_native_text_layer_cache_reuses_static_main_and_ruby_layers(tmp_path, monkeypatch):

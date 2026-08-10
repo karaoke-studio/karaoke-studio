@@ -666,6 +666,9 @@ class NativeRendererProcess:
         executable_path: str | os.PathLike[str] | None = None,
         *,
         response_timeout_s: float = 5.0,
+        startup_timeout_s: float | None = None,
+        configure_timeout_s: float | None = None,
+        gpu_configure_timeout_s: float | None = None,
         close_timeout_s: float = 2.0,
     ) -> None:
         resolved = resolve_native_renderer_path(executable_path)
@@ -673,6 +676,9 @@ class NativeRendererProcess:
             raise NativeRendererError("native subtitle renderer executable was not found")
         self.executable_path = resolved
         self.response_timeout_s = max(0.1, float(response_timeout_s))
+        self.startup_timeout_s = self._resolved_timeout(startup_timeout_s)
+        self.configure_timeout_s = self._resolved_timeout(configure_timeout_s)
+        self.gpu_configure_timeout_s = self._resolved_timeout(gpu_configure_timeout_s)
         self.close_timeout_s = max(0.1, float(close_timeout_s))
         self._process: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
@@ -710,7 +716,10 @@ class NativeRendererProcess:
             **_sidecar_subprocess_kwargs(),
         )
         self._start_pipe_threads(self._process)
-        ready = self._read_response()
+        ready = self._read_response(
+            timeout_s=self.startup_timeout_s,
+            waiting_for="ready",
+        )
         if not ready.get("ok"):
             raise NativeRendererError(f"native renderer did not become ready: {ready}")
         return ready
@@ -723,7 +732,7 @@ class NativeRendererProcess:
             if process.poll() is None:
                 self._send({"cmd": "shutdown"})
                 try:
-                    self._read_until_event("shutdown")
+                    self._read_until_event("shutdown", timeout_s=self.close_timeout_s)
                 except NativeRendererError:
                     pass
         finally:
@@ -769,7 +778,9 @@ class NativeRendererProcess:
             ir_kwargs["duration_ms"] = duration_ms
         ir = build_render_ir(track, style, **ir_kwargs)
         self._send({"cmd": "configure", "ir": ir})
-        return self._expect_ok(self._read_until_event("configured"))
+        return self._expect_ok(
+            self._read_until_event("configured", timeout_s=self.configure_timeout_s)
+        )
 
     def backend_info(self, *, force_warp: bool = False) -> dict[str, Any]:
         """Return Direct2D/D3D11 adapter capabilities without touching product UI."""
@@ -827,7 +838,12 @@ class NativeRendererProcess:
         if realization_capacity is not None:
             payload["realization_capacity"] = max(int(realization_capacity), 8192)
         self._send(payload)
-        return self._expect_ok(self._read_until_event("gpu_configured"))
+        return self._expect_ok(
+            self._read_until_event(
+                "gpu_configured",
+                timeout_s=self.gpu_configure_timeout_s,
+            )
+        )
 
     def begin_render_gpu_frame(
         self,
@@ -1061,20 +1077,40 @@ class NativeRendererProcess:
             process.stdin.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
             process.stdin.flush()
 
-    def _read_response(self) -> dict[str, Any]:
+    def _read_response(
+        self,
+        *,
+        timeout_s: float | None = None,
+        waiting_for: str = "protocol response",
+    ) -> dict[str, Any]:
         process = self._current_process()
-        deadline = time.monotonic() + self.response_timeout_s
+        effective_timeout_s = self._resolved_timeout(timeout_s)
+        deadline = time.monotonic() + effective_timeout_s
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise NativeRendererError(self._format_timeout_error(process))
+                raise NativeRendererError(
+                    self._format_timeout_error(
+                        process,
+                        timeout_s=effective_timeout_s,
+                        waiting_for=waiting_for,
+                    )
+                )
             try:
                 line = self._stdout_queue.get(timeout=remaining)
             except queue.Empty as exc:
-                raise NativeRendererError(self._format_timeout_error(process)) from exc
+                raise NativeRendererError(
+                    self._format_timeout_error(
+                        process,
+                        timeout_s=effective_timeout_s,
+                        waiting_for=waiting_for,
+                    )
+                ) from exc
 
             if line is None:
-                raise NativeRendererError(self._format_exit_error(process))
+                raise NativeRendererError(
+                    self._format_exit_error(process, waiting_for=waiting_for)
+                )
 
             try:
                 payload = json.loads(line)
@@ -1085,7 +1121,12 @@ class NativeRendererProcess:
                 return payload
             self._remember_stdout_noise(line)
 
-    def _read_until_event(self, event: str) -> dict[str, Any]:
+    def _read_until_event(
+        self,
+        event: str,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
         kept: deque[dict[str, Any]] = deque()
         while self._event_backlog:
             payload = self._event_backlog.popleft()
@@ -1095,7 +1136,7 @@ class NativeRendererProcess:
             kept.append(payload)
         self._event_backlog = kept
         while True:
-            payload = self._read_response()
+            payload = self._read_response(timeout_s=timeout_s, waiting_for=event)
             if payload.get("event") == event or not payload.get("ok", False):
                 return payload
             self._event_backlog.append(payload)
@@ -1162,16 +1203,33 @@ class NativeRendererProcess:
         with self._stdout_noise_lock:
             return "\n".join(self._stdout_noise_tail)
 
-    def _format_timeout_error(self, process: subprocess.Popen[str]) -> str:
+    def _resolved_timeout(self, timeout_s: float | None) -> float:
+        if timeout_s is None:
+            return self.response_timeout_s
+        return max(0.1, float(timeout_s))
+
+    def _format_timeout_error(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        timeout_s: float,
+        waiting_for: str,
+    ) -> str:
         return (
-            f"native renderer response timed out after {self.response_timeout_s:.1f}s "
+            f"native renderer response timed out after {timeout_s:.1f}s "
+            f"while waiting for {waiting_for!r} "
             f"(returncode={process.poll()}); stderr_tail={self._stderr_excerpt()!r}; "
             f"stdout_noise={self._stdout_noise_excerpt()!r}"
         )
 
-    def _format_exit_error(self, process: subprocess.Popen[str]) -> str:
+    def _format_exit_error(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        waiting_for: str,
+    ) -> str:
         return (
-            f"native renderer exited without a protocol response "
+            f"native renderer exited while waiting for {waiting_for!r} "
             f"(returncode={process.poll()}); stderr_tail={self._stderr_excerpt()!r}; "
             f"stdout_noise={self._stdout_noise_excerpt()!r}"
         )
