@@ -344,122 +344,44 @@ def track_to_ir(
 ) -> dict[str, Any]:
     schedule: dict[int, tuple[int, int, int]] = {}
     if style is not None:
-        from krok_helper.subtitle_render.engine.painter import (
-            _display_style_for_signal_window,
-            _lane_count,
-            _line_with_guide_symbol,
-            _line_center_override,
-            _row_count_resolver,
-            _style_for_line,
-            _style_for_line_display_window,
-            display_schedule_for_style,
-            resolved_char_intervals_for_line,
-            resolved_guide_anchor_bounds_for_line,
-            resolved_page_offset_windows_for_style,
-        )
-        from krok_helper.subtitle_render.engine.page_plan import resolve_page_plan
-        display_style = _display_style_for_signal_window(style)
-        schedule = display_schedule_for_style(
+        from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
+
+        layout_plan = build_track_layout_plan(
             track,
-            display_style,
+            style,
             logical_w=width,
             logical_h=height,
         )
-        page_offset_windows = (
-            resolved_page_offset_windows_for_style(
-                max(int(width), 1),
-                max(int(height), 1),
-                track,
-                display_style,
+        schedule = {
+            item.track_index: (
+                item.lane,
+                item.display_start_ms,
+                item.display_end_ms,
             )
-            if width is not None and height is not None
-            else {}
-        )
-        render_lines = [_line_with_guide_symbol(line) for line in track.lines]
-        layout_styles = [_style_for_line(style, line) for line in track.lines]
-        resolved_intervals = [
-            resolved_char_intervals_for_line(line, style) for line in render_lines
-        ]
-        guide_anchor_bounds = [
-            resolved_guide_anchor_bounds_for_line(track, line, style)
-            for line in track.lines
-        ]
-        center_overrides = {
-            index: _line_center_override(track, line, layout_styles[index])
-            for index, line in enumerate(track.lines)
+            for item in layout_plan.lines
+            if item.display_start_ms is not None and item.display_end_ms is not None
         }
-        animation_styles = [
-            _style_for_line_display_window(
-                style,
-                line,
-                schedule[index][1] if index in schedule else None,
-                schedule[index][2] if index in schedule else None,
-            )
-            for index, line in enumerate(track.lines)
-        ]
-        from krok_helper.subtitle_render.engine.timeline import assign_lanes
-
-        # 页内行数按 Painter 的口径算（``_renderable_page_lines`` 同样只走
-        # assign_lanes），保证 native 解出的对齐档与 Painter 一致。
-        renderable_lines = [
-            (index, line)
-            for index, line in enumerate(track.lines)
-            if not line.is_blank and line.chars
-        ]
-        _lanes, lane_page_starts, lane_page_rows = assign_lanes(
-            [line for _, line in renderable_lines],
-            _lane_count(style),
-            _row_count_resolver(style),
-            section_gap_ms=style.section_gap_ms,
-        )
         page_line_counts = {
-            track_index: lane_page_rows[render_index]
-            for render_index, (track_index, _) in enumerate(renderable_lines)
+            item.track_index: item.page_line_count for item in layout_plan.lines
         }
         authored_lanes = {
-            track_index: _lanes[render_index]
-            for render_index, (track_index, _) in enumerate(renderable_lines)
+            item.track_index: item.layout_lane for item in layout_plan.lines
         }
-        if track.page_plan is not None:
-            resolved_plan = resolve_page_plan(track, style)
-            page_indices = {
-                item.track_line_index: item.global_page_index
-                for item in resolved_plan.lines
-            }
-            section_indices = {
-                item.track_line_index: item.section_index
-                for item in resolved_plan.lines
-            }
-            page_line_counts = {
-                item.track_line_index: item.page_line_count
-                for item in resolved_plan.lines
-            }
-            authored_lanes = {
-                item.track_line_index: item.lane
-                for item in resolved_plan.lines
-            }
-        else:
-            page_indices = {
-                track_index: lane_page_starts[render_index]
-                for render_index, (track_index, _) in enumerate(renderable_lines)
-            }
-            section_indices = {}
-            renderable_only = [line for _, line in renderable_lines]
-            for render_index, (track_index, _line) in enumerate(renderable_lines):
-                page_start = lane_page_starts[render_index]
-                page_rows = lane_page_rows[render_index]
-                page_head = renderable_only[page_start]
-                page_style = _style_for_line(style, page_head)
-                configured_rows = _lane_count(page_style)
-                if page_rows >= configured_rows:
-                    continue
-                if page_style.line_y_position == "bottom":
-                    authored_lanes[track_index] += configured_rows - page_rows
-                elif page_style.line_y_position == "center":
-                    authored_lanes[track_index] += max(
-                        (configured_rows - page_rows + 1) // 2,
-                        0,
-                    )
+        center_overrides = {
+            item.track_index: item.center_override for item in layout_plan.lines
+        }
+        animation_styles = [item.animation_style for item in layout_plan.lines]
+        layout_styles = [item.layout_style for item in layout_plan.lines]
+        render_lines = [item.render_line for item in layout_plan.lines]
+        resolved_intervals = [list(item.resolved_intervals) for item in layout_plan.lines]
+        guide_anchor_bounds = [item.guide_anchor_bounds for item in layout_plan.lines]
+        page_indices = {item.track_index: item.page_index for item in layout_plan.lines}
+        section_indices = {
+            item.track_index: item.section_index for item in layout_plan.lines
+        }
+        page_offset_windows = {
+            item.track_index: item.layout_offset_windows for item in layout_plan.lines
+        }
     else:
         page_line_counts = {}
         authored_lanes = {}

@@ -49,6 +49,8 @@ from krok_helper.subtitle_render.native_protocol import (
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )
+from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
 
 _NATIVE_PARITY_DIVERGED = pytest.mark.skipif(
     os.environ.get("KROK_SUBTITLE_NATIVE_PARITY_STRICT") != "1",
@@ -103,6 +105,56 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
     assert ir["track"]["rubies"][0]["reading_part_ms"] == [100, 250]
     assert ir["track"]["rubies"][0]["reading_parts"] == ["き", "", "み"]
     assert ir["extra_tracks"] == []
+
+
+def test_shared_track_layout_plan_is_the_gpu_ir_semantic_source():
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 100)],
+                end_ms=500,
+                animation_override=LineAnimationOverride(
+                    entry_anim="slide_in",
+                    entry_duration_ms=450,
+                ),
+            ),
+            TimingLine(chars=[TimingChar("B", 600)], end_ms=1000),
+        ]
+    )
+    style = Style(
+        layout_semantics="n3_1074",
+        line_lead_in_ms=200,
+        line_tail_ms=300,
+    )
+
+    plan = build_track_layout_plan(
+        track,
+        style,
+        logical_w=640,
+        logical_h=360,
+    )
+    ir_lines = build_render_ir(
+        track,
+        style,
+        width=640,
+        height=360,
+        fps=60,
+    )["track"]["lines"]
+
+    assert isinstance(plan, TrackLayoutPlan)
+    assert plan.layout_semantics == "n3_1074"
+    assert (plan.logical_width, plan.logical_height) == (640, 360)
+    assert len(plan.lines) == len(ir_lines) == 2
+    for line_plan, ir_line in zip(plan.lines, ir_lines):
+        assert ir_line["lane"] == line_plan.lane
+        assert ir_line["layout_lane"] == line_plan.layout_lane
+        assert ir_line["page_index"] == line_plan.page_index
+        assert ir_line["section_index"] == line_plan.section_index
+        assert ir_line["display_start_ms"] == line_plan.display_start_ms
+        assert ir_line["display_end_ms"] == line_plan.display_end_ms
+        assert ir_line["center_override"] is line_plan.center_override
+        assert ir_line["entry_anim"] == line_plan.animation_style.entry_anim
+        assert ir_line["exit_anim"] == line_plan.animation_style.exit_anim
 
 
 def test_build_render_ir_preserves_extra_track_boundaries():

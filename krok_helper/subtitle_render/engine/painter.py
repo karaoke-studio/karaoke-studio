@@ -589,6 +589,10 @@ from krok_helper.subtitle_render.engine.page_placement import (
     solve_page_axis_offsets,
     time_windows_overlap,
 )
+from krok_helper.subtitle_render.engine.layout_plan import (
+    LineLayoutPlan,
+    TrackLayoutPlan,
+)
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.engine.show_time import (
     MIN_AUTO_ENTRY_ANIMATION_MS,
@@ -5039,6 +5043,144 @@ def display_schedule_for_style(
         for item in items
         if id(item.line) in index_of
     }
+
+
+def build_track_layout_plan(
+    track: TimingTrack,
+    style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> TrackLayoutPlan:
+    """Resolve frame-independent line semantics once for CPU/GPU consumers."""
+    display_style = _display_style_for_signal_window(style)
+    schedule = display_schedule_for_style(
+        track,
+        display_style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
+    page_offset_windows = (
+        resolved_page_offset_windows_for_style(
+            max(int(logical_w), 1),
+            max(int(logical_h), 1),
+            track,
+            display_style,
+        )
+        if logical_w is not None and logical_h is not None
+        else {}
+    )
+    render_lines = [_line_with_guide_symbol(line) for line in track.lines]
+    layout_styles = [_style_for_line(style, line) for line in track.lines]
+    resolved_intervals = [
+        resolved_char_intervals_for_line(line, style) for line in render_lines
+    ]
+    guide_anchor_bounds = [
+        resolved_guide_anchor_bounds_for_line(track, line, style)
+        for line in track.lines
+    ]
+    center_overrides = {
+        index: _line_center_override(track, line, layout_styles[index])
+        for index, line in enumerate(track.lines)
+    }
+    animation_styles = [
+        _style_for_line_display_window(
+            style,
+            line,
+            schedule[index][1] if index in schedule else None,
+            schedule[index][2] if index in schedule else None,
+        )
+        for index, line in enumerate(track.lines)
+    ]
+
+    renderable_lines = [
+        (index, line)
+        for index, line in enumerate(track.lines)
+        if not line.is_blank and line.chars
+    ]
+    lanes, lane_page_starts, lane_page_rows = assign_lanes(
+        [line for _, line in renderable_lines],
+        _lane_count(style),
+        _row_count_resolver(style),
+        section_gap_ms=style.section_gap_ms,
+    )
+    page_line_counts = {
+        track_index: lane_page_rows[render_index]
+        for render_index, (track_index, _) in enumerate(renderable_lines)
+    }
+    authored_lanes = {
+        track_index: lanes[render_index]
+        for render_index, (track_index, _) in enumerate(renderable_lines)
+    }
+    if track.page_plan is not None:
+        resolved_plan = resolve_page_plan(track, style)
+        page_indices = {
+            item.track_line_index: item.global_page_index
+            for item in resolved_plan.lines
+        }
+        section_indices = {
+            item.track_line_index: item.section_index
+            for item in resolved_plan.lines
+        }
+        page_line_counts = {
+            item.track_line_index: item.page_line_count
+            for item in resolved_plan.lines
+        }
+        authored_lanes = {
+            item.track_line_index: item.lane for item in resolved_plan.lines
+        }
+    else:
+        page_indices = {
+            track_index: lane_page_starts[render_index]
+            for render_index, (track_index, _) in enumerate(renderable_lines)
+        }
+        section_indices = {}
+        renderable_only = [line for _, line in renderable_lines]
+        for render_index, (track_index, _line) in enumerate(renderable_lines):
+            page_start = lane_page_starts[render_index]
+            page_rows = lane_page_rows[render_index]
+            page_head = renderable_only[page_start]
+            page_style = _style_for_line(style, page_head)
+            configured_rows = _lane_count(page_style)
+            if page_rows >= configured_rows:
+                continue
+            if page_style.line_y_position == "bottom":
+                authored_lanes[track_index] += configured_rows - page_rows
+            elif page_style.line_y_position == "center":
+                authored_lanes[track_index] += max(
+                    (configured_rows - page_rows + 1) // 2,
+                    0,
+                )
+
+    plans = []
+    for index, line in enumerate(track.lines):
+        lane, display_start, display_end = schedule.get(index, (0, None, None))
+        plans.append(
+            LineLayoutPlan(
+                track_index=index,
+                line=line,
+                render_line=render_lines[index],
+                layout_style=layout_styles[index],
+                animation_style=animation_styles[index],
+                resolved_intervals=tuple(resolved_intervals[index]),
+                guide_anchor_bounds=guide_anchor_bounds[index],
+                page_index=page_indices.get(index, -1),
+                page_line_count=page_line_counts.get(index, 0),
+                section_index=section_indices.get(index, -1),
+                lane=lane,
+                layout_lane=authored_lanes.get(index, lane),
+                display_start_ms=display_start,
+                display_end_ms=display_end,
+                center_override=center_overrides.get(index, False),
+                layout_offset_windows=tuple(page_offset_windows.get(index, ())),
+            )
+        )
+    return TrackLayoutPlan(
+        layout_semantics=style.layout_semantics,
+        logical_width=logical_w,
+        logical_height=logical_h,
+        lines=tuple(plans),
+    )
 
 
 def _single_visible_display_line(
