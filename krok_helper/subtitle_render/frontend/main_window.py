@@ -2904,6 +2904,7 @@ class SubtitleRenderWindow(QWidget):
                 self._refresh_tracks_view_windows()
 
     def _apply_project_data_inner(self, data: dict) -> None:
+        self._project_document.remember_project_data(data)
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
         # 1) 样式 / 屏幕 / 配色方案

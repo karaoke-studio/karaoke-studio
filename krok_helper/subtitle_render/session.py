@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -18,6 +19,35 @@ from krok_helper.subtitle_render.models import (
     track_page_plan_to_dict,
 )
 from krok_helper.subtitle_render.project_store import background_payload, project_payload
+
+
+_PROJECT_OWNED_KEYS = frozenset(
+    {
+        "schema_version",
+        "subtitle_path",
+        "video_path",
+        "audio_path",
+        "style",
+        "screen",
+        "selected_scheme_key",
+        "output",
+        "background",
+        "line_layout_indices",
+        "line_breaks_before",
+        "char_role_labels",
+        "line_guide_symbols",
+        "line_inline_guide_symbols",
+        "line_display_overrides",
+        "line_animation_overrides",
+        "page_plan",
+        "loading_settings_mode",
+        "loading_settings",
+        "loading_settings_snapshot",
+        "extra_subtitle_sources",
+        "project_role_names",
+    }
+)
+_PROJECT_EXTENSIBLE_MAPPINGS = ("style", "screen", "output", "background")
 
 
 @dataclass
@@ -43,6 +73,7 @@ class SubtitleProjectDocument:
     audio_info: Optional[MediaInfo] = None
     style: Style = field(default_factory=Style)
     role_names: list[str] = field(default_factory=list)
+    preserved_project_data: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def clear_loaded_media(self) -> None:
         """Clear source material while preserving current project style."""
@@ -55,6 +86,12 @@ class SubtitleProjectDocument:
         self.audio_path = None
         self.audio_info = None
         self.role_names = []
+        self.preserved_project_data = {}
+
+    def remember_project_data(self, data: dict) -> None:
+        """Keep forward-compatible fields that this version does not own."""
+
+        self.preserved_project_data = deepcopy(data) if isinstance(data, dict) else {}
 
     def to_project_data(
         self,
@@ -79,7 +116,7 @@ class SubtitleProjectDocument:
             for source in self.extra_sources
         ] or None
         background = self.background_source
-        return project_payload(
+        payload = project_payload(
             subtitle_path=self.subtitle_path,
             video_path=self.video_path,
             audio_path=independent_audio,
@@ -103,6 +140,27 @@ class SubtitleProjectDocument:
             output=dict(output),
             **track_data,
         )
+        return _merge_preserved_project_data(self.preserved_project_data, payload)
+
+
+def _merge_preserved_project_data(source: dict, current: dict) -> dict:
+    """Overlay current owned values while retaining unknown future fields."""
+
+    merged = {
+        key: deepcopy(value)
+        for key, value in source.items()
+        if key not in _PROJECT_OWNED_KEYS
+    }
+    for key in _PROJECT_EXTENSIBLE_MAPPINGS:
+        current_value = current.get(key)
+        source_value = source.get(key)
+        if not isinstance(current_value, dict) or not isinstance(source_value, dict):
+            continue
+        nested = deepcopy(source_value)
+        nested.update(current_value)
+        current[key] = nested
+    merged.update(current)
+    return merged
 
 
 def _track_project_data(track: Optional[TimingTrack]) -> dict:

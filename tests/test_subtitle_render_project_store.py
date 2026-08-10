@@ -243,6 +243,35 @@ def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
     assert payload["output"] == {"encoder_mode": "cpu", "crf": 18}
 
 
+def test_project_document_preserves_future_extension_fields():
+    document = SubtitleProjectDocument(style=Style(font_size_px=88))
+    document.remember_project_data(
+        {
+            "schema_version": 99,
+            "future_section": {"mode": "new"},
+            "style": {"font_size_px": 12, "future_style": {"v": 1}},
+            "screen": {"width": 320, "future_screen": True},
+            "output": {"crf": 51, "future_output": "keep"},
+            "background": {"kind": "solid", "future_background": 7},
+        }
+    )
+
+    payload = document.to_project_data(
+        screen={"width": 1920, "height": 1080, "fps": 60, "par": "1:1"},
+        selected_scheme_key="global",
+        output={"crf": 18},
+    )
+
+    assert "schema_version" not in payload
+    assert payload["future_section"] == {"mode": "new"}
+    assert payload["style"]["font_size_px"] == 88
+    assert payload["style"]["future_style"] == {"v": 1}
+    assert payload["screen"]["width"] == 1920
+    assert payload["screen"]["future_screen"] is True
+    assert payload["output"] == {"crf": 18, "future_output": "keep"}
+    assert "background" not in payload
+
+
 def test_app_style_preferences_do_not_leak_project_only_content():
     app_title_scheme = SubtitleStyleScheme(fill_color="#112233")
     app_title = TitleOverlay(enabled=True, text_template="应用默认标题")
@@ -707,6 +736,51 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._export_native_check.isChecked() is False
     # 加载过程中不应把项目标脏
     assert win._project_dirty is False
+
+
+def test_window_open_edit_save_preserves_future_project_fields(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    win._apply_project_data(
+        {
+            "schema_version": 99,
+            "future_section": {"mode": "new"},
+            "style": {
+                **style_to_dict(Style(font_size_px=87)),
+                "future_style": {"version": 2},
+            },
+            "screen": {
+                "width": 1280,
+                "height": 720,
+                "fps": 60,
+                "par": "1:1",
+                "future_screen": "keep",
+            },
+            "output": {"crf": 21, "future_output": [1, 2]},
+            "background": {
+                "kind": "solid",
+                "color": "#010203",
+                "future_background": True,
+            },
+        }
+    )
+    win._style = replace(win._style, font_size_px=91)
+
+    path = tmp_path / "future.yurika"
+    assert win._write_project(path) is True
+    saved = load_render_project(path)
+
+    assert saved["schema_version"] == PROJECT_SCHEMA_VERSION
+    assert saved["future_section"] == {"mode": "new"}
+    assert saved["style"]["font_size_px"] == 91
+    assert saved["style"]["future_style"] == {"version": 2}
+    assert saved["screen"]["future_screen"] == "keep"
+    assert saved["output"]["future_output"] == [1, 2]
+    assert saved["background"]["future_background"] is True
+
+    win._new_project()
+    assert "future_section" not in win._current_project_data()
 
 
 def test_new_project_reuses_last_export_settings_and_keeps_fixed_directory(
