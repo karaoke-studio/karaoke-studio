@@ -236,7 +236,6 @@ from krok_helper.subtitle_render.models import (
     subtitle_loading_settings_from_dict,
     subtitle_loading_settings_to_dict,
     track_page_plan_from_dict,
-    track_page_plan_to_dict,
     timing_line_start_ms,
     infer_image_sequence_pattern,
 )
@@ -261,12 +260,10 @@ from krok_helper.subtitle_render.project_store import (
     ProjectFileRevision,
     RecoveryCandidate,
     backup_project_file,
-    background_payload,
     inspect_project_file,
     invalidate_recovery_project,
     load_render_project,
     project_output_payload,
-    project_payload,
     save_discarded_project_backup,
     save_recovery_project,
     save_render_project,
@@ -2837,94 +2834,9 @@ class SubtitleRenderWindow(QWidget):
             pass
 
     def _current_project_data(self) -> dict:
-        independent_audio = (
-            self._audio_path
-            if self._audio_path is not None and self._audio_path != self._video_path
-            else None
-        )
-        line_layout_indices = (
-            [int(getattr(line, "layout_index", 0) or 0) for line in self._timing_track.lines]
-            if self._timing_track is not None
-            else None
-        )
-        line_breaks_before = self._line_break_rows(self._timing_track)
-        char_role_labels = self._collect_char_role_labels()
-        line_guide_symbols = self._guide_symbol_rows(self._timing_track)
-        line_inline_guide_symbols = self._inline_guide_symbol_rows(self._timing_track)
-        line_display_overrides = self._display_override_rows(self._timing_track)
-        line_animation_overrides = self._animation_override_rows(self._timing_track)
-        extra_subtitle_sources = [
-            {
-                "name": source.name,
-                "path": str(source.path),
-                "line_layout_indices": [
-                    int(getattr(line, "layout_index", 0) or 0) for line in source.track.lines
-                ],
-                "line_breaks_before": self._line_break_rows(source.track),
-                "char_role_labels": self._char_role_rows(source.track),
-                "line_guide_symbols": self._guide_symbol_rows(source.track),
-                "line_inline_guide_symbols": self._inline_guide_symbol_rows(source.track),
-                "line_display_overrides": self._display_override_rows(source.track),
-                "line_animation_overrides": self._animation_override_rows(source.track),
-                "page_plan": track_page_plan_to_dict(source.track.page_plan),
-                "loading_settings_mode": source.track.loading_settings_mode,
-                "loading_settings": (
-                    subtitle_loading_settings_to_dict(source.track.loading_settings)
-                    if source.track.loading_settings is not None
-                    else None
-                ),
-                "loading_settings_snapshot": subtitle_loading_settings_to_dict(
-                    source.track.loading_settings_snapshot
-                ),
-            }
-            for source in self._extra_sources
-        ] or None
-        payload = project_payload(
-            subtitle_path=self._subtitle_path,
-            video_path=self._video_path,
-            audio_path=independent_audio,
-            background=background_payload(
-                kind=self._background_source.kind,
-                path=Path(self._background_source.path) if self._background_source.path else None,
-                color=self._background_source.color,
-                source_fps=self._background_source.source_fps,
-                sequence_start_number=self._background_source.sequence_start_number,
-                video_offset_ms=self._background_source.video_offset_ms,
-            ) if self._background_source is not None else None,
-            style=style_to_dict(self._style),
+        payload = self._project_document.to_project_data(
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
-            line_layout_indices=line_layout_indices,
-            line_breaks_before=line_breaks_before,
-            char_role_labels=char_role_labels,
-            line_guide_symbols=line_guide_symbols,
-            line_inline_guide_symbols=line_inline_guide_symbols,
-            line_display_overrides=line_display_overrides,
-            line_animation_overrides=line_animation_overrides,
-            page_plan=(
-                track_page_plan_to_dict(self._timing_track.page_plan)
-                if self._timing_track is not None
-                else None
-            ),
-            loading_settings_mode=(
-                self._timing_track.loading_settings_mode
-                if self._timing_track is not None
-                else None
-            ),
-            loading_settings=(
-                subtitle_loading_settings_to_dict(self._timing_track.loading_settings)
-                if self._timing_track is not None
-                and self._timing_track.loading_settings is not None
-                else None
-            ),
-            loading_settings_snapshot=(
-                subtitle_loading_settings_to_dict(
-                    self._timing_track.loading_settings_snapshot
-                )
-                if self._timing_track is not None
-                else None
-            ),
-            extra_subtitle_sources=extra_subtitle_sources,
             project_role_names=self._property_panel.role_names,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),

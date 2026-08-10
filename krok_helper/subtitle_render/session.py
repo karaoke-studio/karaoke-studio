@@ -7,7 +7,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 from krok_helper.models import MediaInfo
-from krok_helper.subtitle_render.models import BackgroundSource, Style, TimingTrack
+from krok_helper.subtitle_render.models import (
+    BackgroundSource,
+    Style,
+    TimingTrack,
+    guide_symbol_to_dict,
+    line_animation_override_to_dict,
+    style_to_dict,
+    subtitle_loading_settings_to_dict,
+    track_page_plan_to_dict,
+)
+from krok_helper.subtitle_render.project_store import background_payload, project_payload
 
 
 @dataclass
@@ -43,6 +53,142 @@ class SubtitleProjectDocument:
         self.background_source = None
         self.audio_path = None
         self.audio_info = None
+
+    def to_project_data(
+        self,
+        *,
+        screen: dict,
+        selected_scheme_key: str,
+        project_role_names: list[str],
+        output: dict,
+    ) -> dict:
+        """Serialize project-owned content with UI settings supplied as plain data."""
+        independent_audio = (
+            self.audio_path
+            if self.audio_path is not None and self.audio_path != self.video_path
+            else None
+        )
+        track_data = _track_project_data(self.timing_track)
+        extra_subtitle_sources = [
+            {
+                "name": source.name,
+                "path": str(source.path),
+                **_track_project_data(source.track),
+            }
+            for source in self.extra_sources
+        ] or None
+        background = self.background_source
+        return project_payload(
+            subtitle_path=self.subtitle_path,
+            video_path=self.video_path,
+            audio_path=independent_audio,
+            background=(
+                background_payload(
+                    kind=background.kind,
+                    path=Path(background.path) if background.path else None,
+                    color=background.color,
+                    source_fps=background.source_fps,
+                    sequence_start_number=background.sequence_start_number,
+                    video_offset_ms=background.video_offset_ms,
+                )
+                if background is not None
+                else None
+            ),
+            style=style_to_dict(self.style),
+            screen=dict(screen),
+            selected_scheme_key=selected_scheme_key,
+            extra_subtitle_sources=extra_subtitle_sources,
+            project_role_names=project_role_names,
+            output=dict(output),
+            **track_data,
+        )
+
+
+def _track_project_data(track: Optional[TimingTrack]) -> dict:
+    """Return the stable ``.yurika`` projection of one timing track."""
+    if track is None:
+        return {
+            "line_layout_indices": None,
+            "line_breaks_before": None,
+            "char_role_labels": None,
+            "line_guide_symbols": None,
+            "line_inline_guide_symbols": None,
+            "line_display_overrides": None,
+            "line_animation_overrides": None,
+            "page_plan": None,
+            "loading_settings_mode": None,
+            "loading_settings": None,
+            "loading_settings_snapshot": None,
+        }
+    return {
+        "line_layout_indices": [
+            int(getattr(line, "layout_index", 0) or 0) for line in track.lines
+        ],
+        "line_breaks_before": [
+            str(getattr(line, "break_before", "none")) for line in track.lines
+        ],
+        "char_role_labels": _char_role_rows(track),
+        "line_guide_symbols": _guide_symbol_rows(track),
+        "line_inline_guide_symbols": _inline_guide_symbol_rows(track),
+        "line_display_overrides": _display_override_rows(track),
+        "line_animation_overrides": _animation_override_rows(track),
+        "page_plan": track_page_plan_to_dict(track.page_plan),
+        "loading_settings_mode": track.loading_settings_mode,
+        "loading_settings": (
+            subtitle_loading_settings_to_dict(track.loading_settings)
+            if track.loading_settings is not None
+            else None
+        ),
+        "loading_settings_snapshot": subtitle_loading_settings_to_dict(
+            track.loading_settings_snapshot
+        ),
+    }
+
+
+def _char_role_rows(track: TimingTrack) -> Optional[list]:
+    rows = [
+        [char.role_label for char in line.chars]
+        if any(char.role_label for char in line.chars)
+        else None
+        for line in track.lines
+    ]
+    return rows if any(row is not None for row in rows) else None
+
+
+def _guide_symbol_rows(track: TimingTrack) -> Optional[list]:
+    rows = [guide_symbol_to_dict(line.guide_symbol) for line in track.lines]
+    return rows if any(row is not None for row in rows) else None
+
+
+def _inline_guide_symbol_rows(track: TimingTrack) -> Optional[list]:
+    rows = [
+        {
+            str(index): guide_symbol_to_dict(symbol)
+            for index, symbol in sorted(line.inline_guide_symbols.items())
+            if 0 <= index < len(line.chars) and symbol.path_commands
+        }
+        or None
+        for line in track.lines
+    ]
+    return rows if any(row is not None for row in rows) else None
+
+
+def _display_override_rows(track: TimingTrack) -> Optional[list]:
+    rows = [
+        [line.display_start_override_ms, line.display_end_override_ms]
+        if line.display_start_override_ms is not None
+        or line.display_end_override_ms is not None
+        else None
+        for line in track.lines
+    ]
+    return rows if any(row is not None for row in rows) else None
+
+
+def _animation_override_rows(track: TimingTrack) -> Optional[list]:
+    rows = [
+        line_animation_override_to_dict(line.animation_override) for line in track.lines
+    ]
+    return rows if any(row is not None for row in rows) else None
 
 
 @dataclass(frozen=True)

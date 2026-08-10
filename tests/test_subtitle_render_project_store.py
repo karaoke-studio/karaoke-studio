@@ -167,6 +167,70 @@ def test_project_document_clears_sources_without_resetting_style(tmp_path):
     assert document.style is style
 
 
+def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
+    line = TimingLine(
+        chars=[TimingChar("歌", 1000, role_label="主唱")],
+        end_ms=2000,
+        layout_index=2,
+        break_before="page",
+        display_start_override_ms=750,
+        display_end_override_ms=2250,
+        animation_override=LineAnimationOverride(
+            entry_anim="slide_in",
+            entry_duration_ms=450,
+        ),
+    )
+    track = TimingTrack(lines=[line])
+    document = SubtitleProjectDocument(
+        timing_track=track,
+        extra_sources=[
+            ExtraSubtitleSource(
+                name="和声",
+                path=tmp_path / "chorus.lrc",
+                track=track,
+            )
+        ],
+        subtitle_path=tmp_path / "main.lrc",
+        video_path=tmp_path / "video.mp4",
+        background_source=BackgroundSource(
+            kind="video",
+            path=str(tmp_path / "video.mp4"),
+            video_offset_ms=125,
+        ),
+        audio_path=tmp_path / "audio.wav",
+        style=Style(font_size_px=96),
+    )
+
+    payload = document.to_project_data(
+        screen={"width": 1920, "height": 1080, "fps": 60, "par": "1:1"},
+        selected_scheme_key="global",
+        project_role_names=["主唱", "和声"],
+        output={"encoder_mode": "cpu", "crf": 18},
+    )
+
+    assert payload["subtitle_path"] == str(tmp_path / "main.lrc")
+    assert payload["video_path"] == str(tmp_path / "video.mp4")
+    assert payload["audio_path"] == str(tmp_path / "audio.wav")
+    assert payload["background"]["video_offset_ms"] == 125
+    assert payload["style"]["font_size_px"] == 96
+    assert payload["line_layout_indices"] == [2]
+    assert payload["line_breaks_before"] == ["page"]
+    assert payload["char_role_labels"] == [["主唱"]]
+    assert payload["line_display_overrides"] == [[750, 2250]]
+    assert payload["line_animation_overrides"] == [
+        {
+            "entry_anim": "slide_in",
+            "entry_duration_ms": 450,
+            "exit_anim": "none",
+            "exit_duration_ms": 300,
+        }
+    ]
+    assert payload["project_role_names"] == ["主唱", "和声"]
+    assert payload["extra_subtitle_sources"][0]["name"] == "和声"
+    assert payload["extra_subtitle_sources"][0]["line_layout_indices"] == [2]
+    assert payload["output"] == {"encoder_mode": "cpu", "crf": 18}
+
+
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
     assert style_from_dict({}).allow_inter_page_line_overlap is False
 
