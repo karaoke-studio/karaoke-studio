@@ -1,26 +1,16 @@
 """波形对齐页（工作流第 2 步「音视频处理 → 波形对齐」）的全部界面与流程。
 
-**这是物理拆分，还不是完全的解耦**：这些方法整体从 ``KrokHelperQtApp`` 搬到
-这里，仍然以 mixin 的形式混回同一个对象，``self`` 语义和搬之前一模一样，因此
-行为零变化、也不需要改任何调用点。收益是对齐页从此是一份能单独读、单独改、
-单独 review 的文件，而不是散在八千行里的 78 个方法。
+页面是独立对象：自己建界面、自己持有三个后台任务和预览进程，与外壳的往来
+只经构造时注入的 ``host``。它需要外壳提供什么，全写在下面的 :class:`AlignmentHost`
+里 —— 那是一份真接口，不是"现状清单"，接口之外的东西页面拿不到。
 
-真正的解耦还差一步：把 mixin 变成独立的页面对象。挡在中间的是下面这份
-「宿主接口」—— 对齐页目前直接读写宿主的这些成员：
-
-* ``settings`` / ``save_app_settings`` —— 配置读写
-* ``_track_background_task`` —— 后台任务登记（关窗时统一收尾）
-* ``_resolve_ffmpeg_dir`` —— ffmpeg 位置
-* ``active_module`` / ``_focused_widget_is_text_input`` —— 快捷键是否该响应
-* ``_set_panel_enabled`` —— 忙碌时整块禁用
-* ``_notify_handoff`` —— 转交产物的右下角提示
-* ``set_on_vocal_path`` / ``subtitle_render_page`` —— 把产物交给第 5/6 步
-* ``_open_settings_window`` —— 打开全局设置的对齐分页
-* ``preview_timer`` / ``_offset_finalize_timer`` —— 两个只服务本页的定时器
-  （改对象时应当跟着搬过来）
-
-这份清单由 ``tests/test_alignment_page_boundary.py`` 钉住：多引用一个宿主成员
-测试就会失败，边界不会在不知不觉中重新糊上。
+边界由三条测试钉住：
+* ``tests/test_alignment_page_boundary.py`` —— 除 ``_host`` 外什么都不摸，且能用
+  假 host 独立构造；
+* ``tests/test_host_call_sites.py`` —— 每一处 ``self._host.xxx(...)`` 的调用形状都
+  对得上契约（漏参数不会等到点下按钮才发现）；
+* ``tests/test_page_state_initialized.py`` —— 会读的属性构造完就得在（初始化留在
+  外壳、读写在页面，这种分家过一次）。
 """
 
 from __future__ import annotations
@@ -161,7 +151,13 @@ class AlignmentPage(QWidget):
         self._load_alignment_settings()
 
     def collect_settings(self) -> None:
+        """把本页的设置全部写进 settings 对象（不落盘）。
+
+        命名模板和界面上那几个开关原先要外壳分两次调（``collect`` +
+        ``update_preferences_from_ui``），现在归成一个入口。
+        """
         self._collect_alignment_settings()
+        self._update_alignment_preferences_from_ui()
 
     def sync_shortcut_scope(self, active: bool) -> None:
         """只有本页在前台时那三个快捷键才该响应。"""
@@ -217,6 +213,12 @@ class AlignmentPage(QWidget):
     def current_video_path(self):
         zone = getattr(self, "align_video_zone", None)
         return getattr(zone, "path", None)
+
+    def build_settings_fragment(self, parent=None) -> QWidget:
+        """全局设置「波形对齐」页里那两块面板 —— 界面归提供设置的这一页。"""
+        from krok_helper.alignment.settings_fragment import AlignmentSettingsFragment
+
+        return AlignmentSettingsFragment(self, parent=parent)
 
     def validate_name_template(self, template: str, label: str, *, allowed_fields, extensions) -> str:
         return self._validate_alignment_name_template(
@@ -1567,11 +1569,22 @@ class AlignmentPage(QWidget):
         self._invalidate_alignment_waveforms()
         self._refresh_alignment_material_inputs()
 
-    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None:
+    def set_output_dir_settings(self, mode: str, custom_dir: str) -> None:
+        """写回导出位置。不合法抛 ``ProcessingError``。
+
+        "选了指定目录却没选/选了个不存在的目录"这条校验原先在全局设置对话框里，
+        跟着设置片段一起收回本页 —— 判断自己的取值是否合法本来就该自己说了算。
+        """
         if mode not in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}:
             raise ProcessingError("对齐输出位置无效，请重新选择。")
+        custom_dir = custom_dir.strip()
+        if mode == ALIGN_OUTPUT_DIR_CUSTOM:
+            if not custom_dir:
+                raise ProcessingError("请选择对齐导出的保存目录。")
+            if not Path(custom_dir).expanduser().is_dir():
+                raise ProcessingError("所选对齐导出目录无效，请重新选择。")
         self.align_output_dir_mode_value = mode
-        self.align_output_custom_dir_text = custom_dir.strip()
+        self.align_output_custom_dir_text = custom_dir
 
     def _choose_align_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择用于对齐的字幕视频", "", "视频文件 (*.mkv *.mp4 *.mov *.avi);;所有文件 (*.*)")

@@ -47,10 +47,6 @@ from qfluentwidgets import (
     SwitchButton,
 )
 
-from krok_helper.audio_alignment import (
-    DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
-    DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
-)
 from krok_helper.config import APP_LOGO_PATH, APP_TITLE, APP_VERSION, FFMPEG_DIR_PLACEHOLDER
 from krok_helper.errors import ProcessingError
 from krok_helper.logging_config import get_active_log_dir
@@ -69,8 +65,6 @@ from krok_helper.qfluent_compat import (
     show_fluent_info,
 )
 from krok_helper.settings import (
-    ALIGN_OUTPUT_DIR_CUSTOM,
-    ALIGN_OUTPUT_DIR_SOURCE_VIDEO,
     import_legacy_sug_settings,
     save_app_settings,
 )
@@ -127,22 +121,18 @@ class SettingsHost(Protocol):
     off_name_template_value: str
     ffmpeg_dir_text: str
 
-    # ── 波形对齐页的设置片段（待对齐页对象化后收敛）──
-    align_video_name_template_value: str
-    align_audio_name_template_value: str
-    align_output_custom_dir_text: str
-    align_output_dir_mode_value: str
-    align_video_zone: object
+    def build_alignment_settings_fragment(self, parent: QWidget | None = None) -> QWidget:
+        """向对齐页要一段设置界面。
 
-    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None: ...
+        以前这里是九项穿透（模板值、输出目录、连 ``align_video_zone`` 那张
+        drop card 都直接摸），对话框等于在远程操作另一页的内部状态。现在只要
+        一块填好值的 ``QWidget``，怎么排布、怎么校验都归它自己。
+        """
+        ...
 
-    def collect_alignment_settings(self) -> None: ...
-
-    def update_alignment_preferences_from_ui(self) -> None: ...
-
-    def validate_alignment_name_template(
-        self, template: str, label: str, *, allowed_fields: set[str], extensions: tuple[str, ...]
-    ) -> str: ...
+    def collect_page_settings(self) -> None:
+        """写盘前让外壳把各页当前的设置收进 ``settings`` —— 收谁是外壳的事。"""
+        ...
 
 
 def relax_setting_card_height(
@@ -268,95 +258,11 @@ class SettingsDialogs(QObject):
         from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
         _wb_th(status_label, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
 
+        alignment_fragment = None
         if context == "align":
-            naming_panel = QFrame()
-            naming_panel.setObjectName("WhitePanel")
-            naming_layout = QGridLayout(naming_panel)
-            naming_layout.setContentsMargins(14, 14, 14, 14)
-            naming_title = QLabel("对齐导出命名")
-            naming_title.setObjectName("PanelTitle")
-            video_template_edit = QLineEdit(dialog)
-            video_template_edit.setText(self._host.align_video_name_template_value)
-            audio_template_edit = QLineEdit(dialog)
-            audio_template_edit.setText(self._host.align_audio_name_template_value)
-            naming_help_1 = QLabel("默认: 对齐后视频 {video_name}_aligned.mp4；对齐后音频 {audio_name}_aligned.wav。")
-            from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-            _wb_th(naming_help_1, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-            naming_help_2 = QLabel("视频模板支持 {video_name}；音频模板支持 {audio_name} 和 {video_name}。不用写扩展名。")
-            from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-            _wb_th(naming_help_2, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-            naming_layout.addWidget(naming_title, 0, 0)
-            naming_layout.addWidget(QLabel("对齐后视频模板"), 1, 0)
-            naming_layout.addWidget(video_template_edit, 1, 1)
-            naming_layout.addWidget(QLabel("对齐后音频模板"), 2, 0)
-            naming_layout.addWidget(audio_template_edit, 2, 1)
-            naming_layout.addWidget(naming_help_1, 3, 1)
-            naming_layout.addWidget(naming_help_2, 4, 1)
-            naming_layout.setColumnStretch(1, 1)
-            shell.addWidget(naming_panel)
-
-            output_panel = QFrame()
-            output_panel.setObjectName("WhitePanel")
-            output_layout = QGridLayout(output_panel)
-            output_layout.setContentsMargins(14, 14, 14, 14)
-            output_layout.setHorizontalSpacing(10)
-            output_layout.setVerticalSpacing(10)
-            output_title = QLabel("对齐导出位置")
-            output_title.setObjectName("PanelTitle")
-            output_mode_group = QButtonGroup(dialog)
-            output_source_radio = QRadioButton("保存在字幕视频所在目录")
-            output_custom_radio = QRadioButton("保存在指定目录")
-            output_mode_group.addButton(output_source_radio)
-            output_mode_group.addButton(output_custom_radio)
-            if self._host.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM:
-                output_custom_radio.setChecked(True)
-            else:
-                output_source_radio.setChecked(True)
-            output_dir_edit = QLineEdit(dialog)
-            output_dir_edit.setReadOnly(True)
-            output_dir_edit.setPlaceholderText("点击选择保存文件夹")
-            output_dir_edit.setText(self._host.align_output_custom_dir_text)
-            output_dir_button = QPushButton("选择文件夹")
-
-            def choose_align_output_dir() -> None:
-                init_dir = output_dir_edit.text().strip()
-                if not init_dir and self._host.align_video_zone.path is not None:
-                    init_dir = str(self._host.align_video_zone.path.parent)
-                if not init_dir:
-                    init_dir = str(Path.home())
-                path = QFileDialog.getExistingDirectory(dialog, "选择对齐导出保存目录", init_dir)
-                if path:
-                    output_dir_edit.setText(path)
-                    output_custom_radio.setChecked(True)
-                    sync_align_output_dir_enabled()
-
-            def sync_align_output_dir_enabled() -> None:
-                enabled = output_custom_radio.isChecked()
-                output_dir_edit.setEnabled(enabled)
-                output_dir_button.setEnabled(enabled)
-
-            output_source_radio.toggled.connect(lambda _checked: sync_align_output_dir_enabled())
-            output_custom_radio.toggled.connect(lambda _checked: sync_align_output_dir_enabled())
-            output_dir_button.clicked.connect(choose_align_output_dir)
-            output_dir_edit.mousePressEvent = lambda event: choose_align_output_dir() if output_custom_radio.isChecked() else None
-            sync_align_output_dir_enabled()
-
-            output_help = QLabel("导出时会以这里作为另存为窗口的默认目录。")
-            from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-            _wb_th(output_help, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-            output_dir_row = QHBoxLayout()
-            output_dir_row.setContentsMargins(0, 0, 0, 0)
-            output_dir_row.setSpacing(8)
-            output_dir_row.addWidget(output_dir_edit, 1)
-            output_dir_row.addWidget(output_dir_button)
-            output_layout.addWidget(output_title, 0, 0)
-            output_layout.addWidget(output_source_radio, 1, 1)
-            output_layout.addWidget(output_custom_radio, 2, 1)
-            output_layout.addWidget(QLabel("指定目录"), 3, 0)
-            output_layout.addLayout(output_dir_row, 3, 1)
-            output_layout.addWidget(output_help, 4, 1)
-            output_layout.setColumnStretch(1, 1)
-            shell.addWidget(output_panel)
+            # 界面由对齐页自己提供，这里只负责摆进版式、保存时叫它一声。
+            alignment_fragment = self._host.build_alignment_settings_fragment(dialog)
+            shell.addWidget(alignment_fragment)
         else:
             naming_panel = QFrame()
             naming_panel.setObjectName("WhitePanel")
@@ -427,19 +333,9 @@ class SettingsDialogs(QObject):
                 mode = self._host.output_name_mode_value
                 on_template = self._host.on_name_template_value
                 off_template = self._host.off_name_template_value
-                align_video_template = self._host.align_video_name_template_value
-                align_audio_template = self._host.align_audio_name_template_value
-                align_output_dir_mode = self._host.align_output_dir_mode_value
-                align_output_custom_dir = self._host.align_output_custom_dir_text
-                if context == "align":
-                    align_video_template = video_template_edit.text().strip() or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
-                    align_audio_template = audio_template_edit.text().strip() or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
-                    align_output_dir_mode = (
-                        ALIGN_OUTPUT_DIR_CUSTOM
-                        if output_custom_radio.isChecked()
-                        else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
-                    )
-                    align_output_custom_dir = output_dir_edit.text().strip()
+                if alignment_fragment is not None:
+                    # 对齐那一页的校验与写回都归它自己，不合法照样抛 ProcessingError。
+                    alignment_fragment.apply()
                 else:
                     mode = OUTPUT_NAME_MODE_TEMPLATE if template_radio.isChecked() else OUTPUT_NAME_MODE_FIXED
                     # 仅在选择「自定义模板」时才采用对话框里填写的模板；保存为「默认命名」
@@ -452,10 +348,6 @@ class SettingsDialogs(QObject):
                     output_name_mode=mode,
                     on_template=on_template,
                     off_template=off_template,
-                    align_video_template=align_video_template,
-                    align_audio_template=align_audio_template,
-                    align_output_dir_mode=align_output_dir_mode,
-                    align_output_custom_dir=align_output_custom_dir,
                     ffmpeg_dir_text=self._host.ffmpeg_dir_text,
                 )
             except ProcessingError as exc:
@@ -998,25 +890,16 @@ class SettingsDialogs(QObject):
         output_name_mode: str,
         on_template: str,
         off_template: str,
-        align_video_template: str,
-        align_audio_template: str,
-        align_output_dir_mode: str,
-        align_output_custom_dir: str,
         ffmpeg_dir_text: str,
     ) -> Path:
+        """校验对话框自己那几项，再连同各页的设置一起落盘。
+
+        对齐那几项原先也在这里校验和写回（模板、输出目录），现在归对齐页的
+        设置片段 —— 保存时它已经先跑过 ``apply()`` 了。
+        """
         ffmpeg_dir = Path(ffmpeg_dir_text).expanduser() if ffmpeg_dir_text.strip() else None
         if ffmpeg_dir is not None and not ffmpeg_dir.is_dir():
             raise ProcessingError("所选 ffmpeg 目录无效，请重新选择。")
-        if align_output_dir_mode not in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}:
-            raise ProcessingError("对齐输出位置无效，请重新选择。")
-        align_output_dir = (
-            Path(align_output_custom_dir).expanduser() if align_output_custom_dir.strip() else None
-        )
-        if align_output_dir_mode == ALIGN_OUTPUT_DIR_CUSTOM:
-            if align_output_dir is None:
-                raise ProcessingError("请选择对齐导出的保存目录。")
-            if not align_output_dir.is_dir():
-                raise ProcessingError("所选对齐导出目录无效，请重新选择。")
 
         if output_name_mode not in {OUTPUT_NAME_MODE_FIXED, OUTPUT_NAME_MODE_TEMPLATE}:
             raise ProcessingError("输出命名模式无效，请重新选择。")
@@ -1024,35 +907,15 @@ class SettingsDialogs(QObject):
             on_template = validate_output_name_template(on_template, "原唱")
             off_template = validate_output_name_template(off_template, "伴奏")
 
-        align_video_template = self._host.validate_alignment_name_template(
-            align_video_template,
-            "对齐后视频",
-            allowed_fields={"video_name"},
-            extensions=(".mp4", ".mkv"),
-        )
-        align_audio_template = self._host.validate_alignment_name_template(
-            align_audio_template,
-            "对齐后音频",
-            allowed_fields={"audio_name", "video_name"},
-            extensions=(".wav",),
-        )
-
         self._host.output_name_mode_value = output_name_mode
         self._host.on_name_template_value = on_template
         self._host.off_name_template_value = off_template
-        self._host.align_video_name_template_value = align_video_template
-        self._host.align_audio_name_template_value = align_audio_template
-        self._host.set_alignment_output_dir_settings(
-            align_output_dir_mode,
-            str(align_output_dir) if align_output_dir is not None else "",
-        )
         self._host.ffmpeg_dir_text = str(ffmpeg_dir) if ffmpeg_dir else ""
         self._host.sync_ffmpeg_labels()
         self._host.settings.output_name_mode = self._host.output_name_mode_value
         self._host.settings.on_name_template = self._host.on_name_template_value
         self._host.settings.off_name_template = self._host.off_name_template_value
-        self._host.collect_alignment_settings()
         self._host.settings.ffmpeg_dir = self._host.ffmpeg_dir_text
         self._host.sync_lyrics_timing_host_paths()
-        self._host.update_alignment_preferences_from_ui()
+        self._host.collect_page_settings()
         return save_app_settings(self._host.settings)

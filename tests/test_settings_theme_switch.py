@@ -28,11 +28,6 @@ class _Host(QWidget):
         self.output_name_mode_value = "fixed"
         self.on_name_template_value = "{video_name}_on"
         self.off_name_template_value = "{video_name}_off"
-        self.align_video_name_template_value = "{video_name}_aligned"
-        self.align_audio_name_template_value = "{audio_name}_aligned"
-        self.align_output_custom_dir_text = ""
-        self.align_output_dir_mode_value = "source_video"
-        self.align_video_zone = None
 
     def set_ffmpeg_dir(self, path) -> None: ...
 
@@ -44,14 +39,10 @@ class _Host(QWidget):
 
     def start_workbench_update_check(self, **_kwargs) -> None: ...
 
-    def set_alignment_output_dir_settings(self, mode, custom_dir) -> None: ...
+    def build_alignment_settings_fragment(self, parent=None):
+        return QWidget(parent)
 
-    def collect_alignment_settings(self) -> None: ...
-
-    def update_alignment_preferences_from_ui(self) -> None: ...
-
-    def validate_alignment_name_template(self, template, label, **_kwargs):
-        return template
+    def collect_page_settings(self) -> None: ...
 
 
 def test_the_dialog_owner_is_a_qobject() -> None:

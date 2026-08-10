@@ -269,7 +269,12 @@ class LyricsSearchPage(QWidget):
     def persist_preferences(self) -> None:
         self._persist_lyrics_preferences()
 
-    def rerender_results(self) -> None:
+    def collect_settings(self) -> None:
+        """外壳写盘前统一收一遍。本页的偏好每次改动就已经写进 settings 了，
+        这里再收一次只是保证落盘时取的是最终态。"""
+        self._persist_lyrics_preferences()
+
+    def rerender_after_theme_change(self) -> None:
         """主题切换后重画结果表 —— 表格单元格的配色是自绘的。"""
         if not self.lyrics_search_results:
             return

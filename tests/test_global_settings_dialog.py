@@ -19,11 +19,6 @@ class _SettingsHost(QWidget):
         self.output_name_mode_value = "fixed"
         self.on_name_template_value = "{video_name}_on"
         self.off_name_template_value = "{video_name}_off"
-        self.align_video_name_template_value = "{video_name}_aligned"
-        self.align_audio_name_template_value = "{audio_name}_aligned"
-        self.align_output_custom_dir_text = ""
-        self.align_output_dir_mode_value = "source_video"
-        self.align_video_zone = None
 
     def install_single_click_combo_behavior(self, _combo: QWidget) -> None:
         pass
@@ -41,18 +36,11 @@ class _SettingsHost(QWidget):
     def start_workbench_update_check(self, *, manual: bool) -> None:
         pass
 
-    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None:
-        self.align_output_dir_mode_value = mode
-        self.align_output_custom_dir_text = custom_dir
+    def build_alignment_settings_fragment(self, parent=None) -> QWidget:
+        return QWidget(parent)
 
-    def collect_alignment_settings(self) -> None:
+    def collect_page_settings(self) -> None:
         pass
-
-    def update_alignment_preferences_from_ui(self) -> None:
-        pass
-
-    def validate_alignment_name_template(self, template, label, **_kwargs):
-        return template
 
 
 def _open_global_settings_dialog(monkeypatch):

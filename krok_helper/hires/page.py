@@ -694,6 +694,7 @@ class HiResPage(QWidget):
         self._hires_expected_outputs: list[Path] = []
         self._hires_completed_outputs: list[Path] = []
         self._hires_preexisting_outputs: set[Path] = set()
+        self._status_color: str | None = None
         self._build_ui()
 
     def _register_task(self, task: BackgroundTask) -> BackgroundTask:
@@ -1011,10 +1012,21 @@ class HiResPage(QWidget):
             off_template,
         )
 
+    def collect_settings(self) -> None:
+        """本页没有自己的持久化项 —— 输出命名/目录都归全局设置。
+
+        明写成空实现，是为了让外壳能一视同仁地遍历各页，不必按方法名去猜。
+        """
+
+    def rerender_after_theme_change(self) -> None:
+        """主题切换后重上状态色 —— idle 那一档是跟着配色走的，不重上会留在旧主题。"""
+        self._set_hires_status_color(self._status_color)
+
     def _set_hires_status_color(self, color: str | None) -> None:
         # ``None`` 表示 idle —— 用当前主题的 ``text_secondary``；其它显式色
         # （success/error/processing）按原值传给 QSS，深色背景下这些状态色
         # 都有足够对比度。
+        self._status_color = color
         if color is None:
             from krok_helper.theme_workbench import palette as _wb_pal
             color = _wb_pal().text_secondary

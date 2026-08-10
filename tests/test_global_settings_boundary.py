@@ -21,18 +21,9 @@ from krok_helper.settings import AppSettings
 
 PAGE = pathlib.Path(__file__).resolve().parents[1] / "krok_helper" / "global_settings" / "page.py"
 
-#: 对齐页的设置片段 —— 对齐页对象化后这一组应当消失。
-ALIGNMENT_REACH_THROUGH = {
-    "align_video_name_template_value",
-    "align_audio_name_template_value",
-    "align_output_custom_dir_text",
-    "align_output_dir_mode_value",
-    "align_video_zone",
-    "set_alignment_output_dir_settings",
-    "collect_alignment_settings",
-    "update_alignment_preferences_from_ui",
-    "validate_alignment_name_template",
-}
+#: 对齐页的设置片段 —— 曾经是九项穿透（模板值、输出目录、连那张 drop card 都
+#: 直接摸），现在收敛成"向对齐页要一块 QWidget"。这一组只能是它自己。
+ALIGNMENT_REACH_THROUGH = {"build_alignment_settings_fragment"}
 
 
 class _Host(QWidget):
@@ -43,11 +34,6 @@ class _Host(QWidget):
         self.output_name_mode_value = "fixed"
         self.on_name_template_value = "{video_name}_on"
         self.off_name_template_value = "{video_name}_off"
-        self.align_video_name_template_value = "{video_name}_aligned"
-        self.align_audio_name_template_value = "{audio_name}_aligned"
-        self.align_output_custom_dir_text = ""
-        self.align_output_dir_mode_value = "source_video"
-        self.align_video_zone = None
 
     def set_ffmpeg_dir(self, path) -> None:
         self.ffmpeg_dir_text = str(path) if path is not None else ""
@@ -60,14 +46,10 @@ class _Host(QWidget):
 
     def start_workbench_update_check(self, *, manual: bool) -> None: ...
 
-    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None: ...
+    def build_alignment_settings_fragment(self, parent=None):
+        return QWidget(parent)
 
-    def collect_alignment_settings(self) -> None: ...
-
-    def update_alignment_preferences_from_ui(self) -> None: ...
-
-    def validate_alignment_name_template(self, template, label, **_kwargs):
-        return template
+    def collect_page_settings(self) -> None: ...
 
 
 @pytest.fixture

@@ -341,17 +341,6 @@ class KrokHelperQtApp(QMainWindow):
         QTimer.singleShot(2500, self._check_for_workbench_update_on_startup)
 
 
-    def _track_background_task(self, attr_name: str, task: BackgroundTask) -> BackgroundTask:
-        task.setObjectName(attr_name)
-        setattr(self, attr_name, task)
-        task.finished.connect(lambda attr_name=attr_name, task=task: self._cleanup_background_task(attr_name, task))
-        task.finished.connect(task.deleteLater)
-        return task
-
-    def _cleanup_background_task(self, attr_name: str, task: BackgroundTask) -> None:
-        if getattr(self, attr_name, None) is task:
-            setattr(self, attr_name, None)
-
     # ── HiResHost 实现 ───────────────────────────────────────────
     # 这几个是「页面 → 外壳」的公开接口（见 krok_helper.hires.page.HiResHost）。
     # 其余还是 mixin 的页面仍直接用下划线私有方法，等它们各自对象化时一并收口。
@@ -394,53 +383,14 @@ class KrokHelperQtApp(QMainWindow):
             trigger_button=trigger_button,
         )
 
-    def collect_alignment_settings(self) -> None:
-        align_page = getattr(self, "align_page", None)
-        if align_page is not None:
-            align_page.collect_settings()
+    def build_alignment_settings_fragment(self, parent=None):
+        """全局设置里「波形对齐」那一页的内容，向对齐页要。"""
+        return self.align_page.build_settings_fragment(parent)
 
-    def update_alignment_preferences_from_ui(self) -> None:
-        self.align_page._update_alignment_preferences_from_ui()
-
-    def validate_alignment_name_template(self, template, label, *, allowed_fields, extensions):
-        return self.align_page.validate_name_template(
-            template, label, allowed_fields=allowed_fields, extensions=extensions
-        )
-
-    # 设置对话框读写对齐页的那几项 —— 转调到页面自己的窄接口，
-    # 不再让对话框隔空改它的属性。
-    @property
-    def align_video_name_template_value(self) -> str:
-        return self.align_page.name_templates()[0]
-
-    @align_video_name_template_value.setter
-    def align_video_name_template_value(self, value: str) -> None:
-        _video, audio = self.align_page.name_templates()
-        self.align_page.set_name_templates(value, audio)
-
-    @property
-    def align_audio_name_template_value(self) -> str:
-        return self.align_page.name_templates()[1]
-
-    @align_audio_name_template_value.setter
-    def align_audio_name_template_value(self, value: str) -> None:
-        video, _audio = self.align_page.name_templates()
-        self.align_page.set_name_templates(video, value)
-
-    @property
-    def align_output_dir_mode_value(self) -> str:
-        return self.align_page.output_dir_settings()[0]
-
-    @property
-    def align_output_custom_dir_text(self) -> str:
-        return self.align_page.output_dir_settings()[1]
-
-    @property
-    def align_video_zone(self):
-        return self.align_page.align_video_zone
-
-    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None:
-        self.align_page.set_alignment_output_dir_settings(mode, custom_dir)
+    def collect_page_settings(self) -> None:
+        """写盘前把各页当前的设置收进 settings —— 收谁归外壳管。"""
+        for page in self._workflow_pages():
+            page.collect_settings()
 
     # ── LyricsSearchHost 实现 ────────────────────────────────────
 
@@ -486,17 +436,25 @@ class KrokHelperQtApp(QMainWindow):
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         return self.hires_page.accept_separated_accompaniment(paths)
 
+    def _workflow_pages(self) -> list:
+        """已经建好的工作流页面。
+
+        外壳跟页面打交道就走这一条（重绘、收设置、查后台任务），不再按方法名
+        去 ``getattr`` —— 名字对不上时那种写法是静默空转，出过事。
+        """
+        pages = []
+        for name in ("align_page", "lyrics_page", "hires_page"):
+            page = getattr(self, name, None)
+            if page is not None:
+                pages.append(page)
+        return pages
+
     def _running_background_tasks(self) -> list[BackgroundTask]:
         tasks: list[BackgroundTask] = []
         # 每个页面自己持有后台任务，关窗前挨个问。
-        for page in (
-            getattr(self, "hires_page", None),
-            getattr(self, "lyrics_page", None),
-            getattr(self, "align_page", None),
-        ):
-            running = getattr(page, "running_tasks", None)
-            if callable(running):
-                tasks.extend(running())
+        tasks_by_page = (page.running_tasks() for page in self._workflow_pages())
+        for running in tasks_by_page:
+            tasks.extend(running)
         return tasks
 
     def showEvent(self, event) -> None:  # noqa: N802
@@ -589,33 +547,17 @@ class KrokHelperQtApp(QMainWindow):
         try:
             setThemeColor(palette().accent_primary, lazy=True)
             self._apply_styles()
-            # 状态驱动的样式（依据 in-memory 计数/选中态生成 QSS）需要在
-            # 主题切换时重跑，因为 themed() 只覆盖"恒等 lambda"场景。
-            for fn_name in (
-                "_refresh_alignment_material_inputs",
-                "_apply_alignment_mode_styles",
-                "_refresh_alignment_export_panels",
-            ):
-                fn = getattr(self, fn_name, None)
-                if fn is None:
-                    continue
+            # 状态驱动的样式（依据 in-memory 计数/选中态生成 QSS）需要在主题切换时
+            # 重跑，因为 themed() 只覆盖"恒等 lambda"场景。这活儿归各页自己 ——
+            # 以前是外壳按**方法名**去 getattr 自己身上的一串私有方法，页面搬走之后
+            # 那串名字全成了 None，配着 `if fn is None: continue` 一声不响地空转，
+            # 换主题后对齐页的卡片/模式按钮/导出面板就一直留在旧配色里。
+            for page in self._workflow_pages():
                 try:
-                    fn()
+                    page.rerender_after_theme_change()
                 except Exception:
-                    pass
-            if hasattr(self, "_head_mode_current"):
-                try:
-                    self._update_head_mode_buttons(self._head_mode_current)
-                except Exception:
-                    pass
-            lyrics_page = getattr(self, "lyrics_page", None)
-            if lyrics_page is not None:
-                try:
-                    lyrics_page.rerender_results()
-                except Exception:
-                    pass
+                    logging.getLogger(__name__).warning("页面重绘失败：%s", type(page).__name__, exc_info=True)
         except Exception:
-            import logging
             logging.getLogger(__name__).warning("主题切换刷新失败", exc_info=True)
 
     def _apply_styles(self) -> None:
@@ -1294,15 +1236,9 @@ class KrokHelperQtApp(QMainWindow):
         self.settings.output_name_mode = self.output_name_mode_value
         self.settings.on_name_template = self.on_name_template_value
         self.settings.off_name_template = self.off_name_template_value
-        align_page = getattr(self, "align_page", None)
-        if align_page is not None:
-            align_page.collect_settings()
         self.settings.ffmpeg_dir = self.ffmpeg_dir_text
         self._sync_lyrics_timing_host_paths()
-        if not self._loading_settings_into_ui:
-            align_page = getattr(self, "align_page", None)
-            if align_page is not None:
-                align_page.collect_settings()
+        self.collect_page_settings()
         return save_app_settings(self.settings)
 
     def _bind_shortcuts(self) -> None:
