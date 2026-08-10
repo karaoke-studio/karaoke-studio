@@ -28,8 +28,11 @@ def _fake_host(calls: list) -> SimpleNamespace:
         active_module="waveform_align",
         track_background_task=lambda task: task,
         resolve_ffmpeg_dir=lambda: None,
-        build_media_info=lambda path, label: f"{label}: {path.name}",
-        set_panel_enabled=lambda panel, enabled: calls.append(("panel", enabled)),
+        build_media_info=lambda path, label: f"{label}: {path.name if path else '时长未知'}",
+        set_panel_enabled=lambda panel, enabled: (
+            calls.append(("panel", enabled)),
+            [w.setEnabled(enabled) for w in panel.findChildren(QWidget)],
+        ),
         focused_widget_is_text_input=lambda: False,
         notify_handoff=lambda title, content: calls.append(("toast", title)),
         open_settings_window=lambda context: calls.append(("settings", context)),

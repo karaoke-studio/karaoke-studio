@@ -371,7 +371,7 @@ class KrokHelperQtApp(QMainWindow):
     def set_panel_enabled(self, panel, enabled: bool) -> None:
         self._set_panel_enabled(panel, enabled)
 
-    def build_media_info(self, path: Path, label: str) -> str:
+    def build_media_info(self, path: Path | None, label: str) -> str:
         return self._build_media_info(path, label)
 
     def focused_widget_is_text_input(self) -> bool:

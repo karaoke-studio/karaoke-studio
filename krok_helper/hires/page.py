@@ -76,9 +76,6 @@ class HiResHost(Protocol):
     页面拿不到接口之外的任何东西。
     """
 
-    #: 应用配置对象，页面读写自己那几项。
-    settings: object
-
     def track_background_task(self, task: BackgroundTask) -> BackgroundTask:
         """登记后台任务，让外壳在关窗/强退时统一收尾。"""
         ...

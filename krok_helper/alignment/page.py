@@ -121,8 +121,11 @@ class AlignmentHost(Protocol):
 
     def resolve_ffmpeg_dir(self) -> Path | None: ...
 
-    def build_media_info(self, path: Path, label: str) -> str:
-        """素材信息文案（带时长/分辨率），Hi-Res 页也在用，所以留在外壳。"""
+    def build_media_info(self, path: Path | None, label: str) -> str:
+        """素材信息文案（带时长/分辨率），Hi-Res 页也在用，所以留在外壳。
+
+        清空素材后这里会拿到 ``None``，返回「时长未知」而不是炸。
+        """
         ...
 
     def set_panel_enabled(self, panel, enabled: bool) -> None:
@@ -173,6 +176,20 @@ class AlignmentPage(QWidget):
 
     def is_busy(self) -> bool:
         return bool(self.running_tasks())
+
+    def _register_task(self, slot: str, task: BackgroundTask) -> BackgroundTask:
+        """把任务放进本页的槽位，并登记到外壳去统一收尾。
+
+        三个槽位归页面自己（对象化之前是外壳按属性名代管的），所以清槽也在这边。
+        清之前认一下身份：旧任务的 finished 晚到时不能把新任务的槽位抹掉。
+        """
+        setattr(self, slot, task)
+        task.finished.connect(lambda slot=slot, task=task: self._forget_task(slot, task))
+        return self._host.track_background_task(task)
+
+    def _forget_task(self, slot: str, task: BackgroundTask) -> None:
+        if getattr(self, slot, None) is task:
+            setattr(self, slot, None)
 
     def refresh_media_info(self) -> None:
         self._refresh_media_info_labels()
@@ -1719,7 +1736,7 @@ class AlignmentPage(QWidget):
             audio_waveform = extract_waveform(audio_path, ffmpeg_dir, logger, label="原唱音源")
             return video_waveform, audio_waveform
 
-        task = self._host.track_background_task("align_analysis_task", BackgroundTask(runner))
+        task = self._register_task("align_analysis_task", BackgroundTask(runner))
         task.log_message.connect(self._append_align_log)
         task.task_succeeded.connect(self._finish_alignment_analysis_success)
         task.task_failed.connect(self._finish_alignment_analysis_failure)
@@ -1781,7 +1798,7 @@ class AlignmentPage(QWidget):
                 audio_start_seconds=audio_start_seconds,
             )
 
-        task = self._host.track_background_task("align_auto_task", BackgroundTask(runner))
+        task = self._register_task("align_auto_task", BackgroundTask(runner))
         task.task_succeeded.connect(self._finish_auto_align_success)
         task.task_failed.connect(self._finish_auto_align_failure)
         task.start()
@@ -2298,7 +2315,7 @@ class AlignmentPage(QWidget):
                 self._align_export_completed_outputs.append(outputs[-1])
             return outputs
 
-        task = self._host.track_background_task("align_export_task", BackgroundTask(runner))
+        task = self._register_task("align_export_task", BackgroundTask(runner))
         task.log_message.connect(self._append_align_log)
         # Connect to bound QObject methods so Qt queues completion back to this
         # window's GUI thread. A lambda runs in BackgroundTask's worker thread

@@ -16,12 +16,13 @@ from typing import get_type_hints
 
 import pytest
 
+from krok_helper.alignment.page import AlignmentHost
 from krok_helper.global_settings.page import SettingsHost
 from krok_helper.gui_qt import KrokHelperQtApp
 from krok_helper.hires.page import HiResHost
 from krok_helper.lyrics_search.page import LyricsSearchHost
 
-PROTOCOLS = [HiResHost, LyricsSearchHost, SettingsHost]
+PROTOCOLS = [AlignmentHost, HiResHost, LyricsSearchHost, SettingsHost]
 
 
 def _protocol_methods(protocol) -> list[str]:
@@ -77,7 +78,9 @@ def test_the_shell_accepts_the_declared_call_shape(protocol) -> None:
 
 @pytest.mark.parametrize("protocol", PROTOCOLS, ids=lambda p: p.__name__)
 def test_the_shell_carries_every_protocol_attribute(protocol) -> None:
-    """契约里的数据成员由实例持有，类上查不到，所以只断言它们有声明来源。"""
-    declared = _protocol_attributes(protocol)
+    """契约里的数据成员由实例持有，类上查不到，所以只断言注解解析得开。
 
-    assert declared, f"{protocol.__name__} 没有声明任何数据成员？"
+    没有数据成员是合法的 —— `HiResHost` 就一项不要，配置全经方法拿。
+    """
+    for name in _protocol_attributes(protocol):
+        assert not name.startswith("__"), f"{protocol.__name__} 的 {name} 不像是数据成员"
