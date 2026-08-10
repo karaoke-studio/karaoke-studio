@@ -1554,6 +1554,18 @@ class LyricsPanel(DropPanel):
         if display_row is not None:
             self._refresh_presentation(rows=[display_row])
 
+    def refresh_layout_assignments(self) -> None:
+        """行的布局变了之后刷新「布局」列。
+
+        布局是写在 **track**（``line.layout_index``）上的，不是 ``Style``。宿主原先
+        靠 ``set_style(self._style)`` 顺带触发重绘，但 ``set_style`` 后来加了"样式
+        签名没变就直接返回"的优化 —— 样式本来就没变，于是这一列一直停在旧值：
+        右键菜单里勾的已经是新布局、预览也按新布局渲染，只有表格还写着旧的。
+        """
+        if not self._populated:
+            return
+        self._refresh_presentation(update_widths=True)
+
     def refresh_row_effect(self, row: int) -> None:
         """逐行动画覆盖变化后刷新该行摘要。"""
         display_row = self._display_row_for_track_line(row)

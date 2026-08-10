@@ -6549,6 +6549,9 @@ class SubtitleRenderWindow(QWidget):
         # track 是就地修改的，set_style 只为触发预览/列表重绘；副轨需重喂 worker。
         self._preview_panel.set_style(self._style)
         self._lyrics_panel.set_style(self._style)
+        # 布局写在 track 上而不是 Style 上，``set_style`` 比对签名后会直接返回，
+        # 「布局」列刷不到 —— 得单独叫一次。
+        self._lyrics_panel.refresh_layout_assignments()
         self._sync_extra_tracks_to_preview()
         self._margin_check_timer.start()
         self._mark_project_dirty()
