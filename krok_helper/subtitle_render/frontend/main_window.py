@@ -292,7 +292,12 @@ BACKGROUND_MEDIA_FILTER = (
     + VIDEO_FILTER + ";;" + IMAGE_FILTER
 )
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
-PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
+PROJECT_FILTER = (
+    f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX} *{N3_PROJECT_FILE_SUFFIX});;"
+    f"Yurika 项目 (*{PROJECT_FILE_SUFFIX});;"
+    f"NicoKaraMaker3 项目 (*{N3_PROJECT_FILE_SUFFIX});;"
+    "所有文件 (*.*)"
+)
 EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
 AUTO_SAVE_DEBOUNCE_MS = 2_000
@@ -3273,7 +3278,16 @@ class SubtitleRenderWindow(QWidget):
         *,
         confirm_discard: bool = True,
     ) -> bool:
-        """Open a ``.yurika`` project selected from the menu or dropped."""
+        """Open a ``.yurika`` project selected from the menu or dropped。
+
+        ``.n3proj`` 在这里改道走 N3 导入：它是个 zip，按 ``.yurika`` 的路子读会
+        撞上一句谁也看不懂的 ``'utf-8' codec can't decode byte 0x.. ``。拖进来时
+        本来就是按扩展名分流的，从「打开」菜单或命令行进来的却不是 —— 同一个文件
+        两条路两种结果。
+        """
+        path = Path(path)
+        if path.suffix.lower() == N3_PROJECT_FILE_SUFFIX:
+            return self._import_n3_project_path(path, confirm_discard=confirm_discard)
         if confirm_discard and not self._confirm_discard_changes():
             return False
         try:
