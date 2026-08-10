@@ -1083,6 +1083,32 @@ def test_batch_layout_assignment_is_remembered_for_new_subtitle_sources(qapp):
     assert project_track.lines[0].layout_index == 0
 
 
+def test_layout_assignment_document_command_preserves_undo_and_dirty_state(qapp):
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(Style(layouts=[LyricsLayout(name="常用布局")]))}
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._timing_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("一", 0)], end_ms=500),
+            TimingLine(chars=[TimingChar("二", 500)], end_ms=1000),
+        ]
+    )
+    win._set_project_dirty(False)
+
+    win._on_layout_assign_all(1)
+
+    assert [line.layout_index for line in win._timing_track.lines] == [1, 1]
+    assert win._undo_stack[-1][0] == "track_snapshot"
+    assert win._project_dirty is True
+
+    win._undo_edit()
+    assert [line.layout_index for line in win._timing_track.lines] == [0, 0]
+
+    win._redo_edit()
+    assert [line.layout_index for line in win._timing_track.lines] == [1, 1]
+
+
 def _font_migration_catalog() -> N3FontCatalog:
     return N3FontCatalog(
         families=("游明朝", "标准名称"),

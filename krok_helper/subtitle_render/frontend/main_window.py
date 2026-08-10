@@ -293,6 +293,7 @@ from krok_helper.subtitle_render.session import (
     SubtitleProjectDocument,
     SubtitleProjectSession,
     SubtitleProjectState,
+    SubtitleTrackMutation,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 
@@ -6133,6 +6134,13 @@ class SubtitleRenderWindow(QWidget):
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
 
+    def _record_track_mutation(self, mutation: SubtitleTrackMutation) -> None:
+        self._record_track_snapshot(
+            mutation.track_index,
+            mutation.before,
+            mutation.after,
+        )
+
     def _on_page_boundary_requested(self, action: str, track_line_index: int) -> None:
         track = self._active_track()
         if track is None or self._title_source_active:
@@ -6535,17 +6543,23 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None:
             return
-        before = deepcopy(track)
-        changed: set[int] = set()
-        for row in rows:
-            if isinstance(row, int) and 0 <= row < len(track.lines):
-                changed.update(
-                    apply_layout_to_page(track, self._style, row, int(layout_index))
-                )
-        if changed:
-            self._record_track_snapshot(
-                self._active_source_index, before, deepcopy(track)
-            )
+        def apply_selected_pages(target: TimingTrack) -> set[int]:
+            changed: set[int] = set()
+            for row in rows:
+                if isinstance(row, int) and 0 <= row < len(target.lines):
+                    changed.update(
+                        apply_layout_to_page(
+                            target, self._style, row, int(layout_index)
+                        )
+                    )
+            return changed
+
+        mutation = self._project_document.mutate_track(
+            self._active_source_index,
+            apply_selected_pages,
+        )
+        if mutation is not None and mutation.changed:
+            self._record_track_mutation(mutation)
             self._refresh_after_layout_assignment()
 
     def _on_layout_assign_all(self, layout_index: int) -> None:
@@ -6568,24 +6582,28 @@ class SubtitleRenderWindow(QWidget):
                     "请改用更大布局，或先调整分页。",
                 )
                 return
-        before = deepcopy(track)
         self._remember_layout_assignment("all", int(layout_index))
-        if assign_layout_to_all(track, int(layout_index), self._style):
-            self._record_track_snapshot(
-                self._active_source_index, before, deepcopy(track)
-            )
+        mutation = self._project_document.mutate_track(
+            self._active_source_index,
+            lambda target: assign_layout_to_all(
+                target, int(layout_index), self._style
+            ),
+        )
+        if mutation is not None and mutation.changed:
+            self._record_track_mutation(mutation)
             self._refresh_after_layout_assignment()
 
     def _on_layout_auto_assign(self) -> None:
         track = self._active_track()
         if track is None:
             return
-        before = deepcopy(track)
         self._remember_layout_assignment("auto")
-        if auto_assign_layouts_by_page(track, self._style):
-            self._record_track_snapshot(
-                self._active_source_index, before, deepcopy(track)
-            )
+        mutation = self._project_document.mutate_track(
+            self._active_source_index,
+            lambda target: auto_assign_layouts_by_page(target, self._style),
+        )
+        if mutation is not None and mutation.changed:
+            self._record_track_mutation(mutation)
             self._refresh_after_layout_assignment()
 
     def _on_layout_deleted(self, deleted_index: int) -> None:

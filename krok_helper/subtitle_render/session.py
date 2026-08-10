@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from krok_helper.models import MediaInfo
 from krok_helper.subtitle_render.models import (
@@ -59,6 +59,20 @@ class ExtraSubtitleSource:
     track: TimingTrack
 
 
+@dataclass(frozen=True)
+class SubtitleTrackMutation:
+    """One document-owned track mutation with stable undo snapshots."""
+
+    track_index: int
+    before: TimingTrack
+    after: TimingTrack
+    result: Any = None
+
+    @property
+    def changed(self) -> bool:
+        return self.before != self.after
+
+
 @dataclass
 class SubtitleProjectDocument:
     """Mutable project content shared by UI, preview, and export adapters."""
@@ -98,6 +112,24 @@ class SubtitleProjectDocument:
             self.extra_sources[index - 1].track = track
             return True
         return False
+
+    def mutate_track(
+        self,
+        index: int,
+        operation: Callable[[TimingTrack], Any],
+    ) -> Optional[SubtitleTrackMutation]:
+        """Run one in-place track operation and capture undo-safe snapshots."""
+        track = self.track_at(index)
+        if track is None:
+            return None
+        before = deepcopy(track)
+        result = operation(track)
+        return SubtitleTrackMutation(
+            track_index=int(index),
+            before=before,
+            after=deepcopy(track),
+            result=result,
+        )
 
     def clear_loaded_media(self) -> None:
         """Clear source material while preserving current project style."""

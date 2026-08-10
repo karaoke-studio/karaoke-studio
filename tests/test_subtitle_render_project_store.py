@@ -203,6 +203,36 @@ def test_project_document_owns_track_lookup_and_replacement(tmp_path):
     assert document.replace_track(2, primary) is False
 
 
+def test_project_document_captures_track_mutation_snapshots():
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("主", 0)])])
+    document = SubtitleProjectDocument(timing_track=track)
+
+    mutation = document.mutate_track(
+        0,
+        lambda target: setattr(target.lines[0], "layout_index", 2) or "applied",
+    )
+
+    assert mutation is not None
+    assert mutation.changed is True
+    assert mutation.result == "applied"
+    assert mutation.before.lines[0].layout_index == 0
+    assert mutation.after.lines[0].layout_index == 2
+    track.lines[0].layout_index = 3
+    assert mutation.after.lines[0].layout_index == 2
+
+
+def test_project_document_reports_noop_and_rejects_missing_track():
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("主", 0)])])
+    document = SubtitleProjectDocument(timing_track=track)
+
+    noop = document.mutate_track(0, lambda _target: False)
+
+    assert noop is not None
+    assert noop.changed is False
+    assert noop.result is False
+    assert document.mutate_track(1, lambda _target: True) is None
+
+
 def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
     line = TimingLine(
         chars=[TimingChar("歌", 1000, role_label="主唱")],
