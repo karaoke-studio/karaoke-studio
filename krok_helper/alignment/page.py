@@ -328,6 +328,10 @@ class AlignmentPage(QWidget):
         self.align_preview_process = None
         self.align_preview_started_at = 0.0
         self.align_preview_start_seconds = 0.0
+        #: 播放头被程序改动时先别重启预览 —— 自动对齐落定那一下会连改好几次偏移。
+        #: 这一项当初漏在外壳的 __init__ 里没跟着搬（读写它的代码都在本页），
+        #: 于是自动对齐一跑完就 AttributeError。
+        self._suppress_preview_seek_restart = False
         self._align_export_cancel_requested = False
         self._align_export_process: subprocess.Popen | None = None
         self._align_export_expected_outputs: list[Path] = []

@@ -9,8 +9,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from PyQt6.QtWidgets import QApplication
 
@@ -19,7 +17,7 @@ from krok_helper.hires import page as hires_page
 from krok_helper.hires.page import HiResPage
 from krok_helper.lyrics_search import page as lyrics_page
 from krok_helper.lyrics_search.page import LyricsSearchPage
-from krok_helper.settings import AppSettings
+from tests.page_fakes import hires_host, lyrics_host
 from tests.ui_sweep import block_modals, clickable, crash_collector, fake_popen
 
 
@@ -43,16 +41,7 @@ def _no_real_work(monkeypatch):
 @pytest.fixture
 def hires():
     calls: list = []
-    page = HiResPage(
-        host=SimpleNamespace(
-            track_background_task=lambda task: (calls.append(("task", task)), task)[1],
-            resolve_ffmpeg_dir=lambda: None,
-            resolve_output_name_mode=lambda: "fixed",
-            resolve_output_name_templates=lambda: ("{video_name}_on", "{video_name}_off"),
-            notify_handoff=lambda title, content: calls.append(("toast", title)),
-            open_settings_window=lambda context: calls.append(("settings", context)),
-        )
-    )
+    page = HiResPage(host=hires_host(calls))
     yield page, calls
     page.deleteLater()
 
@@ -60,14 +49,7 @@ def hires():
 @pytest.fixture
 def lyrics():
     calls: list = []
-    page = LyricsSearchPage(
-        host=SimpleNamespace(
-            settings=AppSettings(),
-            track_background_task=lambda task: (calls.append(("task", task)), task)[1],
-            install_single_click_combo_behavior=lambda combo: None,
-            import_current_lyrics_to_timing=lambda: calls.append(("import", None)),
-        )
-    )
+    page = LyricsSearchPage(host=lyrics_host(calls))
     yield page, calls
     page.deleteLater()
 

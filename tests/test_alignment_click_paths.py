@@ -18,35 +18,18 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication
 
 from krok_helper.alignment import page as align_page
 from krok_helper.alignment.page import AlignmentPage
 from krok_helper.audio_alignment import WaveformData
 from krok_helper.background import BackgroundTask
-from krok_helper.settings import AppSettings
+from tests.page_fakes import alignment_host, media_files
 from tests.ui_sweep import block_modals, clickable, crash_collector, fake_popen
 
 #: 点了会走到"选文件/打开资源管理器"这类外部交互的，扫描时跳过。
 SKIP = {"align_material_settings_button"}
-
-
-def _fake_host(calls: list) -> SimpleNamespace:
-    return SimpleNamespace(
-        settings=AppSettings(),
-        active_module="waveform_align",
-        track_background_task=lambda task: (calls.append(("task", task)), task)[1],
-        resolve_ffmpeg_dir=lambda: None,
-        build_media_info=lambda path, label: f"{label}: {path.name if path else '时长未知'}",
-        set_panel_enabled=lambda panel, enabled: [w.setEnabled(enabled) for w in panel.findChildren(QWidget)],
-        focused_widget_is_text_input=lambda: False,
-        notify_handoff=lambda title, content: calls.append(("toast", title)),
-        open_settings_window=lambda context: calls.append(("settings", context)),
-        set_on_vocal_path=lambda path: None,
-    )
 
 
 @pytest.fixture
@@ -67,7 +50,7 @@ def swept(monkeypatch, tmp_path):
     block_modals(monkeypatch)
 
     calls: list = []
-    page = AlignmentPage(host=_fake_host(calls))
+    page = AlignmentPage(host=alignment_host(calls))
 
     # 喂两份素材，否则大半按钮是灰的、根本走不到功能里去。
     video = tmp_path / "GO GHOST.mp4"
@@ -180,3 +163,32 @@ def test_exporting_really_creates_a_task(swept, monkeypatch, tmp_path) -> None:
     assert not crashes, f"点「导出对齐视频」炸了：{crashes[0]}"
     assert page.align_export_task is not None, "导出点完没在 align_export_task 里留下任务"
     assert any(kind == "task" for kind, _ in calls), "任务没登记到外壳去"
+
+
+def test_auto_align_completion_lands_on_the_page(swept) -> None:
+    """自动对齐**跑完之后**那一段也要走通。
+
+    扫描里的后台任务是不 start 的，走不到收尾；而线上炸的恰恰是收尾 ——
+    设置偏移会连带动播放头，那条路上读 ``_suppress_preview_seek_restart``，
+    这一项当初漏在外壳没跟着搬。
+    """
+    from krok_helper.audio_alignment import AutoAlignResult
+
+    page, crashes, _, prime = swept
+    prime()
+
+    page._finish_auto_align_success(
+        AutoAlignResult(
+            target_offset_seconds=1.234,
+            media_offset_seconds=0.567,
+            confidence=0.93,
+            score=0.88,
+            second_score=0.41,
+            overlap_seconds=160.0,
+            search_seconds=30.0,
+        )
+    )
+
+    assert not crashes, f"自动对齐收尾炸了：{crashes[0]}"
+    assert "置信度 93%" in page.align_status_label.text()
+    assert abs(page.waveform_view.offset_seconds - 1.234) < 1e-6

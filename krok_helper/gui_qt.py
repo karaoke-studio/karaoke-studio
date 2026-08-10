@@ -301,11 +301,6 @@ class KrokHelperQtApp(QMainWindow):
         self._update_progress_win = None
         self._force_quitting_for_update = False
         self._update_exit_prepared = False
-        self._hires_cancel_requested = False
-        self._hires_process: subprocess.Popen | None = None
-        self._hires_expected_outputs: list[Path] = []
-        self._hires_completed_outputs: list[Path] = []
-        self._hires_preexisting_outputs: set[Path] = set()
         self.active_module = WORKFLOW_VIDEO_DOWNLOAD
         self._loading_settings_into_ui = True
 
@@ -314,7 +309,6 @@ class KrokHelperQtApp(QMainWindow):
         self.off_name_template_value = DEFAULT_OFF_NAME_TEMPLATE
         self.ffmpeg_dir_text = ""
         self._media_duration_cache: dict[Path, str] = {}
-        self._suppress_preview_seek_restart = False
         self._restoring_from_maximized = False
         self._startup_geometry_applied = False
         self._page_transition_overlay: PageTransitionOverlay | None = None
