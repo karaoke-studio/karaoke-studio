@@ -1105,12 +1105,17 @@ def _bind_undo_host(track, extra_sources=()):
     from krok_helper.subtitle_render.frontend.main_window import (
         SubtitleRenderWindow as W,
     )
+    from krok_helper.subtitle_render.session import SubtitleProjectDocument
 
     host = SimpleNamespace(
         _undo_stack=[],
         _redo_stack=[],
         _timing_track=track,
         _extra_sources=list(extra_sources),
+        _project_document=SubtitleProjectDocument(
+            timing_track=track,
+            extra_sources=list(extra_sources),
+        ),
         refreshed=[],
     )
     for name in (

@@ -179,6 +179,30 @@ def test_project_document_clears_sources_without_resetting_style(tmp_path):
     assert document.role_names == []
 
 
+def test_project_document_owns_track_lookup_and_replacement(tmp_path):
+    primary = TimingTrack(lines=[TimingLine(chars=[TimingChar("主", 0)])])
+    chorus = TimingTrack(lines=[TimingLine(chars=[TimingChar("和", 0)])])
+    replacement = TimingTrack(lines=[TimingLine(chars=[TimingChar("新", 0)])])
+    document = SubtitleProjectDocument(
+        timing_track=primary,
+        extra_sources=[
+            ExtraSubtitleSource(
+                name="和声",
+                path=tmp_path / "chorus.lrc",
+                track=chorus,
+            )
+        ],
+    )
+
+    assert document.tracks() == [primary, chorus]
+    assert document.track_at(0) is primary
+    assert document.track_at(1) is chorus
+    assert document.track_at(2) is None
+    assert document.replace_track(1, replacement) is True
+    assert document.track_at(1) is replacement
+    assert document.replace_track(2, primary) is False
+
+
 def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
     line = TimingLine(
         chars=[TimingChar("歌", 1000, role_label="主唱")],

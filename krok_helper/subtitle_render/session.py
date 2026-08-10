@@ -75,6 +75,30 @@ class SubtitleProjectDocument:
     role_names: list[str] = field(default_factory=list)
     preserved_project_data: dict[str, Any] = field(default_factory=dict, repr=False)
 
+    def tracks(self) -> list[TimingTrack]:
+        """Return primary and secondary timing tracks in their UI source order."""
+        tracks = [] if self.timing_track is None else [self.timing_track]
+        tracks.extend(source.track for source in self.extra_sources)
+        return tracks
+
+    def track_at(self, index: int) -> Optional[TimingTrack]:
+        """Return one timing track by UI source index (primary is index zero)."""
+        if index == 0:
+            return self.timing_track
+        if 1 <= index <= len(self.extra_sources):
+            return self.extra_sources[index - 1].track
+        return None
+
+    def replace_track(self, index: int, track: TimingTrack) -> bool:
+        """Replace one timing track while preserving its source identity."""
+        if index == 0:
+            self.timing_track = track
+            return True
+        if 1 <= index <= len(self.extra_sources):
+            self.extra_sources[index - 1].track = track
+            return True
+        return False
+
     def clear_loaded_media(self) -> None:
         """Clear source material while preserving current project style."""
         self.timing_track = None

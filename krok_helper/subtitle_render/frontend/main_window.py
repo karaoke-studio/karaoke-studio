@@ -5504,21 +5504,15 @@ class SubtitleRenderWindow(QWidget):
         self._sync_subtitle_source_watcher()
 
     def _all_tracks(self) -> list[TimingTrack]:
-        tracks = [] if self._timing_track is None else [self._timing_track]
-        tracks.extend(source.track for source in self._extra_sources)
-        return tracks
+        return self._project_document.tracks()
 
     def _extra_track_list(self) -> list[TimingTrack]:
         return [source.track for source in self._extra_sources]
 
     def _active_track(self) -> Optional[TimingTrack]:
         """歌词列表当前显示的 track（0 = 主字幕）。"""
-        index = self._active_source_index
-        if index <= 0:
-            return self._timing_track
-        if index - 1 < len(self._extra_sources):
-            return self._extra_sources[index - 1].track
-        return self._timing_track
+        index = max(int(self._active_source_index), 0)
+        return self._project_document.track_at(index) or self._timing_track
 
     def _title_source_index(self) -> Optional[int]:
         title = self._style.title_overlay
@@ -5720,11 +5714,7 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
 
     def _track_by_index(self, track_index: int) -> Optional[TimingTrack]:
-        if track_index == 0:
-            return self._timing_track
-        if 1 <= track_index <= len(self._extra_sources):
-            return self._extra_sources[track_index - 1].track
-        return None
+        return self._project_document.track_at(track_index)
 
     def _restore_display_override(
         self, track_index: int, line_index: int, values: object
@@ -6097,13 +6087,7 @@ class SubtitleRenderWindow(QWidget):
         return None
 
     def _set_track_by_index(self, track_index: int, track: TimingTrack) -> bool:
-        if track_index == 0:
-            self._timing_track = track
-            return True
-        if 1 <= track_index <= len(self._extra_sources):
-            self._extra_sources[track_index - 1].track = track
-            return True
-        return False
+        return self._project_document.replace_track(track_index, track)
 
     def _refresh_after_track_structure_changed(self) -> None:
         self._refresh_source_ui()
