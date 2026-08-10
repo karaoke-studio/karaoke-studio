@@ -690,10 +690,14 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
     win._flush_persisted_state_save()
 
     assert "title_overlay" not in provider.data["style"]
-    assert provider.data["new_project_defaults"] == {
-        "title_enabled": True,
-        "title_layout_name": "用户标题布局",
-    }
+    defaults = provider.data["new_project_defaults"]
+    # 这里断的是"标题的哪些习惯被记住了"，不是这个字典的完整形状 —— 后来又加了
+    # title_fades（淡入淡出时长），再往里加东西也不该让这条无关的测试红。
+    assert defaults["title_enabled"] is True
+    assert defaults["title_layout_name"] == "用户标题布局"
+    assert not any(
+        "当前项目标题" in str(value) for value in defaults.values()
+    ), defaults
     reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
     assert reloaded._style.title_overlay is not None
     assert reloaded._style.title_overlay.enabled is True

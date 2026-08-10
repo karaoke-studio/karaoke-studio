@@ -2338,6 +2338,14 @@ class _MillisPartSpinBox(_WheelFocusedSpinBox):
         super().stepBy(steps)
 
 
+#: 标题「显示时段」几个时刻字段的上限，取 N3 的时间标签上限
+#: ``Nkm3Constants.TIME_TAG_TIME_MAX``（``[99:59:99]``，约 100 分钟）。
+#:
+#: 原来写死 600000（10 分钟），那个数没有来源；N3 里 ``TitleShowTime`` 的
+#: HeadOffset / HeadEnd / TailOffset 都直接落在这条时间轴上，没有更窄的限制。
+TITLE_TIME_MAX_MS = 5_999_990
+
+
 class _DurationSpin(QWidget):
     """秒 + 毫秒并排的时长输入；对外仍然是一个「毫秒整数」控件。
 
@@ -5868,12 +5876,12 @@ class PropertyPanel(QWidget):
             lambda value: self._update_title(fade_in_ms=value)
         )
         self._title_head_grid.add_field("淡入", self._title_fade_in_spin)
-        self._title_head_spin = _DurationSpin(0, 600_000)
+        self._title_head_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
         self._title_head_spin.valueChanged.connect(
             lambda value: self._update_title(head_offset_ms=value)
         )
         self._title_head_grid.add_field("偏移", self._title_head_spin)
-        self._title_duration_spin = _DurationSpin(0, 600_000)
+        self._title_duration_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
         self._title_duration_spin.valueChanged.connect(
             lambda value: self._update_title(duration_ms=value)
         )
@@ -5903,12 +5911,12 @@ class PropertyPanel(QWidget):
             lambda value: self._update_title(tail_fade_in_ms=value)
         )
         self._title_tail_grid.add_field("淡入", self._title_tail_fade_in_spin)
-        self._title_tail_spin = _DurationSpin(0, 600_000)
+        self._title_tail_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
         self._title_tail_spin.valueChanged.connect(
             lambda value: self._update_title(tail_offset_ms=value)
         )
         self._title_tail_grid.add_field("偏移", self._title_tail_spin)
-        self._title_tail_duration_spin = _DurationSpin(0, 600_000)
+        self._title_tail_duration_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
         self._title_tail_duration_spin.valueChanged.connect(
             lambda value: self._update_title(tail_duration_ms=value)
         )
