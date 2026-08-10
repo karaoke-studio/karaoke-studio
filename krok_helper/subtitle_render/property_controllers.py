@@ -6,7 +6,13 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Callable
 
-from krok_helper.subtitle_render.models import Style, StylePreset, SubtitleStyleScheme
+from krok_helper.subtitle_render.models import (
+    LYRICS_LAYOUT_FIELDS,
+    LyricsLayout,
+    Style,
+    StylePreset,
+    SubtitleStyleScheme,
+)
 
 
 class RoleSchemeController:
@@ -63,3 +69,63 @@ class RoleSchemeController:
         if not changed:
             return style, False
         return replace(style, custom_style_schemes=schemes), True
+
+
+class LayoutCatalogController:
+    """Perform layout-catalog model edits without knowing about panel widgets."""
+
+    @staticmethod
+    def source(style: Style, index: int):
+        return style if index <= 0 else style.layouts[index - 1]
+
+    def resolved_values(self, style: Style, index: int) -> dict:
+        source = self.source(style, index)
+        values = {}
+        for name in LYRICS_LAYOUT_FIELDS:
+            value = getattr(source, name)
+            if value is None:
+                value = getattr(style, name)
+            values[name] = deepcopy(value)
+        return values
+
+    @staticmethod
+    def field_changes(style: Style, index: int, changes: dict) -> dict:
+        if index <= 0:
+            return dict(changes)
+        layouts = list(style.layouts)
+        layouts[index - 1] = replace(layouts[index - 1], **changes)
+        return {"layouts": layouts}
+
+    def add_changes(self, style: Style, source_index: int) -> tuple[dict, int]:
+        values = self.resolved_values(style, source_index)
+        existing = {layout.name for layout in style.layouts}
+        number = len(style.layouts) + 1
+        name = f"布局 {number}"
+        while name in existing:
+            number += 1
+            name = f"布局 {number}"
+        layouts = list(style.layouts) + [LyricsLayout(name=name, **values)]
+        return {"layouts": layouts}, len(layouts)
+
+    @staticmethod
+    def rename_changes(style: Style, index: int, name: str) -> dict:
+        layouts = list(style.layouts)
+        layouts[index - 1] = replace(layouts[index - 1], name=name)
+        return {"layouts": layouts}
+
+    @staticmethod
+    def delete_changes(style: Style, index: int) -> dict:
+        layouts = list(style.layouts)
+        del layouts[index - 1]
+        changes: dict = {"layouts": layouts}
+        title = style.title_overlay
+        if title is not None and title.layout_index is not None:
+            title_index = int(title.layout_index)
+            if title_index == index:
+                changes["title_overlay"] = replace(title, layout_index=0)
+            elif title_index > index:
+                changes["title_overlay"] = replace(
+                    title,
+                    layout_index=title_index - 1,
+                )
+        return changes

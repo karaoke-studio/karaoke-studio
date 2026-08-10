@@ -115,8 +115,6 @@ from krok_helper.subtitle_render.models import (
     KaraokeColorState,
     LineHorizontalLayout,
     LineYPosition,
-    LYRICS_LAYOUT_FIELDS,
-    LyricsLayout,
     N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
     StylePreset,
@@ -131,7 +129,10 @@ from krok_helper.subtitle_render.models import (
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
-from krok_helper.subtitle_render.property_controllers import RoleSchemeController
+from krok_helper.subtitle_render.property_controllers import (
+    LayoutCatalogController,
+    RoleSchemeController,
+)
 from krok_helper.subtitle_render.n3_template_import import (
     N3_TEMPLATE_FILTER,
     default_n3_template_directories,
@@ -4208,6 +4209,7 @@ class PropertyPanel(QWidget):
         self._title_text_change_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
         self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
         self._role_controller = RoleSchemeController()
+        self._layout_controller = LayoutCatalogController()
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -6793,18 +6795,16 @@ class PropertyPanel(QWidget):
         return index if 0 <= index <= len(self._style.layouts) else 0
 
     def _current_layout_source(self):
-        index = self._current_layout_index()
-        return self._style if index == 0 else self._style.layouts[index - 1]
+        return self._layout_controller.source(
+            self._style,
+            self._current_layout_index(),
+        )
 
     def _current_layout_values(self) -> dict:
-        source = self._current_layout_source()
-        values: dict[str, Any] = {}
-        for name in LYRICS_LAYOUT_FIELDS:
-            value = getattr(source, name)
-            if value is None:
-                value = getattr(self._style, name)
-            values[name] = deepcopy(value)
-        return values
+        return self._layout_controller.resolved_values(
+            self._style,
+            self._current_layout_index(),
+        )
 
     def _update_layout_field(self, **changes) -> None:
         if self._syncing:
@@ -6813,9 +6813,9 @@ class PropertyPanel(QWidget):
         if index <= 0:
             self._update_style(_force_global=True, **changes)
             return
-        layouts = list(self._style.layouts)
-        layouts[index - 1] = replace(layouts[index - 1], **changes)
-        self._update_style(layouts=layouts)
+        self._update_style(
+            **self._layout_controller.field_changes(self._style, index, changes)
+        )
 
     def _refresh_layout_combo(self, selected: Optional[int] = None) -> None:
         if selected is None:
@@ -6887,16 +6887,12 @@ class PropertyPanel(QWidget):
         self._sync_layout_editor_controls()
 
     def _on_add_layout(self) -> None:
-        values = self._current_layout_values()
-        existing = {layout.name for layout in self._style.layouts}
-        number = len(self._style.layouts) + 1
-        name = f"布局 {number}"
-        while name in existing:
-            number += 1
-            name = f"布局 {number}"
-        layouts = list(self._style.layouts) + [LyricsLayout(name=name, **values)]
-        self._update_style(layouts=layouts)
-        self._refresh_layout_combo(selected=len(layouts))
+        changes, selected = self._layout_controller.add_changes(
+            self._style,
+            self._current_layout_index(),
+        )
+        self._update_style(**changes)
+        self._refresh_layout_combo(selected=selected)
         self._sync_layout_editor_controls()
 
     def _on_rename_layout(self) -> None:
@@ -6910,9 +6906,9 @@ class PropertyPanel(QWidget):
         new = new.strip()
         if not new or new == old:
             return
-        layouts = list(self._style.layouts)
-        layouts[index - 1] = replace(layouts[index - 1], name=new)
-        self._update_style(layouts=layouts)
+        self._update_style(
+            **self._layout_controller.rename_changes(self._style, index, new)
+        )
         self._refresh_layout_combo(selected=index)
 
     def _on_delete_layout(self) -> None:
@@ -6932,18 +6928,9 @@ class PropertyPanel(QWidget):
         )
         if not confirmed:
             return
-        layouts = list(self._style.layouts)
-        del layouts[index - 1]
-        changes: dict[str, Any] = {"layouts": layouts}
-        # 标题的布局引用与歌词行一样修正：被删的回默认，其后的序号前移。
-        title = self._style.title_overlay
-        if title is not None and title.layout_index is not None:
-            title_index = int(title.layout_index)
-            if title_index == index:
-                changes["title_overlay"] = replace(title, layout_index=0)
-            elif title_index > index:
-                changes["title_overlay"] = replace(title, layout_index=title_index - 1)
-        self._update_style(**changes)
+        self._update_style(
+            **self._layout_controller.delete_changes(self._style, index)
+        )
         self.layoutDeleted.emit(index)
         self._refresh_layout_combo(selected=0)
         self._sync_layout_editor_controls()

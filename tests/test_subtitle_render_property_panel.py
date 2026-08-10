@@ -86,6 +86,7 @@ from krok_helper.subtitle_render.n3_template_import import (  # noqa: E402
 )
 from krok_helper.subtitle_render.n3_font_catalog import N3FontCatalog  # noqa: E402
 from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
+    LayoutCatalogController,
     RoleSchemeController,
 )
 
@@ -129,6 +130,41 @@ def test_role_scheme_controller_owns_registry_and_scheme_defaults():
     controller.remove(" B ")
     controller.add("E")
     assert controller.names == ["A", "D", "C", "E"]
+
+
+def test_layout_catalog_controller_preserves_inheritance_and_title_references():
+    controller = LayoutCatalogController()
+    style = Style(
+        letter_spacing_px=13,
+        layouts=[
+            LyricsLayout(name="A", letter_spacing_px=None),
+            LyricsLayout(name="布局 3", letter_spacing_px=8),
+        ],
+        title_overlay=TitleOverlay(layout_index=2),
+    )
+
+    assert controller.resolved_values(style, 1)["letter_spacing_px"] == 13
+    changes = controller.field_changes(style, 1, {"letter_spacing_px": 21})
+    edited = replace(style, **changes)
+    assert edited.letter_spacing_px == 13
+    assert edited.layouts[0].letter_spacing_px == 21
+
+    add_changes, selected = controller.add_changes(style, 1)
+    added = replace(style, **add_changes)
+    assert selected == 3
+    assert added.layouts[-1].name == "布局 4"
+    assert added.layouts[-1].letter_spacing_px == 13
+
+    renamed = replace(
+        style,
+        **controller.rename_changes(style, 1, "重命名"),
+    )
+    assert renamed.layouts[0].name == "重命名"
+
+    deleted = replace(style, **controller.delete_changes(style, 1))
+    assert [layout.name for layout in deleted.layouts] == ["布局 3"]
+    assert deleted.title_overlay is not None
+    assert deleted.title_overlay.layout_index == 1
 
 
 def test_property_panel_uses_fluent_checkboxes(qapp):
