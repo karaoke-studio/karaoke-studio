@@ -4185,6 +4185,7 @@ class PropertyPanel(QWidget):
     )
 
     styleChanged = Signal(Style)
+    rolesChanged = Signal(list)
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
     defaultSchemeSaveRequested = Signal(str)
@@ -4495,7 +4496,12 @@ class PropertyPanel(QWidget):
 
     def set_roles(self, role_names: list[str]) -> None:
         """Replace the current project's role registry and refresh navigation."""
+        previous = self._role_controller.names
         self._role_controller.replace(role_names)
+        self._sync_role_registry(previous)
+
+    def _sync_role_registry(self, previous: list[str]) -> None:
+        """Refresh role-backed controls and publish one model change."""
         self._ensure_role_schemes()
         current_key = self._current_scheme_key()
         self._syncing = True
@@ -4504,11 +4510,14 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = False
         self._sync_subtitle_scheme_controls()
+        if self._role_controller.names != previous:
+            self.rolesChanged.emit(self._role_controller.names)
 
     def merge_roles(self, role_names: list[str]) -> None:
         """Add newly discovered roles without dropping earlier project roles."""
+        previous = self._role_controller.names
         self._role_controller.merge(role_names)
-        self.set_roles(self._role_controller.names)
+        self._sync_role_registry(previous)
 
     # ------------------------------------------------------------------ layout
 
@@ -7734,8 +7743,11 @@ class PropertyPanel(QWidget):
             name = f"{original} {suffix}"
             suffix += 1
         schemes[name] = _scheme_from_current(self)
+        previous_roles = self._role_controller.names
         self._role_controller.add(name)
         self._update_style(custom_style_schemes=schemes)
+        if self._role_controller.names != previous_roles:
+            self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
         try:
             self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{name}")
@@ -7846,8 +7858,11 @@ class PropertyPanel(QWidget):
                 continue
             style_schemes[name] = deepcopy(preset.scheme)
             role_names.append(name)
+        previous_roles = self._role_controller.names
         self._role_controller.replace(role_names)
         self._update_style(custom_style_schemes=style_schemes)
+        if self._role_controller.names != previous_roles:
+            self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
         try:
             self._refresh_scheme_combo(self._current_scheme_key())
@@ -7874,8 +7889,11 @@ class PropertyPanel(QWidget):
         if role_name is not None:
             schemes = dict(self._style.custom_style_schemes)
             schemes[role_name] = deepcopy(scheme)
+            previous_roles = self._role_controller.names
             self._role_controller.add(role_name)
             self._update_style(custom_style_schemes=schemes)
+            if self._role_controller.names != previous_roles:
+                self.rolesChanged.emit(self._role_controller.names)
             return
         changes = _style_scheme_changes(scheme)
         if changes:
@@ -7967,8 +7985,11 @@ class PropertyPanel(QWidget):
             del schemes[old]
         schemes[new] = scheme
         # 角色名来自字幕标签（role_names）的，重命名后也从可选名单里替换掉旧名。
+        previous_roles = self._role_controller.names
         self._role_controller.rename(old, new)
         self._update_style(custom_style_schemes=schemes)
+        if self._role_controller.names != previous_roles:
+            self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
         try:
             self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{new}")
@@ -7982,8 +8003,11 @@ class PropertyPanel(QWidget):
             return  # 全局默认 / 内置「标题」方案不能删
         schemes = dict(self._style.custom_style_schemes)
         schemes.pop(name, None)
+        previous_roles = self._role_controller.names
         self._role_controller.remove(name)
         self._update_style(custom_style_schemes=schemes)
+        if self._role_controller.names != previous_roles:
+            self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
         try:
             self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)

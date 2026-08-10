@@ -162,6 +162,7 @@ def test_project_document_clears_sources_without_resetting_style(tmp_path):
         background_source=BackgroundSource(kind="video", path="video.mp4"),
         audio_path=tmp_path / "audio.wav",
         style=style,
+        role_names=["主唱"],
     )
 
     document.clear_loaded_media()
@@ -175,6 +176,7 @@ def test_project_document_clears_sources_without_resetting_style(tmp_path):
     assert document.audio_path is None
     assert document.audio_info is None
     assert document.style is style
+    assert document.role_names == []
 
 
 def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
@@ -209,12 +211,12 @@ def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
         ),
         audio_path=tmp_path / "audio.wav",
         style=Style(font_size_px=96),
+        role_names=["主唱", "和声"],
     )
 
     payload = document.to_project_data(
         screen={"width": 1920, "height": 1080, "fps": 60, "par": "1:1"},
         selected_scheme_key="global",
-        project_role_names=["主唱", "和声"],
         output={"encoder_mode": "cpu", "crf": 18},
     )
 
@@ -2485,6 +2487,7 @@ def test_unassigned_imported_project_role_round_trips_in_project_data(
         }
     )
 
+    assert win._project_document.role_names == ["尚未分配"]
     data = win._current_project_data()
     assert data["project_role_names"] == ["尚未分配"]
 
@@ -2492,6 +2495,7 @@ def test_unassigned_imported_project_role_round_trips_in_project_data(
     restored._apply_project_data(data)
 
     assert restored._property_panel.role_names == ["尚未分配"]
+    assert restored._project_document.role_names == ["尚未分配"]
     assert restored._lyrics_panel._role_options == ["尚未分配"]
     assert restored._style.custom_style_schemes["尚未分配"].fill_color == "#654321"
 

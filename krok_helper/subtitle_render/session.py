@@ -42,6 +42,7 @@ class SubtitleProjectDocument:
     audio_path: Optional[Path] = None
     audio_info: Optional[MediaInfo] = None
     style: Style = field(default_factory=Style)
+    role_names: list[str] = field(default_factory=list)
 
     def clear_loaded_media(self) -> None:
         """Clear source material while preserving current project style."""
@@ -53,13 +54,13 @@ class SubtitleProjectDocument:
         self.background_source = None
         self.audio_path = None
         self.audio_info = None
+        self.role_names = []
 
     def to_project_data(
         self,
         *,
         screen: dict,
         selected_scheme_key: str,
-        project_role_names: list[str],
         output: dict,
     ) -> dict:
         """Serialize project-owned content with UI settings supplied as plain data."""
@@ -98,7 +99,7 @@ class SubtitleProjectDocument:
             screen=dict(screen),
             selected_scheme_key=selected_scheme_key,
             extra_subtitle_sources=extra_subtitle_sources,
-            project_role_names=project_role_names,
+            project_role_names=list(self.role_names),
             output=dict(output),
             **track_data,
         )

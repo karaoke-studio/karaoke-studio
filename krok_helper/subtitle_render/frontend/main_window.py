@@ -2827,7 +2827,6 @@ class SubtitleRenderWindow(QWidget):
         payload = self._project_document.to_project_data(
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
-            project_role_names=self._property_panel.role_names,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
@@ -3012,7 +3011,12 @@ class SubtitleRenderWindow(QWidget):
                     seen.add(name)
                     content_roles.append(name)
         self._property_panel.set_roles(content_roles)
+        self._apply_project_role_names(self._property_panel.role_names)
         self._lyrics_panel.set_role_options(self._merged_role_options())
+
+    def _apply_project_role_names(self, role_names: list[str]) -> None:
+        """Mirror the UI role registry into project-owned document state."""
+        self._project_document.role_names = [str(name) for name in role_names if name]
 
     def _queue_project_deferred_loads(
         self,
@@ -3792,6 +3796,7 @@ class SubtitleRenderWindow(QWidget):
             self._screen_settings.height,
         )
         self._property_panel.styleChanged.connect(self._apply_style)
+        self._property_panel.rolesChanged.connect(self._apply_project_role_names)
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
         self._property_panel.defaultSchemeSaveRequested.connect(
             self._save_builtin_scheme_default

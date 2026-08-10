@@ -4796,6 +4796,18 @@ def test_property_panel_imports_only_one_cross_group_same_name_role(qapp):
     assert "preset-b" not in panel.subtitle_style.custom_style_schemes
 
 
+def test_property_panel_publishes_role_registry_changes_once(qapp):
+    panel = PropertyPanel()
+    changes: list[list[str]] = []
+    panel.rolesChanged.connect(lambda names: changes.append(list(names)))
+
+    panel.set_roles(["A"])
+    panel.merge_roles(["A", "B"])
+    panel.merge_roles(["B"])
+
+    assert changes == [["A"], ["A", "B"]]
+
+
 def test_property_panel_batch_import_does_not_overwrite_existing_project_role(qapp):
     panel = PropertyPanel()
     panel.set_style(
