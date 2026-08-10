@@ -92,12 +92,17 @@ DELETE_BUTTON_QSS = (
 )
 
 
-def _create_delete_button(tooltip: str) -> PushButton:
-    button = PushButton(FIF.DELETE, "")
+def _create_delete_button(tooltip: str) -> ToolButton:
+    """纯图标的删除按钮。
+
+    必须是 ``ToolButton`` —— ``PushButton(icon, "")`` 会按"图标 + 文字"整体居中，
+    文字为空时仍占位，图标于是被挤得偏右（两个垃圾桶看起来歪的就是这个原因）。
+    """
+    button = ToolButton(FIF.DELETE)
     button.setFixedSize(30, 30)
     button.setToolTip(tooltip)
     install_fluent_tooltip(button, 300, ToolTipPosition.TOP)
-    button.setStyleSheet(DELETE_BUTTON_QSS)
+    button.setStyleSheet(DELETE_BUTTON_QSS.replace("QPushButton", "QToolButton"))
     return button
 
 
@@ -769,7 +774,6 @@ class VideoDownloadPage(QWidget):
         self._panel_cards: dict[str, QWidget] = {}
         self._panel_contents: dict[str, tuple[QWidget, ...]] = {}
         self._panel_collapse_buttons: dict[str, ToolButton] = {}
-        self._panel_expanded_min_heights: dict[str, int] = {}
         self._panel_last_expanded_sizes: dict[str, int] = {}
         self._collapsed_panels: set[str] = set()
 
@@ -895,7 +899,6 @@ class VideoDownloadPage(QWidget):
         self._configure_splitter(self.content_splitter)
 
         input_card = PanelCard(panel)
-        input_card.setMinimumHeight(145)
         input_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         input_layout = input_card.create_vbox()
         input_title_row = QHBoxLayout()
@@ -933,13 +936,15 @@ class VideoDownloadPage(QWidget):
         input_layout.addWidget(self.parse_status_label)
 
         info_card = PanelCard(panel)
-        info_card.setMinimumHeight(260)
         info_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         info_layout = info_card.create_vbox()
         info_title_row = QHBoxLayout()
         info_title_row.setContentsMargins(0, 0, 0, 0)
         info_title_row.setSpacing(8)
-        info_title_row.addWidget(self._create_panel_title("视频信息与下载设置"), 1)
+        info_title_row.addWidget(self._create_panel_title("视频信息与下载设置"), 0)
+        self.task_switch_row = self._build_task_switch_row(info_card)
+        self.task_switch_row.hide()
+        info_title_row.addWidget(self.task_switch_row, 1)
         self.delete_current_task_button = _create_delete_button("从列表删除当前视频")
         self.delete_current_task_button.clicked.connect(self._delete_current_task)
         info_title_row.addWidget(self.delete_current_task_button, 0)
@@ -954,7 +959,6 @@ class VideoDownloadPage(QWidget):
         info_layout.addWidget(self.video_details_stack, 1)
 
         download_card = PanelCard(panel)
-        download_card.setMinimumHeight(180)
         download_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         download_layout = download_card.create_vbox()
         download_title_row = QHBoxLayout()
@@ -997,6 +1001,10 @@ class VideoDownloadPage(QWidget):
         for column, width in DOWNLOAD_TABLE_FIXED_WIDTHS.items():
             self.download_table.setColumnWidth(column, width)
         self.download_table.itemSelectionChanged.connect(self._handle_task_selection_changed)
+        # 表头 + 一行：拖到最矮时至少还看得见一条任务，而不是只剩一条表头线。
+        self.download_table.setMinimumHeight(
+            download_header.sizeHint().height() + DOWNLOAD_TABLE_ROW_HEIGHT
+        )
         download_layout.addWidget(self.download_table, 1)
         self.download_hint_label = CaptionLabel("暂无下载任务。")
         download_layout.addWidget(self.download_hint_label)
@@ -1035,14 +1043,12 @@ class VideoDownloadPage(QWidget):
             input_card,
             (self.link_input, self.parse_button, self.clear_input_button, self.parse_status_label),
             input_collapse_button,
-            145,
         )
         self._register_collapsible_panel(
             "info",
             info_card,
-            (self.video_details_stack,),
+            (self.video_details_stack, self.task_switch_row),
             info_collapse_button,
-            260,
         )
         self._register_collapsible_panel(
             "download",
@@ -1057,7 +1063,6 @@ class VideoDownloadPage(QWidget):
                 self.clear_list_button,
             ),
             download_collapse_button,
-            180,
         )
         self._refresh_panel_collapse_buttons()
         layout.addWidget(self.content_splitter, 1)
@@ -1076,12 +1081,30 @@ class VideoDownloadPage(QWidget):
         card: QWidget,
         contents: tuple[QWidget, ...],
         button: ToolButton,
-        expanded_min_height: int,
     ) -> None:
         self._panel_cards[panel_key] = card
         self._panel_contents[panel_key] = contents
         self._panel_collapse_buttons[panel_key] = button
-        self._panel_expanded_min_heights[panel_key] = expanded_min_height
+
+    def _sync_task_switch_row_visibility(self) -> None:
+        """「第 N 个 …」导航行跟着视频信息的空/非空状态走。"""
+        row = getattr(self, "task_switch_row", None)
+        if row is None:
+            return
+        row.setVisible(self.video_details_stack.currentIndex() == 1)
+
+    def _expanded_min_height(self, panel_key: str) -> int:
+        """展开状态下这张卡片最少需要多高 —— 由它自己的布局说了算。
+
+        原先是三个手写的常数（145 / 260 / 180），全都**小于**布局的真实最小值
+        （176 / 352 / 218）。``QSplitter`` 认显式的 ``minimumHeight``，于是可以把
+        卡片压到比内容还矮：提示文字被压进输入框、右侧按钮挤没、卡片里的东西
+        互相重叠、下载表格整个看不见。数字不该手写。
+        """
+        card = self._panel_cards.get(panel_key)
+        if card is None:
+            return max(card.minimumSizeHint().height(), VIDEO_INFO_COLLAPSED_HEIGHT)
+        return VIDEO_INFO_COLLAPSED_HEIGHT
 
     def _toggle_panel_collapsed(self, panel_key: str) -> None:
         if panel_key not in self._panel_cards:
@@ -1098,7 +1121,7 @@ class VideoDownloadPage(QWidget):
         panel_index = self.content_splitter.indexOf(card)
         sizes = self.content_splitter.sizes()
         self._panel_last_expanded_sizes[panel_key] = max(
-            self._panel_expanded_min_heights[panel_key],
+            self._expanded_min_height(panel_key),
             sizes[panel_index],
         )
         for content in self._panel_contents[panel_key]:
@@ -1113,15 +1136,18 @@ class VideoDownloadPage(QWidget):
     def _expand_panel(self, panel_key: str) -> None:
         card = self._panel_cards[panel_key]
         panel_index = self.content_splitter.indexOf(card)
-        card.setMinimumHeight(self._panel_expanded_min_heights[panel_key])
+        # 把折叠时压上的硬下限/上限撤掉，重新交给布局的 minimumSizeHint 把关。
+        card.setMinimumHeight(0)
         card.setMaximumHeight(16777215)
         for content in self._panel_contents[panel_key]:
             content.show()
+        # 展开是无差别 show 的，但导航行只在"有视频信息"时才该出现。
+        self._sync_task_switch_row_visibility()
         self._collapsed_panels.discard(panel_key)
         sizes = self.content_splitter.sizes()
         sizes[panel_index] = self._panel_last_expanded_sizes.get(
             panel_key,
-            self._panel_expanded_min_heights[panel_key],
+            self._expanded_min_height(panel_key),
         )
         self.content_splitter.setSizes(sizes)
         self._refresh_panel_collapse_buttons()
@@ -1172,17 +1198,17 @@ class VideoDownloadPage(QWidget):
         layout.addStretch(1)
         return empty
 
-    def _build_video_details_state(self, parent: QWidget) -> QWidget:
-        details = QWidget(parent)
-        details.setStyleSheet("background: transparent; border: 0;")
-        layout = QVBoxLayout(details)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+    def _build_task_switch_row(self, parent: QWidget) -> QWidget:
+        """「← 第 N 个：标题 ▾ / 总数 →」那一行。
 
-        switch_row = QHBoxLayout()
+        摆在卡片标题那一行里（和删除、折叠按钮同排），而不是卡片内容的第一行 ——
+        它是"当前在看第几个视频"的导航，属于标题的一部分。
+        """
+        row_widget = QWidget(parent)
+        row_widget.setStyleSheet("background: transparent; border: 0;")
+        switch_row = QHBoxLayout(row_widget)
         switch_row.setContentsMargins(0, 0, 0, 0)
         switch_row.setSpacing(8)
-        switch_row.addStretch(1)
         self.prev_task_button = ToolButton(FIF.LEFT_ARROW)
         self.prev_task_button.setFixedSize(30, 30)
         self.prev_task_button.clicked.connect(lambda: self._move_task_selection(-1))
@@ -1203,8 +1229,14 @@ class VideoDownloadPage(QWidget):
         switch_row.addWidget(self.task_switch_combo, 1)
         switch_row.addWidget(self.task_total_label, 0, Qt.AlignmentFlag.AlignVCenter)
         switch_row.addWidget(self.next_task_button, 0)
-        switch_row.addStretch(1)
-        layout.addLayout(switch_row)
+        return row_widget
+
+    def _build_video_details_state(self, parent: QWidget) -> QWidget:
+        details = QWidget(parent)
+        details.setStyleSheet("background: transparent; border: 0;")
+        layout = QVBoxLayout(details)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
         info_row = QHBoxLayout()
         info_row.setContentsMargins(0, 0, 0, 0)
@@ -2460,6 +2492,7 @@ class VideoDownloadPage(QWidget):
         task = self._current_task()
         if task is None or task.info is None:
             self.video_details_stack.setCurrentIndex(0)
+            self.task_switch_row.hide()
             self.delete_current_task_button.setEnabled(False)
             self.thumbnail_label.setText("暂无视频信息")
             self.thumbnail_label.setPixmap(QPixmap())
@@ -2472,6 +2505,7 @@ class VideoDownloadPage(QWidget):
             return
 
         self.video_details_stack.setCurrentIndex(1)
+        self.task_switch_row.show()
         self.delete_current_task_button.setEnabled(True)
         info = task.info
         if info.thumbnail_bytes:
