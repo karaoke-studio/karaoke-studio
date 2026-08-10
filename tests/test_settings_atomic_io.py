@@ -19,6 +19,11 @@ def _isolated_appdata(monkeypatch, tmp_path: Path):
     """每个测试都获得自己的 %APPDATA%/Karaoke Studio/ 目录，避免污染真实 settings.json。"""
     monkeypatch.setenv("APPDATA", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))  # POSIX 兜底
+    # 配置目录名也要钉住：``configure_source_debug_settings_profile`` 是产品代码里
+    # 直接 ``os.environ.setdefault`` 的，测完不会自己还原；由 monkeypatch 先设一次，
+    # 它的还原才兜得住，否则那条用例之后的测试全被带到 "Karaoke Studio Dev" 去。
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", "Karaoke Studio")
+    monkeypatch.delenv("KARAOKE_STUDIO_SETTINGS_DIR", raising=False)
     # 清掉模块级 corruption 状态，避免上一个测试污染本测试
     consume_corruption_backup()
     yield
@@ -172,3 +177,97 @@ def test_source_debug_profile_defaults_to_dev_settings(monkeypatch: pytest.Monke
     configure_source_debug_settings_profile()
 
     assert os.environ["KARAOKE_STUDIO_SETTINGS_APP_NAME"] == "Karaoke Studio Dev"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 多开时的命名空间保护
+#
+# 打轴与字幕渲染的配置由各自的设置桥读写（读盘 → 只改自己那段 → 写盘），而外壳、
+# 全局设置对话框、更新器写的是**本进程启动时读到的那份整份快照**。同时开着两个
+# 工作台时，后写的会把先写的整份顶掉：在 A 里存进预设库的配色方案，B 随手换个
+# 主题就没了；等 A 退出再写一次才回来 —— 用户看到的现象是"要关掉应用才保存"。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_whole_snapshot_write_keeps_another_instances_module_settings(tmp_path: Path):
+    """B 写自己的设置，不该把 A 刚存进去的模块配置顶掉。"""
+    first = load_app_settings()
+    first.subtitle_render = {"style_presets": [{"name": "旧"}]}
+    save_app_settings(first)
+
+    # 两个实例各自启动，都读到"旧"
+    instance_a = load_app_settings()
+    instance_b = load_app_settings()
+
+    # A 通过设置桥存了一条新预设（桥写的就是这一段，所以不合并）
+    instance_a.subtitle_render = {"style_presets": [{"name": "旧"}, {"name": "新"}]}
+    save_app_settings(instance_a, merge_module_namespaces=False)
+
+    # B 这时候做任何会写设置的事：换主题、折叠步骤条、关窗……
+    instance_b.ui_theme = "dark"
+    save_app_settings(instance_b)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    names = [item["name"] for item in saved["subtitle_render"]["style_presets"]]
+    assert names == ["旧", "新"], "B 的整份写回把 A 存的预设顶掉了"
+    assert saved["ui_theme"] == "dark", "B 自己那份改动也要写进去"
+
+
+def test_the_bridge_can_still_write_its_own_namespace(tmp_path: Path):
+    """桥要写的正是那几段，合并回盘上的旧值等于把自己的改动丢掉。"""
+    settings = load_app_settings()
+    settings.subtitle_render = {"style_presets": [{"name": "旧"}]}
+    save_app_settings(settings, merge_module_namespaces=False)
+
+    settings.subtitle_render = {"style_presets": [{"name": "新"}]}
+    save_app_settings(settings, merge_module_namespaces=False)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert [i["name"] for i in saved["subtitle_render"]["style_presets"]] == ["新"]
+
+
+def test_module_namespaces_survive_across_every_wholesale_writer(tmp_path: Path):
+    """打轴那几段和字幕渲染一样受保护 —— 它们也各有一个桥。"""
+    first = load_app_settings()
+    save_app_settings(first)
+
+    writer = load_app_settings()
+
+    fresh = load_app_settings()
+    fresh.lyrics_timing = {"a": 1}
+    fresh.lyrics_timing_dictionary = [{"b": 2}]
+    fresh.lyrics_timing_singers = [{"name": "歌手"}]
+    fresh.lyrics_timing_network_dictionary = {"c": 3}
+    save_app_settings(fresh, merge_module_namespaces=False)
+
+    save_app_settings(writer)  # 另一个实例的整份写回
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["lyrics_timing"] == {"a": 1}
+    assert saved["lyrics_timing_dictionary"] == [{"b": 2}]
+    assert saved["lyrics_timing_singers"] == [{"name": "歌手"}]
+    assert saved["lyrics_timing_network_dictionary"] == {"c": 3}
+
+
+def test_the_first_ever_save_still_works_without_a_file(tmp_path: Path):
+    """盘上还没有文件时合并要安静地跳过，不能把首次保存搞挂。"""
+    settings = AppSettings()
+    settings.subtitle_render = {"style_presets": []}
+
+    save_app_settings(settings)
+
+    assert _settings_path(tmp_path).is_file()
+
+
+def test_a_corrupt_file_does_not_wipe_module_namespaces(tmp_path: Path):
+    """坏文件读不出来时保留内存里的值，别把好好的命名空间清成空的。"""
+    path = _settings_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ 这不是 json", encoding="utf-8")
+    settings = AppSettings()
+    settings.subtitle_render = {"style_presets": [{"name": "内存里的"}]}
+
+    save_app_settings(settings)
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [i["name"] for i in saved["subtitle_render"]["style_presets"]] == ["内存里的"]

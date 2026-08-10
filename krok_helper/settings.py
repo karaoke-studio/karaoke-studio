@@ -271,7 +271,51 @@ def load_app_settings() -> AppSettings:
     )
 
 
-def save_app_settings(settings: AppSettings) -> Path:
+#: 由各模块自己的设置桥负责读写的命名空间。
+#:
+#: 打轴（SUG）和字幕渲染都通过设置桥持久化，桥每次都是"读盘 → 只改自己那段 →
+#: 写盘"。别的地方（工作台外壳、全局设置对话框、更新器……）写的却是**本进程启动
+#: 时读到的那份整份快照**，于是同时开着两个工作台时，后写的会把先写的整份顶掉：
+#: 在 A 里存进预设库的配色方案，B 随手换个主题就没了，等 A 退出再写一次才回来
+#: ——看起来就像"要关掉应用才保存"。
+MODULE_NAMESPACE_FIELDS = (
+    "lyrics_timing",
+    "lyrics_timing_dictionary",
+    "lyrics_timing_singers",
+    "lyrics_timing_network_dictionary",
+    "subtitle_render",
+)
+
+
+def _merge_module_namespaces_from_disk(settings: AppSettings) -> None:
+    """把模块命名空间就地换成盘上的最新值。
+
+    桥总是先写盘再更新内存，所以盘上的永远不会比内存里旧 —— 无条件取盘上的既能
+    修好跨实例覆盖，也不会把本实例刚写的读回旧值。
+
+    这里直接读原始 JSON 而不走 :func:`load_app_settings`：后者遇到坏文件会备份并
+    退回默认值，那样反而会把好好的命名空间清成空的。读不出来就什么都不做。
+    """
+    try:
+        raw = json.loads(get_settings_path().read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 —— 首次保存、文件损坏、被占用都走这里
+        return
+    if not isinstance(raw, dict):
+        return
+    for name in MODULE_NAMESPACE_FIELDS:
+        if name not in raw:
+            continue
+        current = getattr(settings, name, None)
+        value = raw[name]
+        if isinstance(current, dict):
+            setattr(settings, name, _safe_dict(value))
+        elif isinstance(current, list):
+            setattr(settings, name, _safe_list(value))
+
+
+def save_app_settings(
+    settings: AppSettings, *, merge_module_namespaces: bool = True
+) -> Path:
     """原子写 settings.json。
 
     实现：先写到 ``settings.json.tmp``，再 ``os.replace`` 替换。Windows 与 POSIX 上
@@ -279,7 +323,13 @@ def save_app_settings(settings: AppSettings) -> Path:
     完整版本。**绝不能**退回到 ``path.write_text`` 直接覆盖：那条路径里
     ``open(w)`` 先 truncate 再 write，崩在中间的话主文件就是空 / 半截，下次启动
     会触发「全空配置」事故（v3.0.x 真实案例，v3.0.5 修复）。
+
+    默认会把 :data:`MODULE_NAMESPACE_FIELDS` 换成盘上的最新值，避免多开时互相
+    覆盖。**只有模块自己的设置桥**该传 ``merge_module_namespaces=False`` —— 它们
+    要写的正是那几段，合并回去等于把自己的改动丢掉。
     """
+    if merge_module_namespaces:
+        _merge_module_namespaces_from_disk(settings)
     path = get_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f"{path.name}.tmp"

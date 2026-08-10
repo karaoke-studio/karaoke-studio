@@ -157,7 +157,8 @@ class KrokHelperSettingsBridge:
     def save(self, data: dict) -> None:
         latest = load_app_settings()
         latest.lyrics_timing = deepcopy(data)
-        save_app_settings(latest)
+        # 这里要写的正是模块命名空间，合并回盘上的旧值等于把自己的改动丢掉。
+        save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.lyrics_timing = deepcopy(latest.lyrics_timing)
 
     def save_partial(self, changes: dict[str, object]) -> None:
@@ -166,7 +167,7 @@ class KrokHelperSettingsBridge:
         for path, value in changes.items():
             self._set_nested(config, path, value)
         latest.lyrics_timing = config
-        save_app_settings(latest)
+        save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.lyrics_timing = deepcopy(config)
 
     def load_extra(self, key: str, default):
@@ -183,7 +184,7 @@ class KrokHelperSettingsBridge:
             return
         latest = load_app_settings()
         setattr(latest, field_name, deepcopy(data))
-        save_app_settings(latest)
+        save_app_settings(latest, merge_module_namespaces=False)
         setattr(self._app_settings, field_name, deepcopy(data))
 
     @staticmethod

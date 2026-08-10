@@ -7975,6 +7975,10 @@ class SubtitleRenderWindow(QWidget):
             settings.subtitle_render = data
             save_app_settings(settings)
         except Exception:
+            # 原来是彻底静默的：写盘失败（文件被占用 / 没权限 / 磁盘满）时用户什么
+            # 都看不到，只会觉得"存了但没存上"。仍然不往上抛（保存失败不该把正在
+            # 编辑的界面带崩），但至少要留下痕迹。
+            logging.getLogger(__name__).warning("保存字幕渲染模块设置失败", exc_info=True)
             return
 
     def _save_builtin_scheme_default(self, key: str) -> None:

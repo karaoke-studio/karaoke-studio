@@ -27,5 +27,6 @@ class KrokHelperSubtitleRenderSettingsBridge:
     def save(self, data: dict) -> None:
         latest = load_app_settings()
         latest.subtitle_render = deepcopy(data)
-        save_app_settings(latest)
+        # 这里要写的正是模块命名空间，合并回盘上的旧值等于把自己的改动丢掉。
+        save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.subtitle_render = deepcopy(latest.subtitle_render)
