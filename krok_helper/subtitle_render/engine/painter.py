@@ -648,8 +648,30 @@ def _resolve_visible_content(
     :func:`paint_frame_to_painter` 的早退判断与 :func:`frame_has_content` 共用本函数，
     保证"是否有可见内容"两处口径一致（A4 空帧短路用）。
     """
+    resolved = _resolve_visible_content_with_plan(
+        track,
+        t_ms,
+        style,
+        duration_ms=duration_ms,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
+    return resolved[:5]
+
+
+def _resolve_visible_content_with_plan(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+    *,
+    duration_ms: Optional[int] = None,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+):
+    """Resolve visible content and retain its shared dual-line layout plan."""
     track_t_ms = _effective_track_time_ms(track, t_ms, style)
     display_style = _display_style_for_signal_window(style)
+    layout_plan: TrackLayoutPlan | None = None
     if display_style.dual_line_layout:
         layout_plan = build_track_layout_plan(
             track,
@@ -684,7 +706,14 @@ def _resolve_visible_content(
         t_ms,
         duration_ms=duration_ms,
     )
-    return track_t_ms, display_style, display_lines, signal_lines, title_opacity
+    return (
+        track_t_ms,
+        display_style,
+        display_lines,
+        signal_lines,
+        title_opacity,
+        layout_plan,
+    )
 
 
 def frame_has_content(
@@ -931,15 +960,20 @@ def _paint_track_to_painter(
     draw_title: bool,
     duration_ms: Optional[int] = None,
 ) -> None:
-    track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
-        _resolve_visible_content(
+    (
+        track_t_ms,
+        display_style,
+        display_lines,
+        signal_lines,
+        title_opacity,
+        layout_plan,
+    ) = _resolve_visible_content_with_plan(
             track,
             t_ms,
             style,
             duration_ms=duration_ms if draw_title else None,
             logical_w=logical_w,
             logical_h=logical_h,
-        )
     )
     if not draw_title:
         title_opacity = 0.0
@@ -964,6 +998,11 @@ def _paint_track_to_painter(
         _apply_viewport_transform(painter, logical_w, logical_h, display_style)
         # 竖排时 baselines 字典里存的是每 lane 的「列中心 x」，横排时存基线 y；
         # 含义由 style.vertical 区分，_paint_line_static 据此走对应几何。
+        line_plans = (
+            {id(item.line): item for item in layout_plan.lines}
+            if layout_plan is not None
+            else {}
+        )
         if display_style.vertical:
             baselines = _resolve_vertical_columns(logical_w, track, display_lines, display_style)
             line_layouts = {}
@@ -972,7 +1011,11 @@ def _paint_track_to_painter(
                     logical_w,
                     track,
                     [display_line],
-                    _style_for_line(display_style, display_line.line),
+                    (
+                        line_plans[id(display_line.line)].layout_style
+                        if id(display_line.line) in line_plans
+                        else _style_for_line(display_style, display_line.line)
+                    ),
                 ).get(display_line.lane)
                 for display_line in display_lines
             }
@@ -995,14 +1038,19 @@ def _paint_track_to_painter(
         layout_cache_sig = (
             _layout_cache_sig(track, display_style) if display_lines else None
         )
-        track_offsets = resolved_page_offsets_for_style(
-            logical_w, logical_h, track, display_style, t_ms=track_t_ms
+        track_offsets = (
+            _active_page_offsets_from_layout_plan(layout_plan, track_t_ms)
+            if layout_plan is not None
+            else resolved_page_offsets_for_style(
+                logical_w, logical_h, track, display_style, t_ms=track_t_ms
+            )
         )
         line_offsets = {
             id(line): track_offsets.get(index, (0.0, 0.0))
             for index, line in enumerate(track.lines)
         }
         for display_line in display_lines:
+            line_plan = line_plans.get(id(display_line.line))
             line_layout = line_layouts.get(id(display_line.line))
             has_role_labels = _line_has_role_labels(display_line.line)
             line_x = None
@@ -1038,6 +1086,9 @@ def _paint_track_to_painter(
                     display_start_ms=display_line.display_start_ms,
                     display_end_ms=display_line.display_end_ms,
                     layout_cache_sig=layout_cache_sig,
+                    resolved_style=(
+                        line_plan.animation_style if line_plan is not None else None
+                    ),
                 )
             finally:
                 painter.restore()
@@ -5007,6 +5058,26 @@ def _visible_lines_from_layout_plan(
     ]
 
 
+def _active_page_offsets_from_layout_plan(
+    plan: TrackLayoutPlan,
+    t_ms: int,
+) -> dict[int, tuple[float, float]]:
+    """Select the page-offset window active for each planned source line."""
+    resolved: dict[int, tuple[float, float]] = {}
+    for item in plan.lines:
+        selected = next(
+            (
+                window
+                for window in item.layout_offset_windows
+                if window[0] <= int(t_ms) < window[1]
+            ),
+            None,
+        )
+        if selected is not None:
+            resolved[item.track_index] = (selected[2], selected[3])
+    return resolved
+
+
 def display_windows_for_style(
     track: TimingTrack,
     style: Style,
@@ -6923,12 +6994,10 @@ def _paint_line(
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
     layout_cache_sig: tuple | None = None,
+    resolved_style: Style | None = None,
 ) -> None:
-    style = _style_for_line_display_window(
-        style,
-        line,
-        display_start_ms,
-        display_end_ms,
+    style = resolved_style or _style_for_line_display_window(
+        style, line, display_start_ms, display_end_ms
     )
     animation = line_animation_state(
         style,

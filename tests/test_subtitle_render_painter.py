@@ -2935,6 +2935,59 @@ def test_shared_track_layout_plan_cache_reuses_and_invalidates_mutable_inputs(qa
     assert changed.lines[0].display_end_ms != first.lines[0].display_end_ms
 
 
+def test_dual_line_cpu_consumes_planned_animation_style(qapp, monkeypatch):
+    clear_before_layer_cache()
+    track = _two_line_track()
+    style = Style(dual_line_layout=True, lit_enabled=False)
+    subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    )
+    expected = paint_frame(_blank(), track, 1_600, style)
+
+    def fail_recompute(*_args, **_kwargs):
+        raise AssertionError("CPU recomputed a line animation style")
+
+    monkeypatch.setattr(
+        subtitle_painter, "_style_for_line_display_window", fail_recompute
+    )
+    actual = paint_frame(_blank(), track, 1_600, style)
+
+    assert _pixel_hash(actual) == _pixel_hash(expected)
+
+
+@pytest.mark.parametrize("layout_semantics", ["legacy", "n3_1074"])
+def test_planned_page_offset_windows_match_cpu_offset_selection(
+    qapp,
+    layout_semantics,
+):
+    lines = [
+        TimingLine(
+            chars=[TimingChar(text, start)],
+            end_ms=start + 500,
+            display_start_override_ms=0,
+            display_end_override_ms=5_000,
+        )
+        for text, start in (("A", 1_000), ("B", 2_000), ("C", 3_000))
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(1, "builtin-1")])]
+        ),
+    )
+    style = Style(layout_semantics=layout_semantics, dual_line_layout=True)
+    plan = subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    )
+
+    for t_ms in (0, 1_500, 3_000, 4_999, 5_000):
+        assert subtitle_painter._active_page_offsets_from_layout_plan(
+            plan, t_ms
+        ) == subtitle_painter.resolved_page_offsets_for_style(
+            640, 360, track, style, t_ms=t_ms
+        )
+
+
 def test_dual_line_baselines_stay_fixed_when_lower_line_disappears(qapp):
     track = _two_line_track()
     style = Style()
