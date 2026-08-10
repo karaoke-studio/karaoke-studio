@@ -2310,7 +2310,7 @@ class VideoDownloadPage(QWidget):
                 or DEFAULT_CUSTOM_TEMPLATE
             ),
             merge_video_audio=bool(getattr(self.settings, "video_download_merge_video_audio", True)),
-            download_thumbnail=False,
+            download_thumbnail=bool(getattr(self.settings, "video_download_download_thumbnail", False)),
         )
         task.filesize = self._preferred_task_filesize(task)
         return task
@@ -2406,8 +2406,12 @@ class VideoDownloadPage(QWidget):
         if task is None:
             self._set_combo_text_or_default(self.naming_rule_combo, NAMING_RULE_TITLE, NAMING_RULE_TITLE)
             self.custom_template_edit.setText(DEFAULT_CUSTOM_TEMPLATE)
-            self.per_video_merge_checkbox.setChecked(True)
-            self.per_video_thumbnail_checkbox.setChecked(False)
+            self.per_video_merge_checkbox.setChecked(
+                bool(getattr(self.settings, "video_download_merge_video_audio", True))
+            )
+            self.per_video_thumbnail_checkbox.setChecked(
+                bool(getattr(self.settings, "video_download_download_thumbnail", False))
+            )
         else:
             self._set_combo_text_or_default(self.naming_rule_combo, task.naming_rule or NAMING_RULE_TITLE, NAMING_RULE_TITLE)
             self.custom_template_edit.setText(task.custom_template or DEFAULT_CUSTOM_TEMPLATE)
@@ -2424,6 +2428,10 @@ class VideoDownloadPage(QWidget):
         del args
         if self._per_video_controls_updating:
             return
+        # 两个勾选框记在设置里：它们本身是逐任务的，但用户的习惯是固定的，
+        # 每加一个视频都要重勾一遍很烦。放在取任务之前，是为了没有当前任务时
+        # 勾一下也照样记住。
+        self._remember_per_video_toggles()
         task = self._current_task()
         if task is None:
             return
@@ -2434,6 +2442,19 @@ class VideoDownloadPage(QWidget):
         task.settings_confirmed = True
         self._sync_custom_template_visibility()
         self._refresh_task_switcher()
+
+    def _remember_per_video_toggles(self) -> None:
+        """把「自动合并音视频」「下载封面」的当前勾选状态存进设置。"""
+        merge = self.per_video_merge_checkbox.isChecked()
+        thumbnail = self.per_video_thumbnail_checkbox.isChecked()
+        if (
+            bool(getattr(self.settings, "video_download_merge_video_audio", True)) == merge
+            and bool(getattr(self.settings, "video_download_download_thumbnail", False)) == thumbnail
+        ):
+            return  # 没变就别写盘
+        self.settings.video_download_merge_video_audio = merge
+        self.settings.video_download_download_thumbnail = thumbnail
+        self._persist_settings()
 
     def _refresh_preview(self) -> None:
         task = self._current_task()
