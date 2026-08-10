@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 import logging
 import tempfile
@@ -350,6 +351,113 @@ def test_project_document_preserves_future_extension_fields():
     assert payload["screen"]["future_screen"] is True
     assert payload["output"] == {"crf": 18, "future_output": "keep"}
     assert "background" not in payload
+
+
+def test_project_document_preserves_nested_future_fields_by_object_identity(tmp_path):
+    style = Style(
+        font_size_px=88,
+        layouts=[
+            subtitle_models.LyricsLayout(name="A", layout_id="layout-a"),
+            subtitle_models.LyricsLayout(name="B", layout_id="layout-b"),
+        ],
+        custom_style_schemes={
+            "主唱": SubtitleStyleScheme(fill_color="#112233")
+        },
+        title_overlay=TitleOverlay(enabled=True),
+    )
+    page_plan = subtitle_models.TrackPagePlan(
+        [subtitle_models.TrackSection([subtitle_models.TrackPage(1, "layout-a")])]
+    )
+    settings = subtitle_models.SubtitleLoadingSettings(rows_per_page=3)
+    primary = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("主", 0)])],
+        page_plan=page_plan,
+        loading_settings_mode="custom",
+        loading_settings=settings,
+        loading_settings_snapshot=settings,
+    )
+    chorus_a = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("甲", 0)])],
+        page_plan=deepcopy(page_plan),
+    )
+    chorus_b = TimingTrack(lines=[TimingLine(chars=[TimingChar("乙", 0)])])
+    document = SubtitleProjectDocument(
+        timing_track=primary,
+        style=style,
+        extra_sources=[
+            ExtraSubtitleSource("甲", tmp_path / "a.lrc", chorus_a),
+            ExtraSubtitleSource("乙", tmp_path / "b.lrc", chorus_b),
+        ],
+    )
+    source = document.to_project_data(
+        screen={"width": 1920, "height": 1080, "fps": 60, "par": "1:1"},
+        selected_scheme_key="global",
+        output={"crf": 18},
+    )
+    source["style"]["future_style"] = {"enabled": True}
+    source["style"]["title_overlay"]["future_title"] = "keep"
+    source["style"]["title_overlay"]["fill"]["future_fill"] = 7
+    source["style"]["custom_style_schemes"]["主唱"]["future_scheme"] = {
+        "mode": "new"
+    }
+    source_layouts = {
+        item["layout_id"]: item for item in source["style"]["layouts"]
+    }
+    source_layouts["layout-a"]["future_layout"] = "A"
+    source_layouts["layout-b"]["future_layout"] = "B"
+    source["page_plan"]["future_plan"] = 1
+    source["page_plan"]["sections"][0]["future_section"] = 2
+    source["page_plan"]["sections"][0]["pages"][0]["future_page"] = 3
+    source["loading_settings"]["future_loading"] = 4
+    source["loading_settings_snapshot"]["future_snapshot"] = 5
+    source["extra_subtitle_sources"][0]["future_source"] = "A"
+    source["extra_subtitle_sources"][1]["future_source"] = "B"
+    document.remember_project_data(source)
+
+    document.style = replace(
+        document.style,
+        font_size_px=96,
+        layouts=[document.style.layouts[1], document.style.layouts[0]],
+    )
+    document.extra_sources.reverse()
+    payload = document.to_project_data(
+        screen={"width": 1280, "height": 720, "fps": 60, "par": "1:1"},
+        selected_scheme_key="global",
+        output={"crf": 20},
+    )
+
+    assert payload["style"]["font_size_px"] == 96
+    assert payload["style"]["future_style"] == {"enabled": True}
+    assert payload["style"]["title_overlay"]["future_title"] == "keep"
+    assert payload["style"]["title_overlay"]["fill"]["future_fill"] == 7
+    assert payload["style"]["custom_style_schemes"]["主唱"]["future_scheme"] == {
+        "mode": "new"
+    }
+    assert [item["future_layout"] for item in payload["style"]["layouts"]] == [
+        "B",
+        "A",
+    ]
+    assert payload["page_plan"]["future_plan"] == 1
+    assert payload["page_plan"]["sections"][0]["future_section"] == 2
+    assert payload["page_plan"]["sections"][0]["pages"][0]["future_page"] == 3
+    assert payload["loading_settings"]["future_loading"] == 4
+    assert payload["loading_settings_snapshot"]["future_snapshot"] == 5
+    assert [
+        item["future_source"] for item in payload["extra_subtitle_sources"]
+    ] == ["B", "A"]
+
+    document.style = replace(
+        document.style,
+        layouts=[],
+        custom_style_schemes={},
+    )
+    document.extra_sources = []
+    deleted = document.to_project_data(
+        screen={}, selected_scheme_key="global", output={}
+    )
+    assert deleted["style"]["layouts"] == []
+    assert deleted["style"]["custom_style_schemes"] == {}
+    assert "extra_subtitle_sources" not in deleted
 
 
 def test_app_style_preferences_do_not_leak_project_only_content():
@@ -822,14 +930,25 @@ def test_window_open_edit_save_preserves_future_project_fields(
     qapp, monkeypatch, tmp_path
 ):
     win = _make_window(qapp, monkeypatch)
+    future_style = style_to_dict(
+        Style(
+            font_size_px=87,
+            layouts=[subtitle_models.LyricsLayout(name="未来布局", layout_id="future")],
+            custom_style_schemes={
+                "主唱": SubtitleStyleScheme(fill_color="#123456")
+            },
+            title_overlay=TitleOverlay(enabled=True),
+        )
+    )
+    future_style["future_style"] = {"version": 2}
+    future_style["title_overlay"]["future_title"] = True
+    future_style["custom_style_schemes"]["主唱"]["future_scheme"] = 7
+    future_style["layouts"][0]["future_layout"] = "keep"
     win._apply_project_data(
         {
             "schema_version": 99,
             "future_section": {"mode": "new"},
-            "style": {
-                **style_to_dict(Style(font_size_px=87)),
-                "future_style": {"version": 2},
-            },
+            "style": future_style,
             "screen": {
                 "width": 1280,
                 "height": 720,
@@ -855,6 +974,9 @@ def test_window_open_edit_save_preserves_future_project_fields(
     assert saved["future_section"] == {"mode": "new"}
     assert saved["style"]["font_size_px"] == 91
     assert saved["style"]["future_style"] == {"version": 2}
+    assert saved["style"]["title_overlay"]["future_title"] is True
+    assert saved["style"]["custom_style_schemes"]["主唱"]["future_scheme"] == 7
+    assert saved["style"]["layouts"][0]["future_layout"] == "keep"
     assert saved["screen"]["future_screen"] == "keep"
     assert saved["output"]["future_output"] == [1, 2]
     assert saved["background"]["future_background"] is True
