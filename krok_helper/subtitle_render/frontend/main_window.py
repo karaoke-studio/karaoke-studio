@@ -250,6 +250,7 @@ from krok_helper.subtitle_render.preferences import (
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
     app_default_style_to_dict,
     load_app_style_preferences,
+    merge_app_setting_field,
     merge_common_style_preferences,
     update_app_output_preferences,
 )
@@ -8093,7 +8094,11 @@ class SubtitleRenderWindow(QWidget):
             self._style,
         )
         data = self._load_subtitle_settings()
-        data["style"] = app_default_style_to_dict(self._app_default_style)
+        data["style"] = merge_app_setting_field(
+            data.get("style"),
+            app_default_style_to_dict(self._app_default_style),
+            key="style",
+        )
         default_title = self._app_default_style.title_overlay or TitleOverlay()
         new_project_defaults = (
             dict(data.get("new_project_defaults"))
@@ -8106,9 +8111,11 @@ class SubtitleRenderWindow(QWidget):
         )
         # 淡入淡出时长和上面两项同属"标题的用户习惯"，放在一起。
         # 尾段那两项是 Optional，``None`` 表示跟随开头，原样存。
-        new_project_defaults["title_fades"] = {
-            name: getattr(default_title, name) for name in _TITLE_FADE_FIELDS
-        }
+        new_project_defaults["title_fades"] = merge_app_setting_field(
+            new_project_defaults.get("title_fades"),
+            {name: getattr(default_title, name) for name in _TITLE_FADE_FIELDS},
+            key="title_fades",
+        )
         if self._layout_assignment_preference is None:
             new_project_defaults.pop("layout_assignment", None)
         else:
@@ -8116,17 +8123,31 @@ class SubtitleRenderWindow(QWidget):
                 self._layout_assignment_preference
             )
         data["new_project_defaults"] = new_project_defaults
-        data["subtitle_loading_defaults"] = subtitle_loading_settings_to_dict(
-            self._subtitle_loading_defaults
+        data["subtitle_loading_defaults"] = merge_app_setting_field(
+            data.get("subtitle_loading_defaults"),
+            subtitle_loading_settings_to_dict(self._subtitle_loading_defaults),
+            key="subtitle_loading_defaults",
         )
-        data["style_presets"] = _style_presets_to_dict(self._style_presets)
-        data["auto_chorus"] = {
-            "role": self._auto_chorus_role,
-            "begin_chars": self._auto_chorus_begin_chars,
-            "end_chars": self._auto_chorus_end_chars,
-            "overwrite": bool(self._auto_chorus_overwrite),
-        }
-        data["screen"] = screen_settings_to_dict(self._screen_settings)
+        data["style_presets"] = merge_app_setting_field(
+            data.get("style_presets"),
+            _style_presets_to_dict(self._style_presets),
+            key="style_presets",
+        )
+        data["auto_chorus"] = merge_app_setting_field(
+            data.get("auto_chorus"),
+            {
+                "role": self._auto_chorus_role,
+                "begin_chars": self._auto_chorus_begin_chars,
+                "end_chars": self._auto_chorus_end_chars,
+                "overwrite": bool(self._auto_chorus_overwrite),
+            },
+            key="auto_chorus",
+        )
+        data["screen"] = merge_app_setting_field(
+            data.get("screen"),
+            screen_settings_to_dict(self._screen_settings),
+            key="screen",
+        )
         data["selected_scheme_key"] = (
             self._selected_scheme_key
             if self._selected_scheme_key
@@ -8134,14 +8155,22 @@ class SubtitleRenderWindow(QWidget):
             else "global"
         )
         data["preview_splitter_ratio"] = round(self._preview_splitter_ratio, 4)
-        data["auto_save"] = {
-            "enabled": bool(self._auto_save_enabled),
-            "interval_minutes": int(self._auto_save_interval_minutes),
-        }
-        data["backup"] = {
-            "history_count": int(self._project_backup_count),
-            "discarded_retention_days": DISCARDED_BACKUP_RETENTION_DAYS,
-        }
+        data["auto_save"] = merge_app_setting_field(
+            data.get("auto_save"),
+            {
+                "enabled": bool(self._auto_save_enabled),
+                "interval_minutes": int(self._auto_save_interval_minutes),
+            },
+            key="auto_save",
+        )
+        data["backup"] = merge_app_setting_field(
+            data.get("backup"),
+            {
+                "history_count": int(self._project_backup_count),
+                "discarded_retention_days": DISCARDED_BACKUP_RETENTION_DAYS,
+            },
+            key="backup",
+        )
         if hasattr(self, "_export_native_check"):
             local_output = self._local_output_preferences
             data["output"] = update_app_output_preferences(

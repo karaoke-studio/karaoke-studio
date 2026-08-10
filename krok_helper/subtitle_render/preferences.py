@@ -12,6 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
 
+from krok_helper.subtitle_render.forward_compat import merge_extensible_value
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     STYLE_APPEARANCE_FIELDS,
@@ -199,6 +200,17 @@ def app_default_style_to_dict(style: Style) -> dict:
     payload = style_to_dict(style)
     payload.pop("title_overlay", None)
     return payload
+
+
+def merge_app_setting_field(existing: object, current: object, *, key: str) -> Any:
+    """Overlay one app setting while retaining nested fields from newer versions."""
+    if isinstance(current, (dict, list)) and isinstance(existing, type(current)):
+        source = deepcopy(existing)
+        if key == "style" and isinstance(source, dict):
+            # Application defaults deliberately exclude per-project title text.
+            source.pop("title_overlay", None)
+        return merge_extensible_value(source, current, path=(str(key),))
+    return deepcopy(current)
 
 
 def update_app_output_preferences(

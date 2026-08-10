@@ -77,6 +77,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TitleOverlay,
     effective_karaoke_animation,
     paint_fill_from_dict,
+    subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
 )
@@ -612,6 +613,68 @@ class _CountingSettingsProvider(_FontMigrationSettingsProvider):
     def save(self, data):
         self.saves += 1
         super().save(data)
+
+
+def test_app_settings_save_preserves_nested_future_fields_and_deletions(qapp):
+    style_payload = style_to_dict(Style())
+    style_payload["future_style"] = {"version": 3}
+    style_payload["custom_style_schemes"][TITLE_SCHEME_NAME]["future_scheme"] = 4
+    style_payload["layouts"][0]["future_layout"] = "keep"
+    provider = _CountingSettingsProvider(
+        {
+            "future_root": True,
+            "style": style_payload,
+            "new_project_defaults": {
+                "title_fades": {"fade_in_ms": 100, "future_fade": 5},
+                "future_default": 6,
+            },
+            "subtitle_loading_defaults": {"rows_per_page": 2, "future_loading": 7},
+            "style_presets": [
+                {
+                    "id": "preset-a",
+                    "name": "预设 A",
+                    "group": "",
+                    "scheme": {
+                        **subtitle_style_scheme_to_dict(SubtitleStyleScheme()),
+                        "future_scheme": 8,
+                    },
+                    "source_type": "",
+                    "source_data": {},
+                    "future_preset": 9,
+                }
+            ],
+            "auto_chorus": {"role": "副歌", "future_chorus": 10},
+            "screen": {"width": 1920, "height": 1080, "fps": 60, "future_screen": 11},
+            "auto_save": {"enabled": True, "interval_minutes": 5, "future_auto": 12},
+            "backup": {"history_count": 5, "future_backup": 13},
+            "output": {"future_output": 14},
+        }
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    win._save_persisted_state()
+    saved = provider.data
+
+    assert saved["future_root"] is True
+    assert saved["style"]["future_style"] == {"version": 3}
+    assert saved["style"]["custom_style_schemes"][TITLE_SCHEME_NAME][
+        "future_scheme"
+    ] == 4
+    assert saved["style"]["layouts"][0]["future_layout"] == "keep"
+    assert saved["new_project_defaults"]["future_default"] == 6
+    assert saved["new_project_defaults"]["title_fades"]["future_fade"] == 5
+    assert saved["subtitle_loading_defaults"]["future_loading"] == 7
+    assert saved["style_presets"][0]["future_preset"] == 9
+    assert saved["style_presets"][0]["scheme"]["future_scheme"] == 8
+    assert saved["auto_chorus"]["future_chorus"] == 10
+    assert saved["screen"]["future_screen"] == 11
+    assert saved["auto_save"]["future_auto"] == 12
+    assert saved["backup"]["future_backup"] == 13
+    assert saved["output"]["future_output"] == 14
+
+    win._style_presets = {}
+    win._save_persisted_state()
+    assert provider.data["style_presets"] == []
 
 
 def test_app_preference_save_is_deferred_off_the_edit_path(qapp):
