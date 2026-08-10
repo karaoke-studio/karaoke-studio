@@ -1685,6 +1685,70 @@ def _write_demo_lrc(path, text="[00:01:00]あ[00:01:50]い[00:02:00]\r\n"):
     return path
 
 
+def test_dropped_subtitle_replaces_the_selected_source(qapp, monkeypatch, tmp_path):
+    """拖入 / 「替换」按钮换掉的是当前选中那一轨，不再一律砸到主字幕。"""
+    win = _make_window(qapp, monkeypatch)
+    main_lrc = _write_demo_lrc(tmp_path / "main.lrc")
+    chorus_lrc = _write_demo_lrc(
+        tmp_path / "chorus.lrc", "[00:10:00]ラ[00:11:00]ラ[00:12:00]\r\n"
+    )
+    other_lrc = _write_demo_lrc(
+        tmp_path / "other.lrc", "[00:20:00]ヨ[00:21:00]ソ[00:22:00]\r\n"
+    )
+    assert win.load_from_lrc(main_lrc) is not None
+
+    from krok_helper.subtitle_render.frontend.main_window import ExtraSubtitleSource
+    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+
+    win._extra_sources.append(
+        ExtraSubtitleSource(
+            name="chorus", path=chorus_lrc, track=load_nicokara_lrc(chorus_lrc)
+        )
+    )
+    win._refresh_source_ui()
+
+    # 选中副源 → 拖入只换副源
+    win._on_source_selected(1)
+    win._load_dropped_subtitle(other_lrc)
+    assert win._extra_sources[0].path == other_lrc
+    assert [c.text for c in win._extra_sources[0].track.lines[0].chars] == ["ヨ", "ソ"]
+    # 名字还是旧文件名时跟着新文件走
+    assert win._extra_sources[0].name == "other"
+    assert win._subtitle_path == main_lrc
+    assert [c.text for c in win._timing_track.lines[0].chars] == ["あ", "い"]
+
+    # 选中主字幕 → 拖入换主字幕，副源不动
+    win._on_source_selected(0)
+    win._load_dropped_subtitle(chorus_lrc)
+    assert win._subtitle_path == chorus_lrc
+    assert [c.text for c in win._timing_track.lines[0].chars] == ["ラ", "ラ"]
+    assert win._extra_sources[0].path == other_lrc
+
+
+def test_replace_source_keeps_a_renamed_extra_source_name(qapp, monkeypatch, tmp_path):
+    """用户改过的副源名字不该被新文件名覆盖。"""
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_lrc(_write_demo_lrc(tmp_path / "main.lrc")) is not None
+    chorus_lrc = _write_demo_lrc(
+        tmp_path / "chorus.lrc", "[00:10:00]ラ[00:11:00]ラ[00:12:00]\r\n"
+    )
+    other_lrc = _write_demo_lrc(
+        tmp_path / "other.lrc", "[00:20:00]ヨ[00:21:00]ソ[00:22:00]\r\n"
+    )
+
+    from krok_helper.subtitle_render.frontend.main_window import ExtraSubtitleSource
+    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+
+    win._extra_sources.append(
+        ExtraSubtitleSource(
+            name="コーラス1", path=chorus_lrc, track=load_nicokara_lrc(chorus_lrc)
+        )
+    )
+    win._replace_source_file(1, other_lrc)
+    assert win._extra_sources[0].path == other_lrc
+    assert win._extra_sources[0].name == "コーラス1"
+
+
 def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     """副字幕源（N3 多歌词文件）随 .yurika 保存/恢复：路径、每行布局、逐字角色。"""
     win = _make_window(qapp, monkeypatch)

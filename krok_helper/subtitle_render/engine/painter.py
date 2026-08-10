@@ -925,6 +925,14 @@ def _paint_track_to_painter(
     if not display_lines and not signal_lines and title_opacity <= 0.0:
         return
 
+    # 标题字幕 overlay（B7）：静态文字，画在屏幕坐标系（不随「视图」变换 / 行布局），
+    # 外观由「标题」配色方案与布局引用解析。**钉在最下层**——先画标题，本轨歌词与
+    # 随后叠绘的副字幕源都压在它之上（GPU 侧对应 compositeOrder 最小）。
+    if title_opacity > 0.0 and style.title_overlay is not None:
+        _paint_title_overlay(
+            painter, logical_w, logical_h, track, style, title_opacity
+        )
+
     painter.save()
     try:
         painter.setRenderHints(
@@ -1027,13 +1035,6 @@ def _paint_track_to_painter(
             )
     finally:
         painter.restore()
-
-    # 标题字幕 overlay（B7）：静态文字，画在屏幕坐标系（不随「视图」变换 / 行布局），
-    # 在歌词之上独立绘制。外观由「标题」配色方案与布局引用解析。
-    if title_opacity > 0.0 and style.title_overlay is not None:
-        _paint_title_overlay(
-            painter, logical_w, logical_h, track, style, title_opacity
-        )
 
 
 # ---------------------------------------------------------------------------

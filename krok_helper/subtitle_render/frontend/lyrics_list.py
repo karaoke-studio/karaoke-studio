@@ -1069,6 +1069,8 @@ class LyricsPanel(DropPanel):
     """「＋」按钮：请求添加副字幕源（N3 多歌词文件，如コーラス轨）。"""
     sourceRemoveRequested = Signal(int)
     """「－」按钮：请求移除当前选中的副字幕源（主字幕不可移除）。"""
+    sourceReplaceRequested = Signal(int)
+    """「文件」按钮：请求换掉当前选中源的歌词文件（0 = 主字幕）。"""
     sourceRefreshRequested = Signal()
     sourceSettingsRequested = Signal(object)
     pageBoundaryRequested = Signal(str, int)
@@ -1180,6 +1182,7 @@ class LyricsPanel(DropPanel):
         # ---- 字幕源工具条（对标 N3 多歌词文件：メイン / コーラス1 / …）----
         self._syncing_sources = False
         self._removable_source_indices: set[int] = set()
+        self._replaceable_source_indices: set[int] = set()
         self._source_bar = QWidget(self)
         source_layout = QHBoxLayout(self._source_bar)
         source_layout.setContentsMargins(8, 6, 8, 0)
@@ -1193,6 +1196,12 @@ class LyricsPanel(DropPanel):
         self._remove_source_btn = TransparentToolButton(FIF.REMOVE, self._source_bar)
         self._remove_source_btn.setToolTip("移除当前副字幕源")
         self._remove_source_btn.clicked.connect(self._on_remove_source_clicked)
+        self._replace_source_btn = TransparentToolButton(FIF.FOLDER, self._source_bar)
+        self._replace_source_btn.setToolTip(
+            "换掉当前选中字幕源的歌词文件（保留该源的其他设置槽位）。"
+            "把文件直接拖到歌词列表上等效。"
+        )
+        self._replace_source_btn.clicked.connect(self._on_replace_source_clicked)
         self._refresh_source_btn = TransparentToolButton(FIF.SYNC, self._source_bar)
         self._refresh_source_btn.setToolTip(
             "使用已保存的加载设置重新读取当前字幕源，并重新生成段落、页面和按行数布局。"
@@ -1213,6 +1222,7 @@ class LyricsPanel(DropPanel):
         for button in (
             self._add_source_btn,
             self._remove_source_btn,
+            self._replace_source_btn,
             self._refresh_source_btn,
             self._settings_source_btn,
         ):
@@ -1221,6 +1231,7 @@ class LyricsPanel(DropPanel):
         source_layout.addWidget(self._source_combo, 1)
         source_layout.addWidget(self._add_source_btn)
         source_layout.addWidget(self._remove_source_btn)
+        source_layout.addWidget(self._replace_source_btn)
         source_layout.addWidget(self._refresh_source_btn)
         source_layout.addWidget(self._settings_source_btn)
         self._source_bar.setVisible(False)
@@ -1249,13 +1260,23 @@ class LyricsPanel(DropPanel):
         names: list[str],
         active_index: int,
         removable_indices: Optional[set[int]] = None,
+        replaceable_indices: Optional[set[int]] = None,
     ) -> None:
-        """刷新字幕源下拉（首项 = 主字幕）；只有一个源时也显示，便于发现「＋」入口。"""
+        """刷新字幕源下拉（首项 = 主字幕）；只有一个源时也显示，便于发现「＋」入口。
+
+        ``replaceable_indices`` 是能换文件的源；「标题」这类没有歌词文件的伪源
+        不在其中，宿主必须显式排除。
+        """
         self._syncing_sources = True
         self._removable_source_indices = (
             set(removable_indices)
             if removable_indices is not None
             else set(range(1, len(names)))
+        )
+        self._replaceable_source_indices = (
+            set(replaceable_indices)
+            if replaceable_indices is not None
+            else set(range(len(names)))
         )
         try:
             self._source_combo.clear()
@@ -1267,15 +1288,17 @@ class LyricsPanel(DropPanel):
         finally:
             self._syncing_sources = False
         self._source_bar.setVisible(bool(names))
-        self._remove_source_btn.setEnabled(
-            self._source_combo.currentIndex() in self._removable_source_indices
-        )
+        self._sync_source_buttons(self._source_combo.currentIndex())
 
     def current_source_index(self) -> int:
         return max(self._source_combo.currentIndex(), 0)
 
-    def _on_source_combo_changed(self, index: int) -> None:
+    def _sync_source_buttons(self, index: int) -> None:
         self._remove_source_btn.setEnabled(index in self._removable_source_indices)
+        self._replace_source_btn.setEnabled(index in self._replaceable_source_indices)
+
+    def _on_source_combo_changed(self, index: int) -> None:
+        self._sync_source_buttons(index)
         if self._syncing_sources or index < 0:
             return
         self.sourceSelected.emit(index)
@@ -1284,6 +1307,11 @@ class LyricsPanel(DropPanel):
         index = self._source_combo.currentIndex()
         if index in self._removable_source_indices:
             self.sourceRemoveRequested.emit(index)
+
+    def _on_replace_source_clicked(self) -> None:
+        index = self._source_combo.currentIndex()
+        if index in self._replaceable_source_indices:
+            self.sourceReplaceRequested.emit(index)
 
     def set_role_options(self, options: list[str]) -> None:
         """设置可选的配色方案 / 角色名列表。"""

@@ -7625,9 +7625,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.pageIndex = sourceLine.pageIndex;
         line.lane = sourceLine.lane;
         line.centerOverride = sourceLine.centerOverride;
-        line.compositeOrder = sourceLine.sourceIndex == 0
-            ? 0
-            : sourceLine.sourceIndex + 1;
+        // 标题钉在最下层（compositeOrder = kTitleCompositeOrder），所以源之间不必
+        // 再为它预留 1 号槽位：主字幕 0，副源依次 1、2……
+        line.compositeOrder = sourceLine.sourceIndex;
         if (sourceLine.guideAnchorLeft.has_value()
             && sourceLine.guideAnchorRight.has_value()) {
             line.guideAnchorLeft = static_cast<float>(
@@ -7956,7 +7956,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 titleLine.sourceIndex = -1;
                 titleLine.sourceLineIndex = rowIndex;
                 titleLine.lane = rowIndex;
-                titleLine.compositeOrder = 1;
+                titleLine.compositeOrder =
+                    krok::subtitle::native::kTitleCompositeOrder;
                 titleLine.staticOverlay = true;
                 titleLine.fadeInMs = defaultFadeInMs;
                 titleLine.fadeOutMs = defaultFadeOutMs;

@@ -210,6 +210,10 @@ struct PlacementWindow {
     bool operator==(const PlacementWindow &) const = default;
 };
 
+/// Composite slot of the title overlay.  Lower draws first, so the title sits
+/// below every lyric source (which use their own 0-based source index).
+inline constexpr int kTitleCompositeOrder = -1;
+
 struct TextLine {
     std::vector<TextChar> chars;
     std::vector<TextRuby> rubies;

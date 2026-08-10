@@ -3461,6 +3461,119 @@ def test_gpu_g4_vertical_title_remains_in_screen_coordinates(monkeypatch) -> Non
     ), (gpu_bounds, painter_bounds)
 
 
+def _payload_core_pixels(
+    payload: bytes,
+    rgb: tuple[int, int, int],
+    width: int = 640,
+    height: int = 360,
+) -> set[tuple[int, int]]:
+    """Opaque pixels exactly equal to ``rgb`` — the interior of one flat layer."""
+    red, green, blue = rgb
+    found: set[tuple[int, int]] = set()
+    for y in range(height):
+        row = y * width * 4
+        for x in range(width):
+            index = row + x * 4
+            if (
+                payload[index] == red
+                and payload[index + 1] == green
+                and payload[index + 2] == blue
+                and payload[index + 3] == 255
+            ):
+                found.add((x, y))
+    return found
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_title_overlay_draws_below_lyrics(monkeypatch) -> None:
+    """标题的 compositeOrder 最小：重叠处歌词压住标题，与 Painter 同口径。"""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    text = "あいうえおかきくけこ"
+    meta = TimingTrackMeta(title="曲名", artist="歌手")
+    track = TimingTrack(
+        meta=meta,
+        lines=[TimingLine(chars=[TimingChar(ch, 0) for ch in text], end_ms=30_000)],
+    )
+    # 歌词远在时间轴后段的同构轨，用来单独量出标题自己的覆盖范围。
+    offscreen_track = TimingTrack(
+        meta=meta,
+        lines=[
+            TimingLine(
+                chars=[TimingChar(ch, 60_000) for ch in text], end_ms=70_000
+            )
+        ],
+    )
+    lyrics_style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        stroke2_width_px=0,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(mode="solid", color="#FF0000")),
+            after=KaraokeColorState(text=PaintFill(mode="solid", color="#FF0000")),
+        ),
+    )
+    schemes = dict(lyrics_style.custom_style_schemes)
+    schemes["标题"] = replace(
+        schemes["标题"],
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=80,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        glow_concentration_level=-1,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(mode="solid", color="#0000FF"))
+        ),
+    )
+    style = replace(
+        lyrics_style,
+        custom_style_schemes=schemes,
+        title_overlay=TitleOverlay(
+            enabled=True,
+            # 显式 anchor/offset 生效，把标题抬到与歌词重叠的位置。
+            layout_index=None,
+            text_template=text,
+            show_mode="head",
+            head_offset_ms=0,
+            duration_ms=30_000,
+            fade_in_ms=0,
+            fade_out_ms=0,
+            anchor="bottom_left",
+            offset_x=0,
+            offset_y=20,
+        ),
+    )
+
+    titleless = replace(
+        style, title_overlay=replace(style.title_overlay, enabled=False)
+    )
+
+    # 三帧全部由 sidecar 自己光栅化，才能直接比核心像素集合——跨后端比会被
+    # DirectWrite 与 Qt 的抗锯齿差异淹没（同一几何下红/蓝核心只重合几百像素）。
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, lyrics_frames = _render_g1_frames(
+            renderer, titleless, (500,), force_warp=True, track=track
+        )
+        _, title_frames = _render_g1_frames(
+            renderer, style, (500,), force_warp=True, track=offscreen_track
+        )
+        _, both_frames = _render_g1_frames(
+            renderer, style, (500,), force_warp=True, track=track
+        )
+
+    overlap = _payload_core_pixels(
+        lyrics_frames[0], (255, 0, 0)
+    ) & _payload_core_pixels(title_frames[0], (0, 0, 255))
+    assert overlap, "测试几何失效：标题与歌词没有互相覆盖的核心像素"
+    still_lyrics = _payload_core_pixels(both_frames[0], (255, 0, 0))
+    assert overlap <= still_lyrics, sorted(overlap - still_lyrics)[:16]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_vertical_inline_role_styles_follow_painter(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")

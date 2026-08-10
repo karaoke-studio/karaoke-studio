@@ -6626,6 +6626,91 @@ def test_title_overlay_renders_only_when_enabled(qapp):
     assert _pixel_hash(off) == _pixel_hash(disabled)
 
 
+def _core_pixels(img: QImage, rgb: int) -> set[tuple[int, int]]:
+    """严格等于 ``rgb`` 的像素，即被该图层完全覆盖、没混进抗锯齿的核心。"""
+    return {
+        (x, y)
+        for y in range(img.height())
+        for x in range(img.width())
+        if img.pixel(x, y) & 0xFFFFFF == rgb
+    }
+
+
+def test_title_overlay_draws_below_lyrics(qapp):
+    """标题钉在最下层：与歌词重叠处歌词压住标题（GPU compositeOrder 同口径）。"""
+    duration_ms = 30_000
+    text = "あいうえおかきくけこ"
+    meta = TimingTrackMeta(title="曲名", artist="歌手")
+    track = TimingTrack(
+        meta=meta,
+        lines=[
+            TimingLine(
+                chars=[TimingChar(text=ch, start_ms=1000) for ch in text],
+                end_ms=duration_ms,
+            )
+        ],
+    )
+    # 同一时长的另一条轨，歌词远在时间轴后段——用来单独量标题自己的覆盖范围。
+    offscreen_track = TimingTrack(
+        meta=meta,
+        lines=[
+            TimingLine(
+                chars=[TimingChar(text=ch, start_ms=60_000) for ch in text],
+                end_ms=70_000,
+            )
+        ],
+    )
+    base = Style(
+        dual_line_layout=False,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#FF0000")),
+            after=KaraokeColorState(text=_solid_fill("#FF0000")),
+        ),
+    )
+    schemes = dict(base.custom_style_schemes)
+    schemes["标题"] = replace(
+        schemes["标题"],
+        font_size_px=90,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        glow_concentration_level=-1,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#0000FF"))
+        ),
+    )
+    style = replace(
+        base,
+        custom_style_schemes=schemes,
+        title_overlay=TitleOverlay(
+            enabled=True,
+            # 显式 anchor/offset 生效，避免内置「タイトル左上」布局把标题移开歌词。
+            layout_index=None,
+            text_template=text,
+            fade_in_ms=0,
+            fade_out_ms=0,
+            anchor="bottom_left",
+            offset_x=0,
+            offset_y=0,
+        ),
+    )
+
+    lyrics_only = _blank()
+    paint_frame(lyrics_only, track, 500, base, duration_ms=duration_ms)
+    title_only = _blank()
+    paint_frame(title_only, offscreen_track, 500, style, duration_ms=duration_ms)
+    both = _blank()
+    paint_frame(both, track, 500, style, duration_ms=duration_ms)
+
+    overlap = _core_pixels(lyrics_only, 0xFF0000) & _core_pixels(title_only, 0x0000FF)
+    assert overlap, "测试几何失效：标题与歌词没有互相覆盖的核心像素"
+    assert {both.pixel(x, y) & 0xFFFFFF for x, y in overlap} == {0xFF0000}
+
+
 def test_title_overlay_applies_role_scheme_per_character(qapp):
     track = _title_track()
     base = Style()

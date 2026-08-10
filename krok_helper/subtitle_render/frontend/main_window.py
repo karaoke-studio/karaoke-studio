@@ -3741,6 +3741,9 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.sourceSelected.connect(self._on_source_selected)
         self._lyrics_panel.sourceAddRequested.connect(self._on_source_add_requested)
         self._lyrics_panel.sourceRemoveRequested.connect(self._on_source_remove_requested)
+        self._lyrics_panel.sourceReplaceRequested.connect(
+            self._on_source_replace_requested
+        )
         self._lyrics_panel.sourceRefreshRequested.connect(
             self._on_source_refresh_requested
         )
@@ -4295,6 +4298,11 @@ class SubtitleRenderWindow(QWidget):
             return
         if suffix == N3_PROJECT_FILE_SUFFIX:
             self._import_n3_project_path(path)
+            return
+        # 拖入 = 替换当前选中的那一轨，与「替换」按钮同一条路径。选中「标题」时
+        # 没有可替换的歌词文件，回落到主字幕（也是空态首次载入走的那条）。
+        if self._timing_track is not None and not self._title_source_active:
+            self._replace_source_file(self._active_source_index, path)
             return
         self.load_subtitle_source(path)
 
@@ -5531,6 +5539,8 @@ class SubtitleRenderWindow(QWidget):
             names,
             active_index,
             removable_indices=set(range(1, len(self._extra_sources) + 1)),
+            # 「标题」没有歌词文件，不能换文件；其余每个源都能。
+            replaceable_indices=set(range(len(self._extra_sources) + 1)),
         )
 
     def _refresh_lyrics_panel_source(self) -> None:
@@ -6437,6 +6447,68 @@ class SubtitleRenderWindow(QWidget):
         self._clear_undo_history()
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._sync_subtitle_source_watcher()
+        self._mark_project_dirty()
+
+    def _on_source_replace_requested(self, index: int) -> None:
+        """换掉某个源的歌词文件：0 = 主字幕，k >= 1 = 第 k 个副字幕源。"""
+        track_index = int(index)
+        if self._timing_track is None or not 0 <= track_index <= len(self._extra_sources):
+            return
+        current = self._source_path_for_track_index(track_index)
+        start_dir = str(current.parent) if current is not None else ""
+        name = "主字幕" if track_index == 0 else self._extra_sources[track_index - 1].name
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, f"替换「{name}」的歌词文件", start_dir, SUBTITLE_FILTER
+        )
+        if not path_str:
+            return
+        self._replace_source_file(track_index, Path(path_str))
+
+    def _replace_source_file(self, track_index: int, path: Path) -> None:
+        """把 ``track_index`` 指向的源换成 ``path``。主字幕走既有的整体加载路径。"""
+        if track_index <= 0:
+            self.load_subtitle_source(path)
+            return
+        extra_index = track_index - 1
+        if not 0 <= extra_index < len(self._extra_sources):
+            return
+        try:
+            track = self._load_timing_track_file(path)
+        except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
+            fluent_error(
+                self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
+            )
+            return
+        # 与「添加副字幕源」同口径：新文件按全局加载设置重新分段分页。
+        track.loading_settings_mode = "global"
+        track.loading_settings = None
+        track.loading_settings_snapshot = self._subtitle_loading_defaults
+        track.page_plan = build_page_plan(
+            track, self._subtitle_loading_defaults, self._style
+        )
+        project_page_plan_to_legacy_fields(track, self._style)
+        self._apply_remembered_layout_assignment(track)
+        self._apply_imported_role_preset_choices(track.role_options)
+        self._set_subtitle_source_baseline(path, track)
+        source = self._extra_sources[extra_index]
+        renamed = source.name == source.path.stem
+        source.path = path
+        source.track = track
+        # 名字是用户可见标识：只在它还是旧文件名（没被改过）时跟着新文件走。
+        if renamed:
+            source.name = path.stem
+        self._active_source_index = track_index
+        self._title_source_active = False
+        # 换文件后旧的行索引全部失效
+        self._clear_undo_history()
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._property_panel.merge_roles(self._content_role_options())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
         self._margin_check_timer.start()
