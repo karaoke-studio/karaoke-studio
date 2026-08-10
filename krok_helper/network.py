@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import ssl
 import subprocess
 import sys
 import urllib.request
@@ -182,6 +183,38 @@ def requests_session_for_app_settings(app_settings: Any):
     return requests_session_for_proxy(settings.proxy_mode, settings.proxy_manual_url)
 
 
+_shared_ssl_context: ssl.SSLContext | None = None
+
+
+def build_ssl_context() -> ssl.SSLContext:
+    # 系统根证书存储 + certifi 两份信任锚叠加，两边都不能少：
+    # Windows 的根证书是访问到才从 Windows Update 按需拉取并缓存的，ssl 只能读到已经
+    # 缓存下来的那些，既不触发按需下载也不做 AIA 补链。国内机器常年没访问过日文站点、
+    # 根更新又常连不上，utaten.com 依赖的 SECOM 根就一直不在存储里，握手直接报
+    # CERTIFICATE_VERIFY_FAILED。certifi 能补上这类缺口，但它反过来没有企业根、
+    # 杀软 HTTPS 扫描根这些只可能存在于系统存储里的信任锚，单用会把中间人环境挂掉。
+    context = ssl.create_default_context()
+    try:
+        import certifi
+
+        context.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        # certifi 缺失或没被打进包里时退回纯系统存储，不能让它把整条请求链炸掉。
+        pass
+    return context
+
+
+def shared_ssl_context() -> ssl.SSLContext:
+    global _shared_ssl_context
+    if _shared_ssl_context is None:
+        _shared_ssl_context = build_ssl_context()
+    return _shared_ssl_context
+
+
+def https_handler_for_shared_context() -> urllib.request.HTTPSHandler:
+    return urllib.request.HTTPSHandler(context=shared_ssl_context())
+
+
 def urllib_proxy_handler_for_app_settings(app_settings: Any) -> urllib.request.ProxyHandler | None:
     settings = _updater_settings_from_app_settings(app_settings)
     info, _proxies = resolve_proxy(settings.proxy_mode, settings.proxy_manual_url)
@@ -194,11 +227,10 @@ def urllib_proxy_handler_for_app_settings(app_settings: Any) -> urllib.request.P
 
 def build_urllib_opener_for_app_settings(app_settings: Any, *handlers):
     proxy_handler = urllib_proxy_handler_for_app_settings(app_settings)
+    extra_handlers = (https_handler_for_shared_context(), *handlers)
     if proxy_handler is not None:
-        return urllib.request.build_opener(proxy_handler, *handlers)
-    if handlers:
-        return urllib.request.build_opener(*handlers)
-    return urllib.request.build_opener()
+        return urllib.request.build_opener(proxy_handler, *extra_handlers)
+    return urllib.request.build_opener(*extra_handlers)
 
 
 def load_current_app_settings():
