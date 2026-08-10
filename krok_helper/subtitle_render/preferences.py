@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
+    STYLE_APPEARANCE_FIELDS,
     TITLE_SCHEME_NAME,
     Style,
     SubtitleStyleScheme,
@@ -28,12 +29,7 @@ from krok_helper.subtitle_render.n3_font_catalog import (
 )
 
 
-BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
-    field.name
-    for field in fields(SubtitleStyleScheme)
-    if field.name in {style_field.name for style_field in fields(Style)}
-    and field.name not in LYRICS_LAYOUT_FIELDS
-)
+BUILTIN_SCHEME_STYLE_FIELDS = frozenset(STYLE_APPEARANCE_FIELDS)
 LAYOUT_DEFAULT_VALUE_FIELDS = frozenset(
     (*LYRICS_LAYOUT_FIELDS, "upper_line_left_margin_px", "lower_line_right_margin_px")
 )

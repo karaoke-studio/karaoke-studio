@@ -1371,6 +1371,45 @@ class Style:
         values.update(changes)
         return replace(self, **values)
 
+    @property
+    def appearance(self) -> SubtitleStyleScheme:
+        """Return default typography/paint fields through the scheme model."""
+        return SubtitleStyleScheme(
+            **{
+                name: deepcopy(getattr(self, name))
+                for name in STYLE_APPEARANCE_FIELDS
+            }
+        )
+
+    def with_appearance(
+        self,
+        appearance: Optional[SubtitleStyleScheme] = None,
+        **changes: object,
+    ) -> "Style":
+        """Update default appearance while keeping legacy flat storage."""
+        unknown = set(changes) - set(STYLE_APPEARANCE_FIELDS)
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise TypeError(f"unsupported appearance field(s): {names}")
+        values = {}
+        for name in STYLE_APPEARANCE_FIELDS:
+            value = (
+                getattr(appearance, name)
+                if appearance is not None
+                else getattr(self, name)
+            )
+            values[name] = deepcopy(getattr(self, name) if value is None else value)
+        values.update(changes)
+        return replace(self, **values)
+
+
+_STYLE_FIELD_NAMES = frozenset(field.name for field in fields(Style))
+STYLE_APPEARANCE_FIELDS = tuple(
+    field.name
+    for field in fields(SubtitleStyleScheme)
+    if field.name in _STYLE_FIELD_NAMES and field.name not in LYRICS_LAYOUT_FIELDS
+)
+
 
 def style_with_line_animation(style: Style, line: TimingLine) -> Style:
     """把逐行动画覆盖套到样式上；其他视觉与布局字段保持不变。"""

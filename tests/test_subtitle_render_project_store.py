@@ -25,6 +25,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
     LineAnimationOverride,
     Style,
+    STYLE_APPEARANCE_FIELDS,
     StyleTimingConfig,
     StylePreset,
     SubtitleStyleScheme,
@@ -404,6 +405,47 @@ def test_style_default_layout_view_preserves_flat_project_compatibility():
     assert style_from_dict(payload).default_layout == updated.default_layout
     with pytest.raises(TypeError, match="unsupported layout field"):
         style.with_default_layout(font_size_px=123)
+
+
+def test_style_appearance_view_uses_scheme_without_changing_project_schema():
+    style = Style(
+        font_family="测试字体",
+        font_size_px=88,
+        fill_color="#123456",
+        ruby_font_size_px=40,
+        font_family_latin="Latin Font",
+    )
+
+    appearance = style.appearance
+    assert isinstance(appearance, SubtitleStyleScheme)
+    assert appearance.font_family == style.font_family
+    assert appearance.fill_color == style.fill_color
+    assert "line_y_margin_px" not in STYLE_APPEARANCE_FIELDS
+
+    updated = style.with_appearance(
+        replace(
+            appearance,
+            font_size_px=96,
+            fill_color="#654321",
+            ruby_font_size_px=44,
+        ),
+        font_family_latin=None,
+    )
+    assert updated.font_size_px == 96
+    assert updated.fill_color == "#654321"
+    assert updated.ruby_font_size_px == 44
+    assert updated.font_family_latin is None
+    assert updated.line_y_margin_px == style.line_y_margin_px
+
+    payload = style_to_dict(updated)
+    assert "appearance" not in payload
+    assert payload["fill_color"] == "#654321"
+    restored = style_from_dict(payload)
+    assert restored.font_size_px == updated.font_size_px
+    assert restored.fill_color == updated.fill_color
+    assert restored.ruby_font_size_px == updated.ruby_font_size_px
+    with pytest.raises(TypeError, match="unsupported appearance field"):
+        style.with_appearance(line_y_margin_px=123)
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
