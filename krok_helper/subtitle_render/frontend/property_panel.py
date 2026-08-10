@@ -131,6 +131,7 @@ from krok_helper.subtitle_render.models import (
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
+from krok_helper.subtitle_render.property_controllers import RoleSchemeController
 from krok_helper.subtitle_render.n3_template_import import (
     N3_TEMPLATE_FILTER,
     default_n3_template_directories,
@@ -4206,7 +4207,7 @@ class PropertyPanel(QWidget):
         self._title_text_change_timer.setSingleShot(True)
         self._title_text_change_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
         self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
-        self._role_names: list[str] = []
+        self._role_controller = RoleSchemeController()
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -4350,7 +4351,7 @@ class PropertyPanel(QWidget):
     @property
     def role_names(self) -> list[str]:
         """当前角色导航中可分配给歌词的角色名（不含全局默认与标题）。"""
-        return list(self._role_names)
+        return self._role_controller.names
 
     def set_preset_schemes(
         self, schemes: dict[str, StylePreset | SubtitleStyleScheme]
@@ -4491,7 +4492,7 @@ class PropertyPanel(QWidget):
 
     def set_roles(self, role_names: list[str]) -> None:
         """Replace the current project's role registry and refresh navigation."""
-        self._role_names = [str(n) for n in role_names if n]
+        self._role_controller.replace(role_names)
         self._ensure_role_schemes()
         current_key = self._current_scheme_key()
         self._syncing = True
@@ -4503,15 +4504,8 @@ class PropertyPanel(QWidget):
 
     def merge_roles(self, role_names: list[str]) -> None:
         """Add newly discovered roles without dropping earlier project roles."""
-        merged = list(self._role_names)
-        seen = set(merged)
-        for value in role_names:
-            name = str(value or "").strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            merged.append(name)
-        self.set_roles(merged)
+        self._role_controller.merge(role_names)
+        self.set_roles(self._role_controller.names)
 
     # ------------------------------------------------------------------ layout
 
@@ -7728,7 +7722,7 @@ class PropertyPanel(QWidget):
         # 这里只显示当前字幕里出现过、或用户手动新建的角色目标。
         # 用户保存过的可复用预设由「样式预设库」维护，避免未分色文件自动套用历史方案。
         seen: set[str] = {TITLE_SCHEME_NAME}
-        for name in self._role_names:
+        for name in self._role_controller.names:
             if name in seen:
                 continue
             seen.add(name)
@@ -7770,8 +7764,7 @@ class PropertyPanel(QWidget):
             name = f"{original} {suffix}"
             suffix += 1
         schemes[name] = _scheme_from_current(self)
-        if name not in self._role_names:
-            self._role_names.append(name)
+        self._role_controller.add(name)
         self._update_style(custom_style_schemes=schemes)
         self._syncing = True
         try:
@@ -7785,7 +7778,8 @@ class PropertyPanel(QWidget):
             presets=self._preset_schemes,
             current_scheme=_scheme_from_current(self),
             target_label=self._current_target_label(),
-            existing_role_names=set(self._role_names) | {TITLE_SCHEME_NAME},
+            existing_role_names=set(self._role_controller.names)
+            | {TITLE_SCHEME_NAME},
             target_height=self._n3_template_target_height,
             lyrics_dir=self._n3_template_lyrics_dir,
             parent=self,
@@ -7874,7 +7868,7 @@ class PropertyPanel(QWidget):
     ) -> None:
         if not schemes:
             return
-        role_names = list(self._role_names)
+        role_names = self._role_controller.names
         style_schemes = dict(self._style.custom_style_schemes)
         for preset in _normalize_style_presets(schemes).values():
             name = str(preset.name).strip()
@@ -7882,7 +7876,7 @@ class PropertyPanel(QWidget):
                 continue
             style_schemes[name] = deepcopy(preset.scheme)
             role_names.append(name)
-        self._role_names = role_names
+        self._role_controller.replace(role_names)
         self._update_style(custom_style_schemes=style_schemes)
         self._syncing = True
         try:
@@ -7892,23 +7886,12 @@ class PropertyPanel(QWidget):
         self._sync_subtitle_scheme_controls()
 
     def _ensure_role_schemes(self) -> None:
-        schemes = dict(self._style.custom_style_schemes)
-        changed = False
-        for index, name in enumerate(self._role_names):
-            if name in schemes:
-                continue
-            matches = [
-                preset
-                for preset in self._preset_schemes.values()
-                if preset.name == name
-            ]
-            if len(matches) == 1:
-                schemes[name] = deepcopy(matches[0].scheme)
-            else:
-                schemes[name] = _auto_role_scheme(_scheme_from_current(self), index)
-            changed = True
-        if changed:
-            self._style = replace(self._style, custom_style_schemes=schemes)
+        base_scheme = _scheme_from_current(self)
+        self._style, changed = self._role_controller.ensure_style_schemes(
+            self._style,
+            self._preset_schemes,
+            lambda index: _auto_role_scheme(base_scheme, index),
+        )
         if changed:
             self.styleChanged.emit(self._style)
 
@@ -7921,8 +7904,7 @@ class PropertyPanel(QWidget):
         if role_name is not None:
             schemes = dict(self._style.custom_style_schemes)
             schemes[role_name] = deepcopy(scheme)
-            if role_name not in self._role_names:
-                self._role_names.append(role_name)
+            self._role_controller.add(role_name)
             self._update_style(custom_style_schemes=schemes)
             return
         changes = _style_scheme_changes(scheme)
@@ -7998,7 +7980,10 @@ class PropertyPanel(QWidget):
         new = new.strip()
         if not new or new == old:
             return
-        if new in self._role_names or new in self._style.custom_style_schemes:
+        if (
+            new in self._role_controller.names
+            or new in self._style.custom_style_schemes
+        ):
             InfoBar.warning(
                 title="名称已存在",
                 content=f"项目中已经存在角色“{new}”。",
@@ -8012,8 +7997,7 @@ class PropertyPanel(QWidget):
             del schemes[old]
         schemes[new] = scheme
         # 角色名来自字幕标签（role_names）的，重命名后也从可选名单里替换掉旧名。
-        if old in self._role_names:
-            self._role_names = [new if n == old else n for n in self._role_names]
+        self._role_controller.rename(old, new)
         self._update_style(custom_style_schemes=schemes)
         self._syncing = True
         try:
@@ -8028,8 +8012,7 @@ class PropertyPanel(QWidget):
             return  # 全局默认 / 内置「标题」方案不能删
         schemes = dict(self._style.custom_style_schemes)
         schemes.pop(name, None)
-        if name in self._role_names:
-            self._role_names = [n for n in self._role_names if n != name]
+        self._role_controller.remove(name)
         self._update_style(custom_style_schemes=schemes)
         self._syncing = True
         try:

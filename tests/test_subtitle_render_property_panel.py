@@ -85,6 +85,9 @@ from krok_helper.subtitle_render.n3_template_import import (  # noqa: E402
     N3TemplateLoadResult,
 )
 from krok_helper.subtitle_render.n3_font_catalog import N3FontCatalog  # noqa: E402
+from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
+    RoleSchemeController,
+)
 
 
 @pytest.fixture(scope="module")
@@ -99,6 +102,33 @@ def qapp():
         widget.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+def test_role_scheme_controller_owns_registry_and_scheme_defaults():
+    controller = RoleSchemeController()
+    controller.replace(["A", "", " B "])
+    controller.merge(["A", "B", "C", " "])
+    assert controller.names == ["A", " B ", "B", "C"]
+
+    preset_scheme = SubtitleStyleScheme(fill_color="#123456")
+    presets = {
+        "only": StylePreset(name="A", scheme=preset_scheme, preset_id="only")
+    }
+    style, changed = controller.ensure_style_schemes(
+        Style(),
+        presets,
+        lambda index: SubtitleStyleScheme(fill_color=f"#{index:06X}"),
+    )
+    assert changed is True
+    assert style.custom_style_schemes["A"] == preset_scheme
+    assert style.custom_style_schemes[" B "].fill_color == "#000001"
+    assert style.custom_style_schemes["B"].fill_color == "#000002"
+    assert style.custom_style_schemes["C"].fill_color == "#000003"
+
+    controller.rename("B", "D")
+    controller.remove(" B ")
+    controller.add("E")
+    assert controller.names == ["A", "D", "C", "E"]
 
 
 def test_property_panel_uses_fluent_checkboxes(qapp):
