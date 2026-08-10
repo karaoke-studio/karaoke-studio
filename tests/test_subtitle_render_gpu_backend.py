@@ -1952,6 +1952,74 @@ def test_gpu_preview_worker_pool_bounds_in_flight_and_tags_out_of_order_frames(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_preview_deferred_followers_and_target_cache(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            dpr=0.5,
+            worker_count=2,
+            realization_enabled=False,
+            defer_followers=True,
+            defer_realizations_until_first_frame=True,
+        )
+        assert configured["worker_count"] == 1
+
+        first = renderer.render_gpu_frame(
+            750,
+            generation=1,
+            frame_index=0,
+            shm_key=f"test-gpu-deferred-{uuid.uuid4().hex}",
+            include_checksum=True,
+        )
+        assert first["worker_count_ready"] == 1
+
+        resized = renderer.resize_gpu_target(
+            width=640,
+            height=360,
+            dpr=0.25,
+            prewarm_t_ms=750,
+            worker_count=2,
+            realization_enabled=False,
+        )
+        assert resized["target_cache_hit"] is False
+        restored = renderer.resize_gpu_target(
+            width=640,
+            height=360,
+            dpr=0.5,
+            prewarm_t_ms=750,
+            worker_count=2,
+            realization_enabled=False,
+        )
+        assert restored["target_cache_hit"] is True
+        assert restored["worker_count"] == 1
+
+        restored_frame = renderer.render_gpu_frame(
+            750,
+            generation=2,
+            frame_index=1,
+            shm_key=f"test-gpu-restored-{uuid.uuid4().hex}",
+            include_checksum=True,
+        )
+        assert restored_frame["worker_count_ready"] == 1
+        assert restored_frame["checksum"] == first["checksum"]
+
+        deadline = time.monotonic() + 5.0
+        diagnostics = renderer.gpu_diagnostics()
+        while (
+            diagnostics.get("worker_count_ready", 1) < 2
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+            diagnostics = renderer.gpu_diagnostics()
+        assert diagnostics["worker_count_ready"] == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_glow_scratch_reuse_is_worker_history_independent(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(

@@ -29,6 +29,7 @@ public:
     void closeNativePreview() override;
 
     std::shared_ptr<D2DDeviceResources> sharedDeviceResources() const noexcept;
+    void cancelRealizationPrewarm();
     void waitForRealizationPrewarm();
     void adoptSharedGlyphResources(const Direct2DGpuBackend &source);
 

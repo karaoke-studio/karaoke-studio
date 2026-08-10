@@ -127,6 +127,30 @@ def test_preview_graphics_video_source_uses_qt_playback_proxy(qapp, monkeypatch,
         qapp.processEvents()
 
 
+def test_preview_graphics_propagates_quality_to_shared_player(qapp):
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    seen: list[str] = []
+
+    class FakeController:
+        def set_video_output(self, _output):
+            pass
+
+        def set_preview_quality(self, quality):
+            seen.append(quality)
+
+    graphics = PreviewGraphicsView()
+    try:
+        graphics.use_external_player(FakeController())
+        graphics.set_preview_quality("low")
+
+        assert seen == ["high", "low"]
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
 def test_async_preview_target_size_uses_device_pixel_ratio():
     from krok_helper.subtitle_render.frontend.preview_async import preview_render_target_size
 
@@ -161,6 +185,7 @@ def test_transport_preview_quality_defaults_and_emits(qapp):
 
     assert bar.preview_quality() == "low"
     assert seen == ["low"]
+    assert "540p" in bar._preview_quality_combo.toolTip()
     assert "不影响视频导出" in bar._preview_quality_combo.toolTip()
 
 
@@ -191,36 +216,7 @@ def test_native_preview_lookahead_timestamps_only_expand_while_playing():
     ) == []
 
 
-def test_gpu_preview_auto_warp_only_selects_wide_main_outlines():
-    from dataclasses import replace
-
-    from krok_helper.subtitle_render.frontend.preview_async import (
-        _wide_stroke_prefers_warp,
-    )
-    from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme
-
-    fine = replace(
-        Style(),
-        stroke_width_px=5,
-        latin_stroke_width_px=5,
-        singer_style_overrides={},
-    )
-    assert _wide_stroke_prefers_warp(fine, 8) is False
-    assert _wide_stroke_prefers_warp(replace(fine, stroke_width_px=14), 8) is True
-    assert _wide_stroke_prefers_warp(
-        replace(
-            fine,
-            singer_style_overrides={
-                1: SubtitleStyleScheme(stroke_width_px=12)
-            },
-        ),
-        8,
-    ) is True
-
-
-def test_gpu_preview_auto_warp_selection_is_monotonic_during_style_churn(
-    qapp, monkeypatch
-):
+def test_gpu_preview_wide_stroke_keeps_hardware_backend(qapp, monkeypatch):
     from dataclasses import replace
 
     from krok_helper.subtitle_render.frontend.preview_async import (
@@ -229,14 +225,26 @@ def test_gpu_preview_auto_warp_selection_is_monotonic_during_style_churn(
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
-    monkeypatch.setenv("KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE", "1")
     renderer = GpuAsyncSubtitleRenderer(320, 180)
     try:
         wide = replace(Style(), stroke_width_px=14, latin_stroke_width_px=14)
-        fine = replace(Style(), stroke_width_px=5, latin_stroke_width_px=5)
         renderer.set_state(TimingTrack(), wide)
-        assert renderer._force_warp is True
-        renderer.set_state(TimingTrack(), fine)
+        assert renderer._force_warp is False
+        assert renderer.stats_snapshot()["warp_selected"] == 0
+    finally:
+        renderer.stop()
+
+
+def test_gpu_preview_explicit_warp_request_is_preserved(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview_async import (
+        GpuAsyncSubtitleRenderer,
+    )
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_FORCE_WARP", "1")
+    renderer = GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
         assert renderer._force_warp is True
         assert renderer.stats_snapshot()["warp_selected"] == 1
     finally:
@@ -449,6 +457,62 @@ def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
         assert renderer.targets[-1][:2] == (1280, 720)
         assert math.isclose(renderer.targets[-1][2], min(display_scale, 0.25))
         assert renderer.requests[-1] == graphics.current_time_ms
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_debounces_interactive_resize(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    class FakeSignal:
+        def connect(self, *args, **kwargs):
+            pass
+
+    class FakeAsyncRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.frame_ready = FakeSignal()
+            self.targets = []
+            self.requests = []
+            FakeAsyncRenderer.instances.append(self)
+
+        def set_render_target(self, width, height, device_pixel_ratio=1.0):
+            self.targets.append((width, height, device_pixel_ratio))
+
+        def set_state(self, *args, **kwargs):
+            pass
+
+        def request(self, t_ms):
+            self.requests.append(t_ms)
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "AsyncSubtitleRenderer", FakeAsyncRenderer)
+
+    graphics = PreviewGraphicsView()
+    try:
+        graphics.show()
+        qapp.processEvents()
+        renderer = FakeAsyncRenderer.instances[-1]
+        before = len(renderer.targets)
+
+        graphics.resize(900, 520)
+        qapp.processEvents()
+        assert len(renderer.targets) == before
+
+        deadline = time.monotonic() + 1.0
+        while len(renderer.targets) == before and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert len(renderer.targets) == before + 1
     finally:
         graphics.close()
         graphics.deleteLater()
@@ -1042,6 +1106,79 @@ def test_gpu_async_renderer_resize_rotates_shared_memory_generation(qapp):
         renderer.stop()
 
 
+def test_gpu_async_renderer_uses_target_resize_after_initial_scene(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    first_finished = threading.Event()
+    resized_finished = threading.Event()
+    configure_calls = []
+    resize_calls = []
+
+    class FakeGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure_gpu(self, *args, **kwargs):
+            configure_calls.append(dict(kwargs))
+            return {"ok": True, "event": "gpu_configured", "worker_count": 1}
+
+        def resize_gpu_target(self, **kwargs):
+            resize_calls.append(dict(kwargs))
+            return {"ok": True, "event": "gpu_configured", "worker_count": 1}
+
+        def render_gpu_frame(self, t_ms, **kwargs):
+            (resized_finished if int(t_ms) == 2_000 else first_finished).set()
+            return {
+                "ok": True,
+                "event": "gpu_frame_ready",
+                "shm_key": "gpu-resize-ring",
+                "t_ms": int(t_ms),
+            }
+
+        def close(self):
+            pass
+
+    class FakeGpuReader:
+        def __init__(self, shm_key):
+            self.shm_key = shm_key
+
+        @classmethod
+        def from_event(cls, event):
+            return cls(event["shm_key"])
+
+        def read_qimage(self, event):
+            return QImage(8, 8, QImage.Format.Format_RGBA8888)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", FakeGpuReader)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        assert first_finished.wait(timeout=2.0)
+
+        renderer.set_render_target(640, 360, 0.5)
+        renderer.request(2_000)
+        assert resized_finished.wait(timeout=2.0)
+
+        assert len(configure_calls) == 1
+        assert configure_calls[0]["defer_followers"] is True
+        assert configure_calls[0]["defer_realizations_until_first_frame"] is True
+        assert len(resize_calls) == 1
+        assert resize_calls[0]["width"] == 640
+        assert resize_calls[0]["height"] == 360
+        assert resize_calls[0]["dpr"] == 0.5
+    finally:
+        renderer.stop()
+
+
 def test_gpu_async_renderer_restarts_after_bounded_fallback(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -1208,6 +1345,186 @@ def test_gpu_async_renderer_pooled_batch_accepts_out_of_order_completion(qapp, m
         assert stats["worker_count"] == 2
         assert stats["max_in_flight"] == 2
         assert stats["future_frames_cached"] == 2
+    finally:
+        renderer.stop()
+
+
+def test_gpu_async_renderer_reserves_final_ring_before_deferred_follower(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    slot_counts: list[int] = []
+    pending: list[dict] = []
+    first_ready = threading.Event()
+
+    class FakeGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure_gpu(self, *args, **kwargs):
+            return {
+                "ok": True,
+                "event": "gpu_configured",
+                "worker_count": 1,
+                "dedicated_video_memory": 8 * 1024**3,
+            }
+
+        def render_gpu_frame(self, t_ms, **kwargs):
+            slot_counts.append(int(kwargs["slot_count"]))
+            first_ready.set()
+            return {
+                "ok": True,
+                "event": "gpu_frame_ready",
+                "shm_key": "gpu-deferred-ring",
+                "t_ms": int(t_ms),
+                "worker_count_ready": 2,
+            }
+
+        def begin_render_gpu_frame(self, t_ms, **kwargs):
+            slot_counts.append(int(kwargs["slot_count"]))
+            pending.append(
+                {
+                    "ok": True,
+                    "event": "gpu_frame_ready",
+                    "shm_key": "gpu-deferred-ring",
+                    "t_ms": int(t_ms),
+                    "request_serial": int(kwargs["request_serial"]),
+                    "worker_count_ready": 2,
+                }
+            )
+
+        def finish_render_gpu_frame(self):
+            return pending.pop()
+
+        def send_cancel_generation(self, _generation):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeGpuReader:
+        def __init__(self, shm_key):
+            self.shm_key = shm_key
+
+        @classmethod
+        def from_event(cls, event):
+            return cls(event["shm_key"])
+
+        def read_qimage(self, _event):
+            return QImage(8, 8, QImage.Format.Format_RGBA8888)
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_WORKERS", "2")
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", FakeGpuReader)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.set_playing(False)
+        renderer.request(0)
+        assert first_ready.wait(timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while renderer.stats_snapshot()["worker_count"] != 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        renderer.set_playing(True)
+        renderer.request(1_000)
+        while len(slot_counts) < 3 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        assert slot_counts == [2, 2, 2]
+    finally:
+        renderer.stop()
+
+
+def test_gpu_async_renderer_ignores_dropped_single_frame_without_fallback(
+    qapp, monkeypatch
+):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    calls = 0
+    rendered = threading.Event()
+    emitted: list[int] = []
+    fallbacks: list[str] = []
+
+    class FakeGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure_gpu(self, *args, **kwargs):
+            return {"ok": True, "event": "gpu_configured", "worker_count": 1}
+
+        def render_gpu_frame(self, t_ms, **kwargs):
+            nonlocal calls
+            calls += 1
+            rendered.set()
+            if calls == 1:
+                return {
+                    "ok": True,
+                    "event": "gpu_frame_dropped",
+                    "generation": kwargs["generation"],
+                    "reason": "generation_cancelled",
+                }
+            return {
+                "ok": True,
+                "event": "gpu_frame_ready",
+                "shm_key": "gpu-after-drop-ring",
+                "t_ms": int(t_ms),
+            }
+
+        def send_cancel_generation(self, _generation):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeGpuReader:
+        def __init__(self, shm_key):
+            self.shm_key = shm_key
+
+        @classmethod
+        def from_event(cls, event):
+            assert event["event"] == "gpu_frame_ready"
+            return cls(event["shm_key"])
+
+        def read_qimage(self, _event):
+            return QImage(8, 8, QImage.Format.Format_RGBA8888)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", FakeGpuReader)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    renderer.frame_ready.connect(lambda _image, t_ms: emitted.append(int(t_ms)))
+    renderer.fallback_occurred.connect(fallbacks.append)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        assert rendered.wait(timeout=2.0)
+        rendered.clear()
+
+        renderer.request(2_000)
+        assert rendered.wait(timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while not emitted and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+
+        assert emitted == [2_000]
+        assert fallbacks == []
+        stats = renderer.stats_snapshot()
+        assert stats["stale_frames_dropped"] == 1
+        assert stats["renderer_failures"] == 0
     finally:
         renderer.stop()
 

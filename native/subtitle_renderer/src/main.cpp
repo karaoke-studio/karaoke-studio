@@ -586,9 +586,14 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stopping_ = true;
+            cancelFollowerConfigure_ = true;
             queue_.clear();
         }
         ready_.notify_all();
+        followerReady_.notify_all();
+        if (followerConfigureThread_.joinable()) {
+            followerConfigureThread_.join();
+        }
         for (auto &worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
@@ -599,19 +604,60 @@ public:
     GpuPreviewWorkerPool(const GpuPreviewWorkerPool &) = delete;
     GpuPreviewWorkerPool &operator=(const GpuPreviewWorkerPool &) = delete;
 
-    void configure(
-        const krok::subtitle::native::RenderScene &scene,
-        bool waitForRealizations = false
-    ) {
+    void pause() {
         {
             std::unique_lock<std::mutex> lock(mutex_);
             accepting_ = false;
+            cancelFollowerConfigure_ = true;
+            followerReady_.notify_all();
             outstanding_ -= static_cast<int>(queue_.size());
             queue_.clear();
             if (outstanding_ == 0) {
                 drained_.notify_all();
             }
             drained_.wait(lock, [this]() { return outstanding_ == 0; });
+        }
+        if (followerConfigureThread_.joinable()) {
+            followerConfigureThread_.join();
+        }
+        for (auto &backend : backends_) {
+            backend->cancelRealizationPrewarm();
+        }
+    }
+
+    void resume(
+        const krok::subtitle::native::RenderScene &scene,
+        bool deferFollowers
+    ) {
+        bool restartFollowers = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cancelFollowerConfigure_ = false;
+            accepting_ = true;
+            restartFollowers = deferFollowers
+                && readyWorkerCount_ < workerCount_
+                && backends_.size() > 1;
+            if (restartFollowers) {
+                firstFrameDelivered_ = false;
+            }
+        }
+        if (restartFollowers) {
+            startDeferredFollowers(scene);
+        }
+        ready_.notify_all();
+    }
+
+    void configure(
+        const krok::subtitle::native::RenderScene &scene,
+        bool waitForRealizations = false,
+        bool deferFollowers = false
+    ) {
+        pause();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cancelFollowerConfigure_ = false;
+            readyWorkerCount_ = 0;
+            firstFrameDelivered_ = false;
         }
         if (sharedResources_ && scene.realizationEnabled) {
             backends_.front()->configure(scene);
@@ -624,11 +670,11 @@ public:
                 backends_[index]->adoptSharedGlyphResources(*backends_.front());
                 backends_[index]->renderFrame(scene.prewarmTimeMs, true);
             }
-        } else {
+        } else if (waitForRealizations || !deferFollowers) {
             for (auto &backend : backends_) {
                 backend->configure(scene);
             }
-            if (scene.realizationEnabled && waitForRealizations) {
+            if (scene.realizationEnabled) {
                 for (auto &backend : backends_) {
                     backend->waitForRealizationPrewarm();
                 }
@@ -636,11 +682,29 @@ public:
             for (auto &backend : backends_) {
                 backend->renderFrame(scene.prewarmTimeMs, true);
             }
+        } else {
+            // Interactive preview becomes usable as soon as worker zero has
+            // its scene.  Followers are expensive independent Direct2D
+            // configurations, so bring them online after a short foreground
+            // grace period instead of extending the configure response.
+            backends_.front()->configure(scene);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                readyWorkerCount_ = 1;
+            }
+            if (backends_.size() > 1) {
+                startDeferredFollowers(scene);
+            }
         }
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (waitForRealizations || !deferFollowers
+                || (sharedResources_ && scene.realizationEnabled)) {
+                readyWorkerCount_ = workerCount_;
+            }
             accepting_ = true;
         }
+        ready_.notify_all();
     }
 
     bool submit(Work work) {
@@ -651,11 +715,19 @@ public:
         queue_.push_back(std::move(work));
         ++outstanding_;
         maxOutstanding_ = std::max(maxOutstanding_, outstanding_);
-        ready_.notify_one();
+        if (readyWorkerCount_ < workerCount_) {
+            ready_.notify_all();
+        } else {
+            ready_.notify_one();
+        }
         return true;
     }
 
     int workerCount() const noexcept { return workerCount_; }
+    int readyWorkerCount() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return readyWorkerCount_;
+    }
     bool sharedResources() const noexcept { return sharedResources_; }
     int maxOutstanding() const noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -672,8 +744,14 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         drained_.wait(lock, [this]() { return outstanding_ == 0; });
         lock.unlock();
+        int readyWorkerCount = 1;
+        {
+            std::lock_guard<std::mutex> readyLock(mutex_);
+            readyWorkerCount = std::max(readyWorkerCount_, 1);
+        }
         auto aggregate = backends_.front()->diagnostics();
-        for (std::size_t index = 1; index < backends_.size(); ++index) {
+        for (std::size_t index = 1;
+             index < static_cast<std::size_t>(readyWorkerCount); ++index) {
             const auto current = backends_[index]->diagnostics();
             aggregate.estimatedCacheBytes += current.estimatedCacheBytes;
             aggregate.realizationPrewarmComplete =
@@ -717,12 +795,61 @@ public:
     }
 
 private:
+    void startDeferredFollowers(
+        const krok::subtitle::native::RenderScene &scene
+    ) {
+        followerConfigureThread_ = std::thread([this, scene]() {
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                followerReady_.wait(lock, [this]() {
+                    return stopping_ || cancelFollowerConfigure_
+                        || firstFrameDelivered_;
+                });
+                if (stopping_ || cancelFollowerConfigure_) {
+                    return;
+                }
+                followerReady_.wait_for(
+                    lock,
+                    std::chrono::milliseconds(250),
+                    [this]() { return stopping_ || cancelFollowerConfigure_; }
+                );
+                if (stopping_ || cancelFollowerConfigure_) {
+                    return;
+                }
+            }
+            for (std::size_t index = 1; index < backends_.size(); ++index) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (static_cast<int>(index) < readyWorkerCount_) {
+                        continue;
+                    }
+                }
+                try {
+                    backends_[index]->configure(scene);
+                } catch (...) {
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (stopping_ || cancelFollowerConfigure_) {
+                        return;
+                    }
+                    readyWorkerCount_ = static_cast<int>(index + 1);
+                }
+                ready_.notify_all();
+            }
+        });
+    }
+
     void workerLoop(int workerIndex) {
         while (true) {
             Work work;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                ready_.wait(lock, [this]() { return stopping_ || !queue_.empty(); });
+                ready_.wait(lock, [this, workerIndex]() {
+                    return stopping_
+                        || (workerIndex < readyWorkerCount_ && !queue_.empty());
+                });
                 if (stopping_ && queue_.empty()) {
                     return;
                 }
@@ -735,6 +862,8 @@ private:
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 --outstanding_;
+                firstFrameDelivered_ = true;
+                followerReady_.notify_all();
                 if (outstanding_ == 0) {
                     drained_.notify_all();
                 }
@@ -752,13 +881,23 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable ready_;
     mutable std::condition_variable drained_;
+    std::condition_variable followerReady_;
     std::deque<Work> queue_;
     std::vector<std::unique_ptr<krok::subtitle::native::Direct2DGpuBackend>> backends_;
     std::vector<std::thread> workers_;
     bool stopping_ = false;
     bool accepting_ = false;
+    bool cancelFollowerConfigure_ = false;
+    bool firstFrameDelivered_ = false;
+    int readyWorkerCount_ = 0;
     int outstanding_ = 0;
     int maxOutstanding_ = 0;
+    std::thread followerConfigureThread_;
+};
+
+struct GpuPreviewPoolCacheEntry {
+    QString key;
+    std::unique_ptr<GpuPreviewWorkerPool> pool;
 };
 
 struct RenderRuntime {
@@ -777,6 +916,10 @@ struct RenderRuntime {
     bool warpGpuConfigured = false;
     std::unique_ptr<GpuPreviewWorkerPool> hardwareGpuPreviewPool;
     std::unique_ptr<GpuPreviewWorkerPool> warpGpuPreviewPool;
+    QString hardwareGpuPreviewPoolKey;
+    QString warpGpuPreviewPoolKey;
+    std::deque<GpuPreviewPoolCacheEntry> hardwareGpuPreviewPoolCache;
+    std::deque<GpuPreviewPoolCacheEntry> warpGpuPreviewPoolCache;
 };
 
 QString fontCacheKey(const QFont &font);
@@ -8233,6 +8376,12 @@ QJsonObject handleConfigureGpu(
     const bool waitRealizations = request.value(
         QStringLiteral("wait_realizations")
     ).toBool(false);
+    const bool deferFollowers = request.value(
+        QStringLiteral("defer_followers")
+    ).toBool(false);
+    const bool deferRealizationsUntilFirstFrame = request.value(
+        QStringLiteral("defer_realizations_until_first_frame")
+    ).toBool(false);
     const int exportCropTop = std::max(
         intValue(request, QStringLiteral("export_crop_top"), 0), 0
     );
@@ -8267,6 +8416,13 @@ QJsonObject handleConfigureGpu(
         )
     );
     const int workerCount = forceWarp ? 1 : requestedWorkers;
+    const bool targetResize = request.value(
+        QStringLiteral("target_resize")
+    ).toBool(false);
+    if (!targetResize) {
+        runtime->hardwareGpuPreviewPoolCache.clear();
+        runtime->warpGpuPreviewPoolCache.clear();
+    }
     if (workerCount > 1) {
         QElapsedTimer timer;
         timer.start();
@@ -8276,26 +8432,72 @@ QJsonObject handleConfigureGpu(
                 intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
             );
             scene.realizationEnabled = realizationEnabled;
+            scene.deferRealizationPrewarmUntilFirstFrame =
+                deferRealizationsUntilFirstFrame;
             scene.exportCropTop = exportCropTop;
             scene.exportCropHeight = exportCropHeight;
             scene.exportBands = exportBands;
             scene.realizationCapacity = realizationCapacity;
             auto &pool = runtime->hardwareGpuPreviewPool;
+            auto &poolKey = runtime->hardwareGpuPreviewPoolKey;
+            auto &poolCache = runtime->hardwareGpuPreviewPoolCache;
+            const QString targetKey = QStringLiteral("%1x%2@%3:w%4:s%5:r%6")
+                .arg(scene.width)
+                .arg(scene.height)
+                .arg(static_cast<double>(scene.layoutReferenceScale), 0, 'f', 6)
+                .arg(workerCount)
+                .arg(sharedResources ? 1 : 0)
+                .arg(realizationEnabled ? 1 : 0);
+            bool targetCacheHit = false;
+            if (targetResize && pool != nullptr && poolKey == targetKey) {
+                targetCacheHit = true;
+            } else if (targetResize && pool != nullptr && !poolKey.isEmpty()) {
+                pool->pause();
+                poolCache.erase(
+                    std::remove_if(
+                        poolCache.begin(), poolCache.end(),
+                        [&](const GpuPreviewPoolCacheEntry &entry) {
+                            return entry.key == poolKey;
+                        }
+                    ),
+                    poolCache.end()
+                );
+                poolCache.push_front({poolKey, std::move(pool)});
+                const auto cached = std::find_if(
+                    poolCache.begin(), poolCache.end(),
+                    [&](const GpuPreviewPoolCacheEntry &entry) {
+                        return entry.key == targetKey;
+                    }
+                );
+                if (cached != poolCache.end()) {
+                    pool = std::move(cached->pool);
+                    poolCache.erase(cached);
+                    pool->resume(scene, deferFollowers);
+                    targetCacheHit = true;
+                }
+                while (poolCache.size() > 2) {
+                    poolCache.pop_back();
+                }
+            }
             if (pool == nullptr || pool->workerCount() != workerCount
                 || pool->sharedResources() != sharedResources) {
                 pool = std::make_unique<GpuPreviewWorkerPool>(
                     false, workerCount, sharedResources
                 );
             }
-            pool->configure(scene, waitRealizations);
+            if (!targetCacheHit) {
+                pool->configure(scene, waitRealizations, deferFollowers);
+            }
+            poolKey = targetKey;
             runtime->hardwareGpuConfigured = true;
             QJsonObject out = response(true, QStringLiteral("gpu_configured"));
             out.insert(QStringLiteral("width"), scene.width);
             out.insert(QStringLiteral("height"), scene.height);
             out.insert(QStringLiteral("line_count"), static_cast<int>(scene.lines.size()));
-            out.insert(QStringLiteral("worker_count"), workerCount);
+            out.insert(QStringLiteral("worker_count"), pool->readyWorkerCount());
             out.insert(QStringLiteral("worker_count_requested"), requestedWorkers);
             out.insert(QStringLiteral("shared_resources"), pool->sharedResources());
+            out.insert(QStringLiteral("target_cache_hit"), targetCacheHit);
             out.insert(
                 QStringLiteral("configure_ms"),
                 static_cast<double>(timer.nsecsElapsed()) / 1000000.0
@@ -8315,8 +8517,10 @@ QJsonObject handleConfigureGpu(
     }
     if (forceWarp) {
         runtime->warpGpuPreviewPool.reset();
+        runtime->warpGpuPreviewPoolKey.clear();
     } else {
         runtime->hardwareGpuPreviewPool.reset();
+        runtime->hardwareGpuPreviewPoolKey.clear();
     }
     QString error;
     auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
@@ -8333,6 +8537,8 @@ QJsonObject handleConfigureGpu(
             intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
         );
         scene.realizationEnabled = realizationEnabled;
+        scene.deferRealizationPrewarmUntilFirstFrame =
+            deferRealizationsUntilFirstFrame;
         scene.exportCropTop = exportCropTop;
         scene.exportCropHeight = exportCropHeight;
         scene.exportBands = exportBands;
@@ -8364,6 +8570,48 @@ QJsonObject handleConfigureGpu(
     }
 }
 
+QJsonObject handleResizeGpuTarget(
+    const QJsonObject &request,
+    std::optional<RenderConfig> *config,
+    RenderRuntime *runtime
+) {
+    if (config == nullptr || !config->has_value()) {
+        QJsonObject out = response(false, QStringLiteral("gpu_configure"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+    const int width = std::clamp(
+        intValue(request, QStringLiteral("width"), config->value().width),
+        1,
+        8192
+    );
+    const int height = std::clamp(
+        intValue(request, QStringLiteral("height"), config->value().height),
+        1,
+        8192
+    );
+    const double dpr = std::clamp(
+        request.value(QStringLiteral("dpr")).toDouble(config->value().dpr),
+        0.01,
+        4.0
+    );
+    if (static_cast<double>(width) * dpr > 8192.0
+        || static_cast<double>(height) * dpr > 8192.0) {
+        QJsonObject out = response(false, QStringLiteral("gpu_configure"));
+        out.insert(
+            QStringLiteral("error"),
+            QStringLiteral("GPU target dimensions must be within 1..8192")
+        );
+        return out;
+    }
+    config->value().width = width;
+    config->value().height = height;
+    config->value().dpr = dpr;
+    QJsonObject resizeRequest = request;
+    resizeRequest.insert(QStringLiteral("target_resize"), true);
+    return handleConfigureGpu(resizeRequest, *config, runtime);
+}
+
 QJsonObject handleGpuDiagnostics(
     const QJsonObject &request,
     RenderRuntime *runtime
@@ -8381,6 +8629,7 @@ QJsonObject handleGpuDiagnostics(
     if (auto *pool = gpuPreviewPool(runtime, forceWarp)) {
         appendGpuDiagnostics(&out, pool->diagnostics());
         out.insert(QStringLiteral("worker_count"), pool->workerCount());
+        out.insert(QStringLiteral("worker_count_ready"), pool->readyWorkerCount());
         out.insert(QStringLiteral("in_flight"), pool->outstanding());
         out.insert(QStringLiteral("max_in_flight"), pool->maxOutstanding());
     } else {
@@ -8619,7 +8868,7 @@ std::optional<QJsonObject> handleRenderGpuFrame(
     const RenderConfig snapshot = *config;
     const QJsonObject requestSnapshot = request;
     const bool accepted = pool->submit(
-        [runtime, snapshot, requestSnapshot, generation, requestSerial](
+        [runtime, snapshot, requestSnapshot, generation, requestSerial, forceWarp](
             krok::subtitle::native::RenderBackend &backend,
             int workerIndex
         ) {
@@ -8635,6 +8884,12 @@ std::optional<QJsonObject> handleRenderGpuFrame(
             QJsonObject out = renderGpuFrameWithBackend(
                 workerRequest, snapshot, runtime, &backend
             );
+            if (auto *currentPool = gpuPreviewPool(runtime, forceWarp)) {
+                out.insert(
+                    QStringLiteral("worker_count_ready"),
+                    currentPool->readyWorkerCount()
+                );
+            }
             if (generationCancelled(runtime, generation)) {
                 out = response(true, QStringLiteral("gpu_frame_dropped"));
                 out.insert(QStringLiteral("generation"), generation);
@@ -8795,6 +9050,8 @@ int main(int argc, char **argv) {
             writeJson(handleRenderProbe(request, &runtime));
         } else if (command == QStringLiteral("gpu_configure")) {
             writeJson(handleConfigureGpu(request, config, &runtime));
+        } else if (command == QStringLiteral("gpu_resize_target")) {
+            writeJson(handleResizeGpuTarget(request, &config, &runtime));
         } else if (command == QStringLiteral("gpu_render_frame")) {
             if (auto out = handleRenderGpuFrame(request, config, &runtime)) {
                 writeJson(*out);

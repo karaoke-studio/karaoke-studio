@@ -1039,8 +1039,14 @@ class TransportBar(QWidget):
             (scale for key, _label, scale in PREVIEW_QUALITY_OPTIONS if key == quality),
             1.0,
         )
+        video_hint = {
+            "low": "视频预览使用最高 540p 代理",
+            "medium": "视频预览使用最高 1080p 代理",
+            "high": "视频预览保留源分辨率",
+        }[quality]
         tooltip = (
             f"预览质量：字幕最多按工程分辨率的 {scale:g} 倍渲染；"
+            f"{video_hint}；"
             "只影响交互预览，不影响视频导出。"
         )
         self._preview_quality_label.setToolTip(tooltip)

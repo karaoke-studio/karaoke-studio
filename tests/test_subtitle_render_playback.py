@@ -8,6 +8,7 @@ flag 解析、媒体文件有效性判定、source 切换 / has_media、音量�
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,7 @@ from krok_helper.subtitle_render.frontend.playback import (  # noqa: E402
     _is_real_media_file,
     unified_player_enabled,
 )
+from krok_helper.subtitle_render.frontend import playback  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -42,6 +44,7 @@ def make_controller(qapp):  # noqa: ARG001
     controllers: list[PlaybackController] = []
     yield lambda: _new_controller(controllers)
     for ctrl in controllers:
+        ctrl.shutdown()
         player = ctrl.media_player
         player.stop()
         player.setSource(QUrl())
@@ -118,3 +121,64 @@ def test_seek_and_position_do_not_crash(make_controller):
     ctrl.seek(5_000)
     assert isinstance(ctrl.position(), int)
     assert isinstance(ctrl.duration(), int)
+
+
+def test_preview_quality_switches_shared_player_to_cached_proxy(
+    make_controller, monkeypatch, tmp_path
+):
+    ctrl = make_controller()
+    source = tmp_path / "source.mp4"
+    proxy = tmp_path / "source-540p.mp4"
+    source.write_bytes(b"source")
+    proxy.write_bytes(b"proxy")
+
+    def prepared(path, quality="high"):
+        return proxy if quality == "low" else Path(path)
+
+    selected: list[Path] = []
+    monkeypatch.setattr(
+        playback.preview_media,
+        "prepared_qt_playback_source",
+        prepared,
+    )
+    monkeypatch.setattr(
+        ctrl,
+        "_set_player_source",
+        lambda path, **_kwargs: selected.append(Path(path)),
+    )
+
+    ctrl.set_media(source)
+    ctrl.set_preview_quality("low")
+
+    assert selected == [source, proxy]
+
+
+def test_preview_quality_cache_miss_keeps_current_source_while_preparing(
+    make_controller, monkeypatch, tmp_path
+):
+    ctrl = make_controller()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    requested: list[tuple[Path, str]] = []
+    selected: list[Path] = []
+    monkeypatch.setattr(
+        playback.preview_media,
+        "prepared_qt_playback_source",
+        lambda path, quality="high": Path(path) if quality == "high" else None,
+    )
+    monkeypatch.setattr(
+        ctrl,
+        "_start_proxy_preparation",
+        lambda path, quality: requested.append((Path(path), quality)),
+    )
+    monkeypatch.setattr(
+        ctrl,
+        "_set_player_source",
+        lambda path, **_kwargs: selected.append(Path(path)),
+    )
+
+    ctrl.set_media(source)
+    ctrl.set_preview_quality("medium")
+
+    assert selected == [source]
+    assert requested == [(source, "medium")]

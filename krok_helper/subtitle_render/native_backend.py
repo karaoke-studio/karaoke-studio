@@ -804,6 +804,8 @@ class NativeRendererProcess:
         realization_enabled: bool = True,
         shared_resources: bool = False,
         wait_realizations: bool = False,
+        defer_followers: bool = False,
+        defer_realizations_until_first_frame: bool = False,
         realization_capacity: int | None = None,
         export_crop_top: int = 0,
         export_crop_height: int = 0,
@@ -828,6 +830,10 @@ class NativeRendererProcess:
             "realization_enabled": bool(realization_enabled),
             "shared_resources": bool(shared_resources),
             "wait_realizations": bool(wait_realizations),
+            "defer_followers": bool(defer_followers),
+            "defer_realizations_until_first_frame": bool(
+                defer_realizations_until_first_frame
+            ),
             "export_crop_top": max(int(export_crop_top), 0),
             "export_crop_height": max(int(export_crop_height), 0),
             "export_bands": [
@@ -838,6 +844,38 @@ class NativeRendererProcess:
         if realization_capacity is not None:
             payload["realization_capacity"] = max(int(realization_capacity), 8192)
         self._send(payload)
+        return self._expect_ok(
+            self._read_until_event(
+                "gpu_configured",
+                timeout_s=self.gpu_configure_timeout_s,
+            )
+        )
+
+    def resize_gpu_target(
+        self,
+        *,
+        width: int,
+        height: int,
+        dpr: float,
+        force_warp: bool = False,
+        prewarm_t_ms: int = 0,
+        worker_count: int = 1,
+        realization_enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Reconfigure only preview target fields on the existing render IR."""
+        self._send({
+            "cmd": "gpu_resize_target",
+            "width": max(int(width), 1),
+            "height": max(int(height), 1),
+            "dpr": max(float(dpr or 1.0), 0.01),
+            "force_warp": bool(force_warp),
+            "prewarm_t_ms": max(int(prewarm_t_ms), 0),
+            "worker_count": max(1, min(int(worker_count), 8)),
+            "realization_enabled": bool(realization_enabled),
+            "wait_realizations": False,
+            "defer_followers": True,
+            "defer_realizations_until_first_frame": True,
+        })
         return self._expect_ok(
             self._read_until_event(
                 "gpu_configured",
@@ -890,6 +928,8 @@ class NativeRendererProcess:
         """Collect the response for a pending begin_render_gpu_frame call."""
         while True:
             response = self._read_response()
+            if not response.get("ok", False):
+                return self._expect_ok(response)
             if response.get("event") in {
                 "gpu_frame_ready",
                 "gpu_frame_dropped",

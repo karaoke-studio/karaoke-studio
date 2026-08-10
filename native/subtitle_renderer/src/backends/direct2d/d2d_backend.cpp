@@ -1167,6 +1167,7 @@ struct Direct2DGpuBackend::Impl {
     std::vector<RetiredRealizationWorker> retiredRealizationWorkers;
     std::atomic<bool> realizationPrewarmComplete{true};
     std::atomic<bool> renderActive{false};
+    std::atomic<bool> firstFrameCompleted{false};
     std::atomic<std::int64_t> lastRenderCompletedMs{0};
     mutable std::mutex realizationMutex;
     BackendDiagnostics diagnostics;
@@ -1280,6 +1281,26 @@ void Direct2DGpuBackend::waitForRealizationPrewarm() {
     if (impl_->realizationThread.joinable()) {
         impl_->realizationThread.join();
     }
+}
+
+void Direct2DGpuBackend::cancelRealizationPrewarm() {
+    if (impl_->realizationControl) {
+        impl_->realizationControl->stop.store(true, std::memory_order_release);
+    }
+    for (Impl::RetiredRealizationWorker &worker
+         : impl_->retiredRealizationWorkers) {
+        worker.control->stop.store(true, std::memory_order_release);
+    }
+    if (impl_->realizationThread.joinable()) {
+        impl_->realizationThread.join();
+    }
+    for (Impl::RetiredRealizationWorker &worker
+         : impl_->retiredRealizationWorkers) {
+        if (worker.thread.joinable()) {
+            worker.thread.join();
+        }
+    }
+    impl_->retiredRealizationWorkers.clear();
 }
 
 void Direct2DGpuBackend::adoptSharedGlyphResources(
@@ -1528,6 +1549,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     }
     impl_->realizationControl.reset();
     impl_->realizationPrewarmComplete.store(true, std::memory_order_release);
+    impl_->firstFrameCompleted.store(false, std::memory_order_release);
     if (!impl_->brushes.empty()) {
         impl_->brushes.clear();
         impl_->brushUseSerial = 0;
@@ -3352,9 +3374,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         control->generation = impl_->realizationGeneration;
         impl_->realizationControl = control;
         impl_->realizationPrewarmComplete.store(false, std::memory_order_release);
+        const bool deferUntilFirstFrame =
+            impl_->scene.deferRealizationPrewarmUntilFirstFrame;
         impl_->realizationThread = std::thread([
             this,
             control,
+            deferUntilFirstFrame,
             tasks = std::move(tasks)
         ]() mutable {
             // Keep individual background realization chunks short enough for
@@ -3433,6 +3458,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             };
             const auto waitForFrameGap = [&]() {
                 while (!shouldStop()) {
+                    if (deferUntilFirstFrame
+                        && !impl_->firstFrameCompleted.load(
+                            std::memory_order_acquire
+                        )) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
                     const bool active = impl_->renderActive.load(
                         std::memory_order_acquire
                     );
@@ -3625,6 +3657,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             impl->lastRenderCompletedMs.store(
                 steadyNowMs(), std::memory_order_release
             );
+            impl->firstFrameCompleted.store(true, std::memory_order_release);
             impl->renderActive.store(false, std::memory_order_release);
         }
     } renderActivityGuard{impl_.get()};

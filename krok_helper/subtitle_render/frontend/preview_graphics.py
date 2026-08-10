@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QEvent, QRectF, QSizeF, Qt, QUrl, pyqtSignal as Signal
+from PyQt6.QtCore import QEvent, QRectF, QSizeF, Qt, QTimer, QUrl, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -55,6 +55,9 @@ _ASYNC_PLAYBACK_STALE_TOLERANCE_MS = 120
 
 _VIDEO_EDGE_OVERSCAN_PX = 4
 """Small scene-space bleed to cover native video edge underdraw while playing."""
+
+_RESIZE_RENDER_DEBOUNCE_MS = 150
+"""Keep the previous subtitle frame visible until an interactive resize settles."""
 
 class SubtitleGraphicsItem(QGraphicsItem):
     """Transparent subtitle layer placed above the video item."""
@@ -262,6 +265,10 @@ class PreviewGraphicsView(QGraphicsView):
         self._t_ms: int = 0
         self._duration_ms: int = 0
         self._preview_quality = DEFAULT_PREVIEW_QUALITY
+        self._resize_render_timer = QTimer(self)
+        self._resize_render_timer.setSingleShot(True)
+        self._resize_render_timer.setInterval(_RESIZE_RENDER_DEBOUNCE_MS)
+        self._resize_render_timer.timeout.connect(self._refresh_async_target)
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
         # 单播放器统一（步骤2，§10.9）：use_external_player 后视频由共享 controller 驱动，
@@ -292,19 +299,24 @@ class PreviewGraphicsView(QGraphicsView):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self._fit_scene_to_view()
-        self._refresh_async_target()
+        # fitInView immediately scales the scene, including the last completed
+        # subtitle image.  Defer the expensive sharp rerender until the drag
+        # settles instead of rebuilding the native scene for every mouse move.
+        self._resize_render_timer.start()
 
     def event(self, ev):  # noqa: N802
         # 窗口被拖到缩放比例（DPR）不同的显示器时不会触发 resizeEvent，
         # 若不刷新渲染目标，字幕层会按旧物理分辨率渲染再被拉伸 → 整体发虚。
         if ev.type() == QEvent.Type.DevicePixelRatioChange:
             self._fit_scene_to_view()
+            self._resize_render_timer.stop()
             self._refresh_async_target()
         return super().event(ev)
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
         self._fit_scene_to_view()
+        self._resize_render_timer.stop()
         self._refresh_async_target()
 
     def closeEvent(self, event):  # noqa: N802
@@ -366,6 +378,11 @@ class PreviewGraphicsView(QGraphicsView):
         if normalized == self._preview_quality:
             return
         self._preview_quality = normalized
+        if self._external_player is not None and hasattr(
+            self._external_player, "set_preview_quality"
+        ):
+            self._external_player.set_preview_quality(normalized)
+        self._resize_render_timer.stop()
         self._refresh_async_target()
 
     def _connect_gpu_fallback_signal(self) -> None:
@@ -516,6 +533,8 @@ class PreviewGraphicsView(QGraphicsView):
         """单播放器统一：视频输出接到共享 controller，本视图不再自建/驱动视频 player。"""
         self._external_player = controller
         controller.set_video_output(self._video_item)
+        if hasattr(controller, "set_preview_quality"):
+            controller.set_preview_quality(self._preview_quality)
 
     def set_video_source(self, path: Optional[Path]) -> None:
         if self._external_player is not None:

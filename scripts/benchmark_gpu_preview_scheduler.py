@@ -58,11 +58,6 @@ def main() -> int:
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--force-warp", action="store_true")
     parser.add_argument(
-        "--auto-warp-wide-stroke",
-        action="store_true",
-        help="exercise the product's measured wide-outline WARP selector",
-    )
-    parser.add_argument(
         "--native-preview",
         action="store_true",
         help="Use the G6 DirectComposition child HWND instead of readback/QImage.",
@@ -103,9 +98,6 @@ def main() -> int:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         os.environ["KROK_SUBTITLE_GPU_NATIVE_PREVIEW"] = "0"
     os.environ["KROK_SUBTITLE_GPU_FORCE_WARP"] = "1" if args.force_warp else "0"
-    os.environ["KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE"] = (
-        "1" if args.auto_warp_wide_stroke else "0"
-    )
     os.environ["KROK_SUBTITLE_GPU_WORKERS"] = str(args.worker_count)
     app = QApplication.instance() or QApplication([])
     slow_state: dict[str, float | bool] = {

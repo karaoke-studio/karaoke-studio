@@ -120,24 +120,6 @@ def gpu_native_preview_enabled() -> bool:
     return False
 
 
-def _wide_stroke_prefers_warp(style: Optional[Style], threshold_px: int) -> bool:
-    """Return whether software Direct2D is the measured faster preview path.
-
-    On current Windows drivers the hardware rasterizer scales poorly for wide
-    outline geometry, while WARP stays below a frame at preview resolution.
-    Keep the decision limited to main/Latin outlines; ruby uses a much smaller
-    effective font size and does not justify switching the whole scene.
-    """
-    if style is None:
-        return False
-    widths = [style.stroke_width_px, style.latin_stroke_width_px]
-    for scheme in style.singer_style_overrides.values():
-        widths.extend((scheme.stroke_width_px, scheme.latin_stroke_width_px))
-    return max((int(value) for value in widths if value is not None), default=0) >= max(
-        int(threshold_px), 0
-    )
-
-
 def native_preview_timestamps(
     t_ms: int,
     *,
@@ -490,27 +472,19 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._latest_t: Optional[int] = None
         self._pending: Optional[tuple[int, int, bool, float]] = None
         self._needs_configure = True
+        self._needs_target_resize = False
         self._playing = False
         self._stopped = False
         self._renderer_failed = False
         self._fallback_reported = False
         self._retry_after = 0.0
-        self._force_warp_requested = _env_enabled(
-            "KROK_SUBTITLE_GPU_FORCE_WARP", "0"
-        )
-        self._auto_warp_wide_stroke = _env_enabled(
-            "KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE", "1"
-        )
-        self._auto_warp_threshold_px = _env_int(
-            "KROK_SUBTITLE_GPU_AUTO_WARP_THRESHOLD_PX", 8, minimum=0
-        )
-        self._force_warp = self._force_warp_requested
+        self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
         self._native_preview = gpu_native_preview_enabled()
         self._worker_count_requested = _env_int(
             "KROK_SUBTITLE_GPU_WORKERS", 2, minimum=1
         )
         self._worker_count_requested = min(self._worker_count_requested, 8)
-        if self._force_warp_requested or self._native_preview:
+        if self._force_warp or self._native_preview:
             self._worker_count_requested = 1
         self._active_worker_count = 1
         self._native_target: Optional[tuple[int, int, int, int, int]] = None
@@ -587,21 +561,11 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._style = style
             self._extra_tracks = list(extra_tracks or ())
             self._duration_ms = max(int(duration_ms or 0), 0)
-            # Backend selection is monotonic for the renderer lifetime.  A
-            # wide-to-fine style edit must not bounce between two device
-            # pools (and synchronously rebuild both caches) on every slider
-            # tick; recreating the preview renderer resets the choice.
-            self._force_warp = self._force_warp_requested or self._force_warp or (
-                self._auto_warp_wide_stroke
-                and not self._native_preview
-                and _wide_stroke_prefers_warp(
-                    style, self._auto_warp_threshold_px
-                )
-            )
             with self._stats_lock:
                 self._stats["warp_selected"] = int(self._force_warp)
             self._generation += 1
             self._needs_configure = True
+            self._needs_target_resize = False
             self._pending = None
             self._frame_cache.clear()
             self._cancel_native_generation_locked(previous_generation)
@@ -628,7 +592,8 @@ class GpuAsyncSubtitleRenderer(QObject):
                 previous_generation = self._generation
                 self._logical_w, self._logical_h, self._device_pixel_ratio = target
                 self._generation += 1
-                self._needs_configure = True
+                if not self._needs_configure:
+                    self._needs_target_resize = True
                 self._pending = None
                 self._frame_cache.clear()
                 # QSharedMemory cannot resize an existing named segment. Give
@@ -749,7 +714,9 @@ class GpuAsyncSubtitleRenderer(QObject):
             t_ms, serial, speculative, submitted_at = self._pending
             self._pending = None
             needs_configure = self._needs_configure
+            needs_target_resize = self._needs_target_resize
             self._needs_configure = False
+            self._needs_target_resize = False
             return (
                 self._track,
                 self._style,
@@ -763,6 +730,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 speculative,
                 self._generation,
                 needs_configure,
+                needs_target_resize,
                 self._shm_key,
                 submitted_at,
                 self._native_target,
@@ -788,6 +756,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     speculative,
                     generation,
                     needs_configure,
+                    needs_target_resize,
                     shm_key,
                     submitted_at,
                     native_target,
@@ -834,6 +803,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                         continue
                     self._renderer_failed = False
                     needs_configure = True
+                    needs_target_resize = False
                     self._note("renderer_restarts")
                 work_started = time.monotonic()
                 try:
@@ -851,6 +821,8 @@ class GpuAsyncSubtitleRenderer(QObject):
                             duration_ms=duration_ms,
                             prewarm_t_ms=t_ms,
                             worker_count=self._worker_count_requested,
+                            defer_followers=True,
+                            defer_realizations_until_first_frame=True,
                         )
                         self._active_worker_count = max(
                             1, min(int(configured.get("worker_count", 1)), 8)
@@ -864,10 +836,11 @@ class GpuAsyncSubtitleRenderer(QObject):
                             minimum=0,
                         ) * 1024 * 1024
                         if (
-                            self._active_worker_count > 1
+                            self._worker_count_requested > 1
                             and dedicated_vram > 0
                             and dedicated_vram < min_multiworker_vram
                         ):
+                            self._worker_count_requested = 1
                             configured = renderer.configure_gpu(
                                 track,
                                 style,
@@ -880,8 +853,25 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 duration_ms=duration_ms,
                                 prewarm_t_ms=t_ms,
                                 worker_count=1,
+                                defer_followers=True,
+                                defer_realizations_until_first_frame=True,
                             )
                             self._active_worker_count = 1
+                        with self._stats_lock:
+                            self._stats["worker_count"] = self._active_worker_count
+                        self._note("configure_count")
+                    elif needs_target_resize:
+                        configured = renderer.resize_gpu_target(
+                            width=width,
+                            height=height,
+                            dpr=dpr,
+                            force_warp=force_warp,
+                            prewarm_t_ms=t_ms,
+                            worker_count=self._worker_count_requested,
+                        )
+                        self._active_worker_count = max(
+                            1, min(int(configured.get("worker_count", 1)), 8)
+                        )
                         with self._stats_lock:
                             self._stats["worker_count"] = self._active_worker_count
                         self._note("configure_count")
@@ -924,8 +914,28 @@ class GpuAsyncSubtitleRenderer(QObject):
                             shm_key=shm_key,
                             include_checksum=False,
                             readback_bands=True,
+                            slot_count=(
+                                1 if force_warp else self._worker_count_requested
+                            ),
                         )
+                    ready_workers = max(
+                        1,
+                        min(
+                            int(event.get("worker_count_ready", self._active_worker_count)),
+                            self._worker_count_requested,
+                        ),
+                    )
+                    if ready_workers != self._active_worker_count:
+                        self._active_worker_count = ready_workers
+                        with self._stats_lock:
+                            self._stats["worker_count"] = ready_workers
                     self._frame_index += 1
+                    if event.get("event") == "gpu_frame_dropped":
+                        # A target/style generation can be cancelled while its
+                        # sole foreground frame is already in flight. Dropped
+                        # responses deliberately carry no shared-memory slot.
+                        self._note("stale_frames_dropped")
+                        continue
                     completed_at = time.monotonic()
                     self._record_timing("roundtrip_ms", (completed_at - work_started) * 1000.0)
                     self._adapt_pipeline_lookahead()
@@ -965,6 +975,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     self._retry_after = time.monotonic() + 1.0
                     with self._condition:
                         self._needs_configure = True
+                        self._needs_target_resize = False
                     self._note("renderer_failures")
                     self._report_fallback(
                         f"GPU 字幕预览异常，当前帧已回退 Painter，稍后会自动重试：{exc}"
@@ -1031,7 +1042,11 @@ class GpuAsyncSubtitleRenderer(QObject):
                 shm_key=shm_key,
                 include_checksum=False,
                 readback_bands=True,
-                slot_count=self._active_worker_count,
+                # Deferred followers must not resize an already attached named
+                # shared-memory mapping when the pool grows from one ready
+                # worker to its final size. Reserve the stable ring capacity
+                # from the very first frame instead.
+                slot_count=(1 if force_warp else self._worker_count_requested),
             )
         with self._stats_lock:
             self._stats["max_in_flight"] = max(
@@ -1049,6 +1064,17 @@ class GpuAsyncSubtitleRenderer(QObject):
             if event.get("event") == "gpu_frame_dropped":
                 self._note("stale_frames_dropped")
                 continue
+            ready_workers = max(
+                1,
+                min(
+                    int(event.get("worker_count_ready", self._active_worker_count)),
+                    self._worker_count_requested,
+                ),
+            )
+            if ready_workers != self._active_worker_count:
+                self._active_worker_count = ready_workers
+                with self._stats_lock:
+                    self._stats["worker_count"] = ready_workers
             wire_serial = int(event.get("request_serial", -1))
             item = metadata.get(wire_serial)
             if item is None:

@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import time
 import uuid
 
 import numpy as np
@@ -801,6 +802,15 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
                     print(json.dumps({{"ok": True, "event": "configured"}}), flush=True)
                 elif command == "gpu_configure":
                     print(json.dumps({{"ok": True, "event": "gpu_configured"}}), flush=True)
+                elif command == "gpu_resize_target":
+                    print(json.dumps({{
+                        "ok": True,
+                        "event": "gpu_configured",
+                        "width": request.get("width"),
+                        "height": request.get("height"),
+                        "dpr": request.get("dpr"),
+                        "target_cache_hit": True,
+                    }}), flush=True)
                 elif command == "render_frame":
                     print(json.dumps({{"ok": True, "event": "frame_ready", "checksum": "fake", "render_ms": 1.25}}), flush=True)
                 elif command == "render_frame_stats":
@@ -850,6 +860,10 @@ def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
     ready = renderer.start()
     assert ready["event"] == "ready"
     assert renderer.configure(TimingTrack(), Style(), width=640, height=360, fps=60)["event"] == "configured"
+    resized = renderer.resize_gpu_target(width=640, height=360, dpr=0.5, worker_count=2)
+    assert resized["event"] == "gpu_configured"
+    assert resized["dpr"] == 0.5
+    assert resized["target_cache_hit"] is True
     assert renderer.render_frame_png(900, tmp_path / "frame.png")["event"] == "frame_ready"
     stats = renderer.render_frame_stats(900)
     assert stats["event"] == "frame_stats"
@@ -886,6 +900,20 @@ def test_native_renderer_process_can_send_cancel_without_consuming_response(tmp_
 
     assert event["event"] == "generation_cancelled"
     assert event["generation"] == 11
+
+
+def test_native_renderer_process_surfaces_gpu_frame_error_without_timing_out(tmp_path):
+    sidecar = _write_fake_sidecar(tmp_path)
+
+    with NativeRendererProcess(
+        sidecar, response_timeout_s=2.0, close_timeout_s=1.0
+    ) as renderer:
+        renderer.begin_render_gpu_frame(900)
+        started = time.monotonic()
+        with pytest.raises(NativeRendererError, match="bad command"):
+            renderer.finish_render_gpu_frame()
+
+    assert time.monotonic() - started < 1.0
 
 
 def test_native_render_range_shared_memory_reader_reads_slot_when_exe_exists(monkeypatch):

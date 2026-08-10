@@ -379,6 +379,7 @@ struct RenderScene {
     std::vector<std::pair<int, int>> exportBands;
     int prewarmTimeMs = 0;
     bool realizationEnabled = true;
+    bool deferRealizationPrewarmUntilFirstFrame = false;
     std::uint64_t realizationCapacity = 8192;
     float viewportScale = 1.0f;
     float viewportRotation = 0.0f;

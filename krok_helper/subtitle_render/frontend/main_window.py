@@ -2133,6 +2133,8 @@ class SubtitleRenderWindow(QWidget):
         self._closing_window = True
         self._flush_persisted_state_save()
         self._stop_auto_save_runtime(wait=True)
+        if self._playback is not None:
+            self._playback.shutdown()
         if self._layout_issues_dialog is not None:
             self._layout_issues_dialog.close()
             self._layout_issues_dialog = None
