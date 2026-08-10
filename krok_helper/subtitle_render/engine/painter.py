@@ -603,6 +603,22 @@ from krok_helper.subtitle_render.engine.show_time import (
     MIN_AUTO_ENTRY_ANIMATION_MS,
     protect_time_ms,
 )
+from krok_helper.subtitle_render.engine.style_semantics import (
+    effective_karaoke_colors as _effective_karaoke_colors,
+    legacy_after_text_fill as _legacy_after_text_fill,
+    solid_fill as _solid_fill,
+    style_for_role as _style_for_role,
+    style_scheme_changes as _style_scheme_changes,
+)
+from krok_helper.subtitle_render.engine.title_semantics import (
+    resolve_title_overlay,
+    resolve_title_role_overlay as _resolve_title_role_overlay,
+    resolve_title_text as _resolve_title_text,
+    title_layout_source as _title_layout_source,
+    title_overlay_opacity as _title_overlay_opacity,
+    title_show_specs as _title_show_specs,
+    title_show_window as _title_show_window,
+)
 from krok_helper.subtitle_render.models import (
     DecorationKind,
     GuideSymbol,
@@ -610,12 +626,9 @@ from krok_helper.subtitle_render.models import (
     KaraokeColorState,
     LYRICS_LAYOUT_CHAR_FIELDS,
     LYRICS_LAYOUT_FIELDS,
-    N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
     RubyAnnotation,
     Style,
-    SubtitleStyleScheme,
-    TITLE_SCHEME_NAME,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -1113,245 +1126,6 @@ def _paint_track_to_painter(
 # ---------------------------------------------------------------------------
 # 标题字幕 overlay（B7）
 # ---------------------------------------------------------------------------
-
-
-def _title_layout_source(style: Style, index: Optional[int]):
-    """标题布局引用 → 几何来源（0 = 默认布局即 ``Style`` 自身；悬空返回 None）。"""
-    if index is None:
-        return None
-    index = int(index)
-    if index == 0:
-        return style
-    if 1 <= index <= len(style.layouts):
-        return style.layouts[index - 1]
-    return None
-
-
-def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
-    """把「标题」配色方案与布局引用解析成有效 ``TitleOverlay``。
-
-    字体/颜色来自 ``custom_style_schemes[TITLE_SCHEME_NAME]`` 与全局样式的合并
-    结果（标题永不走字，取走字前配色）；位置、行距和字间距来自
-    ``layout_index`` 引用的布局。方案或布局缺失（旧工程迁移前 / 引用悬空）
-    时保留字段原值。
-    """
-    title = style.title_overlay
-    if title is None:
-        return None
-    changes: dict[str, object] = {}
-    if TITLE_SCHEME_NAME in style.custom_style_schemes:
-        merged = _style_for_role(style, TITLE_SCHEME_NAME)
-        colors = _effective_karaoke_colors(merged).before
-        changes.update(
-            font_family=merged.font_family,
-            font_family_latin=merged.font_family_latin,
-            font_size_px=int(merged.font_size_px),
-            font_weight=int(merged.font_weight),
-            italic=bool(merged.italic),
-            letter_spacing_px=int(merged.letter_spacing_px),
-            fill=colors.text,
-            stroke=colors.stroke,
-            stroke_width_px=int(merged.stroke_width_px),
-            stroke2=colors.stroke2,
-            stroke2_width_px=(
-                int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
-            ),
-            decoration_kind=merged.decoration_kind,
-            glow_radius_px=int(merged.glow_before_radius_px),
-            glow_concentration_level=int(merged.glow_concentration_level),
-            shadow=colors.shadow,
-            shadow_offset_x=int(merged.shadow_offset_x),
-            shadow_offset_y=int(merged.shadow_offset_y),
-        )
-    source = _title_layout_source(style, title.layout_index)
-    if source is not None:
-        alignments = list(source.line_alignments) or ["left"]
-        horizontal = alignments[0]
-        vertical = source.line_y_position
-        letter_spacing = getattr(source, "letter_spacing_px", None)
-        if letter_spacing is None:
-            letter_spacing = style.letter_spacing_px
-        changes.update(
-            anchor=(
-                "center"
-                if (vertical, horizontal) == ("center", "center")
-                else f"{vertical}_{horizontal}"
-            ),
-            align=horizontal,
-            offset_x=int(source.horizontal_margin_px),
-            offset_y=int(source.line_y_margin_px),
-            line_gap_px=int(source.line_gap_px),
-            letter_spacing_px=int(letter_spacing),
-        )
-    if not changes:
-        return title
-    return replace(title, **changes)
-
-
-def _resolve_title_role_overlay(
-    style: Style, base: TitleOverlay, role_label: Optional[str]
-) -> TitleOverlay:
-    """标题字符角色 → 静态标题外观；缺失方案回退内置标题方案。"""
-    if not role_label or role_label not in style.custom_style_schemes:
-        return base
-    merged = _style_for_role(style, role_label)
-    colors = _effective_karaoke_colors(merged).before
-    layout_source = _title_layout_source(style, base.layout_index)
-    return replace(
-        base,
-        font_family=merged.font_family,
-        font_family_latin=merged.font_family_latin,
-        font_size_px=int(merged.font_size_px),
-        font_weight=int(merged.font_weight),
-        italic=bool(merged.italic),
-        # 与普通歌词一致：角色方案决定字体/颜色，已应用布局的字符排版优先。
-        letter_spacing_px=(
-            int(base.letter_spacing_px)
-            if layout_source is not None
-            else int(merged.letter_spacing_px)
-        ),
-        fill=colors.text,
-        stroke=colors.stroke,
-        stroke_width_px=int(merged.stroke_width_px),
-        stroke2=colors.stroke2,
-        stroke2_width_px=(
-            int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
-        ),
-        decoration_kind=merged.decoration_kind,
-        glow_radius_px=int(merged.glow_before_radius_px),
-        glow_concentration_level=int(merged.glow_concentration_level),
-        shadow=colors.shadow,
-        shadow_offset_x=int(merged.shadow_offset_x),
-        shadow_offset_y=int(merged.shadow_offset_y),
-    )
-
-
-_TITLE_SEPARATOR_CHARS = " \t/|・-–—~　"
-
-
-def _resolve_title_text(title: TitleOverlay, track: TimingTrack) -> str:
-    """模板 ``{title}`` / ``{artist}`` 用 ``@Title`` / ``@Artist`` 元数据替换。
-
-    模板里没有占位符时（用户填了纯自定义文字）原样返回；含占位符时，缺失的
-    title/artist 会让模板里的分隔符（``/`` 等）变孤立，按行清掉首尾分隔，整行只剩
-    分隔符则清空——避免「无元数据时显示一个孤零零的 /」。
-    """
-    template = title.text_template or ""
-    if "{title}" not in template and "{artist}" not in template:
-        return template.strip("\n")
-    meta_title = (track.meta.title or "").strip()
-    meta_artist = (track.meta.artist or "").strip()
-    text = template.replace("{title}", meta_title).replace("{artist}", meta_artist)
-    lines = [raw.strip().strip(_TITLE_SEPARATOR_CHARS).strip() for raw in text.split("\n")]
-    return "\n".join(lines).strip("\n")
-
-
-def _title_show_window(
-    title: TitleOverlay,
-    track: TimingTrack,
-    *,
-    duration_ms: Optional[int] = None,
-) -> list[tuple[int, int]]:
-    """返回标题可见区间（毫秒，项目播放时间轴）。
-
-    ``duration_ms`` 是背景/音频/字幕共同决定的实际预览或导出时长。仅在旧调用方
-    没有提供时才回退字幕轨时长，避免片尾标题错误地锚到最后一句歌词。
-    """
-    total = max(
-        (
-            int(duration_ms)
-            if duration_ms is not None and int(duration_ms) > 0
-            else track_duration_ms(track)
-        ),
-        0,
-    )
-    head_start = max(int(title.head_offset_ms), 0)
-    duration = max(int(title.duration_ms), 0)
-    tail_duration = max(
-        int(title.tail_duration_ms)
-        if title.tail_duration_ms is not None
-        else duration,
-        0,
-    )
-    tail_off = max(int(title.tail_offset_ms), 0)
-    # N3 TitleShowTime.EndTime keeps a zero-offset tail visible through the
-    # movie's inclusive endpoint by adding one 10 ms time-tag unit.
-    tail_base_end = max(total - tail_off, 0)
-    tail_end = tail_base_end + (10 if total > 0 and tail_off == 0 else 0)
-    if title.show_mode == "whole":
-        return [(0, tail_end)]
-    if title.show_mode == "head":
-        return [(head_start, head_start + duration)]
-    if title.show_mode == "tail":
-        return [(max(tail_base_end - tail_duration, 0), tail_end)]
-    # 开始和片尾：两个独立片段，各自使用自己的显示时长。
-    return [
-        (head_start, head_start + duration),
-        (max(tail_base_end - tail_duration, 0), tail_end),
-    ]
-
-
-def _title_show_specs(
-    title: TitleOverlay,
-    track: TimingTrack,
-    *,
-    duration_ms: Optional[int] = None,
-) -> list[tuple[int, int, int, int]]:
-    """返回 ``(开始, 结束, 淡入, 淡出)``，允许首尾片段使用独立过渡。"""
-    windows = _title_show_window(title, track, duration_ms=duration_ms)
-    head_fade_in = max(int(title.fade_in_ms), 0)
-    head_fade_out = max(int(title.fade_out_ms), 0)
-    tail_fade_in = max(
-        int(title.tail_fade_in_ms)
-        if title.tail_fade_in_ms is not None
-        else head_fade_in,
-        0,
-    )
-    tail_fade_out = max(
-        int(title.tail_fade_out_ms)
-        if title.tail_fade_out_ms is not None
-        else head_fade_out,
-        0,
-    )
-    if title.show_mode == "tail":
-        return [
-            (begin, end, tail_fade_in, tail_fade_out)
-            for begin, end in windows
-        ]
-    if title.show_mode == "head_tail" and len(windows) > 1:
-        return [
-            (*windows[0], head_fade_in, head_fade_out),
-            (*windows[1], tail_fade_in, tail_fade_out),
-        ]
-    return [
-        (begin, end, head_fade_in, head_fade_out)
-        for begin, end in windows
-    ]
-
-
-def _title_overlay_opacity(
-    title: Optional[TitleOverlay],
-    track: TimingTrack,
-    t_ms: int,
-    *,
-    duration_ms: Optional[int] = None,
-) -> float:
-    """标题在 ``t_ms`` 的不透明度（含淡入淡出）；不可见返回 0。"""
-    if title is None or not title.enabled:
-        return 0.0
-    best = 0.0
-    for begin, end, fade_in, fade_out in _title_show_specs(
-        title, track, duration_ms=duration_ms
-    ):
-        if end <= begin or t_ms < begin or t_ms > end:
-            continue
-        alpha = 1.0
-        if fade_in > 0 and t_ms < begin + fade_in:
-            alpha = min(alpha, (t_ms - begin) / fade_in)
-        if fade_out > 0 and t_ms > end - fade_out:
-            alpha = min(alpha, (end - t_ms) / fade_out)
-        best = max(best, max(0.0, min(1.0, alpha)))
-    return best
 
 
 def _build_title_font(title: TitleOverlay) -> QFont:
@@ -7527,113 +7301,6 @@ def _char_left_positions(
     return lefts
 
 
-_SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
-    "font_family",
-    "font_family_latin",
-    "font_size_px",
-    "letter_spacing_px",
-    "space_width_percent",
-    "latin_font_size_px",
-    "latin_font_weight",
-    "latin_stroke_width_px",
-    "latin_stroke2_enabled",
-    "latin_stroke2_width_px",
-    "allow_biting",
-    "font_weight",
-    "italic",
-    "affects_ruby_anchor",
-    "base_color",
-    "fill_color",
-    "fill_gradient_enabled",
-    "fill_gradient_start_color",
-    "fill_gradient_end_color",
-    "fill_gradient_angle_deg",
-    "stroke_color",
-    "stroke_width_px",
-    "stroke2_enabled",
-    "stroke2_width_px",
-    "decoration_kind",
-    "glow_radius_px",
-    "glow_before_radius_px",
-    "glow_after_radius_px",
-    "glow_concentration_level",
-    "shadow_color",
-    "shadow_offset_x",
-    "shadow_offset_y",
-    "ruby_font_size_px",
-    "ruby_font_family",
-    "ruby_font_family_latin",
-    "ruby_font_weight",
-    "ruby_latin_font_size_px",
-    "ruby_latin_font_weight",
-    "ruby_font_follow_main",
-    "ruby_color",
-    "ruby_gap_px",
-    "ruby_stroke_width_px",
-    "ruby_stroke2_enabled",
-    "ruby_stroke2_width_px",
-    "ruby_latin_stroke_width_px",
-    "ruby_latin_stroke2_enabled",
-    "ruby_latin_stroke2_width_px",
-    "ruby_decoration_kind",
-    "ruby_glow_radius_px",
-    "ruby_glow_before_radius_px",
-    "ruby_glow_after_radius_px",
-    "ruby_glow_concentration_level",
-    "ruby_shadow_offset_x",
-    "ruby_shadow_offset_y",
-    "ruby_colors_follow_main",
-    "ruby_horizontal_gradient_with_main",
-    "karaoke_colors",
-    "ruby_karaoke_colors",
-)
-
-
-def _style_scheme_changes(scheme: SubtitleStyleScheme) -> dict[str, object]:
-    return {
-        field: value
-        for field in _SUBTITLE_SCHEME_STYLE_FIELDS
-        if (value := getattr(scheme, field)) is not None
-    }
-
-
-def _style_for_role(style: Style, role_label: str | None) -> Style:
-    if not role_label:
-        return style
-    scheme = style.custom_style_schemes.get(role_label)
-    if scheme is None:
-        return style
-    changes = _style_scheme_changes(scheme)
-    if scheme.n3_font_inheritance:
-        # These None values mean fallback to this scheme's Japanese/root slot,
-        # not inheritance from the outer global scheme.
-        changes.update(
-            {field: getattr(scheme, field) for field in N3_FONT_INHERITANCE_FIELDS}
-        )
-    has_legacy_color_changes = any(
-        getattr(scheme, field) is not None
-        for field in (
-            "base_color",
-            "fill_color",
-            "fill_gradient_enabled",
-            "fill_gradient_start_color",
-            "fill_gradient_end_color",
-            "fill_gradient_angle_deg",
-            "stroke_color",
-            "shadow_color",
-        )
-    )
-    if scheme.karaoke_colors is None and has_legacy_color_changes:
-        changes["karaoke_colors"] = None
-    if scheme.ruby_karaoke_colors is None and (
-        scheme.karaoke_colors is not None or has_legacy_color_changes
-    ):
-        changes["ruby_karaoke_colors"] = None
-    if not changes:
-        return style
-    return replace(style, **changes)
-
-
 def _style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
     """Apply role visuals while keeping the active layout's character spacing."""
     role_style = _style_for_role(style, role_label)
@@ -13640,56 +13307,6 @@ def _karaoke_state_signature(state: KaraokeColorState) -> tuple:
         _fill_signature(state.stroke),
         _fill_signature(state.stroke2),
         _fill_signature(state.shadow),
-    )
-
-
-def _effective_karaoke_colors(style: Style) -> KaraokeColors:
-    if style.karaoke_colors is not None:
-        return style.karaoke_colors
-
-    before = KaraokeColorState(
-        text=_solid_fill(style.base_color),
-        stroke=_solid_fill(style.stroke_color),
-        stroke2=_solid_fill("#000000"),
-        shadow=_solid_fill(style.shadow_color),
-    )
-    after_text = _legacy_after_text_fill(style)
-    after = KaraokeColorState(
-        text=after_text,
-        stroke=_solid_fill(style.stroke_color),
-        stroke2=_solid_fill("#000000"),
-        shadow=_solid_fill(style.shadow_color),
-    )
-    return KaraokeColors(before=before, after=after)
-
-
-def _legacy_after_text_fill(style: Style) -> PaintFill:
-    if not style.fill_gradient_enabled:
-        return _solid_fill(style.fill_color)
-    mode = "gradient_vertical" if style.fill_gradient_angle_deg in {90, 270} else "gradient_horizontal"
-    return PaintFill(
-        mode=mode,
-        color=style.fill_color,
-        start_color=style.fill_gradient_start_color,
-        end_color=style.fill_gradient_end_color,
-        gradient_stops=[
-            (0, style.fill_gradient_start_color),
-            (100, style.fill_gradient_end_color),
-        ],
-        split_top_color=style.fill_gradient_start_color,
-        split_bottom_color=style.fill_gradient_end_color,
-    )
-
-
-def _solid_fill(color: str) -> PaintFill:
-    return PaintFill(
-        mode="solid",
-        color=color,
-        start_color=color,
-        end_color=color,
-        gradient_stops=[(0, color), (100, color)],
-        split_top_color=color,
-        split_bottom_color=color,
     )
 
 

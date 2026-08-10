@@ -5,12 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from krok_helper.subtitle_render.engine.painter import (
-    _resolve_title_role_overlay,
-    _resolve_title_text,
-    _title_show_specs,
     build_track_layout_plan,
     layout_pass,
+)
+from krok_helper.subtitle_render.engine.title_semantics import (
     resolve_title_overlay,
+    resolve_title_role_overlay,
+    resolve_title_text,
+    title_show_specs,
 )
 from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
@@ -37,7 +39,7 @@ def title_to_ir(
     title = resolve_title_overlay(style)
     if title is None or not title.enabled:
         return None
-    text = _resolve_title_text(title, track)
+    text = resolve_title_text(title, track)
     if not any(line.strip() for line in text.split("\n")):
         return None
     payload = title_overlay_to_ir(
@@ -47,13 +49,13 @@ def title_to_ir(
     payload["text"] = text
     payload["windows"] = [
         list(window)
-        for window in _title_show_specs(title, track, duration_ms=duration_ms)
+        for window in title_show_specs(title, track, duration_ms=duration_ms)
     ]
     labels = normalize_title_char_role_labels(text, title.char_role_labels)
     payload["resolved_role_labels"] = labels
     payload["role_styles"] = {
         label: title_overlay_to_ir(
-            _resolve_title_role_overlay(style, title, label),
+            resolve_title_role_overlay(style, title, label),
             style.custom_style_schemes.get(label),
         )
         for row in labels

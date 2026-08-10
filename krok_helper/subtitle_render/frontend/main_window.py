@@ -131,7 +131,6 @@ from krok_helper.subtitle_render.engine.encoder_select import (
 )
 from krok_helper.subtitle_render.engine.painter import (
     LayoutMarginWarning,
-    _resolve_title_text,
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,
@@ -139,6 +138,7 @@ from krok_helper.subtitle_render.engine.painter import (
     display_windows_for_style,
     layout_pass,
 )
+from krok_helper.subtitle_render.engine.title_semantics import resolve_title_text
 from krok_helper.subtitle_render.engine.page_plan import (
     build_legacy_page_plan,
     build_page_plan,
@@ -5554,7 +5554,7 @@ class SubtitleRenderWindow(QWidget):
             if title is not None and self._timing_track is not None:
                 title = replace(
                     title,
-                    text_template=_resolve_title_text(title, self._timing_track),
+                    text_template=resolve_title_text(title, self._timing_track),
                 )
             self._lyrics_panel.set_title(title)
         else:
@@ -6955,7 +6955,7 @@ class SubtitleRenderWindow(QWidget):
             or ("{title}" not in title.text_template and "{artist}" not in title.text_template)
         ):
             return
-        resolved = _resolve_title_text(title, self._timing_track)
+        resolved = resolve_title_text(title, self._timing_track)
         if not resolved:
             InfoBar.warning(
                 title="标题为空",

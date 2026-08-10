@@ -66,6 +66,20 @@ def test_native_protocol_has_no_painter_dependency():
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 
+def test_render_ir_only_uses_painter_for_layout_planning():
+    render_ir_path = Path("krok_helper/subtitle_render/engine/render_ir.py")
+    tree = ast.parse(render_ir_path.read_text(encoding="utf-8"))
+    painter_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "krok_helper.subtitle_render.engine.painter"
+        for alias in node.names
+    }
+
+    assert painter_imports == {"build_track_layout_plan", "layout_pass"}
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
