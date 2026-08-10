@@ -6,6 +6,7 @@ import sys
 
 import pytest
 
+import krok_helper.subtitle_render.n3_font_catalog as font_catalog
 from krok_helper.subtitle_render.n3_font_catalog import (
     N3FontCatalog,
     _FamilyRecord,
@@ -94,6 +95,98 @@ def test_resolve_qt_font_family_uses_catalog_runtime_name(monkeypatch):
     resolve_qt_font_family.cache_clear()
     try:
         assert resolve_qt_font_family("Japanese Arial") == "Arial"
+    finally:
+        resolve_qt_font_family.cache_clear()
+
+
+def test_font_catalog_refreshes_qt_aliases_after_application_start(monkeypatch):
+    records = [
+        _FamilyRecord(
+            names=(("en-us", "Meiryo"), ("ja-jp", "メイリオ")),
+            styles=(0,),
+        )
+    ]
+    monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_directwrite_records", lambda: records)
+    monkeypatch.setattr(font_catalog, "_compare_ja_jp", _compare)
+    monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Meiryo"])
+    font_catalog._get_n3_font_catalog.cache_clear()
+    try:
+        before_qt = font_catalog._get_n3_font_catalog(0)
+        with_qt = font_catalog._get_n3_font_catalog(123)
+
+        assert before_qt.qt_family("Meiryo") == "メイリオ"
+        assert with_qt.qt_family("Meiryo") == "Meiryo"
+    finally:
+        font_catalog._get_n3_font_catalog.cache_clear()
+
+
+def test_font_resolution_cache_is_partitioned_by_application_lifecycle(monkeypatch):
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "English Alias"), ("ja-jp", "表示名")),
+                styles=(0,),
+            )
+        ],
+        compare=_compare,
+        qt_families=("English Alias",),
+    )
+    application_keys = iter((0, 123))
+    inspected: list[object] = []
+
+    class FontInfo:
+        def family(self):
+            return "English Alias"
+
+    monkeypatch.setattr(font_catalog, "get_n3_font_catalog", lambda: catalog)
+    monkeypatch.setattr(
+        font_catalog, "_qt_application_cache_key", lambda: next(application_keys)
+    )
+    monkeypatch.setattr(font_catalog, "QFont", lambda family: family)
+    monkeypatch.setattr(
+        font_catalog,
+        "QFontInfo",
+        lambda font: inspected.append(font) or FontInfo(),
+    )
+    resolve_qt_font_family.cache_clear()
+    try:
+        assert resolve_qt_font_family("表示名") == "English Alias"
+        assert inspected == []
+        assert resolve_qt_font_family("表示名") == "English Alias"
+        assert inspected == ["English Alias"]
+    finally:
+        resolve_qt_font_family.cache_clear()
+
+
+def test_font_resolution_probes_alias_registered_after_catalog_build(monkeypatch):
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "Meiryo"), ("ja-jp", "Japanese Meiryo")),
+                styles=(0,),
+            )
+        ],
+        compare=_compare,
+    )
+    resolved = {
+        "Japanese Meiryo": "Arial",
+        "Meiryo": "Meiryo",
+    }
+
+    class FontInfo:
+        def __init__(self, family):
+            self._family = family
+
+        def family(self):
+            return resolved[self._family]
+
+    monkeypatch.setattr(font_catalog, "get_n3_font_catalog", lambda: catalog)
+    monkeypatch.setattr(font_catalog, "QFont", lambda family: family)
+    monkeypatch.setattr(font_catalog, "QFontInfo", FontInfo)
+    resolve_qt_font_family.cache_clear()
+    try:
+        assert resolve_qt_font_family("Meiryo") == "Meiryo"
     finally:
         resolve_qt_font_family.cache_clear()
 

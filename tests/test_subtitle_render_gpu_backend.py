@@ -38,6 +38,7 @@ from krok_helper.subtitle_render.models import (
     TrackSection,
     style_from_dict,
 )
+from krok_helper.subtitle_render.n3_font_catalog import invalidate_n3_font_caches
 from krok_helper.subtitle_render.n3proj_import import load_n3proj
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
@@ -84,8 +85,10 @@ def _gpu_test_application_fonts():
     # frame that no longer matches what DirectWrite drew.
     for family in _GPU_TEST_FONT_FAMILIES:
         assert QFontInfo(QFont(family)).family() == family, family
+    invalidate_n3_font_caches()
     yield
     QFontDatabase.removeAllApplicationFonts()
+    invalidate_n3_font_caches()
 
 
 def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():

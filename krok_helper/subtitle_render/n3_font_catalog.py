@@ -315,8 +315,8 @@ def _compare_ja_jp(left: str, right: str) -> int:
     return result - 2
 
 
-def _qt_fallback_catalog() -> N3FontCatalog:
-    families = tuple(QFontDatabase.families())
+def _qt_fallback_catalog(*, qt_available: bool = True) -> N3FontCatalog:
+    families = tuple(QFontDatabase.families()) if qt_available else ()
     aliases = {name.casefold(): name for name in families}
     return N3FontCatalog(
         families=families,
@@ -329,18 +329,37 @@ def _qt_fallback_catalog() -> N3FontCatalog:
     )
 
 
-@lru_cache(maxsize=1)
-def get_n3_font_catalog() -> N3FontCatalog:
+def _qt_application_cache_key() -> int:
+    """Distinguish pre-QApplication discovery from a live Qt font database."""
+    application = QGuiApplication.instance()
+    if application is None or not isinstance(application, QGuiApplication):
+        return 0
+    return id(application)
+
+
+@lru_cache(maxsize=4)
+def _get_n3_font_catalog(qt_application_key: int) -> N3FontCatalog:
+    qt_available = qt_application_key != 0
     if sys.platform == "win32":
         try:
             return _build_catalog(
                 _directwrite_records(),
                 compare=_compare_ja_jp,
-                qt_families=QFontDatabase.families(),
+                qt_families=(QFontDatabase.families() if qt_available else ()),
             )
         except (OSError, RuntimeError, TypeError, ValueError):
             log.exception("DirectWrite 字体目录枚举失败，已回退 Qt 字体目录")
-    return _qt_fallback_catalog()
+    return _qt_fallback_catalog(qt_available=qt_available)
+
+
+def get_n3_font_catalog() -> N3FontCatalog:
+    """Return a catalog scoped to the current QApplication lifecycle.
+
+    Import/load helpers may canonicalize project fonts before the GUI exists.
+    That pre-Qt catalog must not freeze an empty ``QFontDatabase`` mapping for
+    the later Painter session.
+    """
+    return _get_n3_font_catalog(_qt_application_cache_key())
 
 
 def n3_font_families() -> tuple[str, ...]:
@@ -351,8 +370,8 @@ def canonicalize_n3_font_family(name: str) -> str | None:
     return get_n3_font_catalog().canonicalize(name)
 
 
-@lru_cache(maxsize=512)
-def resolve_qt_font_family(name: str) -> str:
+@lru_cache(maxsize=1024)
+def _resolve_qt_font_family_cached(name: str, qt_application_key: int) -> str:
     """Resolve a saved/display N3 name to the current Qt platform spelling.
 
     DirectWrite exposes all localized family names while Qt may expose only the
@@ -364,7 +383,7 @@ def resolve_qt_font_family(name: str) -> str:
     catalog = get_n3_font_catalog()
     requested = str(name or "").strip()
     candidate = catalog.qt_family(requested)
-    if not candidate or QGuiApplication.instance() is None:
+    if not candidate or qt_application_key == 0:
         return candidate
 
     try:
@@ -374,9 +393,23 @@ def resolve_qt_font_family(name: str) -> str:
     if not actual:
         return candidate
 
-    known_aliases = {alias.casefold() for alias in catalog.aliases_for(requested)}
+    aliases = catalog.aliases_for(requested)
+    known_aliases = {alias.casefold() for alias in aliases}
     if actual.casefold() in known_aliases:
         return actual
+    # Qt application fonts can be registered after the DirectWrite/Qt catalog
+    # was built.  Probe the other localized spellings before accepting a stale
+    # catalog mapping; this keeps English/Japanese family aliases equivalent
+    # without rebuilding the expensive DirectWrite catalog for every frame.
+    for alias in aliases:
+        if alias.casefold() == candidate.casefold():
+            continue
+        try:
+            alias_actual = QFontInfo(QFont(alias)).family().strip()
+        except (RuntimeError, TypeError, ValueError):
+            continue
+        if alias_actual.casefold() in known_aliases:
+            return alias_actual
     if catalog.canonicalize(requested) is not None:
         log.warning(
             "Qt 字体回退：请求 %r（解析为 %r），实际匹配 %r",
@@ -385,6 +418,27 @@ def resolve_qt_font_family(name: str) -> str:
             actual,
         )
     return candidate
+
+
+def resolve_qt_font_family(name: str) -> str:
+    """Resolve one family without sharing pre-GUI results with a live GUI."""
+    return _resolve_qt_font_family_cached(
+        str(name or ""),
+        _qt_application_cache_key(),
+    )
+
+
+# Preserve the cache controls used by diagnostics/tests while keeping the
+# QApplication identity in the actual cache key.
+resolve_qt_font_family.cache_clear = _resolve_qt_font_family_cached.cache_clear  # type: ignore[attr-defined]
+resolve_qt_font_family.cache_info = _resolve_qt_font_family_cached.cache_info  # type: ignore[attr-defined]
+
+
+def invalidate_n3_font_caches() -> None:
+    """Invalidate caches after the process-wide Qt font registry changes."""
+
+    _get_n3_font_catalog.cache_clear()
+    _resolve_qt_font_family_cached.cache_clear()
 
 
 def _n3_default_family(catalog: N3FontCatalog, fallback: str) -> str:
