@@ -1883,6 +1883,8 @@ class LyricsPanel(DropPanel):
             ):
                 point = event.position().toPoint()
                 row = self._table.rowAt(point.y())
+                if self._consume_press_for_batch_picker(point, event.modifiers()):
+                    return True
                 self._page_drag_row = (
                     row
                     if 0 <= row < len(self._presentation_rows)
@@ -2551,20 +2553,102 @@ class LyricsPanel(DropPanel):
         elif column == COL_LAYOUT and not self._title_mode:
             self._show_layout_picker(track_row, row)
 
+    def _consume_press_for_batch_picker(self, point, modifiers) -> bool:
+        """选中多行后再点「角色 / 布局」列时，吃掉这次按下、保住选区。
+
+        QTableWidget 是在**按下**时就把选区重置成点中的那一行的，``cellClicked``
+        要等到松开才发 —— 等我们的代码跑起来多选早没了。所以在这里拦：无修饰键的
+        左键、落在这两列、而且该行本来就在选区里，就不交给表格处理，自己把选择器
+        弹出来，作用于整个选区。
+
+        其余情况一律放行：点选区外的行、Ctrl / Shift 点选、其它列的框选起点，
+        行为和以前完全一样。
+        """
+        if self._track is None:
+            return False
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        ):
+            return False
+        column = self._table.columnAt(point.x())
+        if column == COL_ROLE:
+            pass
+        elif column == COL_LAYOUT and not self._title_mode:
+            pass
+        else:
+            return False
+        display_row = self._table.rowAt(point.y())
+        if display_row < 0:
+            return False
+        track_rows = self._track_rows_for_presentation_row(display_row)
+        if not track_rows:
+            return False
+        selected = self._selected_track_rows()
+        # 只有"点在已选中的多行里"才需要特殊对待；单行还是走原来的路。
+        if len(selected) <= 1 or track_rows[0] not in selected:
+            return False
+        track_row = track_rows[0]
+        self.rowClicked.emit(track_row)
+        # 菜单不能在事件派发中途 exec —— 等这一拍走完再弹。
+        QTimer.singleShot(
+            0,
+            lambda: (
+                self._show_role_picker(track_row)
+                if column == COL_ROLE
+                else self._show_layout_picker(track_row, display_row)
+            ),
+        )
+        return True
+
+    def _selected_track_rows(self) -> list[int]:
+        """当前选中的歌词行（按 track 下标去重）。"""
+        display_rows = sorted({item.row() for item in self._table.selectedItems()})
+        return list(
+            dict.fromkeys(
+                track_row
+                for display_row in display_rows
+                for track_row in self._track_rows_for_presentation_row(display_row)
+            )
+        )
+
+    def _picker_target_rows(self, track_row: int) -> list[int]:
+        """单击「角色 / 布局」单元格时，这一下要作用到哪几行。
+
+        点的是**已选中**的行 → 整个选区一起改（多选批量的入口）；点的是选区外的行
+        → 只改它自己，和以前一样，否则"点一行却改了别处"会很怪。
+        """
+        rows = self._selected_track_rows()
+        return rows if track_row in rows else [track_row]
+
     def _show_role_picker(self, row: int) -> None:
         if self._track is None or not 0 <= row < len(self._track.lines):
             return
         line = self._track.lines[row]
         if line.is_blank or not line.chars:
             return
+        rows = self._picker_target_rows(row)
         menu = _StableRoundMenu(parent=self._table)
-        current = _dominant_role(line)
-        mixed = _line_role_mixed(line)
+        current_roles = {
+            _dominant_role(self._track.lines[r])
+            for r in rows
+            if r < len(self._track.lines)
+        }
+        current = next(iter(current_roles)) if len(current_roles) == 1 else None
+        mixed = len(current_roles) > 1 or any(
+            _line_role_mixed(self._track.lines[r])
+            for r in rows
+            if r < len(self._track.lines)
+        )
         default_text = "标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT
         default_swatch = TITLE_SCHEME_NAME if self._title_mode else ""
         choices = [(default_text, "", default_swatch)] + [
             (name, name, name) for name in self._role_options
         ]
+        if len(rows) > 1:
+            scope = Action(f"应用到所选 {len(rows)} 行", menu)
+            scope.setEnabled(False)
+            menu.addAction(scope)
+            menu.addSeparator()
         for display, name, swatch_name in choices:
             action = Action(
                 _swatch_icon(_scheme_swatch_color(self._style, swatch_name)),
@@ -2574,8 +2658,8 @@ class LyricsPanel(DropPanel):
             action.setCheckable(True)
             action.setChecked(not mixed and current == name)
             action.triggered.connect(
-                lambda _checked=False, value=name: self._request_role_change(
-                    [row], value
+                lambda _checked=False, value=name, rs=list(rows): (
+                    self._request_role_change(rs, value)
                 )
             )
             menu.addAction(action)
@@ -2594,25 +2678,44 @@ class LyricsPanel(DropPanel):
     def _show_layout_picker(self, track_row: int, display_row: int) -> None:
         if self._track is None:
             return
-        resolved = (
-            self._resolved_page_plan.line_for_track_index(track_row)
-            if self._resolved_page_plan is not None
-            else None
-        )
-        page_rows = (
-            self._resolved_page_plan.pages[resolved.global_page_index].line_count
-            if resolved is not None and self._resolved_page_plan is not None
-            else 1
-        )
-        current = int(getattr(self._track.lines[track_row], "layout_index", 0) or 0)
+        rows = self._picker_target_rows(track_row)
+        # 容量按**选区里最大的那一页**判断，和右键菜单同一套口径 —— 否则会放出一个
+        # 装不下其它选中页的布局。
+        page_counts: list[int] = []
+        if self._resolved_page_plan is not None:
+            page_indices = {
+                line.global_page_index
+                for row in rows
+                for line in [self._resolved_page_plan.line_for_track_index(row)]
+                if line is not None
+            }
+            page_counts = [
+                self._resolved_page_plan.pages[index].line_count
+                for index in page_indices
+            ]
+        page_rows = max(page_counts, default=1)
+        current_indices = {
+            int(getattr(self._track.lines[row], "layout_index", 0) or 0)
+            for row in rows
+            if row < len(self._track.lines)
+        }
         menu = _StableRoundMenu(parent=self._table)
+        if len(rows) > 1:
+            scope = Action(f"应用到所选 {len(rows)} 行", menu)
+            scope.setEnabled(False)
+            menu.addAction(scope)
+            if len(current_indices) > 1:
+                mixed = Action("当前：多个布局", menu)
+                mixed.setEnabled(False)
+                menu.addAction(mixed)
+            menu.addSeparator()
         names = [layout_display_name(self._style, "default")] + [
             layout.name for layout in self._style.layouts
         ]
         for index, name in enumerate(names):
             action = Action(name, menu)
             action.setCheckable(True)
-            action.setChecked(index == current)
+            action.setChecked(len(current_indices) == 1 and index in current_indices)
             layout_id = (
                 "default"
                 if index == 0
@@ -2620,10 +2723,14 @@ class LyricsPanel(DropPanel):
             )
             if layout_capacity(self._style, layout_id) < page_rows:
                 action.setEnabled(False)
-                action.setToolTip(f"当前页面有 {page_rows} 行，此布局无法容纳。")
+                action.setToolTip(
+                    f"所选页面最多有 {page_rows} 行，此布局无法容纳。"
+                    if len(rows) > 1
+                    else f"当前页面有 {page_rows} 行，此布局无法容纳。"
+                )
             action.triggered.connect(
-                lambda _checked=False, idx=index, r=track_row: (
-                    self.layoutChangeRequested.emit([r], idx)
+                lambda _checked=False, idx=index, rs=list(rows): (
+                    self.layoutChangeRequested.emit(rs, idx)
                 )
             )
             menu.addAction(action)
