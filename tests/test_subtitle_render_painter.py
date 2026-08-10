@@ -8258,6 +8258,8 @@ def test_style_dict_migrates_legacy_margin_when_new_key_missing():
 
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _layout_style_for_line,
+)
+from krok_helper.subtitle_render.engine.layout_assignment import (  # noqa: E402
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,

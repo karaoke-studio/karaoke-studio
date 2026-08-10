@@ -129,11 +129,13 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     ENCODER_NVENC,
     ENCODER_QSV,
 )
-from krok_helper.subtitle_render.engine.painter import (
-    LayoutMarginWarning,
+from krok_helper.subtitle_render.engine.layout_assignment import (
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,
+)
+from krok_helper.subtitle_render.engine.painter import (
+    LayoutMarginWarning,
     check_layout_margins,
     display_windows_for_style,
     layout_pass,
