@@ -2132,6 +2132,22 @@ def test_schema_v1_project_is_migrated_to_movable_page_plan_in_memory(
         for section in win._timing_track.page_plan.sections
         for page in section.pages
     ] == [3, 1]
+    assert win._undo_stack[-1][0] == "track_snapshot"
+    assert win._project_dirty is True
+
+    win._undo_edit()
+    assert [
+        page.line_count
+        for section in win._timing_track.page_plan.sections
+        for page in section.pages
+    ] == [2, 2]
+
+    win._redo_edit()
+    assert [
+        page.line_count
+        for section in win._timing_track.page_plan.sections
+        for page in section.pages
+    ] == [3, 1]
 
 
 def test_loading_lyrics_applies_each_selected_ambiguous_role_preset(

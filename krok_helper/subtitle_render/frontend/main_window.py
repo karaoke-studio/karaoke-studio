@@ -6145,7 +6145,6 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None or self._title_source_active:
             return
-        before = deepcopy(track)
         operation = {
             "insert_page": ("page", True),
             "delete_page": ("page", False),
@@ -6155,25 +6154,27 @@ class SubtitleRenderWindow(QWidget):
         if operation is None:
             return
         kind, inserting = operation
-        changed = (
-            insert_boundary(
-                track, self._style, int(track_line_index), kind=kind
-            )
-            if inserting
-            else delete_boundary(
-                track, self._style, int(track_line_index), kind=kind
-            )
+        mutation = self._project_document.mutate_track(
+            self._active_source_index,
+            lambda target: (
+                insert_boundary(
+                    target, self._style, int(track_line_index), kind=kind
+                )
+                if inserting
+                else delete_boundary(
+                    target, self._style, int(track_line_index), kind=kind
+                )
+            ),
         )
-        if not changed:
+        if mutation is None or not mutation.result:
             fluent_info(
                 self,
                 "无法修改边界",
                 "当前位置没有可修改的边界，或合并后的页面超过 8 行。",
             )
             return
-        self._record_track_snapshot(
-            self._active_source_index, before, deepcopy(track)
-        )
+        if mutation.changed:
+            self._record_track_mutation(mutation)
         self._refresh_after_track_structure_changed()
 
     def _on_page_move_requested(
@@ -6182,23 +6183,25 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None or self._title_source_active:
             return
-        before = deepcopy(track)
-        if not move_page_boundary(
-            track,
-            self._style,
-            int(section_index),
-            int(page_index),
-            direction=int(direction),
-        ):
+        mutation = self._project_document.mutate_track(
+            self._active_source_index,
+            lambda target: move_page_boundary(
+                target,
+                self._style,
+                int(section_index),
+                int(page_index),
+                direction=int(direction),
+            ),
+        )
+        if mutation is None or not mutation.result:
             fluent_info(
                 self,
                 "无法移动歌词行",
                 "目标页面已经达到 8 行、相邻页面不存在，或当前行不是可移动的分页边界行。",
             )
             return
-        self._record_track_snapshot(
-            self._active_source_index, before, deepcopy(track)
-        )
+        if mutation.changed:
+            self._record_track_mutation(mutation)
         self._refresh_after_track_structure_changed()
 
     def _build_refreshed_track(
