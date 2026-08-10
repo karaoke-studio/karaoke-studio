@@ -1089,6 +1089,7 @@ def _paint_track_to_painter(
                     resolved_style=(
                         line_plan.animation_style if line_plan is not None else None
                     ),
+                    line_plan=line_plan,
                 )
             finally:
                 painter.restore()
@@ -6214,6 +6215,7 @@ def _paint_line_vertical(
     *,
     column_x: int | None,
     lane: int | None = None,
+    line_plan: LineLayoutPlan | None = None,
 ) -> None:
     """竖排单列渲染：字符上→下堆叠、卡拉ok 扫光上→下。
 
@@ -6222,10 +6224,13 @@ def _paint_line_vertical(
     逐帧直绘（亦作像素一致性 oracle）。两条路径像素一致。
     """
     source_line = line
-    line = _line_with_guide_symbol(line)
+    line = line_plan.render_line if line_plan is not None else _line_with_guide_symbol(line)
     layout = _layout_vertical_line(
         track, line, style, img_w, img_h,
         column_x=column_x, source_line=source_line,
+        resolved_intervals=(
+            line_plan.resolved_intervals if line_plan is not None else None
+        ),
     )
     if layout is None:
         return
@@ -6722,6 +6727,7 @@ def _layout_vertical_line(
     *,
     column_x: int | None,
     source_line: TimingLine | None = None,
+    resolved_intervals: tuple[tuple[int, int], ...] | None = None,
 ) -> _VerticalLineLayout | None:
     """layout 段：算竖排行的列几何 / 字符格 / 字形路径（不依赖 t_ms）。"""
     chars = line.chars
@@ -6743,7 +6749,11 @@ def _layout_vertical_line(
     )
     block_h = cell_h * len(chars)
     y_top = _resolve_vertical_top(img_h, block_h, style)
-    intervals = compute_char_intervals(line)
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line)
+    )
     colors = _effective_karaoke_colors(style)
 
     text_path = QPainterPath()
@@ -6995,6 +7005,7 @@ def _paint_line(
     display_end_ms: int | None = None,
     layout_cache_sig: tuple | None = None,
     resolved_style: Style | None = None,
+    line_plan: LineLayoutPlan | None = None,
 ) -> None:
     style = resolved_style or _style_for_line_display_window(
         style, line, display_start_ms, display_end_ms
@@ -7028,6 +7039,7 @@ def _paint_line(
                 display_start_ms=display_start_ms,
                 display_end_ms=display_end_ms,
                 layout_cache_sig=layout_cache_sig,
+                line_plan=line_plan,
             )
         finally:
             target.restore()
@@ -7138,6 +7150,7 @@ def _paint_line_static(
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
     layout_cache_sig: tuple | None = None,
+    line_plan: LineLayoutPlan | None = None,
 ) -> None:
     if style.vertical:
         _paint_line_vertical(
@@ -7150,6 +7163,7 @@ def _paint_line_static(
             style,
             column_x=baseline_y,
             lane=lane,
+            line_plan=line_plan,
         )
         return
     # layout 段（纯几何，不依赖 t_ms）：算字符几何 / 基线 / fill_segments。
@@ -7157,6 +7171,7 @@ def _paint_line_static(
         track, line, style, img_w, img_h,
         baseline_y=baseline_y, line_x=line_x, lane=lane,
         cache_sig=layout_cache_sig,
+        line_plan=line_plan,
     )
     if layout is None:
         return
@@ -7275,17 +7290,20 @@ def _layout_line(
     line_x: int | None = None,
     lane: int | None = None,
     cache_sig: tuple | None = None,
+    line_plan: LineLayoutPlan | None = None,
 ) -> _LineLayout | None:
     if cache_sig is None:
         return _layout_line_uncached(
             track, line, style, img_w, img_h,
             baseline_y=baseline_y, line_x=line_x, lane=lane,
+            line_plan=line_plan,
         )
     line_index = _track_line_index(track, line)
     if line_index < 0:
         return _layout_line_uncached(
             track, line, style, img_w, img_h,
             baseline_y=baseline_y, line_x=line_x, lane=lane,
+            line_plan=line_plan,
         )
     key = (
         cache_sig,
@@ -7302,6 +7320,7 @@ def _layout_line(
         lambda: _layout_line_uncached(
             track, line, style, img_w, img_h,
             baseline_y=baseline_y, line_x=line_x, lane=lane,
+            line_plan=line_plan,
         ),
     )
 
@@ -7316,18 +7335,29 @@ def _layout_line_uncached(
     baseline_y: int | None = None,
     line_x: int | None = None,
     lane: int | None = None,
+    line_plan: LineLayoutPlan | None = None,
 ) -> _LineLayout | None:
-    render_line = _line_with_guide_symbol(line)
+    render_line = (
+        line_plan.render_line if line_plan is not None else _line_with_guide_symbol(line)
+    )
+    resolved_intervals = (
+        line_plan.resolved_intervals if line_plan is not None else None
+    )
+    center_override = line_plan.center_override if line_plan is not None else None
     if _line_has_role_labels(render_line):
         return _layout_role_line(
             track, render_line, style, img_w, img_h,
             baseline_y=baseline_y, line_x=line_x, lane=lane,
             source_line=line,
+            resolved_intervals=resolved_intervals,
+            center_override=center_override,
         )
     return _layout_plain_line(
         track, render_line, style, img_w, img_h,
         baseline_y=baseline_y, line_x=line_x, lane=lane,
         source_line=line,
+        resolved_intervals=resolved_intervals,
+        center_override=center_override,
     )
 
 
@@ -7342,6 +7372,8 @@ def _layout_plain_line(
     line_x: int | None = None,
     lane: int | None = None,
     source_line: TimingLine | None = None,
+    resolved_intervals: tuple[tuple[int, int], ...] | None = None,
+    center_override: bool | None = None,
 ) -> _LineLayout:
     """layout 段：算普通行的纯几何 + 字体资源（不依赖 t_ms，可缓存）。"""
     font = _build_font(style)
@@ -7364,7 +7396,11 @@ def _layout_plain_line(
         )
         for c in line.chars
     ]
-    intervals = compute_char_intervals(line, char_widths)
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line, char_widths)
+    )
     char_gaps, ruby_left_ext, ruby_right_ext = _ruby_char_gaps(
         line, char_widths, active_rubies, style, intervals
     )
@@ -7373,7 +7409,8 @@ def _layout_plain_line(
     # shadow may extend outside the requested horizontal margin.
     left_ext = ruby_left_ext
     right_ext = ruby_right_ext
-    center_override = _line_center_override(track, source_line, style)
+    if center_override is None:
+        center_override = _line_center_override(track, source_line, style)
     n3_main_center = (
         style.layout_semantics == "n3_1074"
         and not center_override
@@ -8177,6 +8214,8 @@ def _layout_role_line(
     line_x: int | None = None,
     lane: int | None = None,
     source_line: TimingLine | None = None,
+    resolved_intervals: tuple[tuple[int, int], ...] | None = None,
+    center_override: bool | None = None,
 ) -> _LineLayout | None:
     """layout 段：算分色行的纯几何（逐段多字体）+ 基线 + fill_segments（不依赖 t_ms）。"""
     has_shared_baseline = baseline_y is not None
@@ -8188,7 +8227,11 @@ def _layout_role_line(
     if not measure_layout.glyphs:
         return None
     char_widths, _measure_ranges = _role_char_geometry_by_index(line, measure_layout)
-    intervals = compute_char_intervals(line, char_widths)
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line, char_widths)
+    )
     ruby_extra = _role_ruby_vertical_extra(
         line, active_rubies, intervals, style
     )
@@ -8199,7 +8242,8 @@ def _layout_role_line(
     left_ext = ruby_left_ext
     right_ext = ruby_right_ext
     total_w = measure_layout.total_width + sum(char_gaps)
-    center_override = _line_center_override(track, source_line, style)
+    if center_override is None:
+        center_override = _line_center_override(track, source_line, style)
     n3_main_center = (
         style.layout_semantics == "n3_1074"
         and not center_override
@@ -8244,7 +8288,11 @@ def _layout_role_line(
         char_gaps=char_gaps,
     )
     char_widths, char_x_ranges = _role_char_geometry_by_index(line, text_layout)
-    intervals = compute_char_intervals(line, char_widths)
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line, char_widths)
+    )
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     wipe_x_ranges = _n3_char_wipe_ranges_by_index(
         line, text_layout, char_x_ranges, ink_x_ranges

@@ -125,6 +125,7 @@ from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
 )
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    GuideSymbol,
     KaraokeColors,
     KaraokeColorState,
     LyricsLayout,
@@ -2986,6 +2987,106 @@ def test_planned_page_offset_windows_match_cpu_offset_selection(
         ) == subtitle_painter.resolved_page_offsets_for_style(
             640, 360, track, style, t_ms=t_ms
         )
+
+
+@pytest.mark.parametrize("with_role", [False, True])
+def test_planned_horizontal_line_inputs_preserve_legacy_geometry(
+    qapp,
+    with_role,
+):
+    role_label = "accent" if with_role else None
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 1_000, role_label=role_label),
+            TimingChar("B", 1_500),
+        ],
+        end_ms=2_000,
+        guide_symbol=GuideSymbol(
+            path_commands=(
+                ("M", 0.0, 0.0),
+                ("L", 500.0, -800.0),
+                ("L", 1_000.0, 0.0),
+                ("Z",),
+            ),
+            duration_ms=400,
+        ),
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        dual_line_layout=True,
+        lit_enabled=False,
+        custom_style_schemes=(
+            {"accent": SubtitleStyleScheme(font_size_px=84)} if with_role else {}
+        ),
+    )
+    plan = subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    ).lines[0]
+    legacy = subtitle_painter._layout_line_uncached(
+        track,
+        line,
+        plan.animation_style,
+        640,
+        360,
+        lane=plan.lane,
+    )
+    planned = subtitle_painter._layout_line_uncached(
+        track,
+        line,
+        plan.animation_style,
+        640,
+        360,
+        lane=plan.lane,
+        line_plan=plan,
+    )
+
+    assert legacy is not None and planned is not None
+    assert planned.render_line == legacy.render_line == plan.render_line
+    assert planned.intervals == legacy.intervals == list(plan.resolved_intervals)
+    assert planned.char_x_ranges == legacy.char_x_ranges
+    assert planned.ink_x_ranges == legacy.ink_x_ranges
+    assert planned.baseline_y == legacy.baseline_y
+    assert planned.line_rect == legacy.line_rect
+
+
+def test_planned_vertical_line_inputs_preserve_legacy_geometry(qapp):
+    line = TimingLine(
+        chars=[TimingChar("縦", 1_000), TimingChar("A", 1_500)],
+        end_ms=2_000,
+        guide_symbol=GuideSymbol(duration_ms=400),
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(vertical=True, dual_line_layout=True, lit_enabled=False)
+    plan = subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    ).lines[0]
+    legacy_line = subtitle_painter._line_with_guide_symbol(line)
+    legacy = _layout_vertical_line(
+        track,
+        legacy_line,
+        plan.animation_style,
+        640,
+        360,
+        column_x=320,
+        source_line=line,
+    )
+    planned = _layout_vertical_line(
+        track,
+        plan.render_line,
+        plan.animation_style,
+        640,
+        360,
+        column_x=320,
+        source_line=line,
+        resolved_intervals=plan.resolved_intervals,
+    )
+
+    assert legacy is not None and planned is not None
+    assert planned.intervals == legacy.intervals == list(plan.resolved_intervals)
+    assert planned.cells == legacy.cells
+    assert planned.column_x == legacy.column_x
+    assert planned.line_rect == legacy.line_rect
+    assert planned.text_path == legacy.text_path
 
 
 def test_dual_line_baselines_stay_fixed_when_lower_line_disappears(qapp):
