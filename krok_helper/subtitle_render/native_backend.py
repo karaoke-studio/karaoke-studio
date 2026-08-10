@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from krok_helper.subtitle_render.engine.render_ir import build_render_ir
 from krok_helper.subtitle_render.models import Style, TimingTrack
-from krok_helper.subtitle_render.native_protocol import build_render_ir
 
 _EXE_NAME = "krok_subtitle_renderer.exe" if os.name == "nt" else "krok_subtitle_renderer"
 _SHARED_FRAME_HEADER = struct.Struct("<10i")

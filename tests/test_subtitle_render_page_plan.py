@@ -434,6 +434,7 @@ def test_page_plan_is_spawn_pickle_safe():
 def test_painter_schedule_and_native_ir_share_authoritative_page_plan():
     from PyQt6.QtWidgets import QApplication
     from krok_helper.subtitle_render.engine.painter import (
+        build_track_layout_plan,
         display_schedule_for_style,
     )
     from krok_helper.subtitle_render.native_protocol import track_to_ir
@@ -450,7 +451,11 @@ def test_painter_schedule_and_native_ir_share_authoritative_page_plan():
     project_page_plan_to_legacy_fields(track, style)
 
     schedule = display_schedule_for_style(track, style)
-    render_ir = track_to_ir(track, style)
+    render_ir = track_to_ir(
+        track,
+        style,
+        layout_plan=build_track_layout_plan(track, style),
+    )
 
     assert [schedule[index][0] for index in range(3)] == [1, 0, 1]
     assert [line["page_index"] for line in render_ir["lines"]] == [0, 1, 1]

@@ -186,11 +186,17 @@ class TestGpuParity:
         return track
 
     def test_the_ir_carries_the_per_line_sung_effect(self, qapp) -> None:
+        from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
         from krok_helper.subtitle_render.native_protocol import track_to_ir
 
         style = Style()
         style.karaoke_anim = "utopia"
-        ir = track_to_ir(self._track(), style)
+        track = self._track()
+        ir = track_to_ir(
+            track,
+            style,
+            layout_plan=build_track_layout_plan(track, style),
+        )
         # 无覆盖 / 覆盖成 none / inherit
         assert [line["karaoke_anim"] for line in ir["lines"]] == [
             "utopia",

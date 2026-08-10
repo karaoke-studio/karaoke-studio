@@ -12,18 +12,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.models import (
     RubyAnnotation,
     Style,
     SubtitleStyleScheme,
-    TITLE_SCHEME_NAME,
     TimingChar,
     TimingLine,
     TimingTrack,
     TitleOverlay,
     effective_karaoke_animation,
     guide_symbol_to_dict,
-    style_to_dict,
     title_overlay_to_dict,
 )
 
@@ -39,7 +38,8 @@ GPU_UNSUPPORTED_FEATURE_LABELS = {
 def gpu_unsupported_feature_labels(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(GPU_UNSUPPORTED_FEATURE_LABELS.get(reason, reason) for reason in reasons)
 
-def _title_overlay_to_ir(
+
+def title_overlay_to_ir(
     title: TitleOverlay,
     scheme: SubtitleStyleScheme | None,
 ) -> dict[str, Any]:
@@ -109,53 +109,6 @@ def gpu_unsupported_features(
                 }:
                     reasons.append("line_animation_override")
     return tuple(dict.fromkeys(reasons))
-
-
-def title_to_ir(
-    track: TimingTrack,
-    style: Style,
-    *,
-    duration_ms: int | None = None,
-) -> dict[str, Any] | None:
-    """Resolve the Painter title contract into a renderer-ready snapshot."""
-    # Keep the resolution logic shared with the CPU oracle.  In particular,
-    # title schemes/layout references and metadata template cleanup must not be
-    # reimplemented independently in the sidecar.
-    from krok_helper.subtitle_render.engine.painter import (
-        _resolve_title_role_overlay,
-        _resolve_title_text,
-        _title_show_specs,
-        resolve_title_overlay,
-    )
-    from krok_helper.subtitle_render.models import normalize_title_char_role_labels
-
-    title = resolve_title_overlay(style)
-    if title is None or not title.enabled:
-        return None
-    text = _resolve_title_text(title, track)
-    if not any(line.strip() for line in text.split("\n")):
-        return None
-    payload = _title_overlay_to_ir(
-        title,
-        style.custom_style_schemes.get(TITLE_SCHEME_NAME),
-    )
-    payload["text"] = text
-    payload["windows"] = [
-        list(window)
-        for window in _title_show_specs(title, track, duration_ms=duration_ms)
-    ]
-    labels = normalize_title_char_role_labels(text, title.char_role_labels)
-    payload["resolved_role_labels"] = labels
-    payload["role_styles"] = {
-        label: _title_overlay_to_ir(
-            _resolve_title_role_overlay(style, title, label),
-            style.custom_style_schemes.get(label),
-        )
-        for row in labels
-        for label in row
-        if label
-    }
-    return payload
 
 
 def _image_file_signature(path_text: str | None) -> tuple[int, int]:
@@ -339,19 +292,12 @@ def track_to_ir(
     track: TimingTrack,
     style: Style | None = None,
     *,
-    width: int | None = None,
-    height: int | None = None,
+    layout_plan: TrackLayoutPlan | None = None,
 ) -> dict[str, Any]:
     schedule: dict[int, tuple[int, int, int]] = {}
     if style is not None:
-        from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
-
-        layout_plan = build_track_layout_plan(
-            track,
-            style,
-            logical_w=width,
-            logical_h=height,
-        )
+        if layout_plan is None:
+            raise ValueError("style serialization requires a resolved layout_plan")
         schedule = {
             item.track_index: (
                 item.lane,
@@ -453,68 +399,4 @@ def track_to_ir(
             for index, line in enumerate(track.lines)
         ],
         "rubies": [ruby_to_ir(ruby) for ruby in track.rubies],
-    }
-
-
-def build_render_ir(
-    track: TimingTrack,
-    style: Style,
-    *,
-    width: int,
-    height: int,
-    fps: int,
-    dpr: float = 1.0,
-    extra_tracks: list[TimingTrack] | None = None,
-    duration_ms: int | None = None,
-) -> dict[str, Any]:
-    """Build a JSON-friendly Render IR v1 snapshot for the native sidecar.
-
-    ``dpr`` 是预览缩放系数：布局仍在 ``width``/``height`` 逻辑坐标系计算，
-    native 光栅化画布为 ``round(width*dpr) x round(height*dpr)``,
-    与 Python 预览 ``preview_render_target_size`` + ``setDevicePixelRatio`` 语义一致。
-    """
-    from krok_helper.subtitle_render.engine.painter import layout_pass
-
-    # 整份 IR 是一次排版过程：其间 track / style 不变，分页结果整轨算一次即可。
-    with layout_pass():
-        return _build_render_ir_locked(
-            track,
-            style,
-            width=width,
-            height=height,
-            fps=fps,
-            dpr=dpr,
-            extra_tracks=extra_tracks,
-            duration_ms=duration_ms,
-        )
-
-
-def _build_render_ir_locked(
-    track: TimingTrack,
-    style: Style,
-    *,
-    width: int,
-    height: int,
-    fps: int,
-    dpr: float = 1.0,
-    extra_tracks: list[TimingTrack] | None = None,
-    duration_ms: int | None = None,
-) -> dict[str, Any]:
-    return {
-        "schema": RENDER_IR_SCHEMA,
-        "screen": {
-            "width": max(int(width), 1),
-            "height": max(int(height), 1),
-            "fps": max(int(fps), 1),
-            "dpr": max(float(dpr or 1.0), 0.01),
-        },
-        "style": style_to_dict(style),
-        "track": track_to_ir(track, style, width=width, height=height),
-        # Keep each source separate.  Painter schedules lanes/display windows
-        # independently per source and then composites primary -> extras.
-        "extra_tracks": [
-            track_to_ir(item, style, width=width, height=height)
-            for item in extra_tracks or ()
-        ],
-        "title": title_to_ir(track, style, duration_ms=duration_ms),
     }

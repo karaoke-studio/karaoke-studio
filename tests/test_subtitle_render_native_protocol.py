@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
 import os
 from pathlib import Path
@@ -13,6 +14,9 @@ import uuid
 import numpy as np
 import pytest
 
+from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
+from krok_helper.subtitle_render.engine.render_ir import build_render_ir
 from krok_helper.subtitle_render.models import (
     GuideSymbol,
     KaraokeColors,
@@ -45,12 +49,29 @@ from krok_helper.subtitle_render.native_backend import (
 )
 from krok_helper.subtitle_render.native_protocol import (
     RENDER_IR_SCHEMA,
-    build_render_ir,
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )
-from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
-from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
+
+
+def test_native_protocol_has_no_painter_dependency():
+    protocol_path = Path("krok_helper/subtitle_render/native_protocol.py")
+    tree = ast.parse(protocol_path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
+
+
+def test_track_ir_requires_resolved_plan_when_serializing_style():
+    from krok_helper.subtitle_render.native_protocol import track_to_ir
+
+    with pytest.raises(ValueError, match="resolved layout_plan"):
+        track_to_ir(TimingTrack(), Style())
+
 
 _NATIVE_PARITY_DIVERGED = pytest.mark.skipif(
     os.environ.get("KROK_SUBTITLE_NATIVE_PARITY_STRICT") != "1",

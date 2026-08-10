@@ -162,7 +162,7 @@ def test_sug_adapter_bakes_global_offset_exactly_once_for_cpu_and_gpu(
         expected_start_ms
     )
 
-    native_track = track_to_ir(track, Style())
+    native_track = track_to_ir(track)
     assert native_track["meta"]["offset_ms"] == 0
     assert native_track["lines"][0]["chars"][0]["start_ms"] == expected_start_ms
 
