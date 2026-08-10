@@ -29,6 +29,7 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
     NativeRendererProcess,
+    NativeRendererProcessOwner,
     SharedFrameRingReader,
 )
 from krok_helper.subtitle_render.native_protocol import (
@@ -505,7 +506,14 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._frame_cache = NativePreviewFrameCache(
             max(self._max_lookahead_frames + self._worker_count_requested + 1, 1)
         )
-        self._renderer: Optional[NativeRendererProcess] = None
+        self._renderer_owner = NativeRendererProcessOwner(
+            process_factory=NativeRendererProcess,
+            response_timeout_s=2.0,
+            startup_timeout_s=5.0,
+            configure_timeout_s=10.0,
+            gpu_configure_timeout_s=30.0,
+            close_timeout_s=1.0,
+        )
         self._reader: Optional[SharedFrameRingReader] = None
         self._shm_key = f"krok-gpu-preview-{os.getpid()}-{uuid.uuid4().hex}"
         self._frame_index = 0
@@ -689,7 +697,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._thread.join(timeout=3.0)
 
     def _cancel_native_generation_locked(self, generation: int) -> None:
-        renderer = self._renderer
+        renderer = self._renderer_owner.process
         if renderer is None:
             return
         try:
@@ -1109,24 +1117,13 @@ class GpuAsyncSubtitleRenderer(QObject):
         self.fallback_occurred.emit(str(message))
 
     def _ensure_renderer(self) -> NativeRendererProcess:
-        if self._renderer is None:
-            self._renderer = NativeRendererProcess(
-                response_timeout_s=2.0,
-                startup_timeout_s=5.0,
-                configure_timeout_s=10.0,
-                gpu_configure_timeout_s=30.0,
-                close_timeout_s=1.0,
-            )
-            self._renderer.start()
-        return self._renderer
+        return self._renderer_owner.ensure()
 
     def _close_renderer(self) -> None:
         if self._reader is not None:
             self._reader.close()
             self._reader = None
-        if self._renderer is not None:
-            self._renderer.close()
-            self._renderer = None
+        self._renderer_owner.close()
 
     def _may_emit(self, t_ms: int, generation: int) -> bool:
         with self._condition:

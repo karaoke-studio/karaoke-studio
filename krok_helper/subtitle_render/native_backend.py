@@ -1273,3 +1273,44 @@ class NativeRendererProcess:
             f"(returncode={process.poll()}); stderr_tail={self._stderr_excerpt()!r}; "
             f"stdout_noise={self._stdout_noise_excerpt()!r}"
         )
+
+
+class NativeRendererProcessOwner:
+    """Own one lazily started sidecar process with idempotent teardown.
+
+    Preview schedulers remain responsible for their request/thread policy; this
+    object owns only the repeated create/start/restart/close state transition.
+    ``process_factory`` keeps tests and alternate launchers injectable.
+    """
+
+    def __init__(self, process_factory=NativeRendererProcess, **process_kwargs: Any) -> None:
+        self._process_factory = process_factory
+        self._process_kwargs = dict(process_kwargs)
+        self._process: NativeRendererProcess | None = None
+
+    @property
+    def process(self) -> NativeRendererProcess | None:
+        return self._process
+
+    def ensure(self) -> NativeRendererProcess:
+        process = self._process
+        if process is not None:
+            return process
+        process = self._process_factory(**self._process_kwargs)
+        try:
+            process.start()
+        except BaseException:
+            process.close()
+            raise
+        self._process = process
+        return process
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        if process is not None:
+            process.close()
+
+    def restart(self) -> NativeRendererProcess:
+        self.close()
+        return self.ensure()

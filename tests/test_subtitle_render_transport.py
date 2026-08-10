@@ -69,6 +69,63 @@ def _bar(qapp) -> TransportBar:
     return bar
 
 
+def test_native_renderer_process_owner_centralizes_lazy_restart_and_close():
+    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+
+    events: list[str] = []
+
+    class FakeProcess:
+        def __init__(self, *, marker):
+            events.append(f"create:{marker}")
+
+        def start(self):
+            events.append("start")
+
+        def close(self):
+            events.append("close")
+
+    owner = NativeRendererProcessOwner(FakeProcess, marker="preview")
+    first = owner.ensure()
+
+    assert owner.ensure() is first
+    second = owner.restart()
+    assert second is not first
+
+    owner.close()
+    owner.close()
+    assert owner.process is None
+    assert events == [
+        "create:preview",
+        "start",
+        "close",
+        "create:preview",
+        "start",
+        "close",
+    ]
+
+
+def test_native_renderer_process_owner_cleans_failed_start():
+    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+
+    events: list[str] = []
+
+    class FailingProcess:
+        def start(self):
+            events.append("start")
+            raise RuntimeError("boom")
+
+        def close(self):
+            events.append("close")
+
+    owner = NativeRendererProcessOwner(FailingProcess)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        owner.ensure()
+
+    assert owner.process is None
+    assert events == ["start", "close"]
+
+
 def test_preview_surfaces_do_not_draw_frame_border(qapp):
     canvas = PreviewCanvas()
     try:
