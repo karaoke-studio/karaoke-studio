@@ -24,7 +24,7 @@ UI 顶层结构（工作区导航居中放在项目命令栏）：
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 import hashlib
 import logging
@@ -204,7 +204,6 @@ from krok_helper.subtitle_render.models import (
     EXPORT_NAME_TEMPLATE_FIELDS,
     GuideSymbol,
     LineAnimationOverride,
-    LYRICS_LAYOUT_FIELDS,
     PROJECT_FILE_SUFFIX,
     StylePreset,
     SubtitleLoadingSettings,
@@ -243,6 +242,13 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     get_n3_font_catalog,
     normalize_scheme_font_families,
     normalize_style_font_families,
+)
+from krok_helper.subtitle_render.preferences import (
+    BUILTIN_SCHEME_STYLE_FIELDS as _BUILTIN_SCHEME_STYLE_FIELDS,
+    LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
+    LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
+    app_default_style_to_dict,
+    merge_common_style_preferences,
 )
 from krok_helper.subtitle_render.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
@@ -698,23 +704,6 @@ class _AutoSaveSettingsDialog(ModelessDialog):
             self.interval_spin.value(),
             self.backup_count_spin.value(),
         )
-
-_BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
-    field.name
-    for field in fields(SubtitleStyleScheme)
-    if field.name in {style_field.name for style_field in fields(Style)}
-    and field.name not in LYRICS_LAYOUT_FIELDS
-)
-_LAYOUT_DEFAULT_VALUE_FIELDS = frozenset(
-    (*LYRICS_LAYOUT_FIELDS, "upper_line_left_margin_px", "lower_line_right_margin_px")
-)
-_LAYOUT_DEFAULT_STYLE_FIELDS = frozenset(
-    (*_LAYOUT_DEFAULT_VALUE_FIELDS, "layouts", "layout_reference_height")
-)
-_FONT_DEFAULT_STYLE_FIELDS = frozenset({"font_reference_height"})
-_PROJECT_ONLY_STYLE_FIELDS = frozenset(
-    {"custom_style_schemes", "singer_style_overrides", "title_overlay"}
-)
 
 #: 标题里跟着"用户习惯"走的字段（标题文字、显示时长这些是逐曲的，不在此列）。
 #:
@@ -8144,31 +8133,12 @@ class SubtitleRenderWindow(QWidget):
     def _save_persisted_state(self) -> None:
         self._persisted_state_save_timer.stop()
         self._persisted_state_dirty = False
-        protected_fields = (
-            _BUILTIN_SCHEME_STYLE_FIELDS
-            | _LAYOUT_DEFAULT_STYLE_FIELDS
-            | _FONT_DEFAULT_STYLE_FIELDS
-            | _PROJECT_ONLY_STYLE_FIELDS
-        )
-        common_changes = {
-            field.name: deepcopy(getattr(self._style, field.name))
-            for field in fields(Style)
-            if field.name not in protected_fields
-        }
-        title_scheme = self._app_default_style.custom_style_schemes.get(
-            TITLE_SCHEME_NAME,
-            Style().custom_style_schemes[TITLE_SCHEME_NAME],
-        )
-        self._app_default_style = replace(
+        self._app_default_style = merge_common_style_preferences(
             self._app_default_style,
-            **common_changes,
-            custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
-            singer_style_overrides={},
+            self._style,
         )
         data = self._load_subtitle_settings()
-        persisted_style = style_to_dict(self._app_default_style)
-        persisted_style.pop("title_overlay", None)
-        data["style"] = persisted_style
+        data["style"] = app_default_style_to_dict(self._app_default_style)
         default_title = self._app_default_style.title_overlay or TitleOverlay()
         new_project_defaults = (
             dict(data.get("new_project_defaults"))

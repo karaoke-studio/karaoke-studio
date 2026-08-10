@@ -27,6 +27,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     Style,
     StylePreset,
     SubtitleStyleScheme,
+    TITLE_SCHEME_NAME,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -34,6 +35,10 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TitleOverlay,
     style_from_dict,
     style_to_dict,
+)
+from krok_helper.subtitle_render.preferences import (  # noqa: E402
+    app_default_style_to_dict,
+    merge_common_style_preferences,
 )
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
@@ -229,6 +234,36 @@ def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
     assert payload["extra_subtitle_sources"][0]["name"] == "和声"
     assert payload["extra_subtitle_sources"][0]["line_layout_indices"] == [2]
     assert payload["output"] == {"encoder_mode": "cpu", "crf": 18}
+
+
+def test_app_style_preferences_do_not_leak_project_only_content():
+    app_title_scheme = SubtitleStyleScheme(fill_color="#112233")
+    app_title = TitleOverlay(enabled=True, text_template="应用默认标题")
+    app_default = Style(
+        font_size_px=80,
+        line_lead_in_ms=1200,
+        custom_style_schemes={TITLE_SCHEME_NAME: app_title_scheme},
+        title_overlay=app_title,
+    )
+    project = Style(
+        font_size_px=140,
+        line_lead_in_ms=2600,
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#445566"),
+            "主唱": SubtitleStyleScheme(fill_color="#FF0000"),
+        },
+        singer_style_overrides={1: SubtitleStyleScheme(fill_color="#00FF00")},
+        title_overlay=TitleOverlay(enabled=False, text_template="逐曲标题"),
+    )
+
+    merged = merge_common_style_preferences(app_default, project)
+
+    assert merged.line_lead_in_ms == 2600
+    assert merged.font_size_px == 80
+    assert merged.custom_style_schemes == {TITLE_SCHEME_NAME: app_title_scheme}
+    assert merged.singer_style_overrides == {}
+    assert merged.title_overlay == app_title
+    assert "title_overlay" not in app_default_style_to_dict(merged)
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
