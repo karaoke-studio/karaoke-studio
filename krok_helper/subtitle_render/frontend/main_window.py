@@ -744,6 +744,27 @@ _PROJECT_ONLY_STYLE_FIELDS = frozenset(
     {"custom_style_schemes", "singer_style_overrides", "title_overlay"}
 )
 
+#: 标题里跟着"用户习惯"走的字段（标题文字、显示时长这些是逐曲的，不在此列）。
+#:
+#: 淡入淡出时长改一次就该一直沿用 —— 每开一个新项目重设一遍 300 → 250 很烦。
+#: 尾段那两项是 ``Optional``：``None`` 表示"跟随开头"，原样记住即可。
+_TITLE_PREFERENCE_FIELDS = (
+    "enabled",
+    "layout_index",
+    "fade_in_ms",
+    "fade_out_ms",
+    "tail_fade_in_ms",
+    "tail_fade_out_ms",
+)
+
+#: 上面那几项里，纯粹的时长字段（``enabled`` / ``layout_index`` 另有存取方式）。
+_TITLE_FADE_FIELDS = (
+    "fade_in_ms",
+    "fade_out_ms",
+    "tail_fade_in_ms",
+    "tail_fade_out_ms",
+)
+
 
 # 纯上色字段：只决定用什么颜色画，不影响字形几何、行宽或演唱时间。
 # 只列这些，其余一律当几何字段——将来 Style 加了新字段而忘了归类，判定会保守地
@@ -7804,9 +7825,13 @@ class SubtitleRenderWindow(QWidget):
         previous_title = previous.title_overlay or TitleOverlay()
         current_title = current.title_overlay or TitleOverlay()
         title_preference_changed = (
-            bool(previous_title.enabled), int(previous_title.layout_index or 0)
+            bool(previous_title.enabled),
+            int(previous_title.layout_index or 0),
+            *(getattr(previous_title, name) for name in _TITLE_FADE_FIELDS),
         ) != (
-            bool(current_title.enabled), int(current_title.layout_index or 0)
+            bool(current_title.enabled),
+            int(current_title.layout_index or 0),
+            *(getattr(current_title, name) for name in _TITLE_FADE_FIELDS),
         )
         app_title = self._app_default_style.title_overlay or TitleOverlay()
         remembered_layout_name = self._layout_name_for_index(
@@ -7822,6 +7847,7 @@ class SubtitleRenderWindow(QWidget):
             app_layout_index = self._layout_index_for_name(
                 self._app_default_style, layout_name
             )
+            source_title = current_title if title_preference_changed else app_title
             self._app_default_style = replace(
                 self._app_default_style,
                 title_overlay=replace(
@@ -7832,6 +7858,10 @@ class SubtitleRenderWindow(QWidget):
                         else bool(app_title.enabled)
                     ),
                     layout_index=app_layout_index,
+                    **{
+                        name: getattr(source_title, name)
+                        for name in _TITLE_FADE_FIELDS
+                    },
                 ),
             )
 
@@ -7913,6 +7943,18 @@ class SubtitleRenderWindow(QWidget):
             title_layout_index = int(legacy_title.layout_index or 0)
         else:
             title_layout_index = int(TitleOverlay().layout_index or 0)
+        persisted_fades = defaults.get("title_fades")
+        title_fades: dict[str, object] = {}
+        if isinstance(persisted_fades, dict):
+            for name in _TITLE_FADE_FIELDS:
+                if name not in persisted_fades:
+                    continue
+                value = persisted_fades[name]
+                if value is None:
+                    # 尾段的 None 是"跟随开头"，是合法取值，不能当缺省丢掉。
+                    title_fades[name] = None
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    title_fades[name] = max(int(value), 0)
         app_default_style = replace(
             normalized_style,
             custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
@@ -7921,6 +7963,7 @@ class SubtitleRenderWindow(QWidget):
                 TitleOverlay(),
                 enabled=title_enabled,
                 layout_index=title_layout_index,
+                **title_fades,
             ),
         )
         style_changed |= had_persisted_title or replace(
@@ -8056,6 +8099,11 @@ class SubtitleRenderWindow(QWidget):
         new_project_defaults["title_layout_name"] = self._layout_name_for_index(
             self._app_default_style, default_title.layout_index
         )
+        # 淡入淡出时长和上面两项同属"标题的用户习惯"，放在一起。
+        # 尾段那两项是 Optional，``None`` 表示跟随开头，原样存。
+        new_project_defaults["title_fades"] = {
+            name: getattr(default_title, name) for name in _TITLE_FADE_FIELDS
+        }
         if self._layout_assignment_preference is None:
             new_project_defaults.pop("layout_assignment", None)
         else:
