@@ -283,6 +283,8 @@ from krok_helper.subtitle_render.source_reload import (
     merge_reloaded_track,
 )
 from krok_helper.subtitle_render.session import (
+    ExtraSubtitleSource,
+    SubtitleProjectDocument,
     SubtitleProjectSession,
     SubtitleProjectState,
 )
@@ -970,15 +972,6 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             str(self._mode_combo.currentData() or "global"),
             self._current_values(),
         )
-
-
-@dataclass
-class ExtraSubtitleSource:
-    """一个副字幕源（对标 N3 ``SourceLyricsInfos`` 的コーラス槽位）。"""
-
-    name: str
-    path: Path
-    track: TimingTrack
 
 
 @dataclass
@@ -1929,6 +1922,81 @@ class SubtitleRenderWindow(QWidget):
     _tracksViewWindowsReady = Signal(int, object)
     _embedded: bool = False
 
+    # Project-document compatibility facade. The existing frontend and tests
+    # can keep using their established private names while content ownership
+    # moves out of the QWidget.
+    @property
+    def _timing_track(self) -> Optional[TimingTrack]:
+        return self._project_document.timing_track
+
+    @_timing_track.setter
+    def _timing_track(self, value: Optional[TimingTrack]) -> None:
+        self._project_document.timing_track = value
+
+    @property
+    def _extra_sources(self) -> list[ExtraSubtitleSource]:
+        return self._project_document.extra_sources
+
+    @_extra_sources.setter
+    def _extra_sources(self, value: list[ExtraSubtitleSource]) -> None:
+        self._project_document.extra_sources = list(value)
+
+    @property
+    def _subtitle_path(self) -> Optional[Path]:
+        return self._project_document.subtitle_path
+
+    @_subtitle_path.setter
+    def _subtitle_path(self, value: Optional[Path]) -> None:
+        self._project_document.subtitle_path = value
+
+    @property
+    def _video_path(self) -> Optional[Path]:
+        return self._project_document.video_path
+
+    @_video_path.setter
+    def _video_path(self, value: Optional[Path]) -> None:
+        self._project_document.video_path = value
+
+    @property
+    def _video_info(self) -> Optional[MediaInfo]:
+        return self._project_document.video_info
+
+    @_video_info.setter
+    def _video_info(self, value: Optional[MediaInfo]) -> None:
+        self._project_document.video_info = value
+
+    @property
+    def _background_source(self) -> Optional[BackgroundSource]:
+        return self._project_document.background_source
+
+    @_background_source.setter
+    def _background_source(self, value: Optional[BackgroundSource]) -> None:
+        self._project_document.background_source = value
+
+    @property
+    def _audio_path(self) -> Optional[Path]:
+        return self._project_document.audio_path
+
+    @_audio_path.setter
+    def _audio_path(self, value: Optional[Path]) -> None:
+        self._project_document.audio_path = value
+
+    @property
+    def _audio_info(self) -> Optional[MediaInfo]:
+        return self._project_document.audio_info
+
+    @_audio_info.setter
+    def _audio_info(self, value: Optional[MediaInfo]) -> None:
+        self._project_document.audio_info = value
+
+    @property
+    def _style(self) -> Style:
+        return self._project_document.style
+
+    @_style.setter
+    def _style(self, value: Style) -> None:
+        self._project_document.style = value
+
     # Compatibility facade for existing frontend code and tests. Mutable
     # lifecycle state has one owner (``_project_session``); these names remain
     # available while callers migrate to explicit session operations.
@@ -2032,24 +2100,16 @@ class SubtitleRenderWindow(QWidget):
         self._settings_provider = settings_provider
         self._workflow_context = workflow_context
 
-        self._timing_track: Optional[TimingTrack] = None
+        self._project_document = SubtitleProjectDocument()
         # 字幕轨道编辑的撤销/重做栈：兼容显示窗口四元组与逐行动画批量命令。
         self._undo_stack: list[tuple] = []
         self._redo_stack: list[tuple] = []
-        self._extra_sources: list[ExtraSubtitleSource] = []
-        """副字幕源（N3 多歌词文件，如コーラス轨）：与主字幕同帧叠绘。"""
+        # 副字幕源（N3 多歌词文件，如コーラス轨）与主字幕同帧叠绘。
         self._active_source_index = 0
         """歌词列表当前显示的源：0 = 主字幕，k >= 1 = ``_extra_sources[k-1]``。"""
         self._title_source_active = False
         """左侧列表当前是否显示末位的特殊「标题」源。"""
-        self._subtitle_path: Optional[Path] = None
-        self._video_path: Optional[Path] = None
-        self._video_info: Optional[MediaInfo] = None
-        self._background_source: Optional[BackgroundSource] = None
         self._audio_menu_actions: list[Action] = []
-        self._audio_path: Optional[Path] = None
-        self._audio_info: Optional[MediaInfo] = None
-        self._style: Style = Style()
         self._app_default_style: Style = Style()
         self._subtitle_loading_defaults = SubtitleLoadingSettings()
         self._style_presets: dict[str, StylePreset] = {}
@@ -3292,19 +3352,12 @@ class SubtitleRenderWindow(QWidget):
         """清空已加载的字幕 / 视频 / 音频，把各面板复位到空态（新建项目用）。"""
         self._loading_project = True
         try:
-            self._timing_track = None
-            self._extra_sources = []
+            self._project_document.clear_loaded_media()
             self._active_source_index = 0
             self._title_source_active = False
             self._clear_undo_history()
-            self._subtitle_path = None
             self._watch_primary_subtitle_source = False
             self._property_panel.set_n3_template_lyrics_directory(None)
-            self._video_path = None
-            self._video_info = None
-            self._background_source = None
-            self._audio_path = None
-            self._audio_info = None
             self._sync_audio_action_enabled()
             # 歌词列表回空态
             self._lyrics_panel.set_track(None)

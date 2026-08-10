@@ -47,7 +47,11 @@ from krok_helper.subtitle_render.project_store import (  # noqa: E402
     save_render_project,
     scan_recovery_projects,
 )
-from krok_helper.subtitle_render.session import SubtitleProjectSession  # noqa: E402
+from krok_helper.subtitle_render.session import (  # noqa: E402
+    ExtraSubtitleSource,
+    SubtitleProjectDocument,
+    SubtitleProjectSession,
+)
 
 
 @pytest.fixture(scope="module")
@@ -129,6 +133,38 @@ def test_project_session_snapshot_preserves_host_status_text(tmp_path):
 
     assert state.path == project
     assert state.status_text() == "song.yurika · 未保存 · 导出中 · 素材缺失 1 项"
+
+
+def test_project_document_clears_sources_without_resetting_style(tmp_path):
+    style = Style(font_size_px=144)
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("歌", 1000)])])
+    document = SubtitleProjectDocument(
+        timing_track=track,
+        extra_sources=[
+            ExtraSubtitleSource(
+                name="和声",
+                path=tmp_path / "chorus.lrc",
+                track=track,
+            )
+        ],
+        subtitle_path=tmp_path / "main.lrc",
+        video_path=tmp_path / "video.mp4",
+        background_source=BackgroundSource(kind="video", path="video.mp4"),
+        audio_path=tmp_path / "audio.wav",
+        style=style,
+    )
+
+    document.clear_loaded_media()
+
+    assert document.timing_track is None
+    assert document.extra_sources == []
+    assert document.subtitle_path is None
+    assert document.video_path is None
+    assert document.video_info is None
+    assert document.background_source is None
+    assert document.audio_path is None
+    assert document.audio_info is None
+    assert document.style is style
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():

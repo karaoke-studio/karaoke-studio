@@ -6,6 +6,44 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from krok_helper.models import MediaInfo
+from krok_helper.subtitle_render.models import BackgroundSource, Style, TimingTrack
+
+
+@dataclass
+class ExtraSubtitleSource:
+    """One secondary lyrics source, such as an N3 chorus track."""
+
+    name: str
+    path: Path
+    track: TimingTrack
+
+
+@dataclass
+class SubtitleProjectDocument:
+    """Mutable project content shared by UI, preview, and export adapters."""
+
+    timing_track: Optional[TimingTrack] = None
+    extra_sources: list[ExtraSubtitleSource] = field(default_factory=list)
+    subtitle_path: Optional[Path] = None
+    video_path: Optional[Path] = None
+    video_info: Optional[MediaInfo] = None
+    background_source: Optional[BackgroundSource] = None
+    audio_path: Optional[Path] = None
+    audio_info: Optional[MediaInfo] = None
+    style: Style = field(default_factory=Style)
+
+    def clear_loaded_media(self) -> None:
+        """Clear source material while preserving current project style."""
+        self.timing_track = None
+        self.extra_sources = []
+        self.subtitle_path = None
+        self.video_path = None
+        self.video_info = None
+        self.background_source = None
+        self.audio_path = None
+        self.audio_info = None
+
 
 @dataclass(frozen=True)
 class SubtitleProjectState:
