@@ -11,6 +11,10 @@ from types import SimpleNamespace
 from typing import Sequence
 
 from krok_helper.workflow_host import AccompanimentSink, OnVocalSink, SubtitleVideoSink, WorkflowHost
+from krok_helper.subtitle_render.contracts import (
+    SubtitleRenderPage,
+    SubtitleRenderSettingsProvider,
+)
 
 
 class _FullHost:
@@ -58,6 +62,23 @@ def test_capabilities_are_checked_one_by_one() -> None:
     assert not isinstance(host, AccompanimentSink)
     assert not isinstance(host, OnVocalSink)
     assert not isinstance(host, WorkflowHost)
+
+
+def test_subtitle_render_window_satisfies_the_host_page_contract() -> None:
+    from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
+
+    assert issubclass(SubtitleRenderWindow, SubtitleRenderPage)
+
+
+def test_subtitle_render_settings_bridge_satisfies_the_provider_contract() -> None:
+    from krok_helper.subtitle_render.settings_bridge import (
+        KrokHelperSubtitleRenderSettingsBridge,
+    )
+
+    assert issubclass(
+        KrokHelperSubtitleRenderSettingsBridge,
+        SubtitleRenderSettingsProvider,
+    )
 
 
 def test_separation_page_skips_handoff_without_a_host(monkeypatch) -> None:

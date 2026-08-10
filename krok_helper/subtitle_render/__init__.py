@@ -11,10 +11,36 @@
 
 from typing import TYPE_CHECKING, Any
 
+from krok_helper.subtitle_render.contracts import (
+    SubtitleRenderPage,
+    SubtitleRenderSettingsProvider,
+)
+
 if TYPE_CHECKING:
     from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
 
-__all__ = ["SubtitleRenderWindow"]
+__all__ = [
+    "SubtitleRenderPage",
+    "SubtitleRenderSettingsProvider",
+    "SubtitleRenderWindow",
+    "create_embedded_subtitle_render",
+]
+
+
+def create_embedded_subtitle_render(
+    parent: Any = None,
+    settings_provider: SubtitleRenderSettingsProvider | None = None,
+    workflow_context: Any = None,
+) -> SubtitleRenderPage:
+    """Create the workbench page without exposing its concrete widget class."""
+
+    from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
+
+    return SubtitleRenderWindow.for_embedding(
+        parent=parent,
+        settings_provider=settings_provider,
+        workflow_context=workflow_context,
+    )
 
 
 def __getattr__(name: str) -> Any:

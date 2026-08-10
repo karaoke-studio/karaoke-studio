@@ -676,7 +676,7 @@ class KrokHelperQtApp(QMainWindow):
         except Exception:
             pass
 
-        from krok_helper.subtitle_render import SubtitleRenderWindow
+        from krok_helper.subtitle_render import create_embedded_subtitle_render
         from krok_helper.subtitle_render.settings_bridge import (
             KrokHelperSubtitleRenderSettingsBridge,
         )
@@ -684,13 +684,13 @@ class KrokHelperQtApp(QMainWindow):
         self.subtitle_render_settings_bridge = KrokHelperSubtitleRenderSettingsBridge(
             self.settings, self._save_all_settings
         )
-        self.subtitle_render_page = SubtitleRenderWindow.for_embedding(
+        self.subtitle_render_page = create_embedded_subtitle_render(
             parent=self.page_stack,
             settings_provider=self.subtitle_render_settings_bridge,
             workflow_context=self,
         )
         try:
-            self.subtitle_render_page.projectStateChanged.connect(
+            self.subtitle_render_page.connect_project_state_changed(
                 self._on_subtitle_project_state_changed
             )
             self._on_subtitle_project_state_changed(

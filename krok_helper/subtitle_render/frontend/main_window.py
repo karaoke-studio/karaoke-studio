@@ -37,7 +37,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持模块可独立运行
@@ -2471,6 +2471,10 @@ class SubtitleRenderWindow(QWidget):
             recovery_path=recovery_path if recovery_path and recovery_path.is_file() else None,
             missing_resources=self._missing_resources,
         )
+
+    def connect_project_state_changed(self, callback: Callable[[object], Any]) -> None:
+        """Subscribe the host without leaking the concrete Qt signal contract."""
+        self.projectStateChanged.connect(callback)
 
     def has_unsaved_changes(self) -> bool:
         """Public embedding API used by the host close coordinator."""
