@@ -233,6 +233,32 @@ def test_project_document_reports_noop_and_rejects_missing_track():
     assert document.mutate_track(1, lambda _target: True) is None
 
 
+def test_project_document_captures_atomic_multi_track_mutation(tmp_path):
+    primary = TimingTrack(lines=[TimingLine(chars=[TimingChar("主", 0)])])
+    chorus = TimingTrack(lines=[TimingLine(chars=[TimingChar("和", 0)])])
+    document = SubtitleProjectDocument(
+        timing_track=primary,
+        extra_sources=[
+            ExtraSubtitleSource("和声", tmp_path / "chorus.lrc", chorus)
+        ],
+    )
+
+    mutation = document.mutate_tracks(
+        (0, 1),
+        lambda tracks: [
+            setattr(track.lines[0], "layout_index", index + 1)
+            for index, track in enumerate(tracks)
+        ],
+    )
+
+    assert mutation is not None
+    assert mutation.changed is True
+    assert mutation.track_indices == (0, 1)
+    assert [track.lines[0].layout_index for track in mutation.before] == [0, 0]
+    assert [track.lines[0].layout_index for track in mutation.after] == [1, 2]
+    assert document.mutate_tracks((0, 2), lambda _tracks: None) is None
+
+
 def test_project_document_builds_complete_ui_independent_snapshot(tmp_path):
     line = TimingLine(
         chars=[TimingChar("歌", 1000, role_label="主唱")],

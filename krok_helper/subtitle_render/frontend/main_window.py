@@ -6612,33 +6612,33 @@ class SubtitleRenderWindow(QWidget):
     def _on_layout_deleted(self, deleted_index: int) -> None:
         """布局被删除后修正歌词行引用（全部字幕源）：被删的回默认，其后的序号前移。"""
         track_indices = tuple(range(len(self._all_tracks())))
-        tracks_before = tuple(deepcopy(track) for track in self._all_tracks())
-        changed = False
-        for track in self._all_tracks():
-            if track.page_plan is not None:
-                previous_plan = deepcopy(track.page_plan)
-                track.page_plan = normalize_page_plan(track, self._style)
-                project_page_plan_to_legacy_fields(track, self._style)
-                changed |= track.page_plan != previous_plan
-                continue
-            for line in track.lines:
-                index = int(getattr(line, "layout_index", 0) or 0)
-                if index == deleted_index:
-                    line.layout_index = 0
-                    changed = True
-                elif index > deleted_index:
-                    line.layout_index = index - 1
-                    changed = True
-        if changed:
+        def repair_layout_references(tracks: tuple[TimingTrack, ...]) -> None:
+            for track in tracks:
+                if track.page_plan is not None:
+                    track.page_plan = normalize_page_plan(track, self._style)
+                    project_page_plan_to_legacy_fields(track, self._style)
+                    continue
+                for line in track.lines:
+                    index = int(getattr(line, "layout_index", 0) or 0)
+                    if index == deleted_index:
+                        line.layout_index = 0
+                    elif index > deleted_index:
+                        line.layout_index = index - 1
+
+        mutation = self._project_document.mutate_tracks(
+            track_indices,
+            repair_layout_references,
+        )
+        if mutation is not None and mutation.changed:
             top = self._undo_stack[-1] if self._undo_stack else None
             if top is not None and top[0] == "style":
                 self._undo_stack[-1] = (
                     "style_tracks",
                     top[1],
                     top[2],
-                    track_indices,
-                    tracks_before,
-                    tuple(deepcopy(track) for track in self._all_tracks()),
+                    mutation.track_indices,
+                    mutation.before,
+                    mutation.after,
                 )
             InfoBar.warning(
                 title="已替换被删除的布局",

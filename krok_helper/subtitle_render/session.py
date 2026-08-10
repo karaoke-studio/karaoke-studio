@@ -73,6 +73,20 @@ class SubtitleTrackMutation:
         return self.before != self.after
 
 
+@dataclass(frozen=True)
+class SubtitleTracksMutation:
+    """One atomic mutation spanning multiple document-owned tracks."""
+
+    track_indices: tuple[int, ...]
+    before: tuple[TimingTrack, ...]
+    after: tuple[TimingTrack, ...]
+    result: Any = None
+
+    @property
+    def changed(self) -> bool:
+        return self.before != self.after
+
+
 @dataclass
 class SubtitleProjectDocument:
     """Mutable project content shared by UI, preview, and export adapters."""
@@ -128,6 +142,28 @@ class SubtitleProjectDocument:
             track_index=int(index),
             before=before,
             after=deepcopy(track),
+            result=result,
+        )
+
+    def mutate_tracks(
+        self,
+        indices: tuple[int, ...],
+        operation: Callable[[tuple[TimingTrack, ...]], Any],
+    ) -> Optional[SubtitleTracksMutation]:
+        """Run one atomic multi-track operation with stable undo snapshots."""
+        tracks: list[TimingTrack] = []
+        for index in indices:
+            track = self.track_at(index)
+            if track is None:
+                return None
+            tracks.append(track)
+        selected = tuple(tracks)
+        before = tuple(deepcopy(track) for track in selected)
+        result = operation(selected)
+        return SubtitleTracksMutation(
+            track_indices=tuple(int(index) for index in indices),
+            before=before,
+            after=tuple(deepcopy(track) for track in selected),
             result=result,
         )
 

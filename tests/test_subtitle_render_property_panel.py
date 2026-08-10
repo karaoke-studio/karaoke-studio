@@ -90,6 +90,7 @@ from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
     RoleSchemeController,
     TitleOverlayController,
 )
+from krok_helper.subtitle_render.session import ExtraSubtitleSource  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -1107,6 +1108,53 @@ def test_layout_assignment_document_command_preserves_undo_and_dirty_state(qapp)
 
     win._redo_edit()
     assert [line.layout_index for line in win._timing_track.lines] == [1, 1]
+
+
+def test_layout_deletion_repairs_all_tracks_in_combined_style_undo(qapp, tmp_path):
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    old_style = replace(
+        win._style,
+        layouts=[LyricsLayout(name="删除"), LyricsLayout(name="保留")],
+    )
+    new_style = replace(old_style, layouts=[old_style.layouts[1]])
+    primary = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("主", 0)], layout_index=1)]
+    )
+    chorus = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("和", 0)], layout_index=2)]
+    )
+    win._timing_track = primary
+    win._extra_sources = [
+        ExtraSubtitleSource("和声", tmp_path / "chorus.lrc", chorus)
+    ]
+    win._style = new_style
+    win._undo_stack = [
+        (
+            "style",
+            style_to_dict(old_style),
+            style_to_dict(new_style),
+            frozenset({"layouts"}),
+            0.0,
+        )
+    ]
+
+    win._on_layout_deleted(1)
+
+    assert win._undo_stack[-1][0] == "style_tracks"
+    assert win._timing_track.lines[0].layout_index == 0
+    assert win._extra_sources[0].track.lines[0].layout_index == 1
+
+    win._undo_edit()
+    assert [layout.name for layout in win._style.layouts[:2]] == ["删除", "保留"]
+    assert win._timing_track.lines[0].layout_index == 1
+    assert win._extra_sources[0].track.lines[0].layout_index == 2
+
+    win._redo_edit()
+    assert win._style.layouts[0].name == "保留"
+    assert "删除" not in {layout.name for layout in win._style.layouts}
+    assert win._timing_track.lines[0].layout_index == 0
+    assert win._extra_sources[0].track.lines[0].layout_index == 1
 
 
 def _font_migration_catalog() -> N3FontCatalog:
