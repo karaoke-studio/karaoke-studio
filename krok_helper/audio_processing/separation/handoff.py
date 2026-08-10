@@ -107,7 +107,7 @@ class AccompanimentHandoffDialog(ModelessDialog):
 
         if self._source_audio is not None:
             layout.addSpacing(6)
-            source_hint = BodyLabel("这次用来分离的原始音频就是完整混音，也可以一并作为原唱：", self)
+            source_hint = BodyLabel("这次用来分离的音频如果是最终想要使用原唱音频，也可以一并放入 Hi-Res 混流：", self)
             source_hint.setWordWrap(True)
             layout.addWidget(source_hint)
             self._source_check = CheckBox(f"原唱：{self._source_audio.name}", self)
