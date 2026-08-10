@@ -79,6 +79,10 @@ class AppSettings:
     video_download_use_aria2c: bool = True
     video_download_cookie_path: str = ""
     video_download_source: str = SOURCE_YOUTUBE
+    # 视频下载页两组 QSplitter 的像素尺寸。空列表表示用户尚未调整过，页面会使用
+    # 当前版本的紧凑默认布局。
+    video_download_main_splitter_sizes: list[int] = field(default_factory=list)
+    video_download_content_splitter_sizes: list[int] = field(default_factory=list)
     updater: dict = field(default_factory=dict)
 
     # ── 工作台界面主题 ──
@@ -258,6 +262,12 @@ def load_app_settings() -> AppSettings:
         video_download_use_aria2c=bool(payload.get("video_download_use_aria2c", True)),
         video_download_cookie_path=str(payload.get("video_download_cookie_path", "")),
         video_download_source=str(payload.get("video_download_source", SOURCE_YOUTUBE)),
+        video_download_main_splitter_sizes=_safe_splitter_sizes(
+            payload.get("video_download_main_splitter_sizes"), 2
+        ),
+        video_download_content_splitter_sizes=_safe_splitter_sizes(
+            payload.get("video_download_content_splitter_sizes"), 3
+        ),
         updater=_safe_dict(payload.get("updater")),
         ui_theme=ui_theme_raw,
         lyrics_timing=_safe_dict(payload.get("lyrics_timing")),
@@ -352,6 +362,16 @@ def _safe_dict(value: object) -> dict:
 def _safe_list(value: object) -> list:
     """Return ``value`` if it's a list, otherwise an empty list."""
     return value if isinstance(value, list) else []
+
+
+def _safe_splitter_sizes(value: object, expected_count: int) -> list[int]:
+    """Return a valid persisted QSplitter size list, or the default marker."""
+    if not isinstance(value, (list, tuple)) or len(value) != expected_count:
+        return []
+    if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in value):
+        return []
+    sizes = [int(item) for item in value]
+    return sizes if sum(sizes) > 0 else []
 
 
 # ════════════════════════════════════════════════════════════════════

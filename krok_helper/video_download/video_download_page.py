@@ -110,9 +110,10 @@ DEFAULT_CUSTOM_TEMPLATE = "{title}"
 CONCURRENT_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 TIMEOUT_OPTIONS = tuple(str(value) for value in TIMEOUT_CHOICES)
 RETRY_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
-VIDEO_DETAILS_CARD_HEIGHT = 340
 # 「视频信息与下载设置」折叠后仅保留标题栏；另外两个面板严格复用此高度。
 VIDEO_INFO_COLLAPSED_HEIGHT = 64
+DEFAULT_MAIN_SPLITTER_SIZES = (320, 1100)
+SPLITTER_SAVE_DELAY_MS = 300
 DOWNLOAD_TABLE_ROW_HEIGHT = 44
 DOWNLOAD_TABLE_ACTION_COLUMN = 6
 DOWNLOAD_PROGRESS_REFRESH_MS = 100
@@ -776,8 +777,19 @@ class VideoDownloadPage(QWidget):
         self._panel_collapse_buttons: dict[str, ToolButton] = {}
         self._panel_last_expanded_sizes: dict[str, int] = {}
         self._collapsed_panels: set[str] = set()
+        self._splitter_sizes_restored = False
+        self._splitter_save_timer = QTimer(self)
+        self._splitter_save_timer.setSingleShot(True)
+        self._splitter_save_timer.setInterval(SPLITTER_SAVE_DELAY_MS)
+        self._splitter_save_timer.timeout.connect(self._flush_splitter_settings)
 
         self._build_ui()
+        self.main_splitter.splitterMoved.connect(
+            lambda _position, _index: self._remember_splitter_sizes("main")
+        )
+        self.content_splitter.splitterMoved.connect(
+            lambda _position, _index: self._remember_splitter_sizes("content")
+        )
         self._load_settings()
         self._refresh_cookie_status()
         self._refresh_youtube_cookie_status()
@@ -806,7 +818,7 @@ class VideoDownloadPage(QWidget):
         self.main_splitter.addWidget(center_panel)
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
-        self.main_splitter.setSizes([320, 1100])
+        self.main_splitter.setSizes(list(DEFAULT_MAIN_SPLITTER_SIZES))
         root.addWidget(self.main_splitter, 1)
 
     @staticmethod
@@ -1037,7 +1049,8 @@ class VideoDownloadPage(QWidget):
         self.content_splitter.setStretchFactor(0, 1)
         self.content_splitter.setStretchFactor(1, 2)
         self.content_splitter.setStretchFactor(2, 2)
-        self.content_splitter.setSizes([170, VIDEO_DETAILS_CARD_HEIGHT, 300])
+        # 首次显示后会按卡片的真实 minimumSizeHint 应用紧凑默认高度。
+        self.content_splitter.setSizes([1, 1, 1])
         self._register_collapsible_panel(
             "input",
             input_card,
@@ -1067,6 +1080,63 @@ class VideoDownloadPage(QWidget):
         self._refresh_panel_collapse_buttons()
         layout.addWidget(self.content_splitter, 1)
         return panel
+
+    @staticmethod
+    def _saved_splitter_sizes(value: object, expected_count: int) -> list[int] | None:
+        if not isinstance(value, (list, tuple)) or len(value) != expected_count:
+            return None
+        if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in value):
+            return None
+        sizes = [int(item) for item in value]
+        return sizes if sum(sizes) > 0 else None
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._splitter_sizes_restored:
+            return
+        self._splitter_sizes_restored = True
+        # 等页面得到最终可用尺寸后再恢复，否则构造期的临时尺寸会按比例缩放保存值。
+        QTimer.singleShot(0, self._restore_splitter_sizes)
+
+    def _restore_splitter_sizes(self) -> None:
+        main_sizes = self._saved_splitter_sizes(
+            getattr(self.settings, "video_download_main_splitter_sizes", None), 2
+        )
+        content_sizes = self._saved_splitter_sizes(
+            getattr(self.settings, "video_download_content_splitter_sizes", None), 3
+        )
+        self.main_splitter.setSizes(main_sizes or list(DEFAULT_MAIN_SPLITTER_SIZES))
+        self.content_splitter.setSizes(
+            content_sizes or self._compact_default_content_sizes()
+        )
+
+    def _compact_default_content_sizes(self) -> list[int]:
+        """Minimize the first two cards and give the remaining height to downloads."""
+        cards = [self.content_splitter.widget(index) for index in range(3)]
+        minimums = [card.minimumSizeHint().height() for card in cards]
+        available = sum(self.content_splitter.sizes())
+        if available <= sum(minimums):
+            return minimums
+        return [minimums[0], minimums[1], available - minimums[0] - minimums[1]]
+
+    def _remember_splitter_sizes(self, splitter_name: str) -> None:
+        if splitter_name == "main":
+            self.settings.video_download_main_splitter_sizes = self.main_splitter.sizes()
+        elif splitter_name == "content":
+            # 折叠状态是临时视图状态；不要用 64px 的折叠高度覆盖用户拖好的展开高度。
+            if self._collapsed_panels:
+                return
+            self.settings.video_download_content_splitter_sizes = self.content_splitter.sizes()
+        else:
+            return
+        self._splitter_save_timer.start()
+
+    def _flush_splitter_settings(self) -> None:
+        try:
+            self._save_settings()
+            self.settingsChanged.emit()
+        except Exception:
+            log.warning("保存视频下载页区域尺寸失败", exc_info=True)
 
     def _create_panel_collapse_button(self, panel_key: str) -> ToolButton:
         button = ToolButton(FIF.UP)

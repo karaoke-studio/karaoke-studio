@@ -17,7 +17,10 @@ import pytest
 from PyQt6.QtWidgets import QApplication, QToolButton
 
 from krok_helper.settings import AppSettings
-from krok_helper.video_download.video_download_page import VideoDownloadPage
+from krok_helper.video_download.video_download_page import (
+    SPLITTER_SAVE_DELAY_MS,
+    VideoDownloadPage,
+)
 
 PANEL_KEYS = ("input", "info", "download")
 
@@ -85,6 +88,74 @@ def test_the_download_table_keeps_a_header_and_a_row(page) -> None:
     header = page.download_table.horizontalHeader().sizeHint().height()
     assert page.download_table.minimumHeight() > header
     assert page.download_table.height() > header
+
+
+def test_new_users_get_compact_top_cards_by_default(page) -> None:
+    cards = _cards(page)
+
+    assert cards[0].height() == cards[0].minimumSizeHint().height()
+    assert cards[1].height() == cards[1].minimumSizeHint().height()
+    assert cards[2].height() > cards[2].minimumSizeHint().height()
+
+
+def test_saved_region_sizes_are_restored_after_show(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(VideoDownloadPage, "_refresh_cookie_status", lambda _self: None)
+    monkeypatch.setattr(VideoDownloadPage, "_refresh_youtube_cookie_status", lambda _self: None)
+    monkeypatch.setattr(VideoDownloadPage, "_ensure_qr_login", lambda _self: None)
+    original = VideoDownloadPage(AppSettings(), lambda: None)
+    original.resize(1400, 1000)
+    original.show()
+    app.processEvents()
+    main_available = sum(original.main_splitter.sizes())
+    content_available = sum(original.content_splitter.sizes())
+    expected_main = [280, main_available - 280]
+    expected_content = [190, 360, content_available - 550]
+    original.main_splitter.setSizes(expected_main)
+    original.content_splitter.setSizes(expected_content)
+    app.processEvents()
+    settings = AppSettings(
+        video_download_main_splitter_sizes=original.main_splitter.sizes(),
+        video_download_content_splitter_sizes=original.content_splitter.sizes(),
+    )
+    original.close()
+    original.deleteLater()
+    app.processEvents()
+
+    restored = VideoDownloadPage(settings, lambda: None)
+    restored.resize(1400, 1000)
+    restored.show()
+    app.processEvents()
+    try:
+        assert restored.main_splitter.sizes() == expected_main
+        assert restored.content_splitter.sizes() == expected_content
+    finally:
+        restored.close()
+        restored.deleteLater()
+        app.processEvents()
+
+
+def test_dragged_region_sizes_are_saved_with_debounce(page, qtbot) -> None:
+    saved: list[tuple[list[int], list[int]]] = []
+    page._save_settings = lambda: saved.append(
+        (
+            page.settings.video_download_main_splitter_sizes.copy(),
+            page.settings.video_download_content_splitter_sizes.copy(),
+        )
+    )
+
+    page.main_splitter.splitterMoved.emit(300, 1)
+    page.content_splitter.splitterMoved.emit(200, 1)
+
+    assert page.settings.video_download_main_splitter_sizes == page.main_splitter.sizes()
+    assert page.settings.video_download_content_splitter_sizes == page.content_splitter.sizes()
+    qtbot.wait(SPLITTER_SAVE_DELAY_MS + 50)
+    assert saved == [
+        (
+            page.main_splitter.sizes(),
+            page.content_splitter.sizes(),
+        )
+    ]
 
 
 def test_icon_only_buttons_are_tool_buttons(page) -> None:

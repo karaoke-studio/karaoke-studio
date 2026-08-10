@@ -15,6 +15,8 @@ def test_save_and_load_yields_equal_settings(tmp_path, monkeypatch) -> None:
         video_download_concurrent_count=4,
         video_download_timeout=10,
         video_download_retry_count=5,
+        video_download_main_splitter_sizes=[288, 1096],
+        video_download_content_splitter_sizes=[176, 352, 310],
     )
 
     save_app_settings(settings)
@@ -38,6 +40,8 @@ def test_save_includes_video_download_fields(tmp_path, monkeypatch) -> None:
         "video_download_retry_count",
         "video_download_merge_video_audio",
         "video_download_download_thumbnail",
+        "video_download_main_splitter_sizes",
+        "video_download_content_splitter_sizes",
     }
     assert expected_keys <= payload.keys()
 
@@ -73,6 +77,27 @@ def test_load_with_unknown_keys_doesnt_crash(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("krok_helper.settings.get_settings_path", lambda: settings_path)
 
     assert load_app_settings().video_download_save_dir == "D:/Downloads"
+
+
+def test_invalid_video_download_splitter_sizes_fall_back_to_new_defaults(
+    tmp_path, monkeypatch
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "video_download_main_splitter_sizes": [320],
+                "video_download_content_splitter_sizes": [176, -1, 300],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("krok_helper.settings.get_settings_path", lambda: settings_path)
+
+    settings = load_app_settings()
+
+    assert settings.video_download_main_splitter_sizes == []
+    assert settings.video_download_content_splitter_sizes == []
 
 
 def test_load_falls_back_to_legacy_karaoke_helper_settings(tmp_path, monkeypatch) -> None:
