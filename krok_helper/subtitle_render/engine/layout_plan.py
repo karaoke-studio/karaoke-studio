@@ -24,6 +24,9 @@ class LineLayoutPlan:
     page_index: int = -1
     page_line_count: int = 0
     section_index: int = -1
+    display_page_index: int = -1
+    display_page_line_count: int = 0
+    display_section_index: int = -1
     lane: int = 0
     layout_lane: int = 0
     display_start_ms: int | None = None

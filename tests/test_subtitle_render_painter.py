@@ -2850,6 +2850,91 @@ def test_paint_frame_default_dual_line_layout_renders_next_line(qapp):
     assert _pixel_hash(img_single) != _pixel_hash(img_dual)
 
 
+@pytest.mark.parametrize("layout_semantics", ["legacy", "n3_1074"])
+def test_dual_line_cpu_visibility_is_projected_from_shared_layout_plan(
+    qapp,
+    monkeypatch,
+    layout_semantics,
+):
+    clear_before_layer_cache()
+    track = _two_line_track()
+    style = Style(layout_semantics=layout_semantics, dual_line_layout=True)
+    expected = _visible_lines_for_style(
+        track,
+        1_600,
+        style,
+        logical_w=640,
+        logical_h=360,
+    )
+    original = subtitle_painter.build_track_layout_plan
+    calls = []
+
+    def build_plan(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "build_track_layout_plan", build_plan)
+    _track_t_ms, _display_style, actual, _signals, _title = (
+        subtitle_painter._resolve_visible_content(
+            track,
+            1_600,
+            style,
+            logical_w=640,
+            logical_h=360,
+        )
+    )
+
+    assert len(calls) == 1
+    assert [
+        (
+            item.line,
+            item.lane,
+            item.display_start_ms,
+            item.display_end_ms,
+            item.section_index,
+            item.page_index,
+            item.page_line_count,
+        )
+        for item in actual
+    ] == [
+        (
+            item.line,
+            item.lane,
+            item.display_start_ms,
+            item.display_end_ms,
+            item.section_index,
+            item.page_index,
+            item.page_line_count,
+        )
+        for item in expected
+    ]
+
+
+def test_shared_track_layout_plan_cache_reuses_and_invalidates_mutable_inputs(qapp):
+    clear_before_layer_cache()
+    track = _two_line_track()
+    style = Style(dual_line_layout=True)
+
+    first = subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    )
+    again = subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    )
+
+    assert again is first
+    assert first.lines[0].display_section_index == 0
+    assert first.lines[0].display_page_index == 0
+
+    style.line_tail_ms += 100
+    changed = subtitle_painter.build_track_layout_plan(
+        track, style, logical_w=640, logical_h=360
+    )
+
+    assert changed is not first
+    assert changed.lines[0].display_end_ms != first.lines[0].display_end_ms
+
+
 def test_dual_line_baselines_stay_fixed_when_lower_line_disappears(qapp):
     track = _two_line_track()
     style = Style()

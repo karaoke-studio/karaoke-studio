@@ -97,6 +97,10 @@ _DISPLAY_LINES_CACHE_MAX = 24
 _DISPLAY_LINES_CACHE: (
     "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
 ) = OrderedDict()
+_TRACK_LAYOUT_PLAN_CACHE_MAX = 24
+_TRACK_LAYOUT_PLAN_CACHE: (
+    "OrderedDict[tuple, tuple[TimingTrack, Style, TrackLayoutPlan]]"
+) = OrderedDict()
 _LAYOUT_PASS = thread_local()
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
@@ -445,6 +449,7 @@ def clear_before_layer_cache() -> None:
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
     _DISPLAY_LINES_CACHE.clear()
+    _TRACK_LAYOUT_PLAN_CACHE.clear()
     _PAGE_PLACEMENT_CACHE.clear()
 
 
@@ -645,13 +650,25 @@ def _resolve_visible_content(
     """
     track_t_ms = _effective_track_time_ms(track, t_ms, style)
     display_style = _display_style_for_signal_window(style)
-    display_lines = _visible_lines_for_style(
-        track,
-        track_t_ms,
-        display_style,
-        logical_w=logical_w,
-        logical_h=logical_h,
-    )
+    if display_style.dual_line_layout:
+        layout_plan = build_track_layout_plan(
+            track,
+            display_style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
+        display_lines = _visible_lines_from_layout_plan(layout_plan, track_t_ms)
+    else:
+        # Single-line mode deliberately selects one best live/lead/tail line
+        # when authored windows overlap; that policy is frame-dependent and is
+        # kept separate from the frame-independent track plan.
+        display_lines = _visible_lines_for_style(
+            track,
+            track_t_ms,
+            display_style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
     signal_lines = _signal_display_lines_for_style(
         track,
         track_t_ms,
@@ -4968,6 +4985,28 @@ def _visible_lines_for_style(
     return [display_line]
 
 
+def _visible_lines_from_layout_plan(
+    plan: TrackLayoutPlan,
+    t_ms: int,
+) -> list[DisplayLine]:
+    """Project the immutable track plan into the frame's Painter lines."""
+    return [
+        DisplayLine(
+            line=item.line,
+            lane=item.lane,
+            display_start_ms=item.display_start_ms,
+            display_end_ms=item.display_end_ms,
+            section_index=item.display_section_index,
+            page_index=item.display_page_index,
+            page_line_count=item.display_page_line_count,
+        )
+        for item in plan.lines
+        if item.display_start_ms is not None
+        and item.display_end_ms is not None
+        and item.display_start_ms <= t_ms < item.display_end_ms
+    ]
+
+
 def display_windows_for_style(
     track: TimingTrack,
     style: Style,
@@ -5053,13 +5092,45 @@ def build_track_layout_plan(
     logical_h: int | None = None,
 ) -> TrackLayoutPlan:
     """Resolve frame-independent line semantics once for CPU/GPU consumers."""
-    display_style = _display_style_for_signal_window(style)
-    schedule = display_schedule_for_style(
-        track,
-        display_style,
-        logical_w=logical_w,
-        logical_h=logical_h,
+    cache_key = (
+        logical_w,
+        logical_h,
+        id(track),
+        _value_signature(track),
+        _value_signature(style),
     )
+    if _layout_cache_enabled():
+        cached = _TRACK_LAYOUT_PLAN_CACHE.get(cache_key)
+        if cached is not None:
+            _TRACK_LAYOUT_PLAN_CACHE.move_to_end(cache_key)
+            return cached[2]
+
+    display_style = _display_style_for_signal_window(style)
+    display_items: list[DisplayLine] = []
+    index_of = {id(line): index for index, line in enumerate(track.lines)}
+    if display_style.dual_line_layout:
+        display_items = _display_lines_for_style(
+            track,
+            display_style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
+        schedule = {
+            index_of[id(item.line)]: (
+                int(item.lane),
+                int(item.display_start_ms),
+                int(item.display_end_ms),
+            )
+            for item in display_items
+            if id(item.line) in index_of
+        }
+    else:
+        schedule = display_schedule_for_style(
+            track,
+            display_style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
     page_offset_windows = (
         resolved_page_offset_windows_for_style(
             max(int(logical_w), 1),
@@ -5152,9 +5223,29 @@ def build_track_layout_plan(
                     0,
                 )
 
+    display_page_metadata = {
+        index_of[id(item.line)]: (
+            int(item.page_index),
+            int(item.page_line_count),
+            int(item.section_index),
+        )
+        for item in display_items
+        if id(item.line) in index_of
+    }
+
     plans = []
     for index, line in enumerate(track.lines):
         lane, display_start, display_end = schedule.get(index, (0, None, None))
+        display_page_index, display_page_line_count, display_section_index = (
+            display_page_metadata.get(
+                index,
+                (
+                    page_indices.get(index, -1),
+                    page_line_counts.get(index, 0),
+                    section_indices.get(index, -1),
+                ),
+            )
+        )
         plans.append(
             LineLayoutPlan(
                 track_index=index,
@@ -5167,6 +5258,9 @@ def build_track_layout_plan(
                 page_index=page_indices.get(index, -1),
                 page_line_count=page_line_counts.get(index, 0),
                 section_index=section_indices.get(index, -1),
+                display_page_index=display_page_index,
+                display_page_line_count=display_page_line_count,
+                display_section_index=display_section_index,
                 lane=lane,
                 layout_lane=authored_lanes.get(index, lane),
                 display_start_ms=display_start,
@@ -5175,12 +5269,20 @@ def build_track_layout_plan(
                 layout_offset_windows=tuple(page_offset_windows.get(index, ())),
             )
         )
-    return TrackLayoutPlan(
+    plan = TrackLayoutPlan(
         layout_semantics=style.layout_semantics,
         logical_width=logical_w,
         logical_height=logical_h,
         lines=tuple(plans),
     )
+    if _layout_cache_enabled():
+        # Retain the owners alongside the plan: the key intentionally uses the
+        # track identity so equal mutable tracks never share TimingLine objects.
+        _TRACK_LAYOUT_PLAN_CACHE[cache_key] = (track, style, plan)
+        _TRACK_LAYOUT_PLAN_CACHE.move_to_end(cache_key)
+        while len(_TRACK_LAYOUT_PLAN_CACHE) > _TRACK_LAYOUT_PLAN_CACHE_MAX:
+            _TRACK_LAYOUT_PLAN_CACHE.popitem(last=False)
+    return plan
 
 
 def _single_visible_display_line(
