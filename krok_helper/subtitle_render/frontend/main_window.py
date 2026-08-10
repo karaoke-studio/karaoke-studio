@@ -249,6 +249,7 @@ from krok_helper.subtitle_render.preferences import (
     app_default_style_to_dict,
     load_app_style_preferences,
     merge_common_style_preferences,
+    update_app_output_preferences,
 )
 from krok_helper.subtitle_render.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
@@ -8129,40 +8130,24 @@ class SubtitleRenderWindow(QWidget):
             "discarded_retention_days": DISCARDED_BACKUP_RETENTION_DAYS,
         }
         if hasattr(self, "_export_native_check"):
-            output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
-            output["native_export_enabled"] = False
-            output["gpu_preview_enabled"] = bool(
-                self._gpu_preview_check.isChecked()
-            )
-            output["gpu_preview_default_version"] = GPU_PREVIEW_DEFAULT_VERSION
-            output["preview_quality"] = self._transport_bar.preview_quality()
-            output["gpu_export_enabled"] = bool(
-                self._gpu_export_check.isChecked()
-            )
-            output["gpu_export_default_version"] = GPU_EXPORT_DEFAULT_VERSION
-            output["directory_mode"] = self._export_dir_mode
-            output["custom_directory"] = self._export_custom_dir
-            output["name_template"] = self._export_name_template
             local_output = self._local_output_preferences
-            output["encoder_mode"] = str(
-                local_output.get("encoder_mode") or ENCODER_CPU
+            data["output"] = update_app_output_preferences(
+                data.get("output"),
+                gpu_preview_enabled=self._gpu_preview_check.isChecked(),
+                gpu_preview_default_version=GPU_PREVIEW_DEFAULT_VERSION,
+                preview_quality=self._transport_bar.preview_quality(),
+                gpu_export_enabled=self._gpu_export_check.isChecked(),
+                gpu_export_default_version=GPU_EXPORT_DEFAULT_VERSION,
+                directory_mode=self._export_dir_mode,
+                custom_directory=self._export_custom_dir,
+                name_template=self._export_name_template,
+                encoder_mode=str(local_output.get("encoder_mode") or ENCODER_CPU),
+                codec=str(local_output.get("codec") or CODEC_H264),
+                preset=str(local_output.get("preset") or "medium"),
+                crf=local_output.get("crf", 18),
+                render_workers=local_output.get("render_workers", 0),
+                allowed_render_workers=RENDER_WORKER_OPTIONS,
             )
-            output["codec"] = str(local_output.get("codec") or CODEC_H264)
-            output["preset"] = str(local_output.get("preset") or "medium")
-            local_crf = local_output.get("crf", 18)
-            output["crf"] = (
-                int(local_crf)
-                if isinstance(local_crf, int) and 0 <= local_crf <= 51
-                else 18
-            )
-            local_workers = local_output.get("render_workers", 0)
-            output["render_workers"] = (
-                int(local_workers)
-                if isinstance(local_workers, int)
-                and local_workers in RENDER_WORKER_OPTIONS
-                else 0
-            )
-            data["output"] = output
         try:
             if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
                 self._settings_provider.save(data)

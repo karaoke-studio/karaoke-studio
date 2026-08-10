@@ -50,6 +50,19 @@ APP_STYLE_EXPLICIT_DEFAULT_FIELDS = (
     | FONT_DEFAULT_STYLE_FIELDS
     | PROJECT_ONLY_STYLE_FIELDS
 )
+APP_LOCAL_ONLY_OUTPUT_FIELDS = frozenset(
+    {
+        "gpu_preview_enabled",
+        "gpu_preview_default_version",
+        "preview_quality",
+        "gpu_export_enabled",
+        "gpu_export_default_version",
+        "directory_mode",
+        "custom_directory",
+        "name_template",
+        "render_workers",
+    }
+)
 TITLE_FADE_FIELDS = (
     "fade_in_ms",
     "fade_out_ms",
@@ -190,3 +203,49 @@ def app_default_style_to_dict(style: Style) -> dict:
     payload = style_to_dict(style)
     payload.pop("title_overlay", None)
     return payload
+
+
+def update_app_output_preferences(
+    existing: object,
+    *,
+    gpu_preview_enabled: bool,
+    gpu_preview_default_version: int,
+    preview_quality: str,
+    gpu_export_enabled: bool,
+    gpu_export_default_version: int,
+    directory_mode: str,
+    custom_directory: str,
+    name_template: str,
+    encoder_mode: str,
+    codec: str,
+    preset: str,
+    crf: object,
+    render_workers: object,
+    allowed_render_workers: tuple[int, ...],
+) -> dict:
+    """Return the app-local output settings while preserving unknown keys."""
+    output = dict(existing) if isinstance(existing, dict) else {}
+    output.update(
+        {
+            "native_export_enabled": False,
+            "gpu_preview_enabled": bool(gpu_preview_enabled),
+            "gpu_preview_default_version": int(gpu_preview_default_version),
+            "preview_quality": str(preview_quality),
+            "gpu_export_enabled": bool(gpu_export_enabled),
+            "gpu_export_default_version": int(gpu_export_default_version),
+            "directory_mode": str(directory_mode),
+            "custom_directory": str(custom_directory),
+            "name_template": str(name_template),
+            "encoder_mode": str(encoder_mode),
+            "codec": str(codec),
+            "preset": str(preset),
+            "crf": int(crf) if isinstance(crf, int) and 0 <= crf <= 51 else 18,
+            "render_workers": (
+                int(render_workers)
+                if isinstance(render_workers, int)
+                and render_workers in allowed_render_workers
+                else 0
+            ),
+        }
+    )
+    return output

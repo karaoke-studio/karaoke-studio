@@ -37,9 +37,11 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     style_to_dict,
 )
 from krok_helper.subtitle_render.preferences import (  # noqa: E402
+    APP_LOCAL_ONLY_OUTPUT_FIELDS,
     app_default_style_to_dict,
     load_app_style_preferences,
     merge_common_style_preferences,
+    update_app_output_preferences,
 )
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
@@ -303,6 +305,42 @@ def test_app_style_preferences_load_title_habits_without_project_content():
     assert loaded.style.singer_style_overrides == {}
     assert loaded.layout_assignment == {"mode": "auto"}
     assert loaded.changed is True
+
+
+def test_app_output_preferences_are_separate_from_project_output_fields():
+    output = update_app_output_preferences(
+        {"future_key": "preserved"},
+        gpu_preview_enabled=True,
+        gpu_preview_default_version=2,
+        preview_quality="balanced",
+        gpu_export_enabled=False,
+        gpu_export_default_version=1,
+        directory_mode="custom",
+        custom_directory="D:/exports",
+        name_template="{source_name}",
+        encoder_mode="nvenc",
+        codec="hevc",
+        preset="slow",
+        crf=99,
+        render_workers=7,
+        allowed_render_workers=(0, 4, 8),
+    )
+
+    assert output["future_key"] == "preserved"
+    assert output["gpu_preview_enabled"] is True
+    assert output["gpu_export_enabled"] is False
+    assert output["directory_mode"] == "custom"
+    assert output["crf"] == 18
+    assert output["render_workers"] == 0
+    project_output = {
+        "encoder_mode": "nvenc",
+        "codec": "hevc",
+        "preset": "slow",
+        "crf": 18,
+        "output_path": "song.mp4",
+        "native_export_enabled": False,
+    }
+    assert APP_LOCAL_ONLY_OUTPUT_FIELDS.isdisjoint(project_output)
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
