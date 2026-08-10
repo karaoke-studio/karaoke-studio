@@ -126,6 +126,72 @@ def test_native_renderer_process_owner_cleans_failed_start():
     assert events == ["start", "close"]
 
 
+def test_native_renderer_process_owner_replaces_exited_process():
+    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+
+    instances = []
+
+    class FakeProcess:
+        def __init__(self):
+            self.is_running = False
+            self.closed = False
+            instances.append(self)
+
+        def start(self):
+            self.is_running = True
+
+        def close(self):
+            self.closed = True
+            self.is_running = False
+
+    owner = NativeRendererProcessOwner(FakeProcess)
+    exited = owner.ensure()
+    exited.is_running = False
+
+    replacement = owner.ensure()
+
+    assert replacement is not exited
+    assert exited.closed is True
+    assert replacement.is_running is True
+    assert len(instances) == 2
+    owner.close()
+
+
+def test_native_renderer_process_owner_serializes_concurrent_start():
+    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+
+    instances = []
+
+    class SlowProcess:
+        def __init__(self):
+            self.is_running = False
+            instances.append(self)
+
+        def start(self):
+            time.sleep(0.02)
+            self.is_running = True
+
+        def close(self):
+            self.is_running = False
+
+    owner = NativeRendererProcessOwner(SlowProcess)
+    results = []
+
+    threads = [
+        threading.Thread(target=lambda: results.append(owner.ensure()))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1.0)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(instances) == 1
+    assert results == [instances[0]] * 4
+    owner.close()
+
+
 def test_preview_surfaces_do_not_draw_frame_border(qapp):
     canvas = PreviewCanvas()
     try:

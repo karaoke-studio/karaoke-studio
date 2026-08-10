@@ -728,6 +728,7 @@ class NativeRendererProcess:
         process = self._process
         if process is None:
             return
+        pipe_threads = list(self._pipe_threads)
         try:
             if process.poll() is None:
                 self._send({"cmd": "shutdown"})
@@ -746,6 +747,9 @@ class NativeRendererProcess:
             else:
                 process.wait(timeout=0)
             self._process = None
+            for thread in pipe_threads:
+                if thread is not threading.current_thread():
+                    thread.join(timeout=self.close_timeout_s)
             self._pipe_threads.clear()
 
     def __enter__(self) -> "NativeRendererProcess":
@@ -1283,33 +1287,44 @@ class NativeRendererProcessOwner:
     ``process_factory`` keeps tests and alternate launchers injectable.
     """
 
-    def __init__(self, process_factory=NativeRendererProcess, **process_kwargs: Any) -> None:
+    def __init__(
+        self,
+        process_factory=NativeRendererProcess,
+        **process_kwargs: Any,
+    ) -> None:
         self._process_factory = process_factory
         self._process_kwargs = dict(process_kwargs)
         self._process: NativeRendererProcess | None = None
+        self._lock = threading.RLock()
 
     @property
     def process(self) -> NativeRendererProcess | None:
-        return self._process
+        with self._lock:
+            return self._process
 
     def ensure(self) -> NativeRendererProcess:
-        process = self._process
-        if process is not None:
+        with self._lock:
+            process = self._process
+            if process is not None and bool(getattr(process, "is_running", True)):
+                return process
+            if process is not None:
+                self._process = None
+                process.close()
+            process = self._process_factory(**self._process_kwargs)
+            try:
+                process.start()
+            except BaseException:
+                process.close()
+                raise
+            self._process = process
             return process
-        process = self._process_factory(**self._process_kwargs)
-        try:
-            process.start()
-        except BaseException:
-            process.close()
-            raise
-        self._process = process
-        return process
 
     def close(self) -> None:
-        process = self._process
-        self._process = None
-        if process is not None:
-            process.close()
+        with self._lock:
+            process = self._process
+            self._process = None
+            if process is not None:
+                process.close()
 
     def restart(self) -> NativeRendererProcess:
         self.close()
