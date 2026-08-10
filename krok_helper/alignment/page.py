@@ -190,6 +190,23 @@ class AlignmentPage(QWidget):
     def refresh_media_info(self) -> None:
         self._refresh_media_info_labels()
 
+    def trigger_export(self) -> None:
+        """走一次导出（Ctrl+S 用）。
+
+        跟 :meth:`stop_preview` 同一笔账：外壳原先直接调自己身上的
+        ``_start_aligned_export``，方法跟着页面搬走之后，在对齐页按 Ctrl+S 就是
+        AttributeError。导出本身的前置检查在 ``_start_aligned_export`` 里。
+        """
+        self._start_aligned_export()
+
+    def stop_preview(self) -> None:
+        """停掉正在播放的对齐预览（离开本页、关窗、强退更新前都要叫一次）。
+
+        外壳原先是直接调 ``self._stop_alignment_preview()`` 的 —— 那是它自己身上
+        的方法，跟着页面搬走之后就成了空调用，预览会在切页之后继续响。
+        """
+        self._stop_alignment_preview(log_message=False)
+
     def rerender_after_theme_change(self) -> None:
         self._refresh_alignment_material_inputs()
         self._apply_alignment_mode_styles()

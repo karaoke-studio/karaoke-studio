@@ -721,16 +721,19 @@ class KrokHelperQtApp(QMainWindow):
         if module_id not in self.module_pages:
             return
         previous_module = self.active_module
+        # 离开波形对齐页就把预览停掉。这一段原先查的是外壳自己的
+        # ``align_preview_process`` —— 页面搬走之后它恒为 None，条件永远不成立，
+        # 切到别的步骤后 ffplay 会一直响。
+        align_page = getattr(self, "align_page", None)
         if (
             previous_module == WORKFLOW_WAVEFORM_ALIGN
             and module_id != WORKFLOW_WAVEFORM_ALIGN
-            and getattr(self, "align_preview_process", None) is not None
-            and self.align_preview_process.is_running()
+            and align_page is not None
         ):
-            self._stop_alignment_preview()
+            align_page.stop_preview()
         self.active_module = module_id
         # 旧页快照必须抢在 setCurrentWidget 之前拍 —— 之后它就被 stack 隐藏了。
-        # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
+        # getattr 容忍测试里的 SimpleNamespace 假 app
         capture_outgoing = getattr(self, "_capture_outgoing_page", None)
         outgoing = capture_outgoing(previous_module, module_id) if capture_outgoing is not None else None
         self._sync_page_stack_margins(module_id)
@@ -749,7 +752,7 @@ class KrokHelperQtApp(QMainWindow):
         必须在 ``setCurrentWidget`` 之前调用。返回 ``None`` 表示这次切换不做
         动画（窗口没显示、没有上一页、或前后是同一页）。
         """
-        # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
+        # getattr 容忍测试里的 SimpleNamespace 假 app
         if not getattr(self, "isVisible", lambda: False)():
             return None
         previous_page = self.module_pages.get(previous_module) if previous_module else None
@@ -1270,7 +1273,9 @@ class KrokHelperQtApp(QMainWindow):
             return
         if self.active_module != WORKFLOW_WAVEFORM_ALIGN or self._focused_widget_is_text_input():
             return
-        self._start_aligned_export()
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.trigger_export()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if (
@@ -1704,10 +1709,9 @@ class KrokHelperQtApp(QMainWindow):
             return
         self._update_exit_prepared = True
 
-        try:
-            self._stop_alignment_preview(log_message=False)
-        except Exception:
-            pass
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.stop_preview()
         if not self._shutdown_audio_separation(timeout_ms=3000):
             logging.getLogger(__name__).warning(
                 "更新强制退出前停止 PyMSS 服务失败"
@@ -1769,7 +1773,9 @@ class KrokHelperQtApp(QMainWindow):
         ):
             event.ignore()
             return
-        self._stop_alignment_preview(log_message=False)
+        align_page = getattr(self, "align_page", None)
+        if align_page is not None:
+            align_page.stop_preview()
         if not self._shutdown_project_modules(event):
             return
         if not self._shutdown_audio_separation():

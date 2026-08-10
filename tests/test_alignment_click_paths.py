@@ -192,3 +192,36 @@ def test_auto_align_completion_lands_on_the_page(swept) -> None:
     assert not crashes, f"自动对齐收尾炸了：{crashes[0]}"
     assert "置信度 93%" in page.align_status_label.text()
     assert abs(page.waveform_view.offset_seconds - 1.234) < 1e-6
+
+
+def test_the_shell_can_stop_the_preview(swept) -> None:
+    """离开本页 / 关窗 / 强退更新时，外壳要停得掉预览。
+
+    外壳原先调的是自己身上的 ``_stop_alignment_preview`` —— 跟着页面搬走之后
+    那句是空调用，切到别的步骤 ffplay 会一直响。
+    """
+    page, crashes, _, prime = swept
+    prime()
+    page.align_preview_button.click()
+    assert page.align_preview_process is not None, "预览没起来，这条测不到东西"
+
+    page.stop_preview()
+
+    assert not crashes, f"停预览炸了：{crashes[0]}"
+    assert page.align_preview_process is None
+
+
+def test_the_shell_can_trigger_the_export(swept, monkeypatch, tmp_path) -> None:
+    """Ctrl+S 走的就是这条 —— 以前外壳调的是搬走了的 ``_start_aligned_export``。"""
+    from PyQt6.QtWidgets import QFileDialog
+
+    page, crashes, _, prime = swept
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(tmp_path / "out.mp4"), ""))
+    )
+    prime()
+
+    page.trigger_export()
+
+    assert not crashes, f"触发导出炸了：{crashes[0]}"
+    assert page.align_export_task is not None
