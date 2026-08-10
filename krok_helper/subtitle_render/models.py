@@ -974,6 +974,30 @@ def migrate_legacy_app_title_default(style: "Style") -> "Style":
     return replace(style, custom_style_schemes=schemes)
 
 
+@dataclass(frozen=True)
+class StyleTimingConfig:
+    """Nested timing/animation view over the legacy flat :class:`Style`."""
+
+    line_lead_in_ms: int
+    line_tail_ms: int
+    line_protect_ms: int
+    timing_offset_ms: int
+    ruby_main_progress_mode: RubyMainProgressMode
+    line_lane_gap_ms: int
+    section_gap_ms: int
+    sync_entry: bool
+    sync_ending: bool
+    section_ending_mode: SectionEndingMode
+    entry_anim: EntryAnimation
+    entry_lead_ms: int
+    exit_anim: ExitAnimation
+    exit_fade_ms: int
+    karaoke_anim: KaraokeAnimation
+
+
+_STYLE_TIMING_FIELDS = tuple(field.name for field in fields(StyleTimingConfig))
+
+
 @dataclass
 class Style:
     """字幕样式（A4 / A5 / A6 实装的纯色 + 横书き子集）。
@@ -1294,6 +1318,30 @@ class Style:
     # 标题字幕 overlay（B7）。None = 用默认（关闭）。
     title_overlay: Optional[TitleOverlay] = None
 
+    @property
+    def timing(self) -> StyleTimingConfig:
+        """Return a typed timing view without changing legacy field storage."""
+        return StyleTimingConfig(
+            **{name: getattr(self, name) for name in _STYLE_TIMING_FIELDS}
+        )
+
+    def with_timing(
+        self,
+        timing: Optional[StyleTimingConfig] = None,
+        **changes: object,
+    ) -> "Style":
+        """Return a style with timing changes while preserving flat-field APIs."""
+        unknown = set(changes) - set(_STYLE_TIMING_FIELDS)
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise TypeError(f"unsupported timing field(s): {names}")
+        values = {
+            name: getattr(timing if timing is not None else self, name)
+            for name in _STYLE_TIMING_FIELDS
+        }
+        values.update(changes)
+        return replace(self, **values)
+
 
 def style_with_line_animation(style: Style, line: TimingLine) -> Style:
     """把逐行动画覆盖套到样式上；其他视觉与布局字段保持不变。"""
@@ -1311,16 +1359,21 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
         # 若把 "inherit" 写进行样式，effective_karaoke_animation 会转而去看这一行
         # 被覆盖后的入退场——全局显式设的 utopia 就这么丢了。
         changes["karaoke_anim"] = override.karaoke_anim
-    return replace(style, **changes)
+    return style.with_timing(**changes)
 
 
 def effective_karaoke_animation(style: Style) -> Literal["none", "utopia"]:
     """Resolve the singing animation while preserving legacy Utopia projects."""
-    if style.karaoke_anim == "utopia":
+    timing = style.timing
+    if timing.karaoke_anim == "utopia":
         return "utopia"
-    if style.karaoke_anim == "none":
+    if timing.karaoke_anim == "none":
         return "none"
-    return "utopia" if "utopia" in {style.entry_anim, style.exit_anim} else "none"
+    return (
+        "utopia"
+        if "utopia" in {timing.entry_anim, timing.exit_anim}
+        else "none"
+    )
 
 
 @dataclass

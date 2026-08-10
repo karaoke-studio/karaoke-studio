@@ -4454,27 +4454,28 @@ class PropertyPanel(QWidget):
             )
             self._refresh_layout_combo()
             self._sync_layout_editor_controls()
-            self._line_lead_spin.setValue(self._style.line_lead_in_ms)
-            self._line_tail_spin.setValue(self._style.line_tail_ms)
-            self._line_offset_spin.setValue(self._style.timing_offset_ms)
+            timing = self._style.timing
+            self._line_lead_spin.setValue(timing.line_lead_in_ms)
+            self._line_tail_spin.setValue(timing.line_tail_ms)
+            self._line_offset_spin.setValue(timing.timing_offset_ms)
             self._ruby_main_reading_units_check.setChecked(
                 self._style.ruby_main_progress_mode == "reading_units"
             )
-            self._section_gap_spin.setValue(self._style.section_gap_ms)
-            self._lane_gap_spin.setValue(self._style.line_lane_gap_ms)
+            self._section_gap_spin.setValue(timing.section_gap_ms)
+            self._lane_gap_spin.setValue(timing.line_lane_gap_ms)
             self._section_ending_combo.setCurrentIndex(
-                max(0, self._section_ending_combo.findData(self._style.section_ending_mode))
+                max(0, self._section_ending_combo.findData(timing.section_ending_mode))
             )
-            self._sync_entry_check.setChecked(self._style.sync_entry)
-            self._sync_ending_check.setChecked(self._style.sync_ending)
+            self._sync_entry_check.setChecked(timing.sync_entry)
+            self._sync_ending_check.setChecked(timing.sync_ending)
             self._entry_anim_combo.setCurrentIndex(
-                max(0, self._entry_anim_combo.findData(self._style.entry_anim))
+                max(0, self._entry_anim_combo.findData(timing.entry_anim))
             )
-            self._entry_lead_spin.setValue(self._style.entry_lead_ms)
+            self._entry_lead_spin.setValue(timing.entry_lead_ms)
             self._exit_anim_combo.setCurrentIndex(
-                max(0, self._exit_anim_combo.findData(self._style.exit_anim))
+                max(0, self._exit_anim_combo.findData(timing.exit_anim))
             )
-            self._exit_fade_spin.setValue(self._style.exit_fade_ms)
+            self._exit_fade_spin.setValue(timing.exit_fade_ms)
             self._karaoke_anim_combo.setCurrentIndex(
                 max(
                     0,

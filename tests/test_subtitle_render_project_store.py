@@ -25,6 +25,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
     LineAnimationOverride,
     Style,
+    StyleTimingConfig,
     StylePreset,
     SubtitleStyleScheme,
     TITLE_SCHEME_NAME,
@@ -341,6 +342,36 @@ def test_app_output_preferences_are_separate_from_project_output_fields():
         "native_export_enabled": False,
     }
     assert APP_LOCAL_ONLY_OUTPUT_FIELDS.isdisjoint(project_output)
+
+
+def test_style_timing_nested_view_preserves_flat_and_project_compatibility():
+    style = Style(
+        line_lead_in_ms=1800,
+        section_gap_ms=4000,
+        entry_anim="fade",
+        exit_anim="slide_out",
+    )
+
+    timing = style.timing
+    assert isinstance(timing, StyleTimingConfig)
+    assert timing.line_lead_in_ms == style.line_lead_in_ms
+    assert timing.entry_anim == style.entry_anim
+
+    updated = style.with_timing(
+        replace(timing, section_gap_ms=5200),
+        entry_lead_ms=450,
+    )
+    assert updated.section_gap_ms == 5200
+    assert updated.entry_lead_ms == 450
+    assert updated.font_size_px == style.font_size_px
+
+    payload = style_to_dict(updated)
+    assert "timing" not in payload
+    assert payload["section_gap_ms"] == 5200
+    restored = style_from_dict(payload)
+    assert restored.timing == updated.timing
+    with pytest.raises(TypeError, match="unsupported timing field"):
+        style.with_timing(font_size_px=123)
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
