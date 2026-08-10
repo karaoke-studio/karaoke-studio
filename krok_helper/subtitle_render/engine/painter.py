@@ -12581,6 +12581,24 @@ def _ruby_target_indices(
     return time_indices
 
 
+def _ruby_owns_line(ruby: RubyAnnotation, line: TimingLine) -> bool:
+    """Whether ``ruby`` was resolved against this very line.
+
+    Harmony and lead lines can overlap in time, so ``pos_start_ms`` /
+    ``pos_end_ms`` alone cannot say which line an annotation belongs to: if both
+    lines happen to carry the same character at the same index, the other line's
+    ruby lands here too.  Loaders record the owning line, and this only vetoes
+    when both sides know their index -- a hand-built track keeps the historical
+    time-based behaviour.
+    """
+
+    return (
+        ruby.target_line_index is None
+        or line.track_line_index is None
+        or ruby.target_line_index == line.track_line_index
+    )
+
+
 def _ruby_explicit_target_indices(
     ruby: RubyAnnotation,
     line: TimingLine,
@@ -14436,6 +14454,7 @@ def _active_rubies_for_line_uncached(
         ruby
         for ruby in rubies
         if ruby.reading
+        and _ruby_owns_line(ruby, line)
         and (
             _ruby_has_global_position(ruby)
             or (

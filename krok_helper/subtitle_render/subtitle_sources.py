@@ -323,6 +323,9 @@ def _parse_body_lines(lines: Iterable[str]) -> list[TimingLine]:
             if line.singer_label not in singer_ids:
                 singer_ids[line.singer_label] = len(singer_ids)
             line.singer_id = singer_ids[line.singer_label]
+        # Ruby annotations resolve their owning line by this index; see
+        # TimingLine.track_line_index.
+        line.track_line_index = len(timing_lines)
         timing_lines.append(line)
     _normalize_cross_line_anchors(timing_lines)
     return timing_lines
@@ -794,7 +797,7 @@ def _resolve_positioned_rubies(
     resolved: list[tuple[int, RubyAnnotation]] = []
     matched_orders: set[int] = set()
 
-    for line in lines:
+    for line_index, line in enumerate(lines):
         if not line.chars:
             continue
         intervals = compute_char_intervals(line)
@@ -854,6 +857,7 @@ def _resolve_positioned_rubies(
                         entry.ruby,
                         pos_start_ms=group_start,
                         pos_end_ms=group_end,
+                        target_line_index=line_index,
                         target_char_start=index,
                         target_char_end=index + span,
                     ),

@@ -102,6 +102,8 @@ struct TimingLine {
     int singerId = -1;
     int sourceIndex = 0;
     int sourceLineIndex = 0;
+    // Loader-stamped identity from TimingLine.track_line_index; -1 = unknown.
+    int trackLineIndex = -1;
     int pageIndex = -1;
     int pageLineCount = 0;
     int sourceOffsetMs = 0;
@@ -131,8 +133,10 @@ struct RubyAnnotation {
     int posEndMs = 0;
     int sourceIndex = 0;
     int sourceOffsetMs = 0;
-    // Loader-resolved, line-local, half-open target range; -1 = unresolved, in
-    // which case the historical text search runs (see rubyTargetIndices).
+    // Loader-resolved owning line plus the line-local, half-open target range;
+    // -1 = unresolved, in which case the historical text search runs (see
+    // rubyTargetIndices) and no line ownership is enforced.
+    int targetLineIndex = -1;
     int targetCharStart = -1;
     int targetCharEnd = -1;
 };
@@ -2414,6 +2418,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.singerId = intValue(lineObject, QStringLiteral("singer_id"), -1);
             line.sourceIndex = static_cast<int>(sourceIndex);
             line.sourceLineIndex = sourceLineIndex;
+            line.trackLineIndex = intValue(
+                lineObject, QStringLiteral("track_line_index"), -1
+            );
             line.pageIndex = intValue(lineObject, QStringLiteral("page_index"), -1);
             line.pageLineCount = std::max(
                 0, intValue(lineObject, QStringLiteral("page_line_count"), 0)
@@ -2658,6 +2665,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             }
             ruby.posStartMs = intValue(rubyObject, QStringLiteral("pos_start_ms"), 0);
             ruby.posEndMs = intValue(rubyObject, QStringLiteral("pos_end_ms"), 0);
+            ruby.targetLineIndex = intValue(
+                rubyObject, QStringLiteral("target_line_index"), -1
+            );
             ruby.targetCharStart = intValue(
                 rubyObject, QStringLiteral("target_char_start"), -1
             );
@@ -7730,6 +7740,15 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         std::vector<bool> rubyMainWipeAssigned(line.chars.size(), false);
         for (const RubyAnnotation &sourceRuby : config.rubies) {
             if (sourceRuby.sourceIndex != sourceLine.sourceIndex) {
+                continue;
+            }
+            // Harmony and lead lines can overlap in time, so the window below
+            // cannot tell which line an annotation belongs to; if both lines
+            // carry the same character at the same index the other line's ruby
+            // would land here too.  Mirrors Painter's _ruby_owns_line.
+            if (sourceRuby.targetLineIndex >= 0
+                && sourceLine.trackLineIndex >= 0
+                && sourceRuby.targetLineIndex != sourceLine.trackLineIndex) {
                 continue;
             }
             const bool globalPosition = sourceRuby.posStartMs == 0 && sourceRuby.posEndMs == 0;

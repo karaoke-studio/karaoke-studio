@@ -238,6 +238,12 @@ def timing_line_to_ir(
         "singer_label": line.singer_label,
         "singer_id": line.singer_id,
         "is_blank": bool(line.is_blank),
+        # Loader-stamped line identity; -1 when unknown.  Ruby ownership is
+        # compared against this, not the IR array position, so a caller that
+        # builds a sub-track (single line, extra subtitle source) still matches.
+        "track_line_index": (
+            -1 if line.track_line_index is None else int(line.track_line_index)
+        ),
         "page_index": int(page_index),
         # 页内可渲染行数：Bottom 锚定的短页要从对齐列表末尾往回取（N3
         # ``CalcHorizontalAlignment``），native 侧靠这个值复现同一档对齐。
@@ -317,6 +323,9 @@ def ruby_to_ir(ruby: RubyAnnotation) -> dict[str, Any]:
         "pos_end_ms": int(ruby.pos_end_ms),
         # Loader-resolved target; -1 means "not resolved, search by text" so the
         # sidecar keeps Painter's fallback for projects saved before this field.
+        "target_line_index": (
+            -1 if ruby.target_line_index is None else int(ruby.target_line_index)
+        ),
         "target_char_start": (
             -1 if ruby.target_char_start is None else int(ruby.target_char_start)
         ),

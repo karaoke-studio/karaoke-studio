@@ -183,6 +183,13 @@ class TimingLine:
     """解析阶段分配的稳定歌手序号。仅用于配色覆盖，不参与布局。"""
     is_blank: bool = False
     """是否是用户主动留的空行（无任何字符 / 时间戳 / 标签）。"""
+    track_line_index: Optional[int] = None
+    """本行在 ``TimingTrack.lines`` 中的下标，由加载器写入。
+
+    只用于把 ``RubyAnnotation.target_line_index`` 对回来：多轨时间重叠时，仅靠
+    注音的 ``pos_*`` 无法判定它属于哪一行。手工构造的 track 留 ``None``，此时
+    不做行归属否决，行为与历史一致。
+    """
     layout_index: int = 0
     """该行使用的布局（N3 ``LayoutIndex``）：0 = 默认布局（``Style`` 自身字段），
     k >= 1 = ``Style.layouts[k-1]``。由 UI 按页联动写入，随项目文件持久化
@@ -272,6 +279,7 @@ class RubyAnnotation:
     - ``reading_part_ms``：mora 时间戳序列（毫秒，与原始 ``[t]`` 数量相同）
     - ``reading_parts``：被内嵌时间戳分开的原始读音 part；连续时间戳会保留空 part
     - ``pos_start_ms`` / ``pos_end_ms``：本条注音在歌曲时间轴上的生效区间
+    - ``target_line_index``：目标所在行在 ``TimingTrack.lines`` 中的下标
     - ``target_char_start`` / ``target_char_end``：目标正文字符的**行内**半开区间
 
     ``target_*`` 是加载时定死的权威目标。``.sug`` 的逐字注音本来就带精确索引，
@@ -279,7 +287,12 @@ class RubyAnnotation:
     这两个字段后，渲染侧不再需要按 ``kanji`` 回头做文本搜索——那套搜索只能返回
     一个出现，同一基字在一行内重复时（``ケロケロケロ…``）会把全部注音叠到第一个
     出现上，长短基字重叠时（``呼`` 与 ``呼吸``）又会两条都画出来。
-    ``None`` 表示旧数据，此时回落到历史的文本 + 时间匹配。
+
+    ``target_line_index`` 解决另一半问题：多轨（主唱 / 和声）时间重叠时，只靠
+    ``pos_*`` 时间窗无法判定注音属于哪一行；若两行恰好在同一下标是同一个字，
+    另一行的注音就会被一起画上去。有了行下标就是事实而非推断。
+
+    三者均为 ``None`` 表示旧数据，此时回落到历史的文本 + 时间匹配。
     """
 
     kanji: str
@@ -288,6 +301,7 @@ class RubyAnnotation:
     pos_start_ms: int = 0
     pos_end_ms: int = 0
     reading_parts: list[str] = field(default_factory=list)
+    target_line_index: Optional[int] = None
     target_char_start: Optional[int] = None
     target_char_end: Optional[int] = None
 

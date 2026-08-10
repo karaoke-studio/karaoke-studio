@@ -71,7 +71,14 @@ def timing_track_from_sug_project(
     for sentence_index, sentence in enumerate(sentences):
         chars = list(getattr(sentence, "characters", []) or [])
         if _is_blank_sentence(chars):
-            lines.append(TimingLine(is_blank=True, singer_label=None, singer_id=None))
+            lines.append(
+                TimingLine(
+                    is_blank=True,
+                    singer_label=None,
+                    singer_id=None,
+                    track_line_index=len(lines),
+                )
+            )
             continue
 
         line_chars: list[TimingChar] = []
@@ -106,6 +113,9 @@ def timing_track_from_sug_project(
                 project,
                 sentence_index,
                 ruby_pause_texts,
+                # The line this sentence is about to occupy.  Blank sentences
+                # append a placeholder line too, so this stays in step.
+                line_index=len(lines),
             )
         )
         lines.append(
@@ -115,6 +125,7 @@ def timing_track_from_sug_project(
                 singer_label=line_singer_label,
                 singer_id=line_singer_index,
                 is_blank=not line_chars,
+                track_line_index=len(lines),
             )
         )
 
@@ -287,6 +298,8 @@ def _ruby_annotations_for_sentence(
     project: Any,
     sentence_index: int,
     ruby_pause_texts: tuple[str, ...],
+    *,
+    line_index: int,
 ) -> list[RubyAnnotation]:
     result: list[RubyAnnotation] = []
     index = 0
@@ -310,6 +323,7 @@ def _ruby_annotations_for_sentence(
             project,
             sentence_index,
             ruby_pause_texts,
+            line_index=line_index,
         )
         if ruby is not None:
             result.append(ruby)
@@ -324,6 +338,8 @@ def _ruby_annotation_for_group(
     project: Any,
     sentence_index: int,
     ruby_pause_texts: tuple[str, ...],
+    *,
+    line_index: int,
 ) -> RubyAnnotation | None:
     group_chars = chars[start:end]
     start_ms = _first_timestamp(group_chars[0], offset_ms)
@@ -355,9 +371,11 @@ def _ruby_annotation_for_group(
         pos_start_ms=start_ms,
         pos_end_ms=end_ms,
         reading_parts=reading_parts,
-        # ``.sug`` stores ruby per character, so the group bounds are exact.
-        # Keeping them is what stops a line like ケロケロケロ… from stacking
-        # every け on the first ケ once the renderer has to guess by text.
+        # ``.sug`` stores ruby per character, so the line and group bounds are
+        # exact.  Keeping them is what stops a line like ケロケロケロ… from
+        # stacking every け on the first ケ once the renderer has to guess by
+        # text, and stops an overlapping harmony line's ruby from landing here.
+        target_line_index=line_index,
         target_char_start=start,
         target_char_end=end,
     )

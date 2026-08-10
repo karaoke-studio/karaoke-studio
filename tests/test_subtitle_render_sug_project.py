@@ -680,3 +680,81 @@ def test_sug_per_character_ruby_keeps_its_own_target(tmp_path):
         (4, 5, "け"),
         (5, 6, "ろ"),
     ]
+
+
+def test_overlapping_lines_keep_their_own_ruby(tmp_path):
+    """A harmony line's ruby must not land on the lead line it overlaps.
+
+    Both sentences carry 空 at index 1 and the harmony line's span sits inside
+    the lead line's, so matching by ``pos_start_ms`` / ``pos_end_ms`` alone lets
+    the harmony annotation resolve onto the lead line as well -- the lead's 空
+    then renders 「そら」 twice.
+    """
+
+    import json
+
+    from krok_helper.subtitle_render.engine import painter as subtitle_painter
+    from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+    from krok_helper.subtitle_render.sug_project import load_sug_timing_track
+
+    def char(text, ts, *, ruby=None, end=None):
+        return {
+            "char": text,
+            "check_count": 1,
+            "timestamps": [ts],
+            "sentence_end_ts": end,
+            "linked_to_next": False,
+            "ruby": {"parts": [{"text": ruby, "offset_ms": 0}]} if ruby else None,
+        }
+
+    payload = {
+        "version": "0.3.0",
+        "metadata": {"title": "", "artist": ""},
+        "audio_duration_ms": 20_000,
+        "singers": [
+            {"id": "lead", "name": "lead", "is_default": True},
+            {"id": "harmony", "name": "harmony", "is_default": False},
+        ],
+        "sentences": [
+            {
+                "id": "lead-line",
+                "singer_id": "lead",
+                # Spans 1000..9000, i.e. right across the harmony line below.
+                "characters": [
+                    char("て", 1_000),
+                    char("空", 2_000, ruby="そ"),
+                    char("へ", 8_000, end=9_000),
+                ],
+            },
+            {
+                "id": "harmony-line",
+                "singer_id": "harmony",
+                "characters": [
+                    char("に", 4_000),
+                    char("空", 5_000, ruby="く"),
+                    char("の", 6_000, end=7_000),
+                ],
+            },
+        ],
+        "global_offset_ms": 0,
+    }
+    path = tmp_path / "overlap.sug"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    track = load_sug_timing_track(path)
+
+    assert [
+        (ruby.target_line_index, ruby.target_char_start, ruby.reading)
+        for ruby in track.rubies
+    ] == [(0, 1, "そ"), (1, 1, "く")]
+
+    for line_index, expected in ((0, ["そ"]), (1, ["く"])):
+        line = track.lines[line_index]
+        intervals = compute_char_intervals(line)
+        active = subtitle_painter._active_rubies_for_line(track.rubies, line)
+        readings = [
+            ruby.reading
+            for ruby in active
+            if 1 in subtitle_painter._ruby_target_indices(ruby, line, intervals)
+        ]
+        assert readings == expected, (line_index, readings)
