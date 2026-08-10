@@ -1054,6 +1054,8 @@ class LyricsPanel(DropPanel):
     guideSymbolImportRequested = Signal(list)
     guideSymbolRemoveRequested = Signal(list)
     guidePrefixReplaceRequested = Signal()
+    #: 右键「自动识别和声…」——整源操作，不带行号。
+    autoChorusRequested = Signal()
     titleEditRequested = Signal()
     """标题模式打开逐字符编辑器前，请宿主把动态模板固定为当前实际文字。"""
     animationOverrideRequested = Signal(list, object)
@@ -2386,6 +2388,13 @@ class LyricsPanel(DropPanel):
             )
             role_menu.addAction(action)
         menu.addMenu(role_menu)
+        if not self._title_mode:
+            auto_chorus_action = Action("自动识别和声…", menu)
+            auto_chorus_action.setToolTip("按括号把和声部分整源分配到一个角色方案")
+            auto_chorus_action.triggered.connect(
+                lambda _checked=False: self.autoChorusRequested.emit()
+            )
+            menu.addAction(auto_chorus_action)
         menu.addSeparator()
         if not self._title_mode:
             effect_action = Action("设置所选行特效…", menu)

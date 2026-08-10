@@ -245,6 +245,13 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     normalize_scheme_font_families,
     normalize_style_font_families,
 )
+from krok_helper.subtitle_render.auto_chorus import (
+    DEFAULT_CHORUS_BEGIN_CHARS,
+    DEFAULT_CHORUS_END_CHARS,
+    apply_chorus_roles,
+    pick_chorus_role,
+)
+from krok_helper.subtitle_render.frontend.auto_chorus_dialog import AutoChorusDialog
 from krok_helper.subtitle_render.n3proj_import import (
     N3_PROJECT_FILE_SUFFIX,
     N3_PROJECT_FILTER,
@@ -1961,6 +1968,11 @@ class SubtitleRenderWindow(QWidget):
         self._app_default_style: Style = Style()
         self._subtitle_loading_defaults = SubtitleLoadingSettings()
         self._style_presets: dict[str, StylePreset] = {}
+        #: 「自动识别和声」的上次选择（app 级偏好，随 subtitle_render 命名空间落盘）。
+        self._auto_chorus_role = ""
+        self._auto_chorus_begin_chars = DEFAULT_CHORUS_BEGIN_CHARS
+        self._auto_chorus_end_chars = DEFAULT_CHORUS_END_CHARS
+        self._auto_chorus_overwrite = False
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
         self._layout_assignment_preference: Optional[dict[str, object]] = None
@@ -3690,6 +3702,9 @@ class SubtitleRenderWindow(QWidget):
         )
         self._lyrics_panel.guideSymbolRemoveRequested.connect(
             self._on_guide_symbol_remove_requested
+        )
+        self._lyrics_panel.autoChorusRequested.connect(
+            self._on_auto_chorus_requested
         )
         self._lyrics_panel.guidePrefixReplaceRequested.connect(
             self._on_guide_prefix_replace_requested
@@ -7086,6 +7101,114 @@ class SubtitleRenderWindow(QWidget):
         new_path = next(iter(current))
         return old_path.startswith(new_path + ".") or new_path.startswith(old_path + ".")
 
+    def _on_auto_chorus_requested(self) -> None:
+        """右键「自动识别和声…」：整个歌词源按括号分配角色。"""
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        role_options = self._content_role_options()
+        dialog = AutoChorusDialog(
+            role_options=role_options,
+            selected_role=(
+                self._auto_chorus_role
+                if self._auto_chorus_role in role_options
+                else pick_chorus_role(role_options) if role_options else ""
+            ),
+            begin_chars=self._auto_chorus_begin_chars,
+            end_chars=self._auto_chorus_end_chars,
+            overwrite=self._auto_chorus_overwrite,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        role = dialog.selected_role().strip() or pick_chorus_role(role_options)
+        self._auto_chorus_role = role
+        self._auto_chorus_begin_chars = dialog.begin_chars()
+        self._auto_chorus_end_chars = dialog.end_chars()
+        self._auto_chorus_overwrite = dialog.overwrite()
+        self._schedule_persisted_state_save()
+
+        changed_rows = self._apply_auto_chorus_roles(
+            track,
+            role=role,
+            begin_chars=self._auto_chorus_begin_chars,
+            end_chars=self._auto_chorus_end_chars,
+            overwrite=self._auto_chorus_overwrite,
+        )
+        if not changed_rows:
+            fluent_info(
+                self,
+                "没有找到和声",
+                "整个歌词源里没有成对的起止字符，或者括号里的字符都已经分配过角色。",
+            )
+            return
+        InfoBar.success(
+            title="已识别和声",
+            content=f"{len(changed_rows)} 行的括号内容已分配到「{role}」。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
+
+    def _apply_auto_chorus_roles(
+        self,
+        track: TimingTrack,
+        *,
+        role: str,
+        begin_chars: str,
+        end_chars: str,
+        overwrite: bool,
+    ) -> tuple[int, ...]:
+        """整源写回；**整批只入一条撤销**，否则撤销要按几十次。
+
+        不动 ``line.guide_symbol``：导唱符是行首的引导标记，不属于括号里的和声段。
+        """
+        track_index = self._active_source_index
+        rows: list[int] = []
+        old_values: list[tuple] = []
+        new_values: list[tuple] = []
+        for row, line in enumerate(track.lines):
+            if line.is_blank or not line.chars:
+                continue
+            current = [ch.role_label for ch in line.chars]
+            updated = apply_chorus_roles(
+                [ch.text for ch in line.chars],
+                current,
+                role,
+                begin_chars=begin_chars,
+                end_chars=end_chars,
+                overwrite=overwrite,
+            )
+            if tuple(updated) == tuple(current):
+                continue
+            rows.append(row)
+            old_values.append(tuple(current))
+            new_values.append(tuple(updated))
+        if not rows:
+            return ()
+        for row, labels in zip(rows, new_values):
+            for ch, label in zip(track.lines[row].chars, labels):
+                ch.role_label = label
+        self._materialize_role_schemes({role})
+        # 全新的角色名要靠 set_roles → _ensure_role_schemes 才会真的建出配色方案，
+        # 不建 painter 解析不到、颜色不会变。它会另外留一条 style 撤销记录（"新建了
+        # 一个配色方案"本来就该能单独撤销），排在角色那条前面，所以第一次撤销撤的
+        # 仍然是角色分配。
+        self._property_panel.set_roles(self._content_role_options())
+        self._undo_stack.append(
+            (
+                "char_roles_batch",
+                track_index,
+                tuple(rows),
+                tuple(old_values),
+                tuple(new_values),
+            )
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_role_labels_changed(tuple(rows))
+        return tuple(rows)
+
     def _on_guide_prefix_replace_requested(self) -> None:
         track = self._active_track()
         if track is None or self._title_source_active:
@@ -7808,6 +7931,17 @@ class SubtitleRenderWindow(QWidget):
             self._layout_assignment_preference = deepcopy(assignment)
         else:
             self._layout_assignment_preference = None
+        auto_chorus = data.get("auto_chorus")
+        if isinstance(auto_chorus, dict):
+            self._auto_chorus_role = str(auto_chorus.get("role") or "")
+            # 空串会让识别永远命中不了任何东西，读到空就退回默认。
+            self._auto_chorus_begin_chars = (
+                str(auto_chorus.get("begin_chars") or "") or DEFAULT_CHORUS_BEGIN_CHARS
+            )
+            self._auto_chorus_end_chars = (
+                str(auto_chorus.get("end_chars") or "") or DEFAULT_CHORUS_END_CHARS
+            )
+            self._auto_chorus_overwrite = bool(auto_chorus.get("overwrite"))
         loaded_presets = _style_presets_from_dict(data.get("style_presets"))
         self._style_presets = {}
         presets_changed = False
@@ -7930,6 +8064,12 @@ class SubtitleRenderWindow(QWidget):
             self._subtitle_loading_defaults
         )
         data["style_presets"] = _style_presets_to_dict(self._style_presets)
+        data["auto_chorus"] = {
+            "role": self._auto_chorus_role,
+            "begin_chars": self._auto_chorus_begin_chars,
+            "end_chars": self._auto_chorus_end_chars,
+            "overwrite": bool(self._auto_chorus_overwrite),
+        }
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = (
             self._selected_scheme_key
