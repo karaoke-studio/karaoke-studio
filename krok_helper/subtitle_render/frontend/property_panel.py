@@ -121,17 +121,16 @@ from krok_helper.subtitle_render.models import (
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
-    TITLE_SHOW_MODES,
     TitleOverlay,
     effective_karaoke_animation,
     layout_display_name,
-    migrate_title_char_role_labels,
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
 from krok_helper.subtitle_render.property_controllers import (
     LayoutCatalogController,
     RoleSchemeController,
+    TitleOverlayController,
 )
 from krok_helper.subtitle_render.n3_template_import import (
     N3_TEMPLATE_FILTER,
@@ -4210,6 +4209,7 @@ class PropertyPanel(QWidget):
         self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
         self._role_controller = RoleSchemeController()
         self._layout_controller = LayoutCatalogController()
+        self._title_controller = TitleOverlayController()
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -5928,7 +5928,7 @@ class PropertyPanel(QWidget):
         return section
 
     def _current_title(self) -> TitleOverlay:
-        return self._style.title_overlay if self._style.title_overlay is not None else TitleOverlay()
+        return self._title_controller.current(self._style)
 
     def _on_title_enabled_toggled(self, checked: bool) -> None:
         self._update_title(enabled=checked)
@@ -5936,20 +5936,13 @@ class PropertyPanel(QWidget):
     def _on_title_text_changed(self) -> None:
         if self._syncing:
             return
-        title = self._current_title()
         new_text = self._title_text_edit.toPlainText()
-        new_title = replace(
-            title,
-            text_template=new_text,
-            char_role_labels=migrate_title_char_role_labels(
-                title.text_template,
-                title.char_role_labels,
-                new_text,
-            ),
+        self._style = self._title_controller.update(
+            self._style,
+            {"text_template": new_text},
         )
         # Keep typing responsive by coalescing the expensive host-side preview,
         # source-table, undo snapshot and settings updates.
-        self._style = replace(self._style, title_overlay=new_title)
         self._title_text_change_pending = True
         self._title_text_change_timer.start()
 
@@ -5965,18 +5958,7 @@ class PropertyPanel(QWidget):
             return
         self._title_text_change_timer.stop()
         self._title_text_change_pending = False
-        title = self._current_title()
-        if "text_template" in changes:
-            new_text = str(changes["text_template"])
-            changes["char_role_labels"] = migrate_title_char_role_labels(
-                title.text_template,
-                title.char_role_labels,
-                new_text,
-            )
-        if "show_mode" in changes and changes["show_mode"] not in TITLE_SHOW_MODES:
-            changes["show_mode"] = "whole"
-        new_title = replace(title, **changes)
-        self._style = replace(self._style, title_overlay=new_title)
+        self._style = self._title_controller.update(self._style, changes)
         self._syncing = True
         try:
             self._sync_title_controls()

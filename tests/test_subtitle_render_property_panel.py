@@ -88,6 +88,7 @@ from krok_helper.subtitle_render.n3_font_catalog import N3FontCatalog  # noqa: E
 from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
     LayoutCatalogController,
     RoleSchemeController,
+    TitleOverlayController,
 )
 
 
@@ -165,6 +166,28 @@ def test_layout_catalog_controller_preserves_inheritance_and_title_references():
     assert [layout.name for layout in deleted.layouts] == ["布局 3"]
     assert deleted.title_overlay is not None
     assert deleted.title_overlay.layout_index == 1
+
+
+def test_title_overlay_controller_migrates_roles_and_normalizes_mode():
+    controller = TitleOverlayController()
+    style = Style(
+        title_overlay=TitleOverlay(
+            text_template="AB",
+            char_role_labels=[["A角色", "B角色"]],
+            show_mode="head",
+        )
+    )
+
+    edited = controller.update(
+        style,
+        {"text_template": "ACB", "show_mode": "invalid"},
+    )
+
+    assert edited.title_overlay is not None
+    assert edited.title_overlay.text_template == "ACB"
+    assert edited.title_overlay.char_role_labels == [["A角色", None, "B角色"]]
+    assert edited.title_overlay.show_mode == "whole"
+    assert controller.current(Style()) == TitleOverlay()
 
 
 def test_property_panel_uses_fluent_checkboxes(qapp):

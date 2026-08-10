@@ -12,6 +12,9 @@ from krok_helper.subtitle_render.models import (
     Style,
     StylePreset,
     SubtitleStyleScheme,
+    TITLE_SHOW_MODES,
+    TitleOverlay,
+    migrate_title_char_role_labels,
 )
 
 
@@ -129,3 +132,29 @@ class LayoutCatalogController:
                     layout_index=title_index - 1,
                 )
         return changes
+
+
+class TitleOverlayController:
+    """Apply title-overlay edits while preserving per-character role labels."""
+
+    @staticmethod
+    def current(style: Style) -> TitleOverlay:
+        return style.title_overlay if style.title_overlay is not None else TitleOverlay()
+
+    def update(self, style: Style, changes: dict) -> Style:
+        title = self.current(style)
+        normalized = dict(changes)
+        if "text_template" in normalized:
+            new_text = str(normalized["text_template"])
+            normalized["text_template"] = new_text
+            normalized["char_role_labels"] = migrate_title_char_role_labels(
+                title.text_template,
+                title.char_role_labels,
+                new_text,
+            )
+        if (
+            "show_mode" in normalized
+            and normalized["show_mode"] not in TITLE_SHOW_MODES
+        ):
+            normalized["show_mode"] = "whole"
+        return replace(style, title_overlay=replace(title, **normalized))
