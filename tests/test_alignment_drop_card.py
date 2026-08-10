@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import FluentIcon as FIF, Theme, qconfig, setTheme
 
 from krok_helper.alignment import AlignmentDropCard
@@ -112,3 +113,68 @@ def test_action_buttons_are_fluent_widgets(card) -> None:
 
     assert isinstance(card.replace_button, PushButton)
     assert isinstance(card.remove_button, PushButton)
+
+
+LONG_NAME = "『アークナイツ：エンドフィールド』リーノEP - 『Mirairo Rider (Japanese Ver)』 [216].mp4"
+
+
+def _chip_with_long_name(card, width: int) -> str:
+    """把卡片摆成收起态、给定宽度，返回标题栏上真正显示的那行字。"""
+    card.set_path(Path("D:/tmp") / LONG_NAME)
+    card.detail_label.setText("字幕视频: 3:36.120")
+    card.set_display_mode("chip")
+    card.resize(width, 60)
+    card.show()
+    QApplication.instance().processEvents()
+    return card.title_label.text()
+
+
+def test_a_long_file_name_is_elided_but_the_duration_survives(card):
+    """收起态是「文件名 · 时长」一行，文件名长起来会把时长从右边挤没。
+
+    QLabel 是从右边截的，正好切掉时长 —— 而时长才是这一行真正要看的信息。
+    所以只截文件名，时长整段留着。
+    """
+    text = _chip_with_long_name(card, 520)
+
+    assert text.endswith("3:36.120"), f"时长被挤掉了：{text}"
+    assert "…" in text, f"文件名没截断：{text}"
+    assert len(text) < len(LONG_NAME), "截了个寂寞"
+
+
+def test_the_duration_still_survives_when_the_card_gets_narrower(card):
+    """窄到只剩几个字也不能牺牲时长。"""
+    text = _chip_with_long_name(card, 300)
+
+    assert text.endswith("3:36.120"), f"时长被挤掉了：{text}"
+
+
+def test_a_wider_card_shows_more_of_the_name(card):
+    """宽度变了要重新截 —— 布局给标签多少宽度只有排完版才知道。"""
+    narrow = _chip_with_long_name(card, 420)
+    card.resize(900, 60)
+    QApplication.instance().processEvents()
+    wide = card.title_label.text()
+
+    assert len(wide) > len(narrow), f"拉宽了却没多显示：{narrow!r} -> {wide!r}"
+    assert wide.endswith("3:36.120")
+
+
+def test_a_short_name_is_not_elided(card):
+    card.set_path(Path("D:/tmp/GO GHOST.mp4"))
+    card.detail_label.setText("字幕视频: 2:51.367")
+    card.set_display_mode("chip")
+    card.resize(520, 60)
+    card.show()
+    QApplication.instance().processEvents()
+
+    assert card.title_label.text() == "GO GHOST.mp4 · 2:51.367"
+
+
+def test_the_expanded_card_keeps_showing_the_media_label(card):
+    """展开态标题还是「字幕视频」这种固定文案，别被收起态的逻辑带跑。"""
+    card.set_path(Path("D:/tmp") / LONG_NAME)
+    card.set_display_mode("ready")
+    QApplication.instance().processEvents()
+
+    assert card.title_label.text() == "字幕视频"

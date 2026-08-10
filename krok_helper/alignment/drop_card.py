@@ -81,6 +81,9 @@ class AlignmentDropCard(CardWidget):
         self._balanced_height: int | None = None
         self._missing_text = ""
         self._media_label = media_label
+        #: 收起态标题的两半：文件名会被截断，时长整段保留。
+        self._chip_name = ""
+        self._chip_suffix = ""
         self._icon = icon
         self._default_action_text = "点击选择文件，或直接拖拽进入区域"
         self._empty_detail_text = f"{media_label}: 时长未知"
@@ -280,6 +283,26 @@ class AlignmentDropCard(CardWidget):
         self._drag_state = "idle"
         self._refresh_style()
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # 宽度变了要重截：布局给标签多少宽度只有排完版才知道。
+        self._sync_chip_title()
+
+    def _sync_chip_title(self) -> None:
+        """收起态标题：文件名按可用宽度截成 ``…``，时长完整保留。"""
+        if not self._chip_name:
+            return
+        metrics = self.title_label.fontMetrics()
+        available = max(0, self.title_label.width())
+        if available <= 0:
+            self.title_label.setText(self._chip_name + self._chip_suffix)
+            return
+        budget = available - metrics.horizontalAdvance(self._chip_suffix)
+        name = metrics.elidedText(self._chip_name, Qt.TextElideMode.ElideRight, max(budget, 0))
+        self.title_label.setText(name + self._chip_suffix)
+        # 截断以后完整文件名只能靠悬停看了。
+        self.title_label.setToolTip(self._chip_name + self._chip_suffix)
+
     def set_display_mode(self, mode: str, *, missing_text: str = "") -> None:
         self._display_mode = mode if mode in {"empty", "ready", "chip"} else "empty"
         self._missing_text = missing_text
@@ -447,17 +470,20 @@ class AlignmentDropCard(CardWidget):
         self.action_icon.setIcon(
             (FIF.UPDATE if is_selected and self._drag_state == "idle" else FIF.UP).icon()
         )
-        self.title_label.setText(
-            f"{self.path.name} · {self.detail_label.text().split(': ', 1)[-1]}"
-            if is_chip and self.path is not None
-            else self._media_label
-        )
-        if not is_chip:
+        if is_chip and self.path is not None:
+            # 收起态是「文件名 · 时长」一行。文件名长起来会把时长顶出可视区
+            # （QLabel 从右边截断，正好把时长切没），所以只截文件名、时长整段留着。
+            self._chip_name = self.path.name
+            self._chip_suffix = f" · {self.detail_label.text().split(': ', 1)[-1]}"
+        else:
+            self._chip_name = ""
+            self._chip_suffix = ""
             self.title_label.setText(self._media_label)
         self.title_label.setStyleSheet(
             f"color: {palette['accent']}; font-size: {'11.5pt' if is_chip else '16pt'}; background: transparent; border: 0;"
         )
         self.title_label.setFont(build_app_ui_font(point_size=11.5 if is_chip else 16, bold=True))
+        self._sync_chip_title()
         # 直接 setStyleSheet（不再用 _wb_th —— 本方法每次拖拽/hover 都跑，
         # 在循环里加 connect 会泄漏 listener）；颜色取当前主题 palette。
         from krok_helper.theme_workbench import palette as _wb_pal_inner
