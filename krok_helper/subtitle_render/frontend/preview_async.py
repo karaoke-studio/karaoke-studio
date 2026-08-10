@@ -1300,7 +1300,14 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._stopped = False
         self._needs_configure = True
         self._restart_renderer = False
-        self._renderer: Optional[NativeRendererProcess] = None
+        self._renderer_owner = NativeRendererProcessOwner(
+            process_factory=NativeRendererProcess,
+            response_timeout_s=2.0,
+            startup_timeout_s=5.0,
+            configure_timeout_s=10.0,
+            gpu_configure_timeout_s=30.0,
+            close_timeout_s=1.0,
+        )
         self._shm_key = ""
         self._renderer_failed = False
         self._playing = False
@@ -1433,9 +1440,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._stopped = True
             self._condition.notify_all()
         with self._process_lock:
-            if self._renderer is not None:
-                self._renderer.close()
-                self._renderer = None
+            self._renderer_owner.close()
         self._thread.join(timeout=2.0)
 
     def _run(self) -> None:
@@ -1564,11 +1569,10 @@ class NativeAsyncSubtitleRenderer(QObject):
             return
         range_started = time.monotonic()
         with self._process_lock:
-            if restart_renderer and self._renderer is not None:
-                self._renderer.close()
-                self._renderer = None
+            if restart_renderer and self._renderer_owner.process is not None:
+                self._renderer_owner.close()
                 needs_configure = True
-            renderer_was_missing = self._renderer is None
+            renderer_was_missing = self._renderer_owner.process is None
             renderer = self._ensure_renderer()
             if renderer_was_missing or needs_configure:
                 # dpr 让 native 按显示分辨率光栅化（布局仍在逻辑坐标系），
@@ -1645,24 +1649,16 @@ class NativeAsyncSubtitleRenderer(QObject):
                         self._active_generation = None
 
     def _ensure_renderer(self) -> NativeRendererProcess:
-        if self._renderer is None:
-            self._renderer = NativeRendererProcess(
-                response_timeout_s=2.0,
-                startup_timeout_s=5.0,
-                configure_timeout_s=10.0,
-                gpu_configure_timeout_s=30.0,
-                close_timeout_s=1.0,
-            )
-            self._renderer.start()
+        renderer_was_missing = self._renderer_owner.process is None
+        renderer = self._renderer_owner.ensure()
+        if renderer_was_missing:
             self._needs_configure = True
             self._shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"
-        return self._renderer
+        return renderer
 
     def _close_renderer(self) -> None:
         with self._process_lock:
-            if self._renderer is not None:
-                self._renderer.close()
-                self._renderer = None
+            self._renderer_owner.close()
 
     def _emit_python_fallback(
         self,
@@ -1774,7 +1770,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._generation += 1
         if active_generation is None:
             return
-        renderer = self._renderer
+        renderer = self._renderer_owner.process
         if renderer is None:
             return
         try:
