@@ -4607,6 +4607,8 @@ class PropertyPanel(QWidget):
                 Optional[str],
             ],
         ] = {}
+        #: 英数页上的"字号跟随上一级"勾选框（日文页没有可跟随的对象）。
+        self._font_size_follow_checks: dict[tuple[str, str], CheckBox] = {}
         for subject, script in (
             ("main", "japanese"),
             ("main", "latin"),
@@ -4830,6 +4832,23 @@ class PropertyPanel(QWidget):
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
 
+        # 英数字号本来就有"0 = 跟随上一级"的语义，但它藏在一个数字里，改了日文
+        # 字号还得记得回来把英数也改一遍。这里把它摆成一个勾选框，且默认勾上。
+        follow_label = {
+            ("main", "latin"): "字号跟随主文字日文",
+            ("ruby", "latin"): "字号跟随注音日文",
+        }.get((subject, script))
+        if follow_label is not None:
+            follow_check = CheckBox(follow_label, page)
+            follow_check.setChecked(True)
+            follow_check.setToolTip("勾选后，改日文字号时英数字号跟着一起变。")
+            follow_check.toggled.connect(
+                lambda checked, current_slot=slot:
+                self._on_font_size_follow_toggled(current_slot, checked)
+            )
+            self._font_size_follow_checks[slot] = follow_check
+            layout.addWidget(follow_check)
+
         stroke_row = QWidget(page)
         stroke_layout = QGridLayout(stroke_row)
         stroke_layout.setContentsMargins(0, 0, 0, 0)
@@ -4853,6 +4872,43 @@ class PropertyPanel(QWidget):
             stroke_layout.setColumnStretch(column, 1)
         layout.addWidget(stroke_row)
         return page
+
+    #: 英数字号跟随谁：勾选框字段 -> (写回的字段名, 被跟随的字段名)。
+    _FONT_SIZE_FOLLOW_FIELDS = {
+        ("main", "latin"): ("latin_font_size_px", "font_size_px"),
+        ("ruby", "latin"): ("ruby_latin_font_size_px", "ruby_font_size_px"),
+    }
+
+    def _on_font_size_follow_toggled(self, slot: tuple[str, str], checked: bool) -> None:
+        if self._syncing:
+            return
+        field, source_field = self._FONT_SIZE_FOLLOW_FIELDS[slot]
+        # 取消跟随时把当前**实际生效**的字号写死，外观不跳变 —— 和注音配色那个
+        # 跟随勾选框同一个套路。
+        value = None if checked else int(self._scheme_value(source_field))
+        if slot[0] == "ruby":
+            self._update_ruby_font_override(**{field: value})
+        else:
+            self._update_style(**{field: value})
+
+    def _sync_font_size_follow_controls(self) -> None:
+        """勾选框与字号输入框跟着方案走：``None`` = 跟随，输入框置灰。"""
+        for slot, check in self._font_size_follow_checks.items():
+            field, source_field = self._FONT_SIZE_FOLLOW_FIELDS[slot]
+            follows = self._scheme_value(field) is None
+            check.blockSignals(True)
+            try:
+                check.setChecked(follows)
+            finally:
+                check.blockSignals(False)
+            spin = (
+                self._font_latin_size_spin
+                if slot == ("main", "latin")
+                else self._ruby_font_latin_size_spin
+            )
+            # 跟随时输入框置灰、留在 0：整个面板里 0 都表示"跟随上一级"
+            # （字体下拉写着"（0）"、字重与描边宽度同理），这里不另立一套。
+            spin.setEnabled(not follows)
 
     def _sync_font_settings_page(self) -> None:
         subject_index = 0 if self._font_tab_panel.current_right() == "main" else 1
@@ -8015,6 +8071,7 @@ class PropertyPanel(QWidget):
             self._ruby_font_latin_size_spin.setValue(
                 0 if ruby_latin_size is None else int(ruby_latin_size)
             )
+            self._sync_font_size_follow_controls()
             self._refresh_font_weight_combos(
                 {
                     ("main", "japanese"): int(self._scheme_value("font_weight")),

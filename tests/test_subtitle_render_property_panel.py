@@ -6490,3 +6490,73 @@ def test_preview_splitter_defaults_to_4_6_and_remembers_dragged_ratio(qapp, monk
     win.deleteLater()
     win2.deleteLater()
     qapp.processEvents()
+
+
+def test_latin_font_size_follows_main_by_default(qapp):
+    """英数字号默认跟随主文字日文 —— 改日文字号，英数跟着变。
+
+    模型层一直有"``None`` = 跟随上一级"的语义，但它藏在一个 0 里；改了日文字号
+    还得记得回来把英数也改一遍。这个勾选框把它摆到明面上，且默认勾着。
+    """
+    panel = PropertyPanel()
+    panel.set_style(Style(font_size_px=40))
+
+    check = panel._font_size_follow_checks[("main", "latin")]
+
+    assert check.isChecked()
+    assert panel.subtitle_style.latin_font_size_px is None
+    # 跟随时输入框置灰、留在 0 —— 面板里 0 一律表示"跟随上一级"。
+    assert not panel._font_latin_size_spin.isEnabled()
+    assert panel._font_latin_size_spin.value() == 0
+
+    panel._font_size_spin.setValue(72)
+
+    # 仍然是"跟随"，所以渲染出来的英数字号就是 72。
+    assert panel.subtitle_style.latin_font_size_px is None
+    from krok_helper.subtitle_render.engine import painter as _painter
+
+    assert _painter._latin_font_size(panel.subtitle_style) == 72
+
+
+def test_unfollowing_latin_font_size_keeps_the_current_size(qapp):
+    """取消跟随时把当前生效的字号写死，外观不该跳变。"""
+    panel = PropertyPanel()
+    panel.set_style(Style(font_size_px=56))
+    check = panel._font_size_follow_checks[("main", "latin")]
+
+    check.setChecked(False)
+
+    assert panel.subtitle_style.latin_font_size_px == 56
+    assert panel._font_latin_size_spin.isEnabled()
+
+    panel._font_size_spin.setValue(20)
+
+    assert panel.subtitle_style.latin_font_size_px == 56, "取消跟随后不该再跟着日文走"
+
+
+def test_an_explicit_latin_font_size_shows_the_box_unchecked(qapp):
+    """已经写死过英数字号的老项目，打开时勾选框应当是没勾的。"""
+    panel = PropertyPanel()
+    panel.set_style(Style(font_size_px=40, latin_font_size_px=64))
+
+    check = panel._font_size_follow_checks[("main", "latin")]
+
+    assert not check.isChecked()
+    assert panel._font_latin_size_spin.isEnabled()
+    assert panel._font_latin_size_spin.value() == 64
+
+
+def test_ruby_latin_font_size_has_the_same_switch(qapp):
+    """注音的英数页同款：跟随的是注音日文。"""
+    panel = PropertyPanel()
+    panel.set_style(Style(ruby_font_size_px=24))
+
+    check = panel._font_size_follow_checks[("ruby", "latin")]
+
+    assert check.isChecked()
+    assert panel.subtitle_style.ruby_latin_font_size_px is None
+    assert panel._ruby_font_latin_size_spin.value() == 0
+
+    check.setChecked(False)
+
+    assert panel.subtitle_style.ruby_latin_font_size_px == 24
