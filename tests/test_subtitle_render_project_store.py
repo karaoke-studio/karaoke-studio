@@ -47,6 +47,7 @@ from krok_helper.subtitle_render.project_store import (  # noqa: E402
     save_render_project,
     scan_recovery_projects,
 )
+from krok_helper.subtitle_render.session import SubtitleProjectSession  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -77,6 +78,57 @@ def test_save_render_project_round_trip(tmp_path):
     loaded = load_render_project(path)
     assert loaded["schema_version"] == PROJECT_SCHEMA_VERSION
     assert loaded["style"]["font_size_px"] == 80
+
+
+def test_project_session_owns_dirty_revision_and_generation_state(tmp_path):
+    session = SubtitleProjectSession(
+        path=tmp_path / "demo.yurika",
+        save_error="old failure",
+        disk_revision=object(),
+        missing_resources=(("主字幕", tmp_path / "missing.lrc"),),
+        unresolved_resource_labels={"主字幕"},
+        missing_resource_source_data={"subtitle_path": "missing.lrc"},
+    )
+
+    assert session.set_dirty(True) is False
+    assert session.dirty is True
+    assert session.revision == 1
+    assert session.save_error is None
+
+    # Reasserting dirty preserves the old window behaviour: it does not create
+    # a second content revision, while an actual mutation always does.
+    assert session.set_dirty(True) is True
+    assert session.revision == 1
+    assert session.mark_dirty() == (True, False)
+    assert session.revision == 2
+
+    session.begin_generation()
+    assert session.generation == 1
+    assert session.revision == 0
+    assert session.saved_revision == 0
+    assert session.disk_revision is None
+    assert session.missing_resources == ()
+    assert session.unresolved_resource_labels == set()
+    assert session.missing_resource_source_data is None
+
+
+def test_project_session_snapshot_preserves_host_status_text(tmp_path):
+    project = tmp_path / "song.yurika"
+    missing = tmp_path / "missing.lrc"
+    session = SubtitleProjectSession(
+        path=project,
+        dirty=True,
+        missing_resources=(("主字幕", missing),),
+    )
+
+    state = session.snapshot(
+        has_project=True,
+        exporting=True,
+        recovery_path=tmp_path / "recovery.yurika",
+    )
+
+    assert state.path == project
+    assert state.status_text() == "song.yurika · 未保存 · 导出中 · 素材缺失 1 项"
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():

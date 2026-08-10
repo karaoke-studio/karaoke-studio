@@ -282,6 +282,10 @@ from krok_helper.subtitle_render.source_reload import (
     TrackReloadMerge,
     merge_reloaded_track,
 )
+from krok_helper.subtitle_render.session import (
+    SubtitleProjectSession,
+    SubtitleProjectState,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 
 apply_qfluent_menu_lifetime_patch()
@@ -341,37 +345,6 @@ def _layout_issue_icon() -> QIcon:
     painter.drawEllipse(11, 17, 2, 2)
     painter.end()
     return QIcon(pixmap)
-
-
-@dataclass(frozen=True)
-class SubtitleProjectState:
-    """宿主可消费的字幕渲染项目状态。"""
-
-    display_name: str
-    path: Optional[Path]
-    has_project: bool
-    dirty: bool
-    saving: bool
-    save_error: Optional[str]
-    exporting: bool
-    recovery_path: Optional[Path]
-    missing_resources: tuple[tuple[str, Path], ...] = ()
-
-    def status_text(self) -> Optional[str]:
-        if not self.has_project:
-            return None
-        states: list[str] = []
-        if self.saving:
-            states.append("正在保存")
-        elif self.save_error:
-            states.append("保存失败")
-        elif self.dirty:
-            states.append("未保存")
-        if self.exporting:
-            states.append("导出中")
-        if self.missing_resources:
-            states.append(f"素材缺失 {len(self.missing_resources)} 项")
-        return f"{self.display_name} · {' · '.join(states)}" if states else self.display_name
 
 
 @dataclass(frozen=True)
@@ -1956,6 +1929,97 @@ class SubtitleRenderWindow(QWidget):
     _tracksViewWindowsReady = Signal(int, object)
     _embedded: bool = False
 
+    # Compatibility facade for existing frontend code and tests. Mutable
+    # lifecycle state has one owner (``_project_session``); these names remain
+    # available while callers migrate to explicit session operations.
+    @property
+    def _project_path(self) -> Optional[Path]:
+        return self._project_session.path
+
+    @_project_path.setter
+    def _project_path(self, value: Optional[Path]) -> None:
+        self._project_session.path = value
+
+    @property
+    def _project_dirty(self) -> bool:
+        return self._project_session.dirty
+
+    @_project_dirty.setter
+    def _project_dirty(self, value: bool) -> None:
+        self._project_session.dirty = bool(value)
+
+    @property
+    def _project_saving(self) -> bool:
+        return self._project_session.saving
+
+    @_project_saving.setter
+    def _project_saving(self, value: bool) -> None:
+        self._project_session.saving = bool(value)
+
+    @property
+    def _project_save_error(self) -> Optional[str]:
+        return self._project_session.save_error
+
+    @_project_save_error.setter
+    def _project_save_error(self, value: Optional[str]) -> None:
+        self._project_session.save_error = value
+
+    @property
+    def _project_generation(self) -> int:
+        return self._project_session.generation
+
+    @_project_generation.setter
+    def _project_generation(self, value: int) -> None:
+        self._project_session.generation = int(value)
+
+    @property
+    def _project_revision(self) -> int:
+        return self._project_session.revision
+
+    @_project_revision.setter
+    def _project_revision(self, value: int) -> None:
+        self._project_session.revision = int(value)
+
+    @property
+    def _saved_revision(self) -> int:
+        return self._project_session.saved_revision
+
+    @_saved_revision.setter
+    def _saved_revision(self, value: int) -> None:
+        self._project_session.saved_revision = int(value)
+
+    @property
+    def _project_disk_revision(self) -> Optional[ProjectFileRevision]:
+        return self._project_session.disk_revision
+
+    @_project_disk_revision.setter
+    def _project_disk_revision(self, value: Optional[ProjectFileRevision]) -> None:
+        self._project_session.disk_revision = value
+
+    @property
+    def _missing_resources(self) -> tuple[tuple[str, Path], ...]:
+        return self._project_session.missing_resources
+
+    @_missing_resources.setter
+    def _missing_resources(self, value: tuple[tuple[str, Path], ...]) -> None:
+        self._project_session.missing_resources = tuple(value)
+
+    @property
+    def _unresolved_resource_labels(self) -> set[str]:
+        return self._project_session.unresolved_resource_labels
+
+    @_unresolved_resource_labels.setter
+    def _unresolved_resource_labels(self, value: set[str]) -> None:
+        self._project_session.unresolved_resource_labels = set(value)
+
+    @property
+    def _missing_resource_source_data(self) -> Optional[dict]:
+        return self._project_session.missing_resource_source_data
+
+    @_missing_resource_source_data.setter
+    def _missing_resource_source_data(self, value: Optional[dict]) -> None:
+        self._project_session.missing_resource_source_data = value
+
     def __init__(
         self,
         embedded: bool = False,
@@ -2000,17 +2064,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_dir_mode = EXPORT_DIR_SOURCE_VIDEO
         self._export_custom_dir = ""
         self._export_name_template = DEFAULT_EXPORT_NAME_TEMPLATE
-        self._project_path: Optional[Path] = None
-        self._project_dirty = False
-        self._project_saving = False
-        self._project_save_error: Optional[str] = None
-        self._project_generation = 0
-        self._project_revision = 0
-        self._saved_revision = 0
-        self._project_disk_revision: Optional[ProjectFileRevision] = None
-        self._missing_resources: tuple[tuple[str, Path], ...] = ()
-        self._unresolved_resource_labels: set[str] = set()
-        self._missing_resource_source_data: Optional[dict] = None
+        self._project_session = SubtitleProjectSession()
         self._last_logged_project_state: Optional[tuple[object, ...]] = None
         self._loading_project = False
         self._syncing_screen_controls = False
@@ -2460,16 +2514,14 @@ class SubtitleRenderWindow(QWidget):
             or self._extra_sources
         )
         recovery_path = self._recovery_path() if self._project_dirty else None
-        return SubtitleProjectState(
-            display_name=path.name if path is not None else "未命名项目",
-            path=path,
+        return self._project_session.snapshot(
             has_project=has_project,
-            dirty=bool(self._project_dirty),
-            saving=bool(self._project_saving),
-            save_error=self._project_save_error,
             exporting=self._render_thread is not None,
-            recovery_path=recovery_path if recovery_path and recovery_path.is_file() else None,
-            missing_resources=self._missing_resources,
+            recovery_path=(
+                recovery_path
+                if recovery_path is not None and recovery_path.is_file()
+                else None
+            ),
         )
 
     def connect_project_state_changed(self, callback: Callable[[object], Any]) -> None:
@@ -2520,12 +2572,7 @@ class SubtitleRenderWindow(QWidget):
         return self._render_thread is not None
 
     def _set_project_dirty(self, dirty: bool) -> None:
-        was_dirty = self._project_dirty
-        self._project_dirty = bool(dirty)
-        if dirty and not was_dirty:
-            self._project_revision += 1
-        if dirty or not self._project_saving:
-            self._project_save_error = None
+        self._project_session.set_dirty(dirty)
         if dirty:
             self._schedule_recovery_auto_save()
         elif hasattr(self, "_auto_save_timer"):
@@ -2535,24 +2582,14 @@ class SubtitleRenderWindow(QWidget):
     def _mark_project_dirty(self) -> None:
         if self._loading_project:
             return
-        was_dirty = self._project_dirty
-        had_save_error = self._project_save_error is not None
-        self._project_revision += 1
-        self._project_dirty = True
-        self._project_save_error = None
+        was_dirty, had_save_error = self._project_session.mark_dirty()
         self._schedule_recovery_auto_save()
         if not was_dirty or had_save_error:
             self._refresh_project_title()
 
     def _begin_project_generation(self) -> None:
         """Invalidate recovery jobs belonging to the previously loaded project."""
-        self._project_generation += 1
-        self._project_revision = 0
-        self._saved_revision = 0
-        self._project_disk_revision = None
-        self._missing_resources = ()
-        self._unresolved_resource_labels = set()
-        self._missing_resource_source_data = None
+        self._project_session.begin_generation()
         self._project_deferred_loads = []
         if hasattr(self, "_project_deferred_load_timer"):
             self._project_deferred_load_timer.stop()
