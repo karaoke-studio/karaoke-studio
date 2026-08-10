@@ -731,6 +731,24 @@ class HiResPage(QWidget):
             self._host.notify_handoff("伴奏已交给下一步", detail)
         return accepted
 
+    def accept_source_as_on_vocal(self, path: Path) -> bool:
+        """第 2 步分离用的那份原始音频放进原唱卡。
+
+        原唱只有一张卡，所以这里是**覆盖**而不是追加 —— 用户是在分离完成的
+        对话框里明确勾选了才会走到这条路，覆盖了什么在提示里说清楚。
+        同样只放素材、不切页面（跟伴奏转交一致）。
+        """
+        path = Path(path)
+        if not path.is_file():
+            return False
+        previous = self.on_vocal_zone.path
+        self.set_on_vocal_path(path)
+        detail = f"「{path.name}」已放入第 6 步 Hi-Res 混流的原唱卡。"
+        if previous is not None and previous != path:
+            detail += f"\n原先的「{previous.name}」已被替换。"
+        self._host.notify_handoff("原唱已交给下一步", detail)
+        return True
+
     def _build_ui(self) -> None:
         shell = QVBoxLayout(self)
         shell.setContentsMargins(20, 20, 20, 20)

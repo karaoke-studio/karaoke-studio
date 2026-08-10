@@ -436,6 +436,9 @@ class KrokHelperQtApp(QMainWindow):
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         return self.hires_page.accept_separated_accompaniment(paths)
 
+    def accept_source_as_on_vocal(self, path: Path) -> bool:
+        return self.hires_page.accept_source_as_on_vocal(path)
+
     def _workflow_pages(self) -> list:
         """已经建好的工作流页面。
 

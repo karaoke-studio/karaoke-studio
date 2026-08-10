@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
 
-from krok_helper.workflow_host import AccompanimentSink, SubtitleVideoSink, WorkflowHost
+from krok_helper.workflow_host import AccompanimentSink, OnVocalSink, SubtitleVideoSink, WorkflowHost
 
 
 class _FullHost:
@@ -18,6 +18,9 @@ class _FullHost:
 
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         return list(paths)
+
+    def accept_source_as_on_vocal(self, path: Path) -> bool:
+        return True
 
 
 class _RenamedHost:
@@ -53,18 +56,22 @@ def test_capabilities_are_checked_one_by_one() -> None:
     host = SubtitleOnly()
     assert isinstance(host, SubtitleVideoSink)
     assert not isinstance(host, AccompanimentSink)
+    assert not isinstance(host, OnVocalSink)
     assert not isinstance(host, WorkflowHost)
 
 
 def test_separation_page_skips_handoff_without_a_host(monkeypatch) -> None:
     """没有工作台外壳时跳过转交是正确行为，不该抛异常。"""
+    from krok_helper.audio_processing.separation import handoff as handoff_module
     from krok_helper.audio_processing.separation import page as page_module
 
     called: list[int] = []
-    monkeypatch.setattr(page_module, "collect_accompaniments", lambda _r: called.append(1), raising=False)
+    # 页面是在函数体里 ``from ...handoff import ...`` 的，桩必须打在 handoff 模块上；
+    # 打在 page 模块的名字上不生效，这条测试会假绿。
+    monkeypatch.setattr(handoff_module, "collect_accompaniments", lambda _r: called.append(1))
 
     # 这两条分支在碰任何 Qt 状态之前就返回了，用替身即可，不必真造一个页面。
-    host_free = SimpleNamespace(_batch_results=[], _workflow_context=None)
+    host_free = SimpleNamespace(_batch_results=[], _batch_input_path=None, _workflow_context=None)
 
     page_module.AudioSeparationPage._offer_accompaniment_handoff(host_free)
 
@@ -74,7 +81,7 @@ def test_separation_page_skips_handoff_without_a_host(monkeypatch) -> None:
 def test_separation_page_warns_when_the_host_broke_the_contract(monkeypatch, caplog) -> None:
     from krok_helper.audio_processing.separation import page as page_module
 
-    broken = SimpleNamespace(_batch_results=[], _workflow_context=_RenamedHost())
+    broken = SimpleNamespace(_batch_results=[], _batch_input_path=None, _workflow_context=_RenamedHost())
 
     with caplog.at_level("WARNING"):
         page_module.AudioSeparationPage._offer_accompaniment_handoff(broken)

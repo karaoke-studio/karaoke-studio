@@ -10,6 +10,7 @@
 
 * :class:`SubtitleVideoSink` —— 第 5 步字幕渲染交成片；
 * :class:`AccompanimentSink` —— 第 2 步音频分离交伴奏；
+* :class:`OnVocalSink` —— 第 2 步音频分离把分离用的原始音频交作原唱；
 * :class:`WorkflowHost` —— 工作台主窗口，两样都实现。
 
 拆开而不是让每个调用点都去校验整个 :class:`WorkflowHost`，是因为宿主不一定
@@ -27,7 +28,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, Sequence, runtime_checkable
 
-__all__ = ["AccompanimentSink", "SubtitleVideoSink", "WorkflowHost"]
+__all__ = ["AccompanimentSink", "OnVocalSink", "SubtitleVideoSink", "WorkflowHost"]
 
 
 @runtime_checkable
@@ -49,5 +50,19 @@ class AccompanimentSink(Protocol):
 
 
 @runtime_checkable
-class WorkflowHost(SubtitleVideoSink, AccompanimentSink, Protocol):
+class OnVocalSink(Protocol):
+    """能接收原唱音频。
+
+    分离用的那份原始音频本身就是"原唱"（人声＋伴奏的完整混音），第 6 步要拿它
+    和分出来的伴奏配成 on / off 两版。单独一条能力而不是并进
+    :class:`AccompanimentSink`，是因为落点不同：伴奏是追加，原唱只有一张卡。
+    """
+
+    def accept_source_as_on_vocal(self, path: Path) -> bool:
+        """把这条音频放进第 6 步的原唱卡；返回是否真的放进去了。"""
+        ...
+
+
+@runtime_checkable
+class WorkflowHost(SubtitleVideoSink, AccompanimentSink, OnVocalSink, Protocol):
     """完整的工作台宿主 —— 主窗口实现全部转交能力。"""

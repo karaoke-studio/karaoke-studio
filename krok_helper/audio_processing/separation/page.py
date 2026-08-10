@@ -25,7 +25,7 @@ from qfluentwidgets import (
     ScrollArea as FluentScrollArea,
 )
 
-from krok_helper.workflow_host import AccompanimentSink
+from krok_helper.workflow_host import AccompanimentSink, OnVocalSink
 from krok_helper.audio_processing.responsive import ResponsiveGrid
 from krok_helper.audio_processing.separation.backend import (
     FLOW_EXISTING,
@@ -115,6 +115,7 @@ class AudioSeparationPage(QWidget):
         self._workflow_context = workflow_context
         #: 本批任务已产出的结果，整批结束时用来问要不要转交 Hi-Res。
         self._batch_results: list = []
+        self._batch_input_path: Path | None = None
         settings_ns = getattr(settings, "pymss", None)
         if not isinstance(settings_ns, dict):
             settings_ns = {}
@@ -440,6 +441,9 @@ class AudioSeparationPage(QWidget):
             return
 
         output_dir = self._output_card.output_dir() or str(Path(input_path).parent)
+        # 记下这一批真正送进去的那份音频：转交对话框要拿它当"原唱"，
+        # 而卡片里的路径在跑的过程中随时可能被用户换掉。
+        self._batch_input_path = Path(input_path)
         self._backend.request_tasks(
             selected,
             input_path=input_path,
@@ -470,6 +474,7 @@ class AudioSeparationPage(QWidget):
         )
 
         results, self._batch_results = self._batch_results, []
+        source, self._batch_input_path = self._batch_input_path, None
         host = self._workflow_context
         if host is None:
             # 分离页被单独拉起来跑（没有工作台外壳），没有下一步可交。
@@ -486,12 +491,18 @@ class AudioSeparationPage(QWidget):
         if not candidates:
             return
 
-        dialog = AccompanimentHandoffDialog(candidates, self.window())
+        # 宿主不收原唱时就别把那条勾选项摆出来 —— 勾了也没地方去。
+        offer_source = source if isinstance(host, OnVocalSink) else None
+        dialog = AccompanimentHandoffDialog(candidates, self.window(), source_audio=offer_source)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         selected = dialog.selected_paths()
         if selected:
             host.accept_separated_accompaniment(selected)
+        on_vocal = dialog.source_as_on_vocal()
+        if on_vocal is not None:
+            host.accept_source_as_on_vocal(on_vocal)
+
 
     def _on_result_ready(self, result) -> None:
         self._results_panel.add_result(result)

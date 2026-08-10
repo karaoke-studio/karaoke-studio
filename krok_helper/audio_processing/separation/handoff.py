@@ -4,6 +4,10 @@
 要的素材。这里只负责问用户「要不要送过去、送哪几条」，真正落地由工作流上下文
 （``gui_qt`` 那边的 ``accept_separated_accompaniment``）完成——分离包不反向依赖
 主窗口。
+
+**分离用的那份原始音频本身就是"原唱"**（人声＋伴奏的完整混音），所以对话框
+底下还多一条可选项，把它放进第 6 步的原唱卡，一次凑齐 on / off 两版所需的素材。
+这条默认**不勾**：原唱卡只有一张、放进去是覆盖，不该在用户没表态时动它。
 """
 
 from __future__ import annotations
@@ -61,9 +65,13 @@ class AccompanimentHandoffDialog(ModelessDialog):
         self,
         candidates: list[tuple[str, Path]],
         parent: QWidget | None = None,
+        *,
+        source_audio: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self._checks: list[tuple[CheckBox, Path]] = []
+        self._source_audio = source_audio if source_audio and source_audio.is_file() else None
+        self._source_check: CheckBox | None = None
 
         self.setWindowTitle("音频分离完成")
         if parent is not None:
@@ -97,6 +105,17 @@ class AccompanimentHandoffDialog(ModelessDialog):
             note.setWordWrap(True)
             layout.addWidget(note)
 
+        if self._source_audio is not None:
+            layout.addSpacing(6)
+            source_hint = BodyLabel("这次用来分离的原始音频就是完整混音，也可以一并作为原唱：", self)
+            source_hint.setWordWrap(True)
+            layout.addWidget(source_hint)
+            self._source_check = CheckBox(f"原唱：{self._source_audio.name}", self)
+            # 默认不勾：原唱卡只有一张，放进去是覆盖。
+            self._source_check.setChecked(False)
+            self._source_check.setToolTip(str(self._source_audio))
+            layout.addWidget(self._source_check)
+
         layout.addSpacing(8)
         buttons = QHBoxLayout()
         buttons.setSpacing(12)
@@ -112,15 +131,24 @@ class AccompanimentHandoffDialog(ModelessDialog):
 
         for check, _path in self._checks:
             check.toggled.connect(self._sync_confirm_enabled)
+        if self._source_check is not None:
+            self._source_check.toggled.connect(self._sync_confirm_enabled)
         self._sync_confirm_enabled()
         self.setMinimumWidth(620)
 
     def _sync_confirm_enabled(self) -> None:
-        # 一条都没勾还点确认没有意义。
-        self.yesButton.setEnabled(any(check.isChecked() for check, _ in self._checks))
+        # 一条都没勾还点确认没有意义 —— 原唱那条也算数。
+        anything = any(check.isChecked() for check, _ in self._checks) or self.source_as_on_vocal() is not None
+        self.yesButton.setEnabled(anything)
 
     def selected_paths(self) -> list[Path]:
         return [path for check, path in self._checks if check.isChecked()]
+
+    def source_as_on_vocal(self) -> Path | None:
+        """勾了「作为原唱」就返回那条原始音频，否则 ``None``。"""
+        if self._source_check is not None and self._source_check.isChecked():
+            return self._source_audio
+        return None
 
 
 __all__ = [
