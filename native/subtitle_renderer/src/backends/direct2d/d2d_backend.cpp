@@ -7169,7 +7169,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return current.right >= following.left;
             }
         ) != line->chars.end();
-        const bool useN3PhaseOrdering = hasVisualOverlap
+        // A character whose wipe runs past the next character's start means two
+        // wipe fronts are alive at once (SUG writes this where a lead phrase's
+        // release timestamp crosses into the following harmony phrase).  The
+        // legacy stack collapses the line into one clip rect and can only show
+        // the first front; the per-character N3 path already clips each glyph
+        // with its own edge, which is what Painter draws.
+        const bool hasConcurrentWipe = std::adjacent_find(
+            line->chars.begin(), line->chars.end(),
+            [&](const Impl::CachedChar &current,
+                const Impl::CachedChar &following) {
+                return wipeEndMs(current) > wipeStartMs(following);
+            }
+        ) != line->chars.end();
+        const bool useN3PhaseOrdering = hasVisualOverlap || hasConcurrentWipe
             || line->hasInlineStyles || hasCharacterTransition;
         if (!useN3PhaseOrdering) {
             const auto drawLegacyStack = [&](bool after, ID2D1Brush *fill,

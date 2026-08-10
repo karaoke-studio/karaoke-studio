@@ -708,6 +708,16 @@ def compute_char_intervals(
     ``[start]多字[next]`` 共享时间块会按正布局宽度加权切分。算法与 SUG
     ``KaraokePreview`` 一致：边界使用 ``int(start + duration * 累计宽度 / 总宽度)``。
     元数据不完整、区间无效或总宽度为 0 时保留兼容的 ``start_ms`` 区间。
+
+    **区间可以重叠。** 源里显式写了释放点（``pause_release_ms``）时就以它为准，
+    哪怕它晚于下一个字的起点 —— 一行里同时有两处在走字是合法的打轴，SUG 的
+    预览一直是这么放的（它逐字独立算比例，没有"夹到下一字"这一步）。这里原先
+    会 ``min(..., next_start)`` 把它压掉，表现是前一段瞬间跳满：比如
+    ``で``（20880 → 释放 21230）被压成 40ms，后面的和声段接着开始。
+
+    没有 ``pause_release_ms`` 时仍然接到下一字起点，因此**只有源数据真的重叠**
+    才会与从前不同；LRC 来源在结构上不可能重叠（``[t1]字[t2]`` 里释放点必早于
+    下一字起点），所以那条路径一帧都不会变。
     """
     chars = line.chars
     n = len(chars)
@@ -718,7 +728,7 @@ def compute_char_intervals(
         if i + 1 < n:
             next_start = chars[i + 1].start_ms
             if ch.pause_release_ms is not None:
-                end = min(max(ch.pause_release_ms, ch.start_ms), next_start)
+                end = max(ch.pause_release_ms, ch.start_ms)
             else:
                 end = next_start
         elif line.end_ms is not None:

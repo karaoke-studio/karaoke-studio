@@ -21,6 +21,7 @@
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
 #include <QtGui/QPixmap>
+#include <QtGui/QRegion>
 #include <QtGui/QTransform>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QGraphicsBlurEffect>
@@ -3699,36 +3700,85 @@ LineLayout cachedLayoutLine(
     return layout;
 }
 
+// One horizontal band per character that has started, in layout order.
+//
+// A character whose wipe runs past the next character's start leaves two fronts
+// alive at once (SUG writes this where a lead phrase's release timestamp crosses
+// into the following harmony phrase).  Stopping at the first unfinished glyph --
+// which is what this used to do -- can only ever show the first of them.  With
+// sequential timing the bands are contiguous and their union is exactly the
+// single rect this produced before.
+std::vector<std::pair<double, double>> afterClipBandsFromCharacterTiming(
+    const RenderConfig &cfg, const TimingLine &line, const LineLayout &layout, int tMs
+) {
+    std::vector<std::pair<double, double>> bands;
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        const int start = line.chars[i].startMs;
+        // Characters are ordered by start time, so nothing later has begun either.
+        if (tMs < start) {
+            break;
+        }
+        const double left = layout.charLefts[i];
+        const double width = layout.charWidths[i];
+        const double right = left + width;
+        const double ratio = progressRatio(start, charEndMs(line, i), tMs);
+        if (ratio >= 1.0) {
+            bands.emplace_back(left, right);
+            continue;
+        }
+        // Keep scanning: a later character may be running at the same time.
+        if (cfg.rightToLeft) {
+            bands.emplace_back(right - width * ratio, right);
+        } else {
+            bands.emplace_back(left, left + width * ratio);
+        }
+    }
+    return bands;
+}
+
+std::vector<std::pair<double, double>> mergeBands(
+    std::vector<std::pair<double, double>> bands
+) {
+    std::sort(bands.begin(), bands.end());
+    std::vector<std::pair<double, double>> merged;
+    for (const auto &band : bands) {
+        if (band.second <= band.first) {
+            continue;
+        }
+        if (!merged.empty() && band.first <= merged.back().second) {
+            merged.back().second = std::max(merged.back().second, band.second);
+            continue;
+        }
+        merged.push_back(band);
+    }
+    return merged;
+}
+
+QRegion bandsToRegion(
+    const std::vector<std::pair<double, double>> &bands, double top, double height
+) {
+    QRegion region;
+    for (const auto &band : bands) {
+        region += QRectF(band.first, top, band.second - band.first, height).toAlignedRect();
+    }
+    return region;
+}
+
 std::optional<QRectF> afterClipRectFromCharacterTiming(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
     if (line.chars.empty()) {
         return std::nullopt;
     }
 
-    double clipEdge = cfg.rightToLeft ? layout.x + layout.width : layout.x;
-    bool hasProgress = false;
-    for (std::size_t i = 0; i < line.chars.size(); ++i) {
-        const int start = line.chars[i].startMs;
-        const int end = charEndMs(line, i);
-        const double left = layout.charLefts[i];
-        const double right = left + layout.charWidths[i];
-
-        if (tMs < start) {
-            break;
-        }
-
-        hasProgress = true;
-        const double ratio = progressRatio(start, end, tMs);
-        if (ratio < 1.0) {
-            clipEdge = cfg.rightToLeft
-                ? right - layout.charWidths[i] * ratio
-                : left + layout.charWidths[i] * ratio;
-            break;
-        }
-
-        clipEdge = cfg.rightToLeft ? left : right;
-    }
-    if (!hasProgress) {
+    const auto bands = afterClipBandsFromCharacterTiming(cfg, line, layout, tMs);
+    if (bands.empty()) {
         return std::nullopt;
+    }
+    // The line edge stays the outer boundary, exactly as before.
+    double clipEdge = cfg.rightToLeft ? bands.front().first : bands.back().second;
+    for (const auto &band : bands) {
+        clipEdge = cfg.rightToLeft
+            ? std::min(clipEdge, band.first)
+            : std::max(clipEdge, band.second);
     }
 
     const double verticalExtent = layout.afterClipExtent > 0.0 ? layout.afterClipExtent : afterClipVerticalExtent(style);
@@ -4679,6 +4729,31 @@ std::vector<NativeFillSegment> fillSegmentsForLine(
     return segments;
 }
 
+// Per-segment bands, same reasoning as afterClipBandsFromCharacterTiming:
+// stopping at the first unfinished segment can only show one wipe front.
+std::vector<std::pair<double, double>> fillClipBands(
+    const std::vector<NativeFillSegment> &segments,
+    bool rtl
+) {
+    std::vector<std::pair<double, double>> bands;
+    for (const auto &segment : segments) {
+        if (segment.ratio <= 0.0) {
+            break;  // segments are time-ordered, so nothing later has begun
+        }
+        const double width = segment.right - segment.left;
+        if (segment.ratio >= 1.0) {
+            bands.emplace_back(segment.left, segment.right);
+            continue;
+        }
+        if (rtl) {
+            bands.emplace_back(segment.right - std::round(width * segment.ratio), segment.right);
+        } else {
+            bands.emplace_back(segment.left, segment.left + std::round(width * segment.ratio));
+        }
+    }
+    return bands;
+}
+
 std::optional<std::pair<double, double>> fillClipBand(
     const std::vector<NativeFillSegment> &segments,
     bool rtl
@@ -4724,6 +4799,29 @@ std::optional<std::pair<double, double>> fillClipBand(
         return std::nullopt;
     }
     return std::pair<double, double>{left, right};
+}
+
+// The clip actually applied to the after-colour layer.
+//
+// Sequential timing yields one contiguous band and this is the same rectangle
+// afterClipRect returns; concurrent wipes yield two, and only a region can hold
+// both.  afterClipRect stays as the bounding rect for diagnostics.
+QRegion afterClipRegion(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
+    const double verticalExtent = layout.afterClipExtent > 0.0
+        ? layout.afterClipExtent
+        : afterClipVerticalExtent(style);
+    const double top = layout.baselineY - layout.ascent - verticalExtent;
+    const double height = layout.height + verticalExtent * 2.0;
+    std::vector<std::pair<double, double>> bands = cfg.rubies.empty()
+        ? afterClipBandsFromCharacterTiming(cfg, line, layout, tMs)
+        : fillClipBands(fillSegmentsForLine(cfg, line, layout, tMs), cfg.rightToLeft);
+    const double lineLeft = layout.x;
+    const double lineRight = layout.x + layout.width;
+    for (auto &band : bands) {
+        band.first = std::clamp(band.first, lineLeft, lineRight);
+        band.second = std::clamp(band.second, lineLeft, lineRight);
+    }
+    return bandsToRegion(mergeBands(std::move(bands)), top, height);
 }
 
 std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
@@ -6548,8 +6646,15 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
 
     const auto clip = afterClipRect(cfg, lineStyle, line, layout, tMs);
     if (!useUtopiaMainText && clip.has_value() && clip->width() > 0.0) {
+        // One band -> the original rectangle, byte for byte.  Two bands only
+        // happen when the source really has two wipes running at once.
+        const QRegion region = afterClipRegion(cfg, lineStyle, line, layout, tMs);
         painter.save();
-        painter.setClipRect(*clip, Qt::IntersectClip);
+        if (region.rectCount() > 1) {
+            painter.setClipRegion(region, Qt::IntersectClip);
+        } else {
+            painter.setClipRect(*clip, Qt::IntersectClip);
+        }
         paintGlyphRunTextLayers(painter, line, layout, lineStyle, true);
         painter.restore();
     }

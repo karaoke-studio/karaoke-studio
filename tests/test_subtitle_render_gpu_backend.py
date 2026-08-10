@@ -8759,3 +8759,151 @@ def test_gpu_negative_margins_move_like_painter(monkeypatch) -> None:
             gpu_bounds_by_margin.append(gpu_bounds)
 
     assert gpu_bounds_by_margin[1] != gpu_bounds_by_margin[0]
+
+
+def _concurrent_wipe_track() -> TimingTrack:
+    """一行里两处同时走字。
+
+    ``D`` 显式写了释放点（1600），比后面 ``E`` 的起点（800）晚 —— 这是 SUG 里
+    主唱段与和声段交叠时的常见轴型（``sentence_end_ts`` 越过了下一段的起点）。
+    以前 ``compute_char_intervals`` 会把它夹到下一字起点，``D`` 于是瞬间跳满；
+    现在两个前沿各走各的。
+
+    这里**故意不带角色标签**：带角色的行本来就按角色拆 run、各算各的裁剪带，
+    那是容易的一侧。同一个 run 里出现两个前沿才是真正的一般情形。
+
+    字用实心块 ``█``：它们左右相接不留空隙，"已唱色分成几段"才等于"有几个走字
+    前沿"。换成普通字母的话，字距本身就会把已唱区切开，数出来的是字数不是前沿数。
+    """
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("█", 0),
+                    TimingChar("█", 200),
+                    TimingChar("█", 400),
+                    TimingChar("█", 600, pause_release_ms=1_600),
+                    TimingChar("█", 800),
+                    TimingChar("█", 1_000),
+                    TimingChar("█", 1_200),
+                    TimingChar("█", 1_400),
+                ],
+                end_ms=1_800,
+            )
+        ]
+    )
+
+
+def _fill_column_runs(payload: bytes, width: int, height: int) -> list[tuple[int, int]]:
+    """已唱色（``fill_color``）在横向上分成了几段，各自的列区间。
+
+    两个前沿之间必然留着一段还没唱到的底色，所以"段数"就是前沿数。
+    """
+    rgba = np.frombuffer(payload, dtype=np.uint8).reshape(height, width, 4)
+    hit = (
+        (np.abs(rgba[:, :, 0].astype(np.int16) - 0xFF) < 24)
+        & (np.abs(rgba[:, :, 1].astype(np.int16) - 0x20) < 24)
+        & (np.abs(rgba[:, :, 2].astype(np.int16) - 0x30) < 24)
+        & (rgba[:, :, 3] > 128)
+    )
+    columns = np.where(hit.any(axis=0))[0]
+    if columns.size == 0:
+        return []
+    runs: list[tuple[int, int]] = []
+    start = int(columns[0])
+    for index in np.where(np.diff(columns) > 8)[0]:
+        runs.append((start, int(columns[index])))
+        start = int(columns[index + 1])
+    runs.append((start, int(columns[-1])))
+    return runs
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_concurrent_wipe_fronts_follow_painter(monkeypatch) -> None:
+    """一行两处同时走字：GPU 与 CPU 画笔要画出同样的两个前沿。
+
+    只断言"两边一致"是不够的 —— 两个后端一起丢掉这个功能也会一致。所以先钉住
+    重叠时刻真的分成了两段已唱区，再比两边的段边界。
+
+    比的是结构（分几段、各段列区间）而不是逐像素：Direct2D 和 Qt 光栅器的抗锯齿
+    本来就不可能逐像素相同，本模块其余的 GPU↔Painter 对比也都是比包围盒与比例。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    track = _concurrent_wipe_track()
+    style = _g1_style(entry_anim="none", exit_anim="none")
+    width, height = 640, 360
+    # 700 还没重叠；900 / 1_100 / 1_300 落在重叠窗（800–1_600）内。
+    timestamps = (700, 900, 1_100, 1_300)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track,
+            width=width, height=height,
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track, width=width, height=height)
+        for t_ms in timestamps
+    ]
+
+    painter_runs = [_fill_column_runs(frame, width, height) for frame in painter]
+    gpu_runs = [_fill_column_runs(frame, width, height) for frame in gpu]
+
+    assert len(painter_runs[0]) == 1, f"重叠开始前 CPU 只该有一个前沿：{painter_runs[0]}"
+    assert len(gpu_runs[0]) == 1, f"重叠开始前 GPU 只该有一个前沿：{gpu_runs[0]}"
+
+    for index, t_ms in enumerate(timestamps[1:], start=1):
+        assert len(painter_runs[index]) == 2, (
+            f"t={t_ms} 在重叠窗内，CPU 应有两段已唱区：{painter_runs[index]}"
+        )
+        assert len(gpu_runs[index]) == 2, (
+            f"t={t_ms} 在重叠窗内，GPU 应有两段已唱区：{gpu_runs[index]}"
+        )
+        for (gpu_start, gpu_end), (painter_start, painter_end) in zip(
+            gpu_runs[index], painter_runs[index]
+        ):
+            assert abs(gpu_start - painter_start) <= 6, (
+                t_ms, gpu_runs[index], painter_runs[index]
+            )
+            assert abs(gpu_end - painter_end) <= 6, (
+                t_ms, gpu_runs[index], painter_runs[index]
+            )
+
+    # 两个前沿都得真的在往前走，而不是卡在某一处。
+    for runs in (painter_runs, gpu_runs):
+        leading_ends = [runs[index][0][1] for index in range(1, len(timestamps))]
+        trailing_ends = [runs[index][1][1] for index in range(1, len(timestamps))]
+        assert leading_ends == sorted(leading_ends) and leading_ends[0] < leading_ends[-1]
+        assert trailing_ends == sorted(trailing_ends) and trailing_ends[0] < trailing_ends[-1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native sidecar build is Windows-only")
+def test_native_qt_export_path_shows_both_wipe_fronts(monkeypatch, tmp_path) -> None:
+    """第三个渲染核心：sidecar 自带的 Qt 渲染器（``render_range`` 导出走的就是它）。
+
+    D2D 后端管预览与 GPU 导出，Python 画笔管 CPU 预览与 CPU 导出，但**原生导出**
+    落在 sidecar 的 ``renderFrame`` 上。三处都得同时走字，否则改了两处、导出出来
+    的成片还是老样子。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    track = _concurrent_wipe_track()
+    style = _g1_style(entry_anim="none", exit_anim="none")
+    width, height = 640, 360
+    output = tmp_path / "frame.png"
+
+    frames: dict[int, bytes] = {}
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        renderer.configure(track, style, width=width, height=height, fps=60)
+        for t_ms in (700, 1_100):
+            assert renderer.render_frame_png(t_ms, output)["event"] == "frame_ready"
+            image = QImage(str(output)).convertToFormat(QImage.Format.Format_RGBA8888)
+            assert image.width() == width and image.height() == height
+            bits = image.constBits()
+            bits.setsize(image.sizeInBytes())
+            frames[t_ms] = bytes(bits)
+
+    assert len(_fill_column_runs(frames[700], width, height)) == 1
+    assert len(_fill_column_runs(frames[1_100], width, height)) == 2, (
+        "原生 Qt 导出路径只画了一个走字前沿：" + str(_fill_column_runs(frames[1_100], width, height))
+    )
