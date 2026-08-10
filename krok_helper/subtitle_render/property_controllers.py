@@ -79,7 +79,7 @@ class LayoutCatalogController:
 
     @staticmethod
     def source(style: Style, index: int):
-        return style if index <= 0 else style.layouts[index - 1]
+        return style.default_layout if index <= 0 else style.layouts[index - 1]
 
     def resolved_values(self, style: Style, index: int) -> dict:
         source = self.source(style, index)

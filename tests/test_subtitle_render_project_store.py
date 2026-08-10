@@ -374,6 +374,38 @@ def test_style_timing_nested_view_preserves_flat_and_project_compatibility():
         style.with_timing(font_size_px=123)
 
 
+def test_style_default_layout_view_preserves_flat_project_compatibility():
+    style = Style(
+        line_y_position="top",
+        line_y_margin_px=64,
+        letter_spacing_px=7,
+    )
+
+    layout = style.default_layout
+    assert isinstance(layout, subtitle_models.LyricsLayout)
+    assert layout.layout_id == "default"
+    assert layout.line_y_position == style.line_y_position
+    assert layout.letter_spacing_px == style.letter_spacing_px
+
+    updated = style.with_default_layout(
+        replace(layout, line_y_margin_px=96, letter_spacing_px=11)
+    )
+    assert updated.line_y_margin_px == 96
+    assert updated.letter_spacing_px == 11
+    assert updated.font_size_px == style.font_size_px
+
+    inherited = style.with_default_layout(
+        subtitle_models.LyricsLayout(letter_spacing_px=None)
+    )
+    assert inherited.letter_spacing_px == 7
+    payload = style_to_dict(updated)
+    assert "default_layout" not in payload
+    assert payload["line_y_margin_px"] == 96
+    assert style_from_dict(payload).default_layout == updated.default_layout
+    with pytest.raises(TypeError, match="unsupported layout field"):
+        style.with_default_layout(font_size_px=123)
+
+
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
     assert style_from_dict({}).allow_inter_page_line_overlap is False
 

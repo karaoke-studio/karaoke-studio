@@ -1342,6 +1342,35 @@ class Style:
         values.update(changes)
         return replace(self, **values)
 
+    @property
+    def default_layout(self) -> LyricsLayout:
+        """Return the flat default-layout fields through the nested layout model."""
+        return LyricsLayout(
+            name="默认布局",
+            layout_id="default",
+            **{
+                name: deepcopy(getattr(self, name))
+                for name in LYRICS_LAYOUT_FIELDS
+            },
+        )
+
+    def with_default_layout(
+        self,
+        layout: Optional[LyricsLayout] = None,
+        **changes: object,
+    ) -> "Style":
+        """Update default-layout fields while keeping legacy flat storage."""
+        unknown = set(changes) - set(LYRICS_LAYOUT_FIELDS)
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise TypeError(f"unsupported layout field(s): {names}")
+        values = {}
+        for name in LYRICS_LAYOUT_FIELDS:
+            value = getattr(layout, name) if layout is not None else getattr(self, name)
+            values[name] = deepcopy(getattr(self, name) if value is None else value)
+        values.update(changes)
+        return replace(self, **values)
+
 
 def style_with_line_animation(style: Style, line: TimingLine) -> Style:
     """把逐行动画覆盖套到样式上；其他视觉与布局字段保持不变。"""
