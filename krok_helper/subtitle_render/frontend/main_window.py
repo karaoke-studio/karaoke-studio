@@ -224,7 +224,6 @@ from krok_helper.subtitle_render.models import (
     layout_id_for_index,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
-    migrate_legacy_app_title_default,
     normalize_title_char_role_labels,
     rescale_font_sizes,
     rescale_layout_sizes,
@@ -248,6 +247,7 @@ from krok_helper.subtitle_render.preferences import (
     LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
     app_default_style_to_dict,
+    load_app_style_preferences,
     merge_common_style_preferences,
 )
 from krok_helper.subtitle_render.auto_chorus import (
@@ -7974,78 +7974,19 @@ class SubtitleRenderWindow(QWidget):
             if isinstance(data.get("output"), dict)
             else {}
         )
-        # 应用级旧默认曾错误使用“游明朝 100px / 15px 描边”。只在加载
-        # 应用默认时迁移到 N3「情報小」；打开 .yurika / .n3proj 时保留项目
-        # 明确选择的标题方案。
-        loaded_style = migrate_legacy_app_title_default(
-            style_from_dict(data.get("style"))
-        )
         catalog = get_n3_font_catalog()
-        normalized_style, style_changed = normalize_style_font_families(
-            loaded_style, catalog
+        loaded_style_preferences = load_app_style_preferences(
+            data,
+            font_catalog=catalog,
         )
-        title_scheme = normalized_style.custom_style_schemes.get(
-            TITLE_SCHEME_NAME,
-            Style().custom_style_schemes[TITLE_SCHEME_NAME],
+        self._app_default_style = deepcopy(loaded_style_preferences.style)
+        self._style = deepcopy(loaded_style_preferences.style)
+        self._layout_assignment_preference = (
+            deepcopy(loaded_style_preferences.layout_assignment)
+            if loaded_style_preferences.layout_assignment is not None
+            else None
         )
-        persisted_style = data.get("style")
-        had_persisted_title = (
-            isinstance(persisted_style, dict)
-            and "title_overlay" in persisted_style
-        )
-        defaults = (
-            dict(data.get("new_project_defaults"))
-            if isinstance(data.get("new_project_defaults"), dict)
-            else {}
-        )
-        legacy_title = normalized_style.title_overlay or TitleOverlay()
-        title_enabled = (
-            bool(defaults.get("title_enabled"))
-            if "title_enabled" in defaults
-            else bool(legacy_title.enabled) if had_persisted_title else False
-        )
-        if "title_layout_name" in defaults:
-            title_layout_index = self._layout_index_for_name(
-                normalized_style, defaults.get("title_layout_name")
-            )
-        elif had_persisted_title:
-            title_layout_index = int(legacy_title.layout_index or 0)
-        else:
-            title_layout_index = int(TitleOverlay().layout_index or 0)
-        persisted_fades = defaults.get("title_fades")
-        title_fades: dict[str, object] = {}
-        if isinstance(persisted_fades, dict):
-            for name in _TITLE_FADE_FIELDS:
-                if name not in persisted_fades:
-                    continue
-                value = persisted_fades[name]
-                if value is None:
-                    # 尾段的 None 是"跟随开头"，是合法取值，不能当缺省丢掉。
-                    title_fades[name] = None
-                elif isinstance(value, (int, float)) and not isinstance(value, bool):
-                    title_fades[name] = max(int(value), 0)
-        app_default_style = replace(
-            normalized_style,
-            custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
-            singer_style_overrides={},
-            title_overlay=replace(
-                TitleOverlay(),
-                enabled=title_enabled,
-                layout_index=title_layout_index,
-                **title_fades,
-            ),
-        )
-        style_changed |= had_persisted_title or replace(
-            app_default_style,
-            title_overlay=normalized_style.title_overlay,
-        ) != normalized_style
-        self._app_default_style = deepcopy(app_default_style)
-        self._style = deepcopy(app_default_style)
-        assignment = defaults.get("layout_assignment")
-        if isinstance(assignment, dict) and assignment.get("mode") in {"all", "auto"}:
-            self._layout_assignment_preference = deepcopy(assignment)
-        else:
-            self._layout_assignment_preference = None
+        style_changed = loaded_style_preferences.changed
         auto_chorus = data.get("auto_chorus")
         if isinstance(auto_chorus, dict):
             self._auto_chorus_role = str(auto_chorus.get("role") or "")

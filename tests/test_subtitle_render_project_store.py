@@ -38,6 +38,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.preferences import (  # noqa: E402
     app_default_style_to_dict,
+    load_app_style_preferences,
     merge_common_style_preferences,
 )
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
@@ -264,6 +265,44 @@ def test_app_style_preferences_do_not_leak_project_only_content():
     assert merged.singer_style_overrides == {}
     assert merged.title_overlay == app_title
     assert "title_overlay" not in app_default_style_to_dict(merged)
+
+
+def test_app_style_preferences_load_title_habits_without_project_content():
+    persisted = Style(
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#112233"),
+            "逐曲角色": SubtitleStyleScheme(fill_color="#FF0000"),
+        },
+        singer_style_overrides={1: SubtitleStyleScheme(fill_color="#00FF00")},
+        title_overlay=TitleOverlay(enabled=False, text_template="不得继承"),
+    )
+
+    loaded = load_app_style_preferences(
+        {
+            "style": style_to_dict(persisted),
+            "new_project_defaults": {
+                "title_enabled": True,
+                "title_layout_name": persisted.layouts[0].name,
+                "title_fades": {
+                    "fade_in_ms": -20,
+                    "tail_fade_in_ms": None,
+                },
+                "layout_assignment": {"mode": "auto"},
+            },
+        }
+    )
+
+    title = loaded.style.title_overlay
+    assert title is not None
+    assert title.enabled is True
+    assert title.layout_index == 1
+    assert title.fade_in_ms == 0
+    assert title.tail_fade_in_ms is None
+    assert title.text_template == TitleOverlay().text_template
+    assert set(loaded.style.custom_style_schemes) == {TITLE_SCHEME_NAME}
+    assert loaded.style.singer_style_overrides == {}
+    assert loaded.layout_assignment == {"mode": "auto"}
+    assert loaded.changed is True
 
 
 def test_inter_page_overlap_setting_defaults_off_and_round_trips():
