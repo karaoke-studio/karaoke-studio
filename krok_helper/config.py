@@ -1,7 +1,7 @@
 from pathlib import Path
 
 APP_NAME = "Karaoke Studio"
-APP_VERSION = "4.2.3"
+APP_VERSION = "4.2.4"
 APP_TITLE = "卡拉OK工作台"
 MIN_HIRES_SAMPLE_RATE = 48_000
 DURATION_WARNING_SECONDS = 2.0
