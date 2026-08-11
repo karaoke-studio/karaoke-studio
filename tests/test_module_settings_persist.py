@@ -112,3 +112,63 @@ def test_the_lyrics_page_still_persists_after_startup(workbench) -> None:
     QApplication.instance().processEvents()
 
     assert _on_disk()["lyrics_strip_intro_lines"] is True
+
+
+# ── 外壳这一层：界面还没灌过设置时不许"收集" ──────────────────
+
+
+def test_a_save_during_construction_keeps_everything(monkeypatch, tmp_path: Path) -> None:
+    """``_build_ui`` 期间任何一个页面叫到 ``_save_all_settings`` 都不该冲掉配置。
+
+    音频分离页建后端时就会叫（``_persist_inputs`` → ``_save_settings``）。那时外壳
+    的 ``output_name_mode_value`` 之类还是构造默认值、对齐页也没 ``load_settings``
+    过，一"收集"就把用户上次的整份配置盖成默认。
+    """
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path))
+    monkeypatch.delenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", raising=False)
+    settings = load_app_settings()
+    for name, value in SAVED_SETTINGS.items():
+        setattr(settings, name, value)
+    settings.pymss = {"mode": "local", "output_format": "flac"}
+    save_app_settings(settings)
+
+    from krok_helper import gui_qt
+
+    app = QApplication.instance() or QApplication([])
+    window = gui_qt.KrokHelperQtApp()
+    try:
+        disk = _on_disk()
+        lost = {
+            name: (expected, disk.get(name))
+            for name, expected in SAVED_SETTINGS.items()
+            if disk.get(name) != expected
+        }
+        assert not lost, f"构造期间的落盘把配置冲掉了：{lost}"
+        # 页面在构造期间写进 settings 的东西照样该存下去（分离页自己还会往这个
+        # 命名空间里补 output_dir，所以只断言我们放进去的那几项还在）。
+        assert disk["pymss"]["mode"] == "local"
+        assert disk["pymss"]["output_format"] == "flac"
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_the_shell_collects_again_once_loaded(workbench) -> None:
+    """旗放开之后，收集方向必须恢复 —— 否则就变成"永远存不了"。"""
+    assert workbench._settings_loaded is True
+
+    workbench.on_name_template_value = "{video_name}_换了"
+    workbench._save_all_settings()
+
+    assert _on_disk()["on_name_template"] == "{video_name}_换了"
+
+
+def test_a_save_before_loading_does_not_collect(workbench) -> None:
+    """直接把旗按回去，模拟构造期间的那次落盘。"""
+    workbench._settings_loaded = False
+    workbench.on_name_template_value = "{video_name}_不该被存"
+
+    workbench._save_all_settings()
+
+    assert _on_disk()["on_name_template"] == SAVED_SETTINGS["on_name_template"]

@@ -304,6 +304,8 @@ class KrokHelperQtApp(QMainWindow):
         self._update_exit_prepared = False
         self.active_module = WORKFLOW_VIDEO_DOWNLOAD
         self._loading_settings_into_ui = True
+        #: 设置是否已经灌进界面。为假时 :meth:`_save_all_settings` 只落盘不收集。
+        self._settings_loaded = False
 
         self.output_name_mode_value = OUTPUT_NAME_MODE_FIXED
         self.on_name_template_value = DEFAULT_ON_NAME_TEMPLATE
@@ -1240,12 +1242,23 @@ class KrokHelperQtApp(QMainWindow):
             self.workflow_compact_button.setToolTip("展开工作流栏" if compact else "折叠工作流栏")
 
     def _save_all_settings(self) -> Path:
-        self.settings.output_name_mode = self.output_name_mode_value
-        self.settings.on_name_template = self.on_name_template_value
-        self.settings.off_name_template = self.off_name_template_value
-        self.settings.ffmpeg_dir = self.ffmpeg_dir_text
+        """把界面上的值收进 ``settings`` 并落盘。
+
+        **界面还没灌过设置时只落盘、不收集**：``_build_ui`` 期间任何一个页面都可能
+        叫到这里（音频分离页建后端时就会），那时界面上全是默认值，一收集就把用户
+        上次的配置整份冲掉 —— 而 ``_load_settings_into_ui`` 排在 ``_build_ui``
+        后面，随后那次"加载"读到的已经是被自己冲掉的那份。
+
+        这一段照样落盘：页面在构造期间写进 ``settings`` 的东西（比如分离页的
+        ``pymss`` 命名空间）该存还是要存，只是不能拿空界面去覆盖别人的字段。
+        """
+        if self._settings_loaded:
+            self.settings.output_name_mode = self.output_name_mode_value
+            self.settings.on_name_template = self.on_name_template_value
+            self.settings.off_name_template = self.off_name_template_value
+            self.settings.ffmpeg_dir = self.ffmpeg_dir_text
+            self.collect_page_settings()
         self._sync_lyrics_timing_host_paths()
-        self.collect_page_settings()
         return save_app_settings(self.settings)
 
     def _bind_shortcuts(self) -> None:
@@ -1320,6 +1333,8 @@ class KrokHelperQtApp(QMainWindow):
 
     def _load_settings_into_ui(self) -> None:
         self._loading_settings_into_ui = True
+        # 收集方向在这之前一律禁止，见 :meth:`_save_all_settings`。
+        self._settings_loaded = False
         self.set_ffmpeg_dir(Path(self.settings.ffmpeg_dir) if self.settings.ffmpeg_dir.strip() else None)
         self.set_output_name_mode(self.settings.output_name_mode)
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
@@ -1330,6 +1345,7 @@ class KrokHelperQtApp(QMainWindow):
         if lyrics_page is not None:
             lyrics_page.restore_preferences()
         self._loading_settings_into_ui = False
+        self._settings_loaded = True
 
     def _install_single_click_combo_behavior(self, combo: QComboBox) -> None:
         popup_view = getattr(combo, "view", None)
