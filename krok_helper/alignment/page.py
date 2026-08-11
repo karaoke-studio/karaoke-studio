@@ -371,7 +371,13 @@ class AlignmentPage(QWidget):
         #: 正在把设置灌进控件 —— 期间控件变化不该回写，否则会把偏好覆盖成中间态。
         #: 以前读的是外壳的 ``_loading_settings_into_ui``，那是整机加载的旗，
         #: 本页只关心自己恢复设置的那一小段。
-        self._restoring_alignment_settings = False
+        #:
+        #: **一开始就是 True**：``_build_ui`` 里 ``setChecked`` 会触发
+        #: ``_on_alignment_target_changed`` → ``_persist_alignment_preferences``，
+        #: 那时 :meth:`load_settings` 还没跑过，页面上全是默认值，一存就把用户
+        #: 上次的导出目录/编码方式原样冲掉（外壳的 ``_build_ui`` 在
+        #: ``_load_settings_into_ui`` 之前）。加载过一次才允许回写。
+        self._restoring_alignment_settings = True
         self.align_control_panel: QFrame | None = None
         self.align_open_output_button: QPushButton | None = None
         self.align_clear_button: QPushButton | None = None

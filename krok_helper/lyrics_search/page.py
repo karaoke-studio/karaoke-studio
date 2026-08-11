@@ -249,7 +249,10 @@ class LyricsSearchPage(QWidget):
         self._lyrics_loading_more = False
         self._lyrics_loading_key = ""
         #: 正在把设置灌进控件 —— 期间控件变化不该回写，否则会把偏好覆盖成中间态。
-        self._restoring_preferences = False
+        #: 同对齐页：建界面时控件变化会触发回写，而那时
+        #: :meth:`restore_preferences` 还没跑过，页面上全是默认值。加载过一次
+        #: 才允许回写。
+        self._restoring_preferences = True
         self._build_ui()
         self.restore_preferences()
 
