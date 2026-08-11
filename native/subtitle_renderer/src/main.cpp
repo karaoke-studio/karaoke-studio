@@ -28,6 +28,7 @@
 
 #include "backends/direct2d/d2d_backend.h"
 #include "protocol/json_protocol.h"
+#include "runtime/render_job_runtime.h"
 #include "runtime/shared_frame_ring.h"
 
 #include <algorithm>
@@ -56,6 +57,7 @@ using krok::subtitle::native::protocol::response;
 using krok::subtitle::native::protocol::writeJson;
 using krok::subtitle::native::runtime::SharedFrameRing;
 using krok::subtitle::native::runtime::SharedFrameRingBuffer;
+using krok::subtitle::native::runtime::RenderJobRuntime;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kUtopiaIntroTimeMs = 700;
@@ -894,11 +896,7 @@ struct GpuPreviewPoolCacheEntry {
 };
 
 struct RenderRuntime {
-    std::mutex cancelMutex;
-    QSet<int> cancelledGenerations;
-    std::atomic<bool> shutdownRequested{false};
-    std::mutex jobsMutex;
-    std::vector<std::thread> jobs;
+    RenderJobRuntime jobs;
     SharedFrameRingBuffer sharedFrames;
     std::mutex gpuBackendMutex;
     std::unique_ptr<krok::subtitle::native::RenderBackend> hardwareGpuBackend;
@@ -1673,27 +1671,21 @@ bool generationCancelled(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return false;
     }
-    if (runtime->shutdownRequested.load()) {
-        return true;
-    }
-    std::lock_guard<std::mutex> lock(runtime->cancelMutex);
-    return runtime->cancelledGenerations.contains(generation);
+    return runtime->jobs.generationCancelled(generation);
 }
 
 void cancelGeneration(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return;
     }
-    std::lock_guard<std::mutex> lock(runtime->cancelMutex);
-    runtime->cancelledGenerations.insert(generation);
+    runtime->jobs.cancelGeneration(generation);
 }
 
 void clearGenerationCancel(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return;
     }
-    std::lock_guard<std::mutex> lock(runtime->cancelMutex);
-    runtime->cancelledGenerations.remove(generation);
+    runtime->jobs.clearGenerationCancel(generation);
 }
 
 void rememberRenderJob(RenderRuntime *runtime, std::thread job) {
@@ -1703,24 +1695,14 @@ void rememberRenderJob(RenderRuntime *runtime, std::thread job) {
         }
         return;
     }
-    std::lock_guard<std::mutex> lock(runtime->jobsMutex);
-    runtime->jobs.push_back(std::move(job));
+    runtime->jobs.remember(std::move(job));
 }
 
 void joinRenderJobs(RenderRuntime *runtime) {
     if (runtime == nullptr) {
         return;
     }
-    std::vector<std::thread> jobs;
-    {
-        std::lock_guard<std::mutex> lock(runtime->jobsMutex);
-        jobs.swap(runtime->jobs);
-    }
-    for (auto &job : jobs) {
-        if (job.joinable()) {
-            job.join();
-        }
-    }
+    runtime->jobs.joinAll();
 }
 
 QString defaultSharedMemoryKey(int generation) {
@@ -8906,7 +8888,7 @@ int main(int argc, char **argv) {
             writeJson(handleCancelGeneration(*request, &runtime));
             break;
         case Command::Shutdown:
-            runtime.shutdownRequested.store(true);
+            runtime.jobs.requestShutdown();
             joinRenderJobs(&runtime);
             writeJson(response(true, QStringLiteral("shutdown")));
             return 0;
@@ -8922,7 +8904,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    runtime.shutdownRequested.store(true);
+    runtime.jobs.requestShutdown();
     joinRenderJobs(&runtime);
     return 0;
 }
