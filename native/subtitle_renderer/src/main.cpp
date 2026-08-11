@@ -29,6 +29,7 @@
 #include <QtWidgets/QGraphicsScene>
 
 #include "backends/direct2d/d2d_backend.h"
+#include "protocol/json_protocol.h"
 
 #include <algorithm>
 #include <atomic>
@@ -48,7 +49,11 @@
 
 namespace {
 
-constexpr int kProtocolSchema = 1;
+using krok::subtitle::native::protocol::kRenderIrSchema;
+using krok::subtitle::native::protocol::parseRequestLine;
+using krok::subtitle::native::protocol::response;
+using krok::subtitle::native::protocol::writeJson;
+
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kUtopiaIntroTimeMs = 700;
 constexpr int kUtopiaIntroDelayMs = 200;
@@ -546,8 +551,6 @@ struct SharedFrameRing {
     int totalBytes = 0;
     QString pixelFormat = QStringLiteral("rgba8888");
 };
-
-void writeJson(const QJsonObject &object);
 
 class GpuPreviewWorkerPool {
 public:
@@ -1678,20 +1681,6 @@ ResolvedStyle resolvedStyleFromTitle(
     return cfg;
 }
 
-QJsonObject response(bool ok, const QString &event) {
-    QJsonObject out;
-    out.insert(QStringLiteral("ok"), ok);
-    out.insert(QStringLiteral("event"), event);
-    return out;
-}
-
-void writeJson(const QJsonObject &object) {
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
-    const QJsonDocument doc(object);
-    std::cout << doc.toJson(QJsonDocument::Compact).constData() << std::endl;
-}
-
 bool generationCancelled(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return false;
@@ -2280,7 +2269,7 @@ std::vector<int> parseIntArray(const QJsonArray &items) {
 void buildResolvedStyleCache(RenderConfig &cfg);
 
 std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
-    if (ir.value(QStringLiteral("schema")).toInt() != kProtocolSchema) {
+    if (ir.value(QStringLiteral("schema")).toInt() != kRenderIrSchema) {
         *error = QStringLiteral("unsupported Render IR schema");
         return std::nullopt;
     }
@@ -9005,12 +8994,6 @@ QJsonObject handleCancelGeneration(const QJsonObject &request, RenderRuntime *ru
     return out;
 }
 
-QJsonObject parseErrorResponse(const QString &message) {
-    QJsonObject out = response(false, QStringLiteral("parse_error"));
-    out.insert(QStringLiteral("error"), message);
-    return out;
-}
-
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -9020,7 +9003,7 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
 
     QJsonObject ready = response(true, QStringLiteral("ready"));
-    ready.insert(QStringLiteral("schema"), kProtocolSchema);
+    ready.insert(QStringLiteral("schema"), kRenderIrSchema);
     ready.insert(QStringLiteral("gpu_protocol"), 1);
     ready.insert(QStringLiteral("native_preview_protocol"), 1);
     ready.insert(QStringLiteral("qt"), QString::fromLatin1(qVersion()));
@@ -9035,45 +9018,44 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        QJsonParseError parseError;
-        const QJsonDocument doc = QJsonDocument::fromJson(line.toUtf8(), &parseError);
-        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-            writeJson(parseErrorResponse(parseError.errorString()));
+        QJsonObject parseError;
+        const auto request = parseRequestLine(line, &parseError);
+        if (!request.has_value()) {
+            writeJson(parseError);
             continue;
         }
 
-        const QJsonObject request = doc.object();
-        const QString command = stringValue(request, QStringLiteral("cmd"));
+        const QString command = stringValue(*request, QStringLiteral("cmd"));
         if (command == QStringLiteral("backend_info")) {
-            writeJson(handleBackendInfo(request, &runtime));
+            writeJson(handleBackendInfo(*request, &runtime));
         } else if (command == QStringLiteral("render_probe")) {
-            writeJson(handleRenderProbe(request, &runtime));
+            writeJson(handleRenderProbe(*request, &runtime));
         } else if (command == QStringLiteral("gpu_configure")) {
-            writeJson(handleConfigureGpu(request, config, &runtime));
+            writeJson(handleConfigureGpu(*request, config, &runtime));
         } else if (command == QStringLiteral("gpu_resize_target")) {
-            writeJson(handleResizeGpuTarget(request, &config, &runtime));
+            writeJson(handleResizeGpuTarget(*request, &config, &runtime));
         } else if (command == QStringLiteral("gpu_render_frame")) {
-            if (auto out = handleRenderGpuFrame(request, config, &runtime)) {
+            if (auto out = handleRenderGpuFrame(*request, config, &runtime)) {
                 writeJson(*out);
             }
         } else if (command == QStringLiteral("gpu_present_frame")) {
-            writeJson(handlePresentGpuFrame(request, config, &runtime));
+            writeJson(handlePresentGpuFrame(*request, config, &runtime));
         } else if (command == QStringLiteral("gpu_preview_close")) {
-            writeJson(handleCloseGpuPreview(request, &runtime));
+            writeJson(handleCloseGpuPreview(*request, &runtime));
         } else if (command == QStringLiteral("gpu_diagnostics")) {
-            writeJson(handleGpuDiagnostics(request, &runtime));
+            writeJson(handleGpuDiagnostics(*request, &runtime));
         } else if (command == QStringLiteral("configure")) {
-            writeJson(handleConfigure(request, &config));
+            writeJson(handleConfigure(*request, &config));
         } else if (command == QStringLiteral("render_frame")) {
-            writeJson(handleRenderFrame(request, config));
+            writeJson(handleRenderFrame(*request, config));
         } else if (command == QStringLiteral("render_frame_stats")) {
-            writeJson(handleRenderFrameStats(request, config));
+            writeJson(handleRenderFrameStats(*request, config));
         } else if (command == QStringLiteral("render_range_stats")) {
-            writeJson(handleRenderRangeStats(request, config));
+            writeJson(handleRenderRangeStats(*request, config));
         } else if (command == QStringLiteral("render_range")) {
-            writeJson(handleRenderRange(request, config, &runtime));
+            writeJson(handleRenderRange(*request, config, &runtime));
         } else if (command == QStringLiteral("cancel_generation")) {
-            writeJson(handleCancelGeneration(request, &runtime));
+            writeJson(handleCancelGeneration(*request, &runtime));
         } else if (command == QStringLiteral("shutdown")) {
             runtime.shutdownRequested.store(true);
             joinRenderJobs(&runtime);

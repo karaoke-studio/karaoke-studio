@@ -28,6 +28,8 @@ endif()
 
 add_executable(krok_subtitle_renderer
     src/main.cpp
+    src/protocol/json_protocol.cpp
+    src/protocol/json_protocol.h
     src/backends/render_backend.h
     src/backends/direct2d/d2d_backend.cpp
     src/backends/direct2d/d2d_backend.h
