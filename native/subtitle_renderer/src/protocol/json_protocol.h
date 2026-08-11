@@ -9,6 +9,26 @@ namespace krok::subtitle::native::protocol {
 
 inline constexpr int kRenderIrSchema = 1;
 
+enum class Command {
+    BackendInfo,
+    RenderProbe,
+    GpuConfigure,
+    GpuResizeTarget,
+    GpuRenderFrame,
+    GpuPresentFrame,
+    GpuPreviewClose,
+    GpuDiagnostics,
+    Configure,
+    RenderFrame,
+    RenderFrameStats,
+    RenderRangeStats,
+    RenderRange,
+    CancelGeneration,
+    Shutdown,
+    Unknown,
+};
+
+Command commandFromName(const QString &name);
 QJsonObject response(bool ok, const QString &event);
 QJsonObject parseErrorResponse(const QString &message);
 std::optional<QJsonObject> parseRequestLine(

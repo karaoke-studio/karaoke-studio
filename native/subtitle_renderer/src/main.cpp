@@ -49,6 +49,8 @@
 namespace {
 
 using krok::subtitle::native::protocol::kRenderIrSchema;
+using krok::subtitle::native::protocol::Command;
+using krok::subtitle::native::protocol::commandFromName;
 using krok::subtitle::native::protocol::parseRequestLine;
 using krok::subtitle::native::protocol::response;
 using krok::subtitle::native::protocol::writeJson;
@@ -8857,46 +8859,66 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        const QString command = stringValue(*request, QStringLiteral("cmd"));
-        if (command == QStringLiteral("backend_info")) {
+        const QString commandName = stringValue(*request, QStringLiteral("cmd"));
+        switch (commandFromName(commandName)) {
+        case Command::BackendInfo:
             writeJson(handleBackendInfo(*request, &runtime));
-        } else if (command == QStringLiteral("render_probe")) {
+            break;
+        case Command::RenderProbe:
             writeJson(handleRenderProbe(*request, &runtime));
-        } else if (command == QStringLiteral("gpu_configure")) {
+            break;
+        case Command::GpuConfigure:
             writeJson(handleConfigureGpu(*request, config, &runtime));
-        } else if (command == QStringLiteral("gpu_resize_target")) {
+            break;
+        case Command::GpuResizeTarget:
             writeJson(handleResizeGpuTarget(*request, &config, &runtime));
-        } else if (command == QStringLiteral("gpu_render_frame")) {
+            break;
+        case Command::GpuRenderFrame:
             if (auto out = handleRenderGpuFrame(*request, config, &runtime)) {
                 writeJson(*out);
             }
-        } else if (command == QStringLiteral("gpu_present_frame")) {
+            break;
+        case Command::GpuPresentFrame:
             writeJson(handlePresentGpuFrame(*request, config, &runtime));
-        } else if (command == QStringLiteral("gpu_preview_close")) {
+            break;
+        case Command::GpuPreviewClose:
             writeJson(handleCloseGpuPreview(*request, &runtime));
-        } else if (command == QStringLiteral("gpu_diagnostics")) {
+            break;
+        case Command::GpuDiagnostics:
             writeJson(handleGpuDiagnostics(*request, &runtime));
-        } else if (command == QStringLiteral("configure")) {
+            break;
+        case Command::Configure:
             writeJson(handleConfigure(*request, &config));
-        } else if (command == QStringLiteral("render_frame")) {
+            break;
+        case Command::RenderFrame:
             writeJson(handleRenderFrame(*request, config));
-        } else if (command == QStringLiteral("render_frame_stats")) {
+            break;
+        case Command::RenderFrameStats:
             writeJson(handleRenderFrameStats(*request, config));
-        } else if (command == QStringLiteral("render_range_stats")) {
+            break;
+        case Command::RenderRangeStats:
             writeJson(handleRenderRangeStats(*request, config));
-        } else if (command == QStringLiteral("render_range")) {
+            break;
+        case Command::RenderRange:
             writeJson(handleRenderRange(*request, config, &runtime));
-        } else if (command == QStringLiteral("cancel_generation")) {
+            break;
+        case Command::CancelGeneration:
             writeJson(handleCancelGeneration(*request, &runtime));
-        } else if (command == QStringLiteral("shutdown")) {
+            break;
+        case Command::Shutdown:
             runtime.shutdownRequested.store(true);
             joinRenderJobs(&runtime);
             writeJson(response(true, QStringLiteral("shutdown")));
             return 0;
-        } else {
+        case Command::Unknown: {
             QJsonObject out = response(false, QStringLiteral("unknown_command"));
-            out.insert(QStringLiteral("error"), QStringLiteral("unknown command: ") + command);
+            out.insert(
+                QStringLiteral("error"),
+                QStringLiteral("unknown command: ") + commandName
+            );
             writeJson(out);
+            break;
+        }
         }
     }
 

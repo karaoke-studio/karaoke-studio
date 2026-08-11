@@ -8,6 +8,55 @@
 
 namespace krok::subtitle::native::protocol {
 
+Command commandFromName(const QString &name) {
+    if (name == QStringLiteral("backend_info")) {
+        return Command::BackendInfo;
+    }
+    if (name == QStringLiteral("render_probe")) {
+        return Command::RenderProbe;
+    }
+    if (name == QStringLiteral("gpu_configure")) {
+        return Command::GpuConfigure;
+    }
+    if (name == QStringLiteral("gpu_resize_target")) {
+        return Command::GpuResizeTarget;
+    }
+    if (name == QStringLiteral("gpu_render_frame")) {
+        return Command::GpuRenderFrame;
+    }
+    if (name == QStringLiteral("gpu_present_frame")) {
+        return Command::GpuPresentFrame;
+    }
+    if (name == QStringLiteral("gpu_preview_close")) {
+        return Command::GpuPreviewClose;
+    }
+    if (name == QStringLiteral("gpu_diagnostics")) {
+        return Command::GpuDiagnostics;
+    }
+    if (name == QStringLiteral("configure")) {
+        return Command::Configure;
+    }
+    if (name == QStringLiteral("render_frame")) {
+        return Command::RenderFrame;
+    }
+    if (name == QStringLiteral("render_frame_stats")) {
+        return Command::RenderFrameStats;
+    }
+    if (name == QStringLiteral("render_range_stats")) {
+        return Command::RenderRangeStats;
+    }
+    if (name == QStringLiteral("render_range")) {
+        return Command::RenderRange;
+    }
+    if (name == QStringLiteral("cancel_generation")) {
+        return Command::CancelGeneration;
+    }
+    if (name == QStringLiteral("shutdown")) {
+        return Command::Shutdown;
+    }
+    return Command::Unknown;
+}
+
 QJsonObject response(bool ok, const QString &event) {
     QJsonObject out;
     out.insert(QStringLiteral("ok"), ok);
