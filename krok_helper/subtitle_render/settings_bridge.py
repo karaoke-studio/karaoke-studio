@@ -9,7 +9,12 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Callable
 
-from krok_helper.settings import AppSettings, load_app_settings, save_app_settings
+from krok_helper.settings import (
+    AppSettings,
+    load_app_settings,
+    save_app_settings,
+    sync_baseline_field,
+)
 
 
 class KrokHelperSubtitleRenderSettingsBridge:
@@ -22,6 +27,7 @@ class KrokHelperSubtitleRenderSettingsBridge:
     def load(self) -> dict:
         latest = load_app_settings()
         self._app_settings.subtitle_render = deepcopy(latest.subtitle_render)
+        sync_baseline_field(self._app_settings, "subtitle_render")
         return deepcopy(self._app_settings.subtitle_render)
 
     def save(self, data: dict) -> None:
@@ -30,3 +36,5 @@ class KrokHelperSubtitleRenderSettingsBridge:
         # 这里要写的正是模块命名空间，合并回盘上的旧值等于把自己的改动丢掉。
         save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.subtitle_render = deepcopy(latest.subtitle_render)
+        # 宿主的整份写盘不该再把这一段当成"自己的改动"端出去。
+        sync_baseline_field(self._app_settings, "subtitle_render")

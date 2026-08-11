@@ -98,6 +98,7 @@ from krok_helper.settings import (
     load_app_settings,
     migrate_strange_uta_game_settings,
     save_app_settings,
+    sync_baseline_field,
 )
 from krok_helper.background import BackgroundTask
 from krok_helper.media_formats import (
@@ -152,6 +153,7 @@ class KrokHelperSettingsBridge:
     def load(self) -> dict:
         latest = load_app_settings()
         self._app_settings.lyrics_timing = deepcopy(latest.lyrics_timing)
+        sync_baseline_field(self._app_settings, "lyrics_timing")
         return deepcopy(self._app_settings.lyrics_timing)
 
     def save(self, data: dict) -> None:
@@ -160,6 +162,8 @@ class KrokHelperSettingsBridge:
         # 这里要写的正是模块命名空间，合并回盘上的旧值等于把自己的改动丢掉。
         save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.lyrics_timing = deepcopy(latest.lyrics_timing)
+        # 宿主的整份写盘不该再把这一段当成"自己的改动"端出去。
+        sync_baseline_field(self._app_settings, "lyrics_timing")
 
     def save_partial(self, changes: dict[str, object]) -> None:
         latest = load_app_settings()
@@ -169,6 +173,7 @@ class KrokHelperSettingsBridge:
         latest.lyrics_timing = config
         save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.lyrics_timing = deepcopy(config)
+        sync_baseline_field(self._app_settings, "lyrics_timing")
 
     def load_extra(self, key: str, default):
         field_name = self._EXTRA_FIELDS.get(key)
@@ -176,6 +181,7 @@ class KrokHelperSettingsBridge:
             return deepcopy(default)
         latest = load_app_settings()
         setattr(self._app_settings, field_name, deepcopy(getattr(latest, field_name, default)))
+        sync_baseline_field(self._app_settings, field_name)
         return deepcopy(getattr(self._app_settings, field_name, default))
 
     def save_extra(self, key: str, data) -> None:
@@ -186,6 +192,7 @@ class KrokHelperSettingsBridge:
         setattr(latest, field_name, deepcopy(data))
         save_app_settings(latest, merge_module_namespaces=False)
         setattr(self._app_settings, field_name, deepcopy(data))
+        sync_baseline_field(self._app_settings, field_name)
 
     @staticmethod
     def _set_nested(target: dict, path: str, value: object) -> None:

@@ -8196,7 +8196,9 @@ class SubtitleRenderWindow(QWidget):
                 return
             settings = load_app_settings()
             settings.subtitle_render = data
-            save_app_settings(settings)
+            # 没有设置桥时这里就是桥：要写的正是 ``subtitle_render`` 那一段，别让
+            # 命名空间合并把盘上的旧值抓回来（那样预设库和输出偏好会悄悄丢掉）。
+            save_app_settings(settings, merge_module_namespaces=False)
         except Exception:
             # 原来是彻底静默的：写盘失败（文件被占用 / 没权限 / 磁盘满）时用户什么
             # 都看不到，只会觉得"存了但没存上"。仍然不往上抛（保存失败不该把正在

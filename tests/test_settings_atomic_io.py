@@ -249,6 +249,203 @@ def test_module_namespaces_survive_across_every_wholesale_writer(tmp_path: Path)
     assert saved["lyrics_timing_network_dictionary"] == {"c": 3}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 多开时的普通字段保护
+#
+# 命名空间只是冰山一角：导出目录、命名模板、下载设置、``pymss``、``updater`` 这些
+# 顶层字段没有设置桥，写的全是本进程启动时读到的那份快照。在 A 里改完导出目录，
+# B 随手换个主题（或者干脆只是关个窗）就把它顶回去了。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _two_instances() -> tuple:
+    save_app_settings(load_app_settings())
+    return load_app_settings(), load_app_settings()
+
+
+def test_another_instance_does_not_revert_ordinary_fields(tmp_path: Path):
+    """B 只改了主题，不该把 A 改过的任何东西带回去。"""
+    instance_a, instance_b = _two_instances()
+
+    instance_a.align_output_custom_dir = r"D:\A 的导出目录"
+    instance_a.video_download_save_dir = r"D:\A 的下载目录"
+    instance_a.pymss = {"output_format": "flac"}
+    instance_a.updater = {"channel": "beta"}
+    save_app_settings(instance_a)
+
+    instance_b.ui_theme = "dark"
+    save_app_settings(instance_b)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["align_output_custom_dir"] == r"D:\A 的导出目录"
+    assert saved["video_download_save_dir"] == r"D:\A 的下载目录"
+    assert saved["pymss"] == {"output_format": "flac"}
+    assert saved["updater"] == {"channel": "beta"}
+    assert saved["ui_theme"] == "dark", "B 自己那份改动也要写进去"
+
+
+def test_a_later_save_from_the_same_instance_still_yields(tmp_path: Path):
+    """判据是"和基线比有没有变"，所以"改过一次"不能变成"永远压着别人"。
+
+    外壳每次写盘前都会把界面上的值收一遍，B 的界面里还是启动时那份 —— 收完仍然
+    等于基线，于是继续让位给 A。
+    """
+    instance_a, instance_b = _two_instances()
+    instance_a.align_output_custom_dir = r"D:\A 的导出目录"
+    save_app_settings(instance_a)
+
+    instance_b.ui_theme = "dark"
+    save_app_settings(instance_b)
+    instance_b.workflow_compact = True
+    save_app_settings(instance_b)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["align_output_custom_dir"] == r"D:\A 的导出目录"
+
+
+def test_an_instance_can_still_change_a_field_twice(tmp_path: Path):
+    """让位的前提是"本实例没动过"—— 动过就得写下去，否则就成了存不了。"""
+    settings = load_app_settings()
+
+    settings.ffmpeg_dir = "D:/一"
+    save_app_settings(settings)
+    settings.ffmpeg_dir = "D:/二"
+    save_app_settings(settings)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["ffmpeg_dir"] == "D:/二"
+
+
+def test_both_instances_changing_one_field_is_last_write_wins(tmp_path: Path):
+    """同一个字段两边都改，跨进程没有更好的答案。"""
+    instance_a, instance_b = _two_instances()
+
+    instance_a.ffmpeg_dir = "D:/A"
+    save_app_settings(instance_a)
+    instance_b.ffmpeg_dir = "D:/B"
+    save_app_settings(instance_b)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["ffmpeg_dir"] == "D:/B"
+
+
+def test_a_hand_built_settings_object_still_writes_everything(tmp_path: Path):
+    """没有基线的 ``AppSettings()`` 走老路子整份写 —— 不然就没人写得进去了。"""
+    save_app_settings(load_app_settings())
+
+    save_app_settings(AppSettings(ffmpeg_dir="D:/手搓"))
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["ffmpeg_dir"] == "D:/手搓"
+
+
+def test_a_field_missing_from_the_file_keeps_this_instances_value(tmp_path: Path):
+    """老版本写的文件里没有的字段，合并时不能当成"盘上是默认值"。"""
+    path = _settings_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"ffmpeg_dir": "D:/老版本"}), encoding="utf-8")
+
+    settings = load_app_settings()
+    settings.workflow_compact = True
+    save_app_settings(settings)
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["workflow_compact"] is True
+    assert saved["ffmpeg_dir"] == "D:/老版本"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 命名空间的保护不能反过来咬住"故意要写命名空间"的人
+#
+# 一次性迁移、「导入旧版 SUG 配置」、字幕渲染独立运行时的兜底保存，写的正是那几段
+# 命名空间。无条件换成盘上的值，等于这次保存什么都没干 —— 而迁移那条还会把
+# ``lyrics_timing_migrated_v1`` 标记写下去，于是永远不再重试。
+#
+# 现有的迁移测试只断言内存里的对象，正是这样漏过去的：这里一律断言**盘上**。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _legacy_sug_dir(tmp_path: Path) -> Path:
+    legacy = tmp_path / "legacy-sug"
+    legacy.mkdir()
+    (legacy / "singers.json").write_text(
+        json.dumps([{"name": "老演唱者"}]), encoding="utf-8"
+    )
+    (legacy / "dictionary.json").write_text(
+        json.dumps([{"word": "老词条"}]), encoding="utf-8"
+    )
+    return legacy
+
+
+def test_the_one_shot_sug_migration_lands_on_disk(tmp_path: Path):
+    from krok_helper.settings import migrate_strange_uta_game_settings
+
+    legacy = _legacy_sug_dir(tmp_path)
+    save_app_settings(load_app_settings())  # 老用户：settings.json 早就存在
+
+    settings = load_app_settings()
+    assert migrate_strange_uta_game_settings(settings, legacy) is True
+    save_app_settings(settings)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["lyrics_timing_singers"] == [{"name": "老演唱者"}]
+    assert saved["lyrics_timing_migrated_v1"] is True
+
+
+def test_importing_legacy_sug_settings_lands_on_disk(tmp_path: Path):
+    from krok_helper.settings import import_legacy_sug_settings
+
+    legacy = _legacy_sug_dir(tmp_path)
+    save_app_settings(load_app_settings())
+
+    settings = load_app_settings()
+    import_legacy_sug_settings(legacy, settings)
+    save_app_settings(settings)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["lyrics_timing_dictionary"] == [{"word": "老词条"}]
+
+
+def test_a_namespace_the_instance_never_touched_still_yields(tmp_path: Path):
+    """放行"改过的"不能顺手把"没改过的"也放行了 —— 那就是原来的多开事故。"""
+    instance_a, instance_b = _two_instances()
+
+    instance_a.subtitle_render = {"style_presets": [{"name": "A 存的"}]}
+    save_app_settings(instance_a, merge_module_namespaces=False)
+
+    instance_b.ui_theme = "dark"
+    save_app_settings(instance_b)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["subtitle_render"] == {"style_presets": [{"name": "A 存的"}]}
+
+
+def test_a_bridge_sync_does_not_make_the_host_claim_the_namespace(tmp_path: Path):
+    """桥把值同步回宿主之后，宿主不能反过来拿它去压别人。
+
+    宿主的 ``AppSettings`` 是启动时那一个，桥每次写完都会把新值塞回去。不打招呼
+    的话，宿主下次整份写盘就认为"这段是我改的"，于是把另一个实例后写的顶掉。
+    """
+    from krok_helper.settings import sync_baseline_field
+
+    host, other = _two_instances()
+
+    # 本实例的桥写了一版，并同步回宿主
+    host.subtitle_render = {"style_presets": [{"name": "本实例"}]}
+    save_app_settings(host, merge_module_namespaces=False)
+    sync_baseline_field(host, "subtitle_render")
+
+    # 另一个实例随后又写了一版
+    other.subtitle_render = {"style_presets": [{"name": "另一个实例"}]}
+    save_app_settings(other, merge_module_namespaces=False)
+
+    host.ui_theme = "dark"
+    save_app_settings(host)
+
+    saved = json.loads(_settings_path(tmp_path).read_text(encoding="utf-8"))
+    assert saved["subtitle_render"] == {"style_presets": [{"name": "另一个实例"}]}
+
+
 def test_the_first_ever_save_still_works_without_a_file(tmp_path: Path):
     """盘上还没有文件时合并要安静地跳过，不能把首次保存搞挂。"""
     settings = AppSettings()

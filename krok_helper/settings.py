@@ -178,6 +178,10 @@ def _backup_corrupt_settings(path: Path, reason: str) -> None:
 
 
 def load_app_settings() -> AppSettings:
+    return _stamp_baseline(_read_app_settings())
+
+
+def _read_app_settings() -> AppSettings:
     path = get_settings_path()
     if not path.is_file():
         path = next((legacy for legacy in get_legacy_settings_paths() if legacy.is_file()), path)
@@ -200,6 +204,10 @@ def load_app_settings() -> AppSettings:
         _backup_corrupt_settings(path, "顶层不是 JSON 对象")
         return AppSettings()
 
+    return _settings_from_payload(payload)
+
+
+def _settings_from_payload(payload: dict) -> AppSettings:
     align_target = str(payload.get("align_target", ALIGN_TARGET_VIDEO))
     if align_target not in {ALIGN_TARGET_VIDEO, ALIGN_TARGET_AUDIO}:
         align_target = ALIGN_TARGET_VIDEO
@@ -297,22 +305,88 @@ MODULE_NAMESPACE_FIELDS = (
 )
 
 
-def _merge_module_namespaces_from_disk(settings: AppSettings) -> None:
-    """把模块命名空间就地换成盘上的最新值。
+#: 本实例上一次"看到"的整份配置，挂在 :class:`AppSettings` 实例上。
+#:
+#: 不是 dataclass 字段，所以 :func:`dataclasses.asdict` 不会把它写进 settings.json。
+#: 只有 :func:`load_app_settings` 会盖这个章 —— 手搓出来的 ``AppSettings()`` 没有
+#: 基线，写盘时按老路子整份覆盖（测试和首次运行都走这条）。
+_BASELINE_ATTR = "_krok_disk_baseline"
 
-    桥总是先写盘再更新内存，所以盘上的永远不会比内存里旧 —— 无条件取盘上的既能
-    修好跨实例覆盖，也不会把本实例刚写的读回旧值。
 
-    这里直接读原始 JSON 而不走 :func:`load_app_settings`：后者遇到坏文件会备份并
-    退回默认值，那样反而会把好好的命名空间清成空的。读不出来就什么都不做。
+def _stamp_baseline(settings: AppSettings) -> AppSettings:
+    setattr(settings, _BASELINE_ATTR, asdict(settings))
+    return settings
+
+
+def _read_raw_settings() -> dict | None:
+    """读盘上的原始 JSON。读不出来（首次保存、损坏、被占用）就返回 ``None``。
+
+    这里不走 :func:`load_app_settings`：后者遇到坏文件会备份并退回默认值，拿那份
+    去合并等于把好好的配置清成默认。
     """
     try:
         raw = json.loads(get_settings_path().read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 —— 首次保存、文件损坏、被占用都走这里
+    except Exception:  # noqa: BLE001
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _merge_untouched_fields_from_disk(
+    settings: AppSettings, payload: dict, raw: dict | None
+) -> dict:
+    """本实例没动过的字段，一律用盘上的最新值。
+
+    每个工作台写的都是**自己启动时读到的那份快照**。同时开着两个时，后写的那个
+    会拿一整份过期数据把先写的顶掉 —— 在 A 里改的导出目录，B 随手换个主题就没了
+    （:data:`MODULE_NAMESPACE_FIELDS` 只护住了有设置桥的那几段命名空间，别的
+    字段全裸奔）。
+
+    判据是"和基线比有没有变"，不是"和默认值比"：变了说明是本实例改的，该写；
+    没变说明本实例只是把启动时读到的值原样端回来，此时盘上如果更新了，那是另一个
+    实例的改动，得让给它。同一个字段两边都改就是后写的赢 —— 跨进程没有更好的答案。
+    """
+    baseline = getattr(settings, _BASELINE_ATTR, None)
+    if raw is None or not isinstance(baseline, dict):
+        return payload
+    disk = asdict(_settings_from_payload(raw))
+    for name, value in payload.items():
+        # 盘上没有这一项：老版本写的文件，或者本实例是第一个写它的人。
+        if name in raw and value == baseline.get(name):
+            payload[name] = disk[name]
+    return payload
+
+
+def sync_baseline_field(settings: AppSettings, name: str) -> None:
+    """告诉基线：这个字段现在的值是刚从盘上读来的，不算本实例的改动。
+
+    设置桥写完自己那段之后会把值同步回宿主的 ``AppSettings``。不打这个招呼的话，
+    宿主下次整份写盘时会认为"这个字段我改过"，于是拿它去压别的实例刚写的值。
+    """
+    baseline = getattr(settings, _BASELINE_ATTR, None)
+    if isinstance(baseline, dict):
+        baseline[name] = deepcopy(getattr(settings, name))
+
+
+def _merge_module_namespaces_from_disk(settings: AppSettings, raw: dict | None) -> None:
+    """把模块命名空间就地换成盘上的最新值。
+
+    桥总是先写盘再更新内存，所以盘上的永远不会比内存里旧 —— 取盘上的既能修好跨
+    实例覆盖，也不会把本实例刚写的读回旧值。
+
+    **本实例主动改过的那几段除外**：一次性迁移、「导入旧版 SUG 配置」、字幕渲染独
+    立运行时的兜底保存，写的正是这些命名空间，无条件换成盘上的等于这次保存什么都
+    没干（用户那边看到的是"提示导入成功、其实一条都没进来"）。判据和普通字段一
+    样：和基线比变了就是本实例的改动。没有基线（手搓的 ``AppSettings``）时按老
+    路子无条件换，那条路上本来也没人有资格声称"我改过"。
+
+    ``raw`` 是盘上的原始 JSON，``None``（首次保存、损坏、被占用）时什么都不做。
+    """
+    if raw is None:
         return
-    if not isinstance(raw, dict):
-        return
+    baseline = getattr(settings, _BASELINE_ATTR, None)
     for name in MODULE_NAMESPACE_FIELDS:
+        if isinstance(baseline, dict) and getattr(settings, name, None) != baseline.get(name):
+            continue  # 本实例改过这一段，它就是要写的东西
         if name not in raw:
             continue
         current = getattr(settings, name, None)
@@ -334,18 +408,27 @@ def save_app_settings(
     ``open(w)`` 先 truncate 再 write，崩在中间的话主文件就是空 / 半截，下次启动
     会触发「全空配置」事故（v3.0.x 真实案例，v3.0.5 修复）。
 
-    默认会把 :data:`MODULE_NAMESPACE_FIELDS` 换成盘上的最新值，避免多开时互相
-    覆盖。**只有模块自己的设置桥**该传 ``merge_module_namespaces=False`` —— 它们
-    要写的正是那几段，合并回去等于把自己的改动丢掉。
+    写的是**三方合并**的结果而不是内存里那份快照：本实例改过的字段照写，没动过的
+    字段取盘上的最新值（见 :func:`_merge_untouched_fields_from_disk`），这样多开时
+    两边的改动能各自留下。
+
+    ``merge_module_namespaces`` 额外把 :data:`MODULE_NAMESPACE_FIELDS` 强行换成盘
+    上的值。**只有模块自己的设置桥**该传 ``False`` —— 它们要写的正是那几段。
     """
+    # 盘上那份只读一次：两处合并都要用它，而写盘会被界面上的每一次改动触发。
+    raw = _read_raw_settings()
     if merge_module_namespaces:
-        _merge_module_namespaces_from_disk(settings)
+        _merge_module_namespaces_from_disk(settings, raw)
     path = get_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f"{path.name}.tmp"
-    payload = json.dumps(asdict(settings), ensure_ascii=False, indent=2)
-    tmp.write_text(payload, encoding="utf-8")
+    snapshot = asdict(settings)
+    payload = _merge_untouched_fields_from_disk(settings, dict(snapshot), raw)
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+    # 基线跟的是**内存里这份**，不是刚写下去的那份：没动过的字段要一直判"没变"，
+    # 才能在后续每一次写盘时继续让位给别的实例。
+    setattr(settings, _BASELINE_ATTR, snapshot)
     return path
 
 
