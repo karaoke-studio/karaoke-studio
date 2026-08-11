@@ -1,5 +1,4 @@
 #include <QtCore/QByteArray>
-#include <QtCore/QCoreApplication>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QElapsedTimer>
@@ -9,7 +8,6 @@
 #include <QtCore/QHash>
 #include <QtCore/QPointF>
 #include <QtCore/QSet>
-#include <QtCore/QSharedMemory>
 #include <QtCore/QTextStream>
 #include <QtGui/QBrush>
 #include <QtGui/QColor>
@@ -30,6 +28,7 @@
 
 #include "backends/direct2d/d2d_backend.h"
 #include "protocol/json_protocol.h"
+#include "runtime/shared_frame_ring.h"
 
 #include <algorithm>
 #include <atomic>
@@ -53,6 +52,8 @@ using krok::subtitle::native::protocol::kRenderIrSchema;
 using krok::subtitle::native::protocol::parseRequestLine;
 using krok::subtitle::native::protocol::response;
 using krok::subtitle::native::protocol::writeJson;
+using krok::subtitle::native::runtime::SharedFrameRing;
+using krok::subtitle::native::runtime::SharedFrameRingBuffer;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kUtopiaIntroTimeMs = 700;
@@ -539,19 +540,6 @@ struct RangeFrameResult {
     QImage image;
 };
 
-struct SharedFrameRing {
-    QString key;
-    int slotCount = 0;
-    int width = 0;
-    int height = 0;
-    int stride = 0;
-    int pixelBytes = 0;
-    int headerBytes = 64;
-    int slotBytes = 0;
-    int totalBytes = 0;
-    QString pixelFormat = QStringLiteral("rgba8888");
-};
-
 class GpuPreviewWorkerPool {
 public:
     using Work = std::function<QJsonObject(
@@ -909,9 +897,7 @@ struct RenderRuntime {
     std::atomic<bool> shutdownRequested{false};
     std::mutex jobsMutex;
     std::vector<std::thread> jobs;
-    std::mutex sharedMemoryMutex;
-    std::unique_ptr<QSharedMemory> sharedMemory;
-    SharedFrameRing sharedRing;
+    SharedFrameRingBuffer sharedFrames;
     std::mutex gpuBackendMutex;
     std::unique_ptr<krok::subtitle::native::RenderBackend> hardwareGpuBackend;
     std::unique_ptr<krok::subtitle::native::RenderBackend> warpGpuBackend;
@@ -1736,9 +1722,7 @@ void joinRenderJobs(RenderRuntime *runtime) {
 }
 
 QString defaultSharedMemoryKey(int generation) {
-    return QStringLiteral("krok_subtitle_renderer_%1_%2")
-        .arg(QCoreApplication::applicationPid())
-        .arg(generation);
+    return krok::subtitle::native::runtime::defaultSharedMemoryKey(generation);
 }
 
 bool ensureSharedFrameRing(
@@ -1755,57 +1739,9 @@ bool ensureSharedFrameRing(
         }
         return false;
     }
-    const int safeSlots = std::max(1, ringSlotCount);
-    QImage probe(std::max(1, width), std::max(1, height), QImage::Format_RGBA8888);
-    const int stride = probe.bytesPerLine();
-    const int pixelBytes = stride * probe.height();
-    constexpr int headerBytes = 64;
-    const int slotBytes = headerBytes + pixelBytes;
-    const int totalBytes = slotBytes * safeSlots;
-
-    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
-    // 资源常驻（GPU 计划 G2 硬性要求 4）：同 key/槽数/尺寸的 ring 直接复用，
-    // 避免预览每个 range 重新 create+memset 一块数十 MB 的共享内存段。
-    if (runtime->sharedMemory != nullptr && runtime->sharedMemory->isAttached()
-        && runtime->sharedRing.key == key
-        && runtime->sharedRing.slotCount == safeSlots
-        && runtime->sharedRing.width == probe.width()
-        && runtime->sharedRing.height == probe.height()) {
-        return true;
-    }
-    if (runtime->sharedMemory != nullptr && runtime->sharedMemory->isAttached()) {
-        runtime->sharedMemory->detach();
-    }
-    runtime->sharedMemory = std::make_unique<QSharedMemory>(key);
-    if (!runtime->sharedMemory->create(totalBytes)) {
-        if (error != nullptr) {
-            *error = runtime->sharedMemory->errorString();
-        }
-        runtime->sharedMemory.reset();
-        return false;
-    }
-    runtime->sharedRing = SharedFrameRing{
-        key,
-        safeSlots,
-        probe.width(),
-        probe.height(),
-        stride,
-        pixelBytes,
-        headerBytes,
-        slotBytes,
-        totalBytes,
-        QStringLiteral("rgba8888"),
-    };
-    if (runtime->sharedMemory->lock()) {
-        std::memset(runtime->sharedMemory->data(), 0, static_cast<std::size_t>(totalBytes));
-        runtime->sharedMemory->unlock();
-    }
-    return true;
-}
-
-void writeSlotInt(char *base, int offset, int value) {
-    std::int32_t stored = static_cast<std::int32_t>(value);
-    std::memcpy(base + offset, &stored, sizeof(stored));
+    return runtime->sharedFrames.ensure(
+        key, ringSlotCount, width, height, error
+    );
 }
 
 bool writeSharedRgbaSlot(
@@ -1863,53 +1799,22 @@ bool writeSharedRgbaSlot(
     int formatId,
     const QString &pixelFormat
 ) {
-    if (runtime == nullptr || rgba == nullptr || width <= 0 || height <= 0 || stride < width * 4) {
+    if (runtime == nullptr) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
-    if (runtime->sharedMemory == nullptr || !runtime->sharedMemory->isAttached() || runtime->sharedRing.slotCount <= 0) {
-        return false;
-    }
-    SharedFrameRing ring = runtime->sharedRing;
-    if (width != ring.width || height != ring.height) {
-        return false;
-    }
-    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount) % ring.slotCount;
-    if (!runtime->sharedMemory->lock()) {
-        return false;
-    }
-    char *base = static_cast<char *>(runtime->sharedMemory->data());
-    const int slotOffset = safeSlot * ring.slotBytes;
-    char *slot = base + slotOffset;
-    writeSlotInt(slot, 0, 1);  // writing
-    writeSlotInt(slot, 4, generation);
-    writeSlotInt(slot, 8, frameIndex);
-    writeSlotInt(slot, 12, tMs);
-    writeSlotInt(slot, 16, ring.width);
-    writeSlotInt(slot, 20, ring.height);
-    writeSlotInt(slot, 24, ring.stride);
-    writeSlotInt(slot, 28, formatId);
-    writeSlotInt(slot, 32, ring.headerBytes);
-    writeSlotInt(slot, 36, ring.pixelBytes);
-    char *payload = slot + ring.headerBytes;
-    if (stride == ring.stride) {
-        std::memcpy(payload, rgba, static_cast<std::size_t>(ring.pixelBytes));
-    } else {
-        for (int y = 0; y < height; ++y) {
-            std::memcpy(
-                payload + static_cast<std::size_t>(ring.stride) * y,
-                rgba + static_cast<std::size_t>(stride) * y,
-                static_cast<std::size_t>(width * 4)
-            );
-        }
-    }
-    writeSlotInt(slot, 0, 2);  // ready
-    runtime->sharedMemory->unlock();
-    if (ringOut != nullptr) {
-        ring.pixelFormat = pixelFormat;
-        *ringOut = ring;
-    }
-    return true;
+    return runtime->sharedFrames.writeRgba(
+        rgba,
+        width,
+        height,
+        stride,
+        generation,
+        frameIndex,
+        tMs,
+        slotIndex,
+        ringOut,
+        formatId,
+        pixelFormat
+    );
 }
 
 bool writeSharedPackedRgbaSlot(
@@ -1924,64 +1829,20 @@ bool writeSharedPackedRgbaSlot(
     int slotIndex,
     SharedFrameRing *ringOut
 ) {
-    if (runtime == nullptr || premultipliedBgra == nullptr || width <= 0
-        || height <= 0 || stride < width * 4) {
+    if (runtime == nullptr) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
-    if (runtime->sharedMemory == nullptr || !runtime->sharedMemory->isAttached()
-        || runtime->sharedRing.slotCount <= 0) {
-        return false;
-    }
-    SharedFrameRing ring = runtime->sharedRing;
-    if (width != ring.width || height != ring.height
-        || ring.stride != width * 4) {
-        return false;
-    }
-    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount)
-        % ring.slotCount;
-    if (!runtime->sharedMemory->lock()) {
-        return false;
-    }
-    char *base = static_cast<char *>(runtime->sharedMemory->data());
-    const int slotOffset = safeSlot * ring.slotBytes;
-    char *slot = base + slotOffset;
-    writeSlotInt(slot, 0, 1);
-    writeSlotInt(slot, 4, generation);
-    writeSlotInt(slot, 8, frameIndex);
-    writeSlotInt(slot, 12, tMs);
-    writeSlotInt(slot, 16, width);
-    writeSlotInt(slot, 20, height);
-    writeSlotInt(slot, 24, ring.stride);
-    writeSlotInt(slot, 28, 1);
-    writeSlotInt(slot, 32, ring.headerBytes);
-    writeSlotInt(slot, 36, ring.pixelBytes);
-    QImage premultiplied(
-        const_cast<std::uint8_t *>(premultipliedBgra),
+    return runtime->sharedFrames.writePremultipliedBgra(
+        premultipliedBgra,
         width,
         height,
         stride,
-        QImage::Format_ARGB32_Premultiplied
+        generation,
+        frameIndex,
+        tMs,
+        slotIndex,
+        ringOut
     );
-    const QImage straight = premultiplied.convertToFormat(QImage::Format_RGBA8888);
-    if (straight.isNull()) {
-        runtime->sharedMemory->unlock();
-        return false;
-    }
-    auto *payload = reinterpret_cast<std::uint8_t *>(slot + ring.headerBytes);
-    const int rowBytes = width * 4;
-    for (int y = 0; y < height; ++y) {
-        auto *destination = payload
-            + static_cast<std::size_t>(y) * ring.stride;
-        std::memcpy(destination, straight.constScanLine(y), rowBytes);
-    }
-    writeSlotInt(slot, 0, 2);
-    runtime->sharedMemory->unlock();
-    if (ringOut != nullptr) {
-        ring.pixelFormat = QStringLiteral("rgba8888");
-        *ringOut = ring;
-    }
-    return true;
 }
 
 bool writeSharedBandSlot(
@@ -1997,52 +1858,21 @@ bool writeSharedBandSlot(
     int slotIndex,
     SharedFrameRing *ringOut
 ) {
-    if (runtime == nullptr || payloadBytes < 0
-        || (payloadBytes > 0 && payloadData == nullptr)) {
+    if (runtime == nullptr) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
-    if (runtime->sharedMemory == nullptr || !runtime->sharedMemory->isAttached()
-        || runtime->sharedRing.slotCount <= 0) {
-        return false;
-    }
-    SharedFrameRing ring = runtime->sharedRing;
-    if (width != ring.width || height != ring.height || stride != ring.stride
-        || payloadBytes > ring.pixelBytes) {
-        return false;
-    }
-    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount) % ring.slotCount;
-    if (!runtime->sharedMemory->lock()) {
-        return false;
-    }
-    char *base = static_cast<char *>(runtime->sharedMemory->data());
-    const int slotOffset = safeSlot * ring.slotBytes;
-    char *slot = base + slotOffset;
-    writeSlotInt(slot, 0, 1);
-    writeSlotInt(slot, 4, generation);
-    writeSlotInt(slot, 8, frameIndex);
-    writeSlotInt(slot, 12, tMs);
-    writeSlotInt(slot, 16, width);
-    writeSlotInt(slot, 20, height);
-    writeSlotInt(slot, 24, stride);
-    writeSlotInt(slot, 28, 3);
-    writeSlotInt(slot, 32, ring.headerBytes);
-    writeSlotInt(slot, 36, payloadBytes);
-    if (payloadBytes > 0) {
-        std::memcpy(
-            slot + ring.headerBytes,
-            payloadData,
-            static_cast<std::size_t>(payloadBytes)
-        );
-    }
-    writeSlotInt(slot, 0, 2);
-    runtime->sharedMemory->unlock();
-    if (ringOut != nullptr) {
-        ring.pixelBytes = payloadBytes;
-        ring.pixelFormat = QStringLiteral("bgra8888_premultiplied_bands");
-        *ringOut = ring;
-    }
-    return true;
+    return runtime->sharedFrames.writeBands(
+        payloadData,
+        payloadBytes,
+        width,
+        height,
+        stride,
+        generation,
+        frameIndex,
+        tMs,
+        slotIndex,
+        ringOut
+    );
 }
 
 std::uint64_t imageChecksum(const QImage &image) {
@@ -7217,7 +7047,9 @@ void launchRenderRangeJob(
                 }
                 result = results[static_cast<std::size_t>(nextEmit)];
             }
-            const int slotIndex = nextEmit % std::max(1, runtime->sharedRing.slotCount);
+            const int slotIndex = nextEmit % std::max(
+                1, runtime->sharedFrames.slotCount()
+            );
             SharedFrameRing ring;
             const bool wroteSlot = writeSharedFrameSlot(runtime, result, generation, nextEmit, slotIndex, &ring);
             QJsonObject frame = response(true, QStringLiteral("frame_ready"));
