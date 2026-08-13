@@ -17,21 +17,26 @@ from uuid import uuid4
 
 from PyQt6.QtCore import (
     QEvent,
+    QObject,
     QPoint,
     QPointF,
+    QRunnable,
     QRect,
     QRectF,
     QSize,
+    QThreadPool,
     Qt,
     QTimer,
     pyqtSignal as Signal,
 )
 from PyQt6.QtGui import (
+    QBrush,
     QColor,
     QCursor,
     QFont,
     QFontDatabase,
     QFontInfo,
+    QFontMetrics,
     QIcon,
     QImage,
     QLinearGradient,
@@ -40,6 +45,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QTransform,
     QValidator,
 )
 from PyQt6.QtWidgets import (
@@ -98,6 +104,15 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+from krok_helper.subtitle_render.engine.style_semantics import (
+    effective_karaoke_colors,
+    style_for_role,
+)
+from krok_helper.subtitle_render.engine.painter import (
+    _glow_extent,
+    _paint_glow_path,
+    _paint_shadow_silhouette,
+)
 from krok_helper.subtitle_render.n3_font_catalog import (
     canonicalize_n3_font_family,
     n3_font_families,
@@ -4173,6 +4188,663 @@ class _ResponsiveFieldGrid(QWidget):
         self.updateGeometry()
 
 
+class _ResponsiveRoleHeader(QWidget):
+    """Keep the original toolbar left-aligned and the preview right-aligned."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._navigation: Optional[QWidget] = None
+        self._preview: Optional[QWidget] = None
+        self._stacked: Optional[bool] = None
+        self._layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(12)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+
+    def set_widgets(self, navigation: QWidget, preview: QWidget) -> None:
+        self._navigation = navigation
+        self._preview = preview
+        self._layout.addWidget(
+            navigation, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self._layout.addStretch(1)
+        self._spacer = self._layout.itemAt(1).spacerItem()
+        self._layout.addWidget(
+            preview, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
+        )
+        self._sync_direction(force=True)
+
+    def is_stacked(self) -> bool:
+        return bool(self._stacked)
+
+    def resizeEvent(self, event: Any) -> None:
+        self._sync_direction()
+        super().resizeEvent(event)
+
+    def _sync_direction(self, *, force: bool = False) -> None:
+        if self._navigation is None or self._preview is None:
+            return
+        required = (
+            self._navigation.sizeHint().width()
+            + self._preview.sizeHint().width()
+            + self._layout.spacing()
+        )
+        stacked = self.width() < required
+        if not force and stacked == self._stacked:
+            return
+        self._stacked = stacked
+        self._layout.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if stacked
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self._spacer is not None:
+            self._spacer.changeSize(
+                0,
+                0,
+                QSizePolicy.Policy.Minimum
+                if stacked
+                else QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
+        self._layout.setAlignment(
+            self._navigation,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+        )
+        self._layout.setAlignment(
+            self._preview,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+        )
+        self.updateGeometry()
+
+
+class _FontSampleCanvas(QWidget):
+    """Render a compact role sample without involving a project preview window."""
+
+    _MAX_INK_SIZE = QSize(104, 96)
+    _PADDING = 8
+    _SUPERSAMPLE = 3.0
+    _CANVAS_SIZE = QSize(
+        _MAX_INK_SIZE.width() + _PADDING * 2,
+        _MAX_INK_SIZE.height() + _PADDING * 2,
+    )
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._sample = QPixmap()
+        self._rendering = False
+        self.setFixedSize(self._CANVAS_SIZE)
+
+    def set_rendering(self, rendering: bool) -> None:
+        if self._rendering == bool(rendering):
+            return
+        self._rendering = bool(rendering)
+        self.setAccessibleName("字体预览（正在渲染）" if rendering else "字体预览")
+        self.update()
+
+    def apply_sample(self, image: QImage) -> None:
+        sample = QPixmap.fromImage(image)
+        self._sample = sample
+        self.update()
+
+    @classmethod
+    def _fit_sample_image(cls, image: QImage) -> QImage:
+        logical_size = image.deviceIndependentSize().toSize()
+        if not image.isNull() and (
+            logical_size.width() > cls._MAX_INK_SIZE.width()
+            or logical_size.height() > cls._MAX_INK_SIZE.height()
+        ):
+            dpr = image.devicePixelRatio() or self._SUPERSAMPLE
+            image = image.scaled(
+                QSize(
+                    round(cls._MAX_INK_SIZE.width() * dpr),
+                    round(cls._MAX_INK_SIZE.height() * dpr),
+                ),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            image.setDevicePixelRatio(dpr)
+        return image
+
+    @staticmethod
+    def _font(
+        family: Optional[str], size: int, weight: Optional[int], italic: bool
+    ) -> QFont:
+        font = QFont(family or "Microsoft YaHei UI")
+        font.setPixelSize(max(int(size), 1))
+        font.setWeight(QFont.Weight(max(100, min(int(weight or 400), 900))))
+        font.setItalic(bool(italic))
+        return font
+
+    @staticmethod
+    def _color(value: str, fallback: str = "#FFFFFF") -> QColor:
+        color = QColor(value)
+        return color if color.isValid() else QColor(fallback)
+
+    @classmethod
+    def _brush(cls, fill, rect: QRectF) -> QBrush:
+        mode = getattr(fill, "mode", "solid")
+        fallback = getattr(fill, "color", "#FFFFFF")
+        if mode in {"gradient_horizontal", "gradient_vertical"}:
+            horizontal = mode == "gradient_horizontal"
+            gradient = QLinearGradient(
+                rect.left() if horizontal else rect.center().x(),
+                rect.center().y() if horizontal else rect.top(),
+                rect.right() if horizontal else rect.center().x(),
+                rect.center().y() if horizontal else rect.bottom(),
+            )
+            stops = list(getattr(fill, "gradient_stops", ())) or [
+                (0, getattr(fill, "start_color", fallback)),
+                (100, getattr(fill, "end_color", fallback)),
+            ]
+            for position, color in sorted(stops, key=lambda item: float(item[0])):
+                gradient.setColorAt(
+                    max(0.0, min(float(position) / 100.0, 1.0)),
+                    cls._color(color, fallback),
+                )
+            return QBrush(gradient)
+        if mode == "split_vertical":
+            gradient = QLinearGradient(
+                rect.center().x(), rect.top(), rect.center().x(), rect.bottom()
+            )
+            stops = list(getattr(fill, "split_stops", ()))
+            if len(stops) < 2:
+                split = float(getattr(fill, "split_position_pct", 50))
+                stops = [
+                    (0, getattr(fill, "split_top_color", fallback)),
+                    (split, getattr(fill, "split_bottom_color", fallback)),
+                    (100, getattr(fill, "split_bottom_color", fallback)),
+                ]
+            ordered = sorted(stops, key=lambda item: float(item[0]))
+            for index, (position, color) in enumerate(ordered):
+                ratio = max(0.0, min(float(position) / 100.0, 1.0))
+                if index and ordered[index - 1][1] != color:
+                    gradient.setColorAt(
+                        max(0.0, ratio - 0.0001),
+                        cls._color(ordered[index - 1][1], fallback),
+                    )
+                gradient.setColorAt(ratio, cls._color(color, fallback))
+            return QBrush(gradient)
+        if mode == "image" and getattr(fill, "image_path", ""):
+            image = QImage(str(fill.image_path))
+            if not image.isNull():
+                brush = QBrush()
+                brush.setTextureImage(image)
+                transform = QTransform()
+                scale = max(float(getattr(fill, "image_scale_pct", 100)), 1.0) / 100.0
+                transform.translate(rect.left(), rect.top())
+                transform.scale(scale, scale)
+                brush.setTransform(transform)
+                return brush
+        return QBrush(cls._color(fallback))
+
+    @classmethod
+    def _draw_state(
+        cls,
+        painter: QPainter,
+        path: QPainterPath,
+        state,
+        stroke_width: int,
+        stroke2_enabled: bool,
+        stroke2_width: int,
+        shadow_offset: QPoint,
+        decoration_kind: str,
+        glow_radius: int,
+        glow_concentration: int,
+    ) -> None:
+        if decoration_kind == "glow" and glow_radius > 0:
+            _paint_glow_path(
+                painter,
+                path,
+                state.shadow,
+                path.boundingRect(),
+                glow_radius,
+                stroke_width,
+                stroke2_width if stroke2_enabled else 0,
+                concentration_level=glow_concentration,
+            )
+        elif decoration_kind == "shadow" and not shadow_offset.isNull():
+            _paint_shadow_silhouette(
+                painter,
+                path,
+                state.shadow,
+                path.boundingRect(),
+                shadow_offset.x(),
+                shadow_offset.y(),
+                stroke_width,
+                stroke2_width if stroke2_enabled else 0,
+            )
+        if stroke2_enabled and stroke2_width > 0:
+            pen = QPen(cls._brush(state.stroke2, path.boundingRect()), 1.0)
+            pen.setWidthF(float(2 * (stroke_width + stroke2_width)))
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+        if stroke_width > 0:
+            pen = QPen(cls._brush(state.stroke, path.boundingRect()), 1.0)
+            pen.setWidthF(float(2 * stroke_width))
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(cls._brush(state.text, path.boundingRect()))
+        painter.drawPath(path)
+
+    @classmethod
+    def _render_sample_image(cls, style: Style, script: str) -> QImage:
+        latin = script == "latin"
+        main_text = "LinK" if latin else "人"
+        ruby_text = "リンク" if latin else "ひと"
+        main_font = cls._font(
+            style.font_family_latin if latin else style.font_family,
+            (style.latin_font_size_px or style.font_size_px)
+            if latin
+            else style.font_size_px,
+            (style.latin_font_weight or style.font_weight)
+            if latin
+            else style.font_weight,
+            style.italic,
+        )
+        main_metrics = QFontMetrics(main_font)
+        main_path = QPainterPath()
+        main_path.addText(0, main_metrics.ascent(), main_font, main_text)
+        ruby_font = cls._font(
+            style.font_family
+            if style.ruby_font_follow_main
+            else style.ruby_font_family or style.font_family,
+            style.ruby_font_size_px,
+            style.font_weight
+            if style.ruby_font_follow_main
+            else style.ruby_font_weight or style.font_weight,
+            style.italic,
+        )
+        ruby_metrics = QFontMetrics(ruby_font)
+        ruby_path = QPainterPath()
+        ruby_path.addText(
+            (main_metrics.horizontalAdvance(main_text) - ruby_metrics.horizontalAdvance(ruby_text)) / 2,
+            ruby_metrics.ascent(),
+            ruby_font,
+            ruby_text,
+        )
+        main_path.translate(0, ruby_metrics.height() + max(style.ruby_gap_px, 0))
+
+        colors = effective_karaoke_colors(style)
+        ruby_colors = (
+            colors
+            if style.ruby_colors_follow_main
+            else style.ruby_karaoke_colors or colors
+        )
+        stroke = max(int(style.stroke_width_px), 0)
+        stroke2 = max(int(style.stroke2_width_px), 0)
+        ruby_stroke = max(int(style.ruby_stroke_width_px or 0), 0)
+        ruby_stroke2 = max(int(style.ruby_stroke2_width_px or 0), 0)
+        shadow = QPoint(style.shadow_offset_x, style.shadow_offset_y)
+        ruby_shadow = QPoint(
+            style.ruby_shadow_offset_x
+            if style.ruby_shadow_offset_x is not None
+            else style.shadow_offset_x,
+            style.ruby_shadow_offset_y
+            if style.ruby_shadow_offset_y is not None
+            else style.shadow_offset_y,
+        )
+        main_glow_extent = (
+            max(
+                _glow_extent(
+                    stroke,
+                    stroke2 if style.stroke2_enabled else 0,
+                    max(int(style.glow_before_radius_px), 0),
+                ),
+                _glow_extent(
+                    stroke,
+                    stroke2 if style.stroke2_enabled else 0,
+                    max(int(style.glow_after_radius_px), 0),
+                ),
+            )
+            if style.decoration_kind == "glow"
+            else 0
+        )
+        ruby_glow_before = max(
+            int(
+                style.ruby_glow_before_radius_px
+                if style.ruby_glow_before_radius_px is not None
+                else style.glow_before_radius_px
+            ),
+            0,
+        )
+        ruby_glow_after = max(
+            int(
+                style.ruby_glow_after_radius_px
+                if style.ruby_glow_after_radius_px is not None
+                else style.glow_after_radius_px
+            ),
+            0,
+        )
+        ruby_decoration = style.ruby_decoration_kind or style.decoration_kind
+        ruby_glow_extent = (
+            max(
+                _glow_extent(
+                    ruby_stroke,
+                    ruby_stroke2 if style.ruby_stroke2_enabled else 0,
+                    ruby_glow_before,
+                ),
+                _glow_extent(
+                    ruby_stroke,
+                    ruby_stroke2 if style.ruby_stroke2_enabled else 0,
+                    ruby_glow_after,
+                ),
+            )
+            if ruby_decoration == "glow"
+            else 0
+        )
+        bounds = main_path.boundingRect().united(ruby_path.boundingRect())
+        margin = max(
+            stroke + (stroke2 if style.stroke2_enabled else 0),
+            ruby_stroke + (ruby_stroke2 if style.ruby_stroke2_enabled else 0),
+            abs(shadow.x()),
+            abs(shadow.y()),
+            abs(ruby_shadow.x()),
+            abs(ruby_shadow.y()),
+            main_glow_extent,
+            ruby_glow_extent,
+        ) + 4
+        bounds = bounds.adjusted(-margin, -margin, margin, margin)
+        scale = cls._SUPERSAMPLE
+        image = QImage(
+            max(int(math.ceil(bounds.width() * scale)), 1),
+            max(int(math.ceil(bounds.height() * scale)), 1),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            painter.scale(scale, scale)
+            painter.translate(-bounds.left(), -bounds.top())
+            split_x = bounds.center().x()
+
+            def paint_halves(
+                path,
+                states,
+                sw,
+                s2_enabled,
+                s2w,
+                offset,
+                kind,
+                before_glow,
+                after_glow,
+                concentration,
+            ):
+                clips = (
+                    (
+                        states.after,
+                        QRectF(
+                            bounds.left(),
+                            bounds.top(),
+                            split_x - bounds.left(),
+                            bounds.height(),
+                        ),
+                        after_glow,
+                    ),
+                    (
+                        states.before,
+                        QRectF(
+                            split_x,
+                            bounds.top(),
+                            bounds.right() - split_x,
+                            bounds.height(),
+                        ),
+                        before_glow,
+                    ),
+                )
+                for state, clip, glow_radius in clips:
+                    painter.save()
+                    try:
+                        painter.setClipRect(clip)
+                        cls._draw_state(
+                            painter,
+                            path,
+                            state,
+                            sw,
+                            s2_enabled,
+                            s2w,
+                            offset,
+                            kind,
+                            glow_radius,
+                            concentration,
+                        )
+                    finally:
+                        painter.restore()
+
+            paint_halves(
+                main_path,
+                colors,
+                stroke,
+                style.stroke2_enabled,
+                stroke2,
+                shadow,
+                style.decoration_kind,
+                max(int(style.glow_before_radius_px), 0),
+                max(int(style.glow_after_radius_px), 0),
+                int(style.glow_concentration_level),
+            )
+            paint_halves(
+                ruby_path,
+                ruby_colors,
+                ruby_stroke,
+                bool(style.ruby_stroke2_enabled),
+                ruby_stroke2,
+                ruby_shadow,
+                style.ruby_decoration_kind or style.decoration_kind,
+                max(
+                    int(
+                        style.ruby_glow_before_radius_px
+                        if style.ruby_glow_before_radius_px is not None
+                        else style.glow_before_radius_px
+                    ),
+                    0,
+                ),
+                max(
+                    int(
+                        style.ruby_glow_after_radius_px
+                        if style.ruby_glow_after_radius_px is not None
+                        else style.glow_after_radius_px
+                    ),
+                    0,
+                ),
+                int(
+                    style.ruby_glow_concentration_level
+                    if style.ruby_glow_concentration_level is not None
+                    else style.glow_concentration_level
+                ),
+            )
+        finally:
+            painter.end()
+        image.setDevicePixelRatio(scale)
+        return cls._fit_sample_image(image)
+
+    @classmethod
+    def _render_sample(cls, style: Style, script: str) -> QPixmap:
+        """Synchronous compatibility helper used only by focused renderer tests."""
+        return QPixmap.fromImage(cls._render_sample_image(style, script))
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            # Keep the sample theme-compatible while separating it slightly
+            # from the surrounding property card.
+            painter.setBrush(QColor("#202124" if palette().is_dark else "#F3F5F8"))
+            border = QColor(palette().input_border_focus)
+            if not border.isValid():
+                border = QColor("#FF5A6F")
+            painter.setPen(QPen(border, 1.5))
+            painter.drawRoundedRect(
+                QRectF(self.rect()).adjusted(1, 1, -1, -1), 10, 10
+            )
+            if not self._sample.isNull():
+                logical = self._sample.deviceIndependentSize()
+                painter.drawPixmap(
+                    round((self.width() - logical.width()) / 2),
+                    round((self.height() - logical.height()) / 2),
+                    self._sample,
+                )
+            if self._rendering:
+                overlay = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(
+                    QColor(20, 20, 20, 150)
+                    if palette().is_dark
+                    else QColor(255, 255, 255, 190)
+                )
+                painter.drawRoundedRect(overlay, 9, 9)
+                painter.setPen(QColor("#F4F4F5" if palette().is_dark else "#374151"))
+                painter.drawText(
+                    overlay,
+                    Qt.AlignmentFlag.AlignCenter,
+                    "正在渲染…",
+                )
+        finally:
+            painter.end()
+
+
+class _FontSampleRenderSignals(QObject):
+    completed = Signal(QImage, int)
+    failed = Signal(int)
+
+
+class _FontSampleRenderTask(QRunnable):
+    """QImage-only worker; it never creates or touches a QWidget/QPixmap."""
+
+    def __init__(self, style: Style, script: str, generation: int) -> None:
+        super().__init__()
+        self._style = style
+        self._script = script
+        self._generation = generation
+        self.signals = _FontSampleRenderSignals()
+
+    def run(self) -> None:
+        try:
+            image = _FontSampleCanvas._render_sample_image(
+                self._style, self._script
+            )
+        except Exception:
+            self.signals.failed.emit(self._generation)
+            return
+        self.signals.completed.emit(image, self._generation)
+
+
+class _FontPreviewWidget(QWidget):
+    """Small embedded sample owned exclusively by ``PropertyPanel``."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubtitleFontPreviewWidget")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.canvas = _FontSampleCanvas(self)
+        layout.addWidget(self.canvas)
+        self._style = Style()
+        self._scheme_key = "global"
+        self._script = "japanese"
+        self._sample_text = "人"
+        self._ruby_text = "ひと"
+        self._render_generation = 0
+        self._render_busy = False
+        self._pending_render: Optional[tuple[int, Style, str]] = None
+        self._active_render_task: Optional[_FontSampleRenderTask] = None
+        self._render_debounce = QTimer(self)
+        self._render_debounce.setSingleShot(True)
+        self._render_debounce.setInterval(80)
+        self._render_debounce.timeout.connect(self._dispatch_render)
+        self._refresh_sample()
+
+    def set_preview_state(self, style: Style, scheme_key: str, script: str) -> None:
+        self._style = replace(
+            style,
+            title_overlay=None,
+            lit_enabled=False,
+            layouts=[],
+            viewport_align="center",
+            viewport_offset_x=0,
+            viewport_offset_y=0,
+            viewport_scale_pct=100,
+            viewport_rotation_deg=0,
+            line_y_position="center",
+            line_y_margin_px=0,
+            dual_line_layout=False,
+            line_horizontal_layout="center",
+            line_alignments=["center"],
+            horizontal_margin_px=0,
+            smart_horizontal="none",
+            entry_anim="none",
+            entry_lead_ms=0,
+            exit_anim="none",
+            exit_fade_ms=0,
+            right_to_left=False,
+            vertical=False,
+        )
+        self._scheme_key = str(scheme_key or "global")
+        self._script = "latin" if script == "latin" else "japanese"
+        self._refresh_sample()
+
+    def _refresh_sample(self) -> None:
+        role_label = (
+            self._scheme_key.removeprefix("custom:")
+            if self._scheme_key.startswith("custom:")
+            else None
+        )
+        self._sample_text = "LinK" if self._script == "latin" else "人"
+        self._ruby_text = "リンク" if self._script == "latin" else "ひと"
+        self._render_generation += 1
+        resolved = style_for_role(self._style, role_label)
+        self._pending_render = (
+            self._render_generation,
+            resolved,
+            self._script,
+        )
+        self.canvas.set_rendering(True)
+        self._render_debounce.start()
+
+    def _dispatch_render(self) -> None:
+        if self._render_busy or self._pending_render is None:
+            return
+        generation, style, script = self._pending_render
+        self._pending_render = None
+        self._render_busy = True
+        task = _FontSampleRenderTask(style, script, generation)
+        self._active_render_task = task
+        task.signals.completed.connect(
+            self._on_render_completed,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        task.signals.failed.connect(
+            self._on_render_failed,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        QThreadPool.globalInstance().start(task)
+
+    def _on_render_completed(self, image: QImage, generation: int) -> None:
+        if generation == self._render_generation:
+            self.canvas.apply_sample(image)
+        self._finish_render_task()
+
+    def _on_render_failed(self, _generation: int) -> None:
+        self._finish_render_task()
+
+    def _finish_render_task(self) -> None:
+        self._render_busy = False
+        self._active_render_task = None
+        if self._pending_render is not None:
+            self._render_debounce.start()
+            return
+        self.canvas.set_rendering(False)
+
+
 class PropertyPanel(QWidget):
     """字体 / 布局 / 特效 / 标题属性面板。"""
 
@@ -4185,6 +4857,7 @@ class PropertyPanel(QWidget):
     )
 
     styleChanged = Signal(Style)
+    pageChanged = Signal(int)
     rolesChanged = Signal(list)
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
@@ -4245,6 +4918,7 @@ class PropertyPanel(QWidget):
 
         self._stack = QStackedWidget(self)
         self._stack.setObjectName("PropertyPanelStack")
+        self._stack.currentChanged.connect(self._on_page_changed)
         root.addWidget(self._stack, 1)
         themed(
             self,
@@ -4327,6 +5001,15 @@ class PropertyPanel(QWidget):
             if candidate == route_key:
                 self._stack.setCurrentIndex(index)
                 return
+
+    def _on_page_changed(self, index: int) -> None:
+        if hasattr(self, "_font_preview_widget"):
+            self._font_preview_widget.setVisible(
+                index == 0 and self._font_preview_requested
+            )
+            if index == 0 and self._font_preview_requested:
+                self._sync_font_preview()
+        self.pageChanged.emit(index)
 
     def count(self) -> int:
         return len(self._pages)
@@ -4435,6 +5118,7 @@ class PropertyPanel(QWidget):
             # setValue/setCurrentIndex 和四个 _sync_* 分支，值没变时纯属白烧，
             # 还会把用户正在输入的那个框改写掉。
             self._style = replace(style)
+            self._sync_font_preview()
             return
         self._style = replace(style)
         current_key = self._current_scheme_key()
@@ -4491,6 +5175,7 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = False
         self._style_synced = True
+        self._sync_font_preview()
         if emit:
             self.styleChanged.emit(self._style)
 
@@ -4510,6 +5195,7 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = False
         self._sync_subtitle_scheme_controls()
+        self._sync_font_preview()
         if self._role_controller.names != previous:
             self.rolesChanged.emit(self._role_controller.names)
 
@@ -4556,11 +5242,15 @@ class PropertyPanel(QWidget):
     def _make_font_color_section(self) -> QFrame:
         section, layout = _plain_card()
         self._scheme_section = section
-        layout.addWidget(
-            self._make_scheme_navigation(section),
-            0,
-            Qt.AlignmentFlag.AlignLeft,
+        self._role_header = _ResponsiveRoleHeader(section)
+        role_navigation = self._make_scheme_navigation(self._role_header)
+        self._font_preview_requested = True
+        self._font_preview_widget = _FontPreviewWidget(self._role_header)
+        self._role_header.set_widgets(
+            role_navigation,
+            self._font_preview_widget,
         )
+        layout.addWidget(self._role_header)
 
         row = _ResponsivePropertyPair(section)
         self._font_color_row = row
@@ -4634,7 +5324,7 @@ class PropertyPanel(QWidget):
             )
         self._font_tab_panel.content_layout.addWidget(self._font_tab_stack)
         self._font_tab_panel.leftChanged.connect(
-            lambda _key: self._sync_font_settings_page()
+            self._on_font_script_changed
         )
         self._font_tab_panel.rightChanged.connect(
             lambda _key: self._sync_font_settings_page()
@@ -4659,6 +5349,35 @@ class PropertyPanel(QWidget):
         layout.addLayout(flags_row)
 
         return section
+
+    def _on_font_script_changed(self, script: str) -> None:
+        self._sync_font_settings_page()
+        self._sync_font_preview()
+
+    def current_font_script(self) -> str:
+        """Return the script selected in the role page's font editor."""
+        if not hasattr(self, "_font_tab_panel"):
+            return "japanese"
+        return self._font_tab_panel.current_left() or "japanese"
+
+    def _sync_font_preview(self) -> None:
+        if not hasattr(self, "_font_preview_widget"):
+            return
+        if not self._font_preview_requested or self.currentIndex() != 0:
+            return
+        self._font_preview_widget.set_preview_state(
+            self._style,
+            self.current_scheme_key(),
+            self.current_font_script(),
+        )
+
+    def _toggle_font_preview(self) -> None:
+        self._font_preview_requested = not self._font_preview_requested
+        self._font_preview_widget.setVisible(
+            self.currentIndex() == 0 and self._font_preview_requested
+        )
+        if self._font_preview_requested:
+            self._sync_font_preview()
 
     def _make_font_settings_page(
         self, subject: str, script: str, parent: QWidget
@@ -5701,7 +6420,12 @@ class PropertyPanel(QWidget):
         nav = QFrame(parent)
         self._role_navigation = nav
         nav.setObjectName("SubtitleRoleNavigation")
+        nav.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         row_layout = QHBoxLayout(nav)
+        self._role_navigation_layout = row_layout
+        self._role_navigation_action: Optional[QWidget] = None
         row_layout.setContentsMargins(6, 6, 6, 6)
         row_layout.setSpacing(4)
 
@@ -5709,6 +6433,9 @@ class PropertyPanel(QWidget):
         # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
         self._singer_combo = _WheelFocusedComboBox(nav)
         _compact_control(self._singer_combo)
+        self._singer_combo.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self._singer_combo.currentIndexChanged.connect(self._on_scheme_combo_changed)
         row_layout.addWidget(self._singer_combo, 1)
 
@@ -5741,6 +6468,14 @@ class PropertyPanel(QWidget):
             # 图标按钮无文字，可访问名沿用中文提示
             btn.setAccessibleName(btn.toolTip())
             row_layout.addWidget(btn, 0)
+
+        self._font_preview_button = FluentPushButton("显示/隐藏预览", nav)
+        self._font_preview_button.setFixedSize(
+            self._font_preview_button.sizeHint().width(), 30
+        )
+        self._font_preview_button.setToolTip("显示/隐藏预览")
+        self._font_preview_button.clicked.connect(self._toggle_font_preview)
+        row_layout.addWidget(self._font_preview_button, 0)
 
         themed(
             nav,
@@ -7878,6 +8613,7 @@ class PropertyPanel(QWidget):
             lambda index: _auto_role_scheme(base_scheme, index),
         )
         if changed:
+            self._sync_font_preview()
             self.styleChanged.emit(self._style)
 
     def _current_target_label(self) -> str:
@@ -7925,6 +8661,7 @@ class PropertyPanel(QWidget):
             self._rename_role_button.setEnabled(editable)
             self._delete_role_button.setEnabled(editable)
         self._sync_subtitle_scheme_controls()
+        self._sync_font_preview()
         if not self._syncing:
             self.schemeSelectionChanged.emit(self.current_scheme_key())
 
@@ -8277,6 +9014,7 @@ class PropertyPanel(QWidget):
             self._syncing = False
         # 布局示意图跟随所有影响排版的修改（set_state 内部有变更判重）
         self._refresh_layout_schematic()
+        self._sync_font_preview()
         self.styleChanged.emit(self._style)
 
 

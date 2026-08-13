@@ -6,12 +6,13 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import time
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import (  # noqa: E402
     QColor,
     QContextMenuEvent,
@@ -1979,7 +1980,7 @@ def test_property_panel_font_and_color_sections_stack_in_narrow_viewport(qapp):
     assert subtitle_page.widget().width() <= subtitle_page.viewport().width()
 
 
-def test_role_navigation_prioritizes_combo_width_at_minimum_panel_width(qapp):
+def test_role_navigation_keeps_all_fixed_controls_at_minimum_panel_width(qapp):
     panel = PropertyPanel()
     panel.resize(320, 800)
     panel.show()
@@ -1987,7 +1988,19 @@ def test_role_navigation_prioritizes_combo_width_at_minimum_panel_width(qapp):
 
     assert panel.currentIndex() == 0
     assert panel._singer_combo.width() == 120
-    assert panel._role_navigation.width() < panel._font_color_section.width()
+    for button in (
+        panel._add_scheme_button,
+        panel._rename_role_button,
+        panel._delete_role_button,
+        panel._manage_presets_button,
+        panel._save_scheme_button,
+    ):
+        assert button.isVisible()
+        assert button.size() == QSize(30, 30)
+    assert panel._font_preview_button.isVisible()
+    assert panel._font_preview_button.size() == QSize(
+        panel._font_preview_button.sizeHint().width(), 30
+    )
 
 
 def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
@@ -2283,6 +2296,277 @@ def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
         qapp.processEvents()
         assert panel.currentIndex() == expected_index
         assert panel._navigation.currentRouteKey() == route_key
+
+
+def test_property_panel_reports_role_page_and_font_script_changes(qapp):
+    panel = PropertyPanel()
+    pages: list[int] = []
+    panel.pageChanged.connect(pages.append)
+
+    panel.setCurrentIndex(1)
+    panel.setCurrentIndex(0)
+    panel._font_tab_panel._buttons[("left", "latin")].click()
+
+    assert pages == [1, 0]
+    assert panel.current_font_script() == "latin"
+    assert panel._font_preview_widget._script == "latin"
+
+
+def test_font_preview_uses_role_japanese_ruby_and_latin_samples(qapp):
+    owner = QWidget()
+    preview = pp._FontPreviewWidget(owner)
+
+    preview.set_preview_state(Style(), "custom:主唱", "japanese")
+    assert preview._sample_text == "人"
+    assert preview._ruby_text == "ひと"
+
+    preview.set_preview_state(Style(), "custom:主唱", "latin")
+    assert preview._sample_text == "LinK"
+    assert preview._ruby_text == "リンク"
+
+
+def _wait_for_font_preview(preview, qapp, timeout_ms: int = 5_000) -> None:
+    elapsed = 0
+    while preview.canvas._rendering and elapsed < timeout_ms:
+        QTest.qWait(20)
+        qapp.processEvents()
+        elapsed += 20
+    assert not preview.canvas._rendering, "font preview render timed out"
+
+
+def test_font_preview_neutralizes_project_overlays_and_layout(qapp):
+    owner = QWidget()
+    preview = pp._FontPreviewWidget(owner)
+    preview.set_preview_state(
+        Style(
+            title_overlay=TitleOverlay(enabled=True, text_template="不应显示的标题"),
+            lit_enabled=True,
+            viewport_offset_x=600,
+            viewport_offset_y=-300,
+            viewport_scale_pct=175,
+            viewport_rotation_deg=30,
+            line_y_position="bottom",
+            entry_anim="slide",
+            exit_anim="fade",
+        ),
+        "global",
+        "japanese",
+    )
+
+    assert preview._style.title_overlay is None
+    assert preview._style.lit_enabled is False
+    assert preview._style.viewport_offset_x == 0
+    assert preview._style.viewport_scale_pct == 100
+    assert preview._style.line_y_position == "center"
+    assert preview._style.entry_anim == "none"
+    _wait_for_font_preview(preview, qapp)
+    assert not preview.canvas._sample.isNull()
+
+
+def test_font_preview_uses_supersampling_and_full_gradient_states(qapp):
+    owner = QWidget()
+    preview = pp._FontPreviewWidget(owner)
+    before = KaraokeColorState(
+        text=PaintFill(
+            mode="gradient_vertical",
+            start_color="#112233",
+            end_color="#445566",
+            gradient_stops=[(0, "#112233"), (100, "#445566")],
+        ),
+        stroke=PaintFill(mode="solid", color="#778899"),
+        stroke2=PaintFill(mode="solid", color="#AABBCC"),
+        shadow=PaintFill(mode="solid", color="#010203"),
+    )
+    after = replace(
+        before,
+        text=PaintFill(
+            mode="gradient_horizontal",
+            start_color="#FF0000",
+            end_color="#FFFF00",
+            gradient_stops=[(0, "#FF0000"), (100, "#FFFF00")],
+        ),
+    )
+    preview.set_preview_state(
+        Style(
+            stroke_width_px=12,
+            stroke2_enabled=True,
+            stroke2_width_px=12,
+            karaoke_colors=KaraokeColors(before=before, after=after),
+        ),
+        "global",
+        "latin",
+    )
+
+    _wait_for_font_preview(preview, qapp)
+    assert preview.canvas._sample.devicePixelRatioF() == pytest.approx(3.0)
+    assert preview._style.stroke_width_px == 12
+    assert preview._style.karaoke_colors.before.text.mode == "gradient_vertical"
+    assert preview._style.karaoke_colors.after.text.mode == "gradient_horizontal"
+    assert pp._FontSampleCanvas._brush(
+        before.text, QRectF(0, 0, 80, 60)
+    ).gradient() is not None
+
+    preview.show()
+    qapp.processEvents()
+    rendered = preview.grab().toImage().convertToFormat(
+        QImage.Format.Format_ARGB32
+    )
+    background = rendered.pixelColor(rendered.width() - 4, rendered.height() - 4)
+    assert any(
+        rendered.pixelColor(x, y) != background
+        for y in range(8, max(rendered.height() - 8, 8))
+        for x in range(8, max(rendered.width() - 8, 8))
+    ), "DPR sample must remain visible inside the logical widget bounds"
+
+
+def test_font_preview_renders_glow_decoration_for_main_and_ruby(qapp):
+    owner = QWidget()
+    preview = pp._FontPreviewWidget(owner)
+    preview.set_preview_state(
+        Style(
+            decoration_kind="glow",
+            glow_before_radius_px=8,
+            glow_after_radius_px=14,
+            glow_concentration_level=2,
+            ruby_decoration_kind="glow",
+            ruby_glow_before_radius_px=5,
+            ruby_glow_after_radius_px=9,
+            ruby_glow_concentration_level=1,
+        ),
+        "global",
+        "japanese",
+    )
+
+    _wait_for_font_preview(preview, qapp)
+    assert not preview.canvas._sample.isNull()
+    assert preview._style.decoration_kind == "glow"
+    assert preview._style.ruby_decoration_kind == "glow"
+
+
+def test_font_preview_renders_full_shadow_silhouette(qapp):
+    state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        stroke=PaintFill(mode="solid", color="#000000"),
+        stroke2=PaintFill(mode="solid", color="#FFFFFF"),
+        shadow=PaintFill(mode="solid", color="#FF0000"),
+    )
+    image = pp._FontSampleCanvas._render_sample(
+        Style(
+            decoration_kind="shadow",
+            shadow_offset_x=8,
+            shadow_offset_y=8,
+            stroke_width_px=12,
+            stroke2_enabled=True,
+            stroke2_width_px=12,
+            karaoke_colors=KaraokeColors(before=state, after=state),
+        ),
+        "japanese",
+    ).toImage().convertToFormat(QImage.Format.Format_ARGB32)
+
+    assert any(
+        (color := image.pixelColor(x, y)).alpha() > 0
+        and color.red() > 180
+        and color.red() > color.green() * 2
+        and color.red() > color.blue() * 2
+        for y in range(image.height())
+        for x in range(image.width())
+    ), "the decoration fill must be visible as a complete offset silhouette"
+
+
+def test_font_preview_render_is_async_and_reports_busy(qapp, monkeypatch):
+    owner = QWidget()
+    preview = pp._FontPreviewWidget(owner)
+    original = pp._FontSampleCanvas._render_sample_image.__func__
+
+    def slow_render(cls, style, script):
+        time.sleep(0.15)
+        return original(cls, style, script)
+
+    monkeypatch.setattr(
+        pp._FontSampleCanvas,
+        "_render_sample_image",
+        classmethod(slow_render),
+    )
+    started = time.perf_counter()
+    preview.set_preview_state(Style(font_size_px=96), "global", "japanese")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.08
+    assert preview.canvas._rendering
+    assert preview.canvas.accessibleName() == "字体预览（正在渲染）"
+    _wait_for_font_preview(preview, qapp)
+    assert preview.canvas.accessibleName() == "字体预览"
+
+
+def test_font_preview_button_lives_in_role_navigation(qapp):
+    panel = PropertyPanel()
+    button = panel._font_preview_button
+
+    assert panel._role_navigation.isAncestorOf(button)
+    assert not panel._navigation_row.isAncestorOf(button)
+    assert button.text() == "显示/隐藏预览"
+
+
+def test_font_preview_widget_embeds_at_role_card_top_right(qapp):
+    panel = PropertyPanel()
+    preview = panel._font_preview_widget
+    panel.resize(1200, 700)
+    panel.show()
+    qapp.processEvents()
+
+    assert panel._role_header.isAncestorOf(preview)
+    assert preview.geometry().right() == panel._role_header.contentsRect().right()
+    assert preview.size() == QSize(120, 112)
+
+
+def test_font_preview_canvas_geometry_is_stable_across_scripts(qapp):
+    panel = PropertyPanel()
+    panel.resize(1200, 700)
+    panel.show()
+    qapp.processEvents()
+    preview = panel._font_preview_widget
+    japanese_geometry = preview.geometry()
+    japanese_canvas_size = preview.canvas.size()
+
+    panel._font_tab_panel._buttons[("left", "latin")].click()
+    qapp.processEvents()
+
+    assert preview.geometry() == japanese_geometry
+    assert preview.canvas.size() == japanese_canvas_size == QSize(120, 112)
+    assert preview._sample_text == "LinK"
+
+
+def test_font_preview_restores_open_state_after_page_round_trip(qapp):
+    panel = PropertyPanel()
+    panel.show()
+    qapp.processEvents()
+    assert panel._font_preview_widget.isVisible()
+
+    panel.setCurrentIndex(1)
+    assert not panel._font_preview_widget.isVisible()
+    panel.setCurrentIndex(0)
+    assert panel._font_preview_widget.isVisible()
+
+    panel._font_preview_button.click()
+    assert not panel._font_preview_widget.isVisible()
+    panel.setCurrentIndex(1)
+    panel.setCurrentIndex(0)
+    assert not panel._font_preview_widget.isVisible()
+
+    panel._font_preview_button.click()
+    assert panel._font_preview_widget.isVisible()
+
+
+def test_font_preview_survives_repeated_panel_teardown(qapp):
+    for _index in range(20):
+        panel = PropertyPanel()
+        panel.show()
+        panel.setCurrentIndex(1)
+        panel.setCurrentIndex(0)
+        panel._font_preview_button.click()
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
 
 
 def test_property_panel_font_controls_emit_style(qapp):
