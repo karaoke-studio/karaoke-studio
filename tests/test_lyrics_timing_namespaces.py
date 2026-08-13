@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -291,3 +292,94 @@ def test_krok_helper_settings_bridge_partial_save_merges_lyrics_timing(monkeypat
     assert loaded.lyrics_timing["shortcuts"]["timing_mode"]["tag_now"] == "SPACE:short"
     assert loaded.lyrics_timing["export"]["last_export_dir"] == "D:/lyrics"
     assert in_memory.lyrics_timing == loaded.lyrics_timing
+
+
+def test_krok_helper_settings_bridge_injects_current_host_ffmpeg_and_proxy(monkeypatch):
+    from krok_helper import gui_qt
+    from krok_helper.gui_qt import KrokHelperSettingsBridge
+
+    host = HostSettings(
+        ffmpeg_dir="D:/tools/ffmpeg/bin",
+        updater={
+            "proxy": {
+                "mode": "manual",
+                "manual_url": "http://127.0.0.1:7890",
+            }
+        },
+        lyrics_timing={
+            "tools": {"ffmpeg_path": "stale-ffmpeg"},
+            "updater": {"proxy": {"mode": "off", "manual_url": "stale-proxy"}},
+        },
+    )
+    disk = HostSettings(lyrics_timing=host.lyrics_timing)
+    monkeypatch.setattr(gui_qt, "load_app_settings", lambda: disk)
+    monkeypatch.setattr(
+        gui_qt,
+        "find_tool",
+        lambda _name, _directory: "D:/tools/ffmpeg/bin/ffmpeg.exe",
+    )
+
+    loaded = KrokHelperSettingsBridge(host, lambda: None).load()
+
+    assert loaded["tools"]["ffmpeg_path"] == "D:/tools/ffmpeg/bin/ffmpeg.exe"
+    assert loaded["updater"]["proxy"] == {
+        "mode": "manual",
+        "manual_url": "http://127.0.0.1:7890",
+    }
+
+
+def test_krok_helper_settings_bridge_protects_host_values_when_sug_saves(monkeypatch):
+    from krok_helper import gui_qt
+    from krok_helper.gui_qt import KrokHelperSettingsBridge
+
+    host = HostSettings(
+        ffmpeg_dir="D:/new/ffmpeg",
+        updater={"proxy": {"mode": "off", "manual_url": ""}},
+    )
+    latest = HostSettings(lyrics_timing={"audio": {"default_volume": 80}})
+    saved = []
+    monkeypatch.setattr(gui_qt, "load_app_settings", lambda: latest)
+    monkeypatch.setattr(gui_qt, "save_app_settings", lambda settings, **_kwargs: saved.append(settings))
+    monkeypatch.setattr(gui_qt, "find_tool", lambda _name, _directory: "D:/new/ffmpeg/ffmpeg.exe")
+
+    KrokHelperSettingsBridge(host, lambda: None).save(
+        {
+            "audio": {"default_volume": 66},
+            "tools": {"ffmpeg_path": "D:/old/ffmpeg.exe"},
+            "updater": {
+                "proxy": {
+                    "mode": "manual",
+                    "manual_url": "http://127.0.0.1:7890",
+                }
+            },
+        }
+    )
+
+    config = saved[-1].lyrics_timing
+    assert config["audio"]["default_volume"] == 66
+    assert config["tools"]["ffmpeg_path"] == "D:/new/ffmpeg/ffmpeg.exe"
+    assert config["updater"]["proxy"] == {"mode": "off", "manual_url": ""}
+
+
+def test_sync_lyrics_timing_host_settings_reloads_embedded_settings(monkeypatch, tmp_path):
+    from krok_helper import gui_qt
+
+    injected = []
+    reloaded = []
+    host = SimpleNamespace(
+        settings=HostSettings(lyrics_timing={}),
+        lyrics_timing_settings_bridge=SimpleNamespace(
+            inject_host_managed_settings=lambda config: injected.append(config)
+        ),
+        lyrics_timing_page=SimpleNamespace(
+            settingInterface=SimpleNamespace(
+                get_settings=lambda: SimpleNamespace(reload=lambda: reloaded.append(True))
+            )
+        ),
+    )
+    monkeypatch.setattr(gui_qt, "get_settings_path", lambda: tmp_path / "settings.json")
+
+    gui_qt.KrokHelperQtApp._sync_lyrics_timing_host_paths(host)
+
+    assert injected == [host.settings.lyrics_timing]
+    assert reloaded == [True]

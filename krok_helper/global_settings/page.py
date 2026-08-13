@@ -879,6 +879,7 @@ class SettingsDialogs(QObject):
             updated.proxy_manual_url = proxy_manual_edit.text().strip()
             updated.source_order = normalize_order(source_order)
             updated.save(self._host.settings)
+            self._host.sync_lyrics_timing_host_paths()
             update_status_label.setText("设置已保存到本地。")
 
         save_button.clicked.connect(save_global_settings)

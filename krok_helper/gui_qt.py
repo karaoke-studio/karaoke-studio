@@ -152,13 +152,17 @@ class KrokHelperSettingsBridge:
 
     def load(self) -> dict:
         latest = load_app_settings()
-        self._app_settings.lyrics_timing = deepcopy(latest.lyrics_timing)
+        config = deepcopy(latest.lyrics_timing)
+        self.inject_host_managed_settings(config)
+        self._app_settings.lyrics_timing = config
         sync_baseline_field(self._app_settings, "lyrics_timing")
         return deepcopy(self._app_settings.lyrics_timing)
 
     def save(self, data: dict) -> None:
         latest = load_app_settings()
-        latest.lyrics_timing = deepcopy(data)
+        config = deepcopy(data)
+        self.inject_host_managed_settings(config)
+        latest.lyrics_timing = config
         # 这里要写的正是模块命名空间，合并回盘上的旧值等于把自己的改动丢掉。
         save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.lyrics_timing = deepcopy(latest.lyrics_timing)
@@ -170,6 +174,7 @@ class KrokHelperSettingsBridge:
         config = deepcopy(latest.lyrics_timing)
         for path, value in changes.items():
             self._set_nested(config, path, value)
+        self.inject_host_managed_settings(config)
         latest.lyrics_timing = config
         save_app_settings(latest, merge_module_namespaces=False)
         self._app_settings.lyrics_timing = deepcopy(config)
@@ -207,6 +212,33 @@ class KrokHelperSettingsBridge:
                 cursor[key] = child
             cursor = child
         cursor[keys[-1]] = deepcopy(value)
+
+    def inject_host_managed_settings(self, config: dict) -> None:
+        """Overlay settings owned by the workbench onto SUG's namespace.
+
+        These values deliberately do not use the copy already stored below
+        ``lyrics_timing``.  That copy may be stale during initial construction
+        or after SUG saves an old settings snapshot.
+        """
+        ffmpeg_path = _resolve_sug_ffmpeg_path(self._app_settings.ffmpeg_dir)
+        self._set_nested(config, "tools.ffmpeg_path", ffmpeg_path)
+
+        proxy = UpdaterSettings.load(self._app_settings)
+        self._set_nested(config, "updater.proxy.mode", proxy.proxy_mode)
+        self._set_nested(config, "updater.proxy.manual_url", proxy.proxy_manual_url)
+
+
+def _resolve_sug_ffmpeg_path(ffmpeg_dir_text: str) -> str:
+    ffmpeg_dir = Path(ffmpeg_dir_text).expanduser() if ffmpeg_dir_text.strip() else None
+    try:
+        return find_tool("ffmpeg", ffmpeg_dir)
+    except ProcessingError:
+        if os.name == "nt":
+            try:
+                return find_tool("ffmpeg.exe", ffmpeg_dir)
+            except ProcessingError:
+                pass
+    return "ffmpeg"
 
 
 TASKBAR_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "logo2.png"
@@ -654,6 +686,7 @@ class KrokHelperQtApp(QMainWindow):
         from strange_uta_game.frontend.main_window import MainWindow as LyricsTimingMainWindow
 
         lyrics_timing_settings = KrokHelperSettingsBridge(self.settings, self._save_all_settings)
+        self.lyrics_timing_settings_bridge = lyrics_timing_settings
         self.lyrics_timing_page = LyricsTimingMainWindow.for_embedding(
             parent=self.page_stack,
             settings_provider=lyrics_timing_settings,
@@ -1381,6 +1414,7 @@ class KrokHelperQtApp(QMainWindow):
 
     def set_ffmpeg_dir(self, path: Path | None) -> None:
         self.ffmpeg_dir_text = str(path) if path is not None else ""
+        self.settings.ffmpeg_dir = self.ffmpeg_dir_text
         self._sync_ffmpeg_labels()
         self._sync_lyrics_timing_host_paths()
 
@@ -1454,25 +1488,20 @@ class KrokHelperQtApp(QMainWindow):
             )
 
     def _sync_lyrics_timing_host_paths(self) -> None:
-        """Inject host-managed runtime paths into the embedded timing module."""
+        """Inject host-managed runtime settings into the embedded timing module."""
         cache_dir = get_settings_path().parent / "lyrics_timing_cache"
         os.environ["SUG_CACHE_DIR"] = str(cache_dir)
 
-        ffmpeg_dir = Path(self.ffmpeg_dir_text).expanduser() if self.ffmpeg_dir_text.strip() else None
-        try:
-            ffmpeg_path = find_tool("ffmpeg", ffmpeg_dir)
-        except ProcessingError:
-            if os.name == "nt":
-                try:
-                    ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)
-                except ProcessingError:
-                    ffmpeg_path = "ffmpeg"
-            else:
-                ffmpeg_path = "ffmpeg"
+        bridge = getattr(self, "lyrics_timing_settings_bridge", None)
+        if bridge is None:
+            bridge = KrokHelperSettingsBridge(self.settings, self._save_all_settings)
+        bridge.inject_host_managed_settings(self.settings.lyrics_timing)
 
-        tools = self.settings.lyrics_timing.setdefault("tools", {})
-        if isinstance(tools, dict):
-            tools["ffmpeg_path"] = ffmpeg_path
+        timing_page = getattr(self, "lyrics_timing_page", None)
+        setting_interface = getattr(timing_page, "settingInterface", None)
+        settings = setting_interface.get_settings() if setting_interface is not None else None
+        if settings is not None:
+            settings.reload()
 
     def set_output_name_mode(self, mode: str) -> None:
         if mode == OUTPUT_NAME_MODE_VIDEO_NAME:
