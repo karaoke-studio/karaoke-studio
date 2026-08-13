@@ -523,15 +523,15 @@ def _group_end_ms(
             if sentence_end is not None:
                 return sentence_end
     for ch in chars[end:]:
+        timestamp = _first_timestamp(ch, offset_ms)
+        if timestamp is not None:
+            return timestamp
         if bool(getattr(ch, "is_sentence_end", False)):
             sentence_end = _offset_optional(
                 getattr(ch, "sentence_end_ts", None), offset_ms
             )
             if sentence_end is not None:
                 return sentence_end
-        timestamp = _first_timestamp(ch, offset_ms)
-        if timestamp is not None:
-            return timestamp
     for sentence in list(getattr(project, "sentences", []) or [])[sentence_index + 1 :]:
         sentence_chars = list(getattr(sentence, "characters", []) or [])
         for ch in sentence_chars:

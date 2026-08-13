@@ -20,6 +20,7 @@ from strange_uta_game.backend.infrastructure.parsers.annotated_text import (
 
 from krok_helper.subtitle_render import sug_project as sug_project_module
 from krok_helper.subtitle_render.engine.painter import _effective_track_time_ms
+from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.native_protocol import track_to_ir
 from krok_helper.subtitle_render.sug_project import (
@@ -582,6 +583,46 @@ def test_sug_nicokara_inline_ruby_keeps_prefix_and_trailing_release_bounds() -> 
     ] == [
         ("天", "てん", 227970, 228170, 1, 2),
         ("神", "しん", 228170, 228430, 2, 3),
+    ]
+
+
+def test_sug_untimed_plain_follower_stops_at_next_checkpoint() -> None:
+    """Match SUG's leader/follower timing for ``[ts]そう[next-ts]な``."""
+
+    singer = Singer(id="main", name="主唱", is_default=True)
+    chars, _ = parse_timed_line(
+        "{嗚呼||[02:24.37]ああ,}[02:25.90]、"
+        "{狂||[02:26.09]く|[02:26.28]る}{い||[02:26.48]ゆ}"
+        "[02:26.99]そう[02:27.83]な[>02:28.37] "
+        "{愛||[02:28.47]あ|[02:28.69]い}"
+        "{情||[02:28.86]じょ|[02:29.11]う}[02:29.56]に[>02:32.91]",
+        default_singer_id=singer.id,
+    )
+    track = timing_track_from_sug_project(
+        Project(
+            singers=[singer],
+            sentences=[Sentence(singer_id=singer.id, characters=chars)],
+        )
+    )
+
+    line = track.lines[0]
+    sou_index = next(
+        index
+        for index in range(len(line.chars) - 1)
+        if line.chars[index].text == "そ" and line.chars[index + 1].text == "う"
+    )
+    sou = line.chars[sou_index : sou_index + 2]
+    assert [char.text for char in sou] == ["そ", "う"]
+    assert [char.source_span_start_ms for char in sou] == [146990, 146990]
+    assert [char.source_span_end_ms for char in sou] == [147830, 147830]
+    assert [char.source_span_index for char in sou] == [0, 1]
+    assert [char.source_span_count for char in sou] == [2, 2]
+
+    # Equal widths demonstrate the same leader/follower split used by SUG;
+    # real painting supplies glyph widths and therefore uses visual proportions.
+    assert compute_char_intervals(line, [1] * len(line.chars))[sou_index : sou_index + 2] == [
+        (146990, 147410),
+        (147410, 147830),
     ]
 
 
