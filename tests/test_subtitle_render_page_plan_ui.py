@@ -79,6 +79,40 @@ def test_page_markers_layout_column_and_boundary_drag_mapping(qapp):
     qapp.processEvents()
 
 
+def test_boundary_drag_mapping_allows_adjacent_sections(qapp):
+    track = _track()
+    track.page_plan = TrackPagePlan(
+        [
+            TrackSection([TrackPage(1, "builtin-1")]),
+            TrackSection([TrackPage(1, "builtin-1")]),
+            TrackSection([TrackPage(2, "builtin-2")]),
+        ]
+    )
+    project_page_plan_to_legacy_fields(track, Style())
+    panel = LyricsPanel()
+    panel.set_style(Style())
+    panel.set_track(track)
+
+    lyric_rows = [
+        row
+        for row, item in enumerate(panel._presentation_rows)
+        if item.track_line_index is not None
+    ]
+    assert panel._page_boundary_move_for_drag(lyric_rows[1], lyric_rows[0]) == (
+        0,
+        0,
+        1,
+    )
+    assert panel._page_boundary_move_for_drag(lyric_rows[0], lyric_rows[1]) == (
+        0,
+        0,
+        -1,
+    )
+
+    panel.deleteLater()
+    qapp.processEvents()
+
+
 def test_render_only_style_change_skips_full_table_refresh(qapp):
     """字号这类只作用于画面的字段不能触发整表刷新。
 
