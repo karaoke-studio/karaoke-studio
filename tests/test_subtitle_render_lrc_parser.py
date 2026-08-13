@@ -551,6 +551,14 @@ def test_combining_sequence_is_one_n3_timed_text_element():
     assert [ch.start_ms for ch in line.chars] == [1_000, 1_500]
 
 
+def test_emoji_variation_and_non_bmp_symbols_are_single_timed_elements():
+    track = parse_nicokara_lrc("[00:01:00]❄️🔯[00:02:00]\n")
+    line = track.lines[0]
+
+    assert [ch.text for ch in line.chars] == ["❄️", "🔯"]
+    assert [ch.start_ms for ch in line.chars] == [1_000, 1_500]
+
+
 def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():
     # @Emoji 行（歌手→图定义）应归入尾部元数据，不污染正文，并保留以便 round-trip。
     text = (

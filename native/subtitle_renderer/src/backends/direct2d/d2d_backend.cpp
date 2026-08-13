@@ -659,24 +659,46 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     return face;
 }
 
-std::vector<UINT32> utf16CodeUnits(const std::wstring &text) {
+std::vector<UINT32> unicodeScalars(const std::wstring &text) {
     std::vector<UINT32> values;
     values.reserve(text.size());
-    for (wchar_t value : text) {
-        // N3 converts each UTF-16 System.Char independently instead of
-        // decoding a Unicode scalar. wchar_t has the same 16-bit width here.
-        values.push_back(static_cast<UINT32>(static_cast<std::uint16_t>(value)));
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const UINT32 first = static_cast<std::uint16_t>(text[index]);
+        if (first >= 0xD800 && first <= 0xDBFF && index + 1 < text.size()) {
+            const UINT32 second = static_cast<std::uint16_t>(text[index + 1]);
+            if (second >= 0xDC00 && second <= 0xDFFF) {
+                values.push_back(
+                    0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+                );
+                ++index;
+                continue;
+            }
+        }
+        // Variation selectors choose presentation but do not have an outline
+        // of their own. The source grapheme remains one timed TextChar.
+        if ((first >= 0xFE00 && first <= 0xFE0F)) {
+            continue;
+        }
+        values.push_back(first);
     }
     return values;
 }
 
+bool containsEmoji(const std::wstring &text) {
+    const auto scalars = unicodeScalars(text);
+    return std::any_of(scalars.begin(), scalars.end(), [](UINT32 value) {
+        return (value >= 0x1F000 && value <= 0x1FAFF)
+            || (value >= 0x2600 && value <= 0x27BF);
+    });
+}
+
 std::vector<UINT16> glyphIndices(IDWriteFontFace *face, const std::wstring &text) {
-    const std::vector<UINT32> codeUnits = utf16CodeUnits(text);
-    std::vector<UINT16> glyphs(codeUnits.size());
-    if (!codeUnits.empty()
+    const std::vector<UINT32> scalars = unicodeScalars(text);
+    std::vector<UINT16> glyphs(scalars.size());
+    if (!scalars.empty()
         && FAILED(face->GetGlyphIndices(
-            codeUnits.data(),
-            static_cast<UINT32>(codeUnits.size()),
+            scalars.data(),
+            static_cast<UINT32>(scalars.size()),
             glyphs.data()))) {
         glyphs.clear();
     }
@@ -713,6 +735,17 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> findFallbackFontFace(
         successfulFaces.push_back(face);
         return face;
     };
+
+    const bool emoji = containsEmoji(text);
+    // Use the monochrome Symbol face for native emoji outlines. They retain the
+    // subtitle fill/stroke/glow semantics and match Painter's fallback instead
+    // of bypassing karaoke effects with system COLR bitmap layers.
+    if (emoji) {
+        if (auto face = tryFace(createFontFace(
+                collection, L"Segoe UI Symbol", DWRITE_FONT_WEIGHT_NORMAL, false))) {
+            return face;
+        }
+    }
 
     // N3 gives this bold face priority before scanning the system collection.
     if (auto face = tryFace(createFontFace(
@@ -1973,8 +2006,15 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     static_cast<float>(unit), device_
                 );
             } else if (!bitmapGuide) {
-                glyphs = glyphIndices(requestedFace.Get(), sourceChar.text);
-                outlineFace = requestedFace;
+                if (containsEmoji(sourceChar.text)) {
+                    outlineFace = createFontFace(
+                        fontCollection.Get(), L"Segoe UI Symbol",
+                        charStyle.fontWeight, charStyle.italic
+                    );
+                } else {
+                    outlineFace = requestedFace;
+                }
+                glyphs = glyphIndices(outlineFace.Get(), sourceChar.text);
                 if (!validGlyphIndices(glyphs)) {
                     outlineFace = findFallbackFontFace(
                         fontCollection.Get(), sourceChar.text, fallbackFaces, glyphs
@@ -2094,9 +2134,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             } else if (charHasBounds) {
                 std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
                 // N3 deliberately asks the originally requested face for
-                // metrics even when the outline came from a fallback face.
+                // ordinary fallback metrics. Emoji glyph IDs belong to the
+                // Symbol face, however, so querying them on the requested face
+                // produces unrelated widths (or E_INVALIDARG).
+                IDWriteFontFace *metricFace = containsEmoji(sourceChar.text)
+                    ? outlineFace.Get()
+                    : requestedFace.Get();
                 checkHr(
-                    requestedFace->GetDesignGlyphMetrics(
+                    metricFace->GetDesignGlyphMetrics(
                         glyphs.data(),
                         static_cast<UINT32>(glyphs.size()),
                         metrics.data(),

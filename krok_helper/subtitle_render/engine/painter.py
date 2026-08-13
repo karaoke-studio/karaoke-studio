@@ -3520,6 +3520,24 @@ def _is_n3_latin_text(text: str) -> bool:
     )
 
 
+def _is_emoji_text(text: str) -> bool:
+    """Return whether a grapheme should use the monochrome emoji outline face."""
+
+    return any(
+        0x1F000 <= ord(char) <= 0x1FAFF
+        or 0x2600 <= ord(char) <= 0x27BF
+        for char in text
+    )
+
+
+def _build_emoji_font(style: Style) -> QFont:
+    font = QFont("Segoe UI Symbol", max(int(style.font_size_px), 1))
+    font.setPixelSize(max(int(style.font_size_px), 1))
+    font.setWeight(_clamp_weight(style.font_weight))
+    font.setItalic(style.italic)
+    return font
+
+
 def _main_script_stroke_style(style: Style, text: str) -> Style:
     """把当前字符对应字体槽的描边参数物化到 Painter 的通用字段。"""
     if _is_n3_latin_text(text):
@@ -3580,11 +3598,13 @@ def _make_font_for(style: Style, jp_font: QFont, latin_font: QFont):
     字符挑字体：全 ASCII 的字符用英数字体，其余（假名/汉字/标点）用日文字体。
     英数轨的字号 / 字重覆盖也会使两套字体分离（family 相同亦然）。
     """
-    if _font_signature(latin_font) == _font_signature(jp_font):
-        return None
+    emoji_font = _build_emoji_font(style)
+    same_text_fonts = _font_signature(latin_font) == _font_signature(jp_font)
 
     def font_for(ch_text: str) -> QFont:
-        return latin_font if _is_n3_latin_text(ch_text) else jp_font
+        if _is_emoji_text(ch_text):
+            return emoji_font
+        return latin_font if not same_text_fonts and _is_n3_latin_text(ch_text) else jp_font
 
     return font_for
 
@@ -3604,12 +3624,21 @@ def _char_advance(
     """
     cache = getattr(_LAYOUT_PASS, "char_advances", None)
     if cache is None:
+        if font_for is not None and _is_emoji_text(ch_text):
+            return QFontMetrics(font_for(ch_text)).horizontalAdvance(ch_text)
         if font_for is not None and _is_n3_latin_text(ch_text):
             return latin_metrics.horizontalAdvance(ch_text)
         return metrics.horizontalAdvance(ch_text)
+    use_emoji = font_for is not None and _is_emoji_text(ch_text)
     use_latin = font_for is not None and _is_n3_latin_text(ch_text)
-    source = latin_metrics if use_latin else metrics
-    cache_key = (ch_text, id(source))
+    if use_emoji:
+        emoji_font = font_for(ch_text)
+        source = QFontMetrics(emoji_font)
+        source_key = ("emoji", _font_signature(emoji_font))
+    else:
+        source = latin_metrics if use_latin else metrics
+        source_key = id(source)
+    cache_key = (ch_text, source_key)
     hit = cache.get(cache_key)
     if hit is None:
         hit = source.horizontalAdvance(ch_text)
@@ -3706,7 +3735,11 @@ def _char_layout_metrics(
     """(layout width, path left offset) using NicokaraMaker3-like rules, memoized."""
     is_latin_glyph = font_for is not None and _is_n3_latin_text(ch_text)
     glyph_font = font_for(ch_text) if font_for is not None else font
-    glyph_metrics = latin_metrics if is_latin_glyph else metrics
+    glyph_metrics = (
+        QFontMetrics(glyph_font)
+        if _is_emoji_text(ch_text)
+        else latin_metrics if is_latin_glyph else metrics
+    )
     font_size = glyph_font.pixelSize()
     if font_size <= 0:
         font_size = max(
@@ -6541,7 +6574,9 @@ def _layout_vertical_line(
         cells.append((cell_top, cell_top + cell_h))
         glyph_font = font_for(ch.text) if font_for is not None else font
         glyph_metrics = (
-            latin_metrics
+            QFontMetrics(glyph_font)
+            if _is_emoji_text(ch.text)
+            else latin_metrics
             if (font_for is not None and ch.text and ch.text.isascii())
             else metrics
         )
@@ -7572,7 +7607,9 @@ def _build_text_layout(
         glyph_style = role_style if is_guide else _main_script_stroke_style(role_style, ch.text)
         glyph_font = font if is_guide else (font_for(ch.text) if font_for is not None else font)
         glyph_metrics = (
-            latin_metrics
+            QFontMetrics(glyph_font)
+            if not is_guide and _is_emoji_text(ch.text)
+            else latin_metrics
             if not is_guide and font_for is not None and _is_n3_latin_text(ch.text)
             else metrics
         )

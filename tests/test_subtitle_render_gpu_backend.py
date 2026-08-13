@@ -61,6 +61,7 @@ _GPU_TEST_FONT_FILES = (
     "arial.ttf",
     "comic.ttf",
     "msgothic.ttc",
+    "seguisym.ttf",
 )
 _GPU_TEST_FONT_FAMILIES = (
     "Times New Roman",
@@ -68,6 +69,7 @@ _GPU_TEST_FONT_FAMILIES = (
     "Arial",
     "Comic Sans MS",
     "MS Gothic",
+    "Segoe UI Symbol",
 )
 
 
@@ -710,6 +712,66 @@ def _render_painter_oracle(
     bits = image.constBits()
     bits.setsize(image.sizeInBytes())
     return bytes(bits)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_and_painter_render_distinct_native_emoji_outlines(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Microsoft YaHei UI",
+        font_size_px=112,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        line_tail_ms=1,
+    )
+
+    def track(text: str) -> TimingTrack:
+        return TimingTrack(
+            lines=[TimingLine(chars=[TimingChar(text, 0)], end_ms=1_000)]
+        )
+
+    gpu_frames: list[bytes] = []
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        for text in ("❄️", "🔯"):
+            _, frames = _render_g1_frames(
+                renderer,
+                style,
+                (500,),
+                force_warp=True,
+                track=track(text),
+            )
+            gpu_frames.append(frames[0])
+
+    painter_frames = [
+        _render_painter_oracle(style, t_ms=500, track=track(text))
+        for text in ("❄️", "🔯")
+    ]
+    assert all(_alpha_count(frame) > 0 for frame in gpu_frames + painter_frames)
+    assert gpu_frames[0] != gpu_frames[1]
+    assert painter_frames[0] != painter_frames[1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native renderer is Windows-only")
+def test_native_cpu_renders_distinct_native_emoji_outlines() -> None:
+    style = _g1_style(
+        font_family="Microsoft YaHei UI",
+        font_size_px=112,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        line_tail_ms=1,
+    )
+    checksums: list[str] = []
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        for text in ("❄️", "🔯"):
+            track = TimingTrack(
+                lines=[TimingLine(chars=[TimingChar(text, 0)], end_ms=1_000)]
+            )
+            renderer.configure(track, style, width=640, height=360, fps=60)
+            checksums.append(renderer.render_frame_stats(500)["checksum"])
+
+    assert checksums[0] != checksums[1]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

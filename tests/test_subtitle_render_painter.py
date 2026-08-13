@@ -328,11 +328,31 @@ def test_main_glyphs_use_script_specific_stroke_parameters(qapp):
         baseline_y=100,
         inline_styles=False,
     )
-
     assert [glyph.style.stroke_width_px for glyph in layout.glyphs] == [7, 12, 7]
     assert [glyph.style.stroke2_width_px for glyph in layout.glyphs] == [0, 5, 0]
-    # 关闭开关只影响有效渲染宽度，不会改掉模型里保存的 9 px。
     assert style.latin_stroke2_width_px == 9
+
+
+def test_emoji_graphemes_use_symbol_outline_font_and_have_distinct_paths(qapp):
+    line = TimingLine(
+        chars=[TimingChar("❄️", 0), TimingChar("🔯", 500)],
+        end_ms=1_000,
+    )
+    layout = subtitle_painter._build_text_layout(
+        line,
+        Style(font_family="Microsoft YaHei UI", font_size_px=96),
+        x0=0,
+        baseline_y=120,
+        inline_styles=False,
+    )
+
+    assert [glyph.font.family() for glyph in layout.glyphs] == [
+        "Segoe UI Symbol",
+        "Segoe UI Symbol",
+    ]
+    paths = [subtitle_painter._glyph_path(glyph, 120) for glyph in layout.glyphs]
+    assert all(not path.isEmpty() for path in paths)
+    assert paths[0].boundingRect() != paths[1].boundingRect()
 
 
 def test_ruby_latin_strokes_resolve_independently():

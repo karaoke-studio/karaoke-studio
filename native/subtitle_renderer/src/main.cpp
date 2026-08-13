@@ -12,6 +12,7 @@
 #include <QtGui/QBrush>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QImage>
 #include <QtGui/QLinearGradient>
@@ -3374,6 +3375,31 @@ QFont buildLineFont(const ResolvedStyle &style) {
     return font;
 }
 
+bool isEmojiText(const QString &text) {
+    for (const uint scalar : text.toUcs4()) {
+        if ((scalar >= 0x1F000U && scalar <= 0x1FAFFU)
+            || (scalar >= 0x2600U && scalar <= 0x27BFU)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QFont buildEmojiFont(const ResolvedStyle &style) {
+    static std::once_flag emojiFontRegistration;
+    std::call_once(emojiFontRegistration, []() {
+        const QString windowsRoot = qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows"));
+        QFontDatabase::addApplicationFont(
+            windowsRoot + QStringLiteral("/Fonts/seguisym.ttf")
+        );
+    });
+    QFont font(QStringLiteral("Segoe UI Symbol"));
+    font.setPixelSize(style.fontSizePx);
+    font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
+    font.setItalic(style.italic);
+    return font;
+}
+
 QFont buildRubyFont(const ResolvedStyle &style) {
     QFont font(style.fontFamily);
     font.setPixelSize(style.rubyFontSizePx);
@@ -3540,7 +3566,9 @@ LineLayout layoutLine(const RenderConfig &cfg, const ResolvedStyle &lineStyle, c
     for (std::size_t i = 0; i < line.chars.size(); ++i) {
         const auto &ch = line.chars[i];
         const ResolvedStyle &charStyle = inlineStyles ? resolvedStyleForCharacter(cfg, line, ch) : lineStyle;
-        QFont charFont = inlineStyles ? buildLineFont(charStyle) : layout.font;
+        QFont charFont = isEmojiText(ch.text)
+            ? buildEmojiFont(charStyle)
+            : (inlineStyles ? buildLineFont(charStyle) : layout.font);
         const QFontMetricsF charMetrics(charFont);
         const double width = std::max(1.0, charMetrics.horizontalAdvance(ch.text));
         layout.charWidths.push_back(width);
