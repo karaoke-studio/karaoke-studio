@@ -145,7 +145,8 @@ struct RubyAnnotation {
     int sourceOffsetMs = 0;
     // Loader-resolved owning line plus the line-local, half-open target range;
     // -1 = unresolved, in which case the historical text search runs (see
-    // rubyTargetIndices) and no line ownership is enforced.
+    // rubyTargetIndices). Source ownership is always enforced, while line
+    // ownership is enforced whenever both sides carry a resolved identity.
     int targetLineIndex = -1;
     int targetCharStart = -1;
     int targetCharEnd = -1;
@@ -3845,6 +3846,18 @@ std::vector<int> rubyTargetIndices(
     const TimingLine &line,
     const std::vector<std::pair<int, int>> &intervals
 ) {
+    // Rubies from every source and line are flattened into RenderConfig. Keep
+    // ownership at this shared resolution boundary so CPU paint, diagnostics,
+    // Utopia and GPU scene construction cannot accidentally apply different
+    // filtering rules to overlapping or repeated lyrics.
+    if (ruby.sourceIndex != line.sourceIndex) {
+        return {};
+    }
+    if (ruby.targetLineIndex >= 0
+        && line.trackLineIndex >= 0
+        && ruby.targetLineIndex != line.trackLineIndex) {
+        return {};
+    }
     // Mirrors Painter's _ruby_explicit_target_indices: the loader already knows
     // the exact characters for .sug per-character ruby, and searching by text
     // instead collapses every repeat of one base onto its first occurrence.
@@ -7687,18 +7700,6 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         const int sourceLineEnd = lineEndMs(sourceLine);
         std::vector<bool> rubyMainWipeAssigned(line.chars.size(), false);
         for (const RubyAnnotation &sourceRuby : config.rubies) {
-            if (sourceRuby.sourceIndex != sourceLine.sourceIndex) {
-                continue;
-            }
-            // Harmony and lead lines can overlap in time, so the window below
-            // cannot tell which line an annotation belongs to; if both lines
-            // carry the same character at the same index the other line's ruby
-            // would land here too.  Mirrors Painter's _ruby_owns_line.
-            if (sourceRuby.targetLineIndex >= 0
-                && sourceLine.trackLineIndex >= 0
-                && sourceRuby.targetLineIndex != sourceLine.trackLineIndex) {
-                continue;
-            }
             const bool globalPosition = sourceRuby.posStartMs == 0 && sourceRuby.posEndMs == 0;
             if (!globalPosition && (
                 sourceRuby.posEndMs <= sourceLineStart || sourceRuby.posStartMs >= sourceLineEnd

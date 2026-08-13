@@ -1490,6 +1490,76 @@ def test_native_text_layer_cache_reuses_static_main_and_ruby_layers(tmp_path, mo
     assert second["layout_cache_misses"] == first["layout_cache_misses"]
 
 
+def test_native_cpu_and_gpu_keep_overlapping_rubies_on_their_own_lines(monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("燃", 98_770), TimingChar("悪", 100_520)],
+                end_ms=102_330,
+                track_line_index=0,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("<", 102_270),
+                    TimingChar("燃", 102_270),
+                    TimingChar("悪", 104_060),
+                    TimingChar(">", 104_910),
+                ],
+                end_ms=105_670,
+                track_line_index=1,
+            ),
+        ],
+        rubies=[
+            RubyAnnotation(
+                "燃",
+                "も",
+                pos_start_ms=98_770,
+                pos_end_ms=100_520,
+                target_line_index=0,
+                target_char_start=0,
+                target_char_end=1,
+            ),
+            RubyAnnotation(
+                "燃",
+                "も",
+                pos_start_ms=102_270,
+                pos_end_ms=104_060,
+                target_line_index=1,
+                target_char_start=1,
+                target_char_end=2,
+            ),
+        ],
+    )
+    style = Style(line_lead_in_ms=1_000, line_tail_ms=1_000)
+
+    with NativeRendererProcess(
+        renderer_path, response_timeout_s=15.0, close_timeout_s=1.0
+    ) as renderer:
+        renderer.configure(track, style, width=800, height=360, fps=60)
+        cpu = renderer.render_frame_stats(102_300)
+        gpu = renderer.configure_gpu(
+            track,
+            style,
+            width=800,
+            height=360,
+            fps=60,
+            force_warp=True,
+            realization_enabled=False,
+        )
+
+    # Both lines are visible at 102300.  A global ruby scan used to attach both
+    # annotations to both lines in native CPU paths, while GPU had a private
+    # ownership filter.  Both backends must now resolve through the same gate.
+    assert [ruby["indices"] for ruby in cpu["ruby_diagnostics"]] == [[0], [1]]
+    assert gpu["cached_rubies"] == 2
+
+
 def test_native_text_layer_cache_reuses_inline_role_runs(tmp_path, monkeypatch):
     renderer_path = resolve_native_renderer_path(root=Path.cwd())
     if renderer_path is None:

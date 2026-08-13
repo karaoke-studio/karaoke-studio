@@ -853,3 +853,46 @@ def test_overlapping_lines_keep_their_own_ruby(tmp_path):
             if 1 in subtitle_painter._ruby_target_indices(ruby, line, intervals)
         ]
         assert readings == expected, (line_index, readings)
+
+
+def test_overlapping_nicokara_repeat_keeps_each_ruby_on_its_source_character() -> None:
+    singer = Singer(id="main", name="main", is_default=True)
+    raw_lines = [
+        "{燃||[01:38.77]も}[01:38.99]え[01:39.23]よ[01:39.44]ド"
+        "[01:39.67]ラ[01:40.10]ゴン[>01:40.35]{悪||[01:40.52]あ|[01:40.72]く}"
+        "{魔||[01:40.84]ま}[01:40.96]の{罠||[01:41.21]わ|[01:41.39]な[>01:42.33]}",
+        "<{燃||[01:42.27]も}[01:42.50]え[01:42.73]よ[01:42.95]ド"
+        "[01:43.16]ラ[01:43.59]ゴン[>01:43.76]{悪||[01:44.06]あ|[01:44.23]く}"
+        "{魔||[01:44.35]ま}[01:44.47]の{罠||[01:44.68]わ|[01:44.91]な}>[>01:45.67]",
+    ]
+    sentences = []
+    for raw_line in raw_lines:
+        chars, _ = parse_timed_line(raw_line, default_singer_id=singer.id)
+        sentences.append(Sentence(singer_id=singer.id, characters=chars))
+
+    track = timing_track_from_sug_project(
+        Project(singers=[singer], sentences=sentences)
+    )
+
+    assert ["".join(char.text for char in line.chars) for line in track.lines] == [
+        "燃えよドラゴン悪魔の罠",
+        "<燃えよドラゴン悪魔の罠>",
+    ]
+    assert [
+        (
+            ruby.target_line_index,
+            ruby.target_char_start,
+            ruby.target_char_end,
+            ruby.kanji,
+        )
+        for ruby in track.rubies
+    ] == [
+        (0, 0, 1, "燃"),
+        (0, 7, 8, "悪"),
+        (0, 8, 9, "魔"),
+        (0, 10, 11, "罠"),
+        (1, 1, 2, "燃"),
+        (1, 8, 9, "悪"),
+        (1, 9, 10, "魔"),
+        (1, 11, 12, "罠"),
+    ]
