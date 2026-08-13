@@ -153,6 +153,7 @@ class KrokHelperSettingsBridge:
     def load(self) -> dict:
         latest = load_app_settings()
         config = deepcopy(latest.lyrics_timing)
+        self._fill_sparse_shortcut_defaults(config)
         self.inject_host_managed_settings(config)
         self._app_settings.lyrics_timing = config
         sync_baseline_field(self._app_settings, "lyrics_timing")
@@ -212,6 +213,21 @@ class KrokHelperSettingsBridge:
                 cursor[key] = child
             cursor = child
         cursor[keys[-1]] = deepcopy(value)
+
+    @staticmethod
+    def _fill_sparse_shortcut_defaults(config: dict) -> None:
+        """Preserve mode-specific empty bindings in migrated sparse settings."""
+        shortcuts = config.setdefault("shortcuts", {})
+        if not isinstance(shortcuts, dict):
+            return
+        edit_mode = shortcuts.setdefault("edit_mode", {})
+        if not isinstance(edit_mode, dict):
+            return
+        # SUG <= 1.5.1 falls back a missing edit-mode value to the timing-mode
+        # default (Backspace -> delete_timestamp).  An explicit empty binding
+        # is semantically different from a missing value and must survive the
+        # host's sparse settings migration.
+        edit_mode.setdefault("delete_timestamp", "")
 
     def inject_host_managed_settings(self, config: dict) -> None:
         """Overlay settings owned by the workbench onto SUG's namespace.
@@ -767,6 +783,9 @@ class KrokHelperQtApp(QMainWindow):
         if module_id not in self.module_pages:
             return
         previous_module = self.active_module
+        module_changed = previous_module != module_id
+        if module_changed and previous_module == WORKFLOW_LYRICS_TIMING:
+            self._notify_lyrics_timing_host_visibility(False)
         # 离开波形对齐页就把预览停掉。这一段原先查的是外壳自己的
         # ``align_preview_process`` —— 页面搬走之后它恒为 None，条件永远不成立，
         # 切到别的步骤后 ffplay 会一直响。
@@ -789,6 +808,23 @@ class KrokHelperQtApp(QMainWindow):
             animate_page(self.module_pages[module_id], outgoing)
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
+        if module_changed and module_id == WORKFLOW_LYRICS_TIMING:
+            self._notify_lyrics_timing_host_visibility(True)
+
+    def _notify_lyrics_timing_host_visibility(self, visible: bool) -> None:
+        """Forward the host workflow visibility lifecycle to embedded SUG."""
+        timing_page = getattr(self, "lyrics_timing_page", None)
+        callback = getattr(timing_page, "on_host_visibility_changed", None)
+        if not callable(callback):
+            return
+        try:
+            callback(bool(visible))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "通知歌词打轴模块宿主可见性失败: visible=%s",
+                visible,
+                exc_info=True,
+            )
 
     def _capture_outgoing_page(
         self, previous_module: str | None, module_id: str

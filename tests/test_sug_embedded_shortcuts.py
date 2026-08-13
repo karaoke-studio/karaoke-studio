@@ -28,6 +28,7 @@ class _FakeTimingPage:
         self.save_count = 0
         self.flush_count = 0
         self.opened_projects: list[str] = []
+        self.host_visibility: list[bool] = []
         self.editorInterface = _FakeEditor()
 
     def trigger_save(self) -> None:
@@ -38,6 +39,9 @@ class _FakeTimingPage:
 
     def flush_unsaved(self) -> None:
         self.flush_count += 1
+
+    def on_host_visibility_changed(self, visible: bool) -> None:
+        self.host_visibility.append(visible)
 
 
 class _FakeProjectPage:
@@ -193,6 +197,69 @@ def test_ctrl_s_routes_to_embedded_sug_save() -> None:
     KrokHelperQtApp._handle_export_or_save_shortcut(app)
 
     assert timing_page.save_count == 1
+
+
+def _workflow_host(previous_module: str, target_module: str):
+    timing_page = _FakeTimingPage()
+    target_page = timing_page if target_module == WORKFLOW_LYRICS_TIMING else object()
+    pages = {
+        WORKFLOW_LYRICS_TIMING: timing_page,
+        target_module: target_page,
+    }
+    app = SimpleNamespace(
+        module_pages=pages,
+        active_module=previous_module,
+        align_page=None,
+        page_stack=SimpleNamespace(setCurrentWidget=lambda _page: None),
+        workflow_stepper=SimpleNamespace(setCurrentModule=lambda _module: None),
+        lyrics_timing_page=timing_page,
+        _sync_page_stack_margins=lambda _module: None,
+        _capture_outgoing_page=lambda *_args: None,
+        _sync_workflow_shortcut_scope=lambda: None,
+        _notify_lyrics_timing_host_visibility=lambda visible: (
+            KrokHelperQtApp._notify_lyrics_timing_host_visibility(app, visible)
+        ),
+    )
+    return app, timing_page
+
+
+def test_entering_embedded_sug_notifies_host_visibility_after_switch() -> None:
+    app, timing_page = _workflow_host(
+        WORKFLOW_HIRES_MIX,
+        WORKFLOW_LYRICS_TIMING,
+    )
+
+    KrokHelperQtApp._show_module(app, WORKFLOW_LYRICS_TIMING)
+
+    assert timing_page.host_visibility == [True]
+
+
+def test_leaving_embedded_sug_notifies_host_visibility_before_switch() -> None:
+    app, timing_page = _workflow_host(
+        WORKFLOW_LYRICS_TIMING,
+        WORKFLOW_HIRES_MIX,
+    )
+
+    KrokHelperQtApp._show_module(app, WORKFLOW_HIRES_MIX)
+
+    assert timing_page.host_visibility == [False]
+
+
+def test_reselecting_embedded_sug_does_not_repeat_visibility_lifecycle() -> None:
+    app, timing_page = _workflow_host(
+        WORKFLOW_LYRICS_TIMING,
+        WORKFLOW_LYRICS_TIMING,
+    )
+
+    KrokHelperQtApp._show_module(app, WORKFLOW_LYRICS_TIMING)
+
+    assert timing_page.host_visibility == []
+
+
+def test_old_embedded_sug_without_visibility_hook_remains_compatible() -> None:
+    app = SimpleNamespace(lyrics_timing_page=SimpleNamespace())
+
+    KrokHelperQtApp._notify_lyrics_timing_host_visibility(app, True)
 
 
 def test_open_sug_project_switches_to_embedded_timing_page(tmp_path: Path) -> None:

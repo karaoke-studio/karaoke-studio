@@ -166,6 +166,47 @@ def test_strange_uta_game_provider_partial_save_preserves_newer_shortcuts():
         AppSettings.set_default_provider(None)
 
 
+def test_krok_helper_settings_bridge_fills_missing_edit_delete_binding(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from krok_helper.gui_qt import KrokHelperSettingsBridge
+
+    host = HostSettings(
+        lyrics_timing={
+            "shortcuts": {
+                "timing_mode": {"delete_timestamp": "Backspace:short"},
+                "edit_mode": {"remove_checkpoint": "BACKSPACE:short"},
+            }
+        }
+    )
+    save_app_settings(host)
+
+    loaded = KrokHelperSettingsBridge(host, lambda: None).load()
+
+    assert loaded["shortcuts"]["edit_mode"]["delete_timestamp"] == ""
+
+
+def test_krok_helper_settings_bridge_preserves_custom_edit_delete_binding(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from krok_helper.gui_qt import KrokHelperSettingsBridge
+
+    host = HostSettings(
+        lyrics_timing={
+            "shortcuts": {
+                "edit_mode": {"delete_timestamp": "R:short"},
+            }
+        }
+    )
+    save_app_settings(host)
+
+    loaded = KrokHelperSettingsBridge(host, lambda: None).load()
+
+    assert loaded["shortcuts"]["edit_mode"]["delete_timestamp"] == "R:short"
+
+
 def test_import_legacy_sug_settings_filters_unknown_keys_and_merges_lists(tmp_path):
     legacy_dir = tmp_path / "sug"
     legacy_dir.mkdir()
