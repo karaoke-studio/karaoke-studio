@@ -14,6 +14,9 @@ from strange_uta_game.backend.domain import (
     Singer,
 )
 from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
+from strange_uta_game.backend.infrastructure.parsers.annotated_text import (
+    parse_timed_line,
+)
 
 from krok_helper.subtitle_render import sug_project as sug_project_module
 from krok_helper.subtitle_render.engine.painter import _effective_track_time_ms
@@ -529,6 +532,57 @@ def test_sug_ruby_without_sentence_end_borrows_next_line_start() -> None:
 
     assert track.rubies[0].pos_start_ms == 1000
     assert track.rubies[0].pos_end_ms == 2400
+
+
+def test_sug_nicokara_inline_ruby_keeps_prefix_and_trailing_release_bounds() -> None:
+    """Keep SUG's checkpoint boundaries around an untimed harmony wrapper."""
+
+    main = Singer(id="sv9", name="sv9", is_default=True)
+    sub = Singer(id="sv9sub", name="sv9sub")
+    main_chars, _ = parse_timed_line(
+        "【sv9】[03:46.59]レ[03:46.72]キ[03:46.84]レ[03:46.96]キ"
+        "{煉||[03:47.08]れん}{獄||[03:47.30]ご|[03:47.41]く}"
+        "{天||[03:47.52]てん}{神||[03:47.72]しん[>03:47.92]}",
+        name_to_singer_id={"sv9": main.id, "sv9sub": sub.id},
+        default_singer_id=main.id,
+    )
+    sub_chars, _ = parse_timed_line(
+        "【sv9sub】<{天||[03:47.97]てん}{神||[03:48.17]しん}>[>03:48.43]",
+        name_to_singer_id={"sv9": main.id, "sv9sub": sub.id},
+        default_singer_id=main.id,
+    )
+    track = timing_track_from_sug_project(
+        Project(
+            singers=[main, sub],
+            sentences=[
+                Sentence(singer_id=main.id, characters=main_chars),
+                Sentence(singer_id=sub.id, characters=sub_chars),
+            ],
+        )
+    )
+
+    harmony = track.lines[1]
+    assert [(char.text, char.start_ms) for char in harmony.chars] == [
+        ("<", 227920),
+        ("天", 227970),
+        ("神", 228170),
+        (">", 228300),
+    ]
+    assert harmony.end_ms == 228430
+    assert [
+        (
+            ruby.kanji,
+            ruby.reading,
+            ruby.pos_start_ms,
+            ruby.pos_end_ms,
+            ruby.target_char_start,
+            ruby.target_char_end,
+        )
+        for ruby in track.rubies[-2:]
+    ] == [
+        ("天", "てん", 227970, 228170, 1, 2),
+        ("神", "しん", 228170, 228430, 2, 3),
+    ]
 
 
 def test_sug_mid_line_pause_does_not_truncate_line_or_later_ruby() -> None:

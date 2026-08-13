@@ -194,8 +194,31 @@ def _timing_chars_for_sentence(
         return []
 
     result: list[TimingChar] = []
+    first_timed_index = timed_indices[0]
+    if first_timed_index > 0:
+        first_start_ms = _first_timestamp(chars[first_timed_index], offset_ms)
+        prefix_start_ms = _previous_sentence_boundary_ms(
+            project, sentence_index, offset_ms
+        )
+        if first_start_ms is not None:
+            if prefix_start_ms is None or prefix_start_ms > first_start_ms:
+                prefix_start_ms = first_start_ms
+            result.extend(
+                _timing_chars_for_span(
+                    chars=chars,
+                    start_index=0,
+                    end_index=first_timed_index,
+                    span_start_ms=prefix_start_ms,
+                    span_end_ms=first_start_ms,
+                    offset_ms=offset_ms,
+                    sentence_singer_id=sentence_singer_id,
+                    default_singer_id=default_singer_id,
+                    singer_by_id=singer_by_id,
+                    has_following_anchor=True,
+                )
+            )
     for timed_index_position, timed_index in enumerate(timed_indices):
-        group_start = 0 if timed_index_position == 0 else timed_index
+        group_start = timed_index
         group_end = (
             timed_indices[timed_index_position + 1]
             if timed_index_position + 1 < len(timed_indices)
@@ -289,6 +312,77 @@ def _timing_chars_for_sentence(
                 span_start_ms = span_end_ms
                 continue
             break
+    return result
+
+
+def _timing_chars_for_span(
+    *,
+    chars: list[Any],
+    start_index: int,
+    end_index: int,
+    span_start_ms: int,
+    span_end_ms: int | None,
+    offset_ms: int,
+    sentence_singer_id: object,
+    default_singer_id: str | None,
+    singer_by_id: dict[str, Any],
+    has_following_anchor: bool,
+) -> list[TimingChar]:
+    """Map one source-character span without moving its boundary anchor.
+
+    SUG treats characters before the first checkpoint as the tail of the
+    preceding interval.  They must therefore occupy the interval *ending* at
+    the first checkpoint; including them in the first checkpoint's following
+    span shifts that checkpoint and every ruby bound to it to the right.
+    """
+
+    items = [
+        (index, ch, text)
+        for index, ch in enumerate(chars[start_index:end_index], start=start_index)
+        if (text := str(getattr(ch, "char", "")))
+    ]
+    starts = _spread_text_starts(span_start_ms, span_end_ms, len(items))
+    shared_span = (
+        len(items) > 1
+        and span_end_ms is not None
+        and span_end_ms > span_start_ms
+    )
+    result: list[TimingChar] = []
+    for local_index, (_index, ch, text) in enumerate(items):
+        sentence_end_ms = _offset_optional(
+            getattr(ch, "sentence_end_ts", None), offset_ms
+        )
+        ch_singer_id = _effective_singer_id(
+            getattr(ch, "singer_id", "") or sentence_singer_id,
+            default_singer_id,
+        )
+        ch_singer = singer_by_id.get(ch_singer_id or "")
+        result.append(
+            TimingChar(
+                text=text,
+                start_ms=starts[local_index],
+                explicit_start=bool(
+                    _offset_timestamps(
+                        getattr(ch, "timestamps", []) or [], offset_ms
+                    )
+                ),
+                explicit_end=(
+                    bool(getattr(ch, "is_sentence_end", False))
+                    and sentence_end_ms is not None
+                )
+                or (local_index == len(items) - 1 and has_following_anchor),
+                pause_release_ms=(
+                    sentence_end_ms
+                    if bool(getattr(ch, "is_sentence_end", False))
+                    else None
+                ),
+                role_label=_singer_name(ch_singer),
+                source_span_start_ms=span_start_ms if shared_span else None,
+                source_span_end_ms=span_end_ms if shared_span else None,
+                source_span_index=local_index if shared_span else 0,
+                source_span_count=len(items) if shared_span else 1,
+            )
+        )
     return result
 
 
@@ -429,6 +523,12 @@ def _group_end_ms(
             if sentence_end is not None:
                 return sentence_end
     for ch in chars[end:]:
+        if bool(getattr(ch, "is_sentence_end", False)):
+            sentence_end = _offset_optional(
+                getattr(ch, "sentence_end_ts", None), offset_ms
+            )
+            if sentence_end is not None:
+                return sentence_end
         timestamp = _first_timestamp(ch, offset_ms)
         if timestamp is not None:
             return timestamp
@@ -438,6 +538,28 @@ def _group_end_ms(
             timestamp = _first_timestamp(ch, offset_ms)
             if timestamp is not None:
                 return timestamp
+    return None
+
+
+def _previous_sentence_boundary_ms(
+    project: Any, sentence_index: int, offset_ms: int
+) -> int | None:
+    """Return the closest usable boundary before a sentence's first anchor."""
+
+    sentences = list(getattr(project, "sentences", []) or [])
+    for sentence in reversed(sentences[:sentence_index]):
+        sentence_chars = list(getattr(sentence, "characters", []) or [])
+        for ch in reversed(sentence_chars):
+            sentence_end = _offset_optional(
+                getattr(ch, "sentence_end_ts", None), offset_ms
+            )
+            if sentence_end is not None:
+                return sentence_end
+            timestamps = _offset_timestamps(
+                getattr(ch, "timestamps", []) or [], offset_ms
+            )
+            if timestamps:
+                return timestamps[-1]
     return None
 
 
