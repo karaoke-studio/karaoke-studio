@@ -147,6 +147,28 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 from krok_helper.subtitle_render.subtitle_sources import parse_nicokara_lrc  # noqa: E402
 
 
+def test_track_layout_signature_includes_ruby_source_binding() -> None:
+    """Equal text/timing on overlapping lines must not share a ruby layout."""
+
+    first = RubyAnnotation(
+        kanji="天",
+        reading="てん",
+        pos_start_ms=1000,
+        pos_end_ms=1200,
+        reading_parts=["てん"],
+        target_line_index=0,
+        target_char_start=0,
+        target_char_end=1,
+    )
+    second = replace(first, target_line_index=1)
+    first_track = TimingTrack(rubies=[first])
+    second_track = TimingTrack(rubies=[second])
+
+    assert subtitle_painter._track_layout_signature(first_track) != (
+        subtitle_painter._track_layout_signature(second_track)
+    )
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])

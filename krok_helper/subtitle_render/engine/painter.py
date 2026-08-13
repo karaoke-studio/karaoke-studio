@@ -522,6 +522,9 @@ def _track_layout_signature(track: TimingTrack) -> tuple:
                 ruby.pos_start_ms,
                 ruby.pos_end_ms,
                 tuple(ruby.reading_parts),
+                ruby.target_line_index,
+                ruby.target_char_start,
+                ruby.target_char_end,
             )
             for ruby in track.rubies
         ),
