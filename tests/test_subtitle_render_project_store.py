@@ -891,6 +891,77 @@ def test_project_bar_present_in_both_modes(qapp, monkeypatch):
     assert hasattr(embedded, "_project_shortcuts")
 
 
+def test_recent_projects_refreshes_only_its_submenu(qapp, monkeypatch, tmp_path):
+    project = tmp_path / "recent.yurika"
+    save_render_project(project, {})
+    win = _make_window(qapp, monkeypatch)
+    file_menu = win._file_menu_btn.menu()
+    recent_menu = win._recent_projects_menu
+    project_bar = win._project_bar
+
+    win._record_recent_project(project)
+
+    assert win._file_menu_btn.menu() is file_menu
+    assert win._recent_projects_menu is recent_menu
+    assert win._project_bar is project_bar
+    assert win._recent_project_paths == [str(project.absolute())]
+    assert recent_menu.actions()[0].toolTip() == str(project.absolute())
+
+    rebuilds = []
+    monkeypatch.setattr(
+        win,
+        "_rebuild_recent_projects_menu",
+        lambda: rebuilds.append("recent-menu"),
+    )
+    win._set_recent_projects(list(win._recent_project_paths))
+    assert rebuilds == []
+    win._set_recent_projects([])
+    assert rebuilds == ["recent-menu"]
+
+
+def test_recent_projects_persist_prune_and_clear(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    valid = tmp_path / "valid.yurika"
+    missing = tmp_path / "missing.yurika"
+    foreign = tmp_path / "import.n3proj"
+    save_render_project(valid, {})
+    foreign.write_text("not a native project", encoding="utf-8")
+
+    settings = mw.load_app_settings()
+    settings.subtitle_render = {
+        "recent_projects": [str(missing), str(foreign), str(valid), str(valid)]
+    }
+    mw.save_app_settings(settings, merge_module_namespaces=False)
+
+    win = _make_window(qapp, monkeypatch)
+    assert win._recent_project_paths == [str(valid.absolute())]
+    assert mw.load_app_settings().subtitle_render["recent_projects"] == [
+        str(valid.absolute())
+    ]
+
+    win._clear_recent_projects()
+    assert win._recent_project_paths == []
+    assert mw.load_app_settings().subtitle_render["recent_projects"] == []
+
+
+def test_successful_open_records_recent_project(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    project = tmp_path / "opened.yurika"
+    save_render_project(project, {})
+
+    assert win._open_project_path(project, confirm_discard=False)
+    assert win._recent_project_paths[0] == str(project.absolute())
+
+    n3_project = tmp_path / "imported.n3proj"
+    monkeypatch.setattr(
+        win,
+        "_import_n3_project_path",
+        lambda path, confirm_discard=True: True,
+    )
+    assert win._open_project_path(n3_project, confirm_discard=False)
+    assert str(n3_project.absolute()) not in win._recent_project_paths
+
+
 def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     default_font_size = win._app_default_style.font_size_px

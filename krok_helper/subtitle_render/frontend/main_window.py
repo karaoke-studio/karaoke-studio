@@ -330,6 +330,8 @@ GPU_PREVIEW_DEFAULT_VERSION = 2
 GPU_EXPORT_DEFAULT_VERSION = 1
 DEFAULT_PROJECT_BACKUP_COUNT = 5
 DISCARDED_BACKUP_RETENTION_DAYS = 7
+_RECENT_PROJECTS_SETTINGS_KEY = "recent_projects"
+_MAX_RECENT_PROJECTS = 10
 RENDER_WORKER_OPTIONS = (0, 4, 8, 12, 16)
 """0 = 自动（最多 8）；其余值为用户显式选择的渲染进程数。"""
 
@@ -2124,6 +2126,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_custom_dir = ""
         self._export_name_template = DEFAULT_EXPORT_NAME_TEMPLATE
         self._project_session = SubtitleProjectSession()
+        self._recent_project_paths: list[str] = []
         self._last_logged_project_state: Optional[tuple[object, ...]] = None
         self._loading_project = False
         self._syncing_screen_controls = False
@@ -2206,6 +2209,7 @@ class SubtitleRenderWindow(QWidget):
         if app is not None:
             app.aboutToQuit.connect(self._flush_persisted_state_save)
         self._load_persisted_state()
+        self._recent_project_paths = self._load_recent_projects()
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.setSingleShot(True)
         self._auto_save_timer.setInterval(AUTO_SAVE_DEBOUNCE_MS)
@@ -2416,6 +2420,10 @@ class SubtitleRenderWindow(QWidget):
         menu = RoundMenu(parent=self._file_menu_btn)
         menu.addAction(Action(FIF.ADD, "新建", triggered=self._new_project))
         menu.addAction(Action(FIF.FOLDER, "打开", triggered=self._open_project))
+        self._recent_projects_menu = RoundMenu("最近打开的项目", menu)
+        self._recent_projects_menu.setIcon(FIF.HISTORY)
+        self._rebuild_recent_projects_menu()
+        menu.addMenu(self._recent_projects_menu)
         self._save_project_action = Action(FIF.SAVE, "保存", triggered=self._save_project)
         self._save_project_as_action = Action(
             FIF.SAVE_AS, "另存为", triggered=self._save_project_as
@@ -2485,6 +2493,130 @@ class SubtitleRenderWindow(QWidget):
         self._project_bar_right_balance.setFixedWidth(left.sizeHint().width())
         layout.addWidget(self._project_bar_right_balance)
         return bar
+
+    @staticmethod
+    def _recent_project_path_key(path: Path | str) -> str:
+        """Return the platform-normalized key used to deduplicate recent paths."""
+        return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+    def _load_recent_projects(self) -> list[str]:
+        """Load valid native projects and prune stale or duplicate entries."""
+        data = self._load_subtitle_settings()
+        stored = data.get(_RECENT_PROJECTS_SETTINGS_KEY, [])
+        raw_paths = stored if isinstance(stored, list) else []
+        paths: list[str] = []
+        seen: set[str] = set()
+        for value in raw_paths:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            path = Path(value).expanduser().absolute()
+            key = self._recent_project_path_key(path)
+            if (
+                key in seen
+                or path.suffix.lower() != PROJECT_FILE_SUFFIX
+                or not path.is_file()
+            ):
+                continue
+            seen.add(key)
+            paths.append(str(path))
+            if len(paths) >= _MAX_RECENT_PROJECTS:
+                break
+        if paths != stored:
+            self._persist_recent_projects(paths)
+        return paths
+
+    def _persist_recent_projects(self, paths: list[str]) -> None:
+        """Persist only the recent-project field within the module namespace."""
+        try:
+            data = self._load_subtitle_settings()
+            data[_RECENT_PROJECTS_SETTINGS_KEY] = list(paths)
+            if self._settings_provider is not None and hasattr(
+                self._settings_provider, "save"
+            ):
+                self._settings_provider.save(data)
+                return
+            settings = load_app_settings()
+            settings.subtitle_render = data
+            save_app_settings(settings, merge_module_namespaces=False)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "保存字幕渲染最近项目失败", exc_info=True
+            )
+
+    def _rebuild_recent_projects_menu(self) -> None:
+        """Refresh only the recent-project submenu and keep its parents intact."""
+        recent_menu = self._recent_projects_menu
+        old_actions = list(recent_menu.actions())
+        recent_menu.clear()
+        for action in old_actions:
+            action.deleteLater()
+
+        if not self._recent_project_paths:
+            empty_action = Action("暂无最近打开的项目", recent_menu)
+            empty_action.setEnabled(False)
+            recent_menu.addAction(empty_action)
+            return
+
+        for file_path in self._recent_project_paths:
+            path = Path(file_path)
+            action = Action(
+                FIF.DOCUMENT,
+                f"{path.name}  —  {path.parent}",
+                recent_menu,
+            )
+            action.setToolTip(file_path)
+            action.triggered.connect(
+                lambda checked=False, p=file_path: self._open_recent_project(p)
+            )
+            recent_menu.addAction(action)
+        recent_menu.addSeparator()
+        recent_menu.addAction(
+            Action(
+                FIF.DELETE,
+                "清除最近打开记录",
+                recent_menu,
+                triggered=self._clear_recent_projects,
+            )
+        )
+
+    def _set_recent_projects(self, paths: list[str]) -> None:
+        """Update paths and rebuild only the recent-project submenu when changed."""
+        normalized = [str(path) for path in paths]
+        if normalized == self._recent_project_paths:
+            return
+        self._recent_project_paths = normalized
+        if hasattr(self, "_recent_projects_menu"):
+            self._rebuild_recent_projects_menu()
+
+    def _record_recent_project(self, path: Path | str) -> None:
+        """Move one successfully opened native project to the front."""
+        resolved = str(Path(path).expanduser().absolute())
+        key = self._recent_project_path_key(resolved)
+        paths = [
+            existing
+            for existing in self._load_recent_projects()
+            if self._recent_project_path_key(existing) != key
+        ]
+        paths.insert(0, resolved)
+        paths = paths[:_MAX_RECENT_PROJECTS]
+        self._persist_recent_projects(paths)
+        self._set_recent_projects(paths)
+
+    def _clear_recent_projects(self, _checked: bool = False) -> None:
+        self._persist_recent_projects([])
+        self._set_recent_projects([])
+
+    def _open_recent_project(self, file_path: str) -> None:
+        path = Path(file_path)
+        if not path.is_file():
+            self._set_recent_projects(self._load_recent_projects())
+            fluent_warning(
+                self,
+                "文件不存在",
+                "最近打开的项目已被移动或删除。",
+            )
+            return
+        self._open_project_path(path)
 
     def _balance_project_bar(self) -> None:
         if not hasattr(self, "_project_bar_left"):
@@ -3364,6 +3496,7 @@ class SubtitleRenderWindow(QWidget):
         }
         self._missing_resource_source_data = deepcopy(data) if missing_resources else None
         self._set_project_dirty(False)
+        self._record_recent_project(path)
         if missing_resources:
             fluent_warning(
                 self,
