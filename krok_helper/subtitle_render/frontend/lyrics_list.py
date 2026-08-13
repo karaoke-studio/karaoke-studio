@@ -2027,7 +2027,7 @@ class LyricsPanel(DropPanel):
             if target_rows
             else None
         )
-        if source is None or target is None or source.section_index != target.section_index:
+        if source is None or target is None:
             return None
         page = resolved.pages[source.global_page_index]
         if (
@@ -2039,8 +2039,29 @@ class LyricsPanel(DropPanel):
             return source.section_index, target.page_index_in_section, 1
         if (
             page.track_line_indices
+            and source.track_line_index == page.track_line_indices[0]
+            and source.page_index_in_section == 0
+            and source.section_index > 0
+            and target.section_index == source.section_index - 1
+            and target.page_index_in_section
+            == len(resolved.sections[target.section_index].pages) - 1
+        ):
+            return target.section_index, target.page_index_in_section, 1
+        if (
+            page.track_line_indices
             and source.track_line_index == page.track_line_indices[-1]
+            and source.section_index == target.section_index
             and target.page_index_in_section == source.page_index_in_section + 1
+        ):
+            return source.section_index, source.page_index_in_section, -1
+        if (
+            page.track_line_indices
+            and source.track_line_index == page.track_line_indices[-1]
+            and source.page_index_in_section
+            == len(resolved.sections[source.section_index].pages) - 1
+            and source.section_index + 1 < len(resolved.sections)
+            and target.section_index == source.section_index + 1
+            and target.page_index_in_section == 0
         ):
             return source.section_index, source.page_index_in_section, -1
         return None

@@ -573,8 +573,10 @@ def move_page_boundary(
 
     ``direction > 0`` pulls the following page's first line into ``page_index``.
     Later pages keep their requested counts and therefore flow forward; the
-    section's final page loses one line.  ``direction < 0`` performs the inverse
-    and grows (or creates) the final page.
+    destination section's final page loses one line.  ``direction < 0`` performs
+    the inverse and grows (or creates) that section's final page.  The adjacent
+    page may belong to the next section; sections left without renderable lines
+    are removed so all following section indices stay contiguous.
     """
 
     plan = normalize_page_plan(track, style)
@@ -584,10 +586,14 @@ def move_page_boundary(
     if not 0 <= page_index < len(section.pages):
         return False
     if direction > 0:
-        if page_index + 1 >= len(section.pages):
-            return False
         target = section.pages[page_index]
-        tail = section.pages[-1]
+        if page_index + 1 < len(section.pages):
+            destination = section
+        elif section_index + 1 < len(plan.sections):
+            destination = plan.sections[section_index + 1]
+        else:
+            return False
+        tail = destination.pages[-1]
         if target.line_count >= 8 or tail.line_count <= 0:
             return False
         _resize_page_with_instant_layout_rule(target, target.line_count + 1, style)
@@ -597,9 +603,17 @@ def move_page_boundary(
         if target.line_count <= 0:
             return False
         _resize_page_with_instant_layout_rule(target, target.line_count - 1, style)
-        tail = section.pages[-1]
+        if page_index + 1 < len(section.pages):
+            destination = section
+        elif section_index + 1 < len(plan.sections):
+            destination = plan.sections[section_index + 1]
+        else:
+            destination = section
+        tail = destination.pages[-1]
         if tail is target or tail.line_count >= 8:
-            section.pages.append(TrackPage(1, _default_layout_id(style, 1)))
+            destination.pages.append(
+                TrackPage(1, _default_layout_id(style, 1))
+            )
         else:
             _resize_page_with_instant_layout_rule(tail, tail.line_count + 1, style)
     else:

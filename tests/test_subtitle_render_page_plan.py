@@ -300,6 +300,55 @@ def test_move_boundary_uses_instant_capacity_rule_and_forward_flow():
     assert [char.text for line in track.lines for char in line.chars] == list("012345")
 
 
+def test_move_boundary_crosses_section_and_removes_empty_section():
+    style = ensure_page_layout_defaults(Style())
+    track = _track(4)
+    track.page_plan = TrackPagePlan(
+        [
+            TrackSection([TrackPage(1, "builtin-1")]),
+            TrackSection([TrackPage(1, "builtin-1")]),
+            TrackSection([TrackPage(2, "builtin-2")]),
+        ]
+    )
+
+    assert move_page_boundary(track, style, 0, 0, direction=1)
+
+    assert [
+        [(page.line_count, page.layout_id) for page in section.pages]
+        for section in track.page_plan.sections
+    ] == [
+        [(2, "builtin-2")],
+        [(2, "builtin-2")],
+    ]
+    resolved = resolve_page_plan(track, style)
+    assert [line.section_index for line in resolved.lines] == [0, 0, 1, 1]
+    assert track.lines[2].break_before == "paragraph"
+
+
+def test_move_last_line_into_next_section_removes_empty_source_section():
+    style = ensure_page_layout_defaults(Style())
+    track = _track(3)
+    track.page_plan = TrackPagePlan(
+        [
+            TrackSection([TrackPage(1, "builtin-1")]),
+            TrackSection([TrackPage(2, "builtin-2")]),
+        ]
+    )
+
+    assert move_page_boundary(track, style, 0, 0, direction=-1)
+
+    assert len(track.page_plan.sections) == 1
+    assert [
+        (page.line_count, page.layout_id)
+        for page in track.page_plan.sections[0].pages
+    ] == [(3, "builtin-3")]
+    assert [line.section_index for line in resolve_page_plan(track, style).lines] == [
+        0,
+        0,
+        0,
+    ]
+
+
 def test_all_five_instant_layout_examples():
     base = Style()
     examples = [
