@@ -11,10 +11,11 @@
 本文记录 SUG 歌词打轴模块接入 AI 自动时间轴对齐的完整产品决策、standalone / embedded
 边界、模型与人声复用策略、缓存规则、取消与撤销语义、实施阶段和验收标准。
 
-本功能允许同时修改 Karaoke Studio 主仓库和 StrangeUtaGame 独立仓库。开发时先在本地
-`E:\KaraMaker\StrangeUtaGame` 完成 SUG 改动与测试，再更新主仓库
-`krok_helper/lyrics_timing` 的 submodule 指针。不得直接把两边实现揉成只能在工作台运行的
-单一路径；SUG standalone 是正式产品路径，必须与 embedded 同时通过验收。
+本功能允许同时修改 Karaoke Studio 主仓库和 StrangeUtaGame 独立仓库。开发者可在任意
+位置建立 StrangeUtaGame 的独立工作树，先在该仓库完成 SUG 改动、测试与提交，再回到主仓库
+更新 `krok_helper/lyrics_timing` 的 submodule 指针。本文不约定独立仓库的本机绝对路径。
+不得直接把两边实现揉成只能在工作台运行的单一路径；SUG standalone 是正式产品路径，必须
+与 embedded 同时通过验收。
 
 参考项目：
 
