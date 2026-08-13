@@ -138,6 +138,9 @@ def test_loading_settings_card_is_isolated_and_fully_described(qapp):
     assert dialog._gap_spin.toolTip()
     assert dialog._blank_enabled.toolTip()
     assert "也使用 3 行默认布局" in dialog._rows_spin.toolTip()
+    assert dialog._actual_rows_layout.text() == "根据实际行数分配布局"
+    assert dialog._actual_rows_layout.toolTip()
+    assert not dialog._actual_rows_layout.isChecked()
     assert dialog._mode_combo.toolTip()
     assert dialog.result_value() == ("global", defaults)
     dialog.deleteLater()

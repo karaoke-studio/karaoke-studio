@@ -174,6 +174,42 @@ def test_partial_pages_keep_the_base_row_default_layout():
     ] == [(3, "custom-three"), (2, "custom-three")]
 
 
+def test_partial_pages_can_use_actual_row_default_layout():
+    base = Style()
+    custom_three = LyricsLayout(
+        name="三行加载布局",
+        layout_id="custom-three",
+        line_alignments=["left", "center", "right"],
+    )
+    style = ensure_page_layout_defaults(
+        replace(
+            base,
+            layouts=base.layouts + [custom_three],
+            default_layout_by_row_count={
+                **base.default_layout_by_row_count,
+                3: "custom-three",
+            },
+        )
+    )
+
+    plan = build_page_plan(
+        _track(5),
+        SubtitleLoadingSettings(
+            time_gap_section_enabled=False,
+            blank_line_section_enabled=False,
+            rows_per_page=3,
+            allocate_layout_by_actual_rows=True,
+        ),
+        style,
+    )
+
+    assert [
+        (page.line_count, page.layout_id)
+        for section in plan.sections
+        for page in section.pages
+    ] == [(3, "custom-three"), (2, "default")]
+
+
 def test_partial_pages_before_explicit_boundaries_keep_base_row_layout():
     track = _track(4)
     track.lines[1].break_before = "page"

@@ -153,11 +153,17 @@ def build_page_plan(
         previous_line = line
     start_page()
 
+    allocate_by_actual_rows = bool(settings.allocate_layout_by_actual_rows)
     base_layout_id = _default_layout_id(style, rows_per_page)
     sections: list[TrackSection] = []
     for counts in sections_counts:
         pages = [
-            TrackPage(count, base_layout_id)
+            TrackPage(
+                count,
+                _default_layout_id(style, count)
+                if allocate_by_actual_rows
+                else base_layout_id,
+            )
             for count in counts
             if count > 0
         ]

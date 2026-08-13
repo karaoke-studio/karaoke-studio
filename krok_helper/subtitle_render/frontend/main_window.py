@@ -915,6 +915,12 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             "1 行或 2 行的尾页也使用 3 行默认布局。"
         )
         form.addRow("每页基础行数", self._rows_spin)
+        self._actual_rows_layout = CheckBox("根据实际行数分配布局", self)
+        self._actual_rows_layout.setToolTip(
+            "默认关闭。启用后，每页会根据实际歌词行数使用对应的项目默认布局；例如基础行数为 3 时，"
+            "只有 1 行或 2 行的尾页会分别使用 1 行或 2 行默认布局。基础行数仍用于限制每页最多行数。"
+        )
+        form.addRow("", self._actual_rows_layout)
         root.addLayout(form)
 
         buttons = QHBoxLayout()
@@ -941,6 +947,7 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
         self._gap_spin.setValue(settings.section_gap_ms)
         self._blank_enabled.setChecked(settings.blank_line_section_enabled)
         self._rows_spin.setValue(settings.rows_per_page)
+        self._actual_rows_layout.setChecked(settings.allocate_layout_by_actual_rows)
 
     def _current_values(self) -> SubtitleLoadingSettings:
         return SubtitleLoadingSettings(
@@ -948,6 +955,7 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             section_gap_ms=self._gap_spin.value(),
             blank_line_section_enabled=self._blank_enabled.isChecked(),
             rows_per_page=self._rows_spin.value(),
+            allocate_layout_by_actual_rows=self._actual_rows_layout.isChecked(),
         )
 
     def _on_mode_changed(self, _index: int) -> None:

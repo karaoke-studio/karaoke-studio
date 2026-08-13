@@ -222,6 +222,7 @@ class SubtitleLoadingSettings:
     section_gap_ms: int = 3100
     blank_line_section_enabled: bool = True
     rows_per_page: int = 2
+    allocate_layout_by_actual_rows: bool = False
 
 
 @dataclass
@@ -1654,6 +1655,9 @@ def subtitle_loading_settings_to_dict(
         "section_gap_ms": max(int(settings.section_gap_ms), 0),
         "blank_line_section_enabled": bool(settings.blank_line_section_enabled),
         "rows_per_page": max(1, min(int(settings.rows_per_page), 4)),
+        "allocate_layout_by_actual_rows": bool(
+            settings.allocate_layout_by_actual_rows
+        ),
     }
 
 
@@ -1678,6 +1682,12 @@ def subtitle_loading_settings_from_dict(value: object) -> SubtitleLoadingSetting
             value.get("blank_line_section_enabled", defaults.blank_line_section_enabled)
         ),
         rows_per_page=rows,
+        allocate_layout_by_actual_rows=bool(
+            value.get(
+                "allocate_layout_by_actual_rows",
+                defaults.allocate_layout_by_actual_rows,
+            )
+        ),
     )
 
 
