@@ -208,6 +208,20 @@ class TestSeparateVocal:
 
 
 class TestCacheDir:
+    def test_model_root_is_shared_location(self, tmp_path, qapp, monkeypatch):
+        """宿主提供统一模型根（对齐模型与分离模型同源管理）。"""
+        from krok_helper import settings as settings_module
+
+        class _P:
+            def __init__(self, p):
+                self.parent = p
+
+        monkeypatch.setattr(
+            settings_module, "get_settings_path", lambda: _P(tmp_path)
+        )
+        host = _host(tmp_path, _StubBackend())
+        assert host.model_root() == tmp_path / "ai_models"
+
     def test_cache_dir_under_host_root(self, tmp_path, qapp):
         host = _host(tmp_path, _StubBackend())
         assert host.ai_cache_dir() == tmp_path / "lyrics_timing_cache" / "ai_timing"

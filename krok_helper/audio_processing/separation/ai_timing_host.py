@@ -212,6 +212,19 @@ class KaraokeAiTimingHost:
     def ai_cache_dir(self):
         return self._cache_root / "ai_timing"
 
+    def model_root(self):
+        """统一 AI 模型根目录（SUG 与工作台共用，嵌入模式复用）。
+
+        对齐模型放在与工作台分离 Runtime/模型同一管理根下的 ``ai_models``；
+        返回 None 表示宿主未提供，SUG 回落自身默认目录。
+        """
+        try:
+            from krok_helper.settings import get_settings_path
+
+            return get_settings_path().parent / "ai_models"
+        except Exception:
+            return None
+
     def http_proxy(self) -> str:
         """当前生效的下载代理 URL（SUG 模型下载默认走工作台网络设置）。
 
