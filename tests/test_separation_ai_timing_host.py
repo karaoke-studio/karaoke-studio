@@ -43,6 +43,7 @@ class _StubBackend(QObject):
         self.requests = []
         self.cancelled = False
         self._next_result = None
+        self.install_dir = ""
 
     def snapshot(self):
         return SeparationSnapshot(
@@ -50,6 +51,7 @@ class _StubBackend(QObject):
             current_model=self._snap.current_model,
             pending_task=self._snap.pending_task,
             error=self._snap.error,
+            install_dir=self.install_dir,
         )
 
     def request_task(self, task, *, input_path, output_dir, output_format):
@@ -104,8 +106,30 @@ class TestProtocolShape:
             "find_session_vocal",
             "separate_vocal",
             "ai_cache_dir",
+            "runtime_python",
         ):
             assert callable(getattr(host, name)), name
+
+
+class TestRuntimePython:
+    """方案 B：宿主托管 Runtime 解释器发现（SUG 增量安装用）。"""
+
+    def test_returns_managed_python_when_installed(self, tmp_path, qapp):
+        install_dir = tmp_path / "rt"
+        (install_dir / "runtime").mkdir(parents=True)
+        exe = install_dir / "runtime" / "python.exe"
+        exe.write_text("#fake", encoding="utf-8")
+        backend = _StubBackend()
+        backend.install_dir = str(install_dir)
+        assert _host(tmp_path, backend).runtime_python() == str(exe)
+
+    def test_none_when_not_installed(self, tmp_path, qapp):
+        assert _host(tmp_path, _StubBackend()).runtime_python() is None
+
+    def test_none_when_executable_missing(self, tmp_path, qapp):
+        backend = _StubBackend()
+        backend.install_dir = str(tmp_path / "empty")
+        assert _host(tmp_path, backend).runtime_python() is None
 
 
 class TestSeparationStatus:

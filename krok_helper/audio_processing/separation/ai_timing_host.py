@@ -212,6 +212,28 @@ class KaraokeAiTimingHost:
     def ai_cache_dir(self):
         return self._cache_root / "ai_timing"
 
+    def runtime_python(self):
+        """宿主托管 PyMSS Runtime 的 python.exe（SUG AI 打轴增量复用）。
+
+        SUG（方案 B）检测到可用路径后，AI 打轴的「安装/修复」改为向该
+        解释器增量安装 AI 依赖：不建 venv、不重复下载 torch，
+        torchaudio 按 runtime 已装的 torch 版本自动配对。返回 None 表示
+        托管 runtime 未安装（SUG 回落自身安装路径）。
+        """
+        try:
+            snap = self._backend.snapshot()
+            install_dir = str(getattr(snap, "install_dir", "") or "")
+            if not install_dir:
+                return None
+            from krok_helper.audio_processing.separation.service import (
+                runtime_python as resolve_runtime_python,
+            )
+
+            exe = resolve_runtime_python(install_dir)
+            return str(exe) if exe.is_file() else None
+        except Exception:
+            return None
+
     def model_root(self):
         """统一 AI 模型根目录（SUG 与工作台共用，嵌入模式复用）。
 
