@@ -184,6 +184,17 @@ git submodule status
    CWD）。正常终端 / CI 不受影响。该卡点的完整分析也写在
    `tests/test_module_settings_persist.py` 的 `workbench` fixture 注释里。
 
+10. **沙箱下工作台自身 pytest 也有两个独立坑（SUG 坑之外的）**——
+    ① 收集期 `PyQt6.QtSvg` 报「DLL load failed: 找不到指定的程序」：
+    同一解释器直接 `python -c "import krok_helper..."` 正常，仅 pytest
+    的导入环境触发；规避 = 先在进程内预导入
+    `krok_helper.audio_processing.separation.ai_timing_host`（Qt/
+    qfluentwidgets 链预热）再进 pytest。② `tmp_path` fixture 报
+    `PermissionError: pytest-of-<user>`（同 §8.9 条 9 的 basetemp 问题）。
+    两个一起规避：`%TEMP%\run_ks_pytest.py`（预热导入 + 注入
+    `--basetemp=%TEMP%/ks_pytest_basetemp`），在仓库根目录运行。
+    正常终端 / CI 不受影响。
+
 ---
 
 ## 9. 字幕渲染模块
