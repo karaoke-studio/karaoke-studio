@@ -444,3 +444,31 @@ class TestServiceAutoStart:
         host = _host(tmp_path, backend)
         with pytest.raises(AiTimingHostError, match="运行时校验失败"):
             host.separate_vocal(media, lambda *a: None, lambda: False)
+
+
+class TestOpenSeparationPage:
+    """SUG AI 打轴引导「去音频分离」的页面跳转能力。"""
+
+    def test_navigate_called_and_returns_true(self, tmp_path, qapp):
+        calls = []
+
+        def _nav():
+            calls.append(1)
+
+        host = KaraokeAiTimingHost(
+            _StubBackend(), tmp_path / "cache", navigate=_nav
+        )
+        assert host.open_separation_page() is True
+        assert calls == [1]
+
+    def test_without_navigate_returns_false(self, tmp_path, qapp):
+        assert _host(tmp_path, _StubBackend()).open_separation_page() is False
+
+    def test_navigate_exception_returns_false(self, tmp_path, qapp):
+        def _boom():
+            raise RuntimeError("nav failed")
+
+        host = KaraokeAiTimingHost(
+            _StubBackend(), tmp_path / "cache", navigate=_boom
+        )
+        assert host.open_separation_page() is False

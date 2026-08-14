@@ -44,13 +44,15 @@ class KaraokeAiTimingHost:
         cache_root: AI 缓存根目录（宿主注入给 SUG 的 ``.cache`` 范围）。
     """
 
-    def __init__(self, backend_getter, cache_root: Path, page=None):
+    def __init__(self, backend_getter, cache_root: Path, page=None, navigate=None):
         self._backend_getter = (
             backend_getter if callable(backend_getter) else (lambda: backend_getter)
         )
         self._cache_root = Path(cache_root)
         # 分离页引用：http_proxy 需要读工作台网络设置（可为 None）
         self._page_ref = page
+        # 页面跳转回调（SUG AI 打轴引导「去音频分离」用；可为 None）
+        self._navigate = navigate
         self._session_results: list = []
         self._lock = threading.Lock()
 
@@ -270,7 +272,7 @@ class KaraokeAiTimingHost:
         SUG（方案 B）检测到可用路径后，AI 打轴的「安装/修复」改为向该
         解释器增量安装 AI 依赖：不建 venv、不重复下载 torch，
         torchaudio 按 runtime 已装的 torch 版本自动配对。返回 None 表示
-        托管 runtime 未安装（SUG 回落自身安装路径）。
+        托管 runtime 未安装（SUG 引导去分离页，或经确认后独立安装兜底）。
         """
         try:
             snap = self._backend.snapshot()
@@ -285,6 +287,16 @@ class KaraokeAiTimingHost:
             return str(exe) if exe.is_file() else None
         except Exception:
             return None
+
+    def open_separation_page(self) -> bool:
+        """跳转到工作台第 2 步的「分离人声」页（SUG 引导安装入口）。"""
+        if callable(self._navigate):
+            try:
+                self._navigate()
+                return True
+            except Exception:
+                return False
+        return False
 
     def model_root(self):
         """统一 AI 模型根目录（SUG 与工作台共用，嵌入模式复用）。

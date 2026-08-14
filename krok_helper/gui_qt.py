@@ -1537,10 +1537,24 @@ class KrokHelperQtApp(QMainWindow):
             separation_page = getattr(self, "audio_separation_page", None)
             if getattr(separation_page, "backend", None) is None:
                 return None
+
+            def _open_separation_page():
+                # SUG AI 打轴引导「去音频分离」：切到第 2 步并选中分离页签
+                self._show_module(WORKFLOW_WAVEFORM_ALIGN)
+                wrapper = getattr(self, "audio_processing_page", None)
+                switch_tab = getattr(wrapper, "switch_tab", None)
+                if callable(switch_tab):
+                    from krok_helper.audio_processing.page import TAB_SEPARATION
+
+                    switch_tab(TAB_SEPARATION)
+
             # 传 getter 而非实例：PyMSS/MSST 模式切换会整体替换后端对象
             cache_root = get_settings_path().parent / "lyrics_timing_cache"
             return KaraokeAiTimingHost(
-                lambda: separation_page.backend, cache_root, page=separation_page
+                lambda: separation_page.backend,
+                cache_root,
+                page=separation_page,
+                navigate=_open_separation_page,
             )
         except Exception:
             logging.getLogger(__name__).warning(
