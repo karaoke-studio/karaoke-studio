@@ -7,12 +7,17 @@ docs/EMBEDDING.md §6）：把工作台现有的人声分离后端适配成 SUG
 
 不复制 PyMSS Runtime、不复制模型、不保存第二套分离参数；
 分离始终跟随工作台当前「分离人声」设置（backend 自身状态即真相）。
+
+后端通过 ``backend_getter`` **动态解析**：分离页在 PyMSS/MSST 模式切换
+时会整体替换 ``self._backend``，构造期捕获的引用会变陈旧（状态过期、
+信号失联），因此每次操作前重新取当前后端。
 """
 
 from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import Callable
 
 from krok_helper.audio_processing.separation.backend import SeparationBackend
 from krok_helper.audio_processing.separation.states import (
@@ -32,20 +37,23 @@ class KaraokeAiTimingHost:
     """把分离后端适配为 SUG AiTimingHost 协议。
 
     Args:
-        backend: 工作台分离后端（真实或 Mock；信号驱动）。
+        backend_getter: 返回**当前**分离后端的 callable（模式切换后端
+            实例会被替换，不能在构造期钉住引用）；也接受后端实例本身
+            （测试/固定后端场景）。
         cache_root: AI 缓存根目录（宿主注入给 SUG 的 ``.cache`` 范围）。
     """
 
-    def __init__(self, backend: SeparationBackend, cache_root: Path):
-        self._backend = backend
+    def __init__(self, backend_getter, cache_root: Path):
+        self._backend_getter = (
+            backend_getter if callable(backend_getter) else (lambda: backend_getter)
+        )
         self._cache_root = Path(cache_root)
         self._session_results: list = []
         self._lock = threading.Lock()
-        try:
-            backend.resultReady.connect(self._on_result_ready)
-        except TypeError:
-            # 测试桩可能没有信号
-            pass
+
+    @property
+    def _backend(self) -> SeparationBackend:
+        return self._backend_getter()
 
     # ── 协议实现 ──
 
@@ -99,7 +107,12 @@ class KaraokeAiTimingHost:
         return None
 
     def separate_vocal(self, source_path, on_progress, is_cancelled):
-        """阻塞执行一次工作台人声分离，返回人声文件路径。"""
+        """阻塞执行一次工作台人声分离，返回人声文件路径。
+
+        后端 ``request_task`` 的同步失败路径（服务未启动、输入非法等）只置
+        ERROR 状态、不发 ``resultReady``——因此除了等结果，还要监听
+        ``snapshotChanged``，避免错误后无限空转。
+        """
         source = Path(source_path)
         status = self.separation_status()
         if not status["available"]:
@@ -109,6 +122,7 @@ class KaraokeAiTimingHost:
         if not source.is_file():
             raise AiTimingHostError(f"音频文件不存在：{source}")
 
+        backend = self._backend
         done = threading.Event()
         outcome: dict = {}
 
@@ -127,13 +141,27 @@ class KaraokeAiTimingHost:
             outcome["result"] = result
             done.set()
 
+        def _on_snapshot(snap) -> None:
+            # 同步失败：进入 ERROR 且没有排队/进行中任务，也没有结果
+            if done.is_set():
+                return
+            if (
+                snap.state == ServiceState.ERROR
+                and snap.pending_task is None
+                and not snap.queued_tasks
+            ):
+                outcome["error"] = snap.error or "人声分离启动失败"
+                done.set()
+
+        # 监听当前后端（模式切换后端实例已替换时，以提交时刻的后端为准）
         try:
-            self._backend.taskProgressChanged.connect(_on_progress)
-            self._backend.resultReady.connect(_on_result)
+            backend.taskProgressChanged.connect(_on_progress)
+            backend.resultReady.connect(_on_result)
+            backend.snapshotChanged.connect(_on_snapshot)
         except TypeError:
             pass
         try:
-            self._backend.request_task(
+            backend.request_task(
                 TaskType.VOCAL,
                 input_path=str(source),
                 output_dir=str(source.parent),
@@ -142,34 +170,50 @@ class KaraokeAiTimingHost:
             while not done.wait(0.2):
                 if is_cancelled():
                     try:
-                        self._backend.cancel_task()
+                        backend.cancel_task()
                     except Exception:
                         pass
                     raise AiTimingHostError("已取消人声分离")
+                # 后端被整体替换（模式切换） → 当前等待作废
+                if self._backend is not backend:
+                    raise AiTimingHostError(
+                        "分离后端已切换，请重新执行 AI 打轴"
+                    )
 
+            if "error" in outcome:
+                raise AiTimingHostError(str(outcome["error"]))
             result = outcome.get("result")
             if result is None:
                 raise AiTimingHostError("分离任务没有返回结果")
             if getattr(result, "failed", False):
                 raise AiTimingHostError(str(result.error or "人声分离失败"))
+            # 记录本次产物供后续 find_session_vocal 零分离复用。用户在
+            # 分离页手动分离的人声无需记录——它们落在原音频同目录，
+            # SUG 的同目录严格匹配（§6.1 ③）天然可以发现。
+            self.record_result(result)
             for f in getattr(result, "files", []) or []:
                 p = Path(f.path)
                 if p.suffix.lower() == ".wav" and p.is_file():
                     return p
             raise AiTimingHostError("分离完成但未找到输出的人声文件")
         finally:
-            try:
-                self._backend.taskProgressChanged.disconnect(_on_progress)
-                self._backend.resultReady.disconnect(_on_result)
-            except (TypeError, RuntimeError):
-                pass
+            for signal, slot in (
+                (backend.taskProgressChanged, _on_progress),
+                (backend.resultReady, _on_result),
+                (backend.snapshotChanged, _on_snapshot),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
 
     def ai_cache_dir(self):
         return self._cache_root / "ai_timing"
 
     # ── 内部 ──
 
-    def _on_result_ready(self, result) -> None:
+    def record_result(self, result) -> None:
+        """记录一次分离产物（供 find_session_vocal 零分离复用）。"""
         with self._lock:
             self._session_results.append(result)
             # 会话产物记录有界，防长会话内存增长

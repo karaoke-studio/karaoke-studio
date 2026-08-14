@@ -135,7 +135,7 @@ class TestSessionVocal:
         host = _host(tmp_path, backend)
         vocal = media.parent / "song_人声.wav"
         vocal.write_bytes(b"v")
-        backend.resultReady.emit(_record(TaskType.VOCAL, vocal))
+        host.record_result(_record(TaskType.VOCAL, vocal))
 
         found = host.find_session_vocal(media, "any-sha")
         assert found == vocal
@@ -147,14 +147,16 @@ class TestSessionVocal:
         noise.write_bytes(b"x")
         other = media.parent / "other_人声.wav"
         other.write_bytes(b"x")
-        backend.resultReady.emit(_record(TaskType.VOCAL, noise, other))
+        host.record_result(_record(TaskType.VOCAL, noise, other))
 
         assert host.find_session_vocal(media, "sha") is None
 
     def test_session_vocal_ignores_missing_file(self, tmp_path, qapp, media):
         backend = _StubBackend()
         host = _host(tmp_path, backend)
-        backend.resultReady.emit(_record(TaskType.VOCAL, media.parent / "song_人声.wav"))
+        host.record_result(
+            _record(TaskType.VOCAL, media.parent / "song_人声.wav")
+        )
         # 文件已不存在 → 不命中
         assert host.find_session_vocal(media, "sha") is None
 
@@ -258,7 +260,7 @@ class TestSugIntegration:
 
         vocal = media.parent / "song_人声.wav"
         vocal.write_bytes(b"v")
-        backend.resultReady.emit(_record(TaskType.VOCAL, vocal))
+        host.record_result(_record(TaskType.VOCAL, vocal))
 
         project = Project()
         project.sentences = [
@@ -308,3 +310,47 @@ class TestSugIntegration:
         assert backend.requests == []
         # worker 用的是人声文件
         assert _FakeWorker.calls == [str(vocal)]
+
+
+class TestReviewFixes:
+    """2026-08 提交前代码审查修复的回归测试。"""
+
+    def test_dynamic_backend_getter_survives_mode_swap(self, tmp_path, qapp, media):
+        """宿主持 getter：分离页切换后端（PyMSS↔MSST）后状态取新实例。"""
+        backends = [_StubBackend()]
+        host = KaraokeAiTimingHost(lambda: backends[-1], tmp_path / "cache")
+        assert host.separation_status()["available"] is True
+
+        # 模式切换：换成一个未就绪的新后端实例
+        swapped = _StubBackend(state=ServiceState.UNCONFIGURED)
+        swapped._snap.error = "未配置"
+        backends.append(swapped)
+        assert host.separation_status()["available"] is False
+
+    def test_sync_failure_does_not_hang_wait_loop(self, tmp_path, qapp, media):
+        """request_task 同步失败（只置 ERROR 不发 resultReady）不空转。"""
+        backend = _StubBackend()
+        host = KaraokeAiTimingHost(backend, tmp_path / "cache")
+
+        def _fail_sync(task, *, input_path, output_dir, output_format):
+            backend.requests.append((task, input_path, output_dir, output_format))
+            backend._snap.pending_task = None
+            backend._snap.error = "PyMSS 服务尚未启动。"
+            backend._snap.state = ServiceState.ERROR
+            backend.snapshotChanged.emit(backend.snapshot())
+
+        backend.request_task = _fail_sync
+        with pytest.raises(AiTimingHostError, match="尚未启动"):
+            host.separate_vocal(media, lambda *a: None, lambda: False)
+
+    def test_backend_swap_during_wait_aborts(self, tmp_path, qapp, media):
+        """等待分离期间后端被整体替换 → 明确报错而非挂死。"""
+        backends = [_StubBackend()]
+        host = KaraokeAiTimingHost(lambda: backends[-1], tmp_path / "cache")
+
+        def _slow_task(task, *, input_path, output_dir, output_format):
+            backends.append(_StubBackend())  # 等待期间后端被替换
+
+        backends[0].request_task = _slow_task
+        with pytest.raises(AiTimingHostError, match="已切换"):
+            host.separate_vocal(media, lambda *a: None, lambda: False)

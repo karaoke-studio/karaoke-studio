@@ -1535,11 +1535,13 @@ class KrokHelperQtApp(QMainWindow):
             )
 
             separation_page = getattr(self, "audio_separation_page", None)
-            backend = getattr(separation_page, "backend", None)
-            if backend is None:
+            if getattr(separation_page, "backend", None) is None:
                 return None
+            # 传 getter 而非实例：PyMSS/MSST 模式切换会整体替换后端对象
             cache_root = get_settings_path().parent / "lyrics_timing_cache"
-            return KaraokeAiTimingHost(backend, cache_root)
+            return KaraokeAiTimingHost(
+                lambda: separation_page.backend, cache_root
+            )
         except Exception:
             logging.getLogger(__name__).warning(
                 "构建 AI 打轴宿主能力失败，SUG 将使用独立默认配置", exc_info=True
