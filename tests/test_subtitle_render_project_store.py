@@ -962,6 +962,28 @@ def test_successful_open_records_recent_project(qapp, monkeypatch, tmp_path):
     assert str(n3_project.absolute()) not in win._recent_project_paths
 
 
+def test_save_and_save_as_record_recent_project(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+
+    # 新项目首次保存（保存/另存为共用 _write_project）即进入最近列表
+    first = tmp_path / "song.yurika"
+    assert win._write_project(first) is True
+    assert win._recent_project_paths[0] == str(first.absolute())
+
+    # 另存为新路径：新路径置顶，旧路径保留
+    second = tmp_path / "song-renamed.yurika"
+    assert win._write_project(second) is True
+    assert win._recent_project_paths[0] == str(second.absolute())
+    assert str(first.absolute()) in win._recent_project_paths
+
+    # 保存失败（父路径是个文件）不得记录
+    blocker = tmp_path / "blocker"
+    blocker.write_text("占位", encoding="utf-8")
+    broken = blocker / "broken.yurika"
+    assert win._write_project(broken) is False
+    assert str(broken.absolute()) not in win._recent_project_paths
+
+
 def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     default_font_size = win._app_default_style.font_size_px

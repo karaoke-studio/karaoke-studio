@@ -3816,6 +3816,7 @@ class SubtitleRenderWindow(QWidget):
         self._project_saving = False
         self._project_save_error = None
         self._set_project_dirty(False)
+        self._record_recent_project(path)
         self._cleanup_recovery_file(previous_recovery_path)
         self._cleanup_recovery_file()
         InfoBar.success(
