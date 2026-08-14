@@ -44,6 +44,11 @@ class _StubBackend(QObject):
         self.cancelled = False
         self._next_result = None
         self.install_dir = ""
+        self.started_service = False
+
+    def start_service(self):
+        self.started_service = True
+        self._snap.state = ServiceState.SERVICE_READY
 
     def snapshot(self):
         return SeparationSnapshot(
@@ -400,4 +405,42 @@ class TestReviewFixes:
 
         backends[0].request_task = _slow_task
         with pytest.raises(AiTimingHostError, match="已切换"):
+            host.separate_vocal(media, lambda *a: None, lambda: False)
+
+
+class TestServiceAutoStart:
+    """已配置但服务未运行（INSTALLED_STOPPED）是正常待机态：可用、执行时自动拉起。"""
+
+    def test_installed_stopped_counts_available(self, tmp_path, qapp):
+        backend = _StubBackend(state=ServiceState.INSTALLED_STOPPED)
+        status = _host(tmp_path, backend).separation_status()
+        assert status["available"] is True
+        assert "自动启动" in status["message"]
+
+    def test_service_starting_counts_available(self, tmp_path, qapp):
+        backend = _StubBackend(state=ServiceState.SERVICE_STARTING)
+        status = _host(tmp_path, backend).separation_status()
+        assert status["available"] is True
+
+    def test_separate_auto_starts_stopped_service(self, tmp_path, qapp, media):
+        backend = _StubBackend(state=ServiceState.INSTALLED_STOPPED)
+        vocal = media.with_name(media.stem + "_人声.wav")
+        vocal.write_bytes(b"v")
+        backend._next_result = _record(TaskType.VOCAL, vocal)
+        host = _host(tmp_path, backend)
+        out = host.separate_vocal(media, lambda *a: None, lambda: False)
+        assert out == vocal
+        assert backend.started_service is True
+
+    def test_start_failure_raises_backend_error(self, tmp_path, qapp, media):
+        backend = _StubBackend(state=ServiceState.INSTALLED_STOPPED)
+
+        def _fail_start():
+            backend.started_service = True
+            backend._snap.state = ServiceState.ERROR
+            backend._snap.error = "运行时校验失败"
+
+        backend.start_service = _fail_start
+        host = _host(tmp_path, backend)
+        with pytest.raises(AiTimingHostError, match="运行时校验失败"):
             host.separate_vocal(media, lambda *a: None, lambda: False)

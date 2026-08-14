@@ -16,6 +16,7 @@ docs/EMBEDDING.md §6）：把工作台现有的人声分离后端适配成 SUG
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -67,14 +68,27 @@ class KaraokeAiTimingHost:
                 "model": str(snap.current_model or ""),
                 "message": "分离环境正在执行任务，请稍候",
             }
+        # INSTALLED_STOPPED / SERVICE_STARTING 也算可用：环境已配置，
+        # separate_vocal 会在执行前自动拉起/等待服务（配置好但服务
+        # 未运行是正常待机态，此前被误报为「未就绪」）
         available = snap.state in (
             ServiceState.SERVICE_READY,
             ServiceState.EXTERNAL_MODEL_READY,
+            ServiceState.INSTALLED_STOPPED,
+            ServiceState.SERVICE_STARTING,
         )
+        message = ""
+        if not available:
+            message = snap.error or "分离环境未就绪"
+        elif snap.state in (
+            ServiceState.INSTALLED_STOPPED,
+            ServiceState.SERVICE_STARTING,
+        ):
+            message = "已配置（服务未运行，执行 AI 打轴时自动启动）"
         return {
             "available": bool(available),
             "model": str(snap.current_model or ""),
-            "message": "" if available else (snap.error or "分离环境未就绪"),
+            "message": message,
         }
 
     def effective_identity(self) -> dict:
@@ -108,21 +122,59 @@ class KaraokeAiTimingHost:
                     return p
         return None
 
+    _SERVICE_START_TIMEOUT_S = 300.0
+
+    def _ensure_service_ready(self, on_progress, is_cancelled) -> None:
+        """确保分离服务 READY：已安装未运行时自动拉起并等待就绪。
+
+        工作台配置好环境后服务通常处于 INSTALLED_STOPPED 待机态；
+        这里按需 ``start_service()``（自包含异步流程：校验→拉起→健康
+        检查），轮询快照直到 READY / 失败 / 超时。
+        """
+        deadline = time.monotonic() + self._SERVICE_START_TIMEOUT_S
+        start_attempted = False
+        while True:
+            if is_cancelled():
+                raise AiTimingHostError("已取消人声分离")
+            snap = self._backend.snapshot()
+            if snap.pending_task:
+                raise AiTimingHostError("分离环境正在执行任务，请稍候")
+            state = snap.state
+            if state in (
+                ServiceState.SERVICE_READY,
+                ServiceState.EXTERNAL_MODEL_READY,
+            ):
+                return
+            if state is ServiceState.SERVICE_STARTING:
+                on_progress("vocal", 10, "正在启动工作台分离服务…")
+            elif state is ServiceState.INSTALLED_STOPPED and not start_attempted:
+                on_progress("vocal", 8, "工作台分离服务未运行，正在自动启动…")
+                self._backend.start_service()
+                start_attempted = True
+            else:
+                raise AiTimingHostError(
+                    snap.error
+                    or f"工作台分离环境不可用（{getattr(state, 'value', state)}），"
+                    "请到第 2 步「音频分离」页检查"
+                )
+            if time.monotonic() > deadline:
+                raise AiTimingHostError(
+                    "启动工作台分离服务超时，请到第 2 步「音频分离」页检查环境"
+                )
+            time.sleep(0.2)
+
     def separate_vocal(self, source_path, on_progress, is_cancelled):
         """阻塞执行一次工作台人声分离，返回人声文件路径。
 
         后端 ``request_task`` 的同步失败路径（服务未启动、输入非法等）只置
         ERROR 状态、不发 ``resultReady``——因此除了等结果，还要监听
-        ``snapshotChanged``，避免错误后无限空转。
+        ``snapshotChanged``，避免错误后无限空转。服务未运行时先自动拉起
+        （见 ``_ensure_service_ready``）。
         """
         source = Path(source_path)
-        status = self.separation_status()
-        if not status["available"]:
-            raise AiTimingHostError(
-                "工作台分离环境未就绪，请先在第 2 步「音频分离」完成环境配置后重试"
-            )
         if not source.is_file():
             raise AiTimingHostError(f"音频文件不存在：{source}")
+        self._ensure_service_ready(on_progress, is_cancelled)
 
         backend = self._backend
         done = threading.Event()
