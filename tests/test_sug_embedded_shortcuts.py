@@ -284,8 +284,11 @@ def test_force_update_exit_flushes_and_releases_sug_resources_once() -> None:
     app = SimpleNamespace(
         _update_exit_prepared=False,
         lyrics_timing_page=timing_page,
-        _stop_alignment_preview=lambda **_kwargs: calls.append("stop-preview"),
+        align_page=SimpleNamespace(
+            stop_preview=lambda: calls.append("stop-preview")
+        ),
         _save_all_settings=lambda: calls.append("save-settings"),
+        _shutdown_audio_separation=lambda **_kwargs: True,
     )
 
     KrokHelperQtApp._prepare_force_quit_for_update(app)
@@ -305,6 +308,7 @@ def test_force_update_exit_flushes_both_project_modules_once() -> None:
         subtitle_render_page=subtitle_page,
         _stop_alignment_preview=lambda **_kwargs: None,
         _save_all_settings=lambda: None,
+        _shutdown_audio_separation=lambda **_kwargs: True,
     )
 
     KrokHelperQtApp._prepare_force_quit_for_update(app)

@@ -47,7 +47,26 @@ SAVED_SETTINGS = {
 
 @pytest.fixture
 def workbench(monkeypatch, tmp_path: Path):
-    """一个用干净配置目录起来的工作台，配置里预先写好"用户改过的值"。"""
+    """一个用干净配置目录起来的工作台，配置里预先写好"用户改过的值"。
+
+    ⚠ 全量回归卡点（2026-08 实测，详见 AGENTS.md §8.9）：teardown 走
+    ``window.close() → _shutdown_project_modules → _finalize_lyrics_timing_shutdown
+    → SUG cleanup_temp_files → app_dirs.config_dir()``，后者对
+    ``Path(sys.argv[0]).parent`` 做临时文件写探测。当 pytest 以
+    ``python -m pytest`` 启动时 argv[0] 是 site-packages 里的 pytest 包目录
+    （ProgramData）；在受限/沙箱环境下对该目录的写探测会**无限阻塞并烧
+    CPU**（表现：全量跑到本文件附近进度停住，py-spy 栈顶卡在
+    ``tempfile._mkstemp_inner ← app_dirs._is_dir_writable``）。
+
+    规避（无需改产品代码）：
+      1. 正常开发者终端 / CI 不受影响，直接跑即可；
+      2. 沙箱/受限环境：把一个极简 ``run_pytest.py``（内容仅
+         ``sys.exit(console_main())``）放到**可写目录**（如 %TEMP%），
+         再 ``python %TEMP%/run_pytest.py tests/ ...`` —— argv[0] 解析到
+         可写目录，探测立即通过；同时建议 ``--basetemp=%TEMP%/xxx``
+         绕开沙箱对 ``pytest-of-<user>`` 目录的建目录限制，并设
+         ``PYTHONPATH=<仓库根>``（``python -m`` 会自动加 CWD，脚本方式不会）。
+    """
     monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path))
     monkeypatch.delenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", raising=False)
     settings = load_app_settings()

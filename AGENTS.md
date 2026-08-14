@@ -168,6 +168,22 @@ git submodule status
    旧文件；改收集规则时同步 bump `scripts/build_parts.py` 的 `RUNTIME_PROFILE`，否则 CI 会复用含旧运行时的 runtime zip。
    排查此类闪退：`Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'}` 看故障模块。
 
+9. **受限/沙箱环境下全量回归会被 SUG 的配置目录写探测卡死**——SUG 的
+   `app_dirs.program_dir()` 取 `Path(sys.argv[0]).parent` 并用
+   `NamedTemporaryFile` 做可写探测；`python -m pytest` 的 argv[0] 是
+   site-packages（ProgramData）里的 pytest 包目录，沙箱对它的写探测会
+   **无限阻塞并持续烧 CPU**（无报错、无超时，进度条停住）。触发点包括
+   `tests/test_module_settings_persist.py` 的 teardown（closeEvent →
+   SUG `cleanup_temp_files → config_dir`）与 SUG 自身任何触发
+   `AppSettings` 首次构造的测试。定位：`py-spy dump` 栈顶为
+   `tempfile._mkstemp_inner ← app_dirs._is_dir_writable`。规避（不改
+   产品代码）：把仅含 `sys.exit(console_main())` 的 `run_pytest.py` 放到
+   **可写目录**（如 `%TEMP%`）后以它启动 pytest（argv[0] 解析到可写目录），
+   并加 `--basetemp=%TEMP%/xxx`（沙箱可能拒绝在旧 `pytest-of-<user>` 下建
+   目录）与 `PYTHONPATH=<仓库根>`（脚本方式不像 `python -m` 会自动加
+   CWD）。正常终端 / CI 不受影响。该卡点的完整分析也写在
+   `tests/test_module_settings_persist.py` 的 `workbench` fixture 注释里。
+
 ---
 
 ## 9. 字幕渲染模块

@@ -1,0 +1,310 @@
+"""AI 打轴宿主能力（KaraokeAiTimingHost）测试。
+
+验证 SUG AiTimingHost 协议（EMBEDDING.md §6）的工作台实现：
+- 协议鸭子类型完整；
+- separation_status 跟随后端状态；
+- find_session_vocal 严格匹配本会话人声（不猜相似名）；
+- separate_vocal：环境未就绪阻断、成功返回产物、失败/取消转中文异常。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from PyQt6.QtCore import QObject, pyqtSignal
+
+from krok_helper.audio_processing.separation.ai_timing_host import (
+    AiTimingHostError,
+    KaraokeAiTimingHost,
+)
+from krok_helper.audio_processing.separation.backend import (
+    ResultFile,
+    SeparationSnapshot,
+    TaskProgress,
+    TaskResult,
+)
+from krok_helper.audio_processing.separation.states import (
+    ServiceState,
+    TaskType,
+)
+
+
+class _StubBackend(QObject):
+    """最小分离后端：手动控制快照与结果。"""
+
+    resultReady = pyqtSignal(object)
+    taskProgressChanged = pyqtSignal(object)
+    snapshotChanged = pyqtSignal(object)
+
+    def __init__(self, state=ServiceState.SERVICE_READY, model="inst_v1e"):
+        super().__init__()
+        self._snap = SeparationSnapshot(state=state, current_model=model)
+        self.requests = []
+        self.cancelled = False
+        self._next_result = None
+
+    def snapshot(self):
+        return SeparationSnapshot(
+            state=self._snap.state,
+            current_model=self._snap.current_model,
+            pending_task=self._snap.pending_task,
+            error=self._snap.error,
+        )
+
+    def request_task(self, task, *, input_path, output_dir, output_format):
+        self.requests.append((task, input_path, output_dir, output_format))
+        if self._next_result is not None:
+            result, self._next_result = self._next_result, None
+            self.taskProgressChanged.emit(
+                TaskProgress(title="分离人声", stage_name="分离处理中",
+                             processing_done=5, processing_total=10)
+            )
+            self.resultReady.emit(result)
+
+    def cancel_task(self):
+        self.cancelled = True
+        self._snap.pending_task = None
+
+
+def _host(tmp_path, backend):
+    return KaraokeAiTimingHost(backend, tmp_path / "lyrics_timing_cache")
+
+
+def _record(task, *files):
+    return TaskResult(
+        task=task,
+        title="分离人声",
+        finished_at="12:00:00",
+        files=[ResultFile(path=str(f), label="人声") for f in files],
+    )
+
+
+@pytest.fixture
+def qapp():
+    from PyQt6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture
+def media(tmp_path):
+    source = tmp_path / "song.flac"
+    source.write_bytes(b"mix")
+    return source
+
+
+class TestProtocolShape:
+    def test_satisfies_sug_protocol_duck_type(self, tmp_path, qapp):
+        """全部协议方法存在（与 SUG is_ai_timing_host 同口径）。"""
+        host = _host(tmp_path, _StubBackend())
+        for name in (
+            "separation_status",
+            "effective_identity",
+            "find_session_vocal",
+            "separate_vocal",
+            "ai_cache_dir",
+        ):
+            assert callable(getattr(host, name)), name
+
+
+class TestSeparationStatus:
+    def test_ready_backend_available(self, tmp_path, qapp):
+        status = _host(tmp_path, _StubBackend()).separation_status()
+        assert status["available"] is True
+        assert status["model"] == "inst_v1e"
+
+    def test_busy_backend_unavailable(self, tmp_path, qapp):
+        backend = _StubBackend()
+        backend._snap.pending_task = TaskType.VOCAL
+        status = _host(tmp_path, backend).separation_status()
+        assert status["available"] is False
+        assert "任务" in status["message"]
+
+    def test_unconfigured_unavailable(self, tmp_path, qapp):
+        backend = _StubBackend(state=ServiceState.UNCONFIGURED)
+        backend._snap.error = "未配置安装目录"
+        status = _host(tmp_path, backend).separation_status()
+        assert status["available"] is False
+        assert "未配置" in status["message"]
+
+
+class TestSessionVocal:
+    def test_session_vocal_strict_match(self, tmp_path, qapp, media):
+        backend = _StubBackend()
+        host = _host(tmp_path, backend)
+        vocal = media.parent / "song_人声.wav"
+        vocal.write_bytes(b"v")
+        backend.resultReady.emit(_record(TaskType.VOCAL, vocal))
+
+        found = host.find_session_vocal(media, "any-sha")
+        assert found == vocal
+
+    def test_session_vocal_rejects_loose_names(self, tmp_path, qapp, media):
+        backend = _StubBackend()
+        host = _host(tmp_path, backend)
+        noise = media.parent / "song_人声演唱会.wav"
+        noise.write_bytes(b"x")
+        other = media.parent / "other_人声.wav"
+        other.write_bytes(b"x")
+        backend.resultReady.emit(_record(TaskType.VOCAL, noise, other))
+
+        assert host.find_session_vocal(media, "sha") is None
+
+    def test_session_vocal_ignores_missing_file(self, tmp_path, qapp, media):
+        backend = _StubBackend()
+        host = _host(tmp_path, backend)
+        backend.resultReady.emit(_record(TaskType.VOCAL, media.parent / "song_人声.wav"))
+        # 文件已不存在 → 不命中
+        assert host.find_session_vocal(media, "sha") is None
+
+
+class TestSeparateVocal:
+    def test_not_available_blocks_with_chinese_error(self, tmp_path, qapp, media):
+        backend = _StubBackend(state=ServiceState.UNCONFIGURED)
+        with pytest.raises(AiTimingHostError, match="音频分离"):
+            _host(tmp_path, backend).separate_vocal(media, lambda *a: None, lambda: False)
+
+    def test_success_returns_vocal_wav(self, tmp_path, qapp, media):
+        backend = _StubBackend()
+        vocal = media.parent / "song_人声.wav"
+        vocal.write_bytes(b"v")
+        backend._next_result = _record(TaskType.VOCAL, vocal)
+        host = _host(tmp_path, backend)
+
+        progress_events = []
+        result = host.separate_vocal(
+            media,
+            lambda s, p, m: progress_events.append((s, p, m)),
+            lambda: False,
+        )
+        assert result == vocal
+        # 只调用一次现有分离任务（验收门槛 §11-G）
+        assert len(backend.requests) == 1
+        task, input_path, output_dir, fmt = backend.requests[0]
+        assert task == TaskType.VOCAL
+        assert input_path == str(media)
+        assert output_dir == str(media.parent)
+        assert fmt == "wav"
+        assert progress_events and progress_events[0][0] == "separation"
+        # 分离产物进入会话记录：下次 find_session_vocal 零分离命中
+        assert host.find_session_vocal(media, "sha") == vocal
+
+    def test_failed_task_raises_error(self, tmp_path, qapp, media):
+        backend = _StubBackend()
+        backend._next_result = TaskResult(
+            task=TaskType.VOCAL, title="分离人声", finished_at="12:00:00", error="推理失败"
+        )
+        with pytest.raises(AiTimingHostError, match="推理失败"):
+            _host(tmp_path, backend).separate_vocal(media, lambda *a: None, lambda: False)
+
+    def test_no_wav_output_raises(self, tmp_path, qapp, media):
+        backend = _StubBackend()
+        backend._next_result = _record(TaskType.VOCAL, media.parent / "song_人声.flac")
+        with pytest.raises(AiTimingHostError, match="未找到输出的人声文件"):
+            _host(tmp_path, backend).separate_vocal(media, lambda *a: None, lambda: False)
+
+
+class TestCacheDir:
+    def test_cache_dir_under_host_root(self, tmp_path, qapp):
+        host = _host(tmp_path, _StubBackend())
+        assert host.ai_cache_dir() == tmp_path / "lyrics_timing_cache" / "ai_timing"
+
+
+class TestSugIntegration:
+    def test_sug_service_uses_host_pieces(self, tmp_path, qapp, media):
+        """SUG AiTimingService 端到端（fake worker）：embedded 宿主注入后
+        会话人声零分离完成整条链路。"""
+        import sys
+
+        sug_src = Path(__file__).resolve().parent.parent / "krok_helper" / "lyrics_timing" / "src"
+        if not sug_src.is_dir():
+            pytest.skip("SUG submodule 未初始化")
+        sys.path.insert(0, str(sug_src))
+        try:
+            from strange_uta_game.backend.application.ai_timing.host import (
+                is_ai_timing_host,
+            )
+            from strange_uta_game.backend.application.ai_timing.models import (
+                ModelRegistry,
+            )
+            from strange_uta_game.backend.application.ai_timing.resolver import (
+                PronunciationResolver,
+            )
+            from strange_uta_game.backend.application.ai_timing.service import (
+                AiTimingService,
+            )
+            from strange_uta_game.backend.application.ai_timing.settings import (
+                AiTimingSettings,
+            )
+            from strange_uta_game.backend.application.ai_timing.vocals import (
+                AiCache,
+                VocalPreparationService,
+            )
+            from strange_uta_game.backend.domain import (
+                Character,
+                Project,
+                Sentence,
+            )
+            from strange_uta_game.backend.infrastructure.parsers.ruby_analyzer import (
+                DummyAnalyzer,
+            )
+        finally:
+            sys.path.remove(str(sug_src))
+
+        backend = _StubBackend()
+        host = _host(tmp_path, backend)
+        assert is_ai_timing_host(host)
+
+        vocal = media.parent / "song_人声.wav"
+        vocal.write_bytes(b"v")
+        backend.resultReady.emit(_record(TaskType.VOCAL, vocal))
+
+        project = Project()
+        project.sentences = [
+            Sentence(
+                singer_id="s1",
+                characters=[
+                    Character(char="あ", check_count=1, ruby=None, singer_id="s1")
+                ],
+            )
+        ]
+
+        class _FakeWorker:
+            calls = []
+
+            def run(self, request, audio_path, model_spec, on_progress=None, timeout_s=None):
+                _FakeWorker.calls.append(audio_path)
+                from strange_uta_game.backend.application.ai_timing.alignment import (
+                    AlignmentResult,
+                    EmissionSpan,
+                )
+
+                return AlignmentResult(
+                    annotation_digest=request.annotation_digest,
+                    model_id="fake",
+                    spans=[
+                        EmissionSpan(t.index, i * 100, i * 100 + 50)
+                        for i, t in enumerate(request.tokens)
+                    ],
+                )
+
+        cache = AiCache(host.ai_cache_dir())
+        service = AiTimingService(
+            settings=AiTimingSettings(),
+            cache=cache,
+            registry=ModelRegistry(tmp_path / "models"),
+            vocal_service=VocalPreparationService(
+                cache, session_vocal_finder=host.find_session_vocal
+            ),
+            resolver=PronunciationResolver(analyzer=DummyAnalyzer(), chinese_mode=False),
+            worker_factory=lambda python: _FakeWorker(),
+            separation_executor=host.separate_vocal,
+            separation_identity=host.effective_identity,
+        )
+        cmd = service.execute(project, str(media))
+        assert cmd is not None
+        # 会话人声直接复用：没有发起分离任务
+        assert backend.requests == []
+        # worker 用的是人声文件
+        assert _FakeWorker.calls == [str(vocal)]

@@ -706,6 +706,7 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_timing_page = LyricsTimingMainWindow.for_embedding(
             parent=self.page_stack,
             settings_provider=lyrics_timing_settings,
+            ai_timing_host=self._build_ai_timing_host(),
         )
         try:
             self.lyrics_timing_page.export_to_next_requested.connect(
@@ -1522,6 +1523,28 @@ class KrokHelperQtApp(QMainWindow):
             logging.getLogger(__name__).warning(
                 "处理字幕项目恢复数据失败", exc_info=True
             )
+
+    def _build_ai_timing_host(self):
+        """构建注入 SUG「AI 打轴」的宿主能力（阶段 G 嵌入契约）。
+
+        失败时返回 None——SUG 回落 standalone 默认配置，绝不阻塞工作台启动。
+        """
+        try:
+            from krok_helper.audio_processing.separation.ai_timing_host import (
+                KaraokeAiTimingHost,
+            )
+
+            separation_page = getattr(self, "audio_separation_page", None)
+            backend = getattr(separation_page, "backend", None)
+            if backend is None:
+                return None
+            cache_root = get_settings_path().parent / "lyrics_timing_cache"
+            return KaraokeAiTimingHost(backend, cache_root)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "构建 AI 打轴宿主能力失败，SUG 将使用独立默认配置", exc_info=True
+            )
+            return None
 
     def _sync_lyrics_timing_host_paths(self) -> None:
         """Inject host-managed runtime settings into the embedded timing module."""

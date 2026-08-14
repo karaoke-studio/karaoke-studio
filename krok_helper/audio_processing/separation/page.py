@@ -504,6 +504,11 @@ class AudioSeparationPage(QWidget):
             host.accept_source_as_on_vocal(on_vocal)
 
 
+    @property
+    def backend(self) -> SeparationBackend:
+        """当前分离后端（宿主 AI 打轴等外部能力使用，只读）。"""
+        return self._backend
+
     def _on_result_ready(self, result) -> None:
         self._results_panel.add_result(result)
         self._results_panel.setVisible(True)
