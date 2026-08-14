@@ -1540,7 +1540,7 @@ class KrokHelperQtApp(QMainWindow):
             # 传 getter 而非实例：PyMSS/MSST 模式切换会整体替换后端对象
             cache_root = get_settings_path().parent / "lyrics_timing_cache"
             return KaraokeAiTimingHost(
-                lambda: separation_page.backend, cache_root
+                lambda: separation_page.backend, cache_root, page=separation_page
             )
         except Exception:
             logging.getLogger(__name__).warning(

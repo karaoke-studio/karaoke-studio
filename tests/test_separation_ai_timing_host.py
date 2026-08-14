@@ -228,6 +228,7 @@ class TestSugIntegration:
                 is_ai_timing_host,
             )
             from strange_uta_game.backend.application.ai_timing.models import (
+                ModelManifest,
                 ModelRegistry,
             )
             from strange_uta_game.backend.application.ai_timing.resolver import (
@@ -292,10 +293,18 @@ class TestSugIntegration:
                 )
 
         cache = AiCache(host.ai_cache_dir())
+        registry = ModelRegistry(tmp_path / "models")
+        registry.register(
+            ModelManifest(
+                model_id="NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn",
+                provider="wav2vec2",
+                revision="main",
+            )
+        )
         service = AiTimingService(
             settings=AiTimingSettings(),
             cache=cache,
-            registry=ModelRegistry(tmp_path / "models"),
+            registry=registry,
             vocal_service=VocalPreparationService(
                 cache, session_vocal_finder=host.find_session_vocal
             ),

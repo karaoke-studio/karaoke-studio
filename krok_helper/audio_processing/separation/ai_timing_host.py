@@ -43,11 +43,13 @@ class KaraokeAiTimingHost:
         cache_root: AI 缓存根目录（宿主注入给 SUG 的 ``.cache`` 范围）。
     """
 
-    def __init__(self, backend_getter, cache_root: Path):
+    def __init__(self, backend_getter, cache_root: Path, page=None):
         self._backend_getter = (
             backend_getter if callable(backend_getter) else (lambda: backend_getter)
         )
         self._cache_root = Path(cache_root)
+        # 分离页引用：http_proxy 需要读工作台网络设置（可为 None）
+        self._page_ref = page
         self._session_results: list = []
         self._lock = threading.Lock()
 
@@ -209,6 +211,24 @@ class KaraokeAiTimingHost:
 
     def ai_cache_dir(self):
         return self._cache_root / "ai_timing"
+
+    def http_proxy(self) -> str:
+        """当前生效的下载代理 URL（SUG 模型下载默认走工作台网络设置）。
+
+        返回空串表示不走显式代理（requests 仍会继承系统/环境代理）。
+        """
+        try:
+            from krok_helper.network import proxy_url_for_app_settings
+
+            page = getattr(self, "_page_ref", None)
+            if page is None:
+                return ""
+            settings = getattr(page, "_settings", None)
+            if settings is None:
+                return ""
+            return proxy_url_for_app_settings(settings) or ""
+        except Exception:
+            return ""
 
     # ── 内部 ──
 
