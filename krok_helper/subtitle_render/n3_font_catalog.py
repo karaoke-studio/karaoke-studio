@@ -1,4 +1,15 @@
-"""NicoKaraMaker3-compatible system font discovery and name resolution."""
+"""NicoKaraMaker3-compatible system font discovery and name resolution.
+
+The primary record source is SUG's process-level font cache (EMBEDDING §8):
+``localized_alias_map()`` localizes family names via a pure-stdlib font-file
+scan that ``prewarm_async`` keeps warm in a background thread, and the Qt
+family snapshot is cached the same way.  Building the catalog from those
+caches is pure dict work - the DirectWrite COM walk it replaces enumerates
+every family and face synchronously and blocks the UI thread for tens of
+seconds on machines with large font libraries (first project load / first
+font combo open).  DirectWrite remains as the fallback when the cached scan
+yields nothing.
+"""
 
 from __future__ import annotations
 
@@ -342,6 +353,81 @@ def _compare_ja_jp(left: str, right: str) -> int:
     return result - 2
 
 
+# SUG's font-name scan reports Windows language IDs; catalog semantics only
+# distinguish the Japanese locale when picking the canonical display name,
+# every other entry is an opaque alias.
+_LANGID_LOCALE = {
+    0x0411: "ja-jp",
+    0x0412: "ko-kr",
+    0x0804: "zh-cn",
+    0x0404: "zh-tw",
+    0x0C04: "zh-hk",
+    0x1004: "zh-sg",
+    0x0409: "en-us",
+}
+
+
+def _sug_alias_records() -> list[_FamilyRecord]:
+    """Localized-name records synthesized from SUG's cached font-file scan.
+
+    The scan (registry ∪ font directories, OpenType ``name`` tables) is
+    prewarmed into a process-level cache by ``font_cache.prewarm_async`` at
+    startup, so this is dict work instead of the DirectWrite COM walk.
+    Name tables carry no style information, so every record claims the
+    normal face: ``_build_catalog`` merges every Qt-visible family back in
+    regardless of styles, so selectable families are unchanged.
+    """
+
+    try:
+        from strange_uta_game.frontend.font_names import localized_alias_map
+    except Exception:
+        return []
+    records: list[_FamilyRecord] = []
+    for english, natives in localized_alias_map().items():
+        names: list[tuple[str, str]] = [("en-us", english)]
+        for langid, native in natives.items():
+            locale = _LANGID_LOCALE.get(langid, f"lang-{langid:04x}")
+            names.append((locale, native))
+        records.append(
+            _FamilyRecord(names=tuple(names), styles=(_DWRITE_FONT_STYLE_NORMAL,))
+        )
+    return records
+
+
+def _sug_installed_families() -> tuple[str, ...]:
+    """Qt family snapshot from SUG's process-level cache (EMBEDDING §8)."""
+
+    try:
+        from PyQt6.QtGui import QGuiApplication
+
+        from strange_uta_game.frontend import font_cache
+
+        if QGuiApplication.instance() is None:
+            # Never build the snapshot without a live application: it would
+            # cache the empty pre-GUI database for the rest of the process.
+            return ()
+        return tuple(font_cache.installed_families())
+    except Exception:
+        return ()
+
+
+def _qt_families_for_catalog(qt_available: bool) -> tuple[str, ...]:
+    """Qt-visible families, preferring the prewarmed SUG snapshot."""
+
+    if not qt_available:
+        return ()
+    cached = _sug_installed_families()
+    if cached:
+        return cached
+    return tuple(QFontDatabase.families())
+
+
+def installed_qt_font_families() -> tuple[str, ...]:
+    """Public wrapper for Qt-visible families with the SUG snapshot preferred."""
+
+    return _qt_families_for_catalog(True)
+
+
 def _qt_fallback_catalog(*, qt_available: bool = True) -> N3FontCatalog:
     families = tuple(QFontDatabase.families()) if qt_available else ()
     if qt_available and not families:
@@ -370,13 +456,33 @@ def _qt_application_cache_key() -> int:
 def _get_n3_font_catalog(qt_application_key: int) -> N3FontCatalog:
     qt_available = qt_application_key != 0
     if sys.platform == "win32":
+        # Primary source: SUG's process-level font cache, prewarmed at
+        # startup - keeps the first catalog build off the critical path of
+        # project load / first font combo open.
+        try:
+            sug_records = _sug_alias_records()
+        except Exception:
+            sug_records = []
+        if sug_records:
+            qt_families = _qt_families_for_catalog(qt_available)
+            if qt_families:
+                return _build_catalog(
+                    sug_records,
+                    compare=_compare_ja_jp,
+                    qt_families=qt_families,
+                )
+            # Without a populated Qt font database (pre-GUI canonicalization,
+            # offscreen sessions) the alias map alone misses English-only
+            # families; fall through to the full DirectWrite walk, which is
+            # Qt-independent.  Real GUI sessions - the slow-library case the
+            # cache exists for - always take the branch above.
         try:
             records = _directwrite_records()
             if records:
                 return _build_catalog(
                     records,
                     compare=_compare_ja_jp,
-                    qt_families=(QFontDatabase.families() if qt_available else ()),
+                    qt_families=_qt_families_for_catalog(qt_available),
                 )
             # A damaged/disabled Windows font cache service can yield an empty
             # DirectWrite collection without any HRESULT failure.  Treat that
@@ -476,6 +582,14 @@ def invalidate_n3_font_caches() -> None:
 
     _get_n3_font_catalog.cache_clear()
     _resolve_qt_font_family_cached.cache_clear()
+    try:
+        from strange_uta_game.frontend import font_cache
+
+        # Qt registry changes do not alter font files on disk, so the
+        # expensive localized-name scan is kept (EMBEDDING §8).
+        font_cache.invalidate(clear_alias_map=False)
+    except Exception:
+        pass
 
 
 def _n3_default_family(catalog: N3FontCatalog, fallback: str) -> str:

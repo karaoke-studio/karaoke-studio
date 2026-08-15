@@ -241,10 +241,14 @@ def _font_face_weight(family: str, face_name: str) -> int:
 def _n3_default_font_family() -> str:
     candidates = ("HGP明朝E", "游明朝", "ＭＳ Ｐ明朝")
     try:
-        from PyQt6.QtGui import QFontDatabase, QGuiApplication
+        from PyQt6.QtGui import QGuiApplication
 
         if QGuiApplication.instance() is not None:
-            installed = {name.casefold() for name in QFontDatabase.families()}
+            from krok_helper.subtitle_render.n3_font_catalog import (
+                installed_qt_font_families,
+            )
+
+            installed = {name.casefold() for name in installed_qt_font_families()}
             for candidate in candidates:
                 if candidate.casefold() in installed:
                     return candidate

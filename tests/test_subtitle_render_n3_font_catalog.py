@@ -24,6 +24,28 @@ def _compare(left: str, right: str) -> int:
     return (left > right) - (left < right)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sug_font_cache():
+    """Keep SUG's process-level font snapshot from leaking across tests.
+
+    Without this, a snapshot built under one test's monkeypatched
+    ``QFontDatabase.families`` would resurface in later tests via
+    ``_sug_installed_families`` (EMBEDDING §8 snapshot semantics).
+    """
+
+    def _invalidate() -> None:
+        try:
+            from strange_uta_game.frontend import font_cache
+
+            font_cache.invalidate(clear_alias_map=False)
+        except Exception:
+            pass
+
+    _invalidate()
+    yield
+    _invalidate()
+
+
 def test_build_catalog_prefers_japanese_name_and_maps_every_alias():
     catalog = _build_catalog(
         [
@@ -108,6 +130,7 @@ def test_font_catalog_refreshes_qt_aliases_after_application_start(monkeypatch):
         )
     ]
     monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_sug_alias_records", lambda: [])
     monkeypatch.setattr(font_catalog, "_directwrite_records", lambda: records)
     monkeypatch.setattr(font_catalog, "_compare_ja_jp", _compare)
     monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Meiryo"])
@@ -375,8 +398,63 @@ def test_build_catalog_appends_families_only_qt_can_see():
     assert catalog.aliases_for("Late Installed Font") == ("Late Installed Font",)
 
 
+def test_catalog_prefers_sug_cached_records_over_directwrite(monkeypatch):
+    records = [
+        _FamilyRecord(
+            names=(("en-us", "Meiryo"), ("ja-jp", "メイリオ")),
+            styles=(0,),
+        )
+    ]
+
+    def _directwrite_must_not_run():
+        raise AssertionError("DirectWrite walk must not run when the SUG cache hits")
+
+    monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_sug_alias_records", lambda: records)
+    monkeypatch.setattr(font_catalog, "_directwrite_records", _directwrite_must_not_run)
+    monkeypatch.setattr(font_catalog, "_compare_ja_jp", _compare)
+    monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Meiryo"])
+    font_catalog._get_n3_font_catalog.cache_clear()
+    try:
+        catalog = font_catalog._get_n3_font_catalog(123)
+    finally:
+        font_catalog._get_n3_font_catalog.cache_clear()
+
+    assert catalog.authoritative is True
+    assert catalog.families == ("メイリオ",)
+    assert catalog.canonicalize("Meiryo") == "メイリオ"
+    assert catalog.qt_family("メイリオ") == "Meiryo"
+
+
+def test_sug_alias_records_map_langids_to_catalog_locales(monkeypatch):
+    from strange_uta_game.frontend import font_names
+
+    monkeypatch.setattr(
+        font_names,
+        "localized_alias_map",
+        lambda: {
+            "UD Digi Kyokasho N-B": {
+                0x0411: "UD デジタル 教科書体 N-B",
+                0x0804: "UD 数字教科书体 N-B",
+            }
+        },
+    )
+    records = font_catalog._sug_alias_records()
+
+    assert len(records) == 1
+    names = dict(records[0].names)
+    assert names["en-us"] == "UD Digi Kyokasho N-B"
+    assert names["ja-jp"] == "UD デジタル 教科書体 N-B"
+    assert names["zh-cn"] == "UD 数字教科书体 N-B"
+
+    catalog = _build_catalog(records, compare=_compare)
+    assert catalog.canonicalize("UD Digi Kyokasho N-B") == "UD デジタル 教科書体 N-B"
+    assert catalog.canonicalize("UD 数字教科书体 N-B") == "UD デジタル 教科書体 N-B"
+
+
 def test_empty_directwrite_catalog_falls_back_to_qt(monkeypatch):
     monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_sug_alias_records", lambda: [])
     monkeypatch.setattr(font_catalog, "_directwrite_records", lambda: [])
     monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Arial"])
     font_catalog._get_n3_font_catalog.cache_clear()
@@ -394,6 +472,7 @@ def test_unexpected_directwrite_error_falls_back_to_qt(monkeypatch):
         raise ctypes.ArgumentError("vtable mismatch")
 
     monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_sug_alias_records", lambda: [])
     monkeypatch.setattr(font_catalog, "_directwrite_records", broken_enum)
     monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Arial"])
     font_catalog._get_n3_font_catalog.cache_clear()
