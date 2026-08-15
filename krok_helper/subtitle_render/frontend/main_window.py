@@ -172,6 +172,7 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
+from krok_helper.subtitle_render.frontend.font_loading import font_list_loading_overlay
 from krok_helper.subtitle_render.frontend.guide_replacement import (
     GuidePrefixMatch,
     GuidePrefixReplaceDialog,
@@ -3068,8 +3069,11 @@ class SubtitleRenderWindow(QWidget):
             )
         if project_style.title_overlay is None:
             project_style = replace(project_style, title_overlay=TitleOverlay())
+        # 字体目录冷构建可达秒级且必须留在主线程——先给出可见占位再读取
+        with font_list_loading_overlay(self):
+            catalog = get_n3_font_catalog()
         self._style, _font_names_changed = normalize_style_font_families(
-            project_style, get_n3_font_catalog()
+            project_style, catalog
         )
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:

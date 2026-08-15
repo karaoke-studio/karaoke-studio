@@ -509,6 +509,16 @@ def n3_font_families() -> tuple[str, ...]:
     return get_n3_font_catalog().families
 
 
+def is_n3_font_catalog_ready() -> bool:
+    """True when a catalog is already cached for this process.
+
+    Lets UI code decide whether the next ``get_n3_font_catalog()`` is a
+    millisecond dict hit or a cold build worth showing a busy state for.
+    """
+
+    return _get_n3_font_catalog.cache_info().currsize > 0
+
+
 def canonicalize_n3_font_family(name: str) -> str | None:
     return get_n3_font_catalog().canonicalize(name)
 
