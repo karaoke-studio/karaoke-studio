@@ -95,8 +95,8 @@ C:\Python314\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QAppli
 **规则**：
 
 - **不要直接改 `krok_helper/lyrics_timing/src/strange_uta_game/` 里的代码**。要改先去 SUG 仓库提 PR，merge 后再 bump submodule。
-- 嵌入主程序的入口是 [`krok_helper/gui_qt.py`](krok_helper/gui_qt.py) 里的 `self.lyrics_timing_page`（约第 2380 行附近构造）。SUG 自己暴露 `MainWindow` class，宿主把它当一个 Qt widget 挂上去。
-- 嵌入契约见 SUG 仓库的 `docs/embedding-contract*.md`（在 submodule 内）。
+- 嵌入主程序的入口是 [`krok_helper/gui_qt.py`](krok_helper/gui_qt.py) 里的 `self.lyrics_timing_page`（约第 700 行附近构造）。SUG 自己暴露 `MainWindow` class，宿主把它当一个 Qt widget 挂上去。
+- 嵌入契约见 SUG 仓库的 `docs/EMBEDDING.md`（在 submodule 内）。
 - [`krok_helper/__init__.py`](krok_helper/__init__.py) 会自动把 `lyrics_timing/src/` 加进 `sys.path`，所以 `import strange_uta_game` 在主程序里直接可用。
 
 **新会话第一件事**：
