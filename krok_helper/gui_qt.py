@@ -708,6 +708,15 @@ class KrokHelperQtApp(QMainWindow):
             settings_provider=lyrics_timing_settings,
             ai_timing_host=self._build_ai_timing_host(),
         )
+        # EMBEDDING §8：SUG 字体缓存后台预热（幂等）。embedded 构造路径不会
+        # 自行预热，宿主补调一次，把字体枚举成本从首次打开字体选择器挪到
+        # 启动空闲期。
+        try:
+            from strange_uta_game.frontend import font_cache as sug_font_cache
+
+            sug_font_cache.prewarm_async()
+        except Exception:
+            logging.getLogger(__name__).warning("SUG 字体缓存预热调度失败", exc_info=True)
         try:
             self.lyrics_timing_page.export_to_next_requested.connect(
                 self._export_lyrics_timing_to_next
