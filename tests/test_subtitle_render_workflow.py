@@ -52,11 +52,13 @@ def test_entering_subtitle_render_only_switches_page() -> None:
         _sync_page_stack_margins=lambda module: calls.append(f"margin:{module}"),
         _sync_workflow_shortcut_scope=lambda: calls.append("shortcuts"),
         _prepare_subtitle_render_from_workflow=lambda: calls.append("prepare"),
+        _notify_lyrics_timing_host_visibility=lambda visible: calls.append(f"vis:{visible}"),
     )
 
     KrokHelperQtApp._show_module(app, WORKFLOW_SUBTITLE_RENDER)
 
     assert calls == [
+        "vis:False",
         f"margin:{WORKFLOW_SUBTITLE_RENDER}",
         "page:True",
         f"step:{WORKFLOW_SUBTITLE_RENDER}",
@@ -795,7 +797,7 @@ def test_lyrics_timing_export_without_project_uses_fluent_warning(
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
 
     assert dialogs == [
-        (app, "无法导出到下一步", "当前没有可导出的打轴项目。")
+        (app, "无法进入下一步", "当前没有可导出的打轴项目。")
     ]
 
 
@@ -817,7 +819,7 @@ def test_lyrics_timing_export_read_failure_uses_fluent_error(monkeypatch) -> Non
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
 
     assert dialogs == [
-        (app, "导出到下一步失败", "无法读取当前打轴项目：\n读取异常")
+        (app, "进入下一步失败", "无法读取当前打轴项目：\n读取异常")
     ]
 
 

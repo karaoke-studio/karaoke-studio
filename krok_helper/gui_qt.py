@@ -996,7 +996,7 @@ class KrokHelperQtApp(QMainWindow):
         if timing_page is None or render_page is None:
             fluent_warning(
                 self,
-                "无法导出到下一步",
+                "无法进入下一步",
                 "下一步模块尚未准备好，请稍后重试。",
             )
             return
@@ -1007,14 +1007,14 @@ class KrokHelperQtApp(QMainWindow):
             logging.getLogger(__name__).exception("读取歌词打轴项目失败")
             fluent_error(
                 self,
-                "导出到下一步失败",
+                "进入下一步失败",
                 f"无法读取当前打轴项目：\n{exc}",
             )
             return
         if not isinstance(payload, dict) or payload.get("project") is None:
             fluent_warning(
                 self,
-                "无法导出到下一步",
+                "无法进入下一步",
                 "当前没有可导出的打轴项目。",
             )
             return
