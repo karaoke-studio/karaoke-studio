@@ -290,7 +290,11 @@ for rel in "${REMOVE_QT_LIBS[@]}"; do
   done < <(find "$APP_DIST" -name "$rel" -print0)
 done
 
-echo "Validating macOS package contents..."
+# 嵌入的 AI 打轴 worker 以外部解释器子进程运行，runpy 引导要求 bundle
+# 内 strange_uta_game 下有真实 .py 源码；--collect-submodules 只服务
+# frozen 应用自身（PYZ），数据 add-data 只落了 config/resource/bass。
+# 打包末尾补复制 submodule 源码树到同相对路径（剔除 __pycache__/.pyc）。
+echo "Copying SUG source tree for the AI timing worker..."
 APP_INTERNAL="$APP_DIST/Contents/Frameworks"
 if [ ! -d "$APP_INTERNAL" ]; then
   APP_INTERNAL="$APP_DIST/Contents/Resources"
@@ -299,7 +303,18 @@ if [ ! -d "$APP_INTERNAL" ]; then
   echo "Could not locate PyInstaller internal directory in $APP_DIST"
   exit 1
 fi
+SUG_DST="$APP_INTERNAL/strange_uta_game"
+mkdir -p "$SUG_DST"
+if ! rsync -a --exclude '__pycache__' --exclude '*.pyc' "$SUG_PACKAGE"/ "$SUG_DST"/; then
+  echo "Failed to copy the SUG source tree."
+  exit 1
+fi
+if [ ! -f "$SUG_DST/backend/application/ai_timing/worker/client.py" ]; then
+  echo "SUG worker source missing after copy."
+  exit 1
+fi
 
+echo "Validating macOS package contents..."
 REQUIRED_FILES=(
   "krok_helper/assets/logo/logo.jpg"
   "krok_helper/assets/logo/start.jpg"
@@ -308,6 +323,7 @@ REQUIRED_FILES=(
   "strange_uta_game/config/dictionary.json"
   "strange_uta_game/config/cmudict-0.7b"
   "strange_uta_game/config/kanji_readings.json"
+  "strange_uta_game/backend/application/ai_timing/worker/client.py"
   "strange_uta_game/resource/icon.ico"
   "strange_uta_game/resource/sounds/press.wav"
 )

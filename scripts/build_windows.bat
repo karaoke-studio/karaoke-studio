@@ -294,6 +294,38 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM 嵌入的 AI 打轴 worker 以外部解释器（托管 PyMSS runtime）子进程运行，
+REM runpy 引导要求 _internal\strange_uta_game 下有真实 .py 源码；KS 的
+REM PyInstaller 用 --collect-submodules 把 SUG 编进 PYZ（仅 frozen 应用
+REM 自身可用），数据 add-data 只落了 config/resource/bass。打包末尾把
+REM submodule 源码树补复制到同相对路径（剔除 __pycache__/.pyc），不改
+REM 依赖分析、不改 worker 代码（frozen 应用自身 import 仍走 PYZ，
+REM FrozenImporter 优先于路径查找，不受该目录影响）。
+echo Copying SUG source tree for the AI timing worker...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$targetDir = Resolve-Path '%APP_DIST%';" ^
+    "$src = (Resolve-Path '%SUG_PACKAGE%').Path;" ^
+    "$dst = Join-Path $targetDir '_internal\strange_uta_game';" ^
+    "New-Item -ItemType Directory -Path $dst -Force | Out-Null;" ^
+    "Get-ChildItem -LiteralPath $src -Recurse -File |" ^
+    "  Where-Object { $_.FullName -notmatch '\\__pycache__\\' -and $_.Extension -ne '.pyc' } |" ^
+    "  ForEach-Object {" ^
+    "    $rel = $_.FullName.Substring($src.Length).TrimStart('\');" ^
+    "    $dest = Join-Path $dst $rel;" ^
+    "    $destDir = Split-Path -Parent $dest;" ^
+    "    if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null };" ^
+    "    Copy-Item -LiteralPath $_.FullName -Destination $dest -Force" ^
+    "  };" ^
+    "$probe = Join-Path $dst 'backend\application\ai_timing\worker\client.py';" ^
+    "if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) { throw 'SUG worker source missing after copy.' };" ^
+    "Write-Host '  SUG source tree copied (worker bootstrap ready).'"
+if errorlevel 1 (
+    echo.
+    echo Failed to copy the SUG source tree.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo Validating Windows package contents...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$targetDir = Resolve-Path '%APP_DIST%';" ^
@@ -307,6 +339,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\config\dictionary.json'," ^
     "  'strange_uta_game\config\cmudict-0.7b'," ^
     "  'strange_uta_game\config\kanji_readings.json'," ^
+    "  'strange_uta_game\backend\application\ai_timing\worker\client.py'," ^
     "  'pyphen\dictionaries\hyph_en_US.dic'," ^
     "  'strange_uta_game\resource\icon.ico'," ^
     "  'strange_uta_game\resource\sounds\press.wav'," ^
