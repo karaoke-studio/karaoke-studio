@@ -679,3 +679,17 @@ class AiTimingHost(Protocol):
 1. KS 打包冒烟：嵌入 AI 打轴执行链路（安装 / 修复 → 分离 → 对齐）。
 2. 发版 4.2.6（流程 B，攒批 bump submodule + CHANGELOG + README）；期间 release.yml 已
    暂改为草稿发布（KS 仓库），本地冒烟通过后手动发布并移除 `draft: true`。
+
+### 15.9 英文对齐改 CMU 音素口径（4.2.6 后开发中）
+
+- 背景：e2k 口径（词→片假名→按拍罗马字）把英文词的词内边界交给词组比例切分，
+  实测不如 FA-Kara 的音素标注准。
+- 改动：`transcription.py` 新增 ARPAbet→罗马字映射表（FA-Kara `phoneme_map`，
+  MIT，未内嵌其代码）与 `cmudict-0.7b`（随包分发）解析——音素按最大节首辅音
+  原则切音节、逐音素映射成罗马字、合并到 pyphen 拼写音节数（FA-Kara 同款
+  `split_into_syllables_en`/`align_syllables_en` 语义）；不引入新库。
+- 对齐行为：音素口径命中的英文词逐音节**独立对齐**（不进 word_groups，词内
+  边界由 CTC 直接给出）；CMU 未收录回退原 e2k→pyphen 链（保持词组比例口径）。
+  数字读音同样优先音素口径（`3`→`sri`，原 `surii`）。
+- 实测口径：take→`teik`（单音节）、abandoned→`a/bandand`（aban-doned 两拼写
+  音节）、love→`rav`、OOV（kirakira 等）→ e2k 回退。
