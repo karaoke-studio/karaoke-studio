@@ -87,10 +87,16 @@ def _gpu_test_application_fonts():
     # frame that no longer matches what DirectWrite drew.
     for family in _GPU_TEST_FONT_FAMILIES:
         assert QFontInfo(QFont(family)).family() == family, family
+    # EMBEDDING §8：SUG 的进程级字体缓存也必须看到应用字体的装卸，与 N3
+    # 缓存一并失效，否则后续用例里 SUG 侧读到过期字体族快照。
+    from strange_uta_game.frontend import font_cache as sug_font_cache
+
     invalidate_n3_font_caches()
+    sug_font_cache.invalidate()
     yield
     QFontDatabase.removeAllApplicationFonts()
     invalidate_n3_font_caches()
+    sug_font_cache.invalidate()
 
 
 def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():
