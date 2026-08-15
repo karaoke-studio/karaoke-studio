@@ -136,10 +136,6 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # 暂时改为草稿（AI 打轴打包链路冒烟期）：与 SUG 发版流程对齐，
-          # 本地手动冒烟通过后在 Release 页手动发布。草稿对自动更新器
-          # 不可见，不会提前推送给用户；确认稳定后移除 draft 恢复直发。
-          draft: true
           body_path: release-notes.md
           files: |
             release-assets/windows/KaraokeStudio-windows.zip
