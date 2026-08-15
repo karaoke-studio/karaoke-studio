@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import sys
 
 import pytest
@@ -326,6 +327,83 @@ def test_normalize_scheme_keeps_saved_names_when_catalog_is_not_authoritative():
 
     assert normalized == scheme
     assert changed is False
+
+
+def test_build_catalog_merges_duplicate_family_records():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "Dup Font"), ("ja-jp", "重複フォント")),
+                styles=(0,),
+            ),
+            _FamilyRecord(
+                names=(
+                    ("en-us", "Dup Font"),
+                    ("ja-jp", "重複フォント"),
+                    ("zh-cn", "重复字体"),
+                ),
+                styles=(0,),
+            ),
+        ],
+        compare=_compare,
+    )
+
+    assert catalog.families == ("重複フォント",)
+    assert catalog.canonicalize("重复字体") == "重複フォント"
+    assert catalog.aliases_for("重複フォント") == (
+        "重複フォント",
+        "Dup Font",
+        "重复字体",
+    )
+
+
+def test_build_catalog_appends_families_only_qt_can_see():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "Meiryo"), ("ja-jp", "メイリオ")),
+                styles=(0,),
+            )
+        ],
+        compare=_compare,
+        qt_families=("Meiryo", "Late Installed Font"),
+    )
+
+    assert "Late Installed Font" in catalog.families
+    assert catalog.canonicalize("late installed font") == "Late Installed Font"
+    assert catalog.qt_family("Late Installed Font") == "Late Installed Font"
+    assert catalog.aliases_for("Late Installed Font") == ("Late Installed Font",)
+
+
+def test_empty_directwrite_catalog_falls_back_to_qt(monkeypatch):
+    monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_directwrite_records", lambda: [])
+    monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Arial"])
+    font_catalog._get_n3_font_catalog.cache_clear()
+    try:
+        catalog = font_catalog._get_n3_font_catalog(123)
+    finally:
+        font_catalog._get_n3_font_catalog.cache_clear()
+
+    assert catalog.families == ("Arial",)
+    assert catalog.authoritative is False
+
+
+def test_unexpected_directwrite_error_falls_back_to_qt(monkeypatch):
+    def broken_enum():
+        raise ctypes.ArgumentError("vtable mismatch")
+
+    monkeypatch.setattr(font_catalog.sys, "platform", "win32")
+    monkeypatch.setattr(font_catalog, "_directwrite_records", broken_enum)
+    monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Arial"])
+    font_catalog._get_n3_font_catalog.cache_clear()
+    try:
+        catalog = font_catalog._get_n3_font_catalog(123)
+    finally:
+        font_catalog._get_n3_font_catalog.cache_clear()
+
+    assert catalog.families == ("Arial",)
+    assert catalog.authoritative is False
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="DirectWrite is Windows-only")

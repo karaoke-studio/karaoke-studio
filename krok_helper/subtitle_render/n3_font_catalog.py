@@ -89,7 +89,7 @@ def _build_catalog(
     compare: Callable[[str, str], int],
     qt_families: Sequence[str] = (),
 ) -> N3FontCatalog:
-    entries: list[_CatalogEntry] = []
+    merged: dict[str, _CatalogEntry] = {}
     for record in records:
         if _DWRITE_FONT_STYLE_NORMAL not in record.styles or not record.names:
             continue
@@ -100,13 +100,40 @@ def _build_catalog(
         canonical = japanese_name or record.names[0][1]
         if not canonical:
             continue
-        entries.append(
-            _CatalogEntry(
+        aliases = tuple(name for _locale, name in record.names if name)
+        key = canonical.casefold()
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = _CatalogEntry(
                 canonical_name=canonical,
                 has_japanese_name=japanese_name is not None,
-                aliases=tuple(name for _locale, name in record.names if name),
+                aliases=aliases,
             )
-        )
+        else:
+            # Parallel installs (per-user + per-machine) expose the same family
+            # twice; merge the alias sets instead of listing the family twice.
+            merged[key] = _CatalogEntry(
+                canonical_name=existing.canonical_name,
+                has_japanese_name=existing.has_japanese_name,
+                aliases=tuple(dict.fromkeys((*existing.aliases, *aliases))),
+            )
+    entries: list[_CatalogEntry] = list(merged.values())
+
+    # Qt enumerates fonts the DirectWrite system collection can miss (fonts
+    # installed after app start, per-user installs).  Follow the SUG font
+    # picker's contract: every family QFontDatabase can resolve must stay
+    # selectable in the font combo.
+    covered = {
+        alias.casefold()
+        for entry in entries
+        for alias in (entry.canonical_name, *entry.aliases)
+    }
+    for qt_name in qt_families:
+        key = str(qt_name or "").casefold()
+        if not key or key in covered:
+            continue
+        entries.append(_CatalogEntry(str(qt_name), False, (str(qt_name),)))
+        covered.add(key)
 
     def compare_entries(left: _CatalogEntry, right: _CatalogEntry) -> int:
         if left.has_japanese_name != right.has_japanese_name:
@@ -317,6 +344,8 @@ def _compare_ja_jp(left: str, right: str) -> int:
 
 def _qt_fallback_catalog(*, qt_available: bool = True) -> N3FontCatalog:
     families = tuple(QFontDatabase.families()) if qt_available else ()
+    if qt_available and not families:
+        log.warning("Qt 字体目录为空：未检测到任何系统字体")
     aliases = {name.casefold(): name for name in families}
     return N3FontCatalog(
         families=families,
@@ -342,12 +371,20 @@ def _get_n3_font_catalog(qt_application_key: int) -> N3FontCatalog:
     qt_available = qt_application_key != 0
     if sys.platform == "win32":
         try:
-            return _build_catalog(
-                _directwrite_records(),
-                compare=_compare_ja_jp,
-                qt_families=(QFontDatabase.families() if qt_available else ()),
-            )
-        except (OSError, RuntimeError, TypeError, ValueError):
+            records = _directwrite_records()
+            if records:
+                return _build_catalog(
+                    records,
+                    compare=_compare_ja_jp,
+                    qt_families=(QFontDatabase.families() if qt_available else ()),
+                )
+            # A damaged/disabled Windows font cache service can yield an empty
+            # DirectWrite collection without any HRESULT failure.  Treat that
+            # as "no catalog" instead of freezing an authoritative empty list.
+            log.warning("DirectWrite 字体目录为空，已回退 Qt 字体目录")
+        except Exception:
+            # Hand-written COM calls can raise anything on locked-down or
+            # damaged font stacks; the Qt (GDI) catalog is the safety net.
             log.exception("DirectWrite 字体目录枚举失败，已回退 Qt 字体目录")
     return _qt_fallback_catalog(qt_available=qt_available)
 
