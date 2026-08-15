@@ -1,8 +1,9 @@
 # AI 自动打轴——需求与实施计划
 
-> 状态：需求已对齐，尚未开始实现
+> 状态：P0 主路径已实现；SUG standalone 打包链路（安装→分离→对齐）已跑通，
+> KS 打包嵌入链路待冒烟（详见 §15 实施进度）
 >
-> 校准日期：2026-08-13
+> 校准日期：2026-08-15
 >
 > 适用仓库：Karaoke Studio 与 StrangeUtaGame（SUG）submodule
 
@@ -600,3 +601,81 @@ class AiTimingHost(Protocol):
 实施从阶段 A 开始。第一批代码只处理 PronunciationPlan、项目现有标注提取、缺口补注音和
 反向映射，不先做 UI 或模型下载。只有领域契约通过混合语言与标注优先测试后，才进入 worker、
 缓存和弹窗阶段。
+
+## 15. 实施进度（2026-08-15 校准）
+
+阶段 A–H 全部落地：转写（拼音表音 / e2k 英文 / 数字读音）、word_groups 比例切分、
+尾音能量判据、MMS_FA 层进度、方案 B 共享 Runtime、发行包安装路线与 embedded 宿主接入
+均已合入 SUG `main`。本轮为**打包（frozen）链路的集中修复**，SUG standalone 已从安装到
+对齐全链路跑通；以下按问题记录，提交号均为 SUG 仓库（另注 KS 仓库者除外）。
+
+### 15.1 打包版「安装 / 修复」报缺少 python.exe（58cde67）
+
+- 根因：`install_from_release` 按「zip 条目相对 runtime 根、无前缀」校验，而
+  karaoke-studio-runtime 真实发行包（pymss-runtime-v2.0.18-r1）的 zip 条目与清单
+  `files[].path` **均带 `runtime/` 前缀**（与 KS `separation/runtime.py` 的 `_safe_member`
+  契约一致，已对真实资产验证：6569 个条目全部 `runtime/…`）。
+- 修复：校验 `payload/runtime/python.exe`、只搬 `payload/runtime` 子目录（顺带消灭
+  `target/runtime/runtime` 双重前缀隐患，带杀软锁重试）；快路径判定从完整 probe 改为
+  「torch 可导入」，半装环境免重下 3GB wheel；成功后清理 staging（约 3.2GB）；cu128
+  路线拉清单前做峰值磁盘预检（约 9.5GB，完成后约 6GB）。
+
+### 15.2 安装后「分离环境」行仍显示未安装、重复修复无效（f4ede90）
+
+- 根因：`StandaloneVocalSeparator` 在弹窗构造时固化 `settings.runtime_python`（当时为
+  空），prober 闭包始终探测空路径；重开程序才恢复。
+- 修复：分离器改惰性读取解释器路径（str 或零参 callable），宿主/standalone 接线传活设置
+  引用；embedded 回落分离同样受益（能拿到构造后才注入的托管 runtime）。
+
+### 15.3 pip 警告漏进弹窗底部状态行 + 安装无日志（f4ede90）
+
+- pip 的 Scripts 目录 PATH 警告（"Consider adding this directory to PATH…"）被逐行转发
+  函数写进状态行：所有 pip 调用加 `--no-warn-script-location`。
+- 新增安装日志 `ai_runtime\install.log`：会话头（时间/pid/frozen 标记）、限噪进度行
+  （消息变化即记，否则最多 2 秒一条）、pip 完整逐行输出、失败原因（`log_line`）；
+  安装失败弹窗附日志路径，成功提示同；shared 模式日志落在解释器上级目录；超 5MB 轮转。
+
+### 15.4 对齐 worker 启动即崩：python313.dll conflicts（a42f95f）
+
+- 根因：runpy 引导把 frozen 包根 `_internal` 用 `sys.path.insert(0, …)` 插到最前，
+  PyInstaller 为宿主 Python（SUG 打包用 3.13）收集的 stdlib 扩展（`unicodedata.pyd` 等）
+  遮蔽了嵌入式运行环境（3.12）自带版本 → `import unicodedata` 触发
+  `ImportError: Module use of python313.dll conflicts with this version of Python`。
+- 修复：包根改 `sys.path.append`（运行环境 stdlib 优先，包根兜底）；外部解释器环境不再
+  设 `PYTHONPATH=_internal`（对非嵌入式 Python 同样会遮蔽 stdlib）。
+- 已在真实机器复现 insert 崩溃 / 验证 append 通过（torch 2.7.1+cu128 CUDA 可用）。
+- KS 现状：KS 用 Python 3.12 构建、托管 runtime 同为 3.12，天然不触发；append 修复使
+  未来版本错位也免疫（随 submodule bump 生效）。
+
+### 15.5 KS 打包嵌入 worker 缺源码（KS 仓库 1bb216b）
+
+- 根因：KS 用 `--collect-submodules` 把 SUG 编进 PYZ（仅 frozen 应用自身可用），数据
+  add-data 只落 `config/resource/bass`，`_internal\strange_uta_game` 是无 `__init__.py`
+  的命名空间包 → runpy 引导 `ModuleNotFoundError: strange_uta_game.backend`（真实打包
+  产物上复现；此前 KS 冒烟为源码运行，未暴露）。
+- 修复：`build_windows.bat` / `build_macos.command` 在打包末尾把 submodule 源码树复制到
+  `_internal\strange_uta_game` 同相对路径（剔除 `__pycache__`/`.pyc`），包校验清单加
+  worker `client.py` 探针；frozen 应用自身 import 仍走 PYZ（FrozenImporter 优先）。
+  已用提取出的真实复制步骤 + 干净解释器环境验证 worker 引导。
+
+### 15.6 其他打包体验修复
+
+- 打包版未装环境时运行环境行显示「未安装（点击下方「安装 / 修复」）」而非误导性的
+  「当前解释器」（782ba6e）；frozen 磁盘预估按发行包口径（CUDA 完成后约 6GB）。
+- 防黑框（`hidden_subprocess_kwargs`）与 frozen 空解释器守卫（防幽灵进程）此前已合入。
+
+### 15.7 GPU 支持口径
+
+- NVIDIA：检测到独显且驱动满足 cu128 下限时装 CUDA 版（对齐环境行显示 GPU/CUDA/torch
+  版本）；驱动过旧自动落 CPU 版。
+- AMD / Intel / 无独显：一律 CPU 版发行包（底座 153MB + torch cpu wheel 约 216MB，落盘
+  约 2GB），对齐与分离全部 CPU 执行——功能完整、无报错，仅推理速度显著慢于 CUDA；
+  设备下拉手动选 CUDA 会回退 CPU 并提示。torch 官方无 Windows AMD 加速轮子
+  （ROCm 仅 Linux），DirectML 不在支持范围。
+- Apple 芯片：源码运行可走 MPS；打包版 runtime 安装暂不支持 macOS（明确报错提示）。
+
+### 15.8 当前待办
+
+1. KS 打包冒烟：嵌入 AI 打轴执行链路（安装 / 修复 → 分离 → 对齐）。
+2. 发版 4.2.6（流程 B，攒批 bump submodule + CHANGELOG + README）；期间 release.yml 已
+   暂改为草稿发布（KS 仓库），本地冒烟通过后手动发布并移除 `draft: true`。
