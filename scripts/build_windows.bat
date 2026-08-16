@@ -43,6 +43,8 @@ call :ensure_pkg jaconv jaconv || exit /b 1
 call :ensure_pkg pyphen pyphen || exit /b 1
 call :ensure_pkg sudachipy sudachipy || exit /b 1
 call :ensure_pkg sudachidict_small sudachidict_small || exit /b 1
+call :ensure_pkg jieba jieba || exit /b 1
+call :ensure_pkg pypinyin pypinyin || exit /b 1
 
 echo Checking bundled SUG source path...
 %PYTHON_BIN% -c "import sys; from pathlib import Path; src=Path(r'%SUG_SRC%').resolve(); sys.path.insert(0, str(src)); import strange_uta_game; actual=Path(strange_uta_game.__file__).resolve(); expected=src/'strange_uta_game'/'__init__.py'; print('  strange_uta_game:', actual); raise SystemExit(0 if actual == expected else f'Expected {expected}, got {actual}')" || exit /b 1
@@ -121,6 +123,8 @@ echo Building Windows package...
     --collect-all sudachipy ^
     --collect-data sudachidict_small ^
     --collect-all pyphen ^
+    --collect-all jieba ^
+    --collect-all pypinyin ^
     --collect-binaries soundfile ^
     --collect-submodules strange_uta_game ^
     --hidden-import sounddevice ^
@@ -341,6 +345,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\config\kanji_readings.json'," ^
     "  'strange_uta_game\backend\application\ai_timing\worker\client.py'," ^
     "  'pyphen\dictionaries\hyph_en_US.dic'," ^
+    "  'jieba\dict.txt'," ^
     "  'strange_uta_game\resource\icon.ico'," ^
     "  'strange_uta_game\resource\sounds\press.wav'," ^
     "  'strange_uta_game\bass\x64\bass.dll'," ^

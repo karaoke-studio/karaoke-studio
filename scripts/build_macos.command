@@ -148,6 +148,8 @@ ensure_pkg jaconv jaconv
 ensure_pkg pyphen pyphen
 ensure_pkg sudachipy sudachipy
 ensure_pkg sudachidict_small sudachidict_small
+ensure_pkg jieba jieba
+ensure_pkg pypinyin pypinyin
 
 echo "Checking bundled SUG source path..."
 "$PYTHON_BIN" - <<PY
@@ -208,6 +210,8 @@ PYINSTALLER_ARGS=(
   --collect-all pykakasi
   --collect-all sudachipy
   --collect-all pyphen
+  --collect-all jieba
+  --collect-all pypinyin
   --collect-data sudachidict_small
   --collect-binaries soundfile
   --collect-submodules strange_uta_game
@@ -319,6 +323,7 @@ REQUIRED_FILES=(
   "krok_helper/assets/logo/logo.jpg"
   "krok_helper/assets/logo/start.jpg"
   "krok_helper/assets/platforms/youtube.svg"
+  "jieba/dict.txt"
   "strange_uta_game/config/config.json"
   "strange_uta_game/config/dictionary.json"
   "strange_uta_game/config/cmudict-0.7b"
