@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -239,6 +240,52 @@ def _safe_relative_path(value: str) -> str:
     if not text or path.is_absolute() or ".." in path.parts or path.parts[0] != "runtime":
         raise ValueError(f"PyMSS Runtime 清单包含不安全路径：{value!r}")
     return path.as_posix()
+
+
+def portable_base_dir() -> Path:
+    """托管 Runtime 的便携基准目录：frozen = exe 所在目录。
+
+    与向导的默认安装位置（``default_install_root``）同口径——基准目录
+    内的安装以相对路径持久化，整目录搬移 / 多副本共用同一份用户级
+    设置时指针始终跟随当前 exe 解析。
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd()
+
+
+def resolve_install_dir(raw: str) -> str:
+    """读取 ``install_dir`` 设置时的规范化：相对路径按当前基准目录展开。
+
+    旧版存的绝对路径原样通过（过渡兼容）；只有本版本写入的相对值
+    才会命中展开分支。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(portable_base_dir() / path)
+
+
+def relativize_install_dir(path: str) -> str:
+    """写入 ``install_dir`` 设置时的规范化：frozen 且位于基准目录内时
+    收为相对路径，其余（自定义位置 / 源码运行）原样保留绝对路径。
+
+    实测问题：用户级设置被多副本共用——在下载目录解压试运行并安装
+    后，主安装重启即「丢失」分离环境（记录的是旧副本的绝对路径）。
+    """
+    text = str(path or "").strip()
+    if not text or not getattr(sys, "frozen", False):
+        return text
+    try:
+        rel = Path(text).expanduser().resolve().relative_to(
+            portable_base_dir().resolve()
+        )
+        return str(rel)
+    except (ValueError, OSError):
+        return text
 
 
 def sha256_file(path: Path, *, cancelled=None) -> str:

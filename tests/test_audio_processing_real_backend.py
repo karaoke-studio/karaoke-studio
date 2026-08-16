@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import threading
 import time
 import zipfile
@@ -303,6 +304,108 @@ def test_restore_detects_deleted_and_damaged_managed_runtime(tmp_path) -> None:
         assert damaged.snapshot().state is ServiceState.INSTALL_DAMAGED
     finally:
         damaged.shutdown()
+
+
+def _frozen_at(monkeypatch, exe: Path) -> Path:
+    """把进程伪装成从 exe 所在目录运行的打包版（便携基准目录）。"""
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_bytes(b"fake-exe")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(exe))
+    return exe.parent
+
+
+def test_install_dir_helpers_roundtrip(tmp_path, monkeypatch) -> None:
+    from krok_helper.audio_processing.separation.runtime import (
+        portable_base_dir,
+        relativize_install_dir,
+        resolve_install_dir,
+    )
+
+    base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    assert str(portable_base_dir()) == str(base)
+    # 基准目录内收为相对，读取时按当前基准展开
+    assert relativize_install_dir(str(base / "pymss")) == "pymss"
+    assert resolve_install_dir("pymss") == str(base / "pymss")
+    # 基准目录外（自定义位置）保持绝对路径原样
+    custom = str(tmp_path / "elsewhere" / "pymss")
+    assert relativize_install_dir(custom) == custom
+    assert resolve_install_dir(custom) == custom
+    assert resolve_install_dir("") == ""
+
+
+def test_restore_heals_to_exec_relative_pymss(tmp_path, monkeypatch) -> None:
+    """旧版记录被其它副本写坏（指向已删除目录）时，自动认领当前
+    exe 目录旁的 pymss 安装并按相对路径落盘（无感过渡）。"""
+    base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    _installed_runtime(base / "pymss")
+    settings = {"install_dir": str(tmp_path / "downloads-copy" / "pymss")}
+    saved: list[dict] = []
+
+    def _save() -> None:
+        saved.append(dict(settings))
+
+    backend = RealSeparationBackend(settings, _save)
+    try:
+        snap = backend.snapshot()
+        assert snap.state is ServiceState.INSTALLED_STOPPED
+        assert snap.install_dir == str(base / "pymss")
+        assert settings["install_dir"] == "pymss"  # 新口径持久化
+        assert saved, "自愈后应触发一次设置落盘"
+    finally:
+        backend.shutdown()
+
+
+def test_restore_no_heal_when_candidate_invalid(tmp_path, monkeypatch) -> None:
+    """exe 旁没有完整可用的安装时不认领，维持原校验结果。"""
+    base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    (base / "pymss" / "runtime").mkdir(parents=True)  # 空壳
+    recorded = str(tmp_path / "downloads-copy" / "pymss")
+    settings = {"install_dir": recorded}
+
+    backend = RealSeparationBackend(settings)
+    try:
+        snap = backend.snapshot()
+        assert snap.state is ServiceState.INSTALL_MISSING
+        assert snap.install_dir == recorded
+        assert settings["install_dir"] == recorded  # 不改写
+    finally:
+        backend.shutdown()
+
+
+def test_restore_migrates_legacy_absolute_to_relative(tmp_path, monkeypatch) -> None:
+    """旧版绝对路径仍有效且位于基准目录内：校验通过后顺势改为相对存储，
+    下次整目录搬移/换副本即自动跟随。"""
+    base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    absolute = base / "pymss"
+    _installed_runtime(absolute)
+    settings = {"install_dir": str(absolute)}
+
+    backend = RealSeparationBackend(settings)
+    try:
+        snap = backend.snapshot()
+        assert snap.state is ServiceState.INSTALLED_STOPPED
+        assert snap.install_dir == str(absolute)
+        assert settings["install_dir"] == "pymss"
+    finally:
+        backend.shutdown()
+
+
+def test_restore_keeps_valid_custom_absolute_location(tmp_path, monkeypatch) -> None:
+    """自定义安装位置（基准目录外）不受相对化/自愈影响。"""
+    _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    custom = tmp_path / "elsewhere" / "pymss"
+    _installed_runtime(custom)
+    settings = {"install_dir": str(custom)}
+
+    backend = RealSeparationBackend(settings)
+    try:
+        snap = backend.snapshot()
+        assert snap.state is ServiceState.INSTALLED_STOPPED
+        assert snap.install_dir == str(custom)
+        assert settings["install_dir"] == str(custom)
+    finally:
+        backend.shutdown()
 
 
 def test_managed_old_version_enters_upgrade_state_without_losing_location(tmp_path) -> None:

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -60,7 +61,10 @@ from .runtime import (
     ManagedRuntimeInstaller,
     RuntimeStatus,
     fetch_runtime_package,
+    portable_base_dir,
     preflight_install_destination,
+    relativize_install_dir,
+    resolve_install_dir,
     validate_runtime,
 )
 from .pymss_service import BridgeServiceProcess
@@ -252,12 +256,16 @@ class RealSeparationBackend(SeparationBackend):
         self._set_state(ServiceState.ERROR, error=message)
 
     def _restore_configuration(self) -> None:
-        install_dir = str(self._settings.get("install_dir", "")).strip()
+        install_dir = resolve_install_dir(
+            str(self._settings.get("install_dir", ""))
+        )
         server_url = str(self._settings.get("external_server_url", "")).strip()
         executable = str(self._settings.get("external_executable", "")).strip()
         if install_dir:
-            self._snap.install_dir = install_dir
-            self._apply_runtime_validation(validate_runtime(install_dir))
+            if not self._heal_stale_install_dir(install_dir):
+                self._snap.install_dir = install_dir
+                self._apply_runtime_validation(validate_runtime(install_dir))
+                self._normalize_install_dir_setting(install_dir)
         elif server_url:
             self._snap.state = ServiceState.EXTERNAL_OFFLINE
             self._snap.pymss_version = str(self._settings.get("expected_pymss_version", ""))
@@ -276,6 +284,49 @@ class RealSeparationBackend(SeparationBackend):
             else:
                 self._snap.state = ServiceState.INSTALLED_STOPPED
         self._rebuild_dependencies()
+
+    def _heal_stale_install_dir(self, recorded: str) -> bool:
+        """记录的安装目录已失效时，认领基准目录旁的 pymss 安装。
+
+        旧版以绝对路径持久化 install_dir，用户级设置被多副本共用
+        （如解压到下载目录试运行并安装）后，主安装重启即「丢失」分离
+        环境。记录路径 MISSING/DAMAGED 且 <基准目录>/pymss 完整可用
+        时自动重指，并按新口径（相对路径）落盘——旧版用户无感过渡。
+        返回 True 表示已完成认领（调用方无需再走原路径校验）。
+        """
+        if not getattr(sys, "frozen", False):
+            # 源码运行不做认领：cwd 基准随启动目录漂移，测试与开发
+            # 环境不可复现；打包用户才是本问题的影响面
+            return False
+        try:
+            validation = validate_runtime(recorded)
+        except Exception:
+            return False
+        if validation.status not in (RuntimeStatus.MISSING, RuntimeStatus.DAMAGED):
+            return False
+        candidate = portable_base_dir() / "pymss"
+        if not candidate.exists():
+            return False
+        try:
+            healed = validate_runtime(str(candidate))
+        except Exception:
+            return False
+        if healed.status is not RuntimeStatus.READY:
+            return False
+        self._snap.install_dir = str(candidate)
+        self._apply_runtime_validation(healed)
+        self._settings["install_dir"] = relativize_install_dir(str(candidate))
+        self._persist()
+        self._log(f"检测到已保存的安装位置失效，已改用 {candidate}。")
+        return True
+
+    def _normalize_install_dir_setting(self, install_dir: str) -> None:
+        """旧版绝对路径的规范化迁移：校验通过的安装在基准目录内时，
+        顺势改为相对路径持久化，下次搬移/换副本即自动跟随。"""
+        relativized = relativize_install_dir(install_dir)
+        if relativized != str(self._settings.get("install_dir", "")).strip():
+            self._settings["install_dir"] = relativized
+            self._persist()
 
     def _apply_runtime_validation(self, result) -> None:
         mapping = {
@@ -582,7 +633,7 @@ class RealSeparationBackend(SeparationBackend):
             with self._lock:
                 self._snap.download_done = self._snap.download_total
             self._set_state(ServiceState.RUNTIME_VERIFYING)
-            self._settings["install_dir"] = install_dir
+            self._settings["install_dir"] = relativize_install_dir(install_dir)
             self._settings["expected_pymss_version"] = PYMSS_VERSION
             self._settings.pop("external_server_url", None)
             self._settings.pop("external_executable", None)
@@ -595,7 +646,9 @@ class RealSeparationBackend(SeparationBackend):
 
         def failure(exc: Exception) -> None:
             if self._install_cancel.is_set():
-                persisted = str(self._settings.get("install_dir", "")).strip()
+                persisted = resolve_install_dir(
+                    str(self._settings.get("install_dir", ""))
+                )
                 if persisted:
                     with self._lock:
                         self._apply_runtime_validation(
@@ -641,7 +694,9 @@ class RealSeparationBackend(SeparationBackend):
     def cleanup_incomplete(self) -> None:
         self._install_cancel.set()
         self._scan_cancel.set()
-        persisted = str(self._settings.get("install_dir", "")).strip()
+        persisted = resolve_install_dir(
+            str(self._settings.get("install_dir", ""))
+        )
         if persisted:
             self._snap.install_dir = persisted
             with self._lock:
@@ -662,7 +717,9 @@ class RealSeparationBackend(SeparationBackend):
 
     def relocate_install(self, path: str) -> None:
         self.confirm_install_location(path)
-        self._settings["install_dir"] = self._snap.install_dir
+        self._settings["install_dir"] = relativize_install_dir(
+            self._snap.install_dir
+        )
         result = validate_runtime(self._snap.install_dir)
         with self._lock:
             self._apply_runtime_validation(result)
