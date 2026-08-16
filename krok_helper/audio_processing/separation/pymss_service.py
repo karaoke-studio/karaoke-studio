@@ -292,7 +292,14 @@ class PyMSSWorker:
         log_path = work / "pymss-bridge.log"
         log_stream = log_path.open("a", encoding="utf-8", errors="replace")
 
-        env = dict(os.environ)
+        # 桥接进程里的模型下载（pymss → modelscope / huggingface）只认环境变量代理，
+        # 必须经工作台代理设置生成环境：有代理时注入，off 时显式清掉残留变量。
+        try:
+            from krok_helper.network import subprocess_env_for_current_settings
+
+            env = subprocess_env_for_current_settings()
+        except Exception:
+            env = dict(os.environ)
         if model_dir:
             env["PYMSS_MODEL_DIR"] = str(model_dir)
         if user_models:
@@ -477,7 +484,13 @@ class PyMSSBridgeEngine:
         url = str(config.get("remote_url") or "")
         if not url:
             raise RuntimeError(f"模型 {model} 的配置无下载地址。")
-        with urllib.request.urlopen(url, timeout=30) as response:
+        try:
+            from krok_helper.network import build_urllib_opener_for_current_settings
+
+            opener = build_urllib_opener_for_current_settings()
+        except Exception:
+            opener = urllib.request.build_opener()
+        with opener.open(url, timeout=30) as response:
             return response.read().decode("utf-8", errors="replace")
 
     def download_model(self, model: str, *, source: str = "modelscope", on_progress=None, **_kwargs) -> dict:

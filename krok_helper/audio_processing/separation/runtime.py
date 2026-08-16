@@ -33,6 +33,21 @@ _MANIFEST_SCHEMA = 1
 _CHUNK_SIZE = 1024 * 1024
 
 
+def _default_download_session() -> requests.Session:
+    """未显式注入 session 时的默认会话：PyMSS 底座与 torch wheel 属于下载步骤，
+    必须遵循工作台的代理设置（system / auto / manual / off），不能吃进程环境里
+    恰好残留的代理变量。设置读取失败时退回普通会话，不阻断安装流程。"""
+    try:
+        from krok_helper.network import requests_session_for_current_settings
+
+        session, proxies = requests_session_for_current_settings()
+        if proxies:
+            session.proxies.update(proxies)
+        return session
+    except Exception:
+        return requests.Session()
+
+
 class RuntimeStatus(str, Enum):
     READY = "ready"
     MISSING = "missing"
@@ -244,7 +259,7 @@ def fetch_runtime_package(
     session: requests.Session | None = None,
     timeout: tuple[float, float] = (10.0, 30.0),
 ) -> RuntimePackage:
-    client = session or requests.Session()
+    client = session or _default_download_session()
     response = client.get(manifest_url, timeout=timeout)
     response.raise_for_status()
     package = RuntimePackage.from_payload(response.json())
@@ -437,7 +452,7 @@ class ManagedRuntimeInstaller:
     """Install a versioned archive without modifying models or user registries."""
 
     def __init__(self, session: requests.Session | None = None) -> None:
-        self._session = session or requests.Session()
+        self._session = session or _default_download_session()
 
     def install(
         self,

@@ -61,6 +61,128 @@ class TestBridgeScript:
         assert write_bridge(work).read_text(encoding="utf-8") == first
 
 
+class _ReadyFakeProcess:
+    """过 ``_await_ready`` 的假进程：先活着报 ready，之后 poll 报退出便于 stop。"""
+
+    def __init__(self) -> None:
+        import io
+
+        self.stdin = io.StringIO()
+        self.stdout = io.StringIO('{"event": "ready"}\n')
+        self._polls = 0
+
+    def poll(self):
+        self._polls += 1
+        return None if self._polls == 1 else 0
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class TestWorkerProxyEnv:
+    """桥接进程承载模型下载（modelscope / huggingface），环境必须由工作台代理设置生成。"""
+
+    def _start_worker(self, tmp_path, popen):
+        python = tmp_path / "python.exe"
+        python.write_bytes(b"")
+        worker = PyMSSWorker.start(
+            str(python),
+            tmp_path / "work",
+            model_dir=str(tmp_path / "models"),
+            popen_factory=popen,
+            ready_timeout=2.0,
+        )
+        worker.stop(force=True)
+        return worker
+
+    def test_env_carries_workbench_proxy(self, monkeypatch, tmp_path) -> None:
+        from krok_helper import network
+        from krok_helper.settings import AppSettings
+
+        monkeypatch.setattr(network, "read_system_proxy", lambda: None)
+        app = AppSettings(updater={"proxy": {"mode": "manual", "manual_url": "127.0.0.1:7890"}})
+        monkeypatch.setattr(network, "load_current_app_settings", lambda: app)
+
+        captured = {}
+
+        def fake_popen(args, **kwargs):
+            captured.update(kwargs)
+            return _ReadyFakeProcess()
+
+        self._start_worker(tmp_path, fake_popen)
+
+        env = captured["env"]
+        assert env["HTTP_PROXY"] == "http://127.0.0.1:7890"
+        assert env["https_proxy"] == "http://127.0.0.1:7890"
+        assert env["PYMSS_MODEL_DIR"] == str(tmp_path / "models")
+
+    def test_env_strips_proxy_keys_in_off_mode(self, monkeypatch, tmp_path) -> None:
+        from krok_helper import network
+        from krok_helper.settings import AppSettings
+
+        monkeypatch.setenv("HTTP_PROXY", "http://leak:1")
+        monkeypatch.setenv("all_proxy", "http://leak:1")
+        app = AppSettings(updater={"proxy": {"mode": "off", "manual_url": ""}})
+        monkeypatch.setattr(network, "load_current_app_settings", lambda: app)
+
+        captured = {}
+
+        def fake_popen(args, **kwargs):
+            captured.update(kwargs)
+            return _ReadyFakeProcess()
+
+        self._start_worker(tmp_path, fake_popen)
+
+        env = captured["env"]
+        assert all(key not in env for key in network.PROXY_ENV_KEYS)
+
+
+class TestRemoteConfigFetch:
+    def test_remote_config_fetch_uses_workbench_proxy_opener(self, monkeypatch) -> None:
+        from krok_helper import network
+
+        opened = []
+
+        class _Response:
+            def read(self):
+                return b"model: ok"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class _Opener:
+            def open(self, request, timeout=None):
+                url = request.full_url if hasattr(request, "full_url") else request
+                opened.append((url, timeout))
+                return _Response()
+
+        monkeypatch.setattr(
+            network, "build_urllib_opener_for_current_settings", lambda: _Opener()
+        )
+
+        class _Worker:
+            def request(self, payload, on_progress=None):
+                return {
+                    "pymss": {
+                        "files": [
+                            {
+                                "role": "config",
+                                "relpath": "model/config.yaml",
+                                "exists": False,
+                                "remote_url": "https://example.invalid/config.yaml",
+                            }
+                        ]
+                    }
+                }
+
+        engine = PyMSSBridgeEngine(_Worker())
+        assert engine.model_config_text("model-x") == "model: ok"
+        assert opened and opened[0][0] == "https://example.invalid/config.yaml"
+
+
 class TestEngineIsADropInForTheHttpClient:
     """后端只用到 client 的 8 个方法；桥接引擎同名同形才能少改调用点。"""
 

@@ -132,6 +132,74 @@ def test_runtime_package_rejects_paths_outside_runtime() -> None:
         )
 
 
+def _fake_proxied_settings(monkeypatch):
+    from krok_helper import network
+    from krok_helper.settings import AppSettings
+
+    monkeypatch.setattr(network, "read_system_proxy", lambda: None)
+    app = AppSettings(updater={"proxy": {"mode": "manual", "manual_url": "127.0.0.1:7890"}})
+    monkeypatch.setattr(network, "load_current_app_settings", lambda: app)
+    return network
+
+
+def test_default_download_session_follows_workbench_proxy(monkeypatch) -> None:
+    network = _fake_proxied_settings(monkeypatch)
+
+    session = runtime_module._default_download_session()
+
+    assert session.proxies["http"] == "http://127.0.0.1:7890"
+    assert session.proxies["https"] == "http://127.0.0.1:7890"
+    assert network.requests_session_for_current_settings()[1] == {
+        "http": "http://127.0.0.1:7890",
+        "https": "http://127.0.0.1:7890",
+    }
+
+
+def test_default_download_session_survives_settings_failure(monkeypatch) -> None:
+    def explode():
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr(
+        "krok_helper.network.requests_session_for_current_settings", explode
+    )
+
+    # 设置读取失败不能阻断安装流程：退回普通会话。
+    import requests
+
+    session = runtime_module._default_download_session()
+    assert isinstance(session, requests.Session)
+
+
+def test_managed_installer_defaults_to_proxied_session(monkeypatch) -> None:
+    used = {}
+    monkeypatch.setattr(
+        runtime_module,
+        "_default_download_session",
+        lambda: used.setdefault("session", _Session(b"")),
+    )
+
+    ManagedRuntimeInstaller()
+
+    assert "session" in used
+
+
+def test_fetch_runtime_package_defaults_to_proxied_session(monkeypatch) -> None:
+    class ManifestResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return _production_manifest()
+
+    class ProbeSession:
+        def get(self, *_args, **_kwargs):
+            return ManifestResponse()
+
+    monkeypatch.setattr(runtime_module, "_default_download_session", lambda: ProbeSession())
+
+    assert fetch_runtime_package("https://example.invalid/manifest")
+
+
 def test_fetch_runtime_requires_exact_official_torch_and_torch_free_base() -> None:
     class ManifestResponse:
         def __init__(self, payload) -> None:

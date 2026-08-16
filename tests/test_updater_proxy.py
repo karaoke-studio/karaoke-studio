@@ -51,6 +51,17 @@ def test_proxy_cli_args_use_updater_settings(monkeypatch):
     assert network.proxy_cli_args_for_app_settings(app) == ["--proxy", "http://127.0.0.1:7890"]
 
 
+def test_requests_session_for_current_settings_applies_workbench_proxy(monkeypatch):
+    monkeypatch.setattr(network, "read_system_proxy", lambda: None)
+    app = AppSettings(updater={"proxy": {"mode": "manual", "manual_url": "127.0.0.1:7890"}})
+    monkeypatch.setattr(network, "load_current_app_settings", lambda: app)
+
+    session, proxies = network.requests_session_for_current_settings()
+
+    assert proxies == {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
+    assert session.trust_env is False
+
+
 def test_off_mode_removes_proxy_environment(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://leak:1")
     monkeypatch.setenv("https_proxy", "http://leak:1")

@@ -183,6 +183,10 @@ def requests_session_for_app_settings(app_settings: Any):
     return requests_session_for_proxy(settings.proxy_mode, settings.proxy_manual_url)
 
 
+def requests_session_for_current_settings():
+    return requests_session_for_app_settings(load_current_app_settings())
+
+
 _shared_ssl_context: ssl.SSLContext | None = None
 
 
