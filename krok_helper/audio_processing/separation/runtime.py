@@ -254,6 +254,14 @@ def portable_base_dir() -> Path:
     return Path.cwd()
 
 
+#: 托管 Runtime 安装目录名（与 SUG AI 打轴的 ``ai_runtime`` 约定同名同构，
+#: 内层都是 ``runtime/``——两边本质上都是同一份 PyMSS 发行包）。
+RUNTIME_DIR_NAME = "ai_runtime"
+
+#: 旧版目录名：仅用于认领/防嵌套兼容，不再作为新安装的默认名。
+LEGACY_RUNTIME_DIR_NAME = "pymss"
+
+
 def resolve_install_dir(raw: str) -> str:
     """读取 ``install_dir`` 设置时的规范化：相对路径按当前基准目录展开。
 

@@ -87,11 +87,18 @@ class TestAutoImport:
 
 
 class TestInstallPathResolution:
-    def test_appends_pymss_for_a_plain_directory(self, tmp_path) -> None:
-        assert resolve_install_path(tmp_path / "tools").name == "pymss"
+    def test_appends_ai_runtime_for_a_plain_directory(self, tmp_path) -> None:
+        """默认目录名与 SUG AI 打轴约定统一（ai_runtime），不再叫 pymss。"""
+        assert resolve_install_path(tmp_path / "tools").name == "ai_runtime"
 
-    def test_does_not_nest_when_directory_is_already_pymss(self, tmp_path) -> None:
-        """回归：选中已有的 pymss 目录曾被套成 pymss/pymss，模型再也扫不到。"""
+    def test_does_not_nest_when_directory_is_already_ai_runtime(
+        self, tmp_path
+    ) -> None:
+        target = tmp_path / "ai_runtime"
+        assert resolve_install_path(target) == target
+
+    def test_does_not_nest_when_directory_is_legacy_pymss(self, tmp_path) -> None:
+        """旧版 pymss 目录直接选中时不再套一层（升级/重选场景）。"""
         target = tmp_path / "pymss"
         assert resolve_install_path(target) == target
 

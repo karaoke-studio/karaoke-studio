@@ -58,6 +58,8 @@ from .local_import import build_local_candidate
 from .local_models import scan_local_models
 from .stems import choose_stem_for_task, parse_model_stems
 from .runtime import (
+    LEGACY_RUNTIME_DIR_NAME,
+    RUNTIME_DIR_NAME,
     ManagedRuntimeInstaller,
     RuntimeStatus,
     fetch_runtime_package,
@@ -304,21 +306,24 @@ class RealSeparationBackend(SeparationBackend):
             return False
         if validation.status not in (RuntimeStatus.MISSING, RuntimeStatus.DAMAGED):
             return False
-        candidate = portable_base_dir() / "pymss"
-        if not candidate.exists():
-            return False
-        try:
-            healed = validate_runtime(str(candidate))
-        except Exception:
-            return False
-        if healed.status is not RuntimeStatus.READY:
-            return False
-        self._snap.install_dir = str(candidate)
-        self._apply_runtime_validation(healed)
-        self._settings["install_dir"] = relativize_install_dir(str(candidate))
-        self._persist()
-        self._log(f"检测到已保存的安装位置失效，已改用 {candidate}。")
-        return True
+        # 优先新约定目录名，兼容旧版 pymss 目录（内层布局一致）
+        for name in (RUNTIME_DIR_NAME, LEGACY_RUNTIME_DIR_NAME):
+            candidate = portable_base_dir() / name
+            if not candidate.exists():
+                continue
+            try:
+                healed = validate_runtime(str(candidate))
+            except Exception:
+                continue
+            if healed.status is not RuntimeStatus.READY:
+                continue
+            self._snap.install_dir = str(candidate)
+            self._apply_runtime_validation(healed)
+            self._settings["install_dir"] = relativize_install_dir(str(candidate))
+            self._persist()
+            self._log(f"检测到已保存的安装位置失效，已改用 {candidate}。")
+            return True
+        return False
 
     def _normalize_install_dir_setting(self, install_dir: str) -> None:
         """旧版绝对路径的规范化迁移：校验通过的安装在基准目录内时，

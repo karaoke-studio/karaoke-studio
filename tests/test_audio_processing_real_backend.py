@@ -334,11 +334,11 @@ def test_install_dir_helpers_roundtrip(tmp_path, monkeypatch) -> None:
     assert resolve_install_dir("") == ""
 
 
-def test_restore_heals_to_exec_relative_pymss(tmp_path, monkeypatch) -> None:
+def test_restore_heals_to_exec_relative_ai_runtime(tmp_path, monkeypatch) -> None:
     """旧版记录被其它副本写坏（指向已删除目录）时，自动认领当前
-    exe 目录旁的 pymss 安装并按相对路径落盘（无感过渡）。"""
+    exe 目录旁的 ai_runtime 安装并按相对路径落盘（无感过渡）。"""
     base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
-    _installed_runtime(base / "pymss")
+    _installed_runtime(base / "ai_runtime")
     settings = {"install_dir": str(tmp_path / "downloads-copy" / "pymss")}
     saved: list[dict] = []
 
@@ -349,9 +349,39 @@ def test_restore_heals_to_exec_relative_pymss(tmp_path, monkeypatch) -> None:
     try:
         snap = backend.snapshot()
         assert snap.state is ServiceState.INSTALLED_STOPPED
-        assert snap.install_dir == str(base / "pymss")
-        assert settings["install_dir"] == "pymss"  # 新口径持久化
+        assert snap.install_dir == str(base / "ai_runtime")
+        assert settings["install_dir"] == "ai_runtime"  # 新口径持久化
         assert saved, "自愈后应触发一次设置落盘"
+    finally:
+        backend.shutdown()
+
+
+def test_restore_heals_to_legacy_pymss_directory(tmp_path, monkeypatch) -> None:
+    """旧版目录名的现存安装同样可被认领（兼容过渡）。"""
+    base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    _installed_runtime(base / "pymss")
+    settings = {"install_dir": str(tmp_path / "downloads-copy" / "pymss")}
+
+    backend = RealSeparationBackend(settings)
+    try:
+        snap = backend.snapshot()
+        assert snap.state is ServiceState.INSTALLED_STOPPED
+        assert snap.install_dir == str(base / "pymss")
+        assert settings["install_dir"] == "pymss"
+    finally:
+        backend.shutdown()
+
+
+def test_restore_heal_prefers_ai_runtime_over_legacy(tmp_path, monkeypatch) -> None:
+    base = _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")
+    _installed_runtime(base / "ai_runtime")
+    _installed_runtime(base / "pymss")
+    settings = {"install_dir": str(tmp_path / "gone")}
+
+    backend = RealSeparationBackend(settings)
+    try:
+        snap = backend.snapshot()
+        assert snap.install_dir == str(base / "ai_runtime")
     finally:
         backend.shutdown()
 

@@ -51,6 +51,10 @@ from krok_helper.audio_processing.separation.backend import (
     FLOW_UPGRADE,
     SeparationBackend,
 )
+from krok_helper.audio_processing.separation.runtime import (
+    LEGACY_RUNTIME_DIR_NAME,
+    RUNTIME_DIR_NAME,
+)
 from krok_helper.audio_processing.separation.states import (
     TASK_SPECS,
     ServiceState,
@@ -74,18 +78,22 @@ WIZARD_COLUMN_MAX_WIDTH = 780
 def resolve_install_path(directory: str | Path) -> Path:
     """把用户选中的目录换算成最终安装路径。
 
-    默认在所选目录下建独立的 ``pymss`` 子目录（§4.2），但两种情况不再套一层，
-    否则会得到 ``…\\pymss\\pymss`` 这种嵌套目录，模型放在外层就再也扫不到：
+    默认在所选目录下建独立的 ``ai_runtime`` 子目录（与 SUG AI 打轴的
+    目录约定同名同构），但两种情况不再套一层，否则会得到嵌套目录，
+    模型放在外层就再也扫不到：
 
-    1. 选中的目录本身就叫 ``pymss``；
+    1. 选中的目录本身就叫 ``ai_runtime``（或旧版 ``pymss``）；
     2. 选中的目录已经是一个托管安装（有 ``manifests/runtime-manifest.json``）。
     """
     path = Path(directory)
-    if path.name.lower() == "pymss":
+    if path.name.lower() in (
+        RUNTIME_DIR_NAME.lower(),
+        LEGACY_RUNTIME_DIR_NAME.lower(),
+    ):
         return path
     if (path / "manifests" / "runtime-manifest.json").is_file():
         return path
-    return path / "pymss"
+    return path / RUNTIME_DIR_NAME
 
 
 def default_install_root() -> Path:
@@ -246,12 +254,12 @@ class InstallLocationStep(WizardStep):
 
         self._root_option = OptionCard(
             "软件根目录（推荐）",
-            f"安装到 {default_install_root() / 'pymss'}",
+            f"安装到 {default_install_root() / RUNTIME_DIR_NAME}",
             self,
         )
         self._custom_option = OptionCard(
             "其他目录",
-            "自行指定，仍会创建独立的 pymss 子目录。",
+            "自行指定，仍会创建独立的 ai_runtime 子目录。",
             self,
         )
         self._root_option.selected.connect(lambda: self._select(root=True))
@@ -304,10 +312,10 @@ class InstallLocationStep(WizardStep):
         use_root = self._root_option.is_checked()
         self._path_row.setVisible(not use_root)
         if use_root:
-            self._path_edit.setText(str(default_install_root() / "pymss"))
+            self._path_edit.setText(str(default_install_root() / RUNTIME_DIR_NAME))
         else:
             current = self._path_edit.text().strip()
-            default = str(default_install_root() / "pymss")
+            default = str(default_install_root() / RUNTIME_DIR_NAME)
             if not current or current == default:
                 self._path_edit.setText("")
         self._refresh_info()
