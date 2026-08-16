@@ -79,19 +79,23 @@ def resolve_install_path(directory: str | Path) -> Path:
     """把用户选中的目录换算成最终安装路径。
 
     默认在所选目录下建独立的 ``ai_runtime`` 子目录（与 SUG AI 打轴的
-    目录约定同名同构），但两种情况不再套一层，否则会得到嵌套目录，
+    目录约定同名同构），但三种情况不再套一层，否则会得到嵌套目录，
     模型放在外层就再也扫不到：
 
-    1. 选中的目录本身就叫 ``ai_runtime``（或旧版 ``pymss``）；
-    2. 选中的目录已经是一个托管安装（有 ``manifests/runtime-manifest.json``）。
+    1. 选中的目录自身或其上级（两层内）是一个现有托管安装——归位到
+       该安装根（实测坑：选中旧安装内部的 ``runtime`` 子目录曾被套成
+       ``pymss\\runtime\\pymss`` 嵌套安装）；
+    2. 选中的目录本身就叫 ``ai_runtime``（或旧版 ``pymss``）；
+    3. 选中的目录已经是一个托管安装（有 ``manifests/runtime-manifest.json``）。
     """
     path = Path(directory)
+    for candidate in (path, *path.parents[:2]):
+        if (candidate / "manifests" / "runtime-manifest.json").is_file():
+            return candidate
     if path.name.lower() in (
         RUNTIME_DIR_NAME.lower(),
         LEGACY_RUNTIME_DIR_NAME.lower(),
     ):
-        return path
-    if (path / "manifests" / "runtime-manifest.json").is_file():
         return path
     return path / RUNTIME_DIR_NAME
 

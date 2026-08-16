@@ -421,6 +421,38 @@ def test_restore_migrates_legacy_absolute_to_relative(tmp_path, monkeypatch) -> 
         backend.shutdown()
 
 
+def test_note_runtime_changed_resyncs_manifest(tmp_path) -> None:
+    """方案 B 增量安装改动共用包后：宿主通知 → 清单再登记 → 校验恢复，
+    且重建后端（等价重启）保持绿色。"""
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    # 内容变化且长度不同（非全量校验只比 size，等长突变检测不到）
+    (root / "runtime" / "python.exe").write_bytes(b"mutated-by-pip-longer")
+
+    settings = {"install_dir": str(root)}
+    backend = RealSeparationBackend(settings)
+    try:
+        assert backend.snapshot().state is ServiceState.INSTALL_DAMAGED
+        assert backend.note_runtime_changed() is True
+        assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
+    finally:
+        backend.shutdown()
+
+    again = RealSeparationBackend({"install_dir": str(root)})
+    try:
+        assert again.snapshot().state is ServiceState.INSTALLED_STOPPED
+    finally:
+        again.shutdown()
+
+
+def test_note_runtime_changed_without_install_returns_false(tmp_path) -> None:
+    backend = RealSeparationBackend({})
+    try:
+        assert backend.note_runtime_changed() is False
+    finally:
+        backend.shutdown()
+
+
 def test_restore_keeps_valid_custom_absolute_location(tmp_path, monkeypatch) -> None:
     """自定义安装位置（基准目录外）不受相对化/自愈影响。"""
     _frozen_at(monkeypatch, tmp_path / "app" / "KaraokeStudio.exe")

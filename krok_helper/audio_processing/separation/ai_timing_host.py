@@ -288,6 +288,22 @@ class KaraokeAiTimingHost:
         except Exception:
             return None
 
+    def note_runtime_changed(self) -> bool:
+        """（可选协议）托管 runtime 被受信增量修改后的清单再登记入口。
+
+        SUG 的 install_shared 装完依赖后调用：pip 会升级/降级清单登记
+        在案的共用包，不重登记的话工作台下次启动会报「文件缺失或
+        损坏」。后端未提供该能力（旧版/模拟后端）时返回 False，
+        SUG 静默跳过。
+        """
+        note = getattr(self._backend, "note_runtime_changed", None)
+        if not callable(note):
+            return False
+        try:
+            return bool(note())
+        except Exception:
+            return False
+
     def open_separation_page(self) -> bool:
         """跳转到工作台第 2 步的「分离人声」页（SUG 引导安装入口）。"""
         if callable(self._navigate):

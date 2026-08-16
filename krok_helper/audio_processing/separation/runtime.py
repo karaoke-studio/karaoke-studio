@@ -373,6 +373,46 @@ def _installed_manifest_path(install_dir: Path) -> Path:
     return install_dir / "manifests" / "runtime-manifest.json"
 
 
+def resync_installed_manifest(install_dir: str | os.PathLike) -> RuntimeValidation:
+    """受信变更后的清单再登记：按磁盘现状重建 installed manifest。
+
+    方案 B 增量安装（AI 打轴向托管解释器 pip 安装依赖）会改动清单
+    登记在案的共用包（升级/降级/换 dist-info），下次启动
+    ``validate_runtime`` 即报「文件缺失或损坏」。这里以磁盘为准重建
+    ``files``：size 与原记录一致的条目沿用原 sha256（免全量哈希），
+    新增/变化的文件重新计算；已删除的条目剔除。仅在安装本身健康的
+    受信变更后调用——它会让任意篡改合法化，不能作为损坏自愈手段。
+
+    Returns:
+        重建后的校验结果（READY 即清单与磁盘重新对齐）。
+    """
+    root = Path(install_dir)
+    package = load_installed_package(root)
+    old = {item.path: item for item in package.files}
+    base = root / "runtime"
+    files: list[RuntimeFile] = []
+    if base.is_dir():
+        for path in sorted(base.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = "runtime/" + path.relative_to(base).as_posix()
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            prev = old.get(rel)
+            if prev is not None and prev.size == size:
+                files.append(RuntimeFile(path=rel, size=size, sha256=prev.sha256))
+            else:
+                files.append(
+                    RuntimeFile(path=rel, size=size, sha256=sha256_file(path))
+                )
+    _atomic_json_write(
+        _installed_manifest_path(root), package.installed_payload(tuple(files))
+    )
+    return validate_runtime(root)
+
+
 def load_installed_package(install_dir: Path) -> RuntimePackage:
     path = _installed_manifest_path(install_dir)
     with path.open("r", encoding="utf-8") as stream:

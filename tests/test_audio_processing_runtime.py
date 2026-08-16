@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from krok_helper.audio_processing.separation.runtime import (
     RuntimeValidation,
     fetch_runtime_package,
     preflight_install_destination,
+    resync_installed_manifest,
     validate_runtime,
 )
 from krok_helper.audio_processing.separation import runtime as runtime_module
@@ -635,3 +637,36 @@ def test_torch_wheel_download_resumes_a_verified_partial_file(tmp_path) -> None:
 
     assert session.headers == {"Range": f"bytes={split}-"}
     assert destination.read_bytes() == wheel
+
+def test_resync_manifest_after_trusted_mutation(tmp_path) -> None:
+    """受信增量安装（AI 打轴方案 B）改动共用包后，清单可按磁盘现状
+    再登记：改文件/删文件/加新包全部收编，全量校验恢复通过。"""
+    files = {
+        "runtime/python.exe": b"python-runtime",
+        "runtime/Lib/site-packages/pkg/a.py": b"aaa",
+        "runtime/Lib/site-packages/pkg/b.py": b"bbb",
+        "runtime/Lib/site-packages/old-0.11.dist-info/METADATA": b"x",
+    }
+    archive = _archive(files)
+    package = _package(archive, files)
+    install_dir = tmp_path / "rt"
+    ManagedRuntimeInstaller(_Session(archive)).install(package, install_dir)
+
+    site = install_dir / "runtime" / "Lib" / "site-packages"
+    (site / "pkg" / "a.py").write_bytes(b"changed-content-longer")
+    (site / "pkg" / "c.py").write_bytes(b"new-package-file")
+    shutil.rmtree(site / "old-0.11.dist-info")
+
+    assert validate_runtime(install_dir).status is RuntimeStatus.DAMAGED
+    result = resync_installed_manifest(install_dir)
+    assert result.status is RuntimeStatus.READY
+    # size 未变条目沿用旧哈希、变化/新增已重算：全量（sha256）校验同样通过
+    assert validate_runtime(install_dir, full=True).status is RuntimeStatus.READY
+    manifest = json.loads(
+        (install_dir / "manifests" / "runtime-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    paths = {item["path"] for item in manifest["files"]}
+    assert "runtime/Lib/site-packages/pkg/c.py" in paths
+    assert "runtime/Lib/site-packages/old-0.11.dist-info/METADATA" not in paths

@@ -67,6 +67,7 @@ from .runtime import (
     preflight_install_destination,
     relativize_install_dir,
     resolve_install_dir,
+    resync_installed_manifest,
     validate_runtime,
 )
 from .pymss_service import BridgeServiceProcess
@@ -695,6 +696,34 @@ class RealSeparationBackend(SeparationBackend):
     def cancel_install(self) -> None:
         self._install_cancel.set()
         self._log("正在取消 PyMSS Runtime 下载……")
+
+    def note_runtime_changed(self) -> bool:
+        """宿主通知：托管解释器被受信方增量修改（如 AI 打轴安装依赖）。
+
+        嵌入的 AI 打轴走方案 B 向托管解释器 pip 安装依赖，会改动清单
+        登记在案的共用包（升级/降级），不重登记清单的话下次启动即报
+        「文件缺失或损坏」。按磁盘现状重建后重新校验。
+        """
+        install_dir = resolve_install_dir(
+            str(self._settings.get("install_dir", ""))
+        )
+        if not install_dir:
+            return False
+        try:
+            result = resync_installed_manifest(install_dir)
+        except Exception as exc:
+            self._log(f"运行环境清单再登记失败：{exc}")
+            return False
+        with self._lock:
+            self._snap.install_dir = install_dir
+            self._apply_runtime_validation(result)
+            self._rebuild_dependencies()
+        self._emit()
+        if result.status is RuntimeStatus.READY:
+            self._log("运行环境清单已按当前安装内容重新登记。")
+            return True
+        self._log(f"清单再登记后校验未通过：{result.message}")
+        return False
 
     def cleanup_incomplete(self) -> None:
         self._install_cancel.set()

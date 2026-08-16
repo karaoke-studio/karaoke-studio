@@ -102,6 +102,19 @@ class TestInstallPathResolution:
         target = tmp_path / "pymss"
         assert resolve_install_path(target) == target
 
+    def test_picking_inside_existing_install_returns_its_root(
+        self, tmp_path
+    ) -> None:
+        """选到现有安装内部（如旧安装的 runtime 子目录）时归位安装根，
+        不再套层——实测曾产出 pymss/runtime/pymss 嵌套安装。"""
+        root = tmp_path / "app" / "pymss"
+        (root / "manifests").mkdir(parents=True)
+        (root / "manifests" / "runtime-manifest.json").write_text(
+            "{}", encoding="utf-8"
+        )
+        assert resolve_install_path(root / "runtime") == root
+        assert resolve_install_path(root / "runtime" / "Lib") == root
+
     def test_does_not_nest_into_an_existing_install(self, tmp_path) -> None:
         root = tmp_path / "audio-tools"
         (root / "manifests").mkdir(parents=True)

@@ -171,6 +171,28 @@ class TestRuntimePython:
         status = host.separation_status()
         assert status["available"] is True
 
+    def test_note_runtime_changed_delegates_to_backend(
+        self, tmp_path, qapp
+    ):
+        """（可选协议）后端无该能力时返回 False 不抛；有则透传结果。"""
+        host = _host(tmp_path, _StubBackend())
+        assert host.note_runtime_changed() is False  # 旧版/模拟后端
+
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+        from tests.test_audio_processing_real_backend import _installed_runtime
+
+        root = tmp_path / "managed"
+        _installed_runtime(root)
+        (root / "runtime" / "python.exe").write_bytes(b"mutated")
+        backend = RealSeparationBackend({"install_dir": str(root)})
+        try:
+            healed_host = _host(tmp_path, backend)
+            assert healed_host.note_runtime_changed() is True
+        finally:
+            backend.shutdown()
+
     def test_none_when_not_installed(self, tmp_path, qapp):
         assert _host(tmp_path, _StubBackend()).runtime_python() is None
 
