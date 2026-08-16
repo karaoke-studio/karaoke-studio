@@ -143,6 +143,7 @@ def test_do_check_uses_redirect_fallback(monkeypatch) -> None:
     assert result.primary_asset_name  # 按命名约定合成
     assert result.download_candidates  # 下载候选按 tag 合成，Updater 仍可接力
     assert result.all_releases == []  # 兜底模式不做聚合
+    assert result.primary_sha256 == ""  # 跳转兜底拿不到资产清单，无 digest
 
 
 def test_do_check_reports_rate_limit_when_all_fail(monkeypatch) -> None:
@@ -210,6 +211,63 @@ def test_do_check_aggregates_changelogs(monkeypatch) -> None:
     result = worker._CheckRunnable(settings, manual=True)._do_check()
     assert result.ok and result.has_update
     assert [r.version for r in result.all_releases] == ["9.0.0", "8.9.0"]
+
+
+# ── asset digest → --sha256 接线 ──────────────────────────────────────
+
+
+def test_parse_release_extracts_sha256_digest() -> None:
+    payload = {
+        "tag_name": "v9.0.0",
+        "assets": [
+            {
+                "name": "KaraokeStudio-windows.zip",
+                "size": 1,
+                "browser_download_url": "u",
+                "digest": "sha256:" + "a" * 64,
+            },
+            {
+                "name": "KaraokeStudio-macos.zip",
+                "size": 1,
+                "browser_download_url": "u2",
+                "digest": "sha512:" + "b" * 128,
+            },
+            {
+                "name": "KaraokeStudio-windows.zip.sha256",
+                "size": 1,
+                "browser_download_url": "u3",
+                "digest": "sha256:too-short",
+            },
+        ],
+    }
+    release = worker._parse_release(payload)
+    by_name = {a.name: a for a in release.assets}
+    assert by_name["KaraokeStudio-windows.zip"].digest == "a" * 64
+    assert by_name["KaraokeStudio-macos.zip"].digest == ""  # 非 sha256 算法不收
+    assert by_name["KaraokeStudio-windows.zip.sha256"].digest == ""  # 畸形摘要不收
+
+
+def test_do_check_carries_primary_sha256_for_updater(monkeypatch) -> None:
+    settings = UpdaterSettings()
+    latest = LatestRelease(
+        tag="v9.0.0",
+        version="9.0.0",
+        name="v9.0.0",
+        body="latest body",
+        html_url="",
+        prerelease=False,
+        published_at="",
+        assets=[
+            worker.ReleaseAsset(
+                worker.current_asset_name(), 1, "https://example.invalid/a.zip", digest="c" * 64
+            )
+        ],
+    )
+    monkeypatch.setattr(worker, "fetch_latest_release", lambda s: (latest, [("github", "u", "")]))
+    monkeypatch.setattr(worker, "fetch_releases_since", lambda cur, s: ([latest], []))
+    result = worker._CheckRunnable(settings, manual=True)._do_check()
+    assert result.ok and result.has_update
+    assert result.primary_sha256 == "c" * 64
 
 
 # ── 列表 API URL ─────────────────────────────────────────────────────

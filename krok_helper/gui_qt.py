@@ -1771,6 +1771,9 @@ class KrokHelperQtApp(QMainWindow):
             asset_name=result.primary_asset_name,
             download_urls=[(source, url) for source, url in result.download_candidates],
             proxy_url=proxy_url,
+            # GitHub API 的 asset digest：让 Updater 的全量兜底校验不依赖
+            # 运行时再拉 .sha256 旁车文件（代理不稳时可能拉取失败）。
+            expected_sha256=result.primary_sha256,
         )
 
         # launch_updater 内部的 Updater.exe 自更新会发起网络下载（数秒到数十秒），

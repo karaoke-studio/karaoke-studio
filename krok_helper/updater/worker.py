@@ -29,6 +29,9 @@ class ReleaseAsset:
     name: str
     size: int
     download_url: str
+    # GitHub API asset digest 的 sha256 裸十六进制（无算法前缀）；旧 release
+    # 或非 sha256 算法为空串。
+    digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,10 @@ class CheckResult:
     primary_url: str = ""
     primary_source: str = ""
     primary_asset_name: str = ""
+    # 主资产（全量 zip）的 sha256，来自 GitHub API asset digest。传给 Updater 的
+    # ``--sha256``，让全量兜底路径的完整性校验不依赖运行时再拉 ``.sha256``
+    # 旁车文件（代理不稳时旁车拉取失败会导致校验被跳过）。
+    primary_sha256: str = ""
     download_candidates: list[tuple[SourceId, str]] = field(default_factory=list)
     attempts: list[tuple[SourceId, str, str]] = field(default_factory=list)
     error: str = ""
@@ -106,6 +113,17 @@ def current_asset_name() -> str:
     return "KaraokeStudio-windows.zip"
 
 
+def _asset_sha256(raw: str) -> str:
+    """GitHub API 的 asset digest 形如 ``sha256:<64位hex>``；仅接受 sha256，其余返回空。"""
+    value = raw.strip().lower()
+    if not value.startswith("sha256:"):
+        return ""
+    hex_part = value.split(":", 1)[1].strip()
+    if len(hex_part) != 64 or any(ch not in "0123456789abcdef" for ch in hex_part):
+        return ""
+    return hex_part
+
+
 def _parse_release(payload: dict[str, Any]) -> LatestRelease:
     assets: list[ReleaseAsset] = []
     for raw_asset in payload.get("assets") or []:
@@ -119,6 +137,7 @@ def _parse_release(payload: dict[str, Any]) -> LatestRelease:
                 name=name,
                 size=int(raw_asset.get("size") or 0),
                 download_url=str(raw_asset.get("browser_download_url") or ""),
+                digest=_asset_sha256(str(raw_asset.get("digest") or "")),
             )
         )
     tag = str(payload.get("tag_name") or "")
@@ -373,6 +392,7 @@ class _CheckRunnable(QObject):
             primary_url=primary_url,
             primary_source=primary_source,
             primary_asset_name=asset_name,
+            primary_sha256=asset.digest if asset is not None else "",
             download_candidates=candidates,
             attempts=attempts,
             all_releases=all_releases,
