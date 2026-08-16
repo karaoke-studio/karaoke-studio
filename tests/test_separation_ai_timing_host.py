@@ -128,6 +128,49 @@ class TestRuntimePython:
         backend.install_dir = str(install_dir)
         assert _host(tmp_path, backend).runtime_python() == str(exe)
 
+    def test_relative_setting_end_to_end_real_backend(
+        self, tmp_path, qapp, monkeypatch
+    ):
+        """相对化口径端到端：settings 存相对 ai_runtime，真实后端还原为
+        绝对路径后，宿主仍能把 python.exe 传给 SUG（方案 B 链路不断）。"""
+        import sys as _sys
+
+        from krok_helper.audio_processing.separation.real_backend import (
+            RealSeparationBackend,
+        )
+
+        base = tmp_path / "app"
+        exe_file = base / "KaraokeStudio.exe"
+        exe_file.parent.mkdir(parents=True)
+        exe_file.write_bytes(b"fake-exe")
+        monkeypatch.setattr(_sys, "frozen", True, raising=False)
+        monkeypatch.setattr("sys.executable", str(exe_file))
+
+        from tests.test_audio_processing_real_backend import _installed_runtime
+
+        _installed_runtime(base / "ai_runtime")
+        settings = {"install_dir": "ai_runtime"}  # 新口径相对路径
+        backend = RealSeparationBackend(settings)
+        try:
+            host = _host(tmp_path, backend)
+            assert host.runtime_python() == str(
+                base / "ai_runtime" / "runtime" / "python.exe"
+            )
+        finally:
+            backend.shutdown()
+
+    def test_msst_style_backend_without_install_dir_returns_none(
+        self, tmp_path, qapp
+    ):
+        """MSST/外部环境模式：快照无 install_dir（属性缺失/为空）时
+        返回 None——SUG 走「blocked」引导而不是拿到坏路径。"""
+        backend = _StubBackend(state=ServiceState.EXTERNAL_MODEL_READY)
+        host = _host(tmp_path, backend)
+        assert host.runtime_python() is None
+        # 分离能力本身仍可用（跟随工作台 MSST 设置）
+        status = host.separation_status()
+        assert status["available"] is True
+
     def test_none_when_not_installed(self, tmp_path, qapp):
         assert _host(tmp_path, _StubBackend()).runtime_python() is None
 
