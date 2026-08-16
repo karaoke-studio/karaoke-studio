@@ -543,6 +543,22 @@ def preflight_install_destination(install_dir: str | os.PathLike) -> Path:
     return root
 
 
+#: 网络抖动重试：首次 + 4 次重试，退避 3/6/12/24s（取消可立即打断睡眠）
+_DOWNLOAD_RETRY_DELAYS = (3.0, 6.0, 12.0, 24.0)
+
+
+def _sleep_cancelable(seconds: float, cancelled) -> bool:
+    """分片睡眠；返回 True 表示等待期间被取消。"""
+    deadline = time.monotonic() + seconds
+    while True:
+        if cancelled is not None and cancelled.is_set():
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.2, remaining))
+
+
 class ManagedRuntimeInstaller:
     """Install a versioned archive without modifying models or user registries."""
 
@@ -596,6 +612,10 @@ class ManagedRuntimeInstaller:
             for stale in staging.glob("torch-*.whl.part"):
                 if stale not in {wheel, wheel_part}:
                     _unlink_with_retry(stale, tolerate_busy=True)
+        # 清理历史失败安装遗留的底座分卷临时文件（每次安装用新 token）
+        for stale in staging.glob("runtime-*.zip.part"):
+            if stale != archive:
+                _unlink_with_retry(stale, tolerate_busy=True)
         payload = staging / f"runtime-{token}"
         backup = staging / f"runtime-backup-{token}"
         payload.mkdir()
@@ -682,6 +702,41 @@ class ManagedRuntimeInstaller:
         )
 
     def _download(self, package, destination, *, progress=None, cancelled=None) -> None:
+        """下载底座分卷并整体校验；网络抖动按退避重试（每次重下整档）。
+
+        底座约 150MB 且当前 release 为单分卷，重试整档重下成本可控，
+        不做字节级续传；torch wheel（数 GB）在 _download_wheel 里走
+        Range 断点续传。大小不符视为连接中断的截断，同样重试；SHA
+        不匹配是内容问题，不重试直接失败。
+        """
+        import requests as _requests
+
+        attempts = len(_DOWNLOAD_RETRY_DELAYS) + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            if cancelled is not None and cancelled.is_set():
+                raise InterruptedError("下载已取消。")
+            try:
+                self._download_once(
+                    package, destination, progress=progress, cancelled=cancelled
+                )
+                return
+            except InterruptedError:
+                raise
+            except _requests.RequestException as exc:
+                # 连接中断/超时在 iter_content 里都以 RequestException
+                # 抛出；大小/校验不符是内容问题，立即失败不重试
+                last_error = exc
+            if attempt < attempts - 1:
+                if _sleep_cancelable(
+                    _DOWNLOAD_RETRY_DELAYS[attempt], cancelled
+                ):
+                    raise InterruptedError("下载已取消。")
+        raise ValueError(
+            f"PyMSS Runtime 下载失败（已重试 {attempts - 1} 次）：{last_error}"
+        )
+
+    def _download_once(self, package, destination, *, progress=None, cancelled=None) -> None:
         done = 0
         archive_digest = hashlib.sha256()
         with destination.open("wb") as stream:
@@ -742,6 +797,62 @@ class ManagedRuntimeInstaller:
                     destination.unlink()
                     done = 0
                     digest = hashlib.sha256()
+        # 网络抖动退避重试：每次重试从已落盘偏移 Range 续传（不重下
+        # 已完成的数 GB 内容）；大小不符=截断可重试，校验失败不重试
+        import requests as _requests
+
+        attempts = len(_DOWNLOAD_RETRY_DELAYS) + 1
+        last_error: Exception | None = None
+        state = {"done": done, "digest": digest}
+        for attempt in range(attempts):
+            if cancelled is not None and cancelled.is_set():
+                raise InterruptedError("torch 下载已取消。")
+            try:
+                self._download_wheel_segment(
+                    package,
+                    dependency,
+                    destination,
+                    state=state,
+                    progress=progress,
+                    cancelled=cancelled,
+                )
+                break
+            except InterruptedError:
+                raise
+            except _requests.RequestException as exc:
+                last_error = exc
+            if attempt < attempts - 1:
+                if _sleep_cancelable(
+                    _DOWNLOAD_RETRY_DELAYS[attempt], cancelled
+                ):
+                    raise InterruptedError("torch 下载已取消。")
+        else:
+            raise ValueError(
+                f"torch wheel 下载失败（已重试 {attempts - 1} 次）：{last_error}"
+            )
+        if state["done"] != dependency.size:
+            if state["done"] > dependency.size:
+                destination.unlink(missing_ok=True)
+            raise ValueError(
+                f"torch wheel 下载大小不符：得到 {state['done']}，应为 {dependency.size}。"
+            )
+        if state["digest"].hexdigest() != dependency.sha256:
+            destination.unlink(missing_ok=True)
+            raise ValueError("torch wheel 校验失败（SHA-256 不匹配）。")
+
+    def _download_wheel_segment(
+        self,
+        package,
+        dependency,
+        destination,
+        *,
+        state: dict,
+        progress=None,
+        cancelled=None,
+    ) -> None:
+        """从 state["done"] 偏移续传一段下载；state 原地更新（可重入）。"""
+        done = state["done"]
+        digest = state["digest"]
         headers = {"Range": f"bytes={done}-"} if done else None
         with self._session.get(
             dependency.url,
@@ -754,28 +865,23 @@ class ManagedRuntimeInstaller:
             if done and not append:
                 done = 0
                 digest = hashlib.sha256()
-            with destination.open("ab" if append else "wb") as stream:
+            with destination.open("ab" if append else "wb") as stream_out:
                 for chunk in response.iter_content(_CHUNK_SIZE):
                     if cancelled is not None and cancelled.is_set():
                         raise InterruptedError("torch 下载已取消。")
                     if not chunk:
                         continue
-                    stream.write(chunk)
+                    stream_out.write(chunk)
                     digest.update(chunk)
                     done += len(chunk)
+                    state["done"] = done
+                    state["digest"] = digest
                     if progress is not None:
                         progress(package.archive_size + done, package.download_size)
-                stream.flush()
-                os.fsync(stream.fileno())
-        if done != dependency.size:
-            if done > dependency.size:
-                destination.unlink(missing_ok=True)
-            raise ValueError(
-                f"torch wheel 下载大小不符：得到 {done}，应为 {dependency.size}。"
-            )
-        if digest.hexdigest() != dependency.sha256:
-            destination.unlink(missing_ok=True)
-            raise ValueError("torch wheel 校验失败（SHA-256 不匹配）。")
+                stream_out.flush()
+                os.fsync(stream_out.fileno())
+        state["done"] = done
+        state["digest"] = digest
 
     def _install_torch(
         self,

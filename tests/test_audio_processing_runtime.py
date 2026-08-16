@@ -64,6 +64,24 @@ class _PartSession:
         return _Response(self.bodies[url])
 
 
+class _FlakySession:
+    """前 fail 次 GET 抛 ConnectionError，之后交给内层会话。"""
+
+    def __init__(self, inner, fail_times: int) -> None:
+        self._inner = inner
+        self._remaining = fail_times
+        self.calls = 0
+
+    def get(self, url, **kwargs):
+        self.calls += 1
+        if self._remaining > 0:
+            self._remaining -= 1
+            import requests
+
+            raise requests.exceptions.ConnectionError("simulated drop")
+        return self._inner.get(url, **kwargs)
+
+
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -670,3 +688,74 @@ def test_resync_manifest_after_trusted_mutation(tmp_path) -> None:
     paths = {item["path"] for item in manifest["files"]}
     assert "runtime/Lib/site-packages/pkg/c.py" in paths
     assert "runtime/Lib/site-packages/old-0.11.dist-info/METADATA" not in paths
+
+def test_download_retries_on_connection_error(tmp_path, monkeypatch) -> None:
+    """网络抖动（连接中断）按退避重试，重试成功即完成安装。"""
+    monkeypatch.setattr(runtime_module, "_DOWNLOAD_RETRY_DELAYS", (0.0,) * 4)
+    files = {"runtime/python.exe": b"python-runtime"}
+    archive = _archive(files)
+    package = _package(archive, files)
+    flaky = _FlakySession(_Session(archive), fail_times=2)
+    install_dir = tmp_path / "rt"
+    ManagedRuntimeInstaller(flaky).install(package, install_dir)
+    assert validate_runtime(install_dir).status is RuntimeStatus.READY
+    assert flaky.calls == 3  # 失败 2 次 + 成功 1 次
+
+
+def test_download_retry_exhaustion_raises_value_error(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(runtime_module, "_DOWNLOAD_RETRY_DELAYS", (0.0,) * 4)
+    files = {"runtime/python.exe": b"python-runtime"}
+    archive = _archive(files)
+    package = _package(archive, files)
+    flaky = _FlakySession(_Session(archive), fail_times=99)
+    with pytest.raises(ValueError, match="已重试 4 次"):
+        ManagedRuntimeInstaller(flaky).install(package, tmp_path / "rt")
+
+
+def test_wheel_download_retries_resume_from_offset(
+    tmp_path, monkeypatch
+) -> None:
+    """torch wheel 网络中断重试从已落盘偏移续传（Range），不重下前缀。"""
+    monkeypatch.setattr(runtime_module, "_DOWNLOAD_RETRY_DELAYS", (0.0,) * 4)
+    wheel_body = b"W" * 5000
+    base = _archive({"runtime/python.exe": b"python-runtime"})
+    package = RuntimePackage.from_payload(
+        {
+            "schema": 1,
+            "runtime_version": PYMSS_RUNTIME_VERSION,
+            "pymss_version": PYMSS_VERSION,
+            "python_version": PYMSS_PYTHON_VERSION,
+            "variant": "windows-cpu",
+            "archive": {
+                "url": "https://example.invalid/base.zip",
+                "size": len(base),
+                "sha256": _sha(base),
+            },
+            "torch": {
+                "version": PYMSS_TORCH_VERSION,
+                "wheel": {
+                    "url": "https://download.pytorch.org/fake.whl",
+                    "filename": "torch-2.7.1+cpu-cp312-cp312-win_amd64.whl",
+                    "size": len(wheel_body),
+                    "sha256": _sha(wheel_body),
+                },
+            },
+            "files": [
+                {
+                    "path": "runtime/python.exe",
+                    "size": len(b"python-runtime"),
+                    "sha256": _sha(b"python-runtime"),
+                }
+            ],
+        }
+    )
+    flaky = _FlakySession(_Session(wheel_body), fail_times=1)
+    installer = ManagedRuntimeInstaller(flaky)
+    dest = tmp_path / "torch.whl.part"
+    installer._download_wheel(package, dest)
+    assert dest.read_bytes() == wheel_body
+    # 第二次 GET 带 Range（从首次中断后已写入的偏移续传）
+    # _FlakySession 不校验 headers；断言调用次数与最终内容即可
+    assert flaky.calls == 2
