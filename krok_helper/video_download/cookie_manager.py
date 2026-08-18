@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from krok_helper.app_paths import LEGACY_APP_NAMES
 from krok_helper.config import APP_NAME
 from krok_helper.network import (
     build_urllib_opener_for_app_settings,
@@ -53,15 +54,30 @@ class CookieManager:
         path = self.default_cookie_path(platform)
         if path.exists():
             return path
-        legacy = self._legacy_default_cookie_path(platform)
-        return legacy if legacy.exists() and self._is_builtin_default_cookie_path(path) else path
+        if not self._is_builtin_default_cookie_path(path):
+            return path
+        return next(
+            (legacy for legacy in self._legacy_default_cookie_paths(platform) if legacy.exists()),
+            path,
+        )
 
-    def _legacy_default_cookie_path(self, platform: str = SOURCE_BILIBILI) -> Path:
+    def _legacy_default_cookie_paths(self, platform: str = SOURCE_BILIBILI) -> list[Path]:
+        """历史应用名下的默认 Cookie 路径，按 ``LEGACY_APP_NAMES`` 顺序（越新越靠前）。
+
+        正常情况下 :func:`~krok_helper.app_paths.migrate_app_data_dir` 已经把整个
+        用户数据目录搬过来了，Cookie 也跟着走。这里是迁移失败（目录被占用 / 跨盘）
+        时的双保险。
+        """
+
         filename = "youtube_cookies.txt" if platform == SOURCE_YOUTUBE else "bilibili_cookies.txt"
         appdata = os.getenv("APPDATA")
-        if os.name == "nt" and appdata:
-            return Path(appdata) / "Karaoke Helper" / "video_download" / filename
-        return Path.home() / ".config" / "karaoke-helper" / filename
+        paths: list[Path] = []
+        for name in LEGACY_APP_NAMES:
+            if os.name == "nt" and appdata:
+                paths.append(Path(appdata) / name / "video_download" / filename)
+            else:
+                paths.append(Path.home() / ".config" / name.lower().replace(" ", "-") / filename)
+        return paths
 
     def _is_builtin_default_cookie_path(self, path: Path) -> bool:
         parts = path.parts

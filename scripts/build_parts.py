@@ -61,10 +61,17 @@ _force_utf8_stdio()
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST_ROOT = ROOT / "dist" / "windows"
-APP_DIR_NAME = "Karaoke Studio"
-APP_EXE_NAME = "Karaoke Studio.exe"
+APP_DIR_NAME = "Lin-K Lyrics"
+APP_EXE_NAME = "Lin-K Lyrics.exe"
+# 改名前的主程序 EXE 名。必须随包分发一份同内容副本：存量客户端的 Updater 用
+# **旧 app 传入的** ``--app-exe`` 去校验更新包（apply_update 找不到就整包失败）
+# 并在更新后按同一个名字重启。删掉它等于让所有旧版用户断更。
+# 详见 docs/auto_update.md §8 发布不变量。
+LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
 UPDATER_EXE_NAME = "Updater.exe"
 NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
+# 资产名刻意保持改名前的 "KaraokeStudio-" 前缀：存量 Updater 硬编码全量 zip 名，
+# 且从 zip 名派生 manifest 名。改了会甩掉整个存量安装基数。
 ASSET_BASE = "KaraokeStudio-windows"
 MANIFEST_SCHEMA = 1
 LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
@@ -89,6 +96,9 @@ INTERNAL_NON_RUNTIME_NAMES = {
 
 APP_TARGETS = [
     APP_EXE_NAME,
+    # 兼容副本必须在 targets 里：增量更新的 orphan cleanup 会删掉「本地 manifest 有、
+    # 新 manifest 没有」的文件，漏了它旧客户端更新完就重启不起来。
+    LEGACY_APP_EXE_NAME,
     UPDATER_EXE_NAME,
     NATIVE_RENDERER_EXE_NAME,
     "_internal/krok_helper",
@@ -442,6 +452,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     app_dir = dist_root / APP_DIR_NAME
     if not (app_dir / APP_EXE_NAME).exists():
         raise SystemExit(f"找不到 {app_dir / APP_EXE_NAME}，请先运行 build_windows.bat")
+    if not (app_dir / LEGACY_APP_EXE_NAME).exists():
+        # 缺了它，存量客户端的更新会整包失败（apply_update 找不到 --app-exe）。
+        raise SystemExit(
+            f"找不到兼容副本 {app_dir / LEGACY_APP_EXE_NAME}。"
+            "build_windows.bat 必须在改名后复制一份旧名 EXE，否则旧版用户无法自动更新。"
+        )
     if not (app_dir / UPDATER_EXE_NAME).exists():
         raise SystemExit(f"找不到 {app_dir / UPDATER_EXE_NAME}")
 

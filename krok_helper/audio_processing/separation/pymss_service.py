@@ -31,7 +31,7 @@ from pathlib import Path
 from krok_helper.windows import hidden_subprocess_kwargs
 
 #: 桥接脚本源码。由工作台写入自己的目录，用 PyMSS 运行时的解释器执行。
-_BRIDGE_SOURCE = r'''"""Karaoke Studio 的 PyMSS 桥接进程（由工作台生成，请勿手工修改）。"""
+_BRIDGE_SOURCE = r'''"""Lin-K Lyrics 的 PyMSS 桥接进程（由工作台生成，请勿手工修改）。"""
 from __future__ import annotations
 
 import json

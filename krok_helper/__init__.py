@@ -1,4 +1,4 @@
-"""Karaoke Studio package."""
+"""Lin-K Lyrics package."""
 
 from __future__ import annotations
 

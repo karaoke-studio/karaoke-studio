@@ -118,7 +118,7 @@ class ExternalModelCandidate:
     ``candidate_id`` is a stable backend identifier and must be used for
     binding.  ``display_name`` is presentation-only and may change without
     invalidating saved mappings.  Only candidates with ``bindable=True`` may
-    be assigned to a fixed Karaoke Studio task.
+    be assigned to a fixed Lin-K Lyrics task.
     """
 
     candidate_id: str

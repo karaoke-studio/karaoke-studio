@@ -18,7 +18,12 @@ log = logging.getLogger(__name__)
 
 UPDATER_EXE_NAME = "Updater.exe"
 TMP_DIR_NAME = "KaraokeStudioUpdater"
-DEFAULT_APP_EXE_NAME = "Karaoke Studio.exe"
+#: 非冻结运行时的兜底 EXE 名。冻结运行时 :func:`find_app_exe_name` 取的是用户
+#: 实际启动的那个文件名 —— 包里同时有 ``Lin-K Lyrics.exe`` 与改名前的
+#: ``Karaoke Studio.exe`` 兼容副本，两者都能自洽走完更新流程。
+DEFAULT_APP_EXE_NAME = "Lin-K Lyrics.exe"
+#: 改名前的主程序名。存量客户端会把它当 ``--app-exe`` 传进来，发布包必须一直带着它。
+LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
 LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 
 

@@ -5,7 +5,12 @@ import sys
 from krok_helper.settings import AppSettings
 from krok_helper.updater.settings import UpdaterSettings, ensure_updater_settings
 from krok_helper.updater.sources import build_api_urls, build_release_urls, normalize_order
-from krok_helper.updater.installer import DEFAULT_APP_EXE_NAME, TMP_DIR_NAME, LaunchPlan
+from krok_helper.updater.installer import (
+    DEFAULT_APP_EXE_NAME,
+    LEGACY_APP_EXE_NAME,
+    TMP_DIR_NAME,
+    LaunchPlan,
+)
 from krok_helper.updater.worker import LatestRelease, ReleaseAsset, current_asset_name, is_newer_version
 
 
@@ -71,9 +76,13 @@ def test_workbench_updater_launcher_is_workbench_scoped(tmp_path) -> None:
 
     args = plan.command_args(tmp_path / "Updater.exe", current_pid=1234)
 
+    # 更新器临时目录名刻意保持改名前的写法：三处副本（installer / updater_app /
+    # separation.runtime 的目的地校验）必须一致，且它是存量客户端的既定行为。
     assert TMP_DIR_NAME == "KaraokeStudioUpdater"
-    assert DEFAULT_APP_EXE_NAME == "Karaoke Studio.exe"
+    assert DEFAULT_APP_EXE_NAME == "Lin-K Lyrics.exe"
+    # 改名前的 EXE 名必须继续存在：存量客户端会把它当 --app-exe 传进来。
+    assert LEGACY_APP_EXE_NAME == "Karaoke Studio.exe"
     assert "--app-exe" in args
-    assert args[args.index("--app-exe") + 1] == "Karaoke Studio.exe"
+    assert args[args.index("--app-exe") + 1] == DEFAULT_APP_EXE_NAME
     assert "KaraokeStudio-windows.zip" in args
     assert "StrangeUtaGame" not in " ".join(args)

@@ -76,6 +76,7 @@ from krok_helper.config import (
     APP_LOGO_PATH,
     APP_TITLE,
     APP_VERSION,
+    APP_WINDOW_TITLE,
     WINDOW_HEIGHT,
     WINDOW_MIN_HEIGHT,
     WINDOW_MIN_WIDTH,
@@ -381,7 +382,7 @@ class KrokHelperQtApp(QMainWindow):
         setThemeColor(palette().accent_primary, lazy=True)
         theme.changed.connect(self._on_theme_changed)
 
-        self.setWindowTitle(APP_TITLE)
+        self.setWindowTitle(APP_WINDOW_TITLE)
         app_icon = load_app_icon()
         if app_icon is not None:
             self.setWindowIcon(app_icon)

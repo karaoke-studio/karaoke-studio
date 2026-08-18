@@ -13,7 +13,7 @@ from PyQt6.QtCore import QPoint, QSize, Qt
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
-from krok_helper.config import APP_VERSION
+from krok_helper.config import APP_VERSION, APP_WINDOW_TITLE
 
 
 def test_startup_splash_module_exposes_window_class() -> None:
@@ -48,7 +48,7 @@ def test_startup_splash_displays_workbench_branding_and_start_image() -> None:
     status = window.findChild(QLabel, "startupStatus")
 
     assert title is not None
-    assert title.text() == f"Karaoke Studio · 卡拉OK工作台 · v{APP_VERSION}"
+    assert title.text() == f"{APP_WINDOW_TITLE} · v{APP_VERSION}"
     assert status is not None
     assert status.text() == "正在加载..."
     assert STARTUP_IMAGE_PATH == Path(__file__).parents[1] / "krok_helper" / "assets" / "logo" / "start.jpg"

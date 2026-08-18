@@ -19,6 +19,8 @@ from urllib.parse import unquote, urlsplit
 
 from PyQt6.QtCore import QObject, QTimer
 
+from krok_helper.app_paths import LEGACY_APP_NAMES
+from krok_helper.config import APP_NAME
 from krok_helper.windows import hidden_subprocess_kwargs
 
 from .audio_io import extract_result_stems, prepare_pcm
@@ -101,7 +103,7 @@ class RealSeparationBackend(SeparationBackend):
     """Threaded adapter around the pinned PyMSS v2 HTTP server.
 
     The backend owns only services it starts. A URL supplied by the user is
-    probed and used as-is, and is never stopped by Karaoke Studio.
+    probed and used as-is, and is never stopped by Lin-K Lyrics.
     """
 
     def __init__(
@@ -1066,7 +1068,16 @@ class RealSeparationBackend(SeparationBackend):
             return Path(configured)
         appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         root = Path(appdata) if appdata else Path.cwd()
-        return root / "Karaoke Studio" / "PyMSSExternal"
+        current = root / APP_NAME / "PyMSSExternal"
+        if current.exists():
+            return current
+        # 这个目录在 %LOCALAPPDATA% 下，不在 migrate_app_data_dir 的搬迁范围内，
+        # 所以改名后要自己回退到历史应用名，免得把已装好的外部 PyMSS 环境丢掉。
+        for legacy_name in LEGACY_APP_NAMES:
+            legacy = root / legacy_name / "PyMSSExternal"
+            if legacy.exists():
+                return legacy
+        return current
 
     def _download_source(self) -> str:
         source = str(self._settings.get("download_source", "modelscope")).strip()

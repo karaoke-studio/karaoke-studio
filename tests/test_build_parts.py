@@ -54,11 +54,13 @@ def test_content_hash_matches_shipped_updater_implementation(tmp_path) -> None:
 
 
 def _make_app_dir(tmp_path: Path) -> Path:
-    app = tmp_path / "Karaoke Studio"
+    app = tmp_path / build_parts.APP_DIR_NAME
     (app / "_internal" / "krok_helper" / "assets").mkdir(parents=True)
     (app / "_internal" / "strange_uta_game" / "config").mkdir(parents=True)
     (app / "_internal" / "PyQt6").mkdir(parents=True)
-    (app / "Karaoke Studio.exe").write_bytes(b"EXE")
+    (app / build_parts.APP_EXE_NAME).write_bytes(b"EXE")
+    # 改名前的兼容副本：存量客户端的 Updater 靠它校验更新包并重启
+    (app / build_parts.LEGACY_APP_EXE_NAME).write_bytes(b"EXE")
     (app / "Updater.exe").write_bytes(b"UPD")
     (app / "krok_subtitle_renderer.exe").write_bytes(b"GPU")
     (app / "_internal" / "base_library.zip").write_bytes(b"LIB")
@@ -85,11 +87,14 @@ def test_pack_part_zip_uses_app_relative_arcnames(tmp_path) -> None:
     build_parts.pack_part_zip(zip_path, app, build_parts.APP_TARGETS)
     with zipfile.ZipFile(str(zip_path)) as zf:
         names = set(zf.namelist())
-    assert "Karaoke Studio.exe" in names
+    assert build_parts.APP_EXE_NAME in names
+    # 兼容副本必须进 app part：漏了它，增量更新的 orphan cleanup 会把存量用户
+    # 安装目录里的旧名 EXE 删掉，旧 Updater 更新完就重启不起来。
+    assert build_parts.LEGACY_APP_EXE_NAME in names
     assert "Updater.exe" in names
     assert "krok_subtitle_renderer.exe" in names
     assert "_internal/krok_helper/assets/logo.ico" in names
-    assert not any(n.startswith("Karaoke Studio/") for n in names)
+    assert not any(n.startswith(f"{build_parts.APP_DIR_NAME}/") for n in names)
 
 
 def test_pack_app_part_rejects_missing_native_renderer(tmp_path) -> None:
@@ -110,7 +115,7 @@ def test_pack_full_zip_keeps_single_top_dir(tmp_path) -> None:
     build_parts.pack_full_zip(zip_path, app)
     with zipfile.ZipFile(str(zip_path)) as zf:
         names = zf.namelist()
-    assert names and all(n.startswith("Karaoke Studio/") for n in names)
+    assert names and all(n.startswith(f"{build_parts.APP_DIR_NAME}/") for n in names)
 
 
 # ── runtime 复用决策 ────────────────────────────────────────────────

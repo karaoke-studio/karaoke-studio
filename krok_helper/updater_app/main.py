@@ -17,13 +17,16 @@ class _WorkbenchProductFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = record.msg.replace(
                 "StrangeUtaGame Updater",
-                "Karaoke Studio Updater",
+                "Lin-K Lyrics Updater",
             )
         return True
 
 
 _original_setup_logger = updater_main.setup_logger
 _original_cleanup_temp_workdir = updater_main._cleanup_temp_workdir
+_original_apply_update = updater_main.apply_update
+
+PRIMARY_APP_EXE_NAME = "Lin-K Lyrics.exe"
 
 
 def _setup_workbench_logger(log_path):
@@ -62,11 +65,38 @@ def _cleanup_workbench_temp_workdir(work_dir) -> None:
                 pass
 
 
+def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
+    """Keep the renamed primary EXE when an old client requests the legacy name.
+
+    SUG's generic full-package updater copies only the EXE named by ``--app-exe``.
+    Existing workbench installs pass ``Karaoke Studio.exe``, while renamed release
+    packages intentionally contain both that compatibility copy and
+    ``Lin-K Lyrics.exe``.  Preserve the generic updater's rollback behavior, then
+    add the renamed entry point after the legacy target has updated successfully.
+    """
+
+    ok, error = _original_apply_update(app_dir, app_exe, internal_name, new_root, log)
+    if not ok or app_exe == PRIMARY_APP_EXE_NAME:
+        return ok, error
+
+    primary_source = new_root / PRIMARY_APP_EXE_NAME
+    if not primary_source.is_file():
+        return False, f"更新包中找不到 {PRIMARY_APP_EXE_NAME}"
+
+    try:
+        shutil.copy2(str(primary_source), str(app_dir / PRIMARY_APP_EXE_NAME))
+    except OSError as exc:
+        return False, f"写入 {PRIMARY_APP_EXE_NAME} 失败: {exc}"
+    log.info("已写入改名后的主程序 %s", PRIMARY_APP_EXE_NAME)
+    return True, ""
+
+
 def _configure_product() -> None:
     updater_main.TMP_DIR_NAME = "KaraokeStudioUpdater"
     updater_main.DEFAULT_USER_AGENT = "KaraokeStudio-Updater/standalone"
     updater_main.setup_logger = _setup_workbench_logger
     updater_main._cleanup_temp_workdir = _cleanup_workbench_temp_workdir
+    updater_main.apply_update = _apply_workbench_update
 
 
 def _enable_gui() -> None:

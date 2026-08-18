@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sys
 
+from krok_helper.config import APP_NAME
+
 
 def configure_source_debug_settings_profile() -> None:
     """Keep source debug runs from touching the packaged app's settings."""
@@ -11,4 +13,4 @@ def configure_source_debug_settings_profile() -> None:
         return
     if os.environ.get("KARAOKE_STUDIO_SETTINGS_DIR"):
         return
-    os.environ.setdefault("KARAOKE_STUDIO_SETTINGS_APP_NAME", "Karaoke Studio Dev")
+    os.environ.setdefault("KARAOKE_STUDIO_SETTINGS_APP_NAME", f"{APP_NAME} Dev")

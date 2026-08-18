@@ -47,7 +47,13 @@ from qfluentwidgets import (
     SwitchButton,
 )
 
-from krok_helper.config import APP_LOGO_PATH, APP_TITLE, APP_VERSION, FFMPEG_DIR_PLACEHOLDER
+from krok_helper.config import (
+    APP_LOGO_PATH,
+    APP_TITLE,
+    APP_VERSION,
+    APP_WINDOW_TITLE,
+    FFMPEG_DIR_PLACEHOLDER,
+)
 from krok_helper.errors import ProcessingError
 from krok_helper.logging_config import get_active_log_dir
 from krok_helper.pipeline import (
@@ -773,7 +779,7 @@ class SettingsDialogs(QObject):
         product_icon: QIcon | FIF = QIcon(str(APP_LOGO_PATH)) if APP_LOGO_PATH.exists() else FIF.INFO
         product_card = SettingCard(
             product_icon,
-            "Karaoke-Studio 卡拉OK工作台",
+            APP_WINDOW_TITLE,
             f"版本 v{APP_VERSION}  |  B站 @凛夜delin",
             about_group,
         )

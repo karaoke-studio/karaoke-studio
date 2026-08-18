@@ -2043,7 +2043,7 @@ class _GradientStopsPasteDialog(ModelessDialog):
         layout.setSpacing(10)
 
         hint = CaptionLabel(
-            "粘贴 Karaoke Studio 渐变关键点 JSON。应用后仅替换当前渐变条的颜色和位置。",
+            "粘贴 Lin-K Lyrics 渐变关键点 JSON。应用后仅替换当前渐变条的颜色和位置。",
             self,
         )
         hint.setWordWrap(True)

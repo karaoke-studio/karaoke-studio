@@ -14,10 +14,15 @@ from pathlib import Path
 from typing import TextIO
 
 from krok_helper.config import APP_NAME, APP_VERSION
+from krok_helper.app_paths import (
+    SETTINGS_APP_NAME_ENV,
+    SETTINGS_DIR_ENV,
+    consume_migration_notes,
+)
 
 
 LOG_DIR_ENV = "KARAOKE_STUDIO_LOG_DIR"
-LOG_FILE_NAME = "karaoke-studio.log"
+LOG_FILE_NAME = "lin-k-lyrics.log"
 NATIVE_CRASH_FILE_NAME = "native-crash.log"
 MAX_LOG_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
@@ -36,11 +41,11 @@ def get_log_dir() -> Path:
     if explicit:
         return Path(explicit).expanduser()
 
-    settings_dir = os.getenv("KARAOKE_STUDIO_SETTINGS_DIR")
+    settings_dir = os.getenv(SETTINGS_DIR_ENV)
     if settings_dir:
         return Path(settings_dir).expanduser() / "logs"
 
-    app_dir_name = os.getenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", APP_NAME).strip() or APP_NAME
+    app_dir_name = os.getenv(SETTINGS_APP_NAME_ENV, APP_NAME).strip() or APP_NAME
     appdata = os.getenv("APPDATA")
     if os.name == "nt" and appdata:
         return Path(appdata) / app_dir_name / "logs"
@@ -208,7 +213,7 @@ def configure_application_logging(
         target_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         fallback_reason = exc
-        target_dir = Path(tempfile.gettempdir()) / "KaraokeStudio" / "logs"
+        target_dir = Path(tempfile.gettempdir()) / "LinKLyrics" / "logs"
         target_dir.mkdir(parents=True, exist_ok=True)
     log_path = target_dir / LOG_FILE_NAME
 
@@ -227,7 +232,7 @@ def configure_application_logging(
             )
         except OSError as exc:
             fallback_reason = fallback_reason or exc
-            target_dir = Path(tempfile.gettempdir()) / "KaraokeStudio" / "logs"
+            target_dir = Path(tempfile.gettempdir()) / "LinKLyrics" / "logs"
             target_dir.mkdir(parents=True, exist_ok=True)
             log_path = target_dir / LOG_FILE_NAME
             handler = logging.handlers.RotatingFileHandler(
@@ -272,6 +277,9 @@ def configure_application_logging(
                 "默认日志目录不可写，已回退到临时目录: %s",
                 fallback_reason,
             )
+        # migrate_app_data_dir 跑在日志就绪之前，它攒下的说明在这里补写。
+        for note in consume_migration_notes():
+            logging.getLogger(__name__).info("%s", note)
     elif _configured_log_path is None:
         _configured_log_path = Path(getattr(handler, "baseFilename", log_path))
 

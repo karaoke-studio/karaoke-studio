@@ -1,6 +1,6 @@
 """Pure-data NicoKaraMaker3 font-slot fallback resolution.
 
-N3 stores six ``FontFaceInfoModel`` entries, but Karaoke Studio deliberately
+N3 stores six ``FontFaceInfoModel`` entries, but Lin-K Lyrics deliberately
 ignores the two kana entries (1/4).  Kana uses the Japanese settings from slot
 0 for lyrics and slot 3 for ruby.  This module resolves the four effective
 slots without importing Qt so both ``.n3proj`` snapshots and ``.tpl`` templates

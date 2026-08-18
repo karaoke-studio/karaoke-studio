@@ -25,10 +25,11 @@ def _serve_directory(root: Path):
 
 def _write_release_zip(path: Path) -> str:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("Karaoke Studio/Karaoke Studio.exe", "new exe\n")
-        zf.writestr("Karaoke Studio/Updater.exe", "new updater\n")
-        zf.writestr("Karaoke Studio/_internal/version.txt", "3.0.1\n")
-        zf.writestr("Karaoke Studio/_internal/runtime/new.txt", "new runtime\n")
+        zf.writestr("Lin-K Lyrics/Lin-K Lyrics.exe", "new exe\n")
+        zf.writestr("Lin-K Lyrics/Karaoke Studio.exe", "new exe\n")
+        zf.writestr("Lin-K Lyrics/Updater.exe", "new updater\n")
+        zf.writestr("Lin-K Lyrics/_internal/version.txt", "3.0.1\n")
+        zf.writestr("Lin-K Lyrics/_internal/runtime/new.txt", "new runtime\n")
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -49,7 +50,7 @@ def test_workbench_cleanup_preserves_handed_off_app_part(tmp_path) -> None:
     assert not stale_dir.exists()
 
 
-def test_workbench_updater_applies_full_zip_from_local_http(tmp_path, monkeypatch) -> None:
+def test_old_install_applies_renamed_full_zip_from_local_http(tmp_path, monkeypatch) -> None:
     app_dir = tmp_path / "installed" / "Karaoke Studio"
     internal_dir = app_dir / "_internal"
     internal_dir.mkdir(parents=True)
@@ -102,6 +103,7 @@ def test_workbench_updater_applies_full_zip_from_local_http(tmp_path, monkeypatc
 
     assert rc == 0
     assert (app_dir / "Karaoke Studio.exe").read_text(encoding="utf-8") == "new exe\n"
+    assert (app_dir / "Lin-K Lyrics.exe").read_text(encoding="utf-8") == "new exe\n"
     assert (app_dir / "Updater.exe").read_text(encoding="utf-8") == "new updater\n"
     assert (internal_dir / "version.txt").read_text(encoding="utf-8") == "3.0.1\n"
     assert (internal_dir / "runtime" / "new.txt").read_text(encoding="utf-8") == "new runtime\n"

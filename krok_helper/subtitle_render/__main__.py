@@ -9,6 +9,7 @@ import sys
 
 from PyQt6.QtWidgets import QApplication, QMainWindow
 
+from krok_helper.config import APP_TITLE
 from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
 
 
@@ -16,7 +17,7 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
 
     window = QMainWindow()
-    window.setWindowTitle("字幕视频生成 — 卡拉ok工作台")
+    window.setWindowTitle(f"字幕视频生成 — {APP_TITLE}")
     window.resize(1280, 800)
 
     content = SubtitleRenderWindow(embedded=False)

@@ -13,6 +13,13 @@ from krok_helper.stdio import configure_utf8_stdio
 configure_source_debug_settings_profile()
 configure_utf8_stdio()
 
+# 必须早于 configure_application_logging()：日志会在新应用名目录下建 logs/，
+# 一旦它先跑，迁移的「新目录不存在」前提就被破坏，用户数据会永久留在旧目录。
+from krok_helper.app_paths import migrate_app_data_dir
+
+
+migrate_app_data_dir()
+
 from krok_helper.logging_config import configure_application_logging
 
 

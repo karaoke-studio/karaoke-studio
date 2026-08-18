@@ -1,4 +1,4 @@
-# Karaoke Studio 发版流程
+# Lin-K Lyrics 发版流程
 
 工作台与 SUG submodule **不会同时发版**——一次 release 要么仅工作台代码改动，要么仅 submodule 同步。两条流程在版本号规则和操作步骤上不同，CI 触发与 release body 处理共用。
 
@@ -195,7 +195,7 @@ git push origin vX.Y.Z[.N]
 - **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量）。
 - **Publish Release**：把全部文件上传到 GitHub Release（仅 tag 推送时执行）。
 
-**发布不变量（违反任何一条都会甩掉存量客户端）**：全量 zip / part / manifest 资产名不可改；`Karaoke Studio.exe` 与 onedir 布局不可改名/改结构；tag 保持 `vX.Y.Z[.N]`；runtime 依赖未变时必须复用上一版 zip 原文件（CI 已内置 `--require-runtime-reuse` 安全闸，重打会改变内容哈希令全部老用户重下 runtime）。
+**发布不变量（违反任何一条都会甩掉存量客户端）**：全量 zip / part / manifest 资产名不可改（保持改名前的 `KaraokeStudio-*` 前缀）；主程序改名后必须继续随包分发同内容的 `Karaoke Studio.exe` 兼容副本并保留在 `APP_TARGETS` 中，onedir 布局不可改结构（详见 [auto_update.md §8.1](auto_update.md)）；tag 保持 `vX.Y.Z[.N]`；runtime 依赖未变时必须复用上一版 zip 原文件（CI 已内置 `--require-runtime-reuse` 安全闸，重打会改变内容哈希令全部老用户重下 runtime）。
 
 3 个 job 必须全绿才会创建 release。监控：
 
@@ -282,7 +282,7 @@ macOS：
 
 ```bash
 bash ./scripts/build_macos.command
-cd dist/macos && ditto -c -k --sequesterRsrc --keepParent "Karaoke Studio.app" "../../KaraokeStudio-macos.zip"
+cd dist/macos && ditto -c -k --sequesterRsrc --keepParent "Lin-K Lyrics.app" "../../KaraokeStudio-macos.zip"
 ```
 
 手工上传到已有 release：

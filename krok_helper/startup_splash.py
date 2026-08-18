@@ -1,4 +1,4 @@
-"""Lightweight Karaoke Studio startup splash window."""
+"""Lightweight Lin-K Lyrics startup splash window."""
 
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
-from krok_helper.config import APP_VERSION
+from krok_helper.config import APP_VERSION, APP_WINDOW_TITLE
 
 
 STARTUP_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "start.jpg"
@@ -52,7 +52,7 @@ class StartupSplashWindow(QWidget):
         layout.setSpacing(0)
         layout.addStretch()
 
-        title = QLabel(f"Karaoke Studio · 卡拉OK工作台 · v{APP_VERSION}", self)
+        title = QLabel(f"{APP_WINDOW_TITLE} · v{APP_VERSION}", self)
         title.setObjectName("startupTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = title.font()

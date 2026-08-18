@@ -10,6 +10,18 @@ from datetime import datetime
 from pathlib import Path
 
 from krok_helper.config import APP_NAME
+# 路径原语集中在 app_paths（零重依赖），这里重新导出，历史 import 点无需改动。
+from krok_helper.app_paths import (  # noqa: F401
+    LEGACY_APP_NAMES,
+    SETTINGS_APP_NAME_ENV,
+    SETTINGS_DIR_ENV,
+    SETTINGS_FILE_NAME,
+    consume_migration_notes,
+    get_legacy_settings_paths,
+    get_settings_path,
+    migrate_app_data_dir,
+    settings_path_for_app_name as _settings_path_for_app_name,
+)
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
@@ -26,14 +38,11 @@ from krok_helper.video_download.download_task import (
 )
 
 
-SETTINGS_FILE_NAME = "settings.json"
 ALIGN_TARGET_VIDEO = "video"
 ALIGN_TARGET_AUDIO = "audio"
 ALIGN_OUTPUT_DIR_SOURCE_VIDEO = "source_video"
 ALIGN_OUTPUT_DIR_CUSTOM = "custom"
-LEGACY_APP_NAMES = ("Karaoke Helper",)
-SETTINGS_DIR_ENV = "KARAOKE_STUDIO_SETTINGS_DIR"
-SETTINGS_APP_NAME_ENV = "KARAOKE_STUDIO_SETTINGS_APP_NAME"
+
 
 # 工作台界面主题：跟随系统 / 强制浅色 / 强制深色。
 # 与 SUG ``frontend/theme.py::ThemeMode`` 对应。新值必须同步两边。
@@ -118,31 +127,6 @@ class AppSettings:
     # 形式读写，保存安装位置、Runtime 来源、任务模型绑定、输出设置与
     # last_internal_tab 等。API key 不写入本 namespace（每次启动临时生成）。
     pymss: dict = field(default_factory=dict)
-
-
-def _settings_path_for_app_name(app_name: str) -> Path:
-    appdata = os.getenv("APPDATA")
-    if os.name == "nt" and appdata:
-        return Path(appdata) / app_name / SETTINGS_FILE_NAME
-
-    config_home = os.getenv("XDG_CONFIG_HOME")
-    if config_home:
-        return Path(config_home) / app_name.lower().replace(" ", "-") / SETTINGS_FILE_NAME
-
-    return Path.home() / ".config" / app_name.lower().replace(" ", "-") / SETTINGS_FILE_NAME
-
-
-def get_settings_path() -> Path:
-    settings_dir = os.getenv(SETTINGS_DIR_ENV)
-    if settings_dir:
-        return Path(settings_dir).expanduser() / SETTINGS_FILE_NAME
-
-    app_name = os.getenv(SETTINGS_APP_NAME_ENV, APP_NAME).strip() or APP_NAME
-    return _settings_path_for_app_name(app_name)
-
-
-def get_legacy_settings_paths() -> list[Path]:
-    return [_settings_path_for_app_name(name) for name in LEGACY_APP_NAMES]
 
 
 # settings.json 解析失败时，``load_app_settings`` 会把坏文件备份并把备份路径

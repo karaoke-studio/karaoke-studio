@@ -15,7 +15,7 @@
 
 ## 1. 这是什么
 
-**Karaoke Studio（卡拉OK工作台）**——面向卡拉 OK / B 站投稿制作的 Windows 桌面工具，Python + PyQt6 + PyInstaller，仓库主体是 `karaoke-studio/karaoke-studio`，由 [Myosotis11037](https://github.com/Myosotis11037)（原 karaoke-helper 作者）与 [Xuan-cc](https://github.com/Xuan-cc)（原 StrangeUtaGame 作者）于 2026-06 合并而成。详情见 [AUTHORS.md](AUTHORS.md) / [NOTICE](NOTICE)。
+**Lin-K Lyrics（凛K）**——面向卡拉 OK / B 站投稿制作的 Windows 桌面工具，Python + PyQt6 + PyInstaller，仓库主体是 `karaoke-studio/karaoke-studio`，由 [Myosotis11037](https://github.com/Myosotis11037)（原 karaoke-helper 作者）与 [Xuan-cc](https://github.com/Xuan-cc)（原 StrangeUtaGame 作者）于 2026-06 合并而成，2026-08 由 Karaoke Studio 更名为 Lin-K Lyrics（仓库名、发布资产名与环境变量前缀均保持不变）。详情见 [AUTHORS.md](AUTHORS.md) / [NOTICE](NOTICE)。
 
 UI 的核心是 [`WORKFLOW_STEPS`](krok_helper/gui_qt.py)（约第 1064 行）定义的 **6 步工作流**：
 
@@ -114,7 +114,8 @@ git submodule status
 - [`krok_helper/updater/worker.py`](krok_helper/updater/worker.py)：在主程序里跑，查询 GitHub Releases API（全 403 时用 github.com 网页 302 跳转兜底），对比 `APP_VERSION`，跨版本聚合 changelog。
 - [`krok_helper/updater_app/`](krok_helper/updater_app/)：独立 GUI `Updater.exe`（复用 SUG `updater_app` 的 PyQt6 界面与增量更新逻辑），主程序退出后由它显示进度、替换文件并重启，不弹控制台。需要 `build_updater.py` 单独打包。
 - **增量更新**：[`scripts/build_parts.py`](scripts/build_parts.py) 产出 `KaraokeStudio-windows.json`（manifest）+ `-app.zip` + `-runtime.zip`；Updater 按 manifest diff 只下变化的 part，失败自动回退全量 zip。依赖未变时 CI 复用上一版 runtime zip 原文件（`--require-runtime-reuse` 安全闸）。完整机制、配置与失败矩阵见 [`docs/auto_update.md`](docs/auto_update.md)；设计取舍见 [`docs/工作台更新器完善计划.md`](docs/工作台更新器完善计划.md)。
-- 资产命名是硬编码的：`KaraokeStudio-windows.zip` / `KaraokeStudio-macos.zip`（见 `worker.current_asset_name()`）。**manifest 名 `KaraokeStudio-windows.json` 由存量客户端从 zip 名派生，全都不可改**。改名要改四处：worker、`scripts/build_*`、`scripts/build_parts.py`、workflow。
+- 资产命名是硬编码的：`KaraokeStudio-windows.zip` / `KaraokeStudio-macos.zip`（见 `worker.current_asset_name()`）。**manifest 名 `KaraokeStudio-windows.json` 由存量客户端从 zip 名派生，全都不可改** —— 应用 2026-08 已更名为 Lin-K Lyrics，但这套 `KaraokeStudio-*` 资产名刻意保持原样。
+- **主程序 EXE 双名并存**：包里主程序是 `Lin-K Lyrics.exe`，同时必须带一份同内容的`Karaoke Studio.exe`，并且它要在 `build_parts.APP_TARGETS` 里。执行更新的是旧版代码，它按旧文件名校验更新包并重启 —— 删掉副本会让存量用户全量路径彻底断更、增量路径「装上了却拉不起来」。原理与失败矩阵见 [docs/auto_update.md §8.1](docs/auto_update.md)，护栏见 `tests/test_rename_release_invariants.py`。
 - **更新弹窗会直接展示 GitHub Release 的 body**，所以 release body 必须是中文。详见 §6。
 
 ---

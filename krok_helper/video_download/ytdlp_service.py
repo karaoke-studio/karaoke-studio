@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
+from krok_helper.config import APP_NAME
 from krok_helper.ffmpeg import find_tool
 from krok_helper.network import (
     build_urllib_opener_for_app_settings,
@@ -278,9 +279,9 @@ class YtDlpService:
         return version
 
     def update_ytdlp(self) -> str:
-        # PyInstaller frozen 包里 ``sys.executable`` 是宿主 ``Karaoke Studio.exe``，
+        # PyInstaller frozen 包里 ``sys.executable`` 是宿主主程序 EXE，
         # 不是 python.exe；走 ``<app>.exe -m pip install -U yt-dlp`` 只会触发主程序的
-        # argparse 退路，把 Karaoke Studio 自己的 usage 当成 yt-dlp 的更新输出回填到
+        # argparse 退路，把宿主自己的 usage 当成 yt-dlp 的更新输出回填到
         # 状态栏（v3.0.6 之前的真实事故）。而且 frozen bundle 里 yt_dlp 是只读烧进
         # ``_internal/`` 的，pip 即便能跑也写不进去——所以打包版不应该尝试 pip 路径，
         # 只去用户系统 PATH 上可能存在的独立 yt-dlp CLI；找不到就由 ``_update_ytdlp_cli``
@@ -988,7 +989,7 @@ class YtDlpService:
         if getattr(sys, "frozen", False):
             raise VideoDownloadError(
                 "未在系统 PATH 上找到独立的 yt-dlp CLI。"
-                "打包版的 Karaoke Studio 内置 yt-dlp 是只读的，无法热更新；"
+                f"打包版的 {APP_NAME} 内置 yt-dlp 是只读的，无法热更新；"
                 "请整体升级应用，或者单独安装 yt-dlp 到系统 PATH 后再点更新。"
             )
         raise VideoDownloadError("未找到 yt-dlp。请安装 `yt-dlp` 命令或 Python 包。")
@@ -1077,7 +1078,7 @@ class YtDlpService:
         if getattr(sys, "frozen", False):
             raise VideoDownloadError(
                 "打包版无法定位独立的 Python 解释器来跑 pip 更新 yt-dlp。"
-                "请整体升级 Karaoke Studio，或者单独安装 yt-dlp CLI 到系统 PATH 后再试。"
+                f"请整体升级 {APP_NAME}，或者单独安装 yt-dlp CLI 到系统 PATH 后再试。"
             )
         return sys.executable
 

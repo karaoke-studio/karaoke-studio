@@ -531,7 +531,7 @@ def preflight_install_destination(install_dir: str | os.PathLike) -> Path:
         renamed = root / f".pymss-write-probe-{token}.ok"
         try:
             with probe.open("xb") as stream:
-                stream.write(b"Karaoke Studio PyMSS write probe\n")
+                stream.write(b"Lin-K Lyrics PyMSS write probe\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(probe, renamed)

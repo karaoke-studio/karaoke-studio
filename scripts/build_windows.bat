@@ -5,8 +5,11 @@ setlocal
 cd /d "%~dp0\.."
 
 set "PYTHON_BIN=python"
-set "BUILD_NAME=KaraokeStudio"
-set "APP_NAME=Karaoke Studio"
+set "BUILD_NAME=LinKLyrics"
+set "APP_NAME=Lin-K Lyrics"
+rem 改名前的 EXE 名。打包末尾会复制一份同内容副本，供存量客户端的 Updater
+rem 校验更新包并在更新后重启（见 docs/auto_update.md §8）。不要删。
+set "LEGACY_APP_NAME=Karaoke Studio"
 set "DIST_PATH=dist\windows"
 set "WORK_PATH=build\pyinstaller-windows"
 set "SPEC_PATH=build\spec-windows"
@@ -284,6 +287,21 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Creating legacy-name EXE copy for existing installs...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$targetDir = Resolve-Path '%APP_DIST%';" ^
+    "$primary = Join-Path $targetDir ('%APP_NAME%' + '.exe');" ^
+    "$legacy = Join-Path $targetDir ('%LEGACY_APP_NAME%' + '.exe');" ^
+    "if (-not (Test-Path $primary -PathType Leaf)) { throw 'Primary EXE not found.' };" ^
+    "Copy-Item -LiteralPath $primary -Destination $legacy -Force"
+if errorlevel 1 (
+    echo.
+    echo Failed to create the legacy-name EXE copy.
+    echo Existing installs cannot auto-update without it - aborting.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo Copying Updater.exe...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$targetDir = Resolve-Path '%APP_DIST%';" ^
@@ -351,16 +369,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\bass\x64\bass.dll'," ^
     "  'strange_uta_game\bass\x64\bass_fx.dll'," ^
     "  'Updater.exe'," ^
-    "  'krok_subtitle_renderer.exe'" ^
+    "  'krok_subtitle_renderer.exe'," ^
+    "  '%APP_NAME%.exe'," ^
+    "  '%LEGACY_APP_NAME%.exe'" ^
     ");" ^
+    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','%APP_NAME%.exe','%LEGACY_APP_NAME%.exe');" ^
     "$missing = @();" ^
-    "foreach ($rel in $required) { $base = if ($rel -in @('Updater.exe','krok_subtitle_renderer.exe')) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
+    "foreach ($rel in $required) { $base = if ($rel -in $rootLevel) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
     "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^
     "foreach ($name in $multimediaRequired) { if (-not (Get-ChildItem -LiteralPath $internal -Recurse -File -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += ('Qt Multimedia component: ' + $name) } };" ^
     "$forbiddenRuntimeDirs = @('torch','functorch','torchgen','pymss','pymss_core','pip');" ^
-    "foreach ($name in $forbiddenRuntimeDirs) { if (Get-ChildItem -LiteralPath $internal -Recurse -Directory -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1) { $missing += ($name + ' must not be bundled in Karaoke Studio') } };" ^
+    "foreach ($name in $forbiddenRuntimeDirs) { if (Get-ChildItem -LiteralPath $internal -Recurse -Directory -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1) { $missing += ($name + ' must not be bundled in the app') } };" ^
     "$forbiddenMetadataPrefixes = @('torch-','pymss-','pymss_core-','pip-');" ^
-    "foreach ($dir in Get-ChildItem -LiteralPath $internal -Recurse -Directory -ErrorAction SilentlyContinue) { $lower = $dir.Name.ToLowerInvariant(); foreach ($prefix in $forbiddenMetadataPrefixes) { if ($lower.StartsWith($prefix)) { $missing += ($dir.FullName + ' must not be bundled in Karaoke Studio'); break } } };" ^
+    "foreach ($dir in Get-ChildItem -LiteralPath $internal -Recurse -Directory -ErrorAction SilentlyContinue) { $lower = $dir.Name.ToLowerInvariant(); foreach ($prefix in $forbiddenMetadataPrefixes) { if ($lower.StartsWith($prefix)) { $missing += ($dir.FullName + ' must not be bundled in the app'); break } } };" ^
     "if ($missing.Count) { Write-Host 'Missing package files:'; $missing | ForEach-Object { Write-Host ('  ' + $_) }; exit 1 };" ^
     "$warnRoot = Join-Path '%WORK_PATH%' '%BUILD_NAME%';" ^
     "$warn = if (Test-Path $warnRoot) { Get-ChildItem -LiteralPath $warnRoot -Recurse -Filter 'warn-*.txt' -File -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null };" ^

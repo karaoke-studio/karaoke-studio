@@ -76,7 +76,7 @@ def pyinstaller_args(*, clean: bool = False) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Karaoke Studio GUI Updater.exe")
+    parser = argparse.ArgumentParser(description="Build Lin-K Lyrics GUI Updater.exe")
     parser.add_argument("--clean", action="store_true", default=False)
     args = parser.parse_args()
 

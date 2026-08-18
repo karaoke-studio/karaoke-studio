@@ -5,7 +5,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-APP_NAME="Karaoke Studio"
+APP_NAME="Lin-K Lyrics"
 DIST_PATH="$PROJECT_ROOT/dist/macos"
 WORK_PATH="$PROJECT_ROOT/build/pyinstaller-macos"
 SPEC_PATH="$PROJECT_ROOT/build/spec-macos"
@@ -353,12 +353,12 @@ if [ "$missing" -ne 0 ]; then
 fi
 for forbidden_dir in torch functorch torchgen pymss pymss_core pip; do
   if find "$APP_INTERNAL" -type d -name "$forbidden_dir" -print -quit | grep -q .; then
-    echo "$forbidden_dir must not be bundled in Karaoke Studio"
+    echo "$forbidden_dir must not be bundled in $APP_NAME"
     exit 1
   fi
 done
 if find "$APP_INTERNAL" -type d \( -name 'torch-*' -o -name 'pymss-*' -o -name 'pymss_core-*' -o -name 'pip-*' \) -print -quit | grep -q .; then
-  echo "PyMSS/torch/pip package metadata must not be bundled in Karaoke Studio"
+  echo "PyMSS/torch/pip package metadata must not be bundled in $APP_NAME"
   exit 1
 fi
 warn_file="$(find "$WORK_PATH" -name 'warn-*.txt' -type f -print -quit || true)"

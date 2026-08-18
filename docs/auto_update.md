@@ -1,4 +1,4 @@
-# Karaoke Studio 自动更新机制
+# Lin-K Lyrics 自动更新机制
 
 本文面向用户、维护者和后续接手更新器的开发者。发版操作以
 [`release-process.md`](./release-process.md) 为准；设计取舍与跨版本兼容性分析见
@@ -14,9 +14,10 @@
    有变化，先下载并换入新版 `Updater.exe`，然后退出并启动它。
 5. `Updater.exe` 在临时目录运行，等待主进程退出，优先按 manifest 做增量替换；
    manifest 不可用或 part 失败时自动回退全量 zip。
-6. 替换前会备份，失败则回滚；成功后重启 `Karaoke Studio.exe`。
+6. 替换前会备份，失败则回滚；成功后按旧 app 传入的 `--app-exe` 重启主程序
+   （新装是 `Lin-K Lyrics.exe`，从改名前版本升上来的则是 `Karaoke Studio.exe`）。
 
-更新器只管理安装目录中的 `Karaoke Studio.exe`、`Updater.exe`、
+更新器只管理安装目录中的 `Lin-K Lyrics.exe`（及其同内容的 `Karaoke Studio.exe` 兼容副本）、`Updater.exe`、
 `krok_subtitle_renderer.exe` 与 `_internal/`。
 用户设置和工作文件不在更新范围内。日志位于
 `%TEMP%\KaraokeStudioUpdater\updater.log`。
@@ -92,7 +93,7 @@ manifest 协议。
 | `KaraokeStudio-windows.zip` | 完整 onedir 包，全量兜底；内含出厂 `.installed_manifest.json` |
 | `KaraokeStudio-windows.zip.sha256` | 全量 zip 校验 |
 | `KaraokeStudio-windows.json` | schema 1 manifest；名字由存量 Updater 从 zip 名派生，不可改 |
-| `KaraokeStudio-windows-app.zip` | `Karaoke Studio.exe`、`Updater.exe`、`krok_subtitle_renderer.exe`、`_internal/krok_helper`、`_internal/strange_uta_game` |
+| `KaraokeStudio-windows-app.zip` | `Lin-K Lyrics.exe`、`Karaoke Studio.exe`（兼容副本）、`Updater.exe`、`krok_subtitle_renderer.exe`、`_internal/krok_helper`、`_internal/strange_uta_game` |
 | `KaraokeStudio-windows-app.zip.sha256` | app part 文件校验 |
 | `KaraokeStudio-windows-runtime.zip` | `_internal/` 中除应用代码和本地清单外的运行库 |
 | `KaraokeStudio-windows-runtime.zip.sha256` | runtime part 文件校验 |
@@ -147,12 +148,39 @@ runtime 内容哈希、迫使所有用户重下运行库。
 
 下列契约已经被存量客户端硬编码，任何一项都不可改：
 
-- 全量 zip、app/runtime part、manifest 的现有资产名。
-- 主程序名 `Karaoke Studio.exe`、更新器名 `Updater.exe`。
+- 全量 zip、app/runtime part、manifest 的现有资产名 —— 即 `KaraokeStudio-windows*`
+  / `KaraokeStudio-macos.zip` 这套**改名前**的前缀。应用已更名为 Lin-K Lyrics，
+  但资产名刻意保持原样：旧 worker 硬编码全量 zip 名，并从 zip 名派生 manifest 名。
+- **`Karaoke Studio.exe` 必须一直随包分发**（改名后它是 `Lin-K Lyrics.exe` 的同内容副本），
+  且必须列在 `build_parts.APP_TARGETS` 里。更新器名 `Updater.exe` 同样不可改。
 - onedir 的「根目录 EXE + `_internal/`」布局。
 - tag 格式 `vX.Y.Z[.N]`。
 - KS 的四段 `_version_key` 比较语义；`3.1.7.4` 必须大于 `3.1.7`。
 - 已发布 tag 不得 force-push。
+
+### 8.1 为什么旧名 EXE 不能删
+
+执行更新的是**用户机器上的旧版代码**，新版怎么写都救不了它：
+
+1. `updater/installer.py::find_app_exe_name()` 返回 `Path(sys.executable).name` ——
+   也就是用户当前装着的那个文件名 —— 并作为 `--app-exe` 传给 Updater。
+2. `updater_app/main.py::apply_update()` 第一句就是
+   `if not (new_root / app_exe).exists(): return False`。
+3. 同文件的 `launch_main_app()` 更新后按同一个名字重启。
+
+后果分两条路径，都很难看：
+
+| 路径 | 症状 |
+|---|---|
+| 全量 zip | `apply_update` 直接失败并返回「更新包中找不到 Karaoke Studio.exe」。安装不受损，但该用户**从此再也无法自动更新** |
+| 增量 | 文件写入并提交成功，随后 orphan cleanup 删掉旧名 EXE，`launch_main_app` 找不到主程序 —— **更新装上了却永远拉不起来**，桌面快捷方式一并失效 |
+
+`SUPPORTED_MANIFEST_SCHEMA` 那个版本闸门救不了这种情况：把 schema 抬高只会把所有旧
+客户端赶到全量路径，而全量路径恰恰是硬失败的那条。
+
+护栏见 [`tests/test_rename_release_invariants.py`](../tests/test_rename_release_invariants.py)；
+`scripts/build_parts.py` 在缺少兼容副本时会直接 `SystemExit`，`scripts/build_windows.bat`
+复制失败时会中止构建。
 
 ## 9. 发布 checklist
 

@@ -47,7 +47,7 @@ def test_workbench_rebrands_sug_updater_log_messages() -> None:
     )
 
     assert workbench_updater._WorkbenchProductFilter().filter(record)
-    assert record.getMessage() == "Karaoke Studio Updater 启动"
+    assert record.getMessage() == "Lin-K Lyrics Updater 启动"
 
 
 def test_workbench_update_progress_window_is_not_always_on_top(qapp) -> None:

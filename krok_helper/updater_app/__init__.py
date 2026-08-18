@@ -1,2 +1,2 @@
-"""Karaoke Studio standalone updater entry points."""
+"""Lin-K Lyrics standalone updater entry points."""
 

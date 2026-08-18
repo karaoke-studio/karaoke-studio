@@ -28,7 +28,7 @@ from pathlib import Path
 from .msst_env import find_python, locate_root
 
 #: 桥接脚本源码。用 MSST 自带解释器执行，通过 stdin/stdout 收发行分隔 JSON。
-_BRIDGE_SOURCE = r'''"""Karaoke Studio 的 MSST 桥接进程（由工作台生成，请勿手工修改）。"""
+_BRIDGE_SOURCE = r'''"""Lin-K Lyrics 的 MSST 桥接进程（由工作台生成，请勿手工修改）。"""
 from __future__ import annotations
 
 import json
