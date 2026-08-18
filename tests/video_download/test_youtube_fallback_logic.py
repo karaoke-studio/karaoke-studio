@@ -30,11 +30,43 @@ def test_returns_true_for_requested_format_unavailable_error() -> None:
     assert YtDlpService()._should_retry_youtube_with_fallback(YOUTUBE_URL, message) is True
 
 
-def test_youtube_fallback_uses_android_vr_for_full_format_list() -> None:
+def test_returns_true_for_youtube_http_403() -> None:
+    assert YtDlpService()._should_retry_youtube_with_fallback(YOUTUBE_URL, "HTTP Error 403: Forbidden") is True
+
+
+def test_youtube_fallback_uses_visionos_before_android_vr() -> None:
     args = YtDlpService()._build_python_extractor_args(YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
 
-    assert args == {"youtube": {"player_client": ["android_vr", "web"]}}
+    assert args == {"youtube": {"player_client": ["visionos", "android_vr", "web"]}}
     assert "tv" not in args["youtube"]["player_client"]
+
+
+def test_youtube_download_forces_visionos_and_preserves_no_cookie_hint(monkeypatch) -> None:
+    service = YtDlpService()
+    monkeypatch.setattr(service, "_ensure_youtube_visionos_client", lambda: True)
+
+    assert service._youtube_download_extractor_args_hint(YOUTUBE_URL, "") == YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+    assert service._youtube_download_extractor_args_hint(
+        YOUTUBE_URL,
+        YOUTUBE_DISABLE_COOKIE_HINT,
+    ) == f"{YOUTUBE_FALLBACK_EXTRACTOR_ARGS}|{YOUTUBE_DISABLE_COOKIE_HINT}"
+    assert service._youtube_download_extractor_args_hint(BILIBILI_URL, "original") == "original"
+
+
+def test_registers_visionos_client_for_stable_ytdlp() -> None:
+    from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+
+    original = INNERTUBE_CLIENTS.pop("visionos", None)
+    try:
+        assert YtDlpService()._ensure_youtube_visionos_client() is True
+        client = INNERTUBE_CLIENTS["visionos"]
+        assert client["INNERTUBE_CONTEXT"]["client"]["clientName"] == "VISIONOS"
+        assert client["INNERTUBE_CONTEXT_CLIENT_NAME"] == 101
+        assert client["REQUIRE_JS_PLAYER"] is False
+    finally:
+        INNERTUBE_CLIENTS.pop("visionos", None)
+        if original is not None:
+            INNERTUBE_CLIENTS["visionos"] = original
 
 
 def test_extract_retry_drops_cookie_when_cookie_breaks_youtube_formats(monkeypatch) -> None:

@@ -87,6 +87,7 @@ def test_youtube_recommended_downloads_same_best_format_shown_in_ui() -> None:
 
 def test_cli_backend_is_preferred_only_when_cli_is_newer(monkeypatch) -> None:
     service = YtDlpService()
+    monkeypatch.setattr(service, "_ensure_youtube_visionos_client", lambda: False)
     monkeypatch.setattr(service, "_find_ytdlp_cli_or_none", lambda: "yt-dlp")
     monkeypatch.setattr(service, "_python_ytdlp_version", lambda: "2026.03.17")
     monkeypatch.setattr(service, "_read_ytdlp_cli_version", lambda _cli: "2026.06.09")
@@ -97,8 +98,22 @@ def test_cli_backend_is_preferred_only_when_cli_is_newer(monkeypatch) -> None:
 
 def test_cli_backend_is_not_preferred_when_cli_is_older(monkeypatch) -> None:
     service = YtDlpService()
+    monkeypatch.setattr(service, "_ensure_youtube_visionos_client", lambda: False)
     monkeypatch.setattr(service, "_find_ytdlp_cli_or_none", lambda: "yt-dlp")
     monkeypatch.setattr(service, "_python_ytdlp_version", lambda: "2026.06.09")
     monkeypatch.setattr(service, "_read_ytdlp_cli_version", lambda _cli: "2026.03.17")
+
+    assert service._should_prefer_cli_backend("https://www.youtube.com/watch?v=abc") is False
+
+
+def test_patched_python_backend_wins_over_newer_cli(monkeypatch) -> None:
+    service = YtDlpService()
+    monkeypatch.setattr(service, "_python_ytdlp_version", lambda: "2026.03.17")
+    monkeypatch.setattr(service, "_ensure_youtube_visionos_client", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "_find_ytdlp_cli_or_none",
+        lambda: (_ for _ in ()).throw(AssertionError("patched Python backend should short-circuit CLI lookup")),
+    )
 
     assert service._should_prefer_cli_backend("https://www.youtube.com/watch?v=abc") is False

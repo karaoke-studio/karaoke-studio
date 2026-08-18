@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import http.cookiejar
 import json
 import os
@@ -38,7 +39,7 @@ from .format_parser import FormatParser
 
 
 WINDOWS_INVALID_FILENAME_PATTERN = re.compile(r'[\\/:*?"<>|]+')
-YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=android_vr,web"
+YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=visionos,android_vr,web"
 YOUTUBE_DISABLE_COOKIE_HINT = "no_cookie"
 YOUTUBE_HINT_SEPARATOR = "|"
 
@@ -403,6 +404,7 @@ class YtDlpService:
         outtmpl = str(save_dir / f"{output_stem}.%(ext)s")
         selected_format = task.selected_format.download_format if task.selected_format else "best"
         extractor_args_hint = task.info.extractor_args_hint if task.info else ""
+        extractor_args_hint = self._youtube_download_extractor_args_hint(task.url, extractor_args_hint)
         preexisting_outputs = self._snapshot_output_candidates(save_dir, output_stem)
 
         youtube_dl = self._import_ytdlp()
@@ -931,10 +933,17 @@ class YtDlpService:
             from yt_dlp import YoutubeDL
         except ModuleNotFoundError:
             return None
+        self._ensure_youtube_visionos_client()
         return YoutubeDL
 
     def _should_prefer_cli_backend(self, url: str) -> bool:
         if self.detect_source(url) != SOURCE_YOUTUBE:
+            return False
+        # The bundled Python backend can be patched with the VisionOS client that
+        # yt-dlp added after the 2026.07.04 release.  Prefer it over a newer CLI:
+        # an unpatched stable CLI still returns Android VR URLs that consistently
+        # fail with HTTP 403 part-way through some large videos.
+        if self._python_ytdlp_version() and self._ensure_youtube_visionos_client():
             return False
         cli = self._find_ytdlp_cli_or_none()
         if not cli:
@@ -1616,8 +1625,55 @@ class YtDlpService:
 
     def _build_python_extractor_args(self, extractor_args_hint: str) -> dict[str, dict[str, list[str]]]:
         if self._strip_hint_flags(extractor_args_hint) == YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
-            return {"youtube": {"player_client": ["android_vr", "web"]}}
+            return {"youtube": {"player_client": ["visionos", "android_vr", "web"]}}
         return {}
+
+    def _youtube_download_extractor_args_hint(self, url: str, extractor_args_hint: str) -> str:
+        """Use a GVS-compatible client while preserving the no-cookie parse decision."""
+        if self.detect_source(url) != SOURCE_YOUTUBE or not self._ensure_youtube_visionos_client():
+            return extractor_args_hint
+        if self._hint_disables_cookies(extractor_args_hint):
+            return self._with_no_cookie_hint(YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
+        return YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+
+    def _ensure_youtube_visionos_client(self) -> bool:
+        """Backport yt-dlp's VisionOS client to stable builds that predate it.
+
+        YouTube began selectively enforcing GVS PO tokens for Android VR URLs in
+        July 2026.  Those URLs can download roughly one third of a large stream
+        before every subsequent range request receives HTTP 403.  VisionOS is
+        the token-free replacement now used by yt-dlp master.  Its client entry
+        is data-only, so registering it here also fixes already released stable
+        yt-dlp versions without vendoring or monkey-patching extractor code.
+        """
+        try:
+            from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+        except (ImportError, ModuleNotFoundError):
+            return False
+
+        if "visionos" in INNERTUBE_CLIENTS:
+            return True
+        template = INNERTUBE_CLIENTS.get("android_vr")
+        if not isinstance(template, dict):
+            return False
+
+        visionos = copy.deepcopy(template)
+        visionos["INNERTUBE_CONTEXT"]["client"] = {
+            "clientName": "VISIONOS",
+            "clientVersion": "1.02",
+            "deviceMake": "Apple",
+            "deviceModel": "RealityDevice17,1",
+            "userAgent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+            ),
+            "osName": "visionOS",
+            "osVersion": "26.5.23O471",
+        }
+        visionos["INNERTUBE_CONTEXT_CLIENT_NAME"] = 101
+        visionos["REQUIRE_JS_PLAYER"] = False
+        INNERTUBE_CLIENTS["visionos"] = visionos
+        return True
 
     def _strip_hint_flags(self, extractor_args_hint: str) -> str:
         return YOUTUBE_HINT_SEPARATOR.join(
@@ -1647,6 +1703,7 @@ class YtDlpService:
         return (
             "not a bot" in lower
             or "cookies-from-browser" in lower
+            or "http error 403" in lower
             or "requested format is not available" in lower
             or "video is not available" in lower
             or "video is unavailable" in lower
@@ -1654,6 +1711,7 @@ class YtDlpService:
             or "empty file" in lower
             or "空文件" in message
             or "机器人校验" in message
+            or "访问被拒绝" in message
         )
 
     def _should_retry_youtube_without_cookies(self, url: str, message: str) -> bool:
@@ -1691,7 +1749,7 @@ class YtDlpService:
         if "sign in to confirm your age" in lower or "login required" in lower:
             return "该视频需要登录后访问，请检查 Bilibili 登录状态是否有效。"
         if "http error 403" in lower:
-            return "访问被拒绝，可能需要刷新登录状态或稍后重试。"
+            return "YouTube 视频流访问被拒绝，已尝试 VisionOS 兼容模式；请更新 yt-dlp 或稍后重试。"
         if "timed out" in lower:
             return "网络超时，请稍后重试。"
         if "module named yt_dlp" in lower:
