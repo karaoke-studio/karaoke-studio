@@ -218,7 +218,7 @@
   <td align="center">🎬</td>
   <td>
     <b>字幕视频生成 / Subtitle video rendering</b><br/>
-    <sub>把打好轴的歌词渲染成卡拉 OK 动画字幕视频。工程格式 <code>.yurika</code>，可导入 <b>SUG 的 <code>.sug</code></b>、<b>Nicokara 逐字 LRC</b>、<b>NicoKaraMaker3 的 <code>.n3proj</code></b> 与 N3 字体模板。样式能力：<b>角色配色</b>（逐字符指派，含<b>自动和声分色</b> —— 按括号自动把和声段落分给指定角色）、注音、渐变与图片填充、<b>二重描边</b>、三层发光、竖排与 RTL、标题与逐行特效、<b>导唱符</b>（可用自定义 SVG）、分页布局。背景支持视频 / 静态图 / 图片序列 / 纯色，配自动保存与备份历史。<br/>
+    <sub>把打好轴的歌词渲染成卡拉 OK 动画字幕视频。工程格式 <code>.yurika</code>，可导入 <b>SUG 的 <code>.sug</code></b>、<b>Nicokara 逐字 LRC</b>、<b>NicoKaraMaker3 的 <code>.n3proj</code></b> 与 N3 字体模板。样式能力：<b>角色配色</b>（逐字符指派，含<b>自动和声分色</b> —— 按括号自动把和声段落分给指定角色）、注音、渐变与图片填充、<b>二重描边</b>、三档浓度的发光、竖排与 RTL、标题与逐行特效、<b>导唱符</b>（可用自定义 SVG）、分页布局。背景支持视频 / 静态图 / 图片序列 / 纯色，配自动保存与备份历史。<br/>
     Renders timed lyrics into animated karaoke subtitle videos. Native <code>.yurika</code> projects can import SUG <code>.sug</code>, Nicokara per-character LRC, NicoKaraMaker3 <code>.n3proj</code>, and N3 font templates. Styling includes role colors with per-character assignment and <b>automatic backing-vocal coloring</b> (parenthesized backing-vocal passages are assigned to a chosen role), ruby, gradient and image fills, double strokes, three-layer glow, vertical and RTL text, titles, per-line effects, guide symbols with custom SVG support, and paginated layout. Backgrounds can be video, a still image, an image sequence, or a solid color, with auto-save and backup history.</sub>
   </td>
 </tr>
