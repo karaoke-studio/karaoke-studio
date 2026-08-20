@@ -1495,6 +1495,84 @@ def test_unsaved_project_uses_fluent_save_discard_cancel_confirmation(
     assert captured["kwargs"] == {"default": 2}
 
 
+def _capture_question(monkeypatch, answer: bool) -> dict:
+    """把导出前的保存确认换成假的，记下文案与按钮。"""
+    captured: dict = {}
+
+    def fake_question(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return answer
+
+    monkeypatch.setattr(mw, "fluent_question", fake_question)
+    return captured
+
+
+def test_export_does_not_ask_when_the_project_is_already_saved(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "demo.yurika"
+    win._project_dirty = False
+    captured = _capture_question(monkeypatch, False)
+
+    assert win._confirm_project_saved_before_export() is True
+    assert captured == {}
+
+
+@pytest.mark.parametrize("save_result", [True, False])
+def test_export_saves_a_never_saved_project_first(qapp, monkeypatch, save_result):
+    """从未保存过 → 弹窗只给「保存并导出」和「取消导出」两条路。"""
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = None
+    win._project_dirty = True
+    captured = _capture_question(monkeypatch, True)
+    calls: list[bool] = []
+    monkeypatch.setattr(win, "_save_project", lambda: calls.append(True) or save_result)
+
+    assert win._confirm_project_saved_before_export() is save_result
+    assert calls == [True]
+    assert ".yurika" in captured["args"][2]
+    assert captured["kwargs"] == {
+        "yes_text": "保存并导出",
+        "no_text": "取消导出",
+        "default_cancel": True,
+    }
+
+
+def test_export_asks_again_when_a_saved_project_has_new_changes(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "demo.yurika"
+    win._project_dirty = True
+    captured = _capture_question(monkeypatch, True)
+    monkeypatch.setattr(win, "_save_project", lambda: True)
+
+    assert win._confirm_project_saved_before_export() is True
+    assert "未保存的改动" in captured["args"][2]
+
+
+def test_cancelling_the_save_prompt_cancels_the_export(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = None
+    win._project_dirty = True
+    _capture_question(monkeypatch, False)
+    calls: list[bool] = []
+    monkeypatch.setattr(win, "_save_project", lambda: calls.append(True) or True)
+
+    assert win._confirm_project_saved_before_export() is False
+    assert calls == []
+
+
+def test_export_thread_never_starts_when_the_save_prompt_is_cancelled(qapp, monkeypatch):
+    """光有确认还不够 —— 取消之后导出线程一定不能起来。"""
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(win, "_build_render_job", lambda: object())
+    monkeypatch.setattr(win, "_confirm_project_saved_before_export", lambda: False)
+
+    win._start_render_export()
+
+    assert win._render_thread is None
+    assert win._export_start_button.isEnabled()
+
+
 def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     monkeypatch.setattr(

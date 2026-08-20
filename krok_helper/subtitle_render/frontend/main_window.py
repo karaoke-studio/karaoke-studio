@@ -8624,6 +8624,30 @@ class SubtitleRenderWindow(QWidget):
             candidates.append(int(round(self._audio_info.duration * 1000)))
         return max(candidates, default=0)
 
+    def _confirm_project_saved_before_export(self) -> bool:
+        """导出前先把工程落盘；返回 ``False`` 表示用户取消了这次导出。
+
+        成片一旦导出，用户回头多半要照着同一版工程改字幕或配色。这里不给
+        「不保存直接导出」那条路：要么存，要么这次不导。
+        """
+        if self._project_path is not None and not self._project_dirty:
+            return True
+        detail = (
+            "当前项目有未保存的改动。"
+            if self._project_path is not None
+            else f"当前项目还没有保存成工程文件（{PROJECT_FILE_SUFFIX}）。"
+        )
+        if not fluent_question(
+            self,
+            "导出前先保存项目",
+            f"{detail}\n保存后导出的成片才有对应的工程可以回头再改。",
+            yes_text="保存并导出",
+            no_text="取消导出",
+            default_cancel=True,
+        ):
+            return False
+        return self._save_project()
+
     def _start_render_export(self) -> None:
         if self._render_thread is not None and self._render_thread.isRunning():
             fluent_info(self, "导出中", "当前导出任务还在处理中，请稍等。")
@@ -8632,6 +8656,9 @@ class SubtitleRenderWindow(QWidget):
             job = self._build_render_job()
         except ProcessingError as exc:
             fluent_error(self, "无法导出", str(exc))
+            return
+        # 先校验再问保存：素材都没齐时不该先把用户拖进另存为对话框。
+        if not self._confirm_project_saved_before_export():
             return
 
         self._export_start_button.setEnabled(False)
