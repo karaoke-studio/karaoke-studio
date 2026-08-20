@@ -72,15 +72,26 @@ def test_no_toast_when_every_accompaniment_was_a_duplicate() -> None:
     assert toasts == []
 
 
-def _alignment_page(*, selections, payload, vocals=None, **extra):
-    """对齐页替身：转交提示与"交原唱给第 6 步"现在都经 ``_host``。"""
+def _alignment_page(*, selections, payload, vocals=None, backgrounds=None, accepts_background=True, **extra):
+    """对齐页替身：三条转交（背景素材、原唱、提示）现在都经 ``_host``。
+
+    字幕渲染页挂在工作台上，对齐页手里没有 —— 替身如果自带
+    ``subtitle_render_page``，测出来的绿是假的（线上就是这么静默失灵的）。
+    """
     toasts: list[tuple[str, str]] = []
+
+    def _accept_background(path):
+        if backgrounds is not None:
+            backgrounds.append(path)
+        return accepts_background
+
     page = SimpleNamespace(
         _alignment_handoff_dialog=SimpleNamespace(selections=lambda: selections),
         _alignment_handoff_payload=payload,
         _host=SimpleNamespace(
             notify_handoff=lambda title, content: toasts.append((title, content)),
             set_on_vocal_path=(vocals.append if vocals is not None else (lambda _p: None)),
+            set_subtitle_background_video=_accept_background,
         ),
         **extra,
     )
@@ -94,7 +105,7 @@ def test_alignment_handoff_reports_both_targets() -> None:
         selections=(True, True),
         payload=(True, Path("D:/tmp/对齐后.mp4"), Path("D:/tmp/源.mkv"), Path("D:/tmp/原唱.flac")),
         vocals=vocals,
-        subtitle_render_page=SimpleNamespace(load_video=loaded.append),
+        backgrounds=loaded,
     )
 
     AlignmentPage._apply_alignment_handoff(page)
@@ -112,7 +123,6 @@ def test_alignment_handoff_only_reports_what_was_ticked() -> None:
         selections=(False, True),
         payload=(True, Path("D:/tmp/对齐后.mp4"), Path("D:/tmp/源.mkv"), Path("D:/tmp/原唱.flac")),
         vocals=vocals,
-        subtitle_render_page=SimpleNamespace(load_video=lambda _p: None),
     )
 
     AlignmentPage._apply_alignment_handoff(page)
@@ -126,7 +136,19 @@ def test_alignment_handoff_stays_quiet_without_a_source_path() -> None:
     page, toasts = _alignment_page(
         selections=(True, False),
         payload=(False, Path("D:/tmp/对齐后.wav"), None, Path("D:/tmp/原唱.flac")),
-        subtitle_render_page=SimpleNamespace(load_video=lambda _p: None),
+    )
+
+    AlignmentPage._apply_alignment_handoff(page)
+
+    assert toasts == []
+
+
+def test_alignment_handoff_stays_quiet_when_the_render_page_refuses() -> None:
+    """渲染页读不出这个视频就没放进去 —— 它自己会报错，这里不能再报「已放入」。"""
+    page, toasts = _alignment_page(
+        selections=(True, False),
+        payload=(True, Path("D:/tmp/对齐后.mp4"), Path("D:/tmp/源.mkv"), Path("D:/tmp/原唱.flac")),
+        accepts_background=False,
     )
 
     AlignmentPage._apply_alignment_handoff(page)

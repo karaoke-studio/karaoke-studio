@@ -134,6 +134,13 @@ class AlignmentHost(Protocol):
         """把原唱交给第 6 步 Hi-Res 混流。"""
         ...
 
+    def set_subtitle_background_video(self, path: Path) -> bool:
+        """把视频交给第 5 步字幕渲染当背景素材；返回是否真的放进去了。
+
+        必须走外壳：字幕渲染页挂在工作台上，对齐页手里没有它。
+        """
+        ...
+
 
 class AlignmentPage(QWidget):
     """波形对齐页 —— 独立控件，与外壳的往来只经 :class:`AlignmentHost`。"""
@@ -2481,10 +2488,9 @@ class AlignmentPage(QWidget):
 
         if send_to_subtitle:
             background_path = output_path if is_video_target else source_video_path
-            render_page = getattr(self, "subtitle_render_page", None)
-            load_video = getattr(render_page, "load_video", None)
-            if background_path is not None and callable(load_video):
-                load_video(Path(background_path))
+            if background_path is not None and self._host.set_subtitle_background_video(
+                Path(background_path)
+            ):
                 self._host.notify_handoff(
                     "背景素材已交给字幕渲染",
                     f"「{Path(background_path).name}」已放入第 5 步字幕视频生成。",

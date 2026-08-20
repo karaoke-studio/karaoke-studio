@@ -32,6 +32,9 @@ def alignment_host(calls: list | None = None, *, settings: AppSettings | None = 
         notify_handoff=lambda title, content: log.append(("toast", title)),
         open_settings_window=lambda context: log.append(("settings", context)),
         set_on_vocal_path=lambda path: log.append(("vocal", path)),
+        # 真外壳把接收结果如实回给页面（渲染页拒收就是 False），替身也得回布尔，
+        # 不然「没真放进去时不报提示」那条分支测不出来。
+        set_subtitle_background_video=lambda path: (log.append(("background", path)), True)[1],
     )
 
 

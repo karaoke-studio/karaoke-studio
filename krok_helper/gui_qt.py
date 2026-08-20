@@ -498,6 +498,24 @@ class KrokHelperQtApp(QMainWindow):
     def accept_source_as_on_vocal(self, path: Path) -> bool:
         return self.hires_page.accept_source_as_on_vocal(path)
 
+    # ── 工作流转交入口：素材落在字幕渲染页 ──────────────────────
+
+    def set_subtitle_background_video(self, path: Path) -> bool:
+        """把视频放进第 5 步字幕渲染的背景素材；返回是否真的放进去了。
+
+        对齐页的转交入口。渲染页拒收（ffprobe 读不出、没有视频流）时它自己
+        会弹提示，这里只把结果如实回给调用方，免得转交提示瞎报「已放入」。
+        """
+        render_page = getattr(self, "subtitle_render_page", None)
+        load_video = getattr(render_page, "load_video", None)
+        if not callable(load_video):
+            return False
+        try:
+            return load_video(Path(path)) is not None
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("交接背景视频给字幕渲染失败")
+            return False
+
     def _workflow_pages(self) -> list:
         """已经建好的工作流页面。
 

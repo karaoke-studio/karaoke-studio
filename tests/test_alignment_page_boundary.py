@@ -37,6 +37,7 @@ def _fake_host(calls: list) -> SimpleNamespace:
         notify_handoff=lambda title, content: calls.append(("toast", title)),
         open_settings_window=lambda context: calls.append(("settings", context)),
         set_on_vocal_path=lambda path: calls.append(("vocal", path)),
+        set_subtitle_background_video=lambda path: (calls.append(("background", path)), True)[1],
     )
 
 
@@ -60,6 +61,21 @@ def test_the_page_reaches_outside_only_through_the_host() -> None:
     for node in ast.walk(cls):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
             (assigned if isinstance(node.ctx, ast.Store) else read).add(node.attr)
+        # ``getattr(self, "xxx", None)`` 也是摸自己 —— 名字藏在字符串里，上面那条
+        # 看不见。对齐页曾这样去拿主窗口的 ``subtitle_render_page``：搬出 gui_qt
+        # 之后永远拿到 ``None``，转交静默失灵，扫描却是绿的。
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "self"
+            and len(node.args) > 1
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            read.add(node.args[1].value)
 
     inherited = {name for name in read if hasattr(QWidget, name)}
     outside = read - own - assigned - inherited
