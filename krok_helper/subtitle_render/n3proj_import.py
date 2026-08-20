@@ -240,19 +240,16 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             for item in layouts[1:]
         ]
 
+    # N3 的每一套 フォント設定 都原样落成一个角色方案（含 FontIndex 0 那套）。
+    # 早期版本把第 0 套摊进全局默认，等于把它改名成「全局默认」：分色歌里这套
+    # 通常是某个具体角色（【アクア】之类），名字一丢，LRC 里同名的 ``【…】``
+    # 标记就再也找不到对应方案。全局默认与「标题」两个内置角色因此保持出厂值，
+    # N3 的配色一律 append 进来，由逐字角色标签去引用。
+    font_names: list[str] = []
     if fonts:
-        changes.update(
-            _scheme_changes(
-                fonts[0],
-                lyrics_dir,
-                warnings,
-                str(fonts[0].get("SettingsName") or "標準配色"),
-                preserve_inheritance=True,
-            )
-        )
         scheme_field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
         custom: dict[str, SubtitleStyleScheme] = {}
-        for index, font in enumerate(fonts[1:], start=1):
+        for index, font in enumerate(fonts):
             name = _n3_scheme_name(font.get("SettingsName"), f"配色{index}")
             if name in custom or name == TITLE_SCHEME_NAME:
                 name = f"{name}（{index}）"
@@ -271,25 +268,19 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                 },
                 n3_font_inheritance=True,
             )
+            # 逐字标签只认这里定下的最终名字（重名会被加后缀），所以两边同源。
+            font_names.append(name)
         changes["custom_style_schemes"] = custom
 
     title_infos = [_dict(item) for item in _list(data.get("TitleInfos"))]
-    title_overlay, title_scheme, title_role_schemes = _build_title_overlay(
-        title_infos, fonts, layouts, lyrics_dir, warnings
-    )
+    title_overlay = _build_title_overlay(title_infos, layouts, font_names, warnings)
     if title_overlay is not None:
         changes["title_overlay"] = title_overlay
-    # 「标题」方案恒存在：N3 标题引用的 フォント設定 优先，否则保持默认标题外观。
+    # 「标题」方案恒存在。N3 标题引用的 フォント設定 已经在上面 append 过，标题
+    # 逐字角色去引用它，所以这里保持出厂标题外观、不被 N3 覆写。
     custom_schemes = changes.get("custom_style_schemes")
     if isinstance(custom_schemes, dict):
-        custom_schemes.update(
-            {
-                name: scheme
-                for name, scheme in title_role_schemes.items()
-                if name not in custom_schemes
-            }
-        )
-        custom_schemes[TITLE_SCHEME_NAME] = title_scheme or default_title_scheme()
+        custom_schemes[TITLE_SCHEME_NAME] = default_title_scheme()
 
     # ---------------------------------------------------------- 每行布局 / 逐字配色 / 动画
     line_layout_indices: Optional[list[int]] = None
@@ -305,10 +296,6 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         layout_row_counts = [
             max(len(_list(layout.get("HorizontalAlignments"))), 1)
             for layout in layouts
-        ]
-        font_names = [
-            _n3_scheme_name(font.get("SettingsName"), f"配色{index}")
-            for index, font in enumerate(fonts)
         ]
 
         line_infos = [_dict(item) for item in _list(lyrics_with_source[0].get("LineInfos"))]
@@ -742,50 +729,24 @@ def _title_character_rows(title: dict) -> list[list[dict]]:
     return rows
 
 
-def _title_base_font_index(title: dict, font_count: int) -> int:
-    """取非空白标题字符中出现最多的 FontIndex；平票按首次出现。"""
-    counts: dict[int, int] = {}
-    order: list[int] = []
-    first_valid: Optional[int] = None
-    for row in _title_character_rows(title):
-        for char in row:
-            index = _int(char.get("FontIndex"), 0)
-            if not 0 <= index < font_count:
-                continue
-            if first_valid is None:
-                first_valid = index
-            if not str(char.get("Char") or "").strip():
-                continue
-            if index not in counts:
-                counts[index] = 0
-                order.append(index)
-            counts[index] += 1
-    if counts:
-        return max(order, key=lambda index: counts[index])
-    return first_valid if first_valid is not None else 0
-
-
 def _build_title_overlay(
     title_infos: list[dict],
-    fonts: list[dict],
     layouts: list[dict],
-    lyrics_dir: Path,
+    font_names: list[str],
     warnings: list[str],
-) -> tuple[
-    Optional[TitleOverlay],
-    Optional[SubtitleStyleScheme],
-    dict[str, SubtitleStyleScheme],
-]:
-    """标题 → (文字/布局引用/显示时段, 「标题」配色方案)。
+) -> Optional[TitleOverlay]:
+    """标题 → 文字 / 布局引用 / 显示时段 / 逐字角色。
 
-    字体/颜色不再展开进 ``TitleOverlay``：标题引用的 フォント設定 折算成
-    ``SubtitleStyleScheme`` 由调用方写入 ``custom_style_schemes[TITLE_SCHEME_NAME]``；
+    字体与颜色不展开进 ``TitleOverlay``，也不写进内置的「标题」方案：标题用到
+    的每套 フォント設定 都已经作为角色方案 append 进 ``custom_style_schemes``，
+    这里只按 ``FontIndex`` 给每个标题字符贴上对应的角色名 —— 包括标题的主字体，
+    这样内置「标题」角色保持出厂值，N3 的配色也不会被改名。
     位置改为 ``layout_index`` 引用（与 N3 ``TitleInfoModel.LayoutIndex`` 同序）。
     """
     candidates = [(title, _title_lines(title)) for title in title_infos]
     candidates = [(title, lines) for title, lines in candidates if any(line.strip() for line in lines)]
     if not candidates:
-        return None, None, {}
+        return None
     if len(candidates) > 1:
         skipped = "、".join(str(title.get("SettingsName") or "?") for title, _lines in candidates[1:])
         warnings.append(f"N3 项目包含多个标题设置，仅导入第一个（{skipped} 被忽略）")
@@ -798,36 +759,13 @@ def _build_title_overlay(
         "fade_out_ms": 0,
     }
 
-    scheme: Optional[SubtitleStyleScheme] = None
-    font_index = _title_base_font_index(title, len(fonts))
-    font = fonts[font_index] if 0 <= font_index < len(fonts) else (fonts[0] if fonts else None)
-    if font is not None:
-        context = f"标题·{font.get('SettingsName') or '?'}"
-        scheme_changes = _scheme_changes(font, lyrics_dir, warnings, context)
-        field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
-        scheme = SubtitleStyleScheme(
-            **{key: value for key, value in scheme_changes.items() if key in field_names}
-        )
-
-    title_role_schemes: dict[str, SubtitleStyleScheme] = {}
     role_rows: list[list[Optional[str]]] = []
     for row in _title_character_rows(title):
         labels: list[Optional[str]] = []
         for char in row:
             index = _int(char.get("FontIndex"), 0)
-            if index == font_index or not 0 <= index < len(fonts):
-                labels.append(None)
-                continue
-            role_font = fonts[index]
-            name = _n3_scheme_name(role_font.get("SettingsName"), f"配色{index}")
-            labels.append(name)
-            if name not in title_role_schemes:
-                context = f"标题字符·{name}"
-                changes = _scheme_changes(role_font, lyrics_dir, warnings, context)
-                field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
-                title_role_schemes[name] = SubtitleStyleScheme(
-                    **{key: value for key, value in changes.items() if key in field_names}
-                )
+            # 索引越界（N3 删过配色）时留空，落回内置「标题」角色。
+            labels.append(font_names[index] if 0 <= index < len(font_names) else None)
         role_rows.append(labels)
     kwargs["char_role_labels"] = role_rows
 
@@ -835,12 +773,6 @@ def _build_title_overlay(
     if not (0 <= layout_index < len(layouts)):
         layout_index = 0
     kwargs["layout_index"] = layout_index
-    layout = layouts[layout_index] if 0 <= layout_index < len(layouts) else None
-    if layout is not None and scheme is not None:
-        # N3 标题字间距来自布局的歌詞間隔；本模块字间距归配色方案域。
-        scheme = replace(
-            scheme, letter_spacing_px=_layout_char_domain(layout)["letter_spacing_px"]
-        )
 
     show_time = _dict(title.get("ShowTime"))
     kind = _int(show_time.get("Kind"), 0)
@@ -869,7 +801,7 @@ def _build_title_overlay(
         kwargs["show_mode"] = "tail"
         kwargs["duration_ms"] = interval
         kwargs["tail_offset_ms"] = tail_offset
-    return TitleOverlay(**kwargs), scheme, title_role_schemes
+    return TitleOverlay(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1138,10 +1070,10 @@ def _per_line_payloads(
                     exit_duration_ms=signature[3],
                 )
             )
-        # 逐字配色：FontIndex > 0 → 对应 フォント設定 名称作为角色标签。
-        # FontIndex == 0 是 N3 第一套（全局）方案，不是“没有数据”。
-        # 即使整行都是 0，也必须写入与字符对齐的 None 列表，
-        # 用于覆盖 LRC ``【...】`` 语法解析后遗留的角色标签。
+        # 逐字配色：FontIndex → 对应 フォント設定 名称作为角色标签。第 0 套
+        # 同样是一个具名角色（不再摊进全局默认），所以也贴标签；这样 LRC 里
+        # ``【…】`` 解析出的同名标记正好对得上，而不是被清成 None。
+        # 索引越界（N3 删过配色）才留 None，与字符对齐写回。
         offset_to_char: dict[int, dict] = {}
         position = 0
         for char in n3_chars:
@@ -1154,7 +1086,7 @@ def _per_line_payloads(
             font_index = _int(n3_char.get("FontIndex"), 0) if n3_char is not None else 0
             label = (
                 font_names[font_index]
-                if 0 < font_index < len(font_names) and font_names[font_index]
+                if 0 <= font_index < len(font_names) and font_names[font_index]
                 else None
             )
             labels.append(label)

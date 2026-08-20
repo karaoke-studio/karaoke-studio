@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from krok_helper.subtitle_render.models import guide_symbol_from_dict, style_from_dict
+from krok_helper.subtitle_render.engine.style_semantics import style_for_role
+from krok_helper.subtitle_render.models import (
+    Style,
+    default_title_scheme,
+    guide_symbol_from_dict,
+    style_from_dict,
+)
 from krok_helper.subtitle_render.n3proj_import import (
     N3ImportResult,
     is_n3proj_file,
@@ -313,7 +319,7 @@ def test_movie_canvas_uses_n3_size_reference_instead_of_background_placeholder(
         "fps": 60,
         "par": "1:1",
     }
-    assert style.font_size_px == 180
+    assert style.custom_style_schemes["標準配色"].font_size_px == 180
     assert style.font_reference_height == 2160
     assert style.line_y_margin_px == 40
     assert style.layout_reference_height == 2160
@@ -351,50 +357,73 @@ def test_import_decor_kind_none_as_explicit_no_decoration(tmp_path):
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
 
-    assert style.decoration_kind == "none"
+    assert style.custom_style_schemes["標準配色"].decoration_kind == "none"
 
 
-def test_import_global_style_font_and_colors(imported):
+def test_import_first_font_settings_become_a_named_scheme(imported):
+    """第 0 套 フォント設定 也是一个具名角色，不再摊进全局默认。"""
     style = style_from_dict(imported.project_data["style"])
     assert style.layout_semantics == "n3_1074"
-    assert style.font_family == "UD デジタル 教科書体 N-B"
-    assert style.font_family_latin == "Comic Sans MS"
-    assert style.font_size_px == 100
-    assert style.font_weight == 700
-    assert style.stroke_width_px == 15
+    scheme = style.custom_style_schemes["標準配色"]
+    assert scheme.n3_font_inheritance is True
+    assert scheme.font_family == "UD デジタル 教科書体 N-B"
+    assert scheme.font_family_latin == "Comic Sans MS"
+    assert scheme.font_size_px == 100
+    assert scheme.font_weight == 700
+    assert scheme.stroke_width_px == 15
     # UseEdge2 全链 None → N3 不绘制二重描边
-    assert style.stroke2_enabled is False
-    assert style.stroke2_width_px == 5
+    assert scheme.stroke2_enabled is False
+    assert scheme.stroke2_width_px == 5
     # 子槽的 0/null 保持为继承状态，不再物化成根槽的有效值。
-    assert style.latin_font_size_px is None
-    assert style.latin_stroke_width_px is None
-    assert style.latin_stroke2_enabled is None
-    assert style.latin_stroke2_width_px is None
+    assert scheme.latin_font_size_px is None
+    assert scheme.latin_stroke_width_px is None
+    assert scheme.latin_stroke2_enabled is None
+    assert scheme.latin_stroke2_width_px is None
     # DecorKind.Shadow → 右下偏移 DecorSize
-    assert style.decoration_kind == "shadow"
-    assert style.shadow_offset_x == 5
-    assert style.shadow_offset_y == 5
-    colors = style.karaoke_colors
+    assert scheme.decoration_kind == "shadow"
+    assert scheme.shadow_offset_x == 5
+    assert scheme.shadow_offset_y == 5
+    colors = scheme.karaoke_colors
     assert colors is not None
     assert colors.after.text.color == "#FF0000"
     assert colors.before.text.color == "#FFFFFF"
     assert colors.before.shadow.color == "#26386A"
     # ルビ：空字体/字面继续显示 0 并跟随主文字；字号与描边保留显式值。
-    assert style.ruby_font_follow_main is True
-    assert style.ruby_font_family is None
-    assert style.ruby_font_weight is None
-    assert style.ruby_font_family_latin is None
-    assert style.ruby_font_size_px == 45
-    assert style.ruby_stroke_width_px == 10
-    assert style.ruby_stroke2_enabled is None
-    assert style.ruby_stroke2_width_px == 3
-    assert style.ruby_latin_font_size_px is None
-    assert style.ruby_latin_font_weight is None
-    assert style.ruby_latin_stroke_width_px is None
-    assert style.ruby_latin_stroke2_enabled is None
-    assert style.ruby_latin_stroke2_width_px is None
-    assert style.ruby_colors_follow_main is True
-    assert style.ruby_karaoke_colors is not None
+    assert scheme.ruby_font_follow_main is True
+    assert scheme.ruby_font_family is None
+    assert scheme.ruby_font_weight is None
+    assert scheme.ruby_font_family_latin is None
+    assert scheme.ruby_font_size_px == 45
+    assert scheme.ruby_stroke_width_px == 10
+    assert scheme.ruby_stroke2_enabled is None
+    assert scheme.ruby_stroke2_width_px == 3
+    assert scheme.ruby_latin_font_size_px is None
+    assert scheme.ruby_latin_font_weight is None
+    assert scheme.ruby_latin_stroke_width_px is None
+    assert scheme.ruby_latin_stroke2_enabled is None
+    assert scheme.ruby_latin_stroke2_width_px is None
+    assert scheme.ruby_colors_follow_main is True
+    assert scheme.ruby_karaoke_colors is not None
+
+
+def test_import_keeps_global_and_title_roles_at_factory_defaults(imported):
+    """两个内置角色不被 N3 改写 —— 否则第 0 套配色等于被改名成「全局默认」。
+
+    分色歌里第 0 套通常就是某个具体角色（【アクア】之类），名字一丢，源 LRC
+    里同名的 ``【…】`` 标记就再也找不到方案。
+    """
+    style = style_from_dict(imported.project_data["style"])
+    factory = Style()
+
+    for field in ("font_family", "font_family_latin", "font_size_px", "font_weight",
+                  "stroke_width_px", "stroke2_enabled", "decoration_kind",
+                  "shadow_offset_x", "shadow_offset_y", "karaoke_colors",
+                  "ruby_font_size_px", "ruby_stroke_width_px"):
+        assert getattr(style, field) == getattr(factory, field), field
+    assert style.custom_style_schemes["标题"] == default_title_scheme()
+    # 版式（布局域）仍然照 N3 导入，只有配色域不碰全局。
+    assert style.layout_semantics == "n3_1074"
+    assert style.line_y_margin_px == 90
 
 
 def test_import_applies_explicit_latin_and_ruby_latin_strokes(tmp_path):
@@ -415,15 +444,16 @@ def test_import_applies_explicit_latin_and_ruby_latin_strokes(tmp_path):
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
+    scheme = style.custom_style_schemes["標準配色"]
 
-    assert style.latin_font_size_px == 72
-    assert style.latin_stroke_width_px == 8
-    assert style.latin_stroke2_enabled is True
-    assert style.latin_stroke2_width_px == 4
-    assert style.ruby_latin_font_size_px == 30
-    assert style.ruby_latin_stroke_width_px == 6
-    assert style.ruby_latin_stroke2_enabled is False
-    assert style.ruby_latin_stroke2_width_px == 2
+    assert scheme.latin_font_size_px == 72
+    assert scheme.latin_stroke_width_px == 8
+    assert scheme.latin_stroke2_enabled is True
+    assert scheme.latin_stroke2_width_px == 4
+    assert scheme.ruby_latin_font_size_px == 30
+    assert scheme.ruby_latin_stroke_width_px == 6
+    assert scheme.ruby_latin_stroke2_enabled is False
+    assert scheme.ruby_latin_stroke2_width_px == 2
 
 
 def test_import_ignores_kana_slots_and_uses_japanese_settings(tmp_path):
@@ -441,16 +471,17 @@ def test_import_ignores_kana_slots_and_uses_japanese_settings(tmp_path):
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
+    scheme = style.custom_style_schemes["標準配色"]
 
-    assert style.font_family == "UD デジタル 教科書体 N-B"
-    assert style.font_size_px == 100
-    assert style.stroke_width_px == 15
-    assert style.stroke2_enabled is False
-    assert style.ruby_font_family is None
-    assert style.ruby_font_weight is None
-    assert style.ruby_font_size_px == 45
-    assert style.ruby_stroke_width_px == 10
-    assert style.ruby_stroke2_enabled is None
+    assert scheme.font_family == "UD デジタル 教科書体 N-B"
+    assert scheme.font_size_px == 100
+    assert scheme.stroke_width_px == 15
+    assert scheme.stroke2_enabled is False
+    assert scheme.ruby_font_family is None
+    assert scheme.ruby_font_weight is None
+    assert scheme.ruby_font_size_px == 45
+    assert scheme.ruby_stroke_width_px == 10
+    assert scheme.ruby_stroke2_enabled is None
     assert not any("かな" in warning or "假名" in warning for warning in result.warnings)
 
 
@@ -596,7 +627,8 @@ def test_import_preserves_fractional_gradient_stop_positions(tmp_path):
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
 
-    assert style.karaoke_colors.after.text.gradient_stops == [
+    stops = style.custom_style_schemes["標準配色"].karaoke_colors.after.text
+    assert stops.gradient_stops == [
         (0, "#FF0000"),
         (33.3333, "#00FF00"),
         (100, "#0000FF"),
@@ -617,7 +649,7 @@ def test_import_mille_feuille_uses_exact_fractional_hard_bands(tmp_path):
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
-    fill = style.karaoke_colors.after.text
+    fill = style.custom_style_schemes["標準配色"].karaoke_colors.after.text
 
     assert fill.mode == "split_vertical"
     assert fill.split_stops == [
@@ -643,7 +675,8 @@ def test_import_preserves_dxcolor_alpha_for_all_font_brush_layers(tmp_path):
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
-    colors = style.karaoke_colors
+    scheme = style.custom_style_schemes["標準配色"]
+    colors = scheme.karaoke_colors
 
     assert colors.after.text.color == "#80FF0000"
     assert colors.after.stroke.color == "#40FFFFFF"
@@ -653,9 +686,9 @@ def test_import_preserves_dxcolor_alpha_for_all_font_brush_layers(tmp_path):
     assert colors.before.stroke.color == "#66000000"
     assert colors.before.stroke2.color == "#33FFFFFF"
     assert colors.before.shadow.color == "#1A26386A"
-    assert style.fill_color == "#80FF0000"
-    assert style.stroke_color == "#40FFFFFF"
-    assert style.shadow_color == "#BF000000"
+    assert scheme.fill_color == "#80FF0000"
+    assert scheme.stroke_color == "#40FFFFFF"
+    assert scheme.shadow_color == "#BF000000"
 
     gradient_fill = style.custom_style_schemes["青配色"].karaoke_colors.after.text
     assert gradient_fill.gradient_stops == [
@@ -678,7 +711,8 @@ def test_import_preserves_missing_bitmap_settings_and_clamps_scale(
     brush["BitmapScale"] = bitmap_scale
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
-    fill = style_from_dict(result.project_data["style"]).karaoke_colors.after.text
+    style = style_from_dict(result.project_data["style"])
+    fill = style.custom_style_schemes["標準配色"].karaoke_colors.after.text
 
     assert fill.mode == "image"
     assert Path(fill.image_path) == tmp_path / "missing-texture.png"
@@ -696,9 +730,9 @@ def test_import_blur_concentration_is_scheme_shared_and_reaches_title(tmp_path):
 
     assert scheme.glow_concentration_level == 2
     assert scheme.ruby_glow_concentration_level is None
-    # 标题引用 FontIndex=1（青配色）→ 同步进「标题」方案
-    title_scheme = style.custom_style_schemes["标题"]
-    assert title_scheme.glow_concentration_level == 2
+    # 标题 FontIndex=1 → 逐字角色引用同一套「青配色」，内置「标题」角色不被改写
+    assert style.title_overlay.char_role_labels == [["青配色", "青配色"]]
+    assert style.custom_style_schemes["标题"] == default_title_scheme()
     assert not any("BlurLevel" in warning or "ブラー浓度" in warning for warning in result.warnings)
 
 
@@ -711,8 +745,10 @@ def test_import_title_overlay(imported):
     assert title.layout_index == 1
     assert style.layouts[0].name == "タイトル左上"
     assert style.layouts[0].line_y_position == "top"
-    # FontIndex=1（青配色）→ 写入「标题」配色方案；标题永不走字 → 渲染取ワイプ前
-    scheme = style.custom_style_schemes["标题"]
+    # FontIndex=1 → 标题逐字引用「青配色」角色；内置「标题」角色保持出厂值
+    assert title.char_role_labels == [["青配色", "青配色"]]
+    assert style.custom_style_schemes["标题"] == default_title_scheme()
+    scheme = style.custom_style_schemes["青配色"]
     assert scheme.font_family == "UD デジタル 教科書体 N-B"
     assert scheme.karaoke_colors.before.text.color == "#FFFFFF"
     assert scheme.decoration_kind == "glow"
@@ -754,9 +790,10 @@ def test_import_title_preserves_per_character_font_roles(tmp_path):
 
     assert title is not None
     assert title.text_template == "青標青"
-    assert title.char_role_labels == [[None, "標準配色", None]]
-    assert style.custom_style_schemes["标题"].decoration_kind == "glow"
-    assert "標準配色" in style.custom_style_schemes
+    # 主字体那两个字符同样贴标签 —— 只有内置「标题」角色留给用户自己改。
+    assert title.char_role_labels == [["青配色", "標準配色", "青配色"]]
+    assert style.custom_style_schemes["标题"] == default_title_scheme()
+    assert {"標準配色", "青配色"} <= set(style.custom_style_schemes)
 
 
 def test_import_title_scheme_always_present(tmp_path):
@@ -774,10 +811,44 @@ def test_import_per_line_layout_and_roles(imported):
     # track 共 3 行（含 1 空行），第一行引用布局 1
     assert data["line_layout_indices"] == [1, 0, 0]
     roles = data["char_role_labels"]
-    assert roles[0] == [None, "青配色"]
+    assert roles[0] == ["標準配色", "青配色"]
     assert roles[1] is None
-    # FontIndex=0 explicitly clears any role marker parsed from the source LRC.
-    assert roles[2] == [None, None]
+    # FontIndex=0 也是一套具名配色，覆盖源 LRC 解析出的角色标记。
+    assert roles[2] == ["標準配色", "標準配色"]
+
+
+def test_default_font_chars_still_render_like_n3(imported):
+    """外观不变：FontIndex=0 的字符照旧长成 N3 的样子，只是改由角色方案提供。"""
+    style = style_from_dict(imported.project_data["style"])
+    resolved = style_for_role(style, "標準配色")
+
+    assert resolved.font_family == "UD デジタル 教科書体 N-B"
+    assert resolved.font_family_latin == "Comic Sans MS"
+    assert resolved.font_size_px == 100
+    assert resolved.stroke_width_px == 15
+    assert resolved.decoration_kind == "shadow"
+    assert resolved.karaoke_colors.after.text.color == "#FF0000"
+    assert imported.project_data["char_role_labels"][2] == ["標準配色", "標準配色"]
+
+
+def test_import_appends_every_font_setting_in_n3_order(imported):
+    """N3 的 フォント設定 一套不落地 append 进来（内置「标题」角色除外）。"""
+    style = style_from_dict(imported.project_data["style"])
+
+    names = [name for name in style.custom_style_schemes if name != "标题"]
+    assert names == ["標準配色", "青配色"]
+
+
+def test_import_keeps_char_labels_in_sync_with_renamed_duplicate_schemes(tmp_path):
+    """两套同名 フォント設定 → 后一套改名，逐字标签必须跟着改，不能指空。"""
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"][1]["SettingsName"] = "標準配色"
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert "標準配色（1）" in style.custom_style_schemes
+    assert result.project_data["char_role_labels"][0] == ["標準配色", "標準配色（1）"]
 
 
 def test_import_normalizes_bracketed_n3_scheme_names(tmp_path):
@@ -788,12 +859,13 @@ def test_import_normalizes_bracketed_n3_scheme_names(tmp_path):
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
 
-    assert "エミリア" in style.custom_style_schemes
+    assert {"アクア", "エミリア"} <= set(style.custom_style_schemes)
     assert "【エミリア】" not in style.custom_style_schemes
-    assert result.project_data["char_role_labels"][0] == [None, "エミリア"]
+    assert result.project_data["char_role_labels"][0] == ["アクア", "エミリア"]
 
 
-def test_import_emits_explicit_role_clears_for_all_default_font_indices(tmp_path):
+def test_import_labels_every_default_font_index_with_the_first_scheme(tmp_path):
+    """整首都用第 0 套时，每个字符也要贴上它的名字（而不是留空吃全局默认）。"""
     payload = _project_payload(tmp_path)
     payload["LyricsFonts"] = payload["LyricsFonts"][:1]
     payload["TitleInfos"] = []
@@ -804,9 +876,9 @@ def test_import_emits_explicit_role_clears_for_all_default_font_indices(tmp_path
     result = load_n3proj(_write_n3proj(tmp_path, payload))
 
     assert result.project_data["char_role_labels"] == [
-        [None, None],
+        ["標準配色", "標準配色"],
         None,
-        [None, None],
+        ["標準配色", "標準配色"],
     ]
 
 
@@ -1091,6 +1163,6 @@ def test_import_multiple_lyrics_sources(tmp_path):
     assert entry["name"] == "コーラス1"
     assert entry["path"] == str(chorus)
     assert entry["line_layout_indices"] == [1]
-    assert entry["char_role_labels"] == [["青配色", None]]
+    assert entry["char_role_labels"] == [["青配色", "標準配色"]]
     # 不再出现「仅导入第一个」的提示
     assert not any("仅导入第一个" in w for w in result.warnings)

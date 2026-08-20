@@ -31,6 +31,7 @@ from krok_helper.subtitle_render.models import (
     TimingChar,
     TimingLine,
     TimingTrack,
+    TITLE_SCHEME_NAME,
     TimingTrackMeta,
     TitleOverlay,
     TrackPage,
@@ -38,6 +39,7 @@ from krok_helper.subtitle_render.models import (
     TrackSection,
     style_from_dict,
 )
+from krok_helper.subtitle_render.engine.style_semantics import style_for_role
 from krok_helper.subtitle_render.n3_font_catalog import invalidate_n3_font_caches
 from krok_helper.subtitle_render.n3proj_import import load_n3proj
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
@@ -4854,7 +4856,17 @@ def test_gpu_g3_real_n3_ruby_frame_is_bounded_by_painter_oracle(monkeypatch) -> 
             after=solid_state(colors.after),
         )
 
+    # N3 的第 0 套 フォント設定 导入后是一个具名角色方案（不再摊进全局默认），
+    # 这条轨是直接从 LRC 拼的、没有角色标签，所以先把它并进来当本轨外观。
     imported_style = style_from_dict(project.project_data["style"])
+    imported_style = style_for_role(
+        imported_style,
+        next(
+            name
+            for name in imported_style.custom_style_schemes
+            if name != TITLE_SCHEME_NAME
+        ),
+    )
     style = replace(
         imported_style,
         # The reference project's UD font is not installed on every test host.
