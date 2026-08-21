@@ -357,8 +357,13 @@ class YtDlpService:
     ) -> VideoInfo:
         source = self.detect_source(fallback_url, info.get("extractor_key"))
         preferred_audio_ext = "m4a" if source == SOURCE_YOUTUBE else ""
-        formats = self._format_parser.parse_formats(info.get("formats"), preferred_audio_ext=preferred_audio_ext)
-        thumbnail_url = str(info.get("thumbnail") or "")
+        duration = float(info["duration"]) if info.get("duration") else None
+        formats = self._format_parser.parse_formats(
+            info.get("formats"),
+            preferred_audio_ext=preferred_audio_ext,
+            duration=duration,
+        )
+        thumbnail_url = self._pick_thumbnail_url(info)
         webpage_url = self._coerce_webpage_url(info, fallback_url)
         title = str(info.get("title") or "未命名视频")
         if parent_title and title and title != parent_title:
@@ -369,7 +374,7 @@ class YtDlpService:
             source=source,
             title=title,
             uploader=str(info.get("uploader") or info.get("channel") or info.get("owner") or "-"),
-            duration=float(info["duration"]) if info.get("duration") else None,
+            duration=duration,
             thumbnail_url=thumbnail_url,
             thumbnail_bytes=self._fetch_thumbnail_bytes(thumbnail_url),
             webpage_url=webpage_url,
@@ -1164,6 +1169,46 @@ class YtDlpService:
                 if isinstance(value, (int, float)) and value > 0:
                     return int(value)
         return None
+
+    def _pick_thumbnail_url(self, info: dict[str, Any]) -> str:
+        """挑一张 Qt 解得开的封面。
+
+        YouTube 从 2026-08 起把 ``info["thumbnail"]`` 给成 ``vi_webp/...webp``，
+        而打包里的 Qt 只带 ico/jpeg/svg 三个图像插件，没有 webp —— 于是
+        ``QPixmap`` 拿到一张空图，界面上封面直接消失（日志里表现为
+        ``QPixmap::scaled: Pixmap is a null pixmap``）。
+        ``thumbnails`` 列表里同时还有一堆 jpg，优先挑其中最大的那张。
+        """
+
+        primary = str(info.get("thumbnail") or "")
+        if primary and not self._is_undecodable_image(primary):
+            return primary
+
+        candidates = [
+            item
+            for item in (info.get("thumbnails") or [])
+            if isinstance(item, dict)
+            and item.get("url")
+            and not self._is_undecodable_image(str(item.get("url")))
+        ]
+        if not candidates:
+            return primary
+        best = max(
+            candidates,
+            key=lambda item: (
+                float(item.get("preference") or 0),
+                int(item.get("width") or 0),
+                int(item.get("height") or 0),
+            ),
+        )
+        return str(best.get("url") or primary)
+
+    @staticmethod
+    def _is_undecodable_image(url: str) -> bool:
+        """打包里的 Qt 图像插件只有 ico / jpeg / svg，webp 之类一律当解不开。"""
+
+        path = url.split("?", 1)[0].lower()
+        return path.endswith((".webp", ".avif", ".heic", ".heif"))
 
     def _fetch_thumbnail_bytes(self, url: str) -> bytes:
         if not url:

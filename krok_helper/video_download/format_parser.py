@@ -32,6 +32,7 @@ class FormatParser:
         raw_formats: list[dict[str, Any]] | None,
         *,
         preferred_audio_ext: str = "",
+        duration: float | None = None,
     ) -> list[FormatOption]:
         formats = list(raw_formats or [])
         if not formats:
@@ -57,14 +58,26 @@ class FormatParser:
             if not format_id:
                 continue
 
-            filesize = self._coalesce_size(item)
+            # 真实体积用于排序，估算体积只用于显示：不能让「估出来的数」把无体积的
+            # HLS 变体重新顶回各档清晰度的代表位。
+            video_size = self._coalesce_size(item)
+            filesize = video_size or self._estimate_size(item, duration)
             requires_merge = acodec == "none" and best_audio is not None
             if requires_merge:
                 audio_id = str(best_audio.get("format_id") or "")
                 if not audio_id:
                     continue
                 download_format = f"{format_id}+{audio_id}"
-                filesize = (filesize or 0) + (self._coalesce_size(best_audio) or 0) or None
+                # 视频轨报不出体积时整条就是未知（显示「-」）。以前写成
+                # ``(video or 0) + (audio or 0)``，视频轨为 None 时会把**音频轨的
+                # 体积**当成整条的体积报出去 —— 每一档清晰度都显示同一个几 MB 的
+                # 数字，正是这个加法造成的。
+                video_display = video_size or self._estimate_size(item, duration)
+                filesize = (
+                    video_display + (self._coalesce_size(best_audio) or 0)
+                    if video_display
+                    else None
+                )
                 audio_codec = str(best_audio.get("acodec") or "unknown")
                 format_label = f"{ext.upper() or '视频'} + 音频"
             else:
@@ -89,7 +102,13 @@ class FormatParser:
                 requires_merge=requires_merge,
             )
 
+            # 同一档清晰度里选谁当代表：**能报出体积的优先**。
+            # YouTube 从 2026-08 起在格式表里混进了 HLS（``m3u8_native``）变体，
+            # 它们的 ``tbr`` 普遍比同画质的 DASH 条目高（1080p: 4684 vs 1859），
+            # 却完全没有 filesize/filesize_approx。只按 tbr 排的话每档都会被这些
+            # 无体积条目占据，界面上全部清晰度都显示不出真实大小。
             score = (
+                1 if video_size else 0,
                 float(item.get("tbr") or item.get("vbr") or 0),
                 fps,
                 filesize or 0,
@@ -279,3 +298,17 @@ class FormatParser:
             if isinstance(value, (int, float)) and value > 0:
                 return int(value)
         return None
+
+    def _estimate_size(self, item: dict[str, Any], duration: float | None) -> int | None:
+        """按码率 × 时长估体积。
+
+        YouTube 的 HLS 变体（含「Premium」高码率档）不带任何 filesize 字段，
+        但有 ``tbr``。宁可给个估算值，也好过整行显示「-」让人以为解析坏了。
+        """
+
+        if not duration or duration <= 0:
+            return None
+        tbr = item.get("tbr") or item.get("vbr")
+        if not isinstance(tbr, (int, float)) or tbr <= 0:
+            return None
+        return int(float(tbr) * 1000 / 8 * float(duration))
