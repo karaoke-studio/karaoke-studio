@@ -500,10 +500,12 @@ def test_alignment_handoff_maps_assets_without_switching_modules(
 
     monkeypatch.setattr("krok_helper.alignment.page.AlignmentHandoffDialog", AcceptedDialog)
     app = SimpleNamespace(
-        subtitle_render_page=SimpleNamespace(
-            load_video=lambda path: calls.append(("subtitle", path))
-        ),
+        # 背景素材与原唱都经 _host 转交 —— 对齐页手里没有字幕渲染页，
+        # 替身自带 subtitle_render_page 会测出假绿（线上就是这么静默失灵的）。
         _host=SimpleNamespace(
+            set_subtitle_background_video=(
+                lambda path: calls.append(("subtitle", path)) or True
+            ),
             set_on_vocal_path=lambda path: calls.append(("hires", path)),
             # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
             notify_handoff=lambda title, content: None,
@@ -572,10 +574,12 @@ def test_alignment_handoff_respects_unchecked_options_and_cancel(
 
     monkeypatch.setattr("krok_helper.alignment.page.AlignmentHandoffDialog", ControlledDialog)
     app = SimpleNamespace(
-        subtitle_render_page=SimpleNamespace(
-            load_video=lambda path: calls.append(("subtitle", path))
-        ),
+        # 背景素材与原唱都经 _host 转交 —— 对齐页手里没有字幕渲染页，
+        # 替身自带 subtitle_render_page 会测出假绿（线上就是这么静默失灵的）。
         _host=SimpleNamespace(
+            set_subtitle_background_video=(
+                lambda path: calls.append(("subtitle", path)) or True
+            ),
             set_on_vocal_path=lambda path: calls.append(("hires", path)),
             # 提示条另有专测（test_handoff_toasts.py），这里只关心素材映射
             notify_handoff=lambda title, content: None,
