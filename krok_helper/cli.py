@@ -20,6 +20,7 @@ from krok_helper.pipeline import (
     run_pipeline,
 )
 from krok_helper.settings import load_app_settings
+from krok_helper.startup_trace import install_qt_message_capture, mark as trace
 from krok_helper.windows import enable_high_dpi_awareness, set_explicit_app_user_model_id
 
 from PyQt6.QtCore import QTimer
@@ -96,14 +97,20 @@ def run_cli(args: argparse.Namespace) -> int:
 
 def run_gui(args: argparse.Namespace) -> int:
     log.info("开始初始化 GUI")
+    trace("gui.enter")
     enable_high_dpi_awareness()
     set_explicit_app_user_model_id("KaraokeStudio.Desktop")
+    # 抄一份 Qt 自己的消息：qFatal 会当场 abort 掉进程，而无控制台的 GUI 构建里
+    # 那句话只会流向 OutputDebugString，没人接就等于没发生过。
+    install_qt_message_capture()
     qt_app = QApplication.instance() or QApplication(sys.argv)
+    trace("gui.qapplication_ready")
     from krok_helper.startup_splash import StartupSplashWindow
 
     splash = StartupSplashWindow()
     splash.show()
     qt_app.processEvents()
+    trace("gui.splash_shown")
 
     try:
         # 在 ``MainWindow()`` 构造**之前**就把主题 settle 到目标模式 ——
@@ -113,6 +120,7 @@ def run_gui(args: argparse.Namespace) -> int:
         from krok_helper.theme_workbench import apply_settings_theme
 
         apply_settings_theme(load_app_settings())
+        trace("gui.theme_applied")
 
         # gui_qt is intentionally imported only after the splash is visible;
         # importing it initializes most UI dependencies and can take noticeable time.
@@ -122,12 +130,14 @@ def run_gui(args: argparse.Namespace) -> int:
             load_taskbar_icon,
         )
 
+        trace("gui.workbench_imported")
         _install_global_excepthook()
 
         app_icon = load_taskbar_icon()
         if app_icon is not None:
             qt_app.setWindowIcon(app_icon)
         window = KrokHelperQtApp()
+        trace("gui.main_window_built")
         if args.video:
             window.set_video_path(args.video.expanduser())
         if args.on_audio:
@@ -144,6 +154,7 @@ def run_gui(args: argparse.Namespace) -> int:
                 args.off_name_template or DEFAULT_OFF_NAME_TEMPLATE,
             )
         window.show()
+        trace("gui.main_window_shown")
         log.info("主窗口已显示，进入 Qt 事件循环")
         splash.finish()
         if args.project:
@@ -153,9 +164,11 @@ def run_gui(args: argparse.Namespace) -> int:
                 lambda path=startup_project: window.open_project_file(path),
             )
         exit_code = qt_app.exec()
+        trace("gui.event_loop_exited", f"exit_code={exit_code}")
         log.info("Qt 事件循环结束 exit_code=%s", exit_code)
         return exit_code
-    except Exception:
+    except Exception as exc:
+        trace("gui.failed", f"{type(exc).__name__}: {exc}")
         log.exception("GUI 初始化或运行失败")
         splash.close()
         raise
