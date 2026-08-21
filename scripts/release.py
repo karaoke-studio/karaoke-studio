@@ -66,7 +66,9 @@ def _replace_once(path: Path, pattern: str, replacement: str, description: str) 
     if count != 1:
         raise SystemExit(f"未能在 {path} 中唯一替换{description}")
     if updated != text:
-        path.write_text(updated, encoding="utf-8")
+        # newline="" 关掉换行翻译：默认会把整份文件写成 CRLF，本仓库源文件一律 LF，
+        # 那样 diff 会变成"整文件重写"，真正的一行改动被埋掉。
+        path.write_text(updated, encoding="utf-8", newline="")
     return old, updated
 
 
@@ -91,7 +93,7 @@ def _write_version(version: str) -> str:
 def _write_readme_version(version: str) -> str:
     old, _ = _replace_once(
         README,
-        r"(?m)^当前版本：`([^`]+)`\s*$",
+        r"(?m)^当前版本：`([^`]+)`[ \t]*$",
         f"当前版本：`{version}`",
         "顶部‘当前版本’",
     )
@@ -135,7 +137,7 @@ def cmd_prepare(version: str) -> int:
     # 先验证三个入口标记都存在，避免某个文件格式变化时只改成功一半。
     old_version = _read_version()
     readme_text = README.read_text(encoding="utf-8")
-    if not re.search(r"(?m)^当前版本：`([^`]+)`\s*$", readme_text):
+    if not re.search(r"(?m)^当前版本：`([^`]+)`[ \t]*$", readme_text):
         raise SystemExit(f"无法在 {README} 中找到顶部‘当前版本’")
     changelog_text = CHANGELOG.read_text(encoding="utf-8")
     if not _has_version_section(changelog_text, version) and not re.search(
