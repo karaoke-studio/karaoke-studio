@@ -18,6 +18,7 @@ from krok_helper.app_paths import (
     SETTINGS_APP_NAME_ENV,
     SETTINGS_DIR_ENV,
     consume_migration_notes,
+    ensure_app_data_migrated,
 )
 
 
@@ -45,6 +46,8 @@ def get_log_dir() -> Path:
     if settings_dir:
         return Path(settings_dir).expanduser() / "logs"
 
+    # 建 logs/ 会让新应用名目录凭空出现，从而永久掐掉迁移 —— 所以先迁移再取路径。
+    ensure_app_data_migrated()
     app_dir_name = os.getenv(SETTINGS_APP_NAME_ENV, APP_NAME).strip() or APP_NAME
     appdata = os.getenv("APPDATA")
     if os.name == "nt" and appdata:

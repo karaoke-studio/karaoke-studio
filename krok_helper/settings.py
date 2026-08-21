@@ -19,7 +19,6 @@ from krok_helper.app_paths import (  # noqa: F401
     consume_migration_notes,
     get_legacy_settings_paths,
     get_settings_path,
-    migrate_app_data_dir,
     settings_path_for_app_name as _settings_path_for_app_name,
 )
 from krok_helper.audio_alignment import (
