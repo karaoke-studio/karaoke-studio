@@ -63,6 +63,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     ScreenColorPicker,
     StylePresetManagerDialog,
 )
+from krok_helper.subtitle_render.engine.style_semantics import style_for_role  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
     KaraokeColorState,
@@ -4366,6 +4367,95 @@ def test_ruby_color_follow_toggle_detaches_and_restores_live_inheritance(qapp):
     assert emitted[-1].ruby_colors_follow_main is True
     assert panel._current_ruby_karaoke_colors() == emitted[-1].karaoke_colors
     assert not panel._ruby_apply_main_btn.isEnabled()
+
+
+def _latin_follow_check(panel):
+    return panel._font_size_follow_checks[("main", "latin")]
+
+
+def _role_panel(*, global_latin, scheme=None):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            font_size_px=100,
+            latin_font_size_px=global_latin,
+            custom_style_schemes={"A": scheme or SubtitleStyleScheme(font_size_px=120)},
+        )
+    )
+    panel.set_roles(["A"])
+    panel.set_current_scheme_key("custom:A")
+    return panel
+
+
+def test_latin_follow_stays_checked_when_the_global_pins_a_latin_size(qapp):
+    """全局写死英数字号时，角色勾「跟随」也得勾得上 —— 以前点了当场弹回来。"""
+    panel = _role_panel(global_latin=72)
+    check = _latin_follow_check(panel)
+    assert not check.isChecked()  # 空槽此时继承的是全局那个数，并没有跟随
+
+    check.setChecked(True)
+    panel._sync_subtitle_scheme_controls()
+
+    assert check.isChecked()
+    assert not panel._font_latin_size_spin.isEnabled()
+    scheme = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme.latin_font_size_px is None
+
+
+def test_latin_follow_actually_follows_the_role_at_render_time(qapp):
+    """勾上以后渲染要真的跟着本角色的日文字号，而不是全局那个数。"""
+    panel = _role_panel(global_latin=72)
+    _latin_follow_check(panel).setChecked(True)
+
+    merged = style_for_role(panel.subtitle_style, "A")
+
+    assert merged.font_size_px == 120
+    assert merged.latin_font_size_px is None  # None → 画的时候落回本方案日文字号
+
+
+def test_turning_on_latin_follow_keeps_the_other_empty_slots_looking_the_same(qapp):
+    """方案内解析是整套子槽共用的开关，别让它顺手改了别的槽的外观。"""
+    panel = _role_panel(global_latin=72)
+    style = replace(
+        panel.subtitle_style,
+        font_family_latin="Comic Sans MS",
+        latin_font_weight=800,
+    )
+    panel.set_style(style)
+    panel.set_current_scheme_key("custom:A")
+    before = style_for_role(panel.subtitle_style, "A")
+
+    _latin_follow_check(panel).setChecked(True)
+    after = style_for_role(panel.subtitle_style, "A")
+
+    assert after.font_family_latin == before.font_family_latin == "Comic Sans MS"
+    assert after.latin_font_weight == before.latin_font_weight == 800
+
+
+def test_a_new_role_copied_from_a_following_role_keeps_following(qapp):
+    """新建角色是复制当前角色 —— 跟随不能在复制时被固化成一个死数字。"""
+    panel = _role_panel(global_latin=72)
+    _latin_follow_check(panel).setChecked(True)
+
+    panel._add_custom_scheme("B")
+
+    assert panel._current_custom_scheme_name() == "B"
+    assert _latin_follow_check(panel).isChecked()
+    assert panel.subtitle_style.custom_style_schemes["B"].latin_font_size_px is None
+    assert style_for_role(panel.subtitle_style, "B").latin_font_size_px is None
+
+
+def test_a_new_role_copied_from_a_pinned_role_keeps_the_pinned_size(qapp):
+    panel = _role_panel(global_latin=None)
+    check = _latin_follow_check(panel)
+    assert check.isChecked()
+    check.setChecked(False)  # 取消跟随 → 写死当前生效字号
+
+    panel._add_custom_scheme("B")
+
+    scheme = panel.subtitle_style.custom_style_schemes["B"]
+    assert scheme.latin_font_size_px == 120
+    assert not _latin_follow_check(panel).isChecked()
 
 
 def test_ruby_color_follow_state_is_saved_per_role_scheme(qapp):

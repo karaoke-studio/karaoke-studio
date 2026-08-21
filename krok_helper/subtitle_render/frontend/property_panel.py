@@ -156,6 +156,9 @@ from krok_helper.subtitle_render.n3_template_import import (
     resolve_n3_template_preset,
 )
 
+#: 只存在于角色方案里的字段 —— ``Style`` 上没有同名属性，落不到全局。
+_SCHEME_ONLY_FIELDS = frozenset({"n3_font_inheritance"})
+
 _SCHEME_FIELDS = {
     "font_family",
     "font_family_latin",
@@ -5619,16 +5622,58 @@ class PropertyPanel(QWidget):
         # 取消跟随时把当前**实际生效**的字号写死，外观不跳变 —— 和注音配色那个
         # 跟随勾选框同一个套路。
         value = None if checked else int(self._scheme_value(source_field))
+        changes: dict[str, object] = {field: value}
+        if checked:
+            changes.update(self._scheme_local_inheritance_changes(field))
         if slot[0] == "ruby":
-            self._update_ruby_font_override(**{field: value})
+            self._update_ruby_font_override(**changes)
         else:
-            self._update_style(**{field: value})
+            self._update_style(**changes)
+
+    def _scheme_local_inheritance_changes(self, follow_field: str) -> dict[str, object]:
+        """让角色方案里的空槽在**方案内**解析，而不是回头去继承全局。
+
+        角色方案的 ``None`` 默认是"这一槽没设定，用全局的"，只有
+        ``n3_font_inheritance`` 打开后才变成"在本方案里往上找"。用户勾
+        「字号跟随主文字日文」要的正是后者：全局要是写死过英数字号，不打开
+        这个标志的话，勾了也还是按全局那个数渲染。
+
+        标志是整套子槽共用的，直接打开会连带把其他还空着的槽（英数字体、注音
+        描边…）一起改成方案内解析，外观会跟着跳。所以打开之前先把那些槽当前
+        **实际生效**的值固化进方案，只让用户刚勾的这一项空着。
+        """
+        if self._current_custom_scheme_name() is None:
+            return {}  # 全局默认自己的 None 本来就是「跟随」，不需要标志
+        changes: dict[str, object] = {"n3_font_inheritance": True}
+        for name in N3_FONT_INHERITANCE_FIELDS:
+            if name == follow_field or self._scheme_own_value(name) is not None:
+                continue
+            changes[name] = self._scheme_value(name)
+        return changes
+
+    def _font_size_follows(self, field: str) -> bool:
+        """这一槽现在是不是**真的**跟随上一级（渲染也照这个走）。
+
+        不能只看方案自己是不是 ``None``：角色方案的空槽默认继承全局，全局要是
+        写死过英数字号，这个空槽渲染出来就是全局那个数、并没有跟着本角色的日
+        文字号走 —— 勾选框这时候就不该显示成已勾选。只有 ``n3_font_inheritance``
+        打开（空槽在方案内解析），或者全局自己也空着，才算真跟随。
+        """
+        if self._scheme_own_value(field) is not None:
+            return False
+        role_name = self._current_custom_scheme_name()
+        if role_name is None:
+            return True  # 全局默认自己的 None 就是「跟随」
+        scheme = self._style.custom_style_schemes.get(role_name)
+        if scheme is not None and scheme.n3_font_inheritance:
+            return True
+        return getattr(self._style, field, None) is None
 
     def _sync_font_size_follow_controls(self) -> None:
         """勾选框与字号输入框跟着方案走：``None`` = 跟随，输入框置灰。"""
         for slot, check in self._font_size_follow_checks.items():
             field, source_field = self._FONT_SIZE_FOLLOW_FIELDS[slot]
-            follows = self._scheme_value(field) is None
+            follows = self._font_size_follows(field)
             check.blockSignals(True)
             try:
                 check.setChecked(follows)
@@ -8695,6 +8740,18 @@ class PropertyPanel(QWidget):
                 return value
         return getattr(self._style, field_name)
 
+    def _scheme_own_value(self, field_name: str):
+        """方案**自己**存的值；``None`` 表示这一槽没设定（跟随上一级）。
+
+        与 :meth:`_scheme_value` 的分工：那个给最终生效值（角色没设就回退全
+        局），填输入框用；这个用来判断"这一槽是不是空着"。
+        """
+        role_name = self._current_custom_scheme_name()
+        if role_name is None:
+            return getattr(self._style, field_name)
+        scheme = self._style.custom_style_schemes.get(role_name)
+        return getattr(scheme, field_name, None) if scheme is not None else None
+
     def _rename_current_role(self) -> None:
         old = self._current_custom_scheme_name()
         if old is None or old == TITLE_SCHEME_NAME:
@@ -8940,7 +8997,11 @@ class PropertyPanel(QWidget):
     def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:
             return
-        if not _force_global and changes and set(changes).issubset(_SCHEME_FIELDS):
+        if (
+            not _force_global
+            and changes
+            and set(changes).issubset(_SCHEME_FIELDS | _SCHEME_ONLY_FIELDS)
+        ):
             role_name = self._current_custom_scheme_name()
             if role_name is not None:
                 # 当前选中某个角色 → 编辑进该角色（按名字存进 custom_style_schemes）。
@@ -8948,6 +9009,14 @@ class PropertyPanel(QWidget):
                 scheme = schemes.get(role_name) or _scheme_from_current(self)
                 schemes[role_name] = replace(scheme, **changes)
                 changes = {"custom_style_schemes": schemes}
+        if _SCHEME_ONLY_FIELDS.intersection(changes):
+            # 当前选的是全局默认：方案专属字段对它没有意义，扔掉而不是喂给
+            # ``replace(Style, ...)`` 当场 TypeError。
+            changes = {
+                key: value
+                for key, value in changes.items()
+                if key not in _SCHEME_ONLY_FIELDS
+            }
         if "line_y_position" in changes:
             changes["line_y_position"] = _normalize_line_position(changes["line_y_position"])
         if "line_horizontal_layout" in changes:
@@ -9318,6 +9387,12 @@ def _solid_fill(color: str) -> PaintFill:
 
 
 def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
+    """把当前选中的方案快照成一个独立方案（新建角色、存预设都走这里）。
+
+    子槽（英数 / 注音那 17 项）读方案**自己**的值：它们的 ``None`` 是「跟随
+    上一级」，用最终生效值去填会把跟随物化成一个死数字 —— 复制出来的新角色
+    从此不再跟着日文字号走。
+    """
     current_name = panel._current_custom_scheme_name()
     current_scheme = (
         panel._style.custom_style_schemes.get(current_name)
@@ -9326,13 +9401,13 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
     )
     return SubtitleStyleScheme(
         font_family=str(panel._scheme_value("font_family")),
-        font_family_latin=panel._scheme_value("font_family_latin"),
+        font_family_latin=panel._scheme_own_value("font_family_latin"),
         font_size_px=int(panel._scheme_value("font_size_px")),
-        latin_font_size_px=panel._scheme_value("latin_font_size_px"),
-        latin_font_weight=panel._scheme_value("latin_font_weight"),
-        latin_stroke_width_px=panel._scheme_value("latin_stroke_width_px"),
-        latin_stroke2_enabled=panel._scheme_value("latin_stroke2_enabled"),
-        latin_stroke2_width_px=panel._scheme_value("latin_stroke2_width_px"),
+        latin_font_size_px=panel._scheme_own_value("latin_font_size_px"),
+        latin_font_weight=panel._scheme_own_value("latin_font_weight"),
+        latin_stroke_width_px=panel._scheme_own_value("latin_stroke_width_px"),
+        latin_stroke2_enabled=panel._scheme_own_value("latin_stroke2_enabled"),
+        latin_stroke2_width_px=panel._scheme_own_value("latin_stroke2_width_px"),
         letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
         space_width_percent=int(panel._scheme_value("space_width_percent")),
         allow_biting=bool(panel._scheme_value("allow_biting")),
@@ -9358,24 +9433,24 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
         shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
         ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
-        ruby_font_family=panel._scheme_value("ruby_font_family"),
-        ruby_font_family_latin=panel._scheme_value("ruby_font_family_latin"),
-        ruby_font_weight=panel._scheme_value("ruby_font_weight"),
-        ruby_latin_font_size_px=panel._scheme_value("ruby_latin_font_size_px"),
-        ruby_latin_font_weight=panel._scheme_value("ruby_latin_font_weight"),
+        ruby_font_family=panel._scheme_own_value("ruby_font_family"),
+        ruby_font_family_latin=panel._scheme_own_value("ruby_font_family_latin"),
+        ruby_font_weight=panel._scheme_own_value("ruby_font_weight"),
+        ruby_latin_font_size_px=panel._scheme_own_value("ruby_latin_font_size_px"),
+        ruby_latin_font_weight=panel._scheme_own_value("ruby_latin_font_weight"),
         ruby_font_follow_main=bool(panel._scheme_value("ruby_font_follow_main")),
         ruby_color=str(panel._scheme_value("ruby_color")),
         ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
-        ruby_stroke_width_px=panel._scheme_value("ruby_stroke_width_px"),
-        ruby_stroke2_enabled=panel._scheme_value("ruby_stroke2_enabled"),
-        ruby_stroke2_width_px=panel._scheme_value("ruby_stroke2_width_px"),
-        ruby_latin_stroke_width_px=panel._scheme_value(
+        ruby_stroke_width_px=panel._scheme_own_value("ruby_stroke_width_px"),
+        ruby_stroke2_enabled=panel._scheme_own_value("ruby_stroke2_enabled"),
+        ruby_stroke2_width_px=panel._scheme_own_value("ruby_stroke2_width_px"),
+        ruby_latin_stroke_width_px=panel._scheme_own_value(
             "ruby_latin_stroke_width_px"
         ),
-        ruby_latin_stroke2_enabled=panel._scheme_value(
+        ruby_latin_stroke2_enabled=panel._scheme_own_value(
             "ruby_latin_stroke2_enabled"
         ),
-        ruby_latin_stroke2_width_px=panel._scheme_value(
+        ruby_latin_stroke2_width_px=panel._scheme_own_value(
             "ruby_latin_stroke2_width_px"
         ),
         ruby_decoration_kind=panel._scheme_value("ruby_decoration_kind"),
