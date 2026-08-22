@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import os
 import logging
 import tempfile
@@ -1614,6 +1615,35 @@ def test_apply_project_data_does_not_mark_dirty(qapp, monkeypatch):
     win._apply_project_data({"style": {"font_size_px": 64}})
     assert win._project_dirty is False
     assert win._style.font_size_px == 64
+
+
+def test_startup_scheme_restore_does_not_mark_project_dirty(
+    qapp, monkeypatch, tmp_path
+):
+    """构造期按持久化偏好同步方案下拉框不得把空项目标脏。
+
+    set_current_scheme_key 会触发 currentIndexChanged，与用户手动切换方案
+    走同一条 schemeSelectionChanged 链；未受加载守卫保护时，启动 2 秒后
+    自动保存就会写出 untitled 恢复快照，下次启动再弹"检测到未保存的
+    项目"，形成每次启动都要放弃一次的死循环。
+    """
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"subtitle_render": {"selected_scheme_key": "custom:标题"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(settings_dir))
+    win = _make_window(qapp, monkeypatch)
+
+    assert win._selected_scheme_key == "custom:标题"
+    assert win.has_unsaved_changes() is False
+    assert not win._auto_save_timer.isActive()
+
+    # 用户手动切回全局方案仍应正常标脏。
+    win._property_panel.set_current_scheme_key("global")
+    assert win.has_unsaved_changes() is True
+    win.close()
 
 
 def test_public_project_state_tracks_dirty_save_and_discard(qapp, monkeypatch, tmp_path):

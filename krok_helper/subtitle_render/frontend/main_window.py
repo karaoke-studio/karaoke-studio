@@ -4099,8 +4099,17 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.layoutAssignAllRequested.connect(self._on_layout_assign_all)
         self._property_panel.layoutAutoAssignRequested.connect(self._on_layout_auto_assign)
         self._property_panel.layoutDeleted.connect(self._on_layout_deleted)
-        self._property_panel.set_current_scheme_key(self._selected_scheme_key)
-        self._selected_scheme_key = self._property_panel.current_scheme_key()
+        # 按持久化偏好同步方案下拉框会触发 currentIndexChanged，走的是与
+        # 用户手动切换方案同一条 schemeSelectionChanged 链；不加载入守卫
+        # 会在启动时把空项目标脏，2 秒后自动保存写出 untitled 恢复快照，
+        # 下次启动又弹"检测到未保存的项目"，形成死循环。
+        was_loading_project = self._loading_project
+        self._loading_project = True
+        try:
+            self._property_panel.set_current_scheme_key(self._selected_scheme_key)
+            self._selected_scheme_key = self._property_panel.current_scheme_key()
+        finally:
+            self._loading_project = was_loading_project
 
         self._video_settings_panel = DropPanel(
             extensions={
