@@ -1127,6 +1127,24 @@ def test_strip_safety_margin_uses_max_scheme_font_size(tmp_path):
     expected = 2160 / 15.0 + 200 * 1.5
     assert _strip_safety_margin(job) >= math.ceil(expected)
 
+    # 全局样式自身的拉丁/注音字号同样要进最大值：不使用角色方案、
+    # 只调大全局 latin/ruby 字号的工程不能按主字号算安全边
+    plain_big_latin = Style(
+        font_size_px=48,
+        latin_font_size_px=4096,
+        ruby_font_size_px=3000,
+    )
+    assert _max_project_font_size(plain_big_latin) == 4096.0
+    plain_big_ruby = Style(font_size_px=48, ruby_font_size_px=3000)
+    assert _max_project_font_size(plain_big_ruby) == 3000.0
+    plain_utopia = replace(
+        plain_big_latin,
+        exit_anim="utopia",
+        exit_fade_ms=750,
+    )
+    utopia_job = replace(_job(tmp_path), style=plain_utopia, height=2160)
+    assert _strip_safety_margin(utopia_job) >= math.ceil(2160 / 15.0 + 4096 * 1.5)
+
     # rise 同样按最大字号缩放
     rise_style = Style(
         font_size_px=24,
@@ -1335,6 +1353,48 @@ def test_drain_pending_head_wraps_worker_exceptions(monkeypatch):
     assert "渲染 worker 异常" in str(excinfo.value)
     assert "MemoryError" in str(excinfo.value)
     assert isinstance(excinfo.value.__cause__, MemoryError)
+
+
+def test_multiprocess_writer_releases_blob_before_next_dispatch(monkeypatch, tmp_path):
+    # 消费者侧 blob 引用必须在下一次取结果前释放，否则瞬态峰值是
+    # (window+1)×chunk 而不是声明的 window×chunk（8K 下差 ~127MiB）
+    import gc
+    import weakref
+
+    class _Blob:
+        """支持 buffer 协议（可直接 += 进 bytearray）且可 weakref 的 blob 替身。"""
+
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def __buffer__(self, flags: int = 0) -> memoryview:
+            return memoryview(self._payload)
+
+    job = replace(_job(tmp_path), width=2, height=2, fps=2, duration_ms=1000)
+    total = _frame_count(job.duration_ms, job.fps)
+    alive: dict[int, weakref.ref] = {}
+    violations: list[int] = []
+
+    def make_blob(index: int) -> "_Blob":
+        blob = _Blob(b"x" * 8)
+        alive[index] = weakref.ref(blob)
+        return blob
+
+    def fake_iter(pool, task_fn, tasks, *, window, stall_timeout_s, should_cancel=None):
+        for index, _task in enumerate(tasks):
+            if index:
+                gc.collect()
+                if alive[index - 1]() is not None:
+                    violations.append(index - 1)
+            # 直接 yield 表达式：生成器帧不能持有 blob 局部引用，否则
+            # 消费者释放后仍会被本测试误报为泄漏
+            yield make_blob(index)
+
+    monkeypatch.setattr(renderer, "_iter_ordered_pool_results", fake_iter)
+    proc = _CollectProcess()
+    renderer._write_frames_multiprocess(proc, job, 0, job.height, total, 2, None, None)
+    assert violations == []
+    assert len(proc.stdin.data) > 0  # 假 blob 为 8 字节，只验证确有数据流过
 
 
 def test_render_processing_error_cleans_up_ffmpeg_and_output(monkeypatch, tmp_path):

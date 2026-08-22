@@ -70,26 +70,29 @@ _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 
 
 def _max_project_font_size(style: Style) -> float:
-    """工程内实际可能出现的最大主/注音字号（像素）。
+    """工程内实际可能出现的最大主/拉丁/注音字号（像素）。
 
-    角色方案（歌手 ``singer_style_overrides``）与行内配色（``custom_style_schemes``，
-    含标题方案）都可把字号覆盖到远超全局样式；utopia 放大 / rise 行程按
-    字形尺寸缩放，安全边必须按全项目最大字号估算，否则大字号角色会被裁。
+    全局样式自身的 ``latin_font_size_px`` / ``ruby_font_size_px`` /
+    ``ruby_latin_font_size_px``，以及角色方案（歌手 ``singer_style_overrides``）
+    与行内配色（``custom_style_schemes``，含标题方案）的同名字段，都可把
+    字形放大到远超全局主字号；utopia 放大 / rise 行程按字形尺寸缩放，
+    安全边必须按全项目最大字号估算，否则大字号字符会被裁。
     """
-    sizes = [float(getattr(style, "font_size_px", 0) or 0)]
-    schemes = list((getattr(style, "singer_style_overrides", None) or {}).values())
-    schemes += list((getattr(style, "custom_style_schemes", None) or {}).values())
-    for scheme in schemes:
+    sources: list[object] = [style]
+    sources += list((getattr(style, "singer_style_overrides", None) or {}).values())
+    sources += list((getattr(style, "custom_style_schemes", None) or {}).values())
+    sizes: list[float] = []
+    for source in sources:
         for field_name in (
             "font_size_px",
             "latin_font_size_px",
             "ruby_font_size_px",
             "ruby_latin_font_size_px",
         ):
-            value = getattr(scheme, field_name, None)
+            value = getattr(source, field_name, None)
             if value:
                 sizes.append(float(value))
-    return max(sizes)
+    return max(sizes) if sizes else 0.0
 
 
 def _strip_safety_margin(job: RenderJob) -> int | None:
@@ -1594,7 +1597,12 @@ def _write_frames_multiprocess(
             stall_timeout_s=stall_timeout_s,
             should_cancel=should_cancel,
         )
-        for (_start, count), blob in zip(tasks, results):
+        # 不用 zip：CPython 的 zip 会复用结果元组，旧 blob 在生成器推进补交
+        # 任务期间仍被元组持有；手动配对 + del 让已完成结果的存活峰值严格
+        # 等于 window×chunk。
+        task_iter = iter(tasks)
+        for blob in results:
+            _start, count = next(task_iter)
             if should_cancel is not None and should_cancel():
                 terminate_process(process)
                 raise ExportCancelled("已停止导出。")
@@ -1602,6 +1610,7 @@ def _write_frames_multiprocess(
             written += count
             if on_progress is not None:
                 on_progress(written, total_frames)
+            del blob
     finally:
         # 无论正常完成 / 取消 / 异常，都强制收掉 workers（可能仍有在飞任务）。
         pool.terminate()
@@ -1708,7 +1717,11 @@ def _write_frames_multiprocess_bands(
             stall_timeout_s=stall_timeout_s,
             should_cancel=should_cancel,
         )
-        for (_start, count), blob in zip(tasks, results):
+        # 同 _write_frames_multiprocess：手动配对 + del，避免 zip 元组在生成器
+        # 推进期间持有旧 blob。
+        task_iter = iter(tasks)
+        for blob in results:
+            _start, count = next(task_iter)
             if should_cancel is not None and should_cancel():
                 terminate_process(process)
                 raise ExportCancelled("已停止导出。")
@@ -1716,6 +1729,7 @@ def _write_frames_multiprocess_bands(
             written += count
             if on_progress is not None:
                 on_progress(written, total_frames)
+            del blob
     finally:
         pool.terminate()
         pool.join()
