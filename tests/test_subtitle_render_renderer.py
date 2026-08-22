@@ -31,6 +31,7 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     _frame_count,
     _image_bytes,
     _iter_ordered_pool_results,
+    _max_guide_span_em,
     _max_project_font_size,
     _merge_intervals,
     _packed_offsets,
@@ -52,6 +53,7 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
+    GuideSymbol,
     LineAnimationOverride,
     Style,
     SubtitleStyleScheme,
@@ -1110,9 +1112,9 @@ def test_strip_safety_margin_unbounded_for_shear_animations(tmp_path):
     assert _strip_safety_margin(job_flip) is None
 
 
-def test_strip_safety_margin_uses_max_scheme_font_size(tmp_path):
+def test_strip_safety_margin_uses_max_referenced_font_size(tmp_path):
     # 角色方案 / 行内配色 / 注音可把字号覆盖到远超全局样式；utopia 的
-    # 1.3×放大与 rise 行程按字形尺寸缩放，安全边必须按全项目最大字号估算
+    # 1.3×放大与 rise 行程按字形尺寸缩放，安全边必须按实际引用的最大字号估算
     style = Style(
         font_size_px=24,
         exit_anim="utopia",
@@ -1120,12 +1122,29 @@ def test_strip_safety_margin_uses_max_scheme_font_size(tmp_path):
         singer_style_overrides={1: SubtitleStyleScheme(font_size_px=200)},
         custom_style_schemes={
             "custom": SubtitleStyleScheme(ruby_font_size_px=120),
+            "unused": SubtitleStyleScheme(font_size_px=4096),
         },
     )
-    job = replace(_job(tmp_path), style=style, height=2160)
-    assert _max_project_font_size(style) == 200.0
+    referenced_line = TimingLine(
+        chars=[TimingChar("a", 0, role_label="custom"), TimingChar("b", 500)],
+        end_ms=1000,
+        singer_id=1,
+    )
+    referenced_track = TimingTrack(lines=[referenced_line])
+    job = replace(
+        _job(tmp_path), style=style, track=referenced_track, height=2160
+    )
+    assert _max_project_font_size(style, [referenced_track]) == 200.0
     expected = 2160 / 15.0 + 200 * 1.5
     assert _strip_safety_margin(job) >= math.ceil(expected)
+
+    # 未被引用的方案不参与估算：无角色标签 / 歌手不匹配 / 标题未启用时，
+    # N3 导入或编辑遗留的 4096px 方案不应把安全边撑大、让条带优化失效
+    #（45 = Style 默认全局注音字号 ruby_font_size_px，始终生效）
+    plain_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 0)], end_ms=1000)]
+    )
+    assert _max_project_font_size(style, [plain_track]) == 45.0
 
     # 全局样式自身的拉丁/注音字号同样要进最大值：不使用角色方案、
     # 只调大全局 latin/ruby 字号的工程不能按主字号算安全边
@@ -1134,18 +1153,20 @@ def test_strip_safety_margin_uses_max_scheme_font_size(tmp_path):
         latin_font_size_px=4096,
         ruby_font_size_px=3000,
     )
-    assert _max_project_font_size(plain_big_latin) == 4096.0
+    assert _max_project_font_size(plain_big_latin, [plain_track]) == 4096.0
     plain_big_ruby = Style(font_size_px=48, ruby_font_size_px=3000)
-    assert _max_project_font_size(plain_big_ruby) == 3000.0
+    assert _max_project_font_size(plain_big_ruby, [plain_track]) == 3000.0
     plain_utopia = replace(
         plain_big_latin,
         exit_anim="utopia",
         exit_fade_ms=750,
     )
-    utopia_job = replace(_job(tmp_path), style=plain_utopia, height=2160)
+    utopia_job = replace(
+        _job(tmp_path), style=plain_utopia, track=plain_track, height=2160
+    )
     assert _strip_safety_margin(utopia_job) >= math.ceil(2160 / 15.0 + 4096 * 1.5)
 
-    # rise 同样按最大字号缩放
+    # rise 同样按最大字号缩放（custom 方案经角色标签引用）
     rise_style = Style(
         font_size_px=24,
         entry_anim="rise",
@@ -1154,8 +1175,57 @@ def test_strip_safety_margin_uses_max_scheme_font_size(tmp_path):
             "custom": SubtitleStyleScheme(font_size_px=300),
         },
     )
-    rise_job = replace(_job(tmp_path), style=rise_style)
+    rise_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("a", 0, role_label="custom")],
+                end_ms=1000,
+            )
+        ]
+    )
+    rise_job = replace(_job(tmp_path), style=rise_style, track=rise_track)
     assert _strip_safety_margin(rise_job) >= math.ceil(max(300 * 0.35, 18.0))
+
+
+def test_strip_safety_margin_includes_vector_guide_span(tmp_path):
+    # SVG 导入的矢量导唱符可远宽于 1em，utopia 旋转的纵向包络按路径对角线
+    # 跨度估算；位图导唱符走独立渲染路径，不参与该包络
+    wide_vector = GuideSymbol(
+        name="wide",
+        path_commands=(
+            ("M", 0.0, 0.0),
+            ("L", 10000.0, 0.0),
+            ("L", 0.0, 1000.0),
+            ("Z",),
+        ),
+        units_per_em=1000,
+        advance_width=10000.0,
+    )
+    bitmap = replace(
+        wide_vector,
+        kind="bitmap",
+        bitmap_before_path="before.png",
+        bitmap_after_path="after.png",
+    )
+    style = Style(font_size_px=48, exit_anim="utopia", exit_fade_ms=750)
+
+    vector_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("a", 0)], end_ms=1000, guide_symbol=wide_vector)
+        ]
+    )
+    vector_job = replace(
+        _job(tmp_path), style=style, track=vector_track, height=2160
+    )
+    span_em = math.hypot(10000.0, 1000.0) / 1000.0
+    expected = 2160 / 15.0 + 48 * max(1.5, span_em * 1.3)
+    assert _strip_safety_margin(vector_job) >= math.ceil(expected)
+
+    bitmap_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 0)], end_ms=1000, guide_symbol=bitmap)]
+    )
+    assert _max_guide_span_em([bitmap_track]) == 0.0
+    assert _max_guide_span_em([vector_track]) == pytest.approx(span_em)
 
 
 def test_compute_subtitle_strip_disabled_for_char_drip(tmp_path):
@@ -1419,6 +1489,37 @@ def test_render_processing_error_cleans_up_ffmpeg_and_output(monkeypatch, tmp_pa
 
     with pytest.raises(ProcessingError, match="无响应"):
         render_subtitle_video(job)
+
+    assert fake_process.terminated is True
+    assert not job.output_path.exists()
+
+
+def test_render_progress_callback_error_cleans_up(monkeypatch, tmp_path):
+    # 进度回调抛 RuntimeError（Qt 对象销毁/线程退出竞态）不属于任何既有
+    # 清理分支，也必须终止 ffmpeg、删除半成品后原样上抛
+    job = replace(_job(tmp_path), width=2, height=2, fps=2, duration_ms=1000)
+    fake_process = _FakeRenderProcess(job.output_path)
+    job.output_path.write_bytes(b"partial")
+
+    def writer(process, _job, strip_top, render_h, total_frames, should_cancel, on_progress):
+        process.stdin.write(b"partial")
+        if on_progress is not None:
+            on_progress(1, total_frames)
+
+    def failing_progress(_done, _total):
+        raise RuntimeError("Qt 对象已销毁")
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", writer)
+    monkeypatch.setattr(
+        renderer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: fake_process,
+    )
+
+    with pytest.raises(RuntimeError, match="Qt 对象已销毁"):
+        render_subtitle_video(job, on_progress=failing_progress)
 
     assert fake_process.terminated is True
     assert not job.output_path.exists()

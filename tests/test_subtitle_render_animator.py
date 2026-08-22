@@ -224,3 +224,20 @@ def test_max_line_animation_excursion_honors_project_max_font():
     assert max_line_animation_excursion(rise, 1080, font_size_px=300) == pytest.approx(
         max(300 * 0.35, 18.0)
     )
+
+
+def test_max_line_animation_excursion_uses_glyph_span_em():
+    # 矢量导唱符可远宽于 1em；utopia 旋转的纵向包络按调用方传入的
+    # 路径对角线跨度（em）缩放，而不是固定 1.5×字号
+    from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
+
+    style = Style(font_size_px=48, exit_anim="utopia", exit_fade_ms=750)
+    wide = max_line_animation_excursion(
+        style, 2160, font_size_px=48, glyph_span_em=10.05
+    )
+    assert wide == pytest.approx(2160 / 15.0 + 48 * 10.05)
+    # 小于 1.5 的跨度仍按常规字形下限
+    narrow = max_line_animation_excursion(
+        style, 2160, font_size_px=48, glyph_span_em=1.0
+    )
+    assert narrow == pytest.approx(2160 / 15.0 + 48 * 1.5)

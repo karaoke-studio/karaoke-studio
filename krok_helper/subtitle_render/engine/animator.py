@@ -84,10 +84,13 @@ def _rise_distance(style: Style) -> float:
 
 
 # utopia 退场相位 y_travel = sin(π·local/2)·amp（painter._char_transition_state），
-# amp = frame_height/15；intro 相位另有 1.3×放大，与旋转一并按 1.5×字号近似。
-def _utopia_excursion(frame_height: float, font_px: float) -> float:
+# amp = frame_height/15；intro 相位另有 1.3×放大，与旋转一并按 glyph_span_em×字号
+# 近似（常规字形 1.5em；矢量导唱符可远宽于 1em，由调用方按实际轮廓对角线传入）。
+def _utopia_excursion(
+    frame_height: float, font_px: float, glyph_span_em: float
+) -> float:
     height = float(frame_height) if frame_height and frame_height > 0 else 1080.0
-    return height / 15.0 + font_px * 1.5
+    return height / 15.0 + font_px * max(glyph_span_em, 1.5)
 
 
 def max_line_animation_excursion(
@@ -95,6 +98,7 @@ def max_line_animation_excursion(
     frame_height: float,
     *,
     font_size_px: float | None = None,
+    glyph_span_em: float = 1.5,
 ) -> float | None:
     """任一帧内动画能把内容移出静止纵向包络的最大距离（像素，向上或向下）。
 
@@ -105,6 +109,10 @@ def max_line_animation_excursion(
     ``font_size_px``：工程内实际可能出现的最大字号（角色方案 / 行内配色 /
     注音可把字号覆盖到远超全局样式）。utopia 的 1.3×放大与 rise 的行程都
     按字形尺寸缩放，缺省时仅取 ``style.font_size_px`` 会低估大字号角色。
+
+    ``glyph_span_em``：utopia 旋转/放大的字形纵向包络（em 单位）。常规字形
+    用默认 1.5；行内矢量导唱符的 SVG 轮廓可远宽于 1em，旋转后的纵向包络
+    按其路径对角线长度估算，由调用方传入。
 
     返回 ``None`` 表示无可靠上界，调用方必须禁用条带/多带优化退回整帧：
     char_drip / spin_flip 逐字剪切（``tan`` 接近 90°，char_drip 还保持
@@ -123,7 +131,9 @@ def max_line_animation_excursion(
     if "rise" in anims:
         excursion = max(excursion, max(font_px * 0.35, 18.0))
     if "utopia" in anims or effective_karaoke_animation(style) == "utopia":
-        excursion = max(excursion, _utopia_excursion(frame_height, font_px))
+        excursion = max(
+            excursion, _utopia_excursion(frame_height, font_px, glyph_span_em)
+        )
     if not math.isfinite(excursion) or excursion < 0.0:
         return 0.0
     return excursion

@@ -48,7 +48,9 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame_to_painter,
 )
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
+from krok_helper.subtitle_render.guide_symbols import guide_symbol_path
 from krok_helper.subtitle_render.models import (
+    TITLE_SCHEME_NAME,
     BackgroundSource,
     Style,
     TimingTrack,
@@ -69,20 +71,48 @@ _STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退�
 _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 
 
-def _max_project_font_size(style: Style) -> float:
+def _referenced_style_sources(style: Style, tracks: list[TimingTrack]) -> list[object]:
+    """聚合当前工程实际生效的字号来源：全局样式 + 被引用的方案。
+
+    歌手方案只保留 tracks 里出现的 ``singer_id``；行内配色只保留任一字符
+    ``role_label`` 引用到的名字（标签跨行延续时，延续源头的字符必带标签）；
+    标题方案只在 ``title_overlay.enabled`` 时计入。N3 导入或编辑遗留的
+    未使用超大字号方案不应把安全边撑到数千像素、让整个 4K 导出退回全帧。
+    """
+    sources: list[object] = [style]
+    used_singers = {
+        line.singer_id
+        for track in tracks
+        for line in track.lines
+        if getattr(line, "singer_id", None) is not None
+    }
+    for singer_id, scheme in (getattr(style, "singer_style_overrides", None) or {}).items():
+        if singer_id in used_singers:
+            sources.append(scheme)
+    used_roles: set[str] = set()
+    for track in tracks:
+        for line in track.lines:
+            for char in line.chars:
+                if getattr(char, "role_label", None):
+                    used_roles.add(char.role_label)
+    title = getattr(style, "title_overlay", None)
+    title_active = title is not None and bool(getattr(title, "enabled", False))
+    for name, scheme in (getattr(style, "custom_style_schemes", None) or {}).items():
+        if name in used_roles or (title_active and name == TITLE_SCHEME_NAME):
+            sources.append(scheme)
+    return sources
+
+
+def _max_project_font_size(style: Style, tracks: list[TimingTrack]) -> float:
     """工程内实际可能出现的最大主/拉丁/注音字号（像素）。
 
     全局样式自身的 ``latin_font_size_px`` / ``ruby_font_size_px`` /
-    ``ruby_latin_font_size_px``，以及角色方案（歌手 ``singer_style_overrides``）
-    与行内配色（``custom_style_schemes``，含标题方案）的同名字段，都可把
-    字形放大到远超全局主字号；utopia 放大 / rise 行程按字形尺寸缩放，
-    安全边必须按全项目最大字号估算，否则大字号字符会被裁。
+    ``ruby_latin_font_size_px``，以及被引用方案（歌手 / 行内配色 / 标题）的
+    同名字段，都可把字形放大到远超全局主字号；utopia 放大 / rise 行程按
+    字形尺寸缩放，安全边必须按全项目最大字号估算，否则大字号字符会被裁。
     """
-    sources: list[object] = [style]
-    sources += list((getattr(style, "singer_style_overrides", None) or {}).values())
-    sources += list((getattr(style, "custom_style_schemes", None) or {}).values())
     sizes: list[float] = []
-    for source in sources:
+    for source in _referenced_style_sources(style, tracks):
         for field_name in (
             "font_size_px",
             "latin_font_size_px",
@@ -95,6 +125,34 @@ def _max_project_font_size(style: Style) -> float:
     return max(sizes) if sizes else 0.0
 
 
+def _max_guide_span_em(tracks: list[TimingTrack]) -> float:
+    """行内矢量导唱符的最大旋转对角线跨度（em 单位）。
+
+    位图导唱符走独立渲染路径（不进 utopia 旋转）；矢量导唱符是行内虚拟
+    字符，会进入 utopia 旋转/缩放，且 SVG 导入的轮廓可以远宽于 1em——
+    其纵向包络按路径对角线长度估算，而不是按字号近似。
+    """
+    span_em = 0.0
+    seen: set[int] = set()
+    for track in tracks:
+        for line in track.lines:
+            guides = [line.guide_symbol, *(line.inline_guide_symbols or {}).values()]
+            for guide in guides:
+                if guide is None or id(guide) in seen:
+                    continue
+                seen.add(id(guide))
+                if getattr(guide, "kind", "vector") != "vector":
+                    continue
+                if not getattr(guide, "path_commands", None):
+                    continue
+                rect = guide_symbol_path(guide).boundingRect()
+                if rect.isEmpty():
+                    continue
+                units = max(int(getattr(guide, "units_per_em", 1) or 1), 1)
+                span_em = max(span_em, math.hypot(rect.width(), rect.height()) / units)
+    return span_em
+
+
 def _strip_safety_margin(job: RenderJob) -> int | None:
     """条带/多带的纵向安全边：基础边随分辨率缩放 + 动画纵向行程上界。
 
@@ -102,23 +160,26 @@ def _strip_safety_margin(job: RenderJob) -> int | None:
     采样间隙之间；把行程上界并进安全边后，条带对任意帧都不会裁掉可见像素
     （越出画布的部分在整帧路径同样被画布裁掉，因此 clamp 到画布即无损）。
     行级动画覆盖（N3 逐行动画）逐行解析后取最大值；字号按全项目最大
-    （含角色方案 / 行内配色 / 注音）估算。
+    （含被引用的角色方案 / 行内配色 / 注音）估算；utopia 的字形放大量
+    额外计入矢量导唱符的旋转对角线跨度（SVG 轮廓可远宽于 1em）。
 
     返回 ``None`` 表示存在无可靠纵向上界的动画（char_drip / spin_flip 的
     逐字剪切随首帧 ``tan`` 发散，且行内混合字号使字形宽度不可由样式字号
     约束），条带/多带优化必须禁用、退回整帧渲染。
     """
     margin = max(_STRIP_MARGIN_PX, _STRIP_MARGIN_PX * job.height / 1080.0)
-    font_px = _max_project_font_size(job.style)
+    tracks = _job_tracks(job)
+    font_px = _max_project_font_size(job.style, tracks)
+    glyph_span_em = max(1.5, _max_guide_span_em(tracks) * 1.3)  # 1.3 = utopia intro 放大
     styles: list[Style] = [job.style]
     styles.extend(
         style_with_line_animation(job.style, line)
-        for track in _job_tracks(job)
+        for track in tracks
         for line in track.lines
     )
     for candidate in styles:
         excursion = max_line_animation_excursion(
-            candidate, job.height, font_size_px=font_px
+            candidate, job.height, font_size_px=font_px, glyph_span_em=glyph_span_em
         )
         if excursion is None:
             return None
@@ -378,6 +439,13 @@ def render_subtitle_video(
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。") from exc
         raise ProcessingError(f"ffmpeg 管道写入失败: {exc}") from exc
+    except Exception:
+        # 其余帧生产异常（如进度回调抛 RuntimeError / Qt 对象竞态）同样不得
+        # 泄漏 ffmpeg：终止进程、删半成品后原样上抛。放在各具体分支之后，
+        # 不影响 ExportCancelled / NativeRendererError（GPU→CPU 回退）等既有路径。
+        terminate_process(process)
+        _remove_incomplete_output(job.output_path, logger)
+        raise
     finally:
         if process.poll() is not None and output_drain_thread.is_alive():
             output_drain_thread.join(timeout=1.0)
@@ -1603,14 +1671,18 @@ def _write_frames_multiprocess(
         task_iter = iter(tasks)
         for blob in results:
             _start, count = next(task_iter)
-            if should_cancel is not None and should_cancel():
-                terminate_process(process)
-                raise ExportCancelled("已停止导出。")
-            process.stdin.write(blob)
-            written += count
-            if on_progress is not None:
-                on_progress(written, total_frames)
-            del blob
+            try:
+                if should_cancel is not None and should_cancel():
+                    terminate_process(process)
+                    raise ExportCancelled("已停止导出。")
+                process.stdin.write(blob)
+                written += count
+                if on_progress is not None:
+                    on_progress(written, total_frames)
+            finally:
+                # 写入/进度回调（可能抛异常）结束后都立即释放消费者侧引用，
+                # 下一次 next() 补交任务时存活峰值严格等于 window×chunk
+                del blob
     finally:
         # 无论正常完成 / 取消 / 异常，都强制收掉 workers（可能仍有在飞任务）。
         pool.terminate()
@@ -1722,14 +1794,18 @@ def _write_frames_multiprocess_bands(
         task_iter = iter(tasks)
         for blob in results:
             _start, count = next(task_iter)
-            if should_cancel is not None and should_cancel():
-                terminate_process(process)
-                raise ExportCancelled("已停止导出。")
-            process.stdin.write(blob)
-            written += count
-            if on_progress is not None:
-                on_progress(written, total_frames)
-            del blob
+            try:
+                if should_cancel is not None and should_cancel():
+                    terminate_process(process)
+                    raise ExportCancelled("已停止导出。")
+                process.stdin.write(blob)
+                written += count
+                if on_progress is not None:
+                    on_progress(written, total_frames)
+            finally:
+                # 写入/进度回调（可能抛异常）结束后都立即释放消费者侧引用，
+                # 下一次 next() 补交任务时存活峰值严格等于 window×chunk
+                del blob
     finally:
         pool.terminate()
         pool.join()
