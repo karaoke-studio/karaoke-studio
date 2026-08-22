@@ -31,12 +31,14 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     _frame_count,
     _image_bytes,
     _iter_ordered_pool_results,
+    _max_project_font_size,
     _merge_intervals,
     _packed_offsets,
     _paint_overlay_bands,
     _paint_overlay_strip,
     _render_overlay_frame,
     _resolve_chunk_size,
+    _resolve_effective_worker_count,
     _resolve_pending_window,
     _resolve_stall_timeout_s,
     _resolve_worker_count,
@@ -52,6 +54,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
     LineAnimationOverride,
     Style,
+    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -1107,6 +1110,36 @@ def test_strip_safety_margin_unbounded_for_shear_animations(tmp_path):
     assert _strip_safety_margin(job_flip) is None
 
 
+def test_strip_safety_margin_uses_max_scheme_font_size(tmp_path):
+    # 角色方案 / 行内配色 / 注音可把字号覆盖到远超全局样式；utopia 的
+    # 1.3×放大与 rise 行程按字形尺寸缩放，安全边必须按全项目最大字号估算
+    style = Style(
+        font_size_px=24,
+        exit_anim="utopia",
+        exit_fade_ms=750,
+        singer_style_overrides={1: SubtitleStyleScheme(font_size_px=200)},
+        custom_style_schemes={
+            "custom": SubtitleStyleScheme(ruby_font_size_px=120),
+        },
+    )
+    job = replace(_job(tmp_path), style=style, height=2160)
+    assert _max_project_font_size(style) == 200.0
+    expected = 2160 / 15.0 + 200 * 1.5
+    assert _strip_safety_margin(job) >= math.ceil(expected)
+
+    # rise 同样按最大字号缩放
+    rise_style = Style(
+        font_size_px=24,
+        entry_anim="rise",
+        entry_lead_ms=300,
+        custom_style_schemes={
+            "custom": SubtitleStyleScheme(font_size_px=300),
+        },
+    )
+    rise_job = replace(_job(tmp_path), style=rise_style)
+    assert _strip_safety_margin(rise_job) >= math.ceil(max(300 * 0.35, 18.0))
+
+
 def test_compute_subtitle_strip_disabled_for_char_drip(tmp_path):
     job = replace(
         _job(tmp_path),
@@ -1162,9 +1195,23 @@ def test_resolve_pending_window_bounds_by_bytes_and_workers():
     assert _resolve_pending_window(8, 3, 1920 * 1080 * 4) == 10
     # 小帧不受字节约束，只受 worker 数约束
     assert _resolve_pending_window(8, 1, 1024) == 10
-    # 单帧巨大（8K ~127MiB）时字节上限让位：窗口下限 = worker 数，
-    # 绝不饿死 worker（在飞内存会超 256MiB 目标，但仍远低于旧 imap 的无界积压）
-    assert _resolve_pending_window(8, 1, 7680 * 4320 * 4) == 8
+    # 单帧巨大（8K ~127MiB）：窗口被字节上限压到 2，绝不突破 256MiB 预算；
+    # 并行度由 _resolve_effective_worker_count 同步降 worker 保住
+    assert _resolve_pending_window(8, 1, 7680 * 4320 * 4) == 2
+
+
+def test_resolve_effective_worker_count_caps_by_budget():
+    frame_bytes_4k = 3840 * 2160 * 4
+    # 8K 自动 8 worker：256MiB/127MiB = 2 → 降为 2，窗口与预算同时成立
+    assert _resolve_effective_worker_count(8, 1, 7680 * 4320 * 4) == 2
+    # 4K 手动 16 worker：256MiB/31.6MiB = 8 → 降为 8
+    assert _resolve_effective_worker_count(16, 1, frame_bytes_4k) == 8
+    # 4K 自动 8 worker：预算内放得下，不降
+    assert _resolve_effective_worker_count(8, 1, frame_bytes_4k) == 8
+    # 1080p + 8 worker（chunk ≈ 23.6MiB）：不降，高性能机器并行度不受影响
+    assert _resolve_effective_worker_count(8, 3, 1920 * 1080 * 4) == 8
+    # 极端下限：预算只容 1 块时保底单 worker
+    assert _resolve_effective_worker_count(8, 1, 512 * 1024 * 1024) == 1
 
 
 def test_resolve_stall_timeout_scales_with_chunk_bytes(monkeypatch):
@@ -1271,6 +1318,23 @@ def test_drain_pending_head_polls_until_result_arrives(monkeypatch):
     pending = deque([result])
     assert _drain_pending_head(pending, 60.0) == b"blob"
     assert result.calls == 3
+
+
+def test_drain_pending_head_wraps_worker_exceptions(monkeypatch):
+    monkeypatch.setattr(renderer, "_MULTIPROC_POLL_INTERVAL_S", 0.01)
+
+    class _MemoryErrorResult:
+        def get(self, timeout=None):
+            raise MemoryError("cannot allocate QImage")
+
+    pending = deque([_MemoryErrorResult()])
+    # worker 内原样冒泡的 MemoryError 不是 ProcessingError/OSError，会绕过
+    # ffmpeg 清理分支；必须包装成 ProcessingError 走统一清理
+    with pytest.raises(ProcessingError) as excinfo:
+        _drain_pending_head(pending, 60.0)
+    assert "渲染 worker 异常" in str(excinfo.value)
+    assert "MemoryError" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, MemoryError)
 
 
 def test_render_processing_error_cleans_up_ffmpeg_and_output(monkeypatch, tmp_path):

@@ -69,19 +69,44 @@ _STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退�
 _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 
 
+def _max_project_font_size(style: Style) -> float:
+    """工程内实际可能出现的最大主/注音字号（像素）。
+
+    角色方案（歌手 ``singer_style_overrides``）与行内配色（``custom_style_schemes``，
+    含标题方案）都可把字号覆盖到远超全局样式；utopia 放大 / rise 行程按
+    字形尺寸缩放，安全边必须按全项目最大字号估算，否则大字号角色会被裁。
+    """
+    sizes = [float(getattr(style, "font_size_px", 0) or 0)]
+    schemes = list((getattr(style, "singer_style_overrides", None) or {}).values())
+    schemes += list((getattr(style, "custom_style_schemes", None) or {}).values())
+    for scheme in schemes:
+        for field_name in (
+            "font_size_px",
+            "latin_font_size_px",
+            "ruby_font_size_px",
+            "ruby_latin_font_size_px",
+        ):
+            value = getattr(scheme, field_name, None)
+            if value:
+                sizes.append(float(value))
+    return max(sizes)
+
+
 def _strip_safety_margin(job: RenderJob) -> int | None:
     """条带/多带的纵向安全边：基础边随分辨率缩放 + 动画纵向行程上界。
 
     预扫并集按采样时刻取值，动画峰值（utopia 弹跳、rise 抬升等）可能落在
     采样间隙之间；把行程上界并进安全边后，条带对任意帧都不会裁掉可见像素
     （越出画布的部分在整帧路径同样被画布裁掉，因此 clamp 到画布即无损）。
-    行级动画覆盖（N3 逐行动画）逐行解析后取最大值。
+    行级动画覆盖（N3 逐行动画）逐行解析后取最大值；字号按全项目最大
+    （含角色方案 / 行内配色 / 注音）估算。
 
     返回 ``None`` 表示存在无可靠纵向上界的动画（char_drip / spin_flip 的
     逐字剪切随首帧 ``tan`` 发散，且行内混合字号使字形宽度不可由样式字号
     约束），条带/多带优化必须禁用、退回整帧渲染。
     """
     margin = max(_STRIP_MARGIN_PX, _STRIP_MARGIN_PX * job.height / 1080.0)
+    font_px = _max_project_font_size(job.style)
     styles: list[Style] = [job.style]
     styles.extend(
         style_with_line_animation(job.style, line)
@@ -89,7 +114,9 @@ def _strip_safety_margin(job: RenderJob) -> int | None:
         for line in track.lines
     )
     for candidate in styles:
-        excursion = max_line_animation_excursion(candidate, job.height)
+        excursion = max_line_animation_excursion(
+            candidate, job.height, font_size_px=font_px
+        )
         if excursion is None:
             return None
         margin = max(margin, excursion)
@@ -292,12 +319,12 @@ def render_subtitle_video(
             if bands is not None:
                 _write_frames_multiprocess_bands(
                     process, job, bands, packed_h, total_frames,
-                    worker_count, should_cancel, on_progress,
+                    worker_count, should_cancel, on_progress, logger=logger,
                 )
             else:
                 _write_frames_multiprocess(
                     process, job, strip_top, render_h, total_frames,
-                    worker_count, should_cancel, on_progress,
+                    worker_count, should_cancel, on_progress, logger=logger,
                 )
         elif bands is not None:
             _write_frames_single_bands(
@@ -1374,13 +1401,28 @@ _MULTIPROC_POLL_INTERVAL_S = 0.5  # 等待结果的单次轮询时长（期间�
 def _resolve_pending_window(worker_count: int, chunk: int, frame_bytes: int) -> int:
     """同时在飞（已派发未消费）的 chunk 数上限。
 
-    高核机器不能饿死任何 worker：窗口下限 = worker 数。字节上限只在单帧
-    本身巨大（如 8K）时让位——此时在飞内存会超 256MiB 目标，但仍远低于
-    改造前 imap 的无界积压。
+    调用方需先经 :func:`_resolve_effective_worker_count` 把 worker 数压回
+    预算内（worker ≤ 256MiB/chunk），此后窗口 = min(worker+2, 字节上限)
+    恒 ≥ worker 数——既不饿死 worker，也绝不突破内存预算。
     """
     chunk_bytes = max(chunk * max(frame_bytes, 1), 1)
     by_bytes = max(1, _MULTIPROC_MAX_PENDING_BYTES // chunk_bytes)
-    return max(worker_count, min(worker_count + 2, by_bytes))
+    return max(2, min(worker_count + 2, by_bytes))
+
+
+def _resolve_effective_worker_count(
+    worker_count: int, chunk: int, frame_bytes: int
+) -> int:
+    """按 chunk 字节把实际 worker 数压回在飞内存预算内。
+
+    单帧巨大时（8K 全幅 ~127MiB、手动 16 worker 的 4K）靠放大窗口喂满
+    worker 会让待消费结果突破 256MiB 数倍，重新引入 OOM 风险；正确做法
+    是降 worker 数：8K 自动 8 worker → 2，4K 手动 16 → 8，窗口与预算
+    同时成立。常规分辨率（chunk 缩放后 ≤64MiB）不受影响。
+    """
+    chunk_bytes = max(chunk * max(frame_bytes, 1), 1)
+    by_bytes = max(1, _MULTIPROC_MAX_PENDING_BYTES // chunk_bytes)
+    return max(1, min(worker_count, by_bytes))
 
 
 def _resolve_stall_timeout_s(chunk_frames: int, frame_bytes: int) -> float:
@@ -1423,6 +1465,16 @@ def _drain_pending_head(
             return result.get(timeout=_MULTIPROC_POLL_INTERVAL_S)
         except mp.TimeoutError:
             pass
+        except (ExportCancelled, ProcessingError):
+            raise
+        except Exception as exc:
+            # worker 内的 MemoryError / MaybeEncodingError / 渲染异常原样冒泡会
+            # 绕过外层 ffmpeg 清理分支（不是 ProcessingError/OSError），统一
+            # 包装后再抛。
+            raise ProcessingError(
+                f"渲染 worker 异常（{type(exc).__name__}: {exc}），导出中止；"
+                "可尝试调低导出分辨率或在环境变量 KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
+            ) from exc
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
         if time.monotonic() >= deadline:
@@ -1504,23 +1556,31 @@ def _write_frames_multiprocess(
     worker_count: int,
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
+    logger: Logger | None = None,
 ) -> None:
     """多进程并行渲染：worker 池各渲一段，主进程按序收回并写入 ffmpeg stdin。
 
     apply_async + 有界在飞窗口保序消费（替代 imap 的无界结果积压），4K 下
-    已完成未消费的 chunk 结果内存峰值封顶在 _MULTIPROC_MAX_PENDING_BYTES。
-    取消 / 异常时 terminate 整池。
+    已完成未消费的 chunk 结果内存峰值封顶在 _MULTIPROC_MAX_PENDING_BYTES；
+    单帧巨大时按预算降低实际 worker 数（不放大窗口）。取消 / 异常时
+    terminate 整池。
     """
     import multiprocessing as mp
 
     chunk = _resolve_chunk_size(job, render_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
     frame_bytes = job.width * render_h * 4
-    window = _resolve_pending_window(worker_count, chunk, frame_bytes)
+    effective_workers = _resolve_effective_worker_count(worker_count, chunk, frame_bytes)
+    if effective_workers < worker_count and logger is not None:
+        logger(
+            f"单帧数据过大，渲染进程数从 {worker_count} 降至 {effective_workers}"
+            "以守住主进程在飞内存预算（256MiB）"
+        )
+    window = _resolve_pending_window(effective_workers, chunk, frame_bytes)
     stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
-        worker_count,
+        effective_workers,
         initializer=_render_worker_init,
         initargs=(job, strip_top, render_h),
     )
@@ -1613,20 +1673,28 @@ def _write_frames_multiprocess_bands(
     worker_count: int,
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
+    logger: Logger | None = None,
 ) -> None:
     """多进程并行渲染（方案 B 打包多带），主进程按序收回写入 ffmpeg stdin。
 
-    与 _write_frames_multiprocess 相同的有界在飞窗口 + 停滞超时护栏。"""
+    与 _write_frames_multiprocess 相同的有界在飞窗口 + 预算内降 worker +
+    停滞超时护栏。"""
     import multiprocessing as mp
 
     chunk = _resolve_chunk_size(job, packed_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
     frame_bytes = job.width * packed_h * 4
-    window = _resolve_pending_window(worker_count, chunk, frame_bytes)
+    effective_workers = _resolve_effective_worker_count(worker_count, chunk, frame_bytes)
+    if effective_workers < worker_count and logger is not None:
+        logger(
+            f"单帧数据过大，渲染进程数从 {worker_count} 降至 {effective_workers}"
+            "以守住主进程在飞内存预算（256MiB）"
+        )
+    window = _resolve_pending_window(effective_workers, chunk, frame_bytes)
     stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
-        worker_count,
+        effective_workers,
         initializer=_render_worker_init_bands,
         initargs=(job, bands, packed_h),
     )

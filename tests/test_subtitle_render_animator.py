@@ -207,3 +207,20 @@ def test_max_line_animation_excursion_bounded_for_travel_effects():
         2160 / 15.0 + 48 * 1.5
     )
     assert max_line_animation_excursion(Style(), 1080) == 0.0
+
+
+def test_max_line_animation_excursion_honors_project_max_font():
+    # 角色/行内方案可把字号覆盖到远超全局样式；utopia 放大与 rise 行程
+    # 按字形尺寸缩放，必须按传入的全项目最大字号估算
+    from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
+
+    style = Style(font_size_px=48, exit_anim="utopia", exit_fade_ms=750)
+    base = max_line_animation_excursion(style, 2160)
+    assert base == pytest.approx(2160 / 15.0 + 48 * 1.5)
+    big = max_line_animation_excursion(style, 2160, font_size_px=4096)
+    assert big == pytest.approx(2160 / 15.0 + 4096 * 1.5)
+
+    rise = Style(font_size_px=48, entry_anim="rise", entry_lead_ms=300)
+    assert max_line_animation_excursion(rise, 1080, font_size_px=300) == pytest.approx(
+        max(300 * 0.35, 18.0)
+    )
