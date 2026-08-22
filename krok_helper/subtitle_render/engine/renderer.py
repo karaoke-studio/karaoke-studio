@@ -69,13 +69,17 @@ _STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退�
 _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 
 
-def _strip_safety_margin(job: RenderJob) -> int:
+def _strip_safety_margin(job: RenderJob) -> int | None:
     """条带/多带的纵向安全边：基础边随分辨率缩放 + 动画纵向行程上界。
 
     预扫并集按采样时刻取值，动画峰值（utopia 弹跳、rise 抬升等）可能落在
     采样间隙之间；把行程上界并进安全边后，条带对任意帧都不会裁掉可见像素
     （越出画布的部分在整帧路径同样被画布裁掉，因此 clamp 到画布即无损）。
     行级动画覆盖（N3 逐行动画）逐行解析后取最大值。
+
+    返回 ``None`` 表示存在无可靠纵向上界的动画（char_drip / spin_flip 的
+    逐字剪切随首帧 ``tan`` 发散，且行内混合字号使字形宽度不可由样式字号
+    约束），条带/多带优化必须禁用、退回整帧渲染。
     """
     margin = max(_STRIP_MARGIN_PX, _STRIP_MARGIN_PX * job.height / 1080.0)
     styles: list[Style] = [job.style]
@@ -85,7 +89,10 @@ def _strip_safety_margin(job: RenderJob) -> int:
         for line in track.lines
     )
     for candidate in styles:
-        margin = max(margin, max_line_animation_excursion(candidate, job.height))
+        excursion = max_line_animation_excursion(candidate, job.height)
+        if excursion is None:
+            return None
+        margin = max(margin, excursion)
     return int(math.ceil(margin))
 
 # A3 多进程导出：offscreen worker 池并行渲帧，主进程按序喂 ffmpeg。
@@ -94,7 +101,8 @@ def _strip_safety_margin(job: RenderJob) -> int:
 _MULTIPROC_AUTO_WORKER_CAP = 8  # 自动模式保持保守上限
 _MULTIPROC_WORKER_CAP = 16  # 手动 / 环境变量上限（每个 worker 一份 QApplication）
 _MULTIPROC_MIN_FRAMES = 240  # 帧数低于此不值当 spawn，走单进程
-_CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节（控内存 / IPC 粒度）
+_CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节上限（控内存 / IPC 粒度）
+_CHUNK_MIN_TARGET_BYTES = 4 * 1024 * 1024  # 单个 chunk 目标字节下限（避免 IPC 过碎）
 
 # 导出预览（仿 N3 出力预览）：把 ffmpeg 内合成后的成品流 split 一路，按视频时间
 # 降频 + 缩宽后持续覆盖写入单张 JPG（image2 -update，原子写），UI 轮询该文件即可
@@ -198,9 +206,13 @@ def render_subtitle_video(
         and (not gpu_export_active or gpu_packed_active)
     ):
         if _bands_enabled():
-            bands = _compute_content_bands(job, duration_ms, should_cancel=should_cancel)
+            bands = _compute_content_bands(
+                job, duration_ms, should_cancel=should_cancel, logger=logger
+            )
         if bands is None:
-            strip = _compute_subtitle_strip(job, duration_ms, should_cancel=should_cancel)
+            strip = _compute_subtitle_strip(
+                job, duration_ms, should_cancel=should_cancel, logger=logger
+            )
 
     if bands is not None:
         packed_h = sum(height for _top, height in bands)
@@ -301,6 +313,12 @@ def render_subtitle_video(
         return_code = process.wait()
         output_drain_thread.join()
     except ExportCancelled:
+        terminate_process(process)
+        _remove_incomplete_output(job.output_path, logger)
+        raise
+    except ProcessingError:
+        # 帧生产阶段的停滞 / worker 异常退出（如 _drain_pending_head）也要走完整
+        # 清理：终止 ffmpeg、删半成品，否则 ffmpeg 会一直等 stdin 并锁住输出文件。
         terminate_process(process)
         _remove_incomplete_output(job.output_path, logger)
         raise
@@ -734,6 +752,7 @@ def _compute_subtitle_strip(
     duration_ms: int,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    logger: Logger | None = None,
 ) -> tuple[int, int] | None:
     """预扫整段，求所有可见字幕内容的纵向并集 ``(y_top, height)``。
 
@@ -741,6 +760,14 @@ def _compute_subtitle_strip(
     决定，不假设固定行数。并集 ≥ 全高 ``_STRIP_MIN_GAIN_RATIO`` 或全空时返回 ``None``
     退回整帧。yuv420p 友好：top 下取偶、height 上取偶。
     """
+    margin = _strip_safety_margin(job)
+    if margin is None:
+        if logger is not None:
+            logger(
+                "检测到 char_drip / spin_flip 逐字剪切动画，纵向包络无可靠上界，"
+                "条带渲染已禁用（改用整帧，剪切轨迹不会被裁）"
+            )
+        return None
     width, height = job.width, job.height
     total_frames = _frame_count(duration_ms, job.fps)
     times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
@@ -795,7 +822,6 @@ def _compute_subtitle_strip(
     if bottom < top:
         return None  # 整段无可见内容
 
-    margin = _strip_safety_margin(job)
     top = max(0, top - margin)
     bottom = min(height - 1, bottom + margin)
     top -= top % 2  # 下取偶
@@ -853,6 +879,7 @@ def _compute_content_bands(
     duration_ms: int,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    logger: Logger | None = None,
 ) -> list[tuple[int, int]] | None:
     """预扫整段，求互不相交的内容块 → 多条 ``(y_top, height)``（方案 B）。
 
@@ -861,6 +888,14 @@ def _compute_content_bands(
     （竖排 / viewport 旋转 / 逐字 transition）→ 返回 ``None`` 让上层退回方案 A / 整帧。
     少于 2 条或打包高度省不下来时也返回 ``None``（交给方案 A 单条）。
     """
+    margin = _strip_safety_margin(job)
+    if margin is None:
+        if logger is not None:
+            logger(
+                "检测到 char_drip / spin_flip 逐字剪切动画，纵向包络无可靠上界，"
+                "多带渲染已禁用（改用整帧，剪切轨迹不会被裁）"
+            )
+        return None
     width, height = job.width, job.height
     total_frames = _frame_count(duration_ms, job.fps)
     times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
@@ -898,7 +933,6 @@ def _compute_content_bands(
         return None
 
     merged = _merge_intervals(collected, _BAND_MERGE_GAP_PX)
-    margin = _strip_safety_margin(job)
     padded = [
         (max(0, top - margin), min(height - 1, bottom + margin))
         for top, bottom in merged
@@ -1308,9 +1342,22 @@ def _resolve_worker_count(
 
 
 def _resolve_chunk_size(job: RenderJob, render_h: int, total_frames: int, worker_count: int) -> int:
-    """每个 worker 任务的帧数：按目标字节封顶（控内存/IPC），且每 worker 至少几块以均衡。"""
+    """每个 worker 任务的帧数：按目标字节封顶（控内存/IPC），且每 worker 至少几块以均衡。
+
+    chunk 目标随 worker 数缩放：``在飞内存上限 / (worker+2)``，夹在 4~64MiB——
+    固定 64MiB 时 256MiB 窗口只能容纳 ~4 块，8 worker 的高核机器会有约一半
+    worker 无任务可做（并行度 8→4）。缩放后 1080p 全幅 8 worker 每块 ~24MiB、
+    窗口 10，喂满全部 worker。
+    """
     frame_bytes = max(job.width * render_h * 4, 1)
-    by_bytes = max(1, _CHUNK_TARGET_BYTES // frame_bytes)
+    target_bytes = max(
+        _CHUNK_MIN_TARGET_BYTES,
+        min(
+            _CHUNK_TARGET_BYTES,
+            _MULTIPROC_MAX_PENDING_BYTES // max(worker_count + 2, 1),
+        ),
+    )
+    by_bytes = max(1, target_bytes // frame_bytes)
     by_balance = max(1, total_frames // (worker_count * 4))
     return max(1, min(by_bytes, by_balance))
 
@@ -1319,18 +1366,30 @@ def _resolve_chunk_size(job: RenderJob, render_h: int, total_frames: int, worker
 # 4K 全幅帧（31.6MiB/帧）下渲染快于编码时几分钟即可吃掉数 GB 内存。
 # 改用 apply_async + 有界在飞窗口：同时未消费的 chunk 结果条数与字节数都封顶。
 _MULTIPROC_MAX_PENDING_BYTES = 256 * 1024 * 1024  # 在飞 chunk 结果的内存上限
-_MULTIPROC_MIN_STALL_TIMEOUT_S = 120.0  # 单 chunk 结果等待下限（4K 单帧正常 <10s）
+_MULTIPROC_MIN_STALL_TIMEOUT_S = 60.0  # 单 chunk 结果等待的基础时间
+_MULTIPROC_STALL_BYTES_PER_SLOW_S = 512 * 1024  # 假设的最慢渲染速率（字节/秒）
+_MULTIPROC_POLL_INTERVAL_S = 0.5  # 等待结果的单次轮询时长（期间响应取消）
 
 
 def _resolve_pending_window(worker_count: int, chunk: int, frame_bytes: int) -> int:
-    """同时在飞（已派发未消费）的 chunk 数上限。"""
+    """同时在飞（已派发未消费）的 chunk 数上限。
+
+    高核机器不能饿死任何 worker：窗口下限 = worker 数。字节上限只在单帧
+    本身巨大（如 8K）时让位——此时在飞内存会超 256MiB 目标，但仍远低于
+    改造前 imap 的无界积压。
+    """
     chunk_bytes = max(chunk * max(frame_bytes, 1), 1)
     by_bytes = max(1, _MULTIPROC_MAX_PENDING_BYTES // chunk_bytes)
-    return max(2, min(worker_count + 2, by_bytes))
+    return max(worker_count, min(worker_count + 2, by_bytes))
 
 
-def _resolve_stall_timeout_s(chunk_frames: int) -> float:
-    """单 chunk 结果的等待上限：超时视为 worker 被系统终止（如 OOM），明确报错。"""
+def _resolve_stall_timeout_s(chunk_frames: int, frame_bytes: int) -> float:
+    """单 chunk 结果的等待上限：超时视为 worker 已异常（如被系统 OOM 终止）。
+
+    按数据量而非帧数估算——条带/多带让单帧更小、帧数更多，按帧数线性放大
+    会等到数十分钟：基础 60s + 每 512KiB 给 1s（4K 全幅 33MiB ≈ 125s）。
+    环境变量 KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S 覆盖。
+    """
     raw = os.environ.get("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S")
     if raw and raw.strip():
         try:
@@ -1339,26 +1398,49 @@ def _resolve_stall_timeout_s(chunk_frames: int) -> float:
             value = 0.0
         if value > 0:
             return value
-    return max(_MULTIPROC_MIN_STALL_TIMEOUT_S, chunk_frames * 60.0)
+    chunk_bytes = max(int(chunk_frames), 1) * max(int(frame_bytes), 1)
+    return _MULTIPROC_MIN_STALL_TIMEOUT_S + chunk_bytes / _MULTIPROC_STALL_BYTES_PER_SLOW_S
 
 
 def _drain_pending_head(
-    pending: "deque", stall_timeout_s: float
+    pending: "deque",
+    stall_timeout_s: float,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> bytes:
+    """按序取队头 chunk 结果；等待期间以短轮询响应取消，并维护绝对截止时间。
+
+    单次 ``AsyncResult.get`` 长阻塞期间既无法取消也探测不到停滞，这里每
+    ``_MULTIPROC_POLL_INTERVAL_S`` 秒醒来一次：用户停止导出立即抛
+    ``ExportCancelled``；超过绝对截止仍无结果则抛 ``ProcessingError``。
+    """
     import multiprocessing as mp
 
-    try:
-        return pending.popleft().get(timeout=stall_timeout_s)
-    except mp.TimeoutError as exc:
-        raise ProcessingError(
-            f"渲染 worker 超过 {stall_timeout_s:.0f}s 无响应"
-            "（可能被系统因内存不足终止），导出中止；"
-            "可尝试调低导出分辨率或在环境变量 KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
-        ) from exc
+    result = pending.popleft()
+    deadline = time.monotonic() + max(stall_timeout_s, _MULTIPROC_POLL_INTERVAL_S)
+    while True:
+        try:
+            return result.get(timeout=_MULTIPROC_POLL_INTERVAL_S)
+        except mp.TimeoutError:
+            pass
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。")
+        if time.monotonic() >= deadline:
+            raise ProcessingError(
+                f"渲染 worker 超过 {stall_timeout_s:.0f}s 无响应"
+                "（可能被系统因内存不足终止），导出中止；"
+                "可尝试调低导出分辨率或在环境变量 KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
+            )
 
 
 def _iter_ordered_pool_results(
-    pool, task_fn, tasks, *, window: int, stall_timeout_s: float
+    pool,
+    task_fn,
+    tasks,
+    *,
+    window: int,
+    stall_timeout_s: float,
+    should_cancel: Callable[[], bool] | None = None,
 ):
     """apply_async 按序产出 chunk 结果，同时在飞条数不超过 ``window``。
 
@@ -1369,10 +1451,14 @@ def _iter_ordered_pool_results(
     try:
         for task in tasks:
             while len(pending) >= window:
-                yield _drain_pending_head(pending, stall_timeout_s)
+                yield _drain_pending_head(
+                    pending, stall_timeout_s, should_cancel=should_cancel
+                )
             pending.append(pool.apply_async(task_fn, (task,)))
         while pending:
-            yield _drain_pending_head(pending, stall_timeout_s)
+            yield _drain_pending_head(
+                pending, stall_timeout_s, should_cancel=should_cancel
+            )
     finally:
         # 提前退出（取消 / 异常）时丢弃剩余句柄；池由调用方 terminate。
         pending.clear()
@@ -1429,8 +1515,9 @@ def _write_frames_multiprocess(
 
     chunk = _resolve_chunk_size(job, render_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
-    window = _resolve_pending_window(worker_count, chunk, job.width * render_h * 4)
-    stall_timeout_s = _resolve_stall_timeout_s(chunk)
+    frame_bytes = job.width * render_h * 4
+    window = _resolve_pending_window(worker_count, chunk, frame_bytes)
+    stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
         worker_count,
@@ -1445,6 +1532,7 @@ def _write_frames_multiprocess(
             tasks,
             window=window,
             stall_timeout_s=stall_timeout_s,
+            should_cancel=should_cancel,
         )
         for (_start, count), blob in zip(tasks, results):
             if should_cancel is not None and should_cancel():
@@ -1533,8 +1621,9 @@ def _write_frames_multiprocess_bands(
 
     chunk = _resolve_chunk_size(job, packed_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
-    window = _resolve_pending_window(worker_count, chunk, job.width * packed_h * 4)
-    stall_timeout_s = _resolve_stall_timeout_s(chunk)
+    frame_bytes = job.width * packed_h * 4
+    window = _resolve_pending_window(worker_count, chunk, frame_bytes)
+    stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
         worker_count,
@@ -1549,6 +1638,7 @@ def _write_frames_multiprocess_bands(
             tasks,
             window=window,
             stall_timeout_s=stall_timeout_s,
+            should_cancel=should_cancel,
         )
         for (_start, count), blob in zip(tasks, results):
             if should_cancel is not None and should_cancel():

@@ -462,6 +462,19 @@ def test_resolve_chunk_size_is_positive_and_balanced(tmp_path):
     assert chunk <= 10_000 // 4
 
 
+def test_resolve_chunk_size_scales_target_with_worker_count(tmp_path):
+    # 固定 64MiB chunk + 256MiB 窗口只能容纳 ~4 块，8 worker 会饿死一半；
+    # chunk 目标随 worker 缩放后，窗口 ≥ worker 数，喂满全部 worker。
+    job_1080p = replace(_job(tmp_path), width=1920, height=1080)
+    # 8 worker：目标 256MiB/10 = 25.6MiB → 1080p 全幅（~7.9MiB/帧）3 帧/块
+    assert _resolve_chunk_size(job_1080p, 1080, total_frames=10_000, worker_count=8) == 3
+    # 2 worker：目标仍为 64MiB 上限 → 8 帧/块
+    assert _resolve_chunk_size(job_1080p, 1080, total_frames=10_000, worker_count=2) == 8
+    # 4K 全幅单帧 ~31.6MiB > 25.6MiB 目标 → 1 帧/块（帧不可再分）
+    job_4k = replace(_job(tmp_path), width=3840, height=2160)
+    assert _resolve_chunk_size(job_4k, 2160, total_frames=10_000, worker_count=8) == 1
+
+
 class _CollectStdin:
     def __init__(self):
         self.data = bytearray()
@@ -1079,6 +1092,33 @@ def test_strip_safety_margin_respects_line_animation_overrides(tmp_path):
     assert _strip_safety_margin(job) >= math.ceil(2160 / 15.0)
 
 
+def test_strip_safety_margin_unbounded_for_shear_animations(tmp_path):
+    # char_drip / spin_flip 的剪切包络随首帧 tan 发散、且依赖行内字形宽度，
+    # 无可靠上界 → 返回 None，条带/多带优化必须禁用退回整帧
+    job_drip = replace(
+        _job(tmp_path),
+        style=Style(font_size_px=24, entry_anim="char_drip", entry_lead_ms=250),
+    )
+    assert _strip_safety_margin(job_drip) is None
+    job_flip = replace(
+        _job(tmp_path),
+        style=Style(font_size_px=24, exit_anim="spin_flip", exit_fade_ms=250),
+    )
+    assert _strip_safety_margin(job_flip) is None
+
+
+def test_compute_subtitle_strip_disabled_for_char_drip(tmp_path):
+    job = replace(
+        _job(tmp_path),
+        style=Style(font_size_px=24, entry_anim="char_drip", entry_lead_ms=250),
+    )
+    logs: list[str] = []
+    assert _compute_subtitle_strip(job, 1000, logger=logs.append) is None
+    assert _compute_content_bands(job, 1000, logger=logs.append) is None
+    assert any("条带渲染已禁用" in message for message in logs)
+    assert any("多带渲染已禁用" in message for message in logs)
+
+
 def test_compute_subtitle_strip_covers_all_frame_content(qapp, tmp_path):
     # 预扫并集按采样时刻取值；含动画行程的安全边必须把任意帧的可见像素
     # 全部罩进条带，否则条带裁剪会静默丢字幕。
@@ -1118,18 +1158,25 @@ def test_resolve_pending_window_bounds_by_bytes_and_workers():
     # 256MB 在飞上限 → 8 条（8×31.6MiB=253MiB）；worker+2 更小时取 worker+2
     assert _resolve_pending_window(8, 1, frame_bytes_4k) == 8
     assert _resolve_pending_window(2, 1, frame_bytes_4k) == 4
+    # 1080p + 8 worker（chunk 缩放为 3 帧 ≈ 23.6MiB）：窗口 10，喂满全部 worker
+    assert _resolve_pending_window(8, 3, 1920 * 1080 * 4) == 10
     # 小帧不受字节约束，只受 worker 数约束
     assert _resolve_pending_window(8, 1, 1024) == 10
+    # 单帧巨大（8K ~127MiB）时字节上限让位：窗口下限 = worker 数，
+    # 绝不饿死 worker（在飞内存会超 256MiB 目标，但仍远低于旧 imap 的无界积压）
+    assert _resolve_pending_window(8, 1, 7680 * 4320 * 4) == 8
 
 
-def test_resolve_stall_timeout_defaults_and_env(monkeypatch):
+def test_resolve_stall_timeout_scales_with_chunk_bytes(monkeypatch):
     monkeypatch.delenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", raising=False)
-    assert _resolve_stall_timeout_s(1) == 120.0
-    assert _resolve_stall_timeout_s(10) == 600.0
+    # 4K 全幅单帧（~31.6MiB）：60s 基础 + 每 512KiB 1s ≈ 123s
+    assert _resolve_stall_timeout_s(1, 3840 * 2160 * 4) == pytest.approx(123.3, abs=1.0)
+    # 窄条带多帧（42×1.5MiB）：按字节估算约 183s，而非按帧数的 42×60s
+    assert _resolve_stall_timeout_s(42, 1920 * 200 * 4) == pytest.approx(183.0, abs=1.0)
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "5")
-    assert _resolve_stall_timeout_s(10) == 5.0
+    assert _resolve_stall_timeout_s(10, 1024) == 5.0
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "bad")
-    assert _resolve_stall_timeout_s(1) == 120.0
+    assert _resolve_stall_timeout_s(1, 1024) == pytest.approx(60.0, abs=0.1)
 
 
 def test_iter_ordered_pool_results_bounds_in_flight_and_keeps_order():
@@ -1167,8 +1214,10 @@ def test_iter_ordered_pool_results_bounds_in_flight_and_keeps_order():
     assert pool.peak <= 3  # 派发从不超过窗口
 
 
-def test_drain_pending_head_reports_stalled_worker():
+def test_drain_pending_head_reports_stalled_worker(monkeypatch):
     import multiprocessing as mp
+
+    monkeypatch.setattr(renderer, "_MULTIPROC_POLL_INTERVAL_S", 0.01)
 
     class _StalledResult:
         def get(self, timeout=None):
@@ -1176,6 +1225,76 @@ def test_drain_pending_head_reports_stalled_worker():
 
     pending = deque([_StalledResult()])
     with pytest.raises(ProcessingError) as excinfo:
-        _drain_pending_head(pending, 3.0)
+        _drain_pending_head(pending, 0.05)
     assert "无响应" in str(excinfo.value)
     assert not pending
+
+
+def test_drain_pending_head_responds_to_cancel(monkeypatch):
+    import multiprocessing as mp
+
+    monkeypatch.setattr(renderer, "_MULTIPROC_POLL_INTERVAL_S", 0.01)
+
+    class _StalledResult:
+        def get(self, timeout=None):
+            raise mp.TimeoutError()
+
+    cancel_calls = {"count": 0}
+
+    def should_cancel() -> bool:
+        cancel_calls["count"] += 1
+        return cancel_calls["count"] >= 2
+
+    pending = deque([_StalledResult()])
+    # 等待期间取消应立即生效，而不是等到停滞截止才被外层发现
+    with pytest.raises(ExportCancelled):
+        _drain_pending_head(pending, 60.0, should_cancel=should_cancel)
+    assert cancel_calls["count"] >= 2
+
+
+def test_drain_pending_head_polls_until_result_arrives(monkeypatch):
+    import multiprocessing as mp
+
+    monkeypatch.setattr(renderer, "_MULTIPROC_POLL_INTERVAL_S", 0.01)
+
+    class _LateResult:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, timeout=None):
+            self.calls += 1
+            if self.calls < 3:
+                raise mp.TimeoutError()
+            return b"blob"
+
+    result = _LateResult()
+    pending = deque([result])
+    assert _drain_pending_head(pending, 60.0) == b"blob"
+    assert result.calls == 3
+
+
+def test_render_processing_error_cleans_up_ffmpeg_and_output(monkeypatch, tmp_path):
+    # 帧生产阶段的 ProcessingError（worker 停滞 / 异常退出）必须走完整清理：
+    # 终止 ffmpeg、删除半成品，否则 ffmpeg 会一直等 stdin 并锁住输出文件
+    job = replace(_job(tmp_path), width=2, height=2, fps=2, duration_ms=1000)
+    fake_process = _FakeRenderProcess(job.output_path)
+    job.output_path.write_bytes(b"partial")
+
+    def stall_writer(process, *_args, **_kwargs):
+        process.stdin.write(b"partial")
+        raise ProcessingError("渲染 worker 超过 60s 无响应")
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", stall_writer)
+    monkeypatch.setattr(
+        renderer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: fake_process,
+    )
+
+    with pytest.raises(ProcessingError, match="无响应"):
+        render_subtitle_video(job)
+
+    assert fake_process.terminated is True
+    assert not job.output_path.exists()

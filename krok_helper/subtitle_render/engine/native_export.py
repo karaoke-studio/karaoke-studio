@@ -111,12 +111,13 @@ def gpu_export_vram_headroom(
 
 
 def degraded_gpu_worker_candidates(requested: int) -> list[int]:
-    """Worker 降级序列：如 4→[4, 2, 1]、3→[3, 1]、1→[1]。"""
+    """Worker 降级序列：逐级递减（4→[4,3,2,1]、3→[3,2,1]、1→[1]）。
+
+    预检公式是经验估算，逐级下降可避免误判时高配 GPU 从 3 直接掉到 1
+    造成数倍导出时长——宁可多一次重配，也要保住并发。
+    """
     first = max(1, min(int(requested), 4))
-    candidates = [first]
-    while candidates[-1] > 1:
-        candidates.append(max(1, candidates[-1] // 2))
-    return candidates
+    return list(range(first, 0, -1))
 
 
 def _configure_gpu_export_with_preflight(

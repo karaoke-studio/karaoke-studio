@@ -667,11 +667,13 @@ def test_gpu_export_vram_headroom_extraction() -> None:
 
 
 def test_degraded_gpu_worker_candidates_sequence() -> None:
-    assert ne.degraded_gpu_worker_candidates(4) == [4, 2, 1]
-    assert ne.degraded_gpu_worker_candidates(3) == [3, 1]
+    # 逐级递减：预检是经验估算，误判时宁可多一次重配也不能让高配 GPU
+    # 从 3 直接掉到 1
+    assert ne.degraded_gpu_worker_candidates(4) == [4, 3, 2, 1]
+    assert ne.degraded_gpu_worker_candidates(3) == [3, 2, 1]
     assert ne.degraded_gpu_worker_candidates(2) == [2, 1]
     assert ne.degraded_gpu_worker_candidates(1) == [1]
-    assert ne.degraded_gpu_worker_candidates(9) == [4, 2, 1]
+    assert ne.degraded_gpu_worker_candidates(9) == [4, 3, 2, 1]
 
 
 class _FakeVramGpuRendererProcess:
@@ -780,15 +782,16 @@ def test_iter_gpu_rgba_frames_degrades_workers_on_projected_vram(monkeypatch) ->
         logger=logs.append,
     )
 
-    # 第一档 3 worker 预估峰值 1800MiB > 1000MiB 预算 → 关掉重配为 1 worker
+    # 第一档 3 worker 预估峰值 1800MiB > 1000MiB 预算 → 关掉重配；降级序列
+    # 逐级递减（3→2→1），第二档是 2 worker 而不是直接跌到 1
     assert frames == [bytes([20, 40, 60, 128])]
     assert len(_FakeVramGpuRendererProcess.instances) == 2
     first, second = _FakeVramGpuRendererProcess.instances
     assert [c["worker_count"] for c in first.configures] == [3]
-    assert [c["worker_count"] for c in second.configures] == [1]
+    assert [c["worker_count"] for c in second.configures] == [2]
     assert first.closed is True
     assert second.started is True
-    assert any("降至 1 个 worker" in message for message in logs)
+    assert any("降至 2 个 worker" in message for message in logs)
 
 
 def test_iter_gpu_rgba_frames_raises_when_single_worker_exhausts_vram(

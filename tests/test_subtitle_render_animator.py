@@ -182,3 +182,28 @@ def test_rise_exit_fades_from_opaque_to_transparent():
     assert mid.dy < 0.0
     assert end.opacity == pytest.approx(0.0)
     assert end.dy < mid.dy
+
+
+def test_max_line_animation_excursion_none_for_shear_effects():
+    # char_drip / spin_flip 的剪切包络随首帧 tan 发散、依赖行内字形宽度，
+    # 无可靠上界：调用方（条带/多带预扫）必须据此禁用裁剪优化
+    from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
+
+    drip = Style(font_size_px=48, entry_anim="char_drip", entry_lead_ms=250)
+    assert max_line_animation_excursion(drip, 1080) is None
+    flip = Style(font_size_px=48, exit_anim="spin_flip", exit_fade_ms=250)
+    assert max_line_animation_excursion(flip, 1080) is None
+
+
+def test_max_line_animation_excursion_bounded_for_travel_effects():
+    from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
+
+    rise = Style(font_size_px=48, entry_anim="rise", entry_lead_ms=300)
+    assert max_line_animation_excursion(rise, 1080) == pytest.approx(
+        max(48 * 0.35, 18.0)
+    )
+    utopia = Style(font_size_px=48, exit_anim="utopia", exit_fade_ms=750)
+    assert max_line_animation_excursion(utopia, 2160) == pytest.approx(
+        2160 / 15.0 + 48 * 1.5
+    )
+    assert max_line_animation_excursion(Style(), 1080) == 0.0
