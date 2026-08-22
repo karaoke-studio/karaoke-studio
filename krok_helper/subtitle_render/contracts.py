@@ -69,12 +69,20 @@ class SubtitleRenderPage(Protocol):
         """Load a saved SUG project into the primary subtitle track."""
         ...
 
-    def load_video(self, path: Path) -> object | None:
-        """Load a video as the current background source."""
+    def load_video(self, path: Path, info: object | None = None) -> object | None:
+        """Load a video as the current background source.
+
+        ``info`` carries a pre-probed MediaInfo so callers that probed in the
+        background can skip the synchronous ffprobe here.
+        """
         ...
 
-    def load_audio(self, path: Path) -> object | None:
+    def load_audio(self, path: Path, info: object | None = None) -> object | None:
         """Load an independent audio source when the background permits it."""
+        ...
+
+    def load_media_async(self, path: Path, *, as_video: bool) -> None:
+        """Probe media off the UI thread, then load it (workflow handoff)."""
         ...
 
     def flush_unsaved(self) -> None:

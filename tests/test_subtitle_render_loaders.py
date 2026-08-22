@@ -508,6 +508,112 @@ def test_load_audio_rejects_video_with_no_audio(qapp, monkeypatch, tmp_path):
     assert win.audio_info is None
 
 
+def test_load_video_with_precomputed_info_skips_probe(qapp, monkeypatch, tmp_path):
+    """工作流交接路径：传入预探测结果时不再起内部 ffprobe。"""
+    win = _make_window(qapp, monkeypatch)
+    fake_info = MediaInfo(
+        path=tmp_path / "bg.mp4",
+        duration=12.0,
+        video_streams=1,
+        audio_streams=1,
+        subtitle_streams=0,
+        video_width=1280,
+        video_height=720,
+        video_fps=60.0,
+    )
+
+    def _fail(probe, path):  # pragma: no cover — 内部探测被调用即失败
+        raise AssertionError("预探测路径不应再调用 probe_media")
+
+    monkeypatch.setattr(mw, "probe_media", _fail)
+
+    result = win.load_video(tmp_path / "bg.mp4", info=fake_info)
+
+    assert result is fake_info
+    assert win.video_info is fake_info
+    assert win._video_path == tmp_path / "bg.mp4"
+
+
+def test_load_audio_with_precomputed_info_skips_probe(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    fake_info = MediaInfo(
+        path=tmp_path / "song.flac",
+        duration=200.0,
+        video_streams=0,
+        audio_streams=1,
+        subtitle_streams=0,
+        sample_rate=44100,
+        channels=2,
+    )
+
+    def _fail(probe, path):  # pragma: no cover — 内部探测被调用即失败
+        raise AssertionError("预探测路径不应再调用 probe_media")
+
+    monkeypatch.setattr(mw, "probe_media", _fail)
+
+    result = win.load_audio(tmp_path / "song.flac", info=fake_info)
+
+    assert result is fake_info
+    assert win.audio_info is fake_info
+
+
+def test_load_media_async_probes_in_background_then_loads(
+    qapp, monkeypatch, tmp_path
+):
+    """「进入下一步」交接：探测在后台线程完成，UI 线程只做加载，且只探测一次。"""
+    win = _make_window(qapp, monkeypatch)
+    fake_info = MediaInfo(
+        path=tmp_path / "bg.mp4",
+        duration=12.0,
+        video_streams=1,
+        audio_streams=1,
+        subtitle_streams=0,
+        video_width=1280,
+        video_height=720,
+        video_fps=60.0,
+    )
+    probe_calls: list[Path] = []
+    monkeypatch.setattr(
+        mw, "probe_media", lambda probe, path: probe_calls.append(path) or fake_info
+    )
+
+    win.load_media_async(tmp_path / "bg.mp4", as_video=True)
+    deadline = time.monotonic() + 5.0
+    while win.video_info is not fake_info and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert win.video_info is fake_info
+    assert win._video_path == tmp_path / "bg.mp4"
+    # 后台探测一次，load_video 拿预探测结果不再探测。
+    assert probe_calls == [tmp_path / "bg.mp4"]
+
+
+def test_load_media_async_probe_failure_falls_back_to_sync_load(
+    qapp, monkeypatch, tmp_path
+):
+    """后台探测失败时回退同步加载，沿用 _probe 的错误弹窗语义。"""
+    win = _make_window(qapp, monkeypatch)
+
+    def _boom(probe, path):
+        raise RuntimeError("probe failed")
+
+    monkeypatch.setattr(mw, "probe_media", _boom)
+    errors: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        mw, "fluent_error", lambda parent, title, content: errors.append((title, content))
+    )
+
+    win.load_media_async(tmp_path / "bg.mp4", as_video=True)
+    deadline = time.monotonic() + 5.0
+    while not errors and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert win.video_info is None
+    assert errors and errors[0][0] == "加载视频失败"
+
+
 def test_load_video_auto_loads_audio_from_same_file(qapp, monkeypatch, tmp_path):
     """新增 A7 后行为：视频含音频流时，load_video 自动把视频路径喂给 TransportBar。"""
     win = _make_window(qapp, monkeypatch)

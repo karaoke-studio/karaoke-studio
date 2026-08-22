@@ -1770,6 +1770,34 @@ class _RecoverySaveWorker(QObject):
             QThread.currentThread().quit()
 
 
+class _MediaProbeWorker(QObject):
+    """后台 ffprobe 探测（工作流「进入下一步」交接媒体加载用）。
+
+    结束时自行 ``quit`` 所在线程；结果经 :attr:`probed` 回到 UI 线程，
+    ``info`` 为 ``None`` 表示探测失败，由调用侧回退同步加载以复用
+    ``_probe`` 内原有的错误弹窗。
+    """
+
+    probed = Signal(object, object)  # (worker, MediaInfo | None)
+
+    def __init__(self, ffprobe_path: str, media_path: Path, as_video: bool) -> None:
+        super().__init__()
+        self._ffprobe_path = ffprobe_path
+        self.media_path = media_path
+        self.as_video = as_video
+
+    def run(self) -> None:
+        try:
+            info: Optional[MediaInfo]
+            try:
+                info = probe_media(self._ffprobe_path, self.media_path)
+            except Exception:  # noqa: BLE001 — 统一按“无信息”走回退路径
+                info = None
+            self.probed.emit(self, info)
+        finally:
+            QThread.currentThread().quit()
+
+
 class _RenderWorker(QObject):
     progressChanged = Signal(int, int)
     logMessage = Signal(str)
@@ -2136,6 +2164,8 @@ class SubtitleRenderWindow(QWidget):
         self._project_backup_count = DEFAULT_PROJECT_BACKUP_COUNT
         self._auto_save_thread: Optional[QThread] = None
         self._auto_save_worker: Optional[_RecoverySaveWorker] = None
+        self._handoff_probe_thread: Optional[QThread] = None
+        self._handoff_probe_worker: Optional[_MediaProbeWorker] = None
         self._auto_save_pending = False
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
@@ -4909,12 +4939,17 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_style(style)
         self._apply_style(style)
 
-    def load_video(self, path: Path) -> Optional[MediaInfo]:
+    def load_video(
+        self, path: Path, info: Optional[MediaInfo] = None
+    ) -> Optional[MediaInfo]:
         """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。
 
         视频如果含音频流，会自动用作播放音轨——用户不需要再单独选音频。
+        ``info`` 传入预探测结果时跳过内部 ffprobe（工作流交接的后台探测
+        路径）；为 ``None`` 时同步探测并维持原有的错误弹窗行为。
         """
-        info = self._probe(path, "视频")
+        if info is None:
+            info = self._probe(path, "视频")
         if info is None:
             return None
         if info.video_streams == 0:
@@ -5069,10 +5104,14 @@ class SubtitleRenderWindow(QWidget):
         elif kind == "solid":
             self._set_non_video_background(source)
 
-    def load_audio(self, path: Path) -> Optional[MediaInfo]:
+    def load_audio(
+        self, path: Path, info: Optional[MediaInfo] = None
+    ) -> Optional[MediaInfo]:
         """为图片/图片序列/纯色背景加载独立音轨。
 
         视频背景严格使用内嵌音轨，避免预览形成两个媒体时钟。
+        ``info`` 传入预探测结果时跳过内部 ffprobe（工作流交接的后台
+        探测路径）；为 ``None`` 时同步探测并维持原有的错误弹窗行为。
         """
         if self._background_source is not None and self._background_source.kind == "video":
             fluent_warning(
@@ -5081,7 +5120,8 @@ class SubtitleRenderWindow(QWidget):
                 "视频背景只使用视频内嵌音轨，以避免双时钟造成音画不同步。",
             )
             return None
-        info = self._probe(path, "音频")
+        if info is None:
+            info = self._probe(path, "音频")
         if info is None:
             return None
         if info.audio_streams == 0:
@@ -5095,6 +5135,42 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_transport_duration()
         self._mark_project_dirty()
         return info
+
+    def load_media_async(self, path: Path, *, as_video: bool) -> None:
+        """工作流「进入下一步」交接入口：后台探测媒体后加载，不阻塞 UI。
+
+        保存完成切到本页后由宿主调用。ffprobe 子进程在 Windows 上启动要
+        上百毫秒，是交接链上仅剩的同步重活，这里把探测放到后台线程，
+        完成后回 UI 线程调用 :meth:`load_video` / :meth:`load_audio` 并
+        携带预探测结果，避免二次探测。探测失败回退为同步加载，沿用
+        ``_probe`` 的错误弹窗语义。
+        """
+        thread = QThread(self)
+        worker = _MediaProbeWorker(self._resolve_ffprobe_path(), path, as_video)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.probed.connect(self._on_handoff_media_probed)
+        self._handoff_probe_worker = worker
+        self._handoff_probe_thread = thread
+        thread.start()
+
+    def _on_handoff_media_probed(
+        self, worker: "_MediaProbeWorker", info: Optional[MediaInfo]
+    ) -> None:
+        if self._handoff_probe_worker is not worker:
+            return  # 已有更新的交接请求，丢弃过期探测结果
+        self._handoff_probe_worker = None
+        self._handoff_probe_thread = None
+        if info is None:
+            if worker.as_video:
+                self.load_video(worker.media_path)
+            else:
+                self.load_audio(worker.media_path)
+            return
+        if worker.as_video:
+            self.load_video(worker.media_path, info=info)
+        else:
+            self.load_audio(worker.media_path, info=info)
 
     def _sync_audio_action_enabled(self) -> None:
         enabled = not (

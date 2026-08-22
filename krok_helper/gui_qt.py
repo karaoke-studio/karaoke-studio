@@ -1003,7 +1003,12 @@ class KrokHelperQtApp(QMainWindow):
         self._notify_handoff("成片已交给下一步", f"「{path.name}」已放入第 6 步 Hi-Res 混流的视频卡。")
 
     def _export_lyrics_timing_to_next(self) -> None:
-        """确保 SUG 项目落盘后，从该文件加载字幕并切换到第 5 步。"""
+        """确保 SUG 项目落盘后，从该文件加载字幕并切换到第 5 步。
+
+        未保存的修改先经 SUG 异步保存（``_save_lyrics_timing_then_export``
+        等 ``project_save_finished`` 后重入本方法），保存期间 UI 不阻塞、
+        也不会提前切页；切换后媒体加载由渲染页后台探测完成。
+        """
         from krok_helper.subtitle_render.frontend.fluent_dialogs import (
             fluent_choice,
             fluent_error,
@@ -1080,19 +1085,24 @@ class KrokHelperQtApp(QMainWindow):
         # 则作为独立音轨。原始媒体不可用时再回退到当前播放音频。
         media_value = payload.get("media_path")
         media_path = Path(str(media_value)) if media_value else None
-        media_kind = payload.get("media_kind")
+        handoff_media: tuple[Path, bool] | None = None
         if media_path is not None and media_path.is_file():
-            if media_kind == "video":
-                render_page.load_video(media_path)
-            else:
-                render_page.load_audio(media_path)
+            handoff_media = (media_path, payload.get("media_kind") == "video")
         else:
             audio_value = payload.get("audio_path")
             audio_path = Path(str(audio_value)) if audio_value else None
             if audio_path is not None and audio_path.is_file():
-                render_page.load_audio(audio_path)
+                handoff_media = (audio_path, False)
 
+        # 走到这里保存已完成（脏路径经 _save_lyrics_timing_then_export 等到
+        # project_save_finished 才会重入本方法），立即进入第 5 步；媒体加载
+        # 交给页面后台执行（ffprobe 探测起子进程是这条链上唯一的同步重活），
+        # 避免切换瞬间在 UI 线程上卡顿。
         self._show_module(WORKFLOW_SUBTITLE_RENDER)
+        if handoff_media is not None:
+            render_page.load_media_async(
+                handoff_media[0], as_video=handoff_media[1]
+            )
 
     def _save_lyrics_timing_then_export(
         self,

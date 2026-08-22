@@ -722,11 +722,8 @@ def test_lyrics_timing_export_loads_saved_sug_into_subtitle_render(
             calls.append(("track", path))
             return object()
 
-        def load_video(self, path):
-            calls.append(("video", path))
-
-        def load_audio(self, path):
-            calls.append(("audio", path))
+        def load_media_async(self, path, *, as_video):
+            calls.append(("media_async", path, as_video))
 
     app = SimpleNamespace(
         lyrics_timing_page=SimpleNamespace(
@@ -747,8 +744,8 @@ def test_lyrics_timing_export_loads_saved_sug_into_subtitle_render(
 
     assert calls == [
         ("track", source),
-        ("video", video),
         ("show", WORKFLOW_SUBTITLE_RENDER),
+        ("media_async", video, True),
     ]
 
 
@@ -771,7 +768,9 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
         ),
         subtitle_render_page=SimpleNamespace(
             load_from_sug=lambda path: calls.append(("track", path)) or object(),
-            load_audio=lambda path: calls.append(("audio", path)),
+            load_media_async=lambda path, *, as_video: calls.append(
+                ("media_async", path, as_video)
+            ),
         ),
         _show_module=lambda module: calls.append(("show", module)),
     )
@@ -780,8 +779,8 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
 
     assert calls == [
         ("track", source),
-        ("audio", audio),
         ("show", WORKFLOW_SUBTITLE_RENDER),
+        ("media_async", audio, False),
     ]
 
 
