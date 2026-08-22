@@ -4,7 +4,7 @@ from pathlib import Path
 #: 也是 :func:`krok_helper.settings.migrate_app_data_dir` 的迁移目标名。
 #: 改动它会搬走用户数据目录 —— 必须同步 ``settings.LEGACY_APP_NAMES``。
 APP_NAME = "Lin-K Lyrics"
-APP_VERSION = "4.2.6.5"
+APP_VERSION = "4.2.6.6"
 #: 短标题。用在对话框标题（``f"{APP_TITLE} - 全局设置"``）等空间有限的位置，
 #: 所以刻意只放中文名，不要塞中英组合。
 APP_TITLE = "凛K"
