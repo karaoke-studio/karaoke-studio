@@ -1467,6 +1467,10 @@ class BackgroundSource:
 
     ``image_sequence`` 的 ``path`` 可以是首帧/编号模式；``source_fps`` 决定取帧
     速度。视频偏移保留为毫秒，供预览和导出统一应用。
+
+    ``image_fit`` 仅对图片 / 图片序列背景生效：``"cover"`` 等比铺满并裁掉
+    超出画面（旧工程观感），``"contain"`` 等比完整放入、不足处补黑边。
+    视频背景固定 ``contain``（等比缩放 + 黑边），预览与导出严格一致。
     """
 
     kind: Literal["video", "image", "image_sequence", "solid"] = "solid"
@@ -1475,6 +1479,7 @@ class BackgroundSource:
     source_fps: Optional[int] = None
     sequence_start_number: int = 0
     video_offset_ms: int = 0
+    image_fit: Literal["cover", "contain"] = "cover"
 
 
 def background_sequence_frame_path(source: BackgroundSource, t_ms: int) -> Optional[Path]:

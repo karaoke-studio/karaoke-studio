@@ -434,6 +434,7 @@ def background_payload(
     source_fps: Optional[int] = None,
     sequence_start_number: int = 0,
     video_offset_ms: int = 0,
+    image_fit: str = "cover",
 ) -> dict[str, object]:
     """组装可写入 ``.yurika`` 的背景源快照。"""
     return {
@@ -443,6 +444,7 @@ def background_payload(
         "source_fps": int(source_fps) if source_fps is not None else None,
         "sequence_start_number": int(sequence_start_number),
         "video_offset_ms": int(video_offset_ms),
+        "image_fit": image_fit if image_fit in {"cover", "contain"} else "cover",
     }
 
 

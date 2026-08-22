@@ -712,6 +712,7 @@ def test_background_payload_round_trip(tmp_path):
         "source_fps": 24,
         "sequence_start_number": 0,
         "video_offset_ms": 125,
+        "image_fit": "cover",
     }
 
 

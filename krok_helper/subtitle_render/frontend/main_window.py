@@ -67,6 +67,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QShortcut,
+    QValidator,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -3109,6 +3110,8 @@ class SubtitleRenderWindow(QWidget):
             pass
 
     def _current_project_data(self) -> dict:
+        if hasattr(self, "_export_width_spin"):
+            self._flush_export_spin_edits()
         payload = self._project_document.to_project_data(
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
@@ -3993,7 +3996,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_style(self._style)
         self._preview_panel.pathDropped.connect(self._load_dropped_background)
         self._preview_panel.browseRequested.connect(self._browse_background_media)
-        self._add_background_empty_actions(self._preview_panel)
+        # 背景/图片序列/纯色的选择入口已迁入属性面板「背景/音频」卡片。
         self._transport_bar = self._preview_window.transport_bar
 
         self._lyrics_panel = LyricsPanel()
@@ -4099,15 +4102,31 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.layoutAssignAllRequested.connect(self._on_layout_assign_all)
         self._property_panel.layoutAutoAssignRequested.connect(self._on_layout_auto_assign)
         self._property_panel.layoutDeleted.connect(self._on_layout_deleted)
-        # 按持久化偏好同步方案下拉框会触发 currentIndexChanged，走的是与
-        # 用户手动切换方案同一条 schemeSelectionChanged 链；不加载入守卫
-        # 会在启动时把空项目标脏，2 秒后自动保存写出 untitled 恢复快照，
-        # 下次启动又弹"检测到未保存的项目"，形成死循环。
+        self._property_panel.backgroundBrowseRequested.connect(
+            self._on_panel_background_browse
+        )
+        self._property_panel.backgroundClearRequested.connect(
+            self._on_panel_background_clear
+        )
+        self._property_panel.backgroundSolidColorChanged.connect(
+            self._on_panel_solid_color
+        )
+        self._property_panel.imageFitChanged.connect(self._on_panel_image_fit_changed)
+        self._property_panel.audioBrowseRequested.connect(self._browse_audio)
+        self._property_panel.audioClearRequested.connect(self._clear_audio)
+        self._property_panel.screenSizeChanged.connect(
+            self._on_panel_screen_size_changed
+        )
+        # 按持久化偏好同步方案下拉框 / 背景卡片状态会触发控件的
+        # currentIndexChanged 等信号，走的是与用户手动操作相同的链路；
+        # 不加载入守卫会在启动时把空项目标脏，2 秒后自动保存写出
+        # untitled 恢复快照，下次启动又弹"检测到未保存的项目"，形成死循环。
         was_loading_project = self._loading_project
         self._loading_project = True
         try:
             self._property_panel.set_current_scheme_key(self._selected_scheme_key)
             self._selected_scheme_key = self._property_panel.current_scheme_key()
+            self._sync_background_panel_state()
         finally:
             self._loading_project = was_loading_project
 
@@ -4119,12 +4138,14 @@ class SubtitleRenderWindow(QWidget):
                 N3_PROJECT_FILE_SUFFIX,
             },
             empty_title="拖入背景素材",
-            empty_hint="拖入视频、静态图片、Yurika 工程（.yurika）\n或 N3 项目（.n3proj）；图片序列与纯色请用下方按钮",
+            empty_hint="拖入视频、静态图片、Yurika 工程（.yurika）或 N3 项目（.n3proj）；"
+            "图片序列与纯色请在「背景/音频」卡片中选择",
             empty_icon="🎬",
         )
         self._video_settings_panel.pathDropped.connect(self._load_dropped_background)
         self._video_settings_panel.browseRequested.connect(self._browse_background_media)
-        self._add_background_empty_actions(self._video_settings_panel)
+        # 背景/图片序列/纯色的选择入口已迁入属性面板「背景/音频」卡片；
+        # 空态仅保留拖放与整块点击浏览。
         self._video_settings_panel.set_content(self._property_panel)
         top.addWidget(self._video_settings_panel)
 
@@ -4298,6 +4319,12 @@ class SubtitleRenderWindow(QWidget):
         # 字段上方已有 CaptionLabel 标签，SpinBox 不再重复「宽/高」后缀
         self._export_width_spin = self._export_spin(160, 7680, 1920, "")
         self._export_height_spin = self._export_spin(90, 4320, 1080, "")
+        # 关闭键盘跟踪：逐字键入不逐键提交中间值。高度变化会按 N3 语义
+        # 比例重算字号/余白，重算用 int() 截断、链式应用不等于一次应用
+        # （1080 → 键入 "1440" 的中间值 144 → 1440 会得到 130px 字号，
+        # 直接一次 1080 → 1440 是 133px）；回车 / 失焦时 Qt 只提交最终值。
+        self._export_width_spin.setKeyboardTracking(False)
+        self._export_height_spin.setKeyboardTracking(False)
         self._export_fps_combo = FluentComboBox()
         self._export_fps_combo.setMinimumHeight(32)
         for fps in SCREEN_FPS_OPTIONS:
@@ -4609,11 +4636,75 @@ class SubtitleRenderWindow(QWidget):
             return
         self.load_subtitle_source(path)
 
-    def _add_background_empty_actions(self, panel: DropPanel) -> None:
-        panel.add_empty_action("视频", self._browse_video)
-        panel.add_empty_action("静态图", self._browse_background_image)
-        panel.add_empty_action("图片序列", self._browse_background_sequence)
-        panel.add_empty_action("纯色", self._choose_solid_background)
+    def _on_panel_background_browse(self, kind: str) -> None:
+        """「背景/音频」卡片点击 → 打开对应素材选择（与旧空态按钮同一组）。"""
+        handlers = {
+            "video": self._browse_video,
+            "image": self._browse_background_image,
+            "image_sequence": self._browse_background_sequence,
+            "solid": self._choose_solid_background,
+        }
+        handler = handlers.get(kind)
+        if handler is not None:
+            handler()
+
+    def _on_panel_background_clear(self) -> None:
+        self.set_solid_background("#000000")
+
+    def _on_panel_solid_color(self, color: str) -> None:
+        """「背景/音频」纯色 ColorButton 的色值输入 / 取色 / 选色结果。"""
+        qcolor = QColor(color)
+        if qcolor.isValid():
+            self.set_solid_background(qcolor.name())
+
+    def _on_panel_image_fit_changed(self, fit: str) -> None:
+        """图片缩放策略（铺满/黑边）：只改图片类背景，预览即时生效。"""
+        source = self._background_source
+        if source is None or source.kind not in {"image", "image_sequence"}:
+            return
+        if fit not in {"cover", "contain"} or source.image_fit == fit:
+            return
+        updated = replace(source, image_fit=fit)
+        self._background_source = updated
+        self._preview_panel.set_background_source(updated)
+        self._property_panel.set_background_state(updated)
+        self._mark_project_dirty()
+
+    def _clear_audio(self) -> None:
+        """移除独立音频（仅图片/图片序列/纯色背景配过时有效）。"""
+        if self._audio_path is None and self._audio_info is None:
+            self._sync_background_panel_state()
+            return
+        self._audio_path = None
+        self._audio_info = None
+        self._transport_bar.set_audio_source(None)
+        self._refresh_transport_duration()
+        self._sync_audio_action_enabled()
+        self._sync_background_panel_state()
+        self._mark_project_dirty()
+
+    def _on_panel_screen_size_changed(self) -> None:
+        """面板宽/高/帧率 → 导出页 spin（触发既有联动）与预览同步。"""
+        width, height, fps = self._property_panel.screen_size()
+        settings = ScreenSettings(
+            preset_key=match_screen_preset_key(width, height, self._screen_settings.par),
+            par=self._screen_settings.par,
+            width=width,
+            height=height,
+            fps=fps,
+        )
+        self._set_export_screen_controls(settings)
+        self._sync_preview_output_size()
+        self._on_export_screen_changed()
+
+    def _sync_background_panel_state(self) -> None:
+        """把当前背景源 / 独立音频状态回填到「背景/音频」卡片。"""
+        if not hasattr(self, "_property_panel"):
+            return
+        self._property_panel.set_background_state(
+            self._background_source or BackgroundSource()
+        )
+        self._property_panel.set_audio_state(self._audio_path)
 
     def _browse_background_image(self) -> None:
         start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
@@ -5143,6 +5234,7 @@ class SubtitleRenderWindow(QWidget):
         else:
             self._transport_bar.set_audio_source(None)
         self._sync_audio_action_enabled()
+        self._sync_background_panel_state()
         if had_independent_audio:
             InfoBar.warning(
                 title="已移除独立音频",
@@ -5161,6 +5253,10 @@ class SubtitleRenderWindow(QWidget):
         height = int(info.video_height or 0)
         if width <= 0 or height <= 0:
             return
+        # H.264/H.265 的 yuv420p 输出要求偶数尺寸；源视频本身带奇数时
+        # 向内收敛，避免导出渲染完整轮后才在编码器处失败。
+        width -= width % 2
+        height -= height % 2
         settings = ScreenSettings(
             preset_key=match_screen_preset_key(width, height, self._screen_settings.par),
             par=self._screen_settings.par,
@@ -5168,10 +5264,21 @@ class SubtitleRenderWindow(QWidget):
             height=height,
             fps=self._export_fps_value(),
         )
+        size_changed = (
+            width != self._screen_settings.width or height != self._screen_settings.height
+        )
         self._set_export_screen_controls(settings)
         self._sync_preview_output_size()
         self._refresh_export_format_label()
         self._on_export_screen_changed()
+        if size_changed:
+            InfoBar.info(
+                title="输出尺寸已跟随背景视频",
+                content=f"宽度和高度已改为 {width}×{height}；如需其他尺寸请在导出页重新填写。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=3500,
+            )
 
     def load_background_image(self, path: Path) -> bool:
         image = QImage(str(path))
@@ -5224,6 +5331,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_background_source(source)
         self._video_settings_panel.set_populated(True)
         self._sync_audio_action_enabled()
+        self._sync_background_panel_state()
         if source.path:
             self._preview_window.set_media_title(Path(source.path))
         self._request_preview_window()
@@ -5233,6 +5341,7 @@ class SubtitleRenderWindow(QWidget):
     def _load_background_payload(self, payload: dict) -> None:
         kind = str(payload.get("kind") or "solid")
         path = Path(str(payload.get("path"))) if payload.get("path") else None
+        raw_fit = str(payload.get("image_fit") or "cover")
         source = BackgroundSource(
             kind=kind if kind in {"video", "image", "image_sequence", "solid"} else "solid",
             path=str(path) if path is not None else None,
@@ -5240,6 +5349,7 @@ class SubtitleRenderWindow(QWidget):
             source_fps=(int(payload["source_fps"]) if payload.get("source_fps") else None),
             sequence_start_number=max(int(payload.get("sequence_start_number") or 0), 0),
             video_offset_ms=int(payload.get("video_offset_ms") or 0),
+            image_fit=raw_fit if raw_fit in {"cover", "contain"} else "cover",
         )
         if kind == "video" and path is not None and path.is_file():
             self.load_video(path)
@@ -5281,6 +5391,7 @@ class SubtitleRenderWindow(QWidget):
         self._audio_info = info
         self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
+        self._sync_background_panel_state()
         self._mark_project_dirty()
         return info
 
@@ -6314,6 +6425,12 @@ class SubtitleRenderWindow(QWidget):
                     self._redo_stack.append(command)
                     return
                 continue
+            if command[0] == "screen":
+                _kind, old_screen, old_style, _new_screen, _new_style, _ts = command
+                if self._restore_screen(old_screen, old_style):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if command[0] == "char_roles":
                 _kind, track_index, row, old_labels, _new_labels = command
                 if self._restore_char_roles(track_index, row, old_labels):
@@ -6396,6 +6513,12 @@ class SubtitleRenderWindow(QWidget):
                 continue
             if command[0] == "style":
                 if self._restore_style(command[2]):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "screen":
+                _kind, _old_screen, _old_style, new_screen, new_style, _ts = command
+                if self._restore_screen(new_screen, new_style):
                     self._undo_stack.append(command)
                     return
                 continue
@@ -7258,6 +7381,11 @@ class SubtitleRenderWindow(QWidget):
     def _on_export_screen_changed(self) -> None:
         if self._syncing_screen_controls:
             return
+        # 画面尺寸（宽/高/帧率）与随之重算的样式快照一起入撤销栈：
+        # 误触改动可以用 Ctrl+Z 整体撤回（_rescale_layout_for_height 本身
+        # 不入样式撤销栈，快照在这里统一补）。
+        old_screen = screen_settings_to_dict(self._screen_settings)
+        old_style = style_to_dict(self._style)
         self._screen_settings = ScreenSettings(
             preset_key="custom",
             par=self._screen_settings.par,
@@ -7276,6 +7404,14 @@ class SubtitleRenderWindow(QWidget):
             height=self._screen_settings.height,
             fps=self._screen_settings.fps,
         )
+        if hasattr(self, "_property_panel"):
+            # 「背景/音频」卡片里的画面尺寸与导出页双向联动
+            # （panel 侧自身的 _syncing guard 拦住回环）。
+            self._property_panel.set_screen_size(
+                self._screen_settings.width,
+                self._screen_settings.height,
+                self._screen_settings.fps,
+            )
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._rescale_layout_for_height(self._screen_settings.height)
         self._property_panel.set_output_size(
@@ -7285,6 +7421,49 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.start()
         self._schedule_persisted_state_save()
         self._mark_project_dirty()
+        self._record_screen_undo(old_screen, old_style)
+
+    def _record_screen_undo(self, old_screen: dict, old_style: dict) -> None:
+        """画面尺寸 + 高度重算样式入撤销栈；连续微调按 1.2s 窗口合并。"""
+        new_screen = screen_settings_to_dict(self._screen_settings)
+        new_style = style_to_dict(self._style)
+        if old_screen == new_screen and old_style == new_style:
+            return
+        now = time.monotonic()
+        top = self._undo_stack[-1] if self._undo_stack else None
+        if (
+            top is not None
+            and top[0] == "screen"
+            and now - top[5] <= self._STYLE_UNDO_MERGE_WINDOW_S
+        ):
+            # 合并：保留最早的旧快照，滚动更新新值与时间戳。
+            if top[1] == new_screen and top[2] == new_style:
+                self._undo_stack.pop()
+            else:
+                self._undo_stack[-1] = (
+                    "screen", top[1], top[2], new_screen, new_style, now,
+                )
+        else:
+            self._undo_stack.append(
+                ("screen", old_screen, old_style, new_screen, new_style, now)
+            )
+            del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+
+    def _restore_screen(self, screen_payload: object, style_payload: object) -> bool:
+        """撤销/重做时整体恢复画面尺寸与配套样式（不再录制新的撤销记录）。"""
+        if not isinstance(screen_payload, dict):
+            return False
+        settings = screen_settings_from_dict(screen_payload)
+        self._screen_settings = settings
+        self._set_export_screen_controls(settings)
+        self._sync_preview_output_size()
+        self._refresh_export_format_label()
+        self._transport_bar.set_preview_fps(settings.fps)
+        self._margin_check_timer.start()
+        self._schedule_persisted_state_save()
+        self._mark_project_dirty()
+        return self._restore_style(style_payload)
 
     def _set_export_screen_controls(self, settings: ScreenSettings) -> None:
         self._syncing_screen_controls = True
@@ -7296,6 +7475,24 @@ class SubtitleRenderWindow(QWidget):
             self._syncing_screen_controls = False
         if hasattr(self, "_property_panel"):
             self._property_panel.set_output_size(settings.width, settings.height)
+            self._property_panel.set_screen_size(
+                settings.width, settings.height, settings.fps
+            )
+
+    def _flush_export_spin_edits(self) -> None:
+        """提交宽/高输入框里尚未失焦的键盘编辑（导出 / 保存前兜底）。
+
+        宽/高已关闭键盘跟踪，键入中的文本要等回车或失焦才生效；窗口级
+        快捷键（如 Ctrl+S）不会移走焦点，这里手动收敛一次。只提交完整
+        可解析的文本，半成品（清空、暂时越界）保持原样，留给用户继续
+        输入或失焦时由 Qt 按常规规则处理——与属性面板数值字段的既定
+        语义一致。
+        """
+        for spin in (self._export_width_spin, self._export_height_spin):
+            editor = spin.lineEdit()
+            state, _fixed, _pos = spin.validate(editor.text(), editor.cursorPosition())
+            if state == QValidator.State.Acceptable:
+                spin.interpretText()
 
     def _export_fps_value(self) -> int:
         data = self._export_fps_combo.currentData()
@@ -8546,6 +8743,8 @@ class SubtitleRenderWindow(QWidget):
     def _save_persisted_state(self) -> None:
         self._persisted_state_save_timer.stop()
         self._persisted_state_dirty = False
+        if hasattr(self, "_export_width_spin"):
+            self._flush_export_spin_edits()
         self._app_default_style = merge_common_style_preferences(
             self._app_default_style,
             self._style,
@@ -8883,6 +9082,8 @@ class SubtitleRenderWindow(QWidget):
             return None
 
     def _build_render_job(self) -> RenderJob:
+        if hasattr(self, "_export_width_spin"):
+            self._flush_export_spin_edits()
         if self._timing_track is None:
             raise ProcessingError("请先加载字幕文件。")
         if self._background_source is None:

@@ -245,6 +245,11 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
 - **两条后端必须给出同一布局结果**，出现分歧时按 `layout_semantics` 对应的语义判对错
   （`n3_1074` 以 N3 10.74 逆向结论为准，`legacy` 以旧工程既有画面为准），不要因为"GPU 是主口径"
   就直接把 GPU 的现状当成正确答案——行网格属于页级量，任何依赖行内容的实现都要先存疑。
+- **背景缩放以预览为主口径、预览与导出必须严格一致**（2026-08-23 用户拍板）：视频背景固定
+  contain（等比缩放完整放入 + 纯黑边，预览 `KeepAspectRatio` + 黑底矩形 = 导出
+  `scale=decrease + pad=black`）；静态图/图片序列按 `BackgroundSource.image_fit` 选
+  cover（铺满裁切，旧工程默认）或 contain，两侧同语义实现。背景选择/独立音频/画面尺寸入口
+  在属性面板「背景/音频」页（`PropertyPanel._PAGE_SPECS` 第 6 页），与导出页宽高帧率双向联动。
 - **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
 - **只输出 MP4、只支持 60/120fps**；不做 30fps 原样输出、AVI 或 ARGB/透明 PNG 序列。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。

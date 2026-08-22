@@ -148,6 +148,49 @@ def test_render_job_rejects_independent_audio_with_video_background(tmp_path):
         build_render_command("ffmpeg", job)
 
 
+def test_build_render_command_rejects_odd_dimensions(tmp_path):
+    """H.264/H.265 的 yuv420p 不支持奇数尺寸，必须在渲染前拦下。"""
+    with pytest.raises(ProcessingError, match="偶数"):
+        build_render_command("ffmpeg", replace(_job(tmp_path), width=321))
+    with pytest.raises(ProcessingError, match="偶数"):
+        build_render_command("ffmpeg", replace(_job(tmp_path), height=181))
+
+
+def _image_job(tmp_path: Path, image_fit: str) -> RenderJob:
+    image = tmp_path / "bg.png"
+    image.write_bytes(b"fake")
+    return replace(
+        _job(tmp_path, include_audio=False),
+        background_video_path=None,
+        background_source=BackgroundSource(
+            kind="image", path=str(image), image_fit=image_fit
+        ),
+    )
+
+
+def _filter_graph(command: list[str]) -> str:
+    return command[command.index("-filter_complex") + 1]
+
+
+def test_background_filter_video_is_always_contain(tmp_path):
+    """视频背景固定等比缩放 + 黑边，与预览 KeepAspectRatio + 纯黑底一致。"""
+    graph = _filter_graph(build_render_command("ffmpeg", _job(tmp_path, include_audio=False)))
+    assert "force_original_aspect_ratio=decrease" in graph
+    assert "pad=320:180" in graph
+
+
+def test_background_filter_image_fit_cover_and_contain(tmp_path):
+    cover = _filter_graph(build_render_command("ffmpeg", _image_job(tmp_path, "cover")))
+    assert "force_original_aspect_ratio=increase" in cover
+    assert "crop=320:180" in cover
+
+    contain = _filter_graph(
+        build_render_command("ffmpeg", _image_job(tmp_path, "contain"))
+    )
+    assert "force_original_aspect_ratio=decrease" in contain
+    assert "pad=320:180" in contain
+
+
 def test_build_render_command_supports_solid_background(tmp_path):
     job = replace(
         _job(tmp_path),

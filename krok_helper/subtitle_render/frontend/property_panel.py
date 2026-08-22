@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from PyQt6.QtCore import (
@@ -20,6 +20,7 @@ from PyQt6.QtCore import (
     QObject,
     QPoint,
     QPointF,
+    QRegularExpression,
     QRunnable,
     QRect,
     QRectF,
@@ -45,6 +46,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QRegularExpressionValidator,
     QTransform,
     QValidator,
 )
@@ -85,6 +87,7 @@ from qfluentwidgets import (
     PlainTextEdit as FluentPlainTextEdit,
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
+    RadioButton,
     RoundMenu,
     ScrollArea as FluentScrollArea,
     SegmentedWidget,
@@ -133,6 +136,7 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     resolve_qt_font_family,
 )
 from krok_helper.subtitle_render.models import (
+    BackgroundSource,
     ColorLayerKey,
     ColorStateKey,
     DecorationKind,
@@ -2102,6 +2106,21 @@ class _GradientStopsPasteDialog(ModelessDialog):
         return True
 
 
+_BACKGROUND_KIND_PAGES = (
+    ("video", "视频", "选择背景视频文件..."),
+    ("image", "静态图", "选择静态背景图片..."),
+    ("image_sequence", "图片序列", "选择图片序列首帧..."),
+    ("solid", "纯色", ""),
+)
+
+
+class _NoWheelSpinBox(FluentSpinBox):
+    """滚动页面里的数值框：完全忽略滚轮，防止滚动卡片时误改数值。"""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
+        event.ignore()
+
+
 class _UnitProtectedSpinBoxMixin:
     """Keep spin-box prefixes and suffixes outside the editable selection."""
 
@@ -2349,29 +2368,6 @@ class _WheelFocusedDoubleSpinBox(_UnitProtectedSpinBoxMixin, FluentDoubleSpinBox
         super().wheelEvent(event)
 
 
-class _MillisPartSpinBox(_WheelFocusedSpinBox):
-    """秒/毫秒复合框里的毫秒位：0–999，步进越界时向秒位进位 / 借位。
-
-    没有进位的话滚轮会死在 999 或 0 上，用户得手工切到秒位再切回来。
-    """
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._carry_handler: Optional[Callable[[int, int], bool]] = None
-
-    def set_carry_handler(self, handler: Callable[[int, int], bool]) -> None:
-        self._carry_handler = handler
-
-    def stepBy(self, steps: int) -> None:  # noqa: N802 - Qt API
-        target = self.value() + steps
-        if self._carry_handler is not None and not 0 <= target <= 999:
-            carry = math.floor(target / 1000)
-            # 秒位越界时 handler 返回 False，退回默认的原地钳值。
-            if self._carry_handler(carry, target - carry * 1000):
-                return
-        super().stepBy(steps)
-
-
 #: 标题「显示时段」几个时刻字段的上限，取 N3 的时间标签上限
 #: ``Nkm3Constants.TIME_TAG_TIME_MAX``（``[99:59:99]``，约 100 分钟）。
 #:
@@ -2379,17 +2375,61 @@ class _MillisPartSpinBox(_WheelFocusedSpinBox):
 #: HeadOffset / HeadEnd / TailOffset 都直接落在这条时间轴上，没有更窄的限制。
 TITLE_TIME_MAX_MS = 5_999_990
 
+#: timecode 输入框允许的文本形态：段用 ``:`` 分隔，小数点 ``.`` 或 ``,``。
+#: 只约束结构、不约束数值——中间态（``1:``、``1.``、空串）必须放行，
+#: 数值越界在提交时钳制。
+_TIMECODE_PATTERN = QRegularExpression(r"\d{0,4}(:\d{1,2}){0,2}([.,]\d{0,3})?")
 
-class _DurationSpin(QWidget):
-    """秒 + 毫秒并排的时长输入；对外仍然是一个「毫秒整数」控件。
 
-    ``value()`` / ``setValue()`` / ``valueChanged`` 全部以毫秒为单位，与被它
-    替换掉的单个 ms spin 完全同构，所以模型层（``TitleOverlay`` 等）继续存
-    整数毫秒，工程文件与 N3 导入的 10ms 粒度都不会被这层 UI 改写。
+def parse_timecode_ms(text: str) -> Optional[int]:
+    """把用户敲的时间文本解析成整数毫秒；无法解析时返回 ``None``。
 
-    毫秒位恒为 0–999，取值上下限由秒位动态收窄，因此任何可输入的组合都落在
-    ``[minimum, maximum]`` 内——不需要事后钳值，也就不会在用户还在打字时把
-    输入框里的文本改掉（见 ``_UnitProtectedSpinBoxMixin._commit_keyboard_edit``）。
+    接受三种写法，后台自动换算，不强迫用户记单位：
+
+    - 纯数字按秒：``90`` → 90000，``0.3`` → 300（逗号视同小数点）；
+    - ``分:秒.毫秒``：``1:30.5`` → 90500，毫秒可省略；
+    - ``时:分:秒``：``1:02:03`` → 3723000。
+
+    空串按 0 处理；出现空段（``1:``、``:30``、``1::30``）视为半成品，
+    返回 ``None`` 交给调用方恢复原值。
+    """
+    normalized = text.strip().replace(",", ".")
+    if not normalized:
+        return 0
+    parts = normalized.split(":")
+    if not all(parts):
+        return None
+    seconds_text, _, fraction = parts[-1].partition(".")
+    if not seconds_text.isdigit():
+        return None
+    if fraction and not fraction.isdigit():
+        return None
+    millis = int((fraction + "000")[:3])
+    total_seconds = int(seconds_text)
+    scale = 60
+    for part in reversed(parts[:-1]):
+        total_seconds += int(part) * scale
+        scale *= 60
+    return total_seconds * 1000 + millis
+
+
+def format_timecode_ms(value: int) -> str:
+    """整数毫秒格式化为 ``M:SS.mmm``（分钟不补零，如 ``1:23.450``）。"""
+    minutes, remainder = divmod(int(value), 60_000)
+    seconds, millis = divmod(remainder, 1000)
+    return f"{minutes}:{seconds:02d}.{millis:03d}"
+
+
+class _TimecodeEdit(FluentLineEdit):
+    """单个时间码输入框：显示 ``M:SS.mmm``，后台自动解析为整数毫秒。
+
+    对外接口与被它替换的秒/毫秒复合框同构（``value()`` / ``setValue()`` /
+    ``valueChanged``，单位毫秒），模型层（``TitleOverlay`` 等）与工程文件的
+    10ms 粒度不受这层 UI 影响。手输支持纯秒数、``分:秒.毫秒``、``时:分:秒``，
+    失焦或回车后统一规范化回显。
+
+    键入走 ``EDIT_COMMIT_DEBOUNCE_MS`` 防抖提交且只更新值，不回写正在敲的
+    文本（回流重写会打断输入）；规范化回写只发生在失焦、回车与步进时。
     """
 
     valueChanged = Signal(int)
@@ -2402,50 +2442,49 @@ class _DurationSpin(QWidget):
     ) -> None:
         super().__init__(parent)
         if minimum < 0:
-            # 负值的符号该归秒位还是毫秒位没有直观答案（-0.3s = 0s + -300ms？），
-            # 需要负偏移的字段请继续用单个 ms spin。
-            raise ValueError("_DurationSpin 只支持非负范围")
+            # 负时长的符号语义不明（-0.3s 放哪个字段？），需要负值的字段
+            # 请继续用单个 ms spin。
+            raise ValueError("_TimecodeEdit 只支持非负范围")
         if maximum < minimum:
-            raise ValueError("_DurationSpin 的 maximum 不能小于 minimum")
+            raise ValueError("_TimecodeEdit 的 maximum 不能小于 minimum")
         self._minimum = int(minimum)
         self._maximum = int(maximum)
         self._value = self._minimum
-        self._syncing = False
 
-        # 焦点直接落到两个子框上；容器自身不参与 Tab 链。
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
+        self.setValidator(QRegularExpressionValidator(_TIMECODE_PATTERN))
+        self.setPlaceholderText("分:秒.毫秒")
+        self.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        _compact_control(self)
+        self.setToolTip(
+            "时间格式「分:秒.毫秒」，如 1:23.450；直接输入数字按秒计"
+            "（90 = 90 秒），也接受 时:分:秒。回车或点击别处后自动规范化。"
+            "聚焦时滚轮 / 上下方向键 ±1 秒，按住 Ctrl ±10 毫秒。"
+        )
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        self.seconds_spin = _spin(self._minimum // 1000, self._maximum // 1000, suffix=" s")
-        self.millis_spin = _spin(0, 999, suffix=" ms", cls=_MillisPartSpinBox)
-        self.millis_spin.set_carry_handler(self._carry_millis)
-        hint = "两格相加即为总时长（1 s + 230 ms = 1230 毫秒）；毫秒位满 1000 自动进位到秒。"
-        self.seconds_spin.setToolTip(hint)
-        self.millis_spin.setToolTip(hint)
-        # 毫秒位固定三位数（"999 ms"），比秒位宽，按比例分配剩余空间。
-        row.addWidget(self.seconds_spin, 3)
-        row.addWidget(self.millis_spin, 4)
-
-        self.seconds_spin.valueChanged.connect(self._on_part_changed)
-        self.millis_spin.valueChanged.connect(self._on_part_changed)
-        self._apply_split(self._value)
+        self._commit_timer = QTimer(self)
+        self._commit_timer.setSingleShot(True)
+        self._commit_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
+        self._commit_timer.timeout.connect(self._commit_typing)
+        self.textEdited.connect(lambda _text: self._commit_timer.start())
+        self.editingFinished.connect(self._flush_edit)
+        self._apply_text(self._value)
 
     # -------------------------------------------------------------- 对外接口
 
     def value(self) -> int:
         return self._value
 
-    def setValue(self, value: int) -> None:  # noqa: N802 - QSpinBox API
+    def setValue(self, value: int) -> None:  # noqa: N802 - Qt API
         clamped = self._clamp(value)
         changed = clamped != self._value
         self._value = clamped
-        self._apply_split(clamped)
+        # 值没变也可能要校准显示：打字防抖刚提交过时解析结果一致，不会碰
+        # 文本，用户敲的 "90" 保持到失焦才规范化。
+        if changed or parse_timecode_ms(self.text()) != clamped:
+            self._apply_text(clamped)
         if changed:
-            # 与 QSpinBox.setValue 一致：值真的变了才发信号。
             self.valueChanged.emit(clamped)
 
     def minimum(self) -> int:
@@ -2454,47 +2493,92 @@ class _DurationSpin(QWidget):
     def maximum(self) -> int:
         return self._maximum
 
+    def submit_text(self, text: str) -> bool:
+        """按「用户输入并结束编辑」处理一段文本；返回是否解析成功。
+
+        ``setText`` 不经过 validator（Qt 只拦键盘输入），所以这里能收到
+        任意文本，非法时恢复为当前值——测试与程序化提交共用该路径。
+        """
+        self.setText(text)
+        return self._flush_edit()
+
+    def stepBy(self, steps: int, fine: bool = False) -> None:  # noqa: N802
+        """步进提交：默认 ±1 秒，``fine=True`` 时 ±10 毫秒。"""
+        self._apply_value(self._value + steps * (10 if fine else 1000))
+
+    # ---------------------------------------------------------------- 输入处理
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            steps = 1 if event.key() == Qt.Key.Key_Up else -1
+            self.stepBy(
+                steps,
+                fine=bool(
+                    event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                ),
+            )
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            # 与 _WheelFocusedSpinBox 一致：未聚焦时把滚轮还给属性面板滚动。
+            event.ignore()
+            return
+        delta = event.angleDelta().y()
+        if event.inverted():
+            delta = -delta
+        if delta:
+            steps = int(delta / 120) or (1 if delta > 0 else -1)
+            self.stepBy(
+                steps,
+                fine=bool(
+                    event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                ),
+            )
+            event.accept()
+            return
+        super().wheelEvent(event)
+
     # ---------------------------------------------------------------- 内部实现
 
     def _clamp(self, value: Any) -> int:
         return int(max(self._minimum, min(self._maximum, int(value))))
 
-    def _apply_split(self, value: int) -> None:
-        seconds, millis = divmod(value, 1000)
-        self._syncing = True
-        try:
-            self.seconds_spin.setValue(seconds)
-            self._sync_millis_range()
-            self.millis_spin.setValue(millis)
-        finally:
-            self._syncing = False
+    def _commit_typing(self) -> None:
+        """防抖到期：文本能解析就提交值，但不动文本本身。"""
+        parsed = parse_timecode_ms(self.text())
+        if parsed is None:
+            return  # validator 之后的兜底，等失焦时恢复。
+        clamped = self._clamp(parsed)
+        if clamped != self._value:
+            self._value = clamped
+            self.valueChanged.emit(clamped)
 
-    def _sync_millis_range(self) -> None:
-        """按当前秒位收窄毫秒位的取值范围，让越界组合根本敲不出来。"""
-        base = self.seconds_spin.value() * 1000
-        self.millis_spin.setMaximum(max(0, min(999, self._maximum - base)))
-        self.millis_spin.setMinimum(max(0, min(999, self._minimum - base)))
-
-    def _carry_millis(self, carry: int, millis: int) -> bool:
-        seconds = self.seconds_spin.value() + carry
-        if not self.seconds_spin.minimum() <= seconds <= self.seconds_spin.maximum():
+    def _flush_edit(self) -> bool:
+        """结束编辑：解析、钳值并规范化回写。"""
+        self._commit_timer.stop()
+        parsed = parse_timecode_ms(self.text())
+        if parsed is None:
+            self._apply_text(self._value)
             return False
-        if not self._minimum <= seconds * 1000 + millis <= self._maximum:
-            return False
-        self.setValue(seconds * 1000 + millis)
+        self._apply_value(self._clamp(parsed))
         return True
 
-    def _on_part_changed(self, _value: int) -> None:
-        if self._syncing:
-            return
-        # 秒位变了 → 毫秒位的可用区间跟着变；这一步可能反过来钳住毫秒位并
-        # 递归回到本函数，递归里已经发过信号，外层因为值相等不会重复发。
-        self._sync_millis_range()
-        value = self._clamp(self.seconds_spin.value() * 1000 + self.millis_spin.value())
-        if value == self._value:
-            return
-        self._value = value
-        self.valueChanged.emit(value)
+    def _apply_value(self, value: int) -> None:
+        clamped = self._clamp(value)
+        changed = clamped != self._value
+        self._value = clamped
+        self._apply_text(clamped)
+        if changed:
+            self.valueChanged.emit(clamped)
+
+    def _apply_text(self, value: int) -> None:
+        # 重写后把光标锚到相对末尾的同一位置，别让它跳回开头。
+        offset = len(self.text()) - self.cursorPosition()
+        self.setText(format_timecode_ms(value))
+        self.setCursorPosition(max(0, len(self.text()) - offset))
 
 
 class _WheelFocusedComboBox(FluentComboBox):
@@ -4770,6 +4854,7 @@ class PropertyPanel(QWidget):
         ("timing", "时间"),
         ("effects", "特效"),
         ("title", "标题"),
+        ("background", "背景/音频"),
     )
 
     styleChanged = Signal(Style)
@@ -4785,6 +4870,18 @@ class PropertyPanel(QWidget):
     """「各页按行数自动布局」：不重新分页，只恢复同行数映射布局。"""
     layoutDeleted = Signal(int)
     """布局被删除：参数为被删布局 index（>= 1），宿主需修正歌词行引用。"""
+    backgroundBrowseRequested = Signal(str)
+    """点击某张背景卡请求选择素材；参数为 kind（video/image/image_sequence/solid）。"""
+    backgroundClearRequested = Signal()
+    """请求清除背景素材（回到纯色黑）。"""
+    backgroundSolidColorChanged = Signal(str)
+    """纯色背景色变化（色值输入 / 取色 / 选色对话框）；参数为 #RRGGBB。"""
+    imageFitChanged = Signal(str)
+    """图片缩放策略变化；参数为 cover（铺满）/ contain（黑边）。"""
+    audioBrowseRequested = Signal()
+    audioClearRequested = Signal()
+    screenSizeChanged = Signal()
+    """面板内宽 / 高 / 帧率被用户改动（宿主回写导出页与预览）。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -4856,6 +4953,7 @@ class PropertyPanel(QWidget):
             self._make_timing_page(),
             self._make_effects_page(),
             self._make_title_page(),
+            self._make_background_page(),
         )
         for page, (route_key, label) in zip(pages, self._PAGE_SPECS):
             self._add_navigation_page(page, route_key, label)
@@ -6465,6 +6563,312 @@ class PropertyPanel(QWidget):
 
     # ----------------------------------------------------------------- 标题（B7）
 
+    # ------------------------------------------------------------------ background / audio page
+
+    def _make_background_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_background_source_section())
+        layout.addWidget(self._make_screen_size_section())
+        layout.addStretch(1)
+        return scroll
+
+    def _make_background_source_section(self) -> QFrame:
+        section, layout = _section("背景素材")
+        hint = CaptionLabel(
+            "四种背景互斥：左侧选择类型，右侧选择素材；"
+            "视频与画面比例不同时等比缩放并自动加黑边。"
+        )
+        hint.setWordWrap(True)
+        themed(hint, lambda: f"color: {palette().text_secondary};")
+        layout.addWidget(hint)
+
+        # 与颜色区的图层列同一模式：左·竖排类型胶囊（四状态），右·按类型
+        # 切换的详情页。胶囊只切换查看，不改数据；激活由「浏览...」完成。
+        self._background_kind_pill = _PillSelector(
+            (
+                ("video", "视频"),
+                ("image", "静态图"),
+                ("image_sequence", "图片序列"),
+                ("solid", "纯色"),
+            ),
+            section,
+            vertical=True,
+        )
+        self._background_kind_pill.changed.connect(
+            self._on_background_kind_pill_changed
+        )
+
+        self._background_detail_stack = _DynamicStackedWidget(section)
+        self._background_path_edits: dict[str, FluentLineEdit] = {}
+        self._audio_path_edits: list[FluentLineEdit] = []
+        for kind, label, placeholder in _BACKGROUND_KIND_PAGES:
+            self._background_detail_stack.addWidget(
+                self._make_background_detail_page(kind, label, placeholder, section)
+            )
+
+        # 图片缩放策略：静态图与图片序列共用（仅查看这两类时显示）。
+        self._image_fit_cover_radio = RadioButton("铺满屏幕", section)
+        self._image_fit_contain_radio = RadioButton("加入黑边", section)
+        self._image_fit_cover_radio.setToolTip(
+            "等比放大铺满画面并居中裁掉超出部分（旧工程默认观感）。"
+        )
+        self._image_fit_contain_radio.setToolTip(
+            "等比缩小完整放入画面，不足处补纯黑边，与视频背景和导出一致。"
+        )
+        self._image_fit_cover_radio.toggled.connect(
+            lambda checked: (
+                self.imageFitChanged.emit("cover")
+                if checked and not self._syncing
+                else None
+            )
+        )
+        self._image_fit_contain_radio.toggled.connect(
+            lambda checked: (
+                self.imageFitChanged.emit("contain")
+                if checked and not self._syncing
+                else None
+            )
+        )
+        self._syncing = True
+        try:
+            self._image_fit_cover_radio.setChecked(True)
+        finally:
+            self._syncing = False
+        fit_row = QHBoxLayout()
+        fit_row.setContentsMargins(0, 0, 0, 0)
+        fit_row.setSpacing(16)
+        fit_row.addWidget(self._image_fit_cover_radio)
+        fit_row.addWidget(self._image_fit_contain_radio)
+        fit_row.addStretch(1)
+        self._image_fit_group = QWidget(section)
+        fit_group_layout = QVBoxLayout(self._image_fit_group)
+        fit_group_layout.setContentsMargins(0, 0, 0, 0)
+        fit_group_layout.setSpacing(4)
+        fit_title = CaptionLabel("图片缩放策略", self._image_fit_group)
+        themed(fit_title, lambda: f"color: {palette().text_secondary};")
+        fit_group_layout.addWidget(fit_title)
+        fit_group_layout.addLayout(fit_row)
+        self._image_fit_group.setVisible(False)
+
+        columns = QHBoxLayout()
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(10)
+        columns.addWidget(self._background_kind_pill, 0, Qt.AlignmentFlag.AlignTop)
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(10)
+        right.addWidget(self._background_detail_stack, 1)
+        right.addWidget(self._image_fit_group)
+        right.addStretch(1)
+        columns.addLayout(right, 1)
+        layout.addLayout(columns)
+
+        clear_row = QHBoxLayout()
+        clear_row.setContentsMargins(0, 0, 0, 0)
+        clear_row.addStretch(1)
+        clear_button = FluentPushButton("清除背景（恢复纯色黑）", section)
+        clear_button.setMinimumHeight(30)
+        clear_button.clicked.connect(self.backgroundClearRequested.emit)
+        clear_row.addWidget(clear_button)
+        layout.addLayout(clear_row)
+        return section
+
+    def _make_background_detail_page(
+        self, kind: str, label: str, placeholder: str, section: QWidget
+    ) -> QWidget:
+        """单个背景类型的详情页：SUG 风格路径行 / 纯色 ColorButton + 音频行。"""
+        page = QWidget(section)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(10)
+
+        if kind == "solid":
+            self._solid_color_btn = ColorButton("#000000", page)
+            self._solid_color_btn.clicked.connect(self._choose_solid_color_dialog)
+            self._solid_color_btn.screenPickRequested.connect(
+                lambda: self._begin_screen_color_pick(
+                    self._solid_color_btn, self._apply_solid_color
+                )
+            )
+            self._solid_color_btn.colorEntered.connect(self._apply_solid_color)
+            solid_field = _field("背景颜色（点击色块输入色值）", self._solid_color_btn)
+            page_layout.addWidget(solid_field)
+        else:
+            path_row = QHBoxLayout()
+            path_row.setContentsMargins(0, 0, 0, 0)
+            path_row.setSpacing(8)
+            path_edit = FluentLineEdit(page)
+            path_edit.setPlaceholderText(placeholder)
+            path_edit.setReadOnly(True)
+            path_row.addWidget(path_edit, 1)
+            browse_button = FluentPushButton("浏览...", page)
+            browse_button.setMinimumHeight(30)
+            browse_button.setIcon(FIF.FOLDER)
+            browse_button.clicked.connect(
+                lambda _checked=False, k=kind: self.backgroundBrowseRequested.emit(k)
+            )
+            path_row.addWidget(browse_button)
+            page_layout.addLayout(path_row)
+            self._background_path_edits[kind] = path_edit
+
+        # 独立音频是图片 / 图片序列 / 纯色背景的专属配套（视频只用内嵌音轨），
+        # 因此音频行放在这三类的详情页里，而不是独立的卡片。
+        if kind != "video":
+            audio_label = CaptionLabel("独立音频（非视频背景的配乐）", page)
+            themed(audio_label, lambda: f"color: {palette().text_secondary};")
+            page_layout.addWidget(audio_label)
+            audio_row = QHBoxLayout()
+            audio_row.setContentsMargins(0, 0, 0, 0)
+            audio_row.setSpacing(8)
+            audio_edit = FluentLineEdit(page)
+            audio_edit.setPlaceholderText("未设置（点击右侧按钮选择音频）")
+            audio_edit.setReadOnly(True)
+            audio_row.addWidget(audio_edit, 1)
+            audio_browse = FluentPushButton("浏览...", page)
+            audio_browse.setMinimumHeight(30)
+            audio_browse.setIcon(FIF.MUSIC)
+            audio_browse.clicked.connect(self.audioBrowseRequested.emit)
+            audio_row.addWidget(audio_browse)
+            audio_remove = FluentPushButton("移除", page)
+            audio_remove.setMinimumHeight(30)
+            audio_remove.clicked.connect(self.audioClearRequested.emit)
+            audio_row.addWidget(audio_remove)
+            page_layout.addLayout(audio_row)
+            self._audio_path_edits.append(audio_edit)
+        return page
+
+    def _choose_solid_color_dialog(self) -> None:
+        color = _select_color(
+            QColor(self._solid_color_btn.color), self, "选择纯色背景"
+        )
+        if color.isValid():
+            self._apply_solid_color(color)
+
+    def _apply_solid_color(self, color: object) -> None:
+        text = color if isinstance(color, str) else None
+        if text is None:
+            qcolor = color if isinstance(color, QColor) else QColor()
+            if not qcolor.isValid():
+                return
+            text = qcolor.name()
+        self.backgroundSolidColorChanged.emit(text)
+
+    def _on_background_kind_pill_changed(self, kind: str) -> None:
+        """胶囊只切换查看的类型页，不改动当前背景数据。"""
+        index = {
+            item[0]: position for position, item in enumerate(_BACKGROUND_KIND_PAGES)
+        }.get(kind, 0)
+        self._background_detail_stack.setCurrentIndex(index)
+        self._image_fit_group.setVisible(kind in {"image", "image_sequence"})
+
+    def _make_screen_size_section(self) -> QFrame:
+        section, layout = _section("画面尺寸")
+        hint = CaptionLabel("宽度 / 高度 / 帧率与预览页「画面」及导出页设置双向联动。")
+        hint.setWordWrap(True)
+        themed(hint, lambda: f"color: {palette().text_secondary};")
+        layout.addWidget(hint)
+
+        self._screen_size_width_spin = _NoWheelSpinBox(section)
+        self._screen_size_width_spin.setRange(160, 7680)
+        self._screen_size_width_spin.setValue(1920)
+        self._screen_size_width_spin.setSingleStep(2)
+        self._screen_size_width_spin.setKeyboardTracking(False)
+        self._screen_size_height_spin = _NoWheelSpinBox(section)
+        self._screen_size_height_spin.setRange(90, 4320)
+        self._screen_size_height_spin.setValue(1080)
+        self._screen_size_height_spin.setSingleStep(2)
+        self._screen_size_height_spin.setKeyboardTracking(False)
+        self._screen_size_fps_combo = FluentComboBox(section)
+        for fps in SCREEN_FPS_OPTIONS:
+            self._screen_size_fps_combo.addItem(f"{fps} fps", userData=fps)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(8)
+        grid.addWidget(_field("宽度", self._screen_size_width_spin), 0, 0)
+        grid.addWidget(_field("高度", self._screen_size_height_spin), 0, 1)
+        grid.addWidget(_field("帧率", self._screen_size_fps_combo), 1, 0)
+        layout.addLayout(grid)
+
+        self._screen_size_width_spin.valueChanged.connect(
+            self._on_panel_screen_size_changed
+        )
+        self._screen_size_height_spin.valueChanged.connect(
+            self._on_panel_screen_size_changed
+        )
+        self._screen_size_fps_combo.currentIndexChanged.connect(
+            self._on_panel_screen_size_changed
+        )
+        return section
+
+    def _on_panel_screen_size_changed(self, *_args) -> None:
+        if self._syncing:
+            return
+        self.screenSizeChanged.emit()
+
+    def screen_size(self) -> tuple[int, int, int]:
+        data = self._screen_size_fps_combo.currentData()
+        fps = int(data) if data in SCREEN_FPS_OPTIONS else 60
+        return (
+            self._screen_size_width_spin.value(),
+            self._screen_size_height_spin.value(),
+            fps,
+        )
+
+    def set_screen_size(self, width: int, height: int, fps: int) -> None:
+        self._syncing = True
+        try:
+            self._screen_size_width_spin.setValue(max(int(width), 1))
+            self._screen_size_height_spin.setValue(max(int(height), 1))
+            index = self._screen_size_fps_combo.findData(int(fps))
+            self._screen_size_fps_combo.setCurrentIndex(
+                index if index >= 0 else 0
+            )
+        finally:
+            self._syncing = False
+
+    def set_background_state(self, source: BackgroundSource) -> None:
+        """宿主在背景源变化后回填：类型胶囊、详情页、图片策略与音频可用态。"""
+        self._background_state_kind = source.kind
+        self._background_kind_pill.set_current(source.kind)
+        index = {
+            item[0]: position for position, item in enumerate(_BACKGROUND_KIND_PAGES)
+        }.get(source.kind, 0)
+        self._background_detail_stack.setCurrentIndex(index)
+        self._image_fit_group.setVisible(
+            source.kind in {"image", "image_sequence"}
+        )
+        if source.path:
+            path_edit = self._background_path_edits.get(source.kind)
+            if path_edit is not None:
+                path_edit.setText(source.path)
+        else:
+            for path_edit in self._background_path_edits.values():
+                path_edit.clear()
+        if source.kind == "solid":
+            color = QColor(source.color)
+            if color.isValid():
+                current = QColor(self._solid_color_btn.color)
+                if current.name() != color.name():
+                    self._solid_color_btn.set_color(color.name())
+
+        image_like = source.kind in {"image", "image_sequence"}
+        self._image_fit_cover_radio.setEnabled(image_like)
+        self._image_fit_contain_radio.setEnabled(image_like)
+        self._syncing = True
+        try:
+            if source.image_fit == "contain":
+                self._image_fit_contain_radio.setChecked(True)
+            else:
+                self._image_fit_cover_radio.setChecked(True)
+        finally:
+            self._syncing = False
+
+    def set_audio_state(self, path: Optional[Path]) -> None:
+        text = str(path) if path is not None else ""
+        for audio_edit in self._audio_path_edits:
+            audio_edit.setText(text)
+
     def _make_title_page(self) -> QWidget:
         scroll, layout = _scroll_page()
         layout.addWidget(self._make_title_text_section())
@@ -6571,33 +6975,33 @@ class PropertyPanel(QWidget):
         head_row_layout.addWidget(
             self._title_head_row_label, 0, Qt.AlignmentFlag.AlignTop
         )
-        # 秒 + 毫秒两个输入框比原来的单个 ms 框宽，列宽下限跟着抬高，
-        # 否则窄面板下两列会把 "999 ms" 挤到显示不全。
+        # 单个 timecode 输入框比原来的秒/毫秒两框窄，列宽下限可以收紧，
+        # 让四个字段更容易在宽面板下并成一排。
         self._title_head_grid = _ResponsiveFieldGrid(
-            self._title_head_row, min_column_width=160, max_columns=4
+            self._title_head_row, min_column_width=140, max_columns=4
         )
         head_row_layout.addWidget(self._title_head_grid, 1)
 
-        self._title_fade_in_spin = _DurationSpin(0, 10_000)
-        self._title_fade_in_spin.valueChanged.connect(
+        self._title_fade_in_edit = _TimecodeEdit(0, 10_000)
+        self._title_fade_in_edit.valueChanged.connect(
             lambda value: self._update_title(fade_in_ms=value)
         )
-        self._title_head_grid.add_field("淡入", self._title_fade_in_spin)
-        self._title_head_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
-        self._title_head_spin.valueChanged.connect(
+        self._title_head_grid.add_field("淡入", self._title_fade_in_edit)
+        self._title_head_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
+        self._title_head_edit.valueChanged.connect(
             lambda value: self._update_title(head_offset_ms=value)
         )
-        self._title_head_grid.add_field("偏移", self._title_head_spin)
-        self._title_duration_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
-        self._title_duration_spin.valueChanged.connect(
+        self._title_head_grid.add_field("偏移", self._title_head_edit)
+        self._title_duration_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
+        self._title_duration_edit.valueChanged.connect(
             lambda value: self._update_title(duration_ms=value)
         )
-        self._title_head_grid.add_field("显示时长", self._title_duration_spin)
-        self._title_fade_out_spin = _DurationSpin(0, 10_000)
-        self._title_fade_out_spin.valueChanged.connect(
+        self._title_head_grid.add_field("显示时长", self._title_duration_edit)
+        self._title_fade_out_edit = _TimecodeEdit(0, 10_000)
+        self._title_fade_out_edit.valueChanged.connect(
             lambda value: self._update_title(fade_out_ms=value)
         )
-        self._title_head_grid.add_field("淡出", self._title_fade_out_spin)
+        self._title_head_grid.add_field("淡出", self._title_fade_out_edit)
 
         self._title_tail_row = QWidget(section)
         tail_row_layout = QHBoxLayout(self._title_tail_row)
@@ -6609,30 +7013,30 @@ class PropertyPanel(QWidget):
             self._title_tail_row_label, 0, Qt.AlignmentFlag.AlignTop
         )
         self._title_tail_grid = _ResponsiveFieldGrid(
-            self._title_tail_row, min_column_width=160, max_columns=4
+            self._title_tail_row, min_column_width=140, max_columns=4
         )
         tail_row_layout.addWidget(self._title_tail_grid, 1)
 
-        self._title_tail_fade_in_spin = _DurationSpin(0, 10_000)
-        self._title_tail_fade_in_spin.valueChanged.connect(
+        self._title_tail_fade_in_edit = _TimecodeEdit(0, 10_000)
+        self._title_tail_fade_in_edit.valueChanged.connect(
             lambda value: self._update_title(tail_fade_in_ms=value)
         )
-        self._title_tail_grid.add_field("淡入", self._title_tail_fade_in_spin)
-        self._title_tail_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
-        self._title_tail_spin.valueChanged.connect(
+        self._title_tail_grid.add_field("淡入", self._title_tail_fade_in_edit)
+        self._title_tail_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
+        self._title_tail_edit.valueChanged.connect(
             lambda value: self._update_title(tail_offset_ms=value)
         )
-        self._title_tail_grid.add_field("偏移", self._title_tail_spin)
-        self._title_tail_duration_spin = _DurationSpin(0, TITLE_TIME_MAX_MS)
-        self._title_tail_duration_spin.valueChanged.connect(
+        self._title_tail_grid.add_field("偏移", self._title_tail_edit)
+        self._title_tail_duration_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
+        self._title_tail_duration_edit.valueChanged.connect(
             lambda value: self._update_title(tail_duration_ms=value)
         )
-        self._title_tail_grid.add_field("显示时长", self._title_tail_duration_spin)
-        self._title_tail_fade_out_spin = _DurationSpin(0, 10_000)
-        self._title_tail_fade_out_spin.valueChanged.connect(
+        self._title_tail_grid.add_field("显示时长", self._title_tail_duration_edit)
+        self._title_tail_fade_out_edit = _TimecodeEdit(0, 10_000)
+        self._title_tail_fade_out_edit.valueChanged.connect(
             lambda value: self._update_title(tail_fade_out_ms=value)
         )
-        self._title_tail_grid.add_field("淡出", self._title_tail_fade_out_spin)
+        self._title_tail_grid.add_field("淡出", self._title_tail_fade_out_edit)
 
         layout.addWidget(self._title_head_row)
         layout.addWidget(self._title_tail_row)
@@ -6689,22 +7093,22 @@ class PropertyPanel(QWidget):
         self._title_mode_combo.setCurrentIndex(
             max(0, self._title_mode_combo.findData(title.show_mode))
         )
-        self._title_head_spin.setValue(title.head_offset_ms)
-        self._title_duration_spin.setValue(title.duration_ms)
-        self._title_tail_spin.setValue(title.tail_offset_ms)
-        self._title_fade_in_spin.setValue(title.fade_in_ms)
-        self._title_fade_out_spin.setValue(title.fade_out_ms)
-        self._title_tail_duration_spin.setValue(
+        self._title_head_edit.setValue(title.head_offset_ms)
+        self._title_duration_edit.setValue(title.duration_ms)
+        self._title_tail_edit.setValue(title.tail_offset_ms)
+        self._title_fade_in_edit.setValue(title.fade_in_ms)
+        self._title_fade_out_edit.setValue(title.fade_out_ms)
+        self._title_tail_duration_edit.setValue(
             title.duration_ms
             if title.tail_duration_ms is None
             else title.tail_duration_ms
         )
-        self._title_tail_fade_in_spin.setValue(
+        self._title_tail_fade_in_edit.setValue(
             title.fade_in_ms
             if title.tail_fade_in_ms is None
             else title.tail_fade_in_ms
         )
-        self._title_tail_fade_out_spin.setValue(
+        self._title_tail_fade_out_edit.setValue(
             title.fade_out_ms
             if title.tail_fade_out_ms is None
             else title.tail_fade_out_ms

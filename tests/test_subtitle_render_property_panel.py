@@ -65,6 +65,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
 )
 from krok_helper.subtitle_render.engine.style_semantics import style_for_role  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    BackgroundSource,
     KaraokeColors,
     KaraokeColorState,
     LyricsLayout,
@@ -1796,7 +1797,8 @@ def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
     qapp.processEvents()
     assert panel._title_appearance_grid._columns == 1
     assert panel._title_time_grid._columns == 1
-    # 秒 + 毫秒复合框放不下两列，窄面板下退成单列而不是把 "999 ms" 截断。
+    # 单个 timecode 框在窄面板下也放不进两列（四个字段退成单列），
+    # 不会把 "99:59.990" 截断。
     assert panel._title_head_grid._columns == 1
     title_page = panel.widget(4)
     assert title_page.horizontalScrollBar().maximum() == 0
@@ -1824,13 +1826,13 @@ def test_title_head_tail_mode_has_independent_timing_rows(qapp):
     assert not panel._title_head_row.isHidden()
     assert not panel._title_tail_row.isHidden()
     assert panel._title_head_row_label.text() == "开头"
-    assert panel._title_tail_duration_spin.value() == 3_000
-    assert panel._title_tail_fade_in_spin.value() == 600
-    assert panel._title_tail_fade_out_spin.value() == 700
+    assert panel._title_tail_duration_edit.value() == 3_000
+    assert panel._title_tail_fade_in_edit.value() == 600
+    assert panel._title_tail_fade_out_edit.value() == 700
 
-    panel._title_tail_duration_spin.setValue(4_000)
-    panel._title_tail_fade_in_spin.setValue(800)
-    panel._title_tail_fade_out_spin.setValue(900)
+    panel._title_tail_duration_edit.setValue(4_000)
+    panel._title_tail_fade_in_edit.setValue(800)
+    panel._title_tail_fade_out_edit.setValue(900)
     title = panel._style.title_overlay
     assert title is not None
     assert title.duration_ms == 2_000
@@ -1841,7 +1843,32 @@ def test_title_head_tail_mode_has_independent_timing_rows(qapp):
     assert title.tail_fade_out_ms == 900
 
 
-def test_title_timing_fields_split_seconds_and_millis(qapp):
+def test_timecode_parse_and_format_round_trip():
+    """宽松解析接受纯秒数 / 分:秒.毫秒 / 时:分:秒，后台换算成毫秒。"""
+    assert pp.parse_timecode_ms("") == 0
+    assert pp.parse_timecode_ms("  ") == 0
+    assert pp.parse_timecode_ms("90") == 90_000
+    assert pp.parse_timecode_ms("0.3") == 300
+    assert pp.parse_timecode_ms("1:30") == 90_000
+    assert pp.parse_timecode_ms("1:30.5") == 90_500
+    assert pp.parse_timecode_ms("1:02:03") == 3_723_000
+    assert pp.parse_timecode_ms("1,5") == 1_500
+    # 半成品（空段）不算有效输入，交还给调用方恢复原值。
+    assert pp.parse_timecode_ms("1:") is None
+    assert pp.parse_timecode_ms(":30") is None
+    assert pp.parse_timecode_ms("1::30") is None
+    assert pp.parse_timecode_ms("1..2") is None
+    assert pp.parse_timecode_ms("1:a") is None
+
+    assert pp.format_timecode_ms(0) == "0:00.000"
+    assert pp.format_timecode_ms(1_230) == "0:01.230"
+    assert pp.format_timecode_ms(83_450) == "1:23.450"
+    assert pp.format_timecode_ms(5_999_990) == "99:59.990"
+    for ms in (0, 1, 999, 1_000, 83_450, 90_000, 5_999_990):
+        assert pp.parse_timecode_ms(pp.format_timecode_ms(ms)) == ms
+
+
+def test_title_timing_fields_use_single_timecode_edit(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
@@ -1855,68 +1882,70 @@ def test_title_timing_fields_split_seconds_and_millis(qapp):
         )
     )
 
-    assert panel._title_head_spin.seconds_spin.value() == 1
-    assert panel._title_head_spin.millis_spin.value() == 230
-    assert panel._title_head_spin.value() == 1_230
-    assert panel._title_duration_spin.seconds_spin.value() == 10
-    assert panel._title_duration_spin.millis_spin.value() == 0
-    assert panel._title_fade_in_spin.seconds_spin.value() == 0
-    assert panel._title_fade_in_spin.millis_spin.value() == 300
+    # 单个输入框显示 M:SS.mmm，对外仍然是整数毫秒。
+    assert panel._title_head_edit.value() == 1_230
+    assert panel._title_head_edit.text() == "0:01.230"
+    assert panel._title_duration_edit.text() == "0:10.000"
+    assert panel._title_fade_in_edit.text() == "0:00.300"
 
-    # 两个分量分别编辑，写回模型的仍是整数毫秒。
-    panel._title_duration_spin.seconds_spin.setValue(12)
-    panel._title_duration_spin.millis_spin.setValue(45)
+    # 常见格式与纯秒数都能输入，写回模型的仍是整数毫秒，且回显规范化。
+    assert panel._title_duration_edit.submit_text("12.045")
+    assert panel._title_head_edit.submit_text("2:03")
+    assert panel._title_fade_in_edit.submit_text("0,45")
     title = panel._style.title_overlay
     assert title is not None
     assert title.duration_ms == 12_045
+    assert title.head_offset_ms == 123_000
+    assert title.fade_in_ms == 450
+    assert panel._title_duration_edit.text() == "0:12.045"
+    assert panel._title_head_edit.text() == "2:03.000"
 
 
-def test_title_timing_millis_step_carries_into_seconds(qapp):
+def test_title_timing_step_adjusts_by_second_and_fine_millis(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(title_overlay=TitleOverlay(enabled=True, duration_ms=1_999))
     )
 
-    spin = panel._title_duration_spin
-    spin.millis_spin.stepBy(1)  # 999 → 进位
-    assert spin.value() == 2_000
-    assert (spin.seconds_spin.value(), spin.millis_spin.value()) == (2, 0)
+    edit = panel._title_duration_edit
+    edit.stepBy(1)  # 默认 ±1 秒
+    assert edit.value() == 2_999
+    assert edit.text() == "0:02.999"
 
-    spin.millis_spin.stepBy(-1)  # 0 → 借位
-    assert spin.value() == 1_999
-    assert (spin.seconds_spin.value(), spin.millis_spin.value()) == (1, 999)
+    edit.stepBy(-1, fine=True)  # Ctrl ±10 毫秒
+    assert edit.value() == 2_989
 
     title = panel._style.title_overlay
     assert title is not None
-    assert title.duration_ms == 1_999
+    assert title.duration_ms == 2_989
 
 
-def test_title_timing_millis_range_follows_seconds_limit(qapp):
+def test_title_timing_input_clamps_to_field_range(qapp):
     panel = PropertyPanel()
     panel.set_style(Style(title_overlay=TitleOverlay(enabled=True)))
 
-    spin = panel._title_fade_in_spin  # 上限 10 000ms
-    assert spin.millis_spin.maximum() == 999
-    spin.seconds_spin.setValue(10)
-    # 秒位顶到上限后毫秒位只能是 0，越界组合根本敲不出来。
-    assert spin.millis_spin.maximum() == 0
-    assert spin.value() == 10_000
+    edit = panel._title_fade_in_edit  # 上限 10 000ms
+    # 越界输入在提交时钳到上限。
+    assert edit.submit_text("15")
+    assert edit.value() == 10_000
+    assert edit.text() == "0:10.000"
 
-    spin.seconds_spin.setValue(9)
-    assert spin.millis_spin.maximum() == 999
+    edit.setValue(99_999)
+    assert edit.value() == 10_000
 
-    spin.setValue(99_999)
-    assert spin.value() == 10_000
-    assert (spin.seconds_spin.value(), spin.millis_spin.value()) == (10, 0)
+    # 半成品文本失焦时恢复为当前值。
+    assert not edit.submit_text("1:")
+    assert edit.value() == 10_000
+    assert edit.text() == "0:10.000"
 
-    # 借位不能突破下限。
-    spin.setValue(0)
-    spin.millis_spin.stepBy(-1)
-    assert spin.value() == 0
+    # 步进不能突破下限。
+    edit.setValue(0)
+    edit.stepBy(-1)
+    assert edit.value() == 0
 
 
-def test_title_timing_millis_typing_survives_panel_round_trip(qapp):
-    """毫秒位打字提交后，样式回流不能把用户正在敲的文本改写掉。"""
+def test_title_timing_timecode_typing_survives_panel_round_trip(qapp):
+    """timecode 打字提交后，样式回流不能把用户正在敲的文本改写掉。"""
     panel = PropertyPanel()
     panel.set_style(
         Style(title_overlay=TitleOverlay(enabled=True, duration_ms=2_500))
@@ -1925,25 +1954,31 @@ def test_title_timing_millis_typing_survives_panel_round_trip(qapp):
     panel.setCurrentIndex(4)
     qapp.processEvents()
 
-    editor = panel._title_duration_spin.millis_spin.lineEdit()
+    editor = panel._title_duration_edit
     editor.setFocus()
     editor.selectAll()
     QTest.keyClicks(editor, "045")
     QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
-    assert panel._title_duration_spin.value() == 2_045
+    # 纯数字按秒计："045" = 45 秒。
+    assert editor.value() == 45_000
     title = panel._style.title_overlay
     assert title is not None
-    assert title.duration_ms == 2_045
-    # 提交走的是 _update_title → _sync_title_controls → setValue 这条回路，
-    # 途中不能把 "045" 规范化成 "45"。
-    assert editor.text() == "045 ms"
+    assert title.duration_ms == 45_000
+    # 提交走的是防抖 → _update_title → _sync_title_controls → setValue 这条
+    # 回路，途中不能把 "045" 规范化成 "0:45.000"。
+    assert editor.text() == "045"
+
+    # 失焦后才统一规范化回显。
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    qapp.processEvents()
+    assert editor.text() == "0:45.000"
     panel.close()
 
 
-def test_title_timing_unit_split_does_not_touch_undo_or_dirty_state(qapp, tmp_path):
-    """拆成两个框只是显示方式：同一个毫秒值不该产生多余的样式变更。"""
+def test_title_timing_timecode_edit_does_not_touch_undo_or_dirty_state(qapp, tmp_path):
+    """单个 timecode 框只是显示方式：同一个毫秒值不该产生多余的样式变更。"""
     panel = PropertyPanel()
     panel.set_style(
         Style(title_overlay=TitleOverlay(enabled=True, duration_ms=2_500))
@@ -1954,11 +1989,11 @@ def test_title_timing_unit_split_does_not_touch_undo_or_dirty_state(qapp, tmp_pa
         style.title_overlay.duration_ms if style.title_overlay else -1
     ))
 
-    spin = panel._title_duration_spin
-    spin.setValue(2_500)  # 值没变
+    edit = panel._title_duration_edit
+    edit.setValue(2_500)  # 值没变
     assert emitted == []
 
-    spin.seconds_spin.setValue(3)
+    edit.submit_text("3.5")
     assert emitted == [3_500]
 
 
@@ -2317,8 +2352,10 @@ def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
     panel = PropertyPanel()
 
     assert isinstance(panel._navigation, SegmentedWidget)
-    assert panel.count() == 5
-    assert [spec[1] for spec in panel._PAGE_SPECS] == ["角色", "布局", "时间", "特效", "标题"]
+    assert panel.count() == 6
+    assert [spec[1] for spec in panel._PAGE_SPECS] == [
+        "角色", "布局", "时间", "特效", "标题", "背景/音频",
+    ]
     for route_key, label in panel._PAGE_SPECS:
         item = panel._navigation.widget(route_key)
         assert item.text() == label
@@ -6647,6 +6684,99 @@ def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch
     assert provider.data["screen"]["fps"] == 120
 
 
+def _export_screen_window(monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    return mw.SubtitleRenderWindow(embedded=True, settings_provider=FakeSettingsProvider())
+
+
+def test_export_height_typing_rescales_once_from_final_value(qapp, monkeypatch):
+    """逐字键入高度不得让中间值链式触发字号/余白重算。
+
+    重算按 N3 语义用 int() 截断，链式应用不等于一次应用：修复前键入
+    "1440" 会先提交中间值 144，得到 font=130/margin=60，而直接一次
+    1080→1440 应为 font=133/margin=66。
+    """
+    typed = _export_screen_window(monkeypatch)
+    direct = _export_screen_window(monkeypatch)
+
+    spin = typed._export_height_spin
+    editor = spin.lineEdit()
+    editor.setSelection(0, len(editor.text()))
+    QTest.keyClicks(editor, "1440")
+
+    # 键入过程中不提交：中间值 144 不应触发任何样式重算
+    assert typed._style.font_reference_height == 1080
+    assert typed._style.font_size_px == direct._style.font_size_px
+
+    spin.clearFocus()
+    typed._flush_export_spin_edits()
+    direct._export_height_spin.setValue(1440)
+
+    assert spin.value() == 1440
+    assert typed._style.font_reference_height == 1440
+    assert typed._style.layout_reference_height == 1440
+    assert typed._style.font_size_px == direct._style.font_size_px
+    assert typed._style.horizontal_margin_px == direct._style.horizontal_margin_px
+    assert typed._style.line_gap_px == direct._style.line_gap_px
+
+
+def test_flush_export_spin_edits_skips_partial_text(qapp, monkeypatch):
+    """flush 只收敛完整可解析文本；半成品留给用户继续输入或失焦处理。"""
+    win = _export_screen_window(monkeypatch)
+    spin = win._export_height_spin
+    editor = spin.lineEdit()
+
+    editor.setSelection(0, len(editor.text()))
+    QTest.keyClicks(editor, "2160")
+    assert win._style.font_reference_height == 1080
+
+    win._flush_export_spin_edits()
+    assert spin.value() == 2160
+    assert win._style.font_reference_height == 2160
+
+    editor.setSelection(0, len(editor.text()))
+    QTest.keyClicks(editor, "9")
+    win._flush_export_spin_edits()
+    assert spin.value() == 2160
+    assert win._style.font_reference_height == 2160
+
+
+def test_sync_output_size_to_video_rounds_odd_source_dimensions(qapp, monkeypatch):
+    """源视频奇数宽高收敛为偶数，避免导出在编码器处才失败。"""
+    from pathlib import Path
+
+    win = _export_screen_window(monkeypatch)
+    info = mw.MediaInfo(
+        path=Path("dummy.mp4"),
+        duration=10.0,
+        video_streams=1,
+        audio_streams=1,
+        subtitle_streams=0,
+        video_width=1091,
+        video_height=1081,
+        video_fps=29.97,
+    )
+
+    win._sync_output_size_to_video(info)
+
+    assert win._export_width_spin.value() == 1090
+    assert win._export_height_spin.value() == 1080
+    assert win._screen_settings.width == 1090
+    assert win._screen_settings.height == 1080
+
+
 def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
     monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
     monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
@@ -7337,3 +7467,151 @@ def test_ruby_latin_font_size_has_the_same_switch(qapp):
     check.setChecked(False)
 
     assert panel.subtitle_style.ruby_latin_font_size_px == 24
+
+
+# ------------------------------------------------------------------ background / audio page
+
+def test_property_panel_background_page_pill_and_signals(qapp):
+    panel = PropertyPanel()
+
+    assert len(panel._pages) == 6
+    # 竖排类型胶囊四状态（与颜色区图层列同一 _PillSelector 模式）
+    assert set(panel._background_path_edits) == {
+        "video", "image", "image_sequence",
+    }
+    # 独立音频行内嵌在三个非视频详情页里（每页一份，共享同一状态）
+    assert len(panel._audio_path_edits) == 3
+
+    requested = []
+    panel.backgroundBrowseRequested.connect(requested.append)
+    panel._on_background_kind_pill_changed("image_sequence")
+    # 胶囊只切换查看，不发选择请求；选择由详情页「浏览...」按钮发出
+    assert requested == []
+
+
+def test_property_panel_background_state_updates_pill_and_radios(qapp):
+    panel = PropertyPanel()
+
+    panel.set_background_state(
+        BackgroundSource(kind="solid", color="#20B2AA")
+    )
+    assert panel._background_kind_pill.current() == "solid"
+    assert QColor(panel._solid_color_btn.color).name().upper() == "#20B2AA"
+    assert not panel._image_fit_cover_radio.isEnabled()
+
+    panel.set_background_state(
+        BackgroundSource(
+            kind="image", path=r"C:\fake dir\bg_pic.png", image_fit="contain"
+        )
+    )
+    assert panel._background_kind_pill.current() == "image"
+    assert panel._image_fit_contain_radio.isChecked()
+    assert panel._image_fit_cover_radio.isEnabled()
+    assert panel._background_path_edits["image"].text() == r"C:\fake dir\bg_pic.png"
+    # 面板未 show 时 isVisible() 恒 False，断言显式可见性标志
+    assert not panel._image_fit_group.isHidden()
+
+    panel.set_background_state(
+        BackgroundSource(kind="video", path=r"C:\fake dir\bg.mp4")
+    )
+    assert panel._background_kind_pill.current() == "video"
+    assert panel._background_path_edits["video"].text() == r"C:\fake dir\bg.mp4"
+    assert panel._image_fit_group.isHidden()
+
+
+def test_property_panel_solid_color_button_emits_color(qapp):
+    """纯色 ColorButton 的色值输入走 backgroundSolidColorChanged。"""
+    panel = PropertyPanel()
+
+    received = []
+    panel.backgroundSolidColorChanged.connect(received.append)
+    panel._apply_solid_color("#305070")
+    assert received == ["#305070"]
+
+    panel._apply_solid_color(QColor("#AA1122"))
+    assert received[-1].upper() == "#AA1122"
+
+
+def test_main_window_solid_color_updates_background_and_preview(qapp, monkeypatch):
+    win = _export_screen_window(monkeypatch)
+
+    win._property_panel._apply_solid_color("#305070")
+    assert win._background_source.kind == "solid"
+    assert win._background_source.color == "#305070"
+    # 预览画布场景底色即时更新（invalidate 已在 set_background_source 内触发）
+    brush = win._preview_panel.canvas._scene.backgroundBrush()
+    assert brush.color().name().upper() == "#305070"
+    # 面板回填后 ColorButton 显示同步
+    assert QColor(win._property_panel._solid_color_btn.color).name().upper() == "#305070"
+
+
+def test_main_window_background_page_image_fit_updates_source(qapp, monkeypatch):
+    win = _export_screen_window(monkeypatch)
+    win._background_source = BackgroundSource(
+        kind="image", path=r"C:\fake\bg_pic.png"
+    )
+    win._sync_background_panel_state()
+
+    win._property_panel._image_fit_contain_radio.setChecked(True)
+    assert win._background_source.image_fit == "contain"
+
+    win._property_panel._image_fit_cover_radio.setChecked(True)
+    assert win._background_source.image_fit == "cover"
+
+
+def test_main_window_background_page_screen_size_bidirectional(qapp, monkeypatch):
+    win = _export_screen_window(monkeypatch)
+    panel = win._property_panel
+
+    panel._screen_size_width_spin.setValue(2560)
+    panel._screen_size_height_spin.setValue(1440)
+    assert win._export_width_spin.value() == 2560
+    assert win._export_height_spin.value() == 1440
+    assert win._screen_settings.width == 2560
+
+    win._export_width_spin.setValue(1280)
+    win._export_height_spin.setValue(720)
+    assert panel._screen_size_width_spin.value() == 1280
+    assert panel._screen_size_height_spin.value() == 720
+
+
+def test_main_window_screen_size_undo_restores_size_and_style(qapp, monkeypatch):
+    """画面尺寸误触可 Ctrl+Z：宽高帧率与高度重算的样式一起撤回/重做。"""
+    win = _export_screen_window(monkeypatch)
+    old_height = win._screen_settings.height
+    old_font = win._style.font_size_px
+
+    win._export_width_spin.setValue(3840)
+    win._export_height_spin.setValue(2160)
+    assert win._screen_settings.width == 3840
+    assert win._style.font_reference_height == 2160
+    assert win._style.font_size_px != old_font
+    assert win._undo_stack and win._undo_stack[-1][0] == "screen"
+
+    win._undo_edit()
+
+    assert win._screen_settings.width == 1920
+    assert win._screen_settings.height == old_height
+    assert win._export_width_spin.value() == 1920
+    assert win._property_panel._screen_size_width_spin.value() == 1920
+    assert win._style.font_size_px == old_font
+
+    win._redo_edit()
+
+    assert win._screen_settings.width == 3840
+    assert win._export_height_spin.value() == 2160
+    assert win._style.font_reference_height == 2160
+
+
+def test_main_window_screen_size_undo_merges_rapid_edits(qapp, monkeypatch):
+    """1.2s 内的连续尺寸微调合并为一条撤销记录。"""
+    win = _export_screen_window(monkeypatch)
+
+    for width in (1922, 1924, 1926):
+        win._export_width_spin.setValue(width)
+
+    screen_records = [c for c in win._undo_stack if c[0] == "screen"]
+    assert len(screen_records) == 1
+    # 一条 Ctrl+Z 回到第一个旧值
+    win._undo_edit()
+    assert win._screen_settings.width == 1920

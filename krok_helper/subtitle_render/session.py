@@ -235,6 +235,7 @@ class SubtitleProjectDocument:
                     source_fps=background.source_fps,
                     sequence_start_number=background.sequence_start_number,
                     video_offset_ms=background.video_offset_ms,
+                    image_fit=background.image_fit,
                 )
                 if background is not None
                 else None

@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QEvent, QRectF, QSizeF, Qt, QTimer, QUrl, pyqtSignal as Signal
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPixmapItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
     QWidget,
@@ -54,6 +55,7 @@ _ASYNC_PLAYBACK_STALE_TOLERANCE_MS = 120
 """Late subtitle frames accepted while video playback is advancing."""
 
 _VIDEO_EDGE_OVERSCAN_PX = 4
+"""旧 cover 视频铺满时代的防边缘细缝外扩；视频改 contain 加黑边后不再使用。"""
 """Small scene-space bleed to cover native video edge underdraw while playing."""
 
 _RESIZE_RENDER_DEBOUNCE_MS = 150
@@ -226,11 +228,23 @@ class PreviewGraphicsView(QGraphicsView):
         self.setScene(scene)
         self._scene = scene
 
+        self._background_source = BackgroundSource()
+
         # 视图外框、视图背景、场景背景三者全部用同一个舞台底色——否则视频四周会露出
         # 一圈深浅不一的细黑边（场景底色 #101010 与外框 stage_bg 撞色）。随主题刷新。
+        # 纯色背景时场景底色用背景色本身（主题重刷不得盖回舞台色）；视图外框
+        # 仍用舞台色，画布外与画布内因此可区分。
+        def _scene_base_color() -> str:
+            source = self._background_source
+            if source.kind == "solid":
+                solid = QColor(source.color)
+                if solid.isValid():
+                    return solid.name()
+            return stage_bg()
+
         def _stage_style() -> str:
+            scene.setBackgroundBrush(QBrush(QColor(_scene_base_color())))
             color = stage_bg()
-            scene.setBackgroundBrush(QBrush(QColor(color)))
             self.setBackgroundBrush(QBrush(QColor(color)))
             return (
                 f"#PreviewGraphicsView {{ background: {color}; "
@@ -240,10 +254,23 @@ class PreviewGraphicsView(QGraphicsView):
         themed(self, _stage_style)
 
         self._video_item = QGraphicsVideoItem()
-        self._video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatioByExpanding)
+        # contain 语义：等比缩小完整放入 item，不足处露出下方纯黑底矩形
+        # （与导出 pad=...:color=black 严格一致）。视频素材与输出画面比例
+        # 不同时只加黑边，不做铺满裁切。
+        self._video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
         self._video_item.setZValue(0)
         scene.addItem(self._video_item)
         self._fit_video_item_to_scene()
+
+        # 黑边底：视频/图片 contain 后四周的纯黑，对齐导出的 pad black。
+        # solid 背景不用它（场景底色即背景色）。
+        self._letterbox_rect = QGraphicsRectItem()
+        self._letterbox_rect.setBrush(QBrush(QColor(0, 0, 0)))
+        self._letterbox_rect.setPen(QPen(Qt.PenStyle.NoPen))
+        self._letterbox_rect.setZValue(-1)
+        self._letterbox_rect.setVisible(False)
+        scene.addItem(self._letterbox_rect)
+        self._update_letterbox_rect()
 
         self._image_item = QGraphicsPixmapItem()
         self._image_item.setZValue(1)
@@ -259,7 +286,6 @@ class PreviewGraphicsView(QGraphicsView):
         scene.addItem(self._subtitle_item)
 
         self._video_path: Optional[Path] = None
-        self._background_source = BackgroundSource()
         self._background_pixmap_cache: dict[Path, QPixmap] = {}
         self._video_playing: bool = False
         self._t_ms: int = 0
@@ -448,20 +474,25 @@ class PreviewGraphicsView(QGraphicsView):
         self._output_h = h
         self._scene.setSceneRect(0, 0, w, h)
         self._fit_video_item_to_scene()
+        self._update_letterbox_rect()
         self._refresh_background_image()
         self._subtitle_item.set_output_size(w, h)
         self._fit_scene_to_view()
         self._refresh_async_target()
 
     def _fit_video_item_to_scene(self) -> None:
-        overscan = _VIDEO_EDGE_OVERSCAN_PX
-        self._video_item.setPos(-overscan, -overscan)
-        self._video_item.setSize(
-            QSizeF(
-                self._output_w + overscan * 2,
-                self._output_h + overscan * 2,
-            )
-        )
+        # contain：视频帧等比完整放入输出画布，四周露出纯黑 letterbox，
+        # 与导出的 scale=decrease + pad=color=black 完全一致。
+        self._video_item.setPos(0, 0)
+        self._video_item.setSize(QSizeF(self._output_w, self._output_h))
+
+    def _update_letterbox_rect(self) -> None:
+        """同步黑边底矩形与背景可见性（导出 pad black 的预览对应物）。"""
+        source = self._background_source
+        show_letterbox = source.kind != "solid"
+        self._letterbox_rect.setVisible(show_letterbox)
+        if show_letterbox:
+            self._letterbox_rect.setRect(QRectF(0, 0, self._output_w, self._output_h))
 
     def _fit_scene_to_view(self) -> None:
         self.fitInView(
@@ -562,6 +593,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._background_pixmap_cache.clear()
         self._video_item.setVisible(source.kind == "video")
         self._image_item.setVisible(source.kind in {"image", "image_sequence"})
+        self._update_letterbox_rect()
         color = QColor(source.color)
         if source.kind == "solid" and color.isValid():
             self._scene.setBackgroundBrush(QBrush(color))
@@ -569,6 +601,12 @@ class PreviewGraphicsView(QGraphicsView):
             self._scene.setBackgroundBrush(QBrush(QColor(stage_bg())))
         self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
         self._refresh_background_image()
+        # setBackgroundBrush 不会自动调度重绘：纯色切换后必须显式失效
+        # 背景层，否则预览画面停留在旧底色，看起来像「没生效」。
+        self._scene.invalidate(
+            self._scene.sceneRect(),
+            QGraphicsScene.SceneLayer.BackgroundLayer,
+        )
 
     def _refresh_background_image(self) -> None:
         source = self._background_source
@@ -590,10 +628,17 @@ class PreviewGraphicsView(QGraphicsView):
         if pixmap.isNull():
             self._image_item.setPixmap(QPixmap())
             return
+        # 铺满（cover）= 等比放大裁掉超出（旧工程观感）；黑边（contain）= 等比
+        # 完整放入、四周露出纯黑底（与导出 scale=decrease + pad black 一致）。
+        aspect = (
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding
+            if source.image_fit == "cover"
+            else Qt.AspectRatioMode.KeepAspectRatio
+        )
         scaled = pixmap.scaled(
             self._output_w,
             self._output_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            aspect,
             Qt.TransformationMode.SmoothTransformation,
         )
         self._image_item.setPixmap(scaled)

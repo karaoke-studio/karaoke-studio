@@ -349,15 +349,37 @@ def render_subtitle_video(
     return job.output_path
 
 
-def _bands_filter_graph(job: RenderJob, duration_seconds: float, bands: list[tuple[int, int]]) -> str:
-    """方案 B 的 filter graph：打包输入 split → 各 band crop → 逐条 overlay 回原始 y。"""
-    offsets = _packed_offsets(bands)
-    n = len(bands)
-    bg = (
+def _background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
+    """背景缩放链（输出 label 为 ``[bg]``），预览与导出严格同语义。
+
+    - 视频背景固定 contain：等比缩小完整放入、不足处补纯黑边（与预览
+      ``KeepAspectRatio`` + 纯黑底一致）。
+    - 图片 / 图片序列按 ``image_fit``：``"cover"`` 等比放大铺满并居中裁掉
+      超出（与预览 ``KeepAspectRatioByExpanding`` 一致）；``"contain"`` 同视频。
+    - 纯色背景由 lavfi 直接生成目标尺寸，缩放链是无害的恒等变换。
+    """
+    source = _resolved_background(job)
+    cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
+    if cover:
+        return (
+            f"[1:v:0]scale={job.width}:{job.height}"
+            ":force_original_aspect_ratio=increase:force_divisible_by=2,"
+            f"crop={job.width}:{job.height},"
+            f"fps={job.fps},trim=duration={duration_seconds:.6f},"
+            "setpts=PTS-STARTPTS[bg];"
+        )
+    return (
         f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
     )
+
+
+def _bands_filter_graph(job: RenderJob, duration_seconds: float, bands: list[tuple[int, int]]) -> str:
+    """方案 B 的 filter graph：打包输入 split → 各 band crop → 逐条 overlay 回原始 y。"""
+    offsets = _packed_offsets(bands)
+    n = len(bands)
+    bg = _background_scale_chain(job, duration_seconds)
     ov = "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
     split = "[ov]split=" + str(n) + "".join(f"[p{i}]" for i in range(n)) + ";"
     crops = "".join(
@@ -405,11 +427,9 @@ def build_render_command(
         if strip is not None:
             overlay_y, pipe_h = strip
         filter_graph = (
-            f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
-            f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
-            "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
-            f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
+            _background_scale_chain(job, duration_seconds)
+            + "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
+            + f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
         )
     video_label = "[v]"
     if preview_image_path is not None:
@@ -499,6 +519,11 @@ def _validate_job(job: RenderJob) -> None:
         raise ProcessingError(f"独立音频不存在: {job.audio_path}")
     if job.width <= 0 or job.height <= 0:
         raise ProcessingError("输出分辨率无效。")
+    if job.width % 2 != 0 or job.height % 2 != 0:
+        raise ProcessingError(
+            f"输出宽度和高度必须是偶数（当前 {job.width}×{job.height}）："
+            "H.264/H.265 编码的 yuv420p 像素格式不支持奇数尺寸。"
+        )
     if job.fps <= 0:
         raise ProcessingError("输出 fps 无效。")
     if job.encoder_mode not in ENCODER_MODES:

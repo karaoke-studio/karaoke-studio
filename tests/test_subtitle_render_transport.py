@@ -205,8 +205,12 @@ def test_preview_surfaces_do_not_draw_frame_border(qapp):
     graphics = PreviewGraphicsView()
     try:
         assert "border: 0" in graphics.styleSheet()
-        assert graphics._video_item.pos().x() < 0
-        assert graphics._video_item.size().width() > graphics._output_w
+        # contain 语义：视频项与输出画布严格对齐（四周露出纯黑 letterbox，
+        # 对齐导出 pad black），不再使用 cover 时代的负偏移 overscan。
+        assert graphics._video_item.pos().x() == 0
+        assert graphics._video_item.pos().y() == 0
+        assert graphics._video_item.size().width() == graphics._output_w
+        assert graphics._video_item.size().height() == graphics._output_h
     finally:
         graphics.close()
         graphics.deleteLater()
@@ -2880,3 +2884,68 @@ def test_audio_clock_anchor_correction_deadband_resync_and_gain():
     assert corr < 0  # 向音频回拉，消除「字幕更快」
     # 收敛是单调缩小偏差：施加校正后，新 target 更接近音频
     assert abs((2_000 + corr) - 1_900) < abs(2_000 - 1_900)
+
+
+# ------------------------------------------------------------------ background scaling preview
+
+def test_preview_graphics_video_background_is_contain_with_black_bars(qapp):
+    """视频背景 contain：等比完整放入 + 纯黑 letterbox 底（对齐导出 pad black）。"""
+    from krok_helper.subtitle_render.frontend.preview_graphics import (
+        PreviewGraphicsView,
+    )
+    from krok_helper.subtitle_render.models import BackgroundSource
+
+    graphics = PreviewGraphicsView()
+    try:
+        graphics.set_background_source(
+            BackgroundSource(kind="video", path=r"C:\fake\bg.mp4")
+        )
+        assert (
+            graphics._video_item.aspectRatioMode()
+            == Qt.AspectRatioMode.KeepAspectRatio
+        )
+        assert graphics._letterbox_rect.isVisible()
+        rect = graphics._letterbox_rect.rect()
+        assert (int(rect.width()), int(rect.height())) == (1920, 1080)
+        # solid 背景不显示黑边底（场景底色即背景色）
+        graphics.set_background_source(
+            BackgroundSource(kind="solid", color="#123456")
+        )
+        assert not graphics._letterbox_rect.isVisible()
+    finally:
+        graphics.deleteLater()
+
+
+def test_preview_graphics_image_fit_cover_and_contain(qapp, tmp_path):
+    """图片背景按 image_fit 选择铺满（裁切）或黑边（完整放入）。"""
+    from PyQt6.QtGui import QPixmap
+    from krok_helper.subtitle_render.frontend.preview_graphics import (
+        PreviewGraphicsView,
+    )
+    from krok_helper.subtitle_render.models import BackgroundSource
+
+    image_path = tmp_path / "bg_4x3.png"
+    pixmap = QPixmap(800, 600)
+    pixmap.fill(QColor("#305070"))
+    assert pixmap.save(str(image_path))
+
+    graphics = PreviewGraphicsView()
+    try:
+        cover_source = BackgroundSource(
+            kind="image", path=str(image_path), image_fit="cover"
+        )
+        graphics.set_background_source(cover_source)
+        cover = graphics._image_item.pixmap()
+        # 4:3 图片铺满 16:9 输出：等比放大到 1920x1440（上下被裁）
+        assert (cover.width(), cover.height()) == (1920, 1440)
+
+        contain_source = BackgroundSource(
+            kind="image", path=str(image_path), image_fit="contain"
+        )
+        graphics.set_background_source(contain_source)
+        contain = graphics._image_item.pixmap()
+        # 完整放入：等比缩小到 1440x1080，左右黑边
+        assert (contain.width(), contain.height()) == (1440, 1080)
+        assert graphics._letterbox_rect.isVisible()
+    finally:
+        graphics.deleteLater()

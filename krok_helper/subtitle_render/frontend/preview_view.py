@@ -64,6 +64,7 @@ from krok_helper.subtitle_render.models import (
 
 
 PREVIEW_BG = QColor("#101010")
+"""模块历史导出：外部如有引用仍可用；背景黑边现在一律纯黑对齐导出。"""
 """画布默认深色背景（A7 接入视频后这里换成视频帧）。"""
 
 _DEFAULT_PREVIEW_FPS = 60
@@ -289,7 +290,9 @@ class PreviewCanvas(QWidget):
             solid = QColor(self._background_source.color)
             painter.fillRect(
                 self.rect(),
-                solid if self._background_source.kind == "solid" and solid.isValid() else PREVIEW_BG,
+                # 非 solid 背景时画布底是纯黑：视频/图片 contain 后的黑边与
+                # 导出 pad=...:color=black 严格一致（solid 才用背景色）。
+                solid if self._background_source.kind == "solid" and solid.isValid() else QColor(0, 0, 0),
             )
             target = self._paint_background_video(painter, logical_w, logical_h, dpr)
             if target is None:
@@ -387,12 +390,25 @@ class PreviewCanvas(QWidget):
     ) -> Optional[QImage]:
         if self._video_image is None or self._video_image.isNull():
             return None
-        phys_w = max(int(round(logical_w * dpr)), 1)
-        phys_h = max(int(round(logical_h * dpr)), 1)
+        canvas_x, canvas_y, canvas_w, canvas_h = self._fit_output_rect(
+            logical_w, logical_h
+        )
+        phys_w = max(int(round(canvas_w * dpr)), 1)
+        phys_h = max(int(round(canvas_h * dpr)), 1)
         # 缓存 DPR-aware 视频帧：物理尺寸 = 逻辑 × dpr。
         # 直接按物理像素缩放视频帧 → 物理分辨率渲染 → 不糊；最后用物理坐标
         # 绘制（painter.drawImage 在 dpr-aware image 上默认是逻辑坐标系，
         # 这里把 frame 自身也 setDevicePixelRatio 同步，绘制时就按逻辑落点）。
+        # 视频固定 contain（等比完整放入）；图片/图片序列按 image_fit 选
+        # 铺满（cover，等比放大裁掉超出）或黑边（contain）——与主预览、
+        # 导出同一套语义。
+        source = self._background_source
+        cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
+        aspect = (
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding
+            if cover
+            else Qt.AspectRatioMode.KeepAspectRatio
+        )
         dpr_key = int(round(dpr * 1000))
         cache_key = (
             int(self._video_image.cacheKey()),
@@ -404,7 +420,7 @@ class PreviewCanvas(QWidget):
         if frame is None or self._scaled_video_key != cache_key:
             frame = self._video_image.scaled(
                 QSize(phys_w, phys_h),
-                Qt.AspectRatioMode.KeepAspectRatio,
+                aspect,
                 Qt.TransformationMode.SmoothTransformation,
             )
             frame.setDevicePixelRatio(dpr)
@@ -422,13 +438,17 @@ class PreviewCanvas(QWidget):
         frame = self._scaled_background_video(logical_w, logical_h, dpr)
         if frame is None:
             return None
-        # 居中：用逻辑坐标
+        # 背景绘制与字幕共用同一个输出画布区域；cover 时帧向四周溢出，
+        # 由调用方的 clip 裁回画布。
+        canvas_x, canvas_y, canvas_w, canvas_h = self._fit_output_rect(
+            logical_w, logical_h
+        )
         logical_frame_w = int(round(frame.width() / dpr))
         logical_frame_h = int(round(frame.height() / dpr))
-        x = (logical_w - logical_frame_w) // 2
-        y = (logical_h - logical_frame_h) // 2
+        x = canvas_x + (canvas_w - logical_frame_w) // 2
+        y = canvas_y + (canvas_h - logical_frame_h) // 2
         painter.drawImage(x, y, frame)
-        return (x, y, logical_frame_w, logical_frame_h)
+        return (canvas_x, canvas_y, canvas_w, canvas_h)
 
     def _fit_output_rect(self, logical_w: int, logical_h: int) -> tuple[int, int, int, int]:
         output_aspect = self._output_width / self._output_height
