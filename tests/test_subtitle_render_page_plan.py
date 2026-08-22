@@ -547,3 +547,26 @@ def test_painter_schedule_and_native_ir_share_authoritative_page_plan():
     assert [line["section_index"] for line in render_ir["lines"]] == [0, 1, 1]
     assert [line["lane"] for line in render_ir["lines"]] == [1, 0, 1]
     assert app is not None
+
+
+def test_subtitle_loading_settings_round_trips_sug_export_offset_flag() -> None:
+    from krok_helper.subtitle_render.models import (
+        subtitle_loading_settings_from_dict,
+        subtitle_loading_settings_to_dict,
+    )
+
+    payload = subtitle_loading_settings_to_dict(
+        SubtitleLoadingSettings(apply_sug_export_offset=False)
+    )
+    assert payload["apply_sug_export_offset"] is False
+    assert subtitle_loading_settings_from_dict(payload) == SubtitleLoadingSettings(
+        apply_sug_export_offset=False
+    )
+
+    # 旧项目 / 旧 settings.json 没有该字段时回落默认值「应用」，
+    # 保证升级后既有行为不变。
+    legacy = dict(payload)
+    legacy.pop("apply_sug_export_offset")
+    assert (
+        subtitle_loading_settings_from_dict(legacy).apply_sug_export_offset is True
+    )

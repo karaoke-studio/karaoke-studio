@@ -30,22 +30,32 @@ from krok_helper.subtitle_render.models import (
 _DEFAULT_PLACEHOLDER_SINGER_NAMES = {"未命名", "Untitled"}
 
 
-def load_sug_timing_track(path: str | Path) -> TimingTrack:
-    """Load a ``.sug`` file and convert it to :class:`TimingTrack`."""
+def load_sug_timing_track(
+    path: str | Path, *, apply_export_offset: bool = True
+) -> TimingTrack:
+    """Load a ``.sug`` file and convert it to :class:`TimingTrack`.
+
+    ``apply_export_offset`` controls whether the project's ``global_offset_ms``
+    (SUG 的「导出偏移」) is added on top of the raw checkpoints, matching
+    :func:`timing_track_from_sug_project`.
+    """
 
     source_path = Path(path)
     project = SugProjectParser.load(str(source_path))
     extras = SugProjectParser.load_extras(str(source_path))
     tags = extras.get("nicokara_tags") if isinstance(extras, dict) else None
-    return timing_track_from_sug_project(project, nicokara_tags=tags)
+    return timing_track_from_sug_project(
+        project, nicokara_tags=tags, apply_export_offset=apply_export_offset
+    )
 
 
 def timing_track_from_sug_project(
     project: Any,
     *,
     nicokara_tags: Mapping[str, Any] | None = None,
+    apply_export_offset: bool = True,
 ) -> TimingTrack:
-    """Convert a StrangeUtaGame ``Project`` object to ``TimingTrack``.
+    """Convert a StrangeUtaGame ``Project`` object to :class:`TimingTrack`.
 
     The conversion is intentionally semantic rather than text-based:
 
@@ -54,9 +64,20 @@ def timing_track_from_sug_project(
     - SUG ``Ruby.parts`` become ``RubyAnnotation.reading_parts``.
     - SUG singers become both line singer labels and per-char role labels so
       the existing role styling path can address them.
+
+    ``.sug`` stores *raw* checkpoints; SUG adds ``global_offset_ms`` (导出偏移)
+    on top at preview/export time.  ``apply_export_offset=True`` bakes the same
+    additive shift into every timestamp (clamped at 0, exactly like SUG's
+    ``Character.set_offset``).  ``False`` keeps the raw timestamps instead.
+    Either way the offset never touches ``meta.offset_ms`` (LRC ``@Offset``)
+    or ``style.timing_offset_ms`` — those stay independent and cumulative.
     """
 
-    offset_ms = int(getattr(project, "global_offset_ms", 0) or 0)
+    offset_ms = (
+        int(getattr(project, "global_offset_ms", 0) or 0)
+        if apply_export_offset
+        else 0
+    )
     singers = list(getattr(project, "singers", []) or [])
     singer_by_id = {str(getattr(singer, "id")): singer for singer in singers}
     singer_index_by_id = {
@@ -144,8 +165,9 @@ def timing_track_from_sug_project(
             or _optional_text(getattr(metadata, "album", None)),
             tagging_by=_tag_text(tags, "tagging_by"),
             silence_ms=_tag_int(tags, "silence_ms"),
-            # All SUG checkpoints, line ends and ruby positions were already
-            # normalized with ``global_offset_ms`` while building this track.
+            # ``global_offset_ms``（若启用）已在构建本轨道时加算进所有检查点、
+            # 行尾与 ruby 位置；无论是否启用，这里都保持 0 —— LRC ``@Offset``
+            # 与 ``style.timing_offset_ms`` 是独立的叠加偏移，不能被覆盖。
             offset_ms=0,
             custom=_custom_tag_lines(tags.get("custom")),
         ),

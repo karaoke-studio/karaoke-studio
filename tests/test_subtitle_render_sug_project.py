@@ -171,6 +171,54 @@ def test_sug_adapter_bakes_global_offset_exactly_once_for_cpu_and_gpu(
     assert native_track["lines"][0]["chars"][0]["start_ms"] == expected_start_ms
 
 
+@pytest.mark.parametrize("offset_ms", [200, -200])
+def test_sug_adapter_apply_export_offset_false_keeps_raw_timestamps(
+    offset_ms: int,
+) -> None:
+    """关闭「读取 .sug 时应用导出偏移」后使用原始时间轴，且不写 meta 偏移。"""
+    project = _sample_sug_project()
+    project.global_offset_ms = offset_ms
+
+    track = timing_track_from_sug_project(project, apply_export_offset=False)
+
+    # 原始检查点未被叠加偏移；meta 的 @Offset 槽位保持空置。
+    assert track.lines[0].chars[0].start_ms == 1000
+    assert track.lines[0].end_ms == 1800
+    assert track.meta.offset_ms == 0
+    native_track = track_to_ir(track)
+    assert native_track["meta"]["offset_ms"] == 0
+    assert native_track["lines"][0]["chars"][0]["start_ms"] == 1000
+
+
+def test_sug_adapter_export_offset_is_cumulative_with_style_offset() -> None:
+    """导出偏移只加算进时间戳；LRC @Offset 槽位与样式「偏移」保持独立叠加。"""
+    project = _sample_sug_project()
+    project.global_offset_ms = 200
+
+    track = timing_track_from_sug_project(project)
+    style = Style(timing_offset_ms=150)
+
+    assert track.lines[0].chars[0].start_ms == 1200
+    assert track.meta.offset_ms == 0
+    # 播放 1350ms 采样到 1200ms 起始的字符：两层偏移各退各的，互不覆盖。
+    assert _effective_track_time_ms(track, 1350, style) == 1200
+
+
+def test_load_sug_timing_track_apply_export_offset_false_reads_raw(
+    tmp_path: Path,
+) -> None:
+    sug_path = tmp_path / "offset.sug"
+    SugProjectParser.save(_sample_sug_project(), str(sug_path))
+
+    applied = load_sug_timing_track(sug_path)
+    raw = load_sug_timing_track(sug_path, apply_export_offset=False)
+
+    assert applied.lines[0].chars[0].start_ms == 1050
+    assert raw.lines[0].chars[0].start_ms == 1000
+    assert raw.lines[0].end_ms == 1800
+    assert raw.meta.offset_ms == 0
+
+
 def test_load_sug_timing_track_reads_nicokara_extras(tmp_path: Path) -> None:
     sug_path = tmp_path / "song-with-tags.sug"
     SugProjectParser.save(

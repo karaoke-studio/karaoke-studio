@@ -868,7 +868,11 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
         root.setSpacing(14)
         title = StrongBodyLabel("加载字幕设置", self)
         root.addWidget(title)
-        hint = CaptionLabel("这些设置只控制字幕如何分段、分页，与渲染样式隔离。", self)
+        hint = CaptionLabel(
+            "这些设置控制字幕如何分段、分页，以及读取 .sug 项目时是否应用导出偏移；"
+            "与渲染样式隔离。",
+            self,
+        )
         hint.setWordWrap(True)
         root.addWidget(hint)
 
@@ -924,6 +928,15 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             "只有 1 行或 2 行的尾页会分别使用 1 行或 2 行默认布局。基础行数仍用于限制每页最多行数。"
         )
         form.addRow("", self._actual_rows_layout)
+        self._sug_offset_check = CheckBox("读取 .sug 时应用导出偏移", self)
+        self._sug_offset_check.setToolTip(
+            "SUG 把「导出偏移」单独保存在 .sug 文件里，时间戳本身是未加偏移的原始值。"
+            "启用后读取 .sug 时自动把导出偏移叠加到每个时间戳上（与 SUG 导出一致，"
+            "负偏移不会早于 0 秒）；关闭则使用原始时间轴。该偏移是叠加式的：不影响 "
+            "LRC 的 @Offset 标签，也不影响渲染属性里时间轴的「偏移」字段。"
+            "保存后会重新读取字幕文件并刷新段落和页面；对 .lrc 字幕源无影响。"
+        )
+        form.addRow("", self._sug_offset_check)
         root.addLayout(form)
 
         buttons = QHBoxLayout()
@@ -951,6 +964,7 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
         self._blank_enabled.setChecked(settings.blank_line_section_enabled)
         self._rows_spin.setValue(settings.rows_per_page)
         self._actual_rows_layout.setChecked(settings.allocate_layout_by_actual_rows)
+        self._sug_offset_check.setChecked(settings.apply_sug_export_offset)
 
     def _current_values(self) -> SubtitleLoadingSettings:
         return SubtitleLoadingSettings(
@@ -959,6 +973,7 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             blank_line_section_enabled=self._blank_enabled.isChecked(),
             rows_per_page=self._rows_spin.value(),
             allocate_layout_by_actual_rows=self._actual_rows_layout.isChecked(),
+            apply_sug_export_offset=self._sug_offset_check.isChecked(),
         )
 
     def _on_mode_changed(self, _index: int) -> None:
@@ -4605,7 +4620,12 @@ class SubtitleRenderWindow(QWidget):
     def load_from_sug(self, path: Path) -> Optional[TimingTrack]:
         """加载 SUG 项目文件，直接读取打轴数据而不导出中间 LRC。"""
         try:
-            track = load_sug_timing_track(path)
+            track = load_sug_timing_track(
+                path,
+                apply_export_offset=(
+                    self._subtitle_loading_defaults.apply_sug_export_offset
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
             fluent_error(
                 self, "加载字幕失败", f"无法解析 SUG 项目：\n{path}\n\n错误：{exc}"
@@ -4624,7 +4644,11 @@ class SubtitleRenderWindow(QWidget):
         """加载嵌入式 SUG 当前项目对象，供主工作流第 4 步 → 第 5 步接线使用。"""
         try:
             track = timing_track_from_sug_project(
-                project, nicokara_tags=nicokara_tags
+                project,
+                nicokara_tags=nicokara_tags,
+                apply_export_offset=(
+                    self._subtitle_loading_defaults.apply_sug_export_offset
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             fluent_error(
@@ -4826,7 +4850,29 @@ class SubtitleRenderWindow(QWidget):
                 self._source_reload_retries.pop(key, None)
                 self._sync_subtitle_source_watcher()
                 return
-            candidate = self._load_timing_track_file(path)
+            # 与手动刷新同口径：按所属轨道的加载设置决定是否应用 .sug 导出偏移。
+            # 同一路径被多个源引用时沿用现有「单次解析」语义，取首个所属轨道。
+            owner_track = (
+                self._timing_track
+                if (
+                    self._watch_primary_subtitle_source
+                    and self._subtitle_path is not None
+                    and self._subtitle_source_key(self._subtitle_path) == key
+                    and self._timing_track is not None
+                )
+                else next(
+                    (
+                        source.track
+                        for source in self._extra_sources
+                        if self._subtitle_source_key(source.path) == key
+                    ),
+                    None,
+                )
+            )
+            candidate = self._load_timing_track_file(
+                path,
+                apply_sug_export_offset=self._sug_export_offset_for_track(owner_track),
+            )
             after = path.stat()
             if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
                 raise OSError("字幕文件仍在写入")
@@ -5676,8 +5722,19 @@ class SubtitleRenderWindow(QWidget):
                 path = Path(path_text)
                 if not path.is_file():
                     continue
+                # 副源在项目打开时按磁盘文件重新解析；导出偏移开关沿用该项目
+                # 保存时该源的加载设置（旧项目快照没有该字段时按默认值应用）。
+                apply_sug_offset = (
+                    self._subtitle_loading_defaults.apply_sug_export_offset
+                )
+                if str(item.get("loading_settings_mode") or "") == "custom":
+                    apply_sug_offset = subtitle_loading_settings_from_dict(
+                        item.get("loading_settings")
+                    ).apply_sug_export_offset
                 try:
-                    track = self._load_timing_track_file(path)
+                    track = self._load_timing_track_file(
+                        path, apply_sug_export_offset=apply_sug_offset
+                    )
                 except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
                     continue
                 self._set_subtitle_source_baseline(path, track)
@@ -6303,6 +6360,12 @@ class SubtitleRenderWindow(QWidget):
             return track.loading_settings
         return self._subtitle_loading_defaults
 
+    def _sug_export_offset_for_track(self, track: Optional[TimingTrack]) -> bool:
+        """该轨道重新解析 ``.sug`` 时是否应用导出偏移（跟随其加载设置）。"""
+        if track is None:
+            return self._subtitle_loading_defaults.apply_sug_export_offset
+        return self._effective_loading_settings(track).apply_sug_export_offset
+
     def _source_path_for_track_index(self, track_index: int) -> Optional[Path]:
         if track_index == 0:
             return self._subtitle_path
@@ -6440,7 +6503,9 @@ class SubtitleRenderWindow(QWidget):
         path = self._source_path_for_track_index(track_index)
         parsed_source: Optional[TimingTrack] = None
         if path is not None and path.is_file():
-            parsed_source = self._load_timing_track_file(path)
+            parsed_source = self._load_timing_track_file(
+                path, apply_sug_export_offset=settings.apply_sug_export_offset
+            )
             state = self._source_watch_states.get(self._subtitle_source_key(path))
             baseline = state.baseline if state is not None else current
             merge = merge_reloaded_track(
@@ -6554,7 +6619,7 @@ class SubtitleRenderWindow(QWidget):
         ):
             InfoBar.success(
                 title="字幕已刷新",
-                content="已按保存的加载设置重新生成段落、页面和按行数布局。",
+                content="已按保存的加载设置重新读取字幕，并生成段落、页面和按行数布局。",
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=3000,
@@ -6615,7 +6680,12 @@ class SubtitleRenderWindow(QWidget):
             return
         path = Path(path_str)
         try:
-            track = self._load_timing_track_file(path)
+            track = self._load_timing_track_file(
+                path,
+                apply_sug_export_offset=(
+                    self._subtitle_loading_defaults.apply_sug_export_offset
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
             fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
@@ -6644,10 +6714,14 @@ class SubtitleRenderWindow(QWidget):
         self._sync_subtitle_source_watcher()
         self._mark_project_dirty()
 
-    @staticmethod
-    def _load_timing_track_file(path: Path) -> TimingTrack:
+    def _load_timing_track_file(
+        self, path: Path, *, apply_sug_export_offset: bool = True
+    ) -> TimingTrack:
+        """按需解析字幕文件；``.sug`` 的导出偏移开关由调用方的加载设置决定。"""
         if path.suffix.lower() == ".sug":
-            return load_sug_timing_track(path)
+            return load_sug_timing_track(
+                path, apply_export_offset=apply_sug_export_offset
+            )
         return load_nicokara_lrc(path)
 
     def _on_source_remove_requested(self, index: int) -> None:
@@ -6701,7 +6775,12 @@ class SubtitleRenderWindow(QWidget):
         if not 0 <= extra_index < len(self._extra_sources):
             return
         try:
-            track = self._load_timing_track_file(path)
+            track = self._load_timing_track_file(
+                path,
+                apply_sug_export_offset=(
+                    self._subtitle_loading_defaults.apply_sug_export_offset
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
             fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"

@@ -175,6 +175,15 @@ def test_loading_settings_card_is_isolated_and_fully_described(qapp):
     assert dialog._actual_rows_layout.text() == "根据实际行数分配布局"
     assert dialog._actual_rows_layout.toolTip()
     assert not dialog._actual_rows_layout.isChecked()
+    assert dialog._sug_offset_check.text() == "读取 .sug 时应用导出偏移"
+    assert dialog._sug_offset_check.toolTip()
+    assert dialog._sug_offset_check.isChecked()
+    dialog._sug_offset_check.setChecked(False)
+    assert dialog.result_value() == (
+        "global",
+        SubtitleLoadingSettings(apply_sug_export_offset=False),
+    )
+    dialog._sug_offset_check.setChecked(True)
     assert dialog._mode_combo.toolTip()
     assert dialog.result_value() == ("global", defaults)
     dialog.deleteLater()
