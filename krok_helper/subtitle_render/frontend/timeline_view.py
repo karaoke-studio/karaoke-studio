@@ -52,7 +52,7 @@ _HANDLE_STRIP_H = 16
 """轨道与缩放条之间的句子显示/隐藏时间把手条高度。"""
 
 _HANDLE_MIN_W = 12
-"""余量为零时虚线把手的最小可抓宽度（像素）。"""
+"""虚线把手的最小鼠标命中宽度（像素）；不改变实际绘制宽度。"""
 
 _LANE_MIN_H = 20
 _LANE_MAX_H = 44
@@ -292,7 +292,8 @@ class TrackTimelineView(QWidget):
         """用户期望的比例尺；生效值随总时长夹取（时长后到位时恢复期望值）。"""
         self._drag: Optional[tuple] = None
         """进行中的拖动：("scrub",) / ("pan", 抓取点相对视口起点的毫秒差) /
-        ("zoom_left",) / ("zoom_right",)。拖动期间暂停播放头自动翻页。"""
+        ("lead|tail", 轨道, 句块, 旧覆盖, 拖动起点毫秒) / ("zoom_left",) /
+        ("zoom_right",)。拖动期间暂停播放头自动翻页。"""
         self._margin_editor: Optional[CardWidget] = None
         self._margin_edit: Optional[LineEdit] = None
         self._margin_editor_context: Optional[tuple[int, LineBlock, bool, tuple]] = None
@@ -543,18 +544,26 @@ class TrackTimelineView(QWidget):
 
         left_x0 = self._x_for_ms(show_ms)
         left_x1 = self._x_for_ms(block.start_ms)
-        if left_x1 - left_x0 < _HANDLE_MIN_W:
-            left_x0 = left_x1 - _HANDLE_MIN_W
         right_x0 = self._x_for_ms(block.end_ms)
         right_x1 = self._x_for_ms(hide_ms)
-        if right_x1 - right_x0 < _HANDLE_MIN_W:
-            right_x1 = right_x0 + _HANDLE_MIN_W
         return (
             QRectF(left_x0, top, left_x1 - left_x0, height),
             QRectF(right_x0, top, right_x1 - right_x0, height),
             lane_index,
             block,
         )
+
+    @staticmethod
+    def _handle_hit_rect(rect: QRectF, *, entry: bool) -> QRectF:
+        """Return a forgiving hit target without falsifying the painted time span."""
+
+        hit = QRectF(rect)
+        if hit.width() < _HANDLE_MIN_W:
+            if entry:
+                hit.setLeft(hit.right() - _HANDLE_MIN_W)
+            else:
+                hit.setRight(hit.left() + _HANDLE_MIN_W)
+        return hit.adjusted(-3, -3, 3, 3)
 
     def _apply_lead_drag(self, lane_index: int, block: LineBlock, x: float) -> None:
         """拖左把手：改「上屏时刻」覆盖，不晚于开始走字。"""
@@ -730,6 +739,7 @@ class TrackTimelineView(QWidget):
         painter.drawPixmap(0, 0, self._lanes_pixmap)
         self._paint_selection(painter)
         self._paint_playhead(painter)
+        self._paint_drag_badge(painter)
         painter.end()
 
     def _paint_empty_hint(self, painter: QPainter) -> None:
@@ -986,6 +996,56 @@ class TrackTimelineView(QWidget):
             QPointF(x, 1.0), QPointF(x, float(self.height() - _ZOOMBAR_H))
         )
 
+    def _drag_badge_content(self) -> Optional[tuple[str, str, int]]:
+        """Return the SUG-style delta and absolute time for a margin drag."""
+
+        if self._drag is None or self._drag[0] not in ("lead", "tail"):
+            return None
+        mode, lane_index, block, _old_values, anchor_ms = self._drag
+        show_ms, hide_ms = self._selected_window(lane_index, block)
+        current_ms = show_ms if mode == "lead" else hide_ms
+        delta = int(current_ms) - int(anchor_ms)
+        sign = "+" if delta >= 0 else "−"
+        return (
+            f"Δ {sign}{abs(delta)} ms",
+            f"→ {_format_precise_ms(current_ms)}",
+            int(current_ms),
+        )
+
+    def _paint_drag_badge(self, painter: QPainter) -> None:
+        """Paint the live margin adjustment beside its current time boundary."""
+
+        content = self._drag_badge_content()
+        if content is None:
+            return
+        line1, line2, current_ms = content
+        font = QFont("Microsoft YaHei UI")
+        font.setPointSizeF(8.0)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+        pad = 5
+        line_h = metrics.height()
+        box_w = max(
+            metrics.horizontalAdvance(line1),
+            metrics.horizontalAdvance(line2),
+        ) + pad * 2
+        box_h = line_h * 2 + pad * 2
+        x = self._x_for_ms(current_ms) + 8
+        y = self._handle_strip_rect().top() - box_h - 6
+        x = max(2.0, min(x, float(self.width() - box_w - 2)))
+        y = max(float(_RULER_H + 2), y)
+        badge = QRectF(x, y, float(box_w), float(box_h))
+
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 180))
+        painter.drawRoundedRect(badge, 4.0, 4.0)
+        painter.setPen(QColor(palette().accent_primary))
+        baseline = y + pad + metrics.ascent()
+        painter.drawText(QPointF(x + pad, baseline), line1)
+        painter.drawText(QPointF(x + pad, baseline + line_h), line2)
+        painter.restore()
+
     # ------------------------------------------------------------------ mouse
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 — Qt override
@@ -1012,12 +1072,16 @@ class TrackTimelineView(QWidget):
             left_rect, right_rect, lane_index, block = handles
             # 按下时记住旧覆盖值，松手时作为一次可撤销的编辑上报
             old_values = self._line_override_values(lane_index, block.line_index)
-            if left_rect.adjusted(-3, -3, 3, 3).contains(pos):
-                self._drag = ("lead", lane_index, block, old_values)
+            if self._handle_hit_rect(left_rect, entry=True).contains(pos):
+                show_ms, _hide_ms = self._selected_window(lane_index, block)
+                self._drag = ("lead", lane_index, block, old_values, show_ms)
+                hide_fluent_tooltip(parent=self)
                 event.accept()
                 return
-            if right_rect.adjusted(-3, -3, 3, 3).contains(pos):
-                self._drag = ("tail", lane_index, block, old_values)
+            if self._handle_hit_rect(right_rect, entry=False).contains(pos):
+                _show_ms, hide_ms = self._selected_window(lane_index, block)
+                self._drag = ("tail", lane_index, block, old_values, hide_ms)
+                hide_fluent_tooltip(parent=self)
                 event.accept()
                 return
         if self._ruler_rect().contains(pos):
@@ -1048,7 +1112,7 @@ class TrackTimelineView(QWidget):
             return
         pos = event.position()
         left_rect, right_rect, lane_index, block = handles
-        if left_rect.adjusted(-3, -3, 3, 3).contains(pos):
+        if self._handle_hit_rect(left_rect, entry=True).contains(pos):
             self._drag = None
             hide_fluent_tooltip(parent=self)
             self._show_margin_editor(
@@ -1059,7 +1123,7 @@ class TrackTimelineView(QWidget):
             )
             event.accept()
             return
-        if right_rect.adjusted(-3, -3, 3, 3).contains(pos):
+        if self._handle_hit_rect(right_rect, entry=False).contains(pos):
             self._drag = None
             hide_fluent_tooltip(parent=self)
             self._show_margin_editor(
@@ -1126,8 +1190,8 @@ class TrackTimelineView(QWidget):
         handles = self._handle_rects()
         if handles is not None:
             left_rect, right_rect, lane_index, block = handles
-            left_hovered = left_rect.adjusted(-3, -3, 3, 3).contains(pos)
-            right_hovered = right_rect.adjusted(-3, -3, 3, 3).contains(pos)
+            left_hovered = self._handle_hit_rect(left_rect, entry=True).contains(pos)
+            right_hovered = self._handle_hit_rect(right_rect, entry=False).contains(pos)
             if left_hovered or right_hovered:
                 self.setCursor(Qt.CursorShape.SizeHorCursor)
                 tooltip = self._animation_tooltip(
@@ -1174,13 +1238,18 @@ class TrackTimelineView(QWidget):
             margin_ms = max(block.start_ms - show_ms, 0)
             duration_ms = min(max(int(effective.entry_lead_ms), 0), margin_ms)
             phase = "入场"
+            range_start, range_end = show_ms, block.start_ms
         else:
             animation = effective.exit_anim
             label = _EXIT_ANIMATION_LABELS.get(animation, animation)
             margin_ms = max(hide_ms - block.end_ms, 0)
             duration_ms = min(max(int(effective.exit_fade_ms), 0), margin_ms)
             phase = "退场"
-        head = f"{phase}（{margin_ms} ms）"
+            range_start, range_end = block.end_ms, hide_ms
+        head = (
+            f"{phase}覆盖：{_format_precise_ms(range_start)} → "
+            f"{_format_precise_ms(range_end)}（{margin_ms} ms）"
+        )
         if animation == "none":
             return f"{head}：{label}"
         return f"{head}：{label}（{duration_ms} ms）"
@@ -1194,7 +1263,7 @@ class TrackTimelineView(QWidget):
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 — Qt override
         if self._drag is not None and self._drag[0] in ("lead", "tail"):
             # 拖动结束才通知宿主刷新预览，避免拖动中反复重渲染
-            _mode, lane_index, block, old_values = self._drag
+            _mode, lane_index, block, old_values, _anchor_ms = self._drag
             new_values = self._line_override_values(lane_index, block.line_index)
             if new_values != old_values:
                 self.displayWindowEdited.emit(

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.frontend.timeline_view import (  # noqa: E402
     TrackTimelineView,
+    _format_precise_ms,
     build_lanes,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
@@ -365,6 +366,27 @@ def test_click_block_selects_and_click_empty_deselects(qapp) -> None:
     assert widget._handle_rects() is None
 
 
+def test_short_handle_paints_at_exact_time_but_keeps_wide_hit_target(qapp) -> None:
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", _make_track())])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (990, 2_610)}])
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1_650), lane_rect.center().y())
+    left_rect, right_rect, _lane_index, _block = widget._handle_rects()
+
+    assert left_rect.left() == pytest.approx(widget._x_for_ms(990), abs=0.01)
+    assert left_rect.right() == pytest.approx(widget._x_for_ms(1_000), abs=0.01)
+    assert right_rect.left() == pytest.approx(widget._x_for_ms(2_600), abs=0.01)
+    assert right_rect.right() == pytest.approx(widget._x_for_ms(2_610), abs=0.01)
+    assert left_rect.width() < 12
+    assert right_rect.width() < 12
+    assert widget._handle_hit_rect(left_rect, entry=True).width() >= 18
+    assert widget._handle_hit_rect(right_rect, entry=False).width() >= 18
+
+
 def test_handle_hover_shows_effective_animation_name_and_duration(
     qapp, monkeypatch
 ) -> None:
@@ -395,7 +417,10 @@ def test_handle_hover_shows_effective_animation_name_and_duration(
     _move(widget, right_rect.center().x(), right_rect.center().y())
 
     # 括号里的第一个时长是虚线框本身（上屏 500 → 走字 1000、2600 → 消失 3200）
-    assert shown == ["入场（500 ms）：滑入（500 ms）", "退场（600 ms）：逐字淡出（600 ms）"]
+    assert shown == [
+        "入场覆盖：00:00.500 → 00:01.000（500 ms）：滑入（500 ms）",
+        "退场覆盖：00:02.600 → 00:03.200（600 ms）：逐字淡出（600 ms）",
+    ]
     assert all("本句" not in text and "全局" not in text for text in shown)
 
 
@@ -445,7 +470,10 @@ def test_handle_hover_uses_global_animation_when_line_has_no_override(
     _move(widget, left_rect.center().x(), left_rect.center().y())
     _move(widget, right_rect.center().x(), right_rect.center().y())
 
-    assert shown == ["入场（500 ms）：淡入（300 ms）", "退场（600 ms）：滑出（500 ms）"]
+    assert shown == [
+        "入场覆盖：00:00.500 → 00:01.000（500 ms）：淡入（300 ms）",
+        "退场覆盖：00:02.600 → 00:03.200（600 ms）：滑出（500 ms）",
+    ]
 
 
 def test_drag_left_handle_writes_show_override(qapp) -> None:
@@ -469,6 +497,12 @@ def test_drag_left_handle_writes_show_override(qapp) -> None:
     _move(widget, widget._x_for_ms(300), left_rect.center().y())
     assert track.lines[0].display_start_override_ms == pytest.approx(300, abs=30)
     assert widget._windows[0][0][0] == track.lines[0].display_start_override_ms
+    current = track.lines[0].display_start_override_ms
+    assert widget._drag_badge_content() == (
+        f"Δ −{800 - current} ms",
+        f"→ {_format_precise_ms(current)}",
+        current,
+    )
     assert edits == []  # 拖动中不通知
 
     _release(widget, widget._x_for_ms(300), left_rect.center().y())

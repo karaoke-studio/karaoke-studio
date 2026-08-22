@@ -35,6 +35,9 @@ MAX_SHOW_TIME_MS = 5_999_990
 MIN_AUTO_ENTRY_ANIMATION_MS = 250
 """自动压缩非零入场动画时采用的人类视觉反应时间下限。"""
 
+MIN_AUTO_EXIT_ANIMATION_MS = 100
+"""自动压缩非零退场动画时保留的最小可见时长。"""
+
 
 @dataclass(frozen=True)
 class ShowTimePage:
@@ -82,6 +85,7 @@ def compute_show_times(
     protect_ms: int,
     overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]] = None,
     auto_entry_reserve_ms: Optional[Sequence[int]] = None,
+    auto_exit_reserve_ms: Optional[Sequence[int]] = None,
     entry_animation_ms: Optional[Sequence[int]] = None,
     exit_animation_ms: Optional[Sequence[int]] = None,
     adjust_same_position: bool = True,
@@ -101,8 +105,8 @@ def compute_show_times(
     改后的值——所以覆盖必须参与本趟计算（ForceBottom 判定、下行入场、同位挤压），
     而不是等算完再往结果上盖。被覆盖的那一侧不再参与挤压。
 
-    ``auto_entry_reserve_ms`` 是自动压缩后必须保留在走字开始之前的入场动画时间；
-    手工上屏覆盖不受该下限约束。退场不保留自动下限，可以压缩到走字结束即消失。
+    ``auto_entry_reserve_ms`` / ``auto_exit_reserve_ms`` 是自动压缩后必须保留的
+    入场/退场动画时间；对应一侧有手工显示时刻覆盖时不受自动下限约束。
 
     ``entry_animation_ms`` / ``exit_animation_ms`` 用于区分稳定绘制与纯动画时段：
     自动压缩优先消除稳定绘制的跨页重叠，入场和退场动画彼此重叠是允许的。
@@ -134,6 +138,7 @@ def compute_show_times(
         protect=max(int(protect_ms), 0),
         overrides=overrides,
         auto_entry_reserve_ms=auto_entry_reserve_ms,
+        auto_exit_reserve_ms=auto_exit_reserve_ms,
         entry_animation_ms=entry_animation_ms,
         exit_animation_ms=exit_animation_ms,
         adjust_same_position=bool(adjust_same_position),
@@ -160,6 +165,7 @@ class _Solver:
         protect: int,
         overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]],
         auto_entry_reserve_ms: Optional[Sequence[int]],
+        auto_exit_reserve_ms: Optional[Sequence[int]],
         entry_animation_ms: Optional[Sequence[int]],
         exit_animation_ms: Optional[Sequence[int]],
         adjust_same_position: bool,
@@ -206,6 +212,7 @@ class _Solver:
         self.start_override: list[Optional[int]] = [None] * total
         self.end_override: list[Optional[int]] = [None] * total
         self.auto_entry_reserve_ms = [0] * total
+        self.auto_exit_reserve_ms = [0] * total
         self.entry_animation_ms = [0] * total
         self.exit_animation_ms = [0] * total
         if overrides is not None:
@@ -220,6 +227,11 @@ class _Solver:
                 if index >= total:
                     break
                 self.auto_entry_reserve_ms[index] = max(int(duration), 0)
+        if auto_exit_reserve_ms is not None:
+            for index, duration in enumerate(auto_exit_reserve_ms):
+                if index >= total:
+                    break
+                self.auto_exit_reserve_ms[index] = max(int(duration), 0)
         for target, source in (
             (self.entry_animation_ms, entry_animation_ms),
             (self.exit_animation_ms, exit_animation_ms),
@@ -379,7 +391,10 @@ class _Solver:
             )
             self.out.starts[line] = min(self.out.starts[line], latest_start)
         if self.end_override[line] is None:
-            self.out.ends[line] = max(self.out.ends[line], self.ends[line])
+            self.out.ends[line] = max(
+                self.out.ends[line],
+                self.ends[line] + self.auto_exit_reserve_ms[line],
+            )
 
     def _stable_start(self, line: int) -> int:
         margin = max(self.begins[line] - self.out.starts[line], 0)
@@ -690,6 +705,7 @@ class _Solver:
                 protect_ms=self.protect,
                 overrides=list(zip(self.start_override, self.end_override)),
                 auto_entry_reserve_ms=self.auto_entry_reserve_ms,
+                auto_exit_reserve_ms=self.auto_exit_reserve_ms,
                 adjust_same_position=False,
                 dynamic_single_page_reflow=self.dynamic_single_page_reflow,
                 independent_line_entry=self.independent_line_entry,
@@ -774,8 +790,8 @@ class _Solver:
                 self._preserve_page_entry_order(entry_order_reference)
         # Automatic squeezing may consume PreTime/PostTime completely, but it
         # must never consume the wipe interval itself.  Non-zero automatic
-        # entry animation also retains its requested visual reaction reserve;
-        # exit animation may shrink to zero.  Manual overrides remain
+        # entry and exit animations also retain their requested automatic
+        # visual-reaction reserves.  Manual overrides remain
         # authoritative on the side explicitly edited by the user.
         for line in range(len(starts)):
             self._enforce_auto_wipe_bounds(line)

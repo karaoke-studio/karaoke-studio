@@ -191,7 +191,7 @@ def test_same_position_squeeze_never_cuts_into_either_wipe_interval():
     assert out.ends[0] > out.starts[2]
 
 
-def test_auto_squeeze_keeps_250ms_entry_but_allows_zero_exit():
+def test_auto_squeeze_keeps_entry_and_exit_animation_minimums():
     begins = [10_000, 10_500, 12_100, 12_500]
     ends = [12_000, 12_400, 13_500, 14_000]
     out = _run(
@@ -199,11 +199,28 @@ def test_auto_squeeze_keeps_250ms_entry_but_allows_zero_exit():
         ends,
         _pages((0, 2, 0, 1), (0, 2, 2, 3)),
         auto_entry_reserve_ms=[250, 250, 250, 250],
+        auto_exit_reserve_ms=[100, 100, 100, 100],
     )
 
     assert out.starts[2] == begins[2] - 250
-    assert out.ends[0] == ends[0]
+    assert out.ends[0] == ends[0] + 100
     assert out.ends[0] > out.starts[2]
+
+
+def test_manual_show_end_can_reduce_exit_reserve_below_100ms():
+    begins = [10_000, 10_500, 12_100, 12_500]
+    ends = [12_000, 12_400, 13_500, 14_000]
+    overrides = [(None, 12_050), (None, None), (None, None), (None, None)]
+    out = _run(
+        begins,
+        ends,
+        _pages((0, 2, 0, 1), (0, 2, 2, 3)),
+        overrides=overrides,
+        auto_entry_reserve_ms=[250, 250, 250, 250],
+        auto_exit_reserve_ms=[100, 100, 100, 100],
+    )
+
+    assert out.ends[0] == 12_050
 
 
 def test_manual_show_start_can_reduce_entry_reserve_below_250ms():

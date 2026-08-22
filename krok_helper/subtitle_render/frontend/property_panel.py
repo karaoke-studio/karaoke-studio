@@ -7417,7 +7417,7 @@ class PropertyPanel(QWidget):
             "退场时间，不会截断任何走字区间或改变页内上屏顺序。自动压缩可以"
             "缩短动画时段：不会把非零入场动画自动压到"
             " 250 ms 以下；若动画时长或上屏时间由用户手工设定，则保留用户值；"
-            "退场动画可以缩短为 0 ms。入场动画结束前和退场动画开始后的绘制"
+            "非零退场动画自动压缩时至少保留 100 ms。入场动画结束前和退场动画开始后的绘制"
             "不启用碰撞箱。时间压缩仍无法消除冲突时，移动后进入的整页字幕。"
             "避让优先吸附到已有布局行位，再沿布局方向寻找画布"
             "内空间，跨页空隙采用被重叠页面布局的行间距；放不下时改向反方向寻找；"
@@ -7840,10 +7840,9 @@ class PropertyPanel(QWidget):
         sync_row.setContentsMargins(0, 0, 0, 0)
         self._sync_entry_check = CheckBox("同步入场", section)
         self._sync_entry_check.setToolTip(
-            "只把同一页内较晚上屏、且未手工调整上屏时间的 T 尽量向前延长，"
-            "目标是接近本页最早的上屏时间。\n"
-            "延伸到前方仍在显示且像素相撞的行时便停在碰撞边界；"
-            "允许各个 T 最终不同步。已经更早上屏的 T 绝不会被向后压缩。"
+            "同一页内未手工调整上屏时间的 T 会先尽量延长到本页最早边界。\n"
+            "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩自己入场的"
+            "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
         )
         self._sync_entry_check.toggled.connect(
             lambda checked: self._update_style(sync_entry=checked)
@@ -7852,10 +7851,9 @@ class PropertyPanel(QWidget):
 
         self._sync_ending_check = CheckBox("同步退场", section)
         self._sync_ending_check.setToolTip(
-            "只把同一页内较早消失、且未手工调整消失时间的 T 尽量向后延长，"
-            "目标是接近本页最晚的消失时间。\n"
-            "延伸到后方已经入场且像素相撞的行时便停在碰撞边界；"
-            "允许各个 T 最终不同步。已经更晚消失的 T 绝不会被向前压缩。"
+            "同一页内未手工调整消失时间的 T 会先尽量延长到本页最晚边界。\n"
+            "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩后句入场的"
+            "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
         )
         self._sync_ending_check.toggled.connect(
             lambda checked: self._update_style(sync_ending=checked)

@@ -219,7 +219,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     assert "不会截断任何走字区间" in overlap_tip
     assert "不会把非零入场动画自动压到 250 ms 以下" in overlap_tip
     assert "动画时长或上屏时间由用户手工设定" in overlap_tip
-    assert "退场动画可以缩短为 0 ms" in overlap_tip
+    assert "非零退场动画自动压缩时至少保留 100 ms" in overlap_tip
     assert "保持位置直到本页播放完毕" in overlap_tip
     assert "采用被重叠页面布局的行间距" in overlap_tip
     assert "放不下时改向反方向寻找" in overlap_tip

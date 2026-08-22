@@ -148,6 +148,7 @@ def visible_display_lines(
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
     auto_entry_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
+    auto_exit_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
     entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     exit_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     adjust_same_position: bool = True,
@@ -172,6 +173,7 @@ def visible_display_lines(
         bottom_align_of=bottom_align_of,
         vertical_position_of=vertical_position_of,
         auto_entry_reserve_ms_of=auto_entry_reserve_ms_of,
+        auto_exit_reserve_ms_of=auto_exit_reserve_ms_of,
         entry_animation_ms_of=entry_animation_ms_of,
         exit_animation_ms_of=exit_animation_ms_of,
         adjust_same_position=adjust_same_position,
@@ -199,6 +201,7 @@ def compute_display_lines(
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
     auto_entry_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
+    auto_exit_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
     entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     exit_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     adjust_same_position: bool = True,
@@ -218,10 +221,11 @@ def compute_display_lines(
 
     ``protect_ms`` 传 0 表示按 N3 规则自动推导（``min(PreTime, PostTime) / 2``）。
 
-    ``sync_entry`` / ``sync_ending`` 是页内各个自动 T 的单向延长候选；带实际
-    画布的渲染路径会以向前/向后实际撞到的行作为边界，允许部分同步，但绝不
-    缩短任何行原有的显示窗口。``section_ending_mode`` 仍是段落级清屏选项。
-    逐行手动覆盖（字幕轨道拖动）优先于全部自动结果。
+    ``sync_entry`` / ``sync_ending`` 是页内各个自动 T 的最长单向延长候选；
+    带实际画布的渲染路径随后按「先压前句退场、再压后句入场」逐对消除碰撞，
+    不会把一行的压缩结果传播给未参与碰撞的页内兄弟行。
+    ``section_ending_mode`` 仍是段落级清屏选项；逐行手动覆盖（字幕轨道拖动）
+    优先于全部自动结果。
     """
     render_lines = [line for line in track.lines if not line.is_blank and line.chars]
     if not render_lines:
@@ -267,6 +271,12 @@ def compute_display_lines(
         auto_entry_reserve_ms=[
             max(int(auto_entry_reserve_ms_of(line)), 0)
             if auto_entry_reserve_ms_of is not None
+            else 0
+            for line in render_lines
+        ],
+        auto_exit_reserve_ms=[
+            max(int(auto_exit_reserve_ms_of(line)), 0)
+            if auto_exit_reserve_ms_of is not None
             else 0
             for line in render_lines
         ],

@@ -741,8 +741,10 @@ def test_build_render_ir_uses_compressed_entry_and_exit_animation_windows():
         "lines"
     ]
 
-    assert lines[0]["display_end_ms"] == ends[0]
-    assert lines[0]["exit_duration_ms"] == 0
+    # With undecorated main-glyph collision boxes the A/C pair has enough
+    # spatial clearance to retain the automatic 100 ms exit floor.
+    assert lines[0]["display_end_ms"] == ends[0] + 100
+    assert lines[0]["exit_duration_ms"] == 100
     # Pixel-gated compression changes only the A/C conflict pair.  C keeps its
     # complete configured 900 ms entry animation, but may only move as far as
     # D's original page-order boundary; the unresolved overlap is spatially

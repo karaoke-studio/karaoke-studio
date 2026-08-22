@@ -79,6 +79,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidgetItem,
     QPushButton,
+    QPlainTextEdit,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -136,8 +137,10 @@ from krok_helper.subtitle_render.engine.layout_assignment import (
 )
 from krok_helper.subtitle_render.engine.painter import (
     LayoutMarginWarning,
+    LayoutTimingDiagnostic,
     check_layout_margins,
     display_windows_for_style,
+    layout_timing_diagnostics_for_style,
     layout_pass,
 )
 from krok_helper.subtitle_render.engine.title_semantics import resolve_title_text
@@ -369,6 +372,15 @@ class _LayoutIssue:
     warning: LayoutMarginWarning
 
 
+@dataclass(frozen=True)
+class _TimingIssue:
+    """One timing/page-placement diagnostic for a subtitle source."""
+
+    track_index: int
+    source_name: str
+    diagnostic: LayoutTimingDiagnostic
+
+
 class _LayoutIssuesDialog(ModelessDialog):
     """Modeless, clickable list of the current lyrics layout issues."""
 
@@ -376,20 +388,20 @@ class _LayoutIssuesDialog(ModelessDialog):
 
     def __init__(
         self,
-        issues: list[_LayoutIssue],
+        issues: list[_LayoutIssue | _TimingIssue],
         parent: Optional[QWidget] = None,
     ) -> None:
         anchor = parent.window() if parent is not None else None
         super().__init__(anchor)
         self.setObjectName("LayoutIssuesDialog")
-        self.setWindowTitle("当前歌词问题")
+        self.setWindowTitle("当前字幕诊断")
         self.setMinimumSize(620, 360)
         self.resize(720, 440)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
-        layout.addWidget(StrongBodyLabel("当前歌词存在的问题", self))
+        layout.addWidget(StrongBodyLabel("当前字幕渲染计划诊断", self))
         self._summary_label = CaptionLabel("", self)
         self._summary_label.setWordWrap(True)
         layout.addWidget(self._summary_label)
@@ -402,6 +414,13 @@ class _LayoutIssuesDialog(ModelessDialog):
         )
         self._list_widget.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._list_widget, 1)
+
+        self._detail = QPlainTextEdit(self)
+        self._detail.setObjectName("LayoutIssueDetail")
+        self._detail.setReadOnly(True)
+        self._detail.setMinimumHeight(150)
+        self._detail.setPlaceholderText("选择一项查看最终渲染计划的详细计算过程")
+        layout.addWidget(self._detail)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
@@ -419,40 +438,86 @@ class _LayoutIssuesDialog(ModelessDialog):
         )
         self.set_issues(issues)
 
-    def set_issues(self, issues: list[_LayoutIssue]) -> None:
+    def set_issues(self, issues: list[_LayoutIssue | _TimingIssue]) -> None:
         """Replace the list while the dialog is open."""
         self._list_widget.clear()
         overflow_count = sum(
-            issue.warning.level == "overflow" for issue in issues
+            isinstance(issue, _LayoutIssue) and issue.warning.level == "overflow"
+            for issue in issues
         )
-        margin_count = len(issues) - overflow_count
+        margin_count = sum(
+            isinstance(issue, _LayoutIssue) and issue.warning.level == "margin"
+            for issue in issues
+        )
+        timing_count = sum(
+            isinstance(issue, _TimingIssue)
+            and issue.diagnostic.kind == "timing"
+            for issue in issues
+        )
+        shift_count = sum(
+            isinstance(issue, _TimingIssue)
+            and issue.diagnostic.kind in {"page_shift", "force_bottom_shift"}
+            for issue in issues
+        )
         parts = []
         if overflow_count:
             parts.append(f"{overflow_count} 行超出画面")
         if margin_count:
             parts.append(f"{margin_count} 行侵入左右余白")
-        summary = "、".join(parts) if parts else "未发现歌词布局问题"
-        self._summary_label.setText(f"{summary}。点击任一行可跳转歌词与预览。")
+        if timing_count:
+            parts.append(f"{timing_count} 行发生时间压缩")
+        if shift_count:
+            parts.append(f"{shift_count} 组碰撞触发页面避让")
+        summary = "、".join(parts) if parts else "未发现字幕布局或时间问题"
+        self._summary_label.setText(f"{summary}。点击任一项可跳转歌词与预览。")
         for issue in issues:
-            warning = issue.warning
-            kind = "字幕溢出画面" if warning.level == "overflow" else "左右余白无法确保"
-            text = " ".join(warning.text.split()) or "（空歌词）"
-            display = (
-                f"{issue.source_name} · 第 {warning.line_index + 1} 行　"
-                f"{kind}　{text}"
-            )
+            if isinstance(issue, _TimingIssue):
+                diagnostic = issue.diagnostic
+                primary_line = diagnostic.line_indices[-1]
+                display = (
+                    f"{issue.source_name} · {diagnostic.title}　"
+                    f"{diagnostic.summary}"
+                )
+                detail = f"{issue.source_name}\n{diagnostic.detail}"
+            else:
+                warning = issue.warning
+                primary_line = warning.line_index
+                kind = (
+                    "字幕溢出画面"
+                    if warning.level == "overflow"
+                    else "左右余白无法确保"
+                )
+                text = " ".join(warning.text.split()) or "（空歌词）"
+                display = (
+                    f"{issue.source_name} · 第 {warning.line_index + 1} 行　"
+                    f"{kind}　{text}"
+                )
+                detail = (
+                    f"{issue.source_name} · 第 {warning.line_index + 1} 行\n"
+                    f"{kind}\n{text}\n"
+                    f"测得范围：left={warning.left:.1f}, right={warning.right:.1f}"
+                )
             item = QListWidgetItem(display)
             item.setData(
                 Qt.ItemDataRole.UserRole,
-                (issue.track_index, warning.line_index),
+                (issue.track_index, primary_line),
             )
-            item.setToolTip(
-                f"{issue.source_name} · 第 {warning.line_index + 1} 行\n"
-                f"{kind}\n{text}"
-            )
+            item.setData(Qt.ItemDataRole.UserRole + 1, detail)
+            item.setToolTip(detail)
             self._list_widget.addItem(item)
+        if self._list_widget.count():
+            first = self._list_widget.item(0)
+            self._list_widget.setCurrentItem(first)
+            self._detail.setPlainText(
+                str(first.data(Qt.ItemDataRole.UserRole + 1) or "")
+            )
+        else:
+            self._detail.clear()
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        self._detail.setPlainText(
+            str(item.data(Qt.ItemDataRole.UserRole + 1) or "")
+        )
         target = item.data(Qt.ItemDataRole.UserRole)
         if (
             isinstance(target, tuple)
@@ -2261,7 +2326,7 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.setInterval(400)
         self._margin_check_timer.timeout.connect(self._check_layout_margins)
         self._last_margin_warning_key = ""
-        self._layout_issues: list[_LayoutIssue] = []
+        self._layout_issues: list[_LayoutIssue | _TimingIssue] = []
         self._layout_issues_dialog: Optional[_LayoutIssuesDialog] = None
         # 歌词 / 属性面板分割比例：默认 4:6，用户拖动后记忆。拖动过程中
         # splitterMoved 连续触发，用单发定时器合并成一次落盘。
@@ -2711,12 +2776,12 @@ class SubtitleRenderWindow(QWidget):
         return button
 
     def _make_layout_issues_button(self, parent: QWidget) -> FluentToolButton:
-        """Create the persistent entry for current lyrics layout issues."""
+        """Create the persistent entry for current render-plan diagnostics."""
         button = FluentToolButton(_layout_issue_icon(), parent)
         button.setFixedWidth(34)
         button.setIconSize(QSize(20, 20))
-        button.setToolTip("当前歌词问题")
-        button.setAccessibleName("当前歌词问题")
+        button.setToolTip("当前字幕诊断")
+        button.setAccessibleName("当前字幕诊断")
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(self._show_layout_issues)
         button.hide()
@@ -6022,6 +6087,7 @@ class SubtitleRenderWindow(QWidget):
             # 不走 _sync_extra_tracks_to_preview：它会重建轨道视图、丢掉选中态
             self._preview_panel.set_extra_tracks(self._extra_track_list())
         self._schedule_tracks_view_window_refresh()
+        self._margin_check_timer.start()
         self._mark_project_dirty()
 
     def _track_by_index(self, track_index: int) -> Optional[TimingTrack]:
@@ -7010,11 +7076,11 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.start()
         self._mark_project_dirty()
 
-    def _collect_layout_issues(self) -> list[_LayoutIssue]:
-        """Collect margin warnings with enough source identity for navigation."""
+    def _collect_layout_issues(self) -> list[_LayoutIssue | _TimingIssue]:
+        """Collect margin, timing and page-placement diagnostics."""
         tracks = self._all_tracks()
         source_names = ["主字幕", *(source.name for source in self._extra_sources)]
-        issues: list[_LayoutIssue] = []
+        issues: list[_LayoutIssue | _TimingIssue] = []
         for track_index, track in enumerate(tracks):
             warnings = check_layout_margins(
                 track,
@@ -7035,17 +7101,38 @@ class SubtitleRenderWindow(QWidget):
                 for warning in warnings
                 if 0 <= warning.line_index < len(track.lines)
             )
+            diagnostics = layout_timing_diagnostics_for_style(
+                self._screen_settings.width,
+                self._screen_settings.height,
+                track,
+                self._style,
+            )
+            issues.extend(
+                _TimingIssue(
+                    track_index=track_index,
+                    source_name=source_name,
+                    diagnostic=diagnostic,
+                )
+                for diagnostic in diagnostics
+                if diagnostic.line_indices
+                and all(
+                    0 <= line_index < len(track.lines)
+                    for line_index in diagnostic.line_indices
+                )
+            )
         return issues
 
-    def _set_layout_issues(self, issues: list[_LayoutIssue]) -> None:
+    def _set_layout_issues(
+        self, issues: list[_LayoutIssue | _TimingIssue]
+    ) -> None:
         self._layout_issues = list(issues)
         if hasattr(self, "_layout_issues_button"):
             count = len(issues)
             self._layout_issues_button.setToolTip(
-                f"当前歌词问题（{count} 条）" if count else "当前歌词没有布局问题"
+                f"当前字幕诊断（{count} 条）" if count else "当前字幕没有诊断信息"
             )
             self._layout_issues_button.setAccessibleName(
-                f"当前歌词问题，{count} 条" if count else "当前歌词没有布局问题"
+                f"当前字幕诊断，{count} 条" if count else "当前字幕没有诊断信息"
             )
             self._layout_issues_button.setVisible(bool(issues))
         if self._layout_issues_dialog is not None:
@@ -7060,7 +7147,11 @@ class SubtitleRenderWindow(QWidget):
                 "刷新歌词布局问题失败", exc_info=True
             )
         if not self._layout_issues:
-            fluent_info(self, "当前歌词问题", "没有发现歌词溢出或侵入左右余白的问题。")
+            fluent_info(
+                self,
+                "当前字幕诊断",
+                "没有发现歌词溢出、时间压缩或页面避让问题。",
+            )
             return
         if self._layout_issues_dialog is None:
             dialog = _LayoutIssuesDialog(self._layout_issues, self)
@@ -7109,15 +7200,23 @@ class SubtitleRenderWindow(QWidget):
         overflow = [
             issue.warning
             for issue in issues
+            if isinstance(issue, _LayoutIssue)
             if issue.warning.level == "overflow"
         ]
         margin = [
             issue.warning
             for issue in issues
+            if isinstance(issue, _LayoutIssue)
             if issue.warning.level == "margin"
         ]
         key = "|".join(
-            f"{issue.track_index}:{issue.warning.line_index}:{issue.warning.level}"
+            (
+                f"{issue.track_index}:{issue.warning.line_index}:{issue.warning.level}"
+                if isinstance(issue, _LayoutIssue)
+                else f"{issue.track_index}:{issue.diagnostic.kind}:"
+                f"{','.join(map(str, issue.diagnostic.line_indices))}:"
+                f"{issue.diagnostic.summary}"
+            )
             for issue in issues
         )
         if key == self._last_margin_warning_key:

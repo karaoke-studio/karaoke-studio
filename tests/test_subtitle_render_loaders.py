@@ -1228,6 +1228,11 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
         "check_layout_margins",
         lambda _track, _style, _width: [warning],
     )
+    monkeypatch.setattr(
+        mw,
+        "layout_timing_diagnostics_for_style",
+        lambda *_args: [],
+    )
     toast_calls: list[dict] = []
     monkeypatch.setattr(
         mw.InfoBar,
@@ -1254,7 +1259,7 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
         win._layout_issues_button.geometry().right()
         < win._show_preview_btn.geometry().left()
     )
-    assert win._layout_issues_button.toolTip() == "当前歌词问题（1 条）"
+    assert win._layout_issues_button.toolTip() == "当前字幕诊断（1 条）"
 
     win._show_layout_issues()
     qapp.processEvents()
@@ -1264,6 +1269,7 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
     item = dialog._list_widget.item(0)
     assert "主字幕 · 第 2 行" in item.text()
     assert "字幕溢出画面" in item.text()
+    assert "测得范围" in dialog._detail.toPlainText()
 
     dialog._list_widget.itemClicked.emit(item)
     qapp.processEvents()
@@ -1274,14 +1280,42 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
     assert win._transport_bar.current_time_ms == 4_200
     assert preview_calls == [True]
 
+    timing = mw.LayoutTimingDiagnostic(
+        kind="timing",
+        line_indices=(1,),
+        title="时间窗口自动压缩",
+        summary="第 2 行退场被提前",
+        detail="基础自动窗口：00:03.000 – 00:06.000\n最终消费窗口：00:03.000 – 00:05.100",
+    )
     monkeypatch.setattr(
         mw,
         "check_layout_margins",
         lambda _track, _style, _width: [],
     )
+    monkeypatch.setattr(
+        mw,
+        "layout_timing_diagnostics_for_style",
+        lambda *_args: [timing],
+    )
+    win._check_layout_margins()
+    assert win._layout_issues_button.toolTip() == "当前字幕诊断（1 条）"
+    assert dialog._list_widget.count() == 1
+    assert "时间窗口自动压缩" in dialog._list_widget.item(0).text()
+    assert "最终消费窗口" in dialog._detail.toPlainText()
+
+    monkeypatch.setattr(
+        mw,
+        "check_layout_margins",
+        lambda _track, _style, _width: [],
+    )
+    monkeypatch.setattr(
+        mw,
+        "layout_timing_diagnostics_for_style",
+        lambda *_args: [],
+    )
     win._check_layout_margins()
     assert win._layout_issues_button.isHidden() is True
-    assert dialog._summary_label.text().startswith("未发现歌词布局问题")
+    assert dialog._summary_label.text().startswith("未发现字幕布局或时间问题")
     win.close()
 
 
