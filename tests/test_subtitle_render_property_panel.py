@@ -2326,6 +2326,42 @@ def test_font_preview_uses_role_japanese_ruby_and_latin_samples(qapp):
     assert preview._ruby_text == "リンク"
 
 
+def test_font_preview_resolves_localized_families_before_worker(qapp, monkeypatch):
+    aliases = {
+        "UD Digi Kyokasho N-B": "UD デジタル 教科書体 N-B",
+        "Latin Display Name": "Latin Runtime Family",
+        "Ruby Display Name": "Ruby Runtime Family",
+        "Ruby Latin Display Name": "Ruby Latin Runtime Family",
+    }
+    calls: list[str] = []
+
+    def resolve(name: str) -> str:
+        calls.append(name)
+        return aliases.get(name, name)
+
+    monkeypatch.setattr(pp, "resolve_qt_font_family", resolve)
+    owner = QWidget()
+    preview = pp._FontPreviewWidget(owner)
+    preview.set_preview_state(
+        Style(
+            font_family="UD Digi Kyokasho N-B",
+            font_family_latin="Latin Display Name",
+            ruby_font_family="Ruby Display Name",
+            ruby_font_family_latin="Ruby Latin Display Name",
+        ),
+        "global",
+        "japanese",
+    )
+
+    assert preview._pending_render is not None
+    resolved = preview._pending_render[1]
+    assert resolved.font_family == "UD デジタル 教科書体 N-B"
+    assert resolved.font_family_latin == "Latin Runtime Family"
+    assert resolved.ruby_font_family == "Ruby Runtime Family"
+    assert resolved.ruby_font_family_latin == "Ruby Latin Runtime Family"
+    assert "UD Digi Kyokasho N-B" in calls
+
+
 def _wait_for_font_preview(preview, qapp, timeout_ms: int = 5_000) -> None:
     elapsed = 0
     while preview.canvas._rendering and elapsed < timeout_ms:

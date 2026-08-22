@@ -116,6 +116,7 @@ from krok_helper.subtitle_render.engine.painter import (
 from krok_helper.subtitle_render.n3_font_catalog import (
     canonicalize_n3_font_family,
     n3_font_families,
+    resolve_qt_font_family,
 )
 from krok_helper.subtitle_render.models import (
     ColorLayerKey,
@@ -4263,6 +4264,29 @@ class _ResponsiveRoleHeader(QWidget):
         self.updateGeometry()
 
 
+def _resolve_font_preview_families(style: Style) -> Style:
+    """Materialize Qt runtime family names before crossing the worker boundary.
+
+    Project/N3 styles intentionally preserve localized display names.  The
+    production painter resolves those names immediately before constructing a
+    ``QFont``.  Font preview rendering runs in a worker, so perform the same
+    Qt-font-registry lookup on the GUI thread and pass only resolved strings to
+    the worker.
+    """
+
+    changes: dict[str, Optional[str]] = {}
+    for field_name in (
+        "font_family",
+        "font_family_latin",
+        "ruby_font_family",
+        "ruby_font_family_latin",
+    ):
+        family = getattr(style, field_name, None)
+        if family:
+            changes[field_name] = resolve_qt_font_family(str(family))
+    return replace(style, **changes) if changes else style
+
+
 class _FontSampleCanvas(QWidget):
     """Render a compact role sample without involving a project preview window."""
 
@@ -4804,7 +4828,9 @@ class _FontPreviewWidget(QWidget):
         self._sample_text = "LinK" if self._script == "latin" else "人"
         self._ruby_text = "リンク" if self._script == "latin" else "ひと"
         self._render_generation += 1
-        resolved = style_for_role(self._style, role_label)
+        resolved = _resolve_font_preview_families(
+            style_for_role(self._style, role_label)
+        )
         self._pending_render = (
             self._render_generation,
             resolved,
