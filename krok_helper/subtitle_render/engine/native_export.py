@@ -28,6 +28,203 @@ _DEFAULT_GPU_EXPORT_REALIZATION_MEMORY_MB = 256
 _GPU_REALIZATION_ESTIMATED_BYTES_PER_TASK = 4096
 _GPU_REALIZATION_MIN_TASKS = 8192
 _GPU_REALIZATION_MAX_TASKS = 262144
+# 每帧响应默认 60s：4K + 弱 GPU（含 iGPU）单帧（字形 + 发光）可能远超旧值 15s；
+# sidecar 进程退出靠管道 EOF 立即暴露，超时只兜 worker 卡死（如驱动 TDR 挂起）。
+_DEFAULT_GPU_EXPORT_RESPONSE_TIMEOUT_S = 60.0
+# configure 含每 worker prewarm 整帧渲染，4K 多 worker 弱 GPU 下给足余量。
+_DEFAULT_GPU_EXPORT_CONFIGURE_TIMEOUT_S = 180.0
+# 显存预检：configure 后 usage×growth 预估帧阶段峰值（glow 池 / 字形增长），
+# 超过 budget 则降 worker 重配；单 worker 仍超且逼近 budget 时报错走 CPU 回退。
+_DEFAULT_GPU_EXPORT_VRAM_GROWTH = 2.0
+_GPU_EXPORT_VRAM_NEAR_BUDGET_RATIO = 0.9
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > minimum else default
+
+
+def gpu_export_response_timeout_s(realizations: bool) -> float:
+    """Per-response sidecar timeout (``KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S``)."""
+    if realizations:
+        return _env_float(
+            "KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S", 300.0, minimum=0.0
+        )
+    return _env_float(
+        "KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S",
+        _DEFAULT_GPU_EXPORT_RESPONSE_TIMEOUT_S,
+        minimum=0.0,
+    )
+
+
+def gpu_export_configure_timeout_s(realizations: bool) -> float:
+    """gpu_configure 专属超时（``KROK_SUBTITLE_GPU_EXPORT_CONFIGURE_TIMEOUT_S``）。"""
+    return max(
+        gpu_export_response_timeout_s(realizations),
+        _env_float(
+            "KROK_SUBTITLE_GPU_EXPORT_CONFIGURE_TIMEOUT_S",
+            _DEFAULT_GPU_EXPORT_CONFIGURE_TIMEOUT_S,
+            minimum=0.0,
+        ),
+    )
+
+
+def gpu_export_preflight_enabled() -> bool:
+    return os.environ.get(
+        "KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", "1"
+    ).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def gpu_export_vram_growth_factor() -> float:
+    return max(
+        1.0,
+        _env_float(
+            "KROK_SUBTITLE_GPU_EXPORT_VRAM_GROWTH",
+            _DEFAULT_GPU_EXPORT_VRAM_GROWTH,
+        ),
+    )
+
+
+def gpu_export_vram_headroom(
+    configured: dict[str, object],
+) -> tuple[int, int] | None:
+    """Extract per-process local-segment ``(usage, budget)`` after configure.
+
+    返回 ``None`` 表示 DXGI 查询不可用（常见于 iGPU 共享显存机器），预检跳过。
+    """
+    if not configured.get("video_memory_info_available"):
+        return None
+    try:
+        usage = int(configured.get("local_video_memory_usage_bytes") or 0)
+        budget = int(configured.get("local_video_memory_budget_bytes") or 0)
+    except (TypeError, ValueError):
+        return None
+    if budget <= 0:
+        return None
+    return usage, budget
+
+
+def degraded_gpu_worker_candidates(requested: int) -> list[int]:
+    """Worker 降级序列：如 4→[4, 2, 1]、3→[3, 1]、1→[1]。"""
+    first = max(1, min(int(requested), 4))
+    candidates = [first]
+    while candidates[-1] > 1:
+        candidates.append(max(1, candidates[-1] // 2))
+    return candidates
+
+
+def _configure_gpu_export_with_preflight(
+    *,
+    renderer_path: str | os.PathLike[str] | None,
+    track: TimingTrack,
+    style: Style,
+    width: int,
+    height: int,
+    fps: int,
+    force_warp: bool,
+    extra_tracks: list[TimingTrack] | None,
+    worker_count: int,
+    realizations: bool,
+    shared: bool,
+    duration_ms: int | None,
+    packed: bool,
+    crop_top: int,
+    crop_height: int,
+    packed_bands: list[tuple[int, int]],
+    logger: Callable[[str], None] | None = None,
+) -> tuple[NativeRendererProcess, dict[str, object], str]:
+    """启动 sidecar 并 configure，附显存预检与 worker 降级。
+
+    configure 后用 DXGI 上报的进程级显存 usage/budget 判断帧阶段（glow 池、
+    字形 realization 会继续增长）是否吃得下：预估峰值超预算则关掉当前
+    sidecar、按降级序列用更少 worker 重配；单 worker 仍逼近预算时抛
+    :class:`NativeRendererError`，由上层整单回退 CPU Painter 保证导出完成。
+    返回 ``(已启动的 renderer, configure 响应, 共享内存 key)``。
+    """
+    response_timeout_s = gpu_export_response_timeout_s(realizations)
+    configure_timeout_s = gpu_export_configure_timeout_s(realizations)
+    growth = gpu_export_vram_growth_factor()
+    preflight = gpu_export_preflight_enabled()
+    candidates = degraded_gpu_worker_candidates(worker_count)
+
+    for attempt_index, attempt_workers in enumerate(candidates):
+        shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
+        renderer = NativeRendererProcess(
+            renderer_path,
+            response_timeout_s=response_timeout_s,
+            gpu_configure_timeout_s=configure_timeout_s,
+            close_timeout_s=1.0,
+        )
+        try:
+            renderer.start()
+            configure_started = time.perf_counter()
+            configure_kwargs = {
+                "width": width,
+                "height": height,
+                "fps": fps,
+                "force_warp": force_warp,
+                "extra_tracks": extra_tracks,
+                "worker_count": attempt_workers,
+                "realization_enabled": realizations,
+                "shared_resources": shared,
+                "wait_realizations": realizations,
+                "realization_capacity": gpu_export_realization_capacity(),
+                "export_crop_top": crop_top if packed else 0,
+                "export_crop_height": crop_height if packed and not packed_bands else 0,
+                "export_bands": packed_bands,
+            }
+            if duration_ms is not None:
+                configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
+            configured = dict(
+                renderer.configure_gpu(
+                    track,
+                    style,
+                    **configure_kwargs,
+                )
+            )
+            configured["prepare_layout_ms"] = (
+                time.perf_counter() - configure_started
+            ) * 1000.0
+        except BaseException:
+            renderer.close()
+            raise
+
+        headroom = gpu_export_vram_headroom(configured) if preflight else None
+        if headroom is not None:
+            usage, budget = headroom
+            if usage * growth > budget:
+                if attempt_index + 1 < len(candidates):
+                    if logger is not None:
+                        logger(
+                            f"GPU 显存预检：configure 后已用 {usage / 1048576:.0f} MiB"
+                            f" / 预算 {budget / 1048576:.0f} MiB，"
+                            f"预估帧阶段峰值超预算，降至 "
+                            f"{candidates[attempt_index + 1]} 个 worker 重新配置"
+                        )
+                    renderer.close()
+                    continue
+                if usage > budget * _GPU_EXPORT_VRAM_NEAR_BUDGET_RATIO:
+                    renderer.close()
+                    raise NativeRendererError(
+                        f"GPU 显存不足：单 worker configure 后已用 "
+                        f"{usage / 1048576:.0f} MiB / 预算 "
+                        f"{budget / 1048576:.0f} MiB"
+                    )
+                if logger is not None:
+                    logger(
+                        f"GPU 显存预检：单 worker 已用 {usage / 1048576:.0f} MiB"
+                        f" / 预算 {budget / 1048576:.0f} MiB，余量偏紧，"
+                        "仍将尝试 GPU 导出（失败会自动回退 CPU Painter 完成导出）"
+                    )
+        return renderer, configured, shm_key
+
+    raise NativeRendererError("GPU 显存预检未产生可用配置")  # pragma: no cover
 
 
 def native_export_timestamps(
@@ -308,6 +505,7 @@ def iter_gpu_rgba_frames(
     on_prepare_progress: Callable[[int, int], None] | None = None,
     on_diagnostics: Callable[[dict[str, object]], None] | None = None,
     on_frame_diagnostics: Callable[[dict[str, object]], None] | None = None,
+    logger: Callable[[str], None] | None = None,
 ) -> Iterator[bytes | memoryview]:
     """Yield straight RGBA frames from the Direct2D GPU export path.
 
@@ -322,13 +520,15 @@ def iter_gpu_rgba_frames(
     exports may use up to four independent Direct2D workers; completed frames
     are held in a ring-sized reorder window and yielded strictly in timestamp
     order, so ffmpeg never observes out-of-order input.
+
+    configure 阶段附显存预检：预估峰值超预算时自动降 worker 数重配（见
+    :func:`_configure_gpu_export_with_preflight`），``logger`` 接收决策日志。
     """
     from PyQt6.QtGui import QImage
 
     frame_total = max(int(total_frames), 0)
     if frame_total <= 0:
         return
-    shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
     slot_count = 2
     packed = gpu_export_packed_enabled() if packed_rgba is None else bool(packed_rgba)
     shared = (
@@ -356,39 +556,27 @@ def iter_gpu_rgba_frames(
         else crop_height
     )
     reader: SharedFrameRingReader | None = None
+    gpu_renderer, configured, shm_key = _configure_gpu_export_with_preflight(
+        renderer_path=renderer_path,
+        track=track,
+        style=style,
+        width=width,
+        height=height,
+        fps=fps,
+        force_warp=force_warp,
+        extra_tracks=extra_tracks,
+        worker_count=worker_count,
+        realizations=realizations,
+        shared=shared,
+        duration_ms=duration_ms,
+        packed=packed,
+        crop_top=crop_top,
+        crop_height=crop_height,
+        packed_bands=packed_bands,
+        logger=logger,
+    )
     try:
-        with NativeRendererProcess(
-            renderer_path,
-            response_timeout_s=300.0 if realizations else 15.0,
-            close_timeout_s=1.0,
-        ) as renderer:
-            configure_started = time.perf_counter()
-            configure_kwargs = {
-                "width": width,
-                "height": height,
-                "fps": fps,
-                "force_warp": force_warp,
-                "extra_tracks": extra_tracks,
-                "worker_count": max(1, min(int(worker_count), 4)),
-                "realization_enabled": realizations,
-                "shared_resources": shared,
-                "wait_realizations": realizations,
-                "realization_capacity": gpu_export_realization_capacity(),
-                "export_crop_top": crop_top if packed else 0,
-                "export_crop_height": crop_height if packed and not packed_bands else 0,
-                "export_bands": packed_bands,
-            }
-            if duration_ms is not None:
-                configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
-            configured = renderer.configure_gpu(
-                track,
-                style,
-                **configure_kwargs,
-            )
-            configured = dict(configured)
-            configured["prepare_layout_ms"] = (
-                time.perf_counter() - configure_started
-            ) * 1000.0
+        with gpu_renderer as renderer:
             if on_diagnostics is not None:
                 on_diagnostics(configured)
 

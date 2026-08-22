@@ -5539,6 +5539,36 @@ def test_image_fill_brush_is_cached(qapp, tmp_path):
     assert len(_IMAGE_BRUSH_CACHE) == 2
 
 
+def test_image_fill_failure_warns_once_per_path(qapp, tmp_path, caplog):
+    clear_before_layer_cache()
+    painter_log = "krok_helper.subtitle_render.painter"
+
+    missing_path = tmp_path / "missing.png"
+    with caplog.at_level("WARNING", logger=painter_log):
+        assert subtitle_painter._image_file_signature(str(missing_path)) is None
+        assert subtitle_painter._image_file_signature(str(missing_path)) is None
+    missing_warnings = [
+        record
+        for record in caplog.records
+        if "字幕图片填充被跳过" in record.message
+        and str(missing_path) in record.getMessage()
+    ]
+    assert len(missing_warnings) == 1
+
+    bad_path = tmp_path / "bad.png"
+    bad_path.write_bytes(b"not an image")
+    with caplog.at_level("WARNING", logger=painter_log):
+        assert subtitle_painter._cached_fill_image((str(bad_path), 0, 0)) is None
+        assert subtitle_painter._cached_fill_image((str(bad_path), 0, 0)) is None
+    bad_warnings = [
+        record
+        for record in caplog.records
+        if "字幕图片填充被跳过" in record.message
+        and str(bad_path) in record.getMessage()
+    ]
+    assert len(bad_warnings) == 1
+
+
 def test_image_fill_wraps_from_the_canvas_origin(qapp, tmp_path):
     clear_before_layer_cache()
     image_path = tmp_path / "pattern.png"

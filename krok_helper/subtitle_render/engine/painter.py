@@ -29,6 +29,7 @@ P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections import OrderedDict
@@ -70,6 +71,9 @@ from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
+# 图片纹理填充加载失败时告警一次（按路径去重），避免导出中静默缺纹理。
+_IMAGE_FILL_WARNED: set[str] = set()
+_PAINTER_LOG = logging.getLogger("krok_helper.subtitle_render.painter")
 _BITMAP_GUIDE_CACHE_MAX = 64
 _BITMAP_GUIDE_CACHE: "OrderedDict[tuple[str, int, int], QImage]" = OrderedDict()
 _HARD_BAND_BRUSH_CACHE_MAX = 128
@@ -13665,6 +13669,14 @@ def _anchor_texture_brush(brush: QBrush, rect: QRectF) -> QBrush:
     return anchored
 
 
+def _warn_image_fill_skipped(path: str, reason: str) -> None:
+    with _IMAGE_FILL_LOCK:
+        if path in _IMAGE_FILL_WARNED:
+            return
+        _IMAGE_FILL_WARNED.add(path)
+    _PAINTER_LOG.warning("字幕图片填充被跳过：%s（%s）", path, reason)
+
+
 def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
     with _IMAGE_FILL_LOCK:
         cached = _IMAGE_FILL_CACHE.get(signature)
@@ -13673,6 +13685,7 @@ def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
             return cached
     image = QImage(signature[0])
     if image.isNull():
+        _warn_image_fill_skipped(signature[0], "图片解码失败或不是有效图片文件")
         return None
     with _IMAGE_FILL_LOCK:
         _IMAGE_FILL_CACHE[signature] = image
@@ -13685,7 +13698,8 @@ def _image_file_signature(path: str) -> tuple[str, int, int] | None:
     try:
         normalized = os.path.abspath(os.path.normpath(path))
         stat = os.stat(normalized)
-    except OSError:
+    except OSError as exc:
+        _warn_image_fill_skipped(path, f"无法读取图片文件：{exc}")
         return None
     return normalized, int(stat.st_mtime_ns), int(stat.st_size)
 

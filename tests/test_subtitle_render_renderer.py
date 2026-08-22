@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import replace
 import json
+import math
 import os
 from pathlib import Path
 import threading
@@ -25,15 +27,20 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
     _compute_content_bands,
     _compute_subtitle_strip,
+    _drain_pending_head,
     _frame_count,
     _image_bytes,
+    _iter_ordered_pool_results,
     _merge_intervals,
     _packed_offsets,
     _paint_overlay_bands,
     _paint_overlay_strip,
     _render_overlay_frame,
     _resolve_chunk_size,
+    _resolve_pending_window,
+    _resolve_stall_timeout_s,
     _resolve_worker_count,
+    _strip_safety_margin,
     _write_frames_multiprocess,
     _write_frames_multiprocess_bands,
     _write_frames_single,
@@ -43,6 +50,7 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
+    LineAnimationOverride,
     Style,
     TimingChar,
     TimingLine,
@@ -560,7 +568,7 @@ def test_render_ignores_native_enable_and_uses_python(monkeypatch, tmp_path):
     job = replace(
         _job(tmp_path),
         width=2,
-        height=1,
+        height=2,
         fps=2,
         duration_ms=1000,
         native_export_enabled=True,
@@ -589,8 +597,8 @@ def test_render_ignores_native_enable_and_uses_python(monkeypatch, tmp_path):
 
     assert render_subtitle_video(job, on_progress=lambda done, total: progress.append((done, total))) == job.output_path
 
-    assert writes == [(0, 1, 2)]
-    assert bytes(fake_process.stdin.data) == b"p" * 16
+    assert writes == [(0, 2, 2)]
+    assert bytes(fake_process.stdin.data) == b"p" * 32
     assert progress == [(2, 2)]
 
 
@@ -598,7 +606,7 @@ def test_render_drains_ffmpeg_output_while_writing_frames(monkeypatch, tmp_path)
     job = replace(
         _job(tmp_path),
         width=2,
-        height=1,
+        height=2,
         fps=2,
         duration_ms=1000,
     )
@@ -727,7 +735,7 @@ def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, t
     job = replace(
         _job(tmp_path),
         width=2,
-        height=1,
+        height=2,
         fps=2,
         duration_ms=1_000,
         gpu_export_enabled=True,
@@ -769,14 +777,14 @@ def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, t
 
     assert render_subtitle_video(job) == job.output_path
     assert writes == [("cpu", 2, gpu_path, (0, 1), None)]
-    assert bytes(fake_process.stdin.data) == b"g" * 16
+    assert bytes(fake_process.stdin.data) == b"g" * 32
 
 
 def test_gpu_export_runtime_failure_restarts_with_painter(monkeypatch, tmp_path):
     job = replace(
         _job(tmp_path),
         width=2,
-        height=1,
+        height=2,
         fps=2,
         duration_ms=1_000,
         gpu_export_enabled=True,
@@ -806,12 +814,13 @@ def test_gpu_export_runtime_failure_restarts_with_painter(monkeypatch, tmp_path)
     )
 
     assert render_subtitle_video(job, logger=logs.append) == job.output_path
-    assert painter_writes == [(False, 0, 1)]
-    assert any("从头回退到 Painter" in message for message in logs)
+    assert painter_writes == [(False, 0, 2)]
+    assert any("已自动回退到 CPU Painter" in message for message in logs)
+    assert any("进度会重新从 0 开始计数" in message for message in logs)
 
 
 def test_render_falls_back_to_python_when_native_export_sidecar_missing(monkeypatch, tmp_path):
-    job = replace(_job(tmp_path), width=2, height=1, fps=2, duration_ms=1000)
+    job = replace(_job(tmp_path), width=2, height=2, fps=2, duration_ms=1000)
     fake_process = _FakeRenderProcess(job.output_path)
     writes = []
 
@@ -830,8 +839,8 @@ def test_render_falls_back_to_python_when_native_export_sidecar_missing(monkeypa
 
     render_subtitle_video(job)
 
-    assert writes == [(0, 1, 2)]
-    assert bytes(fake_process.stdin.data) == b"p" * 16
+    assert writes == [(0, 2, 2)]
+    assert bytes(fake_process.stdin.data) == b"p" * 32
 
 
 def _band_job(tmp_path: Path) -> RenderJob:
@@ -979,3 +988,151 @@ def test_multiprocess_bands_is_byte_identical_to_single_process(qapp, tmp_path):
 
     assert len(single.stdin.data) == total * job.width * packed_h * 4
     assert bytes(multi.stdin.data) == bytes(single.stdin.data)
+
+
+# ---------------------------------------------------------------------------
+# 条带/多带安全边：动画纵向行程上界（4K 丢字幕修复）
+# ---------------------------------------------------------------------------
+
+
+def test_strip_safety_margin_scales_with_output_height(tmp_path):
+    job = _job(tmp_path)  # 320x180：低于 1080p 基准，保持基础边 8px
+    assert _strip_safety_margin(job) == 8
+    big = replace(job, height=2160)
+    assert _strip_safety_margin(big) == 16  # 4K：8 × 2160/1080
+
+
+def test_strip_safety_margin_includes_animation_excursion(tmp_path):
+    # utopia 退场 y_travel 上界 = height/15 + 1.5×字号
+    job = replace(
+        _job(tmp_path),
+        height=2160,
+        style=Style(font_size_px=24, exit_anim="utopia", exit_fade_ms=750),
+    )
+    expected = 2160 / 15.0 + 24 * 1.5
+    assert _strip_safety_margin(job) >= math.ceil(expected)
+
+    # rise 入场行程 = max(字号×0.35, 18)
+    job_rise = replace(
+        _job(tmp_path),
+        style=Style(font_size_px=200, entry_anim="rise", entry_lead_ms=300),
+    )
+    assert _strip_safety_margin(job_rise) >= math.ceil(max(200 * 0.35, 18.0))
+
+
+def test_strip_safety_margin_respects_line_animation_overrides(tmp_path):
+    # 全局 none，但单行覆盖 utopia：行程上界必须按行生效
+    line = TimingLine(
+        chars=[TimingChar("a", 0), TimingChar("b", 500)],
+        end_ms=1000,
+        animation_override=LineAnimationOverride(exit_anim="utopia"),
+    )
+    track = TimingTrack(lines=[line])
+    job = replace(
+        _job(tmp_path),
+        track=track,
+        height=2160,
+    )
+    assert _strip_safety_margin(job) >= math.ceil(2160 / 15.0)
+
+
+def test_compute_subtitle_strip_covers_all_frame_content(qapp, tmp_path):
+    # 预扫并集按采样时刻取值；含动画行程的安全边必须把任意帧的可见像素
+    # 全部罩进条带，否则条带裁剪会静默丢字幕。
+    style = Style(
+        font_size_px=24,
+        entry_anim="utopia",
+        entry_lead_ms=300,
+        exit_anim="utopia",
+        exit_fade_ms=750,
+    )
+    job = replace(_job(tmp_path), style=style, height=1080)
+    strip = _compute_subtitle_strip(job, 1000)
+    assert strip is not None
+    top, height = strip
+
+    for index in range(_frame_count(1000, job.fps)):
+        t_ms = int(round(index * 1000 / job.fps))
+        image = QImage(job.width, job.height, QImage.Format.Format_RGBA8888)
+        image.fill(QColor(0, 0, 0, 0))
+        paint_frame(image, job.track, t_ms, job.style)
+        bounds = renderer._content_row_bounds(image)
+        if bounds is None:
+            continue
+        assert bounds[0] >= top, f"t={t_ms}ms 内容顶部 {bounds[0]} 越出条带顶 {top}"
+        assert bounds[1] < top + height, (
+            f"t={t_ms}ms 内容底部 {bounds[1]} 越出条带底 {top + height - 1}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 多进程内存护栏：有界在飞窗口 + 停滞超时
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_pending_window_bounds_by_bytes_and_workers():
+    frame_bytes_4k = 3840 * 2160 * 4  # ~31.6MiB
+    # 256MB 在飞上限 → 8 条（8×31.6MiB=253MiB）；worker+2 更小时取 worker+2
+    assert _resolve_pending_window(8, 1, frame_bytes_4k) == 8
+    assert _resolve_pending_window(2, 1, frame_bytes_4k) == 4
+    # 小帧不受字节约束，只受 worker 数约束
+    assert _resolve_pending_window(8, 1, 1024) == 10
+
+
+def test_resolve_stall_timeout_defaults_and_env(monkeypatch):
+    monkeypatch.delenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", raising=False)
+    assert _resolve_stall_timeout_s(1) == 120.0
+    assert _resolve_stall_timeout_s(10) == 600.0
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "5")
+    assert _resolve_stall_timeout_s(10) == 5.0
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "bad")
+    assert _resolve_stall_timeout_s(1) == 120.0
+
+
+def test_iter_ordered_pool_results_bounds_in_flight_and_keeps_order():
+    class _AsyncResult:
+        def __init__(self, pool, value):
+            self._pool = pool
+            self._value = value
+
+        def get(self, timeout=None):
+            self._pool.live -= 1
+            return self._value
+
+    class _FakePool:
+        def __init__(self):
+            self.live = 0
+            self.peak = 0
+
+        def apply_async(self, fn, args):
+            self.live += 1
+            self.peak = max(self.peak, self.live)
+            return _AsyncResult(self, fn(*args))
+
+    tasks = [(index, 1) for index in range(20)]
+    pool = _FakePool()
+    out = list(
+        _iter_ordered_pool_results(
+            pool,
+            lambda task: task[0] * 2,
+            tasks,
+            window=3,
+            stall_timeout_s=5.0,
+        )
+    )
+    assert out == [index * 2 for index in range(20)]
+    assert pool.peak <= 3  # 派发从不超过窗口
+
+
+def test_drain_pending_head_reports_stalled_worker():
+    import multiprocessing as mp
+
+    class _StalledResult:
+        def get(self, timeout=None):
+            raise mp.TimeoutError()
+
+    pending = deque([_StalledResult()])
+    with pytest.raises(ProcessingError) as excinfo:
+        _drain_pending_head(pending, 3.0)
+    assert "无响应" in str(excinfo.value)
+    assert not pending

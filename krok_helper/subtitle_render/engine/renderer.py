@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -38,6 +39,7 @@ from krok_helper.subtitle_render.engine.native_export import (
     iter_gpu_rgba_frames,
     iter_native_rgba_frames,
 )
+from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
     frame_vertical_bounds,
@@ -50,6 +52,7 @@ from krok_helper.subtitle_render.models import (
     BackgroundSource,
     Style,
     TimingTrack,
+    style_with_line_animation,
     timing_line_start_ms,
 )
 from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
@@ -61,9 +64,29 @@ from krok_helper.subtitle_render.native_protocol import (
 # A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
 # 条带 = 整段渲染里所有可见内容纵向范围的并集（单条覆盖，方案 A）。可用环境变量
 # KROK_SUBTITLE_RENDER_STRIP=0 关闭退回整帧。
-_STRIP_MARGIN_PX = 8  # 安全边：采样可能漏掉单帧动画极值
+_STRIP_MARGIN_PX = 8  # 基础安全边（1080p 基准，随输出高度等比放大）
 _STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退回整帧
 _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
+
+
+def _strip_safety_margin(job: RenderJob) -> int:
+    """条带/多带的纵向安全边：基础边随分辨率缩放 + 动画纵向行程上界。
+
+    预扫并集按采样时刻取值，动画峰值（utopia 弹跳、rise 抬升等）可能落在
+    采样间隙之间；把行程上界并进安全边后，条带对任意帧都不会裁掉可见像素
+    （越出画布的部分在整帧路径同样被画布裁掉，因此 clamp 到画布即无损）。
+    行级动画覆盖（N3 逐行动画）逐行解析后取最大值。
+    """
+    margin = max(_STRIP_MARGIN_PX, _STRIP_MARGIN_PX * job.height / 1080.0)
+    styles: list[Style] = [job.style]
+    styles.extend(
+        style_with_line_animation(job.style, line)
+        for track in _job_tracks(job)
+        for line in track.lines
+    )
+    for candidate in styles:
+        margin = max(margin, max_line_animation_excursion(candidate, job.height))
+    return int(math.ceil(margin))
 
 # A3 多进程导出：offscreen worker 池并行渲帧，主进程按序喂 ffmpeg。
 # KROK_SUBTITLE_RENDER_WORKERS=N 指定自动模式进程数（1=关闭，走单进程）。worker
@@ -285,7 +308,11 @@ def render_subtitle_video(
         terminate_process(process)
         _remove_incomplete_output(job.output_path, logger)
         if gpu_export_active and not (should_cancel is not None and should_cancel()):
-            logger(f"GPU 字幕导出失败，正在从头回退到 Painter：{exc}")
+            logger(
+                "GPU 字幕导出失败，已自动回退到 CPU Painter 从头渲染"
+                "（进度会重新从 0 开始计数，导出仍会正常完成），原因："
+                f"{exc}"
+            )
             return render_subtitle_video(
                 replace(job, gpu_export_enabled=False),
                 ffmpeg_dir=ffmpeg_dir,
@@ -743,8 +770,9 @@ def _compute_subtitle_strip(
     if bottom < top:
         return None  # 整段无可见内容
 
-    top = max(0, top - _STRIP_MARGIN_PX)
-    bottom = min(height - 1, bottom + _STRIP_MARGIN_PX)
+    margin = _strip_safety_margin(job)
+    top = max(0, top - margin)
+    bottom = min(height - 1, bottom + margin)
     top -= top % 2  # 下取偶
     strip_h = bottom - top + 1
     if strip_h % 2:
@@ -845,8 +873,9 @@ def _compute_content_bands(
         return None
 
     merged = _merge_intervals(collected, _BAND_MERGE_GAP_PX)
+    margin = _strip_safety_margin(job)
     padded = [
-        (max(0, top - _STRIP_MARGIN_PX), min(height - 1, bottom + _STRIP_MARGIN_PX))
+        (max(0, top - margin), min(height - 1, bottom + margin))
         for top, bottom in merged
     ]
     remerged = _merge_intervals(padded, 0)  # 加边后可能首尾相接，再并一次
@@ -1066,6 +1095,7 @@ def _write_frames_gpu(
         on_prepare_progress=on_prepare_progress,
         on_diagnostics=on_diagnostics if diagnostics_enabled else None,
         on_frame_diagnostics=on_frame_diagnostics if diagnostics_enabled else None,
+        logger=logger,
     ):
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
@@ -1260,6 +1290,69 @@ def _resolve_chunk_size(job: RenderJob, render_h: int, total_frames: int, worker
     return max(1, min(by_bytes, by_balance))
 
 
+# A3 内存护栏：imap 会把全部任务一次性派发、已完成结果在主进程无界积压，
+# 4K 全幅帧（31.6MiB/帧）下渲染快于编码时几分钟即可吃掉数 GB 内存。
+# 改用 apply_async + 有界在飞窗口：同时未消费的 chunk 结果条数与字节数都封顶。
+_MULTIPROC_MAX_PENDING_BYTES = 256 * 1024 * 1024  # 在飞 chunk 结果的内存上限
+_MULTIPROC_MIN_STALL_TIMEOUT_S = 120.0  # 单 chunk 结果等待下限（4K 单帧正常 <10s）
+
+
+def _resolve_pending_window(worker_count: int, chunk: int, frame_bytes: int) -> int:
+    """同时在飞（已派发未消费）的 chunk 数上限。"""
+    chunk_bytes = max(chunk * max(frame_bytes, 1), 1)
+    by_bytes = max(1, _MULTIPROC_MAX_PENDING_BYTES // chunk_bytes)
+    return max(2, min(worker_count + 2, by_bytes))
+
+
+def _resolve_stall_timeout_s(chunk_frames: int) -> float:
+    """单 chunk 结果的等待上限：超时视为 worker 被系统终止（如 OOM），明确报错。"""
+    raw = os.environ.get("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S")
+    if raw and raw.strip():
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 0.0
+        if value > 0:
+            return value
+    return max(_MULTIPROC_MIN_STALL_TIMEOUT_S, chunk_frames * 60.0)
+
+
+def _drain_pending_head(
+    pending: "deque", stall_timeout_s: float
+) -> bytes:
+    import multiprocessing as mp
+
+    try:
+        return pending.popleft().get(timeout=stall_timeout_s)
+    except mp.TimeoutError as exc:
+        raise ProcessingError(
+            f"渲染 worker 超过 {stall_timeout_s:.0f}s 无响应"
+            "（可能被系统因内存不足终止），导出中止；"
+            "可尝试调低导出分辨率或在环境变量 KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
+        ) from exc
+
+
+def _iter_ordered_pool_results(
+    pool, task_fn, tasks, *, window: int, stall_timeout_s: float
+):
+    """apply_async 按序产出 chunk 结果，同时在飞条数不超过 ``window``。
+
+    严格按提交顺序 ``.get()`` 队头结果以保序；窗口堵满时暂停派发新任务，
+    从而把主进程内已完成未消费结果的内存峰值钉在 window×chunk 字节内。
+    """
+    pending: deque = deque()
+    try:
+        for task in tasks:
+            while len(pending) >= window:
+                yield _drain_pending_head(pending, stall_timeout_s)
+            pending.append(pool.apply_async(task_fn, (task,)))
+        while pending:
+            yield _drain_pending_head(pending, stall_timeout_s)
+    finally:
+        # 提前退出（取消 / 异常）时丢弃剩余句柄；池由调用方 terminate。
+        pending.clear()
+
+
 # worker 进程内的渲染上下文（spawn 后由 _render_worker_init 一次性建立）。
 _W_CTX: dict = {}
 
@@ -1301,15 +1394,18 @@ def _write_frames_multiprocess(
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
-    """多进程并行渲染：worker 池各渲一段，主进程用 imap 按序收回并写入 ffmpeg stdin。
+    """多进程并行渲染：worker 池各渲一段，主进程按序收回并写入 ffmpeg stdin。
 
-    imap 保序，慢块会让后续完成块在结果队列里短暂积压；chunk 按 _CHUNK_TARGET_BYTES
-    封顶以控内存。取消 / 异常时 terminate 整池。
+    apply_async + 有界在飞窗口保序消费（替代 imap 的无界结果积压），4K 下
+    已完成未消费的 chunk 结果内存峰值封顶在 _MULTIPROC_MAX_PENDING_BYTES。
+    取消 / 异常时 terminate 整池。
     """
     import multiprocessing as mp
 
     chunk = _resolve_chunk_size(job, render_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
+    window = _resolve_pending_window(worker_count, chunk, job.width * render_h * 4)
+    stall_timeout_s = _resolve_stall_timeout_s(chunk)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
         worker_count,
@@ -1318,7 +1414,14 @@ def _write_frames_multiprocess(
     )
     written = 0
     try:
-        for (_start, count), blob in zip(tasks, pool.imap(_render_worker_chunk, tasks)):
+        results = _iter_ordered_pool_results(
+            pool,
+            _render_worker_chunk,
+            tasks,
+            window=window,
+            stall_timeout_s=stall_timeout_s,
+        )
+        for (_start, count), blob in zip(tasks, results):
             if should_cancel is not None and should_cancel():
                 terminate_process(process)
                 raise ExportCancelled("已停止导出。")
@@ -1327,7 +1430,7 @@ def _write_frames_multiprocess(
             if on_progress is not None:
                 on_progress(written, total_frames)
     finally:
-        # 无论正常完成 / 取消 / 异常，都强制收掉 workers（imap 可能仍在后台渲染）。
+        # 无论正常完成 / 取消 / 异常，都强制收掉 workers（可能仍有在飞任务）。
         pool.terminate()
         pool.join()
 
@@ -1398,11 +1501,15 @@ def _write_frames_multiprocess_bands(
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
-    """多进程并行渲染（方案 B 打包多带），主进程用 imap 按序收回写入 ffmpeg stdin。"""
+    """多进程并行渲染（方案 B 打包多带），主进程按序收回写入 ffmpeg stdin。
+
+    与 _write_frames_multiprocess 相同的有界在飞窗口 + 停滞超时护栏。"""
     import multiprocessing as mp
 
     chunk = _resolve_chunk_size(job, packed_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
+    window = _resolve_pending_window(worker_count, chunk, job.width * packed_h * 4)
+    stall_timeout_s = _resolve_stall_timeout_s(chunk)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
         worker_count,
@@ -1411,7 +1518,14 @@ def _write_frames_multiprocess_bands(
     )
     written = 0
     try:
-        for (_start, count), blob in zip(tasks, pool.imap(_render_worker_chunk_bands, tasks)):
+        results = _iter_ordered_pool_results(
+            pool,
+            _render_worker_chunk_bands,
+            tasks,
+            window=window,
+            stall_timeout_s=stall_timeout_s,
+        )
+        for (_start, count), blob in zip(tasks, results):
             if should_cancel is not None and should_cancel():
                 terminate_process(process)
                 raise ExportCancelled("已停止导出。")

@@ -353,7 +353,16 @@ class _FakeGpuRendererProcess:
         self.frames = []
         self.pending = []
         self.max_pending = 0
+        self.started = False
+        self.closed = False
         _FakeGpuRendererProcess.instances.append(self)
+
+    def start(self):
+        self.started = True
+        return {"ok": True, "event": "ready"}
+
+    def close(self):
+        self.closed = True
 
     def __enter__(self):
         return self
@@ -614,3 +623,233 @@ def test_iter_gpu_rgba_frames_multiworker_cancel_closes_transport(monkeypatch) -
     process = _FakeGpuRendererProcess.instances[-1]
     assert process.max_pending == 4
     assert _FakeGpuRingReader.instances == []
+
+
+def test_gpu_export_timeout_helpers_default_and_env(monkeypatch) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_CONFIGURE_TIMEOUT_S", raising=False)
+    assert ne.gpu_export_response_timeout_s(False) == pytest.approx(60.0)
+    assert ne.gpu_export_response_timeout_s(True) == pytest.approx(300.0)
+    # configure 超时 ≥ 每帧响应超时，且默认给足 prewarm 余量
+    assert ne.gpu_export_configure_timeout_s(False) == pytest.approx(180.0)
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S", "1.5")
+    assert ne.gpu_export_response_timeout_s(False) == pytest.approx(1.5)
+    assert ne.gpu_export_configure_timeout_s(False) == pytest.approx(180.0)
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_CONFIGURE_TIMEOUT_S", "5")
+    assert ne.gpu_export_configure_timeout_s(False) == pytest.approx(5.0)
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S", "200")
+    assert ne.gpu_export_configure_timeout_s(False) == pytest.approx(200.0)
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_TIMEOUT_S", "bad")
+    assert ne.gpu_export_response_timeout_s(False) == pytest.approx(60.0)
+
+
+def test_gpu_export_vram_headroom_extraction() -> None:
+    assert ne.gpu_export_vram_headroom({}) is None
+    assert ne.gpu_export_vram_headroom({"video_memory_info_available": False}) is None
+    assert ne.gpu_export_vram_headroom(
+        {
+            "video_memory_info_available": True,
+            "local_video_memory_usage_bytes": 10,
+            "local_video_memory_budget_bytes": 0,
+        }
+    ) is None
+    assert ne.gpu_export_vram_headroom(
+        {
+            "video_memory_info_available": True,
+            "local_video_memory_usage_bytes": 100,
+            "local_video_memory_budget_bytes": 400,
+        }
+    ) == (100, 400)
+
+
+def test_degraded_gpu_worker_candidates_sequence() -> None:
+    assert ne.degraded_gpu_worker_candidates(4) == [4, 2, 1]
+    assert ne.degraded_gpu_worker_candidates(3) == [3, 1]
+    assert ne.degraded_gpu_worker_candidates(2) == [2, 1]
+    assert ne.degraded_gpu_worker_candidates(1) == [1]
+    assert ne.degraded_gpu_worker_candidates(9) == [4, 2, 1]
+
+
+class _FakeVramGpuRendererProcess:
+    """按创建顺序消耗 ``vram_reports`` 的 GPU sidecar 假体（预检 / 降级路径）。"""
+
+    instances: "list[_FakeVramGpuRendererProcess]" = []
+    vram_reports: "list[dict[str, int] | None]" = []
+
+    def __init__(self, *args, **kwargs):
+        self.configures = []
+        self.frames = []
+        self.pending = []
+        self.started = False
+        self.closed = False
+        index = len(_FakeVramGpuRendererProcess.instances)
+        self.report = (
+            _FakeVramGpuRendererProcess.vram_reports[index]
+            if index < len(_FakeVramGpuRendererProcess.vram_reports)
+            else None
+        )
+        _FakeVramGpuRendererProcess.instances.append(self)
+
+    def start(self):
+        self.started = True
+        return {"ok": True, "event": "ready"}
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
+        return None
+
+    def configure_gpu(self, *args, **kwargs):
+        self.configures.append(kwargs)
+        response: dict[str, object] = {
+            "ok": True,
+            "event": "gpu_configured",
+            "worker_count": int(kwargs.get("worker_count", 1) or 1),
+        }
+        if self.report is not None:
+            response.update(self.report)
+        return response
+
+    def begin_render_gpu_frame(self, t_ms, **kwargs):
+        self.frames.append((t_ms, kwargs))
+        self.pending.append(
+            {
+                "ok": True,
+                "event": "gpu_frame_ready",
+                "frame_index": kwargs["frame_index"],
+                "shm_key": kwargs["shm_key"],
+            }
+        )
+
+    def finish_render_gpu_frame(self):
+        return self.pending.pop(0)
+
+    def gpu_diagnostics(self, *, force_warp=False):
+        return {"ok": True, "event": "gpu_diagnostics", "force_warp": force_warp}
+
+
+_MIB = 1024 * 1024
+
+
+def _report(usage_mib: int, budget_mib: int) -> dict[str, int]:
+    return {
+        "video_memory_info_available": True,
+        "local_video_memory_usage_bytes": usage_mib * _MIB,
+        "local_video_memory_budget_bytes": budget_mib * _MIB,
+    }
+
+
+def _run_vram_export(monkeypatch, *, worker_count, reports, **kwargs):
+    _FakeVramGpuRendererProcess.instances.clear()
+    _FakeVramGpuRendererProcess.vram_reports = list(reports)
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeVramGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    return list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=1,
+            worker_count=worker_count,
+            **kwargs,
+        )
+    )
+
+
+def test_iter_gpu_rgba_frames_degrades_workers_on_projected_vram(monkeypatch) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_GROWTH", raising=False)
+    logs: list[str] = []
+
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=3,
+        reports=[_report(900, 1000), _report(100, 1000)],
+        logger=logs.append,
+    )
+
+    # 第一档 3 worker 预估峰值 1800MiB > 1000MiB 预算 → 关掉重配为 1 worker
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert len(_FakeVramGpuRendererProcess.instances) == 2
+    first, second = _FakeVramGpuRendererProcess.instances
+    assert [c["worker_count"] for c in first.configures] == [3]
+    assert [c["worker_count"] for c in second.configures] == [1]
+    assert first.closed is True
+    assert second.started is True
+    assert any("降至 1 个 worker" in message for message in logs)
+
+
+def test_iter_gpu_rgba_frames_raises_when_single_worker_exhausts_vram(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_GROWTH", raising=False)
+
+    with pytest.raises(ne.NativeRendererError) as excinfo:
+        _run_vram_export(
+            monkeypatch,
+            worker_count=2,
+            reports=[_report(950, 1000), _report(950, 1000)],
+        )
+    assert "显存不足" in str(excinfo.value)
+    assert _FakeVramGpuRendererProcess.instances[-1].closed is True
+
+
+def test_iter_gpu_rgba_frames_proceeds_with_tight_single_worker(monkeypatch) -> None:
+    # 单 worker 预估超预算但实际占用未逼近预算：尽力导出并记录提示。
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_GROWTH", raising=False)
+    logs: list[str] = []
+
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=1,
+        reports=[_report(600, 1000)],
+        logger=logs.append,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert len(_FakeVramGpuRendererProcess.instances) == 1
+    assert any("余量偏紧" in message for message in logs)
+
+
+def test_iter_gpu_rgba_frames_preflight_env_disables_degradation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", "0")
+
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=3,
+        reports=[_report(900, 1000)],
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert len(_FakeVramGpuRendererProcess.instances) == 1
+    assert [c["worker_count"] for c in _FakeVramGpuRendererProcess.instances[0].configures] == [3]
+
+
+def test_iter_gpu_rgba_frames_growth_env_relaxes_preflight(monkeypatch) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", raising=False)
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_GROWTH", "1.0")
+
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=3,
+        reports=[_report(900, 1000)],
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert len(_FakeVramGpuRendererProcess.instances) == 1
