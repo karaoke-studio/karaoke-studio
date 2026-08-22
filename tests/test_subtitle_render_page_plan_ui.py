@@ -175,13 +175,13 @@ def test_loading_settings_card_is_isolated_and_fully_described(qapp):
     assert dialog._actual_rows_layout.text() == "根据实际行数分配布局"
     assert dialog._actual_rows_layout.toolTip()
     assert not dialog._actual_rows_layout.isChecked()
-    assert dialog._sug_offset_check.text() == "读取 .sug 时应用导出偏移"
+    assert dialog._sug_offset_check.text() == "读取 .sug 时应用打轴模块的软件导出补偿"
     assert dialog._sug_offset_check.toolTip()
     assert dialog._sug_offset_check.isChecked()
     dialog._sug_offset_check.setChecked(False)
     assert dialog.result_value() == (
         "global",
-        SubtitleLoadingSettings(apply_sug_export_offset=False),
+        SubtitleLoadingSettings(apply_sug_export_compensation=False),
     )
     dialog._sug_offset_check.setChecked(True)
     assert dialog._mode_combo.toolTip()
@@ -189,3 +189,38 @@ def test_loading_settings_card_is_isolated_and_fully_described(qapp):
     dialog.deleteLater()
     parent.deleteLater()
     qapp.processEvents()
+
+
+def test_sug_software_compensation_reads_timing_module_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """补偿值来自宿主 lyrics_timing 命名空间的 export.software_compensation_ms。"""
+    from types import SimpleNamespace
+
+    from krok_helper.subtitle_render.frontend import main_window as render_window
+
+    def fake_settings(value):
+        def load():
+            return SimpleNamespace(lyrics_timing=value)
+
+        return load
+
+    cases = [
+        ({"export": {"software_compensation_ms": -300}}, -300),
+        ({"export": {"software_compensation_ms": 240}}, 240),
+        # 字段缺失 / 命名空间缺失 / 值脏 → 0（SUG 侧同款默认）。
+        ({"export": {}}, 0),
+        ({}, 0),
+        ({"export": {"software_compensation_ms": "abc"}}, 0),
+    ]
+    for payload, expected in cases:
+        monkeypatch.setattr(
+            render_window, "load_app_settings", fake_settings(payload)
+        )
+        assert render_window._sug_software_compensation_ms() == expected, payload
+
+    def broken():
+        raise OSError("settings unreadable")
+
+    monkeypatch.setattr(render_window, "load_app_settings", broken)
+    assert render_window._sug_software_compensation_ms() == 0

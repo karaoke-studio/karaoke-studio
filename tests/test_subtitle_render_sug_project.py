@@ -172,51 +172,87 @@ def test_sug_adapter_bakes_global_offset_exactly_once_for_cpu_and_gpu(
 
 
 @pytest.mark.parametrize("offset_ms", [200, -200])
-def test_sug_adapter_apply_export_offset_false_keeps_raw_timestamps(
+def test_sug_adapter_software_compensation_shifts_all_absolute_times(
     offset_ms: int,
 ) -> None:
-    """关闭「读取 .sug 时应用导出偏移」后使用原始时间轴，且不写 meta 偏移。"""
-    project = _sample_sug_project()
-    project.global_offset_ms = offset_ms
+    """软件导出补偿叠加在导出偏移之上，平移全部绝对时间，mora 相对值不动。"""
+    track = timing_track_from_sug_project(
+        _sample_sug_project(), software_compensation_ms=offset_ms
+    )
 
-    track = timing_track_from_sug_project(project, apply_export_offset=False)
-
-    # 原始检查点未被叠加偏移；meta 的 @Offset 槽位保持空置。
-    assert track.lines[0].chars[0].start_ms == 1000
-    assert track.lines[0].end_ms == 1800
+    # 基线：烘焙导出偏移后 愛=1050 起 / 行尾 1850 / ruby 1050..1850。
+    assert track.lines[0].chars[0].start_ms == 1050 + offset_ms
+    assert track.lines[0].chars[0].pause_release_ms == 1850 + offset_ms
+    assert track.lines[0].end_ms == 1850 + offset_ms
+    ruby = track.rubies[0]
+    assert ruby.pos_start_ms == 1050 + offset_ms
+    assert ruby.pos_end_ms == 1850 + offset_ms
+    # mora 时间戳是相对 ruby 起点的差值，不随补偿平移。
+    assert ruby.reading_part_ms == [300]
     assert track.meta.offset_ms == 0
-    native_track = track_to_ir(track)
-    assert native_track["meta"]["offset_ms"] == 0
-    assert native_track["lines"][0]["chars"][0]["start_ms"] == 1000
+
+
+def test_sug_adapter_software_compensation_double_clamps_like_export_service() -> None:
+    """两段独立钳 0：先 max(0, raw+导出偏移)，再 max(0, +补偿)，非单段合并。"""
+    singer = Singer(id="main", name="主唱", is_default=True)
+    char = Character(
+        char="歌",
+        check_count=1,
+        timestamps=[100],
+        sentence_end_ts=150,
+        is_sentence_end=True,
+        is_line_end=True,
+        singer_id=singer.id,
+    )
+    project = Project(
+        singers=[singer],
+        sentences=[Sentence(singer_id=singer.id, characters=[char])],
+        global_offset_ms=-200,
+    )
+
+    track = timing_track_from_sug_project(project, software_compensation_ms=150)
+
+    # 导出偏移先把 100 钳到 0，补偿再加 150 → 150；
+    # 单段合并 max(0, 100-200+150) 会得到 50，与 export_service 口径不符。
+    assert track.lines[0].chars[0].start_ms == 150
+
+
+def test_sug_adapter_software_compensation_zero_is_noop() -> None:
+    project = _sample_sug_project()
+
+    plain = timing_track_from_sug_project(project)
+    zero = timing_track_from_sug_project(project, software_compensation_ms=0)
+
+    assert plain == zero
 
 
 def test_sug_adapter_export_offset_is_cumulative_with_style_offset() -> None:
-    """导出偏移只加算进时间戳；LRC @Offset 槽位与样式「偏移」保持独立叠加。"""
+    """导出偏移+软件补偿烘焙进时间戳；@Offset 槽位与样式「偏移」独立叠加。"""
     project = _sample_sug_project()
     project.global_offset_ms = 200
 
-    track = timing_track_from_sug_project(project)
+    track = timing_track_from_sug_project(project, software_compensation_ms=-300)
     style = Style(timing_offset_ms=150)
 
-    assert track.lines[0].chars[0].start_ms == 1200
+    assert track.lines[0].chars[0].start_ms == 900
     assert track.meta.offset_ms == 0
-    # 播放 1350ms 采样到 1200ms 起始的字符：两层偏移各退各的，互不覆盖。
-    assert _effective_track_time_ms(track, 1350, style) == 1200
+    # 播放 1050ms 采样到 900ms 起始的字符：三层偏移各退各的，互不覆盖。
+    assert _effective_track_time_ms(track, 1050, style) == 900
 
 
-def test_load_sug_timing_track_apply_export_offset_false_reads_raw(
+def test_load_sug_timing_track_applies_software_compensation(
     tmp_path: Path,
 ) -> None:
     sug_path = tmp_path / "offset.sug"
     SugProjectParser.save(_sample_sug_project(), str(sug_path))
 
-    applied = load_sug_timing_track(sug_path)
-    raw = load_sug_timing_track(sug_path, apply_export_offset=False)
+    plain = load_sug_timing_track(sug_path)
+    compensated = load_sug_timing_track(sug_path, software_compensation_ms=-300)
 
-    assert applied.lines[0].chars[0].start_ms == 1050
-    assert raw.lines[0].chars[0].start_ms == 1000
-    assert raw.lines[0].end_ms == 1800
-    assert raw.meta.offset_ms == 0
+    assert plain.lines[0].chars[0].start_ms == 1050
+    assert compensated.lines[0].chars[0].start_ms == 750
+    assert compensated.lines[0].end_ms == 1550
+    assert compensated.meta.offset_ms == 0
 
 
 def test_load_sug_timing_track_reads_nicokara_extras(tmp_path: Path) -> None:

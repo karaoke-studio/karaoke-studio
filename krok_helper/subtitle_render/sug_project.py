@@ -31,12 +31,13 @@ _DEFAULT_PLACEHOLDER_SINGER_NAMES = {"未命名", "Untitled"}
 
 
 def load_sug_timing_track(
-    path: str | Path, *, apply_export_offset: bool = True
+    path: str | Path, *, software_compensation_ms: int = 0
 ) -> TimingTrack:
     """Load a ``.sug`` file and convert it to :class:`TimingTrack`.
 
-    ``apply_export_offset`` controls whether the project's ``global_offset_ms``
-    (SUG 的「导出偏移」) is added on top of the raw checkpoints, matching
+    ``software_compensation_ms`` is the timing module's 「软件导出补偿」
+    (``export.software_compensation_ms``); passing it replicates what a SUG
+    export to LRC would contain.  See
     :func:`timing_track_from_sug_project`.
     """
 
@@ -45,7 +46,9 @@ def load_sug_timing_track(
     extras = SugProjectParser.load_extras(str(source_path))
     tags = extras.get("nicokara_tags") if isinstance(extras, dict) else None
     return timing_track_from_sug_project(
-        project, nicokara_tags=tags, apply_export_offset=apply_export_offset
+        project,
+        nicokara_tags=tags,
+        software_compensation_ms=software_compensation_ms,
     )
 
 
@@ -53,7 +56,7 @@ def timing_track_from_sug_project(
     project: Any,
     *,
     nicokara_tags: Mapping[str, Any] | None = None,
-    apply_export_offset: bool = True,
+    software_compensation_ms: int = 0,
 ) -> TimingTrack:
     """Convert a StrangeUtaGame ``Project`` object to :class:`TimingTrack`.
 
@@ -65,19 +68,24 @@ def timing_track_from_sug_project(
     - SUG singers become both line singer labels and per-char role labels so
       the existing role styling path can address them.
 
-    ``.sug`` stores *raw* checkpoints; SUG adds ``global_offset_ms`` (导出偏移)
-    on top at preview/export time.  ``apply_export_offset=True`` bakes the same
-    additive shift into every timestamp (clamped at 0, exactly like SUG's
-    ``Character.set_offset``).  ``False`` keeps the raw timestamps instead.
-    Either way the offset never touches ``meta.offset_ms`` (LRC ``@Offset``)
-    or ``style.timing_offset_ms`` — those stay independent and cumulative.
+    Timing is assembled exactly the way SUG's own export pipeline does, in
+    two additive, individually clamped steps:
+
+    1. the project's ``global_offset_ms`` (「导出偏移」) is always baked into
+       every timestamp — ``max(0, raw + offset)``, mirroring
+       ``Character.set_offset``;
+    2. ``software_compensation_ms`` (「软件导出补偿」，``export_service``
+       applies it to every format except ``.sug`` at export time) is then
+       added on top — ``max(0, shifted + compensation)``.
+
+    Step 2 exists because ``.sug`` stores uncompensated timestamps; a SUG
+    LRC export shifts them by the module's current setting, and reading the
+    project directly should be able to match that.  The compensation never
+    touches ``meta.offset_ms`` (LRC ``@Offset``) or ``style.timing_offset_ms``
+    — those stay independent and cumulative.
     """
 
-    offset_ms = (
-        int(getattr(project, "global_offset_ms", 0) or 0)
-        if apply_export_offset
-        else 0
-    )
+    offset_ms = int(getattr(project, "global_offset_ms", 0) or 0)
     singers = list(getattr(project, "singers", []) or [])
     singer_by_id = {str(getattr(singer, "id")): singer for singer in singers}
     singer_index_by_id = {
@@ -152,7 +160,7 @@ def timing_track_from_sug_project(
 
     metadata = getattr(project, "metadata", None)
     tags = nicokara_tags if isinstance(nicokara_tags, Mapping) else {}
-    return TimingTrack(
+    track = TimingTrack(
         meta=TimingTrackMeta(
             # Nicokara 标签是导出时的显式元数据；有值时优先于项目属性。
             # 这也覆盖“从 LRC 导入后标签已解析、但 ProjectMetadata 仍为空”
@@ -165,15 +173,48 @@ def timing_track_from_sug_project(
             or _optional_text(getattr(metadata, "album", None)),
             tagging_by=_tag_text(tags, "tagging_by"),
             silence_ms=_tag_int(tags, "silence_ms"),
-            # ``global_offset_ms``（若启用）已在构建本轨道时加算进所有检查点、
-            # 行尾与 ruby 位置；无论是否启用，这里都保持 0 —— LRC ``@Offset``
-            # 与 ``style.timing_offset_ms`` 是独立的叠加偏移，不能被覆盖。
+            # ``global_offset_ms`` 已在构建本轨道时加算进所有检查点、行尾
+            # 与 ruby 位置；软件导出补偿随后独立叠加。无论补偿多少，这里都
+            # 保持 0 —— LRC ``@Offset`` 与 ``style.timing_offset_ms`` 是独立
+            # 的叠加偏移，不能被覆盖。
             offset_ms=0,
             custom=_custom_tag_lines(tags.get("custom")),
         ),
         lines=lines,
         rubies=rubies,
     )
+    _apply_software_compensation(track, software_compensation_ms)
+    return track
+
+
+def _apply_software_compensation(track: TimingTrack, compensation_ms: int) -> None:
+    """在已构建的轨道上叠加「软件导出补偿」，与 ``export_service`` 同口径。
+
+    SUG 导出时对 ``global_timestamps`` 做 ``max(0, ts + compensation)``；
+    这里的绝对时间字段正是那些值在 :class:`TimingTrack` 里的落点。mora 级
+    ``reading_part_ms`` 是相对值、``meta`` 是源文件元数据，都不参与平移。
+    """
+
+    try:
+        compensation = int(compensation_ms)
+    except (TypeError, ValueError):
+        return
+    if compensation == 0:
+        return
+
+    def shift(value: int | None) -> int | None:
+        return None if value is None else max(0, int(value) + compensation)
+
+    for line in track.lines:
+        line.end_ms = shift(line.end_ms)
+        for ch in line.chars:
+            ch.start_ms = max(0, int(ch.start_ms) + compensation)
+            ch.pause_release_ms = shift(ch.pause_release_ms)
+            ch.source_span_start_ms = shift(ch.source_span_start_ms)
+            ch.source_span_end_ms = shift(ch.source_span_end_ms)
+    for ruby in track.rubies:
+        ruby.pos_start_ms = max(0, int(ruby.pos_start_ms) + compensation)
+        ruby.pos_end_ms = max(0, int(ruby.pos_end_ms) + compensation)
 
 
 def _tag_text(tags: Mapping[str, Any], key: str) -> str | None:

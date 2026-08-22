@@ -846,6 +846,34 @@ class _AspectRatioBox(QWidget):
         self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
 
 
+def _sug_software_compensation_ms() -> int:
+    """打轴模块（SUG）「设置 → 导出 → 软件导出补偿」的当前值（毫秒）。
+
+    SUG 只在导出（除 ``.sug`` 外的所有格式）时把它叠加到时间戳上，所以
+    ``.sug`` 本体不含此补偿；KS 直读 ``.sug`` 时取该值即可复刻一次 SUG
+    导出的结果。宿主把 SUG 设置树整体持久化在 ``AppSettings.lyrics_timing``
+    （嵌套 dict，``export.software_compensation_ms`` 对应
+    ``["export"]["software_compensation_ms"]``）。
+    """
+
+    try:
+        sug_settings = load_app_settings().lyrics_timing
+    except Exception:  # noqa: BLE001 — 设置读取失败按无补偿处理
+        return 0
+    export = (
+        sug_settings.get("export") if isinstance(sug_settings, dict) else None
+    )
+    value = (
+        export.get("software_compensation_ms")
+        if isinstance(export, dict)
+        else None
+    )
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 class _SubtitleLoadingSettingsDialog(ModelessDialog):
     """Source-loading settings card, positioned to the right of its gear button."""
 
@@ -869,8 +897,8 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
         title = StrongBodyLabel("加载字幕设置", self)
         root.addWidget(title)
         hint = CaptionLabel(
-            "这些设置控制字幕如何分段、分页，以及读取 .sug 项目时是否应用导出偏移；"
-            "与渲染样式隔离。",
+            "这些设置控制字幕如何分段、分页，以及读取 .sug 项目时是否应用"
+            "打轴模块的软件导出补偿；与渲染样式隔离。",
             self,
         )
         hint.setWordWrap(True)
@@ -928,13 +956,15 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             "只有 1 行或 2 行的尾页会分别使用 1 行或 2 行默认布局。基础行数仍用于限制每页最多行数。"
         )
         form.addRow("", self._actual_rows_layout)
-        self._sug_offset_check = CheckBox("读取 .sug 时应用导出偏移", self)
+        self._sug_offset_check = CheckBox("读取 .sug 时应用打轴模块的软件导出补偿", self)
         self._sug_offset_check.setToolTip(
-            "SUG 把「导出偏移」单独保存在 .sug 文件里，时间戳本身是未加偏移的原始值。"
-            "启用后读取 .sug 时自动把导出偏移叠加到每个时间戳上（与 SUG 导出一致，"
-            "负偏移不会早于 0 秒）；关闭则使用原始时间轴。该偏移是叠加式的：不影响 "
-            "LRC 的 @Offset 标签，也不影响渲染属性里时间轴的「偏移」字段。"
-            "保存后会重新读取字幕文件并刷新段落和页面；对 .lrc 字幕源无影响。"
+            "「软件导出补偿」是打轴模块「设置 → 导出」里的项目，SUG 只在导出"
+            "（除 .sug 外的所有格式）时把它叠加到时间戳上，.sug 本体不含此补偿。"
+            "启用后读取 .sug 会按打轴模块当前的补偿值平移时间轴，与 SUG 导出"
+            " LRC 的结果一致（负值=提前，正值=延后，不早于 0 秒）。补偿叠加在"
+            " .sug 记录的导出偏移之上，且不影响 LRC 的 @Offset 标签和渲染属性"
+            "里时间轴的「偏移」字段。保存后会重新读取字幕文件并刷新段落和页面；"
+            "对 .lrc 字幕源无影响。"
         )
         form.addRow("", self._sug_offset_check)
         root.addLayout(form)
@@ -964,7 +994,7 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
         self._blank_enabled.setChecked(settings.blank_line_section_enabled)
         self._rows_spin.setValue(settings.rows_per_page)
         self._actual_rows_layout.setChecked(settings.allocate_layout_by_actual_rows)
-        self._sug_offset_check.setChecked(settings.apply_sug_export_offset)
+        self._sug_offset_check.setChecked(settings.apply_sug_export_compensation)
 
     def _current_values(self) -> SubtitleLoadingSettings:
         return SubtitleLoadingSettings(
@@ -973,7 +1003,7 @@ class _SubtitleLoadingSettingsDialog(ModelessDialog):
             blank_line_section_enabled=self._blank_enabled.isChecked(),
             rows_per_page=self._rows_spin.value(),
             allocate_layout_by_actual_rows=self._actual_rows_layout.isChecked(),
-            apply_sug_export_offset=self._sug_offset_check.isChecked(),
+            apply_sug_export_compensation=self._sug_offset_check.isChecked(),
         )
 
     def _on_mode_changed(self, _index: int) -> None:
@@ -4622,9 +4652,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = load_sug_timing_track(
                 path,
-                apply_export_offset=(
-                    self._subtitle_loading_defaults.apply_sug_export_offset
-                ),
+                software_compensation_ms=self._sug_compensation_value(),
             )
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
             fluent_error(
@@ -4646,9 +4674,7 @@ class SubtitleRenderWindow(QWidget):
             track = timing_track_from_sug_project(
                 project,
                 nicokara_tags=nicokara_tags,
-                apply_export_offset=(
-                    self._subtitle_loading_defaults.apply_sug_export_offset
-                ),
+                software_compensation_ms=self._sug_compensation_value(),
             )
         except Exception as exc:  # noqa: BLE001
             fluent_error(
@@ -4871,7 +4897,9 @@ class SubtitleRenderWindow(QWidget):
             )
             candidate = self._load_timing_track_file(
                 path,
-                apply_sug_export_offset=self._sug_export_offset_for_track(owner_track),
+                apply_sug_export_compensation=(
+                    self._sug_compensation_enabled_for_track(owner_track)
+                ),
             )
             after = path.stat()
             if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
@@ -5724,16 +5752,18 @@ class SubtitleRenderWindow(QWidget):
                     continue
                 # 副源在项目打开时按磁盘文件重新解析；导出偏移开关沿用该项目
                 # 保存时该源的加载设置（旧项目快照没有该字段时按默认值应用）。
-                apply_sug_offset = (
-                    self._subtitle_loading_defaults.apply_sug_export_offset
+                apply_compensation = (
+                    self._subtitle_loading_defaults.apply_sug_export_compensation
                 )
                 if str(item.get("loading_settings_mode") or "") == "custom":
-                    apply_sug_offset = subtitle_loading_settings_from_dict(
-                        item.get("loading_settings")
-                    ).apply_sug_export_offset
+                    apply_compensation = (
+                        subtitle_loading_settings_from_dict(
+                            item.get("loading_settings")
+                        ).apply_sug_export_compensation
+                    )
                 try:
                     track = self._load_timing_track_file(
-                        path, apply_sug_export_offset=apply_sug_offset
+                        path, apply_sug_export_compensation=apply_compensation
                     )
                 except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
                     continue
@@ -6360,11 +6390,21 @@ class SubtitleRenderWindow(QWidget):
             return track.loading_settings
         return self._subtitle_loading_defaults
 
-    def _sug_export_offset_for_track(self, track: Optional[TimingTrack]) -> bool:
-        """该轨道重新解析 ``.sug`` 时是否应用导出偏移（跟随其加载设置）。"""
+    def _sug_compensation_enabled_for_track(
+        self, track: Optional[TimingTrack]
+    ) -> bool:
+        """该轨道重新解析 ``.sug`` 时是否应用软件导出补偿（跟随其加载设置）。"""
         if track is None:
-            return self._subtitle_loading_defaults.apply_sug_export_offset
-        return self._effective_loading_settings(track).apply_sug_export_offset
+            return self._subtitle_loading_defaults.apply_sug_export_compensation
+        return (
+            self._effective_loading_settings(track).apply_sug_export_compensation
+        )
+
+    def _sug_compensation_value(self) -> int:
+        """按全局加载设置解析 ``.sug`` 读取时使用的软件导出补偿值。"""
+        if not self._subtitle_loading_defaults.apply_sug_export_compensation:
+            return 0
+        return _sug_software_compensation_ms()
 
     def _source_path_for_track_index(self, track_index: int) -> Optional[Path]:
         if track_index == 0:
@@ -6504,7 +6544,10 @@ class SubtitleRenderWindow(QWidget):
         parsed_source: Optional[TimingTrack] = None
         if path is not None and path.is_file():
             parsed_source = self._load_timing_track_file(
-                path, apply_sug_export_offset=settings.apply_sug_export_offset
+                path,
+                apply_sug_export_compensation=(
+                    settings.apply_sug_export_compensation
+                ),
             )
             state = self._source_watch_states.get(self._subtitle_source_key(path))
             baseline = state.baseline if state is not None else current
@@ -6682,8 +6725,8 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = self._load_timing_track_file(
                 path,
-                apply_sug_export_offset=(
-                    self._subtitle_loading_defaults.apply_sug_export_offset
+                apply_sug_export_compensation=(
+                    self._subtitle_loading_defaults.apply_sug_export_compensation
                 ),
             )
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
@@ -6715,12 +6758,17 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
 
     def _load_timing_track_file(
-        self, path: Path, *, apply_sug_export_offset: bool = True
+        self, path: Path, *, apply_sug_export_compensation: bool = True
     ) -> TimingTrack:
-        """按需解析字幕文件；``.sug`` 的导出偏移开关由调用方的加载设置决定。"""
+        """按需解析字幕文件；``.sug`` 的软件导出补偿开关由调用方的加载设置决定。"""
         if path.suffix.lower() == ".sug":
             return load_sug_timing_track(
-                path, apply_export_offset=apply_sug_export_offset
+                path,
+                software_compensation_ms=(
+                    _sug_software_compensation_ms()
+                    if apply_sug_export_compensation
+                    else 0
+                ),
             )
         return load_nicokara_lrc(path)
 
@@ -6777,8 +6825,8 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = self._load_timing_track_file(
                 path,
-                apply_sug_export_offset=(
-                    self._subtitle_loading_defaults.apply_sug_export_offset
+                apply_sug_export_compensation=(
+                    self._subtitle_loading_defaults.apply_sug_export_compensation
                 ),
             )
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗

@@ -223,9 +223,10 @@ class SubtitleLoadingSettings:
     blank_line_section_enabled: bool = True
     rows_per_page: int = 2
     allocate_layout_by_actual_rows: bool = False
-    apply_sug_export_offset: bool = True
-    """读取 ``.sug`` 时是否把项目里的 ``global_offset_ms``（SUG「导出偏移」）
-    加算到原始时间戳上。偏移是叠加式的：不影响 LRC ``@Offset`` 元数据与
+    apply_sug_export_compensation: bool = True
+    """读取 ``.sug`` 时是否应用打轴模块（SUG）「设置 → 导出 → 软件导出补偿」
+    （``export.software_compensation_ms``）。补偿叠加在 ``.sug`` 自带的导出
+    偏移之上，与 SUG 导出 LRC 的口径一致；不影响 LRC ``@Offset`` 元数据与
     ``style.timing_offset_ms``。仅在重新解析 ``.sug`` 文件时生效。"""
 
 
@@ -1662,7 +1663,7 @@ def subtitle_loading_settings_to_dict(
         "allocate_layout_by_actual_rows": bool(
             settings.allocate_layout_by_actual_rows
         ),
-        "apply_sug_export_offset": bool(settings.apply_sug_export_offset),
+        "apply_sug_export_compensation": bool(settings.apply_sug_export_compensation),
     }
 
 
@@ -1693,10 +1694,10 @@ def subtitle_loading_settings_from_dict(value: object) -> SubtitleLoadingSetting
                 defaults.allocate_layout_by_actual_rows,
             )
         ),
-        apply_sug_export_offset=bool(
+        apply_sug_export_compensation=bool(
             value.get(
-                "apply_sug_export_offset",
-                defaults.apply_sug_export_offset,
+                "apply_sug_export_compensation",
+                defaults.apply_sug_export_compensation,
             )
         ),
     )
