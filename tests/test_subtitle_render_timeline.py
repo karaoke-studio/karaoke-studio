@@ -103,6 +103,77 @@ def test_compute_char_intervals_weights_shared_lrc_span_like_sug():
     assert compute_char_intervals(line) == [(1000, 1500), (1500, 2000)]
 
 
+def test_compute_char_intervals_space_consumes_no_wipe_time():
+    """回归：共享时间块里的无节奏点空格不得占用走字时长。
+
+    ``[1000]あ [2000]い``（"あ " 是一个共享块，空格无独立节奏点，句尾 3000）：
+    旧算法把空格的排版宽度计入加权，空格分走一段时间而绘制层又因无墨水跳过
+    它——走字在空格处停顿、后续字符窗口被压缩。修复后空格得到零时长窗口，
+    あ 的 wipe 一直延伸到 い 的起始时间。与 SUG v1.6.2 ``ba1d6a74`` 同源。
+    """
+    line = TimingLine(
+        chars=[
+            TimingChar(
+                text="あ",
+                start_ms=1000,
+                source_span_start_ms=1000,
+                source_span_end_ms=2000,
+                source_span_index=0,
+                source_span_count=2,
+            ),
+            TimingChar(
+                text=" ",
+                start_ms=1500,
+                source_span_start_ms=1000,
+                source_span_end_ms=2000,
+                source_span_index=1,
+                source_span_count=2,
+            ),
+            TimingChar(text="い", start_ms=2000),
+        ],
+        end_ms=3000,
+    )
+
+    intervals = compute_char_intervals(line, [100, 50, 100])
+
+    # 空格：零时长窗口，瞬时跨过，不占走字时间
+    assert intervals[1][0] == intervals[1][1] == 2000
+    # あ：wipe 延伸到 い 的起始（旧算法会提前结束再停顿）
+    assert intervals[0] == (1000, 2000)
+    # 末段不受影响：い 从 2000 起步、收尾于行末 3000
+    assert intervals[2] == (2000, 3000)
+
+
+def test_compute_char_intervals_all_blank_shared_span_falls_back():
+    # 整段全空白的共享块：回退布局宽度加权，保证各字符仍有有限时间窗口
+    line = TimingLine(
+        chars=[
+            TimingChar(
+                text=" ",
+                start_ms=1000,
+                source_span_start_ms=1000,
+                source_span_end_ms=2000,
+                source_span_index=0,
+                source_span_count=2,
+            ),
+            TimingChar(
+                text="　",
+                start_ms=1500,
+                source_span_start_ms=1000,
+                source_span_end_ms=2000,
+                source_span_index=1,
+                source_span_count=2,
+            ),
+        ],
+        end_ms=2000,
+    )
+
+    assert compute_char_intervals(line, [50, 50]) == [
+        (1000, 1500),
+        (1500, 2000),
+    ]
+
+
 def test_compute_char_intervals_uses_pause_release_as_char_end():
     line = TimingLine(
         chars=[

@@ -697,6 +697,16 @@ def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
     return candidate
 
 
+def _char_has_no_wipe_ink(ch: TimingChar) -> bool:
+    """零墨水字符判定（空格 / 全角空格 / NBSP 等无渲染字符）。
+
+    与 Painter 的 ``_char_ink_x_ranges`` / ``_role_char_ink_ranges_by_index``
+    同口径：空白字符的墨水边界是零宽 ``(left, left)``，走字扫光在其上没有可见
+    推进；``\\uFFFC`` 虚拟图片字符有真实墨水（且非空白），不在此列。
+    """
+    return ch.vector_glyph is None and (not ch.text or ch.text.isspace())
+
+
 def compute_char_intervals(
     line: TimingLine,
     char_widths: Optional[Sequence[int | float]] = None,
@@ -709,6 +719,9 @@ def compute_char_intervals(
     若传入与字符数等长的 ``char_widths``，解析器标记的
     ``[start]多字[next]`` 共享时间块会按正布局宽度加权切分。算法与 SUG
     ``KaraokePreview`` 一致：边界使用 ``int(start + duration * 累计宽度 / 总宽度)``。
+    空格等零墨水字符权重为 0（零时长窗口、瞬时跨过），时长由可见字符瓜分——
+    否则空格凭排版宽度分走一段真实走字时间，绘制层却因无墨水跳过它，表现为
+    走字停顿、后续字符窗口被压缩；整段全空白时回退布局宽度加权。
     元数据不完整、区间无效或总宽度为 0 时保留兼容的 ``start_ms`` 区间。
 
     **区间可以重叠。** 源里显式写了释放点（``pause_release_ms``）时就以它为准，
@@ -776,8 +789,21 @@ def compute_char_intervals(
             index += 1
             continue
 
-        weights = [max(float(char_widths[index + offset]), 0.0) for offset in range(count)]
+        # 零墨水字符（空格 / 全角空格 / NBSP 等无渲染字符）权重为 0：得到零时长
+        # 窗口、瞬时跨过，整段时长由可见字符按宽度瓜分。整段全空白时回退布局
+        # 宽度加权，保证各字符仍有有限时间窗口。
+        weights = [
+            0.0
+            if _char_has_no_wipe_ink(group[offset])
+            else max(float(char_widths[index + offset]), 0.0)
+            for offset in range(count)
+        ]
         total_width = sum(weights)
+        if total_width <= 0.0:
+            weights = [
+                max(float(char_widths[index + offset]), 0.0) for offset in range(count)
+            ]
+            total_width = sum(weights)
         if total_width <= 0.0:
             index += count
             continue
