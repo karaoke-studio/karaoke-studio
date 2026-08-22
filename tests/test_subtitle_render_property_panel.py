@@ -209,12 +209,22 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
         panel._allow_inter_page_line_overlap_check,
         panel._sync_entry_check,
         panel._sync_ending_check,
+        panel._allow_animation_overlap_check,
+        panel._auto_fill_section_time_check,
+        panel._sync_each_page_check,
         panel._ruby_main_reading_units_check,
     )
 
     assert all(isinstance(checkbox, CheckBox) for checkbox in checkboxes)
     assert not panel._ruby_main_reading_units_check.isChecked()
     assert not panel._allow_inter_page_line_overlap_check.isChecked()
+    assert not panel._allow_animation_overlap_check.isChecked()
+    assert panel._auto_fill_section_time_check.isChecked()
+    assert not panel._sync_each_page_check.isChecked()
+    assert not panel._sync_each_page_check.isEnabled()
+    assert panel._n3_style_row.indexOf(panel._ruby_main_reading_units_check) == 0
+    assert panel._n3_style_row.indexOf(panel._allow_animation_overlap_check) == 1
+    assert panel._n3_style_row.indexOf(panel._auto_fill_section_time_check) == 2
     overlap_tip = panel._allow_inter_page_line_overlap_check.toolTip()
     assert "不会截断任何走字区间" in overlap_tip
     assert "不会把非零入场动画自动压到 250 ms 以下" in overlap_tip
@@ -224,9 +234,22 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     assert "采用被重叠页面布局的行间距" in overlap_tip
     assert "放不下时改向反方向寻找" in overlap_tip
     assert "两边都放不下则保持原布局位置" in overlap_tip
-    assert "入场动画结束前和退场动画开始后的绘制不启用碰撞箱" in overlap_tip
+    assert "不含注音、描边、阴影和发光的主文字字形" in overlap_tip
+    assert "允许出入场动画重叠" in overlap_tip
     assert "不因页面排版变化而扩大碰撞时间" in overlap_tip
-    assert "开启后不执行空间避让" in overlap_tip
+    assert "开启后不执行跨页时间压缩或空间避让" in overlap_tip
+
+
+def test_sync_each_page_is_enabled_only_for_active_sync_parent(qapp):
+    panel = PropertyPanel()
+
+    assert not panel._sync_each_page_check.isEnabled()
+    panel._sync_entry_check.setChecked(True)
+    assert panel._sync_each_page_check.isEnabled()
+    panel._sync_entry_check.setChecked(False)
+    assert not panel._sync_each_page_check.isEnabled()
+    panel._sync_ending_check.setChecked(True)
+    assert panel._sync_each_page_check.isEnabled()
 
 
 def test_property_panel_uses_fluent_form_controls(qapp):
@@ -4169,6 +4192,9 @@ def test_property_panel_timing_controls_emit_style(qapp):
     )
     panel._sync_entry_check.setChecked(True)
     panel._sync_ending_check.setChecked(True)
+    panel._allow_animation_overlap_check.setChecked(True)
+    panel._auto_fill_section_time_check.setChecked(False)
+    panel._sync_each_page_check.setChecked(True)
     panel._ruby_main_reading_units_check.setChecked(True)
 
     assert emitted[-1].line_lead_in_ms == 1500
@@ -4178,6 +4204,9 @@ def test_property_panel_timing_controls_emit_style(qapp):
     assert emitted[-1].section_ending_mode == "clear"
     assert emitted[-1].sync_entry is True
     assert emitted[-1].sync_ending is True
+    assert emitted[-1].allow_entry_exit_animation_overlap is True
+    assert emitted[-1].auto_fill_section_time is False
+    assert emitted[-1].sync_each_page is True
     assert emitted[-1].ruby_main_progress_mode == "reading_units"
 
 

@@ -5069,6 +5069,14 @@ class PropertyPanel(QWidget):
             )
             self._sync_entry_check.setChecked(timing.sync_entry)
             self._sync_ending_check.setChecked(timing.sync_ending)
+            self._allow_animation_overlap_check.setChecked(
+                timing.allow_entry_exit_animation_overlap
+            )
+            self._sync_each_page_check.setChecked(timing.sync_each_page)
+            self._auto_fill_section_time_check.setChecked(
+                timing.auto_fill_section_time
+            )
+            self._sync_sync_each_page_enabled()
             self._entry_anim_combo.setCurrentIndex(
                 max(0, self._entry_anim_combo.findData(timing.entry_anim))
             )
@@ -7412,19 +7420,20 @@ class PropertyPanel(QWidget):
             "启用行间重叠", compact_row
         )
         self._allow_inter_page_line_overlap_check.setToolTip(
-            "关闭时，系统先按每一行布局完成后的正文、注音、描边、阴影和发光"
+            "关闭时，系统按每一行不含注音、描边、阴影和发光的主文字字形"
             "像素范围检测真实跨页冲突，只缩短发生冲突的两行的提前入场和延迟"
             "退场时间，不会截断任何走字区间或改变页内上屏顺序。自动压缩可以"
             "缩短动画时段：不会把非零入场动画自动压到"
             " 250 ms 以下；若动画时长或上屏时间由用户手工设定，则保留用户值；"
-            "非零退场动画自动压缩时至少保留 100 ms。入场动画结束前和退场动画开始后的绘制"
-            "不启用碰撞箱。时间压缩仍无法消除冲突时，移动后进入的整页字幕。"
+            "非零退场动画自动压缩时至少保留 100 ms。是否允许入场和退场动画"
+            "互相重叠，由时间设置中的“允许出入场动画重叠”单独控制。"
+            "时间压缩仍无法消除冲突时，移动后进入的整页字幕。"
             "避让优先吸附到已有布局行位，再沿布局方向寻找画布"
             "内空间，跨页空隙采用被重叠页面布局的行间距；放不下时改向反方向寻找；"
             "两边都放不下则保持原布局位置和绘制优先级。页面一旦移动，会保持位置"
             "直到本页播放完毕。入场、退场和字符动画允许互相穿越，不因页面排版"
-            "变化而扩大碰撞时间。开启后不执行空间避让，允许跨页字幕"
-            "重叠，适合需要刻意叠放的特殊效果。同一页内部的负行间距或手工重叠"
+            "变化而扩大碰撞时间。开启后不执行跨页时间压缩或空间避让，允许跨页字幕"
+            "直接重叠，适合需要刻意叠放的特殊效果。同一页内部的负行间距或手工重叠"
             "不受此开关影响。"
         )
         self._allow_inter_page_line_overlap_check.toggled.connect(
@@ -7840,25 +7849,44 @@ class PropertyPanel(QWidget):
         sync_row.setContentsMargins(0, 0, 0, 0)
         self._sync_entry_check = CheckBox("同步入场", section)
         self._sync_entry_check.setToolTip(
-            "同一页内未手工调整上屏时间的 T 会先尽量延长到本页最早边界。\n"
+            "未手工调整上屏时间的 T 会尽量延长到同步页的最早边界；默认只处理段首页，\n"
+            "开启“每句同步”后处理每一页。"
             "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩自己入场的"
             "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
         )
         self._sync_entry_check.toggled.connect(
             lambda checked: self._update_style(sync_entry=checked)
         )
+        self._sync_entry_check.toggled.connect(
+            lambda _checked: self._sync_sync_each_page_enabled()
+        )
         sync_row.addWidget(self._sync_entry_check)
 
         self._sync_ending_check = CheckBox("同步退场", section)
         self._sync_ending_check.setToolTip(
-            "同一页内未手工调整消失时间的 T 会先尽量延长到本页最晚边界。\n"
+            "未手工调整消失时间的 T 会尽量延长到同步页的最晚边界；默认只处理段尾页，\n"
+            "开启“每句同步”后处理每一页。"
             "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩后句入场的"
             "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
         )
         self._sync_ending_check.toggled.connect(
             lambda checked: self._update_style(sync_ending=checked)
         )
+        self._sync_ending_check.toggled.connect(
+            lambda _checked: self._sync_sync_each_page_enabled()
+        )
         sync_row.addWidget(self._sync_ending_check)
+
+        self._sync_each_page_check = CheckBox("每句同步", section)
+        self._sync_each_page_check.setToolTip(
+            "关闭时，同步入场只作用于每段第一页，同步退场只作用于每段最后一页；\n"
+            "开启时，每一页都会分别执行同步入场和同步退场。"
+        )
+        self._sync_each_page_check.toggled.connect(
+            lambda checked: self._update_style(sync_each_page=checked)
+        )
+        self._sync_each_page_check.setEnabled(False)
+        sync_row.addWidget(self._sync_each_page_check)
         sync_row.addStretch(1)
         layout.addLayout(sync_row)
 
@@ -7877,8 +7905,49 @@ class PropertyPanel(QWidget):
                 )
             )
         )
-        layout.addWidget(self._ruby_main_reading_units_check)
+        self._n3_style_row = QHBoxLayout()
+        self._n3_style_row.setContentsMargins(0, 0, 0, 0)
+        self._n3_style_row.addWidget(self._ruby_main_reading_units_check)
+
+        self._allow_animation_overlap_check = CheckBox(
+            "允许出入场动画重叠", section
+        )
+        self._allow_animation_overlap_check.setToolTip(
+            "开启时，同轨间隔只约束主文字的稳定显示段，入场和退场动画可以互相重叠；\n"
+            "关闭时，完整的入场、稳定显示和退场窗口都必须满足同轨间隔。"
+        )
+        self._allow_animation_overlap_check.toggled.connect(
+            lambda checked: self._update_style(
+                allow_entry_exit_animation_overlap=checked
+            )
+        )
+        self._n3_style_row.addWidget(self._allow_animation_overlap_check)
+
+        self._auto_fill_section_time_check = CheckBox(
+            "自动填充段内时间", section
+        )
+        self._auto_fill_section_time_check.setToolTip(
+            "开启时，非段尾页的每句按主文字行盒高度匹配下一页最近的行，并延长到"
+            "该行入场前的同轨间隔；段尾页填充到本页自然结束。\n"
+            "关闭时，每句仅保留自己的退场窗口。"
+        )
+        self._auto_fill_section_time_check.toggled.connect(
+            lambda checked: self._update_style(auto_fill_section_time=checked)
+        )
+        self._n3_style_row.addWidget(self._auto_fill_section_time_check)
+        self._n3_style_row.addStretch(1)
+        layout.addLayout(self._n3_style_row)
         return section
+
+    def _sync_sync_each_page_enabled(self) -> None:
+        """Enable the child option only while either synchronization mode is active."""
+
+        if not hasattr(self, "_sync_each_page_check"):
+            return
+        self._sync_each_page_check.setEnabled(
+            self._sync_entry_check.isChecked()
+            or self._sync_ending_check.isChecked()
+        )
 
     def _color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)

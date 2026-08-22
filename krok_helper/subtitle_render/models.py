@@ -993,6 +993,9 @@ class StyleTimingConfig:
     section_gap_ms: int
     sync_entry: bool
     sync_ending: bool
+    allow_entry_exit_animation_overlap: bool
+    sync_each_page: bool
+    auto_fill_section_time: bool
     section_ending_mode: SectionEndingMode
     entry_anim: EntryAnimation
     entry_lead_ms: int
@@ -1041,8 +1044,9 @@ class Style:
     allow_inter_page_line_overlap: bool = False
     """允许不同页面的字幕行保持旧式重叠行为。
 
-    关闭时，渲染器按最终像素范围移动后进入的整页字幕；该字段是项目级设置，
-    不属于 ``LyricsLayout``，也不随分页布局预设切换。
+    关闭时，渲染器按最终主文字像素范围压缩冲突时间，仍无法消除时移动后进入的
+    整页字幕；开启时跳过这两类跨页避让。该字段是项目级设置，不属于
+    ``LyricsLayout``，也不随分页布局预设切换。
     """
 
     font_weight: int = 400  # Qt 习惯 100-900
@@ -1254,10 +1258,19 @@ class Style:
     """自动分段阈值：相邻两句演唱空隙（间奏）超过此值即开新段落。"""
 
     sync_entry: bool = False
-    """同步入场：先取同页最长延长候选，再逐个压缩实际碰撞的行。"""
+    """同步入场：先取同步页最长延长候选，再逐个压缩实际碰撞的行。"""
 
     sync_ending: bool = False
-    """同步退场：先取同页最长延长候选，再逐个压缩实际碰撞的行。"""
+    """同步退场：先取同步页最长延长候选，再逐个压缩实际碰撞的行。"""
+
+    allow_entry_exit_animation_overlap: bool = False
+    """允许相邻页面的入场和退场动画在时间上重叠。"""
+
+    sync_each_page: bool = False
+    """每句同步：开启时每页同步；关闭时仅同步段首入场和段尾退场。"""
+
+    auto_fill_section_time: bool = True
+    """自动填充段内时间：按相邻页对应高度延长退场，段尾填充到本页结束。"""
 
     section_ending_mode: SectionEndingMode = "hold"
     """段落结束行为：``hold`` 维持现状（按 N3 TopLong 挂到段末）；``clear`` 段末即
@@ -2076,6 +2089,9 @@ def style_from_dict(payload: object) -> Style:
             "vertical",
             "sync_entry",
             "sync_ending",
+            "allow_entry_exit_animation_overlap",
+            "sync_each_page",
+            "auto_fill_section_time",
             "lit_enabled",
             "lit_shadow",
         }:

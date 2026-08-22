@@ -141,6 +141,8 @@ def visible_display_lines(
     section_gap_ms: int = 0,
     sync_entry: bool = False,
     sync_ending: bool = False,
+    sync_each_page: bool = False,
+    auto_fill_section_time: bool = True,
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
     lane_count: int = 2,
@@ -167,6 +169,8 @@ def visible_display_lines(
         section_gap_ms=section_gap_ms,
         sync_entry=sync_entry,
         sync_ending=sync_ending,
+        sync_each_page=sync_each_page,
+        auto_fill_section_time=auto_fill_section_time,
         section_ending_mode=section_ending_mode,
         lane_count=lane_count,
         row_count_of=row_count_of,
@@ -194,6 +198,8 @@ def compute_display_lines(
     section_gap_ms: int = 0,
     sync_entry: bool = False,
     sync_ending: bool = False,
+    sync_each_page: bool = False,
+    auto_fill_section_time: bool = True,
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
     lane_count: int = 2,
@@ -221,7 +227,8 @@ def compute_display_lines(
 
     ``protect_ms`` 传 0 表示按 N3 规则自动推导（``min(PreTime, PostTime) / 2``）。
 
-    ``sync_entry`` / ``sync_ending`` 是页内各个自动 T 的最长单向延长候选；
+    ``sync_entry`` / ``sync_ending`` 是同步页内各个自动 T 的最长单向延长候选；
+    默认只作用于段首页入场和段尾页退场，``sync_each_page`` 开启后作用于每页；
     带实际画布的渲染路径随后按「先压前句退场、再压后句入场」逐对消除碰撞，
     不会把一行的压缩结果传播给未参与碰撞的页内兄弟行。
     ``section_ending_mode`` 仍是段落级清屏选项；逐行手动覆盖（字幕轨道拖动）
@@ -301,6 +308,7 @@ def compute_display_lines(
         force_bottom_pairs=force_bottom_pairs,
         dynamic_single_page_reflow=dynamic_single_page_reflow,
         independent_line_entry=independent_line_entry,
+        auto_fill_section_time=auto_fill_section_time,
     )
     starts = show_times.starts
     display_ends = show_times.ends
@@ -311,6 +319,7 @@ def compute_display_lines(
         render_lines,
         sync_entry=sync_entry,
         sync_ending=sync_ending,
+        sync_each_page=sync_each_page,
     )
 
     _apply_page_lane_offsets(pages, lanes, show_times.force_bottom)
@@ -553,6 +562,7 @@ def _synchronize_page_boundaries(
     *,
     sync_entry: bool,
     sync_ending: bool,
+    sync_each_page: bool,
 ) -> None:
     """Apply raw page-level sync candidates without crossing manual overrides.
 
@@ -561,15 +571,27 @@ def _synchronize_page_boundaries(
     already resolved bands.
     """
 
+    first_page_by_section: dict[int, ShowTimePage] = {}
+    last_page_by_section: dict[int, ShowTimePage] = {}
+    for page in pages:
+        first_page_by_section.setdefault(page.section, page)
+        last_page_by_section[page.section] = page
+
     for page in pages:
         if not page.lines:
             continue
-        if sync_entry:
+        if sync_entry and (
+            sync_each_page
+            or first_page_by_section.get(page.section) is page
+        ):
             common_start = min(starts[line] for line in page.lines)
             for line in page.lines:
                 if render_lines[line].display_start_override_ms is None:
                     starts[line] = common_start
-        if sync_ending:
+        if sync_ending and (
+            sync_each_page
+            or last_page_by_section.get(page.section) is page
+        ):
             common_end = max(ends[line] for line in page.lines)
             for line in page.lines:
                 if render_lines[line].display_end_override_ms is None:

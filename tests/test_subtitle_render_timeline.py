@@ -593,6 +593,7 @@ def test_sync_entry_groups_each_page_instead_of_the_whole_section():
         tail_ms=1_000,
         lane_gap_ms=300,
         sync_entry=True,
+        sync_each_page=True,
         independent_line_entry=True,
     )
 
@@ -602,6 +603,40 @@ def test_sync_entry_groups_each_page_instead_of_the_whole_section():
         18_200,
         18_200,
     ]
+
+
+def test_sync_defaults_to_section_edge_pages():
+    track = _track(
+        _make_line([("a", 10_000)], end_ms=11_000),
+        _make_line([("b", 12_000)], end_ms=13_000),
+        _make_line([("c", 20_000)], end_ms=21_000),
+        _make_line([("d", 23_000)], end_ms=24_000),
+    )
+    track.page_plan = TrackPagePlan(
+        [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+    )
+    settings = dict(
+        lead_in_ms=1_800,
+        tail_ms=1_000,
+        lane_gap_ms=300,
+        sync_entry=True,
+        sync_ending=True,
+        independent_line_entry=True,
+    )
+
+    section_edges = compute_display_lines(track, **settings)
+    every_page = compute_display_lines(track, sync_each_page=True, **settings)
+
+    assert [item.display_start_ms for item in section_edges] == [
+        8_200, 8_200, 18_200, 21_200
+    ]
+    assert section_edges[0].display_end_ms != section_edges[1].display_end_ms
+    assert section_edges[2].display_end_ms == section_edges[3].display_end_ms
+    assert [item.display_start_ms for item in every_page] == [
+        8_200, 8_200, 18_200, 18_200
+    ]
+    assert every_page[0].display_end_ms == every_page[1].display_end_ms
+    assert every_page[2].display_end_ms == every_page[3].display_end_ms
 
 
 def test_auto_section_boundary_keeps_next_section_from_entering_early():
@@ -642,7 +677,9 @@ def test_red_fraction_page_sync_does_not_extend_to_section_end():
     )
 
     nosync = compute_display_lines(track, sync_ending=False, **settings)
-    sync = compute_display_lines(track, sync_ending=True, **settings)
+    sync = compute_display_lines(
+        track, sync_ending=True, sync_each_page=True, **settings
+    )
 
     assert [item.lane for item in nosync] == [0, 1, 0, 0]
     assert [item.display_end_ms for item in nosync] == [66_865, 69_315, 73_065, 87_915]

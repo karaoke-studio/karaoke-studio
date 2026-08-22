@@ -93,6 +93,7 @@ def compute_show_times(
     force_bottom_pairs: Optional[Sequence[tuple[int, int]]] = None,
     dynamic_single_page_reflow: bool = True,
     independent_line_entry: bool = False,
+    auto_fill_section_time: bool = True,
 ) -> ShowTimes:
     """按 N3 ``TopLongAdjuster`` 算出每个渲染行的 ``(上屏, 消失)``。
 
@@ -146,6 +147,7 @@ def compute_show_times(
         force_bottom_pairs=force_bottom_pairs,
         dynamic_single_page_reflow=bool(dynamic_single_page_reflow),
         independent_line_entry=bool(independent_line_entry),
+        auto_fill_section_time=bool(auto_fill_section_time),
         result=result,
     ).run()
 
@@ -173,6 +175,7 @@ class _Solver:
         force_bottom_pairs: Optional[Sequence[tuple[int, int]]],
         dynamic_single_page_reflow: bool,
         independent_line_entry: bool,
+        auto_fill_section_time: bool,
         result: ShowTimes,
     ) -> None:
         self.begins = sing_begins
@@ -203,6 +206,7 @@ class _Solver:
         )
         self.dynamic_single_page_reflow = dynamic_single_page_reflow
         self.independent_line_entry = independent_line_entry
+        self.auto_fill_section_time = auto_fill_section_time
         animation_windows_supplied = (
             entry_animation_ms is not None or exit_animation_ms is not None
         )
@@ -709,6 +713,7 @@ class _Solver:
                 adjust_same_position=False,
                 dynamic_single_page_reflow=self.dynamic_single_page_reflow,
                 independent_line_entry=self.independent_line_entry,
+                auto_fill_section_time=self.auto_fill_section_time,
             ).starts
         starts, ends, force_bottom = (
             self.out.starts,
@@ -735,16 +740,28 @@ class _Solver:
                         )
                 if line == top and force_bottom[line] is False:
                     starts[line] = self._top_show_begin(page_index)
-                    ends[line] = self._top_show_end(page_index)
+                    ends[line] = (
+                        self._top_show_end(page_index)
+                        if self.auto_fill_section_time
+                        else min(self.ends[line] + self.post, MAX_SHOW_TIME_MS)
+                    )
                 elif line == bottom:
                     starts[line] = self._bottom_show_begin(page_index, is_bottom_align)
                     ends[line] = min(self.ends[line] + self.post, MAX_SHOW_TIME_MS)
                 elif page.vertical_position == "top":
                     starts[line] = self._bottom_show_begin(page_index, is_bottom_align)
-                    ends[line] = min(self.ends[bottom] + self.post, MAX_SHOW_TIME_MS)
+                    ends[line] = min(
+                        self.ends[bottom if self.auto_fill_section_time else line]
+                        + self.post,
+                        MAX_SHOW_TIME_MS,
+                    )
                 else:
                     starts[line] = starts[top]
-                    ends[line] = ends[top]
+                    ends[line] = (
+                        ends[top]
+                        if self.auto_fill_section_time
+                        else min(self.ends[line] + self.post, MAX_SHOW_TIME_MS)
+                    )
                 self._apply_override(line)
                 adjusted_other = None
                 if self.adjust_same_position:

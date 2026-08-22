@@ -8281,10 +8281,27 @@ def test_style_dict_roundtrip_keeps_line_alignments_and_margin():
 
 
 def test_style_dict_roundtrip_keeps_sync_entry():
-    restored = style_from_dict(style_to_dict(Style(sync_entry=True)))
+    restored = style_from_dict(
+        style_to_dict(
+            Style(
+                sync_entry=True,
+                sync_ending=True,
+                allow_entry_exit_animation_overlap=False,
+                sync_each_page=True,
+                auto_fill_section_time=False,
+            )
+        )
+    )
 
     assert restored.sync_entry is True
+    assert restored.sync_ending is True
+    assert restored.allow_entry_exit_animation_overlap is False
+    assert restored.sync_each_page is True
+    assert restored.auto_fill_section_time is False
     assert style_from_dict({}).sync_entry is False
+    assert style_from_dict({}).allow_entry_exit_animation_overlap is False
+    assert style_from_dict({}).sync_each_page is False
+    assert style_from_dict({}).auto_fill_section_time is True
 
 
 def test_style_dict_migrates_legacy_margin_when_new_key_missing():
@@ -9619,6 +9636,7 @@ def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
     )
     style = replace(
         Style(),
+        auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
@@ -9632,14 +9650,13 @@ def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
     assert normal != legacy
     assert normal == {
         0: (8_200, 12_000),
-        1: (10_700, 14_200),
-        2: (12_200, 18_000),
+        1: (10_700, 13_900),
+        2: (12_300, 16_000),
         3: (14_200, 18_000),
     }
-    # The full-coverage conflict consumes only the part of B's automatic exit
-    # that really overlaps C.  The schedule gap is not applied a second time.
+    # Both same-lane handoffs retain the configured 300 ms interval.
     assert normal[0] == (8_200, 12_000)
-    assert normal[2] == (12_200, 18_000)
+    assert normal[2] == (12_300, 16_000)
     assert normal[1][0] == lines[1].chars[0].start_ms - 1_800
     assert normal[3][0] == lines[3].chars[0].start_ms - 1_800
     assert all(
@@ -9674,6 +9691,7 @@ def test_overlap_mode_only_drops_avoidance_and_keeps_the_timing_pipeline(qapp):
     )
     style = replace(
         Style(),
+        auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
@@ -9687,12 +9705,11 @@ def test_overlap_mode_only_drops_avoidance_and_keeps_the_timing_pipeline(qapp):
     # Avoidance can only delay an entry or clip an exit, never the reverse.
     assert all(overlap[index][0] <= normal[index][0] for index in normal)
     assert all(overlap[index][1] >= normal[index][1] for index in normal)
-    # B's exit is shortened exactly to C's existing coverage boundary.  C is
-    # not delayed merely to manufacture an extra schedule gap.
-    assert {index for index in normal if normal[index] != overlap[index]} == {1}
-    assert normal[1] == (10_700, 14_200)
+    # Both same-lane handoffs retain the configured schedule gap.
+    assert {index for index in normal if normal[index] != overlap[index]} == {0, 1, 2}
+    assert normal[1] == (10_700, 13_900)
     assert overlap[1] == (10_700, int(lines[1].end_ms) + 1_000)
-    assert normal[2][0] == overlap[2][0]
+    assert normal[2][0] == overlap[2][0] + 100
 
 
 @pytest.mark.parametrize(
@@ -9721,11 +9738,13 @@ def test_overlap_mode_computes_page_sync_identically(
     )
     style = replace(
         Style(),
+        auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
         sync_entry=sync_entry,
         sync_ending=sync_ending,
+        sync_each_page=True,
     )
 
     normal = subtitle_painter.display_windows_for_style(track, style)
@@ -9735,21 +9754,19 @@ def test_overlap_mode_computes_page_sync_identically(
 
     # Avoidance shortens and delays only the directly colliding line pairs.
     # A sibling from the same page keeps its own independently resolved window.
-    expected_changed = {1}
+    expected_changed = {0, 1, 2}
     if sync_entry:
         expected_changed.add(3)
-    if sync_ending:
-        expected_changed.add(0)
     assert {
         index for index in normal if normal[index] != overlap[index]
     } == expected_changed
     assert overlap[1] == (normal[1][0], int(lines[1].end_ms) + 1_000)
     if sync_entry:
-        assert normal[2][0] == 12_200
-        assert normal[3][0] == 13_500
+        assert normal[2][0] == 12_300
+        assert normal[3][0] == 13_800
         assert overlap[2][0] == overlap[3][0] == 12_200
     else:
-        assert normal[2][0] == overlap[2][0]
+        assert normal[2][0] == overlap[2][0] + 100
     if sync_entry:
         # The collision-driven contraction is per line, not page-wide.
         assert normal[0][0] == normal[1][0]
@@ -9775,6 +9792,8 @@ def test_animation_guard_keeps_exit_floor_and_delays_full_coverage_entry(qapp):
     )
     plain = replace(
         Style(),
+        auto_fill_section_time=False,
+        allow_entry_exit_animation_overlap=True,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
@@ -9795,9 +9814,9 @@ def test_animation_guard_keeps_exit_floor_and_delays_full_coverage_entry(qapp):
     )
 
     assert plain_windows[0][1] == lines[0].end_ms
-    assert lines[0].end_ms + 100 <= animated_windows[0][1] <= (
-        lines[0].end_ms + animated.exit_fade_ms
-    )
+    # The automatic window may retain additional stable tail, but it must not
+    # consume the protected 100 ms exit animation floor.
+    assert animated_windows[0][1] >= lines[0].end_ms + 100
     # The display windows may overlap while one or both lines are animating.
     assert animated_windows[2][0] < animated_windows[0][1]
     display = subtitle_painter._display_lines_for_style(
@@ -9926,6 +9945,7 @@ def test_sync_collision_time_window_keeps_fade_duration(qapp):
     ]
     style = replace(
         Style(),
+        allow_entry_exit_animation_overlap=True,
         entry_anim="fade",
         entry_lead_ms=250,
         exit_anim="fade",
@@ -9975,6 +9995,7 @@ def test_animation_guard_measures_only_stable_text_collisions(qapp, monkeypatch)
     )
     style = replace(
         Style(),
+        allow_entry_exit_animation_overlap=True,
         line_lead_in_ms=0,
         line_tail_ms=0,
         line_lane_gap_ms=300,
@@ -10260,6 +10281,240 @@ def test_page_sync_boundary_extension_never_shortens_existing_windows():
     assert [item.display_end_ms for item in ending] == [700, 650, 650]
 
 
+def test_page_sync_defaults_to_section_edges_and_can_run_on_every_page():
+    lines = [
+        TimingLine(chars=[TimingChar(text, 1_000 + index * 100)], end_ms=2_000)
+        for index, text in enumerate(("A", "B", "C", "D", "E", "F"))
+    ]
+    display_lines = [
+        DisplayLine(
+            line,
+            index % 2,
+            100 + index * 100,
+            1_000 + index * 100,
+            0,
+            index // 2,
+            2,
+        )
+        for index, line in enumerate(lines)
+    ]
+    track = TimingTrack(lines=lines)
+
+    section_edges = subtitle_painter._apply_constrained_page_sync(
+        1_280, 720, track, Style(sync_entry=True, sync_ending=True), display_lines
+    )
+    every_page = subtitle_painter._apply_constrained_page_sync(
+        1_280,
+        720,
+        track,
+        Style(sync_entry=True, sync_ending=True, sync_each_page=True),
+        display_lines,
+    )
+
+    assert [item.display_start_ms for item in section_edges] == [
+        100, 100, 300, 400, 500, 600
+    ]
+    assert [item.display_end_ms for item in section_edges] == [
+        1_000, 1_100, 1_200, 1_300, 1_500, 1_500
+    ]
+    assert [item.display_start_ms for item in every_page] == [
+        100, 100, 300, 300, 500, 500
+    ]
+    assert [item.display_end_ms for item in every_page] == [
+        1_100, 1_100, 1_300, 1_300, 1_500, 1_500
+    ]
+
+
+def test_section_time_fill_matches_next_page_by_nearest_main_text_box(
+    monkeypatch
+):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 1_000, 2_000),
+            ("B", 2_000, 3_000),
+            ("C", 5_000, 6_000),
+            ("D", 7_000, 8_000),
+            ("E", 9_000, 10_000),
+        )
+    ]
+    track = TimingTrack(lines=lines)
+    display_lines = [
+        DisplayLine(lines[0], 0, 500, 2_500, 0, 0, 2),
+        DisplayLine(lines[1], 1, 1_500, 3_500, 0, 0, 2),
+        DisplayLine(lines[2], 0, 5_000, 6_000, 0, 1, 3),
+        DisplayLine(lines[3], 1, 7_000, 8_000, 0, 1, 3),
+        DisplayLine(lines[4], 2, 9_000, 10_000, 0, 1, 3),
+    ]
+    axis_boxes = ((0, 40), (100, 140), (105, 145), (5, 45), (200, 240))
+    measured = [
+        (
+            index,
+            (0, item.page_index),
+            subtitle_painter.LineVisualBand(
+                index,
+                (0, item.page_index),
+                item.display_start_ms,
+                item.display_end_ms,
+                float(axis_min),
+                float(axis_max),
+            ),
+            0.0,
+        )
+        for index, (item, (axis_min, axis_max)) in enumerate(
+            zip(display_lines, axis_boxes)
+        )
+    ]
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_measure_collision_bands",
+        lambda *_args, **_kwargs: measured,
+    )
+
+    filled = subtitle_painter._apply_measured_section_time_fill(
+        1_280,
+        720,
+        track,
+        Style(line_lane_gap_ms=300),
+        display_lines,
+    )
+    disabled = subtitle_painter._apply_measured_section_time_fill(
+        1_280,
+        720,
+        track,
+        Style(auto_fill_section_time=False, line_lane_gap_ms=300),
+        display_lines,
+    )
+
+    # A matches D by height, B matches C; page order is deliberately opposite.
+    assert [item.display_end_ms for item in filled[:2]] == [6_700, 4_700]
+    # The three-line tail page fills its middle line as well as its first line.
+    assert [item.display_end_ms for item in filled[2:]] == [10_000, 10_000, 10_000]
+    assert disabled == display_lines
+
+
+def test_section_time_fill_uses_strict_unique_matches_after_page_shift(
+    monkeypatch,
+):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 1_000, 2_000),
+            ("B", 2_000, 3_000),
+            ("X", 3_000, 4_000),
+            ("C", 6_000, 7_000),
+            ("D", 8_000, 9_000),
+        )
+    ]
+    track = TimingTrack(lines=lines)
+    display_lines = [
+        DisplayLine(lines[0], 0, 500, 2_500, 0, 0, 3),
+        DisplayLine(lines[1], 1, 1_500, 3_500, 0, 0, 3),
+        DisplayLine(lines[2], 2, 2_500, 4_500, 0, 0, 3),
+        DisplayLine(lines[3], 0, 6_000, 7_000, 0, 1, 2),
+        DisplayLine(lines[4], 1, 8_000, 9_000, 0, 1, 2),
+    ]
+    # Before the page displacement, C is closest to both A and B.  The final
+    # +40 px placement makes C a valid match for B only; D remains too far
+    # away from every source.  Thus C may be consumed once and A stays put.
+    axis_boxes = ((0, 40), (50, 90), (100, 140), (5, 45), (200, 240))
+    measured = [
+        (
+            index,
+            (0, item.page_index),
+            subtitle_painter.LineVisualBand(
+                index,
+                (0, item.page_index),
+                item.display_start_ms,
+                item.display_end_ms,
+                float(axis_min),
+                float(axis_max),
+            ),
+            0.0,
+        )
+        for index, (item, (axis_min, axis_max)) in enumerate(
+            zip(display_lines, axis_boxes)
+        )
+    ]
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_measure_collision_bands",
+        lambda *_args, **_kwargs: measured,
+    )
+    monkeypatch.setattr(
+        subtitle_painter,
+        "solve_page_axis_offsets",
+        lambda *_args, **_kwargs: {(0, 0): 0.0, (0, 1): 40.0},
+    )
+
+    filled = subtitle_painter._apply_measured_section_time_fill(
+        1_280,
+        720,
+        track,
+        Style(line_lane_gap_ms=300),
+        display_lines,
+    )
+
+    assert filled[0].display_end_ms == 2_500
+    assert filled[1].display_end_ms == 5_700
+    assert filled[2].display_end_ms == 4_500
+    assert [item.display_end_ms for item in filled[3:]] == [9_000, 9_000]
+
+
+def test_all_automatic_timing_options_preserve_stable_lane_gap(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 1_000, 2_200),
+            ("B", 1_800, 3_000),
+            ("X", 2_600, 3_900),
+            ("C", 5_000, 6_200),
+            ("D", 6_800, 7_900),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(3, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = replace(
+        Style(font_family="Arial", font_family_latin="Arial"),
+        sync_entry=True,
+        sync_ending=True,
+        sync_each_page=True,
+        allow_entry_exit_animation_overlap=True,
+        auto_fill_section_time=True,
+        entry_anim="fade",
+        entry_lead_ms=250,
+        exit_anim="fade",
+        exit_fade_ms=250,
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+
+    display = subtitle_painter._display_lines_for_style(
+        track, style, logical_w=1_280, logical_h=720
+    )
+    stable = [
+        subtitle_painter._display_line_static_collision_window(item, style)
+        for item in display
+    ]
+
+    # Page sync supplies the longest candidate first.  The collision solver
+    # may then contract individual rows, but each matched lane keeps 300 ms
+    # between stable main-text windows while the animations may overlap.
+    assert display[0].display_end_ms > display[3].display_start_ms
+    assert display[1].display_end_ms > display[4].display_start_ms
+    assert stable[0][1] + 300 == stable[3][0]
+    assert stable[1][1] + 300 == stable[4][0]
+    # Three-to-two matching leaves X unmatched; it is not reused as another
+    # correspondence.  The two-line section tail still shares its final end.
+    assert display[2].display_end_ms == 4_150
+    assert display[3].display_end_ms == display[4].display_end_ms == 8_900
+
+
 def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
@@ -10278,6 +10533,7 @@ def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
     )
     base_style = replace(
         Style(),
+        auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
@@ -10290,7 +10546,7 @@ def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
     )
     synchronized = subtitle_painter.display_windows_for_style(
         track,
-        replace(base_style, sync_entry=True),
+        replace(base_style, sync_entry=True, sync_each_page=True),
         logical_w=1920,
         logical_h=1080,
     )
@@ -10301,13 +10557,13 @@ def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
     assert synchronized[0][1] == baseline[0][1]
     assert synchronized[1][1] == lines[1].end_ms
     assert synchronized[2][0] == 12_200
-    assert synchronized[3][0] == 13_500
+    assert synchronized[3][0] == 13_800
     assert synchronized[1][1] <= synchronized[3][0]
     offsets = subtitle_painter.resolved_page_offsets_for_style(
         1920,
         1080,
         track,
-        replace(base_style, sync_entry=True),
+        replace(base_style, sync_entry=True, sync_each_page=True),
     )
     assert offsets == {index: (0.0, 0.0) for index in range(4)}
 
@@ -10325,6 +10581,7 @@ def test_page_sync_entry_applies_longest_candidate_before_collision_guard(qapp):
     style = replace(
         Style(),
         sync_entry=True,
+        sync_each_page=True,
         entry_anim="spin_flip",
         entry_lead_ms=250,
         exit_anim="char_fade",
@@ -10362,6 +10619,7 @@ def test_animation_guard_keeps_100ms_exit_before_delaying_incoming(qapp):
     track = TimingTrack(lines=lines)
     style = replace(
         Style(),
+        allow_entry_exit_animation_overlap=True,
         entry_anim="spin_flip",
         entry_lead_ms=250,
         exit_anim="char_fade",
@@ -10382,10 +10640,10 @@ def test_animation_guard_keeps_100ms_exit_before_delaying_incoming(qapp):
         enforce_inter_page_gap=True,
     )
 
-    # Only the two stable intervals touch at 27.310.  Their 250 ms exit/entry
-    # animations may overlap and therefore remain completely unchanged.
+    # Stable windows retain the configured 300 ms same-lane interval while
+    # their 250 ms exit/entry animations may still overlap.
     assert guarded[0].display_end_ms == 27_560
-    assert guarded[1].display_start_ms == 27_060
+    assert guarded[1].display_start_ms == 27_360
 
 
 def test_animation_guard_does_not_clip_a_non_overlapping_exit(qapp):
@@ -10396,6 +10654,7 @@ def test_animation_guard_does_not_clip_a_non_overlapping_exit(qapp):
     track = TimingTrack(lines=lines)
     style = replace(
         Style(),
+        allow_entry_exit_animation_overlap=True,
         line_lane_gap_ms=300,
         exit_anim="char_fade",
         exit_fade_ms=250,
@@ -10420,6 +10679,173 @@ def test_animation_guard_does_not_clip_a_non_overlapping_exit(qapp):
     assert guarded[1].display_start_ms == 29_740
 
 
+def test_animation_overlap_switch_changes_collision_time_window(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar("前句", 1_000)], end_ms=2_000),
+        TimingLine(chars=[TimingChar("后句", 2_850)], end_ms=4_000),
+    ]
+    track = TimingTrack(lines=lines)
+    style = replace(
+        Style(font_family="Arial", font_family_latin="Arial"),
+        allow_entry_exit_animation_overlap=True,
+        entry_anim="fade",
+        entry_lead_ms=250,
+        exit_anim="fade",
+        exit_fade_ms=250,
+        line_lane_gap_ms=300,
+    )
+    display_lines = [
+        # Stable windows are 00.750–02.300 and 02.600–03.750: exactly 300 ms.
+        # Complete animation windows overlap from 02.350 to 02.550.
+        DisplayLine(lines[0], 0, 500, 2_550, 0, 1, 1),
+        DisplayLine(lines[1], 0, 2_350, 4_250, 0, 2, 1),
+    ]
+
+    allowed = subtitle_painter._apply_animation_time_guard(
+        1_280, 720, track, style, display_lines, enforce_inter_page_gap=True
+    )
+    forbidden = subtitle_painter._apply_animation_time_guard(
+        1_280,
+        720,
+        track,
+        replace(style, allow_entry_exit_animation_overlap=False),
+        display_lines,
+        enforce_inter_page_gap=True,
+    )
+
+    assert [(item.display_start_ms, item.display_end_ms) for item in allowed] == [
+        (500, 2_550),
+        (2_350, 4_250),
+    ]
+    assert [(item.display_start_ms, item.display_end_ms) for item in forbidden] == [
+        (500, 2_250),
+        (2_550, 4_250),
+    ]
+
+
+def test_same_lane_gap_does_not_depend_on_horizontal_glyph_intersection(
+    qapp, monkeypatch
+):
+    lines = [
+        TimingLine(chars=[TimingChar("左", 1_000)], end_ms=2_000),
+        TimingLine(chars=[TimingChar("右", 4_000)], end_ms=5_000),
+    ]
+    track = TimingTrack(lines=lines)
+    style = Style(line_lane_gap_ms=300)
+    display_lines = [
+        DisplayLine(lines[0], 0, 1_000, 2_500, 0, 1, 1),
+        DisplayLine(lines[1], 0, 2_600, 5_000, 0, 2, 1),
+    ]
+    measured = [
+        (
+            0,
+            (0, 1),
+            subtitle_painter.LineVisualBand(
+                0, (0, 1), 1_000, 2_500, 0.0, 40.0,
+                cross_min=0.0, cross_max=40.0,
+            ),
+            0.0,
+        ),
+        (
+            1,
+            (0, 2),
+            subtitle_painter.LineVisualBand(
+                1, (0, 2), 2_600, 5_000, 0.0, 40.0,
+                cross_min=100.0, cross_max=140.0,
+            ),
+            0.0,
+        ),
+    ]
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_measure_collision_bands",
+        lambda *_args, **_kwargs: measured,
+    )
+
+    guarded = subtitle_painter._apply_animation_time_guard(
+        1_280, 720, track, style, display_lines, enforce_inter_page_gap=True
+    )
+
+    assert guarded[0].display_end_ms == 2_300
+    assert guarded[1].display_start_ms == 2_600
+
+
+def test_animation_guard_compresses_stable_overlap_incrementally(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar("前句", 1_000)], end_ms=2_000),
+        TimingLine(chars=[TimingChar("后句", 4_000)], end_ms=5_000),
+    ]
+    track = TimingTrack(lines=lines)
+    style = replace(
+        Style(font_family="Arial", font_family_latin="Arial"),
+        allow_entry_exit_animation_overlap=True,
+        entry_anim="fade",
+        entry_lead_ms=250,
+        exit_anim="fade",
+        exit_fade_ms=250,
+    )
+    display_lines = [
+        # Stable windows are 01.000–02.750 and 02.650–04.000: overlap 100 ms.
+        DisplayLine(lines[0], 0, 1_000, 3_000, 0, 1, 1),
+        DisplayLine(lines[1], 0, 2_400, 5_250, 0, 2, 1),
+    ]
+
+    guarded = subtitle_painter._apply_animation_time_guard(
+        1_280,
+        720,
+        track,
+        style,
+        display_lines,
+        enforce_inter_page_gap=True,
+    )
+
+    # Consume the 100 ms overlap plus the configured 300 ms interval from the
+    # outgoing stable tail without shortening either 250 ms animation.
+    assert guarded[0].display_end_ms == 2_600
+    assert guarded[1].display_start_ms == 2_400
+    assert guarded[0].display_end_ms - lines[0].end_ms >= 250
+    assert lines[1].chars[0].start_ms - guarded[1].display_start_ms >= 250
+
+
+def test_animation_guard_spills_only_remaining_overlap_to_incoming(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar("前句", 1_000)], end_ms=2_000),
+        TimingLine(chars=[TimingChar("后句", 4_000)], end_ms=5_000),
+    ]
+    track = TimingTrack(lines=lines)
+    style = replace(
+        Style(font_family="Arial", font_family_latin="Arial"),
+        allow_entry_exit_animation_overlap=True,
+        entry_anim="fade",
+        entry_lead_ms=250,
+        exit_anim="fade",
+        exit_fade_ms=250,
+    )
+    display_lines = [
+        # Stable windows are 01.250–02.100 and 01.850–04.000: overlap 250 ms.
+        # The outgoing side owns only 100 ms of stable tail.
+        DisplayLine(lines[0], 0, 1_000, 2_350, 0, 1, 1),
+        DisplayLine(lines[1], 0, 1_600, 5_250, 0, 2, 1),
+    ]
+
+    guarded = subtitle_painter._apply_animation_time_guard(
+        1_280,
+        720,
+        track,
+        style,
+        display_lines,
+        enforce_inter_page_gap=True,
+    )
+
+    # Resolve 250 ms overlap plus the 300 ms interval: first consume the
+    # previous 100 ms stable tail, then move the incoming by the remaining
+    # 450 ms.  Both animations stay 250 ms.
+    assert guarded[0].display_end_ms == 2_250
+    assert guarded[1].display_start_ms == 2_050
+    assert guarded[0].display_end_ms - lines[0].end_ms == 250
+    assert lines[1].chars[0].start_ms - guarded[1].display_start_ms > 250
+
+
 def test_force_bottom_waits_for_automatic_time_avoidance(qapp, monkeypatch):
     """A resolved same-lane handoff must not leave a stale page reflow."""
 
@@ -10440,6 +10866,7 @@ def test_force_bottom_waits_for_automatic_time_avoidance(qapp, monkeypatch):
     )
     style = replace(
         Style(font_family="Arial", font_family_latin="Arial"),
+        allow_entry_exit_animation_overlap=True,
         line_lead_in_ms=3_000,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
@@ -10470,7 +10897,7 @@ def test_force_bottom_waits_for_automatic_time_avoidance(qapp, monkeypatch):
     # Display windows overlap only during animation; stable text does not.
     assert windows[3][0] < windows[1][1]
     assert windows[2][0] == 24_680
-    assert windows[3][0] == 27_310
+    assert windows[3][0] == 27_360
     assert all(not pairs for pairs in calls)
 
     diagnostics = subtitle_painter.layout_timing_diagnostics_for_style(
@@ -10543,7 +10970,7 @@ def test_manual_cross_lane_extension_does_not_raise_incoming_page(
     assert offsets == {index: (0.0, 0.0) for index in range(4)}
 
 
-def test_page_sync_ending_compresses_outgoing_page_before_incoming(qapp):
+def test_page_sync_ending_defaults_to_the_section_tail_page(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
         for text, start, end in (
@@ -10561,6 +10988,7 @@ def test_page_sync_ending_compresses_outgoing_page_before_incoming(qapp):
     )
     base_style = replace(
         Style(),
+        auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
@@ -10578,14 +11006,12 @@ def test_page_sync_ending_compresses_outgoing_page_before_incoming(qapp):
         logical_h=1080,
     )
 
-    assert synchronized[2] == baseline[2]
+    # “每句同步”关闭时，非段尾页保持自己的自动窗口；段尾页的两行
+    # 同步到该页最晚退场边界。
+    assert synchronized[0] == baseline[0]
+    assert synchronized[1] == baseline[1]
+    assert synchronized[2] == (baseline[2][0], baseline[3][1])
     assert synchronized[3] == baseline[3]
-    # 同步退场先采用最长候选；碰撞时仍先压前页的退场，再考虑压后句入场。
-    # 只有实际碰撞的 A 被压到后页的真实入场边界 12.200；页内兄弟行 B
-    # 保留自己的 12.500。
-    assert synchronized[0][1] == 12_200
-    assert synchronized[1][1] == 12_500
-    assert synchronized[0][1] <= baseline[2][0]
 
 
 def _line_fade_style(**changes) -> Style:

@@ -717,7 +717,7 @@ def test_build_render_ir_resolves_global_and_per_line_basic_animations():
     assert gpu_unsupported_features(track, style) == ()
 
 
-def test_build_render_ir_uses_compressed_entry_and_exit_animation_windows():
+def test_build_render_ir_preserves_animation_windows_around_stable_compression():
     begins = [10_000, 10_500, 12_100, 12_500]
     ends = [12_000, 12_400, 13_500, 14_000]
     track = TimingTrack(
@@ -741,15 +741,14 @@ def test_build_render_ir_uses_compressed_entry_and_exit_animation_windows():
         "lines"
     ]
 
-    # With undecorated main-glyph collision boxes the A/C pair has enough
-    # spatial clearance to retain the automatic 100 ms exit floor.
-    assert lines[0]["display_end_ms"] == ends[0] + 100
-    assert lines[0]["exit_duration_ms"] == 100
-    # Pixel-gated compression changes only the A/C conflict pair.  C keeps its
-    # complete configured 900 ms entry animation, but may only move as far as
-    # D's original page-order boundary; the unresolved overlap is spatially
-    # avoided instead of rewriting D.
-    assert lines[2]["display_start_ms"] == begins[3] - 1_800
+    # Only stable text is compressed; the complete exit animation may overlap
+    # the incoming page and remains untouched.
+    assert lines[0]["display_end_ms"] == ends[0] + 800
+    assert lines[0]["exit_duration_ms"] == 800
+    # Pixel-gated compression changes only the A/C conflict pair.  C moves by
+    # only the amount needed for the stable 300 ms gap and keeps its complete
+    # 900 ms entry.
+    assert lines[2]["display_start_ms"] == 11_200
     assert lines[2]["entry_duration_ms"] == 900
 
 

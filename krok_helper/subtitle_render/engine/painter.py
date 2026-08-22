@@ -3870,6 +3870,8 @@ def _display_line_compute_kwargs(style: Style) -> dict[str, object]:
         "section_gap_ms": style.section_gap_ms,
         "sync_entry": style.sync_entry,
         "sync_ending": style.sync_ending,
+        "sync_each_page": style.sync_each_page,
+        "auto_fill_section_time": style.auto_fill_section_time,
         "section_ending_mode": style.section_ending_mode,
         "protect_ms": _effective_line_protect_ms(style),
         "lane_count": _lane_count(style),
@@ -3895,12 +3897,16 @@ def _measure_collision_bands(
     style: Style,
     display_lines: list[DisplayLine],
     *,
-    time_window: str = "stable",
+    time_window: str | None = None,
 ) -> list[tuple[int, tuple[int, int], LineVisualBand, float]]:
     """Measure ink bands without changing display-time behaviour."""
 
     if not display_lines:
         return []
+    if time_window is None:
+        time_window = (
+            "stable" if style.allow_entry_exit_animation_overlap else "display"
+        )
     if style.vertical:
         baselines: dict[int, int] = {}
         line_layouts: dict[int, _SayatooLineLayout] = {}
@@ -4010,7 +4016,7 @@ def _pixel_collision_squeeze_pairs(
     style: Style,
     display_lines: list[DisplayLine],
 ) -> tuple[tuple[int, int], ...]:
-    """Return only line pairs with both stable-time and pixel-axis conflict."""
+    """Return pairs conflicting in the configured time window and pixel axis."""
 
     measured = _measure_collision_bands(
         logical_w, logical_h, track, style, display_lines
@@ -4220,6 +4226,212 @@ def _extend_page_display_boundary(
     return changed
 
 
+def _apply_measured_section_time_fill(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+) -> list[DisplayLine]:
+    """Extend automatic exits toward the nearest-height line on the next page.
+
+    N3's TopLong rule only special-cases the first line and uses the next
+    page's first line as its boundary.  The product rule is geometry-driven:
+    every line on a non-tail page matches the undecorated main-text box whose
+    vertical (or vertical-text horizontal) position is closest on the next
+    page.  Tail-page lines share the page's natural final boundary.
+    """
+
+    if not style.auto_fill_section_time or not display_lines:
+        return display_lines
+    time_window = (
+        "stable" if style.allow_entry_exit_animation_overlap else "display"
+    )
+    measured = _measure_collision_bands(
+        logical_w,
+        logical_h,
+        track,
+        style,
+        display_lines,
+        time_window=time_window,
+    )
+    bands = {
+        render_index: band
+        for render_index, _page_id, band, _gap in measured
+    }
+    if not bands:
+        return display_lines
+
+    page_order: list[tuple[int, int]] = []
+    page_indices: dict[tuple[int, int], list[int]] = {}
+    for index, item in enumerate(display_lines):
+        page_id = (int(item.section_index), int(item.page_index))
+        if page_id not in page_indices:
+            page_order.append(page_id)
+            page_indices[page_id] = []
+        page_indices[page_id].append(index)
+    next_page: dict[tuple[int, int], tuple[int, int] | None] = {}
+    for position, page_id in enumerate(page_order):
+        following = page_order[position + 1] if position + 1 < len(page_order) else None
+        next_page[page_id] = (
+            following
+            if following is not None and following[0] == page_id[0]
+            else None
+        )
+
+    # Match against the final page placement, not merely the authored row.
+    # A whole incoming page may have moved while resolving an earlier visual
+    # collision.  Reconstruct that same rigid page translation from the now
+    # stable display windows before comparing main-text boxes.
+    page_entries: dict[tuple[int, int], list[tuple[LineVisualBand, float]]] = {}
+    for _render_index, page_id, band, gap in measured:
+        page_entries.setdefault(page_id, []).append((band, gap))
+    pages: list[PageVisualBands] = []
+    for page_id in page_order:
+        entries = page_entries.get(page_id, [])
+        if not entries:
+            continue
+        page_style = _style_for_line(
+            style, display_lines[page_indices[page_id][0]].line
+        )
+        position = page_style.line_y_position
+        anchor = "start" if position == "top" else "center" if position == "center" else "end"
+        if style.vertical:
+            anchor = "end"
+        pages.append(
+            PageVisualBands(
+                page_id=page_id,
+                bands=tuple(band for band, _gap in entries),
+                gap_px=max((gap for _band, gap in entries), default=0.0),
+                anchor=anchor,
+            )
+        )
+    page_offsets = solve_page_axis_offsets(
+        pages,
+        viewport_min=0.0,
+        viewport_max=float(logical_w if style.vertical else logical_h),
+    )
+    bands = {
+        index: band.shifted(float(page_offsets.get(band.page_id, 0.0)))
+        for index, band in bands.items()
+    }
+
+    def match_page_bands(
+        source_indices: list[int], candidate_indices: list[int]
+    ) -> dict[int, int]:
+        """Return a validated one-to-one minimum-distance box assignment."""
+
+        sources = [index for index in source_indices if index in bands]
+        candidates = [index for index in candidate_indices if index in bands]
+        if not sources or not candidates:
+            return {}
+        costs: dict[tuple[int, int], float] = {}
+        for source_pos, source_index in enumerate(sources):
+            source = bands[source_index]
+            source_height = max(float(source.axis_max - source.axis_min), 1.0)
+            source_center = (source.axis_min + source.axis_max) / 2.0
+            for candidate_pos, candidate_index in enumerate(candidates):
+                candidate = bands[candidate_index]
+                candidate_height = max(
+                    float(candidate.axis_max - candidate.axis_min), 1.0
+                )
+                candidate_center = (candidate.axis_min + candidate.axis_max) / 2.0
+                center_distance = abs(candidate_center - source_center)
+                tolerance = max(source_height, candidate_height)
+                # A corresponding row may shift or change font size, but its
+                # centre must remain within one complete main-text box height.
+                # Anything farther away is an adjacent/different row, not a
+                # merely imperfect match.
+                if center_distance > tolerance:
+                    continue
+                height_delta = abs(candidate_height - source_height)
+                costs[(source_pos, candidate_pos)] = (
+                    center_distance / tolerance
+                    + 0.25 * height_delta / tolerance
+                )
+
+        memo: dict[
+            tuple[int, int], tuple[int, float, tuple[tuple[int, int], ...]]
+        ] = {}
+
+        def solve(
+            source_pos: int, used_mask: int
+        ) -> tuple[int, float, tuple[tuple[int, int], ...]]:
+            key = (source_pos, used_mask)
+            cached = memo.get(key)
+            if cached is not None:
+                return cached
+            if source_pos >= len(sources):
+                return 0, 0.0, ()
+            best = solve(source_pos + 1, used_mask)
+            for candidate_pos in range(len(candidates)):
+                bit = 1 << candidate_pos
+                cost = costs.get((source_pos, candidate_pos))
+                if used_mask & bit or cost is None:
+                    continue
+                count, total, pairs = solve(source_pos + 1, used_mask | bit)
+                proposal = (
+                    count + 1,
+                    total + cost,
+                    ((source_pos, candidate_pos),) + pairs,
+                )
+                if (
+                    proposal[0] > best[0]
+                    or (
+                        proposal[0] == best[0]
+                        and proposal[1] < best[1] - 1e-9
+                    )
+                    or (
+                        proposal[0] == best[0]
+                        and abs(proposal[1] - best[1]) <= 1e-9
+                        and proposal[2] < best[2]
+                    )
+                ):
+                    best = proposal
+            memo[key] = best
+            return best
+
+        _count, _cost, pairs = solve(0, 0)
+        return {
+            sources[source_pos]: candidates[candidate_pos]
+            for source_pos, candidate_pos in pairs
+        }
+
+    changed = list(display_lines)
+    gap_ms = max(int(style.line_lane_gap_ms), 0)
+    for page_id in page_order:
+        indices = page_indices[page_id]
+        following = next_page[page_id]
+        if following is None:
+            page_collision_end = max(
+                (int(bands[index].display_end_ms) for index in indices if index in bands),
+                default=None,
+            )
+            if page_collision_end is None:
+                continue
+            targets = {index: page_collision_end for index in indices}
+        else:
+            candidates = [index for index in page_indices[following] if index in bands]
+            if not candidates:
+                continue
+            matches = match_page_bands(indices, candidates)
+            targets = {}
+            for index, matched in matches.items():
+                targets[index] = int(bands[matched].display_start_ms) - gap_ms
+
+        for index, collision_end in targets.items():
+            item = changed[index]
+            if item.line.display_end_override_ms is not None:
+                continue
+            full_end = int(collision_end)
+            if time_window == "stable":
+                full_end += _exit_animation_ms(style, item.line)
+            new_end = max(int(item.display_end_ms), full_end)
+            if new_end != item.display_end_ms:
+                changed[index] = replace(item, display_end_ms=new_end)
+    return changed
+
+
 def _apply_constrained_page_sync(
     logical_w: int,
     logical_h: int,
@@ -4251,9 +4463,23 @@ def _apply_constrained_page_sync(
         page_indices[page_id].append(index)
 
     resolved = list(baseline)
+    first_page_by_section: dict[int, tuple[int, int]] = {}
+    last_page_by_section: dict[int, tuple[int, int]] = {}
+    for page_id in page_order:
+        section_index = page_id[0]
+        first_page_by_section.setdefault(section_index, page_id)
+        last_page_by_section[section_index] = page_id
     for page_id in page_order:
         indices = tuple(page_indices[page_id])
-        if style.sync_entry:
+        sync_entry_here = style.sync_entry and (
+            style.sync_each_page
+            or first_page_by_section.get(page_id[0]) == page_id
+        )
+        sync_ending_here = style.sync_ending and (
+            style.sync_each_page
+            or last_page_by_section.get(page_id[0]) == page_id
+        )
+        if sync_entry_here:
             automatic = tuple(
                 index
                 for index in indices
@@ -4269,7 +4495,7 @@ def _apply_constrained_page_sync(
                     start_ms=page_target,
                 )
 
-        if style.sync_ending:
+        if sync_ending_here:
             automatic = tuple(
                 index
                 for index in indices
@@ -4297,11 +4523,11 @@ def _apply_animation_time_guard(
     enforce_inter_page_gap: bool,
     adjustments: list[_TimingCollisionAdjustment] | None = None,
 ) -> list[DisplayLine]:
-    """Restore animations, then separate only colliding stable text windows.
+    """Restore animations, then enforce measured collision-window separation.
 
-    Entry and exit animations may overlap each other.  Measuring the complete
-    display windows here used to immediately consume the animation duration
-    restored just above (for example 29.590 was clipped back to 29.440).
+    With animation overlap enabled, only stable main-text windows participate.
+    Otherwise the complete display windows participate.  In both modes the
+    configured same-lane interval is enforced after synchronization.
     """
 
     if not display_lines:
@@ -4312,7 +4538,6 @@ def _apply_animation_time_guard(
     entry_durations: list[int] = []
     line_starts: list[int] = []
     line_ends: list[int] = []
-    exit_reserves: list[int] = []
     for index, item in enumerate(guarded):
         entry_duration = _entry_animation_ms(style, item.line)
         exit_duration = _exit_animation_ms(style, item.line)
@@ -4321,7 +4546,6 @@ def _apply_animation_time_guard(
         line_end = _line_end_ms(item.line)
         line_starts.append(line_start)
         line_ends.append(line_end)
-        exit_reserves.append(_auto_exit_reserve_ms(style, item.line))
 
         start = int(item.display_start_ms)
         end = int(item.display_end_ms)
@@ -4340,20 +4564,16 @@ def _apply_animation_time_guard(
     if not enforce_inter_page_gap or style.allow_inter_page_line_overlap:
         return guarded if changed else display_lines
 
-    # ``line_lane_gap_ms`` belongs to the authored display schedule.  It is
-    # not an extra collision margin for the animation guard: applying it here
-    # used to classify two non-overlapping coverage windows as a collision
-    # (for example 29.590 -> 29.740 still got clipped to 29.440 merely to
-    # manufacture a 300 ms gap).  The guard only owns real temporal overlap;
-    # the schedule calculation has already applied the configured lane gap.
-    required_gap = 0
+    time_window = (
+        "stable" if style.allow_entry_exit_animation_overlap else "display"
+    )
     measured = _measure_collision_bands(
         logical_w,
         logical_h,
         track,
         style,
         guarded,
-        time_window="stable",
+        time_window=time_window,
     )
     for _pass in range(max(len(guarded) * 3, 1)):
         adjusted = False
@@ -4370,27 +4590,51 @@ def _apply_animation_time_guard(
             ]:
                 if previous_page == incoming_page:
                     continue
-                if not bands_require_separation(
-                    incoming_band, previous_band, 0.0
+                previous = guarded[previous_index]
+                same_lane = int(previous.lane) == int(incoming.lane)
+                # The configured lane interval is a scheduling invariant, not
+                # a glyph-intersection margin.  Same-lane lines must retain it
+                # even when their short text happens not to overlap on the
+                # cross axis.  Different lanes still use measured ink boxes.
+                if (
+                    not same_lane
+                    and not bands_require_separation(
+                        incoming_band, previous_band, 0.0
+                    )
                 ):
                     continue
+                required_gap = (
+                    max(int(style.line_lane_gap_ms), 0)
+                    if same_lane
+                    else 0
+                )
                 required_start = int(previous_band.display_end_ms) + required_gap
                 if int(incoming_band.display_start_ms) >= required_start:
                     continue
+                overlap_ms = required_start - int(
+                    incoming_band.display_start_ms
+                )
 
-                # First consume only the automatic outgoing animation surplus.
-                # A non-zero exit keeps at least 100 ms (or the explicitly
-                # configured shorter duration); manual end overrides are fixed.
-                previous = guarded[previous_index]
+                # First subtract only the actual overlap from the outgoing
+                # line's *stable* tail.  Move the complete display boundary by
+                # the same delta so the exit animation remains intact; never
+                # jump the display end directly to a stable-time coordinate.
                 if previous.line.display_end_override_ms is None:
-                    minimum_end = (
-                        line_ends[previous_index] + exit_reserves[previous_index]
-                    )
-                    latest_end = int(incoming_band.display_start_ms) - required_gap
-                    new_end = max(
-                        minimum_end,
-                        min(int(previous.display_end_ms), latest_end),
-                    )
+                    if time_window == "stable":
+                        stable_tail = max(
+                            int(previous_band.display_end_ms)
+                            - line_ends[previous_index],
+                            0,
+                        )
+                    else:
+                        stable_tail = max(
+                            int(previous.display_end_ms)
+                            - _exit_animation_ms(style, previous.line)
+                            - line_ends[previous_index],
+                            0,
+                        )
+                    delta = min(overlap_ms, stable_tail)
+                    new_end = int(previous.display_end_ms) - delta
                     if new_end < previous.display_end_ms:
                         if adjustments is not None:
                             adjustments.append(
@@ -4414,20 +4658,32 @@ def _apply_animation_time_guard(
                         changed = True
                         break
 
-                # Then delay the automatic incoming boundary while retaining
-                # its configured entry animation duration.
-                latest_entry_start = max(
-                    line_starts[incoming_index] - entry_durations[incoming_index],
-                    0,
-                )
-                if (
-                    incoming.line.display_start_override_ms is None
-                    and required_start <= latest_entry_start
-                ):
-                    new_start = max(
-                        int(incoming.display_start_ms),
-                        required_start,
+                # If outgoing stable tail was insufficient, subtract only the
+                # remaining overlap from the incoming stable lead.  Advancing
+                # the complete display start by that delta preserves the full
+                # entry animation instead of skipping straight to the limit.
+                if time_window == "stable":
+                    stable_lead = max(
+                        line_starts[incoming_index]
+                        - int(incoming_band.display_start_ms),
+                        0,
                     )
+                else:
+                    stable_lead = max(
+                        line_starts[incoming_index]
+                        - entry_durations[incoming_index]
+                        - int(incoming.display_start_ms),
+                        0,
+                    )
+                if incoming.line.display_start_override_ms is None:
+                    delta = min(overlap_ms, stable_lead)
+                    new_start = int(incoming.display_start_ms) + delta
+                    latest_entry_start = max(
+                        line_starts[incoming_index]
+                        - entry_durations[incoming_index],
+                        0,
+                    )
+                    new_start = min(new_start, latest_entry_start)
                     if new_start != incoming.display_start_ms:
                         if adjustments is not None:
                             adjustments.append(
@@ -4457,7 +4713,7 @@ def _apply_animation_time_guard(
                 guarded,
                 style,
                 (changed_index,),
-                time_window="stable",
+                time_window=time_window,
             )
             measured = (
                 retimed
@@ -4468,7 +4724,7 @@ def _apply_animation_time_guard(
                     track,
                     style,
                     guarded,
-                    time_window="stable",
+                    time_window=time_window,
                 )
             )
     return guarded if changed else display_lines
@@ -4484,7 +4740,7 @@ def _resolve_page_sync_and_collisions(
     enforce_inter_page_gap: bool,
     adjustments: list[_TimingCollisionAdjustment] | None = None,
 ) -> list[DisplayLine]:
-    """Apply maximal page sync, then squeeze each colliding pair in order."""
+    """Apply page sync, then squeeze each colliding pair in order."""
 
     synchronized = _apply_constrained_page_sync(
         logical_w,
@@ -4526,6 +4782,7 @@ def _display_lines_for_style(
         **kwargs,
         "sync_entry": False,
         "sync_ending": False,
+        "auto_fill_section_time": False,
     }
     if logical_w is None or logical_h is None:
         default_w, default_h = _default_collision_canvas(style)
@@ -4635,6 +4892,27 @@ def _display_lines_for_style(
             resolved,
             enforce_inter_page_gap=avoid_collisions,
         )
+    # Geometry-dependent section filling must be the final layout pass.  At
+    # this point ForceBottom, squeeze pairs and rigid page displacement have
+    # all settled.  Filling can extend time windows, so run the timing guard
+    # once more afterwards without allowing it to change page geometry.
+    if style.auto_fill_section_time:
+        filled = _apply_measured_section_time_fill(
+            logical_w,
+            logical_h,
+            track,
+            style,
+            resolved,
+        )
+        if filled != resolved:
+            resolved = _apply_animation_time_guard(
+                logical_w,
+                logical_h,
+                track,
+                style,
+                filled,
+                enforce_inter_page_gap=avoid_collisions,
+            )
     # Keep the track object alive with the cached display lines.  The key uses
     # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable
     # TimingLine references; retaining the owner also prevents CPython from
@@ -4766,10 +5044,20 @@ def layout_timing_diagnostics_for_style(
     # signal-induced overlap can visibly lift a page while this function still
     # reports the shorter, non-overlapping authored window.
     style = _display_style_for_signal_window(style)
+    collision_window_label = (
+        "稳定主文字行盒"
+        if style.allow_entry_exit_animation_overlap
+        else "完整显示行盒"
+    )
     logical_w = max(int(logical_w), 1)
     logical_h = max(int(logical_h), 1)
     kwargs = _display_line_compute_kwargs(style)
-    base_kwargs = {**kwargs, "sync_entry": False, "sync_ending": False}
+    base_kwargs = {
+        **kwargs,
+        "sync_entry": False,
+        "sync_ending": False,
+        "auto_fill_section_time": False,
+    }
     ideal = compute_display_lines(
         track,
         **base_kwargs,
@@ -4982,7 +5270,8 @@ def layout_timing_diagnostics_for_style(
             )
             detail_lines.extend(
                 (
-                    f"触发前稳定行盒时间交集：{_format_diagnostic_ms(overlap_start)} – "
+                    f"触发前{collision_window_label}时间交集："
+                    f"{_format_diagnostic_ms(overlap_start)} – "
                     f"{_format_diagnostic_ms(overlap_end)}",
                     f"前行纵向盒：{previous_band.axis_min:.1f} – "
                     f"{previous_band.axis_max:.1f}",
@@ -5058,7 +5347,8 @@ def layout_timing_diagnostics_for_style(
                     detail=(
                         f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
                         f"第 {incoming_track + 1} 行「{incoming_text}」\n"
-                        f"稳定行盒时间交集：{_format_diagnostic_ms(overlap_start)} – "
+                        f"{collision_window_label}时间交集："
+                        f"{_format_diagnostic_ms(overlap_start)} – "
                         f"{_format_diagnostic_ms(overlap_end)}\n"
                         f"前行{axis_name}盒：{previous_band.axis_min:.1f} – {previous_band.axis_max:.1f}\n"
                         f"后行{axis_name}盒：{incoming_band.axis_min:.1f} – {incoming_band.axis_max:.1f}\n"
