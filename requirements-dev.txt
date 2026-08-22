@@ -4,3 +4,8 @@ pytest-timeout
 psutil
 jieba==0.42.1
 pypinyin==0.55.0
+# WinRT IME 日语注音（Windows only，与 SUG requirements-winrt.txt 同锁）
+winrt-runtime==3.2.1
+winrt-Windows.Globalization==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
