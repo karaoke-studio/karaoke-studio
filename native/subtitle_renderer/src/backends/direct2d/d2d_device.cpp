@@ -218,19 +218,24 @@ void D2DDevice::appendVideoMemoryDiagnostics(
     }
     DXGI_QUERY_VIDEO_MEMORY_INFO local{};
     DXGI_QUERY_VIDEO_MEMORY_INFO nonLocal{};
-    if (FAILED(adapter3->QueryVideoMemoryInfo(
-            0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local
-        ))
-        || FAILED(adapter3->QueryVideoMemoryInfo(
-            0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal
-        ))) {
+    const HRESULT localResult = adapter3->QueryVideoMemoryInfo(
+        0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local
+    );
+    const HRESULT nonLocalResult = adapter3->QueryVideoMemoryInfo(
+        0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal
+    );
+    if (FAILED(localResult) && FAILED(nonLocalResult)) {
         return;
     }
     diagnostics->videoMemoryInfoAvailable = true;
-    diagnostics->localVideoMemoryUsageBytes = local.CurrentUsage;
-    diagnostics->localVideoMemoryBudgetBytes = local.Budget;
-    diagnostics->nonLocalVideoMemoryUsageBytes = nonLocal.CurrentUsage;
-    diagnostics->nonLocalVideoMemoryBudgetBytes = nonLocal.Budget;
+    if (SUCCEEDED(localResult)) {
+        diagnostics->localVideoMemoryUsageBytes = local.CurrentUsage;
+        diagnostics->localVideoMemoryBudgetBytes = local.Budget;
+    }
+    if (SUCCEEDED(nonLocalResult)) {
+        diagnostics->nonLocalVideoMemoryUsageBytes = nonLocal.CurrentUsage;
+        diagnostics->nonLocalVideoMemoryBudgetBytes = nonLocal.Budget;
+    }
 }
 
 std::string D2DDevice::deviceRemovedReason() const {

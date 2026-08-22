@@ -40,6 +40,7 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     _render_overlay_frame,
     _resolve_chunk_size,
     _resolve_effective_worker_count,
+    _resolve_pending_memory_budget,
     _resolve_pending_window,
     _resolve_stall_timeout_s,
     _resolve_worker_count,
@@ -675,7 +676,7 @@ def test_render_drains_ffmpeg_output_while_writing_frames(monkeypatch, tmp_path)
     drain_started = threading.Event()
     allow_drain_to_finish = threading.Event()
 
-    def fake_drain(_process, _logger):
+    def fake_drain(_process, _logger, _output_tail=None):
         drain_started.set()
         assert allow_drain_to_finish.wait(timeout=1.0)
 
@@ -738,7 +739,11 @@ def test_gpu_export_request_defaults_to_gpu_on_windows(monkeypatch, tmp_path):
 
 def test_gpu_export_worker_count_is_bounded_and_warp_stays_serial(monkeypatch):
     monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", raising=False)
-    assert renderer._gpu_export_worker_count(force_warp=False) == 3
+    monkeypatch.setattr(renderer.os, "cpu_count", lambda: 32)
+    assert renderer._gpu_export_worker_count(force_warp=False) == 4
+
+    monkeypatch.setattr(renderer.os, "cpu_count", lambda: 12)
+    assert renderer._gpu_export_worker_count(force_warp=False) == 4
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "2")
     assert renderer._gpu_export_worker_count(force_warp=False) == 2
@@ -748,7 +753,7 @@ def test_gpu_export_worker_count_is_bounded_and_warp_stays_serial(monkeypatch):
     assert renderer._gpu_export_worker_count(force_warp=True) == 1
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "invalid")
-    assert renderer._gpu_export_worker_count(force_warp=False) == 3
+    assert renderer._gpu_export_worker_count(force_warp=False) == 4
 
 
 def test_gpu_export_diagnostics_flag(monkeypatch):
@@ -878,6 +883,98 @@ def test_gpu_export_runtime_failure_restarts_with_painter(monkeypatch, tmp_path)
     assert painter_writes == [(False, 0, 2)]
     assert any("已自动回退到 CPU Painter" in message for message in logs)
     assert any("进度会重新从 0 开始计数" in message for message in logs)
+
+
+def test_render_retries_amf_initialization_failure_with_cpu(monkeypatch, tmp_path):
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=2,
+        fps=2,
+        duration_ms=1_000,
+        gpu_export_enabled=False,
+        encoder_mode="amf",
+    )
+    failed = _FakeRenderProcess(job.output_path)
+    failed.returncode = 1
+    failed.stdout = [
+        b"[h264_amf] CreateComponent failed with error AMF_OUT_OF_MEMORY\n"
+    ]
+    succeeded = _FakeRenderProcess(job.output_path)
+    processes = [failed, succeeded]
+    commands: list[list[str]] = []
+    logs: list[str] = []
+
+    def fake_popen(command, **_kwargs):
+        commands.append(command)
+        return processes.pop(0)
+
+    def fake_writer(process, active_job, _top, render_h, total, *_args):
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda *_args, **_kwargs: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_writer)
+    monkeypatch.setattr(renderer.subprocess, "Popen", fake_popen)
+
+    assert render_subtitle_video(job, logger=logs.append) == job.output_path
+    assert "h264_amf" in commands[0]
+    assert "libx264" in commands[1]
+    assert any("已自动切换 CPU 编码" in message for message in logs)
+    assert any("进度会重新从 0 开始" in message for message in logs)
+
+
+def test_render_retries_amf_broken_pipe_with_cpu(monkeypatch, tmp_path):
+    class _BrokenAmfStdin(_FakeRenderStdin):
+        def write(self, _payload):
+            raise BrokenPipeError("AMF encoder exited during initialization")
+
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=2,
+        fps=2,
+        duration_ms=1_000,
+        gpu_export_enabled=False,
+        encoder_mode="amf",
+    )
+    failed = _FakeRenderProcess(job.output_path)
+    failed.stdin = _BrokenAmfStdin()
+    failed.returncode = 1
+    failed.stdout = [b"[h264_amf] Error while opening encoder\n"]
+    succeeded = _FakeRenderProcess(job.output_path)
+    processes = [failed, succeeded]
+    commands: list[list[str]] = []
+
+    def fake_popen(command, **_kwargs):
+        commands.append(command)
+        return processes.pop(0)
+
+    def fake_writer(process, active_job, _top, render_h, total, *_args):
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda *_args, **_kwargs: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_writer)
+    monkeypatch.setattr(renderer.subprocess, "Popen", fake_popen)
+
+    assert render_subtitle_video(job) == job.output_path
+    assert "h264_amf" in commands[0]
+    assert "libx264" in commands[1]
+
+
+def test_amf_retry_filter_rejects_unrelated_ffmpeg_failure():
+    command = ["ffmpeg", "-c:v", "h264_amf", "out.mp4"]
+    assert renderer._should_retry_amf_with_cpu(
+        command, deque(["No space left on device"])
+    ) is False
+    assert renderer._should_retry_amf_with_cpu(
+        command, deque(["Error while opening encoder"])
+    ) is True
+    assert renderer._should_retry_amf_with_cpu(
+        ["ffmpeg", "-c:v", "libx264", "out.mp4"],
+        deque(["Error while opening encoder"]),
+    ) is False
 
 
 def test_render_falls_back_to_python_when_native_export_sidecar_missing(monkeypatch, tmp_path):
@@ -1382,6 +1479,63 @@ def test_resolve_effective_worker_count_caps_by_budget():
     assert _resolve_effective_worker_count(8, 3, 1920 * 1080 * 4) == 8
     # 极端下限：预算只容 1 块时保底单 worker
     assert _resolve_effective_worker_count(8, 1, 512 * 1024 * 1024) == 1
+
+
+def test_resolve_effective_worker_count_caps_4k_by_available_system_memory():
+    frame_bytes_4k = 3840 * 2160 * 4
+    gib = 1024 * 1024 * 1024
+    # 只剩 2GiB 可用时，保留 UI/ffmpeg 与主进程结果窗口后，
+    # 4K 全幅 worker 按 QImage + empty + chunk 多份副本估算只容 3 个。
+    assert _resolve_effective_worker_count(
+        8,
+        1,
+        frame_bytes_4k,
+        available_memory_bytes=2 * gib,
+    ) == 3
+    # 高内存机器保持原有自动 8 worker，不牺牲性能。
+    assert _resolve_effective_worker_count(
+        8,
+        1,
+        frame_bytes_4k,
+        available_memory_bytes=16 * gib,
+    ) == 8
+    # 无法查询系统内存时保持旧的在飞结果护栏。
+    assert _resolve_effective_worker_count(
+        8,
+        1,
+        frame_bytes_4k,
+        available_memory_bytes=None,
+    ) == 8
+
+
+def test_high_memory_4k_manual_16_workers_are_not_capped_to_8():
+    frame_bytes_4k = 3840 * 2160 * 4
+    gib = 1024 * 1024 * 1024
+    available = 16 * gib
+    pending_budget = _resolve_pending_memory_budget(available)
+
+    assert pending_budget == gib
+    effective = _resolve_effective_worker_count(
+        16,
+        1,
+        frame_bytes_4k,
+        available_memory_bytes=available,
+        pending_budget_bytes=pending_budget,
+    )
+    assert effective == 16
+    # worker+2 的窗口能同时喂满 16 worker，且约 570MiB < 1GiB。
+    assert _resolve_pending_window(
+        effective,
+        1,
+        frame_bytes_4k,
+        pending_budget_bytes=pending_budget,
+    ) == 18
+
+
+def test_low_memory_pending_budget_stays_conservative():
+    mib = 1024 * 1024
+    assert _resolve_pending_memory_budget(None) == 256 * mib
+    assert _resolve_pending_memory_budget(2 * 1024 * mib) == 256 * mib
 
 
 def test_resolve_stall_timeout_scales_with_chunk_bytes(monkeypatch):

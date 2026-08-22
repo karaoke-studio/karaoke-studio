@@ -364,14 +364,17 @@ def render_subtitle_video(
     # rawvideo from stdin.  Drain its merged stdout/stderr concurrently;
     # otherwise the small Windows pipe buffer can fill and deadlock both sides
     # before all subtitle frames have been written.
+    ffmpeg_output_tail: deque[str] = deque(maxlen=80)
     output_drain_thread = threading.Thread(
         target=_drain_process_output,
-        args=(process, logger),
+        args=(process, logger, ffmpeg_output_tail),
         name="subtitle-ffmpeg-output",
         daemon=True,
     )
     output_drain_thread.start()
 
+    return_code: int | None = None
+    amf_pipe_failure = False
     try:
         assert process.stdin is not None
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
@@ -456,7 +459,14 @@ def render_subtitle_video(
         _remove_incomplete_output(job.output_path, logger)
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。") from exc
-        raise ProcessingError(f"ffmpeg 管道写入失败: {exc}") from exc
+        # AMF 初始化失败通常在第一批 rawvideo 写入时就关闭管道，
+        # 比最终 return_code 更早到达。等日志线程读完后判断；
+        # CPU 重试放在 finally 之后，避免新旧 ffmpeg 进程重叠。
+        output_drain_thread.join(timeout=1.0)
+        if _should_retry_amf_with_cpu(command, ffmpeg_output_tail):
+            amf_pipe_failure = True
+        else:
+            raise ProcessingError(f"ffmpeg 管道写入失败: {exc}") from exc
     except Exception:
         # 其余帧生产异常（如进度回调抛 RuntimeError / Qt 对象竞态）同样不得
         # 泄漏 ffmpeg：终止进程、删半成品后原样上抛。放在各具体分支之后，
@@ -473,6 +483,29 @@ def render_subtitle_video(
     if should_cancel is not None and should_cancel():
         _remove_incomplete_output(job.output_path, logger)
         raise ExportCancelled("已停止导出。")
+    retry_amf_with_cpu = amf_pipe_failure or (
+        return_code is not None
+        and return_code != 0
+        and _should_retry_amf_with_cpu(command, ffmpeg_output_tail)
+    )
+    if retry_amf_with_cpu:
+        _remove_incomplete_output(job.output_path, logger)
+        logger(
+            "AMD AMF 编码器初始化/显存失败，已自动切换 CPU 编码"
+            "，从头重试（进度会重新从 0 开始计数）"
+        )
+        return render_subtitle_video(
+            replace(job, encoder_mode="cpu"),
+            ffmpeg_dir=ffmpeg_dir,
+            logger=logger,
+            should_cancel=should_cancel,
+            on_process_started=on_process_started,
+            on_progress=on_progress,
+            preview_image_path=preview_image_path,
+            preview_width=preview_width,
+        )
+    if return_code is None:
+        raise ProcessingError("ffmpeg 管道异常关闭，未取得退出码")
     if return_code != 0:
         _remove_incomplete_output(job.output_path, logger)
         raise ProcessingError(f"ffmpeg 执行失败，退出码: {return_code}")
@@ -774,11 +807,20 @@ def _gpu_force_warp() -> bool:
 def _gpu_export_worker_count(*, force_warp: bool) -> int:
     if force_warp:
         return 1
-    raw = os.environ.get("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "3")
-    try:
-        return max(1, min(int(raw), 4))
-    except ValueError:
-        return 3
+    raw = os.environ.get("KROK_SUBTITLE_GPU_EXPORT_WORKERS")
+    if raw is not None:
+        try:
+            return max(1, min(int(raw), 4))
+        except ValueError:
+            pass
+    # GPU workers still need CPU threads to submit Direct2D work and consume
+    # readbacks.  The worker pool itself supports eight threads, but the shared
+    # frame transport has four slots, so export concurrency must stay within
+    # four to prevent slot aliasing.  Avoid needless contention on low-core
+    # systems.  The GPU
+    # configure preflight applies the independent VRAM/budget limit afterward.
+    logical_cpus = max(int(os.cpu_count() or 1), 1)
+    return max(1, min(logical_cpus // 2, 4))
 
 
 def _gpu_export_diagnostics_enabled() -> bool:
@@ -1481,37 +1523,102 @@ def _resolve_chunk_size(job: RenderJob, render_h: int, total_frames: int, worker
 # A3 内存护栏：imap 会把全部任务一次性派发、已完成结果在主进程无界积压，
 # 4K 全幅帧（31.6MiB/帧）下渲染快于编码时几分钟即可吃掉数 GB 内存。
 # 改用 apply_async + 有界在飞窗口：同时未消费的 chunk 结果条数与字节数都封顶。
-_MULTIPROC_MAX_PENDING_BYTES = 256 * 1024 * 1024  # 在飞 chunk 结果的内存上限
+_MULTIPROC_MAX_PENDING_BYTES = 256 * 1024 * 1024  # 在飞 chunk 结果的保守下限
+_MULTIPROC_PENDING_HARD_CAP_BYTES = 1024 * 1024 * 1024  # 高内存机也最多 1GiB
+_MULTIPROC_SYSTEM_RESERVE_BYTES = 1024 * 1024 * 1024  # 留给 UI / 背景解码 / ffmpeg
+_MULTIPROC_WORKER_OVERHEAD_BYTES = 64 * 1024 * 1024  # QApplication / 字体与栅格缓存
 _MULTIPROC_MIN_STALL_TIMEOUT_S = 60.0  # 单 chunk 结果等待的基础时间
 _MULTIPROC_STALL_BYTES_PER_SLOW_S = 512 * 1024  # 假设的最慢渲染速率（字节/秒）
 _MULTIPROC_POLL_INTERVAL_S = 0.5  # 等待结果的单次轮询时长（期间响应取消）
 
 
-def _resolve_pending_window(worker_count: int, chunk: int, frame_bytes: int) -> int:
+def _resolve_pending_memory_budget(available_memory_bytes: int | None) -> int:
+    """在飞结果预算：256MiB 保守下限，有余量时用可用内存的 1/8。
+
+    上限 1GiB，足以喂满 16 个 4K 全幅 worker（约 506MiB），
+    又不会因高内存机器而允许主进程无节制积压。
+    """
+
+    if available_memory_bytes is None or available_memory_bytes <= 0:
+        return _MULTIPROC_MAX_PENDING_BYTES
+    return max(
+        _MULTIPROC_MAX_PENDING_BYTES,
+        min(
+            _MULTIPROC_PENDING_HARD_CAP_BYTES,
+            int(available_memory_bytes) // 8,
+        ),
+    )
+
+
+def _resolve_pending_window(
+    worker_count: int,
+    chunk: int,
+    frame_bytes: int,
+    *,
+    pending_budget_bytes: int = _MULTIPROC_MAX_PENDING_BYTES,
+) -> int:
     """同时在飞（已派发未消费）的 chunk 数上限。
 
     调用方需先经 :func:`_resolve_effective_worker_count` 把 worker 数压回
-    预算内（worker ≤ 256MiB/chunk），此后窗口 = min(worker+2, 字节上限)
+    预算内（worker ≤ budget/chunk），此后窗口 = min(worker+2, 字节上限)
     恒 ≥ worker 数——既不饿死 worker，也绝不突破内存预算。
     """
     chunk_bytes = max(chunk * max(frame_bytes, 1), 1)
-    by_bytes = max(1, _MULTIPROC_MAX_PENDING_BYTES // chunk_bytes)
-    return max(2, min(worker_count + 2, by_bytes))
+    by_bytes = max(1, max(int(pending_budget_bytes), 1) // chunk_bytes)
+    return max(1, min(worker_count + 2, by_bytes))
 
 
 def _resolve_effective_worker_count(
-    worker_count: int, chunk: int, frame_bytes: int
+    worker_count: int,
+    chunk: int,
+    frame_bytes: int,
+    *,
+    available_memory_bytes: int | None = None,
+    pending_budget_bytes: int = _MULTIPROC_MAX_PENDING_BYTES,
 ) -> int:
-    """按 chunk 字节把实际 worker 数压回在飞内存预算内。
+    """按主进程在飞结果和系统可用内存限制 worker 数。
 
-    单帧巨大时（8K 全幅 ~127MiB、手动 16 worker 的 4K）靠放大窗口喂满
-    worker 会让待消费结果突破 256MiB 数倍，重新引入 OOM 风险；正确做法
-    是降 worker 数：8K 自动 8 worker → 2，4K 手动 16 → 8，窗口与预算
-    同时成立。常规分辨率（chunk 缩放后 ≤64MiB）不受影响。
+    单帧巨大时，worker 数同时受动态在飞结果预算和估算的
+    worker 峰值内存限制。高内存机器的在飞预算可从 256MiB
+    扩到 1GiB，因此手动 16 worker 的 4K 不会因固定上限被错压成 8；
+    低内存机器仍会降 worker 防止 OOM。
     """
     chunk_bytes = max(chunk * max(frame_bytes, 1), 1)
-    by_bytes = max(1, _MULTIPROC_MAX_PENDING_BYTES // chunk_bytes)
-    return max(1, min(worker_count, by_bytes))
+    by_bytes = max(1, max(int(pending_budget_bytes), 1) // chunk_bytes)
+    resolved = max(1, min(worker_count, by_bytes))
+    if available_memory_bytes is None or available_memory_bytes <= 0:
+        return resolved
+
+    # worker 常驻 QImage + empty_frame；渲染 chunk 时同时存在 bytearray、
+    # 返回 bytes 及 multiprocessing 序列化副本。额外保留 QApplication /
+    # 字体缓存的经验上限，避免 4K 全幅回退一次拉起 8 个大进程。
+    per_worker_peak = (
+        2 * max(frame_bytes, 1)
+        + 3 * chunk_bytes
+        + _MULTIPROC_WORKER_OVERHEAD_BYTES
+    )
+    # available 已排除当前已占用内存；再保留至少 1GiB 与在飞
+    # 结果窗口。高内存机器不会触发降级，低内存/UMA 压力机器降并发。
+    worker_budget = max(
+        int(available_memory_bytes)
+        - _MULTIPROC_SYSTEM_RESERVE_BYTES
+        - max(int(pending_budget_bytes), 1),
+        0,
+    )
+    by_system_memory = max(1, worker_budget // max(per_worker_peak, 1))
+    return max(1, min(resolved, by_system_memory))
+
+
+def _available_system_memory_bytes() -> int | None:
+    """返回当前可用物理内存；查询失败时保留旧的并发策略。"""
+
+    try:
+        import psutil
+
+        available = int(psutil.virtual_memory().available)
+    except (ImportError, AttributeError, OSError, TypeError, ValueError):
+        return None
+    return available if available > 0 else None
 
 
 def _resolve_stall_timeout_s(chunk_frames: int, frame_bytes: int) -> float:
@@ -1659,13 +1766,26 @@ def _write_frames_multiprocess(
     chunk = _resolve_chunk_size(job, render_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
     frame_bytes = job.width * render_h * 4
-    effective_workers = _resolve_effective_worker_count(worker_count, chunk, frame_bytes)
+    available_memory = _available_system_memory_bytes()
+    pending_budget = _resolve_pending_memory_budget(available_memory)
+    effective_workers = _resolve_effective_worker_count(
+        worker_count,
+        chunk,
+        frame_bytes,
+        available_memory_bytes=available_memory,
+        pending_budget_bytes=pending_budget,
+    )
     if effective_workers < worker_count and logger is not None:
         logger(
-            f"单帧数据过大，渲染进程数从 {worker_count} 降至 {effective_workers}"
-            "以守住主进程在飞内存预算（256MiB）"
+            f"内存预算限制：渲染进程数从 {worker_count} 降至 "
+            f"{effective_workers}（在飞结果预算 {pending_budget / 1048576:.0f} MiB）"
         )
-    window = _resolve_pending_window(effective_workers, chunk, frame_bytes)
+    window = _resolve_pending_window(
+        effective_workers,
+        chunk,
+        frame_bytes,
+        pending_budget_bytes=pending_budget,
+    )
     stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
@@ -1783,13 +1903,26 @@ def _write_frames_multiprocess_bands(
     chunk = _resolve_chunk_size(job, packed_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
     frame_bytes = job.width * packed_h * 4
-    effective_workers = _resolve_effective_worker_count(worker_count, chunk, frame_bytes)
+    available_memory = _available_system_memory_bytes()
+    pending_budget = _resolve_pending_memory_budget(available_memory)
+    effective_workers = _resolve_effective_worker_count(
+        worker_count,
+        chunk,
+        frame_bytes,
+        available_memory_bytes=available_memory,
+        pending_budget_bytes=pending_budget,
+    )
     if effective_workers < worker_count and logger is not None:
         logger(
-            f"单帧数据过大，渲染进程数从 {worker_count} 降至 {effective_workers}"
-            "以守住主进程在飞内存预算（256MiB）"
+            f"内存预算限制：渲染进程数从 {worker_count} 降至 "
+            f"{effective_workers}（在飞结果预算 {pending_budget / 1048576:.0f} MiB）"
         )
-    window = _resolve_pending_window(effective_workers, chunk, frame_bytes)
+    window = _resolve_pending_window(
+        effective_workers,
+        chunk,
+        frame_bytes,
+        pending_budget_bytes=pending_budget,
+    )
     stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
     pool = ctx.Pool(
@@ -1842,7 +1975,11 @@ def _render_overlay_frame(
     return _image_bytes(image)
 
 
-def _drain_process_output(process: subprocess.Popen, logger: Logger) -> None:
+def _drain_process_output(
+    process: subprocess.Popen,
+    logger: Logger,
+    output_tail: deque[str] | None = None,
+) -> None:
     if process.stdout is None:
         return
     for raw in process.stdout:
@@ -1851,7 +1988,36 @@ def _drain_process_output(process: subprocess.Popen, logger: Logger) -> None:
         else:
             line = str(raw).strip()
         if line:
+            if output_tail is not None:
+                output_tail.append(line)
             logger(line)
+
+
+def _should_retry_amf_with_cpu(
+    command: list[str], output_tail: deque[str],
+) -> bool:
+    """仅对 AMF 初始化/设备/内存类错误用 CPU 编码重试一次。
+
+    输出目录不可写、输入损坏、磁盘满等与 AMF 无关的失败不重试，
+    避免长视频在必然失败时白跑第二遍。
+    """
+
+    if not any(part in {"h264_amf", "hevc_amf"} for part in command):
+        return False
+    output = "\n".join(output_tail).lower()
+    markers = (
+        "amf_",
+        "createcomponent",
+        "no capable devices",
+        "out of memory",
+        "cannot allocate memory",
+        "failed to initialise",
+        "failed to initialize",
+        "error while opening encoder",
+        "error initializing output stream",
+        "device removed",
+    )
+    return any(marker in output for marker in markers)
 
 
 def _remove_incomplete_output(output_path: Path, logger: Logger) -> None:

@@ -454,6 +454,40 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert all(row["copies_per_frame"] == 4 for row in frame_diagnostics)
 
 
+def test_iter_gpu_rgba_frames_wraps_python_frame_allocation_oom(monkeypatch) -> None:
+    class _OomImage:
+        def isNull(self):
+            return False
+
+        def convertToFormat(self, _format):
+            raise MemoryError("cannot allocate converted 4K frame")
+
+    class _OomRingReader(_FakeGpuRingReader):
+        def read_qimage(self, _event):
+            return _OomImage()
+
+    _FakeGpuRendererProcess.instances.clear()
+    _OomRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _OomRingReader)
+
+    with pytest.raises(ne.NativeRendererError) as excinfo:
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=3840,
+                height=2160,
+                fps=60,
+                total_frames=1,
+                force_warp=True,
+            )
+        )
+
+    assert "failed to consume GPU subtitle frame" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, MemoryError)
+
+
 def test_iter_gpu_rgba_frames_reorders_bounded_multiworker_results(monkeypatch) -> None:
     _FakeGpuRendererProcess.instances.clear()
     _FakeGpuRingReader.instances.clear()
@@ -664,15 +698,26 @@ def test_gpu_export_vram_headroom_extraction() -> None:
             "local_video_memory_budget_bytes": 400,
         }
     ) == (100, 400)
+    # AMD APU / UMA 可能只上报共享（non-local）segment。
+    assert ne.gpu_export_vram_headroom(
+        {
+            "video_memory_info_available": True,
+            "local_video_memory_usage_bytes": 0,
+            "local_video_memory_budget_bytes": 0,
+            "non_local_video_memory_usage_bytes": 120,
+            "non_local_video_memory_budget_bytes": 500,
+        }
+    ) == (120, 500)
 
 
 def test_degraded_gpu_worker_candidates_sequence() -> None:
     # 逐级递减：预检是经验估算，误判时宁可多一次重配也不能让高配 GPU
-    # 从 3 直接掉到 1
+    # 从高并发直接掉到 1。
     assert ne.degraded_gpu_worker_candidates(4) == [4, 3, 2, 1]
     assert ne.degraded_gpu_worker_candidates(3) == [3, 2, 1]
     assert ne.degraded_gpu_worker_candidates(2) == [2, 1]
     assert ne.degraded_gpu_worker_candidates(1) == [1]
+    assert ne.degraded_gpu_worker_candidates(8) == [4, 3, 2, 1]
     assert ne.degraded_gpu_worker_candidates(9) == [4, 3, 2, 1]
 
 
@@ -680,7 +725,8 @@ class _FakeVramGpuRendererProcess:
     """按创建顺序消耗 ``vram_reports`` 的 GPU sidecar 假体（预检 / 降级路径）。"""
 
     instances: "list[_FakeVramGpuRendererProcess]" = []
-    vram_reports: "list[dict[str, int] | None]" = []
+    vram_reports: "list[dict[str, int] | BaseException | None]" = []
+    backend_reports: "list[dict[str, int]]" = []
 
     def __init__(self, *args, **kwargs):
         self.configures = []
@@ -694,6 +740,11 @@ class _FakeVramGpuRendererProcess:
             if index < len(_FakeVramGpuRendererProcess.vram_reports)
             else None
         )
+        self.backend_report = (
+            _FakeVramGpuRendererProcess.backend_reports[index]
+            if index < len(_FakeVramGpuRendererProcess.backend_reports)
+            else {}
+        )
         _FakeVramGpuRendererProcess.instances.append(self)
 
     def start(self):
@@ -702,6 +753,9 @@ class _FakeVramGpuRendererProcess:
 
     def close(self):
         self.closed = True
+
+    def backend_info(self, *, force_warp=False):
+        return dict(self.backend_report)
 
     def __enter__(self):
         return self
@@ -712,6 +766,8 @@ class _FakeVramGpuRendererProcess:
 
     def configure_gpu(self, *args, **kwargs):
         self.configures.append(kwargs)
+        if isinstance(self.report, BaseException):
+            raise self.report
         response: dict[str, object] = {
             "ok": True,
             "event": "gpu_configured",
@@ -750,9 +806,19 @@ def _report(usage_mib: int, budget_mib: int) -> dict[str, int]:
     }
 
 
-def _run_vram_export(monkeypatch, *, worker_count, reports, **kwargs):
+def _run_vram_export(
+    monkeypatch,
+    *,
+    worker_count,
+    reports,
+    backend_reports=(),
+    width=1,
+    height=1,
+    **kwargs,
+):
     _FakeVramGpuRendererProcess.instances.clear()
     _FakeVramGpuRendererProcess.vram_reports = list(reports)
+    _FakeVramGpuRendererProcess.backend_reports = list(backend_reports)
     _FakeGpuRingReader.instances.clear()
     monkeypatch.setattr(ne, "NativeRendererProcess", _FakeVramGpuRendererProcess)
     monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
@@ -760,8 +826,8 @@ def _run_vram_export(monkeypatch, *, worker_count, reports, **kwargs):
         ne.iter_gpu_rgba_frames(
             _track(),
             Style(),
-            width=1,
-            height=1,
+            width=width,
+            height=height,
             fps=2,
             total_frames=1,
             worker_count=worker_count,
@@ -792,6 +858,147 @@ def test_iter_gpu_rgba_frames_degrades_workers_on_projected_vram(monkeypatch) ->
     assert first.closed is True
     assert second.started is True
     assert any("降至 2 个 worker" in message for message in logs)
+
+
+def test_iter_gpu_rgba_frames_retries_lower_worker_after_configure_oom(
+    monkeypatch,
+) -> None:
+    logs: list[str] = []
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[
+            ne.NativeRendererError("CreateTexture2D failed: out of memory"),
+            _report(100, 1000),
+        ],
+        logger=logs.append,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert [
+        instance.configures[0]["worker_count"]
+        for instance in _FakeVramGpuRendererProcess.instances
+    ] == [4, 3]
+    assert any("4 worker 配置失败" in message for message in logs)
+
+
+def test_gpu_configure_timeout_does_not_repeat_for_every_worker() -> None:
+    assert ne.gpu_configure_failure_allows_worker_retry(
+        ne.NativeRendererError("native renderer response timed out after 180.0s")
+    ) is False
+
+
+def test_iter_gpu_rgba_frames_uses_single_worker_when_4k_vram_info_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", raising=False)
+    logs: list[str] = []
+
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[None, None],
+        width=3840,
+        height=2160,
+        logger=logs.append,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    # 首次 4 worker 无可用预算后直接跳过 3/2，用单 worker 重配。
+    assert [
+        instance.configures[0]["worker_count"]
+        for instance in _FakeVramGpuRendererProcess.instances
+    ] == [4, 1]
+    assert _FakeVramGpuRendererProcess.instances[0].closed is True
+    assert any("降至 1 个 worker" in message for message in logs)
+
+
+def test_iter_gpu_rgba_frames_keeps_high_end_4k_workers_without_dynamic_budget(
+    monkeypatch,
+) -> None:
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[{"dedicated_video_memory": 12 * 1024**3}],
+        width=3840,
+        height=2160,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert len(_FakeVramGpuRendererProcess.instances) == 1
+    assert _FakeVramGpuRendererProcess.instances[0].configures[0]["worker_count"] == 4
+
+
+def test_iter_gpu_rgba_frames_starts_16g_adapter_at_four_workers(monkeypatch) -> None:
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[{"dedicated_video_memory": 16 * 1024**3}],
+        backend_reports=[{"dedicated_video_memory": 16 * 1024**3}],
+        width=3840,
+        height=2160,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert len(_FakeVramGpuRendererProcess.instances) == 1
+    assert _FakeVramGpuRendererProcess.instances[0].configures[0]["worker_count"] == 4
+
+
+def test_iter_gpu_rgba_frames_caps_small_adapter_before_configure(monkeypatch) -> None:
+    logs: list[str] = []
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[None, {"dedicated_video_memory": 4 * 1024**3}],
+        backend_reports=[
+            {"dedicated_video_memory": 4 * 1024**3},
+            {"dedicated_video_memory": 4 * 1024**3},
+        ],
+        width=3840,
+        height=2160,
+        logger=logs.append,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert _FakeVramGpuRendererProcess.instances[0].configures == []
+    assert _FakeVramGpuRendererProcess.instances[1].configures[0]["worker_count"] == 2
+    assert any("限制为 2 个 worker" in message for message in logs)
+
+
+def test_iter_gpu_rgba_frames_caps_midrange_4k_without_dynamic_budget(
+    monkeypatch,
+) -> None:
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[
+            {"dedicated_video_memory": 6 * 1024**3},
+            {"dedicated_video_memory": 6 * 1024**3},
+        ],
+        width=3840,
+        height=2160,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert [
+        instance.configures[0]["worker_count"]
+        for instance in _FakeVramGpuRendererProcess.instances
+    ] == [4, 3]
+
+
+def test_iter_gpu_rgba_frames_keeps_workers_when_small_vram_info_missing(
+    monkeypatch,
+) -> None:
+    frames = _run_vram_export(
+        monkeypatch,
+        worker_count=4,
+        reports=[None],
+        width=1920,
+        height=1080,
+    )
+
+    assert frames == [bytes([20, 40, 60, 128])]
+    assert _FakeVramGpuRendererProcess.instances[0].configures[0]["worker_count"] == 4
 
 
 def test_iter_gpu_rgba_frames_raises_when_single_worker_exhausts_vram(

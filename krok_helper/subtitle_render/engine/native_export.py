@@ -37,6 +37,7 @@ _DEFAULT_GPU_EXPORT_CONFIGURE_TIMEOUT_S = 180.0
 # 超过 budget 则降 worker 重配；单 worker 仍超且逼近 budget 时报错走 CPU 回退。
 _DEFAULT_GPU_EXPORT_VRAM_GROWTH = 2.0
 _GPU_EXPORT_VRAM_NEAR_BUDGET_RATIO = 0.9
+_GIB = 1024 * 1024 * 1024
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -94,30 +95,85 @@ def gpu_export_vram_growth_factor() -> float:
 def gpu_export_vram_headroom(
     configured: dict[str, object],
 ) -> tuple[int, int] | None:
-    """Extract per-process local-segment ``(usage, budget)`` after configure.
+    """Extract the usable DXGI segment ``(usage, budget)`` after configure.
 
-    返回 ``None`` 表示 DXGI 查询不可用（常见于 iGPU 共享显存机器），预检跳过。
+    独显通常使用 local segment；iGPU / UMA 共享显存机器可能只上报
+    non-local segment。优先 local，其预算无效时回退 non-local，避免 AMD
+    APU 在 4K 导出时完全跳过显存护栏。
     """
     if not configured.get("video_memory_info_available"):
         return None
-    try:
-        usage = int(configured.get("local_video_memory_usage_bytes") or 0)
-        budget = int(configured.get("local_video_memory_budget_bytes") or 0)
-    except (TypeError, ValueError):
-        return None
-    if budget <= 0:
-        return None
-    return usage, budget
+    for prefix in ("local", "non_local"):
+        try:
+            usage = int(configured.get(f"{prefix}_video_memory_usage_bytes") or 0)
+            budget = int(configured.get(f"{prefix}_video_memory_budget_bytes") or 0)
+        except (TypeError, ValueError):
+            continue
+        if budget > 0:
+            return max(usage, 0), budget
+    return None
 
 
 def degraded_gpu_worker_candidates(requested: int) -> list[int]:
-    """Worker 降级序列：逐级递减（4→[4,3,2,1]、3→[3,2,1]、1→[1]）。
+    """Worker 降级序列：从共享帧传输上限 4 开始逐级递减至 1。
 
     预检公式是经验估算，逐级下降可避免误判时高配 GPU 从 3 直接掉到 1
     造成数倍导出时长——宁可多一次重配，也要保住并发。
     """
     first = max(1, min(int(requested), 4))
     return list(range(first, 0, -1))
+
+
+def gpu_worker_limit_without_dynamic_budget(
+    configured: dict[str, object], *, width: int, height: int
+) -> int:
+    """DXGI 动态预算不可用时，按适配器物理显存保守分档。
+
+    非 4K 不预先降级。4K 下高端独显保留并发；小显存独显和
+    ``dedicated_video_memory == 0`` 的 UMA/iGPU 才逐级压低。这只是
+    QueryVideoMemoryInfo 失效时的后备策略，正常驱动仍以实时 budget 为准。
+    """
+
+    if max(int(width), 1) * max(int(height), 1) < 3840 * 2160:
+        return 4
+    try:
+        dedicated = max(int(configured.get("dedicated_video_memory") or 0), 0)
+    except (TypeError, ValueError):
+        dedicated = 0
+    if dedicated >= 8 * _GIB:
+        return 4
+    if dedicated >= 6 * _GIB:
+        return 3
+    if dedicated >= 4 * _GIB:
+        return 2
+    return 1
+
+
+def gpu_configure_failure_allows_worker_retry(error: BaseException) -> bool:
+    """Only retry lower concurrency for failures that can improve with fewer workers.
+
+    In particular, a 180-second protocol timeout must not be repeated for every
+    candidate.  Resource/device failures are normally returned immediately and
+    are the cases where rebuilding a smaller Direct2D pool is useful.
+    """
+
+    message = str(error).lower()
+    markers = (
+        "out of memory",
+        "cannot allocate",
+        "failed to allocate",
+        "bad_alloc",
+        "e_outofmemory",
+        "0x8007000e",
+        "device removed",
+        "device reset",
+        "device hung",
+        "dxgi_error_device",
+        "0x887a0005",
+        "0x887a0006",
+        "0x887a0007",
+    )
+    return any(marker in message for marker in markers)
 
 
 def _configure_gpu_export_with_preflight(
@@ -153,8 +209,13 @@ def _configure_gpu_export_with_preflight(
     growth = gpu_export_vram_growth_factor()
     preflight = gpu_export_preflight_enabled()
     candidates = degraded_gpu_worker_candidates(worker_count)
+    fallback_worker_limit: int | None = None
 
     for attempt_index, attempt_workers in enumerate(candidates):
+        # 首次 configure 已确认 DXGI 动态预算不可用时，直接跳过
+        # 高于物理显存分档上限的中间并发数，避免重复做昂贵配置。
+        if fallback_worker_limit is not None and attempt_workers > fallback_worker_limit:
+            continue
         shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
         renderer = NativeRendererProcess(
             renderer_path,
@@ -162,8 +223,34 @@ def _configure_gpu_export_with_preflight(
             gpu_configure_timeout_s=configure_timeout_s,
             close_timeout_s=1.0,
         )
+        configure_invoked = False
         try:
             renderer.start()
+            # Query immutable adapter capacity before allocating a worker pool.
+            # This prevents a 4-worker probe itself from exhausting a small
+            # 4K adapter.  Older test/protocol doubles may not expose this
+            # optional query, in which case configure-time DXGI data remains
+            # the authority.
+            if preflight and fallback_worker_limit is None:
+                try:
+                    backend_info = renderer.backend_info(force_warp=force_warp)
+                except (AttributeError, NativeRendererError):
+                    backend_info = {}
+                if backend_info:
+                    fallback_worker_limit = gpu_worker_limit_without_dynamic_budget(
+                        backend_info, width=width, height=height
+                    )
+                if (
+                    fallback_worker_limit is not None
+                    and attempt_workers > fallback_worker_limit
+                ):
+                    if logger is not None:
+                        logger(
+                            "GPU 自适应并发：按适配器显存将本次导出限制为 "
+                            f"{fallback_worker_limit} 个 worker"
+                        )
+                    renderer.close()
+                    continue
             configure_started = time.perf_counter()
             configure_kwargs = {
                 "width": width,
@@ -182,6 +269,7 @@ def _configure_gpu_export_with_preflight(
             }
             if duration_ms is not None:
                 configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
+            configure_invoked = True
             configured = dict(
                 renderer.configure_gpu(
                     track,
@@ -192,11 +280,38 @@ def _configure_gpu_export_with_preflight(
             configured["prepare_layout_ms"] = (
                 time.perf_counter() - configure_started
             ) * 1000.0
+        except NativeRendererError as exc:
+            renderer.close()
+            if (
+                configure_invoked
+                and attempt_workers > 1
+                and gpu_configure_failure_allows_worker_retry(exc)
+            ):
+                if logger is not None:
+                    logger(
+                        f"GPU {attempt_workers} worker 配置失败（{exc}），"
+                        "降低并发重试"
+                    )
+                continue
+            raise
         except BaseException:
             renderer.close()
             raise
 
         headroom = gpu_export_vram_headroom(configured) if preflight else None
+        if preflight and headroom is None:
+            fallback_worker_limit = gpu_worker_limit_without_dynamic_budget(
+                configured, width=width, height=height
+            )
+        if headroom is None and attempt_workers > (fallback_worker_limit or 4):
+            if logger is not None:
+                logger(
+                    "GPU 显存预检：DXGI 未提供可用的本地/共享显存预算，"
+                    f"按适配器物理显存将 4K 导出降至 "
+                    f"{fallback_worker_limit} 个 worker 重新配置"
+                )
+            renderer.close()
+            continue
         if headroom is not None:
             usage, budget = headroom
             if usage * growth > budget:
@@ -719,19 +834,25 @@ def iter_gpu_rgba_frames(
                 expand_started = time.perf_counter()
                 try:
                     image = reader.read_qimage(event)
-                except RuntimeError as exc:
+                    if image.isNull():
+                        raise MemoryError("failed to allocate GPU readback QImage")
+                    expand_ms = (time.perf_counter() - expand_started) * 1000.0
+                    convert_started = time.perf_counter()
+                    image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+                    if image.isNull():
+                        raise MemoryError("failed to allocate converted GPU frame")
+                    convert_ms = (time.perf_counter() - convert_started) * 1000.0
+                    bytes_started = time.perf_counter()
+                    bits = image.constBits()
+                    bits.setsize(image.sizeInBytes())
+                    frame = bytes(bits)
+                    bytes_ms = (time.perf_counter() - bytes_started) * 1000.0
+                except NativeRendererError:
+                    raise
+                except (MemoryError, RuntimeError) as exc:
                     raise NativeRendererError(
                         f"failed to consume GPU subtitle frame {frame_index}: {exc}"
                     ) from exc
-                expand_ms = (time.perf_counter() - expand_started) * 1000.0
-                convert_started = time.perf_counter()
-                image = image.convertToFormat(QImage.Format.Format_RGBA8888)
-                convert_ms = (time.perf_counter() - convert_started) * 1000.0
-                bytes_started = time.perf_counter()
-                bits = image.constBits()
-                bits.setsize(image.sizeInBytes())
-                frame = bytes(bits)
-                bytes_ms = (time.perf_counter() - bytes_started) * 1000.0
                 record_frame_diagnostics(
                     event,
                     frame_index,
