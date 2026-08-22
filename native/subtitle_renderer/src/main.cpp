@@ -117,6 +117,9 @@ struct TimingLine {
     int trackLineIndex = -1;
     int pageIndex = -1;
     int pageLineCount = 0;
+    // Volume signal bars only attach to each section's first page's first
+    // line; Python stamps the flag so both backends share one decision.
+    bool signalHead = false;
     int sourceOffsetMs = 0;
     int lane = 0;
     double layoutOffsetX = 0.0;
@@ -2373,6 +2376,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.pageLineCount = std::max(
                 0, intValue(lineObject, QStringLiteral("page_line_count"), 0)
             );
+            // Default true: an IR from an older Python host has no stamp, and
+            // the pre-change behavior (bars on every line) must survive that
+            // pairing. New IRs always stamp the flag explicitly.
+            line.signalHead = lineObject.value(
+                QStringLiteral("signal_head")
+            ).toBool(true);
             line.sourceOffsetMs = sourceOffsetMs;
             line.lane = std::max(0, intValue(lineObject, QStringLiteral("lane"), 0));
             line.layoutOffsetX = lineObject.value(
@@ -7613,6 +7622,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.sourceLineIndex = sourceLine.sourceLineIndex;
         line.pageIndex = sourceLine.pageIndex;
         line.lane = sourceLine.lane;
+        line.signalHead = sourceLine.signalHead;
         line.centerOverride = sourceLine.centerOverride;
         // 标题钉在最下层（compositeOrder = kTitleCompositeOrder），所以源之间不必
         // 再为它预留 1 号槽位：主字幕 0，副源依次 1、2……

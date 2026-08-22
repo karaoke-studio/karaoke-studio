@@ -378,6 +378,40 @@ def project_page_plan_to_legacy_fields(track: TimingTrack, style: Style) -> None
                 line.break_before = "page"
 
 
+def section_head_line_indices(
+    track: TimingTrack,
+    style: Style,
+    *,
+    section_gap_ms: int = 0,
+) -> frozenset[int]:
+    """每段第一页第一行的 ``track.lines`` 索引集合。
+
+    音量柱（SignalsLits 的 volume 样式）只挂在这些行上。page_plan 存在时
+    以权威结构为准；裸解析的 track 没有 plan，按行间奏间隔推导段边界，
+    口径与 :func:`krok_helper.subtitle_render.engine.timeline._compute_section_ids`
+    一致。段的行序连续展开，因此段首行必然是段第一页的第一行。
+    """
+
+    if track.page_plan is not None:
+        resolved = resolve_page_plan(track, style)
+        heads: set[int] = set()
+        for section in resolved.sections:
+            if section.pages and section.pages[0].track_line_indices:
+                heads.add(section.pages[0].track_line_indices[0])
+        return frozenset(heads)
+    heads = set()
+    previous: Optional[TimingLine] = None
+    for track_index in renderable_line_indices(track):
+        line = track.lines[track_index]
+        if previous is None or (
+            section_gap_ms > 0
+            and timing_line_start_ms(line) - _line_end_ms(previous) > section_gap_ms
+        ):
+            heads.add(track_index)
+        previous = line
+    return frozenset(heads)
+
+
 def page_for_track_line(
     track: TimingTrack, style: Style, track_line_index: int
 ) -> Optional[ResolvedPage]:

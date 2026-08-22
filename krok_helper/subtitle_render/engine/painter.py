@@ -434,6 +434,7 @@ def layout_pass():
         _LAYOUT_PASS.char_advances = {}
         _LAYOUT_PASS.ink_rects = {}
         _LAYOUT_PASS.sayatoo_layouts = {}
+        _LAYOUT_PASS.signal_heads = {}
         _LAYOUT_PASS.tracks = []
         _LAYOUT_PASS.styles = []
         _LAYOUT_PASS.lines = []
@@ -453,6 +454,7 @@ def layout_pass():
             _LAYOUT_PASS.char_advances = None
             _LAYOUT_PASS.ink_rects = None
             _LAYOUT_PASS.sayatoo_layouts = None
+            _LAYOUT_PASS.signal_heads = None
             _LAYOUT_PASS.tracks = []
             _LAYOUT_PASS.styles = []
             _LAYOUT_PASS.lines = []
@@ -610,6 +612,7 @@ from krok_helper.subtitle_render.engine.timeline import (
 from krok_helper.subtitle_render.engine.page_plan import (
     page_plan_signature,
     resolve_page_plan,
+    section_head_line_indices,
 )
 from krok_helper.subtitle_render.engine.page_placement import (
     AxisOffsetWindow,
@@ -2633,6 +2636,12 @@ def _resolve_sayatoo_line_layouts(
             return hit
     layouts: dict[int, _SayatooLineLayout] = {}
     signal_metrics = _signal_layout_metrics(style) if style.lit_enabled else None
+    signal_head_ids = _signal_head_context(track, style) if signal_metrics else None
+    index_of_signal_lines = (
+        {id(line): index for index, line in enumerate(track.lines)}
+        if signal_head_ids is not None
+        else None
+    )
     for display_line in display_lines:
         line = display_line.line
         if line.is_blank or not line.chars:
@@ -2679,7 +2688,15 @@ def _resolve_sayatoo_line_layouts(
         signal_x: float | None = None
         if (
             signal_metrics is not None
-            and _line_has_active_signal(line, t_ms, line_style)
+            and _line_has_active_signal(
+                line,
+                t_ms,
+                line_style,
+                is_signal_head=(
+                    signal_head_ids is None
+                    or index_of_signal_lines.get(id(line)) in signal_head_ids
+                ),
+            )
         ):
             # Sayatoo CoreSuites aligns the *union* of the lyric text box and the
             # signal-module bounds (the LineDrawingData width), then applies
@@ -2782,7 +2799,16 @@ def _signal_layout_metrics(style: Style) -> _SignalLayoutMetrics:
     )
 
 
-def _line_has_active_signal(line: TimingLine, t_ms: int, style: Style) -> bool:
+def _line_has_active_signal(
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+    *,
+    is_signal_head: bool = True,
+) -> bool:
+    if not is_signal_head:
+        # 音量柱只挂在每 S 第一 P 第一行：非段首行不为灯预留布局位。
+        return False
     duration = max(int(style.signals_duration_ms), 0)
     active_duration = max(duration - max(int(style.lit_waiting_time_ms), 0), 0)
     if active_duration <= 0:
@@ -3143,9 +3169,18 @@ def _signal_lit_groups(
         group_width = _volume_signal_geometry(style).group_width
     else:
         group_width = count * size + max(count - 1, 0) * (size * 0.5 + tracking)
+    signal_heads = _signal_head_context(track, style)
+    index_of = (
+        {id(line): index for index, line in enumerate(track.lines)}
+        if signal_heads is not None
+        else None
+    )
     for display_line in display_lines:
         line = display_line.line
         if line.is_blank or not line.chars:
+            continue
+        if index_of is not None and index_of.get(id(line)) not in signal_heads:
+            # 音量柱只画每 S 第一 P 第一行。
             continue
         line_layout = (
             line_layouts.get(id(display_line.line))
@@ -4782,12 +4817,17 @@ def _display_lines_for_style(
 
     kwargs = _display_line_compute_kwargs(style)
     avoid_collisions = not style.allow_inter_page_line_overlap
+    signal_heads = _signal_head_context(track, style)
     base_kwargs = {
         **kwargs,
         "sync_entry": False,
         "sync_ending": False,
         "auto_fill_section_time": False,
     }
+    if signal_heads is not None:
+        # 音量柱只挂段首行：lead 扩展按行下发，其余行保持用户 PreTime。
+        base_kwargs["signal_head_indexes"] = signal_heads
+        base_kwargs["signal_lead_ms"] = _signal_lead_in_ms(style)
     if logical_w is None or logical_h is None:
         default_w, default_h = _default_collision_canvas(style)
         logical_w = default_w if logical_w is None else logical_w
@@ -5023,10 +5063,17 @@ def display_windows_for_style(
         return windows
     lead = max(style.line_lead_in_ms, 0)
     tail = max(style.line_tail_ms, 0)
+    signal_heads = _signal_head_context(track, style)
+    signal_lead = _signal_lead_in_ms(style) if signal_heads is not None else 0
     for index, line in enumerate(track.lines):
         if line.is_blank or not line.chars:
             continue
-        display_start = max(_line_start_ms(line) - lead, 0)
+        line_lead = (
+            max(lead, signal_lead)
+            if signal_heads is not None and index in signal_heads
+            else lead
+        )
+        display_start = max(_line_start_ms(line) - line_lead, 0)
         display_end = _line_end_ms(line) + tail
         windows[index] = apply_display_overrides(line, display_start, display_end)
     return windows
@@ -5062,6 +5109,10 @@ def layout_timing_diagnostics_for_style(
         "sync_ending": False,
         "auto_fill_section_time": False,
     }
+    signal_heads = _signal_head_context(track, style)
+    if signal_heads is not None:
+        base_kwargs["signal_head_indexes"] = signal_heads
+        base_kwargs["signal_lead_ms"] = _signal_lead_in_ms(style)
     ideal = compute_display_lines(
         track,
         **base_kwargs,
@@ -5629,12 +5680,19 @@ def _single_visible_display_line(
     best_lead_or_tail: DisplayLine | None = None
     lead = max(style.line_lead_in_ms, 0)
     tail = max(style.line_tail_ms, 0)
-    for line in track.lines:
+    signal_heads = _signal_head_context(track, style)
+    signal_lead = _signal_lead_in_ms(style) if signal_heads is not None else 0
+    for index, line in enumerate(track.lines):
         if line.is_blank or not line.chars:
             continue
+        line_lead = (
+            max(lead, signal_lead)
+            if signal_heads is not None and index in signal_heads
+            else lead
+        )
         sing_start = _line_start_ms(line)
         sing_end = _line_end_ms(line)
-        display_start = max(sing_start - lead, 0)
+        display_start = max(sing_start - line_lead, 0)
         display_end = sing_end + tail
         display_start, display_end = apply_display_overrides(
             line, display_start, display_end
@@ -5671,7 +5729,51 @@ def _display_style_for_signal_window(style: Style) -> Style:
     signal_lead = _signal_lead_in_ms(style)
     if signal_lead <= max(style.line_lead_in_ms, 0):
         return style
+    if _volume_signal_style(style):
+        # 音量柱只挂每段第一行：lead 扩展按行下发（见 _signal_head_context），
+        # 不再全局提前所有行。
+        return style
     return replace(style, line_lead_in_ms=signal_lead)
+
+
+def _volume_signal_style(style: Style) -> bool:
+    """音量柱样式：指示灯只生效在每 S 第一 P 第一行。"""
+
+    return bool(style.lit_enabled) and not style.vertical and (
+        style.lit_style == "volume"
+    )
+
+
+def _signal_head_context(
+    track: TimingTrack,
+    style: Style,
+) -> Optional[frozenset[int]]:
+    """音量柱生效的 ``track.lines`` 索引集合（每段第一行）；None = 不过滤。
+
+    形状灯（circle/square/rounded）与竖排保持每行生效的历史行为，返回
+    ``None``。结果按 ``(id(track), 布局签名)`` 缓存：同一布局趟内会被行布局、
+    灯组与窗口计算反复询问。
+    """
+
+    if not _volume_signal_style(style):
+        return None
+    cache = getattr(_LAYOUT_PASS, "signal_heads", None)
+    key = None
+    if cache is not None:
+        # 段首集合只由分页结构与间奏间隔决定；行内容变化不改分页计数，
+        # 无需整轨值签名。
+        key = (id(track), page_plan_signature(track), max(style.section_gap_ms, 0))
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+    heads = section_head_line_indices(
+        track, style, section_gap_ms=max(style.section_gap_ms, 0)
+    )
+    if cache is not None:
+        cache[key] = heads
+        # 键里有 id()：按住 track 防止地址复用后命中脏缓存。
+        _LAYOUT_PASS.tracks.append(track)
+    return heads
 
 
 def _signal_lead_in_ms(style: Style) -> int:
@@ -5697,14 +5799,33 @@ def _signal_display_lines_for_style(
     signal_lead = _signal_lead_in_ms(style)
     if signal_lead <= 0:
         return []
-    signal_style = replace(style, line_lead_in_ms=max(style.line_lead_in_ms, signal_lead))
-    return _visible_lines_for_style(
-        track,
-        t_ms,
-        signal_style,
-        logical_w=logical_w,
-        logical_h=logical_h,
-    )
+    signal_heads = _signal_head_context(track, style)
+    if signal_heads is None:
+        signal_style = replace(
+            style, line_lead_in_ms=max(style.line_lead_in_ms, signal_lead)
+        )
+        return _visible_lines_for_style(
+            track,
+            t_ms,
+            signal_style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
+    # 音量柱只挂每 S 第一 P 第一行：非段首行不进入信号窗口（无灯、无提前显示）。
+    # `_visible_lines_for_style` 内部（dual 与单行两条路径）已经按段首行下发
+    # lead 扩展，这里只需把非段首行从候选中剔除。
+    index_of = {id(line): index for index, line in enumerate(track.lines)}
+    return [
+        item
+        for item in _visible_lines_for_style(
+            track,
+            t_ms,
+            style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
+        if index_of.get(id(item.line)) in signal_heads
+    ]
 
 
 def _build_ruby_font(style: Style) -> QFont:

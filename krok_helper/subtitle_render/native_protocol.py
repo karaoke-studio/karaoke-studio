@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.page_plan import section_head_line_indices
 from krok_helper.subtitle_render.models import (
     RubyAnnotation,
     Style,
@@ -170,6 +171,7 @@ def timing_line_to_ir(
     page_index: int = -1,
     page_line_count: int = 0,
     section_index: int = -1,
+    signal_head: bool = False,
     lane: int = 0,
     layout_lane: int | None = None,
     display_start_ms: int | None = None,
@@ -202,6 +204,9 @@ def timing_line_to_ir(
         # ``CalcHorizontalAlignment``），native 侧靠这个值复现同一档对齐。
         "page_line_count": max(int(page_line_count), 0),
         "section_index": int(section_index),
+        # 音量柱（volume 信号灯）只画每 S 第一 P 第一行；形状灯保持每行
+        # 生效，native 侧不区分样式时以该标记 + litStyle 共同判断。
+        "signal_head": bool(signal_head),
         "lane": int(lane),
         "layout_lane": int(lane if layout_lane is None else layout_lane),
         "display_start_ms": (
@@ -340,6 +345,16 @@ def track_to_ir(
         page_indices = {}
         section_indices = {}
         page_offset_windows = {}
+    volume_heads: frozenset[int] = frozenset()
+    if (
+        style is not None
+        and style.lit_enabled
+        and not style.vertical
+        and style.lit_style == "volume"
+    ):
+        volume_heads = section_head_line_indices(
+            track, style, section_gap_ms=max(style.section_gap_ms, 0)
+        )
     return {
         "meta": {
             "title": track.meta.title,
@@ -364,6 +379,7 @@ def track_to_ir(
                 page_index=page_indices.get(index, -1),
                 page_line_count=page_line_counts.get(index, 0),
                 section_index=section_indices.get(index, -1),
+                signal_head=index in volume_heads,
                 lane=schedule.get(index, (0, 0, 0))[0],
                 layout_lane=authored_lanes.get(index),
                 display_start_ms=(schedule[index][1] if index in schedule else None),

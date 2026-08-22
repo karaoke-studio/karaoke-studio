@@ -6649,6 +6649,75 @@ def test_gpu_g4_volume_signal_timing_union_layout_and_colors_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_volume_signal_limited_to_section_head_follows_painter(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    # 两段三行：行 0（S1 第一页第一行）与行 2（S2 第一页第一行）是段首，
+    # 行 1 是页内第二行。音量柱只允许出现在段首行旁。
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("あ", 5_000)], end_ms=6_000),
+            TimingLine(chars=[TimingChar("い", 8_000)], end_ms=9_000),
+            TimingLine(chars=[TimingChar("う", 20_000)], end_ms=21_000),
+        ]
+    )
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(pages=[TrackPage(2)]),
+            TrackSection(pages=[TrackPage(1)]),
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="center",
+        line_lead_in_ms=500,
+        line_tail_ms=500,
+        lit_enabled=True,
+        lit_style="volume",
+        signals_duration_ms=4_000,
+        lit_waiting_time_ms=0,
+        lit_time_offset_ms=0,
+        lit_stroke_width=2,
+        volume_size=42,
+        volume_column_width=12,
+        volume_column_count=4,
+        volume_column_spacing=3,
+    )
+    # 2_000：段首页（行 0）的信号窗口内，行 0 画柱、同页行 1 无柱；
+    # 4_500：行 1 的信号窗口起点附近，页仍在显示但行 1 不画柱；
+    # 17_000：第二段段首行（行 2）的信号窗口内。
+    timestamps = (2_000, 4_500, 17_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        assert all(
+            abs(actual - expected) <= 12
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("lit_style", ["circle", "square", "rounded"])
 @pytest.mark.parametrize("transition_mode", ["fade", "slide"])
 def test_gpu_g4_shape_signal_geometry_and_extinguish_transition_follow_painter(

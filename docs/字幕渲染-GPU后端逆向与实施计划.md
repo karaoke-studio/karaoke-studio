@@ -1742,3 +1742,21 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - sidecar 硬件导出新增 2/4 worker 独立 Direct2D context 与有界共享环。完成事件可乱序返回，但 Python 仅保留一个 ring window，按 `frame_index` 严格顺序交付 ffmpeg；释放在途 credit 后才回写响应，避免消费者立即复用槽位时误报 queue full。产品硬上限为 4，WARP 固定为 1。
 - 真实 `25 m.n3proj` 4K60、30 秒背景解码 + overlay + NVENC 端到端结果：1/2/4 worker 分别为 `82.46/80.45/83.88s`（`21.83/22.37/21.46fps`）；ffmpeg 管道累计等待 `24.66/17.50/15.27s`，sidecar 峰值 RSS `208/330/548 MiB`，DXGI 本地显存占用 `177/354/709 MiB`。2 worker 仅快约 2.5%，但连续两轮都优于 1；4 worker 因重复 realization、额外 context 和下游瓶颈反而变慢，因此硬件默认 2、保留环境变量选择 1～4，不照搬 N3 的 8 worker。
 - 顺序/资源门禁覆盖乱序完成、ring window 上限、取消和诊断回收。1/2/4 输出均为 1800 帧；独立 context 首次命中新内容存在 Direct2D 栅格缓存的微小非位级差异（同一 4K 帧 19 像素、最大通道差 2），会改变有损编码 GOP 哈希，但不是丢帧或错序。Python 导出测试 `61 passed`，真实 native worker/流水线/realization 定向测试 `3 passed`。
+
+### 2026-08-23：音量柱收敛到每 S 第一 P 第一行
+
+- 行为口径变更（用户拍板）：`lit_style=volume` 的音量柱只生效在每个段落（S）第一页（P）的第一行；
+  形状灯（circle/square/rounded）与竖排保持历史「每行生效」行为不变。
+- Python 侧新增权威判定 `page_plan.section_head_line_indices()`：有 `page_plan` 时按权威分页结构取
+  各段第一页首行；无 plan 的裸解析 track 按行间奏间隔推导段边界（与 `_compute_section_ids` 同口径）。
+- 显示窗口从「全局替换 lead」改为行级下发：`compute_show_times` 的 `pre_time_ms` 支持逐行序列
+  （TopLong 页 ShowBegin 取页内各行 `begin − pre` 的最小值，页内同步入场语义不变），
+  `compute_display_lines` 通过 `signal_head_indexes` / `signal_lead_ms` 注入。段首行按
+  `max(PreTime, signals 窗口)` 提前，其余行保持用户 PreTime；`protect_ms` 仍按未扩展 lead 推导。
+- CPU Painter 三处同步过滤（仅 volume）：信号候选行、`_signal_lit_groups` 灯组与
+  `_line_has_active_signal` 布局联合盒都只认段首行；`_display_style_for_signal_window` 对
+  volume 不再全局扩展（形状灯仍全局扩展）。
+- Render IR 行新增 `signal_head` 标记（volume 时由 `track_to_ir` 计算盖章，形状灯恒 false），
+  native `TimingLine`/`TextLine`/`CachedLine` 透传；Direct2D 的 `signalLayoutActive` 与
+  `volumeSignalState` 均以该标记门控，两后端口径一致。GPU 显示窗口本就从 Python layout plan
+  下发，行级 lead 自动一致，无需 native 侧重算。

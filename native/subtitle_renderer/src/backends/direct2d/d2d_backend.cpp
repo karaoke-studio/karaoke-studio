@@ -331,9 +331,14 @@ VolumeSignalState volumeSignalState(
     int lineStartMs,
     const TextStyle &style,
     int tMs,
-    int displayEndMs
+    int displayEndMs,
+    bool signalHead
 ) {
     VolumeSignalState state;
+    if (!signalHead) {
+        // Volume bars only attach to each section's first page's first line.
+        return state;
+    }
     if (style.vertical || !style.litEnabled || style.litStyle != "volume") {
         return state;
     }
@@ -1100,6 +1105,7 @@ struct Direct2DGpuBackend::Impl {
         int pageIndex = -1;
         int compositeOrder = 0;
         int lane = 0;
+        bool signalHead = false;
         bool staticOverlay = false;
         int fadeInMs = 0;
         int fadeOutMs = 0;
@@ -1820,6 +1826,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.sourceLineIndex = sourceLine.sourceLineIndex;
         cached.pageIndex = sourceLine.pageIndex;
         cached.compositeOrder = sourceLine.compositeOrder;
+        cached.signalHead = sourceLine.signalHead;
         cached.guideAnchorLeft = sourceLine.guideAnchorLeft;
         cached.guideAnchorRight = sourceLine.guideAnchorRight;
         cached.centerOverride = sourceLine.centerOverride;
@@ -4884,7 +4891,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
         }
         const VolumeSignalState signalState = volumeSignalState(
-            line->startMs, style, tMs, displayEndMs
+            line->startMs, style, tMs, displayEndMs, line->signalHead
         );
         const VolumeSignalGeometry signalGeometry = volumeSignalGeometry(style);
         const ShapeSignalState shapeState = shapeSignalState(
@@ -4895,9 +4902,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             style.signalsDurationMs - std::max(style.litWaitingTimeMs, 0), 0
         );
         const int signalEndMs = line->startMs + style.litTimeOffsetMs;
+        // The volume bars only attach to each section's first page's first
+        // line (signalHead); shape lamps keep their historical per-line reach.
         const bool signalLayoutActive = style.litEnabled
             && !style.vertical
             && signalActiveDuration > 0
+            && (style.litStyle != "volume" || line->signalHead)
             && tMs >= signalEndMs - signalActiveDuration
             && tMs < displayEndMs;
         float lyricLeft = line->bounds.left;

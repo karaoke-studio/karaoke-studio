@@ -209,6 +209,47 @@ def test_build_render_ir_preserves_extra_track_boundaries():
     assert ir["extra_tracks"][0]["lines"][0]["chars"][0]["text"] == "副"
 
 
+def test_build_render_ir_stamps_volume_signal_head_per_section():
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("あ", 10_000)], end_ms=11_000),
+            TimingLine(chars=[TimingChar("い", 12_000)], end_ms=13_000),
+            TimingLine(chars=[TimingChar("う", 14_000)], end_ms=15_000),
+            TimingLine(chars=[TimingChar("え", 16_000)], end_ms=17_000),
+            TimingLine(chars=[TimingChar("お", 30_000)], end_ms=31_000),
+            TimingLine(chars=[TimingChar("か", 32_000)], end_ms=33_000),
+        ]
+    )
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(pages=[TrackPage(2), TrackPage(2)]),
+            TrackSection(pages=[TrackPage(2)]),
+        ]
+    )
+    style = Style(
+        lit_enabled=True,
+        lit_style="volume",
+        signals_duration_ms=4_000,
+    )
+
+    ir = build_render_ir(track, style, width=640, height=360, fps=60)
+
+    # 音量柱只挂每 S 第一 P 第一行：行 0 与行 4。
+    assert [line["signal_head"] for line in ir["track"]["lines"]] == [
+        True, False, False, False, True, False,
+    ]
+
+    # 形状灯保持每行生效，不写段首标记。
+    shape_ir = build_render_ir(
+        track,
+        replace(style, lit_style="circle"),
+        width=640,
+        height=360,
+        fps=60,
+    )
+    assert not any(line["signal_head"] for line in shape_ir["track"]["lines"])
+
+
 def test_build_render_ir_resolves_title_metadata_and_windows():
     track = TimingTrack(
         meta=TimingTrackMeta(title="曲名", artist="歌手"),

@@ -196,6 +196,8 @@ def compute_display_lines(
     tail_ms: int,
     lane_gap_ms: int,
     section_gap_ms: int = 0,
+    signal_head_indexes: Optional[set[int]] = None,
+    signal_lead_ms: int = 0,
     sync_entry: bool = False,
     sync_ending: bool = False,
     sync_each_page: bool = False,
@@ -227,6 +229,12 @@ def compute_display_lines(
 
     ``protect_ms`` 传 0 表示按 N3 规则自动推导（``min(PreTime, PostTime) / 2``）。
 
+    ``signal_head_indexes``（``track.lines`` 索引）+ ``signal_lead_ms`` 描述只
+    提前部分行的信号窗口（音量柱只挂每段第一行）：命中的行 lead 取
+    ``max(lead_in_ms, signal_lead_ms)``，其余行保持 ``lead_in_ms``。省略时全部
+    行使用同一 lead。``protect_ms`` 仍按未扩展的 ``lead_in_ms`` 推导，信号扩展
+    不撑大碰撞保护。
+
     ``sync_entry`` / ``sync_ending`` 是同步页内各个自动 T 的最长单向延长候选；
     默认只作用于段首页入场和段尾页退场，``sync_each_page`` 开启后作用于每页；
     带实际画布的渲染路径随后按「先压前句退场、再压后句入场」逐对消除碰撞，
@@ -240,6 +248,17 @@ def compute_display_lines(
 
     tail = max(tail_ms, 0)
     section_gap = max(section_gap_ms, 0)
+    base_pre = max(lead_in_ms, 0)
+    if signal_head_indexes:
+        extended_pre = max(base_pre, max(int(signal_lead_ms), 0))
+        pre_per_line = [
+            extended_pre if track_index in signal_head_indexes else base_pre
+            for track_index, _line in enumerate(track.lines)
+            if not _line.is_blank and _line.chars
+        ]
+        pre_argument: int | list[int] = pre_per_line
+    else:
+        pre_argument = base_pre
     explicit_structure = _assign_lanes_from_page_plan(track, render_lines)
     if explicit_structure is None:
         section_ids = _compute_section_ids(render_lines, section_gap)
@@ -267,7 +286,7 @@ def compute_display_lines(
         [timing_line_start_ms(line) for line in render_lines],
         [_line_end_ms(line) for line in render_lines],
         pages,
-        pre_time_ms=max(lead_in_ms, 0),
+        pre_time_ms=pre_argument,
         post_time_ms=tail,
         interval_ms=max(lane_gap_ms, 0),
         # ``protect_ms`` 0 = 按 N3 规则自动推导（min(pre, post) / 2）。

@@ -79,7 +79,7 @@ def compute_show_times(
     sing_ends: Sequence[int],
     pages: Sequence[ShowTimePage],
     *,
-    pre_time_ms: int,
+    pre_time_ms: int | Sequence[int],
     post_time_ms: int,
     interval_ms: int,
     protect_ms: int,
@@ -121,6 +121,11 @@ def compute_show_times(
     启用时会同时传入按正式像素碰撞口径测得的 ``force_bottom_pairs``。
     ``independent_line_entry`` 关闭 TopLong 隐式的页内同步入场：每行先按自己的
     走字开始减 ``pre_time_ms`` 建立理想窗口，显式同步由上层按页处理。
+
+    ``pre_time_ms`` 可以传逐行序列（与渲染行索引对齐）：信号灯只提前部分行
+    （音量柱只挂段首行）时，各行的理想窗口按各自的 lead 展开；标量保持旧的
+    全局行为。``protect_ms`` 等其余参数仍是全局量，由调用方按未扩展的 lead
+    口径推导。
     """
 
     total = len(sing_begins)
@@ -133,7 +138,7 @@ def compute_show_times(
         sing_begins,
         sing_ends,
         pages,
-        pre=max(int(pre_time_ms), 0),
+        pre=pre_time_ms,
         post=max(int(post_time_ms), 0),
         interval=max(int(interval_ms), 0),
         protect=max(int(protect_ms), 0),
@@ -181,7 +186,14 @@ class _Solver:
         self.begins = sing_begins
         self.ends = sing_ends
         self.pages = pages
-        self.pre = pre
+        total_lines = len(sing_begins)
+        if isinstance(pre, int):
+            self._pre_per_line = [max(int(pre), 0)] * total_lines
+        else:
+            self._pre_per_line = [
+                max(int(pre[index]), 0) if index < len(pre) else 0
+                for index in range(total_lines)
+            ]
         self.post = post
         self.interval = interval
         self.protect = protect
@@ -279,11 +291,14 @@ class _Solver:
     def _is_tail_page(self, page_index: int) -> bool:
         return self.next_page[page_index] < 0
 
+    def _pre_of(self, line: int) -> int:
+        return self._pre_per_line[line]
+
     # -- N3 TopLongAdjuster ------------------------------------------------
     def _top_show_begin(self, page_index: int) -> int:
         page = self.pages[page_index]
         lines = page.lines
-        best = self.begins[lines[0]]
+        best = self.begins[lines[0]] - self._pre_of(lines[0])
         # num2 = bottom（段首页）/ bottom-1（非段首页且非顶部对齐）/ 不扫描（顶部对齐）
         if self._is_head_page(page_index):
             scan = lines[1:]
@@ -292,8 +307,8 @@ class _Solver:
         else:
             scan = ()
         for line in scan:
-            best = min(best, self.begins[line])
-        return max(best - self.pre, 0)
+            best = min(best, self.begins[line] - self._pre_of(line))
+        return max(best, 0)
 
     def _top_show_end(self, page_index: int) -> int:
         lines = self.pages[page_index].lines
@@ -322,7 +337,7 @@ class _Solver:
                 self.out.ends[previous_lines[-1]] + self.interval, MAX_SHOW_TIME_MS
             )
         # N3 在这一支不做 0 下限钳制。
-        return self.begins[top] - self.pre
+        return self.begins[top] - self._pre_of(top)
 
     def _prev_page_overlap_line(
         self, line: int, is_bottom_align: bool
@@ -570,7 +585,7 @@ class _Solver:
         # timeline 公共 API 的既有语义。正式渲染路径总会提供动画窗口。
         starts, ends = self.out.starts, self.out.ends
         pre, post, interval, protect = (
-            self.pre,
+            self._pre_of(line),
             self.post,
             self.interval,
             self.protect,
@@ -703,7 +718,7 @@ class _Solver:
                 self.begins,
                 self.ends,
                 self.pages,
-                pre_time_ms=self.pre,
+                pre_time_ms=self._pre_per_line,
                 post_time_ms=self.post,
                 interval_ms=self.interval,
                 protect_ms=self.protect,
@@ -776,7 +791,7 @@ class _Solver:
         if self.independent_line_entry:
             for line in range(len(starts)):
                 if self.start_override[line] is None:
-                    starts[line] = max(self.begins[line] - self.pre, 0)
+                    starts[line] = max(self.begins[line] - self._pre_of(line), 0)
                 self._apply_override(line)
                 self._enforce_auto_wipe_bounds(line)
         if self.adjust_same_position and self.animation_windows_active:

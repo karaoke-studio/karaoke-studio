@@ -811,6 +811,116 @@ def test_signal_volume_local_bounds_match_sayatoo_offset_origin(qapp):
     assert geometry.local_left + geometry.group_width == pytest.approx(62.0)
 
 
+def _two_section_track() -> TimingTrack:
+    """S1 = 两页（每页 2 行），S2 = 一页；行 0 / 4 是各段第一页第一行。"""
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("あ", 10_000)], end_ms=11_000),
+            TimingLine(chars=[TimingChar("い", 12_000)], end_ms=13_000),
+            TimingLine(chars=[TimingChar("う", 14_000)], end_ms=15_000),
+            TimingLine(chars=[TimingChar("え", 16_000)], end_ms=17_000),
+            TimingLine(chars=[TimingChar("お", 30_000)], end_ms=31_000),
+            TimingLine(chars=[TimingChar("か", 32_000)], end_ms=33_000),
+        ]
+    )
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(pages=[TrackPage(2), TrackPage(2)]),
+            TrackSection(pages=[TrackPage(2)]),
+        ]
+    )
+    return track
+
+
+def _volume_style(**overrides) -> Style:
+    values = {
+        "font_size_px": 20,
+        "line_y_margin_px": 10,
+        "dual_line_layout": True,
+        "line_lead_in_ms": 200,
+        "line_tail_ms": 100,
+        "lit_enabled": True,
+        "lit_shadow": False,
+        "signals_duration_ms": 4_000,
+    }
+    values.update(overrides)
+    return Style(**values)
+
+
+def test_volume_signal_candidate_lines_limited_to_section_heads(qapp):
+    track = _two_section_track()
+    style = _volume_style()
+
+    # 行 0（S1 第一页第一行）的信号窗口内：只有段首行成为信号候选。
+    visible = subtitle_painter._signal_display_lines_for_style(track, 6_500, style)
+    assert [item.line.chars[0].text for item in visible] == ["あ"]
+
+    # 行 2（S1 第二页第一行，非段首）的信号窗口起点是 10_000：旧行为会让它
+    # 提前出现，现在非段首行不进入信号窗口（段首行自己也已退场）。
+    assert subtitle_painter._signal_display_lines_for_style(track, 13_600, style) == []
+
+    # 行 4（S2 第一页第一行）恢复信号窗口。
+    visible = subtitle_painter._signal_display_lines_for_style(track, 26_500, style)
+    assert [item.line.chars[0].text for item in visible] == ["お"]
+
+
+def _plan_display_starts(track: TimingTrack, style: Style) -> list[int]:
+    plan = subtitle_painter.build_track_layout_plan(track, style)
+    return [int(item.display_start_ms or 0) for item in plan.lines]
+
+
+def test_volume_signal_lead_extends_only_section_head_pages(qapp):
+    track = _two_section_track()
+    style = _volume_style()
+    off = _plan_display_starts(track, replace(style, lit_enabled=False))
+    on = _plan_display_starts(track, style)
+
+    # 段首行所在的页仍被信号窗口提前。
+    assert on[0] < off[0]
+    assert on[4] < off[4]
+    # 非段首页（S1 第二页）不受音量柱影响：上屏时刻与关闭指示灯完全一致。
+    assert on[2] == off[2]
+    assert on[3] == off[3]
+
+
+def test_shape_signal_lead_still_extends_every_line(qapp):
+    track = _two_section_track()
+    style = _volume_style(lit_style="circle", lit_number=4, lit_size=10)
+    off = _plan_display_starts(track, replace(style, lit_enabled=False))
+    on = _plan_display_starts(track, style)
+
+    # 形状灯（circle/square/rounded）保持历史行为：每行的页都被信号窗口提前。
+    for index in (0, 2, 4):
+        assert on[index] < off[index]
+
+
+def test_volume_signal_paints_section_head_before_entry_only(qapp):
+    track = _two_section_track()
+    style = _volume_style(dual_line_layout=False)
+
+    # 行 1 退场后到行 2（非段首）正常入场前：旧行为会因信号窗口提前显示并画
+    # 音量柱，现在整段（含闪烁相位）都为空帧。非段首行保留自己的 PreTime。
+    for probe in range(13_200, 13_800, 100):
+        img = _blank(160, 90)
+        baseline = _pixel_hash(img)
+        paint_frame(img, track, probe, style)
+        assert _pixel_hash(img) == baseline, probe
+
+    # 段首行（行 4）开唱前的信号窗口：闪烁周期里总有一帧亮出蓝色音量柱。
+    lit_frame_found = False
+    for probe in range(26_000, 27_600, 100):
+        img2 = _blank(160, 90)
+        paint_frame(img2, track, probe, style)
+        try:
+            _assert_blue_pixels_in(img2, left=0, right=159)
+        except AssertionError:
+            continue
+        lit_frame_found = True
+        break
+    assert lit_frame_found
+
+
 def test_signal_volume_layout_does_not_jump_between_flash_and_fill(qapp):
     track = _singer_track(singer_id=0)
     style = Style(

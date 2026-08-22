@@ -65,6 +65,47 @@ def test_protect_time_resolution_is_idempotent():
 
 
 # ---------------------------------------------------------------------------
+# 逐行 PreTime（音量柱只提前段首行）
+# ---------------------------------------------------------------------------
+
+
+def test_per_line_pre_extends_only_marked_single_row_pages():
+    # 每页一行：被标记的行按扩展 pre 展开理想窗口，未标记行保持全局口径；
+    # 行 2 与前页的 bottom 联动不受 pre 影响（与标量基线一致）。
+    begins, ends = [10_000, 14_000, 30_000], [13_000, 17_000, 33_000]
+    pages = _pages((0, 1, 0), (0, 1, 1), (0, 1, 2))
+    baseline = _run(begins, ends, pages)
+    out = _run(begins, ends, pages, pre_time_ms=[4_000, 1_800, 1_800])
+
+    assert out.starts[0] == 10_000 - 4_000
+    assert out.starts[1] == 14_000 - 1_800
+    assert out.starts[2] == baseline.starts[2]
+    assert out.ends == baseline.ends
+
+
+def test_per_line_pre_with_uniform_values_matches_scalar_pre():
+    begins, ends = [10_000, 14_000, 30_000, 34_000], [13_000, 17_000, 33_000, 37_000]
+    pages = _pages((0, 2, 0, 1), (1, 2, 2, 3))
+    scalar = _run(begins, ends, pages)
+    uniform = _run(begins, ends, pages, pre_time_ms=[PRE, PRE, PRE, PRE])
+
+    assert uniform.starts == scalar.starts
+    assert uniform.ends == scalar.ends
+    assert uniform.force_bottom == scalar.force_bottom
+
+
+def test_per_line_pre_page_begin_takes_min_of_line_windows():
+    # 多行页：TopLong 的页 ShowBegin 取页内各行 begin − pre 的最小值，
+    # 页内 bottom 行与 top 行同步入场（页级显示语义保持不变）。
+    begins, ends = [10_000, 14_000], [13_000, 17_000]
+    pages = _pages((0, 2, 0, 1))
+    out = _run(begins, ends, pages, pre_time_ms=[4_000, 1_800])
+
+    assert out.starts[0] == 10_000 - 4_000
+    assert out.starts[1] == 10_000 - 4_000
+
+
+# ---------------------------------------------------------------------------
 # 上行 / 下行的不对称规则
 # ---------------------------------------------------------------------------
 

@@ -223,6 +223,9 @@ struct TextLine {
     int sourceLineIndex = 0;
     int pageIndex = -1;
     int lane = 0;
+    // Volume signal bars attach only to each section's first page's first
+    // line; the painter stamps this flag in the render IR.
+    bool signalHead = false;
     int compositeOrder = 0;
     std::optional<float> guideAnchorLeft;
     std::optional<float> guideAnchorRight;
