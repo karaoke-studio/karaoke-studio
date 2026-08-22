@@ -86,6 +86,7 @@ def compute_show_times(
     exit_animation_ms: Optional[Sequence[int]] = None,
     adjust_same_position: bool = True,
     squeeze_pairs: Optional[Sequence[tuple[int, int]]] = None,
+    force_bottom_pairs: Optional[Sequence[tuple[int, int]]] = None,
     dynamic_single_page_reflow: bool = True,
     independent_line_entry: bool = False,
 ) -> ShowTimes:
@@ -109,8 +110,10 @@ def compute_show_times(
 
     ``squeeze_pairs`` 由渲染器在完成逐行像素测量后提供。存在该参数时，只压缩
     明确发生时间与空间双重冲突的 ``(旧行, 新行)``，不再用逻辑行位猜测冲突。
-    ``dynamic_single_page_reflow`` 仅供旧式 N3 ForceBottom 路径使用；新的像素
-    避让路径关闭它，避免单行页先按逻辑行位上移、随后又被空间求解器移动一次。
+    ``force_bottom_pairs`` 使用同一测量口径决定单行 Bottom 页是否上移；省略时
+    仅供无渲染器的兼容调用按稳定时间半开区间判定。
+    ``dynamic_single_page_reflow`` 控制是否执行 N3 ForceBottom 行位切换；渲染器
+    启用时会同时传入按正式像素碰撞口径测得的 ``force_bottom_pairs``。
     ``independent_line_entry`` 关闭 TopLong 隐式的页内同步入场：每行先按自己的
     走字开始减 ``pre_time_ms`` 建立理想窗口，显式同步由上层按页处理。
     """
@@ -135,6 +138,7 @@ def compute_show_times(
         exit_animation_ms=exit_animation_ms,
         adjust_same_position=bool(adjust_same_position),
         squeeze_pairs=squeeze_pairs,
+        force_bottom_pairs=force_bottom_pairs,
         dynamic_single_page_reflow=bool(dynamic_single_page_reflow),
         independent_line_entry=bool(independent_line_entry),
         result=result,
@@ -160,6 +164,7 @@ class _Solver:
         exit_animation_ms: Optional[Sequence[int]],
         adjust_same_position: bool,
         squeeze_pairs: Optional[Sequence[tuple[int, int]]],
+        force_bottom_pairs: Optional[Sequence[tuple[int, int]]],
         dynamic_single_page_reflow: bool,
         independent_line_entry: bool,
         result: ShowTimes,
@@ -178,6 +183,17 @@ class _Solver:
             if 0 <= int(other) < len(sing_begins)
             and 0 <= int(line) < len(sing_begins)
             and int(other) != int(line)
+        )
+        self.force_bottom_pairs = (
+            None
+            if force_bottom_pairs is None
+            else {
+                (int(other), int(line))
+                for other, line in force_bottom_pairs
+                if 0 <= int(other) < len(sing_begins)
+                and 0 <= int(line) < len(sing_begins)
+                and int(other) != int(line)
+            }
         )
         self.dynamic_single_page_reflow = dynamic_single_page_reflow
         self.independent_line_entry = independent_line_entry
@@ -298,7 +314,13 @@ class _Solver:
         candidate = self._prev_page_same_position_line(line, is_bottom_align)
         if candidate is None:
             return None
-        if self.out.ends[candidate] < self.out.starts[line]:
+        if self.force_bottom_pairs is not None:
+            return (
+                candidate
+                if (candidate, line) in self.force_bottom_pairs
+                else None
+            )
+        if self._stable_end(candidate) <= self._stable_start(line):
             return None
         return candidate
 

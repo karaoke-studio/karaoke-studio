@@ -4779,13 +4779,25 @@ def _display_lines_for_style(
         track,
         **base_kwargs,
         adjust_same_position=False,
-        dynamic_single_page_reflow=True,
+        dynamic_single_page_reflow=not avoid_collisions,
         independent_line_entry=True,
     )
     resolved = ideal
     if avoid_collisions:
-        squeeze_pairs = _pixel_collision_squeeze_pairs(
+        force_bottom_pairs = _pixel_collision_squeeze_pairs(
             logical_w, logical_h, track, style, ideal
+        )
+        if force_bottom_pairs:
+            resolved = compute_display_lines(
+                track,
+                **base_kwargs,
+                adjust_same_position=False,
+                force_bottom_pairs=force_bottom_pairs,
+                dynamic_single_page_reflow=True,
+                independent_line_entry=True,
+            )
+        squeeze_pairs = _pixel_collision_squeeze_pairs(
+            logical_w, logical_h, track, style, resolved
         )
         if squeeze_pairs:
             resolved = compute_display_lines(
@@ -4793,6 +4805,7 @@ def _display_lines_for_style(
                 **base_kwargs,
                 adjust_same_position=False,
                 squeeze_pairs=squeeze_pairs,
+                force_bottom_pairs=force_bottom_pairs,
                 dynamic_single_page_reflow=True,
                 independent_line_entry=True,
             )
@@ -4808,6 +4821,7 @@ def _display_lines_for_style(
                 **base_kwargs,
                 adjust_same_position=False,
                 squeeze_pairs=combined_pairs,
+                force_bottom_pairs=force_bottom_pairs,
                 dynamic_single_page_reflow=True,
                 independent_line_entry=True,
             )

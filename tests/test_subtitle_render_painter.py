@@ -9963,6 +9963,53 @@ def test_animation_guard_reuses_display_collision_measurement(qapp, monkeypatch)
     assert calls.count("display") == 1
 
 
+def test_force_bottom_requires_measured_spatial_conflict(qapp):
+    first = TimingLine(
+        chars=[TimingChar("左", 1_000)],
+        end_ms=4_000,
+        display_start_override_ms=0,
+        display_end_override_ms=5_000,
+        layout_index=1,
+    )
+    second = TimingLine(
+        chars=[TimingChar("右", 1_500)],
+        end_ms=4_500,
+        display_start_override_ms=0,
+        display_end_override_ms=5_000,
+    )
+    track = TimingTrack(
+        lines=[first, second],
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(1, "left"), TrackPage(1, "default")])]
+        ),
+    )
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=48,
+        line_alignments=["right", "right"],
+        layouts=[
+            LyricsLayout(
+                name="左",
+                layout_id="left",
+                line_y_position="bottom",
+                line_alignments=["left", "left"],
+            )
+        ],
+    )
+
+    display = subtitle_painter._display_lines_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+    measured = subtitle_painter._measure_collision_bands(
+        1280, 720, track, style, display
+    )
+
+    assert len(measured) == 2
+    assert measured[0][2].cross_max <= measured[1][2].cross_min
+    assert [item.lane for item in display] == [1, 1]
+
+
 def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
     from krok_helper.subtitle_render.engine.page_plan import (
         project_page_plan_to_legacy_fields,

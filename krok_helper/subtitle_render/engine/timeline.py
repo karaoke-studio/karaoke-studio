@@ -203,6 +203,7 @@ def compute_display_lines(
     exit_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     adjust_same_position: bool = True,
     squeeze_pairs: Optional[Sequence[tuple[int, int]]] = None,
+    force_bottom_pairs: Optional[Sequence[tuple[int, int]]] = None,
     dynamic_single_page_reflow: bool = True,
     independent_line_entry: bool = False,
 ) -> list[DisplayLine]:
@@ -287,6 +288,7 @@ def compute_display_lines(
         ),
         adjust_same_position=adjust_same_position,
         squeeze_pairs=squeeze_pairs,
+        force_bottom_pairs=force_bottom_pairs,
         dynamic_single_page_reflow=dynamic_single_page_reflow,
         independent_line_entry=independent_line_entry,
     )
@@ -381,8 +383,8 @@ def _apply_page_lane_offsets(
 ) -> None:
     """把不满页映射到布局的底部 / 居中位置，并复现 N3 ForceBottom 的上移。
 
-    单行底部页正常占最下行；若上一页在同一行还没消失（N3 pass 判定
-    ``force_bottom`` 为 False），N3 把它上移一行，后面再重叠的单行页又能用回
+    单行底部页正常占最下行；若上一页与它按稳定时间和最终二维行盒确认冲突
+    （``force_bottom`` 为 False），N3 把它上移一行，后面再重叠的单行页又能用回
     最下行。
     """
 

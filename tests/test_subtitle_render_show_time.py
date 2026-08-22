@@ -380,6 +380,43 @@ def test_single_bottom_page_is_pushed_up_when_the_previous_page_still_shows():
     assert out.force_bottom[1] is False
 
 
+def test_force_bottom_uses_stable_half_open_time_windows():
+    begins, ends = [10_000, 14_000], [13_000, 17_000]
+    pages = _pages((0, 2, 0), (0, 2, 1))
+    touching = _run(
+        begins,
+        ends,
+        pages,
+        overrides=[(None, 14_000), (14_000, None)],
+        entry_animation_ms=[0, 0],
+        exit_animation_ms=[0, 0],
+    )
+    animation_only = _run(
+        begins,
+        ends,
+        pages,
+        overrides=[(None, 14_500), (13_500, None)],
+        entry_animation_ms=[600, 600],
+        exit_animation_ms=[600, 600],
+    )
+
+    assert touching.force_bottom[1] is True
+    assert animation_only.force_bottom[1] is True
+
+
+def test_measured_force_bottom_pair_is_authoritative():
+    begins, ends = [10_000, 14_000], [13_000, 17_000]
+    out = _run(
+        begins,
+        ends,
+        _pages((0, 2, 0), (0, 2, 1)),
+        overrides=[(None, 14_000), (14_000, None)],
+        force_bottom_pairs=[(0, 1)],
+    )
+
+    assert out.force_bottom[1] is False
+
+
 def test_empty_input_returns_empty_result():
     out = _run([], [], [])
     assert out.starts == [] and out.ends == [] and out.force_bottom == []
