@@ -1765,4 +1765,3 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - 兼容性：旧宿主发的 IR 没有 `signal_head` 字段，native 按 `QJsonValue::toBool(true)` 解析，
   保持改动前「每行画灯」的旧行为；回归测试以删除字段的 IR 直喂 sidecar 钉住该约定
   （`test_gpu_g4_legacy_ir_without_signal_head_keeps_per_line_lamps`）。
-
