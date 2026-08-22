@@ -2510,6 +2510,89 @@ def test_font_preview_renders_full_shadow_silhouette(qapp):
     ), "the decoration fill must be visible as a complete offset silhouette"
 
 
+def test_font_preview_keeps_ruby_and_main_outline_ink_separate(qapp):
+    def solid(color: str) -> PaintFill:
+        return PaintFill(mode="solid", color=color)
+
+    def one_color_state(color: str) -> KaraokeColorState:
+        fill = solid(color)
+        return KaraokeColorState(
+            text=fill,
+            stroke=fill,
+            stroke2=fill,
+            shadow=fill,
+        )
+
+    main_state = one_color_state("#0000FF")
+    ruby_state = one_color_state("#FF0000")
+    image = pp._FontSampleCanvas._render_sample_image(
+        Style(
+            decoration_kind="none",
+            stroke_width_px=15,
+            stroke2_enabled=True,
+            stroke2_width_px=5,
+            karaoke_colors=KaraokeColors(
+                before=main_state,
+                after=main_state,
+            ),
+            ruby_colors_follow_main=False,
+            ruby_karaoke_colors=KaraokeColors(
+                before=ruby_state,
+                after=ruby_state,
+            ),
+            ruby_stroke_width_px=10,
+            ruby_stroke2_enabled=True,
+            ruby_stroke2_width_px=3,
+            ruby_gap_px=0,
+        ),
+        "japanese",
+    ).convertToFormat(QImage.Format.Format_ARGB32)
+
+    ruby_rows: list[int] = []
+    main_rows: list[int] = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.red() > 180 and color.blue() < 80:
+                ruby_rows.append(y)
+            elif color.blue() > 180 and color.red() < 80:
+                main_rows.append(y)
+
+    assert ruby_rows and main_rows
+    assert max(ruby_rows) < min(main_rows)
+
+
+def test_font_preview_uses_isolated_production_glyph_stacks(qapp, monkeypatch):
+    from krok_helper.subtitle_render.engine import painter as engine_painter
+
+    calls: list[tuple[str, float]] = []
+    original_main = pp._paint_char_karaoke_stack
+    original_ruby = pp._paint_ruby_karaoke_fragment
+
+    def main_stack(*args, **kwargs):
+        calls.append(("main", kwargs["ratio"]))
+        return original_main(*args, **kwargs)
+
+    def ruby_stack(*args, **kwargs):
+        calls.append(("ruby", args[3]))
+        return original_ruby(*args, **kwargs)
+
+    def reject_full_frame(*args, **kwargs):
+        raise AssertionError("compact font preview must not render project/title layers")
+
+    monkeypatch.setattr(pp, "_paint_char_karaoke_stack", main_stack)
+    monkeypatch.setattr(pp, "_paint_ruby_karaoke_fragment", ruby_stack)
+    monkeypatch.setattr(engine_painter, "paint_frame", reject_full_frame)
+
+    image = pp._FontSampleCanvas._render_sample_image(
+        Style(title_overlay=TitleOverlay(enabled=True, text_template="标题")),
+        "latin",
+    )
+
+    assert not image.isNull()
+    assert calls == [("main", 0.5), ("ruby", 0.5)]
+
+
 def test_font_preview_render_is_async_and_reports_busy(qapp, monkeypatch):
     owner = QWidget()
     preview = pp._FontPreviewWidget(owner)

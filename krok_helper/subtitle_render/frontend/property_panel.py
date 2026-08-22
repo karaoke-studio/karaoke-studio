@@ -109,9 +109,23 @@ from krok_helper.subtitle_render.engine.style_semantics import (
     style_for_role,
 )
 from krok_helper.subtitle_render.engine.painter import (
+    _build_font,
+    _build_latin_font,
+    _build_ruby_font_for_text,
     _glow_extent,
-    _paint_glow_path,
-    _paint_shadow_silhouette,
+    _main_script_stroke_style,
+    _main_stroke2_width,
+    _n3_char_box_ascent,
+    _paint_char_karaoke_stack,
+    _paint_ruby_karaoke_fragment,
+    _ruby_baseline_y,
+    _ruby_decoration_kind,
+    _ruby_glow_radius,
+    _ruby_script_stroke_style,
+    _ruby_shadow_dx,
+    _ruby_shadow_dy,
+    _ruby_stroke2_width,
+    _ruby_stroke_width,
 )
 from krok_helper.subtitle_render.n3_font_catalog import (
     canonicalize_n3_font_family,
@@ -4408,169 +4422,116 @@ class _FontSampleCanvas(QWidget):
         return QBrush(cls._color(fallback))
 
     @classmethod
-    def _draw_state(
-        cls,
-        painter: QPainter,
-        path: QPainterPath,
-        state,
-        stroke_width: int,
-        stroke2_enabled: bool,
-        stroke2_width: int,
-        shadow_offset: QPoint,
-        decoration_kind: str,
-        glow_radius: int,
-        glow_concentration: int,
-    ) -> None:
-        if decoration_kind == "glow" and glow_radius > 0:
-            _paint_glow_path(
-                painter,
-                path,
-                state.shadow,
-                path.boundingRect(),
-                glow_radius,
-                stroke_width,
-                stroke2_width if stroke2_enabled else 0,
-                concentration_level=glow_concentration,
-            )
-        elif decoration_kind == "shadow" and not shadow_offset.isNull():
-            _paint_shadow_silhouette(
-                painter,
-                path,
-                state.shadow,
-                path.boundingRect(),
-                shadow_offset.x(),
-                shadow_offset.y(),
-                stroke_width,
-                stroke2_width if stroke2_enabled else 0,
-            )
-        if stroke2_enabled and stroke2_width > 0:
-            pen = QPen(cls._brush(state.stroke2, path.boundingRect()), 1.0)
-            pen.setWidthF(float(2 * (stroke_width + stroke2_width)))
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(path)
-        if stroke_width > 0:
-            pen = QPen(cls._brush(state.stroke, path.boundingRect()), 1.0)
-            pen.setWidthF(float(2 * stroke_width))
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(path)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(cls._brush(state.text, path.boundingRect()))
-        painter.drawPath(path)
-
-    @classmethod
     def _render_sample_image(cls, style: Style, script: str) -> QImage:
         latin = script == "latin"
         main_text = "LinK" if latin else "人"
         ruby_text = "リンク" if latin else "ひと"
-        main_font = cls._font(
-            style.font_family_latin if latin else style.font_family,
-            (style.latin_font_size_px or style.font_size_px)
-            if latin
-            else style.font_size_px,
-            (style.latin_font_weight or style.font_weight)
-            if latin
-            else style.font_weight,
-            style.italic,
-        )
+        # Keep this an isolated sample renderer: only reuse the production
+        # glyph/font/layer primitives.  Calling paint_frame here would also
+        # traverse project overlays (notably titles), which do not belong in
+        # the compact role preview.
+        main_style = _main_script_stroke_style(style, main_text)
+        ruby_style = _ruby_script_stroke_style(style, ruby_text)
+        main_font = _build_latin_font(main_style) if latin else _build_font(main_style)
         main_metrics = QFontMetrics(main_font)
+        main_baseline = 0
+        main_advance = max(main_metrics.horizontalAdvance(main_text), 1)
+        main_rect = QRectF(
+            0,
+            main_baseline - main_metrics.ascent(),
+            main_advance,
+            main_metrics.height(),
+        )
         main_path = QPainterPath()
-        main_path.addText(0, main_metrics.ascent(), main_font, main_text)
-        ruby_font = cls._font(
-            style.font_family
-            if style.ruby_font_follow_main
-            else style.ruby_font_family or style.font_family,
-            style.ruby_font_size_px,
-            style.font_weight
-            if style.ruby_font_follow_main
-            else style.ruby_font_weight or style.font_weight,
-            style.italic,
-        )
-        ruby_metrics = QFontMetrics(ruby_font)
-        ruby_path = QPainterPath()
-        ruby_path.addText(
-            (main_metrics.horizontalAdvance(main_text) - ruby_metrics.horizontalAdvance(ruby_text)) / 2,
-            ruby_metrics.ascent(),
-            ruby_font,
-            ruby_text,
-        )
-        main_path.translate(0, ruby_metrics.height() + max(style.ruby_gap_px, 0))
+        main_path.addText(0, main_baseline, main_font, main_text)
 
-        colors = effective_karaoke_colors(style)
-        ruby_colors = (
-            colors
-            if style.ruby_colors_follow_main
-            else style.ruby_karaoke_colors or colors
+        ruby_font = _build_ruby_font_for_text(ruby_style, ruby_text)
+        ruby_metrics = QFontMetrics(ruby_font)
+        ruby_advance = max(ruby_metrics.horizontalAdvance(ruby_text), 1)
+        ruby_x = (main_advance - ruby_advance) / 2.0
+        ruby_baseline = _ruby_baseline_y(
+            main_baseline,
+            _n3_char_box_ascent(
+                main_metrics,
+                main_font.pixelSize(),
+                main_style.stroke_width_px,
+            ),
+            ruby_metrics,
+            ruby_style,
+            font_size_px=ruby_font.pixelSize(),
         )
-        stroke = max(int(style.stroke_width_px), 0)
-        stroke2 = max(int(style.stroke2_width_px), 0)
-        ruby_stroke = max(int(style.ruby_stroke_width_px or 0), 0)
-        ruby_stroke2 = max(int(style.ruby_stroke2_width_px or 0), 0)
-        shadow = QPoint(style.shadow_offset_x, style.shadow_offset_y)
+        ruby_rect = QRectF(
+            ruby_x,
+            ruby_baseline - ruby_metrics.ascent(),
+            ruby_advance,
+            ruby_metrics.height(),
+        )
+        ruby_path = QPainterPath()
+        ruby_path.addText(ruby_x, ruby_baseline, ruby_font, ruby_text)
+        colors = effective_karaoke_colors(style)
+        stroke = max(int(main_style.stroke_width_px), 0)
+        stroke2 = _main_stroke2_width(main_style)
+        ruby_stroke = _ruby_stroke_width(ruby_style)
+        ruby_stroke2 = _ruby_stroke2_width(ruby_style)
+        # The formal N3 metric boxes can touch when ruby_gap_px == 0.  Some
+        # typefaces overhang those boxes, and thick outlines then overlap even
+        # though their baselines are correct.  The compact preview has no line
+        # layout around it to hide that collision, so move ruby only by the
+        # measured excess of the two *actual* outlined paths.
+        main_ink_top = main_path.boundingRect().top() - (stroke + stroke2) / 2.0
+        ruby_ink_bottom = (
+            ruby_path.boundingRect().bottom() + (ruby_stroke + ruby_stroke2) / 2.0
+        )
+        collision = ruby_ink_bottom - main_ink_top
+        if collision >= 0.0:
+            ruby_shift_y = -(collision + 1.0)
+            ruby_path.translate(0, ruby_shift_y)
+            ruby_rect.translate(0, ruby_shift_y)
+            ruby_baseline += ruby_shift_y
+        shadow = QPoint(main_style.shadow_offset_x, main_style.shadow_offset_y)
         ruby_shadow = QPoint(
-            style.ruby_shadow_offset_x
-            if style.ruby_shadow_offset_x is not None
-            else style.shadow_offset_x,
-            style.ruby_shadow_offset_y
-            if style.ruby_shadow_offset_y is not None
-            else style.shadow_offset_y,
+            _ruby_shadow_dx(ruby_style),
+            _ruby_shadow_dy(ruby_style),
         )
         main_glow_extent = (
             max(
                 _glow_extent(
                     stroke,
-                    stroke2 if style.stroke2_enabled else 0,
-                    max(int(style.glow_before_radius_px), 0),
+                    stroke2,
+                    max(int(main_style.glow_before_radius_px), 0),
                 ),
                 _glow_extent(
                     stroke,
-                    stroke2 if style.stroke2_enabled else 0,
-                    max(int(style.glow_after_radius_px), 0),
+                    stroke2,
+                    max(int(main_style.glow_after_radius_px), 0),
                 ),
             )
-            if style.decoration_kind == "glow"
+            if main_style.decoration_kind == "glow"
             else 0
         )
-        ruby_glow_before = max(
-            int(
-                style.ruby_glow_before_radius_px
-                if style.ruby_glow_before_radius_px is not None
-                else style.glow_before_radius_px
-            ),
-            0,
-        )
-        ruby_glow_after = max(
-            int(
-                style.ruby_glow_after_radius_px
-                if style.ruby_glow_after_radius_px is not None
-                else style.glow_after_radius_px
-            ),
-            0,
-        )
-        ruby_decoration = style.ruby_decoration_kind or style.decoration_kind
+        ruby_glow_before = _ruby_glow_radius(ruby_style, after=False)
+        ruby_glow_after = _ruby_glow_radius(ruby_style, after=True)
+        ruby_decoration = _ruby_decoration_kind(ruby_style)
         ruby_glow_extent = (
             max(
                 _glow_extent(
                     ruby_stroke,
-                    ruby_stroke2 if style.ruby_stroke2_enabled else 0,
+                    ruby_stroke2,
                     ruby_glow_before,
                 ),
                 _glow_extent(
                     ruby_stroke,
-                    ruby_stroke2 if style.ruby_stroke2_enabled else 0,
+                    ruby_stroke2,
                     ruby_glow_after,
                 ),
             )
             if ruby_decoration == "glow"
             else 0
         )
-        bounds = main_path.boundingRect().united(ruby_path.boundingRect())
+        bounds = main_rect.united(ruby_rect)
         margin = max(
-            stroke + (stroke2 if style.stroke2_enabled else 0),
-            ruby_stroke + (ruby_stroke2 if style.ruby_stroke2_enabled else 0),
+            stroke + stroke2,
+            ruby_stroke + ruby_stroke2,
             abs(shadow.x()),
             abs(shadow.y()),
             abs(ruby_shadow.x()),
@@ -4592,102 +4553,28 @@ class _FontSampleCanvas(QWidget):
             painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
             painter.scale(scale, scale)
             painter.translate(-bounds.left(), -bounds.top())
-            split_x = bounds.center().x()
-
-            def paint_halves(
-                path,
-                states,
-                sw,
-                s2_enabled,
-                s2w,
-                offset,
-                kind,
-                before_glow,
-                after_glow,
-                concentration,
-            ):
-                clips = (
-                    (
-                        states.after,
-                        QRectF(
-                            bounds.left(),
-                            bounds.top(),
-                            split_x - bounds.left(),
-                            bounds.height(),
-                        ),
-                        after_glow,
-                    ),
-                    (
-                        states.before,
-                        QRectF(
-                            split_x,
-                            bounds.top(),
-                            bounds.right() - split_x,
-                            bounds.height(),
-                        ),
-                        before_glow,
-                    ),
-                )
-                for state, clip, glow_radius in clips:
-                    painter.save()
-                    try:
-                        painter.setClipRect(clip)
-                        cls._draw_state(
-                            painter,
-                            path,
-                            state,
-                            sw,
-                            s2_enabled,
-                            s2w,
-                            offset,
-                            kind,
-                            glow_radius,
-                            concentration,
-                        )
-                    finally:
-                        painter.restore()
-
-            paint_halves(
+            _paint_char_karaoke_stack(
+                painter,
                 main_path,
-                colors,
-                stroke,
-                style.stroke2_enabled,
-                stroke2,
-                shadow,
-                style.decoration_kind,
-                max(int(style.glow_before_radius_px), 0),
-                max(int(style.glow_after_radius_px), 0),
-                int(style.glow_concentration_level),
+                main_rect,
+                char_x=round(main_rect.left()),
+                char_width=max(round(main_rect.width()), 1),
+                baseline_y=main_baseline,
+                metrics=main_metrics,
+                colors=colors,
+                style=main_style,
+                ratio=0.5,
+                clip_rect=main_rect,
+                fill_rect=main_rect,
             )
-            paint_halves(
+            _paint_ruby_karaoke_fragment(
+                painter,
                 ruby_path,
-                ruby_colors,
-                ruby_stroke,
-                bool(style.ruby_stroke2_enabled),
-                ruby_stroke2,
-                ruby_shadow,
-                style.ruby_decoration_kind or style.decoration_kind,
-                max(
-                    int(
-                        style.ruby_glow_before_radius_px
-                        if style.ruby_glow_before_radius_px is not None
-                        else style.glow_before_radius_px
-                    ),
-                    0,
-                ),
-                max(
-                    int(
-                        style.ruby_glow_after_radius_px
-                        if style.ruby_glow_after_radius_px is not None
-                        else style.glow_after_radius_px
-                    ),
-                    0,
-                ),
-                int(
-                    style.ruby_glow_concentration_level
-                    if style.ruby_glow_concentration_level is not None
-                    else style.glow_concentration_level
-                ),
+                ruby_rect,
+                0.5,
+                ruby_style,
+                fill_rect=ruby_rect,
+                horizontal_fill_rect=main_rect,
             )
         finally:
             painter.end()
