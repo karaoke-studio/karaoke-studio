@@ -21,6 +21,7 @@ from qfluentwidgets.components.widgets.tool_tip import ToolTipFilter  # noqa: E4
 from krok_helper.qfluent_compat import (  # noqa: E402
     apply_qfluent_menu_lifetime_patch,
     apply_qfluent_tooltip_parent_patch,
+    install_fluent_tooltip,
 )
 
 
@@ -68,3 +69,29 @@ def test_qfluent_tooltip_filter_uses_parentless_popup(qapp):
     assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (1, 1, 1, 2)
     assert tooltip.shadowEffect.blurRadius() == 2
     assert tooltip.shadowEffect.offset().y() == 1
+
+
+def test_fluent_tooltips_restart_delay_for_each_adjacent_widget(qapp):
+    first = PushButton("一")
+    second = PushButton("二")
+    first.setToolTip("第一个提示")
+    second.setToolTip("第二个提示")
+    first_filter = install_fluent_tooltip(first, show_delay=300)
+    second_filter = install_fluent_tooltip(second, show_delay=300)
+
+    assert first_filter is install_fluent_tooltip(first, show_delay=300)
+    assert first_filter is not second_filter
+
+    QApplication.sendEvent(first, QEvent(QEvent.Type.Enter))
+    assert first_filter.timer.isActive()
+    first_filter.showToolTip()
+    QApplication.sendEvent(first, QEvent(QEvent.Type.Leave))
+    QApplication.sendEvent(second, QEvent(QEvent.Type.Enter))
+
+    # Moving directly from a visible tooltip to its neighbour starts that
+    # neighbour's own complete delay instead of inheriting Qt's global
+    # "recent tooltip" fast path.
+    assert second_filter.timer.isActive()
+    assert second_filter.timer.remainingTime() > 0
+    assert second_filter._tooltip is not None
+    assert not second_filter._tooltip.isVisible()

@@ -93,7 +93,7 @@ from qfluentwidgets import (
     ToolButton as FluentToolButton,
     TransparentToolButton as FluentTransparentToolButton,
 )
-from krok_helper.qfluent_compat import ModelessDialog
+from krok_helper.qfluent_compat import ModelessDialog, install_fluent_tooltip
 
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_button_row,
@@ -7935,6 +7935,15 @@ class PropertyPanel(QWidget):
             lambda checked: self._update_style(auto_fill_section_time=checked)
         )
         self._n3_style_row.addWidget(self._auto_fill_section_time_check)
+        for tooltip_button in (
+            self._sync_entry_check,
+            self._sync_ending_check,
+            self._sync_each_page_check,
+            self._ruby_main_reading_units_check,
+            self._allow_animation_overlap_check,
+            self._auto_fill_section_time_check,
+        ):
+            install_fluent_tooltip(tooltip_button, show_delay=300)
         self._n3_style_row.addStretch(1)
         layout.addLayout(self._n3_style_row)
         return section

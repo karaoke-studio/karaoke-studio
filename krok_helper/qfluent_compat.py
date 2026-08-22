@@ -12,6 +12,7 @@ from qfluentwidgets import Dialog
 _PATCH_MARKER = "_krok_menu_lifetime_safe"
 _TOOLTIP_PATCH_MARKER = "_krok_parentless_tooltip"
 _TOOLTIP_SHADOW_PATCH_MARKER = "_krok_slim_tooltip_shadow"
+_FLUENT_TOOLTIP_FILTER_ATTRIBUTE = "_strange_uta_game_fluent_tooltip_filter"
 _manual_tooltips = {}
 _modeless_dialogs: set[QDialog] = set()
 
@@ -196,15 +197,28 @@ def apply_qfluent_tooltip_parent_patch() -> None:
     ToolTipFilter._createToolTip = _create_parentless_tooltip
 
 
-def install_fluent_tooltip(widget, show_delay: int = 300, position=None) -> None:
-    """Install qfluentwidgets' themed tooltip filter on a widget."""
+def install_fluent_tooltip(widget, show_delay: int = 300, position=None):
+    """Install one independently timed Fluent tooltip filter on ``widget``.
+
+    The attribute name intentionally matches SUG's application-wide manager.
+    Whichever side installs first therefore owns the sole filter, avoiding a
+    second timer when the embedded editor initializes later.
+    """
 
     from qfluentwidgets import ToolTipFilter, ToolTipPosition
 
     apply_qfluent_tooltip_parent_patch()
     if position is None:
         position = ToolTipPosition.TOP
-    widget.installEventFilter(ToolTipFilter(widget, show_delay, position))
+    existing = getattr(widget, _FLUENT_TOOLTIP_FILTER_ATTRIBUTE, None)
+    if existing is not None:
+        existing.setToolTipDelay(show_delay)
+        existing.position = position
+        return existing
+    tooltip_filter = ToolTipFilter(widget, show_delay, position)
+    widget.installEventFilter(tooltip_filter)
+    setattr(widget, _FLUENT_TOOLTIP_FILTER_ATTRIBUTE, tooltip_filter)
+    return tooltip_filter
 
 
 def show_fluent_tooltip(

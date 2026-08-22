@@ -225,6 +225,19 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     assert panel._n3_style_row.indexOf(panel._ruby_main_reading_units_check) == 0
     assert panel._n3_style_row.indexOf(panel._allow_animation_overlap_check) == 1
     assert panel._n3_style_row.indexOf(panel._auto_fill_section_time_check) == 2
+    tooltip_filters = [
+        getattr(button, "_strange_uta_game_fluent_tooltip_filter", None)
+        for button in (
+            panel._sync_entry_check,
+            panel._sync_ending_check,
+            panel._sync_each_page_check,
+            panel._ruby_main_reading_units_check,
+            panel._allow_animation_overlap_check,
+            panel._auto_fill_section_time_check,
+        )
+    ]
+    assert all(item is not None for item in tooltip_filters)
+    assert len({id(item) for item in tooltip_filters}) == len(tooltip_filters)
     overlap_tip = panel._allow_inter_page_line_overlap_check.toolTip()
     assert "不会截断任何走字区间" in overlap_tip
     assert "不会把非零入场动画自动压到 250 ms 以下" in overlap_tip
