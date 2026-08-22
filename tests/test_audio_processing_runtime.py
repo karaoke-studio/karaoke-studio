@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import requests
 
 from krok_helper.audio_processing.separation.integration import (
     PYMSS_PYTHON_VERSION,
@@ -759,3 +760,28 @@ def test_wheel_download_retries_resume_from_offset(
     # 第二次 GET 带 Range（从首次中断后已写入的偏移续传）
     # _FlakySession 不校验 headers；断言调用次数与最终内容即可
     assert flaky.calls == 2
+
+class _HTTP404Session:
+    """恒定返回 404 的会话：确定性失败必须立即失败，不烧退避。"""
+
+    calls = 0
+
+    def get(self, _url, **_kwargs):
+        type(self).calls += 1
+        import requests
+
+        response = requests.Response()
+        response.status_code = 404
+        raise requests.exceptions.HTTPError(response=response)
+
+
+def test_download_http_4xx_fails_immediately(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(runtime_module, "_DOWNLOAD_RETRY_DELAYS", (99.0,) * 4)
+    files = {"runtime/python.exe": b"python-runtime"}
+    archive = _archive(files)
+    package = _package(archive, files)
+    with pytest.raises(requests.exceptions.HTTPError):
+        ManagedRuntimeInstaller(_HTTP404Session()).install(
+            package, tmp_path / "rt"
+        )
+    assert _HTTP404Session.calls == 1  # 未重试

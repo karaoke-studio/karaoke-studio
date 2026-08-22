@@ -725,7 +725,13 @@ class ManagedRuntimeInstaller:
                 raise
             except _requests.RequestException as exc:
                 # 连接中断/超时在 iter_content 里都以 RequestException
-                # 抛出；大小/校验不符是内容问题，立即失败不重试
+                # 抛出；大小/校验不符是内容问题，立即失败不重试。
+                # HTTP 4xx（如资产缺失 404）是确定性失败，重试只会
+                # 白烧退避时间；5xx 视为瞬态可重试
+                if isinstance(exc, _requests.HTTPError):
+                    status = getattr(getattr(exc, "response", None), "status_code", 0)
+                    if 400 <= status < 500:
+                        raise
                 last_error = exc
             if attempt < attempts - 1:
                 if _sleep_cancelable(
@@ -820,6 +826,10 @@ class ManagedRuntimeInstaller:
             except InterruptedError:
                 raise
             except _requests.RequestException as exc:
+                if isinstance(exc, _requests.HTTPError):
+                    status = getattr(getattr(exc, "response", None), "status_code", 0)
+                    if 400 <= status < 500:
+                        raise
                 last_error = exc
             if attempt < attempts - 1:
                 if _sleep_cancelable(
