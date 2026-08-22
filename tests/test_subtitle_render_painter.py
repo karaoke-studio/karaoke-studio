@@ -9453,6 +9453,127 @@ def test_collision_bands_ignore_glow_extent(qapp):
     assert glow_band.cross_max == plain_band.cross_max
 
 
+def test_legacy_collision_height_uses_legacy_main_text_line_box(qapp):
+    line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
+    ruby = RubyAnnotation(
+        kanji="歌",
+        reading="うた",
+        pos_start_ms=1_000,
+        pos_end_ms=2_000,
+    )
+    display_lines = [
+        DisplayLine(
+            line=line,
+            lane=0,
+            display_start_ms=0,
+            display_end_ms=3_000,
+        )
+    ]
+    plain = Style(
+        layout_semantics="legacy",
+        dual_line_layout=False,
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=80,
+        stroke_width_px=8,
+        stroke2_enabled=True,
+        stroke2_width_px=4,
+        decoration_kind="none",
+        ruby_font_size_px=48,
+        ruby_stroke_width_px=6,
+    )
+    decorated = replace(
+        plain,
+        decoration_kind="shadow",
+        shadow_offset_y=30,
+    )
+
+    plain_band = subtitle_painter._measure_collision_bands(
+        640,
+        360,
+        TimingTrack(lines=[line]),
+        plain,
+        display_lines,
+    )[0][2]
+    decorated_band = subtitle_painter._measure_collision_bands(
+        640,
+        360,
+        TimingTrack(lines=[line], rubies=[ruby]),
+        decorated,
+        display_lines,
+    )[0][2]
+    metrics = QFontMetrics(_build_font(plain))
+    baseline = subtitle_painter._resolve_baseline_y(metrics, 360, plain)
+    _height, ascent, descent, _ruby_extra = subtitle_painter._fixed_line_geometry(
+        plain
+    )
+
+    assert plain_band.axis_min == baseline - ascent
+    assert plain_band.axis_max == baseline + descent
+    assert decorated_band.axis_min == plain_band.axis_min
+    assert decorated_band.axis_max == plain_band.axis_max
+
+
+def test_n3_collision_height_uses_n3_main_text_line_box(qapp):
+    line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
+    ruby = RubyAnnotation(
+        kanji="歌",
+        reading="うた",
+        pos_start_ms=1_000,
+        pos_end_ms=2_000,
+    )
+    display_lines = [
+        DisplayLine(
+            line=line,
+            lane=0,
+            display_start_ms=0,
+            display_end_ms=3_000,
+        )
+    ]
+    style = Style(
+        layout_semantics="n3_1074",
+        dual_line_layout=False,
+        font_size_px=80,
+        stroke_width_px=8,
+        stroke2_enabled=True,
+        stroke2_width_px=40,
+        decoration_kind="shadow",
+        shadow_offset_y=18,
+        ruby_font_size_px=36,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none",
+    )
+
+    plain_band = subtitle_painter._measure_collision_bands(
+        640,
+        360,
+        TimingTrack(lines=[line]),
+        style,
+        display_lines,
+    )[0][2]
+    ruby_band = subtitle_painter._measure_collision_bands(
+        640,
+        360,
+        TimingTrack(lines=[line], rubies=[ruby]),
+        style,
+        display_lines,
+    )[0][2]
+    metrics = QFontMetrics(_build_font(style))
+    baseline = subtitle_painter._resolve_baseline_y(metrics, 360, style)
+    _height, ascent, descent, _ruby_extra = subtitle_painter._fixed_line_geometry(
+        style
+    )
+
+    assert ruby_band.axis_min == plain_band.axis_min
+    assert ruby_band.axis_max == plain_band.axis_max
+    assert plain_band.axis_min == baseline - ascent
+    assert plain_band.axis_max == baseline + descent
+    assert plain_band.axis_max - plain_band.axis_min == (
+        style.font_size_px + style.stroke_width_px
+    )
+
+
 def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)

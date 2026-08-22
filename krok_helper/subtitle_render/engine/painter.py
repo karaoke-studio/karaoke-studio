@@ -2167,10 +2167,13 @@ def _display_line_horizontal_ink_rect(
     layout_cache_sig: tuple | None,
     include_glow: bool = True,
 ) -> tuple[int, int, int, int] | None:
-    """Return the final static horizontal-line ink rectangle.
+    """Return the horizontal-line rectangle used by placement checks.
 
     Entry/exit and per-character animation trajectories intentionally do not
-    enlarge this box.  Main glyphs, Ruby and their visual decorations do.
+    enlarge this box.  Collision height follows the active layout semantics'
+    logical main-text box: N3 uses its fixed font-size/primary-edge geometry,
+    while legacy uses font metrics plus visual stroke padding.  Ruby, shadow
+    and glow therefore do not change its top/bottom.
     """
 
     line = display_line.line
@@ -2227,7 +2230,18 @@ def _display_line_horizontal_ink_rect(
         _LAYOUT_PASS.tracks.append(track)
         _LAYOUT_PASS.lines.append(line)
         _LAYOUT_PASS.styles.append(line_style)
-    return rect
+    if rect is None:
+        return rect
+
+    _main_h, main_ascent, main_descent, _ruby_extra = _fixed_line_geometry(
+        line_style
+    )
+    return (
+        rect[0],
+        int(baseline_y - main_ascent),
+        rect[2],
+        int(baseline_y + main_descent),
+    )
 
 
 def _line_static_ink_rect(
