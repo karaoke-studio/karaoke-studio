@@ -7538,9 +7538,10 @@ def test_main_window_solid_color_updates_background_and_preview(qapp, monkeypatc
     win._property_panel._apply_solid_color("#305070")
     assert win._background_source.kind == "solid"
     assert win._background_source.color == "#305070"
-    # 预览画布场景底色即时更新（invalidate 已在 set_background_source 内触发）
-    brush = win._preview_panel.canvas._scene.backgroundBrush()
-    assert brush.color().name().upper() == "#305070"
+    # 预览画布的背景底矩形即时变为纯色（承载纯色的是它，不是场景底色）
+    base = win._preview_panel.canvas._letterbox_rect
+    assert base.brush().color().name().upper() == "#305070"
+    assert base.isVisible()
     # 面板回填后 ColorButton 显示同步
     assert QColor(win._property_panel._solid_color_btn.color).name().upper() == "#305070"
 

@@ -2907,13 +2907,40 @@ def test_preview_graphics_video_background_is_contain_with_black_bars(qapp):
         assert graphics._letterbox_rect.isVisible()
         rect = graphics._letterbox_rect.rect()
         assert (int(rect.width()), int(rect.height())) == (1920, 1080)
-        # solid 背景不显示黑边底（场景底色即背景色）
+        # 背景底矩形永远可见：solid 填背景色本身，其余填纯黑。纯色不能靠
+        # 场景底色显示——实测 view 的 QSS background 会整体盖住 scene
+        # backgroundBrush（曾表现为「纯色预览永远是黑的」）。
         graphics.set_background_source(
             BackgroundSource(kind="solid", color="#123456")
         )
-        assert not graphics._letterbox_rect.isVisible()
+        assert graphics._letterbox_rect.isVisible()
+        assert graphics._letterbox_rect.brush().color().name().upper() == "#123456"
     finally:
         graphics.deleteLater()
+
+
+def test_preview_graphics_solid_background_renders_color(qapp):
+    """纯色背景的像素级验证：渲染结果必须是背景色，而不是舞台底色。"""
+    from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel
+    from krok_helper.subtitle_render.models import BackgroundSource
+
+    panel = PreviewPanel()
+    try:
+        panel.resize(640, 400)
+        panel.set_populated(True)
+        panel.show()
+        for color in ("#FF3050", "#30FF70"):
+            panel.set_background_source(
+                BackgroundSource(kind="solid", color=color)
+            )
+            qapp.processEvents()
+            image = panel._canvas.grab().toImage()
+            pixel = image.pixel(20, 20) & 0xFFFFFF
+            assert f"#{pixel:06X}" == color
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
 
 
 def test_preview_graphics_image_fit_cover_and_contain(qapp, tmp_path):

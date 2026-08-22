@@ -232,19 +232,9 @@ class PreviewGraphicsView(QGraphicsView):
 
         # 视图外框、视图背景、场景背景三者全部用同一个舞台底色——否则视频四周会露出
         # 一圈深浅不一的细黑边（场景底色 #101010 与外框 stage_bg 撞色）。随主题刷新。
-        # 纯色背景时场景底色用背景色本身（主题重刷不得盖回舞台色）；视图外框
-        # 仍用舞台色，画布外与画布内因此可区分。
-        def _scene_base_color() -> str:
-            source = self._background_source
-            if source.kind == "solid":
-                solid = QColor(source.color)
-                if solid.isValid():
-                    return solid.name()
-            return stage_bg()
-
         def _stage_style() -> str:
-            scene.setBackgroundBrush(QBrush(QColor(_scene_base_color())))
             color = stage_bg()
+            scene.setBackgroundBrush(QBrush(QColor(color)))
             self.setBackgroundBrush(QBrush(QColor(color)))
             return (
                 f"#PreviewGraphicsView {{ background: {color}; "
@@ -262,13 +252,14 @@ class PreviewGraphicsView(QGraphicsView):
         scene.addItem(self._video_item)
         self._fit_video_item_to_scene()
 
-        # 黑边底：视频/图片 contain 后四周的纯黑，对齐导出的 pad black。
-        # solid 背景不用它（场景底色即背景色）。
+        # 背景底矩形：画布最底层的着色层，与导出的图层顺序一一对应——
+        # solid 背景时填背景色本身，其余背景（视频/图片 contain 后四周、
+        # 无背景时）填纯黑（导出 pad=...:color=black 的预览对应物）。
+        # 不用场景底色承载纯色：实测 view 的 QSS background 会整体盖住
+        # scene backgroundBrush，纯色永远显示不出来。
         self._letterbox_rect = QGraphicsRectItem()
-        self._letterbox_rect.setBrush(QBrush(QColor(0, 0, 0)))
         self._letterbox_rect.setPen(QPen(Qt.PenStyle.NoPen))
         self._letterbox_rect.setZValue(-1)
-        self._letterbox_rect.setVisible(False)
         scene.addItem(self._letterbox_rect)
         self._update_letterbox_rect()
 
@@ -487,12 +478,16 @@ class PreviewGraphicsView(QGraphicsView):
         self._video_item.setSize(QSizeF(self._output_w, self._output_h))
 
     def _update_letterbox_rect(self) -> None:
-        """同步黑边底矩形与背景可见性（导出 pad black 的预览对应物）。"""
+        """同步背景底矩形：solid 填背景色，其余填纯黑（导出 pad black 的对应物）。"""
         source = self._background_source
-        show_letterbox = source.kind != "solid"
-        self._letterbox_rect.setVisible(show_letterbox)
-        if show_letterbox:
-            self._letterbox_rect.setRect(QRectF(0, 0, self._output_w, self._output_h))
+        color = QColor(0, 0, 0)
+        if source.kind == "solid":
+            solid = QColor(source.color)
+            if solid.isValid():
+                color = solid
+        self._letterbox_rect.setBrush(QBrush(color))
+        self._letterbox_rect.setRect(QRectF(0, 0, self._output_w, self._output_h))
+        self._letterbox_rect.setVisible(True)
 
     def _fit_scene_to_view(self) -> None:
         self.fitInView(
@@ -594,15 +589,10 @@ class PreviewGraphicsView(QGraphicsView):
         self._video_item.setVisible(source.kind == "video")
         self._image_item.setVisible(source.kind in {"image", "image_sequence"})
         self._update_letterbox_rect()
-        color = QColor(source.color)
-        if source.kind == "solid" and color.isValid():
-            self._scene.setBackgroundBrush(QBrush(color))
-        else:
-            self._scene.setBackgroundBrush(QBrush(QColor(stage_bg())))
+        self._scene.setBackgroundBrush(QBrush(QColor(stage_bg())))
         self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
         self._refresh_background_image()
-        # setBackgroundBrush 不会自动调度重绘：纯色切换后必须显式失效
-        # 背景层，否则预览画面停留在旧底色，看起来像「没生效」。
+        #setBackgroundBrush 不会自动调度重绘：切换背景后显式失效背景层。
         self._scene.invalidate(
             self._scene.sceneRect(),
             QGraphicsScene.SceneLayer.BackgroundLayer,
