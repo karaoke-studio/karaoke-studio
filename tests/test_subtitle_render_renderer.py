@@ -1188,8 +1188,8 @@ def test_strip_safety_margin_uses_max_referenced_font_size(tmp_path):
 
 
 def test_strip_safety_margin_includes_vector_guide_span(tmp_path):
-    # SVG 导入的矢量导唱符可远宽于 1em，utopia 旋转的纵向包络按路径对角线
-    # 跨度估算；位图导唱符走独立渲染路径，不参与该包络
+    # SVG 导入的矢量导唱符可远宽于 1em；utopia 旋转包络按「advance 枢轴到
+    # 路径四角的最大距离 ×2」估算；位图导唱符走独立渲染路径，不参与该包络
     wide_vector = GuideSymbol(
         name="wide",
         path_commands=(
@@ -1217,7 +1217,8 @@ def test_strip_safety_margin_includes_vector_guide_span(tmp_path):
     vector_job = replace(
         _job(tmp_path), style=style, track=vector_track, height=2160
     )
-    span_em = math.hypot(10000.0, 1000.0) / 1000.0
+    # 枢轴 (advance/2, 基线) = (5em, 0)；最远角 (0,1em) → 半径 hypot(5,1)
+    span_em = 2 * math.hypot(5.0, 1.0)
     expected = 2160 / 15.0 + 48 * max(1.5, span_em * 1.3)
     assert _strip_safety_margin(vector_job) >= math.ceil(expected)
 
@@ -1226,6 +1227,87 @@ def test_strip_safety_margin_includes_vector_guide_span(tmp_path):
     )
     assert _max_guide_span_em([bitmap_track]) == 0.0
     assert _max_guide_span_em([vector_track]) == pytest.approx(span_em)
+
+    # 轮廓本身只有 1em 宽、advance 却有 10em：旋转枢轴距轮廓 ~5em，
+    # 只按路径宽高会把它估成 ~1.4em 而严重低估
+    narrow_wide_advance = GuideSymbol(
+        name="narrow",
+        path_commands=(
+            ("M", 0.0, 0.0),
+            ("L", 1000.0, 0.0),
+            ("L", 0.0, 1000.0),
+            ("Z",),
+        ),
+        units_per_em=1000,
+        advance_width=10000.0,
+    )
+    narrow_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("a", 0)], end_ms=1000, guide_symbol=narrow_wide_advance
+            )
+        ]
+    )
+    assert _max_guide_span_em([narrow_track]) == pytest.approx(2 * math.hypot(5.0, 1.0))
+
+    # 小轮廓悬离基线：枢轴在基线上，位置主导旋转半径
+    floating = GuideSymbol(
+        name="floating",
+        path_commands=(
+            ("M", 0.0, 8000.0),
+            ("L", 1000.0, 8000.0),
+            ("L", 0.0, 9000.0),
+            ("Z",),
+        ),
+        units_per_em=1000,
+        advance_width=1000.0,
+    )
+    floating_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("a", 0)], end_ms=1000, guide_symbol=floating)
+        ]
+    )
+    assert _max_guide_span_em([floating_track]) == pytest.approx(
+        2 * math.hypot(0.5, 9.0)
+    )
+
+
+def test_strip_safety_margin_counts_guide_role_labels(tmp_path):
+    # 行首导唱符可通过自身 role_label/role_labels 引用自定义方案并按该方案
+    # 字号绘制；4096px 方案经导唱符引用时必须进入最大字号聚合
+    guide = GuideSymbol(
+        name="role_guide",
+        path_commands=(
+            ("M", 0.0, 0.0),
+            ("L", 1000.0, 0.0),
+            ("L", 0.0, 1000.0),
+            ("Z",),
+        ),
+        units_per_em=1000,
+        advance_width=1000.0,
+        role_labels=("big", None),
+        count=2,
+    )
+    style = Style(
+        font_size_px=48,
+        exit_anim="utopia",
+        exit_fade_ms=750,
+        custom_style_schemes={
+            "big": SubtitleStyleScheme(font_size_px=4096),
+        },
+    )
+    guide_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 0)], end_ms=1000, guide_symbol=guide)]
+    )
+    assert _max_project_font_size(style, [guide_track]) == 4096.0
+    job = replace(_job(tmp_path), style=style, track=guide_track, height=2160)
+    assert _strip_safety_margin(job) >= math.ceil(2160 / 15.0 + 4096 * 1.5)
+
+    # 无导唱符、无角色标签引用时该方案不参与
+    plain_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 0)], end_ms=1000)]
+    )
+    assert _max_project_font_size(style, [plain_track]) == 48.0
 
 
 def test_compute_subtitle_strip_disabled_for_char_drip(tmp_path):

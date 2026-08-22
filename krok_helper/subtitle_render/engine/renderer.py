@@ -54,6 +54,7 @@ from krok_helper.subtitle_render.models import (
     BackgroundSource,
     Style,
     TimingTrack,
+    guide_symbol_role_labels,
     style_with_line_animation,
     timing_line_start_ms,
 )
@@ -95,6 +96,12 @@ def _referenced_style_sources(style: Style, tracks: list[TimingTrack]) -> list[o
             for char in line.chars:
                 if getattr(char, "role_label", None):
                     used_roles.add(char.role_label)
+            # 行首导唱符自带角色标签（Painter 写入虚拟字符并按对应方案字号
+            # 绘制）；行内导唱符沿用被替换字符的标签，由上面的扫描覆盖。
+            if line.guide_symbol is not None:
+                for label in guide_symbol_role_labels(line.guide_symbol):
+                    if label:
+                        used_roles.add(label)
     title = getattr(style, "title_overlay", None)
     title_active = title is not None and bool(getattr(title, "enabled", False))
     for name, scheme in (getattr(style, "custom_style_schemes", None) or {}).items():
@@ -126,11 +133,13 @@ def _max_project_font_size(style: Style, tracks: list[TimingTrack]) -> float:
 
 
 def _max_guide_span_em(tracks: list[TimingTrack]) -> float:
-    """行内矢量导唱符的最大旋转对角线跨度（em 单位）。
+    """行内矢量导唱符的最大 utopia 旋转包络（em 单位）。
 
     位图导唱符走独立渲染路径（不进 utopia 旋转）；矢量导唱符是行内虚拟
-    字符，会进入 utopia 旋转/缩放，且 SVG 导入的轮廓可以远宽于 1em——
-    其纵向包络按路径对角线长度估算，而不是按字号近似。
+    字符，会进入 utopia 旋转/缩放。包络按「旋转枢轴到路径四角的最大距离
+    ×2」估算：枢轴取 advance box 水平中心（``advance_width/2``，SVG 可远宽
+    于轮廓本身，枢轴距离主导）、竖直方向按基线保守估计（轮廓可整体悬离
+    基线，位置主导）——项目反序列化对 advance 与路径坐标均无上限。
     """
     span_em = 0.0
     seen: set[int] = set()
@@ -149,7 +158,16 @@ def _max_guide_span_em(tracks: list[TimingTrack]) -> float:
                 if rect.isEmpty():
                     continue
                 units = max(int(getattr(guide, "units_per_em", 1) or 1), 1)
-                span_em = max(span_em, math.hypot(rect.width(), rect.height()) / units)
+                advance_em = max(
+                    float(getattr(guide, "advance_width", 0.0) or 0.0) / units, 0.0
+                )
+                pivot_x = advance_em / 2.0
+                radius_em = max(
+                    math.hypot(x / units - pivot_x, y / units)
+                    for x in (rect.left(), rect.right())
+                    for y in (rect.top(), rect.bottom())
+                )
+                span_em = max(span_em, 2.0 * radius_em)
     return span_em
 
 
