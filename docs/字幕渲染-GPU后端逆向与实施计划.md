@@ -1743,20 +1743,26 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - 真实 `25 m.n3proj` 4K60、30 秒背景解码 + overlay + NVENC 端到端结果：1/2/4 worker 分别为 `82.46/80.45/83.88s`（`21.83/22.37/21.46fps`）；ffmpeg 管道累计等待 `24.66/17.50/15.27s`，sidecar 峰值 RSS `208/330/548 MiB`，DXGI 本地显存占用 `177/354/709 MiB`。2 worker 仅快约 2.5%，但连续两轮都优于 1；4 worker 因重复 realization、额外 context 和下游瓶颈反而变慢，因此硬件默认 2、保留环境变量选择 1～4，不照搬 N3 的 8 worker。
 - 顺序/资源门禁覆盖乱序完成、ring window 上限、取消和诊断回收。1/2/4 输出均为 1800 帧；独立 context 首次命中新内容存在 Direct2D 栅格缓存的微小非位级差异（同一 4K 帧 19 像素、最大通道差 2），会改变有损编码 GOP 哈希，但不是丢帧或错序。Python 导出测试 `61 passed`，真实 native worker/流水线/realization 定向测试 `3 passed`。
 
-### 2026-08-23：音量柱收敛到每 S 第一 P 第一行
+### 2026-08-23：指示灯收敛到每 S 第一 P 第一行（全部 lit 样式）
 
-- 行为口径变更（用户拍板）：`lit_style=volume` 的音量柱只生效在每个段落（S）第一页（P）的第一行；
-  形状灯（circle/square/rounded）与竖排保持历史「每行生效」行为不变。
+- 行为口径变更（用户拍板，含后续修订）：SignalsLits 指示灯的**全部特效种类**——音量柱
+  （`lit_style=volume`）与形状灯（circle/square/rounded）——都只生效在每个段落（S）第一页（P）
+  的第一行；竖排不绘制 Sayatoo signal，不受影响。初版仅收敛了 volume，用户随后确认整个模块
+  统一语义。
 - Python 侧新增权威判定 `page_plan.section_head_line_indices()`：有 `page_plan` 时按权威分页结构取
   各段第一页首行；无 plan 的裸解析 track 按行间奏间隔推导段边界（与 `_compute_section_ids` 同口径）。
 - 显示窗口从「全局替换 lead」改为行级下发：`compute_show_times` 的 `pre_time_ms` 支持逐行序列
   （TopLong 页 ShowBegin 取页内各行 `begin − pre` 的最小值，页内同步入场语义不变），
   `compute_display_lines` 通过 `signal_head_indexes` / `signal_lead_ms` 注入。段首行按
   `max(PreTime, signals 窗口)` 提前，其余行保持用户 PreTime；`protect_ms` 仍按未扩展 lead 推导。
-- CPU Painter 三处同步过滤（仅 volume）：信号候选行、`_signal_lit_groups` 灯组与
-  `_line_has_active_signal` 布局联合盒都只认段首行；`_display_style_for_signal_window` 对
-  volume 不再全局扩展（形状灯仍全局扩展）。
-- Render IR 行新增 `signal_head` 标记（volume 时由 `track_to_ir` 计算盖章，形状灯恒 false），
-  native `TimingLine`/`TextLine`/`CachedLine` 透传；Direct2D 的 `signalLayoutActive` 与
-  `volumeSignalState` 均以该标记门控，两后端口径一致。GPU 显示窗口本就从 Python layout plan
+- CPU Painter 三处同步过滤（全部 lit 样式）：信号候选行、`_signal_lit_groups` 灯组与
+  `_line_has_active_signal` 布局联合盒都只认段首行；`_display_style_for_signal_window` 不再对任何
+  样式全局扩展 lead（行级下发取代）。
+- Render IR 行新增 `signal_head` 标记（任何 lit 样式开启时由 `track_to_ir` 计算盖章），native
+  `TimingLine`/`TextLine`/`CachedLine` 透传；Direct2D 的 `signalLayoutActive`、`volumeSignalState`
+  与 `shapeSignalState` 均以该标记门控，两后端口径一致。GPU 显示窗口本就从 Python layout plan
   下发，行级 lead 自动一致，无需 native 侧重算。
+- 兼容性：旧宿主发的 IR 没有 `signal_head` 字段，native 按 `QJsonValue::toBool(true)` 解析，
+  保持改动前「每行画灯」的旧行为；回归测试以删除字段的 IR 直喂 sidecar 钉住该约定
+  （`test_gpu_g4_legacy_ir_without_signal_head_keeps_per_line_lamps`）。
+

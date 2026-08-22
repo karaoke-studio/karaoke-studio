@@ -2807,7 +2807,7 @@ def _line_has_active_signal(
     is_signal_head: bool = True,
 ) -> bool:
     if not is_signal_head:
-        # 音量柱只挂在每 S 第一 P 第一行：非段首行不为灯预留布局位。
+        # 指示灯只挂在每 S 第一 P 第一行：非段首行不为灯预留布局位。
         return False
     duration = max(int(style.signals_duration_ms), 0)
     active_duration = max(duration - max(int(style.lit_waiting_time_ms), 0), 0)
@@ -3180,7 +3180,7 @@ def _signal_lit_groups(
         if line.is_blank or not line.chars:
             continue
         if index_of is not None and index_of.get(id(line)) not in signal_heads:
-            # 音量柱只画每 S 第一 P 第一行。
+            # 指示灯（全部 lit 样式）只画每 S 第一 P 第一行。
             continue
         line_layout = (
             line_layouts.get(id(display_line.line))
@@ -4825,7 +4825,7 @@ def _display_lines_for_style(
         "auto_fill_section_time": False,
     }
     if signal_heads is not None:
-        # 音量柱只挂段首行：lead 扩展按行下发，其余行保持用户 PreTime。
+        # 指示灯只挂段首行：lead 扩展按行下发，其余行保持用户 PreTime。
         base_kwargs["signal_head_indexes"] = signal_heads
         base_kwargs["signal_lead_ms"] = _signal_lead_in_ms(style)
     if logical_w is None or logical_h is None:
@@ -5726,36 +5726,30 @@ def _effective_line_protect_ms(style: Style) -> int:
 def _display_style_for_signal_window(style: Style) -> Style:
     if not style.lit_enabled or style.vertical:
         return style
-    signal_lead = _signal_lead_in_ms(style)
-    if signal_lead <= max(style.line_lead_in_ms, 0):
-        return style
-    if _volume_signal_style(style):
-        # 音量柱只挂每段第一行：lead 扩展按行下发（见 _signal_head_context），
-        # 不再全局提前所有行。
-        return style
-    return replace(style, line_lead_in_ms=signal_lead)
+    # 指示灯（全部 lit 样式）只挂每段第一行：lead 扩展按行下发（见
+    # _signal_head_context），不再全局提前所有行。
+    return style
 
 
-def _volume_signal_style(style: Style) -> bool:
-    """音量柱样式：指示灯只生效在每 S 第一 P 第一行。"""
+def _lit_signal_active(style: Style) -> bool:
+    """指示灯生效：任何 ``lit_style``（volume/circle/square/rounded）都只
+    生效在每 S 第一 P 第一行。"""
 
-    return bool(style.lit_enabled) and not style.vertical and (
-        style.lit_style == "volume"
-    )
+    return bool(style.lit_enabled) and not style.vertical
 
 
 def _signal_head_context(
     track: TimingTrack,
     style: Style,
 ) -> Optional[frozenset[int]]:
-    """音量柱生效的 ``track.lines`` 索引集合（每段第一行）；None = 不过滤。
+    """指示灯生效的 ``track.lines`` 索引集合（每段第一行）；None = 不过滤。
 
-    形状灯（circle/square/rounded）与竖排保持每行生效的历史行为，返回
-    ``None``。结果按 ``(id(track), 布局签名)`` 缓存：同一布局趟内会被行布局、
+    仅竖排或指示灯关闭时返回 ``None``（竖排不绘制 Sayatoo signal）。
+    结果按 ``(id(track), 布局签名)`` 缓存：同一布局趟内会被行布局、
     灯组与窗口计算反复询问。
     """
 
-    if not _volume_signal_style(style):
+    if not _lit_signal_active(style):
         return None
     cache = getattr(_LAYOUT_PASS, "signal_heads", None)
     key = None
@@ -5801,17 +5795,8 @@ def _signal_display_lines_for_style(
         return []
     signal_heads = _signal_head_context(track, style)
     if signal_heads is None:
-        signal_style = replace(
-            style, line_lead_in_ms=max(style.line_lead_in_ms, signal_lead)
-        )
-        return _visible_lines_for_style(
-            track,
-            t_ms,
-            signal_style,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-    # 音量柱只挂每 S 第一 P 第一行：非段首行不进入信号窗口（无灯、无提前显示）。
+        return []
+    # 指示灯只挂每 S 第一 P 第一行：非段首行不进入信号窗口（无灯、无提前显示）。
     # `_visible_lines_for_style` 内部（dual 与单行两条路径）已经按段首行下发
     # lead 扩展，这里只需把非段首行从候选中剔除。
     index_of = {id(line): index for index, line in enumerate(track.lines)}

@@ -268,9 +268,15 @@ ShapeSignalState shapeSignalState(
     int lineStartMs,
     const TextStyle &style,
     int tMs,
-    int displayEndMs
+    int displayEndMs,
+    bool signalHead
 ) {
     ShapeSignalState state;
+    if (!signalHead) {
+        // Shape lamps attach only to each section's first page's first line,
+        // matching the volume bars.
+        return state;
+    }
     if (style.vertical || !style.litEnabled || style.litStyle == "volume") {
         return state;
     }
@@ -4895,19 +4901,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         );
         const VolumeSignalGeometry signalGeometry = volumeSignalGeometry(style);
         const ShapeSignalState shapeState = shapeSignalState(
-            line->startMs, style, tMs, displayEndMs
+            line->startMs, style, tMs, displayEndMs, line->signalHead
         );
         const ShapeSignalGeometry shapeGeometry = shapeSignalGeometry(style);
         const int signalActiveDuration = std::max(
             style.signalsDurationMs - std::max(style.litWaitingTimeMs, 0), 0
         );
         const int signalEndMs = line->startMs + style.litTimeOffsetMs;
-        // The volume bars only attach to each section's first page's first
-        // line (signalHead); shape lamps keep their historical per-line reach.
+        // Every lit style (volume bars and shape lamps) attaches only to each
+        // section's first page's first line (signalHead).
         const bool signalLayoutActive = style.litEnabled
             && !style.vertical
             && signalActiveDuration > 0
-            && (style.litStyle != "volume" || line->signalHead)
+            && line->signalHead
             && tMs >= signalEndMs - signalActiveDuration
             && tMs < displayEndMs;
         float lyricLeft = line->bounds.left;

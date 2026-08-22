@@ -884,15 +884,18 @@ def test_volume_signal_lead_extends_only_section_head_pages(qapp):
     assert on[3] == off[3]
 
 
-def test_shape_signal_lead_still_extends_every_line(qapp):
+def test_shape_signal_lead_also_limited_to_section_head_pages(qapp):
     track = _two_section_track()
     style = _volume_style(lit_style="circle", lit_number=4, lit_size=10)
     off = _plan_display_starts(track, replace(style, lit_enabled=False))
     on = _plan_display_starts(track, style)
 
-    # 形状灯（circle/square/rounded）保持历史行为：每行的页都被信号窗口提前。
-    for index in (0, 2, 4):
-        assert on[index] < off[index]
+    # 形状灯（circle/square/rounded）与音量柱同一语义：只有段首行所在的页
+    # 被信号窗口提前，非段首页与关闭指示灯完全一致。
+    assert on[0] < off[0]
+    assert on[4] < off[4]
+    assert on[2] == off[2]
+    assert on[3] == off[3]
 
 
 def test_volume_signal_paints_section_head_before_entry_only(qapp):

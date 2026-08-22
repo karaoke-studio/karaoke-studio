@@ -209,7 +209,7 @@ def test_build_render_ir_preserves_extra_track_boundaries():
     assert ir["extra_tracks"][0]["lines"][0]["chars"][0]["text"] == "副"
 
 
-def test_build_render_ir_stamps_volume_signal_head_per_section():
+def test_build_render_ir_stamps_signal_head_for_every_lit_style():
     track = TimingTrack(
         lines=[
             TimingLine(chars=[TimingChar("あ", 10_000)], end_ms=11_000),
@@ -226,28 +226,27 @@ def test_build_render_ir_stamps_volume_signal_head_per_section():
             TrackSection(pages=[TrackPage(2)]),
         ]
     )
-    style = Style(
-        lit_enabled=True,
-        lit_style="volume",
-        signals_duration_ms=4_000,
-    )
+    for lit_style in ("volume", "circle", "square", "rounded"):
+        style = Style(
+            lit_enabled=True,
+            lit_style=lit_style,
+            signals_duration_ms=4_000,
+        )
+        ir = build_render_ir(track, style, width=640, height=360, fps=60)
+        # 指示灯（全部 lit 样式）只挂每 S 第一 P 第一行：行 0 与行 4。
+        assert [
+            line["signal_head"] for line in ir["track"]["lines"]
+        ] == [True, False, False, False, True, False], lit_style
 
-    ir = build_render_ir(track, style, width=640, height=360, fps=60)
-
-    # 音量柱只挂每 S 第一 P 第一行：行 0 与行 4。
-    assert [line["signal_head"] for line in ir["track"]["lines"]] == [
-        True, False, False, False, True, False,
-    ]
-
-    # 形状灯保持每行生效，不写段首标记。
-    shape_ir = build_render_ir(
+    # 指示灯关闭时不盖章（native 也不会绘制）。
+    off_ir = build_render_ir(
         track,
-        replace(style, lit_style="circle"),
+        Style(lit_enabled=False, lit_style="volume"),
         width=640,
         height=360,
         fps=60,
     )
-    assert not any(line["signal_head"] for line in shape_ir["track"]["lines"])
+    assert not any(line["signal_head"] for line in off_ir["track"]["lines"])
 
 
 def test_build_render_ir_resolves_title_metadata_and_windows():

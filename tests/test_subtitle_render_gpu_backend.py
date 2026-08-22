@@ -6718,6 +6718,72 @@ def test_gpu_g4_volume_signal_limited_to_section_head_follows_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_legacy_ir_without_signal_head_keeps_per_line_lamps(
+    monkeypatch,
+) -> None:
+    """旧宿主发的 IR 没有 ``signal_head`` 字段：native 必须按 true 解析。"""
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    # 两行一页：行 1（非段首）在自身信号窗口内上屏的时段（开唱前 300ms）
+    # 是新旧行为的可观察差异带——旧 IR 行 1 旁有形状灯，新 IR 没有。
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("あ", 5_000)], end_ms=6_000),
+            TimingLine(chars=[TimingChar("い", 12_000)], end_ms=13_000),
+        ]
+    )
+    track.page_plan = TrackPagePlan(sections=[TrackSection(pages=[TrackPage(2)])])
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="center",
+        line_lead_in_ms=500,
+        line_tail_ms=500,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_number=4,
+        lit_size=34,
+        lit_stroke_width=2,
+        signals_duration_ms=4_000,
+        lit_waiting_time_ms=0,
+        lit_time_offset_ms=0,
+    )
+    timestamps = (11_700,)
+
+    import krok_helper.subtitle_render.native_backend as native_backend
+
+    original_build = native_backend.build_render_ir
+
+    def legacy_build(track_obj, style_obj=None, **kwargs):
+        ir = original_build(track_obj, style_obj, **kwargs)
+        for source in [ir.get("track"), *(ir.get("extra_tracks") or [])]:
+            for line in source["lines"]:
+                line.pop("signal_head", None)
+        return ir
+
+    monkeypatch.setattr(native_backend, "build_render_ir", legacy_build)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, legacy = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    monkeypatch.setattr(native_backend, "build_render_ir", original_build)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, stamped = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+
+    # 行 1 在屏且处于其信号窗口：旧 IR（缺字段，按 true 解析）画出形状灯，
+    # 新 IR（盖章 false）不画。
+    assert sum(legacy[0][3::4]) > sum(stamped[0][3::4])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("lit_style", ["circle", "square", "rounded"])
 @pytest.mark.parametrize("transition_mode", ["fade", "slide"])
 def test_gpu_g4_shape_signal_geometry_and_extinguish_transition_follow_painter(

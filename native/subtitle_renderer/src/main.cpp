@@ -117,8 +117,9 @@ struct TimingLine {
     int trackLineIndex = -1;
     int pageIndex = -1;
     int pageLineCount = 0;
-    // Volume signal bars only attach to each section's first page's first
-    // line; Python stamps the flag so both backends share one decision.
+    // Sayatoo signal lamps (every lit style) attach only to each section's
+    // first page's first line; Python stamps the flag so both backends share
+    // one decision. Absent field parses as true to keep legacy per-line IRs.
     bool signalHead = false;
     int sourceOffsetMs = 0;
     int lane = 0;
