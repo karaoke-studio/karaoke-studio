@@ -756,7 +756,7 @@ def test_native_qt_text_layer_hides_low_level_glow_and_path_painting():
     assert '#include "qt_render_cache.h"' in implementation_source
     assert '#include "qt_style_metrics.h"' in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_text_layer.h"' in main_source
+    assert '#include "backends/qt/qt_text_layer.h"' not in main_source
     assert "src/backends/qt/qt_text_layer.cpp" in cmake_source
     assert "src/backends/qt/qt_text_layer.h" in cmake_source
 
@@ -865,6 +865,26 @@ def test_native_qt_inline_text_hides_character_style_iteration():
     assert '#include "backends/qt/qt_inline_text.h"' in main_source
     assert "src/backends/qt/qt_inline_text.cpp" in cmake_source
     assert "src/backends/qt/qt_inline_text.h" in cmake_source
+
+
+def test_native_qt_transformed_text_hides_fill_and_glow_composition():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_transformed_text.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_transformed_text.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "paintTransformedTextStack(" in header_source
+    assert "paintRubyTransformedStack(" in header_source
+    assert "paintTransformedTextStackWithFills(" in implementation_source
+    assert "paintTransformedTextStackWithFills(" not in header_source
+    assert "paintTransformedTextStackWithFills(" not in main_source
+    assert '#include "qt_render_cache.h"' in implementation_source
+    assert '#include "qt_text_layer.h"' in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_transformed_text.h"' in main_source
+    assert "qt_text_layer.h" not in main_source
+    assert "src/backends/qt/qt_transformed_text.cpp" in cmake_source
+    assert "src/backends/qt/qt_transformed_text.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():

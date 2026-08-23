@@ -42,7 +42,7 @@
 #include "backends/qt/qt_ruby_timing.h"
 #include "backends/qt/qt_ruby_wipe.h"
 #include "backends/qt/qt_style_metrics.h"
-#include "backends/qt/qt_text_layer.h"
+#include "backends/qt/qt_transformed_text.h"
 #include "protocol/json_protocol.h"
 #include "protocol/json_value.h"
 #include "protocol/render_config.h"
@@ -112,7 +112,6 @@ using krok::subtitle::native::legacy_qt::RenderDiagnostics;
 using krok::subtitle::native::legacy_qt::RenderResult;
 using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::brushForFill;
-using krok::subtitle::native::legacy_qt::blitTransformedGlowLayerWithWidths;
 using krok::subtitle::native::legacy_qt::cachedLayoutLine;
 using krok::subtitle::native::legacy_qt::paintCachedTextLayerStackWithWidths;
 using krok::subtitle::native::legacy_qt::afterClipVerticalExtent;
@@ -132,7 +131,6 @@ using krok::subtitle::native::legacy_qt::clearTextLayerCache;
 using krok::subtitle::native::legacy_qt::effectiveRubyForTarget;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheStats;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheSize;
-using krok::subtitle::native::legacy_qt::glowBitmapCacheEnabled;
 using krok::subtitle::native::legacy_qt::glowExtentForWidths;
 using krok::subtitle::native::legacy_qt::glowRadius;
 using krok::subtitle::native::legacy_qt::paintGlyphRunTextLayers;
@@ -148,7 +146,8 @@ using krok::subtitle::native::legacy_qt::lineStartMs;
 using krok::subtitle::native::legacy_qt::lineText;
 using krok::subtitle::native::legacy_qt::isEmojiText;
 using krok::subtitle::native::legacy_qt::progressRatio;
-using krok::subtitle::native::legacy_qt::paintTextLayerStackWithWidths;
+using krok::subtitle::native::legacy_qt::paintTransformedTextStack;
+using krok::subtitle::native::legacy_qt::paintRubyTransformedStack;
 using krok::subtitle::native::legacy_qt::lookupLayoutCache;
 using krok::subtitle::native::legacy_qt::rubyScale;
 using krok::subtitle::native::legacy_qt::rubyGroupForCharIndex;
@@ -561,251 +560,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-void paintTransformedTextStackWithFills(
-    QPainter &painter,
-    const QPainterPath &path,
-    const QRectF &rect,
-    const PaintFillSpec &baseFill,
-    const PaintFillSpec &afterFill,
-    const PaintFillSpec &beforeStrokeFill,
-    const PaintFillSpec &afterStrokeFill,
-    const PaintFillSpec &beforeStroke2Fill,
-    const PaintFillSpec &afterStroke2Fill,
-    const PaintFillSpec &beforeShadowFill,
-    const PaintFillSpec &afterShadowFill,
-    const ResolvedStyle &style,
-    double ratio,
-    bool rtl,
-    int charX,
-    int charWidth,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int beforeGlowRadius,
-    int afterGlowRadius,
-    bool forceAfter,
-    const QPainterPath *uprightPath = nullptr,
-    const QRectF *uprightRect = nullptr,
-    const QTransform *uprightTransform = nullptr,
-    const QString &glowScope = QStringLiteral("transformed_text")
-) {
-    const bool useCachedGlow = style.decorationKind == QStringLiteral("glow")
-        && uprightPath != nullptr
-        && uprightRect != nullptr
-        && uprightTransform != nullptr
-        && glowBitmapCacheEnabled();
-    auto blitGlow = [&](const PaintFillSpec &shadowFill, int radius) {
-        if (!useCachedGlow) {
-            return;
-        }
-        blitTransformedGlowLayerWithWidths(
-            painter,
-            *uprightPath,
-            shadowFill,
-            *uprightRect,
-            radius,
-            strokeWidth,
-            stroke2Width,
-            *uprightTransform,
-            glowScope
-        );
-    };
-
-    const double clampedRatio = forceAfter ? 1.0 : std::clamp(ratio, 0.0, 1.0);
-    if (clampedRatio <= 0.0) {
-        blitGlow(beforeShadowFill, beforeGlowRadius);
-        paintTextLayerStackWithWidths(
-            painter,
-            path,
-            rect,
-            baseFill,
-            beforeStrokeFill,
-            beforeStroke2Fill,
-            beforeShadowFill,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            beforeGlowRadius,
-            !useCachedGlow,
-            glowScope + QStringLiteral(":before")
-        );
-        return;
-    }
-    if (clampedRatio >= 1.0) {
-        blitGlow(afterShadowFill, afterGlowRadius);
-        paintTextLayerStackWithWidths(
-            painter,
-            path,
-            rect,
-            afterFill,
-            afterStrokeFill,
-            afterStroke2Fill,
-            afterShadowFill,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            afterGlowRadius,
-            !useCachedGlow,
-            glowScope + QStringLiteral(":after")
-        );
-        return;
-    }
-
-    blitGlow(beforeShadowFill, beforeGlowRadius);
-    paintTextLayerStackWithWidths(
-        painter,
-        path,
-        rect,
-        baseFill,
-        beforeStrokeFill,
-        beforeStroke2Fill,
-        beforeShadowFill,
-        style,
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        beforeGlowRadius,
-        !useCachedGlow,
-        glowScope + QStringLiteral(":before")
-    );
-
-    const double strokePad = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
-    const double clipX = rtl
-        ? charX + charWidth * (1.0 - clampedRatio)
-        : charX;
-    const double clipWidth = std::max(charWidth * clampedRatio + strokePad, 1.0);
-    painter.save();
-    painter.setClipRect(
-        QRectF(
-            clipX - strokePad,
-            rect.top() - strokePad,
-            clipWidth,
-            rect.height() + strokePad * 2.0
-        ),
-        Qt::IntersectClip
-    );
-    blitGlow(afterShadowFill, afterGlowRadius);
-    paintTextLayerStackWithWidths(
-        painter,
-        path,
-        rect,
-        afterFill,
-        afterStrokeFill,
-        afterStroke2Fill,
-        afterShadowFill,
-        style,
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        afterGlowRadius,
-        !useCachedGlow,
-        glowScope + QStringLiteral(":after")
-    );
-    painter.restore();
-}
-
-void paintTransformedTextStack(
-    QPainter &painter,
-    const QPainterPath &path,
-    const QRectF &rect,
-    const ResolvedStyle &style,
-    double ratio,
-    bool rtl,
-    int charX,
-    int charWidth,
-    bool forceAfter,
-    const QPainterPath *uprightPath = nullptr,
-    const QRectF *uprightRect = nullptr,
-    const QTransform *uprightTransform = nullptr,
-    const QString &glowScope = QStringLiteral("main_transformed")
-) {
-    paintTransformedTextStackWithFills(
-        painter,
-        path,
-        rect,
-        style.baseFill,
-        style.afterFill,
-        style.beforeStrokeFill,
-        style.afterStrokeFill,
-        style.beforeStroke2Fill,
-        style.afterStroke2Fill,
-        style.beforeShadowFill,
-        style.afterShadowFill,
-        style,
-        ratio,
-        rtl,
-        charX,
-        charWidth,
-        style.strokeWidthPx,
-        style.stroke2WidthPx,
-        style.shadowOffsetX,
-        style.shadowOffsetY,
-        glowRadius(style, false),
-        glowRadius(style, true),
-        forceAfter,
-        uprightPath,
-        uprightRect,
-        uprightTransform,
-        glowScope
-    );
-}
-
-void paintRubyTransformedStack(
-    QPainter &painter,
-    const QPainterPath &path,
-    const QRectF &rect,
-    const ResolvedStyle &style,
-    double ratio,
-    bool rtl,
-    bool forceAfter,
-    const QPainterPath *uprightPath = nullptr,
-    const QRectF *uprightRect = nullptr,
-    const QTransform *uprightTransform = nullptr,
-    const QString &glowScope = QStringLiteral("ruby_transformed")
-) {
-    const double scale = rubyScale(style);
-    const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
-    const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
-    const int shadowOffsetX = scaledSignedPx(style.shadowOffsetX, scale);
-    const int shadowOffsetY = scaledSignedPx(style.shadowOffsetY, scale);
-    paintTransformedTextStackWithFills(
-        painter,
-        path,
-        rect,
-        style.rubyBaseFill,
-        style.rubyAfterFill,
-        style.rubyBeforeStrokeFill,
-        style.rubyAfterStrokeFill,
-        style.rubyBeforeStroke2Fill,
-        style.rubyAfterStroke2Fill,
-        style.rubyBeforeShadowFill,
-        style.rubyAfterShadowFill,
-        style,
-        ratio,
-        rtl,
-        static_cast<int>(std::round(rect.left())),
-        std::max(1, static_cast<int>(std::round(rect.width()))),
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        scaledPx(glowRadius(style, false), scale),
-        scaledPx(glowRadius(style, true), scale),
-        forceAfter,
-        uprightPath,
-        uprightRect,
-        uprightTransform,
-        glowScope
-    );
-}
 
 void paintRubyUtopiaText(
     QPainter &painter,
