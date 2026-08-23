@@ -1112,6 +1112,8 @@ class LyricsPanel(DropPanel):
         self._page_drag_row: Optional[int] = None
         self._page_drag_start = QPoint()
         self._page_drag_active = False
+        self._header_drag: Optional[tuple[int, int]] = None
+        """内容|布局边界把手的进行中拖动：(按下 x, 按下时布局列宽)。"""
 
         # ---- qfluentwidgets TableWidget ----
         self._table = FluentTableWidget(self)
@@ -1166,6 +1168,9 @@ class LyricsPanel(DropPanel):
         # viewport 尺寸变化（拖 splitter / 缩放窗口 / 竖直滚动条出现）时重测列宽，
         # 是响应式的唯一可靠信号——resizeEvent 时机早于子布局落位。
         self._table.viewport().installEventFilter(self)
+        # 内容列（Stretch）右缘的把手 Qt 会映射给内容列自己，而 Stretch 列不可
+        # 拖，这条边界就成了死把手。接管它的把手区拖动，改为调整右邻的布局列。
+        self._table.horizontalHeader().viewport().installEventFilter(self)
 
         # 表格内只展示角色，不再叠加半透明 ComboBox 编辑器。单击角色列时
         # 在单元格下方弹出 Fluent RoundMenu，避免底层文字 / 色点透出重影。
@@ -1966,7 +1971,77 @@ class LyricsPanel(DropPanel):
                             global_pos=event.globalPosition().toPoint(),
                         )
                     return True
+        elif obj is self._table.horizontalHeader().viewport():
+            if self._handle_header_boundary_drag(event):
+                return True
         return super().eventFilter(obj, event)
+
+    def _layout_handle_hit(self, x: float) -> bool:
+        """x 是否落在 内容|布局 边界的把手区内（不窄于 Qt 原生把手宽）。"""
+        header = self._table.horizontalHeader()
+        if header.isSectionHidden(COL_LAYOUT):
+            return False
+        boundary = (
+            header.sectionViewportPosition(COL_CONTENT)
+            + header.sectionSize(COL_CONTENT)
+        )
+        grip = max(
+            int(
+                header.style().pixelMetric(
+                    QStyle.PixelMetric.PM_HeaderGripMargin, None, header
+                )
+            ),
+            4,
+        )
+        return boundary - grip <= x <= boundary + grip
+
+    def _handle_header_boundary_drag(self, event) -> bool:
+        """接管 内容|布局 边界把手的按下 / 拖动 / 松开与悬停光标。
+
+        QHeaderView 的 ``sectionHandleAt`` 非虚函数，无法覆写映射；在这里对
+        表头 viewport 过滤事件：把手区内的左键按下改由面板自己拖，宽度直接
+        写到布局列（Interactive），内容列作为 Stretch 自动吸收差值。
+        """
+        header = self._table.horizontalHeader()
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            x = int(event.position().x())
+            if self._layout_handle_hit(x):
+                self._header_drag = (x, header.sectionSize(COL_LAYOUT))
+                self._user_sized_columns.add(COL_LAYOUT)
+                return True
+        elif event.type() == QEvent.Type.MouseMove:
+            if self._header_drag is not None:
+                if not event.buttons() & Qt.MouseButton.LeftButton:
+                    self._header_drag = None
+                    return True
+                start_x, original = self._header_drag
+                # 边界右移 = 压窄布局列，左移 = 放宽；与"把手属于左列"的
+                # 直觉一致：拖的是布局列的左缘。
+                desired = original - (int(event.position().x()) - start_x)
+                header.resizeSection(
+                    COL_LAYOUT,
+                    min(
+                        max(desired, self._column_minimum_width(COL_LAYOUT)),
+                        self._column_maximum_width(COL_LAYOUT),
+                    ),
+                )
+                return True
+            if self._layout_handle_hit(event.position().x()):
+                header.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+            else:
+                header.viewport().unsetCursor()
+        elif (
+            event.type() == QEvent.Type.MouseButtonRelease
+            and self._header_drag is not None
+        ):
+            self._header_drag = None
+            return True
+        elif event.type() == QEvent.Type.Leave:
+            header.viewport().unsetCursor()
+        return False
 
     def _update_page_drag_preview(self, target_row: int, global_pos: QPoint) -> None:
         source_row = self._page_drag_row
