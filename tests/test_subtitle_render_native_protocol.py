@@ -267,6 +267,9 @@ def test_native_render_config_parser_exposes_only_prepared_config_contract():
     implementation_source = Path(
         "native/subtitle_renderer/src/protocol/render_config_parser.cpp"
     ).read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/qt_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -288,7 +291,8 @@ def test_native_render_config_parser_exposes_only_prepared_config_contract():
         assert private_rule in implementation_source
         assert private_rule not in main_source
         assert private_rule not in header_source
-    assert '#include "protocol/render_config_parser.h"' in main_source
+    assert '#include "protocol/render_config_parser.h"' not in main_source
+    assert '#include "../protocol/render_config_parser.h"' in frame_commands_source
     assert "backends/" not in implementation_source
     assert "runtime/" not in implementation_source
     assert "src/protocol/render_config_parser.cpp" in cmake_source
@@ -1016,6 +1020,9 @@ def test_native_qt_frame_diagnostics_json_hides_cache_serialization():
     implementation_source = Path(
         "native/subtitle_renderer/src/diagnostics/qt_frame_diagnostics_json.cpp"
     ).read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/qt_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -1032,7 +1039,11 @@ def test_native_qt_frame_diagnostics_json_hides_cache_serialization():
         assert field not in main_source
     assert "RenderRuntime" not in implementation_source
     assert "RenderConfig" not in implementation_source
-    assert '#include "diagnostics/qt_frame_diagnostics_json.h"' in main_source
+    assert '#include "diagnostics/qt_frame_diagnostics_json.h"' not in main_source
+    assert (
+        '#include "../diagnostics/qt_frame_diagnostics_json.h"'
+        in frame_commands_source
+    )
     assert "src/diagnostics/qt_frame_diagnostics_json.cpp" in cmake_source
     assert "src/diagnostics/qt_frame_diagnostics_json.h" in cmake_source
 
@@ -1068,6 +1079,36 @@ def test_native_gpu_diagnostics_json_hides_backend_serialization():
     assert '#include "diagnostics/gpu_diagnostics_json.h"' in main_source
     assert "src/diagnostics/gpu_diagnostics_json.cpp" in cmake_source
     assert "src/diagnostics/gpu_diagnostics_json.h" in cmake_source
+
+
+def test_native_qt_frame_commands_own_single_frame_request_flow():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/commands/qt_frame_commands.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/commands/qt_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for operation in (
+        "handleConfigure(",
+        "handleRenderFrame(",
+        "handleRenderFrameStats(",
+    ):
+        assert operation in header_source
+        assert f"QJsonObject {operation}" not in main_source
+    assert "output_path is required for native smoke render" in implementation_source
+    assert "output_path is required for native smoke render" not in main_source
+    assert "RenderRuntime" not in implementation_source
+    assert "Direct2D" not in implementation_source
+    assert '#include "commands/qt_frame_commands.h"' in main_source
+    assert "src/commands/qt_frame_commands.cpp" in cmake_source
+    assert "src/commands/qt_frame_commands.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():

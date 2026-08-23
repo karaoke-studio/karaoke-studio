@@ -12,12 +12,11 @@
 #include "backends/qt/qt_frame_renderer.h"
 #include "backends/qt/qt_render_cache.h"
 #include "backends/qt/qt_render_types.h"
+#include "commands/qt_frame_commands.h"
 #include "diagnostics/gpu_diagnostics_json.h"
-#include "diagnostics/qt_frame_diagnostics_json.h"
 #include "protocol/json_protocol.h"
 #include "protocol/json_value.h"
 #include "protocol/render_config.h"
-#include "protocol/render_config_parser.h"
 #include "runtime/checksum.h"
 #include "runtime/gpu_preview_worker_pool.h"
 #include "runtime/render_runtime.h"
@@ -42,7 +41,6 @@ using krok::subtitle::native::protocol::commandFromName;
 using krok::subtitle::native::protocol::intValue;
 using krok::subtitle::native::protocol::parseRequestLine;
 using krok::subtitle::native::protocol::parseIntArray;
-using krok::subtitle::native::protocol::parseRenderConfig;
 using krok::subtitle::native::protocol::RenderConfig;
 using krok::subtitle::native::protocol::response;
 using krok::subtitle::native::protocol::stringValue;
@@ -51,9 +49,6 @@ using krok::subtitle::native::legacy_qt::RenderResult;
 using krok::subtitle::native::legacy_qt::renderFrame;
 using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::gpuSceneFromConfig;
-using krok::subtitle::native::legacy_qt::clearGlowBitmapCache;
-using krok::subtitle::native::legacy_qt::clearLayoutCache;
-using krok::subtitle::native::legacy_qt::clearTextLayerCache;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheStats;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheSize;
 using krok::subtitle::native::legacy_qt::layoutCacheStats;
@@ -62,7 +57,9 @@ using krok::subtitle::native::legacy_qt::textLayerCacheStats;
 using krok::subtitle::native::legacy_qt::textLayerCacheSize;
 using krok::subtitle::native::diagnostics::appendGpuDiagnostics;
 using krok::subtitle::native::diagnostics::appendGpuFrameDiagnostics;
-using krok::subtitle::native::diagnostics::appendQtFrameDiagnostics;
+using krok::subtitle::native::commands::handleConfigure;
+using krok::subtitle::native::commands::handleRenderFrame;
+using krok::subtitle::native::commands::handleRenderFrameStats;
 using krok::subtitle::native::runtime::GpuPreviewWorkerPool;
 using krok::subtitle::native::runtime::GpuPreviewPoolCacheEntry;
 using krok::subtitle::native::runtime::RenderRuntime;
@@ -448,79 +445,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-QJsonObject handleConfigure(const QJsonObject &request, std::optional<RenderConfig> *config) {
-    QString error;
-    auto parsed = parseRenderConfig(
-        request.value(QStringLiteral("ir")).toObject(), &error
-    );
-    if (!parsed.has_value()) {
-        QJsonObject out = response(false, QStringLiteral("configure"));
-        out.insert(QStringLiteral("error"), error);
-        return out;
-    }
-    *config = parsed;
-    clearGlowBitmapCache();
-    clearTextLayerCache();
-    clearLayoutCache();
-    QJsonObject out = response(true, QStringLiteral("configured"));
-    out.insert(QStringLiteral("width"), parsed->width);
-    out.insert(QStringLiteral("height"), parsed->height);
-    out.insert(QStringLiteral("fps"), parsed->fps);
-    out.insert(QStringLiteral("dpr"), parsed->dpr);
-    out.insert(QStringLiteral("physical_width"), parsed->physicalWidth());
-    out.insert(QStringLiteral("physical_height"), parsed->physicalHeight());
-    out.insert(QStringLiteral("line_count"), static_cast<int>(parsed->lines.size()));
-    out.insert(QStringLiteral("ruby_count"), static_cast<int>(parsed->rubies.size()));
-    return out;
-}
-
-QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<RenderConfig> &config) {
-    if (!config.has_value()) {
-        QJsonObject out = response(false, QStringLiteral("render_frame"));
-        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
-        return out;
-    }
-
-    const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
-    const QString outputPath = stringValue(request, QStringLiteral("output_path"));
-    if (outputPath.isEmpty()) {
-        QJsonObject out = response(false, QStringLiteral("render_frame"));
-        out.insert(QStringLiteral("error"), QStringLiteral("output_path is required for native smoke render"));
-        return out;
-    }
-
-    QElapsedTimer timer;
-    timer.start();
-    RenderResult rendered = renderFrame(*config, tMs);
-    const double renderMs = static_cast<double>(timer.nsecsElapsed()) / 1000000.0;
-    QImage &image = rendered.image;
-    const bool saved = image.save(outputPath);
-    QJsonObject out = response(saved, QStringLiteral("frame_ready"));
-    out.insert(QStringLiteral("output_path"), outputPath);
-    appendQtFrameDiagnostics(&out, tMs, image, rendered.diagnostics, renderMs);
-    if (!saved) {
-        out.insert(QStringLiteral("error"), QStringLiteral("failed to save output image"));
-    }
-    return out;
-}
-
-QJsonObject handleRenderFrameStats(const QJsonObject &request, const std::optional<RenderConfig> &config) {
-    if (!config.has_value()) {
-        QJsonObject out = response(false, QStringLiteral("render_frame_stats"));
-        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
-        return out;
-    }
-
-    const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
-    QElapsedTimer timer;
-    timer.start();
-    RenderResult rendered = renderFrame(*config, tMs);
-    const double renderMs = static_cast<double>(timer.nsecsElapsed()) / 1000000.0;
-    QJsonObject out = response(true, QStringLiteral("frame_stats"));
-    appendQtFrameDiagnostics(&out, tMs, rendered.image, rendered.diagnostics, renderMs);
-    return out;
-}
 
 std::vector<int> rangeTimestampsFromRequest(const QJsonObject &request, const RenderConfig &config) {
     std::vector<int> timestamps = parseIntArray(request.value(QStringLiteral("t_ms")).toArray());
