@@ -749,6 +749,43 @@ def test_native_direct2d_opacity_layer_has_raii_contract():
     assert "src/backends/direct2d/d2d_opacity_layer.h" in cmake_source
 
 
+def test_native_direct2d_rendering_is_separate_lifecycle_stage():
+    public_header = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.h"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    configure_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_configure.cpp"
+    ).read_text(encoding="utf-8")
+    render_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ProbeResult renderFrame(" in public_header
+    assert "ProbeResult Direct2DGpuBackend::renderFrame(" in render_source
+    assert "ProbeResult Direct2DGpuBackend::renderFrameInternal(" in render_source
+    assert "NativePreviewResult Direct2DGpuBackend::presentFrame(" in render_source
+    assert "void Direct2DGpuBackend::closeNativePreview(" in render_source
+    for operation in (
+        "Direct2DGpuBackend::renderFrame(",
+        "Direct2DGpuBackend::renderFrameInternal(",
+        "Direct2DGpuBackend::presentFrame(",
+        "Direct2DGpuBackend::closeNativePreview(",
+    ):
+        assert operation not in backend_source
+        assert operation not in configure_source
+    assert "Direct2DGpuBackend::configure(" not in render_source
+    assert '#include "d2d_backend_internal.h"' in render_source
+    assert '#include "d2d_opacity_layer.h"' in render_source
+    assert '#include "../signal_state.h"' in render_source
+    assert "src/backends/direct2d/d2d_backend_render.cpp" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
