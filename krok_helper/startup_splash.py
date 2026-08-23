@@ -1,8 +1,17 @@
 """Lightweight Lin-K Lyrics startup splash window."""
 
+import random
+import time
 from pathlib import Path
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRectF, Qt
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QRectF,
+    QTimer,
+    Qt,
+    pyqtProperty,
+)
 from PyQt6.QtGui import (
     QColor,
     QCursor,
@@ -22,6 +31,46 @@ from krok_helper.config import APP_VERSION, APP_WINDOW_TITLE
 STARTUP_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "start.jpg"
 
 
+class _SplashProgressBar(QWidget):
+    """Rounded hairline progress bar painted over the splash background."""
+
+    _HEIGHT = 5
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(self._HEIGHT)
+        self._value = 0.0
+
+    def _get_value(self) -> float:
+        return self._value
+
+    def _set_value(self, value: float) -> None:
+        self._value = value
+        self.update()
+
+    value = pyqtProperty(float, _get_value, _set_value)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        radius = self._HEIGHT / 2
+        track = QRectF(0, 0, self.width(), self._HEIGHT)
+        clip = QPainterPath()
+        clip.addRoundedRect(track, radius, radius)
+        painter.setClipPath(clip)
+        painter.setBrush(QColor(255, 255, 255, 40))
+        painter.drawRect(track)
+
+        fraction = max(0.0, min(1.0, self._value / 100.0))
+        if fraction > 0.0:
+            painter.setBrush(QColor(255, 255, 255, 225))
+            fill = QRectF(0.0, 0.0, track.width() * fraction, self._HEIGHT)
+            painter.drawRect(fill)
+
+
 def select_startup_screen() -> QScreen | None:
     """Return the screen that should contain the startup splash."""
 
@@ -33,6 +82,15 @@ class StartupSplashWindow(QWidget):
 
     _SIDE = 400
     _RADIUS = 24
+    #: 里程碑之间数字持续爬行：100ms 一步、随机步长，渐近逼近
+    #: 「最近锚点 + _CREEP_HEADROOM」，且永不超过 _CREEP_CEILING。
+    #: 主线程被长初始化（import / 大页面构造）卡住时 QTimer 冻结，恢复后
+    #: 按墙钟一次补齐欠下的步数（封顶 _CREEP_MAX_CATCHUP_TICKS），数字
+    #: 看起来一直在动；要真正逐帧刷新需把初始化挪出主线程。
+    _CREEP_INTERVAL_MS = 100
+    _CREEP_HEADROOM = 8.0
+    _CREEP_CEILING = 99.4
+    _CREEP_MAX_CATCHUP_TICKS = 40
 
     def __init__(self) -> None:
         super().__init__()
@@ -46,6 +104,13 @@ class StartupSplashWindow(QWidget):
             self.background_path,
             self.target_screen,
         )
+        self._stage_text = "正在加载"
+        self._anchor = 0.0
+        self._last_creep_at = time.monotonic()
+        self._creep_timer = QTimer(self)
+        self._creep_timer.setInterval(self._CREEP_INTERVAL_MS)
+        self._creep_timer.timeout.connect(self._creep_tick)
+        self._creep_timer.start()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 0, 18, 22)
@@ -78,8 +143,61 @@ class StartupSplashWindow(QWidget):
             "color: rgba(255, 255, 255, 0.82); font-size: 12px; background: transparent;"
         )
         layout.addWidget(status)
+        self.status_label = status
+        layout.addSpacing(12)
+
+        # 进度条在首次 set_progress 前保持隐藏，兼容只想要静态 splash 的调用方。
+        self.progress_bar = _SplashProgressBar(self)
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
 
         self._center_on_target_screen(self.target_screen)
+
+    def set_progress(self, percent: int | float, stage: str | None = None) -> None:
+        """锚定一个进度里程碑并更新阶段文案。
+
+        ``stage`` 为 None 时沿用上一次的阶段文案；percent 会被夹到 0-100。
+        锚点之间由 :meth:`_creep_tick` 以随机步长持续爬行，状态行百分比
+        带一位小数。锚定值即时落位且只增不减（爬行已超过新锚点时保持
+        当前显示值）；调用方随后需让出主线程
+        （``QApplication.processEvents()``）才会真正重绘。
+        """
+
+        if stage is not None:
+            self._stage_text = stage
+        clamped = max(0.0, min(100.0, float(percent)))
+        self._anchor = max(self._anchor, clamped)
+        if clamped >= 100.0:
+            self._creep_timer.stop()
+        if not self.progress_bar.isVisible():
+            self.progress_bar.show()
+        started = not self.progress_bar.isHidden()
+        target = max(clamped, self.progress_bar.value) if started else clamped
+        self._display(target)
+
+    def _display(self, value: float) -> None:
+        """把显示值写进进度条和状态行（一位小数）。"""
+
+        self.progress_bar._set_value(value)
+        self.status_label.setText(f"{self._stage_text}... ({value:.1f}%)")
+
+    def _creep_tick(self) -> None:
+        now = time.monotonic()
+        elapsed = now - self._last_creep_at
+        self._last_creep_at = now
+        ticks = min(
+            self._CREEP_MAX_CATCHUP_TICKS,
+            max(1, int(elapsed * 1000.0 / self._CREEP_INTERVAL_MS)),
+        )
+        ceiling = min(self._anchor + self._CREEP_HEADROOM, self._CREEP_CEILING)
+        for _ in range(ticks):
+            display = self.progress_bar.value
+            if display >= ceiling:
+                return
+            # 随机步长 + 越接近上限越慢：渐近逼近，不会撞顶，也不会在长启动里虚标过头。
+            room = ceiling - display
+            step = random.uniform(0.05, 0.45) * min(1.0, room / 4.0)
+            self._display(min(ceiling, display + step))
 
     def _load_background(self, path: Path, screen: QScreen | None) -> QPixmap:
         source = QPixmap(str(path))
@@ -132,6 +250,7 @@ class StartupSplashWindow(QWidget):
     def finish(self) -> None:
         """Fade out and close after the main window becomes visible."""
 
+        self._creep_timer.stop()
         self._fade_animation = QPropertyAnimation(self, b"windowOpacity", self)
         self._fade_animation.setDuration(300)
         self._fade_animation.setStartValue(1.0)

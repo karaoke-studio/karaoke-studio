@@ -341,8 +341,12 @@ class KrokHelperQtApp(QMainWindow):
     ``AlignmentHost`` / ``LyricsSearchHost`` / ``HiResHost`` / ``SettingsHost``，
     页面只能透过这些接口回头找外壳。
     """
-    def __init__(self) -> None:
+    def __init__(self, startup_progress: Callable[[int, str], None] | None = None) -> None:
         super().__init__()
+        # 启动进度回调（cli.run_gui 注入，驱动 splash 的「阶段 + 百分比」展示）。
+        # 必须在任何里程碑上报之前就位。
+        self._startup_progress = startup_progress
+        self._report_startup(32, "正在初始化工作台")
         self.settings = load_app_settings()
         # 取走「上次 load 是否检测到 settings.json 损坏」的状态。要在 super().__init__
         # 之后、`self.show()` 之前留住；真正弹窗在主窗口显示后再触发，避免和 splash
@@ -391,13 +395,26 @@ class KrokHelperQtApp(QMainWindow):
 
         self._apply_styles()
         self._build_ui()
+        self._report_startup(95, "正在应用用户设置")
         self._load_settings_into_ui()
+        self._report_startup(97, "正在绑定快捷键")
         self._bind_shortcuts()
 
         QTimer.singleShot(800, self._check_lyrics_timing_crash_recovery)
         QTimer.singleShot(1200, self._check_subtitle_render_crash_recovery)
         QTimer.singleShot(1500, self._notify_settings_corruption_if_any)
         QTimer.singleShot(2500, self._check_for_workbench_update_on_startup)
+
+    def _report_startup(self, percent: int, stage: str) -> None:
+        """向启动 splash 上报进度；回调失败绝不阻塞工作台启动。"""
+
+        callback = self._startup_progress
+        if callback is None:
+            return
+        try:
+            callback(percent, stage)
+        except Exception:
+            logging.getLogger(__name__).debug("报告启动进度失败", exc_info=True)
 
 
     # ── HiResHost 实现 ───────────────────────────────────────────
@@ -645,6 +662,7 @@ class KrokHelperQtApp(QMainWindow):
         self.setStyleSheet(build_app_qss())
 
     def _build_ui(self) -> None:
+        self._report_startup(34, "正在构建工作台框架")
         central = QWidget()
         central.setObjectName("AppRoot")
         shell = QVBoxLayout(central)
@@ -696,11 +714,14 @@ class KrokHelperQtApp(QMainWindow):
         self._page_stack_container_layout.setSpacing(0)
         self._page_stack_container_layout.addWidget(self.page_stack)
 
+        self._report_startup(38, "正在加载视频下载模块")
         self.video_download_page = VideoDownloadPage(self.settings, self._save_all_settings, self)
+        self._report_startup(42, "正在加载波形对齐模块")
         self.align_page = AlignmentPage(host=self, parent=self.page_stack)
         # 第 2 步「音视频处理」= Pivot 容器（波形对齐 / 音频分离），模块 ID 不变。
         from krok_helper.audio_processing import AudioProcessingPage, AudioSeparationPage
 
+        self._report_startup(46, "正在加载音频处理模块")
         self.audio_separation_page = AudioSeparationPage(
             self.settings,
             self._save_all_settings,
@@ -714,6 +735,7 @@ class KrokHelperQtApp(QMainWindow):
             self._save_all_settings,
             parent=self.page_stack,
         )
+        self._report_startup(50, "正在加载歌词检索模块")
         self.lyrics_page = LyricsSearchPage(host=self, parent=self.page_stack)
         self._sync_lyrics_timing_host_paths()
         ensure_sug_src_path()
@@ -722,10 +744,13 @@ class KrokHelperQtApp(QMainWindow):
 
         lyrics_timing_settings = KrokHelperSettingsBridge(self.settings, self._save_all_settings)
         self.lyrics_timing_settings_bridge = lyrics_timing_settings
+        self._report_startup(54, "正在初始化 AI 打轴服务")
+        ai_timing_host = self._build_ai_timing_host()
+        self._report_startup(58, "正在加载歌词打轴模块")
         self.lyrics_timing_page = LyricsTimingMainWindow.for_embedding(
             parent=self.page_stack,
             settings_provider=lyrics_timing_settings,
-            ai_timing_host=self._build_ai_timing_host(),
+            ai_timing_host=ai_timing_host,
         )
         # EMBEDDING §8：SUG 字体缓存后台预热（幂等）。embedded 构造路径不会
         # 自行预热，宿主补调一次，把字体枚举成本从首次打开字体选择器挪到
@@ -768,6 +793,7 @@ class KrokHelperQtApp(QMainWindow):
             KrokHelperSubtitleRenderSettingsBridge,
         )
 
+        self._report_startup(70, "正在加载字幕渲染模块")
         self.subtitle_render_settings_bridge = KrokHelperSubtitleRenderSettingsBridge(
             self.settings, self._save_all_settings
         )
@@ -785,6 +811,7 @@ class KrokHelperQtApp(QMainWindow):
             )
         except Exception:
             pass
+        self._report_startup(88, "正在加载 Hi-Res 混流模块")
         self.hires_page = HiResPage(host=self, parent=self.page_stack)
         self.module_pages = {
             WORKFLOW_VIDEO_DOWNLOAD: self.video_download_page,
@@ -794,6 +821,7 @@ class KrokHelperQtApp(QMainWindow):
             WORKFLOW_SUBTITLE_RENDER: self.subtitle_render_page,
             WORKFLOW_HIRES_MIX: self.hires_page,
         }
+        self._report_startup(92, "正在组装工作流页面")
         self.page_stack.addWidget(self.video_download_page)
         self.page_stack.addWidget(self.audio_processing_page)
         self.page_stack.addWidget(self.lyrics_page)

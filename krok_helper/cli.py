@@ -112,7 +112,14 @@ def run_gui(args: argparse.Namespace) -> int:
     qt_app.processEvents()
     trace("gui.splash_shown")
 
+    def report_startup_progress(percent: int, stage: str) -> None:
+        # progress 动画和文本重绘都依赖主线程让出，构造期没有事件循环，
+        # 必须在这里 processEvents 才能真正画出来。
+        splash.set_progress(percent, stage)
+        qt_app.processEvents()
+
     try:
+        report_startup_progress(4, "正在应用界面主题")
         # 在 ``MainWindow()`` 构造**之前**就把主题 settle 到目标模式 ——
         # 这样窗口首次绘制即正确颜色，避免"浅色闪一帧"。
         # theme_workbench 必须在 QApplication 之后 import（SUG theme 单例
@@ -124,6 +131,7 @@ def run_gui(args: argparse.Namespace) -> int:
 
         # gui_qt is intentionally imported only after the splash is visible;
         # importing it initializes most UI dependencies and can take noticeable time.
+        report_startup_progress(12, "正在加载界面框架")
         from krok_helper.gui_qt import (
             KrokHelperQtApp,
             _install_global_excepthook,
@@ -136,7 +144,8 @@ def run_gui(args: argparse.Namespace) -> int:
         app_icon = load_taskbar_icon()
         if app_icon is not None:
             qt_app.setWindowIcon(app_icon)
-        window = KrokHelperQtApp()
+        # 构造起点的「正在初始化工作台 (32%)」由 KrokHelperQtApp 自身上报。
+        window = KrokHelperQtApp(startup_progress=report_startup_progress)
         trace("gui.main_window_built")
         if args.video:
             window.set_video_path(args.video.expanduser())
@@ -154,6 +163,7 @@ def run_gui(args: argparse.Namespace) -> int:
                 args.off_name_template or DEFAULT_OFF_NAME_TEMPLATE,
             )
         window.show()
+        report_startup_progress(100, "启动完成")
         trace("gui.main_window_shown")
         log.info("主窗口已显示，进入 Qt 事件循环")
         splash.finish()
