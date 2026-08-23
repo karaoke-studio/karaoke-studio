@@ -30,6 +30,7 @@ add_executable(krok_subtitle_renderer
     src/main.cpp
     src/protocol/json_protocol.cpp
     src/protocol/json_protocol.h
+    src/protocol/render_config.h
     src/runtime/render_job_runtime.cpp
     src/runtime/render_job_runtime.h
     src/runtime/shared_frame_ring.cpp
