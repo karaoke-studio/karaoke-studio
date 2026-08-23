@@ -556,6 +556,44 @@ def test_native_direct2d_font_fallback_has_narrow_contract():
     assert "src/backends/direct2d/d2d_font_fallback.h" in cmake_source
 
 
+def test_native_direct2d_paint_resources_hide_wic_and_brush_construction():
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_paint_resources.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_paint_resources.cpp"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "createPaintBrush(",
+        "rubyPaintBounds(",
+        "updatePaintBrush(",
+        "loadWicBitmap(",
+    ):
+        assert contract in header_source
+        assert contract in implementation_source
+    for private_detail in (
+        "IWICImagingFactory",
+        "IWICBitmapDecoder",
+        "IWICFormatConverter",
+        "CreateGradientStopCollection",
+        "CreateLinearGradientBrush",
+        "CreateBitmapBrush",
+    ):
+        assert private_detail in implementation_source
+        assert private_detail not in header_source
+        assert private_detail not in backend_source
+    assert '#include "d2d_paint_resources.h"' in backend_source
+    assert "src/backends/direct2d/d2d_paint_resources.cpp" in cmake_source
+    assert "src/backends/direct2d/d2d_paint_resources.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
