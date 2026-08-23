@@ -663,6 +663,39 @@ def test_native_direct2d_runtime_support_is_shared_low_level_contract():
     assert "src/backends/direct2d/d2d_runtime_support.h" in cmake_source
 
 
+def test_native_direct2d_backend_state_is_internal_only():
+    public_header = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.h"
+    ).read_text(encoding="utf-8")
+    internal_header = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_internal.h"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "struct Impl;" in public_header
+    assert "struct Direct2DGpuBackend::Impl {" in internal_header
+    assert "struct Direct2DGpuBackend::Impl {" not in public_header
+    assert "struct Direct2DGpuBackend::Impl {" not in backend_source
+    for internal_state in (
+        "struct CachedChar",
+        "struct CachedRuby",
+        "struct CachedLine",
+        "struct CachedBrush",
+        "struct RealizationTask",
+        "glowScratchPool",
+    ):
+        assert internal_state in internal_header
+        assert internal_state not in public_header
+    assert '#include "d2d_backend_internal.h"' not in public_header
+    assert '#include "d2d_backend_internal.h"' in backend_source
+    assert "src/backends/direct2d/d2d_backend_internal.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"

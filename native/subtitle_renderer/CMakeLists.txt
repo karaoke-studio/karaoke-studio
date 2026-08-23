@@ -123,6 +123,7 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_utopia_painter.h
     src/backends/direct2d/d2d_backend.cpp
     src/backends/direct2d/d2d_backend.h
+    src/backends/direct2d/d2d_backend_internal.h
     src/backends/direct2d/d2d_font_fallback.cpp
     src/backends/direct2d/d2d_font_fallback.h
     src/backends/direct2d/d2d_geometry_resources.cpp
