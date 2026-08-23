@@ -382,6 +382,49 @@ def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     assert "src/backends/qt/qt_display_plan.h" in cmake_source
 
 
+def test_native_qt_character_animation_hides_utopia_rules():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_character_animation.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_character_animation.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    public_declarations = (
+        "int charEndMs(",
+        "double progressRatio(",
+        "int utopiaFollowingDoneTime(",
+        "std::optional<LineCharTransition> lineCharTransitionContext(",
+        "QTransform characterTransform(",
+        "AnimationState transitionCharState(",
+    )
+    for declaration in public_declarations:
+        assert declaration in header_source
+        assert declaration not in main_source
+    for private_rule in (
+        "lineDisplayEndMs(",
+        "nextValidCharIndex(",
+        "isUtopiaWiping(",
+        "utopiaWipeScale(",
+        "utopiaKaraokeEnabled(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert '#include "qt_display_plan.h"' in implementation_source
+    assert "QPainter" not in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_character_animation.h"' in main_source
+    assert "src/backends/qt/qt_character_animation.cpp" in cmake_source
+    assert "src/backends/qt/qt_character_animation.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
