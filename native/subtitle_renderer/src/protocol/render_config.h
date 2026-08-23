@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../backends/render_backend.h"
+#include "../model/render_types.h"
 
 #include <QtCore/QHash>
 #include <QtCore/QJsonObject>

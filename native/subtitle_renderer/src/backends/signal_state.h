@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render_backend.h"
+#include "../model/render_types.h"
 
 namespace krok::subtitle::native {
 

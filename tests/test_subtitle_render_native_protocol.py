@@ -803,6 +803,49 @@ def test_native_direct2d_rendering_is_separate_lifecycle_stage():
         assert stage_dependency not in backend_source
 
 
+def test_native_render_model_breaks_protocol_backend_dependency_cycle():
+    model_source = Path(
+        "native/subtitle_renderer/src/model/render_types.h"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/render_backend.h"
+    ).read_text(encoding="utf-8")
+    config_source = Path(
+        "native/subtitle_renderer/src/protocol/render_config.h"
+    ).read_text(encoding="utf-8")
+    signal_source = Path(
+        "native/subtitle_renderer/src/backends/signal_state.h"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "struct BackendCaps",
+        "struct ProbeResult",
+        "struct TextStyle",
+        "struct RenderScene",
+        "struct BackendDiagnostics",
+        "class BackendError",
+    ):
+        assert contract in model_source
+        assert contract not in backend_source
+    assert "class RenderBackend" in backend_source
+    assert '#include "../model/render_types.h"' in backend_source
+    assert '#include "../model/render_types.h"' in config_source
+    assert '#include "../model/render_types.h"' in signal_source
+    assert "backends/" not in config_source
+    for forbidden_dependency in (
+        "commands/",
+        "diagnostics/",
+        "protocol/",
+        "runtime/",
+        "backends/",
+    ):
+        assert forbidden_dependency not in model_source
+    assert "src/model/render_types.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
