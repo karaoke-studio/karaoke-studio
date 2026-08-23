@@ -35,6 +35,7 @@ htmlcov/
 .aider*
 .reverse/
 .tools/
+.zcode/
 
 # Build artifacts
 build/
