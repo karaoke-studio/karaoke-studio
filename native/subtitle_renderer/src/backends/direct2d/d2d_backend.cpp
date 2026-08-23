@@ -2,6 +2,7 @@
 #include "d2d_backend_internal.h"
 #include "d2d_font_fallback.h"
 #include "d2d_geometry_resources.h"
+#include "d2d_opacity_layer.h"
 #include "d2d_paint_resources.h"
 #include "d2d_runtime_support.h"
 #include "../signal_state.h"
@@ -42,6 +43,7 @@ using direct2d::elapsedMs;
 using direct2d::environmentFlagEnabled;
 using direct2d::loadWicBitmap;
 using direct2d::outsideStrokeGeometry;
+using direct2d::OpacityLayerScope;
 using direct2d::paintNeedsBodyProtection;
 using direct2d::rectAreaPx;
 using direct2d::rubyPaintBounds;
@@ -51,79 +53,6 @@ using direct2d::updatePaintBrush;
 using direct2d::validGlyphIndices;
 using direct2d::vectorGlyphGeometry;
 using direct2d::widenedStrokeGeometry;
-
-// Mirrors N3's LineFade -> SubtitleAction.PushOpacityLayer: everything drawn
-// inside the layer is composed at full opacity and the finished result is
-// blended once.  Multiplying the opacity into every brush instead applies it to
-// each draw call, so a glyph body stops covering its own edge, glow and shadow;
-// those lower layers bleed through and the line looks like it changes colour
-// mid-animation.
-//
-// A Direct2D layer cannot survive SetTarget/EndDraw, and the line loop renders
-// glow into intermediate bitmaps first, so ``prepare`` (CreateLayer, which is
-// target independent) is decided up front while ``push`` waits until the final
-// target's BeginDraw and ``pop`` runs before its EndDraw.  N3 avoids the split
-// by handing its glow a second device context (DrawLineInfoBefore's workBitmap).
-class OpacityLayerScope {
-public:
-    OpacityLayerScope() = default;
-    OpacityLayerScope(const OpacityLayerScope &) = delete;
-    OpacityLayerScope &operator=(const OpacityLayerScope &) = delete;
-
-    ~OpacityLayerScope() {
-        pop();
-    }
-
-    bool prepare(ID2D1DeviceContext *context, float opacity) {
-        if (context == nullptr) {
-            return false;
-        }
-        Microsoft::WRL::ComPtr<ID2D1Layer> layer;
-        if (FAILED(context->CreateLayer(nullptr, &layer)) || !layer) {
-            return false;
-        }
-        context_ = context;
-        layer_ = std::move(layer);
-        opacity_ = opacity;
-        return true;
-    }
-
-    void push() {
-        if (context_ == nullptr || pushed_) {
-            return;
-        }
-        // InfiniteRect keeps the bounds independent of whatever transform is
-        // current; N3 can use the movie rect because its context is identity.
-        context_->PushLayer(
-            D2D1::LayerParameters(
-                D2D1::InfiniteRect(),
-                nullptr,
-                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                D2D1::IdentityMatrix(),
-                opacity_
-            ),
-            layer_.Get()
-        );
-        pushed_ = true;
-    }
-
-    void pop() {
-        if (context_ != nullptr && pushed_) {
-            context_->PopLayer();
-            pushed_ = false;
-        }
-    }
-
-    bool prepared() const {
-        return context_ != nullptr && !pushed_;
-    }
-
-private:
-    ID2D1DeviceContext *context_ = nullptr;
-    Microsoft::WRL::ComPtr<ID2D1Layer> layer_;
-    float opacity_ = 1.0f;
-    bool pushed_ = false;
-};
 
 }  // namespace
 

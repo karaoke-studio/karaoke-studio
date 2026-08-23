@@ -129,6 +129,8 @@ add_executable(krok_subtitle_renderer
     src/backends/direct2d/d2d_font_fallback.h
     src/backends/direct2d/d2d_geometry_resources.cpp
     src/backends/direct2d/d2d_geometry_resources.h
+    src/backends/direct2d/d2d_opacity_layer.cpp
+    src/backends/direct2d/d2d_opacity_layer.h
     src/backends/direct2d/d2d_paint_resources.cpp
     src/backends/direct2d/d2d_paint_resources.h
     src/backends/direct2d/d2d_runtime_support.cpp

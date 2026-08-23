@@ -725,6 +725,30 @@ def test_native_direct2d_configuration_is_separate_lifecycle_stage():
     assert "src/backends/direct2d/d2d_backend_configure.cpp" in cmake_source
 
 
+def test_native_direct2d_opacity_layer_has_raii_contract():
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_opacity_layer.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_opacity_layer.cpp"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class OpacityLayerScope" in header_source
+    for operation in ("prepare(", "push()", "pop()", "prepared()"):
+        assert operation in header_source
+        assert f"OpacityLayerScope::{operation}" in implementation_source
+    assert "class OpacityLayerScope" not in backend_source
+    assert '#include "d2d_opacity_layer.h"' in backend_source
+    assert "src/backends/direct2d/d2d_opacity_layer.cpp" in cmake_source
+    assert "src/backends/direct2d/d2d_opacity_layer.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
