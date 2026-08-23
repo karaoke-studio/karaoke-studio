@@ -6,11 +6,44 @@
 #include <QtCore/QString>
 
 #include <algorithm>
+#include <deque>
 #include <iostream>
 #include <memory>
 #include <mutex>
 
 namespace krok::subtitle::native::runtime {
+
+struct GpuPreviewPoolCacheEntry {
+    QString key;
+    std::unique_ptr<GpuPreviewWorkerPool> pool;
+};
+
+class GpuRuntimeState {
+public:
+    std::mutex backendMutex;
+    std::unique_ptr<RenderBackend> hardwareBackend;
+    std::unique_ptr<RenderBackend> warpBackend;
+    bool hardwareConfigured = false;
+    bool warpConfigured = false;
+    std::unique_ptr<GpuPreviewWorkerPool> hardwarePreviewPool;
+    std::unique_ptr<GpuPreviewWorkerPool> warpPreviewPool;
+    QString hardwarePreviewPoolKey;
+    QString warpPreviewPoolKey;
+    std::deque<GpuPreviewPoolCacheEntry> hardwarePreviewPoolCache;
+    std::deque<GpuPreviewPoolCacheEntry> warpPreviewPoolCache;
+};
+
+class GpuBackendRuntimeAccess {
+public:
+    static GpuRuntimeState *state(RenderRuntime *runtime) {
+        return runtime == nullptr ? nullptr : runtime->gpu_.get();
+    }
+};
+
+RenderRuntime::RenderRuntime()
+    : gpu_(std::make_unique<GpuRuntimeState>()) {}
+
+RenderRuntime::~RenderRuntime() = default;
 
 RenderBackend *ensureGpuBackend(
     RenderRuntime *runtime,
@@ -23,8 +56,9 @@ RenderBackend *ensureGpuBackend(
         }
         return nullptr;
     }
-    std::lock_guard<std::mutex> lock(runtime->gpuBackendMutex);
-    auto &backend = forceWarp ? runtime->warpGpuBackend : runtime->hardwareGpuBackend;
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
+    std::lock_guard<std::mutex> lock(state->backendMutex);
+    auto &backend = forceWarp ? state->warpBackend : state->hardwareBackend;
     if (backend == nullptr) {
         try {
             backend = std::make_unique<krok::subtitle::native::Direct2DGpuBackend>(forceWarp);
@@ -50,9 +84,10 @@ GpuPreviewWorkerPool *gpuPreviewPool(
     if (runtime == nullptr) {
         return nullptr;
     }
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
     return forceWarp
-        ? runtime->warpGpuPreviewPool.get()
-        : runtime->hardwareGpuPreviewPool.get();
+        ? state->warpPreviewPool.get()
+        : state->hardwarePreviewPool.get();
 }
 
 bool gpuConfigured(
@@ -62,9 +97,8 @@ bool gpuConfigured(
     if (runtime == nullptr) {
         return false;
     }
-    return forceWarp
-        ? runtime->warpGpuConfigured
-        : runtime->hardwareGpuConfigured;
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
+    return forceWarp ? state->warpConfigured : state->hardwareConfigured;
 }
 
 void markGpuConfigured(
@@ -74,10 +108,11 @@ void markGpuConfigured(
     if (runtime == nullptr) {
         return;
     }
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
     if (forceWarp) {
-        runtime->warpGpuConfigured = true;
+        state->warpConfigured = true;
     } else {
-        runtime->hardwareGpuConfigured = true;
+        state->hardwareConfigured = true;
     }
 }
 
@@ -85,8 +120,9 @@ void clearGpuPreviewPoolCaches(RenderRuntime *runtime) {
     if (runtime == nullptr) {
         return;
     }
-    runtime->hardwareGpuPreviewPoolCache.clear();
-    runtime->warpGpuPreviewPoolCache.clear();
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
+    state->hardwarePreviewPoolCache.clear();
+    state->warpPreviewPoolCache.clear();
 }
 
 void resetGpuPreviewPool(
@@ -96,12 +132,13 @@ void resetGpuPreviewPool(
     if (runtime == nullptr) {
         return;
     }
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
     if (forceWarp) {
-        runtime->warpGpuPreviewPool.reset();
-        runtime->warpGpuPreviewPoolKey.clear();
+        state->warpPreviewPool.reset();
+        state->warpPreviewPoolKey.clear();
     } else {
-        runtime->hardwareGpuPreviewPool.reset();
-        runtime->hardwareGpuPreviewPoolKey.clear();
+        state->hardwarePreviewPool.reset();
+        state->hardwarePreviewPoolKey.clear();
     }
 }
 
@@ -118,9 +155,10 @@ GpuPreviewPoolConfiguration configureGpuPreviewPool(
     if (runtime == nullptr) {
         return {};
     }
-    auto &pool = runtime->hardwareGpuPreviewPool;
-    auto &poolKey = runtime->hardwareGpuPreviewPoolKey;
-    auto &poolCache = runtime->hardwareGpuPreviewPoolCache;
+    auto *state = GpuBackendRuntimeAccess::state(runtime);
+    auto &pool = state->hardwarePreviewPool;
+    auto &poolKey = state->hardwarePreviewPoolKey;
+    auto &poolCache = state->hardwarePreviewPoolCache;
     const QString targetKey = QStringLiteral("%1x%2@%3:w%4:s%5:r%6")
         .arg(scene.width)
         .arg(scene.height)

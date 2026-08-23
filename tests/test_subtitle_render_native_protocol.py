@@ -330,6 +330,9 @@ def test_native_render_runtime_state_has_single_runtime_owner():
     runtime_implementation = Path(
         "native/subtitle_renderer/src/runtime/render_runtime.cpp"
     ).read_text(encoding="utf-8")
+    gpu_runtime_implementation = Path(
+        "native/subtitle_renderer/src/runtime/gpu_backend_runtime.cpp"
+    ).read_text(encoding="utf-8")
     router_source = Path(
         "native/subtitle_renderer/src/commands/command_router.cpp"
     ).read_text(encoding="utf-8")
@@ -337,18 +340,25 @@ def test_native_render_runtime_state_has_single_runtime_owner():
         encoding="utf-8"
     )
 
-    assert "struct GpuPreviewPoolCacheEntry {" in runtime_source
+    assert "class GpuRuntimeState;" in runtime_source
+    assert "struct GpuPreviewPoolCacheEntry {" in gpu_runtime_implementation
     assert "class RenderRuntime {" in runtime_source
     assert "struct GpuPreviewPoolCacheEntry {" not in main_source
+    assert "struct GpuPreviewPoolCacheEntry {" not in runtime_source
     assert "class RenderRuntime {" not in main_source
     for owned_state in (
         "RenderJobRuntime jobs",
         "SharedFrameRingBuffer sharedFrames",
-        "hardwareGpuBackend",
-        "hardwareGpuPreviewPool",
-        "hardwareGpuPreviewPoolCache",
+        "std::unique_ptr<GpuRuntimeState> gpu_",
     ):
         assert owned_state in runtime_source
+    for hidden_gpu_state in (
+        "hardwareBackend",
+        "hardwarePreviewPool",
+        "hardwarePreviewPoolCache",
+    ):
+        assert hidden_gpu_state in gpu_runtime_implementation
+        assert hidden_gpu_state not in runtime_source
     for operation in (
         "generationCancelled",
         "cancelGeneration",
@@ -422,26 +432,30 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
         assert direct_state not in frame_commands_source
         assert direct_state not in lifecycle_commands_source
     for pool_transaction_detail in (
-        "hardwareGpuPreviewPool",
-        "hardwareGpuPreviewPoolKey",
-        "hardwareGpuPreviewPoolCache",
+        "hardwarePreviewPool",
+        "hardwarePreviewPoolKey",
+        "hardwarePreviewPoolCache",
         "poolCache.push_front",
         "pool->pause()",
         "pool->resume(",
     ):
         assert pool_transaction_detail in implementation_source
         assert pool_transaction_detail not in lifecycle_commands_source
-    private_section = render_runtime_header.split("private:", 1)[1]
-    for private_state in (
-        "gpuBackendMutex",
-        "hardwareGpuBackend",
-        "warpGpuBackend",
-        "hardwareGpuConfigured",
-        "warpGpuConfigured",
-        "hardwareGpuPreviewPool",
-        "warpGpuPreviewPool",
+    assert "class GpuRuntimeState;" in render_runtime_header
+    assert "std::unique_ptr<GpuRuntimeState> gpu_;" in render_runtime_header
+    for hidden_state in (
+        "backendMutex",
+        "hardwareBackend",
+        "warpBackend",
+        "hardwareConfigured",
+        "warpConfigured",
+        "hardwarePreviewPool",
+        "warpPreviewPool",
+        "hardwarePreviewPoolCache",
+        "warpPreviewPoolCache",
     ):
-        assert private_state in private_section
+        assert hidden_state in implementation_source
+        assert hidden_state not in render_runtime_header
     assert '#include "runtime/gpu_backend_runtime.h"' not in main_source
     assert '#include "../runtime/gpu_backend_runtime.h"' in frame_commands_source
     assert "src/runtime/gpu_backend_runtime.cpp" in cmake_source
@@ -1425,8 +1439,8 @@ def test_native_gpu_lifecycle_commands_own_configuration_state():
         assert f"QJsonObject {operation}" not in main_source
         assert f"QJsonObject {operation}" in implementation_source
     for runtime_detail in (
-        "hardwareGpuPreviewPoolCache",
-        "warpGpuPreviewPoolCache",
+        "hardwarePreviewPoolCache",
+        "warpPreviewPoolCache",
     ):
         assert runtime_detail in runtime_source
         assert runtime_detail not in header_source
