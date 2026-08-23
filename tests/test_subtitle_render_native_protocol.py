@@ -861,6 +861,38 @@ def test_native_qt_ruby_layout_depends_only_on_timing_and_render_types():
     assert "src/backends/qt/qt_ruby_layout.h" in cmake_source
 
 
+def test_native_qt_ruby_diagnostics_is_a_read_only_projection_boundary():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_ruby_diagnostics.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_ruby_diagnostics.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "std::vector<RubyDiagnostics> rubyDiagnosticsForLine(" in header_source
+    assert "std::vector<RubyDiagnostics> rubyDiagnosticsForLine(" not in main_source
+    for dependency in (
+        '#include "qt_character_animation.h"',
+        '#include "qt_font_factory.h"',
+        '#include "qt_ruby_layout.h"',
+        '#include "qt_ruby_target.h"',
+        '#include "qt_ruby_timing.h"',
+        '#include "qt_style_metrics.h"',
+    ):
+        assert dependency in implementation_source
+    assert "QPainter &" not in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_ruby_diagnostics.h"' in main_source
+    assert "src/backends/qt/qt_ruby_diagnostics.cpp" in cmake_source
+    assert "src/backends/qt/qt_ruby_diagnostics.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

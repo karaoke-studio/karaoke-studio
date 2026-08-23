@@ -32,6 +32,7 @@
 #include "backends/qt/qt_line_layout.h"
 #include "backends/qt/qt_render_cache.h"
 #include "backends/qt/qt_render_types.h"
+#include "backends/qt/qt_ruby_diagnostics.h"
 #include "backends/qt/qt_ruby_layout.h"
 #include "backends/qt/qt_ruby_target.h"
 #include "backends/qt/qt_ruby_timing.h"
@@ -147,6 +148,7 @@ using krok::subtitle::native::legacy_qt::lookupLayoutCache;
 using krok::subtitle::native::legacy_qt::lookupTextLayerCache;
 using krok::subtitle::native::legacy_qt::rubyScale;
 using krok::subtitle::native::legacy_qt::rubyGroupForCharIndex;
+using krok::subtitle::native::legacy_qt::rubyDiagnosticsForLine;
 using krok::subtitle::native::legacy_qt::rubyLayoutWidth;
 using krok::subtitle::native::legacy_qt::rubyProgressRatio;
 using krok::subtitle::native::legacy_qt::rubyReadingUnits;
@@ -557,62 +559,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-std::vector<RubyDiagnostics> rubyDiagnosticsForLine(
-    const RenderConfig &cfg,
-    const ResolvedStyle &style,
-    const TimingLine &line,
-    const LineLayout &layout,
-    int tMs
-) {
-    std::vector<RubyDiagnostics> diagnostics;
-    if (cfg.rubies.empty()) {
-        return diagnostics;
-    }
-    const QFont rubyFont = buildRubyFont(style);
-    const QFontMetricsF rubyMetrics(rubyFont);
-    const auto intervals = lineIntervals(line);
-    const double rubyBaselineY = layout.baselineY - layout.ascent - style.rubyGapPx;
-    const double pad = rubyVisualPadding(style);
-
-    for (const RubyAnnotation &ruby : cfg.rubies) {
-        const auto indices = rubyTargetIndices(ruby, line, intervals);
-        if (indices.empty()) {
-            continue;
-        }
-        const auto targetRange = rubyTargetXRange(ruby, line, layout, intervals);
-        if (!targetRange.has_value()) {
-            continue;
-        }
-        const RubyAnnotation paintRuby = effectiveRubyForTarget(ruby, indices, intervals);
-        const double x = targetRange->first;
-        const double targetWidth = std::max(targetRange->second - targetRange->first, 1.0);
-        const double readingWidth = rubyLayoutWidth(paintRuby.reading, rubyMetrics, targetWidth);
-        const double ratio = rubyProgressRatio(paintRuby, tMs);
-        const double ratioC = std::min(ratio, 1.0);
-        const QRectF rect(x, rubyBaselineY - rubyMetrics.ascent(), readingWidth, rubyMetrics.height());
-        const double clipLeft = cfg.rightToLeft
-            ? rect.left() + rect.width() * (1.0 - ratioC) - pad
-            : rect.left() - pad;
-        const double clipWidth = rect.width() * ratioC + pad;
-
-        RubyDiagnostics item;
-        item.kanji = paintRuby.kanji;
-        item.reading = paintRuby.reading;
-        item.indices = indices;
-        item.x = x;
-        item.baselineY = rubyBaselineY;
-        item.targetWidth = targetWidth;
-        item.readingWidth = readingWidth;
-        item.progress = ratio;
-        item.afterClipLeft = clipLeft;
-        item.afterClipRight = clipLeft + clipWidth;
-        item.afterClipTop = rect.top() - pad;
-        item.afterClipHeight = rect.height() + pad * 2.0;
-        diagnostics.push_back(item);
-    }
-    return diagnostics;
-}
 
 struct NativeFillSegment {
     double left = 0.0;
