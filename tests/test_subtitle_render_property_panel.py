@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
 import json
 import os
@@ -95,6 +96,19 @@ from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
     TitleOverlayController,
 )
 from krok_helper.subtitle_render.session import ExtraSubtitleSource  # noqa: E402
+
+
+def test_property_panel_uses_public_style_preview_boundary() -> None:
+    source_path = Path("krok_helper/subtitle_render/frontend/property_panel.py")
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "krok_helper.subtitle_render.engine.style_preview" in imported_modules
+    assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 
 @pytest.fixture(scope="module")
