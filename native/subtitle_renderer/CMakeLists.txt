@@ -48,6 +48,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_character_animation.h
     src/backends/qt/qt_display_plan.cpp
     src/backends/qt/qt_display_plan.h
+    src/backends/qt/qt_fill_brush.cpp
+    src/backends/qt/qt_fill_brush.h
     src/backends/qt/qt_render_types.h
     src/backends/direct2d/d2d_backend.cpp
     src/backends/direct2d/d2d_backend.h
