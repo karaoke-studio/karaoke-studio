@@ -53,6 +53,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_font_factory.cpp
     src/backends/qt/qt_font_factory.h
     src/backends/qt/qt_render_types.h
+    src/backends/qt/qt_style_metrics.cpp
+    src/backends/qt/qt_style_metrics.h
     src/backends/direct2d/d2d_backend.cpp
     src/backends/direct2d/d2d_backend.h
     src/backends/direct2d/d2d_device.cpp
