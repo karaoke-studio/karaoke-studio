@@ -2841,6 +2841,18 @@ def test_font_tabs_own_four_independent_stroke_groups(qapp):
     assert emitted[-1].ruby_latin_stroke_width_px == 7
 
 
+def test_default_style_stroke2_sub_slots_show_inherited_state(qapp):
+    panel = PropertyPanel()
+    panel.set_style(Style())
+
+    # 日文-主文字是唯一非三态槽，默认仍是显式勾选。
+    assert panel._stroke2_enabled_check.isChecked() is True
+    # 其余三个槽默认半选：None = 跟随上一级字体槽。
+    for prefix in ("latin_", "ruby_", "ruby_latin_"):
+        check = getattr(panel, f"_{prefix}stroke2_enabled_check")
+        assert check.checkState() == Qt.CheckState.PartiallyChecked
+
+
 def test_stroke2_checkbox_sits_tightly_beside_width_input(qapp):
     panel = PropertyPanel()
     panel.resize(900, 800)

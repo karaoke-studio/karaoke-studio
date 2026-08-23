@@ -1117,7 +1117,8 @@ class Style:
     """注音相对正文范围的排布（N3 ``RubyAlignment``）：``auto`` = 正文或注音全为
     英数时居中、否则均等分布；``center`` = 整组居中；``equal_space`` = 均等分布。"""
     ruby_stroke_width_px: Optional[int] = 10
-    ruby_stroke2_enabled: Optional[bool] = True
+    ruby_stroke2_enabled: Optional[bool] = None
+    """注音描边 2 开关默认未设定（面板半选，跟随主文字开关）。"""
     ruby_stroke2_width_px: Optional[int] = 3
     ruby_latin_stroke_width_px: Optional[int] = None
     ruby_latin_stroke2_enabled: Optional[bool] = None
