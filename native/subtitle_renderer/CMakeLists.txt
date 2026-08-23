@@ -70,6 +70,8 @@ add_executable(krok_subtitle_renderer
     src/backends/render_backend.h
     src/backends/signal_state.cpp
     src/backends/signal_state.h
+    src/backends/text_semantics.cpp
+    src/backends/text_semantics.h
     src/backends/qt/gpu_scene_projection.cpp
     src/backends/qt/gpu_scene_projection.h
     src/backends/qt/qt_cached_line_layout.cpp
