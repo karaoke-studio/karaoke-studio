@@ -75,6 +75,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_ruby_wipe.h
     src/backends/qt/qt_style_metrics.cpp
     src/backends/qt/qt_style_metrics.h
+    src/backends/qt/qt_text_layer.cpp
+    src/backends/qt/qt_text_layer.h
     src/backends/direct2d/d2d_backend.cpp
     src/backends/direct2d/d2d_backend.h
     src/backends/direct2d/d2d_device.cpp

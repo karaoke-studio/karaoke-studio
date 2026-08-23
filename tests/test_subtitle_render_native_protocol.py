@@ -732,6 +732,35 @@ def test_native_qt_clip_geometry_hides_ruby_aware_segment_model():
     assert "src/backends/qt/qt_clip_geometry.h" in cmake_source
 
 
+def test_native_qt_text_layer_hides_low_level_glow_and_path_painting():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_text_layer.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_text_layer.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    for declaration in (
+        "blitTransformedGlowLayerWithWidths(",
+        "paintTextLayerStackWithWidths(",
+        "buildTextLayerStackWithWidths(",
+    ):
+        assert declaration in header_source
+    for private_rule in (
+        "paintKaraokePathWithWidths(",
+        "buildGlowLayerWithWidths(",
+        "paintGlowPathWithWidths(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert '#include "qt_fill_brush.h"' in implementation_source
+    assert '#include "qt_render_cache.h"' in implementation_source
+    assert '#include "qt_style_metrics.h"' in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_text_layer.h"' in main_source
+    assert "src/backends/qt/qt_text_layer.cpp" in cmake_source
+    assert "src/backends/qt/qt_text_layer.h" in cmake_source
+
+
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
