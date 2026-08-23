@@ -11,6 +11,7 @@
 #include "commands/qt_frame_commands.h"
 #include "commands/qt_range_commands.h"
 #include "diagnostics/gpu_diagnostics_json.h"
+#include "diagnostics/shared_frame_metadata_json.h"
 #include "protocol/json_protocol.h"
 #include "protocol/json_value.h"
 #include "protocol/render_config.h"
@@ -40,6 +41,7 @@ using krok::subtitle::native::protocol::writeJson;
 using krok::subtitle::native::legacy_qt::gpuSceneFromConfig;
 using krok::subtitle::native::diagnostics::appendGpuDiagnostics;
 using krok::subtitle::native::diagnostics::appendGpuFrameDiagnostics;
+using krok::subtitle::native::diagnostics::appendSharedFrameMetadata;
 using krok::subtitle::native::commands::handleConfigure;
 using krok::subtitle::native::commands::handleRenderFrame;
 using krok::subtitle::native::commands::handleRenderFrameStats;
@@ -258,22 +260,6 @@ GpuPreviewWorkerPool *gpuPreviewPool(RenderRuntime *runtime, bool forceWarp) {
         : runtime->hardwareGpuPreviewPool.get();
 }
 
-void appendSharedRingMetadata(QJsonObject &out, const SharedFrameRing &ring, int slotIndex) {
-    out.insert(QStringLiteral("payload"), QStringLiteral("shared_memory"));
-    out.insert(QStringLiteral("shm_key"), ring.key);
-    out.insert(QStringLiteral("slot_index"), slotIndex);
-    out.insert(QStringLiteral("slot_count"), ring.slotCount);
-    out.insert(QStringLiteral("slot_offset"), slotIndex * ring.slotBytes);
-    out.insert(QStringLiteral("slot_bytes"), ring.slotBytes);
-    out.insert(QStringLiteral("header_bytes"), ring.headerBytes);
-    out.insert(QStringLiteral("payload_offset"), slotIndex * ring.slotBytes + ring.headerBytes);
-    out.insert(QStringLiteral("payload_bytes"), ring.pixelBytes);
-    out.insert(QStringLiteral("width"), ring.width);
-    out.insert(QStringLiteral("height"), ring.height);
-    out.insert(QStringLiteral("stride"), ring.stride);
-    out.insert(QStringLiteral("pixel_format"), ring.pixelFormat);
-}
-
 QJsonObject handleBackendInfo(const QJsonObject &request, RenderRuntime *runtime) {
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
     QString error;
@@ -370,7 +356,7 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
         for (auto it = caps.begin(); it != caps.end(); ++it) {
             out.insert(it.key(), it.value());
         }
-        appendSharedRingMetadata(out, ring, slotIndex);
+        appendSharedFrameMetadata(out, ring, slotIndex);
         return out;
     } catch (const std::exception &exception) {
         QJsonObject out = response(false, QStringLiteral("render_probe"));
@@ -818,7 +804,7 @@ QJsonObject renderGpuFrameWithBackend(
                 QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
             );
         }
-        appendSharedRingMetadata(out, ring, slotIndex);
+        appendSharedFrameMetadata(out, ring, slotIndex);
         if (packedRgba) {
             out.insert(
                 QStringLiteral("readback_ratio"),

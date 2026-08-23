@@ -3,6 +3,7 @@
 #include "../backends/qt/qt_frame_renderer.h"
 #include "../backends/qt/qt_render_cache.h"
 #include "../backends/qt/qt_render_types.h"
+#include "../diagnostics/shared_frame_metadata_json.h"
 #include "../protocol/json_protocol.h"
 #include "../protocol/json_value.h"
 #include "../runtime/checksum.h"
@@ -32,6 +33,7 @@ using legacy_qt::layoutCacheStats;
 using legacy_qt::renderFrame;
 using legacy_qt::textLayerCacheSize;
 using legacy_qt::textLayerCacheStats;
+using diagnostics::appendSharedFrameMetadata;
 using protocol::RenderConfig;
 using protocol::intValue;
 using protocol::parseIntArray;
@@ -230,18 +232,7 @@ void launchRenderRangeJob(
             frame.insert(QStringLiteral("visible_lines"), result.visibleLines);
             frame.insert(QStringLiteral("payload"), wroteSlot ? QStringLiteral("shared_memory") : QStringLiteral("metadata"));
             if (wroteSlot) {
-                frame.insert(QStringLiteral("shm_key"), ring.key);
-                frame.insert(QStringLiteral("slot_index"), slotIndex);
-                frame.insert(QStringLiteral("slot_count"), ring.slotCount);
-                frame.insert(QStringLiteral("slot_offset"), slotIndex * ring.slotBytes);
-                frame.insert(QStringLiteral("slot_bytes"), ring.slotBytes);
-                frame.insert(QStringLiteral("header_bytes"), ring.headerBytes);
-                frame.insert(QStringLiteral("payload_offset"), slotIndex * ring.slotBytes + ring.headerBytes);
-                frame.insert(QStringLiteral("payload_bytes"), ring.pixelBytes);
-                frame.insert(QStringLiteral("width"), ring.width);
-                frame.insert(QStringLiteral("height"), ring.height);
-                frame.insert(QStringLiteral("stride"), ring.stride);
-                frame.insert(QStringLiteral("pixel_format"), ring.pixelFormat);
+                appendSharedFrameMetadata(frame, ring, slotIndex);
             }
             writeJson(frame);
             ++nextEmit;

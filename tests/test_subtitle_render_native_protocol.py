@@ -1093,6 +1093,45 @@ def test_native_gpu_diagnostics_json_hides_backend_serialization():
     assert "src/diagnostics/gpu_diagnostics_json.h" in cmake_source
 
 
+def test_native_shared_frame_metadata_has_one_json_owner():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    range_commands_source = Path(
+        "native/subtitle_renderer/src/commands/qt_range_commands.cpp"
+    ).read_text(encoding="utf-8")
+    header_source = Path(
+        "native/subtitle_renderer/src/diagnostics/shared_frame_metadata_json.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/diagnostics/shared_frame_metadata_json.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "void appendSharedFrameMetadata(" in header_source
+    for field in (
+        "slot_offset",
+        "payload_offset",
+        "payload_bytes",
+        "pixel_format",
+    ):
+        assert field in implementation_source
+        assert field not in header_source
+        assert field not in main_source
+        assert field not in range_commands_source
+    assert "RenderRuntime" not in implementation_source
+    assert "RenderConfig" not in implementation_source
+    assert "appendSharedFrameMetadata(out, ring, slotIndex)" in main_source
+    assert (
+        "appendSharedFrameMetadata(frame, ring, slotIndex)"
+        in range_commands_source
+    )
+    assert "src/diagnostics/shared_frame_metadata_json.cpp" in cmake_source
+    assert "src/diagnostics/shared_frame_metadata_json.h" in cmake_source
+
+
 def test_native_qt_frame_commands_own_single_frame_request_flow():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"

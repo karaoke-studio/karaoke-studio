@@ -36,6 +36,8 @@ add_executable(krok_subtitle_renderer
     src/diagnostics/gpu_diagnostics_json.h
     src/diagnostics/qt_frame_diagnostics_json.cpp
     src/diagnostics/qt_frame_diagnostics_json.h
+    src/diagnostics/shared_frame_metadata_json.cpp
+    src/diagnostics/shared_frame_metadata_json.h
     src/protocol/json_protocol.cpp
     src/protocol/json_protocol.h
     src/protocol/json_value.cpp
