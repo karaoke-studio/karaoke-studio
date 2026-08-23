@@ -57,6 +57,8 @@ add_executable(krok_subtitle_renderer
     src/runtime/render_runtime.h
     src/runtime/shared_frame_ring.cpp
     src/runtime/shared_frame_ring.h
+    src/runtime/shared_frame_transport.cpp
+    src/runtime/shared_frame_transport.h
     src/backends/render_backend.h
     src/backends/qt/gpu_scene_projection.cpp
     src/backends/qt/gpu_scene_projection.h

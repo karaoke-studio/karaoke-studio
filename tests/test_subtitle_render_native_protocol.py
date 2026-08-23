@@ -1163,6 +1163,37 @@ def test_native_shared_frame_metadata_has_one_json_owner():
     assert "src/diagnostics/shared_frame_metadata_json.h" in cmake_source
 
 
+def test_native_shared_frame_transport_hides_runtime_writes():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/runtime/shared_frame_transport.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/runtime/shared_frame_transport.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for operation in (
+        "ensureSharedFrameRing(",
+        "writeSharedRgbaSlot(",
+        "writeSharedPackedRgbaSlot(",
+        "writeSharedBandSlot(",
+    ):
+        assert operation in header_source
+        assert f"bool {operation}" not in main_source
+        assert f"runtime->{operation}" in implementation_source
+    assert "QJsonObject" not in implementation_source
+    assert "RenderBackend" not in implementation_source
+    assert "protocol/" not in implementation_source
+    assert '#include "runtime/shared_frame_transport.h"' in main_source
+    assert "src/runtime/shared_frame_transport.cpp" in cmake_source
+    assert "src/runtime/shared_frame_transport.h" in cmake_source
+
+
 def test_native_qt_frame_commands_own_single_frame_request_flow():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"

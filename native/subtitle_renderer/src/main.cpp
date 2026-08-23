@@ -18,6 +18,7 @@
 #include "runtime/gpu_backend_runtime.h"
 #include "runtime/gpu_preview_worker_pool.h"
 #include "runtime/render_runtime.h"
+#include "runtime/shared_frame_transport.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -51,7 +52,11 @@ using krok::subtitle::native::runtime::RenderRuntime;
 using krok::subtitle::native::runtime::SharedFrameRing;
 using krok::subtitle::native::runtime::bytesChecksum;
 using krok::subtitle::native::runtime::ensureGpuBackend;
+using krok::subtitle::native::runtime::ensureSharedFrameRing;
 using krok::subtitle::native::runtime::gpuPreviewPool;
+using krok::subtitle::native::runtime::writeSharedBandSlot;
+using krok::subtitle::native::runtime::writeSharedPackedRgbaSlot;
+using krok::subtitle::native::runtime::writeSharedRgbaSlot;
 
 bool generationCancelled(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
@@ -77,131 +82,6 @@ void joinRenderJobs(RenderRuntime *runtime) {
 QString defaultSharedMemoryKey(int generation) {
     return krok::subtitle::native::runtime::defaultSharedMemoryKey(generation);
 }
-
-bool ensureSharedFrameRing(
-    RenderRuntime *runtime,
-    const QString &key,
-    int ringSlotCount,
-    int width,
-    int height,
-    QString *error
-) {
-    if (runtime == nullptr) {
-        if (error != nullptr) {
-            *error = QStringLiteral("render runtime is unavailable");
-        }
-        return false;
-    }
-    return runtime->ensureSharedFrameRing(
-        key, ringSlotCount, width, height, error
-    );
-}
-
-bool writeSharedRgbaSlot(
-    RenderRuntime *runtime,
-    const std::uint8_t *rgba,
-    int width,
-    int height,
-    int stride,
-    int generation,
-    int frameIndex,
-    int tMs,
-    int slotIndex,
-    SharedFrameRing *ringOut,
-    int formatId = 1,
-    const QString &pixelFormat = QStringLiteral("rgba8888")
-);
-
-bool writeSharedRgbaSlot(
-    RenderRuntime *runtime,
-    const std::uint8_t *rgba,
-    int width,
-    int height,
-    int stride,
-    int generation,
-    int frameIndex,
-    int tMs,
-    int slotIndex,
-    SharedFrameRing *ringOut,
-    int formatId,
-    const QString &pixelFormat
-) {
-    if (runtime == nullptr) {
-        return false;
-    }
-    return runtime->writeSharedRgbaSlot(
-        rgba,
-        width,
-        height,
-        stride,
-        generation,
-        frameIndex,
-        tMs,
-        slotIndex,
-        ringOut,
-        formatId,
-        pixelFormat
-    );
-}
-
-bool writeSharedPackedRgbaSlot(
-    RenderRuntime *runtime,
-    const std::uint8_t *premultipliedBgra,
-    int width,
-    int height,
-    int stride,
-    int generation,
-    int frameIndex,
-    int tMs,
-    int slotIndex,
-    SharedFrameRing *ringOut
-) {
-    if (runtime == nullptr) {
-        return false;
-    }
-    return runtime->writeSharedPackedRgbaSlot(
-        premultipliedBgra,
-        width,
-        height,
-        stride,
-        generation,
-        frameIndex,
-        tMs,
-        slotIndex,
-        ringOut
-    );
-}
-
-bool writeSharedBandSlot(
-    RenderRuntime *runtime,
-    const std::uint8_t *payloadData,
-    int payloadBytes,
-    int width,
-    int height,
-    int stride,
-    int generation,
-    int frameIndex,
-    int tMs,
-    int slotIndex,
-    SharedFrameRing *ringOut
-) {
-    if (runtime == nullptr) {
-        return false;
-    }
-    return runtime->writeSharedBandSlot(
-        payloadData,
-        payloadBytes,
-        width,
-        height,
-        stride,
-        generation,
-        frameIndex,
-        tMs,
-        slotIndex,
-        ringOut
-    );
-}
-
 
 QJsonObject handleBackendInfo(const QJsonObject &request, RenderRuntime *runtime) {
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
