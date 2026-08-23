@@ -63,6 +63,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_render_cache.cpp
     src/backends/qt/qt_render_cache.h
     src/backends/qt/qt_render_types.h
+    src/backends/qt/qt_ruby_layout.cpp
+    src/backends/qt/qt_ruby_layout.h
     src/backends/qt/qt_ruby_target.cpp
     src/backends/qt/qt_ruby_target.h
     src/backends/qt/qt_ruby_timing.cpp

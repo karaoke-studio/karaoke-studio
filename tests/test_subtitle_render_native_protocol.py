@@ -831,6 +831,36 @@ def test_native_qt_ruby_wipe_exposes_projection_not_interpolation_details():
     assert "src/backends/qt/qt_ruby_wipe.h" in cmake_source
 
 
+def test_native_qt_ruby_layout_depends_only_on_timing_and_render_types():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_ruby_layout.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_ruby_layout.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for declaration in (
+        "double rubyLayoutWidth(",
+        "QPainterPath rubyTextPath(",
+        "std::vector<RubyUnitLayout> rubyUnitLayouts(",
+    ):
+        assert declaration in header_source
+        assert declaration not in main_source
+    assert '#include "qt_ruby_timing.h"' in implementation_source
+    assert "qt_ruby_target" not in implementation_source
+    assert "QPainter &" not in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_ruby_layout.h"' in main_source
+    assert "src/backends/qt/qt_ruby_layout.cpp" in cmake_source
+    assert "src/backends/qt/qt_ruby_layout.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
