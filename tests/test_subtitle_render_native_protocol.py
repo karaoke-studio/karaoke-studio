@@ -351,6 +351,9 @@ def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_display_plan.cpp"
     ).read_text(encoding="utf-8")
+    frame_renderer_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_frame_renderer.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -374,7 +377,8 @@ def test_native_qt_display_plan_hides_lane_and_section_algorithms():
         assert private_rule in implementation_source
         assert private_rule not in header_source
         assert private_rule not in main_source
-    assert '#include "backends/qt/qt_display_plan.h"' in main_source
+    assert '#include "backends/qt/qt_display_plan.h"' not in main_source
+    assert '#include "qt_display_plan.h"' in frame_renderer_source
     assert "protocol/json" not in implementation_source
     assert "runtime/" not in implementation_source
     assert "src/backends/qt/qt_display_plan.cpp" in cmake_source
@@ -390,6 +394,9 @@ def test_native_qt_character_animation_hides_utopia_rules():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_character_animation.cpp"
+    ).read_text(encoding="utf-8")
+    projection_source = Path(
+        "native/subtitle_renderer/src/backends/qt/gpu_scene_projection.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -421,7 +428,8 @@ def test_native_qt_character_animation_hides_utopia_rules():
     assert '#include "qt_display_plan.h"' in implementation_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_character_animation.h"' in main_source
+    assert '#include "backends/qt/qt_character_animation.h"' not in main_source
+    assert '#include "qt_character_animation.h"' in projection_source
     assert "src/backends/qt/qt_character_animation.cpp" in cmake_source
     assert "src/backends/qt/qt_character_animation.h" in cmake_source
 
@@ -435,6 +443,9 @@ def test_native_qt_fill_brush_hides_image_cache_and_fill_rules():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_fill_brush.cpp"
+    ).read_text(encoding="utf-8")
+    text_layer_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_text_layer.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -455,7 +466,8 @@ def test_native_qt_fill_brush_hides_image_cache_and_fill_rules():
     assert "QFileInfo" not in header_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_fill_brush.h"' in main_source
+    assert '#include "backends/qt/qt_fill_brush.h"' not in main_source
+    assert '#include "qt_fill_brush.h"' in text_layer_source
     assert "src/backends/qt/qt_fill_brush.cpp" in cmake_source
     assert "src/backends/qt/qt_fill_brush.h" in cmake_source
 
@@ -469,6 +481,9 @@ def test_native_qt_font_factory_owns_font_selection_and_registration():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_font_factory.cpp"
+    ).read_text(encoding="utf-8")
+    glyph_run_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_glyph_run.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -487,7 +502,8 @@ def test_native_qt_font_factory_owns_font_selection_and_registration():
     assert "QFontDatabase" not in main_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_font_factory.h"' in main_source
+    assert '#include "backends/qt/qt_font_factory.h"' not in main_source
+    assert '#include "qt_font_factory.h"' in glyph_run_source
     assert "src/backends/qt/qt_font_factory.cpp" in cmake_source
     assert "src/backends/qt/qt_font_factory.h" in cmake_source
 
@@ -501,6 +517,9 @@ def test_native_qt_style_metrics_hides_pen_and_glow_formulas():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_style_metrics.cpp"
+    ).read_text(encoding="utf-8")
+    glyph_run_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_glyph_run.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -533,7 +552,8 @@ def test_native_qt_style_metrics_hides_pen_and_glow_formulas():
     assert "QFont" not in implementation_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_style_metrics.h"' in main_source
+    assert '#include "backends/qt/qt_style_metrics.h"' not in main_source
+    assert '#include "qt_style_metrics.h"' in glyph_run_source
     assert "src/backends/qt/qt_style_metrics.cpp" in cmake_source
     assert "src/backends/qt/qt_style_metrics.h" in cmake_source
 
@@ -547,6 +567,9 @@ def test_native_qt_line_layout_exposes_one_pure_layout_operation():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_line_layout.cpp"
+    ).read_text(encoding="utf-8")
+    cached_layout_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_cached_line_layout.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -564,7 +587,8 @@ def test_native_qt_line_layout_exposes_one_pure_layout_operation():
     assert '#include "qt_display_plan.h"' in implementation_source
     assert '#include "qt_font_factory.h"' in implementation_source
     assert '#include "qt_style_metrics.h"' in implementation_source
-    assert '#include "backends/qt/qt_line_layout.h"' in main_source
+    assert '#include "backends/qt/qt_line_layout.h"' not in main_source
+    assert '#include "qt_line_layout.h"' in cached_layout_source
     assert "src/backends/qt/qt_line_layout.cpp" in cmake_source
     assert "src/backends/qt/qt_line_layout.h" in cmake_source
 
@@ -949,6 +973,39 @@ def test_native_qt_frame_renderer_owns_the_cpu_frame_loop():
     assert "src/backends/qt/qt_frame_renderer.h" in cmake_source
 
 
+def test_native_gpu_scene_projection_hides_style_and_layout_mapping():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/gpu_scene_projection.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/gpu_scene_projection.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "RenderScene gpuSceneFromConfig(" in header_source
+    assert "RenderScene gpuSceneFromConfig(" not in main_source
+    for private_rule in (
+        "gpuColor(",
+        "gpuPaint(",
+        "applyGpuResolvedStyle(",
+        "alignmentIndexForLane(",
+        "applyGpuLineLayout(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert "RenderRuntime" not in implementation_source
+    assert "SharedFrameRing" not in implementation_source
+    assert '#include "backends/qt/gpu_scene_projection.h"' in main_source
+    assert "src/backends/qt/gpu_scene_projection.cpp" in cmake_source
+    assert "src/backends/qt/gpu_scene_projection.h" in cmake_source
+
+
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
@@ -958,6 +1015,9 @@ def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_ruby_target.cpp"
+    ).read_text(encoding="utf-8")
+    projection_source = Path(
+        "native/subtitle_renderer/src/backends/qt/gpu_scene_projection.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -982,7 +1042,8 @@ def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
         assert private_rule not in main_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_ruby_target.h"' in main_source
+    assert '#include "backends/qt/qt_ruby_target.h"' not in main_source
+    assert '#include "qt_ruby_target.h"' in projection_source
     assert "src/backends/qt/qt_ruby_target.cpp" in cmake_source
     assert "src/backends/qt/qt_ruby_target.h" in cmake_source
 
@@ -996,6 +1057,9 @@ def test_native_qt_ruby_timing_hides_interval_compatibility_rules():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_ruby_timing.cpp"
+    ).read_text(encoding="utf-8")
+    ruby_layout_header = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_ruby_layout.h"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -1018,7 +1082,8 @@ def test_native_qt_ruby_timing_hides_interval_compatibility_rules():
         assert private_rule not in main_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_ruby_timing.h"' in main_source
+    assert '#include "backends/qt/qt_ruby_timing.h"' not in main_source
+    assert '#include "qt_ruby_timing.h"' in ruby_layout_header
     assert "src/backends/qt/qt_ruby_timing.cpp" in cmake_source
     assert "src/backends/qt/qt_ruby_timing.h" in cmake_source
 
@@ -1032,6 +1097,9 @@ def test_native_qt_ruby_wipe_exposes_projection_not_interpolation_details():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_ruby_wipe.cpp"
+    ).read_text(encoding="utf-8")
+    projection_source = Path(
+        "native/subtitle_renderer/src/backends/qt/gpu_scene_projection.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -1051,7 +1119,8 @@ def test_native_qt_ruby_wipe_exposes_projection_not_interpolation_details():
         assert private_rule not in main_source
     assert "QPainter" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_ruby_wipe.h"' in main_source
+    assert '#include "backends/qt/qt_ruby_wipe.h"' not in main_source
+    assert '#include "qt_ruby_wipe.h"' in projection_source
     assert "src/backends/qt/qt_ruby_wipe.cpp" in cmake_source
     assert "src/backends/qt/qt_ruby_wipe.h" in cmake_source
 

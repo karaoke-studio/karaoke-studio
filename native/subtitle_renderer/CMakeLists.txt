@@ -46,6 +46,8 @@ add_executable(krok_subtitle_renderer
     src/runtime/shared_frame_ring.cpp
     src/runtime/shared_frame_ring.h
     src/backends/render_backend.h
+    src/backends/qt/gpu_scene_projection.cpp
+    src/backends/qt/gpu_scene_projection.h
     src/backends/qt/qt_cached_line_layout.cpp
     src/backends/qt/qt_cached_line_layout.h
     src/backends/qt/qt_cached_ruby_layer.cpp
