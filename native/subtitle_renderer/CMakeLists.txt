@@ -89,6 +89,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_text_layer.h
     src/backends/qt/qt_transformed_text.cpp
     src/backends/qt/qt_transformed_text.h
+    src/backends/qt/qt_utopia_painter.cpp
+    src/backends/qt/qt_utopia_painter.h
     src/backends/direct2d/d2d_backend.cpp
     src/backends/direct2d/d2d_backend.h
     src/backends/direct2d/d2d_device.cpp
