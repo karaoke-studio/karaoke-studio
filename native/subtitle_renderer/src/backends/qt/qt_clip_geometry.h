@@ -6,26 +6,17 @@
 #include <QtGui/QRegion>
 
 #include <optional>
-#include <utility>
-#include <vector>
 
 namespace krok::subtitle::native::legacy_qt {
 
-std::vector<std::pair<double, double>> afterClipBandsFromCharacterTiming(
+QRegion afterClipRegion(
     const protocol::RenderConfig &cfg,
+    const protocol::ResolvedStyle &style,
     const protocol::TimingLine &line,
     const LineLayout &layout,
     int tMs
 );
-std::vector<std::pair<double, double>> mergeBands(
-    std::vector<std::pair<double, double>> bands
-);
-QRegion bandsToRegion(
-    const std::vector<std::pair<double, double>> &bands,
-    double top,
-    double height
-);
-std::optional<QRectF> afterClipRectFromCharacterTiming(
+std::optional<QRectF> afterClipRect(
     const protocol::RenderConfig &cfg,
     const protocol::ResolvedStyle &style,
     const protocol::TimingLine &line,

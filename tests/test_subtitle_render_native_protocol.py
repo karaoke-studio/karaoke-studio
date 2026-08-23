@@ -686,7 +686,7 @@ def test_native_cached_line_layout_hides_cache_key_and_bypass_policy():
     assert "src/backends/qt/qt_cached_line_layout.h" in cmake_source
 
 
-def test_native_qt_clip_geometry_has_no_ruby_or_painter_dependency():
+def test_native_qt_clip_geometry_hides_ruby_aware_segment_model():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
     )
@@ -701,23 +701,31 @@ def test_native_qt_clip_geometry_has_no_ruby_or_painter_dependency():
     )
 
     public_declarations = (
-        "afterClipBandsFromCharacterTiming(",
-        "mergeBands(",
-        "bandsToRegion(",
-        "afterClipRectFromCharacterTiming(",
+        "QRegion afterClipRegion(",
+        "std::optional<QRectF> afterClipRect(",
     )
     for declaration in public_declarations:
         assert declaration in header_source
-    assert (
-        "std::vector<std::pair<double, double>> "
-        "afterClipBandsFromCharacterTiming(" not in main_source
-    )
-    assert "std::optional<QRectF> afterClipRectFromCharacterTiming(" not in main_source
-    assert "RubyAnnotation" not in implementation_source
-    assert "fillSegmentsForLine" not in implementation_source
-    assert "QPainter" not in implementation_source
+        assert declaration not in main_source
+    for private_rule in (
+        "NativeFillSegment",
+        "rubyForCharIndex(",
+        "fillSegmentsForLine(",
+        "fillClipBands(",
+        "fillClipBand(",
+        "afterClipBandsFromCharacterTiming(",
+        "afterClipRectFromCharacterTiming(",
+        "mergeBands(",
+        "bandsToRegion(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert "QPainter &" not in implementation_source
     assert "runtime/" not in implementation_source
     assert '#include "qt_character_animation.h"' in implementation_source
+    assert '#include "qt_ruby_target.h"' in implementation_source
+    assert '#include "qt_ruby_timing.h"' in implementation_source
     assert '#include "qt_style_metrics.h"' in implementation_source
     assert '#include "backends/qt/qt_clip_geometry.h"' in main_source
     assert "src/backends/qt/qt_clip_geometry.cpp" in cmake_source

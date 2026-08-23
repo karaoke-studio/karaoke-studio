@@ -112,9 +112,8 @@ using krok::subtitle::native::legacy_qt::brushForFill;
 using krok::subtitle::native::legacy_qt::cachedLayoutLine;
 using krok::subtitle::native::legacy_qt::afterClipVerticalExtent;
 using krok::subtitle::native::legacy_qt::applyRubyMainWipeProjection;
-using krok::subtitle::native::legacy_qt::afterClipBandsFromCharacterTiming;
-using krok::subtitle::native::legacy_qt::afterClipRectFromCharacterTiming;
-using krok::subtitle::native::legacy_qt::bandsToRegion;
+using krok::subtitle::native::legacy_qt::afterClipRect;
+using krok::subtitle::native::legacy_qt::afterClipRegion;
 using krok::subtitle::native::legacy_qt::buildEmojiFont;
 using krok::subtitle::native::legacy_qt::buildLineFont;
 using krok::subtitle::native::legacy_qt::buildRubyFont;
@@ -141,7 +140,6 @@ using krok::subtitle::native::legacy_qt::layoutCacheStats;
 using krok::subtitle::native::legacy_qt::layoutCacheSize;
 using krok::subtitle::native::legacy_qt::lineStartMs;
 using krok::subtitle::native::legacy_qt::lineText;
-using krok::subtitle::native::legacy_qt::mergeBands;
 using krok::subtitle::native::legacy_qt::isEmojiText;
 using krok::subtitle::native::legacy_qt::progressRatio;
 using krok::subtitle::native::legacy_qt::lookupLayoutCache;
@@ -559,196 +557,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-struct NativeFillSegment {
-    double left = 0.0;
-    double right = 0.0;
-    double ratio = 0.0;
-};
-
-std::optional<RubyAnnotation> rubyForCharIndex(
-    const RenderConfig &cfg,
-    const TimingLine &line,
-    const std::vector<std::pair<int, int>> &intervals,
-    int index
-) {
-    for (const RubyAnnotation &ruby : cfg.rubies) {
-        const auto indices = rubyTargetIndices(ruby, line, intervals);
-        if (std::find(indices.begin(), indices.end(), index) != indices.end()) {
-            return ruby;
-        }
-    }
-    return std::nullopt;
-}
-
-std::vector<NativeFillSegment> fillSegmentsForLine(
-    const RenderConfig &cfg,
-    const TimingLine &line,
-    const LineLayout &layout,
-    int tMs
-) {
-    std::vector<NativeFillSegment> segments;
-    const auto intervals = lineIntervals(line);
-    int index = 0;
-    while (index < static_cast<int>(line.chars.size())) {
-        const auto ruby = rubyForCharIndex(cfg, line, intervals, index);
-        if (!ruby.has_value()) {
-            if (static_cast<std::size_t>(index) >= layout.charLefts.size()) {
-                break;
-            }
-            const double left = layout.charLefts[index];
-            const double right = left + layout.charWidths[index];
-            const double ratio = index < static_cast<int>(intervals.size())
-                ? progressRatio(intervals[index].first, intervals[index].second, tMs)
-                : 0.0;
-            segments.push_back({left, right, ratio});
-            ++index;
-            continue;
-        }
-
-        auto indices = rubyTargetIndices(ruby.value(), line, intervals);
-        std::vector<int> validIndices;
-        for (int candidate : indices) {
-            if (
-                candidate >= 0
-                && static_cast<std::size_t>(candidate) < layout.charLefts.size()
-                && static_cast<std::size_t>(candidate) < intervals.size()
-            ) {
-                validIndices.push_back(candidate);
-            }
-        }
-        if (validIndices.empty()) {
-            const double left = layout.charLefts[index];
-            const double right = left + layout.charWidths[index];
-            const double ratio = index < static_cast<int>(intervals.size())
-                ? progressRatio(intervals[index].first, intervals[index].second, tMs)
-                : 0.0;
-            segments.push_back({left, right, ratio});
-            ++index;
-            continue;
-        }
-
-        double left = layout.charLefts[validIndices.front()];
-        double right = layout.charLefts[validIndices.front()] + layout.charWidths[validIndices.front()];
-        for (int candidate : validIndices) {
-            left = std::min(left, layout.charLefts[candidate]);
-            right = std::max(right, layout.charLefts[candidate] + layout.charWidths[candidate]);
-        }
-        const RubyAnnotation effectiveRuby = effectiveRubyForTarget(ruby.value(), validIndices, intervals);
-        segments.push_back({left, right, rubyProgressRatio(effectiveRuby, tMs)});
-        index = *std::max_element(validIndices.begin(), validIndices.end()) + 1;
-    }
-    return segments;
-}
-
-// Per-segment bands, same reasoning as afterClipBandsFromCharacterTiming:
-// stopping at the first unfinished segment can only show one wipe front.
-std::vector<std::pair<double, double>> fillClipBands(
-    const std::vector<NativeFillSegment> &segments,
-    bool rtl
-) {
-    std::vector<std::pair<double, double>> bands;
-    for (const auto &segment : segments) {
-        if (segment.ratio <= 0.0) {
-            break;  // segments are time-ordered, so nothing later has begun
-        }
-        const double width = segment.right - segment.left;
-        if (segment.ratio >= 1.0) {
-            bands.emplace_back(segment.left, segment.right);
-            continue;
-        }
-        if (rtl) {
-            bands.emplace_back(segment.right - std::round(width * segment.ratio), segment.right);
-        } else {
-            bands.emplace_back(segment.left, segment.left + std::round(width * segment.ratio));
-        }
-    }
-    return bands;
-}
-
-std::optional<std::pair<double, double>> fillClipBand(
-    const std::vector<NativeFillSegment> &segments,
-    bool rtl
-) {
-    if (segments.empty()) {
-        return std::nullopt;
-    }
-    if (rtl) {
-        double left = segments.front().right;
-        double right = segments.front().right;
-        for (const auto &segment : segments) {
-            right = std::max(right, segment.right);
-            if (segment.ratio <= 0.0) {
-                break;
-            }
-            if (segment.ratio >= 1.0) {
-                left = segment.left;
-                continue;
-            }
-            left = segment.right - std::round((segment.right - segment.left) * segment.ratio);
-            break;
-        }
-        if (right <= left) {
-            return std::nullopt;
-        }
-        return std::pair<double, double>{left, right};
-    }
-
-    const double left = segments.front().left;
-    double right = left;
-    for (const auto &segment : segments) {
-        if (segment.ratio <= 0.0) {
-            break;
-        }
-        if (segment.ratio >= 1.0) {
-            right = segment.right;
-            continue;
-        }
-        right = segment.left + std::round((segment.right - segment.left) * segment.ratio);
-        break;
-    }
-    if (right <= left) {
-        return std::nullopt;
-    }
-    return std::pair<double, double>{left, right};
-}
-
-// The clip actually applied to the after-colour layer.
-//
-// Sequential timing yields one contiguous band and this is the same rectangle
-// afterClipRect returns; concurrent wipes yield two, and only a region can hold
-// both.  afterClipRect stays as the bounding rect for diagnostics.
-QRegion afterClipRegion(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
-    const double verticalExtent = layout.afterClipExtent > 0.0
-        ? layout.afterClipExtent
-        : afterClipVerticalExtent(style);
-    const double top = layout.baselineY - layout.ascent - verticalExtent;
-    const double height = layout.height + verticalExtent * 2.0;
-    std::vector<std::pair<double, double>> bands = cfg.rubies.empty()
-        ? afterClipBandsFromCharacterTiming(cfg, line, layout, tMs)
-        : fillClipBands(fillSegmentsForLine(cfg, line, layout, tMs), cfg.rightToLeft);
-    const double lineLeft = layout.x;
-    const double lineRight = layout.x + layout.width;
-    for (auto &band : bands) {
-        band.first = std::clamp(band.first, lineLeft, lineRight);
-        band.second = std::clamp(band.second, lineLeft, lineRight);
-    }
-    return bandsToRegion(mergeBands(std::move(bands)), top, height);
-}
-
-std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
-    if (cfg.rubies.empty()) {
-        return afterClipRectFromCharacterTiming(cfg, style, line, layout, tMs);
-    }
-    const auto band = fillClipBand(fillSegmentsForLine(cfg, line, layout, tMs), cfg.rightToLeft);
-    if (!band.has_value()) {
-        return std::nullopt;
-    }
-    const double verticalExtent = layout.afterClipExtent > 0.0 ? layout.afterClipExtent : afterClipVerticalExtent(style);
-    const double top = layout.baselineY - layout.ascent - verticalExtent;
-    const double height = layout.height + verticalExtent * 2.0;
-    return QRectF(band->first, top, band->second - band->first, height);
-}
 
 void paintKaraokePathWithWidths(
     QPainter &painter,
