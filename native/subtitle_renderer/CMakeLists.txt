@@ -48,6 +48,8 @@ add_executable(krok_subtitle_renderer
     src/backends/render_backend.h
     src/backends/qt/qt_cached_line_layout.cpp
     src/backends/qt/qt_cached_line_layout.h
+    src/backends/qt/qt_cached_ruby_layer.cpp
+    src/backends/qt/qt_cached_ruby_layer.h
     src/backends/qt/qt_cached_text_layer.cpp
     src/backends/qt/qt_cached_text_layer.h
     src/backends/qt/qt_character_animation.cpp

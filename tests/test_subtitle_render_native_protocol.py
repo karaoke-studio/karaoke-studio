@@ -807,6 +807,29 @@ def test_native_qt_glyph_run_exposes_only_line_painting():
     assert "src/backends/qt/qt_glyph_run.h" in cmake_source
 
 
+def test_native_qt_cached_ruby_layer_hides_build_and_key_details():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_cached_ruby_layer.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_cached_ruby_layer.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "cachedRubyTextLayer(" in header_source
+    for private_rule in ("buildRubyTextLayer(", "rubyTextLayerCacheKey("):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    for dependency in (
+        '#include "qt_render_cache.h"',
+        '#include "qt_ruby_layout.h"',
+        '#include "qt_text_layer.h"',
+    ):
+        assert dependency in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_cached_ruby_layer.h"' in main_source
+    assert "src/backends/qt/qt_cached_ruby_layer.cpp" in cmake_source
+    assert "src/backends/qt/qt_cached_ruby_layer.h" in cmake_source
+
+
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"

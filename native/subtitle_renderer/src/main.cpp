@@ -24,6 +24,7 @@
 
 #include "backends/direct2d/d2d_backend.h"
 #include "backends/qt/qt_cached_line_layout.h"
+#include "backends/qt/qt_cached_ruby_layer.h"
 #include "backends/qt/qt_cached_text_layer.h"
 #include "backends/qt/qt_character_animation.h"
 #include "backends/qt/qt_clip_geometry.h"
@@ -113,6 +114,7 @@ using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::brushForFill;
 using krok::subtitle::native::legacy_qt::blitTransformedGlowLayerWithWidths;
 using krok::subtitle::native::legacy_qt::cachedLayoutLine;
+using krok::subtitle::native::legacy_qt::cachedRubyTextLayer;
 using krok::subtitle::native::legacy_qt::paintCachedTextLayerStackWithWidths;
 using krok::subtitle::native::legacy_qt::afterClipVerticalExtent;
 using krok::subtitle::native::legacy_qt::applyRubyMainWipeProjection;
@@ -127,9 +129,7 @@ using krok::subtitle::native::legacy_qt::cachedBlurImage;
 using krok::subtitle::native::legacy_qt::clearGlowBitmapCache;
 using krok::subtitle::native::legacy_qt::clearLayoutCache;
 using krok::subtitle::native::legacy_qt::clearTextLayerCache;
-using krok::subtitle::native::legacy_qt::doubleCacheKey;
 using krok::subtitle::native::legacy_qt::effectiveRubyForTarget;
-using krok::subtitle::native::legacy_qt::fontCacheKey;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheStats;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheSize;
 using krok::subtitle::native::legacy_qt::glowBitmapCacheEnabled;
@@ -149,7 +149,6 @@ using krok::subtitle::native::legacy_qt::isEmojiText;
 using krok::subtitle::native::legacy_qt::progressRatio;
 using krok::subtitle::native::legacy_qt::paintTextLayerStackWithWidths;
 using krok::subtitle::native::legacy_qt::lookupLayoutCache;
-using krok::subtitle::native::legacy_qt::lookupTextLayerCache;
 using krok::subtitle::native::legacy_qt::rubyScale;
 using krok::subtitle::native::legacy_qt::rubyGroupForCharIndex;
 using krok::subtitle::native::legacy_qt::rubyDiagnosticsForLine;
@@ -166,11 +165,8 @@ using krok::subtitle::native::legacy_qt::rubyVisualPadding;
 using krok::subtitle::native::legacy_qt::scaledPx;
 using krok::subtitle::native::legacy_qt::scaledSignedPx;
 using krok::subtitle::native::legacy_qt::storeLayoutCache;
-using krok::subtitle::native::legacy_qt::storeTextLayerCache;
 using krok::subtitle::native::legacy_qt::textLayerCacheStats;
 using krok::subtitle::native::legacy_qt::textLayerCacheSize;
-using krok::subtitle::native::legacy_qt::textLayerCacheEnabled;
-using krok::subtitle::native::legacy_qt::textStackStyleCacheKey;
 using krok::subtitle::native::legacy_qt::transitionCharState;
 using krok::subtitle::native::legacy_qt::utopiaFollowingDoneTime;
 using krok::subtitle::native::legacy_qt::utopiaWipeWindowForIndex;
@@ -563,183 +559,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-RubyLayerImage buildRubyTextLayer(
-    const RubyDiagnostics &ruby,
-    const QFont &rubyFont,
-    const QFontMetricsF &rubyMetrics,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &stroke,
-    const PaintFillSpec &stroke2,
-    const PaintFillSpec &shadow,
-    const ResolvedStyle &style,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int glowRadiusValue
-) {
-    const double strokeExtent = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
-    const double glowExtra = style.decorationKind == QStringLiteral("glow")
-        ? glowExtentForWidths(strokeWidth, stroke2Width, glowRadiusValue)
-        : 0.0;
-    const int extent = static_cast<int>(std::max({
-        strokeExtent,
-        glowExtra,
-        static_cast<double>(std::abs(shadowOffsetX)),
-        static_cast<double>(std::abs(shadowOffsetY)),
-        2.0,
-    })) + 4;
-    const int padLeft = std::max(0, -shadowOffsetX) + extent;
-    const int padRight = std::max(0, shadowOffsetX) + extent;
-    const int padTop = std::max(0, -shadowOffsetY) + extent;
-    const int padBottom = std::max(0, shadowOffsetY) + extent;
-
-    const int rubyWidth = std::max(1, static_cast<int>(std::ceil(ruby.readingWidth)));
-    const int rubyHeight = std::max(1, static_cast<int>(std::ceil(rubyMetrics.height())));
-    const int imageWidth = std::max(1, padLeft + rubyWidth + padRight);
-    const int imageHeight = std::max(1, padTop + rubyHeight + padBottom);
-
-    QImage image(imageWidth, imageHeight, QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::transparent);
-
-    const double localBaseline = padTop + rubyMetrics.ascent();
-    const QPainterPath localPath = rubyTextPath(
-        ruby.reading,
-        rubyFont,
-        rubyMetrics,
-        padLeft,
-        localBaseline,
-        ruby.targetWidth
-    );
-    const QRectF localRect(
-        padLeft,
-        localBaseline - rubyMetrics.ascent(),
-        ruby.readingWidth,
-        rubyMetrics.height()
-    );
-
-    QPainter layerPainter(&image);
-    layerPainter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
-    paintTextLayerStackWithWidths(
-        layerPainter,
-        localPath,
-        localRect,
-        fill,
-        stroke,
-        stroke2,
-        shadow,
-        style,
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        glowRadiusValue
-    );
-    layerPainter.end();
-
-    return RubyLayerImage{
-        image,
-        QPointF(-padLeft, -(padTop + rubyMetrics.ascent())),
-    };
-}
-
-QString rubyTextLayerCacheKey(
-    const RubyDiagnostics &ruby,
-    const QFont &rubyFont,
-    const QFontMetricsF &rubyMetrics,
-    const QString &phase,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &stroke,
-    const PaintFillSpec &stroke2,
-    const PaintFillSpec &shadow,
-    const ResolvedStyle &style,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int glowRadiusValue
-) {
-    return QStringLiteral("ruby|%1|reading=%2|target=%3|reading_w=%4|font=%5|height=%6|ascent=%7|style=%8")
-        .arg(phase)
-        .arg(ruby.reading)
-        .arg(doubleCacheKey(ruby.targetWidth))
-        .arg(doubleCacheKey(ruby.readingWidth))
-        .arg(fontCacheKey(rubyFont))
-        .arg(doubleCacheKey(rubyMetrics.height()))
-        .arg(doubleCacheKey(rubyMetrics.ascent()))
-        .arg(textStackStyleCacheKey(
-            fill,
-            stroke,
-            stroke2,
-            shadow,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            glowRadiusValue
-        ));
-}
-
-RubyLayerImage cachedRubyTextLayer(
-    const RubyDiagnostics &ruby,
-    const QFont &rubyFont,
-    const QFontMetricsF &rubyMetrics,
-    const QString &phase,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &stroke,
-    const PaintFillSpec &stroke2,
-    const PaintFillSpec &shadow,
-    const ResolvedStyle &style,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int glowRadiusValue
-) {
-    const QString cacheKey = rubyTextLayerCacheKey(
-        ruby,
-        rubyFont,
-        rubyMetrics,
-        phase,
-        fill,
-        stroke,
-        stroke2,
-        shadow,
-        style,
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        glowRadiusValue
-    );
-    if (textLayerCacheEnabled()) {
-        if (const auto cached = lookupTextLayerCache(cacheKey)) {
-            return RubyLayerImage{cached->image, cached->offset};
-        }
-    }
-
-    const RubyLayerImage layer = buildRubyTextLayer(
-        ruby,
-        rubyFont,
-        rubyMetrics,
-        fill,
-        stroke,
-        stroke2,
-        shadow,
-        style,
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        glowRadiusValue
-    );
-    if (textLayerCacheEnabled()) {
-        storeTextLayerCache(cacheKey, TextLayerImage{layer.image, layer.offset});
-    }
-    return layer;
-}
 
 void paintRubyDiagnostics(
     QPainter &painter,
