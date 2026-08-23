@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import os
+from pathlib import Path
 
 import pytest
 
@@ -77,6 +79,19 @@ def test_build_lanes_char_cells_and_blanks() -> None:
     tail = lane.blocks[1]
     assert (tail.start_ms, tail.end_ms) == (4000, 5000)
     assert tail.singer_id == 1
+
+
+def test_timeline_uses_visual_interval_projection_boundary() -> None:
+    source_path = Path("krok_helper/subtitle_render/frontend/timeline_view.py")
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "krok_helper.subtitle_render.engine.timeline_projection" in imported_modules
+    assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 
 def test_build_lanes_multiple_sources() -> None:

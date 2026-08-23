@@ -28,14 +28,16 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import BodyLabel, CardWidget, LineEdit, PrimaryPushButton
 
 from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
-from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.timeline_projection import (
+    resolve_utopia_visual_intervals,
+    source_char_intervals,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.models import (
     RubyAnnotation,
     Style,
     TimingLine,
     TimingTrack,
-    effective_karaoke_animation,
     style_with_line_animation,
 )
 
@@ -123,13 +125,13 @@ class Lane:
 
 
 def _raw_char_cells(line: TimingLine, end_ms: int) -> list[CharCell]:
-    cells: list[CharCell] = []
-    for i, ch in enumerate(line.chars):
-        next_ms = line.chars[i + 1].start_ms if i + 1 < len(line.chars) else end_ms
-        if ch.pause_release_ms is not None:
-            next_ms = min(next_ms, ch.pause_release_ms)
-        cells.append(CharCell(ch.text, ch.start_ms, max(next_ms, ch.start_ms)))
-    return cells
+    return [
+        CharCell(char.text, start_ms, cell_end_ms)
+        for char, (start_ms, cell_end_ms) in zip(
+            line.chars,
+            source_char_intervals(line, end_ms),
+        )
+    ]
 
 
 def _visual_utopia_char_cells(
@@ -138,66 +140,18 @@ def _visual_utopia_char_cells(
     style: Style,
     rubies: Sequence[RubyAnnotation],
 ) -> list[CharCell] | None:
-    if effective_karaoke_animation(style) != "utopia" or not rubies:
-        return None
-
-    from krok_helper.subtitle_render.engine.painter import (
-        _active_rubies_for_line,
-        _build_font,
-        _build_latin_font,
-        _char_layout_width,
-        _char_left_positions,
-        _letter_spacing,
-        _resolve_char_ruby_groups,
-        _style_for_line,
-        _utopia_wipe_window_for_index,
+    intervals = resolve_utopia_visual_intervals(
+        line,
+        end_ms,
+        style,
+        rubies,
     )
-
-    line_style = _style_for_line(style, line)
-    active_rubies = _active_rubies_for_line(list(rubies), line)
-    if not active_rubies:
+    if intervals is None:
         return None
-    font = _build_font(line_style)
-    metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(line_style)
-    latin_metrics = QFontMetrics(latin_font)
-    char_widths = [
-        _char_layout_width(ch.text, font, metrics, latin_metrics, None, line_style)
-        for ch in line.chars
+    return [
+        CharCell(char.text, start_ms, end_ms)
+        for char, (start_ms, end_ms) in zip(line.chars, intervals)
     ]
-    intervals = compute_char_intervals(line, char_widths)
-    char_lefts = _char_left_positions(
-        char_widths,
-        0,
-        line_style.right_to_left,
-        _letter_spacing(line_style),
-        n3_no_backtracking=line_style.layout_semantics == "n3_1074",
-    )
-    char_x_ranges = [
-        (left, left + width) for left, width in zip(char_lefts, char_widths)
-    ]
-    groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
-    if not groups:
-        return None
-
-    cells: list[CharCell] = []
-    changed = False
-    raw_cells = _raw_char_cells(line, end_ms)
-    for index, (ch, raw_cell) in enumerate(zip(line.chars, raw_cells)):
-        start_ms, cell_end_ms = _utopia_wipe_window_for_index(
-            line,
-            intervals,
-            char_x_ranges,
-            groups,
-            index,
-            line_style,
-            fallback_start=raw_cell.start_ms,
-            fallback_end=raw_cell.end_ms,
-        )
-        if (start_ms, cell_end_ms) != (raw_cell.start_ms, raw_cell.end_ms):
-            changed = True
-        cells.append(CharCell(ch.text, start_ms, max(start_ms, cell_end_ms)))
-    return cells if changed else None
 
 
 def _line_block(
