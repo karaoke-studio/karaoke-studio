@@ -8,9 +8,7 @@ behind this boundary in later behavior-preserving stages.
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.engine.painter import (
-    build_track_layout_plan,
-    layout_pass,
-)
+from krok_helper.subtitle_render.engine.layout_context import layout_pass
+from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
 
 __all__ = ["build_track_layout_plan", "layout_pass"]

@@ -86,6 +86,22 @@ def test_render_ir_uses_semantic_plan_boundary():
     assert semantic_plan_imports == {"build_track_layout_plan", "layout_pass"}
 
 
+def test_layout_pass_boundary_preserves_shared_reentrant_context():
+    from krok_helper.subtitle_render.engine import painter, semantic_plan
+    from krok_helper.subtitle_render.engine.layout_context import _LAYOUT_PASS
+
+    assert semantic_plan.layout_pass is painter.layout_pass
+    assert getattr(_LAYOUT_PASS, "page_maps", None) is None
+    with semantic_plan.layout_pass():
+        page_maps = _LAYOUT_PASS.page_maps
+        page_maps["sentinel"] = 1
+        with painter.layout_pass():
+            assert _LAYOUT_PASS.page_maps is page_maps
+            assert _LAYOUT_PASS.page_maps["sentinel"] == 1
+        assert _LAYOUT_PASS.page_maps is page_maps
+    assert _LAYOUT_PASS.page_maps is None
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

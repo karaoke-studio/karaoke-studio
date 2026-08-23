@@ -33,7 +33,6 @@ import logging
 import math
 import os
 from collections import OrderedDict
-from contextlib import contextmanager
 from dataclasses import dataclass, field, fields as dataclass_fields, is_dataclass, replace
 from threading import Lock, local as thread_local
 from typing import Hashable, Optional
@@ -63,6 +62,10 @@ from krok_helper.subtitle_render.engine.layers import (
     LayerContext,
     SCOPE_GROUP,
     SCOPE_LINE,
+)
+from krok_helper.subtitle_render.engine.layout_context import (
+    _LAYOUT_PASS,
+    layout_pass,
 )
 from krok_helper.subtitle_render.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
@@ -105,7 +108,6 @@ _TRACK_LAYOUT_PLAN_CACHE_MAX = 24
 _TRACK_LAYOUT_PLAN_CACHE: (
     "OrderedDict[tuple, tuple[TimingTrack, Style, TrackLayoutPlan]]"
 ) = OrderedDict()
-_LAYOUT_PASS = thread_local()
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
 _PAGE_PLACEMENT_CACHE_MAX = 24
@@ -414,52 +416,6 @@ _UTOPIA_FADE_OUT_TIME_MS = 750
 _CHAR_FADE_INTRO_DELAY_MS = 350
 _CHAR_FADE_IN_TIME_MS = 250
 _CHAR_FADE_OUT_TIME_MS = 250
-
-
-@contextmanager
-def layout_pass():
-    """标记一次排版过程：其间轨道与样式不会被改动。
-
-    排版是逐行问「这一行同页还有谁」的，而答案对整条轨道只有一份。把这段区间圈
-    出来，就能用对象身份做 O(1) 键把它算一次；区间结束即丢弃，所以外部改了轨道
-    也不会读到旧分页。可重入，按线程隔离（预览与导出各跑各的）。
-    """
-    depth = getattr(_LAYOUT_PASS, "depth", 0)
-    if depth == 0:
-        _LAYOUT_PASS.page_maps = {}
-        _LAYOUT_PASS.line_styles = {}
-        _LAYOUT_PASS.line_indices = {}
-        _LAYOUT_PASS.active_rubies = {}
-        _LAYOUT_PASS.ruby_gaps = {}
-        _LAYOUT_PASS.char_advances = {}
-        _LAYOUT_PASS.ink_rects = {}
-        _LAYOUT_PASS.sayatoo_layouts = {}
-        _LAYOUT_PASS.signal_heads = {}
-        _LAYOUT_PASS.tracks = []
-        _LAYOUT_PASS.styles = []
-        _LAYOUT_PASS.lines = []
-        _LAYOUT_PASS.ruby_lists = []
-        _LAYOUT_PASS.metrics = []
-    _LAYOUT_PASS.depth = depth + 1
-    try:
-        yield
-    finally:
-        _LAYOUT_PASS.depth = depth
-        if depth == 0:
-            _LAYOUT_PASS.page_maps = None
-            _LAYOUT_PASS.line_styles = None
-            _LAYOUT_PASS.line_indices = None
-            _LAYOUT_PASS.active_rubies = None
-            _LAYOUT_PASS.ruby_gaps = None
-            _LAYOUT_PASS.char_advances = None
-            _LAYOUT_PASS.ink_rects = None
-            _LAYOUT_PASS.sayatoo_layouts = None
-            _LAYOUT_PASS.signal_heads = None
-            _LAYOUT_PASS.tracks = []
-            _LAYOUT_PASS.styles = []
-            _LAYOUT_PASS.lines = []
-            _LAYOUT_PASS.ruby_lists = []
-            _LAYOUT_PASS.metrics = []
 
 
 def clear_before_layer_cache() -> None:
