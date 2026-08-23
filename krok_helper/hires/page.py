@@ -218,7 +218,9 @@ class DropZoneCard(CardWidget):
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(8)
 
-        self.icon_label = QLabel(icon_text)
+        # 带 self 作 parent：无父 QLabel 在 setVisible(True) 时会作为独立
+        # 顶层窗口闪现，随后 addWidget reparent 才把它收回（启动闪小窗根因）。
+        self.icon_label = QLabel(icon_text, self)
         self.icon_label.setObjectName("DropZoneIcon")
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)

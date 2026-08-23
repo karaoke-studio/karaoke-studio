@@ -4394,18 +4394,20 @@ class SubtitleRenderWindow(QWidget):
         )
         settings_layout.addWidget(params_card)
 
-        self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出")
+        # 传 settings_col 作 parent：无父 CheckBox 在 setVisible(True) 时会作为
+        # 独立顶层窗口闪现，随后 addWidget reparent 才把它收回（启动闪小窗根因）。
+        self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出", settings_col)
         self._export_native_check.setChecked(False)
         self._export_native_check.setEnabled(False)
         self._export_native_check.setVisible(False)
         self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
-        self._gpu_preview_check = CheckBox("使用 GPU 渲染字幕预览")
+        self._gpu_preview_check = CheckBox("使用 GPU 渲染字幕预览", settings_col)
         self._gpu_preview_check.setChecked(gpu_preview_enabled())
         self._gpu_preview_check.setVisible(sys.platform == "win32")
         self._gpu_preview_check.setToolTip(
             "使用稳定的 G5 shared-memory/QImage 路径加速字幕透明层；不可用或失败时自动回退 Painter。"
         )
-        self._gpu_export_check = CheckBox("使用 GPU 渲染字幕导出")
+        self._gpu_export_check = CheckBox("使用 GPU 渲染字幕导出", settings_col)
         self._gpu_export_check.setChecked(sys.platform == "win32")
         self._gpu_export_check.setVisible(sys.platform == "win32")
         self._gpu_export_check.setToolTip(
