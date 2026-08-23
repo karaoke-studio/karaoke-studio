@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gpu_backend_runtime.h"
 #include "gpu_preview_worker_pool.h"
 #include "render_job_runtime.h"
 #include "shared_frame_ring.h"
@@ -75,6 +76,31 @@ public:
         SharedFrameRing *ringOut
     );
 
+private:
+    friend RenderBackend *ensureGpuBackend(
+        RenderRuntime *runtime,
+        bool forceWarp,
+        QString *error
+    );
+    friend GpuPreviewWorkerPool *gpuPreviewPool(
+        RenderRuntime *runtime,
+        bool forceWarp
+    );
+    friend bool gpuConfigured(RenderRuntime *runtime, bool forceWarp);
+    friend void markGpuConfigured(RenderRuntime *runtime, bool forceWarp);
+    friend void clearGpuPreviewPoolCaches(RenderRuntime *runtime);
+    friend void resetGpuPreviewPool(RenderRuntime *runtime, bool forceWarp);
+    friend GpuPreviewPoolConfiguration configureGpuPreviewPool(
+        RenderRuntime *runtime,
+        const RenderScene &scene,
+        int workerCount,
+        bool sharedResources,
+        bool targetResize,
+        bool waitRealizations,
+        bool deferFollowers,
+        GpuPreviewWorkerPool::Publish publish
+    );
+
     std::mutex gpuBackendMutex;
     std::unique_ptr<RenderBackend> hardwareGpuBackend;
     std::unique_ptr<RenderBackend> warpGpuBackend;
@@ -87,7 +113,6 @@ public:
     std::deque<GpuPreviewPoolCacheEntry> hardwareGpuPreviewPoolCache;
     std::deque<GpuPreviewPoolCacheEntry> warpGpuPreviewPoolCache;
 
-private:
     RenderJobRuntime jobs_;
     SharedFrameRingBuffer sharedFrames_;
 };

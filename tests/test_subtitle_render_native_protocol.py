@@ -389,6 +389,9 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
+    render_runtime_header = Path(
+        "native/subtitle_renderer/src/runtime/render_runtime.h"
+    ).read_text(encoding="utf-8")
 
     assert "RenderBackend *ensureGpuBackend(" in header_source
     assert "GpuPreviewWorkerPool *gpuPreviewPool(" in header_source
@@ -428,6 +431,17 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     ):
         assert pool_transaction_detail in implementation_source
         assert pool_transaction_detail not in lifecycle_commands_source
+    private_section = render_runtime_header.split("private:", 1)[1]
+    for private_state in (
+        "gpuBackendMutex",
+        "hardwareGpuBackend",
+        "warpGpuBackend",
+        "hardwareGpuConfigured",
+        "warpGpuConfigured",
+        "hardwareGpuPreviewPool",
+        "warpGpuPreviewPool",
+    ):
+        assert private_state in private_section
     assert '#include "runtime/gpu_backend_runtime.h"' not in main_source
     assert '#include "../runtime/gpu_backend_runtime.h"' in frame_commands_source
     assert "src/runtime/gpu_backend_runtime.cpp" in cmake_source
