@@ -179,7 +179,6 @@ def test_native_legacy_qt_render_types_have_single_header_owner():
         "RubyDiagnostics",
         "RubyLayerImage",
         "TextLayerImage",
-        "GlyphRunRef",
         "RubyGroupInfo",
         "RubyUnitLayout",
         "LineCharTransition",
@@ -776,6 +775,36 @@ def test_native_qt_cached_text_layer_owns_cache_policy():
     assert '#include "backends/qt/qt_cached_text_layer.h"' in main_source
     assert "src/backends/qt/qt_cached_text_layer.cpp" in cmake_source
     assert "src/backends/qt/qt_cached_text_layer.h" in cmake_source
+
+
+def test_native_qt_glyph_run_exposes_only_line_painting():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    types_source = Path("native/subtitle_renderer/src/backends/qt/qt_render_types.h").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_glyph_run.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_glyph_run.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "paintGlyphRunTextLayers(" in header_source
+    for private_rule in (
+        "GlyphRunRef",
+        "layoutCharStyle(",
+        "layoutCharFont(",
+        "glyphRunVisualSignature(",
+        "glyphRunsForLayout(",
+        "glyphRunPath(",
+        "glyphRunRect(",
+        "glyphRunTextLayerCacheKey(",
+        "paintGlyphRunTextLayer(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert "GlyphRunRef" not in types_source
+    assert '#include "qt_cached_text_layer.h"' in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_glyph_run.h"' in main_source
+    assert "src/backends/qt/qt_glyph_run.cpp" in cmake_source
+    assert "src/backends/qt/qt_glyph_run.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():

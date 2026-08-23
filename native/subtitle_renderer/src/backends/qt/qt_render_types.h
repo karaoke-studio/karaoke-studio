@@ -83,11 +83,6 @@ struct TextLayerImage {
     QPointF offset;
 };
 
-struct GlyphRunRef {
-    std::size_t start = 0;
-    std::size_t end = 0;
-};
-
 struct RubyGroupInfo {
     std::vector<int> indices;
     RubyAnnotation ruby;
