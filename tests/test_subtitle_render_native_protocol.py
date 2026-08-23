@@ -205,6 +205,32 @@ def test_native_legacy_qt_render_types_have_single_header_owner():
     assert "src/backends/qt/qt_render_types.h" in cmake_source
 
 
+def test_native_gpu_preview_pool_hides_backend_and_protocol_details():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/runtime/gpu_preview_worker_pool.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/runtime/gpu_preview_worker_pool.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class GpuPreviewWorkerPool {" in header_source
+    assert "class GpuPreviewWorkerPool {" not in main_source
+    assert '#include "runtime/gpu_preview_worker_pool.h"' in main_source
+    assert "Direct2DGpuBackend" not in header_source
+    assert "json_protocol.h" not in implementation_source
+    assert "writeJson(" not in implementation_source
+    assert "Publish publish" in header_source
+    assert "sharedResources, writeJson" in main_source
+    assert "src/runtime/gpu_preview_worker_pool.cpp" in cmake_source
+    assert "src/runtime/gpu_preview_worker_pool.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
