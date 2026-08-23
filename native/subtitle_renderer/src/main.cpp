@@ -124,21 +124,21 @@ bool generationCancelled(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return false;
     }
-    return runtime->jobs.generationCancelled(generation);
+    return runtime->generationCancelled(generation);
 }
 
 void cancelGeneration(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return;
     }
-    runtime->jobs.cancelGeneration(generation);
+    runtime->cancelGeneration(generation);
 }
 
 void clearGenerationCancel(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
         return;
     }
-    runtime->jobs.clearGenerationCancel(generation);
+    runtime->clearGenerationCancel(generation);
 }
 
 void rememberRenderJob(RenderRuntime *runtime, std::thread job) {
@@ -148,14 +148,14 @@ void rememberRenderJob(RenderRuntime *runtime, std::thread job) {
         }
         return;
     }
-    runtime->jobs.remember(std::move(job));
+    runtime->rememberRenderJob(std::move(job));
 }
 
 void joinRenderJobs(RenderRuntime *runtime) {
     if (runtime == nullptr) {
         return;
     }
-    runtime->jobs.joinAll();
+    runtime->joinRenderJobs();
 }
 
 QString defaultSharedMemoryKey(int generation) {
@@ -176,7 +176,7 @@ bool ensureSharedFrameRing(
         }
         return false;
     }
-    return runtime->sharedFrames.ensure(
+    return runtime->ensureSharedFrameRing(
         key, ringSlotCount, width, height, error
     );
 }
@@ -239,7 +239,7 @@ bool writeSharedRgbaSlot(
     if (runtime == nullptr) {
         return false;
     }
-    return runtime->sharedFrames.writeRgba(
+    return runtime->writeSharedRgbaSlot(
         rgba,
         width,
         height,
@@ -269,7 +269,7 @@ bool writeSharedPackedRgbaSlot(
     if (runtime == nullptr) {
         return false;
     }
-    return runtime->sharedFrames.writePremultipliedBgra(
+    return runtime->writeSharedPackedRgbaSlot(
         premultipliedBgra,
         width,
         height,
@@ -298,7 +298,7 @@ bool writeSharedBandSlot(
     if (runtime == nullptr) {
         return false;
     }
-    return runtime->sharedFrames.writeBands(
+    return runtime->writeSharedBandSlot(
         payloadData,
         payloadBytes,
         width,
@@ -4900,7 +4900,7 @@ void launchRenderRangeJob(
                 result = results[static_cast<std::size_t>(nextEmit)];
             }
             const int slotIndex = nextEmit % std::max(
-                1, runtime->sharedFrames.slotCount()
+                1, runtime->sharedFrameSlotCount()
             );
             SharedFrameRing ring;
             const bool wroteSlot = writeSharedFrameSlot(runtime, result, generation, nextEmit, slotIndex, &ring);
@@ -6745,7 +6745,7 @@ int main(int argc, char **argv) {
             writeJson(handleCancelGeneration(*request, &runtime));
             break;
         case Command::Shutdown:
-            runtime.jobs.requestShutdown();
+            runtime.requestShutdown();
             joinRenderJobs(&runtime);
             writeJson(response(true, QStringLiteral("shutdown")));
             return 0;
@@ -6761,7 +6761,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    runtime.jobs.requestShutdown();
+    runtime.requestShutdown();
     joinRenderJobs(&runtime);
     return 0;
 }

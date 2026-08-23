@@ -303,14 +303,17 @@ def test_native_render_runtime_state_has_single_runtime_owner():
     runtime_source = Path(
         "native/subtitle_renderer/src/runtime/render_runtime.h"
     ).read_text(encoding="utf-8")
+    runtime_implementation = Path(
+        "native/subtitle_renderer/src/runtime/render_runtime.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
 
-    for type_name in ("GpuPreviewPoolCacheEntry", "RenderRuntime"):
-        declaration = f"struct {type_name} {{"
-        assert declaration in runtime_source
-        assert declaration not in main_source
+    assert "struct GpuPreviewPoolCacheEntry {" in runtime_source
+    assert "class RenderRuntime {" in runtime_source
+    assert "struct GpuPreviewPoolCacheEntry {" not in main_source
+    assert "class RenderRuntime {" not in main_source
     for owned_state in (
         "RenderJobRuntime jobs",
         "SharedFrameRingBuffer sharedFrames",
@@ -319,7 +322,23 @@ def test_native_render_runtime_state_has_single_runtime_owner():
         "hardwareGpuPreviewPoolCache",
     ):
         assert owned_state in runtime_source
+    for operation in (
+        "generationCancelled",
+        "cancelGeneration",
+        "rememberRenderJob",
+        "requestShutdown",
+        "ensureSharedFrameRing",
+        "writeSharedRgbaSlot",
+        "writeSharedPackedRgbaSlot",
+        "writeSharedBandSlot",
+    ):
+        assert f"RenderRuntime::{operation}" in runtime_implementation
+    assert "runtime->jobs" not in main_source
+    assert "runtime->sharedFrames" not in main_source
+    assert "RenderJobRuntime jobs_" in runtime_source
+    assert "SharedFrameRingBuffer sharedFrames_" in runtime_source
     assert '#include "runtime/render_runtime.h"' in main_source
+    assert "src/runtime/render_runtime.cpp" in cmake_source
     assert "src/runtime/render_runtime.h" in cmake_source
 
 

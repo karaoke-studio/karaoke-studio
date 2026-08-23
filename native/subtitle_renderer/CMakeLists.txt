@@ -39,6 +39,7 @@ add_executable(krok_subtitle_renderer
     src/runtime/gpu_preview_worker_pool.h
     src/runtime/render_job_runtime.cpp
     src/runtime/render_job_runtime.h
+    src/runtime/render_runtime.cpp
     src/runtime/render_runtime.h
     src/runtime/shared_frame_ring.cpp
     src/runtime/shared_frame_ring.h

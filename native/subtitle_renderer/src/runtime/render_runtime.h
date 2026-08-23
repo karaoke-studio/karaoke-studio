@@ -8,9 +8,11 @@
 
 #include <QtCore/QString>
 
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace krok::subtitle::native::runtime {
 
@@ -19,9 +21,60 @@ struct GpuPreviewPoolCacheEntry {
     std::unique_ptr<GpuPreviewWorkerPool> pool;
 };
 
-struct RenderRuntime {
-    RenderJobRuntime jobs;
-    SharedFrameRingBuffer sharedFrames;
+class RenderRuntime {
+public:
+    bool generationCancelled(int generation);
+    void cancelGeneration(int generation);
+    void clearGenerationCancel(int generation);
+    void rememberRenderJob(std::thread job);
+    void joinRenderJobs();
+    void requestShutdown() noexcept;
+
+    int sharedFrameSlotCount() const;
+    bool ensureSharedFrameRing(
+        const QString &key,
+        int ringSlotCount,
+        int width,
+        int height,
+        QString *error
+    );
+    bool writeSharedRgbaSlot(
+        const std::uint8_t *rgba,
+        int width,
+        int height,
+        int stride,
+        int generation,
+        int frameIndex,
+        int tMs,
+        int slotIndex,
+        SharedFrameRing *ringOut,
+        int formatId = 1,
+        const QString &pixelFormat = QStringLiteral("rgba8888")
+    );
+    bool writeSharedPackedRgbaSlot(
+        const std::uint8_t *premultipliedBgra,
+        int width,
+        int height,
+        int stride,
+        int generation,
+        int frameIndex,
+        int tMs,
+        int slotIndex,
+        SharedFrameRing *ringOut
+    );
+    bool writeSharedBandSlot(
+        const std::uint8_t *payloadData,
+        int payloadBytes,
+        int width,
+        int height,
+        int stride,
+        int generation,
+        int frameIndex,
+        int tMs,
+        int slotIndex,
+        SharedFrameRing *ringOut
+    );
+
     std::mutex gpuBackendMutex;
     std::unique_ptr<RenderBackend> hardwareGpuBackend;
     std::unique_ptr<RenderBackend> warpGpuBackend;
@@ -33,6 +86,10 @@ struct RenderRuntime {
     QString warpGpuPreviewPoolKey;
     std::deque<GpuPreviewPoolCacheEntry> hardwareGpuPreviewPoolCache;
     std::deque<GpuPreviewPoolCacheEntry> warpGpuPreviewPoolCache;
+
+private:
+    RenderJobRuntime jobs_;
+    SharedFrameRingBuffer sharedFrames_;
 };
 
 }  // namespace krok::subtitle::native::runtime
