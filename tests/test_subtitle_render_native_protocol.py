@@ -231,6 +231,33 @@ def test_native_gpu_preview_pool_hides_backend_and_protocol_details():
     assert "src/runtime/gpu_preview_worker_pool.h" in cmake_source
 
 
+def test_native_json_value_rules_have_single_protocol_owner():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/protocol/json_value.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/protocol/json_value.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for signature in (
+        "QString stringValue(",
+        "int intValue(",
+        "std::vector<int> parseIntArray(",
+    ):
+        assert signature in header_source
+        assert signature in implementation_source
+        assert signature not in main_source
+    assert '#include "protocol/json_value.h"' in main_source
+    assert "src/protocol/json_value.cpp" in cmake_source
+    assert "src/protocol/json_value.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

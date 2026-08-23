@@ -30,6 +30,8 @@ add_executable(krok_subtitle_renderer
     src/main.cpp
     src/protocol/json_protocol.cpp
     src/protocol/json_protocol.h
+    src/protocol/json_value.cpp
+    src/protocol/json_value.h
     src/protocol/render_config.h
     src/runtime/gpu_preview_worker_pool.cpp
     src/runtime/gpu_preview_worker_pool.h

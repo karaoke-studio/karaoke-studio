@@ -30,6 +30,7 @@
 #include "backends/direct2d/d2d_backend.h"
 #include "backends/qt/qt_render_types.h"
 #include "protocol/json_protocol.h"
+#include "protocol/json_value.h"
 #include "protocol/render_config.h"
 #include "runtime/gpu_preview_worker_pool.h"
 #include "runtime/render_job_runtime.h"
@@ -55,12 +56,15 @@ namespace {
 using krok::subtitle::native::protocol::kRenderIrSchema;
 using krok::subtitle::native::protocol::Command;
 using krok::subtitle::native::protocol::commandFromName;
+using krok::subtitle::native::protocol::intValue;
 using krok::subtitle::native::protocol::parseRequestLine;
+using krok::subtitle::native::protocol::parseIntArray;
 using krok::subtitle::native::protocol::PaintFillSpec;
 using krok::subtitle::native::protocol::RenderConfig;
 using krok::subtitle::native::protocol::ResolvedLineLayout;
 using krok::subtitle::native::protocol::ResolvedStyle;
 using krok::subtitle::native::protocol::response;
+using krok::subtitle::native::protocol::stringValue;
 using krok::subtitle::native::protocol::RubyAnnotation;
 using krok::subtitle::native::protocol::TimingChar;
 using krok::subtitle::native::protocol::TimingLine;
@@ -130,16 +134,6 @@ struct RenderRuntime {
 QString fontCacheKey(const QFont &font);
 std::optional<LineLayout> lookupLayoutCache(const QString &key);
 void storeLayoutCache(const QString &key, const LineLayout &layout);
-
-QString stringValue(const QJsonObject &object, const QString &key, const QString &fallback = {}) {
-    const auto value = object.value(key);
-    return value.isString() ? value.toString() : fallback;
-}
-
-int intValue(const QJsonObject &object, const QString &key, int fallback = 0) {
-    const auto value = object.value(key);
-    return value.isDouble() ? value.toInt() : fallback;
-}
 
 bool supportedFillMode(const QString &mode) {
     return mode == QStringLiteral("solid")
@@ -1283,17 +1277,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
         out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
         return out;
     }
-}
-
-std::vector<int> parseIntArray(const QJsonArray &items) {
-    std::vector<int> out;
-    out.reserve(static_cast<std::size_t>(items.size()));
-    for (const auto &item : items) {
-        if (item.isDouble()) {
-            out.push_back(item.toInt());
-        }
-    }
-    return out;
 }
 
 void buildResolvedStyleCache(RenderConfig &cfg);
