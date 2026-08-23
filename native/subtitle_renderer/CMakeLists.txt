@@ -28,6 +28,8 @@ endif()
 
 add_executable(krok_subtitle_renderer
     src/main.cpp
+    src/diagnostics/gpu_diagnostics_json.cpp
+    src/diagnostics/gpu_diagnostics_json.h
     src/diagnostics/qt_frame_diagnostics_json.cpp
     src/diagnostics/qt_frame_diagnostics_json.h
     src/protocol/json_protocol.cpp

@@ -1037,6 +1037,39 @@ def test_native_qt_frame_diagnostics_json_hides_cache_serialization():
     assert "src/diagnostics/qt_frame_diagnostics_json.h" in cmake_source
 
 
+def test_native_gpu_diagnostics_json_hides_backend_serialization():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/diagnostics/gpu_diagnostics_json.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/diagnostics/gpu_diagnostics_json.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "void appendGpuDiagnostics(" in header_source
+    assert "void appendGpuFrameDiagnostics(" in header_source
+    assert "void appendGpuDiagnostics(" not in main_source
+    assert "void appendGpuFrameDiagnostics(" not in main_source
+    for field in (
+        "estimated_cache_bytes",
+        "realization_prewarm_create_p95_ms",
+        "end_draw_frame_layers_count",
+    ):
+        assert field in implementation_source
+        assert field not in header_source
+        assert field not in main_source
+    assert "RenderRuntime" not in implementation_source
+    assert "RenderConfig" not in implementation_source
+    assert '#include "diagnostics/gpu_diagnostics_json.h"' in main_source
+    assert "src/diagnostics/gpu_diagnostics_json.cpp" in cmake_source
+    assert "src/diagnostics/gpu_diagnostics_json.h" in cmake_source
+
+
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
