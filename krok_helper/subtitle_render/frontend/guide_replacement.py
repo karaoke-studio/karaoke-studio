@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.models import (
     GuideSymbol,
     TimingLine,
     TimingTrack,
+    guide_symbol_replaces_prefix,
     guide_symbol_with_role_labels,
 )
 
@@ -118,8 +119,10 @@ def detect_guide_prefix_matches(
             )
             target_indices = range(start, end)
             is_prefix = start == 0 and end < len(line.chars)
+            # 只占正文前空位、不替代真实字符的行前导唱符（@Emoji 小头像即是）不算
+            # 「已有替换」：它与行首标记替换互不冲突，勾选后也不会被顶掉。
             has_replacement = (
-                (is_prefix and line.guide_symbol is not None)
+                (is_prefix and guide_symbol_replaces_prefix(line.guide_symbol))
                 or any(index in line.inline_guide_symbols for index in target_indices)
             )
             source_text = "".join(char.text for char in line.chars)

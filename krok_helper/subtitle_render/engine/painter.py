@@ -670,6 +670,7 @@ from krok_helper.subtitle_render.models import (
     effective_karaoke_animation,
     normalize_title_char_role_labels,
     normalize_glow_concentration_level,
+    guide_symbol_has_visual as _guide_symbol_has_visual,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     line_visible_chars,
@@ -7983,12 +7984,6 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
         chars=[*guides, *render_line.chars],
         guide_symbol=None,
         inline_guide_symbols={},
-    )
-
-
-def _guide_symbol_has_visual(symbol: GuideSymbol) -> bool:
-    return bool(symbol.path_commands) or (
-        symbol.kind == "bitmap" and bool(symbol.bitmap_before_path)
     )
 
 

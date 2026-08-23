@@ -252,6 +252,29 @@ class TrackPagePlan:
     sections: list[TrackSection] = field(default_factory=list)
 
 
+def guide_symbol_has_visual(symbol: object) -> bool:
+    """是否是能真正画出东西的导唱符：SVG 轮廓，或 ``@Emoji`` 这类位图小头像。
+
+    位图导唱符没有 ``path_commands``，早期只按轮廓判断的校验会把它当成非法值
+    整条丢弃（行内小头像因此在保存/撤销/逐字符编辑里消失）。
+    """
+    if not isinstance(symbol, GuideSymbol):
+        return False
+    return bool(symbol.path_commands) or (
+        symbol.kind == "bitmap" and bool(symbol.bitmap_before_path)
+    )
+
+
+def guide_symbol_replaces_prefix(symbol: Optional[GuideSymbol]) -> bool:
+    """该行级导唱符是否占用行首打轴单元（而不是额外插在正文之前）。
+
+    ``@Emoji`` 小头像与「行前导唱符」都属于后者：它们不替代任何真实字符，因此
+    行首标记替换必须绕开 ``TimingLine.guide_symbol`` 这个唯一槽位，改用行内替换，
+    否则会把小头像顶掉。
+    """
+    return isinstance(symbol, GuideSymbol) and bool(symbol.replacement_prefix)
+
+
 def guide_symbol_replacement_count(
     line: TimingLine, symbol: Optional[GuideSymbol] = None
 ) -> int:

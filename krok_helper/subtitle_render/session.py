@@ -13,6 +13,7 @@ from krok_helper.subtitle_render.models import (
     BackgroundSource,
     Style,
     TimingTrack,
+    guide_symbol_has_visual,
     guide_symbol_to_dict,
     line_animation_override_to_dict,
     style_to_dict,
@@ -336,7 +337,7 @@ def _inline_guide_symbol_rows(track: TimingTrack) -> Optional[list]:
         {
             str(index): guide_symbol_to_dict(symbol)
             for index, symbol in sorted(line.inline_guide_symbols.items())
-            if 0 <= index < len(line.chars) and symbol.path_commands
+            if 0 <= index < len(line.chars) and guide_symbol_has_visual(symbol)
         }
         or None
         for line in track.lines

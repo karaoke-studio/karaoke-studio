@@ -221,6 +221,8 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     background_sequence_frame_path,
     guide_symbol_from_dict,
+    guide_symbol_has_visual,
+    guide_symbol_replaces_prefix,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     guide_symbol_with_role_labels,
@@ -5874,7 +5876,7 @@ class SubtitleRenderWindow(QWidget):
             {
                 str(index): guide_symbol_to_dict(symbol)
                 for index, symbol in sorted(line.inline_guide_symbols.items())
-                if 0 <= index < len(line.chars) and symbol.path_commands
+                if 0 <= index < len(line.chars) and guide_symbol_has_visual(symbol)
             }
             or None
             for line in track.lines
@@ -5912,16 +5914,8 @@ class SubtitleRenderWindow(QWidget):
                     except (TypeError, ValueError):
                         continue
                     symbol = guide_symbol_from_dict(raw_symbol)
-                    if (
-                        0 <= index < len(line.chars)
-                        and symbol is not None
-                        and (
-                            symbol.path_commands
-                            or (
-                                symbol.kind == "bitmap"
-                                and bool(symbol.bitmap_before_path)
-                            )
-                        )
+                    if 0 <= index < len(line.chars) and guide_symbol_has_visual(
+                        symbol
                     ):
                         symbols[index] = symbol
             line.inline_guide_symbols = symbols
@@ -6323,8 +6317,7 @@ class SubtitleRenderWindow(QWidget):
                 or len(item) != 2
                 or not isinstance(item[0], int)
                 or not 0 <= item[0] < len(line.chars)
-                or not isinstance(item[1], GuideSymbol)
-                or not item[1].path_commands
+                or not guide_symbol_has_visual(item[1])
             ):
                 return False
             inline_symbols[item[0]] = item[1]
@@ -6367,8 +6360,7 @@ class SubtitleRenderWindow(QWidget):
                     or len(item) != 2
                     or not isinstance(item[0], int)
                     or not 0 <= item[0] < len(track.lines[row].chars)
-                    or not isinstance(item[1], GuideSymbol)
-                    or not item[1].path_commands
+                    or not guide_symbol_has_visual(item[1])
                 ):
                     return False
                 inline_symbols[item[0]] = item[1]
@@ -8030,7 +8022,14 @@ class SubtitleRenderWindow(QWidget):
                 or tuple(char.text for char in line.chars[start:end]) != match.prefix
             ):
                 continue
-            if match.is_prefix:
+            # 行首标记替换默认走 line.guide_symbol；但该槽位可能已被「不占字符」的
+            # 行前导唱符占着（@Emoji 小头像就是这种），直接赋值会把它顶掉。这种行
+            # 改用行内替换：小头像照旧画在行首，SVG 顶掉的仍是那几个真实字符。
+            use_prefix_slot = match.is_prefix and (
+                line.guide_symbol is None
+                or guide_symbol_replaces_prefix(line.guide_symbol)
+            )
+            if use_prefix_slot:
                 symbol = replacement_symbol_for_match(base_symbol, line, match)
                 if symbol is None:
                     continue
@@ -8143,7 +8142,9 @@ class SubtitleRenderWindow(QWidget):
                 for char in line.chars[start:end]:
                     char.role_label = label
                 prefix_selected |= match.is_prefix
-            if prefix_selected and line.guide_symbol is not None:
+            # 只有替代了这段标记的导唱符才跟着改角色；行前小头像/插入式导唱符不
+            # 属于所选标记跨度，别把它一起染色。
+            if prefix_selected and guide_symbol_replaces_prefix(line.guide_symbol):
                 line.guide_symbol = guide_symbol_with_role_labels(
                     line.guide_symbol,
                     [label] * max(int(line.guide_symbol.count), 1),
@@ -8297,7 +8298,7 @@ class SubtitleRenderWindow(QWidget):
         for offset, vector_symbol in enumerate(vector_symbols):
             if vector_symbol is None:
                 continue
-            if not isinstance(vector_symbol, GuideSymbol) or not vector_symbol.path_commands:
+            if not guide_symbol_has_visual(vector_symbol):
                 return
             inline_symbols[replacement_count + offset] = vector_symbol
         new_char_labels = tuple(

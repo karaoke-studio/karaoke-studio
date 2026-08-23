@@ -1443,3 +1443,147 @@ def test_project_reload_keeps_bitmap_inline_guide_symbols(tmp_path):
     SubtitleRenderWindow._apply_inline_guide_symbol_rows(track, payload)
 
     assert track.lines[0].inline_guide_symbols == {0: symbol}
+
+
+def test_batch_prefix_replacement_keeps_bitmap_avatar_guide(tmp_path, monkeypatch):
+    """@Emoji 小头像占着行前槽位时，行首标记改走行内替换，小头像不能被顶掉。"""
+    _symbol(tmp_path)
+    avatar = _bitmap_symbol(tmp_path)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("h", 1000), TimingChar("歌", 2000)],
+                end_ms=2600,
+                guide_symbol=avatar,
+            )
+        ]
+    )
+    matches = detect_guide_prefix_matches(track, "h")
+
+    class AcceptedDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def svg_path(self):
+            return tmp_path / "lead.svg"
+
+        def selected_matches(self):
+            return matches
+
+    monkeypatch.setattr(
+        main_window_module, "GuidePrefixReplaceDialog", AcceptedDialog
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "choose_guide_role_scheme",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    window._on_guide_prefix_replace_requested()
+
+    line = track.lines[0]
+    assert line.guide_symbol == avatar
+    assert line.inline_guide_symbols[0].name == "lead"
+
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+    )
+    image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor("#101010"))
+    paint_frame(image, track, 1500, style)
+    assert _count_red_pixels(image) > 20
+
+    window._undo_edit()
+    assert line.guide_symbol == avatar
+    assert line.inline_guide_symbols == {}
+    window._redo_edit()
+    assert line.guide_symbol == avatar
+    assert line.inline_guide_symbols[0].name == "lead"
+    window.close()
+
+
+def test_prefix_match_with_avatar_guide_stays_replaceable(tmp_path):
+    """不占字符的行前小头像不该被标成"已有导唱符"（那会默认取消勾选）。"""
+    avatar = _bitmap_symbol(tmp_path)
+    prefix_symbol = replace(_symbol(tmp_path), replacement_prefix=("h",))
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("h", 1000), TimingChar("歌", 2000)],
+                guide_symbol=avatar,
+            ),
+            TimingLine(
+                chars=[TimingChar("h", 3000), TimingChar("詞", 4000)],
+                guide_symbol=prefix_symbol,
+            ),
+        ]
+    )
+
+    matches = detect_guide_prefix_matches(track, "h")
+
+    assert [match.has_guide_symbol for match in matches] == [False, True]
+
+
+def test_char_dialog_svg_keeps_inline_bitmap_avatar(tmp_path, monkeypatch):
+    """行内已有小头像时，逐字符 SVG 替换不能整条被拒（旧行为：什么也没发生）。"""
+    svg = _symbol(tmp_path)
+    avatar = replace(_bitmap_symbol(tmp_path), prefix_timing="pre_roll")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 1000), TimingChar("詞", 2000)],
+                end_ms=2600,
+                inline_guide_symbols={0: avatar},
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    window._on_inline_char_edit_changed(0, None, [None, None], [avatar, svg])
+
+    assert track.lines[0].inline_guide_symbols == {0: avatar, 1: svg}
+    window._undo_edit()
+    assert track.lines[0].inline_guide_symbols == {0: avatar}
+    window._redo_edit()
+    assert track.lines[0].inline_guide_symbols == {0: avatar, 1: svg}
+    window.close()
+
+
+def test_project_payload_keeps_bitmap_inline_guide_symbols(tmp_path):
+    """位图小头像没有轮廓数据，保存时不能被当成空导唱符丢掉。"""
+    avatar = _bitmap_symbol(tmp_path)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 1000), TimingChar("詞", 2000)],
+                inline_guide_symbols={1: avatar},
+            )
+        ]
+    )
+
+    rows = SubtitleRenderWindow._inline_guide_symbol_rows(track)
+
+    assert rows == [{"1": guide_symbol_to_dict(avatar)}]

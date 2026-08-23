@@ -9306,3 +9306,93 @@ def test_native_qt_export_path_shows_both_wipe_fronts(monkeypatch, tmp_path) -> 
     assert len(_fill_column_runs(frames[1_100], width, height)) == 2, (
         "原生 Qt 导出路径只画了一个走字前沿：" + str(_fill_column_runs(frames[1_100], width, height))
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native sidecar build is Windows-only")
+def test_line_avatar_and_inline_svg_survive_in_every_render_core(
+    monkeypatch, tmp_path
+) -> None:
+    """行前 ``@Emoji`` 小头像 + 行首标记替换成的 SVG 必须在三个核心里同时出现。
+
+    两者曾抢同一个 ``TimingLine.guide_symbol`` 槽位，行首标记替换会把小头像顶掉；
+    现在小头像留在行前槽位、SVG 走行内替换，展开后是同一条 ``render_line``，因此
+    Python 画笔、D2D 预览、sidecar 原生导出三条路都吃到同样的字符序列。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.guide_symbols import import_svg_guide_symbol
+
+    image_path = tmp_path / "avatar.png"
+    avatar_image = QImage(24, 18, QImage.Format.Format_RGBA8888)
+    avatar_image.fill(QColor(255, 0, 0, 255))
+    assert avatar_image.save(str(image_path))
+    avatar = GuideSymbol(
+        name="avatar",
+        kind="bitmap",
+        bitmap_before_path=str(image_path),
+        bitmap_no_decor=True,
+        prefix_timing="anchored",
+        duration_ms=0,
+    )
+    svg_path = tmp_path / "lead.svg"
+    svg_path.write_text(
+        '<svg viewBox="0 0 100 100"><path d="M5 50 L85 10 L65 50 L85 90 Z"/></svg>',
+        encoding="utf-8",
+    )
+    svg = import_svg_guide_symbol(svg_path)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("★", 1_000),
+                    TimingChar("何", 1_600),
+                    TimingChar("度", 2_000),
+                ],
+                end_ms=2_400,
+                guide_symbol=avatar,
+                inline_guide_symbols={0: svg},
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        entry_anim="none",
+        exit_anim="none",
+    )
+    width, height = 640, 360
+    t_ms = 1_800
+
+    def avatar_pixels(payload: bytes) -> int:
+        return sum(
+            payload[index] > 200
+            and payload[index + 1] < 80
+            and payload[index + 2] < 80
+            and payload[index + 3] > 80
+            for index in range(0, len(payload), 4)
+        )
+
+    painter_frame = _render_painter_oracle(
+        style, t_ms=t_ms, track=track, width=width, height=height
+    )
+    output = tmp_path / "frame.png"
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        _, gpu_frames = _render_g1_frames(
+            renderer,
+            style,
+            (t_ms,),
+            force_warp=True,
+            track=track,
+            width=width,
+            height=height,
+        )
+        renderer.configure(track, style, width=width, height=height, fps=60)
+        assert renderer.render_frame_png(t_ms, output)["event"] == "frame_ready"
+    native_image = QImage(str(output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    native_bits = native_image.constBits()
+    native_bits.setsize(native_image.sizeInBytes())
+    native_frame = bytes(native_bits)
+
+    assert avatar_pixels(painter_frame) > 100
+    assert avatar_pixels(gpu_frames[0]) > 100
+    assert avatar_pixels(native_frame) > 100
