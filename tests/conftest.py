@@ -38,6 +38,77 @@ def _pinned_qapp():
 _SETTINGS_PATH_AWARE_MODULES = frozenset({"test_settings_atomic_io"})
 
 
+def _stop_media_outputs(widgets) -> None:
+    """销毁窗口前显式停掉测试懒创建的 QMediaPlayer。
+
+    与 ``test_subtitle_render_transport._release_media_objects`` 同一套防御：
+    若把 QMediaPlayer/QAudioOutput 留给解释器退出时的 Python GC 与 PyQt6
+    多媒体后端 C++ 析构竞争，会段错误（Python 3.14 退出期尤甚）。
+    """
+    try:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtMultimedia import QMediaPlayer
+    except ImportError:
+        return
+    for widget in widgets:
+        for attr in ("_player", "_video_player"):
+            player = getattr(widget, attr, None)
+            if isinstance(player, QMediaPlayer):
+                try:
+                    player.stop()
+                    player.setSource(QUrl())
+                    player.setAudioOutput(None)
+                    player.setVideoOutput(None)
+                except (RuntimeError, TypeError):
+                    pass
+
+
+@pytest.fixture(autouse=True)
+def _reap_stray_toplevel_widgets():
+    """测试结束后立刻回收本测试新建的无父顶层窗口。
+
+    背景：大量 GUI 测试构造 ``SubtitleRenderWindow`` / 面板后不再销毁，
+    全进程的泄漏窗口会累积到 ``test_subtitle_render_property_panel`` 等
+    模块级 ``qapp`` teardown 一次性 ``topLevelWidgets()`` 批量关闭——
+    ``topLevelWidgets()`` 是进程级的，那一个 teardown 实测最多 308s
+    （占全量 18m38s 的 27%），且随累积量超线性、量级不稳定（12s~308s），
+    还让进程堆持续膨胀，拖慢其它依赖 ``gc.collect()`` 的测试。
+
+    这里按测试粒度回收：进入测试前快照顶层窗口集合，结束后只处理新增项。
+    pytest 按 scope 排序实例化 fixture：更高作用域（session/module/class）
+    的 fixture 先于本函数级 autouse fixture 实例化，它们的窗口天然落在
+    快照里不会被误回收；函数级 fixture 的 teardown 按逆序先于本 fixture
+    收尾，也不会撞上已删的 C++ 对象。各模块末尾的批量关闭保留作兜底，
+    泄漏变少后它本身不再产生可观耗时。
+    """
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        yield
+        return
+    before = {id(widget) for widget in QApplication.topLevelWidgets()}
+    yield
+    strays = [
+        widget
+        for widget in QApplication.topLevelWidgets()
+        if id(widget) not in before
+    ]
+    if not strays:
+        return
+    _stop_media_outputs(strays)
+    for widget in strays:
+        try:
+            widget.close()
+            widget.deleteLater()
+        except RuntimeError:
+            # C++ 对象已随其它路径销毁（fixture 自行 deleteLater 等）。
+            continue
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
 @pytest.fixture(autouse=True)
 def _isolated_app_settings(request, tmp_path_factory, monkeypatch):
     """给每个测试一份独立的设置目录。

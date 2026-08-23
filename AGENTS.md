@@ -79,6 +79,8 @@ CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-aud
 C:\Python314\python.exe -m pytest tests\
 ```
 
+**开发时不要每次都跑全量**：整套 2900+ 个测试要 15 分钟以上，会拖慢迭代。日常开发只跑与改动相关的测试文件/用例（如 `pytest tests\test_subtitle_render_property_panel.py` 或单个 `::test_name`），全量回归留给发版前或跨模块大改动合并前。注意多个 pytest 进程并发跑会互相拖慢并诱发 flaky 失败，计时与排查请独占时段。GUI 测试结束后的顶层窗口由根 conftest 的 `_reap_stray_toplevel_widgets` 按测试回收，不要再引入跨测试存活的无父窗口。
+
 Qt 嵌入冒烟（无显示器环境）：
 
 ```powershell
