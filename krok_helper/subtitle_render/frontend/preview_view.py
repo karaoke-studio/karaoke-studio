@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from krok_helper.background_throttle import UiActivityGuard
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.preview_async import (
@@ -825,6 +826,9 @@ class TransportBar(QWidget):
         self._fps_update_timer.setInterval(_FPS_REFRESH_MS)
         self._fps_update_timer.timeout.connect(self._refresh_fps_label)
         self._fps_update_timer.start()
+        # FPS 读数是纯 UI 文本：页面切走/窗口最小化时停，恢复时立即补一次
+        self._ui_guard = UiActivityGuard(self)
+        self._ui_guard.manage(self._fps_update_timer, on_resume=self._refresh_fps_label)
 
     # ------------------------------------------------------------------ public API
 

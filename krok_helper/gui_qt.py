@@ -1632,6 +1632,7 @@ class KrokHelperQtApp(QMainWindow):
         """Inject host-managed runtime settings into the embedded timing module."""
         cache_dir = get_settings_path().parent / "lyrics_timing_cache"
         os.environ["SUG_CACHE_DIR"] = str(cache_dir)
+        os.environ["SUG_LOGS_DIR"] = str(get_settings_path().parent / "lyrics_timing_logs")
 
         bridge = getattr(self, "lyrics_timing_settings_bridge", None)
         if bridge is None:

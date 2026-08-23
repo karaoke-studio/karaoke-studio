@@ -111,6 +111,7 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
+from krok_helper.background_throttle import UiActivityGuard
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
@@ -4494,6 +4495,11 @@ class SubtitleRenderWindow(QWidget):
         self._export_preview_timer = QTimer(self)
         self._export_preview_timer.setInterval(500)
         self._export_preview_timer.timeout.connect(self._poll_export_preview)
+        # 纯 UI 轮询：页面切走/窗口最小化时停，恢复时立即补读一帧
+        self._export_preview_guard = UiActivityGuard(self)
+        self._export_preview_activity = self._export_preview_guard.manage(
+            self._export_preview_timer, on_resume=self._poll_export_preview
+        )
         self._export_preview_dir: Optional[Path] = None
         self._export_preview_file: Optional[Path] = None
         self._export_preview_mtime_ns = 0
@@ -9203,7 +9209,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_eta_label.setText("正在准备…")
         self._export_format_label.setText(self._export_format_text(job))
         self._export_started_monotonic = time.monotonic()
-        self._export_preview_timer.start()
+        self._export_preview_activity.set_desired(True)
 
         thread = QThread(self)
         preview_width = _export_preview_width(
@@ -9355,7 +9361,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_monitor_view.set_frame(image)
 
     def _stop_export_preview_polling(self) -> None:
-        self._export_preview_timer.stop()
+        self._export_preview_activity.set_desired(False)
         self._poll_export_preview()  # 收尾再读一次，保住最后写入的帧
 
     def _cleanup_export_preview_dir(self) -> None:

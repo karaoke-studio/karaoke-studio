@@ -46,6 +46,7 @@ from krok_helper.audio_processing.separation.states import (
     format_elapsed,
     format_size,
 )
+from krok_helper.background_throttle import UiActivityGuard
 
 #: 音频素材卡支持的格式（需求文档 §9.1，P0）。
 ACCEPTED_AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ape", ".alac"}
@@ -1087,6 +1088,15 @@ class CurrentTaskPanel(CardWidget):
         self._elapsed_timer.timeout.connect(self._update_elapsed)
         self._current_stage = -1
 
+        # qfluentwidgets 的 IndeterminateProgressBar 构造即启动无限循环动画；
+        # 空闲（无任务）时必须停掉，任务/面板可见性再交给节流 guard。
+        self._busy_bar.stop()
+        self._ui_guard = UiActivityGuard(self)
+        self._busy_animation = self._ui_guard.manage_animation(self._busy_bar)
+        self._elapsed_activity = self._ui_guard.manage(
+            self._elapsed_timer, on_resume=self._update_elapsed
+        )
+
     def set_stage_names(self, names) -> None:
         """重建阶段行（分离任务为六阶段；修复安装等复用时可传入自定义阶段）。"""
         while self._stages_col.count():
@@ -1123,7 +1133,8 @@ class CurrentTaskPanel(CardWidget):
         self._busy_bar.setVisible(True)
         self._download_row.setVisible(False)
         self._elapsed.start()
-        self._elapsed_timer.start()
+        self._elapsed_activity.set_desired(True)
+        self._busy_animation.set_desired(True)
         self._update_elapsed()
         self._refresh_stages(0)
         self.show()
@@ -1131,6 +1142,7 @@ class CurrentTaskPanel(CardWidget):
     def update_progress(self, progress) -> None:
         self._refresh_stages(progress.stage_index)
         determinate = progress.is_download_stage or progress.is_processing_stage
+        self._busy_animation.set_desired(not determinate)
         self._busy_bar.setVisible(not determinate)
         self._download_row.setVisible(determinate)
         if progress.is_download_stage and progress.download_total > 0:
@@ -1151,7 +1163,8 @@ class CurrentTaskPanel(CardWidget):
             self._file_label.setText(f"当前文件：{progress.current_file}")
 
     def stop(self) -> None:
-        self._elapsed_timer.stop()
+        self._elapsed_activity.set_desired(False)
+        self._busy_animation.set_desired(False)
 
     def _update_elapsed(self) -> None:
         self._elapsed_label.setText(f"已用时 {format_elapsed(self._elapsed.elapsed() / 1000)}")
