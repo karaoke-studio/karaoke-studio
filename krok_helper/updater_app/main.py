@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 
 from krok_helper import ensure_sug_root_path
-from krok_helper.updater_app import lock_diag
+from krok_helper.updater_app import diagnostics, lock_diag
 
 ensure_sug_root_path()
 from updater_app import main as updater_main
@@ -38,6 +38,7 @@ class BlockedLockInfo:
 
     entries: list = field(default_factory=list)  # [(pid, 友好名)]
     detail: str = ""
+    diagnostic_path: str = ""
 
 
 # worker 线程写入（_retry_workbench 抛 PersistentFileLock 时），GUI 线程在
@@ -49,6 +50,22 @@ _retry_context: tuple | None = None
 
 _original_run_incremental = updater_main.run_incremental
 _original_apply_part = updater_main._apply_part
+
+
+def _best_effort_diagnostic(func, *args, **kwargs):
+    """Keep every observability hook outside the updater's decision boundary."""
+    try:
+        return func(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def _record_diagnostic_attempt(*args, **kwargs) -> None:
+    _best_effort_diagnostic(diagnostics.record_attempt, *args, **kwargs)
+
+
+def _persist_diagnostic_failure(*args, **kwargs):
+    return _best_effort_diagnostic(diagnostics.persist_failure, *args, **kwargs)
 
 
 def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RETRY_INTERVAL):
@@ -64,16 +81,59 @@ def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RE
         max_retries = updater_main.FILE_LOCK_RETRY_COUNT
     last_exc: BaseException = OSError("no attempt made")
     for attempt in range(1, max_retries + 1):
+        started_ns = time.monotonic_ns()
         try:
-            return func()
+            result = func()
         except PermissionError as exc:
             last_exc = exc
+            _record_diagnostic_attempt(
+                op_desc,
+                phase="regular",
+                attempt=attempt,
+                max_attempts=max_retries,
+                started_ns=started_ns,
+                outcome="failed",
+                exc=exc,
+            )
         except OSError as exc:
             # WinError 5 (拒绝访问) / 32 (文件被占用) 同样视为可重试
             if getattr(exc, "winerror", None) in (5, 32):
                 last_exc = exc
+                _record_diagnostic_attempt(
+                    op_desc,
+                    phase="regular",
+                    attempt=attempt,
+                    max_attempts=max_retries,
+                    started_ns=started_ns,
+                    outcome="failed",
+                    exc=exc,
+                )
             else:
+                _record_diagnostic_attempt(
+                    op_desc,
+                    phase="regular",
+                    attempt=attempt,
+                    max_attempts=max_retries,
+                    started_ns=started_ns,
+                    outcome="failed_non_retryable",
+                    exc=exc,
+                )
+                _flush_logger(log)
+                _persist_diagnostic_failure(
+                    f"{op_desc}: non_retryable_oserror",
+                    exc=exc,
+                )
                 raise
+        else:
+            _record_diagnostic_attempt(
+                op_desc,
+                phase="regular",
+                attempt=attempt,
+                max_attempts=max_retries,
+                started_ns=started_ns,
+                outcome="succeeded",
+            )
+            return result
         if attempt < max_retries:
             log.warning(
                 "%s 第 %d/%d 次失败：%s；%.1fs 后重试…",
@@ -86,29 +146,118 @@ def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RE
                 op_desc, attempt, max_retries, last_exc,
             )
 
-    entries = lock_diag.find_lockers_for_exception(last_exc)
+    diagnosis_started_ns = time.monotonic_ns()
+    try:
+        diagnosis = lock_diag.diagnose_lockers_for_exception(last_exc)
+    except Exception as exc:
+        diagnosis = lock_diag.RestartManagerResult(
+            status="failed",
+            stage="unexpected_exception",
+            coverage={"exception": f"{type(exc).__name__}: {exc}"},
+        )
+    _best_effort_diagnostic(
+        diagnostics.record_restart_manager,
+        op_desc,
+        diagnosis,
+        started_ns=diagnosis_started_ns,
+    )
+    entries = diagnosis.entries
     holders = lock_diag.format_lockers(entries) if entries else ""
     if holders:
         log.warning("%s 诊断发现可能使用目标路径的进程：%s", op_desc, holders)
+    elif diagnosis.status == "none":
+        log.warning(
+            "%s Restart Manager 未发现占用进程（覆盖完整=%s，注册文件=%d）",
+            op_desc,
+            diagnosis.coverage.get("complete", False),
+            diagnosis.coverage.get("registered_file_count", 0),
+        )
+    else:
+        log.warning(
+            "%s Restart Manager 诊断失败（阶段=%s，返回码=%s）",
+            op_desc,
+            diagnosis.stage,
+            diagnosis.win32_error,
+        )
 
     log.info("%s 诊断完成，执行最终重试", op_desc)
+    final_started_ns = time.monotonic_ns()
     try:
         result = func()
     except PermissionError as exc:
         final_exc: BaseException = exc
     except OSError as exc:
         if getattr(exc, "winerror", None) not in (5, 32):
+            _record_diagnostic_attempt(
+                op_desc,
+                phase="final_after_diagnostics",
+                attempt=max_retries + 1,
+                max_attempts=max_retries + 1,
+                started_ns=final_started_ns,
+                outcome="failed_non_retryable",
+                exc=exc,
+            )
+            _flush_logger(log)
+            _persist_diagnostic_failure(
+                f"{op_desc}: final_non_retryable_oserror",
+                exc=exc,
+            )
             raise
         final_exc = exc
     else:
+        _record_diagnostic_attempt(
+            op_desc,
+            phase="final_after_diagnostics",
+            attempt=max_retries + 1,
+            max_attempts=max_retries + 1,
+            started_ns=final_started_ns,
+            outcome="succeeded",
+        )
         log.info("%s 最终重试成功", op_desc)
         return result
 
+    _record_diagnostic_attempt(
+        op_desc,
+        phase="final_after_diagnostics",
+        attempt=max_retries + 1,
+        max_attempts=max_retries + 1,
+        started_ns=final_started_ns,
+        outcome="failed",
+        exc=final_exc,
+    )
+    _flush_logger(log)
+    bundle_path = _persist_diagnostic_failure(
+        f"{op_desc}: final_retry_failed",
+        exc=final_exc,
+        details={
+            "restart_manager_status": diagnosis.status,
+            "restart_manager_stage": diagnosis.stage,
+            "restart_manager_win32_error": diagnosis.win32_error,
+        },
+    )
+    if bundle_path is not None:
+        log.error("诊断资料已保存：%s", bundle_path)
     if not entries:
         raise final_exc
     log.error("%s 最终重试仍被系统拒绝；%s", op_desc, holders)
-    _blocked_lock = BlockedLockInfo(entries=entries, detail=holders)
+    _blocked_lock = BlockedLockInfo(
+        entries=entries,
+        detail=holders,
+        diagnostic_path=str(bundle_path) if bundle_path is not None else "",
+    )
     raise PersistentFileLock(f"{final_exc}（{holders}）") from final_exc
+
+
+def _flush_logger(log) -> None:
+    """Flush current handlers before copying updater.log into a diagnostic bundle."""
+    try:
+        for handler in log.handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _path_lexists(path) -> bool:
@@ -141,6 +290,12 @@ def _remove_stale_backup(path, log, label: str) -> tuple[bool, str]:
     if _path_lexists(path):
         message = f"清理旧备份目标 {label} 失败: 删除操作结束后目标仍然存在"
         log.error(message)
+        _flush_logger(log)
+        _persist_diagnostic_failure(
+            f"清理旧备份目标 {label}: verification_failed",
+            extra_paths=[path],
+            details={"message": message},
+        )
         return False, message
     return True, ""
 
@@ -151,6 +306,12 @@ def _run_incremental_workbench(args, manifest, work_dir, log):
     if rc != 0:
         global _blocked_lock
         _blocked_lock = None
+        _flush_logger(log)
+        _persist_diagnostic_failure(
+            "incremental_update_failed",
+            extra_paths=[getattr(args, "app_dir", "")],
+            details={"exit_code": rc},
+        )
     return rc
 
 
@@ -168,6 +329,17 @@ def _apply_part_workbench(part_zip, targets, app_dir, work_dir, part_id, log):
             return False, error
 
     ok, err = _original_apply_part(part_zip, targets, app_dir, work_dir, part_id, log)
+    if not ok:
+        _flush_logger(log)
+        target_paths = [app_dir / rel for rel in targets if isinstance(rel, str)]
+        target_paths.extend(
+            app_dir / (rel + ".bak") for rel in targets if isinstance(rel, str)
+        )
+        _persist_diagnostic_failure(
+            f"incremental_part_{part_id}_failed",
+            extra_paths=target_paths,
+            details={"part_id": part_id, "error": err},
+        )
     if ok:
         leftovers = [
             rel for rel in targets
@@ -229,6 +401,10 @@ def _restart_update_worker(win) -> bool:
     win._workbench_retry_artifacts = (bridge, handler, worker)
 
     win._running = True
+    for name in ("_workbench_open_diagnostics", "_workbench_copy_diagnostics"):
+        button = getattr(win, name, None)
+        if button is not None:
+            button.hide()
     try:
         win._btn.setText(updater_gui._tr("取消更新"))
     except Exception:
@@ -250,6 +426,8 @@ def _offer_lock_recovery(win) -> bool:
 
     killable, blocked = _classify_lock_entries(info.entries)
     lines = "\n".join(f"{name}（PID {pid}）" for pid, name in info.entries)
+    if info.diagnostic_path:
+        lines += f"\n诊断资料：{info.diagnostic_path}"
     blocked_note = ""
     if blocked:
         shown = "、".join(name for _pid, name, _image in blocked)
@@ -283,6 +461,63 @@ def _offer_lock_recovery(win) -> bool:
     return _restart_update_worker(win)
 
 
+def _open_latest_diagnostic_bundle() -> None:
+    path = diagnostics.latest_bundle_path()
+    if path is None:
+        return
+    try:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    except Exception:
+        pass
+
+
+def _copy_latest_diagnostic_path() -> None:
+    path = diagnostics.latest_bundle_path()
+    if path is None:
+        return
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(str(path))
+    except Exception:
+        pass
+
+
+def _show_diagnostic_actions(win) -> None:
+    """Expose the persisted bundle without making GUI recovery failure fatal."""
+    path = diagnostics.latest_bundle_path()
+    if path is None:
+        return
+    try:
+        from qfluentwidgets import PushButton
+
+        open_button = getattr(win, "_workbench_open_diagnostics", None)
+        copy_button = getattr(win, "_workbench_copy_diagnostics", None)
+        if open_button is None or copy_button is None:
+            root_layout = win.layout()
+            bottom_layout = root_layout.itemAt(root_layout.count() - 1).layout()
+            open_button = PushButton("打开诊断目录", win)
+            copy_button = PushButton("复制诊断路径", win)
+            open_button.setFixedWidth(120)
+            copy_button.setFixedWidth(120)
+            open_button.clicked.connect(_open_latest_diagnostic_bundle)
+            copy_button.clicked.connect(_copy_latest_diagnostic_path)
+            bottom_layout.insertWidget(0, open_button)
+            bottom_layout.insertWidget(1, copy_button)
+            win._workbench_open_diagnostics = open_button
+            win._workbench_copy_diagnostics = copy_button
+        open_button.setToolTip(str(path))
+        copy_button.setToolTip(str(path))
+        open_button.show()
+        copy_button.show()
+        win.append_log(f"诊断资料已保存：{path}")
+    except Exception:
+        pass
+
+
 class _WorkbenchProductFilter(logging.Filter):
     """Replace SUG's hard-coded updater brand in all workbench log outputs."""
 
@@ -307,6 +542,18 @@ def _setup_workbench_logger(log_path):
     if not any(isinstance(item, _WorkbenchProductFilter) for item in logger.filters):
         logger.addFilter(_WorkbenchProductFilter())
     return logger
+
+
+def _run_with_diagnostics(args, run_func, *run_args, **run_kwargs):
+    """Run one updater attempt with a non-interfering diagnostic session."""
+    _best_effort_diagnostic(diagnostics.begin_session, args)
+    try:
+        code = run_func(args, *run_args, **run_kwargs)
+    except BaseException as exc:
+        _best_effort_diagnostic(diagnostics.finish_session, 99, exc=exc)
+        raise
+    _best_effort_diagnostic(diagnostics.finish_session, code)
+    return code
 
 
 def _cleanup_workbench_temp_workdir(work_dir) -> None:
@@ -354,9 +601,21 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
     # implementation performs the same validation, but its cleanup silently
     # ignores failures and then continues into rename.
     if not (new_root / app_exe).is_file():
-        return False, f"更新包中找不到 {app_exe}"
+        error = f"更新包中找不到 {app_exe}"
+        _persist_diagnostic_failure(
+            "full_update_package_validation_failed",
+            extra_paths=[new_root / app_exe],
+            details={"error": error},
+        )
+        return False, error
     if not (new_root / internal_name).is_dir():
-        return False, f"更新包中找不到 {internal_name}/"
+        error = f"更新包中找不到 {internal_name}/"
+        _persist_diagnostic_failure(
+            "full_update_package_validation_failed",
+            extra_paths=[new_root / internal_name],
+            details={"error": error},
+        )
+        return False, error
 
     backup_targets = (
         (app_dir / internal_name, app_dir / f"{internal_name}.old", f"{internal_name}.old"),
@@ -378,16 +637,39 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
             "（主程序可能未完全退出）",
             "（文件重命名被系统拒绝）",
         )
+        _flush_logger(log)
+        _persist_diagnostic_failure(
+            "full_update_apply_failed",
+            extra_paths=[
+                app_dir / internal_name,
+                app_dir / f"{internal_name}.old",
+                app_dir / app_exe,
+                app_dir / f"{app_exe}.old",
+            ],
+            details={"error": error},
+        )
     if not ok or app_exe == PRIMARY_APP_EXE_NAME:
         return ok, error
 
     primary_source = new_root / PRIMARY_APP_EXE_NAME
     if not primary_source.is_file():
-        return False, f"更新包中找不到 {PRIMARY_APP_EXE_NAME}"
+        error = f"更新包中找不到 {PRIMARY_APP_EXE_NAME}"
+        _persist_diagnostic_failure(
+            "full_update_package_validation_failed",
+            extra_paths=[primary_source],
+            details={"error": error},
+        )
+        return False, error
 
     try:
         shutil.copy2(str(primary_source), str(app_dir / PRIMARY_APP_EXE_NAME))
     except OSError as exc:
+        _flush_logger(log)
+        _persist_diagnostic_failure(
+            "primary_executable_copy_failed",
+            exc=exc,
+            extra_paths=[primary_source, app_dir / PRIMARY_APP_EXE_NAME],
+        )
         return False, f"写入 {PRIMARY_APP_EXE_NAME} 失败: {exc}"
     log.info("已写入改名后的主程序 %s", PRIMARY_APP_EXE_NAME)
     return True, ""
@@ -479,6 +761,8 @@ def _enable_gui() -> None:
                 except Exception:
                     pass  # 恢复流程异常时退回默认失败展示
             _original_on_finished(self, code)
+            if code != 0:
+                _show_diagnostic_actions(self)
 
         window_class.on_finished = _on_finished_with_lock_recovery
         window_class._workbench_lock_recovery_patch = True
@@ -491,8 +775,17 @@ def _enable_gui() -> None:
 
         def _run_gui_workbench(args, run_func):
             global _retry_context
-            _retry_context = (args, run_func)
-            return _original_run_gui(args, run_func)
+
+            def diagnosed_run(run_args, *extra_args, **kwargs):
+                return _run_with_diagnostics(
+                    run_args,
+                    run_func,
+                    *extra_args,
+                    **kwargs,
+                )
+
+            _retry_context = (args, diagnosed_run)
+            return _original_run_gui(args, diagnosed_run)
 
         _run_gui_workbench._workbench_retry_context_patch = True
         updater_gui.run_gui = _run_gui_workbench
@@ -511,7 +804,8 @@ def main(argv: list[str] | None = None, *, use_gui: bool = True) -> int:
     else:
         # Programmatic callers (notably integration tests) can exercise the
         # updater core without constructing a QApplication.
-        return updater_main.run(updater_main.parse_args(argv))
+        args = updater_main.parse_args(argv)
+        return _run_with_diagnostics(args, updater_main.run)
 
     if argv is None:
         return updater_main.main()

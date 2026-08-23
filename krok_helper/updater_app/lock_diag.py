@@ -1,16 +1,18 @@
 """点名占用更新目录的进程（Windows Restart Manager）。
 
 更新器在目录改名被 WinError 5 拒绝、重试耗尽后调用，把「拒绝访问」翻译成
-可直接操作的进程清单。诊断路径上的任何失败都安静降级（返回空描述），
-绝不影响更新主流程。
+可直接操作的进程清单。结构化接口区分发现占用、未发现占用与诊断失败；兼容
+接口仍在失败时返回空描述。诊断失败绝不影响更新主流程。
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Iterable, List, Tuple
 
 _CCH_RM_SESSION_KEY = 32
 _CCH_RM_MAX_APP_NAME = 255
@@ -19,7 +21,38 @@ _CCH_RM_MAX_SVC_NAME = 63
 _ERROR_MORE_DATA = 234
 # 目录树过大时只注册有限样本；exe/dll/pyd 优先（最常被长期占用的类型）。
 _SAMPLE_FILE_LIMIT = 400
+_SCAN_FILE_LIMIT = 4000
+_SCAN_TIME_LIMIT_SECONDS = 1.0
 _BINARY_SUFFIXES = {".exe", ".dll", ".pyd"}
+
+
+@dataclass
+class RestartManagerResult:
+    """One explicit Restart Manager outcome, including diagnostic coverage."""
+
+    status: str  # found / none / failed
+    entries: List[Tuple[int, str]] = field(default_factory=list)
+    stage: str = ""
+    win32_error: int | None = None
+    registered_paths: List[str] = field(default_factory=list)
+    coverage: dict[str, Any] = field(default_factory=dict)
+    reboot_reasons: int = 0
+    end_session_error: int | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "entries": [
+                {"pid": pid, "application_name": name}
+                for pid, name in self.entries
+            ],
+            "stage": self.stage,
+            "win32_error": self.win32_error,
+            "registered_paths": list(self.registered_paths),
+            "coverage": dict(self.coverage),
+            "reboot_reasons": self.reboot_reasons,
+            "end_session_error": self.end_session_error,
+        }
 
 
 class _FILETIME(ctypes.Structure):
@@ -48,123 +81,265 @@ class _RM_PROCESS_INFO(ctypes.Structure):
     ]
 
 
-def _rm_lockers(paths: List[str]) -> Optional[List[Tuple[int, str]]]:
-    """一次 Restart Manager 会话查询。
-
-    返回 ``(pid, 应用名)`` 列表；``[]`` 表示注册的资源当前无进程占用，
-    ``None`` 表示 API 调用失败（调用方需换一种资源组合重试或放弃）。
-    """
+def _rm_lockers(paths: List[str]) -> RestartManagerResult:
+    """Query one Restart Manager session and preserve the exact API outcome."""
     if os.name != "nt" or not paths:
-        return None
+        return RestartManagerResult(
+            status="failed",
+            stage="platform" if os.name != "nt" else "no_resources",
+            registered_paths=list(paths),
+        )
+    result = RestartManagerResult(
+        status="failed",
+        stage="start_session",
+        registered_paths=list(paths),
+    )
     try:
         rstrtmgr = ctypes.windll.rstrtmgr
         session = ctypes.c_uint32(0)
         session_key = ctypes.create_unicode_buffer(_CCH_RM_SESSION_KEY + 1)
-        if rstrtmgr.RmStartSession(ctypes.byref(session), 0, session_key) != 0:
-            return None
+        rc = int(rstrtmgr.RmStartSession(ctypes.byref(session), 0, session_key))
+        if rc != 0:
+            result.win32_error = rc
+            return result
         try:
             path_array = (ctypes.c_wchar_p * len(paths))(*paths)
-            if rstrtmgr.RmRegisterResources(
-                session, len(paths), path_array, 0, None, 0, None
-            ) != 0:
-                return None
+            result.stage = "register_resources"
+            rc = int(
+                rstrtmgr.RmRegisterResources(
+                    session, len(paths), path_array, 0, None, 0, None
+                )
+            )
+            if rc != 0:
+                result.win32_error = rc
+                return result
             needed = ctypes.c_uint32(0)
             count = ctypes.c_uint32(0)
             reboot = ctypes.c_uint32(0)
-            rc = rstrtmgr.RmGetList(
-                session,
-                ctypes.byref(needed),
-                ctypes.byref(count),
-                None,
-                ctypes.byref(reboot),
+            result.stage = "get_list_probe"
+            rc = int(
+                rstrtmgr.RmGetList(
+                    session,
+                    ctypes.byref(needed),
+                    ctypes.byref(count),
+                    None,
+                    ctypes.byref(reboot),
+                )
             )
+            result.reboot_reasons = int(reboot.value)
             if rc == 0:
-                return []
+                result.status = "none"
+                result.stage = "complete"
+                result.win32_error = None
+                return result
             if rc != _ERROR_MORE_DATA:
-                return None
+                result.win32_error = rc
+                return result
             infos = (_RM_PROCESS_INFO * needed.value)()
             count = ctypes.c_uint32(needed.value)
-            rc = rstrtmgr.RmGetList(
-                session,
-                ctypes.byref(needed),
-                ctypes.byref(count),
-                infos,
-                ctypes.byref(reboot),
+            result.stage = "get_list_data"
+            rc = int(
+                rstrtmgr.RmGetList(
+                    session,
+                    ctypes.byref(needed),
+                    ctypes.byref(count),
+                    infos,
+                    ctypes.byref(reboot),
+                )
             )
+            result.reboot_reasons = int(reboot.value)
             if rc != 0:
-                return None
-            return [
+                result.win32_error = rc
+                return result
+            result.entries = [
                 (int(infos[index].Process.dwProcessId), str(infos[index].strAppName))
                 for index in range(count.value)
             ]
+            result.status = "found" if result.entries else "none"
+            result.stage = "complete"
+            result.win32_error = None
+            return result
         finally:
-            rstrtmgr.RmEndSession(session)
-    except Exception:
-        return None
+            end_rc = int(rstrtmgr.RmEndSession(session))
+            if end_rc != 0:
+                result.end_session_error = end_rc
+    except Exception as exc:
+        result.stage = "exception"
+        result.coverage["exception"] = f"{type(exc).__name__}: {exc}"
+        return result
 
 
 def _sample_files(root: Path, limit: int = _SAMPLE_FILE_LIMIT) -> List[Path]:
-    """收集目录树内的文件样本，exe/dll/pyd 优先，总量不超过 ``limit``。"""
+    """Compatibility wrapper returning only bounded file samples."""
+    return _sample_files_with_coverage(root, limit)[0]
+
+
+def _sample_files_with_coverage(
+    root: Path,
+    limit: int = _SAMPLE_FILE_LIMIT,
+) -> tuple[List[Path], dict[str, Any]]:
+    """Collect bounded real-file samples without registering a directory in RM."""
     binaries: List[Path] = []
     others: List[Path] = []
+    discovered = 0
+    complete = True
+    errors: list[str] = []
+    deadline = time.monotonic() + _SCAN_TIME_LIMIT_SECONDS
     try:
-        for current, _dirs, files in os.walk(root):
+        for current, dirs, files in os.walk(root, followlinks=False):
+            # Do not traverse junctions/reparse points while diagnosing a failure.
+            safe_dirs = []
+            for name in dirs:
+                candidate = Path(current) / name
+                try:
+                    attrs = int(getattr(os.lstat(candidate), "st_file_attributes", 0))
+                    if attrs & 0x0400:
+                        continue
+                    safe_dirs.append(name)
+                except OSError as exc:
+                    errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
+            dirs[:] = safe_dirs
             for name in files:
                 path = Path(current) / name
+                discovered += 1
                 if path.suffix.lower() in _BINARY_SUFFIXES:
                     if len(binaries) < limit:
                         binaries.append(path)
                 elif len(others) < limit:
                     others.append(path)
-            if len(binaries) >= limit and len(others) >= limit:
+                if discovered >= _SCAN_FILE_LIMIT or time.monotonic() >= deadline:
+                    complete = False
+                    break
+            if not complete:
                 break
-    except OSError:
-        pass
+    except OSError as exc:
+        complete = False
+        errors.append(f"{root}: {type(exc).__name__}: {exc}")
     if len(binaries) < limit:
         binaries += others[: limit - len(binaries)]
-    return binaries
+    samples = binaries[:limit]
+    if discovered > len(samples):
+        complete = False
+    return samples, {
+        "root": str(root),
+        "discovered_file_count": discovered,
+        "registered_file_count": len(samples),
+        "complete": complete,
+        "truncated": not complete,
+        "errors": errors,
+    }
 
 
-def find_lockers(paths: Iterable[object]) -> List[Tuple[int, str]]:
-    """返回去重后的 ``(pid, 友好名)`` 占用进程列表；无占用/不可用时为空。
+def _normalize_rm_result(
+    raw: object,
+    registered_paths: List[str],
+) -> RestartManagerResult:
+    """Accept legacy private-test doubles while the public result stays structured."""
+    if isinstance(raw, RestartManagerResult):
+        return raw
+    if raw is None:
+        return RestartManagerResult(
+            status="failed",
+            stage="legacy_unavailable",
+            registered_paths=registered_paths,
+        )
+    entries = list(raw)  # type: ignore[arg-type]
+    return RestartManagerResult(
+        status="found" if entries else "none",
+        entries=entries,
+        stage="complete",
+        registered_paths=registered_paths,
+    )
 
-    目录与文件都接受：先直接注册目录本身（捕获停在目录里的资源管理器等
-    目录句柄持有者），查不到再用树内文件样本查询（捕获打开着树内文件的进程）。
-    """
-    files: List[str] = []
-    dirs: List[str] = []
+
+def diagnose_lockers(paths: Iterable[object]) -> RestartManagerResult:
+    """Diagnose files represented by paths, never registering directories directly."""
+    explicit_files: List[str] = []
+    directories: List[Path] = []
+    missing: List[str] = []
+    input_count = 0
     for raw in paths:
         if not raw:
             continue
+        input_count += 1
         text = os.fspath(raw)
         if os.path.isdir(text):
-            dirs.append(text)
-        elif os.path.isfile(text):
-            files.append(text)
-    if not files and not dirs:
-        return []
+            directories.append(Path(text))
+        elif os.path.isfile(text) or os.path.lexists(text):
+            explicit_files.append(text)
+        else:
+            missing.append(text)
 
-    lockers: Optional[List[Tuple[int, str]]] = None
-    if dirs:
-        lockers = _rm_lockers(dirs)
-    if not lockers:
-        samples = list(files)
-        for directory in dirs:
-            samples.extend(_sample_files(Path(directory)))
-        if samples:
-            lockers = _rm_lockers([str(path) for path in samples])
-    if not lockers:
-        return []
+    registered = list(dict.fromkeys(explicit_files))
+    per_directory: list[dict[str, Any]] = []
+    for directory in directories:
+        remaining = max(0, _SAMPLE_FILE_LIMIT - len(registered))
+        if remaining == 0:
+            per_directory.append(
+                {
+                    "root": str(directory),
+                    "discovered_file_count": 0,
+                    "registered_file_count": 0,
+                    "complete": False,
+                    "truncated": True,
+                    "errors": ["global sample limit reached"],
+                }
+            )
+            continue
+        samples, coverage = _sample_files_with_coverage(directory, remaining)
+        per_directory.append(coverage)
+        for sample in samples:
+            text = str(sample)
+            if text not in registered:
+                registered.append(text)
+
+    if len(registered) > _SAMPLE_FILE_LIMIT:
+        registered = registered[:_SAMPLE_FILE_LIMIT]
+    complete = (
+        len(explicit_files) <= _SAMPLE_FILE_LIMIT
+        and not missing
+        and all(item.get("complete", False) for item in per_directory)
+    )
+    coverage = {
+        "input_path_count": input_count,
+        "explicit_file_count": len(explicit_files),
+        "directory_count": len(directories),
+        "missing_paths": missing,
+        "registered_file_count": len(registered),
+        "sample_limit": _SAMPLE_FILE_LIMIT,
+        "complete": complete,
+        "truncated": not complete,
+        "directories": per_directory,
+        "directories_registered_directly": False,
+    }
+
+    if not registered:
+        return RestartManagerResult(
+            status="failed",
+            stage="no_registerable_files",
+            coverage=coverage,
+        )
+
+    result = _normalize_rm_result(_rm_lockers(registered), registered)
+    result.coverage.update(coverage)
 
     own_pid = os.getpid()
     seen: set[int] = set()
-    result: List[Tuple[int, str]] = []
-    for pid, name in lockers:
+    filtered: List[Tuple[int, str]] = []
+    for pid, name in result.entries:
         if pid == own_pid or pid in seen or not name:
             continue
         seen.add(pid)
-        result.append((pid, name))
+        filtered.append((pid, name))
+    result.entries = filtered
+    if result.status != "failed":
+        result.status = "found" if filtered else "none"
     return result
+
+
+def find_lockers(paths: Iterable[object]) -> List[Tuple[int, str]]:
+    """Compatibility helper returning only the deduplicated process entries."""
+    return diagnose_lockers(paths).entries
 
 
 def format_lockers(entries: List[Tuple[int, str]]) -> str:
@@ -185,6 +360,15 @@ def find_lockers_for_exception(exc: BaseException) -> List[Tuple[int, str]]:
         getattr(exc, "filename2", None),
     ]
     return find_lockers([item for item in candidates if item])
+
+
+def diagnose_lockers_for_exception(exc: BaseException) -> RestartManagerResult:
+    """Return a tri-state diagnosis for ``filename`` / ``filename2``."""
+    candidates = [
+        getattr(exc, "filename", None),
+        getattr(exc, "filename2", None),
+    ]
+    return diagnose_lockers([item for item in candidates if item])
 
 
 def describe_lockers_for_exception(exc: BaseException) -> str:

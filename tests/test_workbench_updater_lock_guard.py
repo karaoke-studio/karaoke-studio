@@ -15,6 +15,16 @@ def _lock_error(src: Path, dst: Path) -> PermissionError:
     return PermissionError(5, "拒绝访问。", str(src), 5, str(dst))
 
 
+def _rm_diagnosis(entries=None, *, status: str | None = None):
+    entries = list(entries or [])
+    return lock_diag.RestartManagerResult(
+        status=status or ("found" if entries else "none"),
+        entries=entries,
+        stage="complete",
+        coverage={"complete": True, "registered_file_count": 1},
+    )
+
+
 def test_configure_product_registers_lock_guard_patches() -> None:
     workbench_updater._configure_product()
 
@@ -41,8 +51,8 @@ def test_retry_uses_three_second_intervals_and_names_holders(
     monkeypatch.setattr(workbench_updater.time, "sleep", sleeps.append)
     monkeypatch.setattr(
         workbench_updater.lock_diag,
-        "find_lockers_for_exception",
-        lambda exc: [(42, "demo.exe")],
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis([(42, "demo.exe")]),
     )
     src = tmp_path / "strange_uta_game"
     dst = tmp_path / "strange_uta_game.bak"
@@ -73,8 +83,8 @@ def test_retry_succeeds_on_final_attempt_after_diagnostics(
     monkeypatch.setattr(workbench_updater.time, "sleep", sleeps.append)
     monkeypatch.setattr(
         workbench_updater.lock_diag,
-        "find_lockers_for_exception",
-        lambda exc: [(42, "demo.exe")],
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis([(42, "demo.exe")]),
     )
     calls = 0
 
@@ -103,7 +113,9 @@ def test_retry_without_holders_reraises_original_error(
     monkeypatch.setattr(workbench_updater, "_blocked_lock", None)
     monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
-        workbench_updater.lock_diag, "find_lockers_for_exception", lambda exc: []
+        workbench_updater.lock_diag,
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis(),
     )
 
     calls = 0
@@ -182,8 +194,8 @@ def test_apply_part_stops_when_stale_backup_cannot_be_removed(
     monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         workbench_updater.lock_diag,
-        "find_lockers_for_exception",
-        lambda exc: [],
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis(),
     )
     called = False
 
@@ -350,8 +362,8 @@ def test_full_update_stops_when_old_backup_cannot_be_removed(
     monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         workbench_updater.lock_diag,
-        "find_lockers_for_exception",
-        lambda exc: [],
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis(),
     )
     monkeypatch.setattr(workbench_updater, "_original_apply_update", generic_apply)
 
