@@ -46,7 +46,7 @@ from krok_helper.audio_processing.separation.states import (
     format_elapsed,
     format_size,
 )
-from krok_helper.background_throttle import UiActivityGuard
+from krok_helper.background_throttle import UiActivityGuard, ui_active
 
 #: 音频素材卡支持的格式（需求文档 §9.1，P0）。
 ACCEPTED_AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ape", ".alac"}
@@ -1096,6 +1096,9 @@ class CurrentTaskPanel(CardWidget):
         self._elapsed_activity = self._ui_guard.manage(
             self._elapsed_timer, on_resume=self._update_elapsed
         )
+        # 页面隐藏期间进度信号只缓存最新值，恢复可见时重放一次
+        self._pending_progress = None
+        self._ui_guard.on_visibility(self._flush_pending_progress)
 
     def set_stage_names(self, names) -> None:
         """重建阶段行（分离任务为六阶段；修复安装等复用时可传入自定义阶段）。"""
@@ -1140,6 +1143,12 @@ class CurrentTaskPanel(CardWidget):
         self.show()
 
     def update_progress(self, progress) -> None:
+        if not ui_active(self):
+            # 隐藏期间分离 worker 全速推进，UI 控件没人看得见：
+            # 只留最新一份进度，恢复可见时重放。
+            self._pending_progress = progress
+            return
+        self._pending_progress = None
         self._refresh_stages(progress.stage_index)
         determinate = progress.is_download_stage or progress.is_processing_stage
         self._busy_animation.set_desired(not determinate)
@@ -1165,6 +1174,12 @@ class CurrentTaskPanel(CardWidget):
     def stop(self) -> None:
         self._elapsed_activity.set_desired(False)
         self._busy_animation.set_desired(False)
+        self._pending_progress = None  # 任务收尾，旧进度不得在恢复可见时重放
+
+    def _flush_pending_progress(self) -> None:
+        progress = self._pending_progress
+        if progress is not None and ui_active(self):
+            self.update_progress(progress)
 
     def _update_elapsed(self) -> None:
         self._elapsed_label.setText(f"已用时 {format_elapsed(self._elapsed.elapsed() / 1000)}")

@@ -44,6 +44,7 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
+from krok_helper.background_throttle import UiActivityGuard, ui_active
 from krok_helper.qfluent_compat import (
     ask_fluent_confirm,
     exec_modeless_dialog,
@@ -769,6 +770,10 @@ class VideoDownloadPage(QWidget):
         self._progress_refresh_timer.setInterval(DOWNLOAD_PROGRESS_REFRESH_MS)
         self._progress_refresh_timer.setSingleShot(True)
         self._progress_refresh_timer.timeout.connect(self._flush_progress_refresh)
+        # 页面隐藏（切走/最小化）期间下载 worker 全速推进，表格重绘只攒
+        # pending，恢复可见时补一次。
+        self._ui_guard = UiActivityGuard(self)
+        self._ui_guard.on_visibility(self._flush_hidden_progress_refresh)
         self._bilibili_profile: BilibiliAccountProfile | None = None
         self._youtube_profile: BilibiliAccountProfile | None = None
         self._recent_bilibili_login_deadline = 0.0
@@ -2897,6 +2902,9 @@ class VideoDownloadPage(QWidget):
 
     def _schedule_progress_refresh(self) -> None:
         """Coalesce yt-dlp progress ticks into at most one repaint per interval."""
+        if not ui_active(self):
+            self._progress_refresh_pending = True
+            return
         if self._progress_refresh_timer.isActive():
             self._progress_refresh_pending = True
             return
@@ -2906,9 +2914,17 @@ class VideoDownloadPage(QWidget):
     def _flush_progress_refresh(self) -> None:
         if not self._progress_refresh_pending:
             return
+        if not ui_active(self):
+            return  # 保持 pending，等恢复可见；不再自续期定时器
         self._progress_refresh_pending = False
         self._repaint_task_progress()
         self._progress_refresh_timer.start()
+
+    def _flush_hidden_progress_refresh(self) -> None:
+        """恢复可见时补一次隐藏期间攒下的表格刷新。"""
+        if ui_active(self) and self._progress_refresh_pending:
+            self._progress_refresh_pending = False
+            self._repaint_task_progress()
 
     def _repaint_task_progress(self) -> None:
         if self.download_table.rowCount() != len(self._tasks):

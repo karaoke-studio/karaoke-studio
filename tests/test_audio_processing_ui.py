@@ -380,6 +380,10 @@ class TestSwitcherAndWidgets:
         from krok_helper.audio_processing.separation.widgets import CurrentTaskPanel
 
         panel = CurrentTaskPanel()
+        # 隐藏期间进度会转为 pending 攒批（见 background_throttle），
+        # 这里验证可见路径的控件行为。
+        panel.show()
+        QApplication.instance().processEvents()
         panel.start("分离伴奏")
         panel.update_progress(
             TaskProgress(

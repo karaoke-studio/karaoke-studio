@@ -53,6 +53,10 @@ def page(monkeypatch: pytest.MonkeyPatch, make_download_task) -> Iterator[VideoD
         task.status = TASK_STATUS_DOWNLOADING
         widget._tasks.append(task)
         widget._task_index[task.task_id] = task
+    # 隐藏期间进度刷新会转为 pending 攒批（见 background_throttle），
+    # 本文件的用例验证的是可见路径的表格行为。
+    widget.show()
+    app.processEvents()
     widget._refresh_download_table()
     try:
         yield widget
@@ -88,6 +92,22 @@ def test_progress_ticks_are_coalesced(page: VideoDownloadPage) -> None:
     page._flush_progress_refresh()
     assert len(repaints) == 2
     assert page.download_table.item(0, PROGRESS_COLUMN).text() == "50%"
+
+
+def test_progress_refresh_defers_while_page_hidden(page: VideoDownloadPage) -> None:
+    """页面隐藏期间进度 tick 只攒 pending，恢复可见时补一次重绘。"""
+    app = QApplication.instance()
+
+    page.hide()
+    app.processEvents()
+    page._handle_download_progress("task-1", _progress_payload(400))
+    assert page._progress_refresh_pending is True
+    assert page.download_table.item(0, PROGRESS_COLUMN).text() != "40%"
+
+    page.show()
+    app.processEvents()
+    assert page._progress_refresh_pending is False
+    assert page.download_table.item(0, PROGRESS_COLUMN).text() == "40%"
 
 
 def test_status_change_rebuilds_action_widget(page: VideoDownloadPage) -> None:

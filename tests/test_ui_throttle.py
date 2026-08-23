@@ -305,6 +305,46 @@ def test_current_task_panel_determinate_stage_stops_busy_bar(app):
         panel.deleteLater()
 
 
+def test_current_task_panel_defers_progress_updates(app):
+    """分离进度信号在面板隐藏时只缓存最新值，恢复可见时重放一次。"""
+    from krok_helper.audio_processing.separation.backend import TaskProgress
+    from krok_helper.audio_processing.separation.widgets import CurrentTaskPanel
+
+    panel = CurrentTaskPanel()
+    try:
+        panel.show()
+        _process(app)
+        panel.start("测试任务")
+
+        panel.hide()
+        _process(app)
+        determinate = TaskProgress(
+            stage_index=1,
+            show_download=True,
+            download_done=10,
+            download_total=100,
+        )
+        panel.update_progress(determinate)
+        assert panel._pending_progress is determinate  # 隐藏：只攒不刷
+        assert panel._download_row.isHidden()  # UI 控件保持原状
+
+        panel.show()
+        _process(app)
+        assert panel._pending_progress is None  # 恢复：重放
+        assert not panel._download_row.isHidden()
+        assert panel._download_bar.value() == 100
+
+        # 任务收尾清空 pending：隐藏期到达的旧进度不得在下次恢复时重放
+        panel.hide()
+        _process(app)
+        panel.update_progress(determinate)
+        assert panel._pending_progress is determinate
+        panel.stop()
+        assert panel._pending_progress is None
+    finally:
+        panel.deleteLater()
+
+
 # ── 导出逐帧 UI 更新：隐藏攒最新值，恢复可见重放 ──────────────────────
 
 
