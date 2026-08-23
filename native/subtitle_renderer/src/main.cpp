@@ -31,6 +31,7 @@
 #include "backends/qt/qt_fill_brush.h"
 #include "backends/qt/qt_font_factory.h"
 #include "backends/qt/qt_glyph_run.h"
+#include "backends/qt/qt_inline_text.h"
 #include "backends/qt/qt_line_layout.h"
 #include "backends/qt/qt_render_cache.h"
 #include "backends/qt/qt_render_types.h"
@@ -134,6 +135,7 @@ using krok::subtitle::native::legacy_qt::glowBitmapCacheEnabled;
 using krok::subtitle::native::legacy_qt::glowExtentForWidths;
 using krok::subtitle::native::legacy_qt::glowRadius;
 using krok::subtitle::native::legacy_qt::paintGlyphRunTextLayers;
+using krok::subtitle::native::legacy_qt::paintInlineTextLayerStack;
 using krok::subtitle::native::legacy_qt::lineEndMs;
 using krok::subtitle::native::legacy_qt::lineCharTransitionContext;
 using krok::subtitle::native::legacy_qt::lineIntervals;
@@ -558,44 +560,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-void paintInlineTextLayerStack(
-    QPainter &painter,
-    const TimingLine &line,
-    const LineLayout &layout,
-    bool after
-) {
-    for (std::size_t i = 0; i < line.chars.size(); ++i) {
-        if (i >= layout.charLefts.size() || i >= layout.charWidths.size() || i >= layout.charFonts.size() || i >= layout.charStyles.size()) {
-            continue;
-        }
-        const ResolvedStyle &style = *layout.charStyles[i];
-        const QFontMetricsF metrics(layout.charFonts[i]);
-        QPainterPath path;
-        path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.charFonts[i], line.chars[i].text);
-        const QRectF rect(
-            layout.charLefts[i],
-            layout.baselineY - metrics.ascent(),
-            layout.charWidths[i],
-            metrics.height()
-        );
-        paintTextLayerStackWithWidths(
-            painter,
-            path,
-            rect,
-            after ? style.afterFill : style.baseFill,
-            after ? style.afterStrokeFill : style.beforeStrokeFill,
-            after ? style.afterStroke2Fill : style.beforeStroke2Fill,
-            after ? style.afterShadowFill : style.beforeShadowFill,
-            style,
-            style.strokeWidthPx,
-            style.stroke2WidthPx,
-            style.shadowOffsetX,
-            style.shadowOffsetY,
-            glowRadius(style, after)
-        );
-    }
-}
 
 double characterFillRatio(
     const std::vector<std::pair<int, int>> &intervals,
