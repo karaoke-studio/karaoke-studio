@@ -227,7 +227,11 @@ def test_native_gpu_preview_pool_hides_backend_and_protocol_details():
 
     assert "class GpuPreviewWorkerPool {" in header_source
     assert "class GpuPreviewWorkerPool {" not in main_source
-    assert '#include "runtime/gpu_preview_worker_pool.h"' in main_source
+    assert '#include "runtime/gpu_preview_worker_pool.h"' not in main_source
+    assert (
+        '#include "../runtime/gpu_preview_worker_pool.h"'
+        in lifecycle_commands_source
+    )
     assert "Direct2DGpuBackend" not in header_source
     assert "json_protocol.h" not in implementation_source
     assert "writeJson(" not in implementation_source
@@ -363,6 +367,9 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     implementation_source = Path(
         "native/subtitle_renderer/src/runtime/gpu_backend_runtime.cpp"
     ).read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -376,7 +383,8 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     assert "Direct2DGpuBackend" not in main_source
     assert "QJsonObject" not in implementation_source
     assert "protocol/" not in implementation_source
-    assert '#include "runtime/gpu_backend_runtime.h"' in main_source
+    assert '#include "runtime/gpu_backend_runtime.h"' not in main_source
+    assert '#include "../runtime/gpu_backend_runtime.h"' in frame_commands_source
     assert "src/runtime/gpu_backend_runtime.cpp" in cmake_source
     assert "src/runtime/gpu_backend_runtime.h" in cmake_source
 
@@ -643,6 +651,9 @@ def test_native_checksum_rules_have_single_runtime_owner():
     implementation_source = Path(
         "native/subtitle_renderer/src/runtime/checksum.cpp"
     ).read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -657,7 +668,8 @@ def test_native_checksum_rules_have_single_runtime_owner():
         assert declaration not in main_source
     assert "protocol/" not in implementation_source
     assert "backends/" not in implementation_source
-    assert '#include "runtime/checksum.h"' in main_source
+    assert '#include "runtime/checksum.h"' not in main_source
+    assert '#include "../runtime/checksum.h"' in frame_commands_source
     assert "src/runtime/checksum.cpp" in cmake_source
     assert "src/runtime/checksum.h" in cmake_source
 
@@ -1109,6 +1121,9 @@ def test_native_gpu_diagnostics_json_hides_backend_serialization():
     implementation_source = Path(
         "native/subtitle_renderer/src/diagnostics/gpu_diagnostics_json.cpp"
     ).read_text(encoding="utf-8")
+    lifecycle_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -1130,7 +1145,11 @@ def test_native_gpu_diagnostics_json_hides_backend_serialization():
         assert field not in main_source
     assert "RenderRuntime" not in implementation_source
     assert "RenderConfig" not in implementation_source
-    assert '#include "diagnostics/gpu_diagnostics_json.h"' in main_source
+    assert '#include "diagnostics/gpu_diagnostics_json.h"' not in main_source
+    assert (
+        '#include "../diagnostics/gpu_diagnostics_json.h"'
+        in lifecycle_commands_source
+    )
     assert "src/diagnostics/gpu_diagnostics_json.cpp" in cmake_source
     assert "src/diagnostics/gpu_diagnostics_json.h" in cmake_source
 
@@ -1141,6 +1160,9 @@ def test_native_shared_frame_metadata_has_one_json_owner():
     )
     range_commands_source = Path(
         "native/subtitle_renderer/src/commands/qt_range_commands.cpp"
+    ).read_text(encoding="utf-8")
+    gpu_frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
     ).read_text(encoding="utf-8")
     header_source = Path(
         "native/subtitle_renderer/src/diagnostics/shared_frame_metadata_json.h"
@@ -1165,7 +1187,11 @@ def test_native_shared_frame_metadata_has_one_json_owner():
         assert field not in range_commands_source
     assert "RenderRuntime" not in implementation_source
     assert "RenderConfig" not in implementation_source
-    assert "appendSharedFrameMetadata(out, ring, slotIndex)" in main_source
+    assert "appendSharedFrameMetadata(out, ring, slotIndex)" not in main_source
+    assert (
+        "appendSharedFrameMetadata(out, ring, slotIndex)"
+        in gpu_frame_commands_source
+    )
     assert (
         "appendSharedFrameMetadata(frame, ring, slotIndex)"
         in range_commands_source
@@ -1184,6 +1210,9 @@ def test_native_shared_frame_transport_hides_runtime_writes():
     implementation_source = Path(
         "native/subtitle_renderer/src/runtime/shared_frame_transport.cpp"
     ).read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -1200,7 +1229,11 @@ def test_native_shared_frame_transport_hides_runtime_writes():
     assert "QJsonObject" not in implementation_source
     assert "RenderBackend" not in implementation_source
     assert "protocol/" not in implementation_source
-    assert '#include "runtime/shared_frame_transport.h"' in main_source
+    assert '#include "runtime/shared_frame_transport.h"' not in main_source
+    assert (
+        '#include "../runtime/shared_frame_transport.h"'
+        in frame_commands_source
+    )
     assert "src/runtime/shared_frame_transport.cpp" in cmake_source
     assert "src/runtime/shared_frame_transport.h" in cmake_source
 
@@ -1299,6 +1332,48 @@ def test_native_gpu_lifecycle_commands_own_configuration_state():
     assert '#include "commands/gpu_lifecycle_commands.h"' in main_source
     assert "src/commands/gpu_lifecycle_commands.cpp" in cmake_source
     assert "src/commands/gpu_lifecycle_commands.h" in cmake_source
+
+
+def test_native_gpu_frame_commands_hide_hot_path_transport_details():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_frame_commands.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "handleRenderGpuFrame(" in header_source
+    assert "handlePresentGpuFrame(" in header_source
+    assert "std::optional<QJsonObject> handleRenderGpuFrame(" not in main_source
+    assert "QJsonObject handlePresentGpuFrame(" not in main_source
+    for private_rule in (
+        "renderGpuFrameWithBackend(",
+        "generationCancelled(",
+        "defaultSharedMemoryKey(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    for private_detail in (
+        "native_pack_ms",
+        "slot_count",
+        "parent_hwnd",
+        "direct_composition",
+    ):
+        assert private_detail in implementation_source
+        assert private_detail not in header_source
+        assert private_detail not in main_source
+    assert "gpuSceneFromConfig" not in implementation_source
+    assert "Direct2DGpuBackend" not in implementation_source
+    assert '#include "commands/gpu_frame_commands.h"' in main_source
+    assert "src/commands/gpu_frame_commands.cpp" in cmake_source
+    assert "src/commands/gpu_frame_commands.h" in cmake_source
 
 
 def test_native_qt_range_commands_hide_parallel_render_flow():
