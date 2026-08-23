@@ -825,9 +825,28 @@ def test_native_qt_cached_ruby_layer_hides_build_and_key_details():
     ):
         assert dependency in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_cached_ruby_layer.h"' in main_source
     assert "src/backends/qt/qt_cached_ruby_layer.cpp" in cmake_source
     assert "src/backends/qt/qt_cached_ruby_layer.h" in cmake_source
+
+
+def test_native_qt_ruby_painter_consumes_diagnostics_not_raw_timing():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_ruby_painter.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_ruby_painter.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "paintRubyDiagnostics(" in header_source
+    assert "void paintRubyDiagnostics(" not in main_source
+    assert '#include "qt_cached_ruby_layer.h"' in implementation_source
+    assert "RubyAnnotation" not in implementation_source
+    assert "TimingLine" not in implementation_source
+    assert "rubyTargetIndices" not in implementation_source
+    assert "rubyProgressRatio" not in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_ruby_painter.h"' in main_source
+    assert "qt_cached_ruby_layer.h" not in main_source
+    assert "src/backends/qt/qt_ruby_painter.cpp" in cmake_source
+    assert "src/backends/qt/qt_ruby_painter.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():

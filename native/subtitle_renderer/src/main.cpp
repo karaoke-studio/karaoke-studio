@@ -24,7 +24,6 @@
 
 #include "backends/direct2d/d2d_backend.h"
 #include "backends/qt/qt_cached_line_layout.h"
-#include "backends/qt/qt_cached_ruby_layer.h"
 #include "backends/qt/qt_cached_text_layer.h"
 #include "backends/qt/qt_character_animation.h"
 #include "backends/qt/qt_clip_geometry.h"
@@ -37,6 +36,7 @@
 #include "backends/qt/qt_render_types.h"
 #include "backends/qt/qt_ruby_diagnostics.h"
 #include "backends/qt/qt_ruby_layout.h"
+#include "backends/qt/qt_ruby_painter.h"
 #include "backends/qt/qt_ruby_target.h"
 #include "backends/qt/qt_ruby_timing.h"
 #include "backends/qt/qt_ruby_wipe.h"
@@ -92,7 +92,6 @@ using krok::subtitle::native::legacy_qt::LineLayout;
 using krok::subtitle::native::legacy_qt::LineDiagnostics;
 using krok::subtitle::native::legacy_qt::DisplayLineRef;
 using krok::subtitle::native::legacy_qt::RubyDiagnostics;
-using krok::subtitle::native::legacy_qt::RubyLayerImage;
 using krok::subtitle::native::legacy_qt::TextLayerImage;
 using krok::subtitle::native::legacy_qt::RubyGroupInfo;
 using krok::subtitle::native::legacy_qt::RubyUnitLayout;
@@ -114,7 +113,6 @@ using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::brushForFill;
 using krok::subtitle::native::legacy_qt::blitTransformedGlowLayerWithWidths;
 using krok::subtitle::native::legacy_qt::cachedLayoutLine;
-using krok::subtitle::native::legacy_qt::cachedRubyTextLayer;
 using krok::subtitle::native::legacy_qt::paintCachedTextLayerStackWithWidths;
 using krok::subtitle::native::legacy_qt::afterClipVerticalExtent;
 using krok::subtitle::native::legacy_qt::applyRubyMainWipeProjection;
@@ -153,6 +151,7 @@ using krok::subtitle::native::legacy_qt::rubyScale;
 using krok::subtitle::native::legacy_qt::rubyGroupForCharIndex;
 using krok::subtitle::native::legacy_qt::rubyDiagnosticsForLine;
 using krok::subtitle::native::legacy_qt::rubyLayoutWidth;
+using krok::subtitle::native::legacy_qt::paintRubyDiagnostics;
 using krok::subtitle::native::legacy_qt::rubyProgressRatio;
 using krok::subtitle::native::legacy_qt::rubyReadingUnits;
 using krok::subtitle::native::legacy_qt::rubyTargetIndices;
@@ -559,81 +558,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-void paintRubyDiagnostics(
-    QPainter &painter,
-    const ResolvedStyle &style,
-    const std::vector<RubyDiagnostics> &rubies,
-    const PaintFillSpec &base,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &beforeStroke,
-    const PaintFillSpec &afterStroke,
-    const PaintFillSpec &beforeStroke2,
-    const PaintFillSpec &afterStroke2,
-    const PaintFillSpec &beforeShadow,
-    const PaintFillSpec &afterShadow
-) {
-    if (rubies.empty()) {
-        return;
-    }
-    const QFont rubyFont = buildRubyFont(style);
-    const QFontMetricsF rubyMetrics(rubyFont);
-    const double scale = rubyScale(style);
-    const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
-    const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
-    const int shadowOffsetX = scaledSignedPx(style.shadowOffsetX, scale);
-    const int shadowOffsetY = scaledSignedPx(style.shadowOffsetY, scale);
-    for (const RubyDiagnostics &ruby : rubies) {
-        const RubyLayerImage beforeLayer = cachedRubyTextLayer(
-            ruby,
-            rubyFont,
-            rubyMetrics,
-            QStringLiteral("before"),
-            base,
-            beforeStroke,
-            beforeStroke2,
-            beforeShadow,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            scaledPx(glowRadius(style, false), scale)
-        );
-        painter.drawImage(QPointF(ruby.x, ruby.baselineY) + beforeLayer.offset, beforeLayer.image);
-        if (ruby.progress <= 0.0) {
-            continue;
-        }
-        const RubyLayerImage afterLayer = cachedRubyTextLayer(
-            ruby,
-            rubyFont,
-            rubyMetrics,
-            QStringLiteral("after"),
-            fill,
-            afterStroke,
-            afterStroke2,
-            afterShadow,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            scaledPx(glowRadius(style, true), scale)
-        );
-        painter.save();
-        painter.setClipRect(
-            QRectF(
-                ruby.afterClipLeft,
-                ruby.afterClipTop,
-                ruby.afterClipRight - ruby.afterClipLeft,
-                ruby.afterClipHeight
-            ),
-            Qt::IntersectClip
-        );
-        painter.drawImage(QPointF(ruby.x, ruby.baselineY) + afterLayer.offset, afterLayer.image);
-        painter.restore();
-    }
-}
 
 void paintInlineTextLayerStack(
     QPainter &painter,
