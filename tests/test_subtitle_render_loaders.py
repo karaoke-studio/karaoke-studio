@@ -1149,14 +1149,15 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert isinstance(win._lyrics_panel._add_source_btn, TransparentToolButton)
     assert isinstance(win._lyrics_panel._remove_source_btn, TransparentToolButton)
 
-    # 属性面板 5 个分类页（顶部 segmented 导航，页面用 accessibleName 标注）
-    assert win._property_panel.count() == 5
-    assert [win._property_panel.widget(i).accessibleName() for i in range(5)] == [
+    # 属性面板 6 个分类页（顶部 segmented 导航，页面用 accessibleName 标注）
+    assert win._property_panel.count() == 6
+    assert [win._property_panel.widget(i).accessibleName() for i in range(6)] == [
         "角色",
         "布局",
         "时间",
         "特效",
         "标题",
+        "背景/音频",
     ]
 
 
