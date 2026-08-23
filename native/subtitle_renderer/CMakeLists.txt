@@ -67,6 +67,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_ruby_target.h
     src/backends/qt/qt_ruby_timing.cpp
     src/backends/qt/qt_ruby_timing.h
+    src/backends/qt/qt_ruby_wipe.cpp
+    src/backends/qt/qt_ruby_wipe.h
     src/backends/qt/qt_style_metrics.cpp
     src/backends/qt/qt_style_metrics.h
     src/backends/direct2d/d2d_backend.cpp
