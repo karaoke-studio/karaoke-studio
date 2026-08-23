@@ -123,6 +123,7 @@ using krok::subtitle::native::legacy_qt::buildEmojiFont;
 using krok::subtitle::native::legacy_qt::buildLineFont;
 using krok::subtitle::native::legacy_qt::buildRubyFont;
 using krok::subtitle::native::legacy_qt::characterTransform;
+using krok::subtitle::native::legacy_qt::characterFillRatio;
 using krok::subtitle::native::legacy_qt::charEndMs;
 using krok::subtitle::native::legacy_qt::cachedBlurImage;
 using krok::subtitle::native::legacy_qt::clearGlowBitmapCache;
@@ -560,24 +561,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-double characterFillRatio(
-    const std::vector<std::pair<int, int>> &intervals,
-    std::size_t index,
-    int tMs
-) {
-    if (index >= intervals.size()) {
-        return 0.0;
-    }
-    const auto interval = intervals[index];
-    if (tMs < interval.first) {
-        return 0.0;
-    }
-    if (tMs >= interval.second) {
-        return 1.0;
-    }
-    return progressRatio(interval.first, interval.second, tMs);
-}
 
 void paintTransformedTextStackWithFills(
     QPainter &painter,

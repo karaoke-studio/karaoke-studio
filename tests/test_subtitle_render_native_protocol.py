@@ -399,6 +399,7 @@ def test_native_qt_character_animation_hides_utopia_rules():
         "int charEndMs(",
         "std::vector<std::pair<int, int>> lineIntervals(",
         "double progressRatio(",
+        "double characterFillRatio(",
         "int utopiaFollowingDoneTime(",
         "std::optional<LineCharTransition> lineCharTransitionContext(",
         "QTransform characterTransform(",

@@ -17,6 +17,11 @@ std::vector<std::pair<int, int>> lineIntervals(
     const protocol::TimingLine &line
 );
 double progressRatio(int startMs, int endMs, int tMs);
+double characterFillRatio(
+    const std::vector<std::pair<int, int>> &intervals,
+    std::size_t index,
+    int tMs
+);
 int utopiaFollowingDoneTime(
     const protocol::TimingLine &line,
     const std::vector<std::pair<int, int>> &intervals,

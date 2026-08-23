@@ -63,6 +63,24 @@ double progressRatio(int startMs, int endMs, int tMs) {
     return std::clamp(raw, 0.0, 1.0);
 }
 
+double characterFillRatio(
+    const std::vector<std::pair<int, int>> &intervals,
+    std::size_t index,
+    int tMs
+) {
+    if (index >= intervals.size()) {
+        return 0.0;
+    }
+    const auto interval = intervals[index];
+    if (tMs < interval.first) {
+        return 0.0;
+    }
+    if (tMs >= interval.second) {
+        return 1.0;
+    }
+    return progressRatio(interval.first, interval.second, tMs);
+}
+
 int lineDisplayEndMs(const TimingLine &line, const RenderConfig &cfg) {
     if (line.chars.empty()) {
         return 0;
