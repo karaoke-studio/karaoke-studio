@@ -120,6 +120,20 @@ def test_painter_uses_shared_layout_plan_cache_boundary():
     }
 
 
+def test_painter_uses_shared_value_signature_boundary():
+    painter_path = Path("krok_helper/subtitle_render/engine/painter.py")
+    tree = ast.parse(painter_path.read_text(encoding="utf-8"))
+    signature_imports = {
+        (alias.name, alias.asname)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "krok_helper.subtitle_render.engine.value_signature"
+        for alias in node.names
+    }
+
+    assert signature_imports == {("value_signature", "_value_signature")}
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

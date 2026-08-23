@@ -33,7 +33,7 @@ import logging
 import math
 import os
 from collections import OrderedDict
-from dataclasses import dataclass, field, fields as dataclass_fields, is_dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Lock, local as thread_local
 from typing import Hashable, Optional
 
@@ -71,6 +71,9 @@ from krok_helper.subtitle_render.engine.layout_plan_cache import (
     cached_track_layout_plan,
     clear_track_layout_plan_cache,
     store_track_layout_plan,
+)
+from krok_helper.subtitle_render.engine.value_signature import (
+    value_signature as _value_signature,
 )
 from krok_helper.subtitle_render.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
@@ -434,41 +437,6 @@ def clear_before_layer_cache() -> None:
     _DISPLAY_LINES_CACHE.clear()
     clear_track_layout_plan_cache()
     _PAGE_PLACEMENT_CACHE.clear()
-
-
-_SIG_FIELD_NAMES_BY_TYPE: dict[type, tuple[str, ...]] = {}
-
-
-def _value_signature(value) -> Hashable:
-    """任意 models 值的递归值签名（dataclass / list / dict / 标量）。
-
-    用于布局缓存 key：models 全部是可变 dataclass 且前端从不调用失效接口，
-    所以 key 必须完全由当前值构成，不掺对象 id。"""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    # GuideSymbol is the only frozen model carrying a potentially very large
-    # immutable tuple (the complete SVG outline).  Reusing the frozen value as
-    # the key preserves value-based invalidation while avoiding a Python-level
-    # recursive copy of every path command for every layout/layer cache lookup.
-    if isinstance(value, GuideSymbol):
-        return value
-    if isinstance(value, (list, tuple)):
-        return tuple(_value_signature(item) for item in value)
-    if isinstance(value, dict):
-        return tuple(
-            (key, _value_signature(item))
-            for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))
-        )
-    if is_dataclass(value) and not isinstance(value, type):
-        tp = type(value)
-        names = _SIG_FIELD_NAMES_BY_TYPE.get(tp)
-        if names is None:
-            names = tuple(f.name for f in dataclass_fields(value))
-            _SIG_FIELD_NAMES_BY_TYPE[tp] = names
-        return (tp.__name__,) + tuple(
-            _value_signature(getattr(value, name)) for name in names
-        )
-    return repr(value)
 
 
 def _track_layout_signature(track: TimingTrack) -> tuple:
