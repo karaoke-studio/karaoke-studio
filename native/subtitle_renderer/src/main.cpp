@@ -12,7 +12,6 @@
 #include <QtGui/QBrush>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
-#include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QImage>
 #include <QtGui/QPainter>
@@ -30,6 +29,7 @@
 #include "backends/qt/qt_character_animation.h"
 #include "backends/qt/qt_display_plan.h"
 #include "backends/qt/qt_fill_brush.h"
+#include "backends/qt/qt_font_factory.h"
 #include "backends/qt/qt_render_types.h"
 #include "protocol/json_protocol.h"
 #include "protocol/json_value.h"
@@ -101,6 +101,9 @@ using krok::subtitle::native::legacy_qt::RenderDiagnostics;
 using krok::subtitle::native::legacy_qt::RenderResult;
 using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::brushForFill;
+using krok::subtitle::native::legacy_qt::buildEmojiFont;
+using krok::subtitle::native::legacy_qt::buildLineFont;
+using krok::subtitle::native::legacy_qt::buildRubyFont;
 using krok::subtitle::native::legacy_qt::characterTransform;
 using krok::subtitle::native::legacy_qt::charEndMs;
 using krok::subtitle::native::legacy_qt::lineEndMs;
@@ -108,6 +111,7 @@ using krok::subtitle::native::legacy_qt::lineCharTransitionContext;
 using krok::subtitle::native::legacy_qt::lineHasRoleLabels;
 using krok::subtitle::native::legacy_qt::lineStartMs;
 using krok::subtitle::native::legacy_qt::lineText;
+using krok::subtitle::native::legacy_qt::isEmojiText;
 using krok::subtitle::native::legacy_qt::progressRatio;
 using krok::subtitle::native::legacy_qt::transitionCharState;
 using krok::subtitle::native::legacy_qt::utopiaFollowingDoneTime;
@@ -528,44 +532,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-QFont buildLineFont(const ResolvedStyle &style) {
-    QFont font(style.fontFamily);
-    font.setPixelSize(style.fontSizePx);
-    font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
-    return font;
-}
-
-bool isEmojiText(const QString &text) {
-    for (const uint scalar : text.toUcs4()) {
-        if ((scalar >= 0x1F000U && scalar <= 0x1FAFFU)
-            || (scalar >= 0x2600U && scalar <= 0x27BFU)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-QFont buildEmojiFont(const ResolvedStyle &style) {
-    static std::once_flag emojiFontRegistration;
-    std::call_once(emojiFontRegistration, []() {
-        const QString windowsRoot = qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows"));
-        QFontDatabase::addApplicationFont(
-            windowsRoot + QStringLiteral("/Fonts/seguisym.ttf")
-        );
-    });
-    QFont font(QStringLiteral("Segoe UI Symbol"));
-    font.setPixelSize(style.fontSizePx);
-    font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
-    font.setItalic(style.italic);
-    return font;
-}
-
-QFont buildRubyFont(const ResolvedStyle &style) {
-    QFont font(style.fontFamily);
-    font.setPixelSize(style.rubyFontSizePx);
-    font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
-    return font;
-}
 
 double visualStrokeExtent(const ResolvedStyle &style) {
     return std::ceil((std::max(style.strokeWidthPx, 0) + std::max(style.stroke2WidthPx, 0)) / 2.0);

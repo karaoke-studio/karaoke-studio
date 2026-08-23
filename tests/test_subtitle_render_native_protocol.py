@@ -459,6 +459,38 @@ def test_native_qt_fill_brush_hides_image_cache_and_fill_rules():
     assert "src/backends/qt/qt_fill_brush.h" in cmake_source
 
 
+def test_native_qt_font_factory_owns_font_selection_and_registration():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_font_factory.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_font_factory.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    public_declarations = (
+        "QFont buildLineFont(",
+        "bool isEmojiText(",
+        "QFont buildEmojiFont(",
+        "QFont buildRubyFont(",
+    )
+    for declaration in public_declarations:
+        assert declaration in header_source
+        assert declaration not in main_source
+    assert "QFontDatabase::addApplicationFont" in implementation_source
+    assert "QFontDatabase" not in main_source
+    assert "QPainter" not in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_font_factory.h"' in main_source
+    assert "src/backends/qt/qt_font_factory.cpp" in cmake_source
+    assert "src/backends/qt/qt_font_factory.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
