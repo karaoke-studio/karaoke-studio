@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import ast
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -50,6 +52,19 @@ from krok_helper.subtitle_render.frontend.lyrics_list import COL_CONTENT  # noqa
 from krok_helper.subtitle_render.frontend.workspace_switcher import (  # noqa: E402
     WorkspaceSwitcher,
 )
+
+
+def test_main_window_uses_public_layout_diagnostics_boundary() -> None:
+    source_path = Path("krok_helper/subtitle_render/frontend/main_window.py")
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "krok_helper.subtitle_render.engine.layout_diagnostics" in imported_modules
+    assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 
 @pytest.fixture(scope="module")
