@@ -141,6 +141,9 @@ def test_native_parsed_render_config_has_single_header_owner():
     config_source = Path(
         "native/subtitle_renderer/src/protocol/render_config.h"
     ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -157,7 +160,8 @@ def test_native_parsed_render_config_has_single_header_owner():
         declaration = f"struct {type_name} {{"
         assert declaration in config_source
         assert declaration not in main_source
-    assert '#include "protocol/render_config.h"' in main_source
+    assert '#include "protocol/render_config.h"' not in main_source
+    assert '#include "../protocol/render_config.h"' in router_source
     assert "src/protocol/render_config.h" in cmake_source
 
 
@@ -252,6 +256,9 @@ def test_native_json_value_rules_have_single_protocol_owner():
     implementation_source = Path(
         "native/subtitle_renderer/src/protocol/json_value.cpp"
     ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -264,7 +271,8 @@ def test_native_json_value_rules_have_single_protocol_owner():
         assert signature in header_source
         assert signature in implementation_source
         assert signature not in main_source
-    assert '#include "protocol/json_value.h"' in main_source
+    assert '#include "protocol/json_value.h"' not in main_source
+    assert '#include "../protocol/json_value.h"' in router_source
     assert "src/protocol/json_value.cpp" in cmake_source
     assert "src/protocol/json_value.h" in cmake_source
 
@@ -321,6 +329,9 @@ def test_native_render_runtime_state_has_single_runtime_owner():
     runtime_implementation = Path(
         "native/subtitle_renderer/src/runtime/render_runtime.cpp"
     ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -352,7 +363,8 @@ def test_native_render_runtime_state_has_single_runtime_owner():
     assert "runtime->sharedFrames" not in main_source
     assert "RenderJobRuntime jobs_" in runtime_source
     assert "SharedFrameRingBuffer sharedFrames_" in runtime_source
-    assert '#include "runtime/render_runtime.h"' in main_source
+    assert '#include "runtime/render_runtime.h"' not in main_source
+    assert '#include "../runtime/render_runtime.h"' in router_source
     assert "src/runtime/render_runtime.cpp" in cmake_source
     assert "src/runtime/render_runtime.h" in cmake_source
 
@@ -1248,6 +1260,9 @@ def test_native_qt_frame_commands_own_single_frame_request_flow():
     implementation_source = Path(
         "native/subtitle_renderer/src/commands/qt_frame_commands.cpp"
     ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -1263,9 +1278,43 @@ def test_native_qt_frame_commands_own_single_frame_request_flow():
     assert "output_path is required for native smoke render" not in main_source
     assert "RenderRuntime" not in implementation_source
     assert "Direct2D" not in implementation_source
-    assert '#include "commands/qt_frame_commands.h"' in main_source
+    assert '#include "commands/qt_frame_commands.h"' not in main_source
+    assert '#include "qt_frame_commands.h"' in router_source
     assert "src/commands/qt_frame_commands.cpp" in cmake_source
     assert "src/commands/qt_frame_commands.h" in cmake_source
+
+
+def test_native_command_router_hides_session_state_and_dispatch_table():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class CommandRouter" in header_source
+    assert "CommandDispatchResult dispatch(" in header_source
+    assert "struct Impl;" in header_source
+    assert "RenderConfig" not in header_source
+    assert "RenderRuntime" not in header_source
+    assert "switch (commandFromName(commandName))" in implementation_source
+    assert "std::optional<RenderConfig> config" in implementation_source
+    assert "RenderRuntime runtime" in implementation_source
+    assert "switch (" not in main_source
+    assert "RenderConfig" not in main_source
+    assert "RenderRuntime" not in main_source
+    assert "handleRenderGpuFrame" not in main_source
+    assert "router.dispatch(*request)" in main_source
+    assert "router.shutdown()" in main_source
+    assert '#include "commands/command_router.h"' in main_source
+    assert "src/commands/command_router.cpp" in cmake_source
+    assert "src/commands/command_router.h" in cmake_source
 
 
 def test_native_gpu_probe_commands_hide_probe_transport_flow():
@@ -1277,6 +1326,9 @@ def test_native_gpu_probe_commands_hide_probe_transport_flow():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/commands/gpu_probe_commands.cpp"
+    ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -1290,7 +1342,8 @@ def test_native_gpu_probe_commands_hide_probe_transport_flow():
     assert "render probe dimensions must be within 1..8192" not in main_source
     assert "gpuSceneFromConfig" not in implementation_source
     assert "GpuPreviewWorkerPool" not in implementation_source
-    assert '#include "commands/gpu_probe_commands.h"' in main_source
+    assert '#include "commands/gpu_probe_commands.h"' not in main_source
+    assert '#include "gpu_probe_commands.h"' in router_source
     assert "src/commands/gpu_probe_commands.cpp" in cmake_source
     assert "src/commands/gpu_probe_commands.h" in cmake_source
 
@@ -1304,6 +1357,9 @@ def test_native_gpu_lifecycle_commands_own_configuration_state():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
+    ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -1329,7 +1385,8 @@ def test_native_gpu_lifecycle_commands_own_configuration_state():
         assert private_detail not in main_source
     assert "writeSharedRgbaSlot" not in implementation_source
     assert "QIODevice" not in implementation_source
-    assert '#include "commands/gpu_lifecycle_commands.h"' in main_source
+    assert '#include "commands/gpu_lifecycle_commands.h"' not in main_source
+    assert '#include "gpu_lifecycle_commands.h"' in router_source
     assert "src/commands/gpu_lifecycle_commands.cpp" in cmake_source
     assert "src/commands/gpu_lifecycle_commands.h" in cmake_source
 
@@ -1343,6 +1400,9 @@ def test_native_gpu_frame_commands_hide_hot_path_transport_details():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -1371,7 +1431,8 @@ def test_native_gpu_frame_commands_hide_hot_path_transport_details():
         assert private_detail not in main_source
     assert "gpuSceneFromConfig" not in implementation_source
     assert "Direct2DGpuBackend" not in implementation_source
-    assert '#include "commands/gpu_frame_commands.h"' in main_source
+    assert '#include "commands/gpu_frame_commands.h"' not in main_source
+    assert '#include "gpu_frame_commands.h"' in router_source
     assert "src/commands/gpu_frame_commands.cpp" in cmake_source
     assert "src/commands/gpu_frame_commands.h" in cmake_source
 
@@ -1385,6 +1446,9 @@ def test_native_qt_range_commands_hide_parallel_render_flow():
     ).read_text(encoding="utf-8")
     implementation_source = Path(
         "native/subtitle_renderer/src/commands/qt_range_commands.cpp"
+    ).read_text(encoding="utf-8")
+    router_source = Path(
+        "native/subtitle_renderer/src/commands/command_router.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -1405,7 +1469,8 @@ def test_native_qt_range_commands_hide_parallel_render_flow():
         assert private_rule not in main_source
     assert "Direct2D" not in implementation_source
     assert "gpuSceneFromConfig" not in implementation_source
-    assert '#include "commands/qt_range_commands.h"' in main_source
+    assert '#include "commands/qt_range_commands.h"' not in main_source
+    assert '#include "qt_range_commands.h"' in router_source
     assert "src/commands/qt_range_commands.cpp" in cmake_source
     assert "src/commands/qt_range_commands.h" in cmake_source
 

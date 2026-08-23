@@ -28,6 +28,8 @@ endif()
 
 add_executable(krok_subtitle_renderer
     src/main.cpp
+    src/commands/command_router.cpp
+    src/commands/command_router.h
     src/commands/gpu_frame_commands.cpp
     src/commands/gpu_frame_commands.h
     src/commands/gpu_lifecycle_commands.cpp
