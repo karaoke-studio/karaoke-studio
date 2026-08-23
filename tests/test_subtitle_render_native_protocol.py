@@ -568,6 +568,35 @@ def test_native_qt_line_layout_exposes_one_pure_layout_operation():
     assert "src/backends/qt/qt_line_layout.h" in cmake_source
 
 
+def test_native_checksum_rules_have_single_runtime_owner():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/runtime/checksum.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/runtime/checksum.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for declaration in (
+        "std::uint64_t imageChecksum(",
+        "std::uint64_t imageFullChecksum(",
+        "std::uint64_t bytesChecksum(",
+    ):
+        assert declaration in header_source
+        assert declaration in implementation_source
+        assert declaration not in main_source
+    assert "protocol/" not in implementation_source
+    assert "backends/" not in implementation_source
+    assert '#include "runtime/checksum.h"' in main_source
+    assert "src/runtime/checksum.cpp" in cmake_source
+    assert "src/runtime/checksum.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

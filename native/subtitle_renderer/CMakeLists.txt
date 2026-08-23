@@ -35,6 +35,8 @@ add_executable(krok_subtitle_renderer
     src/protocol/render_config.h
     src/protocol/render_config_parser.cpp
     src/protocol/render_config_parser.h
+    src/runtime/checksum.cpp
+    src/runtime/checksum.h
     src/runtime/gpu_preview_worker_pool.cpp
     src/runtime/gpu_preview_worker_pool.h
     src/runtime/render_job_runtime.cpp

@@ -37,6 +37,7 @@
 #include "protocol/json_value.h"
 #include "protocol/render_config.h"
 #include "protocol/render_config_parser.h"
+#include "runtime/checksum.h"
 #include "runtime/gpu_preview_worker_pool.h"
 #include "runtime/render_runtime.h"
 
@@ -132,6 +133,9 @@ using krok::subtitle::native::runtime::GpuPreviewWorkerPool;
 using krok::subtitle::native::runtime::GpuPreviewPoolCacheEntry;
 using krok::subtitle::native::runtime::RenderRuntime;
 using krok::subtitle::native::runtime::SharedFrameRing;
+using krok::subtitle::native::runtime::bytesChecksum;
+using krok::subtitle::native::runtime::imageChecksum;
+using krok::subtitle::native::runtime::imageFullChecksum;
 
 QString fontCacheKey(const QFont &font);
 std::optional<LineLayout> lookupLayoutCache(const QString &key);
@@ -330,37 +334,6 @@ bool writeSharedBandSlot(
     );
 }
 
-std::uint64_t imageChecksum(const QImage &image) {
-    const uchar *data = image.constBits();
-    const qsizetype size = image.sizeInBytes();
-    std::uint64_t hash = 1469598103934665603ull;
-    const qsizetype step = std::max<qsizetype>(1, size / 4096);
-    for (qsizetype i = 0; i < size; i += step) {
-        hash ^= static_cast<std::uint64_t>(data[i]);
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
-
-std::uint64_t imageFullChecksum(const QImage &image) {
-    const uchar *data = image.constBits();
-    const qsizetype size = image.sizeInBytes();
-    std::uint64_t hash = 1469598103934665603ull;
-    for (qsizetype i = 0; i < size; ++i) {
-        hash ^= static_cast<std::uint64_t>(data[i]);
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
-
-std::uint64_t bytesChecksum(const std::uint8_t *data, std::size_t size) {
-    std::uint64_t hash = 1469598103934665603ull;
-    for (std::size_t index = 0; index < size; ++index) {
-        hash ^= static_cast<std::uint64_t>(data[index]);
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
 
 QJsonObject backendCapsJson(const krok::subtitle::native::BackendCaps &caps) {
     QJsonObject out;
