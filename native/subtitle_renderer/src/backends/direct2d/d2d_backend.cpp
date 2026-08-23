@@ -1,58 +1,24 @@
 #include "d2d_backend.h"
 #include "d2d_backend_internal.h"
-#include "d2d_font_fallback.h"
-#include "d2d_geometry_resources.h"
-#include "d2d_opacity_layer.h"
-#include "d2d_paint_resources.h"
 #include "d2d_runtime_support.h"
-#include "../signal_state.h"
-#include "../text_semantics.h"
 
 #include <d2d1_2.h>
 #include <d2d1helper.h>
-#include <d2d1effects.h>
-#include <dwrite.h>
-#include <wincodec.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <cmath>
-#include <cstdlib>
 #include <cstring>
-#include <cwctype>
-#include <iomanip>
-#include <sstream>
-#include <limits>
 #include <mutex>
-#include <tuple>
 #include <thread>
 
 namespace krok::subtitle::native {
 namespace {
 
 using Clock = direct2d::RuntimeClock;
-using direct2d::containsEmoji;
-using direct2d::createFontFace;
-using direct2d::findFallbackFontFace;
-using direct2d::glyphIndices;
-using direct2d::createPaintBrush;
 using direct2d::checkHr;
-using direct2d::d2dColor;
 using direct2d::elapsedMs;
 using direct2d::environmentFlagEnabled;
-using direct2d::loadWicBitmap;
-using direct2d::outsideStrokeGeometry;
-using direct2d::OpacityLayerScope;
-using direct2d::paintNeedsBodyProtection;
-using direct2d::rectAreaPx;
-using direct2d::rubyPaintBounds;
-using direct2d::steadyNowMs;
 using direct2d::unpremultiply;
-using direct2d::updatePaintBrush;
-using direct2d::validGlyphIndices;
-using direct2d::vectorGlyphGeometry;
-using direct2d::widenedStrokeGeometry;
 
 }  // namespace
 

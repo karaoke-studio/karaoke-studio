@@ -470,7 +470,7 @@ def test_native_signal_state_is_backend_independent_contract():
         "native/subtitle_renderer/src/backends/signal_state.cpp"
     ).read_text(encoding="utf-8")
     direct2d_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -504,7 +504,7 @@ def test_native_text_semantics_is_backend_independent_contract():
         "native/subtitle_renderer/src/backends/text_semantics.cpp"
     ).read_text(encoding="utf-8")
     direct2d_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_configure.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -536,7 +536,7 @@ def test_native_direct2d_font_fallback_has_narrow_contract():
         "native/subtitle_renderer/src/backends/direct2d/d2d_font_fallback.cpp"
     ).read_text(encoding="utf-8")
     backend_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_configure.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -563,9 +563,13 @@ def test_native_direct2d_paint_resources_hide_wic_and_brush_construction():
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/direct2d/d2d_paint_resources.cpp"
     ).read_text(encoding="utf-8")
-    backend_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    configure_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_configure.cpp"
     ).read_text(encoding="utf-8")
+    render_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
+    ).read_text(encoding="utf-8")
+    backend_source = configure_source + render_source
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -601,9 +605,13 @@ def test_native_direct2d_geometry_resources_hide_path_construction():
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/direct2d/d2d_geometry_resources.cpp"
     ).read_text(encoding="utf-8")
-    backend_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    configure_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_configure.cpp"
     ).read_text(encoding="utf-8")
+    render_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
+    ).read_text(encoding="utf-8")
+    backend_source = configure_source + render_source
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -638,7 +646,7 @@ def test_native_direct2d_runtime_support_is_shared_low_level_contract():
         "native/subtitle_renderer/src/backends/direct2d/d2d_runtime_support.cpp"
     ).read_text(encoding="utf-8")
     backend_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -733,7 +741,7 @@ def test_native_direct2d_opacity_layer_has_raii_contract():
         "native/subtitle_renderer/src/backends/direct2d/d2d_opacity_layer.cpp"
     ).read_text(encoding="utf-8")
     backend_source = Path(
-        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
     ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -784,6 +792,15 @@ def test_native_direct2d_rendering_is_separate_lifecycle_stage():
     assert '#include "d2d_opacity_layer.h"' in render_source
     assert '#include "../signal_state.h"' in render_source
     assert "src/backends/direct2d/d2d_backend_render.cpp" in cmake_source
+    for stage_dependency in (
+        '"d2d_font_fallback.h"',
+        '"d2d_geometry_resources.h"',
+        '"d2d_opacity_layer.h"',
+        '"d2d_paint_resources.h"',
+        '"../signal_state.h"',
+        '"../text_semantics.h"',
+    ):
+        assert stage_dependency not in backend_source
 
 
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
