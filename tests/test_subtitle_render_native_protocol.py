@@ -342,6 +342,46 @@ def test_native_render_runtime_state_has_single_runtime_owner():
     assert "src/runtime/render_runtime.h" in cmake_source
 
 
+def test_native_qt_display_plan_hides_lane_and_section_algorithms():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_display_plan.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_display_plan.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    public_declarations = {
+        "lineText": "QString lineText(",
+        "lineHasRoleLabels": "bool lineHasRoleLabels(",
+        "lineStartMs": "int lineStartMs(",
+        "lineEndMs": "int lineEndMs(",
+        "visibleDisplayLines": "std::vector<DisplayLineRef> visibleDisplayLines(",
+    }
+    for operation, declaration in public_declarations.items():
+        assert operation in header_source
+        assert declaration not in main_source
+    for private_rule in (
+        "computeSectionIds(",
+        "adjustSameLaneDisplayWindows(",
+        "computeDisplayLines(",
+        "effectiveLineProtectMs(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert '#include "backends/qt/qt_display_plan.h"' in main_source
+    assert "protocol/json" not in implementation_source
+    assert "runtime/" not in implementation_source
+    assert "src/backends/qt/qt_display_plan.cpp" in cmake_source
+    assert "src/backends/qt/qt_display_plan.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
