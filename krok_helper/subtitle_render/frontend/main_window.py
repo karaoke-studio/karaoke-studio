@@ -3996,7 +3996,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_style(self._style)
         self._preview_panel.pathDropped.connect(self._load_dropped_background)
         self._preview_panel.browseRequested.connect(self._browse_background_media)
-        # 背景/图片序列/纯色的选择入口已迁入属性面板「背景/音频」卡片。
+        self._add_background_empty_actions(self._preview_panel)
         self._transport_bar = self._preview_window.transport_bar
 
         self._lyrics_panel = LyricsPanel()
@@ -4139,13 +4139,14 @@ class SubtitleRenderWindow(QWidget):
             },
             empty_title="拖入背景素材",
             empty_hint="拖入视频、静态图片、Yurika 工程（.yurika）或 N3 项目（.n3proj）；"
-            "图片序列与纯色请在「背景/音频」卡片中选择",
+            "图片序列与纯色请用下方按钮，也可在「背景/音频」卡片中选择",
             empty_icon="🎬",
         )
         self._video_settings_panel.pathDropped.connect(self._load_dropped_background)
         self._video_settings_panel.browseRequested.connect(self._browse_background_media)
-        # 背景/图片序列/纯色的选择入口已迁入属性面板「背景/音频」卡片；
-        # 空态仅保留拖放与整块点击浏览。
+        # 空态四按钮保留为快捷入口；属性面板「背景/音频」卡片承载同一组
+        # 功能的完整形态（路径显示、纯色取色、图片缩放策略、独立音频）。
+        self._add_background_empty_actions(self._video_settings_panel)
         self._video_settings_panel.set_content(self._property_panel)
         top.addWidget(self._video_settings_panel)
 
@@ -4705,6 +4706,12 @@ class SubtitleRenderWindow(QWidget):
             self._background_source or BackgroundSource()
         )
         self._property_panel.set_audio_state(self._audio_path)
+
+    def _add_background_empty_actions(self, panel: DropPanel) -> None:
+        panel.add_empty_action("视频", self._browse_video)
+        panel.add_empty_action("静态图", self._browse_background_image)
+        panel.add_empty_action("图片序列", self._browse_background_sequence)
+        panel.add_empty_action("纯色", self._choose_solid_background)
 
     def _browse_background_image(self) -> None:
         start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
