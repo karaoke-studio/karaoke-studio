@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from krok_helper.subtitle_render.engine.painter import (
+from krok_helper.subtitle_render.engine.semantic_plan import (
     build_track_layout_plan,
     layout_pass,
 )

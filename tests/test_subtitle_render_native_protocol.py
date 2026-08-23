@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 
 from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
-from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
 from krok_helper.subtitle_render.engine.render_ir import build_render_ir
+from krok_helper.subtitle_render.engine.semantic_plan import build_track_layout_plan
 from krok_helper.subtitle_render.models import (
     GuideSymbol,
     KaraokeColors,
@@ -66,18 +66,24 @@ def test_native_protocol_has_no_painter_dependency():
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 
-def test_render_ir_only_uses_painter_for_layout_planning():
+def test_render_ir_uses_semantic_plan_boundary():
     render_ir_path = Path("krok_helper/subtitle_render/engine/render_ir.py")
     tree = ast.parse(render_ir_path.read_text(encoding="utf-8"))
-    painter_imports = {
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    semantic_plan_imports = {
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == "krok_helper.subtitle_render.engine.painter"
+        and node.module == "krok_helper.subtitle_render.engine.semantic_plan"
         for alias in node.names
     }
 
-    assert painter_imports == {"build_track_layout_plan", "layout_pass"}
+    assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
+    assert semantic_plan_imports == {"build_track_layout_plan", "layout_pass"}
 
 
 def test_track_ir_requires_resolved_plan_when_serializing_style():
