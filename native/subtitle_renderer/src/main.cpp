@@ -7,6 +7,7 @@
 #include <QtWidgets/QApplication>
 
 #include "backends/qt/gpu_scene_projection.h"
+#include "commands/gpu_probe_commands.h"
 #include "commands/qt_frame_commands.h"
 #include "commands/qt_range_commands.h"
 #include "diagnostics/gpu_diagnostics_json.h"
@@ -42,6 +43,8 @@ using krok::subtitle::native::diagnostics::appendGpuFrameDiagnostics;
 using krok::subtitle::native::diagnostics::appendSharedFrameMetadata;
 using krok::subtitle::native::diagnostics::backendCapsJson;
 using krok::subtitle::native::commands::handleConfigure;
+using krok::subtitle::native::commands::handleBackendInfo;
+using krok::subtitle::native::commands::handleRenderProbe;
 using krok::subtitle::native::commands::handleRenderFrame;
 using krok::subtitle::native::commands::handleRenderFrameStats;
 using krok::subtitle::native::commands::handleRenderRange;
@@ -82,119 +85,6 @@ void joinRenderJobs(RenderRuntime *runtime) {
 QString defaultSharedMemoryKey(int generation) {
     return krok::subtitle::native::runtime::defaultSharedMemoryKey(generation);
 }
-
-QJsonObject handleBackendInfo(const QJsonObject &request, RenderRuntime *runtime) {
-    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
-    QString error;
-    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
-    QJsonObject out = response(true, QStringLiteral("backend_info"));
-    out.insert(QStringLiteral("available"), backend != nullptr);
-    out.insert(QStringLiteral("requested_warp"), forceWarp);
-    if (backend == nullptr) {
-        out.insert(QStringLiteral("error"), error);
-        return out;
-    }
-    const QJsonObject caps = backendCapsJson(backend->capabilities());
-    for (auto it = caps.begin(); it != caps.end(); ++it) {
-        out.insert(it.key(), it.value());
-    }
-    return out;
-}
-
-QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime) {
-    const int width = intValue(request, QStringLiteral("width"), 256);
-    const int height = intValue(request, QStringLiteral("height"), 144);
-    if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
-        QJsonObject out = response(false, QStringLiteral("render_probe"));
-        out.insert(QStringLiteral("error"), QStringLiteral("render probe dimensions must be within 1..8192"));
-        return out;
-    }
-    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
-    QString error;
-    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
-    if (backend == nullptr) {
-        QJsonObject out = response(false, QStringLiteral("render_probe"));
-        out.insert(QStringLiteral("error"), error);
-        return out;
-    }
-
-    krok::subtitle::native::ProbeOptions options;
-    options.width = width;
-    options.height = height;
-    options.red = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("red"), 51), 0, 255));
-    options.green = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("green"), 102), 0, 255));
-    options.blue = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("blue"), 204), 0, 255));
-    options.alpha = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("alpha"), 128), 0, 255));
-    options.drawGlyph = request.value(QStringLiteral("draw_glyph")).toBool(true);
-
-    const int generation = intValue(request, QStringLiteral("generation"), 0);
-    const int frameIndex = intValue(request, QStringLiteral("frame_index"), 0);
-    const int slotIndex = 0;
-    const QString shmKey = stringValue(
-        request,
-        QStringLiteral("shm_key"),
-        defaultSharedMemoryKey(generation) + QStringLiteral("_gpu_probe")
-    );
-    QString shmError;
-    if (!ensureSharedFrameRing(runtime, shmKey, 1, width, height, &shmError)) {
-        QJsonObject out = response(false, QStringLiteral("render_probe"));
-        out.insert(QStringLiteral("error"), QStringLiteral("failed to create shared memory: ") + shmError);
-        return out;
-    }
-
-    QElapsedTimer totalTimer;
-    totalTimer.start();
-    try {
-        const auto result = backend->renderProbe(options);
-        SharedFrameRing ring;
-        const bool wrote = writeSharedRgbaSlot(
-            runtime,
-            result.surface.bytes.data(),
-            result.surface.width,
-            result.surface.height,
-            result.surface.stride,
-            generation,
-            frameIndex,
-            0,
-            slotIndex,
-            &ring
-        );
-        if (!wrote) {
-            QJsonObject out = response(false, QStringLiteral("render_probe"));
-            out.insert(QStringLiteral("error"), QStringLiteral("failed to write GPU probe shared-memory slot"));
-            return out;
-        }
-        QJsonObject out = response(true, QStringLiteral("probe_ready"));
-        out.insert(QStringLiteral("generation"), generation);
-        out.insert(QStringLiteral("frame_index"), frameIndex);
-        out.insert(QStringLiteral("t_ms"), 0);
-        out.insert(QStringLiteral("render_ms"), result.renderMs);
-        out.insert(QStringLiteral("readback_ms"), result.readbackMs);
-        out.insert(QStringLiteral("total_ms"), static_cast<double>(totalTimer.nsecsElapsed()) / 1000000.0);
-        out.insert(
-            QStringLiteral("checksum"),
-            QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
-        );
-        const QJsonObject caps = backendCapsJson(backend->capabilities());
-        for (auto it = caps.begin(); it != caps.end(); ++it) {
-            out.insert(it.key(), it.value());
-        }
-        appendSharedFrameMetadata(out, ring, slotIndex);
-        return out;
-    } catch (const std::exception &exception) {
-        QJsonObject out = response(false, QStringLiteral("render_probe"));
-        out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
-        return out;
-    }
-}
-
-
-
-
-
-
-
-
 
 QJsonObject handleConfigureGpu(
     const QJsonObject &request,

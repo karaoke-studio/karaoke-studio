@@ -1224,6 +1224,33 @@ def test_native_qt_frame_commands_own_single_frame_request_flow():
     assert "src/commands/qt_frame_commands.h" in cmake_source
 
 
+def test_native_gpu_probe_commands_hide_probe_transport_flow():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_probe_commands.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_probe_commands.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "handleBackendInfo(" in header_source
+    assert "handleRenderProbe(" in header_source
+    assert "QJsonObject handleBackendInfo(" not in main_source
+    assert "QJsonObject handleRenderProbe(" not in main_source
+    assert "render probe dimensions must be within 1..8192" in implementation_source
+    assert "render probe dimensions must be within 1..8192" not in main_source
+    assert "gpuSceneFromConfig" not in implementation_source
+    assert "GpuPreviewWorkerPool" not in implementation_source
+    assert '#include "commands/gpu_probe_commands.h"' in main_source
+    assert "src/commands/gpu_probe_commands.cpp" in cmake_source
+    assert "src/commands/gpu_probe_commands.h" in cmake_source
+
+
 def test_native_qt_range_commands_hide_parallel_render_flow():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"

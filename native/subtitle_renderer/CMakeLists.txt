@@ -28,6 +28,8 @@ endif()
 
 add_executable(krok_subtitle_renderer
     src/main.cpp
+    src/commands/gpu_probe_commands.cpp
+    src/commands/gpu_probe_commands.h
     src/commands/qt_frame_commands.cpp
     src/commands/qt_frame_commands.h
     src/commands/qt_range_commands.cpp
