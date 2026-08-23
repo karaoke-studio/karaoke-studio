@@ -46,6 +46,15 @@ int charEndMs(const TimingLine &line, std::size_t index) {
     return ch.startMs + 1;
 }
 
+std::vector<std::pair<int, int>> lineIntervals(const TimingLine &line) {
+    std::vector<std::pair<int, int>> intervals;
+    intervals.reserve(line.chars.size());
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        intervals.push_back({line.chars[i].startMs, charEndMs(line, i)});
+    }
+    return intervals;
+}
+
 double progressRatio(int startMs, int endMs, int tMs) {
     if (endMs <= startMs) {
         return tMs >= startMs ? 1.0 : 0.0;

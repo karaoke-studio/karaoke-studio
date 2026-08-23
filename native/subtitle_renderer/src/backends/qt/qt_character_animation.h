@@ -13,6 +13,9 @@
 namespace krok::subtitle::native::legacy_qt {
 
 int charEndMs(const protocol::TimingLine &line, std::size_t index);
+std::vector<std::pair<int, int>> lineIntervals(
+    const protocol::TimingLine &line
+);
 double progressRatio(int startMs, int endMs, int tMs);
 int utopiaFollowingDoneTime(
     const protocol::TimingLine &line,

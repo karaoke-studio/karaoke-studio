@@ -132,6 +132,7 @@ using krok::subtitle::native::legacy_qt::glowExtentForWidths;
 using krok::subtitle::native::legacy_qt::glowRadius;
 using krok::subtitle::native::legacy_qt::lineEndMs;
 using krok::subtitle::native::legacy_qt::lineCharTransitionContext;
+using krok::subtitle::native::legacy_qt::lineIntervals;
 using krok::subtitle::native::legacy_qt::lineHasRoleLabels;
 using krok::subtitle::native::legacy_qt::layoutLine;
 using krok::subtitle::native::legacy_qt::layoutCacheStats;
@@ -551,16 +552,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-
-std::vector<std::pair<int, int>> lineIntervals(const TimingLine &line) {
-    std::vector<std::pair<int, int>> intervals;
-    intervals.reserve(line.chars.size());
-    for (std::size_t i = 0; i < line.chars.size(); ++i) {
-        intervals.push_back({line.chars[i].startMs, charEndMs(line, i)});
-    }
-    return intervals;
-}
 
 
 double rubyLayoutWidth(const QString &reading, const QFontMetricsF &metrics, double targetWidth) {
