@@ -349,6 +349,34 @@ def test_native_render_runtime_state_has_single_runtime_owner():
     assert "src/runtime/render_runtime.h" in cmake_source
 
 
+def test_native_gpu_backend_runtime_hides_direct2d_construction():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/runtime/gpu_backend_runtime.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/runtime/gpu_backend_runtime.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "RenderBackend *ensureGpuBackend(" in header_source
+    assert "GpuPreviewWorkerPool *gpuPreviewPool(" in header_source
+    assert "RenderBackend *ensureGpuBackend(" not in main_source
+    assert "GpuPreviewWorkerPool *gpuPreviewPool(" not in main_source
+    assert "std::make_unique<krok::subtitle::native::Direct2DGpuBackend>" in implementation_source
+    assert "Direct2DGpuBackend" not in header_source
+    assert "Direct2DGpuBackend" not in main_source
+    assert "QJsonObject" not in implementation_source
+    assert "protocol/" not in implementation_source
+    assert '#include "runtime/gpu_backend_runtime.h"' in main_source
+    assert "src/runtime/gpu_backend_runtime.cpp" in cmake_source
+    assert "src/runtime/gpu_backend_runtime.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"

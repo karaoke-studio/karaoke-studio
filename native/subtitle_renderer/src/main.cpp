@@ -6,7 +6,6 @@
 #include <QtCore/QTextStream>
 #include <QtWidgets/QApplication>
 
-#include "backends/direct2d/d2d_backend.h"
 #include "backends/qt/gpu_scene_projection.h"
 #include "commands/qt_frame_commands.h"
 #include "commands/qt_range_commands.h"
@@ -16,14 +15,12 @@
 #include "protocol/json_value.h"
 #include "protocol/render_config.h"
 #include "runtime/checksum.h"
+#include "runtime/gpu_backend_runtime.h"
 #include "runtime/gpu_preview_worker_pool.h"
 #include "runtime/render_runtime.h"
 
 #include <algorithm>
 #include <cstdint>
-#include <iostream>
-#include <memory>
-#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -52,6 +49,8 @@ using krok::subtitle::native::runtime::GpuPreviewPoolCacheEntry;
 using krok::subtitle::native::runtime::RenderRuntime;
 using krok::subtitle::native::runtime::SharedFrameRing;
 using krok::subtitle::native::runtime::bytesChecksum;
+using krok::subtitle::native::runtime::ensureGpuBackend;
+using krok::subtitle::native::runtime::gpuPreviewPool;
 
 bool generationCancelled(RenderRuntime *runtime, int generation) {
     if (runtime == nullptr) {
@@ -218,46 +217,6 @@ QJsonObject backendCapsJson(const krok::subtitle::native::BackendCaps &caps) {
     out.insert(QStringLiteral("glyphs"), caps.supportsGlyphs);
     out.insert(QStringLiteral("native_preview"), caps.supportsNativePreview);
     return out;
-}
-
-krok::subtitle::native::RenderBackend *ensureGpuBackend(
-    RenderRuntime *runtime,
-    bool forceWarp,
-    QString *error
-) {
-    if (runtime == nullptr) {
-        if (error != nullptr) {
-            *error = QStringLiteral("render runtime is unavailable");
-        }
-        return nullptr;
-    }
-    std::lock_guard<std::mutex> lock(runtime->gpuBackendMutex);
-    auto &backend = forceWarp ? runtime->warpGpuBackend : runtime->hardwareGpuBackend;
-    if (backend == nullptr) {
-        try {
-            backend = std::make_unique<krok::subtitle::native::Direct2DGpuBackend>(forceWarp);
-            const auto caps = backend->capabilities();
-            std::cerr
-                << "gpu_backend=direct2d adapter=\"" << caps.adapterName
-                << "\" feature_level=" << caps.featureLevel
-                << " warp=" << (caps.warp ? 1 : 0) << std::endl;
-        } catch (const std::exception &exception) {
-            if (error != nullptr) {
-                *error = QString::fromUtf8(exception.what());
-            }
-            return nullptr;
-        }
-    }
-    return backend.get();
-}
-
-GpuPreviewWorkerPool *gpuPreviewPool(RenderRuntime *runtime, bool forceWarp) {
-    if (runtime == nullptr) {
-        return nullptr;
-    }
-    return forceWarp
-        ? runtime->warpGpuPreviewPool.get()
-        : runtime->hardwareGpuPreviewPool.get();
 }
 
 QJsonObject handleBackendInfo(const QJsonObject &request, RenderRuntime *runtime) {
