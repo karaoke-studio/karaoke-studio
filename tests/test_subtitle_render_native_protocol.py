@@ -218,6 +218,9 @@ def test_native_gpu_preview_pool_hides_backend_and_protocol_details():
     implementation_source = Path(
         "native/subtitle_renderer/src/runtime/gpu_preview_worker_pool.cpp"
     ).read_text(encoding="utf-8")
+    lifecycle_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -229,7 +232,8 @@ def test_native_gpu_preview_pool_hides_backend_and_protocol_details():
     assert "json_protocol.h" not in implementation_source
     assert "writeJson(" not in implementation_source
     assert "Publish publish" in header_source
-    assert "sharedResources, writeJson" in main_source
+    assert "sharedResources, writeJson" not in main_source
+    assert "sharedResources, writeJson" in lifecycle_commands_source
     assert "src/runtime/gpu_preview_worker_pool.cpp" in cmake_source
     assert "src/runtime/gpu_preview_worker_pool.h" in cmake_source
 
@@ -1027,6 +1031,9 @@ def test_native_gpu_scene_projection_hides_style_and_layout_mapping():
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/gpu_scene_projection.cpp"
     ).read_text(encoding="utf-8")
+    lifecycle_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -1045,7 +1052,11 @@ def test_native_gpu_scene_projection_hides_style_and_layout_mapping():
         assert private_rule not in main_source
     assert "RenderRuntime" not in implementation_source
     assert "SharedFrameRing" not in implementation_source
-    assert '#include "backends/qt/gpu_scene_projection.h"' in main_source
+    assert '#include "backends/qt/gpu_scene_projection.h"' not in main_source
+    assert (
+        '#include "../backends/qt/gpu_scene_projection.h"'
+        in lifecycle_commands_source
+    )
     assert "src/backends/qt/gpu_scene_projection.cpp" in cmake_source
     assert "src/backends/qt/gpu_scene_projection.h" in cmake_source
 
@@ -1249,6 +1260,45 @@ def test_native_gpu_probe_commands_hide_probe_transport_flow():
     assert '#include "commands/gpu_probe_commands.h"' in main_source
     assert "src/commands/gpu_probe_commands.cpp" in cmake_source
     assert "src/commands/gpu_probe_commands.h" in cmake_source
+
+
+def test_native_gpu_lifecycle_commands_own_configuration_state():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for operation in (
+        "handleConfigureGpu(",
+        "handleResizeGpuTarget(",
+        "handleGpuDiagnostics(",
+        "handleCloseGpuPreview(",
+    ):
+        assert operation in header_source
+        assert f"QJsonObject {operation}" not in main_source
+        assert f"QJsonObject {operation}" in implementation_source
+    for private_detail in (
+        "hardwareGpuPreviewPoolCache",
+        "warpGpuPreviewPoolCache",
+        "target_cache_hit",
+        "realization_capacity",
+    ):
+        assert private_detail in implementation_source
+        assert private_detail not in header_source
+        assert private_detail not in main_source
+    assert "writeSharedRgbaSlot" not in implementation_source
+    assert "QIODevice" not in implementation_source
+    assert '#include "commands/gpu_lifecycle_commands.h"' in main_source
+    assert "src/commands/gpu_lifecycle_commands.cpp" in cmake_source
+    assert "src/commands/gpu_lifecycle_commands.h" in cmake_source
 
 
 def test_native_qt_range_commands_hide_parallel_render_flow():
