@@ -696,6 +696,35 @@ def test_native_direct2d_backend_state_is_internal_only():
     assert "src/backends/direct2d/d2d_backend_internal.h" in cmake_source
 
 
+def test_native_direct2d_configuration_is_separate_lifecycle_stage():
+    public_header = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.h"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    configure_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_configure.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "void configure(const RenderScene &scene) override;" in public_header
+    assert "void Direct2DGpuBackend::configure(" in configure_source
+    assert "void Direct2DGpuBackend::configure(" not in backend_source
+    for dependency in (
+        '"d2d_font_fallback.h"',
+        '"d2d_geometry_resources.h"',
+        '"d2d_paint_resources.h"',
+        '"../text_semantics.h"',
+    ):
+        assert dependency in configure_source
+    assert "renderFrameInternal(" not in configure_source
+    assert "presentFrame(" not in configure_source
+    assert "src/backends/direct2d/d2d_backend_configure.cpp" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
