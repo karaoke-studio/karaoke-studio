@@ -64,10 +64,10 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_font_factory.h
     src/backends/qt/qt_glyph_run.cpp
     src/backends/qt/qt_glyph_run.h
-    src/backends/qt/qt_inline_text.cpp
-    src/backends/qt/qt_inline_text.h
     src/backends/qt/qt_line_layout.cpp
     src/backends/qt/qt_line_layout.h
+    src/backends/qt/qt_line_painter.cpp
+    src/backends/qt/qt_line_painter.h
     src/backends/qt/qt_render_cache.cpp
     src/backends/qt/qt_render_cache.h
     src/backends/qt/qt_render_types.h

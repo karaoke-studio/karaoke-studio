@@ -6,11 +6,14 @@
 
 namespace krok::subtitle::native::legacy_qt {
 
-void paintInlineTextLayerStack(
+void paintLine(
     QPainter &painter,
+    const protocol::RenderConfig &cfg,
     const protocol::TimingLine &line,
-    const LineLayout &layout,
-    bool after
+    int tMs,
+    int lane,
+    int visibleLineCount,
+    RenderDiagnostics *diagnostics
 );
 
 }  // namespace krok::subtitle::native::legacy_qt

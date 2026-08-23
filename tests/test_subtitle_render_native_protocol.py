@@ -681,7 +681,7 @@ def test_native_cached_line_layout_hides_cache_key_and_bypass_policy():
     assert '#include "qt_line_layout.h"' in implementation_source
     assert '#include "qt_render_cache.h"' in implementation_source
     assert "QPainter" not in implementation_source
-    assert '#include "backends/qt/qt_cached_line_layout.h"' in main_source
+    assert '#include "backends/qt/qt_cached_line_layout.h"' not in main_source
     assert "src/backends/qt/qt_cached_line_layout.cpp" in cmake_source
     assert "src/backends/qt/qt_cached_line_layout.h" in cmake_source
 
@@ -727,7 +727,7 @@ def test_native_qt_clip_geometry_hides_ruby_aware_segment_model():
     assert '#include "qt_ruby_target.h"' in implementation_source
     assert '#include "qt_ruby_timing.h"' in implementation_source
     assert '#include "qt_style_metrics.h"' in implementation_source
-    assert '#include "backends/qt/qt_clip_geometry.h"' in main_source
+    assert '#include "backends/qt/qt_clip_geometry.h"' not in main_source
     assert "src/backends/qt/qt_clip_geometry.cpp" in cmake_source
     assert "src/backends/qt/qt_clip_geometry.h" in cmake_source
 
@@ -773,7 +773,7 @@ def test_native_qt_cached_text_layer_owns_cache_policy():
     assert '#include "qt_render_cache.h"' in implementation_source
     assert '#include "qt_text_layer.h"' in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_cached_text_layer.h"' in main_source
+    assert '#include "backends/qt/qt_cached_text_layer.h"' not in main_source
     assert "src/backends/qt/qt_cached_text_layer.cpp" in cmake_source
     assert "src/backends/qt/qt_cached_text_layer.h" in cmake_source
 
@@ -803,7 +803,7 @@ def test_native_qt_glyph_run_exposes_only_line_painting():
     assert "GlyphRunRef" not in types_source
     assert '#include "qt_cached_text_layer.h"' in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_glyph_run.h"' in main_source
+    assert '#include "backends/qt/qt_glyph_run.h"' not in main_source
     assert "src/backends/qt/qt_glyph_run.cpp" in cmake_source
     assert "src/backends/qt/qt_glyph_run.h" in cmake_source
 
@@ -844,27 +844,10 @@ def test_native_qt_ruby_painter_consumes_diagnostics_not_raw_timing():
     assert "rubyTargetIndices" not in implementation_source
     assert "rubyProgressRatio" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_ruby_painter.h"' in main_source
+    assert '#include "backends/qt/qt_ruby_painter.h"' not in main_source
     assert "qt_cached_ruby_layer.h" not in main_source
     assert "src/backends/qt/qt_ruby_painter.cpp" in cmake_source
     assert "src/backends/qt/qt_ruby_painter.h" in cmake_source
-
-
-def test_native_qt_inline_text_hides_character_style_iteration():
-    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
-    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_inline_text.h").read_text(encoding="utf-8")
-    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_inline_text.cpp").read_text(encoding="utf-8")
-    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
-
-    assert "paintInlineTextLayerStack(" in header_source
-    assert "void paintInlineTextLayerStack(" not in main_source
-    assert "layout.charStyles" in implementation_source
-    assert "layout.charFonts" in implementation_source
-    assert '#include "qt_text_layer.h"' in implementation_source
-    assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_inline_text.h"' in main_source
-    assert "src/backends/qt/qt_inline_text.cpp" in cmake_source
-    assert "src/backends/qt/qt_inline_text.h" in cmake_source
 
 
 def test_native_qt_transformed_text_hides_fill_and_glow_composition():
@@ -907,10 +890,43 @@ def test_native_qt_utopia_painter_hides_specialized_unit_iteration():
     ):
         assert dependency in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_utopia_painter.h"' in main_source
+    assert '#include "backends/qt/qt_utopia_painter.h"' not in main_source
     assert "qt_transformed_text.h" not in main_source
     assert "src/backends/qt/qt_utopia_painter.cpp" in cmake_source
     assert "src/backends/qt/qt_utopia_painter.h" in cmake_source
+
+
+def test_native_qt_line_painter_is_the_cpu_line_composition_boundary():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_line_painter.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_line_painter.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "void paintLine(" in header_source
+    assert "void paintLine(" not in main_source
+    for dependency in (
+        '#include "qt_cached_line_layout.h"',
+        '#include "qt_character_animation.h"',
+        '#include "qt_clip_geometry.h"',
+        '#include "qt_glyph_run.h"',
+        '#include "qt_ruby_diagnostics.h"',
+        '#include "qt_ruby_painter.h"',
+        '#include "qt_utopia_painter.h"',
+    ):
+        assert dependency in implementation_source
+    for hidden_dependency in (
+        "qt_cached_line_layout.h",
+        "qt_clip_geometry.h",
+        "qt_glyph_run.h",
+        "qt_ruby_diagnostics.h",
+        "qt_ruby_painter.h",
+        "qt_utopia_painter.h",
+    ):
+        assert hidden_dependency not in main_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_line_painter.h"' in main_source
+    assert "src/backends/qt/qt_line_painter.cpp" in cmake_source
+    assert "src/backends/qt/qt_line_painter.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
@@ -1077,7 +1093,7 @@ def test_native_qt_ruby_diagnostics_is_a_read_only_projection_boundary():
         assert dependency in implementation_source
     assert "QPainter &" not in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_ruby_diagnostics.h"' in main_source
+    assert '#include "backends/qt/qt_ruby_diagnostics.h"' not in main_source
     assert "src/backends/qt/qt_ruby_diagnostics.cpp" in cmake_source
     assert "src/backends/qt/qt_ruby_diagnostics.h" in cmake_source
 
