@@ -1074,6 +1074,10 @@ def test_stop_render_export_keeps_running_when_confirmation_is_rejected(
 
 def test_render_log_does_not_flash_ffmpeg_command_in_status(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
+    # 页面隐藏期间 log 会转为 pending 攒批（见 background_throttle），
+    # 这两个用例验证的是可见路径的文本行为。
+    win.show()
+    qapp.processEvents()
     win._export_status_label.setText("正在准备导出…")
 
     win._on_render_log("执行命令:")
@@ -1088,6 +1092,8 @@ def test_render_log_does_not_flash_ffmpeg_command_in_status(qapp, monkeypatch):
 
 def test_render_log_does_not_flash_late_sei_warning_in_status(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
+    win.show()
+    qapp.processEvents()
     progress = "正在导出… 3002/10079 帧"
     win._export_status_label.setText(progress)
 

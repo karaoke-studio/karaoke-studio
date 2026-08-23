@@ -111,7 +111,7 @@ from qfluentwidgets import (
     TitleLabel,
 )
 
-from krok_helper.background_throttle import UiActivityGuard
+from krok_helper.background_throttle import UiActivityGuard, ui_active
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
@@ -4495,11 +4495,15 @@ class SubtitleRenderWindow(QWidget):
         self._export_preview_timer = QTimer(self)
         self._export_preview_timer.setInterval(500)
         self._export_preview_timer.timeout.connect(self._poll_export_preview)
-        # 纯 UI 轮询：页面切走/窗口最小化时停，恢复时立即补读一帧
+        # 纯 UI 轮询：页面切走/窗口最小化时停，恢复时立即补读一帧；
+        # 逐帧 progress/log 更新同样在隐藏期间只攒最新值，恢复可见时重放。
         self._export_preview_guard = UiActivityGuard(self)
         self._export_preview_activity = self._export_preview_guard.manage(
             self._export_preview_timer, on_resume=self._poll_export_preview
         )
+        self._export_preview_guard.on_visibility(self._flush_pending_export_progress)
+        self._export_pending_progress: Optional[tuple[int, int]] = None
+        self._export_pending_log: Optional[str] = None
         self._export_preview_dir: Optional[Path] = None
         self._export_preview_file: Optional[Path] = None
         self._export_preview_mtime_ns = 0
@@ -9260,6 +9264,14 @@ class SubtitleRenderWindow(QWidget):
         self._render_worker.cancel()
 
     def _on_render_progress(self, done: int, total: int) -> None:
+        if not ui_active(self):
+            # 导出 worker 全速推进；隐藏期间只留最新一帧数据，
+            # 恢复可见（on_visibility 回调）时再落到 UI。
+            self._export_pending_progress = (done, total)
+            return
+        self._apply_render_progress(done, total)
+
+    def _apply_render_progress(self, done: int, total: int) -> None:
         self._export_progress.setRange(0, max(total, 1))
         self._export_progress.setValue(done)
         self._export_status_label.setText(f"正在导出… {done}/{total} 帧")
@@ -9270,6 +9282,19 @@ class SubtitleRenderWindow(QWidget):
             self._export_eta_label.setText(
                 f"剩余约 {_format_eta_seconds(remaining)} · {rate:.0f} 帧/秒"
             )
+
+    def _flush_pending_export_progress(self) -> None:
+        """恢复可见（或仍可见时的冗余调用）时重放隐藏期间攒下的导出状态。"""
+        if not ui_active(self):
+            return
+        progress = self._export_pending_progress
+        if progress is not None:
+            self._export_pending_progress = None
+            self._apply_render_progress(*progress)
+        log = self._export_pending_log
+        if log is not None:
+            self._export_pending_log = None
+            self._export_status_label.setText(log)
 
     def _on_render_log(self, message: str) -> None:
         if message == "执行命令:":
@@ -9282,6 +9307,9 @@ class SubtitleRenderWindow(QWidget):
             "If you want to help, upload a sample of this file" in message
             and "ffmpeg-devel" in message
         ):
+            return
+        if not ui_active(self):
+            self._export_pending_log = message
             return
         self._export_status_label.setText(message)
 
@@ -9362,6 +9390,10 @@ class SubtitleRenderWindow(QWidget):
 
     def _stop_export_preview_polling(self) -> None:
         self._export_preview_activity.set_desired(False)
+        # 任务收尾：三个 finish 路径都会重写导出 UI 终态，
+        # 攒下的隐藏期进度不能在之后恢复可见时被重放。
+        self._export_pending_progress = None
+        self._export_pending_log = None
         self._poll_export_preview()  # 收尾再读一次，保住最后写入的帧
 
     def _cleanup_export_preview_dir(self) -> None:

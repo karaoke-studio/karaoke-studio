@@ -145,6 +145,7 @@ class UiActivityGuard(QObject):
         super().__init__(parent if parent is not None else widget)
         self._widget = widget
         self._entries: list[_GuardedEntry] = []
+        self._visibility_callbacks: list[Callable[[], None]] = []
         throttle = background_throttle()
         if throttle is not None:
             throttle.visibility_maybe_changed.connect(self._reevaluate)
@@ -157,9 +158,16 @@ class UiActivityGuard(QObject):
         """管理 qfluentwidgets IndeterminateProgressBar 等有 start/stop/isStarted 的动画。"""
         return self._add(animator.start, animator.stop, animator.isStarted, on_resume)
 
+    def on_visibility(self, callback: Callable[[], None]) -> None:
+        """注册每次可见性可能变化时都会收到的回调（回调自行判定状态）。"""
+        self._visibility_callbacks.append(callback)
+
     def _add(self, start, stop, is_running, on_resume) -> _GuardedEntry:
         entry = _GuardedEntry(self, start, stop, is_running, on_resume)
         self._entries.append(entry)
+        # 接管即校正：隐藏 widget 上已启动的定时器必须在 manage() 当场停下，
+        # 不能等下一次 Show/Hide 事件才生效（FPS 定时器就是先 start、后 manage）。
+        self.apply(entry)
         return entry
 
     def apply(self, entry: _GuardedEntry) -> None:
@@ -178,3 +186,8 @@ class UiActivityGuard(QObject):
     def _reevaluate(self) -> None:
         for entry in list(self._entries):
             self.apply(entry)
+        for callback in list(self._visibility_callbacks):
+            try:
+                callback()
+            except RuntimeError:
+                pass

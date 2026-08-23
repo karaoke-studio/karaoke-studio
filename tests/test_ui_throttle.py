@@ -181,6 +181,47 @@ def test_guard_business_stop_prevents_resume(app, throttle):
         win.deleteLater()
 
 
+def test_manage_stops_running_timer_on_hidden_widget_immediately(app):
+    """接管已启动的定时器时必须当场按可见性校正。
+
+    FPS 定时器是「先 start、后 manage」路径：widget 仍隐藏时 manage()
+    不能等下一次 Show/Hide 事件才停。
+    """
+    win = QWidget()  # 从未 show
+    timer = QTimer(win)
+    timer.setInterval(100)
+    timer.start()
+    try:
+        guard = UiActivityGuard(win)
+        guard.manage(timer)
+        assert not timer.isActive()  # 接管即停，无事件也生效
+
+        win.show()
+        _process(app)
+        assert timer.isActive()  # 广播后恢复
+    finally:
+        win.deleteLater()
+
+
+def test_on_visibility_callback_invoked_on_broadcast(app, throttle):
+    calls = []
+    win = QWidget()
+    try:
+        guard = UiActivityGuard(win)
+        guard.on_visibility(lambda: calls.append(win.isVisible()))
+        win.show()
+        _process(app)
+        win.hide()
+        _process(app)
+    finally:
+        win.deleteLater()
+    # show/hide 可能各自触发多次广播（Show + WindowStateChange 等），
+    # 只要求可见与不可见两种状态都被通知到。
+    assert True in calls
+    assert False in calls
+    assert calls[-1] is False
+
+
 def test_guard_defers_start_while_hidden(app, throttle):
     """隐藏期间任务开始（set_desired(True)）：等恢复可见才真正启动。"""
     win = QWidget()
@@ -262,3 +303,73 @@ def test_current_task_panel_determinate_stage_stops_busy_bar(app):
         assert panel._busy_bar.isStarted()  # 回到不确定阶段恢复动画
     finally:
         panel.deleteLater()
+
+
+# ── 导出逐帧 UI 更新：隐藏攒最新值，恢复可见重放 ──────────────────────
+
+
+@pytest.fixture
+def render_window(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import main_window as mw
+
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mw.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    window = mw.SubtitleRenderWindow(embedded=False)
+    yield window
+    # 必须跑一次事件循环让 deleteLater 真正销毁窗口树，
+    # 否则合跑时 USER 句柄累积会拖垮后续用例的定时器注册。
+    window.hide()
+    window.close()
+    window.deleteLater()
+    qapp.processEvents()
+
+
+def test_export_progress_defers_updates_while_hidden(qapp, render_window):
+    """隐藏攒最新值 → 恢复重放 → 再隐藏 → 收尾清理，单窗口走完整场景。"""
+    win = render_window
+    # 隐藏期间 worker 全速：UI 只攒最新一帧数据
+    win._on_render_progress(10, 100)
+    assert win._export_pending_progress == (10, 100)
+    assert win._export_progress.value() == 0
+    win._on_render_log("阶段日志")
+    assert win._export_pending_log == "阶段日志"
+
+    # 恢复可见：广播触发 flush，重放到 UI
+    win.show()
+    qapp.processEvents()
+    assert win._export_pending_progress is None
+    assert win._export_pending_log is None
+    assert win._export_progress.value() == 10
+    assert win._export_progress.maximum() == 100
+    assert win._export_status_label.text() == "阶段日志"
+
+    # 可见时直接更新，不攒
+    win._on_render_progress(30, 100)
+    assert win._export_pending_progress is None
+    assert win._export_progress.value() == 30
+    assert "30/100" in win._export_status_label.text()
+
+    # 再次隐藏 → 重新进入攒模式，UI 保持旧值
+    win.hide()
+    qapp.processEvents()
+    win._on_render_progress(40, 100)
+    assert win._export_pending_progress == (40, 100)
+    assert win._export_progress.value() == 30
+
+
+def test_export_finish_clears_pending(qapp, render_window):
+    win = render_window
+    win._on_render_progress(50, 100)
+    assert win._export_pending_progress == (50, 100)
+    win._stop_export_preview_polling()  # 三个 finish 路径共用的收尾
+    assert win._export_pending_progress is None
+    assert win._export_pending_log is None
+    # 收尾后恢复可见不得重放旧进度
+    win.show()
+    qapp.processEvents()
+    assert win._export_progress.value() == 0
