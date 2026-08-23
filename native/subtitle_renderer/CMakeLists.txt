@@ -63,6 +63,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_render_cache.cpp
     src/backends/qt/qt_render_cache.h
     src/backends/qt/qt_render_types.h
+    src/backends/qt/qt_ruby_target.cpp
+    src/backends/qt/qt_ruby_target.h
     src/backends/qt/qt_style_metrics.cpp
     src/backends/qt/qt_style_metrics.h
     src/backends/direct2d/d2d_backend.cpp
