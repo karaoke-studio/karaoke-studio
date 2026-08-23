@@ -28,6 +28,7 @@
 #include <QtWidgets/QGraphicsScene>
 
 #include "backends/direct2d/d2d_backend.h"
+#include "backends/qt/qt_render_types.h"
 #include "protocol/json_protocol.h"
 #include "protocol/render_config.h"
 #include "runtime/render_job_runtime.h"
@@ -64,6 +65,30 @@ using krok::subtitle::native::protocol::RubyAnnotation;
 using krok::subtitle::native::protocol::TimingChar;
 using krok::subtitle::native::protocol::TimingLine;
 using krok::subtitle::native::protocol::writeJson;
+using krok::subtitle::native::legacy_qt::LineLayout;
+using krok::subtitle::native::legacy_qt::LineDiagnostics;
+using krok::subtitle::native::legacy_qt::DisplayLineRef;
+using krok::subtitle::native::legacy_qt::RubyDiagnostics;
+using krok::subtitle::native::legacy_qt::RubyLayerImage;
+using krok::subtitle::native::legacy_qt::TextLayerImage;
+using krok::subtitle::native::legacy_qt::GlyphRunRef;
+using krok::subtitle::native::legacy_qt::RubyGroupInfo;
+using krok::subtitle::native::legacy_qt::RubyUnitLayout;
+using krok::subtitle::native::legacy_qt::LineCharTransition;
+using krok::subtitle::native::legacy_qt::AnimationState;
+using krok::subtitle::native::legacy_qt::ImageFillCacheEntry;
+using krok::subtitle::native::legacy_qt::GlowBitmapCacheEntry;
+using krok::subtitle::native::legacy_qt::TextLayerCacheEntry;
+using krok::subtitle::native::legacy_qt::LayoutCacheEntry;
+using krok::subtitle::native::legacy_qt::GlowBitmapCacheKeyParts;
+using krok::subtitle::native::legacy_qt::GlowBitmapCacheMissDiagnostic;
+using krok::subtitle::native::legacy_qt::GlowLayerImage;
+using krok::subtitle::native::legacy_qt::GlowBitmapCacheStats;
+using krok::subtitle::native::legacy_qt::TextLayerCacheStats;
+using krok::subtitle::native::legacy_qt::LayoutCacheStats;
+using krok::subtitle::native::legacy_qt::RenderDiagnostics;
+using krok::subtitle::native::legacy_qt::RenderResult;
+using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::runtime::SharedFrameRing;
 using krok::subtitle::native::runtime::SharedFrameRingBuffer;
 using krok::subtitle::native::runtime::RenderJobRuntime;
@@ -79,197 +104,6 @@ constexpr double kUtopiaWipeOverTimeRatio = 0.25;
 constexpr int kUtopiaWipeOverTimeLimitMs = 100;
 constexpr int kUtopiaFadeOutTimeMs = 750;
 
-struct LineLayout {
-    QString text;
-    QFont font;
-    QPainterPath path;
-    std::vector<double> charLefts;
-    std::vector<double> charWidths;
-    std::vector<QFont> charFonts;
-    const ResolvedStyle *lineStyle = nullptr;
-    // Pointers into RenderConfig::resolvedStyles, which is frozen for render_frame.
-    std::vector<const ResolvedStyle *> charStyles;
-    double x = 0.0;
-    double baselineY = 0.0;
-    double width = 0.0;
-    double height = 0.0;
-    double ascent = 0.0;
-    double descent = 0.0;
-    double afterClipExtent = 0.0;
-    bool hasInlineStyles = false;
-};
-
-struct LineDiagnostics {
-    int lane = 0;
-    double lineX = 0.0;
-    double lineWidth = 0.0;
-    double baselineY = 0.0;
-    double afterClipLeft = 0.0;
-    double afterClipRight = 0.0;
-    double afterClipTop = 0.0;
-    double afterClipHeight = 0.0;
-};
-
-struct DisplayLineRef {
-    const TimingLine *line = nullptr;
-    int lane = 0;
-    int displayStartMs = 0;
-    int displayEndMs = 0;
-};
-
-struct RubyDiagnostics {
-    QString kanji;
-    QString reading;
-    std::vector<int> indices;
-    double x = 0.0;
-    double baselineY = 0.0;
-    double targetWidth = 0.0;
-    double readingWidth = 0.0;
-    double progress = 0.0;
-    double afterClipLeft = 0.0;
-    double afterClipRight = 0.0;
-    double afterClipTop = 0.0;
-    double afterClipHeight = 0.0;
-};
-
-struct RubyLayerImage {
-    QImage image;
-    QPointF offset;
-};
-
-struct TextLayerImage {
-    QImage image;
-    QPointF offset;
-};
-
-struct GlyphRunRef {
-    std::size_t start = 0;
-    std::size_t end = 0;
-};
-
-struct RubyGroupInfo {
-    std::vector<int> indices;
-    RubyAnnotation ruby;
-};
-
-struct RubyUnitLayout {
-    QString text;
-    std::pair<int, int> interval;
-    double x = 0.0;
-    double width = 0.0;
-};
-
-struct LineCharTransition {
-    QString phase;
-    QString effect;
-    double progress = 1.0;
-    int startMs = 0;
-    int endMs = 0;
-};
-
-struct AnimationState {
-    double opacity = 1.0;
-    double dx = 0.0;
-    double dy = 0.0;
-    double rotation = 0.0;
-    double scaleX = 1.0;
-    double scaleY = 1.0;
-    double skewY = 0.0;
-};
-
-struct ImageFillCacheEntry {
-    QString key;
-    QImage image;
-};
-
-struct GlowBitmapCacheEntry {
-    QString key;
-    QImage image;
-};
-
-struct TextLayerCacheEntry {
-    QString key;
-    TextLayerImage layer;
-};
-
-struct LayoutCacheEntry {
-    QString key;
-    LineLayout layout;
-};
-
-struct GlowBitmapCacheKeyParts {
-    QString key;
-    QString shapeKey;
-    QString checksum;
-    int radius = 1;
-    int width = 0;
-    int height = 0;
-    int format = 0;
-};
-
-struct GlowBitmapCacheMissDiagnostic {
-    QString scope;
-    QString category;
-    int radius = 1;
-    int width = 0;
-    int height = 0;
-    int format = 0;
-    QString checksum;
-};
-
-struct GlowLayerImage {
-    QImage image;
-    QPointF offset;
-};
-
-struct GlowBitmapCacheStats {
-    int hits = 0;
-    int misses = 0;
-    int shapeMisses = 0;
-    int contentVariantMisses = 0;
-    int evictedKeyMisses = 0;
-    QSet<QString> seenKeys;
-    QSet<QString> seenShapes;
-    QHash<QString, int> missesByScope;
-    std::vector<GlowBitmapCacheMissDiagnostic> recentMisses;
-};
-
-struct TextLayerCacheStats {
-    int hits = 0;
-    int misses = 0;
-};
-
-struct LayoutCacheStats {
-    int hits = 0;
-    int misses = 0;
-};
-
-struct RenderDiagnostics {
-    int visibleLines = 0;
-    bool hasFirstLine = false;
-    double lineX = 0.0;
-    double lineWidth = 0.0;
-    double baselineY = 0.0;
-    double afterClipLeft = 0.0;
-    double afterClipRight = 0.0;
-    double afterClipTop = 0.0;
-    double afterClipHeight = 0.0;
-    std::vector<LineDiagnostics> lines;
-    std::vector<RubyDiagnostics> rubies;
-};
-
-struct RenderResult {
-    QImage image;
-    RenderDiagnostics diagnostics;
-};
-
-struct RangeFrameResult {
-    int tMs = 0;
-    double renderMs = 0.0;
-    QString checksum;
-    int visibleLines = 0;
-    QImage image;
-};
 
 class GpuPreviewWorkerPool {
 public:

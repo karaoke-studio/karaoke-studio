@@ -161,6 +161,50 @@ def test_native_parsed_render_config_has_single_header_owner():
     assert "src/protocol/render_config.h" in cmake_source
 
 
+def test_native_legacy_qt_render_types_have_single_header_owner():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    types_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_render_types.h"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for type_name in (
+        "LineLayout",
+        "LineDiagnostics",
+        "DisplayLineRef",
+        "RubyDiagnostics",
+        "RubyLayerImage",
+        "TextLayerImage",
+        "GlyphRunRef",
+        "RubyGroupInfo",
+        "RubyUnitLayout",
+        "LineCharTransition",
+        "AnimationState",
+        "ImageFillCacheEntry",
+        "GlowBitmapCacheEntry",
+        "TextLayerCacheEntry",
+        "LayoutCacheEntry",
+        "GlowBitmapCacheKeyParts",
+        "GlowBitmapCacheMissDiagnostic",
+        "GlowLayerImage",
+        "GlowBitmapCacheStats",
+        "TextLayerCacheStats",
+        "LayoutCacheStats",
+        "RenderDiagnostics",
+        "RenderResult",
+        "RangeFrameResult",
+    ):
+        declaration = f"struct {type_name} {{"
+        assert declaration in types_source
+        assert declaration not in main_source
+    assert '#include "backends/qt/qt_render_types.h"' in main_source
+    assert "src/backends/qt/qt_render_types.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
