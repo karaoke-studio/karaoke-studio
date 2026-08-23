@@ -24,6 +24,7 @@
 
 #include "backends/direct2d/d2d_backend.h"
 #include "backends/qt/qt_cached_line_layout.h"
+#include "backends/qt/qt_cached_text_layer.h"
 #include "backends/qt/qt_character_animation.h"
 #include "backends/qt/qt_clip_geometry.h"
 #include "backends/qt/qt_display_plan.h"
@@ -111,8 +112,8 @@ using krok::subtitle::native::legacy_qt::RenderResult;
 using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::brushForFill;
 using krok::subtitle::native::legacy_qt::blitTransformedGlowLayerWithWidths;
-using krok::subtitle::native::legacy_qt::buildTextLayerStackWithWidths;
 using krok::subtitle::native::legacy_qt::cachedLayoutLine;
+using krok::subtitle::native::legacy_qt::paintCachedTextLayerStackWithWidths;
 using krok::subtitle::native::legacy_qt::afterClipVerticalExtent;
 using krok::subtitle::native::legacy_qt::applyRubyMainWipeProjection;
 using krok::subtitle::native::legacy_qt::afterClipRect;
@@ -562,62 +563,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-QString mainTextLayerCacheKey(
-    const LineLayout &layout,
-    const QRectF &rect,
-    const QString &phase,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &stroke,
-    const PaintFillSpec &stroke2,
-    const PaintFillSpec &shadow,
-    const ResolvedStyle &style,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int glowRadiusValue
-) {
-    return QStringLiteral("main|%1|text=%2|font=%3|x=%4|y=%5|w=%6|h=%7|ascent=%8|descent=%9|style=%10")
-        .arg(phase)
-        .arg(layout.text)
-        .arg(fontCacheKey(layout.font))
-        .arg(doubleCacheKey(rect.left()))
-        .arg(doubleCacheKey(rect.top()))
-        .arg(doubleCacheKey(rect.width()))
-        .arg(doubleCacheKey(rect.height()))
-        .arg(doubleCacheKey(layout.ascent))
-        .arg(doubleCacheKey(layout.descent))
-        .arg(textStackStyleCacheKey(
-            fill,
-            stroke,
-            stroke2,
-            shadow,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            glowRadiusValue
-        ));
-}
-
-void paintCachedTextLayerStackWithWidths(
-    QPainter &painter,
-    const QString &cacheKey,
-    const QPainterPath &path,
-    const QRectF &rect,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &stroke,
-    const PaintFillSpec &stroke2,
-    const PaintFillSpec &shadow,
-    const ResolvedStyle &style,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int glowRadiusValue
-);
-
 const ResolvedStyle &layoutCharStyle(
     const LineLayout &layout,
     const ResolvedStyle &lineStyle,
@@ -865,64 +810,6 @@ void paintGlyphRunTextLayers(
         const ResolvedStyle &style = layoutCharStyle(layout, lineStyle, run.start);
         paintGlyphRunTextLayer(painter, line, layout, run, style, after);
     }
-}
-
-void paintCachedTextLayerStackWithWidths(
-    QPainter &painter,
-    const QString &cacheKey,
-    const QPainterPath &path,
-    const QRectF &rect,
-    const PaintFillSpec &fill,
-    const PaintFillSpec &stroke,
-    const PaintFillSpec &stroke2,
-    const PaintFillSpec &shadow,
-    const ResolvedStyle &style,
-    int strokeWidth,
-    int stroke2Width,
-    int shadowOffsetX,
-    int shadowOffsetY,
-    int glowRadiusValue
-) {
-    if (!textLayerCacheEnabled()) {
-        const TextLayerImage layer = buildTextLayerStackWithWidths(
-            path,
-            rect,
-            fill,
-            stroke,
-            stroke2,
-            shadow,
-            style,
-            strokeWidth,
-            stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            glowRadiusValue
-        );
-        painter.drawImage(layer.offset, layer.image);
-        return;
-    }
-
-    if (const auto cached = lookupTextLayerCache(cacheKey)) {
-        painter.drawImage(cached->offset, cached->image);
-        return;
-    }
-
-    const TextLayerImage layer = buildTextLayerStackWithWidths(
-        path,
-        rect,
-        fill,
-        stroke,
-        stroke2,
-        shadow,
-        style,
-        strokeWidth,
-        stroke2Width,
-        shadowOffsetX,
-        shadowOffsetY,
-        glowRadiusValue
-    );
-    storeTextLayerCache(cacheKey, layer);
-    painter.drawImage(layer.offset, layer.image);
 }
 
 RubyLayerImage buildRubyTextLayer(

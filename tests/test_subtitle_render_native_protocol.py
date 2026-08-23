@@ -761,6 +761,23 @@ def test_native_qt_text_layer_hides_low_level_glow_and_path_painting():
     assert "src/backends/qt/qt_text_layer.h" in cmake_source
 
 
+def test_native_qt_cached_text_layer_owns_cache_policy():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_cached_text_layer.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_cached_text_layer.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "paintCachedTextLayerStackWithWidths(" in header_source
+    assert "void paintCachedTextLayerStackWithWidths(" not in main_source
+    assert "mainTextLayerCacheKey(" not in main_source
+    assert '#include "qt_render_cache.h"' in implementation_source
+    assert '#include "qt_text_layer.h"' in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_cached_text_layer.h"' in main_source
+    assert "src/backends/qt/qt_cached_text_layer.cpp" in cmake_source
+    assert "src/backends/qt/qt_cached_text_layer.h" in cmake_source
+
+
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
