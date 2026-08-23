@@ -27,14 +27,17 @@ def test_configure_product_registers_lock_guard_patches() -> None:
     assert workbench_updater.updater_main._apply_part is (
         workbench_updater._apply_part_workbench
     )
+    assert workbench_updater.updater_main.launch_main_app is (
+        workbench_updater._launch_main_app_workbench
+    )
 
 
 def test_retry_uses_three_second_intervals_and_names_holders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    workbench_updater._persistent_lock_detail.clear()
     monkeypatch.setattr(workbench_updater, "_blocked_lock", None)
     sleeps: list[float] = []
+    calls = 0
     monkeypatch.setattr(workbench_updater.time, "sleep", sleeps.append)
     monkeypatch.setattr(
         workbench_updater.lock_diag,
@@ -45,6 +48,8 @@ def test_retry_uses_three_second_intervals_and_names_holders(
     dst = tmp_path / "strange_uta_game.bak"
 
     def always_locked() -> None:
+        nonlocal calls
+        calls += 1
         raise _lock_error(src, dst)
 
     with caplog.at_level(logging.INFO, logger="sug.updater"):
@@ -52,12 +57,44 @@ def test_retry_uses_three_second_intervals_and_names_holders(
         with pytest.raises(workbench_updater.PersistentFileLock) as excinfo:
             workbench_updater._retry_workbench("备份 _internal/strange_uta_game", always_locked, log)
 
-    assert sleeps == [workbench_updater.FILE_LOCK_RETRY_INTERVAL] * 6
+    assert calls == 7
+    assert sleeps == [workbench_updater.FILE_LOCK_RETRY_INTERVAL] * 5
     assert "demo.exe(PID 42)" in str(excinfo.value)
-    assert workbench_updater._persistent_lock_detail
     assert workbench_updater._blocked_lock is not None
     assert workbench_updater._blocked_lock.entries == [(42, "demo.exe")]
-    assert any("持续被占用" in message for message in caplog.messages)
+    assert any("最终重试仍被系统拒绝" in message for message in caplog.messages)
+
+
+def test_retry_succeeds_on_final_attempt_after_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(workbench_updater, "_blocked_lock", None)
+    sleeps: list[float] = []
+    monkeypatch.setattr(workbench_updater.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "find_lockers_for_exception",
+        lambda exc: [(42, "demo.exe")],
+    )
+    calls = 0
+
+    def released_after_regular_retries() -> str:
+        nonlocal calls
+        calls += 1
+        if calls <= 6:
+            raise _lock_error(tmp_path / "a", tmp_path / "a.bak")
+        return "ok"
+
+    result = workbench_updater._retry_workbench(
+        "备份 a",
+        released_after_regular_retries,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert result == "ok"
+    assert calls == 7
+    assert sleeps == [workbench_updater.FILE_LOCK_RETRY_INTERVAL] * 5
+    assert workbench_updater._blocked_lock is None
 
 
 def test_retry_without_holders_reraises_original_error(
@@ -69,13 +106,18 @@ def test_retry_without_holders_reraises_original_error(
         workbench_updater.lock_diag, "find_lockers_for_exception", lambda exc: []
     )
 
+    calls = 0
+
     def always_locked() -> None:
+        nonlocal calls
+        calls += 1
         raise _lock_error(tmp_path / "a", tmp_path / "a.bak")
 
     with pytest.raises(PermissionError) as excinfo:
         workbench_updater._retry_workbench("备份 a", always_locked, logging.getLogger("sug.updater"))
 
     assert type(excinfo.value) is PermissionError
+    assert calls == 7
     assert workbench_updater._blocked_lock is None
 
 
@@ -97,72 +139,88 @@ def test_retry_non_lock_oserror_raises_immediately(
     assert not sleeps
 
 
-def test_run_incremental_guard_aborts_before_full_fallback(
-    monkeypatch: pytest.MonkeyPatch,
+def test_apply_part_removes_stale_backup_before_generic_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def locked_failure(args, manifest, work_dir, log):
-        workbench_updater._persistent_lock_detail.append(
-            "备份 _internal/strange_uta_game：占用进程：demo.exe(PID 42)"
-        )
-        return 33
-
-    monkeypatch.setattr(workbench_updater, "_original_run_incremental", locked_failure)
-
-    with pytest.raises(workbench_updater.UpdateBlockedByLock) as excinfo:
-        workbench_updater._run_incremental_workbench(None, {}, None, logging.getLogger("sug.updater"))
-
-    message = str(excinfo.value)
-    assert "demo.exe(PID 42)" in message
-    assert "重启电脑" in message
-    assert "杀" not in message
-    # 明细在入口被清空，guard 消费后不影响下一次运行。
-    assert workbench_updater._persistent_lock_detail == []
-
-
-def test_run_incremental_guard_clears_stale_detail(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(workbench_updater, "_original_run_incremental", lambda *args: 0)
-    workbench_updater._persistent_lock_detail.append("stale")
-
-    rc = workbench_updater._run_incremental_workbench(None, {}, None, logging.getLogger("sug.updater"))
-
-    assert rc == 0
-    assert workbench_updater._persistent_lock_detail == []
-
-
-def test_run_incremental_guard_keeps_full_fallback_for_other_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(workbench_updater, "_original_run_incremental", lambda *args: 33)
-
-    log = logging.getLogger("sug.updater")
-    assert workbench_updater._run_incremental_workbench(None, {}, None, log) == 33
-
-    monkeypatch.setattr(workbench_updater, "_original_run_incremental", lambda *args: 31)
-    assert workbench_updater._run_incremental_workbench(None, {}, None, log) == 31
-
-
-def test_apply_part_reports_leftover_backup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setattr(
-        workbench_updater, "_original_apply_part", lambda *args: (True, "")
-    )
     app_dir = tmp_path / "app"
     leftover = app_dir / "_internal" / "strange_uta_game.bak"
     leftover.mkdir(parents=True)
+    (leftover / "old.py").write_text("old", encoding="utf-8")
+    called = False
 
-    with caplog.at_level(logging.ERROR, logger="sug.updater"):
-        ok, err = workbench_updater._apply_part_workbench(
-            tmp_path / "part.zip",
-            ["_internal/strange_uta_game"],
-            app_dir,
-            tmp_path,
-            "app",
-            logging.getLogger("sug.updater"),
-        )
+    def generic_apply(*args):
+        nonlocal called
+        called = True
+        assert not leftover.exists()
+        return True, ""
+
+    monkeypatch.setattr(workbench_updater, "_original_apply_part", generic_apply)
+    ok, err = workbench_updater._apply_part_workbench(
+        tmp_path / "part.zip",
+        ["_internal/strange_uta_game"],
+        app_dir,
+        tmp_path,
+        "app",
+        logging.getLogger("sug.updater"),
+    )
 
     assert ok is True and err == ""
-    assert any("残留" in message for message in caplog.messages)
+    assert called is True
+
+
+def test_apply_part_stops_when_stale_backup_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_dir = tmp_path / "app"
+    leftover = app_dir / "_internal" / "strange_uta_game.bak"
+    leftover.mkdir(parents=True)
+    monkeypatch.setattr(
+        workbench_updater.shutil,
+        "rmtree",
+        lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError(5, "拒绝访问")),
+    )
+    monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "find_lockers_for_exception",
+        lambda exc: [],
+    )
+    called = False
+
+    def generic_apply(*args):
+        nonlocal called
+        called = True
+        return True, ""
+
+    monkeypatch.setattr(workbench_updater, "_original_apply_part", generic_apply)
+    ok, err = workbench_updater._apply_part_workbench(
+        tmp_path / "part.zip",
+        ["_internal/strange_uta_game"],
+        app_dir,
+        tmp_path,
+        "app",
+        logging.getLogger("sug.updater"),
+    )
+
+    assert ok is False
+    assert "清理旧备份目标" in err
+    assert called is False
+
+
+def test_incremental_failure_keeps_full_fallback_and_clears_stale_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workbench_updater, "_blocked_lock", workbench_updater.BlockedLockInfo(
+        entries=[(42, "demo.exe")], detail="stale"
+    ))
+    monkeypatch.setattr(workbench_updater, "_original_run_incremental", lambda *args: 33)
+
+    rc = workbench_updater._run_incremental_workbench(
+        None, {}, None, logging.getLogger("sug.updater")
+    )
+
+    assert rc == 33
+    assert workbench_updater._blocked_lock is None
 
 
 def test_lock_diag_formats_and_filters_lockers(
@@ -250,9 +308,9 @@ def test_classify_lock_entries_uses_image_name_and_protects_critical(
 
     killable_pids = [pid for pid, _name, _image in killable]
     blocked_pids = [pid for pid, _name, _image in blocked]
-    # explorer 与主程序家族可结束；svchost / 安全软件只展示；自身排除。
-    assert killable_pids == [111, 444]
-    assert blocked_pids == [222, 333]
+    # 只有本程序家族可结束；Explorer、系统进程和安全软件都只展示。
+    assert killable_pids == [444]
+    assert blocked_pids == [111, 222, 333]
 
 
 def test_classify_lock_entries_falls_back_to_friendly_name(
@@ -260,10 +318,138 @@ def test_classify_lock_entries_falls_back_to_friendly_name(
 ) -> None:
     monkeypatch.setattr(workbench_updater.lock_diag, "process_image_name", lambda pid: "")
 
-    killable, blocked = workbench_updater._classify_lock_entries([(555, "360Tray.exe")])
+    killable, blocked = workbench_updater._classify_lock_entries(
+        [(555, "Karaoke Studio.exe")]
+    )
 
     assert not killable
     assert [pid for pid, _n, _i in blocked] == [555]
+
+
+def test_full_update_stops_when_old_backup_cannot_be_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_dir = tmp_path / "app"
+    new_root = tmp_path / "new"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "_internal.old").mkdir()
+    (app_dir / "Karaoke Studio.exe").write_bytes(b"old")
+    (new_root / "_internal").mkdir(parents=True)
+    (new_root / "Karaoke Studio.exe").write_bytes(b"new")
+    called = False
+
+    def fail_rmtree(*args, **kwargs):
+        raise PermissionError(5, "拒绝访问")
+
+    def generic_apply(*args):
+        nonlocal called
+        called = True
+        return True, ""
+
+    monkeypatch.setattr(workbench_updater.shutil, "rmtree", fail_rmtree)
+    monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "find_lockers_for_exception",
+        lambda exc: [],
+    )
+    monkeypatch.setattr(workbench_updater, "_original_apply_update", generic_apply)
+
+    ok, err = workbench_updater._apply_workbench_update(
+        app_dir,
+        "Karaoke Studio.exe",
+        "_internal",
+        new_root,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert ok is False
+    assert "_internal.old" in err
+    assert called is False
+
+
+def test_full_update_removes_stale_backups_before_generic_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_dir = tmp_path / "app"
+    new_root = tmp_path / "new"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "_internal.old").mkdir()
+    (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old")
+    (app_dir / "Lin-K Lyrics.exe.old").write_bytes(b"older")
+    (new_root / "_internal").mkdir(parents=True)
+    (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
+
+    def generic_apply(*args):
+        assert not (app_dir / "_internal.old").exists()
+        assert not (app_dir / "Lin-K Lyrics.exe.old").exists()
+        return True, ""
+
+    monkeypatch.setattr(workbench_updater, "_original_apply_update", generic_apply)
+
+    ok, err = workbench_updater._apply_workbench_update(
+        app_dir,
+        "Lin-K Lyrics.exe",
+        "_internal",
+        new_root,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert ok is True and err == ""
+
+
+def test_full_update_uses_neutral_rename_error_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_dir = tmp_path / "app"
+    new_root = tmp_path / "new"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old")
+    (new_root / "_internal").mkdir(parents=True)
+    (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
+    monkeypatch.setattr(
+        workbench_updater,
+        "_original_apply_update",
+        lambda *args: (False, "备份失败（主程序可能仍未完全释放文件句柄）"),
+    )
+
+    ok, err = workbench_updater._apply_workbench_update(
+        app_dir,
+        "Lin-K Lyrics.exe",
+        "_internal",
+        new_root,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert ok is False
+    assert "目录重命名被系统拒绝" in err
+    assert "可能" not in err
+
+
+def test_launch_main_app_resets_pyinstaller_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exe = tmp_path / "Lin-K Lyrics.exe"
+    exe.write_bytes(b"exe")
+    captured = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(workbench_updater.subprocess, "Popen", fake_popen)
+
+    assert workbench_updater._launch_main_app_workbench(
+        tmp_path,
+        exe.name,
+        logging.getLogger("sug.updater"),
+    )
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
 
 
 def test_kill_pid_terminates_disposable_child() -> None:

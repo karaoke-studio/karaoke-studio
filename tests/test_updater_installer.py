@@ -1,8 +1,10 @@
 """LaunchPlan 与随包 Updater CLI 的交接契约测试。"""
 
+import os
 import sys
 from pathlib import Path
 
+from krok_helper.updater import installer
 from krok_helper.updater.installer import LaunchPlan
 
 
@@ -63,3 +65,38 @@ def test_shipped_updater_parser_roundtrip():
     assert parsed.asset_name == "KaraokeStudio-windows.zip"
     assert parsed.pid == 777
     assert parsed.sha256 == "deadbeef"
+
+
+def test_launch_updater_uses_temp_cwd_and_fresh_pyinstaller_environment(
+    tmp_path: Path, monkeypatch
+):
+    app_dir = tmp_path / "app"
+    temp_dir = tmp_path / "temp"
+    app_dir.mkdir()
+    temp_dir.mkdir()
+    installed_updater = app_dir / installer.UPDATER_EXE_NAME
+    temp_updater = temp_dir / installer.UPDATER_EXE_NAME
+    installed_updater.write_bytes(b"installed")
+    temp_updater.write_bytes(b"temp")
+    captured = {}
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        captured.update(kwargs)
+        return FakeProcess()
+
+    plan = _plan(app_dir=app_dir)
+    monkeypatch.setattr(installer, "_update_updater_from_remote", lambda *args, **kwargs: False)
+    monkeypatch.setattr(installer, "_copy_updater_to_temp", lambda path: temp_updater)
+    monkeypatch.setattr(installer.subprocess, "Popen", fake_popen)
+
+    result = installer.launch_updater(plan)
+
+    assert result.launched is True
+    assert result.pid == 4321
+    assert captured["cwd"] == str(temp_dir)
+    assert captured["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert captured["env"] is not os.environ

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -18,31 +19,17 @@ from updater_app import main as updater_main
 # 单纯加次数帮助有限，拉长单次等待更稳妥。
 FILE_LOCK_RETRY_INTERVAL = 3.0
 
-# 永不由更新器结束的进程镜像名（小写）。系统关键进程结束会导致系统失稳，
-# 安全软件进程受自保护且不应由应用代管——占用名单里出现它们时只展示、不提供
-# 结束入口，指引用户重启电脑后再试。
-_PROTECTED_PROCESS_IMAGES = frozenset({
-    # Windows 系统关键进程
-    "system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
-    "services.exe", "lsass.exe", "lsm.exe", "svchost.exe", "dwm.exe",
-    "fontdrvhost.exe", "sihost.exe", "taskhostw.exe", "conhost.exe",
-    # Windows Defender / Security Health
-    "msmpeng.exe", "msmpengl.exe", "nissrv.exe",
-    "securityhealthservice.exe", "securityhealthsystray.exe",
-    # 常见第三方安全软件（名单不追求完备，宁漏勿错杀）
-    "360tray.exe", "360safe.exe", "zhudongfangyu.exe", "360sd.exe",
-    "qhsafetray.exe", "qmdl.exe", "qqpcrtp.exe", "qqpctray.exe",
-    "kxetray.exe", "ksafe.exe", "ravmond.exe", "baidusd.exe",
-    "baiduansvx.exe", "hipsdaemon.exe", "hipstray.exe",
+# 更新器只能结束明确属于本产品的进程。未知进程、Explorer、系统进程和安全软件
+# 一律只展示；黑名单无法穷举，白名单才不会误伤用户的其他程序。
+_TERMINABLE_PROCESS_IMAGES = frozenset({
+    "lin-k lyrics.exe",
+    "karaoke studio.exe",
+    "krok_subtitle_renderer.exe",
 })
 
 
 class PersistentFileLock(OSError):
-    """重试窗口耗尽后仍被占用（WinError 5/32），消息中携带占用进程清单。"""
-
-
-class UpdateBlockedByLock(RuntimeError):
-    """增量与全量共同依赖的目录被占用，已跳过注定失败的全量下载。"""
+    """重命名持续被拒绝，且 Restart Manager 返回了可能的占用进程。"""
 
 
 @dataclass
@@ -62,21 +49,17 @@ _retry_context: tuple | None = None
 
 _original_run_incremental = updater_main.run_incremental
 _original_apply_part = updater_main._apply_part
-_original_retry_on_permission_error = updater_main._retry_on_permission_error
-
-# 一次 run_incremental 执行期间累计的「持续占用」描述；其包装层据此决定
-# 是否跳过全量兜底。目录占时时全量路径要 rename 的 _internal 是增量目标的
-# 超集，数学上不可能成功，只会白白多下载一次全量包。
-_persistent_lock_detail: list[str] = []
 
 
 def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RETRY_INTERVAL):
-    """SUG _retry_on_permission_error 的工作台版：3s 等差 + 耗尽时点名占用进程。
+    """重试被系统拒绝的文件操作，并在诊断后做一次最终尝试。
 
     行为与原版一致（重试 PermissionError 与 WinError 5/32，其余 OSError 直接
-    抛出）；唯一差异是耗尽后若能通过 Restart Manager 找到占用方，改抛携带
-    进程清单的 :class:`PersistentFileLock`，让上游错误消息直接可操作。
+    抛出）。常规次数耗尽后先运行 Restart Manager 诊断，再执行一次最终操作，
+    覆盖“最后一次失败后条件已经解除、但旧实现只诊断不再尝试”的竞态窗口。
     """
+    global _blocked_lock
+    _blocked_lock = None
     if max_retries is None:
         max_retries = updater_main.FILE_LOCK_RETRY_COUNT
     last_exc: BaseException = OSError("no attempt made")
@@ -91,44 +74,99 @@ def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RE
                 last_exc = exc
             else:
                 raise
-        log.warning(
-            "%s 第 %d/%d 次失败：%s；%.1fs 后重试…",
-            op_desc, attempt, max_retries, last_exc, interval,
-        )
-        time.sleep(interval)
+        if attempt < max_retries:
+            log.warning(
+                "%s 第 %d/%d 次失败：%s；%.1fs 后重试…",
+                op_desc, attempt, max_retries, last_exc, interval,
+            )
+            time.sleep(interval)
+        else:
+            log.warning(
+                "%s 第 %d/%d 次失败：%s；正在诊断后执行最终重试…",
+                op_desc, attempt, max_retries, last_exc,
+            )
+
     entries = lock_diag.find_lockers_for_exception(last_exc)
+    holders = lock_diag.format_lockers(entries) if entries else ""
+    if holders:
+        log.warning("%s 诊断发现可能使用目标路径的进程：%s", op_desc, holders)
+
+    log.info("%s 诊断完成，执行最终重试", op_desc)
+    try:
+        result = func()
+    except PermissionError as exc:
+        final_exc: BaseException = exc
+    except OSError as exc:
+        if getattr(exc, "winerror", None) not in (5, 32):
+            raise
+        final_exc = exc
+    else:
+        log.info("%s 最终重试成功", op_desc)
+        return result
+
     if not entries:
-        raise last_exc
-    holders = lock_diag.format_lockers(entries)
-    log.error("%s 持续被占用：%s", op_desc, holders)
-    _persistent_lock_detail.append(f"{op_desc}：{holders}")
-    global _blocked_lock
+        raise final_exc
+    log.error("%s 最终重试仍被系统拒绝；%s", op_desc, holders)
     _blocked_lock = BlockedLockInfo(entries=entries, detail=holders)
-    raise PersistentFileLock(f"{last_exc}（{holders}）") from last_exc
+    raise PersistentFileLock(f"{final_exc}（{holders}）") from final_exc
+
+
+def _path_lexists(path) -> bool:
+    """Like Path.exists(), but also true for broken links/reparse-point entries."""
+    return os.path.lexists(os.fspath(path))
+
+
+def _remove_stale_backup(path, log, label: str) -> tuple[bool, str]:
+    """Remove one stale backup and verify that the destination is really free."""
+    if not _path_lexists(path):
+        return True, ""
+
+    log.info("清理旧备份目标: %s", path)
+
+    def remove_once() -> None:
+        if not _path_lexists(path):
+            return
+        if path.is_symlink() or not path.is_dir():
+            path.unlink()
+        else:
+            shutil.rmtree(str(path), ignore_errors=False)
+
+    try:
+        _retry_workbench(f"清理旧备份目标 {label}", remove_once, log)
+    except OSError as exc:
+        message = f"清理旧备份目标 {label} 失败: {exc}"
+        log.error(message)
+        return False, message
+
+    if _path_lexists(path):
+        message = f"清理旧备份目标 {label} 失败: 删除操作结束后目标仍然存在"
+        log.error(message)
+        return False, message
+    return True, ""
 
 
 def _run_incremental_workbench(args, manifest, work_dir, log):
-    """SUG run_incremental 的工作台版：目录被占用时中止而非回退全量。"""
-    _persistent_lock_detail.clear()
-    detail = ""
-    try:
-        rc = _original_run_incremental(args, manifest, work_dir, log)
-        detail = "；".join(_persistent_lock_detail)
-    finally:
-        _persistent_lock_detail.clear()
-    if rc == 33 and detail:
-        log.error(
-            "安装目录被其他程序占用，增量更新失败；全量路径需要重命名同一目录，"
-            "已跳过注定失败的全量下载。"
-        )
-        raise UpdateBlockedByLock(
-            f"更新被占用阻止：{detail}。请关闭相关程序或重启电脑后重新尝试更新。"
-        ) from None
+    """Keep full fallback enabled and discard stale incremental lock state."""
+    rc = _original_run_incremental(args, manifest, work_dir, log)
+    if rc != 0:
+        global _blocked_lock
+        _blocked_lock = None
     return rc
 
 
 def _apply_part_workbench(part_zip, targets, app_dir, work_dir, part_id, log):
-    """SUG _apply_part 的工作台版：备份清理失败不再静默。"""
+    """SUG _apply_part wrapper with verified stale-backup cleanup."""
+    for rel in targets:
+        if not isinstance(rel, str) or rel in (
+            updater_main.UPDATER_EXE_NAME,
+            updater_main.UPDATER_EX_NAME,
+        ):
+            continue
+        backup = app_dir / (rel + ".bak")
+        ok, error = _remove_stale_backup(backup, log, rel + ".bak")
+        if not ok:
+            return False, error
+
     ok, err = _original_apply_part(part_zip, targets, app_dir, work_dir, part_id, log)
     if ok:
         leftovers = [
@@ -149,9 +187,8 @@ def _apply_part_workbench(part_zip, targets, app_dir, work_dir, part_id, log):
 def _classify_lock_entries(entries):
     """把 RM 占用名单分为「可由更新器结束」与「只展示不结束」两组。
 
-    匹配用真实镜像名（RM 的友好名是本地化文案，不可靠）；镜像名查不到时退回
-    友好名。本程序家族（主程序双名 / 渲染 sidecar / 更新器残留副本）视为可结束，
-    但弹窗文案会提示其中可能有用户正在使用的实例。
+    只有能查到真实镜像名、且镜像名属于本程序白名单的进程可结束。RM 友好名
+    可本地化、也不能证明进程身份，查询不到镜像路径时必须保守地只展示。
     """
     killable = []
     blocked = []
@@ -162,14 +199,12 @@ def _classify_lock_entries(entries):
         image = lock_diag.process_image_name(pid)
         image = os.path.basename(image).lower() if image else ""
         if not image:
-            # 镜像名查不到（进程已退出等）时退回友好名兜底匹配
-            image = (name or "").strip().lower()
-        if not image:
+            blocked.append((pid, name or "未知进程", ""))
             continue
-        if image in _PROTECTED_PROCESS_IMAGES:
-            blocked.append((pid, name or image, image))
-        else:
+        if image in _TERMINABLE_PROCESS_IMAGES:
             killable.append((pid, name or image, image))
+        else:
+            blocked.append((pid, name or image, image))
     return killable, blocked
 
 
@@ -230,7 +265,7 @@ def _offer_lock_recovery(win) -> bool:
     from krok_helper.updater_app import lock_dialog
 
     dialog = lock_dialog.LockRecoveryDialog(
-        "以下程序正在占用安装目录，导致无法替换文件：",
+        "目录重命名被系统拒绝；检测到以下程序可能正在使用相关文件：",
         lines + blocked_note,
         retry_label,
         parent=win,
@@ -315,7 +350,34 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
     add the renamed entry point after the legacy target has updated successfully.
     """
 
+    # Validate the package before touching any recovery backup.  The generic
+    # implementation performs the same validation, but its cleanup silently
+    # ignores failures and then continues into rename.
+    if not (new_root / app_exe).is_file():
+        return False, f"更新包中找不到 {app_exe}"
+    if not (new_root / internal_name).is_dir():
+        return False, f"更新包中找不到 {internal_name}/"
+
+    backup_targets = (
+        (app_dir / internal_name, app_dir / f"{internal_name}.old", f"{internal_name}.old"),
+        (app_dir / app_exe, app_dir / f"{app_exe}.old", f"{app_exe}.old"),
+    )
+    for current, backup, label in backup_targets:
+        if not _path_lexists(current):
+            continue
+        ok, error = _remove_stale_backup(backup, log, label)
+        if not ok:
+            return False, error
+
     ok, error = _original_apply_update(app_dir, app_exe, internal_name, new_root, log)
+    if not ok:
+        error = error.replace(
+            "（主程序可能仍未完全释放文件句柄）",
+            "（目录重命名被系统拒绝）",
+        ).replace(
+            "（主程序可能未完全退出）",
+            "（文件重命名被系统拒绝）",
+        )
     if not ok or app_exe == PRIMARY_APP_EXE_NAME:
         return ok, error
 
@@ -331,16 +393,47 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
     return True, ""
 
 
+def _launch_main_app_workbench(app_dir, app_exe, log) -> bool:
+    """Launch the updated frozen app as a fresh PyInstaller instance."""
+    exe_path = app_dir / app_exe
+    if not exe_path.exists():
+        log.error("找不到主程序 EXE: %s", exe_path)
+        return False
+
+    log.info("启动新版本: %s", exe_path)
+    flags = 0
+    if sys.platform == "win32":
+        flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    try:
+        subprocess.Popen(  # noqa: S603
+            [str(exe_path)],
+            cwd=str(app_dir),
+            env=env,
+            close_fds=True,
+            creationflags=flags,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except OSError as exc:
+        log.error("启动主程序失败: %s", exc)
+        return False
+
+
 def _configure_product() -> None:
     updater_main.TMP_DIR_NAME = "KaraokeStudioUpdater"
     updater_main.DEFAULT_USER_AGENT = "KaraokeStudio-Updater/standalone"
     updater_main.setup_logger = _setup_workbench_logger
     updater_main._cleanup_temp_workdir = _cleanup_workbench_temp_workdir
     updater_main.apply_update = _apply_workbench_update
+    updater_main.launch_main_app = _launch_main_app_workbench
     # 文件锁相关工作台口径（详见各函数 docstring）：
-    # - 3s 等差重试 + 耗尽时点名占用进程；
-    # - 目录被占用时跳过注定失败的全量兜底；
-    # - 备份清理失败不再静默。
+    # - 3s 间隔重试 + 诊断后的最终尝试；
+    # - 增量失败仍保留全量兜底；
+    # - 备份目标清理失败不再静默。
     # run_incremental / _apply_part 的调用点都在 SUG 模块内按全局名解析，
     # 替换模块属性即可生效。
     updater_main._retry_on_permission_error = _retry_workbench

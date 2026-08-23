@@ -399,10 +399,13 @@ def launch_updater(
         else:
             flags = 0x00000010 | 0x00000200  # CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
 
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     try:
         proc = subprocess.Popen(
             args,
-            cwd=str(plan.app_dir),
+            cwd=str(temp_copy.parent),
+            env=env,
             close_fds=True,
             creationflags=flags,
             stdin=None,
@@ -418,4 +421,3 @@ def launch_updater(
         temp_copy_path=str(temp_copy),
         pid=int(proc.pid),
     )
-

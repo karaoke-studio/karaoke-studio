@@ -40,7 +40,7 @@ class LockRecoveryDialog(MessageBox):
             informative_text = DEFAULT_INFORMATIVE_TEXT
 
         content = f"{body_text}\n{detail_text}\n{informative_text}"
-        super().__init__("更新被占用停止", content, parent)
+        super().__init__("更新文件替换受阻", content, parent)
 
         self.retry_requested = False
         self.yesSignal.connect(self._mark_retry)
