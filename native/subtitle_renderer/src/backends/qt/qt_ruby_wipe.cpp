@@ -321,4 +321,3 @@ bool applyRubyMainWipeProjection(
 }
 
 }  // namespace krok::subtitle::native::legacy_qt
-
