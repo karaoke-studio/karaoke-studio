@@ -296,6 +296,33 @@ def test_native_render_config_parser_exposes_only_prepared_config_contract():
     assert "src/protocol/render_config_parser.h" in cmake_source
 
 
+def test_native_render_runtime_state_has_single_runtime_owner():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    runtime_source = Path(
+        "native/subtitle_renderer/src/runtime/render_runtime.h"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for type_name in ("GpuPreviewPoolCacheEntry", "RenderRuntime"):
+        declaration = f"struct {type_name} {{"
+        assert declaration in runtime_source
+        assert declaration not in main_source
+    for owned_state in (
+        "RenderJobRuntime jobs",
+        "SharedFrameRingBuffer sharedFrames",
+        "hardwareGpuBackend",
+        "hardwareGpuPreviewPool",
+        "hardwareGpuPreviewPoolCache",
+    ):
+        assert owned_state in runtime_source
+    assert '#include "runtime/render_runtime.h"' in main_source
+    assert "src/runtime/render_runtime.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

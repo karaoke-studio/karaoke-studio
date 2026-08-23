@@ -34,8 +34,7 @@
 #include "protocol/render_config.h"
 #include "protocol/render_config_parser.h"
 #include "runtime/gpu_preview_worker_pool.h"
-#include "runtime/render_job_runtime.h"
-#include "runtime/shared_frame_ring.h"
+#include "runtime/render_runtime.h"
 
 #include <algorithm>
 #include <atomic>
@@ -100,9 +99,9 @@ using krok::subtitle::native::legacy_qt::RenderDiagnostics;
 using krok::subtitle::native::legacy_qt::RenderResult;
 using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::runtime::GpuPreviewWorkerPool;
+using krok::subtitle::native::runtime::GpuPreviewPoolCacheEntry;
+using krok::subtitle::native::runtime::RenderRuntime;
 using krok::subtitle::native::runtime::SharedFrameRing;
-using krok::subtitle::native::runtime::SharedFrameRingBuffer;
-using krok::subtitle::native::runtime::RenderJobRuntime;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kUtopiaIntroTimeMs = 700;
@@ -115,27 +114,6 @@ constexpr double kUtopiaWipeOverTimeRatio = 0.25;
 constexpr int kUtopiaWipeOverTimeLimitMs = 100;
 constexpr int kUtopiaFadeOutTimeMs = 750;
 
-
-struct GpuPreviewPoolCacheEntry {
-    QString key;
-    std::unique_ptr<GpuPreviewWorkerPool> pool;
-};
-
-struct RenderRuntime {
-    RenderJobRuntime jobs;
-    SharedFrameRingBuffer sharedFrames;
-    std::mutex gpuBackendMutex;
-    std::unique_ptr<krok::subtitle::native::RenderBackend> hardwareGpuBackend;
-    std::unique_ptr<krok::subtitle::native::RenderBackend> warpGpuBackend;
-    bool hardwareGpuConfigured = false;
-    bool warpGpuConfigured = false;
-    std::unique_ptr<GpuPreviewWorkerPool> hardwareGpuPreviewPool;
-    std::unique_ptr<GpuPreviewWorkerPool> warpGpuPreviewPool;
-    QString hardwareGpuPreviewPoolKey;
-    QString warpGpuPreviewPoolKey;
-    std::deque<GpuPreviewPoolCacheEntry> hardwareGpuPreviewPoolCache;
-    std::deque<GpuPreviewPoolCacheEntry> warpGpuPreviewPoolCache;
-};
 
 QString fontCacheKey(const QFont &font);
 std::optional<LineLayout> lookupLayoutCache(const QString &key);
