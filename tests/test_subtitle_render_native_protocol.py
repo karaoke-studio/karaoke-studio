@@ -168,6 +168,9 @@ def test_native_legacy_qt_render_types_have_single_header_owner():
     types_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_render_types.h"
     ).read_text(encoding="utf-8")
+    range_commands_source = Path(
+        "native/subtitle_renderer/src/commands/qt_range_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -200,7 +203,8 @@ def test_native_legacy_qt_render_types_have_single_header_owner():
         declaration = f"struct {type_name} {{"
         assert declaration in types_source
         assert declaration not in main_source
-    assert '#include "backends/qt/qt_render_types.h"' in main_source
+    assert '#include "backends/qt/qt_render_types.h"' not in main_source
+    assert '#include "../backends/qt/qt_render_types.h"' in range_commands_source
     assert "src/backends/qt/qt_render_types.h" in cmake_source
 
 
@@ -636,6 +640,9 @@ def test_native_qt_render_cache_has_single_state_owner():
     implementation_source = Path(
         "native/subtitle_renderer/src/backends/qt/qt_render_cache.cpp"
     ).read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/qt_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
@@ -674,7 +681,8 @@ def test_native_qt_render_cache_has_single_state_owner():
     assert "imageFullChecksum" in implementation_source
     assert "paintKaraokePath" not in implementation_source
     assert "brushForFill" not in implementation_source
-    assert '#include "backends/qt/qt_render_cache.h"' in main_source
+    assert '#include "backends/qt/qt_render_cache.h"' not in main_source
+    assert '#include "../backends/qt/qt_render_cache.h"' in frame_commands_source
     assert "QGraphicsBlurEffect" not in main_source
     assert "src/backends/qt/qt_render_cache.cpp" in cmake_source
     assert "src/backends/qt/qt_render_cache.h" in cmake_source
@@ -961,6 +969,9 @@ def test_native_qt_frame_renderer_owns_the_cpu_frame_loop():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
     header_source = Path("native/subtitle_renderer/src/backends/qt/qt_frame_renderer.h").read_text(encoding="utf-8")
     implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_frame_renderer.cpp").read_text(encoding="utf-8")
+    frame_commands_source = Path(
+        "native/subtitle_renderer/src/commands/qt_frame_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
 
     assert "RenderResult renderFrame(" in header_source
@@ -971,7 +982,8 @@ def test_native_qt_frame_renderer_owns_the_cpu_frame_loop():
     assert "visibleDisplayLines(" in implementation_source
     assert "paintLine(" in implementation_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_frame_renderer.h"' in main_source
+    assert '#include "backends/qt/qt_frame_renderer.h"' not in main_source
+    assert '#include "../backends/qt/qt_frame_renderer.h"' in frame_commands_source
     assert "qt_line_painter.h" not in main_source
     assert "src/backends/qt/qt_frame_renderer.cpp" in cmake_source
     assert "src/backends/qt/qt_frame_renderer.h" in cmake_source
@@ -1109,6 +1121,40 @@ def test_native_qt_frame_commands_own_single_frame_request_flow():
     assert '#include "commands/qt_frame_commands.h"' in main_source
     assert "src/commands/qt_frame_commands.cpp" in cmake_source
     assert "src/commands/qt_frame_commands.h" in cmake_source
+
+
+def test_native_qt_range_commands_hide_parallel_render_flow():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/commands/qt_range_commands.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/commands/qt_range_commands.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "handleRenderRangeStats(" in header_source
+    assert "handleRenderRange(" in header_source
+    assert "QJsonObject handleRenderRangeStats(" not in main_source
+    assert "QJsonObject handleRenderRange(" not in main_source
+    for private_rule in (
+        "rangeTimestampsFromRequest(",
+        "rangeWorkerCountFromRequest(",
+        "launchRenderRangeJob(",
+        "writeSharedFrameSlot(",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+        assert private_rule not in main_source
+    assert "Direct2D" not in implementation_source
+    assert "gpuSceneFromConfig" not in implementation_source
+    assert '#include "commands/qt_range_commands.h"' in main_source
+    assert "src/commands/qt_range_commands.cpp" in cmake_source
+    assert "src/commands/qt_range_commands.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():

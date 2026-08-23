@@ -30,6 +30,8 @@ add_executable(krok_subtitle_renderer
     src/main.cpp
     src/commands/qt_frame_commands.cpp
     src/commands/qt_frame_commands.h
+    src/commands/qt_range_commands.cpp
+    src/commands/qt_range_commands.h
     src/diagnostics/gpu_diagnostics_json.cpp
     src/diagnostics/gpu_diagnostics_json.h
     src/diagnostics/qt_frame_diagnostics_json.cpp
