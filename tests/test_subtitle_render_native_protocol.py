@@ -597,6 +597,60 @@ def test_native_checksum_rules_have_single_runtime_owner():
     assert "src/runtime/checksum.h" in cmake_source
 
 
+def test_native_qt_render_cache_has_single_state_owner():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_render_cache.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_render_cache.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for operation in (
+        "clearGlowBitmapCache",
+        "clearTextLayerCache",
+        "clearLayoutCache",
+        "glowBitmapCacheEnabled",
+        "textLayerCacheEnabled",
+        "fontCacheKey",
+        "textStackStyleCacheKey",
+        "lookupTextLayerCache",
+        "storeTextLayerCache",
+        "lookupLayoutCache",
+        "storeLayoutCache",
+        "cachedBlurImage",
+        "glowBitmapCacheSize",
+        "textLayerCacheSize",
+        "layoutCacheSize",
+    ):
+        assert operation in header_source
+    for private_state in (
+        "glowBitmapCache()",
+        "textLayerCache()",
+        "layoutCache()",
+        "layoutCacheGeneration()",
+        "glowBitmapCacheMutex()",
+        "kGlowBitmapCacheMax",
+        "kTextLayerCacheMax",
+        "kLayoutCacheMax",
+    ):
+        assert private_state in implementation_source
+        assert private_state not in header_source
+        assert private_state not in main_source
+    assert "imageFullChecksum" in implementation_source
+    assert "paintKaraokePath" not in implementation_source
+    assert "brushForFill" not in implementation_source
+    assert '#include "backends/qt/qt_render_cache.h"' in main_source
+    assert "QGraphicsBlurEffect" not in main_source
+    assert "src/backends/qt/qt_render_cache.cpp" in cmake_source
+    assert "src/backends/qt/qt_render_cache.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 

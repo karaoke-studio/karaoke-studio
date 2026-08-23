@@ -56,6 +56,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_font_factory.h
     src/backends/qt/qt_line_layout.cpp
     src/backends/qt/qt_line_layout.h
+    src/backends/qt/qt_render_cache.cpp
+    src/backends/qt/qt_render_cache.h
     src/backends/qt/qt_render_types.h
     src/backends/qt/qt_style_metrics.cpp
     src/backends/qt/qt_style_metrics.h
