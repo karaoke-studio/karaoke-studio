@@ -462,6 +462,40 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     assert "src/runtime/gpu_backend_runtime.h" in cmake_source
 
 
+def test_native_signal_state_is_backend_independent_contract():
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/signal_state.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/signal_state.cpp"
+    ).read_text(encoding="utf-8")
+    direct2d_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "struct VolumeSignalGeometry",
+        "struct VolumeSignalState",
+        "struct ShapeSignalGeometry",
+        "struct ShapeSignalState",
+        "VolumeSignalGeometry volumeSignalGeometry(",
+        "VolumeSignalState volumeSignalState(",
+        "ShapeSignalGeometry shapeSignalGeometry(",
+        "ShapeSignalState shapeSignalState(",
+    ):
+        assert contract in header_source
+        assert contract not in direct2d_source
+    for platform_detail in ("ID2D1", "DWRITE_", "Microsoft::WRL", "windows.h"):
+        assert platform_detail not in header_source
+        assert platform_detail not in implementation_source
+    assert '#include "../signal_state.h"' in direct2d_source
+    assert "src/backends/signal_state.cpp" in cmake_source
+    assert "src/backends/signal_state.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
