@@ -290,6 +290,14 @@ class _FakeServiceFactory:
         return _FakeService(cls.client)
 
 
+class _BrokenServiceFactory:
+    """功能自检必然失败（桥接起不来）：仲裁应维持 DAMAGED 结论。"""
+
+    @classmethod
+    def start(cls, *_args, **_kwargs):
+        raise OSError("模拟桥接进程无法启动")
+
+
 def test_restore_detects_deleted_and_damaged_managed_runtime(tmp_path) -> None:
     missing = RealSeparationBackend({"install_dir": str(tmp_path / "deleted")})
     try:
@@ -299,8 +307,12 @@ def test_restore_detects_deleted_and_damaged_managed_runtime(tmp_path) -> None:
 
     damaged_root = tmp_path / "damaged"
     damaged_root.mkdir()
-    damaged = RealSeparationBackend({"install_dir": str(damaged_root)})
+    damaged = RealSeparationBackend(
+        {"install_dir": str(damaged_root)}, service_factory=_BrokenServiceFactory
+    )
     try:
+        # 启动仲裁是异步的：等结论落地再断言，避免撞上 VERIFYING 中间态
+        _wait_until(lambda: not damaged._futures)
         assert damaged.snapshot().state is ServiceState.INSTALL_DAMAGED
     finally:
         damaged.shutdown()
@@ -430,8 +442,10 @@ def test_note_runtime_changed_resyncs_manifest(tmp_path) -> None:
     (root / "runtime" / "python.exe").write_bytes(b"mutated-by-pip-longer")
 
     settings = {"install_dir": str(root)}
-    backend = RealSeparationBackend(settings)
+    backend = RealSeparationBackend(settings, service_factory=_BrokenServiceFactory)
     try:
+        # 等启动期仲裁结束（自检失败维持损坏），避免与宿主通知的结果竞争
+        _wait_until(lambda: not backend._futures)
         assert backend.snapshot().state is ServiceState.INSTALL_DAMAGED
         assert backend.note_runtime_changed() is True
         assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
@@ -451,6 +465,72 @@ def test_note_runtime_changed_without_install_returns_false(tmp_path) -> None:
         assert backend.note_runtime_changed() is False
     finally:
         backend.shutdown()
+
+
+def test_startup_damage_arbitration_runs_bridge_and_heals_manifest(tmp_path) -> None:
+    """清单口径 DAMAGED（如 AI 打轴增量 pip 改动共用包，且宿主通知
+    缺席——pip 中途取消、standalone SUG 直指托管解释器等）时：启动即
+    起一次真实桥接进程做功能仲裁，通过则按磁盘重登记清单恢复可用，
+    不再单凭清单钉死误报「文件缺失或损坏」。"""
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    # 内容变化且长度不同（非全量校验比 size 即可发现）
+    (root / "runtime" / "python.exe").write_bytes(b"mutated-by-pip-longer")
+
+    events: list[str] = []
+
+    class HealingClient:
+        def capability_checks(self):
+            events.append("capabilities")
+            return [("健康检查", True, "正常")]
+
+    class HealingService:
+        client = HealingClient()
+
+        def stop(self, timeout_seconds=5.0):
+            del timeout_seconds
+            events.append("smoke-stop")
+            return True
+
+    class HealingFactory:
+        @classmethod
+        def start(cls, install_dir, **_kwargs):
+            assert Path(install_dir) == root
+            events.append("smoke-start")
+            return HealingService()
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=HealingFactory
+    )
+    try:
+        _wait_until(lambda: backend.snapshot().state is ServiceState.INSTALLED_STOPPED)
+        assert events == ["smoke-start", "capabilities", "smoke-stop"]
+        assert validate_runtime(root).status is RuntimeStatus.READY
+        assert any("功能自检通过" in line for line in backend.recent_logs)
+    finally:
+        assert backend.shutdown()
+
+
+def test_damage_arbitration_failure_keeps_damaged_state(tmp_path) -> None:
+    """功能自检失败（桥接起不来/能力缺失）才维持「文件缺失或损坏」，
+    清单不被合法化。"""
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    (root / "runtime" / "python.exe").write_bytes(b"mutated-by-pip-longer")
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=_BrokenServiceFactory
+    )
+    try:
+        _wait_until(
+            lambda: any("功能自检未通过" in line for line in backend.recent_logs)
+        )
+        snap = backend.snapshot()
+        assert snap.state is ServiceState.INSTALL_DAMAGED
+        assert "损坏" in snap.error
+        assert validate_runtime(root).status is RuntimeStatus.DAMAGED
+    finally:
+        assert backend.shutdown()
 
 
 def test_restore_keeps_valid_custom_absolute_location(tmp_path, monkeypatch) -> None:
@@ -587,13 +667,18 @@ def test_explicit_full_refresh_detects_same_size_runtime_tampering(tmp_path) -> 
     executable = root / "runtime" / "python.exe"
     original = executable.read_bytes()
     executable.write_bytes(b"X" * len(original))
-    backend = RealSeparationBackend({"install_dir": str(root)})
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=_BrokenServiceFactory
+    )
     try:
         # Startup remains lightweight (presence + size); an explicit manual
         # check requests the asynchronous full digest verification.
         assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
         backend.refresh(full=True)
-        _wait_until(lambda: backend.snapshot().state is ServiceState.INSTALL_DAMAGED)
+        _wait_until(
+            lambda: backend.snapshot().state is ServiceState.INSTALL_DAMAGED
+            and not backend._futures
+        )
         assert "损坏" in backend.snapshot().error
     finally:
         backend.shutdown()

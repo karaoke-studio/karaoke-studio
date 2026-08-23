@@ -380,8 +380,12 @@ def resync_installed_manifest(install_dir: str | os.PathLike) -> RuntimeValidati
     登记在案的共用包（升级/降级/换 dist-info），下次启动
     ``validate_runtime`` 即报「文件缺失或损坏」。这里以磁盘为准重建
     ``files``：size 与原记录一致的条目沿用原 sha256（免全量哈希），
-    新增/变化的文件重新计算；已删除的条目剔除。仅在安装本身健康的
-    受信变更后调用——它会让任意篡改合法化，不能作为损坏自愈手段。
+    新增/变化的文件重新计算；已删除的条目剔除。调用方有两种：宿主
+    通知（``note_runtime_changed``，安装方主动上报）或功能仲裁
+    （``RealSeparationBackend._arbitrate_damaged_runtime``，起真实
+    桥接进程跑能力探测通过后）——后者允许在清单失配但运行时功能
+    完好时自愈；裸调本函数仍会无条件合法化任意篡改，不要新增裸调
+    调用点。
 
     Returns:
         重建后的校验结果（READY 即清单与磁盘重新对齐）。

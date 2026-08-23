@@ -64,6 +64,7 @@ from .runtime import (
     RUNTIME_DIR_NAME,
     ManagedRuntimeInstaller,
     RuntimeStatus,
+    RuntimeValidation,
     fetch_runtime_package,
     portable_base_dir,
     preflight_install_destination,
@@ -149,6 +150,10 @@ class RealSeparationBackend(SeparationBackend):
         self._progress = TaskProgress()
         self._health_future: Future | None = None
         self._runtime_check_future: Future | None = None
+        #: 损坏仲裁（功能自检）专用取消事件——不复用 _install_cancel，
+        #: 后者在 cleanup_incomplete/shutdown 后保持置位，会让仲裁误判为取消
+        self._probe_cancel = threading.Event()
+        self._arbitration_future: Future | None = None
         self.recent_logs: deque[str] = deque(maxlen=200)
         self._snap = SeparationSnapshot()
         self._restore_configuration()
@@ -269,7 +274,11 @@ class RealSeparationBackend(SeparationBackend):
         if install_dir:
             if not self._heal_stale_install_dir(install_dir):
                 self._snap.install_dir = install_dir
-                self._apply_runtime_validation(validate_runtime(install_dir))
+                validation = validate_runtime(install_dir)
+                self._apply_runtime_validation(validation)
+                # 清单口径报损坏先仲裁再下结论：构造发生在 GUI 线程，
+                # 功能自检（起一次真实桥接进程）必须交给执行线程
+                self._schedule_damage_arbitration(install_dir, validation)
                 self._normalize_install_dir_setting(install_dir)
         elif server_url:
             self._snap.state = ServiceState.EXTERNAL_OFFLINE
@@ -658,12 +667,12 @@ class RealSeparationBackend(SeparationBackend):
                     str(self._settings.get("install_dir", ""))
                 )
                 if persisted:
+                    validation = validate_runtime(persisted, full=True)
                     with self._lock:
-                        self._apply_runtime_validation(
-                            validate_runtime(persisted, full=True)
-                        )
+                        self._apply_runtime_validation(validation)
                         self._rebuild_dependencies()
                     self._emit()
+                    self._schedule_damage_arbitration(persisted, validation)
                 else:
                     self._set_state(ServiceState.LOCATION_REQUIRED)
                 self._log("PyMSS Runtime 安装已取消，原有安装保持不变。")
@@ -677,13 +686,15 @@ class RealSeparationBackend(SeparationBackend):
         self._set_state(ServiceState.RUNTIME_VERIFYING)
         self._smoke_managed_runtime(str(install_dir))
 
-    def _smoke_managed_runtime(self, install_dir: str) -> None:
+    def _smoke_managed_runtime(
+        self, install_dir: str, *, cancelled=None
+    ) -> None:
         """Start the freshly installed server once and verify its API contract."""
         service = self._service_factory.start(
             install_dir,
             source=self._download_source(),
             device=str(self._settings.get("device", "auto")),
-            cancelled=self._install_cancel,
+            cancelled=cancelled if cancelled is not None else self._install_cancel,
         )
         try:
             checks = service.client.capability_checks()
@@ -694,6 +705,62 @@ class RealSeparationBackend(SeparationBackend):
         finally:
             if not service.stop(timeout_seconds=5.0):
                 raise RuntimeError("PyMSS 安装冒烟服务未能正常停止。")
+
+    def _arbitrate_damaged_runtime(
+        self, install_dir: str, validation: RuntimeValidation
+    ) -> RuntimeValidation:
+        """清单口径报损坏时的功能仲裁（只能在执行线程调用）。
+
+        DAMAGED 的常见成因不是文件真坏了，而是受信方（AI 打轴方案 B
+        的增量 pip、用户手动维护）改动了清单登记在案的共用包后清单
+        没跟上。起一次真实桥接进程跑能力探测即可分辨：通过说明运行
+        时功能完好，按磁盘现状重登记清单并返回新结论；失败才维持
+        「文件缺失或损坏」。清单本就不是安全边界（能写文件就能写
+        清单），以「能不能跑」为准与用户的实际受损面一致。
+        """
+        try:
+            self._smoke_managed_runtime(install_dir, cancelled=self._probe_cancel)
+        except Exception as exc:
+            self._log(f"运行环境功能自检未通过：{exc}")
+            return validation
+        self._log("运行环境功能自检通过，按当前安装内容重新登记清单。")
+        try:
+            return resync_installed_manifest(install_dir)
+        except Exception as exc:
+            self._log(f"运行环境清单再登记失败：{exc}")
+            return validation
+
+    def _schedule_damage_arbitration(
+        self, install_dir: str, validation: RuntimeValidation
+    ) -> None:
+        """GUI 线程安全入口：DAMAGED 时把功能仲裁交给执行线程异步裁决。"""
+        if self._shutdown_requested:
+            return
+        if validation.status is not RuntimeStatus.DAMAGED:
+            return
+        if self._arbitration_future is not None and not self._arbitration_future.done():
+            return
+        self._probe_cancel = threading.Event()
+
+        def success(result) -> None:
+            with self._lock:
+                self._apply_runtime_validation(result)
+                self._rebuild_dependencies()
+            self._emit()
+
+        def failure(_exc: Exception) -> None:
+            # 仲裁自身出异常：维持原 DAMAGED 结论并刷新一次快照
+            with self._lock:
+                self._apply_runtime_validation(validation)
+                self._rebuild_dependencies()
+            self._emit()
+
+        self._set_state(ServiceState.RUNTIME_VERIFYING)
+        self._arbitration_future = self._submit(
+            lambda: self._arbitrate_damaged_runtime(install_dir, validation),
+            success,
+            failure,
+        )
 
     def cancel_install(self) -> None:
         self._install_cancel.set()
@@ -735,10 +802,12 @@ class RealSeparationBackend(SeparationBackend):
         )
         if persisted:
             self._snap.install_dir = persisted
+            validation = validate_runtime(persisted)
             with self._lock:
-                self._apply_runtime_validation(validate_runtime(persisted))
+                self._apply_runtime_validation(validation)
                 self._rebuild_dependencies()
             self._emit()
+            self._schedule_damage_arbitration(persisted, validation)
             return
         self._snap = SeparationSnapshot()
         with self._lock:
@@ -756,12 +825,13 @@ class RealSeparationBackend(SeparationBackend):
         self._settings["install_dir"] = relativize_install_dir(
             self._snap.install_dir
         )
-        result = validate_runtime(self._snap.install_dir)
+        validation = validate_runtime(self._snap.install_dir)
         with self._lock:
-            self._apply_runtime_validation(result)
+            self._apply_runtime_validation(validation)
             self._rebuild_dependencies()
         self._persist()
         self._emit()
+        self._schedule_damage_arbitration(self._snap.install_dir, validation)
 
     def remove_configuration(self) -> None:
         self._install_cancel.set()
@@ -1467,6 +1537,10 @@ class RealSeparationBackend(SeparationBackend):
                 validation = validate_runtime(root, full=False)
                 if self._service_cancel.is_set():
                     raise InterruptedError("PyMSS 服务启动已取消。")
+                if validation.status is RuntimeStatus.DAMAGED:
+                    # 清单失配≠跑不起来（多为增量安装后清单没跟上）；
+                    # 起服务前先功能仲裁，通过则重登记清单继续启动
+                    validation = self._arbitrate_damaged_runtime(root, validation)
                 if validation.status is not RuntimeStatus.READY:
                     return None, "", validation
             external_version = self._require_external_version(executable) if executable else ""
@@ -1585,9 +1659,13 @@ class RealSeparationBackend(SeparationBackend):
                         self._snap.state = self._ready_state()
                 self._emit()
 
-            self._runtime_check_future = self._submit(
-                lambda: validate_runtime(install_dir, full=full), success, self._fail
-            )
+            def check() -> RuntimeValidation:
+                result = validate_runtime(install_dir, full=full)
+                if result.status is RuntimeStatus.DAMAGED:
+                    result = self._arbitrate_damaged_runtime(install_dir, result)
+                return result
+
+            self._runtime_check_future = self._submit(check, success, self._fail)
 
     def _diagnose_managed_runtime_failure(self, error: Exception | str) -> None:
         """Hash the managed Runtime after a real execution failure."""
@@ -2428,6 +2506,7 @@ class RealSeparationBackend(SeparationBackend):
         self._task_cancel.set()
         self._service_cancel.set()
         self._scan_cancel.set()
+        self._probe_cancel.set()
         self._shutdown_requested = True
         deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
         stopped = self._stop_owned_service(max(0.5, deadline - time.monotonic()))
