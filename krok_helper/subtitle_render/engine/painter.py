@@ -67,6 +67,11 @@ from krok_helper.subtitle_render.engine.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
 )
+from krok_helper.subtitle_render.engine.layout_plan_cache import (
+    cached_track_layout_plan,
+    clear_track_layout_plan_cache,
+    store_track_layout_plan,
+)
 from krok_helper.subtitle_render.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 
@@ -103,10 +108,6 @@ _LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
 _DISPLAY_LINES_CACHE_MAX = 24
 _DISPLAY_LINES_CACHE: (
     "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
-) = OrderedDict()
-_TRACK_LAYOUT_PLAN_CACHE_MAX = 24
-_TRACK_LAYOUT_PLAN_CACHE: (
-    "OrderedDict[tuple, tuple[TimingTrack, Style, TrackLayoutPlan]]"
 ) = OrderedDict()
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
@@ -431,7 +432,7 @@ def clear_before_layer_cache() -> None:
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
     _DISPLAY_LINES_CACHE.clear()
-    _TRACK_LAYOUT_PLAN_CACHE.clear()
+    clear_track_layout_plan_cache()
     _PAGE_PLACEMENT_CACHE.clear()
 
 
@@ -5443,10 +5444,9 @@ def build_track_layout_plan(
         _value_signature(style),
     )
     if _layout_cache_enabled():
-        cached = _TRACK_LAYOUT_PLAN_CACHE.get(cache_key)
+        cached = cached_track_layout_plan(cache_key)
         if cached is not None:
-            _TRACK_LAYOUT_PLAN_CACHE.move_to_end(cache_key)
-            return cached[2]
+            return cached
 
     display_style = _display_style_for_signal_window(style)
     display_items: list[DisplayLine] = []
@@ -5621,10 +5621,7 @@ def build_track_layout_plan(
     if _layout_cache_enabled():
         # Retain the owners alongside the plan: the key intentionally uses the
         # track identity so equal mutable tracks never share TimingLine objects.
-        _TRACK_LAYOUT_PLAN_CACHE[cache_key] = (track, style, plan)
-        _TRACK_LAYOUT_PLAN_CACHE.move_to_end(cache_key)
-        while len(_TRACK_LAYOUT_PLAN_CACHE) > _TRACK_LAYOUT_PLAN_CACHE_MAX:
-            _TRACK_LAYOUT_PLAN_CACHE.popitem(last=False)
+        store_track_layout_plan(cache_key, track, style, plan)
     return plan
 
 
