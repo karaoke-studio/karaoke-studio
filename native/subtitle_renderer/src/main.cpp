@@ -39,6 +39,7 @@ using krok::subtitle::native::legacy_qt::gpuSceneFromConfig;
 using krok::subtitle::native::diagnostics::appendGpuDiagnostics;
 using krok::subtitle::native::diagnostics::appendGpuFrameDiagnostics;
 using krok::subtitle::native::diagnostics::appendSharedFrameMetadata;
+using krok::subtitle::native::diagnostics::backendCapsJson;
 using krok::subtitle::native::commands::handleConfigure;
 using krok::subtitle::native::commands::handleRenderFrame;
 using krok::subtitle::native::commands::handleRenderFrameStats;
@@ -201,23 +202,6 @@ bool writeSharedBandSlot(
     );
 }
 
-
-QJsonObject backendCapsJson(const krok::subtitle::native::BackendCaps &caps) {
-    QJsonObject out;
-    out.insert(QStringLiteral("backend"), QString::fromStdString(caps.backend));
-    out.insert(QStringLiteral("adapter"), QString::fromStdString(caps.adapterName));
-    out.insert(QStringLiteral("feature_level"), QString::fromStdString(caps.featureLevel));
-    out.insert(QStringLiteral("vendor_id"), static_cast<qint64>(caps.adapterVendorId));
-    out.insert(QStringLiteral("device_id"), static_cast<qint64>(caps.adapterDeviceId));
-    out.insert(QStringLiteral("dedicated_video_memory"), static_cast<qint64>(caps.dedicatedVideoMemory));
-    out.insert(QStringLiteral("hardware"), caps.hardware);
-    out.insert(QStringLiteral("warp"), caps.warp);
-    out.insert(QStringLiteral("transparent_surface"), caps.supportsTransparentSurface);
-    out.insert(QStringLiteral("staging_readback"), caps.supportsStagingReadback);
-    out.insert(QStringLiteral("glyphs"), caps.supportsGlyphs);
-    out.insert(QStringLiteral("native_preview"), caps.supportsNativePreview);
-    return out;
-}
 
 QJsonObject handleBackendInfo(const QJsonObject &request, RenderRuntime *runtime) {
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);

@@ -1104,12 +1104,15 @@ def test_native_gpu_diagnostics_json_hides_backend_serialization():
 
     assert "void appendGpuDiagnostics(" in header_source
     assert "void appendGpuFrameDiagnostics(" in header_source
+    assert "QJsonObject backendCapsJson(" in header_source
     assert "void appendGpuDiagnostics(" not in main_source
     assert "void appendGpuFrameDiagnostics(" not in main_source
+    assert "QJsonObject backendCapsJson(" not in main_source
     for field in (
         "estimated_cache_bytes",
         "realization_prewarm_create_p95_ms",
         "end_draw_frame_layers_count",
+        "dedicated_video_memory",
     ):
         assert field in implementation_source
         assert field not in header_source

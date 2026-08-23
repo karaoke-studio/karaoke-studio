@@ -6,6 +6,8 @@ class QJsonObject;
 
 namespace krok::subtitle::native::diagnostics {
 
+QJsonObject backendCapsJson(const BackendCaps &caps);
+
 void appendGpuDiagnostics(
     QJsonObject *out,
     const BackendDiagnostics &diagnostics
