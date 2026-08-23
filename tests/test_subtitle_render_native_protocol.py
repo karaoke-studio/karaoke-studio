@@ -651,6 +651,40 @@ def test_native_qt_render_cache_has_single_state_owner():
     assert "src/backends/qt/qt_render_cache.h" in cmake_source
 
 
+def test_native_cached_line_layout_hides_cache_key_and_bypass_policy():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_cached_line_layout.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/qt/qt_cached_line_layout.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "LineLayout cachedLayoutLine(" in header_source
+    assert "LineLayout cachedLayoutLine(" not in main_source
+    for private_rule in (
+        "timingLineLayoutTextKey(",
+        "layoutLineCacheKey(",
+        "lineHasRoleLabels(",
+        "layout.lineStyle = nullptr",
+        "layout.charStyles.clear()",
+    ):
+        assert private_rule in implementation_source
+        assert private_rule not in header_source
+    assert "layoutLineCacheKey(" not in main_source
+    assert '#include "qt_line_layout.h"' in implementation_source
+    assert '#include "qt_render_cache.h"' in implementation_source
+    assert "QPainter" not in implementation_source
+    assert '#include "backends/qt/qt_cached_line_layout.h"' in main_source
+    assert "src/backends/qt/qt_cached_line_layout.cpp" in cmake_source
+    assert "src/backends/qt/qt_cached_line_layout.h" in cmake_source
+
+
 def test_track_ir_requires_resolved_plan_when_serializing_style():
     from krok_helper.subtitle_render.native_protocol import track_to_ir
 
