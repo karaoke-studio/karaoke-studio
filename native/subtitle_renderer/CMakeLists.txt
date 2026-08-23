@@ -50,6 +50,8 @@ add_executable(krok_subtitle_renderer
     src/backends/qt/qt_cached_line_layout.h
     src/backends/qt/qt_character_animation.cpp
     src/backends/qt/qt_character_animation.h
+    src/backends/qt/qt_clip_geometry.cpp
+    src/backends/qt/qt_clip_geometry.h
     src/backends/qt/qt_display_plan.cpp
     src/backends/qt/qt_display_plan.h
     src/backends/qt/qt_fill_brush.cpp
