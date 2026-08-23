@@ -241,7 +241,8 @@ def test_native_gpu_preview_pool_hides_backend_and_protocol_details():
     assert "writeJson(" not in implementation_source
     assert "Publish publish" in header_source
     assert "sharedResources, writeJson" not in main_source
-    assert "sharedResources, writeJson" in lifecycle_commands_source
+    assert "configureGpuPreviewPool(" in lifecycle_commands_source
+    assert "writeJson" in lifecycle_commands_source
     assert "src/runtime/gpu_preview_worker_pool.cpp" in cmake_source
     assert "src/runtime/gpu_preview_worker_pool.h" in cmake_source
 
@@ -396,6 +397,7 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
         "markGpuConfigured(",
         "clearGpuPreviewPoolCaches(",
         "resetGpuPreviewPool(",
+        "configureGpuPreviewPool(",
     ):
         assert operation in header_source
         assert operation in implementation_source
@@ -416,6 +418,16 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     ):
         assert direct_state not in frame_commands_source
         assert direct_state not in lifecycle_commands_source
+    for pool_transaction_detail in (
+        "hardwareGpuPreviewPool",
+        "hardwareGpuPreviewPoolKey",
+        "hardwareGpuPreviewPoolCache",
+        "poolCache.push_front",
+        "pool->pause()",
+        "pool->resume(",
+    ):
+        assert pool_transaction_detail in implementation_source
+        assert pool_transaction_detail not in lifecycle_commands_source
     assert '#include "runtime/gpu_backend_runtime.h"' not in main_source
     assert '#include "../runtime/gpu_backend_runtime.h"' in frame_commands_source
     assert "src/runtime/gpu_backend_runtime.cpp" in cmake_source

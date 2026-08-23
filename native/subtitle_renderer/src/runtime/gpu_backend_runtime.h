@@ -1,15 +1,22 @@
 #pragma once
 
+#include "gpu_preview_worker_pool.h"
+
 class QString;
 
 namespace krok::subtitle::native {
 
 class RenderBackend;
+struct RenderScene;
 
 namespace runtime {
 
-class GpuPreviewWorkerPool;
 class RenderRuntime;
+
+struct GpuPreviewPoolConfiguration {
+    GpuPreviewWorkerPool *pool = nullptr;
+    bool targetCacheHit = false;
+};
 
 RenderBackend *ensureGpuBackend(
     RenderRuntime *runtime,
@@ -37,6 +44,17 @@ void clearGpuPreviewPoolCaches(RenderRuntime *runtime);
 void resetGpuPreviewPool(
     RenderRuntime *runtime,
     bool forceWarp
+);
+
+GpuPreviewPoolConfiguration configureGpuPreviewPool(
+    RenderRuntime *runtime,
+    const RenderScene &scene,
+    int workerCount,
+    bool sharedResources,
+    bool targetResize,
+    bool waitRealizations,
+    bool deferFollowers,
+    GpuPreviewWorkerPool::Publish publish
 );
 
 }  // namespace runtime

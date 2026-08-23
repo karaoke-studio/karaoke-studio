@@ -5,6 +5,7 @@
 
 #include <QtCore/QString>
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -102,6 +103,73 @@ void resetGpuPreviewPool(
         runtime->hardwareGpuPreviewPool.reset();
         runtime->hardwareGpuPreviewPoolKey.clear();
     }
+}
+
+GpuPreviewPoolConfiguration configureGpuPreviewPool(
+    RenderRuntime *runtime,
+    const RenderScene &scene,
+    int workerCount,
+    bool sharedResources,
+    bool targetResize,
+    bool waitRealizations,
+    bool deferFollowers,
+    GpuPreviewWorkerPool::Publish publish
+) {
+    if (runtime == nullptr) {
+        return {};
+    }
+    auto &pool = runtime->hardwareGpuPreviewPool;
+    auto &poolKey = runtime->hardwareGpuPreviewPoolKey;
+    auto &poolCache = runtime->hardwareGpuPreviewPoolCache;
+    const QString targetKey = QStringLiteral("%1x%2@%3:w%4:s%5:r%6")
+        .arg(scene.width)
+        .arg(scene.height)
+        .arg(static_cast<double>(scene.layoutReferenceScale), 0, 'f', 6)
+        .arg(workerCount)
+        .arg(sharedResources ? 1 : 0)
+        .arg(scene.realizationEnabled ? 1 : 0);
+    bool targetCacheHit = false;
+    if (targetResize && pool != nullptr && poolKey == targetKey) {
+        targetCacheHit = true;
+    } else if (targetResize && pool != nullptr && !poolKey.isEmpty()) {
+        pool->pause();
+        poolCache.erase(
+            std::remove_if(
+                poolCache.begin(), poolCache.end(),
+                [&](const GpuPreviewPoolCacheEntry &entry) {
+                    return entry.key == poolKey;
+                }
+            ),
+            poolCache.end()
+        );
+        poolCache.push_front({poolKey, std::move(pool)});
+        const auto cached = std::find_if(
+            poolCache.begin(), poolCache.end(),
+            [&](const GpuPreviewPoolCacheEntry &entry) {
+                return entry.key == targetKey;
+            }
+        );
+        if (cached != poolCache.end()) {
+            pool = std::move(cached->pool);
+            poolCache.erase(cached);
+            pool->resume(scene, deferFollowers);
+            targetCacheHit = true;
+        }
+        while (poolCache.size() > 2) {
+            poolCache.pop_back();
+        }
+    }
+    if (pool == nullptr || pool->workerCount() != workerCount
+        || pool->sharedResources() != sharedResources) {
+        pool = std::make_unique<GpuPreviewWorkerPool>(
+            false, workerCount, sharedResources, std::move(publish)
+        );
+    }
+    if (!targetCacheHit) {
+        pool->configure(scene, waitRealizations, deferFollowers);
+    }
+    poolKey = targetKey;
+    return {pool.get(), targetCacheHit};
 }
 
 }  // namespace krok::subtitle::native::runtime

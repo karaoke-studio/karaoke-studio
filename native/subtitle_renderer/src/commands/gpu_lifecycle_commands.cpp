@@ -13,9 +13,8 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 
-#include <algorithm>
 #include <cstdint>
-#include <memory>
+#include <stdexcept>
 #include <vector>
 
 namespace krok::subtitle::native::commands {
@@ -27,10 +26,9 @@ using protocol::RenderConfig;
 using protocol::intValue;
 using protocol::response;
 using protocol::writeJson;
-using runtime::GpuPreviewPoolCacheEntry;
-using runtime::GpuPreviewWorkerPool;
 using runtime::RenderRuntime;
 using runtime::clearGpuPreviewPoolCaches;
+using runtime::configureGpuPreviewPool;
 using runtime::ensureGpuBackend;
 using runtime::gpuConfigured;
 using runtime::gpuPreviewPool;
@@ -118,57 +116,21 @@ QJsonObject handleConfigureGpu(
             scene.exportCropHeight = exportCropHeight;
             scene.exportBands = exportBands;
             scene.realizationCapacity = realizationCapacity;
-            auto &pool = runtime->hardwareGpuPreviewPool;
-            auto &poolKey = runtime->hardwareGpuPreviewPoolKey;
-            auto &poolCache = runtime->hardwareGpuPreviewPoolCache;
-            const QString targetKey = QStringLiteral("%1x%2@%3:w%4:s%5:r%6")
-                .arg(scene.width)
-                .arg(scene.height)
-                .arg(static_cast<double>(scene.layoutReferenceScale), 0, 'f', 6)
-                .arg(workerCount)
-                .arg(sharedResources ? 1 : 0)
-                .arg(realizationEnabled ? 1 : 0);
-            bool targetCacheHit = false;
-            if (targetResize && pool != nullptr && poolKey == targetKey) {
-                targetCacheHit = true;
-            } else if (targetResize && pool != nullptr && !poolKey.isEmpty()) {
-                pool->pause();
-                poolCache.erase(
-                    std::remove_if(
-                        poolCache.begin(), poolCache.end(),
-                        [&](const GpuPreviewPoolCacheEntry &entry) {
-                            return entry.key == poolKey;
-                        }
-                    ),
-                    poolCache.end()
-                );
-                poolCache.push_front({poolKey, std::move(pool)});
-                const auto cached = std::find_if(
-                    poolCache.begin(), poolCache.end(),
-                    [&](const GpuPreviewPoolCacheEntry &entry) {
-                        return entry.key == targetKey;
-                    }
-                );
-                if (cached != poolCache.end()) {
-                    pool = std::move(cached->pool);
-                    poolCache.erase(cached);
-                    pool->resume(scene, deferFollowers);
-                    targetCacheHit = true;
-                }
-                while (poolCache.size() > 2) {
-                    poolCache.pop_back();
-                }
+            const auto configuredPool = configureGpuPreviewPool(
+                runtime,
+                scene,
+                workerCount,
+                sharedResources,
+                targetResize,
+                waitRealizations,
+                deferFollowers,
+                writeJson
+            );
+            auto *pool = configuredPool.pool;
+            const bool targetCacheHit = configuredPool.targetCacheHit;
+            if (pool == nullptr) {
+                throw std::runtime_error("GPU preview pool is unavailable");
             }
-            if (pool == nullptr || pool->workerCount() != workerCount
-                || pool->sharedResources() != sharedResources) {
-                pool = std::make_unique<GpuPreviewWorkerPool>(
-                    false, workerCount, sharedResources, writeJson
-                );
-            }
-            if (!targetCacheHit) {
-                pool->configure(scene, waitRealizations, deferFollowers);
-            }
-            poolKey = targetKey;
             markGpuConfigured(runtime, false);
             QJsonObject out = response(true, QStringLiteral("gpu_configured"));
             out.insert(QStringLiteral("width"), scene.width);
