@@ -528,6 +528,34 @@ def test_native_text_semantics_is_backend_independent_contract():
     assert "src/backends/text_semantics.h" in cmake_source
 
 
+def test_native_direct2d_font_fallback_has_narrow_contract():
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_font_fallback.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_font_fallback.cpp"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "findFallbackFontFace(" in header_source
+    assert "findFallbackFontFace(" in implementation_source
+    assert "createFontFace(" in header_source
+    assert "containsEmoji(" in header_source
+    assert "glyphIndices(" in header_source
+    assert "validGlyphIndices(" in header_source
+    assert "unicodeScalars(" not in header_source
+    assert '#include "d2d_font_fallback.h"' in backend_source
+    assert "Microsoft JhengHei" in implementation_source
+    assert "Microsoft JhengHei" not in backend_source
+    assert "src/backends/direct2d/d2d_font_fallback.cpp" in cmake_source
+    assert "src/backends/direct2d/d2d_font_fallback.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
