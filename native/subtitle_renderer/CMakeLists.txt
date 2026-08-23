@@ -129,6 +129,8 @@ add_executable(krok_subtitle_renderer
     src/backends/direct2d/d2d_geometry_resources.h
     src/backends/direct2d/d2d_paint_resources.cpp
     src/backends/direct2d/d2d_paint_resources.h
+    src/backends/direct2d/d2d_runtime_support.cpp
+    src/backends/direct2d/d2d_runtime_support.h
     src/backends/direct2d/d2d_device.cpp
     src/backends/direct2d/d2d_device.h
     src/backends/direct2d/native_preview_surface.cpp

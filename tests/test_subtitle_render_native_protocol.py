@@ -630,6 +630,39 @@ def test_native_direct2d_geometry_resources_hide_path_construction():
     assert "src/backends/direct2d/d2d_geometry_resources.h" in cmake_source
 
 
+def test_native_direct2d_runtime_support_is_shared_low_level_contract():
+    header_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_runtime_support.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_runtime_support.cpp"
+    ).read_text(encoding="utf-8")
+    backend_source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    for contract in (
+        "elapsedMs(",
+        "steadyNowMs(",
+        "environmentFlagEnabled(",
+        "rectAreaPx(",
+        "checkHr(",
+        "unpremultiply(",
+        "d2dColor(",
+    ):
+        assert contract in header_source
+        assert contract in implementation_source
+    assert "hresultText(" not in header_source
+    assert "hresultText(" in implementation_source
+    assert '#include "d2d_runtime_support.h"' in backend_source
+    assert "std::string hresultText(" not in backend_source
+    assert "src/backends/direct2d/d2d_runtime_support.cpp" in cmake_source
+    assert "src/backends/direct2d/d2d_runtime_support.h" in cmake_source
+
+
 def test_native_qt_display_plan_hides_lane_and_section_algorithms():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
