@@ -924,9 +924,29 @@ def test_native_qt_line_painter_is_the_cpu_line_composition_boundary():
     ):
         assert hidden_dependency not in main_source
     assert "runtime/" not in implementation_source
-    assert '#include "backends/qt/qt_line_painter.h"' in main_source
+    assert '#include "backends/qt/qt_line_painter.h"' not in main_source
     assert "src/backends/qt/qt_line_painter.cpp" in cmake_source
     assert "src/backends/qt/qt_line_painter.h" in cmake_source
+
+
+def test_native_qt_frame_renderer_owns_the_cpu_frame_loop():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(encoding="utf-8")
+    header_source = Path("native/subtitle_renderer/src/backends/qt/qt_frame_renderer.h").read_text(encoding="utf-8")
+    implementation_source = Path("native/subtitle_renderer/src/backends/qt/qt_frame_renderer.cpp").read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "RenderResult renderFrame(" in header_source
+    assert "RenderResult renderFrame(" not in main_source
+    assert '#include "qt_display_plan.h"' in implementation_source
+    assert '#include "qt_line_painter.h"' in implementation_source
+    assert "QPainter painter" in implementation_source
+    assert "visibleDisplayLines(" in implementation_source
+    assert "paintLine(" in implementation_source
+    assert "runtime/" not in implementation_source
+    assert '#include "backends/qt/qt_frame_renderer.h"' in main_source
+    assert "qt_line_painter.h" not in main_source
+    assert "src/backends/qt/qt_frame_renderer.cpp" in cmake_source
+    assert "src/backends/qt/qt_frame_renderer.h" in cmake_source
 
 
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():

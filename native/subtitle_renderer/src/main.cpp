@@ -27,8 +27,8 @@
 #include "backends/qt/qt_display_plan.h"
 #include "backends/qt/qt_fill_brush.h"
 #include "backends/qt/qt_font_factory.h"
+#include "backends/qt/qt_frame_renderer.h"
 #include "backends/qt/qt_line_layout.h"
-#include "backends/qt/qt_line_painter.h"
 #include "backends/qt/qt_render_cache.h"
 #include "backends/qt/qt_render_types.h"
 #include "backends/qt/qt_ruby_target.h"
@@ -83,7 +83,6 @@ using krok::subtitle::native::protocol::TimingLine;
 using krok::subtitle::native::protocol::writeJson;
 using krok::subtitle::native::legacy_qt::LineLayout;
 using krok::subtitle::native::legacy_qt::LineDiagnostics;
-using krok::subtitle::native::legacy_qt::DisplayLineRef;
 using krok::subtitle::native::legacy_qt::RubyDiagnostics;
 using krok::subtitle::native::legacy_qt::TextLayerImage;
 using krok::subtitle::native::legacy_qt::RubyGroupInfo;
@@ -102,6 +101,7 @@ using krok::subtitle::native::legacy_qt::TextLayerCacheStats;
 using krok::subtitle::native::legacy_qt::LayoutCacheStats;
 using krok::subtitle::native::legacy_qt::RenderDiagnostics;
 using krok::subtitle::native::legacy_qt::RenderResult;
+using krok::subtitle::native::legacy_qt::renderFrame;
 using krok::subtitle::native::legacy_qt::RangeFrameResult;
 using krok::subtitle::native::legacy_qt::brushForFill;
 using krok::subtitle::native::legacy_qt::applyRubyMainWipeProjection;
@@ -121,7 +121,6 @@ using krok::subtitle::native::legacy_qt::lineEndMs;
 using krok::subtitle::native::legacy_qt::lineIntervals;
 using krok::subtitle::native::legacy_qt::lineHasRoleLabels;
 using krok::subtitle::native::legacy_qt::layoutLine;
-using krok::subtitle::native::legacy_qt::paintLine;
 using krok::subtitle::native::legacy_qt::layoutCacheStats;
 using krok::subtitle::native::legacy_qt::layoutCacheSize;
 using krok::subtitle::native::legacy_qt::lineStartMs;
@@ -138,7 +137,6 @@ using krok::subtitle::native::legacy_qt::storeLayoutCache;
 using krok::subtitle::native::legacy_qt::textLayerCacheStats;
 using krok::subtitle::native::legacy_qt::textLayerCacheSize;
 using krok::subtitle::native::legacy_qt::transitionCharState;
-using krok::subtitle::native::legacy_qt::visibleDisplayLines;
 using krok::subtitle::native::legacy_qt::visualStrokeExtent;
 using krok::subtitle::native::legacy_qt::visualStrokeExtentForWidths;
 using krok::subtitle::native::runtime::GpuPreviewWorkerPool;
@@ -527,41 +525,6 @@ QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime
 
 
 
-
-RenderResult renderFrame(const RenderConfig &cfg, int tMs) {
-    RenderResult result{
-        QImage(cfg.physicalWidth(), cfg.physicalHeight(), QImage::Format_ARGB32_Premultiplied),
-        RenderDiagnostics{},
-    };
-    result.image.fill(Qt::transparent);
-
-    QPainter painter(&result.image);
-    painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
-    if (cfg.dpr != 1.0) {
-        painter.scale(cfg.dpr, cfg.dpr);
-    }
-
-    const std::vector<DisplayLineRef> visibleLines = visibleDisplayLines(cfg, tMs);
-    result.diagnostics.visibleLines = static_cast<int>(visibleLines.size());
-
-    for (const DisplayLineRef &displayLine : visibleLines) {
-        if (displayLine.line == nullptr) {
-            continue;
-        }
-        paintLine(
-            painter,
-            cfg,
-            *displayLine.line,
-            tMs,
-            displayLine.lane,
-            result.diagnostics.visibleLines,
-            &result.diagnostics
-        );
-    }
-
-    painter.end();
-    return result;
-}
 
 QJsonObject handleConfigure(const QJsonObject &request, std::optional<RenderConfig> *config) {
     QString error;
