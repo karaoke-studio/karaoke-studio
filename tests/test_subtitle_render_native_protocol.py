@@ -1006,6 +1006,37 @@ def test_native_gpu_scene_projection_hides_style_and_layout_mapping():
     assert "src/backends/qt/gpu_scene_projection.h" in cmake_source
 
 
+def test_native_qt_frame_diagnostics_json_hides_cache_serialization():
+    main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    header_source = Path(
+        "native/subtitle_renderer/src/diagnostics/qt_frame_diagnostics_json.h"
+    ).read_text(encoding="utf-8")
+    implementation_source = Path(
+        "native/subtitle_renderer/src/diagnostics/qt_frame_diagnostics_json.cpp"
+    ).read_text(encoding="utf-8")
+    cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "void appendQtFrameDiagnostics(" in header_source
+    assert "void appendQtFrameDiagnostics(" not in main_source
+    for field in (
+        "glow_cache_recent_misses",
+        "line_diagnostics",
+        "ruby_diagnostics",
+    ):
+        assert field in implementation_source
+        assert field not in header_source
+        assert field not in main_source
+    assert "RenderRuntime" not in implementation_source
+    assert "RenderConfig" not in implementation_source
+    assert '#include "diagnostics/qt_frame_diagnostics_json.h"' in main_source
+    assert "src/diagnostics/qt_frame_diagnostics_json.cpp" in cmake_source
+    assert "src/diagnostics/qt_frame_diagnostics_json.h" in cmake_source
+
+
 def test_native_qt_ruby_target_hides_text_matching_and_disambiguation():
     main_source = Path("native/subtitle_renderer/src/main.cpp").read_text(
         encoding="utf-8"
