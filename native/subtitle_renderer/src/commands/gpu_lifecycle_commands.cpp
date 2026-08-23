@@ -30,8 +30,12 @@ using protocol::writeJson;
 using runtime::GpuPreviewPoolCacheEntry;
 using runtime::GpuPreviewWorkerPool;
 using runtime::RenderRuntime;
+using runtime::clearGpuPreviewPoolCaches;
 using runtime::ensureGpuBackend;
+using runtime::gpuConfigured;
 using runtime::gpuPreviewPool;
+using runtime::markGpuConfigured;
+using runtime::resetGpuPreviewPool;
 
 QJsonObject handleConfigureGpu(
     const QJsonObject &request,
@@ -97,8 +101,7 @@ QJsonObject handleConfigureGpu(
         QStringLiteral("target_resize")
     ).toBool(false);
     if (!targetResize) {
-        runtime->hardwareGpuPreviewPoolCache.clear();
-        runtime->warpGpuPreviewPoolCache.clear();
+        clearGpuPreviewPoolCaches(runtime);
     }
     if (workerCount > 1) {
         QElapsedTimer timer;
@@ -166,7 +169,7 @@ QJsonObject handleConfigureGpu(
                 pool->configure(scene, waitRealizations, deferFollowers);
             }
             poolKey = targetKey;
-            runtime->hardwareGpuConfigured = true;
+            markGpuConfigured(runtime, false);
             QJsonObject out = response(true, QStringLiteral("gpu_configured"));
             out.insert(QStringLiteral("width"), scene.width);
             out.insert(QStringLiteral("height"), scene.height);
@@ -186,19 +189,13 @@ QJsonObject handleConfigureGpu(
             appendGpuDiagnostics(&out, pool->diagnostics());
             return out;
         } catch (const std::exception &exception) {
-            runtime->hardwareGpuPreviewPool.reset();
+            resetGpuPreviewPool(runtime, false);
             QJsonObject out = response(false, QStringLiteral("gpu_configure"));
             out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
             return out;
         }
     }
-    if (forceWarp) {
-        runtime->warpGpuPreviewPool.reset();
-        runtime->warpGpuPreviewPoolKey.clear();
-    } else {
-        runtime->hardwareGpuPreviewPool.reset();
-        runtime->hardwareGpuPreviewPoolKey.clear();
-    }
+    resetGpuPreviewPool(runtime, forceWarp);
     QString error;
     auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
     if (backend == nullptr) {
@@ -221,11 +218,7 @@ QJsonObject handleConfigureGpu(
         scene.exportBands = exportBands;
         scene.realizationCapacity = realizationCapacity;
         backend->configure(scene);
-        if (forceWarp) {
-            runtime->warpGpuConfigured = true;
-        } else {
-            runtime->hardwareGpuConfigured = true;
-        }
+        markGpuConfigured(runtime, forceWarp);
         QJsonObject out = response(true, QStringLiteral("gpu_configured"));
         out.insert(QStringLiteral("width"), scene.width);
         out.insert(QStringLiteral("height"), scene.height);
@@ -294,9 +287,7 @@ QJsonObject handleGpuDiagnostics(
     RenderRuntime *runtime
 ) {
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
-    const bool configured = forceWarp
-        ? runtime->warpGpuConfigured
-        : runtime->hardwareGpuConfigured;
+    const bool configured = gpuConfigured(runtime, forceWarp);
     if (!configured) {
         QJsonObject out = response(false, QStringLiteral("gpu_diagnostics"));
         out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));

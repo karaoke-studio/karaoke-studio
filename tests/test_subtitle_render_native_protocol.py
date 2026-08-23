@@ -382,12 +382,23 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     frame_commands_source = Path(
         "native/subtitle_renderer/src/commands/gpu_frame_commands.cpp"
     ).read_text(encoding="utf-8")
+    lifecycle_commands_source = Path(
+        "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
+    ).read_text(encoding="utf-8")
     cmake_source = Path("native/subtitle_renderer/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
 
     assert "RenderBackend *ensureGpuBackend(" in header_source
     assert "GpuPreviewWorkerPool *gpuPreviewPool(" in header_source
+    for operation in (
+        "gpuConfigured(",
+        "markGpuConfigured(",
+        "clearGpuPreviewPoolCaches(",
+        "resetGpuPreviewPool(",
+    ):
+        assert operation in header_source
+        assert operation in implementation_source
     assert "RenderBackend *ensureGpuBackend(" not in main_source
     assert "GpuPreviewWorkerPool *gpuPreviewPool(" not in main_source
     assert "std::make_unique<krok::subtitle::native::Direct2DGpuBackend>" in implementation_source
@@ -395,6 +406,16 @@ def test_native_gpu_backend_runtime_hides_direct2d_construction():
     assert "Direct2DGpuBackend" not in main_source
     assert "QJsonObject" not in implementation_source
     assert "protocol/" not in implementation_source
+    for direct_state in (
+        "runtime->hardwareGpuConfigured",
+        "runtime->warpGpuConfigured",
+        "runtime->warpGpuPreviewPool.reset",
+        "runtime->hardwareGpuPreviewPool.reset",
+        "runtime->hardwareGpuPreviewPoolCache.clear",
+        "runtime->warpGpuPreviewPoolCache.clear",
+    ):
+        assert direct_state not in frame_commands_source
+        assert direct_state not in lifecycle_commands_source
     assert '#include "runtime/gpu_backend_runtime.h"' not in main_source
     assert '#include "../runtime/gpu_backend_runtime.h"' in frame_commands_source
     assert "src/runtime/gpu_backend_runtime.cpp" in cmake_source
@@ -1358,6 +1379,9 @@ def test_native_gpu_lifecycle_commands_own_configuration_state():
     implementation_source = Path(
         "native/subtitle_renderer/src/commands/gpu_lifecycle_commands.cpp"
     ).read_text(encoding="utf-8")
+    runtime_source = Path(
+        "native/subtitle_renderer/src/runtime/gpu_backend_runtime.cpp"
+    ).read_text(encoding="utf-8")
     router_source = Path(
         "native/subtitle_renderer/src/commands/command_router.cpp"
     ).read_text(encoding="utf-8")
@@ -1374,9 +1398,14 @@ def test_native_gpu_lifecycle_commands_own_configuration_state():
         assert operation in header_source
         assert f"QJsonObject {operation}" not in main_source
         assert f"QJsonObject {operation}" in implementation_source
-    for private_detail in (
+    for runtime_detail in (
         "hardwareGpuPreviewPoolCache",
         "warpGpuPreviewPoolCache",
+    ):
+        assert runtime_detail in runtime_source
+        assert runtime_detail not in header_source
+        assert runtime_detail not in main_source
+    for private_detail in (
         "target_cache_hit",
         "realization_capacity",
     ):

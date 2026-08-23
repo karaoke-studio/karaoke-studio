@@ -22,5 +22,22 @@ GpuPreviewWorkerPool *gpuPreviewPool(
     bool forceWarp
 );
 
+bool gpuConfigured(
+    RenderRuntime *runtime,
+    bool forceWarp
+);
+
+void markGpuConfigured(
+    RenderRuntime *runtime,
+    bool forceWarp
+);
+
+void clearGpuPreviewPoolCaches(RenderRuntime *runtime);
+
+void resetGpuPreviewPool(
+    RenderRuntime *runtime,
+    bool forceWarp
+);
+
 }  // namespace runtime
 }  // namespace krok::subtitle::native

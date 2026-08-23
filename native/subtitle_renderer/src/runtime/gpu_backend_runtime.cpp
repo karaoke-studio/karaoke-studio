@@ -54,4 +54,54 @@ GpuPreviewWorkerPool *gpuPreviewPool(
         : runtime->hardwareGpuPreviewPool.get();
 }
 
+bool gpuConfigured(
+    RenderRuntime *runtime,
+    bool forceWarp
+) {
+    if (runtime == nullptr) {
+        return false;
+    }
+    return forceWarp
+        ? runtime->warpGpuConfigured
+        : runtime->hardwareGpuConfigured;
+}
+
+void markGpuConfigured(
+    RenderRuntime *runtime,
+    bool forceWarp
+) {
+    if (runtime == nullptr) {
+        return;
+    }
+    if (forceWarp) {
+        runtime->warpGpuConfigured = true;
+    } else {
+        runtime->hardwareGpuConfigured = true;
+    }
+}
+
+void clearGpuPreviewPoolCaches(RenderRuntime *runtime) {
+    if (runtime == nullptr) {
+        return;
+    }
+    runtime->hardwareGpuPreviewPoolCache.clear();
+    runtime->warpGpuPreviewPoolCache.clear();
+}
+
+void resetGpuPreviewPool(
+    RenderRuntime *runtime,
+    bool forceWarp
+) {
+    if (runtime == nullptr) {
+        return;
+    }
+    if (forceWarp) {
+        runtime->warpGpuPreviewPool.reset();
+        runtime->warpGpuPreviewPoolKey.clear();
+    } else {
+        runtime->hardwareGpuPreviewPool.reset();
+        runtime->hardwareGpuPreviewPoolKey.clear();
+    }
+}
+
 }  // namespace krok::subtitle::native::runtime

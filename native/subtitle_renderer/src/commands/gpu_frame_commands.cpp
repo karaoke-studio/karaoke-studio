@@ -32,6 +32,7 @@ using runtime::SharedFrameRing;
 using runtime::bytesChecksum;
 using runtime::ensureGpuBackend;
 using runtime::ensureSharedFrameRing;
+using runtime::gpuConfigured;
 using runtime::gpuPreviewPool;
 using runtime::writeSharedBandSlot;
 using runtime::writeSharedPackedRgbaSlot;
@@ -243,9 +244,7 @@ std::optional<QJsonObject> handleRenderGpuFrame(
         return out;
     }
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
-    const bool configured = forceWarp
-        ? runtime->warpGpuConfigured
-        : runtime->hardwareGpuConfigured;
+    const bool configured = gpuConfigured(runtime, forceWarp);
     if (!configured) {
         QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
         out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
@@ -326,9 +325,7 @@ QJsonObject handlePresentGpuFrame(
         return out;
     }
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
-    const bool configured = forceWarp
-        ? runtime->warpGpuConfigured
-        : runtime->hardwareGpuConfigured;
+    const bool configured = gpuConfigured(runtime, forceWarp);
     if (!configured) {
         QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
         out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
