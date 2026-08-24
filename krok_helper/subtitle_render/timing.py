@@ -396,4 +396,3 @@ class SubtitleSource:
 
     path: str = ""
     singer_filter: Optional[list[int]] = None
-
