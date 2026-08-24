@@ -1042,6 +1042,35 @@ def test_subtitle_property_panel_delegates_background_screen_construction() -> N
     assert calls == {"make_screen_size_section"}
 
 
+def test_subtitle_property_panel_delegates_background_source_construction() -> None:
+    panel_path = ROOT / "frontend" / "property_panel.py"
+    tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    panel_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyPanel"
+    )
+    delegated = {
+        "_make_background_source_section": "make_source_section",
+        "_make_background_detail_page": "make_detail_page",
+    }
+    for method_name, builder_method in delegated.items():
+        method = next(
+            node
+            for node in panel_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        calls = {
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_background_page_builder"
+        }
+        assert calls == {builder_method}
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
