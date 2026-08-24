@@ -623,6 +623,42 @@ def test_ruby_selection_has_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_ruby_style_has_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.ruby_style"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_build_ruby_font",
+        "_build_ruby_font_for_text",
+        "_ruby_font_size",
+        "_ruby_scale",
+        "_ruby_script_stroke_style",
+        "_ruby_stroke2_enabled",
+        "_ruby_stroke2_width",
+        "_ruby_stroke2_width_value",
+        "_ruby_stroke_width",
+        "_ruby_uses_main_font",
+        "_scaled_px",
+        "_scaled_signed_px",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert imported == delegated_names
+    targets = _import_targets(owner, ROOT / "engine/ruby_style.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

@@ -127,6 +127,20 @@ from krok_helper.subtitle_render.engine.ruby_selection import (
     ruby_time_indices as _ruby_time_indices,
     text_span_indices as _text_span_indices,
 )
+from krok_helper.subtitle_render.engine.ruby_style import (
+    build_ruby_font as _build_ruby_font,
+    build_ruby_font_for_text as _build_ruby_font_for_text,
+    ruby_font_size as _ruby_font_size,
+    ruby_scale as _ruby_scale,
+    ruby_script_stroke_style as _ruby_script_stroke_style,
+    ruby_stroke2_enabled as _ruby_stroke2_enabled,
+    ruby_stroke2_width as _ruby_stroke2_width,
+    ruby_stroke2_width_value as _ruby_stroke2_width_value,
+    ruby_stroke_width as _ruby_stroke_width,
+    ruby_uses_main_font as _ruby_uses_main_font,
+    scaled_px as _scaled_px,
+    scaled_signed_px as _scaled_signed_px,
+)
 from krok_helper.subtitle_render.engine.text_metrics import (
     build_font as _build_font,
     build_latin_font as _build_latin_font,
@@ -5054,77 +5068,6 @@ def _signal_display_lines_for_style(
     ]
 
 
-def _build_ruby_font(style: Style) -> QFont:
-    family = style.font_family if _ruby_uses_main_font(style) else (
-        style.ruby_font_family or style.font_family
-    )
-    size = _ruby_font_size(style)
-    weight = style.font_weight if _ruby_uses_main_font(style) else (
-        style.ruby_font_weight
-        if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
-        else style.font_weight
-    )
-    font = QFont(resolve_qt_font_family(family), size)
-    font.setPixelSize(size)
-    font.setWeight(_clamp_weight(int(weight)))
-    font.setItalic(style.italic)
-    return font
-
-
-def _build_ruby_font_for_text(style: Style, reading: str) -> QFont:
-    """Build the effective Japanese or Latin ruby font for one reading."""
-    if not _is_n3_latin_text(reading):
-        return _build_ruby_font(style)
-    if _ruby_uses_main_font(style):
-        family = style.font_family_latin or style.font_family
-        weight = _latin_font_weight(style)
-    else:
-        family = (
-            style.ruby_font_family_latin
-            or style.ruby_font_family
-            or style.font_family
-        )
-        weight = (
-            int(style.ruby_latin_font_weight)
-            if style.ruby_latin_font_weight is not None
-            and int(style.ruby_latin_font_weight) > 0
-            else int(style.ruby_font_weight)
-            if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
-            else int(style.font_weight)
-        )
-    size = (
-        int(style.ruby_latin_font_size_px)
-        if style.ruby_latin_font_size_px is not None
-        and int(style.ruby_latin_font_size_px) > 0
-        else _ruby_font_size(style)
-    )
-    font = QFont(resolve_qt_font_family(family), max(size, 1))
-    font.setPixelSize(max(size, 1))
-    font.setWeight(_clamp_weight(weight))
-    font.setItalic(style.italic)
-    return font
-
-
-def _ruby_uses_main_font(style: Style) -> bool:
-    """旧工程显式保存了非默认注音字号时，视为已经解除跟随。"""
-    return bool(style.ruby_font_follow_main) and all(
-        value is None
-        for value in (
-            style.ruby_font_family,
-            style.ruby_font_family_latin,
-            style.ruby_font_weight,
-            style.ruby_latin_font_size_px,
-            style.ruby_latin_font_weight,
-        )
-    ) and int(style.ruby_font_size_px) == 45
-
-
-def _ruby_font_size(style: Style) -> int:
-    # 字体 fallback 只共享字体族/字重，注音字号始终使用自己的字段。
-    # 否则全局默认 Style() 会把 45px 注音错误渲染成 100px 主文字。
-    return max(int(style.ruby_font_size_px), 1)
-
-
 def _visual_text_padding(style: Style) -> int:
     return _visual_stroke_extent(style.stroke_width_px, _main_stroke2_width(style))
 
@@ -5257,69 +5200,6 @@ def _glow_radius(style: Style, *, after: bool) -> int:
         return 0
     value = style.glow_after_radius_px if after else style.glow_before_radius_px
     return max(int(value), 0)
-
-
-def _ruby_stroke_width(style: Style) -> int:
-    if style.ruby_stroke_width_px is not None:
-        return max(int(style.ruby_stroke_width_px), 0)
-    return _scaled_px(style.stroke_width_px, _ruby_scale(style))
-
-
-def _ruby_stroke2_enabled(style: Style) -> bool:
-    """注音描边 2 的开关；未设定表示跟随主文字。"""
-    return (
-        style.stroke2_enabled
-        if style.ruby_stroke2_enabled is None
-        else bool(style.ruby_stroke2_enabled)
-    )
-
-
-def _ruby_stroke2_width_value(style: Style) -> int:
-    """注音描边 2 的宽度本身，不含开关判定。
-
-    宽度与开关沿各自的链条独立继承（N3 ``FontFaceInfoModel`` 里 ``UseEdge2``
-    与 ``EdgeSize2`` 就是分别回退的，见 ``n3_font_fallback``）。因此主文字关掉
-    描边 2 不会抹掉注音继承的宽度值——属性面板显示的也正是这个未经开关裁剪的
-    宽度。调用方负责在最后按开关裁剪一次。
-    """
-    if style.ruby_stroke2_width_px is not None:
-        return max(int(style.ruby_stroke2_width_px), 0)
-    return _scaled_px(style.stroke2_width_px, _ruby_scale(style))
-
-
-def _ruby_stroke2_width(style: Style) -> int:
-    return _ruby_stroke2_width_value(style) if _ruby_stroke2_enabled(style) else 0
-
-
-def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
-    """把整段 ruby 读音所用字体槽的描边物化到 ruby 通用字段。"""
-    if not _is_n3_latin_text(reading):
-        return style
-    width = (
-        _ruby_stroke_width(style)
-        if style.ruby_latin_stroke_width_px is None
-        or int(style.ruby_latin_stroke_width_px) <= 0
-        else max(int(style.ruby_latin_stroke_width_px), 0)
-    )
-    enabled = (
-        _ruby_stroke2_enabled(style)
-        if style.ruby_latin_stroke2_enabled is None
-        else bool(style.ruby_latin_stroke2_enabled)
-    )
-    # 继承的宽度必须取未经开关裁剪的值：``_ruby_stroke2_width`` 会先按注音/主文字
-    # 那一级的开关归零，于是英数槽自己显式打开描边 2 时也只能拿到 0。
-    width2 = (
-        _ruby_stroke2_width_value(style)
-        if style.ruby_latin_stroke2_width_px is None
-        or int(style.ruby_latin_stroke2_width_px) <= 0
-        else max(int(style.ruby_latin_stroke2_width_px), 0)
-    )
-    return replace(
-        style,
-        ruby_stroke_width_px=width,
-        ruby_stroke2_enabled=True,
-        ruby_stroke2_width_px=width2 if enabled else 0,
-    )
 
 
 def _ruby_decoration_kind(style: Style) -> DecorationKind:
@@ -15579,20 +15459,3 @@ def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
         shadow=_solid_fill(style.shadow_color),
     )
     return KaraokeColors(before=before, after=after)
-
-
-def _ruby_scale(style: Style) -> float:
-    return _ruby_font_size(style) / max(style.font_size_px, 1)
-
-
-def _scaled_px(value: int, scale: float) -> int:
-    if value <= 0:
-        return 0
-    return max(1, int(round(value * scale)))
-
-
-def _scaled_signed_px(value: int, scale: float) -> int:
-    if value == 0:
-        return 0
-    sign = 1 if value > 0 else -1
-    return sign * max(1, int(round(abs(value) * scale)))
