@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QWidget
 from krok_helper.subtitle_render.frontend.property_inputs import (
     DynamicStackedWidget,
     GrowingPlainTextEdit,
+    NoWheelSpinBox,
     WheelFocusedComboBox,
     WheelFocusedFontComboBox,
 )
@@ -59,6 +60,21 @@ def test_wheel_focused_property_combo_preserves_positional_user_data(qapp) -> No
 
     assert combo.itemText(0) == "布局"
     assert combo.itemData(0) == 3
+
+
+def test_no_wheel_property_spin_ignores_page_scroll_input(qapp) -> None:
+    class WheelEvent:
+        ignored = False
+
+        def ignore(self) -> None:
+            self.ignored = True
+
+    event = WheelEvent()
+    spin = NoWheelSpinBox()
+
+    spin.wheelEvent(event)
+
+    assert event.ignored is True
 
 
 def test_property_font_combo_uses_injected_catalog_and_canonicalizer(qapp) -> None:

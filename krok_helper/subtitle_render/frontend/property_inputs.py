@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QSizePolicy, QStackedWidget, QWidget
 from qfluentwidgets import (
     ComboBox as FluentComboBox,
     PlainTextEdit as FluentPlainTextEdit,
+    SpinBox as FluentSpinBox,
 )
 
 from krok_helper.subtitle_render.n3_font_catalog import (
@@ -92,6 +93,13 @@ class WheelFocusedComboBox(FluentComboBox):
             event.ignore()
             return
         super().wheelEvent(event)
+
+
+class NoWheelSpinBox(FluentSpinBox):
+    """Ignore wheel input so scrolling a page cannot change the value."""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
+        event.ignore()
 
 
 class WheelFocusedFontComboBox(WheelFocusedComboBox):
