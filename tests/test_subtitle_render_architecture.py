@@ -516,6 +516,13 @@ def test_page_offset_plan_has_no_painter_dependency() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_layout_plan_projection_has_no_painter_dependency() -> None:
+    owner = f"{PACKAGE}.engine.layout_plan_projection"
+    targets = _import_targets(owner, ROOT / "engine/layout_plan_projection.py")
+
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"
