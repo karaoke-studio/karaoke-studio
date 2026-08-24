@@ -3212,7 +3212,10 @@ class SubtitleRenderWindow(QWidget):
             }
         )
         self._reset_export_settings_for_new_project()
-        self._project_path = None
+        self._project_session.adopt_project_identity(
+            path=None,
+            disk_revision=None,
+        )
         self._set_project_dirty(False)
 
     def _clear_loaded_media(self) -> None:
@@ -3302,9 +3305,12 @@ class SubtitleRenderWindow(QWidget):
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(data, defer_assets=True)
-        self._project_path = path
-        self._project_disk_revision = loaded.revision
-        self._project_session.remember_missing_resources(missing_resources, data)
+        self._project_session.adopt_project_identity(
+            path=path,
+            disk_revision=loaded.revision,
+            missing_resources=missing_resources,
+            source_data=data,
+        )
         self._set_project_dirty(False)
         self._record_recent_project(path)
         if missing_resources:
@@ -3440,11 +3446,12 @@ class SubtitleRenderWindow(QWidget):
                 self._lyrics_panel.set_style(self._style)
             self._sync_output_size_to_video(self._video_info)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
-        self._project_path = None
         missing_resources = self._missing_project_resources(result.project_data)
-        self._project_session.remember_missing_resources(
-            missing_resources,
-            result.project_data,
+        self._project_session.adopt_project_identity(
+            path=None,
+            disk_revision=None,
+            missing_resources=missing_resources,
+            source_data=result.project_data,
         )
         self._set_project_dirty(True)
         if result.warnings:
@@ -9135,15 +9142,19 @@ class SubtitleRenderWindow(QWidget):
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(data)
-        self._project_path = candidate.source_project_path
-        if self._project_path is not None:
+        source_path = candidate.source_project_path
+        disk_revision = None
+        if source_path is not None:
             try:
-                self._project_disk_revision = self._project_controller.inspect(
-                    self._project_path
-                )
+                disk_revision = self._project_controller.inspect(source_path)
             except OSError:
-                self._project_disk_revision = None
-        self._project_session.remember_missing_resources(missing_resources, data)
+                disk_revision = None
+        self._project_session.adopt_project_identity(
+            path=source_path,
+            disk_revision=disk_revision,
+            missing_resources=missing_resources,
+            source_data=data,
+        )
         self._set_project_dirty(True)
         if missing_resources:
             fluent_warning(

@@ -650,3 +650,42 @@ def test_subtitle_render_window_delegates_project_save_state() -> None:
         }
     }
     assert direct_state_assignments == set()
+
+
+def test_subtitle_render_window_delegates_project_identity_adoption() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method_names = {
+        "_new_project",
+        "_open_project_path",
+        "_import_n3_project_path",
+        "_restore_recovery_candidate",
+    }
+    for method in window_class.body:
+        if not isinstance(method, ast.FunctionDef) or method.name not in method_names:
+            continue
+        session_calls = {
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_project_session"
+        }
+        assert "adopt_project_identity" in session_calls
+        direct_identity_assignments = {
+            target.attr
+            for node in ast.walk(method)
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else [node.target]
+            )
+            if isinstance(target, ast.Attribute)
+            and target.attr in {"_project_disk_revision", "_project_path"}
+        }
+        assert direct_identity_assignments == set()
