@@ -20,9 +20,14 @@ from krok_helper.subtitle_render.engine.layout.page_placement import (
     LineVisualBand,
     bands_require_separation,
 )
+from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+    signal_head_context,
+    signal_lead_in_ms,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingLine
+from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
 
 
 DisplayLines = list[DisplayLine]
@@ -91,6 +96,13 @@ class DisplayResolutionPorts:
     secondary_collision_pairs: Callable[[DisplayLines], CollisionPairs]
     fill_section_time: Callable[[DisplayLines], DisplayLines]
     apply_animation_guard: Callable[[DisplayLines, bool], DisplayLines]
+
+
+@dataclass(frozen=True)
+class StyleDisplayResolutionPorts:
+    """Backend factory for one concrete canvas display-resolution pass."""
+
+    build: Callable[[int, int, dict[str, object]], DisplayResolutionPorts]
 
 
 @dataclass(frozen=True)
@@ -374,14 +386,63 @@ def resolve_display_lines(
     return resolved
 
 
+def resolve_display_lines_for_style(
+    track: TimingTrack,
+    style: Style,
+    compute_kwargs: dict[str, object],
+    ports: StyleDisplayResolutionPorts,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> DisplayLines:
+    """Resolve and cache one style's display lines on a normalized canvas."""
+
+    base_kwargs = {
+        **compute_kwargs,
+        "sync_entry": False,
+        "sync_ending": False,
+        "auto_fill_section_time": False,
+    }
+    signal_heads = signal_head_context(track, style)
+    if signal_heads is not None:
+        base_kwargs["signal_head_indexes"] = signal_heads
+        base_kwargs["signal_lead_ms"] = signal_lead_in_ms(style)
+    if logical_w is None or logical_h is None:
+        default_h = max(int(style.layout_reference_height), 1)
+        default_w = max(int(round(default_h * 16 / 9)), 1)
+        logical_w = default_w if logical_w is None else logical_w
+        logical_h = default_h if logical_h is None else logical_h
+    logical_w = max(int(logical_w), 1)
+    logical_h = max(int(logical_h), 1)
+    cache_key = (
+        logical_w,
+        logical_h,
+        id(track),
+        value_signature(track),
+        value_signature(style),
+    )
+    cached = cached_display_line_resolution(cache_key)
+    if cached is not None:
+        return cached
+    resolved = resolve_display_lines(
+        avoid_collisions=not style.allow_inter_page_line_overlap,
+        auto_fill_section_time=style.auto_fill_section_time,
+        ports=ports.build(logical_w, logical_h, base_kwargs),
+    )
+    store_display_line_resolution(cache_key, track, resolved)
+    return resolved
+
+
 __all__ = [
     "AnimationGuardPorts",
     "DisplayResolutionCache",
     "DisplayResolutionPorts",
+    "StyleDisplayResolutionPorts",
     "apply_animation_time_guard",
     "cached_display_line_resolution",
     "clear_display_line_resolution_cache",
     "resolve_display_lines",
+    "resolve_display_lines_for_style",
     "resolve_display_timing",
     "store_display_line_resolution",
 ]

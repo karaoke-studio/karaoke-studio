@@ -206,12 +206,11 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     AnimationGuardPorts,
     DisplayResolutionPorts,
+    StyleDisplayResolutionPorts,
     apply_animation_time_guard,
-    cached_display_line_resolution,
     clear_display_line_resolution_cache,
-    resolve_display_lines,
+    resolve_display_lines_for_style,
     resolve_display_timing,
-    store_display_line_resolution,
 )
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
@@ -3479,11 +3478,6 @@ def _display_line_compute_kwargs(style: Style) -> dict[str, object]:
     }
 
 
-def _default_collision_canvas(style: Style) -> tuple[int, int]:
-    height = max(int(style.layout_reference_height), 1)
-    return max(int(round(height * 16 / 9)), 1), height
-
-
 def _measure_collision_bands(
     logical_w: int,
     logical_h: int,
@@ -4048,82 +4042,57 @@ def _display_lines_for_style(
     only differ on windows that avoidance would actually have consumed.
     """
 
-    kwargs = _display_line_compute_kwargs(style)
-    avoid_collisions = not style.allow_inter_page_line_overlap
-    signal_heads = _signal_head_context(track, style)
-    base_kwargs = {
-        **kwargs,
-        "sync_entry": False,
-        "sync_ending": False,
-        "auto_fill_section_time": False,
-    }
-    if signal_heads is not None:
-        # 指示灯只挂段首行：lead 扩展按行下发，其余行保持用户 PreTime。
-        base_kwargs["signal_head_indexes"] = signal_heads
-        base_kwargs["signal_lead_ms"] = _signal_lead_in_ms(style)
-    if logical_w is None or logical_h is None:
-        default_w, default_h = _default_collision_canvas(style)
-        logical_w = default_w if logical_w is None else logical_w
-        logical_h = default_h if logical_h is None else logical_h
-    logical_w = max(int(logical_w), 1)
-    logical_h = max(int(logical_h), 1)
-    cache_key = (
-        logical_w,
-        logical_h,
-        id(track),
-        _value_signature(track),
-        _value_signature(style),
-    )
-    cached = cached_display_line_resolution(cache_key)
-    if cached is not None:
-        return cached
-    ports = DisplayResolutionPorts(
-        compute=lambda **overrides: compute_display_lines(
-            track,
-            **base_kwargs,
-            **overrides,
-        ),
-        resolve_timing=lambda items, enforce_gap: resolve_display_timing(
-            style,
-            items,
-            animation_guard_ports_for_style(
-                logical_w,
-                logical_h,
-                track,
-                style,
+    return resolve_display_lines_for_style(
+        track,
+        style,
+        _display_line_compute_kwargs(style),
+        StyleDisplayResolutionPorts(
+            build=lambda width, height, base_kwargs: DisplayResolutionPorts(
+                compute=lambda **overrides: compute_display_lines(
+                    track,
+                    **base_kwargs,
+                    **overrides,
+                ),
+                resolve_timing=lambda items, enforce_gap: resolve_display_timing(
+                    style,
+                    items,
+                    animation_guard_ports_for_style(
+                        width,
+                        height,
+                        track,
+                        style,
+                    ),
+                    enforce_inter_page_gap=enforce_gap,
+                ),
+                collision_pairs=lambda items: _pixel_collision_squeeze_pairs(
+                    width, height, track, style, items
+                ),
+                secondary_collision_pairs=lambda items: (
+                    _secondary_displacement_squeeze_pairs(
+                        width, height, track, style, items
+                    )
+                ),
+                fill_section_time=lambda items: _apply_measured_section_time_fill(
+                    width, height, track, style, items
+                ),
+                apply_animation_guard=lambda items, enforce_gap: (
+                    apply_animation_time_guard(
+                        style,
+                        items,
+                        animation_guard_ports_for_style(
+                            width,
+                            height,
+                            track,
+                            style,
+                        ),
+                        enforce_inter_page_gap=enforce_gap,
+                    )
+                ),
             ),
-            enforce_inter_page_gap=enforce_gap,
         ),
-        collision_pairs=lambda items: _pixel_collision_squeeze_pairs(
-            logical_w, logical_h, track, style, items
-        ),
-        secondary_collision_pairs=lambda items: (
-            _secondary_displacement_squeeze_pairs(
-                logical_w, logical_h, track, style, items
-            )
-        ),
-        fill_section_time=lambda items: _apply_measured_section_time_fill(
-            logical_w, logical_h, track, style, items
-        ),
-        apply_animation_guard=lambda items, enforce_gap: apply_animation_time_guard(
-            style,
-            items,
-            animation_guard_ports_for_style(
-                logical_w,
-                logical_h,
-                track,
-                style,
-            ),
-            enforce_inter_page_gap=enforce_gap,
-        ),
+        logical_w=logical_w,
+        logical_h=logical_h,
     )
-    resolved = resolve_display_lines(
-        avoid_collisions=avoid_collisions,
-        auto_fill_section_time=style.auto_fill_section_time,
-        ports=ports,
-    )
-    store_display_line_resolution(cache_key, track, resolved)
-    return resolved
 
 
 def _visible_lines_for_style(

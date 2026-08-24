@@ -3,8 +3,13 @@ from __future__ import annotations
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     DisplayResolutionCache,
     DisplayResolutionPorts,
+    StyleDisplayResolutionPorts,
+    clear_display_line_resolution_cache,
     resolve_display_lines,
+    resolve_display_lines_for_style,
 )
+from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.timing import TimingTrack
 
 
 def test_display_resolution_cache_returns_copies_and_evicts_lru_entry() -> None:
@@ -27,6 +32,56 @@ def test_display_resolution_cache_returns_copies_and_evicts_lru_entry() -> None:
 
     cache.clear()
     assert cache.get("first") is None
+
+
+def test_style_display_resolver_owns_canvas_normalization_and_cache() -> None:
+    clear_display_line_resolution_cache()
+    track = TimingTrack()
+    style = Style(
+        layout_reference_height=720,
+        allow_inter_page_line_overlap=True,
+    )
+    events: list[object] = []
+
+    def build(width, height, base_kwargs):
+        events.append((width, height, dict(base_kwargs)))
+        return DisplayResolutionPorts(
+            compute=lambda **_kwargs: ["ideal"],
+            resolve_timing=lambda items, _enforce: list(items),
+            collision_pairs=lambda _items: (),
+            secondary_collision_pairs=lambda _items: (),
+            fill_section_time=lambda items: items,
+            apply_animation_guard=lambda items, _enforce: items,
+        )
+
+    ports = StyleDisplayResolutionPorts(build=build)
+    first = resolve_display_lines_for_style(
+        track,
+        style,
+        {"sync_entry": True, "auto_fill_section_time": True},
+        ports,
+    )
+    again = resolve_display_lines_for_style(
+        track,
+        style,
+        {"sync_entry": True, "auto_fill_section_time": True},
+        ports,
+    )
+
+    assert first == ["ideal"]
+    assert again == ["ideal"]
+    assert events == [
+        (
+            1280,
+            720,
+            {
+                "sync_entry": False,
+                "sync_ending": False,
+                "auto_fill_section_time": False,
+            },
+        )
+    ]
+    clear_display_line_resolution_cache()
 
 
 def test_display_resolver_skips_collision_discovery_when_overlap_is_allowed() -> None:

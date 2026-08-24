@@ -687,7 +687,8 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
         for node in ast.walk(method)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    assert "resolve_display_lines" in calls
+    assert "resolve_display_lines_for_style" in calls
+    assert "StyleDisplayResolutionPorts" in calls
 
     guard_factory = next(
         node
@@ -716,6 +717,7 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
         if isinstance(node, ast.FunctionDef)
     }
     assert "apply_animation_time_guard" in resolver_functions
+    assert "resolve_display_lines_for_style" in resolver_functions
     assert "resolve_display_timing" in resolver_functions
     assert "_resolve_page_sync_and_collisions" not in inline_functions
 
