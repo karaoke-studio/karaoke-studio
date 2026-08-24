@@ -291,6 +291,7 @@ from krok_helper.subtitle_render.preferences import (
 from krok_helper.subtitle_render.project_controller import (
     SubtitleProjectController,
 )
+from krok_helper.subtitle_render.project_load import ProjectLoadPlan
 from krok_helper.subtitle_render.project_recovery import ProjectRecoveryPolicy
 from krok_helper.subtitle_render.project_resources import (
     find_missing_project_resources,
@@ -315,7 +316,6 @@ from krok_helper.subtitle_render.project_store import (
     project_output_payload,
     save_discarded_project_backup,
     save_recovery_project,
-    split_project_paths,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.subtitle_render.sug_project import (
@@ -2907,35 +2907,20 @@ class SubtitleRenderWindow(QWidget):
                 self._refresh_tracks_view_windows()
 
     def _apply_project_data_inner(self, data: dict) -> None:
-        self._project_document.remember_project_data(data)
+        plan = ProjectLoadPlan.from_data(data)
+        self._project_document.remember_project_data(plan.source_data)
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
         # 1) 样式 / 屏幕 / 配色方案
-        style_payload = data.get("style")
-        project_style = style_from_dict(style_payload)
-        self._screen_settings = screen_settings_from_dict(data.get("screen"))
-        # Older projects stored already-resolved pixel sizes without a reference
-        # height.  Treat those values as belonging to the saved output height so
-        # the first later resize does not scale them from an incorrect 1080 base.
-        if (
-            not isinstance(style_payload, dict)
-            or "font_reference_height" not in style_payload
-        ):
-            project_style = replace(
-                project_style,
-                font_reference_height=max(int(self._screen_settings.height), 1),
-            )
-        if project_style.title_overlay is None:
-            project_style = replace(project_style, title_overlay=TitleOverlay())
+        self._screen_settings = plan.screen
         # 字体目录冷构建可达秒级且必须留在主线程——先给出可见占位再读取
         with font_list_loading_overlay(self):
             catalog = get_n3_font_catalog()
         self._style, _font_names_changed = normalize_style_font_families(
-            project_style, catalog
+            plan.style, catalog
         )
-        key = data.get("selected_scheme_key")
-        if isinstance(key, str) and key:
-            self._selected_scheme_key = key
+        if plan.selected_scheme_key is not None:
+            self._selected_scheme_key = plan.selected_scheme_key
         self._property_panel.set_style(self._style)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
@@ -2944,22 +2929,20 @@ class SubtitleRenderWindow(QWidget):
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
         # 2) 导出参数
-        output = data.get("output") if isinstance(data.get("output"), dict) else {}
-        self._apply_output_settings(output)
+        self._apply_output_settings(plan.output)
         # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
-        paths = split_project_paths(data)
-        if paths["subtitle_path"] is not None and paths["subtitle_path"].is_file():
-            self.load_subtitle_source(paths["subtitle_path"])
-            self._apply_line_breaks_before(data.get("line_breaks_before"))
-            self._apply_line_layout_indices(data.get("line_layout_indices"))
+        if plan.subtitle_path is not None and plan.subtitle_path.is_file():
+            self.load_subtitle_source(plan.subtitle_path)
+            self._apply_line_breaks_before(plan.line_breaks_before)
+            self._apply_line_layout_indices(plan.line_layout_indices)
             if self._timing_track is not None:
-                self._restore_track_page_state(self._timing_track, data)
-            self._apply_char_role_labels(data.get("char_role_labels"))
+                self._restore_track_page_state(self._timing_track, plan.source_data)
+            self._apply_char_role_labels(plan.char_role_labels)
             guide_mismatches = self._apply_guide_symbol_rows(
-                self._timing_track, data.get("line_guide_symbols")
+                self._timing_track, plan.line_guide_symbols
             )
             self._apply_inline_guide_symbol_rows(
-                self._timing_track, data.get("line_inline_guide_symbols")
+                self._timing_track, plan.line_inline_guide_symbols
             )
             if guide_mismatches:
                 rows = "、".join(str(row + 1) for row in guide_mismatches[:12])
@@ -2973,35 +2956,31 @@ class SubtitleRenderWindow(QWidget):
             self._preview_panel.set_track(self._timing_track)
             if self._timing_track is not None:
                 self._apply_display_override_rows(
-                    self._timing_track, data.get("line_display_overrides")
+                    self._timing_track, plan.line_display_overrides
                 )
                 self._apply_animation_override_rows(
-                    self._timing_track, data.get("line_animation_overrides")
+                    self._timing_track, plan.line_animation_overrides
                 )
             self._refresh_tracks_view_windows()
-        background = data.get("background") if isinstance(data.get("background"), dict) else None
         if self._defer_project_assets:
-            self._queue_project_deferred_loads(
-                background=background,
-                fallback_video_path=paths["video_path"],
-                audio_path=paths["audio_path"],
-                extra_subtitle_sources=data.get("extra_subtitle_sources"),
-                project_role_names=data.get("project_role_names"),
-            )
+            self._queue_project_deferred_loads(plan)
         else:
-            self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
-            if background is not None:
-                self._load_background_payload(background)
-            elif paths["video_path"] is not None and paths["video_path"].is_file():
-                self.load_video(paths["video_path"])
-            audio = paths["audio_path"]
+            self._apply_extra_subtitle_sources(plan.extra_subtitle_sources)
+            if plan.background is not None:
+                self._load_background_payload(plan.background)
+            elif (
+                plan.fallback_video_path is not None
+                and plan.fallback_video_path.is_file()
+            ):
+                self.load_video(plan.fallback_video_path)
+            audio = plan.audio_path
             if audio is not None and audio.is_file() and audio != self._video_path:
                 self.load_audio(audio)
         # Project/N3 role payloads are authoritative.  Populate missing role
         # schemes only after those payloads have replaced source-LRC markers;
         # otherwise a transient ``【アクア】`` marker can auto-create an unrelated
         # palette before FontIndex=0 clears it back to the global N3 scheme.
-        self._apply_project_role_options(data.get("project_role_names"))
+        self._apply_project_role_options(plan.project_role_names)
 
     def _apply_project_role_options(self, project_roles: object) -> None:
         content_roles = self._content_role_options()
@@ -3027,30 +3006,13 @@ class SubtitleRenderWindow(QWidget):
 
     def _queue_project_deferred_loads(
         self,
-        *,
-        background: Optional[dict],
-        fallback_video_path: Optional[Path],
-        audio_path: Optional[Path],
-        extra_subtitle_sources: object,
-        project_role_names: object,
+        plan: ProjectLoadPlan,
     ) -> None:
-        loads: list[tuple[str, object]] = []
-        if background is not None:
-            loads.append(("background", deepcopy(background)))
-        elif fallback_video_path is not None and fallback_video_path.is_file():
-            loads.append(("video", fallback_video_path))
-        if audio_path is not None:
-            loads.append(("audio", audio_path))
-        if isinstance(extra_subtitle_sources, list) and extra_subtitle_sources:
-            loads.append(
-                (
-                    "extra_subtitle_sources",
-                    (deepcopy(extra_subtitle_sources), deepcopy(project_role_names)),
-                )
-            )
-        self._project_deferred_loads = loads
+        self._project_deferred_loads = [
+            (asset.kind, asset.payload) for asset in plan.deferred_assets()
+        ]
         self._project_deferred_load_generation = self._project_generation
-        if loads:
+        if self._project_deferred_loads:
             self._project_deferred_load_timer.start(500)
 
     def _process_project_deferred_load(self) -> None:
