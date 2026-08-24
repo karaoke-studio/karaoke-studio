@@ -7849,8 +7849,13 @@ def test_after_glow_strip_matches_full_blur_within_tolerance(qapp, monkeypatch, 
 # P1：N3 布局对齐（负值间距 / ルビ間隔 / ルビ配置 / 余白警告）
 # ---------------------------------------------------------------------------
 
-from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (  # noqa: E402
     LayoutMarginWarning,
+)
+from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter import (  # noqa: E402
+    check_layout_margins,
+)
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_latin_font,
     _char_layout_width,
     _fixed_line_geometry,
@@ -7858,7 +7863,6 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _make_font_for,
     _resolve_baseline_y,
     _resolve_ruby_alignment,
-    check_layout_margins,
 )
 from krok_helper.subtitle_render.models import style_from_dict, style_to_dict  # noqa: E402
 

@@ -645,9 +645,9 @@ def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     assert inline_contracts == set()
 
 
-def test_painter_delegates_layout_margin_policy() -> None:
-    painter_path = ROOT / "engine/painter.py"
-    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+def test_painter_diagnostics_adapter_binds_layout_margin_policy() -> None:
+    adapter_path = ROOT / "engine/layout/painter_diagnostics_adapter.py"
+    tree = ast.parse(adapter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
         for node in tree.body
@@ -659,6 +659,15 @@ def test_painter_delegates_layout_margin_policy() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "resolve_layout_margin_warnings" in calls
+
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    inline_functions = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "check_layout_margins" not in inline_functions
 
 
 def test_painter_delegates_timing_window_diagnostic_policy() -> None:

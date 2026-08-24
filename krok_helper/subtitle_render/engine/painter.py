@@ -67,15 +67,11 @@ from krok_helper.subtitle_render.engine.layout.layout_context import (
     layout_pass,
 )
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
-    LayoutMarginBox,
-    LayoutMarginPorts,
-    LayoutMarginWarning,
     LayoutTimingDiagnostic,
     TimingCollisionAdjustment as _TimingCollisionAdjustment,
     build_force_bottom_diagnostics,
     build_page_shift_diagnostics,
     build_timing_window_diagnostics,
-    resolve_layout_margin_warnings,
 )
 from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
@@ -12412,56 +12408,6 @@ def _resolve_line_x_smart(
         center_override=center_override,
         page=page,
     )
-
-
-def check_layout_margins(
-    track: TimingTrack,
-    style: Style,
-    img_w: int,
-) -> list[LayoutMarginWarning]:
-    """检查每行主文字的左右边界，返回溢出/侵入余白的行。
-
-    只做主文字外框（N3 ``DrawLineLeft/Right`` 口径，不含描边溢出）的静态估算，
-    不含 ruby 左右溢出与指示灯加宽；足以提示用户调小字号或余白。竖排模式左右
-    边界语义不同，不检查。
-    """
-    def measure_line(
-        source_track: TimingTrack,
-        source_style: Style,
-        display_line: DisplayLine,
-        width: int,
-    ) -> LayoutMarginBox:
-        line = display_line.line
-        line_style = _style_for_line(source_style, line)
-        total_w = _line_total_width(line, line_style, source_track.rubies)
-        lane = display_line.lane if line_style.dual_line_layout else None
-        x0 = _resolve_line_x_smart(
-            width,
-            total_w,
-            source_track,
-            line,
-            line_style,
-            lane,
-            center_override=_line_center_override(source_track, line, line_style),
-        )
-        return LayoutMarginBox(
-            left=x0,
-            right=x0 + total_w,
-            margin_left=line_style.horizontal_margin_px,
-            margin_right=line_style.horizontal_margin_px,
-        )
-
-    ports = LayoutMarginPorts(
-        resolve_display_lines=lambda source_track, source_style, width: (
-            _display_lines_for_style(
-                source_track,
-                source_style,
-                logical_w=width,
-            )
-        ),
-        measure_line=measure_line,
-    )
-    return resolve_layout_margin_warnings(track, style, img_w, ports=ports)
 
 
 def _bottom_align_resolver(style: Style):
