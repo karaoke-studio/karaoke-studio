@@ -871,6 +871,8 @@ def test_subtitle_property_panel_delegates_shared_widget_primitives() -> None:
     assert "CollapsibleSection" not in inline_names
     assert "_PillSelector" not in inline_names
     assert "_FolderTabPanel" not in inline_names
+    assert "_ClickableRow" not in inline_names
+    assert "_SubGroup" not in inline_names
 
 
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:

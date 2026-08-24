@@ -119,10 +119,13 @@ from krok_helper.subtitle_render.frontend.property_pages import (
     property_page_index,
 )
 from krok_helper.subtitle_render.frontend.property_widgets import (
+    ClickableRow as _ClickableRow,
     CollapsibleSection,
     FolderTabPanel as _FolderTabPanel,
     PillSelector as _PillSelector,
+    SubGroup as _SubGroup,
     ToggleSwitch,
+    subgroup_label as _subgroup_label,
 )
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 from krok_helper.subtitle_render.engine.style_semantics import (
@@ -1075,70 +1078,6 @@ def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return QColor()
     return dialog.selectedColor()
-
-
-class _ClickableRow(QWidget):
-    """A bare row widget that emits ``clicked`` on a left mouse press."""
-
-    clicked = Signal()
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-
-class _SubGroup(QWidget):
-    """A collapsible sub-section inside a property card (accent-bar heading + grid)."""
-
-    def __init__(
-        self,
-        title: str,
-        *,
-        collapsed: bool = False,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 4, 0, 0)
-        root.setSpacing(6)
-
-        self._header = _ClickableRow(self)
-        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
-        header_layout = QHBoxLayout(self._header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(6)
-        label = _subgroup_label(title)
-        label.setParent(self._header)
-        header_layout.addWidget(label, 0)
-        header_layout.addStretch(1)
-        self._chevron = QLabel(self._header)
-        themed(
-            self._chevron,
-            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
-        )
-        header_layout.addWidget(self._chevron, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self._host = QWidget(self)
-        self.grid = QGridLayout(self._host)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(8)
-        self.grid.setVerticalSpacing(8)
-        self.grid.setColumnStretch(0, 1)
-        self.grid.setColumnStretch(1, 1)
-
-        root.addWidget(self._header)
-        root.addWidget(self._host)
-
-        self._header.clicked.connect(lambda: self.set_collapsed(self._host.isVisible()))
-        self.set_collapsed(collapsed)
-
-    def set_collapsed(self, collapsed: bool) -> None:
-        self._host.setVisible(not collapsed)
-        self._chevron.setText("▸" if collapsed else "▾")
-
-    def is_collapsed(self) -> bool:
-        return not self._host.isVisible()
 
 
 def _fill_mode_icons() -> dict[str, QIcon]:
@@ -9450,23 +9389,6 @@ def _solid_paint_fill(color: str) -> PaintFill:
         split_top_color=normalized,
         split_bottom_color=normalized,
     )
-
-
-def _subgroup_label(text: str) -> QLabel:
-    """A sub-section heading: accent bar + bold dark text, distinct from field labels."""
-    label = QLabel(text)
-    label.setObjectName("SubtitlePropertySubheading")
-    themed(
-        label,
-        lambda: (
-            f"color: {palette().title_text};"
-            "font-size: 9.5pt;"
-            "font-weight: 700;"
-            f"border-left: 3px solid {palette().accent_primary};"
-            "padding: 0 0 0 8px;"
-        ),
-    )
-    return label
 
 
 def _section(
