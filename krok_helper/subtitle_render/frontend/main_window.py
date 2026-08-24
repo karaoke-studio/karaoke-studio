@@ -206,6 +206,7 @@ from krok_helper.subtitle_render.frontend.preview_async import (
     normalize_preview_quality,
 )
 from krok_helper.subtitle_render.frontend.preview_controller import (
+    PreviewPreferenceController,
     PreviewWindowController,
 )
 from krok_helper.subtitle_render.frontend.property_panel import (
@@ -2346,6 +2347,14 @@ class SubtitleRenderWindow(QWidget):
 
     def _connect_project_output_signals(self) -> None:
         """Connect user-editable project output fields after initial state loading."""
+        self._preview_preference_controller = PreviewPreferenceController(
+            preview_panel=self._preview_panel,
+            gpu_checkbox=self._gpu_preview_check,
+            local_output_preferences=self._local_output_preferences,
+            save_persisted_state=self._save_persisted_state,
+            warn_gpu_unavailable=self._warn_gpu_preview_unavailable,
+            warn_gpu_fallback=self._show_gpu_preview_fallback,
+        )
         self._export_encoder_combo.currentIndexChanged.connect(
             self._on_output_settings_changed
         )
@@ -7138,31 +7147,27 @@ class SubtitleRenderWindow(QWidget):
 
     def _on_gpu_preview_changed(self, enabled: bool) -> None:
         """Apply and persist the experimental subtitle-preview backend."""
-        if not self._preview_panel.set_gpu_preview_enabled(bool(enabled)):
-            blocked = self._gpu_preview_check.blockSignals(True)
-            try:
-                self._gpu_preview_check.setChecked(False)
-            finally:
-                self._gpu_preview_check.blockSignals(blocked)
-            fluent_warning(
-                self,
-                "GPU 预览不可用",
-                "当前预览模式不支持 GPU 字幕层，已继续使用 Painter。",
-            )
-        self._save_persisted_state()
+        self._preview_preference_controller.apply_gpu_enabled(enabled)
+
+    def _warn_gpu_preview_unavailable(self) -> None:
+        fluent_warning(
+            self,
+            "GPU 预览不可用",
+            "当前预览模式不支持 GPU 字幕层，已继续使用 Painter。",
+        )
 
     def _on_preview_quality_changed(self, quality: str) -> None:
         """Apply and persist a local preview-only raster quality preference."""
-        normalized = normalize_preview_quality(quality)
-        self._preview_panel.set_preview_quality(normalized)
-        self._local_output_preferences["preview_quality"] = normalized
-        self._save_persisted_state()
+        self._preview_preference_controller.apply_quality(quality)
 
     def _on_gpu_export_changed(self, _enabled: bool) -> None:
         """Persist GPU subtitle export independently from encoder selection."""
         self._save_persisted_state()
 
     def _on_gpu_preview_fallback(self, message: str) -> None:
+        self._preview_preference_controller.report_gpu_fallback(message)
+
+    def _show_gpu_preview_fallback(self, message: str) -> None:
         InfoBar.warning(
             title="GPU 预览已回退",
             content=str(message),
