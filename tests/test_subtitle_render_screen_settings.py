@@ -46,7 +46,7 @@ def test_screen_settings_resolves_matching_preset() -> None:
 
 
 def test_property_panel_keeps_screen_settings_compatibility_exports() -> None:
-    from krok_helper.subtitle_render.frontend import property_panel
+    from krok_helper.subtitle_render.frontend.properties import property_panel
 
     assert property_panel.ScreenSettings is ScreenSettings
     assert property_panel.screen_settings_from_dict is screen_settings_from_dict

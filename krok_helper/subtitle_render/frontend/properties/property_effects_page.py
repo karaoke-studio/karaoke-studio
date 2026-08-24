@@ -7,17 +7,17 @@ from typing import Any, Callable
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QWidget
 from qfluentwidgets import CheckBox
 
-from krok_helper.subtitle_render.frontend.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.property_inputs import (
     WheelFocusedComboBox,
 )
-from krok_helper.subtitle_render.frontend.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.property_layout import (
     ResponsiveFieldGrid,
     compact_property_control,
     property_field,
     property_section,
 )
-from krok_helper.subtitle_render.frontend.property_timing_page import timing_spin
-from krok_helper.subtitle_render.frontend.property_widgets import SubGroup
+from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
+from krok_helper.subtitle_render.frontend.properties.property_widgets import SubGroup
 
 
 ENTRY_ANIMATION_OPTIONS = (

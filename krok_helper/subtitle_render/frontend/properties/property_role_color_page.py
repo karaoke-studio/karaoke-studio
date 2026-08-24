@@ -10,18 +10,18 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CheckBox, PushButton as FluentPushButton
 
-from krok_helper.subtitle_render.frontend.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.property_inputs import (
     DynamicStackedWidget,
     WheelFocusedComboBox,
 )
-from krok_helper.subtitle_render.frontend.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.property_layout import (
     compact_property_control,
     inline_property_section,
     property_field,
     property_section,
 )
-from krok_helper.subtitle_render.frontend.property_timing_page import timing_spin
-from krok_helper.subtitle_render.frontend.property_widgets import FolderTabPanel, PillSelector
+from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
+from krok_helper.subtitle_render.frontend.properties.property_widgets import FolderTabPanel, PillSelector
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 

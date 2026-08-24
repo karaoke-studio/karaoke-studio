@@ -215,7 +215,7 @@ from krok_helper.subtitle_render.frontend.preview.preview_controller import (
     PreviewPreferenceController,
     PreviewWindowController,
 )
-from krok_helper.subtitle_render.frontend.property_panel import (
+from krok_helper.subtitle_render.frontend.properties.property_panel import (
     PropertyPanel,
 )
 from krok_helper.subtitle_render.frontend.project_commands import (

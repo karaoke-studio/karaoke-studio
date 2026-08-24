@@ -1378,12 +1378,36 @@ def test_subtitle_render_window_delegates_export_job_assembly() -> None:
         assert calls == {controller_method}
 
 
+def test_property_frontend_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "property_background_page.py",
+        "property_effects_page.py",
+        "property_inputs.py",
+        "property_layout.py",
+        "property_layout_page.py",
+        "property_pages.py",
+        "property_panel.py",
+        "property_role_color_page.py",
+        "property_role_fill_pages.py",
+        "property_role_font_page.py",
+        "property_role_page.py",
+        "property_timing_page.py",
+        "property_title_page.py",
+        "property_widgets.py",
+    }
+    properties_root = ROOT / "frontend" / "properties"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in properties_root.glob("*.py")
+    }
+    assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
 def test_subtitle_property_panel_delegates_page_registry_and_routing() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_pages" in targets
+    assert f"{PACKAGE}.frontend.properties.property_pages" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1417,11 +1441,11 @@ def test_subtitle_property_panel_delegates_page_registry_and_routing() -> None:
 
 
 def test_subtitle_property_panel_delegates_shared_widget_primitives() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_widgets" in targets
+    assert f"{PACKAGE}.frontend.properties.property_widgets" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     inline_names = {
         node.name
@@ -1437,11 +1461,11 @@ def test_subtitle_property_panel_delegates_shared_widget_primitives() -> None:
 
 
 def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_layout" in targets
+    assert f"{PACKAGE}.frontend.properties.property_layout" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     inline_names = {
         node.name
@@ -1465,11 +1489,11 @@ def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> Non
 
 
 def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_inputs" in targets
+    assert f"{PACKAGE}.frontend.properties.property_inputs" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     inline_names = {
         node.name
@@ -1513,11 +1537,11 @@ def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
 
 
 def test_subtitle_property_panel_delegates_title_page_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_title_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_title_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1547,11 +1571,11 @@ def test_subtitle_property_panel_delegates_title_page_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_timing_page_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_timing_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_timing_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1575,11 +1599,11 @@ def test_subtitle_property_panel_delegates_timing_page_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_background_screen_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_background_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_background_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1604,7 +1628,7 @@ def test_subtitle_property_panel_delegates_background_screen_construction() -> N
 
 
 def test_subtitle_property_panel_delegates_background_source_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1633,11 +1657,11 @@ def test_subtitle_property_panel_delegates_background_source_construction() -> N
 
 
 def test_subtitle_property_panel_delegates_animation_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_effects_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_effects_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1661,7 +1685,7 @@ def test_subtitle_property_panel_delegates_animation_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_indicator_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1685,11 +1709,11 @@ def test_subtitle_property_panel_delegates_indicator_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_viewport_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_layout_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_layout_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1713,7 +1737,7 @@ def test_subtitle_property_panel_delegates_viewport_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_vertical_layout_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1738,7 +1762,7 @@ def test_subtitle_property_panel_delegates_vertical_layout_construction() -> Non
 
 
 def test_subtitle_property_panel_delegates_ruby_layout_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1762,7 +1786,7 @@ def test_subtitle_property_panel_delegates_ruby_layout_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_row_structure_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1787,11 +1811,11 @@ def test_subtitle_property_panel_delegates_row_structure_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_role_page_composition() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_role_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_role_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1816,7 +1840,7 @@ def test_subtitle_property_panel_delegates_role_page_composition() -> None:
 
 
 def test_subtitle_property_panel_delegates_role_font_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1840,11 +1864,11 @@ def test_subtitle_property_panel_delegates_role_font_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_role_font_settings_page() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_role_font_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_role_font_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1869,11 +1893,11 @@ def test_subtitle_property_panel_delegates_role_font_settings_page() -> None:
 
 
 def test_subtitle_property_panel_delegates_role_color_construction() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_role_color_page" in targets
+    assert f"{PACKAGE}.frontend.properties.property_role_color_page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1897,11 +1921,11 @@ def test_subtitle_property_panel_delegates_role_color_construction() -> None:
 
 
 def test_subtitle_property_panel_delegates_solid_fill_editor() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
-    panel_module = f"{PACKAGE}.frontend.property_panel"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.property_role_fill_pages" in targets
+    assert f"{PACKAGE}.frontend.properties.property_role_fill_pages" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1925,7 +1949,7 @@ def test_subtitle_property_panel_delegates_solid_fill_editor() -> None:
 
 
 def test_subtitle_property_panel_delegates_gradient_fill_editor() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1950,7 +1974,7 @@ def test_subtitle_property_panel_delegates_gradient_fill_editor() -> None:
 
 
 def test_subtitle_property_panel_delegates_split_fill_editor() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -1974,7 +1998,7 @@ def test_subtitle_property_panel_delegates_split_fill_editor() -> None:
 
 
 def test_subtitle_property_panel_delegates_image_fill_editor() -> None:
-    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node

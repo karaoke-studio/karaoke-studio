@@ -5,7 +5,7 @@ from __future__ import annotations
 from PyQt6.QtCore import pyqtSignal as Signal
 from PyQt6.QtWidgets import QWidget
 
-from krok_helper.subtitle_render.frontend.property_background_page import (
+from krok_helper.subtitle_render.frontend.properties.property_background_page import (
     BackgroundPropertyPageBuilder,
 )
 

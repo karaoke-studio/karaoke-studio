@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import QPushButton
 
-from krok_helper.subtitle_render.frontend.property_role_fill_pages import (
+from krok_helper.subtitle_render.frontend.properties.property_role_fill_pages import (
     RoleFillPagesBuilder,
 )
 
@@ -68,7 +68,7 @@ def test_solid_fill_page_preserves_color_button_contract(qapp) -> None:
 
 
 def test_gradient_fill_page_preserves_editor_and_control_contracts(qapp) -> None:
-    from krok_helper.subtitle_render.frontend.property_panel import (
+    from krok_helper.subtitle_render.frontend.properties.property_panel import (
         ColorButton,
         GradientStopsEditor,
         _double_spin,
@@ -102,7 +102,7 @@ def test_gradient_fill_page_preserves_editor_and_control_contracts(qapp) -> None
 
 
 def test_split_fill_page_preserves_hard_stop_and_vertical_contracts(qapp) -> None:
-    from krok_helper.subtitle_render.frontend.property_panel import (
+    from krok_helper.subtitle_render.frontend.properties.property_panel import (
         ColorButton,
         GradientStopsEditor,
         _double_spin,
@@ -126,7 +126,7 @@ def test_split_fill_page_preserves_hard_stop_and_vertical_contracts(qapp) -> Non
 
 
 def test_image_fill_page_preserves_path_and_scale_contracts(qapp) -> None:
-    from krok_helper.subtitle_render.frontend.property_panel import _spin
+    from krok_helper.subtitle_render.frontend.properties.property_panel import _spin
 
     host = _Host()
     builder = RoleFillPagesBuilder(host, spin_factory=_spin)

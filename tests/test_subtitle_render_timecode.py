@@ -9,7 +9,7 @@ def test_timecode_contract_round_trips_supported_values() -> None:
 
 
 def test_property_panel_keeps_timecode_compatibility_exports() -> None:
-    from krok_helper.subtitle_render.frontend import property_panel
+    from krok_helper.subtitle_render.frontend.properties import property_panel
 
     assert property_panel.parse_timecode_ms is parse_timecode_ms
     assert property_panel.format_timecode_ms is format_timecode_ms

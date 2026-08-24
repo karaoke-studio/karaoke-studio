@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from PyQt6.QtWidgets import QPushButton
 
-from krok_helper.subtitle_render.frontend.property_effects_page import (
+from krok_helper.subtitle_render.frontend.properties.property_effects_page import (
     EffectsPropertyPageBuilder,
 )
 

@@ -108,12 +108,12 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
-from krok_helper.subtitle_render.frontend.property_pages import (
+from krok_helper.subtitle_render.frontend.properties.property_pages import (
     PROPERTY_PAGE_SPECS,
     build_property_pages,
     property_page_index,
 )
-from krok_helper.subtitle_render.frontend.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.property_layout import (
     ResponsiveFieldGrid as _ResponsiveFieldGrid,
     ResponsivePropertyPair as _ResponsivePropertyPair,
     ResponsiveRoleHeader as _ResponsiveRoleHeader,
@@ -124,7 +124,7 @@ from krok_helper.subtitle_render.frontend.property_layout import (
     property_section as _section,
     property_section_pair as _section_pair,
 )
-from krok_helper.subtitle_render.frontend.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.property_inputs import (
     DynamicStackedWidget as _DynamicStackedWidget,
     GrowingPlainTextEdit as _GrowingPlainTextEdit,
     NoWheelSpinBox as _NoWheelSpinBox,
@@ -134,29 +134,29 @@ from krok_helper.subtitle_render.frontend.property_inputs import (
     WheelFocusedFontComboBox,
     WheelFocusedSpinBox,
 )
-from krok_helper.subtitle_render.frontend.property_background_page import (
+from krok_helper.subtitle_render.frontend.properties.property_background_page import (
     BACKGROUND_KIND_PAGES,
     BackgroundPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_effects_page import (
+from krok_helper.subtitle_render.frontend.properties.property_effects_page import (
     EffectsPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_layout_page import (
+from krok_helper.subtitle_render.frontend.properties.property_layout_page import (
     LayoutPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_role_page import (
+from krok_helper.subtitle_render.frontend.properties.property_role_page import (
     RolePropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_role_font_page import (
+from krok_helper.subtitle_render.frontend.properties.property_role_font_page import (
     RoleFontSettingsPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_role_color_page import (
+from krok_helper.subtitle_render.frontend.properties.property_role_color_page import (
     RoleColorPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_role_fill_pages import (
+from krok_helper.subtitle_render.frontend.properties.property_role_fill_pages import (
     RoleFillPagesBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_widgets import (
+from krok_helper.subtitle_render.frontend.properties.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
     FolderTabPanel as _FolderTabPanel,
@@ -165,10 +165,10 @@ from krok_helper.subtitle_render.frontend.property_widgets import (
     ToggleSwitch,
     subgroup_label as _subgroup_label,
 )
-from krok_helper.subtitle_render.frontend.property_title_page import (
+from krok_helper.subtitle_render.frontend.properties.property_title_page import (
     TitlePropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.property_timing_page import (
+from krok_helper.subtitle_render.frontend.properties.property_timing_page import (
     TimingPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR

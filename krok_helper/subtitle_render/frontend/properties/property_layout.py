@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QWIDGETSIZE_MAX,
 )
 
-from krok_helper.subtitle_render.frontend.property_widgets import (
+from krok_helper.subtitle_render.frontend.properties.property_widgets import (
     CollapsibleSection,
     subgroup_label,
 )

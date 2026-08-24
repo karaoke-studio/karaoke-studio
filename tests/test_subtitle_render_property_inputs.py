@@ -6,7 +6,7 @@ from PyQt6.QtCore import QSize
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QWidget
 
-from krok_helper.subtitle_render.frontend.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.property_inputs import (
     DynamicStackedWidget,
     GrowingPlainTextEdit,
     NoWheelSpinBox,

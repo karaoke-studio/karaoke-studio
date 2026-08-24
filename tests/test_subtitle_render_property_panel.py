@@ -48,13 +48,13 @@ from qfluentwidgets import (  # noqa: E402
 )
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
-from krok_helper.subtitle_render.frontend import property_panel as pp  # noqa: E402
+from krok_helper.subtitle_render.frontend.properties import property_panel as pp  # noqa: E402
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
     FluentIntInputDialog,
     FluentMessageDialog,
     FluentTextInputDialog,
 )
-from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.properties.property_panel import (  # noqa: E402
     _ColorDialog,
     _LayoutSchematic,
     _SchematicBoard,
@@ -99,7 +99,9 @@ from krok_helper.subtitle_render.session import ExtraSubtitleSource  # noqa: E40
 
 
 def test_property_panel_uses_public_style_preview_boundary() -> None:
-    source_path = Path("krok_helper/subtitle_render/frontend/property_panel.py")
+    source_path = Path(
+        "krok_helper/subtitle_render/frontend/properties/property_panel.py"
+    )
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     imported_modules = {
         node.module
@@ -5481,7 +5483,7 @@ def test_style_preset_manager_sets_group_for_checked_items(qapp, monkeypatch):
     for index in range(dialog._preset_list.count()):
         dialog._preset_list.item(index).setCheckState(Qt.CheckState.Checked)
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.property_panel.fluent_get_editable_choice",
+        "krok_helper.subtitle_render.frontend.properties.property_panel.fluent_get_editable_choice",
         lambda *args, **kwargs: ("新分组", True),
     )
 
@@ -5581,7 +5583,7 @@ def test_property_panel_deleting_preset_keeps_same_named_project_role(qapp):
 
 def test_style_preset_manager_dialog_deletes_only_library_entry(qapp, monkeypatch):
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.property_panel.fluent_question",
+        "krok_helper.subtitle_render.frontend.properties.property_panel.fluent_question",
         lambda *args, **kwargs: True,
     )
     dialog = StylePresetManagerDialog(
@@ -5626,7 +5628,7 @@ def test_property_panel_dialog_library_changes_do_not_remove_project_roles(qapp,
             return None
 
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.property_panel.StylePresetManagerDialog",
+        "krok_helper.subtitle_render.frontend.properties.property_panel.StylePresetManagerDialog",
         FakeDialog,
     )
 
@@ -6084,7 +6086,7 @@ def test_color_control_screen_action_requests_direct_screen_pick(qapp, monkeypat
         raise AssertionError("direct screen picking must not open QColorDialog")
 
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.property_panel._select_color",
+        "krok_helper.subtitle_render.frontend.properties.property_panel._select_color",
         fail_if_dialog_opens,
     )
     panel = PropertyPanel()

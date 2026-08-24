@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from krok_helper.subtitle_render.frontend.property_role_page import (
+from krok_helper.subtitle_render.frontend.properties.property_role_page import (
     RolePropertyPageBuilder,
 )
 

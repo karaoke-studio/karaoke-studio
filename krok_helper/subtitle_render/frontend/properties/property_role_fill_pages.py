@@ -14,7 +14,7 @@ from qfluentwidgets import (
     TransparentToolButton as FluentTransparentToolButton,
 )
 
-from krok_helper.subtitle_render.frontend.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.property_layout import (
     compact_property_control,
     property_field,
 )

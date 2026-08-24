@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.frontend.property_timing_page import (
+from krok_helper.subtitle_render.frontend.properties.property_timing_page import (
     TimingPropertyPageBuilder,
 )
 

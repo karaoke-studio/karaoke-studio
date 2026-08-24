@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QToolButton, QWidget
 
-from krok_helper.subtitle_render.frontend.property_role_color_page import (
+from krok_helper.subtitle_render.frontend.properties.property_role_color_page import (
     RoleColorPropertyPageBuilder,
 )
 
