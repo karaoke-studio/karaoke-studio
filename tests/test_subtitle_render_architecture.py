@@ -667,6 +667,63 @@ def test_ruby_style_has_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_ruby_layout_has_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.ruby"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_resolve_ruby_alignment",
+        "_ruby_interval_px",
+        "_ruby_layout_draw_bounds",
+        "_ruby_layout_gap",
+        "_ruby_layout_left_offset",
+        "_ruby_layout_left_overhang",
+        "_ruby_layout_origins",
+        "_ruby_layout_units",
+        "_ruby_layout_width",
+        "_ruby_unit_layouts",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert delegated_names <= imported
+    targets = _import_targets(
+        f"{owner}.layout",
+        ROOT / "engine/ruby/layout.py",
+    )
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
+def test_ruby_engine_modules_are_grouped_in_one_domain_package() -> None:
+    ruby_root = ROOT / "engine" / "ruby"
+    assert {
+        "__init__.py",
+        "layout.py",
+        "selection.py",
+        "style.py",
+        "timing.py",
+    } <= {path.name for path in ruby_root.glob("*.py")}
+    assert not any(
+        (ROOT / "engine" / name).exists()
+        for name in (
+            "ruby_layout.py",
+            "ruby_selection.py",
+            "ruby_style.py",
+            "ruby_timing.py",
+        )
+    )
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

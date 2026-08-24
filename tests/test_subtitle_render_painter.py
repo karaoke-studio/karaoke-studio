@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
 import krok_helper.subtitle_render.engine.raster_blur as raster_blur  # noqa: E402
+import krok_helper.subtitle_render.engine.ruby.layout as ruby_layout  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
 import krok_helper.subtitle_render.engine.text_metrics as text_metrics  # noqa: E402
@@ -8938,8 +8939,8 @@ def test_n3_adjacent_ruby_boxes_only_shift_the_colliding_third_group(
     # plus its 10 px primary edge.  Keep this regression independent of the
     # fonts installed on the test machine.
     monkeypatch.setattr(
-        subtitle_painter,
-        "_ruby_unit_layouts",
+        ruby_layout,
+        "ruby_unit_layouts",
         lambda units, _metrics, _style: [
             (unit, 52.0, 0.0) for unit in units
         ],
@@ -8959,8 +8960,8 @@ def test_ruby_collision_box_does_not_shrink_the_paint_clip(qapp, monkeypatch):
         kanji="展", reading="てん", pos_start_ms=0, pos_end_ms=100
     )
     monkeypatch.setattr(
-        subtitle_painter,
-        "_ruby_unit_layouts",
+        ruby_layout,
+        "ruby_unit_layouts",
         lambda units, _metrics, _style: [
             (unit, 52.0, 0.0) for unit in units
         ],
