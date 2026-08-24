@@ -62,6 +62,25 @@ class DisplayResolutionCache:
         self._entries.clear()
 
 
+_DISPLAY_LINE_RESOLUTION_CACHE = DisplayResolutionCache(max_items=24)
+
+
+def cached_display_line_resolution(key: Hashable) -> DisplayLines | None:
+    return _DISPLAY_LINE_RESOLUTION_CACHE.get(key)
+
+
+def store_display_line_resolution(
+    key: Hashable,
+    owner: object,
+    display_lines: DisplayLines,
+) -> None:
+    _DISPLAY_LINE_RESOLUTION_CACHE.put(key, owner, display_lines)
+
+
+def clear_display_line_resolution_cache() -> None:
+    _DISPLAY_LINE_RESOLUTION_CACHE.clear()
+
+
 @dataclass(frozen=True)
 class DisplayResolutionPorts:
     """Concrete geometry and timing operations required by the resolver."""
@@ -360,6 +379,9 @@ __all__ = [
     "DisplayResolutionCache",
     "DisplayResolutionPorts",
     "apply_animation_time_guard",
+    "cached_display_line_resolution",
+    "clear_display_line_resolution_cache",
     "resolve_display_lines",
     "resolve_display_timing",
+    "store_display_line_resolution",
 ]

@@ -719,6 +719,10 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     assert "resolve_display_timing" in resolver_functions
     assert "_resolve_page_sync_and_collisions" not in inline_functions
 
+    painter_source = painter_path.read_text(encoding="utf-8-sig")
+    assert "_DISPLAY_LINE_RESOLUTION_CACHE" not in painter_source
+    assert "clear_display_line_resolution_cache" in painter_source
+
 
 def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     painter_path = ROOT / "engine/painter.py"

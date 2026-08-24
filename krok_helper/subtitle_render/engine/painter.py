@@ -205,11 +205,13 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     AnimationGuardPorts,
-    DisplayResolutionCache,
     DisplayResolutionPorts,
     apply_animation_time_guard,
+    cached_display_line_resolution,
+    clear_display_line_resolution_cache,
     resolve_display_lines,
     resolve_display_timing,
+    store_display_line_resolution,
 )
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
@@ -242,7 +244,6 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 # 一次排版会把每行的布局问上三遍，但三遍是分批扫全轨的：48 项装不下一条曲目，
 # 等第二遍回到第一行时它早被挤掉了，长曲目命中率直接归零。按整轨都能留住来定容量。
 _LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
-_DISPLAY_LINE_RESOLUTION_CACHE = DisplayResolutionCache(max_items=24)
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
 
@@ -502,7 +503,7 @@ def clear_before_layer_cache() -> None:
     _RUBY_MEASURE_CACHE.clear()
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
-    _DISPLAY_LINE_RESOLUTION_CACHE.clear()
+    clear_display_line_resolution_cache()
     clear_track_layout_plan_cache()
     clear_page_offset_cache()
 
@@ -4073,7 +4074,7 @@ def _display_lines_for_style(
         _value_signature(track),
         _value_signature(style),
     )
-    cached = _DISPLAY_LINE_RESOLUTION_CACHE.get(cache_key)
+    cached = cached_display_line_resolution(cache_key)
     if cached is not None:
         return cached
     ports = DisplayResolutionPorts(
@@ -4121,7 +4122,7 @@ def _display_lines_for_style(
         auto_fill_section_time=style.auto_fill_section_time,
         ports=ports,
     )
-    _DISPLAY_LINE_RESOLUTION_CACHE.put(cache_key, track, resolved)
+    store_display_line_resolution(cache_key, track, resolved)
     return resolved
 
 
