@@ -332,6 +332,23 @@ def test_subtitle_render_window_delegates_background_tasks() -> None:
     )
 
 
+def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.project_autosave" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    recovery_worker_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.frontend.background_tasks"
+        for alias in node.names
+    }
+    assert "_RecoverySaveWorker" not in recovery_worker_imports
+
+
 def test_subtitle_render_window_delegates_project_recovery_policy() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"

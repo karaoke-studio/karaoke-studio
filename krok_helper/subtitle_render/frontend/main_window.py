@@ -173,7 +173,6 @@ from krok_helper.subtitle_render.guide_symbols import (
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.background_tasks import (
     _MediaProbeWorker,
-    _RecoverySaveWorker,
     _RenderWorker,
 )
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
@@ -208,6 +207,10 @@ from krok_helper.subtitle_render.frontend.property_panel import (
 )
 from krok_helper.subtitle_render.frontend.project_commands import (
     ProjectCommandController,
+)
+from krok_helper.subtitle_render.frontend.project_autosave import (
+    ProjectAutoSaveRuntime,
+    RecoverySaveRequest,
 )
 from krok_helper.subtitle_render.frontend.project_recovery import (
     ProjectRecoveryController,
@@ -2111,6 +2114,24 @@ class SubtitleRenderWindow(QWidget):
     def _missing_resource_source_data(self, value: Optional[dict]) -> None:
         self._project_session.missing_resource_source_data = value
 
+    @property
+    def _auto_save_thread(self) -> Optional[QThread]:
+        """Compatibility view of the extracted auto-save runtime thread."""
+        return self._auto_save_runtime.thread
+
+    @property
+    def _auto_save_worker(self) -> Optional[QObject]:
+        """Compatibility view of the extracted auto-save runtime worker."""
+        return self._auto_save_runtime.worker
+
+    @property
+    def _auto_save_pending(self) -> bool:
+        return self._auto_save_runtime.pending
+
+    @_auto_save_pending.setter
+    def _auto_save_pending(self, value: bool) -> None:
+        self._auto_save_runtime.pending = bool(value)
+
     def __init__(
         self,
         embedded: bool = False,
@@ -2130,6 +2151,12 @@ class SubtitleRenderWindow(QWidget):
         self._recovery_policy = ProjectRecoveryPolicy(self._recovery_root())
         self._project_recovery_controller = ProjectRecoveryController(
             self._recovery_policy
+        )
+        self._auto_save_runtime = ProjectAutoSaveRuntime(self)
+        self._auto_save_runtime.saved.connect(self._on_recovery_auto_save_success)
+        self._auto_save_runtime.failed.connect(self._on_recovery_auto_save_failure)
+        self._auto_save_runtime.rerunRequested.connect(
+            self._on_recovery_auto_save_rerun_requested
         )
         self._workflow_context = workflow_context
 
@@ -2169,11 +2196,8 @@ class SubtitleRenderWindow(QWidget):
         self._auto_save_enabled = True
         self._auto_save_interval_minutes = DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
         self._project_backup_count = DEFAULT_PROJECT_BACKUP_COUNT
-        self._auto_save_thread: Optional[QThread] = None
-        self._auto_save_worker: Optional[_RecoverySaveWorker] = None
         self._handoff_probe_thread: Optional[QThread] = None
         self._handoff_probe_worker: Optional[_MediaProbeWorker] = None
-        self._auto_save_pending = False
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
@@ -2873,30 +2897,16 @@ class SubtitleRenderWindow(QWidget):
     def _start_recovery_auto_save(self) -> None:
         if not self._auto_save_enabled or not self._project_dirty or self._loading_project:
             return
-        if self._auto_save_thread is not None:
-            self._auto_save_pending = True
-            return
         payload, snapshot_id = self._recovery_payload_snapshot()
-        path = self._recovery_path()
-        generation = self._project_generation
-        revision = self._project_revision
-        worker = _RecoverySaveWorker(
-            path,
-            payload,
-            generation,
-            revision,
-            snapshot_id,
+        self._auto_save_runtime.start(
+            RecoverySaveRequest(
+                path=self._recovery_path(),
+                payload=payload,
+                generation=self._project_generation,
+                revision=self._project_revision,
+                snapshot_id=snapshot_id,
+            )
         )
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.saved.connect(self._on_recovery_auto_save_success)
-        worker.failed.connect(self._on_recovery_auto_save_failure)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._finish_recovery_auto_save)
-        self._auto_save_worker = worker
-        self._auto_save_thread = thread
-        thread.start()
 
     def _on_recovery_auto_save_success(
         self,
@@ -2932,13 +2942,9 @@ class SubtitleRenderWindow(QWidget):
             duration=5000,
         )
 
-    def _finish_recovery_auto_save(self) -> None:
-        self._auto_save_thread = None
-        self._auto_save_worker = None
-        if self._auto_save_pending:
-            self._auto_save_pending = False
-            if self._project_dirty and self._auto_save_enabled:
-                QTimer.singleShot(0, self._start_recovery_auto_save)
+    def _on_recovery_auto_save_rerun_requested(self) -> None:
+        if self._project_dirty and self._auto_save_enabled:
+            QTimer.singleShot(0, self._start_recovery_auto_save)
 
     def _stop_auto_save_runtime(self, *, wait: bool) -> None:
         if hasattr(self, "_auto_save_timer"):
@@ -2950,10 +2956,7 @@ class SubtitleRenderWindow(QWidget):
             self._wait_for_recovery_worker()
 
     def _wait_for_recovery_worker(self) -> bool:
-        thread = self._auto_save_thread
-        if thread is None or not thread.isRunning():
-            return True
-        if thread.wait(AUTO_SAVE_THREAD_WAIT_MS):
+        if self._auto_save_runtime.wait(AUTO_SAVE_THREAD_WAIT_MS):
             return True
         logging.getLogger(__name__).warning("等待字幕项目自动保存线程退出超时")
         return False
