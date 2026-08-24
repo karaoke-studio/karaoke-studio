@@ -138,6 +138,9 @@ from krok_helper.subtitle_render.frontend.property_background_page import (
     BACKGROUND_KIND_PAGES,
     BackgroundPropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_effects_page import (
+    EffectsPropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3590,6 +3593,10 @@ class PropertyPanel(QWidget):
             color_button_factory=ColorButton,
             kind_pages=_BACKGROUND_KIND_PAGES,
         )
+        self._effects_page_builder = EffectsPropertyPageBuilder(
+            self,
+            spin_factory=_spin,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -5718,93 +5725,7 @@ class PropertyPanel(QWidget):
             box.setVisible(not is_volume)
 
     def _make_animation_section(self) -> QFrame:
-        section, layout = _section("入退场动画")
-
-        self._animation_grid = _ResponsiveFieldGrid(
-            section, min_column_width=260, max_columns=2
-        )
-
-        self._entry_anim_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._entry_anim_combo)
-        for label, value in [
-            ("无", "none"),
-            ("淡入", "fade"),
-            ("滑入", "slide_in"),
-            ("上移", "rise"),
-            ("逐文字渐显", "char_fade"),
-            ("文字垂下", "char_drip"),
-            ("旋转翻转", "spin_flip"),
-            ("utopia", "utopia"),
-        ]:
-            self._entry_anim_combo.addItem(label, value)
-        self._entry_anim_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                entry_anim=self._entry_anim_combo.currentData()
-            )
-        )
-        self._entry_lead_spin = _spin(0, 3000, suffix=" ms")
-        self._entry_lead_spin.valueChanged.connect(
-            lambda value: self._update_style(entry_lead_ms=value)
-        )
-        self._entry_animation_row = QWidget(section)
-        entry_row_layout = QHBoxLayout(self._entry_animation_row)
-        entry_row_layout.setContentsMargins(0, 0, 0, 0)
-        entry_row_layout.setSpacing(6)
-        entry_row_layout.addWidget(self._entry_anim_combo, 2)
-        self._entry_lead_spin.setToolTip("入场动画时长")
-        entry_row_layout.addWidget(self._entry_lead_spin, 1)
-        self._animation_grid.add_field("入场动画 / 时长", self._entry_animation_row)
-
-        self._exit_anim_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._exit_anim_combo)
-        for label, value in [
-            ("无", "none"),
-            ("淡出", "fade"),
-            ("滑出", "slide_out"),
-            ("上移", "rise"),
-            ("逐文字渐隐", "char_fade"),
-            ("文字垂出", "char_drip"),
-            ("旋转翻转", "spin_flip"),
-            ("utopia", "utopia"),
-        ]:
-            self._exit_anim_combo.addItem(label, value)
-        self._exit_anim_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                exit_anim=self._exit_anim_combo.currentData()
-            )
-        )
-        self._exit_fade_spin = _spin(0, 3000, suffix=" ms")
-        self._exit_fade_spin.valueChanged.connect(
-            lambda value: self._update_style(exit_fade_ms=value)
-        )
-        self._exit_animation_row = QWidget(section)
-        exit_row_layout = QHBoxLayout(self._exit_animation_row)
-        exit_row_layout.setContentsMargins(0, 0, 0, 0)
-        exit_row_layout.setSpacing(6)
-        exit_row_layout.addWidget(self._exit_anim_combo, 2)
-        self._exit_fade_spin.setToolTip("退场动画时长")
-        exit_row_layout.addWidget(self._exit_fade_spin, 1)
-        self._animation_grid.add_field("退场动画 / 时长", self._exit_animation_row)
-
-        self._karaoke_anim_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._karaoke_anim_combo)
-        for label, value in [
-            ("无", "none"),
-            ("utopia", "utopia"),
-        ]:
-            self._karaoke_anim_combo.addItem(label, value)
-        self._karaoke_anim_combo.setToolTip(
-            "控制歌词正在着色时的逐字动画；旧项目的 Utopia 入退场会自动兼容"
-        )
-        self._karaoke_anim_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                karaoke_anim=self._karaoke_anim_combo.currentData()
-            )
-        )
-        self._animation_grid.add_field("唱字特效", self._karaoke_anim_combo)
-
-        layout.addWidget(self._animation_grid)
-        return section
+        return self._effects_page_builder.make_animation_section()
 
     def _make_viewport_section(self) -> QFrame:
         section, layout = _section("视图")
