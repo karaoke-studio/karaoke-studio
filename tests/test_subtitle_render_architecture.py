@@ -562,6 +562,7 @@ def test_signal_semantics_have_one_engine_owner() -> None:
     delegated_names = {
         "_display_style_for_signal_window",
         "_lit_signal_active",
+        "_resolve_signal_display_lines",
         "_signal_head_context",
         "_signal_lead_in_ms",
     }
@@ -581,6 +582,19 @@ def test_signal_semantics_have_one_engine_owner() -> None:
     assert imported == delegated_names
     targets = _import_targets(owner, ROOT / "engine/layout/signal_semantics.py")
     assert f"{PACKAGE}.engine.painter" not in targets
+
+    adapter = next(
+        node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_signal_display_lines_for_style"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(adapter)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_resolve_signal_display_lines" in calls
 
 
 def test_display_schedule_projection_has_no_painter_dependency() -> None:

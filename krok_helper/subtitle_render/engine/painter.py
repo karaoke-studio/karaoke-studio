@@ -114,6 +114,7 @@ from krok_helper.subtitle_render.engine.layout.line_geometry import (
 from krok_helper.subtitle_render.engine.layout.signal_semantics import (
     display_style_for_signal_window as _display_style_for_signal_window,
     lit_signal_active as _lit_signal_active,
+    resolve_signal_display_lines as _resolve_signal_display_lines,
     signal_head_context as _signal_head_context,
     signal_lead_in_ms as _signal_lead_in_ms,
 )
@@ -4446,29 +4447,14 @@ def _signal_display_lines_for_style(
     logical_w: int | None = None,
     logical_h: int | None = None,
 ) -> list[DisplayLine]:
-    if not style.lit_enabled or style.vertical:
-        return []
-    signal_lead = _signal_lead_in_ms(style)
-    if signal_lead <= 0:
-        return []
-    signal_heads = _signal_head_context(track, style)
-    if signal_heads is None:
-        return []
-    # 指示灯只挂每 S 第一 P 第一行：非段首行不进入信号窗口（无灯、无提前显示）。
-    # `_visible_lines_for_style` 内部（dual 与单行两条路径）已经按段首行下发
-    # lead 扩展，这里只需把非段首行从候选中剔除。
-    index_of = {id(line): index for index, line in enumerate(track.lines)}
-    return [
-        item
-        for item in _visible_lines_for_style(
-            track,
-            t_ms,
-            style,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-        if index_of.get(id(item.line)) in signal_heads
-    ]
+    return _resolve_signal_display_lines(
+        track,
+        t_ms,
+        style,
+        _visible_lines_for_style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
 
 
 def _visual_text_padding(style: Style) -> int:
