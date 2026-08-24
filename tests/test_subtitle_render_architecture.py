@@ -120,6 +120,7 @@ def test_subtitle_render_engine_does_not_depend_on_frontend() -> None:
 def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
     forbidden = f"{PACKAGE}.frontend"
     paths = (
+        ROOT / "background.py",
         ROOT / "contracts.py",
         ROOT / "recent_projects.py",
         ROOT / "screen_settings.py",

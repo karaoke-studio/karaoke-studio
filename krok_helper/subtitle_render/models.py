@@ -21,10 +21,15 @@ from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from difflib import SequenceMatcher
 import math
-from pathlib import Path
-import re
 from typing import Literal, Optional
 from uuid import uuid4
+
+from krok_helper.subtitle_render.background import (
+    Background,
+    BackgroundSource,
+    background_sequence_frame_path,
+    infer_image_sequence_pattern,
+)
 
 LineBreakKind = Literal["none", "page", "paragraph"]
 EntryAnimation = Literal[
@@ -1483,60 +1488,6 @@ def effective_karaoke_animation(style: Style) -> Literal["none", "utopia"]:
         if "utopia" in {timing.entry_anim, timing.exit_anim}
         else "none"
     )
-
-
-@dataclass
-class BackgroundSource:
-    """字幕画面的正式背景源。
-
-    ``image_sequence`` 的 ``path`` 可以是首帧/编号模式；``source_fps`` 决定取帧
-    速度。视频偏移保留为毫秒，供预览和导出统一应用。
-
-    ``image_fit`` 仅对图片 / 图片序列背景生效：``"cover"`` 等比铺满并裁掉
-    超出画面（旧工程观感），``"contain"`` 等比完整放入、不足处补黑边。
-    视频背景固定 ``contain``（等比缩放 + 黑边），预览与导出严格一致。
-    """
-
-    kind: Literal["video", "image", "image_sequence", "solid"] = "solid"
-    path: Optional[str] = None
-    color: str = "#000000"
-    source_fps: Optional[int] = None
-    sequence_start_number: int = 0
-    video_offset_ms: int = 0
-    image_fit: Literal["cover", "contain"] = "cover"
-
-
-def background_sequence_frame_path(source: BackgroundSource, t_ms: int) -> Optional[Path]:
-    """按 ffmpeg ``%0Nd``/``%d`` 编号模式解析图片序列当前帧。"""
-    if source.kind != "image_sequence" or not source.path:
-        return None
-    index = (
-        max(int(t_ms), 0) * max(int(source.source_fps or 60), 1) // 1000
-        + max(int(source.sequence_start_number), 0)
-    )
-    raw = str(source.path)
-    match = re.search(r"%0?(\d*)d", raw)
-    if match:
-        width = int(match.group(1) or 0)
-        number = f"{index:0{width}d}" if width else str(index)
-        return Path(raw[: match.start()] + number + raw[match.end() :])
-    return Path(raw)
-
-
-def infer_image_sequence_pattern(path: Path) -> tuple[Path, int]:
-    """把 ``frame_0001.png`` 转成 ffmpeg 模式并保留起始编号。"""
-    match = re.search(r"(\d+)$", path.stem)
-    if not match:
-        return path, 0
-    start = int(match.group(1))
-    pattern = path.with_name(
-        path.stem[: match.start()] + f"%0{len(match.group(1))}d" + path.suffix
-    )
-    return pattern, start
-
-
-# 旧代码曾公开 ``Background`` 名称；保留别名以兼容项目外调用。
-Background = BackgroundSource
 
 
 @dataclass
