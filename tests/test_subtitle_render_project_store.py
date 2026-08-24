@@ -23,8 +23,8 @@ from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.workflow import import_controller as import_controller_module  # noqa: E402
 from krok_helper.subtitle_render.frontend.editor import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
-from krok_helper.subtitle_render import project_controller as project_controller_module  # noqa: E402
-from krok_helper.subtitle_render import project_store as project_store_module  # noqa: E402
+from krok_helper.subtitle_render.project import controller as project_controller_module  # noqa: E402
+from krok_helper.subtitle_render.project import store as project_store_module  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
     LineAnimationOverride,
@@ -49,7 +49,7 @@ from krok_helper.subtitle_render.preferences import (  # noqa: E402
     merge_common_style_preferences,
     update_app_output_preferences,
 )
-from krok_helper.subtitle_render.project_store import (  # noqa: E402
+from krok_helper.subtitle_render.project.store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
     backup_project_file,
     background_payload,
@@ -61,7 +61,7 @@ from krok_helper.subtitle_render.project_store import (  # noqa: E402
     save_render_project,
     scan_recovery_projects,
 )
-from krok_helper.subtitle_render.session import (  # noqa: E402
+from krok_helper.subtitle_render.project.session import (  # noqa: E402
     ExtraSubtitleSource,
     SubtitleProjectDocument,
     SubtitleProjectSession,

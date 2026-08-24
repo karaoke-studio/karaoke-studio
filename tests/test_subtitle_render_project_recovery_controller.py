@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from krok_helper.subtitle_render.frontend.project.project_recovery import (
     ProjectRecoveryController,
 )
-from krok_helper.subtitle_render.project_recovery import RecoveryScan
-from krok_helper.subtitle_render.project_store import RecoveryCandidate
+from krok_helper.subtitle_render.project.recovery import RecoveryScan
+from krok_helper.subtitle_render.project.store import RecoveryCandidate
 
 
 def _candidate(path: Path, *, source: Path | None = None) -> RecoveryCandidate:

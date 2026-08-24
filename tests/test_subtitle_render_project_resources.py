@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.project_resources import (
+from krok_helper.subtitle_render.project.resources import (
     find_missing_project_resources,
 )
 

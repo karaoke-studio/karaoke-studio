@@ -49,7 +49,7 @@ from krok_helper.subtitle_render.models import (
     line_visible_chars,
     timing_line_start_ms,
 )
-from krok_helper.subtitle_render.project_store import project_payload
+from krok_helper.subtitle_render.project.store import project_payload
 
 
 def _symbol(tmp_path, *, duration_ms: int = 1000, count: int = 1) -> GuideSymbol:

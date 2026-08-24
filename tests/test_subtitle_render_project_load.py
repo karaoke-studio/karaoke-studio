@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.project_load import ProjectLoadPlan
+from krok_helper.subtitle_render.project.load import ProjectLoadPlan
 
 
 def test_project_load_plan_resolves_legacy_style_reference_height() -> None:

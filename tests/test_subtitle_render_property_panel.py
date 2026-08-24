@@ -95,7 +95,7 @@ from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
     RoleSchemeController,
     TitleOverlayController,
 )
-from krok_helper.subtitle_render.session import ExtraSubtitleSource  # noqa: E402
+from krok_helper.subtitle_render.project.session import ExtraSubtitleSource  # noqa: E402
 
 
 def test_property_panel_uses_public_style_preview_boundary() -> None:

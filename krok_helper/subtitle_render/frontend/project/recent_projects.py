@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from qfluentwidgets import Action, FluentIcon as FIF, RoundMenu
 
-from krok_helper.subtitle_render.recent_projects import RecentProjectPolicy
+from krok_helper.subtitle_render.project.recent import RecentProjectPolicy
 from krok_helper.subtitle_render.settings_store import SubtitleRenderSettingsStore
 
 

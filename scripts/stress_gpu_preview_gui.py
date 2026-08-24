@@ -72,7 +72,7 @@ def main() -> int:
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
     from krok_helper.subtitle_render.models import style_from_dict
     from krok_helper.subtitle_render.n3.project_import import load_n3proj
-    from krok_helper.subtitle_render.project_store import load_render_project
+    from krok_helper.subtitle_render.project.store import load_render_project
     from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
     project = args.project.resolve()

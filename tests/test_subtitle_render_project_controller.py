@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from krok_helper.subtitle_render import project_controller as controller_module
-from krok_helper.subtitle_render.project_controller import (
+from krok_helper.subtitle_render.project import controller as controller_module
+from krok_helper.subtitle_render.project.controller import (
     SubtitleProjectController,
 )
-from krok_helper.subtitle_render.project_store import (
+from krok_helper.subtitle_render.project.store import (
     ProjectFileRevision,
     load_render_project,
     save_render_project,

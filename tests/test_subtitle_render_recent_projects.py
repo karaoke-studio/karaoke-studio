@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.recent_projects import RecentProjectPolicy
+from krok_helper.subtitle_render.project.recent import RecentProjectPolicy
 
 
 def test_recent_project_policy_prunes_invalid_duplicate_and_excess_paths(

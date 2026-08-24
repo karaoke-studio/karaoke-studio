@@ -14,7 +14,7 @@ from krok_helper.ffmpeg import probe_media, terminate_process
 from krok_helper.models import MediaInfo
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.engine.renderer import render_subtitle_video
-from krok_helper.subtitle_render.project_store import save_recovery_project
+from krok_helper.subtitle_render.project.store import save_recovery_project
 
 
 class _RecoverySaveWorker(QObject):

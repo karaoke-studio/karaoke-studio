@@ -15,7 +15,7 @@ from krok_helper.subtitle_render.frontend.project.project_autosave import (  # n
     ProjectAutoSaveRuntime,
     RecoverySaveRequest,
 )
-from krok_helper.subtitle_render.project_store import load_render_project  # noqa: E402
+from krok_helper.subtitle_render.project.store import load_render_project  # noqa: E402
 
 
 @pytest.fixture(scope="module")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.session import SubtitleProjectSession
+from krok_helper.subtitle_render.project.session import SubtitleProjectSession
 
 
 def test_project_session_remembers_and_resolves_missing_resources(

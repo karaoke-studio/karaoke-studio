@@ -131,13 +131,13 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "engine" / "ruby" / "timing.py",
         ROOT / "paint.py",
         ROOT / "paint_codec.py",
-        ROOT / "project_controller.py",
-        ROOT / "project_load.py",
-        ROOT / "project_recovery.py",
-        ROOT / "project_resources.py",
-        ROOT / "recent_projects.py",
+        ROOT / "project" / "controller.py",
+        ROOT / "project" / "load.py",
+        ROOT / "project" / "recovery.py",
+        ROOT / "project" / "resources.py",
+        ROOT / "project" / "recent.py",
         ROOT / "screen_settings.py",
-        ROOT / "session.py",
+        ROOT / "project" / "session.py",
         ROOT / "settings_store.py",
         ROOT / "source_loader.py",
         ROOT / "timecode.py",
@@ -341,6 +341,34 @@ def test_n3_compatibility_modules_are_grouped_behind_one_package_boundary() -> N
             "n3_font_scheme.py",
             "n3_template_import.py",
             "n3proj_import.py",
+        }
+    )
+
+
+def test_project_modules_are_grouped_behind_one_package_boundary() -> None:
+    module_names = {
+        "controller.py",
+        "load.py",
+        "recent.py",
+        "recovery.py",
+        "resources.py",
+        "session.py",
+        "store.py",
+    }
+    project_root = ROOT / "project"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in project_root.glob("*.py")
+    }
+    assert not any(
+        (ROOT / name).exists()
+        for name in {
+            "project_controller.py",
+            "project_load.py",
+            "project_recovery.py",
+            "project_resources.py",
+            "project_store.py",
+            "recent_projects.py",
+            "session.py",
         }
     )
 
@@ -1052,14 +1080,14 @@ def test_subtitle_render_window_delegates_project_recovery_policy() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.project_recovery" in targets
+    assert f"{PACKAGE}.project.recovery" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     forbidden = {"invalidate_recovery_project", "scan_recovery_projects"}
     direct_policy_imports = {
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == f"{PACKAGE}.project_store"
+        and node.module == f"{PACKAGE}.project.store"
         for alias in node.names
     } & forbidden
     assert direct_policy_imports == set()
@@ -1193,7 +1221,7 @@ def test_subtitle_render_window_delegates_project_resource_policy() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.project_resources" in targets
+    assert f"{PACKAGE}.project.resources" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
@@ -1219,7 +1247,7 @@ def test_subtitle_render_window_delegates_project_file_transactions() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.project_controller" in targets
+    assert f"{PACKAGE}.project.controller" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     forbidden = {
         "backup_project_file",
@@ -1230,7 +1258,7 @@ def test_subtitle_render_window_delegates_project_file_transactions() -> None:
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == f"{PACKAGE}.project_store"
+        and node.module == f"{PACKAGE}.project.store"
         for alias in node.names
     } & forbidden
     assert direct_transaction_imports == set()
@@ -1241,7 +1269,7 @@ def test_subtitle_render_window_consumes_typed_project_load_plan() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.project_load" in targets
+    assert f"{PACKAGE}.project.load" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node

@@ -73,7 +73,7 @@ def test_subtitle_render_window_satisfies_the_host_page_contract() -> None:
 
 def test_subtitle_project_state_is_the_stable_public_contract() -> None:
     from krok_helper.subtitle_render import SubtitleProjectState as PublicState
-    from krok_helper.subtitle_render.session import SubtitleProjectState as SessionState
+    from krok_helper.subtitle_render.project.session import SubtitleProjectState as SessionState
 
     assert PublicState is SubtitleProjectState
     assert SessionState is SubtitleProjectState

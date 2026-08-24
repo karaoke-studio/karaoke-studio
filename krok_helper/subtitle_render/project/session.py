@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.models import (
     Style,
     style_to_dict,
 )
-from krok_helper.subtitle_render.project_store import (
+from krok_helper.subtitle_render.project.store import (
     background_payload,
     project_payload,
     split_project_paths,

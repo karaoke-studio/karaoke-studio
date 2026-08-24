@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.background import (
     BackgroundSource,
     background_sequence_frame_path,
 )
-from krok_helper.subtitle_render.project_store import split_project_paths
+from krok_helper.subtitle_render.project.store import split_project_paths
 
 
 def find_missing_project_resources(data: dict) -> list[tuple[str, Path]]:

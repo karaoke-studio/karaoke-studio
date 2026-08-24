@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from krok_helper.subtitle_render.models import Style, TitleOverlay, style_from_dict
-from krok_helper.subtitle_render.project_store import split_project_paths
+from krok_helper.subtitle_render.project.store import split_project_paths
 from krok_helper.subtitle_render.screen_settings import (
     ScreenSettings,
     screen_settings_from_dict,

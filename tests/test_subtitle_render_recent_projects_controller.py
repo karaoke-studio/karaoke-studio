@@ -14,7 +14,7 @@ from qfluentwidgets import RoundMenu  # noqa: E402
 from krok_helper.subtitle_render.frontend.project.recent_projects import (  # noqa: E402
     RecentProjectsController,
 )
-from krok_helper.subtitle_render.recent_projects import RecentProjectPolicy  # noqa: E402
+from krok_helper.subtitle_render.project.recent import RecentProjectPolicy  # noqa: E402
 
 
 class _MemoryStore:

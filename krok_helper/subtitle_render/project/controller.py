@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from krok_helper.subtitle_render.project_resources import (
+from krok_helper.subtitle_render.project.resources import (
     find_missing_project_resources,
 )
-from krok_helper.subtitle_render.project_store import (
+from krok_helper.subtitle_render.project.store import (
     ProjectFileRevision,
     backup_project_file,
     inspect_project_file,

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
-from krok_helper.subtitle_render.project_recovery import RecoveryScan
-from krok_helper.subtitle_render.project_store import RecoveryCandidate
+from krok_helper.subtitle_render.project.recovery import RecoveryScan
+from krok_helper.subtitle_render.project.store import RecoveryCandidate
 
 
 class RecoveryScanner(Protocol):

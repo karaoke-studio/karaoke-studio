@@ -67,7 +67,7 @@ def test_an_n3proj_really_is_a_zip_and_not_utf8_text(tmp_path: Path) -> None:
 
     真的 ``.n3proj`` 以 ``PK\x03\x04`` 开头（zip），按 UTF-8 文本读必然炸。
     """
-    from krok_helper.subtitle_render.project_store import load_render_project
+    from krok_helper.subtitle_render.project.store import load_render_project
 
     fake = tmp_path / "曲名.n3proj"
     fake.write_bytes(b"PK\x03\x04\x14\x00\x00\x00\x08\x00\xd7\x8e\xeb\x5c")

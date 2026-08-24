@@ -38,7 +38,7 @@ from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg 
 from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView  # noqa: E402
 from krok_helper.subtitle_render.frontend.preview.preview_view import TransportBar  # noqa: E402
 from krok_helper.subtitle_render.models import style_from_dict  # noqa: E402
-from krok_helper.subtitle_render.project_store import load_render_project  # noqa: E402
+from krok_helper.subtitle_render.project.store import load_render_project  # noqa: E402
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc  # noqa: E402
 
 DEFAULT_PROJECT = Path(r"D:\カラオケ\songs\A stain\A stain.yurika")

@@ -301,15 +301,15 @@ from krok_helper.subtitle_render.preferences import (
     merge_common_style_preferences,
     update_app_output_preferences,
 )
-from krok_helper.subtitle_render.project_controller import (
+from krok_helper.subtitle_render.project.controller import (
     SubtitleProjectController,
 )
-from krok_helper.subtitle_render.project_load import ProjectLoadPlan
-from krok_helper.subtitle_render.project_recovery import ProjectRecoveryPolicy
-from krok_helper.subtitle_render.project_resources import (
+from krok_helper.subtitle_render.project.load import ProjectLoadPlan
+from krok_helper.subtitle_render.project.recovery import ProjectRecoveryPolicy
+from krok_helper.subtitle_render.project.resources import (
     find_missing_project_resources,
 )
-from krok_helper.subtitle_render.recent_projects import RecentProjectPolicy
+from krok_helper.subtitle_render.project.recent import RecentProjectPolicy
 from krok_helper.subtitle_render.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
     DEFAULT_CHORUS_END_CHARS,
@@ -320,7 +320,7 @@ from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import Auto
 from krok_helper.subtitle_render.n3.project_import import (
     N3_PROJECT_FILE_SUFFIX,
 )
-from krok_helper.subtitle_render.project_store import (
+from krok_helper.subtitle_render.project.store import (
     ProjectFileRevision,
     RecoveryCandidate,
     load_render_project,
@@ -333,7 +333,7 @@ from krok_helper.subtitle_render.source_reload import (
     TrackReloadMerge,
     merge_reloaded_track,
 )
-from krok_helper.subtitle_render.session import (
+from krok_helper.subtitle_render.project.session import (
     ExtraSubtitleSource,
     SubtitleProjectDocument,
     SubtitleProjectSession,

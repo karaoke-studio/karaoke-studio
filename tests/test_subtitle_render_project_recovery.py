@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from krok_helper.subtitle_render.project_recovery import ProjectRecoveryPolicy
-from krok_helper.subtitle_render.project_store import (
+from krok_helper.subtitle_render.project.recovery import ProjectRecoveryPolicy
+from krok_helper.subtitle_render.project.store import (
     load_render_project,
     save_recovery_project,
     save_render_project,

@@ -9,7 +9,7 @@ from pathlib import Path
 import time
 from typing import Callable, Optional
 
-from krok_helper.subtitle_render.project_store import (
+from krok_helper.subtitle_render.project.store import (
     RecoveryCandidate,
     invalidate_recovery_project,
     load_render_project,

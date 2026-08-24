@@ -167,7 +167,7 @@ def _summarize_samples(
 
 def _load_project(project_path: Path):
     from krok_helper.subtitle_render.models import style_from_dict
-    from krok_helper.subtitle_render.project_store import load_render_project
+    from krok_helper.subtitle_render.project.store import load_render_project
     from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
     data = load_render_project(project_path)
