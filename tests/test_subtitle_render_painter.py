@@ -10034,7 +10034,7 @@ def test_animation_guard_keeps_exit_floor_and_delays_full_coverage_entry(qapp):
     assert animated_windows[0][1] >= lines[0].end_ms + 100
     # The display windows may overlap while one or both lines are animating.
     assert animated_windows[2][0] < animated_windows[0][1]
-    display = subtitle_painter._display_lines_for_style(
+    display = subtitle_painter.display_lines_for_style(
         track, animated, logical_w=1920, logical_h=1080
     )
     stable = [
@@ -10134,7 +10134,7 @@ def test_animation_only_cross_page_overlap_does_not_move_incoming_page(qapp):
     # 页面级显示窗口虽然大幅交叠，但碰撞必须逐行判断：P1T1/P2T1 与
     # P1T2/P2T2 的稳定文字窗口分别不相交，因此不能把整页抬高。
     assert windows[1][1] > windows[2][0]
-    display = subtitle_painter._display_lines_for_style(
+    display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=1280, logical_h=1080
     )
     stable = [
@@ -10276,7 +10276,7 @@ def test_force_bottom_requires_measured_spatial_conflict(qapp):
         ],
     )
 
-    display = subtitle_painter._display_lines_for_style(
+    display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=1280, logical_h=720
     )
     measured = subtitle_painter._measure_collision_bands(
@@ -10317,7 +10317,7 @@ def test_force_bottom_lane_lift_is_reported_by_diagnostics(qapp):
         line_alignments=["right", "right"],
     )
 
-    display = subtitle_painter._display_lines_for_style(
+    display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=1280, logical_h=720
     )
     diagnostics = layout_timing_diagnostics_for_style(
@@ -10705,7 +10705,7 @@ def test_all_automatic_timing_options_preserve_stable_lane_gap(qapp):
         line_lane_gap_ms=300,
     )
 
-    display = subtitle_painter._display_lines_for_style(
+    display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=1_280, logical_h=720
     )
     stable = [
@@ -11162,7 +11162,7 @@ def test_manual_cross_lane_extension_does_not_raise_incoming_page(
         exit_fade_ms=250,
     )
 
-    display = subtitle_painter._display_lines_for_style(
+    display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=3_840, logical_h=2_160
     )
     measured = subtitle_painter._measure_collision_bands(

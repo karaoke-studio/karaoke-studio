@@ -22,6 +22,15 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
 from krok_helper.subtitle_render.engine.layout.line_style import (
     auto_exit_reserve_ms,
     entry_animation_ms,
+    style_for_line,
+)
+from krok_helper.subtitle_render.engine.layout.line_pagination import (
+    line_center_override,
+)
+from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+    display_style_for_signal_window,
+    signal_head_context,
+    signal_lead_in_ms,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.models import Style
@@ -45,7 +54,7 @@ def check_layout_margins(
         width: int,
     ) -> LayoutMarginBox:
         line = display_line.line
-        line_style = painter_impl._style_for_line(source_style, line)
+        line_style = style_for_line(source_style, line)
         total_w = painter_impl._line_total_width(
             line,
             line_style,
@@ -59,7 +68,7 @@ def check_layout_margins(
             line,
             line_style,
             lane,
-            center_override=painter_impl._line_center_override(
+            center_override=line_center_override(
                 source_track,
                 line,
                 line_style,
@@ -74,7 +83,7 @@ def check_layout_margins(
 
     ports = LayoutMarginPorts(
         resolve_display_lines=lambda source_track, source_style, width: (
-            painter_impl._display_lines_for_style(
+            painter_impl.display_lines_for_style(
                 source_track,
                 source_style,
                 logical_w=width,
@@ -97,7 +106,7 @@ def layout_timing_diagnostics_for_style(
         return []
     # CPU and GPU both consume the layout plan built from this effective
     # signal-window style. Diagnostics must inspect the same display window.
-    style = painter_impl._display_style_for_signal_window(style)
+    style = display_style_for_signal_window(style)
     collision_window_label = (
         "稳定主文字行盒"
         if style.allow_entry_exit_animation_overlap
@@ -111,10 +120,10 @@ def layout_timing_diagnostics_for_style(
         "sync_ending": False,
         "auto_fill_section_time": False,
     }
-    signal_heads = painter_impl._signal_head_context(track, style)
+    signal_heads = signal_head_context(track, style)
     if signal_heads is not None:
         base_kwargs["signal_head_indexes"] = signal_heads
-        base_kwargs["signal_lead_ms"] = painter_impl._signal_lead_in_ms(style)
+        base_kwargs["signal_lead_ms"] = signal_lead_in_ms(style)
     ideal = painter_impl.compute_display_lines(
         track,
         **base_kwargs,
@@ -143,7 +152,7 @@ def layout_timing_diagnostics_for_style(
         enforce_inter_page_gap=not style.allow_inter_page_line_overlap,
         adjustments=adjustments,
     )
-    final = painter_impl._display_lines_for_style(
+    final = painter_impl.display_lines_for_style(
         track,
         style,
         logical_w=logical_w,

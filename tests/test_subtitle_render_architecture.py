@@ -699,7 +699,7 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     method = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_display_lines_for_style"
+        if isinstance(node, ast.FunctionDef) and node.name == "display_lines_for_style"
     )
     calls = {
         node.func.id
@@ -727,6 +727,7 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
         if isinstance(node, ast.FunctionDef)
     }
     assert "_apply_animation_time_guard" not in inline_functions
+    assert "_display_lines_for_style" not in inline_functions
 
     resolver_path = ROOT / "engine/layout/display_resolver.py"
     resolver_tree = ast.parse(resolver_path.read_text(encoding="utf-8-sig"))
@@ -818,13 +819,21 @@ def test_painter_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
     } <= calls
     private_painter_calls = {
         node.func.attr
-        for node in ast.walk(method)
+        for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "painter_impl"
     }
     assert "_apply_animation_time_guard" not in private_painter_calls
+    assert {
+        "_display_lines_for_style",
+        "_display_style_for_signal_window",
+        "_line_center_override",
+        "_signal_head_context",
+        "_signal_lead_in_ms",
+        "_style_for_line",
+    }.isdisjoint(private_painter_calls)
 
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))

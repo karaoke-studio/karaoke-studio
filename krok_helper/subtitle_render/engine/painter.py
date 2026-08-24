@@ -1919,7 +1919,7 @@ def resolved_page_offset_windows_for_style(
         track,
         style,
         PageOffsetResolvers(
-            display_lines=_display_lines_for_style,
+            display_lines=display_lines_for_style,
             measure_lines=_measure_page_offset_lines,
         ),
     )
@@ -4001,7 +4001,7 @@ def animation_guard_ports_for_style(
 
 
 
-def _display_lines_for_style(
+def display_lines_for_style(
     track: TimingTrack,
     style: Style,
     *,
@@ -4082,7 +4082,7 @@ def _visible_lines_for_style(
         track,
         t_ms,
         style,
-        DisplayScheduleResolvers(display_lines=_display_lines_for_style),
+        DisplayScheduleResolvers(display_lines=display_lines_for_style),
         logical_w=logical_w,
         logical_h=logical_h,
     )
@@ -4103,7 +4103,7 @@ def display_windows_for_style(
     return resolve_display_windows(
         track,
         style,
-        DisplayScheduleResolvers(display_lines=_display_lines_for_style),
+        DisplayScheduleResolvers(display_lines=display_lines_for_style),
         logical_w=logical_w,
         logical_h=logical_h,
     )
@@ -4124,7 +4124,7 @@ def display_schedule_for_style(
     return resolve_display_schedule(
         track,
         style,
-        DisplayScheduleResolvers(display_lines=_display_lines_for_style),
+        DisplayScheduleResolvers(display_lines=display_lines_for_style),
         logical_w=logical_w,
         logical_h=logical_h,
     )
@@ -4142,7 +4142,7 @@ def build_track_layout_plan(
         track,
         style,
         LayoutPlanResolvers(
-            display_lines=_display_lines_for_style,
+            display_lines=display_lines_for_style,
             page_offset_windows=resolved_page_offset_windows_for_style,
         ),
         logical_w=logical_w,
