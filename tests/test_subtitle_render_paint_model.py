@@ -5,6 +5,10 @@ from krok_helper.subtitle_render.paint import (
     KaraokeColorState,
     PaintFill,
 )
+from krok_helper.subtitle_render.paint_codec import (
+    paint_fill_from_dict,
+    paint_fill_to_dict,
+)
 
 
 def test_paint_model_preserves_nicokara_defaults() -> None:
@@ -31,3 +35,24 @@ def test_models_keeps_paint_compatibility_exports() -> None:
     assert models.PaintFill is PaintFill
     assert models.KaraokeColorState is KaraokeColorState
     assert models.KaraokeColors is KaraokeColors
+    assert models.paint_fill_to_dict is paint_fill_to_dict
+    assert models.paint_fill_from_dict is paint_fill_from_dict
+
+
+def test_paint_codec_round_trips_fractional_stops_and_image_scale() -> None:
+    fill = paint_fill_from_dict(
+        {
+            "mode": "gradient_vertical",
+            "color": "#123456",
+            "gradient_stops": [[12.5, "#111111"], [80, "#EEEEEE"]],
+            "image_scale_pct": 125,
+        }
+    )
+
+    assert fill.gradient_stops == [
+        (0, "#123456"),
+        (12.5, "#111111"),
+        (80, "#EEEEEE"),
+        (100, "#123456"),
+    ]
+    assert paint_fill_to_dict(fill)["image_scale_pct"] == 125
