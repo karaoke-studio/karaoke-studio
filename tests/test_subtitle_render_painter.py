@@ -9172,8 +9172,8 @@ def test_n3_negative_spacing_ruby_boxes_follow_non_backtracking_advance(
         ruby_interval_px=0,
     )
     monkeypatch.setattr(
-        subtitle_painter,
-        "_ruby_layout_draw_bounds",
+        ruby_layout,
+        "ruby_layout_draw_bounds",
         lambda _units, _metrics, left, width, **_kwargs: (left, left + width),
     )
 

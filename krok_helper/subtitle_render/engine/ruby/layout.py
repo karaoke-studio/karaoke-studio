@@ -2,23 +2,36 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 from PyQt6.QtGui import QFont, QFontMetrics
 
+from krok_helper.subtitle_render.engine.layout_context import _LAYOUT_PASS
+from krok_helper.subtitle_render.engine.ruby.selection import (
+    effective_ruby_for_target,
+    ruby_target_indices,
+)
 from krok_helper.subtitle_render.engine.ruby.style import (
     build_ruby_font,
+    build_ruby_font_for_text,
     ruby_font_size,
+    ruby_script_stroke_style,
     ruby_stroke2_width,
     ruby_stroke_width,
+    ruby_style_for_target_indices,
 )
 from krok_helper.subtitle_render.engine.ruby.timing import _ruby_utopia_visual_units
 from krok_helper.subtitle_render.engine.text_metrics import (
     char_layout_width,
     char_path_left_offset,
+    letter_spacing,
     truncate_div,
 )
+from krok_helper.subtitle_render.engine.text_layout import char_left_positions
+from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.timing import RubyAnnotation, TimingLine
 
 
 _RUBY_MEASURE_CACHE: dict[tuple, tuple[QFont, Style]] = {}
@@ -329,9 +342,155 @@ def ruby_unit_layouts(
     return result
 
 
+def ruby_char_gaps(
+    line: TimingLine,
+    char_widths: list[int],
+    rubies: list[RubyAnnotation],
+    style: Style,
+    intervals: list[tuple[int, int]] | None = None,
+) -> tuple[list[int], int, int]:
+    """Return ruby collision gaps and left/right line-box overflow."""
+    cache = getattr(_LAYOUT_PASS, "ruby_gaps", None)
+    if cache is None:
+        return _ruby_char_gaps_uncached(
+            line,
+            char_widths,
+            rubies,
+            style,
+            intervals,
+        )
+    cache_key = (
+        id(line),
+        tuple(char_widths),
+        tuple(id(ruby) for ruby in rubies),
+        id(style),
+        None if intervals is None else tuple(intervals),
+    )
+    hit = cache.get(cache_key)
+    if hit is None:
+        gaps, left, right = _ruby_char_gaps_uncached(
+            line,
+            char_widths,
+            rubies,
+            style,
+            intervals,
+        )
+        hit = (tuple(gaps), left, right)
+        cache[cache_key] = hit
+        _LAYOUT_PASS.lines.append(line)
+        _LAYOUT_PASS.ruby_lists.append(list(rubies))
+        _LAYOUT_PASS.styles.append(style)
+    return list(hit[0]), hit[1], hit[2]
+
+
+def _ruby_char_gaps_uncached(
+    line: TimingLine,
+    char_widths: list[int],
+    rubies: list[RubyAnnotation],
+    style: Style,
+    intervals: list[tuple[int, int]] | None = None,
+) -> tuple[list[int], int, int]:
+    zero = [0] * len(char_widths)
+    if not rubies or not line.chars or style.vertical or style.right_to_left:
+        return zero, 0, 0
+    if intervals is None:
+        intervals = compute_char_intervals(line, char_widths)
+    spacing = letter_spacing(style)
+    interval = ruby_interval_px(style)
+
+    entries: list[tuple[int, int, RubyAnnotation, RubyAnnotation, Style]] = []
+    for ruby in rubies:
+        indices = ruby_target_indices(ruby, line, intervals)
+        if not indices:
+            continue
+        paint_ruby = effective_ruby_for_target(ruby, indices, intervals)
+        target_style = ruby_style_for_target_indices(style, line, indices)
+        ruby_style = ruby_script_stroke_style(
+            target_style,
+            paint_ruby.reading,
+        )
+        entries.append(
+            (
+                min(indices),
+                max(indices),
+                paint_ruby,
+                ruby,
+                ruby_style,
+            )
+        )
+    if not entries:
+        return zero, 0, 0
+    entries.sort(key=lambda item: item[0])
+
+    gaps = [0] * len(char_widths)
+
+    def char_span(first: int, last: int) -> tuple[float, float]:
+        lefts = char_left_positions(
+            char_widths,
+            0,
+            False,
+            spacing,
+            char_gaps=gaps,
+            n3_no_backtracking=style.layout_semantics == "n3_1074",
+        )
+        return float(lefts[first]), float(lefts[last] + char_widths[last])
+
+    previous_right: float | None = None
+    min_ruby_left = 0.0
+    max_ruby_right = 0.0
+    for first, last, paint_ruby, ruby, ruby_style in entries:
+        span_left, span_right = char_span(
+            first,
+            min(last, len(char_widths) - 1),
+        )
+        target_width = max(span_right - span_left, 1.0)
+        ruby_metrics = QFontMetrics(
+            build_ruby_font_for_text(ruby_style, paint_ruby.reading)
+        )
+        ruby_left, ruby_right = ruby_layout_draw_bounds(
+            _ruby_utopia_visual_units(paint_ruby.reading),
+            ruby_metrics,
+            span_left,
+            target_width,
+            style=ruby_style,
+            base_text=ruby.kanji,
+        )
+        if previous_right is not None and first > 0:
+            deficit = (previous_right + interval) - ruby_left
+            if deficit > 0:
+                push = int(math.ceil(deficit))
+                gaps[first] += push
+                ruby_left += push
+                ruby_right += push
+        previous_right = ruby_right
+        min_ruby_left = min(min_ruby_left, ruby_left)
+        max_ruby_right = max(max_ruby_right, ruby_right)
+
+    if style.layout_semantics == "n3_1074":
+        lefts = char_left_positions(
+            char_widths,
+            0,
+            False,
+            spacing,
+            char_gaps=gaps,
+            n3_no_backtracking=True,
+        )
+        text_width = float(lefts[-1] + char_widths[-1])
+    else:
+        text_width = float(
+            sum(char_widths)
+            + spacing * max(len(char_widths) - 1, 0)
+            + sum(gaps)
+        )
+    left_overflow = max(0, int(math.ceil(-min_ruby_left)))
+    right_overflow = max(0, int(math.ceil(max_ruby_right - text_width)))
+    return gaps, left_overflow, right_overflow
+
+
 __all__ = [
     "resolve_ruby_alignment",
     "ruby_interval_px",
+    "ruby_char_gaps",
     "ruby_layout_draw_bounds",
     "ruby_layout_gap",
     "ruby_layout_left_offset",

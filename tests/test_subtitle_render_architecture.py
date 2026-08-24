@@ -673,6 +673,7 @@ def test_ruby_layout_has_one_engine_owner() -> None:
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
         "_resolve_ruby_alignment",
+        "_ruby_char_gaps",
         "_ruby_interval_px",
         "_ruby_layout_draw_bounds",
         "_ruby_layout_gap",
