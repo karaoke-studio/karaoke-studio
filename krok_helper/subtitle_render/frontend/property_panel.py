@@ -3641,7 +3641,12 @@ class PropertyPanel(QWidget):
             spin_factory=_spin,
             combo_factory=_WheelFocusedComboBox,
         )
-        self._role_fill_pages_builder = RoleFillPagesBuilder(self)
+        self._role_fill_pages_builder = RoleFillPagesBuilder(
+            self,
+            gradient_editor_factory=GradientStopsEditor,
+            color_button_factory=ColorButton,
+            double_spin_factory=_double_spin,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -4347,80 +4352,7 @@ class PropertyPanel(QWidget):
         return self._role_fill_pages_builder.make_solid_page()
 
     def _make_gradient_fill_page(self) -> QWidget:
-        page = QWidget()
-        layout = QGridLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-        self._paint_gradient_start_btn = self._paint_color_button("start_color", "#FFFFFF")
-        self._paint_gradient_end_btn = self._paint_color_button("end_color", "#FF5A6F")
-        self._paint_gradient_start_btn.hide()
-        self._paint_gradient_end_btn.hide()
-        self._gradient_editor = GradientStopsEditor(page)
-        self._gradient_editor.stopsChanged.connect(self._update_gradient_stops)
-        self._gradient_editor.selectedChanged.connect(
-            lambda _index: self._sync_gradient_stop_controls()
-        )
-        self._gradient_bar_field = self._gradient_editor
-
-        self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
-        self._wire_color_edit_session(self._gradient_stop_color_btn)
-        self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
-        self._gradient_stop_color_btn.colorEntered.connect(
-            self._gradient_editor.set_selected_color
-        )
-        self._gradient_stop_color_btn.screenPickRequested.connect(
-            lambda: self._choose_gradient_stop_color(screen_pick=True)
-        )
-        self._gradient_stop_position_spin = _double_spin(
-            0, 100, decimals=3, suffix=" %"
-        )
-        self._gradient_stop_position_spin.valueChanged.connect(
-            self._set_gradient_stop_position
-        )
-        # 删除收成图标按钮，和颜色 / 位置挤在关键点行里，省一整行
-        self._gradient_stop_delete_btn = FluentTransparentToolButton(FIF.DELETE, page)
-        self._gradient_stop_delete_btn.setToolTip("删除关键点")
-        self._gradient_stop_delete_btn.setAccessibleName("删除关键点")
-        self._gradient_stop_delete_btn.setFixedSize(30, 30)
-        self._gradient_stop_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._gradient_stop_delete_btn.clicked.connect(
-            self._gradient_editor.delete_selected_stop
-        )
-        self._gradient_color_field = _field(
-            "关键点颜色", self._gradient_stop_color_btn
-        )
-        position_row = QWidget(page)
-        position_layout = QHBoxLayout(position_row)
-        position_layout.setContentsMargins(0, 0, 0, 0)
-        position_layout.setSpacing(6)
-        position_layout.addWidget(self._gradient_stop_position_spin, 1)
-        position_layout.addWidget(
-            self._gradient_stop_delete_btn, 0, Qt.AlignmentFlag.AlignBottom
-        )
-        self._gradient_position_field = _field("关键点位置", position_row)
-        self._ruby_horizontal_gradient_with_main_check = CheckBox(
-            "注音与主文字共享横向渐变", page
-        )
-        self._ruby_horizontal_gradient_with_main_check.setChecked(True)
-        self._ruby_horizontal_gradient_with_main_check.setToolTip(
-            "开启后，注音与下方主文字使用同一个整行横向渐变范围，颜色进度保持一致。"
-        )
-        self._ruby_horizontal_gradient_with_main_check.toggled.connect(
-            lambda checked: self._update_style(
-                ruby_horizontal_gradient_with_main=checked
-            )
-        )
-        self._gradient_editor_layout = layout
-        self._arrange_stop_editor(
-            layout,
-            self._gradient_bar_field,
-            self._gradient_color_field,
-            self._gradient_position_field,
-            vertical=False,
-            footer=self._ruby_horizontal_gradient_with_main_check,
-        )
-        return page
+        return self._role_fill_pages_builder.make_gradient_page()
 
     def _make_split_fill_page(self) -> QWidget:
         page = QWidget()
