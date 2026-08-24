@@ -205,6 +205,9 @@ from krok_helper.subtitle_render.frontend.preview_async import (
     gpu_preview_enabled,
     normalize_preview_quality,
 )
+from krok_helper.subtitle_render.frontend.preview_controller import (
+    PreviewWindowController,
+)
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
 )
@@ -2083,6 +2086,23 @@ class SubtitleRenderWindow(QWidget):
     def _recent_project_paths(self, value: list[str]) -> None:
         self._recent_projects_controller.paths = list(value)
 
+    @property
+    def _preview_window_requested(self) -> bool:
+        """Compatibility view of the extracted preview-window request state."""
+        return self._preview_window_controller.requested
+
+    @_preview_window_requested.setter
+    def _preview_window_requested(self, value: bool) -> None:
+        self._preview_window_controller.requested = bool(value)
+
+    @property
+    def _preview_reposition_on_next_show(self) -> bool:
+        return self._preview_window_controller.reposition_on_next_show
+
+    @_preview_reposition_on_next_show.setter
+    def _preview_reposition_on_next_show(self, value: bool) -> None:
+        self._preview_window_controller.reposition_on_next_show = bool(value)
+
     def __init__(
         self,
         embedded: bool = False,
@@ -2097,6 +2117,7 @@ class SubtitleRenderWindow(QWidget):
         self._project_controller = SubtitleProjectController()
         self._subtitle_source_loader = SubtitleSourceLoader()
         self._n3_import_controller = N3ProjectImportController()
+        self._preview_window_controller = PreviewWindowController()
         self._project_command_controller = ProjectCommandController(
             PROJECT_FILTER,
             PROJECT_FILE_SUFFIX,
@@ -2199,8 +2220,6 @@ class SubtitleRenderWindow(QWidget):
         self._project_deferred_load_timer.timeout.connect(
             self._process_project_deferred_load
         )
-        self._preview_window_requested = False
-        self._preview_reposition_on_next_show = True
         self._closing_window = False
         self._suppress_next_render_command_log = False
         # 左右余白检查：属性面板每个 SpinBox tick 都会触发样式变更，
@@ -2370,50 +2389,42 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.toggle_play()
 
     def _preview_window_context_allowed(self) -> bool:
-        return bool(
-            not self._closing_window
-            and self.isVisible()
-            and self._stack.currentWidget() is self._preview_tab
-            and self._render_thread is None
+        return self._preview_window_controller.context_allowed(
+            host_visible=not self._closing_window and self.isVisible(),
+            preview_tab_active=self._stack.currentWidget() is self._preview_tab,
+            exporting=self._render_thread is not None,
         )
 
     def _hide_preview_window_for_context(self) -> None:
         """Pause and hide without treating the action as a user close."""
         if not hasattr(self, "_preview_window"):
             return
-        self._transport_bar.pause()
-        if self._preview_window.isVisible():
-            self._preview_window.hide()
+        self._preview_window_controller.hide(
+            self._preview_window,
+            self._transport_bar,
+        )
 
     def _sync_preview_window_visibility(self) -> None:
         """Keep the top-level preview inside the preview-tab lifecycle."""
         if not hasattr(self, "_preview_window"):
             return
-        should_show = bool(
-            self._preview_window_requested
-            and self._preview_window_context_allowed()
+        self._preview_window_controller.sync(
+            self._preview_window,
+            self._transport_bar,
+            context_allowed=self._preview_window_context_allowed(),
         )
-        if not should_show:
-            self._hide_preview_window_for_context()
-            return
-        if self._preview_window.isVisible():
-            return
-        if self._preview_reposition_on_next_show:
-            self._preview_window.show_near_workspace()
-            self._preview_reposition_on_next_show = False
-        else:
-            self._preview_window.show()
-            self._preview_window.show_controls()
 
     def _request_preview_window(self) -> None:
-        self._preview_window_requested = True
-        self._sync_preview_window_visibility()
+        self._preview_window_controller.request(
+            self._preview_window,
+            self._transport_bar,
+            context_allowed=self._preview_window_context_allowed(),
+        )
 
     def _on_preview_window_user_closed(self) -> None:
         if self._closing_window:
             return
-        self._preview_window_requested = False
-        self._preview_reposition_on_next_show = True
+        self._preview_window_controller.user_closed()
 
     # ----------------------------------------------------------- 项目文件（A11）
 
@@ -2596,11 +2607,7 @@ class SubtitleRenderWindow(QWidget):
         if not hasattr(self, "_preview_window"):
             return
         self._request_preview_window()
-        if self._preview_window.isVisible():
-            if self._preview_window.is_collapsed():
-                self._preview_window._restore_from_collapsed()
-            self._preview_window.raise_()
-            self._preview_window.activateWindow()
+        self._preview_window_controller.activate_visible(self._preview_window)
 
     def _refresh_project_title(self) -> None:
         if not hasattr(self, "_project_name_label"):

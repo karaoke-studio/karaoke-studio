@@ -77,6 +77,11 @@ class PreviewWindowController:
             transport,
             context_allowed=context_allowed,
         )
+        self.activate_visible(preview_window)
+
+    @staticmethod
+    def activate_visible(preview_window: Any) -> None:
+        """Restore and activate an already requested visible preview window."""
         if not preview_window.isVisible():
             return
         if preview_window.is_collapsed():

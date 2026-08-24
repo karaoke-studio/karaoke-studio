@@ -644,6 +644,46 @@ def test_subtitle_render_window_delegates_n3_import_commands() -> None:
     assert controller_calls == {"choose_path", "load", "rebase_style_for_video"}
 
 
+def test_subtitle_render_window_delegates_preview_window_state() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.preview_controller" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method_names = {
+        "_preview_window_context_allowed",
+        "_hide_preview_window_for_context",
+        "_sync_preview_window_visibility",
+        "_request_preview_window",
+        "_on_preview_window_user_closed",
+        "_show_preview_window",
+    }
+    controller_calls = {
+        node.func.attr
+        for method in window_class.body
+        if isinstance(method, ast.FunctionDef) and method.name in method_names
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_preview_window_controller"
+    }
+    assert controller_calls == {
+        "activate_visible",
+        "context_allowed",
+        "hide",
+        "request",
+        "sync",
+        "user_closed",
+    }
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
