@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from krok_helper.subtitle_render.frontend.preview_controller import (
+    PreviewPreferenceController,
     PreviewWindowController,
 )
 
@@ -51,6 +52,96 @@ class _Transport:
 
     def pause(self) -> None:
         self.pauses += 1
+
+
+class _PreviewPanel:
+    def __init__(self, *, gpu_supported: bool = True) -> None:
+        self.gpu_supported = gpu_supported
+        self.gpu_requests: list[bool] = []
+        self.quality_requests: list[str] = []
+
+    def set_gpu_preview_enabled(self, enabled: bool) -> bool:
+        self.gpu_requests.append(enabled)
+        return self.gpu_supported
+
+    def set_preview_quality(self, quality: str) -> None:
+        self.quality_requests.append(quality)
+
+
+class _CheckBox:
+    def __init__(self) -> None:
+        self.checked = True
+        self.signals_blocked = False
+        self.block_calls: list[bool] = []
+
+    def blockSignals(self, blocked: bool) -> bool:
+        previous = self.signals_blocked
+        self.signals_blocked = blocked
+        self.block_calls.append(blocked)
+        return previous
+
+    def setChecked(self, checked: bool) -> None:
+        self.checked = checked
+
+
+def _preference_controller(*, gpu_supported: bool = True):
+    panel = _PreviewPanel(gpu_supported=gpu_supported)
+    checkbox = _CheckBox()
+    preferences: dict[str, object] = {}
+    events: list[object] = []
+    controller = PreviewPreferenceController(
+        preview_panel=panel,
+        gpu_checkbox=checkbox,
+        local_output_preferences=preferences,
+        save_persisted_state=lambda: events.append("save"),
+        warn_gpu_unavailable=lambda: events.append("unavailable"),
+        warn_gpu_fallback=lambda message: events.append(("fallback", message)),
+    )
+    return controller, panel, checkbox, preferences, events
+
+
+def test_preview_preferences_apply_supported_gpu_request_and_persist() -> None:
+    controller, panel, checkbox, _preferences, events = _preference_controller()
+
+    controller.apply_gpu_enabled(True)
+
+    assert panel.gpu_requests == [True]
+    assert checkbox.checked is True
+    assert checkbox.block_calls == []
+    assert events == ["save"]
+
+
+def test_preview_preferences_revert_unsupported_gpu_request_without_signal() -> None:
+    controller, panel, checkbox, _preferences, events = _preference_controller(
+        gpu_supported=False
+    )
+
+    controller.apply_gpu_enabled(True)
+
+    assert panel.gpu_requests == [True]
+    assert checkbox.checked is False
+    assert checkbox.block_calls == [True, False]
+    assert checkbox.signals_blocked is False
+    assert events == ["unavailable", "save"]
+
+
+def test_preview_preferences_normalize_quality_and_keep_it_local() -> None:
+    controller, panel, _checkbox, preferences, events = _preference_controller()
+
+    normalized = controller.apply_quality("unknown")
+
+    assert normalized == "high"
+    assert panel.quality_requests == ["high"]
+    assert preferences == {"preview_quality": "high"}
+    assert events == ["save"]
+
+
+def test_preview_preferences_forward_runtime_fallback_message() -> None:
+    controller, _panel, _checkbox, _preferences, events = _preference_controller()
+
+    controller.report_gpu_fallback(123)
+
+    assert events == [("fallback", "123")]
 
 
 def test_preview_controller_defers_request_until_context_is_allowed() -> None:

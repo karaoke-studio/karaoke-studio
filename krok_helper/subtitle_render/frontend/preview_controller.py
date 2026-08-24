@@ -2,7 +2,56 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, MutableMapping
 from typing import Any
+
+from krok_helper.subtitle_render.frontend.preview_async import (
+    normalize_preview_quality,
+)
+
+
+class PreviewPreferenceController:
+    """Coordinate preview-only preferences without owning concrete UI widgets."""
+
+    def __init__(
+        self,
+        *,
+        preview_panel: Any,
+        gpu_checkbox: Any,
+        local_output_preferences: MutableMapping[str, Any],
+        save_persisted_state: Callable[[], None],
+        warn_gpu_unavailable: Callable[[], None],
+        warn_gpu_fallback: Callable[[str], None],
+    ) -> None:
+        self._preview_panel = preview_panel
+        self._gpu_checkbox = gpu_checkbox
+        self._local_output_preferences = local_output_preferences
+        self._save_persisted_state = save_persisted_state
+        self._warn_gpu_unavailable = warn_gpu_unavailable
+        self._warn_gpu_fallback = warn_gpu_fallback
+
+    def apply_gpu_enabled(self, enabled: bool) -> None:
+        """Apply a GPU request, reverting the toggle when unsupported."""
+        if not self._preview_panel.set_gpu_preview_enabled(bool(enabled)):
+            blocked = self._gpu_checkbox.blockSignals(True)
+            try:
+                self._gpu_checkbox.setChecked(False)
+            finally:
+                self._gpu_checkbox.blockSignals(blocked)
+            self._warn_gpu_unavailable()
+        self._save_persisted_state()
+
+    def apply_quality(self, quality: object) -> str:
+        """Apply and persist a normalized preview-only raster quality."""
+        normalized = normalize_preview_quality(quality)
+        self._preview_panel.set_preview_quality(normalized)
+        self._local_output_preferences["preview_quality"] = normalized
+        self._save_persisted_state()
+        return normalized
+
+    def report_gpu_fallback(self, message: object) -> None:
+        """Forward a runtime GPU fallback through the host notification boundary."""
+        self._warn_gpu_fallback(str(message))
 
 
 class PreviewWindowController:
