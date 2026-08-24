@@ -11,13 +11,13 @@ from __future__ import annotations
 from krok_helper.subtitle_render.engine.text import (
     build_font,
     build_latin_font,
+    n3_char_box_ascent,
 )
 from krok_helper.subtitle_render.engine.painter import (
     _build_ruby_font_for_text as build_ruby_font_for_text,
     _glow_extent as glow_extent,
     _main_script_stroke_style as main_script_stroke_style,
     _main_stroke2_width as main_stroke2_width,
-    _n3_char_box_ascent as n3_char_box_ascent,
     _paint_char_karaoke_stack as paint_char_karaoke_stack,
     _paint_ruby_karaoke_fragment as paint_ruby_karaoke_fragment,
     _ruby_baseline_y as ruby_baseline_y,

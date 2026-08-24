@@ -2884,12 +2884,15 @@ def test_n3_role_scheme_empty_slots_fallback_inside_same_scheme(qapp):
 
 
 def test_font_builders_use_runtime_qt_family_alias(monkeypatch):
+    from krok_helper.subtitle_render.engine.render import title as title_render
+
     resolve_family = (
         lambda family: "Arial" if family == "N3 Japanese Display Name" else family
     )
     monkeypatch.setattr(subtitle_painter, "resolve_qt_font_family", resolve_family)
     monkeypatch.setattr(ruby_style, "resolve_qt_font_family", resolve_family)
     monkeypatch.setattr(text_metrics, "resolve_qt_font_family", resolve_family)
+    monkeypatch.setattr(title_render, "resolve_qt_font_family", resolve_family)
     style = Style(
         font_family="N3 Japanese Display Name",
         font_family_latin="N3 Japanese Display Name",

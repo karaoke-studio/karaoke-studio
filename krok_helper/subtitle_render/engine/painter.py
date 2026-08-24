@@ -173,6 +173,8 @@ from krok_helper.subtitle_render.engine.text import (
     letter_spacing as _letter_spacing,
     line_text_width as _line_text_width,
     make_font_for as _make_font_for,
+    n3_char_box_ascent as _n3_char_box_ascent,
+    n3_char_box_descent as _n3_char_box_descent,
     nicokara_char_geometry_left_offset as _nicokara_char_geometry_left_offset,
     nicokara_layout_width as _nicokara_layout_width,
     truncate_div as _truncate_div,
@@ -447,38 +449,6 @@ class _RubyLayout:
     metrics: QFontMetrics | None = field(default=None, compare=False)
 
 
-@dataclass(frozen=True)
-class _TitleOverlayLayout:
-    """标题 overlay 的纯几何/排版布局（不依赖 t_ms）。"""
-
-    lines: list[str]
-    widths: list[float]
-    block_w: float
-    block_h: float
-    line_h: float
-    gap: int
-    x0: float
-    y_top: float
-    font: QFont
-    metrics: QFontMetrics
-    latin_font: QFont
-    latin_metrics: QFontMetrics
-    font_for: object
-    glyph_rows: list[list["_TitleGlyphLayout"]]
-    line_heights: list[float]
-    line_ascents: list[float]
-
-
-@dataclass(frozen=True)
-class _TitleGlyphLayout:
-    text: str
-    x: float
-    advance: float
-    font: QFont
-    metrics: QFontMetrics
-    title: TitleOverlay
-
-
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -647,6 +617,15 @@ from krok_helper.subtitle_render.engine.render.raster_blur import (
     _gaussian_blur_image,
     _n3_gaussian_kernel_1d,
 )
+from krok_helper.subtitle_render.engine.render.title import (
+    TitleGlyphLayout as _TitleGlyphLayout,
+    TitleOverlayLayout as _TitleOverlayLayout,
+    build_title_font as _build_title_font,
+    build_title_latin_font as _build_title_latin_font,
+    layout_title_overlay as _layout_title_overlay,
+    make_title_font_for as _make_title_font_for,
+    title_block_origin as _title_block_origin,
+)
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors as _effective_karaoke_colors,
     legacy_after_text_fill as _legacy_after_text_fill,
@@ -679,7 +658,6 @@ from krok_helper.subtitle_render.models import (
     Style,
     TitleOverlay,
     effective_karaoke_animation,
-    normalize_title_char_role_labels,
     normalize_glow_concentration_level,
 )
 
@@ -1166,61 +1144,6 @@ def _paint_track_to_painter(
 # ---------------------------------------------------------------------------
 
 
-def _build_title_font(title: TitleOverlay) -> QFont:
-    font = QFont(
-        resolve_qt_font_family(title.font_family), max(title.font_size_px, 1)
-    )
-    font.setPixelSize(max(title.font_size_px, 1))
-    font.setWeight(_clamp_weight(title.font_weight))
-    font.setItalic(title.italic)
-    return font
-
-
-def _build_title_latin_font(title: TitleOverlay) -> QFont:
-    family = title.font_family_latin or title.font_family
-    font = QFont(resolve_qt_font_family(family), max(title.font_size_px, 1))
-    font.setPixelSize(max(title.font_size_px, 1))
-    font.setWeight(_clamp_weight(title.font_weight))
-    font.setItalic(title.italic)
-    return font
-
-
-def _title_block_origin(
-    img_w: int,
-    img_h: int,
-    block_w: float,
-    block_h: float,
-    title: TitleOverlay,
-    *,
-    edge_px: float = 0.0,
-) -> tuple[float, float]:
-    """按锚点 9 宫格放置文字块，返回左上角 ``(x0, y_top)``。
-
-    ``offset_x`` / ``offset_y`` 对贴边锚点是内边距，对居中锚点是附加位移。
-
-    ``x0`` 是首字的笔尖原点，``block_w`` 是步进宽之和——两者都不含描边。N3 的
-    字符盒把描边的一半算在盒内（``DrawCharInfo`` 宽 = 墨迹宽 + Edge、高 = 字号 +
-    Edge），贴边锚点对齐的是盒边而不是墨迹，描边不会溢出余白。这里对贴边锚点补上
-    ``edge_px / 2``，让左右余白与上下余白量到同一条边；竖向的那一半已经含在
-    ``block_h`` 里（见 :func:`_n3_char_box_ascent`），无需另加。
-    """
-    anchor = title.anchor
-    half_edge = max(float(edge_px), 0.0) / 2.0
-    if anchor.endswith("left"):
-        x0 = title.offset_x + half_edge
-    elif anchor.endswith("right"):
-        x0 = img_w - block_w - title.offset_x - half_edge
-    else:  # center 列
-        x0 = (img_w - block_w) / 2.0 + title.offset_x
-    if anchor.startswith("top"):
-        y_top = float(title.offset_y)
-    elif anchor.startswith("bottom"):
-        y_top = img_h - block_h - title.offset_y
-    else:  # center 行
-        y_top = (img_h - block_h) / 2.0 + title.offset_y
-    return x0, y_top
-
-
 def _paint_title_overlay(
     painter: QPainter,
     img_w: int,
@@ -1239,154 +1162,6 @@ def _paint_title_overlay(
         painter,
         LayerContext(t_ms=0, logical_w=img_w, logical_h=img_h),
         [_TitleOverlayLayer(layout, title, opacity)],
-    )
-
-
-def _layout_title_overlay(
-    img_w: int,
-    img_h: int,
-    track: TimingTrack,
-    title: TitleOverlay,
-    *,
-    style: Optional[Style] = None,
-) -> _TitleOverlayLayout | None:
-    text = _resolve_title_text(title, track)
-    lines = [line for line in text.split("\n")]
-    if not any(line.strip() for line in lines):
-        return None
-    font = _build_title_font(title)
-    metrics = QFontMetrics(font)
-    latin_font = _build_title_latin_font(title)
-    font_for = _make_title_font_for(title, font, latin_font)
-    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    labels = normalize_title_char_role_labels(text, title.char_role_labels)
-    # N3's SpaceWidth is an application setting shared by every drawn line, so
-    # the title reads it from the project style like the lyrics do.
-    title_space_percent = max(
-        10,
-        min(
-            int(
-                style.space_width_percent
-                if style is not None
-                else Style.space_width_percent
-            ),
-            100,
-        ),
-    )
-    glyph_rows: list[list[_TitleGlyphLayout]] = []
-    widths: list[float] = []
-    line_heights: list[float] = []
-    line_ascents: list[float] = []
-    max_edge = 0.0
-    # 每一行的盒只由这一行实际用到的字形决定。基础标题方案只在整行没有字形
-    # （空行）时兜底：否则给标题分配了角色方案后，基础方案的字号仍会顶着行盒
-    # 走，改「标题」方案的字号会把已经用别的方案渲染的标题整体上下推。
-    fallback_ascent = _n3_char_box_ascent(
-        metrics, title.font_size_px, title.stroke_width_px
-    )
-    fallback_descent = _n3_char_box_descent(
-        metrics, title.font_size_px, title.stroke_width_px
-    )
-    for row_index, text_line in enumerate(lines):
-        glyphs: list[_TitleGlyphLayout] = []
-        cursor = 0.0
-        # N3 行盒：高 = 字号 + 描边，基线按字体 A:D 比例切分（见
-        # _n3_char_box_ascent）。用它替代 Qt 原始 ascent/descent，标题的上余白才
-        # 量到和左右余白同一条盒边——Qt metric 的 ascent 含 em 内部行距，大写字母
-        # 上方那一段空白会让同样的 40px 看起来明显更高。
-        max_ascent = 0.0
-        max_descent = 0.0
-        for char_index, char in enumerate(text_line):
-            glyph_title = (
-                _resolve_title_role_overlay(style, title, labels[row_index][char_index])
-                if style is not None
-                else title
-            )
-            glyph_jp_font = _build_title_font(glyph_title)
-            glyph_latin_font = _build_title_latin_font(glyph_title)
-            glyph_font_for = _make_title_font_for(
-                glyph_title, glyph_jp_font, glyph_latin_font
-            )
-            glyph_font = (
-                glyph_font_for(char) if glyph_font_for is not None else glyph_jp_font
-            )
-            glyph_metrics = QFontMetrics(glyph_font)
-            if char == " ":
-                # N3 sizes a glyph with an empty outline from SpaceWidth rather
-                # than the font's own advance (DirectXCommon), and its title is
-                # a LyricsLineInfo with Kind == Title that runs through the same
-                # DrawCharInfo pipeline as the lyrics.  Qt's raw advance made the
-                # title wider here than the GPU backend drew it.
-                space_unit = glyph_font.pixelSize()
-                if space_unit <= 0:
-                    space_unit = max(int(glyph_title.font_size_px), 1)
-                advance = float(space_unit * title_space_percent // 100)
-            else:
-                advance = float(glyph_metrics.horizontalAdvance(char))
-            glyphs.append(
-                _TitleGlyphLayout(
-                    text=char,
-                    x=cursor,
-                    advance=advance,
-                    font=glyph_font,
-                    metrics=glyph_metrics,
-                    title=glyph_title,
-                )
-            )
-            cursor += advance
-            if char_index + 1 < len(text_line):
-                cursor += int(glyph_title.letter_spacing_px)
-            max_ascent = max(
-                max_ascent,
-                _n3_char_box_ascent(
-                    glyph_metrics,
-                    glyph_title.font_size_px,
-                    glyph_title.stroke_width_px,
-                ),
-            )
-            max_descent = max(
-                max_descent,
-                _n3_char_box_descent(
-                    glyph_metrics,
-                    glyph_title.font_size_px,
-                    glyph_title.stroke_width_px,
-                ),
-            )
-            max_edge = max(max_edge, float(max(glyph_title.stroke_width_px, 0)))
-        if not glyphs:
-            max_ascent = fallback_ascent
-            max_descent = fallback_descent
-        glyph_rows.append(glyphs)
-        widths.append(cursor)
-        line_ascents.append(max_ascent)
-        line_heights.append(max_ascent + max_descent)
-    block_w = max(widths) if widths else 0.0
-    line_h = max(line_heights, default=metrics.height())
-    gap = max(int(title.line_gap_px), 0)
-    block_h = sum(line_heights) + gap * max(len(lines) - 1, 0)
-    if block_w <= 0 or block_h <= 0:
-        return None
-
-    x0, y_top = _title_block_origin(
-        img_w, img_h, block_w, block_h, title, edge_px=max_edge
-    )
-    return _TitleOverlayLayout(
-        lines=lines,
-        widths=widths,
-        block_w=block_w,
-        block_h=float(block_h),
-        line_h=line_h,
-        gap=gap,
-        x0=x0,
-        y_top=y_top,
-        font=font,
-        metrics=metrics,
-        latin_font=latin_font,
-        latin_metrics=latin_metrics,
-        font_for=font_for,
-        glyph_rows=glyph_rows,
-        line_heights=line_heights,
-        line_ascents=line_ascents,
     )
 
 
@@ -1582,16 +1357,6 @@ def _make_raster_image(logical_w: int, logical_h: int, device_pixel_ratio: float
     image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
     image.setDevicePixelRatio(dpr)
     return image
-
-
-def _make_title_font_for(title: TitleOverlay, jp_font: QFont, latin_font: QFont):
-    if not title.font_family_latin or latin_font.family() == jp_font.family():
-        return None
-
-    def font_for(ch_text: str) -> QFont:
-        return latin_font if (ch_text and ch_text.isascii()) else jp_font
-
-    return font_for
 
 
 def _title_line_path(
@@ -4206,28 +3971,6 @@ def _ruby_stroke_extent(style: Style) -> int:
         _ruby_stroke_width(style),
         _ruby_stroke2_width(style),
     )
-
-
-def _n3_char_box_ascent(metrics: QFontMetrics, font_size_px: int, stroke_width: int) -> float:
-    """N3 字符盒的「基线以上」高度。
-
-    N3 的字符/行盒（``DrawCharInfo.Height``）= **字号 + 描边宽**（edge2 不占位），
-    基线把盒按字体 ascent:descent 比例分割（``CreateTransformedCharGeometryChar``：
-    ``baseline = 盒底 - FontSize·D/(A+D) - Edge/2``）。即字体 metric 被归一化到
-    字号高，没有 Qt metric 的 em 外头部空隙——这是 N3 注音贴得更近的根本原因。
-    """
-    ascent = max(metrics.ascent(), 0)
-    descent = max(metrics.descent(), 0)
-    total = max(ascent + descent, 1)
-    return max(font_size_px, 1) * ascent / total + max(stroke_width, 0) / 2.0
-
-
-def _n3_char_box_descent(metrics: QFontMetrics, font_size_px: int, stroke_width: int) -> float:
-    """N3 字符盒的「基线以下」高度（含描边半宽）。见 :func:`_n3_char_box_ascent`。"""
-    ascent = max(metrics.ascent(), 0)
-    descent = max(metrics.descent(), 0)
-    total = max(ascent + descent, 1)
-    return max(font_size_px, 1) * descent / total + max(stroke_width, 0) / 2.0
 
 
 def _ruby_vertical_extra(

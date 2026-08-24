@@ -1173,12 +1173,46 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "render_bands.py",
         "render_ir.py",
         "timeline_projection_backend.py",
+        "title.py",
     }
     render_root = ROOT / "engine" / "render"
     assert {"__init__.py", *module_names} <= {
         path.name for path in render_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
+
+
+def test_title_layout_has_one_render_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.title"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_TitleGlyphLayout",
+        "_TitleOverlayLayout",
+        "_build_title_font",
+        "_build_title_latin_font",
+        "_layout_title_overlay",
+        "_make_title_font_for",
+        "_title_block_origin",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert delegated_names <= imported
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        owner,
+        ROOT / "engine/render/title.py",
+    )
 
 
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:

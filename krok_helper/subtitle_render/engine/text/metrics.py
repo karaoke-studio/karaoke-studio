@@ -140,6 +140,30 @@ def clear_char_metric_cache() -> None:
     _CHAR_METRIC_CACHE.clear()
 
 
+def n3_char_box_ascent(
+    metrics: QFontMetrics,
+    font_size_px: int,
+    stroke_width: int,
+) -> float:
+    """Return the N3 character-box height above the baseline."""
+    ascent = max(metrics.ascent(), 0)
+    descent = max(metrics.descent(), 0)
+    total = max(ascent + descent, 1)
+    return max(font_size_px, 1) * ascent / total + max(stroke_width, 0) / 2.0
+
+
+def n3_char_box_descent(
+    metrics: QFontMetrics,
+    font_size_px: int,
+    stroke_width: int,
+) -> float:
+    """Return the N3 character-box height below the baseline."""
+    ascent = max(metrics.ascent(), 0)
+    descent = max(metrics.descent(), 0)
+    total = max(ascent + descent, 1)
+    return max(font_size_px, 1) * descent / total + max(stroke_width, 0) / 2.0
+
+
 def _font_signature(font: QFont) -> tuple:
     return (font.family(), font.pixelSize(), int(font.weight()), font.italic())
 
@@ -356,6 +380,8 @@ __all__ = [
     "letter_spacing",
     "line_text_width",
     "make_font_for",
+    "n3_char_box_ascent",
+    "n3_char_box_descent",
     "nicokara_char_geometry_left_offset",
     "nicokara_layout_width",
     "truncate_div",
