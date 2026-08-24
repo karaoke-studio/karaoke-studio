@@ -422,7 +422,6 @@ def test_line_geometry_policy_has_no_painter_dependency() -> None:
     assert "_line_has_role_labels" not in inline
     assert imports == {
         ("line_has_role_labels", "_line_has_role_labels"),
-        ("resolve_char_intervals", "_resolve_char_intervals"),
         ("resolve_guide_anchor_bounds", "_resolve_guide_anchor_bounds"),
     }
     targets = _import_targets(owner, ROOT / "engine/line_geometry.py")
@@ -507,6 +506,17 @@ def test_qt_line_geometry_has_no_painter_dependency() -> None:
     targets = _import_targets(owner, ROOT / "engine/qt_line_geometry.py")
 
     assert f"{PACKAGE}.engine.painter" not in targets
+
+    painter_tree = ast.parse(
+        (ROOT / "engine/painter.py").read_text(encoding="utf-8-sig")
+    )
+    imported = {
+        alias.name
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+    assert "resolved_char_intervals_for_line" in imported
 
 
 def test_page_offset_plan_has_no_painter_dependency() -> None:

@@ -6,7 +6,15 @@ from collections.abc import Callable, Sequence
 
 from PyQt6.QtGui import QFontMetrics
 
-from krok_helper.subtitle_render.engine.line_geometry import line_has_role_labels
+from krok_helper.subtitle_render.engine.guide_metrics import vector_glyph_width
+from krok_helper.subtitle_render.engine.line_geometry import (
+    line_has_role_labels,
+    resolve_char_intervals,
+)
+from krok_helper.subtitle_render.engine.text_layout import (
+    build_role_text_layout,
+    role_char_geometry_by_index,
+)
 from krok_helper.subtitle_render.engine.text_metrics import (
     build_font,
     build_latin_font,
@@ -18,8 +26,6 @@ from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
 
 
-RoleCharWidthsResolver = Callable[[TimingLine, Style], Sequence[int]]
-VectorGlyphWidthResolver = Callable[[object, Style], int]
 RubySpacingResolver = Callable[
     [TimingTrack, TimingLine, list[int], Style],
     tuple[Sequence[int], float, float],
@@ -29,13 +35,12 @@ RubySpacingResolver = Callable[
 def char_widths_for_intervals(
     line: TimingLine,
     style: Style,
-    *,
-    role_char_widths: RoleCharWidthsResolver,
-    vector_glyph_width: VectorGlyphWidthResolver,
 ) -> list[int]:
-    """Measure interval weights while delegating role and guide specifics."""
+    """Measure interval weights for normal, role-styled and guide glyphs."""
     if line_has_role_labels(line):
-        return list(role_char_widths(line, style))
+        layout = build_role_text_layout(line, style, x0=0, baseline_y=0)
+        widths, _ranges = role_char_geometry_by_index(line, layout)
+        return widths
     font = build_font(style)
     metrics = QFontMetrics(font)
     latin_font = build_latin_font(style)
@@ -56,6 +61,14 @@ def char_widths_for_intervals(
         )
         for char in line.chars
     ]
+
+
+def resolved_char_intervals_for_line(
+    line: TimingLine,
+    style: Style,
+) -> list[tuple[int, int]]:
+    """Resolve final Painter-compatible character timing intervals."""
+    return resolve_char_intervals(line, style, char_widths_for_intervals)
 
 
 def measure_guide_anchor_bounds(
@@ -92,4 +105,8 @@ def measure_guide_anchor_bounds(
     return -ruby_left, int(round(text_width)) + ruby_right
 
 
-__all__ = ["char_widths_for_intervals", "measure_guide_anchor_bounds"]
+__all__ = [
+    "char_widths_for_intervals",
+    "measure_guide_anchor_bounds",
+    "resolved_char_intervals_for_line",
+]

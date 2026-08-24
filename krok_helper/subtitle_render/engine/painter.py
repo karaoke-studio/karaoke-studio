@@ -107,7 +107,6 @@ from krok_helper.subtitle_render.engine.line_pagination import (
 )
 from krok_helper.subtitle_render.engine.line_geometry import (
     line_has_role_labels as _line_has_role_labels,
-    resolve_char_intervals as _resolve_char_intervals,
     resolve_guide_anchor_bounds as _resolve_guide_anchor_bounds,
 )
 from krok_helper.subtitle_render.engine.signal_semantics import (
@@ -145,8 +144,8 @@ from krok_helper.subtitle_render.engine.text_layout import (
     style_for_role_in_layout as _style_for_role_in_layout,
 )
 from krok_helper.subtitle_render.engine.qt_line_geometry import (
-    char_widths_for_intervals as _qt_char_widths_for_intervals,
     measure_guide_anchor_bounds as _qt_measure_guide_anchor_bounds,
+    resolved_char_intervals_for_line,
 )
 from krok_helper.subtitle_render.engine.page_offset_plan import (
     MeasuredPageLine,
@@ -13296,44 +13295,6 @@ def _display_line_collision_time_window(
     if time_window != "stable":
         raise ValueError(f"Unsupported collision time window: {time_window}")
     return _display_line_static_collision_window(display_line, style)
-
-
-def _role_char_widths_for_intervals(
-    line: TimingLine,
-    line_style: Style,
-) -> list[int]:
-    measure_layout = _build_role_text_layout(
-        line,
-        line_style,
-        x0=0,
-        baseline_y=0,
-    )
-    widths, _ranges = _role_char_geometry_by_index(line, measure_layout)
-    return widths
-
-
-def _char_widths_for_resolved_intervals(
-    line: TimingLine,
-    line_style: Style,
-) -> list[int]:
-
-    return _qt_char_widths_for_intervals(
-        line,
-        line_style,
-        role_char_widths=_role_char_widths_for_intervals,
-        vector_glyph_width=_vector_glyph_width,
-    )
-
-
-def resolved_char_intervals_for_line(
-    line: TimingLine, style: Style
-) -> list[tuple[int, int]]:
-    """Resolve Painter-compatible per-character timing intervals for Render IR."""
-    return _resolve_char_intervals(
-        line,
-        style,
-        _char_widths_for_resolved_intervals,
-    )
 
 
 def _ruby_spacing_for_guide_anchor(
