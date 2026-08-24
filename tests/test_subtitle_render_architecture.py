@@ -369,7 +369,8 @@ def test_guide_render_semantics_have_one_engine_owner() -> None:
 
     assert "_line_with_guide_symbol" not in inline
     assert delegated == {
-        ("render_line_with_guide_symbols", "_line_with_guide_symbol")
+        ("guide_symbol_is_bitmap", "_guide_symbol_is_bitmap"),
+        ("render_line_with_guide_symbols", "_line_with_guide_symbol"),
     }
     targets = _import_targets(owner, ROOT / "engine/guide_semantics.py")
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -422,6 +423,7 @@ def test_line_geometry_policy_has_no_painter_dependency() -> None:
     assert imports == {
         ("line_has_role_labels", "_line_has_role_labels"),
         ("resolve_char_intervals", "_resolve_char_intervals"),
+        ("resolve_guide_anchor_bounds", "_resolve_guide_anchor_bounds"),
     }
     targets = _import_targets(owner, ROOT / "engine/line_geometry.py")
     assert f"{PACKAGE}.engine.painter" not in targets

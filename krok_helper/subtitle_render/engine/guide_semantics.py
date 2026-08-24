@@ -89,4 +89,11 @@ def render_line_with_guide_symbols(line: TimingLine) -> TimingLine:
     )
 
 
-__all__ = ["render_line_with_guide_symbols"]
+def guide_symbol_is_bitmap(symbol: object | None) -> bool:
+    """Return whether a guide uses a configured bitmap before-state."""
+    return isinstance(symbol, GuideSymbol) and symbol.kind == "bitmap" and bool(
+        symbol.bitmap_before_path
+    )
+
+
+__all__ = ["guide_symbol_is_bitmap", "render_line_with_guide_symbols"]

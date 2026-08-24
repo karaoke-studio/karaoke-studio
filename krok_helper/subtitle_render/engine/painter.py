@@ -68,6 +68,7 @@ from krok_helper.subtitle_render.engine.layout_context import (
     layout_pass,
 )
 from krok_helper.subtitle_render.engine.guide_semantics import (
+    guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
     render_line_with_guide_symbols as _line_with_guide_symbol,
 )
 from krok_helper.subtitle_render.engine.layout_plan_cache import (
@@ -94,6 +95,7 @@ from krok_helper.subtitle_render.engine.line_pagination import (
 from krok_helper.subtitle_render.engine.line_geometry import (
     line_has_role_labels as _line_has_role_labels,
     resolve_char_intervals as _resolve_char_intervals,
+    resolve_guide_anchor_bounds as _resolve_guide_anchor_bounds,
 )
 from krok_helper.subtitle_render.engine.signal_semantics import (
     display_style_for_signal_window as _display_style_for_signal_window,
@@ -7611,12 +7613,6 @@ def _style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
     )
 
 
-def _guide_symbol_is_bitmap(symbol: object | None) -> bool:
-    return isinstance(symbol, GuideSymbol) and symbol.kind == "bitmap" and bool(
-        symbol.bitmap_before_path
-    )
-
-
 def _bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
     return _guide_symbol_is_bitmap(symbol) and not bool(
         getattr(symbol, "bitmap_after_path", None)
@@ -14178,27 +14174,11 @@ def resolved_char_intervals_for_line(
     )
 
 
-def resolved_guide_anchor_bounds_for_line(
+def _measure_guide_anchor_bounds(
     track: TimingTrack,
     line: TimingLine,
-    style: Style,
+    line_style: Style,
 ) -> tuple[float, float] | None:
-    """Return Painter's source-line horizontal anchor box for guide glyphs.
-
-    Sayatoo row layout measures the unmodified source line before Painter
-    inserts/replaces guide glyphs.  The rendered vector glyphs therefore grow
-    from that source text origin.  Role-run and vertical lines take their own
-    rendered geometry path and do not use this pre-resolved anchor.
-    """
-    line_style = _style_for_line(style, line)
-    guide_symbols = [line.guide_symbol, *line.inline_guide_symbols.values()]
-    if (
-        line_style.vertical
-        or _line_has_role_labels(line)
-        or (line.guide_symbol is None and not line.inline_guide_symbols)
-        or any(_guide_symbol_is_bitmap(symbol) for symbol in guide_symbols)
-    ):
-        return None
     font = _build_font(line_style)
     metrics = QFontMetrics(font)
     latin_font = _build_latin_font(line_style)
@@ -14219,6 +14199,20 @@ def resolved_guide_anchor_bounds_for_line(
     right_ext = ruby_right
     text_width = _line_text_width(char_widths, line_style) + sum(char_gaps)
     return -left_ext, int(round(text_width)) + right_ext
+
+
+def resolved_guide_anchor_bounds_for_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+) -> tuple[float, float] | None:
+    """Resolve Painter-compatible horizontal anchor bounds for guide glyphs."""
+    return _resolve_guide_anchor_bounds(
+        track,
+        line,
+        style,
+        _measure_guide_anchor_bounds,
+    )
 
 
 def _active_rubies_for_line(
