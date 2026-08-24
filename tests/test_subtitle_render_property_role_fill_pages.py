@@ -47,6 +47,13 @@ class _Host:
     def _update_style(self, **changes):
         self.style_updates.append(changes)
 
+    def _update_current_fill(self, **changes):
+        self.fill_updates = getattr(self, "fill_updates", [])
+        self.fill_updates.append(changes)
+
+    def _choose_paint_image(self):
+        pass
+
     def _arrange_stop_editor(self, *args, **kwargs):
         self.arrangements.append((args, kwargs))
 
@@ -116,3 +123,24 @@ def test_split_fill_page_preserves_hard_stop_and_vertical_contracts(qapp) -> Non
     assert host._split_stop_delete_btn.toolTip() == "删除分段点"
     assert host.arrangements[0][1] == {"vertical": True}
     assert page.layout() is host.arrangements[0][0][0]
+
+
+def test_image_fill_page_preserves_path_and_scale_contracts(qapp) -> None:
+    from krok_helper.subtitle_render.frontend.property_panel import _spin
+
+    host = _Host()
+    builder = RoleFillPagesBuilder(host, spin_factory=_spin)
+    page = builder.make_image_page()
+
+    assert host._paint_image_browse_btn.text() == "浏览..."
+    assert host._paint_image_browse_btn.minimumHeight() == 32
+    assert host._paint_image_scale_spin.minimum() == 1
+    assert host._paint_image_scale_spin.maximum() == 1000
+    host._paint_image_path_edit.setText("C:/image.png")
+    host._paint_image_path_edit.editingFinished.emit()
+    host._paint_image_scale_spin.setValue(125)
+    assert host.fill_updates == [
+        {"image_path": "C:/image.png"},
+        {"image_scale_pct": 125},
+    ]
+    assert page.layout().columnStretch(0) == 1
