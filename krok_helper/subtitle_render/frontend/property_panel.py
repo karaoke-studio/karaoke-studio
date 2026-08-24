@@ -114,6 +114,11 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
+from krok_helper.subtitle_render.frontend.property_pages import (
+    PROPERTY_PAGE_SPECS,
+    build_property_pages,
+    property_page_index,
+)
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 from krok_helper.subtitle_render.engine.style_semantics import (
     effective_karaoke_colors,
@@ -4714,14 +4719,7 @@ class _FontPreviewWidget(QWidget):
 class PropertyPanel(QWidget):
     """字体 / 布局 / 特效 / 标题属性面板。"""
 
-    _PAGE_SPECS = (
-        ("font", "角色"),
-        ("layout", "布局"),
-        ("timing", "时间"),
-        ("effects", "特效"),
-        ("title", "标题"),
-        ("background", "背景/音频"),
-    )
+    _PAGE_SPECS = PROPERTY_PAGE_SPECS
 
     styleChanged = Signal(Style)
     pageChanged = Signal(int)
@@ -4813,14 +4811,7 @@ class PropertyPanel(QWidget):
             ),
         )
 
-        pages = (
-            self._make_subtitle_page(),
-            self._make_basic_page(),
-            self._make_timing_page(),
-            self._make_effects_page(),
-            self._make_title_page(),
-            self._make_background_page(),
-        )
+        pages = build_property_pages(self)
         for page, (route_key, label) in zip(pages, self._PAGE_SPECS):
             self._add_navigation_page(page, route_key, label)
         self.setCurrentIndex(0)
@@ -4877,10 +4868,9 @@ class PropertyPanel(QWidget):
         page.setAccessibleName(label)
 
     def _on_navigation_changed(self, route_key: str) -> None:
-        for index, (candidate, _label) in enumerate(self._PAGE_SPECS):
-            if candidate == route_key:
-                self._stack.setCurrentIndex(index)
-                return
+        index = property_page_index(route_key)
+        if index is not None:
+            self._stack.setCurrentIndex(index)
 
     def _on_page_changed(self, index: int) -> None:
         if hasattr(self, "_font_preview_widget"):

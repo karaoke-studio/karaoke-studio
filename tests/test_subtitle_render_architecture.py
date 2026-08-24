@@ -817,6 +817,44 @@ def test_subtitle_render_window_delegates_export_job_assembly() -> None:
         assert calls == {controller_method}
 
 
+def test_subtitle_property_panel_delegates_page_registry_and_routing() -> None:
+    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.property_panel"
+    targets = _import_targets(panel_module, panel_path)
+
+    assert f"{PACKAGE}.frontend.property_pages" in targets
+    tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    panel_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyPanel"
+    )
+    init_method = next(
+        node
+        for node in panel_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    route_method = next(
+        node
+        for node in panel_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_on_navigation_changed"
+    )
+
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_property_pages"
+        for node in ast.walk(init_method)
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "property_page_index"
+        for node in ast.walk(route_method)
+    )
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
