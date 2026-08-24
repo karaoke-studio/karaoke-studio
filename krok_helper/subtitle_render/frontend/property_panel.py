@@ -171,6 +171,7 @@ from krok_helper.subtitle_render.frontend.property_title_page import (
 from krok_helper.subtitle_render.frontend.property_timing_page import (
     TimingPropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
@@ -328,15 +329,8 @@ COLOR_COMMIT_DEBOUNCE_MS = 250
 """色号输入的同类窗口——6/8 位十六进制要连打更久，留得比数值框宽一点。"""
 _FONT_SIZE_MAX_PX = 4096
 _LAYOUT_SIZE_MAX_PX = 16_384
-_FILL_MODE_ICON_DIR = (
-    Path(__file__).resolve().parents[2] / "assets" / "subtitle_render" / "fill_modes"
-)
-_COLOR_STATE_SWAP_ICON = (
-    Path(__file__).resolve().parents[2]
-    / "assets"
-    / "subtitle_render"
-    / "swap-colors.svg"
-)
+_FILL_MODE_ICON_DIR = SUBTITLE_RENDER_ASSET_DIR / "fill_modes"
+_COLOR_STATE_SWAP_ICON = SUBTITLE_RENDER_ASSET_DIR / "swap-colors.svg"
 _AUTO_ROLE_COLORS = (
     "#FF5A6F",
     "#00A6FF",

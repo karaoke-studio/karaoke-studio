@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from krok_helper.subtitle_render import timing
-from krok_helper.subtitle_render.frontend.preview_controller import (
+from krok_helper.subtitle_render.frontend.preview.preview_controller import (
     PreviewDurationController,
     PreviewPreferenceController,
     PreviewWindowController,

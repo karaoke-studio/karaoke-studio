@@ -18,12 +18,12 @@ from PyQt6.QtCore import QUrl  # noqa: E402
 from PyQt6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.frontend.playback import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview.playback import (  # noqa: E402
     PlaybackController,
     _is_real_media_file,
     unified_player_enabled,
 )
-from krok_helper.subtitle_render.frontend import playback  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview import playback  # noqa: E402
 
 
 @pytest.fixture(scope="module")

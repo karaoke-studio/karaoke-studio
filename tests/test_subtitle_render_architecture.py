@@ -1236,7 +1236,7 @@ def test_subtitle_render_window_delegates_preview_window_state() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.preview_controller" in targets
+    assert f"{PACKAGE}.frontend.preview.preview_controller" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
@@ -1269,6 +1269,22 @@ def test_subtitle_render_window_delegates_preview_window_state() -> None:
         "sync",
         "user_closed",
     }
+
+
+def test_preview_frontend_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "playback.py",
+        "preview_async.py",
+        "preview_controller.py",
+        "preview_graphics.py",
+        "preview_media.py",
+        "preview_view.py",
+    }
+    preview_root = ROOT / "frontend" / "preview"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in preview_root.glob("*.py")
+    }
+    assert not any((ROOT / "frontend" / name).exists() for name in module_names)
 
 
 def test_subtitle_render_window_delegates_preview_preferences() -> None:

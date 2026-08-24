@@ -6,7 +6,7 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
-from krok_helper.subtitle_render.frontend.preview_async import (
+from krok_helper.subtitle_render.frontend.preview.preview_async import (
     normalize_preview_quality,
 )
 

@@ -34,9 +34,9 @@ if str(ROOT) not in sys.path:
 from PyQt6.QtCore import QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget  # noqa: E402
 
-from krok_helper.subtitle_render.frontend import preview_graphics as pg  # noqa: E402
-from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView  # noqa: E402
-from krok_helper.subtitle_render.frontend.preview_view import TransportBar  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview.preview_view import TransportBar  # noqa: E402
 from krok_helper.subtitle_render.models import style_from_dict  # noqa: E402
 from krok_helper.subtitle_render.project_store import load_render_project  # noqa: E402
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc  # noqa: E402
@@ -196,7 +196,7 @@ def main() -> None:
     # view 不自建视频 player（模拟 main_window 的统一接线）。
     controller = None
     if args.unified:
-        from krok_helper.subtitle_render.frontend.playback import PlaybackController  # noqa: PLC0415
+        from krok_helper.subtitle_render.frontend.preview.playback import PlaybackController  # noqa: PLC0415
         controller = PlaybackController()
         view.use_external_player(controller)
     else:

@@ -20,8 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from krok_helper.subtitle_render.frontend import preview_async as preview_async_module
-from krok_helper.subtitle_render.frontend.preview_async import GpuAsyncSubtitleRenderer
+from krok_helper.subtitle_render.frontend.preview import preview_async as preview_async_module
+from krok_helper.subtitle_render.frontend.preview.preview_async import GpuAsyncSubtitleRenderer
 from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.native_backend import NativeRendererProcess
 

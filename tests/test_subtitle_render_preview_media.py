@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from krok_helper.subtitle_render.frontend import preview_media
+from krok_helper.subtitle_render.frontend.preview import preview_media
 
 
 def test_qt_playback_source_remuxes_video_with_generated_pts(monkeypatch, tmp_path):

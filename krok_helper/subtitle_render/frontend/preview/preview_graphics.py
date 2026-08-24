@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
-from krok_helper.subtitle_render.frontend.preview_async import (
+from krok_helper.subtitle_render.frontend.preview.preview_async import (
     AsyncSubtitleRenderer,
     DEFAULT_PREVIEW_QUALITY,
     GpuAsyncSubtitleRenderer,
@@ -38,7 +38,7 @@ from krok_helper.subtitle_render.frontend.preview_async import (
     preview_quality_render_scale,
     preview_render_target_size,
 )
-from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
+from krok_helper.subtitle_render.frontend.preview.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.background import (
     BackgroundSource,

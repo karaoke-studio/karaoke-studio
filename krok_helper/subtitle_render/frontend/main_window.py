@@ -200,17 +200,17 @@ from krok_helper.subtitle_render.frontend.export_controller import (
     ExportJobInputs,
 )
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
-from krok_helper.subtitle_render.frontend.playback import (
+from krok_helper.subtitle_render.frontend.preview.playback import (
     PlaybackController,
     unified_player_enabled,
 )
-from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
-from krok_helper.subtitle_render.frontend.preview_async import (
+from krok_helper.subtitle_render.frontend.preview.preview_view import PreviewPanel, TransportBar
+from krok_helper.subtitle_render.frontend.preview.preview_async import (
     DEFAULT_PREVIEW_QUALITY,
     gpu_preview_enabled,
     normalize_preview_quality,
 )
-from krok_helper.subtitle_render.frontend.preview_controller import (
+from krok_helper.subtitle_render.frontend.preview.preview_controller import (
     PreviewDurationController,
     PreviewPreferenceController,
     PreviewWindowController,

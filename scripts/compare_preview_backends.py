@@ -259,7 +259,7 @@ def _run_backend(
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication
 
-    from krok_helper.subtitle_render.frontend.preview_async import (
+    from krok_helper.subtitle_render.frontend.preview.preview_async import (
         AsyncSubtitleRenderer,
         NativeAsyncSubtitleRenderer,
     )

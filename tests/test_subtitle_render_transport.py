@@ -26,8 +26,8 @@ from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
 from PyQt6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.frontend import preview_view as pv  # noqa: E402
-from krok_helper.subtitle_render.frontend.preview_view import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview import preview_view as pv  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview.preview_view import (  # noqa: E402
     PreviewCanvas,
     TransportBar,
 )
@@ -200,7 +200,7 @@ def test_preview_surfaces_do_not_draw_frame_border(qapp):
         canvas.close()
         canvas.deleteLater()
 
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     graphics = PreviewGraphicsView()
     try:
@@ -218,8 +218,8 @@ def test_preview_surfaces_do_not_draw_frame_border(qapp):
 
 
 def test_preview_graphics_video_source_uses_qt_playback_proxy(qapp, monkeypatch, tmp_path):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     graphics = PreviewGraphicsView()
     source = tmp_path / "source.mp4"
@@ -255,7 +255,7 @@ def test_preview_graphics_video_source_uses_qt_playback_proxy(qapp, monkeypatch,
 
 
 def test_preview_graphics_propagates_quality_to_shared_player(qapp):
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     seen: list[str] = []
 
@@ -279,7 +279,7 @@ def test_preview_graphics_propagates_quality_to_shared_player(qapp):
 
 
 def test_async_preview_target_size_uses_device_pixel_ratio():
-    from krok_helper.subtitle_render.frontend.preview_async import preview_render_target_size
+    from krok_helper.subtitle_render.frontend.preview.preview_async import preview_render_target_size
 
     assert preview_render_target_size(1920, 1080, 1.25) == (2400, 1350, 1.25)
     assert preview_render_target_size(0, 0, 0) == (1, 1, 1.0)
@@ -287,7 +287,7 @@ def test_async_preview_target_size_uses_device_pixel_ratio():
 
 
 def test_preview_quality_caps_lower_tiers_and_preserves_full_quality():
-    from krok_helper.subtitle_render.frontend.preview_async import (
+    from krok_helper.subtitle_render.frontend.preview.preview_async import (
         normalize_preview_quality,
         preview_quality_render_scale,
     )
@@ -317,7 +317,7 @@ def test_transport_preview_quality_defaults_and_emits(qapp):
 
 
 def test_native_preview_lookahead_timestamps_only_expand_while_playing():
-    from krok_helper.subtitle_render.frontend.preview_async import native_preview_timestamps
+    from krok_helper.subtitle_render.frontend.preview.preview_async import native_preview_timestamps
 
     assert native_preview_timestamps(1_000, playing=False, fps=60, lookahead_frames=4) == [1_000]
     assert native_preview_timestamps(1_000, playing=True, fps=60, lookahead_frames=4) == [
@@ -346,7 +346,7 @@ def test_native_preview_lookahead_timestamps_only_expand_while_playing():
 def test_gpu_preview_wide_stroke_keeps_hardware_backend(qapp, monkeypatch):
     from dataclasses import replace
 
-    from krok_helper.subtitle_render.frontend.preview_async import (
+    from krok_helper.subtitle_render.frontend.preview.preview_async import (
         GpuAsyncSubtitleRenderer,
     )
     from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -363,7 +363,7 @@ def test_gpu_preview_wide_stroke_keeps_hardware_backend(qapp, monkeypatch):
 
 
 def test_gpu_preview_explicit_warp_request_is_preserved(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend.preview_async import (
+    from krok_helper.subtitle_render.frontend.preview.preview_async import (
         GpuAsyncSubtitleRenderer,
     )
     from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -379,7 +379,7 @@ def test_gpu_preview_explicit_warp_request_is_preserved(qapp, monkeypatch):
 
 
 def test_native_preview_frame_cache_detaches_and_evicts_oldest():
-    from krok_helper.subtitle_render.frontend.preview_async import NativePreviewFrameCache
+    from krok_helper.subtitle_render.frontend.preview.preview_async import NativePreviewFrameCache
 
     cache = NativePreviewFrameCache(max_frames=2)
     first = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
@@ -408,7 +408,7 @@ def test_native_preview_frame_cache_detaches_and_evicts_oldest():
 
 
 def test_native_preview_frame_cache_uses_fps_normalized_keys():
-    from krok_helper.subtitle_render.frontend.preview_async import NativePreviewFrameCache
+    from krok_helper.subtitle_render.frontend.preview.preview_async import NativePreviewFrameCache
 
     cache = NativePreviewFrameCache(max_frames=2, fps=60)
     image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
@@ -423,7 +423,7 @@ def test_native_preview_frame_cache_uses_fps_normalized_keys():
 
 
 def test_native_preview_stats_snapshot_tracks_core_counters():
-    from krok_helper.subtitle_render.frontend.preview_async import NativePreviewStats
+    from krok_helper.subtitle_render.frontend.preview.preview_async import NativePreviewStats
 
     stats = NativePreviewStats()
 
@@ -448,7 +448,7 @@ def test_native_preview_stats_snapshot_tracks_core_counters():
 
 
 def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
-    from krok_helper.subtitle_render.frontend.preview_async import async_preview_enabled
+    from krok_helper.subtitle_render.frontend.preview.preview_async import async_preview_enabled
 
     monkeypatch.delenv("KROK_SUBTITLE_ASYNC_PREVIEW", raising=False)
     assert async_preview_enabled() is True
@@ -463,7 +463,7 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
 
 
 def test_native_preview_defaults_off_and_env_can_opt_in(monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
     assert pa.native_preview_enabled() is False
@@ -479,7 +479,7 @@ def test_native_preview_defaults_off_and_env_can_opt_in(monkeypatch):
 
 
 def test_gpu_preview_defaults_to_g5_on_interactive_windows(monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.delenv("KROK_SUBTITLE_GPU_PREVIEW", raising=False)
@@ -496,7 +496,7 @@ def test_gpu_preview_defaults_to_g5_on_interactive_windows(monkeypatch):
 
 
 def test_gpu_native_preview_is_hard_disabled(monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     monkeypatch.delenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", raising=False)
     assert pa.gpu_native_preview_enabled() is False
@@ -509,7 +509,7 @@ def test_gpu_native_preview_is_hard_disabled(monkeypatch):
 
 
 def test_gpu_renderer_never_enters_g6_even_with_legacy_env_opt_in(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend.preview_async import (
+    from krok_helper.subtitle_render.frontend.preview.preview_async import (
         GpuAsyncSubtitleRenderer,
     )
 
@@ -522,7 +522,7 @@ def test_gpu_renderer_never_enters_g6_even_with_legacy_env_opt_in(qapp, monkeypa
 
 
 def test_async_preview_renderer_stops_qthread(qapp):
-    from krok_helper.subtitle_render.frontend.preview_async import AsyncSubtitleRenderer
+    from krok_helper.subtitle_render.frontend.preview.preview_async import AsyncSubtitleRenderer
 
     renderer = AsyncSubtitleRenderer(320, 180)
     assert renderer._thread.isRunning()
@@ -533,8 +533,8 @@ def test_async_preview_renderer_stops_qthread(qapp):
 
 
 def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -591,8 +591,8 @@ def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
 
 
 def test_preview_graphics_debounces_interactive_resize(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -647,8 +647,8 @@ def test_preview_graphics_debounces_interactive_resize(qapp, monkeypatch):
 
 
 def test_preview_graphics_uses_native_async_renderer_when_enabled(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -694,8 +694,8 @@ def test_preview_graphics_uses_native_async_renderer_when_enabled(qapp, monkeypa
 
 
 def test_preview_graphics_gpu_opt_in_takes_precedence(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -736,8 +736,8 @@ def test_preview_graphics_gpu_opt_in_takes_precedence(qapp, monkeypatch):
 
 
 def test_preview_graphics_switches_gpu_backend_at_runtime(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -798,8 +798,8 @@ def test_preview_graphics_switches_gpu_backend_at_runtime(qapp, monkeypatch):
 def test_preview_graphics_repeated_gpu_toggles_stop_worker_threads(qapp, monkeypatch):
     import threading
 
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
     monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
@@ -822,8 +822,8 @@ def test_preview_graphics_repeated_gpu_toggles_stop_worker_threads(qapp, monkeyp
 def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
     qapp, monkeypatch
 ):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -885,7 +885,7 @@ def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
 
 
 def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     first_started = threading.Event()
@@ -965,7 +965,7 @@ def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch)
 
 
 def test_gpu_native_preview_presents_without_shared_memory_or_qimage(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     presented_calls: list[tuple[int, dict]] = []
@@ -1047,7 +1047,7 @@ def test_gpu_native_preview_presents_without_shared_memory_or_qimage(qapp, monke
 
 
 def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     class FailingGpuProcess:
@@ -1089,7 +1089,7 @@ def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
 
 
 def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import (
         Style,
         TimingChar,
@@ -1143,7 +1143,7 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
 
 
 def test_gpu_async_renderer_one_frame_lookahead_uses_bounded_cache(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     rendered: list[int] = []
@@ -1217,7 +1217,7 @@ def test_gpu_async_renderer_one_frame_lookahead_uses_bounded_cache(qapp, monkeyp
 
 
 def test_gpu_async_renderer_resize_rotates_shared_memory_generation(qapp):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
     try:
@@ -1234,7 +1234,7 @@ def test_gpu_async_renderer_resize_rotates_shared_memory_generation(qapp):
 
 
 def test_gpu_async_renderer_uses_target_resize_after_initial_scene(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     first_finished = threading.Event()
@@ -1307,7 +1307,7 @@ def test_gpu_async_renderer_uses_target_resize_after_initial_scene(qapp, monkeyp
 
 
 def test_gpu_async_renderer_restarts_after_bounded_fallback(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     process_count = 0
@@ -1392,7 +1392,7 @@ def test_gpu_async_renderer_restarts_after_bounded_fallback(qapp, monkeypatch):
 
 
 def test_gpu_async_renderer_pooled_batch_accepts_out_of_order_completion(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     pending: list[dict] = []
@@ -1477,7 +1477,7 @@ def test_gpu_async_renderer_pooled_batch_accepts_out_of_order_completion(qapp, m
 
 
 def test_gpu_async_renderer_reserves_final_ring_before_deferred_follower(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     slot_counts: list[int] = []
@@ -1572,7 +1572,7 @@ def test_gpu_async_renderer_reserves_final_ring_before_deferred_follower(qapp, m
 def test_gpu_async_renderer_ignores_dropped_single_frame_without_fallback(
     qapp, monkeypatch
 ):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     calls = 0
@@ -1657,7 +1657,7 @@ def test_gpu_async_renderer_ignores_dropped_single_frame_without_fallback(
 
 
 def test_gpu_async_renderer_weak_gpu_shrinks_pool_to_one(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     configured_workers: list[int] = []
@@ -1725,8 +1725,8 @@ def test_gpu_async_renderer_weak_gpu_shrinks_pool_to_one(qapp, monkeypatch):
 
 
 def test_preview_graphics_passes_playing_state_to_async_renderer(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     class FakeSignal:
         def connect(self, *args, **kwargs):
@@ -1774,7 +1774,7 @@ def test_preview_graphics_passes_playing_state_to_async_renderer(qapp, monkeypat
 
 
 def test_native_async_renderer_cancels_active_generation_on_new_request(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     started = threading.Event()
@@ -1831,7 +1831,7 @@ def test_native_async_renderer_cancels_active_generation_on_new_request(qapp, mo
 
 
 def test_native_async_renderer_keeps_active_generation_for_sequential_playback_tick(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     started = threading.Event()
@@ -1881,7 +1881,7 @@ def test_native_async_renderer_keeps_active_generation_for_sequential_playback_t
 
 
 def test_native_async_renderer_waiting_requests_use_frame_bucket(qapp):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
     try:
@@ -1896,7 +1896,7 @@ def test_native_async_renderer_waiting_requests_use_frame_bucket(qapp):
 
 
 def test_native_async_renderer_marks_restart_on_render_target_change(qapp):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
     try:
@@ -1914,7 +1914,7 @@ def test_native_async_renderer_marks_restart_on_render_target_change(qapp):
 
 def test_native_async_renderer_purges_stale_waiting_requests(qapp):
     """G2 硬性要求 1：过期 waiting 请求被丢弃，不回灌新 range（§2.5 死亡螺旋修复）。"""
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
     try:
@@ -1935,7 +1935,7 @@ def test_native_async_renderer_purges_stale_waiting_requests(qapp):
 
 def test_native_async_renderer_adaptive_lookahead_shrinks_and_recovers(qapp):
     """G2 硬性要求 6：range 耗时超过前瞻窗口时收缩前瞻，恢复后逐步回涨。"""
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
     try:
@@ -1962,7 +1962,7 @@ def test_native_async_renderer_adaptive_lookahead_shrinks_and_recovers(qapp):
 
 
 def test_native_async_renderer_handles_cancelled_event_before_range_done(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     started = threading.Event()
@@ -2024,7 +2024,7 @@ def test_native_async_renderer_handles_cancelled_event_before_range_done(qapp, m
 
 
 def test_native_async_renderer_stats_report_cache_counts(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     unblock = threading.Event()
 
@@ -2066,7 +2066,7 @@ def test_native_async_renderer_stats_report_cache_counts(qapp, monkeypatch):
 
 
 def test_native_async_renderer_skips_current_native_frame_after_cache_hit(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     started = threading.Event()
@@ -2118,7 +2118,7 @@ def test_native_async_renderer_skips_current_native_frame_after_cache_hit(qapp, 
 
 
 def test_native_async_renderer_defaults_keep_preview_ahead(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_THREADS", raising=False)
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RING_SLOTS", raising=False)
@@ -2135,7 +2135,7 @@ def test_native_async_renderer_defaults_keep_preview_ahead(qapp, monkeypatch):
 
 
 def test_native_async_renderer_reuses_shared_reader_for_range(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
 
     class FakeSlot:
@@ -2233,8 +2233,8 @@ def test_native_async_renderer_reuses_shared_reader_for_range(qapp, monkeypatch)
 
 
 def test_preview_graphics_ignores_stale_async_frame(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
     graphics = PreviewGraphicsView()
@@ -2254,8 +2254,8 @@ def test_preview_graphics_ignores_stale_async_frame(qapp, monkeypatch):
 
 
 def test_preview_graphics_ignores_late_async_frame_while_playing(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
     graphics = PreviewGraphicsView()
@@ -2276,8 +2276,8 @@ def test_preview_graphics_ignores_late_async_frame_while_playing(qapp, monkeypat
 
 
 def test_preview_graphics_accepts_near_late_async_frame_while_playing(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
     graphics = PreviewGraphicsView()
@@ -2298,8 +2298,8 @@ def test_preview_graphics_accepts_near_late_async_frame_while_playing(qapp, monk
 
 
 def test_preview_graphics_clears_async_frame_on_style_change(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
     from krok_helper.subtitle_render.models import Style
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
@@ -2890,7 +2890,7 @@ def test_audio_clock_anchor_correction_deadband_resync_and_gain():
 
 def test_preview_graphics_video_background_is_contain_with_black_bars(qapp):
     """视频背景 contain：等比完整放入 + 纯黑 letterbox 底（对齐导出 pad black）。"""
-    from krok_helper.subtitle_render.frontend.preview_graphics import (
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
         PreviewGraphicsView,
     )
     from krok_helper.subtitle_render.models import BackgroundSource
@@ -2921,7 +2921,7 @@ def test_preview_graphics_video_background_is_contain_with_black_bars(qapp):
 
 def test_preview_graphics_solid_background_renders_color(qapp):
     """纯色背景的像素级验证：渲染结果必须是背景色，而不是舞台底色。"""
-    from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel
+    from krok_helper.subtitle_render.frontend.preview.preview_view import PreviewPanel
     from krok_helper.subtitle_render.models import BackgroundSource
 
     panel = PreviewPanel()
@@ -2946,7 +2946,7 @@ def test_preview_graphics_solid_background_renders_color(qapp):
 def test_preview_graphics_image_fit_cover_and_contain(qapp, tmp_path):
     """图片背景按 image_fit 选择铺满（裁切）或黑边（完整放入）。"""
     from PyQt6.QtGui import QPixmap
-    from krok_helper.subtitle_render.frontend.preview_graphics import (
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
         PreviewGraphicsView,
     )
     from krok_helper.subtitle_render.models import BackgroundSource

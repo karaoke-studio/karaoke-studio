@@ -26,7 +26,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, QProcess, QUrl, pyqtSignal as Signal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 
-from krok_helper.subtitle_render.frontend import preview_media
+from krok_helper.subtitle_render.frontend.preview import preview_media
 
 
 def unified_player_enabled() -> bool:

@@ -16,7 +16,6 @@ A4 / A7：
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import (
@@ -48,13 +47,14 @@ from PyQt6.QtWidgets import (
 
 from krok_helper.background_throttle import UiActivityGuard
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
+from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.subtitle_render.frontend.preview_async import (
+from krok_helper.subtitle_render.frontend.preview.preview_async import (
     DEFAULT_PREVIEW_QUALITY,
     PREVIEW_QUALITY_OPTIONS,
     normalize_preview_quality,
 )
-from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
+from krok_helper.subtitle_render.frontend.preview.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.background import (
     BackgroundSource,
@@ -104,9 +104,7 @@ _FPS_REFRESH_MS = 500
 """FPS 读数刷新周期：固定节奏更新，避免「按 paint 事件更新」导致的忽高(>100)忽低(<10)。
 读数语义 = **字幕预览渲染帧率**（新字幕帧/秒，不含视频重绘触发的同帧重 blit）。"""
 
-_TRANSPORT_ICON_DIR = (
-    Path(__file__).resolve().parents[2] / "assets" / "subtitle_render"
-)
+_TRANSPORT_ICON_DIR = SUBTITLE_RENDER_ASSET_DIR
 
 
 def _transport_icon(*, playing: bool) -> QIcon:
@@ -498,7 +496,7 @@ class PreviewPanel(DropPanel):
         if _use_graphics_preview():
             # 延迟 import：QGraphicsVideoItem 依赖 QtMultimediaWidgets，
             # 测试 raster 路径时不需要加载。
-            from krok_helper.subtitle_render.frontend.preview_graphics import (
+            from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
                 PreviewGraphicsView,
             )
             self._canvas = PreviewGraphicsView()
