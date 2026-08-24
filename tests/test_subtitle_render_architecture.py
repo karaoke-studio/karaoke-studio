@@ -531,6 +531,35 @@ def test_guide_metrics_and_image_resources_have_no_painter_dependency() -> None:
         assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_text_layout_has_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.text_layout"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_build_role_text_layout",
+        "_build_text_layout",
+        "_main_script_stroke_style",
+        "_role_char_geometry_by_index",
+        "_style_for_role_in_layout",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert delegated_names <= imported
+    targets = _import_targets(owner, ROOT / "engine/text_layout.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

@@ -135,6 +135,15 @@ from krok_helper.subtitle_render.engine.text_metrics import (
     nicokara_layout_width as _nicokara_layout_width,
     truncate_div as _truncate_div,
 )
+from krok_helper.subtitle_render.engine.text_layout import (
+    GlyphLayout as _GlyphLayout,
+    TextLayout as _TextLayout,
+    build_role_text_layout as _build_role_text_layout,
+    build_text_layout as _build_text_layout,
+    main_script_stroke_style as _main_script_stroke_style,
+    role_char_geometry_by_index as _role_char_geometry_by_index,
+    style_for_role_in_layout as _style_for_role_in_layout,
+)
 from krok_helper.subtitle_render.engine.qt_line_geometry import (
     char_widths_for_intervals as _qt_char_widths_for_intervals,
     measure_guide_anchor_bounds as _qt_measure_guide_anchor_bounds,
@@ -318,34 +327,6 @@ class _SayatooLineLayout:
     total_w: int
     signal_x: float | None = None
     signal_y: float | None = None
-
-
-@dataclass(frozen=True)
-class _GlyphLayout:
-    index: int
-    text: str
-    role_label: str | None
-    style: Style
-    font: QFont
-    metrics: QFontMetrics
-    left: int
-    width: int
-    path_offset_x: float = 0.0
-    # N3's SetMultiColorAreas selects the first character's Japanese/main font
-    # slot even when that glyph itself is Latin.  Keep the pre-script style for
-    # the gradient inset while ``style`` retains the actual glyph stroke.
-    brush_style: Style | None = None
-    vector_glyph: object | None = None
-
-
-@dataclass(frozen=True)
-class _TextLayout:
-    glyphs: list[_GlyphLayout]
-    total_width: int
-    ascent: int
-    descent: int
-    height: int
-    line_rect: QRectF
 
 
 @dataclass(frozen=True)
@@ -672,7 +653,6 @@ from krok_helper.subtitle_render.timing import (
 )
 from krok_helper.subtitle_render.models import (
     DecorationKind,
-    LYRICS_LAYOUT_CHAR_FIELDS,
     Style,
     TitleOverlay,
     effective_karaoke_animation,
@@ -3463,44 +3443,6 @@ def _draw_lit_shape_raw(
         painter.drawRoundedRect(rect, radius, radius)
     else:
         painter.drawEllipse(rect)
-def _main_script_stroke_style(style: Style, text: str) -> Style:
-    """把当前字符对应字体槽的描边参数物化到 Painter 的通用字段。"""
-    if _is_n3_latin_text(text):
-        width = (
-            style.stroke_width_px
-            if style.latin_stroke_width_px is None
-            or int(style.latin_stroke_width_px) <= 0
-            else int(style.latin_stroke_width_px)
-        )
-        enabled = (
-            style.stroke2_enabled
-            if style.latin_stroke2_enabled is None
-            else bool(style.latin_stroke2_enabled)
-        )
-        width2 = (
-            style.stroke2_width_px
-            if style.latin_stroke2_width_px is None
-            or int(style.latin_stroke2_width_px) <= 0
-            else int(style.latin_stroke2_width_px)
-        )
-    else:
-        width = style.stroke_width_px
-        enabled = style.stroke2_enabled
-        width2 = style.stroke2_width_px
-    effective_width2 = max(int(width2), 0) if enabled else 0
-    if (
-        int(style.stroke_width_px) == int(width)
-        and int(style.stroke2_width_px) == effective_width2
-    ):
-        return style
-    return replace(
-        style,
-        stroke_width_px=max(int(width), 0),
-        stroke2_enabled=True,
-        stroke2_width_px=effective_width2,
-    )
-
-
 def _main_stroke2_width(style: Style) -> int:
     return max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
 
@@ -7166,15 +7108,6 @@ def _char_left_positions(
     return lefts
 
 
-def _style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
-    """Apply role visuals while keeping the active layout's character spacing."""
-    role_style = _style_for_role(style, role_label)
-    return replace(
-        role_style,
-        **{name: getattr(style, name) for name in LYRICS_LAYOUT_CHAR_FIELDS},
-    )
-
-
 def _bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
     return _guide_symbol_is_bitmap(symbol) and not bool(
         getattr(symbol, "bitmap_after_path", None)
@@ -7206,223 +7139,6 @@ def _glyph_path(glyph: _GlyphLayout, baseline_y: int) -> QPainterPath:
         glyph.text,
     )
     return path
-
-
-def _build_text_layout(
-    line: TimingLine,
-    style: Style,
-    *,
-    x0: int,
-    baseline_y: int,
-    inline_styles: bool,
-    char_gaps: list[int] | None = None,
-) -> _TextLayout:
-    rtl = style.right_to_left
-    measured: list[
-        tuple[
-            int,
-            str,
-            str | None,
-            Style,
-            Style,
-            QFont,
-            QFontMetrics,
-            int,
-            int,
-            float,
-            object | None,
-        ]
-    ] = []
-    total_w = 0
-    max_ascent = 0
-    max_descent = 0
-    plain_font = _build_font(style) if not inline_styles else None
-    plain_metrics = QFontMetrics(plain_font) if plain_font is not None else None
-    plain_latin_font = _build_latin_font(style) if not inline_styles else None
-    plain_font_for = (
-        _make_font_for(style, plain_font, plain_latin_font)
-        if plain_font is not None and plain_latin_font is not None
-        else None
-    )
-    plain_latin_metrics = (
-        QFontMetrics(plain_latin_font)
-        if plain_font_for is not None and plain_latin_font is not None
-        else plain_metrics
-    )
-    inline_resource_cache: dict[
-        str | None,
-        tuple[Style, str | None, QFont, QFontMetrics, object, QFontMetrics],
-    ] = {}
-    for index, ch in enumerate(line.chars):
-        if inline_styles:
-            cached = inline_resource_cache.get(ch.role_label)
-            if cached is None:
-                role_style = _style_for_role_in_layout(style, ch.role_label)
-                role_label = ch.role_label
-                font = _build_font(role_style)
-                metrics = QFontMetrics(font)
-                latin_font = _build_latin_font(role_style)
-                font_for = _make_font_for(role_style, font, latin_font)
-                latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-                cached = (role_style, role_label, font, metrics, font_for, latin_metrics)
-                inline_resource_cache[ch.role_label] = cached
-            role_style, role_label, font, metrics, font_for, latin_metrics = cached
-        else:
-            role_style = style
-            role_label = None
-            font = plain_font
-            metrics = plain_metrics
-            font_for = plain_font_for
-            latin_metrics = plain_latin_metrics
-            if font is None or metrics is None or latin_metrics is None:
-                continue
-        is_guide = ch.vector_glyph is not None
-        glyph_style = role_style if is_guide else _main_script_stroke_style(role_style, ch.text)
-        glyph_font = font if is_guide else (font_for(ch.text) if font_for is not None else font)
-        glyph_metrics = (
-            QFontMetrics(glyph_font)
-            if not is_guide and _is_emoji_text(ch.text)
-            else latin_metrics
-            if not is_guide and font_for is not None and _is_n3_latin_text(ch.text)
-            else metrics
-        )
-        width = (
-            _vector_glyph_width(ch.vector_glyph, role_style)
-            if is_guide
-            else _char_layout_width(
-                ch.text, font, metrics, latin_metrics, font_for, glyph_style,
-            )
-        )
-        spacing_after = _letter_spacing(role_style) if index < len(line.chars) - 1 else 0
-        measured.append(
-            (
-                index,
-                ch.text,
-                role_label,
-                glyph_style,
-                role_style,
-                glyph_font,
-                glyph_metrics,
-                width,
-                spacing_after,
-                0.0
-                if is_guide
-                else _char_path_left_offset(
-                    ch.text, font, metrics, latin_metrics, font_for, glyph_style,
-                ),
-                ch.vector_glyph,
-            )
-        )
-        advance = width + spacing_after
-        total_w += (
-            max(advance, 0)
-            if style.layout_semantics == "n3_1074" and spacing_after
-            else advance
-        )
-        # 空白字符无墨水，不参与行高（N3 按墨水轮廓求行盒）。否则半角空格走
-        # 英数字体时，其超高 metrics（如 Comic Sans）会把注音顶离正文。
-        if ch.text.strip():
-            max_ascent = max(max_ascent, glyph_metrics.ascent())
-            max_descent = max(max_descent, glyph_metrics.descent())
-
-    if measured and max_ascent == 0 and max_descent == 0:
-        # 整行都是空白：退回第一个字符的 metrics，保证行高非零。
-        fallback_metrics = measured[0][6]
-        max_ascent = fallback_metrics.ascent()
-        max_descent = fallback_metrics.descent()
-
-    gap_total = (
-        sum(char_gaps[: len(line.chars)])
-        if char_gaps is not None and not rtl
-        else 0
-    )
-    layout_total_w = total_w + gap_total
-    glyphs: list[_GlyphLayout] = []
-    if rtl:
-        cursor = x0 + layout_total_w
-        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x, vector_glyph in measured:
-            cursor -= width
-            glyphs.append(
-                _GlyphLayout(
-                    index=index,
-                    text=text,
-                    role_label=role_label,
-                    style=glyph_style,
-                    font=glyph_font,
-                    metrics=metrics,
-                    left=cursor,
-                    width=width,
-                    path_offset_x=path_offset_x,
-                    brush_style=brush_style,
-                    vector_glyph=vector_glyph,
-                )
-            )
-            advance = width + spacing_after
-            cursor -= (
-                max(advance, 0) - width
-                if style.layout_semantics == "n3_1074" and spacing_after
-                else spacing_after
-            )
-    else:
-        cursor = x0
-        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x, vector_glyph in measured:
-            if char_gaps is not None and index < len(char_gaps):
-                cursor += char_gaps[index]
-            glyphs.append(
-                _GlyphLayout(
-                    index=index,
-                    text=text,
-                    role_label=role_label,
-                    style=glyph_style,
-                    font=glyph_font,
-                    metrics=metrics,
-                    left=cursor,
-                    width=width,
-                    path_offset_x=path_offset_x,
-                    brush_style=brush_style,
-                    vector_glyph=vector_glyph,
-                )
-            )
-            advance = width + spacing_after
-            cursor += (
-                max(advance, 0)
-                if style.layout_semantics == "n3_1074" and spacing_after
-                else advance
-            )
-
-    height = max_ascent + max_descent
-    line_rect = QRectF(
-        float(x0),
-        float(baseline_y - max_ascent),
-        float(max(layout_total_w, 0)),
-        float(max(height, 1)),
-    )
-    return _TextLayout(
-        glyphs=glyphs,
-        total_width=max(layout_total_w, 0),
-        ascent=max_ascent,
-        descent=max_descent,
-        height=max(height, 1),
-        line_rect=line_rect,
-    )
-
-
-def _build_role_text_layout(
-    line: TimingLine,
-    style: Style,
-    *,
-    x0: int,
-    baseline_y: int,
-    char_gaps: list[int] | None = None,
-) -> _TextLayout:
-    return _build_text_layout(
-        line,
-        style,
-        x0=x0,
-        baseline_y=baseline_y,
-        inline_styles=True,
-        char_gaps=char_gaps,
-    )
 
 
 def _role_visual_text_padding(layout: _TextLayout) -> int:
@@ -10596,19 +10312,6 @@ def _glyph_runs_for_indices(
     if current:
         runs.append(current)
     return runs
-
-
-def _role_char_geometry_by_index(
-    line: TimingLine,
-    layout: _TextLayout,
-) -> tuple[list[int], list[tuple[int, int]]]:
-    widths = [0 for _ in line.chars]
-    ranges = [(0, 0) for _ in line.chars]
-    for glyph in layout.glyphs:
-        if 0 <= glyph.index < len(line.chars):
-            widths[glyph.index] = glyph.width
-            ranges[glyph.index] = (glyph.left, glyph.left + glyph.width)
-    return widths, ranges
 
 
 def _role_char_ink_ranges_by_index(

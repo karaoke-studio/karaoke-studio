@@ -2486,11 +2486,12 @@ def test_glyph_path_offset_drives_render_path_and_ink_ranges(qapp, monkeypatch):
 
     from PyQt6.QtGui import QPainterPath  # noqa: E402,PLC0415
     from krok_helper.subtitle_render.engine import painter as painter_module  # noqa: PLC0415
+    from krok_helper.subtitle_render.engine import text_layout  # noqa: PLC0415
 
     def controlled_path_offset(*args, **kwargs):
         return 12.25
 
-    monkeypatch.setattr(painter_module, "_char_path_left_offset", controlled_path_offset)
+    monkeypatch.setattr(text_layout, "char_path_left_offset", controlled_path_offset)
     line = TimingLine(
         chars=[TimingChar(text="A", start_ms=1000)],
         end_ms=2000,
