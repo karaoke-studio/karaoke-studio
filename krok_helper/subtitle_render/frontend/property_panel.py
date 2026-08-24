@@ -3952,64 +3952,7 @@ class PropertyPanel(QWidget):
     def _make_font_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
     ) -> QWidget:
-        section, layout = _inline_section("字体", parent) if inline else _section("字体")
-
-        # 与颜色面板保持一致：变化维度放左侧，编辑对象放右侧。
-        self._font_tab_panel = _FolderTabPanel(
-            (("japanese", "日文"), ("latin", "英数")),
-            (("main", "主文字"), ("ruby", "注音")),
-            section,
-        )
-        self._font_tab_stack = QStackedWidget(self._font_tab_panel)
-        self._font_stroke_controls: dict[
-            tuple[str, str], tuple[FluentSpinBox, CheckBox, FluentSpinBox]
-        ] = {}
-        self._font_controls: dict[
-            tuple[str, str],
-            tuple[
-                _WheelFocusedFontComboBox,
-                _WheelFocusedComboBox,
-                Optional[str],
-            ],
-        ] = {}
-        #: 英数页上的"字号跟随上一级"勾选框（日文页没有可跟随的对象）。
-        self._font_size_follow_checks: dict[tuple[str, str], CheckBox] = {}
-        for subject, script in (
-            ("main", "japanese"),
-            ("main", "latin"),
-            ("ruby", "japanese"),
-            ("ruby", "latin"),
-        ):
-            self._font_tab_stack.addWidget(
-                self._make_font_settings_page(subject, script, self._font_tab_stack)
-            )
-        self._font_tab_panel.content_layout.addWidget(self._font_tab_stack)
-        self._font_tab_panel.leftChanged.connect(
-            self._on_font_script_changed
-        )
-        self._font_tab_panel.rightChanged.connect(
-            lambda _key: self._sync_font_settings_page()
-        )
-        layout.addWidget(self._font_tab_panel)
-
-        self._italic_check = CheckBox("斜体", section)
-        self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
-        self._ruby_anchor_check = CheckBox("参与注音高度计算", section)
-        self._ruby_anchor_check.setToolTip(
-            "关闭后，使用当前角色的字符仍正常绘制和占位，但不会把整行注音向上顶高。"
-        )
-        self._ruby_anchor_check.toggled.connect(
-            lambda checked: self._update_style(affects_ruby_anchor=checked)
-        )
-        flags_row = QHBoxLayout()
-        flags_row.setContentsMargins(0, 0, 0, 0)
-        flags_row.setSpacing(12)
-        flags_row.addWidget(self._italic_check)
-        flags_row.addWidget(self._ruby_anchor_check)
-        flags_row.addStretch(1)
-        layout.addLayout(flags_row)
-
-        return section
+        return self._role_page_builder.make_font_section(parent, inline=inline)
 
     def _on_font_script_changed(self, script: str) -> None:
         self._sync_font_settings_page()
