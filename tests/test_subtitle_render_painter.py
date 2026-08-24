@@ -31,6 +31,7 @@ from PyQt6.QtGui import (  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
+import krok_helper.subtitle_render.engine.ruby_timing as ruby_timing  # noqa: E402
 from krok_helper.subtitle_render.engine.page_placement import (  # noqa: E402
     LineVisualBand,
 )
@@ -146,6 +147,28 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TitleOverlay,
 )
 from krok_helper.subtitle_render.subtitle_sources import parse_nicokara_lrc  # noqa: E402
+
+
+def test_painter_keeps_ruby_timing_compatibility_exports() -> None:
+    names = (
+        "_main_text_ruby_progress_ratio",
+        "_main_text_ruby_progress_time_at_ratio",
+        "_reading_unit_progress_ratio",
+        "_ruby_main_text_slot_times",
+        "_ruby_progress_parts_and_intervals",
+        "_ruby_progress_ratio",
+        "_ruby_progress_time_at_ratio",
+        "_ruby_reading_boundaries",
+        "_ruby_reading_intervals",
+        "_ruby_reading_intervals_with_pauses",
+        "_ruby_reading_unit_progress_points",
+        "_ruby_reading_units",
+        "_ruby_utopia_reading_units_and_intervals",
+        "_ruby_utopia_visual_units",
+        "_ruby_visual_units_and_intervals",
+    )
+    for name in names:
+        assert getattr(subtitle_painter, name) is getattr(ruby_timing, name)
 
 
 def test_track_layout_signature_includes_ruby_source_binding() -> None:
