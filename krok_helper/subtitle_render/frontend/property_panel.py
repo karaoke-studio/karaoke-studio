@@ -3646,6 +3646,7 @@ class PropertyPanel(QWidget):
             gradient_editor_factory=GradientStopsEditor,
             color_button_factory=ColorButton,
             double_spin_factory=_double_spin,
+            spin_factory=_spin,
         )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
@@ -4394,34 +4395,7 @@ class PropertyPanel(QWidget):
             layout.addWidget(footer, 2, 0, 1, 2)
 
     def _make_image_fill_page(self) -> QWidget:
-        page = QWidget()
-        layout = QGridLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-        self._paint_image_path_edit = FluentLineEdit(page)
-        _compact_control(self._paint_image_path_edit)
-        self._paint_image_path_edit.editingFinished.connect(
-            lambda: self._update_current_fill(image_path=self._paint_image_path_edit.text())
-        )
-        self._paint_image_browse_btn = FluentPushButton("浏览...", page)
-        self._paint_image_browse_btn.setMinimumHeight(32)
-        self._paint_image_browse_btn.clicked.connect(self._choose_paint_image)
-        self._paint_image_scale_spin = _spin(1, 1000, suffix=" %")
-        self._paint_image_scale_spin.valueChanged.connect(
-            lambda value: self._update_current_fill(image_scale_pct=value)
-        )
-        path_row = QWidget(page)
-        path_layout = QHBoxLayout(path_row)
-        path_layout.setContentsMargins(0, 0, 0, 0)
-        path_layout.setSpacing(4)
-        path_layout.addWidget(self._paint_image_path_edit, 1)
-        path_layout.addWidget(self._paint_image_browse_btn)
-        layout.addWidget(_field("图像文件", path_row), 0, 0, 1, 2)
-        layout.addWidget(_field("缩放", self._paint_image_scale_spin), 1, 0)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
-        return page
+        return self._role_fill_pages_builder.make_image_page()
 
     def _paint_color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)
