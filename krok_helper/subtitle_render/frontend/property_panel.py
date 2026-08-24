@@ -150,6 +150,9 @@ from krok_helper.subtitle_render.frontend.property_role_page import (
 from krok_helper.subtitle_render.frontend.property_role_font_page import (
     RoleFontSettingsPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_role_color_page import (
+    RoleColorPropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3627,6 +3630,14 @@ class PropertyPanel(QWidget):
             combo_factory=_WheelFocusedComboBox,
             font_combo_factory=_WheelFocusedFontComboBox,
         )
+        self._role_color_page_builder = RoleColorPropertyPageBuilder(
+            self,
+            anchored_action_factory=_AnchoredTabActionButton,
+            color_state_swap_icon=_COLOR_STATE_SWAP_ICON,
+            fill_mode_icons_provider=_fill_mode_icons,
+            spin_factory=_spin,
+            combo_factory=_WheelFocusedComboBox,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -4309,252 +4320,7 @@ class PropertyPanel(QWidget):
     def _make_color_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
     ) -> QWidget:
-        section, layout = _inline_section("颜色", parent) if inline else _section("颜色")
-
-        # 编辑对象 / 走字前后 / 图层 / 填充方式的下拉全部转为隐藏取值后端，
-        # 界面换成文件夹式 tab + 竖排按钮列；依赖 currentData 的取值 / 同步
-        # 逻辑与测试都无需改动。
-        self._color_subject_combo = _WheelFocusedComboBox(section)
-        self._color_subject_combo.addItem("主文字", "main")
-        self._color_subject_combo.addItem("注音", "ruby")
-        self._color_subject_combo.hide()
-        self._color_subject_combo.currentIndexChanged.connect(
-            lambda _index: self._on_color_subject_changed()
-        )
-
-        self._color_state_combo = _WheelFocusedComboBox(section)
-        self._color_state_combo.addItem("走字前", "before")
-        self._color_state_combo.addItem("走字后", "after")
-        self._color_state_combo.setCurrentIndex(1)
-        self._color_state_combo.hide()
-        self._color_state_combo.currentIndexChanged.connect(
-            lambda _index: self._on_color_target_combo_changed()
-        )
-
-        self._color_layer_combo = _WheelFocusedComboBox(section)
-        self._color_layer_combo.addItem("文字", "text")
-        self._color_layer_combo.addItem("描边", "stroke")
-        self._color_layer_combo.addItem("描边2", "stroke2")
-        self._color_layer_combo.addItem("装饰", "shadow")
-        self._color_layer_combo.hide()
-        self._color_layer_combo.currentIndexChanged.connect(
-            lambda _index: self._on_color_target_combo_changed()
-        )
-
-        # 文件夹式 tab 面板：左上走字后/走字前，右上主文字/注音。
-        self._color_tab_panel = _FolderTabPanel(
-            (("after", "走字后"), ("before", "走字前")),
-            (("main", "主文字"), ("ruby", "注音")),
-            section,
-        )
-        self._color_tab_panel.leftChanged.connect(self._on_color_state_tab_changed)
-        self._color_tab_panel.rightChanged.connect(self._on_color_subject_tab_changed)
-        self._color_state_swap_button = _AnchoredTabActionButton(
-            self._color_tab_panel,
-            ("left", "after"),
-            ("left", "before"),
-            section,
-        )
-        self._color_state_swap_button.setObjectName("ColorStateSwapButton")
-        self._color_state_swap_button.setIcon(QIcon(str(_COLOR_STATE_SWAP_ICON)))
-        self._color_state_swap_button.setIconSize(QSize(16, 16))
-        self._color_state_swap_button.setFixedSize(22, 22)
-        self._color_state_swap_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._color_state_swap_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._color_state_swap_button.setToolTip("交换走字前后配色")
-        self._color_state_swap_button.clicked.connect(
-            self._swap_karaoke_color_states
-        )
-        themed(
-            self._color_state_swap_button,
-            lambda: (
-                "QToolButton#ColorStateSwapButton {"
-                f" background: {palette().card_bg};"
-                f" border: 1px solid {palette().input_border};"
-                " border-radius: 11px; padding: 2px; }"
-                "QToolButton#ColorStateSwapButton:hover {"
-                f" background: {palette().secondary_button_hover_bg}; }}"
-                "QToolButton#ColorStateSwapButton:pressed {"
-                f" background: {palette().secondary_button_pressed_bg}; }}"
-            ),
-        )
-        layout.addWidget(self._color_tab_panel)
-
-        self._color_layer_pill = _PillSelector(
-            (
-                ("text", "文字"),
-                ("stroke", "描边"),
-                ("stroke2", "描边2"),
-                ("shadow", "装饰"),
-            ),
-            section,
-            vertical=True,
-        )
-        self._color_layer_pill.changed.connect(self._on_color_layer_pill_changed)
-
-        self._fill_mode_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._fill_mode_combo)
-        for label, value in [
-            ("全色", "solid"),
-            ("横向渐变", "gradient_horizontal"),
-            ("纵向渐变", "gradient_vertical"),
-            ("纵向拼色", "split_vertical"),
-            ("图像", "image"),
-        ]:
-            self._fill_mode_combo.addItem(label, value)
-        self._fill_mode_combo.hide()
-        self._fill_mode_combo.currentIndexChanged.connect(
-            lambda _index: self._update_current_fill(
-                mode=str(self._fill_mode_combo.currentData())
-            )
-        )
-        # 填充方式改竖排按钮列，与隐藏 combo 双向同步：按钮 → combo 触发
-        # _update_current_fill；_sync_color_fill_controls 设 combo → 按钮跟随
-        self._fill_mode_pill = _PillSelector(
-            (
-                ("solid", "全色"),
-                ("gradient_horizontal", "横渐变"),
-                ("gradient_vertical", "纵渐变"),
-                ("split_vertical", "拼色"),
-                ("image", "图像"),
-            ),
-            section,
-            vertical=True,
-            icons=_fill_mode_icons(),
-        )
-        self._fill_mode_pill.changed.connect(
-            lambda mode: self._fill_mode_combo.setCurrentIndex(
-                max(0, self._fill_mode_combo.findData(mode))
-            )
-        )
-        self._fill_mode_combo.currentIndexChanged.connect(
-            lambda _index: self._fill_mode_pill.set_current(
-                str(self._fill_mode_combo.currentData())
-            )
-        )
-
-        self._decoration_type_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._decoration_type_combo)
-        self._decoration_type_combo.addItem("无", "none")
-        self._decoration_type_combo.addItem("阴影", "shadow")
-        self._decoration_type_combo.addItem("发光", "glow")
-        self._decoration_type_combo.currentIndexChanged.connect(
-            lambda _index: self._update_shared_decoration(
-                decoration_kind=str(self._decoration_type_combo.currentData())
-            )
-        )
-        self._decoration_type_field = _field("装饰类型", self._decoration_type_combo)
-
-        self._fill_editor_stack = _DynamicStackedWidget(section)
-        self._fill_editor_stack.addWidget(self._make_solid_fill_page())
-        self._fill_editor_stack.addWidget(self._make_gradient_fill_page())
-        self._fill_editor_stack.addWidget(self._make_split_fill_page())
-        self._fill_editor_stack.addWidget(self._make_image_fill_page())
-
-        detail_grid = QWidget(section)
-        detail_layout = QGridLayout(detail_grid)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.setHorizontalSpacing(8)
-        detail_layout.setVerticalSpacing(8)
-
-        self._shadow_x_spin = _spin(-40, 40, suffix=" px")
-        self._shadow_x_spin.valueChanged.connect(
-            lambda value: self._update_shared_decoration(shadow_offset_x=value)
-        )
-        self._shadow_x_field = _field("阴影 X", self._shadow_x_spin)
-        detail_layout.addWidget(self._shadow_x_field, 1, 0)
-
-        self._shadow_y_spin = _spin(-40, 40, suffix=" px")
-        self._shadow_y_spin.valueChanged.connect(
-            lambda value: self._update_shared_decoration(shadow_offset_y=value)
-        )
-        self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
-        detail_layout.addWidget(self._shadow_y_field, 1, 1)
-
-        self._glow_before_radius_spin = _spin(0, 120, suffix=" px")
-        self._glow_before_radius_spin.valueChanged.connect(
-            lambda value: self._update_shared_decoration(
-                glow_before_radius_px=value,
-            )
-        )
-        self._glow_radius_spin = self._glow_before_radius_spin
-        self._glow_radius_field = _field("走字前发光", self._glow_before_radius_spin)
-
-        self._glow_after_radius_spin = _spin(0, 120, suffix=" px")
-        self._glow_after_radius_spin.valueChanged.connect(
-            lambda value: self._update_shared_decoration(glow_after_radius_px=value)
-        )
-        self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
-
-        self._glow_concentration_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._glow_concentration_combo)
-        for label, value in [("无", -1), ("低", 0), ("中", 1), ("高", 2)]:
-            self._glow_concentration_combo.addItem(label, value)
-        self._glow_concentration_combo.currentIndexChanged.connect(
-            lambda _index: self._update_shared_decoration(
-                glow_concentration_level=int(
-                    self._glow_concentration_combo.currentData() or 0
-                )
-            )
-        )
-        self._glow_concentration_field = _field(
-            "发光浓度", self._glow_concentration_combo
-        )
-
-        # 发光的三个参数共享一行，顺序与预览语义一致：走字前、走字后、浓度。
-        self._glow_controls_row = QWidget(detail_grid)
-        glow_row_layout = QHBoxLayout(self._glow_controls_row)
-        glow_row_layout.setContentsMargins(0, 0, 0, 0)
-        glow_row_layout.setSpacing(8)
-        glow_row_layout.addWidget(self._glow_radius_field, 1)
-        glow_row_layout.addWidget(self._glow_after_radius_field, 1)
-        glow_row_layout.addWidget(self._glow_concentration_field, 1)
-        detail_layout.addWidget(self._glow_controls_row, 1, 0, 1, 2)
-
-        detail_layout.setColumnStretch(0, 1)
-        detail_layout.setColumnStretch(1, 1)
-
-        self._ruby_color_actions_row = QWidget(section)
-        ruby_color_actions_layout = QHBoxLayout(self._ruby_color_actions_row)
-        ruby_color_actions_layout.setContentsMargins(0, 0, 0, 0)
-        ruby_color_actions_layout.setSpacing(10)
-        self._ruby_colors_follow_main_check = CheckBox(
-            "默认跟随主文字", self._ruby_color_actions_row
-        )
-        self._ruby_colors_follow_main_check.setChecked(True)
-        self._ruby_colors_follow_main_check.setToolTip(
-            "勾选后，注音的文字、描边、描边2、装饰及全部填充参数实时跟随主文字配色。"
-        )
-        self._ruby_colors_follow_main_check.toggled.connect(
-            self._on_ruby_colors_follow_main_toggled
-        )
-        self._ruby_apply_main_btn = FluentPushButton(
-            "应用主文字配色", self._ruby_color_actions_row
-        )
-        self._ruby_apply_main_btn.setMinimumHeight(32)
-        self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
-        ruby_color_actions_layout.addWidget(self._ruby_colors_follow_main_check, 0)
-        ruby_color_actions_layout.addWidget(self._ruby_apply_main_btn, 1)
-        self._set_ruby_color_controls_visible(False)
-
-        # tab 内容区：左·图层列 + 填充方式列（竖排按钮），右·填充编辑和
-        # 整个配色方案共用的装饰参数。描边尺寸已经归入字体卡片。
-        columns = QHBoxLayout()
-        columns.setContentsMargins(0, 0, 0, 0)
-        columns.setSpacing(10)
-        columns.addWidget(self._color_layer_pill, 0, Qt.AlignmentFlag.AlignTop)
-        columns.addWidget(self._fill_mode_pill, 0, Qt.AlignmentFlag.AlignTop)
-        editors = QVBoxLayout()
-        editors.setContentsMargins(0, 0, 0, 0)
-        editors.setSpacing(10)
-        editors.addWidget(self._decoration_type_field)
-        editors.addWidget(self._fill_editor_stack)
-        editors.addWidget(detail_grid)
-        editors.addStretch(1)
-        columns.addLayout(editors, 1)
-        self._color_tab_panel.content_layout.addLayout(columns)
-        self._color_tab_panel.content_layout.addWidget(self._ruby_color_actions_row)
-        return section
+        return self._role_color_page_builder.make_section(parent, inline=inline)
 
     def _update_shared_decoration(self, **changes) -> None:
         """装饰是配色方案级参数；编辑时清除旧工程遗留的 ruby 独立覆盖。"""
