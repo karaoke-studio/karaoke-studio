@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from krok_helper.subtitle_render.frontend.project_commands import (
+from krok_helper.subtitle_render.frontend.project.project_commands import (
     ProjectCommandController,
 )
 

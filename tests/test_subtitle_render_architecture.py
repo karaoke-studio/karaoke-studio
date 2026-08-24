@@ -921,12 +921,27 @@ def test_subtitle_render_window_delegates_export_thread_wiring() -> None:
         assert controller_calls == expected
 
 
+def test_project_frontend_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "project_autosave.py",
+        "project_commands.py",
+        "project_recovery.py",
+        "project_settings.py",
+        "recent_projects.py",
+    }
+    project_root = ROOT / "frontend" / "project"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in project_root.glob("*.py")
+    }
+    assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
 def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.project_autosave" in targets
+    assert f"{PACKAGE}.frontend.project.project_autosave" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     recovery_worker_imports = {
         alias.name
@@ -972,7 +987,7 @@ def test_subtitle_render_window_delegates_recovery_prompt_flow() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.project_recovery" in targets
+    assert f"{PACKAGE}.frontend.project.project_recovery" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
@@ -998,7 +1013,7 @@ def test_subtitle_render_window_delegates_native_project_commands() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.project_commands" in targets
+    assert f"{PACKAGE}.frontend.project.project_commands" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
@@ -1036,7 +1051,7 @@ def test_subtitle_render_window_delegates_recent_projects() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.recent_projects" in targets
+    assert f"{PACKAGE}.frontend.project.recent_projects" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
@@ -1078,7 +1093,7 @@ def test_subtitle_render_window_imports_project_settings_dialog() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
 
     assert (
-        f"{PACKAGE}.frontend.project_settings"
+        f"{PACKAGE}.frontend.project.project_settings"
         in _import_targets(window_module, window_path)
     )
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))

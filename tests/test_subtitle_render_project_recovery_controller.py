@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from krok_helper.subtitle_render.frontend.project_recovery import (
+from krok_helper.subtitle_render.frontend.project.project_recovery import (
     ProjectRecoveryController,
 )
 from krok_helper.subtitle_render.project_recovery import RecoveryScan

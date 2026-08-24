@@ -11,7 +11,7 @@ from PyQt6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 import pytest  # noqa: E402
 
-from krok_helper.subtitle_render.frontend.project_autosave import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.project.project_autosave import (  # noqa: E402
     ProjectAutoSaveRuntime,
     RecoverySaveRequest,
 )

@@ -218,20 +218,20 @@ from krok_helper.subtitle_render.frontend.preview.preview_controller import (
 from krok_helper.subtitle_render.frontend.properties.property_panel import (
     PropertyPanel,
 )
-from krok_helper.subtitle_render.frontend.project_commands import (
+from krok_helper.subtitle_render.frontend.project.project_commands import (
     ProjectCommandController,
 )
-from krok_helper.subtitle_render.frontend.project_autosave import (
+from krok_helper.subtitle_render.frontend.project.project_autosave import (
     ProjectAutoSaveRuntime,
     RecoverySaveRequest,
 )
-from krok_helper.subtitle_render.frontend.project_recovery import (
+from krok_helper.subtitle_render.frontend.project.project_recovery import (
     ProjectRecoveryController,
 )
-from krok_helper.subtitle_render.frontend.project_settings import (
+from krok_helper.subtitle_render.frontend.project.project_settings import (
     AutoSaveSettingsDialog as _AutoSaveSettingsDialog,
 )
-from krok_helper.subtitle_render.frontend.recent_projects import (
+from krok_helper.subtitle_render.frontend.project.recent_projects import (
     RecentProjectsController,
 )
 from krok_helper.subtitle_render.screen_settings import (

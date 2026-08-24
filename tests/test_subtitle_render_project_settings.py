@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 import pytest  # noqa: E402
 
-from krok_helper.subtitle_render.frontend.project_settings import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.project.project_settings import (  # noqa: E402
     AutoSaveSettingsDialog,
 )
 
