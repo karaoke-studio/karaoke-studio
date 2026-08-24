@@ -773,8 +773,8 @@ def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     assert inline_contracts == set()
 
 
-def test_painter_diagnostics_adapter_binds_layout_margin_policy() -> None:
-    adapter_path = ROOT / "engine/layout/painter_diagnostics_adapter.py"
+def test_layout_diagnostics_backend_binds_layout_margin_policy() -> None:
+    adapter_path = ROOT / "engine/render/layout_diagnostics_backend.py"
     tree = ast.parse(adapter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
@@ -810,8 +810,8 @@ def test_painter_diagnostics_adapter_binds_layout_margin_policy() -> None:
     assert "check_layout_margins" not in inline_functions
 
 
-def test_painter_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
-    adapter_path = ROOT / "engine/layout/painter_diagnostics_adapter.py"
+def test_layout_diagnostics_backend_binds_timing_diagnostic_policy() -> None:
+    adapter_path = ROOT / "engine/render/layout_diagnostics_backend.py"
     tree = ast.parse(adapter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
@@ -1117,17 +1117,32 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
         "page_offset_plan.py",
         "page_placement.py",
         "page_plan.py",
-        "painter_diagnostics_adapter.py",
         "qt_line_geometry.py",
         "semantic_plan.py",
         "signal_semantics.py",
-        "timeline_projection.py",
     }
     layout_root = ROOT / "engine" / "layout"
     assert {"__init__.py", *module_names} <= {
         path.name for path in layout_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
+
+
+def test_layout_package_has_no_painter_dependency() -> None:
+    painter_module = f"{PACKAGE}.engine.painter"
+    layout_root = ROOT / "engine" / "layout"
+
+    offenders = {
+        path.name
+        for path in layout_root.glob("*.py")
+        if painter_module
+        in _import_targets(
+            f"{PACKAGE}.engine.layout.{path.stem}",
+            path,
+        )
+    }
+
+    assert offenders == set()
 
 
 def test_export_engine_modules_are_grouped_in_one_domain_package() -> None:
@@ -1151,11 +1166,13 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "animator.py",
         "image_resource.py",
         "layers.py",
+        "layout_diagnostics_backend.py",
         "layout_plan_backend.py",
         "quantize.py",
         "raster_blur.py",
         "render_bands.py",
         "render_ir.py",
+        "timeline_projection_backend.py",
     }
     render_root = ROOT / "engine" / "render"
     assert {"__init__.py", *module_names} <= {

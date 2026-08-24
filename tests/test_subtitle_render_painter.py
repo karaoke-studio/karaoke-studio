@@ -7852,7 +7852,7 @@ def test_after_glow_strip_matches_full_blur_within_tolerance(qapp, monkeypatch, 
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (  # noqa: E402
     LayoutMarginWarning,
 )
-from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter import (  # noqa: E402
+from krok_helper.subtitle_render.engine.render.layout_diagnostics_backend import (  # noqa: E402
     check_layout_margins,
     layout_timing_diagnostics_for_style,
 )

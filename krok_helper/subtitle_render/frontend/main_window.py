@@ -145,7 +145,7 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutTimingDiagnostic,
     layout_pass,
 )
-from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter import (
+from krok_helper.subtitle_render.engine.render.layout_diagnostics_backend import (
     check_layout_margins,
     display_windows_for_style,
     layout_timing_diagnostics_for_style,
