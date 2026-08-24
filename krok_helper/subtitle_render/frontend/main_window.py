@@ -206,6 +206,7 @@ from krok_helper.subtitle_render.frontend.preview_async import (
     normalize_preview_quality,
 )
 from krok_helper.subtitle_render.frontend.preview_controller import (
+    PreviewDurationController,
     PreviewPreferenceController,
     PreviewWindowController,
 )
@@ -2118,6 +2119,7 @@ class SubtitleRenderWindow(QWidget):
         self._project_controller = SubtitleProjectController()
         self._subtitle_source_loader = SubtitleSourceLoader()
         self._n3_import_controller = N3ProjectImportController()
+        self._preview_duration_controller = PreviewDurationController()
         self._preview_window_controller = PreviewWindowController()
         self._project_command_controller = ProjectCommandController(
             PROJECT_FILTER,
@@ -5106,16 +5108,14 @@ class SubtitleRenderWindow(QWidget):
         return find_tool("ffprobe", ffmpeg_dir)
 
     def _refresh_transport_duration(self) -> None:
-        candidates: list[int] = [track_duration_ms(track) for track in self._all_tracks()]
-        if self._video_info is not None and self._video_info.duration > 0:
-            candidates.append(int(self._video_info.duration * 1000))
-        if self._audio_info is not None and self._audio_info.duration > 0:
-            candidates.append(int(self._audio_info.duration * 1000))
-        duration = max(candidates, default=0)
-        self._tracks_view.set_duration(duration)
-        self._preview_panel.set_duration(duration)
-        if duration > 0:
-            self._transport_bar.set_duration(duration)
+        self._preview_duration_controller.refresh(
+            tracks=self._all_tracks(),
+            video_info=self._video_info,
+            audio_info=self._audio_info,
+            tracks_view=self._tracks_view,
+            preview_panel=self._preview_panel,
+            transport_bar=self._transport_bar,
+        )
 
     def _apply_style(self, style: Style) -> None:
         previous = self._style
