@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
 import krok_helper.subtitle_render.engine.raster_blur as raster_blur  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby_timing as ruby_timing  # noqa: E402
+import krok_helper.subtitle_render.engine.text_metrics as text_metrics  # noqa: E402
 from krok_helper.subtitle_render.engine.page_placement import (  # noqa: E402
     LineVisualBand,
 )
@@ -2880,11 +2881,11 @@ def test_n3_role_scheme_empty_slots_fallback_inside_same_scheme(qapp):
 
 
 def test_font_builders_use_runtime_qt_family_alias(monkeypatch):
-    monkeypatch.setattr(
-        subtitle_painter,
-        "resolve_qt_font_family",
-        lambda family: "Arial" if family == "N3 Japanese Display Name" else family,
+    resolve_family = (
+        lambda family: "Arial" if family == "N3 Japanese Display Name" else family
     )
+    monkeypatch.setattr(subtitle_painter, "resolve_qt_font_family", resolve_family)
+    monkeypatch.setattr(text_metrics, "resolve_qt_font_family", resolve_family)
     style = Style(
         font_family="N3 Japanese Display Name",
         font_family_latin="N3 Japanese Display Name",
@@ -2905,7 +2906,7 @@ def test_font_builders_use_runtime_qt_family_alias(monkeypatch):
 
 def test_lead_symbol_ascii_character_uses_resolved_custom_latin_font(monkeypatch):
     monkeypatch.setattr(
-        subtitle_painter,
+        text_metrics,
         "resolve_qt_font_family",
         lambda family: "MyEmoji5 Qt Name" if family == "MyEmoji5" else family,
     )

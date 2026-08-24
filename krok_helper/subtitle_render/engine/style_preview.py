@@ -8,9 +8,11 @@ call signatures and rendering behaviour of the existing preview.
 
 from __future__ import annotations
 
+from krok_helper.subtitle_render.engine.text_metrics import (
+    build_font,
+    build_latin_font,
+)
 from krok_helper.subtitle_render.engine.painter import (
-    _build_font as build_font,
-    _build_latin_font as build_latin_font,
     _build_ruby_font_for_text as build_ruby_font_for_text,
     _glow_extent as glow_extent,
     _main_script_stroke_style as main_script_stroke_style,

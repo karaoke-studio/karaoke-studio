@@ -104,6 +104,25 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
     signal_head_context as _signal_head_context,
     signal_lead_in_ms as _signal_lead_in_ms,
 )
+from krok_helper.subtitle_render.engine.text_metrics import (
+    build_font as _build_font,
+    build_latin_font as _build_latin_font,
+    char_advance as _char_advance,
+    char_layout_width as _char_layout_width,
+    char_path_left_offset as _char_path_left_offset,
+    clamp_weight as _clamp_weight,
+    clear_char_metric_cache,
+    is_emoji_text as _is_emoji_text,
+    is_n3_latin_text as _is_n3_latin_text,
+    latin_font_size as _latin_font_size,
+    latin_font_weight as _latin_font_weight,
+    letter_spacing as _letter_spacing,
+    line_text_width as _line_text_width,
+    make_font_for as _make_font_for,
+    nicokara_char_geometry_left_offset as _nicokara_char_geometry_left_offset,
+    nicokara_layout_width as _nicokara_layout_width,
+    truncate_div as _truncate_div,
+)
 from krok_helper.subtitle_render.engine.display_schedule import (
     display_schedule_from_items,
     display_windows_from_items,
@@ -457,7 +476,7 @@ def clear_before_layer_cache() -> None:
         _HARD_BAND_BRUSH_CACHE.clear()
     _TEXT_RUN_LAYER_CACHE.clear()
     _RUN_GLOW_CACHE.clear()
-    _CHAR_METRIC_CACHE.clear()
+    clear_char_metric_cache()
     _RUBY_MEASURE_CACHE.clear()
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
@@ -3511,54 +3530,6 @@ def _draw_lit_shape_raw(
         painter.drawRoundedRect(rect, radius, radius)
     else:
         painter.drawEllipse(rect)
-def _build_font(style: Style) -> QFont:
-    font = QFont(
-        resolve_qt_font_family(style.font_family), max(style.font_size_px, 1)
-    )
-    # QFont 用 PointSize 时 size 是 pt；这里我们当 px 用，强制 setPixelSize
-    font.setPixelSize(max(style.font_size_px, 1))
-    font.setWeight(_clamp_weight(style.font_weight))
-    font.setItalic(style.italic)
-    return font
-
-
-def _latin_font_size(style: Style) -> int:
-    """英数轨字号；``None`` 跟随日文轨。"""
-    value = style.latin_font_size_px
-    return int(value) if value is not None and int(value) > 0 else int(style.font_size_px)
-
-
-def _latin_font_weight(style: Style) -> int:
-    value = style.latin_font_weight
-    return int(value) if value is not None and int(value) > 0 else int(style.font_weight)
-
-
-def _is_n3_latin_text(text: str) -> bool:
-    """N3 英数页：ASCII U+0020..007E 加 Latin-1 字母 À..ÿ。"""
-    return bool(text) and all(
-        "\u0020" <= char <= "\u007e" or "\u00c0" <= char <= "\u00ff"
-        for char in text
-    )
-
-
-def _is_emoji_text(text: str) -> bool:
-    """Return whether a grapheme should use the monochrome emoji outline face."""
-
-    return any(
-        0x1F000 <= ord(char) <= 0x1FAFF
-        or 0x2600 <= ord(char) <= 0x27BF
-        for char in text
-    )
-
-
-def _build_emoji_font(style: Style) -> QFont:
-    font = QFont("Segoe UI Symbol", max(int(style.font_size_px), 1))
-    font.setPixelSize(max(int(style.font_size_px), 1))
-    font.setWeight(_clamp_weight(style.font_weight))
-    font.setItalic(style.italic)
-    return font
-
-
 def _main_script_stroke_style(style: Style, text: str) -> Style:
     """把当前字符对应字体槽的描边参数物化到 Painter 的通用字段。"""
     if _is_n3_latin_text(text):
@@ -3599,278 +3570,6 @@ def _main_script_stroke_style(style: Style, text: str) -> Style:
 
 def _main_stroke2_width(style: Style) -> int:
     return max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
-
-
-def _build_latin_font(style: Style) -> QFont:
-    """英数字体；未单独设置时各参数退回日文轨（行为与单字体一致）。"""
-    family = style.font_family_latin or style.font_family
-    size = max(_latin_font_size(style), 1)
-    font = QFont(resolve_qt_font_family(family), size)
-    font.setPixelSize(size)
-    font.setWeight(_clamp_weight(_latin_font_weight(style)))
-    font.setItalic(style.italic)
-    return font
-
-
-def _make_font_for(style: Style, jp_font: QFont, latin_font: QFont):
-    """返回逐字符取字体的回调；无需分离时返回 ``None``（调用方走单字体老路径）。
-
-    ``QPainterPath.addText`` 不遵循 ``setFamilies`` 的回退顺序，所以必须显式按
-    字符挑字体：全 ASCII 的字符用英数字体，其余（假名/汉字/标点）用日文字体。
-    英数轨的字号 / 字重覆盖也会使两套字体分离（family 相同亦然）。
-    """
-    emoji_font = _build_emoji_font(style)
-    same_text_fonts = _font_signature(latin_font) == _font_signature(jp_font)
-
-    def font_for(ch_text: str) -> QFont:
-        if _is_emoji_text(ch_text):
-            return emoji_font
-        return latin_font if not same_text_fonts and _is_n3_latin_text(ch_text) else jp_font
-
-    return font_for
-
-
-def _char_advance(
-    ch_text: str,
-    metrics: QFontMetrics,
-    latin_metrics: QFontMetrics,
-    font_for,
-) -> int:
-    """单字符步进；英数字符用英数字体度量，其余用日文字体度量。
-
-    ``QFontMetrics.horizontalAdvance`` 是 PyQt 绑定调用，**不释放 GIL 且会阻断
-    GIL 轮换**——预览 worker 每次编辑要调它数千次，GUI 线程因此被饿住上百毫秒
-    （实测:同样时长的纯 Python 负载只让另一个线程等 7ms，换成 PyQt 文字调用后
-    涨到 184ms）。一次排版里同一个字符 + 同一套度量的结果是常量，缓存掉。
-    """
-    cache = getattr(_LAYOUT_PASS, "char_advances", None)
-    if cache is None:
-        if font_for is not None and _is_emoji_text(ch_text):
-            return QFontMetrics(font_for(ch_text)).horizontalAdvance(ch_text)
-        if font_for is not None and _is_n3_latin_text(ch_text):
-            return latin_metrics.horizontalAdvance(ch_text)
-        return metrics.horizontalAdvance(ch_text)
-    use_emoji = font_for is not None and _is_emoji_text(ch_text)
-    use_latin = font_for is not None and _is_n3_latin_text(ch_text)
-    if use_emoji:
-        emoji_font = font_for(ch_text)
-        source = QFontMetrics(emoji_font)
-        source_key = ("emoji", _font_signature(emoji_font))
-    else:
-        source = latin_metrics if use_latin else metrics
-        source_key = id(source)
-    cache_key = (ch_text, source_key)
-    hit = cache.get(cache_key)
-    if hit is None:
-        hit = source.horizontalAdvance(ch_text)
-        cache[cache_key] = hit
-        # 键里有 id()：存住度量对象，避免回收后地址被复用。
-        _LAYOUT_PASS.metrics.append(source)
-    return hit
-
-
-# 逐字 N3 度量（layout width / path left offset）是 (字符, 字体, 少数 style 标量) 的纯函数，
-# 但每次都要 QPainterPath.addText + boundingRect + bearing，布局段每帧逐字调用非常贵。
-# 按值键 memo：key 不含任何对象 id，track/style 被就地修改也不会取到脏值。
-_CHAR_METRIC_CACHE: dict[tuple, tuple[int, float]] = {}
-_CHAR_METRIC_CACHE_MAX = 16384
-
-
-def _font_signature(font: QFont) -> tuple:
-    return (font.family(), font.pixelSize(), int(font.weight()), font.italic())
-
-
-def _char_metric_key(
-    ch_text: str,
-    glyph_font: QFont,
-    advance: int,
-    style: Style,
-) -> tuple:
-    # advance 进 key：它携带了 metrics（英数/日文字体选择）对结果的全部影响。
-    return (
-        ch_text,
-        _font_signature(glyph_font),
-        advance,
-        bool(style.allow_biting),
-        int(style.stroke_width_px),
-        int(style.space_width_percent),
-        int(style.font_size_px),
-    )
-
-
-def _truncate_div(numerator: int, denominator: int) -> int:
-    """Integer division truncated toward zero, matching C# arithmetic."""
-    if denominator == 0:
-        return 0
-    sign = -1 if (numerator < 0) != (denominator < 0) else 1
-    return sign * (abs(numerator) // abs(denominator))
-
-
-def _nicokara_layout_width(
-    ink_width: int,
-    advance: int,
-    left_bearing: int,
-    right_bearing: int,
-    *,
-    edge_size: int,
-    allow_biting: bool,
-) -> int:
-    """Approximate NicokaraMaker3's per-glyph layout-box width."""
-    advance = max(int(advance), 1)
-    left = int(left_bearing)
-    right = int(right_bearing)
-    if not allow_biting:
-        left = max(left, 0)
-        right = max(right, 0)
-    body_width = _truncate_div(
-        max(int(ink_width), 0) * (left + advance + right),
-        advance,
-    )
-    # NicokaraMaker3's DrawWidth includes EdgeSize (the first outline only).
-    return max(body_width, 0) + max(int(edge_size), 0)
-
-
-def _nicokara_char_geometry_left_offset(
-    ink_width: int,
-    advance: int,
-    left_bearing: int,
-    *,
-    allow_biting: bool,
-) -> int:
-    """Approximate NicokaraMaker3's CharGeometryLeftOffset."""
-    advance = max(int(advance), 1)
-    left = int(left_bearing)
-    if not allow_biting:
-        left = max(left, 0)
-    return _truncate_div(max(int(ink_width), 0) * left, advance)
-
-
-def _char_layout_metrics(
-    ch_text: str,
-    font: QFont,
-    metrics: QFontMetrics,
-    latin_metrics: QFontMetrics,
-    font_for,
-    style: Style,
-) -> tuple[int, float]:
-    """(layout width, path left offset) using NicokaraMaker3-like rules, memoized."""
-    is_latin_glyph = font_for is not None and _is_n3_latin_text(ch_text)
-    glyph_font = font_for(ch_text) if font_for is not None else font
-    glyph_metrics = (
-        QFontMetrics(glyph_font)
-        if _is_emoji_text(ch_text)
-        else latin_metrics if is_latin_glyph else metrics
-    )
-    font_size = glyph_font.pixelSize()
-    if font_size <= 0:
-        font_size = max(
-            _latin_font_size(style) if is_latin_glyph else int(style.font_size_px), 1
-        )
-    space_percent = max(10, min(int(style.space_width_percent), 100))
-    edge_size = max(int(style.stroke_width_px), 0)
-
-    # Treat ASCII space explicitly.  Some headless Qt font backends expose a
-    # tofu outline for it, while NicokaraMaker3 always applies SpaceWidth.
-    if ch_text == " ":
-        # A space has no path to outline.  Adding EdgeSize here made the visual
-        # gap depend on the main-text stroke (20 px became 35 px in GO GHOST),
-        # even though SpaceWidth is already an explicit percentage of FontSize.
-        return font_size * space_percent // 100, 0.0
-
-    advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
-    key = _char_metric_key(ch_text, glyph_font, advance, style)
-    cached = _CHAR_METRIC_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    path = QPainterPath()
-    if ch_text:
-        path.addText(0.0, 0.0, glyph_font, ch_text)
-    bounds = path.boundingRect()
-    if bounds.isEmpty():
-        body_width = font_size * space_percent * 25 // 100 // 10
-        result = (max(body_width, 0) + edge_size, 0.0)
-    else:
-        try:
-            width_left_bearing = glyph_metrics.leftBearing(ch_text)
-            width_right_bearing = glyph_metrics.rightBearing(ch_text)
-        except (TypeError, ValueError):
-            # Multi-codepoint graphemes and non-BMP characters cannot always be
-            # represented by QChar; derive equivalent bearings from the same path.
-            width_left_bearing = int(bounds.left())
-            width_right_bearing = int(advance - bounds.right())
-        width = _nicokara_layout_width(
-            int(bounds.width()),
-            advance,
-            width_left_bearing,
-            width_right_bearing,
-            edge_size=edge_size,
-            allow_biting=bool(style.allow_biting),
-        )
-        try:
-            offset_left_bearing = glyph_metrics.leftBearing(ch_text)
-        except (TypeError, ValueError):
-            offset_left_bearing = int(bounds.left())
-        geometry_left = _nicokara_char_geometry_left_offset(
-            int(bounds.width()),
-            advance,
-            offset_left_bearing,
-            allow_biting=bool(style.allow_biting),
-        )
-        offset = (
-            -float(bounds.left())
-            + float(geometry_left)
-            + max(int(style.stroke_width_px), 0) / 2.0
-        )
-        result = (width, offset)
-
-    if len(_CHAR_METRIC_CACHE) >= _CHAR_METRIC_CACHE_MAX:
-        _CHAR_METRIC_CACHE.clear()
-    _CHAR_METRIC_CACHE[key] = result
-    return result
-
-
-def _char_path_left_offset(
-    ch_text: str,
-    font: QFont,
-    metrics: QFontMetrics,
-    latin_metrics: QFontMetrics,
-    font_for,
-    style: Style,
-) -> float:
-    """Offset from the layout-box left edge to the QPainterPath text origin."""
-    if not ch_text or ch_text.isspace():
-        return 0.0
-    return _char_layout_metrics(ch_text, font, metrics, latin_metrics, font_for, style)[1]
-
-
-def _char_layout_width(
-    ch_text: str,
-    font: QFont,
-    metrics: QFontMetrics,
-    latin_metrics: QFontMetrics,
-    font_for,
-    style: Style,
-) -> int:
-    """Character step using NicokaraMaker3-like outline and spacing rules."""
-    return _char_layout_metrics(ch_text, font, metrics, latin_metrics, font_for, style)[0]
-
-
-def _letter_spacing(style: Style) -> int:
-    return int(style.letter_spacing_px)
-
-
-def _line_text_width(char_widths: list[int], style: Style) -> int:
-    if not char_widths:
-        return 0
-    spacing = _letter_spacing(style)
-    if style.layout_semantics == "n3_1074":
-        return max(
-            0,
-            sum(max(int(width) + spacing, 0) for width in char_widths[:-1])
-            + int(char_widths[-1]),
-        )
-    return max(0, sum(char_widths) + spacing * (len(char_widths) - 1))
 
 
 def _display_line_compute_kwargs(style: Style) -> dict[str, object]:
@@ -5580,26 +5279,6 @@ def _ruby_font_size(style: Style) -> int:
     # 字体 fallback 只共享字体族/字重，注音字号始终使用自己的字段。
     # 否则全局默认 Style() 会把 45px 注音错误渲染成 100px 主文字。
     return max(int(style.ruby_font_size_px), 1)
-
-
-def _clamp_weight(w: int) -> QFont.Weight:
-    # QFont.Weight 在 PyQt6 是 IntEnum，可直接传 int；不过为了取最近档位更稳，
-    # 映射到 Thin/Normal/Bold/Black 几档。
-    if w <= 250:
-        return QFont.Weight.Thin
-    if w <= 350:
-        return QFont.Weight.Light
-    if w <= 450:
-        return QFont.Weight.Normal
-    if w <= 550:
-        return QFont.Weight.Medium
-    if w <= 650:
-        return QFont.Weight.DemiBold
-    if w <= 750:
-        return QFont.Weight.Bold
-    if w <= 850:
-        return QFont.Weight.ExtraBold
-    return QFont.Weight.Black
 
 
 def _visual_text_padding(style: Style) -> int:

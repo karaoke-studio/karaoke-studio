@@ -471,6 +471,37 @@ def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_text_metrics_have_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.text_metrics"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_build_font",
+        "_build_latin_font",
+        "_char_layout_width",
+        "_char_path_left_offset",
+        "_letter_spacing",
+        "_line_text_width",
+        "_make_font_for",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert delegated_names <= imported
+    targets = _import_targets(owner, ROOT / "engine/text_metrics.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

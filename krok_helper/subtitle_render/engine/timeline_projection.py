@@ -13,6 +13,11 @@ from collections.abc import Sequence
 from PyQt6.QtGui import QFontMetrics
 
 from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.text_metrics import (
+    build_font,
+    build_latin_font,
+    char_layout_width,
+)
 from krok_helper.subtitle_render.timing import (
     RubyAnnotation,
     TimingLine,
@@ -62,9 +67,6 @@ def resolve_utopia_visual_intervals(
     # Utopia's visual timing projection is actually requested.
     from krok_helper.subtitle_render.engine.painter import (
         _active_rubies_for_line,
-        _build_font,
-        _build_latin_font,
-        _char_layout_width,
         _char_left_positions,
         _letter_spacing,
         _resolve_char_ruby_groups,
@@ -76,12 +78,12 @@ def resolve_utopia_visual_intervals(
     active_rubies = _active_rubies_for_line(list(rubies), line)
     if not active_rubies:
         return None
-    font = _build_font(line_style)
+    font = build_font(line_style)
     metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(line_style)
+    latin_font = build_latin_font(line_style)
     latin_metrics = QFontMetrics(latin_font)
     char_widths = [
-        _char_layout_width(
+        char_layout_width(
             char.text,
             font,
             metrics,
