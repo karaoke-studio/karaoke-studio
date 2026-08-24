@@ -27,10 +27,15 @@ from PyQt6.QtGui import QColor, QImage, QPainter
 
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
-from krok_helper.subtitle_render.background import BackgroundSource
 from krok_helper.subtitle_render.engine.encoder_select import (
     resolved_encoder_label,
-    video_encoder_options,
+)
+from krok_helper.subtitle_render.engine.export_command import (
+    background_input_args as _background_input_args,
+    background_scale_chain as _background_scale_chain,
+    bands_filter_graph as _bands_filter_graph,
+    build_render_command,
+    resolved_preview_width as _resolved_preview_width,
 )
 from krok_helper.subtitle_render.engine.native_export import (
     gpu_export_packed_enabled,
@@ -222,18 +227,7 @@ _MULTIPROC_MIN_FRAMES = 240  # 帧数低于此不值当 spawn，走单进程
 _CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节上限（控内存 / IPC 粒度）
 _CHUNK_MIN_TARGET_BYTES = 4 * 1024 * 1024  # 单个 chunk 目标字节下限（避免 IPC 过碎）
 
-# 导出预览（仿 N3 出力预览）：把 ffmpeg 内合成后的成品流 split 一路，按视频时间
-# 降频 + 缩宽后持续覆盖写入单张 JPG（image2 -update，原子写），UI 轮询该文件即可
-# 边导出边看画面。fps=2 → 60fps 输出下约每 30 帧刷新一次。
-_PREVIEW_FPS = 2
-_PREVIEW_WIDTH = 640
-_PREVIEW_MIN_WIDTH = 320
 from krok_helper.types import Logger
-
-
-def _resolved_preview_width(output_width: int, requested_width: int | None) -> int:
-    requested = _PREVIEW_WIDTH if requested_width is None else int(requested_width)
-    return min(max(int(output_width), 1), max(_PREVIEW_MIN_WIDTH, requested))
 
 
 def render_subtitle_video(
@@ -494,184 +488,6 @@ def render_subtitle_video(
 
     logger(f"字幕视频导出完成: {job.output_path}")
     return job.output_path
-
-
-def _background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
-    """背景缩放链（输出 label 为 ``[bg]``），预览与导出严格同语义。
-
-    - 视频背景固定 contain：等比缩小完整放入、不足处补纯黑边（与预览
-      ``KeepAspectRatio`` + 纯黑底一致）。
-    - 图片 / 图片序列按 ``image_fit``：``"cover"`` 等比放大铺满并居中裁掉
-      超出（与预览 ``KeepAspectRatioByExpanding`` 一致）；``"contain"`` 同视频。
-    - 纯色背景由 lavfi 直接生成目标尺寸，缩放链是无害的恒等变换。
-    """
-    source = _resolved_background(job)
-    cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
-    if cover:
-        return (
-            f"[1:v:0]scale={job.width}:{job.height}"
-            ":force_original_aspect_ratio=increase:force_divisible_by=2,"
-            f"crop={job.width}:{job.height},"
-            f"fps={job.fps},trim=duration={duration_seconds:.6f},"
-            "setpts=PTS-STARTPTS[bg];"
-        )
-    return (
-        f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
-        f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
-    )
-
-
-def _bands_filter_graph(job: RenderJob, duration_seconds: float, bands: list[tuple[int, int]]) -> str:
-    """方案 B 的 filter graph：打包输入 split → 各 band crop → 逐条 overlay 回原始 y。"""
-    offsets = _packed_offsets(bands)
-    n = len(bands)
-    bg = _background_scale_chain(job, duration_seconds)
-    ov = "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
-    split = "[ov]split=" + str(n) + "".join(f"[p{i}]" for i in range(n)) + ";"
-    crops = "".join(
-        f"[p{i}]crop={job.width}:{height}:0:{off}[c{i}];"
-        for i, ((_top, height), off) in enumerate(zip(bands, offsets))
-    )
-    chain = ""
-    prev = "[bg]"
-    for i, (top, _height) in enumerate(bands):
-        out = "[v]" if i == n - 1 else f"[o{i}]"
-        chain += f"{prev}[c{i}]overlay=0:{top}:format=auto{out};"
-        prev = out
-    return (bg + ov + split + crops + chain).rstrip(";")
-
-
-def build_render_command(
-    ffmpeg_path: str,
-    job: RenderJob,
-    *,
-    duration_ms: int | None = None,
-    strip: tuple[int, int] | None = None,
-    bands: list[tuple[int, int]] | None = None,
-    preview_image_path: Path | None = None,
-    preview_width: int | None = None,
-) -> list[str]:
-    """Build the ffmpeg command used by :func:`render_subtitle_video`.
-
-    ``strip`` = ``(y_top, height)``：仅把该窄条作为 rawvideo 输入，``overlay=0:y_top``
-    贴回全幅背景；``None`` 时整帧输入、``overlay=0:0``（原行为）。
-    ``bands`` = 多条 ``(y_top, height)``（方案 B）：竖向打包成一条 pipe，split/crop/overlay
-    还原到各自原始 y；给定时优先于 ``strip``。
-    ``preview_image_path``：导出预览 —— 把合成后的 ``[v]`` 再 split 一路，降频缩宽后
-    持续覆盖写入该 JPG（原子写），供 UI 边导出边轮询显示。``preview_width``
-    指定该支路的目标物理像素宽度；省略时使用兼容默认值。
-    """
-    _validate_job(job)
-    duration = _resolve_duration_ms(job) if duration_ms is None else duration_ms
-    duration_seconds = max(duration / 1000.0, 0.001)
-    overlay_y = 0
-    pipe_w, pipe_h = job.width, job.height
-    if bands is not None:
-        pipe_h = sum(height for _top, height in bands)
-        filter_graph = _bands_filter_graph(job, duration_seconds, bands)
-    else:
-        if strip is not None:
-            overlay_y, pipe_h = strip
-        filter_graph = (
-            _background_scale_chain(job, duration_seconds)
-            + "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
-            + f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
-        )
-    video_label = "[v]"
-    if preview_image_path is not None:
-        resolved_preview_width = _resolved_preview_width(job.width, preview_width)
-        filter_graph += (
-            ";[v]split=2[venc][vpin];"
-            f"[vpin]fps={_PREVIEW_FPS},scale={resolved_preview_width}:-2[vprev]"
-        )
-        video_label = "[venc]"
-    background = _resolved_background(job)
-    background_args = _background_input_args(background, job, duration_seconds)
-    command = [
-        ffmpeg_path,
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "warning",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgba",
-        "-s:v",
-        f"{pipe_w}x{pipe_h}",
-        "-r",
-        str(job.fps),
-        "-i",
-        "pipe:0",
-        *background_args,
-    ]
-    audio_input_index: int | None = None
-    if job.include_audio and job.audio_path is not None:
-        audio_input_index = 2
-        command.extend(["-i", str(job.audio_path)])
-    elif job.include_audio and background.kind == "video":
-        audio_input_index = 1
-    command.extend([
-        "-filter_complex",
-        filter_graph,
-        "-map",
-        video_label,
-    ])
-    if audio_input_index is not None:
-        command.extend(["-map", f"{audio_input_index}:a:0?"])
-    command.extend(["-t", f"{duration_seconds:.6f}", "-r", str(job.fps), "-fps_mode", "cfr"])
-    command.extend(
-        video_encoder_options(
-            ffmpeg_path,
-            job.encoder_mode,
-            crf=job.crf,
-            preset=job.preset,
-            codec=job.codec,
-        )
-    )
-    command.extend(["-pix_fmt", "yuv420p"])
-    if audio_input_index is not None:
-        command.extend(["-c:a", "aac", "-b:a", "192k"])
-    command.extend(["-movflags", "+faststart", str(job.output_path)])
-    if preview_image_path is not None:
-        command.extend([
-            "-map", "[vprev]",
-            "-f", "image2",
-            "-update", "1",
-            "-atomic_writing", "1",
-            "-q:v", "2",
-            str(preview_image_path),
-        ])
-    return command
-
-
-def _background_input_args(
-    source: BackgroundSource, job: RenderJob, duration_seconds: float
-) -> list[str]:
-    """返回始终占据 ffmpeg input #1 的背景输入参数。"""
-    if source.kind == "solid":
-        color = QColor(source.color)
-        if not color.isValid():
-            raise ProcessingError(f"背景颜色无效: {source.color}")
-        return [
-            "-f", "lavfi", "-i",
-            f"color=c={color.name()}:s={job.width}x{job.height}:r={job.fps}:d={duration_seconds:.6f}",
-        ]
-    if source.kind == "image":
-        return ["-loop", "1", "-framerate", str(job.fps), "-i", str(source.path)]
-    if source.kind == "image_sequence":
-        fps = max(int(source.source_fps or job.fps), 1)
-        return [
-            "-stream_loop", "-1", "-framerate", str(fps),
-            "-start_number", str(max(int(source.sequence_start_number), 0)),
-            "-i", str(source.path),
-        ]
-    args: list[str] = []
-    if source.video_offset_ms:
-        args.extend(["-ss", f"{source.video_offset_ms / 1000.0:.6f}"])
-    args.extend(["-i", str(source.path)])
-    return args
 
 
 def _frame_count(duration_ms: int, fps: int) -> int:

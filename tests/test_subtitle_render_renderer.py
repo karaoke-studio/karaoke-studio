@@ -23,6 +23,13 @@ import numpy as np  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
+from krok_helper.subtitle_render.engine.export_command import (  # noqa: E402
+    background_input_args,
+    background_scale_chain,
+    bands_filter_graph,
+    build_render_command as build_render_command_contract,
+    resolved_preview_width,
+)
 from krok_helper.subtitle_render.engine.render_job import (  # noqa: E402
     RenderJob as RenderJobContract,
 )
@@ -120,6 +127,11 @@ def test_renderer_keeps_render_job_compatibility_export() -> None:
     assert renderer._validate_job is validate_render_job
     assert renderer._merge_intervals is merge_intervals
     assert renderer._packed_offsets is packed_offsets
+    assert renderer._background_input_args is background_input_args
+    assert renderer._background_scale_chain is background_scale_chain
+    assert renderer._bands_filter_graph is bands_filter_graph
+    assert renderer._resolved_preview_width is resolved_preview_width
+    assert build_render_command is build_render_command_contract
 
 
 def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
