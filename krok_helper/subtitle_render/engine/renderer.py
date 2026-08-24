@@ -29,9 +29,6 @@ from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
 from krok_helper.subtitle_render.background import BackgroundSource
 from krok_helper.subtitle_render.engine.encoder_select import (
-    CPU_PRESETS,
-    ENCODER_MODES,
-    VIDEO_CODECS,
     resolved_encoder_label,
     video_encoder_options,
 )
@@ -41,6 +38,12 @@ from krok_helper.subtitle_render.engine.native_export import (
     iter_native_rgba_frames,
 )
 from krok_helper.subtitle_render.engine.render_job import RenderJob
+from krok_helper.subtitle_render.engine.render_job_policy import (
+    job_tracks as _job_tracks,
+    resolve_duration_ms as _resolve_duration_ms,
+    resolved_background as _resolved_background,
+    validate_render_job as _validate_job,
+)
 from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
@@ -49,7 +52,6 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame,
     paint_frame_to_painter,
 )
-from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.guide_symbols import guide_symbol_path
 from krok_helper.subtitle_render.timing import (
     TimingTrack,
@@ -223,10 +225,6 @@ _PREVIEW_FPS = 2
 _PREVIEW_WIDTH = 640
 _PREVIEW_MIN_WIDTH = 320
 from krok_helper.types import Logger
-
-
-def _job_tracks(job: "RenderJob") -> list[TimingTrack]:
-    return [job.track, *job.extra_tracks]
 
 
 def _resolved_preview_width(output_width: int, requested_width: int | None) -> int:
@@ -644,53 +642,6 @@ def build_render_command(
     return command
 
 
-def _validate_job(job: RenderJob) -> None:
-    if all(track.char_count <= 0 for track in _job_tracks(job)):
-        raise ProcessingError("请先加载有效的字幕文件。")
-    background = _resolved_background(job)
-    if background.kind == "video" and job.audio_path is not None:
-        raise ProcessingError("视频背景不支持独立音频，请使用视频内嵌音轨。")
-    if background.kind in {"video", "image", "image_sequence"}:
-        if not background.path:
-            raise ProcessingError("请先选择背景素材。")
-        path = Path(background.path)
-        if background.kind != "image_sequence" and not path.is_file():
-            raise ProcessingError(f"背景素材不存在: {path}")
-        if background.kind == "image_sequence" and not (
-            path.exists() or path.parent.exists()
-        ):
-            raise ProcessingError(f"背景图片序列不存在: {path}")
-    if job.audio_path is not None and not job.audio_path.is_file():
-        raise ProcessingError(f"独立音频不存在: {job.audio_path}")
-    if job.width <= 0 or job.height <= 0:
-        raise ProcessingError("输出分辨率无效。")
-    if job.width % 2 != 0 or job.height % 2 != 0:
-        raise ProcessingError(
-            f"输出宽度和高度必须是偶数（当前 {job.width}×{job.height}）："
-            "H.264/H.265 编码的 yuv420p 像素格式不支持奇数尺寸。"
-        )
-    if job.fps <= 0:
-        raise ProcessingError("输出 fps 无效。")
-    if job.encoder_mode not in ENCODER_MODES:
-        raise ProcessingError(f"不支持的编码器: {job.encoder_mode}")
-    if job.codec not in VIDEO_CODECS:
-        raise ProcessingError(f"不支持的视频编码: {job.codec}")
-    if not 0 <= job.crf <= 51:
-        raise ProcessingError("CRF 必须在 0 到 51 之间。")
-    if job.preset not in CPU_PRESETS:
-        raise ProcessingError(f"不支持的 CPU preset: {job.preset}")
-    if not str(job.output_path).strip():
-        raise ProcessingError("请先选择输出路径。")
-
-
-def _resolved_background(job: RenderJob) -> BackgroundSource:
-    if job.background_source is not None:
-        return job.background_source
-    if job.background_video_path is not None:
-        return BackgroundSource(kind="video", path=str(job.background_video_path))
-    return BackgroundSource(kind="solid", color="#000000")
-
-
 def _background_input_args(
     source: BackgroundSource, job: RenderJob, duration_seconds: float
 ) -> list[str]:
@@ -717,15 +668,6 @@ def _background_input_args(
         args.extend(["-ss", f"{source.video_offset_ms / 1000.0:.6f}"])
     args.extend(["-i", str(source.path)])
     return args
-
-
-def _resolve_duration_ms(job: RenderJob) -> int:
-    if job.duration_ms is not None and job.duration_ms > 0:
-        return job.duration_ms
-    duration = max(track_duration_ms(track) for track in _job_tracks(job))
-    if duration <= 0:
-        raise ProcessingError("字幕时长无效，无法导出。")
-    return duration
 
 
 def _frame_count(duration_ms: int, fps: int) -> int:

@@ -26,6 +26,12 @@ from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
 from krok_helper.subtitle_render.engine.render_job import (  # noqa: E402
     RenderJob as RenderJobContract,
 )
+from krok_helper.subtitle_render.engine.render_job_policy import (  # noqa: E402
+    job_tracks,
+    resolve_duration_ms,
+    resolved_background,
+    validate_render_job,
+)
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
     _compute_content_bands,
@@ -104,6 +110,10 @@ def _job(tmp_path: Path, *, include_audio: bool = True) -> RenderJob:
 
 def test_renderer_keeps_render_job_compatibility_export() -> None:
     assert RenderJob is RenderJobContract
+    assert renderer._job_tracks is job_tracks
+    assert renderer._resolve_duration_ms is resolve_duration_ms
+    assert renderer._resolved_background is resolved_background
+    assert renderer._validate_job is validate_render_job
 
 
 def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
