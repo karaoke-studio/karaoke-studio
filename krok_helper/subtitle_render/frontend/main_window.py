@@ -267,6 +267,7 @@ from krok_helper.subtitle_render.preferences import (
     merge_common_style_preferences,
     update_app_output_preferences,
 )
+from krok_helper.subtitle_render.recent_projects import RecentProjectPolicy
 from krok_helper.subtitle_render.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
     DEFAULT_CHORUS_END_CHARS,
@@ -2134,6 +2135,10 @@ class SubtitleRenderWindow(QWidget):
         self._export_custom_dir = ""
         self._export_name_template = DEFAULT_EXPORT_NAME_TEMPLATE
         self._project_session = SubtitleProjectSession()
+        self._recent_project_policy = RecentProjectPolicy(
+            project_suffix=PROJECT_FILE_SUFFIX,
+            limit=_MAX_RECENT_PROJECTS,
+        )
         self._recent_project_paths: list[str] = []
         self._last_logged_project_state: Optional[tuple[object, ...]] = None
         self._loading_project = False
@@ -2507,30 +2512,13 @@ class SubtitleRenderWindow(QWidget):
     @staticmethod
     def _recent_project_path_key(path: Path | str) -> str:
         """Return the platform-normalized key used to deduplicate recent paths."""
-        return os.path.normcase(os.path.abspath(os.fspath(path)))
+        return RecentProjectPolicy.path_key(path)
 
     def _load_recent_projects(self) -> list[str]:
         """Load valid native projects and prune stale or duplicate entries."""
         data = self._load_subtitle_settings()
         stored = data.get(_RECENT_PROJECTS_SETTINGS_KEY, [])
-        raw_paths = stored if isinstance(stored, list) else []
-        paths: list[str] = []
-        seen: set[str] = set()
-        for value in raw_paths:
-            if not isinstance(value, str) or not value.strip():
-                continue
-            path = Path(value).expanduser().absolute()
-            key = self._recent_project_path_key(path)
-            if (
-                key in seen
-                or path.suffix.lower() != PROJECT_FILE_SUFFIX
-                or not path.is_file()
-            ):
-                continue
-            seen.add(key)
-            paths.append(str(path))
-            if len(paths) >= _MAX_RECENT_PROJECTS:
-                break
+        paths = self._recent_project_policy.normalize(stored)
         if paths != stored:
             self._persist_recent_projects(paths)
         return paths
@@ -2593,15 +2581,10 @@ class SubtitleRenderWindow(QWidget):
 
     def _record_recent_project(self, path: Path | str) -> None:
         """Move one successfully opened native project to the front."""
-        resolved = str(Path(path).expanduser().absolute())
-        key = self._recent_project_path_key(resolved)
-        paths = [
-            existing
-            for existing in self._load_recent_projects()
-            if self._recent_project_path_key(existing) != key
-        ]
-        paths.insert(0, resolved)
-        paths = paths[:_MAX_RECENT_PROJECTS]
+        paths = self._recent_project_policy.record(
+            self._load_recent_projects(),
+            path,
+        )
         self._persist_recent_projects(paths)
         self._set_recent_projects(paths)
 

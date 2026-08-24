@@ -117,6 +117,24 @@ def test_subtitle_render_engine_does_not_depend_on_frontend() -> None:
     assert not violations
 
 
+def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
+    forbidden = f"{PACKAGE}.frontend"
+    paths = (
+        ROOT / "contracts.py",
+        ROOT / "recent_projects.py",
+        ROOT / "session.py",
+        ROOT / "settings_store.py",
+    )
+    violations: dict[str, list[str]] = defaultdict(list)
+    for path in paths:
+        module = _module_name(path)
+        for target in _import_targets(module, path):
+            if target == forbidden or target.startswith(f"{forbidden}."):
+                violations[module].append(target)
+
+    assert not violations
+
+
 def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> None:
     path = ROOT / "contracts.py"
     targets = _import_targets(f"{PACKAGE}.contracts", path)
