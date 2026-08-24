@@ -2,16 +2,34 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from qfluentwidgets import (
+    CheckBox,
+    FluentIcon as FIF,
+    TransparentToolButton as FluentTransparentToolButton,
+)
+
+from krok_helper.subtitle_render.frontend.property_layout import property_field
 
 
 class RoleFillPagesBuilder:
     """Build fill editors while color mutations remain on the panel host."""
 
-    def __init__(self, host: Any) -> None:
+    def __init__(
+        self,
+        host: Any,
+        *,
+        gradient_editor_factory: Callable[..., Any] | None = None,
+        color_button_factory: Callable[..., Any] | None = None,
+        double_spin_factory: Callable[..., Any] | None = None,
+    ) -> None:
         self._host = host
+        self._gradient_editor_factory = gradient_editor_factory
+        self._color_button_factory = color_button_factory
+        self._double_spin_factory = double_spin_factory
 
     def make_solid_page(self) -> QWidget:
         host = self._host
@@ -20,4 +38,103 @@ class RoleFillPagesBuilder:
         layout.setContentsMargins(0, 0, 0, 0)
         host._paint_solid_btn = host._paint_color_button("color", "#FFFFFF")
         layout.addWidget(host._paint_solid_btn)
+        return page
+
+    def make_gradient_page(self) -> QWidget:
+        host = self._host
+        if any(
+            factory is None
+            for factory in (
+                self._gradient_editor_factory,
+                self._color_button_factory,
+                self._double_spin_factory,
+            )
+        ):
+            raise RuntimeError("gradient editor factories are required")
+
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        host._paint_gradient_start_btn = host._paint_color_button(
+            "start_color",
+            "#FFFFFF",
+        )
+        host._paint_gradient_end_btn = host._paint_color_button(
+            "end_color",
+            "#FF5A6F",
+        )
+        host._paint_gradient_start_btn.hide()
+        host._paint_gradient_end_btn.hide()
+        host._gradient_editor = self._gradient_editor_factory(page)
+        host._gradient_editor.stopsChanged.connect(host._update_gradient_stops)
+        host._gradient_editor.selectedChanged.connect(
+            lambda _index: host._sync_gradient_stop_controls()
+        )
+        host._gradient_bar_field = host._gradient_editor
+
+        host._gradient_stop_color_btn = self._color_button_factory("#FFFFFF", page)
+        host._wire_color_edit_session(host._gradient_stop_color_btn)
+        host._gradient_stop_color_btn.clicked.connect(host._choose_gradient_stop_color)
+        host._gradient_stop_color_btn.colorEntered.connect(
+            host._gradient_editor.set_selected_color
+        )
+        host._gradient_stop_color_btn.screenPickRequested.connect(
+            lambda: host._choose_gradient_stop_color(screen_pick=True)
+        )
+        host._gradient_stop_position_spin = self._double_spin_factory(
+            0,
+            100,
+            decimals=3,
+            suffix=" %",
+        )
+        host._gradient_stop_position_spin.valueChanged.connect(
+            host._set_gradient_stop_position
+        )
+        host._gradient_stop_delete_btn = FluentTransparentToolButton(FIF.DELETE, page)
+        host._gradient_stop_delete_btn.setToolTip("删除关键点")
+        host._gradient_stop_delete_btn.setAccessibleName("删除关键点")
+        host._gradient_stop_delete_btn.setFixedSize(30, 30)
+        host._gradient_stop_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        host._gradient_stop_delete_btn.clicked.connect(
+            host._gradient_editor.delete_selected_stop
+        )
+        host._gradient_color_field = property_field(
+            "关键点颜色",
+            host._gradient_stop_color_btn,
+        )
+        position_row = QWidget(page)
+        position_layout = QHBoxLayout(position_row)
+        position_layout.setContentsMargins(0, 0, 0, 0)
+        position_layout.setSpacing(6)
+        position_layout.addWidget(host._gradient_stop_position_spin, 1)
+        position_layout.addWidget(
+            host._gradient_stop_delete_btn,
+            0,
+            Qt.AlignmentFlag.AlignBottom,
+        )
+        host._gradient_position_field = property_field("关键点位置", position_row)
+        host._ruby_horizontal_gradient_with_main_check = CheckBox(
+            "注音与主文字共享横向渐变",
+            page,
+        )
+        host._ruby_horizontal_gradient_with_main_check.setChecked(True)
+        host._ruby_horizontal_gradient_with_main_check.setToolTip(
+            "开启后，注音与下方主文字使用同一个整行横向渐变范围，颜色进度保持一致。"
+        )
+        host._ruby_horizontal_gradient_with_main_check.toggled.connect(
+            lambda checked: host._update_style(
+                ruby_horizontal_gradient_with_main=checked
+            )
+        )
+        host._gradient_editor_layout = layout
+        host._arrange_stop_editor(
+            layout,
+            host._gradient_bar_field,
+            host._gradient_color_field,
+            host._gradient_position_field,
+            vertical=False,
+            footer=host._ruby_horizontal_gradient_with_main_check,
+        )
         return page
