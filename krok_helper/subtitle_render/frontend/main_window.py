@@ -2132,6 +2132,16 @@ class SubtitleRenderWindow(QWidget):
     def _auto_save_pending(self, value: bool) -> None:
         self._auto_save_runtime.pending = bool(value)
 
+    @property
+    def _auto_save_timer(self) -> QTimer:
+        """Compatibility view of the extracted debounce timer."""
+        return self._auto_save_runtime.debounce_timer
+
+    @property
+    def _periodic_auto_save_timer(self) -> QTimer:
+        """Compatibility view of the extracted periodic timer."""
+        return self._auto_save_runtime.periodic_timer
+
     def __init__(
         self,
         embedded: bool = False,
@@ -2152,11 +2162,17 @@ class SubtitleRenderWindow(QWidget):
         self._project_recovery_controller = ProjectRecoveryController(
             self._recovery_policy
         )
-        self._auto_save_runtime = ProjectAutoSaveRuntime(self)
+        self._auto_save_runtime = ProjectAutoSaveRuntime(
+            self,
+            debounce_ms=AUTO_SAVE_DEBOUNCE_MS,
+        )
         self._auto_save_runtime.saved.connect(self._on_recovery_auto_save_success)
         self._auto_save_runtime.failed.connect(self._on_recovery_auto_save_failure)
         self._auto_save_runtime.rerunRequested.connect(
             self._on_recovery_auto_save_rerun_requested
+        )
+        self._auto_save_runtime.saveRequested.connect(
+            self._start_recovery_auto_save
         )
         self._workflow_context = workflow_context
 
@@ -2272,12 +2288,6 @@ class SubtitleRenderWindow(QWidget):
             app.aboutToQuit.connect(self._flush_persisted_state_save)
         self._load_persisted_state()
         self._recent_project_paths = self._load_recent_projects()
-        self._auto_save_timer = QTimer(self)
-        self._auto_save_timer.setSingleShot(True)
-        self._auto_save_timer.setInterval(AUTO_SAVE_DEBOUNCE_MS)
-        self._auto_save_timer.timeout.connect(self._start_recovery_auto_save)
-        self._periodic_auto_save_timer = QTimer(self)
-        self._periodic_auto_save_timer.timeout.connect(self._start_recovery_auto_save)
         self._apply_auto_save_timer_config()
 
         themed(
@@ -2866,24 +2876,15 @@ class SubtitleRenderWindow(QWidget):
             self._schedule_recovery_auto_save()
 
     def _apply_auto_save_timer_config(self) -> None:
-        if not hasattr(self, "_periodic_auto_save_timer"):
-            return
-        self._periodic_auto_save_timer.setInterval(
-            self._auto_save_interval_minutes * 60 * 1000
+        self._auto_save_runtime.configure(
+            enabled=self._auto_save_enabled,
+            interval_ms=self._auto_save_interval_minutes * 60 * 1000,
         )
-        if self._auto_save_enabled:
-            self._periodic_auto_save_timer.start()
-        else:
-            self._periodic_auto_save_timer.stop()
-            self._auto_save_timer.stop()
 
     def _schedule_recovery_auto_save(self) -> None:
-        if (
-            self._auto_save_enabled
-            and not self._loading_project
-            and hasattr(self, "_auto_save_timer")
-        ):
-            self._auto_save_timer.start()
+        self._auto_save_runtime.schedule(
+            enabled=self._auto_save_enabled and not self._loading_project
+        )
 
     def _recovery_payload_snapshot(self) -> tuple[dict, int]:
         snapshot = self._recovery_policy.capture(
@@ -2947,11 +2948,7 @@ class SubtitleRenderWindow(QWidget):
             QTimer.singleShot(0, self._start_recovery_auto_save)
 
     def _stop_auto_save_runtime(self, *, wait: bool) -> None:
-        if hasattr(self, "_auto_save_timer"):
-            self._auto_save_timer.stop()
-        if hasattr(self, "_periodic_auto_save_timer"):
-            self._periodic_auto_save_timer.stop()
-        self._auto_save_pending = False
+        self._auto_save_runtime.stop_scheduling()
         if wait:
             self._wait_for_recovery_worker()
 

@@ -347,6 +347,17 @@ def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:
         for alias in node.names
     }
     assert "_RecoverySaveWorker" not in recovery_worker_imports
+    inline_timer_assignments = {
+        target.attr
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+        if isinstance(target, ast.Attribute)
+        and target.attr in {"_auto_save_timer", "_periodic_auto_save_timer"}
+    }
+    assert inline_timer_assignments == set()
 
 
 def test_subtitle_render_window_delegates_project_recovery_policy() -> None:
