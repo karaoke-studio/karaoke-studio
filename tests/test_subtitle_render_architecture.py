@@ -347,3 +347,29 @@ def test_subtitle_render_window_delegates_project_recovery_policy() -> None:
         for alias in node.names
     } & forbidden
     assert direct_policy_imports == set()
+
+
+def test_subtitle_render_window_delegates_project_resource_policy() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.project_resources" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_missing_project_resources"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert calls == {"find_missing_project_resources"}
