@@ -604,3 +604,49 @@ def test_subtitle_render_window_delegates_missing_resource_state() -> None:
             and node.func.value.attr == "_project_session"
         }
         assert expected_call in calls
+
+
+def test_subtitle_render_window_delegates_project_save_state() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_write_project"
+    )
+    session_calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_project_session"
+    }
+    assert {
+        "begin_save",
+        "complete_save",
+        "fail_save",
+        "record_save_inspection_failure",
+    } <= session_calls
+    direct_state_assignments = {
+        target.attr
+        for node in ast.walk(method)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+        if isinstance(target, ast.Attribute)
+        and target.attr in {
+            "_project_disk_revision",
+            "_project_path",
+            "_project_save_error",
+            "_project_saving",
+            "_saved_revision",
+        }
+    }
+    assert direct_state_assignments == set()

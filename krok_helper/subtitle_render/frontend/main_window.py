@@ -3488,7 +3488,7 @@ class SubtitleRenderWindow(QWidget):
             try:
                 disk_revision = self._project_controller.inspect(path)
             except OSError as exc:
-                self._project_save_error = str(exc)
+                self._project_session.record_save_inspection_failure(str(exc))
                 self._refresh_project_title()
                 fluent_error(
                     self,
@@ -3518,9 +3518,7 @@ class SubtitleRenderWindow(QWidget):
         self._auto_save_timer.stop()
         self._auto_save_pending = False
         self._wait_for_recovery_worker()
-        revision_at_save = self._project_revision
-        self._project_saving = True
-        self._project_save_error = None
+        revision_at_save = self._project_session.begin_save()
         self._refresh_project_title()
         try:
             saved_disk_revision = self._project_controller.save(
@@ -3530,8 +3528,7 @@ class SubtitleRenderWindow(QWidget):
                 backup_count=self._project_backup_count,
             )
         except (OSError, TypeError, ValueError) as exc:
-            self._project_saving = False
-            self._project_save_error = str(exc)
+            self._project_session.fail_save(str(exc))
             self._refresh_project_title()
             self._schedule_recovery_auto_save()
             logging.getLogger(__name__).warning(
@@ -3546,11 +3543,11 @@ class SubtitleRenderWindow(QWidget):
                 copyable=True,
             )
             return False
-        self._project_path = path
-        self._project_disk_revision = saved_disk_revision
-        self._saved_revision = revision_at_save
-        self._project_saving = False
-        self._project_save_error = None
+        self._project_session.complete_save(
+            path=path,
+            disk_revision=saved_disk_revision,
+            saved_revision=revision_at_save,
+        )
         self._set_project_dirty(False)
         self._record_recent_project(path)
         self._cleanup_recovery_file(previous_recovery_path)
