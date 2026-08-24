@@ -37,7 +37,7 @@ from krok_helper.subtitle_render.models import (
     TitleOverlay,
     default_title_scheme,
 )
-from krok_helper.subtitle_render.native_backend import (
+from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
     SharedFrameRingReader,
@@ -47,7 +47,7 @@ from krok_helper.subtitle_render.native_backend import (
     default_native_renderer_path,
     resolve_native_renderer_path,
 )
-from krok_helper.subtitle_render.native_protocol import (
+from krok_helper.subtitle_render.native.protocol import (
     RENDER_IR_SCHEMA,
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
@@ -55,7 +55,7 @@ from krok_helper.subtitle_render.native_protocol import (
 
 
 def test_native_protocol_has_no_painter_dependency():
-    protocol_path = Path("krok_helper/subtitle_render/native_protocol.py")
+    protocol_path = Path("krok_helper/subtitle_render/native/protocol.py")
     tree = ast.parse(protocol_path.read_text(encoding="utf-8"))
     imported_modules = {
         node.module
@@ -2127,7 +2127,7 @@ def test_native_qt_ruby_diagnostics_is_a_read_only_projection_boundary():
 
 
 def test_track_ir_requires_resolved_plan_when_serializing_style():
-    from krok_helper.subtitle_render.native_protocol import track_to_ir
+    from krok_helper.subtitle_render.native.protocol import track_to_ir
 
     with pytest.raises(ValueError, match="resolved layout_plan"):
         track_to_ir(TimingTrack(), Style())

@@ -32,7 +32,7 @@ from krok_helper.subtitle_render.models import (
     style_from_dict,
 )
 from krok_helper.subtitle_render.n3proj_import import load_n3proj
-from krok_helper.subtitle_render.native_backend import (
+from krok_helper.subtitle_render.native.backend import (
     NativeRendererProcess,
     SharedFrameRingReader,
     resolve_native_renderer_path,

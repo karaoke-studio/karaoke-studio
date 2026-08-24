@@ -77,7 +77,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 
 from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
-from krok_helper.subtitle_render.native_backend import NativeRendererProcess, SharedFrameRingReader
+from krok_helper.subtitle_render.native.backend import NativeRendererProcess, SharedFrameRingReader
 
 
 def pixel(slot, x, y):

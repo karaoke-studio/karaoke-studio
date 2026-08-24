@@ -27,7 +27,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingLine,
     TimingTrack,
 )
-from krok_helper.subtitle_render.native_backend import (  # noqa: E402
+from krok_helper.subtitle_render.native.backend import (  # noqa: E402
     NativeRendererProcess,
     SharedFrameRingReader,
 )

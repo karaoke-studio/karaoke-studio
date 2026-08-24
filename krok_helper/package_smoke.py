@@ -29,7 +29,7 @@ def run_gpu_subtitle_smoke() -> int:
         TimingLine,
         TimingTrack,
     )
-    from krok_helper.subtitle_render.native_backend import (
+    from krok_helper.subtitle_render.native.backend import (
         NativeRendererProcess,
         SharedFrameRingReader,
     )

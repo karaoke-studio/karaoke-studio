@@ -298,7 +298,7 @@ def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> N
         "krok_helper.subtitle_render.engine",
         "krok_helper.subtitle_render.frontend",
         "krok_helper.subtitle_render.models",
-        "krok_helper.subtitle_render.native_backend",
+        "krok_helper.subtitle_render.native.backend",
     )
 
     assert not {
@@ -310,6 +310,15 @@ def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> N
 
 def test_subtitle_render_internal_import_graph_is_acyclic() -> None:
     assert _dependency_cycles(_internal_dependencies()) == []
+
+
+def test_native_modules_are_grouped_behind_one_package_boundary() -> None:
+    native_root = ROOT / "native"
+    assert {"__init__.py", "backend.py", "protocol.py"} <= {
+        path.name for path in native_root.glob("*.py")
+    }
+    assert not (ROOT / "native_backend.py").exists()
+    assert not (ROOT / "native_protocol.py").exists()
 
 
 def test_line_style_semantics_have_one_engine_owner() -> None:

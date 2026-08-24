@@ -27,13 +27,13 @@ from PyQt6.QtGui import QImage, QPainter
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.timing import TimingTrack
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.native_backend import (
+from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
     NativeRendererProcessOwner,
     SharedFrameRingReader,
 )
-from krok_helper.subtitle_render.native_protocol import (
+from krok_helper.subtitle_render.native.protocol import (
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )

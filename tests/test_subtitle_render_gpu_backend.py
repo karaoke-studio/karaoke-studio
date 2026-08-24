@@ -13,7 +13,7 @@ import pytest
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QColor, QImage
 
-from krok_helper.subtitle_render.native_backend import (
+from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
     SharedFrameRingReader,
@@ -6755,7 +6755,7 @@ def test_gpu_g4_legacy_ir_without_signal_head_keeps_per_line_lamps(
     )
     timestamps = (11_700,)
 
-    import krok_helper.subtitle_render.native_backend as native_backend
+    import krok_helper.subtitle_render.native.backend as native_backend
 
     original_build = native_backend.build_render_ir
 

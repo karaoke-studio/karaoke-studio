@@ -21,7 +21,7 @@ from krok_helper.subtitle_render.models import (
     normalize_title_char_role_labels,
     style_to_dict,
 )
-from krok_helper.subtitle_render.native_protocol import (
+from krok_helper.subtitle_render.native.protocol import (
     RENDER_IR_SCHEMA,
     title_overlay_to_ir,
     track_to_ir,

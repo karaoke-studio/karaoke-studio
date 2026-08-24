@@ -70,7 +70,7 @@ def _bar(qapp) -> TransportBar:
 
 
 def test_native_renderer_process_owner_centralizes_lazy_restart_and_close():
-    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcessOwner
 
     events: list[str] = []
 
@@ -105,7 +105,7 @@ def test_native_renderer_process_owner_centralizes_lazy_restart_and_close():
 
 
 def test_native_renderer_process_owner_cleans_failed_start():
-    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcessOwner
 
     events: list[str] = []
 
@@ -127,7 +127,7 @@ def test_native_renderer_process_owner_cleans_failed_start():
 
 
 def test_native_renderer_process_owner_replaces_exited_process():
-    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcessOwner
 
     instances = []
 
@@ -158,7 +158,7 @@ def test_native_renderer_process_owner_replaces_exited_process():
 
 
 def test_native_renderer_process_owner_serializes_concurrent_start():
-    from krok_helper.subtitle_render.native_backend import NativeRendererProcessOwner
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcessOwner
 
     instances = []
 

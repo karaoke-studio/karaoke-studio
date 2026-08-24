@@ -81,8 +81,8 @@ from krok_helper.subtitle_render.models import (
     Style,
     style_with_line_animation,
 )
-from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
-from krok_helper.subtitle_render.native_protocol import (
+from krok_helper.subtitle_render.native.backend import NativeRendererError, resolve_native_renderer_path
+from krok_helper.subtitle_render.native.protocol import (
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )

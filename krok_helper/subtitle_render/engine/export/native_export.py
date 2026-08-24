@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from krok_helper.errors import ExportCancelled
 from krok_helper.subtitle_render.timing import TimingTrack
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.native_backend import (
+from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
     SharedFrameRingReader,

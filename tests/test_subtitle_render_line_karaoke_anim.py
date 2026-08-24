@@ -187,7 +187,7 @@ class TestGpuParity:
 
     def test_the_ir_carries_the_per_line_sung_effect(self, qapp) -> None:
         from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
-        from krok_helper.subtitle_render.native_protocol import track_to_ir
+        from krok_helper.subtitle_render.native.protocol import track_to_ir
 
         style = Style()
         style.karaoke_anim = "utopia"
@@ -206,7 +206,7 @@ class TestGpuParity:
 
     def test_it_does_not_force_a_painter_fallback(self, qapp) -> None:
         """协议本来就按行发这个字段，不需要退回 Painter。"""
-        from krok_helper.subtitle_render.native_protocol import gpu_unsupported_features
+        from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
 
         style = Style()
         style.karaoke_anim = "utopia"

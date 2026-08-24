@@ -185,7 +185,7 @@ def _bench_project(args: argparse.Namespace, *, cache_mode: str) -> tuple[dict[s
     from PyQt6.QtWidgets import QApplication
 
     from krok_helper.subtitle_render.engine.painter import clear_before_layer_cache, paint_frame
-    from krok_helper.subtitle_render.native_backend import NativeRendererProcess, resolve_native_renderer_path
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcess, resolve_native_renderer_path
 
     project_path = Path(args.project)
     if not project_path.is_file():
