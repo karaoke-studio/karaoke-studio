@@ -115,6 +115,12 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
     signal_head_context as _signal_head_context,
     signal_lead_in_ms as _signal_lead_in_ms,
 )
+from krok_helper.subtitle_render.engine.ruby_selection import (
+    active_rubies_for_line as _active_rubies_for_line,
+    ruby_owns_line as _ruby_owns_line,
+    ruby_time_indices as _ruby_time_indices,
+    text_span_indices as _text_span_indices,
+)
 from krok_helper.subtitle_render.engine.text_metrics import (
     build_font as _build_font,
     build_latin_font as _build_latin_font,
@@ -11939,24 +11945,6 @@ def _ruby_target_indices(
     return time_indices
 
 
-def _ruby_owns_line(ruby: RubyAnnotation, line: TimingLine) -> bool:
-    """Whether ``ruby`` was resolved against this very line.
-
-    Harmony and lead lines can overlap in time, so ``pos_start_ms`` /
-    ``pos_end_ms`` alone cannot say which line an annotation belongs to: if both
-    lines happen to carry the same character at the same index, the other line's
-    ruby lands here too.  Loaders record the owning line, and this only vetoes
-    when both sides know their index -- a hand-built track keeps the historical
-    time-based behaviour.
-    """
-
-    return (
-        ruby.target_line_index is None
-        or line.track_line_index is None
-        or ruby.target_line_index == line.track_line_index
-    )
-
-
 def _ruby_explicit_target_indices(
     ruby: RubyAnnotation,
     line: TimingLine,
@@ -12025,17 +12013,6 @@ def _ruby_main_uses_base_timing(
         if offset < last_offset and char.explicit_end:
             return True
     return False
-
-
-def _ruby_time_indices(
-    ruby: RubyAnnotation,
-    intervals: list[tuple[int, int]],
-) -> list[int]:
-    return [
-        index
-        for index, (start, end) in enumerate(intervals)
-        if start < ruby.pos_end_ms and end > ruby.pos_start_ms
-    ]
 
 
 def _effective_ruby_for_target(
@@ -13336,76 +13313,6 @@ def resolved_guide_anchor_bounds_for_line(
         style,
         _measure_guide_anchor_bounds,
     )
-
-
-def _active_rubies_for_line(
-    rubies: list[RubyAnnotation],
-    line: TimingLine,
-) -> list[RubyAnnotation]:
-    """这一行生效的注音。排版过程中每行会被问十来次，缓存到区间内。"""
-    cache = getattr(_LAYOUT_PASS, "active_rubies", None)
-    if cache is None:
-        return _active_rubies_for_line_uncached(rubies, line)
-    cache_key = (id(rubies), id(line))
-    hit = cache.get(cache_key)
-    if hit is None:
-        hit = tuple(_active_rubies_for_line_uncached(rubies, line))
-        cache[cache_key] = hit
-        # 键里有 id()：存住这两个对象，避免回收后地址被复用。
-        _LAYOUT_PASS.lines.append(line)
-        _LAYOUT_PASS.ruby_lists.append(rubies)
-    # 调用方会就地改返回的列表，每次给一份新的。
-    return list(hit)
-
-
-def _active_rubies_for_line_uncached(
-    rubies: list[RubyAnnotation],
-    line: TimingLine,
-) -> list[RubyAnnotation]:
-    if not rubies or not line.chars:
-        return []
-    line_start = line.chars[0].start_ms
-    line_end = line.end_ms if line.end_ms is not None else line.chars[-1].start_ms
-    intervals = compute_char_intervals(line)
-    return [
-        ruby
-        for ruby in rubies
-        if ruby.reading
-        and _ruby_owns_line(ruby, line)
-        and (
-            _ruby_has_global_position(ruby)
-            or (
-                ruby.pos_end_ms > line_start
-                and ruby.pos_start_ms < line_end
-                and _timed_ruby_matches_line(ruby, line, intervals)
-            )
-        )
-    ]
-
-
-def _ruby_has_global_position(ruby: RubyAnnotation) -> bool:
-    return ruby.pos_start_ms == 0 and ruby.pos_end_ms == 0
-
-
-def _timed_ruby_matches_line(
-    ruby: RubyAnnotation,
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-) -> bool:
-    time_indices = _ruby_time_indices(ruby, intervals)
-    if not time_indices:
-        return False
-    if not ruby.kanji:
-        return True
-    preferred = set(time_indices)
-    text = "".join(ch.text for ch in line.chars)
-    pos = text.find(ruby.kanji)
-    while pos >= 0:
-        indices = _text_span_indices((pos, pos + len(ruby.kanji)), line)
-        if preferred.intersection(indices):
-            return True
-        pos = text.find(ruby.kanji, pos + 1)
-    return False
 
 
 def _paint_rubies(
@@ -15030,19 +14937,6 @@ def _find_ruby_text_indices(
     if span is None:
         return []
     return _text_span_indices(span, line)
-
-
-def _text_span_indices(text_span: tuple[int, int], line: TimingLine) -> list[int]:
-    span_start, span_end = text_span
-    indices: list[int] = []
-    cursor = 0
-    for index, ch in enumerate(line.chars):
-        unit_start = cursor
-        unit_end = cursor + len(ch.text)
-        cursor = unit_end
-        if unit_start < span_end and unit_end > span_start:
-            indices.append(index)
-    return indices
 
 
 def _paint_ruby_text_units_with_transition(

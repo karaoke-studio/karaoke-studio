@@ -588,6 +588,34 @@ def test_text_layout_has_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_ruby_selection_has_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.ruby_selection"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_active_rubies_for_line",
+        "_ruby_owns_line",
+        "_ruby_time_indices",
+        "_text_span_indices",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert imported == delegated_names
+    targets = _import_targets(owner, ROOT / "engine/ruby_selection.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"
