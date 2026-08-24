@@ -19,7 +19,11 @@ from krok_helper.subtitle_render.models import (
     Style,
     style_to_dict,
 )
-from krok_helper.subtitle_render.project_store import background_payload, project_payload
+from krok_helper.subtitle_render.project_store import (
+    background_payload,
+    project_payload,
+    split_project_paths,
+)
 from krok_helper.subtitle_render.timing_codec import (
     guide_symbol_to_dict,
     line_animation_override_to_dict,
@@ -412,6 +416,78 @@ class SubtitleProjectSession:
         self.missing_resources = ()
         self.unresolved_resource_labels = set()
         self.missing_resource_source_data = None
+
+    def remember_missing_resources(
+        self,
+        missing: tuple[tuple[str, Path], ...] | list[tuple[str, Path]],
+        source_data: dict,
+    ) -> None:
+        """Record unavailable paths without adopting them into loaded document state."""
+        self.missing_resources = tuple(missing)
+        self.unresolved_resource_labels = {label for label, _path in missing}
+        self.missing_resource_source_data = (
+            deepcopy(source_data) if self.missing_resources else None
+        )
+
+    def resolve_missing_resource_labels(self, labels: set[str]) -> bool:
+        """Forget unavailable references explicitly replaced by the user."""
+        if not labels:
+            return False
+        before = set(self.unresolved_resource_labels)
+        self.unresolved_resource_labels = before - set(labels)
+        if self.missing_resources:
+            self.missing_resources = tuple(
+                item for item in self.missing_resources if item[0] not in labels
+            )
+        if not self.unresolved_resource_labels:
+            self.missing_resource_source_data = None
+        return before != self.unresolved_resource_labels
+
+    def merge_unresolved_resource_references(self, payload: dict) -> dict:
+        """Keep skipped missing paths in project data until explicitly replaced."""
+        source = self.missing_resource_source_data
+        labels = self.unresolved_resource_labels
+        if not isinstance(source, dict) or not labels:
+            return payload
+        merged = deepcopy(payload)
+        source_paths = split_project_paths(source)
+        if "主字幕" in labels and not merged.get("subtitle_path"):
+            path = source_paths["subtitle_path"]
+            merged["subtitle_path"] = str(path) if path is not None else None
+        background_labels = {"背景视频", "背景图片", "背景图片序列"}
+        if labels & background_labels and not merged.get("background"):
+            source_background = source.get("background")
+            if isinstance(source_background, dict):
+                merged["background"] = deepcopy(source_background)
+            elif source_paths["video_path"] is not None:
+                merged["video_path"] = str(source_paths["video_path"])
+        if "独立音频" in labels and not merged.get("audio_path"):
+            path = source_paths["audio_path"]
+            merged["audio_path"] = str(path) if path is not None else None
+        source_extras = source.get("extra_subtitle_sources")
+        if isinstance(source_extras, list):
+            current_extras = (
+                list(merged.get("extra_subtitle_sources"))
+                if isinstance(merged.get("extra_subtitle_sources"), list)
+                else []
+            )
+            current_paths = {
+                str(item.get("path") or "")
+                for item in current_extras
+                if isinstance(item, dict)
+            }
+            for index, item in enumerate(source_extras, start=1):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip() or str(index)
+                label = f"副字幕「{name}」"
+                path_text = str(item.get("path") or "").strip()
+                if label in labels and path_text and path_text not in current_paths:
+                    current_extras.append(deepcopy(item))
+                    current_paths.add(path_text)
+            if current_extras:
+                merged["extra_subtitle_sources"] = current_extras
+        return merged
 
     def snapshot(
         self,
