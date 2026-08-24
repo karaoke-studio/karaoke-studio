@@ -590,6 +590,34 @@ def test_display_schedule_projection_has_no_painter_dependency() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_display_resolver_has_no_painter_dependency() -> None:
+    owner = f"{PACKAGE}.engine.layout.display_resolver"
+    path = ROOT / "engine/layout/display_resolver.py"
+    targets = _import_targets(owner, path)
+
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
+def test_painter_delegates_display_resolution_orchestration() -> None:
+    painter_path = ROOT / "engine/painter.py"
+    painter_module = f"{PACKAGE}.engine.painter"
+    targets = _import_targets(painter_module, painter_path)
+
+    assert f"{PACKAGE}.engine.layout.display_resolver" in targets
+    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    method = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_display_lines_for_style"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "resolve_display_lines" in calls
+
+
 def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
     owner = f"{PACKAGE}.engine.layout.layout_plan_orchestrator"
     targets = _import_targets(
@@ -759,6 +787,7 @@ def test_text_engine_modules_are_grouped_in_one_domain_package() -> None:
 def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
         "display_schedule.py",
+        "display_resolver.py",
         "layout_assignment.py",
         "layout_context.py",
         "layout_diagnostics.py",

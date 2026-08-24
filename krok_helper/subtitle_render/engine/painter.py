@@ -201,6 +201,10 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
     single_line_display_schedule,
     single_line_display_windows,
 )
+from krok_helper.subtitle_render.engine.layout.display_resolver import (
+    DisplayResolutionPorts,
+    resolve_display_lines,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -4431,118 +4435,45 @@ def _display_lines_for_style(
     if cached is not None:
         _DISPLAY_LINES_CACHE.move_to_end(cache_key)
         return list(cached[1])
-    ideal = compute_display_lines(
-        track,
-        **base_kwargs,
-        adjust_same_position=False,
-        dynamic_single_page_reflow=not avoid_collisions,
-        independent_line_entry=True,
+    ports = DisplayResolutionPorts(
+        compute=lambda **overrides: compute_display_lines(
+            track,
+            **base_kwargs,
+            **overrides,
+        ),
+        resolve_timing=lambda items, enforce_gap: _resolve_page_sync_and_collisions(
+            logical_w,
+            logical_h,
+            track,
+            style,
+            items,
+            enforce_inter_page_gap=enforce_gap,
+        ),
+        collision_pairs=lambda items: _pixel_collision_squeeze_pairs(
+            logical_w, logical_h, track, style, items
+        ),
+        secondary_collision_pairs=lambda items: (
+            _secondary_displacement_squeeze_pairs(
+                logical_w, logical_h, track, style, items
+            )
+        ),
+        fill_section_time=lambda items: _apply_measured_section_time_fill(
+            logical_w, logical_h, track, style, items
+        ),
+        apply_animation_guard=lambda items, enforce_gap: _apply_animation_time_guard(
+            logical_w,
+            logical_h,
+            track,
+            style,
+            items,
+            enforce_inter_page_gap=enforce_gap,
+        ),
     )
-    resolved = ideal
-    timing_resolved = False
-    if avoid_collisions:
-        # ForceBottom must inspect the schedule after the automatic timing
-        # solver has had a chance to separate the pages.  Measuring ``ideal``
-        # here used to latch a spatial reflow from the raw lead/tail windows;
-        # the later animation guard could then remove that time overlap, but
-        # the stale ForceBottom decision remained in the page layout.
-        resolved = _resolve_page_sync_and_collisions(
-            logical_w,
-            logical_h,
-            track,
-            style,
-            resolved,
-            enforce_inter_page_gap=True,
-        )
-        timing_resolved = True
-        force_bottom_pairs = _pixel_collision_squeeze_pairs(
-            logical_w, logical_h, track, style, resolved
-        )
-        if force_bottom_pairs:
-            resolved = compute_display_lines(
-                track,
-                **base_kwargs,
-                adjust_same_position=False,
-                force_bottom_pairs=force_bottom_pairs,
-                dynamic_single_page_reflow=True,
-                independent_line_entry=True,
-            )
-            resolved = _resolve_page_sync_and_collisions(
-                logical_w,
-                logical_h,
-                track,
-                style,
-                resolved,
-                enforce_inter_page_gap=True,
-            )
-        squeeze_pairs = _pixel_collision_squeeze_pairs(
-            logical_w, logical_h, track, style, resolved
-        )
-        if squeeze_pairs:
-            resolved = compute_display_lines(
-                track,
-                **base_kwargs,
-                adjust_same_position=False,
-                squeeze_pairs=squeeze_pairs,
-                force_bottom_pairs=force_bottom_pairs,
-                dynamic_single_page_reflow=True,
-                independent_line_entry=True,
-            )
-            resolved = _resolve_page_sync_and_collisions(
-                logical_w,
-                logical_h,
-                track,
-                style,
-                resolved,
-                enforce_inter_page_gap=True,
-            )
-        secondary_pairs = _secondary_displacement_squeeze_pairs(
-            logical_w, logical_h, track, style, resolved
-        )
-        if secondary_pairs:
-            combined_pairs = tuple(
-                dict.fromkeys((*squeeze_pairs, *secondary_pairs))
-            )
-            resolved = compute_display_lines(
-                track,
-                **base_kwargs,
-                adjust_same_position=False,
-                squeeze_pairs=combined_pairs,
-                force_bottom_pairs=force_bottom_pairs,
-                dynamic_single_page_reflow=True,
-                independent_line_entry=True,
-            )
-            timing_resolved = False
-    if not timing_resolved:
-        resolved = _resolve_page_sync_and_collisions(
-            logical_w,
-            logical_h,
-            track,
-            style,
-            resolved,
-            enforce_inter_page_gap=avoid_collisions,
-        )
-    # Geometry-dependent section filling must be the final layout pass.  At
-    # this point ForceBottom, squeeze pairs and rigid page displacement have
-    # all settled.  Filling can extend time windows, so run the timing guard
-    # once more afterwards without allowing it to change page geometry.
-    if style.auto_fill_section_time:
-        filled = _apply_measured_section_time_fill(
-            logical_w,
-            logical_h,
-            track,
-            style,
-            resolved,
-        )
-        if filled != resolved:
-            resolved = _apply_animation_time_guard(
-                logical_w,
-                logical_h,
-                track,
-                style,
-                filled,
-                enforce_inter_page_gap=avoid_collisions,
-            )
+    resolved = resolve_display_lines(
+        avoid_collisions=avoid_collisions,
+        auto_fill_section_time=style.auto_fill_section_time,
+        ports=ports,
+    )
     # Keep the track object alive with the cached display lines.  The key uses
     # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable
     # TimingLine references; retaining the owner also prevents CPython from
