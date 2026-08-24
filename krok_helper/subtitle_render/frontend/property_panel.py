@@ -51,7 +51,6 @@ from PyQt6.QtGui import (
     QValidator,
 )
 from PyQt6.QtWidgets import (
-    QAbstractButton,
     QAbstractItemView,
     QApplication,
     QBoxLayout,
@@ -118,6 +117,10 @@ from krok_helper.subtitle_render.frontend.property_pages import (
     PROPERTY_PAGE_SPECS,
     build_property_pages,
     property_page_index,
+)
+from krok_helper.subtitle_render.frontend.property_widgets import (
+    CollapsibleSection,
+    ToggleSwitch,
 )
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 from krok_helper.subtitle_render.engine.style_semantics import (
@@ -1070,135 +1073,6 @@ def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return QColor()
     return dialog.selectedColor()
-
-
-class ToggleSwitch(QAbstractButton):
-    """A compact iOS-style on/off switch used in place of a checkbox."""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._track_w = 38
-        self._track_h = 22
-        self.setFixedSize(self._track_w, self._track_h)
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(self._track_w, self._track_h)
-
-    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            p = palette()
-            checked = self.isChecked()
-            track = QColor(p.accent_primary if checked else p.input_border)
-            if not self.isEnabled():
-                track.setAlpha(90)
-            radius = self.height() / 2
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(track)
-            painter.drawRoundedRect(
-                QRectF(0, 0, self.width(), self.height()), radius, radius
-            )
-            knob = self.height() - 6
-            x = self.width() - knob - 3 if checked else 3
-            painter.setBrush(QColor("#FFFFFF"))
-            painter.drawEllipse(QRectF(x, 3, knob, knob))
-        finally:
-            painter.end()
-
-
-class CollapsibleSection(QFrame):
-    """A property card with a clickable header and collapsible content."""
-
-    def __init__(
-        self,
-        title: str,
-        parent: Optional[QWidget] = None,
-        *,
-        switch: bool = False,
-    ) -> None:
-        super().__init__(parent)
-        self.setObjectName("SubtitlePropertySection")
-        self._content = QWidget(self)
-        self._content.setObjectName("SubtitlePropertySectionContent")
-        self._header = QToolButton(self)
-        self._header.setObjectName("SubtitlePropertySectionHeader")
-        self._header.setText(title)
-        self._header.setCheckable(True)
-        self._header.setChecked(True)
-        self._header.setArrowType(Qt.ArrowType.DownArrow)
-        self._header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._header.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._header.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self._header.clicked.connect(self.set_expanded)
-
-        header_row = QWidget(self)
-        header_row.setObjectName("SubtitlePropertySectionHeaderRow")
-        header_layout = QHBoxLayout(header_row)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(0)
-        header_layout.addWidget(self._header, 0)
-        # 折叠摘要：内容收起后把关键状态（如当前角色名）留在标题栏。
-        # 展开时隐藏——正文自身可见，标题栏不重复。
-        self._summary_text = ""
-        self._summary_label = QLabel(header_row)
-        self._summary_label.setObjectName("SubtitlePropertySectionSummary")
-        self._summary_label.setVisible(False)
-        themed(
-            self._summary_label,
-            lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;",
-        )
-        header_layout.addWidget(self._summary_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        header_layout.addStretch(1)
-
-        self.header_switch: Optional[ToggleSwitch] = None
-        if switch:
-            self.header_switch = ToggleSwitch(header_row)
-            header_layout.addWidget(
-                self.header_switch, 0, Qt.AlignmentFlag.AlignVCenter
-            )
-            header_layout.addSpacing(12)
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        root.addWidget(header_row)
-        root.addWidget(self._content)
-
-        self.content_layout = QVBoxLayout(self._content)
-        self.content_layout.setContentsMargins(12, 0, 12, 12)
-        self.content_layout.setSpacing(10)
-
-    @property
-    def header(self) -> QToolButton:
-        return self._header
-
-    def set_expanded(self, expanded: bool) -> None:
-        self._header.setChecked(expanded)
-        self._header.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-        )
-        self._content.setVisible(expanded)
-        self._refresh_summary()
-
-    def is_expanded(self) -> bool:
-        return self._content.isVisible()
-
-    def set_collapsed_summary(self, text: str) -> None:
-        """设置折叠态显示在标题栏的摘要文本；空串表示无摘要。"""
-        self._summary_text = str(text)
-        self._refresh_summary()
-
-    def _refresh_summary(self) -> None:
-        # 用 header 的 checked 态判断展开与否——widget 未 show 前
-        # isVisible() 恒为 False，不能作为展开依据。
-        collapsed = not self._header.isChecked()
-        self._summary_label.setText(self._summary_text)
-        self._summary_label.setVisible(collapsed and bool(self._summary_text))
 
 
 class _ClickableRow(QWidget):

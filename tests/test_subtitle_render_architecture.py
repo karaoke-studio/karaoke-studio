@@ -855,6 +855,22 @@ def test_subtitle_property_panel_delegates_page_registry_and_routing() -> None:
     )
 
 
+def test_subtitle_property_panel_delegates_shared_widget_primitives() -> None:
+    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.property_panel"
+    targets = _import_targets(panel_module, panel_path)
+
+    assert f"{PACKAGE}.frontend.property_widgets" in targets
+    tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    inline_names = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+    }
+    assert "ToggleSwitch" not in inline_names
+    assert "CollapsibleSection" not in inline_names
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
