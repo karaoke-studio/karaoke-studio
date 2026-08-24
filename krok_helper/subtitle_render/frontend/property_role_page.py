@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PyQt6.QtWidgets import QFrame, QSizePolicy
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QStackedWidget, QWidget
+from qfluentwidgets import CheckBox
 
+from krok_helper.subtitle_render.frontend.property_layout import (
+    inline_property_section,
+    property_section,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.property_widgets import FolderTabPanel
 
 
 class RolePropertyPageBuilder:
@@ -67,4 +73,65 @@ class RolePropertyPageBuilder:
         )
         row.set_widgets(host._color_section, divider, host._font_section)
         layout.addWidget(row)
+        return section
+
+    def make_font_section(
+        self,
+        parent: QWidget | None = None,
+        *,
+        inline: bool = False,
+    ) -> QWidget:
+        host = self._host
+        section, layout = (
+            inline_property_section("字体", parent)
+            if inline
+            else property_section("字体")
+        )
+        host._font_tab_panel = FolderTabPanel(
+            (("japanese", "日文"), ("latin", "英数")),
+            (("main", "主文字"), ("ruby", "注音")),
+            section,
+        )
+        host._font_tab_stack = QStackedWidget(host._font_tab_panel)
+        host._font_stroke_controls = {}
+        host._font_controls = {}
+        host._font_size_follow_checks = {}
+        for subject, script in (
+            ("main", "japanese"),
+            ("main", "latin"),
+            ("ruby", "japanese"),
+            ("ruby", "latin"),
+        ):
+            host._font_tab_stack.addWidget(
+                host._make_font_settings_page(
+                    subject,
+                    script,
+                    host._font_tab_stack,
+                )
+            )
+        host._font_tab_panel.content_layout.addWidget(host._font_tab_stack)
+        host._font_tab_panel.leftChanged.connect(host._on_font_script_changed)
+        host._font_tab_panel.rightChanged.connect(
+            lambda _key: host._sync_font_settings_page()
+        )
+        layout.addWidget(host._font_tab_panel)
+
+        host._italic_check = CheckBox("斜体", section)
+        host._italic_check.toggled.connect(
+            lambda checked: host._update_style(italic=checked)
+        )
+        host._ruby_anchor_check = CheckBox("参与注音高度计算", section)
+        host._ruby_anchor_check.setToolTip(
+            "关闭后，使用当前角色的字符仍正常绘制和占位，但不会把整行注音向上顶高。"
+        )
+        host._ruby_anchor_check.toggled.connect(
+            lambda checked: host._update_style(affects_ruby_anchor=checked)
+        )
+        flags_row = QHBoxLayout()
+        flags_row.setContentsMargins(0, 0, 0, 0)
+        flags_row.setSpacing(12)
+        flags_row.addWidget(host._italic_check)
+        flags_row.addWidget(host._ruby_anchor_check)
+        flags_row.addStretch(1)
+        layout.addLayout(flags_row)
         return section
