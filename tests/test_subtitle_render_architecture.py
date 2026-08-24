@@ -782,9 +782,59 @@ def test_qt_line_geometry_has_no_painter_dependency() -> None:
 
 def test_page_offset_plan_has_no_painter_dependency() -> None:
     owner = f"{PACKAGE}.engine.layout.page_offset_plan"
-    targets = _import_targets(owner, ROOT / "engine/layout/page_offset_plan.py")
+    plan_path = ROOT / "engine/layout/page_offset_plan.py"
+    targets = _import_targets(owner, plan_path)
 
     assert f"{PACKAGE}.engine.painter" not in targets
+
+    tree = ast.parse(plan_path.read_text(encoding="utf-8-sig"))
+    resolver_fields = {
+        node.target.id
+        for class_node in tree.body
+        if isinstance(class_node, ast.ClassDef)
+        and class_node.name == "PageOffsetResolvers"
+        for node in class_node.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert resolver_fields == {"display_lines", "measure_lines"}
+    method = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "resolve_page_offset_windows"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {
+        "build_page_offset_windows",
+        "cached_page_offset_windows",
+        "store_page_offset_windows",
+    } <= calls
+
+
+def test_painter_delegates_page_offset_policy() -> None:
+    painter_path = ROOT / "engine/painter.py"
+    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    method = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "resolved_page_offset_windows_for_style"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "resolve_page_offset_windows" in calls
+    assert {
+        "build_page_offset_windows",
+        "cached_page_offset_windows",
+        "store_page_offset_windows",
+    }.isdisjoint(calls)
 
 
 def test_layout_plan_projection_has_no_painter_dependency() -> None:

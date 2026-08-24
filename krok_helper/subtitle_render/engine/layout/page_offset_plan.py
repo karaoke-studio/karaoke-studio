@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.layout_plan import LayoutOffsetWindow
 from krok_helper.subtitle_render.engine.layout.page_placement import (
@@ -13,6 +14,7 @@ from krok_helper.subtitle_render.engine.layout.page_placement import (
     solve_page_axis_offsets,
 )
 from krok_helper.subtitle_render.engine.value_signature import value_signature
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.models import LYRICS_LAYOUT_FIELDS, Style
 from krok_helper.subtitle_render.timing import TimingTrack
 
@@ -39,6 +41,36 @@ class MeasuredPageLine:
     axis_bounds: tuple[float, float] | None = None
     cross_bounds: tuple[float, float] | None = None
     axis_anchor: float | None = None
+
+
+class DisplayLinesResolver(Protocol):
+    def __call__(
+        self,
+        track: TimingTrack,
+        style: Style,
+        *,
+        logical_w: int | None = None,
+        logical_h: int | None = None,
+    ) -> list[DisplayLine]: ...
+
+
+class PageLineMeasurer(Protocol):
+    def __call__(
+        self,
+        logical_w: int,
+        logical_h: int,
+        track: TimingTrack,
+        style: Style,
+        display_lines: list[DisplayLine],
+    ) -> list[MeasuredPageLine]: ...
+
+
+@dataclass(frozen=True)
+class PageOffsetResolvers:
+    """Backend capabilities needed by the page-offset layout policy."""
+
+    display_lines: DisplayLinesResolver
+    measure_lines: PageLineMeasurer
 
 
 def _page_offset_cache_key(
@@ -87,6 +119,45 @@ def store_page_offset_windows(
 
 def clear_page_offset_cache() -> None:
     _PAGE_OFFSET_CACHE.clear()
+
+
+def resolve_page_offset_windows(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    resolvers: PageOffsetResolvers,
+) -> dict[int, tuple[LayoutOffsetWindow, ...]]:
+    """Resolve and cache page translations through backend measurement ports."""
+
+    if style.allow_inter_page_line_overlap or not style.dual_line_layout:
+        return {}
+    cached = cached_page_offset_windows(logical_w, logical_h, track, style)
+    if cached is not None:
+        return cached
+    display_lines = resolvers.display_lines(
+        track,
+        style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
+    if not display_lines:
+        return {}
+    measurements = resolvers.measure_lines(
+        logical_w,
+        logical_h,
+        track,
+        style,
+        display_lines,
+    )
+    resolved = build_page_offset_windows(
+        logical_w,
+        logical_h,
+        style,
+        measurements,
+    )
+    store_page_offset_windows(logical_w, logical_h, track, style, resolved)
+    return {key: tuple(value) for key, value in resolved.items()}
 
 
 def _page_collision_layout_key(
@@ -216,8 +287,10 @@ def build_page_offset_windows(
 
 __all__ = [
     "MeasuredPageLine",
+    "PageOffsetResolvers",
     "build_page_offset_windows",
     "cached_page_offset_windows",
     "clear_page_offset_cache",
+    "resolve_page_offset_windows",
     "store_page_offset_windows",
 ]

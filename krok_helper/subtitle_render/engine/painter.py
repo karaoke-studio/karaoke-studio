@@ -193,10 +193,9 @@ from krok_helper.subtitle_render.engine.layout.qt_line_geometry import (
 )
 from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
     MeasuredPageLine,
-    build_page_offset_windows,
-    cached_page_offset_windows,
+    PageOffsetResolvers,
     clear_page_offset_cache,
-    store_page_offset_windows,
+    resolve_page_offset_windows,
 )
 from krok_helper.subtitle_render.engine.layout.display_schedule import (
     display_schedule_from_items,
@@ -1914,25 +1913,26 @@ def resolved_page_offset_windows_for_style(
     back to the authored position when neither side can contain the page.
     """
 
-    if style.allow_inter_page_line_overlap or not style.dual_line_layout:
-        return {}
-    cached = cached_page_offset_windows(
+    return resolve_page_offset_windows(
         logical_w,
         logical_h,
         track,
         style,
+        PageOffsetResolvers(
+            display_lines=_display_lines_for_style,
+            measure_lines=_measure_page_offset_lines,
+        ),
     )
-    if cached is not None:
-        return cached
 
-    display_lines = _display_lines_for_style(
-        track,
-        style,
-        logical_w=logical_w,
-        logical_h=logical_h,
-    )
-    if not display_lines:
-        return {}
+
+def _measure_page_offset_lines(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+) -> list[MeasuredPageLine]:
+    """Measure Painter ink geometry required by the page-offset policy."""
 
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     measurements: list[MeasuredPageLine] = []
@@ -2034,14 +2034,7 @@ def resolved_page_offset_windows_for_style(
             )
         )
 
-    resolved = build_page_offset_windows(
-        logical_w,
-        logical_h,
-        style,
-        measurements,
-    )
-    store_page_offset_windows(logical_w, logical_h, track, style, resolved)
-    return {key: tuple(value) for key, value in resolved.items()}
+    return measurements
 
 
 def resolved_page_offsets_for_style(
