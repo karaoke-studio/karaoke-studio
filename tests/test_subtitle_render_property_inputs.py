@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QWidget
 
 from krok_helper.subtitle_render.frontend.property_inputs import (
     DynamicStackedWidget,
     GrowingPlainTextEdit,
+    WheelFocusedComboBox,
+    WheelFocusedFontComboBox,
 )
 
 
@@ -47,3 +50,28 @@ def test_dynamic_property_stack_reports_only_current_page_hints(qapp) -> None:
     stack.setCurrentWidget(second)
     assert stack.sizeHint() == QSize(300, 200)
     assert stack.minimumSizeHint() == QSize(200, 120)
+
+
+def test_wheel_focused_property_combo_preserves_positional_user_data(qapp) -> None:
+    combo = WheelFocusedComboBox()
+
+    combo.addItem("布局", 3)
+
+    assert combo.itemText(0) == "布局"
+    assert combo.itemData(0) == 3
+
+
+def test_property_font_combo_uses_injected_catalog_and_canonicalizer(qapp) -> None:
+    combo = WheelFocusedFontComboBox(
+        font_families_provider=lambda: ("Canonical Font",),
+        canonicalize_family=lambda name: (
+            "Canonical Font" if name == "Saved Alias" else None
+        ),
+    )
+    combo.enable_inheritance("跟随主文字（0）")
+
+    combo.setCurrentFont(QFont("Saved Alias"))
+    assert combo.currentText() == "Canonical Font"
+
+    combo.setCurrentFont(QFont("Missing Font"))
+    assert combo.is_inherited() is True
