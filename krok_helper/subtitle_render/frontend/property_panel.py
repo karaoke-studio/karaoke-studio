@@ -119,7 +119,9 @@ from krok_helper.subtitle_render.frontend.property_pages import (
     property_page_index,
 )
 from krok_helper.subtitle_render.frontend.property_layout import (
+    ResponsiveFieldGrid as _ResponsiveFieldGrid,
     ResponsiveRoleHeader as _ResponsiveRoleHeader,
+    property_field as _field,
 )
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
@@ -3648,82 +3650,6 @@ class _ResponsivePropertyPair(QWidget):
                 self._divider.setSizePolicy(
                     QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
                 )
-        self.updateGeometry()
-
-
-class _ResponsiveFieldGrid(QWidget):
-    """Reflow property fields into 1–N columns based on the available width.
-
-    The fixed two-column ``QGridLayout`` blocks waste half a row whenever the
-    panel is wide (the screenshot case) and still overflow when it is very
-    narrow.  This container re-buckets its children on every resize:
-    ``columns = clamp(width // min_column_width, 1, max_columns)``.
-    """
-
-    def __init__(
-        self,
-        parent: Optional[QWidget] = None,
-        *,
-        min_column_width: int = 150,
-        max_columns: int = 4,
-    ) -> None:
-        super().__init__(parent)
-        self._min_column_width = max(1, min_column_width)
-        self._max_columns = max(1, max_columns)
-        self._items: list[QWidget] = []
-        self._columns = 0
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setHorizontalSpacing(8)
-        self._grid.setVerticalSpacing(8)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-
-    def add_field(self, label_text: str, control: QWidget) -> None:
-        self.add_widget(_field(label_text, control))
-
-    def add_widget(self, widget: QWidget) -> None:
-        widget.setParent(self)
-        self._items.append(widget)
-        self._relayout(force=True)
-
-    def clear(self) -> None:
-        while self._grid.count():
-            self._grid.takeAt(0)
-        for widget in self._items:
-            widget.deleteLater()
-        self._items.clear()
-        self._columns = 0
-
-    def _target_columns(self) -> int:
-        spacing = self._grid.horizontalSpacing()
-        fit = (max(self.width(), 1) + spacing) // (self._min_column_width + spacing)
-        return int(max(1, min(fit, self._max_columns, max(1, len(self._items)))))
-
-    def minimumSizeHint(self) -> QSize:
-        # 必须汇报「单列」最小宽：多列时网格自身的最小宽会阻止父级收窄，
-        # 而收窄不发生 resizeEvent 就永远不会降列数（死锁）。
-        base = super().minimumSizeHint()
-        if not self._items:
-            return base
-        width = max(item.minimumSizeHint().width() for item in self._items)
-        return QSize(width, base.height())
-
-    def resizeEvent(self, event: Any) -> None:
-        self._relayout()
-        super().resizeEvent(event)
-
-    def _relayout(self, *, force: bool = False) -> None:
-        columns = self._target_columns()
-        if not force and columns == self._columns:
-            return
-        previous = max(self._columns, columns)
-        self._columns = columns
-        while self._grid.count():
-            self._grid.takeAt(0)
-        for index, widget in enumerate(self._items):
-            self._grid.addWidget(widget, index // columns, index % columns)
-        for column in range(previous):
-            self._grid.setColumnStretch(column, 1 if column < columns else 0)
         self.updateGeometry()
 
 
@@ -9277,21 +9203,6 @@ def _scroll_page() -> tuple[FluentScrollArea, QVBoxLayout]:
     layout.setSpacing(10)
     scroll.setWidget(page)
     return scroll, layout
-
-
-def _field(label_text: str, control: QWidget) -> QWidget:
-    box = QWidget()
-    box.setObjectName("SubtitlePropertyField")
-    themed(box, lambda: "#SubtitlePropertyField { background: transparent; }")
-    layout = QVBoxLayout(box)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(4)
-    label = QLabel(label_text)
-    themed(label, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
-    control.setParent(box)
-    layout.addWidget(label)
-    layout.addWidget(control)
-    return box
 
 
 def _grid_adder(grid: QGridLayout):

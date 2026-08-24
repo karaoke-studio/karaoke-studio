@@ -888,6 +888,13 @@ def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> Non
         if isinstance(node, ast.ClassDef)
     }
     assert "_ResponsiveRoleHeader" not in inline_names
+    assert "_ResponsiveFieldGrid" not in inline_names
+    inline_functions = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "_field" not in inline_functions
 
 
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
