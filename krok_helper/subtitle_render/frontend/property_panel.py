@@ -120,8 +120,10 @@ from krok_helper.subtitle_render.frontend.property_pages import (
 )
 from krok_helper.subtitle_render.frontend.property_layout import (
     ResponsiveFieldGrid as _ResponsiveFieldGrid,
+    ResponsivePropertyPair as _ResponsivePropertyPair,
     ResponsiveRoleHeader as _ResponsiveRoleHeader,
     property_field as _field,
+    property_section_pair as _section_pair,
 )
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
@@ -3516,141 +3518,6 @@ class _SchematicBoard(QWidget):
         # 换行后子控件的 sizeHint 可能改变；Qt 不一定会再派发一次
         # resizeEvent。下一轮事件再核对一次，消除断点附近的迟滞。
         QTimer.singleShot(0, self._sync)
-
-
-class _ResponsivePropertyPair(QWidget):
-    """Lay two property cards side by side when they genuinely fit.
-
-    The property page intentionally has no horizontal scrollbar.  A regular
-    ``QHBoxLayout`` therefore lets its children extend beyond the viewport
-    when their combined preferred width no longer fits.  This container uses
-    the cards' own size hints (font, DPI and translated labels included) as
-    the breakpoint and stacks them instead of relying on a screen-pixel
-    threshold.
-
-    ``divider`` may be ``None``: section cards carry their own borders, so
-    pairing two cards needs no separator line.  ``min_side_width`` raises the
-    side-by-side breakpoint for children whose controls use ``Ignored``
-    horizontal policy (their size hints are too small to be an honest
-    breakpoint on their own).
-    """
-
-    def __init__(
-        self, parent: Optional[QWidget] = None, *, min_side_width: int = 0
-    ) -> None:
-        super().__init__(parent)
-        self._first: Optional[QWidget] = None
-        self._divider: Optional[QFrame] = None
-        self._second: Optional[QWidget] = None
-        self._stacked: Optional[bool] = None
-        self._min_side_width = min_side_width
-
-        self._layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(12)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-
-    def set_widgets(
-        self, first: QWidget, divider: Optional[QFrame], second: QWidget
-    ) -> None:
-        self._first = first
-        self._divider = divider
-        self._second = second
-        self._layout.addWidget(first)
-        if divider is not None:
-            self._layout.addWidget(divider)
-        self._layout.addWidget(second)
-        # Equal horizontal stretch must not imply equal card heights.  Both
-        # cards keep their own preferred height and simply share the same top.
-        self._layout.setAlignment(first, Qt.AlignmentFlag.AlignTop)
-        self._layout.setAlignment(second, Qt.AlignmentFlag.AlignTop)
-        self._sync_direction(force=True)
-
-    def is_stacked(self) -> bool:
-        return bool(self._stacked)
-
-    def _divider_width(self) -> int:
-        if self._divider is None:
-            return 0
-        return max(1, self._divider.sizeHint().width())
-
-    def _spacing_count(self) -> int:
-        return 2 if self._divider is not None else 1
-
-    def horizontal_width_hint(self) -> int:
-        if self._first is None or self._second is None:
-            return 0
-        first_width = max(
-            self._first.minimumSizeHint().width(), self._first.sizeHint().width()
-        )
-        second_width = max(
-            self._second.minimumSizeHint().width(), self._second.sizeHint().width()
-        )
-        chrome = self._divider_width() + self._layout.spacing() * self._spacing_count()
-        return max(
-            first_width + second_width + chrome,
-            self._min_side_width * 2 + chrome,
-        )
-
-    def minimumSizeHint(self) -> QSize:
-        if self._first is None or self._second is None:
-            return super().minimumSizeHint()
-        width = max(
-            self._first.minimumSizeHint().width(),
-            self._second.minimumSizeHint().width(),
-        )
-        if self.is_stacked():
-            divider_height = 1 if self._divider is not None else 0
-            height = (
-                self._first.minimumSizeHint().height()
-                + self._second.minimumSizeHint().height()
-                + divider_height
-                + self._layout.spacing() * self._spacing_count()
-            )
-        else:
-            height = max(
-                self._first.minimumSizeHint().height(),
-                self._second.minimumSizeHint().height(),
-            )
-        return QSize(width, height)
-
-    def resizeEvent(self, event: Any) -> None:
-        self._sync_direction()
-        super().resizeEvent(event)
-
-    def _sync_direction(self, *, force: bool = False) -> None:
-        if self._first is None or self._second is None:
-            return
-        stacked = self.width() < self.horizontal_width_hint()
-        if not force and stacked == self._stacked:
-            return
-        self._stacked = stacked
-
-        if stacked:
-            self._layout.setDirection(QBoxLayout.Direction.TopToBottom)
-            self._layout.setStretchFactor(self._first, 0)
-            self._layout.setStretchFactor(self._second, 0)
-            if self._divider is not None:
-                self._divider.setMinimumWidth(0)
-                self._divider.setMaximumWidth(QWIDGETSIZE_MAX)
-                self._divider.setFixedHeight(1)
-                self._divider.setFrameShape(QFrame.Shape.HLine)
-                self._divider.setSizePolicy(
-                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-                )
-        else:
-            self._layout.setDirection(QBoxLayout.Direction.LeftToRight)
-            self._layout.setStretchFactor(self._first, 1)
-            self._layout.setStretchFactor(self._second, 1)
-            if self._divider is not None:
-                self._divider.setMinimumHeight(0)
-                self._divider.setMaximumHeight(QWIDGETSIZE_MAX)
-                self._divider.setFixedWidth(1)
-                self._divider.setFrameShape(QFrame.Shape.VLine)
-                self._divider.setSizePolicy(
-                    QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
-                )
-        self.updateGeometry()
 
 
 def _resolve_font_preview_families(style: Style) -> Style:
@@ -9291,21 +9158,6 @@ def _plain_card() -> tuple[QFrame, QVBoxLayout]:
         ),
     )
     return card, layout
-
-
-def _section_pair(first: QWidget, second: QWidget) -> _ResponsivePropertyPair:
-    """Pair two section cards side by side on wide panels, stacked when narrow.
-
-    Cards carry their own borders, so no divider; the explicit
-    ``min_side_width`` keeps each card wide enough to stay usable (the cards'
-    own hints are unreliable because compact controls use ``Ignored`` width).
-    """
-    pair = _ResponsivePropertyPair(min_side_width=270)
-    pair._layout.setSpacing(10)  # 与 _scroll_page 的卡片间距一致
-    for card in (first, second):
-        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-    pair.set_widgets(first, None, second)
-    return pair
 
 
 def _inline_section(
