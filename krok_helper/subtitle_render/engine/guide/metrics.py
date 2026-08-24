@@ -7,7 +7,7 @@ from threading import Lock
 
 from PyQt6.QtGui import QImage
 
-from krok_helper.subtitle_render.engine.guide_semantics import guide_symbol_is_bitmap
+from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from krok_helper.subtitle_render.engine.image_resource import image_file_signature
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import GuideSymbol

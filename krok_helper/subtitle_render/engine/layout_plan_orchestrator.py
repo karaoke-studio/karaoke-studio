@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.engine.display_schedule import (
     display_schedule_from_items,
     single_line_display_schedule,
 )
-from krok_helper.subtitle_render.engine.guide_semantics import (
+from krok_helper.subtitle_render.engine.guide import (
     render_line_with_guide_symbols,
 )
 from krok_helper.subtitle_render.engine.layout_plan import (

@@ -66,11 +66,11 @@ from krok_helper.subtitle_render.engine.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
 )
-from krok_helper.subtitle_render.engine.guide_semantics import (
+from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
     render_line_with_guide_symbols as _line_with_guide_symbol,
 )
-from krok_helper.subtitle_render.engine.guide_metrics import (
+from krok_helper.subtitle_render.engine.guide import (
     bitmap_guide_content_size as _bitmap_guide_content_size,
     bitmap_guide_image as _bitmap_guide_image,
     vector_glyph_width as _vector_glyph_width,

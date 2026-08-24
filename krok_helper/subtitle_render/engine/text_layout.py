@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFont, QFontMetrics
 
-from krok_helper.subtitle_render.engine.guide_metrics import vector_glyph_width
+from krok_helper.subtitle_render.engine.guide import vector_glyph_width
 from krok_helper.subtitle_render.engine.style_semantics import style_for_role
 from krok_helper.subtitle_render.engine.text_metrics import (
     build_font,

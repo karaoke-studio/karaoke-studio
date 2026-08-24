@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtGui import QFontMetrics
 
-from krok_helper.subtitle_render.engine.guide_metrics import vector_glyph_width
+from krok_helper.subtitle_render.engine.guide import vector_glyph_width
 from krok_helper.subtitle_render.engine.line_geometry import (
     line_has_role_labels,
     resolve_char_intervals,

@@ -352,7 +352,7 @@ def test_layout_plan_builder_has_no_painter_dependency() -> None:
 
 
 def test_guide_render_semantics_have_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.guide_semantics"
+    owner = f"{PACKAGE}.engine.guide"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     inline = {
@@ -368,11 +368,14 @@ def test_guide_render_semantics_have_one_engine_owner() -> None:
     }
 
     assert "_line_with_guide_symbol" not in inline
-    assert delegated == {
+    assert {
         ("guide_symbol_is_bitmap", "_guide_symbol_is_bitmap"),
         ("render_line_with_guide_symbols", "_line_with_guide_symbol"),
-    }
-    targets = _import_targets(owner, ROOT / "engine/guide_semantics.py")
+    } <= delegated
+    targets = _import_targets(
+        f"{owner}.semantics",
+        ROOT / "engine/guide/semantics.py",
+    )
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
@@ -551,11 +554,25 @@ def test_layout_plan_projection_has_no_painter_dependency() -> None:
 
 
 def test_guide_metrics_and_image_resources_have_no_painter_dependency() -> None:
-    for module_name in ("guide_metrics", "image_resource"):
-        owner = f"{PACKAGE}.engine.{module_name}"
-        targets = _import_targets(owner, ROOT / f"engine/{module_name}.py")
+    modules = (
+        (f"{PACKAGE}.engine.guide.metrics", ROOT / "engine/guide/metrics.py"),
+        (f"{PACKAGE}.engine.image_resource", ROOT / "engine/image_resource.py"),
+    )
+    for owner, path in modules:
+        targets = _import_targets(owner, path)
 
         assert f"{PACKAGE}.engine.painter" not in targets
+
+
+def test_guide_engine_modules_are_grouped_in_one_domain_package() -> None:
+    guide_root = ROOT / "engine" / "guide"
+    assert {"__init__.py", "metrics.py", "semantics.py"} <= {
+        path.name for path in guide_root.glob("*.py")
+    }
+    assert not any(
+        (ROOT / "engine" / name).exists()
+        for name in ("guide_metrics.py", "guide_semantics.py")
+    )
 
 
 def test_text_layout_has_one_engine_owner() -> None:

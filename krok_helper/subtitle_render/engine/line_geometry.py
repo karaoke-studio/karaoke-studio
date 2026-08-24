@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from krok_helper.subtitle_render.engine.guide_semantics import (
+from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap,
     render_line_with_guide_symbols,
 )
