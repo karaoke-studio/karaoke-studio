@@ -44,6 +44,10 @@ from krok_helper.subtitle_render.engine.render_job_policy import (
     resolved_background as _resolved_background,
     validate_render_job as _validate_job,
 )
+from krok_helper.subtitle_render.engine.render_bands import (
+    merge_intervals as _merge_intervals,
+    packed_offsets as _packed_offsets,
+)
 from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
@@ -925,31 +929,6 @@ def _bands_enabled() -> bool:
     return os.environ.get("KROK_SUBTITLE_RENDER_BANDS", "1").strip().lower() not in (
         "0", "false", "no", "off",
     )
-
-
-def _merge_intervals(intervals: list[tuple[int, int]], gap: int) -> list[tuple[int, int]]:
-    """把 ``(top, bottom)`` 区间按间隔 ``gap`` 合并；返回排序后的不相交区间。"""
-    if not intervals:
-        return []
-    ordered = sorted(intervals)
-    merged = [ordered[0]]
-    for top, bottom in ordered[1:]:
-        last_top, last_bottom = merged[-1]
-        if top - last_bottom <= gap:
-            merged[-1] = (last_top, max(last_bottom, bottom))
-        else:
-            merged.append((top, bottom))
-    return merged
-
-
-def _packed_offsets(bands: list[tuple[int, int]]) -> list[int]:
-    """各 band 在打包缓冲里的纵向起点（高度累加）。"""
-    offsets: list[int] = []
-    cursor = 0
-    for _top, height in bands:
-        offsets.append(cursor)
-        cursor += height
-    return offsets
 
 
 def _compute_content_bands(

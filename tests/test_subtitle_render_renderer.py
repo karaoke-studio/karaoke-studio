@@ -32,6 +32,10 @@ from krok_helper.subtitle_render.engine.render_job_policy import (  # noqa: E402
     resolved_background,
     validate_render_job,
 )
+from krok_helper.subtitle_render.engine.render_bands import (  # noqa: E402
+    merge_intervals,
+    packed_offsets,
+)
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
     _compute_content_bands,
@@ -114,6 +118,8 @@ def test_renderer_keeps_render_job_compatibility_export() -> None:
     assert renderer._resolve_duration_ms is resolve_duration_ms
     assert renderer._resolved_background is resolved_background
     assert renderer._validate_job is validate_render_job
+    assert renderer._merge_intervals is merge_intervals
+    assert renderer._packed_offsets is packed_offsets
 
 
 def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
