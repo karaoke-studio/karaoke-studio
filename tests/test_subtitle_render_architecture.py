@@ -1193,6 +1193,7 @@ def test_title_layout_has_one_render_owner() -> None:
         "_build_title_latin_font",
         "_layout_title_overlay",
         "_make_title_font_for",
+        "_make_title_overlay_layer",
         "_title_block_origin",
     }
     inline = {
@@ -1209,6 +1210,15 @@ def test_title_layout_has_one_render_owner() -> None:
 
     assert inline == set()
     assert delegated_names <= imported
+    assert {
+        "_TitleOverlayLayer",
+        "_build_title_overlay_layer",
+        "_title_overlay_layer_key",
+    }.isdisjoint(
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    )
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
         ROOT / "engine/render/title.py",

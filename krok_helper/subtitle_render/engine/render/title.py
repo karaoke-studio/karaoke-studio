@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Hashable
 
-from PyQt6.QtGui import QFont, QFontMetrics
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 
+from krok_helper.subtitle_render.engine.render.layers import (
+    BakedLayer,
+    LayerAnimation,
+    LayerCompositor,
+    LayerContext,
+    SCOPE_LINE,
+)
 from krok_helper.subtitle_render.engine.style.title_semantics import (
+    resolve_title_overlay,
     resolve_title_role_overlay,
     resolve_title_text,
 )
@@ -22,6 +33,7 @@ from krok_helper.subtitle_render.models import (
     normalize_title_char_role_labels,
 )
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
+from krok_helper.subtitle_render.paint import PaintFill
 from krok_helper.subtitle_render.timing import TimingTrack
 
 
@@ -55,6 +67,17 @@ class TitleOverlayLayout:
     glyph_rows: list[list[TitleGlyphLayout]]
     line_heights: list[float]
     line_ascents: list[float]
+
+
+@dataclass(frozen=True)
+class TitleRenderPorts:
+    """Painter-backend services consumed by title-layer rasterization."""
+
+    fill_signature: Callable[[PaintFill], tuple]
+    make_raster_image: Callable[[int, int, float], QImage]
+    paint_text_stack: Callable[[QPainter, QPainterPath, QRectF, TitleOverlay], None]
+    raster_scale_key: Callable[[float], int]
+    visual_padding: Callable[[TitleOverlay], int]
 
 
 def build_title_font(title: TitleOverlay) -> QFont:
@@ -263,12 +286,248 @@ def layout_title_overlay(
     )
 
 
+def title_overlay_layer_key(
+    layout: TitleOverlayLayout,
+    title: TitleOverlay,
+    *,
+    fill_signature: Callable[[PaintFill], tuple],
+) -> tuple:
+    return (
+        tuple(layout.lines),
+        tuple(round(width, 3) for width in layout.widths),
+        round(layout.block_w, 3),
+        round(layout.block_h, 3),
+        round(layout.line_h, 3),
+        layout.gap,
+        title.align,
+        layout.font.family(),
+        layout.font.pixelSize(),
+        int(layout.font.weight()),
+        layout.font.italic(),
+        layout.latin_font.family(),
+        layout.latin_font.pixelSize(),
+        int(layout.latin_font.weight()),
+        layout.latin_font.italic(),
+        title.letter_spacing_px,
+        fill_signature(title.fill),
+        fill_signature(title.stroke),
+        title.stroke_width_px,
+        fill_signature(title.stroke2),
+        title.stroke2_width_px,
+        title.decoration_kind,
+        title.glow_radius_px,
+        title.glow_concentration_level,
+        fill_signature(title.shadow),
+        title.shadow_offset_x,
+        title.shadow_offset_y,
+        tuple(
+            (
+                glyph.text,
+                round(glyph.x, 3),
+                round(glyph.advance, 3),
+                glyph.font.family(),
+                glyph.font.pixelSize(),
+                int(glyph.font.weight()),
+                glyph.font.italic(),
+                fill_signature(glyph.title.fill),
+                fill_signature(glyph.title.stroke),
+                glyph.title.stroke_width_px,
+                fill_signature(glyph.title.stroke2),
+                glyph.title.stroke2_width_px,
+                glyph.title.decoration_kind,
+                glyph.title.glow_radius_px,
+                glyph.title.glow_concentration_level,
+                fill_signature(glyph.title.shadow),
+                glyph.title.shadow_offset_x,
+                glyph.title.shadow_offset_y,
+            )
+            for row in layout.glyph_rows
+            for glyph in row
+        ),
+    )
+
+
+def build_title_overlay_layer(
+    layout: TitleOverlayLayout,
+    title: TitleOverlay,
+    *,
+    ports: TitleRenderPorts,
+    device_pixel_ratio: float = 1.0,
+) -> tuple[QImage, int, int]:
+    glyph_titles = [glyph.title for row in layout.glyph_rows for glyph in row] or [
+        title
+    ]
+    extent = max(ports.visual_padding(item) for item in glyph_titles) + 4
+    pad_left = max(max(0, -item.shadow_offset_x) for item in glyph_titles) + extent
+    pad_right = max(max(0, item.shadow_offset_x) for item in glyph_titles) + extent
+    pad_top = max(max(0, -item.shadow_offset_y) for item in glyph_titles) + extent
+    pad_bottom = max(max(0, item.shadow_offset_y) for item in glyph_titles) + extent
+    img_w = max(int(math.ceil(pad_left + layout.block_w + pad_right)), 1)
+    img_h = max(int(math.ceil(pad_top + layout.block_h + pad_bottom)), 1)
+    image = ports.make_raster_image(img_w, img_h, device_pixel_ratio)
+    image.fill(0)
+
+    painter = QPainter(image)
+    try:
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        line_top = float(pad_top)
+        for glyphs, width, line_height, line_ascent in zip(
+            layout.glyph_rows,
+            layout.widths,
+            layout.line_heights,
+            layout.line_ascents,
+        ):
+            if glyphs:
+                if title.align == "center":
+                    line_x = pad_left + (layout.block_w - width) / 2.0
+                elif title.align == "right":
+                    line_x = pad_left + (layout.block_w - width)
+                else:
+                    line_x = float(pad_left)
+                baseline = line_top + line_ascent
+                run_start = 0
+                while run_start < len(glyphs):
+                    run_end = run_start + 1
+                    run_title = glyphs[run_start].title
+                    while run_end < len(glyphs) and glyphs[run_end].title == run_title:
+                        run_end += 1
+                    run = glyphs[run_start:run_end]
+                    path = QPainterPath()
+                    for glyph in run:
+                        path.addText(
+                            float(line_x + glyph.x),
+                            baseline,
+                            glyph.font,
+                            glyph.text,
+                        )
+                    left = float(line_x + run[0].x)
+                    right = float(line_x + run[-1].x + run[-1].advance)
+                    ascent = max(glyph.metrics.ascent() for glyph in run)
+                    descent = max(glyph.metrics.descent() for glyph in run)
+                    rect = QRectF(
+                        left,
+                        float(baseline - ascent),
+                        max(right - left, 1.0),
+                        float(ascent + descent),
+                    )
+                    ports.paint_text_stack(painter, path, rect, run_title)
+                    run_start = run_end
+            line_top += line_height + layout.gap
+    finally:
+        painter.end()
+    return image, -pad_left, -pad_top
+
+
+@dataclass(frozen=True)
+class TitleOverlayLayer:
+    """Layer-compositor adapter for one static title overlay block."""
+
+    title_layout: TitleOverlayLayout
+    title: TitleOverlay
+    opacity: float
+    ports: TitleRenderPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> TitleOverlayLayer:
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
+        return (
+            *title_overlay_layer_key(
+                self.title_layout,
+                self.title,
+                fill_signature=self.ports.fill_signature,
+            ),
+            self.ports.raster_scale_key(ctx.device_pixel_ratio),
+        )
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        image, dx, dy = build_title_overlay_layer(
+            self.title_layout,
+            self.title,
+            ports=self.ports,
+            device_pixel_ratio=ctx.device_pixel_ratio,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(
+            top_left=QPointF(float(self.title_layout.x0), float(self.title_layout.y_top)),
+            opacity=max(0.0, min(1.0, self.opacity)),
+        )
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int]:
+        pad = max(
+            (
+                self.ports.visual_padding(glyph.title)
+                for row in self.title_layout.glyph_rows
+                for glyph in row
+            ),
+            default=self.ports.visual_padding(self.title),
+        )
+        return (
+            int(math.floor(self.title_layout.y_top - pad)),
+            int(math.ceil(self.title_layout.y_top + self.title_layout.block_h + pad)),
+        )
+
+
+def make_title_overlay_layer(
+    layout: TitleOverlayLayout,
+    title: TitleOverlay,
+    opacity: float,
+    *,
+    ports: TitleRenderPorts,
+) -> TitleOverlayLayer:
+    return TitleOverlayLayer(layout, title, opacity, ports)
+
+
+def paint_title_overlay(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    style: Style,
+    opacity: float,
+    *,
+    compositor: LayerCompositor,
+    ports: TitleRenderPorts,
+) -> None:
+    title = resolve_title_overlay(style)
+    if title is None:
+        return
+    layout = layout_title_overlay(img_w, img_h, track, title, style=style)
+    if layout is None:
+        return
+    compositor.paint_ordered(
+        painter,
+        LayerContext(t_ms=0, logical_w=img_w, logical_h=img_h),
+        [make_title_overlay_layer(layout, title, opacity, ports=ports)],
+    )
+
+
 __all__ = [
     "TitleGlyphLayout",
     "TitleOverlayLayout",
+    "TitleOverlayLayer",
+    "TitleRenderPorts",
+    "build_title_overlay_layer",
     "build_title_font",
     "build_title_latin_font",
     "layout_title_overlay",
     "make_title_font_for",
+    "make_title_overlay_layer",
+    "paint_title_overlay",
     "title_block_origin",
+    "title_overlay_layer_key",
 ]
