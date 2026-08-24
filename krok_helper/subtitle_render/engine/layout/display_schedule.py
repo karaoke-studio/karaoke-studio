@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.line_style import line_end_ms, line_start_ms
@@ -150,12 +150,115 @@ def resolve_display_schedule(
     return display_schedule_from_items(track, items)
 
 
+def extend_page_display_boundary(
+    display_lines: list[DisplayLine],
+    indices: tuple[int, ...],
+    *,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+) -> list[DisplayLine]:
+    """Extend automatic page members toward a shared display boundary."""
+
+    changed = list(display_lines)
+    for index in indices:
+        item = changed[index]
+        changed[index] = replace(
+            item,
+            display_start_ms=(
+                item.display_start_ms
+                if start_ms is None
+                else min(int(item.display_start_ms), int(start_ms))
+            ),
+            display_end_ms=(
+                item.display_end_ms
+                if end_ms is None
+                else max(int(item.display_end_ms), int(end_ms))
+            ),
+        )
+    return changed
+
+
+def apply_constrained_page_sync(
+    display_lines: list[DisplayLine],
+    style: Style,
+) -> list[DisplayLine]:
+    """Apply configured entry/ending synchronization within section bounds.
+
+    The longest synchronization candidate is applied first.  A later collision
+    guard can then compress outgoing and incoming windows in its normal order.
+    """
+
+    if not display_lines or not (style.sync_entry or style.sync_ending):
+        return display_lines
+    baseline = list(display_lines)
+    page_order: list[tuple[int, int]] = []
+    page_indices: dict[tuple[int, int], list[int]] = {}
+    for index, item in enumerate(baseline):
+        page_id = (int(item.section_index), int(item.page_index))
+        if page_id not in page_indices:
+            page_order.append(page_id)
+            page_indices[page_id] = []
+        page_indices[page_id].append(index)
+
+    resolved = list(baseline)
+    first_page_by_section: dict[int, tuple[int, int]] = {}
+    last_page_by_section: dict[int, tuple[int, int]] = {}
+    for page_id in page_order:
+        section_index = page_id[0]
+        first_page_by_section.setdefault(section_index, page_id)
+        last_page_by_section[section_index] = page_id
+    for page_id in page_order:
+        indices = tuple(page_indices[page_id])
+        sync_entry_here = style.sync_entry and (
+            style.sync_each_page
+            or first_page_by_section.get(page_id[0]) == page_id
+        )
+        sync_ending_here = style.sync_ending and (
+            style.sync_each_page
+            or last_page_by_section.get(page_id[0]) == page_id
+        )
+        if sync_entry_here:
+            automatic = tuple(
+                index
+                for index in indices
+                if resolved[index].line.display_start_override_ms is None
+            )
+            if automatic:
+                page_target = min(
+                    int(resolved[index].display_start_ms) for index in indices
+                )
+                resolved = extend_page_display_boundary(
+                    resolved,
+                    automatic,
+                    start_ms=page_target,
+                )
+
+        if sync_ending_here:
+            automatic = tuple(
+                index
+                for index in indices
+                if resolved[index].line.display_end_override_ms is None
+            )
+            if automatic:
+                page_target = max(
+                    int(resolved[index].display_end_ms) for index in indices
+                )
+                resolved = extend_page_display_boundary(
+                    resolved,
+                    automatic,
+                    end_ms=page_target,
+                )
+    return resolved
+
+
 __all__ = [
     "DisplaySchedule",
     "DisplayScheduleResolvers",
     "DisplayWindows",
+    "apply_constrained_page_sync",
     "display_schedule_from_items",
     "display_windows_from_items",
+    "extend_page_display_boundary",
     "resolve_display_schedule",
     "resolve_display_windows",
     "single_line_display_schedule",
