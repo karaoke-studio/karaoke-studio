@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.line_style import line_end_ms, line_start_ms
 from krok_helper.subtitle_render.engine.layout.signal_semantics import (
@@ -19,6 +21,24 @@ from krok_helper.subtitle_render.timing import TimingTrack
 
 DisplayWindows = dict[int, tuple[int, int]]
 DisplaySchedule = dict[int, tuple[int, int, int]]
+
+
+class DisplayLinesResolver(Protocol):
+    def __call__(
+        self,
+        track: TimingTrack,
+        style: Style,
+        *,
+        logical_w: int | None = None,
+        logical_h: int | None = None,
+    ) -> list[DisplayLine]: ...
+
+
+@dataclass(frozen=True)
+class DisplayScheduleResolvers:
+    """Capabilities required to project a style's resolved display lines."""
+
+    display_lines: DisplayLinesResolver
 
 
 def single_line_display_windows(
@@ -88,11 +108,56 @@ def single_line_display_schedule(
     }
 
 
+def resolve_display_windows(
+    track: TimingTrack,
+    style: Style,
+    resolvers: DisplayScheduleResolvers,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> DisplayWindows:
+    """Project either dual-line resolution or single-line authored windows."""
+
+    if not style.dual_line_layout:
+        return single_line_display_windows(track, style)
+    items = resolvers.display_lines(
+        track,
+        style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
+    return display_windows_from_items(track, items)
+
+
+def resolve_display_schedule(
+    track: TimingTrack,
+    style: Style,
+    resolvers: DisplayScheduleResolvers,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> DisplaySchedule:
+    """Project line lanes and windows without knowing the render backend."""
+
+    if not style.dual_line_layout:
+        return single_line_display_schedule(track, style)
+    items = resolvers.display_lines(
+        track,
+        style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
+    return display_schedule_from_items(track, items)
+
+
 __all__ = [
     "DisplaySchedule",
+    "DisplayScheduleResolvers",
     "DisplayWindows",
     "display_schedule_from_items",
     "display_windows_from_items",
+    "resolve_display_schedule",
+    "resolve_display_windows",
     "single_line_display_schedule",
     "single_line_display_windows",
 ]

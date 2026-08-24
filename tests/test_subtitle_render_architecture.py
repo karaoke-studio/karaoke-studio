@@ -585,9 +585,45 @@ def test_signal_semantics_have_one_engine_owner() -> None:
 
 def test_display_schedule_projection_has_no_painter_dependency() -> None:
     owner = f"{PACKAGE}.engine.layout.display_schedule"
-    targets = _import_targets(owner, ROOT / "engine/layout/display_schedule.py")
+    schedule_path = ROOT / "engine/layout/display_schedule.py"
+    targets = _import_targets(owner, schedule_path)
 
     assert f"{PACKAGE}.engine.painter" not in targets
+
+    tree = ast.parse(schedule_path.read_text(encoding="utf-8-sig"))
+    resolver_fields = {
+        node.target.id
+        for class_node in tree.body
+        if isinstance(class_node, ast.ClassDef)
+        and class_node.name == "DisplayScheduleResolvers"
+        for node in class_node.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert resolver_fields == {"display_lines"}
+
+
+def test_painter_delegates_display_schedule_projection() -> None:
+    painter_path = ROOT / "engine/painter.py"
+    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    methods = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {
+            "display_schedule_for_style",
+            "display_windows_for_style",
+        }
+    }
+    calls = {
+        name: {
+            node.func.id
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        for name, method in methods.items()
+    }
+    assert "resolve_display_windows" in calls["display_windows_for_style"]
+    assert "resolve_display_schedule" in calls["display_schedule_for_style"]
 
 
 def test_display_resolver_has_no_painter_dependency() -> None:

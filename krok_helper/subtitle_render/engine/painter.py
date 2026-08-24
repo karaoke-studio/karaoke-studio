@@ -199,10 +199,9 @@ from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
     resolve_page_offset_windows,
 )
 from krok_helper.subtitle_render.engine.layout.display_schedule import (
-    display_schedule_from_items,
-    display_windows_from_items,
-    single_line_display_schedule,
-    single_line_display_windows,
+    DisplayScheduleResolvers,
+    resolve_display_schedule,
+    resolve_display_windows,
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     DisplayResolutionCache,
@@ -4477,15 +4476,13 @@ def display_windows_for_style(
     与预览/导出使用同一套布局参数（含逐行手动覆盖），供字幕轨道 UI
     展示与编辑句子的显示/隐藏时间。
     """
-    if style.dual_line_layout:
-        items = _display_lines_for_style(
-            track,
-            style,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-        return display_windows_from_items(track, items)
-    return single_line_display_windows(track, style)
+    return resolve_display_windows(
+        track,
+        style,
+        DisplayScheduleResolvers(display_lines=_display_lines_for_style),
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
 
 
 def display_schedule_for_style(
@@ -4500,15 +4497,13 @@ def display_schedule_for_style(
     Native/GPU backends consume this resolved schedule so pagination, manual
     display overrides and lane protection remain owned by the Painter oracle.
     """
-    if not style.dual_line_layout:
-        return single_line_display_schedule(track, style)
-    items = _display_lines_for_style(
+    return resolve_display_schedule(
         track,
         style,
+        DisplayScheduleResolvers(display_lines=_display_lines_for_style),
         logical_w=logical_w,
         logical_h=logical_h,
     )
-    return display_schedule_from_items(track, items)
 
 
 def build_track_layout_plan(
