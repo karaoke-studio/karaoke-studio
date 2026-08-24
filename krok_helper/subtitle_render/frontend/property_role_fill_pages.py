@@ -138,3 +138,78 @@ class RoleFillPagesBuilder:
             footer=host._ruby_horizontal_gradient_with_main_check,
         )
         return page
+
+    def make_split_page(self) -> QWidget:
+        host = self._host
+        if any(
+            factory is None
+            for factory in (
+                self._gradient_editor_factory,
+                self._color_button_factory,
+                self._double_spin_factory,
+            )
+        ):
+            raise RuntimeError("split editor factories are required")
+
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        host._split_editor = self._gradient_editor_factory(page)
+        host._split_editor.set_orientation("split_vertical")
+        host._split_editor.stopsChanged.connect(host._update_split_stops)
+        host._split_editor.selectedChanged.connect(
+            lambda _index: host._sync_split_stop_controls()
+        )
+        host._split_bar_field = host._split_editor
+
+        host._split_stop_color_btn = self._color_button_factory("#FFFFFF", page)
+        host._wire_color_edit_session(host._split_stop_color_btn)
+        host._split_stop_color_btn.clicked.connect(host._choose_split_stop_color)
+        host._split_stop_color_btn.colorEntered.connect(
+            host._split_editor.set_selected_color
+        )
+        host._split_stop_color_btn.screenPickRequested.connect(
+            lambda: host._choose_split_stop_color(screen_pick=True)
+        )
+        host._split_stop_position_spin = self._double_spin_factory(
+            0,
+            100,
+            decimals=3,
+            suffix=" %",
+        )
+        host._split_stop_position_spin.valueChanged.connect(
+            host._set_split_stop_position
+        )
+        host._split_stop_delete_btn = FluentTransparentToolButton(FIF.DELETE, page)
+        host._split_stop_delete_btn.setToolTip("删除分段点")
+        host._split_stop_delete_btn.setAccessibleName("删除分段点")
+        host._split_stop_delete_btn.setFixedSize(30, 30)
+        host._split_stop_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        host._split_stop_delete_btn.clicked.connect(
+            host._split_editor.delete_selected_stop
+        )
+        host._split_color_field = property_field(
+            "分段颜色",
+            host._split_stop_color_btn,
+        )
+        position_row = QWidget(page)
+        position_layout = QHBoxLayout(position_row)
+        position_layout.setContentsMargins(0, 0, 0, 0)
+        position_layout.setSpacing(6)
+        position_layout.addWidget(host._split_stop_position_spin, 1)
+        position_layout.addWidget(
+            host._split_stop_delete_btn,
+            0,
+            Qt.AlignmentFlag.AlignBottom,
+        )
+        host._split_position_field = property_field("分段位置", position_row)
+        host._arrange_stop_editor(
+            layout,
+            host._split_bar_field,
+            host._split_color_field,
+            host._split_position_field,
+            vertical=True,
+        )
+        return page

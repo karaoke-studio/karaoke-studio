@@ -20,7 +20,13 @@ class _Host:
     def _update_gradient_stops(self, _stops):
         pass
 
+    def _update_split_stops(self, _stops):
+        pass
+
     def _sync_gradient_stop_controls(self):
+        pass
+
+    def _sync_split_stop_controls(self):
         pass
 
     def _wire_color_edit_session(self, _button):
@@ -29,7 +35,13 @@ class _Host:
     def _choose_gradient_stop_color(self, *args, **kwargs):
         pass
 
+    def _choose_split_stop_color(self, *args, **kwargs):
+        pass
+
     def _set_gradient_stop_position(self, _value):
+        pass
+
+    def _set_split_stop_position(self, _value):
         pass
 
     def _update_style(self, **changes):
@@ -80,3 +92,27 @@ def test_gradient_fill_page_preserves_editor_and_control_contracts(qapp) -> None
         "vertical": False,
         "footer": host._ruby_horizontal_gradient_with_main_check,
     }
+
+
+def test_split_fill_page_preserves_hard_stop_and_vertical_contracts(qapp) -> None:
+    from krok_helper.subtitle_render.frontend.property_panel import (
+        ColorButton,
+        GradientStopsEditor,
+        _double_spin,
+    )
+
+    host = _Host()
+    builder = RoleFillPagesBuilder(
+        host,
+        gradient_editor_factory=GradientStopsEditor,
+        color_button_factory=ColorButton,
+        double_spin_factory=_double_spin,
+    )
+    page = builder.make_split_page()
+
+    assert host._split_editor._orientation == "vertical"
+    assert host._split_editor._hard_edges is True
+    assert host._split_stop_position_spin.decimals() == 3
+    assert host._split_stop_delete_btn.toolTip() == "删除分段点"
+    assert host.arrangements[0][1] == {"vertical": True}
+    assert page.layout() is host.arrangements[0][0][0]
