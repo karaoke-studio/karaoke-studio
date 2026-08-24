@@ -427,6 +427,34 @@ def test_line_geometry_policy_has_no_painter_dependency() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_signal_semantics_have_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.signal_semantics"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_display_style_for_signal_window",
+        "_lit_signal_active",
+        "_signal_head_context",
+        "_signal_lead_in_ms",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert imported == delegated_names
+    targets = _import_targets(owner, ROOT / "engine/signal_semantics.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

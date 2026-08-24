@@ -96,6 +96,12 @@ from krok_helper.subtitle_render.engine.line_geometry import (
     line_has_role_labels as _line_has_role_labels,
     resolve_char_intervals as _resolve_char_intervals,
 )
+from krok_helper.subtitle_render.engine.signal_semantics import (
+    display_style_for_signal_window as _display_style_for_signal_window,
+    lit_signal_active as _lit_signal_active,
+    signal_head_context as _signal_head_context,
+    signal_lead_in_ms as _signal_lead_in_ms,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -558,7 +564,6 @@ from krok_helper.subtitle_render.engine.timeline import (
 from krok_helper.subtitle_render.engine.page_plan import (
     page_plan_signature,
     resolve_page_plan,
-    section_head_line_indices,
 )
 from krok_helper.subtitle_render.engine.page_placement import (
     AxisOffsetWindow,
@@ -5582,63 +5587,6 @@ def _effective_line_protect_ms(style: Style) -> int:
     """
     return protect_time_ms(
         style.line_lead_in_ms, style.line_tail_ms, style.line_protect_ms
-    )
-
-
-def _display_style_for_signal_window(style: Style) -> Style:
-    if not style.lit_enabled or style.vertical:
-        return style
-    # 指示灯（全部 lit 样式）只挂每段第一行：lead 扩展按行下发（见
-    # _signal_head_context），不再全局提前所有行。
-    return style
-
-
-def _lit_signal_active(style: Style) -> bool:
-    """指示灯生效：任何 ``lit_style``（volume/circle/square/rounded）都只
-    生效在每 S 第一 P 第一行。"""
-
-    return bool(style.lit_enabled) and not style.vertical
-
-
-def _signal_head_context(
-    track: TimingTrack,
-    style: Style,
-) -> Optional[frozenset[int]]:
-    """指示灯生效的 ``track.lines`` 索引集合（每段第一行）；None = 不过滤。
-
-    仅竖排或指示灯关闭时返回 ``None``（竖排不绘制 Sayatoo signal）。
-    结果按 ``(id(track), 布局签名)`` 缓存：同一布局趟内会被行布局、
-    灯组与窗口计算反复询问。
-    """
-
-    if not _lit_signal_active(style):
-        return None
-    cache = getattr(_LAYOUT_PASS, "signal_heads", None)
-    key = None
-    if cache is not None:
-        # 段首集合只由分页结构与间奏间隔决定；行内容变化不改分页计数，
-        # 无需整轨值签名。
-        key = (id(track), page_plan_signature(track), max(style.section_gap_ms, 0))
-        hit = cache.get(key)
-        if hit is not None:
-            return hit
-    heads = section_head_line_indices(
-        track, style, section_gap_ms=max(style.section_gap_ms, 0)
-    )
-    if cache is not None:
-        cache[key] = heads
-        # 键里有 id()：按住 track 防止地址复用后命中脏缓存。
-        _LAYOUT_PASS.tracks.append(track)
-    return heads
-
-
-def _signal_lead_in_ms(style: Style) -> int:
-    duration = max(int(style.signals_duration_ms), 0)
-    if duration <= 0:
-        return 0
-    return max(
-        0,
-        duration + max(int(style.lit_waiting_time_ms), 0) - int(style.lit_time_offset_ms),
     )
 
 
