@@ -595,21 +595,26 @@ from krok_helper.subtitle_render.engine.render.title import (
 from krok_helper.subtitle_render.engine.render.vertical import (
     BakedPathStackLayer as _BakedPathStackLayer,
     VerticalCachePorts,
+    VerticalLayerPorts,
     VerticalLineLayout as _VerticalLineLayout,
     VerticalProgressPorts,
     VerticalRasterPorts,
     baked_stack_key as _baked_stack_key_with_ports,
     layout_vertical_line as _layout_vertical_line,
+    paint_line_vertical_layers as _paint_line_vertical_layers_with_ports,
     resolve_vertical_columns as _resolve_vertical_columns,
     resolve_vertical_top as _resolve_vertical_top,
     vertical_after_clip_rect as _vertical_after_clip_rect,
+    vertical_after_clip_pad as _vertical_after_clip_pad_with_ports,
     vertical_before_clip_rect as _vertical_before_clip_rect,
+    vertical_before_clip_pad as _vertical_before_clip_pad_with_ports,
     vertical_cell_width as _vertical_cell_width,
     vertical_glyph_offset as _vertical_glyph_offset,
     vertical_glyph_path as _vertical_glyph_path,
     vertical_fill_band as _vertical_fill_band_with_ports,
     vertical_orientation as _vertical_orientation,
     vertical_main_path_signature as _vertical_main_path_sig,
+    vertical_layer_stack as _vertical_layer_stack_with_ports,
     vertical_ruby_allowance as _vertical_ruby_allowance,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
@@ -3587,16 +3592,9 @@ def _paint_line_vertical_direct(
 
 
 def _vertical_after_clip_pad(style: Style) -> int:
-    stroke2_width = _main_stroke2_width(style)
-    stroke_extent = _visual_stroke_extent(style.stroke_width_px, stroke2_width)
-    return max(
-        stroke_extent,
-        _glow_extent(style.stroke_width_px, stroke2_width, _glow_radius(style, after=True))
-        if style.decoration_kind == "glow"
-        else 0,
-        stroke_extent + abs(style.shadow_offset_x),
-        stroke_extent + abs(style.shadow_offset_y),
-        2,
+    return _vertical_after_clip_pad_with_ports(
+        style,
+        ports=_VERTICAL_LAYER_PORTS,
     )
 
 
@@ -3607,13 +3605,13 @@ def _vertical_before_clip_pad(
     shadow_dx: int,
     shadow_dy: int,
 ) -> int:
-    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    return max(
-        stroke_extent,
-        _glow_extent(stroke_width, stroke2_width, before_glow_radius),
-        stroke_extent + abs(shadow_dx),
-        stroke_extent + abs(shadow_dy),
-        2,
+    return _vertical_before_clip_pad_with_ports(
+        stroke_width,
+        stroke2_width,
+        before_glow_radius,
+        shadow_dx,
+        shadow_dy,
+        ports=_VERTICAL_LAYER_PORTS,
     )
 
 
@@ -3624,13 +3622,14 @@ def _paint_line_vertical_layers(
     t_ms: int,
     style: Style,
 ) -> None:
-    """竖排经 LayerCompositor 绘制：主文本/ruby 的 before/after 烘焙成位图缓存，逐帧
-    只 blit + 纵向扫光带 clip。与 :func:`_paint_line_vertical_direct` 像素一致。"""
-    layers = _vertical_layer_stack(layout, line, t_ms, style)
-    if not layers:
-        return
-    _TEXT_RUN_COMPOSITOR.paint_ordered(
-        painter, LayerContext(t_ms=t_ms, logical_w=0, logical_h=0), layers
+    _paint_line_vertical_layers_with_ports(
+        painter,
+        layout,
+        line,
+        t_ms,
+        style,
+        compositor=_TEXT_RUN_COMPOSITOR,
+        ports=_VERTICAL_LAYER_PORTS,
     )
 
 
@@ -3660,94 +3659,6 @@ def _baked_stack_key(
         glow_radius=glow_radius,
         after=after,
     )
-
-
-def _vertical_layer_stack(
-    layout: _VerticalLineLayout,
-    line: TimingLine,
-    t_ms: int,
-    style: Style,
-) -> list:
-    layers: list = []
-    stroke2_width = _main_stroke2_width(style)
-    main_sig = _vertical_main_path_sig(line, style, layout)
-    band = _vertical_fill_band(
-        layout.cells,
-        layout.intervals,
-        t_ms,
-        line=line,
-        active_rubies=layout.active_rubies,
-        ruby_main_progress_mode=style.ruby_main_progress_mode,
-    )
-    # N3 硬分割：与 _paint_line_vertical_direct 同口径的未唱层互补裁剪。
-    before_clip = None
-    if (
-        band is not None
-        and style.decoration_kind == "glow"
-        and _glow_radius(style, after=False) > 0
-    ):
-        before_clip = _vertical_before_clip_rect(
-            layout.column_x,
-            layout.cell_w,
-            band[1],
-            _vertical_before_clip_pad(
-                style.stroke_width_px,
-                stroke2_width,
-                _glow_radius(style, after=False),
-                style.shadow_offset_x,
-                style.shadow_offset_y,
-            ),
-        )
-    layers.append(
-        _BakedPathStackLayer(
-            path=layout.text_path,
-            rect=layout.line_rect,
-            state=layout.colors.before,
-            style=style,
-            cache_key=_baked_stack_key(
-                main_sig, layout.line_rect, layout.colors.before, style,
-                stroke_width=style.stroke_width_px, stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x, shadow_dy=style.shadow_offset_y,
-                glow_radius=_glow_radius(style, after=False), after=False,
-            ),
-            stroke_width=style.stroke_width_px,
-            stroke2_width=stroke2_width,
-            shadow_dx=style.shadow_offset_x,
-            shadow_dy=style.shadow_offset_y,
-            glow_radius=_glow_radius(style, after=False),
-            ports=_VERTICAL_RASTER_PORTS,
-            clip_rect=before_clip,
-            z_index=0,
-        )
-    )
-    if band is not None:
-        y0, y_scan = band
-        pad = _vertical_after_clip_pad(style)
-        layers.append(
-            _BakedPathStackLayer(
-                path=layout.text_path,
-                rect=layout.line_rect,
-                state=layout.colors.after,
-                style=style,
-                cache_key=_baked_stack_key(
-                    main_sig, layout.line_rect, layout.colors.after, style,
-                    stroke_width=style.stroke_width_px, stroke2_width=stroke2_width,
-                    shadow_dx=style.shadow_offset_x, shadow_dy=style.shadow_offset_y,
-                    glow_radius=_glow_radius(style, after=True), after=True,
-                ),
-                stroke_width=style.stroke_width_px,
-                stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
-                glow_radius=_glow_radius(style, after=True),
-                ports=_VERTICAL_RASTER_PORTS,
-                clip_rect=_vertical_after_clip_rect(layout.column_x, layout.cell_w, y0, y_scan, pad),
-                z_index=1,
-            )
-        )
-    if layout.active_rubies:
-        layers.extend(_vertical_ruby_layers(layout, line, t_ms, style))
-    return layers
 
 
 def _vertical_ruby_path_and_wipe(
@@ -12416,6 +12327,15 @@ _VERTICAL_RASTER_PORTS = VerticalRasterPorts(
     paint_text_layer_stack=_paint_text_layer_stack,
     visual_stroke_extent=_visual_stroke_extent,
     glow_extent=_glow_extent,
+)
+
+_VERTICAL_LAYER_PORTS = VerticalLayerPorts(
+    progress=_VERTICAL_PROGRESS_PORTS,
+    raster=_VERTICAL_RASTER_PORTS,
+    cache=_VERTICAL_CACHE_PORTS,
+    main_stroke2_width=_main_stroke2_width,
+    glow_radius=_glow_radius,
+    ruby_layers=_vertical_ruby_layers,
 )
 
 

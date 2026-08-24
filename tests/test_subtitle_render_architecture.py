@@ -1299,16 +1299,20 @@ def test_vertical_layout_has_one_render_owner() -> None:
         "_VerticalLineLayout",
         "_baked_stack_key_with_ports",
         "_layout_vertical_line",
+        "_paint_line_vertical_layers_with_ports",
         "_resolve_vertical_columns",
         "_resolve_vertical_top",
         "_vertical_after_clip_rect",
+        "_vertical_after_clip_pad_with_ports",
         "_vertical_before_clip_rect",
+        "_vertical_before_clip_pad_with_ports",
         "_vertical_cell_width",
         "_vertical_fill_band_with_ports",
         "_vertical_glyph_offset",
         "_vertical_glyph_path",
         "_vertical_orientation",
         "_vertical_main_path_sig",
+        "_vertical_layer_stack_with_ports",
         "_vertical_ruby_allowance",
     }
     inline = {
@@ -1326,6 +1330,11 @@ def test_vertical_layout_has_one_render_owner() -> None:
     assert inline == set()
     assert delegated_names <= imported
     assert "_build_baked_path_stack" not in {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_vertical_layer_stack" not in {
         node.name
         for node in painter_tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
