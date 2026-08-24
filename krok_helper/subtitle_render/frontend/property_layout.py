@@ -16,7 +16,14 @@ from PyQt6.QtWidgets import (
     QWIDGETSIZE_MAX,
 )
 
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.property_widgets import (
+    CollapsibleSection,
+    subgroup_label,
+)
+from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+
+
+_COMPACT_CONTROL_HEIGHT = 32
 
 
 def property_field(label_text: str, control: QWidget) -> QWidget:
@@ -33,6 +40,90 @@ def property_field(label_text: str, control: QWidget) -> QWidget:
     layout.addWidget(label)
     layout.addWidget(control)
     return box
+
+
+def compact_property_control(widget: QWidget) -> None:
+    """Apply the shared compact sizing and focus contract to one input."""
+    widget.setMinimumWidth(0)
+    widget.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
+    widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+
+def property_section(
+    title: str,
+    *,
+    switch: bool = False,
+) -> tuple[CollapsibleSection, QVBoxLayout]:
+    """Build one styled, titled and optionally switchable property card."""
+    section = CollapsibleSection(title, switch=switch)
+    themed(
+        section,
+        lambda: (
+            f"""
+            QFrame#SubtitlePropertySection {{
+                background: {palette().card_bg};
+                border: 1px solid {palette().card_border};
+                border-radius: 8px;
+            }}
+            QToolButton#SubtitlePropertySectionHeader {{
+                color: {palette().title_text};
+                border: 0;
+                padding: 10px 12px;
+                font-size: 10.5pt;
+                font-weight: 700;
+                text-align: left;
+            }}
+            QToolButton#SubtitlePropertySectionHeader:hover {{
+                color: {palette().accent_primary};
+            }}
+            QFrame#SubtitlePropertySection QWidget {{
+                background: transparent;
+            }}
+            {control_qss("QFrame#SubtitlePropertySection")}
+            """
+        ),
+    )
+    return section, section.content_layout
+
+
+def plain_property_card() -> tuple[QFrame, QVBoxLayout]:
+    """Build an untitled, non-collapsible property card."""
+    card = QFrame()
+    card.setObjectName("SubtitlePropertyCard")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(12, 12, 12, 12)
+    layout.setSpacing(10)
+    themed(
+        card,
+        lambda: (
+            f"""
+            QFrame#SubtitlePropertyCard {{
+                background: {palette().card_bg};
+                border: 1px solid {palette().card_border};
+                border-radius: 8px;
+            }}
+            QFrame#SubtitlePropertyCard QWidget {{
+                background: transparent;
+            }}
+            {control_qss("QFrame#SubtitlePropertyCard")}
+            """
+        ),
+    )
+    return card, layout
+
+
+def inline_property_section(
+    title: str,
+    parent: Optional[QWidget] = None,
+) -> tuple[QWidget, QVBoxLayout]:
+    """Build a nested untitled section identified by an accent subheading."""
+    section = QWidget(parent)
+    layout = QVBoxLayout(section)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
+    layout.addWidget(subgroup_label(title))
+    return section, layout
 
 
 class ResponsivePropertyPair(QWidget):
