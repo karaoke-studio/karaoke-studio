@@ -897,6 +897,10 @@ def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> Non
     }
     assert "_field" not in inline_functions
     assert "_section_pair" not in inline_functions
+    assert "_compact_control" not in inline_functions
+    assert "_section" not in inline_functions
+    assert "_plain_card" not in inline_functions
+    assert "_inline_section" not in inline_functions
 
 
 def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:

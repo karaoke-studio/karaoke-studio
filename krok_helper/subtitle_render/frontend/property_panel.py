@@ -117,7 +117,11 @@ from krok_helper.subtitle_render.frontend.property_layout import (
     ResponsiveFieldGrid as _ResponsiveFieldGrid,
     ResponsivePropertyPair as _ResponsivePropertyPair,
     ResponsiveRoleHeader as _ResponsiveRoleHeader,
+    compact_property_control as _compact_control,
+    inline_property_section as _inline_section,
+    plain_property_card as _plain_card,
     property_field as _field,
+    property_section as _section,
     property_section_pair as _section_pair,
 )
 from krok_helper.subtitle_render.frontend.property_inputs import (
@@ -139,7 +143,7 @@ from krok_helper.subtitle_render.frontend.property_widgets import (
     ToggleSwitch,
     subgroup_label as _subgroup_label,
 )
-from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.engine.style_semantics import (
     effective_karaoke_colors,
     style_for_role,
@@ -294,7 +298,6 @@ EDIT_COMMIT_DEBOUNCE_MS = 200
 """
 COLOR_COMMIT_DEBOUNCE_MS = 250
 """色号输入的同类窗口——6/8 位十六进制要连打更久，留得比数值框宽一点。"""
-_COMPACT_CONTROL_HEIGHT = 32
 _FONT_SIZE_MAX_PX = 4096
 _LAYOUT_SIZE_MAX_PX = 16_384
 _FILL_MODE_ICON_DIR = (
@@ -8565,13 +8568,6 @@ def _double_spin(
     return spin
 
 
-def _compact_control(widget: QWidget) -> None:
-    widget.setMinimumWidth(0)
-    widget.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
-    widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-    widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-
-
 def _scroll_page() -> tuple[FluentScrollArea, QVBoxLayout]:
     scroll = FluentScrollArea()
     scroll.setObjectName("SubtitlePropertyScroll")
@@ -8615,74 +8611,3 @@ def _solid_paint_fill(color: str) -> PaintFill:
         split_top_color=normalized,
         split_bottom_color=normalized,
     )
-
-
-def _section(
-    title: str, *, switch: bool = False
-) -> tuple[CollapsibleSection, QVBoxLayout]:
-    section = CollapsibleSection(title, switch=switch)
-    themed(
-        section,
-        lambda: (
-            f"""
-            QFrame#SubtitlePropertySection {{
-                background: {palette().card_bg};
-                border: 1px solid {palette().card_border};
-                border-radius: 8px;
-            }}
-            QToolButton#SubtitlePropertySectionHeader {{
-                color: {palette().title_text};
-                border: 0;
-                padding: 10px 12px;
-                font-size: 10.5pt;
-                font-weight: 700;
-                text-align: left;
-            }}
-            QToolButton#SubtitlePropertySectionHeader:hover {{
-                color: {palette().accent_primary};
-            }}
-            QFrame#SubtitlePropertySection QWidget {{
-                background: transparent;
-            }}
-            {control_qss("QFrame#SubtitlePropertySection")}
-            """
-        ),
-    )
-    return section, section.content_layout
-
-
-def _plain_card() -> tuple[QFrame, QVBoxLayout]:
-    """无标题、不折叠的属性卡片，用于顶部导航已表明编辑上下文的页面。"""
-    card = QFrame()
-    card.setObjectName("SubtitlePropertyCard")
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(12, 12, 12, 12)
-    layout.setSpacing(10)
-    themed(
-        card,
-        lambda: (
-            f"""
-            QFrame#SubtitlePropertyCard {{
-                background: {palette().card_bg};
-                border: 1px solid {palette().card_border};
-                border-radius: 8px;
-            }}
-            QFrame#SubtitlePropertyCard QWidget {{
-                background: transparent;
-            }}
-            {control_qss("QFrame#SubtitlePropertyCard")}
-            """
-        ),
-    )
-    return card, layout
-
-
-def _inline_section(
-    title: str, parent: Optional[QWidget] = None
-) -> tuple[QWidget, QVBoxLayout]:
-    section = QWidget(parent)
-    layout = QVBoxLayout(section)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(10)
-    layout.addWidget(_subgroup_label(title))
-    return section, layout
