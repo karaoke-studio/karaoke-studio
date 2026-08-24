@@ -208,8 +208,10 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
     resolve_display_windows,
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
+    AnimationGuardPorts,
     DisplayResolutionCache,
     DisplayResolutionPorts,
+    apply_animation_time_guard,
     resolve_display_lines,
 )
 from krok_helper.subtitle_render.engine.value_signature import (
@@ -4023,211 +4025,37 @@ def _apply_animation_time_guard(
     enforce_inter_page_gap: bool,
     adjustments: list[_TimingCollisionAdjustment] | None = None,
 ) -> list[DisplayLine]:
-    """Restore animations, then enforce measured collision-window separation.
+    """Bind Painter collision measurements to the layout timing guard."""
 
-    With animation overlap enabled, only stable main-text windows participate.
-    Otherwise the complete display windows participate.  In both modes the
-    configured same-lane interval is enforced after synchronization.
-    """
-
-    if not display_lines:
-        return display_lines
-
-    guarded = list(display_lines)
-    changed = False
-    entry_durations: list[int] = []
-    line_starts: list[int] = []
-    line_ends: list[int] = []
-    for index, item in enumerate(guarded):
-        entry_duration = _entry_animation_ms(style, item.line)
-        exit_duration = _exit_animation_ms(style, item.line)
-        entry_durations.append(entry_duration)
-        line_start = _line_start_ms(item.line)
-        line_end = _line_end_ms(item.line)
-        line_starts.append(line_start)
-        line_ends.append(line_end)
-
-        start = int(item.display_start_ms)
-        end = int(item.display_end_ms)
-        if item.line.display_start_override_ms is None and entry_duration > 0:
-            start = min(start, max(line_start - entry_duration, 0))
-        if item.line.display_end_override_ms is None and exit_duration > 0:
-            end = max(end, line_end + exit_duration)
-        if start != item.display_start_ms or end != item.display_end_ms:
-            guarded[index] = replace(
-                item,
-                display_start_ms=start,
-                display_end_ms=max(start, end),
-            )
-            changed = True
-
-    if not enforce_inter_page_gap or style.allow_inter_page_line_overlap:
-        return guarded if changed else display_lines
-
-    time_window = (
-        "stable" if style.allow_entry_exit_animation_overlap else "display"
-    )
-    measured = _measure_collision_bands(
-        logical_w,
-        logical_h,
-        track,
-        style,
-        guarded,
-        time_window=time_window,
-    )
-    for _pass in range(max(len(guarded) * 3, 1)):
-        adjusted = False
-        changed_index: int | None = None
-        for incoming_pos, (
-            incoming_index,
-            incoming_page,
-            incoming_band,
-            _incoming_gap,
-        ) in enumerate(measured):
-            incoming = guarded[incoming_index]
-            for previous_index, previous_page, previous_band, _previous_gap in measured[
-                :incoming_pos
-            ]:
-                if previous_page == incoming_page:
-                    continue
-                previous = guarded[previous_index]
-                same_lane = int(previous.lane) == int(incoming.lane)
-                # The configured lane interval is a scheduling invariant, not
-                # a glyph-intersection margin.  Same-lane lines must retain it
-                # even when their short text happens not to overlap on the
-                # cross axis.  Different lanes still use measured ink boxes.
-                if (
-                    not same_lane
-                    and not bands_require_separation(
-                        incoming_band, previous_band, 0.0
-                    )
-                ):
-                    continue
-                required_gap = (
-                    max(int(style.line_lane_gap_ms), 0)
-                    if same_lane
-                    else 0
-                )
-                required_start = int(previous_band.display_end_ms) + required_gap
-                if int(incoming_band.display_start_ms) >= required_start:
-                    continue
-                overlap_ms = required_start - int(
-                    incoming_band.display_start_ms
-                )
-
-                # First subtract only the actual overlap from the outgoing
-                # line's *stable* tail.  Move the complete display boundary by
-                # the same delta so the exit animation remains intact; never
-                # jump the display end directly to a stable-time coordinate.
-                if previous.line.display_end_override_ms is None:
-                    if time_window == "stable":
-                        stable_tail = max(
-                            int(previous_band.display_end_ms)
-                            - line_ends[previous_index],
-                            0,
-                        )
-                    else:
-                        stable_tail = max(
-                            int(previous.display_end_ms)
-                            - _exit_animation_ms(style, previous.line)
-                            - line_ends[previous_index],
-                            0,
-                        )
-                    delta = min(overlap_ms, stable_tail)
-                    new_end = int(previous.display_end_ms) - delta
-                    if new_end < previous.display_end_ms:
-                        if adjustments is not None:
-                            adjustments.append(
-                                _TimingCollisionAdjustment(
-                                    previous_index=previous_index,
-                                    incoming_index=incoming_index,
-                                    boundary="exit",
-                                    before_ms=int(previous.display_end_ms),
-                                    after_ms=int(new_end),
-                                )
-                            )
-                        guarded[previous_index] = replace(
-                            previous,
-                            display_end_ms=max(
-                                int(previous.display_start_ms),
-                                new_end,
-                            ),
-                        )
-                        adjusted = True
-                        changed_index = previous_index
-                        changed = True
-                        break
-
-                # If outgoing stable tail was insufficient, subtract only the
-                # remaining overlap from the incoming stable lead.  Advancing
-                # the complete display start by that delta preserves the full
-                # entry animation instead of skipping straight to the limit.
-                if time_window == "stable":
-                    stable_lead = max(
-                        line_starts[incoming_index]
-                        - int(incoming_band.display_start_ms),
-                        0,
-                    )
-                else:
-                    stable_lead = max(
-                        line_starts[incoming_index]
-                        - entry_durations[incoming_index]
-                        - int(incoming.display_start_ms),
-                        0,
-                    )
-                if incoming.line.display_start_override_ms is None:
-                    delta = min(overlap_ms, stable_lead)
-                    new_start = int(incoming.display_start_ms) + delta
-                    latest_entry_start = max(
-                        line_starts[incoming_index]
-                        - entry_durations[incoming_index],
-                        0,
-                    )
-                    new_start = min(new_start, latest_entry_start)
-                    if new_start != incoming.display_start_ms:
-                        if adjustments is not None:
-                            adjustments.append(
-                                _TimingCollisionAdjustment(
-                                    previous_index=previous_index,
-                                    incoming_index=incoming_index,
-                                    boundary="entry",
-                                    before_ms=int(incoming.display_start_ms),
-                                    after_ms=int(new_start),
-                                )
-                            )
-                        guarded[incoming_index] = replace(
-                            incoming,
-                            display_start_ms=new_start,
-                        )
-                        adjusted = True
-                        changed_index = incoming_index
-                        changed = True
-                        break
-            if adjusted:
-                break
-        if not adjusted:
-            break
-        if changed_index is not None:
-            retimed = _retime_measured_collision_bands(
+    ports = AnimationGuardPorts(
+        entry_animation_ms=lambda line: _entry_animation_ms(style, line),
+        exit_animation_ms=lambda line: _exit_animation_ms(style, line),
+        measure=lambda items, time_window: _measure_collision_bands(
+            logical_w,
+            logical_h,
+            track,
+            style,
+            items,
+            time_window=time_window,
+        ),
+        retime=lambda measured, items, indices, time_window: (
+            _retime_measured_collision_bands(
                 measured,
-                guarded,
+                items,
                 style,
-                (changed_index,),
+                indices,
                 time_window=time_window,
             )
-            measured = (
-                retimed
-                if retimed is not None
-                else _measure_collision_bands(
-                    logical_w,
-                    logical_h,
-                    track,
-                    style,
-                    guarded,
-                    time_window=time_window,
-                )
-            )
-    return guarded if changed else display_lines
+        ),
+    )
+    return apply_animation_time_guard(
+        style,
+        display_lines,
+        ports,
+        enforce_inter_page_gap=enforce_inter_page_gap,
+        adjustments=adjustments,
+    )
+
 
 
 def _resolve_page_sync_and_collisions(

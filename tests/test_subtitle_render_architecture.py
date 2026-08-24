@@ -700,6 +700,28 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     }
     assert "resolve_display_lines" in calls
 
+    guard = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_apply_animation_time_guard"
+    )
+    guard_calls = {
+        node.func.id
+        for node in ast.walk(guard)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "apply_animation_time_guard" in guard_calls
+
+    resolver_path = ROOT / "engine/layout/display_resolver.py"
+    resolver_tree = ast.parse(resolver_path.read_text(encoding="utf-8-sig"))
+    resolver_functions = {
+        node.name
+        for node in resolver_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "apply_animation_time_guard" in resolver_functions
+
 
 def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     painter_path = ROOT / "engine/painter.py"
