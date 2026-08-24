@@ -141,6 +141,9 @@ from krok_helper.subtitle_render.frontend.property_background_page import (
 from krok_helper.subtitle_render.frontend.property_effects_page import (
     EffectsPropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_layout_page import (
+    LayoutPropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3597,6 +3600,10 @@ class PropertyPanel(QWidget):
             self,
             spin_factory=_spin,
         )
+        self._layout_page_builder = LayoutPropertyPageBuilder(
+            self,
+            spin_factory=_spin,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -5462,57 +5469,7 @@ class PropertyPanel(QWidget):
         return self._effects_page_builder.make_animation_section()
 
     def _make_viewport_section(self) -> QFrame:
-        section, layout = _section("视图")
-
-        self._viewport_align_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._viewport_align_combo)
-        for label, value in [
-            ("左上", "top_left"),
-            ("中上", "top_center"),
-            ("右上", "top_right"),
-            ("左中", "center_left"),
-            ("居中", "center"),
-            ("右中", "center_right"),
-            ("左下", "bottom_left"),
-            ("中下", "bottom_center"),
-            ("右下", "bottom_right"),
-        ]:
-            self._viewport_align_combo.addItem(label, value)
-        self._viewport_align_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                viewport_align=self._viewport_align_combo.currentData()
-            )
-        )
-
-        grid = _ResponsiveFieldGrid(section, min_column_width=110, max_columns=5)
-        grid.add_field("对齐", self._viewport_align_combo)
-
-        self._viewport_x_spin = _spin(-4000, 4000)
-        self._viewport_x_spin.valueChanged.connect(
-            lambda value: self._update_style(viewport_offset_x=value)
-        )
-        grid.add_field("位置 X", self._viewport_x_spin)
-
-        self._viewport_y_spin = _spin(-4000, 4000)
-        self._viewport_y_spin.valueChanged.connect(
-            lambda value: self._update_style(viewport_offset_y=value)
-        )
-        grid.add_field("位置 Y", self._viewport_y_spin)
-
-        self._viewport_scale_spin = _spin(10, 400, suffix=" %")
-        self._viewport_scale_spin.valueChanged.connect(
-            lambda value: self._update_style(viewport_scale_pct=value)
-        )
-        grid.add_field("缩放", self._viewport_scale_spin)
-
-        self._viewport_rotation_spin = _spin(-180, 180, suffix=" °")
-        self._viewport_rotation_spin.valueChanged.connect(
-            lambda value: self._update_style(viewport_rotation_deg=value)
-        )
-        grid.add_field("旋转", self._viewport_rotation_spin)
-
-        layout.addWidget(grid)
-        return section
+        return self._layout_page_builder.make_viewport_section()
 
     def _make_layout_navigation(self, parent: QWidget) -> QFrame:
         """行结构卡片顶部的布局方案导航条。"""
