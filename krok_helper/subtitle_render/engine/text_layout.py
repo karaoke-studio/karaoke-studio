@@ -51,6 +51,42 @@ class TextLayout:
     line_rect: QRectF
 
 
+def char_left_positions(
+    char_widths: list[int],
+    base_x: int,
+    rtl: bool,
+    letter_spacing_px: int = 0,
+    char_gaps: list[int] | None = None,
+    n3_no_backtracking: bool = False,
+) -> list[int]:
+    """Return each character's left edge for LTR or RTL text flow."""
+    lefts: list[int] = []
+    total_width = sum(char_widths) + letter_spacing_px * max(
+        len(char_widths) - 1,
+        0,
+    )
+    if rtl:
+        cursor = base_x + total_width
+        for width in char_widths:
+            cursor -= width
+            lefts.append(cursor)
+            advance = width + letter_spacing_px
+            cursor -= (
+                max(advance, 0) - width
+                if n3_no_backtracking
+                else letter_spacing_px
+            )
+    else:
+        cursor = base_x
+        for index, width in enumerate(char_widths):
+            if char_gaps is not None and index < len(char_gaps):
+                cursor += char_gaps[index]
+            lefts.append(cursor)
+            advance = width + letter_spacing_px
+            cursor += max(advance, 0) if n3_no_backtracking else advance
+    return lefts
+
+
 def main_script_stroke_style(style: Style, text: str) -> Style:
     """Materialize the active script font slot's outlines into common fields."""
     if is_n3_latin_text(text):
@@ -386,6 +422,7 @@ __all__ = [
     "TextLayout",
     "build_role_text_layout",
     "build_text_layout",
+    "char_left_positions",
     "main_script_stroke_style",
     "role_char_geometry_by_index",
     "style_for_role_in_layout",

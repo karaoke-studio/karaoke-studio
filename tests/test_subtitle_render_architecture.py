@@ -566,6 +566,7 @@ def test_text_layout_has_one_engine_owner() -> None:
     delegated_names = {
         "_build_role_text_layout",
         "_build_text_layout",
+        "_char_left_positions",
         "_main_script_stroke_style",
         "_role_char_geometry_by_index",
         "_style_for_role_in_layout",

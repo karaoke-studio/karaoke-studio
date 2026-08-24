@@ -151,6 +151,7 @@ from krok_helper.subtitle_render.engine.text_layout import (
     TextLayout as _TextLayout,
     build_role_text_layout as _build_role_text_layout,
     build_text_layout as _build_text_layout,
+    char_left_positions as _char_left_positions,
     main_script_stroke_style as _main_script_stroke_style,
     role_char_geometry_by_index as _role_char_geometry_by_index,
     style_for_role_in_layout as _style_for_role_in_layout,
@@ -7083,39 +7084,6 @@ def _layout_plain_line(
         ruby_layouts=ruby_layouts,
         render_line=line,
     )
-
-
-def _char_left_positions(
-    char_widths: list[int],
-    base_x: int,
-    rtl: bool,
-    letter_spacing_px: int = 0,
-    char_gaps: list[int] | None = None,
-    n3_no_backtracking: bool = False,
-) -> list[int]:
-    """每个字符左缘的 x 坐标。``rtl`` 时第一个字符排在最右、依次向左。
-
-    ``char_gaps[i]`` = 字符 i 前插入的 ruby 避让间隙（仅 LTR，见
-    :func:`_ruby_char_gaps`）。
-    """
-    lefts: list[int] = []
-    total_w = sum(char_widths) + letter_spacing_px * max(len(char_widths) - 1, 0)
-    if rtl:
-        cursor = base_x + total_w
-        for w in char_widths:
-            cursor -= w
-            lefts.append(cursor)
-            advance = w + letter_spacing_px
-            cursor -= max(advance, 0) - w if n3_no_backtracking else letter_spacing_px
-    else:
-        cursor = base_x
-        for index, w in enumerate(char_widths):
-            if char_gaps is not None and index < len(char_gaps):
-                cursor += char_gaps[index]
-            lefts.append(cursor)
-            advance = w + letter_spacing_px
-            cursor += max(advance, 0) if n3_no_backtracking else advance
-    return lefts
 
 
 def _bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
