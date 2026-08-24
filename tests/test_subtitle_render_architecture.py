@@ -137,3 +137,25 @@ def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> N
 
 def test_subtitle_render_internal_import_graph_is_acyclic() -> None:
     assert _dependency_cycles(_internal_dependencies()) == []
+
+
+def test_subtitle_render_window_delegates_background_tasks() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    worker_path = ROOT / "frontend" / "background_tasks.py"
+    worker_names = {"_RecoverySaveWorker", "_MediaProbeWorker", "_RenderWorker"}
+
+    window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    worker_tree = ast.parse(worker_path.read_text(encoding="utf-8-sig"))
+    inline_workers = {
+        node.name for node in window_tree.body if isinstance(node, ast.ClassDef)
+    } & worker_names
+    extracted_workers = {
+        node.name for node in worker_tree.body if isinstance(node, ast.ClassDef)
+    } & worker_names
+
+    assert inline_workers == set()
+    assert extracted_workers == worker_names
+    assert (
+        f"{PACKAGE}.frontend.background_tasks"
+        in _import_targets(f"{PACKAGE}.frontend.main_window", window_path)
+    )
