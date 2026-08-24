@@ -1,4 +1,4 @@
-"""Tests for the §9 B-tier quantisation primitives (engine/quantize.py)."""
+"""Tests for the §9 B-tier quantisation primitives (engine/render/quantize.py)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QPointF  # noqa: E402
 from PyQt6.QtGui import QTransform  # noqa: E402
 
-from krok_helper.subtitle_render.engine import quantize as q  # noqa: E402
+from krok_helper.subtitle_render.engine.render import quantize as q  # noqa: E402
 
 
 def _scale_rotate(sx: float, sy: float, deg: float, dx: float = 0.0, dy: float = 0.0) -> QTransform:

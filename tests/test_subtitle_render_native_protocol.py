@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
-from krok_helper.subtitle_render.engine.render_ir import build_render_ir
+from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
 from krok_helper.subtitle_render.engine.layout.semantic_plan import build_track_layout_plan
 from krok_helper.subtitle_render.models import (
     GuideSymbol,
@@ -67,7 +67,7 @@ def test_native_protocol_has_no_painter_dependency():
 
 
 def test_render_ir_uses_semantic_plan_boundary():
-    render_ir_path = Path("krok_helper/subtitle_render/engine/render_ir.py")
+    render_ir_path = Path("krok_helper/subtitle_render/engine/render/render_ir.py")
     tree = ast.parse(render_ir_path.read_text(encoding="utf-8"))
     imported_modules = {
         node.module

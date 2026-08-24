@@ -124,10 +124,10 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "contracts.py",
         ROOT / "engine" / "export" / "export_command.py",
         ROOT / "engine" / "export" / "parallel_schedule.py",
-        ROOT / "engine" / "raster_blur.py",
+        ROOT / "engine" / "render" / "raster_blur.py",
         ROOT / "engine" / "export" / "render_job.py",
         ROOT / "engine" / "export" / "render_job_policy.py",
-        ROOT / "engine" / "render_bands.py",
+        ROOT / "engine" / "render" / "render_bands.py",
         ROOT / "engine" / "ruby" / "timing.py",
         ROOT / "paint.py",
         ROOT / "paint_codec.py",
@@ -571,7 +571,10 @@ def test_layout_plan_projection_has_no_painter_dependency() -> None:
 def test_guide_metrics_and_image_resources_have_no_painter_dependency() -> None:
     modules = (
         (f"{PACKAGE}.engine.guide.metrics", ROOT / "engine/guide/metrics.py"),
-        (f"{PACKAGE}.engine.image_resource", ROOT / "engine/image_resource.py"),
+        (
+            f"{PACKAGE}.engine.render.image_resource",
+            ROOT / "engine/render/image_resource.py",
+        ),
     )
     for owner, path in modules:
         targets = _import_targets(owner, path)
@@ -675,6 +678,23 @@ def test_export_engine_modules_are_grouped_in_one_domain_package() -> None:
     export_root = ROOT / "engine" / "export"
     assert {"__init__.py", *module_names} <= {
         path.name for path in export_root.glob("*.py")
+    }
+    assert not any((ROOT / "engine" / name).exists() for name in module_names)
+
+
+def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "animator.py",
+        "image_resource.py",
+        "layers.py",
+        "quantize.py",
+        "raster_blur.py",
+        "render_bands.py",
+        "render_ir.py",
+    }
+    render_root = ROOT / "engine" / "render"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in render_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from krok_helper.subtitle_render.engine.render_ir import build_render_ir
+from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
 from krok_helper.subtitle_render.timing import TimingTrack
 from krok_helper.subtitle_render.models import Style
 

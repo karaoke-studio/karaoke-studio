@@ -40,7 +40,7 @@ from krok_helper.subtitle_render.engine.export.render_job_policy import (  # noq
     resolved_background,
     validate_render_job,
 )
-from krok_helper.subtitle_render.engine.render_bands import (  # noqa: E402
+from krok_helper.subtitle_render.engine.render.render_bands import (  # noqa: E402
     merge_intervals,
     packed_offsets,
 )

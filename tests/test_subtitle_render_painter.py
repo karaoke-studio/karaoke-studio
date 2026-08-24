@@ -31,7 +31,7 @@ from PyQt6.QtGui import (  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
-import krok_helper.subtitle_render.engine.raster_blur as raster_blur  # noqa: E402
+import krok_helper.subtitle_render.engine.render.raster_blur as raster_blur  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.layout as ruby_layout  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
@@ -123,7 +123,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _TEXT_RUN_LAYER_CACHE,
     _RUN_GLOW_CACHE,
 )
-from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
+from krok_helper.subtitle_render.engine.render.layers import (  # noqa: E402
     BakedLayer,
     LayerCompositor,
     LayerContext,

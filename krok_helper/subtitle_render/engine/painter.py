@@ -53,7 +53,7 @@ from PyQt6.QtGui import (
     QTransform,
 )
 
-from krok_helper.subtitle_render.engine.layers import (
+from krok_helper.subtitle_render.engine.render.layers import (
     BakedLayer,
     LayerAnimation,
     LayerCache,
@@ -75,7 +75,7 @@ from krok_helper.subtitle_render.engine.guide import (
     bitmap_guide_image as _bitmap_guide_image,
     vector_glyph_width as _vector_glyph_width,
 )
-from krok_helper.subtitle_render.engine.image_resource import (
+from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature as _image_file_signature,
     warn_image_resource_skipped as _warn_image_fill_skipped,
 )
@@ -635,7 +635,7 @@ from krok_helper.subtitle_render.engine.layout.layout_assignment import (
     assign_layout_to_all,
     auto_assign_layouts_by_page,
 )
-from krok_helper.subtitle_render.engine.animator import line_animation_state
+from krok_helper.subtitle_render.engine.render.animator import line_animation_state
 from krok_helper.subtitle_render.engine.show_time import (
     MIN_AUTO_ENTRY_ANIMATION_MS,
     MIN_AUTO_EXIT_ANIMATION_MS,
@@ -658,7 +658,7 @@ from krok_helper.subtitle_render.engine.ruby.timing import (
     _ruby_utopia_visual_units,
     _ruby_visual_units_and_intervals,
 )
-from krok_helper.subtitle_render.engine.raster_blur import (
+from krok_helper.subtitle_render.engine.render.raster_blur import (
     _blur_image,
     _gaussian_blur_image,
     _n3_gaussian_kernel_1d,
