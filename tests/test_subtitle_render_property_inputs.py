@@ -12,7 +12,9 @@ from krok_helper.subtitle_render.frontend.property_inputs import (
     NoWheelSpinBox,
     TimecodeEdit,
     WheelFocusedComboBox,
+    WheelFocusedDoubleSpinBox,
     WheelFocusedFontComboBox,
+    WheelFocusedSpinBox,
 )
 
 
@@ -104,6 +106,38 @@ def test_property_timecode_input_restores_invalid_partial_text(qapp) -> None:
     assert edit.submit_text("1:") is False
     assert edit.value() == 2_500
     assert edit.text() == "0:02.500"
+
+
+def test_property_spin_inputs_keep_units_out_of_selection(qapp) -> None:
+    spin = WheelFocusedSpinBox()
+    spin.setRange(0, 200)
+    spin.setSuffix(" px")
+    spin.setValue(75)
+    editor = spin.lineEdit()
+
+    editor.setSelection(0, len(editor.text()))
+    qapp.processEvents()
+
+    assert editor.selectedText() == "75"
+
+
+def test_property_double_spin_input_preserves_typed_text_on_commit(qapp) -> None:
+    spin = WheelFocusedDoubleSpinBox(commit_delay_ms=1)
+    spin.setRange(0.0, 100.0)
+    spin.setDecimals(3)
+    spin.show()
+    editor = spin.lineEdit()
+    editor.setFocus()
+    editor.selectAll()
+    editor.setText("12.5")
+    editor.setCursorPosition(len(editor.text()))
+    spin._keyboard_commit_pending = True
+
+    spin._commit_keyboard_edit()
+
+    assert spin.value() == 12.5
+    assert editor.text() == "12.5"
+    assert editor.cursorPosition() == len("12.5")
 
 
 def test_property_font_combo_uses_injected_catalog_and_canonicalizer(qapp) -> None:
