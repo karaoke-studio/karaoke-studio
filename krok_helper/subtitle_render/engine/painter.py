@@ -67,8 +67,11 @@ from krok_helper.subtitle_render.engine.layout.layout_context import (
     layout_pass,
 )
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
+    LayoutMarginBox,
+    LayoutMarginPorts,
     LayoutMarginWarning,
     LayoutTimingDiagnostic,
+    resolve_layout_margin_warnings,
 )
 from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
@@ -684,7 +687,6 @@ from krok_helper.subtitle_render.timing import (
     TimingChar,
     TimingLine,
     TimingTrack,
-    line_visible_chars,
 )
 from krok_helper.subtitle_render.models import (
     DecorationKind,
@@ -12652,58 +12654,43 @@ def check_layout_margins(
     不含 ruby 左右溢出与指示灯加宽；足以提示用户调小字号或余白。竖排模式左右
     边界语义不同，不检查。
     """
-    if style.vertical or not track.lines:
-        return []
-    if style.dual_line_layout:
-        display_lines = _display_lines_for_style(
-            track,
-            style,
-            logical_w=img_w,
-        )
-    else:
-        display_lines = [
-            DisplayLine(line=line, lane=0, display_start_ms=0, display_end_ms=0)
-            for line in track.lines
-            if not line.is_blank and line.chars
-        ]
-    line_indices = {id(line): index for index, line in enumerate(track.lines)}
-    warnings: list[LayoutMarginWarning] = []
-    for display_line in display_lines:
+    def measure_line(
+        source_track: TimingTrack,
+        source_style: Style,
+        display_line: DisplayLine,
+        width: int,
+    ) -> LayoutMarginBox:
         line = display_line.line
-        if not line.chars:
-            continue
-        line_style = _style_for_line(style, line)
-        margin_left = line_style.horizontal_margin_px
-        margin_right = line_style.horizontal_margin_px
-        total_w = _line_total_width(line, line_style, track.rubies)
+        line_style = _style_for_line(source_style, line)
+        total_w = _line_total_width(line, line_style, source_track.rubies)
         lane = display_line.lane if line_style.dual_line_layout else None
         x0 = _resolve_line_x_smart(
-            img_w,
+            width,
             total_w,
-            track,
+            source_track,
             line,
             line_style,
             lane,
-            center_override=_line_center_override(track, line, line_style),
+            center_override=_line_center_override(source_track, line, line_style),
         )
-        left = x0
-        right = x0 + total_w
-        if left < 0 or right > img_w:
-            level = "overflow"
-        elif left < margin_left or right > img_w - margin_right:
-            level = "margin"
-        else:
-            continue
-        warnings.append(
-            LayoutMarginWarning(
-                line_index=line_indices.get(id(line), -1),
-                text="".join(ch.text for ch in line_visible_chars(line)),
-                level=level,
-                left=left,
-                right=right,
+        return LayoutMarginBox(
+            left=x0,
+            right=x0 + total_w,
+            margin_left=line_style.horizontal_margin_px,
+            margin_right=line_style.horizontal_margin_px,
+        )
+
+    ports = LayoutMarginPorts(
+        resolve_display_lines=lambda source_track, source_style, width: (
+            _display_lines_for_style(
+                source_track,
+                source_style,
+                logical_w=width,
             )
-        )
-    return warnings
+        ),
+        measure_line=measure_line,
+    )
+    return resolve_layout_margin_warnings(track, style, img_w, ports=ports)
 
 
 def _bottom_align_resolver(style: Style):
