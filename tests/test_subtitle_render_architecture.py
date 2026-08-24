@@ -502,6 +502,13 @@ def test_text_metrics_have_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_qt_line_geometry_has_no_painter_dependency() -> None:
+    owner = f"{PACKAGE}.engine.qt_line_geometry"
+    targets = _import_targets(owner, ROOT / "engine/qt_line_geometry.py")
+
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

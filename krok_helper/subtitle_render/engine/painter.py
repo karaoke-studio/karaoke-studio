@@ -123,6 +123,10 @@ from krok_helper.subtitle_render.engine.text_metrics import (
     nicokara_layout_width as _nicokara_layout_width,
     truncate_div as _truncate_div,
 )
+from krok_helper.subtitle_render.engine.qt_line_geometry import (
+    char_widths_for_intervals as _qt_char_widths_for_intervals,
+    measure_guide_anchor_bounds as _qt_measure_guide_anchor_bounds,
+)
 from krok_helper.subtitle_render.engine.display_schedule import (
     display_schedule_from_items,
     display_windows_from_items,
@@ -13802,36 +13806,31 @@ def _display_line_collision_time_window(
     return _display_line_static_collision_window(display_line, style)
 
 
+def _role_char_widths_for_intervals(
+    line: TimingLine,
+    line_style: Style,
+) -> list[int]:
+    measure_layout = _build_role_text_layout(
+        line,
+        line_style,
+        x0=0,
+        baseline_y=0,
+    )
+    widths, _ranges = _role_char_geometry_by_index(line, measure_layout)
+    return widths
+
+
 def _char_widths_for_resolved_intervals(
     line: TimingLine,
     line_style: Style,
 ) -> list[int]:
-    if _line_has_role_labels(line):
-        measure_layout = _build_role_text_layout(
-            line, line_style, x0=0, baseline_y=0
-        )
-        char_widths, _ranges = _role_char_geometry_by_index(line, measure_layout)
-        return char_widths
-    font = _build_font(line_style)
-    metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(line_style)
-    font_for = _make_font_for(line_style, font, latin_font)
-    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    return [
-        (
-            _vector_glyph_width(char.vector_glyph, line_style)
-            if char.vector_glyph is not None
-            else _char_layout_width(
-                char.text,
-                font,
-                metrics,
-                latin_metrics,
-                font_for,
-                line_style,
-            )
-        )
-        for char in line.chars
-    ]
+
+    return _qt_char_widths_for_intervals(
+        line,
+        line_style,
+        role_char_widths=_role_char_widths_for_intervals,
+        vector_glyph_width=_vector_glyph_width,
+    )
 
 
 def resolved_char_intervals_for_line(
@@ -13845,31 +13844,32 @@ def resolved_char_intervals_for_line(
     )
 
 
+def _ruby_spacing_for_guide_anchor(
+    track: TimingTrack,
+    line: TimingLine,
+    char_widths: list[int],
+    line_style: Style,
+) -> tuple[list[int], int, int]:
+    active_rubies = _active_rubies_for_line(track.rubies, line)
+    return _ruby_char_gaps(
+        line,
+        char_widths,
+        active_rubies,
+        line_style,
+    )
+
+
 def _measure_guide_anchor_bounds(
     track: TimingTrack,
     line: TimingLine,
     line_style: Style,
 ) -> tuple[float, float] | None:
-    font = _build_font(line_style)
-    metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(line_style)
-    font_for = _make_font_for(line_style, font, latin_font)
-    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    char_widths = [
-        _char_layout_width(
-            ch.text, font, metrics, latin_metrics, font_for, line_style
-        )
-        for ch in line.chars
-    ]
-    active_rubies = _active_rubies_for_line(track.rubies, line)
-    char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
-        line, char_widths, active_rubies, line_style
+    return _qt_measure_guide_anchor_bounds(
+        track,
+        line,
+        line_style,
+        ruby_spacing=_ruby_spacing_for_guide_anchor,
     )
-    # 行盒左右不给描边留位（见 _line_total_width），只让 ruby 溢出撑开。
-    left_ext = ruby_left
-    right_ext = ruby_right
-    text_width = _line_text_width(char_widths, line_style) + sum(char_gaps)
-    return -left_ext, int(round(text_width)) + right_ext
 
 
 def resolved_guide_anchor_bounds_for_line(
