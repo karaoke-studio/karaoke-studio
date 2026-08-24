@@ -30,7 +30,7 @@ from krok_helper.subtitle_render.frontend.main_window import (
     SubtitleRenderWindow,
     _GuideSymbolSettingsDialog,
 )
-from krok_helper.subtitle_render.guide_symbols import (
+from krok_helper.subtitle_render.sources.guide_symbols import (
     guide_symbol_path,
     import_svg_guide_symbol,
 )

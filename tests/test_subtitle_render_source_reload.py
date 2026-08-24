@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
 )
-from krok_helper.subtitle_render.source_reload import merge_reloaded_track
+from krok_helper.subtitle_render.sources.reload import merge_reloaded_track
 
 
 def _track(*, first_ms: int = 1000, role: str | None = "源角色") -> TimingTrack:

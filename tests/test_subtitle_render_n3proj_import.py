@@ -20,7 +20,7 @@ from krok_helper.subtitle_render.n3.project_import import (
     is_n3proj_file,
     load_n3proj,
 )
-from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
 
 def _size(px: int, reference: int = 1080) -> dict:

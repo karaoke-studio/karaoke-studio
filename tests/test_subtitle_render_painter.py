@@ -150,7 +150,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TrackSection,
     TitleOverlay,
 )
-from krok_helper.subtitle_render.subtitle_sources import parse_nicokara_lrc  # noqa: E402
+from krok_helper.subtitle_render.sources.subtitles import parse_nicokara_lrc  # noqa: E402
 
 
 def test_painter_keeps_ruby_timing_compatibility_exports() -> None:

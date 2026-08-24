@@ -42,7 +42,7 @@ from krok_helper.subtitle_render.models import (
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
 from krok_helper.subtitle_render.n3.font_catalog import invalidate_n3_font_caches
 from krok_helper.subtitle_render.n3.project_import import load_n3proj
-from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
 
 DARK_SPIRAL_N3PROJ = (
@@ -9319,7 +9319,7 @@ def test_line_avatar_and_inline_svg_survive_in_every_render_core(
     Python 画笔、D2D 预览、sidecar 原生导出三条路都吃到同样的字符序列。
     """
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from krok_helper.subtitle_render.guide_symbols import import_svg_guide_symbol
+    from krok_helper.subtitle_render.sources.guide_symbols import import_svg_guide_symbol
 
     image_path = tmp_path / "avatar.png"
     avatar_image = QImage(24, 18, QImage.Format.Format_RGBA8888)

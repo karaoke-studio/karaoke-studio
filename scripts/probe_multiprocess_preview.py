@@ -165,7 +165,7 @@ def main() -> None:
     from krok_helper.subtitle_render.frontend.preview.preview_async import preview_render_target_size
     from krok_helper.subtitle_render.models import style_from_dict
     from krok_helper.subtitle_render.project.store import load_render_project
-    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+    from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
     from PyQt6.QtGui import QImage, QPainter
     from PyQt6.QtWidgets import QApplication
 

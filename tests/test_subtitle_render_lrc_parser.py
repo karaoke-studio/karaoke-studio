@@ -1,10 +1,10 @@
-"""Tests for ``krok_helper.subtitle_render.subtitle_sources`` Nicokara LRC parser."""
+"""Tests for ``krok_helper.subtitle_render.sources.subtitles`` Nicokara LRC parser."""
 
 from __future__ import annotations
 
 import pytest
 
-from krok_helper.subtitle_render.subtitle_sources import (
+from krok_helper.subtitle_render.sources.subtitles import (
     load_nicokara_lrc,
     parse_nicokara_lrc,
 )

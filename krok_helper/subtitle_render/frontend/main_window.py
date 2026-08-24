@@ -163,7 +163,7 @@ from krok_helper.subtitle_render.engine.layout.page_plan import (
 )
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.engine.timing.timeline import apply_n3_seq_line_breaks
-from krok_helper.subtitle_render.guide_symbols import (
+from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
 )
@@ -328,8 +328,8 @@ from krok_helper.subtitle_render.project.store import (
     save_discarded_project_backup,
     save_recovery_project,
 )
-from krok_helper.subtitle_render.source_loader import SubtitleSourceLoader
-from krok_helper.subtitle_render.source_reload import (
+from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
+from krok_helper.subtitle_render.sources.reload import (
     TrackReloadMerge,
     merge_reloaded_track,
 )

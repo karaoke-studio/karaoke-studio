@@ -2569,7 +2569,7 @@ def test_dropped_subtitle_replaces_the_selected_source(qapp, monkeypatch, tmp_pa
     assert win.load_from_lrc(main_lrc) is not None
 
     from krok_helper.subtitle_render.frontend.main_window import ExtraSubtitleSource
-    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+    from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
     win._extra_sources.append(
         ExtraSubtitleSource(
@@ -2608,7 +2608,7 @@ def test_replace_source_keeps_a_renamed_extra_source_name(qapp, monkeypatch, tmp
     )
 
     from krok_helper.subtitle_render.frontend.main_window import ExtraSubtitleSource
-    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+    from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
     win._extra_sources.append(
         ExtraSubtitleSource(
@@ -2628,7 +2628,7 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     assert win.load_from_lrc(main_lrc) is not None
 
     from krok_helper.subtitle_render.frontend.main_window import ExtraSubtitleSource
-    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+    from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
     chorus_track = load_nicokara_lrc(chorus_lrc)
     chorus_track.lines[0].layout_index = 1

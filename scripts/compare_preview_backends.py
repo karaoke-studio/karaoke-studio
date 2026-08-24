@@ -348,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     from PyQt6.QtWidgets import QApplication
 
     from krok_helper.subtitle_render.models import Style
-    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+    from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
     _ = QApplication.instance() or QApplication([])
     track = load_nicokara_lrc(args.lrc)

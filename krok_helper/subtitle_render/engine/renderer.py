@@ -70,7 +70,7 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame,
     paint_frame_to_painter,
 )
-from krok_helper.subtitle_render.guide_symbols import guide_symbol_path
+from krok_helper.subtitle_render.sources.guide_symbols import guide_symbol_path
 from krok_helper.subtitle_render.timing import (
     TimingTrack,
     guide_symbol_role_labels,

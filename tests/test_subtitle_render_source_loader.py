@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render import source_loader as loader_module
-from krok_helper.subtitle_render.source_loader import SubtitleSourceLoader
+from krok_helper.subtitle_render.sources import loader as loader_module
+from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
 from krok_helper.subtitle_render.timing import TimingTrack
 
 

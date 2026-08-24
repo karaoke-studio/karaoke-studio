@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
-from krok_helper.subtitle_render.sug_project import (
+from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
+from krok_helper.subtitle_render.sources.sug import (
     load_sug_timing_track,
     timing_track_from_sug_project,
 )

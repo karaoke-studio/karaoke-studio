@@ -139,7 +139,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "settings" / "screen.py",
         ROOT / "project" / "session.py",
         ROOT / "settings" / "store.py",
-        ROOT / "source_loader.py",
+        ROOT / "sources" / "loader.py",
         ROOT / "timecode.py",
         ROOT / "timing.py",
         ROOT / "serialization" / "timing.py",
@@ -405,6 +405,30 @@ def test_serialization_modules_are_grouped_behind_one_package_boundary() -> None
     assert not (ROOT / "forward_compat.py").exists()
     assert not (ROOT / "paint_codec.py").exists()
     assert not (ROOT / "timing_codec.py").exists()
+
+
+def test_source_modules_are_grouped_behind_one_package_boundary() -> None:
+    module_names = {
+        "guide_symbols.py",
+        "loader.py",
+        "reload.py",
+        "subtitles.py",
+        "sug.py",
+    }
+    sources_root = ROOT / "sources"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in sources_root.glob("*.py")
+    }
+    assert not any(
+        (ROOT / name).exists()
+        for name in {
+            "guide_symbols.py",
+            "source_loader.py",
+            "source_reload.py",
+            "subtitle_sources.py",
+            "sug_project.py",
+        }
+    )
 
 
 def test_line_style_semantics_have_one_engine_owner() -> None:
@@ -1328,9 +1352,9 @@ def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.source_loader" in targets
-    assert f"{PACKAGE}.subtitle_sources" not in targets
-    assert f"{PACKAGE}.sug_project" not in targets
+    assert f"{PACKAGE}.sources.loader" in targets
+    assert f"{PACKAGE}.sources.subtitles" not in targets
+    assert f"{PACKAGE}.sources.sug" not in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node

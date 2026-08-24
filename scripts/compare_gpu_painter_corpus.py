@@ -42,7 +42,7 @@ from krok_helper.subtitle_render.native.backend import (  # noqa: E402
     NativeRendererProcess,
     SharedFrameRingReader,
 )
-from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc  # noqa: E402
+from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc  # noqa: E402
 
 
 @dataclass(frozen=True)

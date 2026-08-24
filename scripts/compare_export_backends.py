@@ -375,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from krok_helper.ffmpeg import find_tool
     from krok_helper.subtitle_render.models import Style
-    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+    from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 
     _ = QApplication.instance() or QApplication([])
     ffmpeg_path = find_tool("ffmpeg.exe", None)

@@ -18,12 +18,12 @@ from strange_uta_game.backend.infrastructure.parsers.annotated_text import (
     parse_timed_line,
 )
 
-from krok_helper.subtitle_render import sug_project as sug_project_module
+from krok_helper.subtitle_render.sources import sug as sug_project_module
 from krok_helper.subtitle_render.engine.painter import _effective_track_time_ms
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.native.protocol import track_to_ir
-from krok_helper.subtitle_render.sug_project import (
+from krok_helper.subtitle_render.sources.sug import (
     load_sug_timing_track,
     timing_track_from_sug_project,
 )
@@ -821,7 +821,7 @@ def test_sug_per_character_ruby_keeps_its_own_target(tmp_path):
 
     import json
 
-    from krok_helper.subtitle_render.sug_project import load_sug_timing_track
+    from krok_helper.subtitle_render.sources.sug import load_sug_timing_track
 
     characters = []
     for index, char in enumerate("ケロケロケロ"):
@@ -874,7 +874,7 @@ def test_overlapping_lines_keep_their_own_ruby(tmp_path):
 
     from krok_helper.subtitle_render.engine import painter as subtitle_painter
     from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
-    from krok_helper.subtitle_render.sug_project import load_sug_timing_track
+    from krok_helper.subtitle_render.sources.sug import load_sug_timing_track
 
     def char(text, ts, *, ruby=None, end=None):
         return {

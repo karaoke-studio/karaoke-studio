@@ -77,7 +77,7 @@ from krok_helper.subtitle_render.engine.layout.page_plan import (
     ResolvedPagePlan,
     resolve_page_plan,
 )
-from krok_helper.subtitle_render.guide_symbols import (
+from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
     scaled_guide_symbol_path,
