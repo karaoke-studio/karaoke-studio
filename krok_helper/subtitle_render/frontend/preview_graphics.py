@@ -40,11 +40,13 @@ from krok_helper.subtitle_render.frontend.preview_async import (
 )
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.background import (
     BackgroundSource,
+    background_sequence_frame_path,
+)
+from krok_helper.subtitle_render.models import (
     Style,
     TimingTrack,
-    background_sequence_frame_path,
 )
 
 

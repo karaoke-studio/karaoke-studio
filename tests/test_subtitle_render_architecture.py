@@ -138,6 +138,29 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
     assert not violations
 
 
+def test_background_consumers_use_the_focused_domain_contract() -> None:
+    legacy_names = {
+        "Background",
+        "BackgroundSource",
+        "background_sequence_frame_path",
+        "infer_image_sequence_pattern",
+    }
+    violations: dict[str, list[str]] = defaultdict(list)
+    for path in ROOT.rglob("*.py"):
+        if path.name in {"background.py", "models.py"}:
+            continue
+        module = _module_name(path)
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module != f"{PACKAGE}.models":
+                continue
+            imported = {alias.name for alias in node.names} & legacy_names
+            if imported:
+                violations[module].extend(sorted(imported))
+
+    assert not violations
+
+
 def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> None:
     path = ROOT / "contracts.py"
     targets = _import_targets(f"{PACKAGE}.contracts", path)

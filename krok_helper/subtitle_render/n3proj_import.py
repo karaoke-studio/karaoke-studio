@@ -43,6 +43,7 @@ from krok_helper.subtitle_render.n3_font_scheme import (
     convert_n3_font_scheme as _scheme_changes,
     hex_from_colorbind as _hex_from_colorbind,
 )
+from krok_helper.subtitle_render.background import infer_image_sequence_pattern
 from krok_helper.subtitle_render.models import (
     DEFAULT_OUTPUT_NAME_SUFFIX,
     GuideSymbol,
@@ -57,7 +58,6 @@ from krok_helper.subtitle_render.models import (
     guide_symbol_to_dict,
     line_animation_override_to_dict,
     style_to_dict,
-    infer_image_sequence_pattern,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 

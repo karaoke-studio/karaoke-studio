@@ -98,6 +98,7 @@ from qfluentwidgets import (
 )
 from krok_helper.qfluent_compat import ModelessDialog, install_fluent_tooltip
 
+from krok_helper.subtitle_render.background import BackgroundSource
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_button_row,
     fluent_choice,
@@ -136,7 +137,6 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     resolve_qt_font_family,
 )
 from krok_helper.subtitle_render.models import (
-    BackgroundSource,
     ColorLayerKey,
     ColorStateKey,
     DecorationKind,

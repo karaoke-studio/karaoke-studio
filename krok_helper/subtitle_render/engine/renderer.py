@@ -27,6 +27,7 @@ from PyQt6.QtGui import QColor, QImage, QPainter
 
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
+from krok_helper.subtitle_render.background import BackgroundSource
 from krok_helper.subtitle_render.engine.encoder_select import (
     CPU_PRESETS,
     ENCODER_MODES,
@@ -51,7 +52,6 @@ from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.guide_symbols import guide_symbol_path
 from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
-    BackgroundSource,
     Style,
     TimingTrack,
     guide_symbol_role_labels,

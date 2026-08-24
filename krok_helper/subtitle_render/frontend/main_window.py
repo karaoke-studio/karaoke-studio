@@ -122,6 +122,11 @@ from krok_helper.qfluent_compat import (
     apply_qfluent_tooltip_parent_patch,
 )
 from krok_helper.settings import get_settings_path, load_app_settings, save_app_settings
+from krok_helper.subtitle_render.background import (
+    BackgroundSource,
+    background_sequence_frame_path,
+    infer_image_sequence_pattern,
+)
 from krok_helper.subtitle_render.engine.encoder_select import (
     CODEC_H264,
     CODEC_HEVC,
@@ -213,7 +218,6 @@ from krok_helper.subtitle_render.screen_settings import (
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.models import (
-    BackgroundSource,
     DEFAULT_EXPORT_NAME_TEMPLATE,
     DEFAULT_OUTPUT_NAME_SUFFIX,
     EXPORT_NAME_TEMPLATE_FIELDS,
@@ -227,7 +231,6 @@ from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     TitleOverlay,
     TimingTrack,
-    background_sequence_frame_path,
     guide_symbol_from_dict,
     guide_symbol_has_visual,
     guide_symbol_replaces_prefix,
@@ -252,7 +255,6 @@ from krok_helper.subtitle_render.models import (
     subtitle_loading_settings_to_dict,
     track_page_plan_from_dict,
     timing_line_start_ms,
-    infer_image_sequence_pattern,
 )
 from krok_helper.subtitle_render.n3_font_catalog import (
     get_n3_font_catalog,
