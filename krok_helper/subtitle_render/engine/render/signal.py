@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Hashable
 
-from PyQt6.QtCore import QRectF
-from PyQt6.QtGui import QFontMetrics
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
 
 from krok_helper.subtitle_render.engine.layout.line_style import (
     line_end_ms,
     line_start_ms,
+)
+from krok_helper.subtitle_render.engine.render.layers import (
+    BakedLayer,
+    LayerAnimation,
+    LayerContext,
+    SCOPE_LINE,
 )
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine
@@ -336,10 +343,341 @@ def lit_extinguish_transition_state(
     return 1.0 - opacity if style.lit_transition_mode == "fade" else opacity, dx, dy
 
 
+def _valid_signal_color(value: str, fallback: str) -> QColor:
+    color = QColor(value)
+    if color.isValid():
+        return color
+    return QColor(fallback)
+
+
+def build_signal_layers(
+    groups: list[SignalLitGroup],
+    style: Style,
+) -> list[SignalLitsLayer]:
+    if not groups:
+        return []
+    is_volume = style.lit_style == "volume"
+    count = (
+        max(1, min(int(style.volume_column_count), 16))
+        if is_volume
+        else max(1, min(int(style.lit_number), 8))
+    )
+    size = max(int(style.volume_size if is_volume else style.lit_size), 1)
+    tracking = max(
+        int(style.volume_column_spacing if is_volume else style.lit_tracking),
+        0,
+    )
+    fill = _valid_signal_color(style.lit_fill_color, "#0000FF")
+    stroke = _valid_signal_color(style.lit_stroke_color, "#FFFFFF")
+    stroke_width = max(int(style.lit_stroke_width), 0)
+    soften = max(int(style.lit_stroke_soften), 0)
+    group_opacity = max(0, min(int(style.lit_opacity_pct), 100)) / 100.0
+    edge_brightness = (
+        max(0, min(int(style.lit_edge_brightness_pct), 100)) / 100.0
+    )
+    return [
+        SignalLitsLayer(
+            group=group,
+            style=style,
+            count=count,
+            size=size,
+            tracking=tracking,
+            fill=fill,
+            stroke=stroke,
+            stroke_width=stroke_width,
+            soften=soften,
+            group_opacity=group_opacity,
+            edge_brightness=edge_brightness,
+            is_volume=is_volume,
+            z_index=index,
+        )
+        for index, group in enumerate(groups)
+    ]
+
+
+@dataclass(frozen=True)
+class SignalLitsLayer:
+    """Dynamic LayerCompositor adapter for one Sayatoo signal group."""
+
+    group: SignalLitGroup
+    style: Style
+    count: int
+    size: int
+    tracking: int
+    fill: QColor
+    stroke: QColor
+    stroke_width: int
+    soften: int
+    group_opacity: float
+    edge_brightness: float
+    is_volume: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> SignalLitsLayer:
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        raise AssertionError("Signal layers are dynamic in the QPainter backend")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        if self.group_opacity <= 0.0:
+            return
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * self.group_opacity)
+            painter.save()
+            try:
+                painter.setOpacity(painter.opacity() * self.group.opacity)
+                if self.is_volume:
+                    _draw_volume_lit_group(painter, self.group, self.style)
+                else:
+                    _paint_shape_signal_group(painter, self)
+            finally:
+                painter.restore()
+        finally:
+            painter.restore()
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        if self.group_opacity <= 0.0 or self.group.opacity <= 0.0:
+            return None
+        if self.is_volume:
+            return _volume_signal_vertical_bounds(self.group, self.style)
+        return _shape_signal_vertical_bounds(self)
+
+
+def _paint_shape_signal_group(
+    painter: QPainter,
+    layer: SignalLitsLayer,
+) -> None:
+    group = layer.group
+    for index in range(layer.count):
+        if group.active_index is None or index > group.active_index:
+            continue
+        is_active = index == group.active_index
+        dx = group.dx if is_active else 0.0
+        dy = group.dy if is_active else 0.0
+        x = group.x + dx + index * (layer.size * 1.5 + layer.tracking)
+        rect = QRectF(x, group.y + dy, float(layer.size), float(layer.size))
+        painter.save()
+        try:
+            if is_active:
+                painter.setOpacity(painter.opacity() * group.active_opacity)
+            _draw_lit_shape(
+                painter,
+                rect,
+                layer.style,
+                layer.fill,
+                layer.stroke,
+                layer.stroke_width,
+                layer.soften,
+                layer.edge_brightness if is_active else 0.0,
+            )
+        finally:
+            painter.restore()
+
+
+def _volume_signal_vertical_bounds(
+    group: SignalLitGroup,
+    style: Style,
+) -> tuple[int, int] | None:
+    geometry = volume_signal_geometry(style)
+    rects = volume_signal_column_rects(group.x, group.y, geometry)
+    if not rects:
+        return None
+    pad = max(int(style.lit_stroke_width), 0) + 2
+    top = min(rect.top() for rect in rects) - pad
+    bottom = max(rect.bottom() for rect in rects) + pad
+    return int(math.floor(top)), int(math.ceil(bottom))
+
+
+def _shape_signal_vertical_bounds(
+    layer: SignalLitsLayer,
+) -> tuple[int, int] | None:
+    group = layer.group
+    if group.active_index is None or group.active_index < 0:
+        return None
+    rects: list[QRectF] = []
+    for index in range(layer.count):
+        if index > group.active_index:
+            continue
+        is_active = index == group.active_index
+        dx = group.dx if is_active else 0.0
+        dy = group.dy if is_active else 0.0
+        x = group.x + dx + index * (layer.size * 1.5 + layer.tracking)
+        rect = QRectF(x, group.y + dy, float(layer.size), float(layer.size))
+        rects.append(rect)
+        if layer.style.lit_shadow:
+            rects.append(
+                rect.translated(
+                    max(rect.width() * 0.08, 1.0),
+                    max(rect.height() * 0.08, 1.0),
+                )
+            )
+    if not rects:
+        return None
+    pad = signal_stroke_extent(layer.style, is_volume=False) + 2
+    top = min(rect.top() for rect in rects) - pad
+    bottom = max(rect.bottom() for rect in rects) + pad
+    return int(math.floor(top)), int(math.ceil(bottom))
+
+
+def _draw_volume_lit_group(
+    painter: QPainter,
+    group: SignalLitGroup,
+    style: Style,
+) -> None:
+    fill = _valid_signal_color(style.volume_fill_color, "#FFFFFF")
+    stroke = _valid_signal_color(style.volume_stroke_color, "#0000FF")
+    overlay_fill = _valid_signal_color(style.volume_overlay_fill_color, "#0000FF")
+    overlay_stroke = _valid_signal_color(
+        style.volume_overlay_stroke_color,
+        "#FFFFFF",
+    )
+    stroke_width = max(int(style.lit_stroke_width), 0)
+    geometry = volume_signal_geometry(style)
+    if group.opacity <= 0:
+        return
+
+    painter.save()
+    try:
+        painter.setOpacity(painter.opacity() * group.opacity)
+        rects = volume_signal_column_rects(group.x, group.y, geometry)
+        active_index = group.active_index if group.active_index is not None else -1
+        for index in range(active_index + 1, geometry.count):
+            _draw_volume_column(painter, rects[index], fill, stroke, stroke_width)
+        for index in range(0, active_index + 1):
+            _draw_volume_column(
+                painter,
+                rects[index],
+                overlay_fill,
+                overlay_stroke,
+                stroke_width,
+            )
+    finally:
+        painter.restore()
+
+
+def _draw_volume_column(
+    painter: QPainter,
+    rect: QRectF,
+    fill: QColor,
+    stroke: QColor,
+    stroke_width: int,
+) -> None:
+    painter.setBrush(QBrush(fill))
+    if stroke_width > 0 and stroke.alpha() > 0:
+        painter.setPen(QPen(stroke, stroke_width))
+    else:
+        painter.setPen(Qt.PenStyle.NoPen)
+    radius = max(min(rect.width(), rect.height()) * 0.22, 1.0)
+    painter.drawRoundedRect(rect, radius, radius)
+
+
+def _draw_lit_shape(
+    painter: QPainter,
+    rect: QRectF,
+    style: Style,
+    fill: QColor,
+    stroke: QColor,
+    stroke_width: int,
+    soften: int,
+    edge_brightness: float,
+) -> None:
+    if style.lit_shadow:
+        shadow = QColor("#000000")
+        shadow.setAlphaF(0.35)
+        shadow_rect = rect.translated(
+            max(rect.width() * 0.08, 1.0),
+            max(rect.height() * 0.08, 1.0),
+        )
+        _draw_lit_shape_raw(
+            painter,
+            shadow_rect,
+            style.lit_style,
+            shadow,
+            QColor("#00000000"),
+            0,
+        )
+    if soften > 0 and stroke_width > 0:
+        soft = QColor(stroke)
+        soft.setAlphaF(0.28)
+        _draw_lit_shape_raw(
+            painter,
+            rect,
+            style.lit_style,
+            fill,
+            soft,
+            stroke_width + soften,
+        )
+    _draw_lit_shape_raw(
+        painter,
+        rect,
+        style.lit_style,
+        fill,
+        stroke,
+        stroke_width,
+    )
+    if edge_brightness > 0:
+        highlight = QColor("#FFFFFF")
+        highlight.setAlphaF(min(edge_brightness * 0.55, 1.0))
+        inset = rect.width() * 0.18
+        highlight_rect = QRectF(
+            rect.left() + inset,
+            rect.top() + inset,
+            rect.width() * 0.32,
+            rect.height() * 0.32,
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(highlight))
+        painter.drawEllipse(highlight_rect)
+
+
+def _draw_lit_shape_raw(
+    painter: QPainter,
+    rect: QRectF,
+    lit_style: str,
+    fill: QColor,
+    stroke: QColor,
+    stroke_width: int,
+) -> None:
+    painter.setBrush(QBrush(fill))
+    if stroke_width > 0 and stroke.alpha() > 0:
+        painter.setPen(QPen(stroke, stroke_width))
+    else:
+        painter.setPen(Qt.PenStyle.NoPen)
+    if lit_style == "square":
+        painter.drawRect(rect)
+    elif lit_style == "rounded":
+        radius = max(rect.width() * 0.22, 1.0)
+        painter.drawRoundedRect(rect, radius, radius)
+    else:
+        painter.drawEllipse(rect)
+
+
 __all__ = [
     "SignalLayoutMetrics",
     "SignalLitGroup",
     "VolumeSignalGeometry",
+    "build_signal_layers",
     "line_has_active_signal",
     "lit_extinguish_transition_state",
     "lit_transition_state",

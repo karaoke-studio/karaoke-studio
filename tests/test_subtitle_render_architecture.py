@@ -1234,6 +1234,7 @@ def test_signal_geometry_has_one_render_owner() -> None:
         "_SignalLayoutMetrics",
         "_SignalLitGroup",
         "_VolumeSignalGeometry",
+        "_build_signal_layers",
         "_line_has_active_signal",
         "_lit_extinguish_transition_state",
         "_lit_transition_state",
@@ -1264,6 +1265,20 @@ def test_signal_geometry_has_one_render_owner() -> None:
 
     assert inline == set()
     assert delegated_names <= imported
+    assert {
+        "_SignalLitsLayer",
+        "_draw_lit_shape",
+        "_draw_lit_shape_raw",
+        "_draw_volume_column",
+        "_draw_volume_lit_group",
+        "_paint_shape_signal_group",
+        "_shape_signal_vertical_bounds",
+        "_volume_signal_vertical_bounds",
+    }.isdisjoint(
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    )
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
         ROOT / "engine/render/signal.py",
