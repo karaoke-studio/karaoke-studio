@@ -115,7 +115,7 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
     signal_head_context as _signal_head_context,
     signal_lead_in_ms as _signal_lead_in_ms,
 )
-from krok_helper.subtitle_render.engine.ruby_selection import (
+from krok_helper.subtitle_render.engine.ruby import (
     active_rubies_for_line as _active_rubies_for_line,
     effective_ruby_for_target as _effective_ruby_for_target,
     find_ruby_text_indices as _find_ruby_text_indices,
@@ -128,7 +128,7 @@ from krok_helper.subtitle_render.engine.ruby_selection import (
     ruby_time_indices as _ruby_time_indices,
     text_span_indices as _text_span_indices,
 )
-from krok_helper.subtitle_render.engine.ruby_style import (
+from krok_helper.subtitle_render.engine.ruby import (
     build_ruby_font as _build_ruby_font,
     build_ruby_font_for_text as _build_ruby_font_for_text,
     ruby_font_size as _ruby_font_size,
@@ -629,7 +629,7 @@ from krok_helper.subtitle_render.engine.show_time import (
     MIN_AUTO_EXIT_ANIMATION_MS,
     protect_time_ms,
 )
-from krok_helper.subtitle_render.engine.ruby_timing import (
+from krok_helper.subtitle_render.engine.ruby.timing import (
     _main_text_ruby_progress_ratio,
     _main_text_ruby_progress_time_at_ratio,
     _reading_unit_progress_ratio,

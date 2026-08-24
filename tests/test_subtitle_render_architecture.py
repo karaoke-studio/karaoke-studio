@@ -128,7 +128,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "engine" / "render_job.py",
         ROOT / "engine" / "render_job_policy.py",
         ROOT / "engine" / "render_bands.py",
-        ROOT / "engine" / "ruby_timing.py",
+        ROOT / "engine" / "ruby" / "timing.py",
         ROOT / "paint.py",
         ROOT / "paint_codec.py",
         ROOT / "project_controller.py",
@@ -590,7 +590,7 @@ def test_text_layout_has_one_engine_owner() -> None:
 
 
 def test_ruby_selection_has_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.ruby_selection"
+    owner = f"{PACKAGE}.engine.ruby"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -619,13 +619,16 @@ def test_ruby_selection_has_one_engine_owner() -> None:
     }
 
     assert inline == set()
-    assert imported == delegated_names
-    targets = _import_targets(owner, ROOT / "engine/ruby_selection.py")
+    assert delegated_names <= imported
+    targets = _import_targets(
+        f"{owner}.selection",
+        ROOT / "engine/ruby/selection.py",
+    )
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
 def test_ruby_style_has_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.ruby_style"
+    owner = f"{PACKAGE}.engine.ruby"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -656,8 +659,11 @@ def test_ruby_style_has_one_engine_owner() -> None:
     }
 
     assert inline == set()
-    assert imported == delegated_names
-    targets = _import_targets(owner, ROOT / "engine/ruby_style.py")
+    assert delegated_names <= imported
+    targets = _import_targets(
+        f"{owner}.style",
+        ROOT / "engine/ruby/style.py",
+    )
     assert f"{PACKAGE}.engine.painter" not in targets
 
 

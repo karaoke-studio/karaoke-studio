@@ -32,8 +32,8 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
 import krok_helper.subtitle_render.engine.raster_blur as raster_blur  # noqa: E402
-import krok_helper.subtitle_render.engine.ruby_style as ruby_style  # noqa: E402
-import krok_helper.subtitle_render.engine.ruby_timing as ruby_timing  # noqa: E402
+import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
+import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
 import krok_helper.subtitle_render.engine.text_metrics as text_metrics  # noqa: E402
 from krok_helper.subtitle_render.engine.page_placement import (  # noqa: E402
     LineVisualBand,
