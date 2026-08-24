@@ -484,6 +484,23 @@ def test_subtitle_render_window_delegates_recent_projects() -> None:
     }
 
 
+def test_subtitle_render_window_imports_project_settings_dialog() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+
+    assert (
+        f"{PACKAGE}.frontend.project_settings"
+        in _import_targets(window_module, window_path)
+    )
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    inline_dialogs = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_AutoSaveSettingsDialog"
+    }
+    assert inline_dialogs == set()
+
+
 def test_subtitle_render_window_delegates_project_resource_policy() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"
