@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -22,6 +21,7 @@ from krok_helper.subtitle_render.engine.layout_plan_builder import (
 )
 from krok_helper.subtitle_render.engine.layout_plan_cache import (
     cached_track_layout_plan,
+    layout_cache_enabled,
     store_track_layout_plan,
 )
 from krok_helper.subtitle_render.engine.line_style import (
@@ -83,7 +83,6 @@ class LayoutPlanResolvers:
     page_offset_windows: PageOffsetWindowsResolver
     char_intervals: CharIntervalsResolver
     guide_anchor_bounds: GuideAnchorBoundsResolver
-    cache_enabled: Callable[[], bool]
 
 
 def resolve_track_layout_plan(
@@ -102,7 +101,7 @@ def resolve_track_layout_plan(
         value_signature(track),
         value_signature(style),
     )
-    if resolvers.cache_enabled():
+    if layout_cache_enabled():
         cached = cached_track_layout_plan(cache_key)
         if cached is not None:
             return cached
@@ -161,7 +160,7 @@ def resolve_track_layout_plan(
         resolved_intervals=resolved_intervals,
         guide_anchor_bounds=guide_anchor_bounds,
     )
-    if resolvers.cache_enabled():
+    if layout_cache_enabled():
         # Retain the mutable owners because the key contains track identity.
         store_track_layout_plan(cache_key, track, style, plan)
     return plan

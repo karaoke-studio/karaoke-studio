@@ -73,6 +73,7 @@ from krok_helper.subtitle_render.engine.guide_semantics import (
 )
 from krok_helper.subtitle_render.engine.layout_plan_cache import (
     clear_track_layout_plan_cache,
+    layout_cache_enabled as _layout_cache_enabled,
 )
 from krok_helper.subtitle_render.engine.layout_plan_orchestrator import (
     LayoutPlanResolvers,
@@ -175,14 +176,6 @@ class _TimingCollisionAdjustment:
     boundary: str
     before_ms: int
     after_ms: int
-
-
-def _layout_cache_enabled() -> bool:
-    """行级布局缓存（默认开）。``KROK_SUBTITLE_LAYOUT_CACHE=0`` 退回逐帧重算
-    （A/B 验收 / 紧急回退用）。"""
-    return os.environ.get("KROK_SUBTITLE_LAYOUT_CACHE", "1").strip().lower() not in (
-        "0", "false", "no", "off",
-    )
 
 
 def _glow_cache_enabled() -> bool:
@@ -5427,7 +5420,6 @@ def build_track_layout_plan(
             page_offset_windows=resolved_page_offset_windows_for_style,
             char_intervals=resolved_char_intervals_for_line,
             guide_anchor_bounds=resolved_guide_anchor_bounds_for_line,
-            cache_enabled=_layout_cache_enabled,
         ),
         logical_w=logical_w,
         logical_h=logical_h,

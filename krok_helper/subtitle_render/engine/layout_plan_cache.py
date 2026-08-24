@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import os
 from typing import Hashable
 
 from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
@@ -15,6 +16,16 @@ _TRACK_LAYOUT_PLAN_CACHE: OrderedDict[
     Hashable,
     tuple[TimingTrack, Style, TrackLayoutPlan],
 ] = OrderedDict()
+
+
+def layout_cache_enabled() -> bool:
+    """Return whether frame-independent subtitle layout caches are enabled."""
+    return os.environ.get("KROK_SUBTITLE_LAYOUT_CACHE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
 
 
 def cached_track_layout_plan(key: Hashable) -> TrackLayoutPlan | None:
@@ -48,5 +59,6 @@ def clear_track_layout_plan_cache() -> None:
 __all__ = [
     "cached_track_layout_plan",
     "clear_track_layout_plan_cache",
+    "layout_cache_enabled",
     "store_track_layout_plan",
 ]
