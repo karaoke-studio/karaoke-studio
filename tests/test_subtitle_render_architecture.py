@@ -1335,6 +1335,34 @@ def test_subtitle_property_panel_delegates_role_color_construction() -> None:
     assert calls == {"make_section"}
 
 
+def test_subtitle_property_panel_delegates_solid_fill_editor() -> None:
+    panel_path = ROOT / "frontend" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.property_panel"
+    targets = _import_targets(panel_module, panel_path)
+
+    assert f"{PACKAGE}.frontend.property_role_fill_pages" in targets
+    tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    panel_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyPanel"
+    )
+    method = next(
+        node
+        for node in panel_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_make_solid_fill_page"
+    )
+    calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_role_fill_pages_builder"
+    }
+    assert calls == {"make_solid_page"}
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))

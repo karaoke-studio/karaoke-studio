@@ -153,6 +153,9 @@ from krok_helper.subtitle_render.frontend.property_role_font_page import (
 from krok_helper.subtitle_render.frontend.property_role_color_page import (
     RoleColorPropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_role_fill_pages import (
+    RoleFillPagesBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3638,6 +3641,7 @@ class PropertyPanel(QWidget):
             spin_factory=_spin,
             combo_factory=_WheelFocusedComboBox,
         )
+        self._role_fill_pages_builder = RoleFillPagesBuilder(self)
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -4340,12 +4344,7 @@ class PropertyPanel(QWidget):
         self._update_style(**shared)
 
     def _make_solid_fill_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._paint_solid_btn = self._paint_color_button("color", "#FFFFFF")
-        layout.addWidget(self._paint_solid_btn)
-        return page
+        return self._role_fill_pages_builder.make_solid_page()
 
     def _make_gradient_fill_page(self) -> QWidget:
         page = QWidget()
