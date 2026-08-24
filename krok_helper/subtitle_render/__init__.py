@@ -12,6 +12,7 @@
 from typing import TYPE_CHECKING, Any
 
 from krok_helper.subtitle_render.contracts import (
+    SubtitleProjectState,
     SubtitleRenderPage,
     SubtitleRenderSettingsProvider,
 )
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
 
 __all__ = [
+    "SubtitleProjectState",
     "SubtitleRenderPage",
     "SubtitleRenderSettingsProvider",
     "SubtitleRenderWindow",

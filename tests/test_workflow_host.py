@@ -12,6 +12,7 @@ from typing import Sequence
 
 from krok_helper.workflow_host import AccompanimentSink, OnVocalSink, SubtitleVideoSink, WorkflowHost
 from krok_helper.subtitle_render.contracts import (
+    SubtitleProjectState,
     SubtitleRenderPage,
     SubtitleRenderSettingsProvider,
 )
@@ -68,6 +69,14 @@ def test_subtitle_render_window_satisfies_the_host_page_contract() -> None:
     from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
 
     assert issubclass(SubtitleRenderWindow, SubtitleRenderPage)
+
+
+def test_subtitle_project_state_is_the_stable_public_contract() -> None:
+    from krok_helper.subtitle_render import SubtitleProjectState as PublicState
+    from krok_helper.subtitle_render.session import SubtitleProjectState as SessionState
+
+    assert PublicState is SubtitleProjectState
+    assert SessionState is SubtitleProjectState
 
 
 def test_subtitle_render_settings_bridge_satisfies_the_provider_contract() -> None:

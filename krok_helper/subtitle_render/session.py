@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from krok_helper.models import MediaInfo
+from krok_helper.subtitle_render.contracts import SubtitleProjectState
 from krok_helper.subtitle_render.forward_compat import merge_extensible_value
 from krok_helper.subtitle_render.models import (
     BackgroundSource,
@@ -361,37 +362,6 @@ def _animation_override_rows(track: TimingTrack) -> Optional[list]:
         line_animation_override_to_dict(line.animation_override) for line in track.lines
     ]
     return rows if any(row is not None for row in rows) else None
-
-
-@dataclass(frozen=True)
-class SubtitleProjectState:
-    """Immutable project status consumed by the workbench shell."""
-
-    display_name: str
-    path: Optional[Path]
-    has_project: bool
-    dirty: bool
-    saving: bool
-    save_error: Optional[str]
-    exporting: bool
-    recovery_path: Optional[Path]
-    missing_resources: tuple[tuple[str, Path], ...] = ()
-
-    def status_text(self) -> Optional[str]:
-        if not self.has_project:
-            return None
-        states: list[str] = []
-        if self.saving:
-            states.append("正在保存")
-        elif self.save_error:
-            states.append("保存失败")
-        elif self.dirty:
-            states.append("未保存")
-        if self.exporting:
-            states.append("导出中")
-        if self.missing_resources:
-            states.append(f"素材缺失 {len(self.missing_resources)} 项")
-        return f"{self.display_name} · {' · '.join(states)}" if states else self.display_name
 
 
 @dataclass

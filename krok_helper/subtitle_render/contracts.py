@@ -8,8 +8,40 @@ factory.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
+
+
+@dataclass(frozen=True)
+class SubtitleProjectState:
+    """Immutable project status published across the host boundary."""
+
+    display_name: str
+    path: Path | None
+    has_project: bool
+    dirty: bool
+    saving: bool
+    save_error: str | None
+    exporting: bool
+    recovery_path: Path | None
+    missing_resources: tuple[tuple[str, Path], ...] = ()
+
+    def status_text(self) -> str | None:
+        if not self.has_project:
+            return None
+        states: list[str] = []
+        if self.saving:
+            states.append("正在保存")
+        elif self.save_error:
+            states.append("保存失败")
+        elif self.dirty:
+            states.append("未保存")
+        if self.exporting:
+            states.append("导出中")
+        if self.missing_resources:
+            states.append(f"素材缺失 {len(self.missing_resources)} 项")
+        return f"{self.display_name} · {' · '.join(states)}" if states else self.display_name
 
 
 @runtime_checkable
@@ -36,12 +68,12 @@ class SubtitleRenderPage(Protocol):
     """
 
     def connect_project_state_changed(
-        self, callback: Callable[[object], Any]
+        self, callback: Callable[[SubtitleProjectState], Any]
     ) -> None:
         """Subscribe the shell to project-state changes without exposing Qt."""
         ...
 
-    def project_state(self) -> object:
+    def project_state(self) -> SubtitleProjectState:
         """Return the immutable project-state snapshot shown by the shell."""
         ...
 
