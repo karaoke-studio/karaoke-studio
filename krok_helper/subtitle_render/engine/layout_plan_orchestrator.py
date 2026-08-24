@@ -31,6 +31,9 @@ from krok_helper.subtitle_render.engine.line_style import (
 from krok_helper.subtitle_render.engine.signal_semantics import (
     display_style_for_signal_window,
 )
+from krok_helper.subtitle_render.engine.qt_line_geometry import (
+    resolved_char_intervals_for_line,
+)
 from krok_helper.subtitle_render.engine.timeline import DisplayLine
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import Style
@@ -58,14 +61,6 @@ class PageOffsetWindowsResolver(Protocol):
     ) -> dict[int, tuple[LayoutOffsetWindow, ...]]: ...
 
 
-class CharIntervalsResolver(Protocol):
-    def __call__(
-        self,
-        line: TimingLine,
-        style: Style,
-    ) -> list[tuple[int, int]]: ...
-
-
 class GuideAnchorBoundsResolver(Protocol):
     def __call__(
         self,
@@ -81,7 +76,6 @@ class LayoutPlanResolvers:
 
     display_lines: DisplayLinesResolver
     page_offset_windows: PageOffsetWindowsResolver
-    char_intervals: CharIntervalsResolver
     guide_anchor_bounds: GuideAnchorBoundsResolver
 
 
@@ -131,7 +125,7 @@ def resolve_track_layout_plan(
     render_lines = [render_line_with_guide_symbols(line) for line in track.lines]
     layout_styles = [style_for_line(style, line) for line in track.lines]
     resolved_intervals = [
-        resolvers.char_intervals(line, style) for line in render_lines
+        resolved_char_intervals_for_line(line, style) for line in render_lines
     ]
     guide_anchor_bounds = [
         resolvers.guide_anchor_bounds(track, line, style) for line in track.lines

@@ -4949,7 +4949,6 @@ def build_track_layout_plan(
         LayoutPlanResolvers(
             display_lines=_display_lines_for_style,
             page_offset_windows=resolved_page_offset_windows_for_style,
-            char_intervals=resolved_char_intervals_for_line,
             guide_anchor_bounds=resolved_guide_anchor_bounds_for_line,
         ),
         logical_w=logical_w,

@@ -469,6 +469,24 @@ def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
 
     assert f"{PACKAGE}.engine.painter" not in targets
 
+    source = (ROOT / "engine/layout_plan_orchestrator.py").read_text(
+        encoding="utf-8-sig"
+    )
+    tree = ast.parse(source)
+    resolver_fields = {
+        node.target.id
+        for class_node in tree.body
+        if isinstance(class_node, ast.ClassDef)
+        and class_node.name == "LayoutPlanResolvers"
+        for node in class_node.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+    assert resolver_fields == {
+        "display_lines",
+        "page_offset_windows",
+        "guide_anchor_bounds",
+    }
+
 
 def test_text_metrics_have_one_engine_owner() -> None:
     owner = f"{PACKAGE}.engine.text_metrics"
