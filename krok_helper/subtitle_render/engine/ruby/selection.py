@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
-from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.timing import RubyAnnotation, TimingLine
 
 

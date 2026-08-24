@@ -36,7 +36,7 @@ from krok_helper.subtitle_render.timing import (
     TimingTrack,
     TimingTrackMeta,
 )
-from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 
 # 时间戳：``[MM:SS:CC]``（冒号厘秒，nicokara）/ ``[MM:SS.CC]``（点号厘秒，标准 LRC）/
 # ``[MM:SS.mmm]``（点号毫秒，3 位）。秒与子秒间允许 ``:`` 或 ``.``；子秒 2 位=厘秒、3 位=毫秒。

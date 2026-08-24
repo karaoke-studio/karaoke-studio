@@ -162,7 +162,7 @@ from krok_helper.subtitle_render.engine.layout.page_plan import (
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
-from krok_helper.subtitle_render.engine.timeline import apply_n3_seq_line_breaks
+from krok_helper.subtitle_render.engine.timing.timeline import apply_n3_seq_line_breaks
 from krok_helper.subtitle_render.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,

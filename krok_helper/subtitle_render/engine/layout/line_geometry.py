@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.engine.guide import (
     render_line_with_guide_symbols,
 )
 from krok_helper.subtitle_render.engine.layout.line_style import style_for_line
-from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
 

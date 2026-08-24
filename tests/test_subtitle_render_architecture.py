@@ -699,6 +699,15 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
 
 
+def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {"show_time.py", "timeline.py"}
+    timing_root = ROOT / "engine" / "timing"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in timing_root.glob("*.py")
+    }
+    assert not any((ROOT / "engine" / name).exists() for name in module_names)
+
+
 def test_ruby_selection_has_one_engine_owner() -> None:
     owner = f"{PACKAGE}.engine.ruby"
     painter_path = ROOT / "engine/painter.py"

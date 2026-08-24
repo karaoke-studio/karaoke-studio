@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.engine.show_time import (
+from krok_helper.subtitle_render.engine.timing.show_time import (
     MAX_SHOW_TIME_MS,
     ShowTimePage,
     compute_show_times,

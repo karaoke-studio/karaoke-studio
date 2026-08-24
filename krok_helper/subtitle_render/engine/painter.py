@@ -606,7 +606,7 @@ def _layout_cache_sig(track: TimingTrack, display_style: Style) -> tuple | None:
         return None
     return (_track_layout_signature(track), _value_signature(display_style))
 
-from krok_helper.subtitle_render.engine.timeline import (
+from krok_helper.subtitle_render.engine.timing.timeline import (
     DisplayLine,
     apply_display_overrides,
     assign_lanes,
@@ -636,7 +636,7 @@ from krok_helper.subtitle_render.engine.layout.layout_assignment import (
     auto_assign_layouts_by_page,
 )
 from krok_helper.subtitle_render.engine.render.animator import line_animation_state
-from krok_helper.subtitle_render.engine.show_time import (
+from krok_helper.subtitle_render.engine.timing.show_time import (
     MIN_AUTO_ENTRY_ANIMATION_MS,
     MIN_AUTO_EXIT_ANIMATION_MS,
     protect_time_ms,

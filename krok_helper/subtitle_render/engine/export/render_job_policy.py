@@ -12,7 +12,7 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
     VIDEO_CODECS,
 )
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
-from krok_helper.subtitle_render.engine.timeline import track_duration_ms
+from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
 from krok_helper.subtitle_render.timing import TimingTrack
 
 

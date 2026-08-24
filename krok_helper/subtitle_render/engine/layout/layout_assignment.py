@@ -15,7 +15,7 @@ from krok_helper.subtitle_render.engine.layout.page_plan import (
     set_pages_layout,
     use_default_layouts,
 )
-from krok_helper.subtitle_render.engine.timeline import assign_lanes
+from krok_helper.subtitle_render.engine.timing.timeline import assign_lanes
 from krok_helper.subtitle_render.timing import (
     TimingLine,
     TimingTrack,

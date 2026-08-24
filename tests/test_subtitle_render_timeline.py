@@ -1,8 +1,8 @@
-"""Tests for ``krok_helper.subtitle_render.engine.timeline``."""
+"""Tests for ``krok_helper.subtitle_render.engine.timing.timeline``."""
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.engine.timeline import (
+from krok_helper.subtitle_render.engine.timing.timeline import (
     apply_n3_seq_line_breaks,
     assign_lanes,
     char_fill_ratio,

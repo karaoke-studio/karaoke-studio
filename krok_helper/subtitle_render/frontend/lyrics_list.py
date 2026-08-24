@@ -70,7 +70,7 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
 from krok_helper.qfluent_compat import ModelessDialog, hide_fluent_tooltip, show_fluent_tooltip
-from krok_helper.subtitle_render.engine.timeline import (
+from krok_helper.subtitle_render.engine.timing.timeline import (
     assign_lanes,
 )
 from krok_helper.subtitle_render.engine.layout.page_plan import (

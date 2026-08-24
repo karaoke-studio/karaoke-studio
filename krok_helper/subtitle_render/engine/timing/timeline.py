@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
-from krok_helper.subtitle_render.engine.show_time import (
+from krok_helper.subtitle_render.engine.timing.show_time import (
     ShowTimePage,
     compute_show_times,
     protect_time_ms,
@@ -220,7 +220,7 @@ def compute_display_lines(
 ) -> list[DisplayLine]:
     """Compute NicoKara display windows for all renderable lines.
 
-    窗口由 :mod:`krok_helper.subtitle_render.engine.show_time` 里的 N3
+    窗口由 :mod:`krok_helper.subtitle_render.engine.timing.show_time` 里的 N3
     ``TopLongAdjuster`` 移植算出：``lead_in_ms`` = ``PreTime``、``tail_ms`` =
     ``PostTime``、``lane_gap_ms`` = ``IntervalTime``、``protect_ms`` =
     ``ProtectTime``。页由页计划（或按 ``lane_count`` / ``row_count_of`` 自动

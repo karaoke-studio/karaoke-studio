@@ -18,7 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.engine.show_time import MAX_SHOW_TIME_MS  # noqa: E402
+from krok_helper.subtitle_render.engine.timing.show_time import MAX_SHOW_TIME_MS  # noqa: E402
 from krok_helper.subtitle_render.frontend import property_panel as pp  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     TITLE_TIME_MAX_MS,

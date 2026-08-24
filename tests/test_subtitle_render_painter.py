@@ -129,7 +129,7 @@ from krok_helper.subtitle_render.engine.render.layers import (  # noqa: E402
     LayerContext,
     SCOPE_GROUP,
 )
-from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     GuideSymbol,
     KaraokeColors,
@@ -2600,7 +2600,7 @@ def test_character_fill_ratio_honors_ink_ranges(qapp):
     现在 transition 路径传入墨水边界（而非 advance 框），故同一时刻、同一 ruby 进度下
     墨水与 advance 给出的 ratio 不同——本测试锁定这一差异，防止 transition 路径回退。
     """
-    from krok_helper.subtitle_render.engine.timeline import (  # noqa: E402,PLC0415
+    from krok_helper.subtitle_render.engine.timing.timeline import (  # noqa: E402,PLC0415
         compute_char_intervals,
     )
 
@@ -4351,7 +4351,7 @@ def test_reading_unit_mode_maps_ruby_units_across_multiple_base_chars(qapp):
 @pytest.mark.parametrize("mode", ["checkpoint_segments", "reading_units"])
 def test_ruby_main_progress_modes_keep_explicit_main_text_timing(qapp, mode):
     """Regression for メロディー/melody: explicit base checkpoints always win."""
-    from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+    from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 
     track = parse_nicokara_lrc(
         "[00:06:22]メ[00:06:47]ロ[00:06:74]デ[00:06:92]ィー[00:07:61]\n"
@@ -6773,7 +6773,7 @@ def test_utopia_keeps_one_render_path_before_and_during_wipe(qapp):
         _line_char_transition_context,
         display_windows_for_style,
     )
-    from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+    from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 
     track = _track()
     line = track.lines[0]
@@ -8366,7 +8366,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _lane_count,
     _lane_alignment,
 )
-from krok_helper.subtitle_render.engine.timeline import compute_display_lines  # noqa: E402
+from krok_helper.subtitle_render.engine.timing.timeline import compute_display_lines  # noqa: E402
 
 
 def test_lane_count_follows_line_alignments_length(qapp):
@@ -8502,7 +8502,7 @@ from krok_helper.subtitle_render.engine.layout.layout_assignment import (  # noq
     assign_layout_to_all,
     auto_assign_layouts_by_page,
 )
-from krok_helper.subtitle_render.engine.timeline import assign_lanes  # noqa: E402
+from krok_helper.subtitle_render.engine.timing.timeline import assign_lanes  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     LyricsLayout,
     rescale_font_sizes,

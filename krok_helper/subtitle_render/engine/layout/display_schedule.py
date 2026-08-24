@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.engine.layout.signal_semantics import (
     signal_head_context,
     signal_lead_in_ms,
 )
-from krok_helper.subtitle_render.engine.timeline import (
+from krok_helper.subtitle_render.engine.timing.timeline import (
     DisplayLine,
     apply_display_overrides,
 )

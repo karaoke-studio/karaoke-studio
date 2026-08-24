@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.engine.painter import (
     _resolve_display_baselines,
     paint_frame,
 )
-from krok_helper.subtitle_render.engine.timeline import compute_display_lines, find_active_line
+from krok_helper.subtitle_render.engine.timing.timeline import compute_display_lines, find_active_line
 from krok_helper.subtitle_render.frontend.guide_replacement import (
     GuidePrefixReplaceDialog,
     GuideRoleSchemeDialog,

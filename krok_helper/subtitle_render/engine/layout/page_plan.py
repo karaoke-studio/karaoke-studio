@@ -390,7 +390,7 @@ def section_head_line_indices(
 
     音量柱（SignalsLits 的 volume 样式）只挂在这些行上。page_plan 存在时
     以权威结构为准；裸解析的 track 没有 plan，按行间奏间隔推导段边界，
-    口径与 :func:`krok_helper.subtitle_render.engine.timeline._compute_section_ids`
+    口径与 :func:`krok_helper.subtitle_render.engine.timing.timeline._compute_section_ids`
     一致。段的行序连续展开，因此段首行必然是段第一页的第一行。
     """
 

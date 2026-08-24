@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.engine.layout.page_plan import (
     reflow_pages_for_layout_capacity,
     resolve_page_plan,
 )
-from krok_helper.subtitle_render.engine.timeline import compute_display_lines
+from krok_helper.subtitle_render.engine.timing.timeline import compute_display_lines
 from krok_helper.subtitle_render.models import (
     LyricsLayout,
     Style,

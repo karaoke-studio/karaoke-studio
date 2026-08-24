@@ -35,7 +35,7 @@ from krok_helper.subtitle_render.engine.layout.qt_line_geometry import (
     resolved_char_intervals_for_line,
     resolved_guide_anchor_bounds_for_line,
 )
-from krok_helper.subtitle_render.engine.timeline import DisplayLine
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingTrack

@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.engine.layout.line_style import (
     style_for_line,
 )
 from krok_helper.subtitle_render.engine.layout.page_plan import resolve_page_plan
-from krok_helper.subtitle_render.engine.timeline import DisplayLine, assign_lanes
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine, assign_lanes
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
 

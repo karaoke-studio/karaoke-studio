@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 from PyQt6.QtGui import QFontMetrics
 
-from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.engine.text import (
     build_font,
     build_latin_font,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtGui import QFontMetrics
 
-from krok_helper.subtitle_render.engine.timeline import char_fill_ratio
+from krok_helper.subtitle_render.engine.timing.timeline import char_fill_ratio
 from krok_helper.subtitle_render.timing import RubyAnnotation
 
 
