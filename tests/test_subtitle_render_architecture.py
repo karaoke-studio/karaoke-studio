@@ -328,3 +328,21 @@ def test_subtitle_render_window_delegates_background_tasks() -> None:
         f"{PACKAGE}.frontend.background_tasks"
         in _import_targets(f"{PACKAGE}.frontend.main_window", window_path)
     )
+
+
+def test_subtitle_render_window_delegates_project_recovery_policy() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.project_recovery" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    forbidden = {"invalidate_recovery_project", "scan_recovery_projects"}
+    direct_policy_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.project_store"
+        for alias in node.names
+    } & forbidden
+    assert direct_policy_imports == set()

@@ -275,6 +275,7 @@ from krok_helper.subtitle_render.preferences import (
     merge_common_style_preferences,
     update_app_output_preferences,
 )
+from krok_helper.subtitle_render.project_recovery import ProjectRecoveryPolicy
 from krok_helper.subtitle_render.recent_projects import RecentProjectPolicy
 from krok_helper.subtitle_render.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
@@ -293,13 +294,11 @@ from krok_helper.subtitle_render.project_store import (
     RecoveryCandidate,
     backup_project_file,
     inspect_project_file,
-    invalidate_recovery_project,
     load_render_project,
     project_output_payload,
     save_discarded_project_backup,
     save_recovery_project,
     save_render_project,
-    scan_recovery_projects,
     split_project_paths,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
@@ -2116,6 +2115,7 @@ class SubtitleRenderWindow(QWidget):
         self._embedded = embedded
         self._settings_provider = settings_provider
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
+        self._recovery_policy = ProjectRecoveryPolicy(self._recovery_root())
         self._workflow_context = workflow_context
 
         self._project_document = SubtitleProjectDocument()
@@ -2847,16 +2847,13 @@ class SubtitleRenderWindow(QWidget):
             self._auto_save_timer.start()
 
     def _recovery_payload_snapshot(self) -> tuple[dict, int]:
-        snapshot_id = time.time_ns()
-        payload = deepcopy(self._current_project_data())
-        payload["recovery"] = {
-            "source_project_path": str(self._project_path) if self._project_path else None,
-            "created_at_unix": time.time(),
-            "snapshot_id": snapshot_id,
-            "project_generation": self._project_generation,
-            "project_revision": self._project_revision,
-        }
-        return payload, snapshot_id
+        snapshot = self._recovery_policy.capture(
+            self._current_project_data,
+            project_path=self._project_path,
+            generation=self._project_generation,
+            revision=self._project_revision,
+        )
+        return snapshot.payload, snapshot.snapshot_id
 
     def _start_recovery_auto_save(self) -> None:
         if not self._auto_save_enabled or not self._project_dirty or self._loading_project:
@@ -2948,18 +2945,7 @@ class SubtitleRenderWindow(QWidget):
 
     @staticmethod
     def _cleanup_recovery_snapshot(path: Path, snapshot_id: int) -> None:
-        try:
-            data = load_render_project(path)
-            recovery = data.get("recovery")
-            current_id = (
-                int(recovery.get("snapshot_id") or 0)
-                if isinstance(recovery, dict)
-                else 0
-            )
-            if current_id == snapshot_id:
-                path.unlink(missing_ok=True)
-        except (OSError, TypeError, ValueError):
-            pass
+        ProjectRecoveryPolicy.cleanup_snapshot(path, snapshot_id)
 
     def _current_project_data(self) -> dict:
         if hasattr(self, "_export_width_spin"):
@@ -3776,7 +3762,7 @@ class SubtitleRenderWindow(QWidget):
                 if choice != 0:
                     return False
         previous_recovery_path = self._recovery_path()
-        invalidate_recovery_project(previous_recovery_path, delete=False)
+        self._recovery_policy.invalidate(previous_recovery_path, delete=False)
         self._auto_save_timer.stop()
         self._auto_save_pending = False
         self._wait_for_recovery_worker()
@@ -9374,25 +9360,14 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_project_title()
 
     def has_pending_crash_recovery(self) -> bool:
-        candidates, invalid, stale = scan_recovery_projects(self._recovery_root())
-        for path in stale:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        return bool(candidates or invalid)
+        return self._recovery_policy.scan().requires_attention
 
     def check_crash_recovery(self, dialog_parent: Optional[QWidget] = None) -> bool:
         """Prompt for valid and corrupt recovery files; return True if restored."""
         parent = dialog_parent or self
-        candidates, invalid, stale = scan_recovery_projects(self._recovery_root())
-        for path in stale:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        scan = self._recovery_policy.scan()
 
-        for path in invalid:
+        for path in scan.invalid_paths:
             choice = fluent_choice(
                 parent,
                 "字幕项目恢复文件损坏",
@@ -9406,7 +9381,7 @@ class SubtitleRenderWindow(QWidget):
                 except OSError as exc:
                     fluent_error(parent, "删除恢复文件失败", f"{path}\n\n{exc}")
 
-        for candidate in candidates:
+        for candidate in scan.candidates:
             source = candidate.source_project_path
             source_text = str(source) if source is not None else "未命名字幕项目"
             saved_at = datetime.fromtimestamp(candidate.created_at_unix).strftime(
@@ -9486,16 +9461,11 @@ class SubtitleRenderWindow(QWidget):
         return get_settings_path().parent / "subtitle_render_backups"
 
     def _recovery_path(self) -> Path:
-        root = self._recovery_root()
-        if self._project_path is None:
-            return root / "untitled.yurika.recovery"
-        identity = str(self._project_path.resolve()).encode("utf-8", errors="surrogatepass")
-        suffix = hashlib.sha256(identity).hexdigest()[:12]
-        return root / f"{self._project_path.name}.{suffix}.recovery"
+        return self._recovery_policy.path_for(self._project_path)
 
     def _cleanup_recovery_file(self, path: Optional[Path] = None) -> None:
         target = path or self._recovery_path()
-        invalidate_recovery_project(target)
+        self._recovery_policy.invalidate(target)
 
 
 def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:

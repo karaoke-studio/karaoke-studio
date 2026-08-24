@@ -77,8 +77,24 @@ class ProjectRecoveryPolicy:
         revision: int,
     ) -> RecoverySnapshot:
         """Build a detached snapshot carrying the current session revision."""
+        return self.capture(
+            lambda: project_data,
+            project_path=project_path,
+            generation=generation,
+            revision=revision,
+        )
+
+    def capture(
+        self,
+        project_data_factory: Callable[[], dict],
+        *,
+        project_path: Optional[Path],
+        generation: int,
+        revision: int,
+    ) -> RecoverySnapshot:
+        """Capture current project data after allocating its snapshot identity."""
         snapshot_id = int(self.snapshot_id_factory())
-        payload = deepcopy(project_data)
+        payload = deepcopy(project_data_factory())
         payload["recovery"] = {
             "source_project_path": str(project_path) if project_path else None,
             "created_at_unix": float(self.timestamp_factory()),
