@@ -1172,6 +1172,7 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "raster_blur.py",
         "render_bands.py",
         "render_ir.py",
+        "signal.py",
         "timeline_projection_backend.py",
         "title.py",
     }
@@ -1222,6 +1223,50 @@ def test_title_layout_has_one_render_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
         ROOT / "engine/render/title.py",
+    )
+
+
+def test_signal_geometry_has_one_render_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.signal"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_SignalLayoutMetrics",
+        "_SignalLitGroup",
+        "_VolumeSignalGeometry",
+        "_line_has_active_signal",
+        "_lit_extinguish_transition_state",
+        "_lit_transition_state",
+        "_shape_active_index_and_phase",
+        "_signal_layout_metrics",
+        "_signal_lit_x",
+        "_signal_lit_y",
+        "_signal_local_x",
+        "_signal_offset_x",
+        "_signal_stroke_extent",
+        "_volume_active_index_and_phase",
+        "_volume_flash_alpha",
+        "_volume_signal_column_rects",
+        "_volume_signal_geometry",
+        "_volume_signal_state",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert delegated_names <= imported
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        owner,
+        ROOT / "engine/render/signal.py",
     )
 
 
