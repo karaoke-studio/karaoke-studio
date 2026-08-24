@@ -593,8 +593,10 @@ from krok_helper.subtitle_render.engine.render.title import (
     title_block_origin as _title_block_origin,
 )
 from krok_helper.subtitle_render.engine.render.vertical import (
+    BakedPathStackLayer as _BakedPathStackLayer,
     VerticalLineLayout as _VerticalLineLayout,
     VerticalProgressPorts,
+    VerticalRasterPorts,
     layout_vertical_line as _layout_vertical_line,
     resolve_vertical_columns as _resolve_vertical_columns,
     resolve_vertical_top as _resolve_vertical_top,
@@ -3447,129 +3449,6 @@ def _resolve_display_baselines(
 # 竖排（縦書き）
 # ---------------------------------------------------------------------------
 
-def _build_baked_path_stack(
-    path: QPainterPath,
-    rect: QRectF,
-    state: KaraokeColorState,
-    style: Style,
-    *,
-    stroke_width: int,
-    stroke2_width: int,
-    shadow_dx: int,
-    shadow_dy: int,
-    glow_radius: int,
-) -> tuple[QImage, int, int] | None:
-    """把一次 :func:`_paint_text_layer_stack` 烘焙成透明 QImage（整数对齐 → 贴出像素一致）。
-
-    返回 ``(image, ox, oy)``：``ox/oy`` 为整数 blit 偏移，``drawImage(QPointF(ox,oy), image)``
-    时字形落回原坐标，与直绘逐像素一致（pad/偏移均取整、blit 偏移为整数 → 不重采样）。
-    """
-    is_glow = style.decoration_kind == "glow"
-    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    glow_extra = _glow_extent(stroke_width, stroke2_width, glow_radius) if is_glow else 0
-    extent = max(stroke_extent, glow_extra, 0) + 4
-    pad_left = max(0, -shadow_dx) + extent
-    pad_right = max(0, shadow_dx) + extent
-    pad_top = max(0, -shadow_dy) + extent
-    pad_bottom = max(0, shadow_dy) + extent
-
-    pbr = path.boundingRect()
-    if pbr.isEmpty():
-        return None
-    left_i = math.floor(pbr.left())
-    top_i = math.floor(pbr.top())
-    right_i = math.ceil(pbr.right())
-    bottom_i = math.ceil(pbr.bottom())
-    img_w = max((right_i - left_i) + pad_left + pad_right, 1)
-    img_h = max((bottom_i - top_i) + pad_top + pad_bottom, 1)
-    ox = left_i - pad_left
-    oy = top_i - pad_top
-
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(0)
-    p = QPainter(image)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        p.translate(-ox, -oy)
-        _paint_text_layer_stack(
-            p, path, rect, state, style,
-            stroke_width=stroke_width, stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=glow_radius,
-        )
-    finally:
-        p.end()
-    return image, ox, oy
-
-
-@dataclass(frozen=True)
-class _BakedPathStackLayer:
-    """通用「烘焙 path 栈」层：把一次 ``_paint_text_layer_stack`` 烘焙成位图缓存，逐帧
-    只 blit + 可选 clip 带。竖排主文本 / 竖排 ruby 共用（其几何已是 QPainterPath + clip）。"""
-
-    path: QPainterPath
-    rect: QRectF
-    state: KaraokeColorState
-    style: Style
-    cache_key: tuple
-    stroke_width: int
-    stroke2_width: int
-    shadow_dx: int
-    shadow_dy: int
-    glow_radius: int
-    clip_rect: QRectF | None = None
-    z_index: int = 0
-    scope: str = SCOPE_LINE
-
-    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
-        return []
-
-    def layout(self, ctx: LayerContext) -> "_BakedPathStackLayer":
-        return self
-
-    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
-        return self.cache_key
-
-    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
-        built = _build_baked_path_stack(
-            self.path, self.rect, self.state, self.style,
-            stroke_width=self.stroke_width, stroke2_width=self.stroke2_width,
-            shadow_dx=self.shadow_dx, shadow_dy=self.shadow_dy, glow_radius=self.glow_radius,
-        )
-        if built is None:
-            return BakedLayer(image=QImage(), offset=QPointF())
-        image, ox, oy = built
-        return BakedLayer(image=image, offset=QPointF(float(ox), float(oy)))
-
-    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
-        return LayerAnimation(top_left=QPointF(0.0, 0.0), clip_rect=self.clip_rect)
-
-    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        return
-
-    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
-        pbr = self.path.boundingRect()
-        if pbr.isEmpty():
-            return None
-        is_glow = self.style.decoration_kind == "glow"
-        extent = max(
-            _visual_stroke_extent(self.stroke_width, self.stroke2_width),
-            _glow_extent(self.stroke_width, self.stroke2_width, self.glow_radius) if is_glow else 0,
-            abs(self.shadow_dy), 0,
-        ) + 4
-        top = int(math.floor(pbr.top())) - extent
-        bottom = int(math.ceil(pbr.bottom())) + extent
-        if self.clip_rect is not None:
-            top = max(top, int(math.floor(self.clip_rect.top())))
-            bottom = min(bottom, int(math.ceil(self.clip_rect.bottom())))
-        if bottom < top:
-            return None
-        return top, bottom
-
-
 def _paint_line_vertical(
     painter: QPainter,
     img_w: int,
@@ -3855,6 +3734,7 @@ def _vertical_layer_stack(
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
+            ports=_VERTICAL_RASTER_PORTS,
             clip_rect=before_clip,
             z_index=0,
         )
@@ -3879,6 +3759,7 @@ def _vertical_layer_stack(
                 shadow_dx=style.shadow_offset_x,
                 shadow_dy=style.shadow_offset_y,
                 glow_radius=_glow_radius(style, after=True),
+                ports=_VERTICAL_RASTER_PORTS,
                 clip_rect=_vertical_after_clip_rect(layout.column_x, layout.cell_w, y0, y_scan, pad),
                 z_index=1,
             )
@@ -4022,6 +3903,7 @@ def _vertical_ruby_layers(
                     ),
                     stroke_width=stroke_width, stroke2_width=stroke2_width,
                     shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=before_glow_radius,
+                    ports=_VERTICAL_RASTER_PORTS,
                     clip_rect=before_clip, z_index=z,
                 )
             )
@@ -4049,6 +3931,7 @@ def _vertical_ruby_layers(
                 ),
                 stroke_width=stroke_width, stroke2_width=stroke2_width,
                 shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=after_glow_radius,
+                ports=_VERTICAL_RASTER_PORTS,
                 clip_rect=clip, z_index=z,
             )
         )
@@ -12541,6 +12424,13 @@ def _paint_text_layer_stack(
         colors.text,
         _fill_brush_rect(colors.text, brush_rect, horizontal_fill_rect),
     )
+
+
+_VERTICAL_RASTER_PORTS = VerticalRasterPorts(
+    paint_text_layer_stack=_paint_text_layer_stack,
+    visual_stroke_extent=_visual_stroke_extent,
+    glow_extent=_glow_extent,
+)
 
 
 def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:

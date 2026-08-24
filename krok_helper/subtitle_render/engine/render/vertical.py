@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol
+import math
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Hashable, Protocol
 
-from PyQt6.QtCore import QRectF
-from PyQt6.QtGui import QFont, QFontMetrics, QPainterPath, QTransform
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import (
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QTransform,
+)
 
 from krok_helper.subtitle_render.engine.guide import guide_symbol_is_bitmap
 from krok_helper.subtitle_render.engine.layout.line_style import lane_count
+from krok_helper.subtitle_render.engine.render.layers import (
+    BakedLayer,
+    LayerAnimation,
+    LayerContext,
+    SCOPE_LINE,
+)
 from krok_helper.subtitle_render.engine.ruby import (
     active_rubies_for_line,
     build_ruby_font,
@@ -29,7 +44,7 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     compute_char_intervals,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.paint import KaraokeColors
+from krok_helper.subtitle_render.paint import KaraokeColors, KaraokeColorState
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.timing import RubyAnnotation, TimingLine, TimingTrack
 
@@ -103,6 +118,13 @@ class CharacterFillRatio(Protocol):
 class VerticalProgressPorts:
     resolve_char_ruby_groups: ResolveCharRubyGroups
     character_fill_ratio: CharacterFillRatio
+
+
+@dataclass(frozen=True)
+class VerticalRasterPorts:
+    paint_text_layer_stack: Callable[..., None]
+    visual_stroke_extent: Callable[[int, int], int]
+    glow_extent: Callable[[int, int, int], int]
 
 
 def vertical_orientation(char: str) -> str:
@@ -290,6 +312,161 @@ def vertical_fill_band(
     return y_top, int(round(scan))
 
 
+def build_baked_path_stack(
+    path: QPainterPath,
+    rect: QRectF,
+    state: KaraokeColorState,
+    style: Style,
+    *,
+    ports: VerticalRasterPorts,
+    stroke_width: int,
+    stroke2_width: int,
+    shadow_dx: int,
+    shadow_dy: int,
+    glow_radius: int,
+) -> tuple[QImage, int, int] | None:
+    is_glow = style.decoration_kind == "glow"
+    stroke_extent = ports.visual_stroke_extent(stroke_width, stroke2_width)
+    glow_extra = (
+        ports.glow_extent(stroke_width, stroke2_width, glow_radius)
+        if is_glow
+        else 0
+    )
+    extent = max(stroke_extent, glow_extra, 0) + 4
+    pad_left = max(0, -shadow_dx) + extent
+    pad_right = max(0, shadow_dx) + extent
+    pad_top = max(0, -shadow_dy) + extent
+    pad_bottom = max(0, shadow_dy) + extent
+    path_bounds = path.boundingRect()
+    if path_bounds.isEmpty():
+        return None
+    left = math.floor(path_bounds.left())
+    top = math.floor(path_bounds.top())
+    right = math.ceil(path_bounds.right())
+    bottom = math.ceil(path_bounds.bottom())
+    img_w = max((right - left) + pad_left + pad_right, 1)
+    img_h = max((bottom - top) + pad_top + pad_bottom, 1)
+    offset_x = left - pad_left
+    offset_y = top - pad_top
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    try:
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        painter.translate(-offset_x, -offset_y)
+        ports.paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            state,
+            style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=glow_radius,
+        )
+    finally:
+        painter.end()
+    return image, offset_x, offset_y
+
+
+@dataclass(frozen=True)
+class BakedPathStackLayer:
+    path: QPainterPath
+    rect: QRectF
+    state: KaraokeColorState
+    style: Style
+    cache_key: tuple
+    stroke_width: int
+    stroke2_width: int
+    shadow_dx: int
+    shadow_dy: int
+    glow_radius: int
+    ports: VerticalRasterPorts = field(repr=False, compare=False)
+    clip_rect: QRectF | None = None
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> BakedPathStackLayer:
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
+        return self.cache_key
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        built = build_baked_path_stack(
+            self.path,
+            self.rect,
+            self.state,
+            self.style,
+            ports=self.ports,
+            stroke_width=self.stroke_width,
+            stroke2_width=self.stroke2_width,
+            shadow_dx=self.shadow_dx,
+            shadow_dy=self.shadow_dy,
+            glow_radius=self.glow_radius,
+        )
+        if built is None:
+            return BakedLayer(image=QImage(), offset=QPointF())
+        image, offset_x, offset_y = built
+        return BakedLayer(
+            image=image,
+            offset=QPointF(float(offset_x), float(offset_y)),
+        )
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(top_left=QPointF(0.0, 0.0), clip_rect=self.clip_rect)
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        return
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        path_bounds = self.path.boundingRect()
+        if path_bounds.isEmpty():
+            return None
+        is_glow = self.style.decoration_kind == "glow"
+        extent = max(
+            self.ports.visual_stroke_extent(
+                self.stroke_width,
+                self.stroke2_width,
+            ),
+            self.ports.glow_extent(
+                self.stroke_width,
+                self.stroke2_width,
+                self.glow_radius,
+            )
+            if is_glow
+            else 0,
+            abs(self.shadow_dy),
+            0,
+        ) + 4
+        top = int(math.floor(path_bounds.top())) - extent
+        bottom = int(math.ceil(path_bounds.bottom())) + extent
+        if self.clip_rect is not None:
+            top = max(top, int(math.floor(self.clip_rect.top())))
+            bottom = min(bottom, int(math.ceil(self.clip_rect.bottom())))
+        if bottom < top:
+            return None
+        return top, bottom
+
+
 def layout_vertical_line(
     track: TimingTrack,
     line: TimingLine,
@@ -375,8 +552,11 @@ def layout_vertical_line(
 
 
 __all__ = [
+    "BakedPathStackLayer",
     "VerticalLineLayout",
     "VerticalProgressPorts",
+    "VerticalRasterPorts",
+    "build_baked_path_stack",
     "layout_vertical_line",
     "resolve_vertical_columns",
     "resolve_vertical_top",

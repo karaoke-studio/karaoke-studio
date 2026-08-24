@@ -1295,6 +1295,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
+        "_BakedPathStackLayer",
         "_VerticalLineLayout",
         "_layout_vertical_line",
         "_resolve_vertical_columns",
@@ -1322,6 +1323,11 @@ def test_vertical_layout_has_one_render_owner() -> None:
 
     assert inline == set()
     assert delegated_names <= imported
+    assert "_build_baked_path_stack" not in {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
         ROOT / "engine/render/vertical.py",
