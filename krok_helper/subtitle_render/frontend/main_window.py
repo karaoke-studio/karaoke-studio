@@ -317,11 +317,7 @@ from krok_helper.subtitle_render.project_store import (
     save_discarded_project_backup,
     save_recovery_project,
 )
-from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
-from krok_helper.subtitle_render.sug_project import (
-    load_sug_timing_track,
-    timing_track_from_sug_project,
-)
+from krok_helper.subtitle_render.source_loader import SubtitleSourceLoader
 from krok_helper.subtitle_render.source_reload import (
     TrackReloadMerge,
     merge_reloaded_track,
@@ -2098,6 +2094,7 @@ class SubtitleRenderWindow(QWidget):
         self._settings_provider = settings_provider
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
         self._project_controller = SubtitleProjectController()
+        self._subtitle_source_loader = SubtitleSourceLoader()
         self._project_command_controller = ProjectCommandController(
             PROJECT_FILTER,
             PROJECT_FILE_SUFFIX,
@@ -4414,7 +4411,7 @@ class SubtitleRenderWindow(QWidget):
     def load_from_lrc(self, path: Path) -> Optional[TimingTrack]:
         """加载 Nicokara 逐字 LRC 文件。返回解析结果（失败返回 None 并弹错）。"""
         try:
-            track = load_nicokara_lrc(path)
+            track = self._subtitle_source_loader.load_lrc(path)
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
             fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
@@ -4426,7 +4423,7 @@ class SubtitleRenderWindow(QWidget):
     def load_from_sug(self, path: Path) -> Optional[TimingTrack]:
         """加载 SUG 项目文件，直接读取打轴数据而不导出中间 LRC。"""
         try:
-            track = load_sug_timing_track(
+            track = self._subtitle_source_loader.load_sug(
                 path,
                 software_compensation_ms=self._sug_compensation_value(),
             )
@@ -4447,7 +4444,7 @@ class SubtitleRenderWindow(QWidget):
     ) -> Optional[TimingTrack]:
         """加载嵌入式 SUG 当前项目对象，供主工作流第 4 步 → 第 5 步接线使用。"""
         try:
-            track = timing_track_from_sug_project(
+            track = self._subtitle_source_loader.load_sug_project(
                 project,
                 nicokara_tags=nicokara_tags,
                 software_compensation_ms=self._sug_compensation_value(),
@@ -6560,16 +6557,14 @@ class SubtitleRenderWindow(QWidget):
         self, path: Path, *, apply_sug_export_compensation: bool = True
     ) -> TimingTrack:
         """按需解析字幕文件；``.sug`` 的软件导出补偿开关由调用方的加载设置决定。"""
-        if path.suffix.lower() == ".sug":
-            return load_sug_timing_track(
-                path,
-                software_compensation_ms=(
-                    _sug_software_compensation_ms()
-                    if apply_sug_export_compensation
-                    else 0
-                ),
-            )
-        return load_nicokara_lrc(path)
+        return self._subtitle_source_loader.load_file(
+            path,
+            software_compensation_ms=(
+                _sug_software_compensation_ms()
+                if apply_sug_export_compensation
+                else 0
+            ),
+        )
 
     def _on_source_remove_requested(self, index: int) -> None:
         extra_index = int(index) - 1

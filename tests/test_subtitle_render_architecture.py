@@ -576,6 +576,39 @@ def test_subtitle_render_window_consumes_typed_project_load_plan() -> None:
     assert "split_project_paths" not in split_calls
 
 
+def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.source_loader" in targets
+    assert f"{PACKAGE}.subtitle_sources" not in targets
+    assert f"{PACKAGE}.sug_project" not in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method_names = {
+        "load_from_lrc",
+        "load_from_sug",
+        "load_from_sug_project",
+        "_load_timing_track_file",
+    }
+    loader_calls = {
+        node.func.attr
+        for method in window_class.body
+        if isinstance(method, ast.FunctionDef) and method.name in method_names
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_subtitle_source_loader"
+    }
+    assert loader_calls == {"load_file", "load_lrc", "load_sug", "load_sug_project"}
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
