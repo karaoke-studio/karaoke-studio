@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from krok_helper.subtitle_render import timing
 from krok_helper.subtitle_render.frontend.preview_controller import (
+    PreviewDurationController,
     PreviewPreferenceController,
     PreviewWindowController,
 )
@@ -142,6 +146,64 @@ def test_preview_preferences_forward_runtime_fallback_message() -> None:
     controller.report_gpu_fallback(123)
 
     assert events == [("fallback", "123")]
+
+
+class _DurationSink:
+    def __init__(self) -> None:
+        self.values: list[int] = []
+
+    def set_duration(self, duration: int) -> None:
+        self.values.append(duration)
+
+
+def test_preview_duration_uses_longest_track_or_media_source() -> None:
+    controller = PreviewDurationController()
+    track = timing.TimingTrack(
+        lines=[
+            timing.TimingLine(
+                chars=[timing.TimingChar(text="a", start_ms=100)],
+                end_ms=1_500,
+            )
+        ]
+    )
+    tracks_view = _DurationSink()
+    preview_panel = _DurationSink()
+    transport_bar = _DurationSink()
+
+    duration = controller.refresh(
+        tracks=[track],
+        video_info=SimpleNamespace(duration=2.25),
+        audio_info=SimpleNamespace(duration=1.75),
+        tracks_view=tracks_view,
+        preview_panel=preview_panel,
+        transport_bar=transport_bar,
+    )
+
+    assert duration == 2_250
+    assert tracks_view.values == [2_250]
+    assert preview_panel.values == [2_250]
+    assert transport_bar.values == [2_250]
+
+
+def test_preview_duration_does_not_reset_transport_when_sources_are_empty() -> None:
+    controller = PreviewDurationController()
+    tracks_view = _DurationSink()
+    preview_panel = _DurationSink()
+    transport_bar = _DurationSink()
+
+    duration = controller.refresh(
+        tracks=[],
+        video_info=None,
+        audio_info=None,
+        tracks_view=tracks_view,
+        preview_panel=preview_panel,
+        transport_bar=transport_bar,
+    )
+
+    assert duration == 0
+    assert tracks_view.values == [0]
+    assert preview_panel.values == [0]
+    assert transport_bar.values == []
 
 
 def test_preview_controller_defers_request_until_context_is_allowed() -> None:

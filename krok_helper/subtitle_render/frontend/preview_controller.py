@@ -5,9 +5,48 @@ from __future__ import annotations
 from collections.abc import Callable, MutableMapping
 from typing import Any
 
+from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.preview_async import (
     normalize_preview_quality,
 )
+
+
+class PreviewDurationController:
+    """Resolve and publish the shared preview timeline duration."""
+
+    @staticmethod
+    def resolve_duration_ms(
+        tracks: Any,
+        *,
+        video_info: Any = None,
+        audio_info: Any = None,
+    ) -> int:
+        candidates = [track_duration_ms(track) for track in tracks]
+        for media_info in (video_info, audio_info):
+            if media_info is not None and media_info.duration > 0:
+                candidates.append(int(media_info.duration * 1000))
+        return max(candidates, default=0)
+
+    def refresh(
+        self,
+        *,
+        tracks: Any,
+        video_info: Any,
+        audio_info: Any,
+        tracks_view: Any,
+        preview_panel: Any,
+        transport_bar: Any,
+    ) -> int:
+        duration = self.resolve_duration_ms(
+            tracks,
+            video_info=video_info,
+            audio_info=audio_info,
+        )
+        tracks_view.set_duration(duration)
+        preview_panel.set_duration(duration)
+        if duration > 0:
+            transport_bar.set_duration(duration)
+        return duration
 
 
 class PreviewPreferenceController:
