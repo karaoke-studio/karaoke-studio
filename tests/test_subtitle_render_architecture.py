@@ -634,6 +634,7 @@ def test_ruby_style_has_one_engine_owner() -> None:
         "_ruby_font_size",
         "_ruby_scale",
         "_ruby_script_stroke_style",
+        "_ruby_style_for_target_indices",
         "_ruby_stroke2_enabled",
         "_ruby_stroke2_width",
         "_ruby_stroke2_width_value",

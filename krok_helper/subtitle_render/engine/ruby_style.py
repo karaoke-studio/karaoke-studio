@@ -11,8 +11,10 @@ from krok_helper.subtitle_render.engine.text_metrics import (
     is_n3_latin_text,
     latin_font_weight,
 )
+from krok_helper.subtitle_render.engine.text_layout import style_for_role_in_layout
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
+from krok_helper.subtitle_render.timing import TimingLine
 
 
 def ruby_uses_main_font(style: Style) -> bool:
@@ -159,12 +161,27 @@ def ruby_script_stroke_style(style: Style, reading: str) -> Style:
     )
 
 
+def ruby_style_for_target_indices(
+    style: Style,
+    line: TimingLine,
+    indices: list[int],
+) -> Style:
+    """Resolve the first role-specific style covered by a ruby target."""
+    for index in indices:
+        if 0 <= index < len(line.chars):
+            role_label = line.chars[index].role_label
+            if role_label:
+                return style_for_role_in_layout(style, role_label)
+    return style
+
+
 __all__ = [
     "build_ruby_font",
     "build_ruby_font_for_text",
     "ruby_font_size",
     "ruby_scale",
     "ruby_script_stroke_style",
+    "ruby_style_for_target_indices",
     "ruby_stroke2_enabled",
     "ruby_stroke2_width",
     "ruby_stroke2_width_value",

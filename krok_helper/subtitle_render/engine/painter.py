@@ -134,6 +134,7 @@ from krok_helper.subtitle_render.engine.ruby_style import (
     ruby_font_size as _ruby_font_size,
     ruby_scale as _ruby_scale,
     ruby_script_stroke_style as _ruby_script_stroke_style,
+    ruby_style_for_target_indices as _ruby_style_for_target_indices,
     ruby_stroke2_enabled as _ruby_stroke2_enabled,
     ruby_stroke2_width as _ruby_stroke2_width,
     ruby_stroke2_width_value as _ruby_stroke2_width_value,
@@ -13482,19 +13483,6 @@ def _ruby_wipe_geometry(
         max(right for _left, right in bounds),
         tuple(signature),
     )
-
-
-def _ruby_style_for_target_indices(
-    style: Style,
-    line: TimingLine,
-    indices: list[int],
-) -> Style:
-    for index in indices:
-        if 0 <= index < len(line.chars):
-            role_label = line.chars[index].role_label
-            if role_label:
-                return _style_for_role_in_layout(style, role_label)
-    return style
 
 
 def _role_ruby_vertical_extra(
