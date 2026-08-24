@@ -593,15 +593,15 @@ from krok_helper.subtitle_render.engine.render.title import (
     title_block_origin as _title_block_origin,
 )
 from krok_helper.subtitle_render.engine.render.vertical import (
-    BakedPathStackLayer as _BakedPathStackLayer,
     VerticalCachePorts,
     VerticalLayerPorts,
     VerticalLineLayout as _VerticalLineLayout,
     VerticalProgressPorts,
     VerticalRasterPorts,
-    baked_stack_key as _baked_stack_key_with_ports,
+    VerticalRubyPorts,
     layout_vertical_line as _layout_vertical_line,
     paint_line_vertical_layers as _paint_line_vertical_layers_with_ports,
+    paint_rubies_vertical as _paint_rubies_vertical_with_ports,
     resolve_vertical_columns as _resolve_vertical_columns,
     resolve_vertical_top as _resolve_vertical_top,
     vertical_after_clip_rect as _vertical_after_clip_rect,
@@ -3611,7 +3611,7 @@ def _vertical_before_clip_pad(
         before_glow_radius,
         shadow_dx,
         shadow_dy,
-        ports=_VERTICAL_LAYER_PORTS,
+        raster=_VERTICAL_RASTER_PORTS,
     )
 
 
@@ -3633,204 +3633,6 @@ def _paint_line_vertical_layers(
     )
 
 
-def _baked_stack_key(
-    path_sig: tuple,
-    rect: QRectF,
-    state: KaraokeColorState,
-    style: Style,
-    *,
-    stroke_width: int,
-    stroke2_width: int,
-    shadow_dx: int,
-    shadow_dy: int,
-    glow_radius: int,
-    after: bool,
-) -> tuple:
-    return _baked_stack_key_with_ports(
-        path_sig,
-        rect,
-        state,
-        style,
-        ports=_VERTICAL_CACHE_PORTS,
-        stroke_width=stroke_width,
-        stroke2_width=stroke2_width,
-        shadow_dx=shadow_dx,
-        shadow_dy=shadow_dy,
-        glow_radius=glow_radius,
-        after=after,
-    )
-
-
-def _vertical_ruby_path_and_wipe(
-    ruby: RubyAnnotation,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    ruby_x: int,
-    ruby_cell_w: int,
-    ruby_ascent: int,
-    base_top: int,
-    span_h: int,
-) -> tuple[QPainterPath, tuple[_RubyWipeSegment, ...], float, float, tuple[str, ...]]:
-    timed_units = _ruby_visual_units_and_intervals(ruby)
-    if not timed_units:
-        return QPainterPath(), (), float(base_top), float(base_top), ()
-    count = len(timed_units)
-    ruby_path = QPainterPath()
-    segments: list[_RubyWipeSegment] = []
-    ink_bounds: list[tuple[float, float]] = []
-    for unit_index, (unit, (start_ms, end_ms)) in enumerate(timed_units):
-        slot_top = base_top + span_h * unit_index / count
-        slot_h = span_h / count
-        unit_path = _vertical_glyph_path(
-            unit,
-            ruby_font,
-            ruby_metrics,
-            ruby_x,
-            int(round(slot_top)),
-            ruby_cell_w,
-            max(int(round(slot_h)), 1),
-            ruby_ascent,
-        )
-        ruby_path.addPath(unit_path)
-        ink = unit_path.boundingRect()
-        if ink.isEmpty():
-            ink_top = float(slot_top)
-            ink_bottom = float(slot_top + slot_h)
-        else:
-            ink_top = float(ink.top())
-            ink_bottom = float(ink.bottom())
-        segments.append(
-            _RubyWipeSegment(
-                int(start_ms), max(int(start_ms), int(end_ms)), ink_top, ink_bottom
-            )
-        )
-        ink_bounds.append((ink_top, ink_bottom))
-    return (
-        ruby_path,
-        tuple(segments),
-        min(top for top, _bottom in ink_bounds),
-        max(bottom for _top, bottom in ink_bounds),
-        tuple(unit for unit, _interval in timed_units),
-    )
-
-
-def _vertical_ruby_layers(
-    layout: _VerticalLineLayout,
-    line: TimingLine,
-    t_ms: int,
-    style: Style,
-) -> list:
-    cells = layout.cells
-    if not cells:
-        return []
-    ruby_font = _build_ruby_font(style)
-    ruby_metrics = QFontMetrics(ruby_font)
-    paint_style = _ruby_paint_style(style)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    shadow_dx = _ruby_shadow_dx(style)
-    shadow_dy = _ruby_shadow_dy(style)
-    before_glow_radius = _ruby_glow_radius(style, after=False)
-    after_glow_radius = _ruby_glow_radius(style, after=True)
-    colors = _effective_ruby_karaoke_colors(style)
-    ruby_cell_w = _vertical_cell_width(ruby_metrics)
-    ruby_ascent = ruby_metrics.ascent()
-    ruby_x = int(
-        round(layout.column_x + layout.cell_w / 2 + int(style.ruby_gap_px) + ruby_cell_w / 2)
-    )
-    ruby_font_sig = (
-        ruby_font.family(), ruby_font.pixelSize(), int(ruby_font.weight()), ruby_font.italic(),
-    )
-
-    layers: list = []
-    z = 2
-    for ruby in layout.active_rubies:
-        indices = [i for i in _ruby_target_indices(ruby, line, layout.intervals) if 0 <= i < len(cells)]
-        if not indices:
-            continue
-        base_top = cells[min(indices)][0]
-        base_bottom = cells[max(indices)][1]
-        span_h = base_bottom - base_top
-        ruby_path, wipe_segments, wipe_top, _wipe_bottom, units = _vertical_ruby_path_and_wipe(
-            ruby, ruby_font, ruby_metrics, ruby_x, ruby_cell_w, ruby_ascent,
-            base_top, span_h,
-        )
-        if not wipe_segments:
-            continue
-        count = len(units)
-        ruby_rect = QRectF(
-            float(ruby_x - ruby_cell_w / 2), float(base_top), float(ruby_cell_w), float(span_h),
-        )
-        ruby_sig = (
-            "vruby", ruby.kanji, ruby.reading, tuple(units), ruby_font_sig,
-            ruby_x, base_top, span_h, count,
-        )
-        visible, complete, scan_y = _ruby_segment_wipe_state(
-            wipe_segments, ruby.pos_end_ms, t_ms
-        )
-        # N3 硬分割：注音未唱层裁到扫光线之下；唱完后已唱层不再裁剪、整读音
-        # 由已唱层负责，未唱层直接省略（发光才有差异，body 本就被覆盖）。
-        glow_split = (
-            _ruby_decoration_kind(style) == "glow" and before_glow_radius > 0
-        )
-        before_clip = None
-        if glow_split and visible and not complete:
-            before_clip = _vertical_before_clip_rect(
-                ruby_x,
-                ruby_cell_w,
-                scan_y,
-                _vertical_before_clip_pad(
-                    stroke_width, stroke2_width, before_glow_radius, shadow_dx, shadow_dy
-                ),
-            )
-        if not (glow_split and visible and complete):
-            layers.append(
-                _BakedPathStackLayer(
-                    path=ruby_path, rect=ruby_rect, state=colors.before, style=paint_style,
-                    cache_key=_baked_stack_key(
-                        ruby_sig, ruby_rect, colors.before, paint_style,
-                        stroke_width=stroke_width, stroke2_width=stroke2_width,
-                        shadow_dx=shadow_dx, shadow_dy=shadow_dy,
-                        glow_radius=before_glow_radius, after=False,
-                    ),
-                    stroke_width=stroke_width, stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=before_glow_radius,
-                    ports=_VERTICAL_RASTER_PORTS,
-                    clip_rect=before_clip, z_index=z,
-                )
-            )
-        z += 1
-        if not visible:
-            continue
-        stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-        pad = max(
-            stroke_extent,
-            _glow_extent(stroke_width, stroke2_width, after_glow_radius) if _ruby_decoration_kind(style) == "glow" else 0,
-            stroke_extent + abs(shadow_dx), stroke_extent + abs(shadow_dy), 2,
-        )
-        clip = None if complete else QRectF(
-            float(ruby_x - ruby_cell_w / 2 - pad), float(wipe_top - pad),
-            float(ruby_cell_w + pad * 2), float(max(scan_y - wipe_top, 0.0) + pad),
-        )
-        layers.append(
-            _BakedPathStackLayer(
-                path=ruby_path, rect=ruby_rect, state=colors.after, style=paint_style,
-                cache_key=_baked_stack_key(
-                    ruby_sig, ruby_rect, colors.after, paint_style,
-                    stroke_width=stroke_width, stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx, shadow_dy=shadow_dy,
-                    glow_radius=after_glow_radius, after=True,
-                ),
-                stroke_width=stroke_width, stroke2_width=stroke2_width,
-                shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=after_glow_radius,
-                ports=_VERTICAL_RASTER_PORTS,
-                clip_rect=clip, z_index=z,
-            )
-        )
-        z += 1
-    return layers
-
-
 def _paint_rubies_vertical(
     painter: QPainter,
     ruby_font: QFont,
@@ -3844,125 +3646,20 @@ def _paint_rubies_vertical(
     rubies: list[RubyAnnotation],
     style: Style,
 ) -> None:
-    """竖排注音：读音字形竖向堆叠在基字列右侧，覆盖基字纵向区间，上→下扫光。"""
-    if not cells:
-        return
-    paint_style = _ruby_paint_style(style)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    shadow_dx = _ruby_shadow_dx(style)
-    shadow_dy = _ruby_shadow_dy(style)
-    before_glow_radius = _ruby_glow_radius(style, after=False)
-    after_glow_radius = _ruby_glow_radius(style, after=True)
-    colors = _effective_ruby_karaoke_colors(style)
-    ruby_cell_w = _vertical_cell_width(ruby_metrics)
-    ruby_ascent = ruby_metrics.ascent()
-    ruby_x = int(
-        round(base_column_x + cell_w / 2 + int(style.ruby_gap_px) + ruby_cell_w / 2)
+    _paint_rubies_vertical_with_ports(
+        painter,
+        ruby_font,
+        ruby_metrics,
+        line,
+        intervals,
+        cells,
+        base_column_x,
+        cell_w,
+        t_ms,
+        rubies,
+        style,
+        ports=_VERTICAL_RUBY_PORTS,
     )
-
-    painter.setFont(ruby_font)
-    for ruby in rubies:
-        indices = [
-            index
-            for index in _ruby_target_indices(ruby, line, intervals)
-            if 0 <= index < len(cells)
-        ]
-        if not indices:
-            continue
-        base_top = cells[min(indices)][0]
-        base_bottom = cells[max(indices)][1]
-        span_h = base_bottom - base_top
-        ruby_path, wipe_segments, wipe_top, _wipe_bottom, _units = _vertical_ruby_path_and_wipe(
-            ruby, ruby_font, ruby_metrics, ruby_x, ruby_cell_w, ruby_ascent,
-            base_top, span_h,
-        )
-        if not wipe_segments:
-            continue
-
-        ruby_rect = QRectF(
-            float(ruby_x - ruby_cell_w / 2),
-            float(base_top),
-            float(ruby_cell_w),
-            float(span_h),
-        )
-        visible, complete, scan_y = _ruby_segment_wipe_state(
-            wipe_segments, ruby.pos_end_ms, t_ms
-        )
-        # N3 硬分割：与 _vertical_ruby_layers 同口径（direct 是像素一致 oracle）。
-        glow_split = (
-            _ruby_decoration_kind(style) == "glow" and before_glow_radius > 0
-        )
-        if not (glow_split and visible and complete):
-            painter.save()
-            try:
-                if glow_split and visible and not complete:
-                    painter.setClipRect(
-                        _vertical_before_clip_rect(
-                            ruby_x,
-                            ruby_cell_w,
-                            scan_y,
-                            _vertical_before_clip_pad(
-                                stroke_width,
-                                stroke2_width,
-                                before_glow_radius,
-                                shadow_dx,
-                                shadow_dy,
-                            ),
-                        )
-                    )
-                _paint_text_layer_stack(
-                    painter,
-                    ruby_path,
-                    ruby_rect,
-                    colors.before,
-                    paint_style,
-                    stroke_width=stroke_width,
-                    stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx,
-                    shadow_dy=shadow_dy,
-                    glow_radius=before_glow_radius,
-                )
-            finally:
-                painter.restore()
-
-        if not visible:
-            continue
-        stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-        pad = max(
-            stroke_extent,
-            _glow_extent(stroke_width, stroke2_width, after_glow_radius)
-            if _ruby_decoration_kind(style) == "glow"
-            else 0,
-            stroke_extent + abs(shadow_dx),
-            stroke_extent + abs(shadow_dy),
-            2,
-        )
-        painter.save()
-        try:
-            if not complete:
-                painter.setClipRect(
-                    QRectF(
-                        float(ruby_x - ruby_cell_w / 2 - pad),
-                        float(wipe_top - pad),
-                        float(ruby_cell_w + pad * 2),
-                        float(max(scan_y - wipe_top, 0.0) + pad),
-                    )
-                )
-            _paint_text_layer_stack(
-                painter,
-                ruby_path,
-                ruby_rect,
-                colors.after,
-                paint_style,
-                stroke_width=stroke_width,
-                stroke2_width=stroke2_width,
-                shadow_dx=shadow_dx,
-                shadow_dy=shadow_dy,
-                glow_radius=after_glow_radius,
-            )
-        finally:
-            painter.restore()
 
 
 def _vertical_fill_band(
@@ -12329,16 +12026,6 @@ _VERTICAL_RASTER_PORTS = VerticalRasterPorts(
     glow_extent=_glow_extent,
 )
 
-_VERTICAL_LAYER_PORTS = VerticalLayerPorts(
-    progress=_VERTICAL_PROGRESS_PORTS,
-    raster=_VERTICAL_RASTER_PORTS,
-    cache=_VERTICAL_CACHE_PORTS,
-    main_stroke2_width=_main_stroke2_width,
-    glow_radius=_glow_radius,
-    ruby_layers=_vertical_ruby_layers,
-)
-
-
 def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
     if style.ruby_karaoke_colors is not None:
         return style.ruby_karaoke_colors
@@ -12357,3 +12044,24 @@ def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
         shadow=_solid_fill(style.shadow_color),
     )
     return KaraokeColors(before=before, after=after)
+
+
+_VERTICAL_RUBY_PORTS = VerticalRubyPorts(
+    raster=_VERTICAL_RASTER_PORTS,
+    cache=_VERTICAL_CACHE_PORTS,
+    paint_style=_ruby_paint_style,
+    shadow_dx=_ruby_shadow_dx,
+    shadow_dy=_ruby_shadow_dy,
+    glow_radius=_ruby_glow_radius,
+    decoration_kind=_ruby_decoration_kind,
+    effective_colors=_effective_ruby_karaoke_colors,
+)
+
+_VERTICAL_LAYER_PORTS = VerticalLayerPorts(
+    progress=_VERTICAL_PROGRESS_PORTS,
+    raster=_VERTICAL_RASTER_PORTS,
+    cache=_VERTICAL_CACHE_PORTS,
+    main_stroke2_width=_main_stroke2_width,
+    glow_radius=_glow_radius,
+    ruby=_VERTICAL_RUBY_PORTS,
+)

@@ -97,6 +97,13 @@ def _ruby_visual_units_and_intervals(
     return result
 
 
+def ruby_visual_units_and_intervals(
+    ruby: RubyAnnotation,
+) -> list[tuple[str, tuple[int, int]]]:
+    """Public timing contract for renderers that need visual ruby units."""
+    return _ruby_visual_units_and_intervals(ruby)
+
+
 def _ruby_reading_unit_progress_points(
     ruby: RubyAnnotation,
 ) -> list[tuple[int, float]]:

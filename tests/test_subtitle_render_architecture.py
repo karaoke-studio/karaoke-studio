@@ -1295,11 +1295,10 @@ def test_vertical_layout_has_one_render_owner() -> None:
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
-        "_BakedPathStackLayer",
         "_VerticalLineLayout",
-        "_baked_stack_key_with_ports",
         "_layout_vertical_line",
         "_paint_line_vertical_layers_with_ports",
+        "_paint_rubies_vertical_with_ports",
         "_resolve_vertical_columns",
         "_resolve_vertical_top",
         "_vertical_after_clip_rect",
@@ -1339,6 +1338,46 @@ def test_vertical_layout_has_one_render_owner() -> None:
         for node in painter_tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
+    adapter_targets = {
+        "_paint_rubies_vertical": "_paint_rubies_vertical_with_ports",
+    }
+    for adapter_name, target_name in adapter_targets.items():
+        adapter = next(
+            node
+            for node in painter_tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == adapter_name
+        )
+        calls = {
+            node.func.id
+            for node in ast.walk(adapter)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert target_name in calls
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "_vertical_ruby_layers",
+        "_vertical_ruby_path_and_wipe",
+    }.isdisjoint(painter_members)
+    vertical_tree = ast.parse(
+        (ROOT / "engine/render/vertical.py").read_text(encoding="utf-8-sig")
+    )
+    vertical_members = {
+        node.name
+        for node in vertical_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "VerticalRubyPorts",
+        "VerticalRubyWipeSegment",
+        "paint_rubies_vertical",
+        "vertical_ruby_layers",
+        "vertical_ruby_path_and_wipe",
+        "vertical_ruby_segment_wipe_state",
+    } <= vertical_members
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
         ROOT / "engine/render/vertical.py",

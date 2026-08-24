@@ -45,6 +45,9 @@ from krok_helper.subtitle_render.engine.ruby.style import (
     scaled_px,
     scaled_signed_px,
 )
+from krok_helper.subtitle_render.engine.ruby.timing import (
+    ruby_visual_units_and_intervals,
+)
 
 
 __all__ = [
@@ -81,6 +84,7 @@ __all__ = [
     "ruby_time_indices",
     "ruby_uses_main_font",
     "ruby_unit_layouts",
+    "ruby_visual_units_and_intervals",
     "scaled_px",
     "scaled_signed_px",
     "text_span_indices",
