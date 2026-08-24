@@ -80,3 +80,53 @@ def test_project_session_merge_returns_original_when_nothing_is_unresolved() -> 
     payload = {"style": {}}
 
     assert SubtitleProjectSession().merge_unresolved_resource_references(payload) is payload
+
+
+def test_project_session_owns_save_state_transitions(tmp_path: Path) -> None:
+    original = tmp_path / "original.yurika"
+    saved = tmp_path / "saved.yurika"
+    disk_revision = object()
+    session = SubtitleProjectSession(
+        path=original,
+        dirty=True,
+        revision=7,
+        save_error="old error",
+    )
+
+    revision_at_save = session.begin_save()
+
+    assert revision_at_save == 7
+    assert session.saving is True
+    assert session.save_error is None
+    assert session.dirty is True
+
+    session.fail_save("disk full")
+    assert session.saving is False
+    assert session.save_error == "disk full"
+    assert session.path == original
+    assert session.revision == 7
+    assert session.dirty is True
+
+    assert session.begin_save() == 7
+    session.complete_save(
+        path=saved,
+        disk_revision=disk_revision,
+        saved_revision=7,
+    )
+    assert session.path == saved
+    assert session.disk_revision is disk_revision
+    assert session.saved_revision == 7
+    assert session.saving is False
+    assert session.save_error is None
+    assert session.dirty is True
+
+
+def test_project_session_records_pre_save_inspection_failure() -> None:
+    session = SubtitleProjectSession(dirty=True, revision=3, saving=True)
+
+    session.record_save_inspection_failure("cannot inspect")
+
+    assert session.saving is False
+    assert session.save_error == "cannot inspect"
+    assert session.dirty is True
+    assert session.revision == 3

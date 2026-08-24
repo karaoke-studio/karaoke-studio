@@ -407,6 +407,37 @@ class SubtitleProjectSession:
         self.save_error = None
         return was_dirty, had_save_error
 
+    def record_save_inspection_failure(self, error: str) -> None:
+        """Publish a pre-save disk inspection failure without starting a save."""
+        self.saving = False
+        self.save_error = str(error)
+
+    def begin_save(self) -> int:
+        """Enter saving state and return the content revision being persisted."""
+        revision_at_save = int(self.revision)
+        self.saving = True
+        self.save_error = None
+        return revision_at_save
+
+    def fail_save(self, error: str) -> None:
+        """Leave saving state while retaining dirty content and its failure."""
+        self.saving = False
+        self.save_error = str(error)
+
+    def complete_save(
+        self,
+        *,
+        path: Path,
+        disk_revision: Any,
+        saved_revision: int,
+    ) -> None:
+        """Adopt the successful on-disk identity without hiding dirty side effects."""
+        self.path = Path(path)
+        self.disk_revision = disk_revision
+        self.saved_revision = int(saved_revision)
+        self.saving = False
+        self.save_error = None
+
     def begin_generation(self) -> None:
         """Invalidate state tied to the previously loaded project."""
         self.generation += 1
