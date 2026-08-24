@@ -36,6 +36,8 @@ from krok_helper.subtitle_render.engine.text import (
     build_font,
     build_latin_font,
     is_emoji_text,
+    latin_font_size,
+    latin_font_weight,
     make_font_for,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import (
@@ -43,6 +45,7 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     char_fill_ratio,
     compute_char_intervals,
 )
+from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.paint import KaraokeColors, KaraokeColorState
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
@@ -125,6 +128,11 @@ class VerticalRasterPorts:
     paint_text_layer_stack: Callable[..., None]
     visual_stroke_extent: Callable[[int, int], int]
     glow_extent: Callable[[int, int, int], int]
+
+
+@dataclass(frozen=True)
+class VerticalCachePorts:
+    karaoke_state_signature: Callable[[KaraokeColorState], tuple]
 
 
 def vertical_orientation(char: str) -> str:
@@ -467,6 +475,61 @@ class BakedPathStackLayer:
         return top, bottom
 
 
+def vertical_main_path_signature(
+    line: TimingLine,
+    style: Style,
+    layout: VerticalLineLayout,
+) -> tuple:
+    return (
+        "vmain",
+        tuple(char.text for char in line.chars),
+        tuple(value_signature(char.vector_glyph) for char in line.chars),
+        style.font_family,
+        style.font_family_latin,
+        style.font_size_px,
+        latin_font_size(style),
+        int(style.font_weight),
+        latin_font_weight(style),
+        style.italic,
+        layout.column_x,
+        layout.y_top,
+        layout.cell_w,
+        layout.cell_h,
+        layout.ascent,
+    )
+
+
+def baked_stack_key(
+    path_signature: tuple,
+    rect: QRectF,
+    state: KaraokeColorState,
+    style: Style,
+    *,
+    ports: VerticalCachePorts,
+    stroke_width: int,
+    stroke2_width: int,
+    shadow_dx: int,
+    shadow_dy: int,
+    glow_radius: int,
+    after: bool,
+) -> tuple:
+    return (
+        path_signature,
+        int(round(rect.left())),
+        int(round(rect.top())),
+        int(round(rect.width())),
+        int(round(rect.height())),
+        ports.karaoke_state_signature(state),
+        style.decoration_kind,
+        stroke_width,
+        stroke2_width,
+        shadow_dx,
+        shadow_dy,
+        glow_radius,
+        after,
+    )
+
+
 def layout_vertical_line(
     track: TimingTrack,
     line: TimingLine,
@@ -553,10 +616,12 @@ def layout_vertical_line(
 
 __all__ = [
     "BakedPathStackLayer",
+    "VerticalCachePorts",
     "VerticalLineLayout",
     "VerticalProgressPorts",
     "VerticalRasterPorts",
     "build_baked_path_stack",
+    "baked_stack_key",
     "layout_vertical_line",
     "resolve_vertical_columns",
     "resolve_vertical_top",
@@ -566,6 +631,7 @@ __all__ = [
     "vertical_glyph_offset",
     "vertical_glyph_path",
     "vertical_fill_band",
+    "vertical_main_path_signature",
     "vertical_orientation",
     "vertical_ruby_allowance",
 ]

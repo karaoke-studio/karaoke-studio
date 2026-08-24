@@ -1297,6 +1297,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
     delegated_names = {
         "_BakedPathStackLayer",
         "_VerticalLineLayout",
+        "_baked_stack_key_with_ports",
         "_layout_vertical_line",
         "_resolve_vertical_columns",
         "_resolve_vertical_top",
@@ -1307,6 +1308,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
         "_vertical_glyph_offset",
         "_vertical_glyph_path",
         "_vertical_orientation",
+        "_vertical_main_path_sig",
         "_vertical_ruby_allowance",
     }
     inline = {

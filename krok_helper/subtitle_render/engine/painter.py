@@ -594,9 +594,11 @@ from krok_helper.subtitle_render.engine.render.title import (
 )
 from krok_helper.subtitle_render.engine.render.vertical import (
     BakedPathStackLayer as _BakedPathStackLayer,
+    VerticalCachePorts,
     VerticalLineLayout as _VerticalLineLayout,
     VerticalProgressPorts,
     VerticalRasterPorts,
+    baked_stack_key as _baked_stack_key_with_ports,
     layout_vertical_line as _layout_vertical_line,
     resolve_vertical_columns as _resolve_vertical_columns,
     resolve_vertical_top as _resolve_vertical_top,
@@ -607,6 +609,7 @@ from krok_helper.subtitle_render.engine.render.vertical import (
     vertical_glyph_path as _vertical_glyph_path,
     vertical_fill_band as _vertical_fill_band_with_ports,
     vertical_orientation as _vertical_orientation,
+    vertical_main_path_signature as _vertical_main_path_sig,
     vertical_ruby_allowance as _vertical_ruby_allowance,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
@@ -3631,26 +3634,6 @@ def _paint_line_vertical_layers(
     )
 
 
-def _vertical_main_path_sig(line: TimingLine, style: Style, layout: _VerticalLineLayout) -> tuple:
-    return (
-        "vmain",
-        tuple(ch.text for ch in line.chars),
-        tuple(_value_signature(ch.vector_glyph) for ch in line.chars),
-        style.font_family,
-        style.font_family_latin,
-        style.font_size_px,
-        _latin_font_size(style),
-        int(style.font_weight),
-        _latin_font_weight(style),
-        style.italic,
-        layout.column_x,
-        layout.y_top,
-        layout.cell_w,
-        layout.cell_h,
-        layout.ascent,
-    )
-
-
 def _baked_stack_key(
     path_sig: tuple,
     rect: QRectF,
@@ -3664,20 +3647,18 @@ def _baked_stack_key(
     glow_radius: int,
     after: bool,
 ) -> tuple:
-    return (
+    return _baked_stack_key_with_ports(
         path_sig,
-        int(round(rect.left())),
-        int(round(rect.top())),
-        int(round(rect.width())),
-        int(round(rect.height())),
-        _karaoke_state_signature(state),
-        style.decoration_kind,
-        stroke_width,
-        stroke2_width,
-        shadow_dx,
-        shadow_dy,
-        glow_radius,
-        after,
+        rect,
+        state,
+        style,
+        ports=_VERTICAL_CACHE_PORTS,
+        stroke_width=stroke_width,
+        stroke2_width=stroke2_width,
+        shadow_dx=shadow_dx,
+        shadow_dy=shadow_dy,
+        glow_radius=glow_radius,
+        after=after,
     )
 
 
@@ -10027,6 +10008,11 @@ def _karaoke_state_signature(state: KaraokeColorState) -> tuple:
         _fill_signature(state.stroke2),
         _fill_signature(state.shadow),
     )
+
+
+_VERTICAL_CACHE_PORTS = VerticalCachePorts(
+    karaoke_state_signature=_karaoke_state_signature,
+)
 
 
 def _gradient_stop_position(value: object) -> float:
