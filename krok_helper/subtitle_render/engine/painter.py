@@ -72,9 +72,9 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginWarning,
     LayoutTimingDiagnostic,
     TimingCollisionAdjustment as _TimingCollisionAdjustment,
+    build_force_bottom_diagnostics,
+    build_page_shift_diagnostics,
     build_timing_window_diagnostics,
-    diagnostic_line_text as _diagnostic_line_text,
-    format_diagnostic_ms as _format_diagnostic_ms,
     resolve_layout_margin_warnings,
 )
 from krok_helper.subtitle_render.engine.guide import (
@@ -4593,99 +4593,22 @@ def layout_timing_diagnostics_for_style(
         auto_exit_reserve_ms_of=_auto_exit_reserve_ms,
     )
     track_index_of = {id(line): index for index, line in enumerate(track.lines)}
-    final_by_track = {
-        track_index_of[id(item.line)]: item
-        for item in final
-        if id(item.line) in track_index_of
-    }
-    render_to_track = {
-        render_index: track_index_of[id(item.line)]
-        for render_index, item in enumerate(synchronized)
-        if id(item.line) in track_index_of
-    }
 
-    # ForceBottom is a separate page-lift path from the rigid page translation
-    # solver below.  It changes the lane of a one-line bottom-aligned page
-    # directly, so looking only for a non-zero page offset misses the visible
-    # lift entirely.  Reproduce the measured pair that fed the final timing
-    # pipeline and compare its authored bottom lane with the consumed lane.
-    guarded_render_to_track = {
-        render_index: track_index_of[id(item.line)]
-        for render_index, item in enumerate(collision_guarded)
-        if id(item.line) in track_index_of
-    }
-    guarded_by_track = {
-        track_index_of[id(item.line)]: item
-        for item in collision_guarded
-        if id(item.line) in track_index_of
-    }
-    guarded_bands = {
-        render_index: band
-        for render_index, _page, band, _gap in _measure_collision_bands(
-            logical_w, logical_h, track, style, collision_guarded
-        )
-    }
-    reported_force_bottom: set[int] = set()
-    for previous_render, incoming_render in _pixel_collision_squeeze_pairs(
+    guarded_measurements = _measure_collision_bands(
         logical_w, logical_h, track, style, collision_guarded
-    ):
-        previous_track = guarded_render_to_track.get(previous_render)
-        incoming_track = guarded_render_to_track.get(incoming_render)
-        if previous_track is None or incoming_track is None:
-            continue
-        before_item = guarded_by_track.get(incoming_track)
-        after_item = final_by_track.get(incoming_track)
-        if (
-            before_item is None
-            or after_item is None
-            or int(before_item.lane) == int(after_item.lane)
-            or incoming_track in reported_force_bottom
-        ):
-            continue
-        reported_force_bottom.add(incoming_track)
-        previous_text = _diagnostic_line_text(track.lines[previous_track])
-        incoming_text = _diagnostic_line_text(track.lines[incoming_track])
-        previous_band = guarded_bands.get(previous_render)
-        incoming_band = guarded_bands.get(incoming_render)
-        detail_lines = [
-            f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
-            f"第 {incoming_track + 1} 行「{incoming_text}」",
-            "避让路径：ForceBottom 单行底部页行位切换",
-            f"消费行位：第 {int(before_item.lane) + 1} 行位 → "
-            f"第 {int(after_item.lane) + 1} 行位（画面上移）",
-        ]
-        if previous_band is not None and incoming_band is not None:
-            overlap_start = max(
-                int(previous_band.display_start_ms),
-                int(incoming_band.display_start_ms),
-            )
-            overlap_end = min(
-                int(previous_band.display_end_ms),
-                int(incoming_band.display_end_ms),
-            )
-            detail_lines.extend(
-                (
-                    f"触发前{collision_window_label}时间交集："
-                    f"{_format_diagnostic_ms(overlap_start)} – "
-                    f"{_format_diagnostic_ms(overlap_end)}",
-                    f"前行纵向盒：{previous_band.axis_min:.1f} – "
-                    f"{previous_band.axis_max:.1f}",
-                    f"后行原始纵向盒：{incoming_band.axis_min:.1f} – "
-                    f"{incoming_band.axis_max:.1f}",
-                )
-            )
-        diagnostics.append(
-            LayoutTimingDiagnostic(
-                kind="force_bottom_shift",
-                line_indices=(previous_track, incoming_track),
-                title="单行页发生避让抬升",
-                summary=(
-                    f"第 {previous_track + 1} 行「{previous_text}」 ↔ "
-                    f"第 {incoming_track + 1} 行「{incoming_text}」"
-                ),
-                detail="\n".join(detail_lines),
-            )
+    )
+    diagnostics.extend(
+        build_force_bottom_diagnostics(
+            track,
+            collision_window_label=collision_window_label,
+            before=collision_guarded,
+            after=final,
+            measured=guarded_measurements,
+            collision_pairs=_pixel_collision_squeeze_pairs(
+                logical_w, logical_h, track, style, collision_guarded
+            ),
         )
+    )
 
     offset_windows = resolved_page_offset_windows_for_style(
         logical_w, logical_h, track, style
@@ -4704,60 +4627,16 @@ def layout_timing_diagnostics_for_style(
         page_offsets[(int(item.section_index), int(item.page_index))] = offset
 
     measured = _measure_collision_bands(logical_w, logical_h, track, style, final)
-    occupied: list[tuple[int, tuple[int, int], LineVisualBand]] = []
-    for incoming_index, incoming_page, incoming_band, _gap in measured:
-        incoming_track = render_to_track.get(incoming_index)
-        if incoming_track is None:
-            continue
-        offset = float(page_offsets.get(incoming_page, 0.0))
-        for previous_track, previous_page, previous_band in occupied:
-            if previous_page == incoming_page:
-                continue
-            if not time_windows_overlap(incoming_band, previous_band):
-                continue
-            if not bands_require_separation(incoming_band, previous_band, 0.0):
-                continue
-            if offset == 0.0:
-                continue
-            incoming_text = _diagnostic_line_text(track.lines[incoming_track])
-            previous_text = _diagnostic_line_text(track.lines[previous_track])
-            overlap_start = max(
-                int(incoming_band.display_start_ms),
-                int(previous_band.display_start_ms),
-            )
-            overlap_end = min(
-                int(incoming_band.display_end_ms),
-                int(previous_band.display_end_ms),
-            )
-            axis_name = "横向" if style.vertical else "纵向"
-            diagnostics.append(
-                LayoutTimingDiagnostic(
-                    kind="page_shift",
-                    line_indices=(previous_track, incoming_track),
-                    title="页面发生避让抬升" if not style.vertical else "页面发生横向避让",
-                    summary=(
-                        f"第 {previous_track + 1} 行「{previous_text}」 ↔ "
-                        f"第 {incoming_track + 1} 行「{incoming_text}」"
-                    ),
-                    detail=(
-                        f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
-                        f"第 {incoming_track + 1} 行「{incoming_text}」\n"
-                        f"{collision_window_label}时间交集："
-                        f"{_format_diagnostic_ms(overlap_start)} – "
-                        f"{_format_diagnostic_ms(overlap_end)}\n"
-                        f"前行{axis_name}盒：{previous_band.axis_min:.1f} – {previous_band.axis_max:.1f}\n"
-                        f"后行{axis_name}盒：{incoming_band.axis_min:.1f} – {incoming_band.axis_max:.1f}\n"
-                        f"最终整页偏移：{offset:+.1f} px"
-                    ),
-                )
-            )
-        occupied.append(
-            (
-                incoming_track,
-                incoming_page,
-                incoming_band.shifted(float(page_offsets.get(incoming_page, 0.0))),
-            )
+    diagnostics.extend(
+        build_page_shift_diagnostics(
+            track,
+            style,
+            collision_window_label=collision_window_label,
+            synchronized=synchronized,
+            measured=measured,
+            page_offsets=page_offsets,
         )
+    )
     return diagnostics
 
 

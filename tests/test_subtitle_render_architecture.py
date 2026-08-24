@@ -675,7 +675,11 @@ def test_painter_delegates_timing_window_diagnostic_policy() -> None:
         for node in ast.walk(method)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    assert "build_timing_window_diagnostics" in calls
+    assert {
+        "build_force_bottom_diagnostics",
+        "build_page_shift_diagnostics",
+        "build_timing_window_diagnostics",
+    } <= calls
 
 
 def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:

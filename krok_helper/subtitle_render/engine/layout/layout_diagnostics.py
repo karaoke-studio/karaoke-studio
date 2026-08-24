@@ -10,6 +10,11 @@ from krok_helper.subtitle_render.engine.layout.line_style import (
     line_end_ms,
     line_start_ms,
 )
+from krok_helper.subtitle_render.engine.layout.page_placement import (
+    LineVisualBand,
+    bands_require_separation,
+    time_windows_overlap,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import (
@@ -256,8 +261,179 @@ def build_timing_window_diagnostics(
     return diagnostics
 
 
+def build_force_bottom_diagnostics(
+    track: TimingTrack,
+    *,
+    collision_window_label: str,
+    before: list[DisplayLine],
+    after: list[DisplayLine],
+    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]],
+    collision_pairs: tuple[tuple[int, int], ...],
+) -> list[LayoutTimingDiagnostic]:
+    """Explain one-line bottom-page lane changes from measured collision data."""
+
+    track_index_of = {id(line): index for index, line in enumerate(track.lines)}
+    before_render_to_track = {
+        render_index: track_index_of[id(item.line)]
+        for render_index, item in enumerate(before)
+        if id(item.line) in track_index_of
+    }
+    before_by_track = {
+        track_index_of[id(item.line)]: item
+        for item in before
+        if id(item.line) in track_index_of
+    }
+    after_by_track = {
+        track_index_of[id(item.line)]: item
+        for item in after
+        if id(item.line) in track_index_of
+    }
+    bands = {
+        render_index: band
+        for render_index, _page, band, _gap in measured
+    }
+    diagnostics: list[LayoutTimingDiagnostic] = []
+    reported: set[int] = set()
+    for previous_render, incoming_render in collision_pairs:
+        previous_track = before_render_to_track.get(previous_render)
+        incoming_track = before_render_to_track.get(incoming_render)
+        if previous_track is None or incoming_track is None:
+            continue
+        before_item = before_by_track.get(incoming_track)
+        after_item = after_by_track.get(incoming_track)
+        if (
+            before_item is None
+            or after_item is None
+            or int(before_item.lane) == int(after_item.lane)
+            or incoming_track in reported
+        ):
+            continue
+        reported.add(incoming_track)
+        previous_text = diagnostic_line_text(track.lines[previous_track])
+        incoming_text = diagnostic_line_text(track.lines[incoming_track])
+        previous_band = bands.get(previous_render)
+        incoming_band = bands.get(incoming_render)
+        detail_lines = [
+            f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
+            f"第 {incoming_track + 1} 行「{incoming_text}」",
+            "避让路径：ForceBottom 单行底部页行位切换",
+            f"消费行位：第 {int(before_item.lane) + 1} 行位 → "
+            f"第 {int(after_item.lane) + 1} 行位（画面上移）",
+        ]
+        if previous_band is not None and incoming_band is not None:
+            overlap_start = max(
+                int(previous_band.display_start_ms),
+                int(incoming_band.display_start_ms),
+            )
+            overlap_end = min(
+                int(previous_band.display_end_ms),
+                int(incoming_band.display_end_ms),
+            )
+            detail_lines.extend(
+                (
+                    f"触发前{collision_window_label}时间交集："
+                    f"{format_diagnostic_ms(overlap_start)} – "
+                    f"{format_diagnostic_ms(overlap_end)}",
+                    f"前行纵向盒：{previous_band.axis_min:.1f} – "
+                    f"{previous_band.axis_max:.1f}",
+                    f"后行原始纵向盒：{incoming_band.axis_min:.1f} – "
+                    f"{incoming_band.axis_max:.1f}",
+                )
+            )
+        diagnostics.append(
+            LayoutTimingDiagnostic(
+                kind="force_bottom_shift",
+                line_indices=(previous_track, incoming_track),
+                title="单行页发生避让抬升",
+                summary=(
+                    f"第 {previous_track + 1} 行「{previous_text}」 ↔ "
+                    f"第 {incoming_track + 1} 行「{incoming_text}」"
+                ),
+                detail="\n".join(detail_lines),
+            )
+        )
+    return diagnostics
+
+
+def build_page_shift_diagnostics(
+    track: TimingTrack,
+    style: Style,
+    *,
+    collision_window_label: str,
+    synchronized: list[DisplayLine],
+    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]],
+    page_offsets: dict[tuple[int, int], float],
+) -> list[LayoutTimingDiagnostic]:
+    """Explain rigid page displacement from resolved offsets and line bands."""
+
+    track_index_of = {id(line): index for index, line in enumerate(track.lines)}
+    render_to_track = {
+        render_index: track_index_of[id(item.line)]
+        for render_index, item in enumerate(synchronized)
+        if id(item.line) in track_index_of
+    }
+    diagnostics: list[LayoutTimingDiagnostic] = []
+    occupied: list[tuple[int, tuple[int, int], LineVisualBand]] = []
+    for incoming_index, incoming_page, incoming_band, _gap in measured:
+        incoming_track = render_to_track.get(incoming_index)
+        if incoming_track is None:
+            continue
+        offset = float(page_offsets.get(incoming_page, 0.0))
+        for previous_track, previous_page, previous_band in occupied:
+            if previous_page == incoming_page:
+                continue
+            if not time_windows_overlap(incoming_band, previous_band):
+                continue
+            if not bands_require_separation(incoming_band, previous_band, 0.0):
+                continue
+            if offset == 0.0:
+                continue
+            incoming_text = diagnostic_line_text(track.lines[incoming_track])
+            previous_text = diagnostic_line_text(track.lines[previous_track])
+            overlap_start = max(
+                int(incoming_band.display_start_ms),
+                int(previous_band.display_start_ms),
+            )
+            overlap_end = min(
+                int(incoming_band.display_end_ms),
+                int(previous_band.display_end_ms),
+            )
+            axis_name = "横向" if style.vertical else "纵向"
+            diagnostics.append(
+                LayoutTimingDiagnostic(
+                    kind="page_shift",
+                    line_indices=(previous_track, incoming_track),
+                    title="页面发生横向避让" if style.vertical else "页面发生避让抬升",
+                    summary=(
+                        f"第 {previous_track + 1} 行「{previous_text}」 ↔ "
+                        f"第 {incoming_track + 1} 行「{incoming_text}」"
+                    ),
+                    detail=(
+                        f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
+                        f"第 {incoming_track + 1} 行「{incoming_text}」\n"
+                        f"{collision_window_label}时间交集："
+                        f"{format_diagnostic_ms(overlap_start)} – "
+                        f"{format_diagnostic_ms(overlap_end)}\n"
+                        f"前行{axis_name}盒：{previous_band.axis_min:.1f} – {previous_band.axis_max:.1f}\n"
+                        f"后行{axis_name}盒：{incoming_band.axis_min:.1f} – {incoming_band.axis_max:.1f}\n"
+                        f"最终整页偏移：{offset:+.1f} px"
+                    ),
+                )
+            )
+        occupied.append(
+            (
+                incoming_track,
+                incoming_page,
+                incoming_band.shifted(float(page_offsets.get(incoming_page, 0.0))),
+            )
+        )
+    return diagnostics
+
+
 __all__ = [
     "TimingCollisionAdjustment",
+    "build_force_bottom_diagnostics",
+    "build_page_shift_diagnostics",
     "build_timing_window_diagnostics",
     "diagnostic_line_text",
     "format_diagnostic_ms",
