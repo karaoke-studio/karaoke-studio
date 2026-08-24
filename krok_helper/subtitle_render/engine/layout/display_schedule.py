@@ -198,6 +198,32 @@ def resolve_display_schedule(
     return display_schedule_from_items(track, items)
 
 
+def resolve_visible_display_lines(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+    resolvers: DisplayScheduleResolvers,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> list[DisplayLine]:
+    """Return visible display lines through one single/dual-line boundary."""
+
+    if not style.dual_line_layout:
+        display_line = single_visible_display_line(track, t_ms, style)
+        return [] if display_line is None else [display_line]
+    return [
+        item
+        for item in resolvers.display_lines(
+            track,
+            style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
+        if item.display_start_ms <= t_ms < item.display_end_ms
+    ]
+
+
 def extend_page_display_boundary(
     display_lines: list[DisplayLine],
     indices: tuple[int, ...],
@@ -308,6 +334,7 @@ __all__ = [
     "display_windows_from_items",
     "extend_page_display_boundary",
     "resolve_display_schedule",
+    "resolve_visible_display_lines",
     "resolve_display_windows",
     "single_line_display_schedule",
     "single_line_display_windows",

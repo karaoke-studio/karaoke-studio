@@ -203,8 +203,8 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
     apply_constrained_page_sync,
     extend_page_display_boundary as _extend_page_display_boundary,
     resolve_display_schedule,
+    resolve_visible_display_lines,
     resolve_display_windows,
-    single_visible_display_line as _single_visible_display_line,
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     DisplayResolutionCache,
@@ -4355,21 +4355,14 @@ def _visible_lines_for_style(
     logical_w: int | None = None,
     logical_h: int | None = None,
 ) -> list[DisplayLine]:
-    if style.dual_line_layout:
-        return [
-            item
-            for item in _display_lines_for_style(
-                track,
-                style,
-                logical_w=logical_w,
-                logical_h=logical_h,
-            )
-            if item.display_start_ms <= t_ms < item.display_end_ms
-        ]
-    display_line = _single_visible_display_line(track, t_ms, style)
-    if display_line is None:
-        return []
-    return [display_line]
+    return resolve_visible_display_lines(
+        track,
+        t_ms,
+        style,
+        DisplayScheduleResolvers(display_lines=_display_lines_for_style),
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
 
 
 def display_windows_for_style(

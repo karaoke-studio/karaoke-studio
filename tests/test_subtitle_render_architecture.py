@@ -625,6 +625,19 @@ def test_painter_delegates_display_schedule_projection() -> None:
     assert "resolve_display_windows" in calls["display_windows_for_style"]
     assert "resolve_display_schedule" in calls["display_schedule_for_style"]
 
+    visible_adapter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_visible_lines_for_style"
+    )
+    visible_calls = {
+        node.func.id
+        for node in ast.walk(visible_adapter)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "resolve_visible_display_lines" in visible_calls
+
     sync_adapter = next(
         node
         for node in tree.body
