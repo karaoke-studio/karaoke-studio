@@ -130,3 +130,32 @@ def test_project_session_records_pre_save_inspection_failure() -> None:
     assert session.save_error == "cannot inspect"
     assert session.dirty is True
     assert session.revision == 3
+
+
+def test_project_session_adopts_named_and_unnamed_project_identity(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "song.yurika"
+    missing = tmp_path / "missing.sug"
+    disk_revision = object()
+    session = SubtitleProjectSession(path=tmp_path / "old.yurika")
+
+    session.adopt_project_identity(
+        path=project,
+        disk_revision=disk_revision,
+        missing_resources=[("主字幕", missing)],
+        source_data={"subtitle_path": str(missing)},
+    )
+
+    assert session.path == project
+    assert session.disk_revision is disk_revision
+    assert session.missing_resources == (("主字幕", missing),)
+    assert session.unresolved_resource_labels == {"主字幕"}
+
+    session.adopt_project_identity(path=None, disk_revision=None)
+
+    assert session.path is None
+    assert session.disk_revision is None
+    assert session.missing_resources == ()
+    assert session.unresolved_resource_labels == set()
+    assert session.missing_resource_source_data is None

@@ -448,6 +448,23 @@ class SubtitleProjectSession:
         self.unresolved_resource_labels = set()
         self.missing_resource_source_data = None
 
+    def adopt_project_identity(
+        self,
+        *,
+        path: Optional[Path],
+        disk_revision: Any,
+        missing_resources: tuple[tuple[str, Path], ...]
+        | list[tuple[str, Path]] = (),
+        source_data: Optional[dict] = None,
+    ) -> None:
+        """Adopt one loaded/imported/recovered project identity atomically."""
+        self.path = Path(path) if path is not None else None
+        self.disk_revision = disk_revision
+        self.remember_missing_resources(
+            missing_resources,
+            source_data if isinstance(source_data, dict) else {},
+        )
+
     def remember_missing_resources(
         self,
         missing: tuple[tuple[str, Path], ...] | list[tuple[str, Path]],
