@@ -146,6 +146,9 @@ from krok_helper.subtitle_render.frontend.property_widgets import (
 from krok_helper.subtitle_render.frontend.property_title_page import (
     TitlePropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_timing_page import (
+    TimingPropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.engine.style_semantics import (
     effective_karaoke_colors,
@@ -3575,6 +3578,11 @@ class PropertyPanel(QWidget):
             self,
             timecode_factory=_TimecodeEdit,
         )
+        self._timing_page_builder = TimingPropertyPageBuilder(
+            self,
+            spin_factory=_spin,
+            tooltip_installer=install_fluent_tooltip,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -6691,157 +6699,7 @@ class PropertyPanel(QWidget):
         )
 
     def _make_timing_section(self) -> QFrame:
-        section, layout = _section("时间")
-
-        grid = _ResponsiveFieldGrid(section, min_column_width=130, max_columns=4)
-
-        self._line_lead_spin = _spin(0, 10_000, suffix=" ms")
-        self._line_lead_spin.valueChanged.connect(
-            lambda value: self._update_style(line_lead_in_ms=value)
-        )
-        grid.add_field("提前入场", self._line_lead_spin)
-
-        self._line_tail_spin = _spin(0, 10_000, suffix=" ms")
-        self._line_tail_spin.valueChanged.connect(
-            lambda value: self._update_style(line_tail_ms=value)
-        )
-        grid.add_field("延迟退场", self._line_tail_spin)
-
-        self._line_offset_spin = _spin(-10_000, 10_000, suffix=" ms")
-        self._line_offset_spin.valueChanged.connect(
-            lambda value: self._update_style(timing_offset_ms=value)
-        )
-        grid.add_field("偏移", self._line_offset_spin)
-
-        self._section_gap_spin = _spin(0, 60_000, suffix=" ms")
-        self._section_gap_spin.valueChanged.connect(
-            lambda value: self._update_style(section_gap_ms=value)
-        )
-        # 分段间隔属于字幕源加载规则，已移至歌词列表工具栏的齿轮面板。
-        self._section_gap_spin.setVisible(False)
-
-        self._section_ending_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._section_ending_combo)
-        for label, value in [("保持", "hold"), ("段末清屏", "clear")]:
-            self._section_ending_combo.addItem(label, value)
-        self._section_ending_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                section_ending_mode=self._section_ending_combo.currentData()
-            )
-        )
-        grid.add_field("段落结束", self._section_ending_combo)
-
-        self._lane_gap_spin = _spin(0, 5_000, suffix=" ms")
-        self._lane_gap_spin.setToolTip("同一显示轨上相邻两句之间保留的时间间隔。")
-        self._lane_gap_spin.valueChanged.connect(
-            lambda value: self._update_style(line_lane_gap_ms=value)
-        )
-        grid.add_field("同轨间隔", self._lane_gap_spin)
-
-        layout.addWidget(grid)
-
-        sync_row = QHBoxLayout()
-        sync_row.setContentsMargins(0, 0, 0, 0)
-        self._sync_entry_check = CheckBox("同步入场", section)
-        self._sync_entry_check.setToolTip(
-            "未手工调整上屏时间的 T 会尽量延长到同步页的最早边界；默认只处理段首页，\n"
-            "开启“每句同步”后处理每一页。"
-            "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩自己入场的"
-            "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
-        )
-        self._sync_entry_check.toggled.connect(
-            lambda checked: self._update_style(sync_entry=checked)
-        )
-        self._sync_entry_check.toggled.connect(
-            lambda _checked: self._sync_sync_each_page_enabled()
-        )
-        sync_row.addWidget(self._sync_entry_check)
-
-        self._sync_ending_check = CheckBox("同步退场", section)
-        self._sync_ending_check.setToolTip(
-            "未手工调整消失时间的 T 会尽量延长到同步页的最晚边界；默认只处理段尾页，\n"
-            "开启“每句同步”后处理每一页。"
-            "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩后句入场的"
-            "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
-        )
-        self._sync_ending_check.toggled.connect(
-            lambda checked: self._update_style(sync_ending=checked)
-        )
-        self._sync_ending_check.toggled.connect(
-            lambda _checked: self._sync_sync_each_page_enabled()
-        )
-        sync_row.addWidget(self._sync_ending_check)
-
-        self._sync_each_page_check = CheckBox("每句同步", section)
-        self._sync_each_page_check.setToolTip(
-            "关闭时，同步入场只作用于每段第一页，同步退场只作用于每段最后一页；\n"
-            "开启时，每一页都会分别执行同步入场和同步退场。"
-        )
-        self._sync_each_page_check.toggled.connect(
-            lambda checked: self._update_style(sync_each_page=checked)
-        )
-        self._sync_each_page_check.setEnabled(False)
-        sync_row.addWidget(self._sync_each_page_check)
-        sync_row.addStretch(1)
-        layout.addLayout(sync_row)
-
-        self._ruby_main_reading_units_check = CheckBox(
-            "正文按注音字符切分（N3 式）", section
-        )
-        self._ruby_main_reading_units_check.setToolTip(
-            "正文内部已有时间点时，两种模式都会保留正文逐字时钟；"
-            "缺失时，开启按注音可视字符数映射，"
-            "关闭按注音内部时间点形成的时间段数均分正文。"
-        )
-        self._ruby_main_reading_units_check.toggled.connect(
-            lambda checked: self._update_style(
-                ruby_main_progress_mode=(
-                    "reading_units" if checked else "checkpoint_segments"
-                )
-            )
-        )
-        self._n3_style_row = QHBoxLayout()
-        self._n3_style_row.setContentsMargins(0, 0, 0, 0)
-        self._n3_style_row.addWidget(self._ruby_main_reading_units_check)
-
-        self._allow_animation_overlap_check = CheckBox(
-            "允许出入场动画重叠", section
-        )
-        self._allow_animation_overlap_check.setToolTip(
-            "开启时，同轨间隔只约束主文字的稳定显示段，入场和退场动画可以互相重叠；\n"
-            "关闭时，完整的入场、稳定显示和退场窗口都必须满足同轨间隔。"
-        )
-        self._allow_animation_overlap_check.toggled.connect(
-            lambda checked: self._update_style(
-                allow_entry_exit_animation_overlap=checked
-            )
-        )
-        self._n3_style_row.addWidget(self._allow_animation_overlap_check)
-
-        self._auto_fill_section_time_check = CheckBox(
-            "自动填充段内时间", section
-        )
-        self._auto_fill_section_time_check.setToolTip(
-            "开启时，非段尾页的每句按主文字行盒高度匹配下一页最近的行，并延长到"
-            "该行入场前的同轨间隔；段尾页填充到本页自然结束。\n"
-            "关闭时，每句仅保留自己的退场窗口。"
-        )
-        self._auto_fill_section_time_check.toggled.connect(
-            lambda checked: self._update_style(auto_fill_section_time=checked)
-        )
-        self._n3_style_row.addWidget(self._auto_fill_section_time_check)
-        for tooltip_button in (
-            self._sync_entry_check,
-            self._sync_ending_check,
-            self._sync_each_page_check,
-            self._ruby_main_reading_units_check,
-            self._allow_animation_overlap_check,
-            self._auto_fill_section_time_check,
-        ):
-            install_fluent_tooltip(tooltip_button, show_delay=300)
-        self._n3_style_row.addStretch(1)
-        layout.addLayout(self._n3_style_row)
-        return section
+        return self._timing_page_builder.make_section()
 
     def _sync_sync_each_page_enabled(self) -> None:
         """Enable the child option only while either synchronization mode is active."""
