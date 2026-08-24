@@ -402,6 +402,31 @@ def test_line_pagination_semantics_have_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_line_geometry_policy_has_no_painter_dependency() -> None:
+    owner = f"{PACKAGE}.engine.line_geometry"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    imports = {
+        (alias.name, alias.asname)
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert "_line_has_role_labels" not in inline
+    assert imports == {
+        ("line_has_role_labels", "_line_has_role_labels"),
+        ("resolve_char_intervals", "_resolve_char_intervals"),
+    }
+    targets = _import_targets(owner, ROOT / "engine/line_geometry.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

@@ -92,6 +92,10 @@ from krok_helper.subtitle_render.engine.line_pagination import (
     renderable_page_lines as _renderable_page_lines,
     renderable_page_map as _renderable_page_map,
 )
+from krok_helper.subtitle_render.engine.line_geometry import (
+    line_has_role_labels as _line_has_role_labels,
+    resolve_char_intervals as _resolve_char_intervals,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -7765,10 +7769,6 @@ def _style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
     )
 
 
-def _line_has_role_labels(line: TimingLine) -> bool:
-    return any(bool(ch.role_label) for ch in line.chars)
-
-
 def _guide_symbol_is_bitmap(symbol: object | None) -> bool:
     return isinstance(symbol, GuideSymbol) and symbol.kind == "bitmap" and bool(
         symbol.bitmap_before_path
@@ -14293,47 +14293,47 @@ def _display_line_collision_time_window(
     return _display_line_static_collision_window(display_line, style)
 
 
-def resolved_char_intervals_for_line(
-    line: TimingLine, style: Style
-) -> list[tuple[int, int]]:
-    """Resolve Painter's final per-character timing intervals for Render IR.
-
-    Shared source spans are weighted by the same effective glyph advances used
-    by horizontal layout.  Vertical Painter intentionally keeps the parser's
-    existing intervals because its fixed cells do not run the width-weighted
-    shared-span path.
-    """
-    line_style = _style_for_line(style, line)
-    line = _line_with_guide_symbol(line)
-    if line_style.vertical:
-        return compute_char_intervals(line)
+def _char_widths_for_resolved_intervals(
+    line: TimingLine,
+    line_style: Style,
+) -> list[int]:
     if _line_has_role_labels(line):
         measure_layout = _build_role_text_layout(
             line, line_style, x0=0, baseline_y=0
         )
         char_widths, _ranges = _role_char_geometry_by_index(line, measure_layout)
-    else:
-        font = _build_font(line_style)
-        metrics = QFontMetrics(font)
-        latin_font = _build_latin_font(line_style)
-        font_for = _make_font_for(line_style, font, latin_font)
-        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-        char_widths = [
-            (
-                _vector_glyph_width(ch.vector_glyph, line_style)
-                if ch.vector_glyph is not None
-                else _char_layout_width(
-                    ch.text,
-                    font,
-                    metrics,
-                    latin_metrics,
-                    font_for,
-                    line_style,
-                )
+        return char_widths
+    font = _build_font(line_style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(line_style)
+    font_for = _make_font_for(line_style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    return [
+        (
+            _vector_glyph_width(char.vector_glyph, line_style)
+            if char.vector_glyph is not None
+            else _char_layout_width(
+                char.text,
+                font,
+                metrics,
+                latin_metrics,
+                font_for,
+                line_style,
             )
-            for ch in line.chars
-        ]
-    return compute_char_intervals(line, char_widths)
+        )
+        for char in line.chars
+    ]
+
+
+def resolved_char_intervals_for_line(
+    line: TimingLine, style: Style
+) -> list[tuple[int, int]]:
+    """Resolve Painter-compatible per-character timing intervals for Render IR."""
+    return _resolve_char_intervals(
+        line,
+        style,
+        _char_widths_for_resolved_intervals,
+    )
 
 
 def resolved_guide_anchor_bounds_for_line(
