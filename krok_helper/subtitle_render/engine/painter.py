@@ -117,6 +117,7 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
 )
 from krok_helper.subtitle_render.engine.ruby_selection import (
     active_rubies_for_line as _active_rubies_for_line,
+    effective_ruby_for_target as _effective_ruby_for_target,
     find_ruby_text_indices as _find_ruby_text_indices,
     find_ruby_text_span as _find_ruby_text_span,
     ruby_explicit_target_indices as _ruby_explicit_target_indices,
@@ -11828,47 +11829,6 @@ def _ruby_main_uses_base_timing(
         if offset < last_offset and char.explicit_end:
             return True
     return False
-
-
-def _effective_ruby_for_target(
-    ruby: RubyAnnotation,
-    indices: list[int],
-    intervals: list[tuple[int, int]],
-) -> RubyAnnotation:
-    """把 ruby 的 wipe 时钟对齐到目标字符区间（收窄方向）。
-
-    基字区间可因呼吸停顿 / 多字块再分配而比导出的 ``pos`` 区间**短**，此时
-    以基字区间为准（``fix: honor subtitle pause timing`` 的场景）；但基字
-    interval 的末端是「下一字开始 / 行末」，比 ruby 自身唱完时刻**晚**时不能
-    采用，否则每条 ruby 会拖到间隙 / 行尾才走完。取交集：结束时刻用两者中
-    更早的有效值。
-    """
-    valid_indices = [index for index in indices if 0 <= index < len(intervals)]
-    if not valid_indices:
-        return ruby
-    start = min(intervals[index][0] for index in valid_indices)
-    end = max(intervals[index][1] for index in valid_indices)
-    # Only trust the exported end when the annotation's own clock starts with the
-    # target.  A ``.sug`` ruby carries the raw per-character timestamps, which can
-    # disagree with the recomputed intervals (pauses, multi-character blocks); once
-    # the loader pins the target explicitly, such a stale window would otherwise
-    # shrink the wipe to a few milliseconds and make the base text jump to full.
-    if (
-        ruby.pos_end_ms > ruby.pos_start_ms
-        and ruby.pos_start_ms >= start
-        and start < ruby.pos_end_ms < end
-    ):
-        end = ruby.pos_end_ms
-    if start == ruby.pos_start_ms and end == ruby.pos_end_ms:
-        return ruby
-    target_duration = max(end - start, 0)
-    reading_part_ms = [max(0, min(target_duration, rel_ms)) for rel_ms in ruby.reading_part_ms]
-    return replace(
-        ruby,
-        pos_start_ms=start,
-        pos_end_ms=end,
-        reading_part_ms=reading_part_ms,
-    )
 
 
 def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSegment]:

@@ -595,6 +595,7 @@ def test_ruby_selection_has_one_engine_owner() -> None:
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
         "_active_rubies_for_line",
+        "_effective_ruby_for_target",
         "_find_ruby_text_indices",
         "_find_ruby_text_span",
         "_ruby_explicit_target_indices",

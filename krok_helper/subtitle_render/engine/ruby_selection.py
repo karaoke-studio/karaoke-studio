@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from krok_helper.subtitle_render.engine.layout_context import _LAYOUT_PASS
 from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 from krok_helper.subtitle_render.timing import RubyAnnotation, TimingLine
@@ -123,6 +125,38 @@ def ruby_target_indices(
             preferred_indices=time_indices,
         )
     return time_indices
+
+
+def effective_ruby_for_target(
+    ruby: RubyAnnotation,
+    indices: list[int],
+    intervals: list[tuple[int, int]],
+) -> RubyAnnotation:
+    """Clamp an annotation's wipe clock to its resolved base-character span."""
+    valid_indices = [index for index in indices if 0 <= index < len(intervals)]
+    if not valid_indices:
+        return ruby
+    start = min(intervals[index][0] for index in valid_indices)
+    end = max(intervals[index][1] for index in valid_indices)
+    if (
+        ruby.pos_end_ms > ruby.pos_start_ms
+        and ruby.pos_start_ms >= start
+        and start < ruby.pos_end_ms < end
+    ):
+        end = ruby.pos_end_ms
+    if start == ruby.pos_start_ms and end == ruby.pos_end_ms:
+        return ruby
+    target_duration = max(end - start, 0)
+    reading_part_ms = [
+        max(0, min(target_duration, relative_ms))
+        for relative_ms in ruby.reading_part_ms
+    ]
+    return replace(
+        ruby,
+        pos_start_ms=start,
+        pos_end_ms=end,
+        reading_part_ms=reading_part_ms,
+    )
 
 
 def ruby_text_span_x_range(
@@ -272,6 +306,7 @@ def _active_rubies_for_line_uncached(
 
 __all__ = [
     "active_rubies_for_line",
+    "effective_ruby_for_target",
     "find_ruby_text_indices",
     "find_ruby_text_span",
     "ruby_has_global_position",
