@@ -128,6 +128,8 @@ from krok_helper.subtitle_render.frontend.property_layout import (
 from krok_helper.subtitle_render.frontend.property_inputs import (
     DynamicStackedWidget as _DynamicStackedWidget,
     GrowingPlainTextEdit as _GrowingPlainTextEdit,
+    WheelFocusedComboBox as _WheelFocusedComboBox,
+    WheelFocusedFontComboBox,
 )
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
@@ -2026,65 +2028,15 @@ class _TimecodeEdit(FluentLineEdit):
         self.setCursorPosition(max(0, len(self.text()) - offset))
 
 
-class _WheelFocusedComboBox(FluentComboBox):
-    """Avoid accidental option changes while scrolling the property panel."""
+class _WheelFocusedFontComboBox(WheelFocusedFontComboBox):
+    """Bind the shared font input to this module's patchable catalog providers."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def addItem(self, text: str, userData=None) -> None:  # noqa: N802 - Qt API
-        """Keep QComboBox's positional ``userData`` convention."""
-        super().addItem(text, userData=userData)
-
-    def wheelEvent(self, event):  # noqa: N802 - Qt API
-        if not self.hasFocus():
-            event.ignore()
-            return
-        super().wheelEvent(event)
-
-
-class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
-    """Fluent font picker preserving QFontComboBox's small public contract."""
-
-    currentFontChanged = Signal(QFont)
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._inheritance_label: Optional[str] = None
-        self.addItems(n3_font_families())
-        self.currentIndexChanged.connect(
-            lambda _index: self.currentFontChanged.emit(self.currentFont())
+        super().__init__(
+            parent,
+            font_families_provider=n3_font_families,
+            canonicalize_family=canonicalize_n3_font_family,
         )
-
-    def enable_inheritance(self, label: str) -> None:
-        """Add an explicit N3-style zero slot before installed families."""
-        if self._inheritance_label is not None:
-            return
-        self._inheritance_label = str(label)
-        self.insertItem(0, self._inheritance_label, 0)
-
-    def is_inherited(self) -> bool:
-        return self._inheritance_label is not None and self.currentIndex() == 0
-
-    def setInherited(self) -> None:  # noqa: N802 - Qt-style helper
-        if self._inheritance_label is not None:
-            self.setCurrentIndex(0)
-
-    def currentFont(self) -> QFont:  # noqa: N802 - QFontComboBox compatibility
-        return QFont(self.currentText())
-
-    def setCurrentFont(self, font: QFont) -> None:  # noqa: N802
-        family = canonicalize_n3_font_family(font.family())
-        index = self.findText(family) if family is not None else -1
-        if index < 0:
-            if self._inheritance_label is not None:
-                self.setInherited()
-            return
-        if index == self.currentIndex():
-            self.currentFontChanged.emit(self.currentFont())
-            return
-        self.setCurrentIndex(index)
 
 
 class _StylePresetDetailsDialog(ModelessDialog):

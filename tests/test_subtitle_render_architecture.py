@@ -913,6 +913,16 @@ def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
     }
     assert "_GrowingPlainTextEdit" not in inline_names
     assert "_DynamicStackedWidget" not in inline_names
+    assert "_WheelFocusedComboBox" not in inline_names
+    font_adapter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "_WheelFocusedFontComboBox"
+    )
+    assert [base.id for base in font_adapter.bases if isinstance(base, ast.Name)] == [
+        "WheelFocusedFontComboBox"
+    ]
 
 
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
