@@ -9690,14 +9690,14 @@ def test_collision_bands_ignore_glow_extent(qapp):
         ruby_glow_after_radius_px=24,
     )
 
-    plain_band = subtitle_painter._measure_collision_bands(
+    plain_band = subtitle_painter.measure_collision_bands(
         640,
         360,
         track,
         plain,
         display_lines,
     )[0][2]
-    glow_band = subtitle_painter._measure_collision_bands(
+    glow_band = subtitle_painter.measure_collision_bands(
         640,
         360,
         track,
@@ -9746,14 +9746,14 @@ def test_legacy_collision_box_uses_only_main_glyph_ink(qapp):
         shadow_offset_y=30,
     )
 
-    plain_band = subtitle_painter._measure_collision_bands(
+    plain_band = subtitle_painter.measure_collision_bands(
         640,
         360,
         TimingTrack(lines=[line]),
         plain,
         display_lines,
     )[0][2]
-    decorated_band = subtitle_painter._measure_collision_bands(
+    decorated_band = subtitle_painter.measure_collision_bands(
         640,
         360,
         TimingTrack(lines=[line], rubies=[ruby]),
@@ -9805,14 +9805,14 @@ def test_n3_collision_box_uses_only_main_glyph_ink(qapp):
         ruby_decoration_kind="none",
     )
 
-    plain_band = subtitle_painter._measure_collision_bands(
+    plain_band = subtitle_painter.measure_collision_bands(
         640,
         360,
         TimingTrack(lines=[line]),
         style,
         display_lines,
     )[0][2]
-    ruby_band = subtitle_painter._measure_collision_bands(
+    ruby_band = subtitle_painter.measure_collision_bands(
         640,
         360,
         TimingTrack(lines=[line], rubies=[ruby]),
@@ -10070,7 +10070,7 @@ def test_secondary_displacement_pairs_only_report_new_cascade(monkeypatch):
     ]
     monkeypatch.setattr(
         subtitle_painter,
-        "_measure_collision_bands",
+        "measure_collision_bands",
         lambda *_args: measured,
     )
     monkeypatch.setattr(
@@ -10167,10 +10167,10 @@ def test_sync_collision_time_window_keeps_fade_duration(qapp):
         exit_fade_ms=400,
     )
 
-    stable = subtitle_painter._measure_collision_bands(
+    stable = subtitle_painter.measure_collision_bands(
         1280, 720, track, style, display
     )
-    synced = subtitle_painter._measure_collision_bands(
+    synced = subtitle_painter.measure_collision_bands(
         1280,
         720,
         track,
@@ -10221,14 +10221,14 @@ def test_animation_guard_measures_only_stable_text_collisions(qapp, monkeypatch)
     )
 
     calls: list[str] = []
-    original = subtitle_painter._measure_collision_bands
+    original = subtitle_painter.measure_collision_bands
 
     def wrapped_measure(*args, **kwargs):
         calls.append(kwargs.get("time_window", "stable"))
         return original(*args, **kwargs)
 
     subtitle_painter.clear_before_layer_cache()
-    monkeypatch.setattr(subtitle_painter, "_measure_collision_bands", wrapped_measure)
+    monkeypatch.setattr(subtitle_painter, "measure_collision_bands", wrapped_measure)
 
     windows = subtitle_painter.display_windows_for_style(
         track, style, logical_w=1280, logical_h=1080
@@ -10279,7 +10279,7 @@ def test_force_bottom_requires_measured_spatial_conflict(qapp):
     display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=1280, logical_h=720
     )
-    measured = subtitle_painter._measure_collision_bands(
+    measured = subtitle_painter.measure_collision_bands(
         1280, 720, track, style, display
     )
 
@@ -10578,7 +10578,7 @@ def test_section_time_fill_matches_next_page_by_nearest_main_text_box(
     ]
     monkeypatch.setattr(
         subtitle_painter,
-        "_measure_collision_bands",
+        "measure_collision_bands",
         lambda *_args, **_kwargs: measured,
     )
 
@@ -10649,7 +10649,7 @@ def test_section_time_fill_uses_strict_unique_matches_after_page_shift(
     ]
     monkeypatch.setattr(
         subtitle_painter,
-        "_measure_collision_bands",
+        "measure_collision_bands",
         lambda *_args, **_kwargs: measured,
     )
     monkeypatch.setattr(
@@ -10965,7 +10965,7 @@ def test_same_lane_gap_does_not_depend_on_horizontal_glyph_intersection(
     ]
     monkeypatch.setattr(
         subtitle_painter,
-        "_measure_collision_bands",
+        "measure_collision_bands",
         lambda *_args, **_kwargs: measured,
     )
 
@@ -11165,7 +11165,7 @@ def test_manual_cross_lane_extension_does_not_raise_incoming_page(
     display = subtitle_painter.display_lines_for_style(
         track, style, logical_w=3_840, logical_h=2_160
     )
-    measured = subtitle_painter._measure_collision_bands(
+    measured = subtitle_painter.measure_collision_bands(
         3_840, 2_160, track, style, display, time_window="display"
     )
     bands = {index: band for index, _page, band, _gap in measured}

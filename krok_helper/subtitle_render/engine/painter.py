@@ -3453,7 +3453,7 @@ def _main_stroke2_width(style: Style) -> int:
     return max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
 
 
-def _measure_collision_bands(
+def measure_collision_bands(
     logical_w: int,
     logical_h: int,
     track: TimingTrack,
@@ -3572,7 +3572,7 @@ def _measure_collision_bands(
     return measured
 
 
-def _pixel_collision_squeeze_pairs(
+def pixel_collision_squeeze_pairs(
     logical_w: int,
     logical_h: int,
     track: TimingTrack,
@@ -3581,7 +3581,7 @@ def _pixel_collision_squeeze_pairs(
 ) -> tuple[tuple[int, int], ...]:
     """Return pairs conflicting in the configured time window and pixel axis."""
 
-    measured = _measure_collision_bands(
+    measured = measure_collision_bands(
         logical_w, logical_h, track, style, display_lines
     )
     conflicts: list[tuple[int, int]] = []
@@ -3623,7 +3623,7 @@ def _secondary_displacement_squeeze_pairs(
     overrides, animation reserves and page entry order.
     """
 
-    measured = _measure_collision_bands(
+    measured = measure_collision_bands(
         logical_w, logical_h, track, style, display_lines
     )
     if not measured:
@@ -3784,7 +3784,7 @@ def _apply_measured_section_time_fill(
     time_window = (
         "stable" if style.allow_entry_exit_animation_overlap else "display"
     )
-    measured = _measure_collision_bands(
+    measured = measure_collision_bands(
         logical_w,
         logical_h,
         track,
@@ -3980,7 +3980,7 @@ def animation_guard_ports_for_style(
     return AnimationGuardPorts(
         entry_animation_ms=lambda line: _entry_animation_ms(style, line),
         exit_animation_ms=lambda line: _exit_animation_ms(style, line),
-        measure=lambda items, time_window: _measure_collision_bands(
+        measure=lambda items, time_window: measure_collision_bands(
             logical_w,
             logical_h,
             track,
@@ -4039,7 +4039,7 @@ def display_lines_for_style(
                     ),
                     enforce_inter_page_gap=enforce_gap,
                 ),
-                collision_pairs=lambda items: _pixel_collision_squeeze_pairs(
+                collision_pairs=lambda items: pixel_collision_squeeze_pairs(
                     width, height, track, style, items
                 ),
                 secondary_collision_pairs=lambda items: (

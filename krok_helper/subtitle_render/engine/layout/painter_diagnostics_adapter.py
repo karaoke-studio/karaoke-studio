@@ -152,7 +152,7 @@ def layout_timing_diagnostics_for_style(
         entry_animation_ms_of=entry_animation_ms,
         auto_exit_reserve_ms_of=auto_exit_reserve_ms,
     )
-    guarded_measurements = painter_impl._measure_collision_bands(
+    guarded_measurements = painter_impl.measure_collision_bands(
         logical_w,
         logical_h,
         track,
@@ -166,7 +166,7 @@ def layout_timing_diagnostics_for_style(
             before=collision_guarded,
             after=final,
             measured=guarded_measurements,
-            collision_pairs=painter_impl._pixel_collision_squeeze_pairs(
+            collision_pairs=painter_impl.pixel_collision_squeeze_pairs(
                 logical_w,
                 logical_h,
                 track,
@@ -196,7 +196,7 @@ def layout_timing_diagnostics_for_style(
         )
         page_offsets[(int(item.section_index), int(item.page_index))] = offset
 
-    measured = painter_impl._measure_collision_bands(
+    measured = painter_impl.measure_collision_bands(
         logical_w,
         logical_h,
         track,

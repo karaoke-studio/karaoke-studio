@@ -848,6 +848,7 @@ def test_painter_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
         "_signal_lead_in_ms",
         "_style_for_line",
     }.isdisjoint(private_painter_calls)
+    assert all(not name.startswith("_") for name in private_painter_calls)
 
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
