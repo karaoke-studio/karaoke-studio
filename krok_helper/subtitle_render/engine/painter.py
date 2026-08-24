@@ -67,11 +67,7 @@ from krok_helper.subtitle_render.engine.layout.layout_context import (
     layout_pass,
 )
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
-    LayoutTimingDiagnostic,
     TimingCollisionAdjustment as _TimingCollisionAdjustment,
-    build_force_bottom_diagnostics,
-    build_page_shift_diagnostics,
-    build_timing_window_diagnostics,
 )
 from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
@@ -4507,133 +4503,6 @@ def display_windows_for_style(
         )
         return display_windows_from_items(track, items)
     return single_line_display_windows(track, style)
-
-
-def layout_timing_diagnostics_for_style(
-    logical_w: int,
-    logical_h: int,
-    track: TimingTrack,
-    style: Style,
-) -> list[LayoutTimingDiagnostic]:
-    """Explain automatic window compression and the pairs that move a page."""
-
-    if not style.dual_line_layout:
-        return []
-    # CPU and GPU both consume ``build_track_layout_plan()``, which expands
-    # the effective lead-in when the signal window needs to appear earlier.
-    # Diagnostics must inspect that exact display style as well; otherwise a
-    # signal-induced overlap can visibly lift a page while this function still
-    # reports the shorter, non-overlapping authored window.
-    style = _display_style_for_signal_window(style)
-    collision_window_label = (
-        "稳定主文字行盒"
-        if style.allow_entry_exit_animation_overlap
-        else "完整显示行盒"
-    )
-    logical_w = max(int(logical_w), 1)
-    logical_h = max(int(logical_h), 1)
-    kwargs = _display_line_compute_kwargs(style)
-    base_kwargs = {
-        **kwargs,
-        "sync_entry": False,
-        "sync_ending": False,
-        "auto_fill_section_time": False,
-    }
-    signal_heads = _signal_head_context(track, style)
-    if signal_heads is not None:
-        base_kwargs["signal_head_indexes"] = signal_heads
-        base_kwargs["signal_lead_ms"] = _signal_lead_in_ms(style)
-    ideal = compute_display_lines(
-        track,
-        **base_kwargs,
-        adjust_same_position=False,
-        dynamic_single_page_reflow=False,
-        independent_line_entry=True,
-    )
-    synchronized = _apply_constrained_page_sync(
-        logical_w, logical_h, track, style, ideal
-    )
-    animation_candidate = _apply_animation_time_guard(
-        logical_w,
-        logical_h,
-        track,
-        style,
-        synchronized,
-        enforce_inter_page_gap=False,
-    )
-    adjustments: list[_TimingCollisionAdjustment] = []
-    collision_guarded = _apply_animation_time_guard(
-        logical_w,
-        logical_h,
-        track,
-        style,
-        synchronized,
-        enforce_inter_page_gap=not style.allow_inter_page_line_overlap,
-        adjustments=adjustments,
-    )
-    final = _display_lines_for_style(
-        track,
-        style,
-        logical_w=logical_w,
-        logical_h=logical_h,
-    )
-    diagnostics = build_timing_window_diagnostics(
-        track,
-        style,
-        ideal=ideal,
-        synchronized=synchronized,
-        animation_candidate=animation_candidate,
-        final=final,
-        adjustments=adjustments,
-        entry_animation_ms_of=_entry_animation_ms,
-        auto_exit_reserve_ms_of=_auto_exit_reserve_ms,
-    )
-    track_index_of = {id(line): index for index, line in enumerate(track.lines)}
-
-    guarded_measurements = _measure_collision_bands(
-        logical_w, logical_h, track, style, collision_guarded
-    )
-    diagnostics.extend(
-        build_force_bottom_diagnostics(
-            track,
-            collision_window_label=collision_window_label,
-            before=collision_guarded,
-            after=final,
-            measured=guarded_measurements,
-            collision_pairs=_pixel_collision_squeeze_pairs(
-                logical_w, logical_h, track, style, collision_guarded
-            ),
-        )
-    )
-
-    offset_windows = resolved_page_offset_windows_for_style(
-        logical_w, logical_h, track, style
-    )
-    page_offsets: dict[tuple[int, int], float] = {}
-    for item in final:
-        track_index = track_index_of.get(id(item.line))
-        if track_index is None:
-            continue
-        windows = offset_windows.get(track_index, ())
-        offset = (
-            float(windows[0][2] if style.vertical else windows[0][3])
-            if windows
-            else 0.0
-        )
-        page_offsets[(int(item.section_index), int(item.page_index))] = offset
-
-    measured = _measure_collision_bands(logical_w, logical_h, track, style, final)
-    diagnostics.extend(
-        build_page_shift_diagnostics(
-            track,
-            style,
-            collision_window_label=collision_window_label,
-            synchronized=synchronized,
-            measured=measured,
-            page_offsets=page_offsets,
-        )
-    )
-    return diagnostics
 
 
 def display_schedule_for_style(

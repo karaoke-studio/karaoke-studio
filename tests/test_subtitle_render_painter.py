@@ -7854,6 +7854,7 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (  # no
 )
 from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter import (  # noqa: E402
     check_layout_margins,
+    layout_timing_diagnostics_for_style,
 )
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_latin_font,
@@ -9504,7 +9505,7 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
         1280, 720, track, legacy
     ) == {}
 
-    diagnostics = subtitle_painter.layout_timing_diagnostics_for_style(
+    diagnostics = layout_timing_diagnostics_for_style(
         1280, 1080, track, normal
     )
     shifts = [item for item in diagnostics if item.kind == "page_shift"]
@@ -10287,7 +10288,7 @@ def test_force_bottom_lane_lift_is_reported_by_diagnostics(qapp):
     display = subtitle_painter._display_lines_for_style(
         track, style, logical_w=1280, logical_h=720
     )
-    diagnostics = subtitle_painter.layout_timing_diagnostics_for_style(
+    diagnostics = layout_timing_diagnostics_for_style(
         1280, 720, track, style
     )
 
@@ -11082,7 +11083,7 @@ def test_force_bottom_waits_for_automatic_time_avoidance(qapp, monkeypatch):
     assert windows[3][0] == 27_360
     assert all(not pairs for pairs in calls)
 
-    diagnostics = subtitle_painter.layout_timing_diagnostics_for_style(
+    diagnostics = layout_timing_diagnostics_for_style(
         3_840, 2_160, track, style
     )
     assert not any(

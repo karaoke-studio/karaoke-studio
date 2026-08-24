@@ -670,9 +670,9 @@ def test_painter_diagnostics_adapter_binds_layout_margin_policy() -> None:
     assert "check_layout_margins" not in inline_functions
 
 
-def test_painter_delegates_timing_window_diagnostic_policy() -> None:
-    painter_path = ROOT / "engine/painter.py"
-    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+def test_painter_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
+    adapter_path = ROOT / "engine/layout/painter_diagnostics_adapter.py"
+    tree = ast.parse(adapter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
         for node in tree.body
@@ -689,6 +689,15 @@ def test_painter_delegates_timing_window_diagnostic_policy() -> None:
         "build_page_shift_diagnostics",
         "build_timing_window_diagnostics",
     } <= calls
+
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    inline_functions = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "layout_timing_diagnostics_for_style" not in inline_functions
 
 
 def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
