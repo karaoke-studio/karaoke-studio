@@ -64,7 +64,6 @@ def subtitle_loading_settings_from_dict(value: object) -> SubtitleLoadingSetting
         ),
     )
 
-
 def track_page_plan_to_dict(plan: Optional[TrackPagePlan]) -> Optional[dict[str, object]]:
     if plan is None:
         return None
@@ -277,4 +276,3 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         bitmap_margin_bottom_px=margin_bottom,
         prefix_timing=prefix_timing,  # type: ignore[arg-type]
     )
-
