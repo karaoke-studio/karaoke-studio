@@ -3603,6 +3603,10 @@ class PropertyPanel(QWidget):
         self._layout_page_builder = LayoutPropertyPageBuilder(
             self,
             spin_factory=_spin,
+            plain_card_factory=_plain_card,
+            glyph_segment_factory=_GlyphSegment,
+            layout_schematic_factory=_LayoutSchematic,
+            schematic_board_factory=_SchematicBoard,
         )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
@@ -5553,117 +5557,7 @@ class PropertyPanel(QWidget):
         return assign_btn_row
 
     def _make_row_structure_section(self) -> QFrame:
-        """行结构：示意图居中，锚定/余白/行布局按空间语义贴边（N3 式编排）。"""
-        section, layout = _plain_card()
-        self._layout_section = section
-        navigation = self._make_layout_navigation(section)
-        assignment_actions = self._make_layout_assignment_actions(section)
-
-        # 上下配置贴幕布中上；智能水平占用原来的左上位置。
-        self._line_position_seg = _GlyphSegment(_POSITION_SEGMENT_OPTIONS, section)
-        self._line_position_seg.setValue("bottom")
-        self._line_position_seg.valueChanged.connect(self._on_line_position_changed)
-        self._line_position_field = _field(
-            "上下配置", self._line_position_seg
-        )
-
-        self._horizontal_margin_spin = _spin(
-            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
-        )
-        # 三位数 + 单位足够；必须改回 Fixed 策略——_compact_control 的
-        # Ignored 策略在带对齐的网格单元里会让 sizeHint 归零挤扁控件
-        self._horizontal_margin_spin.setFixedWidth(120)
-        self._horizontal_margin_spin.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        self._horizontal_margin_spin.setToolTip(
-            "左右余白（N3 左右余白）：左对齐行的左缘贴此值，右对齐行的右缘贴"
-            "「画面宽 − 此值」。"
-        )
-        self._horizontal_margin_spin.valueChanged.connect(
-            self._on_horizontal_margin_changed
-        )
-        self._horizontal_margin_field = _field(
-            "左右余白", self._horizontal_margin_spin
-        )
-
-        self._smart_horizontal_field = self._make_smart_horizontal_field(section)
-        self._left_layout_controls = QWidget(section)
-        self._left_layout_controls.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        left_controls_layout = QVBoxLayout(self._left_layout_controls)
-        left_controls_layout.setContentsMargins(0, 0, 0, 0)
-        left_controls_layout.setSpacing(8)
-        left_controls_layout.addWidget(
-            self._smart_horizontal_field, 0, Qt.AlignmentFlag.AlignLeft
-        )
-        left_controls_layout.addWidget(
-            self._horizontal_margin_field, 0, Qt.AlignmentFlag.AlignRight
-        )
-        self._character_layout_group = self._make_character_layout_group(section)
-
-        self._allow_biting_check = CheckBox("启用文字咬合", section)
-        self._allow_biting_check.setToolTip(
-            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
-        )
-        self._allow_biting_check.toggled.connect(
-            lambda checked: self._update_layout_field(allow_biting=checked)
-        )
-
-        # 中列：布局示意图；下方用单行表单贴上/下余白。
-        self._layout_schematic = _LayoutSchematic(section)
-        # 初始固定宽度必须在父面板构建阶段设置；若提前到子控件构造器中，
-        # QScrollArea 会缓存过大的最小宽度，320px 窄面板将产生横向溢出。
-        self._layout_schematic.setFixedWidth(round(150 * 16 / 9))
-
-        self._line_margin_spin = _spin(
-            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
-        )
-        self._line_margin_spin.setFixedWidth(120)
-        self._line_margin_spin.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        self._line_margin_spin.setToolTip(
-            "顶部锚定 = 画面上端到最上行的余白；底部锚定 = 画面下端到最下行的"
-            "余白；居中时忽略（N3 上/下余白）。"
-        )
-        self._line_margin_spin.valueChanged.connect(
-            lambda value: self._update_layout_field(line_y_margin_px=value)
-        )
-
-        self._vertical_margin_field = QWidget(section)
-        # 居中锚定时余白字段隐藏但保留占位，避免示意图与左下的字符排版
-        # 随行高塌缩整体上移（位置稳定 > 空行观感）。
-        retain_policy = self._vertical_margin_field.sizePolicy()
-        retain_policy.setRetainSizeWhenHidden(True)
-        self._vertical_margin_field.setSizePolicy(retain_policy)
-        vertical_margin_layout = QHBoxLayout(self._vertical_margin_field)
-        vertical_margin_layout.setContentsMargins(0, 0, 0, 0)
-        vertical_margin_layout.setSpacing(8)
-        self._vertical_margin_label = QLabel("下余白", self._vertical_margin_field)
-        themed(
-            self._vertical_margin_label,
-            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
-        )
-        vertical_margin_layout.addWidget(self._vertical_margin_label)
-        vertical_margin_layout.addWidget(self._line_margin_spin)
-
-        self._schematic_board = _SchematicBoard(
-            QWidget(section),
-            self._layout_schematic,
-            self._vertical_margin_field,
-            self._make_line_alignments_box(section),
-            section,
-            header_left=navigation,
-            header_right=assignment_actions,
-            top_left=self._left_layout_controls,
-            top_center=self._line_position_field,
-            bottom_left=self._character_layout_group,
-            bottom_right=self._allow_biting_check,
-        )
-        layout.addWidget(self._schematic_board)
-        return section
+        return self._layout_page_builder.make_row_structure_section()
 
     def _make_vertical_layout_section(self) -> QFrame:
         return self._layout_page_builder.make_vertical_section()
