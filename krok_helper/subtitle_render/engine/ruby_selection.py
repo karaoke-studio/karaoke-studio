@@ -34,6 +34,162 @@ def text_span_indices(
     return indices
 
 
+def find_ruby_text_span(
+    kanji: str,
+    line: TimingLine,
+    *,
+    preferred_indices: list[int] | None = None,
+) -> tuple[int, int] | None:
+    if not kanji:
+        return None
+    text = "".join(char.text for char in line.chars)
+    occurrences: list[tuple[int, int]] = []
+    position = text.find(kanji)
+    while position >= 0:
+        occurrences.append((position, position + len(kanji)))
+        position = text.find(kanji, position + 1)
+    if not occurrences:
+        return None
+    if not preferred_indices:
+        return occurrences[0]
+
+    preferred = set(preferred_indices)
+
+    def score(span: tuple[int, int]) -> tuple[int, int]:
+        indices = text_span_indices(span, line)
+        overlap = len(preferred.intersection(indices))
+        distance = min(
+            (
+                abs(index - candidate)
+                for index in indices
+                for candidate in preferred
+            ),
+            default=0,
+        )
+        return overlap, -distance
+
+    return max(occurrences, key=score)
+
+
+def find_ruby_text_indices(
+    kanji: str,
+    line: TimingLine,
+    *,
+    preferred_indices: list[int] | None = None,
+) -> list[int]:
+    if not kanji:
+        return []
+    span = find_ruby_text_span(
+        kanji,
+        line,
+        preferred_indices=preferred_indices,
+    )
+    if span is None:
+        return []
+    return text_span_indices(span, line)
+
+
+def ruby_explicit_target_indices(
+    ruby: RubyAnnotation,
+    line: TimingLine,
+) -> list[int] | None:
+    """Return the loader-resolved target, or ``None`` to fall back to search."""
+    start = ruby.target_char_start
+    end = ruby.target_char_end
+    if start is None or end is None:
+        return None
+    if start < 0 or end <= start or end > len(line.chars):
+        return None
+    if ruby.kanji:
+        target_text = "".join(char.text for char in line.chars[start:end])
+        if target_text != ruby.kanji:
+            return None
+    return list(range(start, end))
+
+
+def ruby_target_indices(
+    ruby: RubyAnnotation,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+) -> list[int]:
+    explicit = ruby_explicit_target_indices(ruby, line)
+    if explicit is not None:
+        return explicit
+    time_indices = ruby_time_indices(ruby, intervals)
+    if ruby.kanji:
+        return find_ruby_text_indices(
+            ruby.kanji,
+            line,
+            preferred_indices=time_indices,
+        )
+    return time_indices
+
+
+def ruby_text_span_x_range(
+    text_span: tuple[int, int],
+    line: TimingLine,
+    char_x_ranges: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    span_start, span_end = text_span
+    cursor = 0
+    left: int | None = None
+    right: int | None = None
+    for index, char in enumerate(line.chars):
+        if index >= len(char_x_ranges):
+            break
+        text_length = len(char.text)
+        unit_start = cursor
+        unit_end = cursor + text_length
+        cursor = unit_end
+        if (
+            text_length <= 0
+            or unit_end <= span_start
+            or unit_start >= span_end
+        ):
+            continue
+        overlap_start = max(span_start, unit_start) - unit_start
+        overlap_end = min(span_end, unit_end) - unit_start
+        char_left, char_right = char_x_ranges[index]
+        width = char_right - char_left
+        segment_left = char_left + round(width * overlap_start / text_length)
+        segment_right = char_left + round(width * overlap_end / text_length)
+        left = segment_left if left is None else min(left, segment_left)
+        right = segment_right if right is None else max(right, segment_right)
+    if left is None or right is None or right <= left:
+        return None
+    return left, right
+
+
+def ruby_target_x_range(
+    ruby: RubyAnnotation,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    explicit = ruby_explicit_target_indices(ruby, line)
+    if explicit is not None:
+        return (
+            min(char_x_ranges[index][0] for index in explicit),
+            max(char_x_ranges[index][1] for index in explicit),
+        )
+    time_indices = ruby_time_indices(ruby, intervals)
+    if ruby.kanji:
+        text_span = find_ruby_text_span(
+            ruby.kanji,
+            line,
+            preferred_indices=time_indices,
+        )
+        if text_span is None:
+            return None
+        return ruby_text_span_x_range(text_span, line, char_x_ranges)
+
+    if not time_indices:
+        return None
+    left = min(char_x_ranges[index][0] for index in time_indices)
+    right = max(char_x_ranges[index][1] for index in time_indices)
+    return left, right
+
+
 def ruby_owns_line(ruby: RubyAnnotation, line: TimingLine) -> bool:
     """Return whether loader-resolved ownership permits this timing line."""
     return (
@@ -116,8 +272,14 @@ def _active_rubies_for_line_uncached(
 
 __all__ = [
     "active_rubies_for_line",
+    "find_ruby_text_indices",
+    "find_ruby_text_span",
     "ruby_has_global_position",
+    "ruby_explicit_target_indices",
     "ruby_owns_line",
+    "ruby_target_indices",
+    "ruby_target_x_range",
+    "ruby_text_span_x_range",
     "ruby_time_indices",
     "text_span_indices",
     "timed_ruby_matches_line",

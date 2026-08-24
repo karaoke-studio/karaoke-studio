@@ -117,7 +117,13 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
 )
 from krok_helper.subtitle_render.engine.ruby_selection import (
     active_rubies_for_line as _active_rubies_for_line,
+    find_ruby_text_indices as _find_ruby_text_indices,
+    find_ruby_text_span as _find_ruby_text_span,
+    ruby_explicit_target_indices as _ruby_explicit_target_indices,
     ruby_owns_line as _ruby_owns_line,
+    ruby_target_indices as _ruby_target_indices,
+    ruby_target_x_range as _ruby_target_x_range,
+    ruby_text_span_x_range as _ruby_text_span_x_range,
     ruby_time_indices as _ruby_time_indices,
     text_span_indices as _text_span_indices,
 )
@@ -11931,45 +11937,6 @@ def _ruby_for_char_index(
     return None
 
 
-def _ruby_target_indices(
-    ruby: RubyAnnotation,
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-) -> list[int]:
-    explicit = _ruby_explicit_target_indices(ruby, line)
-    if explicit is not None:
-        return explicit
-    time_indices = _ruby_time_indices(ruby, intervals)
-    if ruby.kanji:
-        return _find_ruby_text_indices(ruby.kanji, line, preferred_indices=time_indices)
-    return time_indices
-
-
-def _ruby_explicit_target_indices(
-    ruby: RubyAnnotation,
-    line: TimingLine,
-) -> list[int] | None:
-    """Return the loader-resolved target, or ``None`` to fall back to search.
-
-    The range is line-local and half-open.  It is rejected when it does not fit
-    the line or when the base text no longer matches, so a track whose lines
-    changed after the annotation was resolved still renders through the historical
-    text/time matching instead of landing on an unrelated character.
-    """
-
-    start = ruby.target_char_start
-    end = ruby.target_char_end
-    if start is None or end is None:
-        return None
-    if start < 0 or end <= start or end > len(line.chars):
-        return None
-    if ruby.kanji:
-        target_text = "".join(char.text for char in line.chars[start:end])
-        if target_text != ruby.kanji:
-            return None
-    return list(range(start, end))
-
-
 def _resolve_char_ruby_groups(
     rubies: list[RubyAnnotation],
     line: TimingLine,
@@ -14834,109 +14801,6 @@ def _ruby_before_clip_rect_at_time(
         max(wipe_right - front, 0.0) + pad,
         rect.height() + pad * 2,
     )
-
-
-def _ruby_target_x_range(
-    ruby: RubyAnnotation,
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-    char_x_ranges: list[tuple[int, int]],
-) -> tuple[int, int] | None:
-    explicit = _ruby_explicit_target_indices(ruby, line)
-    if explicit is not None:
-        return (
-            min(char_x_ranges[index][0] for index in explicit),
-            max(char_x_ranges[index][1] for index in explicit),
-        )
-    time_indices = _ruby_time_indices(ruby, intervals)
-    if ruby.kanji:
-        text_span = _find_ruby_text_span(ruby.kanji, line, preferred_indices=time_indices)
-        if text_span is None:
-            return None
-        return _ruby_text_span_x_range(text_span, line, char_x_ranges)
-
-    indices = time_indices
-    if not indices:
-        return None
-    left = min(char_x_ranges[index][0] for index in indices)
-    right = max(char_x_ranges[index][1] for index in indices)
-    return left, right
-
-
-def _ruby_text_span_x_range(
-    text_span: tuple[int, int],
-    line: TimingLine,
-    char_x_ranges: list[tuple[int, int]],
-) -> tuple[int, int] | None:
-    span_start, span_end = text_span
-    cursor = 0
-    left: int | None = None
-    right: int | None = None
-    for index, ch in enumerate(line.chars):
-        if index >= len(char_x_ranges):
-            break
-        text = ch.text
-        text_len = len(text)
-        unit_start = cursor
-        unit_end = cursor + text_len
-        cursor = unit_end
-        if text_len <= 0 or unit_end <= span_start or unit_start >= span_end:
-            continue
-        overlap_start = max(span_start, unit_start) - unit_start
-        overlap_end = min(span_end, unit_end) - unit_start
-        char_left, char_right = char_x_ranges[index]
-        width = char_right - char_left
-        segment_left = char_left + round(width * overlap_start / text_len)
-        segment_right = char_left + round(width * overlap_end / text_len)
-        left = segment_left if left is None else min(left, segment_left)
-        right = segment_right if right is None else max(right, segment_right)
-    if left is None or right is None or right <= left:
-        return None
-    return left, right
-
-
-def _find_ruby_text_span(
-    kanji: str,
-    line: TimingLine,
-    *,
-    preferred_indices: list[int] | None = None,
-) -> tuple[int, int] | None:
-    if not kanji:
-        return None
-    text = "".join(ch.text for ch in line.chars)
-    occurrences: list[tuple[int, int]] = []
-    pos = text.find(kanji)
-    while pos >= 0:
-        occurrences.append((pos, pos + len(kanji)))
-        pos = text.find(kanji, pos + 1)
-    if not occurrences:
-        return None
-    if not preferred_indices:
-        return occurrences[0]
-
-    preferred = set(preferred_indices)
-
-    def score(span: tuple[int, int]) -> tuple[int, int]:
-        indices = _text_span_indices(span, line)
-        overlap = len(preferred.intersection(indices))
-        distance = min((abs(index - candidate) for index in indices for candidate in preferred), default=0)
-        return overlap, -distance
-
-    return max(occurrences, key=score)
-
-
-def _find_ruby_text_indices(
-    kanji: str,
-    line: TimingLine,
-    *,
-    preferred_indices: list[int] | None = None,
-) -> list[int]:
-    if not kanji:
-        return []
-    span = _find_ruby_text_span(kanji, line, preferred_indices=preferred_indices)
-    if span is None:
-        return []
-    return _text_span_indices(span, line)
 
 
 def _paint_ruby_text_units_with_transition(
