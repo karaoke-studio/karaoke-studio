@@ -120,6 +120,7 @@ from krok_helper.subtitle_render.frontend.property_pages import (
 )
 from krok_helper.subtitle_render.frontend.property_widgets import (
     CollapsibleSection,
+    PillSelector as _PillSelector,
     ToggleSwitch,
 )
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
@@ -1151,107 +1152,6 @@ def _fill_mode_icons() -> dict[str, QIcon]:
             ("image", "image.svg"),
         )
     }
-
-
-class _PillSelector(QWidget):
-    """一行紧凑胶囊单选组：走字前/后切换与图层选择共用。
-
-    取代旧的 2×4 状态×图层矩阵——前/后两列按钮完全重复，一个双段开关 +
-    一行图层按钮就够了。按钮按文字紧凑测宽、靠左排布，不再撑满整列。
-    """
-
-    changed = Signal(str)
-
-    def __init__(
-        self,
-        options: tuple[tuple[str, str], ...],
-        parent: Optional[QWidget] = None,
-        *,
-        vertical: bool = False,
-        icons: Optional[dict[str, QIcon]] = None,
-    ) -> None:
-        super().__init__(parent)
-        self._current = options[0][0] if options else ""
-        self._buttons: dict[str, QPushButton] = {}
-
-        row = QVBoxLayout(self) if vertical else QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        for key, label in options:
-            btn = QPushButton(label, self)
-            btn.setObjectName("ColorPillCell")
-            btn.setCheckable(True)
-            btn.setMinimumHeight(28)
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            icon = (icons or {}).get(key)
-            if icon is not None:
-                # 图标模式与项目紧凑控件使用同一逻辑尺寸；Qt 会按 DPR 生成
-                # 对应设备像素，不依赖某张截图的物理像素。
-                btn.setText("")
-                btn.setIcon(icon)
-                icon_extent = _COMPACT_CONTROL_HEIGHT * 3 // 4
-                btn.setIconSize(QSize(icon_extent, icon_extent))
-                btn.setFixedSize(_COMPACT_CONTROL_HEIGHT, _COMPACT_CONTROL_HEIGHT)
-                btn.setToolTip(label)
-                btn.setAccessibleName(label)
-            # 竖排列内按钮统一拉到列宽（列宽 = 最宽文字），横排按文字紧凑测宽
-            if icon is None:
-                btn.setSizePolicy(
-                    QSizePolicy.Policy.Expanding if vertical else QSizePolicy.Policy.Maximum,
-                    QSizePolicy.Policy.Fixed,
-                )
-            btn.clicked.connect(lambda _checked=False, k=key: self._select(k))
-            self._buttons[key] = btn
-            row.addWidget(btn, 0)
-        row.addStretch(1)
-        themed(
-            self,
-            lambda: (
-                f"""
-                QPushButton#ColorPillCell {{
-                    background: {palette().secondary_button_bg};
-                    color: {palette().secondary_button_text};
-                    border: 1px solid {palette().secondary_button_border};
-                    border-radius: 6px;
-                    padding: 0 10px;
-                    font-size: 9.5pt;
-                }}
-                QPushButton#ColorPillCell:hover {{
-                    border-color: {palette().accent_primary};
-                }}
-                QPushButton#ColorPillCell:checked {{
-                    background: {palette().accent_primary};
-                    color: #FFFFFF;
-                    border-color: {palette().accent_primary};
-                    font-weight: 600;
-                }}
-                """
-            ),
-        )
-        self._refresh_checked()
-
-    def current(self) -> str:
-        return self._current
-
-    def set_current(self, key: str) -> None:
-        if key == self._current or key not in self._buttons:
-            self._refresh_checked()
-            return
-        self._current = key
-        self._refresh_checked()
-
-    def _select(self, key: str) -> None:
-        if key != self._current:
-            self._current = key
-            self._refresh_checked()
-            self.changed.emit(key)
-        else:
-            self._refresh_checked()  # 点当前项也保持选中态
-
-    def _refresh_checked(self) -> None:
-        for key, btn in self._buttons.items():
-            btn.setChecked(key == self._current)
 
 
 class _FolderTabPanel(QWidget):
