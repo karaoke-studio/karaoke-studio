@@ -135,12 +135,12 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     ENCODER_NVENC,
     ENCODER_QSV,
 )
-from krok_helper.subtitle_render.engine.layout_assignment import (
+from krok_helper.subtitle_render.engine.layout.layout_assignment import (
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,
 )
-from krok_helper.subtitle_render.engine.layout_diagnostics import (
+from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginWarning,
     LayoutTimingDiagnostic,
     check_layout_margins,
@@ -149,7 +149,7 @@ from krok_helper.subtitle_render.engine.layout_diagnostics import (
     layout_pass,
 )
 from krok_helper.subtitle_render.engine.title_semantics import resolve_title_text
-from krok_helper.subtitle_render.engine.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page_plan import (
     build_legacy_page_plan,
     build_page_plan,
     delete_boundary,

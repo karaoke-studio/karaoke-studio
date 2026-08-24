@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from krok_helper.subtitle_render.engine.layout_plan import (
+from krok_helper.subtitle_render.engine.layout.layout_plan import (
     LayoutOffsetWindow,
     LineLayoutPlan,
     TrackLayoutPlan,
 )
-from krok_helper.subtitle_render.engine.line_pagination import line_center_override
-from krok_helper.subtitle_render.engine.line_style import (
+from krok_helper.subtitle_render.engine.layout.line_pagination import line_center_override
+from krok_helper.subtitle_render.engine.layout.line_style import (
     lane_count,
     row_count_resolver,
     style_for_line,
 )
-from krok_helper.subtitle_render.engine.page_plan import resolve_page_plan
+from krok_helper.subtitle_render.engine.layout.page_plan import resolve_page_plan
 from krok_helper.subtitle_render.engine.timeline import DisplayLine, assign_lanes
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack

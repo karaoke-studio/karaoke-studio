@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 import pickle
 
-from krok_helper.subtitle_render.engine.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page_plan import (
     build_legacy_page_plan,
     build_page_plan,
     move_page_boundary,
@@ -394,7 +394,7 @@ def test_all_five_instant_layout_examples():
         (3, 3, 2, "default"),
         (3, 4, 2, "custom"),
     ]
-    from krok_helper.subtitle_render.engine.page_plan import (
+    from krok_helper.subtitle_render.engine.layout.page_plan import (
         _resize_page_with_instant_layout_rule,
     )
 

@@ -62,7 +62,7 @@ from krok_helper.subtitle_render.engine.layers import (
     SCOPE_GROUP,
     SCOPE_LINE,
 )
-from krok_helper.subtitle_render.engine.layout_context import (
+from krok_helper.subtitle_render.engine.layout.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
 )
@@ -79,19 +79,19 @@ from krok_helper.subtitle_render.engine.image_resource import (
     image_file_signature as _image_file_signature,
     warn_image_resource_skipped as _warn_image_fill_skipped,
 )
-from krok_helper.subtitle_render.engine.layout_plan_cache import (
+from krok_helper.subtitle_render.engine.layout.layout_plan_cache import (
     clear_track_layout_plan_cache,
     layout_cache_enabled as _layout_cache_enabled,
 )
-from krok_helper.subtitle_render.engine.layout_plan_orchestrator import (
+from krok_helper.subtitle_render.engine.layout.layout_plan_orchestrator import (
     LayoutPlanResolvers,
     resolve_track_layout_plan,
 )
-from krok_helper.subtitle_render.engine.layout_plan_projection import (
+from krok_helper.subtitle_render.engine.layout.layout_plan_projection import (
     active_page_offsets_from_layout_plan as _active_page_offsets_from_layout_plan,
     visible_lines_from_layout_plan as _visible_lines_from_layout_plan,
 )
-from krok_helper.subtitle_render.engine.line_style import (
+from krok_helper.subtitle_render.engine.layout.line_style import (
     lane_count as _lane_count,
     layout_style_for_line as _layout_style_for_line,
     line_end_ms as _line_end_ms,
@@ -100,15 +100,15 @@ from krok_helper.subtitle_render.engine.line_style import (
     style_for_line as _style_for_line,
     style_for_line_display_window as _style_for_line_display_window,
 )
-from krok_helper.subtitle_render.engine.line_pagination import (
+from krok_helper.subtitle_render.engine.layout.line_pagination import (
     line_center_override as _line_center_override,
     renderable_page_lines as _renderable_page_lines,
     renderable_page_map as _renderable_page_map,
 )
-from krok_helper.subtitle_render.engine.line_geometry import (
+from krok_helper.subtitle_render.engine.layout.line_geometry import (
     line_has_role_labels as _line_has_role_labels,
 )
-from krok_helper.subtitle_render.engine.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.signal_semantics import (
     display_style_for_signal_window as _display_style_for_signal_window,
     lit_signal_active as _lit_signal_active,
     signal_head_context as _signal_head_context,
@@ -184,18 +184,18 @@ from krok_helper.subtitle_render.engine.text import (
     role_char_geometry_by_index as _role_char_geometry_by_index,
     style_for_role_in_layout as _style_for_role_in_layout,
 )
-from krok_helper.subtitle_render.engine.qt_line_geometry import (
+from krok_helper.subtitle_render.engine.layout.qt_line_geometry import (
     resolved_char_intervals_for_line,
     resolved_guide_anchor_bounds_for_line,
 )
-from krok_helper.subtitle_render.engine.page_offset_plan import (
+from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
     MeasuredPageLine,
     build_page_offset_windows,
     cached_page_offset_windows,
     clear_page_offset_cache,
     store_page_offset_windows,
 )
-from krok_helper.subtitle_render.engine.display_schedule import (
+from krok_helper.subtitle_render.engine.layout.display_schedule import (
     display_schedule_from_items,
     display_windows_from_items,
     single_line_display_schedule,
@@ -615,22 +615,22 @@ from krok_helper.subtitle_render.engine.timeline import (
     compute_display_lines,
     track_duration_ms,
 )
-from krok_helper.subtitle_render.engine.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page_plan import (
     page_plan_signature,
     resolve_page_plan,
 )
-from krok_helper.subtitle_render.engine.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page_placement import (
     LineVisualBand,
     PageVisualBands,
     bands_require_separation,
     solve_page_axis_offsets,
     time_windows_overlap,
 )
-from krok_helper.subtitle_render.engine.layout_plan import (
+from krok_helper.subtitle_render.engine.layout.layout_plan import (
     LineLayoutPlan,
     TrackLayoutPlan,
 )
-from krok_helper.subtitle_render.engine.layout_assignment import (
+from krok_helper.subtitle_render.engine.layout.layout_assignment import (
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,

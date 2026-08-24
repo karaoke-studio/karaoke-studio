@@ -14,9 +14,9 @@ import uuid
 import numpy as np
 import pytest
 
-from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.render_ir import build_render_ir
-from krok_helper.subtitle_render.engine.semantic_plan import build_track_layout_plan
+from krok_helper.subtitle_render.engine.layout.semantic_plan import build_track_layout_plan
 from krok_helper.subtitle_render.models import (
     GuideSymbol,
     KaraokeColors,
@@ -78,7 +78,7 @@ def test_render_ir_uses_semantic_plan_boundary():
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == "krok_helper.subtitle_render.engine.semantic_plan"
+        and node.module == "krok_helper.subtitle_render.engine.layout.semantic_plan"
         for alias in node.names
     }
 
@@ -87,8 +87,9 @@ def test_render_ir_uses_semantic_plan_boundary():
 
 
 def test_layout_pass_boundary_preserves_shared_reentrant_context():
-    from krok_helper.subtitle_render.engine import painter, semantic_plan
-    from krok_helper.subtitle_render.engine.layout_context import _LAYOUT_PASS
+    from krok_helper.subtitle_render.engine import painter
+    from krok_helper.subtitle_render.engine.layout import semantic_plan
+    from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
 
     assert semantic_plan.layout_pass is painter.layout_pass
     assert getattr(_LAYOUT_PASS, "page_maps", None) is None
@@ -109,7 +110,7 @@ def test_painter_uses_shared_layout_plan_cache_boundary():
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == "krok_helper.subtitle_render.engine.layout_plan_cache"
+        and node.module == "krok_helper.subtitle_render.engine.layout.layout_plan_cache"
         for alias in node.names
     }
 
@@ -119,14 +120,14 @@ def test_painter_uses_shared_layout_plan_cache_boundary():
     }
 
     orchestrator_path = Path(
-        "krok_helper/subtitle_render/engine/layout_plan_orchestrator.py"
+        "krok_helper/subtitle_render/engine/layout/layout_plan_orchestrator.py"
     )
     orchestrator_tree = ast.parse(orchestrator_path.read_text(encoding="utf-8"))
     orchestrator_imports = {
         alias.name
         for node in ast.walk(orchestrator_tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == "krok_helper.subtitle_render.engine.layout_plan_cache"
+        and node.module == "krok_helper.subtitle_render.engine.layout.layout_plan_cache"
         for alias in node.names
     }
     assert orchestrator_imports == {

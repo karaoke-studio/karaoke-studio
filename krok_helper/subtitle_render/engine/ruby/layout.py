@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from PyQt6.QtGui import QFont, QFontMetrics
 
-from krok_helper.subtitle_render.engine.layout_context import _LAYOUT_PASS
+from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
 from krok_helper.subtitle_render.engine.ruby.selection import (
     effective_ruby_for_target,
     ruby_target_indices,

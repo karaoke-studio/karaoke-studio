@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Callable
 
-from krok_helper.subtitle_render.engine.layout_context import _LAYOUT_PASS
+from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
 from krok_helper.subtitle_render.engine.style_semantics import style_scheme_changes
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,

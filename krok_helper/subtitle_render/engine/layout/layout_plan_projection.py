@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.timeline import DisplayLine
 
 

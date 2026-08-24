@@ -1,4 +1,4 @@
-from krok_helper.subtitle_render.engine.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page_placement import (
     LineVisualBand,
     PageVisualBands,
     solve_page_axis_offset_windows,

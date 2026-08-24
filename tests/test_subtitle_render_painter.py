@@ -36,7 +36,7 @@ import krok_helper.subtitle_render.engine.ruby.layout as ruby_layout  # noqa: E4
 import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
 import krok_helper.subtitle_render.engine.text.metrics as text_metrics  # noqa: E402
-from krok_helper.subtitle_render.engine.page_placement import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.page_placement import (  # noqa: E402
     LineVisualBand,
 )
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
@@ -8497,7 +8497,7 @@ def test_style_dict_migrates_legacy_margin_when_new_key_missing():
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _layout_style_for_line,
 )
-from krok_helper.subtitle_render.engine.layout_assignment import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.layout_assignment import (  # noqa: E402
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,
@@ -10296,7 +10296,7 @@ def test_force_bottom_lane_lift_is_reported_by_diagnostics(qapp):
 
 
 def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
-    from krok_helper.subtitle_render.engine.page_plan import (
+    from krok_helper.subtitle_render.engine.layout.page_plan import (
         project_page_plan_to_legacy_fields,
     )
     from krok_helper.subtitle_render.models import ensure_page_layout_defaults
@@ -10351,7 +10351,7 @@ def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
 
 
 def test_non_overlapping_layouts_keep_full_entry_and_exit_windows(qapp):
-    from krok_helper.subtitle_render.engine.page_plan import (
+    from krok_helper.subtitle_render.engine.layout.page_plan import (
         project_page_plan_to_legacy_fields,
     )
 

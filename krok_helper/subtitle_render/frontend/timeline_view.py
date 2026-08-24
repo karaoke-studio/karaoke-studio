@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import BodyLabel, CardWidget, LineEdit, PrimaryPushButton
 
 from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
-from krok_helper.subtitle_render.engine.timeline_projection import (
+from krok_helper.subtitle_render.engine.layout.timeline_projection import (
     resolve_utopia_visual_intervals,
     source_char_intervals,
 )

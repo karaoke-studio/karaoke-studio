@@ -6,7 +6,7 @@ from collections import OrderedDict
 import os
 from typing import Hashable
 
-from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.timing import TimingTrack
 from krok_helper.subtitle_render.models import Style
 
