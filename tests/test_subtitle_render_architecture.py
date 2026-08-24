@@ -490,7 +490,7 @@ def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
 
 
 def test_text_metrics_have_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.text_metrics"
+    owner = f"{PACKAGE}.engine.text"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -516,7 +516,10 @@ def test_text_metrics_have_one_engine_owner() -> None:
 
     assert inline == set()
     assert delegated_names <= imported
-    targets = _import_targets(owner, ROOT / "engine/text_metrics.py")
+    targets = _import_targets(
+        f"{owner}.metrics",
+        ROOT / "engine/text/metrics.py",
+    )
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
@@ -576,7 +579,7 @@ def test_guide_engine_modules_are_grouped_in_one_domain_package() -> None:
 
 
 def test_text_layout_has_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.text_layout"
+    owner = f"{PACKAGE}.engine.text"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -601,8 +604,22 @@ def test_text_layout_has_one_engine_owner() -> None:
 
     assert inline == set()
     assert delegated_names <= imported
-    targets = _import_targets(owner, ROOT / "engine/text_layout.py")
+    targets = _import_targets(
+        f"{owner}.layout",
+        ROOT / "engine/text/layout.py",
+    )
     assert f"{PACKAGE}.engine.painter" not in targets
+
+
+def test_text_engine_modules_are_grouped_in_one_domain_package() -> None:
+    text_root = ROOT / "engine" / "text"
+    assert {"__init__.py", "layout.py", "metrics.py"} <= {
+        path.name for path in text_root.glob("*.py")
+    }
+    assert not any(
+        (ROOT / "engine" / name).exists()
+        for name in ("text_layout.py", "text_metrics.py")
+    )
 
 
 def test_ruby_selection_has_one_engine_owner() -> None:

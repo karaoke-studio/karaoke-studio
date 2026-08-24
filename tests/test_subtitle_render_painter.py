@@ -35,7 +35,7 @@ import krok_helper.subtitle_render.engine.raster_blur as raster_blur  # noqa: E4
 import krok_helper.subtitle_render.engine.ruby.layout as ruby_layout  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
-import krok_helper.subtitle_render.engine.text_metrics as text_metrics  # noqa: E402
+import krok_helper.subtitle_render.engine.text.metrics as text_metrics  # noqa: E402
 from krok_helper.subtitle_render.engine.page_placement import (  # noqa: E402
     LineVisualBand,
 )
@@ -2488,7 +2488,7 @@ def test_glyph_path_offset_drives_render_path_and_ink_ranges(qapp, monkeypatch):
 
     from PyQt6.QtGui import QPainterPath  # noqa: E402,PLC0415
     from krok_helper.subtitle_render.engine import painter as painter_module  # noqa: PLC0415
-    from krok_helper.subtitle_render.engine import text_layout  # noqa: PLC0415
+    from krok_helper.subtitle_render.engine.text import layout as text_layout  # noqa: PLC0415
 
     def controlled_path_offset(*args, **kwargs):
         return 12.25

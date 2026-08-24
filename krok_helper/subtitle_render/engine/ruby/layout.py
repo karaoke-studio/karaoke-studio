@@ -22,13 +22,13 @@ from krok_helper.subtitle_render.engine.ruby.style import (
     ruby_style_for_target_indices,
 )
 from krok_helper.subtitle_render.engine.ruby.timing import _ruby_utopia_visual_units
-from krok_helper.subtitle_render.engine.text_metrics import (
+from krok_helper.subtitle_render.engine.text import (
     char_layout_width,
     char_path_left_offset,
     letter_spacing,
     truncate_div,
 )
-from krok_helper.subtitle_render.engine.text_layout import char_left_positions
+from krok_helper.subtitle_render.engine.text import char_left_positions
 from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import RubyAnnotation, TimingLine

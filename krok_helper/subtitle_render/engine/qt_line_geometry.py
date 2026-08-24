@@ -14,11 +14,11 @@ from krok_helper.subtitle_render.engine.ruby import (
     active_rubies_for_line,
     ruby_char_gaps,
 )
-from krok_helper.subtitle_render.engine.text_layout import (
+from krok_helper.subtitle_render.engine.text import (
     build_role_text_layout,
     role_char_geometry_by_index,
 )
-from krok_helper.subtitle_render.engine.text_metrics import (
+from krok_helper.subtitle_render.engine.text import (
     build_font,
     build_latin_font,
     char_layout_width,

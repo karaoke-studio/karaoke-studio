@@ -155,7 +155,7 @@ from krok_helper.subtitle_render.engine.ruby import (
     scaled_px as _scaled_px,
     scaled_signed_px as _scaled_signed_px,
 )
-from krok_helper.subtitle_render.engine.text_metrics import (
+from krok_helper.subtitle_render.engine.text import (
     build_font as _build_font,
     build_latin_font as _build_latin_font,
     char_advance as _char_advance,
@@ -174,7 +174,7 @@ from krok_helper.subtitle_render.engine.text_metrics import (
     nicokara_layout_width as _nicokara_layout_width,
     truncate_div as _truncate_div,
 )
-from krok_helper.subtitle_render.engine.text_layout import (
+from krok_helper.subtitle_render.engine.text import (
     GlyphLayout as _GlyphLayout,
     TextLayout as _TextLayout,
     build_role_text_layout as _build_role_text_layout,

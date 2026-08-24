@@ -6,12 +6,12 @@ from dataclasses import replace
 
 from PyQt6.QtGui import QFont
 
-from krok_helper.subtitle_render.engine.text_metrics import (
+from krok_helper.subtitle_render.engine.text import (
     clamp_weight,
     is_n3_latin_text,
     latin_font_weight,
 )
-from krok_helper.subtitle_render.engine.text_layout import style_for_role_in_layout
+from krok_helper.subtitle_render.engine.text import style_for_role_in_layout
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 from krok_helper.subtitle_render.timing import TimingLine
