@@ -23,6 +23,9 @@ import numpy as np  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
+from krok_helper.subtitle_render.engine.render_job import (  # noqa: E402
+    RenderJob as RenderJobContract,
+)
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
     _compute_content_bands,
@@ -97,6 +100,10 @@ def _job(tmp_path: Path, *, include_audio: bool = True) -> RenderJob:
         include_audio=include_audio,
         gpu_export_enabled=False,
     )
+
+
+def test_renderer_keeps_render_job_compatibility_export() -> None:
+    assert RenderJob is RenderJobContract
 
 
 def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):

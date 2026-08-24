@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -40,6 +40,7 @@ from krok_helper.subtitle_render.engine.native_export import (
     iter_gpu_rgba_frames,
     iter_native_rgba_frames,
 )
+from krok_helper.subtitle_render.engine.render_job import RenderJob
 from krok_helper.subtitle_render.engine.animator import max_line_animation_excursion
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
@@ -222,31 +223,6 @@ _PREVIEW_FPS = 2
 _PREVIEW_WIDTH = 640
 _PREVIEW_MIN_WIDTH = 320
 from krok_helper.types import Logger
-
-
-@dataclass(frozen=True)
-class RenderJob:
-    track: TimingTrack
-    style: Style
-    background_video_path: Path | None
-    output_path: Path
-    background_source: BackgroundSource | None = None
-    audio_path: Path | None = None
-    width: int = 1920
-    height: int = 1080
-    fps: int = 60
-    duration_ms: int | None = None
-    include_audio: bool = True
-    encoder_mode: str = "cpu"
-    crf: int = 18
-    preset: str = "medium"
-    codec: str = "h264"
-    native_export_enabled: bool | None = None
-    gpu_export_enabled: bool | None = None
-    render_workers: int | None = None
-    """帧渲染进程数；None 为自动（最多 8），手动最多 16。"""
-    extra_tracks: tuple[TimingTrack, ...] = ()
-    """副字幕源（N3 多歌词文件，如コーラス轨），与主轨同帧叠绘。"""
 
 
 def _job_tracks(job: "RenderJob") -> list[TimingTrack]:
