@@ -24,9 +24,6 @@ from krok_helper.subtitle_render.engine.layout.line_style import (
     entry_animation_ms,
     style_for_line,
 )
-from krok_helper.subtitle_render.engine.layout.line_pagination import (
-    line_center_override,
-)
 from krok_helper.subtitle_render.engine.layout.signal_semantics import (
     display_style_for_signal_window,
     signal_head_context,
@@ -53,30 +50,16 @@ def check_layout_margins(
         display_line: DisplayLine,
         width: int,
     ) -> LayoutMarginBox:
-        line = display_line.line
-        line_style = style_for_line(source_style, line)
-        total_w = painter_impl._line_total_width(
-            line,
-            line_style,
-            source_track.rubies,
-        )
-        lane = display_line.lane if line_style.dual_line_layout else None
-        x0 = painter_impl._resolve_line_x_smart(
-            width,
-            total_w,
+        line_style = style_for_line(source_style, display_line.line)
+        left, right = painter_impl.measure_display_line_horizontal_bounds(
             source_track,
-            line,
-            line_style,
-            lane,
-            center_override=line_center_override(
-                source_track,
-                line,
-                line_style,
-            ),
+            source_style,
+            display_line,
+            width,
         )
         return LayoutMarginBox(
-            left=x0,
-            right=x0 + total_w,
+            left=left,
+            right=right,
             margin_left=line_style.horizontal_margin_px,
             margin_right=line_style.horizontal_margin_px,
         )

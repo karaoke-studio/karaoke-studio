@@ -787,6 +787,18 @@ def test_painter_diagnostics_adapter_binds_layout_margin_policy() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "resolve_layout_margin_warnings" in calls
+    painter_calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "painter_impl"
+    }
+    assert painter_calls == {
+        "display_lines_for_style",
+        "measure_display_line_horizontal_bounds",
+    }
 
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
@@ -830,6 +842,8 @@ def test_painter_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
         "_display_lines_for_style",
         "_display_style_for_signal_window",
         "_line_center_override",
+        "_line_total_width",
+        "_resolve_line_x_smart",
         "_signal_head_context",
         "_signal_lead_in_ms",
         "_style_for_line",

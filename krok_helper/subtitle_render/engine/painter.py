@@ -4070,6 +4070,30 @@ def display_lines_for_style(
     )
 
 
+def measure_display_line_horizontal_bounds(
+    track: TimingTrack,
+    style: Style,
+    display_line: DisplayLine,
+    logical_w: int,
+) -> tuple[float, float]:
+    """Measure one display line's authored horizontal text bounds."""
+
+    line = display_line.line
+    line_style = _style_for_line(style, line)
+    total_w = _line_total_width(line, line_style, track.rubies)
+    lane = display_line.lane if line_style.dual_line_layout else None
+    x0 = _resolve_line_x_smart(
+        logical_w,
+        total_w,
+        track,
+        line,
+        line_style,
+        lane,
+        center_override=_line_center_override(track, line, line_style),
+    )
+    return float(x0), float(x0 + total_w)
+
+
 def _visible_lines_for_style(
     track: TimingTrack,
     t_ms: int,
