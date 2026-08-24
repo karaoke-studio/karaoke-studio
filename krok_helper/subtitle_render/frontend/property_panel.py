@@ -143,6 +143,9 @@ from krok_helper.subtitle_render.frontend.property_widgets import (
     ToggleSwitch,
     subgroup_label as _subgroup_label,
 )
+from krok_helper.subtitle_render.frontend.property_title_page import (
+    TitlePropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.engine.style_semantics import (
     effective_karaoke_colors,
@@ -3568,6 +3571,10 @@ class PropertyPanel(QWidget):
         self._role_controller = RoleSchemeController()
         self._layout_controller = LayoutCatalogController()
         self._title_controller = TitleOverlayController()
+        self._title_page_builder = TitlePropertyPageBuilder(
+            self,
+            timecode_factory=_TimecodeEdit,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -5491,45 +5498,10 @@ class PropertyPanel(QWidget):
             audio_edit.setText(text)
 
     def _make_title_text_section(self) -> QFrame:
-        section, layout = _section("标题", switch=True)
-        self._title_enabled_switch = section.header_switch
-        self._title_enabled_switch.toggled.connect(self._on_title_enabled_toggled)
-
-        # 多行文本框：回车换行后自动增高（背景卡片随之变高）。
-        self._title_text_edit = _GrowingPlainTextEdit(section)
-        self._title_text_edit.setPlaceholderText("{title} / {artist}")
-        self._title_text_edit.setToolTip(
-            "支持换行；{title} / {artist} 会从字幕元数据中读取。"
-        )
-        self._title_text_edit.textChanged.connect(self._on_title_text_changed)
-        self._title_text_edit.editingFinished.connect(self._commit_title_text_edit)
-        layout.addWidget(_field("标题文字", self._title_text_edit))
-        return section
+        return self._title_page_builder.make_text_section()
 
     def _make_title_style_section(self) -> QFrame:
-        section, layout = _section("外观")
-        self._title_appearance_grid = _ResponsiveFieldGrid(
-            section, min_column_width=260, max_columns=2
-        )
-
-        self._title_layout_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._title_layout_combo)
-        self._title_layout_combo.setToolTip(
-            "标题引用的布局方案（与布局页管理的是同一份列表）："
-            "决定标题的锚点、余白与行间距。"
-        )
-        self._title_layout_combo.currentIndexChanged.connect(self._on_title_layout_changed)
-        self._title_appearance_grid.add_field("布局方案", self._title_layout_combo)
-
-        self._title_scheme_edit_btn = FluentPushButton("编辑标题配色", section)
-        self._title_scheme_edit_btn.setMinimumHeight(30)
-        self._title_scheme_edit_btn.setToolTip(
-            "字体与颜色由字体页的「标题」配色方案决定，点击前往编辑。"
-        )
-        self._title_scheme_edit_btn.clicked.connect(self._open_title_scheme)
-        self._title_appearance_grid.add_field("字体与颜色", self._title_scheme_edit_btn)
-        layout.addWidget(self._title_appearance_grid)
-        return section
+        return self._title_page_builder.make_style_section()
 
     def _on_title_layout_changed(self, _index: int) -> None:
         if self._syncing:
@@ -5559,101 +5531,7 @@ class PropertyPanel(QWidget):
             combo.blockSignals(blocked)
 
     def _make_title_time_section(self) -> QFrame:
-        section, layout = _section("显示时段")
-        self._title_time_grid = _ResponsiveFieldGrid(
-            section, min_column_width=150, max_columns=1
-        )
-
-        self._title_mode_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._title_mode_combo)
-        for label, value in [
-            ("全程显示", "whole"),
-            ("仅开头", "head"),
-            ("仅片尾", "tail"),
-            ("开始和片尾", "head_tail"),
-        ]:
-            self._title_mode_combo.addItem(label, value)
-        self._title_mode_combo.currentIndexChanged.connect(
-            lambda _i: self._update_title(show_mode=self._title_mode_combo.currentData())
-        )
-        self._title_time_grid.add_field("显示模式", self._title_mode_combo)
-        layout.addWidget(self._title_time_grid)
-
-        self._title_head_row = QWidget(section)
-        head_row_layout = QHBoxLayout(self._title_head_row)
-        head_row_layout.setContentsMargins(0, 0, 0, 0)
-        head_row_layout.setSpacing(8)
-        self._title_head_row_label = _subgroup_label("开头")
-        self._title_head_row_label.setFixedWidth(42)
-        head_row_layout.addWidget(
-            self._title_head_row_label, 0, Qt.AlignmentFlag.AlignTop
-        )
-        # 单个 timecode 输入框比原来的秒/毫秒两框窄，列宽下限可以收紧，
-        # 让四个字段更容易在宽面板下并成一排。
-        self._title_head_grid = _ResponsiveFieldGrid(
-            self._title_head_row, min_column_width=140, max_columns=4
-        )
-        head_row_layout.addWidget(self._title_head_grid, 1)
-
-        self._title_fade_in_edit = _TimecodeEdit(0, 10_000)
-        self._title_fade_in_edit.valueChanged.connect(
-            lambda value: self._update_title(fade_in_ms=value)
-        )
-        self._title_head_grid.add_field("淡入", self._title_fade_in_edit)
-        self._title_head_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
-        self._title_head_edit.valueChanged.connect(
-            lambda value: self._update_title(head_offset_ms=value)
-        )
-        self._title_head_grid.add_field("偏移", self._title_head_edit)
-        self._title_duration_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
-        self._title_duration_edit.valueChanged.connect(
-            lambda value: self._update_title(duration_ms=value)
-        )
-        self._title_head_grid.add_field("显示时长", self._title_duration_edit)
-        self._title_fade_out_edit = _TimecodeEdit(0, 10_000)
-        self._title_fade_out_edit.valueChanged.connect(
-            lambda value: self._update_title(fade_out_ms=value)
-        )
-        self._title_head_grid.add_field("淡出", self._title_fade_out_edit)
-
-        self._title_tail_row = QWidget(section)
-        tail_row_layout = QHBoxLayout(self._title_tail_row)
-        tail_row_layout.setContentsMargins(0, 0, 0, 0)
-        tail_row_layout.setSpacing(8)
-        self._title_tail_row_label = _subgroup_label("片尾")
-        self._title_tail_row_label.setFixedWidth(42)
-        tail_row_layout.addWidget(
-            self._title_tail_row_label, 0, Qt.AlignmentFlag.AlignTop
-        )
-        self._title_tail_grid = _ResponsiveFieldGrid(
-            self._title_tail_row, min_column_width=140, max_columns=4
-        )
-        tail_row_layout.addWidget(self._title_tail_grid, 1)
-
-        self._title_tail_fade_in_edit = _TimecodeEdit(0, 10_000)
-        self._title_tail_fade_in_edit.valueChanged.connect(
-            lambda value: self._update_title(tail_fade_in_ms=value)
-        )
-        self._title_tail_grid.add_field("淡入", self._title_tail_fade_in_edit)
-        self._title_tail_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
-        self._title_tail_edit.valueChanged.connect(
-            lambda value: self._update_title(tail_offset_ms=value)
-        )
-        self._title_tail_grid.add_field("偏移", self._title_tail_edit)
-        self._title_tail_duration_edit = _TimecodeEdit(0, TITLE_TIME_MAX_MS)
-        self._title_tail_duration_edit.valueChanged.connect(
-            lambda value: self._update_title(tail_duration_ms=value)
-        )
-        self._title_tail_grid.add_field("显示时长", self._title_tail_duration_edit)
-        self._title_tail_fade_out_edit = _TimecodeEdit(0, 10_000)
-        self._title_tail_fade_out_edit.valueChanged.connect(
-            lambda value: self._update_title(tail_fade_out_ms=value)
-        )
-        self._title_tail_grid.add_field("淡出", self._title_tail_fade_out_edit)
-
-        layout.addWidget(self._title_head_row)
-        layout.addWidget(self._title_tail_row)
-        return section
+        return self._title_page_builder.make_time_section()
 
     def _current_title(self) -> TitleOverlay:
         return self._title_controller.current(self._style)
