@@ -131,6 +131,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "engine" / "ruby_timing.py",
         ROOT / "paint.py",
         ROOT / "paint_codec.py",
+        ROOT / "project_controller.py",
         ROOT / "project_recovery.py",
         ROOT / "project_resources.py",
         ROOT / "recent_projects.py",
