@@ -12,7 +12,8 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal
 from krok_helper.errors import ExportCancelled
 from krok_helper.ffmpeg import probe_media, terminate_process
 from krok_helper.models import MediaInfo
-from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
+from krok_helper.subtitle_render.engine.render_job import RenderJob
+from krok_helper.subtitle_render.engine.renderer import render_subtitle_video
 from krok_helper.subtitle_render.project_store import save_recovery_project
 
 

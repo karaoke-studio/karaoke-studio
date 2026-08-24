@@ -163,7 +163,7 @@ from krok_helper.subtitle_render.engine.page_plan import (
     reflow_pages_for_layout_capacity,
     resolve_page_plan,
 )
-from krok_helper.subtitle_render.engine.renderer import RenderJob
+from krok_helper.subtitle_render.engine.render_job import RenderJob
 from krok_helper.subtitle_render.engine.timeline import (
     apply_n3_seq_line_breaks,
     track_duration_ms,

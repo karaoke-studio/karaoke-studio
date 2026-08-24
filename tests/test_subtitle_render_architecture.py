@@ -261,6 +261,24 @@ def test_timing_codec_consumers_use_the_focused_persistence_contract() -> None:
     assert not violations
 
 
+def test_render_job_consumers_use_the_export_contract() -> None:
+    violations: dict[str, list[str]] = defaultdict(list)
+    for path in ROOT.rglob("*.py"):
+        if path.name == "renderer.py":
+            continue
+        module = _module_name(path)
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != f"{PACKAGE}.engine.renderer":
+                continue
+            if any(alias.name == "RenderJob" for alias in node.names):
+                violations[module].append("RenderJob")
+
+    assert not violations
+
+
 def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> None:
     path = ROOT / "contracts.py"
     targets = _import_targets(f"{PACKAGE}.contracts", path)
