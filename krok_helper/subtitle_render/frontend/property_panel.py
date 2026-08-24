@@ -176,6 +176,7 @@ from krok_helper.subtitle_render.screen_settings import (
     screen_settings_from_dict,
     screen_settings_to_dict,
 )
+from krok_helper.subtitle_render.timecode import format_timecode_ms, parse_timecode_ms
 from krok_helper.subtitle_render.n3_template_import import (
     N3_TEMPLATE_FILTER,
     default_n3_template_directories,
@@ -2279,45 +2280,6 @@ TITLE_TIME_MAX_MS = 5_999_990
 #: 只约束结构、不约束数值——中间态（``1:``、``1.``、空串）必须放行，
 #: 数值越界在提交时钳制。
 _TIMECODE_PATTERN = QRegularExpression(r"\d{0,4}(:\d{1,2}){0,2}([.,]\d{0,3})?")
-
-
-def parse_timecode_ms(text: str) -> Optional[int]:
-    """把用户敲的时间文本解析成整数毫秒；无法解析时返回 ``None``。
-
-    接受三种写法，后台自动换算，不强迫用户记单位：
-
-    - 纯数字按秒：``90`` → 90000，``0.3`` → 300（逗号视同小数点）；
-    - ``分:秒.毫秒``：``1:30.5`` → 90500，毫秒可省略；
-    - ``时:分:秒``：``1:02:03`` → 3723000。
-
-    空串按 0 处理；出现空段（``1:``、``:30``、``1::30``）视为半成品，
-    返回 ``None`` 交给调用方恢复原值。
-    """
-    normalized = text.strip().replace(",", ".")
-    if not normalized:
-        return 0
-    parts = normalized.split(":")
-    if not all(parts):
-        return None
-    seconds_text, _, fraction = parts[-1].partition(".")
-    if not seconds_text.isdigit():
-        return None
-    if fraction and not fraction.isdigit():
-        return None
-    millis = int((fraction + "000")[:3])
-    total_seconds = int(seconds_text)
-    scale = 60
-    for part in reversed(parts[:-1]):
-        total_seconds += int(part) * scale
-        scale *= 60
-    return total_seconds * 1000 + millis
-
-
-def format_timecode_ms(value: int) -> str:
-    """整数毫秒格式化为 ``M:SS.mmm``（分钟不补零，如 ``1:23.450``）。"""
-    minutes, remainder = divmod(int(value), 60_000)
-    seconds, millis = divmod(remainder, 1000)
-    return f"{minutes}:{seconds:02d}.{millis:03d}"
 
 
 class _TimecodeEdit(FluentLineEdit):

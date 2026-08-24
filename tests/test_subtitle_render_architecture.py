@@ -125,6 +125,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "screen_settings.py",
         ROOT / "session.py",
         ROOT / "settings_store.py",
+        ROOT / "timecode.py",
     )
     violations: dict[str, list[str]] = defaultdict(list)
     for path in paths:
