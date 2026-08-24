@@ -15,8 +15,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
-from krok_helper.subtitle_render.frontend.lyrics_list import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.editor import lyrics_list  # noqa: E402
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import (  # noqa: E402
     COL_CONTENT,
     COL_LAYOUT,
     COL_ROLE,

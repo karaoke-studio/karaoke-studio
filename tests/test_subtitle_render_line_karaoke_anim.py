@@ -122,7 +122,7 @@ class TestRenderCacheKey:
 class TestDialog:
     @staticmethod
     def _dialog(override):
-        from krok_helper.subtitle_render.frontend.lyrics_list import _LineAnimationDialog
+        from krok_helper.subtitle_render.frontend.editor.lyrics_list import _LineAnimationDialog
 
         style = Style()
         style.karaoke_anim = "utopia"
@@ -148,7 +148,7 @@ class TestDialog:
         assert dialog.animation_override() is None
 
     def test_the_summary_only_mentions_a_changed_sung_effect(self) -> None:
-        from krok_helper.subtitle_render.frontend.lyrics_list import _animation_summary
+        from krok_helper.subtitle_render.frontend.editor.lyrics_list import _animation_summary
 
         style = Style()
         plain = LineAnimationOverride(entry_anim="fade", exit_anim="fade")

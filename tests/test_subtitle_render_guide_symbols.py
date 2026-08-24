@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QAbstractItemView, QApplication, QDialog
 
 from krok_helper.subtitle_render.engine import painter as subtitle_painter
 from krok_helper.subtitle_render.frontend.dialogs import guide_replacement as guide_replacement_module
-from krok_helper.subtitle_render.frontend import lyrics_list as lyrics_list_module
+from krok_helper.subtitle_render.frontend.editor import lyrics_list as lyrics_list_module
 from krok_helper.subtitle_render.frontend import main_window as main_window_module
 from krok_helper.subtitle_render.engine.painter import (
     _layout_line_uncached,
@@ -24,8 +24,8 @@ from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     guide_marker_options,
     replacement_symbol_for_match,
 )
-from krok_helper.subtitle_render.frontend.lyrics_list import _CharRoleDialog
-from krok_helper.subtitle_render.frontend.lyrics_list import COL_CONTENT, LyricsPanel
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import _CharRoleDialog
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT, LyricsPanel
 from krok_helper.subtitle_render.frontend.main_window import (
     SubtitleRenderWindow,
     _GuideSymbolSettingsDialog,

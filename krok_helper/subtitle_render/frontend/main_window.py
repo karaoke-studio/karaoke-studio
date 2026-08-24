@@ -199,7 +199,7 @@ from krok_helper.subtitle_render.frontend.workflow.export_controller import (
     ExportJobController,
     ExportJobInputs,
 )
-from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.preview.playback import (
     PlaybackController,
     unified_player_enabled,
@@ -241,7 +241,7 @@ from krok_helper.subtitle_render.screen_settings import (
     screen_settings_from_dict,
     screen_settings_to_dict,
 )
-from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
+from krok_helper.subtitle_render.frontend.editor.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.timing import (
     GuideSymbol,

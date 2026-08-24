@@ -12,7 +12,7 @@ from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.frontend.timeline_view import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.editor.timeline_view import (  # noqa: E402
     TrackTimelineView,
     _format_precise_ms,
     build_lanes,
@@ -82,7 +82,9 @@ def test_build_lanes_char_cells_and_blanks() -> None:
 
 
 def test_timeline_uses_visual_interval_projection_boundary() -> None:
-    source_path = Path("krok_helper/subtitle_render/frontend/timeline_view.py")
+    source_path = Path(
+        "krok_helper/subtitle_render/frontend/editor/timeline_view.py"
+    )
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     imported_modules = {
         node.module
@@ -420,7 +422,7 @@ def test_handle_hover_shows_effective_animation_name_and_duration(
     widget.set_display_windows([{0: (500, 3200)}])
     shown: list[str] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.timeline_view.show_fluent_tooltip",
+        "krok_helper.subtitle_render.frontend.editor.timeline_view.show_fluent_tooltip",
         lambda text, **_kwargs: shown.append(text),
     )
 
@@ -446,7 +448,7 @@ def test_block_hover_shows_start_and_end_with_milliseconds(qapp, monkeypatch) ->
     widget.set_duration(10_000)
     shown: list[str] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.timeline_view.show_fluent_tooltip",
+        "krok_helper.subtitle_render.frontend.editor.timeline_view.show_fluent_tooltip",
         lambda text, **_kwargs: shown.append(text),
     )
 
@@ -474,7 +476,7 @@ def test_handle_hover_uses_global_animation_when_line_has_no_override(
     widget.set_display_windows([{0: (500, 3200)}])
     shown: list[str] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.timeline_view.show_fluent_tooltip",
+        "krok_helper.subtitle_render.frontend.editor.timeline_view.show_fluent_tooltip",
         lambda text, **_kwargs: shown.append(text),
     )
 

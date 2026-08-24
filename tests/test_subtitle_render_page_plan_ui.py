@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QApplication, QWidget
 from krok_helper.subtitle_render.engine.layout.page_plan import (
     project_page_plan_to_legacy_fields,
 )
-from krok_helper.subtitle_render.frontend.lyrics_list import (
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import (
     COL_LANE,
     COL_LAYOUT,
     LyricsPanel,

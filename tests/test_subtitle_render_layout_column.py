@@ -18,7 +18,7 @@ from PyQt6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.frontend.lyrics_list import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import (  # noqa: E402
     COL_CONTENT,
     COL_LAYOUT,
 )
