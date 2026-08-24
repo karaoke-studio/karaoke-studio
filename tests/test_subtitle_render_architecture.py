@@ -814,6 +814,16 @@ def test_page_offset_plan_has_no_painter_dependency() -> None:
         "store_page_offset_windows",
     } <= calls
 
+    selector = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "page_offsets_at_time"
+    )
+    assert any(
+        isinstance(node, ast.Compare)
+        for node in ast.walk(selector)
+    )
+
 
 def test_painter_delegates_page_offset_policy() -> None:
     painter_path = ROOT / "engine/painter.py"
@@ -835,6 +845,19 @@ def test_painter_delegates_page_offset_policy() -> None:
         "cached_page_offset_windows",
         "store_page_offset_windows",
     }.isdisjoint(calls)
+
+    selector = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "resolved_page_offsets_for_style"
+    )
+    selector_calls = {
+        node.func.id
+        for node in ast.walk(selector)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "page_offsets_at_time" in selector_calls
 
 
 def test_layout_plan_projection_has_no_painter_dependency() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -160,6 +161,32 @@ def resolve_page_offset_windows(
     return {key: tuple(value) for key, value in resolved.items()}
 
 
+def page_offsets_at_time(
+    windows: Mapping[int, Sequence[LayoutOffsetWindow]],
+    *,
+    t_ms: int | None = None,
+) -> dict[int, tuple[float, float]]:
+    """Select the active translation from each line's offset windows."""
+
+    resolved: dict[int, tuple[float, float]] = {}
+    for track_index, items in windows.items():
+        selected: LayoutOffsetWindow | None = None
+        if t_ms is None:
+            selected = items[0] if items else None
+        else:
+            selected = next(
+                (
+                    item
+                    for item in items
+                    if item[0] <= int(t_ms) < item[1]
+                ),
+                None,
+            )
+        if selected is not None:
+            resolved[track_index] = (selected[2], selected[3])
+    return resolved
+
+
 def _page_collision_layout_key(
     page_style: Style,
     *,
@@ -291,6 +318,7 @@ __all__ = [
     "build_page_offset_windows",
     "cached_page_offset_windows",
     "clear_page_offset_cache",
+    "page_offsets_at_time",
     "resolve_page_offset_windows",
     "store_page_offset_windows",
 ]

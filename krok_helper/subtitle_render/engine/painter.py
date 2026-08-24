@@ -195,6 +195,7 @@ from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
     MeasuredPageLine,
     PageOffsetResolvers,
     clear_page_offset_cache,
+    page_offsets_at_time,
     resolve_page_offset_windows,
 )
 from krok_helper.subtitle_render.engine.layout.display_schedule import (
@@ -2052,26 +2053,15 @@ def resolved_page_offsets_for_style(
     current display time.
     """
 
-    windows = resolved_page_offset_windows_for_style(
-        logical_w, logical_h, track, style
+    return page_offsets_at_time(
+        resolved_page_offset_windows_for_style(
+            logical_w,
+            logical_h,
+            track,
+            style,
+        ),
+        t_ms=t_ms,
     )
-    resolved: dict[int, tuple[float, float]] = {}
-    for track_index, items in windows.items():
-        selected: tuple[int, int, float, float] | None = None
-        if t_ms is None:
-            selected = items[0] if items else None
-        else:
-            selected = next(
-                (
-                    item
-                    for item in items
-                    if item[0] <= int(t_ms) < item[1]
-                ),
-                None,
-            )
-        if selected is not None:
-            resolved[track_index] = (selected[2], selected[3])
-    return resolved
 
 
 def _display_line_vertical_envelope(

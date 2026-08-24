@@ -1,3 +1,6 @@
+from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
+    page_offsets_at_time,
+)
 from krok_helper.subtitle_render.engine.layout.page_placement import (
     LineVisualBand,
     PageVisualBands,
@@ -5,6 +8,21 @@ from krok_helper.subtitle_render.engine.layout.page_placement import (
     solve_page_axis_offsets,
     time_windows_overlap,
 )
+
+
+def test_page_offset_selector_preserves_half_open_window_semantics():
+    windows = {
+        0: (
+            (0, 100, 1.0, 2.0),
+            (100, 200, 3.0, 4.0),
+        ),
+        1: (),
+    }
+
+    assert page_offsets_at_time(windows) == {0: (1.0, 2.0)}
+    assert page_offsets_at_time(windows, t_ms=99) == {0: (1.0, 2.0)}
+    assert page_offsets_at_time(windows, t_ms=100) == {0: (3.0, 4.0)}
+    assert page_offsets_at_time(windows, t_ms=200) == {}
 
 
 def _band(line, page, start, end, top, bottom):
