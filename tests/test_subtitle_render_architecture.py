@@ -124,6 +124,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "contracts.py",
         ROOT / "engine" / "export_command.py",
         ROOT / "engine" / "parallel_schedule.py",
+        ROOT / "engine" / "raster_blur.py",
         ROOT / "engine" / "render_job.py",
         ROOT / "engine" / "render_job_policy.py",
         ROOT / "engine" / "render_bands.py",
