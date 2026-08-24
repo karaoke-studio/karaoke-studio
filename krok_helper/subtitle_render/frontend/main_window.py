@@ -174,6 +174,7 @@ from krok_helper.subtitle_render.frontend.background_tasks import (
 from krok_helper.subtitle_render.frontend.export_runtime import (
     ExportRuntimeCallbacks,
     ExportRuntimeController,
+    ExportRuntimeHandles,
 )
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_button_row,
@@ -8775,7 +8776,9 @@ class SubtitleRenderWindow(QWidget):
         return self._save_project()
 
     def _start_render_export(self) -> None:
-        if self._render_thread is not None and self._render_thread.isRunning():
+        if self._export_runtime_controller.is_active(
+            self._current_export_runtime()
+        ):
             fluent_info(self, "导出中", "当前导出任务还在处理中，请稍等。")
             return
         try:
@@ -8837,7 +8840,10 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_project_title()
 
     def _stop_render_export(self) -> None:
-        if self._render_worker is None or self._render_thread is None or not self._render_thread.isRunning():
+        runtime = self._current_export_runtime()
+        if runtime is None or not self._export_runtime_controller.is_active(
+            runtime
+        ):
             return
         confirmed = fluent_question(
             self,
@@ -8851,7 +8857,15 @@ class SubtitleRenderWindow(QWidget):
             return
         self._export_stop_button.setEnabled(False)
         self._export_status_label.setText("正在停止导出…")
-        self._render_worker.cancel()
+        self._export_runtime_controller.cancel(runtime)
+
+    def _current_export_runtime(self) -> Optional[ExportRuntimeHandles]:
+        if self._render_thread is None or self._render_worker is None:
+            return None
+        return ExportRuntimeHandles(
+            thread=self._render_thread,
+            worker=self._render_worker,
+        )
 
     def _on_render_progress(self, done: int, total: int) -> None:
         if not ui_active(self):

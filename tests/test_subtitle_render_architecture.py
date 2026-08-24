@@ -354,21 +354,26 @@ def test_subtitle_render_window_delegates_export_thread_wiring() -> None:
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
     )
-    method = next(
-        node
-        for node in window_class.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_start_render_export"
-    )
-    controller_calls = {
-        node.func.attr
-        for node in ast.walk(method)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "_export_runtime_controller"
+    expected_calls = {
+        "_start_render_export": {"is_active", "prepare", "start"},
+        "_stop_render_export": {"cancel", "is_active"},
     }
 
-    assert controller_calls == {"prepare", "start"}
+    for method_name, expected in expected_calls.items():
+        method = next(
+            node
+            for node in window_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        controller_calls = {
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_export_runtime_controller"
+        }
+        assert controller_calls == expected
 
 
 def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:
