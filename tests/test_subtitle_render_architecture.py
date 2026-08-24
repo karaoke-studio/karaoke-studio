@@ -488,3 +488,34 @@ def test_subtitle_render_window_delegates_project_file_transactions() -> None:
         for alias in node.names
     } & forbidden
     assert direct_transaction_imports == set()
+
+
+def test_subtitle_render_window_delegates_missing_resource_state() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    delegated_methods = {
+        "_merge_unresolved_resource_references": (
+            "merge_unresolved_resource_references"
+        ),
+        "_resolve_unresolved_resource_labels": "resolve_missing_resource_labels",
+    }
+    for method_name, expected_call in delegated_methods.items():
+        method = next(
+            node
+            for node in window_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        calls = {
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_project_session"
+        }
+        assert expected_call in calls

@@ -2981,49 +2981,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _merge_unresolved_resource_references(self, payload: dict) -> dict:
         """Keep skipped missing paths in the project without loading or dirtying them."""
-        source = self._missing_resource_source_data
-        labels = self._unresolved_resource_labels
-        if not isinstance(source, dict) or not labels:
-            return payload
-        merged = deepcopy(payload)
-        source_paths = split_project_paths(source)
-        if "主字幕" in labels and not merged.get("subtitle_path"):
-            path = source_paths["subtitle_path"]
-            merged["subtitle_path"] = str(path) if path is not None else None
-        background_labels = {"背景视频", "背景图片", "背景图片序列"}
-        if labels & background_labels and not merged.get("background"):
-            source_background = source.get("background")
-            if isinstance(source_background, dict):
-                merged["background"] = deepcopy(source_background)
-            elif source_paths["video_path"] is not None:
-                merged["video_path"] = str(source_paths["video_path"])
-        if "独立音频" in labels and not merged.get("audio_path"):
-            path = source_paths["audio_path"]
-            merged["audio_path"] = str(path) if path is not None else None
-        source_extras = source.get("extra_subtitle_sources")
-        if isinstance(source_extras, list):
-            current_extras = (
-                list(merged.get("extra_subtitle_sources"))
-                if isinstance(merged.get("extra_subtitle_sources"), list)
-                else []
-            )
-            current_paths = {
-                str(item.get("path") or "")
-                for item in current_extras
-                if isinstance(item, dict)
-            }
-            for index, item in enumerate(source_extras, start=1):
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "").strip() or str(index)
-                label = f"副字幕「{name}」"
-                path_text = str(item.get("path") or "").strip()
-                if label in labels and path_text and path_text not in current_paths:
-                    current_extras.append(deepcopy(item))
-                    current_paths.add(path_text)
-            if current_extras:
-                merged["extra_subtitle_sources"] = current_extras
-        return merged
+        return self._project_session.merge_unresolved_resource_references(payload)
 
     def _apply_project_data(self, data: dict, *, defer_assets: bool = False) -> None:
         self._loading_project = True
@@ -3480,11 +3438,7 @@ class SubtitleRenderWindow(QWidget):
         self._apply_project_data(data, defer_assets=True)
         self._project_path = path
         self._project_disk_revision = loaded.revision
-        self._missing_resources = tuple(missing_resources)
-        self._unresolved_resource_labels = {
-            label for label, _path in missing_resources
-        }
-        self._missing_resource_source_data = deepcopy(data) if missing_resources else None
+        self._project_session.remember_missing_resources(missing_resources, data)
         self._set_project_dirty(False)
         self._record_recent_project(path)
         if missing_resources:
@@ -3506,17 +3460,8 @@ class SubtitleRenderWindow(QWidget):
 
     def _resolve_unresolved_resource_labels(self, labels: set[str]) -> None:
         """Drop unresolved references replaced explicitly by the user."""
-        if not labels:
-            return
-        before = self._unresolved_resource_labels
-        self._unresolved_resource_labels = before - set(labels)
-        if self._missing_resources:
-            self._missing_resources = tuple(
-                item for item in self._missing_resources if item[0] not in labels
-            )
-        if not self._unresolved_resource_labels:
-            self._missing_resource_source_data = None
-        if before != self._unresolved_resource_labels and not self._loading_project:
+        changed = self._project_session.resolve_missing_resource_labels(labels)
+        if changed and not self._loading_project:
             self._refresh_project_title()
 
     def _refresh_missing_resource_status(self, _checked: bool = False) -> None:
@@ -3631,12 +3576,9 @@ class SubtitleRenderWindow(QWidget):
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
         self._project_path = None
         missing_resources = self._missing_project_resources(result.project_data)
-        self._missing_resources = tuple(missing_resources)
-        self._unresolved_resource_labels = {
-            label for label, _path in missing_resources
-        }
-        self._missing_resource_source_data = (
-            deepcopy(result.project_data) if missing_resources else None
+        self._project_session.remember_missing_resources(
+            missing_resources,
+            result.project_data,
         )
         self._set_project_dirty(True)
         if result.warnings:
@@ -9338,11 +9280,7 @@ class SubtitleRenderWindow(QWidget):
                 )
             except OSError:
                 self._project_disk_revision = None
-        self._missing_resources = tuple(missing_resources)
-        self._unresolved_resource_labels = {
-            label for label, _path in missing_resources
-        }
-        self._missing_resource_source_data = deepcopy(data) if missing_resources else None
+        self._project_session.remember_missing_resources(missing_resources, data)
         self._set_project_dirty(True)
         if missing_resources:
             fluent_warning(
