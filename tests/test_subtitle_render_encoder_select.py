@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.engine import encoder_select as enc
+from krok_helper.subtitle_render.engine.export import encoder_select as enc
 
 
 def test_auto_encoder_uses_available_hardware(monkeypatch):

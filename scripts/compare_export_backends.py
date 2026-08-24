@@ -304,7 +304,7 @@ def _raw_overlay_quality_rows(
     sample_count: int,
     native_renderer: Path | None,
 ) -> list[dict[str, str | int | float]]:
-    from krok_helper.subtitle_render.engine.native_export import iter_native_rgba_frames_at_times
+    from krok_helper.subtitle_render.engine.export.native_export import iter_native_rgba_frames_at_times
     from krok_helper.subtitle_render.engine.renderer import _render_overlay_frame
 
     timestamps = _sample_times(duration_ms, sample_count)

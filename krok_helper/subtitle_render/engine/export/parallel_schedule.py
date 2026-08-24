@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from krok_helper.subtitle_render.engine.render_job import RenderJob
+from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 
 
 _MULTIPROC_AUTO_WORKER_CAP = 8

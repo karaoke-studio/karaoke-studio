@@ -122,11 +122,11 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
     paths = (
         ROOT / "background.py",
         ROOT / "contracts.py",
-        ROOT / "engine" / "export_command.py",
-        ROOT / "engine" / "parallel_schedule.py",
+        ROOT / "engine" / "export" / "export_command.py",
+        ROOT / "engine" / "export" / "parallel_schedule.py",
         ROOT / "engine" / "raster_blur.py",
-        ROOT / "engine" / "render_job.py",
-        ROOT / "engine" / "render_job_policy.py",
+        ROOT / "engine" / "export" / "render_job.py",
+        ROOT / "engine" / "export" / "render_job_policy.py",
         ROOT / "engine" / "render_bands.py",
         ROOT / "engine" / "ruby" / "timing.py",
         ROOT / "paint.py",
@@ -659,6 +659,22 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     layout_root = ROOT / "engine" / "layout"
     assert {"__init__.py", *module_names} <= {
         path.name for path in layout_root.glob("*.py")
+    }
+    assert not any((ROOT / "engine" / name).exists() for name in module_names)
+
+
+def test_export_engine_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "encoder_select.py",
+        "export_command.py",
+        "native_export.py",
+        "parallel_schedule.py",
+        "render_job.py",
+        "render_job_policy.py",
+    }
+    export_root = ROOT / "engine" / "export"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in export_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
 

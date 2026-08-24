@@ -9045,7 +9045,7 @@ def test_gpu_export_pipeline_matches_serial_frames(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtGui import QImage
 
-    from krok_helper.subtitle_render.engine.native_export import iter_gpu_rgba_frames
+    from krok_helper.subtitle_render.engine.export.native_export import iter_gpu_rgba_frames
 
     track = _g1_track()
     style = _g1_style(

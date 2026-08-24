@@ -538,7 +538,7 @@ def test_compare_export_raw_overlay_quality_rows_compare_python_and_native(monke
             value = t_ms // 100
             yield t_ms, bytes([value, 0, 0, 255]) * (width * height)
 
-    import krok_helper.subtitle_render.engine.native_export as native_export_module
+    import krok_helper.subtitle_render.engine.export.native_export as native_export_module
     import krok_helper.subtitle_render.engine.renderer as renderer_module
 
     monkeypatch.setattr(renderer_module, "_render_overlay_frame", fake_python_frame)

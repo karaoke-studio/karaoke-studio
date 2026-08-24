@@ -142,7 +142,7 @@ def _run_transport(
     realization_enabled: bool,
     ffmpeg_path: str,
 ) -> tuple[list[dict[str, object]], dict[str, object], float]:
-    from krok_helper.subtitle_render.engine.native_export import iter_gpu_rgba_frames
+    from krok_helper.subtitle_render.engine.export.native_export import iter_gpu_rgba_frames
 
     rows: list[dict[str, object]] = []
     rows_by_index: dict[int, dict[str, object]] = {}
