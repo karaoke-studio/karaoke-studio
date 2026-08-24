@@ -130,7 +130,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "engine" / "render" / "render_bands.py",
         ROOT / "engine" / "ruby" / "timing.py",
         ROOT / "paint.py",
-        ROOT / "paint_codec.py",
+        ROOT / "serialization" / "paint.py",
         ROOT / "project" / "controller.py",
         ROOT / "project" / "load.py",
         ROOT / "project" / "recovery.py",
@@ -142,7 +142,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "source_loader.py",
         ROOT / "timecode.py",
         ROOT / "timing.py",
-        ROOT / "timing_codec.py",
+        ROOT / "serialization" / "timing.py",
     )
     violations: dict[str, list[str]] = defaultdict(list)
     for path in paths:
@@ -258,7 +258,7 @@ def test_timing_codec_consumers_use_the_focused_persistence_contract() -> None:
     }
     violations: dict[str, list[str]] = defaultdict(list)
     for path in ROOT.rglob("*.py"):
-        if path.name in {"models.py", "timing_codec.py"}:
+        if path == ROOT / "models.py" or path == ROOT / "serialization" / "timing.py":
             continue
         module = _module_name(path)
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
@@ -395,6 +395,16 @@ def test_settings_modules_are_grouped_behind_one_package_boundary() -> None:
             "settings_store.py",
         }
     )
+
+
+def test_serialization_modules_are_grouped_behind_one_package_boundary() -> None:
+    serialization_root = ROOT / "serialization"
+    assert {"__init__.py", "compat.py", "paint.py", "timing.py"} <= {
+        path.name for path in serialization_root.glob("*.py")
+    }
+    assert not (ROOT / "forward_compat.py").exists()
+    assert not (ROOT / "paint_codec.py").exists()
+    assert not (ROOT / "timing_codec.py").exists()
 
 
 def test_line_style_semantics_have_one_engine_owner() -> None:

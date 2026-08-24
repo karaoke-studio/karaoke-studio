@@ -60,7 +60,7 @@ from krok_helper.subtitle_render.models import (
     style_to_dict,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
-from krok_helper.subtitle_render.timing_codec import (
+from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_to_dict,
     line_animation_override_to_dict,
 )

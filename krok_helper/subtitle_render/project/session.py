@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 from krok_helper.models import MediaInfo
 from krok_helper.subtitle_render.background import BackgroundSource
 from krok_helper.subtitle_render.contracts import SubtitleProjectState
-from krok_helper.subtitle_render.forward_compat import merge_extensible_value
+from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
 from krok_helper.subtitle_render.timing import (
     TimingTrack,
     guide_symbol_has_visual,
@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.project.store import (
     project_payload,
     split_project_paths,
 )
-from krok_helper.subtitle_render.timing_codec import (
+from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_to_dict,
     line_animation_override_to_dict,
     subtitle_loading_settings_to_dict,

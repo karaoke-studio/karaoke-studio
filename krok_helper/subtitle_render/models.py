@@ -38,7 +38,7 @@ from krok_helper.subtitle_render.paint import (
     PaintFill,
     _paint_fill,
 )
-from krok_helper.subtitle_render.paint_codec import (
+from krok_helper.subtitle_render.serialization.paint import (
     karaoke_colors_from_dict,
     karaoke_colors_to_dict,
     karaoke_color_state_from_dict,
@@ -74,7 +74,7 @@ from krok_helper.subtitle_render.timing import (
 )
 
 
-from krok_helper.subtitle_render.timing_codec import (
+from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_from_dict,
     guide_symbol_to_dict,
     line_animation_override_from_dict,

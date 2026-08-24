@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.timing import (
     line_visible_chars,
     timing_line_start_ms,
 )
-from krok_helper.subtitle_render.timing_codec import (
+from krok_helper.subtitle_render.serialization.timing import (
     guide_symbol_from_dict,
     guide_symbol_to_dict,
     line_animation_override_from_dict,

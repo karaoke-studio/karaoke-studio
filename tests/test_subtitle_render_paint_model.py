@@ -5,7 +5,7 @@ from krok_helper.subtitle_render.paint import (
     KaraokeColorState,
     PaintFill,
 )
-from krok_helper.subtitle_render.paint_codec import (
+from krok_helper.subtitle_render.serialization.paint import (
     paint_fill_from_dict,
     paint_fill_to_dict,
 )
