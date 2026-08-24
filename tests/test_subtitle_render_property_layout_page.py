@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from PyQt6.QtCore import pyqtSignal as Signal
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
+
 from krok_helper.subtitle_render.frontend.property_layout_page import (
     LayoutPropertyPageBuilder,
 )
@@ -17,6 +20,51 @@ class _Host:
 
     def _update_layout_field(self, **changes) -> None:
         self.layout_updates.append(changes)
+
+    def _make_layout_navigation(self, parent):
+        return QWidget(parent)
+
+    def _make_layout_assignment_actions(self, parent):
+        return QWidget(parent)
+
+    def _on_line_position_changed(self, _value="") -> None:
+        pass
+
+    def _on_horizontal_margin_changed(self, value: int) -> None:
+        self.layout_updates.append({"horizontal_margin_px": value})
+
+    def _make_smart_horizontal_field(self, parent):
+        return QWidget(parent)
+
+    def _make_character_layout_group(self, parent):
+        return QWidget(parent)
+
+    def _make_line_alignments_box(self, parent):
+        return QWidget(parent)
+
+
+class _GlyphSegment(QWidget):
+    valueChanged = Signal(str)
+
+    def __init__(self, options, parent=None) -> None:
+        super().__init__(parent)
+        self.options = tuple(options)
+        self.value = ""
+
+    def setValue(self, value: str) -> None:
+        self.value = value
+
+
+class _SchematicBoard(QWidget):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(args[4])
+        self.parts = args
+        self.slots = kwargs
+
+
+def _plain_card():
+    card = QWidget()
+    return card, QVBoxLayout(card)
 
 
 def test_layout_viewport_builder_preserves_options_and_ranges(qapp) -> None:
@@ -111,4 +159,44 @@ def test_layout_ruby_builder_routes_controls_to_layout_fields(qapp) -> None:
         {"ruby_gap_px": 12},
         {"ruby_interval_px": -3},
         {"ruby_alignment": "equal_space"},
+    ]
+
+
+def _row_builder(host: _Host) -> LayoutPropertyPageBuilder:
+    return LayoutPropertyPageBuilder(
+        host,
+        plain_card_factory=_plain_card,
+        glyph_segment_factory=_GlyphSegment,
+        layout_schematic_factory=QWidget,
+        schematic_board_factory=_SchematicBoard,
+    )
+
+
+def test_layout_row_builder_preserves_schematic_slots_and_ranges(qapp) -> None:
+    host = _Host()
+    section = _row_builder(host).make_row_structure_section()
+
+    assert section is host._layout_section
+    assert host._line_position_seg.value == "bottom"
+    assert len(host._line_position_seg.options) == 3
+    assert host._horizontal_margin_spin.minimum() == -16_384
+    assert host._line_margin_spin.maximum() == 16_384
+    assert host._layout_schematic.width() == round(150 * 16 / 9)
+    assert host._vertical_margin_label.text() == "下余白"
+    assert host._vertical_margin_field.sizePolicy().retainSizeWhenHidden()
+    assert host._schematic_board.slots["bottom_right"] is host._allow_biting_check
+
+
+def test_layout_row_builder_routes_margin_and_biting_changes(qapp) -> None:
+    host = _Host()
+    _row_builder(host).make_row_structure_section()
+
+    host._horizontal_margin_spin.setValue(24)
+    host._line_margin_spin.setValue(36)
+    host._allow_biting_check.setChecked(True)
+
+    assert host.layout_updates == [
+        {"horizontal_margin_px": 24},
+        {"line_y_margin_px": 36},
+        {"allow_biting": True},
     ]

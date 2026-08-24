@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QWidget
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import CheckBox
 
 from krok_helper.subtitle_render.frontend.property_inputs import WheelFocusedComboBox
@@ -17,6 +24,7 @@ from krok_helper.subtitle_render.frontend.property_layout import (
     property_section,
 )
 from krok_helper.subtitle_render.frontend.property_timing_page import timing_spin
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 
 VIEWPORT_ALIGNMENT_OPTIONS = (
@@ -32,6 +40,11 @@ VIEWPORT_ALIGNMENT_OPTIONS = (
 )
 
 LAYOUT_SIZE_MAX_PX = 16_384
+POSITION_SEGMENT_OPTIONS = (
+    ("top", "pos_top", "顶部"),
+    ("center", "pos_middle", "居中"),
+    ("bottom", "pos_bottom", "底部"),
+)
 
 
 class LayoutPropertyPageBuilder:
@@ -42,9 +55,17 @@ class LayoutPropertyPageBuilder:
         host: Any,
         *,
         spin_factory: Callable[..., Any] = timing_spin,
+        plain_card_factory: Callable[..., Any] | None = None,
+        glyph_segment_factory: Callable[..., Any] | None = None,
+        layout_schematic_factory: Callable[..., Any] | None = None,
+        schematic_board_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._host = host
         self._spin_factory = spin_factory
+        self._plain_card_factory = plain_card_factory
+        self._glyph_segment_factory = glyph_segment_factory
+        self._layout_schematic_factory = layout_schematic_factory
+        self._schematic_board_factory = schematic_board_factory
 
     def make_viewport_section(self) -> QFrame:
         host = self._host
@@ -207,6 +228,140 @@ class LayoutPropertyPageBuilder:
         )
         grid.add_field("排布", host._ruby_alignment_combo)
         layout.addWidget(grid)
+        return section
+
+    def make_row_structure_section(self) -> QFrame:
+        host = self._host
+        if any(
+            factory is None
+            for factory in (
+                self._plain_card_factory,
+                self._glyph_segment_factory,
+                self._layout_schematic_factory,
+                self._schematic_board_factory,
+            )
+        ):
+            raise RuntimeError("row-structure widget factories are required")
+
+        section, layout = self._plain_card_factory()
+        host._layout_section = section
+        navigation = host._make_layout_navigation(section)
+        assignment_actions = host._make_layout_assignment_actions(section)
+
+        host._line_position_seg = self._glyph_segment_factory(
+            POSITION_SEGMENT_OPTIONS,
+            section,
+        )
+        host._line_position_seg.setValue("bottom")
+        host._line_position_seg.valueChanged.connect(host._on_line_position_changed)
+        host._line_position_field = property_field(
+            "上下配置",
+            host._line_position_seg,
+        )
+
+        host._horizontal_margin_spin = self._spin_factory(
+            -LAYOUT_SIZE_MAX_PX,
+            LAYOUT_SIZE_MAX_PX,
+            suffix=" px",
+        )
+        host._horizontal_margin_spin.setFixedWidth(120)
+        host._horizontal_margin_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        host._horizontal_margin_spin.setToolTip(
+            "左右余白（N3 左右余白）：左对齐行的左缘贴此值，右对齐行的右缘贴"
+            "「画面宽 − 此值」。"
+        )
+        host._horizontal_margin_spin.valueChanged.connect(
+            host._on_horizontal_margin_changed
+        )
+        host._horizontal_margin_field = property_field(
+            "左右余白",
+            host._horizontal_margin_spin,
+        )
+
+        host._smart_horizontal_field = host._make_smart_horizontal_field(section)
+        host._left_layout_controls = QWidget(section)
+        host._left_layout_controls.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        left_controls_layout = QVBoxLayout(host._left_layout_controls)
+        left_controls_layout.setContentsMargins(0, 0, 0, 0)
+        left_controls_layout.setSpacing(8)
+        left_controls_layout.addWidget(
+            host._smart_horizontal_field,
+            0,
+            Qt.AlignmentFlag.AlignLeft,
+        )
+        left_controls_layout.addWidget(
+            host._horizontal_margin_field,
+            0,
+            Qt.AlignmentFlag.AlignRight,
+        )
+        host._character_layout_group = host._make_character_layout_group(section)
+
+        host._allow_biting_check = CheckBox("启用文字咬合", section)
+        host._allow_biting_check.setToolTip(
+            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
+        )
+        host._allow_biting_check.toggled.connect(
+            lambda checked: host._update_layout_field(allow_biting=checked)
+        )
+
+        host._layout_schematic = self._layout_schematic_factory(section)
+        host._layout_schematic.setFixedWidth(round(150 * 16 / 9))
+        host._line_margin_spin = self._spin_factory(
+            -LAYOUT_SIZE_MAX_PX,
+            LAYOUT_SIZE_MAX_PX,
+            suffix=" px",
+        )
+        host._line_margin_spin.setFixedWidth(120)
+        host._line_margin_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        host._line_margin_spin.setToolTip(
+            "顶部锚定 = 画面上端到最上行的余白；底部锚定 = 画面下端到最下行的"
+            "余白；居中时忽略（N3 上/下余白）。"
+        )
+        host._line_margin_spin.valueChanged.connect(
+            lambda value: host._update_layout_field(line_y_margin_px=value)
+        )
+
+        host._vertical_margin_field = QWidget(section)
+        retain_policy = host._vertical_margin_field.sizePolicy()
+        retain_policy.setRetainSizeWhenHidden(True)
+        host._vertical_margin_field.setSizePolicy(retain_policy)
+        vertical_margin_layout = QHBoxLayout(host._vertical_margin_field)
+        vertical_margin_layout.setContentsMargins(0, 0, 0, 0)
+        vertical_margin_layout.setSpacing(8)
+        host._vertical_margin_label = QLabel(
+            "下余白",
+            host._vertical_margin_field,
+        )
+        themed(
+            host._vertical_margin_label,
+            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+        )
+        vertical_margin_layout.addWidget(host._vertical_margin_label)
+        vertical_margin_layout.addWidget(host._line_margin_spin)
+
+        host._schematic_board = self._schematic_board_factory(
+            QWidget(section),
+            host._layout_schematic,
+            host._vertical_margin_field,
+            host._make_line_alignments_box(section),
+            section,
+            header_left=navigation,
+            header_right=assignment_actions,
+            top_left=host._left_layout_controls,
+            top_center=host._line_position_field,
+            bottom_left=host._character_layout_group,
+            bottom_right=host._allow_biting_check,
+        )
+        layout.addWidget(host._schematic_board)
         return section
 
     def _add_spin(
