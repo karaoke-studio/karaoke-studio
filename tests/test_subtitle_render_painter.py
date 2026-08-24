@@ -10190,7 +10190,7 @@ def test_animation_guard_measures_only_stable_text_collisions(qapp, monkeypatch)
         calls.append(kwargs.get("time_window", "stable"))
         return original(*args, **kwargs)
 
-    subtitle_painter._DISPLAY_LINES_CACHE.clear()
+    subtitle_painter.clear_before_layer_cache()
     monkeypatch.setattr(subtitle_painter, "_measure_collision_bands", wrapped_measure)
 
     windows = subtitle_painter.display_windows_for_style(
@@ -11062,7 +11062,7 @@ def test_force_bottom_waits_for_automatic_time_avoidance(qapp, monkeypatch):
         calls.append(kwargs.get("force_bottom_pairs"))
         return original(*args, **kwargs)
 
-    subtitle_painter._DISPLAY_LINES_CACHE.clear()
+    subtitle_painter.clear_before_layer_cache()
     monkeypatch.setattr(subtitle_painter, "compute_display_lines", wrapped_compute)
 
     windows = subtitle_painter.display_windows_for_style(

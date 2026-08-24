@@ -202,6 +202,7 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
     single_line_display_windows,
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
+    DisplayResolutionCache,
     DisplayResolutionPorts,
     resolve_display_lines,
 )
@@ -236,10 +237,7 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 # 一次排版会把每行的布局问上三遍，但三遍是分批扫全轨的：48 项装不下一条曲目，
 # 等第二遍回到第一行时它早被挤掉了，长曲目命中率直接归零。按整轨都能留住来定容量。
 _LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
-_DISPLAY_LINES_CACHE_MAX = 24
-_DISPLAY_LINES_CACHE: (
-    "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
-) = OrderedDict()
+_DISPLAY_LINE_RESOLUTION_CACHE = DisplayResolutionCache(max_items=24)
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
 
@@ -519,7 +517,7 @@ def clear_before_layer_cache() -> None:
     _RUBY_MEASURE_CACHE.clear()
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
-    _DISPLAY_LINES_CACHE.clear()
+    _DISPLAY_LINE_RESOLUTION_CACHE.clear()
     clear_track_layout_plan_cache()
     clear_page_offset_cache()
 
@@ -4431,10 +4429,9 @@ def _display_lines_for_style(
         _value_signature(track),
         _value_signature(style),
     )
-    cached = _DISPLAY_LINES_CACHE.get(cache_key)
+    cached = _DISPLAY_LINE_RESOLUTION_CACHE.get(cache_key)
     if cached is not None:
-        _DISPLAY_LINES_CACHE.move_to_end(cache_key)
-        return list(cached[1])
+        return cached
     ports = DisplayResolutionPorts(
         compute=lambda **overrides: compute_display_lines(
             track,
@@ -4474,14 +4471,7 @@ def _display_lines_for_style(
         auto_fill_section_time=style.auto_fill_section_time,
         ports=ports,
     )
-    # Keep the track object alive with the cached display lines.  The key uses
-    # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable
-    # TimingLine references; retaining the owner also prevents CPython from
-    # recycling that id while the cache entry exists.
-    _DISPLAY_LINES_CACHE[cache_key] = (track, tuple(resolved))
-    _DISPLAY_LINES_CACHE.move_to_end(cache_key)
-    while len(_DISPLAY_LINES_CACHE) > _DISPLAY_LINES_CACHE_MAX:
-        _DISPLAY_LINES_CACHE.popitem(last=False)
+    _DISPLAY_LINE_RESOLUTION_CACHE.put(cache_key, track, resolved)
     return resolved
 
 

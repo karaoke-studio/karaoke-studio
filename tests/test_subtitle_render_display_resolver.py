@@ -1,9 +1,32 @@
 from __future__ import annotations
 
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
+    DisplayResolutionCache,
     DisplayResolutionPorts,
     resolve_display_lines,
 )
+
+
+def test_display_resolution_cache_returns_copies_and_evicts_lru_entry() -> None:
+    cache = DisplayResolutionCache(max_items=2)
+    first_owner = object()
+    second_owner = object()
+    third_owner = object()
+    cache.put("first", first_owner, ["one"])
+    cache.put("second", second_owner, ["two"])
+
+    first = cache.get("first")
+    assert first == ["one"]
+    first.append("changed")
+    assert cache.get("first") == ["one"]
+
+    cache.put("third", third_owner, ["three"])
+    assert cache.get("second") is None
+    assert cache.get("first") == ["one"]
+    assert cache.get("third") == ["three"]
+
+    cache.clear()
+    assert cache.get("first") is None
 
 
 def test_display_resolver_skips_collision_discovery_when_overlap_is_allowed() -> None:

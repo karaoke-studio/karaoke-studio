@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
@@ -10,6 +11,37 @@ from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 
 DisplayLines = list[DisplayLine]
 CollisionPairs = tuple[tuple[int, int], ...]
+
+
+class DisplayResolutionCache:
+    """Bounded LRU cache that retains each display line's track owner."""
+
+    def __init__(self, max_items: int = 24) -> None:
+        self._max_items = max(int(max_items), 1)
+        self._entries: OrderedDict[
+            Hashable, tuple[object, tuple[DisplayLine, ...]]
+        ] = OrderedDict()
+
+    def get(self, key: Hashable) -> DisplayLines | None:
+        cached = self._entries.get(key)
+        if cached is None:
+            return None
+        self._entries.move_to_end(key)
+        return list(cached[1])
+
+    def put(
+        self,
+        key: Hashable,
+        owner: object,
+        display_lines: DisplayLines,
+    ) -> None:
+        self._entries[key] = (owner, tuple(display_lines))
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._max_items:
+            self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        self._entries.clear()
 
 
 @dataclass(frozen=True)
@@ -91,4 +123,8 @@ def resolve_display_lines(
     return resolved
 
 
-__all__ = ["DisplayResolutionPorts", "resolve_display_lines"]
+__all__ = [
+    "DisplayResolutionCache",
+    "DisplayResolutionPorts",
+    "resolve_display_lines",
+]
