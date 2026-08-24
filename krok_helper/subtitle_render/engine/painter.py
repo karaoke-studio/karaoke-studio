@@ -71,12 +71,11 @@ from krok_helper.subtitle_render.engine.guide_semantics import (
     render_line_with_guide_symbols as _line_with_guide_symbol,
 )
 from krok_helper.subtitle_render.engine.layout_plan_cache import (
-    cached_track_layout_plan,
     clear_track_layout_plan_cache,
-    store_track_layout_plan,
 )
-from krok_helper.subtitle_render.engine.layout_plan_builder import (
-    assemble_track_layout_plan,
+from krok_helper.subtitle_render.engine.layout_plan_orchestrator import (
+    LayoutPlanResolvers,
+    resolve_track_layout_plan,
 )
 from krok_helper.subtitle_render.engine.line_style import (
     lane_count as _lane_count,
@@ -5417,84 +5416,20 @@ def build_track_layout_plan(
     logical_w: int | None = None,
     logical_h: int | None = None,
 ) -> TrackLayoutPlan:
-    """Resolve frame-independent line semantics once for CPU/GPU consumers."""
-    cache_key = (
-        logical_w,
-        logical_h,
-        id(track),
-        _value_signature(track),
-        _value_signature(style),
-    )
-    if _layout_cache_enabled():
-        cached = cached_track_layout_plan(cache_key)
-        if cached is not None:
-            return cached
-
-    display_style = _display_style_for_signal_window(style)
-    display_items: list[DisplayLine] = []
-    if display_style.dual_line_layout:
-        display_items = _display_lines_for_style(
-            track,
-            display_style,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-        schedule = display_schedule_from_items(track, display_items)
-    else:
-        schedule = display_schedule_for_style(
-            track,
-            display_style,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-    page_offset_windows = (
-        resolved_page_offset_windows_for_style(
-            max(int(logical_w), 1),
-            max(int(logical_h), 1),
-            track,
-            display_style,
-        )
-        if logical_w is not None and logical_h is not None
-        else {}
-    )
-    render_lines = [_line_with_guide_symbol(line) for line in track.lines]
-    layout_styles = [_style_for_line(style, line) for line in track.lines]
-    resolved_intervals = [
-        resolved_char_intervals_for_line(line, style) for line in render_lines
-    ]
-    guide_anchor_bounds = [
-        resolved_guide_anchor_bounds_for_line(track, line, style)
-        for line in track.lines
-    ]
-    animation_styles = [
-        _style_for_line_display_window(
-            style,
-            line,
-            schedule[index][1] if index in schedule else None,
-            schedule[index][2] if index in schedule else None,
-        )
-        for index, line in enumerate(track.lines)
-    ]
-
-    plan = assemble_track_layout_plan(
+    """Resolve one plan through Painter's remaining geometry adapters."""
+    return resolve_track_layout_plan(
         track,
         style,
+        LayoutPlanResolvers(
+            display_lines=_display_lines_for_style,
+            page_offset_windows=resolved_page_offset_windows_for_style,
+            char_intervals=resolved_char_intervals_for_line,
+            guide_anchor_bounds=resolved_guide_anchor_bounds_for_line,
+            cache_enabled=_layout_cache_enabled,
+        ),
         logical_w=logical_w,
         logical_h=logical_h,
-        display_items=display_items,
-        schedule=schedule,
-        page_offset_windows=page_offset_windows,
-        render_lines=render_lines,
-        layout_styles=layout_styles,
-        animation_styles=animation_styles,
-        resolved_intervals=resolved_intervals,
-        guide_anchor_bounds=guide_anchor_bounds,
     )
-    if _layout_cache_enabled():
-        # Retain the owners alongside the plan: the key intentionally uses the
-        # track identity so equal mutable tracks never share TimingLine objects.
-        store_track_layout_plan(cache_key, track, style, plan)
-    return plan
 
 
 def _single_visible_display_line(
