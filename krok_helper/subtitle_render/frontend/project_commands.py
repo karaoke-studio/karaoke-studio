@@ -71,18 +71,17 @@ class ProjectCommandController:
         current_project_path: Optional[Path],
         subtitle_path: Optional[Path],
         video_path: Optional[Path],
-        current_directory: Path,
+        current_directory: Optional[Path] = None,
         choose_file: FilePicker,
     ) -> Optional[Path]:
         """Return a suffixed path selected by the existing save-file dialog."""
-        start = (
-            str(current_project_path)
-            if current_project_path is not None
-            else str(
-                (subtitle_path or video_path or Path(current_directory)).with_suffix("")
-            )
-            + self.project_suffix
-        )
+        if current_project_path is not None:
+            start = str(current_project_path)
+        else:
+            source = subtitle_path or video_path
+            if source is None:
+                source = Path.cwd() if current_directory is None else current_directory
+            start = str(Path(source).with_suffix("")) + self.project_suffix
         path_text, _selected_filter = choose_file(
             parent,
             "保存字幕渲染项目",

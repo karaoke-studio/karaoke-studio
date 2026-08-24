@@ -206,6 +206,9 @@ from krok_helper.subtitle_render.frontend.preview_async import (
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
 )
+from krok_helper.subtitle_render.frontend.project_commands import (
+    ProjectCommandController,
+)
 from krok_helper.subtitle_render.frontend.project_recovery import (
     ProjectRecoveryController,
 )
@@ -2120,6 +2123,10 @@ class SubtitleRenderWindow(QWidget):
         self._settings_provider = settings_provider
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
         self._project_controller = SubtitleProjectController()
+        self._project_command_controller = ProjectCommandController(
+            PROJECT_FILTER,
+            PROJECT_FILE_SUFFIX,
+        )
         self._recovery_policy = ProjectRecoveryPolicy(self._recovery_root())
         self._project_recovery_controller = ProjectRecoveryController(
             self._recovery_policy
@@ -3360,21 +3367,13 @@ class SubtitleRenderWindow(QWidget):
 
     def _confirm_discard_changes(self) -> bool:
         """有未保存改动时弹确认；返回 True 表示可以继续（已处理）。"""
-        if not self._project_dirty:
-            return True
-        choice = fluent_choice(
+        return self._project_command_controller.confirm_discard(
             self,
-            "未保存的改动",
-            "当前项目有未保存的改动，是否先保存？",
-            ["保存", "放弃", "取消"],
-            default=2,
+            dirty=self._project_dirty,
+            choose=fluent_choice,
+            save=self._save_project,
+            discard=self.discard_unsaved,
         )
-        if choice not in (0, 1):
-            return False
-        if choice == 0:
-            return self._save_project()
-        self.discard_unsaved()
-        return True
 
     def _new_project(self) -> None:
         if not self._confirm_discard_changes():
@@ -3437,13 +3436,14 @@ class SubtitleRenderWindow(QWidget):
     def _open_project(self) -> None:
         if not self._confirm_discard_changes():
             return
-        start_dir = str(self._project_path.parent) if self._project_path else ""
-        path_str, _ = QFileDialog.getOpenFileName(
-            self, "打开字幕渲染项目", start_dir, PROJECT_FILTER
+        path = self._project_command_controller.choose_open_path(
+            self,
+            current_project_path=self._project_path,
+            choose_file=QFileDialog.getOpenFileName,
         )
-        if not path_str:
+        if path is None:
             return
-        self._open_project_path(Path(path_str), confirm_discard=False)
+        self._open_project_path(path, confirm_discard=False)
 
     def _open_project_path(
         self,
@@ -3663,18 +3663,16 @@ class SubtitleRenderWindow(QWidget):
         return self._write_project(self._project_path)
 
     def _save_project_as(self) -> bool:
-        start = str(self._project_path) if self._project_path else (
-            str((self._subtitle_path or self._video_path or Path.cwd()).with_suffix(""))
-            + PROJECT_FILE_SUFFIX
+        path = self._project_command_controller.choose_save_path(
+            self,
+            current_project_path=self._project_path,
+            subtitle_path=self._subtitle_path,
+            video_path=self._video_path,
+            choose_file=QFileDialog.getSaveFileName,
         )
-        path_str, _ = QFileDialog.getSaveFileName(
-            self, "保存字幕渲染项目", start, PROJECT_FILTER
-        )
-        if not path_str:
+        if path is None:
             return False
-        if not path_str.endswith(PROJECT_FILE_SUFFIX):
-            path_str += PROJECT_FILE_SUFFIX
-        return self._write_project(Path(path_str))
+        return self._write_project(path)
 
     def _write_project(self, path: Path) -> bool:
         path = Path(path)
