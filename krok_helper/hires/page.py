@@ -1204,7 +1204,7 @@ class HiResPage(QWidget):
         self._reset_hires_cancel_state()
         lines = "\n".join(str(path) for path in outputs) if isinstance(outputs, list) else str(outputs)
         play_completion_sound()
-        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_info
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import fluent_info
 
         fluent_info(
             self,

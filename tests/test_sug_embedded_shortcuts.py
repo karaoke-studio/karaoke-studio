@@ -345,7 +345,7 @@ def test_unsaved_project_confirmation_saves_both_modules(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         fake_fluent_choice,
     )
     timing_page = _FakeProjectPage()
@@ -387,7 +387,7 @@ def test_unsaved_exit_matrix_lists_only_dirty_modules(
         return 2
 
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         cancel_dialog,
     )
     timing_page = _FakeProjectPage(dirty=timing_dirty)
@@ -406,7 +406,7 @@ def test_unsaved_exit_matrix_lists_only_dirty_modules(
 
 def test_unsaved_project_confirmation_discards_both_modules(monkeypatch) -> None:
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 1,
     )
     timing_page = _FakeProjectPage()
@@ -429,7 +429,7 @@ def test_unsaved_project_confirmation_cancels_without_touching_modules(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 2,
     )
     timing_page = _FakeProjectPage()
@@ -449,7 +449,7 @@ def test_unsaved_project_confirmation_cancels_without_touching_modules(
 
 def test_exit_stays_open_when_save_as_is_cancelled(monkeypatch) -> None:
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 0,
     )
     page = _FakeProjectPage(save_result=False)
@@ -466,7 +466,7 @@ def test_exit_stays_open_when_save_as_is_cancelled(monkeypatch) -> None:
 
 def test_exit_stays_open_when_project_save_raises(monkeypatch) -> None:
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 0,
     )
     errors: list[str] = []
@@ -544,7 +544,7 @@ def test_unsaved_confirmation_uses_explicit_project_state(monkeypatch) -> None:
         return 2
 
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         cancel_dialog,
     )
     page = SimpleNamespace(

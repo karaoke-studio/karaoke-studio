@@ -263,7 +263,7 @@ def test_the_dialog_opens_on_the_remembered_choice() -> None:
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
-    from krok_helper.subtitle_render.frontend.auto_chorus_dialog import AutoChorusDialog
+    from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import AutoChorusDialog
 
     app = QApplication.instance() or QApplication([])
     dialog = AutoChorusDialog(
@@ -290,7 +290,7 @@ def test_an_empty_delimiter_disables_the_apply_button() -> None:
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
-    from krok_helper.subtitle_render.frontend.auto_chorus_dialog import AutoChorusDialog
+    from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import AutoChorusDialog
 
     app = QApplication.instance() or QApplication([])
     dialog = AutoChorusDialog(role_options=["和声"], selected_role="和声")
@@ -311,7 +311,7 @@ def test_a_project_without_a_chorus_role_offers_to_create_one() -> None:
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
-    from krok_helper.subtitle_render.frontend.auto_chorus_dialog import AutoChorusDialog
+    from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import AutoChorusDialog
 
     app = QApplication.instance() or QApplication([])
     dialog = AutoChorusDialog(role_options=["主唱"])

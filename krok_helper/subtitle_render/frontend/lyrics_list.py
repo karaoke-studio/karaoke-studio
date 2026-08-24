@@ -83,7 +83,7 @@ from krok_helper.subtitle_render.guide_symbols import (
     scaled_guide_symbol_path,
 )
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_error,
     fluent_get_text,
     fluent_question,

@@ -49,7 +49,7 @@ from qfluentwidgets import (  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.properties import property_panel as pp  # noqa: E402
-from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (  # noqa: E402
     FluentIntInputDialog,
     FluentMessageDialog,
     FluentTextInputDialog,

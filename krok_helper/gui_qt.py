@@ -1037,7 +1037,7 @@ class KrokHelperQtApp(QMainWindow):
         等 ``project_save_finished`` 后重入本方法），保存期间 UI 不阻塞、
         也不会提前切页；切换后媒体加载由渲染页后台探测完成。
         """
-        from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
             fluent_choice,
             fluent_error,
             fluent_warning,
@@ -1139,7 +1139,7 @@ class KrokHelperQtApp(QMainWindow):
         force_save_as: bool = False,
     ) -> None:
         """等待 SUG 异步保存成功后重新执行下一步导出。"""
-        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_error
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import fluent_error
 
         if getattr(self, "_lyrics_timing_export_waiting_for_save", False):
             return
@@ -1773,7 +1773,7 @@ class KrokHelperQtApp(QMainWindow):
         if dialog.user_choice == "update":
             self._launch_workbench_updater(result)
             return
-        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_choice
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import fluent_choice
 
         source_label = SOURCE_LABELS.get(result.primary_source, result.primary_source)
         body = release.body.strip()
@@ -2053,7 +2053,7 @@ class KrokHelperQtApp(QMainWindow):
         if not dirty_pages:
             return True
 
-        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_choice
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import fluent_choice
 
         choice = fluent_choice(
             self,

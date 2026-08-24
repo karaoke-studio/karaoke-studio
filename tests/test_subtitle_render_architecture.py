@@ -871,6 +871,19 @@ def test_workflow_frontend_modules_are_grouped_in_one_domain_package() -> None:
     assert not any((ROOT / "frontend" / name).exists() for name in module_names)
 
 
+def test_dialog_frontend_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "auto_chorus_dialog.py",
+        "fluent_dialogs.py",
+        "guide_replacement.py",
+    }
+    dialogs_root = ROOT / "frontend" / "dialogs"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in dialogs_root.glob("*.py")
+    }
+    assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "workflow" / "background_tasks.py"

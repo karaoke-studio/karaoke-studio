@@ -214,7 +214,7 @@ def test_subtitle_render_success_prompts_for_post_export_action(
 
 
 def test_fluent_choice_sticky_button_keeps_dialog_open(qapp, monkeypatch) -> None:
-    from krok_helper.subtitle_render.frontend import fluent_dialogs
+    from krok_helper.subtitle_render.frontend.dialogs import fluent_dialogs
 
     ran: list[str] = []
     finished: list[int] = []
@@ -282,7 +282,7 @@ def test_hires_success_plays_sound_and_uses_fluent_dialog(
         calls.append(("dialog", args, kwargs))
 
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_info",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_info",
         show_info,
     )
 
@@ -789,7 +789,7 @@ def test_lyrics_timing_export_without_project_uses_fluent_warning(
 ) -> None:
     dialogs: list[tuple[object, str, str]] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_warning",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_warning",
         lambda parent, title, content: dialogs.append((parent, title, content)),
     )
     app = SimpleNamespace(
@@ -807,7 +807,7 @@ def test_lyrics_timing_export_without_project_uses_fluent_warning(
 def test_lyrics_timing_export_read_failure_uses_fluent_error(monkeypatch) -> None:
     dialogs: list[tuple[object, str, str]] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_error",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_error",
         lambda parent, title, content: dialogs.append((parent, title, content)),
     )
 
@@ -867,7 +867,7 @@ def test_dirty_saved_sug_confirms_before_saving_for_export(
         ),
     )
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda parent, title, content, buttons, default=0: (
             choices.append((parent, title, content, tuple(buttons), default)) or 0
         ),
@@ -908,7 +908,7 @@ def test_dirty_saved_sug_cancel_does_not_save_or_export(
         ),
     )
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 1,
     )
 
@@ -985,7 +985,7 @@ def test_dirty_sug_save_waits_for_success_before_loading_file(
         KrokHelperQtApp._export_lyrics_timing_to_next(app)
     )
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 0,
     )
 

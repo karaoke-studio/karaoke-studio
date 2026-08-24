@@ -100,7 +100,7 @@ from krok_helper.subtitle_render.paint import (
     KaraokeColorState,
     PaintFill,
 )
-from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_button_row,
     fluent_choice,
     fluent_get_editable_choice,

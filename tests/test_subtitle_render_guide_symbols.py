@@ -8,7 +8,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QAbstractItemView, QApplication, QDialog
 
 from krok_helper.subtitle_render.engine import painter as subtitle_painter
-from krok_helper.subtitle_render.frontend import guide_replacement as guide_replacement_module
+from krok_helper.subtitle_render.frontend.dialogs import guide_replacement as guide_replacement_module
 from krok_helper.subtitle_render.frontend import lyrics_list as lyrics_list_module
 from krok_helper.subtitle_render.frontend import main_window as main_window_module
 from krok_helper.subtitle_render.engine.painter import (
@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import compute_display_lines, find_active_line
-from krok_helper.subtitle_render.frontend.guide_replacement import (
+from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     GuidePrefixReplaceDialog,
     GuideRoleSchemeDialog,
     detect_guide_prefix_matches,

@@ -31,7 +31,7 @@ from qfluentwidgets import (
 )
 from krok_helper.qfluent_compat import ModelessDialog
 
-from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_button_row
+from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import fluent_button_row
 from krok_helper.subtitle_render.timing import (
     GuideSymbol,
     TimingLine,

@@ -176,7 +176,7 @@ from krok_helper.subtitle_render.frontend.workflow.export_runtime import (
     ExportRuntimeController,
     ExportRuntimeHandles,
 )
-from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_button_row,
     fluent_choice,
     fluent_error,
@@ -186,7 +186,7 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.font_loading import font_list_loading_overlay
-from krok_helper.subtitle_render.frontend.guide_replacement import (
+from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     GuidePrefixMatch,
     GuidePrefixReplaceDialog,
     choose_guide_role_scheme,
@@ -316,7 +316,7 @@ from krok_helper.subtitle_render.auto_chorus import (
     apply_chorus_roles,
     pick_chorus_role,
 )
-from krok_helper.subtitle_render.frontend.auto_chorus_dialog import AutoChorusDialog
+from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import AutoChorusDialog
 from krok_helper.subtitle_render.n3proj_import import (
     N3_PROJECT_FILE_SUFFIX,
 )
