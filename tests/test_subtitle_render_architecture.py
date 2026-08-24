@@ -442,6 +442,48 @@ def test_subtitle_render_window_delegates_native_project_commands() -> None:
     }
 
 
+def test_subtitle_render_window_delegates_recent_projects() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.recent_projects" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method_names = {
+        "_load_recent_projects",
+        "_persist_recent_projects",
+        "_rebuild_recent_projects_menu",
+        "_set_recent_projects",
+        "_record_recent_project",
+        "_clear_recent_projects",
+        "_open_recent_project",
+    }
+    controller_calls = {
+        node.func.attr
+        for method in window_class.body
+        if isinstance(method, ast.FunctionDef) and method.name in method_names
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_recent_projects_controller"
+    }
+    assert controller_calls == {
+        "clear",
+        "load",
+        "open",
+        "persist",
+        "rebuild_menu",
+        "record",
+        "set_paths",
+    }
+
+
 def test_subtitle_render_window_delegates_project_resource_policy() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"

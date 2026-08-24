@@ -215,6 +215,9 @@ from krok_helper.subtitle_render.frontend.project_autosave import (
 from krok_helper.subtitle_render.frontend.project_recovery import (
     ProjectRecoveryController,
 )
+from krok_helper.subtitle_render.frontend.recent_projects import (
+    RecentProjectsController,
+)
 from krok_helper.subtitle_render.screen_settings import (
     ScreenSettings,
     SCREEN_FPS_OPTIONS,
@@ -2142,6 +2145,15 @@ class SubtitleRenderWindow(QWidget):
         """Compatibility view of the extracted periodic timer."""
         return self._auto_save_runtime.periodic_timer
 
+    @property
+    def _recent_project_paths(self) -> list[str]:
+        """Compatibility view of the extracted recent-project state."""
+        return self._recent_projects_controller.paths
+
+    @_recent_project_paths.setter
+    def _recent_project_paths(self, value: list[str]) -> None:
+        self._recent_projects_controller.paths = list(value)
+
     def __init__(
         self,
         embedded: bool = False,
@@ -2205,7 +2217,11 @@ class SubtitleRenderWindow(QWidget):
             project_suffix=PROJECT_FILE_SUFFIX,
             limit=_MAX_RECENT_PROJECTS,
         )
-        self._recent_project_paths: list[str] = []
+        self._recent_projects_controller = RecentProjectsController(
+            self._recent_project_policy,
+            self._settings_store,
+            settings_key=_RECENT_PROJECTS_SETTINGS_KEY,
+        )
         self._last_logged_project_state: Optional[tuple[object, ...]] = None
         self._loading_project = False
         self._syncing_screen_controls = False
@@ -2573,93 +2589,49 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_recent_projects(self) -> list[str]:
         """Load valid native projects and prune stale or duplicate entries."""
-        data = self._load_subtitle_settings()
-        stored = data.get(_RECENT_PROJECTS_SETTINGS_KEY, [])
-        paths = self._recent_project_policy.normalize(stored)
-        if paths != stored:
-            self._persist_recent_projects(paths)
-        return paths
+        return self._recent_projects_controller.load()
 
     def _persist_recent_projects(self, paths: list[str]) -> None:
         """Persist only the recent-project field within the module namespace."""
-        try:
-            data = self._load_subtitle_settings()
-            data[_RECENT_PROJECTS_SETTINGS_KEY] = list(paths)
-            self._settings_store.save(data)
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "保存字幕渲染最近项目失败", exc_info=True
-            )
+        self._recent_projects_controller.persist(paths)
 
     def _rebuild_recent_projects_menu(self) -> None:
         """Refresh only the recent-project submenu and keep its parents intact."""
-        recent_menu = self._recent_projects_menu
-        old_actions = list(recent_menu.actions())
-        recent_menu.clear()
-        for action in old_actions:
-            action.deleteLater()
-
-        if not self._recent_project_paths:
-            empty_action = Action("暂无最近打开的项目", recent_menu)
-            empty_action.setEnabled(False)
-            recent_menu.addAction(empty_action)
-            return
-
-        for file_path in self._recent_project_paths:
-            path = Path(file_path)
-            action = Action(
-                FIF.DOCUMENT,
-                f"{path.name}  —  {path.parent}",
-                recent_menu,
-            )
-            action.setToolTip(file_path)
-            action.triggered.connect(
-                lambda checked=False, p=file_path: self._open_recent_project(p)
-            )
-            recent_menu.addAction(action)
-        recent_menu.addSeparator()
-        recent_menu.addAction(
-            Action(
-                FIF.DELETE,
-                "清除最近打开记录",
-                recent_menu,
-                triggered=self._clear_recent_projects,
-            )
+        self._recent_projects_controller.rebuild_menu(
+            self._recent_projects_menu,
+            open_recent=self._open_recent_project,
+            clear_recent=self._clear_recent_projects,
         )
 
     def _set_recent_projects(self, paths: list[str]) -> None:
         """Update paths and rebuild only the recent-project submenu when changed."""
-        normalized = [str(path) for path in paths]
-        if normalized == self._recent_project_paths:
-            return
-        self._recent_project_paths = normalized
-        if hasattr(self, "_recent_projects_menu"):
-            self._rebuild_recent_projects_menu()
+        rebuild = (
+            self._rebuild_recent_projects_menu
+            if hasattr(self, "_recent_projects_menu")
+            else lambda: None
+        )
+        self._recent_projects_controller.set_paths(paths, rebuild=rebuild)
 
     def _record_recent_project(self, path: Path | str) -> None:
         """Move one successfully opened native project to the front."""
-        paths = self._recent_project_policy.record(
-            self._load_recent_projects(),
+        self._recent_projects_controller.record(
             path,
+            rebuild=self._rebuild_recent_projects_menu,
         )
-        self._persist_recent_projects(paths)
-        self._set_recent_projects(paths)
 
     def _clear_recent_projects(self, _checked: bool = False) -> None:
-        self._persist_recent_projects([])
-        self._set_recent_projects([])
+        self._recent_projects_controller.clear(
+            rebuild=self._rebuild_recent_projects_menu,
+        )
 
     def _open_recent_project(self, file_path: str) -> None:
-        path = Path(file_path)
-        if not path.is_file():
-            self._set_recent_projects(self._load_recent_projects())
-            fluent_warning(
-                self,
-                "文件不存在",
-                "最近打开的项目已被移动或删除。",
-            )
-            return
-        self._open_project_path(path)
+        self._recent_projects_controller.open(
+            file_path,
+            parent=self,
+            rebuild=self._rebuild_recent_projects_menu,
+            show_warning=fluent_warning,
+            open_project=self._open_project_path,
+        )
 
     def _balance_project_bar(self) -> None:
         if not hasattr(self, "_project_bar_left"):
