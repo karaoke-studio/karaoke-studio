@@ -172,11 +172,11 @@ from krok_helper.subtitle_render.frontend.property_timing_page import (
     TimingPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
-from krok_helper.subtitle_render.engine.style_semantics import (
+from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
     style_for_role,
 )
-from krok_helper.subtitle_render.engine.style_preview import (
+from krok_helper.subtitle_render.engine.style.style_preview import (
     build_font as _build_font,
     build_latin_font as _build_latin_font,
     build_ruby_font_for_text as _build_ruby_font_for_text,

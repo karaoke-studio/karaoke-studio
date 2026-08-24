@@ -148,7 +148,7 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     layout_timing_diagnostics_for_style,
     layout_pass,
 )
-from krok_helper.subtitle_render.engine.title_semantics import resolve_title_text
+from krok_helper.subtitle_render.engine.style.title_semantics import resolve_title_text
 from krok_helper.subtitle_render.engine.layout.page_plan import (
     build_legacy_page_plan,
     build_page_plan,

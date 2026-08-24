@@ -64,7 +64,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     ScreenColorPicker,
     StylePresetManagerDialog,
 )
-from krok_helper.subtitle_render.engine.style_semantics import style_for_role  # noqa: E402
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
     KaraokeColors,
@@ -107,7 +107,7 @@ def test_property_panel_uses_public_style_preview_boundary() -> None:
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
 
-    assert "krok_helper.subtitle_render.engine.style_preview" in imported_modules
+    assert "krok_helper.subtitle_render.engine.style.style_preview" in imported_modules
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 

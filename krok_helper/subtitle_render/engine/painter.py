@@ -663,13 +663,13 @@ from krok_helper.subtitle_render.engine.render.raster_blur import (
     _gaussian_blur_image,
     _n3_gaussian_kernel_1d,
 )
-from krok_helper.subtitle_render.engine.style_semantics import (
+from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors as _effective_karaoke_colors,
     legacy_after_text_fill as _legacy_after_text_fill,
     solid_fill as _solid_fill,
     style_for_role as _style_for_role,
 )
-from krok_helper.subtitle_render.engine.title_semantics import (
+from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_overlay,
     resolve_title_role_overlay as _resolve_title_role_overlay,
     resolve_title_text as _resolve_title_text,

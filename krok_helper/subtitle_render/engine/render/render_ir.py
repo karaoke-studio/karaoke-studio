@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.engine.layout.semantic_plan import (
     build_track_layout_plan,
     layout_pass,
 )
-from krok_helper.subtitle_render.engine.title_semantics import (
+from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_overlay,
     resolve_title_role_overlay,
     resolve_title_text,

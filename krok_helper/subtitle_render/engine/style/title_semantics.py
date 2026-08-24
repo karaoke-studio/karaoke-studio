@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Optional
 
-from krok_helper.subtitle_render.engine.style_semantics import (
+from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
     style_for_role,
 )

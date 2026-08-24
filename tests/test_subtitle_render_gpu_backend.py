@@ -39,7 +39,7 @@ from krok_helper.subtitle_render.models import (
     TrackSection,
     style_from_dict,
 )
-from krok_helper.subtitle_render.engine.style_semantics import style_for_role
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
 from krok_helper.subtitle_render.n3_font_catalog import invalidate_n3_font_caches
 from krok_helper.subtitle_render.n3proj_import import load_n3proj
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc

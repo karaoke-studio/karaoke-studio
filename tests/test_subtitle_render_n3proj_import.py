@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from krok_helper.subtitle_render.engine.style_semantics import style_for_role
+from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
 from krok_helper.subtitle_render.models import (
     Style,
     default_title_scheme,
