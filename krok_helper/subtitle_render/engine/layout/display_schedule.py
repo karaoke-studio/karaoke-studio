@@ -108,6 +108,54 @@ def single_line_display_schedule(
     }
 
 
+def single_visible_display_line(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+) -> DisplayLine | None:
+    """Select the live line, or the latest lead/tail line, in single-line mode."""
+
+    best_live: DisplayLine | None = None
+    best_lead_or_tail: DisplayLine | None = None
+    lead = max(style.line_lead_in_ms, 0)
+    tail = max(style.line_tail_ms, 0)
+    signal_heads = signal_head_context(track, style)
+    signal_lead = signal_lead_in_ms(style) if signal_heads is not None else 0
+    for index, line in enumerate(track.lines):
+        if line.is_blank or not line.chars:
+            continue
+        line_lead = (
+            max(lead, signal_lead)
+            if signal_heads is not None and index in signal_heads
+            else lead
+        )
+        sing_start = line_start_ms(line)
+        sing_end = line_end_ms(line)
+        display_start = max(sing_start - line_lead, 0)
+        display_end = sing_end + tail
+        display_start, display_end = apply_display_overrides(
+            line,
+            display_start,
+            display_end,
+        )
+        display_line = DisplayLine(
+            line=line,
+            lane=0,
+            display_start_ms=display_start,
+            display_end_ms=display_end,
+        )
+        if sing_start <= t_ms < sing_end:
+            if best_live is None or sing_start >= line_start_ms(best_live.line):
+                best_live = display_line
+        elif display_start <= t_ms < display_end:
+            if (
+                best_lead_or_tail is None
+                or sing_start >= line_start_ms(best_lead_or_tail.line)
+            ):
+                best_lead_or_tail = display_line
+    return best_live or best_lead_or_tail
+
+
 def resolve_display_windows(
     track: TimingTrack,
     style: Style,
@@ -263,4 +311,5 @@ __all__ = [
     "resolve_display_windows",
     "single_line_display_schedule",
     "single_line_display_windows",
+    "single_visible_display_line",
 ]

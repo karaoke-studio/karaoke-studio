@@ -204,6 +204,7 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
     extend_page_display_boundary as _extend_page_display_boundary,
     resolve_display_schedule,
     resolve_display_windows,
+    single_visible_display_line as _single_visible_display_line,
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     DisplayResolutionCache,
@@ -594,7 +595,6 @@ def _layout_cache_sig(track: TimingTrack, display_style: Style) -> tuple | None:
 
 from krok_helper.subtitle_render.engine.timing.timeline import (
     DisplayLine,
-    apply_display_overrides,
     assign_lanes,
     char_fill_ratio,
     compute_char_intervals,
@@ -4432,47 +4432,6 @@ def build_track_layout_plan(
         logical_w=logical_w,
         logical_h=logical_h,
     )
-
-
-def _single_visible_display_line(
-    track: TimingTrack,
-    t_ms: int,
-    style: Style,
-) -> DisplayLine | None:
-    best_live: DisplayLine | None = None
-    best_lead_or_tail: DisplayLine | None = None
-    lead = max(style.line_lead_in_ms, 0)
-    tail = max(style.line_tail_ms, 0)
-    signal_heads = _signal_head_context(track, style)
-    signal_lead = _signal_lead_in_ms(style) if signal_heads is not None else 0
-    for index, line in enumerate(track.lines):
-        if line.is_blank or not line.chars:
-            continue
-        line_lead = (
-            max(lead, signal_lead)
-            if signal_heads is not None and index in signal_heads
-            else lead
-        )
-        sing_start = _line_start_ms(line)
-        sing_end = _line_end_ms(line)
-        display_start = max(sing_start - line_lead, 0)
-        display_end = sing_end + tail
-        display_start, display_end = apply_display_overrides(
-            line, display_start, display_end
-        )
-        display_line = DisplayLine(
-            line=line,
-            lane=0,
-            display_start_ms=display_start,
-            display_end_ms=display_end,
-        )
-        if sing_start <= t_ms < sing_end:
-            if best_live is None or sing_start >= _line_start_ms(best_live.line):
-                best_live = display_line
-        elif display_start <= t_ms < display_end:
-            if best_lead_or_tail is None or sing_start >= _line_start_ms(best_lead_or_tail.line):
-                best_lead_or_tail = display_line
-    return best_live or best_lead_or_tail
 
 
 def _effective_line_protect_ms(style: Style) -> int:

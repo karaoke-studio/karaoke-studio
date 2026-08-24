@@ -643,6 +643,7 @@ def test_painter_delegates_display_schedule_projection() -> None:
         if isinstance(node, ast.FunctionDef)
     }
     assert "_extend_page_display_boundary" not in inline_functions
+    assert "_single_visible_display_line" not in inline_functions
 
 
 def test_display_resolver_has_no_painter_dependency() -> None:
