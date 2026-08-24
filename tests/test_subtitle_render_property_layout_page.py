@@ -81,3 +81,34 @@ def test_layout_vertical_builder_routes_layout_and_style_fields(qapp) -> None:
         {"right_to_left": True},
         {"allow_inter_page_line_overlap": True},
     ]
+
+
+def test_layout_ruby_builder_preserves_ranges_options_and_inline_form(qapp) -> None:
+    host = _Host()
+    builder = LayoutPropertyPageBuilder(host)
+    section = builder.make_ruby_section()
+
+    assert section.header.text() == "注音"
+    assert host._ruby_gap_spin.minimum() == -16_384
+    assert host._ruby_interval_spin.maximum() == 16_384
+    assert host._ruby_alignment_combo.count() == 3
+    assert host._ruby_alignment_combo.itemData(2) == "equal_space"
+    assert "下限" in host._ruby_interval_spin.toolTip()
+
+    inline = builder.make_ruby_section(inline=True)
+    assert not hasattr(inline, "header")
+
+
+def test_layout_ruby_builder_routes_controls_to_layout_fields(qapp) -> None:
+    host = _Host()
+    LayoutPropertyPageBuilder(host).make_ruby_section()
+
+    host._ruby_gap_spin.setValue(12)
+    host._ruby_interval_spin.setValue(-3)
+    host._ruby_alignment_combo.setCurrentIndex(2)
+
+    assert host.layout_updates == [
+        {"ruby_gap_px": 12},
+        {"ruby_interval_px": -3},
+        {"ruby_alignment": "equal_space"},
+    ]

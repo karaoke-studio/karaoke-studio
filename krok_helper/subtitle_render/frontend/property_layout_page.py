@@ -12,6 +12,7 @@ from krok_helper.subtitle_render.frontend.property_inputs import WheelFocusedCom
 from krok_helper.subtitle_render.frontend.property_layout import (
     ResponsiveFieldGrid,
     compact_property_control,
+    inline_property_section,
     property_field,
     property_section,
 )
@@ -146,6 +147,66 @@ class LayoutPropertyPageBuilder:
         )
         compact_layout.addStretch(1)
         layout.addWidget(compact_row)
+        return section
+
+    def make_ruby_section(
+        self,
+        parent: QWidget | None = None,
+        *,
+        inline: bool = False,
+    ) -> QWidget:
+        host = self._host
+        section, layout = (
+            inline_property_section("注音", parent)
+            if inline
+            else property_section("注音")
+        )
+        grid = ResponsiveFieldGrid(section, min_column_width=90, max_columns=3)
+
+        host._ruby_gap_spin = self._spin_factory(
+            -LAYOUT_SIZE_MAX_PX,
+            LAYOUT_SIZE_MAX_PX,
+            suffix=" px",
+        )
+        host._ruby_gap_spin.valueChanged.connect(
+            lambda value: host._update_layout_field(ruby_gap_px=value)
+        )
+        grid.add_field("与正文间距", host._ruby_gap_spin)
+
+        host._ruby_interval_spin = self._spin_factory(
+            -LAYOUT_SIZE_MAX_PX,
+            LAYOUT_SIZE_MAX_PX,
+            suffix=" px",
+        )
+        host._ruby_interval_spin.setToolTip(
+            "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。\n"
+            "注意这是「下限」：注音比正文窄、均等分布摊出的间距大于此值时，"
+            "调整它看不到变化；对超出正文宽度的长注音效果最明显。"
+        )
+        host._ruby_interval_spin.valueChanged.connect(
+            lambda value: host._update_layout_field(ruby_interval_px=value)
+        )
+        grid.add_field("字间距", host._ruby_interval_spin)
+
+        host._ruby_alignment_combo = WheelFocusedComboBox(section)
+        compact_property_control(host._ruby_alignment_combo)
+        for label, value in (
+            ("自动", "auto"),
+            ("居中", "center"),
+            ("均等分布", "equal_space"),
+        ):
+            host._ruby_alignment_combo.addItem(label, value)
+        host._ruby_alignment_combo.setToolTip(
+            "注音相对正文范围的排布（N3 ルビ配置）：自动 = 正文或注音全为英数时居中、"
+            "否则均等分布。"
+        )
+        host._ruby_alignment_combo.currentIndexChanged.connect(
+            lambda _index: host._update_layout_field(
+                ruby_alignment=host._ruby_alignment_combo.currentData()
+            )
+        )
+        grid.add_field("排布", host._ruby_alignment_combo)
+        layout.addWidget(grid)
         return section
 
     def _add_spin(
