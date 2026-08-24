@@ -20,6 +20,7 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu  # noqa: E4
 from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
+from krok_helper.subtitle_render.frontend import import_controller as import_controller_module  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
 from krok_helper.subtitle_render import project_controller as project_controller_module  # noqa: E402
@@ -1343,7 +1344,7 @@ def test_dropped_n3proj_imports_complete_project_like_file_menu(
         loaded_paths.append(path)
         return Result()
 
-    monkeypatch.setattr(mw, "load_n3proj", fake_load)
+    monkeypatch.setattr(import_controller_module, "load_n3proj", fake_load)
     monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
 
     getattr(win, panel_name).pathDropped.emit(project_path)
@@ -1386,7 +1387,11 @@ def test_dropped_n3proj_respects_unsaved_changes_confirmation(
     win._project_dirty = True
     monkeypatch.setattr(win, "_confirm_discard_changes", lambda: False)
     load_calls: list[Path] = []
-    monkeypatch.setattr(mw, "load_n3proj", lambda path: load_calls.append(path))
+    monkeypatch.setattr(
+        import_controller_module,
+        "load_n3proj",
+        lambda path: load_calls.append(path),
+    )
 
     win._lyrics_panel.pathDropped.emit(project_path)
 
@@ -1588,7 +1593,7 @@ def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
         project_data = {}
         warnings = ["输出格式已改为 MP4", "歌词间隔使用默认布局"]
 
-    monkeypatch.setattr(mw, "load_n3proj", lambda _path: Result())
+    monkeypatch.setattr(import_controller_module, "load_n3proj", lambda _path: Result())
     monkeypatch.setattr(win, "_clear_loaded_media", lambda: None)
     monkeypatch.setattr(win, "_apply_project_data", lambda _data: None)
     monkeypatch.setattr(win, "_refresh_project_title", lambda: None)
@@ -1898,7 +1903,7 @@ def test_direct_n3_import_uses_video_resolution_and_rebases_style_without_scalin
         }
         warnings = []
 
-    monkeypatch.setattr(mw, "load_n3proj", lambda _path: Result())
+    monkeypatch.setattr(import_controller_module, "load_n3proj", lambda _path: Result())
     monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
 
     win._import_n3_project()

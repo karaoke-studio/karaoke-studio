@@ -609,6 +609,41 @@ def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
     assert loader_calls == {"load_file", "load_lrc", "load_sug", "load_sug_project"}
 
 
+def test_subtitle_render_window_delegates_n3_import_commands() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.import_controller" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    direct_n3_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.n3proj_import"
+        for alias in node.names
+    }
+    assert "load_n3proj" not in direct_n3_imports
+    assert "N3_PROJECT_FILTER" not in direct_n3_imports
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method_names = {"_import_n3_project", "_import_n3_project_path"}
+    controller_calls = {
+        node.func.attr
+        for method in window_class.body
+        if isinstance(method, ast.FunctionDef) and method.name in method_names
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_n3_import_controller"
+    }
+    assert controller_calls == {"choose_path", "load", "rebase_style_for_video"}
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))

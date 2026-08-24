@@ -191,6 +191,9 @@ from krok_helper.subtitle_render.frontend.guide_replacement import (
     choose_guide_role_scheme,
     replacement_symbol_for_match,
 )
+from krok_helper.subtitle_render.frontend.import_controller import (
+    N3ProjectImportController,
+)
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.playback import (
     PlaybackController,
@@ -306,8 +309,6 @@ from krok_helper.subtitle_render.auto_chorus import (
 from krok_helper.subtitle_render.frontend.auto_chorus_dialog import AutoChorusDialog
 from krok_helper.subtitle_render.n3proj_import import (
     N3_PROJECT_FILE_SUFFIX,
-    N3_PROJECT_FILTER,
-    load_n3proj,
 )
 from krok_helper.subtitle_render.project_store import (
     ProjectFileRevision,
@@ -2095,6 +2096,7 @@ class SubtitleRenderWindow(QWidget):
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
         self._project_controller = SubtitleProjectController()
         self._subtitle_source_loader = SubtitleSourceLoader()
+        self._n3_import_controller = N3ProjectImportController()
         self._project_command_controller = ProjectCommandController(
             PROJECT_FILTER,
             PROJECT_FILE_SUFFIX,
@@ -3397,13 +3399,14 @@ class SubtitleRenderWindow(QWidget):
         """导入 NicoKaraMaker3 项目（.n3proj）：素材 / 字体配色 / 布局 / 标题 / 输出。"""
         if not self._confirm_discard_changes():
             return
-        start_dir = str(self._project_path.parent) if self._project_path else ""
-        path_str, _ = QFileDialog.getOpenFileName(
-            self, "导入 NicoKaraMaker3 项目", start_dir, N3_PROJECT_FILTER
+        path = self._n3_import_controller.choose_path(
+            self,
+            current_project_path=self._project_path,
+            choose_file=QFileDialog.getOpenFileName,
         )
-        if not path_str:
+        if path is None:
             return
-        self._import_n3_project_path(Path(path_str), confirm_discard=False)
+        self._import_n3_project_path(path, confirm_discard=False)
 
     def _import_n3_project_path(
         self,
@@ -3416,7 +3419,7 @@ class SubtitleRenderWindow(QWidget):
         if confirm_discard and not self._confirm_discard_changes():
             return False
         try:
-            result = load_n3proj(path)
+            result = self._n3_import_controller.load(path)
         except (OSError, ValueError) as exc:
             fluent_error(
                 self, "导入失败", f"无法读取 NicoKaraMaker3 项目文件：\n{path}\n\n{exc}"
@@ -3433,10 +3436,9 @@ class SubtitleRenderWindow(QWidget):
         if self._video_info is not None:
             video_height = int(self._video_info.video_height or 0)
             if video_height > 0:
-                self._style = replace(
+                self._style = self._n3_import_controller.rebase_style_for_video(
                     self._style,
-                    font_reference_height=video_height,
-                    layout_reference_height=video_height,
+                    video_height,
                 )
                 self._property_panel.set_style(self._style)
                 self._preview_panel.set_style(self._style)
