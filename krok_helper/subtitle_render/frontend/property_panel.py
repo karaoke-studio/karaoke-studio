@@ -134,6 +134,9 @@ from krok_helper.subtitle_render.frontend.property_inputs import (
     WheelFocusedFontComboBox,
     WheelFocusedSpinBox,
 )
+from krok_helper.subtitle_render.frontend.property_background_page import (
+    BackgroundPropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3583,6 +3586,12 @@ class PropertyPanel(QWidget):
             spin_factory=_spin,
             tooltip_installer=install_fluent_tooltip,
         )
+        self._background_page_builder = BackgroundPropertyPageBuilder(
+            self,
+            fps_options=SCREEN_FPS_OPTIONS,
+            size_spin_factory=_NoWheelSpinBox,
+            fps_combo_factory=FluentComboBox,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -5398,44 +5407,7 @@ class PropertyPanel(QWidget):
         self._image_fit_group.setVisible(kind in {"image", "image_sequence"})
 
     def _make_screen_size_section(self) -> QFrame:
-        section, layout = _section("画面尺寸")
-        hint = CaptionLabel("宽度 / 高度 / 帧率与预览页「画面」及导出页设置双向联动。")
-        hint.setWordWrap(True)
-        themed(hint, lambda: f"color: {palette().text_secondary};")
-        layout.addWidget(hint)
-
-        self._screen_size_width_spin = _NoWheelSpinBox(section)
-        self._screen_size_width_spin.setRange(160, 7680)
-        self._screen_size_width_spin.setValue(1920)
-        self._screen_size_width_spin.setSingleStep(2)
-        self._screen_size_width_spin.setKeyboardTracking(False)
-        self._screen_size_height_spin = _NoWheelSpinBox(section)
-        self._screen_size_height_spin.setRange(90, 4320)
-        self._screen_size_height_spin.setValue(1080)
-        self._screen_size_height_spin.setSingleStep(2)
-        self._screen_size_height_spin.setKeyboardTracking(False)
-        self._screen_size_fps_combo = FluentComboBox(section)
-        for fps in SCREEN_FPS_OPTIONS:
-            self._screen_size_fps_combo.addItem(f"{fps} fps", userData=fps)
-
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(8)
-        grid.addWidget(_field("宽度", self._screen_size_width_spin), 0, 0)
-        grid.addWidget(_field("高度", self._screen_size_height_spin), 0, 1)
-        grid.addWidget(_field("帧率", self._screen_size_fps_combo), 1, 0)
-        layout.addLayout(grid)
-
-        self._screen_size_width_spin.valueChanged.connect(
-            self._on_panel_screen_size_changed
-        )
-        self._screen_size_height_spin.valueChanged.connect(
-            self._on_panel_screen_size_changed
-        )
-        self._screen_size_fps_combo.currentIndexChanged.connect(
-            self._on_panel_screen_size_changed
-        )
-        return section
+        return self._background_page_builder.make_screen_size_section()
 
     def _on_panel_screen_size_changed(self, *_args) -> None:
         if self._syncing:
