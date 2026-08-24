@@ -4355,61 +4355,7 @@ class PropertyPanel(QWidget):
         return self._role_fill_pages_builder.make_gradient_page()
 
     def _make_split_fill_page(self) -> QWidget:
-        page = QWidget()
-        layout = QGridLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-        self._split_editor = GradientStopsEditor(page)
-        self._split_editor.set_orientation("split_vertical")
-        self._split_editor.stopsChanged.connect(self._update_split_stops)
-        self._split_editor.selectedChanged.connect(
-            lambda _index: self._sync_split_stop_controls()
-        )
-        self._split_bar_field = self._split_editor
-
-        self._split_stop_color_btn = ColorButton("#FFFFFF", page)
-        self._wire_color_edit_session(self._split_stop_color_btn)
-        self._split_stop_color_btn.clicked.connect(self._choose_split_stop_color)
-        self._split_stop_color_btn.colorEntered.connect(
-            self._split_editor.set_selected_color
-        )
-        self._split_stop_color_btn.screenPickRequested.connect(
-            lambda: self._choose_split_stop_color(screen_pick=True)
-        )
-        self._split_stop_position_spin = _double_spin(
-            0, 100, decimals=3, suffix=" %"
-        )
-        self._split_stop_position_spin.valueChanged.connect(
-            self._set_split_stop_position
-        )
-        self._split_stop_delete_btn = FluentTransparentToolButton(FIF.DELETE, page)
-        self._split_stop_delete_btn.setToolTip("删除分段点")
-        self._split_stop_delete_btn.setAccessibleName("删除分段点")
-        self._split_stop_delete_btn.setFixedSize(30, 30)
-        self._split_stop_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._split_stop_delete_btn.clicked.connect(
-            self._split_editor.delete_selected_stop
-        )
-        self._split_color_field = _field("分段颜色", self._split_stop_color_btn)
-        position_row = QWidget(page)
-        position_layout = QHBoxLayout(position_row)
-        position_layout.setContentsMargins(0, 0, 0, 0)
-        position_layout.setSpacing(6)
-        position_layout.addWidget(self._split_stop_position_spin, 1)
-        position_layout.addWidget(
-            self._split_stop_delete_btn, 0, Qt.AlignmentFlag.AlignBottom
-        )
-        self._split_position_field = _field("分段位置", position_row)
-        self._arrange_stop_editor(
-            layout,
-            self._split_bar_field,
-            self._split_color_field,
-            self._split_position_field,
-            vertical=True,
-        )
-        return page
-
+        return self._role_fill_pages_builder.make_split_page()
     @staticmethod
     def _arrange_stop_editor(
         layout: QGridLayout,
