@@ -9,6 +9,7 @@ from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -385,3 +386,86 @@ class FolderTabPanel(QWidget):
                     )
         finally:
             painter.end()
+
+
+class ClickableRow(QWidget):
+    """Bare row widget that emits ``clicked`` on a left mouse press."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+def subgroup_label(text: str) -> QLabel:
+    """Build the accent-bar heading shared by nested property groups."""
+    label = QLabel(text)
+    label.setObjectName("SubtitlePropertySubheading")
+    themed(
+        label,
+        lambda: (
+            f"color: {palette().title_text};"
+            "font-size: 9.5pt;"
+            "font-weight: 700;"
+            f"border-left: 3px solid {palette().accent_primary};"
+            "padding: 0 0 0 8px;"
+        ),
+    )
+    return label
+
+
+class SubGroup(QWidget):
+    """Collapsible nested section inside a property card."""
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        collapsed: bool = False,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 4, 0, 0)
+        root.setSpacing(6)
+
+        self._header = ClickableRow(self)
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        label = subgroup_label(title)
+        label.setParent(self._header)
+        header_layout.addWidget(label, 0)
+        header_layout.addStretch(1)
+        self._chevron = QLabel(self._header)
+        themed(
+            self._chevron,
+            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+        )
+        header_layout.addWidget(self._chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._host = QWidget(self)
+        self.grid = QGridLayout(self._host)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(8)
+        self.grid.setVerticalSpacing(8)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 1)
+
+        root.addWidget(self._header)
+        root.addWidget(self._host)
+
+        self._header.clicked.connect(
+            lambda: self.set_collapsed(self._host.isVisible())
+        )
+        self.set_collapsed(collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._host.setVisible(not collapsed)
+        self._chevron.setText("▸" if collapsed else "▾")
+
+    def is_collapsed(self) -> bool:
+        return not self._host.isVisible()

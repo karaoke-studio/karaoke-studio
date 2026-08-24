@@ -5,10 +5,13 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 
 from krok_helper.subtitle_render.frontend.property_widgets import (
+    ClickableRow,
     CollapsibleSection,
     FolderTabPanel,
     PillSelector,
+    SubGroup,
     ToggleSwitch,
+    subgroup_label,
 )
 
 
@@ -67,3 +70,27 @@ def test_property_folder_tabs_keep_left_and_right_selection_independent(qapp) ->
     assert panel.current_right() == "latin"
     assert left_changes == ["ruby"]
     assert right_changes == ["latin"]
+
+
+def test_property_subgroup_preserves_heading_grid_and_collapse_contract(qapp) -> None:
+    subgroup = SubGroup("字符排版", collapsed=True)
+
+    assert isinstance(subgroup._header, ClickableRow)
+    assert subgroup.is_collapsed() is True
+    assert subgroup._chevron.text() == "▸"
+    assert subgroup.grid.columnStretch(0) == 1
+    assert subgroup.grid.columnStretch(1) == 1
+
+    subgroup.show()
+    qapp.processEvents()
+    subgroup.set_collapsed(False)
+
+    assert subgroup.is_collapsed() is False
+    assert subgroup._chevron.text() == "▾"
+
+
+def test_property_subgroup_label_preserves_accessible_style_hook(qapp) -> None:
+    label = subgroup_label("行布局")
+
+    assert label.text() == "行布局"
+    assert label.objectName() == "SubtitlePropertySubheading"
