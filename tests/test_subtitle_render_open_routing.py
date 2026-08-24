@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.frontend.main_window import (
     PROJECT_FILTER,
     SubtitleRenderWindow,
 )
-from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILE_SUFFIX
+from krok_helper.subtitle_render.n3.project_import import N3_PROJECT_FILE_SUFFIX
 
 
 @pytest.mark.parametrize("name", ["曲名.n3proj", "曲名.N3Proj"])

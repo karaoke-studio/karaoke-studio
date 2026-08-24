@@ -286,7 +286,7 @@ from krok_helper.subtitle_render.models import (
     style_from_dict,
     style_to_dict,
 )
-from krok_helper.subtitle_render.n3_font_catalog import (
+from krok_helper.subtitle_render.n3.font_catalog import (
     get_n3_font_catalog,
     normalize_scheme_font_families,
     normalize_style_font_families,
@@ -317,7 +317,7 @@ from krok_helper.subtitle_render.auto_chorus import (
     pick_chorus_role,
 )
 from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import AutoChorusDialog
-from krok_helper.subtitle_render.n3proj_import import (
+from krok_helper.subtitle_render.n3.project_import import (
     N3_PROJECT_FILE_SUFFIX,
 )
 from krok_helper.subtitle_render.project_store import (

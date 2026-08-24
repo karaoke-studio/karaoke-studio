@@ -205,7 +205,7 @@ from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
 from krok_helper.subtitle_render.guide_symbols import scaled_guide_symbol_path
-from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
+from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
 
 _IMAGE_FILL_CACHE_MAX = 16

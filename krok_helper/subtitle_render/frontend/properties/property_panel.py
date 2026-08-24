@@ -196,7 +196,7 @@ from krok_helper.subtitle_render.engine.style.style_preview import (
     ruby_stroke2_width as _ruby_stroke2_width,
     ruby_stroke_width as _ruby_stroke_width,
 )
-from krok_helper.subtitle_render.n3_font_catalog import (
+from krok_helper.subtitle_render.n3.font_catalog import (
     canonicalize_n3_font_family,
     n3_font_families,
     resolve_qt_font_family,
@@ -239,7 +239,7 @@ from krok_helper.subtitle_render.screen_settings import (
     screen_settings_to_dict,
 )
 from krok_helper.subtitle_render.timecode import format_timecode_ms, parse_timecode_ms
-from krok_helper.subtitle_render.n3_template_import import (
+from krok_helper.subtitle_render.n3.template_import import (
     N3_TEMPLATE_FILTER,
     default_n3_template_directories,
     find_n3_template_files,

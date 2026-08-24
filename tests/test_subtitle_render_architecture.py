@@ -321,6 +321,30 @@ def test_native_modules_are_grouped_behind_one_package_boundary() -> None:
     assert not (ROOT / "native_protocol.py").exists()
 
 
+def test_n3_compatibility_modules_are_grouped_behind_one_package_boundary() -> None:
+    module_names = {
+        "font_catalog.py",
+        "font_fallback.py",
+        "font_scheme.py",
+        "project_import.py",
+        "template_import.py",
+    }
+    n3_root = ROOT / "n3"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in n3_root.glob("*.py")
+    }
+    assert not any(
+        (ROOT / name).exists()
+        for name in {
+            "n3_font_catalog.py",
+            "n3_font_fallback.py",
+            "n3_font_scheme.py",
+            "n3_template_import.py",
+            "n3proj_import.py",
+        }
+    )
+
+
 def test_line_style_semantics_have_one_engine_owner() -> None:
     owner = f"{PACKAGE}.engine.layout.line_style"
     delegated_names = {

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.n3proj_import import (
+from krok_helper.subtitle_render.n3.project_import import (
     N3ImportResult,
     N3_PROJECT_FILTER,
     load_n3proj,

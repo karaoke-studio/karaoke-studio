@@ -85,11 +85,11 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     style_from_dict,
     style_to_dict,
 )
-from krok_helper.subtitle_render.n3_template_import import (  # noqa: E402
+from krok_helper.subtitle_render.n3.template_import import (  # noqa: E402
     N3TemplateBatchResult,
     N3TemplateLoadResult,
 )
-from krok_helper.subtitle_render.n3_font_catalog import N3FontCatalog  # noqa: E402
+from krok_helper.subtitle_render.n3.font_catalog import N3FontCatalog  # noqa: E402
 from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
     LayoutCatalogController,
     RoleSchemeController,

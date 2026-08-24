@@ -31,7 +31,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     style_from_dict,
 )
-from krok_helper.subtitle_render.n3proj_import import load_n3proj
+from krok_helper.subtitle_render.n3.project_import import load_n3proj
 from krok_helper.subtitle_render.native.backend import (
     NativeRendererProcess,
     SharedFrameRingReader,

@@ -15,7 +15,7 @@ from krok_helper.subtitle_render.models import (
     guide_symbol_from_dict,
     style_from_dict,
 )
-from krok_helper.subtitle_render.n3proj_import import (
+from krok_helper.subtitle_render.n3.project_import import (
     N3ImportResult,
     is_n3proj_file,
     load_n3proj,

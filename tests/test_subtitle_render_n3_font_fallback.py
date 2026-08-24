@@ -1,6 +1,6 @@
 """N3 font-slot fallback rules shared by project and template imports."""
 
-from krok_helper.subtitle_render.n3_font_fallback import resolve_n3_font_slots
+from krok_helper.subtitle_render.n3.font_fallback import resolve_n3_font_slots
 
 
 def _size(value: int, ratio: float = 0.0) -> dict[str, float | int]:

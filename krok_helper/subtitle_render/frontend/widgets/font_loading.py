@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QFrame, QVBoxLayout, QWidget
 from qfluentwidgets import IndeterminateProgressBar, StrongBodyLabel
 
-from krok_helper.subtitle_render.n3_font_catalog import is_n3_font_catalog_ready
+from krok_helper.subtitle_render.n3.font_catalog import is_n3_font_catalog_ready
 
 
 class FontListLoadingOverlay(QWidget):

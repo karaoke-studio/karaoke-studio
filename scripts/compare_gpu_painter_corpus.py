@@ -37,7 +37,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TitleOverlay,
     style_from_dict,
 )
-from krok_helper.subtitle_render.n3proj_import import load_n3proj  # noqa: E402
+from krok_helper.subtitle_render.n3.project_import import load_n3proj  # noqa: E402
 from krok_helper.subtitle_render.native.backend import (  # noqa: E402
     NativeRendererProcess,
     SharedFrameRingReader,

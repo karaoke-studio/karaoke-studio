@@ -7,8 +7,8 @@ import sys
 
 import pytest
 
-import krok_helper.subtitle_render.n3_font_catalog as font_catalog
-from krok_helper.subtitle_render.n3_font_catalog import (
+import krok_helper.subtitle_render.n3.font_catalog as font_catalog
+from krok_helper.subtitle_render.n3.font_catalog import (
     N3FontCatalog,
     _FamilyRecord,
     _build_catalog,
@@ -112,7 +112,7 @@ def test_resolve_qt_font_family_uses_catalog_runtime_name(monkeypatch):
         qt_families=("Arial",),
     )
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.n3_font_catalog.get_n3_font_catalog",
+        "krok_helper.subtitle_render.n3.font_catalog.get_n3_font_catalog",
         lambda: catalog,
     )
     resolve_qt_font_family.cache_clear()

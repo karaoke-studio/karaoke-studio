@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from krok_helper.subtitle_render.models import StylePreset, SubtitleStyleScheme
-from krok_helper.subtitle_render.n3_template_import import (
+from krok_helper.subtitle_render.n3.template_import import (
     N3_TEMPLATE_SOURCE_TYPE,
     default_n3_template_directories,
     find_n3_template_files,

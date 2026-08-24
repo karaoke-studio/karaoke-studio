@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.models import (
     style_from_dict,
     style_to_dict,
 )
-from krok_helper.subtitle_render.n3_font_catalog import (
+from krok_helper.subtitle_render.n3.font_catalog import (
     get_n3_font_catalog,
     normalize_style_font_families,
 )

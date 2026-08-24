@@ -16,7 +16,7 @@ from qfluentwidgets import (
     SpinBox as FluentSpinBox,
 )
 
-from krok_helper.subtitle_render.n3_font_catalog import (
+from krok_helper.subtitle_render.n3.font_catalog import (
     canonicalize_n3_font_family,
     n3_font_families,
 )

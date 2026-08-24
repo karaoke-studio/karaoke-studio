@@ -13,7 +13,7 @@ from krok_helper.subtitle_render.engine.text import (
 )
 from krok_helper.subtitle_render.engine.text import style_for_role_in_layout
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
+from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 from krok_helper.subtitle_render.timing import TimingLine
 
 

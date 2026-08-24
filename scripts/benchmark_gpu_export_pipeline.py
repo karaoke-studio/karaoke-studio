@@ -49,7 +49,7 @@ def _with_main_stroke_width(style, stroke_width: float):
 
 def _load_project(path: Path):
     from krok_helper.subtitle_render.models import BackgroundSource, style_from_dict
-    from krok_helper.subtitle_render.n3proj_import import load_n3proj
+    from krok_helper.subtitle_render.n3.project_import import load_n3proj
     from krok_helper.subtitle_render.project_store import load_render_project
     from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 

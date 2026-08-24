@@ -20,8 +20,8 @@ from krok_helper.subtitle_render.paint import (
 from krok_helper.subtitle_render.models import (
     normalize_glow_concentration_level,
 )
-from krok_helper.subtitle_render.n3_font_fallback import resolve_n3_font_slots
-from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
+from krok_helper.subtitle_render.n3.font_fallback import resolve_n3_font_slots
+from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
 
 SizeResolver = Callable[[object], int]
@@ -246,7 +246,7 @@ def _n3_default_font_family() -> str:
         from PyQt6.QtGui import QGuiApplication
 
         if QGuiApplication.instance() is not None:
-            from krok_helper.subtitle_render.n3_font_catalog import (
+            from krok_helper.subtitle_render.n3.font_catalog import (
                 installed_qt_font_families,
             )
 

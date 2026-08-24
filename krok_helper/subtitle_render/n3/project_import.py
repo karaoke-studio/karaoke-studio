@@ -39,7 +39,7 @@ from dataclasses import dataclass, fields as dataclass_fields, replace
 from pathlib import Path
 from typing import Any, Optional
 
-from krok_helper.subtitle_render.n3_font_scheme import (
+from krok_helper.subtitle_render.n3.font_scheme import (
     convert_n3_font_scheme as _scheme_changes,
     hex_from_colorbind as _hex_from_colorbind,
 )

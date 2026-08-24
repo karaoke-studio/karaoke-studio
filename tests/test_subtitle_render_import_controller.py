@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.frontend.workflow.import_controller import (
     N3ProjectImportController,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER
+from krok_helper.subtitle_render.n3.project_import import N3_PROJECT_FILTER
 
 
 def test_n3_import_controller_chooses_from_current_project_directory(
