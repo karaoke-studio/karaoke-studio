@@ -168,10 +168,10 @@ from krok_helper.subtitle_render.guide_symbols import (
     import_svg_guide_symbol,
 )
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.subtitle_render.frontend.background_tasks import (
+from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
     _MediaProbeWorker,
 )
-from krok_helper.subtitle_render.frontend.export_runtime import (
+from krok_helper.subtitle_render.frontend.workflow.export_runtime import (
     ExportRuntimeCallbacks,
     ExportRuntimeController,
     ExportRuntimeHandles,
@@ -192,10 +192,10 @@ from krok_helper.subtitle_render.frontend.guide_replacement import (
     choose_guide_role_scheme,
     replacement_symbol_for_match,
 )
-from krok_helper.subtitle_render.frontend.import_controller import (
+from krok_helper.subtitle_render.frontend.workflow.import_controller import (
     N3ProjectImportController,
 )
-from krok_helper.subtitle_render.frontend.export_controller import (
+from krok_helper.subtitle_render.frontend.workflow.export_controller import (
     ExportJobController,
     ExportJobInputs,
 )

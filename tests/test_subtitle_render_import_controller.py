@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.frontend import import_controller as controller_module
-from krok_helper.subtitle_render.frontend.import_controller import (
+from krok_helper.subtitle_render.frontend.workflow import import_controller as controller_module
+from krok_helper.subtitle_render.frontend.workflow.import_controller import (
     N3ProjectImportController,
 )
 from krok_helper.subtitle_render.models import Style

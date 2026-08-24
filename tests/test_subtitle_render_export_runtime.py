@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.frontend.export_runtime import (
+from krok_helper.subtitle_render.frontend.workflow.export_runtime import (
     ExportRuntimeCallbacks,
     ExportRuntimeController,
 )

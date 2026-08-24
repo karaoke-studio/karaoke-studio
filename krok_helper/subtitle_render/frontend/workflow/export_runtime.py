@@ -9,7 +9,7 @@ from typing import Any
 from PyQt6.QtCore import QThread
 
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
-from krok_helper.subtitle_render.frontend.background_tasks import _RenderWorker
+from krok_helper.subtitle_render.frontend.workflow.background_tasks import _RenderWorker
 
 
 @dataclass(frozen=True)

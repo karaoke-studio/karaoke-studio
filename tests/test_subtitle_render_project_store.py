@@ -20,7 +20,7 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu  # noqa: E4
 from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
-from krok_helper.subtitle_render.frontend import import_controller as import_controller_module  # noqa: E402
+from krok_helper.subtitle_render.frontend.workflow import import_controller as import_controller_module  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
 from krok_helper.subtitle_render import project_controller as project_controller_module  # noqa: E402

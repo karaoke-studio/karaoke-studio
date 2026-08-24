@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from krok_helper.subtitle_render.frontend import background_tasks
+from krok_helper.subtitle_render.frontend.workflow import background_tasks
 
 
 class _CurrentThread:

@@ -10,7 +10,7 @@ import pytest
 
 from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.background import BackgroundSource
-from krok_helper.subtitle_render.frontend.export_controller import (
+from krok_helper.subtitle_render.frontend.workflow.export_controller import (
     ExportJobController,
     ExportJobInputs,
 )

@@ -8,7 +8,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal
 
-from krok_helper.subtitle_render.frontend.background_tasks import (
+from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
     _RecoverySaveWorker,
 )
 

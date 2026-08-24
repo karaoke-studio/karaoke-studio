@@ -857,9 +857,23 @@ def test_ruby_engine_modules_are_grouped_in_one_domain_package() -> None:
     )
 
 
+def test_workflow_frontend_modules_are_grouped_in_one_domain_package() -> None:
+    module_names = {
+        "background_tasks.py",
+        "export_controller.py",
+        "export_runtime.py",
+        "import_controller.py",
+    }
+    workflow_root = ROOT / "frontend" / "workflow"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in workflow_root.glob("*.py")
+    }
+    assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
-    worker_path = ROOT / "frontend" / "background_tasks.py"
+    worker_path = ROOT / "frontend" / "workflow" / "background_tasks.py"
     worker_names = {"_RecoverySaveWorker", "_MediaProbeWorker", "_RenderWorker"}
 
     window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
@@ -874,7 +888,7 @@ def test_subtitle_render_window_delegates_background_tasks() -> None:
     assert inline_workers == set()
     assert extracted_workers == worker_names
     assert (
-        f"{PACKAGE}.frontend.background_tasks"
+        f"{PACKAGE}.frontend.workflow.background_tasks"
         in _import_targets(f"{PACKAGE}.frontend.main_window", window_path)
     )
 
@@ -884,13 +898,13 @@ def test_subtitle_render_window_delegates_export_thread_wiring() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.export_runtime" in targets
+    assert f"{PACKAGE}.frontend.workflow.export_runtime" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     direct_worker_imports = {
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == f"{PACKAGE}.frontend.background_tasks"
+        and node.module == f"{PACKAGE}.frontend.workflow.background_tasks"
         for alias in node.names
     }
     assert "_RenderWorker" not in direct_worker_imports
@@ -947,7 +961,7 @@ def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:
         alias.name
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and node.module == f"{PACKAGE}.frontend.background_tasks"
+        and node.module == f"{PACKAGE}.frontend.workflow.background_tasks"
         for alias in node.names
     }
     assert "_RecoverySaveWorker" not in recovery_worker_imports
@@ -1216,7 +1230,7 @@ def test_subtitle_render_window_delegates_n3_import_commands() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.import_controller" in targets
+    assert f"{PACKAGE}.frontend.workflow.import_controller" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     direct_n3_imports = {
         alias.name
@@ -1364,7 +1378,7 @@ def test_subtitle_render_window_delegates_export_job_assembly() -> None:
     window_module = f"{PACKAGE}.frontend.main_window"
     targets = _import_targets(window_module, window_path)
 
-    assert f"{PACKAGE}.frontend.export_controller" in targets
+    assert f"{PACKAGE}.frontend.workflow.export_controller" in targets
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
