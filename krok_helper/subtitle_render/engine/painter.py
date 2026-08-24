@@ -4002,19 +4002,15 @@ def _apply_measured_section_time_fill(
     return changed
 
 
-def _apply_animation_time_guard(
+def animation_guard_ports_for_style(
     logical_w: int,
     logical_h: int,
     track: TimingTrack,
     style: Style,
-    display_lines: list[DisplayLine],
-    *,
-    enforce_inter_page_gap: bool,
-    adjustments: list[_TimingCollisionAdjustment] | None = None,
-) -> list[DisplayLine]:
-    """Bind Painter collision measurements to the layout timing guard."""
+) -> AnimationGuardPorts:
+    """Expose Painter collision measurements through the layout guard ports."""
 
-    ports = AnimationGuardPorts(
+    return AnimationGuardPorts(
         entry_animation_ms=lambda line: _entry_animation_ms(style, line),
         exit_animation_ms=lambda line: _exit_animation_ms(style, line),
         measure=lambda items, time_window: _measure_collision_bands(
@@ -4035,13 +4031,6 @@ def _apply_animation_time_guard(
             )
         ),
     )
-    return apply_animation_time_guard(
-        style,
-        display_lines,
-        ports,
-        enforce_inter_page_gap=enforce_inter_page_gap,
-        adjustments=adjustments,
-    )
 
 
 
@@ -4058,12 +4047,15 @@ def _resolve_page_sync_and_collisions(
     """Apply page sync, then squeeze each colliding pair in order."""
 
     synchronized = apply_constrained_page_sync(display_lines, style)
-    return _apply_animation_time_guard(
-        logical_w,
-        logical_h,
-        track,
+    return apply_animation_time_guard(
         style,
         synchronized,
+        animation_guard_ports_for_style(
+            logical_w,
+            logical_h,
+            track,
+            style,
+        ),
         enforce_inter_page_gap=enforce_inter_page_gap,
         adjustments=adjustments,
     )
@@ -4139,12 +4131,15 @@ def _display_lines_for_style(
         fill_section_time=lambda items: _apply_measured_section_time_fill(
             logical_w, logical_h, track, style, items
         ),
-        apply_animation_guard=lambda items, enforce_gap: _apply_animation_time_guard(
-            logical_w,
-            logical_h,
-            track,
+        apply_animation_guard=lambda items, enforce_gap: apply_animation_time_guard(
             style,
             items,
+            animation_guard_ports_for_style(
+                logical_w,
+                logical_h,
+                track,
+                style,
+            ),
             enforce_inter_page_gap=enforce_gap,
         ),
     )

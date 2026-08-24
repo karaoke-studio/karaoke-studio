@@ -689,18 +689,24 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     }
     assert "resolve_display_lines" in calls
 
-    guard = next(
+    guard_factory = next(
         node
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_apply_animation_time_guard"
+        and node.name == "animation_guard_ports_for_style"
     )
-    guard_calls = {
+    guard_factory_calls = {
         node.func.id
-        for node in ast.walk(guard)
+        for node in ast.walk(guard_factory)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    assert "apply_animation_time_guard" in guard_calls
+    assert "AnimationGuardPorts" in guard_factory_calls
+    inline_functions = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert "_apply_animation_time_guard" not in inline_functions
 
     resolver_path = ROOT / "engine/layout/display_resolver.py"
     resolver_tree = ast.parse(resolver_path.read_text(encoding="utf-8-sig"))
@@ -783,6 +789,15 @@ def test_painter_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
         "build_page_shift_diagnostics",
         "build_timing_window_diagnostics",
     } <= calls
+    private_painter_calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "painter_impl"
+    }
+    assert "_apply_animation_time_guard" not in private_painter_calls
 
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))

@@ -4,6 +4,9 @@ import krok_helper.subtitle_render.engine.painter as painter_impl
 from krok_helper.subtitle_render.engine.layout.display_schedule import (
     apply_constrained_page_sync,
 )
+from krok_helper.subtitle_render.engine.layout.display_resolver import (
+    apply_animation_time_guard,
+)
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginBox,
     LayoutMarginPorts,
@@ -115,21 +118,23 @@ def layout_timing_diagnostics_for_style(
         independent_line_entry=True,
     )
     synchronized = apply_constrained_page_sync(ideal, style)
-    animation_candidate = painter_impl._apply_animation_time_guard(
+    animation_ports = painter_impl.animation_guard_ports_for_style(
         logical_w,
         logical_h,
         track,
         style,
+    )
+    animation_candidate = apply_animation_time_guard(
+        style,
         synchronized,
+        animation_ports,
         enforce_inter_page_gap=False,
     )
     adjustments: list[TimingCollisionAdjustment] = []
-    collision_guarded = painter_impl._apply_animation_time_guard(
-        logical_w,
-        logical_h,
-        track,
+    collision_guarded = apply_animation_time_guard(
         style,
         synchronized,
+        animation_ports,
         enforce_inter_page_gap=not style.allow_inter_page_line_overlap,
         adjustments=adjustments,
     )

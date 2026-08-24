@@ -7859,6 +7859,10 @@ from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter impor
 from krok_helper.subtitle_render.engine.layout.display_schedule import (  # noqa: E402
     apply_constrained_page_sync,
 )
+from krok_helper.subtitle_render.engine.layout.display_resolver import (  # noqa: E402
+    apply_animation_time_guard,
+)
+from krok_helper.subtitle_render.models import style_from_dict, style_to_dict  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_latin_font,
     _char_layout_width,
@@ -7868,9 +7872,30 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _resolve_baseline_y,
     _resolve_ruby_alignment,
 )
-from krok_helper.subtitle_render.models import style_from_dict, style_to_dict  # noqa: E402
 
 
+def _apply_painter_animation_time_guard(
+    logical_w,
+    logical_h,
+    track,
+    style,
+    display_lines,
+    *,
+    enforce_inter_page_gap,
+    adjustments=None,
+):
+    return apply_animation_time_guard(
+        style,
+        display_lines,
+        subtitle_painter.animation_guard_ports_for_style(
+            logical_w,
+            logical_h,
+            track,
+            style,
+        ),
+        enforce_inter_page_gap=enforce_inter_page_gap,
+        adjustments=adjustments,
+    )
 def test_negative_line_gap_overlaps_dual_line_boxes(qapp):
     track = TimingTrack()
     zero = _resolve_display_baselines(1080, track, [], Style(line_gap_px=0))
@@ -10809,7 +10834,7 @@ def test_animation_guard_keeps_100ms_exit_before_delaying_incoming(qapp):
         DisplayLine(lines[1], 1, 27_060, 31_900, 0, 2, 2),
     ]
 
-    guarded = subtitle_painter._apply_animation_time_guard(
+    guarded = _apply_painter_animation_time_guard(
         3840,
         2160,
         track,
@@ -10842,7 +10867,7 @@ def test_animation_guard_does_not_clip_a_non_overlapping_exit(qapp):
         DisplayLine(lines[1], 0, 29_740, 35_670, 0, 2, 1),
     ]
 
-    guarded = subtitle_painter._apply_animation_time_guard(
+    guarded = _apply_painter_animation_time_guard(
         3_840,
         2_160,
         track,
@@ -10879,10 +10904,10 @@ def test_animation_overlap_switch_changes_collision_time_window(qapp):
         DisplayLine(lines[1], 0, 2_350, 4_250, 0, 2, 1),
     ]
 
-    allowed = subtitle_painter._apply_animation_time_guard(
+    allowed = _apply_painter_animation_time_guard(
         1_280, 720, track, style, display_lines, enforce_inter_page_gap=True
     )
-    forbidden = subtitle_painter._apply_animation_time_guard(
+    forbidden = _apply_painter_animation_time_guard(
         1_280,
         720,
         track,
@@ -10940,7 +10965,7 @@ def test_same_lane_gap_does_not_depend_on_horizontal_glyph_intersection(
         lambda *_args, **_kwargs: measured,
     )
 
-    guarded = subtitle_painter._apply_animation_time_guard(
+    guarded = _apply_painter_animation_time_guard(
         1_280, 720, track, style, display_lines, enforce_inter_page_gap=True
     )
 
@@ -10968,7 +10993,7 @@ def test_animation_guard_compresses_stable_overlap_incrementally(qapp):
         DisplayLine(lines[1], 0, 2_400, 5_250, 0, 2, 1),
     ]
 
-    guarded = subtitle_painter._apply_animation_time_guard(
+    guarded = _apply_painter_animation_time_guard(
         1_280,
         720,
         track,
@@ -11006,7 +11031,7 @@ def test_animation_guard_spills_only_remaining_overlap_to_incoming(qapp):
         DisplayLine(lines[1], 0, 1_600, 5_250, 0, 2, 1),
     ]
 
-    guarded = subtitle_painter._apply_animation_time_guard(
+    guarded = _apply_painter_animation_time_guard(
         1_280,
         720,
         track,
