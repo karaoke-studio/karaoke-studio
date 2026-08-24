@@ -16,7 +16,9 @@ import pytest
 
 from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
-from krok_helper.subtitle_render.engine.layout.semantic_plan import build_track_layout_plan
+from krok_helper.subtitle_render.engine.render.layout_plan_backend import (
+    build_track_layout_plan,
+)
 from krok_helper.subtitle_render.models import (
     GuideSymbol,
     KaraokeColors,
@@ -81,9 +83,49 @@ def test_render_ir_uses_semantic_plan_boundary():
         and node.module == "krok_helper.subtitle_render.engine.layout.semantic_plan"
         for alias in node.names
     }
+    backend_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        == "krok_helper.subtitle_render.engine.render.layout_plan_backend"
+        for alias in node.names
+    }
 
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
-    assert semantic_plan_imports == {"build_track_layout_plan", "layout_pass"}
+    assert semantic_plan_imports == {"layout_pass"}
+    assert backend_imports == {"build_track_layout_plan"}
+
+
+def test_semantic_plan_has_no_painter_dependency():
+    semantic_path = Path(
+        "krok_helper/subtitle_render/engine/layout/semantic_plan.py"
+    )
+    tree = ast.parse(semantic_path.read_text(encoding="utf-8"))
+    imported_modules = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
+
+    backend_path = Path(
+        "krok_helper/subtitle_render/engine/render/layout_plan_backend.py"
+    )
+    backend_tree = ast.parse(backend_path.read_text(encoding="utf-8"))
+    painter_imports = {
+        alias.name
+        for node in ast.walk(backend_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "krok_helper.subtitle_render.engine.painter"
+        for alias in node.names
+    }
+    assert painter_imports == {
+        "display_lines_for_style",
+        "resolved_page_offset_windows_for_style",
+    }
+    assert all(not name.startswith("_") for name in painter_imports)
 
 
 def test_layout_pass_boundary_preserves_shared_reentrant_context():

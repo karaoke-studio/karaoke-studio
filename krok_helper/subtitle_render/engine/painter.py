@@ -83,9 +83,9 @@ from krok_helper.subtitle_render.engine.layout.layout_plan_cache import (
     clear_track_layout_plan_cache,
     layout_cache_enabled as _layout_cache_enabled,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan_orchestrator import (
+from krok_helper.subtitle_render.engine.layout.semantic_plan import (
     LayoutPlanResolvers,
-    resolve_track_layout_plan,
+    build_track_layout_plan as _build_semantic_layout_plan,
 )
 from krok_helper.subtitle_render.engine.layout.layout_plan_projection import (
     active_page_offsets_from_layout_plan as _active_page_offsets_from_layout_plan,
@@ -4162,7 +4162,7 @@ def build_track_layout_plan(
     logical_h: int | None = None,
 ) -> TrackLayoutPlan:
     """Resolve one plan through Painter's remaining geometry adapters."""
-    return resolve_track_layout_plan(
+    return _build_semantic_layout_plan(
         track,
         style,
         LayoutPlanResolvers(

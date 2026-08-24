@@ -1151,6 +1151,7 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "animator.py",
         "image_resource.py",
         "layers.py",
+        "layout_plan_backend.py",
         "quantize.py",
         "raster_blur.py",
         "render_bands.py",

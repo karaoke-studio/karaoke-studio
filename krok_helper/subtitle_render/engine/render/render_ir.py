@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from krok_helper.subtitle_render.engine.layout.semantic_plan import (
+from krok_helper.subtitle_render.engine.layout.semantic_plan import layout_pass
+from krok_helper.subtitle_render.engine.render.layout_plan_backend import (
     build_track_layout_plan,
-    layout_pass,
 )
 from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_overlay,
