@@ -29,7 +29,6 @@ P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画
 
 from __future__ import annotations
 
-import logging
 import math
 import os
 from collections import OrderedDict
@@ -70,6 +69,15 @@ from krok_helper.subtitle_render.engine.layout_context import (
 from krok_helper.subtitle_render.engine.guide_semantics import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
     render_line_with_guide_symbols as _line_with_guide_symbol,
+)
+from krok_helper.subtitle_render.engine.guide_metrics import (
+    bitmap_guide_content_size as _bitmap_guide_content_size,
+    bitmap_guide_image as _bitmap_guide_image,
+    vector_glyph_width as _vector_glyph_width,
+)
+from krok_helper.subtitle_render.engine.image_resource import (
+    image_file_signature as _image_file_signature,
+    warn_image_resource_skipped as _warn_image_fill_skipped,
 )
 from krok_helper.subtitle_render.engine.layout_plan_cache import (
     clear_track_layout_plan_cache,
@@ -154,11 +162,6 @@ from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
-# 图片纹理填充加载失败时告警一次（按路径去重），避免导出中静默缺纹理。
-_IMAGE_FILL_WARNED: set[str] = set()
-_PAINTER_LOG = logging.getLogger("krok_helper.subtitle_render.painter")
-_BITMAP_GUIDE_CACHE_MAX = 64
-_BITMAP_GUIDE_CACHE: "OrderedDict[tuple[str, int, int], QImage]" = OrderedDict()
 _HARD_BAND_BRUSH_CACHE_MAX = 128
 _HARD_BAND_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
 _IMAGE_FILL_LOCK = Lock()
@@ -7178,73 +7181,11 @@ def _bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
     )
 
 
-def _bitmap_guide_image(path: str | None) -> QImage | None:
-    if not path:
-        return None
-    signature = _image_file_signature(path)
-    if signature is None:
-        return None
-    with _IMAGE_FILL_LOCK:
-        cached = _BITMAP_GUIDE_CACHE.get(signature)
-        if cached is not None:
-            _BITMAP_GUIDE_CACHE.move_to_end(signature)
-            return cached
-    image = QImage(signature[0])
-    if image.isNull():
-        return None
-    image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-    with _IMAGE_FILL_LOCK:
-        existing = _BITMAP_GUIDE_CACHE.get(signature)
-        if existing is not None:
-            _BITMAP_GUIDE_CACHE.move_to_end(signature)
-            return existing
-        _BITMAP_GUIDE_CACHE[signature] = image
-        while len(_BITMAP_GUIDE_CACHE) > _BITMAP_GUIDE_CACHE_MAX:
-            _BITMAP_GUIDE_CACHE.popitem(last=False)
-    return image
-
-
-def _bitmap_guide_content_size(symbol: GuideSymbol, style: Style) -> tuple[int, int]:
-    image = _bitmap_guide_image(symbol.bitmap_before_path)
-    if image is None:
-        image = _bitmap_guide_image(symbol.bitmap_after_path)
-    if image is None or image.isNull():
-        return 1, max(int(style.font_size_px), 1)
-    if symbol.bitmap_fix_size:
-        return max(int(image.width()), 1), max(int(image.height()), 1)
-    target_h = max(
-        max(int(style.font_size_px), 1) * max(int(symbol.bitmap_zoom_percent), 1) // 100,
-        1,
-    )
-    target_w = max(int(round(image.width() * target_h / max(image.height(), 1))), 1)
-    return target_w, target_h
-
-
 def _bitmap_guide_anchor_descent(glyph: _GlyphLayout) -> int:
     style = glyph.style
     if style.layout_semantics == "n3_1074":
         return _fixed_line_geometry(style)[2]
     return max(int(glyph.metrics.descent()), 0)
-
-
-def _vector_glyph_width(symbol, style: Style) -> int:
-    if _guide_symbol_is_bitmap(symbol):
-        content_w, _ = _bitmap_guide_content_size(symbol, style)
-        return (
-            content_w
-            + int(symbol.bitmap_margin_left_px)
-            + int(symbol.bitmap_margin_right_px)
-        )
-    return max(
-        int(
-            round(
-                max(int(style.font_size_px), 1)
-                * max(float(symbol.advance_width), 0.0)
-                / max(int(symbol.units_per_em), 1)
-            )
-        ),
-        1,
-    )
 
 
 def _glyph_path(glyph: _GlyphLayout, baseline_y: int) -> QPainterPath:
@@ -12863,14 +12804,6 @@ def _anchor_texture_brush(brush: QBrush, rect: QRectF) -> QBrush:
     return anchored
 
 
-def _warn_image_fill_skipped(path: str, reason: str) -> None:
-    with _IMAGE_FILL_LOCK:
-        if path in _IMAGE_FILL_WARNED:
-            return
-        _IMAGE_FILL_WARNED.add(path)
-    _PAINTER_LOG.warning("字幕图片填充被跳过：%s（%s）", path, reason)
-
-
 def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
     with _IMAGE_FILL_LOCK:
         cached = _IMAGE_FILL_CACHE.get(signature)
@@ -12886,16 +12819,6 @@ def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
         while len(_IMAGE_FILL_CACHE) > _IMAGE_FILL_CACHE_MAX:
             _IMAGE_FILL_CACHE.popitem(last=False)
     return image
-
-
-def _image_file_signature(path: str) -> tuple[str, int, int] | None:
-    try:
-        normalized = os.path.abspath(os.path.normpath(path))
-        stat = os.stat(normalized)
-    except OSError as exc:
-        _warn_image_fill_skipped(path, f"无法读取图片文件：{exc}")
-        return None
-    return normalized, int(stat.st_mtime_ns), int(stat.st_size)
 
 
 def _linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBrush:

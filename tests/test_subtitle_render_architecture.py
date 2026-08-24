@@ -523,6 +523,14 @@ def test_layout_plan_projection_has_no_painter_dependency() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_guide_metrics_and_image_resources_have_no_painter_dependency() -> None:
+    for module_name in ("guide_metrics", "image_resource"):
+        owner = f"{PACKAGE}.engine.{module_name}"
+        targets = _import_targets(owner, ROOT / f"engine/{module_name}.py")
+
+        assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"
