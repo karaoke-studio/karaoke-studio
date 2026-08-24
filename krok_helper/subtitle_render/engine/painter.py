@@ -357,26 +357,6 @@ class _LineLayout:
 
 
 @dataclass(frozen=True)
-class _VerticalLineLayout:
-    """竖排行的纯几何布局（不依赖 t_ms）。"""
-
-    font: QFont
-    metrics: QFontMetrics
-    cell_w: int
-    cell_h: int
-    ascent: int
-    column_x: int
-    y_top: int
-    block_h: int
-    intervals: list[tuple[int, int]]
-    cells: list[tuple[int, int]]
-    line_rect: QRectF
-    text_path: QPainterPath
-    colors: KaraokeColors
-    active_rubies: list[RubyAnnotation]
-
-
-@dataclass(frozen=True)
 class _RubyWipeSegment:
     """One timed ruby glyph sweep on the horizontal visual axis."""
 
@@ -611,6 +591,17 @@ from krok_helper.subtitle_render.engine.render.title import (
     make_title_overlay_layer as _make_title_overlay_layer,
     paint_title_overlay as _paint_title_overlay_with_ports,
     title_block_origin as _title_block_origin,
+)
+from krok_helper.subtitle_render.engine.render.vertical import (
+    VerticalLineLayout as _VerticalLineLayout,
+    layout_vertical_line as _layout_vertical_line,
+    resolve_vertical_columns as _resolve_vertical_columns,
+    resolve_vertical_top as _resolve_vertical_top,
+    vertical_cell_width as _vertical_cell_width,
+    vertical_glyph_offset as _vertical_glyph_offset,
+    vertical_glyph_path as _vertical_glyph_path,
+    vertical_orientation as _vertical_orientation,
+    vertical_ruby_allowance as _vertical_ruby_allowance,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors as _effective_karaoke_colors,
@@ -3452,145 +3443,6 @@ def _resolve_display_baselines(
 # 竖排（縦書き）
 # ---------------------------------------------------------------------------
 
-_VERTICAL_REFERENCE_CHAR = "永"  # 「永」全角参照字，估列宽
-
-# UTR#50：竖排时需旋转 90° 的字符（长音、破折号、波浪、横向括号、横箭头）。
-_VERTICAL_ROTATE_CHARS = set(
-    "ーｰ"  # ー ｰ 长音符
-    "—―‐‑‒–"  # — ― ‐ ‑ ‒ – 各种连字符/破折号
-    "〜～"  # 〜 ～ 波浪
-    "→←"  # → ← 横向箭头
-    "（）()"  # （ ） ( )
-    "「」『』"  # 「 」 『 』
-    "【】〔〕"  # 【 】 〔 〕
-    "［］｛｝"  # ［ ］ ｛ ｝
-    "〈〉《》"  # 〈 〉 《 》
-    "[]{}<>"  # [ ] { } < >
-)
-
-# 竖排时移到字格右上角的标点（直立、不旋转）。
-_VERTICAL_CORNER_PUNCT = set("、。，．")  # 、 。 ， ．
-
-# 竖排时向右上偏移的小书き假名（直立）。
-_VERTICAL_SMALL_KANA = set(
-    "ぁぃぅぇぉっゃゅょゎ"  # ぁぃぅぇぉっゃゅょゎ
-    "ァィゥェォッャュョヮ"  # ァィゥェォッャュョヮ
-    "ヵヶ"  # ヵヶ
-)
-
-
-def _vertical_orientation(ch: str) -> str:
-    """UTR#50 简化朝向：``"R"`` 需旋转 90°，``"U"`` 直立。"""
-    return "R" if ch in _VERTICAL_ROTATE_CHARS else "U"
-
-
-def _vertical_glyph_offset(ch: str, cell_w: int, cell_h: int) -> tuple[float, float]:
-    """直立字形在字格内的位移（标点/小假名靠右上）。"""
-    if ch in _VERTICAL_CORNER_PUNCT:
-        return (cell_w * 0.28, -cell_h * 0.28)
-    if ch in _VERTICAL_SMALL_KANA:
-        return (cell_w * 0.10, -cell_h * 0.10)
-    return (0.0, 0.0)
-
-
-def _vertical_glyph_path(
-    ch_text: str,
-    font: QFont,
-    metrics: QFontMetrics,
-    column_x: int,
-    cell_top: int,
-    cell_w: int,
-    cell_h: int,
-    ascent: int,
-    *,
-    vector_glyph=None,
-) -> QPainterPath:
-    """单个竖排字形的 path：旋转类绕字格中心转 90°，其余直立（标点/小假名偏移）。"""
-    if vector_glyph is not None:
-        if _guide_symbol_is_bitmap(vector_glyph):
-            return QPainterPath()
-        path = scaled_guide_symbol_path(
-            vector_glyph,
-            pixel_size=max(int(font.pixelSize()), 1),
-            left=float(column_x - max(int(font.pixelSize()), 1) / 2),
-            baseline_y=float(cell_top + ascent),
-        )
-        bounds = path.boundingRect()
-        return QTransform.fromTranslate(
-            float(column_x) - bounds.center().x(),
-            float(cell_top + cell_h / 2) - bounds.center().y(),
-        ).map(path)
-    advance = metrics.horizontalAdvance(ch_text)
-    baseline = cell_top + ascent
-    glyph_x = column_x - advance / 2
-    path = QPainterPath()
-    if _vertical_orientation(ch_text) == "R":
-        path.addText(float(glyph_x), float(baseline), font, ch_text)
-        center_x = float(column_x)
-        center_y = float(cell_top + cell_h / 2)
-        transform = QTransform()
-        transform.translate(center_x, center_y)
-        transform.rotate(90)
-        transform.translate(-center_x, -center_y)
-        return transform.map(path)
-    dx, dy = _vertical_glyph_offset(ch_text, cell_w, cell_h)
-    path.addText(float(glyph_x + dx), float(baseline + dy), font, ch_text)
-    return path
-
-
-def _vertical_cell_width(metrics: QFontMetrics) -> int:
-    """竖排列宽 = 一个全角字的步进（字形列内居中用）。"""
-    width = metrics.horizontalAdvance(_VERTICAL_REFERENCE_CHAR)
-    if width <= 0:
-        width = metrics.height()
-    return max(width, 1)
-
-
-def _resolve_vertical_columns(
-    img_w: int,
-    track: TimingTrack,
-    display_lines: list[DisplayLine],
-    style: Style,
-) -> dict[int, int]:
-    """每 lane 的列中心 x。lane 0 = 右列（当前句），lane 1 = 左列（下一句）。
-
-    竖排文字流向右→左：当前句在最右，列向左排。列宽用全角参照字估算，
-    列间距复用 ``line_gap_px``，右列距右边缘复用 ``line_y_margin_px``。
-    """
-    metrics = QFontMetrics(_build_font(style))
-    cell_w = _vertical_cell_width(metrics)
-    margin = style.line_y_margin_px
-    gap = max(style.line_gap_px, 0)  # 竖排列距不允许负值（列重叠无意义）
-    ruby_w = _vertical_ruby_allowance(track, style)
-    # 右列：列右侧留出 ruby 宽度（ruby 排在基字右边）。列数随 lane 数扩展，
-    # lane k 在 lane k-1 左侧一列；行级布局的页行数可能超过全局行数，按可见行补足。
-    right_center = img_w - margin - ruby_w - cell_w / 2
-    max_lane = max((item.lane for item in display_lines), default=0)
-    columns: dict[int, int] = {}
-    for lane in range(max(_lane_count(style), max_lane + 1)):
-        columns[lane] = int(round(right_center - lane * (cell_w + ruby_w + gap)))
-    return columns
-
-
-def _vertical_ruby_allowance(track: TimingTrack, style: Style) -> int:
-    """竖排时基字右侧为 ruby 预留的水平宽度（无 ruby 则 0）。"""
-    if not track.rubies:
-        return 0
-    ruby_metrics = QFontMetrics(_build_ruby_font(style))
-    return max(ruby_metrics.height() + int(style.ruby_gap_px), 0)
-
-
-def _resolve_vertical_top(img_h: int, block_h: int, style: Style) -> int:
-    """竖排列的纵向起点 y（列整体上/中/下锚定，复用 line_y_position）。"""
-    margin = style.line_y_margin_px
-    pos = style.line_y_position
-    if pos == "top":
-        return margin
-    if pos == "center":
-        return max((img_h - block_h) // 2, 0)
-    return img_h - margin - block_h  # bottom（默认）
-
-
 def _build_baked_path_stack(
     path: QPainterPath,
     rect: QRectF,
@@ -4226,95 +4078,6 @@ def _vertical_ruby_layers(
         )
         z += 1
     return layers
-
-
-def _layout_vertical_line(
-    track: TimingTrack,
-    line: TimingLine,
-    style: Style,
-    img_w: int,
-    img_h: int,
-    *,
-    column_x: int | None,
-    source_line: TimingLine | None = None,
-    resolved_intervals: tuple[tuple[int, int], ...] | None = None,
-) -> _VerticalLineLayout | None:
-    """layout 段：算竖排行的列几何 / 字符格 / 字形路径（不依赖 t_ms）。"""
-    chars = line.chars
-    if not chars:
-        return None
-    font = _build_font(style)
-    metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(style)
-    font_for = _make_font_for(style, font, latin_font)
-    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    cell_w = _vertical_cell_width(metrics)
-    cell_h = metrics.height()
-    ascent = metrics.ascent()
-
-    resolved_column_x = (
-        column_x
-        if column_x is not None
-        else int(round(img_w - style.line_y_margin_px - cell_w / 2))
-    )
-    block_h = cell_h * len(chars)
-    y_top = _resolve_vertical_top(img_h, block_h, style)
-    intervals = (
-        list(resolved_intervals)
-        if resolved_intervals is not None
-        else compute_char_intervals(line)
-    )
-    colors = _effective_karaoke_colors(style)
-
-    text_path = QPainterPath()
-    cells: list[tuple[int, int]] = []
-    for index, ch in enumerate(chars):
-        cell_top = y_top + index * cell_h
-        cells.append((cell_top, cell_top + cell_h))
-        glyph_font = font_for(ch.text) if font_for is not None else font
-        glyph_metrics = (
-            QFontMetrics(glyph_font)
-            if _is_emoji_text(ch.text)
-            else latin_metrics
-            if (font_for is not None and ch.text and ch.text.isascii())
-            else metrics
-        )
-        text_path.addPath(
-            _vertical_glyph_path(
-                ch.text,
-                glyph_font,
-                glyph_metrics,
-                resolved_column_x,
-                cell_top,
-                cell_w,
-                cell_h,
-                ascent,
-                vector_glyph=ch.vector_glyph,
-            )
-        )
-
-    line_rect = QRectF(
-        float(resolved_column_x - cell_w / 2),
-        float(y_top),
-        float(cell_w),
-        float(block_h),
-    )
-    return _VerticalLineLayout(
-        font=font,
-        metrics=metrics,
-        cell_w=cell_w,
-        cell_h=cell_h,
-        ascent=ascent,
-        column_x=resolved_column_x,
-        y_top=y_top,
-        block_h=block_h,
-        intervals=intervals,
-        cells=cells,
-        line_rect=line_rect,
-        text_path=text_path,
-        colors=colors,
-        active_rubies=_active_rubies_for_line(track.rubies, source_line or line),
-    )
 
 
 def _paint_rubies_vertical(

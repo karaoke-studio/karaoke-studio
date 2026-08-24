@@ -1175,6 +1175,7 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "signal.py",
         "timeline_projection_backend.py",
         "title.py",
+        "vertical.py",
     }
     render_root = ROOT / "engine" / "render"
     assert {"__init__.py", *module_names} <= {
@@ -1286,6 +1287,41 @@ def test_signal_geometry_has_one_render_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
         ROOT / "engine/render/signal.py",
+    )
+
+
+def test_vertical_layout_has_one_render_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.vertical"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_VerticalLineLayout",
+        "_layout_vertical_line",
+        "_resolve_vertical_columns",
+        "_resolve_vertical_top",
+        "_vertical_cell_width",
+        "_vertical_glyph_offset",
+        "_vertical_glyph_path",
+        "_vertical_orientation",
+        "_vertical_ruby_allowance",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert delegated_names <= imported
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        owner,
+        ROOT / "engine/render/vertical.py",
     )
 
 
