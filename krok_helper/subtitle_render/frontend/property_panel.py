@@ -5712,76 +5712,7 @@ class PropertyPanel(QWidget):
         return section
 
     def _make_vertical_layout_section(self) -> QFrame:
-        """垂直与方向：行间距 + 书写方向开关。
-
-        上下配置/上下余白已随布局示意图移入「行结构」（位置即语义）；
-        书写方向只有两个复选框，独立成卡片浪费一整个卡片头。
-        """
-        section, layout = _section("垂直与方向")
-
-        self._line_gap_spin = _spin(
-            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
-        )
-        self._line_gap_spin.setFixedWidth(120)
-        # _spin 默认水平 Ignored，会被 HBox 压到最小宽把「px」单位裁掉。
-        self._line_gap_spin.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        self._line_gap_spin.setToolTip(
-            "相邻两行主文字行盒之间的间距（N3 行間），可为负让行盒重叠；"
-            "不包含注音高度。"
-        )
-        self._line_gap_spin.valueChanged.connect(
-            lambda value: self._update_layout_field(line_gap_px=value)
-        )
-        compact_row = QWidget(section)
-        compact_layout = QHBoxLayout(compact_row)
-        compact_layout.setContentsMargins(0, 0, 0, 0)
-        compact_layout.setSpacing(12)
-        compact_layout.addWidget(_field("行间距", self._line_gap_spin), 0)
-        self._vertical_check = CheckBox("竖排", compact_row)
-        self._vertical_check.toggled.connect(
-            lambda checked: self._update_style(vertical=checked)
-        )
-        compact_layout.addWidget(self._vertical_check, 0, Qt.AlignmentFlag.AlignBottom)
-        self._rtl_check = CheckBox("从右到左", compact_row)
-        self._rtl_check.toggled.connect(
-            lambda checked: self._update_style(right_to_left=checked)
-        )
-        compact_layout.addWidget(self._rtl_check, 0, Qt.AlignmentFlag.AlignBottom)
-        self._allow_inter_page_line_overlap_check = CheckBox(
-            "启用行间重叠", compact_row
-        )
-        self._allow_inter_page_line_overlap_check.setToolTip(
-            "关闭时，系统按每一行不含注音、描边、阴影和发光的主文字字形"
-            "像素范围检测真实跨页冲突，只缩短发生冲突的两行的提前入场和延迟"
-            "退场时间，不会截断任何走字区间或改变页内上屏顺序。自动压缩可以"
-            "缩短动画时段：不会把非零入场动画自动压到"
-            " 250 ms 以下；若动画时长或上屏时间由用户手工设定，则保留用户值；"
-            "非零退场动画自动压缩时至少保留 100 ms。是否允许入场和退场动画"
-            "互相重叠，由时间设置中的“允许出入场动画重叠”单独控制。"
-            "时间压缩仍无法消除冲突时，移动后进入的整页字幕。"
-            "避让优先吸附到已有布局行位，再沿布局方向寻找画布"
-            "内空间，跨页空隙采用被重叠页面布局的行间距；放不下时改向反方向寻找；"
-            "两边都放不下则保持原布局位置和绘制优先级。页面一旦移动，会保持位置"
-            "直到本页播放完毕。入场、退场和字符动画允许互相穿越，不因页面排版"
-            "变化而扩大碰撞时间。开启后不执行跨页时间压缩或空间避让，允许跨页字幕"
-            "直接重叠，适合需要刻意叠放的特殊效果。同一页内部的负行间距或手工重叠"
-            "不受此开关影响。"
-        )
-        self._allow_inter_page_line_overlap_check.toggled.connect(
-            lambda checked: self._update_style(
-                allow_inter_page_line_overlap=checked
-            )
-        )
-        compact_layout.addWidget(
-            self._allow_inter_page_line_overlap_check,
-            0,
-            Qt.AlignmentFlag.AlignBottom,
-        )
-        compact_layout.addStretch(1)
-        layout.addWidget(compact_row)
-        return section
+        return self._layout_page_builder.make_vertical_section()
 
     def _on_line_position_changed(self, _value: str = "") -> None:
         self._update_layout_field(
