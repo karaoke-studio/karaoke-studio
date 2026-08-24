@@ -5498,10 +5498,6 @@ def build_track_layout_plan(
         resolved_guide_anchor_bounds_for_line(track, line, style)
         for line in track.lines
     ]
-    center_overrides = {
-        index: _line_center_override(track, line, layout_styles[index])
-        for index, line in enumerate(track.lines)
-    }
     animation_styles = [
         _style_for_line_display_window(
             style,
@@ -5525,7 +5521,6 @@ def build_track_layout_plan(
         animation_styles=animation_styles,
         resolved_intervals=resolved_intervals,
         guide_anchor_bounds=guide_anchor_bounds,
-        center_overrides=center_overrides,
     )
     if _layout_cache_enabled():
         # Retain the owners alongside the plan: the key intentionally uses the

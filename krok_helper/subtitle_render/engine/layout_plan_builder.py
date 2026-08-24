@@ -9,6 +9,7 @@ from krok_helper.subtitle_render.engine.layout_plan import (
     LineLayoutPlan,
     TrackLayoutPlan,
 )
+from krok_helper.subtitle_render.engine.line_pagination import line_center_override
 from krok_helper.subtitle_render.engine.line_style import (
     lane_count,
     row_count_resolver,
@@ -37,7 +38,6 @@ def assemble_track_layout_plan(
     animation_styles: Sequence[Style],
     resolved_intervals: Sequence[Sequence[tuple[int, int]]],
     guide_anchor_bounds: Sequence[tuple[float, float] | None],
-    center_overrides: Mapping[int, bool],
 ) -> TrackLayoutPlan:
     """Assemble already-resolved timing and geometry into one shared plan."""
     renderable_lines = [
@@ -142,7 +142,11 @@ def assemble_track_layout_plan(
                 layout_lane=authored_lanes.get(index, lane),
                 display_start_ms=display_start,
                 display_end_ms=display_end,
-                center_override=center_overrides.get(index, False),
+                center_override=line_center_override(
+                    track,
+                    line,
+                    layout_styles[index],
+                ),
                 layout_offset_windows=tuple(page_offset_windows.get(index, ())),
             )
         )
