@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from krok_helper.subtitle_render.engine.layout_plan import LayoutOffsetWindow
@@ -13,9 +14,15 @@ from krok_helper.subtitle_render.engine.page_placement import (
 )
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import LYRICS_LAYOUT_FIELDS, Style
+from krok_helper.subtitle_render.timing import TimingTrack
 
 
 PageId = tuple[int, int]
+_PAGE_OFFSET_CACHE_MAX = 24
+_PAGE_OFFSET_CACHE: OrderedDict[
+    tuple,
+    dict[int, tuple[LayoutOffsetWindow, ...]],
+] = OrderedDict()
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,54 @@ class MeasuredPageLine:
     axis_bounds: tuple[float, float] | None = None
     cross_bounds: tuple[float, float] | None = None
     axis_anchor: float | None = None
+
+
+def _page_offset_cache_key(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+) -> tuple:
+    return (
+        max(int(logical_w), 1),
+        max(int(logical_h), 1),
+        value_signature(track),
+        value_signature(style),
+    )
+
+
+def cached_page_offset_windows(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+) -> dict[int, tuple[LayoutOffsetWindow, ...]] | None:
+    key = _page_offset_cache_key(logical_w, logical_h, track, style)
+    cached = _PAGE_OFFSET_CACHE.get(key)
+    if cached is None:
+        return None
+    _PAGE_OFFSET_CACHE.move_to_end(key)
+    return {track_index: tuple(windows) for track_index, windows in cached.items()}
+
+
+def store_page_offset_windows(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    resolved: dict[int, tuple[LayoutOffsetWindow, ...]],
+) -> None:
+    key = _page_offset_cache_key(logical_w, logical_h, track, style)
+    _PAGE_OFFSET_CACHE[key] = {
+        track_index: tuple(windows) for track_index, windows in resolved.items()
+    }
+    _PAGE_OFFSET_CACHE.move_to_end(key)
+    while len(_PAGE_OFFSET_CACHE) > _PAGE_OFFSET_CACHE_MAX:
+        _PAGE_OFFSET_CACHE.popitem(last=False)
+
+
+def clear_page_offset_cache() -> None:
+    _PAGE_OFFSET_CACHE.clear()
 
 
 def _page_collision_layout_key(
@@ -159,4 +214,10 @@ def build_page_offset_windows(
     }
 
 
-__all__ = ["MeasuredPageLine", "build_page_offset_windows"]
+__all__ = [
+    "MeasuredPageLine",
+    "build_page_offset_windows",
+    "cached_page_offset_windows",
+    "clear_page_offset_cache",
+    "store_page_offset_windows",
+]

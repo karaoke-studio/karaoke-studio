@@ -130,6 +130,9 @@ from krok_helper.subtitle_render.engine.qt_line_geometry import (
 from krok_helper.subtitle_render.engine.page_offset_plan import (
     MeasuredPageLine,
     build_page_offset_windows,
+    cached_page_offset_windows,
+    clear_page_offset_cache,
+    store_page_offset_windows,
 )
 from krok_helper.subtitle_render.engine.display_schedule import (
     display_schedule_from_items,
@@ -179,10 +182,6 @@ _DISPLAY_LINES_CACHE: (
 ) = OrderedDict()
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
-_PAGE_PLACEMENT_CACHE_MAX = 24
-_PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[tuple[int, int, float, float], ...]]]" = (
-    OrderedDict()
-)
 
 
 @dataclass(frozen=True)
@@ -490,7 +489,7 @@ def clear_before_layer_cache() -> None:
     _LINE_LAYOUT_CACHE.clear()
     _DISPLAY_LINES_CACHE.clear()
     clear_track_layout_plan_cache()
-    _PAGE_PLACEMENT_CACHE.clear()
+    clear_page_offset_cache()
 
 
 def _track_layout_signature(track: TimingTrack) -> tuple:
@@ -1906,16 +1905,14 @@ def resolved_page_offset_windows_for_style(
 
     if style.allow_inter_page_line_overlap or not style.dual_line_layout:
         return {}
-    cache_key = (
-        max(int(logical_w), 1),
-        max(int(logical_h), 1),
-        _value_signature(track),
-        _value_signature(style),
+    cached = cached_page_offset_windows(
+        logical_w,
+        logical_h,
+        track,
+        style,
     )
-    cached = _PAGE_PLACEMENT_CACHE.get(cache_key)
     if cached is not None:
-        _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
-        return {key: tuple(value) for key, value in cached.items()}
+        return cached
 
     display_lines = _display_lines_for_style(
         track,
@@ -2032,10 +2029,7 @@ def resolved_page_offset_windows_for_style(
         style,
         measurements,
     )
-    _PAGE_PLACEMENT_CACHE[cache_key] = resolved
-    _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
-    while len(_PAGE_PLACEMENT_CACHE) > _PAGE_PLACEMENT_CACHE_MAX:
-        _PAGE_PLACEMENT_CACHE.popitem(last=False)
+    store_page_offset_windows(logical_w, logical_h, track, style, resolved)
     return {key: tuple(value) for key, value in resolved.items()}
 
 
