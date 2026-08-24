@@ -309,6 +309,7 @@ from krok_helper.subtitle_render.session import (
     SubtitleProjectState,
     SubtitleTrackMutation,
 )
+from krok_helper.subtitle_render.settings_store import SubtitleRenderSettingsStore
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 
 apply_qfluent_menu_lifetime_patch()
@@ -2105,6 +2106,7 @@ class SubtitleRenderWindow(QWidget):
         super().__init__(parent)
         self._embedded = embedded
         self._settings_provider = settings_provider
+        self._settings_store = SubtitleRenderSettingsStore(settings_provider)
         self._workflow_context = workflow_context
 
         self._project_document = SubtitleProjectDocument()
@@ -2538,14 +2540,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             data = self._load_subtitle_settings()
             data[_RECENT_PROJECTS_SETTINGS_KEY] = list(paths)
-            if self._settings_provider is not None and hasattr(
-                self._settings_provider, "save"
-            ):
-                self._settings_provider.save(data)
-                return
-            settings = load_app_settings()
-            settings.subtitle_render = data
-            save_app_settings(settings, merge_module_namespaces=False)
+            self._settings_store.save(data)
         except Exception:
             logging.getLogger(__name__).warning(
                 "保存字幕渲染最近项目失败", exc_info=True
@@ -8730,14 +8725,7 @@ class SubtitleRenderWindow(QWidget):
                 allowed_render_workers=RENDER_WORKER_OPTIONS,
             )
         try:
-            if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
-                self._settings_provider.save(data)
-                return
-            settings = load_app_settings()
-            settings.subtitle_render = data
-            # 没有设置桥时这里就是桥：要写的正是 ``subtitle_render`` 那一段，别让
-            # 命名空间合并把盘上的旧值抓回来（那样预设库和输出偏好会悄悄丢掉）。
-            save_app_settings(settings, merge_module_namespaces=False)
+            self._settings_store.save(data)
         except Exception:
             # 原来是彻底静默的：写盘失败（文件被占用 / 没权限 / 磁盘满）时用户什么
             # 都看不到，只会觉得"存了但没存上"。仍然不往上抛（保存失败不该把正在
@@ -8825,11 +8813,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_subtitle_settings(self) -> dict:
         try:
-            if self._settings_provider is not None and hasattr(self._settings_provider, "load"):
-                loaded = self._settings_provider.load()
-            else:
-                loaded = load_app_settings().subtitle_render
-            return dict(loaded) if isinstance(loaded, dict) else {}
+            return self._settings_store.load()
         except Exception:
             return {}
 
