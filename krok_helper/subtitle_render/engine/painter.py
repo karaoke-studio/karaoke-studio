@@ -92,6 +92,8 @@ from krok_helper.subtitle_render.engine.layout.layout_plan_projection import (
     visible_lines_from_layout_plan as _visible_lines_from_layout_plan,
 )
 from krok_helper.subtitle_render.engine.layout.line_style import (
+    entry_animation_ms as _entry_animation_ms,
+    exit_animation_ms as _exit_animation_ms,
     lane_count as _lane_count,
     layout_style_for_line as _layout_style_for_line,
     line_end_ms as _line_end_ms,
@@ -209,6 +211,7 @@ from krok_helper.subtitle_render.engine.layout.display_resolver import (
     StyleDisplayResolutionPorts,
     apply_animation_time_guard,
     clear_display_line_resolution_cache,
+    display_line_compute_kwargs,
     resolve_display_lines_for_style,
     resolve_display_timing,
 )
@@ -622,11 +625,6 @@ from krok_helper.subtitle_render.engine.layout.layout_assignment import (
     auto_assign_layouts_by_page,
 )
 from krok_helper.subtitle_render.engine.render.animator import line_animation_state
-from krok_helper.subtitle_render.engine.timing.show_time import (
-    MIN_AUTO_ENTRY_ANIMATION_MS,
-    MIN_AUTO_EXIT_ANIMATION_MS,
-    protect_time_ms,
-)
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _main_text_ruby_progress_ratio,
     _main_text_ruby_progress_time_at_ratio,
@@ -3455,29 +3453,6 @@ def _main_stroke2_width(style: Style) -> int:
     return max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
 
 
-def _display_line_compute_kwargs(style: Style) -> dict[str, object]:
-    return {
-        "lead_in_ms": style.line_lead_in_ms,
-        "tail_ms": style.line_tail_ms,
-        "lane_gap_ms": style.line_lane_gap_ms,
-        "section_gap_ms": style.section_gap_ms,
-        "sync_entry": style.sync_entry,
-        "sync_ending": style.sync_ending,
-        "sync_each_page": style.sync_each_page,
-        "auto_fill_section_time": style.auto_fill_section_time,
-        "section_ending_mode": style.section_ending_mode,
-        "protect_ms": _effective_line_protect_ms(style),
-        "lane_count": _lane_count(style),
-        "row_count_of": _row_count_resolver(style),
-        "bottom_align_of": _bottom_align_resolver(style),
-        "vertical_position_of": _vertical_position_resolver(style),
-        "auto_entry_reserve_ms_of": _auto_entry_reserve_resolver(style),
-        "auto_exit_reserve_ms_of": _auto_exit_reserve_resolver(style),
-        "entry_animation_ms_of": _entry_animation_resolver(style),
-        "exit_animation_ms_of": _exit_animation_resolver(style),
-    }
-
-
 def _measure_collision_bands(
     logical_w: int,
     logical_h: int,
@@ -4045,7 +4020,7 @@ def _display_lines_for_style(
     return resolve_display_lines_for_style(
         track,
         style,
-        _display_line_compute_kwargs(style),
+        display_line_compute_kwargs(style),
         StyleDisplayResolutionPorts(
             build=lambda width, height, base_kwargs: DisplayResolutionPorts(
                 compute=lambda **overrides: compute_display_lines(
@@ -4174,16 +4149,6 @@ def build_track_layout_plan(
         logical_h=logical_h,
     )
 
-
-def _effective_line_protect_ms(style: Style) -> int:
-    """N3 ``WipeTimingSettingsModel.ProtectTime``。
-
-    N3 不把入 / 退场动画时长算进保护时间——淡入淡出整段落在显示窗口内部，
-    是从 PreTime / PostTime 里"吃"掉的，不额外撑窗口。
-    """
-    return protect_time_ms(
-        style.line_lead_in_ms, style.line_tail_ms, style.line_protect_ms
-    )
 
 
 def _signal_display_lines_for_style(
@@ -11849,72 +11814,6 @@ def _resolve_line_x_smart(
         page=page,
     )
 
-
-def _bottom_align_resolver(style: Style):
-    if style.vertical:
-        return None
-    return lambda line: _layout_style_for_line(style, line).line_y_position == "bottom"
-
-
-def _vertical_position_resolver(style: Style):
-    if style.vertical:
-        return None
-    return lambda line: _layout_style_for_line(style, line).line_y_position
-
-
-def _auto_entry_reserve_ms(style: Style, line: TimingLine) -> int:
-    """Return the automatic pre-wipe reserve for this line's entry animation.
-
-    A user-configured animation shorter than the automatic 250 ms floor is
-    already an explicit choice, so the resolver preserves that shorter value
-    instead of lengthening it.
-    """
-
-    line_style = _style_for_line(style, line)
-    duration = max(int(line_style.entry_lead_ms), 0)
-    if line_style.entry_anim == "none" or duration <= 0:
-        return 0
-    return min(duration, MIN_AUTO_ENTRY_ANIMATION_MS)
-
-
-def _auto_entry_reserve_resolver(style: Style):
-    return lambda line: _auto_entry_reserve_ms(style, line)
-
-
-def _auto_exit_reserve_ms(style: Style, line: TimingLine) -> int:
-    """Keep a short automatic exit visible; explicit shorter values win."""
-
-    line_style = _style_for_line(style, line)
-    duration = max(int(line_style.exit_fade_ms), 0)
-    if line_style.exit_anim == "none" or duration <= 0:
-        return 0
-    return min(duration, MIN_AUTO_EXIT_ANIMATION_MS)
-
-
-def _auto_exit_reserve_resolver(style: Style):
-    return lambda line: _auto_exit_reserve_ms(style, line)
-
-
-def _entry_animation_ms(style: Style, line: TimingLine) -> int:
-    line_style = _style_for_line(style, line)
-    if line_style.entry_anim == "none":
-        return 0
-    return max(int(line_style.entry_lead_ms), 0)
-
-
-def _exit_animation_ms(style: Style, line: TimingLine) -> int:
-    line_style = _style_for_line(style, line)
-    if line_style.exit_anim == "none":
-        return 0
-    return max(int(line_style.exit_fade_ms), 0)
-
-
-def _entry_animation_resolver(style: Style):
-    return lambda line: _entry_animation_ms(style, line)
-
-
-def _exit_animation_resolver(style: Style):
-    return lambda line: _exit_animation_ms(style, line)
 
 
 def _display_line_static_collision_window(

@@ -7862,6 +7862,10 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (  # noqa
 from krok_helper.subtitle_render.engine.layout.display_resolver import (  # noqa: E402
     apply_animation_time_guard,
 )
+from krok_helper.subtitle_render.engine.layout.line_style import (  # noqa: E402
+    auto_entry_reserve_ms,
+    auto_exit_reserve_ms,
+)
 from krok_helper.subtitle_render.models import style_from_dict, style_to_dict  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_latin_font,
@@ -8633,15 +8637,15 @@ def test_display_window_compression_clamps_effective_animation_durations(qapp):
 def test_auto_entry_reserve_preserves_user_configured_short_duration(qapp):
     line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
 
-    assert subtitle_painter._auto_entry_reserve_ms(
+    assert auto_entry_reserve_ms(
         Style(entry_anim="fade", entry_lead_ms=900),
         line,
     ) == 250
-    assert subtitle_painter._auto_entry_reserve_ms(
+    assert auto_entry_reserve_ms(
         Style(entry_anim="fade", entry_lead_ms=100),
         line,
     ) == 100
-    assert subtitle_painter._auto_entry_reserve_ms(
+    assert auto_entry_reserve_ms(
         Style(entry_anim="none", entry_lead_ms=900),
         line,
     ) == 0
@@ -8650,15 +8654,15 @@ def test_auto_entry_reserve_preserves_user_configured_short_duration(qapp):
 def test_auto_exit_reserve_preserves_user_configured_short_duration(qapp):
     line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
 
-    assert subtitle_painter._auto_exit_reserve_ms(
+    assert auto_exit_reserve_ms(
         Style(exit_anim="fade", exit_fade_ms=900),
         line,
     ) == 100
-    assert subtitle_painter._auto_exit_reserve_ms(
+    assert auto_exit_reserve_ms(
         Style(exit_anim="fade", exit_fade_ms=60),
         line,
     ) == 60
-    assert subtitle_painter._auto_exit_reserve_ms(
+    assert auto_exit_reserve_ms(
         Style(exit_anim="none", exit_fade_ms=900),
         line,
     ) == 0

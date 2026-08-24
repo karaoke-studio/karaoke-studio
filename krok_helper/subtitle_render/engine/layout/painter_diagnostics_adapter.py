@@ -6,6 +6,7 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
 )
 from krok_helper.subtitle_render.engine.layout.display_resolver import (
     apply_animation_time_guard,
+    display_line_compute_kwargs,
 )
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginBox,
@@ -17,6 +18,10 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     build_page_shift_diagnostics,
     build_timing_window_diagnostics,
     resolve_layout_margin_warnings,
+)
+from krok_helper.subtitle_render.engine.layout.line_style import (
+    auto_exit_reserve_ms,
+    entry_animation_ms,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.models import Style
@@ -101,7 +106,7 @@ def layout_timing_diagnostics_for_style(
     logical_w = max(int(logical_w), 1)
     logical_h = max(int(logical_h), 1)
     base_kwargs = {
-        **painter_impl._display_line_compute_kwargs(style),
+        **display_line_compute_kwargs(style),
         "sync_entry": False,
         "sync_ending": False,
         "auto_fill_section_time": False,
@@ -152,8 +157,8 @@ def layout_timing_diagnostics_for_style(
         animation_candidate=animation_candidate,
         final=final,
         adjustments=adjustments,
-        entry_animation_ms_of=painter_impl._entry_animation_ms,
-        auto_exit_reserve_ms_of=painter_impl._auto_exit_reserve_ms,
+        entry_animation_ms_of=entry_animation_ms,
+        auto_exit_reserve_ms_of=auto_exit_reserve_ms,
     )
     guarded_measurements = painter_impl._measure_collision_bands(
         logical_w,

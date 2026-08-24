@@ -6,6 +6,10 @@ from dataclasses import replace
 from typing import Callable
 
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
+from krok_helper.subtitle_render.engine.timing.show_time import (
+    MIN_AUTO_ENTRY_ANIMATION_MS,
+    MIN_AUTO_EXIT_ANIMATION_MS,
+)
 from krok_helper.subtitle_render.engine.style.style_semantics import style_scheme_changes
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
@@ -56,6 +60,72 @@ def row_count_resolver(
     if not style.layouts:
         return None
     return lambda line: lane_count(layout_style_for_line(style, line))
+
+
+def bottom_align_resolver(
+    style: Style,
+) -> Callable[[TimingLine], bool] | None:
+    if style.vertical:
+        return None
+    return lambda line: layout_style_for_line(style, line).line_y_position == "bottom"
+
+
+def vertical_position_resolver(
+    style: Style,
+) -> Callable[[TimingLine], str] | None:
+    if style.vertical:
+        return None
+    return lambda line: layout_style_for_line(style, line).line_y_position
+
+
+def auto_entry_reserve_ms(style: Style, line: TimingLine) -> int:
+    """Return the automatic pre-wipe reserve for this line's entry animation."""
+
+    line_style = style_for_line(style, line)
+    duration = max(int(line_style.entry_lead_ms), 0)
+    if line_style.entry_anim == "none" or duration <= 0:
+        return 0
+    return min(duration, MIN_AUTO_ENTRY_ANIMATION_MS)
+
+
+def auto_entry_reserve_resolver(style: Style) -> Callable[[TimingLine], int]:
+    return lambda line: auto_entry_reserve_ms(style, line)
+
+
+def auto_exit_reserve_ms(style: Style, line: TimingLine) -> int:
+    """Keep a short automatic exit visible; explicit shorter values win."""
+
+    line_style = style_for_line(style, line)
+    duration = max(int(line_style.exit_fade_ms), 0)
+    if line_style.exit_anim == "none" or duration <= 0:
+        return 0
+    return min(duration, MIN_AUTO_EXIT_ANIMATION_MS)
+
+
+def auto_exit_reserve_resolver(style: Style) -> Callable[[TimingLine], int]:
+    return lambda line: auto_exit_reserve_ms(style, line)
+
+
+def entry_animation_ms(style: Style, line: TimingLine) -> int:
+    line_style = style_for_line(style, line)
+    if line_style.entry_anim == "none":
+        return 0
+    return max(int(line_style.entry_lead_ms), 0)
+
+
+def entry_animation_resolver(style: Style) -> Callable[[TimingLine], int]:
+    return lambda line: entry_animation_ms(style, line)
+
+
+def exit_animation_ms(style: Style, line: TimingLine) -> int:
+    line_style = style_for_line(style, line)
+    if line_style.exit_anim == "none":
+        return 0
+    return max(int(line_style.exit_fade_ms), 0)
+
+
+def exit_animation_resolver(style: Style) -> Callable[[TimingLine], int]:
+    return lambda line: exit_animation_ms(style, line)
 
 
 def style_for_line(style: Style, line: TimingLine) -> Style:
@@ -123,6 +193,15 @@ def style_for_line_display_window(
 
 
 __all__ = [
+    "auto_entry_reserve_ms",
+    "auto_entry_reserve_resolver",
+    "auto_exit_reserve_ms",
+    "auto_exit_reserve_resolver",
+    "bottom_align_resolver",
+    "entry_animation_ms",
+    "entry_animation_resolver",
+    "exit_animation_ms",
+    "exit_animation_resolver",
     "lane_count",
     "layout_style_for_line",
     "line_end_ms",
@@ -130,4 +209,5 @@ __all__ = [
     "row_count_resolver",
     "style_for_line",
     "style_for_line_display_window",
+    "vertical_position_resolver",
 ]

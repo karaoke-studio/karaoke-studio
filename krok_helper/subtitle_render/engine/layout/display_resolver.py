@@ -13,8 +13,16 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (
     apply_constrained_page_sync,
 )
 from krok_helper.subtitle_render.engine.layout.line_style import (
+    auto_entry_reserve_resolver,
+    auto_exit_reserve_resolver,
+    bottom_align_resolver,
+    entry_animation_resolver,
+    exit_animation_resolver,
+    lane_count,
     line_end_ms,
     line_start_ms,
+    row_count_resolver,
+    vertical_position_resolver,
 )
 from krok_helper.subtitle_render.engine.layout.page_placement import (
     LineVisualBand,
@@ -25,6 +33,7 @@ from krok_helper.subtitle_render.engine.layout.signal_semantics import (
     signal_lead_in_ms,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+from krok_helper.subtitle_render.engine.timing.show_time import protect_time_ms
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
@@ -103,6 +112,35 @@ class StyleDisplayResolutionPorts:
     """Backend factory for one concrete canvas display-resolution pass."""
 
     build: Callable[[int, int, dict[str, object]], DisplayResolutionPorts]
+
+
+def display_line_compute_kwargs(style: Style) -> dict[str, object]:
+    """Build the frame-independent timeline configuration for one style."""
+
+    return {
+        "lead_in_ms": style.line_lead_in_ms,
+        "tail_ms": style.line_tail_ms,
+        "lane_gap_ms": style.line_lane_gap_ms,
+        "section_gap_ms": style.section_gap_ms,
+        "sync_entry": style.sync_entry,
+        "sync_ending": style.sync_ending,
+        "sync_each_page": style.sync_each_page,
+        "auto_fill_section_time": style.auto_fill_section_time,
+        "section_ending_mode": style.section_ending_mode,
+        "protect_ms": protect_time_ms(
+            style.line_lead_in_ms,
+            style.line_tail_ms,
+            style.line_protect_ms,
+        ),
+        "lane_count": lane_count(style),
+        "row_count_of": row_count_resolver(style),
+        "bottom_align_of": bottom_align_resolver(style),
+        "vertical_position_of": vertical_position_resolver(style),
+        "auto_entry_reserve_ms_of": auto_entry_reserve_resolver(style),
+        "auto_exit_reserve_ms_of": auto_exit_reserve_resolver(style),
+        "entry_animation_ms_of": entry_animation_resolver(style),
+        "exit_animation_ms_of": exit_animation_resolver(style),
+    }
 
 
 @dataclass(frozen=True)
@@ -441,6 +479,7 @@ __all__ = [
     "apply_animation_time_guard",
     "cached_display_line_resolution",
     "clear_display_line_resolution_cache",
+    "display_line_compute_kwargs",
     "resolve_display_lines",
     "resolve_display_lines_for_style",
     "resolve_display_timing",

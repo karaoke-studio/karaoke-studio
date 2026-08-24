@@ -465,6 +465,25 @@ def test_line_style_semantics_have_one_engine_owner() -> None:
     )
     assert f"{PACKAGE}.engine.painter" not in line_style_targets
 
+    painter_tree = ast.parse(
+        (ROOT / "engine/painter.py").read_text(encoding="utf-8-sig")
+    )
+    painter_functions = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    assert {
+        "_auto_entry_reserve_ms",
+        "_auto_exit_reserve_ms",
+        "_bottom_align_resolver",
+        "_display_line_compute_kwargs",
+        "_effective_line_protect_ms",
+        "_entry_animation_resolver",
+        "_exit_animation_resolver",
+        "_vertical_position_resolver",
+    }.isdisjoint(painter_functions)
+
 
 def test_layout_plan_builder_has_no_painter_dependency() -> None:
     module = f"{PACKAGE}.engine.layout.layout_plan_builder"
