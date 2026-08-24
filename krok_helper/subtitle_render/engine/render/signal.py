@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Hashable
+from typing import Hashable, Protocol
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
@@ -13,14 +14,19 @@ from krok_helper.subtitle_render.engine.layout.line_style import (
     line_end_ms,
     line_start_ms,
 )
+from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+    signal_head_context,
+)
 from krok_helper.subtitle_render.engine.render.layers import (
     BakedLayer,
     LayerAnimation,
+    LayerCompositor,
     LayerContext,
     SCOPE_LINE,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingLine
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,31 @@ class VolumeSignalGeometry:
     height_delta: float
     align_base_shift: float
     align_delta_shift: float
+
+
+class SignalLineLayout(Protocol):
+    baseline_y: int
+    line_style: Style
+    metrics: QFontMetrics
+    total_w: int
+    signal_x: float | None
+    signal_y: float | None
+
+
+@dataclass(frozen=True)
+class SignalLineMeasurement:
+    baseline_y: int
+    line_style: Style
+    metrics: QFontMetrics
+    total_w: int
+    signal_x: float | None = None
+    signal_y: float | None = None
+
+
+SignalLineMeasurer = Callable[
+    [TimingTrack, DisplayLine, Mapping[int, int], int, Style],
+    SignalLineMeasurement,
+]
 
 
 def signal_stroke_extent(style: Style, *, is_volume: bool) -> float:
@@ -673,14 +704,255 @@ def _draw_lit_shape_raw(
         painter.drawEllipse(rect)
 
 
+def resolve_signal_lit_groups(
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    baselines: Mapping[int, int],
+    img_w: int,
+    img_h: int,
+    t_ms: int,
+    style: Style,
+    count: int,
+    size: int,
+    item_width: int,
+    tracking: int,
+    stroke_extent: float = 0.0,
+    *,
+    measure_line: SignalLineMeasurer,
+    line_layouts: Mapping[int, SignalLineLayout] | None = None,
+    line_offsets: Mapping[int, tuple[float, float]] | None = None,
+) -> list[SignalLitGroup]:
+    del item_width
+    duration = max(int(style.signals_duration_ms), 0)
+    if duration <= 0:
+        return []
+    active_duration = max(duration - max(int(style.lit_waiting_time_ms), 0), 0)
+    if active_duration <= 0:
+        return []
+    groups: list[SignalLitGroup] = []
+    time_offset = int(style.lit_time_offset_ms)
+    if style.lit_style == "volume":
+        group_width = volume_signal_geometry(style).group_width
+    else:
+        group_width = count * size + max(count - 1, 0) * (size * 0.5 + tracking)
+    signal_heads = signal_head_context(track, style)
+    index_of = (
+        {id(line): index for index, line in enumerate(track.lines)}
+        if signal_heads is not None
+        else None
+    )
+    for display_line in display_lines:
+        line = display_line.line
+        if line.is_blank or not line.chars:
+            continue
+        if index_of is not None and index_of.get(id(line)) not in signal_heads:
+            continue
+        line_layout = (
+            line_layouts.get(id(display_line.line))
+            if line_layouts is not None
+            else None
+        )
+        if line_layout is None:
+            line_layout = measure_line(track, display_line, baselines, img_h, style)
+        line_style = line_layout.line_style
+        metrics = line_layout.metrics
+        total_w = line_layout.total_w
+        baseline_y = line_layout.baseline_y
+        if total_w <= 0:
+            continue
+
+        signal_end = line_start_ms(line) + time_offset
+        active_start = signal_end - active_duration
+        display_end = display_line.display_end_ms
+        if display_end is None:
+            display_end = line_end_ms(line) + max(int(line_style.line_tail_ms), 0)
+        if not (active_start <= t_ms <= display_end):
+            continue
+
+        elapsed = max(t_ms - active_start, 0)
+        if style.lit_style == "volume":
+            elapsed = min(elapsed, max(active_duration - 1, 0))
+            active_index, phase, opacity = volume_signal_state(
+                elapsed,
+                active_duration,
+                count,
+                line_style,
+            )
+            active_opacity, dx, dy = 1.0, 0.0, 0.0
+        else:
+            active_index, phase = shape_active_index_and_phase(
+                elapsed,
+                active_duration,
+                count,
+            )
+            active_opacity, dx, dy = lit_extinguish_transition_state(
+                phase,
+                line_style,
+            )
+            opacity = 1.0
+
+        x = (
+            line_layout.signal_x
+            if line_layout.signal_x is not None
+            else signal_lit_x(img_w, group_width, line_style, stroke_extent)
+        )
+        y = (
+            line_layout.signal_y
+            if line_layout.signal_y is not None
+            else signal_lit_y(
+                baseline_y,
+                metrics,
+                size,
+                line_style,
+                stroke_extent,
+            )
+        )
+        offset_x, offset_y = (
+            line_offsets.get(id(line), (0.0, 0.0))
+            if line_offsets is not None
+            else (0.0, 0.0)
+        )
+        groups.append(
+            SignalLitGroup(
+                x=x + offset_x,
+                y=y + offset_y,
+                elapsed_ms=elapsed,
+                duration_ms=active_duration,
+                active_index=active_index,
+                opacity=opacity,
+                active_opacity=active_opacity,
+                dx=dx,
+                dy=dy,
+                phase=phase,
+            )
+        )
+    return groups
+
+
+def resolve_signal_layers(
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    baselines: Mapping[int, int],
+    img_w: int,
+    img_h: int,
+    t_ms: int,
+    style: Style,
+    *,
+    measure_line: SignalLineMeasurer,
+    line_layouts: Mapping[int, SignalLineLayout] | None = None,
+    line_offsets: Mapping[int, tuple[float, float]] | None = None,
+) -> list[SignalLitsLayer]:
+    if not style.lit_enabled:
+        return []
+    metrics = signal_layout_metrics(style)
+    groups = resolve_signal_lit_groups(
+        track,
+        display_lines,
+        baselines,
+        img_w,
+        img_h,
+        t_ms,
+        style,
+        metrics.count,
+        metrics.size,
+        metrics.item_width,
+        metrics.tracking,
+        metrics.stroke_extent,
+        measure_line=measure_line,
+        line_layouts=line_layouts,
+        line_offsets=line_offsets,
+    )
+    return build_signal_layers(groups, style)
+
+
+def paint_signal_lits(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    baselines: Mapping[int, int],
+    t_ms: int,
+    style: Style,
+    *,
+    compositor: LayerCompositor,
+    measure_line: SignalLineMeasurer,
+    line_layouts: Mapping[int, SignalLineLayout] | None = None,
+    line_offsets: Mapping[int, tuple[float, float]] | None = None,
+) -> None:
+    layers = resolve_signal_layers(
+        track,
+        display_lines,
+        baselines,
+        img_w,
+        img_h,
+        t_ms,
+        style,
+        measure_line=measure_line,
+        line_layouts=line_layouts,
+        line_offsets=line_offsets,
+    )
+    if not layers:
+        return
+    compositor.paint_ordered(
+        painter,
+        LayerContext(t_ms=t_ms, logical_w=img_w, logical_h=img_h),
+        layers,
+    )
+
+
+def active_lit_indices(
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    t_ms: int,
+    style: Style,
+    count: int,
+    *,
+    measure_line: SignalLineMeasurer,
+) -> set[int]:
+    is_volume = style.lit_style == "volume"
+    groups = resolve_signal_lit_groups(
+        track,
+        display_lines,
+        {display_line.lane: 0 for display_line in display_lines},
+        1920,
+        1080,
+        t_ms,
+        style,
+        count,
+        max(int(style.volume_size if is_volume else style.lit_size), 1),
+        max(int(style.volume_column_width if is_volume else style.lit_size), 1),
+        max(
+            int(style.volume_column_spacing if is_volume else style.lit_tracking),
+            0,
+        ),
+        signal_stroke_extent(style, is_volume=is_volume),
+        measure_line=measure_line,
+    )
+    return {
+        group.active_index
+        for group in groups
+        if group.opacity > 0
+        and group.active_index is not None
+        and group.active_index >= 0
+    }
+
+
 __all__ = [
     "SignalLayoutMetrics",
+    "SignalLineLayout",
+    "SignalLineMeasurement",
+    "SignalLineMeasurer",
     "SignalLitGroup",
     "VolumeSignalGeometry",
+    "active_lit_indices",
     "build_signal_layers",
     "line_has_active_signal",
     "lit_extinguish_transition_state",
     "lit_transition_state",
+    "paint_signal_lits",
+    "resolve_signal_layers",
+    "resolve_signal_lit_groups",
     "shape_active_index_and_phase",
     "signal_layout_metrics",
     "signal_lit_x",

@@ -1234,10 +1234,13 @@ def test_signal_geometry_has_one_render_owner() -> None:
         "_SignalLayoutMetrics",
         "_SignalLitGroup",
         "_VolumeSignalGeometry",
-        "_build_signal_layers",
         "_line_has_active_signal",
         "_lit_extinguish_transition_state",
         "_lit_transition_state",
+        "_paint_signal_lits_with_ports",
+        "_resolve_active_lit_indices",
+        "_resolve_signal_layers_with_ports",
+        "_resolve_signal_lit_groups",
         "_shape_active_index_and_phase",
         "_signal_layout_metrics",
         "_signal_lit_x",
@@ -1274,6 +1277,7 @@ def test_signal_geometry_has_one_render_owner() -> None:
         "_paint_shape_signal_group",
         "_shape_signal_vertical_bounds",
         "_volume_signal_vertical_bounds",
+        "_signal_layer_stack",
     }.isdisjoint(
         node.name
         for node in painter_tree.body

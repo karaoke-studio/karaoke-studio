@@ -577,12 +577,16 @@ from krok_helper.subtitle_render.engine.render.raster_blur import (
 )
 from krok_helper.subtitle_render.engine.render.signal import (
     SignalLayoutMetrics as _SignalLayoutMetrics,
+    SignalLineMeasurement,
     SignalLitGroup as _SignalLitGroup,
     VolumeSignalGeometry as _VolumeSignalGeometry,
-    build_signal_layers as _build_signal_layers,
+    active_lit_indices as _resolve_active_lit_indices,
     line_has_active_signal as _line_has_active_signal,
     lit_extinguish_transition_state as _lit_extinguish_transition_state,
     lit_transition_state as _lit_transition_state,
+    paint_signal_lits as _paint_signal_lits_with_ports,
+    resolve_signal_layers as _resolve_signal_layers_with_ports,
+    resolve_signal_lit_groups as _resolve_signal_lit_groups,
     shape_active_index_and_phase as _shape_active_index_and_phase,
     signal_layout_metrics as _signal_layout_metrics,
     signal_lit_x as _signal_lit_x,
@@ -1359,15 +1363,16 @@ def _subtitle_lines_vertical_bounds(
     if signal_lines:
         signal_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
             LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
-            _signal_layer_stack(
-                track,
+                _resolve_signal_layers_with_ports(
+                    track,
                 signal_lines,
                 baselines,
                 logical_w,
                 logical_h,
-                track_t_ms,
-                style,
-                line_layouts=line_layouts,
+                    track_t_ms,
+                    style,
+                    measure_line=_measure_signal_line,
+                    line_layouts=line_layouts,
                 line_offsets=line_offsets,
             ),
         )
@@ -2253,6 +2258,52 @@ def _resolve_sayatoo_line_layouts(
     return layouts
 
 
+def _measure_signal_line(
+    track: TimingTrack,
+    display_line: DisplayLine,
+    baselines: dict[int, int],
+    img_h: int,
+    style: Style,
+) -> SignalLineMeasurement:
+    line = display_line.line
+    line_style = _style_for_line(style, line)
+    font = _build_font(line_style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(line_style)
+    font_for = _make_font_for(line_style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    active_rubies = _active_rubies_for_line(track.rubies, line)
+    ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
+    render_line = _line_with_guide_symbol(line)
+    char_widths = [
+        (
+            _vector_glyph_width(
+                char.vector_glyph,
+                _style_for_role_in_layout(line_style, char.role_label),
+            )
+            if char.vector_glyph is not None
+            else _char_layout_width(
+                char.text,
+                font,
+                metrics,
+                latin_metrics,
+                font_for,
+                line_style,
+            )
+        )
+        for char in render_line.chars
+    ]
+    baseline_y = baselines.get(display_line.lane)
+    if baseline_y is None:
+        baseline_y = _resolve_baseline_y(metrics, img_h, line_style, ruby_metrics)
+    return SignalLineMeasurement(
+        baseline_y=baseline_y,
+        line_style=line_style,
+        metrics=metrics,
+        total_w=_line_text_width(char_widths, line_style),
+    )
+
+
 def _paint_signal_lits(
     painter: QPainter,
     img_w: int,
@@ -2266,76 +2317,20 @@ def _paint_signal_lits(
     line_layouts: dict[int, _SayatooLineLayout] | None = None,
     line_offsets: dict[int, tuple[float, float]] | None = None,
 ) -> None:
-    """Paint Sayatoo-style ``SignalsLits`` guide cues.
-
-    Sayatoo exposes this module as ``SignalsLits.sx`` with ``lit.*`` fields and
-    ``signals.duration``. Nicokara LRC has no separate signal track, so each
-    displayed lyric line emits one countdown cue before its first sung character.
-    The cue is anchored to the lyric line, not to the viewport.
-    """
-    layers = _signal_layer_stack(
-        track,
-        display_lines,
-        baselines,
-        img_w,
-        img_h,
-        t_ms,
-        style,
-        line_layouts=line_layouts,
-        line_offsets=line_offsets,
-    )
-    if not layers:
-        return
-    _TEXT_RUN_COMPOSITOR.paint_ordered(
+    _paint_signal_lits_with_ports(
         painter,
-        LayerContext(t_ms=t_ms, logical_w=img_w, logical_h=img_h),
-        layers,
-    )
-
-
-def _signal_layer_stack(
-    track: TimingTrack,
-    display_lines: list[DisplayLine],
-    baselines: dict[int, int],
-    img_w: int,
-    img_h: int,
-    t_ms: int,
-    style: Style,
-    *,
-    line_layouts: dict[int, _SayatooLineLayout] | None = None,
-    line_offsets: dict[int, tuple[float, float]] | None = None,
-) -> list:
-    if not style.lit_enabled:
-        return []
-    is_volume = style.lit_style == "volume"
-    count = (
-        max(1, min(int(style.volume_column_count), 16))
-        if is_volume
-        else max(1, min(int(style.lit_number), 8))
-    )
-    size = max(int(style.volume_size if is_volume else style.lit_size), 1)
-    tracking = max(int(style.volume_column_spacing if is_volume else style.lit_tracking), 0)
-    item_width = max(int(style.volume_column_width), 1) if is_volume else size
-    stroke_extent = _signal_stroke_extent(style, is_volume=is_volume)
-    groups = _signal_lit_groups(
+        img_w,
+        img_h,
         track,
         display_lines,
         baselines,
-        img_w,
-        img_h,
         t_ms,
         style,
-        count,
-        size,
-        item_width,
-        tracking,
-        stroke_extent,
+        compositor=_TEXT_RUN_COMPOSITOR,
+        measure_line=_measure_signal_line,
         line_layouts=line_layouts,
         line_offsets=line_offsets,
     )
-    if not groups:
-        return []
-    return _build_signal_layers(groups, style)
 
 
 def _signal_lit_groups(
@@ -2355,124 +2350,23 @@ def _signal_lit_groups(
     line_layouts: dict[int, _SayatooLineLayout] | None = None,
     line_offsets: dict[int, tuple[float, float]] | None = None,
 ) -> list[_SignalLitGroup]:
-    duration = max(int(style.signals_duration_ms), 0)
-    if duration <= 0:
-        return []
-    active_duration = max(duration - max(int(style.lit_waiting_time_ms), 0), 0)
-    if active_duration <= 0:
-        return []
-    groups: list[_SignalLitGroup] = []
-    time_offset = int(style.lit_time_offset_ms)
-    if style.lit_style == "volume":
-        group_width = _volume_signal_geometry(style).group_width
-    else:
-        group_width = count * size + max(count - 1, 0) * (size * 0.5 + tracking)
-    signal_heads = _signal_head_context(track, style)
-    index_of = (
-        {id(line): index for index, line in enumerate(track.lines)}
-        if signal_heads is not None
-        else None
+    return _resolve_signal_lit_groups(
+        track,
+        display_lines,
+        baselines,
+        img_w,
+        img_h,
+        t_ms,
+        style,
+        count,
+        size,
+        item_width,
+        tracking,
+        stroke_extent,
+        measure_line=_measure_signal_line,
+        line_layouts=line_layouts,
+        line_offsets=line_offsets,
     )
-    for display_line in display_lines:
-        line = display_line.line
-        if line.is_blank or not line.chars:
-            continue
-        if index_of is not None and index_of.get(id(line)) not in signal_heads:
-            # 指示灯（全部 lit 样式）只画每 S 第一 P 第一行。
-            continue
-        line_layout = (
-            line_layouts.get(id(display_line.line))
-            if line_layouts is not None
-            else None
-        )
-        if line_layout is not None:
-            line_style = line_layout.line_style
-            metrics = line_layout.metrics
-            total_w = line_layout.total_w
-            baseline_y = line_layout.baseline_y
-        else:
-            line_style = _style_for_line(style, line)
-            font = _build_font(line_style)
-            metrics = QFontMetrics(font)
-            latin_font = _build_latin_font(line_style)
-            font_for = _make_font_for(line_style, font, latin_font)
-            latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-            active_rubies = _active_rubies_for_line(track.rubies, line)
-            ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-            render_line = _line_with_guide_symbol(line)
-            char_widths = [
-                (
-                    _vector_glyph_width(
-                        c.vector_glyph,
-                        _style_for_role_in_layout(line_style, c.role_label),
-                    )
-                    if c.vector_glyph is not None
-                    else _char_layout_width(
-                        c.text, font, metrics, latin_metrics, font_for, line_style
-                    )
-                )
-                for c in render_line.chars
-            ]
-            total_w = _line_text_width(char_widths, line_style)
-            baseline_y = baselines.get(display_line.lane)
-            if baseline_y is None:
-                baseline_y = _resolve_baseline_y(metrics, img_h, line_style, ruby_metrics)
-        if total_w <= 0:
-            continue
-
-        signal_end = _line_start_ms(line) + time_offset
-        active_start = signal_end - active_duration
-        display_end = display_line.display_end_ms
-        if display_end is None:
-            display_end = _line_end_ms(line) + max(int(line_style.line_tail_ms), 0)
-        if not (active_start <= t_ms <= display_end):
-            continue
-
-        elapsed = max(t_ms - active_start, 0)
-        if style.lit_style == "volume":
-            elapsed = min(elapsed, max(active_duration - 1, 0))
-        if style.lit_style == "volume":
-            active_index, phase, opacity = _volume_signal_state(
-                elapsed, active_duration, count, line_style
-            )
-            active_opacity, dx, dy = 1.0, 0.0, 0.0
-        else:
-            active_index, phase = _shape_active_index_and_phase(elapsed, active_duration, count)
-            active_opacity, dx, dy = _lit_extinguish_transition_state(phase, line_style)
-            opacity = 1.0
-
-        x = (
-            line_layout.signal_x
-            if line_layout is not None and line_layout.signal_x is not None
-            else _signal_lit_x(img_w, group_width, line_style, stroke_extent)
-        )
-        y = (
-            line_layout.signal_y
-            if line_layout is not None and line_layout.signal_y is not None
-            else _signal_lit_y(baseline_y, metrics, size, line_style, stroke_extent)
-        )
-        offset_x, offset_y = (
-            line_offsets.get(id(line), (0.0, 0.0))
-            if line_offsets is not None
-            else (0.0, 0.0)
-        )
-        x += offset_x
-        y += offset_y
-        groups.append(
-            _SignalLitGroup(
-                x=x,
-                y=y,
-                elapsed_ms=elapsed,
-                duration_ms=active_duration,
-                active_index=active_index,
-                opacity=opacity,
-                active_opacity=active_opacity,
-                dx=dx,
-                dy=dy,
-                phase=phase,
-            )
-        )
-    return groups
 
 
 def _active_lit_indices(
@@ -2482,26 +2376,14 @@ def _active_lit_indices(
     style: Style,
     count: int,
 ) -> set[int]:
-    is_volume = style.lit_style == "volume"
-    groups = _signal_lit_groups(
+    return _resolve_active_lit_indices(
         track,
         display_lines,
-        {display_line.lane: 0 for display_line in display_lines},
-        1920,
-        1080,
         t_ms,
         style,
         count,
-        max(int(style.volume_size if is_volume else style.lit_size), 1),
-        max(int(style.volume_column_width if is_volume else style.lit_size), 1),
-        max(int(style.volume_column_spacing if is_volume else style.lit_tracking), 0),
-        _signal_stroke_extent(style, is_volume=is_volume),
+        measure_line=_measure_signal_line,
     )
-    active: set[int] = set()
-    for group in groups:
-        if group.opacity > 0 and group.active_index is not None and group.active_index >= 0:
-            active.add(group.active_index)
-    return active
 
 
 def _main_stroke2_width(style: Style) -> int:
