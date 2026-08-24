@@ -4565,53 +4565,7 @@ class PropertyPanel(QWidget):
     def _make_ruby_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
     ) -> QWidget:
-        section, layout = _inline_section("注音", parent) if inline else _section("注音")
-
-        # 三个控件都很窄（数值框 / 短下拉），列宽阈值放低让常规面板宽度下单行放下。
-        grid = _ResponsiveFieldGrid(section, min_column_width=90, max_columns=3)
-
-        self._ruby_gap_spin = _spin(
-            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
-        )
-        self._ruby_gap_spin.valueChanged.connect(
-            lambda value: self._update_layout_field(ruby_gap_px=value)
-        )
-        grid.add_field("与正文间距", self._ruby_gap_spin)
-
-        self._ruby_interval_spin = _spin(
-            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
-        )
-        self._ruby_interval_spin.setToolTip(
-            "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。\n"
-            "注意这是「下限」：注音比正文窄、均等分布摊出的间距大于此值时，"
-            "调整它看不到变化；对超出正文宽度的长注音效果最明显。"
-        )
-        self._ruby_interval_spin.valueChanged.connect(
-            lambda value: self._update_layout_field(ruby_interval_px=value)
-        )
-        grid.add_field("字间距", self._ruby_interval_spin)
-
-        self._ruby_alignment_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._ruby_alignment_combo)
-        for label, value in [
-            ("自动", "auto"),
-            ("居中", "center"),
-            ("均等分布", "equal_space"),
-        ]:
-            self._ruby_alignment_combo.addItem(label, value)
-        self._ruby_alignment_combo.setToolTip(
-            "注音相对正文范围的排布（N3 ルビ配置）：自动 = 正文或注音全为英数时居中、"
-            "否则均等分布。"
-        )
-        self._ruby_alignment_combo.currentIndexChanged.connect(
-            lambda _index: self._update_layout_field(
-                ruby_alignment=self._ruby_alignment_combo.currentData()
-            )
-        )
-        grid.add_field("排布", self._ruby_alignment_combo)
-
-        layout.addWidget(grid)
-        return section
+        return self._layout_page_builder.make_ruby_section(parent, inline=inline)
 
     def _apply_main_colors_to_ruby(self) -> None:
         if self._syncing:
