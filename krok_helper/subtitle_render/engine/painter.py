@@ -127,6 +127,10 @@ from krok_helper.subtitle_render.engine.qt_line_geometry import (
     char_widths_for_intervals as _qt_char_widths_for_intervals,
     measure_guide_anchor_bounds as _qt_measure_guide_anchor_bounds,
 )
+from krok_helper.subtitle_render.engine.page_offset_plan import (
+    MeasuredPageLine,
+    build_page_offset_windows,
+)
 from krok_helper.subtitle_render.engine.display_schedule import (
     display_schedule_from_items,
     display_windows_from_items,
@@ -589,7 +593,6 @@ from krok_helper.subtitle_render.engine.page_plan import (
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.page_placement import (
-    AxisOffsetWindow,
     LineVisualBand,
     PageVisualBands,
     bands_require_separation,
@@ -664,7 +667,6 @@ from krok_helper.subtitle_render.timing import (
 from krok_helper.subtitle_render.models import (
     DecorationKind,
     LYRICS_LAYOUT_CHAR_FIELDS,
-    LYRICS_LAYOUT_FIELDS,
     Style,
     TitleOverlay,
     effective_karaoke_animation,
@@ -1925,11 +1927,7 @@ def resolved_page_offset_windows_for_style(
         return {}
 
     index_of = {id(line): index for index, line in enumerate(track.lines)}
-    page_order: list[tuple[int, int]] = []
-    page_bands: dict[tuple[int, int], list[LineVisualBand]] = {}
-    page_lifetimes: dict[tuple[int, int], list[tuple[int, int]]] = {}
-    page_styles: dict[tuple[int, int], Style] = {}
-    line_to_page: dict[int, tuple[int, int]] = {}
+    measurements: list[MeasuredPageLine] = []
 
     if style.vertical:
         baselines: dict[int, int] = {}
@@ -1957,19 +1955,7 @@ def resolved_page_offset_windows_for_style(
         if track_index is None:
             continue
         page_id = (int(display_line.section_index), int(display_line.page_index))
-        if page_id not in page_bands:
-            page_order.append(page_id)
-            page_bands[page_id] = []
-            page_lifetimes[page_id] = []
         line_style = _style_for_line(style, display_line.line)
-        page_styles.setdefault(page_id, line_style)
-        line_to_page[track_index] = page_id
-        page_lifetimes[page_id].append(
-            (
-                int(display_line.display_start_ms),
-                int(display_line.display_end_ms),
-            )
-        )
         if style.vertical:
             ink_rect = _display_line_vertical_ink_rect(
                 logical_w,
@@ -2014,96 +2000,38 @@ def resolved_page_offset_windows_for_style(
                 if line_layout is not None
                 else baselines.get(display_line.lane)
             )
-        if axis_bounds is None:
-            continue
-        assert cross_bounds is not None
-        collision_start, collision_end = _display_line_static_collision_window(
-            display_line,
-            style,
+        collision_window = (
+            _display_line_static_collision_window(display_line, style)
+            if axis_bounds is not None
+            else None
         )
-        entry_start = int(display_line.display_start_ms)
-        if collision_end <= entry_start:
-            continue
-        page_bands[page_id].append(
-            LineVisualBand(
-                line_id=track_index,
+        measurements.append(
+            MeasuredPageLine(
+                track_index=track_index,
                 page_id=page_id,
-                display_start_ms=collision_start,
-                display_end_ms=collision_end,
-                axis_min=float(axis_bounds[0]),
-                axis_max=float(axis_bounds[1]),
-                entry_start_ms=entry_start,
+                display_start_ms=int(display_line.display_start_ms),
+                display_end_ms=int(display_line.display_end_ms),
+                page_style=line_style,
+                collision_start_ms=(
+                    None if collision_window is None else collision_window[0]
+                ),
+                collision_end_ms=(
+                    None if collision_window is None else collision_window[1]
+                ),
+                axis_bounds=axis_bounds,
+                cross_bounds=cross_bounds,
                 axis_anchor=(
                     None if axis_anchor is None else float(axis_anchor)
                 ),
-                cross_min=float(cross_bounds[0]),
-                cross_max=float(cross_bounds[1]),
             )
         )
 
-    pages: list[PageVisualBands] = []
-    for page_id in page_order:
-        page_style = page_styles[page_id]
-        position = page_style.line_y_position
-        anchor = (
-            "start"
-            if position == "top"
-            else "center"
-            if position == "center"
-            else "end"
-        )
-        if style.vertical:
-            # Vertical columns originate on the right and naturally avoid
-            # towards the left, independent of the within-column Y anchor.
-            anchor = "end"
-        pages.append(
-            PageVisualBands(
-                page_id=page_id,
-                bands=tuple(page_bands[page_id]),
-                gap_px=max(int(page_style.line_gap_px), 0),
-                anchor=anchor,
-                layout_key=_page_collision_layout_key(
-                    page_style,
-                    line_count=len(page_lifetimes.get(page_id, ())),
-                    vertical=style.vertical,
-                ),
-            )
-        )
-    axis_offsets = solve_page_axis_offsets(
-        pages,
-        viewport_min=0.0,
-        viewport_max=float(logical_w if style.vertical else logical_h),
+    resolved = build_page_offset_windows(
+        logical_w,
+        logical_h,
+        style,
+        measurements,
     )
-    axis_windows: dict[tuple[int, int], tuple[AxisOffsetWindow, ...]] = {}
-    for page_id in page_order:
-        lifetimes = [
-            (start, end)
-            for start, end in page_lifetimes.get(page_id, ())
-            if end > start
-        ]
-        axis_windows[page_id] = (
-            (
-                AxisOffsetWindow(
-                    start_ms=min(start for start, _end in lifetimes),
-                    end_ms=max(end for _start, end in lifetimes),
-                    offset=float(axis_offsets.get(page_id, 0.0)),
-                ),
-            )
-            if lifetimes
-            else ()
-        )
-    resolved = {
-        track_index: tuple(
-            (
-                int(window.start_ms),
-                int(window.end_ms),
-                float(window.offset) if style.vertical else 0.0,
-                0.0 if style.vertical else float(window.offset),
-            )
-            for window in axis_windows.get(page_id, ())
-        )
-        for track_index, page_id in line_to_page.items()
-    }
     _PAGE_PLACEMENT_CACHE[cache_key] = resolved
     _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
     while len(_PAGE_PLACEMENT_CACHE) > _PAGE_PLACEMENT_CACHE_MAX:
@@ -13750,24 +13678,6 @@ def _entry_animation_resolver(style: Style):
 
 def _exit_animation_resolver(style: Style):
     return lambda line: _exit_animation_ms(style, line)
-
-
-def _page_collision_layout_key(
-    page_style: Style,
-    *,
-    line_count: int,
-    vertical: bool,
-) -> tuple:
-    """Return the rendered page-layout identity used by animation collisions."""
-
-    return (
-        bool(vertical),
-        max(int(line_count), 0),
-        tuple(
-            (name, _value_signature(getattr(page_style, name)))
-            for name in LYRICS_LAYOUT_FIELDS
-        ),
-    )
 
 
 def _display_line_static_collision_window(
