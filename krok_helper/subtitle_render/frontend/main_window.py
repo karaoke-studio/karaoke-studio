@@ -274,6 +274,9 @@ from krok_helper.subtitle_render.preferences import (
     merge_common_style_preferences,
     update_app_output_preferences,
 )
+from krok_helper.subtitle_render.project_controller import (
+    SubtitleProjectController,
+)
 from krok_helper.subtitle_render.project_recovery import ProjectRecoveryPolicy
 from krok_helper.subtitle_render.project_resources import (
     find_missing_project_resources,
@@ -294,13 +297,10 @@ from krok_helper.subtitle_render.n3proj_import import (
 from krok_helper.subtitle_render.project_store import (
     ProjectFileRevision,
     RecoveryCandidate,
-    backup_project_file,
-    inspect_project_file,
     load_render_project,
     project_output_payload,
     save_discarded_project_backup,
     save_recovery_project,
-    save_render_project,
     split_project_paths,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
@@ -2117,6 +2117,7 @@ class SubtitleRenderWindow(QWidget):
         self._embedded = embedded
         self._settings_provider = settings_provider
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
+        self._project_controller = SubtitleProjectController()
         self._recovery_policy = ProjectRecoveryPolicy(self._recovery_root())
         self._workflow_context = workflow_context
 
@@ -3458,11 +3459,7 @@ class SubtitleRenderWindow(QWidget):
         if confirm_discard and not self._confirm_discard_changes():
             return False
         try:
-            revision_before = inspect_project_file(path)
-            data = load_render_project(path)
-            revision_after = inspect_project_file(path)
-            if revision_before != revision_after:
-                raise OSError("项目文件在打开期间发生了变化，请重试")
+            loaded = self._project_controller.open(path)
         except (OSError, ValueError) as exc:
             fluent_error(
                 self,
@@ -3471,12 +3468,13 @@ class SubtitleRenderWindow(QWidget):
                 copyable=True,
             )
             return False
-        missing_resources = self._missing_project_resources(data)
+        data = loaded.data
+        missing_resources = loaded.missing_resources
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(data, defer_assets=True)
         self._project_path = path
-        self._project_disk_revision = revision_after
+        self._project_disk_revision = loaded.revision
         self._missing_resources = tuple(missing_resources)
         self._unresolved_resource_labels = {
             label for label, _path in missing_resources
@@ -3677,7 +3675,7 @@ class SubtitleRenderWindow(QWidget):
         path = Path(path)
         if self._project_path is not None and path == self._project_path:
             try:
-                disk_revision = inspect_project_file(path)
+                disk_revision = self._project_controller.inspect(path)
             except OSError as exc:
                 self._project_save_error = str(exc)
                 self._refresh_project_title()
@@ -3714,13 +3712,12 @@ class SubtitleRenderWindow(QWidget):
         self._project_save_error = None
         self._refresh_project_title()
         try:
-            backup_project_file(
+            saved_disk_revision = self._project_controller.save(
                 path,
-                self._backup_root(),
-                max_count=self._project_backup_count,
+                self._current_project_data(),
+                backup_root=self._backup_root(),
+                backup_count=self._project_backup_count,
             )
-            save_render_project(path, self._current_project_data())
-            saved_disk_revision = inspect_project_file(path)
         except (OSError, TypeError, ValueError) as exc:
             self._project_saving = False
             self._project_save_error = str(exc)
@@ -9367,7 +9364,9 @@ class SubtitleRenderWindow(QWidget):
         self._project_path = candidate.source_project_path
         if self._project_path is not None:
             try:
-                self._project_disk_revision = inspect_project_file(self._project_path)
+                self._project_disk_revision = self._project_controller.inspect(
+                    self._project_path
+                )
             except OSError:
                 self._project_disk_revision = None
         self._missing_resources = tuple(missing_resources)

@@ -374,3 +374,25 @@ def test_subtitle_render_window_delegates_project_resource_policy() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert calls == {"find_missing_project_resources"}
+
+
+def test_subtitle_render_window_delegates_project_file_transactions() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.project_controller" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    forbidden = {
+        "backup_project_file",
+        "inspect_project_file",
+        "save_render_project",
+    }
+    direct_transaction_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.project_store"
+        for alias in node.names
+    } & forbidden
+    assert direct_transaction_imports == set()

@@ -22,6 +22,7 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E4
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
+from krok_helper.subtitle_render import project_controller as project_controller_module  # noqa: E402
 from krok_helper.subtitle_render import project_store as project_store_module  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
@@ -1799,7 +1800,7 @@ def test_save_failure_keeps_dirty_and_reports_state(qapp, monkeypatch, tmp_path)
     win._project_path = tmp_path / "song.yurika"
     win._mark_project_dirty()
     monkeypatch.setattr(
-        mw,
+        project_controller_module,
         "save_render_project",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
@@ -1822,7 +1823,7 @@ def test_save_failure_dialog_exposes_copyable_path_and_reason(
     win._mark_project_dirty()
     captured: dict[str, object] = {}
     monkeypatch.setattr(
-        mw,
+        project_controller_module,
         "save_render_project",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
