@@ -125,6 +125,10 @@ from krok_helper.subtitle_render.frontend.property_layout import (
     property_field as _field,
     property_section_pair as _section_pair,
 )
+from krok_helper.subtitle_render.frontend.property_inputs import (
+    DynamicStackedWidget as _DynamicStackedWidget,
+    GrowingPlainTextEdit as _GrowingPlainTextEdit,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -2081,54 +2085,6 @@ class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
             self.currentFontChanged.emit(self.currentFont())
             return
         self.setCurrentIndex(index)
-
-
-class _GrowingPlainTextEdit(FluentPlainTextEdit):
-    """多行文本框：随内容行数自动增高，背景卡片随之变高（回车即变高）。"""
-
-    editingFinished = Signal()
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setLineWrapMode(FluentPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.textChanged.connect(self._adjust_height)
-        self._adjust_height()
-
-    def _adjust_height(self) -> None:
-        # 按段落数（回车数 + 1）× 行高估算，不依赖控件是否可见 / 已布局。
-        blocks = max(1, self.document().blockCount())
-        line_height = self.fontMetrics().lineSpacing()
-        frame = int(self.frameWidth()) * 2
-        margins = self.contentsMargins()
-        doc_margin = int(self.document().documentMargin()) * 2
-        height = blocks * line_height + frame + margins.top() + margins.bottom() + doc_margin + 4
-        self.setFixedHeight(max(32, height))
-
-    def wheelEvent(self, event):  # noqa: N802 - Qt API
-        if not self.hasFocus():
-            event.ignore()
-            return
-        super().wheelEvent(event)
-
-    def focusOutEvent(self, event) -> None:  # noqa: N802 - Qt API
-        super().focusOutEvent(event)
-        self.editingFinished.emit()
-
-
-class _DynamicStackedWidget(QStackedWidget):
-    """Use the current page height instead of the tallest page height."""
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        widget = self.currentWidget()
-        return widget.sizeHint() if widget is not None else super().sizeHint()
-
-    def minimumSizeHint(self) -> QSize:  # noqa: N802
-        widget = self.currentWidget()
-        return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
 
 
 class _StylePresetDetailsDialog(ModelessDialog):
