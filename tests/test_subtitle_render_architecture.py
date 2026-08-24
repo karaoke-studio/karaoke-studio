@@ -924,6 +924,14 @@ def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
     assert [base.id for base in font_adapter.bases if isinstance(base, ast.Name)] == [
         "WheelFocusedFontComboBox"
     ]
+    timecode_adapter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_TimecodeEdit"
+    )
+    assert [
+        base.id for base in timecode_adapter.bases if isinstance(base, ast.Name)
+    ] == ["TimecodeEdit"]
 
 
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:

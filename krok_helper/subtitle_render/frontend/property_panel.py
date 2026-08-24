@@ -129,6 +129,7 @@ from krok_helper.subtitle_render.frontend.property_inputs import (
     DynamicStackedWidget as _DynamicStackedWidget,
     GrowingPlainTextEdit as _GrowingPlainTextEdit,
     NoWheelSpinBox as _NoWheelSpinBox,
+    TimecodeEdit,
     WheelFocusedComboBox as _WheelFocusedComboBox,
     WheelFocusedFontComboBox,
 )
@@ -1855,25 +1856,8 @@ class _WheelFocusedDoubleSpinBox(_UnitProtectedSpinBoxMixin, FluentDoubleSpinBox
 #: HeadOffset / HeadEnd / TailOffset 都直接落在这条时间轴上，没有更窄的限制。
 TITLE_TIME_MAX_MS = 5_999_990
 
-#: timecode 输入框允许的文本形态：段用 ``:`` 分隔，小数点 ``.`` 或 ``,``。
-#: 只约束结构、不约束数值——中间态（``1:``、``1.``、空串）必须放行，
-#: 数值越界在提交时钳制。
-_TIMECODE_PATTERN = QRegularExpression(r"\d{0,4}(:\d{1,2}){0,2}([.,]\d{0,3})?")
-
-
-class _TimecodeEdit(FluentLineEdit):
-    """单个时间码输入框：显示 ``M:SS.mmm``，后台自动解析为整数毫秒。
-
-    对外接口与被它替换的秒/毫秒复合框同构（``value()`` / ``setValue()`` /
-    ``valueChanged``，单位毫秒），模型层（``TitleOverlay`` 等）与工程文件的
-    10ms 粒度不受这层 UI 影响。手输支持纯秒数、``分:秒.毫秒``、``时:分:秒``，
-    失焦或回车后统一规范化回显。
-
-    键入走 ``EDIT_COMMIT_DEBOUNCE_MS`` 防抖提交且只更新值，不回写正在敲的
-    文本（回流重写会打断输入）；规范化回写只发生在失焦、回车与步进时。
-    """
-
-    valueChanged = Signal(int)
+class _TimecodeEdit(TimecodeEdit):
+    """Bind the shared timecode editor to this panel's commit debounce."""
 
     def __init__(
         self,
@@ -1881,145 +1865,12 @@ class _TimecodeEdit(FluentLineEdit):
         maximum: int,
         parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent)
-        if minimum < 0:
-            # 负时长的符号语义不明（-0.3s 放哪个字段？），需要负值的字段
-            # 请继续用单个 ms spin。
-            raise ValueError("_TimecodeEdit 只支持非负范围")
-        if maximum < minimum:
-            raise ValueError("_TimecodeEdit 的 maximum 不能小于 minimum")
-        self._minimum = int(minimum)
-        self._maximum = int(maximum)
-        self._value = self._minimum
-
-        self.setValidator(QRegularExpressionValidator(_TIMECODE_PATTERN))
-        self.setPlaceholderText("分:秒.毫秒")
-        self.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        super().__init__(
+            minimum,
+            maximum,
+            parent,
+            commit_delay_ms=EDIT_COMMIT_DEBOUNCE_MS,
         )
-        _compact_control(self)
-        self.setToolTip(
-            "时间格式「分:秒.毫秒」，如 1:23.450；直接输入数字按秒计"
-            "（90 = 90 秒），也接受 时:分:秒。回车或点击别处后自动规范化。"
-            "聚焦时滚轮 / 上下方向键 ±1 秒，按住 Ctrl ±10 毫秒。"
-        )
-
-        self._commit_timer = QTimer(self)
-        self._commit_timer.setSingleShot(True)
-        self._commit_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
-        self._commit_timer.timeout.connect(self._commit_typing)
-        self.textEdited.connect(lambda _text: self._commit_timer.start())
-        self.editingFinished.connect(self._flush_edit)
-        self._apply_text(self._value)
-
-    # -------------------------------------------------------------- 对外接口
-
-    def value(self) -> int:
-        return self._value
-
-    def setValue(self, value: int) -> None:  # noqa: N802 - Qt API
-        clamped = self._clamp(value)
-        changed = clamped != self._value
-        self._value = clamped
-        # 值没变也可能要校准显示：打字防抖刚提交过时解析结果一致，不会碰
-        # 文本，用户敲的 "90" 保持到失焦才规范化。
-        if changed or parse_timecode_ms(self.text()) != clamped:
-            self._apply_text(clamped)
-        if changed:
-            self.valueChanged.emit(clamped)
-
-    def minimum(self) -> int:
-        return self._minimum
-
-    def maximum(self) -> int:
-        return self._maximum
-
-    def submit_text(self, text: str) -> bool:
-        """按「用户输入并结束编辑」处理一段文本；返回是否解析成功。
-
-        ``setText`` 不经过 validator（Qt 只拦键盘输入），所以这里能收到
-        任意文本，非法时恢复为当前值——测试与程序化提交共用该路径。
-        """
-        self.setText(text)
-        return self._flush_edit()
-
-    def stepBy(self, steps: int, fine: bool = False) -> None:  # noqa: N802
-        """步进提交：默认 ±1 秒，``fine=True`` 时 ±10 毫秒。"""
-        self._apply_value(self._value + steps * (10 if fine else 1000))
-
-    # ---------------------------------------------------------------- 输入处理
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-            steps = 1 if event.key() == Qt.Key.Key_Up else -1
-            self.stepBy(
-                steps,
-                fine=bool(
-                    event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                ),
-            )
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if not self.hasFocus():
-            # 与 _WheelFocusedSpinBox 一致：未聚焦时把滚轮还给属性面板滚动。
-            event.ignore()
-            return
-        delta = event.angleDelta().y()
-        if event.inverted():
-            delta = -delta
-        if delta:
-            steps = int(delta / 120) or (1 if delta > 0 else -1)
-            self.stepBy(
-                steps,
-                fine=bool(
-                    event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                ),
-            )
-            event.accept()
-            return
-        super().wheelEvent(event)
-
-    # ---------------------------------------------------------------- 内部实现
-
-    def _clamp(self, value: Any) -> int:
-        return int(max(self._minimum, min(self._maximum, int(value))))
-
-    def _commit_typing(self) -> None:
-        """防抖到期：文本能解析就提交值，但不动文本本身。"""
-        parsed = parse_timecode_ms(self.text())
-        if parsed is None:
-            return  # validator 之后的兜底，等失焦时恢复。
-        clamped = self._clamp(parsed)
-        if clamped != self._value:
-            self._value = clamped
-            self.valueChanged.emit(clamped)
-
-    def _flush_edit(self) -> bool:
-        """结束编辑：解析、钳值并规范化回写。"""
-        self._commit_timer.stop()
-        parsed = parse_timecode_ms(self.text())
-        if parsed is None:
-            self._apply_text(self._value)
-            return False
-        self._apply_value(self._clamp(parsed))
-        return True
-
-    def _apply_value(self, value: int) -> None:
-        clamped = self._clamp(value)
-        changed = clamped != self._value
-        self._value = clamped
-        self._apply_text(clamped)
-        if changed:
-            self.valueChanged.emit(clamped)
-
-    def _apply_text(self, value: int) -> None:
-        # 重写后把光标锚到相对末尾的同一位置，别让它跳回开头。
-        offset = len(self.text()) - self.cursorPosition()
-        self.setText(format_timecode_ms(value))
-        self.setCursorPosition(max(0, len(self.text()) - offset))
 
 
 class _WheelFocusedFontComboBox(WheelFocusedFontComboBox):
