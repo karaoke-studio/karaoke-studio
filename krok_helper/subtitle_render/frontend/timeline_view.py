@@ -33,11 +33,13 @@ from krok_helper.subtitle_render.engine.timeline_projection import (
     source_char_intervals,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.timing import (
     RubyAnnotation,
-    Style,
     TimingLine,
     TimingTrack,
+)
+from krok_helper.subtitle_render.models import (
+    Style,
     style_with_line_animation,
 )
 

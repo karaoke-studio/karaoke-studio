@@ -28,7 +28,7 @@ import unicodedata
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.timing import (
     GuideSymbol,
     RubyAnnotation,
     TimingChar,

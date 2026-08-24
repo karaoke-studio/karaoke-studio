@@ -44,15 +44,17 @@ from krok_helper.subtitle_render.n3_font_scheme import (
     hex_from_colorbind as _hex_from_colorbind,
 )
 from krok_helper.subtitle_render.background import infer_image_sequence_pattern
-from krok_helper.subtitle_render.models import (
-    DEFAULT_OUTPUT_NAME_SUFFIX,
+from krok_helper.subtitle_render.timing import (
     GuideSymbol,
     LineAnimationOverride,
+    TimingTrack,
+)
+from krok_helper.subtitle_render.models import (
+    DEFAULT_OUTPUT_NAME_SUFFIX,
     LyricsLayout,
     Style,
     SubtitleStyleScheme,
     TITLE_SCHEME_NAME,
-    TimingTrack,
     TitleOverlay,
     default_title_scheme,
     guide_symbol_to_dict,

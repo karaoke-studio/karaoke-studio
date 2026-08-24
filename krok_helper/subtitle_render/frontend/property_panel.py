@@ -143,13 +143,15 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     n3_font_families,
     resolve_qt_font_family,
 )
-from krok_helper.subtitle_render.models import (
-    DecorationKind,
+from krok_helper.subtitle_render.timing import (
     EntryAnimation,
     ExitAnimation,
+    KaraokeAnimation,
+)
+from krok_helper.subtitle_render.models import (
+    DecorationKind,
     HORIZONTAL_ALIGNS,
     HorizontalAlign,
-    KaraokeAnimation,
     LineHorizontalLayout,
     LineYPosition,
     N3_FONT_INHERITANCE_FIELDS,

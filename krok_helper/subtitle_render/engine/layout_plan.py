@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from krok_helper.subtitle_render.models import Style, TimingLine
+from krok_helper.subtitle_render.timing import TimingLine
+from krok_helper.subtitle_render.models import Style
 
 
 LayoutOffsetWindow = tuple[int, int, float, float]

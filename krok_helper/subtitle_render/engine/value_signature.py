@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import fields as dataclass_fields, is_dataclass
 from typing import Hashable
 
-from krok_helper.subtitle_render.models import GuideSymbol
+from krok_helper.subtitle_render.timing import GuideSymbol
 
 
 _SIG_FIELD_NAMES_BY_TYPE: dict[type, tuple[str, ...]] = {}

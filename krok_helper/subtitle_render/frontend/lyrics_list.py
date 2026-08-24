@@ -88,19 +88,21 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_get_text,
     fluent_question,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.timing import (
     GuideSymbol,
-    LYRICS_LAYOUT_FIELDS,
     LineAnimationOverride,
-    Style,
-    TITLE_SCHEME_NAME,
     TimingChar,
     TimingLine,
     TimingTrack,
-    TitleOverlay,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     line_visible_chars,
+)
+from krok_helper.subtitle_render.models import (
+    LYRICS_LAYOUT_FIELDS,
+    Style,
+    TITLE_SCHEME_NAME,
+    TitleOverlay,
     normalize_title_char_role_labels,
     layout_capacity,
     layout_display_name,

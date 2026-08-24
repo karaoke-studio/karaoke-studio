@@ -10,10 +10,10 @@ from krok_helper.subtitle_render.engine.style_semantics import (
     style_for_role,
 )
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
+from krok_helper.subtitle_render.timing import TimingTrack
 from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     Style,
-    TimingTrack,
     TitleOverlay,
 )
 

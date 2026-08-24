@@ -14,13 +14,15 @@ from typing import Any
 
 from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.page_plan import section_head_line_indices
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.timing import (
     RubyAnnotation,
-    Style,
-    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
+)
+from krok_helper.subtitle_render.models import (
+    Style,
+    SubtitleStyleScheme,
     TitleOverlay,
     effective_karaoke_animation,
     guide_symbol_to_dict,

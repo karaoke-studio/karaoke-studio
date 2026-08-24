@@ -11,11 +11,13 @@ from krok_helper.subtitle_render.engine.page_plan import (
     use_default_layouts,
 )
 from krok_helper.subtitle_render.engine.timeline import assign_lanes
+from krok_helper.subtitle_render.timing import (
+    TimingLine,
+    TimingTrack,
+)
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     Style,
-    TimingLine,
-    TimingTrack,
     layout_capacity,
     layout_id_for_index,
 )

@@ -44,10 +44,8 @@ from krok_helper.subtitle_render.background import (
     BackgroundSource,
     background_sequence_frame_path,
 )
-from krok_helper.subtitle_render.models import (
-    Style,
-    TimingTrack,
-)
+from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.models import Style
 
 
 _VIDEO_SEEK_TOLERANCE_MS = 80

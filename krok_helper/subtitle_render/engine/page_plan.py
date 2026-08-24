@@ -12,19 +12,21 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from krok_helper.subtitle_render.models import (
-    Style,
+from krok_helper.subtitle_render.timing import (
     SubtitleLoadingSettings,
     TimingLine,
     TimingTrack,
     TrackPage,
     TrackPagePlan,
     TrackSection,
+    timing_line_start_ms,
+)
+from krok_helper.subtitle_render.models import (
+    Style,
     ensure_page_layout_defaults,
     layout_capacity,
     layout_id_for_index,
     layout_index_for_id,
-    timing_line_start_ms,
 )
 
 

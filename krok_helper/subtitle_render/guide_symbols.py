@@ -13,7 +13,7 @@ from fontTools.pens.transformPen import TransformPen
 from fontTools.svgLib.path import parse_path
 from PyQt6.QtGui import QPainterPath, QTransform
 
-from krok_helper.subtitle_render.models import GuideSymbol
+from krok_helper.subtitle_render.timing import GuideSymbol
 
 
 class GuideSymbolImportError(ValueError):

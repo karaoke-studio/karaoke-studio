@@ -50,13 +50,15 @@ from krok_helper.subtitle_render.engine.painter import (
 )
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.guide_symbols import guide_symbol_path
+from krok_helper.subtitle_render.timing import (
+    TimingTrack,
+    guide_symbol_role_labels,
+    timing_line_start_ms,
+)
 from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     Style,
-    TimingTrack,
-    guide_symbol_role_labels,
     style_with_line_animation,
-    timing_line_start_ms,
 )
 from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
 from krok_helper.subtitle_render.native_protocol import (

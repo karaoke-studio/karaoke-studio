@@ -13,10 +13,12 @@ from collections.abc import Sequence
 from PyQt6.QtGui import QFontMetrics
 
 from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.timing import (
     RubyAnnotation,
-    Style,
     TimingLine,
+)
+from krok_helper.subtitle_render.models import (
+    Style,
     effective_karaoke_animation,
 )
 

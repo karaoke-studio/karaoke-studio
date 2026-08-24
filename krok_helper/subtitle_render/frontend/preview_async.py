@@ -25,7 +25,8 @@ from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlo
 from PyQt6.QtGui import QImage, QPainter
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
     NativeRendererProcess,

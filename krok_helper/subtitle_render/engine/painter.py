@@ -583,26 +583,28 @@ from krok_helper.subtitle_render.paint import (
     KaraokeColorState,
     PaintFill,
 )
-from krok_helper.subtitle_render.models import (
-    DecorationKind,
+from krok_helper.subtitle_render.timing import (
     GuideSymbol,
-    LYRICS_LAYOUT_CHAR_FIELDS,
-    LYRICS_LAYOUT_FIELDS,
     RubyAnnotation,
-    Style,
     TimingChar,
     TimingLine,
     TimingTrack,
-    TitleOverlay,
-    effective_karaoke_animation,
-    normalize_title_char_role_labels,
-    normalize_glow_concentration_level,
     guide_symbol_has_visual as _guide_symbol_has_visual,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     line_visible_chars,
-    style_with_line_animation,
     timing_line_start_ms,
+)
+from krok_helper.subtitle_render.models import (
+    DecorationKind,
+    LYRICS_LAYOUT_CHAR_FIELDS,
+    LYRICS_LAYOUT_FIELDS,
+    Style,
+    TitleOverlay,
+    effective_karaoke_animation,
+    normalize_title_char_role_labels,
+    normalize_glow_concentration_level,
+    style_with_line_animation,
 )
 
 

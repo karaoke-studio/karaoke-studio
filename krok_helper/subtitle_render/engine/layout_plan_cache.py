@@ -6,7 +6,8 @@ from collections import OrderedDict
 from typing import Hashable
 
 from krok_helper.subtitle_render.engine.layout_plan import TrackLayoutPlan
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.models import Style
 
 
 _TRACK_LAYOUT_PLAN_CACHE_MAX = 24

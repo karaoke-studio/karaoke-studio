@@ -217,26 +217,29 @@ from krok_helper.subtitle_render.screen_settings import (
 )
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.workspace_switcher import WorkspaceSwitcher
-from krok_helper.subtitle_render.models import (
-    DEFAULT_EXPORT_NAME_TEMPLATE,
-    DEFAULT_OUTPUT_NAME_SUFFIX,
-    EXPORT_NAME_TEMPLATE_FIELDS,
+from krok_helper.subtitle_render.timing import (
     GuideSymbol,
     LineAnimationOverride,
-    PROJECT_FILE_SUFFIX,
-    StylePreset,
     SubtitleLoadingSettings,
-    SubtitleStyleScheme,
-    Style,
-    TITLE_SCHEME_NAME,
-    TitleOverlay,
     TimingTrack,
-    guide_symbol_from_dict,
     guide_symbol_has_visual,
     guide_symbol_replaces_prefix,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     guide_symbol_with_role_labels,
+    timing_line_start_ms,
+)
+from krok_helper.subtitle_render.models import (
+    DEFAULT_EXPORT_NAME_TEMPLATE,
+    DEFAULT_OUTPUT_NAME_SUFFIX,
+    EXPORT_NAME_TEMPLATE_FIELDS,
+    PROJECT_FILE_SUFFIX,
+    StylePreset,
+    SubtitleStyleScheme,
+    Style,
+    TITLE_SCHEME_NAME,
+    TitleOverlay,
+    guide_symbol_from_dict,
     guide_symbol_to_dict,
     ensure_page_layout_defaults,
     layout_capacity,
@@ -254,7 +257,6 @@ from krok_helper.subtitle_render.models import (
     subtitle_loading_settings_from_dict,
     subtitle_loading_settings_to_dict,
     track_page_plan_from_dict,
-    timing_line_start_ms,
 )
 from krok_helper.subtitle_render.n3_font_catalog import (
     get_n3_font_catalog,

@@ -14,10 +14,10 @@ from krok_helper.subtitle_render.engine.title_semantics import (
     resolve_title_text,
     title_show_specs,
 )
+from krok_helper.subtitle_render.timing import TimingTrack
 from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     Style,
-    TimingTrack,
     normalize_title_char_role_labels,
     style_to_dict,
 )
