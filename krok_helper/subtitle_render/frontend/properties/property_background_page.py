@@ -25,7 +25,7 @@ from krok_helper.subtitle_render.frontend.properties.property_layout import (
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.frontend.properties.property_widgets import PillSelector
-from krok_helper.subtitle_render.screen_settings import SCREEN_FPS_OPTIONS
+from krok_helper.subtitle_render.settings.screen import SCREEN_FPS_OPTIONS
 
 
 BACKGROUND_KIND_PAGES = (

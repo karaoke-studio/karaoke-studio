@@ -223,12 +223,12 @@ from krok_helper.subtitle_render.models import (
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
-from krok_helper.subtitle_render.property_controllers import (
+from krok_helper.subtitle_render.settings.property_controllers import (
     LayoutCatalogController,
     RoleSchemeController,
     TitleOverlayController,
 )
-from krok_helper.subtitle_render.screen_settings import (
+from krok_helper.subtitle_render.settings.screen import (
     PAR_OPTIONS,
     SCREEN_FPS_OPTIONS,
     SCREEN_PRESETS,

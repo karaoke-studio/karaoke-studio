@@ -234,7 +234,7 @@ from krok_helper.subtitle_render.frontend.project.project_settings import (
 from krok_helper.subtitle_render.frontend.project.recent_projects import (
     RecentProjectsController,
 )
-from krok_helper.subtitle_render.screen_settings import (
+from krok_helper.subtitle_render.settings.screen import (
     ScreenSettings,
     SCREEN_FPS_OPTIONS,
     match_screen_preset_key,
@@ -291,7 +291,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     normalize_scheme_font_families,
     normalize_style_font_families,
 )
-from krok_helper.subtitle_render.preferences import (
+from krok_helper.subtitle_render.settings.preferences import (
     BUILTIN_SCHEME_STYLE_FIELDS as _BUILTIN_SCHEME_STYLE_FIELDS,
     LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
@@ -340,7 +340,7 @@ from krok_helper.subtitle_render.project.session import (
     SubtitleProjectState,
     SubtitleTrackMutation,
 )
-from krok_helper.subtitle_render.settings_store import SubtitleRenderSettingsStore
+from krok_helper.subtitle_render.settings.store import SubtitleRenderSettingsStore
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, stage_bg, themed
 
 apply_qfluent_menu_lifetime_patch()

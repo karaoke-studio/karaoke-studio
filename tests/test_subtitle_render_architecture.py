@@ -136,9 +136,9 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "project" / "recovery.py",
         ROOT / "project" / "resources.py",
         ROOT / "project" / "recent.py",
-        ROOT / "screen_settings.py",
+        ROOT / "settings" / "screen.py",
         ROOT / "project" / "session.py",
-        ROOT / "settings_store.py",
+        ROOT / "settings" / "store.py",
         ROOT / "source_loader.py",
         ROOT / "timecode.py",
         ROOT / "timing.py",
@@ -369,6 +369,30 @@ def test_project_modules_are_grouped_behind_one_package_boundary() -> None:
             "project_store.py",
             "recent_projects.py",
             "session.py",
+        }
+    )
+
+
+def test_settings_modules_are_grouped_behind_one_package_boundary() -> None:
+    module_names = {
+        "bridge.py",
+        "preferences.py",
+        "property_controllers.py",
+        "screen.py",
+        "store.py",
+    }
+    settings_root = ROOT / "settings"
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in settings_root.glob("*.py")
+    }
+    assert not any(
+        (ROOT / name).exists()
+        for name in {
+            "preferences.py",
+            "property_controllers.py",
+            "screen_settings.py",
+            "settings_bridge.py",
+            "settings_store.py",
         }
     )
 

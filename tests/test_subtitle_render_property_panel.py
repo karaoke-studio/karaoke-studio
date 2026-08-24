@@ -90,7 +90,7 @@ from krok_helper.subtitle_render.n3.template_import import (  # noqa: E402
     N3TemplateLoadResult,
 )
 from krok_helper.subtitle_render.n3.font_catalog import N3FontCatalog  # noqa: E402
-from krok_helper.subtitle_render.property_controllers import (  # noqa: E402
+from krok_helper.subtitle_render.settings.property_controllers import (  # noqa: E402
     LayoutCatalogController,
     RoleSchemeController,
     TitleOverlayController,

@@ -789,7 +789,7 @@ class KrokHelperQtApp(QMainWindow):
             pass
 
         from krok_helper.subtitle_render import create_embedded_subtitle_render
-        from krok_helper.subtitle_render.settings_bridge import (
+        from krok_helper.subtitle_render.settings.bridge import (
             KrokHelperSubtitleRenderSettingsBridge,
         )
 

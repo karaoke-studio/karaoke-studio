@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from krok_helper.subtitle_render.screen_settings import (
+from krok_helper.subtitle_render.settings.screen import (
     ScreenSettings,
     match_screen_preset_key,
     screen_settings_from_dict,

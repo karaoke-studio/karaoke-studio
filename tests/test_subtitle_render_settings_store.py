@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from krok_helper.subtitle_render import settings_store
+from krok_helper.subtitle_render.settings import store as settings_store
 
 
 class _Provider:

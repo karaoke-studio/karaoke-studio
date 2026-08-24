@@ -42,7 +42,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     style_from_dict,
     style_to_dict,
 )
-from krok_helper.subtitle_render.preferences import (  # noqa: E402
+from krok_helper.subtitle_render.settings.preferences import (  # noqa: E402
     APP_LOCAL_ONLY_OUTPUT_FIELDS,
     app_default_style_to_dict,
     load_app_style_preferences,

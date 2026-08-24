@@ -80,7 +80,7 @@ def test_subtitle_project_state_is_the_stable_public_contract() -> None:
 
 
 def test_subtitle_render_settings_bridge_satisfies_the_provider_contract() -> None:
-    from krok_helper.subtitle_render.settings_bridge import (
+    from krok_helper.subtitle_render.settings.bridge import (
         KrokHelperSubtitleRenderSettingsBridge,
     )
 
