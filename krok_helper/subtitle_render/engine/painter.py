@@ -72,6 +72,15 @@ from krok_helper.subtitle_render.engine.layout_plan_cache import (
     clear_track_layout_plan_cache,
     store_track_layout_plan,
 )
+from krok_helper.subtitle_render.engine.line_style import (
+    lane_count as _lane_count,
+    layout_style_for_line as _layout_style_for_line,
+    line_end_ms as _line_end_ms,
+    line_start_ms as _line_start_ms,
+    row_count_resolver as _row_count_resolver,
+    style_for_line as _style_for_line,
+    style_for_line_display_window as _style_for_line_display_window,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -586,7 +595,6 @@ from krok_helper.subtitle_render.engine.style_semantics import (
     legacy_after_text_fill as _legacy_after_text_fill,
     solid_fill as _solid_fill,
     style_for_role as _style_for_role,
-    style_scheme_changes as _style_scheme_changes,
 )
 from krok_helper.subtitle_render.engine.title_semantics import (
     resolve_title_overlay,
@@ -612,7 +620,6 @@ from krok_helper.subtitle_render.timing import (
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     line_visible_chars,
-    timing_line_start_ms,
 )
 from krok_helper.subtitle_render.models import (
     DecorationKind,
@@ -623,7 +630,6 @@ from krok_helper.subtitle_render.models import (
     effective_karaoke_animation,
     normalize_title_char_role_labels,
     normalize_glow_concentration_level,
-    style_with_line_animation,
 )
 
 
@@ -13820,13 +13826,6 @@ def _line_center_override(track: TimingTrack, line: TimingLine, style: Style) ->
     return page is not None and len(page) == 1
 
 
-def _lane_count(style: Style) -> int:
-    """多行显示的行数 = 每行对齐列表长度；单行模式恒为 1。"""
-    if not style.dual_line_layout:
-        return 1
-    return max(len(style.line_alignments), 1)
-
-
 def _lane_alignment(
     style: Style, lane: int | None, page_line_count: int | None = None
 ) -> str:
@@ -14424,37 +14423,6 @@ def check_layout_margins(
     return warnings
 
 
-def _line_start_ms(line: TimingLine) -> int:
-    return timing_line_start_ms(line)
-
-
-def _line_end_ms(line: TimingLine) -> int:
-    if line.end_ms is not None:
-        return line.end_ms
-    return line.chars[-1].start_ms + 1000 if line.chars else 0
-
-
-def _layout_style_for_line(style: Style, line: TimingLine) -> Style:
-    """把行引用的布局定义套到 style 上（0 = 默认布局，原样返回）。"""
-    index = int(getattr(line, "layout_index", 0) or 0)
-    if index <= 0 or index > len(style.layouts):
-        return style
-    layout = style.layouts[index - 1]
-    changes = {
-        name: value
-        for name in LYRICS_LAYOUT_FIELDS
-        if (value := getattr(layout, name)) is not None
-    }
-    return replace(style, **changes)
-
-
-def _row_count_resolver(style: Style):
-    """timeline ``row_count_of`` 回调：按行布局返回该行所在页的行数。"""
-    if not style.layouts:
-        return None  # 没有额外布局 → 全部页用全局行数，走快路径
-    return lambda line: _lane_count(_layout_style_for_line(style, line))
-
-
 def _bottom_align_resolver(style: Style):
     if style.vertical:
         return None
@@ -14465,57 +14433,6 @@ def _vertical_position_resolver(style: Style):
     if style.vertical:
         return None
     return lambda line: _layout_style_for_line(style, line).line_y_position
-
-
-def _style_for_line(style: Style, line: TimingLine) -> Style:
-    """行的有效样式（布局引用 + 歌手覆盖 + 逐行动画）。
-
-    ``dataclasses.replace`` 要把 ``Style`` 的两百多个字段整份重建一遍，而这个函数
-    每行会被问上好几次、每次至少两趟 replace。结果只取决于下面这几项，同一条轨道
-    里绝大多数行都落在同一个键上，所以在排版区间内缓存住。
-    """
-    cache = getattr(_LAYOUT_PASS, "line_styles", None)
-    if cache is None:
-        return _style_for_line_uncached(style, line)
-    override = line.animation_override
-    cache_key = (
-        id(style),
-        int(getattr(line, "layout_index", 0) or 0),
-        line.singer_id,
-        None
-        if override is None
-        else (
-            override.entry_anim,
-            int(override.entry_duration_ms),
-            override.exit_anim,
-            int(override.exit_duration_ms),
-            # 唱字动画也在键里：只有它不同的两行，否则会命中同一份缓存样式。
-            override.karaoke_anim,
-        ),
-    )
-    hit = cache.get(cache_key)
-    if hit is not None:
-        return hit
-    resolved = _style_for_line_uncached(style, line)
-    cache[cache_key] = resolved
-    # style 存住：键里有 id()，对象被回收后地址会被复用。
-    _LAYOUT_PASS.styles.append(style)
-    return resolved
-
-
-def _style_for_line_uncached(style: Style, line: TimingLine) -> Style:
-    layout_style = _layout_style_for_line(style, line)
-    if line.singer_id is not None:
-        scheme = style.singer_style_overrides.get(line.singer_id)
-        if scheme is not None:
-            changes = _style_scheme_changes(scheme)
-            if changes:
-                style = replace(style, **changes)
-    style = replace(
-        style,
-        **{name: getattr(layout_style, name) for name in LYRICS_LAYOUT_FIELDS},
-    )
-    return style_with_line_animation(style, line)
 
 
 def _auto_entry_reserve_ms(style: Style, line: TimingLine) -> int:
@@ -14625,37 +14542,6 @@ def _display_line_collision_time_window(
     if time_window != "stable":
         raise ValueError(f"Unsupported collision time window: {time_window}")
     return _display_line_static_collision_window(display_line, style)
-
-
-def _style_for_line_display_window(
-    style: Style,
-    line: TimingLine,
-    display_start_ms: int | None,
-    display_end_ms: int | None,
-) -> Style:
-    """Clamp rendered animation durations to the resolved outside-wipe margins.
-
-    Automatic show-time compression may consume configured entry/exit animation
-    time.  Unless the configured animation or display override is already
-    shorter, the entry window retains the 250 ms automatic minimum; exit may
-    collapse to zero.  Manual display overrides are already reflected in the
-    resolved window and therefore remain authoritative.
-    """
-
-    line_style = _style_for_line(style, line)
-    start = (
-        _line_start_ms(line)
-        if display_start_ms is None
-        else int(display_start_ms)
-    )
-    end = _line_end_ms(line) if display_end_ms is None else int(display_end_ms)
-    entry_available = max(_line_start_ms(line) - start, 0)
-    exit_available = max(end - _line_end_ms(line), 0)
-    return replace(
-        line_style,
-        entry_lead_ms=min(max(int(line_style.entry_lead_ms), 0), entry_available),
-        exit_fade_ms=min(max(int(line_style.exit_fade_ms), 0), exit_available),
-    )
 
 
 def resolved_char_intervals_for_line(

@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Optional
+
+from krok_helper.subtitle_render.engine.line_style import (
+    lane_count as _lane_count,
+    layout_style_for_line as _layout_style_for_line,
+    row_count_resolver as _row_count_resolver,
+)
 
 from krok_helper.subtitle_render.engine.page_plan import (
     resolve_page_plan,
@@ -15,37 +20,7 @@ from krok_helper.subtitle_render.timing import (
     TimingLine,
     TimingTrack,
 )
-from krok_helper.subtitle_render.models import (
-    LYRICS_LAYOUT_FIELDS,
-    Style,
-    layout_capacity,
-    layout_id_for_index,
-)
-
-
-def _lane_count(style: Style) -> int:
-    if not style.dual_line_layout:
-        return 1
-    return max(len(style.line_alignments), 1)
-
-
-def _layout_style_for_line(style: Style, line: TimingLine) -> Style:
-    index = int(getattr(line, "layout_index", 0) or 0)
-    if index <= 0 or index > len(style.layouts):
-        return style
-    layout = style.layouts[index - 1]
-    changes = {
-        name: value
-        for name in LYRICS_LAYOUT_FIELDS
-        if (value := getattr(layout, name)) is not None
-    }
-    return replace(style, **changes)
-
-
-def _row_count_resolver(style: Style):
-    if not style.layouts:
-        return None
-    return lambda line: _lane_count(_layout_style_for_line(style, line))
+from krok_helper.subtitle_render.models import Style, layout_capacity, layout_id_for_index
 
 
 def apply_layout_to_page(

@@ -312,6 +312,38 @@ def test_subtitle_render_internal_import_graph_is_acyclic() -> None:
     assert _dependency_cycles(_internal_dependencies()) == []
 
 
+def test_line_style_semantics_have_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.line_style"
+    delegated_names = {
+        "_lane_count",
+        "_layout_style_for_line",
+        "_row_count_resolver",
+    }
+    for relative_path in (
+        Path("engine/layout_assignment.py"),
+        Path("engine/painter.py"),
+    ):
+        path = ROOT / relative_path
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        inline = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        } & delegated_names
+        imported = {
+            alias.asname
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom) and node.module == owner
+            for alias in node.names
+        }
+
+        assert inline == set()
+        assert delegated_names <= imported
+
+    line_style_targets = _import_targets(owner, ROOT / "engine/line_style.py")
+    assert f"{PACKAGE}.engine.painter" not in line_style_targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"
