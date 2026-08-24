@@ -167,7 +167,7 @@ from krok_helper.subtitle_render.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
 )
-from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.widgets.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
     _MediaProbeWorker,
 )
@@ -185,7 +185,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
-from krok_helper.subtitle_render.frontend.font_loading import font_list_loading_overlay
+from krok_helper.subtitle_render.frontend.widgets.font_loading import font_list_loading_overlay
 from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     GuidePrefixMatch,
     GuidePrefixReplaceDialog,
@@ -242,7 +242,7 @@ from krok_helper.subtitle_render.screen_settings import (
     screen_settings_to_dict,
 )
 from krok_helper.subtitle_render.frontend.editor.timeline_view import TrackTimelineView
-from krok_helper.subtitle_render.frontend.workspace_switcher import WorkspaceSwitcher
+from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.timing import (
     GuideSymbol,
     LineAnimationOverride,
@@ -341,7 +341,7 @@ from krok_helper.subtitle_render.session import (
     SubtitleTrackMutation,
 )
 from krok_helper.subtitle_render.settings_store import SubtitleRenderSettingsStore
-from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, stage_bg, themed
 
 apply_qfluent_menu_lifetime_patch()
 apply_qfluent_tooltip_parent_patch()

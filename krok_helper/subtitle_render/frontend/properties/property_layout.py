@@ -20,7 +20,7 @@ from krok_helper.subtitle_render.frontend.properties.property_widgets import (
     CollapsibleSection,
     subgroup_label,
 )
-from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import control_qss, palette, themed
 
 
 _COMPACT_CONTROL_HEIGHT = 32

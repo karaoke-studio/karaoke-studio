@@ -82,7 +82,7 @@ from krok_helper.subtitle_render.guide_symbols import (
     import_svg_guide_symbol,
     scaled_guide_symbol_path,
 )
-from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.widgets.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_error,
     fluent_get_text,
@@ -107,7 +107,7 @@ from krok_helper.subtitle_render.models import (
     layout_capacity,
     layout_display_name,
 )
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
 COL_LANE = 0
 COL_ROLE = 1

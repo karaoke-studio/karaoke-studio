@@ -32,7 +32,7 @@ from krok_helper.subtitle_render.engine.layout.timeline_projection import (
     resolve_utopia_visual_intervals,
     source_char_intervals,
 )
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.timing import (
     RubyAnnotation,
     TimingLine,

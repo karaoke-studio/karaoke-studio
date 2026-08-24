@@ -22,7 +22,7 @@ from krok_helper.subtitle_render.frontend.properties.property_layout import (
 )
 from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
 from krok_helper.subtitle_render.frontend.properties.property_widgets import FolderTabPanel, PillSelector
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
 
 class RoleColorPropertyPageBuilder:

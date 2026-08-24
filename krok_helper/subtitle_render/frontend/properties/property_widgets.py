@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
 
 _COMPACT_CONTROL_HEIGHT = 32

@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.frontend.properties.property_layout import (
     property_section,
 )
 from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
 
 VIEWPORT_ALIGNMENT_OPTIONS = (

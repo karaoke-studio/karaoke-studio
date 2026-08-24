@@ -49,7 +49,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT  # noqa: E402
-from krok_helper.subtitle_render.frontend.workspace_switcher import (  # noqa: E402
+from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import (  # noqa: E402
     WorkspaceSwitcher,
 )
 

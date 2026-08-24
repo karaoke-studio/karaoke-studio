@@ -48,14 +48,14 @@ from PyQt6.QtWidgets import (
 from krok_helper.background_throttle import UiActivityGuard
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR
-from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.widgets.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.preview.preview_async import (
     DEFAULT_PREVIEW_QUALITY,
     PREVIEW_QUALITY_OPTIONS,
     normalize_preview_quality,
 )
 from krok_helper.subtitle_render.frontend.preview.preview_media import qt_playback_source
-from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.background import (
     BackgroundSource,
     background_sequence_frame_path,

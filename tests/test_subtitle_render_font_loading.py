@@ -12,8 +12,8 @@ from PyQt6 import sip  # noqa: E402
 from PyQt6.QtCore import QEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
-import krok_helper.subtitle_render.frontend.font_loading as font_loading  # noqa: E402
-from krok_helper.subtitle_render.frontend.font_loading import (  # noqa: E402
+import krok_helper.subtitle_render.frontend.widgets.font_loading as font_loading  # noqa: E402
+from krok_helper.subtitle_render.frontend.widgets.font_loading import (  # noqa: E402
     FontListLoadingOverlay,
     font_list_loading_overlay,
 )

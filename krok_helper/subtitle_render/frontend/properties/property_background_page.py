@@ -23,7 +23,7 @@ from krok_helper.subtitle_render.frontend.properties.property_layout import (
     property_field,
     property_section,
 )
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.frontend.properties.property_widgets import PillSelector
 from krok_helper.subtitle_render.screen_settings import SCREEN_FPS_OPTIONS
 

@@ -11,7 +11,7 @@ from krok_helper.subtitle_render.frontend.properties.property_layout import (
     inline_property_section,
     property_section,
 )
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.frontend.properties.property_widgets import FolderTabPanel
 
 

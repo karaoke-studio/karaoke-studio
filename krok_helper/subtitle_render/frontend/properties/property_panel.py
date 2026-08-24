@@ -172,7 +172,7 @@ from krok_helper.subtitle_render.frontend.properties.property_timing_page import
     TimingPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
     style_for_role,
