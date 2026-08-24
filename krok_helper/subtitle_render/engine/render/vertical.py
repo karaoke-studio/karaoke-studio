@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFont, QFontMetrics, QPainterPath, QTransform
@@ -24,6 +25,7 @@ from krok_helper.subtitle_render.engine.text import (
 )
 from krok_helper.subtitle_render.engine.timing.timeline import (
     DisplayLine,
+    char_fill_ratio,
     compute_char_intervals,
 )
 from krok_helper.subtitle_render.models import Style
@@ -71,6 +73,36 @@ class VerticalLineLayout:
     text_path: QPainterPath
     colors: KaraokeColors
     active_rubies: list[RubyAnnotation]
+
+
+class ResolveCharRubyGroups(Protocol):
+    def __call__(
+        self,
+        rubies: list[RubyAnnotation],
+        line: TimingLine,
+        intervals: list[tuple[int, int]],
+    ) -> object: ...
+
+
+class CharacterFillRatio(Protocol):
+    def __call__(
+        self,
+        line: TimingLine,
+        intervals: list[tuple[int, int]],
+        fill_ranges: list[tuple[int, int]],
+        active_rubies: list[RubyAnnotation],
+        index: int,
+        t_ms: int,
+        *,
+        groups: object,
+        ruby_main_progress_mode: str,
+    ) -> float: ...
+
+
+@dataclass(frozen=True)
+class VerticalProgressPorts:
+    resolve_char_ruby_groups: ResolveCharRubyGroups
+    character_fill_ratio: CharacterFillRatio
 
 
 def vertical_orientation(char: str) -> str:
@@ -177,6 +209,87 @@ def resolve_vertical_top(img_h: int, block_h: int, style: Style) -> int:
     return img_h - margin - block_h
 
 
+def vertical_after_clip_rect(
+    column_x: int,
+    cell_w: int,
+    y0: int,
+    y_scan: int,
+    pad: int,
+) -> QRectF:
+    return QRectF(
+        float(column_x - cell_w / 2 - pad),
+        float(y0 - pad),
+        float(cell_w + pad * 2),
+        float((y_scan - y0) + pad),
+    )
+
+
+def vertical_before_clip_rect(
+    column_x: float,
+    cell_w: float,
+    y_scan: float,
+    pad: int,
+) -> QRectF:
+    """Return the complementary unsung layer below the vertical wipe."""
+    return QRectF(
+        float(column_x - cell_w / 2 - pad),
+        float(y_scan),
+        float(cell_w + pad * 2),
+        1_000_000.0,
+    )
+
+
+def vertical_fill_band(
+    cells: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    t_ms: int,
+    *,
+    ports: VerticalProgressPorts,
+    line: TimingLine | None = None,
+    active_rubies: list[RubyAnnotation] | None = None,
+    ruby_main_progress_mode: str = "checkpoint_segments",
+) -> tuple[int, int] | None:
+    """Return the sung vertical band ``(y_top, y_scan)``."""
+    if not cells:
+        return None
+    y_top = cells[0][0]
+    scan = float(y_top)
+    ruby_groups = (
+        ports.resolve_char_ruby_groups(active_rubies, line, intervals)
+        if ruby_main_progress_mode == "reading_units"
+        and line is not None
+        and active_rubies
+        else None
+    )
+    for index, ((cell_top, cell_bottom), (start, end)) in enumerate(
+        zip(cells, intervals)
+    ):
+        ratio = (
+            ports.character_fill_ratio(
+                line,
+                intervals,
+                cells,
+                active_rubies or [],
+                index,
+                t_ms,
+                groups=ruby_groups,
+                ruby_main_progress_mode=ruby_main_progress_mode,
+            )
+            if ruby_groups is not None and line is not None
+            else char_fill_ratio(start, end, t_ms)
+        )
+        if ratio <= 0.0:
+            break
+        if ratio >= 1.0:
+            scan = cell_bottom
+            continue
+        scan = cell_top + (cell_bottom - cell_top) * ratio
+        break
+    if scan <= y_top:
+        return None
+    return y_top, int(round(scan))
+
+
 def layout_vertical_line(
     track: TimingTrack,
     line: TimingLine,
@@ -263,12 +376,16 @@ def layout_vertical_line(
 
 __all__ = [
     "VerticalLineLayout",
+    "VerticalProgressPorts",
     "layout_vertical_line",
     "resolve_vertical_columns",
     "resolve_vertical_top",
+    "vertical_after_clip_rect",
+    "vertical_before_clip_rect",
     "vertical_cell_width",
     "vertical_glyph_offset",
     "vertical_glyph_path",
+    "vertical_fill_band",
     "vertical_orientation",
     "vertical_ruby_allowance",
 ]

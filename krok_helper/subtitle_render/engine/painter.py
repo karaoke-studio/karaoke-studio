@@ -594,12 +594,16 @@ from krok_helper.subtitle_render.engine.render.title import (
 )
 from krok_helper.subtitle_render.engine.render.vertical import (
     VerticalLineLayout as _VerticalLineLayout,
+    VerticalProgressPorts,
     layout_vertical_line as _layout_vertical_line,
     resolve_vertical_columns as _resolve_vertical_columns,
     resolve_vertical_top as _resolve_vertical_top,
+    vertical_after_clip_rect as _vertical_after_clip_rect,
+    vertical_before_clip_rect as _vertical_before_clip_rect,
     vertical_cell_width as _vertical_cell_width,
     vertical_glyph_offset as _vertical_glyph_offset,
     vertical_glyph_path as _vertical_glyph_path,
+    vertical_fill_band as _vertical_fill_band_with_ports,
     vertical_orientation as _vertical_orientation,
     vertical_ruby_allowance as _vertical_ruby_allowance,
 )
@@ -3714,17 +3718,6 @@ def _vertical_after_clip_pad(style: Style) -> int:
     )
 
 
-def _vertical_after_clip_rect(
-    column_x: int, cell_w: int, y0: int, y_scan: int, pad: int
-) -> QRectF:
-    return QRectF(
-        float(column_x - cell_w / 2 - pad),
-        float(y0 - pad),
-        float(cell_w + pad * 2),
-        float((y_scan - y0) + pad),
-    )
-
-
 def _vertical_before_clip_pad(
     stroke_width: int,
     stroke2_width: int,
@@ -3739,23 +3732,6 @@ def _vertical_before_clip_pad(
         stroke_extent + abs(shadow_dx),
         stroke_extent + abs(shadow_dy),
         2,
-    )
-
-
-def _vertical_before_clip_rect(
-    column_x: float, cell_w: float, y_scan: float, pad: int
-) -> QRectF:
-    """未唱层的互补裁剪带：扫光线以下（竖排扫光上→下）。
-
-    N3 硬分割：竖排发光烘在整层位图内、无法单独跳过已唱发光，所以只要未唱
-    发光存在就把未唱层整体裁到扫光线之下，已唱带交给已唱层。前后发光相同时
-    两层位图逐像素相同，互补裁剪恰好还原整条 halo（不再是此前的双份叠加）。
-    """
-    return QRectF(
-        float(column_x - cell_w / 2 - pad),
-        float(y_scan),
-        float(cell_w + pad * 2),
-        1_000_000.0,
     )
 
 
@@ -4223,45 +4199,15 @@ def _vertical_fill_band(
     active_rubies: list[RubyAnnotation] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
 ) -> tuple[int, int] | None:
-    """竖排已唱区 ``(y_top, y_scan)``：扫光从首字符顶向下推进；空带返回 None。"""
-    if not cells:
-        return None
-    y_top = cells[0][0]
-    scan = float(y_top)
-    ruby_groups = (
-        _resolve_char_ruby_groups(active_rubies, line, intervals)
-        if ruby_main_progress_mode == "reading_units"
-        and line is not None
-        and active_rubies
-        else None
+    return _vertical_fill_band_with_ports(
+        cells,
+        intervals,
+        t_ms,
+        ports=_VERTICAL_PROGRESS_PORTS,
+        line=line,
+        active_rubies=active_rubies,
+        ruby_main_progress_mode=ruby_main_progress_mode,
     )
-    for index, ((cell_top, cell_bottom), (start, end)) in enumerate(
-        zip(cells, intervals)
-    ):
-        ratio = (
-            _character_fill_ratio(
-                line,
-                intervals,
-                cells,
-                active_rubies or [],
-                index,
-                t_ms,
-                groups=ruby_groups,
-                ruby_main_progress_mode=ruby_main_progress_mode,
-            )
-            if ruby_groups is not None and line is not None
-            else char_fill_ratio(start, end, t_ms)
-        )
-        if ratio <= 0.0:
-            break
-        if ratio >= 1.0:
-            scan = cell_bottom
-            continue
-        scan = cell_top + (cell_bottom - cell_top) * ratio
-        break
-    if scan <= y_top:
-        return None
-    return y_top, int(round(scan))
 
 
 def _paint_line(
@@ -9981,6 +9927,12 @@ def _character_fill_ratio(
         return 0.0
     start, end = intervals[index]
     return char_fill_ratio(start, end, t_ms)
+
+
+_VERTICAL_PROGRESS_PORTS = VerticalProgressPorts(
+    resolve_char_ruby_groups=_resolve_char_ruby_groups,
+    character_fill_ratio=_character_fill_ratio,
+)
 
 
 def _is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
