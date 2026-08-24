@@ -143,10 +143,12 @@ from krok_helper.subtitle_render.engine.layout.layout_assignment import (
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginWarning,
     LayoutTimingDiagnostic,
+    layout_pass,
+)
+from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter import (
     check_layout_margins,
     display_windows_for_style,
     layout_timing_diagnostics_for_style,
-    layout_pass,
 )
 from krok_helper.subtitle_render.engine.style.title_semantics import resolve_title_text
 from krok_helper.subtitle_render.engine.layout.page_plan import (

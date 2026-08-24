@@ -66,6 +66,10 @@ from krok_helper.subtitle_render.engine.layout.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
 )
+from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
+    LayoutMarginWarning,
+    LayoutTimingDiagnostic,
+)
 from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
     render_line_with_guide_symbols as _line_with_guide_symbol,
@@ -240,17 +244,6 @@ _LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
 _DISPLAY_LINE_RESOLUTION_CACHE = DisplayResolutionCache(max_items=24)
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
-
-
-@dataclass(frozen=True)
-class LayoutTimingDiagnostic:
-    """One user-facing explanation emitted by the timing/layout solver."""
-
-    kind: str
-    line_indices: tuple[int, ...]
-    title: str
-    summary: str
-    detail: str
 
 
 @dataclass(frozen=True)
@@ -12646,20 +12639,6 @@ def _resolve_line_x_smart(
         center_override=center_override,
         page=page,
     )
-
-
-@dataclass(frozen=True)
-class LayoutMarginWarning:
-    """一条歌词行的左右余白检查结果（对齐 N3 预览警告语义）。"""
-
-    line_index: int
-    """``track.lines`` 中的索引。"""
-    text: str
-    level: str
-    """``"overflow"`` = 字幕溢出画面（N3 Warning）；``"margin"`` = 左右余白无法确保
-    （N3 Information）。"""
-    left: int
-    right: int
 
 
 def check_layout_margins(

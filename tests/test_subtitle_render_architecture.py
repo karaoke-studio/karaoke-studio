@@ -618,6 +618,28 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     assert "resolve_display_lines" in calls
 
 
+def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
+    painter_path = ROOT / "engine/painter.py"
+    painter_module = f"{PACKAGE}.engine.painter"
+    targets = _import_targets(painter_module, painter_path)
+
+    assert f"{PACKAGE}.engine.layout.layout_diagnostics" in targets
+    diagnostics_path = ROOT / "engine/layout/layout_diagnostics.py"
+    diagnostics_targets = _import_targets(
+        f"{PACKAGE}.engine.layout.layout_diagnostics",
+        diagnostics_path,
+    )
+    assert f"{PACKAGE}.engine.painter" not in diagnostics_targets
+    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    inline_contracts = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name in {"LayoutMarginWarning", "LayoutTimingDiagnostic"}
+    }
+    assert inline_contracts == set()
+
+
 def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
     owner = f"{PACKAGE}.engine.layout.layout_plan_orchestrator"
     targets = _import_targets(
@@ -802,6 +824,7 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
         "page_offset_plan.py",
         "page_placement.py",
         "page_plan.py",
+        "painter_diagnostics_adapter.py",
         "qt_line_geometry.py",
         "semantic_plan.py",
         "signal_semantics.py",
