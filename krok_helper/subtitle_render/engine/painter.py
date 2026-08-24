@@ -107,7 +107,6 @@ from krok_helper.subtitle_render.engine.line_pagination import (
 )
 from krok_helper.subtitle_render.engine.line_geometry import (
     line_has_role_labels as _line_has_role_labels,
-    resolve_guide_anchor_bounds as _resolve_guide_anchor_bounds,
 )
 from krok_helper.subtitle_render.engine.signal_semantics import (
     display_style_for_signal_window as _display_style_for_signal_window,
@@ -186,8 +185,8 @@ from krok_helper.subtitle_render.engine.text_layout import (
     style_for_role_in_layout as _style_for_role_in_layout,
 )
 from krok_helper.subtitle_render.engine.qt_line_geometry import (
-    measure_guide_anchor_bounds as _qt_measure_guide_anchor_bounds,
     resolved_char_intervals_for_line,
+    resolved_guide_anchor_bounds_for_line,
 )
 from krok_helper.subtitle_render.engine.page_offset_plan import (
     MeasuredPageLine,
@@ -4991,7 +4990,6 @@ def build_track_layout_plan(
         LayoutPlanResolvers(
             display_lines=_display_lines_for_style,
             page_offset_windows=resolved_page_offset_windows_for_style,
-            guide_anchor_bounds=resolved_guide_anchor_bounds_for_line,
         ),
         logical_w=logical_w,
         logical_h=logical_h,
@@ -12909,48 +12907,6 @@ def _display_line_collision_time_window(
     if time_window != "stable":
         raise ValueError(f"Unsupported collision time window: {time_window}")
     return _display_line_static_collision_window(display_line, style)
-
-
-def _ruby_spacing_for_guide_anchor(
-    track: TimingTrack,
-    line: TimingLine,
-    char_widths: list[int],
-    line_style: Style,
-) -> tuple[list[int], int, int]:
-    active_rubies = _active_rubies_for_line(track.rubies, line)
-    return _ruby_char_gaps(
-        line,
-        char_widths,
-        active_rubies,
-        line_style,
-    )
-
-
-def _measure_guide_anchor_bounds(
-    track: TimingTrack,
-    line: TimingLine,
-    line_style: Style,
-) -> tuple[float, float] | None:
-    return _qt_measure_guide_anchor_bounds(
-        track,
-        line,
-        line_style,
-        ruby_spacing=_ruby_spacing_for_guide_anchor,
-    )
-
-
-def resolved_guide_anchor_bounds_for_line(
-    track: TimingTrack,
-    line: TimingLine,
-    style: Style,
-) -> tuple[float, float] | None:
-    """Resolve Painter-compatible horizontal anchor bounds for guide glyphs."""
-    return _resolve_guide_anchor_bounds(
-        track,
-        line,
-        style,
-        _measure_guide_anchor_bounds,
-    )
 
 
 def _paint_rubies(

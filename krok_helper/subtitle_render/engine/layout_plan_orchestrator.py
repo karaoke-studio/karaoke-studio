@@ -33,11 +33,12 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
 )
 from krok_helper.subtitle_render.engine.qt_line_geometry import (
     resolved_char_intervals_for_line,
+    resolved_guide_anchor_bounds_for_line,
 )
 from krok_helper.subtitle_render.engine.timeline import DisplayLine
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
+from krok_helper.subtitle_render.timing import TimingTrack
 
 
 class DisplayLinesResolver(Protocol):
@@ -61,22 +62,12 @@ class PageOffsetWindowsResolver(Protocol):
     ) -> dict[int, tuple[LayoutOffsetWindow, ...]]: ...
 
 
-class GuideAnchorBoundsResolver(Protocol):
-    def __call__(
-        self,
-        track: TimingTrack,
-        line: TimingLine,
-        style: Style,
-    ) -> tuple[float, float] | None: ...
-
-
 @dataclass(frozen=True)
 class LayoutPlanResolvers:
     """Concrete capabilities required to resolve one immutable track plan."""
 
     display_lines: DisplayLinesResolver
     page_offset_windows: PageOffsetWindowsResolver
-    guide_anchor_bounds: GuideAnchorBoundsResolver
 
 
 def resolve_track_layout_plan(
@@ -128,7 +119,8 @@ def resolve_track_layout_plan(
         resolved_char_intervals_for_line(line, style) for line in render_lines
     ]
     guide_anchor_bounds = [
-        resolvers.guide_anchor_bounds(track, line, style) for line in track.lines
+        resolved_guide_anchor_bounds_for_line(track, line, style)
+        for line in track.lines
     ]
     animation_styles = [
         style_for_line_display_window(

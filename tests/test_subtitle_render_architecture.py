@@ -422,7 +422,6 @@ def test_line_geometry_policy_has_no_painter_dependency() -> None:
     assert "_line_has_role_labels" not in inline
     assert imports == {
         ("line_has_role_labels", "_line_has_role_labels"),
-        ("resolve_guide_anchor_bounds", "_resolve_guide_anchor_bounds"),
     }
     targets = _import_targets(owner, ROOT / "engine/line_geometry.py")
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -484,7 +483,6 @@ def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
     assert resolver_fields == {
         "display_lines",
         "page_offset_windows",
-        "guide_anchor_bounds",
     }
 
 
@@ -535,6 +533,7 @@ def test_qt_line_geometry_has_no_painter_dependency() -> None:
         for alias in node.names
     }
     assert "resolved_char_intervals_for_line" in imported
+    assert "resolved_guide_anchor_bounds_for_line" in imported
 
 
 def test_page_offset_plan_has_no_painter_dependency() -> None:

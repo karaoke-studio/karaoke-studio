@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-
 from PyQt6.QtGui import QFontMetrics
 
 from krok_helper.subtitle_render.engine.guide_metrics import vector_glyph_width
 from krok_helper.subtitle_render.engine.line_geometry import (
     line_has_role_labels,
     resolve_char_intervals,
+    resolve_guide_anchor_bounds,
+)
+from krok_helper.subtitle_render.engine.ruby import (
+    active_rubies_for_line,
+    ruby_char_gaps,
 )
 from krok_helper.subtitle_render.engine.text_layout import (
     build_role_text_layout,
@@ -24,12 +27,6 @@ from krok_helper.subtitle_render.engine.text_metrics import (
 )
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
-
-
-RubySpacingResolver = Callable[
-    [TimingTrack, TimingLine, list[int], Style],
-    tuple[Sequence[int], float, float],
-]
 
 
 def char_widths_for_intervals(
@@ -75,8 +72,6 @@ def measure_guide_anchor_bounds(
     track: TimingTrack,
     line: TimingLine,
     style: Style,
-    *,
-    ruby_spacing: RubySpacingResolver,
 ) -> tuple[float, float]:
     """Measure the source text box from which vector guides grow."""
     font = build_font(style)
@@ -95,18 +90,34 @@ def measure_guide_anchor_bounds(
         )
         for char in line.chars
     ]
-    char_gaps, ruby_left, ruby_right = ruby_spacing(
-        track,
+    active_rubies = active_rubies_for_line(track.rubies, line)
+    char_gaps, ruby_left, ruby_right = ruby_char_gaps(
         line,
         char_widths,
+        active_rubies,
         style,
     )
     text_width = line_text_width(char_widths, style) + sum(char_gaps)
     return -ruby_left, int(round(text_width)) + ruby_right
 
 
+def resolved_guide_anchor_bounds_for_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+) -> tuple[float, float] | None:
+    """Resolve a source line's horizontal vector-guide anchor bounds."""
+    return resolve_guide_anchor_bounds(
+        track,
+        line,
+        style,
+        measure_guide_anchor_bounds,
+    )
+
+
 __all__ = [
     "char_widths_for_intervals",
     "measure_guide_anchor_bounds",
     "resolved_char_intervals_for_line",
+    "resolved_guide_anchor_bounds_for_line",
 ]
