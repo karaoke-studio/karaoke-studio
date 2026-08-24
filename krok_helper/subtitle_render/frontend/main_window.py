@@ -202,6 +202,8 @@ from krok_helper.subtitle_render.frontend.preview_async import (
 )
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
+)
+from krok_helper.subtitle_render.screen_settings import (
     ScreenSettings,
     SCREEN_FPS_OPTIONS,
     match_screen_preset_key,

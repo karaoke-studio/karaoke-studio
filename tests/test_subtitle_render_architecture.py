@@ -122,6 +122,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
     paths = (
         ROOT / "contracts.py",
         ROOT / "recent_projects.py",
+        ROOT / "screen_settings.py",
         ROOT / "session.py",
         ROOT / "settings_store.py",
     )
