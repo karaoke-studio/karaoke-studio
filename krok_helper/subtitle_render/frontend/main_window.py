@@ -170,7 +170,10 @@ from krok_helper.subtitle_render.guide_symbols import (
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.background_tasks import (
     _MediaProbeWorker,
-    _RenderWorker,
+)
+from krok_helper.subtitle_render.frontend.export_runtime import (
+    ExportRuntimeCallbacks,
+    ExportRuntimeController,
 )
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_button_row,
@@ -2121,6 +2124,7 @@ class SubtitleRenderWindow(QWidget):
         self._subtitle_source_loader = SubtitleSourceLoader()
         self._n3_import_controller = N3ProjectImportController()
         self._export_job_controller = ExportJobController()
+        self._export_runtime_controller = ExportRuntimeController()
         self._preview_duration_controller = PreviewDurationController()
         self._preview_window_controller = PreviewWindowController()
         self._project_command_controller = ProjectCommandController(
@@ -2189,7 +2193,7 @@ class SubtitleRenderWindow(QWidget):
         self._handoff_probe_worker: Optional[_MediaProbeWorker] = None
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
-        self._render_worker: Optional[_RenderWorker] = None
+        self._render_worker: Optional[Any] = None
         self._watch_primary_subtitle_source = False
         self._source_watch_states: dict[str, _WatchedSubtitleState] = {}
         self._pending_source_reload_keys: set[str] = set()
@@ -8805,35 +8809,31 @@ class SubtitleRenderWindow(QWidget):
         self._export_started_monotonic = time.monotonic()
         self._export_preview_activity.set_desired(True)
 
-        thread = QThread(self)
         preview_width = _export_preview_width(
             self._export_monitor_view.size(),
             float(self._export_monitor_view.devicePixelRatioF()),
             job.width,
             job.height,
         )
-        worker = _RenderWorker(
-            job,
-            self._resolve_ffmpeg_dir(),
-            self._export_preview_file,
-            preview_width,
+        runtime = self._export_runtime_controller.prepare(
+            parent=self,
+            job=job,
+            ffmpeg_dir=self._resolve_ffmpeg_dir(),
+            preview_image_path=self._export_preview_file,
+            preview_width=preview_width,
+            callbacks=ExportRuntimeCallbacks(
+                progress=self._on_render_progress,
+                log=self._on_render_log,
+                success=self._finish_render_success,
+                cancelled=self._finish_render_cancelled,
+                failed=self._finish_render_failure,
+                thread_finished=self._clear_render_thread,
+            ),
         )
-        worker.moveToThread(thread)
-        worker.progressChanged.connect(self._on_render_progress)
-        worker.logMessage.connect(self._on_render_log)
-        worker.finished.connect(self._finish_render_success)
-        worker.cancelled.connect(self._finish_render_cancelled)
-        worker.failed.connect(self._finish_render_failure)
-        worker.finished.connect(thread.quit)
-        worker.cancelled.connect(thread.quit)
-        worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._clear_render_thread)
-        thread.started.connect(worker.run)
-        self._render_thread = thread
-        self._render_worker = worker
+        self._render_thread = runtime.thread
+        self._render_worker = runtime.worker
         self._sync_preview_window_visibility()
-        thread.start()
+        self._export_runtime_controller.start(runtime)
         self._refresh_project_title()
 
     def _stop_render_export(self) -> None:

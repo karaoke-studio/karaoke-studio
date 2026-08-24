@@ -334,6 +334,43 @@ def test_subtitle_render_window_delegates_background_tasks() -> None:
     )
 
 
+def test_subtitle_render_window_delegates_export_thread_wiring() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.export_runtime" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    direct_worker_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.frontend.background_tasks"
+        for alias in node.names
+    }
+    assert "_RenderWorker" not in direct_worker_imports
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_start_render_export"
+    )
+    controller_calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_export_runtime_controller"
+    }
+
+    assert controller_calls == {"prepare", "start"}
+
+
 def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"
