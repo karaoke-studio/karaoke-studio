@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import datetime
 import hashlib
 import logging
 from math import isfinite
@@ -206,6 +205,9 @@ from krok_helper.subtitle_render.frontend.preview_async import (
 )
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
+)
+from krok_helper.subtitle_render.frontend.project_recovery import (
+    ProjectRecoveryController,
 )
 from krok_helper.subtitle_render.screen_settings import (
     ScreenSettings,
@@ -2119,6 +2121,9 @@ class SubtitleRenderWindow(QWidget):
         self._settings_store = SubtitleRenderSettingsStore(settings_provider)
         self._project_controller = SubtitleProjectController()
         self._recovery_policy = ProjectRecoveryPolicy(self._recovery_root())
+        self._project_recovery_controller = ProjectRecoveryController(
+            self._recovery_policy
+        )
         self._workflow_context = workflow_context
 
         self._project_document = SubtitleProjectDocument()
@@ -9300,51 +9305,17 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_project_title()
 
     def has_pending_crash_recovery(self) -> bool:
-        return self._recovery_policy.scan().requires_attention
+        return self._project_recovery_controller.has_pending()
 
     def check_crash_recovery(self, dialog_parent: Optional[QWidget] = None) -> bool:
         """Prompt for valid and corrupt recovery files; return True if restored."""
         parent = dialog_parent or self
-        scan = self._recovery_policy.scan()
-
-        for path in scan.invalid_paths:
-            choice = fluent_choice(
-                parent,
-                "字幕项目恢复文件损坏",
-                f"无法读取以下恢复文件：\n{path}\n\n可以删除该文件，或保留以便手动检查。",
-                ("删除", "保留"),
-                default=1,
-            )
-            if choice == 0:
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError as exc:
-                    fluent_error(parent, "删除恢复文件失败", f"{path}\n\n{exc}")
-
-        for candidate in scan.candidates:
-            source = candidate.source_project_path
-            source_text = str(source) if source is not None else "未命名字幕项目"
-            saved_at = datetime.fromtimestamp(candidate.created_at_unix).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-            choice = fluent_choice(
-                parent,
-                "发现字幕项目恢复数据",
-                f"项目：{source_text}\n恢复快照时间：{saved_at}\n\n是否恢复？",
-                ("恢复", "放弃", "稍后处理"),
-                default=2,
-            )
-            if choice == 1:
-                try:
-                    candidate.path.unlink(missing_ok=True)
-                except OSError as exc:
-                    fluent_error(parent, "删除恢复文件失败", f"{candidate.path}\n\n{exc}")
-                continue
-            if choice != 0:
-                continue
-            if self._restore_recovery_candidate(candidate):
-                return True
-        return False
+        return self._project_recovery_controller.check(
+            parent,
+            choose=fluent_choice,
+            show_error=fluent_error,
+            restore=self._restore_recovery_candidate,
+        )
 
     def _restore_recovery_candidate(self, candidate: RecoveryCandidate) -> bool:
         try:

@@ -350,6 +350,32 @@ def test_subtitle_render_window_delegates_project_recovery_policy() -> None:
     assert direct_policy_imports == set()
 
 
+def test_subtitle_render_window_delegates_recovery_prompt_flow() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.project_recovery" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "check_crash_recovery"
+    )
+    prompt_literals = {
+        node.value
+        for node in ast.walk(method)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert "字幕项目恢复文件损坏" not in prompt_literals
+    assert "发现字幕项目恢复数据" not in prompt_literals
+
+
 def test_subtitle_render_window_delegates_project_resource_policy() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"
