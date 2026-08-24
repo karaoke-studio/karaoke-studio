@@ -4811,7 +4811,11 @@ class PropertyPanel(QWidget):
             ),
         )
 
-        pages = build_property_pages(self)
+        pages = build_property_pages(
+            self,
+            scroll_page_factory=_scroll_page,
+            section_pair_factory=_section_pair,
+        )
         for page, (route_key, label) in zip(pages, self._PAGE_SPECS):
             self._add_navigation_page(page, route_key, label)
         self.setCurrentIndex(0)
@@ -5084,38 +5088,6 @@ class PropertyPanel(QWidget):
         self._sync_role_registry(previous)
 
     # ------------------------------------------------------------------ layout
-
-    def _make_basic_page(self) -> QWidget:
-        scroll, layout = _scroll_page()
-        # 布局方案、行结构与字符排版共享同一张无标题工作区卡片。
-        layout.addWidget(self._make_row_structure_section())
-        # 注音的字号/间距/排布是排版参数，归布局页（配色仍在字体页的颜色列）
-        self._ruby_section = self._make_ruby_section()
-        layout.addWidget(
-            _section_pair(self._ruby_section, self._make_vertical_layout_section())
-        )
-        viewport = self._make_viewport_section()
-        viewport.set_expanded(False)  # 本项目特有的整体变换，低频使用默认折叠
-        layout.addWidget(viewport)
-        layout.addStretch(1)
-        return scroll
-
-    def _make_timing_page(self) -> QWidget:
-        scroll, layout = _scroll_page()
-        layout.addWidget(self._make_timing_section())
-        layout.addStretch(1)
-        return scroll
-
-    def _make_subtitle_page(self) -> QWidget:
-        scroll, layout = _scroll_page()
-        self._font_color_section = self._make_font_color_section()
-        # 角色选择是颜色/字体的编辑上下文，放在同一卡片的
-        # 顶部导航条，不再单独占一张可折叠卡片。
-        self._role_section = self._font_color_section
-        layout.addWidget(self._font_color_section)
-
-        layout.addStretch(1)
-        return scroll
 
     def _make_font_color_section(self) -> QFrame:
         section, layout = _plain_card()
@@ -6410,23 +6382,9 @@ class PropertyPanel(QWidget):
 
         return nav
 
-    def _make_effects_page(self) -> QWidget:
-        scroll, layout = _scroll_page()
-        layout.addWidget(self._make_animation_section())
-        layout.addWidget(self._make_lit_section())
-        layout.addStretch(1)
-        return scroll
-
     # ----------------------------------------------------------------- 标题（B7）
 
     # ------------------------------------------------------------------ background / audio page
-
-    def _make_background_page(self) -> QWidget:
-        scroll, layout = _scroll_page()
-        layout.addWidget(self._make_background_source_section())
-        layout.addWidget(self._make_screen_size_section())
-        layout.addStretch(1)
-        return scroll
 
     def _make_background_source_section(self) -> QFrame:
         section, layout = _section("背景素材")
@@ -6724,14 +6682,6 @@ class PropertyPanel(QWidget):
         text = str(path) if path is not None else ""
         for audio_edit in self._audio_path_edits:
             audio_edit.setText(text)
-
-    def _make_title_page(self) -> QWidget:
-        scroll, layout = _scroll_page()
-        layout.addWidget(self._make_title_text_section())
-        layout.addWidget(self._make_title_style_section())
-        layout.addWidget(self._make_title_time_section())
-        layout.addStretch(1)
-        return scroll
 
     def _make_title_text_section(self) -> QFrame:
         section, layout = _section("标题", switch=True)
