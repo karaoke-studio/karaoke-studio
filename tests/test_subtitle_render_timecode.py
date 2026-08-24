@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from krok_helper.subtitle_render.timecode import format_timecode_ms, parse_timecode_ms
+from krok_helper.subtitle_render.engine.timing.timecode import format_timecode_ms, parse_timecode_ms
 
 
 def test_timecode_contract_round_trips_supported_values() -> None:

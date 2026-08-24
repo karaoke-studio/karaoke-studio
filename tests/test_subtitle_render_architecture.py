@@ -140,7 +140,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "project" / "session.py",
         ROOT / "settings" / "store.py",
         ROOT / "sources" / "loader.py",
-        ROOT / "timecode.py",
+        ROOT / "engine" / "timing" / "timecode.py",
         ROOT / "timing.py",
         ROOT / "serialization" / "timing.py",
     )
@@ -819,12 +819,14 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
 
 
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
-    module_names = {"show_time.py", "timeline.py"}
+    module_names = {"auto_chorus.py", "show_time.py", "timecode.py", "timeline.py"}
     timing_root = ROOT / "engine" / "timing"
     assert {"__init__.py", *module_names} <= {
         path.name for path in timing_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
+    assert not (ROOT / "auto_chorus.py").exists()
+    assert not (ROOT / "timecode.py").exists()
 
 
 def test_style_engine_modules_are_grouped_in_one_domain_package() -> None:

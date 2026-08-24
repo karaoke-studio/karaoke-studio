@@ -238,7 +238,7 @@ from krok_helper.subtitle_render.settings.screen import (
     screen_settings_from_dict,
     screen_settings_to_dict,
 )
-from krok_helper.subtitle_render.timecode import format_timecode_ms, parse_timecode_ms
+from krok_helper.subtitle_render.engine.timing.timecode import format_timecode_ms, parse_timecode_ms
 from krok_helper.subtitle_render.n3.template_import import (
     N3_TEMPLATE_FILTER,
     default_n3_template_directories,

@@ -25,7 +25,7 @@ from qfluentwidgets import (
 )
 
 from krok_helper.qfluent_compat import ModelessDialog
-from krok_helper.subtitle_render.auto_chorus import (
+from krok_helper.subtitle_render.engine.timing.auto_chorus import (
     DEFAULT_CHORUS_BEGIN_CHARS,
     DEFAULT_CHORUS_END_CHARS,
 )

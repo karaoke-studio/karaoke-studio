@@ -20,7 +20,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     canonicalize_n3_font_family,
     n3_font_families,
 )
-from krok_helper.subtitle_render.timecode import format_timecode_ms, parse_timecode_ms
+from krok_helper.subtitle_render.engine.timing.timecode import format_timecode_ms, parse_timecode_ms
 
 
 _TIMECODE_PATTERN = QRegularExpression(
