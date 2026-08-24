@@ -229,6 +229,15 @@ from krok_helper.subtitle_render.timing import (
     guide_symbol_with_role_labels,
     timing_line_start_ms,
 )
+from krok_helper.subtitle_render.timing_codec import (
+    guide_symbol_from_dict,
+    guide_symbol_to_dict,
+    line_animation_override_from_dict,
+    line_animation_override_to_dict,
+    subtitle_loading_settings_from_dict,
+    subtitle_loading_settings_to_dict,
+    track_page_plan_from_dict,
+)
 from krok_helper.subtitle_render.models import (
     DEFAULT_EXPORT_NAME_TEMPLATE,
     DEFAULT_OUTPUT_NAME_SUFFIX,
@@ -239,14 +248,10 @@ from krok_helper.subtitle_render.models import (
     Style,
     TITLE_SCHEME_NAME,
     TitleOverlay,
-    guide_symbol_from_dict,
-    guide_symbol_to_dict,
     ensure_page_layout_defaults,
     layout_capacity,
     layout_display_name,
     layout_id_for_index,
-    line_animation_override_from_dict,
-    line_animation_override_to_dict,
     normalize_title_char_role_labels,
     rescale_font_sizes,
     rescale_layout_sizes,
@@ -254,9 +259,6 @@ from krok_helper.subtitle_render.models import (
     subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
-    subtitle_loading_settings_from_dict,
-    subtitle_loading_settings_to_dict,
-    track_page_plan_from_dict,
 )
 from krok_helper.subtitle_render.n3_font_catalog import (
     get_n3_font_catalog,

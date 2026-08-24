@@ -25,9 +25,9 @@ from krok_helper.subtitle_render.models import (
     SubtitleStyleScheme,
     TitleOverlay,
     effective_karaoke_animation,
-    guide_symbol_to_dict,
     title_overlay_to_dict,
 )
+from krok_helper.subtitle_render.timing_codec import guide_symbol_to_dict
 
 RENDER_IR_SCHEMA = 1
 GPU_UNSUPPORTED_FEATURE_LABELS = {

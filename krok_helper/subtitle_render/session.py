@@ -17,13 +17,15 @@ from krok_helper.subtitle_render.timing import (
 )
 from krok_helper.subtitle_render.models import (
     Style,
+    style_to_dict,
+)
+from krok_helper.subtitle_render.project_store import background_payload, project_payload
+from krok_helper.subtitle_render.timing_codec import (
     guide_symbol_to_dict,
     line_animation_override_to_dict,
-    style_to_dict,
     subtitle_loading_settings_to_dict,
     track_page_plan_to_dict,
 )
-from krok_helper.subtitle_render.project_store import background_payload, project_payload
 
 
 _PROJECT_OWNED_KEYS = frozenset(

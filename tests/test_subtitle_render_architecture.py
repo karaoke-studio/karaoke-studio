@@ -233,6 +233,33 @@ def test_timing_consumers_use_the_focused_domain_contract() -> None:
     assert not violations
 
 
+def test_timing_codec_consumers_use_the_focused_persistence_contract() -> None:
+    legacy_names = {
+        "guide_symbol_from_dict",
+        "guide_symbol_to_dict",
+        "line_animation_override_from_dict",
+        "line_animation_override_to_dict",
+        "subtitle_loading_settings_from_dict",
+        "subtitle_loading_settings_to_dict",
+        "track_page_plan_from_dict",
+        "track_page_plan_to_dict",
+    }
+    violations: dict[str, list[str]] = defaultdict(list)
+    for path in ROOT.rglob("*.py"):
+        if path.name in {"models.py", "timing_codec.py"}:
+            continue
+        module = _module_name(path)
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module != f"{PACKAGE}.models":
+                continue
+            imported = {alias.name for alias in node.names} & legacy_names
+            if imported:
+                violations[module].extend(sorted(imported))
+
+    assert not violations
+
+
 def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> None:
     path = ROOT / "contracts.py"
     targets = _import_targets(f"{PACKAGE}.contracts", path)
