@@ -10,6 +10,7 @@ from krok_helper.subtitle_render.frontend.property_inputs import (
     DynamicStackedWidget,
     GrowingPlainTextEdit,
     NoWheelSpinBox,
+    TimecodeEdit,
     WheelFocusedComboBox,
     WheelFocusedFontComboBox,
 )
@@ -75,6 +76,34 @@ def test_no_wheel_property_spin_ignores_page_scroll_input(qapp) -> None:
     spin.wheelEvent(event)
 
     assert event.ignored is True
+
+
+def test_property_timecode_input_preserves_value_format_clamp_and_step(qapp) -> None:
+    edit = TimecodeEdit(0, 10_000)
+    changes: list[int] = []
+    edit.valueChanged.connect(changes.append)
+
+    assert edit.submit_text("3.5") is True
+    assert edit.value() == 3_500
+    assert edit.text() == "0:03.500"
+
+    edit.stepBy(1)
+    edit.stepBy(-1, fine=True)
+    assert edit.value() == 4_490
+
+    assert edit.submit_text("15") is True
+    assert edit.value() == 10_000
+    assert edit.text() == "0:10.000"
+    assert changes == [3_500, 4_500, 4_490, 10_000]
+
+
+def test_property_timecode_input_restores_invalid_partial_text(qapp) -> None:
+    edit = TimecodeEdit(0, 10_000)
+    edit.setValue(2_500)
+
+    assert edit.submit_text("1:") is False
+    assert edit.value() == 2_500
+    assert edit.text() == "0:02.500"
 
 
 def test_property_font_combo_uses_injected_catalog_and_canonicalizer(qapp) -> None:
