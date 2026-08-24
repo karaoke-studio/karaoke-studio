@@ -932,6 +932,19 @@ def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
     assert [
         base.id for base in timecode_adapter.bases if isinstance(base, ast.Name)
     ] == ["TimecodeEdit"]
+    spin_adapters = {
+        node.name: [
+            base.id for base in node.bases if isinstance(base, ast.Name)
+        ]
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name in {"_WheelFocusedSpinBox", "_WheelFocusedDoubleSpinBox"}
+    }
+    assert spin_adapters == {
+        "_WheelFocusedSpinBox": ["WheelFocusedSpinBox"],
+        "_WheelFocusedDoubleSpinBox": ["WheelFocusedDoubleSpinBox"],
+    }
+    assert "_UnitProtectedSpinBoxMixin" not in inline_names
 
 
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:

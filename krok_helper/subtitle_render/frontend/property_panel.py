@@ -20,7 +20,6 @@ from PyQt6.QtCore import (
     QObject,
     QPoint,
     QPointF,
-    QRegularExpression,
     QRunnable,
     QRect,
     QRectF,
@@ -46,9 +45,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
-    QRegularExpressionValidator,
     QTransform,
-    QValidator,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -65,7 +62,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStackedWidget,
-    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -77,7 +73,6 @@ from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
     ComboBox as FluentComboBox,
-    DoubleSpinBox as FluentDoubleSpinBox,
     EditableComboBox as FluentEditableComboBox,
     FluentIcon as FIF,
     InfoBar,
@@ -130,8 +125,10 @@ from krok_helper.subtitle_render.frontend.property_inputs import (
     GrowingPlainTextEdit as _GrowingPlainTextEdit,
     NoWheelSpinBox as _NoWheelSpinBox,
     TimecodeEdit,
+    WheelFocusedDoubleSpinBox,
     WheelFocusedComboBox as _WheelFocusedComboBox,
     WheelFocusedFontComboBox,
+    WheelFocusedSpinBox,
 )
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
@@ -1602,251 +1599,18 @@ _BACKGROUND_KIND_PAGES = (
 )
 
 
-class _UnitProtectedSpinBoxMixin:
-    """Keep spin-box prefixes and suffixes outside the editable selection."""
-
-    def _install_debounced_keyboard_commit(self) -> None:
-        """Coalesce direct numeric typing before emitting ``valueChanged``.
-
-        Property changes rebuild the subtitle preview and update undo/settings
-        state.  With Qt's default keyboard tracking that work runs after every
-        digit, which makes the editor itself visibly pause.  Keep wheel/step
-        changes immediate, but commit direct text entry after the same short
-        idle window used by the title editor (or immediately on focus loss).
-
-        Only complete, in-range text is committed, and the typed string is
-        never rewritten while the caret is still in the field — see
-        ``_commit_keyboard_edit``.
-        """
-        self.setKeyboardTracking(False)
-        self._keyboard_commit_pending = False
-        self._keyboard_commit_timer = QTimer(self)
-        self._keyboard_commit_timer.setSingleShot(True)
-        self._keyboard_commit_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
-        self._keyboard_commit_timer.timeout.connect(self._commit_keyboard_edit)
-        self.lineEdit().textEdited.connect(self._queue_keyboard_commit)
-        self.editingFinished.connect(self._flush_keyboard_edit)
-
-    def _queue_keyboard_commit(self, _text: str) -> None:
-        self._keyboard_commit_pending = True
-        self._keyboard_commit_timer.start()
-
-    def _commit_keyboard_edit(self) -> None:
-        if not self._keyboard_commit_pending:
-            return
-        editor = self.lineEdit()
-        text = editor.text()
-        state, _fixed, _pos = self.validate(text, editor.cursorPosition())
-        if state != QValidator.State.Acceptable:
-            # 半成品文本（清空、只剩单位、暂时越界的 "2" → "20"）不能提交：
-            # interpretText 对不可接受的文本会把上一个值写回输入框，正在输入
-            # 的用户会被打断——删一位数字后旧值自己长回来正是这么来的。
-            # 留给下一次按键或失焦时（由 Qt 自己按常规规则收敛）处理。
-            return
-        self._keyboard_commit_timer.stop()
-        self._keyboard_commit_pending = False
-        cursor = editor.cursorPosition()
-        selection_start = editor.selectionStart()
-        selection_length = len(editor.selectedText())
-        self.interpretText()
-        if editor.text() != text:
-            # 值已提交，但 interpretText 顺手把文本规范化了（"007" → "7"、
-            # "12.5" → "12.50"）。编辑途中不能改用户正在敲的字符串，原样还原。
-            self._restore_editor_text(text, cursor, selection_start, selection_length)
-
-    def _flush_keyboard_edit(self) -> None:
-        """Editing ended: let Qt's own interpretation stand and drop the debounce.
-
-        Focus loss and Enter already run ``interpret()`` inside Qt, including
-        the out-of-range clamping and text normalisation that must not happen
-        while the field still has the caret.
-        """
-        self._keyboard_commit_timer.stop()
-        self._keyboard_commit_pending = False
-        self.interpretText()
-
-    def _restore_editor_text(
-        self,
-        text: str,
-        cursor: int,
-        selection_start: int,
-        selection_length: int,
-    ) -> None:
-        editor = self.lineEdit()
-        self._protecting_unit_selection = True
-        try:
-            editor.setText(text)
-            if selection_start >= 0 and selection_length > 0:
-                editor.setSelection(selection_start, selection_length)
-            else:
-                editor.setCursorPosition(min(cursor, len(text)))
-        finally:
-            self._protecting_unit_selection = False
-
-    def _install_unit_selection_guard(self) -> None:
-        self._protecting_unit_selection = False
-        editor = self.lineEdit()
-        editor.selectionChanged.connect(self._keep_units_out_of_selection)
-        editor.cursorPositionChanged.connect(self._keep_cursor_out_of_units)
-
-    def _editable_text_bounds(self) -> tuple[int, int]:
-        editor_text = self.lineEdit().text()
-        prefix = self.prefix()
-        suffix = self.suffix()
-        start = len(prefix) if prefix and editor_text.startswith(prefix) else 0
-        end = (
-            len(editor_text) - len(suffix)
-            if suffix and editor_text.endswith(suffix)
-            else len(editor_text)
-        )
-        return start, max(start, end)
-
-    def _keep_units_out_of_selection(self) -> None:
-        if self._protecting_unit_selection:
-            return
-        editor = self.lineEdit()
-        selection_start = editor.selectionStart()
-        if selection_start < 0:
-            return
-        selection_end = selection_start + len(editor.selectedText())
-        value_start, value_end = self._editable_text_bounds()
-        protected_start = max(selection_start, value_start)
-        protected_end = min(selection_end, value_end)
-        if (
-            protected_start == selection_start
-            and protected_end == selection_end
-        ):
-            return
-
-        self._protecting_unit_selection = True
-        try:
-            if protected_start >= protected_end:
-                editor.deselect()
-                editor.setCursorPosition(
-                    value_start if selection_end <= value_start else value_end
-                )
-            elif editor.cursorPosition() <= selection_start:
-                # Preserve the anchor/cursor direction for a backwards drag.
-                editor.setSelection(
-                    protected_end, protected_start - protected_end
-                )
-            else:
-                editor.setSelection(
-                    protected_start, protected_end - protected_start
-                )
-        finally:
-            self._protecting_unit_selection = False
-
-    def _keep_cursor_out_of_units(self, _old: int, current: int) -> None:
-        if self._protecting_unit_selection:
-            return
-        editor = self.lineEdit()
-        if editor.hasSelectedText():
-            return
-        value_start, value_end = self._editable_text_bounds()
-        protected_position = min(max(current, value_start), value_end)
-        if protected_position == current:
-            return
-        self._protecting_unit_selection = True
-        try:
-            editor.setCursorPosition(protected_position)
-        finally:
-            self._protecting_unit_selection = False
-
-
-class _WheelFocusedSpinBox(_UnitProtectedSpinBoxMixin, FluentSpinBox):
-    """Direct-entry Fluent spin box without overlapping step controls."""
+class _WheelFocusedSpinBox(WheelFocusedSpinBox):
+    """Bind the shared integer input to this panel's commit debounce."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        # InlineSpinBox's two permanent arrow buttons consume most of a narrow
-        # two-column field. Hide them entirely: click focuses the line edit, while
-        # focused wheel input remains available without any popup/flyout.
-        self.setSymbolVisible(False)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.lineEdit().textChanged.connect(self._sync_text_minimum)
-        self.valueChanged.connect(
-            lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
-        )
-        self._install_debounced_keyboard_commit()
-        self._install_unit_selection_guard()
-
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
-        super().showEvent(event)
-        # The final application font may only be resolved when the page is shown.
-        self._sync_text_minimum()
-
-    def _sync_text_minimum(self) -> None:
-        """Derive a DPI-aware minimum that keeps the current value readable."""
-        style = self.style()
-        text_width = self.lineEdit().fontMetrics().horizontalAdvance(
-            self.lineEdit().text()
-        )
-        text_chrome = (
-            2 * style.pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)
-            + 2 * style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin)
-        )
-        self.setMinimumWidth(max(text_width + text_chrome, 1))
-
-    def wheelEvent(self, event):  # noqa: N802 - Qt API
-        if not (self.hasFocus() or self.lineEdit().hasFocus()):
-            event.ignore()
-            return
-        delta = event.angleDelta().y()
-        if event.inverted():
-            delta = -delta
-        if delta:
-            steps = int(delta / 120) or (1 if delta > 0 else -1)
-            self.stepBy(steps)
-            event.accept()
-            return
-        super().wheelEvent(event)
+        super().__init__(parent, commit_delay_ms=EDIT_COMMIT_DEBOUNCE_MS)
 
 
-class _WheelFocusedDoubleSpinBox(_UnitProtectedSpinBoxMixin, FluentDoubleSpinBox):
-    """Floating-point counterpart used for exact gradient stop positions."""
+class _WheelFocusedDoubleSpinBox(WheelFocusedDoubleSpinBox):
+    """Bind the shared decimal input to this panel's commit debounce."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setSymbolVisible(False)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.lineEdit().textChanged.connect(self._sync_text_minimum)
-        self.valueChanged.connect(
-            lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
-        )
-        self._install_debounced_keyboard_commit()
-        self._install_unit_selection_guard()
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        self._sync_text_minimum()
-
-    def _sync_text_minimum(self) -> None:
-        style = self.style()
-        text_width = self.lineEdit().fontMetrics().horizontalAdvance(
-            self.lineEdit().text()
-        )
-        text_chrome = (
-            2 * style.pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)
-            + 2 * style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin)
-        )
-        self.setMinimumWidth(max(text_width + text_chrome, 1))
-
-    def wheelEvent(self, event):  # noqa: N802
-        if not (self.hasFocus() or self.lineEdit().hasFocus()):
-            event.ignore()
-            return
-        delta = event.angleDelta().y()
-        if event.inverted():
-            delta = -delta
-        if delta:
-            steps = int(delta / 120) or (1 if delta > 0 else -1)
-            self.stepBy(steps)
-            event.accept()
-            return
-        super().wheelEvent(event)
+        super().__init__(parent, commit_delay_ms=EDIT_COMMIT_DEBOUNCE_MS)
 
 
 #: 标题「显示时段」几个时刻字段的上限，取 N3 的时间标签上限
