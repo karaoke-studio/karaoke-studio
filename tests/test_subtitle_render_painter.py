@@ -7856,6 +7856,9 @@ from krok_helper.subtitle_render.engine.layout.painter_diagnostics_adapter impor
     check_layout_margins,
     layout_timing_diagnostics_for_style,
 )
+from krok_helper.subtitle_render.engine.layout.display_schedule import (  # noqa: E402
+    apply_constrained_page_sync,
+)
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_latin_font,
     _char_layout_width,
@@ -10481,17 +10484,13 @@ def test_page_sync_defaults_to_section_edges_and_can_run_on_every_page():
         )
         for index, line in enumerate(lines)
     ]
-    track = TimingTrack(lines=lines)
-
-    section_edges = subtitle_painter._apply_constrained_page_sync(
-        1_280, 720, track, Style(sync_entry=True, sync_ending=True), display_lines
-    )
-    every_page = subtitle_painter._apply_constrained_page_sync(
-        1_280,
-        720,
-        track,
-        Style(sync_entry=True, sync_ending=True, sync_each_page=True),
+    section_edges = apply_constrained_page_sync(
         display_lines,
+        Style(sync_entry=True, sync_ending=True),
+    )
+    every_page = apply_constrained_page_sync(
+        display_lines,
+        Style(sync_entry=True, sync_ending=True, sync_each_page=True),
     )
 
     assert [item.display_start_ms for item in section_edges] == [
@@ -10760,7 +10759,6 @@ def test_page_sync_entry_applies_longest_candidate_before_collision_guard(qapp):
             ("incoming lower line", 29_710, 30_900),
         )
     ]
-    track = TimingTrack(lines=lines)
     style = replace(
         Style(),
         sync_entry=True,
@@ -10777,12 +10775,9 @@ def test_page_sync_entry_applies_longest_candidate_before_collision_guard(qapp):
         DisplayLine(lines[2], 1, 27_860, 31_900, 0, 2, 2),
     ]
 
-    synchronized = subtitle_painter._apply_constrained_page_sync(
-        3840,
-        2160,
-        track,
-        style,
+    synchronized = apply_constrained_page_sync(
         display_lines,
+        style,
     )
 
     # Both automatic lines first receive the page's longest entry candidate.

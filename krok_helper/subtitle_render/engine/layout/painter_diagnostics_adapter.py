@@ -1,6 +1,9 @@
 """Bind layout diagnostic policies to Painter geometry and scheduling ports."""
 
 import krok_helper.subtitle_render.engine.painter as painter_impl
+from krok_helper.subtitle_render.engine.layout.display_schedule import (
+    apply_constrained_page_sync,
+)
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginBox,
     LayoutMarginPorts,
@@ -111,13 +114,7 @@ def layout_timing_diagnostics_for_style(
         dynamic_single_page_reflow=False,
         independent_line_entry=True,
     )
-    synchronized = painter_impl._apply_constrained_page_sync(
-        logical_w,
-        logical_h,
-        track,
-        style,
-        ideal,
-    )
+    synchronized = apply_constrained_page_sync(ideal, style)
     animation_candidate = painter_impl._apply_animation_time_guard(
         logical_w,
         logical_h,

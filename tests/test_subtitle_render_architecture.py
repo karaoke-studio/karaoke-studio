@@ -652,23 +652,12 @@ def test_painter_delegates_display_schedule_projection() -> None:
     }
     assert "resolve_visible_display_lines" in visible_calls
 
-    sync_adapter = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_apply_constrained_page_sync"
-    )
-    sync_calls = {
-        node.func.id
-        for node in ast.walk(sync_adapter)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "apply_constrained_page_sync" in sync_calls
     inline_functions = {
         node.name
         for node in tree.body
         if isinstance(node, ast.FunctionDef)
     }
+    assert "_apply_constrained_page_sync" not in inline_functions
     assert "_extend_page_display_boundary" not in inline_functions
     assert "_single_visible_display_line" not in inline_functions
 

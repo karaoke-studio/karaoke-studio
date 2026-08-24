@@ -4002,19 +4002,6 @@ def _apply_measured_section_time_fill(
     return changed
 
 
-def _apply_constrained_page_sync(
-    logical_w: int,
-    logical_h: int,
-    track: TimingTrack,
-    style: Style,
-    display_lines: list[DisplayLine],
-) -> list[DisplayLine]:
-    """Compatibility adapter to the layout-owned page-sync policy."""
-
-    del logical_w, logical_h, track
-    return apply_constrained_page_sync(display_lines, style)
-
-
 def _apply_animation_time_guard(
     logical_w: int,
     logical_h: int,
@@ -4070,13 +4057,7 @@ def _resolve_page_sync_and_collisions(
 ) -> list[DisplayLine]:
     """Apply page sync, then squeeze each colliding pair in order."""
 
-    synchronized = _apply_constrained_page_sync(
-        logical_w,
-        logical_h,
-        track,
-        style,
-        display_lines,
-    )
+    synchronized = apply_constrained_page_sync(display_lines, style)
     return _apply_animation_time_guard(
         logical_w,
         logical_h,
