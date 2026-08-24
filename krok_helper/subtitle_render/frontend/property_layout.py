@@ -154,6 +154,14 @@ class ResponsivePropertyPair(QWidget):
         self.updateGeometry()
 
 
+def property_section_pair(first: QWidget, second: QWidget) -> ResponsivePropertyPair:
+    """Build the standard two-card responsive property row."""
+    pair = ResponsivePropertyPair(min_side_width=270)
+    pair.set_widgets(first, None, second)
+    pair._layout.setSpacing(10)
+    return pair
+
+
 class ResponsiveFieldGrid(QWidget):
     """Reflow property fields into 1–N columns for the available width."""
 

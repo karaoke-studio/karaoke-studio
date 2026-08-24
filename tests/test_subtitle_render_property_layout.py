@@ -10,6 +10,7 @@ from krok_helper.subtitle_render.frontend.property_layout import (
     ResponsivePropertyPair,
     ResponsiveRoleHeader,
     property_field,
+    property_section_pair,
 )
 
 
@@ -48,6 +49,19 @@ def test_responsive_property_pair_uses_child_hints_as_breakpoint(qapp) -> None:
     pair.resize(100, 100)
     pair._sync_direction()
     assert pair.is_stacked() is True
+
+
+def test_property_section_pair_preserves_standard_breakpoint_and_spacing(qapp) -> None:
+    first = QWidget()
+    second = QWidget()
+
+    pair = property_section_pair(first, second)
+
+    assert pair._first is first
+    assert pair._divider is None
+    assert pair._second is second
+    assert pair._min_side_width == 270
+    assert pair._layout.spacing() == 10
 
 
 def test_responsive_role_header_stacks_when_navigation_and_preview_do_not_fit(qapp) -> None:
