@@ -128,6 +128,7 @@ from krok_helper.subtitle_render.frontend.property_layout import (
 from krok_helper.subtitle_render.frontend.property_inputs import (
     DynamicStackedWidget as _DynamicStackedWidget,
     GrowingPlainTextEdit as _GrowingPlainTextEdit,
+    NoWheelSpinBox as _NoWheelSpinBox,
     WheelFocusedComboBox as _WheelFocusedComboBox,
     WheelFocusedFontComboBox,
 )
@@ -1598,13 +1599,6 @@ _BACKGROUND_KIND_PAGES = (
     ("image_sequence", "图片序列", "选择图片序列首帧..."),
     ("solid", "纯色", ""),
 )
-
-
-class _NoWheelSpinBox(FluentSpinBox):
-    """滚动页面里的数值框：完全忽略滚轮，防止滚动卡片时误改数值。"""
-
-    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
-        event.ignore()
 
 
 class _UnitProtectedSpinBoxMixin:

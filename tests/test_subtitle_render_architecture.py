@@ -914,6 +914,7 @@ def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
     assert "_GrowingPlainTextEdit" not in inline_names
     assert "_DynamicStackedWidget" not in inline_names
     assert "_WheelFocusedComboBox" not in inline_names
+    assert "_NoWheelSpinBox" not in inline_names
     font_adapter = next(
         node
         for node in tree.body
