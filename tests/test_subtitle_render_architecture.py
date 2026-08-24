@@ -716,6 +716,8 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
         if isinstance(node, ast.FunctionDef)
     }
     assert "apply_animation_time_guard" in resolver_functions
+    assert "resolve_display_timing" in resolver_functions
+    assert "_resolve_page_sync_and_collisions" not in inline_functions
 
 
 def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
@@ -723,7 +725,7 @@ def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     painter_module = f"{PACKAGE}.engine.painter"
     targets = _import_targets(painter_module, painter_path)
 
-    assert f"{PACKAGE}.engine.layout.layout_diagnostics" in targets
+    assert f"{PACKAGE}.engine.layout.layout_diagnostics" not in targets
     diagnostics_path = ROOT / "engine/layout/layout_diagnostics.py"
     diagnostics_targets = _import_targets(
         f"{PACKAGE}.engine.layout.layout_diagnostics",

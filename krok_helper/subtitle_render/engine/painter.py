@@ -66,9 +66,6 @@ from krok_helper.subtitle_render.engine.layout.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
 )
-from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
-    TimingCollisionAdjustment as _TimingCollisionAdjustment,
-)
 from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
     render_line_with_guide_symbols as _line_with_guide_symbol,
@@ -201,7 +198,6 @@ from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
 )
 from krok_helper.subtitle_render.engine.layout.display_schedule import (
     DisplayScheduleResolvers,
-    apply_constrained_page_sync,
     extend_page_display_boundary as _extend_page_display_boundary,
     resolve_display_schedule,
     resolve_visible_display_lines,
@@ -213,6 +209,7 @@ from krok_helper.subtitle_render.engine.layout.display_resolver import (
     DisplayResolutionPorts,
     apply_animation_time_guard,
     resolve_display_lines,
+    resolve_display_timing,
 )
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
@@ -4034,33 +4031,6 @@ def animation_guard_ports_for_style(
 
 
 
-def _resolve_page_sync_and_collisions(
-    logical_w: int,
-    logical_h: int,
-    track: TimingTrack,
-    style: Style,
-    display_lines: list[DisplayLine],
-    *,
-    enforce_inter_page_gap: bool,
-    adjustments: list[_TimingCollisionAdjustment] | None = None,
-) -> list[DisplayLine]:
-    """Apply page sync, then squeeze each colliding pair in order."""
-
-    synchronized = apply_constrained_page_sync(display_lines, style)
-    return apply_animation_time_guard(
-        style,
-        synchronized,
-        animation_guard_ports_for_style(
-            logical_w,
-            logical_h,
-            track,
-            style,
-        ),
-        enforce_inter_page_gap=enforce_inter_page_gap,
-        adjustments=adjustments,
-    )
-
-
 def _display_lines_for_style(
     track: TimingTrack,
     style: Style,
@@ -4112,12 +4082,15 @@ def _display_lines_for_style(
             **base_kwargs,
             **overrides,
         ),
-        resolve_timing=lambda items, enforce_gap: _resolve_page_sync_and_collisions(
-            logical_w,
-            logical_h,
-            track,
+        resolve_timing=lambda items, enforce_gap: resolve_display_timing(
             style,
             items,
+            animation_guard_ports_for_style(
+                logical_w,
+                logical_h,
+                track,
+                style,
+            ),
             enforce_inter_page_gap=enforce_gap,
         ),
         collision_pairs=lambda items: _pixel_collision_squeeze_pairs(

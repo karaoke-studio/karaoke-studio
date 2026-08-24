@@ -9,6 +9,9 @@ from dataclasses import dataclass, replace
 from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     TimingCollisionAdjustment,
 )
+from krok_helper.subtitle_render.engine.layout.display_schedule import (
+    apply_constrained_page_sync,
+)
 from krok_helper.subtitle_render.engine.layout.line_style import (
     line_end_ms,
     line_start_ms,
@@ -265,6 +268,26 @@ def apply_animation_time_guard(
     return guarded if changed else display_lines
 
 
+def resolve_display_timing(
+    style: Style,
+    display_lines: DisplayLines,
+    animation_ports: AnimationGuardPorts,
+    *,
+    enforce_inter_page_gap: bool,
+    adjustments: list[TimingCollisionAdjustment] | None = None,
+) -> DisplayLines:
+    """Apply page synchronization before measured animation-window guarding."""
+
+    synchronized = apply_constrained_page_sync(display_lines, style)
+    return apply_animation_time_guard(
+        style,
+        synchronized,
+        animation_ports,
+        enforce_inter_page_gap=enforce_inter_page_gap,
+        adjustments=adjustments,
+    )
+
+
 def resolve_display_lines(
     *,
     avoid_collisions: bool,
@@ -338,4 +361,5 @@ __all__ = [
     "DisplayResolutionPorts",
     "apply_animation_time_guard",
     "resolve_display_lines",
+    "resolve_display_timing",
 ]
