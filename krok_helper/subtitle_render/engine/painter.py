@@ -87,6 +87,11 @@ from krok_helper.subtitle_render.engine.line_style import (
     style_for_line as _style_for_line,
     style_for_line_display_window as _style_for_line_display_window,
 )
+from krok_helper.subtitle_render.engine.line_pagination import (
+    line_center_override as _line_center_override,
+    renderable_page_lines as _renderable_page_lines,
+    renderable_page_map as _renderable_page_map,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -13642,22 +13647,6 @@ def _valid_color(value: str, fallback: str) -> QColor:
     return fallback_color if fallback_color.isValid() else QColor("#FF5A6F")
 
 
-def _line_center_override(track: TimingTrack, line: TimingLine, style: Style) -> bool:
-    """N3 SmartHorizon：仅页内只有一行时强制居中。
-
-    仅在默认「上左下右」双行布局下生效；center 布局本就居中，per_row 是
-    用户手动逐行控制，不覆盖。``ParagraphBreak`` 只结束当前页/段落，并不
-    令多行页的最后一行单独居中；N3 的准确条件是 ``topLineIndex ==
-    bottomLineIndex``。``smart_horizontal == "none"`` 时关闭此覆盖。
-    """
-    if style.smart_horizontal == "none":
-        return False
-    if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
-        return False
-    page = _renderable_page_lines(track, line, style)
-    return page is not None and len(page) == 1
-
-
 def _lane_alignment(
     style: Style, lane: int | None, page_line_count: int | None = None
 ) -> str:
@@ -13976,73 +13965,6 @@ def _line_total_width(
         ),
         1,
     )
-
-
-def _page_lines_style_key(style: Style) -> tuple:
-    """样式里唯一能移动分页的那几项。
-
-    字号、颜色、描边这些改了也不会换页，所以不进键——否则改个颜色就全线失效。
-    逐行布局会派生出一堆 ``replace()`` 出来的 Style 实例，按值取键才能让它们共享
-    同一份分页结果。
-    """
-    return (
-        bool(style.dual_line_layout),
-        len(style.line_alignments or ()),
-        int(style.section_gap_ms),
-        tuple(len(layout.line_alignments or ()) for layout in style.layouts),
-    )
-
-
-def _renderable_page_map(
-    track: TimingTrack, style: Style
-) -> dict[int, tuple[tuple[TimingLine, int], ...]]:
-    """``id(行) -> 同页 (行, lane) 元组``，整轨算一次。
-
-    以前每问一行就把全轨重跑一遍 ``assign_lanes``，而排版是逐行问的——一次
-    IR 构建能跑上千次，是编辑卡顿里最大的一块。
-
-    只在 :func:`layout_pass` 内缓存：一次排版过程中轨道不会被改，用 ``id(track)``
-    做键就够，且是 O(1)。按内容算签名反而更慢——签名本身是 O(行数)，乘上每行十几
-    次调用比重算还贵（实测 400 行从 5.2s 涨到 10.1s）。
-    """
-    cache = getattr(_LAYOUT_PASS, "page_maps", None)
-    cache_key = (id(track), _page_lines_style_key(style)) if cache is not None else None
-    if cache is not None:
-        hit = cache.get(cache_key)
-        if hit is not None:
-            return hit
-    render_lines = [item for item in track.lines if not item.is_blank and item.chars]
-    lanes, page_starts, page_rows = assign_lanes(
-        render_lines,
-        _lane_count(style),
-        _row_count_resolver(style),
-        section_gap_ms=style.section_gap_ms,
-    )
-    page_map: dict[int, tuple[tuple[TimingLine, int], ...]] = {}
-    for index, item in enumerate(render_lines):
-        page_start = page_starts[index]
-        page_end = min(page_start + page_rows[index], len(render_lines))
-        page_map[id(item)] = tuple(
-            (render_lines[i], lanes[i]) for i in range(page_start, page_end)
-        )
-    if cache is not None:
-        # track 一并存住：键里有 id()，对象被回收后地址会被复用。
-        cache[cache_key] = page_map
-        _LAYOUT_PASS.tracks.append(track)
-    return page_map
-
-
-def _renderable_page_lines(
-    track: TimingTrack,
-    line: TimingLine,
-    style: Style,
-) -> list[tuple[TimingLine, int]] | None:
-    """N3「页」的近似：页划分与 timeline 的 lane 分配一致（页首行布局定行数）。
-
-    返回同页 ``(行, lane)`` 列表（含自身）；行不在 track 中时返回 ``None``。
-    """
-    page = _renderable_page_map(track, style).get(id(line))
-    return None if page is None else list(page)
 
 
 def _smart_horizontal_dx(

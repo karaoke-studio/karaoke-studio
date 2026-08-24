@@ -375,6 +375,33 @@ def test_guide_render_semantics_have_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_line_pagination_semantics_have_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.line_pagination"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_line_center_override",
+        "_renderable_page_lines",
+        "_renderable_page_map",
+    }
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    } & delegated_names
+    imported = {
+        alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert inline == set()
+    assert imported == delegated_names
+    targets = _import_targets(owner, ROOT / "engine/line_pagination.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"
