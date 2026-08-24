@@ -147,6 +147,9 @@ from krok_helper.subtitle_render.frontend.property_layout_page import (
 from krok_helper.subtitle_render.frontend.property_role_page import (
     RolePropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_role_font_page import (
+    RoleFontSettingsPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3618,6 +3621,12 @@ class PropertyPanel(QWidget):
             font_preview_factory=_FontPreviewWidget,
             property_pair_factory=_ResponsivePropertyPair,
         )
+        self._role_font_page_builder = RoleFontSettingsPageBuilder(
+            self,
+            spin_factory=_spin,
+            combo_factory=_WheelFocusedComboBox,
+            font_combo_factory=_WheelFocusedFontComboBox,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -3986,229 +3995,7 @@ class PropertyPanel(QWidget):
     def _make_font_settings_page(
         self, subject: str, script: str, parent: QWidget
     ) -> QWidget:
-        page = QWidget(parent)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        font_combo = _WheelFocusedFontComboBox(page)
-        _compact_control(font_combo)
-        inherits_script = script == "latin"
-        inheritance_label: Optional[str] = None
-        if (subject, script) == ("main", "latin"):
-            inheritance_label = "跟随主文字日文（0）"
-        elif (subject, script) == ("ruby", "japanese"):
-            inheritance_label = "跟随主文字（0）"
-        elif (subject, script) == ("ruby", "latin"):
-            inheritance_label = "跟随注音日文（0）"
-        if inheritance_label is not None:
-            font_combo.enable_inheritance(inheritance_label)
-        size_spin = _spin(
-            0 if inherits_script else (8 if subject == "ruby" else 12),
-            _FONT_SIZE_MAX_PX,
-            suffix=" px",
-        )
-        weight_combo = _WheelFocusedComboBox(page)
-        _compact_control(weight_combo)
-        slot = (subject, script)
-        self._font_controls[slot] = (
-            font_combo,
-            weight_combo,
-            inheritance_label,
-        )
-        self._refresh_font_weight_combo(
-            slot, preferred_weight=0 if inheritance_label is not None else 400
-        )
-        font_combo.currentFontChanged.connect(
-            lambda font, current_slot=slot: self._on_font_family_changed(
-                current_slot, font
-            )
-        )
-
-        if (subject, script) == ("main", "japanese"):
-            self._font_combo = font_combo
-            self._font_size_spin = size_spin
-            self._font_weight_combo = weight_combo
-            size_spin.valueChanged.connect(
-                lambda value: self._update_style(font_size_px=value)
-            )
-            weight_combo.currentIndexChanged.connect(
-                lambda _index: self._update_style(
-                    font_weight=int(weight_combo.currentData())
-                )
-            )
-        elif (subject, script) == ("main", "latin"):
-            self._font_latin_combo = font_combo
-            self._font_latin_size_spin = size_spin
-            self._font_latin_weight_combo = weight_combo
-            size_spin.valueChanged.connect(
-                lambda value: self._update_style(
-                    latin_font_size_px=None if value == 0 else value
-                )
-            )
-            weight_combo.currentIndexChanged.connect(
-                lambda _index: self._update_style(
-                    latin_font_weight=(
-                        None
-                        if int(weight_combo.currentData()) == 0
-                        else int(weight_combo.currentData())
-                    )
-                )
-            )
-        elif (subject, script) == ("ruby", "japanese"):
-            self._ruby_font_combo = font_combo
-            self._ruby_font_size_spin = size_spin
-            self._ruby_font_weight_combo = weight_combo
-            size_spin.valueChanged.connect(
-                lambda value: self._update_ruby_font_override(
-                    ruby_font_size_px=value
-                )
-            )
-            weight_combo.currentIndexChanged.connect(
-                lambda _index: self._update_ruby_font_override(
-                    ruby_font_weight=(
-                        None
-                        if int(weight_combo.currentData()) == 0
-                        else int(weight_combo.currentData())
-                    )
-                )
-            )
-        else:
-            self._ruby_font_latin_combo = font_combo
-            self._ruby_font_latin_size_spin = size_spin
-            self._ruby_font_latin_weight_combo = weight_combo
-            size_spin.valueChanged.connect(
-                lambda value: self._update_ruby_font_override(
-                    ruby_latin_font_size_px=None if value == 0 else value
-                )
-            )
-            weight_combo.currentIndexChanged.connect(
-                lambda _index: self._update_ruby_font_override(
-                    ruby_latin_font_weight=(
-                        None
-                        if int(weight_combo.currentData()) == 0
-                        else int(weight_combo.currentData())
-                    )
-                )
-            )
-
-        stroke_fields = {
-            ("main", "japanese"): (
-                "stroke_width_px", "stroke2_enabled", "stroke2_width_px"
-            ),
-            ("main", "latin"): (
-                "latin_stroke_width_px",
-                "latin_stroke2_enabled",
-                "latin_stroke2_width_px",
-            ),
-            ("ruby", "japanese"): (
-                "ruby_stroke_width_px",
-                "ruby_stroke2_enabled",
-                "ruby_stroke2_width_px",
-            ),
-            ("ruby", "latin"): (
-                "ruby_latin_stroke_width_px",
-                "ruby_latin_stroke2_enabled",
-                "ruby_latin_stroke2_width_px",
-            ),
-        }[(subject, script)]
-        stroke_width_field, stroke2_enabled_field, stroke2_width_field = stroke_fields
-        stroke_width_spin = _spin(0, 120, suffix=" px")
-        stroke2_enabled_check = CheckBox("", page)
-        stroke2_enabled_check.setToolTip("启用或关闭描边 2")
-        inherits_stroke2 = inherits_script or subject == "ruby"
-        if inherits_stroke2:
-            stroke2_enabled_check.setTristate(True)
-            stroke2_enabled_check.setToolTip("半选表示跟随上一级字体槽（0）")
-        stroke2_enabled_check.setFixedWidth(28)
-        stroke2_enabled_check.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        stroke2_width_spin = _spin(0, 120, suffix=" px")
-        stroke_width_spin.valueChanged.connect(
-            lambda value, field=stroke_width_field, inherit=inherits_script:
-            self._update_style(**{field: None if inherit and value == 0 else value})
-        )
-        if inherits_stroke2:
-            stroke2_enabled_check.stateChanged.connect(
-                lambda state, field=stroke2_enabled_field, spin=stroke2_width_spin:
-                self._on_font_stroke2_state_changed(field, spin, state)
-            )
-        else:
-            stroke2_enabled_check.toggled.connect(
-                lambda checked, field=stroke2_enabled_field, spin=stroke2_width_spin:
-                self._on_font_stroke2_toggled(field, spin, checked)
-            )
-        stroke2_width_spin.valueChanged.connect(
-            lambda value, field=stroke2_width_field, inherit=inherits_script:
-            self._update_style(**{field: None if inherit and value == 0 else value})
-        )
-        self._font_stroke_controls[(subject, script)] = (
-            stroke_width_spin,
-            stroke2_enabled_check,
-            stroke2_width_spin,
-        )
-        attr_prefix = {
-            ("main", "japanese"): "",
-            ("main", "latin"): "latin_",
-            ("ruby", "japanese"): "ruby_",
-            ("ruby", "latin"): "ruby_latin_",
-        }[(subject, script)]
-        setattr(self, f"_{attr_prefix}stroke_width_spin", stroke_width_spin)
-        setattr(self, f"_{attr_prefix}stroke2_enabled_check", stroke2_enabled_check)
-        setattr(self, f"_{attr_prefix}stroke2_width_spin", stroke2_width_spin)
-
-        layout.addWidget(_field("字体", font_combo))
-        row = QWidget(page)
-        row_layout = QGridLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setHorizontalSpacing(8)
-        row_layout.addWidget(_field("字号", size_spin), 0, 0)
-        row_layout.addWidget(_field("字重", weight_combo), 0, 1)
-        row_layout.setColumnStretch(0, 1)
-        row_layout.setColumnStretch(1, 1)
-        layout.addWidget(row)
-
-        # 英数字号本来就有"0 = 跟随上一级"的语义，但它藏在一个数字里，改了日文
-        # 字号还得记得回来把英数也改一遍。这里把它摆成一个勾选框，且默认勾上。
-        follow_label = {
-            ("main", "latin"): "字号跟随主文字日文",
-            ("ruby", "latin"): "字号跟随注音日文",
-        }.get((subject, script))
-        if follow_label is not None:
-            follow_check = CheckBox(follow_label, page)
-            follow_check.setChecked(True)
-            follow_check.setToolTip("勾选后，改日文字号时英数字号跟着一起变。")
-            follow_check.toggled.connect(
-                lambda checked, current_slot=slot:
-                self._on_font_size_follow_toggled(current_slot, checked)
-            )
-            self._font_size_follow_checks[slot] = follow_check
-            layout.addWidget(follow_check)
-
-        stroke_row = QWidget(page)
-        stroke_layout = QGridLayout(stroke_row)
-        stroke_layout.setContentsMargins(0, 0, 0, 0)
-        stroke_layout.setHorizontalSpacing(8)
-        stroke_width_widget = _field("描边宽度", stroke_width_spin)
-        stroke2_control = QWidget(stroke_row)
-        stroke2_control_layout = QHBoxLayout(stroke2_control)
-        stroke2_control_layout.setContentsMargins(0, 0, 0, 0)
-        stroke2_control_layout.setSpacing(2)
-        stroke2_control_layout.addWidget(stroke2_enabled_check, 0)
-        stroke2_control_layout.addWidget(stroke2_width_spin, 1)
-        stroke2_widget = _field("描边 2", stroke2_control)
-        setattr(self, f"_{attr_prefix}stroke_width_field", stroke_width_widget)
-        setattr(self, f"_{attr_prefix}stroke2_field", stroke2_widget)
-        # 兼容现有内部引用；开关与宽度现在属于同一个组合字段。
-        setattr(self, f"_{attr_prefix}stroke2_enabled_field", stroke2_widget)
-        setattr(self, f"_{attr_prefix}stroke2_width_field", stroke2_widget)
-        stroke_layout.addWidget(stroke_width_widget, 0, 0)
-        stroke_layout.addWidget(stroke2_widget, 0, 1)
-        for column in range(2):
-            stroke_layout.setColumnStretch(column, 1)
-        layout.addWidget(stroke_row)
-        return page
+        return self._role_font_page_builder.make_page(subject, script, parent)
 
     #: 英数字号跟随谁：勾选框字段 -> (写回的字段名, 被跟随的字段名)。
     _FONT_SIZE_FOLLOW_FIELDS = {
