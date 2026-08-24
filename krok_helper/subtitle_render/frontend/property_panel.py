@@ -118,6 +118,9 @@ from krok_helper.subtitle_render.frontend.property_pages import (
     build_property_pages,
     property_page_index,
 )
+from krok_helper.subtitle_render.frontend.property_layout import (
+    ResponsiveRoleHeader as _ResponsiveRoleHeader,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3721,78 +3724,6 @@ class _ResponsiveFieldGrid(QWidget):
             self._grid.addWidget(widget, index // columns, index % columns)
         for column in range(previous):
             self._grid.setColumnStretch(column, 1 if column < columns else 0)
-        self.updateGeometry()
-
-
-class _ResponsiveRoleHeader(QWidget):
-    """Keep the original toolbar left-aligned and the preview right-aligned."""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._navigation: Optional[QWidget] = None
-        self._preview: Optional[QWidget] = None
-        self._stacked: Optional[bool] = None
-        self._layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(12)
-        self.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-
-    def set_widgets(self, navigation: QWidget, preview: QWidget) -> None:
-        self._navigation = navigation
-        self._preview = preview
-        self._layout.addWidget(
-            navigation, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
-        self._layout.addStretch(1)
-        self._spacer = self._layout.itemAt(1).spacerItem()
-        self._layout.addWidget(
-            preview, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
-        )
-        self._sync_direction(force=True)
-
-    def is_stacked(self) -> bool:
-        return bool(self._stacked)
-
-    def resizeEvent(self, event: Any) -> None:
-        self._sync_direction()
-        super().resizeEvent(event)
-
-    def _sync_direction(self, *, force: bool = False) -> None:
-        if self._navigation is None or self._preview is None:
-            return
-        required = (
-            self._navigation.sizeHint().width()
-            + self._preview.sizeHint().width()
-            + self._layout.spacing()
-        )
-        stacked = self.width() < required
-        if not force and stacked == self._stacked:
-            return
-        self._stacked = stacked
-        self._layout.setDirection(
-            QBoxLayout.Direction.TopToBottom
-            if stacked
-            else QBoxLayout.Direction.LeftToRight
-        )
-        if self._spacer is not None:
-            self._spacer.changeSize(
-                0,
-                0,
-                QSizePolicy.Policy.Minimum
-                if stacked
-                else QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed,
-            )
-        self._layout.setAlignment(
-            self._navigation,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-        )
-        self._layout.setAlignment(
-            self._preview,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
-        )
         self.updateGeometry()
 
 
