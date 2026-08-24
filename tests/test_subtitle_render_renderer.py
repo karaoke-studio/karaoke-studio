@@ -23,6 +23,7 @@ import numpy as np  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
+import krok_helper.subtitle_render.engine.parallel_schedule as parallel_schedule  # noqa: E402
 from krok_helper.subtitle_render.engine.export_command import (  # noqa: E402
     background_input_args,
     background_scale_chain,
@@ -132,6 +133,17 @@ def test_renderer_keeps_render_job_compatibility_export() -> None:
     assert renderer._bands_filter_graph is bands_filter_graph
     assert renderer._resolved_preview_width is resolved_preview_width
     assert build_render_command is build_render_command_contract
+    schedule_names = (
+        "_available_system_memory_bytes",
+        "_resolve_chunk_size",
+        "_resolve_effective_worker_count",
+        "_resolve_pending_memory_budget",
+        "_resolve_pending_window",
+        "_resolve_stall_timeout_s",
+        "_resolve_worker_count",
+    )
+    for name in schedule_names:
+        assert getattr(renderer, name) is getattr(parallel_schedule, name)
 
 
 def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
