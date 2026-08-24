@@ -6,6 +6,8 @@ from PyQt6.QtCore import Qt
 
 from krok_helper.subtitle_render.frontend.property_widgets import (
     CollapsibleSection,
+    FolderTabPanel,
+    PillSelector,
     ToggleSwitch,
 )
 
@@ -33,3 +35,35 @@ def test_collapsible_property_section_preserves_summary_and_switch_contract(qapp
     assert section.header.arrowType() == Qt.ArrowType.RightArrow
     assert section._summary_label.text() == "已启用"
     assert section._summary_label.isHidden() is False
+
+
+def test_property_pill_selector_changes_only_for_a_new_choice(qapp) -> None:
+    selector = PillSelector((("before", "走字前"), ("after", "走字后")))
+    changes: list[str] = []
+    selector.changed.connect(changes.append)
+
+    selector._buttons["after"].click()
+    selector._buttons["after"].click()
+
+    assert selector.current() == "after"
+    assert changes == ["after"]
+    assert selector._buttons["after"].isChecked() is True
+
+
+def test_property_folder_tabs_keep_left_and_right_selection_independent(qapp) -> None:
+    panel = FolderTabPanel(
+        (("main", "正文"), ("ruby", "注音")),
+        (("jp", "日文"), ("latin", "英数")),
+    )
+    left_changes: list[str] = []
+    right_changes: list[str] = []
+    panel.leftChanged.connect(left_changes.append)
+    panel.rightChanged.connect(right_changes.append)
+
+    panel._buttons[("left", "ruby")].click()
+    panel._buttons[("right", "latin")].click()
+
+    assert panel.current_left() == "ruby"
+    assert panel.current_right() == "latin"
+    assert left_changes == ["ruby"]
+    assert right_changes == ["latin"]

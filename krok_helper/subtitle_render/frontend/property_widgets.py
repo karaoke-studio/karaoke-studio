@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QRectF, QSize, Qt
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -18,6 +19,9 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.frontend.theme import palette, themed
+
+
+_COMPACT_CONTROL_HEIGHT = 32
 
 
 class ToggleSwitch(QAbstractButton):
@@ -143,3 +147,241 @@ class CollapsibleSection(QFrame):
         collapsed = not self._header.isChecked()
         self._summary_label.setText(self._summary_text)
         self._summary_label.setVisible(collapsed and bool(self._summary_text))
+
+
+class PillSelector(QWidget):
+    """Compact horizontal or vertical single-choice pill group."""
+
+    changed = Signal(str)
+
+    def __init__(
+        self,
+        options: tuple[tuple[str, str], ...],
+        parent: Optional[QWidget] = None,
+        *,
+        vertical: bool = False,
+        icons: Optional[dict[str, QIcon]] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._current = options[0][0] if options else ""
+        self._buttons: dict[str, QPushButton] = {}
+
+        row = QVBoxLayout(self) if vertical else QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        for key, label in options:
+            btn = QPushButton(label, self)
+            btn.setObjectName("ColorPillCell")
+            btn.setCheckable(True)
+            btn.setMinimumHeight(28)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            icon = (icons or {}).get(key)
+            if icon is not None:
+                btn.setText("")
+                btn.setIcon(icon)
+                icon_extent = _COMPACT_CONTROL_HEIGHT * 3 // 4
+                btn.setIconSize(QSize(icon_extent, icon_extent))
+                btn.setFixedSize(_COMPACT_CONTROL_HEIGHT, _COMPACT_CONTROL_HEIGHT)
+                btn.setToolTip(label)
+                btn.setAccessibleName(label)
+            if icon is None:
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Expanding
+                    if vertical
+                    else QSizePolicy.Policy.Maximum,
+                    QSizePolicy.Policy.Fixed,
+                )
+            btn.clicked.connect(lambda _checked=False, k=key: self._select(k))
+            self._buttons[key] = btn
+            row.addWidget(btn, 0)
+        row.addStretch(1)
+        themed(
+            self,
+            lambda: (
+                f"""
+                QPushButton#ColorPillCell {{
+                    background: {palette().secondary_button_bg};
+                    color: {palette().secondary_button_text};
+                    border: 1px solid {palette().secondary_button_border};
+                    border-radius: 6px;
+                    padding: 0 10px;
+                    font-size: 9.5pt;
+                }}
+                QPushButton#ColorPillCell:hover {{
+                    border-color: {palette().accent_primary};
+                }}
+                QPushButton#ColorPillCell:checked {{
+                    background: {palette().accent_primary};
+                    color: #FFFFFF;
+                    border-color: {palette().accent_primary};
+                    font-weight: 600;
+                }}
+                """
+            ),
+        )
+        self._refresh_checked()
+
+    def current(self) -> str:
+        return self._current
+
+    def set_current(self, key: str) -> None:
+        if key == self._current or key not in self._buttons:
+            self._refresh_checked()
+            return
+        self._current = key
+        self._refresh_checked()
+
+    def _select(self, key: str) -> None:
+        if key != self._current:
+            self._current = key
+            self._refresh_checked()
+            self.changed.emit(key)
+        else:
+            self._refresh_checked()
+
+    def _refresh_checked(self) -> None:
+        for key, btn in self._buttons.items():
+            btn.setChecked(key == self._current)
+
+
+class FolderTabPanel(QWidget):
+    """Folder-style two-sided tab strip joined to one content panel."""
+
+    leftChanged = Signal(str)
+    rightChanged = Signal(str)
+
+    _TAB_HEIGHT = 32
+    _RADIUS = 8.0
+    _TAB_RADIUS = 6.0
+
+    def __init__(
+        self,
+        left_options: tuple[tuple[str, str], ...],
+        right_options: tuple[tuple[str, str], ...],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._current = {
+            "left": left_options[0][0] if left_options else "",
+            "right": right_options[0][0] if right_options else "",
+        }
+        self._buttons: dict[tuple[str, str], QPushButton] = {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        tab_row = QHBoxLayout()
+        tab_row.setContentsMargins(12, 0, 12, 0)
+        tab_row.setSpacing(0)
+        for key, label in left_options:
+            tab_row.addWidget(self._make_tab("left", key, label), 0)
+        tab_row.addStretch(1)
+        for key, label in right_options:
+            tab_row.addWidget(self._make_tab("right", key, label), 0)
+        root.addLayout(tab_row)
+
+        self._content = QWidget(self)
+        self.content_layout = QVBoxLayout(self._content)
+        self.content_layout.setContentsMargins(10, 10, 10, 10)
+        self.content_layout.setSpacing(10)
+        root.addWidget(self._content)
+
+        themed(self, self._tab_qss)
+        self._refresh_checked()
+
+    def _make_tab(self, side: str, key: str, label: str) -> QPushButton:
+        btn = QPushButton(label, self)
+        btn.setObjectName("FolderTabButton")
+        btn.setCheckable(True)
+        btn.setFixedHeight(self._TAB_HEIGHT)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        btn.clicked.connect(lambda _checked=False, s=side, k=key: self._select(s, k))
+        self._buttons[(side, key)] = btn
+        return btn
+
+    @staticmethod
+    def _tab_qss() -> str:
+        return (
+            "QPushButton#FolderTabButton {"
+            " background: transparent; border: none; padding: 0 14px;"
+            f" font-size: 9.5pt; color: {palette().text_secondary}; }}"
+            "QPushButton#FolderTabButton:checked {"
+            f" color: {palette().title_text}; font-weight: 600; }}"
+        )
+
+    def current_left(self) -> str:
+        return self._current["left"]
+
+    def current_right(self) -> str:
+        return self._current["right"]
+
+    def set_left(self, key: str) -> None:
+        self._set_current("left", key)
+
+    def set_right(self, key: str) -> None:
+        self._set_current("right", key)
+
+    def _set_current(self, side: str, key: str) -> None:
+        if key != self._current[side] and (side, key) in self._buttons:
+            self._current[side] = key
+        self._refresh_checked()
+
+    def _select(self, side: str, key: str) -> None:
+        if key != self._current[side]:
+            self._current[side] = key
+            self._refresh_checked()
+            (self.leftChanged if side == "left" else self.rightChanged).emit(key)
+        else:
+            self._refresh_checked()
+
+    def _refresh_checked(self) -> None:
+        for (side, key), btn in self._buttons.items():
+            btn.setChecked(key == self._current[side])
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pal = palette()
+            panel_bg = QColor(pal.shell_bg)
+            tab_bg = QColor(pal.card_bg)
+            border = QPen(QColor(pal.input_border), 1)
+
+            content = QRectF(self._content.geometry()).adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setPen(border)
+            painter.setBrush(panel_bg)
+            painter.drawRoundedRect(content, self._RADIUS, self._RADIUS)
+
+            for (side, key), btn in self._buttons.items():
+                selected = key == self._current[side]
+                rect = QRectF(btn.geometry()).adjusted(
+                    0.5, 0.5, -0.5, 0.0 if selected else -1.0
+                )
+                radius = self._TAB_RADIUS
+                path = QPainterPath()
+                path.moveTo(rect.left(), rect.bottom())
+                path.lineTo(rect.left(), rect.top() + radius)
+                path.quadTo(rect.left(), rect.top(), rect.left() + radius, rect.top())
+                path.lineTo(rect.right() - radius, rect.top())
+                path.quadTo(rect.right(), rect.top(), rect.right(), rect.top() + radius)
+                path.lineTo(rect.right(), rect.bottom())
+                painter.setPen(border)
+                painter.setBrush(panel_bg if selected else tab_bg)
+                painter.drawPath(path)
+                if selected:
+                    painter.fillRect(
+                        QRectF(
+                            rect.left() + 0.5,
+                            rect.bottom() - 0.5,
+                            rect.width() - 1.0,
+                            2.0,
+                        ),
+                        panel_bg,
+                    )
+        finally:
+            painter.end()
