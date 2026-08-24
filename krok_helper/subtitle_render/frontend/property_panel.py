@@ -144,6 +144,9 @@ from krok_helper.subtitle_render.frontend.property_effects_page import (
 from krok_helper.subtitle_render.frontend.property_layout_page import (
     LayoutPropertyPageBuilder,
 )
+from krok_helper.subtitle_render.frontend.property_role_page import (
+    RolePropertyPageBuilder,
+)
 from krok_helper.subtitle_render.frontend.property_widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
@@ -3608,6 +3611,13 @@ class PropertyPanel(QWidget):
             layout_schematic_factory=_LayoutSchematic,
             schematic_board_factory=_SchematicBoard,
         )
+        self._role_page_builder = RolePropertyPageBuilder(
+            self,
+            plain_card_factory=_plain_card,
+            role_header_factory=_ResponsiveRoleHeader,
+            font_preview_factory=_FontPreviewWidget,
+            property_pair_factory=_ResponsivePropertyPair,
+        )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._color_edit_style_snapshot: Optional[Style] = None
@@ -3937,53 +3947,7 @@ class PropertyPanel(QWidget):
     # ------------------------------------------------------------------ layout
 
     def _make_font_color_section(self) -> QFrame:
-        section, layout = _plain_card()
-        self._scheme_section = section
-        self._role_header = _ResponsiveRoleHeader(section)
-        role_navigation = self._make_scheme_navigation(self._role_header)
-        self._font_preview_requested = True
-        self._font_preview_widget = _FontPreviewWidget(self._role_header)
-        self._role_header.set_widgets(
-            role_navigation,
-            self._font_preview_widget,
-        )
-        layout.addWidget(self._role_header)
-
-        row = _ResponsivePropertyPair(section)
-        self._font_color_row = row
-
-        self._color_section = self._make_color_section(parent=row, inline=True)
-        self._font_section = self._make_font_section(parent=row, inline=True)
-        self._color_section.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        self._font_section.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-
-        divider = QFrame(row)
-        divider.setObjectName("SubtitlePropertyInnerDivider")
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setFixedWidth(1)
-        divider.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Expanding,
-        )
-        themed(
-            divider,
-            lambda: (
-                "QFrame#SubtitlePropertyInnerDivider { "
-                f"background: {palette().card_border}; "
-                "border: 0; "
-                "}"
-            ),
-        )
-
-        row.set_widgets(self._color_section, divider, self._font_section)
-        layout.addWidget(row)
-        return section
+        return self._role_page_builder.make_font_color_section()
 
     def _make_font_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
