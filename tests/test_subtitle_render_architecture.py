@@ -455,6 +455,13 @@ def test_signal_semantics_have_one_engine_owner() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_display_schedule_projection_has_no_painter_dependency() -> None:
+    owner = f"{PACKAGE}.engine.display_schedule"
+    targets = _import_targets(owner, ROOT / "engine/display_schedule.py")
+
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"

@@ -102,6 +102,12 @@ from krok_helper.subtitle_render.engine.signal_semantics import (
     signal_head_context as _signal_head_context,
     signal_lead_in_ms as _signal_lead_in_ms,
 )
+from krok_helper.subtitle_render.engine.display_schedule import (
+    display_schedule_from_items,
+    display_windows_from_items,
+    single_line_display_schedule,
+    single_line_display_windows,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -5019,7 +5025,6 @@ def display_windows_for_style(
     与预览/导出使用同一套布局参数（含逐行手动覆盖），供字幕轨道 UI
     展示与编辑句子的显示/隐藏时间。
     """
-    windows: dict[int, tuple[int, int]] = {}
     if style.dual_line_layout:
         items = _display_lines_for_style(
             track,
@@ -5027,28 +5032,8 @@ def display_windows_for_style(
             logical_w=logical_w,
             logical_h=logical_h,
         )
-        index_of = {id(line): i for i, line in enumerate(track.lines)}
-        for item in items:
-            index = index_of.get(id(item.line))
-            if index is not None:
-                windows[index] = (item.display_start_ms, item.display_end_ms)
-        return windows
-    lead = max(style.line_lead_in_ms, 0)
-    tail = max(style.line_tail_ms, 0)
-    signal_heads = _signal_head_context(track, style)
-    signal_lead = _signal_lead_in_ms(style) if signal_heads is not None else 0
-    for index, line in enumerate(track.lines):
-        if line.is_blank or not line.chars:
-            continue
-        line_lead = (
-            max(lead, signal_lead)
-            if signal_heads is not None and index in signal_heads
-            else lead
-        )
-        display_start = max(_line_start_ms(line) - line_lead, 0)
-        display_end = _line_end_ms(line) + tail
-        windows[index] = apply_display_overrides(line, display_start, display_end)
-    return windows
+        return display_windows_from_items(track, items)
+    return single_line_display_windows(track, style)
 
 
 def layout_timing_diagnostics_for_style(
@@ -5415,31 +5400,14 @@ def display_schedule_for_style(
     display overrides and lane protection remain owned by the Painter oracle.
     """
     if not style.dual_line_layout:
-        return {
-            index: (0, start, end)
-            for index, (start, end) in display_windows_for_style(
-                track,
-                style,
-                logical_w=logical_w,
-                logical_h=logical_h,
-            ).items()
-        }
+        return single_line_display_schedule(track, style)
     items = _display_lines_for_style(
         track,
         style,
         logical_w=logical_w,
         logical_h=logical_h,
     )
-    index_of = {id(line): index for index, line in enumerate(track.lines)}
-    return {
-        index_of[id(item.line)]: (
-            int(item.lane),
-            int(item.display_start_ms),
-            int(item.display_end_ms),
-        )
-        for item in items
-        if id(item.line) in index_of
-    }
+    return display_schedule_from_items(track, items)
 
 
 def build_track_layout_plan(
@@ -5464,7 +5432,6 @@ def build_track_layout_plan(
 
     display_style = _display_style_for_signal_window(style)
     display_items: list[DisplayLine] = []
-    index_of = {id(line): index for index, line in enumerate(track.lines)}
     if display_style.dual_line_layout:
         display_items = _display_lines_for_style(
             track,
@@ -5472,15 +5439,7 @@ def build_track_layout_plan(
             logical_w=logical_w,
             logical_h=logical_h,
         )
-        schedule = {
-            index_of[id(item.line)]: (
-                int(item.lane),
-                int(item.display_start_ms),
-                int(item.display_end_ms),
-            )
-            for item in display_items
-            if id(item.line) in index_of
-        }
+        schedule = display_schedule_from_items(track, display_items)
     else:
         schedule = display_schedule_for_style(
             track,
