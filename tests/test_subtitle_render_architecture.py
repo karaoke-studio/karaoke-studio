@@ -741,6 +741,40 @@ def test_subtitle_render_window_delegates_preview_duration() -> None:
     assert controller_calls == {"refresh"}
 
 
+def test_subtitle_render_window_delegates_export_job_assembly() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+
+    assert f"{PACKAGE}.frontend.export_controller" in targets
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    delegated_methods = {
+        "_build_render_job": "build",
+        "_current_export_duration_ms": "resolve_duration_ms",
+    }
+
+    for method_name, controller_method in delegated_methods.items():
+        method = next(
+            node
+            for node in window_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        calls = {
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_export_job_controller"
+        }
+        assert calls == {controller_method}
+
+
 def test_subtitle_render_window_delegates_missing_resource_state() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))

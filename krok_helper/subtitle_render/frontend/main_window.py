@@ -162,10 +162,7 @@ from krok_helper.subtitle_render.engine.page_plan import (
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.render_job import RenderJob
-from krok_helper.subtitle_render.engine.timeline import (
-    apply_n3_seq_line_breaks,
-    track_duration_ms,
-)
+from krok_helper.subtitle_render.engine.timeline import apply_n3_seq_line_breaks
 from krok_helper.subtitle_render.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
@@ -193,6 +190,10 @@ from krok_helper.subtitle_render.frontend.guide_replacement import (
 )
 from krok_helper.subtitle_render.frontend.import_controller import (
     N3ProjectImportController,
+)
+from krok_helper.subtitle_render.frontend.export_controller import (
+    ExportJobController,
+    ExportJobInputs,
 )
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.playback import (
@@ -2119,6 +2120,7 @@ class SubtitleRenderWindow(QWidget):
         self._project_controller = SubtitleProjectController()
         self._subtitle_source_loader = SubtitleSourceLoader()
         self._n3_import_controller = N3ProjectImportController()
+        self._export_job_controller = ExportJobController()
         self._preview_duration_controller = PreviewDurationController()
         self._preview_window_controller = PreviewWindowController()
         self._project_command_controller = ProjectCommandController(
@@ -8692,57 +8694,57 @@ class SubtitleRenderWindow(QWidget):
     def _build_render_job(self) -> RenderJob:
         if hasattr(self, "_export_width_spin"):
             self._flush_export_spin_edits()
-        if self._timing_track is None:
-            raise ProcessingError("请先加载字幕文件。")
-        if self._background_source is None:
-            raise ProcessingError("请先选择背景源。")
         directory = self._export_dir_edit.text().strip()
-        if not directory:
-            raise ProcessingError("请先选择输出文件夹。")
         name = self._normalized_export_name()
-        if not name:
-            name = self._default_export_name()
-            self._export_name_edit.setText(name)
-            self._export_auto_name = name
-        output_path = Path(directory).expanduser() / f"{name}.mp4"
-        duration_ms = self._current_export_duration_ms()
-        return RenderJob(
-            track=self._timing_track,
-            style=self._style,
-            background_video_path=self._video_path,
-            background_source=self._background_source,
-            audio_path=(
-                self._audio_path
-                if self._audio_path is not None and self._audio_path != self._video_path
-                else None
-            ),
-            output_path=output_path,
-            extra_tracks=tuple(self._extra_track_list()),
-            width=self._export_width_spin.value(),
-            height=self._export_height_spin.value(),
-            fps=self._export_fps_value(),
-            duration_ms=duration_ms,
-            include_audio=bool(self._audio_info and self._audio_info.audio_streams > 0),
-            encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
-            crf=self._export_crf_spin.value(),
-            preset=str(self._export_preset_combo.currentData() or "medium"),
-            codec=self._export_codec_value(),
-            native_export_enabled=False,
-            gpu_export_enabled=self._gpu_export_check.isChecked(),
-            render_workers=self._export_render_workers_value(),
+        default_name = self._default_export_name() if not name else ""
+        result = self._export_job_controller.build(
+            ExportJobInputs(
+                track=self._timing_track,
+                style=self._style,
+                background_video_path=self._video_path,
+                background_source=self._background_source,
+                audio_path=(
+                    self._audio_path
+                    if self._audio_path is not None
+                    and self._audio_path != self._video_path
+                    else None
+                ),
+                output_directory=directory,
+                output_name=name,
+                default_output_name=default_name,
+                extra_tracks=tuple(self._extra_track_list()),
+                width=self._export_width_spin.value(),
+                height=self._export_height_spin.value(),
+                fps=self._export_fps_value(),
+                duration_ms=self._current_export_duration_ms(),
+                include_audio=bool(
+                    self._audio_info and self._audio_info.audio_streams > 0
+                ),
+                encoder_mode=str(
+                    self._export_encoder_combo.currentData() or ENCODER_CPU
+                ),
+                crf=self._export_crf_spin.value(),
+                preset=str(self._export_preset_combo.currentData() or "medium"),
+                codec=self._export_codec_value(),
+                gpu_export_enabled=self._gpu_export_check.isChecked(),
+                render_workers=self._export_render_workers_value(),
+            )
         )
+        if result.used_default_name:
+            self._export_name_edit.setText(result.output_name)
+            self._export_auto_name = result.output_name
+        return result.job
 
     def _export_render_workers_value(self) -> Optional[int]:
         value = int(self._export_render_workers_combo.currentData() or 0)
         return value if value in RENDER_WORKER_OPTIONS[1:] else None
 
     def _current_export_duration_ms(self) -> int:
-        candidates: list[int] = [track_duration_ms(track) for track in self._all_tracks()]
-        if self._video_info is not None and self._video_info.duration > 0:
-            candidates.append(int(round(self._video_info.duration * 1000)))
-        if self._audio_info is not None and self._audio_info.duration > 0:
-            candidates.append(int(round(self._audio_info.duration * 1000)))
-        return max(candidates, default=0)
+        return self._export_job_controller.resolve_duration_ms(
+            self._all_tracks(),
+            video_info=self._video_info,
+            audio_info=self._audio_info,
+        )
 
     def _confirm_project_saved_before_export(self) -> bool:
         """导出前先把工程落盘；返回 ``False`` 表示用户取消了这次导出。
