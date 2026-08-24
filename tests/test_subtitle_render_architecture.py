@@ -351,6 +351,30 @@ def test_layout_plan_builder_has_no_painter_dependency() -> None:
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
+def test_guide_render_semantics_have_one_engine_owner() -> None:
+    owner = f"{PACKAGE}.engine.guide_semantics"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    inline = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    delegated = {
+        (alias.name, alias.asname)
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+
+    assert "_line_with_guide_symbol" not in inline
+    assert delegated == {
+        ("render_line_with_guide_symbols", "_line_with_guide_symbol")
+    }
+    targets = _import_targets(owner, ROOT / "engine/guide_semantics.py")
+    assert f"{PACKAGE}.engine.painter" not in targets
+
+
 def test_subtitle_render_window_delegates_background_tasks() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     worker_path = ROOT / "frontend" / "background_tasks.py"
