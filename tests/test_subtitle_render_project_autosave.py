@@ -86,3 +86,24 @@ def test_project_auto_save_runtime_coalesces_a_busy_follow_up(
     assert reruns == [None]
     assert runtime.pending is False
     assert runtime.thread is None
+
+
+def test_project_auto_save_runtime_owns_debounce_and_periodic_scheduling(
+    qapp,
+) -> None:
+    runtime = ProjectAutoSaveRuntime(debounce_ms=1)
+    requests: list[None] = []
+    runtime.saveRequested.connect(lambda: requests.append(None))
+
+    runtime.schedule(enabled=True)
+    _wait_for(runtime.saveRequested)
+    assert requests == [None]
+    assert runtime.debounce_timer.isSingleShot() is True
+
+    runtime.configure(enabled=True, interval_ms=60_000)
+    assert runtime.periodic_timer.interval() == 60_000
+    assert runtime.periodic_timer.isActive() is True
+
+    runtime.stop_scheduling()
+    assert runtime.debounce_timer.isActive() is False
+    assert runtime.periodic_timer.isActive() is False
