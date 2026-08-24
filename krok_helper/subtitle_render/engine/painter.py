@@ -71,6 +71,10 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     LayoutMarginPorts,
     LayoutMarginWarning,
     LayoutTimingDiagnostic,
+    TimingCollisionAdjustment as _TimingCollisionAdjustment,
+    build_timing_window_diagnostics,
+    diagnostic_line_text as _diagnostic_line_text,
+    format_diagnostic_ms as _format_diagnostic_ms,
     resolve_layout_margin_warnings,
 )
 from krok_helper.subtitle_render.engine.guide import (
@@ -247,15 +251,6 @@ _LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
 _DISPLAY_LINE_RESOLUTION_CACHE = DisplayResolutionCache(max_items=24)
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
-
-
-@dataclass(frozen=True)
-class _TimingCollisionAdjustment:
-    previous_index: int
-    incoming_index: int
-    boundary: str
-    before_ms: int
-    after_ms: int
 
 
 def _glow_cache_enabled() -> bool:
@@ -4586,25 +4581,21 @@ def layout_timing_diagnostics_for_style(
         logical_w=logical_w,
         logical_h=logical_h,
     )
+    diagnostics = build_timing_window_diagnostics(
+        track,
+        style,
+        ideal=ideal,
+        synchronized=synchronized,
+        animation_candidate=animation_candidate,
+        final=final,
+        adjustments=adjustments,
+        entry_animation_ms_of=_entry_animation_ms,
+        auto_exit_reserve_ms_of=_auto_exit_reserve_ms,
+    )
     track_index_of = {id(line): index for index, line in enumerate(track.lines)}
     final_by_track = {
         track_index_of[id(item.line)]: item
         for item in final
-        if id(item.line) in track_index_of
-    }
-    ideal_by_track = {
-        track_index_of[id(item.line)]: item
-        for item in ideal
-        if id(item.line) in track_index_of
-    }
-    sync_by_track = {
-        track_index_of[id(item.line)]: item
-        for item in synchronized
-        if id(item.line) in track_index_of
-    }
-    animation_by_track = {
-        track_index_of[id(item.line)]: item
-        for item in animation_candidate
         if id(item.line) in track_index_of
     }
     render_to_track = {
@@ -4612,96 +4603,6 @@ def layout_timing_diagnostics_for_style(
         for render_index, item in enumerate(synchronized)
         if id(item.line) in track_index_of
     }
-    actions_by_track: dict[int, list[str]] = {}
-    for action in adjustments:
-        previous = render_to_track.get(action.previous_index)
-        incoming = render_to_track.get(action.incoming_index)
-        if previous is None or incoming is None:
-            continue
-        previous_text = _diagnostic_line_text(track.lines[previous])
-        incoming_text = _diagnostic_line_text(track.lines[incoming])
-        if action.boundary == "exit":
-            affected = previous
-            final_item = final_by_track.get(affected)
-            if (
-                final_item is None
-                or int(final_item.display_end_ms) >= int(action.before_ms)
-            ):
-                continue
-            final_boundary = int(final_item.display_end_ms)
-            message = (
-                f"与第 {incoming + 1} 行「{incoming_text}」发生行盒时间碰撞，"
-                f"按优先级先压缩本行退场：{_format_diagnostic_ms(action.before_ms)}"
-                f" → {_format_diagnostic_ms(final_boundary)}。"
-            )
-        else:
-            affected = incoming
-            final_item = final_by_track.get(affected)
-            if (
-                final_item is None
-                or int(final_item.display_start_ms) <= int(action.before_ms)
-            ):
-                continue
-            final_boundary = int(final_item.display_start_ms)
-            message = (
-                f"第 {previous + 1} 行「{previous_text}」的退场已无法继续压缩，"
-                f"因此推迟本行入场：{_format_diagnostic_ms(action.before_ms)}"
-                f" → {_format_diagnostic_ms(final_boundary)}。"
-            )
-        actions_by_track.setdefault(affected, []).append(message)
-
-    diagnostics: list[LayoutTimingDiagnostic] = []
-    for track_index, item in final_by_track.items():
-        ideal_item = ideal_by_track.get(track_index)
-        sync_item = sync_by_track.get(track_index)
-        animation_item = animation_by_track.get(track_index)
-        if ideal_item is None or sync_item is None or animation_item is None:
-            continue
-        compressed_entry = int(item.display_start_ms) > int(
-            animation_item.display_start_ms
-        )
-        compressed_exit = int(item.display_end_ms) < int(
-            animation_item.display_end_ms
-        )
-        if not (compressed_entry or compressed_exit or track_index in actions_by_track):
-            continue
-        line = item.line
-        text = _diagnostic_line_text(line)
-        changes = []
-        if compressed_entry:
-            changes.append("入场被推迟")
-        if compressed_exit:
-            changes.append("退场被提前")
-        detail_lines = [
-            f"第 {track_index + 1} 行「{text}」",
-            f"演唱区间：{_format_diagnostic_ms(_line_start_ms(line))} – "
-            f"{_format_diagnostic_ms(_line_end_ms(line))}",
-            f"N3 初始排期窗口（已受换页约束）："
-            f"{_format_diagnostic_ms(ideal_item.display_start_ms)} – "
-            f"{_format_diagnostic_ms(ideal_item.display_end_ms)}",
-            f"同步最长候选：{_format_diagnostic_ms(sync_item.display_start_ms)} – "
-            f"{_format_diagnostic_ms(sync_item.display_end_ms)}",
-            f"保留完整动画后：{_format_diagnostic_ms(animation_item.display_start_ms)} – "
-            f"{_format_diagnostic_ms(animation_item.display_end_ms)}",
-            f"最终消费窗口：{_format_diagnostic_ms(item.display_start_ms)} – "
-            f"{_format_diagnostic_ms(item.display_end_ms)}",
-            f"动画保护：入场 {_entry_animation_ms(style, line)} ms；"
-            f"退场至少 {_auto_exit_reserve_ms(style, line)} ms",
-            f"自动窗口参数：提前 {max(int(style.line_lead_in_ms), 0)} ms；"
-            f"尾留 {max(int(style.line_tail_ms), 0)} ms（上限，换页时可压缩稳定停留段）",
-            f"手动覆盖：入场 {line.display_start_override_ms if line.display_start_override_ms is not None else '无'}；"
-            f"退场 {line.display_end_override_ms if line.display_end_override_ms is not None else '无'}",
-        ]
-        detail_lines.extend(actions_by_track.get(track_index, ()))
-        diagnostics.append(
-            LayoutTimingDiagnostic(
-                kind="timing",
-                line_indices=(track_index,),
-                title="时间窗口自动压缩",
-                summary=f"第 {track_index + 1} 行「{text}」：{'、'.join(changes) or '窗口已调整'}",
-                detail="\n".join(detail_lines),
-            )
-        )
 
     # ForceBottom is a separate page-lift path from the rigid page translation
     # solver below.  It changes the lane of a one-line bottom-aligned page
@@ -4858,15 +4759,6 @@ def layout_timing_diagnostics_for_style(
             )
         )
     return diagnostics
-
-
-def _format_diagnostic_ms(value: int) -> str:
-    total = max(int(value), 0)
-    return f"{total // 60_000:02d}:{(total % 60_000) // 1_000:02d}.{total % 1_000:03d}"
-
-
-def _diagnostic_line_text(line: TimingLine) -> str:
-    return " ".join("".join(char.text for char in line.chars).split()) or "（空歌词）"
 
 
 def display_schedule_for_style(

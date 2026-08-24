@@ -635,7 +635,12 @@ def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
         node.name
         for node in tree.body
         if isinstance(node, ast.ClassDef)
-        and node.name in {"LayoutMarginWarning", "LayoutTimingDiagnostic"}
+        and node.name
+        in {
+            "LayoutMarginWarning",
+            "LayoutTimingDiagnostic",
+            "_TimingCollisionAdjustment",
+        }
     }
     assert inline_contracts == set()
 
@@ -654,6 +659,23 @@ def test_painter_delegates_layout_margin_policy() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "resolve_layout_margin_warnings" in calls
+
+
+def test_painter_delegates_timing_window_diagnostic_policy() -> None:
+    painter_path = ROOT / "engine/painter.py"
+    tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    method = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "layout_timing_diagnostics_for_style"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "build_timing_window_diagnostics" in calls
 
 
 def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
