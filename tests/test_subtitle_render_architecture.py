@@ -139,6 +139,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "screen_settings.py",
         ROOT / "session.py",
         ROOT / "settings_store.py",
+        ROOT / "source_loader.py",
         ROOT / "timecode.py",
         ROOT / "timing.py",
         ROOT / "timing_codec.py",
