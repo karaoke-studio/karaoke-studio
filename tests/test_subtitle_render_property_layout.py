@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QSize
-from PyQt6.QtWidgets import QLabel, QLineEdit, QWidget
+from PyQt6.QtWidgets import QLabel, QLineEdit, QSizePolicy, QWidget
 
 from krok_helper.subtitle_render.frontend.property_layout import (
     ResponsiveFieldGrid,
@@ -62,6 +62,10 @@ def test_property_section_pair_preserves_standard_breakpoint_and_spacing(qapp) -
     assert pair._second is second
     assert pair._min_side_width == 270
     assert pair._layout.spacing() == 10
+    assert first.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert first.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Preferred
+    assert second.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert second.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Preferred
 
 
 def test_responsive_role_header_stacks_when_navigation_and_preview_do_not_fit(qapp) -> None:

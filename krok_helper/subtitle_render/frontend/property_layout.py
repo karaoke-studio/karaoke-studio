@@ -157,8 +157,13 @@ class ResponsivePropertyPair(QWidget):
 def property_section_pair(first: QWidget, second: QWidget) -> ResponsivePropertyPair:
     """Build the standard two-card responsive property row."""
     pair = ResponsivePropertyPair(min_side_width=270)
-    pair.set_widgets(first, None, second)
     pair._layout.setSpacing(10)
+    for card in (first, second):
+        card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+    pair.set_widgets(first, None, second)
     return pair
 
 
