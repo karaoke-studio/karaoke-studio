@@ -578,14 +578,16 @@ from krok_helper.subtitle_render.engine.title_semantics import (
     title_show_specs as _title_show_specs,
     title_show_window as _title_show_window,
 )
+from krok_helper.subtitle_render.paint import (
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
+)
 from krok_helper.subtitle_render.models import (
     DecorationKind,
     GuideSymbol,
-    KaraokeColors,
-    KaraokeColorState,
     LYRICS_LAYOUT_CHAR_FIELDS,
     LYRICS_LAYOUT_FIELDS,
-    PaintFill,
     RubyAnnotation,
     Style,
     TimingChar,

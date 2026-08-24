@@ -11,11 +11,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.paint import (
     KaraokeColorState,
     KaraokeColors,
     PaintFill,
     _paint_fill,
+)
+from krok_helper.subtitle_render.models import (
     normalize_glow_concentration_level,
 )
 from krok_helper.subtitle_render.n3_font_fallback import resolve_n3_font_slots

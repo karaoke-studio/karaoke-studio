@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.paint import (
     KaraokeColors,
     KaraokeColorState,
-    N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
+)
+from krok_helper.subtitle_render.models import (
+    N3_FONT_INHERITANCE_FIELDS,
     Style,
     SubtitleStyleScheme,
 )

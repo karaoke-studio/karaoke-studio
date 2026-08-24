@@ -99,6 +99,13 @@ from qfluentwidgets import (
 from krok_helper.qfluent_compat import ModelessDialog, install_fluent_tooltip
 
 from krok_helper.subtitle_render.background import BackgroundSource
+from krok_helper.subtitle_render.paint import (
+    ColorLayerKey,
+    ColorStateKey,
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
+)
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_button_row,
     fluent_choice,
@@ -137,20 +144,15 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     resolve_qt_font_family,
 )
 from krok_helper.subtitle_render.models import (
-    ColorLayerKey,
-    ColorStateKey,
     DecorationKind,
     EntryAnimation,
     ExitAnimation,
     HORIZONTAL_ALIGNS,
     HorizontalAlign,
     KaraokeAnimation,
-    KaraokeColors,
-    KaraokeColorState,
     LineHorizontalLayout,
     LineYPosition,
     N3_FONT_INHERITANCE_FIELDS,
-    PaintFill,
     StylePreset,
     SubtitleStyleScheme,
     Style,
