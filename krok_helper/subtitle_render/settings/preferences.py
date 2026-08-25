@@ -97,6 +97,56 @@ class LoadedAppRuntimePreferences:
     project_backup_count: int
 
 
+@dataclass(frozen=True)
+class AppOutputPreferenceValues:
+    """Widget-independent values persisted in the app-local output section."""
+
+    gpu_preview_enabled: bool
+    gpu_preview_default_version: int
+    preview_quality: str
+    gpu_export_enabled: bool
+    gpu_export_default_version: int
+    directory_mode: str
+    custom_directory: str
+    name_template: str
+    encoder_mode: str
+    codec: str
+    preset: str
+    crf: object
+    render_workers: object
+    allowed_render_workers: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class AppPreferenceSaveInput:
+    """Complete non-Qt contract for projecting current app preferences."""
+
+    app_default_style: Style
+    project_style: Style
+    layout_assignment: Optional[dict]
+    subtitle_loading_defaults: dict
+    style_presets: dict
+    screen: dict
+    auto_chorus_role: str
+    auto_chorus_begin_chars: str
+    auto_chorus_end_chars: str
+    auto_chorus_overwrite: bool
+    selected_scheme_key: str
+    preview_splitter_ratio: float
+    auto_save_enabled: bool
+    auto_save_interval_minutes: int
+    project_backup_count: int
+    output: Optional[AppOutputPreferenceValues] = None
+
+
+@dataclass(frozen=True)
+class PreparedAppPreferences:
+    """Projected settings payload plus the normalized reusable style state."""
+
+    data: dict
+    app_default_style: Style
+
+
 def load_app_runtime_preferences(
     data: dict,
     *,
@@ -304,6 +354,16 @@ def _layout_index_for_name(style: Style, name: object) -> int:
     )
 
 
+def _layout_name_for_index(style: Style, index: object) -> Optional[str]:
+    try:
+        resolved = int(index)
+    except (TypeError, ValueError):
+        resolved = 0
+    if 1 <= resolved <= len(style.layouts):
+        return style.layouts[resolved - 1].name
+    return None
+
+
 def merge_common_style_preferences(
     app_default_style: Style,
     project_style: Style,
@@ -393,3 +453,94 @@ def update_app_output_preferences(
         }
     )
     return output
+
+
+def prepare_app_preferences(
+    existing: dict,
+    values: AppPreferenceSaveInput,
+) -> PreparedAppPreferences:
+    """Project current application state onto a preserved settings payload."""
+
+    app_default_style = merge_common_style_preferences(
+        values.app_default_style,
+        values.project_style,
+    )
+    data = deepcopy(existing)
+    data["style"] = merge_app_setting_field(
+        data.get("style"),
+        app_default_style_to_dict(app_default_style),
+        key="style",
+    )
+    default_title = app_default_style.title_overlay or TitleOverlay()
+    new_project_defaults = (
+        dict(data.get("new_project_defaults"))
+        if isinstance(data.get("new_project_defaults"), dict)
+        else {}
+    )
+    new_project_defaults["title_enabled"] = bool(default_title.enabled)
+    new_project_defaults["title_layout_name"] = _layout_name_for_index(
+        app_default_style,
+        default_title.layout_index,
+    )
+    new_project_defaults["title_fades"] = merge_app_setting_field(
+        new_project_defaults.get("title_fades"),
+        {name: getattr(default_title, name) for name in TITLE_FADE_FIELDS},
+        key="title_fades",
+    )
+    if values.layout_assignment is None:
+        new_project_defaults.pop("layout_assignment", None)
+    else:
+        new_project_defaults["layout_assignment"] = deepcopy(
+            values.layout_assignment
+        )
+    data["new_project_defaults"] = new_project_defaults
+    data["subtitle_loading_defaults"] = merge_app_setting_field(
+        data.get("subtitle_loading_defaults"),
+        values.subtitle_loading_defaults,
+        key="subtitle_loading_defaults",
+    )
+    data["style_presets"] = merge_app_setting_field(
+        data.get("style_presets"),
+        values.style_presets,
+        key="style_presets",
+    )
+    data["screen"] = merge_app_setting_field(
+        data.get("screen"),
+        values.screen,
+        key="screen",
+    )
+    data = update_app_runtime_preferences(
+        data,
+        auto_chorus_role=values.auto_chorus_role,
+        auto_chorus_begin_chars=values.auto_chorus_begin_chars,
+        auto_chorus_end_chars=values.auto_chorus_end_chars,
+        auto_chorus_overwrite=values.auto_chorus_overwrite,
+        selected_scheme_key=values.selected_scheme_key,
+        preview_splitter_ratio=values.preview_splitter_ratio,
+        auto_save_enabled=values.auto_save_enabled,
+        auto_save_interval_minutes=values.auto_save_interval_minutes,
+        project_backup_count=values.project_backup_count,
+    )
+    if values.output is not None:
+        output = values.output
+        data["output"] = update_app_output_preferences(
+            data.get("output"),
+            gpu_preview_enabled=output.gpu_preview_enabled,
+            gpu_preview_default_version=output.gpu_preview_default_version,
+            preview_quality=output.preview_quality,
+            gpu_export_enabled=output.gpu_export_enabled,
+            gpu_export_default_version=output.gpu_export_default_version,
+            directory_mode=output.directory_mode,
+            custom_directory=output.custom_directory,
+            name_template=output.name_template,
+            encoder_mode=output.encoder_mode,
+            codec=output.codec,
+            preset=output.preset,
+            crf=output.crf,
+            render_workers=output.render_workers,
+            allowed_render_workers=output.allowed_render_workers,
+        )
+    return PreparedAppPreferences(
+        data=data,
+        app_default_style=app_default_style,
+    )

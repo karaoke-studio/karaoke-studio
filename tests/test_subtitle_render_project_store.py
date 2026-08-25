@@ -44,10 +44,13 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.settings.preferences import (  # noqa: E402
     APP_LOCAL_ONLY_OUTPUT_FIELDS,
+    AppOutputPreferenceValues,
+    AppPreferenceSaveInput,
     app_default_style_to_dict,
     load_app_runtime_preferences,
     load_app_style_preferences,
     merge_common_style_preferences,
+    prepare_app_preferences,
     update_app_output_preferences,
     update_app_runtime_preferences,
 )
@@ -671,6 +674,78 @@ def test_app_output_preferences_are_separate_from_project_output_fields():
         "native_export_enabled": False,
     }
     assert APP_LOCAL_ONLY_OUTPUT_FIELDS.isdisjoint(project_output)
+
+
+def test_prepare_app_preferences_owns_the_complete_save_projection():
+    existing = {
+        "future_root": {"keep": True},
+        "style": {"future_style": 1},
+        "new_project_defaults": {"future_default": 2},
+        "output": {"future_output": 3},
+    }
+    app_default = Style(
+        title_overlay=TitleOverlay(
+            enabled=True,
+            layout_index=1,
+            fade_in_ms=123,
+        )
+    )
+    project_style = replace(app_default, line_lead_in_ms=2345)
+    prepared = prepare_app_preferences(
+        existing,
+        AppPreferenceSaveInput(
+            app_default_style=app_default,
+            project_style=project_style,
+            layout_assignment={"mode": "auto"},
+            subtitle_loading_defaults={"future_loading": 4},
+            style_presets={"future_preset": 5},
+            screen={"width": 1920, "height": 1080, "fps": 60},
+            auto_chorus_role="和声",
+            auto_chorus_begin_chars="[{",
+            auto_chorus_end_chars="]}",
+            auto_chorus_overwrite=True,
+            selected_scheme_key="global",
+            preview_splitter_ratio=0.4,
+            auto_save_enabled=True,
+            auto_save_interval_minutes=5,
+            project_backup_count=5,
+            output=AppOutputPreferenceValues(
+                gpu_preview_enabled=True,
+                gpu_preview_default_version=2,
+                preview_quality="balanced",
+                gpu_export_enabled=True,
+                gpu_export_default_version=1,
+                directory_mode="custom",
+                custom_directory="D:/exports",
+                name_template="{source_name}",
+                encoder_mode="nvenc",
+                codec="hevc",
+                preset="slow",
+                crf=18,
+                render_workers=8,
+                allowed_render_workers=(0, 4, 8),
+            ),
+        ),
+    )
+
+    assert prepared.app_default_style.line_lead_in_ms == 2345
+    assert prepared.data["future_root"] == {"keep": True}
+    assert prepared.data["style"]["future_style"] == 1
+    defaults = prepared.data["new_project_defaults"]
+    assert defaults["future_default"] == 2
+    assert defaults["title_enabled"] is True
+    assert defaults["title_layout_name"] == app_default.layouts[0].name
+    assert defaults["title_fades"]["fade_in_ms"] == 123
+    assert defaults["layout_assignment"] == {"mode": "auto"}
+    assert prepared.data["output"]["future_output"] == 3
+    assert prepared.data["output"]["encoder_mode"] == "nvenc"
+    assert prepared.data["output"]["render_workers"] == 8
+    assert existing == {
+        "future_root": {"keep": True},
+        "style": {"future_style": 1},
+        "new_project_defaults": {"future_default": 2},
+        "output": {"future_output": 3},
+    }
 
 
 def test_style_timing_nested_view_preserves_flat_and_project_compatibility():

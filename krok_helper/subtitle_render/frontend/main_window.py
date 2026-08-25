@@ -300,19 +300,17 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     normalize_style_font_families,
 )
 from krok_helper.subtitle_render.settings.preferences import (
+    AppOutputPreferenceValues,
+    AppPreferenceSaveInput,
     BUILTIN_SCHEME_STYLE_FIELDS as _BUILTIN_SCHEME_STYLE_FIELDS,
     DEFAULT_AUTO_SAVE_INTERVAL_MINUTES,
     DEFAULT_PROJECT_BACKUP_COUNT,
     DISCARDED_BACKUP_RETENTION_DAYS,
     LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
-    app_default_style_to_dict,
     load_app_style_preferences,
     load_app_runtime_preferences,
-    merge_app_setting_field,
-    merge_common_style_preferences,
-    update_app_output_preferences,
-    update_app_runtime_preferences,
+    prepare_app_preferences,
 )
 from krok_helper.subtitle_render.project.controller import (
     SubtitleProjectController,
@@ -6316,71 +6314,10 @@ class SubtitleRenderWindow(QWidget):
         self._persisted_state_dirty = False
         if hasattr(self, "_export_width_spin"):
             self._flush_export_spin_edits()
-        self._app_default_style = merge_common_style_preferences(
-            self._app_default_style,
-            self._style,
-        )
-        data = self._load_subtitle_settings()
-        data["style"] = merge_app_setting_field(
-            data.get("style"),
-            app_default_style_to_dict(self._app_default_style),
-            key="style",
-        )
-        default_title = self._app_default_style.title_overlay or TitleOverlay()
-        new_project_defaults = (
-            dict(data.get("new_project_defaults"))
-            if isinstance(data.get("new_project_defaults"), dict)
-            else {}
-        )
-        new_project_defaults["title_enabled"] = bool(default_title.enabled)
-        new_project_defaults["title_layout_name"] = self._layout_name_for_index(
-            self._app_default_style, default_title.layout_index
-        )
-        # 淡入淡出时长和上面两项同属"标题的用户习惯"，放在一起。
-        # 尾段那两项是 Optional，``None`` 表示跟随开头，原样存。
-        new_project_defaults["title_fades"] = merge_app_setting_field(
-            new_project_defaults.get("title_fades"),
-            {name: getattr(default_title, name) for name in _TITLE_FADE_FIELDS},
-            key="title_fades",
-        )
-        if self._layout_assignment_preference is None:
-            new_project_defaults.pop("layout_assignment", None)
-        else:
-            new_project_defaults["layout_assignment"] = deepcopy(
-                self._layout_assignment_preference
-            )
-        data["new_project_defaults"] = new_project_defaults
-        data["subtitle_loading_defaults"] = merge_app_setting_field(
-            data.get("subtitle_loading_defaults"),
-            subtitle_loading_settings_to_dict(self._subtitle_loading_defaults),
-            key="subtitle_loading_defaults",
-        )
-        data["style_presets"] = merge_app_setting_field(
-            data.get("style_presets"),
-            _style_presets_to_dict(self._style_presets),
-            key="style_presets",
-        )
-        data["screen"] = merge_app_setting_field(
-            data.get("screen"),
-            screen_settings_to_dict(self._screen_settings),
-            key="screen",
-        )
-        data = update_app_runtime_preferences(
-            data,
-            auto_chorus_role=self._auto_chorus_role,
-            auto_chorus_begin_chars=self._auto_chorus_begin_chars,
-            auto_chorus_end_chars=self._auto_chorus_end_chars,
-            auto_chorus_overwrite=self._auto_chorus_overwrite,
-            selected_scheme_key=self._selected_scheme_key,
-            preview_splitter_ratio=self._preview_splitter_ratio,
-            auto_save_enabled=self._auto_save_enabled,
-            auto_save_interval_minutes=self._auto_save_interval_minutes,
-            project_backup_count=self._project_backup_count,
-        )
+        output_values = None
         if hasattr(self, "_export_native_check"):
             local_output = self._local_output_preferences
-            data["output"] = update_app_output_preferences(
-                data.get("output"),
+            output_values = AppOutputPreferenceValues(
                 gpu_preview_enabled=self._gpu_preview_check.isChecked(),
                 gpu_preview_default_version=GPU_PREVIEW_DEFAULT_VERSION,
                 preview_quality=self._transport_bar.preview_quality(),
@@ -6396,6 +6333,31 @@ class SubtitleRenderWindow(QWidget):
                 render_workers=local_output.get("render_workers", 0),
                 allowed_render_workers=RENDER_WORKER_OPTIONS,
             )
+        prepared = prepare_app_preferences(
+            self._load_subtitle_settings(),
+            AppPreferenceSaveInput(
+                app_default_style=self._app_default_style,
+                project_style=self._style,
+                layout_assignment=self._layout_assignment_preference,
+                subtitle_loading_defaults=subtitle_loading_settings_to_dict(
+                    self._subtitle_loading_defaults
+                ),
+                style_presets=_style_presets_to_dict(self._style_presets),
+                screen=screen_settings_to_dict(self._screen_settings),
+                auto_chorus_role=self._auto_chorus_role,
+                auto_chorus_begin_chars=self._auto_chorus_begin_chars,
+                auto_chorus_end_chars=self._auto_chorus_end_chars,
+                auto_chorus_overwrite=self._auto_chorus_overwrite,
+                selected_scheme_key=self._selected_scheme_key,
+                preview_splitter_ratio=self._preview_splitter_ratio,
+                auto_save_enabled=self._auto_save_enabled,
+                auto_save_interval_minutes=self._auto_save_interval_minutes,
+                project_backup_count=self._project_backup_count,
+                output=output_values,
+            ),
+        )
+        self._app_default_style = prepared.app_default_style
+        data = prepared.data
         try:
             self._settings_store.save(data)
         except Exception:

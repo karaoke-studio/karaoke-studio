@@ -3912,7 +3912,8 @@ def test_subtitle_render_window_delegates_runtime_preference_saving() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
-    assert "update_app_runtime_preferences" in calls
+    assert "prepare_app_preferences" in calls
+    assert "update_app_runtime_preferences" not in calls
 
 
 def test_subtitle_render_window_delegates_n3_import_commands() -> None:
