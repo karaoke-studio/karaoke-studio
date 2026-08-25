@@ -201,17 +201,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     n3_font_families,
     resolve_qt_font_family,
 )
-from krok_helper.subtitle_render.domain.timing import (
-    EntryAnimation,
-    ExitAnimation,
-    KaraokeAnimation,
-)
 from krok_helper.subtitle_render.domain.models import (
-    DecorationKind,
-    HORIZONTAL_ALIGNS,
-    HorizontalAlign,
-    LineHorizontalLayout,
-    LineYPosition,
     N3_FONT_INHERITANCE_FIELDS,
     StylePreset,
     SubtitleStyleScheme,
@@ -220,13 +210,24 @@ from krok_helper.subtitle_render.domain.models import (
     TitleOverlay,
     effective_karaoke_animation,
     layout_display_name,
-    VIEWPORT_ALIGNS,
-    ViewportAlign,
 )
 from krok_helper.subtitle_render.settings.property_controllers import (
     LayoutCatalogController,
+    PropertyStyleController,
     RoleSchemeController,
+    SCHEME_FIELDS as _SCHEME_FIELDS,
+    SCHEME_ONLY_FIELDS as _SCHEME_ONLY_FIELDS,
     TitleOverlayController,
+    normalize_decoration_kind as _normalize_decoration_kind,
+    normalize_entry_animation as _normalize_entry_animation,
+    normalize_exit_animation as _normalize_exit_animation,
+    normalize_horizontal_align as _normalize_horizontal_align,
+    normalize_horizontal_layout as _normalize_horizontal_layout,
+    normalize_karaoke_animation as _normalize_karaoke_animation,
+    normalize_line_position as _normalize_line_position,
+    normalize_lit_style as _normalize_lit_style,
+    normalize_lit_transition_mode as _normalize_lit_transition_mode,
+    normalize_viewport_align as _normalize_viewport_align,
 )
 from krok_helper.subtitle_render.settings.screen import (
     PAR_OPTIONS,
@@ -247,70 +248,6 @@ from krok_helper.subtitle_render.n3.template_import import (
     merge_n3_template_presets,
     resolve_n3_template_preset,
 )
-
-#: 只存在于角色方案里的字段 —— ``Style`` 上没有同名属性，落不到全局。
-_SCHEME_ONLY_FIELDS = frozenset({"n3_font_inheritance"})
-
-_SCHEME_FIELDS = {
-    "font_family",
-    "font_family_latin",
-    "font_size_px",
-    "latin_font_size_px",
-    "latin_font_weight",
-    "latin_stroke_width_px",
-    "latin_stroke2_enabled",
-    "latin_stroke2_width_px",
-    "letter_spacing_px",
-    "space_width_percent",
-    "allow_biting",
-    "font_weight",
-    "italic",
-    "affects_ruby_anchor",
-    "base_color",
-    "fill_color",
-    "fill_gradient_enabled",
-    "fill_gradient_start_color",
-    "fill_gradient_end_color",
-    "fill_gradient_angle_deg",
-    "stroke_color",
-    "stroke_width_px",
-    "stroke2_enabled",
-    "stroke2_width_px",
-    "decoration_kind",
-    "glow_radius_px",
-    "glow_before_radius_px",
-    "glow_after_radius_px",
-    "glow_concentration_level",
-    "shadow_color",
-    "shadow_offset_x",
-    "shadow_offset_y",
-    "ruby_font_size_px",
-    "ruby_font_family",
-    "ruby_font_family_latin",
-    "ruby_font_weight",
-    "ruby_latin_font_size_px",
-    "ruby_latin_font_weight",
-    "ruby_font_follow_main",
-    "ruby_color",
-    "ruby_gap_px",
-    "ruby_stroke_width_px",
-    "ruby_stroke2_enabled",
-    "ruby_stroke2_width_px",
-    "ruby_latin_stroke_width_px",
-    "ruby_latin_stroke2_enabled",
-    "ruby_latin_stroke2_width_px",
-    "ruby_decoration_kind",
-    "ruby_glow_radius_px",
-    "ruby_glow_before_radius_px",
-    "ruby_glow_after_radius_px",
-    "ruby_glow_concentration_level",
-    "ruby_shadow_offset_x",
-    "ruby_shadow_offset_y",
-    "ruby_colors_follow_main",
-    "ruby_horizontal_gradient_with_main",
-    "karaoke_colors",
-    "ruby_karaoke_colors",
-}
 
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
@@ -3585,6 +3522,7 @@ class PropertyPanel(QWidget):
         self._role_controller = RoleSchemeController()
         self._layout_controller = LayoutCatalogController()
         self._title_controller = TitleOverlayController()
+        self._style_controller = PropertyStyleController()
         self._title_page_builder = TitlePropertyPageBuilder(
             self,
             timecode_factory=_TimecodeEdit,
@@ -6253,68 +6191,15 @@ class PropertyPanel(QWidget):
     def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:
             return
-        if (
-            not _force_global
-            and changes
-            and set(changes).issubset(_SCHEME_FIELDS | _SCHEME_ONLY_FIELDS)
-        ):
-            role_name = self._current_custom_scheme_name()
-            if role_name is not None:
-                # 当前选中某个角色 → 编辑进该角色（按名字存进 custom_style_schemes）。
-                schemes = dict(self._style.custom_style_schemes)
-                scheme = schemes.get(role_name) or _scheme_from_current(self)
-                schemes[role_name] = replace(scheme, **changes)
-                changes = {"custom_style_schemes": schemes}
-        if _SCHEME_ONLY_FIELDS.intersection(changes):
-            # 当前选的是全局默认：方案专属字段对它没有意义，扔掉而不是喂给
-            # ``replace(Style, ...)`` 当场 TypeError。
-            changes = {
-                key: value
-                for key, value in changes.items()
-                if key not in _SCHEME_ONLY_FIELDS
-            }
-        if "line_y_position" in changes:
-            changes["line_y_position"] = _normalize_line_position(changes["line_y_position"])
-        if "line_horizontal_layout" in changes:
-            changes["line_horizontal_layout"] = _normalize_horizontal_layout(
-                changes["line_horizontal_layout"]
-            )
-        for align_field in ("row1_align", "row2_align"):
-            if align_field in changes:
-                changes[align_field] = _normalize_horizontal_align(changes[align_field])
-        if "viewport_align" in changes:
-            changes["viewport_align"] = _normalize_viewport_align(changes["viewport_align"])
-        if "section_ending_mode" in changes:
-            changes["section_ending_mode"] = (
-                changes["section_ending_mode"]
-                if changes["section_ending_mode"] in {"hold", "clear"}
-                else "hold"
-            )
-        if "decoration_kind" in changes:
-            changes["decoration_kind"] = _normalize_decoration_kind(
-                changes["decoration_kind"]
-            )
-        if "ruby_decoration_kind" in changes:
-            changes["ruby_decoration_kind"] = (
-                None
-                if changes["ruby_decoration_kind"] is None
-                else _normalize_decoration_kind(changes["ruby_decoration_kind"])
-            )
-        if "entry_anim" in changes:
-            changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
-        if "exit_anim" in changes:
-            changes["exit_anim"] = _normalize_exit_animation(changes["exit_anim"])
-        if "karaoke_anim" in changes:
-            changes["karaoke_anim"] = _normalize_karaoke_animation(
-                changes["karaoke_anim"]
-            )
-        if "lit_style" in changes:
-            changes["lit_style"] = _normalize_lit_style(changes["lit_style"])
-        if "lit_transition_mode" in changes:
-            changes["lit_transition_mode"] = _normalize_lit_transition_mode(
-                changes["lit_transition_mode"]
-            )
-        self._style = replace(self._style, **changes)
+        result = self._style_controller.update(
+            self._style,
+            changes,
+            role_name=self._current_custom_scheme_name(),
+            force_global=_force_global,
+            scheme_factory=lambda: _scheme_from_current(self),
+        )
+        self._style = result.style
+        changes = result.changed_fields
         self._syncing = True
         try:
             if (
@@ -6343,36 +6228,6 @@ class PropertyPanel(QWidget):
         self.styleChanged.emit(self._style)
 
 
-def _normalize_line_position(value: object) -> LineYPosition:
-    if value in {"top", "center", "bottom"}:
-        return value  # type: ignore[return-value]
-    return "bottom"
-
-
-def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
-    if value in {"asymmetric", "center", "per_row"}:
-        return value  # type: ignore[return-value]
-    return "asymmetric"
-
-
-def _normalize_horizontal_align(value: object) -> HorizontalAlign:
-    if value in HORIZONTAL_ALIGNS:
-        return value  # type: ignore[return-value]
-    return "left"
-
-
-def _normalize_viewport_align(value: object) -> ViewportAlign:
-    if value in VIEWPORT_ALIGNS:
-        return value  # type: ignore[return-value]
-    return "center"
-
-
-def _normalize_decoration_kind(value: object) -> DecorationKind:
-    if value in {"none", "shadow", "glow"}:
-        return value  # type: ignore[return-value]
-    return "shadow"
-
-
 def _scaled_panel_px(value: int, scale: float) -> int:
     if value <= 0:
         return 0
@@ -6384,36 +6239,6 @@ def _scaled_panel_signed_px(value: int, scale: float) -> int:
         return 0
     sign = 1 if value > 0 else -1
     return sign * max(1, int(round(abs(value) * scale)))
-
-
-def _normalize_entry_animation(value: object) -> EntryAnimation:
-    if value in {"none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"}:
-        return value  # type: ignore[return-value]
-    return "none"
-
-
-def _normalize_exit_animation(value: object) -> ExitAnimation:
-    if value in {"none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"}:
-        return value  # type: ignore[return-value]
-    return "none"
-
-
-def _normalize_karaoke_animation(value: object) -> KaraokeAnimation:
-    if value in {"inherit", "none", "utopia"}:
-        return value  # type: ignore[return-value]
-    return "inherit"
-
-
-def _normalize_lit_style(value: object):
-    if value in {"volume", "circle", "square", "rounded"}:
-        return value
-    return "volume"
-
-
-def _normalize_lit_transition_mode(value: object) -> str:
-    if value in {"none", "fade", "slide"}:
-        return str(value)
-    return "fade"
 
 
 def _fill_stack_index(mode: str) -> int:

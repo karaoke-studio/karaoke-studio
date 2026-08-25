@@ -3,19 +3,282 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from krok_helper.subtitle_render.domain.models import (
+    DecorationKind,
+    HORIZONTAL_ALIGNS,
     LYRICS_LAYOUT_FIELDS,
+    HorizontalAlign,
+    LineHorizontalLayout,
+    LineYPosition,
     LyricsLayout,
+    N3_FONT_INHERITANCE_FIELDS,
     Style,
     StylePreset,
     SubtitleStyleScheme,
     TITLE_SHOW_MODES,
     TitleOverlay,
+    VIEWPORT_ALIGNS,
+    ViewportAlign,
     migrate_title_char_role_labels,
 )
+from krok_helper.subtitle_render.domain.timing import (
+    EntryAnimation,
+    ExitAnimation,
+    KaraokeAnimation,
+)
+
+
+SCHEME_ONLY_FIELDS = frozenset({"n3_font_inheritance"})
+
+SCHEME_FIELDS = frozenset(
+    {
+        "font_family",
+        "font_family_latin",
+        "font_size_px",
+        "latin_font_size_px",
+        "latin_font_weight",
+        "latin_stroke_width_px",
+        "latin_stroke2_enabled",
+        "latin_stroke2_width_px",
+        "letter_spacing_px",
+        "space_width_percent",
+        "allow_biting",
+        "font_weight",
+        "italic",
+        "affects_ruby_anchor",
+        "base_color",
+        "fill_color",
+        "fill_gradient_enabled",
+        "fill_gradient_start_color",
+        "fill_gradient_end_color",
+        "fill_gradient_angle_deg",
+        "stroke_color",
+        "stroke_width_px",
+        "stroke2_enabled",
+        "stroke2_width_px",
+        "decoration_kind",
+        "glow_radius_px",
+        "glow_before_radius_px",
+        "glow_after_radius_px",
+        "glow_concentration_level",
+        "shadow_color",
+        "shadow_offset_x",
+        "shadow_offset_y",
+        "ruby_font_size_px",
+        "ruby_font_family",
+        "ruby_font_family_latin",
+        "ruby_font_weight",
+        "ruby_latin_font_size_px",
+        "ruby_latin_font_weight",
+        "ruby_font_follow_main",
+        "ruby_color",
+        "ruby_gap_px",
+        "ruby_stroke_width_px",
+        "ruby_stroke2_enabled",
+        "ruby_stroke2_width_px",
+        "ruby_latin_stroke_width_px",
+        "ruby_latin_stroke2_enabled",
+        "ruby_latin_stroke2_width_px",
+        "ruby_decoration_kind",
+        "ruby_glow_radius_px",
+        "ruby_glow_before_radius_px",
+        "ruby_glow_after_radius_px",
+        "ruby_glow_concentration_level",
+        "ruby_shadow_offset_x",
+        "ruby_shadow_offset_y",
+        "ruby_colors_follow_main",
+        "ruby_horizontal_gradient_with_main",
+        "karaoke_colors",
+        "ruby_karaoke_colors",
+    }
+)
+
+
+@dataclass(frozen=True)
+class StyleUpdateResult:
+    """One normalized property edit and the fields the UI must resync."""
+
+    style: Style
+    changed_fields: frozenset[str]
+
+
+class PropertyStyleController:
+    """Route normalized property edits into global or role-specific style state."""
+
+    def update(
+        self,
+        style: Style,
+        changes: dict[str, object],
+        *,
+        role_name: str | None = None,
+        force_global: bool = False,
+        scheme_factory: Callable[[], SubtitleStyleScheme] | None = None,
+    ) -> StyleUpdateResult:
+        normalized = dict(changes)
+        if (
+            not force_global
+            and normalized
+            and set(normalized).issubset(SCHEME_FIELDS | SCHEME_ONLY_FIELDS)
+            and role_name is not None
+        ):
+            schemes = dict(style.custom_style_schemes)
+            scheme = schemes.get(role_name)
+            if scheme is None:
+                if scheme_factory is None:
+                    raise ValueError("scheme_factory is required for a missing role scheme")
+                scheme = scheme_factory()
+            schemes[role_name] = replace(scheme, **normalized)
+            normalized = {"custom_style_schemes": schemes}
+
+        if SCHEME_ONLY_FIELDS.intersection(normalized):
+            normalized = {
+                key: value
+                for key, value in normalized.items()
+                if key not in SCHEME_ONLY_FIELDS
+            }
+        normalized = normalize_style_changes(normalized)
+        return StyleUpdateResult(
+            style=replace(style, **normalized),
+            changed_fields=frozenset(normalized),
+        )
+
+
+def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
+    """Normalize untrusted UI values using the panel's historical fallbacks."""
+    normalized = dict(changes)
+    if "line_y_position" in normalized:
+        normalized["line_y_position"] = normalize_line_position(
+            normalized["line_y_position"]
+        )
+    if "line_horizontal_layout" in normalized:
+        normalized["line_horizontal_layout"] = normalize_horizontal_layout(
+            normalized["line_horizontal_layout"]
+        )
+    for align_field in ("row1_align", "row2_align"):
+        if align_field in normalized:
+            normalized[align_field] = normalize_horizontal_align(
+                normalized[align_field]
+            )
+    if "viewport_align" in normalized:
+        normalized["viewport_align"] = normalize_viewport_align(
+            normalized["viewport_align"]
+        )
+    if "section_ending_mode" in normalized:
+        normalized["section_ending_mode"] = (
+            normalized["section_ending_mode"]
+            if normalized["section_ending_mode"] in {"hold", "clear"}
+            else "hold"
+        )
+    if "decoration_kind" in normalized:
+        normalized["decoration_kind"] = normalize_decoration_kind(
+            normalized["decoration_kind"]
+        )
+    if "ruby_decoration_kind" in normalized:
+        normalized["ruby_decoration_kind"] = (
+            None
+            if normalized["ruby_decoration_kind"] is None
+            else normalize_decoration_kind(normalized["ruby_decoration_kind"])
+        )
+    if "entry_anim" in normalized:
+        normalized["entry_anim"] = normalize_entry_animation(
+            normalized["entry_anim"]
+        )
+    if "exit_anim" in normalized:
+        normalized["exit_anim"] = normalize_exit_animation(
+            normalized["exit_anim"]
+        )
+    if "karaoke_anim" in normalized:
+        normalized["karaoke_anim"] = normalize_karaoke_animation(
+            normalized["karaoke_anim"]
+        )
+    if "lit_style" in normalized:
+        normalized["lit_style"] = normalize_lit_style(normalized["lit_style"])
+    if "lit_transition_mode" in normalized:
+        normalized["lit_transition_mode"] = normalize_lit_transition_mode(
+            normalized["lit_transition_mode"]
+        )
+    return normalized
+
+
+def normalize_line_position(value: object) -> LineYPosition:
+    if value in {"top", "center", "bottom"}:
+        return value  # type: ignore[return-value]
+    return "bottom"
+
+
+def normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
+    if value in {"asymmetric", "center", "per_row"}:
+        return value  # type: ignore[return-value]
+    return "asymmetric"
+
+
+def normalize_horizontal_align(value: object) -> HorizontalAlign:
+    if value in HORIZONTAL_ALIGNS:
+        return value  # type: ignore[return-value]
+    return "left"
+
+
+def normalize_viewport_align(value: object) -> ViewportAlign:
+    if value in VIEWPORT_ALIGNS:
+        return value  # type: ignore[return-value]
+    return "center"
+
+
+def normalize_decoration_kind(value: object) -> DecorationKind:
+    if value in {"none", "shadow", "glow"}:
+        return value  # type: ignore[return-value]
+    return "shadow"
+
+
+def normalize_entry_animation(value: object) -> EntryAnimation:
+    if value in {
+        "none",
+        "fade",
+        "slide_in",
+        "rise",
+        "char_fade",
+        "char_drip",
+        "spin_flip",
+        "utopia",
+    }:
+        return value  # type: ignore[return-value]
+    return "none"
+
+
+def normalize_exit_animation(value: object) -> ExitAnimation:
+    if value in {
+        "none",
+        "fade",
+        "slide_out",
+        "rise",
+        "char_fade",
+        "char_drip",
+        "spin_flip",
+        "utopia",
+    }:
+        return value  # type: ignore[return-value]
+    return "none"
+
+
+def normalize_karaoke_animation(value: object) -> KaraokeAnimation:
+    if value in {"inherit", "none", "utopia"}:
+        return value  # type: ignore[return-value]
+    return "inherit"
+
+
+def normalize_lit_style(value: object):
+    if value in {"volume", "circle", "square", "rounded"}:
+        return value
+    return "volume"
+
+
+def normalize_lit_transition_mode(value: object) -> str:
+    if value in {"none", "fade", "slide"}:
+        return str(value)
+    return "fade"
 
 
 class RoleSchemeController:

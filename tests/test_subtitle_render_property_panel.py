@@ -92,6 +92,7 @@ from krok_helper.subtitle_render.n3.template_import import (  # noqa: E402
 from krok_helper.subtitle_render.n3.font_catalog import N3FontCatalog  # noqa: E402
 from krok_helper.subtitle_render.settings.property_controllers import (  # noqa: E402
     LayoutCatalogController,
+    PropertyStyleController,
     RoleSchemeController,
     TitleOverlayController,
 )
@@ -209,6 +210,52 @@ def test_title_overlay_controller_migrates_roles_and_normalizes_mode():
     assert edited.title_overlay.char_role_labels == [["A角色", None, "B角色"]]
     assert edited.title_overlay.show_mode == "whole"
     assert controller.current(Style()) == TitleOverlay()
+
+
+def test_property_style_controller_routes_and_normalizes_edits():
+    controller = PropertyStyleController()
+    global_result = controller.update(
+        Style(),
+        {
+            "line_y_position": "invalid",
+            "row1_align": "invalid",
+            "viewport_align": "invalid",
+            "entry_anim": "invalid",
+            "lit_transition_mode": "invalid",
+        },
+        force_global=True,
+    )
+    assert global_result.style.line_y_position == "bottom"
+    assert global_result.style.row1_align == "left"
+    assert global_result.style.viewport_align == "center"
+    assert global_result.style.entry_anim == "none"
+    assert global_result.style.lit_transition_mode == "fade"
+    assert global_result.changed_fields == {
+        "line_y_position",
+        "row1_align",
+        "viewport_align",
+        "entry_anim",
+        "lit_transition_mode",
+    }
+
+    role_result = controller.update(
+        Style(font_size_px=72),
+        {"font_size_px": 54, "n3_font_inheritance": True},
+        role_name="Lead",
+        scheme_factory=lambda: SubtitleStyleScheme(),
+    )
+    assert role_result.style.font_size_px == 72
+    assert role_result.style.custom_style_schemes["Lead"].font_size_px == 54
+    assert role_result.style.custom_style_schemes["Lead"].n3_font_inheritance is True
+    assert role_result.changed_fields == {"custom_style_schemes"}
+
+    global_scheme_only = controller.update(
+        role_result.style,
+        {"n3_font_inheritance": True},
+        force_global=True,
+    )
+    assert global_scheme_only.style == role_result.style
+    assert not global_scheme_only.changed_fields
 
 
 def test_property_panel_uses_fluent_checkboxes(qapp):

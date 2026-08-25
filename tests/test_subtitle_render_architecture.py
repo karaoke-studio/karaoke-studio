@@ -138,6 +138,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "project" / "resources.py",
         ROOT / "project" / "recent.py",
         ROOT / "settings" / "screen.py",
+        ROOT / "settings" / "property_controllers.py",
         ROOT / "project" / "session.py",
         ROOT / "settings" / "store.py",
         ROOT / "sources" / "loader.py",
@@ -429,6 +430,68 @@ def test_settings_modules_are_grouped_behind_one_package_boundary() -> None:
             "settings_store.py",
         }
     )
+
+
+def test_property_panel_delegates_normalized_style_updates() -> None:
+    controller_path = ROOT / "settings" / "property_controllers.py"
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    controller_tree = ast.parse(controller_path.read_text(encoding="utf-8-sig"))
+    panel_tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    controller_members = {
+        node.name
+        for node in controller_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "PropertyStyleController",
+        "StyleUpdateResult",
+        "normalize_style_changes",
+    } <= controller_members
+
+    panel_class = next(
+        node
+        for node in panel_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PropertyPanel"
+    )
+    update_method = next(
+        node
+        for node in panel_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_update_style"
+    )
+    delegated_calls = {
+        node.func.attr
+        for node in ast.walk(update_method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_style_controller"
+    }
+    assert delegated_calls == {"update"}
+
+    panel_functions = {
+        node.name
+        for node in panel_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert {
+        "_normalize_decoration_kind",
+        "_normalize_entry_animation",
+        "_normalize_exit_animation",
+        "_normalize_horizontal_align",
+        "_normalize_horizontal_layout",
+        "_normalize_karaoke_animation",
+        "_normalize_line_position",
+        "_normalize_lit_style",
+        "_normalize_lit_transition_mode",
+        "_normalize_viewport_align",
+    }.isdisjoint(panel_functions)
+
+    targets = _import_targets(
+        f"{PACKAGE}.settings.property_controllers",
+        controller_path,
+    )
+    assert f"{PACKAGE}.frontend" not in targets
+    assert not any(target.startswith(f"{PACKAGE}.frontend.") for target in targets)
 
 
 def test_serialization_modules_are_grouped_behind_one_package_boundary() -> None:
