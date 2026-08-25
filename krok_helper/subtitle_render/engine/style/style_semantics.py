@@ -172,3 +172,23 @@ def effective_karaoke_colors(style: Style) -> KaraokeColors:
         shadow=solid_fill(style.shadow_color),
     )
     return KaraokeColors(before=before, after=after)
+
+
+def effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
+    if style.ruby_karaoke_colors is not None:
+        return style.ruby_karaoke_colors
+    if style.karaoke_colors is not None:
+        return style.karaoke_colors
+    before = KaraokeColorState(
+        text=solid_fill(style.base_color),
+        stroke=solid_fill(style.stroke_color),
+        stroke2=solid_fill("#000000"),
+        shadow=solid_fill(style.shadow_color),
+    )
+    after = KaraokeColorState(
+        text=solid_fill(style.ruby_color),
+        stroke=solid_fill(style.stroke_color),
+        stroke2=solid_fill("#000000"),
+        shadow=solid_fill(style.shadow_color),
+    )
+    return KaraokeColors(before=before, after=after)

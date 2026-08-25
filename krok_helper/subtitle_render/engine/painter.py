@@ -586,8 +586,11 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     ruby_after_clip_rect as _ruby_after_clip_rect,
     ruby_after_clip_rect_at_time as _ruby_after_clip_rect_at_time,
     ruby_before_clip_rect_at_time as _ruby_before_clip_rect_at_time,
+    ruby_glow_layer_key as _ruby_glow_layer_key,
+    ruby_horizontal_gradient_rect_signature as _ruby_horizontal_gradient_rect_signature,
     ruby_segment_wipe_state as _ruby_segment_wipe_state,
     ruby_text_rect as _ruby_text_rect,
+    ruby_text_layer_key as _ruby_text_layer_key,
     ruby_wipe_geometry as _ruby_wipe_geometry,
     ruby_wipe_state as _ruby_wipe_state,
     text_glyph_runs as _text_glyph_runs,
@@ -621,6 +624,7 @@ from krok_helper.subtitle_render.engine.render.elements.vertical import (
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors as _effective_karaoke_colors,
+    effective_ruby_karaoke_colors as _effective_ruby_karaoke_colors,
     legacy_after_text_fill as _legacy_after_text_fill,
     solid_fill as _solid_fill,
     style_for_role as _style_for_role,
@@ -8456,98 +8460,6 @@ class _RubyTextLayer:
         return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
 
 
-def _ruby_text_layer_key(
-    layout: _RubyLayout,
-    ruby_font: QFont,
-    style: Style,
-    rtl: bool,
-    *,
-    after: bool,
-    draw_glow: bool = True,
-) -> tuple:
-    colors = _effective_ruby_karaoke_colors(style)
-    state = colors.after if after else colors.before
-    return (
-        layout.ruby.reading,
-        layout.target_width,
-        round(layout.reading_width, 3),
-        layout.geometry_signature,
-        (
-            round(layout.gradient_rect.left() - layout.x, 3),
-            round(layout.gradient_rect.top() - layout.baseline_y, 3),
-            round(layout.gradient_rect.width(), 3),
-            round(layout.gradient_rect.height(), 3),
-        ),
-        _ruby_horizontal_gradient_rect_signature(layout),
-        rtl,
-        ruby_font.family(),
-        ruby_font.pixelSize(),
-        int(ruby_font.weight()),
-        ruby_font.italic(),
-        _karaoke_state_signature(state),
-        _ruby_stroke_width(style),
-        _ruby_stroke2_width(style),
-        _ruby_shadow_dx(style),
-        _ruby_shadow_dy(style),
-        _ruby_decoration_kind(style),
-        _ruby_glow_radius(style, after=after),
-        _ruby_glow_concentration_level(style),
-        after,
-        draw_glow,
-    )
-
-
-def _ruby_glow_layer_key(
-    layout: _RubyLayout,
-    ruby_font: QFont,
-    style: Style,
-    rtl: bool,
-    *,
-    after: bool,
-) -> tuple:
-    colors = _effective_ruby_karaoke_colors(style)
-    state = colors.after if after else colors.before
-    return (
-        "ruby_glow",
-        layout.ruby.reading,
-        layout.target_width,
-        round(layout.reading_width, 3),
-        layout.geometry_signature,
-        (
-            round(layout.gradient_rect.left() - layout.x, 3),
-            round(layout.gradient_rect.top() - layout.baseline_y, 3),
-            round(layout.gradient_rect.width(), 3),
-            round(layout.gradient_rect.height(), 3),
-        ),
-        _ruby_horizontal_gradient_rect_signature(layout),
-        rtl,
-        ruby_font.family(),
-        ruby_font.pixelSize(),
-        int(ruby_font.weight()),
-        ruby_font.italic(),
-        _fill_signature(state.shadow),
-        _ruby_stroke_width(style),
-        _ruby_stroke2_width(style),
-        _ruby_glow_radius(style, after=after),
-        _ruby_glow_concentration_level(style),
-        after,
-    )
-
-
-def _ruby_horizontal_gradient_rect_signature(
-    layout: _RubyLayout,
-) -> tuple[float, float, float, float] | None:
-    rect = layout.horizontal_gradient_rect
-    if rect is None:
-        return None
-    return (
-        round(rect.left() - layout.x, 3),
-        round(rect.top() - layout.baseline_y, 3),
-        round(rect.width(), 3),
-        round(rect.height(), 3),
-    )
-
-
 def _get_or_build_ruby_glow(
     layout: _RubyLayout,
     ruby_font: QFont,
@@ -9328,26 +9240,6 @@ _VERTICAL_RASTER_PORTS = VerticalRasterPorts(
     visual_stroke_extent=_visual_stroke_extent,
     glow_extent=_glow_extent,
 )
-
-def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
-    if style.ruby_karaoke_colors is not None:
-        return style.ruby_karaoke_colors
-    if style.karaoke_colors is not None:
-        return style.karaoke_colors
-    before = KaraokeColorState(
-        text=_solid_fill(style.base_color),
-        stroke=_solid_fill(style.stroke_color),
-        stroke2=_solid_fill("#000000"),
-        shadow=_solid_fill(style.shadow_color),
-    )
-    after = KaraokeColorState(
-        text=_solid_fill(style.ruby_color),
-        stroke=_solid_fill(style.stroke_color),
-        stroke2=_solid_fill("#000000"),
-        shadow=_solid_fill(style.shadow_color),
-    )
-    return KaraokeColors(before=before, after=after)
-
 
 _VERTICAL_RUBY_PORTS = VerticalRubyPorts(
     raster=_VERTICAL_RASTER_PORTS,

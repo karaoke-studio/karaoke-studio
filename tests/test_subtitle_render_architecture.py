@@ -1946,8 +1946,11 @@ def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
         "ruby_after_clip_rect",
         "ruby_after_clip_rect_at_time",
         "ruby_before_clip_rect_at_time",
+        "ruby_glow_layer_key",
+        "ruby_horizontal_gradient_rect_signature",
         "ruby_segment_wipe_state",
         "ruby_text_rect",
+        "ruby_text_layer_key",
         "ruby_wipe_geometry",
         "ruby_wipe_state",
     }
@@ -1973,6 +1976,19 @@ def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
         or target.startswith(f"{PACKAGE}.frontend.")
         for target in targets
     )
+
+    style_owner = f"{PACKAGE}.engine.style.style_semantics"
+    style_imports = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == style_owner
+        for alias in node.names
+        if alias.name == "effective_ruby_karaoke_colors"
+    }
+    assert style_imports == {
+        "effective_ruby_karaoke_colors": "_effective_ruby_karaoke_colors"
+    }
+    assert "_effective_ruby_karaoke_colors" not in painter_functions
 
 
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:

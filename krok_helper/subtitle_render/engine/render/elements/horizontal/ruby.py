@@ -10,13 +10,19 @@ from PyQt6.QtGui import QFont, QFontMetrics, QPainterPath
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from krok_helper.subtitle_render.engine.render.effects import (
+    fill_signature,
     glow_extent,
+    karaoke_state_signature,
     ruby_decoration_kind,
     ruby_glow_radius,
+    ruby_glow_concentration_level,
     ruby_shadow_dx,
     ruby_shadow_dy,
     ruby_vertical_extra,
     visual_stroke_extent,
+)
+from krok_helper.subtitle_render.engine.style.style_semantics import (
+    effective_ruby_karaoke_colors,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
     RubyLayout,
@@ -360,4 +366,96 @@ def ruby_before_clip_rect_at_time(
         rect.top() - pad,
         max(wipe_right - front, 0.0) + pad,
         rect.height() + pad * 2,
+    )
+
+
+def ruby_horizontal_gradient_rect_signature(
+    layout: RubyLayout,
+) -> tuple[float, float, float, float] | None:
+    rect = layout.horizontal_gradient_rect
+    if rect is None:
+        return None
+    return (
+        round(rect.left() - layout.x, 3),
+        round(rect.top() - layout.baseline_y, 3),
+        round(rect.width(), 3),
+        round(rect.height(), 3),
+    )
+
+
+def ruby_text_layer_key(
+    layout: RubyLayout,
+    ruby_font: QFont,
+    style: Style,
+    rtl: bool,
+    *,
+    after: bool,
+    draw_glow: bool = True,
+) -> tuple:
+    colors = effective_ruby_karaoke_colors(style)
+    state = colors.after if after else colors.before
+    return (
+        layout.ruby.reading,
+        layout.target_width,
+        round(layout.reading_width, 3),
+        layout.geometry_signature,
+        (
+            round(layout.gradient_rect.left() - layout.x, 3),
+            round(layout.gradient_rect.top() - layout.baseline_y, 3),
+            round(layout.gradient_rect.width(), 3),
+            round(layout.gradient_rect.height(), 3),
+        ),
+        ruby_horizontal_gradient_rect_signature(layout),
+        rtl,
+        ruby_font.family(),
+        ruby_font.pixelSize(),
+        int(ruby_font.weight()),
+        ruby_font.italic(),
+        karaoke_state_signature(state),
+        ruby_stroke_width(style),
+        ruby_stroke2_width(style),
+        ruby_shadow_dx(style),
+        ruby_shadow_dy(style),
+        ruby_decoration_kind(style),
+        ruby_glow_radius(style, after=after),
+        ruby_glow_concentration_level(style),
+        after,
+        draw_glow,
+    )
+
+
+def ruby_glow_layer_key(
+    layout: RubyLayout,
+    ruby_font: QFont,
+    style: Style,
+    rtl: bool,
+    *,
+    after: bool,
+) -> tuple:
+    colors = effective_ruby_karaoke_colors(style)
+    state = colors.after if after else colors.before
+    return (
+        "ruby_glow",
+        layout.ruby.reading,
+        layout.target_width,
+        round(layout.reading_width, 3),
+        layout.geometry_signature,
+        (
+            round(layout.gradient_rect.left() - layout.x, 3),
+            round(layout.gradient_rect.top() - layout.baseline_y, 3),
+            round(layout.gradient_rect.width(), 3),
+            round(layout.gradient_rect.height(), 3),
+        ),
+        ruby_horizontal_gradient_rect_signature(layout),
+        rtl,
+        ruby_font.family(),
+        ruby_font.pixelSize(),
+        int(ruby_font.weight()),
+        ruby_font.italic(),
+        fill_signature(state.shadow),
+        ruby_stroke_width(style),
+        ruby_stroke2_width(style),
+        ruby_glow_radius(style, after=after),
+        ruby_glow_concentration_level(style),
+        after,
     )
