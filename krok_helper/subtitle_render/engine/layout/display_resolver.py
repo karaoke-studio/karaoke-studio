@@ -12,7 +12,7 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
 from krok_helper.subtitle_render.engine.layout.display_schedule import (
     apply_constrained_page_sync,
 )
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     auto_entry_reserve_resolver,
     auto_exit_reserve_resolver,
     bottom_align_resolver,

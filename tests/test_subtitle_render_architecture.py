@@ -432,7 +432,7 @@ def test_source_modules_are_grouped_behind_one_package_boundary() -> None:
 
 
 def test_line_style_semantics_have_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.layout.line_style"
+    owner = f"{PACKAGE}.engine.layout.line.style"
     delegated_names = {
         "_lane_count",
         "_layout_style_for_line",
@@ -461,7 +461,7 @@ def test_line_style_semantics_have_one_engine_owner() -> None:
 
     line_style_targets = _import_targets(
         owner,
-        ROOT / "engine/layout/line_style.py",
+        ROOT / "engine/layout/line/style.py",
     )
     assert f"{PACKAGE}.engine.painter" not in line_style_targets
 
@@ -551,7 +551,7 @@ def test_line_pagination_semantics_have_one_engine_owner() -> None:
 
 
 def test_line_geometry_policy_has_no_painter_dependency() -> None:
-    owner = f"{PACKAGE}.engine.layout.line_geometry"
+    owner = f"{PACKAGE}.engine.layout.line.geometry"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     inline = {
@@ -570,7 +570,7 @@ def test_line_geometry_policy_has_no_painter_dependency() -> None:
     assert imports == {
         ("line_has_role_labels", "_line_has_role_labels"),
     }
-    targets = _import_targets(owner, ROOT / "engine/layout/line_geometry.py")
+    targets = _import_targets(owner, ROOT / "engine/layout/line/geometry.py")
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
@@ -922,8 +922,8 @@ def test_text_metrics_have_one_engine_owner() -> None:
 
 
 def test_qt_line_geometry_has_no_painter_dependency() -> None:
-    owner = f"{PACKAGE}.engine.layout.qt_line_geometry"
-    targets = _import_targets(owner, ROOT / "engine/layout/qt_line_geometry.py")
+    owner = f"{PACKAGE}.engine.layout.line.qt_geometry"
+    targets = _import_targets(owner, ROOT / "engine/layout/line/qt_geometry.py")
 
     assert f"{PACKAGE}.engine.painter" not in targets
 
@@ -1111,13 +1111,10 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
         "layout_plan_cache.py",
         "layout_plan_orchestrator.py",
         "layout_plan_projection.py",
-        "line_geometry.py",
         "line_pagination.py",
-        "line_style.py",
         "page_offset_plan.py",
         "page_placement.py",
         "page_plan.py",
-        "qt_line_geometry.py",
         "semantic_plan.py",
         "signal_semantics.py",
     }
@@ -1126,21 +1123,26 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in layout_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
+    line_root = layout_root / "line"
+    assert {"__init__.py", "geometry.py", "qt_geometry.py", "style.py"} <= {
+        path.name for path in line_root.glob("*.py")
+    }
+    assert not any(
+        (layout_root / name).exists()
+        for name in {"line_geometry.py", "line_style.py", "qt_line_geometry.py"}
+    )
 
 
 def test_layout_package_has_no_painter_dependency() -> None:
     painter_module = f"{PACKAGE}.engine.painter"
     layout_root = ROOT / "engine" / "layout"
 
-    offenders = {
-        path.name
-        for path in layout_root.glob("*.py")
-        if painter_module
-        in _import_targets(
-            f"{PACKAGE}.engine.layout.{path.stem}",
-            path,
-        )
-    }
+    offenders = set()
+    for path in layout_root.rglob("*.py"):
+        relative_module = path.relative_to(ROOT).with_suffix("")
+        module = f"{PACKAGE}." + ".".join(relative_module.parts)
+        if painter_module in _import_targets(module, path):
+            offenders.add(path.relative_to(layout_root).as_posix())
 
     assert offenders == set()
 

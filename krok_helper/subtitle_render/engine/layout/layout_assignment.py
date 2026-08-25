@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     lane_count as _lane_count,
     layout_style_for_line as _layout_style_for_line,
     row_count_resolver as _row_count_resolver,

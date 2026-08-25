@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     line_end_ms,
     line_start_ms,
 )

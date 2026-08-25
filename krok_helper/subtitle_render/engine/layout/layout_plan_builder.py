@@ -10,7 +10,7 @@ from krok_helper.subtitle_render.engine.layout.layout_plan import (
     TrackLayoutPlan,
 )
 from krok_helper.subtitle_render.engine.layout.line_pagination import line_center_override
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     lane_count,
     row_count_resolver,
     style_for_line,

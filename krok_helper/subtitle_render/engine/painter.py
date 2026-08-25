@@ -91,7 +91,7 @@ from krok_helper.subtitle_render.engine.layout.layout_plan_projection import (
     active_page_offsets_from_layout_plan as _active_page_offsets_from_layout_plan,
     visible_lines_from_layout_plan as _visible_lines_from_layout_plan,
 )
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     entry_animation_ms as _entry_animation_ms,
     exit_animation_ms as _exit_animation_ms,
     lane_count as _lane_count,
@@ -107,7 +107,7 @@ from krok_helper.subtitle_render.engine.layout.line_pagination import (
     renderable_page_lines as _renderable_page_lines,
     renderable_page_map as _renderable_page_map,
 )
-from krok_helper.subtitle_render.engine.layout.line_geometry import (
+from krok_helper.subtitle_render.engine.layout.line.geometry import (
     line_has_role_labels as _line_has_role_labels,
 )
 from krok_helper.subtitle_render.engine.layout.signal_semantics import (
@@ -189,7 +189,7 @@ from krok_helper.subtitle_render.engine.text import (
     role_char_geometry_by_index as _role_char_geometry_by_index,
     style_for_role_in_layout as _style_for_role_in_layout,
 )
-from krok_helper.subtitle_render.engine.layout.qt_line_geometry import (
+from krok_helper.subtitle_render.engine.layout.line.qt_geometry import (
     resolved_char_intervals_for_line,
     resolved_guide_anchor_bounds_for_line,
 )

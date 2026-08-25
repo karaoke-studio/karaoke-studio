@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
     build_timing_window_diagnostics,
     resolve_layout_margin_warnings,
 )
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     auto_exit_reserve_ms,
     entry_animation_ms,
     style_for_line,

@@ -10,7 +10,7 @@ from typing import Hashable, Protocol
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
 
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     line_end_ms,
     line_start_ms,
 )

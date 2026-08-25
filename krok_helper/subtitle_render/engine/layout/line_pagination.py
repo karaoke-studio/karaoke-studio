@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
-from krok_helper.subtitle_render.engine.layout.line_style import lane_count, row_count_resolver
+from krok_helper.subtitle_render.engine.layout.line.style import lane_count, row_count_resolver
 from krok_helper.subtitle_render.engine.timing.timeline import assign_lanes
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.timing import TimingLine, TimingTrack

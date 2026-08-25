@@ -24,14 +24,14 @@ from krok_helper.subtitle_render.engine.layout.layout_plan_cache import (
     layout_cache_enabled,
     store_track_layout_plan,
 )
-from krok_helper.subtitle_render.engine.layout.line_style import (
+from krok_helper.subtitle_render.engine.layout.line.style import (
     style_for_line,
     style_for_line_display_window,
 )
 from krok_helper.subtitle_render.engine.layout.signal_semantics import (
     display_style_for_signal_window,
 )
-from krok_helper.subtitle_render.engine.layout.qt_line_geometry import (
+from krok_helper.subtitle_render.engine.layout.line.qt_geometry import (
     resolved_char_intervals_for_line,
     resolved_guide_anchor_bounds_for_line,
 )

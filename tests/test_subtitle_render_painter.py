@@ -7865,7 +7865,7 @@ from krok_helper.subtitle_render.engine.layout.display_schedule import (  # noqa
 from krok_helper.subtitle_render.engine.layout.display_resolver import (  # noqa: E402
     apply_animation_time_guard,
 )
-from krok_helper.subtitle_render.engine.layout.line_style import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.line.style import (  # noqa: E402
     auto_entry_reserve_ms,
     auto_exit_reserve_ms,
 )
