@@ -1617,6 +1617,84 @@ def test_horizontal_glyph_layout_has_one_painter_free_owner() -> None:
     )
 
 
+def test_horizontal_line_layout_uses_explicit_painter_free_ports() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layout_owner = f"{owner}.layout"
+    layout_path = ROOT / "engine/render/elements/horizontal/layout.py"
+    painter_path = ROOT / "engine/painter.py"
+    layout_tree = ast.parse(layout_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    builders = {
+        "layout_line_uncached": "_build_horizontal_line_uncached",
+        "layout_plain_line": "_build_horizontal_plain_line",
+        "layout_role_line": "_build_horizontal_role_line",
+    }
+    layout_members = {
+        node.name
+        for node in layout_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in builders
+    }
+    painter_functions = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    assert {"HorizontalLayoutPorts", *builders} <= layout_members
+    assert imported == builders
+    for public_name, delegate_name in builders.items():
+        wrapper = painter_functions[f"_{public_name}"]
+        assert len(wrapper.body) == 1
+        returned = wrapper.body[0]
+        assert isinstance(returned, ast.Return)
+        assert isinstance(returned.value, ast.Call)
+        assert isinstance(returned.value.func, ast.Name)
+        assert returned.value.func.id == delegate_name
+        assert any(
+            isinstance(argument, ast.Name)
+            and argument.id == "_HORIZONTAL_LAYOUT_PORTS"
+            for argument in returned.value.args
+        )
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_HORIZONTAL_LAYOUT_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "HorizontalLayoutPorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "char_layout_width",
+        "karaoke_fill_segments",
+        "layout_rubies",
+        "n3_char_wipe_ranges_by_index",
+        "role_char_ink_ranges_by_index",
+        "role_ruby_vertical_extra",
+    }
+
+    targets = _import_targets(layout_owner, layout_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"

@@ -22,6 +22,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning i
     smart_horizontal_dx,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+    HorizontalLayoutPorts,
     bitmap_guide_glyphs,
     bitmap_guide_anchor_descent,
     bitmap_guide_is_no_wipe,
@@ -33,6 +34,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     glyph_run_signature,
     glyph_runs,
     fixed_line_geometry,
+    layout_line_uncached,
+    layout_plain_line,
+    layout_role_line,
     n3_main_fill_rect,
     resolve_role_baseline_y,
     resolve_baseline_y,
@@ -44,6 +48,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
 
 __all__ = [
     "FillSegment",
+    "HorizontalLayoutPorts",
     "LineCharTransition",
     "LineLayout",
     "RubyLayout",
@@ -64,6 +69,9 @@ __all__ = [
     "fixed_line_geometry",
     "lane_alignment",
     "layout_page_lines",
+    "layout_line_uncached",
+    "layout_plain_line",
+    "layout_role_line",
     "line_total_width",
     "line_lane_alignment",
     "n3_smart_font_size",

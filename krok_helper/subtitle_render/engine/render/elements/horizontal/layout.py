@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Callable
+
 from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFontMetrics, QPainterPath
 
 from krok_helper.subtitle_render.domain.models import Style
-from krok_helper.subtitle_render.domain.timing import TimingTrack
-from krok_helper.subtitle_render.engine.guide import guide_symbol_is_bitmap
+from krok_helper.subtitle_render.domain.timing import (
+    RubyAnnotation,
+    TimingLine,
+    TimingTrack,
+)
+from krok_helper.subtitle_render.engine.guide import (
+    guide_symbol_is_bitmap,
+    render_line_with_guide_symbols,
+    vector_glyph_width,
+)
+from krok_helper.subtitle_render.engine.layout.line.geometry import (
+    line_has_role_labels,
+)
+from krok_helper.subtitle_render.engine.layout.page.pagination import (
+    line_center_override,
+)
 from krok_helper.subtitle_render.engine.layout.line.style import lane_count
 from krok_helper.subtitle_render.engine.render.effects import (
     glow_concentration_level,
@@ -20,6 +37,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
 from krok_helper.subtitle_render.engine.ruby import (
     active_rubies_for_line,
     build_ruby_font,
+    ruby_char_gaps,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
@@ -28,11 +46,43 @@ from krok_helper.subtitle_render.engine.text import (
     GlyphLayout,
     TextLayout,
     build_font,
+    build_latin_font,
+    build_role_text_layout,
+    build_text_layout,
+    char_left_positions,
+    letter_spacing,
+    line_text_width,
+    make_font_for,
+    role_char_geometry_by_index,
 )
-from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+from krok_helper.subtitle_render.engine.timing.timeline import (
+    DisplayLine,
+    compute_char_intervals,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
+    FillSegment,
+    LineLayout,
+    RubyLayout,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning import (
+    line_lane_alignment,
+    resolve_line_x_smart,
+)
 from krok_helper.subtitle_render.sources.guide_symbols import (
     scaled_guide_symbol_path,
 )
+
+
+@dataclass(frozen=True)
+class HorizontalLayoutPorts:
+    """Painter-owned capabilities needed to build horizontal line layouts."""
+
+    char_layout_width: Callable[..., int]
+    karaoke_fill_segments: Callable[..., list[FillSegment]]
+    layout_rubies: Callable[..., list[RubyLayout]]
+    n3_char_wipe_ranges_by_index: Callable[..., list[tuple[int, int]]]
+    role_char_ink_ranges_by_index: Callable[..., list[tuple[int, int]]]
+    role_ruby_vertical_extra: Callable[..., int]
 
 
 def bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
@@ -308,4 +358,402 @@ def n3_main_fill_rect(layout: TextLayout, baseline_y: int) -> QRectF:
         top,
         float(max(layout.line_rect.width(), 1.0)),
         float(max(bottom - top, 1.0)),
+    )
+
+
+def layout_line_uncached(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    ports: HorizontalLayoutPorts,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+    line_plan: object | None = None,
+) -> LineLayout | None:
+    render_line = (
+        line_plan.render_line
+        if line_plan is not None
+        else render_line_with_guide_symbols(line)
+    )
+    resolved_intervals = (
+        line_plan.resolved_intervals if line_plan is not None else None
+    )
+    center_override = line_plan.center_override if line_plan is not None else None
+    if line_has_role_labels(render_line):
+        return layout_role_line(
+            track,
+            render_line,
+            style,
+            img_w,
+            img_h,
+            ports,
+            baseline_y=baseline_y,
+            line_x=line_x,
+            lane=lane,
+            source_line=line,
+            resolved_intervals=resolved_intervals,
+            center_override=center_override,
+        )
+    return layout_plain_line(
+        track,
+        render_line,
+        style,
+        img_w,
+        img_h,
+        ports,
+        baseline_y=baseline_y,
+        line_x=line_x,
+        lane=lane,
+        source_line=line,
+        resolved_intervals=resolved_intervals,
+        center_override=center_override,
+    )
+
+
+def layout_plain_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    ports: HorizontalLayoutPorts,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+    source_line: TimingLine | None = None,
+    resolved_intervals: tuple[tuple[int, int], ...] | None = None,
+    center_override: bool | None = None,
+) -> LineLayout:
+    font = build_font(style)
+    metrics = QFontMetrics(font)
+    latin_font = build_latin_font(style)
+    font_for = make_font_for(style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    source_line = source_line or line
+    active_rubies = active_rubies_for_line(track.rubies, source_line)
+    ruby_font = build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
+
+    char_widths = [
+        (
+            vector_glyph_width(char.vector_glyph, style)
+            if char.vector_glyph is not None
+            else ports.char_layout_width(
+                char.text,
+                font,
+                metrics,
+                latin_metrics,
+                font_for,
+                style,
+            )
+        )
+        for char in line.chars
+    ]
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line, char_widths)
+    )
+    char_gaps, ruby_left_ext, ruby_right_ext = ruby_char_gaps(
+        line,
+        char_widths,
+        active_rubies,
+        style,
+        intervals,
+    )
+    total_w = line_text_width(char_widths, style) + sum(char_gaps)
+    left_ext = ruby_left_ext
+    right_ext = ruby_right_ext
+    if center_override is None:
+        center_override = line_center_override(track, source_line, style)
+    n3_main_center = (
+        style.layout_semantics == "n3_1074"
+        and not center_override
+        and style.line_horizontal_layout == "asymmetric"
+        and line_lane_alignment(track, source_line, style, lane) == "center"
+    )
+    x0 = (
+        line_x
+        if line_x is not None
+        else resolve_line_x_smart(
+            img_w,
+            total_w,
+            track,
+            source_line,
+            style,
+            lane,
+            center_override=False,
+        )
+        if n3_main_center
+        else resolve_line_x_smart(
+            img_w,
+            total_w + left_ext + right_ext,
+            track,
+            source_line,
+            style,
+            lane,
+            center_override=center_override,
+        )
+        + left_ext
+    )
+    y = (
+        baseline_y
+        if baseline_y is not None
+        else resolve_baseline_y(metrics, img_h, style, ruby_metrics)
+    )
+    rtl = style.right_to_left
+    char_lefts = char_left_positions(
+        char_widths,
+        x0,
+        rtl,
+        letter_spacing(style),
+        char_gaps=char_gaps,
+        n3_no_backtracking=style.layout_semantics == "n3_1074",
+    )
+    char_x_ranges = [
+        (left, left + width)
+        for left, width in zip(char_lefts, char_widths)
+    ]
+    text_layout = build_text_layout(
+        line,
+        style,
+        x0=x0,
+        baseline_y=y,
+        inline_styles=False,
+        char_gaps=char_gaps,
+    )
+    ink_x_ranges = ports.role_char_ink_ranges_by_index(
+        line,
+        text_layout,
+        char_x_ranges,
+    )
+    wipe_x_ranges = ports.n3_char_wipe_ranges_by_index(
+        line,
+        text_layout,
+        char_x_ranges,
+        ink_x_ranges,
+    )
+    fill_segments = ports.karaoke_fill_segments(
+        char_widths,
+        intervals,
+        ink_x_ranges,
+        active_rubies,
+        line,
+        release_x_ranges=wipe_x_ranges,
+        layout_x_ranges=char_x_ranges,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
+    )
+    line_rect = QRectF(
+        float(x0),
+        float(y - metrics.ascent()),
+        float(total_w),
+        float(metrics.height()),
+    )
+    colors = effective_karaoke_colors(style)
+    ruby_layouts = tuple(
+        ports.layout_rubies(
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            y,
+            active_rubies,
+            style,
+            main_ascent_px=text_layout.ascent,
+            text_layout=text_layout,
+            ruby_font=ruby_font,
+        )
+        if ruby_metrics is not None
+        else ()
+    )
+    return LineLayout(
+        text_layout=text_layout,
+        font=font,
+        metrics=metrics,
+        latin_font=latin_font,
+        font_for=font_for,
+        active_rubies=active_rubies,
+        ruby_font=ruby_font,
+        ruby_metrics=ruby_metrics,
+        char_widths=char_widths,
+        total_w=total_w,
+        x0=x0,
+        baseline_y=y,
+        intervals=intervals,
+        char_lefts=char_lefts,
+        char_x_ranges=char_x_ranges,
+        fill_segments=fill_segments,
+        line_rect=line_rect,
+        colors=colors,
+        rtl=rtl,
+        has_inline_styles=False,
+        ink_x_ranges=ink_x_ranges,
+        ruby_layouts=ruby_layouts,
+        render_line=line,
+    )
+
+
+def layout_role_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    ports: HorizontalLayoutPorts,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+    source_line: TimingLine | None = None,
+    resolved_intervals: tuple[tuple[int, int], ...] | None = None,
+    center_override: bool | None = None,
+) -> LineLayout | None:
+    has_shared_baseline = baseline_y is not None
+    source_line = source_line or line
+    active_rubies = active_rubies_for_line(track.rubies, source_line)
+    ruby_font = build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
+    measure_layout = build_role_text_layout(line, style, x0=0, baseline_y=0)
+    if not measure_layout.glyphs:
+        return None
+    char_widths, _measure_ranges = role_char_geometry_by_index(line, measure_layout)
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line, char_widths)
+    )
+    ruby_extra = ports.role_ruby_vertical_extra(
+        line,
+        active_rubies,
+        intervals,
+        style,
+    )
+    char_gaps, ruby_left_ext, ruby_right_ext = ruby_char_gaps(
+        line,
+        char_widths,
+        active_rubies,
+        style,
+        intervals,
+    )
+    left_ext = ruby_left_ext
+    right_ext = ruby_right_ext
+    total_w = measure_layout.total_width + sum(char_gaps)
+    if center_override is None:
+        center_override = line_center_override(track, source_line, style)
+    n3_main_center = (
+        style.layout_semantics == "n3_1074"
+        and not center_override
+        and style.line_horizontal_layout == "asymmetric"
+        and line_lane_alignment(track, source_line, style, lane) == "center"
+    )
+    x0 = (
+        line_x
+        if line_x is not None
+        else resolve_line_x_smart(
+            img_w,
+            total_w,
+            track,
+            source_line,
+            style,
+            lane,
+            center_override=False,
+        )
+        if n3_main_center
+        else resolve_line_x_smart(
+            img_w,
+            total_w + left_ext + right_ext,
+            track,
+            source_line,
+            style,
+            lane,
+            center_override=center_override,
+        )
+        + left_ext
+    )
+    y = (
+        baseline_y
+        if baseline_y is not None
+        else resolve_role_baseline_y(measure_layout, img_h, style, ruby_extra)
+    )
+    if not has_shared_baseline:
+        y = clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_extra)
+    text_layout = build_role_text_layout(
+        line,
+        style,
+        x0=x0,
+        baseline_y=y,
+        char_gaps=char_gaps,
+    )
+    char_widths, char_x_ranges = role_char_geometry_by_index(line, text_layout)
+    intervals = (
+        list(resolved_intervals)
+        if resolved_intervals is not None
+        else compute_char_intervals(line, char_widths)
+    )
+    ink_x_ranges = ports.role_char_ink_ranges_by_index(
+        line,
+        text_layout,
+        char_x_ranges,
+    )
+    wipe_x_ranges = ports.n3_char_wipe_ranges_by_index(
+        line,
+        text_layout,
+        char_x_ranges,
+        ink_x_ranges,
+    )
+    fill_segments = ports.karaoke_fill_segments(
+        char_widths,
+        intervals,
+        ink_x_ranges,
+        active_rubies,
+        line,
+        release_x_ranges=wipe_x_ranges,
+        layout_x_ranges=char_x_ranges,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
+    )
+    ruby_layouts = tuple(
+        ports.layout_rubies(
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            y,
+            active_rubies,
+            style,
+            main_ascent_px=text_layout.ascent,
+            text_layout=text_layout,
+            ruby_font=ruby_font,
+        )
+        if ruby_metrics is not None
+        else ()
+    )
+    return LineLayout(
+        text_layout=text_layout,
+        active_rubies=active_rubies,
+        font=text_layout.glyphs[0].font,
+        metrics=text_layout.glyphs[0].metrics,
+        latin_font=build_latin_font(style),
+        font_for=None,
+        ruby_font=ruby_font,
+        ruby_metrics=ruby_metrics,
+        char_widths=char_widths,
+        total_w=text_layout.total_width,
+        x0=int(text_layout.line_rect.left()),
+        baseline_y=y,
+        intervals=intervals,
+        char_lefts=[char_range[0] for char_range in char_x_ranges],
+        char_x_ranges=char_x_ranges,
+        fill_segments=fill_segments,
+        line_rect=text_layout.line_rect,
+        colors=effective_karaoke_colors(style),
+        rtl=style.right_to_left,
+        has_inline_styles=True,
+        ink_x_ranges=ink_x_ranges,
+        ruby_layouts=ruby_layouts,
+        render_line=line,
     )
