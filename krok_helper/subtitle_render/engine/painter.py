@@ -521,6 +521,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     RubyLayout as _RubyLayout,
     RubyWipeSegment as _RubyWipeSegment,
     SayatooLineLayout as _SayatooLineLayout,
+    after_glow_loose_clip_rect as _after_glow_loose_clip_rect,
+    after_glow_source_clip_rect as _after_glow_source_clip_rect,
     char_fade_opacity as _char_fade_opacity,
     character_transform as _character_transform,
     aligned_x0 as _aligned_x0,
@@ -528,12 +530,17 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     bitmap_guide_glyphs as _bitmap_guide_glyphs,
     bitmap_guide_is_no_wipe as _bitmap_guide_is_no_wipe,
     bottom_short_page_alignment as _bottom_short_page_alignment,
+    before_glow_source_clip_rect as _before_glow_source_clip_rect,
     clamp_role_baseline_y as _clamp_role_baseline_y,
     glyph_is_bitmap_guide as _glyph_is_bitmap_guide,
     glyph_path as _glyph_path,
     glyph_run_path as _glyph_run_path,
     glyph_run_rect as _glyph_run_rect,
     glyph_run_signature as _glyph_run_signature,
+    glyph_run_after_glow_key as _glyph_run_after_glow_key,
+    glyph_run_layer_key as _glyph_run_layer_key,
+    glyph_run_needs_after_glow as _glyph_run_needs_after_glow,
+    glyph_run_needs_before_glow_split as _glyph_run_needs_before_glow_split,
     glyph_runs as _glyph_runs,
     fixed_line_geometry as _fixed_line_geometry,
     lane_alignment as _lane_alignment,
@@ -542,12 +549,18 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     layout_plain_line as _build_horizontal_plain_line,
     layout_role_line as _build_horizontal_role_line,
     line_total_width as _line_total_width,
+    horizontal_after_clip_rect as _horizontal_after_clip_rect,
+    horizontal_before_clip_rect as _horizontal_before_clip_rect,
+    inflate_rect as _inflate_rect,
+    karaoke_glow_states_differ as _karaoke_glow_states_differ,
+    karaoke_state_uses_image as _karaoke_state_uses_image,
     line_lane_alignment as _line_lane_alignment,
     n3_smart_font_size as _n3_smart_font_size,
     n3_main_fill_rect as _n3_main_fill_rect,
     resolve_line_x as _resolve_line_x,
     resolve_line_x_smart as _resolve_line_x_smart,
     resolve_role_baseline_y as _resolve_role_baseline_y,
+    relative_fill_rect_signature as _relative_fill_rect_signature,
     resolve_baseline_y as _resolve_baseline_y,
     resolve_display_baselines as _resolve_display_baselines,
     role_visual_text_padding as _role_visual_text_padding,
@@ -4035,31 +4048,6 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
     )
 
 
-def _horizontal_after_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
-    band_left, band_right = band
-    if rtl:
-        return QRectF(float(band_left), -1_000_000.0, 1_000_000.0, 2_000_000.0)
-    return QRectF(-1_000_000.0, -1_000_000.0, float(band_right) + 1_000_000.0, 2_000_000.0)
-
-
-def _horizontal_before_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
-    """Keep the before layer only on the unsung side of the wipe front."""
-    band_left, band_right = band
-    if rtl:
-        return QRectF(
-            -1_000_000.0,
-            -1_000_000.0,
-            float(band_left) + 1_000_000.0,
-            2_000_000.0,
-        )
-    return QRectF(
-        float(band_right),
-        -1_000_000.0,
-        1_000_000.0,
-        2_000_000.0,
-    )
-
-
 def _bitmap_guide_target_rect(glyph: _GlyphLayout, baseline_y: int) -> QRectF | None:
     symbol = glyph.vector_glyph
     if not _guide_symbol_is_bitmap(symbol):
@@ -4284,32 +4272,6 @@ def _paint_glyph_run_direct(
         glow_radius=_glow_radius(role_style, after=after),
         draw_glow=draw_glow,
         fill_rect=fill_rect,
-    )
-
-
-def _after_glow_loose_clip_rect(
-    band: tuple[int, int],
-    rect: QRectF,
-    glow_pad: int,
-    rtl: bool,
-    complete: bool,
-) -> QRectF:
-    """已唱发光的宽松裁切矩形（理由见 ``_paint_char_karaoke_stack`` 内注释）。
-
-    N3 的 WipeLeft 用字形轮廓加一半一重描边计算锋面，不包含二重描边或 glow/blur
-    半径；N3 随后才对已裁剪的描边源做 blur。这里的 after-glow 是已经预先 blur 好的
-    位图，所以走字中的前缘必须严格停在扫光线，避免把未唱侧的 glow 位图切进来形成
-    粗亮竖边。``glow_pad`` 只用于尾缘、上下和唱完后的边缘释放。
-    """
-    band_left, band_right = band
-    glow_pad_f = float(glow_pad)
-    left = float(band_left) - (0.0 if rtl and not complete else glow_pad_f)
-    right = float(band_right) + (glow_pad_f if rtl or complete else 0.0)
-    return QRectF(
-        left,
-        rect.top() - glow_pad,
-        right - left,
-        rect.height() + glow_pad * 2,
     )
 
 
@@ -4827,44 +4789,6 @@ def _paint_glyph_run_after_glow_wipe(
         painter.drawImage(anchor, baked.image)
     finally:
         painter.restore()
-
-
-def _after_glow_source_clip_rect(
-    band: tuple[int, int],
-    rect: QRectF,
-    glow_pad: int,
-    rtl: bool,
-    complete: bool,
-) -> QRectF | None:
-    """Source clip for N3-style glow wiping.
-
-    N3 clips the edge source by ``WipeLeft`` and then blurs the resulting
-    work bitmap.  Returning this as ``source_clip`` keeps the visible glow front
-    soft; clipping the already-blurred bitmap would create a hard vertical edge.
-    """
-    if complete:
-        return None
-    band_left, band_right = band
-    top = rect.top() - glow_pad
-    height = rect.height() + glow_pad * 2
-    if rtl:
-        return QRectF(float(band_left), top, 1_000_000.0, height)
-    return QRectF(-1_000_000.0, top, float(band_right) + 1_000_000.0, height)
-
-
-def _before_glow_source_clip_rect(
-    band: tuple[int, int],
-    rect: QRectF,
-    glow_pad: int,
-    rtl: bool,
-) -> QRectF:
-    """Unsing side of N3's source geometry, before Gaussian blur."""
-    band_left, band_right = band
-    top = rect.top() - glow_pad
-    height = rect.height() + glow_pad * 2
-    if rtl:
-        return QRectF(-1_000_000.0, top, float(band_left) + 1_000_000.0, height)
-    return QRectF(float(band_right), top, 1_000_000.0, height)
 
 
 def _spin_flip_char_transform(
@@ -5780,159 +5704,6 @@ def _utopia_scope_id(
         tuple(indices),
         ruby.kanji if ruby is not None else "",
         ruby.reading if ruby is not None else "",
-    )
-
-
-def _inflate_rect(rect: QRectF, pad: int | float) -> QRectF:
-    pad_f = float(max(pad, 0))
-    return rect.adjusted(-pad_f, -pad_f, pad_f, pad_f)
-
-
-def _glyph_run_layer_key(
-    glyphs: list[_GlyphLayout],
-    role_style: Style,
-    colors: KaraokeColors,
-    *,
-    after: bool,
-) -> tuple:
-    """run 层缓存 key：run 内逐字形（文本/字体/相对 x/宽）+ 角色样式签名 + 状态。
-
-    扫光带不进 key（blit 时半平面 clip 处理）；run 绝对位置不进 key（blit offset 复位）。
-    """
-    run_left = min(glyph.left for glyph in glyphs)
-    glyph_sig = tuple(
-        (
-            glyph.text,
-            glyph.font.family(),
-            glyph.font.pixelSize(),
-            int(glyph.font.weight()),
-            glyph.font.italic(),
-            glyph.left - run_left,
-            round(float(glyph.path_offset_x), 3),
-            glyph.width,
-            _value_signature(glyph.vector_glyph),
-        )
-        for glyph in glyphs
-    )
-    state = colors.after if after else colors.before
-    return (
-        glyph_sig,
-        _karaoke_state_signature(state),
-        role_style.shadow_offset_x,
-        role_style.shadow_offset_y,
-        role_style.stroke_width_px,
-        _main_stroke2_width(role_style),
-        role_style.decoration_kind,
-        _glow_radius(role_style, after=False),
-        _glow_concentration_level(role_style),
-        after,
-    )
-
-
-def _relative_fill_rect_signature(
-    glyphs: list[_GlyphLayout],
-    baseline_y: int,
-    fill_rect: QRectF | None,
-    *,
-    global_anchor: bool = False,
-) -> tuple[float, float, float, float] | None:
-    """Return the brush coordinates that affect a cached glyph run."""
-    run_left = min(glyph.left for glyph in glyphs)
-    if global_anchor:
-        if fill_rect is None:
-            return (
-                round(float(run_left), 3),
-                round(float(baseline_y), 3),
-                0.0,
-                0.0,
-            )
-        return (
-            round(float(fill_rect.left()), 3),
-            round(float(fill_rect.top()), 3),
-            round(float(fill_rect.width()), 3),
-            round(float(fill_rect.height()), 3),
-        )
-    if fill_rect is None:
-        return None
-    return (
-        round(float(fill_rect.left()) - run_left, 3),
-        round(float(fill_rect.top()) - baseline_y, 3),
-        round(float(fill_rect.width()), 3),
-        round(float(fill_rect.height()), 3),
-    )
-
-
-def _karaoke_state_uses_image(state: KaraokeColorState) -> bool:
-    return any(
-        fill.mode == "image"
-        for fill in (state.text, state.stroke, state.stroke2, state.shadow)
-    )
-
-
-def _glyph_run_after_glow_key(
-    glyphs: list[_GlyphLayout],
-    role_style: Style,
-    colors: KaraokeColors,
-) -> tuple:
-    run_left = min(glyph.left for glyph in glyphs)
-    glyph_sig = tuple(
-        (
-            glyph.text,
-            glyph.font.family(),
-            glyph.font.pixelSize(),
-            int(glyph.font.weight()),
-            glyph.font.italic(),
-            glyph.left - run_left,
-            round(float(glyph.path_offset_x), 3),
-            glyph.width,
-            _value_signature(glyph.vector_glyph),
-        )
-        for glyph in glyphs
-    )
-    return (
-        "after_glow",
-        glyph_sig,
-        _fill_signature(colors.after.shadow),
-        role_style.stroke_width_px,
-        _main_stroke2_width(role_style),
-        _glow_radius(role_style, after=True),
-        _glow_concentration_level(role_style),
-        role_style.decoration_kind,
-    )
-
-
-def _karaoke_glow_states_differ(style: Style, colors: KaraokeColors) -> bool:
-    """前后发光状态（颜色签名 + 半径）是否不同。
-
-    N3 在 ``WipeLeft`` 两侧互补裁剪前后描边源，再对合成源做 blur；因此锋线
-    只硬分割字形墨水/描边，模糊后的两色 halo 可以跨线混合。状态相同时无需
-    拆源，整字画一次未唱发光即可。
-    """
-    if style.decoration_kind != "glow":
-        return False
-    return (
-        _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
-        or _glow_radius(style, after=False) != _glow_radius(style, after=True)
-    )
-
-
-def _glyph_run_needs_after_glow(glyphs: list[_GlyphLayout]) -> bool:
-    if not glyphs:
-        return False
-    role_style = glyphs[0].style
-    if _glow_radius(role_style, after=True) == 0:
-        return False
-    return _karaoke_glow_states_differ(role_style, _effective_karaoke_colors(role_style))
-
-
-def _glyph_run_needs_before_glow_split(glyphs: list[_GlyphLayout]) -> bool:
-    if not glyphs:
-        return False
-    role_style = glyphs[0].style
-    if _glow_radius(role_style, after=False) == 0:
-        return False
-    return _karaoke_glow_states_differ(
-        role_style, _effective_karaoke_colors(role_style)
     )
 
 

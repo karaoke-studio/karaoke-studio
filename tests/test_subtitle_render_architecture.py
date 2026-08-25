@@ -1751,6 +1751,51 @@ def test_horizontal_transition_math_has_one_painter_free_owner() -> None:
     )
 
 
+def test_horizontal_layer_policy_has_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layer_owner = f"{owner}.layers"
+    layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {
+        "after_glow_loose_clip_rect",
+        "after_glow_source_clip_rect",
+        "before_glow_source_clip_rect",
+        "glyph_run_after_glow_key",
+        "glyph_run_layer_key",
+        "glyph_run_needs_after_glow",
+        "glyph_run_needs_before_glow_split",
+        "horizontal_after_clip_rect",
+        "horizontal_before_clip_rect",
+        "inflate_rect",
+        "karaoke_glow_states_differ",
+        "karaoke_state_uses_image",
+        "relative_fill_rect_signature",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_functions = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_functions)
+    targets = _import_targets(layer_owner, layer_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"
