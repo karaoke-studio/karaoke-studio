@@ -1736,6 +1736,8 @@ def test_ruby_main_text_timing_has_one_painter_free_owner() -> None:
         "resolve_char_ruby_groups": "_resolve_char_ruby_groups",
         "ruby_for_char_index": "_ruby_for_char_index",
         "ruby_main_uses_base_timing": "_ruby_main_uses_base_timing",
+        "utopia_main_group_for_index": "_utopia_main_group_for_index",
+        "utopia_wipe_window_for_index": "_utopia_wipe_window_for_index",
     }
     imported = {
         alias.name: alias.asname
@@ -1771,7 +1773,6 @@ def test_ruby_main_text_timing_has_one_painter_free_owner() -> None:
     assert not any(
         isinstance(node, ast.ImportFrom)
         and node.module == f"{PACKAGE}.engine.painter"
-        and any(alias.name == "_resolve_char_ruby_groups" for alias in node.names)
         for node in ast.walk(timeline_tree)
     )
 

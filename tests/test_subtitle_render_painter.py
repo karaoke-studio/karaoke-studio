@@ -180,6 +180,8 @@ def test_painter_keeps_ruby_timing_compatibility_exports() -> None:
         "resolve_char_ruby_groups": "_resolve_char_ruby_groups",
         "ruby_for_char_index": "_ruby_for_char_index",
         "ruby_main_uses_base_timing": "_ruby_main_uses_base_timing",
+        "utopia_main_group_for_index": "_utopia_main_group_for_index",
+        "utopia_wipe_window_for_index": "_utopia_wipe_window_for_index",
     }
     for public_name, compatibility_name in public_aliases.items():
         assert getattr(subtitle_painter, compatibility_name) is getattr(

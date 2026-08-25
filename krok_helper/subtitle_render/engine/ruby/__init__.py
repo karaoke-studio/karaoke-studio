@@ -52,6 +52,8 @@ from krok_helper.subtitle_render.engine.ruby.timing import (
     ruby_for_char_index,
     ruby_main_uses_base_timing,
     ruby_visual_units_and_intervals,
+    utopia_main_group_for_index,
+    utopia_wipe_window_for_index,
 )
 
 
@@ -95,6 +97,8 @@ __all__ = [
     "ruby_uses_main_font",
     "ruby_unit_layouts",
     "ruby_visual_units_and_intervals",
+    "utopia_main_group_for_index",
+    "utopia_wipe_window_for_index",
     "scaled_px",
     "scaled_signed_px",
     "text_span_indices",

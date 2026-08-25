@@ -1,9 +1,8 @@
 """Project renderer timing semantics onto the passive timeline UI.
 
-The timeline consumes character visibility intervals, not Painter's font,
-Ruby, geometry, or wipe implementation details.  This narrow adapter preserves
-the existing Utopia calculation while those semantics are moved out of the CPU
-renderer incrementally.
+The timeline consumes character visibility intervals, not Painter's caches or
+paint orchestration. This adapter projects the shared ruby, text, and layout
+contracts without importing the CPU renderer.
 """
 
 from __future__ import annotations
@@ -16,9 +15,16 @@ from krok_helper.subtitle_render.engine.timing.timeline import compute_char_inte
 from krok_helper.subtitle_render.engine.text import (
     build_font,
     build_latin_font,
+    char_left_positions,
     char_layout_width,
+    letter_spacing,
 )
-from krok_helper.subtitle_render.engine.ruby import resolve_char_ruby_groups
+from krok_helper.subtitle_render.engine.ruby import (
+    active_rubies_for_line,
+    resolve_char_ruby_groups,
+    utopia_wipe_window_for_index,
+)
+from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingLine,
@@ -63,19 +69,8 @@ def resolve_utopia_visual_intervals(
     if effective_karaoke_animation(style) != "utopia" or not rubies:
         return None
 
-    # Preserve TimelineView's historical lazy dependency on the renderer.  A
-    # normal timeline import must not initialize the Painter/cache stack unless
-    # Utopia's visual timing projection is actually requested.
-    from krok_helper.subtitle_render.engine.painter import (
-        _active_rubies_for_line,
-        _char_left_positions,
-        _letter_spacing,
-        _style_for_line,
-        _utopia_wipe_window_for_index,
-    )
-
-    line_style = _style_for_line(style, line)
-    active_rubies = _active_rubies_for_line(list(rubies), line)
+    line_style = style_for_line(style, line)
+    active_rubies = active_rubies_for_line(list(rubies), line)
     if not active_rubies:
         return None
     font = build_font(line_style)
@@ -94,11 +89,11 @@ def resolve_utopia_visual_intervals(
         for char in line.chars
     ]
     intervals = compute_char_intervals(line, char_widths)
-    char_lefts = _char_left_positions(
+    char_lefts = char_left_positions(
         char_widths,
         0,
         line_style.right_to_left,
-        _letter_spacing(line_style),
+        letter_spacing(line_style),
         n3_no_backtracking=line_style.layout_semantics == "n3_1074",
     )
     char_x_ranges = [
@@ -112,7 +107,7 @@ def resolve_utopia_visual_intervals(
     changed = False
     raw_intervals = source_char_intervals(line, end_ms)
     for index, (fallback_start, fallback_end) in enumerate(raw_intervals):
-        start_ms, cell_end_ms = _utopia_wipe_window_for_index(
+        start_ms, cell_end_ms = utopia_wipe_window_for_index(
             line,
             intervals,
             char_x_ranges,

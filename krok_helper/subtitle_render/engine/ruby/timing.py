@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from PyQt6.QtGui import QFontMetrics
 
+from krok_helper.subtitle_render.domain.models import (
+    Style,
+    effective_karaoke_animation,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import char_fill_ratio
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from krok_helper.subtitle_render.engine.ruby.selection import (
@@ -519,3 +523,91 @@ def character_fill_ratio(
         return 0.0
     start, end = intervals[index]
     return char_fill_ratio(start, end, t_ms)
+
+
+def utopia_main_group_for_index(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+    *,
+    groups: dict[int, tuple[list[int], RubyAnnotation]] | None = None,
+) -> tuple[list[int], RubyAnnotation] | None:
+    """Return the multi-character ruby group driving Utopia at ``index``."""
+
+    if groups is not None:
+        entry = groups.get(index)
+        if entry is None:
+            return None
+        raw_indices, ruby = entry
+    else:
+        ruby = ruby_for_char_index(rubies, line, intervals, index)
+        if ruby is None:
+            return None
+        raw_indices = ruby_target_indices(ruby, line, intervals)
+    indices = [
+        candidate for candidate in raw_indices if 0 <= candidate < len(line.chars)
+    ]
+    if len(indices) <= 1:
+        return None
+    return indices, ruby
+
+
+def utopia_wipe_window_for_index(
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    groups: dict[int, tuple[list[int], RubyAnnotation]],
+    index: int,
+    style: Style,
+    *,
+    fallback_start: int,
+    fallback_end: int,
+) -> tuple[int, int]:
+    """Map one base glyph to its Utopia visual wipe time window."""
+
+    if effective_karaoke_animation(style) != "utopia":
+        return fallback_start, fallback_end
+    entry = groups.get(index)
+    if entry is None:
+        return fallback_start, fallback_end
+    raw_indices, ruby = entry
+    if is_utopia_group_marker(ruby):
+        return fallback_start, fallback_end
+    indices = [
+        candidate
+        for candidate in raw_indices
+        if 0 <= candidate < len(char_x_ranges)
+    ]
+    if index not in indices or ruby_main_uses_base_timing(line, indices):
+        return fallback_start, fallback_end
+
+    effective_ruby = effective_ruby_for_target(ruby, indices, intervals)
+    if (
+        style.ruby_main_progress_mode == "reading_units"
+        and _ruby_visual_units_and_intervals(effective_ruby)
+    ):
+        base_index = indices.index(index)
+        return _ruby_main_text_slot_times(effective_ruby, base_index, len(indices))
+
+    group_left = min(char_x_ranges[candidate][0] for candidate in indices)
+    group_right = max(char_x_ranges[candidate][1] for candidate in indices)
+    if group_right <= group_left:
+        return fallback_start, fallback_end
+    char_left, char_right = char_x_ranges[index]
+    group_width = group_right - group_left
+    start_ratio = (char_left - group_left) / group_width
+    end_ratio = (char_right - group_left) / group_width
+    start = _main_text_ruby_progress_time_at_ratio(
+        effective_ruby,
+        start_ratio,
+        mode=style.ruby_main_progress_mode,
+        plateau_side="right",
+    )
+    end = _main_text_ruby_progress_time_at_ratio(
+        effective_ruby,
+        end_ratio,
+        mode=style.ruby_main_progress_mode,
+        plateau_side="left",
+    )
+    return start, max(start, end)
