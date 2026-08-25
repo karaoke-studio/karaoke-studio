@@ -3202,12 +3202,52 @@ def test_dialog_frontend_modules_are_grouped_in_one_domain_package() -> None:
         "auto_chorus_dialog.py",
         "fluent_dialogs.py",
         "guide_replacement.py",
+        "workspace_dialogs.py",
     }
     dialogs_root = ROOT / "frontend" / "dialogs"
     assert {"__init__.py", *module_names} <= {
         path.name for path in dialogs_root.glob("*.py")
     }
     assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
+def test_workspace_dialogs_have_one_frontend_owner() -> None:
+    owner = f"{PACKAGE}.frontend.dialogs.workspace_dialogs"
+    dialog_path = ROOT / "frontend/dialogs/workspace_dialogs.py"
+    window_path = ROOT / "frontend/main_window.py"
+    dialog_tree = ast.parse(dialog_path.read_text(encoding="utf-8-sig"))
+    window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "GuideSymbolSettingsDialog": "_GuideSymbolSettingsDialog",
+        "LayoutIssue": "_LayoutIssue",
+        "LayoutIssuesDialog": "_LayoutIssuesDialog",
+        "SubtitleLoadingSettingsDialog": "_SubtitleLoadingSettingsDialog",
+        "TimingIssue": "_TimingIssue",
+        "layout_issue_icon": "_layout_issue_icon",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in aliases
+    }
+    dialog_members = {
+        node.name
+        for node in dialog_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    window_members = {
+        node.name
+        for node in window_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == aliases
+    assert set(aliases) <= dialog_members
+    assert set(aliases.values()).isdisjoint(window_members)
+    targets = _import_targets(owner, dialog_path)
+    assert f"{PACKAGE}.frontend.main_window" not in targets
 
 
 def test_editor_frontend_modules_are_grouped_in_one_domain_package() -> None:
