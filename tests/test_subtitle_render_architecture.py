@@ -491,6 +491,28 @@ def test_property_panel_delegates_normalized_style_updates() -> None:
         "_scheme_own_value": {"own_value"},
         "_scheme_value": {"value"},
     }
+    snapshot_delegates = {
+        method_name: {
+            node.func.attr
+            for node in ast.walk(
+                next(
+                    node
+                    for node in panel_class.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == method_name
+                )
+            )
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_style_controller"
+        }
+        for method_name in {"_current_karaoke_colors", "_current_scheme_snapshot"}
+    }
+    assert snapshot_delegates == {
+        "_current_karaoke_colors": {"current_karaoke_colors"},
+        "_current_scheme_snapshot": {"snapshot"},
+    }
 
     panel_functions = {
         node.name
@@ -508,7 +530,11 @@ def test_property_panel_delegates_normalized_style_updates() -> None:
         "_normalize_lit_style",
         "_normalize_lit_transition_mode",
         "_normalize_viewport_align",
+        "_legacy_after_text_fill",
+        "_legacy_colors_from_panel",
         "_scheme_has_legacy_color_values",
+        "_scheme_from_current",
+        "_style_scheme_changes",
     }.isdisjoint(panel_functions)
 
     targets = _import_targets(

@@ -283,6 +283,16 @@ def test_property_style_controller_resolves_role_inheritance_and_legacy_colors()
     assert controller.value(style, "N3", "font_family_latin") is None
     assert controller.value(style, None, "font_family_latin") == "Global Latin"
 
+    snapshot = controller.snapshot(style, "Lead")
+    assert snapshot.font_size_px == 54
+    assert snapshot.font_family_latin is None
+    assert snapshot.karaoke_colors is not None
+    assert snapshot.karaoke_colors.before.text.color == "#123456"
+    assert snapshot.n3_font_inheritance is False
+    assert controller.changes_from_scheme(
+        SubtitleStyleScheme(font_size_px=48, italic=None)
+    ) == {"font_size_px": 48}
+
 
 def test_property_panel_uses_fluent_checkboxes(qapp):
     panel = PropertyPanel()

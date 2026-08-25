@@ -97,7 +97,6 @@ from krok_helper.subtitle_render.domain.paint import (
     ColorLayerKey,
     ColorStateKey,
     KaraokeColors,
-    KaraokeColorState,
     PaintFill,
 )
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
@@ -5373,10 +5372,16 @@ class PropertyPanel(QWidget):
         return max(value, 0)
 
     def _current_karaoke_colors(self) -> KaraokeColors:
-        value = self._scheme_value("karaoke_colors")
-        if isinstance(value, KaraokeColors):
-            return deepcopy(value)
-        return _legacy_colors_from_panel(self)
+        return self._style_controller.current_karaoke_colors(
+            self._style,
+            self._current_custom_scheme_name(),
+        )
+
+    def _current_scheme_snapshot(self) -> SubtitleStyleScheme:
+        return self._style_controller.snapshot(
+            self._style,
+            self._current_custom_scheme_name(),
+        )
 
     def _current_ruby_karaoke_colors(self) -> KaraokeColors:
         if bool(self._scheme_value("ruby_colors_follow_main")):
@@ -5716,7 +5721,7 @@ class PropertyPanel(QWidget):
         while name in schemes:
             name = f"{original} {suffix}"
             suffix += 1
-        schemes[name] = _scheme_from_current(self)
+        schemes[name] = self._current_scheme_snapshot()
         previous_roles = self._role_controller.names
         self._role_controller.add(name)
         self._update_style(custom_style_schemes=schemes)
@@ -5732,7 +5737,7 @@ class PropertyPanel(QWidget):
     def _open_preset_manager(self) -> None:
         dialog = StylePresetManagerDialog(
             presets=self._preset_schemes,
-            current_scheme=_scheme_from_current(self),
+            current_scheme=self._current_scheme_snapshot(),
             target_label=self._current_target_label(),
             existing_role_names=set(self._role_controller.names)
             | {TITLE_SCHEME_NAME},
@@ -5793,7 +5798,7 @@ class PropertyPanel(QWidget):
         presets[preset_id] = StylePreset(
             name=name,
             group=group,
-            scheme=deepcopy(_scheme_from_current(self)),
+            scheme=deepcopy(self._current_scheme_snapshot()),
             preset_id=preset_id,
         )
         self._preset_schemes = presets
@@ -5845,7 +5850,7 @@ class PropertyPanel(QWidget):
         self._sync_subtitle_scheme_controls()
 
     def _ensure_role_schemes(self) -> None:
-        base_scheme = _scheme_from_current(self)
+        base_scheme = self._current_scheme_snapshot()
         self._style, changed = self._role_controller.ensure_style_schemes(
             self._style,
             self._preset_schemes,
@@ -5870,7 +5875,7 @@ class PropertyPanel(QWidget):
             if self._role_controller.names != previous_roles:
                 self.rolesChanged.emit(self._role_controller.names)
             return
-        changes = _style_scheme_changes(scheme)
+        changes = self._style_controller.changes_from_scheme(scheme)
         if changes:
             self._update_style(**changes)
 
@@ -5951,7 +5956,7 @@ class PropertyPanel(QWidget):
             )
             return
         schemes = dict(self._style.custom_style_schemes)
-        scheme = schemes.get(old) or _scheme_from_current(self)
+        scheme = schemes.get(old) or self._current_scheme_snapshot()
         if old in schemes:
             del schemes[old]
         schemes[new] = scheme
@@ -6179,7 +6184,7 @@ class PropertyPanel(QWidget):
             changes,
             role_name=self._current_custom_scheme_name(),
             force_global=_force_global,
-            scheme_factory=lambda: _scheme_from_current(self),
+            scheme_factory=self._current_scheme_snapshot,
         )
         self._style = result.style
         changes = result.changed_fields
@@ -6364,45 +6369,6 @@ def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
     return replace(fill, **changes)
 
 
-def _legacy_colors_from_panel(panel: PropertyPanel) -> KaraokeColors:
-    before = KaraokeColorState(
-        text=_solid_fill(str(panel._scheme_value("base_color"))),
-        stroke=_solid_fill(str(panel._scheme_value("stroke_color"))),
-        stroke2=_solid_fill("#000000"),
-        shadow=_solid_fill(str(panel._scheme_value("shadow_color"))),
-    )
-    after = KaraokeColorState(
-        text=_legacy_after_text_fill(panel),
-        stroke=_solid_fill(str(panel._scheme_value("stroke_color"))),
-        stroke2=_solid_fill("#000000"),
-        shadow=_solid_fill(str(panel._scheme_value("shadow_color"))),
-    )
-    return KaraokeColors(before=before, after=after)
-
-
-def _legacy_after_text_fill(panel: PropertyPanel) -> PaintFill:
-    fill_color = str(panel._scheme_value("fill_color"))
-    if not bool(panel._scheme_value("fill_gradient_enabled")):
-        return _solid_fill(fill_color)
-    mode = (
-        "gradient_vertical"
-        if int(panel._scheme_value("fill_gradient_angle_deg")) in {90, 270}
-        else "gradient_horizontal"
-    )
-    return PaintFill(
-        mode=mode,
-        color=fill_color,
-        start_color=str(panel._scheme_value("fill_gradient_start_color")),
-        end_color=str(panel._scheme_value("fill_gradient_end_color")),
-        gradient_stops=[
-            (0, str(panel._scheme_value("fill_gradient_start_color"))),
-            (100, str(panel._scheme_value("fill_gradient_end_color"))),
-        ],
-        split_top_color=str(panel._scheme_value("fill_gradient_start_color")),
-        split_bottom_color=str(panel._scheme_value("fill_gradient_end_color")),
-    )
-
-
 def _apply_legacy_color_to_matrix(
     colors: KaraokeColors, field_name: str, color: str
 ) -> Optional[KaraokeColors]:
@@ -6448,104 +6414,6 @@ def _solid_fill(color: str) -> PaintFill:
         split_top_color=color,
         split_bottom_color=color,
     )
-
-
-def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
-    """把当前选中的方案快照成一个独立方案（新建角色、存预设都走这里）。
-
-    子槽（英数 / 注音那 17 项）读方案**自己**的值：它们的 ``None`` 是「跟随
-    上一级」，用最终生效值去填会把跟随物化成一个死数字 —— 复制出来的新角色
-    从此不再跟着日文字号走。
-    """
-    current_name = panel._current_custom_scheme_name()
-    current_scheme = (
-        panel._style.custom_style_schemes.get(current_name)
-        if current_name is not None
-        else None
-    )
-    return SubtitleStyleScheme(
-        font_family=str(panel._scheme_value("font_family")),
-        font_family_latin=panel._scheme_own_value("font_family_latin"),
-        font_size_px=int(panel._scheme_value("font_size_px")),
-        latin_font_size_px=panel._scheme_own_value("latin_font_size_px"),
-        latin_font_weight=panel._scheme_own_value("latin_font_weight"),
-        latin_stroke_width_px=panel._scheme_own_value("latin_stroke_width_px"),
-        latin_stroke2_enabled=panel._scheme_own_value("latin_stroke2_enabled"),
-        latin_stroke2_width_px=panel._scheme_own_value("latin_stroke2_width_px"),
-        letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
-        space_width_percent=int(panel._scheme_value("space_width_percent")),
-        allow_biting=bool(panel._scheme_value("allow_biting")),
-        font_weight=int(panel._scheme_value("font_weight")),
-        italic=bool(panel._scheme_value("italic")),
-        affects_ruby_anchor=bool(panel._scheme_value("affects_ruby_anchor")),
-        base_color=str(panel._scheme_value("base_color")),
-        fill_color=str(panel._scheme_value("fill_color")),
-        fill_gradient_enabled=bool(panel._scheme_value("fill_gradient_enabled")),
-        fill_gradient_start_color=str(panel._scheme_value("fill_gradient_start_color")),
-        fill_gradient_end_color=str(panel._scheme_value("fill_gradient_end_color")),
-        fill_gradient_angle_deg=int(panel._scheme_value("fill_gradient_angle_deg")),
-        stroke_color=str(panel._scheme_value("stroke_color")),
-        stroke_width_px=int(panel._scheme_value("stroke_width_px")),
-        stroke2_enabled=bool(panel._scheme_value("stroke2_enabled")),
-        stroke2_width_px=int(panel._scheme_value("stroke2_width_px")),
-        decoration_kind=_normalize_decoration_kind(panel._scheme_value("decoration_kind")),
-        glow_radius_px=int(panel._scheme_value("glow_before_radius_px")),
-        glow_before_radius_px=int(panel._scheme_value("glow_before_radius_px")),
-        glow_after_radius_px=int(panel._scheme_value("glow_after_radius_px")),
-        glow_concentration_level=int(panel._scheme_value("glow_concentration_level")),
-        shadow_color=str(panel._scheme_value("shadow_color")),
-        shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
-        shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
-        ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
-        ruby_font_family=panel._scheme_own_value("ruby_font_family"),
-        ruby_font_family_latin=panel._scheme_own_value("ruby_font_family_latin"),
-        ruby_font_weight=panel._scheme_own_value("ruby_font_weight"),
-        ruby_latin_font_size_px=panel._scheme_own_value("ruby_latin_font_size_px"),
-        ruby_latin_font_weight=panel._scheme_own_value("ruby_latin_font_weight"),
-        ruby_font_follow_main=bool(panel._scheme_value("ruby_font_follow_main")),
-        ruby_color=str(panel._scheme_value("ruby_color")),
-        ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
-        ruby_stroke_width_px=panel._scheme_own_value("ruby_stroke_width_px"),
-        ruby_stroke2_enabled=panel._scheme_own_value("ruby_stroke2_enabled"),
-        ruby_stroke2_width_px=panel._scheme_own_value("ruby_stroke2_width_px"),
-        ruby_latin_stroke_width_px=panel._scheme_own_value(
-            "ruby_latin_stroke_width_px"
-        ),
-        ruby_latin_stroke2_enabled=panel._scheme_own_value(
-            "ruby_latin_stroke2_enabled"
-        ),
-        ruby_latin_stroke2_width_px=panel._scheme_own_value(
-            "ruby_latin_stroke2_width_px"
-        ),
-        ruby_decoration_kind=panel._scheme_value("ruby_decoration_kind"),
-        ruby_glow_radius_px=panel._scheme_value("ruby_glow_radius_px"),
-        ruby_glow_before_radius_px=panel._scheme_value("ruby_glow_before_radius_px"),
-        ruby_glow_after_radius_px=panel._scheme_value("ruby_glow_after_radius_px"),
-        ruby_glow_concentration_level=panel._scheme_value(
-            "ruby_glow_concentration_level"
-        ),
-        ruby_shadow_offset_x=panel._scheme_value("ruby_shadow_offset_x"),
-        ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
-        ruby_colors_follow_main=bool(
-            panel._scheme_value("ruby_colors_follow_main")
-        ),
-        ruby_horizontal_gradient_with_main=bool(
-            panel._scheme_value("ruby_horizontal_gradient_with_main")
-        ),
-        karaoke_colors=panel._current_karaoke_colors(),
-        ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),
-        n3_font_inheritance=bool(
-            current_scheme is not None and current_scheme.n3_font_inheritance
-        ),
-    )
-
-
-def _style_scheme_changes(scheme: SubtitleStyleScheme) -> dict[str, object]:
-    return {
-        field: value
-        for field in _SCHEME_FIELDS
-        if (value := getattr(scheme, field)) is not None
-    }
 
 
 def _auto_role_scheme(base: SubtitleStyleScheme, index: int) -> SubtitleStyleScheme:

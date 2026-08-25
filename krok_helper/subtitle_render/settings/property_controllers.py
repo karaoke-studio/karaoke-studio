@@ -29,6 +29,11 @@ from krok_helper.subtitle_render.domain.timing import (
     ExitAnimation,
     KaraokeAnimation,
 )
+from krok_helper.subtitle_render.domain.paint import (
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
+)
 
 
 SCHEME_ONLY_FIELDS = frozenset({"n3_font_inheritance"})
@@ -141,6 +146,97 @@ class PropertyStyleController:
         scheme = style.custom_style_schemes.get(role_name)
         return getattr(scheme, field_name, None) if scheme is not None else None
 
+    def current_karaoke_colors(
+        self,
+        style: Style,
+        role_name: str | None,
+    ) -> KaraokeColors:
+        """Return a detached color matrix, migrating legacy fields on demand."""
+        value = self.value(style, role_name, "karaoke_colors")
+        if isinstance(value, KaraokeColors):
+            return deepcopy(value)
+        return self._legacy_colors(style, role_name)
+
+    def snapshot(
+        self,
+        style: Style,
+        role_name: str | None,
+    ) -> SubtitleStyleScheme:
+        """Detach the selected effective scheme without materializing inheritance."""
+        values = {
+            field: deepcopy(
+                self.own_value(style, role_name, field)
+                if field in N3_FONT_INHERITANCE_FIELDS
+                else self.value(style, role_name, field)
+            )
+            for field in SCHEME_FIELDS
+        }
+        values["decoration_kind"] = normalize_decoration_kind(
+            values["decoration_kind"]
+        )
+        values["glow_radius_px"] = int(values["glow_before_radius_px"])
+        values["karaoke_colors"] = self.current_karaoke_colors(style, role_name)
+        current = (
+            style.custom_style_schemes.get(role_name)
+            if role_name is not None
+            else None
+        )
+        values["n3_font_inheritance"] = bool(
+            current is not None and current.n3_font_inheritance
+        )
+        return SubtitleStyleScheme(**values)
+
+    @staticmethod
+    def changes_from_scheme(scheme: SubtitleStyleScheme) -> dict[str, object]:
+        """Project a reusable scheme onto the editable global style fields."""
+        return {
+            field: value
+            for field in SCHEME_FIELDS
+            if (value := getattr(scheme, field)) is not None
+        }
+
+    def _legacy_colors(
+        self,
+        style: Style,
+        role_name: str | None,
+    ) -> KaraokeColors:
+        stroke = _solid_fill(str(self.value(style, role_name, "stroke_color")))
+        shadow = _solid_fill(str(self.value(style, role_name, "shadow_color")))
+        before = KaraokeColorState(
+            text=_solid_fill(str(self.value(style, role_name, "base_color"))),
+            stroke=stroke,
+            stroke2=_solid_fill("#000000"),
+            shadow=shadow,
+        )
+        after = KaraokeColorState(
+            text=self._legacy_after_text_fill(style, role_name),
+            stroke=deepcopy(stroke),
+            stroke2=_solid_fill("#000000"),
+            shadow=deepcopy(shadow),
+        )
+        return KaraokeColors(before=before, after=after)
+
+    def _legacy_after_text_fill(
+        self,
+        style: Style,
+        role_name: str | None,
+    ) -> PaintFill:
+        fill_color = str(self.value(style, role_name, "fill_color"))
+        if not bool(self.value(style, role_name, "fill_gradient_enabled")):
+            return _solid_fill(fill_color)
+        start = str(self.value(style, role_name, "fill_gradient_start_color"))
+        end = str(self.value(style, role_name, "fill_gradient_end_color"))
+        angle = int(self.value(style, role_name, "fill_gradient_angle_deg"))
+        return PaintFill(
+            mode="gradient_vertical" if angle in {90, 270} else "gradient_horizontal",
+            color=fill_color,
+            start_color=start,
+            end_color=end,
+            gradient_stops=[(0, start), (100, end)],
+            split_top_color=start,
+            split_bottom_color=end,
+        )
+
     def update(
         self,
         style: Style,
@@ -250,6 +346,18 @@ def scheme_has_legacy_color_values(scheme: SubtitleStyleScheme) -> bool:
             "stroke_color",
             "shadow_color",
         )
+    )
+
+
+def _solid_fill(color: str) -> PaintFill:
+    return PaintFill(
+        mode="solid",
+        color=color,
+        start_color=color,
+        end_color=color,
+        gradient_stops=[(0, color), (100, color)],
+        split_top_color=color,
+        split_bottom_color=color,
     )
 
 
