@@ -2191,10 +2191,6 @@ def test_subtitle_render_window_delegates_export_job_assembly() -> None:
 def test_property_frontend_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
         "property_panel.py",
-        "property_role_color_page.py",
-        "property_role_fill_pages.py",
-        "property_role_font_page.py",
-        "property_role_page.py",
     }
     properties_root = ROOT / "frontend" / "properties"
     assert {"__init__.py", *module_names} <= {
@@ -2208,6 +2204,19 @@ def test_property_frontend_modules_are_grouped_in_one_domain_package() -> None:
     assert not any(
         (properties_root / name).exists()
         for name in {"property_inputs.py", "property_layout.py", "property_widgets.py"}
+    )
+    roles_root = properties_root / "roles"
+    assert {"__init__.py", "color.py", "fills.py", "font.py", "page.py"} <= {
+        path.name for path in roles_root.glob("*.py")
+    }
+    assert not any(
+        (properties_root / name).exists()
+        for name in {
+            "property_role_color_page.py",
+            "property_role_fill_pages.py",
+            "property_role_font_page.py",
+            "property_role_page.py",
+        }
     )
     pages_root = properties_root / "pages"
     assert {
@@ -2645,7 +2654,7 @@ def test_subtitle_property_panel_delegates_role_page_composition() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_role_page" in targets
+    assert f"{PACKAGE}.frontend.properties.roles.page" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2698,7 +2707,7 @@ def test_subtitle_property_panel_delegates_role_font_settings_page() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_role_font_page" in targets
+    assert f"{PACKAGE}.frontend.properties.roles.font" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2727,7 +2736,7 @@ def test_subtitle_property_panel_delegates_role_color_construction() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_role_color_page" in targets
+    assert f"{PACKAGE}.frontend.properties.roles.color" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2755,7 +2764,7 @@ def test_subtitle_property_panel_delegates_solid_fill_editor() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_role_fill_pages" in targets
+    assert f"{PACKAGE}.frontend.properties.roles.fills" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node

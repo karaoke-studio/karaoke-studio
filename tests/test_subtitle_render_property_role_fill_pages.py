@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import QPushButton
 
-from krok_helper.subtitle_render.frontend.properties.property_role_fill_pages import (
+from krok_helper.subtitle_render.frontend.properties.roles.fills import (
     RoleFillPagesBuilder,
 )
 

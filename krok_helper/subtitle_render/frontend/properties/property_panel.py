@@ -144,16 +144,16 @@ from krok_helper.subtitle_render.frontend.properties.pages.effects import (
 from krok_helper.subtitle_render.frontend.properties.pages.layout import (
     LayoutPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_role_page import (
+from krok_helper.subtitle_render.frontend.properties.roles.page import (
     RolePropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_role_font_page import (
+from krok_helper.subtitle_render.frontend.properties.roles.font import (
     RoleFontSettingsPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_role_color_page import (
+from krok_helper.subtitle_render.frontend.properties.roles.color import (
     RoleColorPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_role_fill_pages import (
+from krok_helper.subtitle_render.frontend.properties.roles.fills import (
     RoleFillPagesBuilder,
 )
 from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
