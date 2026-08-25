@@ -3188,6 +3188,7 @@ def test_workflow_frontend_modules_are_grouped_in_one_domain_package() -> None:
         "background_tasks.py",
         "export_controller.py",
         "export_runtime.py",
+        "export_view.py",
         "import_controller.py",
     }
     workflow_root = ROOT / "frontend" / "workflow"
@@ -3195,6 +3196,70 @@ def test_workflow_frontend_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in workflow_root.glob("*.py")
     }
     assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
+def test_export_view_has_one_frontend_owner() -> None:
+    owner = f"{PACKAGE}.frontend.workflow.export_view"
+    export_view_path = ROOT / "frontend/workflow/export_view.py"
+    window_path = ROOT / "frontend/main_window.py"
+    export_view_tree = ast.parse(export_view_path.read_text(encoding="utf-8-sig"))
+    window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "EXPORT_DIR_CUSTOM": None,
+        "EXPORT_DIR_SOURCE_VIDEO": None,
+        "EXPORT_PREVIEW_DEFAULT_WIDTH": "_EXPORT_PREVIEW_DEFAULT_WIDTH",
+        "EXPORT_PREVIEW_MIN_WIDTH": "_EXPORT_PREVIEW_MIN_WIDTH",
+        "ExportLocationDialog": "_ExportLocationDialog",
+        "ExportMonitorView": "_ExportMonitorView",
+        "export_preview_width": "_export_preview_width",
+        "format_elapsed_seconds": "_format_elapsed_seconds",
+        "format_eta_seconds": "_format_eta_seconds",
+        "format_warning_lines": "_format_warning_lines",
+        "physical_preview_size": "_physical_preview_size",
+        "scaled_preview_pixmap": "_scaled_preview_pixmap",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in aliases
+    }
+    export_members = {
+        node.name
+        for node in export_view_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    export_members.update(
+        target.id
+        for node in export_view_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+        if isinstance(target, ast.Name)
+    )
+    window_members = {
+        node.name
+        for node in window_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    window_members.update(
+        target.id
+        for node in window_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+        if isinstance(target, ast.Name)
+    )
+    compatibility_names = {alias or name for name, alias in aliases.items()}
+
+    assert imported == aliases
+    assert set(aliases) <= export_members
+    assert compatibility_names.isdisjoint(window_members)
+    targets = _import_targets(owner, export_view_path)
+    assert f"{PACKAGE}.frontend.main_window" not in targets
 
 
 def test_dialog_frontend_modules_are_grouped_in_one_domain_package() -> None:
