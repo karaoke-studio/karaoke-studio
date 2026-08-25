@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -24,10 +24,16 @@ from qfluentwidgets import (
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
     RadioButton as FluentRadioButton,
+    SimpleCardWidget,
+    SpinBox as FluentSpinBox,
     StrongBodyLabel,
 )
 
 from krok_helper.qfluent_compat import ModelessDialog
+from krok_helper.subtitle_render.engine.export.encoder_select import (
+    ENCODER_AUTO,
+    ENCODER_CPU,
+)
 from krok_helper.subtitle_render.domain.models import (
     DEFAULT_EXPORT_NAME_TEMPLATE,
     EXPORT_NAME_TEMPLATE_FIELDS,
@@ -42,6 +48,105 @@ EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
 EXPORT_PREVIEW_DEFAULT_WIDTH = 640
 EXPORT_PREVIEW_MIN_WIDTH = 320
+
+
+def make_card_icon_badge(icon: FIF) -> QLabel:
+    """Build the themed icon badge shared by export cards."""
+    badge = QLabel()
+    badge.setObjectName("SrExportCardBadge")
+    badge.setFixedSize(26, 26)
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def _qss() -> str:
+        # themed() 主题切换时重跑 factory，顺带把 pixmap 换成当前品牌色
+        p = palette()
+        badge.setPixmap(
+            icon.icon(color=QColor(p.accent_primary)).pixmap(QSize(14, 14))
+        )
+        tint = (
+            "rgba(255, 122, 140, 0.18)"
+            if p.is_dark
+            else "rgba(255, 90, 111, 0.12)"
+        )
+        return f"#SrExportCardBadge {{ background: {tint}; border-radius: 8px; }}"
+
+    themed(badge, _qss)
+    return badge
+
+
+def make_export_card(
+    title_text: str,
+    theme_labels: list[QWidget],
+    header_action: Optional[QWidget] = None,
+    icon: Optional[FIF] = None,
+) -> tuple[SimpleCardWidget, QVBoxLayout]:
+    """Build one export settings card while retaining themed labels."""
+    card = SimpleCardWidget()
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(20, 14, 20, 16)
+    layout.setSpacing(10)
+    header = StrongBodyLabel(title_text)
+    theme_labels.append(header)
+    header_row = QHBoxLayout()
+    header_row.setContentsMargins(0, 0, 0, 0)
+    header_row.setSpacing(8)
+    if icon is not None:
+        header_row.addWidget(
+            make_card_icon_badge(icon),
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+    header_row.addWidget(header)
+    header_row.addStretch(1)
+    if header_action is not None:
+        header_row.addWidget(header_action, 0, Qt.AlignmentFlag.AlignVCenter)
+    layout.addLayout(header_row)
+    return card, layout
+
+
+def make_export_spin(
+    minimum: int,
+    maximum: int,
+    value: int,
+    suffix: str,
+) -> FluentSpinBox:
+    """Build an export numeric field with the established dimensions."""
+    spin = FluentSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setValue(value)
+    spin.setSuffix(suffix)
+    spin.setMinimumHeight(32)
+    return spin
+
+
+def make_labeled_export_control(
+    label_text: str,
+    control: QWidget,
+    theme_labels: list[QWidget],
+) -> QWidget:
+    """Wrap an export control with its retained semantic caption."""
+    box = QWidget()
+    # 工作台全局 QSS 会给裸 QWidget 刷底色，在白色卡片里会显出灰块
+    box.setObjectName("SrExportFieldBox")
+    themed(box, lambda: "#SrExportFieldBox { background: transparent; }")
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(4)
+    label = CaptionLabel(label_text)
+    theme_labels.append(label)
+    layout.addWidget(label)
+    layout.addWidget(control)
+    return box
+
+
+def sync_export_preset_enabled(encoder_combo, preset_combo) -> None:
+    """Apply the existing CPU-preset availability rule to export controls."""
+    mode = str(encoder_combo.currentData() or ENCODER_CPU)
+    cpu_possible = mode in (ENCODER_CPU, ENCODER_AUTO)
+    preset_combo.setEnabled(cpu_possible)
+    preset_combo.setToolTip(
+        "" if cpu_possible else "CPU preset 仅在 CPU / libx264 编码时生效。"
+    )
 
 
 class ExportLocationDialog(ModelessDialog):
@@ -325,6 +430,11 @@ __all__ = [
     "format_elapsed_seconds",
     "format_eta_seconds",
     "format_warning_lines",
+    "make_card_icon_badge",
+    "make_export_card",
+    "make_export_spin",
+    "make_labeled_export_control",
     "physical_preview_size",
     "scaled_preview_pixmap",
+    "sync_export_preset_enabled",
 ]

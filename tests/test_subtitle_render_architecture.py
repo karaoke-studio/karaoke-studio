@@ -3218,12 +3218,26 @@ def test_export_view_has_one_frontend_owner() -> None:
         "physical_preview_size": "_physical_preview_size",
         "scaled_preview_pixmap": "_scaled_preview_pixmap",
     }
+    builder_helpers = {
+        "make_card_icon_badge",
+        "make_export_card",
+        "make_export_spin",
+        "make_labeled_export_control",
+        "sync_export_preset_enabled",
+    }
     imported = {
         alias.name: alias.asname
         for node in window_tree.body
         if isinstance(node, ast.ImportFrom) and node.module == owner
         for alias in node.names
         if alias.name in aliases
+    }
+    imported_helpers = {
+        alias.name
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in builder_helpers and alias.asname is None
     }
     export_members = {
         node.name
@@ -3256,8 +3270,15 @@ def test_export_view_has_one_frontend_owner() -> None:
     compatibility_names = {alias or name for name, alias in aliases.items()}
 
     assert imported == aliases
-    assert set(aliases) <= export_members
+    assert imported_helpers == builder_helpers
+    assert set(aliases) | builder_helpers <= export_members
     assert compatibility_names.isdisjoint(window_members)
+    assert {
+        "_export_spin",
+        "_labeled_export_control",
+        "_make_card_icon_badge",
+        "_make_export_card",
+    }.isdisjoint(window_members)
     targets = _import_targets(owner, export_view_path)
     assert f"{PACKAGE}.frontend.main_window" not in targets
 

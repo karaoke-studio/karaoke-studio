@@ -85,7 +85,6 @@ from qfluentwidgets import (
     PushButton as FluentPushButton,
     RoundMenu,
     SimpleCardWidget,
-    SpinBox as FluentSpinBox,
     StrongBodyLabel,
     ToolButton as FluentToolButton,
     TitleLabel,
@@ -199,8 +198,13 @@ from krok_helper.subtitle_render.frontend.workflow.export_view import (
     format_elapsed_seconds as _format_elapsed_seconds,
     format_eta_seconds as _format_eta_seconds,
     format_warning_lines as _format_warning_lines,
+    make_card_icon_badge,
+    make_export_card,
+    make_export_spin,
+    make_labeled_export_control,
     physical_preview_size as _physical_preview_size,
     scaled_preview_pixmap as _scaled_preview_pixmap,
+    sync_export_preset_enabled,
 )
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.editor.edit_history import (
@@ -2504,8 +2508,11 @@ class SubtitleRenderWindow(QWidget):
         self._export_location_settings_button.clicked.connect(
             self._open_export_location_settings
         )
-        output_card, output_layout = self._make_export_card(
-            "输出文件", self._export_location_settings_button, icon=FIF.SAVE_AS
+        output_card, output_layout = make_export_card(
+            "输出文件",
+            self._export_theme_labels,
+            self._export_location_settings_button,
+            icon=FIF.SAVE_AS,
         )
         dir_row = QHBoxLayout()
         dir_row.setContentsMargins(0, 0, 0, 0)
@@ -2551,8 +2558,10 @@ class SubtitleRenderWindow(QWidget):
         settings_layout.addWidget(output_card)
 
         # 卡片 2：画面与编码
-        params_card, params_layout = self._make_export_card(
-            "画面与编码", icon=FIF.VIDEO
+        params_card, params_layout = make_export_card(
+            "画面与编码",
+            self._export_theme_labels,
+            icon=FIF.VIDEO,
         )
         sync_hint = QLabel("宽度 / 高度 / 帧率与预览页的「画面」设置双向联动。")
         sync_hint.setObjectName("SrExportSyncHint")
@@ -2573,8 +2582,8 @@ class SubtitleRenderWindow(QWidget):
         params_row.setContentsMargins(0, 0, 0, 0)
         params_row.setSpacing(10)
         # 字段上方已有 CaptionLabel 标签，SpinBox 不再重复「宽/高」后缀
-        self._export_width_spin = self._export_spin(160, 7680, 1920, "")
-        self._export_height_spin = self._export_spin(90, 4320, 1080, "")
+        self._export_width_spin = make_export_spin(160, 7680, 1920, "")
+        self._export_height_spin = make_export_spin(90, 4320, 1080, "")
         # 关闭键盘跟踪：逐字键入不逐键提交中间值。高度变化会按 N3 语义
         # 比例重算字号/余白，重算用 int() 截断、链式应用不等于一次应用
         # （1080 → 键入 "1440" 的中间值 144 → 1440 会得到 130px 字号，
@@ -2585,9 +2594,21 @@ class SubtitleRenderWindow(QWidget):
         self._export_fps_combo.setMinimumHeight(32)
         for fps in SCREEN_FPS_OPTIONS:
             self._export_fps_combo.addItem(f"{fps} fps", userData=fps)
-        params_row.addWidget(self._labeled_export_control("宽度", self._export_width_spin))
-        params_row.addWidget(self._labeled_export_control("高度", self._export_height_spin))
-        params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_combo))
+        params_row.addWidget(
+            make_labeled_export_control(
+                "宽度", self._export_width_spin, self._export_theme_labels
+            )
+        )
+        params_row.addWidget(
+            make_labeled_export_control(
+                "高度", self._export_height_spin, self._export_theme_labels
+            )
+        )
+        params_row.addWidget(
+            make_labeled_export_control(
+                "帧率", self._export_fps_combo, self._export_theme_labels
+            )
+        )
         params_layout.addLayout(params_row)
 
         encode_row = QHBoxLayout()
@@ -2613,8 +2634,16 @@ class SubtitleRenderWindow(QWidget):
         self._export_codec_combo.currentIndexChanged.connect(
             self._refresh_export_format_label
         )
-        encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
-        encode_row.addWidget(self._labeled_export_control("视频编码", self._export_codec_combo))
+        encode_row.addWidget(
+            make_labeled_export_control(
+                "编码器", self._export_encoder_combo, self._export_theme_labels
+            )
+        )
+        encode_row.addWidget(
+            make_labeled_export_control(
+                "视频编码", self._export_codec_combo, self._export_theme_labels
+            )
+        )
         params_layout.addLayout(encode_row)
 
         quality_row = QHBoxLayout()
@@ -2625,10 +2654,18 @@ class SubtitleRenderWindow(QWidget):
         for preset in CPU_PRESETS:
             self._export_preset_combo.addItem(preset, userData=preset)
         self._export_preset_combo.setCurrentText("medium")
-        self._export_crf_spin = self._export_spin(0, 51, 18, "")
+        self._export_crf_spin = make_export_spin(0, 51, 18, "")
         self._export_crf_spin.setToolTip("CRF 质量：数值越小画质越高、文件越大；18 约为视觉无损。")
-        quality_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
-        quality_row.addWidget(self._labeled_export_control("质量 (CRF)", self._export_crf_spin))
+        quality_row.addWidget(
+            make_labeled_export_control(
+                "CPU preset", self._export_preset_combo, self._export_theme_labels
+            )
+        )
+        quality_row.addWidget(
+            make_labeled_export_control(
+                "质量 (CRF)", self._export_crf_spin, self._export_theme_labels
+            )
+        )
         params_layout.addLayout(quality_row)
 
         self._export_render_workers_combo = FluentComboBox()
@@ -2643,8 +2680,10 @@ class SubtitleRenderWindow(QWidget):
             "进程越多不一定越快，且会明显增加内存占用。"
         )
         params_layout.addWidget(
-            self._labeled_export_control(
-                "渲染进程", self._export_render_workers_combo
+            make_labeled_export_control(
+                "渲染进程",
+                self._export_render_workers_combo,
+                self._export_theme_labels,
             )
         )
         settings_layout.addWidget(params_card)
@@ -2688,7 +2727,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_eta_label = CaptionLabel("")
         monitor_header.setSpacing(8)
         monitor_header.addWidget(
-            self._make_card_icon_badge(FIF.MOVIE), 0, Qt.AlignmentFlag.AlignVCenter
+            make_card_icon_badge(FIF.MOVIE), 0, Qt.AlignmentFlag.AlignVCenter
         )
         monitor_header.addWidget(monitor_title)
         monitor_header.addStretch(1)
@@ -2764,85 +2803,11 @@ class SubtitleRenderWindow(QWidget):
         self._update_export_preset_enabled()
         return page
 
-    def _make_export_card(
-        self,
-        title_text: str,
-        header_action: Optional[QWidget] = None,
-        icon: Optional[FIF] = None,
-    ) -> tuple[SimpleCardWidget, QVBoxLayout]:
-        card = SimpleCardWidget()
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 14, 20, 16)
-        layout.setSpacing(10)
-        header = StrongBodyLabel(title_text)
-        self._export_theme_labels.append(header)
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(8)
-        if icon is not None:
-            header_row.addWidget(
-                self._make_card_icon_badge(icon), 0, Qt.AlignmentFlag.AlignVCenter
-            )
-        header_row.addWidget(header)
-        header_row.addStretch(1)
-        if header_action is not None:
-            header_row.addWidget(header_action, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addLayout(header_row)
-        return card, layout
-
-    def _make_card_icon_badge(self, icon: FIF) -> QLabel:
-        badge = QLabel()
-        badge.setObjectName("SrExportCardBadge")
-        badge.setFixedSize(26, 26)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        def _qss() -> str:
-            # themed() 主题切换时重跑 factory，顺带把 pixmap 换成当前品牌色
-            p = palette()
-            badge.setPixmap(
-                icon.icon(color=QColor(p.accent_primary)).pixmap(QSize(14, 14))
-            )
-            tint = (
-                "rgba(255, 122, 140, 0.18)" if p.is_dark else "rgba(255, 90, 111, 0.12)"
-            )
-            return f"#SrExportCardBadge {{ background: {tint}; border-radius: 8px; }}"
-
-        themed(badge, _qss)
-        return badge
-
     def _update_export_preset_enabled(self) -> None:
-        # CPU preset 只影响 libx264；「自动硬编」可能回退 CPU，保持可编辑。
-        mode = str(self._export_encoder_combo.currentData() or ENCODER_CPU)
-        cpu_possible = mode in (ENCODER_CPU, ENCODER_AUTO)
-        self._export_preset_combo.setEnabled(cpu_possible)
-        self._export_preset_combo.setToolTip(
-            "" if cpu_possible else "CPU preset 仅在 CPU / libx264 编码时生效。"
+        sync_export_preset_enabled(
+            self._export_encoder_combo,
+            self._export_preset_combo,
         )
-
-    @staticmethod
-    def _export_spin(
-        minimum: int, maximum: int, value: int, suffix: str
-    ) -> FluentSpinBox:
-        spin = FluentSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setValue(value)
-        spin.setSuffix(suffix)
-        spin.setMinimumHeight(32)
-        return spin
-
-    def _labeled_export_control(self, label_text: str, control: QWidget) -> QWidget:
-        box = QWidget()
-        # 工作台全局 QSS 会给裸 QWidget 刷底色，在白色卡片里会显出灰块
-        box.setObjectName("SrExportFieldBox")
-        themed(box, lambda: "#SrExportFieldBox { background: transparent; }")
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        label = CaptionLabel(label_text)
-        self._export_theme_labels.append(label)
-        layout.addWidget(label)
-        layout.addWidget(control)
-        return box
 
     # ------------------------------------------------------------------ browse fallback
 
