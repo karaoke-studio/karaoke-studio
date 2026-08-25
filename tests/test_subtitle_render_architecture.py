@@ -1418,6 +1418,7 @@ def test_export_engine_modules_are_grouped_in_one_domain_package() -> None:
 
 def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
+        "frame_analysis.py",
         "image_resource.py",
         "render_bands.py",
         "render_ir.py",
@@ -1485,6 +1486,40 @@ def test_painter_delegates_layout_cache_keys() -> None:
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         f"{PACKAGE}.engine.render.core.cache_keys",
         cache_path,
+    )
+
+
+def test_painter_delegates_frame_analysis() -> None:
+    painter_path = ROOT / "engine" / "painter.py"
+    analysis_path = ROOT / "engine" / "render" / "frame_analysis.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    window_functions = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name
+        in {"frame_content_intervals", "frame_has_content", "frame_vertical_bounds"}
+    }
+    expected_calls = {
+        "frame_content_intervals": "_analyze_frame_content_intervals",
+        "frame_has_content": "_analyze_frame_has_content",
+        "frame_vertical_bounds": "_analyze_frame_vertical_bounds",
+    }
+    for function_name, delegated_call in expected_calls.items():
+        calls = {
+            node.func.id
+            for node in ast.walk(window_functions[function_name])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert delegated_call in calls
+
+    assert f"{PACKAGE}.engine.render.frame_analysis" in _import_targets(
+        f"{PACKAGE}.engine.painter",
+        painter_path,
+    )
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        f"{PACKAGE}.engine.render.frame_analysis",
+        analysis_path,
     )
 
 

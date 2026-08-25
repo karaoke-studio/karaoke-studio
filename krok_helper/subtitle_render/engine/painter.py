@@ -132,6 +132,12 @@ from krok_helper.subtitle_render.engine.render.core.cache_keys import (
     line_layout_signature as _line_layout_signature,
     track_layout_signature as _track_layout_signature,
 )
+from krok_helper.subtitle_render.engine.render.frame_analysis import (
+    FrameAnalysisPorts,
+    frame_content_intervals as _analyze_frame_content_intervals,
+    frame_has_content as _analyze_frame_has_content,
+    frame_vertical_bounds as _analyze_frame_vertical_bounds,
+)
 from krok_helper.subtitle_render.engine.value_signature import (
     value_signature as _value_signature,
 )
@@ -676,6 +682,51 @@ def _resolve_visible_content_with_plan(
     )
 
 
+def _frame_title_vertical_bounds(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    track_t_ms: int,
+    style: Style,
+    title_opacity: float,
+) -> tuple[int, int] | None:
+    resolved_title = resolve_title_overlay(style)
+    title_layout = _layout_title_overlay(
+        logical_w,
+        logical_h,
+        track,
+        resolved_title,
+        style=style,
+    )
+    if title_layout is None:
+        return None
+    return _TEXT_RUN_COMPOSITOR.vertical_bounds(
+        LayerContext(
+            t_ms=track_t_ms,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        ),
+        [
+            _make_title_overlay_layer(
+                title_layout,
+                resolved_title,
+                title_opacity,
+                ports=_TITLE_RENDER_PORTS,
+            )
+        ],
+    )
+
+
+def _frame_analysis_ports() -> FrameAnalysisPorts:
+    """Bind frame queries to the current Painter adapters."""
+
+    return FrameAnalysisPorts(
+        resolve_visible_content=_resolve_visible_content,
+        subtitle_vertical_bounds=_subtitle_lines_vertical_bounds,
+        title_vertical_bounds=_frame_title_vertical_bounds,
+    )
+
+
 def frame_has_content(
     track: Optional[TimingTrack],
     t_ms: int,
@@ -694,28 +745,16 @@ def frame_has_content(
     ``extra_tracks``：副字幕源（N3 多歌词文件，如コーラス轨）；任一轨有内容即为真。
     标题只随主轨。
     """
-    if track is not None:
-        _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(
-            track,
-            t_ms,
-            style,
-            duration_ms=duration_ms,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-        if display_lines or signal_lines or title_opacity > 0.0:
-            return True
-    for extra in extra_tracks or ():
-        _, _, display_lines, signal_lines, _unused = _resolve_visible_content(
-            extra,
-            t_ms,
-            style,
-            logical_w=logical_w,
-            logical_h=logical_h,
-        )
-        if display_lines or signal_lines:
-            return True
-    return False
+    return _analyze_frame_has_content(
+        track,
+        t_ms,
+        style,
+        extra_tracks,
+        duration_ms=duration_ms,
+        logical_w=logical_w,
+        logical_h=logical_h,
+        ports=_frame_analysis_ports(),
+    )
 
 
 def frame_content_intervals(
@@ -736,74 +775,16 @@ def frame_content_intervals(
     ``None`` for paths not yet migrated to layer bounds (竖排 / viewport 旋转 /
     逐字 transition)，调用方应回退到整帧 / alpha 扫描。
     """
-    track_entries: list[tuple[TimingTrack, bool]] = []
-    if track is not None:
-        track_entries.append((track, True))
-    track_entries.extend((extra, False) for extra in extra_tracks or ())
-    if not track_entries:
-        return None
-
-    intervals: list[tuple[int, int]] = []
-    any_content = False
-    for entry_track, with_title in track_entries:
-        track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
-            _resolve_visible_content(
-                entry_track,
-                t_ms,
-                style,
-                duration_ms=duration_ms if with_title else None,
-                logical_w=logical_w,
-                logical_h=logical_h,
-            )
-        )
-        if not with_title:
-            title_opacity = 0.0
-        if not display_lines and not signal_lines and title_opacity <= 0.0:
-            continue
-        any_content = True
-        if display_lines:
-            lyric_bounds = _subtitle_lines_vertical_bounds(
-                logical_w,
-                logical_h,
-                entry_track,
-                track_t_ms,
-                display_style,
-                display_lines,
-                signal_lines,
-            )
-            if lyric_bounds is None:
-                return None
-            intervals.append(lyric_bounds)
-
-        if with_title and title_opacity > 0.0 and style.title_overlay is not None:
-            resolved_title = resolve_title_overlay(style)
-            title_layout = _layout_title_overlay(
-                logical_w, logical_h, entry_track, resolved_title, style=style
-            )
-            if title_layout is not None:
-                title_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
-                    LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
-                    [
-                        _make_title_overlay_layer(
-                            title_layout,
-                            resolved_title,
-                            title_opacity,
-                            ports=_TITLE_RENDER_PORTS,
-                        )
-                    ],
-                )
-                if title_bounds is not None:
-                    intervals.append(title_bounds)
-
-    if not any_content:
-        return None
-    clamped: list[tuple[int, int]] = []
-    for top, bottom in intervals:
-        ct = max(0, top)
-        cb = min(logical_h - 1, bottom)
-        if cb >= ct:
-            clamped.append((ct, cb))
-    return clamped or None
+    return _analyze_frame_content_intervals(
+        logical_w,
+        logical_h,
+        track,
+        t_ms,
+        style,
+        extra_tracks,
+        duration_ms=duration_ms,
+        ports=_frame_analysis_ports(),
+    )
 
 
 def frame_vertical_bounds(
@@ -823,7 +804,7 @@ def frame_vertical_bounds(
     that have not migrated to layer bounds yet; callers should then fall back to
     the existing pixel scan / full repaint path.
     """
-    intervals = frame_content_intervals(
+    return _analyze_frame_vertical_bounds(
         logical_w,
         logical_h,
         track,
@@ -831,14 +812,8 @@ def frame_vertical_bounds(
         style,
         extra_tracks,
         duration_ms=duration_ms,
+        ports=_frame_analysis_ports(),
     )
-    if not intervals:
-        return None
-    top = min(item[0] for item in intervals)
-    bottom = max(item[1] for item in intervals)
-    if bottom < top:
-        return None
-    return top, bottom
 
 
 def paint_frame(

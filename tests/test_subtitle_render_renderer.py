@@ -44,6 +44,12 @@ from krok_helper.subtitle_render.engine.render.render_bands import (  # noqa: E4
     merge_intervals,
     packed_offsets,
 )
+from krok_helper.subtitle_render.engine.render.frame_analysis import (  # noqa: E402
+    FrameAnalysisPorts,
+    frame_content_intervals as analyze_frame_content_intervals,
+    frame_has_content as analyze_frame_has_content,
+    frame_vertical_bounds as analyze_frame_vertical_bounds,
+)
 from krok_helper.subtitle_render.engine.render.elements.title import (  # noqa: E402
     TitleOverlayLayer,
 )
@@ -104,6 +110,70 @@ def _track() -> TimingTrack:
             )
         ]
     )
+
+
+def test_frame_analysis_aggregates_main_title_and_extra_bounds() -> None:
+    main = TimingTrack()
+    extra = TimingTrack()
+    style = Style(title_overlay=TitleOverlay(enabled=True))
+    durations: list[int | None] = []
+
+    def resolve_visible_content(track, _t_ms, resolved_style, **kwargs):
+        durations.append(kwargs.get("duration_ms"))
+        top = 10 if track is main else 40
+        return 0, resolved_style, [top], [], 0.5
+
+    def subtitle_bounds(
+        _logical_w,
+        _logical_h,
+        _track,
+        _track_t_ms,
+        _style,
+        display_lines,
+        _signal_lines,
+    ):
+        top = display_lines[0]
+        return (-5, 30) if top == 10 else (40, 60)
+
+    ports = FrameAnalysisPorts(
+        resolve_visible_content=resolve_visible_content,
+        subtitle_vertical_bounds=subtitle_bounds,
+        title_vertical_bounds=lambda *_args: (80, 120),
+    )
+
+    assert analyze_frame_has_content(
+        main,
+        500,
+        style,
+        [extra],
+        duration_ms=2000,
+        logical_w=160,
+        logical_h=100,
+        ports=ports,
+    )
+    durations.clear()
+    intervals = analyze_frame_content_intervals(
+        160,
+        100,
+        main,
+        500,
+        style,
+        [extra],
+        duration_ms=2000,
+        ports=ports,
+    )
+    assert intervals == [(0, 30), (80, 99), (40, 60)]
+    assert durations == [2000, None]
+    assert analyze_frame_vertical_bounds(
+        160,
+        100,
+        main,
+        500,
+        style,
+        [extra],
+        duration_ms=2000,
+        ports=ports,
+    ) == (0, 99)
 
 
 def _job(tmp_path: Path, *, include_audio: bool = True) -> RenderJob:
