@@ -1568,6 +1568,51 @@ def test_horizontal_positioning_has_one_painter_free_owner() -> None:
     )
 
 
+def test_horizontal_glyph_layout_has_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layout_owner = f"{owner}.layout"
+    layout_path = ROOT / "engine/render/elements/horizontal/layout.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {
+        "bitmap_guide_glyphs",
+        "bitmap_guide_is_no_wipe",
+        "clamp_role_baseline_y",
+        "glyph_is_bitmap_guide",
+        "glyph_path",
+        "glyph_run_path",
+        "glyph_run_rect",
+        "glyph_run_signature",
+        "glyph_runs",
+        "n3_main_fill_rect",
+        "resolve_role_baseline_y",
+        "role_visual_text_padding",
+        "text_glyph_runs",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_members)
+    targets = _import_targets(layout_owner, layout_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"

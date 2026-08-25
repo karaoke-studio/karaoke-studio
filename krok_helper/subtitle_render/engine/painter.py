@@ -532,16 +532,29 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     RubyWipeSegment as _RubyWipeSegment,
     SayatooLineLayout as _SayatooLineLayout,
     aligned_x0 as _aligned_x0,
+    bitmap_guide_glyphs as _bitmap_guide_glyphs,
+    bitmap_guide_is_no_wipe as _bitmap_guide_is_no_wipe,
     bottom_short_page_alignment as _bottom_short_page_alignment,
+    clamp_role_baseline_y as _clamp_role_baseline_y,
+    glyph_is_bitmap_guide as _glyph_is_bitmap_guide,
+    glyph_path as _glyph_path,
+    glyph_run_path as _glyph_run_path,
+    glyph_run_rect as _glyph_run_rect,
+    glyph_run_signature as _glyph_run_signature,
+    glyph_runs as _glyph_runs,
     lane_alignment as _lane_alignment,
     layout_page_lines as _layout_page_lines,
     line_total_width as _line_total_width,
     line_lane_alignment as _line_lane_alignment,
     n3_smart_font_size as _n3_smart_font_size,
+    n3_main_fill_rect as _n3_main_fill_rect,
     resolve_line_x as _resolve_line_x,
     resolve_line_x_smart as _resolve_line_x_smart,
+    resolve_role_baseline_y as _resolve_role_baseline_y,
+    role_visual_text_padding as _role_visual_text_padding,
     row_layout_params as _row_layout_params,
     smart_horizontal_dx as _smart_horizontal_dx,
+    text_glyph_runs as _text_glyph_runs,
 )
 from krok_helper.subtitle_render.engine.render.elements.vertical import (
     VerticalCachePorts,
@@ -3910,196 +3923,11 @@ def _layout_plain_line(
     )
 
 
-def _bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
-    return _guide_symbol_is_bitmap(symbol) and not bool(
-        getattr(symbol, "bitmap_after_path", None)
-    )
-
-
 def _bitmap_guide_anchor_descent(glyph: _GlyphLayout) -> int:
     style = glyph.style
     if style.layout_semantics == "n3_1074":
         return _fixed_line_geometry(style)[2]
     return max(int(glyph.metrics.descent()), 0)
-
-
-def _glyph_path(glyph: _GlyphLayout, baseline_y: int) -> QPainterPath:
-    if glyph.vector_glyph is not None:
-        if _guide_symbol_is_bitmap(glyph.vector_glyph):
-            return QPainterPath()
-        return scaled_guide_symbol_path(
-            glyph.vector_glyph,
-            pixel_size=max(int(glyph.font.pixelSize()), 1),
-            left=float(glyph.left),
-            baseline_y=float(baseline_y),
-        )
-    path = QPainterPath()
-    path.addText(
-        float(glyph.left + glyph.path_offset_x),
-        float(baseline_y),
-        glyph.font,
-        glyph.text,
-    )
-    return path
-
-
-def _role_visual_text_padding(layout: _TextLayout) -> int:
-    if not layout.glyphs:
-        return 0
-    return max(_visual_text_padding(glyph.style) for glyph in layout.glyphs)
-
-
-def _resolve_role_baseline_y(
-    layout: _TextLayout,
-    img_h: int,
-    style: Style,
-    ruby_extra: int = 0,
-) -> int:
-    pos = style.line_y_position
-    margin = style.line_y_margin_px
-    pad = _role_visual_text_padding(layout)
-    ruby_extra = max(int(ruby_extra), 0)
-    if pos == "top":
-        return margin + ruby_extra + pad + layout.ascent
-    if pos == "center":
-        block_h = layout.height + ruby_extra + pad * 2
-        return (img_h - block_h) // 2 + ruby_extra + pad + layout.ascent
-    return img_h - margin - pad - layout.descent
-
-
-def _clamp_role_baseline_y(
-    baseline_y: int,
-    layout: _TextLayout,
-    img_h: int,
-    style: Style,
-    ruby_extra: int = 0,
-) -> int:
-    pad = _role_visual_text_padding(layout)
-    ruby_extra = max(int(ruby_extra), 0)
-    min_y = ruby_extra + pad + layout.ascent
-    max_y = img_h - pad - layout.descent
-    if max_y < min_y:
-        return min_y
-    return max(min_y, min(max_y, baseline_y))
-
-
-def _glyph_run_signature(glyph: _GlyphLayout) -> tuple:
-    colors = _effective_karaoke_colors(glyph.style)
-    return (
-        _karaoke_state_signature(colors.before),
-        _karaoke_state_signature(colors.after),
-        glyph.style.shadow_offset_x,
-        glyph.style.shadow_offset_y,
-        glyph.style.stroke_width_px,
-        glyph.style.stroke2_width_px,
-        glyph.style.decoration_kind,
-        _glow_radius(glyph.style, after=False),
-        _glow_radius(glyph.style, after=True),
-        _glow_concentration_level(glyph.style),
-    )
-
-
-def _glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
-    runs: list[list[_GlyphLayout]] = []
-    current: list[_GlyphLayout] = []
-    current_signature: tuple | None = None
-    signature_cache: dict[int, tuple] = {}
-    for glyph in layout.glyphs:
-        style_id = id(glyph.style)
-        signature = signature_cache.get(style_id)
-        if signature is None:
-            signature = _glyph_run_signature(glyph)
-            signature_cache[style_id] = signature
-        if not current or signature == current_signature:
-            current.append(glyph)
-            current_signature = signature
-            continue
-        runs.append(current)
-        current = [glyph]
-        current_signature = signature
-    if current:
-        runs.append(current)
-    return runs
-
-
-def _glyph_is_bitmap_guide(glyph: _GlyphLayout) -> bool:
-    return _guide_symbol_is_bitmap(glyph.vector_glyph)
-
-
-def _text_glyph_runs(
-    layout: _TextLayout, has_inline_styles: bool
-) -> list[list[_GlyphLayout]]:
-    runs = [layout.glyphs] if not has_inline_styles else _glyph_runs(layout)
-    result: list[list[_GlyphLayout]] = []
-    for run in runs:
-        text_run = [glyph for glyph in run if not _glyph_is_bitmap_guide(glyph)]
-        if text_run:
-            result.append(text_run)
-    return result
-
-
-def _bitmap_guide_glyphs(layout: _TextLayout) -> list[_GlyphLayout]:
-    return [glyph for glyph in layout.glyphs if _glyph_is_bitmap_guide(glyph)]
-
-
-def _glyph_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
-    path = QPainterPath()
-    for glyph in glyphs:
-        path.addPath(_glyph_path(glyph, baseline_y))
-    return path
-
-
-def _glyph_run_rect(glyphs: list[_GlyphLayout], baseline_y: int) -> QRectF:
-    left = min(glyph.left for glyph in glyphs)
-    right = max(glyph.left + glyph.width for glyph in glyphs)
-    ascent = max(glyph.metrics.ascent() for glyph in glyphs)
-    descent = max(glyph.metrics.descent() for glyph in glyphs)
-    return QRectF(
-        float(left),
-        float(baseline_y - ascent),
-        float(max(right - left, 1)),
-        float(max(ascent + descent, 1)),
-    )
-
-
-def _n3_main_fill_rect(layout: _TextLayout, baseline_y: int) -> QRectF:
-    """Return N3's shared vertical brush area for one main-text line.
-
-    ``DrawLineInfo.DrawTop/DrawBottom`` use the tallest ``FontSize + EdgeSize``
-    character box.  ``SetMultiColorAreas`` then moves both gradient endpoints
-    inward by half of ``EdgeSize + EdgeSize2`` from the *first* character's
-    font slot.  All divisions in N3 are integer divisions.  The resulting
-    rectangle is shared by every character and visual layer in the line; it is
-    not the individual glyph ink/advance box.
-    """
-    glyphs = layout.glyphs
-    if not glyphs:
-        return QRectF(layout.line_rect)
-
-    first = glyphs[0]
-    font_size = max(int(first.font.pixelSize()), 1)
-    metric_total = max(first.metrics.ascent() + first.metrics.descent(), 1)
-    descent = font_size * max(first.metrics.descent(), 0) // metric_total
-    brush_style = first.brush_style or first.style
-    draw_edge = max(int(first.style.stroke_width_px), 0)
-    anchor_edge = max(int(brush_style.stroke_width_px), 0)
-    anchor_edge2 = _main_stroke2_width(brush_style)
-    draw_bottom = float(baseline_y + descent + draw_edge // 2)
-    draw_height = max(
-        max(int(glyph.font.pixelSize()), 1)
-        + max(int(glyph.style.stroke_width_px), 0)
-        for glyph in glyphs
-    )
-    draw_top = draw_bottom - float(draw_height)
-    inset = float((anchor_edge + anchor_edge2) // 2)
-    top = draw_top + inset
-    bottom = draw_bottom - inset
-    return QRectF(
-        float(layout.line_rect.left()),
-        top,
-        float(max(layout.line_rect.width(), 1.0)),
-        float(max(bottom - top, 1.0)),
-    )
 
 
 def _layout_role_line(
