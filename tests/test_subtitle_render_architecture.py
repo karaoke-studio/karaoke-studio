@@ -3467,12 +3467,76 @@ def test_project_frontend_modules_are_grouped_in_one_domain_package() -> None:
         "project_recovery.py",
         "project_settings.py",
         "recent_projects.py",
+        "source_watch.py",
     }
     project_root = ROOT / "frontend" / "project"
     assert {"__init__.py", *module_names} <= {
         path.name for path in project_root.glob("*.py")
     }
     assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
+def test_subtitle_source_watch_runtime_has_one_frontend_owner() -> None:
+    owner = f"{PACKAGE}.frontend.project.source_watch"
+    runtime_path = ROOT / "frontend/project/source_watch.py"
+    window_path = ROOT / "frontend/main_window.py"
+    runtime_tree = ast.parse(runtime_path.read_text(encoding="utf-8-sig"))
+    window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "SubtitleSourceWatchRuntime": None,
+        "WatchedSubtitleState": "_WatchedSubtitleState",
+        "subtitle_source_digest": None,
+        "subtitle_source_key": None,
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in aliases
+    }
+    runtime_members = {
+        node.name
+        for node in runtime_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    window_classes = {
+        node.name for node in window_tree.body if isinstance(node, ast.ClassDef)
+    }
+
+    assert imported == aliases
+    assert set(aliases) <= runtime_members
+    assert "_WatchedSubtitleState" not in window_classes
+    targets = _import_targets(owner, runtime_path)
+    assert f"{PACKAGE}.frontend.main_window" not in targets
+
+    window_class = next(
+        node
+        for node in window_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    delegated_methods = {
+        "_set_subtitle_source_baseline": {"set_baseline"},
+        "_sync_subtitle_source_watcher": {"sync"},
+        "_queue_subtitle_source_reload": {"queue"},
+        "_process_subtitle_source_changes": {"take_pending"},
+        "_retry_subtitle_source_reload": {"retry", "state"},
+    }
+    for method_name, expected_calls in delegated_methods.items():
+        method = next(
+            node
+            for node in window_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        runtime_calls = {
+            node.func.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_source_watch_runtime"
+        }
+        assert runtime_calls == expected_calls
 
 
 def test_subtitle_render_window_delegates_auto_save_thread_lifecycle() -> None:

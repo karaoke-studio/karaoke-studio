@@ -24,8 +24,7 @@ UI 顶层结构（工作区导航居中放在项目命令栏）：
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
-import hashlib
+from dataclasses import replace
 import logging
 import os
 from pathlib import Path
@@ -42,7 +41,6 @@ if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持�
     from krok_helper.workflow_host import SubtitleVideoSink
 
 from PyQt6.QtCore import (
-    QFileSystemWatcher,
     QObject,
     QSize,
     QThread,
@@ -248,6 +246,12 @@ from krok_helper.subtitle_render.frontend.project.project_settings import (
 )
 from krok_helper.subtitle_render.frontend.project.recent_projects import (
     RecentProjectsController,
+)
+from krok_helper.subtitle_render.frontend.project.source_watch import (
+    SubtitleSourceWatchRuntime,
+    WatchedSubtitleState as _WatchedSubtitleState,
+    subtitle_source_digest,
+    subtitle_source_key,
 )
 from krok_helper.subtitle_render.settings.screen import (
     ScreenSettings,
@@ -499,14 +503,6 @@ def _sug_software_compensation_ms() -> int:
         return 0
 
 
-@dataclass
-class _WatchedSubtitleState:
-    path: Path
-    baseline: TimingTrack
-    seen_digest: str
-    missing_notified: bool = False
-
-
 class SubtitleRenderWindow(QWidget):
     """字幕视频渲染模块主 widget。"""
 
@@ -734,6 +730,29 @@ class SubtitleRenderWindow(QWidget):
     def _preview_reposition_on_next_show(self, value: bool) -> None:
         self._preview_window_controller.reposition_on_next_show = bool(value)
 
+    @property
+    def _source_watcher(self):
+        """Compatibility view of the extracted QFileSystemWatcher."""
+        return self._source_watch_runtime.watcher
+
+    @property
+    def _source_change_timer(self) -> QTimer:
+        """Compatibility view of the extracted source debounce timer."""
+        return self._source_watch_runtime.timer
+
+    @property
+    def _source_watch_states(self) -> dict[str, _WatchedSubtitleState]:
+        """Compatibility view of externally watched source baselines."""
+        return self._source_watch_runtime.states
+
+    @property
+    def _pending_source_reload_keys(self) -> set[str]:
+        return self._source_watch_runtime.pending_keys
+
+    @property
+    def _source_reload_retries(self) -> dict[str, int]:
+        return self._source_watch_runtime.retries
+
     def __init__(
         self,
         embedded: bool = False,
@@ -820,18 +839,19 @@ class SubtitleRenderWindow(QWidget):
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[Any] = None
         self._watch_primary_subtitle_source = False
-        self._source_watch_states: dict[str, _WatchedSubtitleState] = {}
-        self._pending_source_reload_keys: set[str] = set()
-        self._source_reload_retries: dict[str, int] = {}
-        self._source_watcher = QFileSystemWatcher(self)
-        self._source_watcher.fileChanged.connect(self._on_subtitle_source_file_changed)
-        self._source_watcher.directoryChanged.connect(
+        self._source_watch_runtime = SubtitleSourceWatchRuntime(
+            self,
+            reload_suspended=lambda: self._render_thread is not None,
+        )
+        self._source_watch_runtime.fileChanged.connect(
+            self._on_subtitle_source_file_changed
+        )
+        self._source_watch_runtime.directoryChanged.connect(
             self._on_subtitle_source_directory_changed
         )
-        self._source_change_timer = QTimer(self)
-        self._source_change_timer.setSingleShot(True)
-        self._source_change_timer.setInterval(450)
-        self._source_change_timer.timeout.connect(self._process_subtitle_source_changes)
+        self._source_watch_runtime.pendingReady.connect(
+            self._process_subtitle_source_changes
+        )
         self._tracks_window_refresh_timer = QTimer(self)
         self._tracks_window_refresh_timer.setSingleShot(True)
         self._tracks_window_refresh_timer.setInterval(120)
@@ -3158,26 +3178,14 @@ class SubtitleRenderWindow(QWidget):
 
     @staticmethod
     def _subtitle_source_key(path: Path) -> str:
-        resolved = str(Path(path).resolve(strict=False))
-        return resolved.casefold() if sys.platform == "win32" else resolved
+        return subtitle_source_key(path)
 
     @staticmethod
     def _subtitle_source_digest(path: Path) -> str:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return subtitle_source_digest(path)
 
     def _set_subtitle_source_baseline(self, path: Path, track: TimingTrack) -> None:
-        source_path = Path(path).resolve(strict=False)
-        try:
-            digest = self._subtitle_source_digest(source_path)
-        except OSError:
-            digest = ""
-        self._source_watch_states[self._subtitle_source_key(source_path)] = (
-            _WatchedSubtitleState(
-                path=source_path,
-                baseline=deepcopy(track),
-                seen_digest=digest,
-            )
-        )
+        self._source_watch_runtime.set_baseline(path, track)
 
     def _referenced_subtitle_sources(self) -> dict[str, tuple[Path, TimingTrack]]:
         referenced: dict[str, tuple[Path, TimingTrack]] = {}
@@ -3194,74 +3202,35 @@ class SubtitleRenderWindow(QWidget):
         return referenced
 
     def _sync_subtitle_source_watcher(self) -> None:
-        referenced = self._referenced_subtitle_sources()
-        for key in list(self._source_watch_states):
-            if key not in referenced:
-                self._source_watch_states.pop(key, None)
-                self._pending_source_reload_keys.discard(key)
-                self._source_reload_retries.pop(key, None)
-        for key, (path, track) in referenced.items():
-            if key not in self._source_watch_states:
-                self._set_subtitle_source_baseline(path, track)
-
-        watched_files = self._source_watcher.files()
-        watched_directories = self._source_watcher.directories()
-        if watched_files:
-            self._source_watcher.removePaths(watched_files)
-        if watched_directories:
-            self._source_watcher.removePaths(watched_directories)
-
-        files = sorted(
-            {str(state.path) for state in self._source_watch_states.values() if state.path.is_file()}
-        )
-        directories = sorted(
-            {
-                str(state.path.parent)
-                for state in self._source_watch_states.values()
-                if state.path.parent.is_dir()
-            }
-        )
-        if files:
-            self._source_watcher.addPaths(files)
-        if directories:
-            self._source_watcher.addPaths(directories)
+        self._source_watch_runtime.sync(self._referenced_subtitle_sources())
 
     def _on_subtitle_source_file_changed(self, path_text: str) -> None:
         key = self._subtitle_source_key(Path(path_text))
-        if key in self._source_watch_states:
+        if self._source_watch_runtime.state(key) is not None:
             self._queue_subtitle_source_reload(key)
         # Editors may replace a file atomically, which removes Qt's file watch.
         self._sync_subtitle_source_watcher()
 
     def _on_subtitle_source_directory_changed(self, path_text: str) -> None:
         directory_key = self._subtitle_source_key(Path(path_text))
-        for key, state in self._source_watch_states.items():
+        for key, state in self._source_watch_runtime.states.items():
             if self._subtitle_source_key(state.path.parent) == directory_key:
                 self._queue_subtitle_source_reload(key)
         self._sync_subtitle_source_watcher()
 
     def _queue_subtitle_source_reload(self, key: str) -> None:
-        self._pending_source_reload_keys.add(key)
-        if self._render_thread is None:
-            self._source_change_timer.start()
+        self._source_watch_runtime.queue(key)
 
     def _process_subtitle_source_changes(self) -> None:
         if self._render_thread is not None:
             return
-        pending = tuple(self._pending_source_reload_keys)
-        self._pending_source_reload_keys.clear()
-        for key in pending:
+        for key in self._source_watch_runtime.take_pending():
             self._reload_external_subtitle_source(key)
 
     def _retry_subtitle_source_reload(self, key: str, error: Exception) -> None:
-        attempt = self._source_reload_retries.get(key, 0) + 1
-        if attempt <= 5:
-            self._source_reload_retries[key] = attempt
-            self._pending_source_reload_keys.add(key)
-            self._source_change_timer.start(400)
+        if self._source_watch_runtime.retry(key):
             return
-        self._source_reload_retries.pop(key, None)
-        state = self._source_watch_states.get(key)
+        state = self._source_watch_runtime.state(key)
         if state is None:
             return
         logging.getLogger(__name__).warning(
@@ -3276,7 +3245,7 @@ class SubtitleRenderWindow(QWidget):
         )
 
     def _reload_external_subtitle_source(self, key: str) -> None:
-        state = self._source_watch_states.get(key)
+        state = self._source_watch_runtime.state(key)
         if state is None:
             return
         path = state.path
@@ -3297,7 +3266,7 @@ class SubtitleRenderWindow(QWidget):
             digest = self._subtitle_source_digest(path)
             if digest == state.seen_digest:
                 state.missing_notified = False
-                self._source_reload_retries.pop(key, None)
+                self._source_watch_runtime.acknowledge(key)
                 self._sync_subtitle_source_watcher()
                 return
             # 与手动刷新同口径：按所属轨道的加载设置决定是否应用 .sug 导出偏移。
@@ -3333,7 +3302,7 @@ class SubtitleRenderWindow(QWidget):
             return
 
         state.missing_notified = False
-        self._source_reload_retries.pop(key, None)
+        self._source_watch_runtime.acknowledge(key)
         if state.baseline == candidate:
             state.seen_digest = digest
             self._sync_subtitle_source_watcher()
@@ -4815,7 +4784,9 @@ class SubtitleRenderWindow(QWidget):
                     settings.apply_sug_export_compensation
                 ),
             )
-            state = self._source_watch_states.get(self._subtitle_source_key(path))
+            state = self._source_watch_runtime.state(
+                self._subtitle_source_key(path)
+            )
             baseline = state.baseline if state is not None else current
             merge = merge_reloaded_track(
                 current,
@@ -7413,8 +7384,7 @@ class SubtitleRenderWindow(QWidget):
         self._cleanup_export_preview_dir()
         self._refresh_project_title()
         self._sync_preview_window_visibility()
-        if self._pending_source_reload_keys:
-            self._source_change_timer.start(0)
+        self._source_watch_runtime.start_pending(0)
 
     # ------------------------------------------------------------------ embed
 

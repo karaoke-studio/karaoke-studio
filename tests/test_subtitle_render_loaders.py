@@ -49,6 +49,9 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT  # noqa: E402
+from krok_helper.subtitle_render.frontend.project.source_watch import (  # noqa: E402
+    SubtitleSourceWatchRuntime,
+)
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import (  # noqa: E402
     WorkspaceSwitcher,
 )
@@ -308,6 +311,29 @@ def test_external_lrc_filesystem_watcher_detects_change(
         QTest.qWait(50)
 
     assert win._timing_track.lines[0].chars[0].start_ms == 4000
+
+
+def test_source_watch_runtime_defers_pending_reload_while_suspended(qapp):
+    suspended = [True]
+    runtime = SubtitleSourceWatchRuntime(
+        reload_suspended=lambda: suspended[0],
+    )
+    ready: list[bool] = []
+    runtime.pendingReady.connect(lambda: ready.append(True))
+
+    runtime.queue("source-key")
+    assert runtime.pending_keys == {"source-key"}
+    assert not runtime.timer.isActive()
+
+    suspended[0] = False
+    runtime.start_pending(0)
+    QTest.qWait(1)
+    qapp.processEvents()
+
+    assert ready == [True]
+    assert runtime.take_pending() == ("source-key",)
+    assert runtime.pending_keys == set()
+    runtime.deleteLater()
 
 
 def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):
