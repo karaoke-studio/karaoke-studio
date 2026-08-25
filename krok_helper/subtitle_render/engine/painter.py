@@ -466,6 +466,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     char_fade_opacity as _char_fade_opacity,
     char_drip_char_transform as _char_drip_char_transform,
     character_transform as _character_transform,
+    line_char_transition_context as _line_char_transition_context,
     aligned_x0 as _aligned_x0,
     bitmap_guide_anchor_descent as _bitmap_guide_anchor_descent,
     bitmap_guide_band_for_glyph as _horizontal_bitmap_guide_band_for_glyph,
@@ -5677,65 +5678,6 @@ def _line_text_path(
         glyph_font = font_for(ch.text) if font_for is not None else font
         path.addText(float(left + path_offset_x), float(y), glyph_font, ch.text)
     return path
-
-
-def _line_char_transition_context(
-    style: Style,
-    line: TimingLine,
-    t_ms: int,
-    display_start_ms: int | None,
-    display_end_ms: int | None,
-    char_count: int,
-    *,
-    intervals: list[tuple[int, int]] | None = None,
-) -> _LineCharTransition | None:
-    if char_count <= 0:
-        return None
-    start = display_start_ms if display_start_ms is not None else _line_start_ms(line)
-    end = display_end_ms if display_end_ms is not None else _line_end_ms(line)
-
-    if style.exit_anim in {"char_fade", "char_drip", "spin_flip"} and style.exit_fade_ms > 0:
-        exit_start = max(_line_end_ms(line), end - _CHAR_FADE_INTRO_DELAY_MS - _CHAR_FADE_OUT_TIME_MS)
-        if t_ms >= exit_start:
-            return _LineCharTransition(
-                phase="exit",
-                effect=style.exit_anim,
-                progress=1.0,
-                start_ms=exit_start,
-                end_ms=end,
-            )
-
-    if style.entry_anim in {"char_fade", "char_drip", "spin_flip"} and style.entry_lead_ms > 0:
-        entry_end = start + _CHAR_FADE_INTRO_DELAY_MS + _CHAR_FADE_IN_TIME_MS
-        if t_ms <= entry_end:
-            return _LineCharTransition(
-                phase="entry",
-                effect=style.entry_anim,
-                progress=1.0,
-                start_ms=start,
-                end_ms=entry_end,
-            )
-
-    if (
-        style.entry_anim == "utopia"
-        or style.exit_anim == "utopia"
-        or effective_karaoke_animation(style) == "utopia"
-    ):
-        intervals = intervals if intervals is not None else compute_char_intervals(line)
-        # Utopia 的入场、唱中弹跳和退场原本只在各自的活动窗口切进逐字符
-        # 矢量路径，其余时刻回到整行静态路径。两条路径在发光叠加与边缘
-        # 抗锯齿上存在细微差异，切换瞬间即使配色完全相同也会产生色闪。
-        # 行可见期间始终保留 Utopia 上下文；但若另一侧正在执行逐字
-        # 入/退场，上面的活动过渡必须优先，避免 Utopia 吞掉其效果。
-        if start <= t_ms <= end:
-            return _LineCharTransition(
-                phase="utopia",
-                effect="utopia",
-                progress=1.0,
-                start_ms=start,
-                end_ms=end,
-            )
-    return None
 
 
 def _paint_line_with_character_transition(

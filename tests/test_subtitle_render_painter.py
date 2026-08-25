@@ -250,6 +250,15 @@ def test_painter_keeps_horizontal_glyph_layout_compatibility_exports() -> None:
         assert getattr(subtitle_painter, f"_{name}") is getattr(layout, name)
 
 
+def test_painter_keeps_horizontal_transition_context_compatibility_export() -> None:
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import transitions
+
+    assert (
+        subtitle_painter._line_char_transition_context
+        is transitions.line_char_transition_context
+    )
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])

@@ -1953,6 +1953,7 @@ def test_horizontal_transition_math_has_one_painter_free_owner() -> None:
         "char_fade_opacity": "_char_fade_opacity",
         "char_drip_char_transform": "_char_drip_char_transform",
         "character_transform": "_character_transform",
+        "line_char_transition_context": "_line_char_transition_context",
         "spin_flip_char_transform": "_spin_flip_char_transform",
         "spin_flip_skew": "_spin_flip_skew",
         "transition_char_state": "_transition_char_state",

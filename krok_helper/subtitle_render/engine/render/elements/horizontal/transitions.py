@@ -11,11 +11,15 @@ from krok_helper.subtitle_render.domain.models import (
     effective_karaoke_animation,
 )
 from krok_helper.subtitle_render.domain.timing import TimingLine
-from krok_helper.subtitle_render.engine.layout.line.style import line_end_ms
+from krok_helper.subtitle_render.engine.layout.line.style import (
+    line_end_ms,
+    line_start_ms,
+)
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
     LineCharTransition,
 )
 from krok_helper.subtitle_render.engine.text import GlyphLayout
+from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 
 
 UTOPIA_INTRO_TIME_MS = 700
@@ -30,6 +34,74 @@ UTOPIA_FADE_OUT_TIME_MS = 750
 CHAR_FADE_INTRO_DELAY_MS = 350
 CHAR_FADE_IN_TIME_MS = 250
 CHAR_FADE_OUT_TIME_MS = 250
+
+
+def line_char_transition_context(
+    style: Style,
+    line: TimingLine,
+    t_ms: int,
+    display_start_ms: int | None,
+    display_end_ms: int | None,
+    char_count: int,
+    *,
+    intervals: list[tuple[int, int]] | None = None,
+) -> LineCharTransition | None:
+    """Select the active whole-line character-transition mode at ``t_ms``."""
+
+    if char_count <= 0:
+        return None
+    start = display_start_ms if display_start_ms is not None else line_start_ms(line)
+    end = display_end_ms if display_end_ms is not None else line_end_ms(line)
+
+    if (
+        style.exit_anim in {"char_fade", "char_drip", "spin_flip"}
+        and style.exit_fade_ms > 0
+    ):
+        exit_start = max(
+            line_end_ms(line),
+            end - CHAR_FADE_INTRO_DELAY_MS - CHAR_FADE_OUT_TIME_MS,
+        )
+        if t_ms >= exit_start:
+            return LineCharTransition(
+                phase="exit",
+                effect=style.exit_anim,
+                progress=1.0,
+                start_ms=exit_start,
+                end_ms=end,
+            )
+
+    if (
+        style.entry_anim in {"char_fade", "char_drip", "spin_flip"}
+        and style.entry_lead_ms > 0
+    ):
+        entry_end = start + CHAR_FADE_INTRO_DELAY_MS + CHAR_FADE_IN_TIME_MS
+        if t_ms <= entry_end:
+            return LineCharTransition(
+                phase="entry",
+                effect=style.entry_anim,
+                progress=1.0,
+                start_ms=start,
+                end_ms=entry_end,
+            )
+
+    if (
+        style.entry_anim == "utopia"
+        or style.exit_anim == "utopia"
+        or effective_karaoke_animation(style) == "utopia"
+    ):
+        intervals = intervals if intervals is not None else compute_char_intervals(line)
+        # Keep one Utopia render path throughout visibility so entry, wipe and
+        # exit state changes cannot introduce antialiasing or glow color flashes.
+        # Active non-Utopia character entry/exit effects still take precedence.
+        if start <= t_ms <= end:
+            return LineCharTransition(
+                phase="utopia",
+                effect="utopia",
+                progress=1.0,
+                start_ms=start,
+                end_ms=end,
+            )
+    return None
 
 
 def spin_flip_char_transform(
