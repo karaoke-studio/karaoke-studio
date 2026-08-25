@@ -15,8 +15,8 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import CheckBox
 
-from krok_helper.subtitle_render.frontend.properties.property_inputs import WheelFocusedComboBox
-from krok_helper.subtitle_render.frontend.properties.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import WheelFocusedComboBox
+from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     ResponsiveFieldGrid,
     compact_property_control,
     inline_property_section,

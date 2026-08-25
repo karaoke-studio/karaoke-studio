@@ -15,16 +15,16 @@ from qfluentwidgets import (
     RadioButton,
 )
 
-from krok_helper.subtitle_render.frontend.properties.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     DynamicStackedWidget,
     NoWheelSpinBox,
 )
-from krok_helper.subtitle_render.frontend.properties.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_field,
     property_section,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
-from krok_helper.subtitle_render.frontend.properties.property_widgets import PillSelector
+from krok_helper.subtitle_render.frontend.properties.controls.widgets import PillSelector
 from krok_helper.subtitle_render.settings.screen import SCREEN_FPS_OPTIONS
 
 

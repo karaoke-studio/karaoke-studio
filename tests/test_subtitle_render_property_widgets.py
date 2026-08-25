@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 
-from krok_helper.subtitle_render.frontend.properties.property_widgets import (
+from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
     ClickableRow,
     CollapsibleSection,
     FolderTabPanel,

@@ -7,12 +7,12 @@ from typing import Any, Callable
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QStackedWidget, QWidget
 from qfluentwidgets import CheckBox
 
-from krok_helper.subtitle_render.frontend.properties.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     inline_property_section,
     property_section,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
-from krok_helper.subtitle_render.frontend.properties.property_widgets import FolderTabPanel
+from krok_helper.subtitle_render.frontend.properties.controls.widgets import FolderTabPanel
 
 
 class RolePropertyPageBuilder:

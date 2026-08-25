@@ -113,7 +113,7 @@ from krok_helper.subtitle_render.frontend.properties.property_pages import (
     build_property_pages,
     property_page_index,
 )
-from krok_helper.subtitle_render.frontend.properties.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     ResponsiveFieldGrid as _ResponsiveFieldGrid,
     ResponsivePropertyPair as _ResponsivePropertyPair,
     ResponsiveRoleHeader as _ResponsiveRoleHeader,
@@ -124,7 +124,7 @@ from krok_helper.subtitle_render.frontend.properties.property_layout import (
     property_section as _section,
     property_section_pair as _section_pair,
 )
-from krok_helper.subtitle_render.frontend.properties.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     DynamicStackedWidget as _DynamicStackedWidget,
     GrowingPlainTextEdit as _GrowingPlainTextEdit,
     NoWheelSpinBox as _NoWheelSpinBox,
@@ -156,7 +156,7 @@ from krok_helper.subtitle_render.frontend.properties.property_role_color_page im
 from krok_helper.subtitle_render.frontend.properties.property_role_fill_pages import (
     RoleFillPagesBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_widgets import (
+from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
     ClickableRow as _ClickableRow,
     CollapsibleSection,
     FolderTabPanel as _FolderTabPanel,

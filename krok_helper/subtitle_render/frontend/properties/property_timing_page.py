@@ -9,11 +9,11 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout
 from qfluentwidgets import CheckBox
 
 from krok_helper.qfluent_compat import install_fluent_tooltip
-from krok_helper.subtitle_render.frontend.properties.property_inputs import (
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     WheelFocusedComboBox,
     WheelFocusedSpinBox,
 )
-from krok_helper.subtitle_render.frontend.properties.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     ResponsiveFieldGrid,
     compact_property_control,
     property_section,

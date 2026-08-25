@@ -5,7 +5,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import QLabel, QLineEdit, QSizePolicy, QWidget
 
-from krok_helper.subtitle_render.frontend.properties.property_layout import (
+from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     ResponsiveFieldGrid,
     ResponsivePropertyPair,
     ResponsiveRoleHeader,
