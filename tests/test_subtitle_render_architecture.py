@@ -3831,6 +3831,7 @@ def test_subtitle_render_window_delegates_preview_window_state() -> None:
 def test_preview_frontend_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
         "playback.py",
+        "player_window.py",
         "preview_async.py",
         "preview_controller.py",
         "preview_graphics.py",
@@ -3842,6 +3843,48 @@ def test_preview_frontend_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in preview_root.glob("*.py")
     }
     assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
+def test_preview_player_window_has_one_frontend_owner() -> None:
+    owner = f"{PACKAGE}.frontend.preview.player_window"
+    player_path = ROOT / "frontend/preview/player_window.py"
+    window_path = ROOT / "frontend/main_window.py"
+    player_tree = ast.parse(player_path.read_text(encoding="utf-8-sig"))
+    window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "AspectRatioBox": "_AspectRatioBox",
+        "PreviewPlayerWindow": None,
+        "WindowEdgeGrip": "_WindowEdgeGrip",
+        "fit_size_to_aspect": None,
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in aliases
+    }
+    player_members = {
+        node.name
+        for node in player_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    window_members = {
+        node.name
+        for node in window_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == aliases
+    assert set(aliases) <= player_members
+    assert {
+        "_AspectRatioBox",
+        "_WindowEdgeGrip",
+        "PreviewPlayerWindow",
+        "fit_size_to_aspect",
+    }.isdisjoint(window_members)
+    targets = _import_targets(owner, player_path)
+    assert f"{PACKAGE}.frontend.main_window" not in targets
 
 
 def test_subtitle_render_window_delegates_preview_preferences() -> None:
