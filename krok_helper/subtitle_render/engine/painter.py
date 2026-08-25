@@ -32,7 +32,7 @@ from __future__ import annotations
 import math
 import os
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from threading import Lock, local as thread_local
 from typing import Hashable, Optional
 
@@ -283,110 +283,6 @@ def _horizontal_layer_enabled() -> bool:
     )
 
 
-@dataclass(frozen=True)
-class _FillSegment:
-    left: int
-    right: int
-    start_ms: int = 0
-    end_ms: int = 0
-    ruby: RubyAnnotation | None = None
-    indices: tuple[int, ...] = ()
-    release_left: float | None = None
-    release_right: float | None = None
-    layout_left: int | None = None
-    layout_right: int | None = None
-    ruby_base_index: int | None = None
-    ruby_base_count: int = 1
-
-
-@dataclass(frozen=True)
-class _LineCharTransition:
-    phase: str
-    effect: str
-    progress: float
-    start_ms: int | None = None
-    end_ms: int | None = None
-
-
-@dataclass(frozen=True)
-class _SayatooLineLayout:
-    baseline_y: int
-    text_x: int
-    line_style: Style
-    metrics: QFontMetrics
-    total_w: int
-    signal_x: float | None = None
-    signal_y: float | None = None
-
-
-@dataclass(frozen=True)
-class _LineLayout:
-    """横排歌词行的纯几何布局（**不依赖 t_ms**）+ 渲染所需字体资源。
-
-    P1.a 三段式（layout→animation→paint）的 layout 段产物：字符几何 / 基线 /
-    fill_segments（含时序但不含当前进度）都与帧无关、可缓存。普通行与分色行都
-    表达为同一个 glyph-list 模型：普通行只是所有 glyph 使用同一 style 的特例。
-    """
-    text_layout: _TextLayout
-    font: QFont
-    metrics: QFontMetrics
-    latin_font: QFont
-    font_for: object  # Callable[[str], QFont] | None
-    active_rubies: list
-    ruby_font: QFont
-    ruby_metrics: QFontMetrics | None
-    char_widths: list[int]
-    total_w: int
-    x0: int
-    baseline_y: int
-    intervals: list
-    char_lefts: list[int]
-    char_x_ranges: list
-    fill_segments: list
-    line_rect: QRectF
-    colors: KaraokeColors
-    rtl: bool
-    has_inline_styles: bool
-    # 各字符墨水边界（绝对坐标）；走字按墨水推进，不含 advance 两侧空白。
-    # 仅用于扫光 ratio/分段计算，绘制定位仍用 advance 的 char_x_ranges。
-    ink_x_ranges: list = field(default_factory=list)
-    # Ruby geometry is frame-independent.  Keep it with the line layout so the
-    # per-character wipe paths are not measured again for every preview frame.
-    ruby_layouts: tuple["_RubyLayout", ...] = ()
-    render_line: TimingLine | None = None
-
-
-@dataclass(frozen=True)
-class _RubyWipeSegment:
-    """One timed ruby glyph sweep on the horizontal visual axis."""
-
-    start_ms: int
-    end_ms: int
-    axis_start: float
-    axis_end: float
-
-
-@dataclass(frozen=True)
-class _RubyLayout:
-    """横排 ruby 的纯几何/目标布局（不依赖 t_ms）。"""
-
-    ruby: RubyAnnotation
-    indices: list[int]
-    style: Style
-    x: int
-    baseline_y: int
-    target_width: int
-    reading_width: float
-    gradient_rect: QRectF
-    horizontal_gradient_rect: QRectF | None = None
-    wipe_segments: tuple[_RubyWipeSegment, ...] = ()
-    wipe_left: float = 0.0
-    wipe_right: float = 0.0
-    geometry_signature: tuple = ()
-    font: QFont | None = field(default=None, compare=False)
-    metrics: QFontMetrics | None = field(default=None, compare=False)
-
-
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -591,6 +487,14 @@ from krok_helper.subtitle_render.engine.render.elements.title import (
     make_title_overlay_layer as _make_title_overlay_layer,
     paint_title_overlay as _paint_title_overlay_with_ports,
     title_block_origin as _title_block_origin,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal import (
+    FillSegment as _FillSegment,
+    LineCharTransition as _LineCharTransition,
+    LineLayout as _LineLayout,
+    RubyLayout as _RubyLayout,
+    RubyWipeSegment as _RubyWipeSegment,
+    SayatooLineLayout as _SayatooLineLayout,
 )
 from krok_helper.subtitle_render.engine.render.elements.vertical import (
     VerticalCachePorts,

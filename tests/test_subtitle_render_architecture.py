@@ -1483,6 +1483,45 @@ def test_vertical_layout_has_one_render_owner() -> None:
     )
 
 
+def test_horizontal_contracts_have_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    contract_owner = f"{owner}.contracts"
+    contract_path = ROOT / "engine/render/elements/horizontal/contracts.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "FillSegment": "_FillSegment",
+        "LineCharTransition": "_LineCharTransition",
+        "LineLayout": "_LineLayout",
+        "RubyLayout": "_RubyLayout",
+        "RubyWipeSegment": "_RubyWipeSegment",
+        "SayatooLineLayout": "_SayatooLineLayout",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+    painter_classes = {
+        node.name for node in painter_tree.body if isinstance(node, ast.ClassDef)
+    }
+
+    assert {"__init__.py", "contracts.py"} <= {
+        path.name
+        for path in (ROOT / "engine/render/elements/horizontal").glob("*.py")
+    }
+    assert imported == aliases
+    assert set(aliases.values()).isdisjoint(painter_classes)
+    targets = _import_targets(contract_owner, contract_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {"auto_chorus.py", "show_time.py", "timecode.py", "timeline.py"}
     timing_root = ROOT / "engine" / "timing"
