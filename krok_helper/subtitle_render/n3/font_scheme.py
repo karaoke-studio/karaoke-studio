@@ -11,7 +11,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
-from krok_helper.subtitle_render.paint import (
+from krok_helper.subtitle_render.domain.paint import (
     KaraokeColorState,
     KaraokeColors,
     PaintFill,

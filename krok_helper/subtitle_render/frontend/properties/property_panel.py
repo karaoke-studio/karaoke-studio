@@ -92,8 +92,8 @@ from qfluentwidgets import (
 )
 from krok_helper.qfluent_compat import ModelessDialog, install_fluent_tooltip
 
-from krok_helper.subtitle_render.background import BackgroundSource
-from krok_helper.subtitle_render.paint import (
+from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.paint import (
     ColorLayerKey,
     ColorStateKey,
     KaraokeColors,
@@ -201,7 +201,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     n3_font_families,
     resolve_qt_font_family,
 )
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     EntryAnimation,
     ExitAnimation,
     KaraokeAnimation,

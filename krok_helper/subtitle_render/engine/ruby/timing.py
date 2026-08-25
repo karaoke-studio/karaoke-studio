@@ -5,7 +5,7 @@ from __future__ import annotations
 from PyQt6.QtGui import QFontMetrics
 
 from krok_helper.subtitle_render.engine.timing.timeline import char_fill_ratio
-from krok_helper.subtitle_render.timing import RubyAnnotation
+from krok_helper.subtitle_render.domain.timing import RubyAnnotation
 
 
 _RUBY_COMBINING_CHARS = set(

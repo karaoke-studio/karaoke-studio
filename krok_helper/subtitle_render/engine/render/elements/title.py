@@ -33,8 +33,8 @@ from krok_helper.subtitle_render.models import (
     normalize_title_char_role_labels,
 )
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
-from krok_helper.subtitle_render.paint import PaintFill
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.paint import PaintFill
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 @dataclass(frozen=True)

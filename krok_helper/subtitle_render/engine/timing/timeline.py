@@ -23,7 +23,7 @@ from krok_helper.subtitle_render.engine.timing.show_time import (
     compute_show_times,
     protect_time_ms,
 )
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     TimingChar,
     TimingLine,
     TimingTrack,

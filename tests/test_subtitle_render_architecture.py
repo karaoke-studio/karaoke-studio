@@ -120,7 +120,7 @@ def test_subtitle_render_engine_does_not_depend_on_frontend() -> None:
 def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
     forbidden = f"{PACKAGE}.frontend"
     paths = (
-        ROOT / "background.py",
+        ROOT / "domain" / "background.py",
         ROOT / "contracts.py",
         ROOT / "engine" / "export" / "export_command.py",
         ROOT / "engine" / "export" / "parallel_schedule.py",
@@ -129,7 +129,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "engine" / "export" / "render_job_policy.py",
         ROOT / "engine" / "render" / "render_bands.py",
         ROOT / "engine" / "ruby" / "timing.py",
-        ROOT / "paint.py",
+        ROOT / "domain" / "paint.py",
         ROOT / "serialization" / "paint.py",
         ROOT / "project" / "controller.py",
         ROOT / "project" / "load.py",
@@ -141,7 +141,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "settings" / "store.py",
         ROOT / "sources" / "loader.py",
         ROOT / "engine" / "timing" / "timecode.py",
-        ROOT / "timing.py",
+        ROOT / "domain" / "timing.py",
         ROOT / "serialization" / "timing.py",
     )
     violations: dict[str, list[str]] = defaultdict(list)
@@ -152,6 +152,16 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
                 violations[module].append(target)
 
     assert not violations
+
+
+def test_domain_value_modules_are_grouped_in_one_package() -> None:
+    domain_root = ROOT / "domain"
+    module_names = {"background.py", "paint.py", "timing.py"}
+
+    assert {"__init__.py", *module_names} <= {
+        path.name for path in domain_root.glob("*.py")
+    }
+    assert not any((ROOT / name).exists() for name in module_names)
 
 
 def test_background_consumers_use_the_focused_domain_contract() -> None:

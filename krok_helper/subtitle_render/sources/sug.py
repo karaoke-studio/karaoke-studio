@@ -19,7 +19,7 @@ from strange_uta_game.backend.domain.models import (
 )
 from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
 
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingChar,
     TimingLine,

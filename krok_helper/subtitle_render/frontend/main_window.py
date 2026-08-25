@@ -121,7 +121,7 @@ from krok_helper.qfluent_compat import (
     apply_qfluent_tooltip_parent_patch,
 )
 from krok_helper.settings import get_settings_path, load_app_settings, save_app_settings
-from krok_helper.subtitle_render.background import (
+from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
     infer_image_sequence_pattern,
 )
@@ -245,7 +245,7 @@ from krok_helper.subtitle_render.settings.screen import (
 )
 from krok_helper.subtitle_render.frontend.editor.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import WorkspaceSwitcher
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
     LineAnimationOverride,
     SubtitleLoadingSettings,

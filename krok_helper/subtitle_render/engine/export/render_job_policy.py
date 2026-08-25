@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from krok_helper.errors import ProcessingError
-from krok_helper.subtitle_render.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.engine.export.encoder_select import (
     CPU_PRESETS,
     ENCODER_MODES,
@@ -13,7 +13,7 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
 )
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 def job_tracks(job: RenderJob) -> list[TimingTrack]:

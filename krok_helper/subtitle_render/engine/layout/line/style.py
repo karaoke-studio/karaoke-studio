@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.models import (
     Style,
     style_with_line_animation,
 )
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     timing_line_start_ms,
 )

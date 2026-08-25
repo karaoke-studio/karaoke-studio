@@ -632,12 +632,12 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     title_show_specs as _title_show_specs,
     title_show_window as _title_show_window,
 )
-from krok_helper.subtitle_render.paint import (
+from krok_helper.subtitle_render.domain.paint import (
     KaraokeColors,
     KaraokeColorState,
     PaintFill,
 )
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
     RubyAnnotation,
     TimingChar,

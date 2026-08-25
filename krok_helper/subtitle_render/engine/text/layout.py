@@ -23,7 +23,7 @@ from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_CHAR_FIELDS,
     Style,
 )
-from krok_helper.subtitle_render.timing import TimingLine
+from krok_helper.subtitle_render.domain.timing import TimingLine
 
 
 @dataclass(frozen=True)

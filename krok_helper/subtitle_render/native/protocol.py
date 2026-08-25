@@ -14,7 +14,7 @@ from typing import Any
 
 from krok_helper.subtitle_render.engine.layout.plan.model import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.layout.page.plan import section_head_line_indices
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingChar,
     TimingLine,

@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.engine.layout.page.placement import (
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.models import LYRICS_LAYOUT_FIELDS, Style
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 PageId = tuple[int, int]

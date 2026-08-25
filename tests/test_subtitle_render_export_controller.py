@@ -9,13 +9,13 @@ from types import SimpleNamespace
 import pytest
 
 from krok_helper.errors import ProcessingError
-from krok_helper.subtitle_render.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.frontend.workflow.export_controller import (
     ExportJobController,
     ExportJobInputs,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
 
 
 def _track(end_ms: int = 1_500) -> TimingTrack:

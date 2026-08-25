@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     resolve_display_lines_for_style,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 def test_display_resolution_cache_returns_copies_and_evicts_lru_entry() -> None:

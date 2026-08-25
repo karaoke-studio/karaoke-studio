@@ -9,7 +9,7 @@ from threading import Lock
 
 _IMAGE_RESOURCE_LOCK = Lock()
 _WARNED_PATHS: set[str] = set()
-_RESOURCE_LOG = logging.getLogger("krok_helper.subtitle_render.painter")
+_RESOURCE_LOG = logging.getLogger("krok_helper.subtitle_render.domain.painter")
 
 
 def warn_image_resource_skipped(path: str, reason: str) -> None:

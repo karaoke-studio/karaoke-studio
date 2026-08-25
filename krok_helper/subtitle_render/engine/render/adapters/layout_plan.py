@@ -12,7 +12,7 @@ from krok_helper.subtitle_render.engine.painter import (
     resolved_page_offset_windows_for_style,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 _PAINTER_LAYOUT_RESOLVERS = LayoutPlanResolvers(

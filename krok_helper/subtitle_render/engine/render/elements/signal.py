@@ -26,7 +26,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
 )
 from krok_helper.subtitle_render.models import Style
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
-from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 
 @dataclass(frozen=True)

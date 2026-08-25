@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
     TimingChar,
     TimingLine,

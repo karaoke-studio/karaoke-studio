@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_text,
     title_show_specs,
 )
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     Style,

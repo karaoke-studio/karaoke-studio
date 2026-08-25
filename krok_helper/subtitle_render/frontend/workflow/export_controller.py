@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from krok_helper.errors import ProcessingError
-from krok_helper.subtitle_render.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 @dataclass(frozen=True)

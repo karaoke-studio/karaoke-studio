@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from krok_helper.models import MediaInfo
-from krok_helper.subtitle_render.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.contracts import SubtitleProjectState
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     TimingTrack,
     guide_symbol_has_visual,
 )

@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from krok_helper.subtitle_render.background import BackgroundSource
+from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 @dataclass(frozen=True)

@@ -43,8 +43,8 @@ from krok_helper.subtitle_render.n3.font_scheme import (
     convert_n3_font_scheme as _scheme_changes,
     hex_from_colorbind as _hex_from_colorbind,
 )
-from krok_helper.subtitle_render.background import infer_image_sequence_pattern
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.background import infer_image_sequence_pattern
+from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
     LineAnimationOverride,
     TimingTrack,

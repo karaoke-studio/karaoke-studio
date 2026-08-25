@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     SubtitleLoadingSettings,
     TimingLine,
     TimingTrack,

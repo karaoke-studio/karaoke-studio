@@ -23,13 +23,13 @@ from difflib import SequenceMatcher
 from typing import Literal, Optional
 from uuid import uuid4
 
-from krok_helper.subtitle_render.background import (
+from krok_helper.subtitle_render.domain.background import (
     Background,
     BackgroundSource,
     background_sequence_frame_path,
     infer_image_sequence_pattern,
 )
-from krok_helper.subtitle_render.paint import (
+from krok_helper.subtitle_render.domain.paint import (
     ColorFillMode,
     ColorLayerKey,
     ColorStateKey,
@@ -47,7 +47,7 @@ from krok_helper.subtitle_render.serialization.paint import (
     paint_fill_to_dict,
 )
 
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     EntryAnimation,
     ExitAnimation,
     GuideSymbol,

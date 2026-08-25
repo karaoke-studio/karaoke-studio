@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.background import (
+from krok_helper.subtitle_render.domain.background import (
     BackgroundSource,
     background_sequence_frame_path,
     infer_image_sequence_pattern,

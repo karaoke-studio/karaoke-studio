@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-from krok_helper.subtitle_render.paint import (
+from krok_helper.subtitle_render.domain.paint import (
     KaraokeColors,
     KaraokeColorState,
     PaintFill,

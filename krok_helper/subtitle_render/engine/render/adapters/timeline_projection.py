@@ -18,7 +18,7 @@ from krok_helper.subtitle_render.engine.text import (
     build_latin_font,
     char_layout_width,
 )
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingLine,
 )

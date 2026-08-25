@@ -11,7 +11,7 @@ from krok_helper.subtitle_render.engine.guide import (
 from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 
 CharWidthResolver = Callable[[TimingLine, Style], Sequence[int]]

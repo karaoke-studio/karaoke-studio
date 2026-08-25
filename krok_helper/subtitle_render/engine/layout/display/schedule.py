@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     apply_display_overrides,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 DisplayWindows = dict[int, tuple[int, int]]

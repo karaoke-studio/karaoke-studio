@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from krok_helper.subtitle_render.paint import (
+from krok_helper.subtitle_render.domain.paint import (
     KaraokeColors,
     KaraokeColorState,
     PaintFill,

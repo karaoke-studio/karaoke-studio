@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.engine.layout.page.placement import (
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     line_visible_chars,

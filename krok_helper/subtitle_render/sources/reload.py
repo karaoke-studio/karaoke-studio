@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     guide_symbol_replacement_count,

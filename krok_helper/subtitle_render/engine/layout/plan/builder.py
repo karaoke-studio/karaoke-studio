@@ -18,7 +18,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
 from krok_helper.subtitle_render.engine.layout.page.plan import resolve_page_plan
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine, assign_lanes
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 
 DisplaySchedule = Mapping[int, tuple[int, int | None, int | None]]

@@ -33,7 +33,7 @@ from krok_helper.subtitle_render.engine.render.adapters.timeline_projection impo
     source_char_intervals,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingLine,
     TimingTrack,

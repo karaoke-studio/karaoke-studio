@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from krok_helper.subtitle_render.timing import TimingLine
+from krok_helper.subtitle_render.domain.timing import TimingLine
 from krok_helper.subtitle_render.models import Style
 
 

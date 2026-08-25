@@ -26,7 +26,7 @@ from krok_helper.subtitle_render.engine.text import (
     make_font_for,
 )
 from krok_helper.subtitle_render.models import Style
-from krok_helper.subtitle_render.timing import TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 
 def char_widths_for_intervals(

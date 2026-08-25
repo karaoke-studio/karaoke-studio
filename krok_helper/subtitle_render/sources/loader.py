@@ -10,7 +10,7 @@ from krok_helper.subtitle_render.sources.sug import (
     load_sug_timing_track,
     timing_track_from_sug_project,
 )
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 class SubtitleSourceLoader:

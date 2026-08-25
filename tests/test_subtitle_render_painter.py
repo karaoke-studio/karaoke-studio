@@ -5692,7 +5692,7 @@ def test_image_fill_brush_is_cached(qapp, tmp_path):
 
 def test_image_fill_failure_warns_once_per_path(qapp, tmp_path, caplog):
     clear_before_layer_cache()
-    painter_log = "krok_helper.subtitle_render.painter"
+    painter_log = "krok_helper.subtitle_render.domain.painter"
 
     missing_path = tmp_path / "missing.png"
     with caplog.at_level("WARNING", logger=painter_log):

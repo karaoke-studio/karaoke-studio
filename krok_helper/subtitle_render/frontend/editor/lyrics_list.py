@@ -88,7 +88,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_get_text,
     fluent_question,
 )
-from krok_helper.subtitle_render.timing import (
+from krok_helper.subtitle_render.domain.timing import (
     GuideSymbol,
     LineAnimationOverride,
     TimingChar,

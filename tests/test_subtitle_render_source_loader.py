@@ -6,7 +6,7 @@ from pathlib import Path
 
 from krok_helper.subtitle_render.sources import loader as loader_module
 from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
-from krok_helper.subtitle_render.timing import TimingTrack
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
 def test_subtitle_source_loader_routes_sug_with_compensation(
