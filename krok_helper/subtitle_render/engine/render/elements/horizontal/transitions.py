@@ -15,6 +15,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import line_end_ms
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
     LineCharTransition,
 )
+from krok_helper.subtitle_render.engine.text import GlyphLayout
 
 
 UTOPIA_INTRO_TIME_MS = 700
@@ -29,6 +30,50 @@ UTOPIA_FADE_OUT_TIME_MS = 750
 CHAR_FADE_INTRO_DELAY_MS = 350
 CHAR_FADE_IN_TIME_MS = 250
 CHAR_FADE_OUT_TIME_MS = 250
+
+
+def spin_flip_char_transform(
+    glyph: GlyphLayout,
+    baseline_y: int,
+    transition: LineCharTransition,
+    opacity: float,
+) -> QTransform | None:
+    """Return the residual scale/skew transform for one spin-flip glyph."""
+    direction = 1.0 if transition.phase == "exit" else -1.0
+    skew_y = direction * spin_flip_skew(opacity)
+    center_x = glyph.left + glyph.width / 2
+    center_y = baseline_y - glyph.metrics.ascent() + glyph.metrics.height() / 2
+    transform = character_transform(
+        center_x=center_x,
+        center_y=center_y,
+        scale_x=opacity,
+        scale_y=opacity,
+        skew_y=skew_y,
+    )
+    return None if transform.isIdentity() else transform
+
+
+def char_drip_char_transform(
+    glyph: GlyphLayout,
+    baseline_y: int,
+    transition: LineCharTransition,
+    progress: float,
+) -> QTransform | None:
+    """Return N3's corner-pivot shear transform for one CharDrip glyph."""
+    direction = 1.0 if transition.phase == "entry" else -1.0
+    skew_y = direction * spin_flip_skew(progress)
+    pivot_x = glyph.left + glyph.width
+    pivot_y = (
+        baseline_y
+        if transition.phase == "entry"
+        else baseline_y - glyph.metrics.height()
+    )
+    transform = character_transform(
+        center_x=pivot_x,
+        center_y=pivot_y,
+        skew_y=skew_y,
+    )
+    return None if transform.isIdentity() else transform
 
 
 def transition_char_state(

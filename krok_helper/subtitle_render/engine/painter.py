@@ -539,6 +539,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     after_glow_loose_clip_rect as _after_glow_loose_clip_rect,
     after_glow_source_clip_rect as _after_glow_source_clip_rect,
     char_fade_opacity as _char_fade_opacity,
+    char_drip_char_transform as _char_drip_char_transform,
     character_transform as _character_transform,
     aligned_x0 as _aligned_x0,
     bitmap_guide_anchor_descent as _bitmap_guide_anchor_descent,
@@ -593,6 +594,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     row_layout_params as _row_layout_params,
     smart_horizontal_dx as _smart_horizontal_dx,
     spin_flip_skew as _spin_flip_skew,
+    spin_flip_char_transform as _spin_flip_char_transform,
     ruby_after_clip_rect as _ruby_after_clip_rect,
     ruby_after_clip_rect_at_time as _ruby_after_clip_rect_at_time,
     ruby_before_clip_rect_at_time as _ruby_before_clip_rect_at_time,
@@ -4637,61 +4639,6 @@ def _paint_glyph_run_after_glow_wipe(
         painter.drawImage(anchor, baked.image)
     finally:
         painter.restore()
-
-
-def _spin_flip_char_transform(
-    glyph: _GlyphLayout,
-    baseline_y: int,
-    transition: _LineCharTransition,
-    opacity: float,
-) -> QTransform | None:
-    """A2：spin_flip 逐字的 scale(opacity)+skew 残差变换，绕字心枢轴。
-
-    复用 ``_character_transform``（与旧 ``_apply_character_transform`` 同一构造、
-    几何完全一致），把枢轴烘焙进矩阵；compositor 把它作为残差套在烘焙位图上
-    （bitmap-transform，短窗口软化可接受，见 §9.7 D2）。返回恒等时给 ``None``。
-    """
-    direction = 1.0 if transition.phase == "exit" else -1.0
-    skew_y = direction * _spin_flip_skew(opacity)
-    center_x = glyph.left + glyph.width / 2
-    center_y = baseline_y - glyph.metrics.ascent() + glyph.metrics.height() / 2
-    transform = _character_transform(
-        center_x=center_x,
-        center_y=center_y,
-        scale_x=opacity,
-        scale_y=opacity,
-        skew_y=skew_y,
-    )
-    return None if transform.isIdentity() else transform
-
-
-def _char_drip_char_transform(
-    glyph: _GlyphLayout,
-    baseline_y: int,
-    transition: _LineCharTransition,
-    progress: float,
-) -> QTransform | None:
-    """N3 ``CharDrip``: shear around the glyph's right-bottom/right-top corner.
-
-    N3 uses ``(drawWidth, 0)`` for intro and ``(drawWidth, -height)`` for
-    outro in glyph-local coordinates.  Unlike ``CharFadeInFadeOut`` it uses
-    the inherited opacity value only as transform progress; visible geometry
-    itself remains opaque once progress is non-zero.
-    """
-    direction = 1.0 if transition.phase == "entry" else -1.0
-    skew_y = direction * _spin_flip_skew(progress)
-    pivot_x = glyph.left + glyph.width
-    pivot_y = (
-        baseline_y
-        if transition.phase == "entry"
-        else baseline_y - glyph.metrics.height()
-    )
-    transform = _character_transform(
-        center_x=pivot_x,
-        center_y=pivot_y,
-        skew_y=skew_y,
-    )
-    return None if transform.isIdentity() else transform
 
 
 def _char_transition_layer_stack(
