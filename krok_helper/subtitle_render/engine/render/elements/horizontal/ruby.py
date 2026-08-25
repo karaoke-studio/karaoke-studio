@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from typing import Callable, Hashable
+from typing import Callable, Hashable, Optional
 
 from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPainterPath
@@ -24,6 +24,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     ruby_shadow_dy,
     ruby_vertical_extra,
     ruby_visual_padding,
+    ruby_baseline_y,
     visual_stroke_extent,
 )
 from krok_helper.subtitle_render.engine.render.core.layers import (
@@ -39,18 +40,28 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
     RubyLayout,
     RubyWipeSegment,
 )
+from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+    n3_main_fill_rect,
+)
 from krok_helper.subtitle_render.engine.ruby import (
     build_ruby_font_for_text,
     effective_ruby_for_target,
     ruby_font_size,
     ruby_layout_left_offset,
     ruby_layout_units,
+    ruby_layout_width,
     ruby_script_stroke_style,
     ruby_stroke2_width,
     ruby_stroke_width,
     ruby_style_for_target_indices,
     ruby_target_indices,
+    ruby_target_x_range,
     ruby_visual_units_and_intervals,
+)
+from krok_helper.subtitle_render.engine.text import (
+    TextLayout,
+    build_font,
+    n3_char_box_ascent,
 )
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _ruby_progress_ratio as ruby_progress_ratio,
@@ -67,6 +78,13 @@ class RubyLayerPorts:
     build_ruby_text_layer: Callable[..., tuple]
     paint_split_glow_path: Callable[..., None]
     ruby_text_path_and_rect: Callable[..., tuple]
+
+
+@dataclass(frozen=True)
+class RubyLayoutPorts:
+    """Compatibility hook needed while Painter exposes ruby wipe geometry."""
+
+    ruby_wipe_geometry: Callable[..., tuple]
 
 
 def ruby_wipe_geometry(
@@ -153,6 +171,167 @@ def ruby_wipe_geometry(
         max(right for _left, right in bounds),
         tuple(signature),
     )
+
+
+def layout_rubies(
+    ruby_metrics: QFontMetrics,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    main_baseline_y: int,
+    rubies: list[RubyAnnotation],
+    style: Style,
+    ports: RubyLayoutPorts,
+    *,
+    main_ascent_px: int | None = None,
+    text_layout: TextLayout | None = None,
+    ruby_font: QFont | None = None,
+) -> list[RubyLayout]:
+    """Build frame-independent horizontal ruby layouts."""
+    if not rubies:
+        return []
+    main_box_ascent: Optional[float] = None
+    if main_ascent_px is not None and text_layout is not None and text_layout.glyphs:
+        height_glyphs = [
+            glyph
+            for glyph in text_layout.glyphs
+            if glyph.text.strip() and glyph.style.affects_ruby_anchor
+        ]
+        if not height_glyphs:
+            target_indices = {
+                index
+                for ruby in rubies
+                for index in ruby_target_indices(ruby, line, intervals)
+            }
+            height_glyphs = [
+                glyph
+                for glyph in text_layout.glyphs
+                if glyph.text.strip() and glyph.index in target_indices
+            ]
+        candidates = [
+            n3_char_box_ascent(
+                glyph.metrics,
+                glyph.style.font_size_px,
+                glyph.style.stroke_width_px,
+            )
+            for glyph in height_glyphs
+        ]
+        if candidates:
+            main_box_ascent = max(candidates)
+    if main_box_ascent is None:
+        main_box_ascent = n3_char_box_ascent(
+            QFontMetrics(build_font(style)),
+            style.font_size_px,
+            style.stroke_width_px,
+        )
+    layouts: list[RubyLayout] = []
+    for ruby in rubies:
+        indices = ruby_target_indices(ruby, line, intervals)
+        if not indices:
+            continue
+        paint_ruby = effective_ruby_for_target(ruby, indices, intervals)
+        target_range = ruby_target_x_range(
+            ruby,
+            line,
+            intervals,
+            char_x_ranges,
+        )
+        if target_range is None:
+            continue
+        ruby_brush_style = ruby_style_for_target_indices(style, line, indices)
+        ruby_style = ruby_script_stroke_style(
+            ruby_brush_style,
+            paint_ruby.reading,
+        )
+        target_ruby_font = build_ruby_font_for_text(
+            ruby_style,
+            paint_ruby.reading,
+        )
+        target_ruby_metrics = QFontMetrics(target_ruby_font)
+        target_ruby_size = max(target_ruby_font.pixelSize(), 1)
+        baseline_y = ruby_baseline_y(
+            main_baseline_y,
+            main_box_ascent,
+            target_ruby_metrics,
+            ruby_style,
+            font_size_px=target_ruby_size,
+        )
+        left, right = target_range
+        target_width = max(right - left, 1)
+        gradient_rect = n3_ruby_fill_rect(
+            left,
+            target_width,
+            baseline_y,
+            target_ruby_metrics,
+            ruby_style,
+            brush_style=ruby_brush_style,
+            font_size_px=target_ruby_size,
+        )
+        reading_width = ruby_layout_width(
+            paint_ruby.reading,
+            target_ruby_metrics,
+            target_width,
+            style=ruby_style,
+            base_text=paint_ruby.kanji,
+        )
+        wipe_segments, wipe_left, wipe_right, geometry_signature = (
+            ports.ruby_wipe_geometry(
+                paint_ruby,
+                target_ruby_font,
+                target_ruby_metrics,
+                left,
+                baseline_y,
+                target_width,
+                ruby_style,
+                rtl=style.right_to_left,
+            )
+        )
+        layouts.append(
+            RubyLayout(
+                ruby=paint_ruby,
+                indices=indices,
+                style=ruby_style,
+                x=left,
+                baseline_y=baseline_y,
+                target_width=target_width,
+                reading_width=reading_width,
+                gradient_rect=gradient_rect,
+                wipe_segments=wipe_segments,
+                wipe_left=wipe_left,
+                wipe_right=wipe_right,
+                geometry_signature=geometry_signature,
+                font=target_ruby_font,
+                metrics=target_ruby_metrics,
+            )
+        )
+    if text_layout is not None and layouts:
+        main_rect = n3_main_fill_rect(text_layout, main_baseline_y)
+        top = min(
+            float(main_rect.top()),
+            *(float(layout.gradient_rect.top()) for layout in layouts),
+        )
+        bottom = max(
+            float(main_rect.bottom()),
+            *(float(layout.gradient_rect.bottom()) for layout in layouts),
+        )
+        shared_rect = QRectF(
+            float(main_rect.left()),
+            top,
+            float(max(main_rect.width(), 1.0)),
+            float(max(bottom - top, 1.0)),
+        )
+        layouts = [
+            replace(
+                layout,
+                horizontal_gradient_rect=(
+                    shared_rect
+                    if layout.style.ruby_horizontal_gradient_with_main
+                    else None
+                ),
+            )
+            for layout in layouts
+        ]
+    return layouts
 
 
 def role_ruby_vertical_extra(

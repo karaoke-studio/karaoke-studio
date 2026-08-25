@@ -529,6 +529,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     RubyLayout as _RubyLayout,
     RubyGlowLayer as _HorizontalRubyGlowLayer,
     RubyLayerPorts,
+    RubyLayoutPorts,
     RubySplitGlowLayer as _HorizontalRubySplitGlowLayer,
     RubyTextLayer as _HorizontalRubyTextLayer,
     RubyWipeSegment as _RubyWipeSegment,
@@ -563,6 +564,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     layout_line_uncached as _build_horizontal_line_uncached,
     layout_plain_line as _build_horizontal_plain_line,
     layout_role_line as _build_horizontal_role_line,
+    layout_rubies as _build_horizontal_ruby_layouts,
     line_total_width as _line_total_width,
     horizontal_after_clip_rect as _horizontal_after_clip_rect,
     horizontal_before_clip_rect as _horizontal_before_clip_rect,
@@ -7752,6 +7754,13 @@ def _paint_rubies(
         painter.restore()
 
 
+_RUBY_LAYOUT_PORTS = RubyLayoutPorts(
+    ruby_wipe_geometry=lambda *args, **kwargs: (
+        _ruby_wipe_geometry(*args, **kwargs)
+    ),
+)
+
+
 def _layout_rubies(
     ruby_metrics: QFontMetrics,
     line: TimingLine,
@@ -7765,142 +7774,19 @@ def _layout_rubies(
     text_layout: _TextLayout | None = None,
     ruby_font: QFont | None = None,
 ) -> list[_RubyLayout]:
-    """layout 段：算横排 ruby 的目标字符范围、基线与排布宽度。"""
-    if not rubies:
-        return []
-    main_box_ascent: Optional[float] = None
-    if main_ascent_px is not None and text_layout is not None and text_layout.glyphs:
-        # N3 行盒顶 = 参与注音高度计算的字符盒顶最高者；空白无墨水不算。
-        height_glyphs = [
-            glyph
-            for glyph in text_layout.glyphs
-            if glyph.text.strip() and glyph.style.affects_ruby_anchor
-        ]
-        if not height_glyphs:
-            # If every visible glyph opted out, keep ruby attached to its own
-            # base characters instead of falling back to an unrelated global
-            # font metric.  This also gives an all-decoration line a safe floor.
-            ruby_target_indices = {
-                index
-                for ruby in rubies
-                for index in _ruby_target_indices(ruby, line, intervals)
-            }
-            height_glyphs = [
-                glyph
-                for glyph in text_layout.glyphs
-                if glyph.text.strip() and glyph.index in ruby_target_indices
-            ]
-        candidates = [
-            _n3_char_box_ascent(
-                glyph.metrics, glyph.style.font_size_px, glyph.style.stroke_width_px
-            )
-            for glyph in height_glyphs
-        ]
-        if candidates:
-            main_box_ascent = max(candidates)
-    if main_box_ascent is None:
-        main_box_ascent = _n3_char_box_ascent(
-            QFontMetrics(_build_font(style)), style.font_size_px, style.stroke_width_px
-        )
-    layouts: list[_RubyLayout] = []
-    for ruby in rubies:
-        indices = _ruby_target_indices(ruby, line, intervals)
-        if not indices:
-            continue
-        paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
-        target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
-        if target_range is None:
-            continue
-        ruby_brush_style = _ruby_style_for_target_indices(style, line, indices)
-        ruby_style = _ruby_script_stroke_style(
-            ruby_brush_style, paint_ruby.reading
-        )
-        target_ruby_font = _build_ruby_font_for_text(
-            ruby_style, paint_ruby.reading
-        )
-        target_ruby_metrics = QFontMetrics(target_ruby_font)
-        target_ruby_size = max(target_ruby_font.pixelSize(), 1)
-        ruby_baseline_y = _ruby_baseline_y(
-            main_baseline_y,
-            main_box_ascent,
-            target_ruby_metrics,
-            ruby_style,
-            font_size_px=target_ruby_size,
-        )
-        left, right = target_range
-        target_width = max(right - left, 1)
-        gradient_rect = _n3_ruby_fill_rect(
-            left,
-            target_width,
-            ruby_baseline_y,
-            target_ruby_metrics,
-            ruby_style,
-            brush_style=ruby_brush_style,
-            font_size_px=target_ruby_size,
-        )
-        reading_width = _ruby_layout_width(
-            paint_ruby.reading,
-            target_ruby_metrics,
-            target_width,
-            style=ruby_style,
-            base_text=paint_ruby.kanji,
-        )
-        wipe_segments, wipe_left, wipe_right, geometry_signature = _ruby_wipe_geometry(
-            paint_ruby,
-            target_ruby_font,
-            target_ruby_metrics,
-            left,
-            ruby_baseline_y,
-            target_width,
-            ruby_style,
-            rtl=style.right_to_left,
-        )
-        layouts.append(
-            _RubyLayout(
-                ruby=paint_ruby,
-                indices=indices,
-                style=ruby_style,
-                x=left,
-                baseline_y=ruby_baseline_y,
-                target_width=target_width,
-                reading_width=reading_width,
-                gradient_rect=gradient_rect,
-                wipe_segments=wipe_segments,
-                wipe_left=wipe_left,
-                wipe_right=wipe_right,
-                geometry_signature=geometry_signature,
-                font=target_ruby_font,
-                metrics=target_ruby_metrics,
-            )
-        )
-    if text_layout is not None and layouts:
-        main_rect = _n3_main_fill_rect(text_layout, main_baseline_y)
-        top = min(
-            float(main_rect.top()),
-            *(float(layout.gradient_rect.top()) for layout in layouts),
-        )
-        bottom = max(
-            float(main_rect.bottom()),
-            *(float(layout.gradient_rect.bottom()) for layout in layouts),
-        )
-        shared_rect = QRectF(
-            float(main_rect.left()),
-            top,
-            float(max(main_rect.width(), 1.0)),
-            float(max(bottom - top, 1.0)),
-        )
-        layouts = [
-            replace(
-                layout,
-                horizontal_gradient_rect=(
-                    shared_rect
-                    if layout.style.ruby_horizontal_gradient_with_main
-                    else None
-                ),
-            )
-            for layout in layouts
-        ]
-    return layouts
+    return _build_horizontal_ruby_layouts(
+        ruby_metrics,
+        line,
+        intervals,
+        char_x_ranges,
+        main_baseline_y,
+        rubies,
+        style,
+        _RUBY_LAYOUT_PORTS,
+        main_ascent_px=main_ascent_px,
+        text_layout=text_layout,
+        ruby_font=ruby_font,
+    )
 
 
 _HORIZONTAL_LAYOUT_PORTS = HorizontalLayoutPorts(

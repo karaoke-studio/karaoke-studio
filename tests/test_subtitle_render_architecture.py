@@ -2061,6 +2061,64 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
     )
 
 
+def test_horizontal_ruby_layout_uses_one_explicit_geometry_port() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    ruby_path = ROOT / "engine/render/elements/horizontal/ruby.py"
+    painter_path = ROOT / "engine/painter.py"
+    ruby_tree = ast.parse(ruby_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    ruby_members = {
+        node.name
+        for node in ruby_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name == "layout_rubies"
+    }
+    wrappers = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_layout_rubies"
+    }
+
+    assert {"RubyLayoutPorts", "layout_rubies"} <= ruby_members
+    assert imported == {"layout_rubies": "_build_horizontal_ruby_layouts"}
+    wrapper = wrappers["_layout_rubies"]
+    assert len(wrapper.body) == 1
+    returned = wrapper.body[0]
+    assert isinstance(returned, ast.Return)
+    assert isinstance(returned.value, ast.Call)
+    assert isinstance(returned.value.func, ast.Name)
+    assert returned.value.func.id == "_build_horizontal_ruby_layouts"
+    assert any(
+        isinstance(argument, ast.Name)
+        and argument.id == "_RUBY_LAYOUT_PORTS"
+        for argument in returned.value.args
+    )
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_RUBY_LAYOUT_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "RubyLayoutPorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "ruby_wipe_geometry"
+    }
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"
