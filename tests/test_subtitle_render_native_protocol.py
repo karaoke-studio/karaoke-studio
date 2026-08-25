@@ -16,7 +16,7 @@ import pytest
 
 from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
-from krok_helper.subtitle_render.engine.render.layout_plan_backend import (
+from krok_helper.subtitle_render.engine.render.adapters.layout_plan import (
     build_track_layout_plan,
 )
 from krok_helper.subtitle_render.models import (
@@ -88,7 +88,7 @@ def test_render_ir_uses_semantic_plan_boundary():
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
         and node.module
-        == "krok_helper.subtitle_render.engine.render.layout_plan_backend"
+        == "krok_helper.subtitle_render.engine.render.adapters.layout_plan"
         for alias in node.names
     }
 
@@ -111,7 +111,7 @@ def test_semantic_plan_has_no_painter_dependency():
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
     backend_path = Path(
-        "krok_helper/subtitle_render/engine/render/layout_plan_backend.py"
+        "krok_helper/subtitle_render/engine/render/adapters/layout_plan.py"
     )
     backend_tree = ast.parse(backend_path.read_text(encoding="utf-8"))
     painter_imports = {

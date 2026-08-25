@@ -93,7 +93,7 @@ def test_timeline_uses_visual_interval_projection_boundary() -> None:
     }
 
     assert (
-        "krok_helper.subtitle_render.engine.render.timeline_projection_backend"
+        "krok_helper.subtitle_render.engine.render.adapters.timeline_projection"
         in imported_modules
     )
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules

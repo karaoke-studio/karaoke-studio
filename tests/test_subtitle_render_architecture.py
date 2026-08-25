@@ -773,8 +773,8 @@ def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     assert inline_contracts == set()
 
 
-def test_layout_diagnostics_backend_binds_layout_margin_policy() -> None:
-    adapter_path = ROOT / "engine/render/layout_diagnostics_backend.py"
+def test_layout_diagnostics_adapter_binds_layout_margin_policy() -> None:
+    adapter_path = ROOT / "engine/render/adapters/layout_diagnostics.py"
     tree = ast.parse(adapter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
@@ -810,8 +810,8 @@ def test_layout_diagnostics_backend_binds_layout_margin_policy() -> None:
     assert "check_layout_margins" not in inline_functions
 
 
-def test_layout_diagnostics_backend_binds_timing_diagnostic_policy() -> None:
-    adapter_path = ROOT / "engine/render/layout_diagnostics_backend.py"
+def test_layout_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
+    adapter_path = ROOT / "engine/render/adapters/layout_diagnostics.py"
     tree = ast.parse(adapter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
@@ -1166,14 +1166,11 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "animator.py",
         "image_resource.py",
         "layers.py",
-        "layout_diagnostics_backend.py",
-        "layout_plan_backend.py",
         "quantize.py",
         "raster_blur.py",
         "render_bands.py",
         "render_ir.py",
         "signal.py",
-        "timeline_projection_backend.py",
         "title.py",
         "vertical.py",
     }
@@ -1182,6 +1179,23 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in render_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
+    adapter_names = {
+        "layout_diagnostics.py",
+        "layout_plan.py",
+        "timeline_projection.py",
+    }
+    adapter_root = render_root / "adapters"
+    assert {"__init__.py", *adapter_names} <= {
+        path.name for path in adapter_root.glob("*.py")
+    }
+    assert not any(
+        (render_root / name).exists()
+        for name in {
+            "layout_diagnostics_backend.py",
+            "layout_plan_backend.py",
+            "timeline_projection_backend.py",
+        }
+    )
 
 
 def test_title_layout_has_one_render_owner() -> None:
