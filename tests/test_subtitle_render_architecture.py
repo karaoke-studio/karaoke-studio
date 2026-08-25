@@ -4399,6 +4399,28 @@ def test_subtitle_property_panel_delegates_font_preview_controls() -> None:
     )
 
 
+def test_subtitle_property_panel_delegates_preset_library_dialogs() -> None:
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
+    targets = _import_targets(panel_module, panel_path)
+
+    preset_module = f"{PACKAGE}.frontend.properties.preset_manager"
+    assert preset_module in targets
+    tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    class_names = {
+        node.name for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+    assert class_names.isdisjoint(
+        {
+            "_StylePresetDetailsDialog",
+            "_RolePresetGroupDialog",
+            "StylePresetManagerDialog",
+        }
+    )
+    preset_path = ROOT / "frontend" / "properties" / "preset_manager.py"
+    assert panel_module not in _import_targets(preset_module, preset_path)
+
+
 def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
     panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"

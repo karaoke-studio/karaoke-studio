@@ -49,6 +49,9 @@ from qfluentwidgets import (  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.properties import property_panel as pp  # noqa: E402
+from krok_helper.subtitle_render.frontend.properties import (  # noqa: E402
+    preset_manager as preset_manager_module,
+)
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (  # noqa: E402
     FluentIntInputDialog,
     FluentMessageDialog,
@@ -5522,13 +5525,17 @@ def test_style_preset_manager_leaves_new_n3_templates_unchecked_after_import(
         for name, color in (("N3 角色 A", "#111111"), ("N3 角色 B", "#222222"))
     )
     monkeypatch.setattr(
-        pp,
+        preset_manager_module,
         "find_n3_template_files",
         lambda: [item.path for item in imported_templates],
     )
-    monkeypatch.setattr(pp, "fluent_choice", lambda *_args, **_kwargs: 0)
     monkeypatch.setattr(
-        pp,
+        preset_manager_module,
+        "fluent_choice",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        preset_manager_module,
         "load_n3_font_templates",
         lambda *_args, **_kwargs: N3TemplateBatchResult(
             templates=imported_templates,
@@ -5566,10 +5573,18 @@ def test_style_preset_manager_publishes_n3_import_before_dialog_closes(
             source_data={"payload": {"SettingsName": "N3 模板"}},
         ),
     )
-    monkeypatch.setattr(pp, "find_n3_template_files", lambda: [imported.path])
-    monkeypatch.setattr(pp, "fluent_choice", lambda *_args, **_kwargs: 0)
     monkeypatch.setattr(
-        pp,
+        preset_manager_module,
+        "find_n3_template_files",
+        lambda: [imported.path],
+    )
+    monkeypatch.setattr(
+        preset_manager_module,
+        "fluent_choice",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        preset_manager_module,
         "load_n3_font_templates",
         lambda *_args, **_kwargs: N3TemplateBatchResult(
             templates=(imported,), skipped=(), failed=()
@@ -5630,7 +5645,7 @@ def test_style_preset_manager_sets_group_for_checked_items(qapp, monkeypatch):
     for index in range(dialog._preset_list.count()):
         dialog._preset_list.item(index).setCheckState(Qt.CheckState.Checked)
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.properties.property_panel.fluent_get_editable_choice",
+        "krok_helper.subtitle_render.frontend.properties.preset_manager.fluent_get_editable_choice",
         lambda *args, **kwargs: ("新分组", True),
     )
 
@@ -5730,7 +5745,7 @@ def test_property_panel_deleting_preset_keeps_same_named_project_role(qapp):
 
 def test_style_preset_manager_dialog_deletes_only_library_entry(qapp, monkeypatch):
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.properties.property_panel.fluent_question",
+        "krok_helper.subtitle_render.frontend.properties.preset_manager.fluent_question",
         lambda *args, **kwargs: True,
     )
     dialog = StylePresetManagerDialog(
