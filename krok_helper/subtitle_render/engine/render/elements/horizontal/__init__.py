@@ -45,8 +45,13 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     text_glyph_runs,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.layers import (
+    BitmapGuideLayer,
+    BitmapGuidePorts,
     after_glow_loose_clip_rect,
     after_glow_source_clip_rect,
+    bitmap_guide_band_for_glyph,
+    bitmap_guide_band_for_segments,
+    bitmap_guide_target_rect,
     before_glow_source_clip_rect,
     glyph_run_after_glow_key,
     glyph_run_layer_key,
@@ -57,6 +62,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layers import
     inflate_rect,
     karaoke_glow_states_differ,
     karaoke_state_uses_image,
+    paint_bitmap_guide_glyph,
+    paint_bitmap_guide_glyphs,
+    paint_bitmap_guide_transition_glyph,
     relative_fill_rect_signature,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
@@ -72,6 +80,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions i
 
 
 __all__ = [
+    "BitmapGuideLayer",
+    "BitmapGuidePorts",
     "FillSegment",
     "HorizontalLayoutPorts",
     "LineCharTransition",
@@ -85,9 +95,12 @@ __all__ = [
     "aligned_x0",
     "after_glow_loose_clip_rect",
     "after_glow_source_clip_rect",
+    "bitmap_guide_band_for_glyph",
+    "bitmap_guide_band_for_segments",
     "bitmap_guide_glyphs",
     "bitmap_guide_anchor_descent",
     "bitmap_guide_is_no_wipe",
+    "bitmap_guide_target_rect",
     "before_glow_source_clip_rect",
     "bottom_short_page_alignment",
     "clamp_role_baseline_y",
@@ -118,6 +131,9 @@ __all__ = [
     "karaoke_state_uses_image",
     "n3_smart_font_size",
     "n3_main_fill_rect",
+    "paint_bitmap_guide_glyph",
+    "paint_bitmap_guide_glyphs",
+    "paint_bitmap_guide_transition_glyph",
     "resolve_line_x",
     "resolve_line_x_smart",
     "resolve_role_baseline_y",

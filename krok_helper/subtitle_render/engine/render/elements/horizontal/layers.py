@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QRectF
+import math
+from dataclasses import dataclass
+from typing import Callable, Hashable
+
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QImage, QPainter
 
 from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.timing import TimingLine
 from krok_helper.subtitle_render.domain.paint import (
     KaraokeColors,
     KaraokeColorState,
@@ -16,11 +22,45 @@ from krok_helper.subtitle_render.engine.render.effects import (
     karaoke_state_signature,
     main_stroke2_width,
 )
+from krok_helper.subtitle_render.engine.guide import (
+    bitmap_guide_content_size,
+    bitmap_guide_image,
+    guide_symbol_is_bitmap,
+)
+from krok_helper.subtitle_render.engine.render.core.layers import (
+    BakedLayer,
+    LayerAnimation,
+    LayerContext,
+    SCOPE_LINE,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
+    FillSegment,
+    LineCharTransition,
+    LineLayout,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+    bitmap_guide_anchor_descent,
+    bitmap_guide_glyphs,
+    glyph_is_bitmap_guide,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+    transition_char_state,
+    utopia_following_done_time,
+)
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
 )
 from krok_helper.subtitle_render.engine.text import GlyphLayout
 from krok_helper.subtitle_render.engine.value_signature import value_signature
+
+
+@dataclass(frozen=True)
+class BitmapGuidePorts:
+    """Painter-owned sweep-band capabilities used by bitmap guide layers."""
+
+    fill_clip_band: Callable[..., tuple[int, int] | None]
+    fill_clip_band_for_glyphs: Callable[..., tuple[int, int] | None]
+    n3_following_wipe_band: Callable[..., tuple[int, int] | None]
 
 
 def horizontal_after_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
@@ -269,3 +309,254 @@ def glyph_run_needs_before_glow_split(glyphs: list[GlyphLayout]) -> bool:
         role_style,
         effective_karaoke_colors(role_style),
     )
+
+
+def bitmap_guide_target_rect(
+    glyph: GlyphLayout,
+    baseline_y: int,
+) -> QRectF | None:
+    symbol = glyph.vector_glyph
+    if not guide_symbol_is_bitmap(symbol):
+        return None
+    width, height = bitmap_guide_content_size(symbol, glyph.style)
+    left = float(glyph.left + int(symbol.bitmap_margin_left_px))
+    bottom = (
+        baseline_y
+        + bitmap_guide_anchor_descent(glyph)
+        - int(symbol.bitmap_margin_bottom_px)
+    )
+    top = float(bottom - height)
+    return QRectF(left, top, float(max(width, 1)), float(max(height, 1)))
+
+
+def paint_bitmap_guide_glyph(
+    painter: QPainter,
+    glyph: GlyphLayout,
+    baseline_y: int,
+    *,
+    after: bool,
+    band: tuple[int, int] | None,
+    rtl: bool,
+) -> None:
+    symbol = glyph.vector_glyph
+    if not guide_symbol_is_bitmap(symbol):
+        return
+    image_path = (
+        symbol.bitmap_after_path
+        if after and symbol.bitmap_after_path
+        else symbol.bitmap_before_path
+    )
+    image = bitmap_guide_image(image_path)
+    rect = bitmap_guide_target_rect(glyph, baseline_y)
+    if image is None or rect is None or image.isNull():
+        return
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        if after and band is not None:
+            painter.setClipRect(horizontal_after_clip_rect(band, rtl))
+        painter.drawImage(rect, image)
+    finally:
+        painter.restore()
+
+
+def bitmap_guide_band_for_segments(
+    fill_segments: list[FillSegment],
+    glyph: GlyphLayout,
+    t_ms: int,
+    rtl: bool,
+    ports: BitmapGuidePorts,
+) -> tuple[int, int] | None:
+    band = ports.fill_clip_band_for_glyphs(
+        fill_segments,
+        [glyph],
+        t_ms,
+        rtl,
+    )
+    if band is None:
+        band = ports.fill_clip_band(fill_segments, t_ms, rtl)
+    following_band = ports.n3_following_wipe_band(
+        fill_segments,
+        {glyph.index},
+        t_ms,
+        rtl,
+    )
+    if following_band is not None:
+        return following_band
+    return band
+
+
+def bitmap_guide_band_for_glyph(
+    layout: LineLayout,
+    glyph: GlyphLayout,
+    t_ms: int,
+    ports: BitmapGuidePorts,
+) -> tuple[int, int] | None:
+    return bitmap_guide_band_for_segments(
+        layout.fill_segments,
+        glyph,
+        t_ms,
+        layout.rtl,
+        ports,
+    )
+
+
+def paint_bitmap_guide_glyphs(
+    painter: QPainter,
+    layout: LineLayout,
+    t_ms: int,
+    ports: BitmapGuidePorts,
+    *,
+    after: bool,
+) -> None:
+    for glyph in bitmap_guide_glyphs(layout.text_layout):
+        band = bitmap_guide_band_for_glyph(layout, glyph, t_ms, ports)
+        if after and band is None:
+            continue
+        paint_bitmap_guide_glyph(
+            painter,
+            glyph,
+            layout.baseline_y,
+            after=after,
+            band=band,
+            rtl=layout.rtl,
+        )
+
+
+def paint_bitmap_guide_transition_glyph(
+    painter: QPainter,
+    glyph: GlyphLayout,
+    fill_segments: list[FillSegment],
+    baseline_y: int,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+    t_ms: int,
+    transition: LineCharTransition,
+    style: Style,
+    ports: BitmapGuidePorts,
+    *,
+    rtl: bool,
+) -> None:
+    if not glyph_is_bitmap_guide(glyph):
+        return
+    following_done_ms = (
+        utopia_following_done_time(line, intervals, index, style)
+        if transition.effect == "utopia"
+        else None
+    )
+    char_start_ms = intervals[index][0] if index < len(intervals) else glyph.index
+    char_end_ms = (
+        intervals[index][1]
+        if index < len(intervals)
+        else char_start_ms
+    )
+    opacity = transition_char_state(
+        style,
+        transition,
+        index,
+        max(len(line.chars), 1),
+        char_start_ms=char_start_ms,
+        char_end_ms=char_end_ms,
+        t_ms=t_ms,
+        frame_height=painter.device().height(),
+        following_done_ms=following_done_ms,
+    )[0]
+    if opacity <= 0.0:
+        return
+    band = bitmap_guide_band_for_segments(
+        fill_segments,
+        glyph,
+        t_ms,
+        rtl,
+        ports,
+    )
+    painter.save()
+    try:
+        painter.setOpacity(painter.opacity() * opacity)
+        paint_bitmap_guide_glyph(
+            painter,
+            glyph,
+            baseline_y,
+            after=False,
+            band=band,
+            rtl=rtl,
+        )
+        if band is not None:
+            paint_bitmap_guide_glyph(
+                painter,
+                glyph,
+                baseline_y,
+                after=True,
+                band=band,
+                rtl=rtl,
+            )
+    finally:
+        painter.restore()
+
+
+@dataclass(frozen=True)
+class BitmapGuideLayer:
+    glyph: GlyphLayout
+    baseline_y: int
+    fill_segments: list
+    t_ms: int
+    rtl: bool
+    after: bool
+    ports: BitmapGuidePorts
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "BitmapGuideLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        return BakedLayer(image=QImage(), offset=QPointF())
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        band = bitmap_guide_band_for_segments(
+            self.fill_segments,
+            self.glyph,
+            self.t_ms,
+            self.rtl,
+            self.ports,
+        )
+        if self.after and band is None:
+            return
+        paint_bitmap_guide_glyph(
+            painter,
+            self.glyph,
+            self.baseline_y,
+            after=self.after,
+            band=band,
+            rtl=self.rtl,
+        )
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = bitmap_guide_target_rect(self.glyph, self.baseline_y)
+        if rect is None:
+            return None
+        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))

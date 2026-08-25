@@ -1796,6 +1796,63 @@ def test_horizontal_layer_policy_has_one_painter_free_owner() -> None:
     )
 
 
+def test_bitmap_guide_layers_use_explicit_painter_free_ports() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layer_owner = f"{owner}.layers"
+    layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
+    painter_path = ROOT / "engine/painter.py"
+    layer_tree = ast.parse(layer_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    layer_members = {
+        node.name
+        for node in layer_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    painter_classes = {
+        node.name for node in painter_tree.body if isinstance(node, ast.ClassDef)
+    }
+
+    assert {
+        "BitmapGuideLayer",
+        "BitmapGuidePorts",
+        "bitmap_guide_band_for_glyph",
+        "bitmap_guide_band_for_segments",
+        "bitmap_guide_target_rect",
+        "paint_bitmap_guide_glyph",
+        "paint_bitmap_guide_glyphs",
+        "paint_bitmap_guide_transition_glyph",
+    } <= layer_members
+    assert "_BitmapGuideLayer" not in painter_classes
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_BITMAP_GUIDE_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "BitmapGuidePorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "fill_clip_band",
+        "fill_clip_band_for_glyphs",
+        "n3_following_wipe_band",
+    }
+
+    targets = _import_targets(layer_owner, layer_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"
