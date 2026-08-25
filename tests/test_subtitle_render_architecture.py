@@ -560,7 +560,13 @@ def test_property_panel_delegates_role_scheme_lifecycle() -> None:
         for node in role_controller.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert {"delete_changes", "rename_changes"} <= methods
+    assert {
+        "add_scheme_changes",
+        "apply_scheme_changes",
+        "delete_changes",
+        "import_preset_changes",
+        "rename_changes",
+    } <= methods
 
     panel_class = next(
         node
@@ -568,7 +574,10 @@ def test_property_panel_delegates_role_scheme_lifecycle() -> None:
         if isinstance(node, ast.ClassDef) and node.name == "PropertyPanel"
     )
     expected = {
+        "_add_custom_scheme": {"add_scheme_changes"},
+        "_apply_preset_to_current_target": {"apply_scheme_changes"},
         "_delete_current_role": {"delete_changes"},
+        "_import_preset_schemes": {"import_preset_changes"},
         "_rename_current_role": {"rename_changes"},
     }
     actual = {}
@@ -585,7 +594,14 @@ def test_property_panel_delegates_role_scheme_lifecycle() -> None:
             and isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Attribute)
             and node.func.value.attr == "_role_controller"
-            and node.func.attr.endswith("_changes")
+            and node.func.attr
+            in {
+                "add_scheme_changes",
+                "apply_scheme_changes",
+                "delete_changes",
+                "import_preset_changes",
+                "rename_changes",
+            }
         }
     assert actual == expected
 

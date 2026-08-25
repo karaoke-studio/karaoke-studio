@@ -5715,16 +5715,13 @@ class PropertyPanel(QWidget):
         name = name.strip()
         if not name:
             return
-        schemes = dict(self._style.custom_style_schemes)
-        original = name
-        suffix = 2
-        while name in schemes:
-            name = f"{original} {suffix}"
-            suffix += 1
-        schemes[name] = self._current_scheme_snapshot()
         previous_roles = self._role_controller.names
-        self._role_controller.add(name)
-        self._update_style(custom_style_schemes=schemes)
+        changes, name = self._role_controller.add_scheme_changes(
+            self._style,
+            name,
+            self._current_scheme_snapshot(),
+        )
+        self._update_style(**changes)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
@@ -5829,17 +5826,13 @@ class PropertyPanel(QWidget):
     ) -> None:
         if not schemes:
             return
-        role_names = self._role_controller.names
-        style_schemes = dict(self._style.custom_style_schemes)
-        for preset in _normalize_style_presets(schemes).values():
-            name = str(preset.name).strip()
-            if not name or name == TITLE_SCHEME_NAME or name in role_names:
-                continue
-            style_schemes[name] = deepcopy(preset.scheme)
-            role_names.append(name)
         previous_roles = self._role_controller.names
-        self._role_controller.replace(role_names)
-        self._update_style(custom_style_schemes=style_schemes)
+        changes = self._role_controller.import_preset_changes(
+            self._style,
+            list(_normalize_style_presets(schemes).values()),
+            reserved_name=TITLE_SCHEME_NAME,
+        )
+        self._update_style(**changes)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
@@ -5867,11 +5860,13 @@ class PropertyPanel(QWidget):
     def _apply_preset_to_current_target(self, scheme: SubtitleStyleScheme) -> None:
         role_name = self._current_custom_scheme_name()
         if role_name is not None:
-            schemes = dict(self._style.custom_style_schemes)
-            schemes[role_name] = deepcopy(scheme)
             previous_roles = self._role_controller.names
-            self._role_controller.add(role_name)
-            self._update_style(custom_style_schemes=schemes)
+            changes = self._role_controller.apply_scheme_changes(
+                self._style,
+                role_name,
+                scheme,
+            )
+            self._update_style(**changes)
             if self._role_controller.names != previous_roles:
                 self.rolesChanged.emit(self._role_controller.names)
             return

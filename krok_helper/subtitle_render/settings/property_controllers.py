@@ -494,6 +494,54 @@ class RoleSchemeController:
         self.remove(name)
         return {"custom_style_schemes": schemes}
 
+    def add_scheme_changes(
+        self,
+        style: Style,
+        name: str,
+        scheme: SubtitleStyleScheme,
+    ) -> tuple[dict[str, object], str]:
+        """Add a uniquely named project role initialized from a detached scheme."""
+        schemes = dict(style.custom_style_schemes)
+        resolved = name
+        suffix = 2
+        while resolved in schemes:
+            resolved = f"{name} {suffix}"
+            suffix += 1
+        schemes[resolved] = deepcopy(scheme)
+        self.add(resolved)
+        return {"custom_style_schemes": schemes}, resolved
+
+    def import_preset_changes(
+        self,
+        style: Style,
+        presets: list[StylePreset],
+        *,
+        reserved_name: str,
+    ) -> dict[str, object]:
+        """Import preset copies as new roles without overwriting project roles."""
+        role_names = self.names
+        schemes = dict(style.custom_style_schemes)
+        for preset in presets:
+            name = str(preset.name).strip()
+            if not name or name == reserved_name or name in role_names:
+                continue
+            schemes[name] = deepcopy(preset.scheme)
+            role_names.append(name)
+        self.replace(role_names)
+        return {"custom_style_schemes": schemes}
+
+    def apply_scheme_changes(
+        self,
+        style: Style,
+        name: str,
+        scheme: SubtitleStyleScheme,
+    ) -> dict[str, object]:
+        """Replace one role's project scheme with a detached preset copy."""
+        schemes = dict(style.custom_style_schemes)
+        schemes[name] = deepcopy(scheme)
+        self.add(name)
+        return {"custom_style_schemes": schemes}
+
     def ensure_style_schemes(
         self,
         style: Style,

@@ -178,6 +178,39 @@ def test_role_scheme_controller_owns_registry_and_scheme_defaults():
     assert lifecycle.names == ["B"]
     assert set(deleted.custom_style_schemes) == {"B"}
 
+    add_changes, added_name = lifecycle.add_scheme_changes(
+        deleted,
+        "B",
+        SubtitleStyleScheme(fill_color="#333333"),
+    )
+    added = replace(deleted, **add_changes)
+    assert added_name == "B 2"
+    assert lifecycle.names == ["B", "B 2"]
+    imported = replace(
+        added,
+        **lifecycle.import_preset_changes(
+            added,
+            [
+                StylePreset(name="B", scheme=SubtitleStyleScheme(fill_color="#AAAAAA")),
+                StylePreset(name="C", scheme=SubtitleStyleScheme(fill_color="#444444")),
+                StylePreset(name=TITLE_SCHEME_NAME),
+            ],
+            reserved_name=TITLE_SCHEME_NAME,
+        ),
+    )
+    assert lifecycle.names == ["B", "B 2", "C"]
+    assert imported.custom_style_schemes["B"].fill_color == "#222222"
+    assert imported.custom_style_schemes["C"].fill_color == "#444444"
+    applied = replace(
+        imported,
+        **lifecycle.apply_scheme_changes(
+            imported,
+            "B",
+            SubtitleStyleScheme(fill_color="#555555"),
+        ),
+    )
+    assert applied.custom_style_schemes["B"].fill_color == "#555555"
+
 
 def test_layout_catalog_controller_preserves_inheritance_and_title_references():
     controller = LayoutCatalogController()
