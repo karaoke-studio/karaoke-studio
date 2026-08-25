@@ -4368,6 +4368,9 @@ def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> Non
     assert "_ResponsiveRoleHeader" not in inline_names
     assert "_ResponsiveFieldGrid" not in inline_names
     assert "_ResponsivePropertyPair" not in inline_names
+    assert "_GlyphSegment" not in inline_names
+    assert "_LayoutSchematic" not in inline_names
+    assert "_SchematicBoard" not in inline_names
     inline_functions = {
         node.name
         for node in tree.body
