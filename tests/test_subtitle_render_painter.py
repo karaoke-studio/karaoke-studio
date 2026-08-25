@@ -174,6 +174,19 @@ def test_painter_keeps_ruby_timing_compatibility_exports() -> None:
     for name in names:
         assert getattr(subtitle_painter, name) is getattr(ruby_timing, name)
 
+    public_aliases = {
+        "character_fill_ratio": "_character_fill_ratio",
+        "is_utopia_group_marker": "_is_utopia_group_marker",
+        "resolve_char_ruby_groups": "_resolve_char_ruby_groups",
+        "ruby_for_char_index": "_ruby_for_char_index",
+        "ruby_main_uses_base_timing": "_ruby_main_uses_base_timing",
+    }
+    for public_name, compatibility_name in public_aliases.items():
+        assert getattr(subtitle_painter, compatibility_name) is getattr(
+            ruby_timing,
+            public_name,
+        )
+
 
 def test_painter_keeps_raster_blur_compatibility_exports() -> None:
     names = ("_blur_image", "_gaussian_blur_image", "_n3_gaussian_kernel_1d")

@@ -5,7 +5,11 @@ from __future__ import annotations
 from PyQt6.QtGui import QFontMetrics
 
 from krok_helper.subtitle_render.engine.timing.timeline import char_fill_ratio
-from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
+from krok_helper.subtitle_render.engine.ruby.selection import (
+    effective_ruby_for_target,
+    ruby_target_indices,
+)
 
 
 _RUBY_COMBINING_CHARS = set(
@@ -384,3 +388,134 @@ def _ruby_reading_boundaries(ruby: RubyAnnotation, unit_count: int) -> list[int]
             boundaries.append(start + round((ruby.pos_end_ms - start) * step / remaining))
     boundaries.append(max(boundaries[-1], ruby.pos_end_ms))
     return boundaries
+
+
+def ruby_for_char_index(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+) -> RubyAnnotation | None:
+    """Return the first ruby annotation whose resolved target owns ``index``."""
+
+    for ruby in rubies:
+        if index in ruby_target_indices(ruby, line, intervals):
+            return ruby
+    return None
+
+
+def resolve_char_ruby_groups(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+) -> dict[int, tuple[list[int], RubyAnnotation]]:
+    """Resolve each character to its first matching ruby group once per line.
+
+    The mapping is frame-independent. ``setdefault`` preserves the established
+    first-match-wins rule when authored ruby annotations overlap.
+    """
+
+    groups: dict[int, tuple[list[int], RubyAnnotation]] = {}
+    for ruby in rubies:
+        indices = ruby_target_indices(ruby, line, intervals)
+        for index in indices:
+            groups.setdefault(index, (indices, ruby))
+    return groups
+
+
+def ruby_main_uses_base_timing(
+    line: TimingLine,
+    indices: list[int],
+) -> bool:
+    """Return whether a ruby target preserves authored main-text checkpoints.
+
+    N3 converts ruby time to kanji time only when the target has no internal
+    explicit main-text boundary. The group's outer start/end do not count as
+    internal boundaries.
+    """
+
+    valid = [index for index in indices if 0 <= index < len(line.chars)]
+    if len(valid) <= 1:
+        return False
+    last_offset = len(valid) - 1
+    for offset, index in enumerate(valid):
+        char = line.chars[index]
+        if offset > 0 and char.explicit_start:
+            return True
+        if offset < last_offset and char.explicit_end:
+            return True
+    return False
+
+
+def is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
+    """Return whether ``ruby`` is SUG's linked-phrase-only pause marker."""
+
+    return ruby.reading.strip() in {"", "^"} and all(
+        not part.strip() or part.strip() == "^" for part in ruby.reading_parts
+    )
+
+
+def character_fill_ratio(
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    active_rubies: list[RubyAnnotation],
+    index: int,
+    t_ms: int,
+    *,
+    groups: dict[int, tuple[list[int], RubyAnnotation]] | None = None,
+    ruby_main_progress_mode: str = "checkpoint_segments",
+) -> float:
+    """Return one main-text character's sung ratio under ruby timing rules."""
+
+    if groups is not None:
+        entry = groups.get(index)
+        ruby = entry[1] if entry is not None else None
+        raw_indices = entry[0] if entry is not None else None
+    else:
+        ruby = ruby_for_char_index(active_rubies, line, intervals, index)
+        raw_indices = (
+            ruby_target_indices(ruby, line, intervals)
+            if ruby is not None
+            else None
+        )
+
+    # SUG's pause-only linked-phrase marker groups Utopia motion but must not
+    # replace the underlying syllable or character clock for main-text wipe.
+    if ruby is not None and is_utopia_group_marker(ruby):
+        ruby = None
+        raw_indices = None
+    if ruby is not None:
+        indices = [
+            candidate
+            for candidate in raw_indices
+            if 0 <= candidate < len(char_x_ranges)
+        ]
+        if indices and not ruby_main_uses_base_timing(line, indices):
+            effective_ruby = effective_ruby_for_target(ruby, indices, intervals)
+            if (
+                ruby_main_progress_mode == "reading_units"
+                and _ruby_visual_units_and_intervals(effective_ruby)
+            ):
+                base_index = indices.index(index)
+                progress = _main_text_ruby_progress_ratio(
+                    effective_ruby,
+                    t_ms,
+                    mode="reading_units",
+                )
+                return max(
+                    0.0,
+                    min(1.0, progress * len(indices) - base_index),
+                )
+            group_left = min(char_x_ranges[candidate][0] for candidate in indices)
+            group_right = max(char_x_ranges[candidate][1] for candidate in indices)
+            fill_end = group_left + (
+                group_right - group_left
+            ) * _main_text_ruby_progress_ratio(effective_ruby, t_ms)
+            char_left, char_right = char_x_ranges[index]
+            width = max(char_right - char_left, 1)
+            return max(0.0, min(1.0, (fill_end - char_left) / width))
+    if index >= len(intervals):
+        return 0.0
+    start, end = intervals[index]
+    return char_fill_ratio(start, end, t_ms)

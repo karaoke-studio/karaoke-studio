@@ -390,6 +390,11 @@ from krok_helper.subtitle_render.engine.ruby.timing import (
     _ruby_utopia_reading_units_and_intervals,
     _ruby_utopia_visual_units,
     _ruby_visual_units_and_intervals,
+    character_fill_ratio as _character_fill_ratio,
+    is_utopia_group_marker as _is_utopia_group_marker,
+    resolve_char_ruby_groups as _resolve_char_ruby_groups,
+    ruby_for_char_index as _ruby_for_char_index,
+    ruby_main_uses_base_timing as _ruby_main_uses_base_timing,
 )
 from krok_helper.subtitle_render.engine.render.core.raster_blur import (
     _blur_image,
@@ -6559,63 +6564,6 @@ def _karaoke_fill_segments(
     return _adjust_fill_release_edges(segments)
 
 
-def _ruby_for_char_index(
-    rubies: list[RubyAnnotation],
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-    index: int,
-) -> RubyAnnotation | None:
-    for ruby in rubies:
-        if index in _ruby_target_indices(ruby, line, intervals):
-            return ruby
-    return None
-
-
-def _resolve_char_ruby_groups(
-    rubies: list[RubyAnnotation],
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-) -> dict[int, tuple[list[int], RubyAnnotation]]:
-    """预解析 ``char index -> (该字所属 ruby 的 target indices, ruby)``，每行算一次。
-
-    等价于逐字调用 ``_ruby_for_char_index`` + ``_ruby_target_indices``，但这些查找是
-    **布局静态**（不依赖 ``t_ms``，只取决于 rubies/line/intervals）。原本在 transition
-    逐字逐帧循环里反复重算（实测每帧数百次 ``_find_ruby_text_span``/``_text_span_indices``），
-    在此一次性建表。``setdefault`` 实现「rubies 顺序中首个命中者胜」，与 ``_ruby_for_char_index``
-    一致；消费方（``_utopia_main_group_for_index`` / ``_character_fill_ratio``）各自对返回的
-    indices 施加自己的范围过滤，故行为逐像素不变。
-    """
-    groups: dict[int, tuple[list[int], RubyAnnotation]] = {}
-    for ruby in rubies:
-        indices = _ruby_target_indices(ruby, line, intervals)
-        for index in indices:
-            groups.setdefault(index, (indices, ruby))
-    return groups
-
-
-def _ruby_main_uses_base_timing(
-    line: TimingLine,
-    indices: list[int],
-) -> bool:
-    """是否保留 ruby 目标正文已有的逐字时间边界。
-
-    ``DrawDataGenerator.SetOneLineWipe`` 只在 ruby 组内部没有显式正文边界时调用
-    ``RubyTimesToKanjiTimes``。组首的 begin 和组尾的 end 不算内部边界；任一后续正文
-    字符有显式 begin，或任一非末正文字符有显式 end，整组都改用正文自己的时钟。
-    """
-    valid = [index for index in indices if 0 <= index < len(line.chars)]
-    if len(valid) <= 1:
-        return False
-    last_offset = len(valid) - 1
-    for offset, index in enumerate(valid):
-        char = line.chars[index]
-        if offset > 0 and char.explicit_start:
-            return True
-        if offset < last_offset and char.explicit_end:
-            return True
-    return False
-
-
 _BITMAP_GUIDE_PORTS = BitmapGuidePorts(
     fill_clip_band=lambda *args, **kwargs: _fill_clip_band(*args, **kwargs),
     fill_clip_band_for_glyphs=lambda *args, **kwargs: (
@@ -6691,76 +6639,10 @@ _CHAR_TRANSITION_LAYER_STACK_PORTS = TransitionLayerStackPorts(
 )
 
 
-def _character_fill_ratio(
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-    char_x_ranges: list[tuple[int, int]],
-    active_rubies: list[RubyAnnotation],
-    index: int,
-    t_ms: int,
-    *,
-    groups: dict[int, tuple[list[int], RubyAnnotation]] | None = None,
-    ruby_main_progress_mode: str = "checkpoint_segments",
-) -> float:
-    # groups 由 _resolve_char_ruby_groups 预建（每行一次）；缺省回退逐字查找。
-    if groups is not None:
-        entry = groups.get(index)
-        ruby = entry[1] if entry is not None else None
-        raw_indices = entry[0] if entry is not None else None
-    else:
-        ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
-        raw_indices = _ruby_target_indices(ruby, line, intervals) if ruby is not None else None
-    # Keep SUG's pause-only linked-phrase marker available to
-    # ``_utopia_main_group_for_index`` while letting the main-text wipe follow
-    # the underlying syllable/character intervals.
-    if ruby is not None and _is_utopia_group_marker(ruby):
-        ruby = None
-        raw_indices = None
-    if ruby is not None:
-        indices = [
-            candidate
-            for candidate in raw_indices
-            if 0 <= candidate < len(char_x_ranges)
-        ]
-        if indices and not _ruby_main_uses_base_timing(line, indices):
-            effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
-            if (
-                ruby_main_progress_mode == "reading_units"
-                and _ruby_visual_units_and_intervals(effective_ruby)
-            ):
-                base_index = indices.index(index)
-                progress = _main_text_ruby_progress_ratio(
-                    effective_ruby, t_ms, mode="reading_units"
-                )
-                return max(
-                    0.0,
-                    min(1.0, progress * len(indices) - base_index),
-                )
-            group_left = min(char_x_ranges[candidate][0] for candidate in indices)
-            group_right = max(char_x_ranges[candidate][1] for candidate in indices)
-            fill_end = group_left + (group_right - group_left) * _main_text_ruby_progress_ratio(
-                effective_ruby, t_ms
-            )
-            char_left, char_right = char_x_ranges[index]
-            width = max(char_right - char_left, 1)
-            return max(0.0, min(1.0, (fill_end - char_left) / width))
-    if index >= len(intervals):
-        return 0.0
-    start, end = intervals[index]
-    return char_fill_ratio(start, end, t_ms)
-
-
 _VERTICAL_PROGRESS_PORTS = VerticalProgressPorts(
     resolve_char_ruby_groups=_resolve_char_ruby_groups,
     character_fill_ratio=_character_fill_ratio,
 )
-
-
-def _is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
-    """Return whether ``ruby`` is SUG's linked-phrase-only pause marker."""
-    return ruby.reading.strip() in {"", "^"} and all(
-        not part.strip() or part.strip() == "^" for part in ruby.reading_parts
-    )
 
 
 # ---------------------------------------------------------------------------

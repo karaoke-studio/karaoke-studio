@@ -1725,6 +1725,57 @@ def test_vertical_layout_has_one_render_owner() -> None:
     )
 
 
+def test_ruby_main_text_timing_has_one_painter_free_owner() -> None:
+    timing_owner = f"{PACKAGE}.engine.ruby.timing"
+    timing_path = ROOT / "engine/ruby/timing.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "character_fill_ratio": "_character_fill_ratio",
+        "is_utopia_group_marker": "_is_utopia_group_marker",
+        "resolve_char_ruby_groups": "_resolve_char_ruby_groups",
+        "ruby_for_char_index": "_ruby_for_char_index",
+        "ruby_main_uses_base_timing": "_ruby_main_uses_base_timing",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == timing_owner
+        for alias in node.names
+        if alias.name in aliases
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == aliases
+    assert set(aliases.values()).isdisjoint(painter_members)
+    targets = _import_targets(timing_owner, timing_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+    timeline_path = ROOT / "engine/render/adapters/timeline_projection.py"
+    timeline_tree = ast.parse(timeline_path.read_text(encoding="utf-8-sig"))
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.engine.ruby"
+        and any(alias.name == "resolve_char_ruby_groups" for alias in node.names)
+        for node in timeline_tree.body
+    )
+    assert not any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.engine.painter"
+        and any(alias.name == "_resolve_char_ruby_groups" for alias in node.names)
+        for node in ast.walk(timeline_tree)
+    )
+
+
 def test_horizontal_contracts_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.horizontal"
     contract_owner = f"{owner}.contracts"

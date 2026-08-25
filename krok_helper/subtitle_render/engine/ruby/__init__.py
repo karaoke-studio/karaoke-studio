@@ -46,6 +46,11 @@ from krok_helper.subtitle_render.engine.ruby.style import (
     scaled_signed_px,
 )
 from krok_helper.subtitle_render.engine.ruby.timing import (
+    character_fill_ratio,
+    is_utopia_group_marker,
+    resolve_char_ruby_groups,
+    ruby_for_char_index,
+    ruby_main_uses_base_timing,
     ruby_visual_units_and_intervals,
 )
 
@@ -54,12 +59,16 @@ __all__ = [
     "active_rubies_for_line",
     "build_ruby_font",
     "build_ruby_font_for_text",
+    "character_fill_ratio",
     "effective_ruby_for_target",
     "find_ruby_text_indices",
     "find_ruby_text_span",
+    "is_utopia_group_marker",
     "resolve_ruby_alignment",
+    "resolve_char_ruby_groups",
     "ruby_explicit_target_indices",
     "ruby_font_size",
+    "ruby_for_char_index",
     "ruby_has_global_position",
     "ruby_char_gaps",
     "ruby_interval_px",
@@ -70,6 +79,7 @@ __all__ = [
     "ruby_layout_origins",
     "ruby_layout_units",
     "ruby_layout_width",
+    "ruby_main_uses_base_timing",
     "ruby_owns_line",
     "ruby_scale",
     "ruby_script_stroke_style",

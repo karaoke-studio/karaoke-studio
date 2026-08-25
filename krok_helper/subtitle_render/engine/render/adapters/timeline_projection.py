@@ -18,6 +18,7 @@ from krok_helper.subtitle_render.engine.text import (
     build_latin_font,
     char_layout_width,
 )
+from krok_helper.subtitle_render.engine.ruby import resolve_char_ruby_groups
 from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingLine,
@@ -69,7 +70,6 @@ def resolve_utopia_visual_intervals(
         _active_rubies_for_line,
         _char_left_positions,
         _letter_spacing,
-        _resolve_char_ruby_groups,
         _style_for_line,
         _utopia_wipe_window_for_index,
     )
@@ -104,7 +104,7 @@ def resolve_utopia_visual_intervals(
     char_x_ranges = [
         (left, left + width) for left, width in zip(char_lefts, char_widths)
     ]
-    groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
+    groups = resolve_char_ruby_groups(active_rubies, line, intervals)
     if not groups:
         return None
 
