@@ -10,7 +10,7 @@ from typing import Hashable
 from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 
-from krok_helper.subtitle_render.engine.render.layers import (
+from krok_helper.subtitle_render.engine.render.core.layers import (
     BakedLayer,
     LayerAnimation,
     LayerCompositor,

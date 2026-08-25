@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
 from PyQt6.QtGui import QColor, QImage, QPainter, QTransform  # noqa: E402
 
-from krok_helper.subtitle_render.engine.render.layers import (  # noqa: E402
+from krok_helper.subtitle_render.engine.render.core.layers import (  # noqa: E402
     BakedLayer,
     LayerAnimation,
     LayerCache,

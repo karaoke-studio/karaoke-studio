@@ -53,7 +53,7 @@ from PyQt6.QtGui import (
     QTransform,
 )
 
-from krok_helper.subtitle_render.engine.render.layers import (
+from krok_helper.subtitle_render.engine.render.core.layers import (
     BakedLayer,
     LayerAnimation,
     LayerCache,
@@ -532,7 +532,7 @@ from krok_helper.subtitle_render.engine.layout.page.assignment import (
     assign_layout_to_all,
     auto_assign_layouts_by_page,
 )
-from krok_helper.subtitle_render.engine.render.animator import line_animation_state
+from krok_helper.subtitle_render.engine.render.core.animator import line_animation_state
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _main_text_ruby_progress_ratio,
     _main_text_ruby_progress_time_at_ratio,
@@ -550,7 +550,7 @@ from krok_helper.subtitle_render.engine.ruby.timing import (
     _ruby_utopia_visual_units,
     _ruby_visual_units_and_intervals,
 )
-from krok_helper.subtitle_render.engine.render.raster_blur import (
+from krok_helper.subtitle_render.engine.render.core.raster_blur import (
     _blur_image,
     _gaussian_blur_image,
     _n3_gaussian_kernel_1d,

@@ -124,7 +124,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "contracts.py",
         ROOT / "engine" / "export" / "export_command.py",
         ROOT / "engine" / "export" / "parallel_schedule.py",
-        ROOT / "engine" / "render" / "raster_blur.py",
+        ROOT / "engine" / "render" / "core" / "raster_blur.py",
         ROOT / "engine" / "export" / "render_job.py",
         ROOT / "engine" / "export" / "render_job_policy.py",
         ROOT / "engine" / "render" / "render_bands.py",
@@ -1207,11 +1207,7 @@ def test_export_engine_modules_are_grouped_in_one_domain_package() -> None:
 
 def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
-        "animator.py",
         "image_resource.py",
-        "layers.py",
-        "quantize.py",
-        "raster_blur.py",
         "render_bands.py",
         "render_ir.py",
         "signal.py",
@@ -1223,6 +1219,12 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in render_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
+    core_names = {"animator.py", "layers.py", "quantize.py", "raster_blur.py"}
+    core_root = render_root / "core"
+    assert {"__init__.py", *core_names} <= {
+        path.name for path in core_root.glob("*.py")
+    }
+    assert not any((render_root / name).exists() for name in core_names)
     adapter_names = {
         "layout_diagnostics.py",
         "layout_plan.py",

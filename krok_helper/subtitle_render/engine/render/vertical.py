@@ -19,7 +19,7 @@ from PyQt6.QtGui import (
 
 from krok_helper.subtitle_render.engine.guide import guide_symbol_is_bitmap
 from krok_helper.subtitle_render.engine.layout.line.style import lane_count
-from krok_helper.subtitle_render.engine.render.layers import (
+from krok_helper.subtitle_render.engine.render.core.layers import (
     BakedLayer,
     LayerAnimation,
     LayerCompositor,

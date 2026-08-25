@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from krok_helper.subtitle_render.engine.render.animator import line_animation_state
+from krok_helper.subtitle_render.engine.render.core.animator import line_animation_state
 from krok_helper.subtitle_render.models import (
     LineAnimationOverride,
     Style,
@@ -187,7 +187,7 @@ def test_rise_exit_fades_from_opaque_to_transparent():
 def test_max_line_animation_excursion_none_for_shear_effects():
     # char_drip / spin_flip 的剪切包络随首帧 tan 发散、依赖行内字形宽度，
     # 无可靠上界：调用方（条带/多带预扫）必须据此禁用裁剪优化
-    from krok_helper.subtitle_render.engine.render.animator import max_line_animation_excursion
+    from krok_helper.subtitle_render.engine.render.core.animator import max_line_animation_excursion
 
     drip = Style(font_size_px=48, entry_anim="char_drip", entry_lead_ms=250)
     assert max_line_animation_excursion(drip, 1080) is None
@@ -196,7 +196,7 @@ def test_max_line_animation_excursion_none_for_shear_effects():
 
 
 def test_max_line_animation_excursion_bounded_for_travel_effects():
-    from krok_helper.subtitle_render.engine.render.animator import max_line_animation_excursion
+    from krok_helper.subtitle_render.engine.render.core.animator import max_line_animation_excursion
 
     rise = Style(font_size_px=48, entry_anim="rise", entry_lead_ms=300)
     assert max_line_animation_excursion(rise, 1080) == pytest.approx(
@@ -212,7 +212,7 @@ def test_max_line_animation_excursion_bounded_for_travel_effects():
 def test_max_line_animation_excursion_honors_project_max_font():
     # 角色/行内方案可把字号覆盖到远超全局样式；utopia 放大与 rise 行程
     # 按字形尺寸缩放，必须按传入的全项目最大字号估算
-    from krok_helper.subtitle_render.engine.render.animator import max_line_animation_excursion
+    from krok_helper.subtitle_render.engine.render.core.animator import max_line_animation_excursion
 
     style = Style(font_size_px=48, exit_anim="utopia", exit_fade_ms=750)
     base = max_line_animation_excursion(style, 2160)
@@ -229,7 +229,7 @@ def test_max_line_animation_excursion_honors_project_max_font():
 def test_max_line_animation_excursion_uses_glyph_span_em():
     # 矢量导唱符可远宽于 1em；utopia 旋转的纵向包络按调用方传入的
     # 路径对角线跨度（em）缩放，而不是固定 1.5×字号
-    from krok_helper.subtitle_render.engine.render.animator import max_line_animation_excursion
+    from krok_helper.subtitle_render.engine.render.core.animator import max_line_animation_excursion
 
     style = Style(font_size_px=48, exit_anim="utopia", exit_fade_ms=750)
     wide = max_line_animation_excursion(

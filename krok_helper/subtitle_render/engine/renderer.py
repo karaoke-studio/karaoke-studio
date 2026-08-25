@@ -62,7 +62,7 @@ from krok_helper.subtitle_render.engine.render.render_bands import (
     merge_intervals as _merge_intervals,
     packed_offsets as _packed_offsets,
 )
-from krok_helper.subtitle_render.engine.render.animator import max_line_animation_excursion
+from krok_helper.subtitle_render.engine.render.core.animator import max_line_animation_excursion
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
     frame_vertical_bounds,

@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
 from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_head_context,
 )
-from krok_helper.subtitle_render.engine.render.layers import (
+from krok_helper.subtitle_render.engine.render.core.layers import (
     BakedLayer,
     LayerAnimation,
     LayerCompositor,
