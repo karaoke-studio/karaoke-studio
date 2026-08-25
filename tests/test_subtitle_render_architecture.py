@@ -142,6 +142,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "project" / "session.py",
         ROOT / "settings" / "store.py",
         ROOT / "sources" / "loader.py",
+        ROOT / "sources" / "reload.py",
         ROOT / "engine" / "timing" / "timecode.py",
         ROOT / "domain" / "timing.py",
         ROOT / "serialization" / "timing.py",
@@ -3355,6 +3356,30 @@ def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
         and node.func.value.attr == "_subtitle_source_loader"
     }
     assert loader_calls == {"load_file", "load_lrc", "load_sug", "load_sug_project"}
+
+
+def test_subtitle_render_window_delegates_source_reload_planning() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_reload_external_subtitle_source"
+    )
+    direct_merge_calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "plan_reloaded_tracks" in direct_merge_calls
+    assert "merge_reloaded_track" not in direct_merge_calls
 
 
 def test_subtitle_render_window_delegates_n3_import_commands() -> None:

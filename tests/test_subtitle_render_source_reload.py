@@ -8,7 +8,10 @@ from krok_helper.subtitle_render.domain.models import (
     TimingLine,
     TimingTrack,
 )
-from krok_helper.subtitle_render.sources.reload import merge_reloaded_track
+from krok_helper.subtitle_render.sources.reload import (
+    merge_reloaded_track,
+    plan_reloaded_tracks,
+)
 
 
 def _track(*, first_ms: int = 1000, role: str | None = "源角色") -> TimingTrack:
@@ -168,3 +171,47 @@ def test_explicit_refresh_drops_only_the_legacy_page_projection() -> None:
     assert result.track.lines[0].break_before == "none"
     assert result.track.lines[0].display_start_override_ms == 700
     assert result.track.lines[0].chars[0].role_label == "手工角色"
+
+
+def test_multi_track_reload_plan_aggregates_project_source_merges() -> None:
+    baseline = _track()
+    primary = deepcopy(baseline)
+    primary.lines[0].chars[0].role_label = "主轨角色"
+    extra = deepcopy(baseline)
+    extra.lines[0].chars[1].role_label = "附加轨角色"
+
+    plan = plan_reloaded_tracks(
+        baseline,
+        _track(first_ms=2200),
+        primary_track=primary,
+        extra_tracks=((3, extra),),
+    )
+
+    assert plan.primary_merge is not None
+    assert plan.primary_merge.track.lines[0].chars[0].role_label == "主轨角色"
+    assert len(plan.extra_merges) == 1
+    assert plan.extra_merges[0][0] == 3
+    assert plan.extra_merges[0][1].track.lines[0].chars[1].role_label == "附加轨角色"
+    assert plan.conflicts == ()
+    assert plan.structure_changed is False
+    assert plan.timing_only is True
+
+
+def test_multi_track_reload_plan_deduplicates_shared_conflicts() -> None:
+    baseline = _track()
+    current = deepcopy(baseline)
+    current.lines[0].inline_guide_symbols = {1: _guide()}
+    candidate = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("x", 1000)], end_ms=1500)]
+    )
+
+    plan = plan_reloaded_tracks(
+        baseline,
+        candidate,
+        primary_track=current,
+        extra_tracks=((0, deepcopy(current)),),
+    )
+
+    assert len(plan.conflicts) == 1
+    assert plan.structure_changed is True
+    assert plan.timing_only is False

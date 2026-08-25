@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -20,6 +21,51 @@ class TrackReloadMerge:
     conflicts: tuple[str, ...] = ()
     structure_changed: bool = False
     timing_only: bool = False
+
+
+@dataclass(frozen=True)
+class TrackReloadPlan:
+    """Pure merge plan for every project track backed by one source file."""
+
+    primary_merge: TrackReloadMerge | None
+    extra_merges: tuple[tuple[int, TrackReloadMerge], ...]
+    conflicts: tuple[str, ...]
+    structure_changed: bool
+    timing_only: bool
+
+
+def plan_reloaded_tracks(
+    baseline: TimingTrack,
+    candidate: TimingTrack,
+    *,
+    primary_track: TimingTrack | None = None,
+    extra_tracks: Iterable[tuple[int, TimingTrack]] = (),
+) -> TrackReloadPlan:
+    """Plan a source reload without mutating project or presentation state."""
+
+    primary_merge = (
+        merge_reloaded_track(primary_track, baseline, candidate)
+        if primary_track is not None
+        else None
+    )
+    extra_merges = tuple(
+        (index, merge_reloaded_track(track, baseline, candidate))
+        for index, track in extra_tracks
+    )
+    merges = (
+        ((primary_merge,) if primary_merge is not None else ())
+        + tuple(merge for _index, merge in extra_merges)
+    )
+    conflicts = tuple(
+        dict.fromkeys(conflict for merge in merges for conflict in merge.conflicts)
+    )
+    return TrackReloadPlan(
+        primary_merge=primary_merge,
+        extra_merges=extra_merges,
+        conflicts=conflicts,
+        structure_changed=any(merge.structure_changed for merge in merges),
+        timing_only=bool(merges) and all(merge.timing_only for merge in merges),
+    )
 
 
 def track_structure_signature(track: TimingTrack) -> tuple:

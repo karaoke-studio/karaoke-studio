@@ -332,8 +332,8 @@ from krok_helper.subtitle_render.project.store import (
 )
 from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
 from krok_helper.subtitle_render.sources.reload import (
-    TrackReloadMerge,
     merge_reloaded_track,
+    plan_reloaded_tracks,
 )
 from krok_helper.subtitle_render.project.session import (
     ExtraSubtitleSource,
@@ -4717,31 +4717,27 @@ class SubtitleRenderWindow(QWidget):
             self._sync_subtitle_source_watcher()
             return
 
-        primary_merge: Optional[TrackReloadMerge] = None
+        primary_track = None
         if (
             self._watch_primary_subtitle_source
             and self._subtitle_path is not None
             and self._timing_track is not None
             and self._subtitle_source_key(self._subtitle_path) == key
         ):
-            primary_merge = merge_reloaded_track(
-                self._timing_track, state.baseline, candidate
-            )
-
-        extra_merges: dict[int, TrackReloadMerge] = {}
-        for index, source in enumerate(self._extra_sources):
-            if self._subtitle_source_key(source.path) == key:
-                extra_merges[index] = merge_reloaded_track(
-                    source.track, state.baseline, candidate
-                )
-
-        merges = ([primary_merge] if primary_merge is not None else []) + list(
-            extra_merges.values()
+            primary_track = self._timing_track
+        plan = plan_reloaded_tracks(
+            state.baseline,
+            candidate,
+            primary_track=primary_track,
+            extra_tracks=(
+                (index, source.track)
+                for index, source in enumerate(self._extra_sources)
+                if self._subtitle_source_key(source.path) == key
+            ),
         )
-        conflicts = list(dict.fromkeys(item for merge in merges for item in merge.conflicts))
-        if conflicts:
-            details = "\n".join(f"• {item}" for item in conflicts[:8])
-            suffix = "\n• 还有其他冲突……" if len(conflicts) > 8 else ""
+        if plan.conflicts:
+            details = "\n".join(f"• {item}" for item in plan.conflicts[:8])
+            suffix = "\n• 还有其他冲突……" if len(plan.conflicts) > 8 else ""
             accepted = fluent_question(
                 self,
                 "字幕源结构已变化",
@@ -4756,20 +4752,18 @@ class SubtitleRenderWindow(QWidget):
                 self._sync_subtitle_source_watcher()
                 return
 
-        if primary_merge is not None:
-            self._timing_track = primary_merge.track
+        if plan.primary_merge is not None:
+            self._timing_track = plan.primary_merge.track
             self._timing_track.page_plan = build_legacy_page_plan(
                 self._timing_track, self._style
             )
             project_page_plan_to_legacy_fields(self._timing_track, self._style)
-        for index, merge in extra_merges.items():
+        for index, merge in plan.extra_merges:
             self._extra_sources[index].track = merge.track
             merge.track.page_plan = build_legacy_page_plan(merge.track, self._style)
             project_page_plan_to_legacy_fields(merge.track, self._style)
 
-        structure_changed = any(merge.structure_changed for merge in merges)
-        timing_only = bool(merges) and all(merge.timing_only for merge in merges)
-        if structure_changed:
+        if plan.structure_changed:
             self._clear_undo_history()
         state.baseline = deepcopy(candidate)
         state.seen_digest = digest
@@ -4787,7 +4781,7 @@ class SubtitleRenderWindow(QWidget):
             title="字幕源已更新",
             content=(
                 f"已自动载入 {path.name} 的最新时间轴。"
-                if timing_only
+                if plan.timing_only
                 else f"已自动载入 {path.name} 的最新内容。"
             ),
             parent=self,
