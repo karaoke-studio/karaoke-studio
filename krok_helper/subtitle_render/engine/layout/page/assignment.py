@@ -10,7 +10,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     row_count_resolver as _row_count_resolver,
 )
 
-from krok_helper.subtitle_render.engine.layout.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page.plan import (
     resolve_page_plan,
     set_pages_layout,
     use_default_layouts,

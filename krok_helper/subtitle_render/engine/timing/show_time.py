@@ -807,7 +807,7 @@ class _Solver:
                         self._enforce_auto_wipe_bounds(other)
                         self._enforce_auto_wipe_bounds(line)
                 previous_page = page
-        # Spatial avoidance (page_placement.py) handles any remaining static
+        # Spatial avoidance (layout/page/placement.py) handles remaining static
         # conflicts that could not be resolved by time-domain compression.
         for other, line in self.squeeze_pairs:
             self._squeeze_measured_pair(

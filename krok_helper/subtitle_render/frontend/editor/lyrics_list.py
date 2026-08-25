@@ -73,7 +73,7 @@ from krok_helper.qfluent_compat import ModelessDialog, hide_fluent_tooltip, show
 from krok_helper.subtitle_render.engine.timing.timeline import (
     assign_lanes,
 )
-from krok_helper.subtitle_render.engine.layout.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page.plan import (
     ResolvedPagePlan,
     resolve_page_plan,
 )

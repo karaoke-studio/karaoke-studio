@@ -10,7 +10,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     line_end_ms,
     line_start_ms,
 )
-from krok_helper.subtitle_render.engine.layout.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     bands_require_separation,
     time_windows_overlap,

@@ -1,7 +1,7 @@
 from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
     page_offsets_at_time,
 )
-from krok_helper.subtitle_render.engine.layout.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     PageVisualBands,
     solve_page_axis_offset_windows,

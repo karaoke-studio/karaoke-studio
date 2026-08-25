@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.layout_plan import LayoutOffsetWindow
-from krok_helper.subtitle_render.engine.layout.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page.placement import (
     AxisOffsetWindow,
     LineVisualBand,
     PageVisualBands,

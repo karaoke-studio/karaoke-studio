@@ -102,7 +102,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     style_for_line as _style_for_line,
     style_for_line_display_window as _style_for_line_display_window,
 )
-from krok_helper.subtitle_render.engine.layout.line_pagination import (
+from krok_helper.subtitle_render.engine.layout.page.pagination import (
     line_center_override as _line_center_override,
     renderable_page_lines as _renderable_page_lines,
     renderable_page_map as _renderable_page_map,
@@ -512,11 +512,11 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     compute_display_lines,
     track_duration_ms,
 )
-from krok_helper.subtitle_render.engine.layout.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page.plan import (
     page_plan_signature,
     resolve_page_plan,
 )
-from krok_helper.subtitle_render.engine.layout.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     PageVisualBands,
     bands_require_separation,
@@ -527,7 +527,7 @@ from krok_helper.subtitle_render.engine.layout.layout_plan import (
     LineLayoutPlan,
     TrackLayoutPlan,
 )
-from krok_helper.subtitle_render.engine.layout.layout_assignment import (
+from krok_helper.subtitle_render.engine.layout.page.assignment import (
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,

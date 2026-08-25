@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     row_count_resolver,
     vertical_position_resolver,
 )
-from krok_helper.subtitle_render.engine.layout.page_placement import (
+from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     bands_require_separation,
 )

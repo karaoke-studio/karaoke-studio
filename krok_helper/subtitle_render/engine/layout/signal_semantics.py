@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
-from krok_helper.subtitle_render.engine.layout.page_plan import (
+from krok_helper.subtitle_render.engine.layout.page.plan import (
     page_plan_signature,
     section_head_line_indices,
 )

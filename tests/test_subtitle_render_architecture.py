@@ -439,7 +439,7 @@ def test_line_style_semantics_have_one_engine_owner() -> None:
         "_row_count_resolver",
     }
     for relative_path in (
-        Path("engine/layout/layout_assignment.py"),
+        Path("engine/layout/page/assignment.py"),
         Path("engine/painter.py"),
     ):
         path = ROOT / relative_path
@@ -524,7 +524,7 @@ def test_guide_render_semantics_have_one_engine_owner() -> None:
 
 
 def test_line_pagination_semantics_have_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.layout.line_pagination"
+    owner = f"{PACKAGE}.engine.layout.page.pagination"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -546,7 +546,7 @@ def test_line_pagination_semantics_have_one_engine_owner() -> None:
 
     assert inline == set()
     assert imported == delegated_names
-    targets = _import_targets(owner, ROOT / "engine/layout/line_pagination.py")
+    targets = _import_targets(owner, ROOT / "engine/layout/page/pagination.py")
     assert f"{PACKAGE}.engine.painter" not in targets
 
 
@@ -1103,7 +1103,6 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
         "display_schedule.py",
         "display_resolver.py",
-        "layout_assignment.py",
         "layout_context.py",
         "layout_diagnostics.py",
         "layout_plan.py",
@@ -1111,10 +1110,7 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
         "layout_plan_cache.py",
         "layout_plan_orchestrator.py",
         "layout_plan_projection.py",
-        "line_pagination.py",
         "page_offset_plan.py",
-        "page_placement.py",
-        "page_plan.py",
         "semantic_plan.py",
         "signal_semantics.py",
     }
@@ -1130,6 +1126,23 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     assert not any(
         (layout_root / name).exists()
         for name in {"line_geometry.py", "line_style.py", "qt_line_geometry.py"}
+    )
+    page_root = layout_root / "page"
+    assert {
+        "__init__.py",
+        "assignment.py",
+        "pagination.py",
+        "placement.py",
+        "plan.py",
+    } <= {path.name for path in page_root.glob("*.py")}
+    assert not any(
+        (layout_root / name).exists()
+        for name in {
+            "layout_assignment.py",
+            "line_pagination.py",
+            "page_placement.py",
+            "page_plan.py",
+        }
     )
 
 
