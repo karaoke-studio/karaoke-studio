@@ -3999,6 +3999,7 @@ def test_preview_frontend_modules_are_grouped_in_one_domain_package() -> None:
         "preview_graphics.py",
         "preview_media.py",
         "preview_view.py",
+        "workspace.py",
     }
     preview_root = ROOT / "frontend" / "preview"
     assert {"__init__.py", *module_names} <= {
@@ -4045,7 +4046,49 @@ def test_preview_player_window_has_one_frontend_owner() -> None:
         "PreviewPlayerWindow",
         "fit_size_to_aspect",
     }.isdisjoint(window_members)
+    window_class = next(
+        node
+        for node in window_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    assert {
+        "_add_background_empty_actions",
+        "_make_layout_issues_button",
+        "_make_preview_window_button",
+    }.isdisjoint(
+        node.name for node in window_class.body if isinstance(node, ast.FunctionDef)
+    )
     targets = _import_targets(owner, player_path)
+    assert f"{PACKAGE}.frontend.main_window" not in targets
+
+
+def test_preview_workspace_has_one_frontend_owner() -> None:
+    owner = f"{PACKAGE}.frontend.preview.workspace"
+    workspace_path = ROOT / "frontend/preview/workspace.py"
+    window_path = ROOT / "frontend/main_window.py"
+    workspace_tree = ast.parse(workspace_path.read_text(encoding="utf-8-sig"))
+    window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    imported = {
+        alias.name: alias.asname
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+    workspace_members = {
+        node.name
+        for node in workspace_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    window_members = {
+        node.name
+        for node in window_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {"PreviewWorkspaceView": None}
+    assert {"PreviewWorkspaceControls", "PreviewWorkspaceView"} <= workspace_members
+    assert "PreviewWorkspaceView" not in window_members
+    targets = _import_targets(owner, workspace_path)
     assert f"{PACKAGE}.frontend.main_window" not in targets
 
 

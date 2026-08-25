@@ -1173,6 +1173,12 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._transport_bar is not None
     assert win._property_panel is not None
     assert win._tracks_view is not None
+    assert isinstance(win._preview_tab, mw.PreviewWorkspaceView)
+    preview_controls = win._preview_tab.controls
+    assert preview_controls.preview_panel is win._preview_panel
+    assert preview_controls.lyrics_panel is win._lyrics_panel
+    assert preview_controls.property_panel is win._property_panel
+    assert preview_controls.tracks_view is win._tracks_view
     assert win._export_start_button is not None
     assert win._export_stop_button is not None
     assert win._export_stop_button.isEnabled() is False
@@ -1578,3 +1584,38 @@ def test_drop_panel_accepts_correct_extensions(qapp, monkeypatch, tmp_path):
         for i in range(win._preview_panel._empty_actions.count())
     ]
     assert actions == ["视频", "静态图", "图片序列", "纯色"]
+
+
+def test_preview_workspace_background_actions_reach_coordinator(qapp, monkeypatch):
+    calls = []
+    handlers = {
+        "_browse_video": "video",
+        "_browse_background_image": "image",
+        "_browse_background_sequence": "sequence",
+        "_choose_solid_background": "solid",
+    }
+    for method_name, call_name in handlers.items():
+        monkeypatch.setattr(
+            mw.SubtitleRenderWindow,
+            method_name,
+            lambda self, name=call_name: calls.append(name),
+        )
+
+    win = _make_window(qapp, monkeypatch)
+    try:
+        for panel in (win._preview_panel, win._video_settings_panel):
+            for index in range(panel._empty_actions.count()):
+                panel._empty_actions.itemAt(index).widget().click()
+
+        assert calls == [
+            "video",
+            "image",
+            "sequence",
+            "solid",
+            "video",
+            "image",
+            "sequence",
+            "solid",
+        ]
+    finally:
+        win.close()

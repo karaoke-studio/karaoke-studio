@@ -42,7 +42,6 @@ if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持�
 
 from PyQt6.QtCore import (
     QObject,
-    QSize,
     QThread,
     QTimer,
     QUrl,
@@ -76,9 +75,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
-    PushButton as FluentPushButton,
     RoundMenu,
-    ToolButton as FluentToolButton,
     TitleLabel,
 )
 
@@ -140,7 +137,6 @@ from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
 )
-from krok_helper.subtitle_render.frontend.widgets.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
     _MediaProbeWorker,
 )
@@ -195,7 +191,6 @@ from krok_helper.subtitle_render.frontend.workflow.export_view import (
     scaled_preview_pixmap as _scaled_preview_pixmap,
     sync_export_preset_enabled,
 )
-from krok_helper.subtitle_render.frontend.editor.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.editor.edit_history import (
     redo_edit,
     undo_edit,
@@ -210,6 +205,9 @@ from krok_helper.subtitle_render.frontend.preview.player_window import (
     WindowEdgeGrip as _WindowEdgeGrip,
     fit_size_to_aspect,
 )
+from krok_helper.subtitle_render.frontend.preview.workspace import (
+    PreviewWorkspaceView,
+)
 from krok_helper.subtitle_render.frontend.preview.preview_view import PreviewPanel, TransportBar
 from krok_helper.subtitle_render.frontend.preview.preview_async import (
     DEFAULT_PREVIEW_QUALITY,
@@ -220,9 +218,6 @@ from krok_helper.subtitle_render.frontend.preview.preview_controller import (
     PreviewDurationController,
     PreviewPreferenceController,
     PreviewWindowController,
-)
-from krok_helper.subtitle_render.frontend.properties.property_panel import (
-    PropertyPanel,
 )
 from krok_helper.subtitle_render.frontend.project.project_commands import (
     ProjectCommandController,
@@ -254,7 +249,6 @@ from krok_helper.subtitle_render.settings.screen import (
     screen_settings_from_dict,
     screen_settings_to_dict,
 )
-from krok_helper.subtitle_render.frontend.editor.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.domain.timing import (
     assign_role_to_track_rows,
@@ -1239,26 +1233,6 @@ class SubtitleRenderWindow(QWidget):
             self._project_bar_left.sizeHint().width()
         )
 
-    def _make_preview_window_button(self, parent: QWidget) -> FluentPushButton:
-        """Create the preview-only entry anchored above the preview workspace."""
-        button = FluentPushButton("预览窗口", parent)
-        button.setFixedHeight(30)
-        button.setToolTip("打开 / 唤起字幕预览窗口")
-        button.clicked.connect(self._show_preview_window)
-        return button
-
-    def _make_layout_issues_button(self, parent: QWidget) -> FluentToolButton:
-        """Create the persistent entry for current render-plan diagnostics."""
-        button = FluentToolButton(_layout_issue_icon(), parent)
-        button.setFixedWidth(34)
-        button.setIconSize(QSize(20, 20))
-        button.setToolTip("当前字幕诊断")
-        button.setAccessibleName("当前字幕诊断")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.clicked.connect(self._show_layout_issues)
-        button.hide()
-        return button
-
     def _show_preview_window(self) -> None:
         if not hasattr(self, "_preview_window"):
             return
@@ -2224,38 +2198,65 @@ class SubtitleRenderWindow(QWidget):
         return True
 
     def _make_preview_tab(self) -> QWidget:
-        page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(24, 4, 24, 4)
-        outer.setSpacing(4)
+        page = PreviewWorkspaceView(
+            owner=self,
+            style=self._style,
+            style_presets=self._style_presets,
+            output_width=self._screen_settings.width,
+            output_height=self._screen_settings.height,
+            preview_fps=self._screen_settings.fps,
+            splitter_ratio=self._preview_splitter_ratio,
+            background_extensions={
+                ".mp4",
+                ".mkv",
+                ".mov",
+                ".webm",
+                ".avi",
+                ".flv",
+                *IMAGE_EXTENSIONS,
+                PROJECT_FILE_SUFFIX,
+                N3_PROJECT_FILE_SUFFIX,
+            },
+        )
+        page.layoutIssuesRequested.connect(self._show_layout_issues)
+        page.previewWindowRequested.connect(self._show_preview_window)
+        page.backgroundVideoRequested.connect(self._browse_video)
+        page.backgroundImageRequested.connect(self._browse_background_image)
+        page.backgroundSequenceRequested.connect(
+            self._browse_background_sequence
+        )
+        page.solidBackgroundRequested.connect(self._choose_solid_background)
 
-        body = QSplitter(Qt.Orientation.Vertical)
-        body.setChildrenCollapsible(False)
-        self._preview_body_splitter = body
+        controls = page.controls
+        # Compatibility aliases keep the coordinator stable while the view
+        # becomes the unique owner of preview workspace construction.
+        self._preview_body_splitter = controls.body_splitter
+        self._preview_splitter = controls.workspace_splitter
+        self._preview_window = controls.preview_window
+        self._preview_panel = controls.preview_panel
+        self._transport_bar = controls.transport_bar
+        self._lyrics_panel = controls.lyrics_panel
+        self._property_panel = controls.property_panel
+        self._layout_issues_button = controls.layout_issues_button
+        self._show_preview_btn = controls.show_preview_button
+        self._video_settings_panel = controls.video_settings_panel
+        self._tracks_view = controls.tracks_view
 
-        # 上半部：左·歌词 / 右·背景视频拖入，视频加载后右侧切换为属性设置。
-        top = QSplitter(Qt.Orientation.Horizontal)
-        top.setChildrenCollapsible(False)
-        self._preview_splitter = top
-
-        self._preview_window = PreviewPlayerWindow(self)
-        self._preview_window.userClosed.connect(self._on_preview_window_user_closed)
-        self._preview_panel = self._preview_window.preview_panel
-        self._preview_panel.set_style(self._style)
+        self._preview_window.userClosed.connect(
+            self._on_preview_window_user_closed
+        )
         self._preview_panel.pathDropped.connect(self._load_dropped_background)
         self._preview_panel.browseRequested.connect(self._browse_background_media)
-        self._add_background_empty_actions(self._preview_panel)
-        self._transport_bar = self._preview_window.transport_bar
 
-        self._lyrics_panel = LyricsPanel()
-        self._lyrics_panel.set_style(self._style)
         self._lyrics_panel.pathDropped.connect(self._load_dropped_subtitle)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
         self._lyrics_panel.roleChangeRequested.connect(
             self._on_lyrics_roles_changed
         )
-        self._lyrics_panel.charRolesChanged.connect(self._on_lyrics_char_roles_changed)
+        self._lyrics_panel.charRolesChanged.connect(
+            self._on_lyrics_char_roles_changed
+        )
         self._lyrics_panel.guideCharRolesChanged.connect(
             self._on_guide_char_roles_changed
         )
@@ -2281,10 +2282,16 @@ class SubtitleRenderWindow(QWidget):
             self._on_line_animation_override_requested
         )
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
-        self._lyrics_panel.layoutChangeRequested.connect(self._on_layout_change_requested)
+        self._lyrics_panel.layoutChangeRequested.connect(
+            self._on_layout_change_requested
+        )
         self._lyrics_panel.sourceSelected.connect(self._on_source_selected)
-        self._lyrics_panel.sourceAddRequested.connect(self._on_source_add_requested)
-        self._lyrics_panel.sourceRemoveRequested.connect(self._on_source_remove_requested)
+        self._lyrics_panel.sourceAddRequested.connect(
+            self._on_source_add_requested
+        )
+        self._lyrics_panel.sourceRemoveRequested.connect(
+            self._on_source_remove_requested
+        )
         self._lyrics_panel.sourceReplaceRequested.connect(
             self._on_source_replace_requested
         )
@@ -2300,20 +2307,20 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.pageMoveRequested.connect(
             self._on_page_move_requested
         )
-        top.addWidget(self._lyrics_panel)
 
-        self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
-        self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
+        self._transport_bar.playbackStateChanged.connect(
+            self._preview_panel.set_playing
+        )
         self._transport_bar.previewQualityChanged.connect(
             self._on_preview_quality_changed
         )
-        self._preview_panel.canvas.framePainted.connect(self._transport_bar.note_preview_frame_painted)
+        self._preview_panel.canvas.framePainted.connect(
+            self._transport_bar.note_preview_frame_painted
+        )
         self._preview_panel.gpuFallback.connect(self._on_gpu_preview_fallback)
-        # 单播放器统一（步骤2，§10.9，flag KROK_SUBTITLE_UNIFIED_PLAYER 默认关）：
-        # 视频自带音频时同一文件本不该被音频/视频两个 QMediaPlayer 各自解码。开启后用一个
-        # 共享 PlaybackController 同时驱动音视频（A/V 天然锁帧），预览不再自建视频 player。
-        # raster 回退画布暂不支持 → use_external_player 返回 False，自动回退旧三播放器路径。
+
+        # Preserve the existing optional unified-player runtime ownership.
         self._playback: Optional[PlaybackController] = None
         if unified_player_enabled():
             controller = PlaybackController(self)
@@ -2321,34 +2328,28 @@ class SubtitleRenderWindow(QWidget):
                 self._playback = controller
                 self._transport_bar.attach_playback_controller(controller)
 
-        self._property_panel = PropertyPanel()
-        self._layout_issues_button = self._make_layout_issues_button(
-            self._property_panel
-        )
-        self._show_preview_btn = self._make_preview_window_button(
-            self._property_panel
-        )
-        self._property_panel.set_navigation_actions(
-            [self._layout_issues_button, self._show_preview_btn]
-        )
-        self._property_panel.set_style(self._style)
-        self._property_panel.set_preset_schemes(self._style_presets)
-        self._property_panel.set_output_size(
-            self._screen_settings.width,
-            self._screen_settings.height,
-        )
         self._property_panel.styleChanged.connect(self._apply_style)
-        self._property_panel.rolesChanged.connect(self._apply_project_role_names)
-        self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
+        self._property_panel.rolesChanged.connect(
+            self._apply_project_role_names
+        )
+        self._property_panel.presetSchemesChanged.connect(
+            self._apply_style_presets
+        )
         self._property_panel.defaultSchemeSaveRequested.connect(
             self._save_builtin_scheme_default
         )
         self._property_panel.defaultLayoutSaveRequested.connect(
             self._save_layout_default
         )
-        self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
-        self._property_panel.layoutAssignAllRequested.connect(self._on_layout_assign_all)
-        self._property_panel.layoutAutoAssignRequested.connect(self._on_layout_auto_assign)
+        self._property_panel.schemeSelectionChanged.connect(
+            self._on_scheme_selection_changed
+        )
+        self._property_panel.layoutAssignAllRequested.connect(
+            self._on_layout_assign_all
+        )
+        self._property_panel.layoutAutoAssignRequested.connect(
+            self._on_layout_auto_assign
+        )
         self._property_panel.layoutDeleted.connect(self._on_layout_deleted)
         self._property_panel.backgroundBrowseRequested.connect(
             self._on_panel_background_browse
@@ -2359,67 +2360,45 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.backgroundSolidColorChanged.connect(
             self._on_panel_solid_color
         )
-        self._property_panel.imageFitChanged.connect(self._on_panel_image_fit_changed)
+        self._property_panel.imageFitChanged.connect(
+            self._on_panel_image_fit_changed
+        )
         self._property_panel.audioBrowseRequested.connect(self._browse_audio)
         self._property_panel.audioClearRequested.connect(self._clear_audio)
         self._property_panel.screenSizeChanged.connect(
             self._on_panel_screen_size_changed
         )
-        # 按持久化偏好同步方案下拉框 / 背景卡片状态会触发控件的
-        # currentIndexChanged 等信号，走的是与用户手动操作相同的链路；
-        # 不加载入守卫会在启动时把空项目标脏，2 秒后自动保存写出
-        # untitled 恢复快照，下次启动又弹"检测到未保存的项目"，形成死循环。
+
+        # Applying persisted selections can emit the same signals as a user
+        # action, so retain the original project-loading guard.
         was_loading_project = self._loading_project
         self._loading_project = True
         try:
-            self._property_panel.set_current_scheme_key(self._selected_scheme_key)
-            self._selected_scheme_key = self._property_panel.current_scheme_key()
+            self._property_panel.set_current_scheme_key(
+                self._selected_scheme_key
+            )
+            self._selected_scheme_key = (
+                self._property_panel.current_scheme_key()
+            )
             self._sync_background_panel_state()
         finally:
             self._loading_project = was_loading_project
 
-        self._video_settings_panel = DropPanel(
-            extensions={
-                ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
-                *IMAGE_EXTENSIONS,
-                PROJECT_FILE_SUFFIX,
-                N3_PROJECT_FILE_SUFFIX,
-            },
-            empty_title="拖入背景素材",
-            empty_hint="拖入视频、静态图片、Yurika 工程（.yurika）或 N3 项目（.n3proj）；"
-            "图片序列与纯色请用下方按钮，也可在「背景/音频」卡片中选择",
-            empty_icon="🎬",
+        self._video_settings_panel.pathDropped.connect(
+            self._load_dropped_background
         )
-        self._video_settings_panel.pathDropped.connect(self._load_dropped_background)
-        self._video_settings_panel.browseRequested.connect(self._browse_background_media)
-        # 空态四按钮保留为快捷入口；属性面板「背景/音频」卡片承载同一组
-        # 功能的完整形态（路径显示、纯色取色、图片缩放策略、独立音频）。
-        self._add_background_empty_actions(self._video_settings_panel)
-        self._video_settings_panel.set_content(self._property_panel)
-        top.addWidget(self._video_settings_panel)
-
-        # 不设 stretch factor：QSplitter 默认按当前尺寸比例分配新增空间，
-        # 窗口缩放时能保持用户拖出的比例。传大数值让 setSizes 按比例缩放
-        # 到实际宽度（面板各自的最小宽仍然优先）。
-        ratio = self._preview_splitter_ratio
-        top.setSizes([round(ratio * 10_000), round((1.0 - ratio) * 10_000)])
-        top.splitterMoved.connect(self._on_preview_splitter_moved)
-        body.addWidget(top)
-
-        # 底部：字幕轨道（波形已移除，不做波形图功能）
-        self._tracks_view = TrackTimelineView()
+        self._video_settings_panel.browseRequested.connect(
+            self._browse_background_media
+        )
+        self._preview_splitter.splitterMoved.connect(
+            self._on_preview_splitter_moved
+        )
         self._tracks_view.seekRequested.connect(self._transport_bar.set_time)
-        self._tracks_view.displayWindowEdited.connect(self._on_display_window_edited)
+        self._tracks_view.displayWindowEdited.connect(
+            self._on_display_window_edited
+        )
         self._transport_bar.timeChanged.connect(self._tracks_view.set_time)
-        body.addWidget(self._tracks_view)
-
-        body.setStretchFactor(0, 5)
-        body.setStretchFactor(1, 2)
-        body.setSizes([520, 180])
-
-        outer.addWidget(body, 1)
         return page
-
     def _init_shortcuts(self) -> None:
         # 空格键播放 / 暂停（窗口范围内有效，避免误伤未来的文本输入）
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
@@ -2650,12 +2629,6 @@ class SubtitleRenderWindow(QWidget):
             self._background_source or BackgroundSource()
         )
         self._property_panel.set_audio_state(self._audio_path)
-
-    def _add_background_empty_actions(self, panel: DropPanel) -> None:
-        panel.add_empty_action("视频", self._browse_video)
-        panel.add_empty_action("静态图", self._browse_background_image)
-        panel.add_empty_action("图片序列", self._browse_background_sequence)
-        panel.add_empty_action("纯色", self._choose_solid_background)
 
     def _browse_background_image(self) -> None:
         start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
