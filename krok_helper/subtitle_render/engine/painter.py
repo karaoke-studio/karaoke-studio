@@ -568,6 +568,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     line_lane_alignment as _line_lane_alignment,
     n3_smart_font_size as _n3_smart_font_size,
     n3_main_fill_rect as _n3_main_fill_rect,
+    n3_ruby_fill_rect as _n3_ruby_fill_rect,
     paint_bitmap_guide_glyph as _paint_horizontal_bitmap_guide_glyph,
     paint_bitmap_guide_glyphs as _paint_horizontal_bitmap_guide_glyphs,
     paint_bitmap_guide_transition_glyph as _paint_horizontal_bitmap_guide_transition_glyph,
@@ -578,9 +579,17 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     resolve_baseline_y as _resolve_baseline_y,
     resolve_display_baselines as _resolve_display_baselines,
     role_visual_text_padding as _role_visual_text_padding,
+    role_ruby_vertical_extra as _role_ruby_vertical_extra,
     row_layout_params as _row_layout_params,
     smart_horizontal_dx as _smart_horizontal_dx,
     spin_flip_skew as _spin_flip_skew,
+    ruby_after_clip_rect as _ruby_after_clip_rect,
+    ruby_after_clip_rect_at_time as _ruby_after_clip_rect_at_time,
+    ruby_before_clip_rect_at_time as _ruby_before_clip_rect_at_time,
+    ruby_segment_wipe_state as _ruby_segment_wipe_state,
+    ruby_text_rect as _ruby_text_rect,
+    ruby_wipe_geometry as _ruby_wipe_geometry,
+    ruby_wipe_state as _ruby_wipe_state,
     text_glyph_runs as _text_glyph_runs,
     transition_char_state as _transition_char_state,
     utopia_following_done_time as _utopia_following_done_time,
@@ -7903,131 +7912,6 @@ def _layout_rubies(
     return layouts
 
 
-def _ruby_wipe_geometry(
-    ruby: RubyAnnotation,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    x: int,
-    baseline_y: int,
-    target_width: int,
-    style: Style,
-    *,
-    rtl: bool,
-) -> tuple[tuple[_RubyWipeSegment, ...], float, float, tuple]:
-    """Build N3-style timed glyph geometry independently from the layout box.
-
-    The target-width box is still used for Center/EqualSpace placement.  Wipe
-    fronts follow each visible glyph's primary-stroke drawing bounds, matching
-    N3 ``WipeLeft`` (geometry bounds expanded by half ``EdgeSize``).  Using the
-    fill-only ink bounds makes the next ruby glyph's left half-stroke visible at
-    ratio zero and leaves the previous half-stroke unfinished until the exact
-    boundary frame, which reads as a jump.  The layout box's centered leading /
-    trailing blank area still does not consume singing time.
-    """
-    logical_units = _ruby_visual_units_and_intervals(ruby)
-    if not logical_units:
-        return (), float(x), float(x), ()
-    visual_units = list(reversed(logical_units)) if rtl else logical_units
-    unit_layouts = _ruby_layout_units(
-        [unit for unit, _interval in visual_units],
-        ruby_metrics,
-        x,
-        target_width,
-        style=style,
-        base_text=ruby.kanji,
-    )
-    segments: list[_RubyWipeSegment] = []
-    signature: list[tuple] = []
-    bounds: list[tuple[float, float]] = []
-    # N3 performs integer ``EdgeSize / 2`` before converting to float.
-    edge_half = float(max(int(_ruby_stroke_width(style)), 0) // 2)
-    for (unit, interval), (_draw_unit, unit_x, unit_width) in zip(
-        visual_units, unit_layouts
-    ):
-        path = QPainterPath()
-        path.addText(float(unit_x), float(baseline_y), ruby_font, unit)
-        ink = path.boundingRect()
-        if ink.isEmpty():
-            ink_left = float(unit_x)
-            ink_right = float(unit_x + max(unit_width, 0.0))
-        else:
-            ink_left = float(ink.left())
-            ink_right = float(ink.right())
-        if ink_right < ink_left:
-            ink_left, ink_right = ink_right, ink_left
-        draw_left = ink_left - edge_half
-        draw_right = ink_right + edge_half
-        start_ms, end_ms = interval
-        segments.append(
-            _RubyWipeSegment(
-                int(start_ms),
-                max(int(start_ms), int(end_ms)),
-                draw_right if rtl else draw_left,
-                draw_left if rtl else draw_right,
-            )
-        )
-        bounds.append((draw_left, draw_right))
-        signature.append(
-            (
-                unit,
-                round(float(unit_x) - float(x), 3),
-                round(float(unit_width), 3),
-                round(ink_left - float(x), 3),
-                round(ink_right - float(x), 3),
-            )
-        )
-    if not bounds:
-        return (), float(x), float(x), tuple(signature)
-    segments.sort(key=lambda segment: (segment.start_ms, segment.end_ms))
-    adjusted = list(segments)
-    for index in range(len(adjusted) - 1):
-        current = adjusted[index]
-        following = adjusted[index + 1]
-        overlaps = (
-            current.axis_end <= following.axis_start
-            if rtl
-            else current.axis_end >= following.axis_start
-        )
-        if overlaps:
-            adjusted[index] = replace(current, axis_end=following.axis_start)
-    return (
-        tuple(adjusted),
-        min(left for left, _right in bounds),
-        max(right for _left, right in bounds),
-        tuple(signature),
-    )
-
-
-def _role_ruby_vertical_extra(
-    line: TimingLine,
-    rubies: list[RubyAnnotation],
-    intervals: list[tuple[int, int]],
-    style: Style,
-) -> int:
-    """Reserve enough vertical space for the largest role-specific ruby."""
-    extra = 0
-    for ruby in rubies:
-        indices = _ruby_target_indices(ruby, line, intervals)
-        if not indices:
-            continue
-        paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
-        ruby_style = _ruby_script_stroke_style(
-            _ruby_style_for_target_indices(style, line, indices),
-            paint_ruby.reading,
-        )
-        font = _build_ruby_font_for_text(ruby_style, paint_ruby.reading)
-        metrics = QFontMetrics(font)
-        extra = max(
-            extra,
-            _ruby_vertical_extra(
-                ruby_style,
-                metrics,
-                font_size_px=max(font.pixelSize(), 1),
-            ),
-        )
-    return extra
-
-
 _HORIZONTAL_LAYOUT_PORTS = HorizontalLayoutPorts(
     char_layout_width=lambda *args, **kwargs: _char_layout_width(*args, **kwargs),
     karaoke_fill_segments=_karaoke_fill_segments,
@@ -8036,41 +7920,6 @@ _HORIZONTAL_LAYOUT_PORTS = HorizontalLayoutPorts(
     role_char_ink_ranges_by_index=_role_char_ink_ranges_by_index,
     role_ruby_vertical_extra=_role_ruby_vertical_extra,
 )
-
-
-def _n3_ruby_fill_rect(
-    left: int,
-    width: int,
-    baseline_y: int,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    *,
-    brush_style: Style | None = None,
-    font_size_px: int | None = None,
-) -> QRectF:
-    """Return the ruby ``DrawLineInfo`` gradient area used by N3."""
-    font_size = (
-        _ruby_font_size(style)
-        if font_size_px is None
-        else max(int(font_size_px), 1)
-    )
-    metric_total = max(ruby_metrics.ascent() + ruby_metrics.descent(), 1)
-    descent = font_size * max(ruby_metrics.descent(), 0) // metric_total
-    draw_edge = _ruby_stroke_width(style)
-    anchor_style = brush_style or style
-    anchor_edge = _ruby_stroke_width(anchor_style)
-    anchor_edge2 = _ruby_stroke2_width(anchor_style)
-    draw_bottom = float(baseline_y + descent + draw_edge // 2)
-    draw_top = draw_bottom - float(font_size + draw_edge)
-    inset = float((anchor_edge + anchor_edge2) // 2)
-    top = draw_top + inset
-    bottom = draw_bottom - inset
-    return QRectF(
-        float(left),
-        top,
-        float(max(width, 1)),
-        float(max(bottom - top, 1.0)),
-    )
 
 
 def _paint_ruby_layers(
@@ -8952,174 +8801,6 @@ def _build_ruby_glow_layer(
         p.end()
 
     return image, -pad_left, -(pad_top + ruby_metrics.ascent())
-
-
-def _ruby_text_rect(layout: _RubyLayout, ruby_metrics: QFontMetrics) -> QRectF:
-    left_offset = _ruby_layout_left_offset(
-        layout.ruby.reading,
-        ruby_metrics,
-        layout.target_width,
-        layout.style,
-        layout.ruby.kanji,
-    )
-    return QRectF(
-        float(layout.x + left_offset),
-        float(layout.baseline_y - ruby_metrics.ascent()),
-        float(layout.reading_width),
-        float(ruby_metrics.height()),
-    )
-
-
-def _ruby_after_clip_rect(
-    layout: _RubyLayout,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    ratio: float,
-) -> QRectF:
-    rect = _ruby_text_rect(layout, ruby_metrics)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    shadow_dx = _ruby_shadow_dx(style)
-    shadow_dy = _ruby_shadow_dy(style)
-    after_glow_radius = _ruby_glow_radius(style, after=True)
-    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    pad = max(
-        stroke_extent,
-        _glow_extent(stroke_width, stroke2_width, after_glow_radius)
-        if _ruby_decoration_kind(style) == "glow"
-        else 0,
-        stroke_extent + abs(shadow_dx),
-        stroke_extent + abs(shadow_dy),
-        2,
-    )
-    ratio_c = min(ratio, 1.0)
-    clip_left = rect.left() + (rect.width() * (1.0 - ratio_c) if rtl else 0.0) - pad
-    return QRectF(
-        clip_left,
-        rect.top() - pad,
-        rect.width() * ratio_c + pad,
-        rect.height() + pad * 2,
-    )
-
-
-def _ruby_wipe_state(
-    layout: _RubyLayout,
-    t_ms: int,
-) -> tuple[bool, bool, float]:
-    """Return ``(visible, complete, front)`` for glyph-geometry ruby wipe."""
-    segments = layout.wipe_segments
-    if not segments:
-        ratio = _ruby_progress_ratio(layout.ruby, t_ms)
-        front = layout.wipe_left + (layout.wipe_right - layout.wipe_left) * ratio
-        return ratio > 0.0, ratio >= 1.0, front
-    return _ruby_segment_wipe_state(segments, layout.ruby.pos_end_ms, t_ms)
-
-
-def _ruby_segment_wipe_state(
-    segments: tuple[_RubyWipeSegment, ...],
-    pos_end_ms: int,
-    t_ms: int,
-) -> tuple[bool, bool, float]:
-    """Evaluate timed glyph-axis segments, including empty-part pauses."""
-    first = segments[0]
-    if t_ms <= first.start_ms:
-        return False, False, first.axis_start
-    previous_front = first.axis_start
-    for segment in segments:
-        if t_ms < segment.start_ms:
-            return True, False, previous_front
-        if t_ms < segment.end_ms:
-            duration = segment.end_ms - segment.start_ms
-            local = (t_ms - segment.start_ms) / duration if duration > 0 else 1.0
-            front = segment.axis_start + (segment.axis_end - segment.axis_start) * local
-            return True, False, front
-        previous_front = segment.axis_end
-    complete = t_ms >= max(int(pos_end_ms), segments[-1].end_ms)
-    return True, complete, previous_front
-
-
-def _ruby_after_clip_rect_at_time(
-    layout: _RubyLayout,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    t_ms: int,
-) -> QRectF:
-    """Clip the after layer at the current ruby glyph front, not its box ratio."""
-    _visible, _complete, front = _ruby_wipe_state(layout, t_ms)
-    rect = _ruby_text_rect(layout, ruby_metrics)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    shadow_dx = _ruby_shadow_dx(style)
-    shadow_dy = _ruby_shadow_dy(style)
-    after_glow_radius = _ruby_glow_radius(style, after=True)
-    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    pad = max(
-        stroke_extent,
-        _glow_extent(stroke_width, stroke2_width, after_glow_radius)
-        if _ruby_decoration_kind(style) == "glow"
-        else 0,
-        stroke_extent + abs(shadow_dx),
-        stroke_extent + abs(shadow_dy),
-        2,
-    )
-    wipe_left = layout.wipe_left if layout.wipe_segments else rect.left()
-    wipe_right = layout.wipe_right if layout.wipe_segments else rect.right()
-    if rtl:
-        left = min(max(front, wipe_left), wipe_right)
-        return QRectF(
-            left - pad,
-            rect.top() - pad,
-            max(wipe_right - left, 0.0) + pad,
-            rect.height() + pad * 2,
-        )
-    right = min(max(front, wipe_left), wipe_right)
-    return QRectF(
-        wipe_left - pad,
-        rect.top() - pad,
-        max(right - wipe_left, 0.0) + pad,
-        rect.height() + pad * 2,
-    )
-
-
-def _ruby_before_clip_rect_at_time(
-    layout: _RubyLayout,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    t_ms: int,
-) -> QRectF:
-    """Keep the before ruby glow only on the unsung side of the wipe front."""
-    _visible, _complete, front = _ruby_wipe_state(layout, t_ms)
-    rect = _ruby_text_rect(layout, ruby_metrics)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    pad = max(
-        _visual_stroke_extent(stroke_width, stroke2_width),
-        _glow_extent(
-            stroke_width,
-            stroke2_width,
-            _ruby_glow_radius(style, after=False),
-        ),
-        2,
-    )
-    wipe_left = layout.wipe_left if layout.wipe_segments else rect.left()
-    wipe_right = layout.wipe_right if layout.wipe_segments else rect.right()
-    front = min(max(front, wipe_left), wipe_right)
-    if rtl:
-        return QRectF(
-            wipe_left - pad,
-            rect.top() - pad,
-            max(front - wipe_left, 0.0) + pad,
-            rect.height() + pad * 2,
-        )
-    return QRectF(
-        front,
-        rect.top() - pad,
-        max(wipe_right - front, 0.0) + pad,
-        rect.height() + pad * 2,
-    )
 
 
 def _paint_ruby_text_units_with_transition(

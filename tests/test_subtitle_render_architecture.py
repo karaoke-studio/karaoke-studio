@@ -1934,6 +1934,47 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     )
 
 
+def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    ruby_owner = f"{owner}.ruby"
+    ruby_path = ROOT / "engine/render/elements/horizontal/ruby.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {
+        "n3_ruby_fill_rect",
+        "role_ruby_vertical_extra",
+        "ruby_after_clip_rect",
+        "ruby_after_clip_rect_at_time",
+        "ruby_before_clip_rect_at_time",
+        "ruby_segment_wipe_state",
+        "ruby_text_rect",
+        "ruby_wipe_geometry",
+        "ruby_wipe_state",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_functions = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_functions)
+    targets = _import_targets(ruby_owner, ruby_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"

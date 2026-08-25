@@ -83,6 +83,17 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions i
     transition_char_state,
     utopia_following_done_time,
 )
+from krok_helper.subtitle_render.engine.render.elements.horizontal.ruby import (
+    n3_ruby_fill_rect,
+    role_ruby_vertical_extra,
+    ruby_after_clip_rect,
+    ruby_after_clip_rect_at_time,
+    ruby_before_clip_rect_at_time,
+    ruby_segment_wipe_state,
+    ruby_text_rect,
+    ruby_wipe_geometry,
+    ruby_wipe_state,
+)
 
 
 __all__ = [
@@ -143,6 +154,7 @@ __all__ = [
     "karaoke_state_uses_image",
     "n3_smart_font_size",
     "n3_main_fill_rect",
+    "n3_ruby_fill_rect",
     "paint_bitmap_guide_glyph",
     "paint_bitmap_guide_glyphs",
     "paint_bitmap_guide_transition_glyph",
@@ -153,9 +165,17 @@ __all__ = [
     "resolve_baseline_y",
     "resolve_display_baselines",
     "role_visual_text_padding",
+    "role_ruby_vertical_extra",
     "row_layout_params",
     "smart_horizontal_dx",
     "spin_flip_skew",
+    "ruby_after_clip_rect",
+    "ruby_after_clip_rect_at_time",
+    "ruby_before_clip_rect_at_time",
+    "ruby_segment_wipe_state",
+    "ruby_text_rect",
+    "ruby_wipe_geometry",
+    "ruby_wipe_state",
     "text_glyph_runs",
     "transition_char_state",
     "utopia_following_done_time",
