@@ -1674,6 +1674,41 @@ def test_render_fill_effects_own_brushes_and_resource_caches() -> None:
     assert "_clear_fill_caches" in calls
 
 
+def test_render_path_effects_have_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.effects"
+    paths_owner = f"{owner}.paths"
+    paths_path = ROOT / "engine/render/effects/paths.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {
+        "paint_fill_path",
+        "paint_shadow_silhouette",
+        "paint_stroke_path",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_members)
+    targets = _import_targets(paths_owner, paths_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {"auto_chorus.py", "show_time.py", "timecode.py", "timeline.py"}
     timing_root = ROOT / "engine" / "timing"

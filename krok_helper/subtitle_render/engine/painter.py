@@ -46,8 +46,6 @@ from PyQt6.QtGui import (
     QImage,
     QPainter,
     QPainterPath,
-    QPainterPathStroker,
-    QPen,
     QTransform,
 )
 
@@ -83,6 +81,9 @@ from krok_helper.subtitle_render.engine.render.effects import (
     karaoke_state_signature as _karaoke_state_signature,
     linear_gradient_brush as _linear_gradient_brush,
     main_stroke2_width as _main_stroke2_width,
+    paint_fill_path as _paint_fill_path,
+    paint_shadow_silhouette as _paint_shadow_silhouette,
+    paint_stroke_path as _paint_stroke_path,
     ruby_baseline_y as _ruby_baseline_y,
     ruby_decoration_kind as _ruby_decoration_kind,
     ruby_glow_concentration_level as _ruby_glow_concentration_level,
@@ -8146,67 +8147,6 @@ def _clamped_ratio(elapsed_ms: int, duration_ms: int) -> float:
     if duration_ms <= 0:
         return 1.0
     return max(0.0, min(1.0, elapsed_ms / duration_ms))
-
-
-def _paint_fill_path(
-    painter: QPainter,
-    path: QPainterPath,
-    fill: PaintFill,
-    rect: QRectF,
-) -> None:
-    painter.fillPath(path, _brush_for_fill(fill, rect))
-
-
-def _paint_stroke_path(
-    painter: QPainter,
-    path: QPainterPath,
-    fill: PaintFill,
-    rect: QRectF,
-    width: int,
-    *,
-    protect_body: bool = False,
-) -> None:
-    brush = _brush_for_fill(fill, rect)
-    pen_width = max(width, 1)
-    if protect_body:
-        stroker = QPainterPathStroker()
-        stroker.setWidth(float(pen_width))
-        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-        outline = stroker.createStroke(path).subtracted(path)
-        painter.fillPath(outline, brush)
-        return
-    pen = QPen(brush, pen_width)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.strokePath(path, pen)
-
-
-def _paint_shadow_silhouette(
-    painter: QPainter,
-    path: QPainterPath,
-    fill: PaintFill,
-    rect: QRectF,
-    dx: int,
-    dy: int,
-    stroke_width: int,
-    stroke2_width: int,
-) -> None:
-    """N3 式阴影：整字**剪影**（含描边外缘）平移绘制。
-
-    N3 的 DrawOneLineDecorShadow 把 edge2+edge+body 整行画进 work bitmap 再整体
-    平移 blit——阴影轮廓因此比正文描边外缘还大。若只平移文字本体路径，偏移小于
-    描边半宽时阴影会被正文描边完全盖住（「几乎看不到阴影」）。"""
-    shadow_path = QTransform().translate(dx, dy).map(path)
-    shadow_rect = rect.translated(dx, dy)
-    pen_width = (
-        _stroke2_pen_width(stroke_width, stroke2_width)
-        if stroke2_width > 0
-        else _stroke_pen_width(stroke_width)
-    )
-    if pen_width > 0:
-        _paint_stroke_path(painter, shadow_path, fill, shadow_rect, pen_width)
-    _paint_fill_path(painter, shadow_path, fill, shadow_rect)
 
 
 def _paint_glow_path(
