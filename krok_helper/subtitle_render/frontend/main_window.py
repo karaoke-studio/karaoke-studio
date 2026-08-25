@@ -355,6 +355,7 @@ from krok_helper.subtitle_render.project.store import (
 )
 from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
 from krok_helper.subtitle_render.sources.reload import (
+    apply_reloaded_tracks,
     merge_reloaded_track,
     prepare_reloaded_tracks,
 )
@@ -3332,16 +3333,9 @@ class SubtitleRenderWindow(QWidget):
                 self._sync_subtitle_source_watcher()
                 return
 
-        if plan.primary_merge is not None:
-            self._timing_track = plan.primary_merge.track
-            self._timing_track.page_plan = build_legacy_page_plan(
-                self._timing_track, self._style
-            )
-            project_page_plan_to_legacy_fields(self._timing_track, self._style)
-        for index, merge in plan.extra_merges:
-            self._extra_sources[index].track = merge.track
-            merge.track.page_plan = build_legacy_page_plan(merge.track, self._style)
-            project_page_plan_to_legacy_fields(merge.track, self._style)
+        for track in apply_reloaded_tracks(self._project_document, plan):
+            track.page_plan = build_legacy_page_plan(track, self._style)
+            project_page_plan_to_legacy_fields(track, self._style)
 
         if plan.structure_changed:
             self._clear_undo_history()

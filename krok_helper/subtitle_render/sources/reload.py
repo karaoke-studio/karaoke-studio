@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 import hashlib
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
@@ -45,6 +45,12 @@ class PreparedTrackReload:
     digest: str
     candidate: TimingTrack | None
     plan: TrackReloadPlan | None
+
+
+class TrackReloadTarget(Protocol):
+    """Project-facing contract required to install merged timing tracks."""
+
+    def replace_track(self, index: int, track: TimingTrack) -> bool: ...
 
 
 def source_file_digest(path: Path) -> str:
@@ -124,6 +130,25 @@ def prepare_reloaded_tracks(
             extra_tracks=extra_tracks,
         ),
     )
+
+
+def apply_reloaded_tracks(
+    target: TrackReloadTarget,
+    plan: TrackReloadPlan,
+) -> tuple[TimingTrack, ...]:
+    """Install a merge plan through the project track replacement contract."""
+    applied: list[TimingTrack] = []
+    if plan.primary_merge is not None:
+        track = plan.primary_merge.track
+        if not target.replace_track(0, track):
+            raise IndexError("primary subtitle track is unavailable")
+        applied.append(track)
+    for extra_index, merge in plan.extra_merges:
+        track = merge.track
+        if not target.replace_track(extra_index + 1, track):
+            raise IndexError(f"extra subtitle track {extra_index} is unavailable")
+        applied.append(track)
+    return tuple(applied)
 
 
 def track_structure_signature(track: TimingTrack) -> tuple:

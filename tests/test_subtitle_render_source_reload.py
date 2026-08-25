@@ -11,6 +11,7 @@ from krok_helper.subtitle_render.domain.models import (
     TimingTrack,
 )
 from krok_helper.subtitle_render.sources.reload import (
+    apply_reloaded_tracks,
     merge_reloaded_track,
     plan_reloaded_tracks,
     prepare_reloaded_tracks,
@@ -277,3 +278,29 @@ def test_stable_reload_rejects_a_source_still_being_written(tmp_path) -> None:
             load_candidate=mutate_while_loading,
             primary_track=_track(),
         )
+
+
+def test_reload_plan_installs_tracks_through_project_contract() -> None:
+    baseline = _track()
+    primary_candidate = _track(first_ms=2200)
+    extra_candidate = _track(first_ms=3200)
+    plan = plan_reloaded_tracks(
+        baseline,
+        primary_candidate,
+        primary_track=deepcopy(baseline),
+        extra_tracks=((0, extra_candidate),),
+    )
+
+    class Target:
+        def __init__(self):
+            self.replacements = []
+
+        def replace_track(self, index, track):
+            self.replacements.append((index, track))
+            return index in {0, 1}
+
+    target = Target()
+    applied = apply_reloaded_tracks(target, plan)
+
+    assert [index for index, _track_value in target.replacements] == [0, 1]
+    assert applied == tuple(track for _index, track in target.replacements)

@@ -3834,7 +3834,7 @@ def test_subtitle_render_window_delegates_source_reload_preparation() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
-    assert "prepare_reloaded_tracks" in direct_merge_calls
+    assert {"apply_reloaded_tracks", "prepare_reloaded_tracks"} <= direct_merge_calls
     assert "plan_reloaded_tracks" not in direct_merge_calls
     assert "merge_reloaded_track" not in direct_merge_calls
 
