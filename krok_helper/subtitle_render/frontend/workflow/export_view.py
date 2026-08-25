@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -19,20 +20,30 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     CaptionLabel,
+    CheckBox,
+    ComboBox as FluentComboBox,
     FluentIcon as FIF,
     LineEdit as FluentLineEdit,
     PrimaryPushButton as FluentPrimaryPushButton,
+    ProgressBar as FluentProgressBar,
     PushButton as FluentPushButton,
     RadioButton as FluentRadioButton,
     SimpleCardWidget,
     SpinBox as FluentSpinBox,
     StrongBodyLabel,
+    ToolButton as FluentToolButton,
 )
 
 from krok_helper.qfluent_compat import ModelessDialog
 from krok_helper.subtitle_render.engine.export.encoder_select import (
+    CODEC_H264,
+    CODEC_HEVC,
+    CPU_PRESETS,
+    ENCODER_AMF,
     ENCODER_AUTO,
     ENCODER_CPU,
+    ENCODER_NVENC,
+    ENCODER_QSV,
 )
 from krok_helper.subtitle_render.domain.models import (
     DEFAULT_EXPORT_NAME_TEMPLATE,
@@ -43,6 +54,7 @@ from krok_helper.subtitle_render.frontend.widgets.theme import (
     stage_bg,
     themed,
 )
+from krok_helper.subtitle_render.frontend.preview.player_window import AspectRatioBox
 
 EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
@@ -390,6 +402,396 @@ class ExportMonitorView(QLabel):
         self._rescale()
 
 
+@dataclass(frozen=True)
+class ExportWorkspaceControls:
+    """Explicit widget contract consumed by the application coordinator."""
+
+    theme_labels: list[QWidget]
+    settings_col: QWidget
+    location_settings_button: FluentToolButton
+    directory_edit: FluentLineEdit
+    browse_button: FluentPushButton
+    name_edit: FluentLineEdit
+    width_spin: FluentSpinBox
+    height_spin: FluentSpinBox
+    fps_combo: FluentComboBox
+    encoder_combo: FluentComboBox
+    codec_combo: FluentComboBox
+    preset_combo: FluentComboBox
+    crf_spin: FluentSpinBox
+    render_workers_combo: FluentComboBox
+    native_check: CheckBox
+    gpu_preview_check: CheckBox
+    gpu_export_check: CheckBox
+    monitor_card: SimpleCardWidget
+    monitor_layout: QVBoxLayout
+    eta_label: CaptionLabel
+    monitor_header: QHBoxLayout
+    monitor_view: ExportMonitorView
+    monitor_frame: AspectRatioBox
+    format_label: CaptionLabel
+    progress: FluentProgressBar
+    status_label: CaptionLabel
+    start_button: FluentPrimaryPushButton
+    stop_button: FluentPushButton
+
+
+class ExportWorkspaceView(QWidget):
+    """Own the export workspace widgets and report user intent via signals."""
+
+    locationSettingsRequested = Signal()
+    directoryEditingFinished = Signal()
+    browseRequested = Signal()
+    encoderChanged = Signal()
+    codecChanged = Signal()
+    startRequested = Signal()
+    stopRequested = Signal()
+
+    def __init__(
+        self,
+        *,
+        fps_options: Sequence[int],
+        render_worker_options: Sequence[int],
+        gpu_preview_checked: bool,
+        gpu_controls_visible: bool,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubtitleExportPage")
+        themed(
+            self,
+            lambda: "#SubtitleExportPage { background: transparent; }",
+        )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 4, 24, 16)
+        outer.setSpacing(10)
+
+        # 内容列限制最大宽度并水平居中，宽屏下表单不再拉满整行。
+        column = QWidget()
+        column.setObjectName("SrExportColumn")
+        themed(column, lambda: "#SrExportColumn { background: transparent; }")
+        column.setMaximumWidth(1200)
+        column.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        center_row = QHBoxLayout()
+        center_row.setContentsMargins(0, 0, 0, 0)
+        center_row.addStretch(1)
+        center_row.addWidget(column)
+        center_row.addStretch(1)
+        outer.addLayout(center_row, 1)
+
+        # qfluentwidgets 语义标签自行跟随主题；保留实例引用，防止被 GC 移出
+        # styleSheetManager 的 WeakKeyDictionary 后主题失效（同 SUG 导出页的教训）。
+        theme_labels: list[QWidget] = []
+        body_row = QHBoxLayout()
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(16)
+        settings_col = QWidget()
+        settings_col.setObjectName("SrExportSettingsCol")
+        themed(
+            settings_col,
+            lambda: "#SrExportSettingsCol { background: transparent; }",
+        )
+        settings_col.setFixedWidth(430)
+        settings_layout = QVBoxLayout(settings_col)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(12)
+
+        location_settings_button = FluentToolButton(FIF.SETTING)
+        location_settings_button.setToolTip("导出视频位置与默认文件名设置")
+        location_settings_button.setFixedSize(30, 30)
+        location_settings_button.setIconSize(QSize(16, 16))
+        location_settings_button.clicked.connect(
+            lambda _checked=False: self.locationSettingsRequested.emit()
+        )
+        output_card, output_layout = make_export_card(
+            "输出文件",
+            theme_labels,
+            location_settings_button,
+            icon=FIF.SAVE_AS,
+        )
+        dir_row = QHBoxLayout()
+        dir_row.setContentsMargins(0, 0, 0, 0)
+        dir_row.setSpacing(8)
+        directory_edit = FluentLineEdit()
+        directory_edit.setPlaceholderText("选择输出文件夹")
+        directory_edit.editingFinished.connect(self.directoryEditingFinished.emit)
+        browse_button = FluentPushButton(FIF.FOLDER, "浏览")
+        browse_button.clicked.connect(
+            lambda _checked=False: self.browseRequested.emit()
+        )
+        dir_row.addWidget(directory_edit, 1)
+        dir_row.addWidget(browse_button)
+        output_layout.addLayout(dir_row)
+
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(8)
+        name_edit = FluentLineEdit()
+        name_edit.setPlaceholderText("文件名（默认：视频文件名_yurika出力）")
+        name_suffix = QLabel(".mp4")
+        name_suffix.setObjectName("SrExportExtBadge")
+        themed(
+            name_suffix,
+            lambda: (
+                "#SrExportExtBadge {{ color: {fg}; background: {bg};"
+                " border-radius: 6px; padding: 4px 8px;"
+                " font-size: 9pt; font-weight: 600; }}"
+            ).format(
+                fg=palette().accent_primary,
+                bg=(
+                    "rgba(255, 122, 140, 0.16)"
+                    if palette().is_dark
+                    else "rgba(255, 90, 111, 0.10)"
+                ),
+            ),
+        )
+        name_row.addWidget(name_edit, 1)
+        name_row.addWidget(name_suffix)
+        output_layout.addLayout(name_row)
+        settings_layout.addWidget(output_card)
+
+        params_card, params_layout = make_export_card(
+            "画面与编码",
+            theme_labels,
+            icon=FIF.VIDEO,
+        )
+        sync_hint = QLabel("宽度 / 高度 / 帧率与预览页的「画面」设置双向联动。")
+        sync_hint.setObjectName("SrExportSyncHint")
+        sync_hint.setWordWrap(True)
+        themed(
+            sync_hint,
+            lambda: (
+                "#SrExportSyncHint {{ background: {bg}; color: {fg};"
+                " border-radius: 6px; padding: 6px 10px; font-size: 9pt; }}"
+            ).format(
+                bg="#26313F" if palette().is_dark else "#EEF4FF",
+                fg="#A6C8FF" if palette().is_dark else "#3D6BBF",
+            ),
+        )
+        params_layout.addWidget(sync_hint)
+
+        params_row = QHBoxLayout()
+        params_row.setContentsMargins(0, 0, 0, 0)
+        params_row.setSpacing(10)
+        width_spin = make_export_spin(160, 7680, 1920, "")
+        height_spin = make_export_spin(90, 4320, 1080, "")
+        # 关闭键盘跟踪，确保高度变化仅在提交最终值时按 N3 语义重算。
+        width_spin.setKeyboardTracking(False)
+        height_spin.setKeyboardTracking(False)
+        fps_combo = FluentComboBox()
+        fps_combo.setMinimumHeight(32)
+        for fps in fps_options:
+            fps_combo.addItem(f"{fps} fps", userData=fps)
+        params_row.addWidget(
+            make_labeled_export_control("宽度", width_spin, theme_labels)
+        )
+        params_row.addWidget(
+            make_labeled_export_control("高度", height_spin, theme_labels)
+        )
+        params_row.addWidget(
+            make_labeled_export_control("帧率", fps_combo, theme_labels)
+        )
+        params_layout.addLayout(params_row)
+
+        encode_row = QHBoxLayout()
+        encode_row.setContentsMargins(0, 0, 0, 0)
+        encode_row.setSpacing(10)
+        encoder_combo = FluentComboBox()
+        encoder_combo.setMinimumHeight(32)
+        encoder_combo.addItem("CPU 软编", userData=ENCODER_CPU)
+        encoder_combo.addItem("自动硬编", userData=ENCODER_AUTO)
+        encoder_combo.addItem("NVIDIA NVENC", userData=ENCODER_NVENC)
+        encoder_combo.addItem("Intel QSV", userData=ENCODER_QSV)
+        encoder_combo.addItem("AMD AMF", userData=ENCODER_AMF)
+        encoder_combo.currentIndexChanged.connect(
+            lambda _index: self.encoderChanged.emit()
+        )
+        codec_combo = FluentComboBox()
+        codec_combo.setMinimumHeight(32)
+        codec_combo.addItem("H.264 (AVC)", userData=CODEC_H264)
+        codec_combo.addItem("H.265 (HEVC)", userData=CODEC_HEVC)
+        codec_combo.setToolTip(
+            "H.265 同画质体积更小，但编码更慢、老设备兼容性略差。"
+        )
+        codec_combo.currentIndexChanged.connect(
+            lambda _index: self.codecChanged.emit()
+        )
+        encode_row.addWidget(
+            make_labeled_export_control("编码器", encoder_combo, theme_labels)
+        )
+        encode_row.addWidget(
+            make_labeled_export_control("视频编码", codec_combo, theme_labels)
+        )
+        params_layout.addLayout(encode_row)
+
+        quality_row = QHBoxLayout()
+        quality_row.setContentsMargins(0, 0, 0, 0)
+        quality_row.setSpacing(10)
+        preset_combo = FluentComboBox()
+        preset_combo.setMinimumHeight(32)
+        for preset in CPU_PRESETS:
+            preset_combo.addItem(preset, userData=preset)
+        preset_combo.setCurrentText("medium")
+        crf_spin = make_export_spin(0, 51, 18, "")
+        crf_spin.setToolTip(
+            "CRF 质量：数值越小画质越高、文件越大；18 约为视觉无损。"
+        )
+        quality_row.addWidget(
+            make_labeled_export_control("CPU preset", preset_combo, theme_labels)
+        )
+        quality_row.addWidget(
+            make_labeled_export_control("质量 (CRF)", crf_spin, theme_labels)
+        )
+        params_layout.addLayout(quality_row)
+
+        render_workers_combo = FluentComboBox()
+        render_workers_combo.setMinimumHeight(32)
+        render_workers_combo.addItem("自动（最多 8 进程）", userData=0)
+        for workers in render_worker_options[1:]:
+            render_workers_combo.addItem(f"{workers} 进程", userData=workers)
+        render_workers_combo.setToolTip(
+            "字幕帧渲染进程数。12/16 适合核心数较多且内存充足的电脑；"
+            "进程越多不一定越快，且会明显增加内存占用。"
+        )
+        params_layout.addWidget(
+            make_labeled_export_control(
+                "渲染进程",
+                render_workers_combo,
+                theme_labels,
+            )
+        )
+        settings_layout.addWidget(params_card)
+
+        # 显式 parent 防止可见 CheckBox 在加入布局前短暂成为顶层窗口。
+        native_check = CheckBox("实验：使用 native 字幕渲染器导出", settings_col)
+        native_check.setChecked(False)
+        native_check.setEnabled(False)
+        native_check.setVisible(False)
+        native_check.setToolTip("native 字幕渲染器暂时停用。")
+        gpu_preview_check = CheckBox("使用 GPU 渲染字幕预览", settings_col)
+        gpu_preview_check.setChecked(gpu_preview_checked)
+        gpu_preview_check.setVisible(gpu_controls_visible)
+        gpu_preview_check.setToolTip(
+            "使用稳定的 G5 shared-memory/QImage 路径加速字幕透明层；"
+            "不可用或失败时自动回退 Painter。"
+        )
+        gpu_export_check = CheckBox("使用 GPU 渲染字幕导出", settings_col)
+        gpu_export_check.setChecked(gpu_controls_visible)
+        gpu_export_check.setVisible(gpu_controls_visible)
+        gpu_export_check.setToolTip(
+            "仅用 Direct2D 渲染字幕条带，仍由当前 ffmpeg 编码器输出；"
+            "失败时会删除半成品并从头回退 Painter。"
+        )
+        settings_layout.addWidget(gpu_preview_check)
+        settings_layout.addWidget(gpu_export_check)
+        settings_layout.addWidget(native_check)
+        settings_layout.addStretch(1)
+
+        monitor_card = SimpleCardWidget()
+        monitor_layout = QVBoxLayout(monitor_card)
+        monitor_layout.setContentsMargins(20, 14, 20, 16)
+        monitor_layout.setSpacing(10)
+        monitor_header = QHBoxLayout()
+        monitor_header.setContentsMargins(0, 0, 0, 0)
+        monitor_title = StrongBodyLabel("导出预览")
+        theme_labels.append(monitor_title)
+        eta_label = CaptionLabel("")
+        monitor_header.setSpacing(8)
+        monitor_header.addWidget(
+            make_card_icon_badge(FIF.MOVIE),
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        monitor_header.addWidget(monitor_title)
+        monitor_header.addStretch(1)
+        monitor_header.addWidget(eta_label)
+        monitor_layout.addLayout(monitor_header)
+        monitor_view = ExportMonitorView()
+        monitor_frame = AspectRatioBox(
+            monitor_view,
+            aspect_ratio=width_spin.value() / height_spin.value(),
+        )
+        monitor_frame.setMinimumSize(240, 135)
+        monitor_layout.addWidget(monitor_frame, 1)
+        format_label = CaptionLabel("输出格式: MP4 · H.264 (AVC)")
+        monitor_layout.addWidget(format_label)
+
+        body_row.addWidget(settings_col, 0, Qt.AlignmentFlag.AlignTop)
+        body_row.addWidget(monitor_card, 0, Qt.AlignmentFlag.AlignTop)
+        body_row.addStretch(1)
+        layout.addStretch(1)
+        layout.addLayout(body_row)
+        layout.addStretch(1)
+
+        progress = FluentProgressBar()
+        progress.setRange(0, 1)
+        progress.setValue(0)
+        layout.addWidget(progress)
+
+        status_label = CaptionLabel("")
+        status_label.setWordWrap(True)
+        status_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        layout.addWidget(status_label)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+        start_button = FluentPrimaryPushButton(FIF.PLAY, "开始导出")
+        start_button.setMinimumHeight(38)
+        start_button.clicked.connect(
+            lambda _checked=False: self.startRequested.emit()
+        )
+        stop_button = FluentPushButton(FIF.CLOSE, "停止导出")
+        stop_button.setMinimumHeight(38)
+        stop_button.setEnabled(False)
+        stop_button.clicked.connect(
+            lambda _checked=False: self.stopRequested.emit()
+        )
+        action_row.addWidget(start_button, 1)
+        action_row.addWidget(stop_button)
+        layout.addLayout(action_row)
+
+        self.controls = ExportWorkspaceControls(
+            theme_labels=theme_labels,
+            settings_col=settings_col,
+            location_settings_button=location_settings_button,
+            directory_edit=directory_edit,
+            browse_button=browse_button,
+            name_edit=name_edit,
+            width_spin=width_spin,
+            height_spin=height_spin,
+            fps_combo=fps_combo,
+            encoder_combo=encoder_combo,
+            codec_combo=codec_combo,
+            preset_combo=preset_combo,
+            crf_spin=crf_spin,
+            render_workers_combo=render_workers_combo,
+            native_check=native_check,
+            gpu_preview_check=gpu_preview_check,
+            gpu_export_check=gpu_export_check,
+            monitor_card=monitor_card,
+            monitor_layout=monitor_layout,
+            eta_label=eta_label,
+            monitor_header=monitor_header,
+            monitor_view=monitor_view,
+            monitor_frame=monitor_frame,
+            format_label=format_label,
+            progress=progress,
+            status_label=status_label,
+            start_button=start_button,
+            stop_button=stop_button,
+        )
+
+
 def format_eta_seconds(seconds: float) -> str:
     """导出剩余时间的短文案：1 小时 5 分 / 3 分 20 秒 / 45 秒。"""
     total = max(int(round(seconds)), 0)
@@ -426,6 +828,8 @@ __all__ = [
     "EXPORT_PREVIEW_MIN_WIDTH",
     "ExportLocationDialog",
     "ExportMonitorView",
+    "ExportWorkspaceControls",
+    "ExportWorkspaceView",
     "export_preview_width",
     "format_elapsed_seconds",
     "format_eta_seconds",

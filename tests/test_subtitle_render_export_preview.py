@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QSize  # noqa: E402
 from PyQt6.QtGui import QImage, QPixmap  # noqa: E402
+from PyQt6.QtTest import QSignalSpy  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
@@ -20,6 +21,9 @@ from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
     _export_preview_width,
     _physical_preview_size,
     _scaled_preview_pixmap,
+)
+from krok_helper.subtitle_render.frontend.workflow.export_view import (  # noqa: E402
+    ExportWorkspaceView,
 )
 
 
@@ -163,6 +167,78 @@ def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
         assert view_geometry.width() / view_geometry.height() == pytest.approx(
             16 / 9, rel=0.005
         )
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_workspace_reports_user_actions_through_its_contract(qapp):
+    view = ExportWorkspaceView(
+        fps_options=(60, 120),
+        render_worker_options=(0, 4, 8, 12, 16),
+        gpu_preview_checked=True,
+        gpu_controls_visible=True,
+    )
+    try:
+        spies = {
+            "location": QSignalSpy(view.locationSettingsRequested),
+            "directory": QSignalSpy(view.directoryEditingFinished),
+            "browse": QSignalSpy(view.browseRequested),
+            "encoder": QSignalSpy(view.encoderChanged),
+            "codec": QSignalSpy(view.codecChanged),
+            "start": QSignalSpy(view.startRequested),
+            "stop": QSignalSpy(view.stopRequested),
+        }
+        controls = view.controls
+
+        controls.location_settings_button.click()
+        controls.directory_edit.editingFinished.emit()
+        controls.browse_button.click()
+        controls.encoder_combo.setCurrentIndex(1)
+        controls.codec_combo.setCurrentIndex(1)
+        controls.start_button.click()
+        controls.stop_button.setEnabled(True)
+        controls.stop_button.click()
+
+        assert {name: len(spy) for name, spy in spies.items()} == {
+            name: 1 for name in spies
+        }
+    finally:
+        view.close()
+        view.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_workspace_actions_reach_window_coordinator(qapp, monkeypatch):
+    calls = []
+    handlers = {
+        "_open_export_location_settings": "location",
+        "_on_export_directory_edited": "directory",
+        "_browse_export_output": "browse",
+        "_start_render_export": "start",
+        "_stop_render_export": "stop",
+    }
+    for method_name, call_name in handlers.items():
+        monkeypatch.setattr(
+            SubtitleRenderWindow,
+            method_name,
+            lambda self, name=call_name: calls.append(name),
+        )
+
+    window = SubtitleRenderWindow(
+        embedded=True,
+        settings_provider=_SettingsProvider(),
+    )
+    try:
+        window._export_location_settings_button.click()
+        window._export_dir_edit.editingFinished.emit()
+        window._export_browse_button.click()
+        window._export_start_button.click()
+        window._export_stop_button.setEnabled(True)
+        window._export_stop_button.click()
+
+        assert calls == ["location", "directory", "browse", "start", "stop"]
     finally:
         window.close()
         window.deleteLater()

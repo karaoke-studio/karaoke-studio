@@ -3211,6 +3211,7 @@ def test_export_view_has_one_frontend_owner() -> None:
         "EXPORT_PREVIEW_MIN_WIDTH": "_EXPORT_PREVIEW_MIN_WIDTH",
         "ExportLocationDialog": "_ExportLocationDialog",
         "ExportMonitorView": "_ExportMonitorView",
+        "ExportWorkspaceView": None,
         "export_preview_width": "_export_preview_width",
         "format_elapsed_seconds": "_format_elapsed_seconds",
         "format_eta_seconds": "_format_eta_seconds",
@@ -3218,12 +3219,15 @@ def test_export_view_has_one_frontend_owner() -> None:
         "physical_preview_size": "_physical_preview_size",
         "scaled_preview_pixmap": "_scaled_preview_pixmap",
     }
-    builder_helpers = {
+    coordinator_helpers = {
+        "sync_export_preset_enabled",
+    }
+    owned_members = {
+        "ExportWorkspaceControls",
         "make_card_icon_badge",
         "make_export_card",
         "make_export_spin",
         "make_labeled_export_control",
-        "sync_export_preset_enabled",
     }
     imported = {
         alias.name: alias.asname
@@ -3237,7 +3241,13 @@ def test_export_view_has_one_frontend_owner() -> None:
         for node in window_tree.body
         if isinstance(node, ast.ImportFrom) and node.module == owner
         for alias in node.names
-        if alias.name in builder_helpers and alias.asname is None
+        if alias.name in coordinator_helpers and alias.asname is None
+    }
+    window_imports_from_owner = {
+        alias.name
+        for node in window_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
     }
     export_members = {
         node.name
@@ -3270,8 +3280,9 @@ def test_export_view_has_one_frontend_owner() -> None:
     compatibility_names = {alias or name for name, alias in aliases.items()}
 
     assert imported == aliases
-    assert imported_helpers == builder_helpers
-    assert set(aliases) | builder_helpers <= export_members
+    assert imported_helpers == coordinator_helpers
+    assert owned_members.isdisjoint(window_imports_from_owner)
+    assert set(aliases) | coordinator_helpers | owned_members <= export_members
     assert compatibility_names.isdisjoint(window_members)
     assert {
         "_export_spin",
