@@ -3,21 +3,33 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QRectF
-from PyQt6.QtGui import QPainterPath
+from PyQt6.QtGui import QFontMetrics, QPainterPath
 
 from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.engine.guide import guide_symbol_is_bitmap
+from krok_helper.subtitle_render.engine.layout.line.style import lane_count
 from krok_helper.subtitle_render.engine.render.effects import (
     glow_concentration_level,
     glow_radius,
     karaoke_state_signature,
     main_stroke2_width,
+    ruby_vertical_extra,
     visual_text_padding,
+)
+from krok_helper.subtitle_render.engine.ruby import (
+    active_rubies_for_line,
+    build_ruby_font,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
 )
-from krok_helper.subtitle_render.engine.text import GlyphLayout, TextLayout
+from krok_helper.subtitle_render.engine.text import (
+    GlyphLayout,
+    TextLayout,
+    build_font,
+)
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.sources.guide_symbols import (
     scaled_guide_symbol_path,
 )
@@ -27,6 +39,104 @@ def bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
     return guide_symbol_is_bitmap(symbol) and not bool(
         getattr(symbol, "bitmap_after_path", None)
     )
+
+
+def fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
+    font = build_font(style)
+    metrics = QFontMetrics(font)
+    ruby_metrics = QFontMetrics(build_ruby_font(style))
+    ruby_extra = ruby_vertical_extra(style, ruby_metrics)
+    if style.layout_semantics == "n3_1074":
+        font_size = max(int(style.font_size_px), 1)
+        edge = max(int(style.stroke_width_px), 0)
+        main_h = font_size + edge
+        metric_total = max(metrics.ascent() + metrics.descent(), 1)
+        main_descent = (
+            font_size * max(metrics.descent(), 0) // metric_total
+            + edge // 2
+        )
+        main_descent = min(max(main_descent, 0), main_h)
+        main_ascent = main_h - main_descent
+        return main_h, main_ascent, main_descent, 0
+    pad = visual_text_padding(style)
+    main_h = metrics.ascent() + metrics.descent() + pad * 2
+    return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra
+
+
+def resolve_baseline_y(
+    metrics: QFontMetrics,
+    img_h: int,
+    style: Style,
+    ruby_metrics: QFontMetrics | None = None,
+) -> int:
+    pos = style.line_y_position
+    margin = style.line_y_margin_px
+    if style.layout_semantics == "n3_1074":
+        main_h, main_ascent, main_descent, ruby_extra = fixed_line_geometry(style)
+        if pos == "top":
+            return margin + ruby_extra + main_ascent
+        if pos == "center":
+            return (img_h - main_h) // 2 + main_ascent
+        return img_h - margin - main_descent
+    pad = visual_text_padding(style)
+    ruby_extra = 0
+    if ruby_metrics is not None:
+        ruby_extra = ruby_vertical_extra(style, ruby_metrics)
+    if pos == "top":
+        return margin + ruby_extra + pad + metrics.ascent()
+    if pos == "center":
+        block_h = metrics.height() + ruby_extra + pad * 2
+        return (img_h - block_h) // 2 + ruby_extra + pad + metrics.ascent()
+    return img_h - margin - pad - metrics.descent()
+
+
+def resolve_display_baselines(
+    img_h: int,
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    style: Style,
+) -> dict[int, int]:
+    if not style.dual_line_layout:
+        font = build_font(style)
+        metrics = QFontMetrics(font)
+        line = display_lines[0].line if display_lines else None
+        ruby_metrics = (
+            QFontMetrics(build_ruby_font(style))
+            if line is not None and active_rubies_for_line(track.rubies, line)
+            else None
+        )
+        baseline = resolve_baseline_y(metrics, img_h, style, ruby_metrics)
+        if style.line_horizontal_layout == "per_row":
+            baseline += style.row1_offset_y
+        return {0: baseline}
+
+    main_h, main_ascent, main_descent, ruby_extra = fixed_line_geometry(style)
+    gap = int(style.line_gap_px)
+    margin = style.line_y_margin_px
+    lanes = lane_count(style)
+    step = main_h + gap
+
+    if style.line_y_position == "top":
+        first_baseline = margin + ruby_extra + main_ascent
+    elif style.line_y_position == "center":
+        total_h = main_h * lanes + gap * (lanes - 1)
+        first_baseline = (img_h - total_h) // 2 + main_ascent
+    else:
+        last_baseline = img_h - margin - main_descent
+        first_baseline = last_baseline - step * (lanes - 1)
+    baselines = {lane: first_baseline + step * lane for lane in range(lanes)}
+    if style.line_horizontal_layout == "per_row":
+        if 0 in baselines:
+            baselines[0] += style.row1_offset_y
+        if 1 in baselines:
+            baselines[1] += style.row2_offset_y
+    return baselines
+
+
+def bitmap_guide_anchor_descent(glyph: GlyphLayout) -> int:
+    if glyph.style.layout_semantics == "n3_1074":
+        return fixed_line_geometry(glyph.style)[2]
+    return max(int(glyph.metrics.descent()), 0)
 
 
 def glyph_path(glyph: GlyphLayout, baseline_y: int) -> QPainterPath:

@@ -1575,6 +1575,7 @@ def test_horizontal_glyph_layout_has_one_painter_free_owner() -> None:
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     names = {
+        "bitmap_guide_anchor_descent",
         "bitmap_guide_glyphs",
         "bitmap_guide_is_no_wipe",
         "clamp_role_baseline_y",
@@ -1584,8 +1585,11 @@ def test_horizontal_glyph_layout_has_one_painter_free_owner() -> None:
         "glyph_run_rect",
         "glyph_run_signature",
         "glyph_runs",
+        "fixed_line_geometry",
         "n3_main_fill_rect",
         "resolve_role_baseline_y",
+        "resolve_baseline_y",
+        "resolve_display_baselines",
         "role_visual_text_padding",
         "text_glyph_runs",
     }

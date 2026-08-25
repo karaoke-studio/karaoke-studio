@@ -532,6 +532,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     RubyWipeSegment as _RubyWipeSegment,
     SayatooLineLayout as _SayatooLineLayout,
     aligned_x0 as _aligned_x0,
+    bitmap_guide_anchor_descent as _bitmap_guide_anchor_descent,
     bitmap_guide_glyphs as _bitmap_guide_glyphs,
     bitmap_guide_is_no_wipe as _bitmap_guide_is_no_wipe,
     bottom_short_page_alignment as _bottom_short_page_alignment,
@@ -542,6 +543,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     glyph_run_rect as _glyph_run_rect,
     glyph_run_signature as _glyph_run_signature,
     glyph_runs as _glyph_runs,
+    fixed_line_geometry as _fixed_line_geometry,
     lane_alignment as _lane_alignment,
     layout_page_lines as _layout_page_lines,
     line_total_width as _line_total_width,
@@ -551,6 +553,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     resolve_line_x as _resolve_line_x,
     resolve_line_x_smart as _resolve_line_x_smart,
     resolve_role_baseline_y as _resolve_role_baseline_y,
+    resolve_baseline_y as _resolve_baseline_y,
+    resolve_display_baselines as _resolve_display_baselines,
     role_visual_text_padding as _role_visual_text_padding,
     row_layout_params as _row_layout_params,
     smart_horizontal_dx as _smart_horizontal_dx,
@@ -3093,102 +3097,6 @@ def _signal_display_lines_for_style(
     )
 
 
-def _resolve_baseline_y(
-    metrics: QFontMetrics,
-    img_h: int,
-    style: Style,
-    ruby_metrics: QFontMetrics | None = None,
-) -> int:
-    pos = style.line_y_position
-    margin = style.line_y_margin_px
-    if style.layout_semantics == "n3_1074":
-        main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
-        if pos == "top":
-            return margin + ruby_extra + main_ascent
-        if pos == "center":
-            return (img_h - main_h) // 2 + main_ascent
-        return img_h - margin - main_descent
-    pad = _visual_text_padding(style)
-    ruby_extra = 0
-    if ruby_metrics is not None:
-        ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
-    if pos == "top":
-        return margin + ruby_extra + pad + metrics.ascent()
-    if pos == "center":
-        block_h = metrics.height() + ruby_extra + pad * 2
-        return (img_h - block_h) // 2 + ruby_extra + pad + metrics.ascent()
-    # bottom（默认）
-    return img_h - margin - pad - metrics.descent()
-
-
-def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
-    font = _build_font(style)
-    metrics = QFontMetrics(font)
-    ruby_metrics = QFontMetrics(_build_ruby_font(style))
-    ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
-    if style.layout_semantics == "n3_1074":
-        # N3 DrawCharInfo.Height is font size + the first edge only.  Keep the
-        # product's larger guide/role glyphs out of the shared lane box; their
-        # visual geometry and ruby-anchor participation remain independent.
-        font_size = max(int(style.font_size_px), 1)
-        edge = max(int(style.stroke_width_px), 0)
-        main_h = font_size + edge
-        metric_total = max(metrics.ascent() + metrics.descent(), 1)
-        main_descent = font_size * max(metrics.descent(), 0) // metric_total + edge // 2
-        main_descent = min(max(main_descent, 0), main_h)
-        main_ascent = main_h - main_descent
-        # N3 anchors top/middle/bottom against the main DrawLine box. Ruby is
-        # positioned above DrawTop afterwards and may extend into the margin.
-        return main_h, main_ascent, main_descent, 0
-    pad = _visual_text_padding(style)
-    main_h = metrics.ascent() + metrics.descent() + pad * 2
-    return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra
-
-
-def _resolve_display_baselines(
-    img_h: int,
-    track: TimingTrack,
-    display_lines: list[DisplayLine],
-    style: Style,
-) -> dict[int, int]:
-    if not style.dual_line_layout:
-        font = _build_font(style)
-        metrics = QFontMetrics(font)
-        line = display_lines[0].line if display_lines else None
-        ruby_metrics = (
-            QFontMetrics(_build_ruby_font(style))
-            if line is not None and _active_rubies_for_line(track.rubies, line)
-            else None
-        )
-        baseline = _resolve_baseline_y(metrics, img_h, style, ruby_metrics)
-        if style.line_horizontal_layout == "per_row":
-            baseline += style.row1_offset_y
-        return {0: baseline}
-
-    main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
-    gap = int(style.line_gap_px)
-    margin = style.line_y_margin_px
-    lanes = _lane_count(style)
-    step = main_h + gap
-
-    if style.line_y_position == "top":
-        first_baseline = margin + ruby_extra + main_ascent
-    elif style.line_y_position == "center":
-        total_h = main_h * lanes + gap * (lanes - 1)
-        first_baseline = (img_h - total_h) // 2 + main_ascent
-    else:
-        last_baseline = img_h - margin - main_descent
-        first_baseline = last_baseline - step * (lanes - 1)
-    baselines = {lane: first_baseline + step * lane for lane in range(lanes)}
-    if style.line_horizontal_layout == "per_row":
-        # per_row 是 Sayatoo 双行遗留：Y 偏移只定义了前两行。
-        if 0 in baselines:
-            baselines[0] += style.row1_offset_y
-        if 1 in baselines:
-            baselines[1] += style.row2_offset_y
-    return baselines
-
-
 # ---------------------------------------------------------------------------
 # 竖排（縦書き）
 # ---------------------------------------------------------------------------
@@ -3921,13 +3829,6 @@ def _layout_plain_line(
         ruby_layouts=ruby_layouts,
         render_line=line,
     )
-
-
-def _bitmap_guide_anchor_descent(glyph: _GlyphLayout) -> int:
-    style = glyph.style
-    if style.layout_semantics == "n3_1074":
-        return _fixed_line_geometry(style)[2]
-    return max(int(glyph.metrics.descent()), 0)
 
 
 def _layout_role_line(
