@@ -1695,6 +1695,62 @@ def test_horizontal_line_layout_uses_explicit_painter_free_ports() -> None:
     )
 
 
+def test_horizontal_transition_math_has_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    transition_owner = f"{owner}.transitions"
+    transition_path = (
+        ROOT / "engine/render/elements/horizontal/transitions.py"
+    )
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    aliases = {
+        "CHAR_FADE_IN_TIME_MS": "_CHAR_FADE_IN_TIME_MS",
+        "CHAR_FADE_INTRO_DELAY_MS": "_CHAR_FADE_INTRO_DELAY_MS",
+        "CHAR_FADE_OUT_TIME_MS": "_CHAR_FADE_OUT_TIME_MS",
+        "char_fade_opacity": "_char_fade_opacity",
+        "character_transform": "_character_transform",
+        "spin_flip_skew": "_spin_flip_skew",
+        "transition_char_state": "_transition_char_state",
+        "utopia_following_done_time": "_utopia_following_done_time",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in aliases
+    }
+    painter_functions = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == aliases
+    assert {
+        "_char_fade_delay_step",
+        "_char_fade_opacity",
+        "_character_transform",
+        "_clamped_ratio",
+        "_is_utopia_wiping",
+        "_next_valid_char_index",
+        "_spin_flip_skew",
+        "_staggered_char_progress",
+        "_transition_char_state",
+        "_utopia_following_done_time",
+        "_utopia_intro_delay_step",
+        "_utopia_tail_delay_ms",
+        "_utopia_wipe_scale",
+    }.isdisjoint(painter_functions)
+    targets = _import_targets(transition_owner, transition_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"

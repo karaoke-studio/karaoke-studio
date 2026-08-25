@@ -44,6 +44,16 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     role_visual_text_padding,
     text_glyph_runs,
 )
+from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+    CHAR_FADE_IN_TIME_MS,
+    CHAR_FADE_INTRO_DELAY_MS,
+    CHAR_FADE_OUT_TIME_MS,
+    char_fade_opacity,
+    character_transform,
+    spin_flip_skew,
+    transition_char_state,
+    utopia_following_done_time,
+)
 
 
 __all__ = [
@@ -54,12 +64,17 @@ __all__ = [
     "RubyLayout",
     "RubyWipeSegment",
     "SayatooLineLayout",
+    "CHAR_FADE_IN_TIME_MS",
+    "CHAR_FADE_INTRO_DELAY_MS",
+    "CHAR_FADE_OUT_TIME_MS",
     "aligned_x0",
     "bitmap_guide_glyphs",
     "bitmap_guide_anchor_descent",
     "bitmap_guide_is_no_wipe",
     "bottom_short_page_alignment",
     "clamp_role_baseline_y",
+    "char_fade_opacity",
+    "character_transform",
     "glyph_is_bitmap_guide",
     "glyph_path",
     "glyph_run_path",
@@ -84,5 +99,8 @@ __all__ = [
     "role_visual_text_padding",
     "row_layout_params",
     "smart_horizontal_dx",
+    "spin_flip_skew",
     "text_glyph_runs",
+    "transition_char_state",
+    "utopia_following_done_time",
 ]

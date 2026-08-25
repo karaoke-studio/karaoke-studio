@@ -322,20 +322,6 @@ def _horizontal_layer_enabled() -> bool:
     )
 
 
-_UTOPIA_INTRO_TIME_MS = 700
-_UTOPIA_INTRO_DELAY_MS = 200
-_UTOPIA_INTRO_ENLARGE_MS = 400
-_UTOPIA_INTRO_CONDENSE_MS = 100
-_UTOPIA_INTRO_OVER_RATIO = 1.3
-_UTOPIA_WIPE_OVER_RATIO = 1.15
-_UTOPIA_WIPE_OVER_TIME_RATIO = 0.25
-_UTOPIA_WIPE_OVER_TIME_LIMIT_MS = 100
-_UTOPIA_FADE_OUT_TIME_MS = 750
-_CHAR_FADE_INTRO_DELAY_MS = 350
-_CHAR_FADE_IN_TIME_MS = 250
-_CHAR_FADE_OUT_TIME_MS = 250
-
-
 def clear_before_layer_cache() -> None:
     """测试 / 调试用：把字幕层位图缓存全部丢掉。"""
     _clear_fill_caches()
@@ -525,6 +511,9 @@ from krok_helper.subtitle_render.engine.render.elements.title import (
     title_block_origin as _title_block_origin,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal import (
+    CHAR_FADE_IN_TIME_MS as _CHAR_FADE_IN_TIME_MS,
+    CHAR_FADE_INTRO_DELAY_MS as _CHAR_FADE_INTRO_DELAY_MS,
+    CHAR_FADE_OUT_TIME_MS as _CHAR_FADE_OUT_TIME_MS,
     FillSegment as _FillSegment,
     HorizontalLayoutPorts,
     LineCharTransition as _LineCharTransition,
@@ -532,6 +521,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     RubyLayout as _RubyLayout,
     RubyWipeSegment as _RubyWipeSegment,
     SayatooLineLayout as _SayatooLineLayout,
+    char_fade_opacity as _char_fade_opacity,
+    character_transform as _character_transform,
     aligned_x0 as _aligned_x0,
     bitmap_guide_anchor_descent as _bitmap_guide_anchor_descent,
     bitmap_guide_glyphs as _bitmap_guide_glyphs,
@@ -562,7 +553,10 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     role_visual_text_padding as _role_visual_text_padding,
     row_layout_params as _row_layout_params,
     smart_horizontal_dx as _smart_horizontal_dx,
+    spin_flip_skew as _spin_flip_skew,
     text_glyph_runs as _text_glyph_runs,
+    transition_char_state as _transition_char_state,
+    utopia_following_done_time as _utopia_following_done_time,
 )
 from krok_helper.subtitle_render.engine.render.elements.vertical import (
     VerticalCachePorts,
@@ -7089,159 +7083,6 @@ def _utopia_wipe_window_for_index(
     return start, max(start, end)
 
 
-def _transition_char_state(
-    style: Style,
-    transition: _LineCharTransition,
-    index: int,
-    count: int,
-    *,
-    char_start_ms: int | None = None,
-    char_end_ms: int | None = None,
-    t_ms: int | None = None,
-    frame_height: int | None = None,
-    following_done_ms: int | None = None,
-) -> tuple[float, float, float, float, float, float, float]:
-    if transition.effect == "utopia" and transition.phase == "utopia":
-        if (
-            style.entry_anim == "utopia"
-            and t_ms is not None
-            and transition.start_ms is not None
-            and t_ms <= transition.start_ms + _UTOPIA_INTRO_TIME_MS
-        ):
-            intro_transition = _LineCharTransition(
-                phase="entry",
-                effect="utopia",
-                progress=_clamped_ratio(t_ms - transition.start_ms, _UTOPIA_INTRO_TIME_MS),
-                start_ms=transition.start_ms,
-                end_ms=transition.start_ms + _UTOPIA_INTRO_TIME_MS,
-            )
-            return _transition_char_state(
-                style,
-                intro_transition,
-                index,
-                count,
-                char_start_ms=char_start_ms,
-                char_end_ms=char_end_ms,
-                t_ms=t_ms,
-                frame_height=frame_height,
-                following_done_ms=following_done_ms,
-            )
-        if (
-            style.exit_anim == "utopia"
-            and t_ms is not None
-            and following_done_ms is not None
-            and t_ms > following_done_ms
-        ):
-            outro_transition = _LineCharTransition(phase="exit", effect="utopia", progress=1.0)
-            return _transition_char_state(
-                style,
-                outro_transition,
-                index,
-                count,
-                char_start_ms=char_start_ms,
-                char_end_ms=char_end_ms,
-                t_ms=t_ms,
-                frame_height=frame_height,
-                following_done_ms=following_done_ms,
-            )
-        if (
-            effective_karaoke_animation(style) == "utopia"
-            and t_ms is not None
-            and char_start_ms is not None
-            and char_end_ms is not None
-            and _is_utopia_wiping(t_ms, char_start_ms, char_end_ms)
-        ):
-            wipe_transition = _LineCharTransition(phase="wipe", effect="utopia", progress=1.0)
-            return _transition_char_state(
-                style,
-                wipe_transition,
-                index,
-                count,
-                char_start_ms=char_start_ms,
-                char_end_ms=char_end_ms,
-                t_ms=t_ms,
-                frame_height=frame_height,
-                following_done_ms=following_done_ms,
-            )
-        return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
-
-    if transition.effect == "utopia" and transition.phase == "entry":
-        if t_ms is None or transition.start_ms is None:
-            local = _staggered_char_progress(transition.progress, index, count)
-            opacity = min(max(local, 0.0), 1.0)
-            return opacity, 0.0, 0.0, 0.0, opacity, opacity, 0.0
-        delay = _utopia_intro_delay_step(count) * index
-        elapsed = t_ms - transition.start_ms - delay
-        if elapsed < 0:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        opacity = min(elapsed / _UTOPIA_INTRO_ENLARGE_MS, 1.0)
-        if elapsed < _UTOPIA_INTRO_ENLARGE_MS:
-            scale = _UTOPIA_INTRO_OVER_RATIO * elapsed / _UTOPIA_INTRO_ENLARGE_MS
-        elif elapsed < _UTOPIA_INTRO_ENLARGE_MS + _UTOPIA_INTRO_CONDENSE_MS:
-            remaining = _UTOPIA_INTRO_ENLARGE_MS + _UTOPIA_INTRO_CONDENSE_MS - elapsed
-            scale = 1.0 + (_UTOPIA_INTRO_OVER_RATIO - 1.0) * remaining / _UTOPIA_INTRO_CONDENSE_MS
-        else:
-            scale = 1.0
-        return opacity, 0.0, 0.0, 0.0, scale, scale, 0.0
-
-    if transition.phase == "exit" and transition.effect == "utopia":
-        if t_ms is None:
-            local = transition.progress
-        else:
-            done_ms = following_done_ms if following_done_ms is not None else char_end_ms
-            if done_ms is None:
-                local = transition.progress
-            else:
-                local = (t_ms - done_ms) / _UTOPIA_FADE_OUT_TIME_MS
-        local = min(max(local, 0.0), 1.0)
-        opacity = max(0.0, 1.0 - local)
-        shrink = 1.0 - local
-        height = frame_height if frame_height and frame_height > 0 else 1080
-        amp = height / 15.0
-        if local <= 0.5:
-            x_travel = math.sin(math.pi * local) * amp
-        else:
-            x_travel = amp + math.sin((local - 0.5) * math.pi) * amp
-        y_travel = math.sin(math.pi * local / 2.0) * amp
-        x_flip = math.cos(math.pi * local)
-        rotation = -180.0 * local
-        return opacity, -x_travel, y_travel, rotation, shrink * x_flip, shrink, 0.0
-
-    if transition.phase == "wipe" and transition.effect == "utopia":
-        if char_start_ms is None or char_end_ms is None or t_ms is None:
-            return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
-        scale = _utopia_wipe_scale(t_ms, char_start_ms, char_end_ms)
-        return 1.0, 0.0, 0.0, 0.0, scale, scale, 0.0
-
-    if transition.effect in {"char_fade", "char_drip", "spin_flip"}:
-        progress = _char_fade_opacity(
-            transition,
-            index,
-            count,
-            t_ms=t_ms,
-        )
-        if transition.effect == "spin_flip":
-            direction = 1.0 if transition.phase == "exit" else -1.0
-            skew_y = direction * _spin_flip_skew(progress)
-            return progress, 0.0, 0.0, 0.0, progress, progress, skew_y
-        if transition.effect == "char_drip":
-            direction = 1.0 if transition.phase == "entry" else -1.0
-            skew_y = direction * _spin_flip_skew(progress)
-            return float(progress > 0.0), 0.0, 0.0, 0.0, 1.0, 1.0, skew_y
-        return progress, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
-
-    local = _staggered_char_progress(transition.progress, index, count)
-    eased = 1.0 - (1.0 - local) * (1.0 - local)
-    if transition.phase == "entry":
-        opacity = 0.22 + 0.78 * eased
-        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
-
-    opacity = 1.0 - eased
-    if transition.effect == "utopia":
-        return 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
-    return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
-
-
 def _apply_character_transform(
     painter: QPainter,
     *,
@@ -7271,135 +7112,6 @@ def _apply_character_transform(
     if transform.isIdentity():
         return
     painter.setTransform(transform, combine=True)
-
-
-def _character_transform(
-    *,
-    center_x: float,
-    center_y: float,
-    dx: float = 0.0,
-    dy: float = 0.0,
-    rotation: float = 0.0,
-    scale_x: float = 1.0,
-    scale_y: float = 1.0,
-    skew_y: float = 0.0,
-    scale_origin_x: float | None = None,
-    scale_origin_y: float | None = None,
-) -> QTransform:
-    transform = QTransform()
-    if not dx and not dy and not rotation and scale_x == 1.0 and scale_y == 1.0 and not skew_y:
-        return transform
-    if scale_origin_x is not None and scale_origin_y is not None:
-        transform.translate(scale_origin_x + dx, scale_origin_y + dy)
-        if skew_y:
-            transform.shear(0.0, skew_y)
-        if scale_x != 1.0 or scale_y != 1.0:
-            transform.scale(scale_x, scale_y)
-        transform.translate(center_x - scale_origin_x, center_y - scale_origin_y)
-        if rotation:
-            transform.rotate(rotation)
-        transform.translate(-center_x, -center_y)
-        return transform
-    transform.translate(center_x + dx, center_y + dy)
-    if rotation:
-        transform.rotate(rotation)
-    if skew_y:
-        transform.shear(0.0, skew_y)
-    if scale_x != 1.0 or scale_y != 1.0:
-        transform.scale(scale_x, scale_y)
-    transform.translate(-center_x, -center_y)
-    return transform
-
-
-def _utopia_intro_delay_step(count: int) -> int:
-    if count <= 1:
-        return 0
-    return _UTOPIA_INTRO_DELAY_MS // (count - 1)
-
-
-def _is_utopia_wiping(t_ms: int, char_start_ms: int, char_end_ms: int) -> bool:
-    return char_start_ms < t_ms < char_end_ms and char_start_ms != char_end_ms
-
-
-def _utopia_wipe_scale(t_ms: int, char_start_ms: int, char_end_ms: int) -> float:
-    if not _is_utopia_wiping(t_ms, char_start_ms, char_end_ms):
-        return 1.0
-    over_ms = min(int((char_end_ms - char_start_ms) * _UTOPIA_WIPE_OVER_TIME_RATIO), _UTOPIA_WIPE_OVER_TIME_LIMIT_MS)
-    if over_ms <= 0:
-        return 1.0
-    peak_ms = char_start_ms + over_ms
-    if t_ms <= peak_ms:
-        progress = (t_ms - char_start_ms) / over_ms
-    else:
-        release_ms = max(char_end_ms - peak_ms, 1)
-        progress = (char_end_ms - t_ms) / release_ms
-    return 1.0 + (_UTOPIA_WIPE_OVER_RATIO - 1.0) * min(max(progress, 0.0), 1.0)
-
-
-def _utopia_following_done_time(
-    line: TimingLine,
-    intervals: list[tuple[int, int]],
-    index: int,
-    style: Style,
-) -> int:
-    if not intervals:
-        return _line_end_ms(line)
-    index = min(max(index, 0), len(intervals) - 1)
-    current_end = intervals[index][1]
-    next_index = _next_valid_char_index(line, index + 1)
-    if next_index is not None and next_index < len(intervals):
-        next_end = intervals[next_index][1]
-        if current_end <= next_end:
-            return next_end
-    return current_end + _utopia_tail_delay_ms(style)
-
-
-def _next_valid_char_index(line: TimingLine, start_index: int) -> int | None:
-    for index in range(start_index, len(line.chars)):
-        text = line.chars[index].text
-        if text and not text.isspace():
-            return index
-    return None
-
-
-def _utopia_tail_delay_ms(style: Style) -> int:
-    return max(0, style.line_tail_ms - _UTOPIA_FADE_OUT_TIME_MS)
-
-
-def _char_fade_delay_step(count: int) -> int:
-    if count <= 1:
-        return 0
-    return _CHAR_FADE_INTRO_DELAY_MS // (count - 1)
-
-
-def _char_fade_opacity(
-    transition: _LineCharTransition,
-    index: int,
-    count: int,
-    *,
-    t_ms: int | None,
-) -> float:
-    if t_ms is None:
-        return transition.progress
-    if transition.phase == "entry":
-        start_ms = (transition.start_ms or 0) + _char_fade_delay_step(count) * index
-        return _clamped_ratio(t_ms - start_ms, _CHAR_FADE_IN_TIME_MS)
-    if transition.phase == "exit":
-        end_ms = (transition.end_ms or t_ms) - _char_fade_delay_step(count) * (count - index - 1)
-        if t_ms > end_ms:
-            return 0.0
-        if t_ms < end_ms - _CHAR_FADE_OUT_TIME_MS:
-            return 1.0
-        return _clamped_ratio(end_ms - t_ms, _CHAR_FADE_OUT_TIME_MS)
-    return 1.0
-
-
-def _spin_flip_skew(opacity: float) -> float:
-    opacity = max(0.0, min(1.0, opacity))
-    if opacity <= 0.0:
-        return 0.0
-    angle = (math.pi / 2.0) * (1.0 - opacity)
-    return math.tan(min(angle, math.radians(89.0)))
 
 
 def _paint_char_karaoke_stack(
@@ -7660,21 +7372,6 @@ def _paint_char_karaoke_stack(
         draw_glow=not use_cached_glow,
         fill_rect=fill_rect,
     )
-
-
-def _staggered_char_progress(progress: float, index: int, count: int) -> float:
-    if count <= 1:
-        return progress
-    span = 0.68
-    window = 1.0 - span
-    offset = (index / max(count - 1, 1)) * span
-    return max(0.0, min(1.0, (progress - offset) / window))
-
-
-def _clamped_ratio(elapsed_ms: int, duration_ms: int) -> float:
-    if duration_ms <= 0:
-        return 1.0
-    return max(0.0, min(1.0, elapsed_ms / duration_ms))
 
 
 def _paint_after_fill_path(
