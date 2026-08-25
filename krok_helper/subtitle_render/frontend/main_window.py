@@ -6031,6 +6031,7 @@ class SubtitleRenderWindow(QWidget):
             self._load_subtitle_settings(),
             chorus_begin_default=DEFAULT_CHORUS_BEGIN_CHARS,
             chorus_end_default=DEFAULT_CHORUS_END_CHARS,
+            font_catalog=get_n3_font_catalog(),
         )
         self._subtitle_loading_defaults = loaded.subtitle_loading_defaults
         self._local_output_preferences = loaded.output
