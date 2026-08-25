@@ -35,7 +35,6 @@ import tempfile
 import threading
 import time
 from typing import Any, Callable, Optional, TYPE_CHECKING
-from uuid import uuid4
 
 if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持模块可独立运行
     from krok_helper.workflow_host import SubtitleVideoSink
@@ -289,14 +288,11 @@ from krok_helper.subtitle_render.domain.models import (
     normalize_title_char_role_labels,
     rescale_font_sizes,
     rescale_layout_sizes,
-    subtitle_style_scheme_from_dict,
-    subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
 )
 from krok_helper.subtitle_render.n3.font_catalog import (
     get_n3_font_catalog,
-    normalize_scheme_font_families,
     normalize_style_font_families,
 )
 from krok_helper.subtitle_render.settings.preferences import (
@@ -308,9 +304,10 @@ from krok_helper.subtitle_render.settings.preferences import (
     DISCARDED_BACKUP_RETENTION_DAYS,
     LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
-    load_app_style_preferences,
-    load_app_runtime_preferences,
+    load_app_preferences,
     prepare_app_preferences,
+    style_presets_from_dict as _style_presets_from_dict,
+    style_presets_to_dict as _style_presets_to_dict,
 )
 from krok_helper.subtitle_render.project.controller import (
     SubtitleProjectController,
@@ -6230,61 +6227,29 @@ class SubtitleRenderWindow(QWidget):
             assign_layout_to_all(track, index, self._style)
 
     def _load_persisted_state(self) -> None:
-        data = self._load_subtitle_settings()
-        runtime_preferences = load_app_runtime_preferences(
-            data,
+        loaded = load_app_preferences(
+            self._load_subtitle_settings(),
             chorus_begin_default=DEFAULT_CHORUS_BEGIN_CHARS,
             chorus_end_default=DEFAULT_CHORUS_END_CHARS,
         )
-        self._subtitle_loading_defaults = subtitle_loading_settings_from_dict(
-            data.get("subtitle_loading_defaults")
-        )
-        self._local_output_preferences = runtime_preferences.output
-        catalog = get_n3_font_catalog()
-        loaded_style_preferences = load_app_style_preferences(
-            data,
-            font_catalog=catalog,
-        )
-        self._app_default_style = deepcopy(loaded_style_preferences.style)
-        self._style = deepcopy(loaded_style_preferences.style)
-        self._layout_assignment_preference = (
-            deepcopy(loaded_style_preferences.layout_assignment)
-            if loaded_style_preferences.layout_assignment is not None
-            else None
-        )
-        style_changed = loaded_style_preferences.changed
-        self._auto_chorus_role = runtime_preferences.auto_chorus_role
-        self._auto_chorus_begin_chars = runtime_preferences.auto_chorus_begin_chars
-        self._auto_chorus_end_chars = runtime_preferences.auto_chorus_end_chars
-        self._auto_chorus_overwrite = runtime_preferences.auto_chorus_overwrite
-        loaded_presets = _style_presets_from_dict(data.get("style_presets"))
-        self._style_presets = {}
-        presets_changed = False
-        for name, preset in loaded_presets.items():
-            scheme, changed = normalize_scheme_font_families(preset.scheme, catalog)
-            self._style_presets[name] = (
-                replace(preset, scheme=scheme) if changed else preset
-            )
-            presets_changed |= changed
-        self._screen_settings = screen_settings_from_dict(data.get("screen"))
-        self._style = rescale_layout_sizes(
-            self._style,
-            self._screen_settings.height,
-        )
-        self._style = rescale_font_sizes(
-            self._style,
-            self._screen_settings.height,
-        )
-        self._selected_scheme_key = runtime_preferences.selected_scheme_key
-        self._preview_splitter_ratio = runtime_preferences.preview_splitter_ratio
-        self._auto_save_enabled = runtime_preferences.auto_save_enabled
-        self._auto_save_interval_minutes = (
-            runtime_preferences.auto_save_interval_minutes
-        )
-        self._project_backup_count = runtime_preferences.project_backup_count
-        if style_changed or presets_changed:
+        self._subtitle_loading_defaults = loaded.subtitle_loading_defaults
+        self._local_output_preferences = loaded.output
+        self._app_default_style = loaded.app_default_style
+        self._style = loaded.project_style
+        self._layout_assignment_preference = loaded.layout_assignment
+        self._auto_chorus_role = loaded.auto_chorus_role
+        self._auto_chorus_begin_chars = loaded.auto_chorus_begin_chars
+        self._auto_chorus_end_chars = loaded.auto_chorus_end_chars
+        self._auto_chorus_overwrite = loaded.auto_chorus_overwrite
+        self._style_presets = loaded.style_presets
+        self._screen_settings = loaded.screen
+        self._selected_scheme_key = loaded.selected_scheme_key
+        self._preview_splitter_ratio = loaded.preview_splitter_ratio
+        self._auto_save_enabled = loaded.auto_save_enabled
+        self._auto_save_interval_minutes = loaded.auto_save_interval_minutes
+        self._project_backup_count = loaded.project_backup_count
+        if loaded.changed:
             self._save_persisted_state()
-
     def _on_preview_splitter_moved(self, _pos: int, _index: int) -> None:
         sizes = self._preview_splitter.sizes()
         total = sum(sizes)
@@ -7092,88 +7057,3 @@ class SubtitleRenderWindow(QWidget):
     def _cleanup_recovery_file(self, path: Optional[Path] = None) -> None:
         target = path or self._recovery_path()
         self._recovery_policy.invalidate(target)
-
-
-def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
-    """Load stable-ID presets and migrate the legacy ``name -> scheme`` mapping."""
-    result: dict[str, StylePreset] = {}
-
-    def add(raw_id: object, raw_name: object, value: object) -> None:
-        name = str(raw_name or "").strip()
-        if not name:
-            return
-        preset_id = str(raw_id or "").strip()
-        if not preset_id or preset_id in result:
-            preset_id = uuid4().hex
-        if isinstance(value, StylePreset):
-            resolved_name = str(value.name).strip() or name
-            resolved_id = str(value.preset_id).strip() or preset_id
-            if resolved_id in result:
-                resolved_id = uuid4().hex
-            result[resolved_id] = StylePreset(
-                name=resolved_name,
-                group=str(value.group).strip(),
-                scheme=deepcopy(value.scheme),
-                preset_id=resolved_id,
-                source_type=str(value.source_type).strip(),
-                source_data=deepcopy(value.source_data),
-            )
-            return
-        if isinstance(value, SubtitleStyleScheme):
-            result[preset_id] = StylePreset(
-                name=name,
-                scheme=deepcopy(value),
-                preset_id=preset_id,
-            )
-            return
-        source_type = ""
-        source_data: dict = {}
-        if isinstance(value, dict) and isinstance(value.get("scheme"), dict):
-            group = str(value.get("group") or "").strip()
-            scheme_payload = value["scheme"]
-            source_type = str(value.get("source_type") or "").strip()
-            if isinstance(value.get("source_data"), dict):
-                source_data = deepcopy(value["source_data"])
-        else:
-            group = ""
-            scheme_payload = value
-        result[preset_id] = StylePreset(
-            name=name,
-            group=group,
-            scheme=subtitle_style_scheme_from_dict(scheme_payload),
-            preset_id=preset_id,
-            source_type=source_type,
-            source_data=source_data,
-        )
-
-    if isinstance(payload, list):
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            add(item.get("id"), item.get("name"), item)
-        return result
-    if not isinstance(payload, dict):
-        return result
-    for raw_key, value in payload.items():
-        if isinstance(value, StylePreset):
-            add(value.preset_id or raw_key, value.name or raw_key, value)
-        else:
-            add(raw_key, raw_key, value)
-    return result
-
-
-def _style_presets_to_dict(
-    presets: dict[str, StylePreset],
-) -> list[dict]:
-    return [
-        {
-            "id": str(preset.preset_id or preset_id),
-            "name": str(preset.name).strip(),
-            "group": str(preset.group).strip(),
-            "scheme": subtitle_style_scheme_to_dict(preset.scheme),
-            "source_type": str(preset.source_type).strip(),
-            "source_data": deepcopy(preset.source_data),
-        }
-        for preset_id, preset in presets.items()
-        if str(preset.name).strip()
-    ]

@@ -47,10 +47,13 @@ from krok_helper.subtitle_render.settings.preferences import (  # noqa: E402
     AppOutputPreferenceValues,
     AppPreferenceSaveInput,
     app_default_style_to_dict,
+    load_app_preferences,
     load_app_runtime_preferences,
     load_app_style_preferences,
     merge_common_style_preferences,
     prepare_app_preferences,
+    style_presets_from_dict,
+    style_presets_to_dict,
     update_app_output_preferences,
     update_app_runtime_preferences,
 )
@@ -534,6 +537,41 @@ def test_app_style_preferences_load_title_habits_without_project_content():
     assert loaded.style.singer_style_overrides == {}
     assert loaded.layout_assignment == {"mode": "auto"}
     assert loaded.changed is True
+
+
+def test_load_app_preferences_owns_the_complete_load_projection():
+    persisted_style = Style(line_lead_in_ms=2345)
+    loaded = load_app_preferences(
+        {
+            "style": style_to_dict(persisted_style),
+            "subtitle_loading_defaults": {"rows_per_page": 3},
+            "style_presets": {
+                "旧预设": {
+                    "fill_color": "#123456",
+                    "font_family": "Arial",
+                }
+            },
+            "screen": {"width": 1280, "height": 720, "fps": 120},
+            "output": {"codec": "hevc"},
+            "selected_scheme_key": "custom:标题",
+            "preview_splitter_ratio": 0.55,
+        },
+        chorus_begin_default="[{",
+        chorus_end_default="]}",
+    )
+
+    assert loaded.subtitle_loading_defaults.rows_per_page == 3
+    assert loaded.output == {"codec": "hevc"}
+    assert loaded.app_default_style.line_lead_in_ms == 2345
+    assert loaded.project_style.line_lead_in_ms == 2345
+    assert [preset.name for preset in loaded.style_presets.values()] == ["旧预设"]
+    assert loaded.screen.width == 1280
+    assert loaded.screen.height == 720
+    assert loaded.screen.fps == 120
+    assert loaded.selected_scheme_key == "custom:标题"
+    assert loaded.preview_splitter_ratio == 0.55
+    assert mw._style_presets_from_dict is style_presets_from_dict
+    assert mw._style_presets_to_dict is style_presets_to_dict
 
 
 def test_app_runtime_preferences_normalize_persisted_values():

@@ -3873,6 +3873,7 @@ def test_subtitle_render_window_delegates_source_reload_preparation() -> None:
 
 def test_subtitle_render_window_delegates_runtime_preference_loading() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
+    preferences_owner = f"{PACKAGE}.settings.preferences"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
         node
@@ -3890,7 +3891,27 @@ def test_subtitle_render_window_delegates_runtime_preference_loading() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
-    assert "load_app_runtime_preferences" in calls
+    assert "load_app_preferences" in calls
+    assert "load_app_runtime_preferences" not in calls
+    imported = {
+        alias.name: alias.asname
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == preferences_owner
+        for alias in node.names
+        if alias.name in {"style_presets_from_dict", "style_presets_to_dict"}
+    }
+    assert imported == {
+        "style_presets_from_dict": "_style_presets_from_dict",
+        "style_presets_to_dict": "_style_presets_to_dict",
+    }
+    assert {
+        "_style_presets_from_dict",
+        "_style_presets_to_dict",
+    }.isdisjoint(
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
 
 
 def test_subtitle_render_window_delegates_runtime_preference_saving() -> None:

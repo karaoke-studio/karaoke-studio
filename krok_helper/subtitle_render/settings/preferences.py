@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
+from uuid import uuid4
 
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
 from krok_helper.subtitle_render.domain.models import (
@@ -18,15 +19,29 @@ from krok_helper.subtitle_render.domain.models import (
     STYLE_APPEARANCE_FIELDS,
     TITLE_SCHEME_NAME,
     Style,
+    StylePreset,
     SubtitleStyleScheme,
     TitleOverlay,
     migrate_legacy_app_title_default,
     style_from_dict,
     style_to_dict,
+    rescale_font_sizes,
+    rescale_layout_sizes,
+    subtitle_style_scheme_from_dict,
+    subtitle_style_scheme_to_dict,
 )
+from krok_helper.subtitle_render.domain.timing import SubtitleLoadingSettings
 from krok_helper.subtitle_render.n3.font_catalog import (
     get_n3_font_catalog,
+    normalize_scheme_font_families,
     normalize_style_font_families,
+)
+from krok_helper.subtitle_render.serialization.timing import (
+    subtitle_loading_settings_from_dict,
+)
+from krok_helper.subtitle_render.settings.screen import (
+    ScreenSettings,
+    screen_settings_from_dict,
 )
 
 
@@ -95,6 +110,29 @@ class LoadedAppRuntimePreferences:
     auto_save_enabled: bool
     auto_save_interval_minutes: int
     project_backup_count: int
+
+
+@dataclass(frozen=True)
+class LoadedAppPreferences:
+    """Complete normalized application state adopted by the frontend."""
+
+    subtitle_loading_defaults: SubtitleLoadingSettings
+    output: dict
+    app_default_style: Style
+    project_style: Style
+    layout_assignment: Optional[dict]
+    auto_chorus_role: str
+    auto_chorus_begin_chars: str
+    auto_chorus_end_chars: str
+    auto_chorus_overwrite: bool
+    style_presets: dict[str, StylePreset]
+    screen: ScreenSettings
+    selected_scheme_key: str
+    preview_splitter_ratio: float
+    auto_save_enabled: bool
+    auto_save_interval_minutes: int
+    project_backup_count: int
+    changed: bool
 
 
 @dataclass(frozen=True)
@@ -543,4 +581,145 @@ def prepare_app_preferences(
     return PreparedAppPreferences(
         data=data,
         app_default_style=app_default_style,
+    )
+
+
+def style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
+    """Load stable-ID presets and migrate the legacy name-to-scheme mapping."""
+
+    result: dict[str, StylePreset] = {}
+
+    def add(raw_id: object, raw_name: object, value: object) -> None:
+        name = str(raw_name or "").strip()
+        if not name:
+            return
+        preset_id = str(raw_id or "").strip()
+        if not preset_id or preset_id in result:
+            preset_id = uuid4().hex
+        if isinstance(value, StylePreset):
+            resolved_name = str(value.name).strip() or name
+            resolved_id = str(value.preset_id).strip() or preset_id
+            if resolved_id in result:
+                resolved_id = uuid4().hex
+            result[resolved_id] = StylePreset(
+                name=resolved_name,
+                group=str(value.group).strip(),
+                scheme=deepcopy(value.scheme),
+                preset_id=resolved_id,
+                source_type=str(value.source_type).strip(),
+                source_data=deepcopy(value.source_data),
+            )
+            return
+        if isinstance(value, SubtitleStyleScheme):
+            result[preset_id] = StylePreset(
+                name=name,
+                scheme=deepcopy(value),
+                preset_id=preset_id,
+            )
+            return
+        source_type = ""
+        source_data: dict = {}
+        if isinstance(value, dict) and isinstance(value.get("scheme"), dict):
+            group = str(value.get("group") or "").strip()
+            scheme_payload = value["scheme"]
+            source_type = str(value.get("source_type") or "").strip()
+            if isinstance(value.get("source_data"), dict):
+                source_data = deepcopy(value["source_data"])
+        else:
+            group = ""
+            scheme_payload = value
+        result[preset_id] = StylePreset(
+            name=name,
+            group=group,
+            scheme=subtitle_style_scheme_from_dict(scheme_payload),
+            preset_id=preset_id,
+            source_type=source_type,
+            source_data=source_data,
+        )
+
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            add(item.get("id"), item.get("name"), item)
+        return result
+    if not isinstance(payload, dict):
+        return result
+    for raw_key, value in payload.items():
+        if isinstance(value, StylePreset):
+            add(value.preset_id or raw_key, value.name or raw_key, value)
+        else:
+            add(raw_key, raw_key, value)
+    return result
+
+
+def style_presets_to_dict(presets: dict[str, StylePreset]) -> list[dict]:
+    """Serialize stable-ID style presets without losing source metadata."""
+
+    return [
+        {
+            "id": str(preset.preset_id or preset_id),
+            "name": str(preset.name).strip(),
+            "group": str(preset.group).strip(),
+            "scheme": subtitle_style_scheme_to_dict(preset.scheme),
+            "source_type": str(preset.source_type).strip(),
+            "source_data": deepcopy(preset.source_data),
+        }
+        for preset_id, preset in presets.items()
+        if str(preset.name).strip()
+    ]
+
+
+def load_app_preferences(
+    data: dict,
+    *,
+    chorus_begin_default: str,
+    chorus_end_default: str,
+    font_catalog: Optional[Any] = None,
+) -> LoadedAppPreferences:
+    """Normalize the complete persisted application state for adoption."""
+
+    runtime = load_app_runtime_preferences(
+        data,
+        chorus_begin_default=chorus_begin_default,
+        chorus_end_default=chorus_end_default,
+    )
+    catalog = font_catalog if font_catalog is not None else get_n3_font_catalog()
+    loaded_style = load_app_style_preferences(data, font_catalog=catalog)
+    app_default_style = deepcopy(loaded_style.style)
+    screen = screen_settings_from_dict(data.get("screen"))
+    project_style = rescale_layout_sizes(deepcopy(loaded_style.style), screen.height)
+    project_style = rescale_font_sizes(project_style, screen.height)
+
+    style_presets: dict[str, StylePreset] = {}
+    presets_changed = False
+    for name, preset in style_presets_from_dict(data.get("style_presets")).items():
+        scheme, changed = normalize_scheme_font_families(preset.scheme, catalog)
+        style_presets[name] = replace(preset, scheme=scheme) if changed else preset
+        presets_changed |= changed
+
+    return LoadedAppPreferences(
+        subtitle_loading_defaults=subtitle_loading_settings_from_dict(
+            data.get("subtitle_loading_defaults")
+        ),
+        output=runtime.output,
+        app_default_style=app_default_style,
+        project_style=project_style,
+        layout_assignment=(
+            deepcopy(loaded_style.layout_assignment)
+            if loaded_style.layout_assignment is not None
+            else None
+        ),
+        auto_chorus_role=runtime.auto_chorus_role,
+        auto_chorus_begin_chars=runtime.auto_chorus_begin_chars,
+        auto_chorus_end_chars=runtime.auto_chorus_end_chars,
+        auto_chorus_overwrite=runtime.auto_chorus_overwrite,
+        style_presets=style_presets,
+        screen=screen,
+        selected_scheme_key=runtime.selected_scheme_key,
+        preview_splitter_ratio=runtime.preview_splitter_ratio,
+        auto_save_enabled=runtime.auto_save_enabled,
+        auto_save_interval_minutes=runtime.auto_save_interval_minutes,
+        project_backup_count=runtime.project_backup_count,
+        changed=loaded_style.changed or presets_changed,
     )
