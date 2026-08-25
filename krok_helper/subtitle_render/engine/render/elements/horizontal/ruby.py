@@ -2,24 +2,35 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+import math
+from dataclasses import dataclass, field, replace
+from typing import Callable, Hashable
 
-from PyQt6.QtCore import QRectF
-from PyQt6.QtGui import QFont, QFontMetrics, QPainterPath
+from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtGui import QFont, QFontMetrics, QPainter, QPainterPath
 
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from krok_helper.subtitle_render.engine.render.effects import (
     fill_signature,
+    fill_brush_rect,
     glow_extent,
     karaoke_state_signature,
+    paint_glow_path,
     ruby_decoration_kind,
     ruby_glow_radius,
     ruby_glow_concentration_level,
     ruby_shadow_dx,
     ruby_shadow_dy,
     ruby_vertical_extra,
+    ruby_visual_padding,
     visual_stroke_extent,
+)
+from krok_helper.subtitle_render.engine.render.core.layers import (
+    BakedLayer,
+    LayerAnimation,
+    LayerContext,
+    SCOPE_LINE,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_ruby_karaoke_colors,
@@ -43,7 +54,19 @@ from krok_helper.subtitle_render.engine.ruby import (
 )
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _ruby_progress_ratio as ruby_progress_ratio,
+    _ruby_utopia_visual_units as ruby_utopia_visual_units,
 )
+
+
+@dataclass(frozen=True)
+class RubyLayerPorts:
+    """Painter-owned raster capabilities used by horizontal ruby layers."""
+
+    blit_cached_ruby_glow: Callable[..., None]
+    build_ruby_glow_layer: Callable[..., tuple]
+    build_ruby_text_layer: Callable[..., tuple]
+    paint_split_glow_path: Callable[..., None]
+    ruby_text_path_and_rect: Callable[..., tuple]
 
 
 def ruby_wipe_geometry(
@@ -459,3 +482,485 @@ def ruby_glow_layer_key(
         ruby_glow_concentration_level(style),
         after,
     )
+
+
+def ruby_glow_states_differ(style: Style) -> bool:
+    """Return whether before/after ruby glow sources need split processing."""
+    if ruby_decoration_kind(style) != "glow":
+        return False
+    colors = effective_ruby_karaoke_colors(style)
+    return (
+        fill_signature(colors.before.shadow)
+        != fill_signature(colors.after.shadow)
+        or ruby_glow_radius(style, after=False)
+        != ruby_glow_radius(style, after=True)
+    )
+
+
+def ruby_glow_can_combine_split(style: Style) -> bool:
+    """Return whether one source bitmap can represent both ruby glow colours."""
+    if not ruby_glow_states_differ(style):
+        return False
+    before_radius = ruby_glow_radius(style, after=False)
+    return (
+        before_radius > 0
+        and before_radius == ruby_glow_radius(style, after=True)
+    )
+
+
+@dataclass(frozen=True)
+class RubySplitGlowLayer:
+    """Combined before/after ruby glow with a cached moving-front strip."""
+
+    ruby_layout: RubyLayout
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics
+    t_ms: int
+    style: Style
+    rtl: bool
+    ports: RubyLayerPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "RubySplitGlowLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        raise AssertionError("combined ruby split glow is painted dynamically")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        visible, complete, front = ruby_wipe_state(
+            self.ruby_layout,
+            self.t_ms,
+        )
+        if not visible:
+            self.ports.blit_cached_ruby_glow(
+                painter,
+                self.ruby_layout,
+                self.ruby_font,
+                self.ruby_metrics,
+                self.style,
+                self.rtl,
+                after=False,
+            )
+            return
+        if complete:
+            self.ports.blit_cached_ruby_glow(
+                painter,
+                self.ruby_layout,
+                self.ruby_font,
+                self.ruby_metrics,
+                self.style,
+                self.rtl,
+                after=True,
+            )
+            return
+
+        reading = (
+            "".join(
+                reversed(
+                    ruby_utopia_visual_units(
+                        self.ruby_layout.ruby.reading
+                    )
+                )
+            )
+            if self.rtl
+            else self.ruby_layout.ruby.reading
+        )
+        path, rect = self.ports.ruby_text_path_and_rect(
+            reading,
+            self.ruby_font,
+            self.ruby_metrics,
+            self.ruby_layout.x,
+            self.ruby_layout.baseline_y,
+            self.ruby_layout.target_width,
+            self.style,
+            base_text=self.ruby_layout.ruby.kanji,
+        )
+        radius = ruby_glow_radius(self.style, after=False)
+        stroke_width = ruby_stroke_width(self.style)
+        stroke2_width = ruby_stroke2_width(self.style)
+        pad = glow_extent(stroke_width, stroke2_width, radius)
+        top = rect.top() - pad
+        height = rect.height() + pad * 2
+        if self.rtl:
+            before_source_clip = QRectF(
+                -1_000_000.0,
+                top,
+                front + 1_000_000.0,
+                height,
+            )
+            after_source_clip = QRectF(front, top, 1_000_000.0, height)
+            before_baked_clip = QRectF(
+                -1_000_000.0,
+                -1_000_000.0,
+                front - pad + 1_000_000.0,
+                2_000_000.0,
+            )
+            after_baked_clip = QRectF(
+                front + pad,
+                -1_000_000.0,
+                1_000_000.0,
+                2_000_000.0,
+            )
+        else:
+            before_source_clip = QRectF(front, top, 1_000_000.0, height)
+            after_source_clip = QRectF(
+                -1_000_000.0,
+                top,
+                front + 1_000_000.0,
+                height,
+            )
+            before_baked_clip = QRectF(
+                front + pad,
+                -1_000_000.0,
+                1_000_000.0,
+                2_000_000.0,
+            )
+            after_baked_clip = QRectF(
+                -1_000_000.0,
+                -1_000_000.0,
+                front - pad + 1_000_000.0,
+                2_000_000.0,
+            )
+
+        strip_clip = QRectF(
+            front - pad,
+            -1_000_000.0,
+            float(pad * 2),
+            2_000_000.0,
+        )
+        colors = effective_ruby_karaoke_colors(self.style)
+        self.ports.paint_split_glow_path(
+            painter,
+            path,
+            colors.before.shadow,
+            colors.after.shadow,
+            self.ruby_layout.gradient_rect,
+            radius,
+            stroke_width,
+            stroke2_width,
+            before_source_clip=before_source_clip,
+            after_source_clip=after_source_clip,
+            concentration_level=ruby_glow_concentration_level(self.style),
+            target_clip=strip_clip,
+            horizontal_fill_rect=self.ruby_layout.horizontal_gradient_rect,
+        )
+        for after, clip in (
+            (False, before_baked_clip),
+            (True, after_baked_clip),
+        ):
+            painter.save()
+            try:
+                painter.setClipRect(clip)
+                self.ports.blit_cached_ruby_glow(
+                    painter,
+                    self.ruby_layout,
+                    self.ruby_font,
+                    self.ruby_metrics,
+                    self.style,
+                    self.rtl,
+                    after=after,
+                )
+            finally:
+                painter.restore()
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = ruby_text_rect(self.ruby_layout, self.ruby_metrics)
+        pad = max(
+            ruby_visual_padding(self.style, after=after)
+            for after in (False, True)
+        )
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class RubyGlowLayer:
+    """Glow-only layer for one horizontal ruby reading."""
+
+    ruby_layout: RubyLayout
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics
+    t_ms: int
+    style: Style
+    rtl: bool
+    after: bool
+    ports: RubyLayerPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "RubyGlowLayer":
+        return self
+
+    def static_key(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple | None:
+        if ruby_decoration_kind(self.style) != "glow":
+            return None
+        if ruby_glow_radius(self.style, after=self.after) == 0:
+            return None
+        visible, complete, _front = ruby_wipe_state(
+            self.ruby_layout,
+            self.t_ms,
+        )
+        if self.after:
+            if not visible or not ruby_glow_states_differ(self.style):
+                return None
+            if not complete:
+                return None
+        elif ruby_glow_states_differ(self.style) and visible:
+            return None
+        return ruby_glow_layer_key(
+            self.ruby_layout,
+            self.ruby_font,
+            self.style,
+            self.rtl,
+            after=self.after,
+        )
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        image, dx, dy = self.ports.build_ruby_glow_layer(
+            self.ruby_layout,
+            self.ruby_font,
+            self.ruby_metrics,
+            self.style,
+            self.rtl,
+            after=self.after,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(
+            top_left=QPointF(
+                float(self.ruby_layout.x),
+                float(self.ruby_layout.baseline_y),
+            ),
+        )
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        if not ruby_glow_states_differ(self.style):
+            return
+        visible, complete, front = ruby_wipe_state(
+            self.ruby_layout,
+            self.t_ms,
+        )
+        if not visible or complete:
+            return
+        reading = (
+            "".join(
+                reversed(
+                    ruby_utopia_visual_units(
+                        self.ruby_layout.ruby.reading
+                    )
+                )
+            )
+            if self.rtl
+            else self.ruby_layout.ruby.reading
+        )
+        path, rect = self.ports.ruby_text_path_and_rect(
+            reading,
+            self.ruby_font,
+            self.ruby_metrics,
+            self.ruby_layout.x,
+            self.ruby_layout.baseline_y,
+            self.ruby_layout.target_width,
+            self.style,
+            base_text=self.ruby_layout.ruby.kanji,
+        )
+        radius = ruby_glow_radius(self.style, after=self.after)
+        pad = glow_extent(
+            ruby_stroke_width(self.style),
+            ruby_stroke2_width(self.style),
+            radius,
+        )
+        source_clip = (
+            QRectF(
+                front,
+                rect.top() - pad,
+                1_000_000.0,
+                rect.height() + pad * 2,
+            )
+            if self.rtl == self.after
+            else QRectF(
+                -1_000_000.0,
+                rect.top() - pad,
+                front + 1_000_000.0,
+                rect.height() + pad * 2,
+            )
+        )
+        colors = effective_ruby_karaoke_colors(self.style)
+        state = colors.after if self.after else colors.before
+        paint_glow_path(
+            painter,
+            path,
+            state.shadow,
+            fill_brush_rect(
+                state.shadow,
+                self.ruby_layout.gradient_rect,
+                self.ruby_layout.horizontal_gradient_rect,
+            ),
+            radius,
+            ruby_stroke_width(self.style),
+            ruby_stroke2_width(self.style),
+            source_clip=source_clip,
+            concentration_level=ruby_glow_concentration_level(self.style),
+        )
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = ruby_text_rect(self.ruby_layout, self.ruby_metrics)
+        pad = ruby_visual_padding(self.style, after=self.after)
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class RubyTextLayer:
+    """Layer wrapper for one horizontal ruby reading."""
+
+    ruby_layout: RubyLayout
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics
+    t_ms: int
+    style: Style
+    rtl: bool
+    after: bool
+    ports: RubyLayerPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+    draw_glow: bool = True
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "RubyTextLayer":
+        return self
+
+    def static_key(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple | None:
+        if self.after:
+            visible, _complete, _front = ruby_wipe_state(
+                self.ruby_layout,
+                self.t_ms,
+            )
+            if not visible:
+                return None
+        return ruby_text_layer_key(
+            self.ruby_layout,
+            self.ruby_font,
+            self.style,
+            self.rtl,
+            after=self.after,
+            draw_glow=self.draw_glow,
+        )
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        image, dx, dy = self.ports.build_ruby_text_layer(
+            self.ruby_layout,
+            self.ruby_font,
+            self.ruby_metrics,
+            self.style,
+            self.rtl,
+            after=self.after,
+            draw_glow=self.draw_glow,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        clip_rect = None
+        if self.after:
+            visible, complete, _front = ruby_wipe_state(
+                self.ruby_layout,
+                self.t_ms,
+            )
+            if not visible:
+                return LayerAnimation(opacity=0.0)
+            if not complete:
+                clip_rect = ruby_after_clip_rect_at_time(
+                    self.ruby_layout,
+                    self.ruby_metrics,
+                    self.style,
+                    self.rtl,
+                    self.t_ms,
+                )
+        return LayerAnimation(
+            top_left=QPointF(
+                float(self.ruby_layout.x),
+                float(self.ruby_layout.baseline_y),
+            ),
+            clip_rect=clip_rect,
+        )
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        return
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = ruby_text_rect(self.ruby_layout, self.ruby_metrics)
+        pad = ruby_visual_padding(self.style, after=self.after)
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )

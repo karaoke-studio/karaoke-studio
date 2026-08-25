@@ -1948,6 +1948,8 @@ def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
         "ruby_before_clip_rect_at_time",
         "ruby_glow_layer_key",
         "ruby_horizontal_gradient_rect_signature",
+        "ruby_glow_can_combine_split",
+        "ruby_glow_states_differ",
         "ruby_segment_wipe_state",
         "ruby_text_rect",
         "ruby_text_layer_key",
@@ -1989,6 +1991,74 @@ def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
         "effective_ruby_karaoke_colors": "_effective_ruby_karaoke_colors"
     }
     assert "_effective_ruby_karaoke_colors" not in painter_functions
+
+
+def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    ruby_owner = f"{owner}.ruby"
+    ruby_path = ROOT / "engine/render/elements/horizontal/ruby.py"
+    painter_path = ROOT / "engine/painter.py"
+    ruby_tree = ast.parse(ruby_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    ruby_classes = {
+        node.name for node in ruby_tree.body if isinstance(node, ast.ClassDef)
+    }
+    adapters = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name
+        in {"_RubyGlowLayer", "_RubySplitGlowLayer", "_RubyTextLayer"}
+    }
+
+    assert {
+        "RubyGlowLayer",
+        "RubyLayerPorts",
+        "RubySplitGlowLayer",
+        "RubyTextLayer",
+    } <= ruby_classes
+    assert set(adapters) == {
+        "_RubyGlowLayer",
+        "_RubySplitGlowLayer",
+        "_RubyTextLayer",
+    }
+    for adapter in adapters.values():
+        methods = {
+            node.name
+            for node in adapter.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert methods == {"__init__"}
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_RUBY_LAYER_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "RubyLayerPorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "blit_cached_ruby_glow",
+        "build_ruby_glow_layer",
+        "build_ruby_text_layer",
+        "paint_split_glow_path",
+        "ruby_text_path_and_rect",
+    }
+
+    targets = _import_targets(ruby_owner, ruby_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
 
 
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:

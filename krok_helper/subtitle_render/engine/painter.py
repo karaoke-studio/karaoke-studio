@@ -527,6 +527,10 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     LineCharTransition as _LineCharTransition,
     LineLayout as _LineLayout,
     RubyLayout as _RubyLayout,
+    RubyGlowLayer as _HorizontalRubyGlowLayer,
+    RubyLayerPorts,
+    RubySplitGlowLayer as _HorizontalRubySplitGlowLayer,
+    RubyTextLayer as _HorizontalRubyTextLayer,
     RubyWipeSegment as _RubyWipeSegment,
     SayatooLineLayout as _SayatooLineLayout,
     after_glow_loose_clip_rect as _after_glow_loose_clip_rect,
@@ -587,6 +591,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     ruby_after_clip_rect_at_time as _ruby_after_clip_rect_at_time,
     ruby_before_clip_rect_at_time as _ruby_before_clip_rect_at_time,
     ruby_glow_layer_key as _ruby_glow_layer_key,
+    ruby_glow_can_combine_split as _ruby_glow_can_combine_split,
+    ruby_glow_states_differ as _ruby_glow_states_differ,
     ruby_horizontal_gradient_rect_signature as _ruby_horizontal_gradient_rect_signature,
     ruby_segment_wipe_state as _ruby_segment_wipe_state,
     ruby_text_rect as _ruby_text_rect,
@@ -5339,25 +5345,6 @@ def _utopia_scope_id(
     )
 
 
-def _ruby_glow_states_differ(style: Style) -> bool:
-    """注音前后发光状态是否不同（语义同主字的裁源后模糊判据）。"""
-    if _ruby_decoration_kind(style) != "glow":
-        return False
-    colors = _effective_ruby_karaoke_colors(style)
-    return (
-        _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
-        or _ruby_glow_radius(style, after=False) != _ruby_glow_radius(style, after=True)
-    )
-
-
-def _ruby_glow_can_combine_split(style: Style) -> bool:
-    """Whether one source bitmap can represent both ruby glow colours."""
-    if not _ruby_glow_states_differ(style):
-        return False
-    before_radius = _ruby_glow_radius(style, after=False)
-    return before_radius > 0 and before_radius == _ruby_glow_radius(style, after=True)
-
-
 def _build_glyph_run_layer(
     glyphs: list[_GlyphLayout],
     role_style: Style,
@@ -8075,389 +8062,91 @@ def _ruby_layer_stack(
     )
 
 
-@dataclass(frozen=True)
-class _RubySplitGlowLayer:
-    """Combined before/after ruby glow with a cached moving-front strip."""
+class _RubySplitGlowLayer(_HorizontalRubySplitGlowLayer):
+    """Compatibility adapter that injects Painter ruby raster ports."""
 
-    ruby_layout: _RubyLayout
-    ruby_font: QFont
-    ruby_metrics: QFontMetrics
-    t_ms: int
-    style: Style
-    rtl: bool
-    z_index: int = 0
-    scope: str = SCOPE_LINE
-
-    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
-        return []
-
-    def layout(self, ctx: LayerContext) -> "_RubySplitGlowLayer":
-        return self
-
-    def static_key(self, ctx: LayerContext, layout: object) -> None:
-        # The layer moves every frame, but its two full halos are cached below.
-        return None
-
-    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
-        raise AssertionError("combined ruby split glow is painted dynamically")
-
-    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
-        return LayerAnimation()
-
-    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        visible, complete, front = _ruby_wipe_state(
-            self.ruby_layout, self.t_ms
-        )
-        if not visible:
-            _blit_cached_ruby_glow(
-                painter,
-                self.ruby_layout,
-                self.ruby_font,
-                self.ruby_metrics,
-                self.style,
-                self.rtl,
-                after=False,
-            )
-            return
-        if complete:
-            _blit_cached_ruby_glow(
-                painter,
-                self.ruby_layout,
-                self.ruby_font,
-                self.ruby_metrics,
-                self.style,
-                self.rtl,
-                after=True,
-            )
-            return
-
-        reading = (
-            "".join(
-                reversed(_ruby_utopia_visual_units(self.ruby_layout.ruby.reading))
-            )
-            if self.rtl
-            else self.ruby_layout.ruby.reading
-        )
-        path, rect = _ruby_text_path_and_rect(
-            reading,
-            self.ruby_font,
-            self.ruby_metrics,
-            self.ruby_layout.x,
-            self.ruby_layout.baseline_y,
-            self.ruby_layout.target_width,
-            self.style,
-            base_text=self.ruby_layout.ruby.kanji,
-        )
-        radius = _ruby_glow_radius(self.style, after=False)
-        stroke_width = _ruby_stroke_width(self.style)
-        stroke2_width = _ruby_stroke2_width(self.style)
-        pad = _glow_extent(stroke_width, stroke2_width, radius)
-        top = rect.top() - pad
-        height = rect.height() + pad * 2
-        if self.rtl:
-            before_source_clip = QRectF(
-                -1_000_000.0, top, front + 1_000_000.0, height
-            )
-            after_source_clip = QRectF(front, top, 1_000_000.0, height)
-            before_baked_clip = QRectF(
-                -1_000_000.0,
-                -1_000_000.0,
-                front - pad + 1_000_000.0,
-                2_000_000.0,
-            )
-            after_baked_clip = QRectF(
-                front + pad,
-                -1_000_000.0,
-                1_000_000.0,
-                2_000_000.0,
-            )
-        else:
-            before_source_clip = QRectF(front, top, 1_000_000.0, height)
-            after_source_clip = QRectF(
-                -1_000_000.0, top, front + 1_000_000.0, height
-            )
-            before_baked_clip = QRectF(
-                front + pad,
-                -1_000_000.0,
-                1_000_000.0,
-                2_000_000.0,
-            )
-            after_baked_clip = QRectF(
-                -1_000_000.0,
-                -1_000_000.0,
-                front - pad + 1_000_000.0,
-                2_000_000.0,
-            )
-
-        strip_clip = QRectF(
-            front - pad,
-            -1_000_000.0,
-            float(pad * 2),
-            2_000_000.0,
-        )
-        colors = _effective_ruby_karaoke_colors(self.style)
-        _paint_split_glow_path(
-            painter,
-            path,
-            colors.before.shadow,
-            colors.after.shadow,
-            self.ruby_layout.gradient_rect,
-            radius,
-            stroke_width,
-            stroke2_width,
-            before_source_clip=before_source_clip,
-            after_source_clip=after_source_clip,
-            concentration_level=_ruby_glow_concentration_level(self.style),
-            target_clip=strip_clip,
-            horizontal_fill_rect=self.ruby_layout.horizontal_gradient_rect,
-        )
-        for after, clip in (
-            (False, before_baked_clip),
-            (True, after_baked_clip),
-        ):
-            painter.save()
-            try:
-                painter.setClipRect(clip)
-                _blit_cached_ruby_glow(
-                    painter,
-                    self.ruby_layout,
-                    self.ruby_font,
-                    self.ruby_metrics,
-                    self.style,
-                    self.rtl,
-                    after=after,
-                )
-            finally:
-                painter.restore()
-
-    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
-        rect = _ruby_text_rect(self.ruby_layout, self.ruby_metrics)
-        pad = max(
-            _ruby_visual_padding(self.style, after=after)
-            for after in (False, True)
-        )
-        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
-
-
-@dataclass(frozen=True)
-class _RubyGlowLayer:
-    """Glow-only layer for one horizontal ruby reading.
-
-    N3 paints ruby/main decorations first, then paints the solid strokes/bodies.
-    Splitting ruby glow from ruby body prevents the ruby halo from covering the
-    main glyph body while still keeping the ruby stroke/fill above the main glow.
-    """
-
-    ruby_layout: _RubyLayout
-    ruby_font: QFont
-    ruby_metrics: QFontMetrics
-    t_ms: int
-    style: Style
-    rtl: bool
-    after: bool
-    z_index: int = 0
-    scope: str = SCOPE_LINE
-
-    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
-        return []
-
-    def layout(self, ctx: LayerContext) -> "_RubyGlowLayer":
-        return self
-
-    def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
-        if _ruby_decoration_kind(self.style) != "glow":
-            return None
-        if _ruby_glow_radius(self.style, after=self.after) == 0:
-            return None
-        visible, complete, _front = _ruby_wipe_state(
-            self.ruby_layout, self.t_ms
-        )
-        if self.after:
-            if not visible:
-                return None
-            if not _ruby_glow_states_differ(self.style):
-                return None
-            if not complete:
-                return None
-        elif _ruby_glow_states_differ(self.style) and visible:
-            return None
-        return _ruby_glow_layer_key(
-            self.ruby_layout,
-            self.ruby_font,
-            self.style,
-            self.rtl,
-            after=self.after,
+    def __init__(
+        self,
+        ruby_layout: _RubyLayout,
+        ruby_font: QFont,
+        ruby_metrics: QFontMetrics,
+        t_ms: int,
+        style: Style,
+        rtl: bool,
+        z_index: int = 0,
+        scope: str = SCOPE_LINE,
+    ) -> None:
+        super().__init__(
+            ruby_layout=ruby_layout,
+            ruby_font=ruby_font,
+            ruby_metrics=ruby_metrics,
+            t_ms=t_ms,
+            style=style,
+            rtl=rtl,
+            ports=_RUBY_LAYER_PORTS,
+            z_index=z_index,
+            scope=scope,
         )
 
-    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
-        image, dx, dy = _build_ruby_glow_layer(
-            self.ruby_layout,
-            self.ruby_font,
-            self.ruby_metrics,
-            self.style,
-            self.rtl,
-            after=self.after,
-        )
-        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
-    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
-        return LayerAnimation(
-            top_left=QPointF(
-                float(self.ruby_layout.x),
-                float(self.ruby_layout.baseline_y),
-            ),
-        )
+class _RubyGlowLayer(_HorizontalRubyGlowLayer):
+    """Compatibility adapter that injects Painter ruby raster ports."""
 
-    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        if not _ruby_glow_states_differ(self.style):
-            return
-        visible, complete, front = _ruby_wipe_state(
-            self.ruby_layout, self.t_ms
-        )
-        if not visible or complete:
-            return
-        reading = (
-            "".join(reversed(_ruby_utopia_visual_units(self.ruby_layout.ruby.reading)))
-            if self.rtl
-            else self.ruby_layout.ruby.reading
-        )
-        path, rect = _ruby_text_path_and_rect(
-            reading,
-            self.ruby_font,
-            self.ruby_metrics,
-            self.ruby_layout.x,
-            self.ruby_layout.baseline_y,
-            self.ruby_layout.target_width,
-            self.style,
-            base_text=self.ruby_layout.ruby.kanji,
-        )
-        radius = _ruby_glow_radius(self.style, after=self.after)
-        pad = _glow_extent(
-            _ruby_stroke_width(self.style),
-            _ruby_stroke2_width(self.style),
-            radius,
-        )
-        source_clip = (
-            QRectF(
-                front,
-                rect.top() - pad,
-                1_000_000.0,
-                rect.height() + pad * 2,
-            )
-            if self.rtl == self.after
-            else QRectF(
-                -1_000_000.0,
-                rect.top() - pad,
-                front + 1_000_000.0,
-                rect.height() + pad * 2,
-            )
-        )
-        colors = _effective_ruby_karaoke_colors(self.style)
-        state = colors.after if self.after else colors.before
-        _paint_glow_path(
-            painter,
-            path,
-            state.shadow,
-            _fill_brush_rect(
-                state.shadow,
-                self.ruby_layout.gradient_rect,
-                self.ruby_layout.horizontal_gradient_rect,
-            ),
-            radius,
-            _ruby_stroke_width(self.style),
-            _ruby_stroke2_width(self.style),
-            source_clip=source_clip,
-            concentration_level=_ruby_glow_concentration_level(self.style),
+    def __init__(
+        self,
+        ruby_layout: _RubyLayout,
+        ruby_font: QFont,
+        ruby_metrics: QFontMetrics,
+        t_ms: int,
+        style: Style,
+        rtl: bool,
+        after: bool,
+        z_index: int = 0,
+        scope: str = SCOPE_LINE,
+    ) -> None:
+        super().__init__(
+            ruby_layout=ruby_layout,
+            ruby_font=ruby_font,
+            ruby_metrics=ruby_metrics,
+            t_ms=t_ms,
+            style=style,
+            rtl=rtl,
+            after=after,
+            ports=_RUBY_LAYER_PORTS,
+            z_index=z_index,
+            scope=scope,
         )
 
-    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
-        rect = _ruby_text_rect(self.ruby_layout, self.ruby_metrics)
-        pad = _ruby_visual_padding(self.style, after=self.after)
-        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
 
+class _RubyTextLayer(_HorizontalRubyTextLayer):
+    """Compatibility adapter that injects Painter ruby raster ports."""
 
-@dataclass(frozen=True)
-class _RubyTextLayer:
-    """Layer wrapper for one horizontal ruby reading."""
-
-    ruby_layout: _RubyLayout
-    ruby_font: QFont
-    ruby_metrics: QFontMetrics
-    t_ms: int
-    style: Style
-    rtl: bool
-    after: bool
-    z_index: int = 0
-    scope: str = SCOPE_LINE
-    draw_glow: bool = True
-
-    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
-        return []
-
-    def layout(self, ctx: LayerContext) -> "_RubyTextLayer":
-        return self
-
-    def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
-        if self.after:
-            visible, _complete, _front = _ruby_wipe_state(
-                self.ruby_layout, self.t_ms
-            )
-            if not visible:
-                return None
-        return _ruby_text_layer_key(
-            self.ruby_layout,
-            self.ruby_font,
-            self.style,
-            self.rtl,
-            after=self.after,
-            draw_glow=self.draw_glow,
+    def __init__(
+        self,
+        ruby_layout: _RubyLayout,
+        ruby_font: QFont,
+        ruby_metrics: QFontMetrics,
+        t_ms: int,
+        style: Style,
+        rtl: bool,
+        after: bool,
+        z_index: int = 0,
+        scope: str = SCOPE_LINE,
+        draw_glow: bool = True,
+    ) -> None:
+        super().__init__(
+            ruby_layout=ruby_layout,
+            ruby_font=ruby_font,
+            ruby_metrics=ruby_metrics,
+            t_ms=t_ms,
+            style=style,
+            rtl=rtl,
+            after=after,
+            ports=_RUBY_LAYER_PORTS,
+            z_index=z_index,
+            scope=scope,
+            draw_glow=draw_glow,
         )
-
-    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
-        image, dx, dy = _build_ruby_text_layer(
-            self.ruby_layout,
-            self.ruby_font,
-            self.ruby_metrics,
-            self.style,
-            self.rtl,
-            after=self.after,
-            draw_glow=self.draw_glow,
-        )
-        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
-
-    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
-        clip_rect = None
-        if self.after:
-            visible, complete, _front = _ruby_wipe_state(
-                self.ruby_layout, self.t_ms
-            )
-            if not visible:
-                return LayerAnimation(opacity=0.0)
-            if not complete:
-                # 唱完（>= 1.0）不再裁剪：裁剪带右缘恰好压在字框右缘，
-                # 会把末字形的描边外扩留在走字前状态。
-                clip_rect = _ruby_after_clip_rect_at_time(
-                    self.ruby_layout,
-                    self.ruby_metrics,
-                    self.style,
-                    self.rtl,
-                    self.t_ms,
-                )
-        return LayerAnimation(
-            top_left=QPointF(
-                float(self.ruby_layout.x),
-                float(self.ruby_layout.baseline_y),
-            ),
-            clip_rect=clip_rect,
-        )
-
-    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        return
-
-    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
-        rect = _ruby_text_rect(self.ruby_layout, self.ruby_metrics)
-        pad = _ruby_visual_padding(self.style, after=self.after)
-        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
 
 
 def _get_or_build_ruby_glow(
@@ -8894,6 +8583,25 @@ def _ruby_text_path_and_rect(
         float(layout_width),
         float(ruby_metrics.height()),
     )
+
+
+_RUBY_LAYER_PORTS = RubyLayerPorts(
+    blit_cached_ruby_glow=lambda *args, **kwargs: (
+        _blit_cached_ruby_glow(*args, **kwargs)
+    ),
+    build_ruby_glow_layer=lambda *args, **kwargs: (
+        _build_ruby_glow_layer(*args, **kwargs)
+    ),
+    build_ruby_text_layer=lambda *args, **kwargs: (
+        _build_ruby_text_layer(*args, **kwargs)
+    ),
+    paint_split_glow_path=lambda *args, **kwargs: (
+        _paint_split_glow_path(*args, **kwargs)
+    ),
+    ruby_text_path_and_rect=lambda *args, **kwargs: (
+        _ruby_text_path_and_rect(*args, **kwargs)
+    ),
+)
 
 
 def _paint_ruby_text_fragment(
