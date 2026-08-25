@@ -2069,6 +2069,53 @@ def normalize_title_char_role_labels(
     return normalized
 
 
+@dataclass(frozen=True)
+class TitleRoleRowsAssignment:
+    """Immutable result of assigning one role to title text rows."""
+
+    title: TitleOverlay
+    role_label: Optional[str]
+    rows: tuple[int, ...]
+
+
+def assign_role_to_title_rows(
+    title: TitleOverlay,
+    rows: list[int],
+    role_name: str,
+) -> Optional[TitleRoleRowsAssignment]:
+    """Return an updated title when at least one valid row changes role."""
+
+    lines = title.text_template.split("\n")
+    valid_rows = tuple(
+        sorted(
+            {
+                int(row)
+                for row in rows
+                if 0 <= int(row) < len(lines) and lines[int(row)]
+            }
+        )
+    )
+    if not valid_rows:
+        return None
+    label = role_name.strip() if role_name else None
+    labels = normalize_title_char_role_labels(
+        title.text_template, title.char_role_labels
+    )
+    changed = False
+    for row in valid_rows:
+        new_values = [label] * len(lines[row])
+        if labels[row] != new_values:
+            labels[row] = new_values
+            changed = True
+    if not changed:
+        return None
+    return TitleRoleRowsAssignment(
+        title=replace(title, char_role_labels=labels),
+        role_label=label,
+        rows=valid_rows,
+    )
+
+
 def migrate_title_char_role_labels(
     old_text: str,
     old_labels: object,

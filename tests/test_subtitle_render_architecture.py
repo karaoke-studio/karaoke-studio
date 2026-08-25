@@ -3024,7 +3024,7 @@ def test_subtitle_render_window_delegates_edit_history_dispatch() -> None:
     )
 
 
-def test_subtitle_render_window_delegates_track_role_assignment() -> None:
+def test_subtitle_render_window_delegates_role_assignments() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
@@ -3044,8 +3044,9 @@ def test_subtitle_render_window_delegates_track_role_assignment() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
-    assert "assign_role_to_track_rows" in calls
+    assert {"assign_role_to_title_rows", "assign_role_to_track_rows"} <= calls
     assert "guide_symbol_with_role_labels" not in calls
+    assert "normalize_title_char_role_labels" not in calls
 
 
 def test_widget_frontend_modules_are_grouped_in_one_domain_package() -> None:

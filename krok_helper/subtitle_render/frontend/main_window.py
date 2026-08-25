@@ -272,6 +272,7 @@ from krok_helper.subtitle_render.serialization.timing import (
     track_page_plan_from_dict,
 )
 from krok_helper.subtitle_render.domain.models import (
+    assign_role_to_title_rows,
     DEFAULT_EXPORT_NAME_TEMPLATE,
     DEFAULT_OUTPUT_NAME_SUFFIX,
     EXPORT_NAME_TEMPLATE_FIELDS,
@@ -7119,34 +7120,15 @@ class SubtitleRenderWindow(QWidget):
             title = self._style.title_overlay
             if title is None:
                 return
-            lines = title.text_template.split("\n")
-            valid_rows = sorted(
-                {
-                    int(row)
-                    for row in rows
-                    if 0 <= int(row) < len(lines) and lines[int(row)]
-                }
-            )
-            if not valid_rows:
+            assignment = assign_role_to_title_rows(title, rows, role_name)
+            if assignment is None:
                 return
-            label = role_name.strip() if role_name else None
-            labels = normalize_title_char_role_labels(
-                title.text_template, title.char_role_labels
-            )
-            changed = False
-            for row in valid_rows:
-                new_values = [label] * len(lines[row])
-                if labels[row] != new_values:
-                    labels[row] = new_values
-                    changed = True
-            if not changed:
-                return
-            if label:
-                self._materialize_role_schemes({label})
+            if assignment.role_label:
+                self._materialize_role_schemes({assignment.role_label})
             self._property_panel.set_style(
                 replace(
                     self._style,
-                    title_overlay=replace(title, char_role_labels=labels),
+                    title_overlay=assignment.title,
                 ),
                 emit=True,
             )

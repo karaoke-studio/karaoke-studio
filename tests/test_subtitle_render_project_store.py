@@ -2200,6 +2200,29 @@ def test_title_row_role_is_independent_of_character_count():
     ) == [["A", "A", "A"]]
 
 
+def test_title_role_assignment_returns_updated_immutable_value():
+    title = TitleOverlay(
+        text_template="甲乙\n\n丙",
+        char_role_labels=[["A", None], [], [None]],
+    )
+
+    assignment = subtitle_models.assign_role_to_title_rows(
+        title, [2, 1, 0, 0, 99], " B "
+    )
+
+    assert assignment is not None
+    assert assignment.role_label == "B"
+    assert assignment.rows == (0, 2)
+    assert assignment.title.char_role_labels == [["B", "B"], [], ["B"]]
+    assert title.char_role_labels == [["A", None], [], [None]]
+    assert (
+        subtitle_models.assign_role_to_title_rows(
+            assignment.title, [0, 2], "B"
+        )
+        is None
+    )
+
+
 def test_lyrics_panel_title_mode_reuses_character_role_picker(qapp, monkeypatch):
     panel = lyrics_list.LyricsPanel()
     title = TitleOverlay(
