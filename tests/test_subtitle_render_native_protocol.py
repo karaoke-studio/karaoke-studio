@@ -157,10 +157,20 @@ def test_painter_uses_shared_layout_plan_cache_boundary():
         for alias in node.names
     }
 
-    assert cache_imports == {
-        "clear_track_layout_plan_cache",
-        "layout_cache_enabled",
+    assert cache_imports == {"clear_track_layout_plan_cache"}
+
+    cache_keys_path = Path(
+        "krok_helper/subtitle_render/engine/render/core/cache_keys.py"
+    )
+    cache_keys_tree = ast.parse(cache_keys_path.read_text(encoding="utf-8"))
+    cache_key_imports = {
+        alias.name
+        for node in ast.walk(cache_keys_tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "krok_helper.subtitle_render.engine.layout.plan.cache"
+        for alias in node.names
     }
+    assert cache_key_imports == {"layout_cache_enabled"}
 
     orchestrator_path = Path(
         "krok_helper/subtitle_render/engine/layout/plan/orchestrator.py"
