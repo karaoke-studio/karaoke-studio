@@ -1853,6 +1853,87 @@ def test_bitmap_guide_layers_use_explicit_painter_free_ports() -> None:
     )
 
 
+def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layer_owner = f"{owner}.layers"
+    layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
+    painter_path = ROOT / "engine/painter.py"
+    layer_tree = ast.parse(layer_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    layer_classes = {
+        node.name for node in layer_tree.body if isinstance(node, ast.ClassDef)
+    }
+    adapters = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name
+        in {
+            "_GlyphRunAfterGlowLayer",
+            "_GlyphRunBeforeGlowLayer",
+            "_GlyphRunLayer",
+            "_GlyphRunSplitGlowLayer",
+        }
+    }
+
+    assert {
+        "GlyphLayerPorts",
+        "GlyphRunAfterGlowLayer",
+        "GlyphRunBeforeGlowLayer",
+        "GlyphRunLayer",
+        "GlyphRunSplitGlowLayer",
+        "ScopeBoundsLayer",
+    } <= layer_classes
+    assert set(adapters) == {
+        "_GlyphRunAfterGlowLayer",
+        "_GlyphRunBeforeGlowLayer",
+        "_GlyphRunLayer",
+        "_GlyphRunSplitGlowLayer",
+    }
+    for adapter in adapters.values():
+        methods = {
+            node.name
+            for node in adapter.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert methods == {"__init__"}
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_GLYPH_LAYER_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "GlyphLayerPorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "build_glyph_run_after_glow_layer",
+        "build_glyph_run_glow_layer",
+        "build_glyph_run_layer",
+        "fill_clip_band",
+        "fill_clip_band_for_glyphs",
+        "n3_following_wipe_band",
+        "paint_glyph_run_after_glow_wipe",
+        "paint_glyph_run_before_glow_direct",
+        "paint_glyph_run_combined_glow",
+        "run_fill_complete",
+    }
+
+    targets = _import_targets(layer_owner, layer_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_render_effect_metrics_have_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.effects"
     metrics_owner = f"{owner}.metrics"

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Hashable
 
 from PyQt6.QtCore import QPointF, QRectF
-from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtGui import QImage, QPainter, QTransform
 
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine
@@ -17,10 +17,12 @@ from krok_helper.subtitle_render.domain.paint import (
 )
 from krok_helper.subtitle_render.engine.render.effects import (
     fill_signature,
+    glow_extent,
     glow_concentration_level,
     glow_radius,
     karaoke_state_signature,
     main_stroke2_width,
+    text_visual_padding,
 )
 from krok_helper.subtitle_render.engine.guide import (
     bitmap_guide_content_size,
@@ -31,6 +33,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
     BakedLayer,
     LayerAnimation,
     LayerContext,
+    SCOPE_GROUP,
     SCOPE_LINE,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
@@ -42,6 +45,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     bitmap_guide_anchor_descent,
     bitmap_guide_glyphs,
     glyph_is_bitmap_guide,
+    glyph_run_rect,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
     transition_char_state,
@@ -61,6 +65,22 @@ class BitmapGuidePorts:
     fill_clip_band: Callable[..., tuple[int, int] | None]
     fill_clip_band_for_glyphs: Callable[..., tuple[int, int] | None]
     n3_following_wipe_band: Callable[..., tuple[int, int] | None]
+
+
+@dataclass(frozen=True)
+class GlyphLayerPorts:
+    """Painter-owned raster and sweep capabilities used by glyph layers."""
+
+    build_glyph_run_after_glow_layer: Callable[..., tuple]
+    build_glyph_run_glow_layer: Callable[..., tuple]
+    build_glyph_run_layer: Callable[..., tuple]
+    fill_clip_band: Callable[..., tuple[int, int] | None]
+    fill_clip_band_for_glyphs: Callable[..., tuple[int, int] | None]
+    n3_following_wipe_band: Callable[..., tuple[int, int] | None]
+    paint_glyph_run_after_glow_wipe: Callable[..., None]
+    paint_glyph_run_before_glow_direct: Callable[..., None]
+    paint_glyph_run_combined_glow: Callable[..., None]
+    run_fill_complete: Callable[..., bool]
 
 
 def horizontal_after_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
@@ -560,3 +580,627 @@ class BitmapGuideLayer:
         if rect is None:
             return None
         return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
+
+
+@dataclass(frozen=True)
+class GlyphRunLayer:
+    """Layer wrapper for a horizontal text glyph-run body."""
+
+    glyphs: list[GlyphLayout]
+    baseline_y: int
+    fill_segments: list[FillSegment]
+    t_ms: int
+    rtl: bool
+    after: bool
+    ports: GlyphLayerPorts = field(repr=False, compare=False)
+    clip_band: tuple[int, int] | None = None
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+    fade_opacity: float = 1.0
+    transform: QTransform | None = None
+    fill_rect: QRectF | None = None
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "GlyphRunLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
+        role_style = self.glyphs[0].style
+        colors = effective_karaoke_colors(role_style)
+        state = colors.after if self.after else colors.before
+        return (
+            glyph_run_layer_key(
+                self.glyphs,
+                role_style,
+                colors,
+                after=self.after,
+            ),
+            relative_fill_rect_signature(
+                self.glyphs,
+                self.baseline_y,
+                self.fill_rect,
+                global_anchor=karaoke_state_uses_image(state),
+            ),
+        )
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        role_style = self.glyphs[0].style
+        colors = effective_karaoke_colors(role_style)
+        image, dx, dy = self.ports.build_glyph_run_layer(
+            self.glyphs,
+            role_style,
+            colors,
+            after=self.after,
+            fill_rect=self.fill_rect,
+            baseline_y=self.baseline_y,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        run_left = min(glyph.left for glyph in self.glyphs)
+        clip_rect = None
+        role_style = self.glyphs[0].style
+        if (
+            not self.after
+            and glow_radius(role_style, after=False) > 0
+            and karaoke_glow_states_differ(
+                role_style,
+                effective_karaoke_colors(role_style),
+            )
+        ):
+            band = self.ports.fill_clip_band_for_glyphs(
+                self.fill_segments,
+                self.glyphs,
+                self.t_ms,
+                self.rtl,
+            )
+            if band is not None:
+                if self.ports.run_fill_complete(
+                    self.fill_segments,
+                    {glyph.index for glyph in self.glyphs},
+                    self.t_ms,
+                ):
+                    return LayerAnimation(opacity=0.0)
+                clip_rect = horizontal_before_clip_rect(band, self.rtl)
+        elif self.after:
+            indices = {glyph.index for glyph in self.glyphs}
+            following_band = self.ports.n3_following_wipe_band(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+                self.rtl,
+            )
+            band = (
+                following_band
+                or self.clip_band
+                or self.ports.fill_clip_band(
+                    self.fill_segments,
+                    self.t_ms,
+                    self.rtl,
+                )
+            )
+            if band is None:
+                return LayerAnimation(opacity=0.0)
+            if (
+                self.ports.run_fill_complete(
+                    self.fill_segments,
+                    indices,
+                    self.t_ms,
+                )
+                and following_band is None
+            ):
+                clip_rect = None
+            else:
+                clip_rect = horizontal_after_clip_rect(band, self.rtl)
+        return LayerAnimation(
+            top_left=QPointF(float(run_left), float(self.baseline_y)),
+            clip_rect=clip_rect,
+            opacity=self.fade_opacity,
+            transform=self.transform,
+        )
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        return
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = glyph_run_rect(self.glyphs, self.baseline_y)
+        pad = text_visual_padding(self.glyphs[0].style, after=self.after)
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class GlyphRunBeforeGlowLayer:
+    """N3 before-glow: split the outline source, then blur it."""
+
+    glyphs: list[GlyphLayout]
+    baseline_y: int
+    fill_segments: list[FillSegment]
+    t_ms: int
+    rtl: bool
+    ports: GlyphLayerPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+    fade_opacity: float = 1.0
+    transform: QTransform | None = None
+    fill_rect: QRectF | None = None
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "GlyphRunBeforeGlowLayer":
+        return self
+
+    def _state(self) -> tuple[tuple[int, int] | None, bool]:
+        indices = {glyph.index for glyph in self.glyphs}
+        following_band = self.ports.n3_following_wipe_band(
+            self.fill_segments,
+            indices,
+            self.t_ms,
+            self.rtl,
+        )
+        band = following_band or self.ports.fill_clip_band_for_glyphs(
+            self.fill_segments,
+            self.glyphs,
+            self.t_ms,
+            self.rtl,
+        )
+        complete = (
+            self.ports.run_fill_complete(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+            )
+            and following_band is None
+        )
+        return band, complete
+
+    def static_key(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple | None:
+        band, complete = self._state()
+        if complete or band is not None:
+            return None
+        role_style = self.glyphs[0].style
+        colors = effective_karaoke_colors(role_style)
+        return (
+            glyph_run_layer_key(
+                self.glyphs,
+                role_style,
+                colors,
+                after=False,
+            ),
+            "before-glow",
+            relative_fill_rect_signature(
+                self.glyphs,
+                self.baseline_y,
+                self.fill_rect,
+                global_anchor=colors.before.shadow.mode == "image",
+            ),
+        )
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        role_style = self.glyphs[0].style
+        colors = effective_karaoke_colors(role_style)
+        image, dx, dy = self.ports.build_glyph_run_glow_layer(
+            self.glyphs,
+            role_style,
+            colors,
+            after=False,
+            fill_rect=self.fill_rect,
+            baseline_y=self.baseline_y,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        run_left = min(glyph.left for glyph in self.glyphs)
+        return LayerAnimation(
+            top_left=QPointF(float(run_left), float(self.baseline_y)),
+            opacity=self.fade_opacity,
+            transform=self.transform,
+        )
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        band, complete = self._state()
+        if complete:
+            return
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * self.fade_opacity)
+            if self.transform is not None:
+                painter.setTransform(self.transform, combine=True)
+            self.ports.paint_glyph_run_before_glow_direct(
+                painter,
+                self.glyphs,
+                self.baseline_y,
+                band,
+                rtl=self.rtl,
+                complete=False,
+                fill_rect=self.fill_rect,
+            )
+        finally:
+            painter.restore()
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = glyph_run_rect(self.glyphs, self.baseline_y)
+        role_style = self.glyphs[0].style
+        pad = glow_extent(
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            glow_radius(role_style, after=False),
+        )
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class GlyphRunSplitGlowLayer:
+    """Combined before/after decoration for equal-radius N3 glow wipes."""
+
+    glyphs: list[GlyphLayout]
+    baseline_y: int
+    fill_segments: list[FillSegment]
+    t_ms: int
+    rtl: bool
+    ports: GlyphLayerPorts = field(repr=False, compare=False)
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+    fill_rect: QRectF | None = None
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "GlyphRunSplitGlowLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        raise AssertionError("combined split glow is painted dynamically")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        self.ports.paint_glyph_run_combined_glow(
+            painter,
+            self.glyphs,
+            self.baseline_y,
+            self.fill_segments,
+            self.t_ms,
+            self.rtl,
+            fill_rect=self.fill_rect,
+        )
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = glyph_run_rect(self.glyphs, self.baseline_y)
+        style = self.glyphs[0].style
+        pad = max(
+            glow_extent(
+                style.stroke_width_px,
+                style.stroke2_width_px,
+                glow_radius(style, after=after),
+            )
+            for after in (False, True)
+        )
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class GlyphRunAfterGlowLayer:
+    """Layer wrapper for the after-glow bitmap of a glyph run."""
+
+    glyphs: list[GlyphLayout]
+    baseline_y: int
+    fill_segments: list[FillSegment]
+    t_ms: int
+    rtl: bool
+    ports: GlyphLayerPorts = field(repr=False, compare=False)
+    clip_band: tuple[int, int] | None = None
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+    fade_opacity: float = 1.0
+    transform: QTransform | None = None
+    fill_rect: QRectF | None = None
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "GlyphRunAfterGlowLayer":
+        return self
+
+    def static_key(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple | None:
+        role_style = self.glyphs[0].style
+        colors = effective_karaoke_colors(role_style)
+        if role_style.decoration_kind != "glow":
+            return None
+        before_radius = glow_radius(role_style, after=False)
+        after_radius = glow_radius(role_style, after=True)
+        if after_radius == 0:
+            return None
+        need_after_glow = (
+            fill_signature(colors.before.shadow)
+            != fill_signature(colors.after.shadow)
+            or before_radius != after_radius
+        )
+        band = self.clip_band or self.ports.fill_clip_band(
+            self.fill_segments,
+            self.t_ms,
+            self.rtl,
+        )
+        if not need_after_glow or band is None:
+            return None
+        indices = {glyph.index for glyph in self.glyphs}
+        if (
+            not self.ports.run_fill_complete(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+            )
+            or self.ports.n3_following_wipe_band(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+                self.rtl,
+            )
+            is not None
+        ):
+            return None
+        return (
+            glyph_run_after_glow_key(self.glyphs, role_style, colors),
+            relative_fill_rect_signature(
+                self.glyphs,
+                self.baseline_y,
+                self.fill_rect,
+                global_anchor=colors.after.shadow.mode == "image",
+            ),
+        )
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        role_style = self.glyphs[0].style
+        colors = effective_karaoke_colors(role_style)
+        image, dx, dy = self.ports.build_glyph_run_after_glow_layer(
+            self.glyphs,
+            role_style,
+            colors,
+            fill_rect=self.fill_rect,
+            baseline_y=self.baseline_y,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        run_left = min(glyph.left for glyph in self.glyphs)
+        indices = {glyph.index for glyph in self.glyphs}
+        following_band = self.ports.n3_following_wipe_band(
+            self.fill_segments,
+            indices,
+            self.t_ms,
+            self.rtl,
+        )
+        band = (
+            following_band
+            or self.clip_band
+            or self.ports.fill_clip_band(
+                self.fill_segments,
+                self.t_ms,
+                self.rtl,
+            )
+        )
+        if band is None:
+            return LayerAnimation(opacity=0.0)
+        rect = glyph_run_rect(self.glyphs, self.baseline_y)
+        role_style = self.glyphs[0].style
+        pad = glow_extent(
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            glow_radius(role_style, after=True),
+        )
+        complete = (
+            self.ports.run_fill_complete(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+            )
+            and following_band is None
+        )
+        clip_rect = (
+            None
+            if complete
+            else after_glow_loose_clip_rect(
+                band,
+                rect,
+                pad,
+                self.rtl,
+                complete,
+            )
+        )
+        return LayerAnimation(
+            top_left=QPointF(float(run_left), float(self.baseline_y)),
+            clip_rect=clip_rect,
+            opacity=self.fade_opacity,
+            transform=self.transform,
+        )
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        indices = {glyph.index for glyph in self.glyphs}
+        following_band = self.ports.n3_following_wipe_band(
+            self.fill_segments,
+            indices,
+            self.t_ms,
+            self.rtl,
+        )
+        band = (
+            following_band
+            or self.clip_band
+            or self.ports.fill_clip_band(
+                self.fill_segments,
+                self.t_ms,
+                self.rtl,
+            )
+        )
+        if band is None:
+            return
+        opacity = max(0.0, min(float(self.fade_opacity), 1.0))
+        if opacity <= 0.0:
+            return
+        complete = (
+            self.ports.run_fill_complete(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+            )
+            and following_band is None
+        )
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * opacity)
+            if self.transform is not None:
+                painter.setTransform(self.transform, combine=True)
+            self.ports.paint_glyph_run_after_glow_wipe(
+                painter,
+                self.glyphs,
+                self.baseline_y,
+                band,
+                rtl=self.rtl,
+                complete=complete,
+                fill_rect=self.fill_rect,
+            )
+        finally:
+            painter.restore()
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        rect = glyph_run_rect(self.glyphs, self.baseline_y)
+        role_style = self.glyphs[0].style
+        pad = glow_extent(
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            glow_radius(role_style, after=True),
+        )
+        return (
+            int(math.floor(rect.top() - pad)),
+            int(math.ceil(rect.bottom() + pad)),
+        )
+
+
+@dataclass(frozen=True)
+class ScopeBoundsLayer:
+    """Bounds-only layer for effects that remain dynamically painted."""
+
+    rect: QRectF
+    scope_id: Hashable
+    z_index: int = 0
+    scope: str = SCOPE_GROUP
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "ScopeBoundsLayer":
+        return self
+
+    def static_key(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> Hashable | None:
+        return None
+
+    def bake(
+        self,
+        ctx: LayerContext,
+        layout: object,
+        key: Hashable,
+    ) -> BakedLayer:
+        raise AssertionError("bounds-only layers are never baked")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(clip_rect=self.rect)
+
+    def paint_dynamic(
+        self,
+        painter: QPainter,
+        ctx: LayerContext,
+        layout: object,
+    ) -> None:
+        return
+
+    def vertical_bounds(
+        self,
+        ctx: LayerContext,
+        layout: object,
+    ) -> tuple[int, int] | None:
+        return (
+            int(math.floor(self.rect.top())),
+            int(math.ceil(self.rect.bottom())),
+        )
