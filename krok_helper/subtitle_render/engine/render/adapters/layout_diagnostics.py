@@ -1,14 +1,14 @@
 """Bind layout diagnostic policies to Painter geometry and scheduling ports."""
 
 import krok_helper.subtitle_render.engine.painter as painter_impl
-from krok_helper.subtitle_render.engine.layout.display_schedule import (
+from krok_helper.subtitle_render.engine.layout.display.schedule import (
     apply_constrained_page_sync,
 )
-from krok_helper.subtitle_render.engine.layout.display_resolver import (
+from krok_helper.subtitle_render.engine.layout.display.resolver import (
     apply_animation_time_guard,
     display_line_compute_kwargs,
 )
-from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
+from krok_helper.subtitle_render.engine.layout.display.diagnostics import (
     LayoutMarginBox,
     LayoutMarginPorts,
     LayoutMarginWarning,
@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     entry_animation_ms,
     style_for_line,
 )
-from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.display.signal import (
     display_style_for_signal_window,
     signal_head_context,
     signal_lead_in_ms,

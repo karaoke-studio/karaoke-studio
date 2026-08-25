@@ -6,10 +6,10 @@ from collections import OrderedDict
 from collections.abc import Callable, Hashable
 from dataclasses import dataclass, replace
 
-from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
+from krok_helper.subtitle_render.engine.layout.display.diagnostics import (
     TimingCollisionAdjustment,
 )
-from krok_helper.subtitle_render.engine.layout.display_schedule import (
+from krok_helper.subtitle_render.engine.layout.display.schedule import (
     apply_constrained_page_sync,
 )
 from krok_helper.subtitle_render.engine.layout.line.style import (
@@ -28,7 +28,7 @@ from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     bands_require_separation,
 )
-from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_head_context,
     signal_lead_in_ms,
 )

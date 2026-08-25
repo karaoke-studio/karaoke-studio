@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from krok_helper.subtitle_render.engine.layout.line.style import line_end_ms, line_start_ms
-from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_head_context,
     signal_lead_in_ms,
 )

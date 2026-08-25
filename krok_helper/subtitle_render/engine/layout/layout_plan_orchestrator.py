@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from krok_helper.subtitle_render.engine.layout.display_schedule import (
+from krok_helper.subtitle_render.engine.layout.display.schedule import (
     display_schedule_from_items,
     single_line_display_schedule,
 )
@@ -28,7 +28,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     style_for_line,
     style_for_line_display_window,
 )
-from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.display.signal import (
     display_style_for_signal_window,
 )
 from krok_helper.subtitle_render.engine.layout.line.qt_geometry import (

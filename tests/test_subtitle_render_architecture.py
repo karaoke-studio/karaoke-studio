@@ -575,7 +575,7 @@ def test_line_geometry_policy_has_no_painter_dependency() -> None:
 
 
 def test_signal_semantics_have_one_engine_owner() -> None:
-    owner = f"{PACKAGE}.engine.layout.signal_semantics"
+    owner = f"{PACKAGE}.engine.layout.display.signal"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -599,7 +599,7 @@ def test_signal_semantics_have_one_engine_owner() -> None:
 
     assert inline == set()
     assert imported == delegated_names
-    targets = _import_targets(owner, ROOT / "engine/layout/signal_semantics.py")
+    targets = _import_targets(owner, ROOT / "engine/layout/display/signal.py")
     assert f"{PACKAGE}.engine.painter" not in targets
 
     adapter = next(
@@ -617,8 +617,8 @@ def test_signal_semantics_have_one_engine_owner() -> None:
 
 
 def test_display_schedule_projection_has_no_painter_dependency() -> None:
-    owner = f"{PACKAGE}.engine.layout.display_schedule"
-    schedule_path = ROOT / "engine/layout/display_schedule.py"
+    owner = f"{PACKAGE}.engine.layout.display.schedule"
+    schedule_path = ROOT / "engine/layout/display/schedule.py"
     targets = _import_targets(owner, schedule_path)
 
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -682,8 +682,8 @@ def test_painter_delegates_display_schedule_projection() -> None:
 
 
 def test_display_resolver_has_no_painter_dependency() -> None:
-    owner = f"{PACKAGE}.engine.layout.display_resolver"
-    path = ROOT / "engine/layout/display_resolver.py"
+    owner = f"{PACKAGE}.engine.layout.display.resolver"
+    path = ROOT / "engine/layout/display/resolver.py"
     targets = _import_targets(owner, path)
 
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -694,7 +694,7 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     painter_module = f"{PACKAGE}.engine.painter"
     targets = _import_targets(painter_module, painter_path)
 
-    assert f"{PACKAGE}.engine.layout.display_resolver" in targets
+    assert f"{PACKAGE}.engine.layout.display.resolver" in targets
     tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     method = next(
         node
@@ -729,7 +729,7 @@ def test_painter_delegates_display_resolution_orchestration() -> None:
     assert "_apply_animation_time_guard" not in inline_functions
     assert "_display_lines_for_style" not in inline_functions
 
-    resolver_path = ROOT / "engine/layout/display_resolver.py"
+    resolver_path = ROOT / "engine/layout/display/resolver.py"
     resolver_tree = ast.parse(resolver_path.read_text(encoding="utf-8-sig"))
     resolver_functions = {
         node.name
@@ -751,10 +751,10 @@ def test_layout_diagnostic_contracts_have_one_layout_owner() -> None:
     painter_module = f"{PACKAGE}.engine.painter"
     targets = _import_targets(painter_module, painter_path)
 
-    assert f"{PACKAGE}.engine.layout.layout_diagnostics" not in targets
-    diagnostics_path = ROOT / "engine/layout/layout_diagnostics.py"
+    assert f"{PACKAGE}.engine.layout.display.diagnostics" not in targets
+    diagnostics_path = ROOT / "engine/layout/display/diagnostics.py"
     diagnostics_targets = _import_targets(
-        f"{PACKAGE}.engine.layout.layout_diagnostics",
+        f"{PACKAGE}.engine.layout.display.diagnostics",
         diagnostics_path,
     )
     assert f"{PACKAGE}.engine.painter" not in diagnostics_targets
@@ -1101,10 +1101,7 @@ def test_text_engine_modules_are_grouped_in_one_domain_package() -> None:
 
 def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
-        "display_schedule.py",
-        "display_resolver.py",
         "layout_context.py",
-        "layout_diagnostics.py",
         "layout_plan.py",
         "layout_plan_builder.py",
         "layout_plan_cache.py",
@@ -1112,7 +1109,6 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
         "layout_plan_projection.py",
         "page_offset_plan.py",
         "semantic_plan.py",
-        "signal_semantics.py",
     }
     layout_root = ROOT / "engine" / "layout"
     assert {"__init__.py", *module_names} <= {
@@ -1126,6 +1122,23 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     assert not any(
         (layout_root / name).exists()
         for name in {"line_geometry.py", "line_style.py", "qt_line_geometry.py"}
+    )
+    display_root = layout_root / "display"
+    assert {
+        "__init__.py",
+        "diagnostics.py",
+        "resolver.py",
+        "schedule.py",
+        "signal.py",
+    } <= {path.name for path in display_root.glob("*.py")}
+    assert not any(
+        (layout_root / name).exists()
+        for name in {
+            "display_resolver.py",
+            "display_schedule.py",
+            "layout_diagnostics.py",
+            "signal_semantics.py",
+        }
     )
     page_root = layout_root / "page"
     assert {

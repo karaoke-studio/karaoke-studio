@@ -110,7 +110,7 @@ from krok_helper.subtitle_render.engine.layout.page.pagination import (
 from krok_helper.subtitle_render.engine.layout.line.geometry import (
     line_has_role_labels as _line_has_role_labels,
 )
-from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.display.signal import (
     display_style_for_signal_window as _display_style_for_signal_window,
     lit_signal_active as _lit_signal_active,
     resolve_signal_display_lines as _resolve_signal_display_lines,
@@ -200,14 +200,14 @@ from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
     page_offsets_at_time,
     resolve_page_offset_windows,
 )
-from krok_helper.subtitle_render.engine.layout.display_schedule import (
+from krok_helper.subtitle_render.engine.layout.display.schedule import (
     DisplayScheduleResolvers,
     extend_page_display_boundary as _extend_page_display_boundary,
     resolve_display_schedule,
     resolve_visible_display_lines,
     resolve_display_windows,
 )
-from krok_helper.subtitle_render.engine.layout.display_resolver import (
+from krok_helper.subtitle_render.engine.layout.display.resolver import (
     AnimationGuardPorts,
     DisplayResolutionPorts,
     StyleDisplayResolutionPorts,

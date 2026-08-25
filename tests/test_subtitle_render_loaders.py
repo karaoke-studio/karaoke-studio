@@ -63,7 +63,10 @@ def test_main_window_uses_public_layout_diagnostics_boundary() -> None:
         if isinstance(node, ast.ImportFrom) and node.module is not None
     }
 
-    assert "krok_helper.subtitle_render.engine.layout.layout_diagnostics" in imported_modules
+    assert (
+        "krok_helper.subtitle_render.engine.layout.display.diagnostics"
+        in imported_modules
+    )
     assert "krok_helper.subtitle_render.engine.painter" not in imported_modules
 
 

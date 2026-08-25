@@ -7852,17 +7852,17 @@ def test_after_glow_strip_matches_full_blur_within_tolerance(qapp, monkeypatch, 
 # P1：N3 布局对齐（负值间距 / ルビ間隔 / ルビ配置 / 余白警告）
 # ---------------------------------------------------------------------------
 
-from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.display.diagnostics import (  # noqa: E402
     LayoutMarginWarning,
 )
 from krok_helper.subtitle_render.engine.render.adapters.layout_diagnostics import (  # noqa: E402
     check_layout_margins,
     layout_timing_diagnostics_for_style,
 )
-from krok_helper.subtitle_render.engine.layout.display_schedule import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.display.schedule import (  # noqa: E402
     apply_constrained_page_sync,
 )
-from krok_helper.subtitle_render.engine.layout.display_resolver import (  # noqa: E402
+from krok_helper.subtitle_render.engine.layout.display.resolver import (  # noqa: E402
     apply_animation_time_guard,
 )
 from krok_helper.subtitle_render.engine.layout.line.style import (  # noqa: E402

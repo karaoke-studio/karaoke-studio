@@ -140,7 +140,7 @@ from krok_helper.subtitle_render.engine.layout.page.assignment import (
     assign_layout_to_all,
     auto_assign_layouts_by_page,
 )
-from krok_helper.subtitle_render.engine.layout.layout_diagnostics import (
+from krok_helper.subtitle_render.engine.layout.display.diagnostics import (
     LayoutMarginWarning,
     LayoutTimingDiagnostic,
     layout_pass,

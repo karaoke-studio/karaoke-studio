@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from krok_helper.subtitle_render.engine.layout.display_resolver import (
+from krok_helper.subtitle_render.engine.layout.display.resolver import (
     DisplayResolutionCache,
     DisplayResolutionPorts,
     StyleDisplayResolutionPorts,

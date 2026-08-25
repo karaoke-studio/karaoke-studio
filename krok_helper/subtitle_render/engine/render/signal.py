@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     line_end_ms,
     line_start_ms,
 )
-from krok_helper.subtitle_render.engine.layout.signal_semantics import (
+from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_head_context,
 )
 from krok_helper.subtitle_render.engine.render.layers import (
