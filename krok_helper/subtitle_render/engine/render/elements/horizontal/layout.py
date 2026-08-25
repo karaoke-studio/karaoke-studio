@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -68,6 +69,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning i
     line_lane_alignment,
     resolve_line_x_smart,
 )
+from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import (
+    n3_char_wipe_ranges_by_index,
+)
 from krok_helper.subtitle_render.sources.guide_symbols import (
     scaled_guide_symbol_path,
 )
@@ -80,8 +84,6 @@ class HorizontalLayoutPorts:
     char_layout_width: Callable[..., int]
     karaoke_fill_segments: Callable[..., list[FillSegment]]
     layout_rubies: Callable[..., list[RubyLayout]]
-    n3_char_wipe_ranges_by_index: Callable[..., list[tuple[int, int]]]
-    role_char_ink_ranges_by_index: Callable[..., list[tuple[int, int]]]
     role_ruby_vertical_extra: Callable[..., int]
 
 
@@ -286,6 +288,83 @@ def glyph_runs(layout: TextLayout) -> list[list[GlyphLayout]]:
     if current:
         runs.append(current)
     return runs
+
+
+def role_glyphs_by_index(
+    line: TimingLine,
+    layout: TextLayout,
+) -> list[GlyphLayout | None]:
+    """Map source character indices to their horizontal glyph layouts."""
+
+    glyphs: list[GlyphLayout | None] = [None for _ in line.chars]
+    for glyph in layout.glyphs:
+        if 0 <= glyph.index < len(glyphs):
+            glyphs[glyph.index] = glyph
+    return glyphs
+
+
+def glyph_runs_for_indices(
+    glyphs_by_index: list[GlyphLayout | None],
+    indices: list[int],
+) -> list[list[GlyphLayout]]:
+    """Group selected glyphs by the same paint-state contract as full lines."""
+
+    runs: list[list[GlyphLayout]] = []
+    current: list[GlyphLayout] = []
+    current_signature: tuple | None = None
+    signature_cache: dict[int, tuple] = {}
+    for index in indices:
+        if not (0 <= index < len(glyphs_by_index)):
+            continue
+        glyph = glyphs_by_index[index]
+        if glyph is None:
+            continue
+        style_id = id(glyph.style)
+        signature = signature_cache.get(style_id)
+        if signature is None:
+            signature = glyph_run_signature(glyph)
+            signature_cache[style_id] = signature
+        if current and signature != current_signature:
+            runs.append(current)
+            current = []
+        current.append(glyph)
+        current_signature = signature
+    if current:
+        runs.append(current)
+    return runs
+
+
+def role_char_ink_ranges_by_index(
+    line: TimingLine,
+    layout: TextLayout,
+    char_x_ranges: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Return each role-styled character's horizontal ink bounds.
+
+    Missing and whitespace glyphs fall back to a zero-width range at the
+    character advance box's left edge, matching the plain-text wipe contract.
+    ``line`` remains in the signature for compatibility with the established
+    layout call boundary.
+    """
+
+    ranges: list[tuple[int, int]] = [(left, left) for left, _ in char_x_ranges]
+    for glyph in layout.glyphs:
+        if not (0 <= glyph.index < len(ranges)):
+            continue
+        text = glyph.text
+        left = glyph.left
+        if not text or text.isspace():
+            ranges[glyph.index] = (left, left)
+            continue
+        bounds = glyph_path(glyph, 0).boundingRect()
+        if bounds.isEmpty():
+            ranges[glyph.index] = (left, left)
+        else:
+            ranges[glyph.index] = (
+                int(math.floor(bounds.left())),
+                int(math.ceil(bounds.right())),
+            )
+    return ranges
 
 
 def glyph_is_bitmap_guide(glyph: GlyphLayout) -> bool:
@@ -527,12 +606,12 @@ def layout_plain_line(
         inline_styles=False,
         char_gaps=char_gaps,
     )
-    ink_x_ranges = ports.role_char_ink_ranges_by_index(
+    ink_x_ranges = role_char_ink_ranges_by_index(
         line,
         text_layout,
         char_x_ranges,
     )
-    wipe_x_ranges = ports.n3_char_wipe_ranges_by_index(
+    wipe_x_ranges = n3_char_wipe_ranges_by_index(
         line,
         text_layout,
         char_x_ranges,
@@ -695,12 +774,12 @@ def layout_role_line(
         if resolved_intervals is not None
         else compute_char_intervals(line, char_widths)
     )
-    ink_x_ranges = ports.role_char_ink_ranges_by_index(
+    ink_x_ranges = role_char_ink_ranges_by_index(
         line,
         text_layout,
         char_x_ranges,
     )
-    wipe_x_ranges = ports.n3_char_wipe_ranges_by_index(
+    wipe_x_ranges = n3_char_wipe_ranges_by_index(
         line,
         text_layout,
         char_x_ranges,

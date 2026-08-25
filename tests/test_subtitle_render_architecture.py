@@ -1827,11 +1827,14 @@ def test_horizontal_glyph_layout_has_one_painter_free_owner() -> None:
         "glyph_run_rect",
         "glyph_run_signature",
         "glyph_runs",
+        "glyph_runs_for_indices",
         "fixed_line_geometry",
         "n3_main_fill_rect",
         "resolve_role_baseline_y",
         "resolve_baseline_y",
         "resolve_display_baselines",
+        "role_char_ink_ranges_by_index",
+        "role_glyphs_by_index",
         "role_visual_text_padding",
         "text_glyph_runs",
     }
@@ -1923,8 +1926,6 @@ def test_horizontal_line_layout_uses_explicit_painter_free_ports() -> None:
         "char_layout_width",
         "karaoke_fill_segments",
         "layout_rubies",
-        "n3_char_wipe_ranges_by_index",
-        "role_char_ink_ranges_by_index",
         "role_ruby_vertical_extra",
     }
 

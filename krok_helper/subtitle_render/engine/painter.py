@@ -488,6 +488,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     glyph_run_needs_after_glow as _glyph_run_needs_after_glow,
     glyph_run_needs_before_glow_split as _glyph_run_needs_before_glow_split,
     glyph_runs as _glyph_runs,
+    glyph_runs_for_indices as _glyph_runs_for_indices,
     fixed_line_geometry as _fixed_line_geometry,
     fill_clip_band as _fill_clip_band,
     fill_clip_band_for_glyphs as _fill_clip_band_for_glyphs,
@@ -525,6 +526,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     relative_fill_rect_signature as _relative_fill_rect_signature,
     resolve_baseline_y as _resolve_baseline_y,
     resolve_display_baselines as _resolve_display_baselines,
+    role_char_ink_ranges_by_index as _role_char_ink_ranges_by_index,
+    role_glyphs_by_index as _role_glyphs_by_index,
     role_visual_text_padding as _role_visual_text_padding,
     role_ruby_vertical_extra as _role_ruby_vertical_extra,
     row_layout_params as _row_layout_params,
@@ -5655,74 +5658,6 @@ def _paint_role_line_with_character_transition(
                 painter.restore()
 
 
-def _role_glyphs_by_index(
-    line: TimingLine,
-    layout: _TextLayout,
-) -> list[_GlyphLayout | None]:
-    glyphs: list[_GlyphLayout | None] = [None for _ in line.chars]
-    for glyph in layout.glyphs:
-        if 0 <= glyph.index < len(glyphs):
-            glyphs[glyph.index] = glyph
-    return glyphs
-
-
-def _glyph_runs_for_indices(
-    glyphs_by_index: list[_GlyphLayout | None],
-    indices: list[int],
-) -> list[list[_GlyphLayout]]:
-    runs: list[list[_GlyphLayout]] = []
-    current: list[_GlyphLayout] = []
-    current_signature: tuple | None = None
-    signature_cache: dict[int, tuple] = {}
-    for index in indices:
-        if not (0 <= index < len(glyphs_by_index)):
-            continue
-        glyph = glyphs_by_index[index]
-        if glyph is None:
-            continue
-        style_id = id(glyph.style)
-        signature = signature_cache.get(style_id)
-        if signature is None:
-            signature = _glyph_run_signature(glyph)
-            signature_cache[style_id] = signature
-        if current and signature != current_signature:
-            runs.append(current)
-            current = []
-        current.append(glyph)
-        current_signature = signature
-    if current:
-        runs.append(current)
-    return runs
-
-
-def _role_char_ink_ranges_by_index(
-    line: TimingLine,
-    layout: _TextLayout,
-    char_x_ranges: list[tuple[int, int]],
-) -> list[tuple[int, int]]:
-    """分色行各字符的墨水边界（逐 glyph 用各自字体），用于走字扫光。
-
-    缺失/空白字符回退为 advance 框左缘的零宽 ``(left, left)``，与
-    :func:`_char_ink_x_ranges` 同口径（见其 docstring）。
-    """
-    ranges: list[tuple[int, int]] = [(left, left) for left, _ in char_x_ranges]
-    for glyph in layout.glyphs:
-        if not (0 <= glyph.index < len(ranges)):
-            continue
-        text = glyph.text
-        left = glyph.left
-        if not text or text.isspace():
-            ranges[glyph.index] = (left, left)
-            continue
-        path = _glyph_path(glyph, 0)
-        br = path.boundingRect()
-        if br.isEmpty():
-            ranges[glyph.index] = (left, left)
-        else:
-            ranges[glyph.index] = (int(math.floor(br.left())), int(math.ceil(br.right())))
-    return ranges
-
-
 def _line_text_path(
     line: TimingLine,
     char_widths: list[int],
@@ -7128,8 +7063,6 @@ _HORIZONTAL_LAYOUT_PORTS = HorizontalLayoutPorts(
     char_layout_width=lambda *args, **kwargs: _char_layout_width(*args, **kwargs),
     karaoke_fill_segments=_karaoke_fill_segments,
     layout_rubies=_layout_rubies,
-    n3_char_wipe_ranges_by_index=_n3_char_wipe_ranges_by_index,
-    role_char_ink_ranges_by_index=_role_char_ink_ranges_by_index,
     role_ruby_vertical_extra=_role_ruby_vertical_extra,
 )
 

@@ -238,6 +238,18 @@ def test_painter_keeps_horizontal_wipe_compatibility_exports() -> None:
         assert getattr(subtitle_painter, f"_{name}") is getattr(wipe, name)
 
 
+def test_painter_keeps_horizontal_glyph_layout_compatibility_exports() -> None:
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import layout
+
+    names = {
+        "glyph_runs_for_indices",
+        "role_char_ink_ranges_by_index",
+        "role_glyphs_by_index",
+    }
+    for name in names:
+        assert getattr(subtitle_painter, f"_{name}") is getattr(layout, name)
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
