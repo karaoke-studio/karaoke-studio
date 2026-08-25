@@ -99,9 +99,9 @@ from krok_helper.subtitle_render.settings.property_controllers import (  # noqa:
 from krok_helper.subtitle_render.project.session import ExtraSubtitleSource  # noqa: E402
 
 
-def test_property_panel_uses_public_style_preview_boundary() -> None:
+def test_font_preview_uses_public_style_preview_boundary() -> None:
     source_path = Path(
-        "krok_helper/subtitle_render/frontend/properties/property_panel.py"
+        "krok_helper/subtitle_render/frontend/properties/controls/font_preview.py"
     )
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     imported_modules = {
@@ -2556,6 +2556,10 @@ def test_font_preview_uses_role_japanese_ruby_and_latin_samples(qapp):
 
 
 def test_font_preview_resolves_localized_families_before_worker(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.properties.controls import (
+        font_preview,
+    )
+
     aliases = {
         "UD Digi Kyokasho N-B": "UD デジタル 教科書体 N-B",
         "Latin Display Name": "Latin Runtime Family",
@@ -2568,7 +2572,7 @@ def test_font_preview_resolves_localized_families_before_worker(qapp, monkeypatc
         calls.append(name)
         return aliases.get(name, name)
 
-    monkeypatch.setattr(pp, "resolve_qt_font_family", resolve)
+    monkeypatch.setattr(font_preview, "resolve_qt_font_family", resolve)
     owner = QWidget()
     preview = pp._FontPreviewWidget(owner)
     preview.set_preview_state(
@@ -2793,10 +2797,13 @@ def test_font_preview_keeps_ruby_and_main_outline_ink_separate(qapp):
 
 def test_font_preview_uses_isolated_production_glyph_stacks(qapp, monkeypatch):
     from krok_helper.subtitle_render.engine import painter as engine_painter
+    from krok_helper.subtitle_render.frontend.properties.controls import (
+        font_preview,
+    )
 
     calls: list[tuple[str, float]] = []
-    original_main = pp._paint_char_karaoke_stack
-    original_ruby = pp._paint_ruby_karaoke_fragment
+    original_main = font_preview._paint_char_karaoke_stack
+    original_ruby = font_preview._paint_ruby_karaoke_fragment
 
     def main_stack(*args, **kwargs):
         calls.append(("main", kwargs["ratio"]))
@@ -2809,8 +2816,8 @@ def test_font_preview_uses_isolated_production_glyph_stacks(qapp, monkeypatch):
     def reject_full_frame(*args, **kwargs):
         raise AssertionError("compact font preview must not render project/title layers")
 
-    monkeypatch.setattr(pp, "_paint_char_karaoke_stack", main_stack)
-    monkeypatch.setattr(pp, "_paint_ruby_karaoke_fragment", ruby_stack)
+    monkeypatch.setattr(font_preview, "_paint_char_karaoke_stack", main_stack)
+    monkeypatch.setattr(font_preview, "_paint_ruby_karaoke_fragment", ruby_stack)
     monkeypatch.setattr(engine_painter, "paint_frame", reject_full_frame)
 
     image = pp._FontSampleCanvas._render_sample_image(

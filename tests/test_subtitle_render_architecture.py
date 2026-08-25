@@ -4384,6 +4384,21 @@ def test_subtitle_property_panel_delegates_responsive_layout_primitives() -> Non
     assert "_inline_section" not in inline_functions
 
 
+def test_subtitle_property_panel_delegates_font_preview_controls() -> None:
+    panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
+    panel_module = f"{PACKAGE}.frontend.properties.property_panel"
+    targets = _import_targets(panel_module, panel_path)
+
+    assert f"{PACKAGE}.frontend.properties.controls.font_preview" in targets
+    tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
+    class_names = {
+        node.name for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+    assert class_names.isdisjoint(
+        {"_FontSampleCanvas", "_FontSampleRenderTask", "_FontPreviewWidget"}
+    )
+
+
 def test_subtitle_property_panel_delegates_shared_input_primitives() -> None:
     panel_path = ROOT / "frontend" / "properties" / "property_panel.py"
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
