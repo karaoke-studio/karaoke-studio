@@ -86,6 +86,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     paint_shadow_silhouette as _paint_shadow_silhouette,
     paint_split_glow_path as _paint_split_glow_path,
     paint_stroke_path as _paint_stroke_path,
+    paint_text_layer_stack as _paint_text_layer_stack,
     ruby_baseline_y as _ruby_baseline_y,
     ruby_decoration_kind as _ruby_decoration_kind,
     ruby_glow_concentration_level as _ruby_glow_concentration_level,
@@ -7575,77 +7576,6 @@ def _paint_ruby_karaoke_fragment(
     )
 
 
-def _paint_text_layer_stack(
-    painter: QPainter,
-    path: QPainterPath,
-    rect: QRectF,
-    colors: KaraokeColorState,
-    style: Style,
-    *,
-    stroke_width: int,
-    stroke2_width: int,
-    shadow_dx: int,
-    shadow_dy: int,
-    glow_radius: int,
-    draw_glow: bool = True,
-    fill_rect: QRectF | None = None,
-    horizontal_fill_rect: QRectF | None = None,
-    draw_shadow: bool = True,
-) -> None:
-    brush_rect = fill_rect if fill_rect is not None else rect
-    if style.decoration_kind == "glow":
-        # ``draw_glow=False`` 让调用方把发光单独按「发光级」宽松裁切处理（卡拉ok 走字
-        # 时发光软晕不能跟描边/填充一样按字框硬裁，否则会被裁成方框）。
-        if draw_glow:
-            _paint_glow_path(
-                painter,
-                path,
-                colors.shadow,
-                _fill_brush_rect(colors.shadow, brush_rect, horizontal_fill_rect),
-                glow_radius,
-                stroke_width,
-                stroke2_width,
-                concentration_level=_glow_concentration_level(style),
-            )
-    elif (
-        style.decoration_kind == "shadow"
-        and draw_shadow
-        and (shadow_dx or shadow_dy)
-    ):
-        _paint_shadow_silhouette(
-            painter,
-            path,
-            colors.shadow,
-            _fill_brush_rect(colors.shadow, brush_rect, horizontal_fill_rect),
-            shadow_dx,
-            shadow_dy,
-            stroke_width,
-            stroke2_width,
-        )
-
-    if stroke2_width > 0:
-        _paint_stroke_path(
-            painter,
-            path,
-            colors.stroke2,
-            _fill_brush_rect(colors.stroke2, brush_rect, horizontal_fill_rect),
-            _stroke2_pen_width(stroke_width, stroke2_width),
-        )
-    if stroke_width > 0:
-        _paint_stroke_path(
-            painter,
-            path,
-            colors.stroke,
-            _fill_brush_rect(colors.stroke, brush_rect, horizontal_fill_rect),
-            _stroke_pen_width(stroke_width),
-            protect_body=_fill_is_alpha(colors.text),
-        )
-    _paint_fill_path(
-        painter,
-        path,
-        colors.text,
-        _fill_brush_rect(colors.text, brush_rect, horizontal_fill_rect),
-    )
 
 
 _VERTICAL_RASTER_PORTS = VerticalRasterPorts(
