@@ -1522,6 +1522,77 @@ def test_horizontal_contracts_have_one_painter_free_owner() -> None:
     )
 
 
+def test_render_effect_metrics_have_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.effects"
+    metrics_owner = f"{owner}.metrics"
+    metrics_path = ROOT / "engine/render/effects/metrics.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {
+        "glow_blur_radii",
+        "glow_concentration_level",
+        "glow_extent",
+        "glow_pen_width",
+        "glow_radius",
+        "main_stroke2_width",
+        "ruby_baseline_y",
+        "ruby_decoration_kind",
+        "ruby_glow_concentration_level",
+        "ruby_glow_radius",
+        "ruby_paint_style",
+        "ruby_shadow_dx",
+        "ruby_shadow_dy",
+        "ruby_stroke_extent",
+        "ruby_vertical_extra",
+        "ruby_visual_padding",
+        "scaled_glow_radius",
+        "stroke2_pen_width",
+        "stroke_pen_width",
+        "text_visual_padding",
+        "title_visual_padding",
+        "visual_stroke_extent",
+        "visual_text_padding",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert {"__init__.py", "metrics.py"} <= {
+        path.name for path in (ROOT / "engine/render/effects").glob("*.py")
+    }
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_members)
+    targets = _import_targets(metrics_owner, metrics_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+    preview_path = ROOT / "engine/style/style_preview.py"
+    preview_tree = ast.parse(preview_path.read_text(encoding="utf-8-sig"))
+    painter_imports = {
+        alias.name
+        for node in preview_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == f"{PACKAGE}.engine.painter"
+        for alias in node.names
+    }
+    assert painter_imports == {
+        "_paint_char_karaoke_stack",
+        "_paint_ruby_karaoke_fragment",
+    }
+
+
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {"auto_chorus.py", "show_time.py", "timecode.py", "timeline.py"}
     timing_root = ROOT / "engine" / "timing"
