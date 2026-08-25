@@ -473,6 +473,27 @@ class RoleSchemeController:
     def remove(self, name: str) -> None:
         self._names = [candidate for candidate in self._names if candidate != name]
 
+    def rename_changes(
+        self,
+        style: Style,
+        old: str,
+        new: str,
+        fallback: SubtitleStyleScheme,
+    ) -> dict[str, object]:
+        """Rename one project role and its detached style scheme together."""
+        schemes = dict(style.custom_style_schemes)
+        scheme = schemes.pop(old, fallback)
+        schemes[new] = scheme
+        self.rename(old, new)
+        return {"custom_style_schemes": schemes}
+
+    def delete_changes(self, style: Style, name: str) -> dict[str, object]:
+        """Delete one project role without touching the reusable preset library."""
+        schemes = dict(style.custom_style_schemes)
+        schemes.pop(name, None)
+        self.remove(name)
+        return {"custom_style_schemes": schemes}
+
     def ensure_style_schemes(
         self,
         style: Style,

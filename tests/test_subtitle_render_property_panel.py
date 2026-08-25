@@ -154,6 +154,30 @@ def test_role_scheme_controller_owns_registry_and_scheme_defaults():
     controller.add("E")
     assert controller.names == ["A", "D", "C", "E"]
 
+    lifecycle = RoleSchemeController()
+    lifecycle.replace(["A", "B"])
+    role_style = Style(
+        custom_style_schemes={
+            "A": SubtitleStyleScheme(fill_color="#111111"),
+            "B": SubtitleStyleScheme(fill_color="#222222"),
+        }
+    )
+    renamed = replace(
+        role_style,
+        **lifecycle.rename_changes(
+            role_style,
+            "A",
+            "Lead",
+            SubtitleStyleScheme(fill_color="#FFFFFF"),
+        ),
+    )
+    assert lifecycle.names == ["Lead", "B"]
+    assert "A" not in renamed.custom_style_schemes
+    assert renamed.custom_style_schemes["Lead"].fill_color == "#111111"
+    deleted = replace(renamed, **lifecycle.delete_changes(renamed, "Lead"))
+    assert lifecycle.names == ["B"]
+    assert set(deleted.custom_style_schemes) == {"B"}
+
 
 def test_layout_catalog_controller_preserves_inheritance_and_title_references():
     controller = LayoutCatalogController()

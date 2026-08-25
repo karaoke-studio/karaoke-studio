@@ -5955,15 +5955,14 @@ class PropertyPanel(QWidget):
                 duration=2000,
             )
             return
-        schemes = dict(self._style.custom_style_schemes)
-        scheme = schemes.get(old) or self._current_scheme_snapshot()
-        if old in schemes:
-            del schemes[old]
-        schemes[new] = scheme
-        # 角色名来自字幕标签（role_names）的，重命名后也从可选名单里替换掉旧名。
         previous_roles = self._role_controller.names
-        self._role_controller.rename(old, new)
-        self._update_style(custom_style_schemes=schemes)
+        changes = self._role_controller.rename_changes(
+            self._style,
+            old,
+            new,
+            self._current_scheme_snapshot(),
+        )
+        self._update_style(**changes)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
@@ -5977,11 +5976,9 @@ class PropertyPanel(QWidget):
         name = self._current_custom_scheme_name()
         if name is None or name == TITLE_SCHEME_NAME:
             return  # 全局默认 / 内置「标题」方案不能删
-        schemes = dict(self._style.custom_style_schemes)
-        schemes.pop(name, None)
         previous_roles = self._role_controller.names
-        self._role_controller.remove(name)
-        self._update_style(custom_style_schemes=schemes)
+        changes = self._role_controller.delete_changes(self._style, name)
+        self._update_style(**changes)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
