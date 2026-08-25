@@ -4838,6 +4838,21 @@ def test_subtitle_render_window_delegates_project_save_state() -> None:
         "fail_save",
         "record_save_inspection_failure",
     } <= session_calls
+    command_calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_project_command_controller"
+    }
+    assert "preflight_save" in command_calls
+    prompt_literals = {
+        node.value
+        for node in ast.walk(method)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert "项目文件已被外部修改" not in prompt_literals
     direct_state_assignments = {
         target.attr
         for node in ast.walk(method)

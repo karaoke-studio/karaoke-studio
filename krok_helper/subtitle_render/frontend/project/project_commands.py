@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -10,6 +11,23 @@ from typing import Any, Callable, Optional
 ChoicePrompt = Callable[..., int]
 FilePicker = Callable[..., tuple[str, str]]
 Command = Callable[[], Any]
+
+
+class ProjectSaveAction(str, Enum):
+    """Result of checking whether an existing project can be overwritten."""
+
+    CONTINUE = "continue"
+    SAVE_AS = "save_as"
+    CANCEL = "cancel"
+    INSPECTION_FAILED = "inspection_failed"
+
+
+@dataclass(frozen=True)
+class ProjectSavePreflight:
+    """Explicit save decision returned to the window composition root."""
+
+    action: ProjectSaveAction
+    error: str = ""
 
 
 @dataclass(frozen=True)
@@ -93,3 +111,48 @@ class ProjectCommandController:
         if not path_text.endswith(self.project_suffix):
             path_text += self.project_suffix
         return Path(path_text)
+
+    @staticmethod
+    def preflight_save(
+        parent: Any,
+        *,
+        path: Path,
+        current_project_path: Optional[Path],
+        known_disk_revision: Any,
+        inspect: Callable[[Path], Any],
+        choose: ChoicePrompt,
+    ) -> ProjectSavePreflight:
+        """Resolve external-modification conflicts before an existing save."""
+        path = Path(path)
+        if current_project_path is None or path != current_project_path:
+            return ProjectSavePreflight(ProjectSaveAction.CONTINUE)
+        try:
+            disk_revision = inspect(path)
+        except OSError as exc:
+            return ProjectSavePreflight(
+                ProjectSaveAction.INSPECTION_FAILED,
+                error=str(exc),
+            )
+        if known_disk_revision is None or disk_revision == known_disk_revision:
+            return ProjectSavePreflight(ProjectSaveAction.CONTINUE)
+
+        choice = choose(
+            parent,
+            "项目文件已被外部修改",
+            f"磁盘上的项目文件在打开或上次保存后发生了变化：\n"
+            f"{path}\n\n直接覆盖可能丢失其他程序的修改。",
+            ("覆盖", "另存为", "取消"),
+            default=2,
+        )
+        if choice == 0:
+            return ProjectSavePreflight(ProjectSaveAction.CONTINUE)
+        if choice == 1:
+            return ProjectSavePreflight(ProjectSaveAction.SAVE_AS)
+        return ProjectSavePreflight(ProjectSaveAction.CANCEL)
+
+
+__all__ = [
+    "ProjectCommandController",
+    "ProjectSaveAction",
+    "ProjectSavePreflight",
+]

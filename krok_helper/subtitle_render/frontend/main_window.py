@@ -233,6 +233,7 @@ from krok_helper.subtitle_render.frontend.properties.property_panel import (
 )
 from krok_helper.subtitle_render.frontend.project.project_commands import (
     ProjectCommandController,
+    ProjectSaveAction,
 )
 from krok_helper.subtitle_render.frontend.project.project_autosave import (
     ProjectAutoSaveRuntime,
@@ -2160,35 +2161,28 @@ class SubtitleRenderWindow(QWidget):
 
     def _write_project(self, path: Path) -> bool:
         path = Path(path)
-        if self._project_path is not None and path == self._project_path:
-            try:
-                disk_revision = self._project_controller.inspect(path)
-            except OSError as exc:
-                self._project_session.record_save_inspection_failure(str(exc))
-                self._refresh_project_title()
-                fluent_error(
-                    self,
-                    "无法检查项目文件",
-                    f"保存前无法确认文件是否被外部修改：\n{path}\n\n{exc}",
-                    copyable=True,
-                )
-                return False
-            if (
-                self._project_disk_revision is not None
-                and disk_revision != self._project_disk_revision
-            ):
-                choice = fluent_choice(
-                    self,
-                    "项目文件已被外部修改",
-                    f"磁盘上的项目文件在打开或上次保存后发生了变化：\n"
-                    f"{path}\n\n直接覆盖可能丢失其他程序的修改。",
-                    ("覆盖", "另存为", "取消"),
-                    default=2,
-                )
-                if choice == 1:
-                    return self._save_project_as()
-                if choice != 0:
-                    return False
+        preflight = self._project_command_controller.preflight_save(
+            self,
+            path=path,
+            current_project_path=self._project_path,
+            known_disk_revision=self._project_disk_revision,
+            inspect=self._project_controller.inspect,
+            choose=fluent_choice,
+        )
+        if preflight.action == ProjectSaveAction.INSPECTION_FAILED:
+            self._project_session.record_save_inspection_failure(preflight.error)
+            self._refresh_project_title()
+            fluent_error(
+                self,
+                "无法检查项目文件",
+                f"保存前无法确认文件是否被外部修改：\n{path}\n\n{preflight.error}",
+                copyable=True,
+            )
+            return False
+        if preflight.action == ProjectSaveAction.SAVE_AS:
+            return self._save_project_as()
+        if preflight.action != ProjectSaveAction.CONTINUE:
+            return False
         previous_recovery_path = self._recovery_path()
         self._recovery_policy.invalidate(previous_recovery_path, delete=False)
         self._auto_save_timer.stop()
