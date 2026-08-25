@@ -94,3 +94,17 @@ def _gaussian_blur_image(source: QImage, standard_deviation: float) -> QImage:
     )
     result_rows[:, : width * 4] = quantized.reshape(height, width * 4)
     return result
+
+
+# Public contracts for render effects. Keep the original private names above
+# for compatibility with existing Painter diagnostics and tests.
+blur_image = _blur_image
+gaussian_blur_image = _gaussian_blur_image
+n3_gaussian_kernel_1d = _n3_gaussian_kernel_1d
+
+
+__all__ = [
+    "blur_image",
+    "gaussian_blur_image",
+    "n3_gaussian_kernel_1d",
+]

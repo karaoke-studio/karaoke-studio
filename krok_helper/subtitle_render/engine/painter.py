@@ -82,7 +82,9 @@ from krok_helper.subtitle_render.engine.render.effects import (
     linear_gradient_brush as _linear_gradient_brush,
     main_stroke2_width as _main_stroke2_width,
     paint_fill_path as _paint_fill_path,
+    paint_glow_path as _paint_glow_path,
     paint_shadow_silhouette as _paint_shadow_silhouette,
+    paint_split_glow_path as _paint_split_glow_path,
     paint_stroke_path as _paint_stroke_path,
     ruby_baseline_y as _ruby_baseline_y,
     ruby_decoration_kind as _ruby_decoration_kind,
@@ -586,7 +588,6 @@ from krok_helper.subtitle_render.domain.models import (
     Style,
     TitleOverlay,
     effective_karaoke_animation,
-    normalize_glow_concentration_level,
 )
 
 
@@ -8147,168 +8148,6 @@ def _clamped_ratio(elapsed_ms: int, duration_ms: int) -> float:
     if duration_ms <= 0:
         return 1.0
     return max(0.0, min(1.0, elapsed_ms / duration_ms))
-
-
-def _paint_glow_path(
-    painter: QPainter,
-    path: QPainterPath,
-    fill: PaintFill,
-    rect: QRectF,
-    radius: int,
-    stroke_width: int,
-    stroke2_width: int,
-    source_clip: QRectF | None = None,
-    concentration_level: int = 0,
-    target_clip: QRectF | None = None,
-) -> None:
-    if normalize_glow_concentration_level(concentration_level) < 0:
-        return
-    radius = max(int(radius), 0)
-    if radius == 0:
-        return
-    width = _glow_pen_width(stroke_width, stroke2_width, radius)
-    bounds = path.boundingRect()
-    if bounds.isEmpty():
-        return
-    pad = _glow_extent(stroke_width, stroke2_width, radius) + 2
-    layer_rect = bounds.adjusted(-pad, -pad, pad, pad)
-    if target_clip is not None:
-        # 调用方只消费 target_clip 内的输出：把 stroke/blur 画布水平裁到
-        # target ± pad（pad ≥ 模糊支撑半径），窄带模糊代替整行模糊。裁剪量取整，
-        # 保留 layer_rect 原有的小数相位——drawImage 的亚像素重采样必须与整行
-        # 路径逐位一致，否则扫光前沿的陡坡会产生半像素偏移。
-        needed_left = float(target_clip.left()) - pad
-        needed_right = float(target_clip.right()) + pad
-        if needed_left > layer_rect.left():
-            layer_rect.setLeft(layer_rect.left() + math.floor(needed_left - layer_rect.left()))
-        if needed_right < layer_rect.right():
-            layer_rect.setRight(layer_rect.right() - math.floor(layer_rect.right() - needed_right))
-        if layer_rect.isEmpty():
-            return
-    image_w = max(1, math.ceil(layer_rect.width()))
-    image_h = max(1, math.ceil(layer_rect.height()))
-    source = QImage(image_w, image_h, QImage.Format.Format_ARGB32_Premultiplied)
-    source.fill(0)
-
-    local_path = QPainterPath(path)
-    local_path.translate(-layer_rect.left(), -layer_rect.top())
-    local_rect = rect.translated(-layer_rect.left(), -layer_rect.top())
-    p = QPainter(source)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        if source_clip is not None:
-            p.setClipRect(source_clip.translated(-layer_rect.left(), -layer_rect.top()))
-        _paint_stroke_path(p, local_path, fill, local_rect, width)
-    finally:
-        p.end()
-
-    target = QPointF(layer_rect.left(), layer_rect.top())
-    painter.save()
-    try:
-        if target_clip is not None:
-            painter.setClipRect(target_clip)
-        for blur_radius in _glow_blur_radii(radius, concentration_level):
-            painter.drawImage(target, _blur_image(source, blur_radius))
-    finally:
-        painter.restore()
-
-
-def _paint_split_glow_path(
-    painter: QPainter,
-    path: QPainterPath,
-    before_fill: PaintFill,
-    after_fill: PaintFill,
-    rect: QRectF,
-    radius: int,
-    stroke_width: int,
-    stroke2_width: int,
-    *,
-    before_source_clip: QRectF,
-    after_source_clip: QRectF,
-    concentration_level: int = 0,
-    target_clip: QRectF | None = None,
-    horizontal_fill_rect: QRectF | None = None,
-) -> None:
-    """Paint both WipeLeft source colours into one bitmap, then blur once."""
-    if normalize_glow_concentration_level(concentration_level) < 0:
-        return
-    radius = max(int(radius), 0)
-    if radius == 0:
-        return
-    width = _glow_pen_width(stroke_width, stroke2_width, radius)
-    bounds = path.boundingRect()
-    if bounds.isEmpty():
-        return
-    pad = _glow_extent(stroke_width, stroke2_width, radius) + 2
-    layer_rect = bounds.adjusted(-pad, -pad, pad, pad)
-    if target_clip is not None:
-        needed_left = float(target_clip.left()) - pad
-        needed_right = float(target_clip.right()) + pad
-        if needed_left > layer_rect.left():
-            layer_rect.setLeft(
-                layer_rect.left() + math.floor(needed_left - layer_rect.left())
-            )
-        if needed_right < layer_rect.right():
-            layer_rect.setRight(
-                layer_rect.right()
-                - math.floor(layer_rect.right() - needed_right)
-            )
-        if layer_rect.isEmpty():
-            return
-    image_w = max(1, math.ceil(layer_rect.width()))
-    image_h = max(1, math.ceil(layer_rect.height()))
-    source = QImage(image_w, image_h, QImage.Format.Format_ARGB32_Premultiplied)
-    source.fill(0)
-    local_path = QPainterPath(path)
-    local_path.translate(-layer_rect.left(), -layer_rect.top())
-    local_rect = rect.translated(-layer_rect.left(), -layer_rect.top())
-    local_horizontal_rect = (
-        horizontal_fill_rect.translated(-layer_rect.left(), -layer_rect.top())
-        if horizontal_fill_rect is not None
-        else None
-    )
-    source_painter = QPainter(source)
-    try:
-        source_painter.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        for fill, clip in (
-            (before_fill, before_source_clip),
-            (after_fill, after_source_clip),
-        ):
-            source_painter.save()
-            try:
-                source_painter.setClipRect(
-                    clip.translated(-layer_rect.left(), -layer_rect.top())
-                )
-                _paint_stroke_path(
-                    source_painter,
-                    local_path,
-                    fill,
-                    _fill_brush_rect(fill, local_rect, local_horizontal_rect),
-                    width,
-                )
-            finally:
-                source_painter.restore()
-    finally:
-        source_painter.end()
-    target = QPointF(layer_rect.left(), layer_rect.top())
-    painter.save()
-    try:
-        if target_clip is not None:
-            painter.setClipRect(target_clip)
-        for blur_radius in _glow_blur_radii(radius, concentration_level):
-            painter.drawImage(target, _blur_image(source, blur_radius))
-    finally:
-        painter.restore()
-
-
 
 
 def _paint_after_fill_path(

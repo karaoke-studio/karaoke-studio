@@ -46,6 +46,10 @@ from krok_helper.subtitle_render.engine.render.effects.metrics import (
     visual_stroke_extent,
     visual_text_padding,
 )
+from krok_helper.subtitle_render.engine.render.effects.glow import (
+    paint_glow_path,
+    paint_split_glow_path,
+)
 from krok_helper.subtitle_render.engine.render.effects.paths import (
     paint_fill_path,
     paint_shadow_silhouette,
@@ -77,7 +81,9 @@ __all__ = [
     "linear_gradient_brush",
     "main_stroke2_width",
     "paint_fill_path",
+    "paint_glow_path",
     "paint_shadow_silhouette",
+    "paint_split_glow_path",
     "paint_stroke_path",
     "ruby_baseline_y",
     "ruby_decoration_kind",

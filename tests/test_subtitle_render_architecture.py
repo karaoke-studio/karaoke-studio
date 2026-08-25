@@ -1709,6 +1709,53 @@ def test_render_path_effects_have_one_painter_free_owner() -> None:
     )
 
 
+def test_render_glow_effects_use_the_public_raster_contract() -> None:
+    owner = f"{PACKAGE}.engine.render.effects"
+    glow_owner = f"{owner}.glow"
+    glow_path = ROOT / "engine/render/effects/glow.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {"paint_glow_path", "paint_split_glow_path"}
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_members)
+    targets = _import_targets(glow_owner, glow_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert f"{PACKAGE}.engine.render.core.raster_blur.blur_image" in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+    blur_path = ROOT / "engine/render/core/raster_blur.py"
+    blur_tree = ast.parse(blur_path.read_text(encoding="utf-8-sig"))
+    public_assignments = {
+        target.id
+        for node in blur_tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert {
+        "blur_image",
+        "gaussian_blur_image",
+        "n3_gaussian_kernel_1d",
+    } <= public_assignments
+
+
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {"auto_chorus.py", "show_time.py", "timecode.py", "timeline.py"}
     timing_root = ROOT / "engine" / "timing"
