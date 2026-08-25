@@ -7,7 +7,7 @@ from collections.abc import Callable
 from PyQt6.QtGui import QFont, QFontMetrics, QPainterPath
 
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
 

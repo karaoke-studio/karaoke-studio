@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.domain.paint import (
     PaintFill,
     _paint_fill,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     normalize_glow_concentration_level,
 )
 from krok_helper.subtitle_render.n3.font_fallback import resolve_n3_font_slots

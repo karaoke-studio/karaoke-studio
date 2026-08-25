@@ -23,7 +23,7 @@ def run_gpu_subtitle_smoke() -> int:
     """Exercise bundled Direct2D G5 readback and G6 native presentation."""
     from PyQt6.QtWidgets import QApplication, QWidget
 
-    from krok_helper.subtitle_render.models import (
+    from krok_helper.subtitle_render.domain.models import (
         Style,
         TimingChar,
         TimingLine,

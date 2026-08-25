@@ -65,7 +65,7 @@ from krok_helper.subtitle_render.frontend.properties.property_panel import (  # 
     StylePresetManagerDialog,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role  # noqa: E402
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     BackgroundSource,
     KaraokeColors,
     KaraokeColorState,

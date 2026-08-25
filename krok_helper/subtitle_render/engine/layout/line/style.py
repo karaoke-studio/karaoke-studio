@@ -11,7 +11,7 @@ from krok_helper.subtitle_render.engine.timing.show_time import (
     MIN_AUTO_EXIT_ANIMATION_MS,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import style_scheme_changes
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
     Style,
     style_with_line_animation,

@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.engine.layout.plan.orchestrator import (
     LayoutPlanResolvers,
     resolve_track_layout_plan,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LineAnimationOverride,
     Style,
     TimingLine,
@@ -164,7 +164,7 @@ class TestGpuParity:
 
     @staticmethod
     def _track():
-        from krok_helper.subtitle_render.models import TimingChar, TimingTrack
+        from krok_helper.subtitle_render.domain.models import TimingChar, TimingTrack
 
         def line(text: str, start: int, override=None) -> TimingLine:
             item = TimingLine()

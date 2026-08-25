@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from krok_helper.subtitle_render.frontend.preview import preview_async as preview_async_module
 from krok_helper.subtitle_render.frontend.preview.preview_async import GpuAsyncSubtitleRenderer
-from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess
 
 

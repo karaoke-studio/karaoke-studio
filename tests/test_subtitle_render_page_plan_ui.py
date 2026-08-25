@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.frontend.editor.lyrics_list import (
 from krok_helper.subtitle_render.frontend.main_window import (
     _SubtitleLoadingSettingsDialog,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     Style,
     SubtitleLoadingSettings,
     TimingChar,

@@ -43,7 +43,7 @@ from scripts.probe_native_preview_stats import (
     _playback_times,
     _summary_row,
 )
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.domain.models import Style, TimingTrack
 from pathlib import Path
 from PyQt6.QtGui import QColor, QImage
 

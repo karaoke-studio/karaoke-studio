@@ -27,7 +27,7 @@ from krok_helper.subtitle_render.engine.text import (
     n3_char_box_ascent,
     n3_char_box_descent,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     Style,
     TitleOverlay,
     normalize_title_char_role_labels,

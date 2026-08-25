@@ -23,7 +23,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     clear_before_layer_cache,
     paint_frame,
 )
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     KaraokeColors,
     KaraokeColorState,
     PaintFill,

@@ -51,7 +51,7 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     compute_char_intervals,
 )
 from krok_helper.subtitle_render.engine.value_signature import value_signature
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine, TimingTrack

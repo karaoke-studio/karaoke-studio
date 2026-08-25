@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from krok_helper.subtitle_render.models import PROJECT_FILE_SUFFIX
+from krok_helper.subtitle_render.domain.models import PROJECT_FILE_SUFFIX
 
 PROJECT_SCHEMA_VERSION = 2
 _RECOVERY_WRITE_LOCK = threading.Lock()

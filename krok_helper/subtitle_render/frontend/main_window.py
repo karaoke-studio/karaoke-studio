@@ -266,7 +266,7 @@ from krok_helper.subtitle_render.serialization.timing import (
     subtitle_loading_settings_to_dict,
     track_page_plan_from_dict,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     DEFAULT_EXPORT_NAME_TEMPLATE,
     DEFAULT_OUTPUT_NAME_SUFFIX,
     EXPORT_NAME_TEMPLATE_FIELDS,

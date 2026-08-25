@@ -12,7 +12,7 @@ import pytest
 
 from krok_helper.errors import ProcessingError
 from krok_helper.pipeline import render_name_template, validate_output_name_template
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     DEFAULT_EXPORT_NAME_TEMPLATE,
     DEFAULT_OUTPUT_NAME_SUFFIX,
     EXPORT_NAME_TEMPLATE_FIELDS,

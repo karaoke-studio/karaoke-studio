@@ -48,7 +48,7 @@ def _with_main_stroke_width(style, stroke_width: float):
 
 
 def _load_project(path: Path):
-    from krok_helper.subtitle_render.models import BackgroundSource, style_from_dict
+    from krok_helper.subtitle_render.domain.models import BackgroundSource, style_from_dict
     from krok_helper.subtitle_render.n3.project_import import load_n3proj
     from krok_helper.subtitle_render.project.store import load_render_project
     from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6.QtWidgets import QApplication
     from krok_helper.ffmpeg import find_tool
-    from krok_helper.subtitle_render.models import BackgroundSource
+    from krok_helper.subtitle_render.domain.models import BackgroundSource
 
     _ = QApplication.instance() or QApplication([])
     data, track, style, screen, background = _load_project(args.project)

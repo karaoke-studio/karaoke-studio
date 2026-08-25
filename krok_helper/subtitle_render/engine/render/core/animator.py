@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from krok_helper.subtitle_render.models import Style, effective_karaoke_animation
+from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
 
 
 @dataclass(frozen=True)

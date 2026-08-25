@@ -98,7 +98,7 @@ from krok_helper.subtitle_render.domain.timing import (
     guide_symbol_role_labels,
     line_visible_chars,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
     Style,
     TITLE_SCHEME_NAME,

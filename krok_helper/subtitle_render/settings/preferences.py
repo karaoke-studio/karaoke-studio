@@ -13,7 +13,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any, Optional
 
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
     STYLE_APPEARANCE_FIELDS,
     TITLE_SCHEME_NAME,

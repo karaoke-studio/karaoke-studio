@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.frontend.workflow.export_controller import (
     ExportJobController,
     ExportJobInputs,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
 
 

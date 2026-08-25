@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
-from krok_helper.subtitle_render.models import Style, TitleOverlay, style_from_dict
+from krok_helper.subtitle_render.domain.models import Style, TitleOverlay, style_from_dict
 from krok_helper.subtitle_render.project.store import split_project_paths
 from krok_helper.subtitle_render.settings.screen import (
     ScreenSettings,

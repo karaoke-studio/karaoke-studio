@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.frontend.properties.property_panel import (  # 
     TITLE_TIME_MAX_MS,
     PropertyPanel,
 )
-from krok_helper.subtitle_render.models import Style, TitleOverlay  # noqa: E402
+from krok_helper.subtitle_render.domain.models import Style, TitleOverlay  # noqa: E402
 
 
 @pytest.fixture

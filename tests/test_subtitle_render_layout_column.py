@@ -25,7 +25,7 @@ from krok_helper.subtitle_render.frontend.editor.lyrics_list import (  # noqa: E
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
     SubtitleRenderWindow,
 )
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     TimingChar,
     TimingLine,
     TimingTrack,

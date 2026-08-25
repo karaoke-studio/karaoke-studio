@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
     LayerContext,
     SCOPE_LINE,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 

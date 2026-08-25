@@ -8,7 +8,7 @@ from PyQt6.QtGui import QColor, QImage
 
 from krok_helper.errors import ExportCancelled
 from krok_helper.subtitle_render.engine.export import native_export as ne
-from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
 
 
 def _track() -> TimingTrack:

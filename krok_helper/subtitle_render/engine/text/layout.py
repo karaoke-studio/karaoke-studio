@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.engine.text.metrics import (
     letter_spacing,
     make_font_for,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_CHAR_FIELDS,
     Style,
 )

@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     TimingChar,
     TimingLine,
     TimingTrack,

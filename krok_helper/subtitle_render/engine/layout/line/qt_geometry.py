@@ -25,7 +25,7 @@ from krok_helper.subtitle_render.engine.text import (
     line_text_width,
     make_font_for,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 

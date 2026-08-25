@@ -25,7 +25,7 @@ from typing import Callable, Mapping, Sequence
 
 from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QGuiApplication
 
-from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import Style, SubtitleStyleScheme
 
 
 log = logging.getLogger(__name__)

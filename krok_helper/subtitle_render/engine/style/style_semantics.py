@@ -9,7 +9,7 @@ from krok_helper.subtitle_render.domain.paint import (
     KaraokeColorState,
     PaintFill,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     N3_FONT_INHERITANCE_FIELDS,
     Style,
     SubtitleStyleScheme,

@@ -49,7 +49,7 @@ from krok_helper.subtitle_render.domain.timing import (
     LineAnimationOverride,
     TimingTrack,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     DEFAULT_OUTPUT_NAME_SUFFIX,
     LyricsLayout,
     Style,

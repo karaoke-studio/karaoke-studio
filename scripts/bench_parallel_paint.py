@@ -43,7 +43,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter  # noqa: E402
 from krok_helper.subtitle_render.frontend.preview.preview_async import preview_render_target_size  # noqa: E402
-from krok_helper.subtitle_render.models import style_from_dict  # noqa: E402
+from krok_helper.subtitle_render.domain.models import style_from_dict  # noqa: E402
 from krok_helper.subtitle_render.project.store import load_render_project  # noqa: E402
 from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc  # noqa: E402
 

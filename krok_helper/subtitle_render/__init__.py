@@ -9,6 +9,7 @@
 设计文档：``C:/Users/18007/.claude/plans/ok-ok-main-bug-merge-merge-main-nicokar-toasty-blum.md``。
 """
 
+import sys
 from typing import TYPE_CHECKING, Any
 
 from krok_helper.subtitle_render.contracts import (
@@ -16,6 +17,12 @@ from krok_helper.subtitle_render.contracts import (
     SubtitleRenderPage,
     SubtitleRenderSettingsProvider,
 )
+from krok_helper.subtitle_render.domain import models as models
+
+# Preserve the original public module path while keeping its implementation in
+# the domain package.  Existing plugins and automation scripts may still use
+# ``import krok_helper.subtitle_render.models``.
+sys.modules[f"{__name__}.models"] = models
 
 if TYPE_CHECKING:
     from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
@@ -26,6 +33,7 @@ __all__ = [
     "SubtitleRenderSettingsProvider",
     "SubtitleRenderWindow",
     "create_embedded_subtitle_render",
+    "models",
 ]
 
 

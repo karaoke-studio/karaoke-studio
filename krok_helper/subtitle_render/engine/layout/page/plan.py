@@ -21,7 +21,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TrackSection,
     timing_line_start_ms,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     Style,
     ensure_page_layout_defaults,
     layout_capacity,

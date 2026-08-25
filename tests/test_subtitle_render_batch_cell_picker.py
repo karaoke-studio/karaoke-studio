@@ -22,7 +22,7 @@ from krok_helper.subtitle_render.frontend.editor.lyrics_list import (  # noqa: E
     COL_ROLE,
     LyricsPanel,
 )
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     Style,
     TimingChar,
     TimingLine,

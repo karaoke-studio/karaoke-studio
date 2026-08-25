@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from krok_helper.subtitle_render.domain.background import BackgroundSource
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 

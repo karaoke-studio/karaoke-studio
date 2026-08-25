@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.frontend.workflow import import_controller as c
 from krok_helper.subtitle_render.frontend.workflow.import_controller import (
     N3ProjectImportController,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.n3.project_import import N3_PROJECT_FILTER
 
 

@@ -20,7 +20,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
 )
-from krok_helper.subtitle_render.models import Style, layout_capacity, layout_id_for_index
+from krok_helper.subtitle_render.domain.models import Style, layout_capacity, layout_id_for_index
 
 
 def apply_layout_to_page(

@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Callable
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
     LyricsLayout,
     Style,

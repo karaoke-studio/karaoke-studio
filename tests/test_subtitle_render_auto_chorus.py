@@ -147,7 +147,7 @@ def window(monkeypatch):
 
 
 def _track(lines: list[str]):
-    from krok_helper.subtitle_render.models import TimingChar, TimingLine, TimingTrack
+    from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine, TimingTrack
 
     return TimingTrack(
         lines=[
@@ -241,7 +241,7 @@ def test_nothing_to_do_returns_no_rows_and_no_undo(window) -> None:
 
 def test_the_guide_symbol_is_left_alone(window) -> None:
     """导唱符是行首的引导标记，不属于括号里的和声段。"""
-    from krok_helper.subtitle_render.models import GuideSymbol
+    from krok_helper.subtitle_render.domain.models import GuideSymbol
 
     track = _track(["（あ）"])
     symbol = GuideSymbol(name="导唱符", count=1)

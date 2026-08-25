@@ -76,7 +76,7 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     build_render_command,
     render_subtitle_video,
 )
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     BackgroundSource,
     GuideSymbol,
     LineAnimationOverride,

@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.frontend.editor.timeline_view import (  # noqa:
     _format_precise_ms,
     build_lanes,
 )
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     LineAnimationOverride,
     RubyAnnotation,
     Style,

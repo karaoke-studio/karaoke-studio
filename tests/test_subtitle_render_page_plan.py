@@ -15,7 +15,7 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import compute_display_lines
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LyricsLayout,
     Style,
     SubtitleLoadingSettings,
@@ -550,7 +550,7 @@ def test_painter_schedule_and_native_ir_share_authoritative_page_plan():
 
 
 def test_subtitle_loading_settings_round_trips_sug_export_compensation_flag() -> None:
-    from krok_helper.subtitle_render.models import (
+    from krok_helper.subtitle_render.domain.models import (
         subtitle_loading_settings_from_dict,
         subtitle_loading_settings_to_dict,
     )

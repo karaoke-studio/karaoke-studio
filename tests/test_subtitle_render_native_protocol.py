@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
 from krok_helper.subtitle_render.engine.render.adapters.layout_plan import (
     build_track_layout_plan,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     GuideSymbol,
     KaraokeColors,
     KaraokeColorState,

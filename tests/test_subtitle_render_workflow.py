@@ -1141,7 +1141,7 @@ def _bind_undo_host(track, extra_sources=()):
 
 
 def _undo_track():
-    from krok_helper.subtitle_render.models import TimingChar, TimingLine, TimingTrack
+    from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine, TimingTrack
 
     line = TimingLine(chars=[TimingChar("あ", 1000)], end_ms=2000)
     return TimingTrack(lines=[line])
@@ -1202,7 +1202,7 @@ def test_undo_skips_stale_entries() -> None:
 
 
 def test_line_animation_batch_edit_supports_undo_redo() -> None:
-    from krok_helper.subtitle_render.models import LineAnimationOverride, TimingChar, TimingLine, TimingTrack
+    from krok_helper.subtitle_render.domain.models import LineAnimationOverride, TimingChar, TimingLine, TimingTrack
 
     track = TimingTrack(
         lines=[

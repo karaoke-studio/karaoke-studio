@@ -16,7 +16,7 @@ from dataclasses import dataclass, fields as dataclass_fields
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from krok_helper.subtitle_render.models import StylePreset, SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import StylePreset, SubtitleStyleScheme
 from krok_helper.subtitle_render.n3.font_scheme import convert_n3_font_scheme
 
 

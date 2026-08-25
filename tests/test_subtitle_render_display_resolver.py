@@ -8,7 +8,7 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     resolve_display_lines,
     resolve_display_lines_for_style,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 

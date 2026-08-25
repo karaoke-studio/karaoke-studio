@@ -35,7 +35,7 @@ from krok_helper.subtitle_render.engine.layout.display.signal import (
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.engine.timing.show_time import protect_time_ms
 from krok_helper.subtitle_render.engine.value_signature import value_signature
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
 

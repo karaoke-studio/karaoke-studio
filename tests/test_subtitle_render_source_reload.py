@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     GuideSymbol,
     TimingChar,
     TimingLine,

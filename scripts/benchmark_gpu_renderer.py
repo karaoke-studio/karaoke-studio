@@ -20,7 +20,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     RubyAnnotation,
     Style,
     TimingChar,
@@ -61,7 +61,7 @@ def _percentile(values: list[float], fraction: float) -> float:
 
 
 def _load_project(project_path: Path) -> tuple[TimingTrack, Style, int, int, int]:
-    from krok_helper.subtitle_render.models import style_from_dict
+    from krok_helper.subtitle_render.domain.models import style_from_dict
     from krok_helper.subtitle_render.project.store import load_render_project
     from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 

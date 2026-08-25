@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from krok_helper.subtitle_render.engine.render.core.animator import line_animation_state
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     LineAnimationOverride,
     Style,
     TimingLine,

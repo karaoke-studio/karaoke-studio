@@ -23,7 +23,7 @@ from typing import Any
 
 from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
 from krok_helper.subtitle_render.domain.timing import TimingTrack
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 
 _EXE_NAME = "krok_subtitle_renderer.exe" if os.name == "nt" else "krok_subtitle_renderer"
 _SHARED_FRAME_HEADER = struct.Struct("<10i")

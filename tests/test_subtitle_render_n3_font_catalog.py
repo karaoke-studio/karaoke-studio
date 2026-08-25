@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     normalize_style_font_families,
     resolve_qt_font_family,
 )
-from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme, TitleOverlay
+from krok_helper.subtitle_render.domain.models import Style, SubtitleStyleScheme, TitleOverlay
 
 
 def _compare(left: str, right: str) -> int:

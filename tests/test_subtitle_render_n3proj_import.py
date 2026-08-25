@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     Style,
     default_title_scheme,
     guide_symbol_from_dict,

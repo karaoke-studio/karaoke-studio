@@ -40,7 +40,7 @@ DEFAULT_PROJECT = Path(r"D:\カラオケ\songs\A stain\A stain.yurika")
 
 def _synthetic_track(start_ms: int):
     """无外部工程时的回退：合成多行 + ruby 的卡拉OK 轨道（贴近 utopia+glow+ruby 场景）。"""
-    from krok_helper.subtitle_render.models import (
+    from krok_helper.subtitle_render.domain.models import (
         RubyAnnotation,
         TimingChar,
         TimingLine,
@@ -163,7 +163,7 @@ def main() -> None:
 
     from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
     from krok_helper.subtitle_render.frontend.preview.preview_async import preview_render_target_size
-    from krok_helper.subtitle_render.models import style_from_dict
+    from krok_helper.subtitle_render.domain.models import style_from_dict
     from krok_helper.subtitle_render.project.store import load_render_project
     from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
     from PyQt6.QtGui import QImage, QPainter
@@ -173,7 +173,7 @@ def main() -> None:
 
     proc_levels = [int(x) for x in args.procs.split(",") if x.strip()]
 
-    from krok_helper.subtitle_render.models import Style
+    from krok_helper.subtitle_render.domain.models import Style
 
     if Path(args.project).exists():
         data = load_render_project(Path(args.project))

@@ -76,7 +76,7 @@ from krok_helper.subtitle_render.domain.timing import (
     guide_symbol_role_labels,
     timing_line_start_ms,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     TITLE_SCHEME_NAME,
     Style,
     style_with_line_animation,

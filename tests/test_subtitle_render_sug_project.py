@@ -21,7 +21,7 @@ from strange_uta_game.backend.infrastructure.parsers.annotated_text import (
 from krok_helper.subtitle_render.sources import sug as sug_project_module
 from krok_helper.subtitle_render.engine.painter import _effective_track_time_ms
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.native.protocol import track_to_ir
 from krok_helper.subtitle_render.sources.sug import (
     load_sug_timing_track,

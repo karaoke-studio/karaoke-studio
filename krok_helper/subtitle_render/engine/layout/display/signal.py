@@ -10,7 +10,7 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
     section_head_line_indices,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 

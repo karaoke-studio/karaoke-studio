@@ -70,7 +70,7 @@ def main() -> int:
 
     from krok_helper.subtitle_render.frontend.preview.preview_async import GpuAsyncSubtitleRenderer
     from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
-    from krok_helper.subtitle_render.models import style_from_dict
+    from krok_helper.subtitle_render.domain.models import style_from_dict
     from krok_helper.subtitle_render.n3.project_import import load_n3proj
     from krok_helper.subtitle_render.project.store import load_render_project
     from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc

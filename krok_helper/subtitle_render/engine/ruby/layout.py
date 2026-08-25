@@ -30,7 +30,7 @@ from krok_helper.subtitle_render.engine.text import (
 )
 from krok_helper.subtitle_render.engine.text import char_left_positions
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 
 

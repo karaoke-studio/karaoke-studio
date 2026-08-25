@@ -26,7 +26,7 @@ from PyQt6.QtGui import QImage, QPainter
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.domain.timing import TimingTrack
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,

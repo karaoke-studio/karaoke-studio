@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
     SubtitleRenderWindow,
 )
-from krok_helper.subtitle_render.models import TitleOverlay  # noqa: E402
+from krok_helper.subtitle_render.domain.models import TitleOverlay  # noqa: E402
 
 
 class _Recorder:

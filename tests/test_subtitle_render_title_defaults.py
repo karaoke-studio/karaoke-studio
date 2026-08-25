@@ -1,6 +1,6 @@
 """Regression tests for the built-in N3-aligned title scheme."""
 
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     default_title_scheme,
     migrate_legacy_app_title_default,
     style_from_dict,

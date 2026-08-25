@@ -1,6 +1,6 @@
 """SUG project adapter for the subtitle renderer.
 
-The renderer uses :class:`~krok_helper.subtitle_render.models.TimingTrack` as
+The renderer uses :class:`~krok_helper.subtitle_render.domain.models.TimingTrack` as
 its source-neutral timing model.  This module maps StrangeUtaGame ``.sug``
 projects directly into that model, avoiding a lossy/temporary Nicokara LRC
 export step in the host workflow.

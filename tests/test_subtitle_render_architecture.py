@@ -156,7 +156,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
 
 def test_domain_value_modules_are_grouped_in_one_package() -> None:
     domain_root = ROOT / "domain"
-    module_names = {"background.py", "paint.py", "timing.py"}
+    module_names = {"background.py", "models.py", "paint.py", "timing.py"}
 
     assert {"__init__.py", *module_names} <= {
         path.name for path in domain_root.glob("*.py")
@@ -178,7 +178,10 @@ def test_background_consumers_use_the_focused_domain_contract() -> None:
         module = _module_name(path)
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or node.module != f"{PACKAGE}.models":
+            if (
+                not isinstance(node, ast.ImportFrom)
+                or node.module != f"{PACKAGE}.domain.models"
+            ):
                 continue
             imported = {alias.name for alias in node.names} & legacy_names
             if imported:
@@ -204,7 +207,10 @@ def test_paint_consumers_use_the_focused_domain_contract() -> None:
         module = _module_name(path)
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or node.module != f"{PACKAGE}.models":
+            if (
+                not isinstance(node, ast.ImportFrom)
+                or node.module != f"{PACKAGE}.domain.models"
+            ):
                 continue
             imported = {alias.name for alias in node.names} & legacy_names
             if imported:
@@ -246,7 +252,10 @@ def test_timing_consumers_use_the_focused_domain_contract() -> None:
         module = _module_name(path)
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or node.module != f"{PACKAGE}.models":
+            if (
+                not isinstance(node, ast.ImportFrom)
+                or node.module != f"{PACKAGE}.domain.models"
+            ):
                 continue
             imported = {alias.name for alias in node.names} & legacy_names
             if imported:
@@ -268,12 +277,18 @@ def test_timing_codec_consumers_use_the_focused_persistence_contract() -> None:
     }
     violations: dict[str, list[str]] = defaultdict(list)
     for path in ROOT.rglob("*.py"):
-        if path == ROOT / "models.py" or path == ROOT / "serialization" / "timing.py":
+        if (
+            path == ROOT / "domain" / "models.py"
+            or path == ROOT / "serialization" / "timing.py"
+        ):
             continue
         module = _module_name(path)
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or node.module != f"{PACKAGE}.models":
+            if (
+                not isinstance(node, ast.ImportFrom)
+                or node.module != f"{PACKAGE}.domain.models"
+            ):
                 continue
             imported = {alias.name for alias in node.names} & legacy_names
             if imported:
@@ -307,7 +322,7 @@ def test_subtitle_render_host_contract_has_no_implementation_dependencies() -> N
         "PyQt6",
         "krok_helper.subtitle_render.engine",
         "krok_helper.subtitle_render.frontend",
-        "krok_helper.subtitle_render.models",
+        "krok_helper.subtitle_render.domain.models",
         "krok_helper.subtitle_render.native.backend",
     )
 

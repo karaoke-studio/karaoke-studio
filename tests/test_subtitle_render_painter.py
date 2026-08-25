@@ -130,7 +130,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (  # noqa: E40
     SCOPE_GROUP,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine  # noqa: E402
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     GuideSymbol,
     KaraokeColors,
     KaraokeColorState,
@@ -7869,7 +7869,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (  # noqa: E402
     auto_entry_reserve_ms,
     auto_exit_reserve_ms,
 )
-from krok_helper.subtitle_render.models import style_from_dict, style_to_dict  # noqa: E402
+from krok_helper.subtitle_render.domain.models import style_from_dict, style_to_dict  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_latin_font,
     _char_layout_width,
@@ -8543,7 +8543,7 @@ from krok_helper.subtitle_render.engine.layout.page.assignment import (  # noqa:
     auto_assign_layouts_by_page,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import assign_lanes  # noqa: E402
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     LyricsLayout,
     rescale_font_sizes,
     rescale_layout_sizes,
@@ -9462,7 +9462,7 @@ def test_paint_frame_renders_extra_tracks(qapp):
 
 def test_display_windows_for_style_maps_line_indices_and_overrides():
     from krok_helper.subtitle_render.engine.painter import display_windows_for_style
-    from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+    from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
 
     line1 = TimingLine(chars=[TimingChar("あ", 5000)], end_ms=6000)
     blank = TimingLine(is_blank=True)
@@ -10339,7 +10339,7 @@ def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
     from krok_helper.subtitle_render.engine.layout.page.plan import (
         project_page_plan_to_legacy_fields,
     )
-    from krok_helper.subtitle_render.models import ensure_page_layout_defaults
+    from krok_helper.subtitle_render.domain.models import ensure_page_layout_defaults
 
     style = ensure_page_layout_defaults(
         replace(

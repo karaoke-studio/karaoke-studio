@@ -34,7 +34,7 @@ from krok_helper.subtitle_render.sources.guide_symbols import (
     guide_symbol_path,
     import_svg_guide_symbol,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     GuideSymbol,
     Style,
     SubtitleStyleScheme,

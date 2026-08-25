@@ -14,7 +14,7 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     track_duration_ms,
     visible_display_lines,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     TrackPage,
     TrackPagePlan,
     TrackSection,

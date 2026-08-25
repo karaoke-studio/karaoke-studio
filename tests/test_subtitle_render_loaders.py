@@ -41,7 +41,7 @@ from strange_uta_game.backend.infrastructure.persistence.sug_io import (  # noqa
 )
 
 from krok_helper.models import MediaInfo  # noqa: E402
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     GuideSymbol,
     TimingChar,
     TimingLine,

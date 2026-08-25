@@ -25,7 +25,7 @@ from krok_helper.subtitle_render.frontend.editor import lyrics_list  # noqa: E40
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
 from krok_helper.subtitle_render.project import controller as project_controller_module  # noqa: E402
 from krok_helper.subtitle_render.project import store as project_store_module  # noqa: E402
-from krok_helper.subtitle_render.models import (  # noqa: E402
+from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     BackgroundSource,
     LineAnimationOverride,
     Style,
@@ -2648,7 +2648,7 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
 
     # 恢复到新窗口（布局数量需覆盖 layout_index=1）
     from dataclasses import replace as dc_replace
-    from krok_helper.subtitle_render.models import LyricsLayout, style_to_dict
+    from krok_helper.subtitle_render.domain.models import LyricsLayout, style_to_dict
 
     data["style"] = style_to_dict(
         dc_replace(win._style, layouts=[LyricsLayout(name="コーラス")])

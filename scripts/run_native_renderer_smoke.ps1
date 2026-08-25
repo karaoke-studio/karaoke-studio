@@ -76,7 +76,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
 
-from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.models import Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, SharedFrameRingReader
 
 

@@ -19,7 +19,7 @@ from krok_helper.subtitle_render.native.backend import (
     SharedFrameRingReader,
     resolve_native_renderer_path,
 )
-from krok_helper.subtitle_render.models import (
+from krok_helper.subtitle_render.domain.models import (
     GuideSymbol,
     KaraokeColors,
     KaraokeColorState,
