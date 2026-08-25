@@ -131,7 +131,6 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
-from krok_helper.subtitle_render.engine.timing.timeline import apply_n3_seq_line_breaks
 from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
@@ -242,6 +241,10 @@ from krok_helper.subtitle_render.frontend.project.source_watch import (
     subtitle_source_digest,
     subtitle_source_key,
 )
+from krok_helper.subtitle_render.project.load import (
+    ProjectLoadPlan,
+    apply_track_project_data,
+)
 from krok_helper.subtitle_render.settings.screen import (
     ScreenSettings,
     SCREEN_FPS_OPTIONS,
@@ -264,13 +267,10 @@ from krok_helper.subtitle_render.domain.timing import (
     timing_line_start_ms,
 )
 from krok_helper.subtitle_render.serialization.timing import (
-    guide_symbol_from_dict,
     guide_symbol_to_dict,
-    line_animation_override_from_dict,
     line_animation_override_to_dict,
     subtitle_loading_settings_from_dict,
     subtitle_loading_settings_to_dict,
-    track_page_plan_from_dict,
 )
 from krok_helper.subtitle_render.domain.models import (
     assign_role_to_title_rows,
@@ -313,7 +313,6 @@ from krok_helper.subtitle_render.settings.preferences import (
 from krok_helper.subtitle_render.project.controller import (
     SubtitleProjectController,
 )
-from krok_helper.subtitle_render.project.load import ProjectLoadPlan
 from krok_helper.subtitle_render.project.recovery import ProjectRecoveryPolicy
 from krok_helper.subtitle_render.project.resources import (
     find_missing_project_resources,
@@ -1564,16 +1563,26 @@ class SubtitleRenderWindow(QWidget):
         # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
         if plan.subtitle_path is not None and plan.subtitle_path.is_file():
             self.load_subtitle_source(plan.subtitle_path)
-            self._apply_line_breaks_before(plan.line_breaks_before)
-            self._apply_line_layout_indices(plan.line_layout_indices)
             if self._timing_track is not None:
-                self._restore_track_page_state(self._timing_track, plan.source_data)
-            self._apply_char_role_labels(plan.char_role_labels)
-            guide_mismatches = self._apply_guide_symbol_rows(
-                self._timing_track, plan.line_guide_symbols
-            )
-            self._apply_inline_guide_symbol_rows(
-                self._timing_track, plan.line_inline_guide_symbols
+                applied_track_state = apply_track_project_data(
+                    self._timing_track,
+                    self._style,
+                    plan.source_data,
+                )
+            else:
+                applied_track_state = None
+            if (
+                applied_track_state is not None
+                and applied_track_state.char_role_labels_changed
+            ):
+                self._lyrics_panel.set_track(self._timing_track)
+                self._lyrics_panel.set_role_options(self._merged_role_options())
+                self._property_panel.set_roles(self._content_role_options())
+                self._preview_panel.set_track(self._timing_track)
+            guide_mismatches = (
+                applied_track_state.guide_symbol_mismatches
+                if applied_track_state is not None
+                else ()
             )
             if guide_mismatches:
                 rows = "、".join(str(row + 1) for row in guide_mismatches[:12])
@@ -1585,13 +1594,6 @@ class SubtitleRenderWindow(QWidget):
                 )
             self._lyrics_panel.set_track(self._timing_track)
             self._preview_panel.set_track(self._timing_track)
-            if self._timing_track is not None:
-                self._apply_display_override_rows(
-                    self._timing_track, plan.line_display_overrides
-                )
-                self._apply_animation_override_rows(
-                    self._timing_track, plan.line_animation_overrides
-                )
             self._refresh_tracks_view_windows()
         if self._defer_project_assets:
             self._queue_project_deferred_loads(plan)
@@ -3514,84 +3516,11 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_after_track_structure_changed()
         return True
 
-    def _apply_line_layout_indices(self, payload: object) -> None:
-        """把项目文件里的每行布局引用套回刚加载的 track。"""
-        track = self._timing_track
-        if track is None or not isinstance(payload, list):
-            return
-        limit = len(self._style.layouts)
-        for line, value in zip(track.lines, payload):
-            try:
-                index = int(value)
-            except (TypeError, ValueError):
-                continue
-            line.layout_index = index if 0 <= index <= limit else 0
-        self._lyrics_panel.set_style(self._style)
-        self._preview_panel.set_style(self._style)
-
     @staticmethod
     def _line_break_rows(track: Optional[TimingTrack]) -> Optional[list[str]]:
         if track is None:
             return None
         return [str(getattr(line, "break_before", "none")) for line in track.lines]
-
-    def _apply_line_breaks_before(self, payload: object) -> None:
-        """恢复 N3 的显式 PageBreak / ParagraphBreak 页边界。"""
-        track = self._timing_track
-        if track is None or not isinstance(payload, list):
-            return
-        for line, value in zip(track.lines, payload):
-            kind = str(value)
-            line.break_before = kind if kind in {"page", "paragraph"} else "none"
-        self._lyrics_panel.set_track(track)
-        self._preview_panel.set_track(track)
-
-    def _restore_track_page_state(self, track: TimingTrack, payload: object) -> None:
-        """Restore schema-v2 page data or migrate schema-v1 line projections."""
-
-        data = payload if isinstance(payload, dict) else {}
-        restored = track_page_plan_from_dict(data.get("page_plan"))
-        if restored is None:
-            saved_breaks = data.get("line_breaks_before")
-            has_complete_legacy_breaks = (
-                isinstance(saved_breaks, list)
-                and len(saved_breaks) >= len(track.lines)
-            )
-            if not has_complete_legacy_breaks:
-                # Early schema-v1 projects did not persist break_before.  At
-                # that time the LRC parser always reconstructed N3's default
-                # SeqLinesBreaker boundaries (two lines per page).  The modern
-                # parser intentionally stays structure-free, so replay that
-                # historical rule only for in-memory legacy migration.
-                apply_n3_seq_line_breaks(track)
-            track.page_plan = build_legacy_page_plan(
-                track,
-                self._style,
-                section_gap_ms=max(int(self._style.section_gap_ms), 0),
-            )
-            track.loading_settings_mode = "custom"
-            track.loading_settings = SubtitleLoadingSettings(
-                time_gap_section_enabled=True,
-                section_gap_ms=max(int(self._style.section_gap_ms), 0),
-                blank_line_section_enabled=False,
-                rows_per_page=2,
-            )
-            track.loading_settings_snapshot = track.loading_settings
-        else:
-            track.page_plan = normalize_page_plan(track, self._style, restored)
-            mode = str(data.get("loading_settings_mode") or "global")
-            track.loading_settings_mode = (
-                mode if mode in {"global", "custom"} else "global"
-            )
-            track.loading_settings = (
-                subtitle_loading_settings_from_dict(data.get("loading_settings"))
-                if track.loading_settings_mode == "custom"
-                else None
-            )
-            track.loading_settings_snapshot = subtitle_loading_settings_from_dict(
-                data.get("loading_settings_snapshot")
-            )
-        project_page_plan_to_legacy_fields(track, self._style)
 
     @staticmethod
     def _display_override_rows(track: Optional[TimingTrack]) -> Optional[list]:
@@ -3610,35 +3539,12 @@ class SubtitleRenderWindow(QWidget):
         return rows if any(row is not None for row in rows) else None
 
     @staticmethod
-    def _apply_display_override_rows(track: TimingTrack, payload: object) -> None:
-        """把项目文件里的逐行显示/隐藏覆盖套回刚加载的 track。"""
-        if not isinstance(payload, list):
-            return
-        for line, row in zip(track.lines, payload):
-            if not isinstance(row, (list, tuple)) or len(row) != 2:
-                continue
-            start, end = row
-            line.display_start_override_ms = (
-                int(start) if isinstance(start, (int, float)) else None
-            )
-            line.display_end_override_ms = (
-                int(end) if isinstance(end, (int, float)) else None
-            )
-
-    @staticmethod
     def _animation_override_rows(track: Optional[TimingTrack]) -> Optional[list]:
         """采集逐行动画覆盖；全部继承全局时不写项目字段。"""
         if track is None:
             return None
         rows = [line_animation_override_to_dict(line.animation_override) for line in track.lines]
         return rows if any(row is not None for row in rows) else None
-
-    @staticmethod
-    def _apply_animation_override_rows(track: TimingTrack, payload: object) -> None:
-        if not isinstance(payload, list):
-            return
-        for line, row in zip(track.lines, payload):
-            line.animation_override = line_animation_override_from_dict(row)
 
     def _collect_char_role_labels(self) -> Optional[list]:
         """收集主字幕每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
@@ -3657,27 +3563,6 @@ class SubtitleRenderWindow(QWidget):
             else:
                 rows.append(None)
         return rows if any_label else None
-
-    def _apply_char_role_labels(self, payload: object) -> None:
-        """把项目文件 / N3 导入的逐字角色标签套回刚加载的 track。"""
-        track = self._timing_track
-        if track is None or not isinstance(payload, list):
-            return
-        changed = False
-        for line, labels in zip(track.lines, payload):
-            if not isinstance(labels, list):
-                continue
-            for ch, label in zip(line.chars, labels):
-                new_label = str(label) if label else None
-                if ch.role_label != new_label:
-                    ch.role_label = new_label
-                    changed = True
-        if not changed:
-            return
-        self._lyrics_panel.set_track(track)
-        self._lyrics_panel.set_role_options(self._merged_role_options())
-        self._property_panel.set_roles(self._content_role_options())
-        self._preview_panel.set_track(track)
 
     @staticmethod
     def _guide_symbol_rows(track: Optional[TimingTrack]) -> Optional[list]:
@@ -3701,43 +3586,6 @@ class SubtitleRenderWindow(QWidget):
         ]
         return rows if any(row is not None for row in rows) else None
 
-    @staticmethod
-    def _apply_guide_symbol_rows(track: TimingTrack, payload: object) -> list[int]:
-        if not isinstance(payload, list):
-            return []
-        mismatches: list[int] = []
-        for row, (line, value) in enumerate(zip(track.lines, payload)):
-            symbol = guide_symbol_from_dict(value)
-            if (
-                symbol is not None
-                and symbol.replacement_prefix
-                and guide_symbol_replacement_count(line, symbol) == 0
-            ):
-                line.guide_symbol = None
-                mismatches.append(row)
-                continue
-            line.guide_symbol = symbol
-        return mismatches
-
-    @staticmethod
-    def _apply_inline_guide_symbol_rows(track: TimingTrack, payload: object) -> None:
-        if not isinstance(payload, list):
-            return
-        for line, value in zip(track.lines, payload):
-            symbols: dict[int, GuideSymbol] = {}
-            if isinstance(value, dict):
-                for raw_index, raw_symbol in value.items():
-                    try:
-                        index = int(raw_index)
-                    except (TypeError, ValueError):
-                        continue
-                    symbol = guide_symbol_from_dict(raw_symbol)
-                    if 0 <= index < len(line.chars) and guide_symbol_has_visual(
-                        symbol
-                    ):
-                        symbols[index] = symbol
-            line.inline_guide_symbols = symbols
-
     # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
 
     def _apply_extra_subtitle_sources(self, payload: object) -> None:
@@ -3746,7 +3594,6 @@ class SubtitleRenderWindow(QWidget):
         self._active_source_index = 0
         self._title_source_active = False
         if isinstance(payload, list):
-            layout_limit = len(self._style.layouts)
             for item in payload:
                 if not isinstance(item, dict):
                     continue
@@ -3774,41 +3621,7 @@ class SubtitleRenderWindow(QWidget):
                 except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
                     continue
                 self._set_subtitle_source_baseline(path, track)
-                layout_indices = item.get("line_layout_indices")
-                if isinstance(layout_indices, list):
-                    for line, value in zip(track.lines, layout_indices):
-                        try:
-                            index = int(value)
-                        except (TypeError, ValueError):
-                            continue
-                        line.layout_index = index if 0 <= index <= layout_limit else 0
-                breaks = item.get("line_breaks_before")
-                if isinstance(breaks, list):
-                    for line, value in zip(track.lines, breaks):
-                        kind = str(value)
-                        line.break_before = (
-                            kind if kind in {"page", "paragraph"} else "none"
-                        )
-                role_rows = item.get("char_role_labels")
-                if isinstance(role_rows, list):
-                    for line, labels in zip(track.lines, role_rows):
-                        if not isinstance(labels, list):
-                            continue
-                        for ch, label in zip(line.chars, labels):
-                            ch.role_label = str(label) if label else None
-                self._apply_guide_symbol_rows(
-                    track, item.get("line_guide_symbols")
-                )
-                self._apply_inline_guide_symbol_rows(
-                    track, item.get("line_inline_guide_symbols")
-                )
-                self._apply_display_override_rows(
-                    track, item.get("line_display_overrides")
-                )
-                self._apply_animation_override_rows(
-                    track, item.get("line_animation_overrides")
-                )
-                self._restore_track_page_state(track, item)
+                apply_track_project_data(track, self._style, item)
                 name = str(item.get("name") or "").strip() or path.stem
                 self._extra_sources.append(
                     ExtraSubtitleSource(name=name, path=path, track=track)

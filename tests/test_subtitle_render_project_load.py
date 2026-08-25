@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from krok_helper.subtitle_render.project.load import ProjectLoadPlan
+from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.project.load import (
+    ProjectLoadPlan,
+    apply_track_project_data,
+)
 
 
 def test_project_load_plan_resolves_legacy_style_reference_height() -> None:
@@ -108,3 +113,46 @@ def test_project_load_plan_uses_existing_legacy_video_for_deferred_load(
     assert [(load.kind, load.payload) for load in plan.deferred_assets()] == [
         ("video", video)
     ]
+
+
+def test_apply_track_project_data_restores_all_line_projections() -> None:
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("甲", 1000)]),
+            TimingLine(chars=[TimingChar("乙", 2000)]),
+        ]
+    )
+
+    result = apply_track_project_data(
+        track,
+        Style(),
+        {
+            "line_breaks_before": ["page", "invalid"],
+            "line_layout_indices": [1, 99],
+            "char_role_labels": [["主唱"], ["和声"]],
+            "line_display_overrides": [[500, None], [None, 2600]],
+            "line_animation_overrides": [
+                {
+                    "entry_anim": "fade",
+                    "entry_duration_ms": 120,
+                    "exit_anim": "slide_out",
+                    "exit_duration_ms": 240,
+                    "karaoke_anim": "utopia",
+                },
+                None,
+            ],
+        },
+    )
+
+    assert result.char_role_labels_changed is True
+    assert result.guide_symbol_mismatches == ()
+    assert [line.break_before for line in track.lines] == ["none", "page"]
+    assert [line.layout_index for line in track.lines] == [1, 0]
+    assert [line.chars[0].role_label for line in track.lines] == ["主唱", "和声"]
+    assert track.lines[0].display_start_override_ms == 500
+    assert track.lines[1].display_end_override_ms == 2600
+    assert track.lines[0].animation_override is not None
+    assert track.lines[0].animation_override.entry_anim == "fade"
+    assert track.lines[1].animation_override is None
+    assert track.page_plan is not None
+    assert track.loading_settings_mode == "custom"

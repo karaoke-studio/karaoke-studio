@@ -51,6 +51,7 @@ from krok_helper.subtitle_render.domain.models import (
     timing_line_start_ms,
 )
 from krok_helper.subtitle_render.project.store import project_payload
+from krok_helper.subtitle_render.project.load import apply_track_project_data
 
 
 def _symbol(tmp_path, *, duration_ms: int = 1000, count: int = 1) -> GuideSymbol:
@@ -1067,11 +1068,13 @@ def test_project_reload_skips_replacement_when_source_prefix_changed(tmp_path):
         ]
     )
 
-    mismatches = SubtitleRenderWindow._apply_guide_symbol_rows(
-        track, [payload, payload]
+    result = apply_track_project_data(
+        track,
+        Style(),
+        {"line_guide_symbols": [payload, payload]},
     )
 
-    assert mismatches == [1]
+    assert result.guide_symbol_mismatches == (1,)
     assert track.lines[0].guide_symbol == symbol
     assert track.lines[1].guide_symbol is None
 
@@ -1465,8 +1468,10 @@ def test_project_payload_and_reload_keep_inline_guide_symbols(tmp_path):
         ]
     )
 
-    SubtitleRenderWindow._apply_inline_guide_symbol_rows(
-        track, payload["line_inline_guide_symbols"]
+    apply_track_project_data(
+        track,
+        Style(),
+        {"line_inline_guide_symbols": payload["line_inline_guide_symbols"]},
     )
 
     assert track.lines[0].inline_guide_symbols == {1: symbol}
@@ -1478,7 +1483,11 @@ def test_project_reload_keeps_bitmap_inline_guide_symbols(tmp_path):
     payload = [{"0": guide_symbol_to_dict(symbol)}]
     track = TimingTrack(lines=[TimingLine(chars=[TimingChar("x", 1000)])])
 
-    SubtitleRenderWindow._apply_inline_guide_symbol_rows(track, payload)
+    apply_track_project_data(
+        track,
+        Style(),
+        {"line_inline_guide_symbols": payload},
+    )
 
     assert track.lines[0].inline_guide_symbols == {0: symbol}
 

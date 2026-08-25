@@ -3810,12 +3810,28 @@ def test_subtitle_render_window_consumes_typed_project_load_plan() -> None:
         for node in window_class.body
         if isinstance(node, ast.FunctionDef) and node.name == "_apply_project_data_inner"
     )
-    split_calls = {
+    direct_calls = {
         node.func.id
         for node in ast.walk(method)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
-    assert "split_project_paths" not in split_calls
+    assert "split_project_paths" not in direct_calls
+    assert "apply_track_project_data" in direct_calls
+    assert not any(
+        isinstance(node, ast.FunctionDef)
+        and node.name
+        in {
+            "_apply_line_layout_indices",
+            "_apply_line_breaks_before",
+            "_restore_track_page_state",
+            "_apply_char_role_labels",
+            "_apply_guide_symbol_rows",
+            "_apply_inline_guide_symbol_rows",
+            "_apply_display_override_rows",
+            "_apply_animation_override_rows",
+        }
+        for node in window_class.body
+    )
 
 
 def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
