@@ -17,12 +17,16 @@ from krok_helper.subtitle_render.contracts import (
     SubtitleRenderPage,
     SubtitleRenderSettingsProvider,
 )
+from krok_helper.subtitle_render.domain import background as background
 from krok_helper.subtitle_render.domain import models as models
+from krok_helper.subtitle_render.domain import paint as paint
+from krok_helper.subtitle_render.domain import timing as timing
 
-# Preserve the original public module path while keeping its implementation in
-# the domain package.  Existing plugins and automation scripts may still use
-# ``import krok_helper.subtitle_render.models``.
-sys.modules[f"{__name__}.models"] = models
+# Preserve the original public module paths while keeping their implementations
+# in the domain package. Existing plugins and automation scripts may still use
+# imports such as ``import krok_helper.subtitle_render.models``.
+for _module in (background, models, paint, timing):
+    sys.modules[f"{__name__}.{_module.__name__.rpartition('.')[2]}"] = _module
 
 if TYPE_CHECKING:
     from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
@@ -32,8 +36,11 @@ __all__ = [
     "SubtitleRenderPage",
     "SubtitleRenderSettingsProvider",
     "SubtitleRenderWindow",
+    "background",
     "create_embedded_subtitle_render",
     "models",
+    "paint",
+    "timing",
 ]
 
 

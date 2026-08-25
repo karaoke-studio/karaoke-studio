@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
+import importlib
 from pathlib import Path
 
 
@@ -162,6 +163,14 @@ def test_domain_value_modules_are_grouped_in_one_package() -> None:
         path.name for path in domain_root.glob("*.py")
     }
     assert not any((ROOT / name).exists() for name in module_names)
+
+
+def test_moved_domain_modules_keep_their_public_import_paths() -> None:
+    for module_name in ("background", "models", "paint", "timing"):
+        compatibility_module = importlib.import_module(f"{PACKAGE}.{module_name}")
+        domain_module = importlib.import_module(f"{PACKAGE}.domain.{module_name}")
+
+        assert compatibility_module is domain_module
 
 
 def test_background_consumers_use_the_focused_domain_contract() -> None:
