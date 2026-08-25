@@ -462,6 +462,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     SayatooLineLayout as _SayatooLineLayout,
     after_glow_loose_clip_rect as _after_glow_loose_clip_rect,
     after_glow_source_clip_rect as _after_glow_source_clip_rect,
+    adjust_fill_release_edges as _adjust_fill_release_edges,
     char_fade_opacity as _char_fade_opacity,
     char_drip_char_transform as _char_drip_char_transform,
     character_transform as _character_transform,
@@ -488,6 +489,12 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     glyph_run_needs_before_glow_split as _glyph_run_needs_before_glow_split,
     glyph_runs as _glyph_runs,
     fixed_line_geometry as _fixed_line_geometry,
+    fill_clip_band as _fill_clip_band,
+    fill_clip_band_for_glyphs as _fill_clip_band_for_glyphs,
+    fill_clip_band_for_indices as _fill_clip_band_for_indices,
+    fill_extent_end as _fill_extent_end,
+    fill_extent_left as _fill_extent_left,
+    fill_extent_start as _fill_extent_start,
     lane_alignment as _lane_alignment,
     layout_page_lines as _layout_page_lines,
     layout_line_uncached as _build_horizontal_line_uncached,
@@ -504,10 +511,12 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     line_layer_stack as _build_horizontal_line_layer_stack,
     n3_smart_font_size as _n3_smart_font_size,
     n3_main_fill_rect as _n3_main_fill_rect,
+    n3_following_wipe_band as _n3_following_wipe_band,
     n3_ruby_fill_rect as _n3_ruby_fill_rect,
     paint_bitmap_guide_glyph as _paint_horizontal_bitmap_guide_glyph,
     paint_bitmap_guide_glyphs as _paint_horizontal_bitmap_guide_glyphs,
     paint_bitmap_guide_transition_glyph as _paint_horizontal_bitmap_guide_transition_glyph,
+    offset_fill_segments as _offset_fill_segments,
     resolve_line_x as _resolve_line_x,
     resolve_line_x_smart as _resolve_line_x_smart,
     resolve_role_baseline_y as _resolve_role_baseline_y,
@@ -517,7 +526,12 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     role_visual_text_padding as _role_visual_text_padding,
     role_ruby_vertical_extra as _role_ruby_vertical_extra,
     row_layout_params as _row_layout_params,
+    run_fill_complete as _run_fill_complete,
     smart_horizontal_dx as _smart_horizontal_dx,
+    segment_fill_ratio as _segment_fill_ratio,
+    segment_wipe_band_at as _segment_wipe_band_at,
+    segment_wipe_edges as _segment_wipe_edges,
+    segment_wipe_times as _segment_wipe_times,
     spin_flip_skew as _spin_flip_skew,
     spin_flip_char_transform as _spin_flip_char_transform,
     ruby_after_clip_rect as _ruby_after_clip_rect,
@@ -6706,49 +6720,6 @@ def _karaoke_fill_segments(
     return _adjust_fill_release_edges(segments)
 
 
-def _adjust_fill_release_edges(segments: list[_FillSegment]) -> list[_FillSegment]:
-    """Apply N3 ``AdjustWipeEnd`` at overlapping character boxes.
-
-    N3 calculates the adjusted *position ratio* in DrawLeft/DrawRight layout-box
-    coordinates, then applies that ratio to the transformed ink geometry used by
-    WipeLeft.  Bearings and the primary edge therefore affect the visible end
-    point without changing the overlap decision itself.
-    """
-    adjusted = list(segments)
-    for index in range(len(adjusted) - 1):
-        current = adjusted[index]
-        following = adjusted[index + 1]
-        release_left = current.release_left if current.release_left is not None else current.left
-        release_right = current.release_right if current.release_right is not None else current.right
-        layout_left = current.layout_left if current.layout_left is not None else release_left
-        layout_right = current.layout_right if current.layout_right is not None else release_right
-        following_left = (
-            following.layout_left
-            if following.layout_left is not None
-            else (following.release_left if following.release_left is not None else following.left)
-        )
-        following_right = (
-            following.layout_right
-            if following.layout_right is not None
-            else (following.release_right if following.release_right is not None else following.right)
-        )
-        layout_width = max(layout_right - layout_left + 1, 1)
-        if layout_left <= following_left:
-            if layout_right >= following_left:
-                pose = max(0.0, min(1.0, (following_left - layout_left) / layout_width))
-                adjusted[index] = replace(
-                    current,
-                    release_right=release_left + (release_right - release_left) * pose,
-                )
-        elif layout_left <= following_right:
-            pose = max(0.0, min(1.0, (layout_right - following_right) / layout_width))
-            adjusted[index] = replace(
-                current,
-                release_left=release_right - (release_right - release_left) * pose,
-            )
-    return adjusted
-
-
 def _ruby_for_char_index(
     rubies: list[RubyAnnotation],
     line: TimingLine,
@@ -6806,257 +6777,6 @@ def _ruby_main_uses_base_timing(
     return False
 
 
-def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSegment]:
-    if dx == 0:
-        return segments
-    return [
-        _FillSegment(
-            left=segment.left + dx,
-            right=segment.right + dx,
-            release_left=(
-                segment.release_left + dx if segment.release_left is not None else None
-            ),
-            release_right=(
-                segment.release_right + dx if segment.release_right is not None else None
-            ),
-            layout_left=(
-                segment.layout_left + dx if segment.layout_left is not None else None
-            ),
-            layout_right=(
-                segment.layout_right + dx if segment.layout_right is not None else None
-            ),
-            start_ms=segment.start_ms,
-            end_ms=segment.end_ms,
-            ruby=segment.ruby,
-            indices=segment.indices,
-        )
-        for segment in segments
-    ]
-
-
-def _fill_extent_start(segments: list[_FillSegment]) -> float | None:
-    if not segments:
-        return None
-    first = segments[0]
-    return first.release_left if first.release_left is not None else first.left
-
-
-def _segment_wipe_edges(segment: _FillSegment) -> tuple[float, float]:
-    """Return the N3 drawing edges used by the moving wipe front.
-
-    ``left`` / ``right`` keep the glyph-ink bounds for layout and ruby mapping,
-    while ``release_*`` are the full DrawLeft/DrawRight-style bounds (including
-    the primary edge).  NicoKaraMaker3 interpolates across those full drawing
-    bounds for the *whole* character interval; ``AdjustWipeEnd`` only changes
-    the destination edge before interpolation.  Characters without drawable
-    ink (spaces) deliberately remain zero-width: their timing consumes time
-    without moving the visible front.  Falling back to ink bounds keeps
-    synthetic/legacy segments compatible.
-    """
-    if segment.right <= segment.left:
-        return segment.left, segment.left
-    left = (
-        segment.release_left if segment.release_left is not None else segment.left
-    )
-    right = (
-        segment.release_right if segment.release_right is not None else segment.right
-    )
-    return left, max(left, right)
-
-
-def _segment_wipe_times(segment: _FillSegment) -> tuple[int, int]:
-    """Return the effective N3 wipe window for one main-text segment."""
-    if segment.ruby_base_index is not None:
-        return int(segment.start_ms), int(segment.end_ms)
-    if segment.ruby is not None:
-        return int(segment.ruby.pos_start_ms), int(segment.ruby.pos_end_ms)
-    return int(segment.start_ms), int(segment.end_ms)
-
-
-def _segment_wipe_band_at(
-    segment: _FillSegment,
-    t_ms: int,
-    rtl: bool,
-) -> tuple[int, int]:
-    """Return one segment's wipe band, including its zero-progress boundary."""
-    wipe_left, wipe_right = _segment_wipe_edges(segment)
-    ratio = _segment_fill_ratio(segment, t_ms)
-    if rtl:
-        boundary = wipe_right - int(round((wipe_right - wipe_left) * ratio))
-        return boundary, wipe_right
-    boundary = wipe_left + int(round((wipe_right - wipe_left) * ratio))
-    return wipe_left, boundary
-
-
-def _n3_following_wipe_band(
-    segments: list[_FillSegment],
-    indices: set[int],
-    t_ms: int,
-    rtl: bool,
-) -> tuple[int, int] | None:
-    """Keep a completed glyph on N3's shared front until its successor ends.
-
-    N3 continues treating the preceding character as ``IsWiping`` while the
-    following character is active.  At the exact hand-off it still uses the
-    preceding segment's adjusted endpoint; afterwards it reuses the following
-    segment's moving boundary.  This is what releases overlapping outlines
-    continuously instead of fully opening each glyph at its own end.
-
-    N3's implementation is left-to-right.  Keep this compatibility behavior
-    scoped away from the application's independent RTL extension.
-    """
-    if rtl or not indices:
-        return None
-    positions = [
-        position
-        for position, segment in enumerate(segments)
-        if segment.indices and any(index in indices for index in segment.indices)
-    ]
-    if not positions:
-        return None
-    current_position = max(positions)
-    if current_position >= len(segments) - 1:
-        return None
-    current = segments[current_position]
-    following = segments[current_position + 1]
-    # N3 cannot reuse a following space/no-wipe glyph because it has no
-    # transformed geometry.  Its WipeLeft fallback leaves the completed glyph
-    # fully released instead of holding its outline/glow through the pause.
-    if following.right <= following.left:
-        return None
-    current_start, current_end = _segment_wipe_times(current)
-    _following_start, following_end = _segment_wipe_times(following)
-    if not (
-        current_start < t_ms < following_end
-        and current_start != following_end
-        and _segment_fill_ratio(current, t_ms) >= 1.0
-    ):
-        return None
-    if t_ms <= current_end:
-        return _segment_wipe_band_at(current, t_ms, rtl=False)
-    return _segment_wipe_band_at(following, t_ms, rtl=False)
-
-
-def _fill_extent_end(
-    segments: list[_FillSegment],
-    t_ms: int,
-) -> float:
-    """Return the current right edge of the continuous karaoke scan.
-
-    Motion follows the N3 drawing bounds for the complete interval.  In
-    particular, the destination is the AdjustWipeEnd-clamped DrawRight from
-    the first partial frame onward; switching from ink ``right`` to DrawRight
-    only on the completion frame causes a visible one-frame jump.
-    """
-    if not segments:
-        return 0
-    fill_end, _ = _segment_wipe_edges(segments[0])
-    for segment in segments:
-        ratio = _segment_fill_ratio(segment, t_ms)
-        if ratio <= 0.0:
-            break
-        if segment.right <= segment.left:
-            if ratio < 1.0:
-                break
-            continue
-        wipe_left, wipe_right = _segment_wipe_edges(segment)
-        if ratio >= 1.0:
-            fill_end = max(fill_end, wipe_right)
-            continue
-        fill_end = max(
-            fill_end,
-            wipe_left + int(round((wipe_right - wipe_left) * ratio)),
-        )
-        break
-    return fill_end
-
-
-def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> float:
-    """RTL：返回已唱区的左缘 x（扫光从右向左推进时的移动边）。
-
-    句中停顿的间隙中点推进与 :func:`_fill_extent_end` 镜像。
-    """
-    if not segments:
-        return 0
-    _, scanline = _segment_wipe_edges(segments[0])
-    for segment in segments:
-        ratio = _segment_fill_ratio(segment, t_ms)
-        if ratio <= 0.0:
-            break
-        if segment.right <= segment.left:
-            if ratio < 1.0:
-                break
-            continue
-        wipe_left, wipe_right = _segment_wipe_edges(segment)
-        if ratio >= 1.0:
-            scanline = min(scanline, wipe_left)
-            continue
-        scanline = min(
-            scanline,
-            wipe_right - int(round((wipe_right - wipe_left) * ratio)),
-        )
-        break
-    return scanline
-
-
-def _fill_clip_band(
-    segments: list[_FillSegment],
-    t_ms: int,
-    rtl: bool,
-) -> tuple[int, int] | None:
-    """已唱区水平裁剪带 ``(left, right)``；空带返回 ``None``。
-
-    LTR：左缘固定在首字符左缘，右缘随扫光右移；
-    RTL：右缘固定在首字符（最右）右缘，左缘随扫光左移。
-    """
-    if not segments:
-        return None
-    if rtl:
-        left = _fill_extent_left(segments, t_ms)
-        right = max(_segment_wipe_edges(segment)[1] for segment in segments)
-    else:
-        left = _fill_extent_start(segments)
-        right = _fill_extent_end(segments, t_ms)
-    if left is None or right is None or right <= left:
-        return None
-    return left, right
-
-
-def _fill_clip_band_for_indices(
-    segments: list[_FillSegment],
-    indices: set[int],
-    t_ms: int,
-    rtl: bool,
-) -> tuple[int, int] | None:
-    if not indices:
-        return _fill_clip_band(segments, t_ms, rtl)
-    scoped = [
-        segment
-        for segment in segments
-        if segment.indices and any(index in indices for index in segment.indices)
-    ]
-    while scoped and (
-        scoped[0].right <= scoped[0].left
-        or _segment_fill_ratio(scoped[0], t_ms) <= 0.0
-    ):
-        scoped = scoped[1:]
-    return _fill_clip_band(scoped, t_ms, rtl)
-
-
-def _fill_clip_band_for_glyphs(
-    segments: list[_FillSegment],
-    glyphs: list[_GlyphLayout],
-    t_ms: int,
-    rtl: bool,
-) -> tuple[int, int] | None:
-    return _fill_clip_band_for_indices(
-        segments,
-        {glyph.index for glyph in glyphs},
-        t_ms,
-        rtl,
-    )
-
-
 _BITMAP_GUIDE_PORTS = BitmapGuidePorts(
     fill_clip_band=lambda *args, **kwargs: _fill_clip_band(*args, **kwargs),
     fill_clip_band_for_glyphs=lambda *args, **kwargs: (
@@ -7066,28 +6786,6 @@ _BITMAP_GUIDE_PORTS = BitmapGuidePorts(
         _n3_following_wipe_band(*args, **kwargs)
     ),
 )
-
-
-def _run_fill_complete(
-    segments: list[_FillSegment],
-    indices: set[int],
-    t_ms: int,
-) -> bool:
-    """run 覆盖的走字分段是否已全部唱完（扫光线已越过 run 前缘）。
-
-    唱完后已唱层不再需要在扫光线处裁切，行缘的发光/描边可完整外扩。
-    """
-    if indices:
-        scoped = [
-            segment
-            for segment in segments
-            if segment.indices and any(index in indices for index in segment.indices)
-        ]
-    else:
-        scoped = segments
-    return bool(scoped) and all(
-        _segment_fill_ratio(segment, t_ms) >= 1.0 for segment in scoped
-    )
 
 
 _GLYPH_LAYER_PORTS = GlyphLayerPorts(
@@ -7152,24 +6850,6 @@ _CHAR_TRANSITION_LAYER_STACK_PORTS = TransitionLayerStackPorts(
     ),
     glyph_run_layer=lambda *args, **kwargs: _GlyphRunLayer(*args, **kwargs),
 )
-
-
-def _segment_fill_ratio(segment: _FillSegment, t_ms: int) -> float:
-    if segment.ruby is None:
-        return char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
-    if segment.ruby_base_index is not None:
-        progress = _main_text_ruby_progress_ratio(
-            segment.ruby, t_ms, mode="reading_units"
-        )
-        return max(
-            0.0,
-            min(
-                1.0,
-                progress * max(segment.ruby_base_count, 1)
-                - segment.ruby_base_index,
-            ),
-        )
-    return _main_text_ruby_progress_ratio(segment.ruby, t_ms)
 
 
 def _character_fill_ratio(

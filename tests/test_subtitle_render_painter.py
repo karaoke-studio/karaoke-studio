@@ -213,6 +213,29 @@ def test_painter_keeps_layout_cache_key_compatibility_exports() -> None:
     assert subtitle_painter._value_signature is value_signature
 
 
+def test_painter_keeps_horizontal_wipe_compatibility_exports() -> None:
+    from krok_helper.subtitle_render.engine.render.elements.horizontal import wipe
+
+    names = {
+        "adjust_fill_release_edges",
+        "fill_clip_band",
+        "fill_clip_band_for_glyphs",
+        "fill_clip_band_for_indices",
+        "fill_extent_end",
+        "fill_extent_left",
+        "fill_extent_start",
+        "n3_following_wipe_band",
+        "offset_fill_segments",
+        "run_fill_complete",
+        "segment_fill_ratio",
+        "segment_wipe_band_at",
+        "segment_wipe_edges",
+        "segment_wipe_times",
+    }
+    for name in names:
+        assert getattr(subtitle_painter, f"_{name}") is getattr(wipe, name)
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])

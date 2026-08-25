@@ -1750,7 +1750,7 @@ def test_horizontal_contracts_have_one_painter_free_owner() -> None:
         node.name for node in painter_tree.body if isinstance(node, ast.ClassDef)
     }
 
-    assert {"__init__.py", "contracts.py"} <= {
+    assert {"__init__.py", "contracts.py", "wipe.py"} <= {
         path.name
         for path in (ROOT / "engine/render/elements/horizontal").glob("*.py")
     }
@@ -1989,6 +1989,52 @@ def test_horizontal_transition_math_has_one_painter_free_owner() -> None:
         "_utopia_wipe_scale",
     }.isdisjoint(painter_functions)
     targets = _import_targets(transition_owner, transition_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
+def test_horizontal_wipe_geometry_has_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    wipe_owner = f"{owner}.wipe"
+    wipe_path = ROOT / "engine/render/elements/horizontal/wipe.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    names = {
+        "adjust_fill_release_edges",
+        "fill_clip_band",
+        "fill_clip_band_for_glyphs",
+        "fill_clip_band_for_indices",
+        "fill_extent_end",
+        "fill_extent_left",
+        "fill_extent_start",
+        "n3_following_wipe_band",
+        "offset_fill_segments",
+        "run_fill_complete",
+        "segment_fill_ratio",
+        "segment_wipe_band_at",
+        "segment_wipe_edges",
+        "segment_wipe_times",
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in names}.isdisjoint(painter_members)
+    targets = _import_targets(wipe_owner, wipe_path)
     assert f"{PACKAGE}.engine.painter" not in targets
     assert not any(
         target == f"{PACKAGE}.frontend"
