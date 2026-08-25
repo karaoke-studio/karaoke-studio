@@ -49,6 +49,7 @@ from krok_helper.subtitle_render.settings.preferences import (  # noqa: E402
     load_app_style_preferences,
     merge_common_style_preferences,
     update_app_output_preferences,
+    update_app_runtime_preferences,
 )
 from krok_helper.subtitle_render.project.store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
@@ -585,6 +586,55 @@ def test_app_runtime_preferences_fall_back_for_malformed_sections():
     assert loaded.auto_save_enabled is True
     assert loaded.auto_save_interval_minutes == 5
     assert loaded.project_backup_count == 5
+
+
+def test_app_runtime_preferences_update_preserves_future_fields():
+    existing = {
+        "future_root": 1,
+        "auto_chorus": {"future_chorus": 2},
+        "auto_save": {"future_auto_save": 3},
+        "backup": {"future_backup": 4},
+    }
+
+    updated = update_app_runtime_preferences(
+        existing,
+        auto_chorus_role="和声",
+        auto_chorus_begin_chars="[{",
+        auto_chorus_end_chars="]}",
+        auto_chorus_overwrite=True,
+        selected_scheme_key="custom:不存在",
+        preview_splitter_ratio=0.55555,
+        auto_save_enabled=False,
+        auto_save_interval_minutes=7,
+        project_backup_count=9,
+    )
+
+    assert updated["future_root"] == 1
+    assert updated["auto_chorus"] == {
+        "future_chorus": 2,
+        "role": "和声",
+        "begin_chars": "[{",
+        "end_chars": "]}",
+        "overwrite": True,
+    }
+    assert updated["selected_scheme_key"] == "global"
+    assert updated["preview_splitter_ratio"] == 0.5555
+    assert updated["auto_save"] == {
+        "future_auto_save": 3,
+        "enabled": False,
+        "interval_minutes": 7,
+    }
+    assert updated["backup"] == {
+        "future_backup": 4,
+        "history_count": 9,
+        "discarded_retention_days": 7,
+    }
+    assert existing == {
+        "future_root": 1,
+        "auto_chorus": {"future_chorus": 2},
+        "auto_save": {"future_auto_save": 3},
+        "backup": {"future_backup": 4},
+    }
 
 
 def test_app_output_preferences_are_separate_from_project_output_fields():

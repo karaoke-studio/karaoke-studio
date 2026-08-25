@@ -3405,6 +3405,28 @@ def test_subtitle_render_window_delegates_runtime_preference_loading() -> None:
     assert "load_app_runtime_preferences" in calls
 
 
+def test_subtitle_render_window_delegates_runtime_preference_saving() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_save_persisted_state"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "update_app_runtime_preferences" in calls
+
+
 def test_subtitle_render_window_delegates_n3_import_commands() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     window_module = f"{PACKAGE}.frontend.main_window"

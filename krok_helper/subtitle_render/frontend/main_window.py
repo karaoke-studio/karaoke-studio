@@ -297,6 +297,7 @@ from krok_helper.subtitle_render.settings.preferences import (
     BUILTIN_SCHEME_STYLE_FIELDS as _BUILTIN_SCHEME_STYLE_FIELDS,
     DEFAULT_AUTO_SAVE_INTERVAL_MINUTES,
     DEFAULT_PROJECT_BACKUP_COUNT,
+    DISCARDED_BACKUP_RETENTION_DAYS,
     LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
     app_default_style_to_dict,
@@ -305,6 +306,7 @@ from krok_helper.subtitle_render.settings.preferences import (
     merge_app_setting_field,
     merge_common_style_preferences,
     update_app_output_preferences,
+    update_app_runtime_preferences,
 )
 from krok_helper.subtitle_render.project.controller import (
     SubtitleProjectController,
@@ -377,7 +379,6 @@ _PERSISTED_STATE_SAVE_DEBOUNCE_MS = 1_500
 AUTO_SAVE_THREAD_WAIT_MS = 3_000
 GPU_PREVIEW_DEFAULT_VERSION = 2
 GPU_EXPORT_DEFAULT_VERSION = 1
-DISCARDED_BACKUP_RETENTION_DAYS = 7
 _RECENT_PROJECTS_SETTINGS_KEY = "recent_projects"
 _MAX_RECENT_PROJECTS = 10
 RENDER_WORKER_OPTIONS = (0, 4, 8, 12, 16)
@@ -8385,43 +8386,22 @@ class SubtitleRenderWindow(QWidget):
             _style_presets_to_dict(self._style_presets),
             key="style_presets",
         )
-        data["auto_chorus"] = merge_app_setting_field(
-            data.get("auto_chorus"),
-            {
-                "role": self._auto_chorus_role,
-                "begin_chars": self._auto_chorus_begin_chars,
-                "end_chars": self._auto_chorus_end_chars,
-                "overwrite": bool(self._auto_chorus_overwrite),
-            },
-            key="auto_chorus",
-        )
         data["screen"] = merge_app_setting_field(
             data.get("screen"),
             screen_settings_to_dict(self._screen_settings),
             key="screen",
         )
-        data["selected_scheme_key"] = (
-            self._selected_scheme_key
-            if self._selected_scheme_key
-            in {"global", f"custom:{TITLE_SCHEME_NAME}"}
-            else "global"
-        )
-        data["preview_splitter_ratio"] = round(self._preview_splitter_ratio, 4)
-        data["auto_save"] = merge_app_setting_field(
-            data.get("auto_save"),
-            {
-                "enabled": bool(self._auto_save_enabled),
-                "interval_minutes": int(self._auto_save_interval_minutes),
-            },
-            key="auto_save",
-        )
-        data["backup"] = merge_app_setting_field(
-            data.get("backup"),
-            {
-                "history_count": int(self._project_backup_count),
-                "discarded_retention_days": DISCARDED_BACKUP_RETENTION_DAYS,
-            },
-            key="backup",
+        data = update_app_runtime_preferences(
+            data,
+            auto_chorus_role=self._auto_chorus_role,
+            auto_chorus_begin_chars=self._auto_chorus_begin_chars,
+            auto_chorus_end_chars=self._auto_chorus_end_chars,
+            auto_chorus_overwrite=self._auto_chorus_overwrite,
+            selected_scheme_key=self._selected_scheme_key,
+            preview_splitter_ratio=self._preview_splitter_ratio,
+            auto_save_enabled=self._auto_save_enabled,
+            auto_save_interval_minutes=self._auto_save_interval_minutes,
+            project_backup_count=self._project_backup_count,
         )
         if hasattr(self, "_export_native_check"):
             local_output = self._local_output_preferences

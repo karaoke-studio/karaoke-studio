@@ -69,6 +69,7 @@ TITLE_FADE_FIELDS = (
 DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
 DEFAULT_PROJECT_BACKUP_COUNT = 5
 DEFAULT_PREVIEW_SPLITTER_RATIO = 0.4
+DISCARDED_BACKUP_RETENTION_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,57 @@ def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> 
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def update_app_runtime_preferences(
+    existing: dict,
+    *,
+    auto_chorus_role: str,
+    auto_chorus_begin_chars: str,
+    auto_chorus_end_chars: str,
+    auto_chorus_overwrite: bool,
+    selected_scheme_key: str,
+    preview_splitter_ratio: float,
+    auto_save_enabled: bool,
+    auto_save_interval_minutes: int,
+    project_backup_count: int,
+) -> dict:
+    """Project current runtime preferences onto a preserved settings payload."""
+
+    data = deepcopy(existing)
+    data["auto_chorus"] = merge_app_setting_field(
+        data.get("auto_chorus"),
+        {
+            "role": auto_chorus_role,
+            "begin_chars": auto_chorus_begin_chars,
+            "end_chars": auto_chorus_end_chars,
+            "overwrite": bool(auto_chorus_overwrite),
+        },
+        key="auto_chorus",
+    )
+    data["selected_scheme_key"] = (
+        selected_scheme_key
+        if selected_scheme_key in {"global", f"custom:{TITLE_SCHEME_NAME}"}
+        else "global"
+    )
+    data["preview_splitter_ratio"] = round(preview_splitter_ratio, 4)
+    data["auto_save"] = merge_app_setting_field(
+        data.get("auto_save"),
+        {
+            "enabled": bool(auto_save_enabled),
+            "interval_minutes": int(auto_save_interval_minutes),
+        },
+        key="auto_save",
+    )
+    data["backup"] = merge_app_setting_field(
+        data.get("backup"),
+        {
+            "history_count": int(project_backup_count),
+            "discarded_retention_days": DISCARDED_BACKUP_RETENTION_DAYS,
+        },
+        key="backup",
+    )
+    return data
 
 
 def load_app_style_preferences(
