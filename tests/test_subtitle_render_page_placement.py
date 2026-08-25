@@ -1,4 +1,4 @@
-from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
+from krok_helper.subtitle_render.engine.layout.plan.page_offsets import (
     page_offsets_at_time,
 )
 from krok_helper.subtitle_render.engine.layout.page.placement import (

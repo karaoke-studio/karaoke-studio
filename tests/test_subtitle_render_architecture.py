@@ -486,10 +486,10 @@ def test_line_style_semantics_have_one_engine_owner() -> None:
 
 
 def test_layout_plan_builder_has_no_painter_dependency() -> None:
-    module = f"{PACKAGE}.engine.layout.layout_plan_builder"
+    module = f"{PACKAGE}.engine.layout.plan.builder"
     targets = _import_targets(
         module,
-        ROOT / "engine/layout/layout_plan_builder.py",
+        ROOT / "engine/layout/plan/builder.py",
     )
 
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -861,15 +861,15 @@ def test_layout_diagnostics_adapter_binds_timing_diagnostic_policy() -> None:
 
 
 def test_layout_plan_orchestrator_has_explicit_painter_free_resolvers() -> None:
-    owner = f"{PACKAGE}.engine.layout.layout_plan_orchestrator"
+    owner = f"{PACKAGE}.engine.layout.plan.orchestrator"
     targets = _import_targets(
         owner,
-        ROOT / "engine/layout/layout_plan_orchestrator.py",
+        ROOT / "engine/layout/plan/orchestrator.py",
     )
 
     assert f"{PACKAGE}.engine.painter" not in targets
 
-    source = (ROOT / "engine/layout/layout_plan_orchestrator.py").read_text(
+    source = (ROOT / "engine/layout/plan/orchestrator.py").read_text(
         encoding="utf-8-sig"
     )
     tree = ast.parse(source)
@@ -941,8 +941,8 @@ def test_qt_line_geometry_has_no_painter_dependency() -> None:
 
 
 def test_page_offset_plan_has_no_painter_dependency() -> None:
-    owner = f"{PACKAGE}.engine.layout.page_offset_plan"
-    plan_path = ROOT / "engine/layout/page_offset_plan.py"
+    owner = f"{PACKAGE}.engine.layout.plan.page_offsets"
+    plan_path = ROOT / "engine/layout/plan/page_offsets.py"
     targets = _import_targets(owner, plan_path)
 
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -1021,10 +1021,10 @@ def test_painter_delegates_page_offset_policy() -> None:
 
 
 def test_layout_plan_projection_has_no_painter_dependency() -> None:
-    owner = f"{PACKAGE}.engine.layout.layout_plan_projection"
+    owner = f"{PACKAGE}.engine.layout.plan.projection"
     targets = _import_targets(
         owner,
-        ROOT / "engine/layout/layout_plan_projection.py",
+        ROOT / "engine/layout/plan/projection.py",
     )
 
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -1102,13 +1102,6 @@ def test_text_engine_modules_are_grouped_in_one_domain_package() -> None:
 def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
         "layout_context.py",
-        "layout_plan.py",
-        "layout_plan_builder.py",
-        "layout_plan_cache.py",
-        "layout_plan_orchestrator.py",
-        "layout_plan_projection.py",
-        "page_offset_plan.py",
-        "semantic_plan.py",
     }
     layout_root = ROOT / "engine" / "layout"
     assert {"__init__.py", *module_names} <= {
@@ -1122,6 +1115,29 @@ def test_layout_engine_modules_are_grouped_in_one_domain_package() -> None:
     assert not any(
         (layout_root / name).exists()
         for name in {"line_geometry.py", "line_style.py", "qt_line_geometry.py"}
+    )
+    plan_root = layout_root / "plan"
+    assert {
+        "__init__.py",
+        "builder.py",
+        "cache.py",
+        "model.py",
+        "orchestrator.py",
+        "page_offsets.py",
+        "projection.py",
+        "semantic.py",
+    } <= {path.name for path in plan_root.glob("*.py")}
+    assert not any(
+        (layout_root / name).exists()
+        for name in {
+            "layout_plan.py",
+            "layout_plan_builder.py",
+            "layout_plan_cache.py",
+            "layout_plan_orchestrator.py",
+            "layout_plan_projection.py",
+            "page_offset_plan.py",
+            "semantic_plan.py",
+        }
     )
     display_root = layout_root / "display"
     assert {

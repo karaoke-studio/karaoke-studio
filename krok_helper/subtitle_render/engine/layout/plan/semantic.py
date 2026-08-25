@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
-from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
-from krok_helper.subtitle_render.engine.layout.layout_plan_orchestrator import (
+from krok_helper.subtitle_render.engine.layout.plan.model import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.layout.plan.orchestrator import (
     LayoutPlanResolvers,
     resolve_track_layout_plan,
 )

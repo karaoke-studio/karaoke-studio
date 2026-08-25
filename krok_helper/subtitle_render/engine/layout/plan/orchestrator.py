@@ -12,14 +12,14 @@ from krok_helper.subtitle_render.engine.layout.display.schedule import (
 from krok_helper.subtitle_render.engine.guide import (
     render_line_with_guide_symbols,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan import (
+from krok_helper.subtitle_render.engine.layout.plan.model import (
     LayoutOffsetWindow,
     TrackLayoutPlan,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan_builder import (
+from krok_helper.subtitle_render.engine.layout.plan.builder import (
     assemble_track_layout_plan,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan_cache import (
+from krok_helper.subtitle_render.engine.layout.plan.cache import (
     cached_track_layout_plan,
     layout_cache_enabled,
     store_track_layout_plan,

@@ -79,15 +79,15 @@ from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature as _image_file_signature,
     warn_image_resource_skipped as _warn_image_fill_skipped,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan_cache import (
+from krok_helper.subtitle_render.engine.layout.plan.cache import (
     clear_track_layout_plan_cache,
     layout_cache_enabled as _layout_cache_enabled,
 )
-from krok_helper.subtitle_render.engine.layout.semantic_plan import (
+from krok_helper.subtitle_render.engine.layout.plan.semantic import (
     LayoutPlanResolvers,
     build_track_layout_plan as _build_semantic_layout_plan,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan_projection import (
+from krok_helper.subtitle_render.engine.layout.plan.projection import (
     active_page_offsets_from_layout_plan as _active_page_offsets_from_layout_plan,
     visible_lines_from_layout_plan as _visible_lines_from_layout_plan,
 )
@@ -193,7 +193,7 @@ from krok_helper.subtitle_render.engine.layout.line.qt_geometry import (
     resolved_char_intervals_for_line,
     resolved_guide_anchor_bounds_for_line,
 )
-from krok_helper.subtitle_render.engine.layout.page_offset_plan import (
+from krok_helper.subtitle_render.engine.layout.plan.page_offsets import (
     MeasuredPageLine,
     PageOffsetResolvers,
     clear_page_offset_cache,
@@ -523,7 +523,7 @@ from krok_helper.subtitle_render.engine.layout.page.placement import (
     solve_page_axis_offsets,
     time_windows_overlap,
 )
-from krok_helper.subtitle_render.engine.layout.layout_plan import (
+from krok_helper.subtitle_render.engine.layout.plan.model import (
     LineLayoutPlan,
     TrackLayoutPlan,
 )

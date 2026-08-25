@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from krok_helper.subtitle_render.engine.layout.layout_plan import TrackLayoutPlan
+from krok_helper.subtitle_render.engine.layout.plan.model import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.layout.page.plan import section_head_line_indices
 from krok_helper.subtitle_render.timing import (
     RubyAnnotation,
