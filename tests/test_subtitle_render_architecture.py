@@ -1427,7 +1427,13 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in render_root.glob("*.py")
     }
     assert not any((ROOT / "engine" / name).exists() for name in module_names)
-    core_names = {"animator.py", "layers.py", "quantize.py", "raster_blur.py"}
+    core_names = {
+        "animator.py",
+        "cache_keys.py",
+        "layers.py",
+        "quantize.py",
+        "raster_blur.py",
+    }
     core_root = render_root / "core"
     assert {"__init__.py", *core_names} <= {
         path.name for path in core_root.glob("*.py")
@@ -1455,6 +1461,30 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
             "layout_plan_backend.py",
             "timeline_projection_backend.py",
         }
+    )
+
+
+def test_painter_delegates_layout_cache_keys() -> None:
+    painter_path = ROOT / "engine" / "painter.py"
+    cache_path = ROOT / "engine" / "render" / "core" / "cache_keys.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    delegated_names = {
+        "_layout_cache_sig",
+        "_line_layout_signature",
+        "_track_layout_signature",
+    }
+    painter_functions = {
+        node.name for node in painter_tree.body if isinstance(node, ast.FunctionDef)
+    }
+
+    assert delegated_names.isdisjoint(painter_functions)
+    assert f"{PACKAGE}.engine.render.core.cache_keys" in _import_targets(
+        f"{PACKAGE}.engine.painter",
+        painter_path,
+    )
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        f"{PACKAGE}.engine.render.core.cache_keys",
+        cache_path,
     )
 
 

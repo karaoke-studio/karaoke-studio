@@ -126,7 +126,14 @@ from krok_helper.subtitle_render.engine.render.image_resource import (
 )
 from krok_helper.subtitle_render.engine.layout.plan.cache import (
     clear_track_layout_plan_cache,
-    layout_cache_enabled as _layout_cache_enabled,
+)
+from krok_helper.subtitle_render.engine.render.core.cache_keys import (
+    layout_cache_signature as _layout_cache_sig,
+    line_layout_signature as _line_layout_signature,
+    track_layout_signature as _track_layout_signature,
+)
+from krok_helper.subtitle_render.engine.value_signature import (
+    value_signature as _value_signature,
 )
 from krok_helper.subtitle_render.engine.layout.plan.semantic import (
     LayoutPlanResolvers,
@@ -262,9 +269,6 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     resolve_display_lines_for_style,
     resolve_display_timing,
 )
-from krok_helper.subtitle_render.engine.value_signature import (
-    value_signature as _value_signature,
-)
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
@@ -336,92 +340,6 @@ def clear_before_layer_cache() -> None:
     clear_page_offset_cache()
 
 
-def _track_layout_signature(track: TimingTrack) -> tuple:
-    """track 中影响**邻行可见**布局的值（手写快速版）。
-
-    邻行只通过 SmartHorizon 分页 / 页宽参与本行布局（``assign_lanes`` 与
-    ``_line_total_width`` 都不读邻行计时），所以帧级签名只收每行文本 / 布局
-    结构字段 + 全部注音 + meta 偏移；目标行自己的逐字符计时细节由
-    :func:`_line_layout_signature` 按行补充，避免大轨每帧走全量计时元组。"""
-    return (
-        tuple(
-            (
-                "".join(c.text for c in line.chars),
-                tuple(
-                    (index, c.role_label)
-                    for index, c in enumerate(line.chars)
-                    if c.role_label is not None
-                ),
-                line.singer_id,
-                line.is_blank,
-                line.layout_index,
-                line.break_before,
-                _value_signature(line.animation_override),
-                _value_signature(line.guide_symbol),
-                _value_signature(line.inline_guide_symbols),
-            )
-            for line in track.lines
-        ),
-        tuple(
-            (
-                ruby.kanji,
-                ruby.reading,
-                tuple(ruby.reading_part_ms),
-                ruby.pos_start_ms,
-                ruby.pos_end_ms,
-                tuple(ruby.reading_parts),
-                ruby.target_line_index,
-                ruby.target_char_start,
-                ruby.target_char_end,
-            )
-            for ruby in track.rubies
-        ),
-        page_plan_signature(track),
-        _value_signature(track.loading_settings_snapshot),
-        track.loading_settings_mode,
-        (track.meta.silence_ms, track.meta.offset_ms),
-    )
-
-
-def _line_layout_signature(line: TimingLine) -> tuple:
-    """目标行的逐字符计时细节（intervals / fill_segments / ruby 时窗的输入）。"""
-    return (
-        tuple(c.start_ms for c in line.chars),
-        tuple(
-            (index, c.pause_release_ms)
-            for index, c in enumerate(line.chars)
-            if c.pause_release_ms is not None
-        ),
-        tuple(
-            (
-                index,
-                c.source_span_start_ms,
-                c.source_span_end_ms,
-                c.source_span_index,
-                c.source_span_count,
-            )
-            for index, c in enumerate(line.chars)
-            if c.source_span_count != 1 or c.source_span_start_ms is not None
-        ),
-        tuple(
-            (index, c.explicit_start, c.explicit_end)
-            for index, c in enumerate(line.chars)
-            if c.explicit_start or c.explicit_end
-        ),
-        line.end_ms,
-        line.display_start_override_ms,
-        line.display_end_override_ms,
-        _value_signature(line.guide_symbol),
-        _value_signature(line.inline_guide_symbols),
-    )
-
-
-def _layout_cache_sig(track: TimingTrack, display_style: Style) -> tuple | None:
-    """每帧一次的布局缓存基础签名；关闭开关或竖排时返回 None（竖排走独立路径）。"""
-    if not _layout_cache_enabled() or display_style.vertical:
-        return None
-    return (_track_layout_signature(track), _value_signature(display_style))
-
 from krok_helper.subtitle_render.engine.timing.timeline import (
     DisplayLine,
     assign_lanes,
@@ -431,7 +349,6 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     track_duration_ms,
 )
 from krok_helper.subtitle_render.engine.layout.page.plan import (
-    page_plan_signature,
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.layout.page.placement import (

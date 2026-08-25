@@ -203,6 +203,16 @@ def test_track_layout_signature_includes_ruby_source_binding() -> None:
     )
 
 
+def test_painter_keeps_layout_cache_key_compatibility_exports() -> None:
+    from krok_helper.subtitle_render.engine.render.core import cache_keys
+    from krok_helper.subtitle_render.engine.value_signature import value_signature
+
+    assert subtitle_painter._track_layout_signature is cache_keys.track_layout_signature
+    assert subtitle_painter._line_layout_signature is cache_keys.line_layout_signature
+    assert subtitle_painter._layout_cache_sig is cache_keys.layout_cache_signature
+    assert subtitle_painter._value_signature is value_signature
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
