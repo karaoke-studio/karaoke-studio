@@ -30,6 +30,7 @@ from krok_helper.subtitle_render.frontend.main_window import (
     SubtitleRenderWindow,
     _GuideSymbolSettingsDialog,
 )
+from krok_helper.subtitle_render.domain.timing import assign_role_to_track_rows
 from krok_helper.subtitle_render.sources.guide_symbols import (
     guide_symbol_path,
     import_svg_guide_symbol,
@@ -754,6 +755,43 @@ def test_batch_role_button_does_not_require_svg_or_cached_role_options():
     assert dialog.batch_role_button.isEnabled()
     assert not dialog.ok_button.isEnabled()
     dialog.close()
+
+
+def test_track_role_assignment_returns_plain_role_history_values():
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("甲", 1000), TimingChar("乙", 1500)]),
+            TimingLine(chars=[], is_blank=True),
+        ]
+    )
+
+    assignment = assign_role_to_track_rows(track, [1, 0, 0, 99], " 主唱 ")
+
+    assert assignment is not None
+    assert assignment.role_label == "主唱"
+    assert assignment.rows == (0,)
+    assert assignment.old_values == ((None, None),)
+    assert assignment.new_values == (("主唱", "主唱"),)
+    assert assignment.includes_guide_symbols is False
+    assert [char.role_label for char in track.lines[0].chars] == ["主唱", "主唱"]
+
+
+def test_track_role_assignment_updates_guide_and_character_roles_together():
+    symbol = GuideSymbol(count=2)
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("甲", 1000)], guide_symbol=symbol)]
+    )
+
+    assignment = assign_role_to_track_rows(track, [0], "和声")
+
+    assert assignment is not None
+    assert assignment.includes_guide_symbols is True
+    assert assignment.old_values == ((symbol, (None,)),)
+    updated_symbol, updated_labels = assignment.new_values[0]
+    assert updated_symbol.role_labels == ("和声", "和声")
+    assert updated_labels == ("和声",)
+    assert track.lines[0].guide_symbol == updated_symbol
+    assert track.lines[0].chars[0].role_label == "和声"
 
 
 def test_batch_role_button_reads_project_roles_when_clicked(monkeypatch):

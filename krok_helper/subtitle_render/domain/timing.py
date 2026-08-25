@@ -367,6 +367,89 @@ class TimingTrack:
         return options
 
 
+@dataclass(frozen=True)
+class TrackRoleRowsAssignment:
+    """Undo-ready result of assigning one role to multiple timing rows."""
+
+    role_label: Optional[str]
+    rows: tuple[int, ...]
+    old_values: tuple[object, ...]
+    new_values: tuple[object, ...]
+    includes_guide_symbols: bool
+
+
+def assign_role_to_track_rows(
+    track: TimingTrack,
+    rows: list[int],
+    role_name: str,
+) -> Optional[TrackRoleRowsAssignment]:
+    """Assign a role to valid lyric rows and return stable history values."""
+
+    valid_rows = tuple(
+        sorted(
+            {
+                int(row)
+                for row in rows
+                if 0 <= int(row) < len(track.lines)
+                and track.lines[int(row)].chars
+                and not track.lines[int(row)].is_blank
+            }
+        )
+    )
+    if not valid_rows:
+        return None
+    label = role_name.strip() if role_name else None
+    includes_guide_symbols = any(
+        track.lines[row].guide_symbol is not None for row in valid_rows
+    )
+    if includes_guide_symbols:
+        old_values = tuple(
+            (
+                track.lines[row].guide_symbol,
+                tuple(char.role_label for char in track.lines[row].chars),
+            )
+            for row in valid_rows
+        )
+        new_values = tuple(
+            (
+                guide_symbol_with_role_labels(
+                    track.lines[row].guide_symbol,
+                    [label] * max(int(track.lines[row].guide_symbol.count), 1),
+                )
+                if track.lines[row].guide_symbol is not None
+                else None,
+                tuple(label for _char in track.lines[row].chars),
+            )
+            for row in valid_rows
+        )
+        if old_values == new_values:
+            return None
+        for row, (symbol, labels) in zip(valid_rows, new_values):
+            track.lines[row].guide_symbol = symbol
+            for char, value in zip(track.lines[row].chars, labels):
+                char.role_label = value
+    else:
+        old_values = tuple(
+            tuple(char.role_label for char in track.lines[row].chars)
+            for row in valid_rows
+        )
+        new_values = tuple(
+            tuple(label for _char in track.lines[row].chars) for row in valid_rows
+        )
+        if old_values == new_values:
+            return None
+        for row, labels in zip(valid_rows, new_values):
+            for char, value in zip(track.lines[row].chars, labels):
+                char.role_label = value
+    return TrackRoleRowsAssignment(
+        role_label=label,
+        rows=valid_rows,
+        old_values=old_values,
+        new_values=new_values,
+        includes_guide_symbols=includes_guide_symbols,
+    )
+
+
 def timing_line_start_ms(line: TimingLine) -> int:
     """行内首个可唱元素的时刻；导唱符存在时它就是虚拟首字符。"""
     if not line.chars:

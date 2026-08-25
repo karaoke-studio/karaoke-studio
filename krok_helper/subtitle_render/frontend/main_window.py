@@ -250,6 +250,7 @@ from krok_helper.subtitle_render.settings.screen import (
 from krok_helper.subtitle_render.frontend.editor.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.domain.timing import (
+    assign_role_to_track_rows,
     GuideSymbol,
     LineAnimationOverride,
     SubtitleLoadingSettings,
@@ -7154,79 +7155,27 @@ class SubtitleRenderWindow(QWidget):
         track = self._track_by_index(track_index)
         if track is None:
             return
-        valid_rows = tuple(
-            sorted(
-                {
-                    int(row)
-                    for row in rows
-                    if 0 <= int(row) < len(track.lines)
-                    and track.lines[int(row)].chars
-                    and not track.lines[int(row)].is_blank
-                }
-            )
-        )
-        if not valid_rows:
+        assignment = assign_role_to_track_rows(track, rows, role_name)
+        if assignment is None:
             return
-        label = role_name.strip() if role_name else None
-        has_guides = any(
-            track.lines[row].guide_symbol is not None for row in valid_rows
-        )
-        if not has_guides:
-            old_values = tuple(
-                tuple(ch.role_label for ch in track.lines[row].chars)
-                for row in valid_rows
-            )
-            new_values = tuple(
-                tuple(label for _ch in track.lines[row].chars)
-                for row in valid_rows
-            )
-            if old_values == new_values:
-                return
-            for row, labels in zip(valid_rows, new_values):
-                for ch, value in zip(track.lines[row].chars, labels):
-                    ch.role_label = value
-            if label:
-                self._materialize_role_schemes({label})
-            self._undo_stack.append(
-                ("char_roles_batch", track_index, valid_rows, old_values, new_values)
-            )
-            del self._undo_stack[:-_UNDO_STACK_LIMIT]
-            self._redo_stack.clear()
-            self._refresh_after_role_labels_changed(valid_rows)
-            return
-        old_values = tuple(
-            (
-                track.lines[row].guide_symbol,
-                tuple(ch.role_label for ch in track.lines[row].chars),
-            )
-            for row in valid_rows
-        )
-        new_values = tuple(
-            (
-                guide_symbol_with_role_labels(
-                    track.lines[row].guide_symbol,
-                    [label] * max(int(track.lines[row].guide_symbol.count), 1),
-                )
-                if track.lines[row].guide_symbol is not None
-                else None,
-                tuple(label for _ch in track.lines[row].chars),
-            )
-            for row in valid_rows
-        )
-        if old_values == new_values:
-            return
-        for row, (symbol, labels) in zip(valid_rows, new_values):
-            track.lines[row].guide_symbol = symbol
-            for ch, value in zip(track.lines[row].chars, labels):
-                ch.role_label = value
-        if label:
-            self._materialize_role_schemes({label})
+        if assignment.role_label:
+            self._materialize_role_schemes({assignment.role_label})
         self._undo_stack.append(
-            ("inline_roles_batch", track_index, valid_rows, old_values, new_values)
+            (
+                (
+                    "inline_roles_batch"
+                    if assignment.includes_guide_symbols
+                    else "char_roles_batch"
+                ),
+                track_index,
+                assignment.rows,
+                assignment.old_values,
+                assignment.new_values,
+            )
         )
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
-        self._refresh_after_role_labels_changed(valid_rows)
+        self._refresh_after_role_labels_changed(assignment.rows)
 
     def _on_lyrics_char_roles_changed(self, row: int, labels: list) -> None:
         """行内逐字符角色编辑器确定后写回（当前选中源）。"""
