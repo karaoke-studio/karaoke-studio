@@ -1976,7 +1976,6 @@ def test_horizontal_line_layout_uses_explicit_painter_free_ports() -> None:
     assert ports[0].func.id == "HorizontalLayoutPorts"
     assert {keyword.arg for keyword in ports[0].keywords} == {
         "char_layout_width",
-        "karaoke_fill_segments",
         "layout_rubies",
         "role_ruby_vertical_extra",
     }
@@ -1988,6 +1987,50 @@ def test_horizontal_line_layout_uses_explicit_painter_free_ports() -> None:
         or target.startswith(f"{PACKAGE}.frontend.")
         for target in targets
     )
+
+
+def test_horizontal_layout_owns_karaoke_fill_segment_projection() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layout_path = ROOT / "engine/render/elements/horizontal/layout.py"
+    painter_path = ROOT / "engine/painter.py"
+    layout_tree = ast.parse(layout_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    layout_functions = {
+        node.name: node
+        for node in layout_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name == "karaoke_fill_segments"
+    }
+    wrapper = next(
+        node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_karaoke_fill_segments"
+    )
+
+    assert "karaoke_fill_segments" in layout_functions
+    assert imported == {
+        "karaoke_fill_segments": "_build_horizontal_karaoke_fill_segments"
+    }
+    assert not any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "ports"
+        and node.attr == "karaoke_fill_segments"
+        for node in ast.walk(layout_tree)
+    )
+    assert len(wrapper.body) == 1
+    returned = wrapper.body[0]
+    assert isinstance(returned, ast.Return)
+    assert isinstance(returned.value, ast.Call)
+    assert isinstance(returned.value.func, ast.Name)
+    assert returned.value.func.id == "_build_horizontal_karaoke_fill_segments"
 
 
 def test_horizontal_transition_math_has_one_painter_free_owner() -> None:

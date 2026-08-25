@@ -192,7 +192,7 @@ def _ruby_progress_time_at_ratio(
     return points[-1][0]
 
 
-def _ruby_main_text_slot_times(
+def ruby_main_text_slot_times(
     ruby: RubyAnnotation,
     base_index: int,
     base_count: int,
@@ -205,6 +205,9 @@ def _ruby_main_text_slot_times(
         ruby, (base_index + 1) / count, plateau_side="left"
     )
     return start, max(start, end)
+
+
+_ruby_main_text_slot_times = ruby_main_text_slot_times
 
 
 def _main_text_ruby_progress_ratio(
@@ -588,7 +591,7 @@ def utopia_wipe_window_for_index(
         and _ruby_visual_units_and_intervals(effective_ruby)
     ):
         base_index = indices.index(index)
-        return _ruby_main_text_slot_times(effective_ruby, base_index, len(indices))
+        return ruby_main_text_slot_times(effective_ruby, base_index, len(indices))
 
     group_left = min(char_x_ranges[candidate][0] for candidate in indices)
     group_right = max(char_x_ranges[candidate][1] for candidate in indices)

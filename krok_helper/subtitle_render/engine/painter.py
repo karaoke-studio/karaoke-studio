@@ -506,6 +506,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     fill_extent_left as _fill_extent_left,
     fill_extent_start as _fill_extent_start,
     lane_alignment as _lane_alignment,
+    karaoke_fill_segments as _build_horizontal_karaoke_fill_segments,
     layout_page_lines as _layout_page_lines,
     layout_line_uncached as _build_horizontal_line_uncached,
     layout_plain_line as _build_horizontal_plain_line,
@@ -6368,125 +6369,16 @@ def _karaoke_fill_segments(
     layout_x_ranges: list[tuple[int, int]] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
 ) -> list[_FillSegment]:
-    """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
-    扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
-    segments: list[_FillSegment] = []
-    release_x_ranges = release_x_ranges or ink_x_ranges
-    layout_x_ranges = layout_x_ranges or release_x_ranges
-    index = 0
-    while index < len(char_widths):
-        if index < len(line.chars) and _bitmap_guide_is_no_wipe(
-            line.chars[index].vector_glyph
-        ):
-            index += 1
-            continue
-        ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
-        ruby_indices = (
-            _ruby_target_indices(ruby, line, intervals) if ruby is not None else []
-        )
-        # SUG uses a pause-only ruby over a linked English phrase as a
-        # non-rendering group marker.  Utopia must still consume that ruby to
-        # drop the whole phrase together, but it is not pronunciation data and
-        # must not replace the phrase's real per-syllable TimingChar clock with
-        # one linear start-to-end wipe.
-        if (
-            ruby is None
-            or _is_utopia_group_marker(ruby)
-            or _ruby_main_uses_base_timing(line, ruby_indices)
-        ):
-            left, right = ink_x_ranges[index]
-            release_left, release_right = release_x_ranges[index]
-            layout_left, layout_right = layout_x_ranges[index]
-            start, end = intervals[index]
-            segments.append(
-                _FillSegment(
-                    left=left,
-                    right=right,
-                    release_left=release_left,
-                    release_right=release_right,
-                    layout_left=layout_left,
-                    layout_right=layout_right,
-                    start_ms=start,
-                    end_ms=end,
-                    indices=(index,),
-                )
-            )
-            index += 1
-            continue
-
-        indices = [i for i in ruby_indices if 0 <= i < len(ink_x_ranges)]
-        if not indices:
-            left, right = ink_x_ranges[index]
-            release_left, release_right = release_x_ranges[index]
-            layout_left, layout_right = layout_x_ranges[index]
-            start, end = intervals[index]
-            segments.append(
-                _FillSegment(
-                    left=left,
-                    right=right,
-                    release_left=release_left,
-                    release_right=release_right,
-                    layout_left=layout_left,
-                    layout_right=layout_right,
-                    start_ms=start,
-                    end_ms=end,
-                    indices=(index,),
-                )
-            )
-            index += 1
-            continue
-
-        effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
-        reading_unit_mode = (
-            ruby_main_progress_mode == "reading_units"
-            and bool(_ruby_visual_units_and_intervals(effective_ruby))
-        )
-        if reading_unit_mode:
-            base_count = len(indices)
-            for base_index, target_index in enumerate(indices):
-                left, right = ink_x_ranges[target_index]
-                release_left, release_right = release_x_ranges[target_index]
-                layout_left, layout_right = layout_x_ranges[target_index]
-                slot_start, slot_end = _ruby_main_text_slot_times(
-                    effective_ruby, base_index, base_count
-                )
-                segments.append(
-                    _FillSegment(
-                        left=left,
-                        right=right,
-                        release_left=release_left,
-                        release_right=release_right,
-                        layout_left=layout_left,
-                        layout_right=layout_right,
-                        start_ms=slot_start,
-                        end_ms=slot_end,
-                        ruby=effective_ruby,
-                        indices=(target_index,),
-                        ruby_base_index=base_index,
-                        ruby_base_count=base_count,
-                    )
-                )
-        else:
-            left = min(ink_x_ranges[i][0] for i in indices)
-            right = max(ink_x_ranges[i][1] for i in indices)
-            release_left = min(release_x_ranges[i][0] for i in indices)
-            release_right = max(release_x_ranges[i][1] for i in indices)
-            layout_left = min(layout_x_ranges[i][0] for i in indices)
-            layout_right = max(layout_x_ranges[i][1] for i in indices)
-            segments.append(
-                _FillSegment(
-                    left=left,
-                    right=right,
-                    release_left=release_left,
-                    release_right=release_right,
-                    layout_left=layout_left,
-                    layout_right=layout_right,
-                    ruby=effective_ruby,
-                    indices=tuple(indices),
-                )
-            )
-        index = max(indices) + 1
-    return _adjust_fill_release_edges(segments)
+    return _build_horizontal_karaoke_fill_segments(
+        char_widths,
+        intervals,
+        ink_x_ranges,
+        active_rubies,
+        line,
+        release_x_ranges=release_x_ranges,
+        layout_x_ranges=layout_x_ranges,
+        ruby_main_progress_mode=ruby_main_progress_mode,
+    )
 
 
 _BITMAP_GUIDE_PORTS = BitmapGuidePorts(
@@ -6810,7 +6702,6 @@ def _layout_rubies(
 
 _HORIZONTAL_LAYOUT_PORTS = HorizontalLayoutPorts(
     char_layout_width=lambda *args, **kwargs: _char_layout_width(*args, **kwargs),
-    karaoke_fill_segments=_karaoke_fill_segments,
     layout_rubies=_layout_rubies,
     role_ruby_vertical_extra=_role_ruby_vertical_extra,
 )

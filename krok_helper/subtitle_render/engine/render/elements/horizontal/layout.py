@@ -38,7 +38,14 @@ from krok_helper.subtitle_render.engine.render.effects import (
 from krok_helper.subtitle_render.engine.ruby import (
     active_rubies_for_line,
     build_ruby_font,
+    effective_ruby_for_target,
+    is_utopia_group_marker,
+    ruby_for_char_index,
     ruby_char_gaps,
+    ruby_main_text_slot_times,
+    ruby_main_uses_base_timing,
+    ruby_target_indices,
+    ruby_visual_units_and_intervals,
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
@@ -70,6 +77,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning i
     resolve_line_x_smart,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import (
+    adjust_fill_release_edges,
     n3_char_wipe_ranges_by_index,
 )
 from krok_helper.subtitle_render.sources.guide_symbols import (
@@ -82,7 +90,6 @@ class HorizontalLayoutPorts:
     """Painter-owned capabilities needed to build horizontal line layouts."""
 
     char_layout_width: Callable[..., int]
-    karaoke_fill_segments: Callable[..., list[FillSegment]]
     layout_rubies: Callable[..., list[RubyLayout]]
     role_ruby_vertical_extra: Callable[..., int]
 
@@ -91,6 +98,137 @@ def bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
     return guide_symbol_is_bitmap(symbol) and not bool(
         getattr(symbol, "bitmap_after_path", None)
     )
+
+def karaoke_fill_segments(
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    ink_x_ranges: list[tuple[int, int]],
+    active_rubies: list[RubyAnnotation],
+    line: TimingLine,
+    *,
+    release_x_ranges: list[tuple[int, int]] | None = None,
+    layout_x_ranges: list[tuple[int, int]] | None = None,
+    ruby_main_progress_mode: str = "checkpoint_segments",
+) -> list[FillSegment]:
+    """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
+    扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
+    segments: list[FillSegment] = []
+    release_x_ranges = release_x_ranges or ink_x_ranges
+    layout_x_ranges = layout_x_ranges or release_x_ranges
+    index = 0
+    while index < len(char_widths):
+        if index < len(line.chars) and bitmap_guide_is_no_wipe(
+            line.chars[index].vector_glyph
+        ):
+            index += 1
+            continue
+        ruby = ruby_for_char_index(active_rubies, line, intervals, index)
+        ruby_indices = (
+            ruby_target_indices(ruby, line, intervals) if ruby is not None else []
+        )
+        # SUG uses a pause-only ruby over a linked English phrase as a
+        # non-rendering group marker.  Utopia must still consume that ruby to
+        # drop the whole phrase together, but it is not pronunciation data and
+        # must not replace the phrase's real per-syllable TimingChar clock with
+        # one linear start-to-end wipe.
+        if (
+            ruby is None
+            or is_utopia_group_marker(ruby)
+            or ruby_main_uses_base_timing(line, ruby_indices)
+        ):
+            left, right = ink_x_ranges[index]
+            release_left, release_right = release_x_ranges[index]
+            layout_left, layout_right = layout_x_ranges[index]
+            start, end = intervals[index]
+            segments.append(
+                FillSegment(
+                    left=left,
+                    right=right,
+                    release_left=release_left,
+                    release_right=release_right,
+                    layout_left=layout_left,
+                    layout_right=layout_right,
+                    start_ms=start,
+                    end_ms=end,
+                    indices=(index,),
+                )
+            )
+            index += 1
+            continue
+
+        indices = [i for i in ruby_indices if 0 <= i < len(ink_x_ranges)]
+        if not indices:
+            left, right = ink_x_ranges[index]
+            release_left, release_right = release_x_ranges[index]
+            layout_left, layout_right = layout_x_ranges[index]
+            start, end = intervals[index]
+            segments.append(
+                FillSegment(
+                    left=left,
+                    right=right,
+                    release_left=release_left,
+                    release_right=release_right,
+                    layout_left=layout_left,
+                    layout_right=layout_right,
+                    start_ms=start,
+                    end_ms=end,
+                    indices=(index,),
+                )
+            )
+            index += 1
+            continue
+
+        effective_ruby = effective_ruby_for_target(ruby, indices, intervals)
+        reading_unit_mode = (
+            ruby_main_progress_mode == "reading_units"
+            and bool(ruby_visual_units_and_intervals(effective_ruby))
+        )
+        if reading_unit_mode:
+            base_count = len(indices)
+            for base_index, target_index in enumerate(indices):
+                left, right = ink_x_ranges[target_index]
+                release_left, release_right = release_x_ranges[target_index]
+                layout_left, layout_right = layout_x_ranges[target_index]
+                slot_start, slot_end = ruby_main_text_slot_times(
+                    effective_ruby, base_index, base_count
+                )
+                segments.append(
+                    FillSegment(
+                        left=left,
+                        right=right,
+                        release_left=release_left,
+                        release_right=release_right,
+                        layout_left=layout_left,
+                        layout_right=layout_right,
+                        start_ms=slot_start,
+                        end_ms=slot_end,
+                        ruby=effective_ruby,
+                        indices=(target_index,),
+                        ruby_base_index=base_index,
+                        ruby_base_count=base_count,
+                    )
+                )
+        else:
+            left = min(ink_x_ranges[i][0] for i in indices)
+            right = max(ink_x_ranges[i][1] for i in indices)
+            release_left = min(release_x_ranges[i][0] for i in indices)
+            release_right = max(release_x_ranges[i][1] for i in indices)
+            layout_left = min(layout_x_ranges[i][0] for i in indices)
+            layout_right = max(layout_x_ranges[i][1] for i in indices)
+            segments.append(
+                FillSegment(
+                    left=left,
+                    right=right,
+                    release_left=release_left,
+                    release_right=release_right,
+                    layout_left=layout_left,
+                    layout_right=layout_right,
+                    ruby=effective_ruby,
+                    indices=tuple(indices),
+                )
+            )
+        index = max(indices) + 1
+    return adjust_fill_release_edges(segments)
 
 
 def fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
@@ -617,7 +755,7 @@ def layout_plain_line(
         char_x_ranges,
         ink_x_ranges,
     )
-    fill_segments = ports.karaoke_fill_segments(
+    fill_segments = karaoke_fill_segments(
         char_widths,
         intervals,
         ink_x_ranges,
@@ -785,7 +923,7 @@ def layout_role_line(
         char_x_ranges,
         ink_x_ranges,
     )
-    fill_segments = ports.karaoke_fill_segments(
+    fill_segments = karaoke_fill_segments(
         char_widths,
         intervals,
         ink_x_ranges,
