@@ -1210,9 +1210,6 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         "image_resource.py",
         "render_bands.py",
         "render_ir.py",
-        "signal.py",
-        "title.py",
-        "vertical.py",
     }
     render_root = ROOT / "engine" / "render"
     assert {"__init__.py", *module_names} <= {
@@ -1225,6 +1222,12 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
         path.name for path in core_root.glob("*.py")
     }
     assert not any((render_root / name).exists() for name in core_names)
+    element_names = {"signal.py", "title.py", "vertical.py"}
+    elements_root = render_root / "elements"
+    assert {"__init__.py", *element_names} <= {
+        path.name for path in elements_root.glob("*.py")
+    }
+    assert not any((render_root / name).exists() for name in element_names)
     adapter_names = {
         "layout_diagnostics.py",
         "layout_plan.py",
@@ -1245,7 +1248,7 @@ def test_render_engine_modules_are_grouped_in_one_domain_package() -> None:
 
 
 def test_title_layout_has_one_render_owner() -> None:
-    owner = f"{PACKAGE}.engine.render.title"
+    owner = f"{PACKAGE}.engine.render.elements.title"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -1283,12 +1286,12 @@ def test_title_layout_has_one_render_owner() -> None:
     )
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
-        ROOT / "engine/render/title.py",
+        ROOT / "engine/render/elements/title.py",
     )
 
 
 def test_signal_geometry_has_one_render_owner() -> None:
-    owner = f"{PACKAGE}.engine.render.signal"
+    owner = f"{PACKAGE}.engine.render.elements.signal"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -1346,12 +1349,12 @@ def test_signal_geometry_has_one_render_owner() -> None:
     )
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
-        ROOT / "engine/render/signal.py",
+        ROOT / "engine/render/elements/signal.py",
     )
 
 
 def test_vertical_layout_has_one_render_owner() -> None:
-    owner = f"{PACKAGE}.engine.render.vertical"
+    owner = f"{PACKAGE}.engine.render.elements.vertical"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     delegated_names = {
@@ -1423,7 +1426,9 @@ def test_vertical_layout_has_one_render_owner() -> None:
         "_vertical_ruby_path_and_wipe",
     }.isdisjoint(painter_members)
     vertical_tree = ast.parse(
-        (ROOT / "engine/render/vertical.py").read_text(encoding="utf-8-sig")
+        (ROOT / "engine/render/elements/vertical.py").read_text(
+            encoding="utf-8-sig"
+        )
     )
     vertical_members = {
         node.name
@@ -1440,7 +1445,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
     } <= vertical_members
     assert f"{PACKAGE}.engine.painter" not in _import_targets(
         owner,
-        ROOT / "engine/render/vertical.py",
+        ROOT / "engine/render/elements/vertical.py",
     )
 
 

@@ -44,7 +44,7 @@ from krok_helper.subtitle_render.engine.render.render_bands import (  # noqa: E4
     merge_intervals,
     packed_offsets,
 )
-from krok_helper.subtitle_render.engine.render.title import (  # noqa: E402
+from krok_helper.subtitle_render.engine.render.elements.title import (  # noqa: E402
     TitleOverlayLayer,
 )
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402

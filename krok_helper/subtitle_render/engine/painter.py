@@ -555,7 +555,7 @@ from krok_helper.subtitle_render.engine.render.core.raster_blur import (
     _gaussian_blur_image,
     _n3_gaussian_kernel_1d,
 )
-from krok_helper.subtitle_render.engine.render.signal import (
+from krok_helper.subtitle_render.engine.render.elements.signal import (
     SignalLayoutMetrics as _SignalLayoutMetrics,
     SignalLineMeasurement,
     SignalLitGroup as _SignalLitGroup,
@@ -580,7 +580,7 @@ from krok_helper.subtitle_render.engine.render.signal import (
     volume_signal_geometry as _volume_signal_geometry,
     volume_signal_state as _volume_signal_state,
 )
-from krok_helper.subtitle_render.engine.render.title import (
+from krok_helper.subtitle_render.engine.render.elements.title import (
     TitleGlyphLayout as _TitleGlyphLayout,
     TitleOverlayLayout as _TitleOverlayLayout,
     TitleRenderPorts,
@@ -592,7 +592,7 @@ from krok_helper.subtitle_render.engine.render.title import (
     paint_title_overlay as _paint_title_overlay_with_ports,
     title_block_origin as _title_block_origin,
 )
-from krok_helper.subtitle_render.engine.render.vertical import (
+from krok_helper.subtitle_render.engine.render.elements.vertical import (
     VerticalCachePorts,
     VerticalLayerPorts,
     VerticalLineLayout as _VerticalLineLayout,
