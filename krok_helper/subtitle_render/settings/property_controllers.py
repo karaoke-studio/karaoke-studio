@@ -108,6 +108,39 @@ class StyleUpdateResult:
 class PropertyStyleController:
     """Route normalized property edits into global or role-specific style state."""
 
+    @staticmethod
+    def value(style: Style, role_name: str | None, field_name: str):
+        """Resolve one effective property value through role inheritance."""
+        if role_name is not None:
+            scheme = style.custom_style_schemes.get(role_name)
+            if (
+                field_name == "karaoke_colors"
+                and scheme is not None
+                and scheme.karaoke_colors is None
+                and scheme_has_legacy_color_values(scheme)
+            ):
+                return None
+            if field_name == "ruby_karaoke_colors" and scheme is not None:
+                return scheme.ruby_karaoke_colors
+            value = getattr(scheme, field_name, None) if scheme is not None else None
+            if (
+                scheme is not None
+                and scheme.n3_font_inheritance
+                and field_name in N3_FONT_INHERITANCE_FIELDS
+            ):
+                return value
+            if value is not None:
+                return value
+        return getattr(style, field_name)
+
+    @staticmethod
+    def own_value(style: Style, role_name: str | None, field_name: str):
+        """Return the selected scheme's stored value without inheritance."""
+        if role_name is None:
+            return getattr(style, field_name)
+        scheme = style.custom_style_schemes.get(role_name)
+        return getattr(scheme, field_name, None) if scheme is not None else None
+
     def update(
         self,
         style: Style,
@@ -201,6 +234,23 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
             normalized["lit_transition_mode"]
         )
     return normalized
+
+
+def scheme_has_legacy_color_values(scheme: SubtitleStyleScheme) -> bool:
+    """Return whether a pre-matrix scheme still owns legacy color fields."""
+    return any(
+        getattr(scheme, field) is not None
+        for field in (
+            "base_color",
+            "fill_color",
+            "fill_gradient_enabled",
+            "fill_gradient_start_color",
+            "fill_gradient_end_color",
+            "fill_gradient_angle_deg",
+            "stroke_color",
+            "shadow_color",
+        )
+    )
 
 
 def normalize_line_position(value: object) -> LineYPosition:

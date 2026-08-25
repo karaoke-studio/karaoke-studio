@@ -258,6 +258,32 @@ def test_property_style_controller_routes_and_normalizes_edits():
     assert not global_scheme_only.changed_fields
 
 
+def test_property_style_controller_resolves_role_inheritance_and_legacy_colors():
+    controller = PropertyStyleController()
+    global_colors = KaraokeColors()
+    style = Style(
+        font_size_px=72,
+        font_family_latin="Global Latin",
+        karaoke_colors=global_colors,
+        ruby_karaoke_colors=global_colors,
+        custom_style_schemes={
+            "Lead": SubtitleStyleScheme(
+                font_size_px=54,
+                base_color="#123456",
+            ),
+            "N3": SubtitleStyleScheme(n3_font_inheritance=True),
+        },
+    )
+
+    assert controller.value(style, "Lead", "font_size_px") == 54
+    assert controller.value(style, "Lead", "italic") is style.italic
+    assert controller.own_value(style, "Lead", "italic") is None
+    assert controller.value(style, "Lead", "karaoke_colors") is None
+    assert controller.value(style, "Lead", "ruby_karaoke_colors") is None
+    assert controller.value(style, "N3", "font_family_latin") is None
+    assert controller.value(style, None, "font_family_latin") == "Global Latin"
+
+
 def test_property_panel_uses_fluent_checkboxes(qapp):
     panel = PropertyPanel()
 

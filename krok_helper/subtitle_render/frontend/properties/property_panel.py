@@ -5911,28 +5911,11 @@ class PropertyPanel(QWidget):
         return key.removeprefix(_CUSTOM_SCHEME_PREFIX)
 
     def _scheme_value(self, field_name: str):
-        role_name = self._current_custom_scheme_name()
-        if role_name is not None:
-            scheme = self._style.custom_style_schemes.get(role_name)
-            if (
-                field_name == "karaoke_colors"
-                and scheme is not None
-                and scheme.karaoke_colors is None
-                and _scheme_has_legacy_color_values(scheme)
-            ):
-                return None
-            if field_name == "ruby_karaoke_colors" and scheme is not None:
-                return scheme.ruby_karaoke_colors
-            value = getattr(scheme, field_name, None) if scheme is not None else None
-            if (
-                scheme is not None
-                and scheme.n3_font_inheritance
-                and field_name in N3_FONT_INHERITANCE_FIELDS
-            ):
-                return value
-            if value is not None:
-                return value
-        return getattr(self._style, field_name)
+        return self._style_controller.value(
+            self._style,
+            self._current_custom_scheme_name(),
+            field_name,
+        )
 
     def _scheme_own_value(self, field_name: str):
         """方案**自己**存的值；``None`` 表示这一槽没设定（跟随上一级）。
@@ -5940,11 +5923,11 @@ class PropertyPanel(QWidget):
         与 :meth:`_scheme_value` 的分工：那个给最终生效值（角色没设就回退全
         局），填输入框用；这个用来判断"这一槽是不是空着"。
         """
-        role_name = self._current_custom_scheme_name()
-        if role_name is None:
-            return getattr(self._style, field_name)
-        scheme = self._style.custom_style_schemes.get(role_name)
-        return getattr(scheme, field_name, None) if scheme is not None else None
+        return self._style_controller.own_value(
+            self._style,
+            self._current_custom_scheme_name(),
+            field_name,
+        )
 
     def _rename_current_role(self) -> None:
         old = self._current_custom_scheme_name()
@@ -6563,22 +6546,6 @@ def _style_scheme_changes(scheme: SubtitleStyleScheme) -> dict[str, object]:
         for field in _SCHEME_FIELDS
         if (value := getattr(scheme, field)) is not None
     }
-
-
-def _scheme_has_legacy_color_values(scheme: SubtitleStyleScheme) -> bool:
-    return any(
-        getattr(scheme, field) is not None
-        for field in (
-            "base_color",
-            "fill_color",
-            "fill_gradient_enabled",
-            "fill_gradient_start_color",
-            "fill_gradient_end_color",
-            "fill_gradient_angle_deg",
-            "stroke_color",
-            "shadow_color",
-        )
-    )
 
 
 def _auto_role_scheme(base: SubtitleStyleScheme, index: int) -> SubtitleStyleScheme:

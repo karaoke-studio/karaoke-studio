@@ -446,6 +446,7 @@ def test_property_panel_delegates_normalized_style_updates() -> None:
         "PropertyStyleController",
         "StyleUpdateResult",
         "normalize_style_changes",
+        "scheme_has_legacy_color_values",
     } <= controller_members
 
     panel_class = next(
@@ -468,6 +469,29 @@ def test_property_panel_delegates_normalized_style_updates() -> None:
     }
     assert delegated_calls == {"update"}
 
+    value_delegates = {
+        method_name: {
+            node.func.attr
+            for node in ast.walk(
+                next(
+                    node
+                    for node in panel_class.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == method_name
+                )
+            )
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "_style_controller"
+        }
+        for method_name in {"_scheme_own_value", "_scheme_value"}
+    }
+    assert value_delegates == {
+        "_scheme_own_value": {"own_value"},
+        "_scheme_value": {"value"},
+    }
+
     panel_functions = {
         node.name
         for node in panel_tree.body
@@ -484,6 +508,7 @@ def test_property_panel_delegates_normalized_style_updates() -> None:
         "_normalize_lit_style",
         "_normalize_lit_transition_mode",
         "_normalize_viewport_align",
+        "_scheme_has_legacy_color_values",
     }.isdisjoint(panel_functions)
 
     targets = _import_targets(
