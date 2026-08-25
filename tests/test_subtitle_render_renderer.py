@@ -44,6 +44,9 @@ from krok_helper.subtitle_render.engine.render.render_bands import (  # noqa: E4
     merge_intervals,
     packed_offsets,
 )
+from krok_helper.subtitle_render.engine.render.title import (  # noqa: E402
+    TitleOverlayLayer,
+)
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
     _compute_content_bands,
@@ -1141,7 +1144,7 @@ def test_title_overlay_bake_uses_target_device_pixel_ratio(qapp):
     title_layers = [
         baked
         for key, baked in subtitle_painter._TEXT_RUN_LAYER_CACHE._items.items()
-        if key[0].__name__ == "_TitleOverlayLayer"
+        if key[0] is TitleOverlayLayer
     ]
     assert title_layers
     assert title_layers[-1].image.devicePixelRatioF() == 2.0
