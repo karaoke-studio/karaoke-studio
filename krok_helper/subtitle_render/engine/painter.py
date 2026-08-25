@@ -514,6 +514,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     BitmapGuideLayer as _HorizontalBitmapGuideLayer,
     BitmapGuidePorts,
     GlyphLayerPorts,
+    LayerStackPorts,
     GlyphRunAfterGlowLayer as _HorizontalGlyphRunAfterGlowLayer,
     GlyphRunBeforeGlowLayer as _HorizontalGlyphRunBeforeGlowLayer,
     GlyphRunLayer as _HorizontalGlyphRunLayer,
@@ -555,6 +556,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     glyph_run_signature as _glyph_run_signature,
     glyph_run_after_glow_key as _glyph_run_after_glow_key,
     glyph_run_layer_key as _glyph_run_layer_key,
+    glyph_run_can_combine_split_glow as _glyph_run_can_combine_split_glow,
     glyph_run_needs_after_glow as _glyph_run_needs_after_glow,
     glyph_run_needs_before_glow_split as _glyph_run_needs_before_glow_split,
     glyph_runs as _glyph_runs,
@@ -572,6 +574,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     karaoke_glow_states_differ as _karaoke_glow_states_differ,
     karaoke_state_uses_image as _karaoke_state_uses_image,
     line_lane_alignment as _line_lane_alignment,
+    line_layer_stack as _build_horizontal_line_layer_stack,
     n3_smart_font_size as _n3_smart_font_size,
     n3_main_fill_rect as _n3_main_fill_rect,
     n3_ruby_fill_rect as _n3_ruby_fill_rect,
@@ -3962,124 +3965,10 @@ def _paint_line_direct(
 
 
 def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
-    runs = _text_glyph_runs(layout.text_layout, layout.has_inline_styles)
-    y = layout.baseline_y
-    fill_rect = _n3_main_fill_rect(layout.text_layout, y)
-    combined_glow_runs = [
-        run for run in runs if _glyph_run_can_combine_split_glow(run)
-    ]
-    combined_run_ids = {id(run) for run in combined_glow_runs}
-    combined_glow_layers = [
-        _GlyphRunSplitGlowLayer(
-            run,
-            y,
-            layout.fill_segments,
-            t_ms,
-            layout.rtl,
-            fill_rect=fill_rect,
-        )
-        for run in combined_glow_runs
-    ]
-    before_glow_layers = [
-        _GlyphRunBeforeGlowLayer(
-            run,
-            y,
-            layout.fill_segments,
-            t_ms,
-            layout.rtl,
-            fill_rect=fill_rect,
-        )
-        for run in runs
-        if id(run) not in combined_run_ids
-        and _glyph_run_needs_before_glow_split(run)
-    ]
-    before_layers = [
-        _GlyphRunLayer(
-            run,
-            y,
-            layout.fill_segments,
-            t_ms,
-            layout.rtl,
-            after=False,
-            fill_rect=fill_rect,
-        )
-        for run in runs
-    ]
-    bitmap_before_layers = [
-        _BitmapGuideLayer(
-            glyph,
-            y,
-            layout.fill_segments,
-            t_ms,
-            layout.rtl,
-            after=False,
-            z_index=len(runs) * 2,
-        )
-        for glyph in _bitmap_guide_glyphs(layout.text_layout)
-    ]
-    after_glow_layers = []
-    after_body_layers = []
-    bitmap_after_layers = []
-    z_index = len(runs) * 2 + len(bitmap_before_layers)
-    for run in runs:
-        combined_glow = id(run) in combined_run_ids
-        for glyph in run:
-            glyph_run = [glyph]
-            after_band = _fill_clip_band_for_glyphs(
-                layout.fill_segments, glyph_run, t_ms, layout.rtl
-            )
-            if after_band is None or glyph.text.isspace():
-                continue
-            if not combined_glow and _glyph_run_needs_after_glow(glyph_run):
-                after_glow_layers.append(
-                    _GlyphRunAfterGlowLayer(
-                        glyph_run,
-                        y,
-                        layout.fill_segments,
-                        t_ms,
-                        layout.rtl,
-                        clip_band=after_band,
-                        z_index=z_index,
-                        fill_rect=fill_rect,
-                    )
-                )
-                z_index += 1
-            after_body_layers.append(
-                _GlyphRunLayer(
-                    glyph_run,
-                    y,
-                    layout.fill_segments,
-                    t_ms,
-                    layout.rtl,
-                    after=True,
-                    clip_band=after_band,
-                    z_index=z_index,
-                    fill_rect=fill_rect,
-                )
-            )
-            z_index += 1
-    for glyph in _bitmap_guide_glyphs(layout.text_layout):
-        bitmap_after_layers.append(
-            _BitmapGuideLayer(
-                glyph,
-                y,
-                layout.fill_segments,
-                t_ms,
-                layout.rtl,
-                after=True,
-                z_index=z_index,
-            )
-        )
-        z_index += 1
-    # N3 composites the blurred decoration below every body/edge layer.
-    return (
-        combined_glow_layers
-        + before_glow_layers
-        + after_glow_layers
-        + before_layers
-        + bitmap_before_layers
-        + after_body_layers
-        + bitmap_after_layers
+    return _build_horizontal_line_layer_stack(
+        layout,
+        t_ms,
+        _HORIZONTAL_LAYER_STACK_PORTS,
     )
 
 
@@ -4593,14 +4482,6 @@ def _paint_cached_run_split_glow_source_wipe(
         finally:
             painter.restore()
     return True
-
-
-def _glyph_run_can_combine_split_glow(glyphs: list[_GlyphLayout]) -> bool:
-    if not _glyph_run_needs_before_glow_split(glyphs):
-        return False
-    style = glyphs[0].style
-    before_radius = _glow_radius(style, after=False)
-    return before_radius > 0 and before_radius == _glow_radius(style, after=True)
 
 
 def _paint_glyph_run_combined_glow(
@@ -7457,6 +7338,24 @@ _GLYPH_LAYER_PORTS = GlyphLayerPorts(
     ),
     run_fill_complete=lambda *args, **kwargs: (
         _run_fill_complete(*args, **kwargs)
+    ),
+)
+
+
+_HORIZONTAL_LAYER_STACK_PORTS = LayerStackPorts(
+    bitmap_guide_layer=lambda *args, **kwargs: _BitmapGuideLayer(*args, **kwargs),
+    fill_clip_band_for_glyphs=lambda *args, **kwargs: (
+        _fill_clip_band_for_glyphs(*args, **kwargs)
+    ),
+    glyph_run_after_glow_layer=lambda *args, **kwargs: (
+        _GlyphRunAfterGlowLayer(*args, **kwargs)
+    ),
+    glyph_run_before_glow_layer=lambda *args, **kwargs: (
+        _GlyphRunBeforeGlowLayer(*args, **kwargs)
+    ),
+    glyph_run_layer=lambda *args, **kwargs: _GlyphRunLayer(*args, **kwargs),
+    glyph_run_split_glow_layer=lambda *args, **kwargs: (
+        _GlyphRunSplitGlowLayer(*args, **kwargs)
     ),
 )
 

@@ -1934,6 +1934,95 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     )
 
 
+def test_horizontal_line_layer_stack_has_one_painter_free_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layer_owner = f"{owner}.layers"
+    layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
+    painter_path = ROOT / "engine/painter.py"
+    layer_tree = ast.parse(layer_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    layer_members = {
+        node.name
+        for node in layer_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert {
+        "LayerStackPorts",
+        "glyph_run_can_combine_split_glow",
+        "line_layer_stack",
+    } <= layer_members
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name
+        in {
+            "LayerStackPorts",
+            "glyph_run_can_combine_split_glow",
+            "line_layer_stack",
+        }
+    }
+    assert imported == {
+        "LayerStackPorts": None,
+        "glyph_run_can_combine_split_glow": (
+            "_glyph_run_can_combine_split_glow"
+        ),
+        "line_layer_stack": "_build_horizontal_line_layer_stack",
+    }
+
+    painter_functions = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_glyph_run_can_combine_split_glow" not in painter_functions
+    adapter = painter_functions["_line_layer_stack"]
+    assert len(adapter.body) == 1
+    assert isinstance(adapter.body[0], ast.Return)
+    call = adapter.body[0].value
+    assert isinstance(call, ast.Call)
+    assert isinstance(call.func, ast.Name)
+    assert call.func.id == "_build_horizontal_line_layer_stack"
+    assert [arg.id for arg in call.args if isinstance(arg, ast.Name)] == [
+        "layout",
+        "t_ms",
+        "_HORIZONTAL_LAYER_STACK_PORTS",
+    ]
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_HORIZONTAL_LAYER_STACK_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "LayerStackPorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "bitmap_guide_layer",
+        "fill_clip_band_for_glyphs",
+        "glyph_run_after_glow_layer",
+        "glyph_run_before_glow_layer",
+        "glyph_run_layer",
+        "glyph_run_split_glow_layer",
+    }
+
+    targets = _import_targets(layer_owner, layer_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.horizontal"
     ruby_owner = f"{owner}.ruby"
