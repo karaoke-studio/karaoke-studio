@@ -4909,3 +4909,29 @@ def test_subtitle_render_window_delegates_project_identity_adoption() -> None:
             and target.attr in {"_project_disk_revision", "_project_path"}
         }
         assert direct_identity_assignments == set()
+
+
+def test_subtitle_render_window_delegates_recovery_snapshot_loading() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_restore_recovery_candidate"
+    )
+    controller_calls = {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "_project_controller"
+    }
+
+    assert controller_calls == {"open_recovery"}

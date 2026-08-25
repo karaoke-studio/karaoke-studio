@@ -349,7 +349,6 @@ from krok_helper.subtitle_render.n3.project_import import (
 from krok_helper.subtitle_render.project.store import (
     ProjectFileRevision,
     RecoveryCandidate,
-    load_render_project,
     project_output_payload,
     save_discarded_project_backup,
     save_recovery_project,
@@ -7427,7 +7426,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _restore_recovery_candidate(self, candidate: RecoveryCandidate) -> bool:
         try:
-            data = load_render_project(candidate.path)
+            loaded = self._project_controller.open_recovery(candidate)
         except (OSError, ValueError) as exc:
             fluent_error(
                 self,
@@ -7435,21 +7434,14 @@ class SubtitleRenderWindow(QWidget):
                 f"无法读取恢复文件：\n{candidate.path}\n\n{exc}",
             )
             return False
-        data.pop("recovery", None)
-        missing_resources = self._missing_project_resources(data)
+        data = loaded.data
+        missing_resources = loaded.missing_resources
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(data)
-        source_path = candidate.source_project_path
-        disk_revision = None
-        if source_path is not None:
-            try:
-                disk_revision = self._project_controller.inspect(source_path)
-            except OSError:
-                disk_revision = None
         self._project_session.adopt_project_identity(
-            path=source_path,
-            disk_revision=disk_revision,
+            path=loaded.source_project_path,
+            disk_revision=loaded.source_disk_revision,
             missing_resources=missing_resources,
             source_data=data,
         )

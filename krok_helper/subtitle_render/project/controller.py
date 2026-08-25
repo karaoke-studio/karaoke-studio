@@ -10,6 +10,7 @@ from krok_helper.subtitle_render.project.resources import (
 )
 from krok_helper.subtitle_render.project.store import (
     ProjectFileRevision,
+    RecoveryCandidate,
     backup_project_file,
     inspect_project_file,
     load_render_project,
@@ -24,6 +25,16 @@ class LoadedSubtitleProject:
     path: Path
     data: dict
     revision: ProjectFileRevision
+    missing_resources: tuple[tuple[str, Path], ...]
+
+
+@dataclass(frozen=True)
+class LoadedRecoveryProject:
+    """Recovery snapshot normalized to the same identity contract as open."""
+
+    data: dict
+    source_project_path: Path | None
+    source_disk_revision: ProjectFileRevision | None
     missing_resources: tuple[tuple[str, Path], ...]
 
 
@@ -48,6 +59,25 @@ class SubtitleProjectController:
             path=path,
             data=data,
             revision=revision_after,
+            missing_resources=tuple(find_missing_project_resources(data)),
+        )
+
+    @staticmethod
+    def open_recovery(candidate: RecoveryCandidate) -> LoadedRecoveryProject:
+        """Read a recovery snapshot and inspect its optional formal project."""
+        data = load_render_project(candidate.path)
+        data.pop("recovery", None)
+        source_path = candidate.source_project_path
+        disk_revision = None
+        if source_path is not None:
+            try:
+                disk_revision = inspect_project_file(source_path)
+            except OSError:
+                disk_revision = None
+        return LoadedRecoveryProject(
+            data=data,
+            source_project_path=source_path,
+            source_disk_revision=disk_revision,
             missing_resources=tuple(find_missing_project_resources(data)),
         )
 
