@@ -531,6 +531,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     RubyGlowLayer as _HorizontalRubyGlowLayer,
     RubyLayerPorts,
     RubyLayoutPorts,
+    RubyStackPorts,
     RubySplitGlowLayer as _HorizontalRubySplitGlowLayer,
     RubyTextLayer as _HorizontalRubyTextLayer,
     RubyWipeSegment as _RubyWipeSegment,
@@ -598,12 +599,15 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     ruby_glow_layer_key as _ruby_glow_layer_key,
     ruby_glow_can_combine_split as _ruby_glow_can_combine_split,
     ruby_glow_states_differ as _ruby_glow_states_differ,
+    ruby_glow_layers as _build_horizontal_ruby_glow_layers,
     ruby_horizontal_gradient_rect_signature as _ruby_horizontal_gradient_rect_signature,
     ruby_segment_wipe_state as _ruby_segment_wipe_state,
     ruby_text_rect as _ruby_text_rect,
+    ruby_text_layers as _build_horizontal_ruby_text_layers,
     ruby_text_layer_key as _ruby_text_layer_key,
     ruby_wipe_geometry as _ruby_wipe_geometry,
     ruby_wipe_state as _ruby_wipe_state,
+    ruby_layer_stack as _build_horizontal_ruby_layer_stack,
     text_glyph_runs as _text_glyph_runs,
     transition_char_state as _transition_char_state,
     utopia_following_done_time as _utopia_following_done_time,
@@ -7744,37 +7748,16 @@ def _ruby_text_layers(
     *,
     draw_glow: bool = True,
 ) -> list:
-    layers = []
-    for index, layout in enumerate(layouts):
-        target_ruby_font = layout.font or ruby_font
-        target_ruby_metrics = layout.metrics or ruby_metrics
-        layers.append(
-            _RubyTextLayer(
-                layout,
-                target_ruby_font,
-                target_ruby_metrics,
-                t_ms,
-                layout.style,
-                rtl,
-                after=False,
-                z_index=index * 2,
-                draw_glow=draw_glow,
-            )
-        )
-        layers.append(
-            _RubyTextLayer(
-                layout,
-                target_ruby_font,
-                target_ruby_metrics,
-                t_ms,
-                layout.style,
-                rtl,
-                after=True,
-                z_index=index * 2 + 1,
-                draw_glow=draw_glow,
-            )
-        )
-    return layers
+    return _build_horizontal_ruby_text_layers(
+        layouts,
+        ruby_font,
+        ruby_metrics,
+        t_ms,
+        style,
+        rtl,
+        _RUBY_STACK_PORTS,
+        draw_glow=draw_glow,
+    )
 
 
 def _ruby_glow_layers(
@@ -7785,48 +7768,15 @@ def _ruby_glow_layers(
     style: Style,
     rtl: bool,
 ) -> list:
-    layers = []
-    for index, layout in enumerate(layouts):
-        target_ruby_font = layout.font or ruby_font
-        target_ruby_metrics = layout.metrics or ruby_metrics
-        if _ruby_glow_can_combine_split(layout.style):
-            layers.append(
-                _RubySplitGlowLayer(
-                    layout,
-                    target_ruby_font,
-                    target_ruby_metrics,
-                    t_ms,
-                    layout.style,
-                    rtl,
-                    z_index=index,
-                )
-            )
-            continue
-        layers.append(
-            _RubyGlowLayer(
-                layout,
-                target_ruby_font,
-                target_ruby_metrics,
-                t_ms,
-                layout.style,
-                rtl,
-                after=False,
-                z_index=index * 2,
-            )
-        )
-        layers.append(
-            _RubyGlowLayer(
-                layout,
-                target_ruby_font,
-                target_ruby_metrics,
-                t_ms,
-                layout.style,
-                rtl,
-                after=True,
-                z_index=index * 2 + 1,
-            )
-        )
-    return layers
+    return _build_horizontal_ruby_glow_layers(
+        layouts,
+        ruby_font,
+        ruby_metrics,
+        t_ms,
+        style,
+        rtl,
+        _RUBY_STACK_PORTS,
+    )
 
 
 def _ruby_layer_stack(
@@ -7835,15 +7785,12 @@ def _ruby_layer_stack(
     t_ms: int,
     style: Style,
 ) -> list:
-    if layout.ruby_metrics is None:
-        return []
-    return _ruby_text_layers(
-        list(layout.ruby_layouts),
-        layout.ruby_font,
-        layout.ruby_metrics,
+    return _build_horizontal_ruby_layer_stack(
+        layout,
+        line,
         t_ms,
         style,
-        layout.rtl,
+        _RUBY_STACK_PORTS,
     )
 
 
@@ -8386,6 +8333,15 @@ _RUBY_LAYER_PORTS = RubyLayerPorts(
     ruby_text_path_and_rect=lambda *args, **kwargs: (
         _ruby_text_path_and_rect(*args, **kwargs)
     ),
+)
+
+
+_RUBY_STACK_PORTS = RubyStackPorts(
+    ruby_glow_layer=lambda *args, **kwargs: _RubyGlowLayer(*args, **kwargs),
+    ruby_split_glow_layer=lambda *args, **kwargs: (
+        _RubySplitGlowLayer(*args, **kwargs)
+    ),
+    ruby_text_layer=lambda *args, **kwargs: _RubyTextLayer(*args, **kwargs),
 )
 
 

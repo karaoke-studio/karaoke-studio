@@ -37,6 +37,7 @@ from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_ruby_karaoke_colors,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
+    LineLayout,
     RubyLayout,
     RubyWipeSegment,
 )
@@ -81,10 +82,139 @@ class RubyLayerPorts:
 
 
 @dataclass(frozen=True)
+class RubyStackPorts:
+    """Compatibility factories used to build ordered horizontal ruby layers."""
+
+    ruby_glow_layer: Callable[..., object]
+    ruby_split_glow_layer: Callable[..., object]
+    ruby_text_layer: Callable[..., object]
+
+
+@dataclass(frozen=True)
 class RubyLayoutPorts:
     """Compatibility hook needed while Painter exposes ruby wipe geometry."""
 
     ruby_wipe_geometry: Callable[..., tuple]
+
+
+def ruby_text_layers(
+    layouts: list[RubyLayout],
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    t_ms: int,
+    style: Style,
+    rtl: bool,
+    ports: RubyStackPorts,
+    *,
+    draw_glow: bool = True,
+) -> list:
+    """Build the ordered before/after body layers for horizontal ruby text."""
+    layers = []
+    for index, layout in enumerate(layouts):
+        target_ruby_font = layout.font or ruby_font
+        target_ruby_metrics = layout.metrics or ruby_metrics
+        layers.append(
+            ports.ruby_text_layer(
+                layout,
+                target_ruby_font,
+                target_ruby_metrics,
+                t_ms,
+                layout.style,
+                rtl,
+                after=False,
+                z_index=index * 2,
+                draw_glow=draw_glow,
+            )
+        )
+        layers.append(
+            ports.ruby_text_layer(
+                layout,
+                target_ruby_font,
+                target_ruby_metrics,
+                t_ms,
+                layout.style,
+                rtl,
+                after=True,
+                z_index=index * 2 + 1,
+                draw_glow=draw_glow,
+            )
+        )
+    return layers
+
+
+def ruby_glow_layers(
+    layouts: list[RubyLayout],
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    t_ms: int,
+    style: Style,
+    rtl: bool,
+    ports: RubyStackPorts,
+) -> list:
+    """Build the ordered decoration layers for horizontal ruby text."""
+    layers = []
+    for index, layout in enumerate(layouts):
+        target_ruby_font = layout.font or ruby_font
+        target_ruby_metrics = layout.metrics or ruby_metrics
+        if ruby_glow_can_combine_split(layout.style):
+            layers.append(
+                ports.ruby_split_glow_layer(
+                    layout,
+                    target_ruby_font,
+                    target_ruby_metrics,
+                    t_ms,
+                    layout.style,
+                    rtl,
+                    z_index=index,
+                )
+            )
+            continue
+        layers.append(
+            ports.ruby_glow_layer(
+                layout,
+                target_ruby_font,
+                target_ruby_metrics,
+                t_ms,
+                layout.style,
+                rtl,
+                after=False,
+                z_index=index * 2,
+            )
+        )
+        layers.append(
+            ports.ruby_glow_layer(
+                layout,
+                target_ruby_font,
+                target_ruby_metrics,
+                t_ms,
+                layout.style,
+                rtl,
+                after=True,
+                z_index=index * 2 + 1,
+            )
+        )
+    return layers
+
+
+def ruby_layer_stack(
+    layout: LineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+    ports: RubyStackPorts,
+) -> list:
+    """Build the static ruby body stack attached to one horizontal line."""
+    if layout.ruby_metrics is None:
+        return []
+    return ruby_text_layers(
+        list(layout.ruby_layouts),
+        layout.ruby_font,
+        layout.ruby_metrics,
+        t_ms,
+        style,
+        layout.rtl,
+        ports,
+    )
 
 
 def ruby_wipe_geometry(
