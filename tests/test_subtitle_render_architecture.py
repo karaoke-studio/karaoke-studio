@@ -3814,7 +3814,7 @@ def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
     assert loader_calls == {"load_file", "load_lrc", "load_sug", "load_sug_project"}
 
 
-def test_subtitle_render_window_delegates_source_reload_planning() -> None:
+def test_subtitle_render_window_delegates_source_reload_preparation() -> None:
     window_path = ROOT / "frontend" / "main_window.py"
     tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     window_class = next(
@@ -3834,7 +3834,8 @@ def test_subtitle_render_window_delegates_source_reload_planning() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
-    assert "plan_reloaded_tracks" in direct_merge_calls
+    assert "prepare_reloaded_tracks" in direct_merge_calls
+    assert "plan_reloaded_tracks" not in direct_merge_calls
     assert "merge_reloaded_track" not in direct_merge_calls
 
 

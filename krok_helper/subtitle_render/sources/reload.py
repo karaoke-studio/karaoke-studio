@@ -6,6 +6,10 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+import hashlib
+from pathlib import Path
+from typing import Callable
+
 from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
@@ -32,6 +36,20 @@ class TrackReloadPlan:
     conflicts: tuple[str, ...]
     structure_changed: bool
     timing_only: bool
+
+
+@dataclass(frozen=True)
+class PreparedTrackReload:
+    """Stable source snapshot and optional merge plan for one file event."""
+
+    digest: str
+    candidate: TimingTrack | None
+    plan: TrackReloadPlan | None
+
+
+def source_file_digest(path: Path) -> str:
+    """Return the content digest used to suppress duplicate file events."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def plan_reloaded_tracks(
@@ -65,6 +83,46 @@ def plan_reloaded_tracks(
         conflicts=conflicts,
         structure_changed=any(merge.structure_changed for merge in merges),
         timing_only=bool(merges) and all(merge.timing_only for merge in merges),
+    )
+
+
+def prepare_reloaded_tracks(
+    path: Path,
+    *,
+    seen_digest: str,
+    baseline: TimingTrack,
+    load_candidate: Callable[[Path], TimingTrack],
+    primary_track: TimingTrack | None = None,
+    extra_tracks: Iterable[tuple[int, TimingTrack]] = (),
+) -> PreparedTrackReload:
+    """Read one stable source snapshot and build its project-wide merge plan.
+
+    A candidate of ``None`` means the file content is byte-identical to the
+    already-seen source.  A candidate with no plan means parsing produced the
+    same source-owned track as the current baseline.
+    """
+    source_path = Path(path)
+    before = source_path.stat()
+    digest = source_file_digest(source_path)
+    if digest == seen_digest:
+        return PreparedTrackReload(digest=digest, candidate=None, plan=None)
+
+    candidate = load_candidate(source_path)
+    after = source_path.stat()
+    if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+        raise OSError("字幕文件仍在写入")
+    if baseline == candidate:
+        return PreparedTrackReload(digest=digest, candidate=candidate, plan=None)
+
+    return PreparedTrackReload(
+        digest=digest,
+        candidate=candidate,
+        plan=plan_reloaded_tracks(
+            baseline,
+            candidate,
+            primary_track=primary_track,
+            extra_tracks=extra_tracks,
+        ),
     )
 
 

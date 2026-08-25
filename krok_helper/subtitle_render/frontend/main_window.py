@@ -356,7 +356,7 @@ from krok_helper.subtitle_render.project.store import (
 from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
 from krok_helper.subtitle_render.sources.reload import (
     merge_reloaded_track,
-    plan_reloaded_tracks,
+    prepare_reloaded_tracks,
 )
 from krok_helper.subtitle_render.project.session import (
     ExtraSubtitleSource,
@@ -3261,53 +3261,6 @@ class SubtitleRenderWindow(QWidget):
                 )
             return
 
-        try:
-            before = path.stat()
-            digest = self._subtitle_source_digest(path)
-            if digest == state.seen_digest:
-                state.missing_notified = False
-                self._source_watch_runtime.acknowledge(key)
-                self._sync_subtitle_source_watcher()
-                return
-            # 与手动刷新同口径：按所属轨道的加载设置决定是否应用 .sug 导出偏移。
-            # 同一路径被多个源引用时沿用现有「单次解析」语义，取首个所属轨道。
-            owner_track = (
-                self._timing_track
-                if (
-                    self._watch_primary_subtitle_source
-                    and self._subtitle_path is not None
-                    and self._subtitle_source_key(self._subtitle_path) == key
-                    and self._timing_track is not None
-                )
-                else next(
-                    (
-                        source.track
-                        for source in self._extra_sources
-                        if self._subtitle_source_key(source.path) == key
-                    ),
-                    None,
-                )
-            )
-            candidate = self._load_timing_track_file(
-                path,
-                apply_sug_export_compensation=(
-                    self._sug_compensation_enabled_for_track(owner_track)
-                ),
-            )
-            after = path.stat()
-            if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-                raise OSError("字幕文件仍在写入")
-        except Exception as exc:  # noqa: BLE001 - partial external writes are retried
-            self._retry_subtitle_source_reload(key, exc)
-            return
-
-        state.missing_notified = False
-        self._source_watch_runtime.acknowledge(key)
-        if state.baseline == candidate:
-            state.seen_digest = digest
-            self._sync_subtitle_source_watcher()
-            return
-
         primary_track = None
         if (
             self._watch_primary_subtitle_source
@@ -3316,16 +3269,52 @@ class SubtitleRenderWindow(QWidget):
             and self._subtitle_source_key(self._subtitle_path) == key
         ):
             primary_track = self._timing_track
-        plan = plan_reloaded_tracks(
-            state.baseline,
-            candidate,
-            primary_track=primary_track,
-            extra_tracks=(
-                (index, source.track)
-                for index, source in enumerate(self._extra_sources)
-                if self._subtitle_source_key(source.path) == key
-            ),
-        )
+        # 与手动刷新同口径：按所属轨道的加载设置决定是否应用 .sug 导出偏移。
+        # 同一路径被多个源引用时沿用现有「单次解析」语义，取首个所属轨道。
+        owner_track = primary_track
+        if owner_track is None:
+            owner_track = next(
+                (
+                    source.track
+                    for source in self._extra_sources
+                    if self._subtitle_source_key(source.path) == key
+                ),
+                None,
+            )
+        try:
+            prepared = prepare_reloaded_tracks(
+                path,
+                seen_digest=state.seen_digest,
+                baseline=state.baseline,
+                load_candidate=lambda source_path: self._load_timing_track_file(
+                    source_path,
+                    apply_sug_export_compensation=(
+                        self._sug_compensation_enabled_for_track(owner_track)
+                    ),
+                ),
+                primary_track=primary_track,
+                extra_tracks=(
+                    (index, source.track)
+                    for index, source in enumerate(self._extra_sources)
+                    if self._subtitle_source_key(source.path) == key
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - partial external writes are retried
+            self._retry_subtitle_source_reload(key, exc)
+            return
+
+        state.missing_notified = False
+        self._source_watch_runtime.acknowledge(key)
+        if prepared.candidate is None:
+            self._sync_subtitle_source_watcher()
+            return
+        if prepared.plan is None:
+            state.seen_digest = prepared.digest
+            self._sync_subtitle_source_watcher()
+            return
+
+        candidate = prepared.candidate
+        plan = prepared.plan
         if plan.conflicts:
             details = "\n".join(f"• {item}" for item in plan.conflicts[:8])
             suffix = "\n• 还有其他冲突……" if len(plan.conflicts) > 8 else ""
@@ -3339,7 +3328,7 @@ class SubtitleRenderWindow(QWidget):
                 default_cancel=True,
             )
             if not accepted:
-                state.seen_digest = digest
+                state.seen_digest = prepared.digest
                 self._sync_subtitle_source_watcher()
                 return
 
@@ -3357,7 +3346,7 @@ class SubtitleRenderWindow(QWidget):
         if plan.structure_changed:
             self._clear_undo_history()
         state.baseline = deepcopy(candidate)
-        state.seen_digest = digest
+        state.seen_digest = prepared.digest
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
         self._property_panel.merge_roles(self._content_role_options())

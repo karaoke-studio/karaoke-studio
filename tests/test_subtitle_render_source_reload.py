@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from krok_helper.subtitle_render.domain.models import (
     GuideSymbol,
     TimingChar,
@@ -11,6 +13,8 @@ from krok_helper.subtitle_render.domain.models import (
 from krok_helper.subtitle_render.sources.reload import (
     merge_reloaded_track,
     plan_reloaded_tracks,
+    prepare_reloaded_tracks,
+    source_file_digest,
 )
 
 
@@ -215,3 +219,61 @@ def test_multi_track_reload_plan_deduplicates_shared_conflicts() -> None:
     assert len(plan.conflicts) == 1
     assert plan.structure_changed is True
     assert plan.timing_only is False
+
+
+def test_stable_reload_skips_parsing_when_digest_is_unchanged(tmp_path) -> None:
+    path = tmp_path / "source.lrc"
+    path.write_text("unchanged", encoding="utf-8")
+
+    prepared = prepare_reloaded_tracks(
+        path,
+        seen_digest=source_file_digest(path),
+        baseline=_track(),
+        load_candidate=lambda _path: pytest.fail("unchanged source must not parse"),
+    )
+
+    assert prepared.candidate is None
+    assert prepared.plan is None
+
+
+def test_stable_reload_returns_project_wide_merge_plan(tmp_path) -> None:
+    path = tmp_path / "source.lrc"
+    path.write_text("changed", encoding="utf-8")
+    baseline = _track()
+    primary = deepcopy(baseline)
+    primary.lines[0].chars[0].role_label = "主轨角色"
+
+    prepared = prepare_reloaded_tracks(
+        path,
+        seen_digest="old-digest",
+        baseline=baseline,
+        load_candidate=lambda _path: _track(first_ms=2200),
+        primary_track=primary,
+    )
+
+    assert prepared.candidate is not None
+    assert prepared.plan is not None
+    assert prepared.plan.timing_only is True
+    assert prepared.plan.primary_merge is not None
+    assert (
+        prepared.plan.primary_merge.track.lines[0].chars[0].role_label
+        == "主轨角色"
+    )
+
+
+def test_stable_reload_rejects_a_source_still_being_written(tmp_path) -> None:
+    path = tmp_path / "source.lrc"
+    path.write_text("first", encoding="utf-8")
+
+    def mutate_while_loading(source_path):
+        source_path.write_text("a different size", encoding="utf-8")
+        return _track(first_ms=2200)
+
+    with pytest.raises(OSError, match="字幕文件仍在写入"):
+        prepare_reloaded_tracks(
+            path,
+            seen_digest="old-digest",
+            baseline=_track(),
+            load_candidate=mutate_while_loading,
+            primary_track=_track(),
+        )

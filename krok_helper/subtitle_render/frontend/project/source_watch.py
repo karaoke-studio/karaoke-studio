@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 import sys
 from typing import Callable, Mapping, Optional
@@ -12,6 +11,7 @@ from typing import Callable, Mapping, Optional
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal as Signal
 
 from krok_helper.subtitle_render.domain.timing import TimingTrack
+from krok_helper.subtitle_render.sources.reload import source_file_digest
 
 
 def subtitle_source_key(path: Path) -> str:
@@ -22,7 +22,7 @@ def subtitle_source_key(path: Path) -> str:
 
 def subtitle_source_digest(path: Path) -> str:
     """Return the content digest used to suppress duplicate file events."""
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return source_file_digest(path)
 
 
 @dataclass
