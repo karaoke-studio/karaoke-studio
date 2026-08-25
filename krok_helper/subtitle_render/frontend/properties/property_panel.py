@@ -108,7 +108,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
-from krok_helper.subtitle_render.frontend.properties.property_pages import (
+from krok_helper.subtitle_render.frontend.properties.pages.registry import (
     PROPERTY_PAGE_SPECS,
     build_property_pages,
     property_page_index,
@@ -134,14 +134,14 @@ from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     WheelFocusedFontComboBox,
     WheelFocusedSpinBox,
 )
-from krok_helper.subtitle_render.frontend.properties.property_background_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.background import (
     BACKGROUND_KIND_PAGES,
     BackgroundPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_effects_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.effects import (
     EffectsPropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_layout_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.layout import (
     LayoutPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend.properties.property_role_page import (
@@ -165,10 +165,10 @@ from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
     ToggleSwitch,
     subgroup_label as _subgroup_label,
 )
-from krok_helper.subtitle_render.frontend.properties.property_title_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.title import (
     TitlePropertyPageBuilder,
 )
-from krok_helper.subtitle_render.frontend.properties.property_timing_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.timing import (
     TimingPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR

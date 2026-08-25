@@ -20,7 +20,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_field,
     property_section,
 )
-from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
+from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
 from krok_helper.subtitle_render.frontend.properties.controls.widgets import FolderTabPanel, PillSelector
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
@@ -299,4 +299,3 @@ class RoleColorPropertyPageBuilder:
         host._color_tab_panel.content_layout.addLayout(columns)
         host._color_tab_panel.content_layout.addWidget(host._ruby_color_actions_row)
         return section
-

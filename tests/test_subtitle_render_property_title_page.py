@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.frontend.properties.property_title_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.title import (
     TITLE_TIME_MAX_MS,
     TitlePropertyPageBuilder,
 )

@@ -16,7 +16,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_field,
     property_section,
 )
-from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
+from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
 from krok_helper.subtitle_render.frontend.properties.controls.widgets import SubGroup
 
 

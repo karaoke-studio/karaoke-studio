@@ -15,7 +15,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     compact_property_control,
     property_field,
 )
-from krok_helper.subtitle_render.frontend.properties.property_timing_page import timing_spin
+from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
 
 
 FONT_SIZE_MAX_PX = 4096
@@ -264,4 +264,3 @@ class RoleFontSettingsPageBuilder:
             stroke_layout.setColumnStretch(column, 1)
         layout.addWidget(stroke_row)
         return page
-

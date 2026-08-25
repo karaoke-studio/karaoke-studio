@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from krok_helper.subtitle_render.frontend.properties.property_pages import (
+from krok_helper.subtitle_render.frontend.properties.pages.registry import (
     PROPERTY_PAGE_DEFINITIONS,
     PROPERTY_PAGE_SPECS,
     build_property_pages,

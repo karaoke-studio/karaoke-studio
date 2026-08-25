@@ -2190,17 +2190,11 @@ def test_subtitle_render_window_delegates_export_job_assembly() -> None:
 
 def test_property_frontend_modules_are_grouped_in_one_domain_package() -> None:
     module_names = {
-        "property_background_page.py",
-        "property_effects_page.py",
-        "property_layout_page.py",
-        "property_pages.py",
         "property_panel.py",
         "property_role_color_page.py",
         "property_role_fill_pages.py",
         "property_role_font_page.py",
         "property_role_page.py",
-        "property_timing_page.py",
-        "property_title_page.py",
     }
     properties_root = ROOT / "frontend" / "properties"
     assert {"__init__.py", *module_names} <= {
@@ -2215,6 +2209,27 @@ def test_property_frontend_modules_are_grouped_in_one_domain_package() -> None:
         (properties_root / name).exists()
         for name in {"property_inputs.py", "property_layout.py", "property_widgets.py"}
     )
+    pages_root = properties_root / "pages"
+    assert {
+        "__init__.py",
+        "background.py",
+        "effects.py",
+        "layout.py",
+        "registry.py",
+        "timing.py",
+        "title.py",
+    } <= {path.name for path in pages_root.glob("*.py")}
+    assert not any(
+        (properties_root / name).exists()
+        for name in {
+            "property_background_page.py",
+            "property_effects_page.py",
+            "property_layout_page.py",
+            "property_pages.py",
+            "property_timing_page.py",
+            "property_title_page.py",
+        }
+    )
 
 
 def test_subtitle_property_panel_delegates_page_registry_and_routing() -> None:
@@ -2222,7 +2237,7 @@ def test_subtitle_property_panel_delegates_page_registry_and_routing() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_pages" in targets
+    assert f"{PACKAGE}.frontend.properties.pages.registry" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2356,7 +2371,7 @@ def test_subtitle_property_panel_delegates_title_page_construction() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_title_page" in targets
+    assert f"{PACKAGE}.frontend.properties.pages.title" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2390,7 +2405,7 @@ def test_subtitle_property_panel_delegates_timing_page_construction() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_timing_page" in targets
+    assert f"{PACKAGE}.frontend.properties.pages.timing" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2418,7 +2433,7 @@ def test_subtitle_property_panel_delegates_background_screen_construction() -> N
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_background_page" in targets
+    assert f"{PACKAGE}.frontend.properties.pages.background" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2476,7 +2491,7 @@ def test_subtitle_property_panel_delegates_animation_construction() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_effects_page" in targets
+    assert f"{PACKAGE}.frontend.properties.pages.effects" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node
@@ -2528,7 +2543,7 @@ def test_subtitle_property_panel_delegates_viewport_construction() -> None:
     panel_module = f"{PACKAGE}.frontend.properties.property_panel"
     targets = _import_targets(panel_module, panel_path)
 
-    assert f"{PACKAGE}.frontend.properties.property_layout_page" in targets
+    assert f"{PACKAGE}.frontend.properties.pages.layout" in targets
     tree = ast.parse(panel_path.read_text(encoding="utf-8-sig"))
     panel_class = next(
         node

@@ -5,7 +5,7 @@ from __future__ import annotations
 from PyQt6.QtCore import pyqtSignal as Signal
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
-from krok_helper.subtitle_render.frontend.properties.property_layout_page import (
+from krok_helper.subtitle_render.frontend.properties.pages.layout import (
     LayoutPropertyPageBuilder,
 )
 
