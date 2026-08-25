@@ -1226,3 +1226,122 @@ def test_line_animation_batch_edit_supports_undo_redo() -> None:
 
     host._redo_edit()
     assert [line.animation_override for line in track.lines] == [override, override]
+
+
+@pytest.mark.parametrize(
+    ("command", "method_name", "old_args", "new_args"),
+    [
+        (
+            ("track_snapshot", 2, "old", "new"),
+            "_restore_track_snapshot",
+            (2, "old"),
+            (2, "new"),
+        ),
+        (
+            ("tracks_snapshot", (1,), "old", "new"),
+            "_restore_tracks_snapshot",
+            ((1,), "old"),
+            ((1,), "new"),
+        ),
+        (
+            ("style_tracks", "old-style", "new-style", (1,), "old", "new"),
+            "_restore_style_and_tracks",
+            ("old-style", (1,), "old"),
+            ("new-style", (1,), "new"),
+        ),
+        (
+            ("style", "old", "new", frozenset(), 1.0),
+            "_restore_style",
+            ("old",),
+            ("new",),
+        ),
+        (
+            ("screen", "old-screen", "old-style", "new-screen", "new-style", 1.0),
+            "_restore_screen",
+            ("old-screen", "old-style"),
+            ("new-screen", "new-style"),
+        ),
+        (
+            ("char_roles", 1, 2, "old", "new"),
+            "_restore_char_roles",
+            (1, 2, "old"),
+            (1, 2, "new"),
+        ),
+        (
+            ("char_roles_batch", 1, (2,), "old", "new"),
+            "_restore_char_role_rows",
+            (1, (2,), "old"),
+            (1, (2,), "new"),
+        ),
+        (
+            ("guide_symbols", 1, (2,), "old", "new"),
+            "_restore_guide_symbols",
+            (1, (2,), "old"),
+            (1, (2,), "new"),
+        ),
+        (
+            ("guide_char_roles", 1, 2, "old", "new"),
+            "_restore_guide_char_roles",
+            (1, 2, "old"),
+            (1, 2, "new"),
+        ),
+        (
+            ("inline_char_edit", 1, 2, "old", "new"),
+            "_restore_inline_char_edit",
+            (1, 2, "old"),
+            (1, 2, "new"),
+        ),
+        (
+            ("guide_replacements", 1, (2,), "old", "new"),
+            "_restore_guide_replacement_rows",
+            (1, (2,), "old"),
+            (1, (2,), "new"),
+        ),
+        (
+            ("inline_roles_batch", 1, (2,), "old", "new"),
+            "_restore_inline_role_rows",
+            (1, (2,), "old"),
+            (1, (2,), "new"),
+        ),
+        (
+            ("animation", 1, (2,), "old", "new"),
+            "_restore_animation_overrides",
+            (1, (2,), "old"),
+            (1, (2,), "new"),
+        ),
+        (
+            (1, 2, "old", "new"),
+            "_restore_display_override",
+            (1, 2, "old"),
+            (1, 2, "new"),
+        ),
+    ],
+)
+def test_edit_history_dispatches_old_and_new_command_values(
+    command, method_name, old_args, new_args
+) -> None:
+    from krok_helper.subtitle_render.frontend.editor.edit_history import (
+        redo_edit,
+        undo_edit,
+    )
+
+    calls = []
+
+    def restore(*args):
+        calls.append(args)
+        return True
+
+    restorer = SimpleNamespace(**{method_name: restore})
+    undo_stack = [command]
+    redo_stack = []
+
+    undo_edit(undo_stack, redo_stack, restorer)
+    assert calls == [old_args]
+    assert undo_stack == []
+    assert redo_stack == [command]
+
+    calls.clear()
+    redo_edit(undo_stack, redo_stack, restorer)
+    assert calls == [new_args]
+    assert undo_stack == [command]
+    assert redo_stack == []

@@ -202,6 +202,10 @@ from krok_helper.subtitle_render.frontend.workflow.export_controller import (
     ExportJobInputs,
 )
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import LyricsPanel
+from krok_helper.subtitle_render.frontend.editor.edit_history import (
+    redo_edit,
+    undo_edit,
+)
 from krok_helper.subtitle_render.frontend.preview.playback import (
     PlaybackController,
     unified_player_enabled,
@@ -6021,184 +6025,11 @@ class SubtitleRenderWindow(QWidget):
 
     def _undo_edit(self) -> None:
         """Ctrl+Z：撤销最近一次样式（字体/布局等）、轨道时间或逐行特效编辑。"""
-        while self._undo_stack:
-            command = self._undo_stack.pop()
-            if command[0] == "track_snapshot":
-                _kind, track_index, old_track, _new_track = command
-                if self._restore_track_snapshot(track_index, old_track):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "tracks_snapshot":
-                _kind, indices, old_tracks, _new_tracks = command
-                if self._restore_tracks_snapshot(indices, old_tracks):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "style_tracks":
-                _kind, old_style, _new_style, indices, old_tracks, _new_tracks = command
-                if self._restore_style_and_tracks(old_style, indices, old_tracks):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "style":
-                if self._restore_style(command[1]):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "screen":
-                _kind, old_screen, old_style, _new_screen, _new_style, _ts = command
-                if self._restore_screen(old_screen, old_style):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "char_roles":
-                _kind, track_index, row, old_labels, _new_labels = command
-                if self._restore_char_roles(track_index, row, old_labels):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "char_roles_batch":
-                _kind, track_index, rows, old_values, _new_values = command
-                if self._restore_char_role_rows(track_index, rows, old_values):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "guide_symbols":
-                _kind, track_index, rows, old_values, _new_values = command
-                if self._restore_guide_symbols(track_index, rows, old_values):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "guide_char_roles":
-                _kind, track_index, row, old_value, _new_value = command
-                if self._restore_guide_char_roles(track_index, row, old_value):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "inline_char_edit":
-                _kind, track_index, row, old_value, _new_value = command
-                if self._restore_inline_char_edit(track_index, row, old_value):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "guide_replacements":
-                _kind, track_index, rows, old_values, _new_values = command
-                if self._restore_guide_replacement_rows(
-                    track_index, rows, old_values
-                ):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if command[0] == "inline_roles_batch":
-                _kind, track_index, rows, old_values, _new_values = command
-                if self._restore_inline_role_rows(track_index, rows, old_values):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            if len(command) == 5 and command[0] == "animation":
-                _kind, track_index, rows, old_values, new_values = command
-                if self._restore_animation_overrides(track_index, rows, old_values):
-                    self._redo_stack.append(command)
-                    return
-                continue
-            track_index, line_index, old_values, new_values = command
-            if self._restore_display_override(track_index, line_index, old_values):
-                self._redo_stack.append(
-                    (track_index, line_index, old_values, new_values)
-                )
-                return
-            # 目标轨道/行已不存在（换源等）→ 丢弃该条继续往下找
+        undo_edit(self._undo_stack, self._redo_stack, self)
 
     def _redo_edit(self) -> None:
         """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的样式或字幕轨道编辑。"""
-        while self._redo_stack:
-            command = self._redo_stack.pop()
-            if command[0] == "track_snapshot":
-                _kind, track_index, _old_track, new_track = command
-                if self._restore_track_snapshot(track_index, new_track):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "tracks_snapshot":
-                _kind, indices, _old_tracks, new_tracks = command
-                if self._restore_tracks_snapshot(indices, new_tracks):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "style_tracks":
-                _kind, _old_style, new_style, indices, _old_tracks, new_tracks = command
-                if self._restore_style_and_tracks(new_style, indices, new_tracks):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "style":
-                if self._restore_style(command[2]):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "screen":
-                _kind, _old_screen, _old_style, new_screen, new_style, _ts = command
-                if self._restore_screen(new_screen, new_style):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "char_roles":
-                _kind, track_index, row, _old_labels, new_labels = command
-                if self._restore_char_roles(track_index, row, new_labels):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "char_roles_batch":
-                _kind, track_index, rows, _old_values, new_values = command
-                if self._restore_char_role_rows(track_index, rows, new_values):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "guide_symbols":
-                _kind, track_index, rows, _old_values, new_values = command
-                if self._restore_guide_symbols(track_index, rows, new_values):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "guide_char_roles":
-                _kind, track_index, row, _old_value, new_value = command
-                if self._restore_guide_char_roles(track_index, row, new_value):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "inline_char_edit":
-                _kind, track_index, row, _old_value, new_value = command
-                if self._restore_inline_char_edit(track_index, row, new_value):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "guide_replacements":
-                _kind, track_index, rows, _old_values, new_values = command
-                if self._restore_guide_replacement_rows(
-                    track_index, rows, new_values
-                ):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if command[0] == "inline_roles_batch":
-                _kind, track_index, rows, _old_values, new_values = command
-                if self._restore_inline_role_rows(track_index, rows, new_values):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            if len(command) == 5 and command[0] == "animation":
-                _kind, track_index, rows, old_values, new_values = command
-                if self._restore_animation_overrides(track_index, rows, new_values):
-                    self._undo_stack.append(command)
-                    return
-                continue
-            track_index, line_index, old_values, new_values = command
-            if self._restore_display_override(track_index, line_index, new_values):
-                self._undo_stack.append(
-                    (track_index, line_index, old_values, new_values)
-                )
-                return
+        redo_edit(self._undo_stack, self._redo_stack, self)
 
     def _clear_undo_history(self) -> None:
         self._undo_stack.clear()

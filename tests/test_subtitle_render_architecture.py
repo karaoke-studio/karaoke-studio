@@ -2983,12 +2983,45 @@ def test_dialog_frontend_modules_are_grouped_in_one_domain_package() -> None:
 
 
 def test_editor_frontend_modules_are_grouped_in_one_domain_package() -> None:
-    module_names = {"lyrics_list.py", "timeline_view.py"}
+    module_names = {"edit_history.py", "lyrics_list.py", "timeline_view.py"}
     editor_root = ROOT / "frontend" / "editor"
     assert {"__init__.py", *module_names} <= {
         path.name for path in editor_root.glob("*.py")
     }
     assert not any((ROOT / "frontend" / name).exists() for name in module_names)
+
+
+def test_subtitle_render_window_delegates_edit_history_dispatch() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    window_module = f"{PACKAGE}.frontend.main_window"
+    targets = _import_targets(window_module, window_path)
+    assert f"{PACKAGE}.frontend.editor.edit_history" in targets
+
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    expected_calls = {"_undo_edit": "undo_edit", "_redo_edit": "redo_edit"}
+    for method_name, expected_call in expected_calls.items():
+        method = next(
+            node
+            for node in window_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == method_name
+        )
+        calls = {
+            node.func.id
+            for node in ast.walk(method)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert calls == {expected_call}
+
+    history_path = ROOT / "frontend" / "editor" / "edit_history.py"
+    assert f"{PACKAGE}.frontend.main_window" not in _import_targets(
+        f"{PACKAGE}.frontend.editor.edit_history",
+        history_path,
+    )
 
 
 def test_widget_frontend_modules_are_grouped_in_one_domain_package() -> None:
