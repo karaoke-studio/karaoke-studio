@@ -2027,6 +2027,85 @@ def test_horizontal_line_layer_stack_has_one_painter_free_owner() -> None:
     )
 
 
+def test_character_transition_layer_stack_has_explicit_factory_ports() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    layer_owner = f"{owner}.layers"
+    layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
+    painter_path = ROOT / "engine/painter.py"
+    layer_tree = ast.parse(layer_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    layer_members = {
+        node.name
+        for node in layer_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert {
+        "TransitionLayerStackPorts",
+        "char_transition_layer_stack",
+    } <= layer_members
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name
+        in {"TransitionLayerStackPorts", "char_transition_layer_stack"}
+    }
+    assert imported == {
+        "TransitionLayerStackPorts": None,
+        "char_transition_layer_stack": "_build_char_transition_layer_stack",
+    }
+
+    wrappers = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_char_transition_layer_stack"
+    }
+    wrapper = wrappers["_char_transition_layer_stack"]
+    assert len(wrapper.body) == 1
+    returned = wrapper.body[0]
+    assert isinstance(returned, ast.Return)
+    assert isinstance(returned.value, ast.Call)
+    assert isinstance(returned.value.func, ast.Name)
+    assert returned.value.func.id == "_build_char_transition_layer_stack"
+    assert any(
+        isinstance(argument, ast.Name)
+        and argument.id == "_CHAR_TRANSITION_LAYER_STACK_PORTS"
+        for argument in returned.value.args
+    )
+
+    ports = [
+        node.value
+        for node in painter_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_CHAR_TRANSITION_LAYER_STACK_PORTS"
+            for target in node.targets
+        )
+    ]
+    assert len(ports) == 1
+    assert isinstance(ports[0], ast.Call)
+    assert isinstance(ports[0].func, ast.Name)
+    assert ports[0].func.id == "TransitionLayerStackPorts"
+    assert {keyword.arg for keyword in ports[0].keywords} == {
+        "fill_clip_band_for_glyphs",
+        "glyph_run_after_glow_layer",
+        "glyph_run_before_glow_layer",
+        "glyph_run_layer",
+    }
+
+    targets = _import_targets(layer_owner, layer_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
 def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.horizontal"
     ruby_owner = f"{owner}.ruby"

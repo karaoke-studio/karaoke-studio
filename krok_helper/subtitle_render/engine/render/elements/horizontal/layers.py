@@ -50,6 +50,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     text_glyph_runs,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+    char_drip_char_transform,
+    char_fade_opacity,
+    spin_flip_char_transform,
     transition_char_state,
     utopia_following_done_time,
 )
@@ -95,6 +98,16 @@ class LayerStackPorts:
     glyph_run_before_glow_layer: Callable[..., object]
     glyph_run_layer: Callable[..., object]
     glyph_run_split_glow_layer: Callable[..., object]
+
+
+@dataclass(frozen=True)
+class TransitionLayerStackPorts:
+    """Compatibility factories and sweep hook for character transitions."""
+
+    fill_clip_band_for_glyphs: Callable[..., tuple[int, int] | None]
+    glyph_run_after_glow_layer: Callable[..., object]
+    glyph_run_before_glow_layer: Callable[..., object]
+    glyph_run_layer: Callable[..., object]
 
 
 def horizontal_after_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
@@ -480,6 +493,122 @@ def line_layer_stack(
         + after_body_layers
         + bitmap_after_layers
     )
+
+
+def char_transition_layer_stack(
+    layout: LineLayout,
+    t_ms: int,
+    transition: LineCharTransition,
+    char_count: int,
+    ports: TransitionLayerStackPorts,
+) -> list:
+    """Build per-glyph layers for fade, drip, and spin-flip transitions."""
+    y = layout.baseline_y
+    rtl = layout.rtl
+    fill_rect = n3_main_fill_rect(layout.text_layout, y)
+    is_spin = transition.effect == "spin_flip"
+    is_drip = transition.effect == "char_drip"
+    before_glow_layers: list = []
+    after_glow_layers: list = []
+    body_layers: list = []
+    z = 0
+    for glyph in layout.text_layout.glyphs:
+        progress = char_fade_opacity(
+            transition,
+            glyph.index,
+            char_count,
+            t_ms=t_ms,
+        )
+        if progress <= 0.0:
+            continue
+        opacity = 1.0 if is_drip else progress
+        if is_spin:
+            transform = spin_flip_char_transform(
+                glyph,
+                y,
+                transition,
+                progress,
+            )
+        elif is_drip:
+            transform = char_drip_char_transform(
+                glyph,
+                y,
+                transition,
+                progress,
+            )
+        else:
+            transform = None
+        run = [glyph]
+        if glyph_run_needs_before_glow_split(run):
+            before_glow_layers.append(
+                ports.glyph_run_before_glow_layer(
+                    run,
+                    y,
+                    layout.fill_segments,
+                    t_ms,
+                    rtl,
+                    z_index=z,
+                    fade_opacity=opacity,
+                    transform=transform,
+                    fill_rect=fill_rect,
+                )
+            )
+        body_layers.append(
+            ports.glyph_run_layer(
+                run,
+                y,
+                layout.fill_segments,
+                t_ms,
+                rtl,
+                after=False,
+                z_index=z,
+                fade_opacity=opacity,
+                transform=transform,
+                fill_rect=fill_rect,
+            )
+        )
+        z += 1
+        after_band = ports.fill_clip_band_for_glyphs(
+            layout.fill_segments,
+            run,
+            t_ms,
+            rtl,
+        )
+        if after_band is None:
+            continue
+        if glyph_run_needs_after_glow(run):
+            after_glow_layers.append(
+                ports.glyph_run_after_glow_layer(
+                    run,
+                    y,
+                    layout.fill_segments,
+                    t_ms,
+                    rtl,
+                    clip_band=after_band,
+                    z_index=z,
+                    fade_opacity=opacity,
+                    transform=transform,
+                    fill_rect=fill_rect,
+                )
+            )
+            z += 1
+        body_layers.append(
+            ports.glyph_run_layer(
+                run,
+                y,
+                layout.fill_segments,
+                t_ms,
+                rtl,
+                after=True,
+                clip_band=after_band,
+                z_index=z,
+                fade_opacity=opacity,
+                transform=transform,
+                fill_rect=fill_rect,
+            )
+        )
+        z += 1
+    return before_glow_layers + after_glow_layers + body_layers
 
 
 def bitmap_guide_target_rect(

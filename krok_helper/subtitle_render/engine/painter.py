@@ -515,6 +515,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     BitmapGuidePorts,
     GlyphLayerPorts,
     LayerStackPorts,
+    TransitionLayerStackPorts,
     GlyphRunAfterGlowLayer as _HorizontalGlyphRunAfterGlowLayer,
     GlyphRunBeforeGlowLayer as _HorizontalGlyphRunBeforeGlowLayer,
     GlyphRunLayer as _HorizontalGlyphRunLayer,
@@ -550,6 +551,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     bitmap_guide_target_rect as _horizontal_bitmap_guide_target_rect,
     bottom_short_page_alignment as _bottom_short_page_alignment,
     before_glow_source_clip_rect as _before_glow_source_clip_rect,
+    char_transition_layer_stack as _build_char_transition_layer_stack,
     clamp_role_baseline_y as _clamp_role_baseline_y,
     glyph_is_bitmap_guide as _glyph_is_bitmap_guide,
     glyph_path as _glyph_path,
@@ -4647,78 +4649,13 @@ def _char_transition_layer_stack(
     transition: _LineCharTransition,
     char_count: int,
 ) -> list:
-    """A1/A2（§9.7）：逐字入退场走 LayerCompositor。
-
-    每个 glyph 复用静态路径的 ``_GlyphRunLayer`` / ``_GlyphRunAfterGlowLayer``
-    烘焙缓存（直立烘焙一次、跨帧复用），逐帧只补该字的残差：
-    - **char_fade**：仅淡入/淡出 opacity（无损）；
-    - **char_drip**：按 N3 从字的右下/右上枢轴纵向剪切，几何保持不透明；
-    - **spin_flip**：opacity + scale(opacity)+skew 残差变换（绕字心枢轴，
-      bitmap-transform 软化可接受，§9.7 D2）。
-    glow 也因此并入烘焙缓存、不再每帧重算高斯。与旧逐帧
-    ``_paint_char_karaoke_stack`` 路径同口径：逐字独立栈、按 glyph 顺序交错绘制
-    （后字覆盖前字），扫光带取整行 ``fill_segments``（与静态路径同一来源），
-    同一字的 before/after/glow 三层套同一残差变换。
-    适用于普通行与分色行（per-glyph ``style``/``metrics`` 已携带角色样式）。
-    """
-    y = layout.baseline_y
-    rtl = layout.rtl
-    fill_rect = _n3_main_fill_rect(layout.text_layout, y)
-    is_spin = transition.effect == "spin_flip"
-    is_drip = transition.effect == "char_drip"
-    before_glow_layers: list = []
-    after_glow_layers: list = []
-    body_layers: list = []
-    z = 0
-    for glyph in layout.text_layout.glyphs:
-        progress = _char_fade_opacity(transition, glyph.index, char_count, t_ms=t_ms)
-        if progress <= 0.0:
-            continue
-        opacity = 1.0 if is_drip else progress
-        if is_spin:
-            transform = _spin_flip_char_transform(glyph, y, transition, progress)
-        elif is_drip:
-            transform = _char_drip_char_transform(glyph, y, transition, progress)
-        else:
-            transform = None
-        run = [glyph]
-        if _glyph_run_needs_before_glow_split(run):
-            before_glow_layers.append(
-                _GlyphRunBeforeGlowLayer(
-                    run, y, layout.fill_segments, t_ms, rtl,
-                    z_index=z, fade_opacity=opacity, transform=transform,
-                    fill_rect=fill_rect,
-                )
-            )
-        body_layers.append(
-            _GlyphRunLayer(
-                run, y, layout.fill_segments, t_ms, rtl,
-                after=False, z_index=z, fade_opacity=opacity, transform=transform,
-                fill_rect=fill_rect,
-            )
-        )
-        z += 1
-        after_band = _fill_clip_band_for_glyphs(layout.fill_segments, run, t_ms, rtl)
-        if after_band is None:
-            continue
-        if _glyph_run_needs_after_glow(run):
-            after_glow_layers.append(
-                _GlyphRunAfterGlowLayer(
-                    run, y, layout.fill_segments, t_ms, rtl,
-                    clip_band=after_band, z_index=z, fade_opacity=opacity, transform=transform,
-                    fill_rect=fill_rect,
-                )
-            )
-            z += 1
-        body_layers.append(
-            _GlyphRunLayer(
-                run, y, layout.fill_segments, t_ms, rtl,
-                after=True, clip_band=after_band, z_index=z, fade_opacity=opacity, transform=transform,
-                fill_rect=fill_rect,
-            )
-        )
-        z += 1
-    return before_glow_layers + after_glow_layers + body_layers
+    return _build_char_transition_layer_stack(
+        layout,
+        t_ms,
+        transition,
+        char_count,
+        _CHAR_TRANSITION_LAYER_STACK_PORTS,
+    )
 
 
 class _GlyphRunLayer(_HorizontalGlyphRunLayer):
@@ -7308,6 +7245,20 @@ _HORIZONTAL_LAYER_STACK_PORTS = LayerStackPorts(
     glyph_run_split_glow_layer=lambda *args, **kwargs: (
         _GlyphRunSplitGlowLayer(*args, **kwargs)
     ),
+)
+
+
+_CHAR_TRANSITION_LAYER_STACK_PORTS = TransitionLayerStackPorts(
+    fill_clip_band_for_glyphs=lambda *args, **kwargs: (
+        _fill_clip_band_for_glyphs(*args, **kwargs)
+    ),
+    glyph_run_after_glow_layer=lambda *args, **kwargs: (
+        _GlyphRunAfterGlowLayer(*args, **kwargs)
+    ),
+    glyph_run_before_glow_layer=lambda *args, **kwargs: (
+        _GlyphRunBeforeGlowLayer(*args, **kwargs)
+    ),
+    glyph_run_layer=lambda *args, **kwargs: _GlyphRunLayer(*args, **kwargs),
 )
 
 
