@@ -45,6 +45,7 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
 from krok_helper.subtitle_render.settings.preferences import (  # noqa: E402
     APP_LOCAL_ONLY_OUTPUT_FIELDS,
     app_default_style_to_dict,
+    load_app_runtime_preferences,
     load_app_style_preferences,
     merge_common_style_preferences,
     update_app_output_preferences,
@@ -529,6 +530,61 @@ def test_app_style_preferences_load_title_habits_without_project_content():
     assert loaded.style.singer_style_overrides == {}
     assert loaded.layout_assignment == {"mode": "auto"}
     assert loaded.changed is True
+
+
+def test_app_runtime_preferences_normalize_persisted_values():
+    loaded = load_app_runtime_preferences(
+        {
+            "output": {"codec": "hevc"},
+            "auto_chorus": {
+                "role": 7,
+                "begin_chars": "",
+                "end_chars": "]}",
+                "overwrite": 1,
+            },
+            "selected_scheme_key": "custom:标题",
+            "preview_splitter_ratio": 2.0,
+            "auto_save": {"enabled": 0, "interval_minutes": "99"},
+            "backup": {"history_count": "bad"},
+        },
+        chorus_begin_default="[{",
+        chorus_end_default="]}",
+    )
+
+    assert loaded.output == {"codec": "hevc"}
+    assert loaded.auto_chorus_role == "7"
+    assert loaded.auto_chorus_begin_chars == "[{"
+    assert loaded.auto_chorus_end_chars == "]}"
+    assert loaded.auto_chorus_overwrite is True
+    assert loaded.selected_scheme_key == "custom:标题"
+    assert loaded.preview_splitter_ratio == 0.85
+    assert loaded.auto_save_enabled is False
+    assert loaded.auto_save_interval_minutes == 60
+    assert loaded.project_backup_count == 5
+
+
+def test_app_runtime_preferences_fall_back_for_malformed_sections():
+    loaded = load_app_runtime_preferences(
+        {
+            "output": [],
+            "auto_chorus": None,
+            "selected_scheme_key": "",
+            "preview_splitter_ratio": False,
+            "auto_save": "bad",
+            "backup": 3,
+        },
+        chorus_begin_default="[{",
+        chorus_end_default="]}",
+    )
+
+    assert loaded.output == {}
+    assert loaded.auto_chorus_begin_chars == "[{"
+    assert loaded.auto_chorus_end_chars == "]}"
+    assert loaded.selected_scheme_key == "global"
+    assert loaded.preview_splitter_ratio == 0.15
+    assert loaded.auto_save_enabled is True
+    assert loaded.auto_save_interval_minutes == 5
+    assert loaded.project_backup_count == 5
 
 
 def test_app_output_preferences_are_separate_from_project_output_fields():

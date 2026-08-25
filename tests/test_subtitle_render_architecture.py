@@ -138,6 +138,7 @@ def test_subtitle_render_non_ui_state_does_not_depend_on_frontend() -> None:
         ROOT / "project" / "resources.py",
         ROOT / "project" / "recent.py",
         ROOT / "settings" / "screen.py",
+        ROOT / "settings" / "preferences.py",
         ROOT / "settings" / "property_controllers.py",
         ROOT / "project" / "session.py",
         ROOT / "settings" / "store.py",
@@ -3380,6 +3381,28 @@ def test_subtitle_render_window_delegates_source_reload_planning() -> None:
 
     assert "plan_reloaded_tracks" in direct_merge_calls
     assert "merge_reloaded_track" not in direct_merge_calls
+
+
+def test_subtitle_render_window_delegates_runtime_preference_loading() -> None:
+    window_path = ROOT / "frontend" / "main_window.py"
+    tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
+    window_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubtitleRenderWindow"
+    )
+    method = next(
+        node
+        for node in window_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_load_persisted_state"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+    assert "load_app_runtime_preferences" in calls
 
 
 def test_subtitle_render_window_delegates_n3_import_commands() -> None:

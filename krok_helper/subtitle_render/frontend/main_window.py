@@ -295,10 +295,13 @@ from krok_helper.subtitle_render.n3.font_catalog import (
 )
 from krok_helper.subtitle_render.settings.preferences import (
     BUILTIN_SCHEME_STYLE_FIELDS as _BUILTIN_SCHEME_STYLE_FIELDS,
+    DEFAULT_AUTO_SAVE_INTERVAL_MINUTES,
+    DEFAULT_PROJECT_BACKUP_COUNT,
     LAYOUT_DEFAULT_STYLE_FIELDS as _LAYOUT_DEFAULT_STYLE_FIELDS,
     LAYOUT_DEFAULT_VALUE_FIELDS as _LAYOUT_DEFAULT_VALUE_FIELDS,
     app_default_style_to_dict,
     load_app_style_preferences,
+    load_app_runtime_preferences,
     merge_app_setting_field,
     merge_common_style_preferences,
     update_app_output_preferences,
@@ -371,11 +374,9 @@ EXPORT_DIR_CUSTOM = "custom"
 AUTO_SAVE_DEBOUNCE_MS = 2_000
 _PERSISTED_STATE_SAVE_DEBOUNCE_MS = 1_500
 """应用级偏好落盘的空闲窗口：编辑停手后才写 settings.json。"""
-DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
 AUTO_SAVE_THREAD_WAIT_MS = 3_000
 GPU_PREVIEW_DEFAULT_VERSION = 2
 GPU_EXPORT_DEFAULT_VERSION = 1
-DEFAULT_PROJECT_BACKUP_COUNT = 5
 DISCARDED_BACKUP_RETENTION_DAYS = 7
 _RECENT_PROJECTS_SETTINGS_KEY = "recent_projects"
 _MAX_RECENT_PROJECTS = 10
@@ -8257,14 +8258,15 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
+        runtime_preferences = load_app_runtime_preferences(
+            data,
+            chorus_begin_default=DEFAULT_CHORUS_BEGIN_CHARS,
+            chorus_end_default=DEFAULT_CHORUS_END_CHARS,
+        )
         self._subtitle_loading_defaults = subtitle_loading_settings_from_dict(
             data.get("subtitle_loading_defaults")
         )
-        self._local_output_preferences = (
-            dict(data.get("output"))
-            if isinstance(data.get("output"), dict)
-            else {}
-        )
+        self._local_output_preferences = runtime_preferences.output
         catalog = get_n3_font_catalog()
         loaded_style_preferences = load_app_style_preferences(
             data,
@@ -8278,17 +8280,10 @@ class SubtitleRenderWindow(QWidget):
             else None
         )
         style_changed = loaded_style_preferences.changed
-        auto_chorus = data.get("auto_chorus")
-        if isinstance(auto_chorus, dict):
-            self._auto_chorus_role = str(auto_chorus.get("role") or "")
-            # 空串会让识别永远命中不了任何东西，读到空就退回默认。
-            self._auto_chorus_begin_chars = (
-                str(auto_chorus.get("begin_chars") or "") or DEFAULT_CHORUS_BEGIN_CHARS
-            )
-            self._auto_chorus_end_chars = (
-                str(auto_chorus.get("end_chars") or "") or DEFAULT_CHORUS_END_CHARS
-            )
-            self._auto_chorus_overwrite = bool(auto_chorus.get("overwrite"))
+        self._auto_chorus_role = runtime_preferences.auto_chorus_role
+        self._auto_chorus_begin_chars = runtime_preferences.auto_chorus_begin_chars
+        self._auto_chorus_end_chars = runtime_preferences.auto_chorus_end_chars
+        self._auto_chorus_overwrite = runtime_preferences.auto_chorus_overwrite
         loaded_presets = _style_presets_from_dict(data.get("style_presets"))
         self._style_presets = {}
         presets_changed = False
@@ -8307,34 +8302,13 @@ class SubtitleRenderWindow(QWidget):
             self._style,
             self._screen_settings.height,
         )
-        key = data.get("selected_scheme_key")
-        if isinstance(key, str) and key:
-            self._selected_scheme_key = key
-        ratio = data.get("preview_splitter_ratio")
-        if isinstance(ratio, (int, float)):
-            # 钳到两侧都还能正常操作的区间，坏数据回落默认 4:6
-            self._preview_splitter_ratio = min(max(float(ratio), 0.15), 0.85)
-        auto_save = data.get("auto_save")
-        if isinstance(auto_save, dict):
-            self._auto_save_enabled = bool(auto_save.get("enabled", True))
-            try:
-                interval = int(
-                    auto_save.get(
-                        "interval_minutes", DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
-                    )
-                )
-            except (TypeError, ValueError):
-                interval = DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
-            self._auto_save_interval_minutes = max(1, min(60, interval))
-        backup = data.get("backup")
-        if isinstance(backup, dict):
-            try:
-                backup_count = int(
-                    backup.get("history_count", DEFAULT_PROJECT_BACKUP_COUNT)
-                )
-            except (TypeError, ValueError):
-                backup_count = DEFAULT_PROJECT_BACKUP_COUNT
-            self._project_backup_count = max(1, min(20, backup_count))
+        self._selected_scheme_key = runtime_preferences.selected_scheme_key
+        self._preview_splitter_ratio = runtime_preferences.preview_splitter_ratio
+        self._auto_save_enabled = runtime_preferences.auto_save_enabled
+        self._auto_save_interval_minutes = (
+            runtime_preferences.auto_save_interval_minutes
+        )
+        self._project_backup_count = runtime_preferences.project_backup_count
         if style_changed or presets_changed:
             self._save_persisted_state()
 

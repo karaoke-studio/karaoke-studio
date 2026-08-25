@@ -66,6 +66,9 @@ TITLE_FADE_FIELDS = (
     "tail_fade_in_ms",
     "tail_fade_out_ms",
 )
+DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
+DEFAULT_PROJECT_BACKUP_COUNT = 5
+DEFAULT_PREVIEW_SPLITTER_RATIO = 0.4
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,87 @@ class LoadedAppStylePreferences:
     style: Style
     layout_assignment: Optional[dict]
     changed: bool
+
+
+@dataclass(frozen=True)
+class LoadedAppRuntimePreferences:
+    """Validated non-style application preferences consumed by the window."""
+
+    output: dict
+    auto_chorus_role: str
+    auto_chorus_begin_chars: str
+    auto_chorus_end_chars: str
+    auto_chorus_overwrite: bool
+    selected_scheme_key: str
+    preview_splitter_ratio: float
+    auto_save_enabled: bool
+    auto_save_interval_minutes: int
+    project_backup_count: int
+
+
+def load_app_runtime_preferences(
+    data: dict,
+    *,
+    chorus_begin_default: str,
+    chorus_end_default: str,
+) -> LoadedAppRuntimePreferences:
+    """Normalize app-local runtime preferences without touching UI state."""
+
+    output = (
+        dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
+    )
+    auto_chorus = (
+        data.get("auto_chorus") if isinstance(data.get("auto_chorus"), dict) else {}
+    )
+    selected_scheme_key = data.get("selected_scheme_key")
+    if not isinstance(selected_scheme_key, str) or not selected_scheme_key:
+        selected_scheme_key = "global"
+    ratio = data.get("preview_splitter_ratio")
+    preview_splitter_ratio = (
+        min(max(float(ratio), 0.15), 0.85)
+        if isinstance(ratio, (int, float))
+        else DEFAULT_PREVIEW_SPLITTER_RATIO
+    )
+    auto_save = data.get("auto_save")
+    if not isinstance(auto_save, dict):
+        auto_save = {}
+    backup = data.get("backup")
+    if not isinstance(backup, dict):
+        backup = {}
+    return LoadedAppRuntimePreferences(
+        output=output,
+        auto_chorus_role=str(auto_chorus.get("role") or ""),
+        auto_chorus_begin_chars=(
+            str(auto_chorus.get("begin_chars") or "") or chorus_begin_default
+        ),
+        auto_chorus_end_chars=(
+            str(auto_chorus.get("end_chars") or "") or chorus_end_default
+        ),
+        auto_chorus_overwrite=bool(auto_chorus.get("overwrite")),
+        selected_scheme_key=selected_scheme_key,
+        preview_splitter_ratio=preview_splitter_ratio,
+        auto_save_enabled=bool(auto_save.get("enabled", True)),
+        auto_save_interval_minutes=_bounded_int(
+            auto_save.get("interval_minutes"),
+            default=DEFAULT_AUTO_SAVE_INTERVAL_MINUTES,
+            minimum=1,
+            maximum=60,
+        ),
+        project_backup_count=_bounded_int(
+            backup.get("history_count"),
+            default=DEFAULT_PROJECT_BACKUP_COUNT,
+            minimum=1,
+            maximum=20,
+        ),
+    )
+
+
+def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
 
 
 def load_app_style_preferences(
