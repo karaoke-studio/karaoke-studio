@@ -31,9 +31,8 @@ from __future__ import annotations
 
 import math
 import os
-from collections import OrderedDict
 from dataclasses import dataclass, replace
-from threading import Lock, local as thread_local
+from threading import local as thread_local
 from typing import Hashable, Optional
 
 import numpy as np
@@ -45,7 +44,6 @@ from PyQt6.QtGui import (
     QFont,
     QFontMetrics,
     QImage,
-    QLinearGradient,
     QPainter,
     QPainterPath,
     QPainterPathStroker,
@@ -63,11 +61,27 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
     SCOPE_LINE,
 )
 from krok_helper.subtitle_render.engine.render.effects import (
+    HARD_BAND_BRUSH_CACHE as _HARD_BAND_BRUSH_CACHE,
+    IMAGE_BRUSH_CACHE as _IMAGE_BRUSH_CACHE,
+    IMAGE_FILL_CACHE as _IMAGE_FILL_CACHE,
+    IMAGE_FILL_LOCK as _IMAGE_FILL_LOCK,
+    anchor_texture_brush as _anchor_texture_brush,
+    brush_for_fill as _brush_for_fill,
+    cached_fill_image as _cached_fill_image,
+    cached_image_brush as _cached_image_brush,
+    clear_fill_caches as _clear_fill_caches,
+    fill_brush_rect as _fill_brush_rect,
+    fill_is_alpha as _fill_is_alpha,
+    fill_signature as _fill_signature,
     glow_blur_radii as _glow_blur_radii,
     glow_concentration_level as _glow_concentration_level,
     glow_extent as _glow_extent,
     glow_pen_width as _glow_pen_width,
     glow_radius as _glow_radius,
+    gradient_stop_position as _gradient_stop_position,
+    gradient_stops as _gradient_stops,
+    karaoke_state_signature as _karaoke_state_signature,
+    linear_gradient_brush as _linear_gradient_brush,
     main_stroke2_width as _main_stroke2_width,
     ruby_baseline_y as _ruby_baseline_y,
     ruby_decoration_kind as _ruby_decoration_kind,
@@ -80,12 +94,15 @@ from krok_helper.subtitle_render.engine.render.effects import (
     ruby_vertical_extra as _ruby_vertical_extra,
     ruby_visual_padding as _ruby_visual_padding,
     scaled_glow_radius as _scaled_glow_radius,
+    split_gradient_stops as _split_gradient_stops,
+    split_vertical_brush as _split_vertical_brush,
     stroke2_pen_width as _stroke2_pen_width,
     stroke_pen_width as _stroke_pen_width,
     text_visual_padding as _text_visual_padding,
     title_visual_padding as _title_visual_padding,
     visual_stroke_extent as _visual_stroke_extent,
     visual_text_padding as _visual_text_padding,
+    valid_color as _valid_color,
 )
 from krok_helper.subtitle_render.engine.layout.layout_context import (
     _LAYOUT_PASS,
@@ -249,12 +266,6 @@ from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbo
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
 
-_IMAGE_FILL_CACHE_MAX = 16
-_IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
-_IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
-_HARD_BAND_BRUSH_CACHE_MAX = 128
-_HARD_BAND_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
-_IMAGE_FILL_LOCK = Lock()
 # 横排 glyph run 层缓存：普通行与分色行都按连续同 style 的 run 烘焙。
 # 每个 run 的「未唱」层（含 before-glow）、「已唱」主体层与 after-glow
 # 各烘焙一次；逐帧只按扫光半平面 clip blit。
@@ -324,10 +335,7 @@ _CHAR_FADE_OUT_TIME_MS = 250
 
 def clear_before_layer_cache() -> None:
     """测试 / 调试用：把字幕层位图缓存全部丢掉。"""
-    with _IMAGE_FILL_LOCK:
-        _IMAGE_FILL_CACHE.clear()
-        _IMAGE_BRUSH_CACHE.clear()
-        _HARD_BAND_BRUSH_CACHE.clear()
+    _clear_fill_caches()
     _TEXT_RUN_LAYER_CACHE.clear()
     _RUN_GLOW_CACHE.clear()
     clear_char_metric_cache()
@@ -8149,17 +8157,6 @@ def _paint_fill_path(
     painter.fillPath(path, _brush_for_fill(fill, rect))
 
 
-def _fill_brush_rect(
-    fill: PaintFill,
-    rect: QRectF,
-    horizontal_rect: QRectF | None,
-) -> QRectF:
-    """Use the shared ruby/main box only for horizontal gradients."""
-    if fill.mode == "gradient_horizontal" and horizontal_rect is not None:
-        return horizontal_rect
-    return rect
-
-
 def _paint_stroke_path(
     painter: QPainter,
     path: QPainterPath,
@@ -9116,190 +9113,9 @@ def _is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
     )
 
 
-def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
-    if fill.mode == "image" and fill.image_path:
-        brush = _cached_image_brush(fill.image_path, fill.image_scale_pct)
-        if brush is not None:
-            return brush
-
-    if fill.mode == "gradient_horizontal":
-        return _linear_gradient_brush(fill, rect, 0)
-    if fill.mode == "gradient_vertical":
-        return _linear_gradient_brush(fill, rect, 90)
-    if fill.mode == "split_vertical":
-        return _split_vertical_brush(fill, rect)
-    return QBrush(_valid_color(fill.color, "#FFFFFF"))
-
-
-def _fill_is_alpha(fill: PaintFill) -> bool:
-    """Return whether N3 protects the glyph body from its primary edge."""
-    if fill.mode == "image":
-        # N3 treats bitmap brushes as alpha-capable unconditionally.  This is
-        # intentional even for opaque or temporarily missing image files.
-        return True
-    if fill.mode in {"gradient_horizontal", "gradient_vertical"}:
-        colors = [color for _position, color in _gradient_stops(fill)]
-    elif fill.mode == "split_vertical":
-        colors = [color for _position, color in _split_gradient_stops(fill)]
-    else:
-        colors = [fill.color]
-    return any(_valid_color(color, fill.color).alpha() < 255 for color in colors)
-
-
-def _cached_image_brush(path: str, scale_pct: int) -> QBrush | None:
-    signature = _image_file_signature(path)
-    if signature is None:
-        return None
-    scale = max(1, min(int(scale_pct), 1000))
-    brush_key = (*signature, scale)
-    with _IMAGE_FILL_LOCK:
-        brush = _IMAGE_BRUSH_CACHE.get(brush_key)
-        if brush is not None:
-            _IMAGE_BRUSH_CACHE.move_to_end(brush_key)
-            return QBrush(brush)
-
-    image = _cached_fill_image(signature)
-    if image is None or image.isNull():
-        return None
-    brush = QBrush(image)
-    brush_scale = scale / 100.0
-    # N3 uses a Direct2D bitmap brush with Wrap/Wrap extension and applies
-    # BitmapScale directly.  QBrush texture patterns wrap in both directions
-    # as well; using the same direct transform keeps 200% visually twice as
-    # large instead of twice as dense.  No translation is applied here: the
-    # texture is anchored at the render target origin, not at each lyric line.
-    brush.setTransform(QTransform().scale(brush_scale, brush_scale))
-
-    with _IMAGE_FILL_LOCK:
-        _IMAGE_BRUSH_CACHE[brush_key] = brush
-        while len(_IMAGE_BRUSH_CACHE) > _IMAGE_FILL_CACHE_MAX:
-            _IMAGE_BRUSH_CACHE.popitem(last=False)
-    return QBrush(brush)
-
-
-def _anchor_texture_brush(brush: QBrush, rect: QRectF) -> QBrush:
-    anchored = QBrush(brush)
-    transform = QTransform(anchored.transform())
-    transform.translate(rect.left(), rect.top())
-    anchored.setTransform(transform)
-    return anchored
-
-
-def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
-    with _IMAGE_FILL_LOCK:
-        cached = _IMAGE_FILL_CACHE.get(signature)
-        if cached is not None:
-            _IMAGE_FILL_CACHE.move_to_end(signature)
-            return cached
-    image = QImage(signature[0])
-    if image.isNull():
-        _warn_image_fill_skipped(signature[0], "图片解码失败或不是有效图片文件")
-        return None
-    with _IMAGE_FILL_LOCK:
-        _IMAGE_FILL_CACHE[signature] = image
-        while len(_IMAGE_FILL_CACHE) > _IMAGE_FILL_CACHE_MAX:
-            _IMAGE_FILL_CACHE.popitem(last=False)
-    return image
-
-
-def _linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBrush:
-    angle = math.radians(angle_deg % 360)
-    dx = math.cos(angle)
-    dy = math.sin(angle)
-    projection = abs(rect.width() * dx) + abs(rect.height() * dy)
-    if projection <= 0:
-        projection = max(rect.width(), rect.height(), 1.0)
-    half = projection / 2.0
-    center = rect.center()
-    start = QPointF(center.x() - dx * half, center.y() - dy * half)
-    end = QPointF(center.x() + dx * half, center.y() + dy * half)
-
-    gradient = QLinearGradient(start, end)
-    for position, color in _gradient_stops(fill):
-        gradient.setColorAt(position / 100.0, _valid_color(color, fill.color))
-    return QBrush(gradient)
-
-
-def _split_vertical_brush(fill: PaintFill, rect: QRectF) -> QBrush:
-    """Return an exact hard-band texture, cached by height and stop values.
-
-    Qt collapses duplicate-position ``QGradientStop`` entries, so a linear
-    gradient cannot represent N3 MilleFeuille without a visible transition.
-    A one-pixel-wide texture keeps every boundary exact; the cached base brush
-    is only translated per glyph/run and is never regenerated per frame.
-    """
-    stops = _split_gradient_stops(fill)
-    height = max(int(math.ceil(rect.height())), 1)
-    stop_key = tuple(
-        (position, _valid_color(color, fill.color).rgba())
-        for position, color in stops
-    )
-    key = (height, stop_key)
-    with _IMAGE_FILL_LOCK:
-        base = _HARD_BAND_BRUSH_CACHE.get(key)
-        if base is not None:
-            _HARD_BAND_BRUSH_CACHE.move_to_end(key)
-        else:
-            image = QImage(1, height, QImage.Format.Format_ARGB32_Premultiplied)
-            band_index = 0
-            for y in range(height):
-                position = (y + 0.5) * 100.0 / height
-                while (
-                    band_index + 1 < len(stops)
-                    and stops[band_index + 1][0] <= position
-                ):
-                    band_index += 1
-                image.setPixelColor(
-                    0, y, _valid_color(stops[band_index][1], fill.color)
-                )
-            base = QBrush(image)
-            _HARD_BAND_BRUSH_CACHE[key] = base
-            while len(_HARD_BAND_BRUSH_CACHE) > _HARD_BAND_BRUSH_CACHE_MAX:
-                _HARD_BAND_BRUSH_CACHE.popitem(last=False)
-    return _anchor_texture_brush(base, rect)
-
-
-def _split_gradient_stops(fill: PaintFill) -> list[tuple[float, str]]:
-    raw = list(fill.split_stops)
-    if len(raw) < 2:
-        raw = [
-            (0, fill.split_top_color),
-            (fill.split_position_pct, fill.split_bottom_color),
-            (100, fill.split_bottom_color),
-        ]
-    stops = sorted(
-        (
-            _gradient_stop_position(position),
-            color,
-        )
-        for position, color in raw
-    )
-    if stops[0][0] > 0:
-        stops.insert(0, (0, stops[0][1]))
-    if stops[-1][0] < 100:
-        stops.append((100, stops[-1][1]))
-    return stops
-
-
 # ---------------------------------------------------------------------------
 # Before-layer 缓存：构建 / 查询
 # ---------------------------------------------------------------------------
-
-
-def _fill_signature(fill: PaintFill) -> tuple:
-    return (
-        fill.mode,
-        fill.color,
-        fill.start_color,
-        fill.end_color,
-        tuple(_gradient_stops(fill)),
-        fill.split_top_color,
-        fill.split_bottom_color,
-        fill.split_position_pct,
-        tuple(fill.split_stops),
-        fill.image_path,
-        fill.image_scale_pct,
-    )
 
 
 _TITLE_RENDER_PORTS = TitleRenderPorts(
@@ -9311,50 +9127,9 @@ _TITLE_RENDER_PORTS = TitleRenderPorts(
 )
 
 
-def _karaoke_state_signature(state: KaraokeColorState) -> tuple:
-    return (
-        _fill_signature(state.text),
-        _fill_signature(state.stroke),
-        _fill_signature(state.stroke2),
-        _fill_signature(state.shadow),
-    )
-
-
 _VERTICAL_CACHE_PORTS = VerticalCachePorts(
     karaoke_state_signature=_karaoke_state_signature,
 )
-
-
-def _gradient_stop_position(value: object) -> float:
-    try:
-        position = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        position = 0.0
-    if not math.isfinite(position):
-        position = 0.0
-    return max(0.0, min(100.0, position))
-
-
-def _gradient_stops(fill: PaintFill) -> list[tuple[float, str]]:
-    raw = fill.gradient_stops or [(0, fill.start_color), (100, fill.end_color)]
-    normalized: list[tuple[float, str]] = []
-    for position, color in raw:
-        normalized.append((_gradient_stop_position(position), color))
-    normalized.sort(key=lambda item: item[0])
-    positions = {position for position, _color in normalized}
-    if 0 not in positions:
-        normalized.insert(0, (0, fill.start_color))
-    if 100 not in positions:
-        normalized.append((100, fill.end_color))
-    return normalized
-
-
-def _valid_color(value: str, fallback: str) -> QColor:
-    color = QColor(value)
-    if color.isValid():
-        return color
-    fallback_color = QColor(fallback)
-    return fallback_color if fallback_color.isValid() else QColor("#FF5A6F")
 
 
 def _lane_alignment(

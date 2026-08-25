@@ -1558,6 +1558,7 @@ def test_render_effect_metrics_have_one_painter_free_owner() -> None:
         for node in painter_tree.body
         if isinstance(node, ast.ImportFrom) and node.module == owner
         for alias in node.names
+        if alias.name in names
     }
     painter_members = {
         node.name
@@ -1591,6 +1592,86 @@ def test_render_effect_metrics_have_one_painter_free_owner() -> None:
         "_paint_char_karaoke_stack",
         "_paint_ruby_karaoke_fragment",
     }
+
+
+def test_render_fill_effects_own_brushes_and_resource_caches() -> None:
+    owner = f"{PACKAGE}.engine.render.effects"
+    fills_owner = f"{owner}.fills"
+    fills_path = ROOT / "engine/render/effects/fills.py"
+    painter_path = ROOT / "engine/painter.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    function_names = {
+        "anchor_texture_brush",
+        "brush_for_fill",
+        "cached_fill_image",
+        "cached_image_brush",
+        "clear_fill_caches",
+        "fill_brush_rect",
+        "fill_is_alpha",
+        "fill_signature",
+        "gradient_stop_position",
+        "gradient_stops",
+        "karaoke_state_signature",
+        "linear_gradient_brush",
+        "split_gradient_stops",
+        "split_vertical_brush",
+        "valid_color",
+    }
+    cache_names = {
+        "HARD_BAND_BRUSH_CACHE",
+        "IMAGE_BRUSH_CACHE",
+        "IMAGE_FILL_CACHE",
+        "IMAGE_FILL_LOCK",
+    }
+    names = function_names | cache_names
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == owner
+        for alias in node.names
+        if alias.name in names
+    }
+    painter_members = {
+        node.name
+        for node in painter_tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    painter_assignments = {
+        target.id
+        for node in painter_tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+        )
+        if isinstance(target, ast.Name)
+    }
+
+    assert imported == {name: f"_{name}" for name in names}
+    assert {f"_{name}" for name in function_names}.isdisjoint(painter_members)
+    assert {f"_{name}" for name in cache_names}.isdisjoint(painter_assignments)
+    targets = _import_targets(fills_owner, fills_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+    clear_cache = next(
+        node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "clear_before_layer_cache"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(clear_cache)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_clear_fill_caches" in calls
 
 
 def test_timing_engine_modules_are_grouped_in_one_domain_package() -> None:
