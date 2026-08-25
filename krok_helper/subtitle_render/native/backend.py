@@ -552,7 +552,7 @@ def _validated_readback_bands(
 
 
 def repository_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def default_native_renderer_path(root: Path | None = None) -> Path:
