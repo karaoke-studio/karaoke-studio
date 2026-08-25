@@ -510,8 +510,10 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     line_lane_alignment as _line_lane_alignment,
     line_layer_stack as _build_horizontal_line_layer_stack,
     n3_smart_font_size as _n3_smart_font_size,
+    n3_char_wipe_ranges_by_index as _n3_char_wipe_ranges_by_index,
     n3_main_fill_rect as _n3_main_fill_rect,
     n3_following_wipe_band as _n3_following_wipe_band,
+    n3_transformed_wipe_span as _n3_transformed_wipe_span,
     n3_ruby_fill_rect as _n3_ruby_fill_rect,
     paint_bitmap_guide_glyph as _paint_horizontal_bitmap_guide_glyph,
     paint_bitmap_guide_glyphs as _paint_horizontal_bitmap_guide_glyphs,
@@ -5719,46 +5721,6 @@ def _role_char_ink_ranges_by_index(
         else:
             ranges[glyph.index] = (int(math.floor(br.left())), int(math.ceil(br.right())))
     return ranges
-
-
-def _n3_char_wipe_ranges_by_index(
-    line: TimingLine,
-    layout: _TextLayout,
-    char_x_ranges: list[tuple[int, int]],
-    ink_x_ranges: list[tuple[int, int]],
-) -> list[tuple[int, int]]:
-    """Return N3 ``WipeLeft`` bounds for each main-text glyph.
-
-    N3 interpolates across the transformed glyph geometry expanded by half of
-    the primary edge size.  The character advance box is only layout geometry;
-    using it as the wipe range spends singing time in transparent side bearings
-    and creates a visible pause at otherwise contiguous character timestamps.
-    Empty glyphs (notably timed spaces) deliberately keep zero-width geometry.
-    """
-    ranges = list(ink_x_ranges)
-    for glyph in layout.glyphs:
-        if not (0 <= glyph.index < len(ranges)):
-            continue
-        ink_left, ink_right = ranges[glyph.index]
-        if not glyph.text or glyph.text.isspace() or ink_right <= ink_left:
-            ranges[glyph.index] = (char_x_ranges[glyph.index][0],) * 2
-            continue
-        # N3 truncates the scaled EdgeSize first, then performs integer / 2.
-        edge_half = max(int(glyph.style.stroke_width_px), 0) // 2
-        ranges[glyph.index] = (ink_left - edge_half, ink_right + edge_half)
-    return ranges
-
-
-def _n3_transformed_wipe_span(
-    path: QPainterPath,
-    stroke_width: int,
-) -> tuple[int, int]:
-    """Return N3 WipeLeft's transformed ink bounds plus half primary edge."""
-    bounds = path.boundingRect()
-    edge_half = max(int(stroke_width), 0) // 2
-    left = int(math.floor(bounds.left())) - edge_half
-    right = int(math.ceil(bounds.right())) + edge_half
-    return left, max(right - left, 1)
 
 
 def _line_text_path(

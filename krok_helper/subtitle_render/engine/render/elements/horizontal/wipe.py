@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
+
+from PyQt6.QtGui import QPainterPath
 
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
     FillSegment,
@@ -10,8 +13,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _main_text_ruby_progress_ratio,
 )
-from krok_helper.subtitle_render.engine.text import GlyphLayout
+from krok_helper.subtitle_render.engine.text import GlyphLayout, TextLayout
 from krok_helper.subtitle_render.engine.timing.timeline import char_fill_ratio
+from krok_helper.subtitle_render.domain.timing import TimingLine
 
 
 def adjust_fill_release_edges(segments: list[FillSegment]) -> list[FillSegment]:
@@ -90,6 +94,51 @@ def adjust_fill_release_edges(segments: list[FillSegment]) -> list[FillSegment]:
                 ),
             )
     return adjusted
+
+
+def n3_char_wipe_ranges_by_index(
+    line: TimingLine,
+    layout: TextLayout,
+    char_x_ranges: list[tuple[int, int]],
+    ink_x_ranges: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Return N3 ``WipeLeft`` bounds for each main-text glyph.
+
+    ``line`` remains in the signature as part of the established layout-port
+    contract, even though this geometry calculation only needs the glyph
+    layout and measured ranges.
+
+    N3 interpolates across transformed glyph geometry expanded by half of the
+    primary edge size. Character advance boxes are layout geometry only; using
+    them as wipe ranges would spend singing time in transparent side bearings.
+    Empty glyphs deliberately retain zero-width geometry.
+    """
+
+    ranges = list(ink_x_ranges)
+    for glyph in layout.glyphs:
+        if not (0 <= glyph.index < len(ranges)):
+            continue
+        ink_left, ink_right = ranges[glyph.index]
+        if not glyph.text or glyph.text.isspace() or ink_right <= ink_left:
+            ranges[glyph.index] = (char_x_ranges[glyph.index][0],) * 2
+            continue
+        # N3 truncates the scaled EdgeSize first, then performs integer / 2.
+        edge_half = max(int(glyph.style.stroke_width_px), 0) // 2
+        ranges[glyph.index] = (ink_left - edge_half, ink_right + edge_half)
+    return ranges
+
+
+def n3_transformed_wipe_span(
+    path: QPainterPath,
+    stroke_width: int,
+) -> tuple[int, int]:
+    """Return N3 WipeLeft's transformed ink bounds plus half primary edge."""
+
+    bounds = path.boundingRect()
+    edge_half = max(int(stroke_width), 0) // 2
+    left = int(math.floor(bounds.left())) - edge_half
+    right = int(math.ceil(bounds.right())) + edge_half
+    return left, max(right - left, 1)
 
 
 def offset_fill_segments(
@@ -406,7 +455,9 @@ __all__ = [
     "fill_extent_end",
     "fill_extent_left",
     "fill_extent_start",
+    "n3_char_wipe_ranges_by_index",
     "n3_following_wipe_band",
+    "n3_transformed_wipe_span",
     "offset_fill_segments",
     "run_fill_complete",
     "segment_fill_ratio",
