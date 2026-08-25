@@ -3515,6 +3515,7 @@ def test_subtitle_source_watch_runtime_has_one_frontend_owner() -> None:
     runtime_tree = ast.parse(runtime_path.read_text(encoding="utf-8-sig"))
     window_tree = ast.parse(window_path.read_text(encoding="utf-8-sig"))
     aliases = {
+        "SourceReloadDisposition": None,
         "SubtitleSourceWatchRuntime": None,
         "WatchedSubtitleState": "_WatchedSubtitleState",
         "subtitle_source_digest": None,
@@ -3537,7 +3538,7 @@ def test_subtitle_source_watch_runtime_has_one_frontend_owner() -> None:
     }
 
     assert imported == aliases
-    assert set(aliases) <= runtime_members
+    assert set(aliases) | {"SourceReloadPreparation"} <= runtime_members
     assert "_WatchedSubtitleState" not in window_classes
     targets = _import_targets(owner, runtime_path)
     assert f"{PACKAGE}.frontend.main_window" not in targets
@@ -3552,7 +3553,11 @@ def test_subtitle_source_watch_runtime_has_one_frontend_owner() -> None:
         "_sync_subtitle_source_watcher": {"sync"},
         "_queue_subtitle_source_reload": {"queue"},
         "_process_subtitle_source_changes": {"take_pending"},
-        "_retry_subtitle_source_reload": {"retry", "state"},
+        "_reload_external_subtitle_source": {
+            "accept_prepared",
+            "ignore_prepared",
+            "prepare_reload",
+        },
     }
     for method_name, expected_calls in delegated_methods.items():
         method = next(
@@ -3866,7 +3871,8 @@ def test_subtitle_render_window_delegates_source_reload_preparation() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
 
-    assert {"apply_reloaded_tracks", "prepare_reloaded_tracks"} <= direct_merge_calls
+    assert "apply_reloaded_tracks" in direct_merge_calls
+    assert "prepare_reloaded_tracks" not in direct_merge_calls
     assert "plan_reloaded_tracks" not in direct_merge_calls
     assert "merge_reloaded_track" not in direct_merge_calls
 

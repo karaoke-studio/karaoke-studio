@@ -236,6 +236,7 @@ from krok_helper.subtitle_render.frontend.project.recent_projects import (
     RecentProjectsController,
 )
 from krok_helper.subtitle_render.frontend.project.source_watch import (
+    SourceReloadDisposition,
     SubtitleSourceWatchRuntime,
     WatchedSubtitleState as _WatchedSubtitleState,
     subtitle_source_digest,
@@ -339,7 +340,6 @@ from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
 from krok_helper.subtitle_render.sources.reload import (
     apply_reloaded_tracks,
     merge_reloaded_track,
-    prepare_reloaded_tracks,
 )
 from krok_helper.subtitle_render.project.session import (
     ExtraSubtitleSource,
@@ -2867,40 +2867,7 @@ class SubtitleRenderWindow(QWidget):
         for key in self._source_watch_runtime.take_pending():
             self._reload_external_subtitle_source(key)
 
-    def _retry_subtitle_source_reload(self, key: str, error: Exception) -> None:
-        if self._source_watch_runtime.retry(key):
-            return
-        state = self._source_watch_runtime.state(key)
-        if state is None:
-            return
-        logging.getLogger(__name__).warning(
-            "外部字幕源重新解析失败: path=%s error=%s", state.path, error
-        )
-        InfoBar.warning(
-            title="字幕源更新失败",
-            content=f"无法读取更新后的字幕文件，已保留当前内容：\n{state.path}",
-            parent=self,
-            position=InfoBarPosition.BOTTOM_RIGHT,
-            duration=5000,
-        )
-
     def _reload_external_subtitle_source(self, key: str) -> None:
-        state = self._source_watch_runtime.state(key)
-        if state is None:
-            return
-        path = state.path
-        if not path.is_file():
-            if not state.missing_notified:
-                state.missing_notified = True
-                InfoBar.warning(
-                    title="字幕源不可用",
-                    content=f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
-                )
-            return
-
         primary_track = None
         if (
             self._watch_primary_subtitle_source
@@ -2921,39 +2888,61 @@ class SubtitleRenderWindow(QWidget):
                 ),
                 None,
             )
-        try:
-            prepared = prepare_reloaded_tracks(
+        preparation = self._source_watch_runtime.prepare_reload(
+            key,
+            load_candidate=lambda source_path: self._load_timing_track_file(
+                source_path,
+                apply_sug_export_compensation=(
+                    self._sug_compensation_enabled_for_track(owner_track)
+                ),
+            ),
+            primary_track=primary_track,
+            extra_tracks=(
+                (index, source.track)
+                for index, source in enumerate(self._extra_sources)
+                if self._subtitle_source_key(source.path) == key
+            ),
+        )
+        if preparation is None:
+            return
+        path = preparation.path
+        disposition = preparation.disposition
+        if disposition == SourceReloadDisposition.MISSING:
+            if preparation.notify:
+                InfoBar.warning(
+                    title="字幕源不可用",
+                    content=f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+            return
+        if disposition == SourceReloadDisposition.RETRYING:
+            return
+        if disposition == SourceReloadDisposition.FAILED:
+            logging.getLogger(__name__).warning(
+                "外部字幕源重新解析失败: path=%s error=%s",
                 path,
-                seen_digest=state.seen_digest,
-                baseline=state.baseline,
-                load_candidate=lambda source_path: self._load_timing_track_file(
-                    source_path,
-                    apply_sug_export_compensation=(
-                        self._sug_compensation_enabled_for_track(owner_track)
-                    ),
-                ),
-                primary_track=primary_track,
-                extra_tracks=(
-                    (index, source.track)
-                    for index, source in enumerate(self._extra_sources)
-                    if self._subtitle_source_key(source.path) == key
-                ),
+                preparation.error,
             )
-        except Exception as exc:  # noqa: BLE001 - partial external writes are retried
-            self._retry_subtitle_source_reload(key, exc)
+            InfoBar.warning(
+                title="字幕源更新失败",
+                content=f"无法读取更新后的字幕文件，已保留当前内容：\n{path}",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=5000,
+            )
             return
-
-        state.missing_notified = False
-        self._source_watch_runtime.acknowledge(key)
-        if prepared.candidate is None:
+        if disposition in {
+            SourceReloadDisposition.DUPLICATE,
+            SourceReloadDisposition.UNCHANGED,
+        }:
             self._sync_subtitle_source_watcher()
             return
-        if prepared.plan is None:
-            state.seen_digest = prepared.digest
-            self._sync_subtitle_source_watcher()
-            return
 
-        candidate = prepared.candidate
+        prepared = preparation.prepared
+        if prepared is None or prepared.candidate is None or prepared.plan is None:
+            return
         plan = prepared.plan
         if plan.conflicts:
             details = "\n".join(f"• {item}" for item in plan.conflicts[:8])
@@ -2968,7 +2957,7 @@ class SubtitleRenderWindow(QWidget):
                 default_cancel=True,
             )
             if not accepted:
-                state.seen_digest = prepared.digest
+                self._source_watch_runtime.ignore_prepared(preparation)
                 self._sync_subtitle_source_watcher()
                 return
 
@@ -2978,8 +2967,7 @@ class SubtitleRenderWindow(QWidget):
 
         if plan.structure_changed:
             self._clear_undo_history()
-        state.baseline = deepcopy(candidate)
-        state.seen_digest = prepared.digest
+        self._source_watch_runtime.accept_prepared(preparation)
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
         self._property_panel.merge_roles(self._content_role_options())
@@ -3002,7 +2990,6 @@ class SubtitleRenderWindow(QWidget):
             duration=3000,
         )
         self._sync_subtitle_source_watcher()
-
     def _apply_imported_role_preset_choices(self, role_names: list[str]) -> None:
         """Resolve cross-group preset collisions before roles are materialized."""
 

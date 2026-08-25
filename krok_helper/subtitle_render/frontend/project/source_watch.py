@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 import sys
-from typing import Callable, Mapping, Optional
+from typing import Callable, Iterable, Mapping, Optional
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal as Signal
 
 from krok_helper.subtitle_render.domain.timing import TimingTrack
-from krok_helper.subtitle_render.sources.reload import source_file_digest
+from krok_helper.subtitle_render.sources.reload import (
+    PreparedTrackReload,
+    prepare_reloaded_tracks,
+    source_file_digest,
+)
 
 
 def subtitle_source_key(path: Path) -> str:
@@ -33,6 +38,29 @@ class WatchedSubtitleState:
     baseline: TimingTrack
     seen_digest: str
     missing_notified: bool = False
+
+
+class SourceReloadDisposition(str, Enum):
+    """Runtime outcome before any project or presentation mutation."""
+
+    MISSING = "missing"
+    RETRYING = "retrying"
+    FAILED = "failed"
+    DUPLICATE = "duplicate"
+    UNCHANGED = "unchanged"
+    READY = "ready"
+
+
+@dataclass(frozen=True)
+class SourceReloadPreparation:
+    """Explicit source-watch result consumed by the window coordinator."""
+
+    key: str
+    path: Path
+    disposition: SourceReloadDisposition
+    prepared: Optional[PreparedTrackReload] = None
+    error: Optional[Exception] = None
+    notify: bool = False
 
 
 class SubtitleSourceWatchRuntime(QObject):
@@ -164,12 +192,101 @@ class SubtitleSourceWatchRuntime(QObject):
     def acknowledge(self, key: str) -> None:
         self._retries.pop(key, None)
 
+    def prepare_reload(
+        self,
+        key: str,
+        *,
+        load_candidate: Callable[[Path], TimingTrack],
+        primary_track: Optional[TimingTrack] = None,
+        extra_tracks: Iterable[tuple[int, TimingTrack]] = (),
+    ) -> Optional[SourceReloadPreparation]:
+        """Resolve file state, retry policy, and stable reload preparation."""
+
+        state = self.state(key)
+        if state is None:
+            return None
+        path = state.path
+        if not path.is_file():
+            notify = not state.missing_notified
+            state.missing_notified = True
+            return SourceReloadPreparation(
+                key=key,
+                path=path,
+                disposition=SourceReloadDisposition.MISSING,
+                notify=notify,
+            )
+        try:
+            prepared = prepare_reloaded_tracks(
+                path,
+                seen_digest=state.seen_digest,
+                baseline=state.baseline,
+                load_candidate=load_candidate,
+                primary_track=primary_track,
+                extra_tracks=extra_tracks,
+            )
+        except Exception as exc:  # noqa: BLE001 - partial writes are retried
+            retrying = self.retry(key)
+            return SourceReloadPreparation(
+                key=key,
+                path=path,
+                disposition=(
+                    SourceReloadDisposition.RETRYING
+                    if retrying
+                    else SourceReloadDisposition.FAILED
+                ),
+                error=exc,
+            )
+
+        state.missing_notified = False
+        self.acknowledge(key)
+        if prepared.candidate is None:
+            return SourceReloadPreparation(
+                key=key,
+                path=path,
+                disposition=SourceReloadDisposition.DUPLICATE,
+                prepared=prepared,
+            )
+        if prepared.plan is None:
+            state.seen_digest = prepared.digest
+            return SourceReloadPreparation(
+                key=key,
+                path=path,
+                disposition=SourceReloadDisposition.UNCHANGED,
+                prepared=prepared,
+            )
+        return SourceReloadPreparation(
+            key=key,
+            path=path,
+            disposition=SourceReloadDisposition.READY,
+            prepared=prepared,
+        )
+
+    def ignore_prepared(self, preparation: SourceReloadPreparation) -> None:
+        """Remember a user-rejected stable revision without replacing tracks."""
+
+        state = self.state(preparation.key)
+        prepared = preparation.prepared
+        if state is not None and prepared is not None:
+            state.seen_digest = prepared.digest
+
+    def accept_prepared(self, preparation: SourceReloadPreparation) -> None:
+        """Adopt the successfully applied source snapshot as the new baseline."""
+
+        state = self.state(preparation.key)
+        prepared = preparation.prepared
+        if state is None or prepared is None or prepared.candidate is None:
+            return
+        state.baseline = deepcopy(prepared.candidate)
+        state.seen_digest = prepared.digest
+
     def start_pending(self, delay_ms: int = 0) -> None:
         if self._pending_keys:
             self._timer.start(int(delay_ms))
 
 
 __all__ = [
+    "SourceReloadDisposition",
+    "SourceReloadPreparation",
     "SubtitleSourceWatchRuntime",
     "WatchedSubtitleState",
     "subtitle_source_digest",

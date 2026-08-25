@@ -50,7 +50,9 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT  # noqa: E402
 from krok_helper.subtitle_render.frontend.project.source_watch import (  # noqa: E402
+    SourceReloadDisposition,
     SubtitleSourceWatchRuntime,
+    subtitle_source_key,
 )
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import (  # noqa: E402
     WorkspaceSwitcher,
@@ -333,6 +335,123 @@ def test_source_watch_runtime_defers_pending_reload_while_suspended(qapp):
     assert ready == [True]
     assert runtime.take_pending() == ("source-key",)
     assert runtime.pending_keys == set()
+    runtime.deleteLater()
+
+
+def test_source_watch_runtime_owns_missing_and_duplicate_file_state(qapp, tmp_path):
+    path = tmp_path / "watched.lrc"
+    path.write_text("unchanged", encoding="utf-8")
+    baseline = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500)]
+    )
+    runtime = SubtitleSourceWatchRuntime()
+    runtime.set_baseline(path, baseline)
+    key = subtitle_source_key(path)
+
+    duplicate = runtime.prepare_reload(
+        key,
+        load_candidate=lambda _path: pytest.fail("duplicate must not parse"),
+        primary_track=baseline,
+    )
+    assert duplicate is not None
+    assert duplicate.disposition == SourceReloadDisposition.DUPLICATE
+
+    path.unlink()
+    first_missing = runtime.prepare_reload(
+        key,
+        load_candidate=lambda _path: baseline,
+        primary_track=baseline,
+    )
+    second_missing = runtime.prepare_reload(
+        key,
+        load_candidate=lambda _path: baseline,
+        primary_track=baseline,
+    )
+    assert first_missing is not None and first_missing.notify is True
+    assert second_missing is not None and second_missing.notify is False
+    assert first_missing.disposition == SourceReloadDisposition.MISSING
+    runtime.deleteLater()
+
+
+def test_source_watch_runtime_owns_retry_and_baseline_acceptance(qapp, tmp_path):
+    path = tmp_path / "watched.lrc"
+    path.write_text("before", encoding="utf-8")
+    baseline = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500)]
+    )
+    candidate = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 2000)], end_ms=2500)]
+    )
+    runtime = SubtitleSourceWatchRuntime()
+    runtime.set_baseline(path, baseline)
+    key = subtitle_source_key(path)
+    path.write_text("after", encoding="utf-8")
+
+    def fail_partial_load(_path):
+        raise OSError("partial")
+
+    retrying = runtime.prepare_reload(
+        key,
+        load_candidate=fail_partial_load,
+        primary_track=baseline,
+    )
+    assert retrying is not None
+    assert retrying.disposition == SourceReloadDisposition.RETRYING
+    assert key in runtime.pending_keys
+    runtime.pending_keys.clear()
+    runtime.timer.stop()
+
+    ready = runtime.prepare_reload(
+        key,
+        load_candidate=lambda _path: candidate,
+        primary_track=baseline,
+    )
+    assert ready is not None
+    assert ready.disposition == SourceReloadDisposition.READY
+    assert runtime.state(key).baseline == baseline
+
+    runtime.ignore_prepared(ready)
+    assert runtime.state(key).baseline == baseline
+    duplicate = runtime.prepare_reload(
+        key,
+        load_candidate=lambda _path: pytest.fail("ignored revision is acknowledged"),
+        primary_track=baseline,
+    )
+    assert duplicate is not None
+    assert duplicate.disposition == SourceReloadDisposition.DUPLICATE
+
+    path.write_text("after-again", encoding="utf-8")
+    accepted = runtime.prepare_reload(
+        key,
+        load_candidate=lambda _path: candidate,
+        primary_track=baseline,
+    )
+    assert accepted is not None
+    assert accepted.disposition == SourceReloadDisposition.READY
+    runtime.accept_prepared(accepted)
+    assert runtime.state(key).baseline == candidate
+    assert runtime.state(key).baseline is not candidate
+
+    path.write_text("always-partial", encoding="utf-8")
+    dispositions = []
+    for _attempt in range(6):
+        failed = runtime.prepare_reload(
+            key,
+            load_candidate=fail_partial_load,
+            primary_track=candidate,
+        )
+        assert failed is not None
+        dispositions.append(failed.disposition)
+        runtime.pending_keys.clear()
+        runtime.timer.stop()
+    assert dispositions == [
+        SourceReloadDisposition.RETRYING,
+        SourceReloadDisposition.RETRYING,
+        SourceReloadDisposition.RETRYING,
+        SourceReloadDisposition.RETRYING,
+        SourceReloadDisposition.RETRYING,
+        SourceReloadDisposition.FAILED,
+    ]
     runtime.deleteLater()
 
 
