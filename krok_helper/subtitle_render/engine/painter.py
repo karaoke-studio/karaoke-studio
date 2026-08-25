@@ -524,6 +524,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     n3_following_wipe_band as _n3_following_wipe_band,
     n3_transformed_wipe_span as _n3_transformed_wipe_span,
     n3_ruby_fill_rect as _n3_ruby_fill_rect,
+    paint_ruby_karaoke_fragment as _paint_horizontal_ruby_karaoke_fragment,
     paint_bitmap_guide_glyph as _paint_horizontal_bitmap_guide_glyph,
     paint_bitmap_guide_glyphs as _paint_horizontal_bitmap_guide_glyphs,
     paint_bitmap_guide_transition_glyph as _paint_horizontal_bitmap_guide_transition_glyph,
@@ -7442,6 +7443,9 @@ _RUBY_LAYER_PORTS = RubyLayerPorts(
     paint_split_glow_path=lambda *args, **kwargs: (
         _paint_split_glow_path(*args, **kwargs)
     ),
+    paint_text_layer_stack=lambda *args, **kwargs: (
+        _paint_text_layer_stack(*args, **kwargs)
+    ),
     ruby_text_path_and_rect=lambda *args, **kwargs: (
         _ruby_text_path_and_rect(*args, **kwargs)
     ),
@@ -7556,171 +7560,19 @@ def _paint_ruby_karaoke_fragment(
     after_clip_rect: QRectF | None = None,
     before_glow_clip_rect: QRectF | None = None,
 ) -> None:
-    colors = _effective_ruby_karaoke_colors(style)
-    paint_style = _ruby_paint_style(style)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    shadow_dx = _ruby_shadow_dx(style)
-    shadow_dy = _ruby_shadow_dy(style)
-    before_glow_radius = _ruby_glow_radius(style, after=False)
-    after_glow_radius = _ruby_glow_radius(style, after=True)
-    glow_states_differ = _ruby_glow_states_differ(style)
-
-    # N3 clips before/after outline sources at WipeLeft and blurs afterwards.
-    # The sharp colour boundary therefore stays on the ruby ink/edge while the
-    # two soft halos may blend across it.
-    clip_before_glow = ratio > 0.0 and glow_states_differ and (
-        before_glow_radius > 0 or after_glow_radius > 0
+    _paint_horizontal_ruby_karaoke_fragment(
+        painter,
+        path,
+        rect,
+        ratio,
+        style,
+        _RUBY_LAYER_PORTS,
+        rtl=rtl,
+        fill_rect=fill_rect,
+        horizontal_fill_rect=horizontal_fill_rect,
+        after_clip_rect=after_clip_rect,
+        before_glow_clip_rect=before_glow_clip_rect,
     )
-    if clip_before_glow and ratio < 1.0:
-        if before_glow_clip_rect is not None:
-            front = (
-                before_glow_clip_rect.right()
-                if rtl
-                else before_glow_clip_rect.left()
-            )
-        else:
-            front = rect.left() + rect.width() * (1.0 - ratio if rtl else ratio)
-        before_pad = _glow_extent(
-            stroke_width, stroke2_width, before_glow_radius
-        )
-        before_source_clip = (
-            QRectF(
-                -1_000_000.0,
-                rect.top() - before_pad,
-                front + 1_000_000.0,
-                rect.height() + before_pad * 2,
-            )
-            if rtl
-            else QRectF(
-                front,
-                rect.top() - before_pad,
-                1_000_000.0,
-                rect.height() + before_pad * 2,
-            )
-        )
-        _paint_glow_path(
-            painter,
-            path,
-            colors.before.shadow,
-            _fill_brush_rect(
-                colors.before.shadow,
-                fill_rect if fill_rect is not None else rect,
-                horizontal_fill_rect,
-            ),
-            before_glow_radius,
-            stroke_width,
-            stroke2_width,
-            source_clip=before_source_clip,
-            concentration_level=_glow_concentration_level(paint_style),
-        )
-        after_pad = _glow_extent(
-            stroke_width, stroke2_width, after_glow_radius
-        )
-        after_source_clip = (
-            QRectF(
-                front,
-                rect.top() - after_pad,
-                1_000_000.0,
-                rect.height() + after_pad * 2,
-            )
-            if rtl
-            else QRectF(
-                -1_000_000.0,
-                rect.top() - after_pad,
-                front + 1_000_000.0,
-                rect.height() + after_pad * 2,
-            )
-        )
-        _paint_glow_path(
-            painter,
-            path,
-            colors.after.shadow,
-            _fill_brush_rect(
-                colors.after.shadow,
-                fill_rect if fill_rect is not None else rect,
-                horizontal_fill_rect,
-            ),
-            after_glow_radius,
-            stroke_width,
-            stroke2_width,
-            source_clip=after_source_clip,
-            concentration_level=_glow_concentration_level(paint_style),
-        )
-
-    if ratio < 1.0:
-        _paint_text_layer_stack(
-            painter,
-            path,
-            rect,
-            colors.before,
-            paint_style,
-            stroke_width=stroke_width,
-            stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx,
-            shadow_dy=shadow_dy,
-            glow_radius=before_glow_radius,
-            draw_glow=not clip_before_glow,
-            fill_rect=fill_rect,
-            horizontal_fill_rect=horizontal_fill_rect,
-        )
-
-    if ratio <= 0.0:
-        return
-
-    painter.save()
-    try:
-        if ratio < 1.0 or after_clip_rect is not None:
-            stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-            pad = max(
-                stroke_extent,
-                _glow_extent(stroke_width, stroke2_width, after_glow_radius)
-                if _ruby_decoration_kind(style) == "glow"
-                else 0,
-                stroke_extent + abs(shadow_dx),
-                stroke_extent + abs(shadow_dy),
-                2,
-            )
-            # RTL：已唱区贴读音右缘，左缘（扫光线）随进度左移。前缘必须停在
-            # 扫光线本身，pad 只外扩尾缘/上下缘（LTR 尾缘在左，RTL 在右）。
-            if after_clip_rect is None:
-                if rtl:
-                    front = rect.left() + rect.width() * (1.0 - ratio)
-                    after_clip_rect = QRectF(
-                        front,
-                        rect.top() - pad,
-                        rect.width() * ratio + pad,
-                        rect.height() + pad * 2,
-                    )
-                else:
-                    after_clip_rect = QRectF(
-                        rect.left() - pad,
-                        rect.top() - pad,
-                        rect.width() * ratio + pad,
-                        rect.height() + pad * 2,
-                    )
-            painter.setClipRect(after_clip_rect)
-        # ratio >= 1.0：唱完不再裁剪——裁剪带右缘恰好压在字框右缘，
-        # 会把末字形的描边外扩留在走字前状态。
-        _paint_text_layer_stack(
-            painter,
-            path,
-            rect,
-            colors.after,
-            paint_style,
-            stroke_width=stroke_width,
-            stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx,
-            shadow_dy=shadow_dy,
-            glow_radius=after_glow_radius,
-            # 前后发光相同时未唱发光已铺满整读音，再叠只会加亮已唱带；
-            # ratio>=1 时未唱层未画，已唱发光必须自己画。
-            draw_glow=ratio >= 1.0,
-            fill_rect=fill_rect,
-            horizontal_fill_rect=horizontal_fill_rect,
-        )
-    finally:
-        painter.restore()
 
 
 def _paint_text_layer_stack(

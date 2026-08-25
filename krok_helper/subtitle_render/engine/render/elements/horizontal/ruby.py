@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from krok_helper.subtitle_render.engine.render.effects import (
     fill_signature,
     fill_brush_rect,
+    glow_concentration_level,
     glow_extent,
     karaoke_state_signature,
     paint_glow_path,
@@ -22,6 +23,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     ruby_glow_concentration_level,
     ruby_shadow_dx,
     ruby_shadow_dy,
+    ruby_paint_style,
     ruby_vertical_extra,
     ruby_visual_padding,
     ruby_baseline_y,
@@ -78,6 +80,7 @@ class RubyLayerPorts:
     build_ruby_glow_layer: Callable[..., tuple]
     build_ruby_text_layer: Callable[..., tuple]
     paint_split_glow_path: Callable[..., None]
+    paint_text_layer_stack: Callable[..., None]
     ruby_text_path_and_rect: Callable[..., tuple]
 
 
@@ -804,6 +807,185 @@ def ruby_glow_states_differ(style: Style) -> bool:
         or ruby_glow_radius(style, after=False)
         != ruby_glow_radius(style, after=True)
     )
+
+
+def paint_ruby_karaoke_fragment(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    ratio: float,
+    style: Style,
+    ports: RubyLayerPorts,
+    rtl: bool = False,
+    fill_rect: QRectF | None = None,
+    horizontal_fill_rect: QRectF | None = None,
+    after_clip_rect: QRectF | None = None,
+    before_glow_clip_rect: QRectF | None = None,
+) -> None:
+    """Paint one before/after ruby fragment through explicit raster ports."""
+    colors = effective_ruby_karaoke_colors(style)
+    paint_style = ruby_paint_style(style)
+    stroke_width = ruby_stroke_width(style)
+    stroke2_width = ruby_stroke2_width(style)
+    shadow_dx = ruby_shadow_dx(style)
+    shadow_dy = ruby_shadow_dy(style)
+    before_glow_radius = ruby_glow_radius(style, after=False)
+    after_glow_radius = ruby_glow_radius(style, after=True)
+    glow_states_differ = ruby_glow_states_differ(style)
+
+    # N3 clips before/after outline sources at WipeLeft and blurs afterwards.
+    # The sharp colour boundary therefore stays on the ruby ink/edge while the
+    # two soft halos may blend across it.
+    clip_before_glow = ratio > 0.0 and glow_states_differ and (
+        before_glow_radius > 0 or after_glow_radius > 0
+    )
+    if clip_before_glow and ratio < 1.0:
+        if before_glow_clip_rect is not None:
+            front = (
+                before_glow_clip_rect.right()
+                if rtl
+                else before_glow_clip_rect.left()
+            )
+        else:
+            front = rect.left() + rect.width() * (1.0 - ratio if rtl else ratio)
+        before_pad = glow_extent(
+            stroke_width, stroke2_width, before_glow_radius
+        )
+        before_source_clip = (
+            QRectF(
+                -1_000_000.0,
+                rect.top() - before_pad,
+                front + 1_000_000.0,
+                rect.height() + before_pad * 2,
+            )
+            if rtl
+            else QRectF(
+                front,
+                rect.top() - before_pad,
+                1_000_000.0,
+                rect.height() + before_pad * 2,
+            )
+        )
+        paint_glow_path(
+            painter,
+            path,
+            colors.before.shadow,
+            fill_brush_rect(
+                colors.before.shadow,
+                fill_rect if fill_rect is not None else rect,
+                horizontal_fill_rect,
+            ),
+            before_glow_radius,
+            stroke_width,
+            stroke2_width,
+            source_clip=before_source_clip,
+            concentration_level=glow_concentration_level(paint_style),
+        )
+        after_pad = glow_extent(
+            stroke_width, stroke2_width, after_glow_radius
+        )
+        after_source_clip = (
+            QRectF(
+                front,
+                rect.top() - after_pad,
+                1_000_000.0,
+                rect.height() + after_pad * 2,
+            )
+            if rtl
+            else QRectF(
+                -1_000_000.0,
+                rect.top() - after_pad,
+                front + 1_000_000.0,
+                rect.height() + after_pad * 2,
+            )
+        )
+        paint_glow_path(
+            painter,
+            path,
+            colors.after.shadow,
+            fill_brush_rect(
+                colors.after.shadow,
+                fill_rect if fill_rect is not None else rect,
+                horizontal_fill_rect,
+            ),
+            after_glow_radius,
+            stroke_width,
+            stroke2_width,
+            source_clip=after_source_clip,
+            concentration_level=glow_concentration_level(paint_style),
+        )
+
+    if ratio < 1.0:
+        ports.paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.before,
+            paint_style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=before_glow_radius,
+            draw_glow=not clip_before_glow,
+            fill_rect=fill_rect,
+            horizontal_fill_rect=horizontal_fill_rect,
+        )
+
+    if ratio <= 0.0:
+        return
+
+    painter.save()
+    try:
+        if ratio < 1.0 or after_clip_rect is not None:
+            stroke_extent = visual_stroke_extent(stroke_width, stroke2_width)
+            pad = max(
+                stroke_extent,
+                glow_extent(stroke_width, stroke2_width, after_glow_radius)
+                if ruby_decoration_kind(style) == "glow"
+                else 0,
+                stroke_extent + abs(shadow_dx),
+                stroke_extent + abs(shadow_dy),
+                2,
+            )
+            # RTL: the sung area hugs the reading's right edge while the wipe
+            # front moves left. The extra pad only expands the outer edges.
+            if after_clip_rect is None:
+                if rtl:
+                    front = rect.left() + rect.width() * (1.0 - ratio)
+                    after_clip_rect = QRectF(
+                        front,
+                        rect.top() - pad,
+                        rect.width() * ratio + pad,
+                        rect.height() + pad * 2,
+                    )
+                else:
+                    after_clip_rect = QRectF(
+                        rect.left() - pad,
+                        rect.top() - pad,
+                        rect.width() * ratio + pad,
+                        rect.height() + pad * 2,
+                    )
+            painter.setClipRect(after_clip_rect)
+        ports.paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.after,
+            paint_style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=after_glow_radius,
+            # Matching before/after glow is already supplied by the unsung
+            # layer; after a complete wipe the sung layer must supply it.
+            draw_glow=ratio >= 1.0,
+            fill_rect=fill_rect,
+            horizontal_fill_rect=horizontal_fill_rect,
+        )
+    finally:
+        painter.restore()
 
 
 def ruby_glow_can_combine_split(style: Style) -> bool:

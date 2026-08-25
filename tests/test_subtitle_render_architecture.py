@@ -2565,6 +2565,7 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
         "build_ruby_glow_layer",
         "build_ruby_text_layer",
         "paint_split_glow_path",
+        "paint_text_layer_stack",
         "ruby_text_path_and_rect",
     }
 
@@ -2574,6 +2575,45 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
         target == f"{PACKAGE}.frontend"
         or target.startswith(f"{PACKAGE}.frontend.")
         for target in targets
+    )
+
+
+def test_horizontal_ruby_fragment_uses_thin_painter_raster_port() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    ruby_path = ROOT / "engine/render/elements/horizontal/ruby.py"
+    painter_path = ROOT / "engine/painter.py"
+    ruby_tree = ast.parse(ruby_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    ruby_functions = {
+        node.name for node in ruby_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name == "paint_ruby_karaoke_fragment"
+    }
+    wrapper = next(
+        node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_paint_ruby_karaoke_fragment"
+    )
+
+    assert "paint_ruby_karaoke_fragment" in ruby_functions
+    assert imported == {
+        "paint_ruby_karaoke_fragment": "_paint_horizontal_ruby_karaoke_fragment"
+    }
+    assert len(wrapper.body) == 1
+    call = wrapper.body[0]
+    assert isinstance(call, ast.Expr)
+    assert isinstance(call.value, ast.Call)
+    assert isinstance(call.value.func, ast.Name)
+    assert call.value.func.id == "_paint_horizontal_ruby_karaoke_fragment"
+    assert any(
+        isinstance(argument, ast.Name) and argument.id == "_RUBY_LAYER_PORTS"
+        for argument in call.value.args
     )
 
 
