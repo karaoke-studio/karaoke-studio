@@ -16,15 +16,22 @@ from krok_helper.subtitle_render.domain.paint import (
     KaraokeColorState,
 )
 from krok_helper.subtitle_render.engine.render.effects import (
+    fill_is_alpha,
     fill_signature,
     glow_extent,
     glow_concentration_level,
     glow_radius,
     karaoke_state_signature,
     main_stroke2_width,
+    paint_fill_path,
     paint_glow_path,
+    paint_shadow_silhouette,
+    paint_stroke_path,
     paint_text_layer_stack,
+    stroke2_pen_width,
+    stroke_pen_width,
     text_visual_padding,
+    visual_stroke_extent,
 )
 from krok_helper.subtitle_render.engine.guide import (
     bitmap_guide_content_size,
@@ -79,9 +86,6 @@ class BitmapGuidePorts:
 class GlyphLayerPorts:
     """Painter-owned raster and sweep capabilities used by glyph layers."""
 
-    build_glyph_run_after_glow_layer: Callable[..., tuple]
-    build_glyph_run_glow_layer: Callable[..., tuple]
-    build_glyph_run_layer: Callable[..., tuple]
     fill_clip_band: Callable[..., tuple[int, int] | None]
     fill_clip_band_for_glyphs: Callable[..., tuple[int, int] | None]
     n3_following_wipe_band: Callable[..., tuple[int, int] | None]
@@ -179,6 +183,228 @@ def paint_glyph_run_direct(
         glow_radius=glow_radius(role_style, after=after),
         draw_glow=draw_glow,
         fill_rect=fill_rect,
+    )
+
+
+def build_glyph_run_layer(
+    glyphs: list[GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+    supersample: float = 1.0,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
+) -> tuple[QImage, int, int]:
+    """Bake one horizontal glyph-run state into a transparent image."""
+
+    state = colors.after if after else colors.before
+    run_left = min(glyph.left for glyph in glyphs)
+    run_right = max(glyph.left + glyph.width for glyph in glyphs)
+    run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
+    run_descent = max(glyph.metrics.descent() for glyph in glyphs)
+    run_w = max(run_right - run_left, 1)
+    run_h = max(run_ascent + run_descent, 1)
+    stroke2_width = main_stroke2_width(role_style)
+
+    is_glow = role_style.decoration_kind == "glow"
+    bake_glow = (
+        is_glow
+        and not after
+        and not karaoke_glow_states_differ(role_style, colors)
+    )
+    has_shadow = (
+        role_style.decoration_kind == "shadow"
+        and bool(role_style.shadow_color)
+        and bool(role_style.shadow_offset_x or role_style.shadow_offset_y)
+    )
+
+    stroke_extent = visual_stroke_extent(
+        role_style.stroke_width_px,
+        stroke2_width,
+    )
+    glow_extra = (
+        glow_extent(
+            role_style.stroke_width_px,
+            stroke2_width,
+            glow_radius(role_style, after=False),
+        )
+        if bake_glow
+        else 0
+    )
+    extent = max(stroke_extent, glow_extra, 0) + 4
+    shadow_dx = role_style.shadow_offset_x if has_shadow else 0
+    shadow_dy = role_style.shadow_offset_y if has_shadow else 0
+    pad_left = max(0, -shadow_dx) + extent
+    pad_right = max(0, shadow_dx) + extent
+    pad_top = max(0, -shadow_dy) + extent
+    pad_bottom = max(0, shadow_dy) + extent
+
+    img_w = max(pad_left + run_w + pad_right, 1)
+    img_h = max(pad_top + run_h + pad_bottom, 1)
+
+    # Render the natural-coordinate layer at Sx and let the caller downscale
+    # it, preserving the sharp Utopia entrance phase and natural offsets.
+    scale = max(float(supersample), 1.0)
+    image = QImage(
+        max(int(round(img_w * scale)), 1),
+        max(int(round(img_h * scale)), 1),
+        QImage.Format.Format_ARGB32_Premultiplied,
+    )
+    image.fill(0)
+
+    target_origin_x = float(run_left - pad_left)
+    target_origin_y = float(baseline_y - run_ascent - pad_top)
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = QRectF(
+        float(run_left),
+        float(baseline_y - run_ascent),
+        float(run_w),
+        float(run_h),
+    )
+    brush_rect = fill_rect if fill_rect is not None else rect
+
+    painter = QPainter(image)
+    try:
+        if scale != 1.0:
+            painter.scale(scale, scale)
+        painter.translate(-target_origin_x, -target_origin_y)
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        if bake_glow:
+            paint_glow_path(
+                painter,
+                path,
+                state.shadow,
+                brush_rect,
+                glow_radius(role_style, after=False),
+                role_style.stroke_width_px,
+                stroke2_width,
+                concentration_level=glow_concentration_level(role_style),
+            )
+        elif has_shadow:
+            paint_shadow_silhouette(
+                painter,
+                path,
+                state.shadow,
+                brush_rect,
+                role_style.shadow_offset_x,
+                role_style.shadow_offset_y,
+                role_style.stroke_width_px,
+                stroke2_width,
+            )
+        if stroke2_width > 0:
+            paint_stroke_path(
+                painter,
+                path,
+                state.stroke2,
+                brush_rect,
+                stroke2_pen_width(role_style.stroke_width_px, stroke2_width),
+            )
+        if role_style.stroke_color and role_style.stroke_width_px > 0:
+            paint_stroke_path(
+                painter,
+                path,
+                state.stroke,
+                brush_rect,
+                stroke_pen_width(role_style.stroke_width_px),
+                protect_body=fill_is_alpha(state.text),
+            )
+        paint_fill_path(painter, path, state.text, brush_rect)
+    finally:
+        painter.end()
+
+    return image, -pad_left, -(pad_top + run_ascent)
+
+
+def build_glyph_run_glow_layer(
+    glyphs: list[GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
+) -> tuple[QImage, int, int]:
+    """Bake the full unclipped glow image for a horizontal glyph run."""
+
+    state = colors.after if after else colors.before
+    run_left = min(glyph.left for glyph in glyphs)
+    run_right = max(glyph.left + glyph.width for glyph in glyphs)
+    run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
+    run_descent = max(glyph.metrics.descent() for glyph in glyphs)
+    run_w = max(run_right - run_left, 1)
+    run_h = max(run_ascent + run_descent, 1)
+    radius = glow_radius(role_style, after=after)
+    stroke2_width = main_stroke2_width(role_style)
+    extent = glow_extent(
+        role_style.stroke_width_px,
+        stroke2_width,
+        radius,
+    ) + 4
+
+    image = QImage(
+        max(extent + run_w + extent, 1),
+        max(extent + run_h + extent, 1),
+        QImage.Format.Format_ARGB32_Premultiplied,
+    )
+    image.fill(0)
+
+    target_origin_x = float(run_left - extent)
+    target_origin_y = float(baseline_y - run_ascent - extent)
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = QRectF(
+        float(run_left),
+        float(baseline_y - run_ascent),
+        float(run_w),
+        float(run_h),
+    )
+    brush_rect = fill_rect if fill_rect is not None else rect
+
+    painter = QPainter(image)
+    try:
+        painter.translate(-target_origin_x, -target_origin_y)
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        paint_glow_path(
+            painter,
+            path,
+            state.shadow,
+            brush_rect,
+            radius,
+            role_style.stroke_width_px,
+            stroke2_width,
+            concentration_level=glow_concentration_level(role_style),
+        )
+    finally:
+        painter.end()
+
+    return image, -extent, -(extent + run_ascent)
+
+
+def build_glyph_run_after_glow_layer(
+    glyphs: list[GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
+) -> tuple[QImage, int, int]:
+    """Bake the full unclipped after-glow image for a glyph run."""
+
+    return build_glyph_run_glow_layer(
+        glyphs,
+        role_style,
+        colors,
+        after=True,
+        fill_rect=fill_rect,
+        baseline_y=baseline_y,
     )
 
 
@@ -1196,7 +1422,7 @@ class GlyphRunLayer:
     ) -> BakedLayer:
         role_style = self.glyphs[0].style
         colors = effective_karaoke_colors(role_style)
-        image, dx, dy = self.ports.build_glyph_run_layer(
+        image, dx, dy = build_glyph_run_layer(
             self.glyphs,
             role_style,
             colors,
@@ -1370,7 +1596,7 @@ class GlyphRunBeforeGlowLayer:
     ) -> BakedLayer:
         role_style = self.glyphs[0].style
         colors = effective_karaoke_colors(role_style)
-        image, dx, dy = self.ports.build_glyph_run_glow_layer(
+        image, dx, dy = build_glyph_run_glow_layer(
             self.glyphs,
             role_style,
             colors,
@@ -1585,7 +1811,7 @@ class GlyphRunAfterGlowLayer:
     ) -> BakedLayer:
         role_style = self.glyphs[0].style
         colors = effective_karaoke_colors(role_style)
-        image, dx, dy = self.ports.build_glyph_run_after_glow_layer(
+        image, dx, dy = build_glyph_run_after_glow_layer(
             self.glyphs,
             role_style,
             colors,

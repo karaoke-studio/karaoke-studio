@@ -2351,6 +2351,12 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     layer_classes = {
         node.name for node in layer_tree.body if isinstance(node, ast.ClassDef)
     }
+    layer_functions = {
+        node.name for node in layer_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    painter_functions = {
+        node.name for node in painter_tree.body if isinstance(node, ast.FunctionDef)
+    }
     adapters = {
         node.name: node
         for node in painter_tree.body
@@ -2372,6 +2378,16 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
         "GlyphRunSplitGlowLayer",
         "ScopeBoundsLayer",
     } <= layer_classes
+    assert {
+        "build_glyph_run_after_glow_layer",
+        "build_glyph_run_glow_layer",
+        "build_glyph_run_layer",
+    } <= layer_functions
+    assert not {
+        "_build_glyph_run_after_glow_layer",
+        "_build_glyph_run_glow_layer",
+        "_build_glyph_run_layer",
+    } & painter_functions
     assert set(adapters) == {
         "_GlyphRunAfterGlowLayer",
         "_GlyphRunBeforeGlowLayer",
@@ -2401,9 +2417,6 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     assert isinstance(ports[0].func, ast.Name)
     assert ports[0].func.id == "GlyphLayerPorts"
     assert {keyword.arg for keyword in ports[0].keywords} == {
-        "build_glyph_run_after_glow_layer",
-        "build_glyph_run_glow_layer",
-        "build_glyph_run_layer",
         "fill_clip_band",
         "fill_clip_band_for_glyphs",
         "n3_following_wipe_band",
