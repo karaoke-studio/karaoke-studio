@@ -1523,6 +1523,27 @@ def test_painter_delegates_frame_analysis() -> None:
     )
 
 
+def test_horizontal_display_line_measurement_has_one_owner() -> None:
+    painter_path = ROOT / "engine" / "painter.py"
+    owner_path = (
+        ROOT / "engine" / "render" / "elements" / "horizontal" / "layout.py"
+    )
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    painter_functions = {
+        node.name for node in painter_tree.body if isinstance(node, ast.FunctionDef)
+    }
+
+    assert "measure_display_line_horizontal_bounds" not in painter_functions
+    assert f"{PACKAGE}.engine.render.elements.horizontal" in _import_targets(
+        f"{PACKAGE}.engine.painter",
+        painter_path,
+    )
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        f"{PACKAGE}.engine.render.elements.horizontal.layout",
+        owner_path,
+    )
+
+
 def test_title_layout_has_one_render_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.title"
     painter_path = ROOT / "engine/painter.py"

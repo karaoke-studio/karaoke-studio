@@ -26,7 +26,10 @@ from krok_helper.subtitle_render.engine.layout.line.geometry import (
 from krok_helper.subtitle_render.engine.layout.page.pagination import (
     line_center_override,
 )
-from krok_helper.subtitle_render.engine.layout.line.style import lane_count
+from krok_helper.subtitle_render.engine.layout.line.style import (
+    lane_count,
+    style_for_line,
+)
 from krok_helper.subtitle_render.engine.render.effects import (
     glow_concentration_level,
     glow_radius,
@@ -74,6 +77,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning import (
     line_lane_alignment,
+    line_total_width,
     resolve_line_x_smart,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import (
@@ -92,6 +96,30 @@ class HorizontalLayoutPorts:
     char_layout_width: Callable[..., int]
     layout_rubies: Callable[..., list[RubyLayout]]
     role_ruby_vertical_extra: Callable[..., int]
+
+
+def measure_display_line_horizontal_bounds(
+    track: TimingTrack,
+    style: Style,
+    display_line: DisplayLine,
+    logical_w: int,
+) -> tuple[float, float]:
+    """Measure one display line's authored horizontal text bounds."""
+
+    line = display_line.line
+    line_style = style_for_line(style, line)
+    total_w = line_total_width(line, line_style, track.rubies)
+    lane = display_line.lane if line_style.dual_line_layout else None
+    x0 = resolve_line_x_smart(
+        logical_w,
+        total_w,
+        track,
+        line,
+        line_style,
+        lane,
+        center_override=line_center_override(track, line, line_style),
+    )
+    return float(x0), float(x0 + total_w)
 
 
 def bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
