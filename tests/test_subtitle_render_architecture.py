@@ -2607,6 +2607,7 @@ def test_horizontal_ruby_geometry_has_one_painter_free_owner() -> None:
         "ruby_glow_can_combine_split",
         "ruby_glow_states_differ",
         "ruby_segment_wipe_state",
+        "ruby_text_path_and_rect",
         "ruby_text_rect",
         "ruby_text_layer_key",
         "ruby_wipe_geometry",

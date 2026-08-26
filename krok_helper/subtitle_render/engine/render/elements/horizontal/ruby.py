@@ -548,6 +548,62 @@ def ruby_text_rect(layout: RubyLayout, ruby_metrics: QFontMetrics) -> QRectF:
     )
 
 
+def ruby_text_path_and_rect(
+    reading: str,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    x: int | float,
+    baseline_y: int | float,
+    target_width: int | float | None,
+    style: Style | None = None,
+    base_text: str | None = None,
+) -> tuple[QPainterPath, QRectF]:
+    """Build the visible ruby path and its authored horizontal layout box."""
+
+    path = QPainterPath()
+    if target_width is None:
+        path.addText(float(x), float(baseline_y), ruby_font, reading)
+        width = ruby_metrics.horizontalAdvance(reading)
+        return path, QRectF(
+            float(x),
+            float(baseline_y - ruby_metrics.ascent()),
+            float(width),
+            float(ruby_metrics.height()),
+        )
+
+    units = ruby_utopia_visual_units(reading)
+    layout_units = ruby_layout_units(
+        units,
+        ruby_metrics,
+        x,
+        target_width,
+        style=style,
+        base_text=base_text,
+    )
+    for unit, unit_x, _unit_width in layout_units:
+        path.addText(float(unit_x), float(baseline_y), ruby_font, unit)
+    layout_width = ruby_layout_width(
+        reading,
+        ruby_metrics,
+        target_width,
+        style=style,
+        base_text=base_text,
+    )
+    layout_left = float(x) + ruby_layout_left_offset(
+        reading,
+        ruby_metrics,
+        target_width,
+        style,
+        base_text,
+    )
+    return path, QRectF(
+        layout_left,
+        float(baseline_y - ruby_metrics.ascent()),
+        float(layout_width),
+        float(ruby_metrics.height()),
+    )
+
+
 def _ruby_clip_padding(style: Style, *, after: bool) -> int:
     stroke_width = ruby_stroke_width(style)
     stroke2_width = ruby_stroke2_width(style)

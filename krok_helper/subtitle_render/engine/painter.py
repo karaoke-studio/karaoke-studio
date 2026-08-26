@@ -568,6 +568,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     ruby_glow_layers as _build_horizontal_ruby_glow_layers,
     ruby_horizontal_gradient_rect_signature as _ruby_horizontal_gradient_rect_signature,
     ruby_segment_wipe_state as _ruby_segment_wipe_state,
+    ruby_text_path_and_rect as _ruby_text_path_and_rect,
     ruby_text_rect as _ruby_text_rect,
     ruby_text_layers as _build_horizontal_ruby_text_layers,
     ruby_text_layer_key as _ruby_text_layer_key,
@@ -6540,51 +6541,6 @@ def _paint_ruby_text(
         gradient_rect=gradient_rect,
         horizontal_gradient_rect=horizontal_gradient_rect,
         wipe_layout=wipe_layout,
-    )
-
-
-def _ruby_text_path_and_rect(
-    reading: str,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    x: int | float,
-    baseline_y: int | float,
-    target_width: int | float | None,
-    style: Style | None = None,
-    base_text: str | None = None,
-) -> tuple[QPainterPath, QRectF]:
-    path = QPainterPath()
-    if target_width is None:
-        path.addText(float(x), float(baseline_y), ruby_font, reading)
-        width = ruby_metrics.horizontalAdvance(reading)
-        return path, QRectF(
-            float(x),
-            float(baseline_y - ruby_metrics.ascent()),
-            float(width),
-            float(ruby_metrics.height()),
-        )
-
-    units = _ruby_utopia_visual_units(reading)
-    layout_units = _ruby_layout_units(
-        units, ruby_metrics, x, target_width, style=style, base_text=base_text
-    )
-    for unit, unit_x, _unit_width in layout_units:
-        path.addText(float(unit_x), float(baseline_y), ruby_font, unit)
-    layout_width = _ruby_layout_width(
-        reading, ruby_metrics, target_width, style=style, base_text=base_text
-    )
-    layout_left = float(x) + _ruby_layout_left_offset(
-        reading,
-        ruby_metrics,
-        target_width,
-        style,
-        base_text,
-    )
-    return path, QRectF(
-        layout_left,
-        float(baseline_y - ruby_metrics.ascent()),
-        float(layout_width),
-        float(ruby_metrics.height()),
     )
 
 
