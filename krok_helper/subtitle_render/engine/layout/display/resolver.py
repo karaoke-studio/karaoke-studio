@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, replace
 
 from krok_helper.subtitle_render.engine.layout.display.diagnostics import (
@@ -50,6 +50,18 @@ MeasuredCollisionBand = tuple[int, Hashable, LineVisualBand, float]
 MeasuredCollisionBands = list[MeasuredCollisionBand]
 
 
+@dataclass(frozen=True)
+class CollisionLineGeometry:
+    """Renderer-supplied static ink geometry for one display line."""
+
+    axis_min: float
+    axis_max: float
+    cross_min: float
+    cross_max: float
+    axis_anchor: float | None
+    gap_px: float
+
+
 def display_line_static_collision_window(
     display_line: DisplayLine,
     style: Style,
@@ -86,6 +98,61 @@ def display_line_collision_time_window(
     if time_window != "stable":
         raise ValueError(f"Unsupported collision time window: {time_window}")
     return display_line_static_collision_window(display_line, style)
+
+
+def build_measured_collision_bands(
+    display_lines: DisplayLines,
+    style: Style,
+    geometries: Sequence[CollisionLineGeometry | None],
+    *,
+    time_window: str | None = None,
+) -> MeasuredCollisionBands:
+    """Attach layout-owned timing and page identity to renderer geometry."""
+
+    if time_window is None:
+        time_window = (
+            "stable" if style.allow_entry_exit_animation_overlap else "display"
+        )
+    measured: MeasuredCollisionBands = []
+    for render_index, display_line in enumerate(display_lines):
+        geometry = geometries[render_index] if render_index < len(geometries) else None
+        if geometry is None:
+            continue
+        collision_start, collision_end = display_line_collision_time_window(
+            display_line,
+            style,
+            time_window=time_window,
+        )
+        if collision_end <= collision_start:
+            continue
+        page_id = (
+            int(display_line.section_index),
+            int(display_line.page_index),
+        )
+        measured.append(
+            (
+                render_index,
+                page_id,
+                LineVisualBand(
+                    line_id=render_index,
+                    page_id=page_id,
+                    display_start_ms=collision_start,
+                    display_end_ms=collision_end,
+                    axis_min=float(geometry.axis_min),
+                    axis_max=float(geometry.axis_max),
+                    entry_start_ms=int(display_line.display_start_ms),
+                    axis_anchor=(
+                        None
+                        if geometry.axis_anchor is None
+                        else float(geometry.axis_anchor)
+                    ),
+                    cross_min=float(geometry.cross_min),
+                    cross_max=float(geometry.cross_max),
+                ),
+                max(float(geometry.gap_px), 0.0),
+            )
+        )
+    return measured
 
 
 def collision_squeeze_pairs(

@@ -268,9 +268,11 @@ from krok_helper.subtitle_render.engine.layout.display.schedule import (
 )
 from krok_helper.subtitle_render.engine.layout.display.resolver import (
     AnimationGuardPorts,
+    CollisionLineGeometry,
     DisplayResolutionPorts,
     StyleDisplayResolutionPorts,
     apply_animation_time_guard,
+    build_measured_collision_bands as _build_measured_collision_bands,
     clear_display_line_resolution_cache,
     collision_squeeze_pairs as _collision_squeeze_pairs,
     display_line_collision_time_window as _display_line_collision_time_window,
@@ -2353,10 +2355,6 @@ def measure_collision_bands(
 
     if not display_lines:
         return []
-    if time_window is None:
-        time_window = (
-            "stable" if style.allow_entry_exit_animation_overlap else "display"
-        )
     if style.vertical:
         baselines: dict[int, int] = {}
         line_layouts: dict[int, _SayatooLineLayout] = {}
@@ -2376,8 +2374,8 @@ def measure_collision_bands(
         )
         layout_cache_sig = _layout_cache_sig(track, style)
 
-    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]] = []
-    for render_index, display_line in enumerate(display_lines):
+    geometries: list[CollisionLineGeometry | None] = []
+    for display_line in display_lines:
         line_style = _style_for_line(style, display_line.line)
         if style.vertical:
             ink_rect = _display_line_vertical_ink_rect(
@@ -2424,39 +2422,25 @@ def measure_collision_bands(
                 else baselines.get(display_line.lane)
             )
         if axis_bounds is None:
+            geometries.append(None)
             continue
         assert cross_bounds is not None
-        collision_start, collision_end = _display_line_collision_time_window(
-            display_line, style, time_window=time_window
-        )
-        if collision_end <= collision_start:
-            continue
-        page_id = (
-            int(display_line.section_index),
-            int(display_line.page_index),
-        )
-        measured.append(
-            (
-                render_index,
-                page_id,
-                LineVisualBand(
-                    line_id=render_index,
-                    page_id=page_id,
-                    display_start_ms=collision_start,
-                    display_end_ms=collision_end,
-                    axis_min=float(axis_bounds[0]),
-                    axis_max=float(axis_bounds[1]),
-                    entry_start_ms=int(display_line.display_start_ms),
-                    axis_anchor=(
-                        None if axis_anchor is None else float(axis_anchor)
-                    ),
-                    cross_min=float(cross_bounds[0]),
-                    cross_max=float(cross_bounds[1]),
-                ),
-                max(float(line_style.line_gap_px), 0.0),
+        geometries.append(
+            CollisionLineGeometry(
+                axis_min=float(axis_bounds[0]),
+                axis_max=float(axis_bounds[1]),
+                cross_min=float(cross_bounds[0]),
+                cross_max=float(cross_bounds[1]),
+                axis_anchor=(None if axis_anchor is None else float(axis_anchor)),
+                gap_px=float(line_style.line_gap_px),
             )
         )
-    return measured
+    return _build_measured_collision_bands(
+        display_lines,
+        style,
+        geometries,
+        time_window=time_window,
+    )
 
 
 def pixel_collision_squeeze_pairs(

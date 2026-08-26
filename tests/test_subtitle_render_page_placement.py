@@ -1,3 +1,10 @@
+from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine
+from krok_helper.subtitle_render.engine.layout.display.resolver import (
+    CollisionLineGeometry,
+    build_measured_collision_bands,
+)
+from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.engine.layout.plan.page_offsets import (
     page_offsets_at_time,
 )
@@ -27,6 +34,38 @@ def test_page_offset_selector_preserves_half_open_window_semantics():
 
 def _band(line, page, start, end, top, bottom):
     return LineVisualBand(line, page, start, end, top, bottom)
+
+
+def test_collision_band_builder_attaches_layout_identity_and_timing():
+    line = TimingLine(chars=[TimingChar("A", 1_000)], end_ms=2_000)
+    display_line = DisplayLine(
+        line,
+        lane=1,
+        display_start_ms=500,
+        display_end_ms=2_500,
+        section_index=2,
+        page_index=3,
+    )
+
+    measured = build_measured_collision_bands(
+        [display_line],
+        Style(),
+        [CollisionLineGeometry(10, 30, 40, 80, 24, 7)],
+        time_window="display",
+    )
+
+    assert len(measured) == 1
+    render_index, page_id, band, gap = measured[0]
+    assert (render_index, page_id, gap) == (0, (2, 3), 7.0)
+    assert (
+        band.display_start_ms,
+        band.display_end_ms,
+        band.axis_min,
+        band.axis_max,
+        band.cross_min,
+        band.cross_max,
+        band.axis_anchor,
+    ) == (500, 2_500, 10.0, 30.0, 40.0, 80.0, 24.0)
 
 
 def test_cross_axis_separation_prevents_false_page_collision():
