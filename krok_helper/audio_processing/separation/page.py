@@ -25,6 +25,7 @@ from qfluentwidgets import (
     ScrollArea as FluentScrollArea,
 )
 
+from krok_helper.media_formats import HIRES_AUDIO_EXTENSIONS
 from krok_helper.workflow_host import AccompanimentSink, OnVocalSink
 from krok_helper.audio_processing.responsive import ResponsiveGrid
 from krok_helper.audio_processing.separation.backend import (
@@ -428,7 +429,7 @@ class AudioSeparationPage(QWidget):
 
         input_path = self._input_card.path()
         if not input_path:
-            show_fluent_info(self, "请先选择待处理的音频素材。")
+            show_fluent_info(self, "请先选择待处理的音频或视频素材。")
             return
 
         pending = sum(self._task_cards[task].download_bytes() for task in selected)
@@ -492,7 +493,13 @@ class AudioSeparationPage(QWidget):
             return
 
         # 宿主不收原唱时就别把那条勾选项摆出来 —— 勾了也没地方去。
+        # 视频素材同理：解复用出来的音轨是任务临时文件、这时已经清掉了，能交出去的
+        # 只有原始容器，而下一步只认音频与 .mp4。
         offer_source = source if isinstance(host, OnVocalSink) else None
+        if offer_source is not None and (
+            offer_source.suffix.lower() not in HIRES_AUDIO_EXTENSIONS
+        ):
+            offer_source = None
         dialog = AccompanimentHandoffDialog(candidates, self.window(), source_audio=offer_source)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return

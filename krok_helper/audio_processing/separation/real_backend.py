@@ -23,7 +23,7 @@ from krok_helper.app_paths import LEGACY_APP_NAMES
 from krok_helper.config import APP_NAME
 from krok_helper.windows import hidden_subprocess_kwargs
 
-from .audio_io import extract_result_stems, prepare_pcm
+from .audio_io import extract_audio_track, extract_result_stems, is_video_input, prepare_pcm
 from .backend import (
     FLOW_EXISTING,
     FLOW_FULL,
@@ -128,6 +128,10 @@ class RealSeparationBackend(SeparationBackend):
         self._runtime_installer_factory = runtime_installer_factory
         self._service_factory = service_factory
         self._ffmpeg_dir = str(ffmpeg_dir or "")
+        # 视频输入的解复用结果：一个批次只抽一次，批次结束随临时目录一起清掉。
+        self._demux_lock = threading.Lock()
+        self._demux_dir: tempfile.TemporaryDirectory | None = None
+        self._demuxed: tuple[str, Path] | None = None
         self._lock = threading.RLock()
         self._futures: set[Future] = set()
         self._detached_futures: set[Future] = set()
@@ -262,6 +266,7 @@ class RealSeparationBackend(SeparationBackend):
 
     def _fail(self, error: Exception | str) -> None:
         message = str(error).strip() or type(error).__name__
+        self._release_demux()
         self._log(f"操作失败：{message}")
         self._set_state(ServiceState.ERROR, error=message)
 
@@ -546,7 +551,53 @@ class RealSeparationBackend(SeparationBackend):
             return ServiceState.EXTERNAL_MODEL_READY
         return ServiceState.SERVICE_READY
 
+    def _resolve_media_input(self, source: Path, progress) -> Path:
+        """Return the audio the models can read, demuxing a video once per batch.
+
+        Audio inputs pass straight through, so projects that never touch video
+        keep working without ffmpeg configured at all.
+        """
+
+        if not is_video_input(source):
+            return source
+        with self._demux_lock:
+            cached = self._demuxed
+            if (
+                cached is not None
+                and cached[0] == str(source)
+                and cached[1].is_file()
+            ):
+                return cached[1]
+            if self._demux_dir is None:
+                self._demux_dir = tempfile.TemporaryDirectory(
+                    prefix="karaoke-demux-"
+                )
+            progress(STAGE_PREPARE, source.name)
+            self._log(f"正在从视频中提取音轨：{source.name}")
+            extracted = extract_audio_track(
+                source,
+                Path(self._demux_dir.name),
+                ffmpeg_dir=self._ffmpeg_dir or None,
+                cancelled=self._task_cancel,
+            )
+            self._demuxed = (str(source), extracted)
+            self._log(f"音轨提取完成：{extracted.name}")
+            return extracted
+
+    def _release_demux(self) -> None:
+        with self._demux_lock:
+            holder, self._demux_dir = self._demux_dir, None
+            self._demuxed = None
+        if holder is not None:
+            try:
+                holder.cleanup()
+            except OSError:
+                # 清不掉只是留下一份临时文件，不该把结束流程带崩。
+                pass
+
     def _set_ready_state(self) -> None:
+        # 走到这里说明整批已经收尾（成功、失败或取消），解复用的中间音轨可以扔了。
+        self._release_demux()
         with self._lock:
             self._rebuild_dependencies()
         self._set_state(self._ready_state())
@@ -2176,6 +2227,8 @@ class RealSeparationBackend(SeparationBackend):
         def operation():
             context = dict(self._task_context)
             source_path = Path(context["input_path"])
+            # 视频先解复用；输出命名仍沿用原素材名，所以 source_path 保持不变。
+            audio_path = self._resolve_media_input(source_path, progress)
             output_dir = Path(context["output_dir"])
             output_format = context["output_format"]
             steps = self._steps_for_task(task)
@@ -2185,7 +2238,7 @@ class RealSeparationBackend(SeparationBackend):
             }
             with tempfile.TemporaryDirectory(prefix="karaoke-pymss-") as temporary:
                 work = Path(temporary)
-                current_input = source_path
+                current_input = audio_path
                 collected: dict[str, Path] = {}
                 for index, step in enumerate(steps):
                     if self._task_cancel.is_set():
@@ -2485,6 +2538,7 @@ class RealSeparationBackend(SeparationBackend):
     def cancel_task(self) -> None:
         self._task_cancel.set()
         self._snap.pending_task = None
+        self._release_demux()
         if self._external_url:
             self._set_ready_state()
             self._log("已请求取消任务；外部服务中的请求可能仍会继续到当前响应结束。")
@@ -2508,6 +2562,7 @@ class RealSeparationBackend(SeparationBackend):
         self._scan_cancel.set()
         self._probe_cancel.set()
         self._shutdown_requested = True
+        self._release_demux()
         deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
         stopped = self._stop_owned_service(max(0.5, deadline - time.monotonic()))
         with self._lock:

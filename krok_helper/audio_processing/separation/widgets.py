@@ -48,8 +48,14 @@ from krok_helper.audio_processing.separation.states import (
 )
 from krok_helper.background_throttle import UiActivityGuard, ui_active
 
-#: 音频素材卡支持的格式（需求文档 §9.1，P0）。
-ACCEPTED_AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ape", ".alac"}
+# 素材白名单与「要不要解复用」的判定住在 audio_io（无 Qt 依赖），
+# 这样后端能共用同一份口径而不必反向 import 界面层。
+from krok_helper.audio_processing.separation.audio_io import (
+    ACCEPTED_AUDIO_EXTENSIONS,
+    ACCEPTED_INPUT_EXTENSIONS,
+    ACCEPTED_VIDEO_EXTENSIONS,
+    is_video_input,
+)
 
 _LEVEL_COLORS = {
     StateLevel.INFO: "#3a7bd5",
@@ -504,7 +510,7 @@ def _tint(color: str, alpha: float) -> str:
 
 
 class _DropZoneFrame(QFrame):
-    """素材卡内的拖放区：可点击选择，也可拖入音频文件。
+    """素材卡内的拖放区：可点击选择，也可拖入音频或视频文件。
 
     四档视觉状态各自可辨（§9.1）：空闲是灰色虚线；鼠标悬停加一层浅色底并把边框
     提到强调色；拖拽经过时边框加粗、底色加深，明确「松手就收」；已载入则换成实线
@@ -576,7 +582,7 @@ class _DropZoneFrame(QFrame):
     def _first_audio(mime) -> str:
         for url in mime.urls():
             local = url.toLocalFile()
-            if local and Path(local).suffix.lower() in ACCEPTED_AUDIO_EXTENSIONS:
+            if local and Path(local).suffix.lower() in ACCEPTED_INPUT_EXTENSIONS:
                 return local
         return ""
 
@@ -608,7 +614,11 @@ class _DropZoneFrame(QFrame):
 
 
 class AudioInputCard(CardWidget):
-    """音频素材卡：点击或拖入待处理音频（需求文档 §3.4-2 / §9.1）。"""
+    """音频素材卡：点击或拖入待处理音频或视频（需求文档 §3.4-2 / §9.1）。
+
+    视频只在这里被接受和展示；真正的解复用发生在后端开跑时，抽出来的音轨落在
+    任务临时目录里，批次结束即随之清理。
+    """
 
     fileSelected = pyqtSignal(str)
     cleared = pyqtSignal()
@@ -684,7 +694,7 @@ class AudioInputCard(CardWidget):
     def path(self) -> str:
         return self._path
 
-    _EMPTY_LABEL = "点击选择文件，或拖拽音频文件到此处"
+    _EMPTY_LABEL = "点击选择文件，或拖拽音频 / 视频到此处"
     _FORMAT_HINT = "支持 wav / flac / mp3 / m4a / aac / ape / alac"
 
     def _refresh_zone(self, *, dragging: bool = False) -> None:
@@ -733,8 +743,20 @@ class AudioInputCard(CardWidget):
         self.cleared.emit()
 
     def _browse(self) -> None:
-        filters = "音频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ape *.alac)"
-        path, _ = QFileDialog.getOpenFileName(self, "选择待处理音频", "", filters)
+        audio_patterns = " ".join(
+            f"*{ext}" for ext in sorted(ACCEPTED_AUDIO_EXTENSIONS)
+        )
+        video_patterns = " ".join(
+            f"*{ext}" for ext in sorted(ACCEPTED_VIDEO_EXTENSIONS)
+        )
+        filters = ";;".join(
+            (
+                f"音频或视频 ({audio_patterns} {video_patterns})",
+                f"音频文件 ({audio_patterns})",
+                f"视频文件 ({video_patterns})",
+            )
+        )
+        path, _ = QFileDialog.getOpenFileName(self, "选择待处理素材", "", filters)
         if path:
             self.set_path(path)
 

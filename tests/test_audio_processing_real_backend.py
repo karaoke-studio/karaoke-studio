@@ -1692,3 +1692,64 @@ def test_remote_only_service_explains_why_it_cannot_register(tmp_path) -> None:
         assert "请先安装 PyMSS 底座" not in reason
     finally:
         backend.shutdown()
+
+
+def test_video_input_is_demuxed_once_per_batch_and_cleaned_up(tmp_path, monkeypatch):
+    """视频只抽一次音轨，整批复用，批次结束后临时文件不留。"""
+
+    backend = RealSeparationBackend({})
+    calls: list[Path] = []
+
+    def fake_extract(source, work_dir, **_kwargs):
+        calls.append(Path(source))
+        work = Path(work_dir)
+        work.mkdir(parents=True, exist_ok=True)
+        produced = work / f"{Path(source).stem}.wav"
+        produced.write_bytes(b"RIFF")
+        return produced
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.extract_audio_track",
+        fake_extract,
+    )
+    video = tmp_path / "MV.mp4"
+    video.write_bytes(b"0")
+
+    first = backend._resolve_media_input(video, lambda *_args, **_kwargs: None)
+    second = backend._resolve_media_input(video, lambda *_args, **_kwargs: None)
+
+    assert first == second
+    assert first.is_file()
+    # 一批里的第二、第三个任务必须复用同一份音轨，而不是各抽一遍。
+    assert calls == [video]
+
+    work_dir = first.parent
+    backend._release_demux()
+    assert not work_dir.exists()
+
+    # 释放之后再要，就该重新抽一份。
+    third = backend._resolve_media_input(video, lambda *_args, **_kwargs: None)
+    assert calls == [video, video]
+    assert third.is_file()
+    backend._release_demux()
+
+
+def test_audio_input_never_reaches_the_demuxer(tmp_path, monkeypatch):
+    """音频素材必须原样透传，否则没配 ffmpeg 的用户会被这条路拖下水。"""
+
+    backend = RealSeparationBackend({})
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("音频输入不应触发解复用")
+
+    monkeypatch.setattr(
+        "krok_helper.audio_processing.separation.real_backend.extract_audio_track",
+        explode,
+    )
+    audio = tmp_path / "歌.wav"
+    audio.write_bytes(b"RIFF")
+
+    assert backend._resolve_media_input(
+        audio, lambda *_args, **_kwargs: None
+    ) == audio
+    backend._release_demux()
