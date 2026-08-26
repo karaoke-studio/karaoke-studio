@@ -10,7 +10,11 @@ from krok_helper.subtitle_render.engine.layout.display.diagnostics import (
     TimingCollisionAdjustment,
 )
 from krok_helper.subtitle_render.engine.layout.display.schedule import (
+    SyncCollisionBands,
     apply_constrained_page_sync,
+    collision_time_window_name,
+    display_line_collision_time_window,
+    display_line_static_collision_window,
 )
 from krok_helper.subtitle_render.engine.layout.line.style import (
     auto_entry_reserve_resolver,
@@ -61,44 +65,6 @@ class CollisionLineGeometry:
     cross_max: float
     axis_anchor: float | None
     gap_px: float
-
-
-def display_line_static_collision_window(
-    display_line: DisplayLine,
-    style: Style,
-) -> tuple[int, int]:
-    """Return the non-animation interval used for page collisions."""
-
-    line_style = style_for_line_display_window(
-        style,
-        display_line.line,
-        display_line.display_start_ms,
-        display_line.display_end_ms,
-    )
-    start = int(display_line.display_start_ms)
-    end = int(display_line.display_end_ms)
-    if line_style.entry_anim != "none":
-        start += max(int(line_style.entry_lead_ms), 0)
-    if line_style.exit_anim != "none":
-        end -= max(int(line_style.exit_fade_ms), 0)
-    return start, max(start, end)
-
-
-def display_line_collision_time_window(
-    display_line: DisplayLine,
-    style: Style,
-    *,
-    time_window: str,
-) -> tuple[int, int]:
-    """Resolve the selected full-display or stable collision interval."""
-
-    if time_window == "display":
-        start = int(display_line.display_start_ms)
-        end = int(display_line.display_end_ms)
-        return start, max(start, end)
-    if time_window != "stable":
-        raise ValueError(f"Unsupported collision time window: {time_window}")
-    return display_line_static_collision_window(display_line, style)
 
 
 def build_measured_collision_bands(
@@ -817,6 +783,38 @@ def apply_animation_time_guard(
     return guarded if changed else display_lines
 
 
+def _sync_collision_bands(
+    style: Style,
+    display_lines: DisplayLines,
+    animation_ports: AnimationGuardPorts,
+    *,
+    enforce_inter_page_gap: bool,
+) -> SyncCollisionBands | None:
+    """Measure static ink geometry so entry sync can see cross-lane overlap.
+
+    Only the geometry is consumed; the clamp reads its timing from the lines
+    being resolved, so measuring once against the pre-sync windows is enough.
+    """
+
+    if not style.sync_entry:
+        # Only entry synchronization consults the clamp; measuring for the
+        # ending side would cost a full ink pass per resolution round for
+        # nothing.
+        return None
+    if not enforce_inter_page_gap or style.allow_inter_page_line_overlap:
+        return None
+    if not display_lines:
+        return None
+    measured = animation_ports.measure(
+        display_lines,
+        collision_time_window_name(style),
+    )
+    return {
+        int(index): (band, float(gap))
+        for index, _page_id, band, gap in measured
+    }
+
+
 def resolve_display_timing(
     style: Style,
     display_lines: DisplayLines,
@@ -827,7 +825,17 @@ def resolve_display_timing(
 ) -> DisplayLines:
     """Apply page synchronization before measured animation-window guarding."""
 
-    synchronized = apply_constrained_page_sync(display_lines, style)
+    synchronized = apply_constrained_page_sync(
+        display_lines,
+        style,
+        collision_bands=_sync_collision_bands(
+            style,
+            display_lines,
+            animation_ports,
+            enforce_inter_page_gap=enforce_inter_page_gap,
+        ),
+        enforce_inter_page_gap=enforce_inter_page_gap,
+    )
     return apply_animation_time_guard(
         style,
         synchronized,

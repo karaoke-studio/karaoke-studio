@@ -10059,7 +10059,9 @@ def test_overlap_mode_computes_page_sync_identically(
     assert overlap[1] == (normal[1][0], int(lines[1].end_ms) + 1_000)
     if sync_entry:
         assert normal[2][0] == 12_300
-        assert normal[3][0] == 13_800
+        # Entry sync stops at the previous page's resolved exit plus the lane
+        # gap; it never buys the remaining distance from that exit.
+        assert normal[3][0] == 14_200
         assert overlap[2][0] == overlap[3][0] == 12_200
     else:
         assert normal[2][0] == overlap[2][0] + 100
@@ -10594,13 +10596,25 @@ def test_page_sync_defaults_to_section_edges_and_can_run_on_every_page():
         )
         for index, line in enumerate(lines)
     ]
+    # These synthetic windows overlap wholesale, so the entry clamp would mask
+    # the scoping behaviour under test.  Overlap mode switches the clamp off and
+    # leaves only the section-edge / every-page distinction visible.
     section_edges = apply_constrained_page_sync(
         display_lines,
-        Style(sync_entry=True, sync_ending=True),
+        Style(
+            sync_entry=True,
+            sync_ending=True,
+            allow_inter_page_line_overlap=True,
+        ),
     )
     every_page = apply_constrained_page_sync(
         display_lines,
-        Style(sync_entry=True, sync_ending=True, sync_each_page=True),
+        Style(
+            sync_entry=True,
+            sync_ending=True,
+            sync_each_page=True,
+            allow_inter_page_line_overlap=True,
+        ),
     )
 
     assert [item.display_start_ms for item in section_edges] == [
@@ -10802,12 +10816,14 @@ def test_all_automatic_timing_options_preserve_stable_lane_gap(qapp):
     assert stable[0][1] + 300 == stable[3][0]
     assert stable[1][1] + 300 == stable[4][0]
     # Three-to-two matching leaves X unmatched; it is not reused as another
-    # correspondence.  The two-line section tail still shares its final end.
-    assert display[2].display_end_ms == 4_150
+    # correspondence.  Nothing on the next page may shorten it either, so it
+    # keeps the ending its own page synchronized it to.  The two-line section
+    # tail still shares its final end.
+    assert display[2].display_end_ms == 4_900
     assert display[3].display_end_ms == display[4].display_end_ms == 8_900
 
 
-def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
+def test_page_sync_entry_never_shortens_previous_page_exit(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
         for text, start, end in (
@@ -10843,14 +10859,15 @@ def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
         logical_h=1080,
     )
 
-    # 第一页完整同步。第二页先尝试最长同步入场；发生碰撞后，每个碰撞对
-    # 各自按「先压前句退场、再压自己入场」处理，不传播给页内兄弟行。
+    # 第一页完整同步。第二页的每一行各自尽量提前到页内最早入场，但下界是
+    # 「同位邻行退场 + IntervalTime」——够不着就停在下界，绝不通过压缩上一页的
+    # 退场来换取提前量。这里 D 的下界正好等于它自己的自动入场，所以它不动。
     assert synchronized[0][0] == synchronized[1][0] == baseline[0][0]
     assert synchronized[0][1] == baseline[0][1]
-    assert synchronized[1][1] == lines[1].end_ms
+    assert synchronized[1][1] == baseline[1][1]
     assert synchronized[2][0] == 12_200
-    assert synchronized[3][0] == 13_800
-    assert synchronized[1][1] <= synchronized[3][0]
+    assert synchronized[3][0] == baseline[3][0] == 14_200
+    assert synchronized[1][1] + 300 == synchronized[3][0]
     offsets = subtitle_painter.resolved_page_offsets_for_style(
         1920,
         1080,
@@ -10860,7 +10877,51 @@ def test_page_sync_entry_compresses_outgoing_then_incoming_page(qapp):
     assert offsets == {index: (0.0, 0.0) for index in range(4)}
 
 
-def test_page_sync_entry_applies_longest_candidate_before_collision_guard(qapp):
+def test_page_sync_entry_reaches_shared_instant_when_room_allows(qapp):
+    """A clamped entry sync must still align fully whenever nothing blocks it."""
+
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 11_000),
+            ("B", 12_000, 13_500),
+            ("C", 20_000, 21_000),
+            ("D", 22_000, 23_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    base_style = replace(
+        Style(),
+        auto_fill_section_time=False,
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+    baseline = subtitle_painter.display_windows_for_style(
+        track, base_style, logical_w=1920, logical_h=1080
+    )
+    synchronized = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base_style, sync_entry=True, sync_each_page=True),
+        logical_w=1920,
+        logical_h=1080,
+    )
+
+    # The second page opens well clear of the first, so both of its lines reach
+    # the shared entry instant and no exit anywhere moves.
+    assert synchronized[2][0] == synchronized[3][0] == baseline[2][0]
+    assert synchronized[3][0] < baseline[3][0]
+    assert [synchronized[index][1] for index in range(4)] == [
+        baseline[index][1] for index in range(4)
+    ]
+
+
+def test_page_sync_entry_clamps_to_previous_page_exit_plus_lane_gap(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
         for text, start, end in (
@@ -10890,10 +10951,13 @@ def test_page_sync_entry_applies_longest_candidate_before_collision_guard(qapp):
         style,
     )
 
-    # Both automatic lines first receive the page's longest entry candidate.
-    # The shared collision guard owns all later compression.
+    # The upper line has no measured counterpart on the previous page and
+    # therefore reaches the page's shared entry.  The lower line shares a lane
+    # with the outgoing line, so it stops at that line's exit plus the lane gap
+    # rather than trading the difference for part of that exit.
     assert synchronized[1].display_start_ms == 24_680
-    assert synchronized[2].display_start_ms == 24_680
+    assert synchronized[2].display_start_ms == 27_860
+    assert synchronized[0].display_end_ms == 27_560
 
 
 def test_animation_guard_keeps_100ms_exit_before_delaying_incoming(qapp):
