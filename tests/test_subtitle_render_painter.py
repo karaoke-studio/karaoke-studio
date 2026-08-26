@@ -36,6 +36,9 @@ import krok_helper.subtitle_render.engine.ruby.layout as ruby_layout  # noqa: E4
 import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
 import krok_helper.subtitle_render.engine.text.metrics as text_metrics  # noqa: E402
+from krok_helper.subtitle_render.engine.render.elements.horizontal import (  # noqa: E402
+    utopia as horizontal_utopia,
+)
 from krok_helper.subtitle_render.engine.layout.page.placement import (  # noqa: E402
     LineVisualBand,
 )
@@ -6311,8 +6314,8 @@ def test_utopia_glow_mask_is_tinted_after_transform_in_fixed_line_space(
     mask = QImage(10, 10, QImage.Format.Format_ARGB32_Premultiplied)
     mask.fill(QColor("#FFFFFF"))
     monkeypatch.setattr(
-        subtitle_painter,
-        "_get_or_build_run_glow_mask",
+        horizontal_utopia,
+        "get_or_build_run_glow_mask",
         lambda *_args, **_kwargs: BakedLayer(mask, QPointF(0.0, 0.0)),
     )
     canvas = QImage(80, 100, QImage.Format.Format_ARGB32_Premultiplied)

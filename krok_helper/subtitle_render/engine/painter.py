@@ -293,10 +293,6 @@ from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 # 各烘焙一次；逐帧只按扫光半平面 clip blit。
 _TEXT_RUN_LAYER_CACHE = LayerCache(max_items=128)
 _TEXT_RUN_COMPOSITOR = LayerCompositor(_TEXT_RUN_LAYER_CACHE)
-# A3（§9.7）：utopia transition 路径每帧重算 glow 高斯（实测 18ms 主因）。把 glow 按
-# **上正 glyph 身份**烘焙一次进此缓存（before/after 各一条），逐帧在 utopia 变换下 blit。
-# glow 是软晕、对 bitmap-transform 不敏感 → 复用无明显软化；body 仍逐帧矢量保持锐利（B 档再缓存）。
-_RUN_GLOW_CACHE = LayerCache(max_items=128)
 # 行级布局缓存：_LineLayout（纯几何 + 字体资源）与 t_ms 无关，但此前每帧重算
 # （full 场景约 30% paint 时间）。key = (整 track 值签名, display_style 值签名,
 # 行索引, 画布尺寸, baseline/line_x/lane)——签名每帧从当前值重建（models 是可变
@@ -308,14 +304,6 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 _LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
 # Scratch buffers for N3-style opacity layers; see _paint_through_opacity_layer.
 _OPACITY_LAYER_LOCAL = thread_local()
-
-
-def _glow_cache_enabled() -> bool:
-    """A3：utopia 路径复用 glow 烘焙缓存（默认开）。``KROK_SUBTITLE_GLOW_CACHE=0`` 退回
-    逐帧 ``_paint_glow_path``（A/B 验收 / 紧急回退用）。"""
-    return os.environ.get("KROK_SUBTITLE_GLOW_CACHE", "1").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
 
 
 def _vertical_layer_enabled() -> bool:
@@ -345,7 +333,7 @@ def clear_before_layer_cache() -> None:
     """测试 / 调试用：把字幕层位图缓存全部丢掉。"""
     _clear_fill_caches()
     _TEXT_RUN_LAYER_CACHE.clear()
-    _RUN_GLOW_CACHE.clear()
+    _clear_utopia_glow_cache()
     clear_char_metric_cache()
     _RUBY_MEASURE_CACHE.clear()
     _RUBY_UNIT_LAYOUT_CACHE.clear()
@@ -457,6 +445,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     GlyphRunLayer as _HorizontalGlyphRunLayer,
     GlyphRunSplitGlowLayer as _HorizontalGlyphRunSplitGlowLayer,
     ScopeBoundsLayer as _ScopeBoundsLayer,
+    UTOPIA_RUN_GLOW_CACHE as _RUN_GLOW_CACHE,
     CHAR_FADE_IN_TIME_MS as _CHAR_FADE_IN_TIME_MS,
     CHAR_FADE_INTRO_DELAY_MS as _CHAR_FADE_INTRO_DELAY_MS,
     CHAR_FADE_OUT_TIME_MS as _CHAR_FADE_OUT_TIME_MS,
@@ -479,6 +468,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     build_glyph_run_after_glow_layer as _build_glyph_run_after_glow_layer,
     build_glyph_run_glow_layer as _build_glyph_run_glow_layer,
     build_glyph_run_layer as _build_glyph_run_layer,
+    blit_cached_run_glow as _blit_cached_run_glow,
+    blit_tinted_run_glow_mask as _blit_tinted_run_glow_mask,
     char_fade_opacity as _char_fade_opacity,
     char_drip_char_transform as _char_drip_char_transform,
     character_transform as _character_transform,
@@ -493,6 +484,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     bottom_short_page_alignment as _bottom_short_page_alignment,
     before_glow_source_clip_rect as _before_glow_source_clip_rect,
     char_transition_layer_stack as _build_char_transition_layer_stack,
+    clear_utopia_glow_cache as _clear_utopia_glow_cache,
     clamp_role_baseline_y as _clamp_role_baseline_y,
     glyph_is_bitmap_guide as _glyph_is_bitmap_guide,
     glyph_path as _glyph_path,
@@ -504,6 +496,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     glyph_run_can_combine_split_glow as _glyph_run_can_combine_split_glow,
     glyph_run_needs_after_glow as _glyph_run_needs_after_glow,
     glyph_run_needs_before_glow_split as _glyph_run_needs_before_glow_split,
+    get_or_build_run_glow as _get_or_build_run_glow,
+    get_or_build_run_glow_mask as _get_or_build_run_glow_mask,
     glyph_runs as _glyph_runs,
     glyph_runs_for_indices as _glyph_runs_for_indices,
     fixed_line_geometry as _fixed_line_geometry,
@@ -580,6 +574,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     ruby_layer_stack as _build_horizontal_ruby_layer_stack,
     text_glyph_runs as _text_glyph_runs,
     transition_char_state as _transition_char_state,
+    utopia_glow_cache_enabled as _glow_cache_enabled,
     utopia_main_scope_layers as _utopia_main_scope_layers,
     utopia_following_done_time as _utopia_following_done_time,
     utopia_ruby_scope_layers as _utopia_ruby_scope_layers,
@@ -630,7 +625,6 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
 )
 from krok_helper.subtitle_render.domain.paint import (
     KaraokeColors,
-    KaraokeColorState,
     PaintFill,
 )
 from krok_helper.subtitle_render.domain.timing import (
@@ -4037,208 +4031,6 @@ def _utopia_transition_scope_layers(
 
 
 
-def _get_or_build_run_glow(
-    glyphs: list[_GlyphLayout],
-    role_style: Style,
-    colors: KaraokeColors,
-    *,
-    after: bool,
-    fill_rect: QRectF | None = None,
-    baseline_y: int = 0,
-) -> BakedLayer:
-    """A3：按上正 glyph 身份缓存 glow 烘焙位图（before/after 各一条）。"""
-    key = (
-        _glyph_run_layer_key(glyphs, role_style, colors, after=after),
-        "glow",
-        after,
-        _relative_fill_rect_signature(
-            glyphs,
-            baseline_y,
-            fill_rect,
-            global_anchor=(colors.after if after else colors.before).shadow.mode
-            == "image",
-        ),
-    )
-    return _RUN_GLOW_CACHE.get_or_build(
-        key,
-        lambda: _baked_run_glow(
-            glyphs,
-            role_style,
-            colors,
-            after=after,
-            fill_rect=fill_rect,
-            baseline_y=baseline_y,
-        ),
-    )
-
-
-def _baked_run_glow(
-    glyphs: list[_GlyphLayout],
-    role_style: Style,
-    colors: KaraokeColors,
-    *,
-    after: bool,
-    fill_rect: QRectF | None = None,
-    baseline_y: int = 0,
-) -> BakedLayer:
-    image, dx, dy = _build_glyph_run_glow_layer(
-        glyphs,
-        role_style,
-        colors,
-        after=after,
-        fill_rect=fill_rect,
-        baseline_y=baseline_y,
-    )
-    return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
-
-
-def _get_or_build_run_glow_mask(
-    glyphs: list[_GlyphLayout],
-    role_style: Style,
-    *,
-    after: bool,
-) -> BakedLayer:
-    """Cache an opaque-white glow alpha mask for spatial brush fills."""
-    mask_fill = PaintFill(mode="solid", color="#FFFFFF")
-    mask_state = KaraokeColorState(shadow=mask_fill)
-    mask_colors = KaraokeColors(before=mask_state, after=mask_state)
-    key = (
-        _glyph_run_layer_key(
-            glyphs, role_style, mask_colors, after=after
-        ),
-        "glow-mask",
-        after,
-    )
-    return _RUN_GLOW_CACHE.get_or_build(
-        key,
-        lambda: _baked_run_glow(
-            glyphs,
-            role_style,
-            mask_colors,
-            after=after,
-        ),
-    )
-
-
-def _blit_tinted_run_glow_mask(
-    painter: QPainter,
-    glyphs: list[_GlyphLayout],
-    baseline_y: int,
-    role_style: Style,
-    fill: PaintFill,
-    *,
-    after: bool,
-    transform: QTransform | None,
-    fill_rect: QRectF,
-) -> None:
-    """Transform a cached glow mask, then colour it in fixed line space."""
-    baked = _get_or_build_run_glow_mask(
-        glyphs, role_style, after=after
-    )
-    if baked.image.isNull():
-        return
-    run_left = min(glyph.left for glyph in glyphs)
-    anchor = QPointF(
-        float(run_left) + baked.offset.x(),
-        float(baseline_y) + baked.offset.y(),
-    )
-    source_rect = QRectF(
-        anchor.x(),
-        anchor.y(),
-        float(baked.image.width()),
-        float(baked.image.height()),
-    )
-    effective_transform = transform or QTransform()
-    mapped = effective_transform.mapRect(source_rect)
-    left = math.floor(mapped.left())
-    top = math.floor(mapped.top())
-    right = math.ceil(mapped.right())
-    bottom = math.ceil(mapped.bottom())
-    width = max(right - left, 1)
-    height = max(bottom - top, 1)
-    tinted = QImage(
-        width, height, QImage.Format.Format_ARGB32_Premultiplied
-    )
-    tinted.fill(0)
-
-    mask_painter = QPainter(tinted)
-    try:
-        mask_painter.setRenderHint(
-            QPainter.RenderHint.SmoothPixmapTransform, True
-        )
-        local_transform = QTransform(effective_transform)
-        local_transform *= QTransform.fromTranslate(-float(left), -float(top))
-        mask_painter.setTransform(local_transform)
-        mask_painter.drawImage(anchor, baked.image)
-        mask_painter.resetTransform()
-        mask_painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_SourceIn
-        )
-        local_fill_rect = fill_rect.translated(-float(left), -float(top))
-        mask_painter.fillRect(
-            QRectF(0.0, 0.0, float(width), float(height)),
-            _brush_for_fill(fill, local_fill_rect),
-        )
-    finally:
-        mask_painter.end()
-    painter.drawImage(QPointF(float(left), float(top)), tinted)
-
-
-def _blit_cached_run_glow(
-    painter: QPainter,
-    glyphs: list[_GlyphLayout],
-    baseline_y: int,
-    role_style: Style,
-    colors: KaraokeColors,
-    *,
-    after: bool,
-    transform: QTransform | None,
-    fill_rect: QRectF | None = None,
-) -> None:
-    """A3：在 ``transform`` 下贴出缓存的上正 glow 位图（替代逐帧 ``_paint_glow_path``）。
-
-    glow 在上正坐标烘焙、自然 anchor ``(run_left+dx, baseline_y+dy)`` 贴出；``transform``
-    把它送到与逐帧矢量 body 相同的变换位置。调用方在贴前已设好设备空间 clip（扫光带），
-    本函数 ``setTransform(combine=True)`` 不影响该 clip（Qt clip 存于设备坐标）。
-    ``fill_rect`` is the shared line brush area used by N3 gradients and
-    MilleFeuille fills.
-    """
-    if _glow_radius(role_style, after=after) == 0:
-        return
-    state = colors.after if after else colors.before
-    if (
-        state.shadow.mode != "solid"
-        and fill_rect is not None
-        and transform is not None
-        and not transform.isIdentity()
-    ):
-        _blit_tinted_run_glow_mask(
-            painter,
-            glyphs,
-            baseline_y,
-            role_style,
-            state.shadow,
-            after=after,
-            transform=transform,
-            fill_rect=fill_rect,
-        )
-        return
-    baked = _get_or_build_run_glow(
-        glyphs, role_style, colors, after=after,
-        fill_rect=fill_rect, baseline_y=baseline_y,
-    )
-    if baked.image.isNull():
-        return
-    run_left = min(glyph.left for glyph in glyphs)
-    anchor = QPointF(float(run_left) + baked.offset.x(), float(baseline_y) + baked.offset.y())
-    painter.save()
-    try:
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        if transform is not None:
-            painter.setTransform(transform, combine=True)
-        painter.drawImage(anchor, baked.image)
-    finally:
-        painter.restore()
 
 
 def _paint_role_line_with_character_transition(

@@ -2434,13 +2434,19 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     )
 
 
-def test_utopia_scope_bounds_have_one_horizontal_owner() -> None:
+def test_utopia_transition_runtime_has_one_horizontal_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.horizontal"
     utopia_path = ROOT / "engine/render/elements/horizontal/utopia.py"
     painter_path = ROOT / "engine/painter.py"
     utopia_tree = ast.parse(utopia_path.read_text(encoding="utf-8-sig"))
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     owned = {
+        "blit_cached_run_glow",
+        "blit_tinted_run_glow_mask",
+        "clear_utopia_glow_cache",
+        "get_or_build_run_glow",
+        "get_or_build_run_glow_mask",
+        "utopia_glow_cache_enabled",
         "utopia_main_scope_layers",
         "utopia_ruby_scope_layers",
         "utopia_ruby_scope_rect",
@@ -2466,7 +2472,9 @@ def test_utopia_scope_bounds_have_one_horizontal_owner() -> None:
     assert owned <= utopia_functions
     assert "ScopeBoundsLayer" in utopia_classes
     assert {f"_{name}" for name in owned}.isdisjoint(painter_functions)
-    assert imported == {name: f"_{name}" for name in owned}
+    expected_imports = {name: f"_{name}" for name in owned}
+    expected_imports["utopia_glow_cache_enabled"] = "_glow_cache_enabled"
+    assert imported == expected_imports
     targets = _import_targets(f"{owner}.utopia", utopia_path)
     assert f"{PACKAGE}.engine.painter" not in targets
     assert not any(
