@@ -474,6 +474,8 @@ class PropertyPanel(QWidget):
     styleChanged = Signal(Style)
     pageChanged = Signal(int)
     rolesChanged = Signal(list)
+    roleReferencesRemapped = Signal(str, object)
+    """(旧角色名, 新角色名 或 None=删除)；在样式改动落地之前发出，让主窗口把内容里的引用一起改写并合成一步撤销。"""
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
     defaultSchemeSaveRequested = Signal(str)
@@ -2948,6 +2950,9 @@ class PropertyPanel(QWidget):
             new,
             self._current_scheme_snapshot(),
         )
+        # 角色是按名字被内容引用的，方案表换键之前必须先announce改名，
+        # 否则那些句子会指向一个不存在的名字。
+        self.roleReferencesRemapped.emit(old, new)
         self._update_style(**changes)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
@@ -2964,6 +2969,8 @@ class PropertyPanel(QWidget):
             return  # 全局默认 / 内置「标题」方案不能删
         previous_roles = self._role_controller.names
         changes = self._role_controller.delete_changes(self._style, name)
+        # 删除角色后，引用它的句子回到默认样式，而不是留下悬空名。
+        self.roleReferencesRemapped.emit(name, None)
         self._update_style(**changes)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)

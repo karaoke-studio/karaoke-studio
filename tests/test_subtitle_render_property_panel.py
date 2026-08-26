@@ -1375,6 +1375,95 @@ def test_layout_assignment_document_command_preserves_undo_and_dirty_state(qapp)
     assert [line.layout_index for line in win._timing_track.lines] == [1, 1]
 
 
+def _role_reference_window(provider_cls, tmp_path, role):
+    """A window whose primary and extra tracks both reference ``role``."""
+
+    provider = provider_cls({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    primary = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("主", 0, role_label=role)], end_ms=1_000
+            )
+        ]
+    )
+    chorus = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("和", 0, role_label=role)], end_ms=1_000
+            )
+        ]
+    )
+    win._timing_track = primary
+    win._extra_sources = [
+        ExtraSubtitleSource("和声", tmp_path / "chorus.lrc", chorus)
+    ]
+    win._property_panel.set_roles([role])
+    return win, primary, chorus
+
+
+def test_renaming_a_role_rewrites_every_reference(qapp, tmp_path):
+    """改名必须连内容里的引用一起改，否则会留下一个查不到方案的幽灵角色。"""
+
+    win, primary, chorus = _role_reference_window(
+        _FontMigrationSettingsProvider, tmp_path, "角色方案A"
+    )
+    panel = win._property_panel
+
+    changes = panel._role_controller.rename_changes(
+        panel._style, "角色方案A", "角色方案A 1", panel._current_scheme_snapshot()
+    )
+    panel.roleReferencesRemapped.emit("角色方案A", "角色方案A 1")
+    panel._update_style(**changes)
+
+    assert primary.role_options == ["角色方案A 1"]
+    assert chorus.role_options == ["角色方案A 1"]
+    # 两个菜单的数据源必须一致——旧名不能再被内容反推出来。
+    assert panel.role_names == ["角色方案A 1"]
+    assert win._merged_role_options() == ["角色方案A 1"]
+
+
+def test_deleting_a_role_returns_its_lines_to_the_default_style(qapp, tmp_path):
+    win, primary, chorus = _role_reference_window(
+        _FontMigrationSettingsProvider, tmp_path, "角色方案A"
+    )
+    panel = win._property_panel
+
+    changes = panel._role_controller.delete_changes(panel._style, "角色方案A")
+    panel.roleReferencesRemapped.emit("角色方案A", None)
+    panel._update_style(**changes)
+
+    assert primary.lines[0].chars[0].role_label is None
+    assert chorus.lines[0].chars[0].role_label is None
+    assert primary.role_options == []
+    assert win._merged_role_options() == []
+
+
+def test_role_rename_and_its_references_undo_as_one_step(qapp, tmp_path):
+    win, _primary, _chorus = _role_reference_window(
+        _FontMigrationSettingsProvider, tmp_path, "角色方案A"
+    )
+    panel = win._property_panel
+    win._undo_stack = []
+
+    changes = panel._role_controller.rename_changes(
+        panel._style, "角色方案A", "角色方案A 1", panel._current_scheme_snapshot()
+    )
+    panel.roleReferencesRemapped.emit("角色方案A", "角色方案A 1")
+    panel._update_style(**changes)
+
+    assert len(win._undo_stack) == 1
+    assert win._undo_stack[-1][0] == "style_tracks"
+
+    win._undo_edit()
+    assert win._timing_track.role_options == ["角色方案A"]
+    assert "角色方案A" in win._style.custom_style_schemes
+
+    win._redo_edit()
+    assert win._timing_track.role_options == ["角色方案A 1"]
+    assert "角色方案A 1" in win._style.custom_style_schemes
+
+
 def test_layout_deletion_repairs_all_tracks_in_combined_style_undo(qapp, tmp_path):
     provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)

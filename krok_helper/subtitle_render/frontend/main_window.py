@@ -255,6 +255,7 @@ from krok_helper.subtitle_render.settings.screen import (
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.domain.timing import (
     assign_role_to_track_rows,
+    remap_track_role_labels,
     GuideSymbol,
     LineAnimationOverride,
     SubtitleLoadingSettings,
@@ -287,6 +288,7 @@ from krok_helper.subtitle_render.domain.models import (
     layout_display_name,
     layout_id_for_index,
     normalize_title_char_role_labels,
+    remap_title_char_role_labels,
     rescale_font_sizes,
     rescale_layout_sizes,
     style_from_dict,
@@ -1633,6 +1635,28 @@ class SubtitleRenderWindow(QWidget):
         self._apply_project_role_names(self._property_panel.role_names)
         self._lyrics_panel.set_role_options(self._merged_role_options())
 
+    def _on_role_references_remapped(self, old: str, new: object) -> None:
+        """记录角色改名 / 删除，交给随后的 ``_apply_style`` 与样式合成一步撤销。
+
+        面板在写样式之前发这个信号，所以这里只登记；真正的改写发生在
+        ``_apply_style`` 里，那条路径已经有「样式 + 轨道」的组合撤销条目。
+        """
+
+        name = str(old or "").strip()
+        if not name:
+            return
+        target = None if new is None else str(new or "").strip() or None
+        if target == name:
+            return
+        self._pending_role_remap = {name: target}
+
+    def _consume_pending_role_remap(
+        self,
+    ) -> Optional[dict[str, Optional[str]]]:
+        mapping = getattr(self, "_pending_role_remap", None)
+        self._pending_role_remap = None
+        return mapping or None
+
     def _apply_project_role_names(self, role_names: list[str]) -> None:
         """Mirror the UI role registry into project-owned document state."""
         self._project_document.role_names = [str(name) for name in role_names if name]
@@ -2328,6 +2352,9 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.styleChanged.connect(self._apply_style)
         self._property_panel.rolesChanged.connect(
             self._apply_project_role_names
+        )
+        self._property_panel.roleReferencesRemapped.connect(
+            self._on_role_references_remapped
         )
         self._property_panel.presetSchemesChanged.connect(
             self._apply_style_presets
@@ -3349,12 +3376,35 @@ class SubtitleRenderWindow(QWidget):
         added_pages = 0
         track_indices: tuple[int, ...] = ()
         tracks_before: tuple[TimingTrack, ...] = ()
+        role_remap = self._consume_pending_role_remap()
+        role_remap_applied = False
+        if role_remap is not None:
+            # 角色改名 / 删除必须连同内容里的引用一起改，否则那些句子会指向
+            # 一个已经不在方案表里的名字：渲染回落默认，名字却仍被
+            # ``role_options`` 反推出来，界面上就多出一个幽灵角色。
+            tracks = self._all_tracks()
+            track_indices = tuple(range(len(tracks)))
+            tracks_before = tuple(deepcopy(track) for track in tracks)
+            for track in tracks:
+                if remap_track_role_labels(track, role_remap):
+                    role_remap_applied = True
+            title = style.title_overlay
+            if title is not None:
+                remapped_title = remap_title_char_role_labels(title, role_remap)
+                if remapped_title is not None:
+                    style = replace(style, title_overlay=remapped_title)
+                    self._style = style
+                    role_remap_applied = True
+            if not role_remap_applied:
+                track_indices = ()
+                tracks_before = ()
         if shrunk:
             # 只有缩容重排会改轨道，也只有那条路径需要轨道撤销快照。全轨深拷贝
             # 是 O(全部行×全部字符)，绝不能挂在每次样式微调的必经路径上。
             tracks = self._all_tracks()
-            track_indices = tuple(range(len(tracks)))
-            tracks_before = tuple(deepcopy(track) for track in tracks)
+            if not track_indices:
+                track_indices = tuple(range(len(tracks)))
+                tracks_before = tuple(deepcopy(track) for track in tracks)
             for layout_id in shrunk:
                 for track in tracks:
                     affected, added = reflow_pages_for_layout_capacity(
@@ -3391,7 +3441,7 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
         # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈。
         if previous is not style:
-            if affected_pages:
+            if affected_pages or role_remap_applied:
                 tracks_after = tuple(
                     deepcopy(track) for track in self._all_tracks()
                 )

@@ -2069,6 +2069,34 @@ def normalize_title_char_role_labels(
     return normalized
 
 
+def remap_title_char_role_labels(
+    title: TitleOverlay, mapping: dict[str, Optional[str]]
+) -> Optional[TitleOverlay]:
+    """Rename or clear the title overlay's role references.
+
+    Returns ``None`` when nothing referenced any remapped role, so callers can
+    skip both the style write and its undo entry.
+    """
+
+    labels = normalize_title_char_role_labels(
+        title.text_template, title.char_role_labels
+    )
+    changed = False
+    remapped: list[list[Optional[str]]] = []
+    for row in labels:
+        new_row: list[Optional[str]] = []
+        for label in row:
+            if label in mapping:
+                new_row.append(mapping[label])
+                changed = True
+            else:
+                new_row.append(label)
+        remapped.append(new_row)
+    if not changed:
+        return None
+    return replace(title, char_role_labels=remapped)
+
+
 @dataclass(frozen=True)
 class TitleRoleRowsAssignment:
     """Immutable result of assigning one role to title text rows."""

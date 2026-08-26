@@ -450,6 +450,52 @@ def assign_role_to_track_rows(
     )
 
 
+def remap_track_role_labels(
+    track: TimingTrack, mapping: dict[str, Optional[str]]
+) -> bool:
+    """把轨道里对角色的**引用**整体改名或清空，返回是否真的改动过。
+
+    角色在数据模型里是按名字字符串存在每个可着色元素上的，方案表只是"名字 →
+    样式"的查表。重命名角色如果只换方案表的键，这些引用就变成悬空名——渲染时
+    查不到方案、回落全局默认，但名字还留在内容里，于是又会被
+    ``TimingTrack.role_options`` 反推出来，表现为界面上同时存在新旧两个角色。
+
+    ``mapping`` 的值为新名表示改名，为 ``None`` 表示清空（该元素回到默认样式）。
+    """
+
+    changed = False
+    for line in track.lines:
+        for char in line.chars:
+            label = char.role_label
+            if label in mapping:
+                char.role_label = mapping[label]
+                changed = True
+        symbol = line.guide_symbol
+        if symbol is not None:
+            labels = list(guide_symbol_role_labels(symbol))
+            if any(label in mapping for label in labels):
+                line.guide_symbol = guide_symbol_with_role_labels(
+                    symbol,
+                    [
+                        mapping[label] if label in mapping else label
+                        for label in labels
+                    ],
+                )
+                changed = True
+        for index, inline in list(line.inline_guide_symbols.items()):
+            labels = list(guide_symbol_role_labels(inline))
+            if any(label in mapping for label in labels):
+                line.inline_guide_symbols[index] = guide_symbol_with_role_labels(
+                    inline,
+                    [
+                        mapping[label] if label in mapping else label
+                        for label in labels
+                    ],
+                )
+                changed = True
+    return changed
+
+
 def timing_line_start_ms(line: TimingLine) -> int:
     """行内首个可唱元素的时刻；导唱符存在时它就是虚拟首字符。"""
     if not line.chars:
