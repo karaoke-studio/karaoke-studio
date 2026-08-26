@@ -442,6 +442,7 @@ from krok_helper.subtitle_render.engine.render.elements.title import (
     layout_title_overlay as _layout_title_overlay,
     make_title_font_for as _make_title_font_for,
     make_title_overlay_layer as _make_title_overlay_layer,
+    paint_title_text_stack as _paint_title_text_stack,
     paint_title_overlay as _paint_title_overlay_with_ports,
     title_block_origin as _title_block_origin,
 )
@@ -1127,71 +1128,6 @@ def _make_raster_image(logical_w: int, logical_h: int, device_pixel_ratio: float
     image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
     image.setDevicePixelRatio(dpr)
     return image
-
-
-def _title_line_path(
-    line: str,
-    font: QFont,
-    x0: float,
-    baseline: float,
-    metrics: QFontMetrics,
-    latin_metrics: QFontMetrics,
-    font_for,
-    spacing: int,
-) -> QPainterPath:
-    path = QPainterPath()
-    cursor = float(x0)
-    for ch in line:
-        glyph_font = font_for(ch) if font_for is not None else font
-        path.addText(cursor, float(baseline), glyph_font, ch)
-        cursor += _char_advance(ch, metrics, latin_metrics, font_for) + spacing
-    return path
-
-
-def _paint_title_text_stack(
-    painter: QPainter, path: QPainterPath, rect: QRectF, title: TitleOverlay
-) -> None:
-    """静态标题文字的装饰 + 二重描边 + 描边 + 填充（单态，不走字）。"""
-    if title.decoration_kind == "glow":
-        _paint_glow_path(
-            painter,
-            path,
-            title.shadow,
-            rect,
-            max(int(title.glow_radius_px), 0),
-            title.stroke_width_px,
-            title.stroke2_width_px,
-            concentration_level=title.glow_concentration_level,
-        )
-    elif (
-        title.decoration_kind == "shadow"
-        and (title.shadow_offset_x or title.shadow_offset_y)
-    ):
-        _paint_shadow_silhouette(
-            painter,
-            path,
-            title.shadow,
-            rect,
-            title.shadow_offset_x,
-            title.shadow_offset_y,
-            title.stroke_width_px,
-            title.stroke2_width_px,
-        )
-    if title.stroke2_width_px > 0:
-        _paint_stroke_path(
-            painter, path, title.stroke2, rect,
-            _stroke2_pen_width(title.stroke_width_px, title.stroke2_width_px),
-        )
-    if title.stroke_width_px > 0:
-        _paint_stroke_path(
-            painter,
-            path,
-            title.stroke,
-            rect,
-            _stroke_pen_width(title.stroke_width_px),
-            protect_body=_fill_is_alpha(title.fill),
-        )
-    _paint_fill_path(painter, path, title.fill, rect)
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,15 @@ from typing import Hashable
 from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 
+from krok_helper.subtitle_render.engine.render.effects import (
+    fill_is_alpha,
+    paint_fill_path,
+    paint_glow_path,
+    paint_shadow_silhouette,
+    paint_stroke_path,
+    stroke2_pen_width,
+    stroke_pen_width,
+)
 from krok_helper.subtitle_render.engine.render.core.layers import (
     BakedLayer,
     LayerAnimation,
@@ -112,6 +121,62 @@ def make_title_font_for(
         return latin_font if (text and text.isascii()) else jp_font
 
     return font_for
+
+
+def paint_title_text_stack(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    title: TitleOverlay,
+) -> None:
+    """Paint one static title state with its complete decoration stack."""
+
+    if title.decoration_kind == "glow":
+        paint_glow_path(
+            painter,
+            path,
+            title.shadow,
+            rect,
+            max(int(title.glow_radius_px), 0),
+            title.stroke_width_px,
+            title.stroke2_width_px,
+            concentration_level=title.glow_concentration_level,
+        )
+    elif (
+        title.decoration_kind == "shadow"
+        and (title.shadow_offset_x or title.shadow_offset_y)
+    ):
+        paint_shadow_silhouette(
+            painter,
+            path,
+            title.shadow,
+            rect,
+            title.shadow_offset_x,
+            title.shadow_offset_y,
+            title.stroke_width_px,
+            title.stroke2_width_px,
+        )
+    if title.stroke2_width_px > 0:
+        paint_stroke_path(
+            painter,
+            path,
+            title.stroke2,
+            rect,
+            stroke2_pen_width(
+                title.stroke_width_px,
+                title.stroke2_width_px,
+            ),
+        )
+    if title.stroke_width_px > 0:
+        paint_stroke_path(
+            painter,
+            path,
+            title.stroke,
+            rect,
+            stroke_pen_width(title.stroke_width_px),
+            protect_body=fill_is_alpha(title.fill),
+        )
+    paint_fill_path(painter, path, title.fill, rect)
 
 
 def title_block_origin(
@@ -527,6 +592,7 @@ __all__ = [
     "layout_title_overlay",
     "make_title_font_for",
     "make_title_overlay_layer",
+    "paint_title_text_stack",
     "paint_title_overlay",
     "title_block_origin",
     "title_overlay_layer_key",

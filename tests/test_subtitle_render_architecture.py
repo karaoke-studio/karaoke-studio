@@ -1599,6 +1599,7 @@ def test_title_layout_has_one_render_owner() -> None:
         "_layout_title_overlay",
         "_make_title_font_for",
         "_make_title_overlay_layer",
+        "_paint_title_text_stack",
         "_title_block_origin",
     }
     inline = {
@@ -1618,6 +1619,7 @@ def test_title_layout_has_one_render_owner() -> None:
     assert {
         "_TitleOverlayLayer",
         "_build_title_overlay_layer",
+        "_title_line_path",
         "_title_overlay_layer_key",
     }.isdisjoint(
         node.name
