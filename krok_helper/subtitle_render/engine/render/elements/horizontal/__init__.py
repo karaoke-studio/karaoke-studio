@@ -59,7 +59,6 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layers import
     GlyphRunBeforeGlowLayer,
     GlyphRunLayer,
     GlyphRunSplitGlowLayer,
-    ScopeBoundsLayer,
     after_glow_loose_clip_rect,
     after_glow_source_clip_rect,
     bitmap_guide_band_for_glyph,
@@ -147,6 +146,13 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.ruby import (
     ruby_wipe_geometry,
     ruby_wipe_state,
     ruby_layer_stack,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.utopia import (
+    ScopeBoundsLayer,
+    utopia_main_scope_layers,
+    utopia_ruby_scope_layers,
+    utopia_ruby_scope_rect,
+    utopia_scope_id,
 )
 
 
@@ -252,6 +258,10 @@ __all__ = [
     "resolve_line_x_smart",
     "resolve_role_baseline_y",
     "relative_fill_rect_signature",
+    "utopia_main_scope_layers",
+    "utopia_ruby_scope_layers",
+    "utopia_ruby_scope_rect",
+    "utopia_scope_id",
     "resolve_baseline_y",
     "resolve_display_baselines",
     "role_char_ink_ranges_by_index",

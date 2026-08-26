@@ -2376,7 +2376,6 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
         "GlyphRunBeforeGlowLayer",
         "GlyphRunLayer",
         "GlyphRunSplitGlowLayer",
-        "ScopeBoundsLayer",
     } <= layer_classes
     assert {
         "build_glyph_run_after_glow_layer",
@@ -2427,6 +2426,48 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     }
 
     targets = _import_targets(layer_owner, layer_path)
+    assert f"{PACKAGE}.engine.painter" not in targets
+    assert not any(
+        target == f"{PACKAGE}.frontend"
+        or target.startswith(f"{PACKAGE}.frontend.")
+        for target in targets
+    )
+
+
+def test_utopia_scope_bounds_have_one_horizontal_owner() -> None:
+    owner = f"{PACKAGE}.engine.render.elements.horizontal"
+    utopia_path = ROOT / "engine/render/elements/horizontal/utopia.py"
+    painter_path = ROOT / "engine/painter.py"
+    utopia_tree = ast.parse(utopia_path.read_text(encoding="utf-8-sig"))
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    owned = {
+        "utopia_main_scope_layers",
+        "utopia_ruby_scope_layers",
+        "utopia_ruby_scope_rect",
+        "utopia_scope_id",
+    }
+    utopia_functions = {
+        node.name for node in utopia_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    utopia_classes = {
+        node.name for node in utopia_tree.body if isinstance(node, ast.ClassDef)
+    }
+    painter_functions = {
+        node.name for node in painter_tree.body if isinstance(node, ast.FunctionDef)
+    }
+    imported = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name in owned
+    }
+
+    assert owned <= utopia_functions
+    assert "ScopeBoundsLayer" in utopia_classes
+    assert {f"_{name}" for name in owned}.isdisjoint(painter_functions)
+    assert imported == {name: f"_{name}" for name in owned}
+    targets = _import_targets(f"{owner}.utopia", utopia_path)
     assert f"{PACKAGE}.engine.painter" not in targets
     assert not any(
         target == f"{PACKAGE}.frontend"
