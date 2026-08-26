@@ -4904,6 +4904,24 @@ def test_subtitle_property_panel_delegates_gradient_fill_editor() -> None:
         and node.func.value.attr == "_role_fill_pages_builder"
     }
     assert calls == {"make_gradient_page"}
+    top_level_classes = {
+        node.name for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+    assert top_level_classes.isdisjoint(
+        {"GradientStopsEditor", "_GradientStopsPasteDialog"}
+    )
+    top_level_functions = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert top_level_functions.isdisjoint(
+        {
+            "_gradient_stops_to_json",
+            "_gradient_stops_from_json",
+            "_normalize_gradient_stops",
+            "_gradient_stops",
+            "_split_stops",
+        }
+    )
 
 
 def test_subtitle_property_panel_delegates_split_fill_editor() -> None:

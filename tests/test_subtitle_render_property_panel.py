@@ -50,7 +50,11 @@ from qfluentwidgets import (  # noqa: E402
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.properties import property_panel as pp  # noqa: E402
 from krok_helper.subtitle_render.frontend.properties import (  # noqa: E402
+    color_controls as color_controls_module,
     preset_manager as preset_manager_module,
+)
+from krok_helper.subtitle_render.frontend.properties.roles import (  # noqa: E402
+    fills as role_fills_module,
 )
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (  # noqa: E402
     FluentIntInputDialog,
@@ -3586,7 +3590,7 @@ def test_gradient_bar_context_menu_exposes_copy_and_paste(qapp, monkeypatch):
     def fake_exec(menu, _pos):
         action_texts.extend(action.text() for action in menu.actions())
 
-    monkeypatch.setattr(pp.RoundMenu, "exec", fake_exec)
+    monkeypatch.setattr(role_fills_module.RoundMenu, "exec", fake_exec)
 
     class FakeContextMenuEvent:
         accepted = False
@@ -6030,7 +6034,7 @@ def test_color_button_right_click_pastes_without_entering_edit_mode(
         menu_labels.extend(action.text() for action in actions)
         next(action for action in actions if action.text() == "粘贴色号").trigger()
 
-    monkeypatch.setattr(pp.RoundMenu, "exec", trigger_paste)
+    monkeypatch.setattr(color_controls_module.RoundMenu, "exec", trigger_paste)
 
     _send_context_menu_event(button._swatch)
 
@@ -6053,7 +6057,7 @@ def test_color_button_custom_menu_copies_color_and_has_no_edit_actions(
         assert [action.text() for action in actions] == ["复制色号", "粘贴色号"]
         next(action for action in actions if action.text() == "复制色号").trigger()
 
-    monkeypatch.setattr(pp.RoundMenu, "exec", trigger_copy)
+    monkeypatch.setattr(color_controls_module.RoundMenu, "exec", trigger_copy)
 
     _send_context_menu_event(button._swatch)
 
@@ -6083,7 +6087,7 @@ def test_color_button_right_click_paste_works_while_hex_editor_is_active(
             action for action in menu.actions() if action.text() == "粘贴色号"
         ).trigger()
 
-    monkeypatch.setattr(pp.RoundMenu, "exec", trigger_paste)
+    monkeypatch.setattr(color_controls_module.RoundMenu, "exec", trigger_paste)
 
     _send_context_menu_event(button._color_edit)
 
