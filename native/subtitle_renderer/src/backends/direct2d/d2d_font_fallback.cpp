@@ -2,9 +2,99 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cwchar>
+#include <unordered_map>
 #include <utility>
 
 namespace krok::subtitle::native::direct2d {
+
+namespace {
+
+bool localizedStringsContain(
+    IDWriteLocalizedStrings *strings,
+    const std::wstring &needle
+) {
+    if (strings == nullptr) {
+        return false;
+    }
+    const UINT32 count = strings->GetCount();
+    for (UINT32 index = 0; index < count; ++index) {
+        UINT32 length = 0;
+        if (FAILED(strings->GetStringLength(index, &length))) {
+            continue;
+        }
+        std::wstring value(static_cast<std::size_t>(length) + 1, L'\0');
+        if (FAILED(strings->GetString(index, value.data(), length + 1))) {
+            continue;
+        }
+        value.resize(length);
+        if (_wcsicmp(value.c_str(), needle.c_str()) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// DirectWrite groups faces under the typographic family (``モトヤ教科書 Pro``),
+// while GDI - and therefore Qt, and therefore every family name the app stores -
+// enumerates the legacy family that folds the weight into the name
+// (``モトヤ教科書 Pro W2``).  ``FindFamilyName`` never matches those, so without
+// this lookup the renderer silently substitutes a default font for any family
+// the font picker offered under its legacy spelling.
+//
+// The legacy name identifies exactly one face, which is what Qt resolves it to,
+// so the matching font is returned directly instead of re-selecting by weight.
+Microsoft::WRL::ComPtr<IDWriteFont> findFontByGdiFamilyName(
+    IDWriteFontCollection *collection,
+    const std::wstring &familyName
+) {
+    // Walking every face is far too slow to repeat per line, and the system
+    // collection is a cached object that only changes when it is rebuilt.
+    static IDWriteFontCollection *cachedCollection = nullptr;
+    static std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IDWriteFont>>
+        cachedFonts;
+    if (cachedCollection != collection) {
+        cachedCollection = collection;
+        cachedFonts.clear();
+    }
+    const auto cached = cachedFonts.find(familyName);
+    if (cached != cachedFonts.end()) {
+        return cached->second;
+    }
+
+    Microsoft::WRL::ComPtr<IDWriteFont> match;
+    const UINT32 familyCount = collection->GetFontFamilyCount();
+    for (UINT32 familyIndex = 0; familyIndex < familyCount && !match; ++familyIndex) {
+        Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+        if (FAILED(collection->GetFontFamily(familyIndex, family.ReleaseAndGetAddressOf()))) {
+            continue;
+        }
+        const UINT32 fontCount = family->GetFontCount();
+        for (UINT32 fontIndex = 0; fontIndex < fontCount; ++fontIndex) {
+            Microsoft::WRL::ComPtr<IDWriteFont> font;
+            if (FAILED(family->GetFont(fontIndex, font.ReleaseAndGetAddressOf()))) {
+                continue;
+            }
+            Microsoft::WRL::ComPtr<IDWriteLocalizedStrings> names;
+            BOOL exists = FALSE;
+            if (FAILED(font->GetInformationalStrings(
+                    DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES,
+                    names.ReleaseAndGetAddressOf(),
+                    &exists))
+                || !exists) {
+                continue;
+            }
+            if (localizedStringsContain(names.Get(), familyName)) {
+                match = font;
+                break;
+            }
+        }
+    }
+    cachedFonts.emplace(familyName, match);
+    return match;
+}
+
+}  // namespace
 
 Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     IDWriteFontCollection *collection,
@@ -12,11 +102,19 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     int weight,
     bool italic
 ) {
+    if (familyName.empty()) {
+        return {};
+    }
     UINT32 familyIndex = 0;
     BOOL exists = FALSE;
-    if (familyName.empty()
-        || FAILED(collection->FindFamilyName(familyName.c_str(), &familyIndex, &exists))
+    if (FAILED(collection->FindFamilyName(familyName.c_str(), &familyIndex, &exists))
         || !exists) {
+        if (auto font = findFontByGdiFamilyName(collection, familyName)) {
+            Microsoft::WRL::ComPtr<IDWriteFontFace> legacyFace;
+            if (SUCCEEDED(font->CreateFontFace(legacyFace.ReleaseAndGetAddressOf()))) {
+                return legacyFace;
+            }
+        }
         return {};
     }
     Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
