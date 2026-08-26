@@ -333,6 +333,7 @@ def clear_before_layer_cache() -> None:
     """测试 / 调试用：把字幕层位图缓存全部丢掉。"""
     _clear_fill_caches()
     _TEXT_RUN_LAYER_CACHE.clear()
+    _clear_horizontal_ruby_glow_cache()
     _clear_utopia_glow_cache()
     clear_char_metric_cache()
     _RUBY_MEASURE_CACHE.clear()
@@ -438,6 +439,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     BitmapGuideLayer as _HorizontalBitmapGuideLayer,
     BitmapGuidePorts,
     HORIZONTAL_GLYPH_LAYER_PORTS as _GLYPH_LAYER_PORTS,
+    HORIZONTAL_RUBY_GLOW_CACHE as _RUBY_GLOW_CACHE,
+    HORIZONTAL_RUBY_LAYER_PORTS as _RUBY_LAYER_PORTS,
     LayerStackPorts,
     TransitionLayerStackPorts,
     GlyphRunAfterGlowLayer as _HorizontalGlyphRunAfterGlowLayer,
@@ -455,7 +458,6 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     LineLayout as _LineLayout,
     RubyLayout as _RubyLayout,
     RubyGlowLayer as _HorizontalRubyGlowLayer,
-    RubyLayerPorts,
     RubyLayoutPorts,
     RubyStackPorts,
     RubySplitGlowLayer as _HorizontalRubySplitGlowLayer,
@@ -469,7 +471,10 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     build_glyph_run_after_glow_layer as _build_glyph_run_after_glow_layer,
     build_glyph_run_glow_layer as _build_glyph_run_glow_layer,
     build_glyph_run_layer as _build_glyph_run_layer,
+    build_ruby_glow_layer as _build_ruby_glow_layer,
+    build_ruby_text_layer as _build_ruby_text_layer,
     blit_cached_run_glow as _blit_cached_run_glow,
+    blit_cached_ruby_glow as _blit_cached_ruby_glow,
     blit_tinted_run_glow_mask as _blit_tinted_run_glow_mask,
     char_fade_opacity as _char_fade_opacity,
     char_drip_char_transform as _char_drip_char_transform,
@@ -485,6 +490,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     bottom_short_page_alignment as _bottom_short_page_alignment,
     before_glow_source_clip_rect as _before_glow_source_clip_rect,
     char_transition_layer_stack as _build_char_transition_layer_stack,
+    clear_horizontal_ruby_glow_cache as _clear_horizontal_ruby_glow_cache,
     clear_utopia_glow_cache as _clear_utopia_glow_cache,
     clamp_role_baseline_y as _clamp_role_baseline_y,
     glyph_is_bitmap_guide as _glyph_is_bitmap_guide,
@@ -499,6 +505,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     glyph_run_needs_before_glow_split as _glyph_run_needs_before_glow_split,
     get_or_build_run_glow as _get_or_build_run_glow,
     get_or_build_run_glow_mask as _get_or_build_run_glow_mask,
+    get_or_build_ruby_glow as _get_or_build_ruby_glow,
     glyph_runs as _glyph_runs,
     glyph_runs_for_indices as _glyph_runs_for_indices,
     fixed_line_geometry as _fixed_line_geometry,
@@ -530,7 +537,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     n3_following_wipe_band as _n3_following_wipe_band,
     n3_transformed_wipe_span as _n3_transformed_wipe_span,
     n3_ruby_fill_rect as _n3_ruby_fill_rect,
-    paint_ruby_karaoke_fragment as _paint_horizontal_ruby_karaoke_fragment,
+    paint_ruby_karaoke_fragment as _paint_ruby_karaoke_fragment,
     paint_glyph_run_after_glow_direct as _paint_glyph_run_after_glow_direct,
     paint_glyph_run_direct as _paint_glyph_run_direct,
     paint_line_direct as _paint_horizontal_line_direct,
@@ -4655,259 +4662,6 @@ class _RubyTextLayer(_HorizontalRubyTextLayer):
         )
 
 
-def _get_or_build_ruby_glow(
-    layout: _RubyLayout,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    *,
-    after: bool,
-) -> BakedLayer:
-    key = (
-        "ruby_full_glow",
-        _ruby_glow_layer_key(layout, ruby_font, style, rtl, after=after),
-    )
-
-    def _build() -> BakedLayer:
-        image, dx, dy = _build_ruby_glow_layer(
-            layout,
-            ruby_font,
-            ruby_metrics,
-            style,
-            rtl,
-            after=after,
-        )
-        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
-
-    return _TEXT_RUN_LAYER_CACHE.get_or_build(key, _build)
-
-
-def _blit_cached_ruby_glow(
-    painter: QPainter,
-    layout: _RubyLayout,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    *,
-    after: bool,
-) -> None:
-    if _ruby_glow_radius(style, after=after) <= 0:
-        return
-    baked = _get_or_build_ruby_glow(
-        layout,
-        ruby_font,
-        ruby_metrics,
-        style,
-        rtl,
-        after=after,
-    )
-    if baked.image.isNull():
-        return
-    anchor = QPointF(
-        float(layout.x) + baked.offset.x(),
-        float(layout.baseline_y) + baked.offset.y(),
-    )
-    painter.save()
-    try:
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.drawImage(anchor, baked.image)
-    finally:
-        painter.restore()
-
-
-def _build_ruby_text_layer(
-    layout: _RubyLayout,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    *,
-    after: bool,
-    draw_glow: bool = True,
-) -> tuple[QImage, int, int]:
-    colors = _effective_ruby_karaoke_colors(style)
-    state = colors.after if after else colors.before
-    paint_style = _ruby_paint_style(style)
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    shadow_dx = _ruby_shadow_dx(style)
-    shadow_dy = _ruby_shadow_dy(style)
-    glow_radius = _ruby_glow_radius(style, after=after)
-    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    glow_extra = (
-        _glow_extent(stroke_width, stroke2_width, glow_radius)
-        if _ruby_decoration_kind(style) == "glow"
-        else 0
-    )
-    extent = max(
-        stroke_extent,
-        glow_extra,
-        stroke_extent + abs(shadow_dx),
-        stroke_extent + abs(shadow_dy),
-        2,
-    ) + 4
-    layout_overhang_left = int(math.ceil(_ruby_layout_left_overhang(
-        layout.ruby.reading,
-        ruby_metrics,
-        layout.target_width,
-        style,
-        layout.ruby.kanji,
-    )))
-    pad_left = max(0, -shadow_dx) + extent + layout_overhang_left
-    pad_right = max(0, shadow_dx) + extent
-    pad_top = max(0, -shadow_dy) + extent
-    pad_bottom = max(0, shadow_dy) + extent
-
-    ruby_w = max(int(math.ceil(layout.reading_width)), 1)
-    ruby_h = max(ruby_metrics.height(), 1)
-    img_w = max(pad_left + ruby_w + pad_right, 1)
-    img_h = max(pad_top + ruby_h + pad_bottom, 1)
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(0)
-
-    reading = (
-        "".join(reversed(_ruby_utopia_visual_units(layout.ruby.reading)))
-        if rtl
-        else layout.ruby.reading
-    )
-    local_baseline = pad_top + ruby_metrics.ascent()
-    path, rect = _ruby_text_path_and_rect(
-        reading,
-        ruby_font,
-        ruby_metrics,
-        pad_left,
-        local_baseline,
-        layout.target_width,
-        style,
-        base_text=layout.ruby.kanji,
-    )
-    fill_rect = layout.gradient_rect.translated(
-        -float(layout.x) + float(pad_left),
-        -float(layout.baseline_y) + float(local_baseline),
-    )
-    horizontal_fill_rect = (
-        layout.horizontal_gradient_rect.translated(
-            -float(layout.x) + float(pad_left),
-            -float(layout.baseline_y) + float(local_baseline),
-        )
-        if layout.horizontal_gradient_rect is not None
-        else None
-    )
-
-    p = QPainter(image)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        _paint_text_layer_stack(
-            p,
-            path,
-            rect,
-            state,
-            paint_style,
-            stroke_width=stroke_width,
-            stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx,
-            shadow_dy=shadow_dy,
-            glow_radius=glow_radius,
-            draw_glow=draw_glow,
-            fill_rect=fill_rect,
-            horizontal_fill_rect=horizontal_fill_rect,
-        )
-    finally:
-        p.end()
-
-    return image, -pad_left, -(pad_top + ruby_metrics.ascent())
-
-
-def _build_ruby_glow_layer(
-    layout: _RubyLayout,
-    ruby_font: QFont,
-    ruby_metrics: QFontMetrics,
-    style: Style,
-    rtl: bool,
-    *,
-    after: bool,
-) -> tuple[QImage, int, int]:
-    colors = _effective_ruby_karaoke_colors(style)
-    state = colors.after if after else colors.before
-    stroke_width = _ruby_stroke_width(style)
-    stroke2_width = _ruby_stroke2_width(style)
-    glow_radius = _ruby_glow_radius(style, after=after)
-    extent = _glow_extent(stroke_width, stroke2_width, glow_radius) + 4
-    layout_overhang_left = int(math.ceil(_ruby_layout_left_overhang(
-        layout.ruby.reading,
-        ruby_metrics,
-        layout.target_width,
-        style,
-        layout.ruby.kanji,
-    )))
-    pad_left = extent + layout_overhang_left
-    pad_right = extent
-    pad_top = extent
-    pad_bottom = extent
-
-    ruby_w = max(int(math.ceil(layout.reading_width)), 1)
-    ruby_h = max(ruby_metrics.height(), 1)
-    img_w = max(pad_left + ruby_w + pad_right, 1)
-    img_h = max(pad_top + ruby_h + pad_bottom, 1)
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(0)
-
-    reading = (
-        "".join(reversed(_ruby_utopia_visual_units(layout.ruby.reading)))
-        if rtl
-        else layout.ruby.reading
-    )
-    local_baseline = pad_top + ruby_metrics.ascent()
-    path, rect = _ruby_text_path_and_rect(
-        reading,
-        ruby_font,
-        ruby_metrics,
-        pad_left,
-        local_baseline,
-        layout.target_width,
-        style,
-        base_text=layout.ruby.kanji,
-    )
-    fill_rect = layout.gradient_rect.translated(
-        -float(layout.x) + float(pad_left),
-        -float(layout.baseline_y) + float(local_baseline),
-    )
-    horizontal_fill_rect = (
-        layout.horizontal_gradient_rect.translated(
-            -float(layout.x) + float(pad_left),
-            -float(layout.baseline_y) + float(local_baseline),
-        )
-        if layout.horizontal_gradient_rect is not None
-        else None
-    )
-
-    p = QPainter(image)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        _paint_glow_path(
-            p,
-            path,
-            state.shadow,
-            _fill_brush_rect(state.shadow, fill_rect, horizontal_fill_rect),
-            glow_radius,
-            stroke_width,
-            stroke2_width,
-            concentration_level=_ruby_glow_concentration_level(style),
-        )
-    finally:
-        p.end()
-
-    return image, -pad_left, -(pad_top + ruby_metrics.ascent())
 
 
 def _paint_ruby_text_units_with_transition(
@@ -5046,28 +4800,6 @@ def _paint_ruby_text(
     )
 
 
-_RUBY_LAYER_PORTS = RubyLayerPorts(
-    blit_cached_ruby_glow=lambda *args, **kwargs: (
-        _blit_cached_ruby_glow(*args, **kwargs)
-    ),
-    build_ruby_glow_layer=lambda *args, **kwargs: (
-        _build_ruby_glow_layer(*args, **kwargs)
-    ),
-    build_ruby_text_layer=lambda *args, **kwargs: (
-        _build_ruby_text_layer(*args, **kwargs)
-    ),
-    paint_split_glow_path=lambda *args, **kwargs: (
-        _paint_split_glow_path(*args, **kwargs)
-    ),
-    paint_text_layer_stack=lambda *args, **kwargs: (
-        _paint_text_layer_stack(*args, **kwargs)
-    ),
-    ruby_text_path_and_rect=lambda *args, **kwargs: (
-        _ruby_text_path_and_rect(*args, **kwargs)
-    ),
-)
-
-
 _RUBY_STACK_PORTS = RubyStackPorts(
     ruby_glow_layer=lambda *args, **kwargs: _RubyGlowLayer(*args, **kwargs),
     ruby_split_glow_layer=lambda *args, **kwargs: (
@@ -5162,35 +4894,6 @@ def _paint_ruby_karaoke_path(
         after_clip_rect=after_clip_rect,
         before_glow_clip_rect=before_glow_clip_rect,
     )
-
-
-def _paint_ruby_karaoke_fragment(
-    painter: QPainter,
-    path: QPainterPath,
-    rect: QRectF,
-    ratio: float,
-    style: Style,
-    rtl: bool = False,
-    fill_rect: QRectF | None = None,
-    horizontal_fill_rect: QRectF | None = None,
-    after_clip_rect: QRectF | None = None,
-    before_glow_clip_rect: QRectF | None = None,
-) -> None:
-    _paint_horizontal_ruby_karaoke_fragment(
-        painter,
-        path,
-        rect,
-        ratio,
-        style,
-        _RUBY_LAYER_PORTS,
-        rtl=rtl,
-        fill_rect=fill_rect,
-        horizontal_fill_rect=horizontal_fill_rect,
-        after_clip_rect=after_clip_rect,
-        before_glow_clip_rect=before_glow_clip_rect,
-    )
-
-
 
 
 _VERTICAL_RASTER_PORTS = VerticalRasterPorts(

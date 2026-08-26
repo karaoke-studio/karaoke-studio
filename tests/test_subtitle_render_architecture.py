@@ -2751,6 +2751,9 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
     ruby_classes = {
         node.name for node in ruby_tree.body if isinstance(node, ast.ClassDef)
     }
+    ruby_functions = {
+        node.name for node in ruby_tree.body if isinstance(node, ast.FunctionDef)
+    }
     adapters = {
         node.name: node
         for node in painter_tree.body
@@ -2765,6 +2768,13 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
         "RubySplitGlowLayer",
         "RubyTextLayer",
     } <= ruby_classes
+    assert {
+        "blit_cached_ruby_glow",
+        "build_ruby_glow_layer",
+        "build_ruby_text_layer",
+        "clear_horizontal_ruby_glow_cache",
+        "get_or_build_ruby_glow",
+    } <= ruby_functions
     assert set(adapters) == {
         "_RubyGlowLayer",
         "_RubySplitGlowLayer",
@@ -2780,11 +2790,11 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
 
     ports = [
         node.value
-        for node in painter_tree.body
+        for node in ruby_tree.body
         if isinstance(node, ast.Assign)
         and any(
             isinstance(target, ast.Name)
-            and target.id == "_RUBY_LAYER_PORTS"
+            and target.id == "HORIZONTAL_RUBY_LAYER_PORTS"
             for target in node.targets
         )
     ]
@@ -2800,6 +2810,25 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
         "paint_text_layer_stack",
         "ruby_text_path_and_rect",
     }
+    imported_ports = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name == "HORIZONTAL_RUBY_LAYER_PORTS"
+    }
+    assert imported_ports == {
+        "HORIZONTAL_RUBY_LAYER_PORTS": "_RUBY_LAYER_PORTS"
+    }
+    assert not any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_RUBY_LAYER_PORTS"
+            for target in node.targets
+        )
+        for node in painter_tree.body
+    )
 
     targets = _import_targets(ruby_owner, ruby_path)
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -2810,7 +2839,7 @@ def test_horizontal_ruby_layers_use_thin_adapters_and_explicit_ports() -> None:
     )
 
 
-def test_horizontal_ruby_fragment_uses_thin_painter_raster_port() -> None:
+def test_horizontal_ruby_fragment_has_one_direct_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.horizontal"
     ruby_path = ROOT / "engine/render/elements/horizontal/ruby.py"
     painter_path = ROOT / "engine/painter.py"
@@ -2826,27 +2855,15 @@ def test_horizontal_ruby_fragment_uses_thin_painter_raster_port() -> None:
         for alias in node.names
         if alias.name == "paint_ruby_karaoke_fragment"
     }
-    wrapper = next(
-        node
-        for node in painter_tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_paint_ruby_karaoke_fragment"
-    )
+    painter_functions = {
+        node.name for node in painter_tree.body if isinstance(node, ast.FunctionDef)
+    }
 
     assert "paint_ruby_karaoke_fragment" in ruby_functions
     assert imported == {
-        "paint_ruby_karaoke_fragment": "_paint_horizontal_ruby_karaoke_fragment"
+        "paint_ruby_karaoke_fragment": "_paint_ruby_karaoke_fragment"
     }
-    assert len(wrapper.body) == 1
-    call = wrapper.body[0]
-    assert isinstance(call, ast.Expr)
-    assert isinstance(call.value, ast.Call)
-    assert isinstance(call.value.func, ast.Name)
-    assert call.value.func.id == "_paint_horizontal_ruby_karaoke_fragment"
-    assert any(
-        isinstance(argument, ast.Name) and argument.id == "_RUBY_LAYER_PORTS"
-        for argument in call.value.args
-    )
+    assert "_paint_ruby_karaoke_fragment" not in painter_functions
 
 
 def test_horizontal_ruby_layer_stacks_use_thin_factory_ports() -> None:
@@ -3066,7 +3083,7 @@ def test_render_effect_metrics_have_one_painter_free_owner() -> None:
         and node.module == f"{PACKAGE}.engine.painter"
         for alias in node.names
     }
-    assert painter_imports == {"_paint_ruby_karaoke_fragment"}
+    assert painter_imports == set()
     horizontal_imports = {
         alias.name
         for node in preview_tree.body
@@ -3075,7 +3092,10 @@ def test_render_effect_metrics_have_one_painter_free_owner() -> None:
         == f"{PACKAGE}.engine.render.elements.horizontal"
         for alias in node.names
     }
-    assert horizontal_imports == {"paint_char_karaoke_stack"}
+    assert horizontal_imports == {
+        "paint_char_karaoke_stack",
+        "paint_ruby_karaoke_fragment",
+    }
 
 
 def test_render_fill_effects_own_brushes_and_resource_caches() -> None:

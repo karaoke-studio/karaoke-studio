@@ -37,6 +37,7 @@ import krok_helper.subtitle_render.engine.ruby.style as ruby_style  # noqa: E402
 import krok_helper.subtitle_render.engine.ruby.timing as ruby_timing  # noqa: E402
 import krok_helper.subtitle_render.engine.text.metrics as text_metrics  # noqa: E402
 from krok_helper.subtitle_render.engine.render.elements.horizontal import (  # noqa: E402
+    ruby as horizontal_ruby,
     utopia as horizontal_utopia,
 )
 from krok_helper.subtitle_render.engine.layout.page.placement import (  # noqa: E402
@@ -1713,7 +1714,7 @@ def test_equal_radius_ruby_glow_reuses_full_cache_around_dynamic_front(
     split_calls = 0
     blit_states: list[bool] = []
     original_split = subtitle_painter._paint_split_glow_path
-    original_blit = subtitle_painter._blit_cached_ruby_glow
+    original_blit = horizontal_ruby.blit_cached_ruby_glow
 
     def _count_split(*args, **kwargs):
         nonlocal split_calls
@@ -1725,8 +1726,8 @@ def test_equal_radius_ruby_glow_reuses_full_cache_around_dynamic_front(
         blit_states.append(bool(kwargs["after"]))
         return original_blit(*args, **kwargs)
 
-    monkeypatch.setattr(subtitle_painter, "_paint_split_glow_path", _count_split)
-    monkeypatch.setattr(subtitle_painter, "_blit_cached_ruby_glow", _count_blit)
+    monkeypatch.setattr(horizontal_ruby, "paint_split_glow_path", _count_split)
+    monkeypatch.setattr(horizontal_ruby, "blit_cached_ruby_glow", _count_blit)
     clear_before_layer_cache()
     image = _blank()
     painter = QPainter(image)
@@ -1741,7 +1742,7 @@ def test_equal_radius_ruby_glow_reuses_full_cache_around_dynamic_front(
 
     assert split_calls == 1
     assert blit_states == [False, True]
-    assert len(_TEXT_RUN_LAYER_CACHE) == 2
+    assert len(horizontal_ruby.HORIZONTAL_RUBY_GLOW_CACHE) == 2
 
 
 def test_split_glow_dynamic_result_is_limited_to_target_strip(qapp):
