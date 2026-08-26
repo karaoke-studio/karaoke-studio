@@ -29,8 +29,10 @@ from krok_helper.subtitle_render.engine.ruby import (
     ruby_stroke2_width,
     ruby_stroke_width,
 )
+from krok_helper.subtitle_render.engine.render.elements.horizontal import (
+    paint_char_karaoke_stack,
+)
 from krok_helper.subtitle_render.engine.painter import (
-    _paint_char_karaoke_stack as paint_char_karaoke_stack,
     _paint_ruby_karaoke_fragment as paint_ruby_karaoke_fragment,
 )
 

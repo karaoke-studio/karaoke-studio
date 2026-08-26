@@ -2470,6 +2470,7 @@ def test_utopia_transition_runtime_has_one_horizontal_owner() -> None:
         "get_or_build_run_glow_mask",
         "paint_cached_run_glow_source_wipe",
         "paint_cached_run_split_glow_source_wipe",
+        "paint_char_karaoke_stack",
         "paint_full_glow_source_wipe",
         "paint_glyph_run_after_glow_wipe",
         "paint_glyph_run_before_glow_direct",
@@ -3065,10 +3066,16 @@ def test_render_effect_metrics_have_one_painter_free_owner() -> None:
         and node.module == f"{PACKAGE}.engine.painter"
         for alias in node.names
     }
-    assert painter_imports == {
-        "_paint_char_karaoke_stack",
-        "_paint_ruby_karaoke_fragment",
+    assert painter_imports == {"_paint_ruby_karaoke_fragment"}
+    horizontal_imports = {
+        alias.name
+        for node in preview_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        == f"{PACKAGE}.engine.render.elements.horizontal"
+        for alias in node.names
     }
+    assert horizontal_imports == {"paint_char_karaoke_stack"}
 
 
 def test_render_fill_effects_own_brushes_and_resource_caches() -> None:

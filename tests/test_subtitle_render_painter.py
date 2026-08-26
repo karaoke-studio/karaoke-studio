@@ -6286,14 +6286,14 @@ def test_utopia_gradient_glow_caches_alpha_mask_not_coloured_bitmap(
         exit_anim="utopia",
     )
     blits = 0
-    original = subtitle_painter._blit_cached_run_glow
+    original = horizontal_utopia.blit_cached_run_glow
 
     def _count_blits(*args, **kwargs):
         nonlocal blits
         blits += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(subtitle_painter, "_blit_cached_run_glow", _count_blits)
+    monkeypatch.setattr(horizontal_utopia, "blit_cached_run_glow", _count_blits)
     clear_before_layer_cache()
     paint_frame(_blank(), _track(), 1100, style)
 
@@ -6454,8 +6454,8 @@ def test_utopia_transformed_glow_does_not_join_cached_far_halves(
     monkeypatch.setenv("KROK_SUBTITLE_GLOW_CACHE", "1")
     monkeypatch.setattr(horizontal_utopia, "paint_split_glow_path", _record_split)
     monkeypatch.setattr(
-        subtitle_painter,
-        "_paint_cached_run_split_glow_source_wipe",
+        horizontal_utopia,
+        "paint_cached_run_split_glow_source_wipe",
         _unexpected_cached_join,
     )
     clear_before_layer_cache()
@@ -6507,7 +6507,7 @@ def test_utopia_shadow_splits_source_before_bitmap_offset(qapp, monkeypatch):
         clips.append((fill.color, painter.clipBoundingRect()))
 
     monkeypatch.setattr(
-        subtitle_painter, "_paint_shadow_silhouette", _record_shadow
+        horizontal_utopia, "paint_shadow_silhouette", _record_shadow
     )
     image = QImage(300, 180, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(0)
