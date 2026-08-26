@@ -2345,8 +2345,10 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
     owner = f"{PACKAGE}.engine.render.elements.horizontal"
     layer_owner = f"{owner}.layers"
     layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
+    utopia_path = ROOT / "engine/render/elements/horizontal/utopia.py"
     painter_path = ROOT / "engine/painter.py"
     layer_tree = ast.parse(layer_path.read_text(encoding="utf-8-sig"))
+    utopia_tree = ast.parse(utopia_path.read_text(encoding="utf-8-sig"))
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     layer_classes = {
         node.name for node in layer_tree.body if isinstance(node, ast.ClassDef)
@@ -2403,11 +2405,11 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
 
     ports = [
         node.value
-        for node in painter_tree.body
+        for node in utopia_tree.body
         if isinstance(node, ast.Assign)
         and any(
             isinstance(target, ast.Name)
-            and target.id == "_GLYPH_LAYER_PORTS"
+            and target.id == "HORIZONTAL_GLYPH_LAYER_PORTS"
             for target in node.targets
         )
     ]
@@ -2424,6 +2426,25 @@ def test_glyph_layers_use_thin_compatibility_adapters_and_explicit_ports() -> No
         "paint_glyph_run_combined_glow",
         "run_fill_complete",
     }
+    imported_ports = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name == "HORIZONTAL_GLYPH_LAYER_PORTS"
+    }
+    assert imported_ports == {
+        "HORIZONTAL_GLYPH_LAYER_PORTS": "_GLYPH_LAYER_PORTS"
+    }
+    assert not any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_GLYPH_LAYER_PORTS"
+            for target in node.targets
+        )
+        for node in painter_tree.body
+    )
 
     targets = _import_targets(layer_owner, layer_path)
     assert f"{PACKAGE}.engine.painter" not in targets
@@ -2441,11 +2462,18 @@ def test_utopia_transition_runtime_has_one_horizontal_owner() -> None:
     utopia_tree = ast.parse(utopia_path.read_text(encoding="utf-8-sig"))
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
     owned = {
+        "afterglow_strip_enabled",
         "blit_cached_run_glow",
         "blit_tinted_run_glow_mask",
         "clear_utopia_glow_cache",
         "get_or_build_run_glow",
         "get_or_build_run_glow_mask",
+        "paint_cached_run_glow_source_wipe",
+        "paint_cached_run_split_glow_source_wipe",
+        "paint_full_glow_source_wipe",
+        "paint_glyph_run_after_glow_wipe",
+        "paint_glyph_run_before_glow_direct",
+        "paint_glyph_run_combined_glow",
         "utopia_glow_cache_enabled",
         "utopia_main_scope_layers",
         "utopia_ruby_scope_layers",

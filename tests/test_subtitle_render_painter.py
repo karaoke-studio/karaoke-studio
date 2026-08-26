@@ -1621,7 +1621,7 @@ def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch)
     def fake_paint_glow_path(*args, source_clip=None, **kwargs):
         seen.append(source_clip)
 
-    monkeypatch.setattr(subtitle_painter, "_paint_glow_path", fake_paint_glow_path)
+    monkeypatch.setattr(horizontal_utopia, "paint_glow_path", fake_paint_glow_path)
     image = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(0)
     painter = QPainter(image)
@@ -1653,7 +1653,7 @@ def test_equal_radius_glow_combines_dynamic_front_and_reuses_full_cache(
     split_calls = 0
     blit_states: list[bool] = []
     original_split = subtitle_painter._paint_split_glow_path
-    original_blit = subtitle_painter._blit_cached_run_glow
+    original_blit = horizontal_utopia.blit_cached_run_glow
 
     def _count_split(*args, **kwargs):
         nonlocal split_calls
@@ -1665,8 +1665,8 @@ def test_equal_radius_glow_combines_dynamic_front_and_reuses_full_cache(
         blit_states.append(bool(kwargs["after"]))
         return original_blit(*args, **kwargs)
 
-    monkeypatch.setattr(subtitle_painter, "_paint_split_glow_path", _count_split)
-    monkeypatch.setattr(subtitle_painter, "_blit_cached_run_glow", _count_blit)
+    monkeypatch.setattr(horizontal_utopia, "paint_split_glow_path", _count_split)
+    monkeypatch.setattr(horizontal_utopia, "blit_cached_run_glow", _count_blit)
     clear_before_layer_cache()
     image = _blank()
     painter = QPainter(image)
@@ -6452,7 +6452,7 @@ def test_utopia_transformed_glow_does_not_join_cached_far_halves(
         raise AssertionError("transformed Utopia glow must not use strip/cache joins")
 
     monkeypatch.setenv("KROK_SUBTITLE_GLOW_CACHE", "1")
-    monkeypatch.setattr(subtitle_painter, "_paint_split_glow_path", _record_split)
+    monkeypatch.setattr(horizontal_utopia, "paint_split_glow_path", _record_split)
     monkeypatch.setattr(
         subtitle_painter,
         "_paint_cached_run_split_glow_source_wipe",

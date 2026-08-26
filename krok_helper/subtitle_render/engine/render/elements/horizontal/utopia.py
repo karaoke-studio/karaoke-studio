@@ -37,19 +37,29 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
 )
 from krok_helper.subtitle_render.engine.render.effects import (
     brush_for_fill,
+    glow_concentration_level,
+    glow_extent,
     glow_radius,
+    main_stroke2_width,
+    paint_glow_path,
+    paint_split_glow_path,
     ruby_visual_padding,
     text_visual_padding,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts import (
+    FillSegment,
     LineCharTransition,
     LineLayout,
     RubyLayout,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.layers import (
+    GlyphLayerPorts,
+    after_glow_source_clip_rect,
+    before_glow_source_clip_rect,
     build_glyph_run_glow_layer,
     glyph_run_layer_key,
     inflate_rect,
+    paint_glyph_run_after_glow_direct,
     relative_fill_rect_signature,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
@@ -65,6 +75,12 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions i
     transition_char_state,
     utopia_following_done_time,
 )
+from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import (
+    fill_clip_band,
+    fill_clip_band_for_glyphs,
+    n3_following_wipe_band,
+    run_fill_complete,
+)
 from krok_helper.subtitle_render.engine.ruby import ruby_layout_units
 from krok_helper.subtitle_render.engine.ruby.timing import (
     _ruby_utopia_reading_units_and_intervals as ruby_utopia_reading_units_and_intervals,
@@ -73,6 +89,10 @@ from krok_helper.subtitle_render.engine.ruby.timing import (
     utopia_main_group_for_index,
     utopia_wipe_window_for_index,
 )
+from krok_helper.subtitle_render.engine.style.style_semantics import (
+    effective_karaoke_colors,
+)
+from krok_helper.subtitle_render.engine.text import GlyphLayout
 
 
 UTOPIA_RUN_GLOW_CACHE = LayerCache(max_items=128)
@@ -727,3 +747,500 @@ def blit_cached_run_glow(
         painter.drawImage(anchor, baked.image)
     finally:
         painter.restore()
+
+
+def paint_glyph_run_before_glow_direct(
+    painter: QPainter,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    band: tuple[int, int] | None,
+    *,
+    rtl: bool,
+    complete: bool,
+    fill_rect: QRectF | None = None,
+) -> None:
+    """Paint N3's before-glow by clipping the stroke source before blur."""
+    if complete:
+        return
+    role_style = glyphs[0].style
+    colors = effective_karaoke_colors(role_style)
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = glyph_run_rect(glyphs, baseline_y)
+    pad = glow_extent(
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        glow_radius(role_style, after=False),
+    )
+    if band is not None and utopia_glow_cache_enabled():
+        front = float(band[0] if rtl else band[1])
+        paint_cached_run_glow_source_wipe(
+            painter,
+            path,
+            rect,
+            glyphs,
+            baseline_y,
+            role_style,
+            colors,
+            after=False,
+            front=front,
+            rtl=rtl,
+            transform=None,
+            fill_rect=fill_rect,
+        )
+        return
+    paint_glow_path(
+        painter,
+        path,
+        colors.before.shadow,
+        fill_rect if fill_rect is not None else rect,
+        glow_radius(role_style, after=False),
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        source_clip=(
+            before_glow_source_clip_rect(band, rect, pad, rtl)
+            if band is not None
+            else None
+        ),
+        concentration_level=glow_concentration_level(role_style),
+    )
+
+
+def paint_full_glow_source_wipe(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    front: float,
+    rtl: bool,
+    fill_rect: QRectF | None,
+) -> None:
+    """Paint an entire source-clipped glow after geometry transforms."""
+    before_radius = glow_radius(role_style, after=False)
+    after_radius = glow_radius(role_style, after=True)
+    stroke2_width = main_stroke2_width(role_style)
+    if before_radius > 0 and before_radius == after_radius:
+        pad = glow_extent(
+            role_style.stroke_width_px, stroke2_width, before_radius
+        )
+        top = rect.top() - pad
+        height = rect.height() + pad * 2
+        if rtl:
+            before_source_clip = QRectF(
+                -1_000_000.0, top, front + 1_000_000.0, height
+            )
+            after_source_clip = QRectF(front, top, 1_000_000.0, height)
+        else:
+            before_source_clip = QRectF(front, top, 1_000_000.0, height)
+            after_source_clip = QRectF(
+                -1_000_000.0, top, front + 1_000_000.0, height
+            )
+        paint_split_glow_path(
+            painter,
+            path,
+            colors.before.shadow,
+            colors.after.shadow,
+            fill_rect if fill_rect is not None else rect,
+            before_radius,
+            role_style.stroke_width_px,
+            stroke2_width,
+            before_source_clip=before_source_clip,
+            after_source_clip=after_source_clip,
+            concentration_level=glow_concentration_level(role_style),
+        )
+        return
+
+    for after in (False, True):
+        radius = glow_radius(role_style, after=after)
+        pad = glow_extent(
+            role_style.stroke_width_px, stroke2_width, radius
+        )
+        source_is_right = rtl == after
+        source_clip = (
+            QRectF(
+                front,
+                rect.top() - pad,
+                1_000_000.0,
+                rect.height() + pad * 2,
+            )
+            if source_is_right
+            else QRectF(
+                -1_000_000.0,
+                rect.top() - pad,
+                front + 1_000_000.0,
+                rect.height() + pad * 2,
+            )
+        )
+        state = colors.after if after else colors.before
+        paint_glow_path(
+            painter,
+            path,
+            state.shadow,
+            fill_rect if fill_rect is not None else rect,
+            radius,
+            role_style.stroke_width_px,
+            stroke2_width,
+            source_clip=source_clip,
+            concentration_level=glow_concentration_level(role_style),
+        )
+
+
+def paint_cached_run_glow_source_wipe(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+    front: float,
+    rtl: bool,
+    transform: QTransform | None,
+    fill_rect: QRectF | None,
+) -> None:
+    """Blur only the moving front strip and reuse cached full glow elsewhere.
+
+    Source-clipped blur differs from the full cached halo only within one
+    Gaussian support radius of ``front``.  N3's source-before-blur result is
+    therefore reproduced by rasterising that narrow strip dynamically and
+    clipping the cached full halo to the unaffected far side.
+    """
+    radius = glow_radius(role_style, after=after)
+    if radius <= 0:
+        return
+    state = colors.after if after else colors.before
+    stroke2_width = main_stroke2_width(role_style)
+    pad = glow_extent(role_style.stroke_width_px, stroke2_width, radius)
+    top = rect.top() - pad
+    height = rect.height() + pad * 2
+    source_is_right = rtl == after
+    if source_is_right:
+        source_clip = QRectF(front, top, 1_000_000.0, height)
+        baked_clip = QRectF(
+            front + pad,
+            -1_000_000.0,
+            1_000_000.0,
+            2_000_000.0,
+        )
+    else:
+        source_clip = QRectF(
+            -1_000_000.0,
+            top,
+            front + 1_000_000.0,
+            height,
+        )
+        baked_clip = QRectF(
+            -1_000_000.0,
+            -1_000_000.0,
+            front - pad + 1_000_000.0,
+            2_000_000.0,
+        )
+    strip_clip = QRectF(
+        front - pad,
+        -1_000_000.0,
+        float(pad * 2),
+        2_000_000.0,
+    )
+    paint_glow_path(
+        painter,
+        path,
+        state.shadow,
+        fill_rect if fill_rect is not None else rect,
+        radius,
+        role_style.stroke_width_px,
+        stroke2_width,
+        source_clip=source_clip,
+        concentration_level=glow_concentration_level(role_style),
+        target_clip=strip_clip,
+    )
+    painter.save()
+    try:
+        painter.setClipRect(baked_clip)
+        blit_cached_run_glow(
+            painter,
+            glyphs,
+            baseline_y,
+            role_style,
+            colors,
+            after=after,
+            transform=transform,
+            fill_rect=fill_rect,
+        )
+    finally:
+        painter.restore()
+
+
+def paint_cached_run_split_glow_source_wipe(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    front: float,
+    rtl: bool,
+    transform: QTransform | None,
+    fill_rect: QRectF | None,
+) -> bool:
+    """N3 fast path: one dynamic blur for both colours plus cached far halos."""
+    before_radius = glow_radius(role_style, after=False)
+    after_radius = glow_radius(role_style, after=True)
+    if before_radius <= 0 or before_radius != after_radius:
+        return False
+    stroke2_width = main_stroke2_width(role_style)
+    pad = glow_extent(
+        role_style.stroke_width_px, stroke2_width, before_radius
+    )
+    top = rect.top() - pad
+    height = rect.height() + pad * 2
+    if rtl:
+        before_source_clip = QRectF(
+            -1_000_000.0, top, front + 1_000_000.0, height
+        )
+        after_source_clip = QRectF(front, top, 1_000_000.0, height)
+        before_baked_clip = QRectF(
+            -1_000_000.0,
+            -1_000_000.0,
+            front - pad + 1_000_000.0,
+            2_000_000.0,
+        )
+        after_baked_clip = QRectF(
+            front + pad,
+            -1_000_000.0,
+            1_000_000.0,
+            2_000_000.0,
+        )
+    else:
+        before_source_clip = QRectF(front, top, 1_000_000.0, height)
+        after_source_clip = QRectF(
+            -1_000_000.0, top, front + 1_000_000.0, height
+        )
+        before_baked_clip = QRectF(
+            front + pad,
+            -1_000_000.0,
+            1_000_000.0,
+            2_000_000.0,
+        )
+        after_baked_clip = QRectF(
+            -1_000_000.0,
+            -1_000_000.0,
+            front - pad + 1_000_000.0,
+            2_000_000.0,
+        )
+    strip_clip = QRectF(
+        front - pad,
+        -1_000_000.0,
+        float(pad * 2),
+        2_000_000.0,
+    )
+    paint_split_glow_path(
+        painter,
+        path,
+        colors.before.shadow,
+        colors.after.shadow,
+        fill_rect if fill_rect is not None else rect,
+        before_radius,
+        role_style.stroke_width_px,
+        stroke2_width,
+        before_source_clip=before_source_clip,
+        after_source_clip=after_source_clip,
+        concentration_level=glow_concentration_level(role_style),
+        target_clip=strip_clip,
+    )
+    for after, clip in (
+        (False, before_baked_clip),
+        (True, after_baked_clip),
+    ):
+        painter.save()
+        try:
+            painter.setClipRect(clip)
+            blit_cached_run_glow(
+                painter,
+                glyphs,
+                baseline_y,
+                role_style,
+                colors,
+                after=after,
+                transform=transform,
+                fill_rect=fill_rect,
+            )
+        finally:
+            painter.restore()
+    return True
+
+
+def paint_glyph_run_combined_glow(
+    painter: QPainter,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    fill_segments: list[FillSegment],
+    t_ms: int,
+    rtl: bool,
+    *,
+    fill_rect: QRectF | None,
+) -> None:
+    """Paint one static run's N3 before/after decoration with one blur."""
+    style = glyphs[0].style
+    colors = effective_karaoke_colors(style)
+    indices = {glyph.index for glyph in glyphs}
+    band = fill_clip_band_for_glyphs(fill_segments, glyphs, t_ms, rtl)
+    complete = run_fill_complete(fill_segments, indices, t_ms)
+    if band is None:
+        blit_cached_run_glow(
+            painter,
+            glyphs,
+            baseline_y,
+            style,
+            colors,
+            after=False,
+            transform=None,
+            fill_rect=fill_rect,
+        )
+        return
+    if complete:
+        blit_cached_run_glow(
+            painter,
+            glyphs,
+            baseline_y,
+            style,
+            colors,
+            after=True,
+            transform=None,
+            fill_rect=fill_rect,
+        )
+        return
+    front = float(band[0] if rtl else band[1])
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = glyph_run_rect(glyphs, baseline_y)
+    paint_cached_run_split_glow_source_wipe(
+        painter,
+        path,
+        rect,
+        glyphs,
+        baseline_y,
+        style,
+        colors,
+        front=front,
+        rtl=rtl,
+        transform=None,
+        fill_rect=fill_rect,
+    )
+
+
+def afterglow_strip_enabled() -> bool:
+    """走字中 after-glow 只逐帧模糊扫光前沿窄带（默认开）。
+
+    ``KROK_SUBTITLE_AFTERGLOW_STRIP=0`` 退回整行逐帧
+    ``_paint_glyph_run_after_glow_direct``（A/B 像素 oracle / 紧急回退用）。
+    """
+    return os.environ.get("KROK_SUBTITLE_AFTERGLOW_STRIP", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def paint_glyph_run_after_glow_wipe(
+    painter: QPainter,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    band: tuple[int, int],
+    *,
+    rtl: bool,
+    complete: bool,
+    fill_rect: QRectF | None = None,
+) -> None:
+    """走字中的已唱发光：前沿窄带逐帧模糊 + 其余贴整段烘焙位图。
+
+    N3 语义要求「先按扫光线裁源、再模糊」让前沿保持柔和，因此该层无法整层烘焙。
+    但 blur(裁切源) 与 blur(完整源) 只在扫光线 ±支撑半径（``glow_extent``，≥3×radius）
+    内不同：seam（前沿 - pad）之前两者逐像素一致 → 直接贴 ``UTOPIA_RUN_GLOW_CACHE`` 里
+    整段 after-glow 烘焙；seam 之后仅对 2×pad 宽的窄带做逐帧 stroke+blur。模糊成本
+    随画布面积线性，长行收益一个数量级。"""
+    role_style = glyphs[0].style
+    if complete or not afterglow_strip_enabled() or not utopia_glow_cache_enabled():
+        _paint_glyph_run_after_glow_direct(
+            painter,
+            glyphs,
+            baseline_y,
+            band,
+            rtl=rtl,
+            complete=complete,
+            fill_rect=fill_rect,
+        )
+        return
+    colors = effective_karaoke_colors(role_style)
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = glyph_run_rect(glyphs, baseline_y)
+    radius = glow_radius(role_style, after=True)
+    pad = glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, radius)
+    band_left, band_right = band
+    front = float(band_left) if rtl else float(band_right)
+    # 前沿窄带 [front-pad, front+pad]；seam 在其已唱侧边缘。
+    if rtl:
+        seam = front + pad
+        strip_clip = QRectF(front - pad, -1_000_000.0, 2.0 * pad, 2_000_000.0)
+        baked_clip = QRectF(seam, -1_000_000.0, 1_000_000.0, 2_000_000.0)
+    else:
+        seam = front - pad
+        strip_clip = QRectF(seam, -1_000_000.0, 2.0 * pad, 2_000_000.0)
+        baked_clip = QRectF(-1_000_000.0, -1_000_000.0, seam + 1_000_000.0, 2_000_000.0)
+    painter.save()
+    try:
+        painter.setClipRect(strip_clip)
+        paint_glow_path(
+            painter,
+            path,
+            colors.after.shadow,
+            fill_rect if fill_rect is not None else rect,
+            radius,
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            source_clip=after_glow_source_clip_rect(band, rect, pad, rtl, complete),
+            concentration_level=glow_concentration_level(role_style),
+            target_clip=strip_clip,
+        )
+    finally:
+        painter.restore()
+    baked = get_or_build_run_glow(
+        glyphs,
+        role_style,
+        colors,
+        after=True,
+        fill_rect=fill_rect,
+        baseline_y=baseline_y,
+    )
+    if baked.image.isNull():
+        return
+    run_left = min(glyph.left for glyph in glyphs)
+    anchor = QPointF(float(run_left) + baked.offset.x(), float(baseline_y) + baked.offset.y())
+    painter.save()
+    try:
+        painter.setClipRect(baked_clip)
+        painter.drawImage(anchor, baked.image)
+    finally:
+        painter.restore()
+
+
+HORIZONTAL_GLYPH_LAYER_PORTS = GlyphLayerPorts(
+    fill_clip_band=lambda *args, **kwargs: fill_clip_band(*args, **kwargs),
+    fill_clip_band_for_glyphs=lambda *args, **kwargs: (
+        fill_clip_band_for_glyphs(*args, **kwargs)
+    ),
+    n3_following_wipe_band=lambda *args, **kwargs: (
+        n3_following_wipe_band(*args, **kwargs)
+    ),
+    paint_glyph_run_after_glow_wipe=lambda *args, **kwargs: (
+        paint_glyph_run_after_glow_wipe(*args, **kwargs)
+    ),
+    paint_glyph_run_before_glow_direct=lambda *args, **kwargs: (
+        paint_glyph_run_before_glow_direct(*args, **kwargs)
+    ),
+    paint_glyph_run_combined_glow=lambda *args, **kwargs: (
+        paint_glyph_run_combined_glow(*args, **kwargs)
+    ),
+    run_fill_complete=lambda *args, **kwargs: run_fill_complete(*args, **kwargs),
+)
