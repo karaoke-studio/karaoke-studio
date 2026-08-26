@@ -118,6 +118,32 @@ def _insert_changelog_placeholder(version: str) -> bool:
     return True
 
 
+#: 每份更新公告开头的固定横幅。
+#:
+#: 更新器用 ``QTextBrowser.setMarkdown()`` 渲染 release body，Qt 的 markdown
+#: 会放行内联 HTML，所以这里的颜色在更新弹窗里是真的红字。用 ``<b>`` 而不是
+#: markdown 的 ``**``：内联 HTML 里的 ``**`` 不会被当成强调解析，加粗会丢。
+#: GitHub 的网页版 release 会过滤掉 ``style``，那边降级成黑色粗体——文字本身
+#: 两边都在。
+ANNOUNCEMENT_BANNER = (
+    '<span style="color:#d64545"><b>Lin-K 官方QQ交流群 1108437280</b></span>'
+)
+
+
+def _with_announcement_banner(body: str) -> str:
+    """Put the standing announcement above every release body.
+
+    Generating it here rather than writing it into each CHANGELOG section keeps
+    the changelog about the changes, and means no release can forget it: CI
+    feeds this command's output straight to the GitHub release body.
+    """
+
+    text = body.lstrip("\n")
+    if text.startswith(ANNOUNCEMENT_BANNER):
+        return body
+    return f"{ANNOUNCEMENT_BANNER}\n\n{text}"
+
+
 def _extract_section(version: str) -> str:
     content = CHANGELOG.read_text(encoding="utf-8")
     match = re.search(
@@ -160,7 +186,7 @@ def cmd_prepare(version: str) -> int:
 
 def cmd_notes(version: str, output: Path | None = None) -> int:
     version = _check_version_format(version)
-    notes = _extract_section(version)
+    notes = _with_announcement_banner(_extract_section(version))
     path = output or RELEASE_DIST / f"release-notes-v{version}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(notes, encoding="utf-8")

@@ -86,3 +86,32 @@ def test_notes_extracts_only_requested_chinese_section(release_mod, tmp_path, ca
 def test_notes_missing_section_raises(release_mod):
     with pytest.raises(SystemExit):
         release_mod.cmd_notes("9.9.9")
+
+
+def test_every_release_body_opens_with_the_qq_group_banner(release_mod, tmp_path):
+    """公告横幅在唯一出口生成，CI 直接拿这份文件当 release body。"""
+
+    out = tmp_path / "notes.md"
+    assert release_mod.cmd_notes("3.1.7.4", out) == 0
+    text = out.read_text(encoding="utf-8")
+
+    assert text.startswith(release_mod.ANNOUNCEMENT_BANNER)
+    assert "1108437280" in text.splitlines()[0]
+    # 横幅之后仍然是这一版真正的更新内容。
+    assert release_mod._extract_section("3.1.7.4").strip() in text
+
+
+def test_the_banner_uses_html_bold_so_qt_markdown_keeps_it(release_mod):
+    """内联 HTML 里的 ``**`` 不会被解析成强调，用它加粗会静默丢掉。"""
+
+    banner = release_mod.ANNOUNCEMENT_BANNER
+    assert "<b>" in banner and "**" not in banner
+    assert "color:#d64545" in banner
+
+
+def test_adding_the_banner_twice_does_not_duplicate_it(release_mod):
+    once = release_mod._with_announcement_banner("## 更新\n- 条目\n")
+    twice = release_mod._with_announcement_banner(once)
+
+    assert once == twice
+    assert twice.count("1108437280") == 1
