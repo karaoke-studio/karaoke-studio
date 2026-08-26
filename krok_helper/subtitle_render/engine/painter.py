@@ -534,6 +534,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     paint_ruby_karaoke_fragment as _paint_horizontal_ruby_karaoke_fragment,
     paint_glyph_run_after_glow_direct as _paint_glyph_run_after_glow_direct,
     paint_glyph_run_direct as _paint_glyph_run_direct,
+    paint_line_direct as _paint_horizontal_line_direct,
     paint_bitmap_guide_glyph as _paint_horizontal_bitmap_guide_glyph,
     paint_bitmap_guide_glyphs as _paint_horizontal_bitmap_guide_glyphs,
     paint_bitmap_guide_transition_glyph as _paint_horizontal_bitmap_guide_transition_glyph,
@@ -3312,153 +3313,15 @@ def _paint_line_direct(
     layout: _LineLayout,
     t_ms: int,
 ) -> None:
-    """Vector oracle for horizontal static lines, sharing the baked path layout."""
-    runs = _text_glyph_runs(layout.text_layout, layout.has_inline_styles)
-    y = layout.baseline_y
-    fill_rect = _n3_main_fill_rect(layout.text_layout, y)
-    combined_glow_runs = [
-        run for run in runs if _glyph_run_can_combine_split_glow(run)
-    ]
-    combined_run_ids = {id(run) for run in combined_glow_runs}
+    """Bind the vector oracle to the horizontal layer owner."""
 
-    # N3 builds both glow colours from outline sources clipped at WipeLeft,
-    # blurs that combined decoration, and only then paints body/edges.
-    for run in combined_glow_runs:
-        _paint_glyph_run_combined_glow(
-            painter,
-            run,
-            y,
-            layout.fill_segments,
-            t_ms,
-            layout.rtl,
-            fill_rect=fill_rect,
-        )
-    for run in runs:
-        if id(run) in combined_run_ids:
-            continue
-        if not _glyph_run_needs_before_glow_split(run):
-            continue
-        before_band = _fill_clip_band_for_glyphs(
-            layout.fill_segments, run, t_ms, layout.rtl
-        )
-        complete = _run_fill_complete(
-            layout.fill_segments, {glyph.index for glyph in run}, t_ms
-        )
-        _paint_glyph_run_before_glow_direct(
-            painter,
-            run,
-            y,
-            before_band,
-            rtl=layout.rtl,
-            complete=complete,
-            fill_rect=fill_rect,
-        )
-
-    for run in runs:
-        if id(run) in combined_run_ids:
-            continue
-        for glyph in run:
-            glyph_run = [glyph]
-            glyph_band = _fill_clip_band_for_glyphs(
-                layout.fill_segments, glyph_run, t_ms, layout.rtl
-            )
-            if glyph_band is None or glyph.text.isspace():
-                continue
-            glyph_complete = _run_fill_complete(
-                layout.fill_segments, {glyph.index}, t_ms
-            )
-            following_band = _n3_following_wipe_band(
-                layout.fill_segments, {glyph.index}, t_ms, layout.rtl
-            )
-            if following_band is not None:
-                glyph_band = following_band
-            glyph_released = glyph_complete and following_band is None
-            if _glyph_run_needs_after_glow(glyph_run):
-                _paint_glyph_run_after_glow_direct(
-                    painter,
-                    glyph_run,
-                    y,
-                    glyph_band,
-                    rtl=layout.rtl,
-                    complete=glyph_released,
-                    fill_rect=fill_rect,
-                )
-
-    for run in runs:
-        split_glow = _glyph_run_needs_before_glow_split(run)
-        if not split_glow:
-            _paint_glyph_run_direct(
-                painter, run, y, after=False, fill_rect=fill_rect
-            )
-            continue
-        before_band = _fill_clip_band_for_glyphs(
-            layout.fill_segments, run, t_ms, layout.rtl
-        )
-        complete = _run_fill_complete(
-            layout.fill_segments, {glyph.index for glyph in run}, t_ms
-        )
-        if complete:
-            continue
-        if before_band is None:
-            _paint_glyph_run_direct(
-                painter,
-                run,
-                y,
-                after=False,
-                fill_rect=fill_rect,
-                draw_glow=not split_glow,
-            )
-            continue
-        painter.save()
-        try:
-            painter.setClipRect(
-                _horizontal_before_clip_rect(before_band, layout.rtl)
-            )
-            _paint_glyph_run_direct(
-                painter,
-                run,
-                y,
-                after=False,
-                fill_rect=fill_rect,
-                draw_glow=not split_glow,
-            )
-        finally:
-            painter.restore()
-
-    _paint_bitmap_guide_glyphs(painter, layout, t_ms, after=False)
-
-    for run in runs:
-        for glyph in run:
-            glyph_run = [glyph]
-            glyph_band = _fill_clip_band_for_glyphs(
-                layout.fill_segments, glyph_run, t_ms, layout.rtl
-            )
-            if glyph_band is None or glyph.text.isspace():
-                continue
-            glyph_complete = _run_fill_complete(
-                layout.fill_segments, {glyph.index}, t_ms
-            )
-            following_band = _n3_following_wipe_band(
-                layout.fill_segments, {glyph.index}, t_ms, layout.rtl
-            )
-            if following_band is not None:
-                glyph_band = following_band
-            glyph_released = glyph_complete and following_band is None
-            if glyph_released:
-                _paint_glyph_run_direct(
-                    painter, glyph_run, y, after=True, fill_rect=fill_rect
-                )
-                continue
-            painter.save()
-            try:
-                painter.setClipRect(_horizontal_after_clip_rect(glyph_band, layout.rtl))
-                _paint_glyph_run_direct(
-                    painter, glyph_run, y, after=True, fill_rect=fill_rect
-                )
-            finally:
-                painter.restore()
-
-    _paint_bitmap_guide_glyphs(painter, layout, t_ms, after=True)
+    _paint_horizontal_line_direct(
+        painter,
+        layout,
+        t_ms,
+        glyph_ports=_GLYPH_LAYER_PORTS,
+        bitmap_ports=_BITMAP_GUIDE_PORTS,
+    )
 
 
 def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:

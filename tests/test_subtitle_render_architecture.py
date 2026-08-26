@@ -2215,6 +2215,7 @@ def test_horizontal_layer_policy_has_one_painter_free_owner() -> None:
     layer_path = ROOT / "engine/render/elements/horizontal/layers.py"
     painter_path = ROOT / "engine/painter.py"
     painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    layer_tree = ast.parse(layer_path.read_text(encoding="utf-8-sig"))
     names = {
         "after_glow_loose_clip_rect",
         "after_glow_source_clip_rect",
@@ -2247,6 +2248,31 @@ def test_horizontal_layer_policy_has_one_painter_free_owner() -> None:
 
     assert imported == {name: f"_{name}" for name in names}
     assert {f"_{name}" for name in names}.isdisjoint(painter_functions)
+    direct_imports = {
+        alias.name: alias.asname
+        for node in painter_tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == owner
+        for alias in node.names
+        if alias.name == "paint_line_direct"
+    }
+    assert direct_imports == {
+        "paint_line_direct": "_paint_horizontal_line_direct"
+    }
+    direct_wrapper = next(
+        node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_paint_line_direct"
+    )
+    assert "_paint_horizontal_line_direct" in {
+        node.func.id
+        for node in ast.walk(direct_wrapper)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "paint_line_direct" in {
+        node.name
+        for node in layer_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
     targets = _import_targets(layer_owner, layer_path)
     assert f"{PACKAGE}.engine.painter" not in targets
     assert not any(

@@ -222,6 +222,212 @@ def paint_glyph_run_after_glow_direct(
     )
 
 
+def paint_line_direct(
+    painter: QPainter,
+    layout: LineLayout,
+    t_ms: int,
+    *,
+    glyph_ports: GlyphLayerPorts,
+    bitmap_ports: BitmapGuidePorts,
+) -> None:
+    """Paint a complete horizontal line without cached raster layers."""
+
+    runs = text_glyph_runs(layout.text_layout, layout.has_inline_styles)
+    baseline_y = layout.baseline_y
+    fill_rect = n3_main_fill_rect(layout.text_layout, baseline_y)
+    combined_glow_runs = [
+        run for run in runs if glyph_run_can_combine_split_glow(run)
+    ]
+    combined_run_ids = {id(run) for run in combined_glow_runs}
+
+    for run in combined_glow_runs:
+        glyph_ports.paint_glyph_run_combined_glow(
+            painter,
+            run,
+            baseline_y,
+            layout.fill_segments,
+            t_ms,
+            layout.rtl,
+            fill_rect=fill_rect,
+        )
+    for run in runs:
+        if id(run) in combined_run_ids or not glyph_run_needs_before_glow_split(
+            run
+        ):
+            continue
+        before_band = glyph_ports.fill_clip_band_for_glyphs(
+            layout.fill_segments,
+            run,
+            t_ms,
+            layout.rtl,
+        )
+        complete = glyph_ports.run_fill_complete(
+            layout.fill_segments,
+            {glyph.index for glyph in run},
+            t_ms,
+        )
+        glyph_ports.paint_glyph_run_before_glow_direct(
+            painter,
+            run,
+            baseline_y,
+            before_band,
+            rtl=layout.rtl,
+            complete=complete,
+            fill_rect=fill_rect,
+        )
+
+    for run in runs:
+        if id(run) in combined_run_ids:
+            continue
+        for glyph in run:
+            glyph_run = [glyph]
+            glyph_band = glyph_ports.fill_clip_band_for_glyphs(
+                layout.fill_segments,
+                glyph_run,
+                t_ms,
+                layout.rtl,
+            )
+            if glyph_band is None or glyph.text.isspace():
+                continue
+            glyph_complete = glyph_ports.run_fill_complete(
+                layout.fill_segments,
+                {glyph.index},
+                t_ms,
+            )
+            following_band = glyph_ports.n3_following_wipe_band(
+                layout.fill_segments,
+                {glyph.index},
+                t_ms,
+                layout.rtl,
+            )
+            if following_band is not None:
+                glyph_band = following_band
+            glyph_released = glyph_complete and following_band is None
+            if glyph_run_needs_after_glow(glyph_run):
+                paint_glyph_run_after_glow_direct(
+                    painter,
+                    glyph_run,
+                    baseline_y,
+                    glyph_band,
+                    rtl=layout.rtl,
+                    complete=glyph_released,
+                    fill_rect=fill_rect,
+                )
+
+    for run in runs:
+        split_glow = glyph_run_needs_before_glow_split(run)
+        if not split_glow:
+            paint_glyph_run_direct(
+                painter,
+                run,
+                baseline_y,
+                after=False,
+                fill_rect=fill_rect,
+            )
+            continue
+        before_band = glyph_ports.fill_clip_band_for_glyphs(
+            layout.fill_segments,
+            run,
+            t_ms,
+            layout.rtl,
+        )
+        complete = glyph_ports.run_fill_complete(
+            layout.fill_segments,
+            {glyph.index for glyph in run},
+            t_ms,
+        )
+        if complete:
+            continue
+        if before_band is None:
+            paint_glyph_run_direct(
+                painter,
+                run,
+                baseline_y,
+                after=False,
+                fill_rect=fill_rect,
+                draw_glow=not split_glow,
+            )
+            continue
+        painter.save()
+        try:
+            painter.setClipRect(horizontal_before_clip_rect(before_band, layout.rtl))
+            paint_glyph_run_direct(
+                painter,
+                run,
+                baseline_y,
+                after=False,
+                fill_rect=fill_rect,
+                draw_glow=not split_glow,
+            )
+        finally:
+            painter.restore()
+
+    paint_bitmap_guide_glyphs(
+        painter,
+        layout,
+        t_ms,
+        after=False,
+        ports=bitmap_ports,
+    )
+
+    for run in runs:
+        for glyph in run:
+            glyph_run = [glyph]
+            glyph_band = glyph_ports.fill_clip_band_for_glyphs(
+                layout.fill_segments,
+                glyph_run,
+                t_ms,
+                layout.rtl,
+            )
+            if glyph_band is None or glyph.text.isspace():
+                continue
+            glyph_complete = glyph_ports.run_fill_complete(
+                layout.fill_segments,
+                {glyph.index},
+                t_ms,
+            )
+            following_band = glyph_ports.n3_following_wipe_band(
+                layout.fill_segments,
+                {glyph.index},
+                t_ms,
+                layout.rtl,
+            )
+            if following_band is not None:
+                glyph_band = following_band
+            glyph_released = glyph_complete and following_band is None
+            if glyph_released:
+                paint_glyph_run_direct(
+                    painter,
+                    glyph_run,
+                    baseline_y,
+                    after=True,
+                    fill_rect=fill_rect,
+                )
+                continue
+            painter.save()
+            try:
+                painter.setClipRect(
+                    horizontal_after_clip_rect(glyph_band, layout.rtl)
+                )
+                paint_glyph_run_direct(
+                    painter,
+                    glyph_run,
+                    baseline_y,
+                    after=True,
+                    fill_rect=fill_rect,
+                )
+            finally:
+                painter.restore()
+
+    paint_bitmap_guide_glyphs(
+        painter,
+        layout,
+        t_ms,
+        after=True,
+        ports=bitmap_ports,
+    )
+
+
 def after_glow_loose_clip_rect(
     band: tuple[int, int],
     rect: QRectF,
