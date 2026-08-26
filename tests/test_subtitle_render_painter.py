@@ -7936,6 +7936,9 @@ from krok_helper.subtitle_render.engine.layout.display.schedule import (  # noqa
 from krok_helper.subtitle_render.engine.layout.display.resolver import (  # noqa: E402
     apply_animation_time_guard,
 )
+from krok_helper.subtitle_render.engine.layout.display import (  # noqa: E402
+    resolver as display_resolver,
+)
 from krok_helper.subtitle_render.engine.layout.line.style import (  # noqa: E402
     auto_entry_reserve_ms,
     auto_exit_reserve_ms,
@@ -10148,7 +10151,7 @@ def test_secondary_displacement_pairs_only_report_new_cascade(monkeypatch):
         lambda *_args: measured,
     )
     monkeypatch.setattr(
-        subtitle_painter,
+        display_resolver,
         "solve_page_axis_offsets",
         lambda *_args, **_kwargs: {(0, 0): -40.0, (0, 1): -80.0},
     )

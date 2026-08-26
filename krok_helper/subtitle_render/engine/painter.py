@@ -272,9 +272,14 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     StyleDisplayResolutionPorts,
     apply_animation_time_guard,
     clear_display_line_resolution_cache,
+    collision_squeeze_pairs as _collision_squeeze_pairs,
+    display_line_collision_time_window as _display_line_collision_time_window,
     display_line_compute_kwargs,
+    display_line_static_collision_window as _display_line_static_collision_window,
+    retime_measured_collision_bands as _retime_measured_collision_bands,
     resolve_display_lines_for_style,
     resolve_display_timing,
+    secondary_displacement_squeeze_pairs as _resolve_secondary_displacement_pairs,
 )
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
@@ -361,9 +366,7 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
 from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     PageVisualBands,
-    bands_require_separation,
     solve_page_axis_offsets,
-    time_windows_overlap,
 )
 from krok_helper.subtitle_render.engine.layout.plan.model import (
     LineLayoutPlan,
@@ -2465,31 +2468,15 @@ def pixel_collision_squeeze_pairs(
 ) -> tuple[tuple[int, int], ...]:
     """Return pairs conflicting in the configured time window and pixel axis."""
 
-    measured = measure_collision_bands(
-        logical_w, logical_h, track, style, display_lines
+    return _collision_squeeze_pairs(
+        measure_collision_bands(
+            logical_w,
+            logical_h,
+            track,
+            style,
+            display_lines,
+        )
     )
-    conflicts: list[tuple[int, int]] = []
-    for incoming_pos, (
-        incoming_index,
-        incoming_page,
-        incoming_band,
-        _incoming_gap,
-    ) in enumerate(measured):
-        for previous_index, previous_page, previous_band, _previous_gap in measured[
-            :incoming_pos
-        ]:
-            if previous_page == incoming_page:
-                continue
-            if not time_windows_overlap(incoming_band, previous_band):
-                continue
-            if not bands_require_separation(
-                incoming_band, previous_band, 0.0
-            ):
-                continue
-            pair = (previous_index, incoming_index)
-            if pair not in conflicts:
-                conflicts.append(pair)
-    return tuple(conflicts)
 
 
 def _secondary_displacement_squeeze_pairs(
@@ -2510,141 +2497,12 @@ def _secondary_displacement_squeeze_pairs(
     measured = measure_collision_bands(
         logical_w, logical_h, track, style, display_lines
     )
-    if not measured:
-        return ()
-
-    page_order: list[tuple[int, int]] = []
-    page_entries: dict[
-        tuple[int, int], list[tuple[int, LineVisualBand, float]]
-    ] = {}
-    page_styles: dict[tuple[int, int], Style] = {}
-    for render_index, page_id, band, gap in measured:
-        if page_id not in page_entries:
-            page_order.append(page_id)
-            page_entries[page_id] = []
-        page_entries[page_id].append((render_index, band, gap))
-        page_styles.setdefault(
-            page_id, _style_for_line(style, display_lines[render_index].line)
-        )
-
-    pages: list[PageVisualBands] = []
-    for page_id in page_order:
-        page_style = page_styles[page_id]
-        position = page_style.line_y_position
-        anchor = (
-            "start"
-            if position == "top"
-            else "center"
-            if position == "center"
-            else "end"
-        )
-        if style.vertical:
-            anchor = "end"
-        pages.append(
-            PageVisualBands(
-                page_id=page_id,
-                bands=tuple(
-                    band for _render_index, band, _gap in page_entries[page_id]
-                ),
-                gap_px=max(float(page_style.line_gap_px), 0.0),
-                anchor=anchor,
-            )
-        )
-
-    offsets = solve_page_axis_offsets(
-        pages,
-        viewport_min=0.0,
+    return _resolve_secondary_displacement_pairs(
+        measured,
+        display_lines,
+        style,
         viewport_max=float(logical_w if style.vertical else logical_h),
     )
-    if not any(float(offset) != 0.0 for offset in offsets.values()):
-        return ()
-
-    conflicts: list[tuple[int, int]] = []
-    for incoming_pos, (
-        incoming_index,
-        incoming_page,
-        incoming_band,
-        _incoming_gap,
-    ) in enumerate(measured):
-        incoming_offset = float(offsets.get(incoming_page, 0.0))
-        if incoming_offset == 0.0:
-            continue
-        for (
-            previous_index,
-            previous_page,
-            previous_band,
-            _previous_gap,
-        ) in measured[:incoming_pos]:
-            if previous_page == incoming_page:
-                continue
-            if not time_windows_overlap(incoming_band, previous_band):
-                continue
-            previous_offset = float(offsets.get(previous_page, 0.0))
-            if previous_offset == 0.0:
-                continue
-            # Authored-position conflicts already went through the primary
-            # squeeze pass.  This pass only covers an incoming page that would
-            # have been clear before an earlier page moved into its position.
-            if bands_require_separation(incoming_band, previous_band, 0.0):
-                continue
-            shifted_previous = previous_band.shifted(
-                previous_offset
-            )
-            if not bands_require_separation(incoming_band, shifted_previous, 0.0):
-                continue
-            pair = (previous_index, incoming_index)
-            if pair not in conflicts:
-                conflicts.append(pair)
-    return tuple(conflicts)
-
-
-def _retime_measured_collision_bands(
-    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]],
-    display_lines: list[DisplayLine],
-    style: Style,
-    changed_indices: tuple[int, ...],
-    *,
-    time_window: str = "stable",
-) -> list[tuple[int, tuple[int, int], LineVisualBand, float]] | None:
-    """Reuse measured X/Y rectangles when only display boundaries changed.
-
-    ``None`` requests a full remeasurement when a changed line had no stable
-    band before.  That rare case can gain one after synchronization; skipping
-    it would miss a collision.
-    """
-
-    changed = set(changed_indices)
-    measured_indices = {render_index for render_index, _page, _band, _gap in measured}
-    if not changed.issubset(measured_indices):
-        return None
-    retimed: list[tuple[int, tuple[int, int], LineVisualBand, float]] = []
-    for render_index, page_id, band, gap in measured:
-        if render_index not in changed:
-            retimed.append((render_index, page_id, band, gap))
-            continue
-        collision_start, collision_end = _display_line_collision_time_window(
-            display_lines[render_index],
-            style,
-            time_window=time_window,
-        )
-        if collision_end <= collision_start:
-            continue
-        retimed.append(
-            (
-                render_index,
-                page_id,
-                replace(
-                    band,
-                    display_start_ms=int(collision_start),
-                    display_end_ms=int(collision_end),
-                    entry_start_ms=int(
-                        display_lines[render_index].display_start_ms
-                    ),
-                ),
-                gap,
-            )
-        )
-    return retimed
 
 
 def _apply_measured_section_time_fill(
@@ -6456,42 +6314,6 @@ _TITLE_RENDER_PORTS = TitleRenderPorts(
 _VERTICAL_CACHE_PORTS = VerticalCachePorts(
     karaoke_state_signature=_karaoke_state_signature,
 )
-
-
-def _display_line_static_collision_window(
-    display_line: DisplayLine,
-    style: Style,
-) -> tuple[int, int]:
-    """Return the non-animation interval used for page placement collisions."""
-
-    line_style = _style_for_line_display_window(
-        style,
-        display_line.line,
-        display_line.display_start_ms,
-        display_line.display_end_ms,
-    )
-    start = int(display_line.display_start_ms)
-    end = int(display_line.display_end_ms)
-    if line_style.entry_anim != "none":
-        start += max(int(line_style.entry_lead_ms), 0)
-    if line_style.exit_anim != "none":
-        end -= max(int(line_style.exit_fade_ms), 0)
-    return start, max(start, end)
-
-
-def _display_line_collision_time_window(
-    display_line: DisplayLine,
-    style: Style,
-    *,
-    time_window: str,
-) -> tuple[int, int]:
-    if time_window == "display":
-        start = int(display_line.display_start_ms)
-        end = int(display_line.display_end_ms)
-        return start, max(start, end)
-    if time_window != "stable":
-        raise ValueError(f"Unsupported collision time window: {time_window}")
-    return _display_line_static_collision_window(display_line, style)
 
 
 def _paint_rubies(

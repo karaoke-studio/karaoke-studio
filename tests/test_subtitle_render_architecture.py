@@ -1544,6 +1544,45 @@ def test_horizontal_display_line_measurement_has_one_owner() -> None:
     )
 
 
+def test_layout_resolver_owns_collision_window_and_pair_policies() -> None:
+    painter_path = ROOT / "engine" / "painter.py"
+    resolver_path = ROOT / "engine" / "layout" / "display" / "resolver.py"
+    painter_tree = ast.parse(painter_path.read_text(encoding="utf-8-sig"))
+    painter_functions = {
+        node.name: node
+        for node in painter_tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    assert {
+        "_display_line_collision_time_window",
+        "_display_line_static_collision_window",
+        "_retime_measured_collision_bands",
+    }.isdisjoint(painter_functions)
+    expected_calls = {
+        "pixel_collision_squeeze_pairs": "_collision_squeeze_pairs",
+        "_secondary_displacement_squeeze_pairs": (
+            "_resolve_secondary_displacement_pairs"
+        ),
+    }
+    for wrapper, delegated_call in expected_calls.items():
+        calls = {
+            node.func.id
+            for node in ast.walk(painter_functions[wrapper])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert delegated_call in calls
+
+    assert f"{PACKAGE}.engine.layout.display.resolver" in _import_targets(
+        f"{PACKAGE}.engine.painter",
+        painter_path,
+    )
+    assert f"{PACKAGE}.engine.painter" not in _import_targets(
+        f"{PACKAGE}.engine.layout.display.resolver",
+        resolver_path,
+    )
+
+
 def test_title_layout_has_one_render_owner() -> None:
     owner = f"{PACKAGE}.engine.render.elements.title"
     painter_path = ROOT / "engine/painter.py"
