@@ -1560,6 +1560,9 @@ def test_layout_resolver_owns_collision_window_and_pair_policies() -> None:
         "_retime_measured_collision_bands",
     }.isdisjoint(painter_functions)
     expected_calls = {
+        "_apply_measured_section_time_fill": (
+            "_fill_section_time_from_measurements"
+        ),
         "measure_collision_bands": "_build_measured_collision_bands",
         "pixel_collision_squeeze_pairs": "_collision_squeeze_pairs",
         "_secondary_displacement_squeeze_pairs": (

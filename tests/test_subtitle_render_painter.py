@@ -10730,7 +10730,7 @@ def test_section_time_fill_uses_strict_unique_matches_after_page_shift(
         lambda *_args, **_kwargs: measured,
     )
     monkeypatch.setattr(
-        subtitle_painter,
+        display_resolver,
         "solve_page_axis_offsets",
         lambda *_args, **_kwargs: {(0, 0): 0.0, (0, 1): 40.0},
     )

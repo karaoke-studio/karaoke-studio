@@ -17,6 +17,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     auto_exit_reserve_resolver,
     bottom_align_resolver,
     entry_animation_resolver,
+    exit_animation_ms,
     exit_animation_resolver,
     lane_count,
     line_end_ms,
@@ -321,6 +322,207 @@ def retime_measured_collision_bands(
             )
         )
     return retimed
+
+
+def fill_section_time_from_measurements(
+    display_lines: DisplayLines,
+    style: Style,
+    measured: MeasuredCollisionBands,
+    *,
+    viewport_max: float,
+    time_window: str,
+) -> DisplayLines:
+    """Extend automatic exits using final measured page placement."""
+
+    if not style.auto_fill_section_time or not display_lines:
+        return display_lines
+    bands = {
+        render_index: band
+        for render_index, _page_id, band, _gap in measured
+    }
+    if not bands:
+        return display_lines
+
+    page_order: list[tuple[int, int]] = []
+    page_indices: dict[tuple[int, int], list[int]] = {}
+    for index, item in enumerate(display_lines):
+        page_id = (int(item.section_index), int(item.page_index))
+        if page_id not in page_indices:
+            page_order.append(page_id)
+            page_indices[page_id] = []
+        page_indices[page_id].append(index)
+    next_page: dict[tuple[int, int], tuple[int, int] | None] = {}
+    for position, page_id in enumerate(page_order):
+        following = (
+            page_order[position + 1]
+            if position + 1 < len(page_order)
+            else None
+        )
+        next_page[page_id] = (
+            following
+            if following is not None and following[0] == page_id[0]
+            else None
+        )
+
+    page_entries: dict[tuple[int, int], list[tuple[LineVisualBand, float]]] = {}
+    for _render_index, page_id, band, gap in measured:
+        page_entries.setdefault(page_id, []).append((band, gap))
+    pages: list[PageVisualBands] = []
+    for page_id in page_order:
+        entries = page_entries.get(page_id, [])
+        if not entries:
+            continue
+        page_style = style_for_line(
+            style,
+            display_lines[page_indices[page_id][0]].line,
+        )
+        position = page_style.line_y_position
+        anchor = (
+            "start"
+            if position == "top"
+            else "center"
+            if position == "center"
+            else "end"
+        )
+        if style.vertical:
+            anchor = "end"
+        pages.append(
+            PageVisualBands(
+                page_id=page_id,
+                bands=tuple(band for band, _gap in entries),
+                gap_px=max((gap for _band, gap in entries), default=0.0),
+                anchor=anchor,
+            )
+        )
+    page_offsets = solve_page_axis_offsets(
+        pages,
+        viewport_min=0.0,
+        viewport_max=float(viewport_max),
+    )
+    bands = {
+        index: band.shifted(float(page_offsets.get(band.page_id, 0.0)))
+        for index, band in bands.items()
+    }
+
+    def match_page_bands(
+        source_indices: list[int],
+        candidate_indices: list[int],
+    ) -> dict[int, int]:
+        sources = [index for index in source_indices if index in bands]
+        candidates = [index for index in candidate_indices if index in bands]
+        if not sources or not candidates:
+            return {}
+        costs: dict[tuple[int, int], float] = {}
+        for source_pos, source_index in enumerate(sources):
+            source = bands[source_index]
+            source_height = max(float(source.axis_max - source.axis_min), 1.0)
+            source_center = (source.axis_min + source.axis_max) / 2.0
+            for candidate_pos, candidate_index in enumerate(candidates):
+                candidate = bands[candidate_index]
+                candidate_height = max(
+                    float(candidate.axis_max - candidate.axis_min),
+                    1.0,
+                )
+                candidate_center = (candidate.axis_min + candidate.axis_max) / 2.0
+                center_distance = abs(candidate_center - source_center)
+                tolerance = max(source_height, candidate_height)
+                if center_distance > tolerance:
+                    continue
+                height_delta = abs(candidate_height - source_height)
+                costs[(source_pos, candidate_pos)] = (
+                    center_distance / tolerance
+                    + 0.25 * height_delta / tolerance
+                )
+
+        memo: dict[
+            tuple[int, int],
+            tuple[int, float, tuple[tuple[int, int], ...]],
+        ] = {}
+
+        def solve(
+            source_pos: int,
+            used_mask: int,
+        ) -> tuple[int, float, tuple[tuple[int, int], ...]]:
+            key = source_pos, used_mask
+            cached = memo.get(key)
+            if cached is not None:
+                return cached
+            if source_pos >= len(sources):
+                return 0, 0.0, ()
+            best = solve(source_pos + 1, used_mask)
+            for candidate_pos in range(len(candidates)):
+                bit = 1 << candidate_pos
+                cost = costs.get((source_pos, candidate_pos))
+                if used_mask & bit or cost is None:
+                    continue
+                count, total, pairs = solve(source_pos + 1, used_mask | bit)
+                proposal = (
+                    count + 1,
+                    total + cost,
+                    ((source_pos, candidate_pos),) + pairs,
+                )
+                if (
+                    proposal[0] > best[0]
+                    or (
+                        proposal[0] == best[0]
+                        and proposal[1] < best[1] - 1e-9
+                    )
+                    or (
+                        proposal[0] == best[0]
+                        and abs(proposal[1] - best[1]) <= 1e-9
+                        and proposal[2] < best[2]
+                    )
+                ):
+                    best = proposal
+            memo[key] = best
+            return best
+
+        _count, _cost, pairs = solve(0, 0)
+        return {
+            sources[source_pos]: candidates[candidate_pos]
+            for source_pos, candidate_pos in pairs
+        }
+
+    changed = list(display_lines)
+    gap_ms = max(int(style.line_lane_gap_ms), 0)
+    for page_id in page_order:
+        indices = page_indices[page_id]
+        following = next_page[page_id]
+        if following is None:
+            page_collision_end = max(
+                (
+                    int(bands[index].display_end_ms)
+                    for index in indices
+                    if index in bands
+                ),
+                default=None,
+            )
+            if page_collision_end is None:
+                continue
+            targets = {index: page_collision_end for index in indices}
+        else:
+            candidates = [
+                index for index in page_indices[following] if index in bands
+            ]
+            if not candidates:
+                continue
+            matches = match_page_bands(indices, candidates)
+            targets = {
+                index: int(bands[matched].display_start_ms) - gap_ms
+                for index, matched in matches.items()
+            }
+
+        for index, collision_end in targets.items():
+            item = changed[index]
+            if item.line.display_end_override_ms is not None:
+                continue
+            full_end = int(collision_end)
+            if time_window == "stable":
+                full_end += exit_animation_ms(style, item.line)
+            new_end = max(int(item.display_end_ms), full_end)
+            if new_end != item.display_end_ms:
+                changed[index] = replace(item, display_end_ms=new_end)
+    return changed
 
 
 class DisplayResolutionCache:
