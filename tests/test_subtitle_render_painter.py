@@ -10823,6 +10823,107 @@ def test_all_automatic_timing_options_preserve_stable_lane_gap(qapp):
     assert display[3].display_end_ms == display[4].display_end_ms == 8_900
 
 
+def _protect_time_track():
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 11_000),
+            ("B", 12_000, 13_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = replace(
+        Style(),
+        auto_fill_section_time=False,
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+    return lines, track, style
+
+
+def test_protect_time_defaults_to_no_floor(qapp):
+    """未设置保护时间的工程必须与该设置生效之前逐帧一致。"""
+
+    lines, track, style = _protect_time_track()
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1920, logical_h=1080
+    )
+
+    assert style.line_protect_ms == 0
+    # B 与下一页同轨相撞，退场被压到只剩 400ms 尾巴——这正是无保护时的行为。
+    assert windows[1][1] - int(lines[1].end_ms) == 400
+    assert windows == subtitle_painter.display_windows_for_style(
+        track, replace(style, line_protect_ms=0), logical_w=1920, logical_h=1080
+    )
+
+
+def test_protect_time_floors_automatic_exit_compression(qapp):
+    """保护时间是自动压缩的下界：演唱结束后至少留这么久才消失。"""
+
+    lines, track, base_style = _protect_time_track()
+    for protect, expected_tail in ((0, 400), (500, 500), (900, 900)):
+        windows = subtitle_painter.display_windows_for_style(
+            track,
+            replace(base_style, line_protect_ms=protect),
+            logical_w=1920,
+            logical_h=1080,
+        )
+        tails = [
+            windows[index][1] - int(lines[index].end_ms) for index in range(4)
+        ]
+        assert min(tails) >= min(protect, base_style.line_tail_ms)
+        assert tails[1] == expected_tail
+        # 让出的时间由后一句自己的入场吸收，而不是把冲突留在屏幕上。
+        assert windows[1][1] + 300 == windows[3][0]
+
+
+def test_protect_time_never_exceeds_the_smaller_configured_margin(qapp):
+    """生效值封顶在 min(提前入场, 延迟退场)，不把窗口撑大。"""
+
+    lines, track, base_style = _protect_time_track()
+    capped = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base_style, line_protect_ms=9_000),
+        logical_w=1920,
+        logical_h=1080,
+    )
+    at_tail = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base_style, line_protect_ms=base_style.line_tail_ms),
+        logical_w=1920,
+        logical_h=1080,
+    )
+
+    assert capped == at_tail
+    assert [
+        capped[index][1] - int(lines[index].end_ms) for index in range(4)
+    ] == [base_style.line_tail_ms] * 4
+
+
+def test_protect_time_yields_to_manual_display_overrides(qapp):
+    """手工拖过的上屏 / 消失时间仍然是权威值。"""
+
+    lines, track, base_style = _protect_time_track()
+    lines[1].display_end_override_ms = 13_600
+    windows = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base_style, line_protect_ms=900),
+        logical_w=1920,
+        logical_h=1080,
+    )
+
+    # 覆盖值只留 100ms 尾巴，低于保护时间，但它不受自动下限约束。
+    assert windows[1][1] == 13_600
+
+
 def test_page_sync_entry_never_shortens_previous_page_exit(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)

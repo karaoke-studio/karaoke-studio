@@ -11,6 +11,7 @@ from __future__ import annotations
 from krok_helper.subtitle_render.engine.timing.show_time import (
     MAX_SHOW_TIME_MS,
     ShowTimePage,
+    compression_floor_ms,
     compute_show_times,
     protect_time_ms,
 )
@@ -565,3 +566,20 @@ def test_cross_slot_pairs_are_not_blindly_squeezed():
     assert out.starts[2] == begins[2] - PRE
     assert out.ends[1] == ends[1] + POST
     assert out.ends[1] > out.starts[2]
+
+
+def test_compression_floor_has_no_automatic_value_and_caps_at_the_smaller_margin():
+    """保护时间与 ProtectTime 不同：不填就是不保护。"""
+
+    # 0 保持既有行为：自动压缩可以把 PreTime / PostTime 吃干净。
+    assert compression_floor_ms(1_800, 1_000, 0) == 0
+    # 与之对照，N3 的 ProtectTime 在不填时仍会自动推导。
+    assert protect_time_ms(1_800, 1_000, 0) == 500
+
+    assert compression_floor_ms(1_800, 1_000, 400) == 400
+    # 上限是两侧余量里较小的那个，避免把窗口撑得比延迟退场还大。
+    assert compression_floor_ms(1_800, 1_000, 1_000) == 1_000
+    assert compression_floor_ms(1_800, 1_000, 4_000) == 1_000
+    assert compression_floor_ms(600, 1_000, 4_000) == 600
+    assert compression_floor_ms(1_800, 0, 400) == 0
+    assert compression_floor_ms(1_800, 1_000, -50) == 0

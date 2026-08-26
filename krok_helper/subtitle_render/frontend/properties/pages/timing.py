@@ -104,16 +104,31 @@ class TimingPropertyPageBuilder:
             "line_lane_gap_ms",
         )
         host._lane_gap_spin.setToolTip("同一显示轨上相邻两句之间保留的时间间隔。")
+
+        host._line_protect_spin = self._add_spin(
+            grid,
+            "保护时间",
+            0,
+            10_000,
+            "line_protect_ms",
+        )
+        host._line_protect_spin.setToolTip(
+            "自动避让压缩显示时间时，必须在走字两侧留下的最小余量：每句演唱结束后\n"
+            "至少保留这么久才消失，上屏也至少提前这么久。\n"
+            "0 = 不保护，提前入场 / 延迟退场可以被压光。实际生效值不会超过"
+            "「提前入场」与「延迟退场」中较小的那个。\n"
+            "手工拖动过上屏 / 消失时间的句子不受此限制。"
+        )
         layout.addWidget(grid)
 
         sync_row = QHBoxLayout()
         sync_row.setContentsMargins(0, 0, 0, 0)
         host._sync_entry_check = CheckBox("同步入场", section)
         host._sync_entry_check.setToolTip(
-            "未手工调整上屏时间的 T 会尽量延长到同步页的最早边界；默认只处理段首页，\n"
+            "未手工调整上屏时间的 T 会尽量提前到同步页的最早边界；默认只处理段首页，\n"
             "开启“每句同步”后处理每一页。"
-            "发生像素碰撞时，各个 T 独立按先压缩前句退场、再压缩自己入场的"
-            "顺序处理；不会改动未参与该次碰撞的页内兄弟行。"
+            "提前量以“同位邻句消失时间 + 同轨间隔”为下界：够得着就与页内最早的 T "
+            "对齐，够不着就停在该下界，绝不会为了提前而压缩上一页的消失时间。"
         )
         host._sync_entry_check.toggled.connect(
             lambda checked: host._update_style(sync_entry=checked)

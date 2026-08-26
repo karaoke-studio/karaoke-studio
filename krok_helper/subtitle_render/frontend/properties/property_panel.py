@@ -830,6 +830,7 @@ class PropertyPanel(QWidget):
             )
             self._section_gap_spin.setValue(timing.section_gap_ms)
             self._lane_gap_spin.setValue(timing.line_lane_gap_ms)
+            self._line_protect_spin.setValue(timing.line_protect_ms)
             self._section_ending_combo.setCurrentIndex(
                 max(0, self._section_ending_combo.findData(timing.section_ending_mode))
             )

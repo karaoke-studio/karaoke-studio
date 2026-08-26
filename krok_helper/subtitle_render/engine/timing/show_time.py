@@ -74,6 +74,23 @@ def protect_time_ms(
     return min(pre, post) // 2
 
 
+def compression_floor_ms(
+    pre_time_ms: int, post_time_ms: int, manual_protect_ms: int
+) -> int:
+    """保护时间：自动压缩必须在走字两侧留下的最小余量。
+
+    与 :func:`protect_time_ms` 不同，它**没有自动值**——0 表示求解器可以把
+    ``PreTime`` / ``PostTime`` 吃干净，也就是这个设置生效之前所有工程的行为。
+    上限取 ``min(PreTime, PostTime)``：保护时间只是压缩的下界，不该把显示窗口
+    撑得比正常的提前入场 / 延迟退场还大。
+    """
+
+    manual = max(int(manual_protect_ms), 0)
+    if manual <= 0:
+        return 0
+    return min(manual, max(int(pre_time_ms), 0), max(int(post_time_ms), 0))
+
+
 def compute_show_times(
     sing_begins: Sequence[int],
     sing_ends: Sequence[int],
@@ -107,7 +124,8 @@ def compute_show_times(
     而不是等算完再往结果上盖。被覆盖的那一侧不再参与挤压。
 
     ``auto_entry_reserve_ms`` / ``auto_exit_reserve_ms`` 是自动压缩后必须保留的
-    入场/退场动画时间；对应一侧有手工显示时刻覆盖时不受自动下限约束。
+    入场/退场余量——入场/退场动画时间与「保护时间」取大；对应一侧有手工显示
+    时刻覆盖时不受自动下限约束。
 
     ``entry_animation_ms`` / ``exit_animation_ms`` 用于区分稳定绘制与纯动画时段：
     自动压缩优先消除稳定绘制的跨页重叠，入场和退场动画彼此重叠是允许的。

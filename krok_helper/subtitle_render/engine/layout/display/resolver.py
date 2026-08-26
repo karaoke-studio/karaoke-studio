@@ -43,7 +43,10 @@ from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_lead_in_ms,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
-from krok_helper.subtitle_render.engine.timing.show_time import protect_time_ms
+from krok_helper.subtitle_render.engine.timing.show_time import (
+    compression_floor_ms,
+    protect_time_ms,
+)
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
@@ -560,6 +563,24 @@ class StyleDisplayResolutionPorts:
     build: Callable[[int, int, dict[str, object]], DisplayResolutionPorts]
 
 
+def style_compression_floor_ms(style: Style) -> int:
+    """Resolve this style's protect time into a concrete compression floor."""
+
+    return compression_floor_ms(
+        style.line_lead_in_ms,
+        style.line_tail_ms,
+        style.line_protect_ms,
+    )
+
+
+def _reserve_with_floor(
+    resolver: Callable[[TimingLine], int], floor_ms: int
+) -> Callable[[TimingLine], int]:
+    if floor_ms <= 0:
+        return resolver
+    return lambda line: max(int(resolver(line)), floor_ms)
+
+
 def display_line_compute_kwargs(style: Style) -> dict[str, object]:
     """Build the frame-independent timeline configuration for one style."""
 
@@ -582,8 +603,14 @@ def display_line_compute_kwargs(style: Style) -> dict[str, object]:
         "row_count_of": row_count_resolver(style),
         "bottom_align_of": bottom_align_resolver(style),
         "vertical_position_of": vertical_position_resolver(style),
-        "auto_entry_reserve_ms_of": auto_entry_reserve_resolver(style),
-        "auto_exit_reserve_ms_of": auto_exit_reserve_resolver(style),
+        # 「保护时间」与入场/退场动画的自动下限取大：两者都是自动压缩必须在走字
+        # 两侧留下的余量，求解器只认一个数。
+        "auto_entry_reserve_ms_of": _reserve_with_floor(
+            auto_entry_reserve_resolver(style), style_compression_floor_ms(style)
+        ),
+        "auto_exit_reserve_ms_of": _reserve_with_floor(
+            auto_exit_reserve_resolver(style), style_compression_floor_ms(style)
+        ),
         "entry_animation_ms_of": entry_animation_resolver(style),
         "exit_animation_ms_of": exit_animation_resolver(style),
     }
@@ -617,6 +644,8 @@ def apply_animation_time_guard(
 
     guarded = list(display_lines)
     changed = False
+    # 「保护时间」：自动压缩不得越过走字两侧的这个余量。
+    floor_ms = style_compression_floor_ms(style)
     entry_durations: list[int] = []
     line_starts: list[int] = []
     line_ends: list[int] = []
@@ -688,14 +717,16 @@ def apply_animation_time_guard(
                     if time_window == "stable":
                         stable_tail = max(
                             int(previous_band.display_end_ms)
-                            - line_ends[previous_index],
+                            - line_ends[previous_index]
+                            - floor_ms,
                             0,
                         )
                     else:
                         stable_tail = max(
                             int(previous.display_end_ms)
                             - ports.exit_animation_ms(previous.line)
-                            - line_ends[previous_index],
+                            - line_ends[previous_index]
+                            - floor_ms,
                             0,
                         )
                     delta = min(overlap_ms, stable_tail)
@@ -726,14 +757,16 @@ def apply_animation_time_guard(
                 if time_window == "stable":
                     stable_lead = max(
                         line_starts[incoming_index]
-                        - int(incoming_band.display_start_ms),
+                        - int(incoming_band.display_start_ms)
+                        - floor_ms,
                         0,
                     )
                 else:
                     stable_lead = max(
                         line_starts[incoming_index]
                         - entry_durations[incoming_index]
-                        - int(incoming.display_start_ms),
+                        - int(incoming.display_start_ms)
+                        - floor_ms,
                         0,
                     )
                 if incoming.line.display_start_override_ms is None:
@@ -741,7 +774,7 @@ def apply_animation_time_guard(
                     new_start = int(incoming.display_start_ms) + delta
                     latest_entry_start = max(
                         line_starts[incoming_index]
-                        - entry_durations[incoming_index],
+                        - max(entry_durations[incoming_index], floor_ms),
                         0,
                     )
                     new_start = min(new_start, latest_entry_start)
