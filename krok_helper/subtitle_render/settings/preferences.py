@@ -9,7 +9,7 @@ depending on Qt widgets.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -175,6 +175,9 @@ class AppPreferenceSaveInput:
     auto_save_interval_minutes: int
     project_backup_count: int
     output: Optional[AppOutputPreferenceValues] = None
+    style_presets_baseline: Optional[dict] = None
+    """本实例上次见到的磁盘预设库；给出后只提交自己的增量，见
+    :func:`merge_style_preset_library`。``None`` 保持整份覆盖的旧行为。"""
 
 
 @dataclass(frozen=True)
@@ -183,6 +186,8 @@ class PreparedAppPreferences:
 
     data: dict
     app_default_style: Style
+    style_presets: dict = field(default_factory=dict)
+    """磁盘与本实例增量合并后的预设库；调用方应据此更新自己的内存与基线。"""
 
 
 def load_app_runtime_preferences(
@@ -537,11 +542,22 @@ def prepare_app_preferences(
         values.subtitle_loading_defaults,
         key="subtitle_loading_defaults",
     )
-    data["style_presets"] = merge_app_setting_field(
-        data.get("style_presets"),
-        values.style_presets,
-        key="style_presets",
-    )
+    if values.style_presets_baseline is None:
+        merged_presets = style_presets_from_dict(values.style_presets)
+        data["style_presets"] = merge_app_setting_field(
+            data.get("style_presets"),
+            values.style_presets,
+            key="style_presets",
+        )
+    else:
+        # 预设库是多实例共享的：只提交自己的增量，别把别人的新增覆盖掉。
+        rows = merge_style_preset_library(
+            data.get("style_presets"),
+            style_presets_from_dict(values.style_presets),
+            style_presets_from_dict(values.style_presets_baseline),
+        )
+        data["style_presets"] = rows
+        merged_presets = style_presets_from_dict(rows)
     data["screen"] = merge_app_setting_field(
         data.get("screen"),
         values.screen,
@@ -581,6 +597,7 @@ def prepare_app_preferences(
     return PreparedAppPreferences(
         data=data,
         app_default_style=app_default_style,
+        style_presets=merged_presets,
     )
 
 
@@ -651,6 +668,71 @@ def style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
         else:
             add(raw_key, raw_key, value)
     return result
+
+
+def merge_style_preset_library(
+    existing: object,
+    current: dict[str, StylePreset],
+    baseline: dict[str, StylePreset],
+) -> list[dict]:
+    """把**本实例自己的**预设改动叠加到盘上的预设库，返回要写回的行。
+
+    预设库是应用级共享状态，可以同时有多个实例在编辑。整份覆盖会让最后关闭的
+    实例把别人新增的预设一起抹掉——它内存里那份是启动时读的，早就过期了。
+
+    ``baseline`` 是本实例上次见到的磁盘内容。用它和 ``current`` 求差，只把新增、
+    修改、删除三类**自己动过的**条目落到盘上那份的副本上；自己没动过的条目一律
+    原样保留磁盘上的行，于是别人的新增得以保留。预设按稳定 ``preset_id`` 归并，
+    因此改名是「修改」而不是「删一个加一个」。
+
+    合并发生在**原始行**上而不是重新序列化整份对象，这样更高版本写入的未知字段
+    不会在本版本保存时被抹掉。
+    """
+
+    if isinstance(existing, list):
+        disk_rows = [deepcopy(row) for row in existing if isinstance(row, dict)]
+    else:
+        disk_rows = style_presets_to_dict(style_presets_from_dict(existing))
+
+    removed = {
+        preset_id for preset_id in baseline if preset_id not in current
+    }
+    rows_by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for row in disk_rows:
+        preset_id = str(row.get("id") or "").strip()
+        if not preset_id or preset_id in rows_by_id:
+            preset_id = uuid4().hex
+            row = {**row, "id": preset_id}
+        rows_by_id[preset_id] = row
+        order.append(preset_id)
+
+    for preset_id in removed:
+        rows_by_id.pop(preset_id, None)
+
+    for preset_id, preset in current.items():
+        previous = baseline.get(preset_id)
+        if previous is not None and previous == preset:
+            # 自己没动过：磁盘上的那行才是最新的，原样保留。
+            continue
+        serialized = style_presets_to_dict({preset_id: preset})
+        if not serialized:
+            continue
+        row = serialized[0]
+        stored = rows_by_id.get(preset_id)
+        if isinstance(stored, dict):
+            row = merge_extensible_value(
+                stored, row, path=("style_presets",)
+            )
+        else:
+            order.append(preset_id)
+        rows_by_id[preset_id] = row
+
+    return [
+        rows_by_id[preset_id]
+        for preset_id in dict.fromkeys(order)
+        if preset_id in rows_by_id
+    ]
 
 
 def style_presets_to_dict(presets: dict[str, StylePreset]) -> list[dict]:

@@ -478,6 +478,8 @@ class PropertyPanel(QWidget):
     """(旧角色名, 新角色名 或 None=删除)；在样式改动落地之前发出，让主窗口把内容里的引用一起改写并合成一步撤销。"""
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
+    presetLibraryOpening = Signal()
+    """预设库即将打开：宿主借此从磁盘刷新，拿到其他实例新增的预设。"""
     defaultSchemeSaveRequested = Signal(str)
     defaultLayoutSaveRequested = Signal(int)
     layoutAssignAllRequested = Signal(int)
@@ -2725,6 +2727,8 @@ class PropertyPanel(QWidget):
         self._sync_subtitle_scheme_controls()
 
     def _open_preset_manager(self) -> None:
+        # 预设库是应用级共享的，别的实例可能已经加过预设了。
+        self.presetLibraryOpening.emit()
         dialog = StylePresetManagerDialog(
             presets=self._preset_schemes,
             current_scheme=self._current_scheme_snapshot(),

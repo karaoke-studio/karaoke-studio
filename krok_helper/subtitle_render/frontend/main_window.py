@@ -790,6 +790,7 @@ class SubtitleRenderWindow(QWidget):
         self._app_default_style: Style = Style()
         self._subtitle_loading_defaults = SubtitleLoadingSettings()
         self._style_presets: dict[str, StylePreset] = {}
+        self._style_presets_baseline: dict[str, StylePreset] = {}
         #: 「自动识别和声」的上次选择（app 级偏好，随 subtitle_render 命名空间落盘）。
         self._auto_chorus_role = ""
         self._auto_chorus_begin_chars = DEFAULT_CHORUS_BEGIN_CHARS
@@ -2358,6 +2359,9 @@ class SubtitleRenderWindow(QWidget):
         )
         self._property_panel.presetSchemesChanged.connect(
             self._apply_style_presets
+        )
+        self._property_panel.presetLibraryOpening.connect(
+            self._reload_style_presets_from_disk
         )
         self._property_panel.defaultSchemeSaveRequested.connect(
             self._save_builtin_scheme_default
@@ -6077,8 +6081,9 @@ class SubtitleRenderWindow(QWidget):
             assign_layout_to_all(track, index, self._style)
 
     def _load_persisted_state(self) -> None:
+        raw_settings = self._load_subtitle_settings()
         loaded = load_app_preferences(
-            self._load_subtitle_settings(),
+            raw_settings,
             chorus_begin_default=DEFAULT_CHORUS_BEGIN_CHARS,
             chorus_end_default=DEFAULT_CHORUS_END_CHARS,
             font_catalog=get_n3_font_catalog(),
@@ -6093,6 +6098,12 @@ class SubtitleRenderWindow(QWidget):
         self._auto_chorus_end_chars = loaded.auto_chorus_end_chars
         self._auto_chorus_overwrite = loaded.auto_chorus_overwrite
         self._style_presets = loaded.style_presets
+        # 预设库是多实例共享的，保存时要靠这份基线区分「自己改的」和「别人加的」。
+        # 基线必须是**磁盘原样**，不能用 loaded 的结果：加载会顺手做字体别名归一化，
+        # 拿归一化后的值当基线会让这次归一化不算增量，于是永远写不回磁盘。
+        self._style_presets_baseline = _style_presets_from_dict(
+            raw_settings.get("style_presets")
+        )
         self._screen_settings = loaded.screen
         self._selected_scheme_key = loaded.selected_scheme_key
         self._preview_splitter_ratio = loaded.preview_splitter_ratio
@@ -6159,6 +6170,9 @@ class SubtitleRenderWindow(QWidget):
                     self._subtitle_loading_defaults
                 ),
                 style_presets=_style_presets_to_dict(self._style_presets),
+                style_presets_baseline=_style_presets_to_dict(
+                    self._style_presets_baseline
+                ),
                 screen=screen_settings_to_dict(self._screen_settings),
                 auto_chorus_role=self._auto_chorus_role,
                 auto_chorus_begin_chars=self._auto_chorus_begin_chars,
@@ -6182,6 +6196,52 @@ class SubtitleRenderWindow(QWidget):
             # 编辑的界面带崩），但至少要留下痕迹。
             logging.getLogger(__name__).warning("保存字幕渲染模块设置失败", exc_info=True)
             return
+        # 合并结果就是此刻盘上的内容：采纳它，本实例才能看到别的实例新增的预设，
+        # 下一次保存的增量也才是相对这份新基线算的。
+        self._adopt_saved_style_presets(prepared.style_presets)
+
+    def _reload_style_presets_from_disk(self) -> None:
+        """Pick up preset-library edits made by other running instances.
+
+        The library is application-level shared state, so another instance may
+        have added or changed presets since this one started.  Re-reading before
+        the library opens keeps the list current without a restart; the baseline
+        moves with it so this instance still only submits its own deltas.
+        """
+
+        loaded = _style_presets_from_dict(
+            self._load_subtitle_settings().get("style_presets")
+        )
+        unsaved = {
+            preset_id: preset
+            for preset_id, preset in self._style_presets.items()
+            if self._style_presets_baseline.get(preset_id) != preset
+        }
+        removed = {
+            preset_id
+            for preset_id in self._style_presets_baseline
+            if preset_id not in self._style_presets
+        }
+        self._style_presets_baseline = deepcopy(loaded)
+        merged = {
+            preset_id: preset
+            for preset_id, preset in loaded.items()
+            if preset_id not in removed
+        }
+        merged.update(deepcopy(unsaved))
+        self._style_presets = merged
+        if hasattr(self, "_property_panel"):
+            self._property_panel.set_preset_schemes(merged)
+
+    def _adopt_saved_style_presets(self, presets: dict) -> None:
+        """Take the freshly merged library as both current state and baseline."""
+
+        merged = dict(presets)
+        changed = merged != self._style_presets
+        self._style_presets = merged
+        self._style_presets_baseline = deepcopy(merged)
+        if changed and hasattr(self, "_property_panel"):
+            self._property_panel.set_preset_schemes(merged)
 
     def _save_builtin_scheme_default(self, key: str) -> None:
         target_reference = max(int(self._app_default_style.font_reference_height), 1)
