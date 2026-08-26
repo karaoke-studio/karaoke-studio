@@ -1205,6 +1205,112 @@ def paint_line_vertical_layers(
     )
 
 
+def paint_line_vertical_direct(
+    painter: QPainter,
+    layout: VerticalLineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+    *,
+    ports: VerticalLayerPorts,
+) -> None:
+    """Paint the vertical pixel-equivalence fallback without cached layers."""
+
+    stroke2_width = ports.main_stroke2_width(style)
+    band = vertical_fill_band(
+        layout.cells,
+        layout.intervals,
+        t_ms,
+        ports=ports.progress,
+        line=line,
+        active_rubies=layout.active_rubies,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
+    )
+    before_clip = None
+    before_glow_radius = ports.glow_radius(style, after=False)
+    if (
+        band is not None
+        and style.decoration_kind == "glow"
+        and before_glow_radius > 0
+    ):
+        before_clip = vertical_before_clip_rect(
+            layout.column_x,
+            layout.cell_w,
+            band[1],
+            vertical_before_clip_pad(
+                style.stroke_width_px,
+                stroke2_width,
+                before_glow_radius,
+                style.shadow_offset_x,
+                style.shadow_offset_y,
+                raster=ports.raster,
+            ),
+        )
+    painter.save()
+    try:
+        if before_clip is not None:
+            painter.setClipRect(before_clip)
+        ports.raster.paint_text_layer_stack(
+            painter,
+            layout.text_path,
+            layout.line_rect,
+            layout.colors.before,
+            style,
+            stroke_width=style.stroke_width_px,
+            stroke2_width=stroke2_width,
+            shadow_dx=style.shadow_offset_x,
+            shadow_dy=style.shadow_offset_y,
+            glow_radius=before_glow_radius,
+        )
+    finally:
+        painter.restore()
+
+    if band is not None:
+        y0, y_scan = band
+        painter.save()
+        try:
+            painter.setClipRect(
+                vertical_after_clip_rect(
+                    layout.column_x,
+                    layout.cell_w,
+                    y0,
+                    y_scan,
+                    vertical_after_clip_pad(style, ports=ports),
+                )
+            )
+            ports.raster.paint_text_layer_stack(
+                painter,
+                layout.text_path,
+                layout.line_rect,
+                layout.colors.after,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=stroke2_width,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=ports.glow_radius(style, after=True),
+            )
+        finally:
+            painter.restore()
+
+    if layout.active_rubies:
+        ruby_font = build_ruby_font(style)
+        paint_rubies_vertical(
+            painter,
+            ruby_font,
+            QFontMetrics(ruby_font),
+            line,
+            layout.intervals,
+            layout.cells,
+            layout.column_x,
+            layout.cell_w,
+            t_ms,
+            layout.active_rubies,
+            style,
+            ports=ports.ruby,
+        )
+
+
 def layout_vertical_line(
     track: TimingTrack,
     line: TimingLine,
@@ -1301,6 +1407,7 @@ __all__ = [
     "build_baked_path_stack",
     "baked_stack_key",
     "layout_vertical_line",
+    "paint_line_vertical_direct",
     "paint_line_vertical_layers",
     "paint_rubies_vertical",
     "resolve_vertical_columns",

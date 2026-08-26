@@ -582,6 +582,7 @@ from krok_helper.subtitle_render.engine.render.elements.vertical import (
     VerticalRasterPorts,
     VerticalRubyPorts,
     layout_vertical_line as _layout_vertical_line,
+    paint_line_vertical_direct as _paint_line_vertical_direct_with_ports,
     paint_line_vertical_layers as _paint_line_vertical_layers_with_ports,
     paint_rubies_vertical as _paint_rubies_vertical_with_ports,
     resolve_vertical_columns as _resolve_vertical_columns,
@@ -2766,95 +2767,16 @@ def _paint_line_vertical_direct(
     t_ms: int,
     style: Style,
 ) -> None:
-    """竖排逐帧直绘（旧路径，A/B oracle + env 回退）。"""
-    stroke2_width = _main_stroke2_width(style)
-    band = _vertical_fill_band(
-        layout.cells,
-        layout.intervals,
+    """Bind the legacy direct path to the vertical render owner."""
+
+    _paint_line_vertical_direct_with_ports(
+        painter,
+        layout,
+        line,
         t_ms,
-        line=line,
-        active_rubies=layout.active_rubies,
-        ruby_main_progress_mode=style.ruby_main_progress_mode,
+        style,
+        ports=_VERTICAL_LAYER_PORTS,
     )
-    # 「未唱」层。N3 硬分割：发光存在且已唱层会覆盖已唱带时，未唱层整体裁到
-    # 扫光线之下（见 _vertical_before_clip_rect 注释）。
-    before_clip = None
-    if (
-        band is not None
-        and style.decoration_kind == "glow"
-        and _glow_radius(style, after=False) > 0
-    ):
-        before_clip = _vertical_before_clip_rect(
-            layout.column_x,
-            layout.cell_w,
-            band[1],
-            _vertical_before_clip_pad(
-                style.stroke_width_px,
-                stroke2_width,
-                _glow_radius(style, after=False),
-                style.shadow_offset_x,
-                style.shadow_offset_y,
-            ),
-        )
-    painter.save()
-    try:
-        if before_clip is not None:
-            painter.setClipRect(before_clip)
-        _paint_text_layer_stack(
-            painter,
-            layout.text_path,
-            layout.line_rect,
-            layout.colors.before,
-            style,
-            stroke_width=style.stroke_width_px,
-            stroke2_width=stroke2_width,
-            shadow_dx=style.shadow_offset_x,
-            shadow_dy=style.shadow_offset_y,
-            glow_radius=_glow_radius(style, after=False),
-        )
-    finally:
-        painter.restore()
-
-    # 「已唱」层：纵向裁剪带 [y_top, scan]
-    if band is not None:
-        y0, y_scan = band
-        pad = _vertical_after_clip_pad(style)
-        painter.save()
-        try:
-            painter.setClipRect(
-                _vertical_after_clip_rect(layout.column_x, layout.cell_w, y0, y_scan, pad)
-            )
-            _paint_text_layer_stack(
-                painter,
-                layout.text_path,
-                layout.line_rect,
-                layout.colors.after,
-                style,
-                stroke_width=style.stroke_width_px,
-                stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
-                glow_radius=_glow_radius(style, after=True),
-            )
-        finally:
-            painter.restore()
-
-    # 注音：排在基字列右侧、上→下扫光
-    if layout.active_rubies:
-        ruby_font = _build_ruby_font(style)
-        _paint_rubies_vertical(
-            painter,
-            ruby_font,
-            QFontMetrics(ruby_font),
-            line,
-            layout.intervals,
-            layout.cells,
-            layout.column_x,
-            layout.cell_w,
-            t_ms,
-            layout.active_rubies,
-            style,
-        )
 
 
 def _vertical_after_clip_pad(style: Style) -> int:

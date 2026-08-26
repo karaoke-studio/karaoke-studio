@@ -1700,6 +1700,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
     delegated_names = {
         "_VerticalLineLayout",
         "_layout_vertical_line",
+        "_paint_line_vertical_direct_with_ports",
         "_paint_line_vertical_layers_with_ports",
         "_paint_rubies_vertical_with_ports",
         "_resolve_vertical_columns",
@@ -1742,6 +1743,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     adapter_targets = {
+        "_paint_line_vertical_direct": "_paint_line_vertical_direct_with_ports",
         "_paint_rubies_vertical": "_paint_rubies_vertical_with_ports",
     }
     for adapter_name, target_name in adapter_targets.items():
@@ -1778,6 +1780,7 @@ def test_vertical_layout_has_one_render_owner() -> None:
     assert {
         "VerticalRubyPorts",
         "VerticalRubyWipeSegment",
+        "paint_line_vertical_direct",
         "paint_rubies_vertical",
         "vertical_ruby_layers",
         "vertical_ruby_path_and_wipe",
