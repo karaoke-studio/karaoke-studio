@@ -156,9 +156,6 @@
 </tr>
 </table>
 
-<sub>📌 截图待补充，文件名与拍摄要求见 <a href="assets/SCREENSHOTS.md"><code>assets/SCREENSHOTS.md</code></a>。<br/>
-<i>Screenshots pending — see <code>assets/SCREENSHOTS.md</code> for the shot list.</i></sub>
-
 </div>
 
 <!-- ───────────────────────────── 功能 ───────────────────────────── -->
@@ -379,7 +376,7 @@ The script verifies deps, builds and smoke-tests the Direct2D renderer sidecar, 
 <img src="https://img.shields.io/badge/PyInstaller-Build-3670A0?style=flat-square" />
 <img src="https://img.shields.io/badge/pytest-CI-43B581?style=flat-square" />
 
-<br/><br/>
+<br/>
 
 <sub>以上仅为代表性依赖；完整清单以 <code>krok_helper/lyrics_timing/requirements*.txt</code> 与 <code>requirements-dev.txt</code> 为准。<br/>
 <i>Representative dependencies only—see <code>krok_helper/lyrics_timing/requirements*.txt</code> and <code>requirements-dev.txt</code> for the full list.</i></sub>
@@ -495,8 +492,8 @@ this repo only bumps the gitlink.
 </tr>
 </table>
 
-<sub>提交前请运行 <code>python -m pytest tests\</code>；用户可见的字符串（界面文案 / 更新日志 / 发布说明）一律用中文。更多约定见 <a href="AGENTS.md"><code>AGENTS.md</code></a>。<br/>
-Run <code>python -m pytest tests\</code> before opening a PR. All user-facing strings are Chinese; see <code>AGENTS.md</code> for the full conventions.</sub>
+<sub>提交前请运行 <code>python -m pytest tests</code>；用户可见的字符串（界面文案 / 更新日志 / 发布说明）一律用中文。更多约定见 <a href="AGENTS.md"><code>AGENTS.md</code></a>。<br/>
+Run <code>python -m pytest tests</code> before opening a PR. All user-facing strings are Chinese; see <code>AGENTS.md</code> for the full conventions.</sub>
 
 <!-- ───────────────────────────── 致谢 ───────────────────────────── -->
 
