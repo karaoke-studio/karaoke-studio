@@ -2228,6 +2228,8 @@ def test_horizontal_layer_policy_has_one_painter_free_owner() -> None:
         "inflate_rect",
         "karaoke_glow_states_differ",
         "karaoke_state_uses_image",
+        "paint_glyph_run_after_glow_direct",
+        "paint_glyph_run_direct",
         "relative_fill_rect_signature",
     }
     imported = {

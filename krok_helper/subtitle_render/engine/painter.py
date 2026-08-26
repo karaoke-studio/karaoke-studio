@@ -532,6 +532,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     n3_transformed_wipe_span as _n3_transformed_wipe_span,
     n3_ruby_fill_rect as _n3_ruby_fill_rect,
     paint_ruby_karaoke_fragment as _paint_horizontal_ruby_karaoke_fragment,
+    paint_glyph_run_after_glow_direct as _paint_glyph_run_after_glow_direct,
+    paint_glyph_run_direct as _paint_glyph_run_direct,
     paint_bitmap_guide_glyph as _paint_horizontal_bitmap_guide_glyph,
     paint_bitmap_guide_glyphs as _paint_horizontal_bitmap_guide_glyphs,
     paint_bitmap_guide_transition_glyph as _paint_horizontal_bitmap_guide_transition_glyph,
@@ -3587,70 +3589,6 @@ def _BitmapGuideLayer(
         ports=_BITMAP_GUIDE_PORTS,
         z_index=z_index,
         scope=scope,
-    )
-
-
-def _paint_glyph_run_direct(
-    painter: QPainter,
-    glyphs: list[_GlyphLayout],
-    baseline_y: int,
-    *,
-    after: bool,
-    fill_rect: QRectF | None = None,
-    draw_glow: bool | None = None,
-) -> None:
-    role_style = glyphs[0].style
-    colors = _effective_karaoke_colors(role_style)
-    state = colors.after if after else colors.before
-    path = _glyph_run_path(glyphs, baseline_y)
-    rect = _glyph_run_rect(glyphs, baseline_y)
-    if draw_glow is None:
-        draw_glow = not (after and role_style.decoration_kind == "glow")
-    _paint_text_layer_stack(
-        painter,
-        path,
-        rect,
-        state,
-        role_style,
-        stroke_width=role_style.stroke_width_px,
-        stroke2_width=role_style.stroke2_width_px,
-        shadow_dx=role_style.shadow_offset_x,
-        shadow_dy=role_style.shadow_offset_y,
-        glow_radius=_glow_radius(role_style, after=after),
-        draw_glow=draw_glow,
-        fill_rect=fill_rect,
-    )
-
-
-def _paint_glyph_run_after_glow_direct(
-    painter: QPainter,
-    glyphs: list[_GlyphLayout],
-    baseline_y: int,
-    band: tuple[int, int],
-    *,
-    rtl: bool,
-    complete: bool,
-    fill_rect: QRectF | None = None,
-) -> None:
-    role_style = glyphs[0].style
-    colors = _effective_karaoke_colors(role_style)
-    path = _glyph_run_path(glyphs, baseline_y)
-    rect = _glyph_run_rect(glyphs, baseline_y)
-    pad = _glow_extent(
-        role_style.stroke_width_px,
-        role_style.stroke2_width_px,
-        _glow_radius(role_style, after=True),
-    )
-    _paint_glow_path(
-        painter,
-        path,
-        colors.after.shadow,
-        fill_rect if fill_rect is not None else rect,
-        _glow_radius(role_style, after=True),
-        role_style.stroke_width_px,
-        role_style.stroke2_width_px,
-        source_clip=_after_glow_source_clip_rect(band, rect, pad, rtl, complete),
-        concentration_level=_glow_concentration_level(role_style),
     )
 
 

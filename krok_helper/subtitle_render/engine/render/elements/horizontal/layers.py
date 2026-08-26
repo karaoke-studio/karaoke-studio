@@ -22,6 +22,8 @@ from krok_helper.subtitle_render.engine.render.effects import (
     glow_radius,
     karaoke_state_signature,
     main_stroke2_width,
+    paint_glow_path,
+    paint_text_layer_stack,
     text_visual_padding,
 )
 from krok_helper.subtitle_render.engine.guide import (
@@ -45,6 +47,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     bitmap_guide_anchor_descent,
     bitmap_guide_glyphs,
     glyph_is_bitmap_guide,
+    glyph_run_path,
     glyph_run_rect,
     n3_main_fill_rect,
     text_glyph_runs,
@@ -142,6 +145,80 @@ def horizontal_before_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
         -1_000_000.0,
         1_000_000.0,
         2_000_000.0,
+    )
+
+
+def paint_glyph_run_direct(
+    painter: QPainter,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    *,
+    after: bool,
+    fill_rect: QRectF | None = None,
+    draw_glow: bool | None = None,
+) -> None:
+    """Paint one horizontal glyph run without the layer cache."""
+
+    role_style = glyphs[0].style
+    colors = effective_karaoke_colors(role_style)
+    state = colors.after if after else colors.before
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = glyph_run_rect(glyphs, baseline_y)
+    if draw_glow is None:
+        draw_glow = not (after and role_style.decoration_kind == "glow")
+    paint_text_layer_stack(
+        painter,
+        path,
+        rect,
+        state,
+        role_style,
+        stroke_width=role_style.stroke_width_px,
+        stroke2_width=role_style.stroke2_width_px,
+        shadow_dx=role_style.shadow_offset_x,
+        shadow_dy=role_style.shadow_offset_y,
+        glow_radius=glow_radius(role_style, after=after),
+        draw_glow=draw_glow,
+        fill_rect=fill_rect,
+    )
+
+
+def paint_glyph_run_after_glow_direct(
+    painter: QPainter,
+    glyphs: list[GlyphLayout],
+    baseline_y: int,
+    band: tuple[int, int],
+    *,
+    rtl: bool,
+    complete: bool,
+    fill_rect: QRectF | None = None,
+) -> None:
+    """Paint one after-glow from a source clipped at the karaoke front."""
+
+    role_style = glyphs[0].style
+    colors = effective_karaoke_colors(role_style)
+    path = glyph_run_path(glyphs, baseline_y)
+    rect = glyph_run_rect(glyphs, baseline_y)
+    pad = glow_extent(
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        glow_radius(role_style, after=True),
+    )
+    paint_glow_path(
+        painter,
+        path,
+        colors.after.shadow,
+        fill_rect if fill_rect is not None else rect,
+        glow_radius(role_style, after=True),
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        source_clip=after_glow_source_clip_rect(
+            band,
+            rect,
+            pad,
+            rtl,
+            complete,
+        ),
+        concentration_level=glow_concentration_level(role_style),
     )
 
 
