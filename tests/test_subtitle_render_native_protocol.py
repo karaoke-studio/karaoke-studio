@@ -3068,6 +3068,8 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
                     print(json.dumps({{"ok": True, "event": "generation_cancelled", "generation": request.get("generation", 0)}}), flush=True)
                 elif command == "shutdown":
                     print(json.dumps({{"ok": True, "event": "shutdown"}}), flush=True)
+                    if mode == "slow_shutdown":
+                        time.sleep(0.6)
                     break
                 else:
                     print(json.dumps({{"ok": False, "event": "error", "error": "bad command"}}), flush=True)
@@ -3555,6 +3557,54 @@ def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):
 
     renderer.close()
     assert renderer.is_running is False
+
+
+def test_native_renderer_process_lets_slow_sidecar_exit_before_terminating(tmp_path):
+    """应答 shutdown 后还要给 sidecar 析构的时间，不能立刻 TerminateProcess。
+
+    真机上 sidecar 是先回 ``shutdown`` 再析构 GPU worker 池的，worker 线程此刻
+    可能正持着 QSharedMemory 的系统信号量。此时强杀会把这把跨进程锁永久留在
+    「已占用」，本进程随后的 detach 无限期阻塞，导出在最后一帧后死锁。
+    """
+
+    sidecar = _write_fake_sidecar(tmp_path, mode="slow_shutdown")
+    renderer = NativeRendererProcess(
+        sidecar,
+        response_timeout_s=2.0,
+        startup_timeout_s=5.0,
+        close_timeout_s=5.0,
+    )
+
+    assert renderer.start()["event"] == "ready"
+    process = renderer._process  # noqa: SLF001
+    assert process is not None
+
+    renderer.close()
+
+    assert renderer.is_running is False
+    # 正常退出是 0；被 terminate 掉的话 Popen.terminate 会把退出码写成 1。
+    assert process.returncode == 0
+
+
+def test_native_renderer_process_terminates_sidecar_that_never_exits(tmp_path):
+    """反过来，赖着不退的 sidecar 仍要被强杀，close 不能挂住调用方。"""
+
+    sidecar = _write_fake_sidecar(tmp_path, mode="hang_after_ready")
+    renderer = NativeRendererProcess(
+        sidecar,
+        response_timeout_s=0.2,
+        startup_timeout_s=5.0,
+        close_timeout_s=0.2,
+    )
+
+    assert renderer.start()["event"] == "ready"
+    process = renderer._process  # noqa: SLF001
+    assert process is not None
+
+    renderer.close()
+
+    assert renderer.is_running is False
+    assert process.poll() is not None
 
 
 def test_native_renderer_process_uses_stage_specific_timeouts(tmp_path):

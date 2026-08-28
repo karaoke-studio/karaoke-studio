@@ -13,6 +13,7 @@ import pytest
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QColor, QImage
 
+from krok_helper.subtitle_render.native import backend as native_backend
 from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
@@ -113,6 +114,46 @@ def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():
     reader.close()
 
     assert reader._shared is None  # noqa: SLF001
+
+
+def test_shared_frame_reader_close_gives_up_on_blocked_detach():
+    """detach 卡死（sidecar 持锁被强杀）时 close 必须超时返回而不是拖死导出。"""
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockedSharedMemory:
+        def isAttached(self):
+            return True
+
+        def detach(self):
+            entered.set()
+            release.wait(30.0)
+
+    reader = SharedFrameRingReader("blocked-detach")
+    reader._shared = BlockedSharedMemory()  # noqa: SLF001
+
+    started = time.perf_counter()
+    reader.close(timeout_s=0.1)
+    elapsed = time.perf_counter() - started
+
+    try:
+        assert elapsed < 5.0
+        assert entered.wait(5.0)
+        assert reader._shared is None  # noqa: SLF001
+        # 放弃的映射由模块级列表钉住，否则 GC 析构 QSharedMemory 时会换个线程
+        # 把同一个死等重演一遍。
+        assert native_backend.abandoned_shared_memory_count() >= 1
+    finally:
+        release.set()
+
+    deadline = time.monotonic() + 5.0
+    while (
+        native_backend.abandoned_shared_memory_count() > 0
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    assert native_backend.abandoned_shared_memory_count() == 0
 
 
 def _renderer_path() -> Path:

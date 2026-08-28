@@ -454,6 +454,101 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert all(row["copies_per_frame"] == 4 for row in frame_diagnostics)
 
 
+def test_iter_gpu_rgba_frames_detaches_reader_before_sidecar_shutdown(
+    monkeypatch,
+) -> None:
+    """读端必须在 sidecar 还活着时 detach。
+
+    倒过来的话，sidecar 一旦被强杀在持锁写帧的瞬间，Qt 的跨进程信号量就永久
+    停在「已占用」，随后的 ``QSharedMemory::detach()`` 死等，导出线程走不到
+    ``ffmpeg.stdin.close()``，成片在最后一帧后卡死。
+    """
+
+    order: list[str] = []
+
+    class _OrderedReader(_FakeGpuRingReader):
+        def close(self):
+            if self.closed:
+                return
+            order.append("reader")
+            super().close()
+
+    class _OrderedRenderer(_FakeGpuRendererProcess):
+        def __exit__(self, *_exc):
+            order.append("sidecar")
+            self.close()
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _OrderedRenderer)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _OrderedReader)
+
+    frames = list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=2,
+            force_warp=True,
+        )
+    )
+
+    assert len(frames) == 2
+    assert order == ["reader", "sidecar"]
+    assert _FakeGpuRingReader.instances[-1].closed is True
+
+
+def test_iter_gpu_rgba_frames_detaches_reader_before_shutdown_on_cancel(
+    monkeypatch,
+) -> None:
+    """取消导出走的是异常路径，读端同样要先于 sidecar 关闭 detach。"""
+
+    order: list[str] = []
+
+    class _OrderedReader(_FakeGpuRingReader):
+        def close(self):
+            if self.closed:
+                return
+            order.append("reader")
+            super().close()
+
+    class _OrderedRenderer(_FakeGpuRendererProcess):
+        def __exit__(self, *_exc):
+            order.append("sidecar")
+            self.close()
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _OrderedRenderer)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _OrderedReader)
+    seen = 0
+
+    def _should_cancel() -> bool:
+        nonlocal seen
+        seen += 1
+        return seen > 2
+
+    with pytest.raises(ExportCancelled):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=2,
+                total_frames=8,
+                force_warp=True,
+                should_cancel=_should_cancel,
+            )
+        )
+
+    assert order == ["reader", "sidecar"]
+
+
 def test_iter_gpu_rgba_frames_wraps_python_frame_allocation_oom(monkeypatch) -> None:
     class _OomImage:
         def isNull(self):

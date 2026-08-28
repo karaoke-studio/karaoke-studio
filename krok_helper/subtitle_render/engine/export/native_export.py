@@ -12,6 +12,7 @@ import os
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 from krok_helper.errors import ExportCancelled
 from krok_helper.subtitle_render.domain.timing import TimingTrack
@@ -37,6 +38,10 @@ _DEFAULT_GPU_EXPORT_CONFIGURE_TIMEOUT_S = 180.0
 # 显存预检：configure 后 usage×growth 预估帧阶段峰值（glow 池 / 字形增长），
 # 超过 budget 则降 worker 重配；单 worker 仍超且逼近 budget 时报错走 CPU 回退。
 _DEFAULT_GPU_EXPORT_VRAM_GROWTH = 2.0
+# sidecar 应答 shutdown 后还要析构 GPU worker 池（join 线程 + 拆 Direct2D 设备），
+# 4 worker / 4K 下 1s 明显不够。等不够就会 TerminateProcess，把 QSharedMemory 的
+# 系统信号量永久锁死，本进程 detach 随即无限期阻塞（见 backend.close 的说明）。
+_GPU_EXPORT_CLOSE_TIMEOUT_S = 5.0
 _GPU_EXPORT_VRAM_NEAR_BUDGET_RATIO = 0.9
 _GIB = 1024 * 1024 * 1024
 
@@ -222,7 +227,7 @@ def _configure_gpu_export_with_preflight(
             renderer_path,
             response_timeout_s=response_timeout_s,
             gpu_configure_timeout_s=configure_timeout_s,
-            close_timeout_s=1.0,
+            close_timeout_s=_GPU_EXPORT_CLOSE_TIMEOUT_S,
         )
         configure_invoked = False
         try:
@@ -599,6 +604,24 @@ def iter_native_rgba_frames_at_times(
             start_frame += count
 
 
+@contextmanager
+def _detach_reader_before_shutdown(
+    get_reader: Callable[[], SharedFrameRingReader | None],
+):
+    """在 sidecar 关闭之前先 detach 共享内存读端。
+
+    ``with A, B:`` 的退出顺序是 B 先于 A。趁 sidecar 还活着、跨进程锁协议还完整
+    时 detach，就绕开了「sidecar 先退出 → 系统信号量可能永久被占 → detach 死等」
+    这条路；``SharedFrameRingReader.close`` 是幂等的，外层兜底再调一次无副作用。
+    """
+    try:
+        yield
+    finally:
+        reader = get_reader()
+        if reader is not None:
+            reader.close()
+
+
 def iter_gpu_rgba_frames(
     track: TimingTrack,
     style: Style,
@@ -693,7 +716,7 @@ def iter_gpu_rgba_frames(
         logger=logger,
     )
     try:
-        with gpu_renderer as renderer:
+        with gpu_renderer as renderer, _detach_reader_before_shutdown(lambda: reader):
             if on_diagnostics is not None:
                 on_diagnostics(configured)
 

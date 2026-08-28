@@ -8,6 +8,7 @@ built or when the process fails.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import struct
@@ -33,6 +34,34 @@ _SHARED_FRAME_PIXEL_FORMATS = {
     2: "bgra8888_premultiplied",
     3: "bgra8888_premultiplied_bands",
 }
+# QSharedMemory::detach() 内部要拿 Qt 的系统信号量。sidecar 若在持锁写帧时被
+# TerminateProcess 杀掉，Win32 信号量不像互斥量那样有 abandoned 语义，锁会永久
+# 停在「已占用」，detach 于是无限期阻塞 —— 导出线程再也走不到 ffmpeg 的
+# stdin.close()，整单导出在最后一帧后死锁。超时后宁可漏掉这块映射（进程退出时
+# 由系统回收），也不能把导出卡死。
+_DEFAULT_SHM_DETACH_TIMEOUT_S = 5.0
+_ABANDONED_SHARED_MEMORY: list[Any] = []
+_ABANDONED_SHARED_MEMORY_LOCK = threading.Lock()
+
+_log = logging.getLogger(__name__)
+
+
+def shared_memory_detach_timeout_s() -> float:
+    """``KROK_SUBTITLE_SHM_DETACH_TIMEOUT_S`` 覆盖的 detach 等待上限（秒）。"""
+    raw = os.environ.get("KROK_SUBTITLE_SHM_DETACH_TIMEOUT_S")
+    if raw is None or not raw.strip():
+        return _DEFAULT_SHM_DETACH_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_SHM_DETACH_TIMEOUT_S
+    return value if value > 0 else _DEFAULT_SHM_DETACH_TIMEOUT_S
+
+
+def abandoned_shared_memory_count() -> int:
+    """detach 尚未返回的共享内存块数（含刚被放弃的那些，诊断用）。"""
+    with _ABANDONED_SHARED_MEMORY_LOCK:
+        return len(_ABANDONED_SHARED_MEMORY)
 
 
 def _sidecar_subprocess_kwargs(platform: str | None = None) -> dict[str, Any]:
@@ -115,19 +144,55 @@ class SharedFrameRingReader:
             )
         self._shared = shared
 
-    def close(self) -> None:
+    def close(self, *, timeout_s: float | None = None) -> None:
+        """detach 共享内存；detach 卡住时超时放弃，绝不阻塞调用方。
+
+        Qt 的 detach 要先拿跨进程系统信号量，sidecar 被强杀会把这把锁永久留在
+        「已占用」（见 ``_DEFAULT_SHM_DETACH_TIMEOUT_S`` 处的说明）。detach 因此
+        放到守护线程里做：超时就把 ``QSharedMemory`` 挂进模块级列表 —— 既让本次
+        导出继续收尾（关 ffmpeg stdin、封装成片），又保证 Python 不会在垃圾回收
+        时析构它、把 detach 的死等换个线程重演一遍。
+        """
         shared = self._shared
         self._shared = None
         if shared is None:
             return
-        try:
-            if shared.isAttached():
-                shared.detach()
-        except RuntimeError:
-            # During exceptional QApplication teardown Qt may delete the
-            # QSharedMemory wrapper before the preview worker reaches its
-            # finally block. Closing must remain idempotent in that order.
-            pass
+        timeout = (
+            shared_memory_detach_timeout_s()
+            if timeout_s is None
+            else max(float(timeout_s), 0.0)
+        )
+        detached = threading.Event()
+
+        def _detach() -> None:
+            try:
+                if shared.isAttached():
+                    shared.detach()
+            except RuntimeError:
+                # During exceptional QApplication teardown Qt may delete the
+                # QSharedMemory wrapper before the preview worker reaches its
+                # finally block. Closing must remain idempotent in that order.
+                pass
+            finally:
+                detached.set()
+                with _ABANDONED_SHARED_MEMORY_LOCK:
+                    if shared in _ABANDONED_SHARED_MEMORY:
+                        _ABANDONED_SHARED_MEMORY.remove(shared)
+
+        worker = threading.Thread(
+            target=_detach, name="native-shm-detach", daemon=True
+        )
+        with _ABANDONED_SHARED_MEMORY_LOCK:
+            _ABANDONED_SHARED_MEMORY.append(shared)
+        worker.start()
+        if detached.wait(timeout):
+            return
+        _log.warning(
+            "共享内存 %s 的 detach 超过 %.1fs 未返回（sidecar 可能持锁退出），"
+            "已放弃该映射以免阻塞导出收尾",
+            self.shm_key,
+            timeout,
+        )
 
     def __enter__(self) -> "SharedFrameRingReader":
         self.attach()
@@ -732,26 +797,46 @@ class NativeRendererProcess:
         pipe_threads = list(self._pipe_threads)
         try:
             if process.poll() is None:
-                self._send({"cmd": "shutdown"})
                 try:
-                    self._read_until_event("shutdown", timeout_s=self.close_timeout_s)
-                except NativeRendererError:
+                    self._send({"cmd": "shutdown"})
+                except (OSError, NativeRendererError):
+                    # sidecar 在 poll() 与写入之间退出：直接走下面的收尸流程。
                     pass
+                else:
+                    try:
+                        self._read_until_event(
+                            "shutdown", timeout_s=self.close_timeout_s
+                        )
+                    except NativeRendererError:
+                        pass
         finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=self.close_timeout_s)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=self.close_timeout_s)
-            else:
-                process.wait(timeout=0)
+            self._await_exit(process)
             self._process = None
             for thread in pipe_threads:
                 if thread is not threading.current_thread():
                     thread.join(timeout=self.close_timeout_s)
             self._pipe_threads.clear()
+
+    def _await_exit(self, process: subprocess.Popen[str]) -> None:
+        """先给 sidecar 自己退干净的时间，逼不得已才 terminate / kill。
+
+        sidecar 应答 ``shutdown`` 时进程还没退：它随后才析构 GPU worker 池，而
+        worker 线程此刻可能正持着 QSharedMemory 的系统信号量往共享内存写帧。
+        这一步若直接 TerminateProcess，那把跨进程锁就永久留在「已占用」状态，
+        本进程接下来的 ``QSharedMemory::detach()`` 会无限期阻塞 —— 导出线程走不
+        到 ``ffmpeg.stdin.close()``，ffmpeg 等不到 EOF，导出在最后一帧后死锁。
+        """
+        if process.poll() is not None:
+            process.wait(timeout=0)
+            return
+        for stop in (None, process.terminate, process.kill):
+            if stop is not None:
+                stop()
+            try:
+                process.wait(timeout=self.close_timeout_s)
+                return
+            except subprocess.TimeoutExpired:
+                continue
 
     def __enter__(self) -> "NativeRendererProcess":
         self.start()
