@@ -281,8 +281,11 @@ def _match_lines(
                     old_start + offset,
                     new_start + offset,
                     True,
-                    old_counts[old_texts[old_start + offset]] == 1
-                    and new_counts[new_texts[new_start + offset]] == 1,
+                    # 重复份数未增减时，等值块的顺序对齐是唯一的，与文本全等
+                    # 快速通道的按行号对齐同语义，可以信任；只有份数变化
+                    # （复制/删除了一份重复行）才无法分辨对应关系，拒绝猜测。
+                    old_counts[old_texts[old_start + offset]]
+                    == new_counts[new_texts[new_start + offset]],
                 )
                 for offset in range(old_end - old_start)
             )

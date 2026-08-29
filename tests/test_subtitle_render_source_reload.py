@@ -131,7 +131,8 @@ def test_inserted_line_keeps_overlays_on_exactly_matched_lines() -> None:
     assert [line.layout_index for line in result.track.lines] == [0, 0, 3]
 
 
-def test_structural_change_does_not_guess_between_duplicate_lyric_lines() -> None:
+def test_inserted_line_before_duplicate_lyric_lines_keeps_overlays() -> None:
+    """重复份数未变时等值块对齐可信任：他处插入新行不再让重复行整体拒绝。"""
     baseline = TimingTrack(
         lines=[
             TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500),
@@ -145,6 +146,84 @@ def test_structural_change_does_not_guess_between_duplicate_lyric_lines() -> Non
             TimingLine(chars=[TimingChar("x", 500)], end_ms=900),
             TimingLine(chars=[TimingChar("a", 1200)], end_ms=1700),
             TimingLine(chars=[TimingChar("a", 2200)], end_ms=2700),
+        ]
+    )
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.structure_changed is True
+    assert result.conflicts == ()
+    assert [line.layout_index for line in result.track.lines] == [0, 0, 4]
+    assert [line.chars[0].start_ms for line in result.track.lines] == [500, 1200, 2200]
+
+
+def test_unrelated_edit_keeps_overlays_on_stable_duplicate_sections() -> None:
+    """回归用户反馈：重复副歌段 + 他处一行文本修改 → 静默合并，不连片弹冲突。"""
+    baseline = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("i", 1000)], end_ms=1500),
+            TimingLine(chars=[TimingChar("a", 2000)], end_ms=2500),
+            TimingLine(chars=[TimingChar("b", 2600)], end_ms=3100),
+            TimingLine(chars=[TimingChar("m", 3200)], end_ms=3700),
+            TimingLine(chars=[TimingChar("a", 4000)], end_ms=4500),
+            TimingLine(chars=[TimingChar("b", 4600)], end_ms=5100),
+        ]
+    )
+    current = deepcopy(baseline)
+    current.lines[4].layout_index = 2
+    current.lines[5].display_end_override_ms = 9000
+    candidate = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("x", 1000)], end_ms=1500),
+            TimingLine(chars=[TimingChar("a", 2000)], end_ms=2500),
+            TimingLine(chars=[TimingChar("b", 2600)], end_ms=3100),
+            TimingLine(chars=[TimingChar("m", 3200)], end_ms=3700),
+            TimingLine(chars=[TimingChar("a", 4200)], end_ms=4700),
+            TimingLine(chars=[TimingChar("b", 4800)], end_ms=5300),
+        ]
+    )
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.structure_changed is True
+    assert result.conflicts == ()
+    assert result.track.lines[4].layout_index == 2
+    assert result.track.lines[5].display_end_override_ms == 9000
+    assert result.track.lines[4].chars[0].start_ms == 4200
+
+
+def test_deleted_duplicate_copy_still_requires_confirmation() -> None:
+    """删除了一份重复行后，幸存副本与被删副本无法分辨，仍需用户确认。"""
+    baseline = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500),
+            TimingLine(chars=[TimingChar("a", 2000)], end_ms=2500),
+        ]
+    )
+    current = deepcopy(baseline)
+    current.lines[0].layout_index = 4
+    candidate = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 1200)], end_ms=1700)]
+    )
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.structure_changed is True
+    assert any("无法唯一定位" in conflict for conflict in result.conflicts)
+    assert all(line.layout_index == 0 for line in result.track.lines)
+
+
+def test_added_duplicate_copy_still_requires_confirmation() -> None:
+    """新增了一份重复行时，新旧副本的对应关系无法分辨，仍需用户确认。"""
+    baseline = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500)]
+    )
+    current = deepcopy(baseline)
+    current.lines[0].layout_index = 4
+    candidate = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("a", 1000)], end_ms=1500),
+            TimingLine(chars=[TimingChar("a", 2000)], end_ms=2500),
         ]
     )
 
