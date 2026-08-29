@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from krok_helper.video_download.ytdlp_service import (
-    YOUTUBE_DISABLE_COOKIE_HINT,
     YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+    YOUTUBE_RELOAD_EXTRACTOR_ARGS,
     VideoDownloadError,
     YtDlpService,
 )
@@ -41,15 +43,21 @@ def test_youtube_fallback_uses_visionos_before_android_vr() -> None:
     assert "tv" not in args["youtube"]["player_client"]
 
 
-def test_youtube_download_forces_visionos_and_preserves_no_cookie_hint(monkeypatch) -> None:
+def test_youtube_reload_fallback_uses_cookie_compatible_clients() -> None:
+    args = YtDlpService()._build_python_extractor_args(YOUTUBE_RELOAD_EXTRACTOR_ARGS)
+
+    assert args == {"youtube": {"player_client": ["default", "web_embedded"]}}
+
+
+def test_youtube_download_preserves_reload_client_hint(monkeypatch) -> None:
     service = YtDlpService()
     monkeypatch.setattr(service, "_ensure_youtube_visionos_client", lambda: True)
 
     assert service._youtube_download_extractor_args_hint(YOUTUBE_URL, "") == YOUTUBE_FALLBACK_EXTRACTOR_ARGS
     assert service._youtube_download_extractor_args_hint(
         YOUTUBE_URL,
-        YOUTUBE_DISABLE_COOKIE_HINT,
-    ) == f"{YOUTUBE_FALLBACK_EXTRACTOR_ARGS}|{YOUTUBE_DISABLE_COOKIE_HINT}"
+        YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+    ) == YOUTUBE_RELOAD_EXTRACTOR_ARGS
     assert service._youtube_download_extractor_args_hint(BILIBILI_URL, "original") == "original"
 
 
@@ -69,27 +77,118 @@ def test_registers_visionos_client_for_stable_ytdlp() -> None:
             INNERTUBE_CLIENTS["visionos"] = original
 
 
-def test_extract_retry_drops_cookie_when_cookie_breaks_youtube_formats(monkeypatch) -> None:
+def test_returns_true_for_youtube_reload_error() -> None:
+    service = YtDlpService()
+
+    assert service._should_retry_youtube_reload(YOUTUBE_URL, "The page needs to be reloaded.") is True
+    assert service._should_retry_youtube_reload(YOUTUBE_URL, "Please reload this page.") is True
+    normalized = service._normalize_error_message(Exception("The page needs to be reloaded."))
+    assert service._should_retry_youtube_reload(YOUTUBE_URL, normalized) is True
+
+
+def test_youtube_reload_retry_is_limited_to_first_client_profile() -> None:
+    service = YtDlpService()
+
+    assert (
+        service._should_retry_youtube_reload(
+            YOUTUBE_URL,
+            "The page needs to be reloaded.",
+            extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+        )
+        is False
+    )
+    assert service._should_retry_youtube_reload(BILIBILI_URL, "The page needs to be reloaded.") is False
+
+
+def test_extract_reload_retry_preserves_cookie_and_client_hint(monkeypatch) -> None:
     service = YtDlpService()
     calls: list[tuple[str | None, str]] = []
 
     def fake_extract(_youtube_dl, url, cookie_file, *, extractor_args_hint="", allow_playlist=False):
         del _youtube_dl, url, allow_playlist
         calls.append((cookie_file, extractor_args_hint))
-        if cookie_file:
-            raise VideoDownloadError("当前清晰度不可用，请重新解析后选择其他格式。")
+        if not extractor_args_hint:
+            message = service._normalize_error_message(
+                Exception("ERROR: [youtube] abc: The page needs to be reloaded.")
+            )
+            raise VideoDownloadError(message)
         return {"title": "ok", "duration": 1, "formats": []}
 
     monkeypatch.setattr(service, "_extract_info_with_python_api", fake_extract)
-    monkeypatch.setattr(service, "_usable_cookie_file", lambda cookie_file: str(cookie_file or ""))
 
     raw_info, hint = service._extract_info_with_python_retry(object, YOUTUBE_URL, "cookies.txt")
 
     assert raw_info["title"] == "ok"
-    assert hint == f"{YOUTUBE_FALLBACK_EXTRACTOR_ARGS}|{YOUTUBE_DISABLE_COOKIE_HINT}"
+    assert hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS
     assert calls == [
         ("cookies.txt", ""),
-        (None, YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
+        ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
+    ]
+
+
+def test_extract_generic_fallback_never_drops_cookie(monkeypatch) -> None:
+    service = YtDlpService()
+    calls: list[tuple[str | None, str]] = []
+
+    def fake_extract(_youtube_dl, url, cookie_file, *, extractor_args_hint="", allow_playlist=False):
+        del _youtube_dl, url, allow_playlist
+        calls.append((cookie_file, extractor_args_hint))
+        if not extractor_args_hint:
+            raise VideoDownloadError("This video is not available")
+        return {"title": "ok", "duration": 1, "formats": []}
+
+    monkeypatch.setattr(service, "_extract_info_with_python_api", fake_extract)
+
+    raw_info, hint = service._extract_info_with_python_retry(object, YOUTUBE_URL, "cookies.txt")
+
+    assert raw_info["title"] == "ok"
+    assert hint == YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+    assert calls == [
+        ("cookies.txt", ""),
+        ("cookies.txt", YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
+    ]
+
+
+def test_extract_reload_retry_stops_after_one_client_switch(monkeypatch) -> None:
+    service = YtDlpService()
+    calls: list[tuple[str | None, str]] = []
+
+    def fake_extract(_youtube_dl, url, cookie_file, *, extractor_args_hint="", allow_playlist=False):
+        del _youtube_dl, url, allow_playlist
+        calls.append((cookie_file, extractor_args_hint))
+        raise VideoDownloadError("The page needs to be reloaded.")
+
+    monkeypatch.setattr(service, "_extract_info_with_python_api", fake_extract)
+
+    with pytest.raises(VideoDownloadError, match="page needs to be reloaded"):
+        service._extract_info_with_python_retry(object, YOUTUBE_URL, "cookies.txt")
+
+    assert calls == [
+        ("cookies.txt", ""),
+        ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
+    ]
+
+
+def test_cli_reload_retry_preserves_cookie_and_client_hint(monkeypatch) -> None:
+    service = YtDlpService()
+    calls: list[tuple[str | None, str]] = []
+
+    def fake_extract(url, cookie_file, *, extractor_args_hint="", allow_playlist=False):
+        del url, allow_playlist
+        calls.append((cookie_file, extractor_args_hint))
+        if not extractor_args_hint:
+            raise VideoDownloadError("The page needs to be reloaded.")
+        return {"title": "ok", "duration": 1, "formats": []}
+
+    monkeypatch.setattr(service, "_extract_info_with_cli", fake_extract)
+
+    raw_info, hint = service._extract_info_with_cli_retry(YOUTUBE_URL, "cookies.txt")
+
+    assert raw_info["title"] == "ok"
+    assert hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS
+    assert calls == [
+        ("cookies.txt", ""),
+        ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
     ]
 
 

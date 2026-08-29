@@ -40,8 +40,7 @@ from .format_parser import FormatParser
 
 WINDOWS_INVALID_FILENAME_PATTERN = re.compile(r'[\\/:*?"<>|]+')
 YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=visionos,android_vr,web"
-YOUTUBE_DISABLE_COOKIE_HINT = "no_cookie"
-YOUTUBE_HINT_SEPARATOR = "|"
+YOUTUBE_RELOAD_EXTRACTOR_ARGS = "youtube:player_client=default,web_embedded"
 
 # ── B 站海外线路的抗断流参数 ───────────────────────────────────────────────
 # B 站分给海外客户端的 upos CDN 会间歇性卡死单条 TCP 连接。整段视频只用一条连接
@@ -469,45 +468,27 @@ class YtDlpService:
         try:
             return self._extract_info_with_python_api(youtube_dl, url, cookie_file, allow_playlist=allow_playlist), ""
         except VideoDownloadError as exc:
-            if self._should_retry_youtube_with_fallback(url, str(exc)):
-                try:
-                    return (
-                        self._extract_info_with_python_api(
-                            youtube_dl,
-                            url,
-                            cookie_file,
-                            extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
-                            allow_playlist=allow_playlist,
-                        ),
-                        YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
-                    )
-                except VideoDownloadError as fallback_exc:
-                    if self._usable_cookie_file(cookie_file) and self._should_retry_youtube_with_fallback(
-                        url,
-                        str(fallback_exc),
-                    ):
-                        no_cookie_hint = self._with_no_cookie_hint(YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
-                        return (
-                            self._extract_info_with_python_api(
-                                youtube_dl,
-                                url,
-                                None,
-                                extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
-                                allow_playlist=allow_playlist,
-                            ),
-                            no_cookie_hint,
-                        )
-                    raise
-            if self._usable_cookie_file(cookie_file) and self._should_retry_youtube_without_cookies(url, str(exc)):
+            if self._should_retry_youtube_reload(url, str(exc)):
                 return (
                     self._extract_info_with_python_api(
                         youtube_dl,
                         url,
-                        None,
+                        cookie_file,
+                        extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                        allow_playlist=allow_playlist,
+                    ),
+                    YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                )
+            if self._should_retry_youtube_with_fallback(url, str(exc)):
+                return (
+                    self._extract_info_with_python_api(
+                        youtube_dl,
+                        url,
+                        cookie_file,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                         allow_playlist=allow_playlist,
                     ),
-                    self._with_no_cookie_hint(YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
+                    YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                 )
             raise
 
@@ -527,7 +508,7 @@ class YtDlpService:
             "skip_download": True,
             "logger": _QuietYtDlpLogger(),
         }
-        usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(cookie_file)
+        usable_cookie_file = self._usable_cookie_file(cookie_file)
         if usable_cookie_file:
             ydl_opts["cookiefile"] = usable_cookie_file
         if extractor_args_hint:
@@ -552,42 +533,25 @@ class YtDlpService:
         try:
             return self._extract_info_with_cli(url, cookie_file, allow_playlist=allow_playlist), ""
         except VideoDownloadError as exc:
-            if self._should_retry_youtube_with_fallback(url, str(exc)):
-                try:
-                    return (
-                        self._extract_info_with_cli(
-                            url,
-                            cookie_file,
-                            extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
-                            allow_playlist=allow_playlist,
-                        ),
-                        YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
-                    )
-                except VideoDownloadError as fallback_exc:
-                    if self._usable_cookie_file(cookie_file) and self._should_retry_youtube_with_fallback(
-                        url,
-                        str(fallback_exc),
-                    ):
-                        no_cookie_hint = self._with_no_cookie_hint(YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
-                        return (
-                            self._extract_info_with_cli(
-                                url,
-                                None,
-                                extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
-                                allow_playlist=allow_playlist,
-                            ),
-                            no_cookie_hint,
-                        )
-                    raise
-            if self._usable_cookie_file(cookie_file) and self._should_retry_youtube_without_cookies(url, str(exc)):
+            if self._should_retry_youtube_reload(url, str(exc)):
                 return (
                     self._extract_info_with_cli(
                         url,
-                        None,
+                        cookie_file,
+                        extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                        allow_playlist=allow_playlist,
+                    ),
+                    YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                )
+            if self._should_retry_youtube_with_fallback(url, str(exc)):
+                return (
+                    self._extract_info_with_cli(
+                        url,
+                        cookie_file,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                         allow_playlist=allow_playlist,
                     ),
-                    self._with_no_cookie_hint(YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
+                    YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                 )
             raise
 
@@ -608,9 +572,8 @@ class YtDlpService:
             "--no-update",
             url,
         ]
-        stripped_extractor_args_hint = self._strip_hint_flags(extractor_args_hint)
-        if stripped_extractor_args_hint:
-            command[1:1] = ["--extractor-args", stripped_extractor_args_hint]
+        if extractor_args_hint:
+            command[1:1] = ["--extractor-args", extractor_args_hint]
         usable_cookie_file = self._usable_cookie_file(cookie_file)
         if usable_cookie_file:
             command[1:1] = ["--cookies", usable_cookie_file]
@@ -730,7 +693,7 @@ class YtDlpService:
         ffmpeg_location = self._configured_ffmpeg_location()
         if ffmpeg_location:
             ydl_opts["ffmpeg_location"] = ffmpeg_location
-        usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(options.cookie_file)
+        usable_cookie_file = self._usable_cookie_file(options.cookie_file)
         if usable_cookie_file:
             ydl_opts["cookiefile"] = usable_cookie_file
         proxy_url = proxy_url_for_app_settings(self._settings())
@@ -834,9 +797,8 @@ class YtDlpService:
                 "%(progress.fragment_index)s|%(progress.fragment_count)s"
             ),
         ]
-        stripped_extractor_args_hint = self._strip_hint_flags(extractor_args_hint)
-        if stripped_extractor_args_hint:
-            command.extend(["--extractor-args", stripped_extractor_args_hint])
+        if extractor_args_hint:
+            command.extend(["--extractor-args", extractor_args_hint])
         if options.download_thumbnail:
             command.append("--write-thumbnail")
         if options.download_subtitle:
@@ -846,7 +808,7 @@ class YtDlpService:
         ffmpeg_location = self._configured_ffmpeg_location()
         if ffmpeg_location:
             command.extend(["--ffmpeg-location", ffmpeg_location])
-        usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(options.cookie_file)
+        usable_cookie_file = self._usable_cookie_file(options.cookie_file)
         if usable_cookie_file:
             command.extend(["--cookies", usable_cookie_file])
         command.extend(proxy_cli_args_for_app_settings(self._settings()))
@@ -1669,16 +1631,20 @@ class YtDlpService:
         return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     def _build_python_extractor_args(self, extractor_args_hint: str) -> dict[str, dict[str, list[str]]]:
-        if self._strip_hint_flags(extractor_args_hint) == YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
+        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
+            return {"youtube": {"player_client": ["default", "web_embedded"]}}
+        if extractor_args_hint == YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
             return {"youtube": {"player_client": ["visionos", "android_vr", "web"]}}
         return {}
 
     def _youtube_download_extractor_args_hint(self, url: str, extractor_args_hint: str) -> str:
-        """Use a GVS-compatible client while preserving the no-cookie parse decision."""
-        if self.detect_source(url) != SOURCE_YOUTUBE or not self._ensure_youtube_visionos_client():
+        """Keep a successful reload client; otherwise use a GVS-compatible client."""
+        if self.detect_source(url) != SOURCE_YOUTUBE:
             return extractor_args_hint
-        if self._hint_disables_cookies(extractor_args_hint):
-            return self._with_no_cookie_hint(YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
+        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
+            return extractor_args_hint
+        if not self._ensure_youtube_visionos_client():
+            return extractor_args_hint
         return YOUTUBE_FALLBACK_EXTRACTOR_ARGS
 
     def _ensure_youtube_visionos_client(self) -> bool:
@@ -1720,19 +1686,22 @@ class YtDlpService:
         INNERTUBE_CLIENTS["visionos"] = visionos
         return True
 
-    def _strip_hint_flags(self, extractor_args_hint: str) -> str:
-        return YOUTUBE_HINT_SEPARATOR.join(
-            part
-            for part in extractor_args_hint.split(YOUTUBE_HINT_SEPARATOR)
-            if part and part != YOUTUBE_DISABLE_COOKIE_HINT
+    def _should_retry_youtube_reload(
+        self,
+        url: str,
+        message: str,
+        extractor_args_hint: str = "",
+    ) -> bool:
+        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
+            return False
+        if self.detect_source(url) != SOURCE_YOUTUBE:
+            return False
+        lower = message.lower()
+        return (
+            "the page needs to be reloaded" in lower
+            or "please reload this page" in lower
+            or "YouTube 播放客户端返回临时错误" in message
         )
-
-    def _with_no_cookie_hint(self, extractor_args_hint: str) -> str:
-        stripped = self._strip_hint_flags(extractor_args_hint)
-        return YOUTUBE_HINT_SEPARATOR.join(part for part in (stripped, YOUTUBE_DISABLE_COOKIE_HINT) if part)
-
-    def _hint_disables_cookies(self, extractor_args_hint: str) -> bool:
-        return YOUTUBE_DISABLE_COOKIE_HINT in extractor_args_hint.split(YOUTUBE_HINT_SEPARATOR)
 
     def _should_retry_youtube_with_fallback(
         self,
@@ -1740,7 +1709,7 @@ class YtDlpService:
         message: str,
         extractor_args_hint: str = "",
     ) -> bool:
-        if self._strip_hint_flags(extractor_args_hint) == YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
+        if extractor_args_hint == YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
             return False
         if self.detect_source(url) != SOURCE_YOUTUBE:
             return False
@@ -1757,17 +1726,6 @@ class YtDlpService:
             or "空文件" in message
             or "机器人校验" in message
             or "访问被拒绝" in message
-        )
-
-    def _should_retry_youtube_without_cookies(self, url: str, message: str) -> bool:
-        if self.detect_source(url) != SOURCE_YOUTUBE:
-            return False
-        lower = message.lower()
-        return (
-            "requested format is not available" in lower
-            or "当前清晰度不可用" in message
-            or "video is not available" in lower
-            or "video is unavailable" in lower
         )
 
     def _normalize_error_message(self, exc: Exception) -> str:
@@ -1789,6 +1747,8 @@ class YtDlpService:
                 "YouTube 返回了空文件，通常是当前清晰度/播放客户端不可用、Cookie 失效或 yt-dlp 版本偏旧。"
                 "已尝试兼容模式；如果仍失败，请刷新 Firefox Cookie、更新 yt-dlp，或换一个清晰度重试。"
             )
+        if "the page needs to be reloaded" in lower or "please reload this page" in lower:
+            return "YouTube 播放客户端返回临时错误，已保留登录状态并切换客户端重试，请稍后再试。"
         if "not a bot" in lower:
             return "YouTube 触发了机器人校验，已尝试兼容模式；如果仍失败，请稍后重试。"
         if "sign in to confirm your age" in lower or "login required" in lower:
