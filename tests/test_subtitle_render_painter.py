@@ -723,7 +723,14 @@ def test_signal_lits_default_off_leaves_early_frame_unchanged(qapp):
     img = _blank(120, 80)
     baseline = _pixel_hash(img)
 
-    paint_frame(img, _track(), 900, Style(line_lead_in_ms=0))
+    paint_frame(img, _track(), 900, Style(
+     entry_anim="none",
+        exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        karaoke_anim="inherit",
+line_lead_in_ms=0))
 
     assert _pixel_hash(img) == baseline
 
@@ -731,6 +738,12 @@ def test_signal_lits_default_off_leaves_early_frame_unchanged(qapp):
 def test_signal_lits_render_during_signal_window(qapp):
     img = _blank(120, 80)
     style = Style(
+        entry_anim="none",
+        exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        karaoke_anim="inherit",
         font_size_px=20,
         stroke_width_px=9,
         stroke2_width_px=0,
@@ -801,6 +814,12 @@ def test_frame_vertical_bounds_cover_signal_only_window(qapp):
 def test_signal_lits_extend_the_lyric_text_window(qapp):
     img = _blank(120, 80)
     style = Style(
+        entry_anim="none",
+        exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        karaoke_anim="inherit",
         font_size_px=20,
         line_y_margin_px=10,
         dual_line_layout=False,
@@ -2335,6 +2354,8 @@ def test_inline_role_utopia_exit_handles_multi_kanji_ruby_group(qapp):
         ],
     )
     base = Style(
+        entry_anim="none",
+        karaoke_anim="inherit",
         font_family="Arial",
         font_family_latin="Arial",
         font_size_px=72,
@@ -3525,6 +3546,7 @@ def test_after_stroke_clip_does_not_bleed_past_scanline(qapp):
         shadow=PaintFill(color="#000000"),
     )
     style = Style(
+        karaoke_anim="inherit",
         font_size_px=110,
         line_y_position="center",
         stroke_width_px=18,
@@ -3629,7 +3651,9 @@ def test_horizontal_ruby_glow_stays_below_solid_text_layers(qapp, monkeypatch):
             track,
             track.lines[0],
             1500,
-            Style(decoration_kind="glow", line_y_position="center"),
+            Style(
+                karaoke_anim="inherit",
+decoration_kind="glow", line_y_position="center"),
         )
     finally:
         painter.end()
@@ -4207,6 +4231,7 @@ def test_explicit_timed_space_has_layout_time_but_no_wipe_geometry(qapp):
     )
     line = track.lines[0]
     style = Style(
+        karaoke_anim="inherit",
         font_size_px=100,
         stroke_width_px=15,
         stroke2_width_px=5,
@@ -4236,6 +4261,7 @@ def test_explicit_timed_space_has_layout_time_but_no_wipe_geometry(qapp):
 def test_completed_glyph_glow_does_not_wait_for_timed_space(qapp):
     track = parse_nicokara_lrc("[00:01:00]週[00:01:30] [00:01:70]バ[00:02:00]\n")
     style = Style(
+        karaoke_anim="inherit",
         font_size_px=100,
         stroke_width_px=15,
         stroke2_width_px=5,
@@ -4272,6 +4298,7 @@ def test_completed_glyph_glow_does_not_wait_for_timed_space(qapp):
 def test_completed_glyph_shadow_does_not_wait_for_timed_space(qapp):
     track = parse_nicokara_lrc("[00:01:00]週[00:01:30] [00:01:70]バ[00:02:00]\n")
     style = Style(
+        karaoke_anim="inherit",
         font_size_px=100,
         stroke_width_px=15,
         stroke2_width_px=5,
@@ -6723,7 +6750,14 @@ def test_paint_frame_utopia_exit_does_not_reappear_after_flying_out(qapp):
     blank = _blank()
     plain = _blank()
     utopia = _blank()
-    base = Style(line_y_position="center", line_tail_ms=1100, exit_fade_ms=1000)
+    base = Style(
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="inherit",
+        line_y_position="center",
+        line_tail_ms=1100,
+        exit_fade_ms=1000,
+    )
 
     paint_frame(plain, track, 3599, base)
     paint_frame(utopia, track, 3599, replace(base, exit_anim="utopia"))
@@ -7790,6 +7824,7 @@ def _img_rows_rgba(image: QImage) -> np.ndarray:
 def test_horizontal_layer_path_matches_direct_within_rounding(qapp, monkeypatch, t_ms):
     track = _track()
     style = Style(
+        karaoke_anim="inherit",
         font_size_px=48,
         line_lead_in_ms=0,
         stroke_width_px=4,
@@ -8594,9 +8629,9 @@ def test_style_dict_roundtrip_keeps_sync_entry():
     assert restored.allow_entry_exit_animation_overlap is False
     assert restored.sync_each_page is True
     assert restored.auto_fill_section_time is False
-    assert style_from_dict({}).sync_entry is False
+    assert style_from_dict({}).sync_entry is True
     assert style_from_dict({}).allow_entry_exit_animation_overlap is False
-    assert style_from_dict({}).sync_each_page is False
+    assert style_from_dict({}).sync_each_page is True
     assert style_from_dict({}).auto_fill_section_time is True
 
 
@@ -9931,7 +9966,13 @@ def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
         ),
     )
     style = replace(
-        Style(),
+        Style(
+            entry_anim="none",
+        exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        ),
         auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
@@ -9986,7 +10027,13 @@ def test_overlap_mode_only_drops_avoidance_and_keeps_the_timing_pipeline(qapp):
         ),
     )
     style = replace(
-        Style(),
+        Style(
+            entry_anim="none",
+        exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        ),
         auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
@@ -10033,7 +10080,11 @@ def test_overlap_mode_computes_page_sync_identically(
         ),
     )
     style = replace(
-        Style(),
+        Style(
+            entry_anim="none",
+        exit_anim="none",
+        sync_each_page=False,
+        ),
         auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
@@ -10089,7 +10140,13 @@ def test_animation_guard_keeps_exit_floor_and_delays_full_coverage_entry(qapp):
         ),
     )
     plain = replace(
-        Style(),
+        Style(
+            sync_entry=False,
+            sync_ending=False,
+            sync_each_page=False,
+            entry_anim="none",
+            exit_anim="none",
+        ),
         auto_fill_section_time=False,
         allow_entry_exit_animation_overlap=True,
         line_lead_in_ms=1_800,
@@ -10602,6 +10659,7 @@ def test_page_sync_defaults_to_section_edges_and_can_run_on_every_page():
     section_edges = apply_constrained_page_sync(
         display_lines,
         Style(
+        sync_each_page=False,
             sync_entry=True,
             sync_ending=True,
             allow_inter_page_line_overlap=True,
@@ -10840,7 +10898,13 @@ def _protect_time_track():
         ),
     )
     style = replace(
-        Style(),
+        Style(
+            entry_anim="none",
+        exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        ),
         auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,
@@ -10997,7 +11061,11 @@ def test_page_sync_entry_reaches_shared_instant_when_room_allows(qapp):
         ),
     )
     base_style = replace(
-        Style(),
+        Style(
+            sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        ),
         auto_fill_section_time=False,
         line_lead_in_ms=1_800,
         line_tail_ms=1_000,

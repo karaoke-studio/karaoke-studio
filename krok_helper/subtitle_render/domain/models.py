@@ -730,8 +730,8 @@ class Style:
     """注音相对正文范围的排布（N3 ``RubyAlignment``）：``auto`` = 正文或注音全为
     英数时居中、否则均等分布；``center`` = 整组居中；``equal_space`` = 均等分布。"""
     ruby_stroke_width_px: Optional[int] = 10
-    ruby_stroke2_enabled: Optional[bool] = None
-    """注音描边 2 开关默认未设定（面板半选，跟随主文字开关）。"""
+    ruby_stroke2_enabled: Optional[bool] = True
+    """注音描边 2 开关；``None`` 为未设定（面板半选，跟随主文字开关）。"""
     ruby_stroke2_width_px: Optional[int] = 3
     ruby_latin_stroke_width_px: Optional[int] = None
     ruby_latin_stroke2_enabled: Optional[bool] = None
@@ -772,7 +772,7 @@ class Style:
     line_y_position: LineYPosition = "bottom"
     """``"top"`` / ``"center"`` / ``"bottom"`` —— 简单 vertical-anchor。"""
 
-    line_y_margin_px: int = 80
+    line_y_margin_px: int = 60
     """``line_y_position`` 为 ``"top"`` / ``"bottom"`` 时距离顶/底边的内边距。"""
 
     dual_line_layout: bool = True
@@ -782,7 +782,7 @@ class Style:
     """双行水平布局：``asymmetric`` 为上左下右，``center`` 为两行居中，
     ``per_row`` 为逐行独立对齐 + X/Y（对标 Sayatoo「布局」第一行 / 第二行）。"""
 
-    line_gap_px: int = 90
+    line_gap_px: int = 45
     """双行布局中两行主文字外框之间的间距，不包含 ruby 高度。"""
 
     line_alignments: list[HorizontalAlign] = field(
@@ -871,16 +871,16 @@ class Style:
     section_gap_ms: int = 4000
     """自动分段阈值：相邻两句演唱空隙（间奏）超过此值即开新段落。"""
 
-    sync_entry: bool = False
+    sync_entry: bool = True
     """同步入场：先取同步页最长延长候选，再逐个压缩实际碰撞的行。"""
 
-    sync_ending: bool = False
+    sync_ending: bool = True
     """同步退场：先取同步页最长延长候选，再逐个压缩实际碰撞的行。"""
 
     allow_entry_exit_animation_overlap: bool = False
     """允许相邻页面的入场和退场动画在时间上重叠。"""
 
-    sync_each_page: bool = False
+    sync_each_page: bool = True
     """每句同步：开启时每页同步；关闭时仅同步段首入场和段尾退场。"""
 
     auto_fill_section_time: bool = True
@@ -890,19 +890,19 @@ class Style:
     """段落结束行为：``hold`` 维持现状（按 N3 TopLong 挂到段末）；``clear`` 段末即
     清屏，字幕不拖进间奏。"""
 
-    entry_anim: EntryAnimation = "none"
+    entry_anim: EntryAnimation = "fade"
     """入场动画：none / fade / slide_in / rise / char_fade / char_drip / spin_flip / utopia。"""
 
     entry_lead_ms: int = 300
     """入场动画时长；不改变歌词填色时间，只影响显示窗口起点后的过渡。"""
 
-    exit_anim: ExitAnimation = "none"
+    exit_anim: ExitAnimation = "fade"
     """退场动画：none / fade / slide_out / rise / char_fade / char_drip / spin_flip / utopia。"""
 
     exit_fade_ms: int = 300
     """退场动画时长；在显示窗口结束前开始。"""
 
-    karaoke_anim: KaraokeAnimation = "inherit"
+    karaoke_anim: KaraokeAnimation = "utopia"
     """唱字动画：inherit（兼容旧 Utopia）/ none / utopia。"""
 
     # 指示灯（Sayatoo SignalsLits.sx：lit.* / signals.duration）

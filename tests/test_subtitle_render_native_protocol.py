@@ -3657,6 +3657,11 @@ def test_native_text_layer_cache_reuses_static_main_and_ruby_layers(tmp_path, mo
         ],
     )
     style = Style(
+        # 静态文字层缓存只对不动的字生效：出厂默认的入场淡入 + utopia 唱字动画会
+        # 让每帧都重算，这里校的是缓存本身，所以把动画钉成静态。
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="inherit",
         font_family="Arial",
         font_size_px=72,
         ruby_font_size_px=24,

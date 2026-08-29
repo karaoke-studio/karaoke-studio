@@ -176,12 +176,31 @@ def test_frame_analysis_aggregates_main_title_and_extra_bounds() -> None:
     ) == (0, 99)
 
 
+def _static_style(**changes) -> Style:
+    """条带 / 几何用例的基准样式：动画默认值不该左右这些断言。
+
+    出厂默认带入场淡入与 utopia 唱字动画，安全边必须覆盖动画行程，条带因此从
+    142px 涨到 358px（1080p）—— 校条带几何的用例先把动画钉死，测动画行程的用例
+    自己显式打开。
+    """
+
+    return Style(
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="inherit",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        **changes,
+    )
+
+
 def _job(tmp_path: Path, *, include_audio: bool = True) -> RenderJob:
     background = tmp_path / "bg.mp4"
     background.write_bytes(b"not-real-video")
     return RenderJob(
         track=_track(),
-        style=Style(font_size_px=24),
+        style=_static_style(font_size_px=24),
         background_video_path=background,
         output_path=tmp_path / "out.mp4",
         width=320,
@@ -475,7 +494,7 @@ def test_build_render_command_without_preview_keeps_single_output(tmp_path):
 
 
 def test_compute_subtitle_strip_returns_subband_for_centered_line(qapp, tmp_path):
-    job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
+    job = replace(_job(tmp_path), style=_static_style(font_size_px=24, line_y_position="center"))
     strip = _compute_subtitle_strip(job, 1000)
     assert strip is not None
     top, height = strip
@@ -486,7 +505,7 @@ def test_compute_subtitle_strip_returns_subband_for_centered_line(qapp, tmp_path
 
 
 def test_compute_subtitle_strip_uses_layer_bounds_without_alpha_scan(qapp, tmp_path, monkeypatch):
-    job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
+    job = replace(_job(tmp_path), style=_static_style(font_size_px=24, line_y_position="center"))
 
     def fail_paint_frame(*_args, **_kwargs):
         raise AssertionError("layer-bound path should not paint a full scratch frame")
@@ -496,7 +515,7 @@ def test_compute_subtitle_strip_uses_layer_bounds_without_alpha_scan(qapp, tmp_p
 
 
 def test_compute_subtitle_strip_uses_signal_layer_bounds_without_alpha_scan(qapp, tmp_path, monkeypatch):
-    style = Style(
+    style = _static_style(
         font_size_px=24,
         line_y_position="center",
         lit_enabled=True,
@@ -533,7 +552,7 @@ def test_compute_subtitle_strip_falls_back_when_content_fills_height(qapp, tmp_p
 
 
 def test_strip_render_is_pixel_identical_to_full_frame_region(qapp, tmp_path):
-    job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
+    job = replace(_job(tmp_path), style=_static_style(font_size_px=24, line_y_position="center"))
     t_ms = 800
     strip = _compute_subtitle_strip(job, 1000)
     assert strip is not None
@@ -621,7 +640,7 @@ def test_multiprocess_output_is_byte_identical_to_single_process(qapp, tmp_path)
     # 多进程并行渲染的拼接输出必须与单进程逐帧逐字节一致（含 worker 间字体一致性）。
     job = replace(
         _job(tmp_path),
-        style=Style(font_size_px=24, line_y_position="center"),
+        style=_static_style(font_size_px=24, line_y_position="center"),
         width=160,
         height=90,
         duration_ms=1000,

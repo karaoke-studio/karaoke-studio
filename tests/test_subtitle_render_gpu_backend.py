@@ -205,7 +205,7 @@ def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypa
             with NativeRendererProcess(response_timeout_s=15.0) as process:
                 configured = process.configure_gpu(
                     _g1_track(),
-                    Style(font_size_px=48, line_lead_in_ms=0),
+                    Style(**_PARITY_BASELINE, font_size_px=48, line_lead_in_ms=0),
                     width=320,
                     height=180,
                     fps=60,
@@ -264,8 +264,25 @@ def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypa
     assert not user32.IsWindow(child_hwnd)
 
 
+# GPU 与 Painter 逐像素比对的场景统一钉住这几项：动画（入场 / 退场 / 唱字 / 分页
+# 同步）关掉，行距与上下边距沿用这些用例写就时的取值。默认值是产品口味、会随预设
+# 调整，而这些用例校的是排版、填色与几何 —— 动画一开整帧会位移或整体半透明，行距
+# 一改整块字幕上下平移，验的就不是被测行为了。要测动画的用例自己显式打开。
+_PARITY_BASELINE = {
+    "entry_anim": "none",
+    "exit_anim": "none",
+    "karaoke_anim": "inherit",
+    "sync_entry": False,
+    "sync_ending": False,
+    "sync_each_page": False,
+    "line_y_margin_px": 80,
+    "line_gap_px": 90,
+}
+
+
 def _g1_style(**changes) -> Style:
     style = Style(
+        **_PARITY_BASELINE,
         font_family="Arial",
         font_family_latin="Times New Roman",
         font_size_px=64,
@@ -876,6 +893,7 @@ def test_gpu_horizontal_ruby_gradient_uses_main_line_bounds_by_default(monkeypat
         ],
     )
     base_style = Style(
+        **_PARITY_BASELINE,
         font_family="Meiryo",
         font_family_latin="Meiryo",
         font_size_px=72,
@@ -6493,6 +6511,9 @@ def test_gpu_utopia_karaoke_bounce_uses_ruby_main_wipe_points(monkeypatch) -> No
         line_y_position="center",
         entry_anim="none",
         exit_anim="none",
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
         karaoke_anim="utopia",
         decoration_kind="shadow",
         stroke_width_px=2,
