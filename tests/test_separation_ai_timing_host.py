@@ -45,10 +45,16 @@ class _StubBackend(QObject):
         self._next_result = None
         self.install_dir = ""
         self.started_service = False
+        self.stopped_service = False
 
     def start_service(self):
         self.started_service = True
         self._snap.state = ServiceState.SERVICE_READY
+
+    def stop_service(self):
+        self.stopped_service = True
+        self._snap.pending_task = None
+        self._snap.state = ServiceState.INSTALLED_STOPPED
 
     def snapshot(self):
         return SeparationSnapshot(
@@ -112,6 +118,7 @@ class TestProtocolShape:
             "separate_vocal",
             "ai_cache_dir",
             "runtime_python",
+            "stop_separation_service",
         ):
             assert callable(getattr(host, name)), name
 
@@ -221,6 +228,49 @@ class TestSeparationStatus:
         status = _host(tmp_path, backend).separation_status()
         assert status["available"] is False
         assert "未配置" in status["message"]
+
+
+class TestStopSeparationService:
+    """方案 B 配套：SUG 增量安装前腾出共享解释器（停服务释放文件锁）。"""
+
+    def test_busy_task_refuses_without_stopping(self, tmp_path, qapp):
+        backend = _StubBackend()
+        backend._snap.pending_task = TaskType.VOCAL
+        result = _host(tmp_path, backend).stop_separation_service(timeout_s=2)
+        assert result["stopped"] is False
+        assert "任务" in result["message"]
+        assert backend.stopped_service is False
+
+    def test_running_service_stops(self, tmp_path, qapp):
+        backend = _StubBackend(state=ServiceState.SERVICE_READY)
+        result = _host(tmp_path, backend).stop_separation_service(timeout_s=2)
+        assert result["stopped"] is True
+        assert backend.stopped_service is True
+
+    def test_idle_service_returns_without_stop_call(self, tmp_path, qapp):
+        backend = _StubBackend(state=ServiceState.INSTALLED_STOPPED)
+        result = _host(tmp_path, backend).stop_separation_service(timeout_s=2)
+        assert result["stopped"] is True
+        assert backend.stopped_service is False
+
+    def test_stop_failure_reports_backend_error(self, tmp_path, qapp):
+        backend = _StubBackend()
+
+        def _fail_stop():
+            backend._snap.state = ServiceState.ERROR
+            backend._snap.error = "桥接进程退出失败"
+
+        backend.stop_service = _fail_stop
+        result = _host(tmp_path, backend).stop_separation_service(timeout_s=2)
+        assert result["stopped"] is False
+        assert "桥接进程退出失败" in result["message"]
+
+    def test_stop_timeout_reports_chinese_message(self, tmp_path, qapp):
+        backend = _StubBackend()
+        backend.stop_service = lambda: None  # 状态停留在 SERVICE_READY
+        result = _host(tmp_path, backend).stop_separation_service(timeout_s=1)
+        assert result["stopped"] is False
+        assert "超时" in result["message"]
 
 
 class TestSessionVocal:

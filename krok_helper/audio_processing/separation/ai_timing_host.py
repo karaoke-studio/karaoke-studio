@@ -304,6 +304,73 @@ class KaraokeAiTimingHost:
         except Exception:
             return False
 
+    _STOP_SERVICE_TIMEOUT_S = 30.0
+
+    #: 这些状态下必然没有工作台拉起的服务进程，无需停止。
+    _NO_SERVICE_STATES = frozenset(
+        {
+            ServiceState.UNCONFIGURED,
+            ServiceState.LOCATION_REQUIRED,
+            ServiceState.RUNTIME_DOWNLOADING,
+            ServiceState.RUNTIME_VERIFYING,
+            ServiceState.INSTALL_MISSING,
+            ServiceState.INSTALL_DAMAGED,
+            ServiceState.VERSION_INCOMPATIBLE,
+            ServiceState.EXTERNAL_VERSION_INCOMPATIBLE,
+            ServiceState.INSTALLED_STOPPED,
+            ServiceState.EXTERNAL_OFFLINE,
+        }
+    )
+
+    def stop_separation_service(self, timeout_s: float | None = None) -> dict:
+        """（可选协议）停止工作台拉起的分离服务，释放共享解释器的文件锁。
+
+        SUG 方案 B 增量安装**前**调用：桥接进程已加载的 torch 等 .pyd
+        会锁住 site-packages 里的文件，pip 覆盖被锁文件可能半失败、
+        留下新旧混杂的安装。装完后由 ``note_runtime_changed`` 重启；
+        若安装前服务本就没跑，无需显式恢复——AI 打轴执行时
+        ``separate_vocal`` 会自动拉起。
+
+        有分离任务在执行时拒绝（不打断任务）。阻塞等待停止完成；
+        服务未在运行时立即返回。
+
+        Returns:
+            ``{"stopped": bool, "message": str}``（message 中文，可直接展示）。
+        """
+        snap = self._backend.snapshot()
+        if snap.pending_task is not None:
+            return {
+                "stopped": False,
+                "message": "分离环境正在执行任务，无法腾出安装环境，请稍后重试",
+            }
+        if snap.state not in self._NO_SERVICE_STATES:
+            self._backend.stop_service()
+        deadline = time.monotonic() + (
+            self._STOP_SERVICE_TIMEOUT_S
+            if timeout_s is None
+            else max(1.0, float(timeout_s))
+        )
+        while True:
+            snap = self._backend.snapshot()
+            if snap.state in (
+                ServiceState.INSTALLED_STOPPED,
+                ServiceState.EXTERNAL_OFFLINE,
+            ):
+                return {"stopped": True, "message": "分离服务已停止"}
+            if snap.state in self._NO_SERVICE_STATES:
+                return {"stopped": True, "message": "分离服务未在运行"}
+            if snap.state is ServiceState.ERROR:
+                return {
+                    "stopped": False,
+                    "message": snap.error or "停止分离服务失败",
+                }
+            if time.monotonic() > deadline:
+                return {
+                    "stopped": False,
+                    "message": "停止分离服务超时，请到第 2 步「音频分离」页检查",
+                }
+            time.sleep(0.2)
+
     def open_separation_page(self) -> bool:
         """跳转到工作台第 2 步的「分离人声」页（SUG 引导安装入口）。"""
         if callable(self._navigate):

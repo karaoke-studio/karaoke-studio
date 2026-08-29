@@ -564,6 +564,54 @@ def test_note_runtime_changed_skips_restart_when_idle_or_busy(tmp_path) -> None:
         backend.shutdown()
 
 
+def test_host_stop_separation_service_reaches_real_backend(tmp_path) -> None:
+    """宿主「装前停服务」（SUG 方案 B 腾文件锁用）穿过真实后端的异步
+    停止链：SERVICE_STOPPING → INSTALLED_STOPPED，阻塞等待而非提前返回。"""
+    from krok_helper.audio_processing.separation.ai_timing_host import (
+        KaraokeAiTimingHost,
+    )
+
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    events: list[str] = []
+
+    class Client:
+        @staticmethod
+        def health():
+            return {"device": "cpu"}
+
+    class Service:
+        running = True
+        client = Client()
+        port = 0
+
+        def stop(self, timeout_seconds=5.0):
+            del timeout_seconds
+            events.append("stop")
+            self.running = False
+            return True
+
+    class Factory:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            return Service()
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=Factory
+    )
+    host = KaraokeAiTimingHost(backend, tmp_path / "cache")
+    try:
+        _wait_until(lambda: not backend._futures)
+        backend._service = Service()
+        backend._snap.state = ServiceState.SERVICE_READY
+        result = host.stop_separation_service(timeout_s=3)
+        assert result["stopped"] is True
+        assert events == ["stop"]
+        assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
+    finally:
+        backend.shutdown()
+
+
 def test_startup_damage_arbitration_runs_bridge_and_heals_manifest(tmp_path) -> None:
     """清单口径 DAMAGED（如 AI 打轴增量 pip 改动共用包，且宿主通知
     缺席——pip 中途取消、standalone SUG 直指托管解释器等）时：启动即
