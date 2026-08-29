@@ -9,6 +9,9 @@ from typing import Any
 from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+from krok_helper.subtitle_render.engine.export.render_job_policy import (
+    ensure_output_is_not_input,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
@@ -99,6 +102,9 @@ class ExportJobController:
             gpu_export_enabled=inputs.gpu_export_enabled,
             render_workers=inputs.render_workers,
         )
+        # 组装阶段就拦下「导出名压在素材上」：留到渲染线程才报错的话，用户要先
+        # 走一遍保存工程弹窗、看进度条起跑，才等来一句失败。
+        ensure_output_is_not_input(job)
         return ExportJobBuildResult(
             job=job,
             output_name=output_name,

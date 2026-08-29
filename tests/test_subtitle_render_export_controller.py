@@ -103,6 +103,26 @@ def test_export_job_controller_preserves_prerequisite_errors(
         ExportJobController.build(replace(_inputs(tmp_path), **changes))
 
 
+def test_export_job_controller_rejects_output_over_the_background_video(
+    tmp_path,
+) -> None:
+    """导出名压在背景视频上时，组装阶段就要报错（别等渲染线程才失败）。"""
+
+    background = tmp_path / "song.mp4"
+    background.write_bytes(b"source-video-bytes")
+    inputs = replace(
+        _inputs(tmp_path),
+        background_source=BackgroundSource(kind="video", path=str(background)),
+        audio_path=None,
+        output_name="song",
+    )
+
+    with pytest.raises(ProcessingError, match="不能覆盖素材本身"):
+        ExportJobController.build(inputs)
+
+    assert background.read_bytes() == b"source-video-bytes"
+
+
 def test_export_job_controller_resolves_longest_track_or_media_duration() -> None:
     duration = ExportJobController.resolve_duration_ms(
         [_track(1_500), _track(2_000)],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from krok_helper.errors import ProcessingError
@@ -30,6 +31,47 @@ def resolved_background(job: RenderJob) -> BackgroundSource:
     if job.background_video_path is not None:
         return BackgroundSource(kind="video", path=str(job.background_video_path))
     return BackgroundSource(kind="solid", color="#000000")
+
+
+def job_input_paths(job: RenderJob) -> list[Path]:
+    """导出过程中会被读取的素材路径（背景素材 + 独立音频）。"""
+
+    paths: list[Path] = []
+    background = resolved_background(job)
+    if background.kind in {"video", "image", "image_sequence"} and background.path:
+        paths.append(Path(background.path))
+    if job.audio_path is not None:
+        paths.append(Path(job.audio_path))
+    return paths
+
+
+def is_same_path(left: Path, right: Path) -> bool:
+    """两个路径是否指向同一个文件（Windows 大小写不敏感、可能走短名/链接）。"""
+
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        # 导出前输出文件通常还不存在，samefile 拿不到 inode，退回归一化比较。
+        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+            os.path.abspath(right)
+        )
+
+
+def ensure_output_is_not_input(job: RenderJob) -> None:
+    """导出目标不许压在素材本身上。
+
+    ffmpeg 自己会拒绝「输出即输入」并直接退出（源文件原样留着），但紧接着的
+    失败清理会把这个路径当成半成品删掉 —— 删掉的其实是用户的源视频。所以在
+    任何东西跑起来之前就拦下来。
+    """
+
+    output = Path(job.output_path)
+    for source in job_input_paths(job):
+        if is_same_path(output, source):
+            raise ProcessingError(
+                f"导出文件不能覆盖素材本身（{source}），"
+                "请换一个导出文件名，或者换个输出文件夹。"
+            )
 
 
 def validate_render_job(job: RenderJob) -> None:
@@ -71,6 +113,7 @@ def validate_render_job(job: RenderJob) -> None:
         raise ProcessingError(f"不支持的 CPU preset: {job.preset}")
     if not str(job.output_path).strip():
         raise ProcessingError("请先选择输出路径。")
+    ensure_output_is_not_input(job)
 
 
 def resolve_duration_ms(job: RenderJob) -> int:

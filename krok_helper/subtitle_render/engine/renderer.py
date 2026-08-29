@@ -53,6 +53,8 @@ from krok_helper.subtitle_render.engine.export.parallel_schedule import (
 )
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.engine.export.render_job_policy import (
+    is_same_path as _is_same_path,
+    job_input_paths as _job_input_paths,
     job_tracks as _job_tracks,
     resolve_duration_ms as _resolve_duration_ms,
     resolved_background as _resolved_background,
@@ -403,17 +405,17 @@ def render_subtitle_video(
         output_drain_thread.join()
     except ExportCancelled:
         terminate_process(process)
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         raise
     except ProcessingError:
         # 帧生产阶段的停滞 / worker 异常退出（如 _drain_pending_head）也要走完整
         # 清理：终止 ffmpeg、删半成品，否则 ffmpeg 会一直等 stdin 并锁住输出文件。
         terminate_process(process)
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         raise
     except NativeRendererError as exc:
         terminate_process(process)
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         if gpu_export_active and not (should_cancel is not None and should_cancel()):
             logger(
                 "GPU 字幕导出失败，已自动回退到 CPU Painter 从头渲染"
@@ -433,7 +435,7 @@ def render_subtitle_video(
         raise ProcessingError(f"native 字幕渲染器导出失败: {exc}") from exc
     except (BrokenPipeError, OSError) as exc:
         terminate_process(process)
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。") from exc
         # AMF 初始化失败通常在第一批 rawvideo 写入时就关闭管道，
@@ -449,7 +451,7 @@ def render_subtitle_video(
         # 泄漏 ffmpeg：终止进程、删半成品后原样上抛。放在各具体分支之后，
         # 不影响 ExportCancelled / NativeRendererError（GPU→CPU 回退）等既有路径。
         terminate_process(process)
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         raise
     finally:
         if process.poll() is not None and output_drain_thread.is_alive():
@@ -458,7 +460,7 @@ def render_subtitle_video(
             on_process_started(None)
 
     if should_cancel is not None and should_cancel():
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         raise ExportCancelled("已停止导出。")
     retry_amf_with_cpu = amf_pipe_failure or (
         return_code is not None
@@ -466,7 +468,7 @@ def render_subtitle_video(
         and _should_retry_amf_with_cpu(command, ffmpeg_output_tail)
     )
     if retry_amf_with_cpu:
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         logger(
             "AMD AMF 编码器初始化/显存失败，已自动切换 CPU 编码"
             "，从头重试（进度会重新从 0 开始计数）"
@@ -484,7 +486,7 @@ def render_subtitle_video(
     if return_code is None:
         raise ProcessingError("ffmpeg 管道异常关闭，未取得退出码")
     if return_code != 0:
-        _remove_incomplete_output(job.output_path, logger)
+        _remove_incomplete_output(job, logger)
         raise ProcessingError(f"ffmpeg 执行失败，退出码: {return_code}")
     if not job.output_path.is_file() or os.path.getsize(job.output_path) == 0:
         raise ProcessingError(f"导出失败，未生成有效文件: {job.output_path}")
@@ -1576,9 +1578,21 @@ def _should_retry_amf_with_cpu(
     return any(marker in output for marker in markers)
 
 
-def _remove_incomplete_output(output_path: Path, logger: Logger) -> None:
+def _remove_incomplete_output(job: RenderJob, logger: Logger) -> None:
+    """删掉这次导出留下的半成品；素材文件一律不碰。
+
+    导出名和背景视频同名时 ``output_path`` 指的就是用户的源素材：ffmpeg 会拒绝
+    「输出即输入」并原样留下文件，这里若照删不误，用户丢的是源视频。正常流程有
+    :func:`ensure_output_is_not_input` 提前拦截，这里是最后一道闸。
+    """
+
+    output_path = job.output_path
     if not output_path.exists():
         return
+    for source in _job_input_paths(job):
+        if _is_same_path(output_path, source):
+            logger(f"输出路径就是素材本身，已跳过清理以免删除源文件: {output_path}")
+            return
     try:
         output_path.unlink()
         logger(f"已清理未完成的输出文件: {output_path}")

@@ -704,6 +704,78 @@ def test_render_cancel_removes_incomplete_output(monkeypatch, tmp_path):
     assert not job.output_path.exists()
 
 
+def test_render_rejects_output_that_is_the_background_video(tmp_path):
+    """导出名和背景视频同名时必须提前报错，且绝不能删掉那个源文件。"""
+
+    background = tmp_path / "song.mp4"
+    background.write_bytes(b"source-video-bytes")
+    job = replace(_job(tmp_path), background_video_path=background, output_path=background)
+
+    with pytest.raises(ProcessingError, match="不能覆盖素材本身"):
+        render_subtitle_video(job)
+
+    assert background.read_bytes() == b"source-video-bytes"
+
+
+def test_render_rejects_output_that_is_the_separate_audio(tmp_path):
+    audio = tmp_path / "vocal.wav"
+    audio.write_bytes(b"source-audio-bytes")
+    job = replace(
+        _job(tmp_path),
+        background_source=BackgroundSource(kind="solid", color="#000000"),
+        background_video_path=None,
+        audio_path=audio,
+        output_path=audio,
+    )
+
+    with pytest.raises(ProcessingError, match="不能覆盖素材本身"):
+        render_subtitle_video(job)
+
+    assert audio.read_bytes() == b"source-audio-bytes"
+
+
+def test_output_input_check_ignores_filename_case(tmp_path):
+    """Windows 上大小写不同仍是同一个文件，别放过去。"""
+
+    background = tmp_path / "song.mp4"
+    background.write_bytes(b"source-video-bytes")
+    job = replace(
+        _job(tmp_path),
+        background_video_path=background,
+        output_path=tmp_path / "SONG.MP4",
+    )
+
+    if os.path.normcase("A") == "A":  # 大小写敏感的文件系统上这条不成立
+        pytest.skip("case-sensitive filesystem")
+    with pytest.raises(ProcessingError, match="不能覆盖素材本身"):
+        render_subtitle_video(job)
+
+
+def test_incomplete_output_cleanup_never_deletes_a_source_file(tmp_path):
+    """最后一道闸：清理半成品时撞上素材路径要跳过，不是照删不误。"""
+
+    background = tmp_path / "song.mp4"
+    background.write_bytes(b"source-video-bytes")
+    job = replace(_job(tmp_path), background_video_path=background, output_path=background)
+    logs: list[str] = []
+
+    renderer._remove_incomplete_output(job, logs.append)
+
+    assert background.read_bytes() == b"source-video-bytes"
+    assert any("跳过清理" in line for line in logs)
+
+
+def test_incomplete_output_cleanup_still_removes_a_real_half_written_file(tmp_path):
+    job = _job(tmp_path)
+    job.output_path.write_bytes(b"partial")
+    logs: list[str] = []
+
+    renderer._remove_incomplete_output(job, logs.append)
+
+    assert not job.output_path.exists()
+    assert any("已清理未完成的输出文件" in line for line in logs)
+
+
 # ---------------------------------------------------------------------------
 # A2 方案 B：多条分离带
 # ---------------------------------------------------------------------------
