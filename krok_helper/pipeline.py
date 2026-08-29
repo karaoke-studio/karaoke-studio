@@ -222,6 +222,11 @@ def build_mux_command(
         "0",
         "-map",
         "-0:a",
+        # MOV（相机 / 剪辑软件导出）几乎都带 tmcd 时间码 data 流，而 Matroska
+        # 只接受音视频 / 字幕 / 附件，不显式丢掉 data 流 ffmpeg 会在写 header 时
+        # 报 "Only audio, video, and subtitles are supported for Matroska" 失败。
+        "-map",
+        "-0:d",
         "-map",
         "1:a:0",
         "-c:v",
