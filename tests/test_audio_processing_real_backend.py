@@ -467,6 +467,103 @@ def test_note_runtime_changed_without_install_returns_false(tmp_path) -> None:
         backend.shutdown()
 
 
+def test_note_runtime_changed_restarts_running_bridge_service(tmp_path) -> None:
+    """方案 B 增量 pip 改了共享解释器：宿主通知除重登记清单外，还必须
+    重启正在运行的桥接进程——旧进程的内存态与磁盘不一致，继续接任务
+    会在 native 层挂死且行协议无超时，上层只能永久等待。"""
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    events: list[str] = []
+
+    class OldService:
+        running = True
+
+        def stop(self, timeout_seconds=5.0):
+            del timeout_seconds
+            events.append("old-stop")
+            self.running = False
+            return True
+
+    class Client:
+        @staticmethod
+        def health():
+            return {"device": "cpu"}
+
+        @staticmethod
+        def catalog_model(_model, *, source="modelscope"):
+            del source
+            return {"pymss": {"local": {"complete": False}}}
+
+    class NewService:
+        running = True
+        client = Client()
+        port = 0
+
+        def stop(self, timeout_seconds=5.0):
+            del timeout_seconds
+            events.append("new-stop")
+            self.running = False
+            return True
+
+    class Factory:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            events.append("new-start")
+            return NewService()
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=Factory
+    )
+    try:
+        _wait_until(lambda: not backend._futures)
+        backend._service = OldService()
+        assert backend.note_runtime_changed() is True
+        _wait_until(
+            lambda: events == ["old-stop", "new-start"]
+            and backend.snapshot().state is ServiceState.SERVICE_READY
+        )
+        assert backend.snapshot().state is ServiceState.SERVICE_READY
+    finally:
+        backend.shutdown()
+
+
+def test_note_runtime_changed_skips_restart_when_idle_or_busy(tmp_path) -> None:
+    """服务未运行时不因清单再登记拉起服务；有任务在跑时不打断任务。"""
+    root = tmp_path / "managed"
+    _installed_runtime(root)
+    events: list[str] = []
+
+    class Factory:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            events.append("unexpected-start")
+            raise AssertionError("不应重启服务")
+
+    backend = RealSeparationBackend(
+        {"install_dir": str(root)}, service_factory=Factory
+    )
+    try:
+        _wait_until(lambda: not backend._futures)
+        assert backend.note_runtime_changed() is True
+        assert backend.snapshot().state is ServiceState.INSTALLED_STOPPED
+        assert events == []
+
+        class BusyService:
+            running = True
+
+            def stop(self, timeout_seconds=5.0):
+                del timeout_seconds
+                events.append("unexpected-stop")
+                return True
+
+        backend._service = BusyService()
+        backend._snap.pending_task = TaskType.VOCAL
+        assert backend.note_runtime_changed() is True
+        assert events == []
+    finally:
+        backend.shutdown()
+
+
 def test_startup_damage_arbitration_runs_bridge_and_heals_manifest(tmp_path) -> None:
     """清单口径 DAMAGED（如 AI 打轴增量 pip 改动共用包，且宿主通知
     缺席——pip 中途取消、standalone SUG 直指托管解释器等）时：启动即

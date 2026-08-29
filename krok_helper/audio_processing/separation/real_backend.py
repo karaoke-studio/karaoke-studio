@@ -822,7 +822,8 @@ class RealSeparationBackend(SeparationBackend):
 
         嵌入的 AI 打轴走方案 B 向托管解释器 pip 安装依赖，会改动清单
         登记在案的共用包（升级/降级），不重登记清单的话下次启动即报
-        「文件缺失或损坏」。按磁盘现状重建后重新校验。
+        「文件缺失或损坏」。按磁盘现状重建后重新校验；通过时若桥接
+        进程还在跑则顺手重启（见 ``_restart_service_after_runtime_change``）。
         """
         install_dir = resolve_install_dir(
             str(self._settings.get("install_dir", ""))
@@ -841,9 +842,44 @@ class RealSeparationBackend(SeparationBackend):
         self._emit()
         if result.status is RuntimeStatus.READY:
             self._log("运行环境清单已按当前安装内容重新登记。")
+            self._restart_service_after_runtime_change()
             return True
         self._log(f"清单再登记后校验未通过：{result.message}")
         return False
+
+    def _restart_service_after_runtime_change(self) -> None:
+        """共享解释器被增量修改后，重启工作台自己拉起的桥接进程。
+
+        桥接进程常驻且延迟到首个任务才 import pymss/torch：pip 原地
+        升级/降级共用包后，旧进程的内存态与磁盘不一致，继续接任务可能
+        在 native 层挂死——行协议没有超时，挂死对上层就是「分离永远
+        进行中」。外部 HTTP 服务（``external_server_url``）的进程不是
+        工作台拉起的，不能替用户重启；有分离任务在执行时不打断任务，
+        引导任务结束后手动重启。
+        """
+        if self._external_url:
+            return
+        service = self._service
+        if service is None or not service.running:
+            return
+        if self._snap.pending_task is not None:
+            self._log(
+                "共享运行环境已被增量修改，但当前有分离任务在执行；"
+                "为避免打断任务暂不重启服务，任务结束后请手动重启分离服务。"
+            )
+            return
+        self._log("共享运行环境已被增量修改，正在重启分离服务以加载新依赖。")
+        self._set_state(ServiceState.SERVICE_STARTING)
+
+        def restart(stopped: bool) -> None:
+            if self._shutdown_requested:
+                return
+            if not stopped:
+                self._fail("无法停止正在运行的 PyMSS 服务，请手动重启后重试。")
+                return
+            self.start_service()
+
+        self._submit(lambda: self._stop_owned_service(5.0), restart)
 
     def cleanup_incomplete(self) -> None:
         self._install_cancel.set()
