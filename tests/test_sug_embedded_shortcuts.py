@@ -318,6 +318,42 @@ def test_force_update_exit_flushes_both_project_modules_once() -> None:
     assert subtitle_page.flush_count == 1
 
 
+def test_update_task_labels_cover_video_ai_and_project_save() -> None:
+    running_thread = SimpleNamespace(isRunning=lambda: True)
+    app = SimpleNamespace(
+        _running_background_tasks=lambda: [],
+        video_download_page=SimpleNamespace(is_busy=lambda: True),
+        audio_separation_page=SimpleNamespace(is_busy=lambda: False),
+        subtitle_render_page=SimpleNamespace(is_busy=lambda: False),
+        lyrics_timing_page=SimpleNamespace(
+            editorInterface=SimpleNamespace(
+                _ai_timing_dialog=SimpleNamespace(_busy=True, _thread=None)
+            ),
+            _store=SimpleNamespace(_save_thread=running_thread, _bg_save_thread=None),
+        ),
+    )
+
+    assert KrokHelperQtApp._active_update_task_labels(app) == [
+        "视频下载",
+        "AI 打轴",
+        "歌词项目保存",
+    ]
+
+
+def test_update_handoff_is_blocked_while_task_is_running(monkeypatch) -> None:
+    notices: list[str] = []
+    app = SimpleNamespace(_active_update_task_labels=lambda: ["AI 打轴"])
+    monkeypatch.setattr(
+        gui_qt,
+        "show_fluent_info",
+        lambda _parent, message: notices.append(message),
+    )
+
+    KrokHelperQtApp._launch_workbench_updater(app, SimpleNamespace())
+
+    assert notices == ["以下任务仍在运行，请等待完成或取消后再更新：\nAI 打轴"]
+
+
 def test_save_project_page_for_close_requires_dirty_state_to_clear() -> None:
     saved = _FakeProjectPage(save_result=True)
     failed = _FakeProjectPage(save_result=False)

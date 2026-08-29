@@ -31,6 +31,9 @@ def test_configure_product_registers_lock_guard_patches() -> None:
     assert workbench_updater.updater_main._retry_on_permission_error is (
         workbench_updater._retry_workbench
     )
+    assert workbench_updater.updater_main.wait_for_pid_exit is (
+        workbench_updater._wait_for_pid_exit_workbench
+    )
     assert workbench_updater.updater_main.run_incremental is (
         workbench_updater._run_incremental_workbench
     )
@@ -40,6 +43,64 @@ def test_configure_product_registers_lock_guard_patches() -> None:
     assert workbench_updater.updater_main.launch_main_app is (
         workbench_updater._launch_main_app_workbench
     )
+
+
+def test_wait_for_pid_exit_terminates_only_orphaned_host_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        lock_diag.ProcessTreeEntry(100, 1, "Lin-K Lyrics.exe"),
+        lock_diag.ProcessTreeEntry(110, 100, "Updater.exe"),
+        lock_diag.ProcessTreeEntry(111, 110, "Updater.exe"),
+        lock_diag.ProcessTreeEntry(130, 100, "explorer.exe"),
+    ]
+    killed: list[int] = []
+    recorded: list[dict] = []
+    monkeypatch.setattr(workbench_updater.os, "getpid", lambda: 111)
+    monkeypatch.setenv(
+        workbench_updater._UPDATE_DESCENDANTS_ENV,
+        '[{"pid":120,"parent_pid":100,"image_name":"python.exe"},'
+        '{"pid":121,"parent_pid":120,"image_name":"ffmpeg.exe"}]',
+    )
+    monkeypatch.setattr(workbench_updater.lock_diag, "snapshot_processes", lambda: rows)
+    monkeypatch.setattr(workbench_updater, "_original_wait_for_pid_exit", lambda *_args: True)
+    monkeypatch.setattr(
+        workbench_updater.updater_main,
+        "_is_pid_alive",
+        lambda pid: pid in {120, 121, 130},
+    )
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "process_image_name",
+        lambda pid: {
+            120: "python.exe",
+            121: "ffmpeg.exe",
+            130: "explorer.exe",
+        }.get(pid, ""),
+    )
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "kill_pid",
+        lambda pid: killed.append(pid) is None or True,
+    )
+    monkeypatch.setattr(
+        workbench_updater.diagnostics,
+        "record_process_cleanup",
+        recorded.append,
+    )
+    monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
+
+    assert workbench_updater._wait_for_pid_exit_workbench(
+        100, logging.getLogger("sug.updater"), timeout=1
+    )
+
+    assert killed == [121, 120]
+    assert 110 not in killed and 111 not in killed and 130 not in killed
+    assert recorded[0]["parent_exited"] is True
+    assert {item["outcome"] for item in recorded[0]["processes"]} == {
+        "terminated",
+        "unmanaged_process_skipped",
+    }
 
 
 def test_retry_uses_three_second_intervals_and_names_holders(

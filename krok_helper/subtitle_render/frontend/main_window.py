@@ -924,6 +924,15 @@ class SubtitleRenderWindow(QWidget):
         super().hideEvent(event)
 
     def closeEvent(self, event):  # noqa: N802
+        self.shutdown_for_host_exit()
+        super().closeEvent(event)
+
+    def shutdown_for_host_exit(self) -> None:
+        """Idempotently release preview workers before the host exits for update."""
+
+        if getattr(self, "_host_exit_shutdown", False):
+            return
+        self._host_exit_shutdown = True
         self._closing_window = True
         self._flush_persisted_state_save()
         self._stop_auto_save_runtime(wait=True)
@@ -934,7 +943,6 @@ class SubtitleRenderWindow(QWidget):
             self._layout_issues_dialog = None
         if hasattr(self, "_preview_window"):
             self._preview_window.close()
-        super().closeEvent(event)
 
     # ------------------------------------------------------------------ layout
 

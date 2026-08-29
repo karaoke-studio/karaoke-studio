@@ -3370,3 +3370,21 @@ class VideoDownloadPage(QWidget):
 
     def _current_task(self) -> DownloadTask | None:
         return self._task_index.get(self._current_task_id)
+
+    def is_busy(self) -> bool:
+        """Return whether any download-page worker is still active."""
+
+        workers = [
+            self._parse_worker,
+            self._cookie_import_worker,
+            self._ytdlp_update_worker,
+            self._qr_login_worker,
+            *self._running_workers.values(),
+        ]
+        for worker in workers:
+            try:
+                if worker is not None and worker.isRunning():
+                    return True
+            except RuntimeError:
+                continue
+        return False

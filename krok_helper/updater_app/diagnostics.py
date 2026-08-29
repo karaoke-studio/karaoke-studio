@@ -267,6 +267,7 @@ class _Session:
     metadata: dict[str, Any]
     attempts: list[dict[str, Any]] = field(default_factory=list)
     restart_manager: list[dict[str, Any]] = field(default_factory=list)
+    process_cleanup: list[dict[str, Any]] = field(default_factory=list)
     filesystem: list[dict[str, Any]] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
     collection_errors: list[dict[str, Any]] = field(default_factory=list)
@@ -390,6 +391,20 @@ def record_restart_manager(
         pass
 
 
+def record_process_cleanup(detail: dict[str, Any]) -> None:
+    """Record updater handoff descendants and their cleanup outcome."""
+
+    try:
+        with _state_lock:
+            if _active is not None:
+                payload = _redact_value(dict(detail))
+                payload["wall_time"] = _wall_time()
+                payload["monotonic_ms"] = _elapsed_ms(_active)
+                _active.process_cleanup.append(payload)
+    except Exception:
+        pass
+
+
 def _create_bundle_dir(session: _Session) -> Path:
     roots = [session.root]
     fallback = Path(tempfile.gettempdir()) / "KaraokeStudioUpdater" / "diagnostics"
@@ -468,9 +483,11 @@ def _report(session: _Session) -> dict[str, Any]:
         "counts": {
             "attempts": len(session.attempts),
             "restart_manager_queries": len(session.restart_manager),
+            "process_cleanup_events": len(session.process_cleanup),
             "filesystem_captures": len(session.filesystem),
             "failures": len(session.failures),
         },
+        "process_cleanup": session.process_cleanup,
         "failures": session.failures,
         "collection_errors": session.collection_errors,
         "privacy": "不包含文件内容；用户目录、临时目录和常见 URL 密钥已脱敏。",

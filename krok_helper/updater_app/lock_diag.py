@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, List, Tuple
 
+from ctypes import wintypes
+
 _CCH_RM_SESSION_KEY = 32
 _CCH_RM_MAX_APP_NAME = 255
 _CCH_RM_MAX_SVC_NAME = 63
@@ -24,6 +26,114 @@ _SAMPLE_FILE_LIMIT = 400
 _SCAN_FILE_LIMIT = 4000
 _SCAN_TIME_LIMIT_SECONDS = 1.0
 _BINARY_SUFFIXES = {".exe", ".dll", ".pyd"}
+
+
+@dataclass(frozen=True)
+class ProcessTreeEntry:
+    """One process-table row used to contain updater handoff descendants."""
+
+    pid: int
+    parent_pid: int
+    image_name: str
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * 260),
+    ]
+
+
+def snapshot_processes() -> List[ProcessTreeEntry]:
+    """Return a best-effort Windows process snapshot without extra dependencies."""
+
+    if os.name != "nt":
+        return []
+    kernel32 = ctypes.windll.kernel32
+    create_snapshot = kernel32.CreateToolhelp32Snapshot
+    create_snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    create_snapshot.restype = wintypes.HANDLE
+    process_first = kernel32.Process32FirstW
+    process_first.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    process_first.restype = wintypes.BOOL
+    process_next = kernel32.Process32NextW
+    process_next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    process_next.restype = wintypes.BOOL
+
+    handle = create_snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    invalid_handle = ctypes.c_void_p(-1).value
+    if not handle or int(handle) == invalid_handle:
+        return []
+    rows: List[ProcessTreeEntry] = []
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = bool(process_first(handle, ctypes.byref(entry)))
+        while ok:
+            rows.append(
+                ProcessTreeEntry(
+                    pid=int(entry.th32ProcessID),
+                    parent_pid=int(entry.th32ParentProcessID),
+                    image_name=str(entry.szExeFile),
+                )
+            )
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = bool(process_next(handle, ctypes.byref(entry)))
+    except Exception:
+        return []
+    finally:
+        kernel32.CloseHandle(handle)
+    return rows
+
+
+def process_lineage(pid: int, snapshot: Iterable[ProcessTreeEntry]) -> set[int]:
+    """Return ``pid`` and every discoverable ancestor in one snapshot."""
+
+    by_pid = {entry.pid: entry for entry in snapshot}
+    lineage: set[int] = set()
+    current = int(pid)
+    while current > 0 and current not in lineage:
+        lineage.add(current)
+        entry = by_pid.get(current)
+        if entry is None:
+            break
+        current = entry.parent_pid
+    return lineage
+
+
+def descendant_processes(
+    root_pid: int,
+    snapshot: Iterable[ProcessTreeEntry],
+    *,
+    exclude_pids: Iterable[int] = (),
+) -> List[ProcessTreeEntry]:
+    """Return descendants in parent-first order, excluding updater lineage."""
+
+    excluded = {int(pid) for pid in exclude_pids}
+    children: dict[int, List[ProcessTreeEntry]] = {}
+    for entry in snapshot:
+        children.setdefault(entry.parent_pid, []).append(entry)
+    found: List[ProcessTreeEntry] = []
+    pending = [int(root_pid)]
+    visited = {int(root_pid)}
+    while pending:
+        parent = pending.pop(0)
+        for child in children.get(parent, []):
+            if child.pid in visited:
+                continue
+            visited.add(child.pid)
+            pending.append(child.pid)
+            if child.pid not in excluded:
+                found.append(child)
+    return found
 
 
 @dataclass

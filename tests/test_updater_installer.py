@@ -99,4 +99,5 @@ def test_launch_updater_uses_temp_cwd_and_fresh_pyinstaller_environment(
     assert result.pid == 4321
     assert captured["cwd"] == str(temp_dir)
     assert captured["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert captured["env"][installer.UPDATE_DESCENDANTS_ENV].startswith("[")
     assert captured["env"] is not os.environ

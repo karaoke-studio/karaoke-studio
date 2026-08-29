@@ -18,7 +18,7 @@ DWMWCP_DONOTROUND = 1
 os.environ["QFLUENT_WIDGETS_NO_PROMOTION"] = "1"
 
 
-def _schedule_hard_process_exit(delay_seconds: float = 0.25) -> None:
+def _schedule_hard_process_exit(delay_seconds: float = 2.0) -> None:
     """Guarantee updater handoff even if Qt or a worker prevents normal teardown."""
 
     timer = threading.Timer(delay_seconds, lambda: os._exit(0))
@@ -553,6 +553,53 @@ class KrokHelperQtApp(QMainWindow):
         for running in tasks_by_page:
             tasks.extend(running)
         return tasks
+
+    def _active_update_task_labels(self) -> list[str]:
+        """Describe work that must finish before handing files to Updater."""
+
+        labels: list[str] = []
+        if self._running_background_tasks():
+            labels.append("工作流后台任务")
+
+        for label, attr_name in (
+            ("视频下载", "video_download_page"),
+            ("音频分离", "audio_separation_page"),
+            ("字幕视频生成", "subtitle_render_page"),
+        ):
+            page = getattr(self, attr_name, None)
+            is_busy = getattr(page, "is_busy", None) if page is not None else None
+            if callable(is_busy):
+                try:
+                    if is_busy():
+                        labels.append(label)
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "检查%s任务状态失败", label, exc_info=True
+                    )
+
+        timing_page = getattr(self, "lyrics_timing_page", None)
+        editor = getattr(timing_page, "editorInterface", None)
+        ai_dialog = getattr(editor, "_ai_timing_dialog", None)
+        ai_thread = getattr(ai_dialog, "_thread", None)
+        try:
+            if ai_dialog is not None and (
+                bool(getattr(ai_dialog, "_busy", False))
+                or (ai_thread is not None and ai_thread.isRunning())
+            ):
+                labels.append("AI 打轴")
+        except (AttributeError, RuntimeError):
+            pass
+
+        store = getattr(timing_page, "_store", None)
+        for thread_name in ("_save_thread", "_bg_save_thread"):
+            thread = getattr(store, thread_name, None)
+            try:
+                if thread is not None and thread.isRunning():
+                    labels.append("歌词项目保存")
+                    break
+            except RuntimeError:
+                pass
+        return list(dict.fromkeys(labels))
 
     def showEvent(self, event) -> None:  # noqa: N802
         if not self._startup_geometry_applied:
@@ -1803,6 +1850,14 @@ class KrokHelperQtApp(QMainWindow):
             self._launch_workbench_updater(result)
 
     def _launch_workbench_updater(self, result: CheckResult) -> None:
+        active_labels = self._active_update_task_labels()
+        if active_labels:
+            show_fluent_info(
+                self,
+                "以下任务仍在运行，请等待完成或取消后再更新：\n"
+                + "、".join(active_labels),
+            )
+            return
         if not result.release or not result.download_candidates:
             show_fluent_error(self, "缺少更新下载信息，请到 GitHub Release 手动下载。")
             return
@@ -1933,9 +1988,21 @@ class KrokHelperQtApp(QMainWindow):
                         "强制退出前保存 %s 恢复数据失败", attr_name, exc_info=True
                     )
 
-        timing_page = getattr(self, "lyrics_timing_page", None)
-        if timing_page is not None:
-            KrokHelperQtApp._release_lyrics_timing_resources(timing_page)
+        subtitle_page = getattr(self, "subtitle_render_page", None)
+        shutdown_subtitle = (
+            getattr(subtitle_page, "shutdown_for_host_exit", None)
+            if subtitle_page is not None
+            else None
+        )
+        if callable(shutdown_subtitle):
+            try:
+                shutdown_subtitle()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "更新强制退出前关闭字幕预览资源失败", exc_info=True
+                )
+
+        KrokHelperQtApp._finalize_lyrics_timing_shutdown(self)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if getattr(self, "_force_quitting_for_update", False):

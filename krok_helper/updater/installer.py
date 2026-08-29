@@ -17,6 +17,7 @@ from typing import Callable, Optional
 log = logging.getLogger(__name__)
 
 UPDATER_EXE_NAME = "Updater.exe"
+UPDATE_DESCENDANTS_ENV = "KROK_UPDATE_DESCENDANTS"
 TMP_DIR_NAME = "KaraokeStudioUpdater"
 #: 非冻结运行时的兜底 EXE 名。冻结运行时 :func:`find_app_exe_name` 取的是用户
 #: 实际启动的那个文件名 —— 包里同时有 ``Lin-K Lyrics.exe`` 与改名前的
@@ -112,6 +113,27 @@ def _copy_updater_to_temp(updater_exe: Path) -> Path:
         dest = tmp_dir / f"Updater-{int(time.time())}.exe"
         shutil.copy2(str(updater_exe), str(dest))
     return dest
+
+
+def _snapshot_update_descendants() -> str:
+    """Serialize current host descendants before the temporary Updater starts."""
+
+    try:
+        from krok_helper.updater_app import lock_diag
+
+        snapshot = lock_diag.snapshot_processes()
+        descendants = lock_diag.descendant_processes(os.getpid(), snapshot)
+        payload = [
+            {
+                "pid": entry.pid,
+                "parent_pid": entry.parent_pid,
+                "image_name": entry.image_name,
+            }
+            for entry in descendants[:128]
+        ]
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    except Exception:
+        return "[]"
 
 
 def _read_pe_subsystem(exe_path: Path) -> int:
@@ -401,6 +423,7 @@ def launch_updater(
 
     env = os.environ.copy()
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    env[UPDATE_DESCENDANTS_ENV] = _snapshot_update_descendants()
     try:
         proc = subprocess.Popen(
             args,

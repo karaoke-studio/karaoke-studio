@@ -130,6 +130,25 @@ def test_restart_manager_coverage_marks_bounded_scan_as_truncated(
     assert result.coverage["registered_file_count"] == 1
 
 
+def test_process_tree_excludes_updater_lineage_and_keeps_nested_children() -> None:
+    rows = [
+        lock_diag.ProcessTreeEntry(100, 1, "Lin-K Lyrics.exe"),
+        lock_diag.ProcessTreeEntry(110, 100, "Updater.exe"),
+        lock_diag.ProcessTreeEntry(111, 110, "Updater.exe"),
+        lock_diag.ProcessTreeEntry(120, 100, "python.exe"),
+        lock_diag.ProcessTreeEntry(121, 120, "ffmpeg.exe"),
+    ]
+
+    lineage = lock_diag.process_lineage(111, rows)
+    descendants = lock_diag.descendant_processes(100, rows, exclude_pids=lineage)
+
+    assert lineage == {1, 100, 110, 111}
+    assert [(item.pid, item.parent_pid) for item in descendants] == [
+        (120, 100),
+        (121, 120),
+    ]
+
+
 def test_failure_bundle_contains_all_artifacts_and_redacts_secrets(
     tmp_path: Path,
 ) -> None:
@@ -169,6 +188,19 @@ def test_failure_bundle_contains_all_artifacts_and_redacts_secrets(
         rm_result,
         started_ns=time.monotonic_ns(),
     )
+    diagnostics.record_process_cleanup(
+        {
+            "parent_pid": 1234,
+            "parent_exited": True,
+            "processes": [
+                {
+                    "pid": 5678,
+                    "image_name": "python.exe",
+                    "outcome": "terminated",
+                }
+            ],
+        }
+    )
     bundle = diagnostics.persist_failure("final_retry_failed", exc=exc)
 
     assert bundle is not None
@@ -184,6 +216,9 @@ def test_failure_bundle_contains_all_artifacts_and_redacts_secrets(
     assert rm_json["status"] == "failed"
     assert rm_json["stage"] == "register_resources"
     assert rm_json["win32_error"] == 5
+    report = _load(bundle / "report.json")
+    assert report["counts"]["process_cleanup_events"] == 1
+    assert report["process_cleanup"][0]["processes"][0]["outcome"] == "terminated"
     filesystem = _load(bundle / "filesystem.json")[0]["entries"]
     assert {item["role"] for item in filesystem} >= {
         "filename",

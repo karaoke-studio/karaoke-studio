@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -26,6 +27,16 @@ _TERMINABLE_PROCESS_IMAGES = frozenset({
     "karaoke studio.exe",
     "krok_subtitle_renderer.exe",
 })
+_MANAGED_DESCENDANT_PROCESS_IMAGES = _TERMINABLE_PROCESS_IMAGES | frozenset({
+    "python.exe",
+    "pythonw.exe",
+    "ffmpeg.exe",
+    "ffplay.exe",
+    "ffprobe.exe",
+    "yt-dlp.exe",
+    "aria2c.exe",
+})
+_UPDATE_DESCENDANTS_ENV = "KROK_UPDATE_DESCENDANTS"
 
 
 class PersistentFileLock(OSError):
@@ -50,6 +61,7 @@ _retry_context: tuple | None = None
 
 _original_run_incremental = updater_main.run_incremental
 _original_apply_part = updater_main._apply_part
+_original_wait_for_pid_exit = updater_main.wait_for_pid_exit
 
 
 def _best_effort_diagnostic(func, *args, **kwargs):
@@ -258,6 +270,126 @@ def _flush_logger(log) -> None:
                 pass
     except Exception:
         pass
+
+
+def _wait_for_pid_exit_workbench(pid, log, timeout=None) -> bool:
+    """Wait for the host and reap descendants left behind by its hard-exit fallback."""
+
+    before = lock_diag.snapshot_processes()
+    updater_lineage = lock_diag.process_lineage(os.getpid(), before)
+    candidates = lock_diag.descendant_processes(
+        pid,
+        before,
+        exclude_pids=updater_lineage,
+    )
+    try:
+        inherited = json.loads(os.environ.get(_UPDATE_DESCENDANTS_ENV, "[]"))
+        for item in inherited if isinstance(inherited, list) else []:
+            entry = lock_diag.ProcessTreeEntry(
+                pid=int(item["pid"]),
+                parent_pid=int(item.get("parent_pid", pid)),
+                image_name=str(item.get("image_name", "")),
+            )
+            if entry.pid > 0 and entry.pid not in updater_lineage:
+                candidates.append(entry)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        log.warning("主程序子进程交接快照无效，回退到 Updater 实时进程树")
+    resolved_timeout = (
+        updater_main.WAIT_PID_TIMEOUT if timeout is None else timeout
+    )
+    exited = _original_wait_for_pid_exit(pid, log, resolved_timeout)
+
+    after = lock_diag.snapshot_processes()
+    updater_lineage.update(lock_diag.process_lineage(os.getpid(), after))
+    merged = {entry.pid: entry for entry in candidates}
+    for entry in lock_diag.descendant_processes(
+        pid,
+        after,
+        exclude_pids=updater_lineage,
+    ):
+        merged[entry.pid] = entry
+
+    outcomes: list[dict[str, object]] = []
+    if not exited:
+        for entry in merged.values():
+            outcomes.append(
+                {
+                    "pid": entry.pid,
+                    "parent_pid": entry.parent_pid,
+                    "image_name": entry.image_name,
+                    "outcome": "parent_still_running",
+                }
+            )
+    else:
+        # Children first: a parent cannot immediately recreate a child after the
+        # latter has been reaped, and the Updater's own bootloader lineage is excluded.
+        for entry in reversed(list(merged.values())):
+            if entry.pid in updater_lineage or entry.pid == os.getpid():
+                continue
+            if not updater_main._is_pid_alive(entry.pid):
+                outcome = "already_exited"
+            else:
+                current_name = lock_diag.process_image_name(entry.pid)
+                if not current_name:
+                    outcome = "image_unverified_skipped"
+                    log.warning(
+                        "无法验证残留子进程身份，保留并写入诊断: PID=%d",
+                        entry.pid,
+                    )
+                elif (
+                    current_name
+                    and entry.image_name
+                    and current_name.casefold() != entry.image_name.casefold()
+                ):
+                    outcome = "pid_reused_skipped"
+                elif current_name.casefold() not in (
+                    _MANAGED_DESCENDANT_PROCESS_IMAGES
+                ):
+                    outcome = "unmanaged_process_skipped"
+                    log.warning(
+                        "主程序退出后仍有未识别子进程，保留并写入诊断: %s (PID=%d)",
+                        current_name,
+                        entry.pid,
+                    )
+                else:
+                    shown_name = current_name
+                    log.warning(
+                        "主程序退出后仍有子进程存活，正在结束: %s (PID=%d)",
+                        shown_name,
+                        entry.pid,
+                    )
+                    outcome = (
+                        "terminated" if lock_diag.kill_pid(entry.pid) else "terminate_failed"
+                    )
+            outcomes.append(
+                {
+                    "pid": entry.pid,
+                    "parent_pid": entry.parent_pid,
+                    "image_name": entry.image_name,
+                    "outcome": outcome,
+                }
+            )
+
+    if outcomes:
+        diagnostics.record_process_cleanup(
+            {
+                "parent_pid": int(pid),
+                "parent_exited": bool(exited),
+                "updater_lineage": sorted(updater_lineage),
+                "processes": outcomes,
+            }
+        )
+        terminated = sum(item["outcome"] == "terminated" for item in outcomes)
+        failed = sum(item["outcome"] == "terminate_failed" for item in outcomes)
+        log.info(
+            "主程序子进程清理完成：发现 %d，结束 %d，失败 %d",
+            len(outcomes),
+            terminated,
+            failed,
+        )
+        if terminated:
+            time.sleep(0.5)
+    return exited
 
 
 def _path_lexists(path) -> bool:
@@ -688,6 +820,7 @@ def _launch_main_app_workbench(app_dir, app_exe, log) -> bool:
         flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     env = os.environ.copy()
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    env.pop(_UPDATE_DESCENDANTS_ENV, None)
     try:
         subprocess.Popen(  # noqa: S603
             [str(exe_path)],
@@ -719,6 +852,7 @@ def _configure_product() -> None:
     # run_incremental / _apply_part 的调用点都在 SUG 模块内按全局名解析，
     # 替换模块属性即可生效。
     updater_main._retry_on_permission_error = _retry_workbench
+    updater_main.wait_for_pid_exit = _wait_for_pid_exit_workbench
     updater_main.run_incremental = _run_incremental_workbench
     updater_main._apply_part = _apply_part_workbench
 
