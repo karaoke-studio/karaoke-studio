@@ -444,6 +444,9 @@ class KrokHelperQtApp(QMainWindow):
     def sync_lyrics_timing_host_paths(self) -> None:
         self._sync_lyrics_timing_host_paths()
 
+    def reload_lyrics_timing_settings(self) -> bool:
+        return self._reload_lyrics_timing_settings()
+
     def start_workbench_update_check(
         self,
         *,
@@ -1691,6 +1694,30 @@ class KrokHelperQtApp(QMainWindow):
         settings = setting_interface.get_settings() if setting_interface is not None else None
         if settings is not None:
             settings.reload()
+
+    def _reload_lyrics_timing_settings(self) -> bool:
+        """Reload imported SUG data without rebuilding the embedded timing page."""
+        timing_page = getattr(self, "lyrics_timing_page", None)
+        setting_interface = getattr(timing_page, "settingInterface", None)
+        reload_from_disk = getattr(setting_interface, "reload_from_disk", None)
+        store = getattr(timing_page, "_store", None)
+        notify = getattr(store, "notify", None)
+        if not callable(reload_from_disk) or not callable(notify):
+            return False
+
+        try:
+            reload_from_disk()
+            settings_changed = getattr(setting_interface, "settings_changed", None)
+            emit = getattr(settings_changed, "emit", None)
+            if callable(emit):
+                emit()
+            notify("settings")
+            return True
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "导入 SUG 配置后热刷新失败，将在重启后生效", exc_info=True
+            )
+            return False
 
     def set_output_name_mode(self, mode: str) -> None:
         if mode == OUTPUT_NAME_MODE_VIDEO_NAME:

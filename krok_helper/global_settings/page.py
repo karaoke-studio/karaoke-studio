@@ -108,6 +108,8 @@ class SettingsHost(Protocol):
 
     def sync_lyrics_timing_host_paths(self) -> None: ...
 
+    def reload_lyrics_timing_settings(self) -> bool: ...
+
     def install_single_click_combo_behavior(self, combo: object) -> None: ...
 
     def start_workbench_update_check(
@@ -401,6 +403,10 @@ class SettingsDialogs(QObject):
             show_fluent_info(parent, f"导入失败：\n{exc}")
             return
 
+        applied_immediately = False
+        if report["imported"]:
+            applied_immediately = self._host.reload_lyrics_timing_settings()
+
         lines: list[str] = []
         if report["imported"]:
             lines.append("已导入：" + "、".join(report["imported"]))
@@ -418,9 +424,12 @@ class SettingsDialogs(QObject):
             lines.append("以下文件解析失败：" + "、".join(name for name, _ in report["errors"]))
         if not lines:
             lines.append("该目录下未找到任何可导入的 SUG 数据文件。")
-        else:
+        elif report["imported"]:
             lines.append("")
-            lines.append("请重启工作台让打轴模块重新加载新设置。")
+            if applied_immediately:
+                lines.append("已立即应用到打轴模块，无需重启工作台。")
+            else:
+                lines.append("导入已保存；打轴模块热刷新失败，重启工作台后即可生效。")
 
         show_fluent_info(parent, "\n".join(lines))
 
@@ -553,7 +562,7 @@ class SettingsDialogs(QObject):
             "打轴模块数据导入",
             "导入旧版 StrangeUtaGame standalone 的设置、词典、演唱者和网络词典缓存。"
             "主配置未知项会被忽略，缺失项使用默认值；词典 / 演唱者按名称去重合并，"
-            "工作台已有的同名条目优先保留。导入后请重启工作台让设置生效。",
+            "工作台已有的同名条目优先保留。导入完成后会立即应用，无需重启工作台。",
             migrate_group,
         )
         import_card.clicked.connect(lambda: self._import_legacy_sug_for_dialog(dialog))

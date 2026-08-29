@@ -424,3 +424,29 @@ def test_sync_lyrics_timing_host_settings_reloads_embedded_settings(monkeypatch,
 
     assert injected == [host.settings.lyrics_timing]
     assert reloaded == [True]
+
+
+def test_reload_lyrics_timing_settings_refreshes_ui_and_runtime():
+    from krok_helper import gui_qt
+
+    events = []
+    host = SimpleNamespace(
+        lyrics_timing_page=SimpleNamespace(
+            settingInterface=SimpleNamespace(
+                reload_from_disk=lambda: events.append("reload"),
+                settings_changed=SimpleNamespace(emit=lambda: events.append("signal")),
+            ),
+            _store=SimpleNamespace(notify=lambda kind: events.append(kind)),
+        )
+    )
+
+    assert gui_qt.KrokHelperQtApp._reload_lyrics_timing_settings(host) is True
+    assert events == ["reload", "signal", "settings"]
+
+
+def test_reload_lyrics_timing_settings_falls_back_when_page_is_unavailable():
+    from krok_helper import gui_qt
+
+    host = SimpleNamespace(lyrics_timing_page=None)
+
+    assert gui_qt.KrokHelperQtApp._reload_lyrics_timing_settings(host) is False

@@ -42,6 +42,9 @@ class _Host(QWidget):
 
     def sync_lyrics_timing_host_paths(self) -> None: ...
 
+    def reload_lyrics_timing_settings(self) -> bool:
+        return True
+
     def install_single_click_combo_behavior(self, combo) -> None: ...
 
     def start_workbench_update_check(self, *, manual: bool) -> None: ...

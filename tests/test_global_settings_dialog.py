@@ -19,6 +19,7 @@ class _SettingsHost(QWidget):
         self.output_name_mode_value = "fixed"
         self.on_name_template_value = "{video_name}_on"
         self.off_name_template_value = "{video_name}_off"
+        self.lyrics_timing_reload_count = 0
 
     def install_single_click_combo_behavior(self, _combo: QWidget) -> None:
         pass
@@ -32,6 +33,10 @@ class _SettingsHost(QWidget):
 
     def sync_lyrics_timing_host_paths(self) -> None:
         pass
+
+    def reload_lyrics_timing_settings(self) -> bool:
+        self.lyrics_timing_reload_count += 1
+        return True
 
     def start_workbench_update_check(self, *, manual: bool) -> None:
         pass
@@ -65,6 +70,41 @@ def _open_global_settings_dialog(monkeypatch):
     settings_page.SettingsDialogs(host=host, parent=host).open_global_settings()
 
     return app, captured["dialog"], host
+
+
+def test_imported_sug_settings_are_applied_without_restart(monkeypatch) -> None:
+    QApplication.instance() or QApplication([])
+    host = _SettingsHost()
+    messages: list[str] = []
+    saved: list[AppSettings] = []
+    report = {
+        "imported": ["config.json", "singers.json"],
+        "missing": [],
+        "errors": [],
+        "skipped_unknown_keys": [],
+        "added_dict_entries": 0,
+        "added_singers": 2,
+    }
+    monkeypatch.setattr(
+        settings_page.QFileDialog,
+        "getExistingDirectory",
+        lambda *_args, **_kwargs: "D:/legacy-sug",
+    )
+    monkeypatch.setattr(settings_page, "ask_fluent_confirm", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(settings_page, "import_legacy_sug_settings", lambda *_args: report)
+    monkeypatch.setattr(settings_page, "save_app_settings", lambda settings: saved.append(settings))
+    monkeypatch.setattr(
+        settings_page,
+        "show_fluent_info",
+        lambda _parent, message: messages.append(message),
+    )
+
+    settings_page.SettingsDialogs(host=host, parent=host)._import_legacy_sug_for_dialog(host)
+
+    assert saved == [host.settings]
+    assert host.lyrics_timing_reload_count == 1
+    assert messages and "已立即应用到打轴模块，无需重启工作台" in messages[0]
+    host.close()
 
 
 def test_global_settings_actions_stay_outside_scroll_area(monkeypatch) -> None:
