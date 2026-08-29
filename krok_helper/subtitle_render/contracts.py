@@ -101,6 +101,11 @@ class SubtitleRenderPage(Protocol):
         """Load a saved SUG project into the primary subtitle track."""
         ...
 
+    def load_or_reload_sug(self, path: Path) -> object | None:
+        """Workflow handoff entry: merge when the path matches the watched
+        primary source, otherwise fall back to a full load."""
+        ...
+
     def load_video(self, path: Path, info: object | None = None) -> object | None:
         """Load a video as the current background source.
 

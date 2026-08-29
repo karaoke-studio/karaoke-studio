@@ -718,7 +718,7 @@ def test_lyrics_timing_export_loads_saved_sug_into_subtitle_render(
     calls: list[object] = []
 
     class RenderPage:
-        def load_from_sug(self, path):
+        def load_or_reload_sug(self, path):
             calls.append(("track", path))
             return object()
 
@@ -767,7 +767,7 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
             }
         ),
         subtitle_render_page=SimpleNamespace(
-            load_from_sug=lambda path: calls.append(("track", path)) or object(),
+            load_or_reload_sug=lambda path: calls.append(("track", path)) or object(),
             load_media_async=lambda path, *, as_video: calls.append(
                 ("media_async", path, as_video)
             ),
@@ -974,7 +974,7 @@ def test_dirty_sug_save_waits_for_success_before_loading_file(
     app = SimpleNamespace(
         lyrics_timing_page=timing_page,
         subtitle_render_page=SimpleNamespace(
-            load_from_sug=lambda path: calls.append(("load", path)) or object()
+            load_or_reload_sug=lambda path: calls.append(("load", path)) or object()
         ),
         _show_module=lambda module: calls.append(("show", module)),
         _save_lyrics_timing_then_export=lambda page, **kwargs: (
@@ -1034,7 +1034,7 @@ def test_missing_sug_save_as_waits_for_new_file_before_loading(
     app = SimpleNamespace(
         lyrics_timing_page=timing_page,
         subtitle_render_page=SimpleNamespace(
-            load_from_sug=lambda path: calls.append(("load", path)) or object()
+            load_or_reload_sug=lambda path: calls.append(("load", path)) or object()
         ),
         _show_module=lambda module: calls.append(("show", module)),
     )

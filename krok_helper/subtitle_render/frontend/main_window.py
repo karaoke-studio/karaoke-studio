@@ -2787,6 +2787,20 @@ class SubtitleRenderWindow(QWidget):
         self._apply_timing_track(track, path, watch_source=True)
         return track
 
+    def load_or_reload_sug(self, path: Path) -> Optional[TimingTrack]:
+        """工作流第 4→5 步交接入口：同一路径的已监视主字幕源走增量合并，否则整体重载。"""
+        key = self._subtitle_source_key(Path(path))
+        if (
+            self._watch_primary_subtitle_source
+            and self._subtitle_path is not None
+            and self._timing_track is not None
+            and self._subtitle_source_key(self._subtitle_path) == key
+            and self._source_watch_runtime.state(key) is not None
+        ):
+            self._reload_external_subtitle_source(key)
+            return self._timing_track
+        return self.load_from_sug(path)
+
     def load_from_sug_project(
         self,
         project: object,

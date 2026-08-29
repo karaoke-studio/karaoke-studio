@@ -1155,7 +1155,7 @@ class KrokHelperQtApp(QMainWindow):
             )
             return
 
-        track = render_page.load_from_sug(source_path)
+        track = render_page.load_or_reload_sug(source_path)
         if track is None:
             return
 

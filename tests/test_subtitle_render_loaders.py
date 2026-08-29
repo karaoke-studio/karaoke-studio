@@ -220,6 +220,177 @@ def test_external_sug_timestamp_change_uses_same_hot_reload_path(
     assert win._project_dirty is True
 
 
+def _save_timing_sug(path: Path, lines: list[tuple[str, int, int]]) -> None:
+    """写一个最小 SUG：每元素为 (文本, 字起始 ms, 行末 ms) 的一行歌词。"""
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    sentences = [
+        Sentence(
+            singer_id=singer.id,
+            characters=[
+                Character(
+                    char=text,
+                    check_count=1,
+                    timestamps=[start_ms],
+                    sentence_end_ts=end_ms,
+                    is_sentence_end=True,
+                    is_line_end=True,
+                    singer_id=singer.id,
+                )
+            ],
+        )
+        for text, start_ms, end_ms in lines
+    ]
+    SugProjectParser.save(Project(singers=[singer], sentences=sentences), str(path))
+
+
+def test_workflow_handoff_same_path_merges_preserving_overlays(
+    qapp, monkeypatch, tmp_path
+):
+    """第 4→5 步交接：同路径且文件已变化时走 watcher 同款增量合并。"""
+    sug = tmp_path / "watched.sug"
+    _save_timing_sug(sug, [("歌", 1000, 1800)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug) is not None
+    line = win._timing_track.lines[0]
+    line.layout_index = 3
+    line.chars[0].role_label = "手工角色"
+    # 哨兵：纯时间合并不得清空撤销历史（合并可能滚动更新栈顶 style 记录）
+    win._undo_stack.append(("keep",))
+    win._project_dirty = False
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.InfoBar, "success", lambda **kwargs: notices.append(kwargs["content"])
+    )
+    monkeypatch.setattr(
+        mw,
+        "fluent_question",
+        lambda *args, **kwargs: pytest.fail("纯时间变化不应要求确认"),
+    )
+
+    _save_timing_sug(sug, [("歌", 2300, 3100)])
+    returned = win.load_or_reload_sug(sug)
+
+    assert returned is win._timing_track
+    line = win._timing_track.lines[0]
+    assert line.chars[0].start_ms == 2300
+    assert line.end_ms == 3100
+    assert line.layout_index == 3
+    assert line.chars[0].role_label == "手工角色"
+    assert ("keep",) in win._undo_stack
+    assert win._project_dirty is True
+    assert notices == ["已自动载入 watched.sug 的最新时间轴。"]
+
+
+def test_workflow_handoff_same_path_unchanged_sug_is_noop(
+    qapp, monkeypatch, tmp_path
+):
+    """第 4→5 步交接：同路径且内容未变时不重载、不清撤销栈、不标脏。"""
+    sug = tmp_path / "watched.sug"
+    _save_timing_sug(sug, [("歌", 1000, 1800)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug) is not None
+    win._timing_track.lines[0].layout_index = 3
+    undo_before = list(win._undo_stack)
+    win._project_dirty = False
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.InfoBar, "success", lambda **kwargs: notices.append(kwargs["content"])
+    )
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: notices.append(kwargs["content"]))
+
+    returned = win.load_or_reload_sug(sug)
+
+    assert returned is win._timing_track
+    assert win._timing_track.lines[0].layout_index == 3
+    assert win._undo_stack == undo_before
+    assert win._project_dirty is False
+    assert notices == []
+
+
+def test_workflow_handoff_structural_conflict_declined_keeps_current(
+    qapp, monkeypatch, tmp_path
+):
+    """结构冲突被拒绝：保留当前内容并记住 digest，重复交接不再打扰。"""
+    sug = tmp_path / "watched.sug"
+    _save_timing_sug(sug, [("歌", 1000, 1800), ("词", 2000, 2800)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug) is not None
+    win._timing_track.lines[1].layout_index = 1
+    win._project_dirty = False
+    questions: list[object] = []
+    monkeypatch.setattr(
+        mw, "fluent_question", lambda *args, **kwargs: questions.append(args) or False
+    )
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+
+    # 新版本删掉了带本地覆盖的第 2 行 → 结构冲突
+    _save_timing_sug(sug, [("歌", 2300, 3100)])
+    returned = win.load_or_reload_sug(sug)
+
+    assert returned is win._timing_track
+    assert len(win._timing_track.lines) == 2
+    assert win._timing_track.lines[0].chars[0].start_ms == 1000
+    assert win._timing_track.lines[1].layout_index == 1
+    assert win._project_dirty is False
+    assert len(questions) == 1
+
+    # 拒绝后 digest 已被记住：再次交接同一文件不再弹窗、不再重载
+    returned = win.load_or_reload_sug(sug)
+    assert returned is win._timing_track
+    assert len(win._timing_track.lines) == 2
+    assert len(questions) == 1
+
+
+def test_workflow_handoff_structural_conflict_accepted_loads_new(
+    qapp, monkeypatch, tmp_path
+):
+    """结构冲突被接受：载入新内容并清空撤销栈（结构已变化）。"""
+    sug = tmp_path / "watched.sug"
+    _save_timing_sug(sug, [("歌", 1000, 1800), ("词", 2000, 2800)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug) is not None
+    win._timing_track.lines[1].layout_index = 1
+    win._undo_stack.append(("keep",))
+    monkeypatch.setattr(mw, "fluent_question", lambda *args, **kwargs: True)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+
+    _save_timing_sug(sug, [("歌", 2300, 3100)])
+    returned = win.load_or_reload_sug(sug)
+
+    assert returned is win._timing_track
+    assert len(win._timing_track.lines) == 1
+    assert win._timing_track.lines[0].chars[0].start_ms == 2300
+    assert win._timing_track.lines[0].end_ms == 3100
+    assert win._undo_stack == []
+    assert win._project_dirty is True
+
+
+def test_workflow_handoff_different_path_full_reloads(
+    qapp, monkeypatch, tmp_path
+):
+    """第 4→5 步交接：路径不同于当前主字幕源时回退整体重载。"""
+    sug_a = tmp_path / "a.sug"
+    sug_b = tmp_path / "b.sug"
+    _save_timing_sug(sug_a, [("歌", 1000, 1800)])
+    _save_timing_sug(sug_b, [("词", 3300, 4100)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug_a) is not None
+    win._timing_track.lines[0].chars[0].role_label = "手工角色"
+    win._undo_stack.append(("keep",))
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+
+    returned = win.load_or_reload_sug(sug_b)
+
+    assert returned is win._timing_track
+    assert win._subtitle_path == sug_b
+    assert win._timing_track.lines[0].chars[0].start_ms == 3300
+    assert win._timing_track.lines[0].chars[0].role_label != "手工角色"
+    assert win._undo_stack == []
+    assert win._watch_primary_subtitle_source is True
+    assert win._subtitle_source_key(sug_b) in win._source_watch_states
+    assert win._subtitle_source_key(sug_a) not in win._source_watch_states
+
+
 def test_in_memory_sug_handoff_does_not_enable_file_watching(
     qapp, monkeypatch, tmp_path
 ):
