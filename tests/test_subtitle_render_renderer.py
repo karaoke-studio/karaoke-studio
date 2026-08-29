@@ -238,6 +238,13 @@ def test_renderer_keeps_render_job_compatibility_export() -> None:
         assert getattr(renderer, name) is getattr(parallel_schedule, name)
 
 
+def test_validate_render_job_rejects_output_path_that_is_a_directory(tmp_path):
+    job = replace(_job(tmp_path), output_path=tmp_path)
+
+    with pytest.raises(ProcessingError, match="同名文件夹"):
+        validate_render_job(job)
+
+
 def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
     job = _job(tmp_path, include_audio=True)
 
@@ -388,6 +395,28 @@ def test_build_render_command_supports_image_sequence(tmp_path):
     assert command[command.index(str(first)) - 7 : command.index(str(first)) + 1] == [
         "-stream_loop", "-1", "-framerate", "24", "-start_number", "0", "-i", str(first)
     ]
+
+
+def test_build_render_command_escapes_literal_percent_in_sequence_path(tmp_path):
+    """目录名里的字面 % 会破坏 image2 的 snprintf 展开，只保留编号模板。"""
+
+    sequence_dir = tmp_path / "100%Love"
+    sequence_dir.mkdir()
+    pattern = sequence_dir / "frame_%04d.png"
+    job = replace(
+        _job(tmp_path),
+        background_video_path=None,
+        background_source=BackgroundSource(
+            kind="image_sequence", path=str(pattern), source_fps=24
+        ),
+        include_audio=False,
+    )
+
+    command = build_render_command("ffmpeg", job)
+
+    input_index = command.index("-i", command.index("-start_number")) + 1
+    assert command[input_index].endswith(os.path.join("100%%Love", "frame_%04d.png"))
+    assert "%04d" in command[input_index]
 
 
 def test_build_render_command_honors_cpu_quality_settings(tmp_path):
@@ -1186,6 +1215,75 @@ def test_amf_retry_filter_rejects_unrelated_ffmpeg_failure():
         ["ffmpeg", "-c:v", "libx264", "out.mp4"],
         deque(["Error while opening encoder"]),
     ) is False
+
+
+def test_ffmpeg_failure_hint_translates_common_markers():
+    assert "磁盘空间不足" in renderer._ffmpeg_failure_hint(
+        deque(["av_interleaved_write_fd: No space left on device"])
+    )
+    assert "占用" in renderer._ffmpeg_failure_hint(
+        deque(["out.mp4: Permission denied"])
+    )
+    assert "素材" in renderer._ffmpeg_failure_hint(
+        deque(["bg.mp4: No such file or directory"])
+    )
+    assert renderer._ffmpeg_failure_hint(deque(["some unrelated warning"])) == ""
+    assert renderer._ffmpeg_failure_hint(deque([])) == ""
+
+
+def test_render_failure_message_includes_translated_hint(monkeypatch, tmp_path):
+    job = replace(
+        _job(tmp_path), width=2, height=2, fps=2, duration_ms=1_000
+    )
+    failed = _FakeRenderProcess(job.output_path)
+    failed.returncode = 1
+    failed.stdout = [b"out.mp4: Permission denied\n"]
+
+    def fake_writer(process, active_job, _top, render_h, total, *_args):
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda *_args, **_kwargs: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_writer)
+    monkeypatch.setattr(
+        renderer.subprocess, "Popen", lambda *args, **kwargs: failed
+    )
+
+    with pytest.raises(ProcessingError) as excinfo:
+        render_subtitle_video(job)
+
+    assert "退出码: 1" in str(excinfo.value)
+    assert "占用" in str(excinfo.value)
+
+
+def test_render_broken_pipe_message_includes_translated_hint(monkeypatch, tmp_path):
+    class _BrokenStdin(_FakeRenderStdin):
+        def write(self, _payload):
+            raise BrokenPipeError("ffmpeg exited while consuming rawvideo")
+
+    job = replace(
+        _job(tmp_path), width=2, height=2, fps=2, duration_ms=1_000
+    )
+    failed = _FakeRenderProcess(job.output_path)
+    failed.stdin = _BrokenStdin()
+    failed.returncode = 1
+    failed.stdout = [b"av_interleaved_write_fd: No space left on device\n"]
+
+    def fake_writer(process, active_job, _top, render_h, total, *_args):
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda *_args, **_kwargs: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_writer)
+    monkeypatch.setattr(
+        renderer.subprocess, "Popen", lambda *args, **kwargs: failed
+    )
+
+    with pytest.raises(ProcessingError) as excinfo:
+        render_subtitle_video(job)
+
+    assert "管道写入失败" in str(excinfo.value)
+    assert "磁盘空间不足" in str(excinfo.value)
 
 
 def test_render_falls_back_to_python_when_native_export_sidecar_missing(monkeypatch, tmp_path):

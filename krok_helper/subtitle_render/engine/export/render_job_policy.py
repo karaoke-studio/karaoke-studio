@@ -74,6 +74,53 @@ def ensure_output_is_not_input(job: RenderJob) -> None:
             )
 
 
+_WINDOWS_ILLEGAL_NAME_CHARS = '<>:"/\\|?*'
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+_WINDOWS_MAX_PATH = 260
+
+
+def validate_output_target(output_path: Path, *, output_name: str | None = None) -> None:
+    """输出侧前置校验：非法文件名 / 保留名 / 已存在同名目录 / 超长路径。
+
+    这些情况 ffmpeg 都要等到创建输出文件那一刻才失败，用户看到的是断管或
+    裸退出码；在这里提前用中文拦下。``output_name`` 传入用户原始输入
+    （拼 ``.mp4`` 之前）以捕获 ``/``、``\\`` 这类会被 Path 静默并入路径的字符；
+    缺省时从 ``output_path`` 反推文件名（引擎侧兜底）。
+    """
+
+    name = (output_name if output_name is not None else output_path.stem).strip()
+    if not name:
+        raise ProcessingError("请填写导出文件名。")
+    if output_path.is_dir():
+        raise ProcessingError(
+            f"输出位置已存在同名文件夹，请换一个导出文件名：{output_path}"
+        )
+    if os.name != "nt":
+        return
+    illegal = sorted(
+        {
+            ch
+            for ch in name
+            if ch in _WINDOWS_ILLEGAL_NAME_CHARS or ord(ch) < 0x20
+        }
+    )
+    if illegal:
+        raise ProcessingError(
+            f"导出文件名包含 Windows 不允许的字符：{' '.join(illegal)}，请换一个文件名。"
+        )
+    if name.split(".", 1)[0].strip().upper() in _WINDOWS_RESERVED_NAMES:
+        raise ProcessingError(f"「{name}」是 Windows 保留设备名，请换一个导出文件名。")
+    if len(str(output_path)) >= _WINDOWS_MAX_PATH:
+        raise ProcessingError(
+            f"输出路径过长（{len(str(output_path))} 字符，Windows 上限约 "
+            f"{_WINDOWS_MAX_PATH}），请缩短输出文件夹层级或文件名。"
+        )
+
+
 def validate_render_job(job: RenderJob) -> None:
     """Reject invalid jobs before ffmpeg or a frame renderer is started."""
 
@@ -113,6 +160,7 @@ def validate_render_job(job: RenderJob) -> None:
         raise ProcessingError(f"不支持的 CPU preset: {job.preset}")
     if not str(job.output_path).strip():
         raise ProcessingError("请先选择输出路径。")
+    validate_output_target(job.output_path)
     ensure_output_is_not_input(job)
 
 

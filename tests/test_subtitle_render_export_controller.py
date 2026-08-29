@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,6 +122,44 @@ def test_export_job_controller_rejects_output_over_the_background_video(
         ExportJobController.build(inputs)
 
     assert background.read_bytes() == b"source-video-bytes"
+
+
+def test_export_job_controller_rejects_output_name_that_is_existing_directory(
+    tmp_path,
+) -> None:
+    (tmp_path / "result.mp4").mkdir()
+
+    with pytest.raises(ProcessingError, match="同名文件夹"):
+        ExportJobController.build(_inputs(tmp_path))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 文件名规则仅限 nt 校验")
+@pytest.mark.parametrize(
+    "output_name",
+    ['a<b', "a:b", 'a"b', "a/b", "a\\b", "a|b", "a?b", "a*b"],
+)
+def test_export_job_controller_rejects_windows_illegal_output_name(
+    tmp_path, output_name
+) -> None:
+    with pytest.raises(ProcessingError, match="不允许的字符"):
+        ExportJobController.build(replace(_inputs(tmp_path), output_name=output_name))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 保留设备名仅限 nt 校验")
+@pytest.mark.parametrize("output_name", ["CON", "con", "NUL.mp3", "COM1"])
+def test_export_job_controller_rejects_windows_reserved_output_name(
+    tmp_path, output_name
+) -> None:
+    with pytest.raises(ProcessingError, match="保留设备名"):
+        ExportJobController.build(replace(_inputs(tmp_path), output_name=output_name))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MAX_PATH 限制仅限 Windows")
+def test_export_job_controller_rejects_overlong_output_path(tmp_path) -> None:
+    with pytest.raises(ProcessingError, match="路径过长"):
+        ExportJobController.build(
+            replace(_inputs(tmp_path), output_name="x" * 300)
+        )
 
 
 def test_export_job_controller_resolves_longest_track_or_media_duration() -> None:

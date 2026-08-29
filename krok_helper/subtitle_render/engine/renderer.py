@@ -445,7 +445,10 @@ def render_subtitle_video(
         if _should_retry_amf_with_cpu(command, ffmpeg_output_tail):
             amf_pipe_failure = True
         else:
-            raise ProcessingError(f"ffmpeg 管道写入失败: {exc}") from exc
+            raise ProcessingError(
+                f"ffmpeg 管道写入失败: {exc}"
+                f"{_ffmpeg_failure_hint(ffmpeg_output_tail)}"
+            ) from exc
     except Exception:
         # 其余帧生产异常（如进度回调抛 RuntimeError / Qt 对象竞态）同样不得
         # 泄漏 ffmpeg：终止进程、删半成品后原样上抛。放在各具体分支之后，
@@ -487,7 +490,10 @@ def render_subtitle_video(
         raise ProcessingError("ffmpeg 管道异常关闭，未取得退出码")
     if return_code != 0:
         _remove_incomplete_output(job, logger)
-        raise ProcessingError(f"ffmpeg 执行失败，退出码: {return_code}")
+        raise ProcessingError(
+            f"ffmpeg 执行失败，退出码: {return_code}"
+            f"{_ffmpeg_failure_hint(ffmpeg_output_tail)}"
+        )
     if not job.output_path.is_file() or os.path.getsize(job.output_path) == 0:
         raise ProcessingError(f"导出失败，未生成有效文件: {job.output_path}")
 
@@ -1576,6 +1582,38 @@ def _should_retry_amf_with_cpu(
         "device removed",
     )
     return any(marker in output for marker in markers)
+
+
+_FFMPEG_FAILURE_HINTS: tuple[tuple[str, str], ...] = (
+    ("no space left", "磁盘空间不足，请清理后重试"),
+    ("disk full", "磁盘空间不足，请清理后重试"),
+    (
+        "permission denied",
+        "输出文件或素材无写入权限/正被其他程序占用（如播放器、杀毒软件），关闭后重试",
+    ),
+    ("read-only file system", "输出位置是只读的，请更换输出文件夹"),
+    ("input/output error", "磁盘读写错误，请检查磁盘状态"),
+    (
+        "no such file or directory",
+        "素材或输出路径在导出过程中失效（被移动、删除或改名）",
+    ),
+    ("invalid data found", "输入素材读取失败或已损坏"),
+    ("cannot allocate memory", "内存不足，请关闭其他程序或减少并行 worker 后重试"),
+)
+
+
+def _ffmpeg_failure_hint(output_tail: deque[str]) -> str:
+    """从 ffmpeg 输出尾部识别常见失败原因，翻译成一句中文解释。
+
+    这些失败最终都表现为断管或非零退出码，光看通用报错无法定位；ffmpeg 的
+    stderr 已由排水线程收进 ``output_tail``，这里只挑高置信度的标记。
+    """
+
+    output = "\n".join(output_tail).lower()
+    for marker, hint in _FFMPEG_FAILURE_HINTS:
+        if marker in output:
+            return f"（疑似原因：{hint}）"
+    return ""
 
 
 def _remove_incomplete_output(job: RenderJob, logger: Logger) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PyQt6.QtGui import QColor
@@ -21,6 +22,18 @@ from krok_helper.subtitle_render.engine.export.render_job_policy import (
 _PREVIEW_FPS = 2
 _PREVIEW_WIDTH = 640
 _PREVIEW_MIN_WIDTH = 320
+
+
+def ffmpeg_sequence_pattern(path: str) -> str:
+    """Escape literal ``%`` in an image-sequence path, keeping the number pattern.
+
+    image2 expands the input path with snprintf semantics, so a literal ``%`` in
+    a directory name (e.g. ``100%Love``) is consumed as a bogus conversion and
+    the input fails to open.  ``%d`` / ``%04d`` stay untouched; everything else
+    becomes ``%%``, which snprintf renders back as ``%``.
+    """
+
+    return re.sub(r"%(?!0?\d*d)", "%%", path)
 
 
 def resolved_preview_width(output_width: int, requested_width: int | None) -> int:
@@ -98,7 +111,7 @@ def background_input_args(
             "-start_number",
             str(max(int(source.sequence_start_number), 0)),
             "-i",
-            str(source.path),
+            ffmpeg_sequence_pattern(str(source.path)),
         ]
     args: list[str] = []
     if source.video_offset_ms:
