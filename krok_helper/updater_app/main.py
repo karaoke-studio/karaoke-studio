@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from krok_helper import ensure_sug_root_path
 from krok_helper.updater_app import diagnostics, lock_diag
@@ -19,6 +20,8 @@ from updater_app import main as updater_main
 # 工作台口径的文件锁重试间隔：等差、3s（SUG 默认 1.5s）。占用方多为常驻句柄，
 # 单纯加次数帮助有限，拉长单次等待更稳妥。
 FILE_LOCK_RETRY_INTERVAL = 3.0
+_LOG_HISTORY_DIR_NAME = "log-history"
+_LOG_HISTORY_KEEP_COUNT = 10
 
 # 更新器只能结束明确属于本产品的进程。未知进程、Explorer、系统进程和安全软件
 # 一律只展示；黑名单无法穷举，白名单才不会误伤用户的其他程序。
@@ -662,17 +665,83 @@ class _WorkbenchProductFilter(logging.Filter):
         return True
 
 
-_original_setup_logger = updater_main.setup_logger
 _original_cleanup_temp_workdir = updater_main._cleanup_temp_workdir
 _original_apply_update = updater_main.apply_update
 
 PRIMARY_APP_EXE_NAME = "Lin-K Lyrics.exe"
 
 
+def _close_logger_handlers(logger: logging.Logger) -> None:
+    """Detach and close handlers left by a previous updater attempt."""
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        try:
+            handler.flush()
+        except Exception:
+            pass
+        try:
+            handler.close()
+        except Exception:
+            pass
+
+
+def _archive_previous_log(log_path) -> bool:
+    """Archive a non-empty updater.log before a new attempt starts."""
+    try:
+        if not log_path.is_file() or log_path.stat().st_size == 0:
+            return True
+        history_dir = log_path.parent / _LOG_HISTORY_DIR_NAME
+        history_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        archived = history_dir / f"updater-{stamp}-pid{os.getpid()}.log"
+        os.replace(str(log_path), str(archived))
+
+        history = sorted(
+            history_dir.glob("updater-*.log"),
+            key=lambda item: (item.stat().st_mtime_ns, item.name),
+            reverse=True,
+        )
+        for stale in history[_LOG_HISTORY_KEEP_COUNT:]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        return True
+    except OSError:
+        return False
+
+
 def _setup_workbench_logger(log_path):
-    logger = _original_setup_logger(log_path)
+    logger = logging.getLogger("sug.updater")
+    _close_logger_handlers(logger)
+    archived = _archive_previous_log(log_path)
+
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(updater_main.LOG_FORMAT, updater_main.DATE_FORMAT)
+
+    console = logging.StreamHandler(stream=sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
+
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        # If archiving was blocked, append rather than destroy the only copy.
+        file_handler = logging.FileHandler(
+            str(log_path),
+            mode="w" if archived else "a",
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except OSError:
+        pass
+
     if not any(isinstance(item, _WorkbenchProductFilter) for item in logger.filters):
         logger.addFilter(_WorkbenchProductFilter())
+    if not archived:
+        logger.warning("无法归档上一份 updater.log，本次日志将追加写入以避免丢失")
     return logger
 
 
@@ -681,10 +750,18 @@ def _run_with_diagnostics(args, run_func, *run_args, **run_kwargs):
     _best_effort_diagnostic(diagnostics.begin_session, args)
     try:
         code = run_func(args, *run_args, **run_kwargs)
+    except Exception as exc:
+        log = logging.getLogger("sug.updater")
+        log.exception("更新器发生未处理异常")
+        _flush_logger(log)
+        _best_effort_diagnostic(diagnostics.finish_session, 99, exc=exc)
+        _flush_logger(log)
+        return 99
     except BaseException as exc:
         _best_effort_diagnostic(diagnostics.finish_session, 99, exc=exc)
         raise
     _best_effort_diagnostic(diagnostics.finish_session, code)
+    _flush_logger(logging.getLogger("sug.updater"))
     return code
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import zipfile
 from types import SimpleNamespace
 
 from PyQt6.QtCore import Qt
@@ -50,6 +51,52 @@ def test_workbench_rebrands_sug_updater_log_messages() -> None:
 
     assert workbench_updater._WorkbenchProductFilter().filter(record)
     assert record.getMessage() == "Lin-K Lyrics Updater 启动"
+
+
+def test_workbench_logger_archives_previous_attempt(tmp_path) -> None:
+    log_path = tmp_path / "updater.log"
+    log_path.write_text("previous attempt\n", encoding="utf-8")
+
+    logger = workbench_updater._setup_workbench_logger(log_path)
+    try:
+        logger.info("current attempt")
+        workbench_updater._flush_logger(logger)
+
+        assert "current attempt" in log_path.read_text(encoding="utf-8")
+        assert "previous attempt" not in log_path.read_text(encoding="utf-8")
+        history = list((tmp_path / "log-history").glob("updater-*.log"))
+        assert len(history) == 1
+        assert history[0].read_text(encoding="utf-8") == "previous attempt\n"
+    finally:
+        workbench_updater._close_logger_handlers(logger)
+
+
+def test_unhandled_exception_is_written_to_updater_log(tmp_path, monkeypatch) -> None:
+    log_path = tmp_path / "updater.log"
+    logger = workbench_updater._setup_workbench_logger(log_path)
+    finished: list[tuple[int, BaseException | None]] = []
+    monkeypatch.setattr(diagnostics, "begin_session", lambda args: None)
+    monkeypatch.setattr(
+        diagnostics,
+        "finish_session",
+        lambda code, exc=None: finished.append((code, exc)),
+    )
+
+    def fail(_args, **_kwargs):
+        raise zipfile.BadZipFile("Bad magic number for central directory")
+
+    try:
+        result = workbench_updater._run_with_diagnostics(object(), fail)
+        text = log_path.read_text(encoding="utf-8")
+
+        assert result == 99
+        assert "ERROR 更新器发生未处理异常" in text
+        assert "Traceback (most recent call last)" in text
+        assert "zipfile.BadZipFile: Bad magic number for central directory" in text
+        assert finished and finished[0][0] == 99
+        assert isinstance(finished[0][1], zipfile.BadZipFile)
+    finally:
+        workbench_updater._close_logger_handlers(logger)
 
 
 def test_workbench_update_progress_window_is_not_always_on_top(qapp) -> None:
