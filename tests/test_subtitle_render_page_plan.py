@@ -7,6 +7,8 @@ import pickle
 from krok_helper.subtitle_render.engine.layout.page.plan import (
     build_legacy_page_plan,
     build_page_plan,
+    delete_boundary,
+    insert_boundary,
     move_page_boundary,
     normalize_page_plan,
     page_plan_has_manual_changes,
@@ -349,12 +351,14 @@ def test_move_boundary_crosses_section_and_removes_empty_section():
 
     assert move_page_boundary(track, style, 0, 0, direction=1)
 
+    # 合并后的 2 行页按实际行数取默认布局；默认样式的 2 行映射是
+    # "default"（"builtin-2" 不在默认布局列表里，normalize 会重映射）。
     assert [
         [(page.line_count, page.layout_id) for page in section.pages]
         for section in track.page_plan.sections
     ] == [
-        [(2, "builtin-2")],
-        [(2, "builtin-2")],
+        [(2, "default")],
+        [(2, "default")],
     ]
     resolved = resolve_page_plan(track, style)
     assert [line.section_index for line in resolved.lines] == [0, 0, 1, 1]
@@ -573,3 +577,117 @@ def test_subtitle_loading_settings_round_trips_sug_export_compensation_flag() ->
         ).apply_sug_export_compensation
         is True
     )
+
+
+def test_insert_section_at_page_head_splits_before_whole_page():
+    """段内非首页的页首行前插分段：不拆页，整页前切段，该页成为新段首页。"""
+
+    style = ensure_page_layout_defaults(Style())
+    track = _track(10)
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[
+                    TrackPage(2, "default"),
+                    TrackPage(2, "default"),
+                    TrackPage(2, "default"),
+                    TrackPage(2, "default"),
+                ]
+            ),
+            TrackSection(pages=[TrackPage(2, "default")]),
+        ]
+    )
+
+    # 行 6 = S1P4T1：插入分段后该页起整体开新段，原 S2 顺延为 S3。
+    assert insert_boundary(track, style, 6, kind="paragraph")
+
+    assert [
+        (line.section_index, line.global_page_index) for line in resolve_page_plan(track, style).lines
+    ] == [
+        (0, 0), (0, 0),
+        (0, 1), (0, 1),
+        (0, 2), (0, 2),
+        (1, 3), (1, 3),
+        (2, 4), (2, 4),
+    ]
+    # 整页平移进新段，页面行数与布局保持不变。
+    assert [
+        [(page.line_count, page.layout_id) for page in section.pages]
+        for section in track.page_plan.sections
+    ] == [
+        [(2, "default"), (2, "default"), (2, "default")],
+        [(2, "default")],
+        [(2, "default")],
+    ]
+    assert track.lines[6].break_before == "paragraph"
+
+
+def test_insert_boundary_at_existing_boundaries_is_rejected():
+    style = ensure_page_layout_defaults(Style())
+    track = _track(4)
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[TrackPage(2, "default"), TrackPage(2, "default")]
+            ),
+            TrackSection(pages=[TrackPage(2, "default")]),
+        ]
+    )
+
+    # 页首行前已有页边界：插分页无意义。
+    assert not insert_boundary(track, style, 2, kind="page")
+    # 段首页的页首前已有段边界：插分段同样无意义。
+    assert not insert_boundary(track, style, 4, kind="paragraph")
+    # 全曲第一行前什么都插不了。
+    assert not insert_boundary(track, style, 0, kind="paragraph")
+    assert not insert_boundary(track, style, 0, kind="page")
+
+
+def test_insert_section_mid_page_splits_page_and_shifts_following_sections():
+    style = ensure_page_layout_defaults(Style())
+    track = _track(4)
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[TrackPage(2, "default"), TrackPage(2, "default")]
+            ),
+        ]
+    )
+
+    # 行 1 在页中间：页在它前拆开，左页留在 S1，它起开新段。
+    assert insert_boundary(track, style, 1, kind="paragraph")
+
+    assert [
+        [(page.line_count, page.layout_id) for page in section.pages]
+        for section in track.page_plan.sections
+    ] == [
+        [(1, "builtin-1")],
+        [(1, "builtin-1"), (2, "default")],
+    ]
+    assert [line.break_before for line in track.lines] == [
+        "none",
+        "paragraph",
+        "page",
+        "none",
+    ]
+
+
+def test_insert_section_at_page_head_round_trips_with_delete():
+    style = ensure_page_layout_defaults(Style())
+    track = _track(4)
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[TrackPage(2, "default"), TrackPage(2, "default")]
+            ),
+        ]
+    )
+
+    assert insert_boundary(track, style, 2, kind="paragraph")
+    assert len(track.page_plan.sections) == 2
+    # 新段首页页首的行可再删除分段，恢复单段结构。
+    assert delete_boundary(track, style, 2, kind="paragraph")
+    assert [
+        [(page.line_count, page.layout_id) for page in section.pages]
+        for section in track.page_plan.sections
+    ] == [[(2, "default"), (2, "default")]]

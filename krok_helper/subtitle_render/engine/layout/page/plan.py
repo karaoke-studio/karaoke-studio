@@ -524,34 +524,42 @@ def insert_boundary(
     if line is None:
         return False
     resolved_page = resolved.pages[line.global_page_index]
-    if (
-        not resolved_page.track_line_indices
-        or resolved_page.track_line_indices[0] == track_line_index
-    ):
+    if not resolved_page.track_line_indices:
         return False
     plan = normalize_page_plan(track, style)
     section = plan.sections[line.section_index]
-    page = section.pages[line.page_index_in_section]
-    offset = next(
-        index
-        for index, item in enumerate(resolved_page.track_line_indices)
-        if item == track_line_index
-    )
-    left = TrackPage(offset, _default_layout_id(style, offset))
-    right_count = page.line_count - offset
-    right = TrackPage(right_count, _default_layout_id(style, right_count))
-    if kind == "page":
-        section.pages[line.page_index_in_section : line.page_index_in_section + 1] = [
-            left,
-            right,
-        ]
+    before_pages: list[TrackPage]
+    after_pages: list[TrackPage]
+    if resolved_page.track_line_indices[0] == track_line_index:
+        # 页首行前已有页边界，插分页无意义；插分段改为整页前切段，
+        # 该页起成为新分段。段首页的页首前段边界也已存在，同样无可插。
+        if kind == "page" or line.page_index_in_section == 0:
+            return False
+        before_pages = section.pages[: line.page_index_in_section]
+        after_pages = section.pages[line.page_index_in_section :]
     else:
+        page = section.pages[line.page_index_in_section]
+        offset = next(
+            index
+            for index, item in enumerate(resolved_page.track_line_indices)
+            if item == track_line_index
+        )
+        left = TrackPage(offset, _default_layout_id(style, offset))
+        right_count = page.line_count - offset
+        right = TrackPage(right_count, _default_layout_id(style, right_count))
+        if kind == "page":
+            section.pages[
+                line.page_index_in_section : line.page_index_in_section + 1
+            ] = [left, right]
+            track.page_plan = normalize_page_plan(track, style, plan)
+            project_page_plan_to_legacy_fields(track, style)
+            return True
         before_pages = section.pages[: line.page_index_in_section] + [left]
         after_pages = [right] + section.pages[line.page_index_in_section + 1 :]
-        plan.sections[line.section_index : line.section_index + 1] = [
-            TrackSection(before_pages),
-            TrackSection(after_pages),
-        ]
+    plan.sections[line.section_index : line.section_index + 1] = [
+        TrackSection(before_pages),
+        TrackSection(after_pages),
+    ]
     track.page_plan = normalize_page_plan(track, style, plan)
     project_page_plan_to_legacy_fields(track, style)
     return True
