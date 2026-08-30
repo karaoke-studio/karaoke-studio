@@ -25,7 +25,11 @@ from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     replacement_symbol_for_match,
 )
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import _CharRoleDialog
-from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT, LyricsPanel
+from krok_helper.subtitle_render.frontend.editor.lyrics_list import (
+    COL_CONTENT,
+    LyricsPanel,
+    _line_content_text,
+)
 from krok_helper.subtitle_render.frontend.main_window import (
     SubtitleRenderWindow,
     _GuideSymbolSettingsDialog,
@@ -79,6 +83,84 @@ def _bitmap_symbol(tmp_path, *, color: str = "#FF0000") -> GuideSymbol:
         bitmap_no_decor=True,
         prefix_timing="anchored",
     )
+
+
+def test_line_content_text_marks_bitmap_inline_symbols(tmp_path):
+    """@Emoji 位图头像（无 path_commands）在歌词列表内容列也显示 ◆ 占位，
+    不能把原始触发标签【演唱者名】当正文漏出来。"""
+    symbol = _bitmap_symbol(tmp_path)
+    line = TimingLine(
+        chars=[
+            TimingChar("【A】", 1000, role_label="A"),
+            TimingChar("あ", 1000, role_label="A"),
+        ],
+        end_ms=1500,
+        inline_guide_symbols={0: symbol},
+    )
+
+    assert _line_content_text(line) == "◆あ"
+
+
+def test_char_chips_paint_bitmap_avatar_thumbnail(qapp, tmp_path):
+    """逐字符角色对话框的字符块必须画出 @Emoji 头像缩略图（不再整块空白）。"""
+    image_path = tmp_path / "avatar.png"
+    image = QImage(24, 16, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(255, 0, 0, 255))
+    assert image.save(str(image_path))
+    view = lyrics_list_module._CharChipsView(
+        ["【A】", "あ"],
+        ["A", "A"],
+        Style(),
+        vector_symbols=[
+            GuideSymbol(kind="bitmap", bitmap_before_path=str(image_path)),
+            None,
+        ],
+    )
+    view.resize(2 * view._CHIP_W + view._GAP, view._CHIP_H)
+
+    canvas = QImage(view.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(Qt.GlobalColor.transparent)
+    view.render(canvas)
+
+    red = sum(
+        1
+        for y in range(canvas.height())
+        for x in range(canvas.width())
+        if canvas.pixelColor(x, y).red() > 180
+        and canvas.pixelColor(x, y).green() < 80
+        and canvas.pixelColor(x, y).blue() < 80
+    )
+    assert red > 10
+
+
+def test_char_chips_paint_placeholder_for_blank_bitmap(qapp, tmp_path):
+    """全透明分色占位图没有可见内容：字符块退 ◆ 占位，不能什么都不画。"""
+    image_path = tmp_path / "blank.png"
+    image = QImage(1, 1, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(0, 0, 0, 0))
+    assert image.save(str(image_path))
+    view = lyrics_list_module._CharChipsView(
+        ["【A】"],
+        ["A"],
+        Style(),
+        vector_symbols=[
+            GuideSymbol(kind="bitmap", bitmap_before_path=str(image_path)),
+        ],
+    )
+    view.resize(view._CHIP_W, view._CHIP_H)
+
+    canvas = QImage(view.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(Qt.GlobalColor.transparent)
+    view.render(canvas)
+
+    visible = sum(
+        1
+        for y in range(canvas.height())
+        for x in range(canvas.width())
+        if canvas.pixelColor(x, y).alpha() > 0
+    )
+    # ◆ 文字 + chip 边框都算可见内容；纯空白（旧行为）远低于此
+    assert visible > 30
 
 
 def _count_red_pixels(image: QImage) -> int:

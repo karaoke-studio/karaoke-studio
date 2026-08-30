@@ -125,6 +125,91 @@ def test_load_sug_timing_track_reads_sug_file(tmp_path: Path) -> None:
     assert [line.chars[0].text for line in track.lines] == ["愛", "空"]
 
 
+def test_sug_emoji_guides_insert_at_singer_switches(tmp_path: Path) -> None:
+    """.sug 直读按歌手切换点原位插入 @Emoji 头像（对齐 SUG 导出器的标签位置）。"""
+    track = timing_track_from_sug_project(
+        _sample_sug_project(),
+        nicokara_tags={
+            "custom": [
+                "@Emoji=【主唱】,lead.png,,NoDecor",
+                "@Emoji=【和声】,chorus.png,,NoDecor",
+            ]
+        },
+        base_dir=tmp_path,
+    )
+
+    # 首个主唱字符前 + 切到和声的行首各插一个头像，起点与后继字符一致
+    first = track.lines[0]
+    assert [(c.text, c.start_ms) for c in first.chars] == [("【主唱】", 1050), ("愛", 1050)]
+    assert set(first.inline_guide_symbols) == {0}
+    assert first.inline_guide_symbols[0].bitmap_before_path == str(tmp_path / "lead.png")
+
+    second = track.lines[1]
+    assert [(c.text, c.start_ms) for c in second.chars] == [("【和声】", 2250), ("空", 2250)]
+    assert set(second.inline_guide_symbols) == {0}
+    assert second.inline_guide_symbols[0].bitmap_before_path == str(tmp_path / "chorus.png")
+
+    # 两行都不占用行前导唱符槽位
+    assert first.guide_symbol is None and second.guide_symbol is None
+
+
+def test_sug_emoji_guides_skip_whitespace_runs(tmp_path: Path) -> None:
+    """纯空白歌手段对齐导出器跳过标签（但仍追踪切换），切回时重新插图。"""
+    ai = Character(
+        char="愛",
+        ruby=Ruby(parts=[RubyPart("あ")]),
+        check_count=1,
+        timestamps=[1000],
+        sentence_end_ts=1500,
+        is_sentence_end=True,
+        is_line_end=True,
+        singer_id="main",
+    )
+    space = Character(
+        char=" ",
+        timestamps=[1600],
+        sentence_end_ts=None,
+        singer_id="chorus",
+    )
+    sora = Character(
+        char="空",
+        ruby=Ruby(parts=[RubyPart("そら")]),
+        check_count=1,
+        timestamps=[2000],
+        sentence_end_ts=2400,
+        is_sentence_end=True,
+        is_line_end=True,
+        singer_id="main",
+    )
+    main = Singer(id="main", name="主唱", color="#ff0000", is_default=True, backend_number=1)
+    chorus = Singer(id="chorus", name="和声", color="#00ff00", backend_number=2)
+    project = Project(
+        metadata=ProjectMetadata(),
+        singers=[main, chorus],
+        sentences=[Sentence(singer_id="main", characters=[ai, space, sora])],
+        audio_duration_ms=3000,
+    )
+    track = timing_track_from_sug_project(
+        project,
+        nicokara_tags={
+            "custom": [
+                "@Emoji=【主唱】,lead.png,,NoDecor",
+                "@Emoji=【和声】,chorus.png,,NoDecor",
+            ]
+        },
+        base_dir=tmp_path,
+    )
+
+    # 和声整段只有空格：不插【和声】；切回主唱仍按切换重新插【主唱】
+    line = track.lines[0]
+    assert [c.text for c in line.chars] == ["【主唱】", "愛", " ", "【主唱】", "空"]
+    assert set(line.inline_guide_symbols) == {0, 3}
+    assert all(
+        s.bitmap_before_path == str(tmp_path / "lead.png")
+        for s in line.inline_guide_symbols.values()
+    )
+
+
 def test_sug_adapter_merges_nicokara_metadata_and_custom_tags() -> None:
     track = timing_track_from_sug_project(
         _sample_sug_project(),

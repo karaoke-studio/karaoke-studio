@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.engine.guide.metrics import vector_glyph_width
 from krok_helper.subtitle_render.sources.subtitles import (
     load_nicokara_lrc,
     parse_nicokara_lrc,
@@ -576,6 +578,7 @@ def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():
 
 
 def test_load_lrc_applies_emoji_role_tag_to_explicit_singer_line(tmp_path):
+    """行首歌手标签同样原位替换为头像（SHINTA 规格：出现一次换一次）。"""
     lrc = tmp_path / "demo.lrc"
     (tmp_path / "lead.png").write_bytes(b"fake")
     lrc.write_text(
@@ -588,17 +591,49 @@ def test_load_lrc_applies_emoji_role_tag_to_explicit_singer_line(tmp_path):
 
     track = load_nicokara_lrc(lrc)
 
-    first = track.lines[0].guide_symbol
-    assert first is not None
-    assert first.kind == "bitmap"
-    assert first.prefix_timing == "anchored"
-    assert first.bitmap_before_path == str(tmp_path / "lead.png")
-    assert first.bitmap_zoom_percent == 120
-    assert first.bitmap_no_decor is True
-    assert first.bitmap_margin_right_px == 7
-    assert first.bitmap_margin_bottom_px == 20
+    first = track.lines[0]
+    assert first.guide_symbol is None
+    assert [(c.text, c.start_ms) for c in first.chars] == [("【A】", 1000), ("●", 1000), ("a", 1500)]
+    symbol = first.inline_guide_symbols[0]
+    assert symbol.kind == "bitmap"
+    assert symbol.bitmap_before_path == str(tmp_path / "lead.png")
+    assert symbol.bitmap_zoom_percent == 120
+    assert symbol.bitmap_no_decor is True
+    assert symbol.bitmap_margin_right_px == 7
+    assert symbol.bitmap_margin_bottom_px == 20
+    # 歌手延续行（正文无标签）不插头像
     assert track.lines[1].singer_label == "A"
     assert track.lines[1].guide_symbol is None
+    assert track.lines[1].inline_guide_symbols == {}
+
+
+def test_load_lrc_color_separation_placeholder_emoji_tag(tmp_path):
+    """SUG 分色标签设置助手的无图标分色：透明 1x1 + Zoom=1 + 负 MarginRight。
+
+    标签原位替换为一个近乎零宽的隐形图片，负边距把后续文字左拉——
+    排版推进由 ``vector_glyph_width`` 决定（图宽 + 左右边距）。
+    """
+    lrc = tmp_path / "demo.lrc"
+    lrc.write_text(
+        "【太郎】[00:01:00]あ[00:02:00]い[00:03:00]\n"
+        "\n"
+        "@Emoji=【太郎】,透明画像1x1.png,,Zoom=1,NoDecor,MarginRight=-170\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+
+    line = track.lines[0]
+    assert line.guide_symbol is None
+    assert [c.text for c in line.chars] == ["【太郎】", "あ", "い"]
+    symbol = line.inline_guide_symbols[0]
+    assert symbol.bitmap_zoom_percent == 1
+    assert symbol.bitmap_no_decor is True
+    assert symbol.bitmap_margin_right_px == -170
+
+    style = Style(font_family="Arial", font_size_px=64)
+    # 图片缺失时布局回退为 1px 宽：1 + 0 + (-170) = -169，文字整体左拉
+    assert vector_glyph_width(symbol, style) == -169
 
 
 def test_load_lrc_applies_single_visible_emoji_token_inline(tmp_path):
@@ -616,6 +651,108 @@ def test_load_lrc_applies_single_visible_emoji_token_inline(tmp_path):
     symbol = track.lines[0].inline_guide_symbols[0]
     assert symbol.kind == "bitmap"
     assert symbol.bitmap_before_path == str(tmp_path / "note.png")
+
+
+def test_load_lrc_replaces_every_inline_emoji_role_tag(tmp_path):
+    """一行内多个 ``@Emoji`` 触发标签：每个出现都原位替换，没有角色名特判。"""
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "a.png").write_bytes(b"fake")
+    (tmp_path / "b.png").write_bytes(b"fake")
+    lrc.write_text(
+        # SUG 导出器把标签写在后继字符时间戳之后：[ts]【B】い
+        "【A】[00:01:00]あ[00:02:00]【B】い[00:03:00]\n"
+        "\n"
+        "@Emoji=【A】,a.png,,NoDecor\n"
+        "@Emoji=【B】,b.png,,NoDecor\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+    line = track.lines[0]
+
+    # 两个标签都在原位置换为头像字符；原有字符的起点一个不变，不占行前槽位。
+    assert line.singer_label == "A"
+    assert line.guide_symbol is None
+    assert [(c.text, c.start_ms, c.role_label) for c in line.chars] == [
+        ("【A】", 1000, "A"),
+        ("あ", 1000, "A"),
+        ("【B】", 2000, "B"),
+        ("い", 2000, "B"),
+    ]
+    assert set(line.inline_guide_symbols) == {0, 2}
+    assert line.inline_guide_symbols[0].name == "N3 Emoji 【A】"
+    assert line.inline_guide_symbols[0].bitmap_before_path == str(tmp_path / "a.png")
+    assert line.inline_guide_symbols[2].name == "N3 Emoji 【B】"
+    assert line.inline_guide_symbols[2].bitmap_before_path == str(tmp_path / "b.png")
+
+
+def test_load_lrc_replaces_repeated_singer_tag_occurrences_inline(tmp_path):
+    """同一歌手标签行内重复（force_singer_tag）：每个出现都逐个原位替换。"""
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "a.png").write_bytes(b"fake")
+    lrc.write_text(
+        "【A】[00:01:00]あ[00:02:00]【A】い[00:03:00]【A】う[00:04:00]\n"
+        "\n"
+        "@Emoji=【A】,a.png,,NoDecor\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+    line = track.lines[0]
+
+    assert line.guide_symbol is None
+    assert [c.text for c in line.chars] == ["【A】", "あ", "【A】", "い", "【A】", "う"]
+    assert set(line.inline_guide_symbols) == {0, 2, 4}
+    assert all(
+        s.bitmap_before_path == str(tmp_path / "a.png")
+        for s in line.inline_guide_symbols.values()
+    )
+
+
+def test_load_lrc_inline_emoji_tag_at_line_end_uses_line_end(tmp_path):
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "a.png").write_bytes(b"fake")
+    (tmp_path / "b.png").write_bytes(b"fake")
+    lrc.write_text(
+        "【A】[00:01:00]あ[00:02:00]い[00:03:00]【B】\n"
+        "\n"
+        "@Emoji=【A】,a.png,,NoDecor\n"
+        "@Emoji=【B】,b.png,,NoDecor\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+    line = track.lines[0]
+
+    assert [(c.text, c.start_ms) for c in line.chars] == [
+        ("【A】", 1000),
+        ("あ", 1000),
+        ("い", 2000),
+        ("【B】", 3000),
+    ]
+    assert set(line.inline_guide_symbols) == {0, 3}
+
+
+def test_load_lrc_inline_emoji_tag_shifts_ruby_targets(tmp_path):
+    """标签位置插入头像后，其后的注音目标区间必须平移，不能落到头像字符上。"""
+    lrc = tmp_path / "ruby.lrc"
+    (tmp_path / "a.png").write_bytes(b"fake")
+    (tmp_path / "b.png").write_bytes(b"fake")
+    lrc.write_text(
+        "【A】[00:01:00]あ[00:02:00]【B】い[00:03:00]\n"
+        "\n"
+        "@Emoji=【A】,a.png,,NoDecor\n"
+        "@Emoji=【B】,b.png,,NoDecor\n"
+        "@Ruby1=い,い\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+
+    assert [c.text for c in track.lines[0].chars] == ["【A】", "あ", "【B】", "い"]
+    ruby = track.rubies[0]
+    assert ruby.target_char_start == 3
+    assert ruby.target_char_end == 4
 
 
 def test_longer_ruby_base_wins_and_blocks_the_shorter_entry():

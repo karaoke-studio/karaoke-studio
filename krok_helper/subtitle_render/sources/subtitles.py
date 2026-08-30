@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import logging
 import re
 import unicodedata
 from pathlib import Path
@@ -153,30 +154,107 @@ def _apply_emoji_guides(
     base_dir: Path,
     body_lines: list[str],
 ) -> None:
+    """把 ``@Emoji`` 触发标签应用到每行（SHINTA NicokaraMaker3 规格）。
+
+    触发字符串在正文里出现一次就原位替换一次为图片，没有"角色名"特判，
+    也不占用 ``guide_symbol`` 行前槽位（SUG 分色标签设置助手的透明 1x1
+    占位 + 负 MarginRight 隐形分色即依赖这一语义）。标签本身已被正文解析
+    剥成角色，``line.chars`` 里没有对应字符，因此必须插入合成字符承载头像。
+    """
     specs = _parse_emoji_specs(track.meta.custom, base_dir)
     if not specs:
         return
-    for line, raw_line in zip(track.lines, body_lines):
+    specs_by_trigger = {str(spec["trigger"]): spec for spec in specs}
+    for row, (line, raw_line) in enumerate(zip(track.lines, body_lines)):
         if line.is_blank or not line.chars:
             continue
         raw_text = str(raw_line)
-        for spec in specs:
-            trigger = spec["trigger"]
-            if not trigger or trigger not in raw_text:
-                continue
+        matched = [trigger for trigger in specs_by_trigger if trigger and trigger in raw_text]
+        if not matched:
+            continue
+        # 可见字符触发（如 ``@Emoji=♪``）：替换该字符本身，打轴时间不变。
+        for trigger in matched:
             inline_index = _line_text_index(line, trigger)
             if inline_index is not None:
                 line.inline_guide_symbols[inline_index] = _emoji_guide_symbol(
-                    spec, anchored=False
+                    specs_by_trigger[trigger], anchored=False
                 )
+        _insert_inline_emoji_tags(track, row, line, raw_text, specs_by_trigger)
+
+
+def _insert_inline_emoji_tags(
+    track: TimingTrack,
+    row: int,
+    line: TimingLine,
+    raw_text: str,
+    specs_by_trigger: dict[str, dict[str, object]],
+) -> None:
+    """在行内每个标签触发位置插入头像字符。
+
+    头像起点取后继字符的 ``start_ms``（SUG 导出器把标签写在后继字符时间戳
+    之后，``[ts]【B】い``）；标签在行尾时取 ``line.end_ms``。这样原有字符的
+    走字区间一个都不变，头像自身是零时长窗口、起点瞬间切换到 after 图。
+    """
+    offset = 0
+    for trigger, raw_index in _emoji_tag_occurrences(raw_text, set(specs_by_trigger)):
+        index = raw_index + offset
+        following = line.chars[index] if index < len(line.chars) else None
+        if following is not None:
+            start_ms = following.start_ms
+        elif line.end_ms is not None:
+            start_ms = line.end_ms
+        else:
+            start_ms = line.chars[-1].start_ms
+        line.inline_guide_symbols = {
+            (key + 1 if key >= index else key): symbol
+            for key, symbol in line.inline_guide_symbols.items()
+        }
+        line.chars.insert(
+            index,
+            TimingChar(text=trigger, start_ms=start_ms, role_label=trigger[1:-1]),
+        )
+        line.inline_guide_symbols[index] = _emoji_guide_symbol(
+            specs_by_trigger[trigger], anchored=False
+        )
+        _shift_ruby_char_targets(track, row, index)
+        offset += 1
+
+
+def _emoji_tag_occurrences(
+    raw_line: str, triggers: set[str]
+) -> list[tuple[str, int]]:
+    """按出现顺序列出命中 emoji 触发的 ``【…】`` 标签及其插入下标。
+
+    插入下标 = 标签之前已产出的可见字符数。这里复用正文解析同一套
+    token / 角色切分 / 文本元素计数逻辑，保证与 ``line.chars`` 严格对齐。
+    """
+    occurrences: list[tuple[str, int]] = []
+    char_index = 0
+    for token_type, token_value in _tokenize_line(raw_line):
+        if token_type == "ts":
+            continue
+        for kind, value in _split_role_labels(str(token_value)):
+            if kind == "role":
+                tag = f"【{value}】"
+                if tag in triggers:
+                    occurrences.append((tag, char_index))
                 continue
-            if _trigger_matches_line_singer(trigger, line):
-                line.guide_symbol = replace(
-                    _emoji_guide_symbol(spec, anchored=True),
-                    role_label=line.singer_label,
-                    role_labels=(line.singer_label,),
-                )
-                break
+            char_index += len(_text_elements(value))
+    return occurrences
+
+
+def _shift_ruby_char_targets(track: TimingTrack, row: int, index: int) -> None:
+    """行内插入头像字符后，平移该行注音的 ``target_char_*`` 半开区间。"""
+    for ruby in track.rubies:
+        if ruby.target_line_index != row:
+            continue
+        if ruby.target_char_start is None or ruby.target_char_end is None:
+            continue
+        if index <= ruby.target_char_start:
+            ruby.target_char_start += 1
+            ruby.target_char_end += 1
+        elif index < ruby.target_char_end:
+            ruby.target_char_end += 1
 
 
 def _parse_emoji_specs(lines: Iterable[str], base_dir: Path) -> list[dict[str, object]]:
@@ -195,6 +273,16 @@ def _parse_emoji_specs(lines: Iterable[str], base_dir: Path) -> list[dict[str, o
         seen.add(trigger)
         before = _resolve_emoji_image(parts[1], base_dir)
         after = _resolve_emoji_image(parts[2], base_dir) if len(parts) >= 3 and parts[2] else None
+        if not before.is_file():
+            # 图片缺失不阻塞加载（布局回退占位宽度），但必须留痕——否则画面
+            # 上头像悄悄消失，用户无从排查（分色占位图忘放进目录是常见场景）。
+            logging.getLogger(__name__).warning(
+                "@Emoji 图片不存在（该触发字符将不显示头像）：%s", before
+            )
+        if after is not None and not after.is_file():
+            logging.getLogger(__name__).warning(
+                "@Emoji 擦除后图片不存在：%s", after
+            )
         spec: dict[str, object] = {
             "trigger": trigger,
             "before": str(before),
@@ -253,10 +341,6 @@ def _emoji_guide_symbol(spec: dict[str, object], *, anchored: bool) -> GuideSymb
         bitmap_margin_bottom_px=int(spec.get("margin_bottom") or 0),
         prefix_timing="anchored" if anchored else "pre_roll",
     )
-
-
-def _trigger_matches_line_singer(trigger: str, line: TimingLine) -> bool:
-    return bool(line.singer_label) and trigger == f"【{line.singer_label}】"
 
 
 def _line_text_index(line: TimingLine, trigger: str) -> Optional[int]:

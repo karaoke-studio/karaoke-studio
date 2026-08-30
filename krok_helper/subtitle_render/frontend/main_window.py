@@ -2814,6 +2814,7 @@ class SubtitleRenderWindow(QWidget):
                 project,
                 nicokara_tags=nicokara_tags,
                 software_compensation_ms=self._sug_compensation_value(),
+                base_dir=source_path.parent if source_path is not None else None,
             )
         except Exception as exc:  # noqa: BLE001
             fluent_error(

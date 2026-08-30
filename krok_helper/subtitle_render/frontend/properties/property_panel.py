@@ -2871,7 +2871,16 @@ class PropertyPanel(QWidget):
         self._sync_subtitle_scheme_controls()
 
     def _ensure_role_schemes(self) -> None:
-        base_scheme = self._current_scheme_snapshot()
+        # 自动建方案以面板当前选中的方案为基底（选中角色 A 时新角色继承 A，
+        # 符合"照着正在编辑的样式建新角色"的直觉）；唯一例外是「标题」——
+        # 它描述标题外观而非歌词角色，且加载/交接流程常停在标题页（第 4→5
+        # 步交接在恢复选中页签之前就会走到这里），被继承会让新发现的未知
+        # 角色整份套上标题样式，此时退回全局默认。
+        current_name = self._current_custom_scheme_name()
+        base_scheme = self._style_controller.snapshot(
+            self._style,
+            None if current_name == TITLE_SCHEME_NAME else current_name,
+        )
         self._style, changed = self._role_controller.ensure_style_schemes(
             self._style,
             self._preset_schemes,

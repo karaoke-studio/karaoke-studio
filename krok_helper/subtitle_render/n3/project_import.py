@@ -878,10 +878,21 @@ def _raw_n3_non_ruby_text(line: dict) -> str:
     return "".join(str(char.get("Char") or "") for char in chars)
 
 
+def _is_synthetic_emoji_tag_char(text: str) -> bool:
+    """是否是 LRC 解析为行内 emoji 头像插入的合成标签字符。
+
+    正文解析会把 ``【…】`` 剥成角色标签，真实字符不可能是完整标签文本；
+    因此 ``chars`` 里出现整段标签文本只能来自 emoji 行内替换的插入。
+    """
+    return _BRACKET_LABEL_RE.fullmatch(text) is not None
+
+
 def _source_text_offsets(line: TimingLine) -> dict[int, int]:
     offsets: dict[int, int] = {}
     position = 0
     for index, char in enumerate(line.chars):
+        if _is_synthetic_emoji_tag_char(char.text):
+            continue
         offsets[position] = index
         position += len(char.text)
     return offsets
@@ -897,8 +908,18 @@ def _emoji_payload_for_line(
         return None, None
     raw_text = _raw_n3_non_ruby_text(n3_line)
     text_offsets = _source_text_offsets(our_line)
-    guide_row: Optional[dict[str, object]] = None
-    inline_row: dict[str, object] = {}
+    # 源解析（load_nicokara_lrc）已把 emoji 应用到行上：首个标签 → 行首 anchored
+    # 头像，其余标签 → 行内插入头像字符。本函数的 payload 会整体覆盖这些字段，
+    # 因此先把行上已有状态序列化进来，再用 N3 可见字符触发（如 ♪）叠加。
+    guide_row: Optional[dict[str, object]] = (
+        guide_symbol_to_dict(our_line.guide_symbol)
+        if our_line.guide_symbol is not None
+        else None
+    )
+    inline_row: dict[str, object] = {
+        str(index): guide_symbol_to_dict(symbol)
+        for index, symbol in our_line.inline_guide_symbols.items()
+    }
     for spec in emoji_specs:
         if not spec.trigger:
             continue
@@ -916,7 +937,13 @@ def _emoji_payload_for_line(
                     _emoji_guide_symbol(spec, anchored=False)
                 )
             continue
-        if guide_row is None and raw_text.find(spec.trigger) >= 0:
+        if (
+            guide_row is None
+            and raw_text.find(spec.trigger) >= 0
+            # 源解析已把该标签原位替换为头像字符（payload 无法造字符，只能兜底
+            # 「LRC 缺标签但 N3 字符数据里有」的情况），再给行首头像会双重呈现。
+            and not any(char.text == spec.trigger for char in our_line.chars)
+        ):
             role_label = our_line.singer_label or next(
                 (char.role_label for char in our_line.chars if char.role_label),
                 None,
@@ -1052,7 +1079,12 @@ def _per_line_payloads(
         break_payload[line_index] = break_before
         n3_chars = _stripped_n3_chars(n3_line)
         n3_text = "".join(str(char.get("Char") or "") for char in n3_chars)
-        our_text = "".join(char.text for char in our_line.chars)
+        # 行内 emoji 头像插入的合成标签字符不属于 N3 可见正文，比对与逐字行走都要跳过。
+        our_text = "".join(
+            char.text
+            for char in our_line.chars
+            if not _is_synthetic_emoji_tag_char(char.text)
+        )
         if n3_text != our_text:
             mismatched += 1
             continue
@@ -1086,6 +1118,10 @@ def _per_line_payloads(
         labels: list[Optional[str]] = []
         position = 0
         for our_char in our_line.chars:
+            if _is_synthetic_emoji_tag_char(our_char.text):
+                # 合成头像字符不对应 N3 字符：保留解析出的角色标签，不推进 N3 位置。
+                labels.append(our_char.role_label)
+                continue
             n3_char = offset_to_char.get(position)
             font_index = _int(n3_char.get("FontIndex"), 0) if n3_char is not None else 0
             label = (

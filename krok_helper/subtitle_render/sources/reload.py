@@ -321,9 +321,23 @@ def _merge_line_overlays(
         else:
             target.guide_symbol = symbol
 
-    if current.inline_guide_symbols:
+    # ``@Emoji`` 等源拥有的行内符号随源解析更新（target 已带上新值），只有
+    # 用户在渲染器里改过/新增的符号才算本地覆盖：文本未变时原位保留，文本
+    # 已变时报"无法定位"冲突而不是悄悄丢掉。
+    local_inline_symbols = {
+        index: symbol
+        for index, symbol in current.inline_guide_symbols.items()
+        if index >= len(baseline.chars)
+        or baseline.inline_guide_symbols.get(index) != symbol
+    }
+    if local_inline_symbols:
         if exact_text:
-            target.inline_guide_symbols = deepcopy(current.inline_guide_symbols)
+            merged = dict(target.inline_guide_symbols)
+            merged.update(
+                (index, deepcopy(symbol))
+                for index, symbol in local_inline_symbols.items()
+            )
+            target.inline_guide_symbols = merged
         else:
             conflicts.append(f"第 {old_index + 1} 行的行内导唱符无法可靠定位")
 
@@ -354,6 +368,23 @@ def _merge_line_overlays(
         target.chars[new_index].role_label = old_char.role_label
 
 
+def _has_local_inline_guides(current: TimingLine, baseline: TimingLine) -> bool:
+    """行内导唱符是否含渲染器本地编辑（相对源解析基线）。
+
+    与基线完全一致的 ``@Emoji`` 符号是源拥有的状态，不算本地编辑；否则
+    结构变化时这些行会被误判为"有本地设置"而拒绝自动迁移。
+    """
+    if not current.inline_guide_symbols:
+        return False
+    if len(baseline.chars) != len(current.chars):
+        return True
+    return any(
+        index >= len(baseline.chars)
+        or baseline.inline_guide_symbols.get(index) != symbol
+        for index, symbol in current.inline_guide_symbols.items()
+    )
+
+
 def _line_has_local_state(
     current: TimingLine,
     baseline: TimingLine,
@@ -369,7 +400,7 @@ def _line_has_local_state(
         or current.display_end_override_ms is not None
         or current.animation_override is not None
         or current.guide_symbol is not None
-        or current.inline_guide_symbols
+        or _has_local_inline_guides(current, baseline)
     ):
         return True
     return any(

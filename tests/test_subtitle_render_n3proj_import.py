@@ -248,6 +248,7 @@ def test_load_n3proj_rejects_bad_json(tmp_path):
 
 
 def test_imports_n3_emoji_role_tag_as_anchored_bitmap_guide(tmp_path):
+    """兜底：LRC 正文缺标签、但 N3 字符数据里有 → 行首 anchored 头像近似。"""
     payload = _project_payload(tmp_path)
     lrc = Path(payload["SourceLyricsInfos"][0]["SourceLyricsPath"])
     lrc.write_text(
@@ -282,6 +283,48 @@ def test_imports_n3_emoji_role_tag_as_anchored_bitmap_guide(tmp_path):
     assert symbol.bitmap_zoom_percent == 80
     assert symbol.bitmap_no_decor is True
     assert symbol.bitmap_margin_right_px == 20
+
+
+def test_import_keeps_inline_emoji_replacement_for_every_role_tag(tmp_path):
+    """一行多个 ``@Emoji`` 触发标签：每个都原位替换，payload 原样带出，逐行数据不错位。"""
+    payload = _project_payload(tmp_path)
+    lrc = Path(payload["SourceLyricsInfos"][0]["SourceLyricsPath"])
+    lrc.write_text(
+        "【A】[00:01:00]●[00:02:00]【B】い[00:03:00]\n"
+        "\n"
+        "@Emoji=【A】,a.png,,NoDecor\n"
+        "@Emoji=【B】,b.png,,NoDecor\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "a.png").write_bytes(b"fake")
+    (tmp_path / "b.png").write_bytes(b"fake")
+    payload["SourceLyricsInfos"][0]["LineInfos"] = [
+        _line_info(
+            [
+                _char("【A】", 1000, 1000, font_index=1),
+                _char("●", 1000, 2000),
+                _char("【B】", 2000, 2000, font_index=1),
+                _char("い", 2000, 3000, font_index=1),
+            ],
+            layout_index=0,
+        )
+    ]
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    data = result.project_data
+
+    # 每个标签都原位替换（不占行前槽位），payload 不再产生 anchored 行首头像
+    assert "line_guide_symbols" not in data
+    inline_row = data["line_inline_guide_symbols"][0]
+    assert set(inline_row) == {"0", "2"}
+    first = guide_symbol_from_dict(inline_row["0"])
+    second = guide_symbol_from_dict(inline_row["2"])
+    assert first is not None and first.bitmap_before_path == str(tmp_path / "a.png")
+    assert second is not None and second.bitmap_before_path == str(tmp_path / "b.png")
+    # 合成头像字符不参与 N3 正文比对：布局 / 逐字配色照常导入（labels 与 chars 对齐）
+    assert data["line_layout_indices"][0] == 0
+    assert len(data["char_role_labels"][0]) == 4
+    assert not any("不一致" in warning for warning in result.warnings)
 
 
 def test_import_media_and_screen(imported, tmp_path):

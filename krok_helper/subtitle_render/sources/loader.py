@@ -52,9 +52,11 @@ class SubtitleSourceLoader:
         *,
         nicokara_tags: Optional[dict] = None,
         software_compensation_ms: int = 0,
+        base_dir: Optional[Path] = None,
     ) -> TimingTrack:
         return timing_track_from_sug_project(
             project,
             nicokara_tags=nicokara_tags,
             software_compensation_ms=int(software_compensation_ms),
+            base_dir=base_dir,
         )

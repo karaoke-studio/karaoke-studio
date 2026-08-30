@@ -81,6 +81,8 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
     ResolvedPagePlan,
     resolve_page_plan,
 )
+from krok_helper.subtitle_render.engine.guide.metrics import bitmap_guide_image
+from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
@@ -98,6 +100,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingChar,
     TimingLine,
     TimingTrack,
+    guide_symbol_has_visual,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     line_visible_chars,
@@ -454,13 +457,18 @@ def _line_role_labels(line) -> list[str]:
 
 
 def _line_content_text(line: TimingLine) -> str:
-    """Preview source text while making persisted inline SVG replacements visible."""
+    """Preview source text while making persisted inline replacements visible.
+
+    SVG 导唱符与 ``@Emoji`` 位图头像（含分色透明占位）都占着字符槽：这里一律
+    显示 ``◆`` 占位标记，位图没有 ``path_commands``，不能放原始触发标签文本
+    出来（否则歌词列表会看到【演唱者名】原样漏出）。
+    """
     start = guide_symbol_replacement_count(line)
     return "".join(
         "◆"
         if (
             (symbol := line.inline_guide_symbols.get(index)) is not None
-            and symbol.path_commands
+            and guide_symbol_has_visual(symbol)
         )
         else char.text
         for index, char in enumerate(line.chars[start:], start=start)
@@ -618,6 +626,57 @@ def _effective_layout_style(style: Style, line: TimingLine) -> Style:
     return _dataclass_replace(
         style, **{name: getattr(layout, name) for name in LYRICS_LAYOUT_FIELDS}
     )
+
+
+_IMAGE_VISIBLE_CACHE: dict[int, bool] = {}
+"""QImage.cacheKey() → 是否含可见像素。paintEvent 每 chip 都要判一次，
+不能每次全图扫描；缓存键随图重新加载自动失效。"""
+
+
+def _image_has_visible_pixels(image: QImage) -> bool:
+    """是否存在任何非完全透明像素（全透明分色占位图视为"无内容"）。"""
+    key = image.cacheKey()
+    cached = _IMAGE_VISIBLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    visible = False
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).alpha() > 0:
+                visible = True
+                break
+        if visible:
+            break
+    if len(_IMAGE_VISIBLE_CACHE) > 256:
+        _IMAGE_VISIBLE_CACHE.clear()
+    _IMAGE_VISIBLE_CACHE[key] = visible
+    return visible
+
+
+_CHIP_THUMB_W, _CHIP_THUMB_H = 34, 36
+_CHIP_THUMB_CACHE: dict[int, QImage | None] = {}
+"""cacheKey → chip 尺寸缩略图（None = 缺图/全透明）。重绘只做 drawImage。"""
+
+
+def _bitmap_chip_thumbnail(path: str | None) -> QImage | None:
+    """取位图导唱符在字符块中央显示的缩略图；无可见内容返回 None。"""
+    image = bitmap_guide_image(path)
+    if image is None or image.isNull() or not _image_has_visible_pixels(image):
+        return None
+    key = image.cacheKey()
+    cached = _CHIP_THUMB_CACHE.get(key)
+    if cached is not None:
+        return cached
+    thumbnail = image.scaled(
+        _CHIP_THUMB_W,
+        _CHIP_THUMB_H,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    if len(_CHIP_THUMB_CACHE) > 128:
+        _CHIP_THUMB_CACHE.clear()
+    _CHIP_THUMB_CACHE[key] = thumbnail
+    return thumbnail
 
 
 class _CharChipsView(QWidget):
@@ -873,7 +932,26 @@ class _CharChipsView(QWidget):
                 )
             painter.setPen(text_color)
             symbol = self._vector_symbols[index]
-            if symbol is not None:
+            if symbol is not None and guide_symbol_is_bitmap(symbol):
+                # @Emoji 位图头像没有轮廓路径，旧实现画空路径 → 整块空白。
+                # 画真实头像缩略图；图片缺失或全透明（分色占位）时退 ◆ 占位。
+                thumbnail = _bitmap_chip_thumbnail(symbol.bitmap_before_path)
+                if thumbnail is not None:
+                    target = rect.adjusted(6, 8, -6, -12)
+                    painter.drawImage(
+                        QPointF(
+                            target.center().x() - thumbnail.width() / 2,
+                            target.center().y() - thumbnail.height() / 2,
+                        ),
+                        thumbnail,
+                    )
+                else:
+                    painter.drawText(
+                        rect.adjusted(0, 2, 0, -8),
+                        Qt.AlignmentFlag.AlignCenter,
+                        "◆",
+                    )
+            elif symbol is not None:
                 glyph_path = scaled_guide_symbol_path(
                     symbol,
                     pixel_size=30,

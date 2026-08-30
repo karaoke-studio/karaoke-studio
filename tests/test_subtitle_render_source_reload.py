@@ -85,6 +85,94 @@ def test_source_roles_update_except_for_sparse_user_overrides() -> None:
     ]
 
 
+def test_source_owned_inline_emoji_symbols_update_on_reload() -> None:
+    """@Emoji 参数变化（如 Zoom）热重载后必须生效：与基线一致的行内符号是
+    源拥有的状态，不能被 current 里的旧值盖回去。"""
+
+    def _emoji_track(zoom: int) -> TimingTrack:
+        symbol = GuideSymbol(
+            kind="bitmap",
+            bitmap_before_path="avatar.png",
+            bitmap_zoom_percent=zoom,
+        )
+        track = _track()
+        track.lines[0].chars.insert(0, TimingChar("【A】", 1000, role_label="A"))
+        track.lines[0].inline_guide_symbols = {0: symbol}
+        return track
+
+    baseline = _emoji_track(100)
+    current = deepcopy(baseline)  # 渲染器未改动该符号
+    candidate = _emoji_track(50)  # 源里 @Emoji Zoom=50
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.conflicts == ()
+    merged = result.track.lines[0].inline_guide_symbols[0]
+    assert merged.bitmap_zoom_percent == 50
+
+
+def test_source_owned_inline_emoji_symbols_removed_on_reload() -> None:
+    """源里删除 @Emoji 后，未手工改过的行内符号应随源消失。"""
+
+    def _emoji_track(with_symbol: bool) -> TimingTrack:
+        track = _track()
+        if with_symbol:
+            track.lines[0].chars.insert(0, TimingChar("【A】", 1000, role_label="A"))
+            track.lines[0].inline_guide_symbols = {
+                0: GuideSymbol(kind="bitmap", bitmap_before_path="avatar.png")
+            }
+        return track
+
+    baseline = _emoji_track(True)
+    current = deepcopy(baseline)
+    candidate = _emoji_track(False)
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.conflicts == ()
+    assert result.track.lines[0].inline_guide_symbols == {}
+    assert [char.text for char in result.track.lines[0].chars] == ["a", "b"]
+
+
+def test_locally_edited_inline_symbols_still_win_over_source() -> None:
+    """用户在渲染器里改过的行内符号仍是本地覆盖，热重载不回退。"""
+    baseline = _track()
+    baseline.lines[0].inline_guide_symbols = {
+        1: GuideSymbol(kind="bitmap", bitmap_before_path="old.png")
+    }
+    current = deepcopy(baseline)
+    current.lines[0].inline_guide_symbols = {
+        1: GuideSymbol(kind="bitmap", bitmap_before_path="user.png")
+    }
+    candidate = deepcopy(baseline)
+    candidate.lines[0].inline_guide_symbols = {
+        1: GuideSymbol(kind="bitmap", bitmap_before_path="new.png")
+    }
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.conflicts == ()
+    assert (
+        result.track.lines[0].inline_guide_symbols[1].bitmap_before_path == "user.png"
+    )
+
+
+def test_source_owned_inline_symbols_do_not_block_structure_migration() -> None:
+    """结构变化时，仅含源 @Emoji 符号的行不算本地状态，不产生迁移冲突。"""
+    baseline = _track()
+    baseline.lines[0].inline_guide_symbols = {
+        0: GuideSymbol(kind="bitmap", bitmap_before_path="avatar.png")
+    }
+    current = deepcopy(baseline)
+    candidate = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("x", 900)], end_ms=1400)]
+    )
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.conflicts == ()
+
+
 def test_changed_text_reports_unmappable_guide_symbols() -> None:
     baseline = _track()
     current = deepcopy(baseline)

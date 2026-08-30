@@ -5178,6 +5178,67 @@ def test_property_panel_does_not_guess_between_cross_group_same_name_presets(qap
     assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#FF5A6F"
 
 
+def test_auto_role_scheme_derives_from_title_selection_falls_back_to_global(qapp):
+    """选中「标题」页时新发现的角色不能继承标题样式（标题外观不是歌词角色外观）。
+
+    第 4→5 步交接在恢复选中页签之前就会 merge_roles，此时常停在标题页；
+    「未知」角色曾因此整份套上标题的字体与字号。
+    """
+    panel = PropertyPanel()
+    style = replace(
+        Style(),
+        font_size_px=50,
+        font_family="GlobalFont",
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(
+                font_size_px=40, font_family="TitleFont"
+            ),
+            "角色A": SubtitleStyleScheme(
+                font_size_px=66, font_family="RoleAFont"
+            ),
+        },
+    )
+    panel.set_style(style)
+    panel._singer_combo.setCurrentIndex(
+        panel._singer_combo.findData(f"custom:{TITLE_SCHEME_NAME}")
+    )
+
+    panel.merge_roles(["未知"])
+
+    scheme = panel.subtitle_style.custom_style_schemes["未知"]
+    assert scheme.font_size_px == 50
+    assert scheme.font_family == "GlobalFont"
+
+
+def test_auto_role_scheme_derives_from_selected_role_when_not_title(qapp):
+    """选中普通角色方案时，新角色照常继承当前正在编辑的样式。"""
+    panel = PropertyPanel()
+    style = replace(
+        Style(),
+        font_size_px=50,
+        font_family="GlobalFont",
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(
+                font_size_px=40, font_family="TitleFont"
+            ),
+            "角色A": SubtitleStyleScheme(
+                font_size_px=66, font_family="RoleAFont"
+            ),
+        },
+    )
+    panel.set_style(style)
+    panel.set_roles(["角色A"])
+    panel._singer_combo.setCurrentIndex(
+        panel._singer_combo.findData("custom:角色A")
+    )
+
+    panel.merge_roles(["新角色"])
+
+    scheme = panel.subtitle_style.custom_style_schemes["新角色"]
+    assert scheme.font_size_px == 66
+    assert scheme.font_family == "RoleAFont"
+
+
 def test_property_panel_prompts_each_ambiguous_imported_role_for_group(
     qapp, monkeypatch
 ):
