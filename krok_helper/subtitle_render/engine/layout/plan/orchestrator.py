@@ -28,6 +28,10 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     style_for_line,
     style_for_line_display_window,
 )
+from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+    section_edge_context,
+)
 from krok_helper.subtitle_render.engine.layout.display.signal import (
     display_style_for_signal_window,
 )
@@ -91,61 +95,65 @@ def resolve_track_layout_plan(
         if cached is not None:
             return cached
 
-    display_style = display_style_for_signal_window(style)
-    display_items: list[DisplayLine] = []
-    if display_style.dual_line_layout:
-        display_items = resolvers.display_lines(
+    # 段首/段尾页标记必须先于逐行样式解析注册；包一层 layout_pass 保证
+    # 无外层 pass 的调用方（IR 构建等）也能拿到同样的替换结果。
+    with layout_pass():
+        section_edge_context(track, style)
+        display_style = display_style_for_signal_window(style)
+        display_items: list[DisplayLine] = []
+        if display_style.dual_line_layout:
+            display_items = resolvers.display_lines(
+                track,
+                display_style,
+                logical_w=logical_w,
+                logical_h=logical_h,
+            )
+            schedule = display_schedule_from_items(track, display_items)
+        else:
+            schedule = single_line_display_schedule(track, display_style)
+        page_offset_windows = (
+            resolvers.page_offset_windows(
+                max(int(logical_w), 1),
+                max(int(logical_h), 1),
+                track,
+                display_style,
+            )
+            if logical_w is not None and logical_h is not None
+            else {}
+        )
+        render_lines = [render_line_with_guide_symbols(line) for line in track.lines]
+        layout_styles = [style_for_line(style, line) for line in track.lines]
+        resolved_intervals = [
+            resolved_char_intervals_for_line(line, style) for line in render_lines
+        ]
+        guide_anchor_bounds = [
+            resolved_guide_anchor_bounds_for_line(track, line, style)
+            for line in track.lines
+        ]
+        animation_styles = [
+            style_for_line_display_window(
+                style,
+                line,
+                schedule[index][1] if index in schedule else None,
+                schedule[index][2] if index in schedule else None,
+            )
+            for index, line in enumerate(track.lines)
+        ]
+
+        plan = assemble_track_layout_plan(
             track,
-            display_style,
+            style,
             logical_w=logical_w,
             logical_h=logical_h,
+            display_items=display_items,
+            schedule=schedule,
+            page_offset_windows=page_offset_windows,
+            render_lines=render_lines,
+            layout_styles=layout_styles,
+            animation_styles=animation_styles,
+            resolved_intervals=resolved_intervals,
+            guide_anchor_bounds=guide_anchor_bounds,
         )
-        schedule = display_schedule_from_items(track, display_items)
-    else:
-        schedule = single_line_display_schedule(track, display_style)
-    page_offset_windows = (
-        resolvers.page_offset_windows(
-            max(int(logical_w), 1),
-            max(int(logical_h), 1),
-            track,
-            display_style,
-        )
-        if logical_w is not None and logical_h is not None
-        else {}
-    )
-    render_lines = [render_line_with_guide_symbols(line) for line in track.lines]
-    layout_styles = [style_for_line(style, line) for line in track.lines]
-    resolved_intervals = [
-        resolved_char_intervals_for_line(line, style) for line in render_lines
-    ]
-    guide_anchor_bounds = [
-        resolved_guide_anchor_bounds_for_line(track, line, style)
-        for line in track.lines
-    ]
-    animation_styles = [
-        style_for_line_display_window(
-            style,
-            line,
-            schedule[index][1] if index in schedule else None,
-            schedule[index][2] if index in schedule else None,
-        )
-        for index, line in enumerate(track.lines)
-    ]
-
-    plan = assemble_track_layout_plan(
-        track,
-        style,
-        logical_w=logical_w,
-        logical_h=logical_h,
-        display_items=display_items,
-        schedule=schedule,
-        page_offset_windows=page_offset_windows,
-        render_lines=render_lines,
-        layout_styles=layout_styles,
-        animation_styles=animation_styles,
-        resolved_intervals=resolved_intervals,
-        guide_anchor_bounds=guide_anchor_bounds,
-    )
     if layout_cache_enabled():
         # Retain the mutable owners because the key contains track identity.
         store_track_layout_plan(cache_key, track, style, plan)

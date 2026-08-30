@@ -864,6 +864,21 @@ class PropertyPanel(QWidget):
                     ),
                 )
             )
+            self._section_edge_check.setChecked(timing.section_edge_anim_enabled)
+            self._section_edge_both_check.setChecked(timing.section_edge_both_animations)
+            self._section_head_anim_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._section_head_anim_combo.findData(timing.section_head_anim),
+                )
+            )
+            self._section_tail_anim_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._section_tail_anim_combo.findData(timing.section_tail_anim),
+                )
+            )
+            self._sync_section_edge_controls()
             self._sync_lit_controls()
             self._sync_subtitle_scheme_controls()
             self._sync_title_controls()
@@ -1042,6 +1057,22 @@ class PropertyPanel(QWidget):
         checked = check_state == Qt.CheckState.Checked
         width_spin.setEnabled(inherited or checked)
         self._update_style(**{field_name: None if inherited else checked})
+
+    def _on_section_edge_toggled(self, checked: bool) -> None:
+        # 先落样式再同步：同步读的是 self._style 的新值（set_style 回显期间
+        # _update_style 被 _syncing 挡掉，self._style 已是新值，同样成立）。
+        self._update_style(section_edge_anim_enabled=checked)
+        self._sync_section_edge_controls()
+
+    def _on_section_edge_both_toggled(self, checked: bool) -> None:
+        self._update_style(section_edge_both_animations=checked)
+
+    def _sync_section_edge_controls(self) -> None:
+        """段首尾子选项只在主开关打开时可用；关闭期间仍保留所选值。"""
+        enabled = self._style.section_edge_anim_enabled
+        self._section_head_anim_combo.setEnabled(enabled)
+        self._section_tail_anim_combo.setEnabled(enabled)
+        self._section_edge_both_check.setEnabled(enabled)
 
     def _update_ruby_font_override(self, **changes) -> None:
         changes["ruby_font_follow_main"] = False

@@ -112,6 +112,9 @@ from krok_helper.subtitle_render.engine.layout.layout_context import (
     _LAYOUT_PASS,
     layout_pass,
 )
+from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+    section_edge_context as _section_edge_context,
+)
 from krok_helper.subtitle_render.engine.guide import (
     guide_symbol_is_bitmap as _guide_symbol_is_bitmap,
     render_line_with_guide_symbols as _line_with_guide_symbol,
@@ -784,6 +787,18 @@ def _frame_analysis_ports() -> FrameAnalysisPorts:
     )
 
 
+def _register_section_edge_contexts(
+    track: Optional[TimingTrack],
+    style: Style,
+    extra_tracks: Optional[list[TimingTrack]],
+) -> None:
+    """为帧分析涉及的全部轨道注册段边缘页标记（含副字幕源）。"""
+
+    for entry in (track, *(extra_tracks or ())):
+        if entry is not None:
+            _section_edge_context(entry, style)
+
+
 def frame_has_content(
     track: Optional[TimingTrack],
     t_ms: int,
@@ -832,16 +847,20 @@ def frame_content_intervals(
     ``None`` for paths not yet migrated to layer bounds (竖排 / viewport 旋转 /
     逐字 transition)，调用方应回退到整帧 / alpha 扫描。
     """
-    return _analyze_frame_content_intervals(
-        logical_w,
-        logical_h,
-        track,
-        t_ms,
-        style,
-        extra_tracks,
-        duration_ms=duration_ms,
-        ports=_frame_analysis_ports(),
-    )
+    # 边界测量会在本函数内重新逐行解析样式（无外层 pass 时拿不到段边缘页
+    # 替换），这里统一包一层 pass 并注册标记，保证与绘制同一套结果。
+    with layout_pass():
+        _register_section_edge_contexts(track, style, extra_tracks)
+        return _analyze_frame_content_intervals(
+            logical_w,
+            logical_h,
+            track,
+            t_ms,
+            style,
+            extra_tracks,
+            duration_ms=duration_ms,
+            ports=_frame_analysis_ports(),
+        )
 
 
 def frame_vertical_bounds(
@@ -861,16 +880,18 @@ def frame_vertical_bounds(
     that have not migrated to layer bounds yet; callers should then fall back to
     the existing pixel scan / full repaint path.
     """
-    return _analyze_frame_vertical_bounds(
-        logical_w,
-        logical_h,
-        track,
-        t_ms,
-        style,
-        extra_tracks,
-        duration_ms=duration_ms,
-        ports=_frame_analysis_ports(),
-    )
+    with layout_pass():
+        _register_section_edge_contexts(track, style, extra_tracks)
+        return _analyze_frame_vertical_bounds(
+            logical_w,
+            logical_h,
+            track,
+            t_ms,
+            style,
+            extra_tracks,
+            duration_ms=duration_ms,
+            ports=_frame_analysis_ports(),
+        )
 
 
 def paint_frame(

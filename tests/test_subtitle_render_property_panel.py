@@ -4618,6 +4618,85 @@ def test_property_panel_exposes_n3_char_drip_animation(qapp):
     assert emitted[-1].exit_anim == "char_drip"
 
 
+def test_section_edge_animation_style_round_trips():
+    style = Style(
+        section_edge_anim_enabled=True,
+        section_edge_both_animations=True,
+        section_head_anim="utopia",
+        section_tail_anim="slide_out",
+    )
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.section_edge_anim_enabled is True
+    assert restored.section_edge_both_animations is True
+    assert restored.section_head_anim == "utopia"
+    assert restored.section_tail_anim == "slide_out"
+    # 旧工程没有这些键：关闭、默认动画。
+    fresh = style_from_dict({})
+    assert fresh.section_edge_anim_enabled is False
+    assert fresh.section_edge_both_animations is False
+    assert fresh.section_head_anim == "fade"
+    assert fresh.section_tail_anim == "fade"
+    assert style_from_dict({"section_head_anim": "unknown"}).section_head_anim == "fade"
+    assert style_from_dict({"section_tail_anim": "utopia"}).section_tail_anim == "utopia"
+
+
+def test_property_panel_section_edge_controls_emit_and_echo_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    assert not panel._section_edge_check.isChecked()
+    assert not panel._section_edge_both_check.isChecked()
+    assert not panel._section_head_anim_combo.isEnabled()
+    assert not panel._section_tail_anim_combo.isEnabled()
+    assert not panel._section_edge_both_check.isEnabled()
+
+    panel._section_edge_check.setChecked(True)
+    assert emitted[-1].section_edge_anim_enabled is True
+    assert panel._section_head_anim_combo.isEnabled()
+    assert panel._section_tail_anim_combo.isEnabled()
+    assert panel._section_edge_both_check.isEnabled()
+
+    panel._section_edge_both_check.setChecked(True)
+    assert emitted[-1].section_edge_both_animations is True
+
+    panel._section_head_anim_combo.setCurrentIndex(
+        panel._section_head_anim_combo.findData("utopia")
+    )
+    panel._section_tail_anim_combo.setCurrentIndex(
+        panel._section_tail_anim_combo.findData("slide_out")
+    )
+    assert emitted[-1].section_head_anim == "utopia"
+    assert emitted[-1].section_tail_anim == "slide_out"
+
+    panel.set_style(
+        Style(
+            section_edge_anim_enabled=True,
+            section_edge_both_animations=True,
+            section_head_anim="rise",
+            section_tail_anim="utopia",
+        ),
+        emit=False,
+    )
+    assert panel._section_edge_check.isChecked()
+    assert panel._section_edge_both_check.isChecked()
+    assert panel._section_head_anim_combo.currentData() == "rise"
+    assert panel._section_tail_anim_combo.currentData() == "utopia"
+    assert panel._section_head_anim_combo.isEnabled()
+    assert panel._section_edge_both_check.isEnabled()
+
+    # 关闭期间下拉与子开关置灰，但仍显示（并保留）所选动画值。
+    panel.set_style(
+        Style(section_edge_anim_enabled=False, section_head_anim="rise"),
+        emit=False,
+    )
+    assert not panel._section_edge_check.isChecked()
+    assert not panel._section_head_anim_combo.isEnabled()
+    assert not panel._section_tail_anim_combo.isEnabled()
+    assert not panel._section_edge_both_check.isEnabled()
+    assert panel._section_head_anim_combo.currentData() == "rise"
+
+
 def test_property_panel_lit_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []

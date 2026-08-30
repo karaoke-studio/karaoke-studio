@@ -615,6 +615,10 @@ class StyleTimingConfig:
     exit_anim: ExitAnimation
     exit_fade_ms: int
     karaoke_anim: KaraokeAnimation
+    section_edge_anim_enabled: bool
+    section_edge_both_animations: bool
+    section_head_anim: EntryAnimation
+    section_tail_anim: ExitAnimation
 
 
 _STYLE_TIMING_FIELDS = tuple(field.name for field in fields(StyleTimingConfig))
@@ -904,6 +908,19 @@ class Style:
 
     karaoke_anim: KaraokeAnimation = "utopia"
     """唱字动画：inherit（兼容旧 Utopia）/ none / utopia。"""
+
+    section_edge_anim_enabled: bool = False
+    """段首尾独立动画：开启后段首页/段尾页各行按下面两个动画替换入退场。"""
+
+    section_edge_both_animations: bool = False
+    """「同时设置出入场」：开启时段边缘页入退场都替换；默认各页只替换自己
+    一侧（段首页只换入场、段尾页只换退场），单页段既是首又是尾、两侧都换。"""
+
+    section_head_anim: EntryAnimation = "fade"
+    """段边缘页替换用的入场动画。"""
+
+    section_tail_anim: ExitAnimation = "fade"
+    """段边缘页替换用的退场动画。"""
 
     # 指示灯（Sayatoo SignalsLits.sx：lit.* / signals.duration）
     lit_enabled: bool = False
@@ -1392,6 +1409,8 @@ def style_from_dict(payload: object) -> Style:
             "allow_entry_exit_animation_overlap",
             "sync_each_page",
             "auto_fill_section_time",
+            "section_edge_anim_enabled",
+            "section_edge_both_animations",
             "lit_enabled",
             "lit_shadow",
         }:
@@ -1448,6 +1467,22 @@ def style_from_dict(payload: object) -> Style:
         elif key == "karaoke_anim":
             changes[key] = (
                 value if value in {"inherit", "none", "utopia"} else defaults.karaoke_anim
+            )
+        elif key == "section_head_anim":
+            changes[key] = (
+                value
+                if value in {
+                    "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+                }
+                else defaults.section_head_anim
+            )
+        elif key == "section_tail_anim":
+            changes[key] = (
+                value
+                if value in {
+                    "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+                }
+                else defaults.section_tail_anim
             )
         elif key in {
             "font_family_latin",

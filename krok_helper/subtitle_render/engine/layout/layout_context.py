@@ -29,6 +29,7 @@ def layout_pass():
         _LAYOUT_PASS.ink_rects = {}
         _LAYOUT_PASS.sayatoo_layouts = {}
         _LAYOUT_PASS.signal_heads = {}
+        _LAYOUT_PASS.section_edges = {}
         _LAYOUT_PASS.tracks = []
         _LAYOUT_PASS.styles = []
         _LAYOUT_PASS.lines = []
@@ -49,6 +50,7 @@ def layout_pass():
             _LAYOUT_PASS.ink_rects = None
             _LAYOUT_PASS.sayatoo_layouts = None
             _LAYOUT_PASS.signal_heads = None
+            _LAYOUT_PASS.section_edges = None
             _LAYOUT_PASS.tracks = []
             _LAYOUT_PASS.styles = []
             _LAYOUT_PASS.lines = []

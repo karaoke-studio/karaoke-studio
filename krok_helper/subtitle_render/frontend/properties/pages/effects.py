@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CheckBox
 
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
@@ -244,6 +244,40 @@ class EffectsPropertyPageBuilder:
             )
         )
         host._animation_grid.add_field("唱字特效", host._karaoke_anim_combo)
+
+        host._section_edge_check = CheckBox("段首尾独立动画", section)
+        host._section_edge_check.toggled.connect(host._on_section_edge_toggled)
+        host._section_head_anim_combo = self._animation_combo(
+            section,
+            ENTRY_ANIMATION_OPTIONS,
+            "section_head_anim",
+        )
+        host._section_head_anim_combo.setToolTip(
+            "段首页各行替换全局入场动画；单页段两侧都替换"
+        )
+        host._section_tail_anim_combo = self._animation_combo(
+            section,
+            EXIT_ANIMATION_OPTIONS,
+            "section_tail_anim",
+        )
+        host._section_tail_anim_combo.setToolTip(
+            "段尾页各行替换全局退场动画；单页段两侧都替换"
+        )
+        host._section_edge_both_check = CheckBox("同时设置出入场", section)
+        host._section_edge_both_check.setToolTip(
+            "开启后段首页与段尾页同时替换入场和退场动画；默认各页只替换自己一侧"
+        )
+        host._section_edge_both_check.toggled.connect(
+            host._on_section_edge_both_toggled
+        )
+        host._section_edge_row = self._section_edge_block(
+            section,
+            host._section_edge_check,
+            host._section_head_anim_combo,
+            host._section_tail_anim_combo,
+            host._section_edge_both_check,
+        )
+        host._animation_grid.add_widget(host._section_edge_row)
         layout.addWidget(host._animation_grid)
         return section
 
@@ -318,6 +352,33 @@ class EffectsPropertyPageBuilder:
         button = host._color_button(model_field, getattr(host._style, model_field))
         setattr(host, attribute, button)
         add(label, button)
+
+    @staticmethod
+    def _section_edge_block(
+        parent: QWidget,
+        check: CheckBox,
+        head_combo: WheelFocusedComboBox,
+        tail_combo: WheelFocusedComboBox,
+        both_check: CheckBox,
+    ) -> QWidget:
+        block = QWidget(parent)
+        block_layout = QVBoxLayout(block)
+        block_layout.setContentsMargins(0, 0, 0, 0)
+        block_layout.setSpacing(4)
+        row = QWidget(block)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        row_layout.addWidget(check, 0)
+        row_layout.addWidget(head_combo, 1)
+        row_layout.addWidget(tail_combo, 1)
+        block_layout.addWidget(row)
+        block_layout.addWidget(both_check)
+        # 主开关关闭时子选项与两个下拉一起失效（回显时由宿主按样式同步）。
+        head_combo.setEnabled(False)
+        tail_combo.setEnabled(False)
+        both_check.setEnabled(False)
+        return block
 
     @staticmethod
     def _animation_row(

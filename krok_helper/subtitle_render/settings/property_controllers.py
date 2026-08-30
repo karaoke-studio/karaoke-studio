@@ -323,6 +323,22 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         normalized["karaoke_anim"] = normalize_karaoke_animation(
             normalized["karaoke_anim"]
         )
+    if "section_edge_anim_enabled" in normalized:
+        normalized["section_edge_anim_enabled"] = bool(
+            normalized["section_edge_anim_enabled"]
+        )
+    if "section_edge_both_animations" in normalized:
+        normalized["section_edge_both_animations"] = bool(
+            normalized["section_edge_both_animations"]
+        )
+    if "section_head_anim" in normalized:
+        normalized["section_head_anim"] = normalize_entry_animation(
+            normalized["section_head_anim"]
+        )
+    if "section_tail_anim" in normalized:
+        normalized["section_tail_anim"] = normalize_exit_animation(
+            normalized["section_tail_anim"]
+        )
     if "lit_style" in normalized:
         normalized["lit_style"] = normalize_lit_style(normalized["lit_style"])
     if "lit_transition_mode" in normalized:

@@ -414,6 +414,37 @@ def section_head_line_indices(
     return frozenset(heads)
 
 
+def section_edge_page_line_indices(
+    track: TimingTrack,
+    style: Style,
+    *,
+    section_gap_ms: int = 0,
+) -> tuple[frozenset[int], frozenset[int]]:
+    """段首页/段尾页全部行的 ``track.lines`` 索引集合（先后返回首、尾）。
+
+    段首页 = 每段第一页，段尾页 = 每段最后一页；单页段既是首又是尾，
+    其行同时进入两个集合。page_plan 存在时以权威结构为准；裸解析的
+    track 没有 plan，用 legacy 行字段（break_before/布局容量）加间奏口径推导。
+    """
+
+    if track.page_plan is not None:
+        resolved = resolve_page_plan(track, style)
+    else:
+        resolved = resolve_page_plan(
+            track,
+            style,
+            build_legacy_page_plan(track, style, section_gap_ms=section_gap_ms),
+        )
+    heads: set[int] = set()
+    tails: set[int] = set()
+    for section in resolved.sections:
+        if not section.pages:
+            continue
+        heads.update(section.pages[0].track_line_indices)
+        tails.update(section.pages[-1].track_line_indices)
+    return frozenset(heads), frozenset(tails)
+
+
 def page_for_track_line(
     track: TimingTrack, style: Style, track_line_index: int
 ) -> Optional[ResolvedPage]:

@@ -70,6 +70,10 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
 from krok_helper.qfluent_compat import ModelessDialog, hide_fluent_tooltip, show_fluent_tooltip
+from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+    apply_section_edge_animation,
+    section_edge_line_flags,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import (
     assign_lanes,
 )
@@ -165,10 +169,19 @@ _EXIT_LABELS = dict(_EXIT_EFFECTS)
 _KARAOKE_LABELS = dict(_KARAOKE_EFFECTS)
 
 
-def _animation_summary(style: Style, override: Optional[LineAnimationOverride]) -> str:
+def _animation_summary(
+    style: Style,
+    override: Optional[LineAnimationOverride],
+    edge_flags: tuple[bool, bool] = (False, False),
+) -> str:
     prefix = "全局：" if override is None else ""
     entry = style.entry_anim if override is None else override.entry_anim
     exit_ = style.exit_anim if override is None else override.exit_anim
+    if override is None and any(edge_flags):
+        # 段首页/段尾页替换与渲染端共用同一套替换逻辑，列表显示的就是实际生效值。
+        effective = apply_section_edge_animation(style, *edge_flags)
+        entry = effective.entry_anim
+        exit_ = effective.exit_anim
     summary = f"{prefix}{_ENTRY_LABELS.get(entry, entry)} / {_EXIT_LABELS.get(exit_, exit_)}"
     # 唱字只在这一行真的改了它时才标出来，免得每行都拖一截重复文字。
     if override is not None and override.karaoke_anim != "inherit":
@@ -564,6 +577,16 @@ _SWATCH_PRESENTATION_FIELDS: tuple[str, ...] = (
 )
 """只改角色色点颜色的字段。"""
 
+_ANIMATION_PRESENTATION_FIELDS: tuple[str, ...] = (
+    "entry_anim",
+    "exit_anim",
+    "section_edge_anim_enabled",
+    "section_edge_both_animations",
+    "section_head_anim",
+    "section_tail_anim",
+)
+"""会改「特效」列摘要文字的字段——段首/段尾页替换后的生效值要在列表里跟着变。"""
+
 
 def _layout_presentation_signature(style: Style) -> tuple:
     """影响行内容 / 列宽的取值签名。
@@ -579,6 +602,11 @@ def _layout_presentation_signature(style: Style) -> tuple:
 def _swatch_presentation_signature(style: Style) -> tuple:
     """只影响角色色点颜色的取值签名。"""
     return tuple(getattr(style, name) for name in _SWATCH_PRESENTATION_FIELDS)
+
+
+def _animation_presentation_signature(style: Style) -> tuple:
+    """只影响「特效」列摘要文字的取值签名。"""
+    return tuple(getattr(style, name) for name in _ANIMATION_PRESENTATION_FIELDS)
 
 
 def _effective_layout_style(style: Style, line: TimingLine) -> Style:
@@ -1338,10 +1366,13 @@ class LyricsPanel(DropPanel):
         swatch_changed = _swatch_presentation_signature(
             previous
         ) != _swatch_presentation_signature(style)
-        if not layout_changed and not swatch_changed:
+        animation_changed = _animation_presentation_signature(
+            previous
+        ) != _animation_presentation_signature(style)
+        if not layout_changed and not swatch_changed and not animation_changed:
             return
-        if layout_changed:
-            # 行内容/列语义变了：立刻刷新，并把待处理的色点刷新一并做掉。
+        if layout_changed or animation_changed:
+            # 行内容/列语义/特效摘要变了：立刻刷新，并把待处理的色点刷新一并做掉。
             self._swatch_refresh_timer.stop()
             self._swatch_refresh_pending = False
             self._refresh_presentation(update_widths=True)
@@ -1451,6 +1482,7 @@ class LyricsPanel(DropPanel):
                 return
 
             self._presentation_rows = self._build_presentation_rows(track)
+            edge_flags = self._section_edge_flags()
             num_rows = len(self._presentation_rows)
             self._table.setRowCount(num_rows)
             for row, presentation in enumerate(self._presentation_rows):
@@ -1497,7 +1529,11 @@ class LyricsPanel(DropPanel):
                 self._table.setItem(row, COL_ROLE, role_item)
 
                 effect_item = QTableWidgetItem(
-                    _animation_summary(self._style, line.animation_override)
+                    _animation_summary(
+                        self._style,
+                        line.animation_override,
+                        edge_flags.get(presentation.track_line_index, (False, False)),
+                    )
                     if line is not None
                     else ""
                 )
@@ -1644,6 +1680,19 @@ class LyricsPanel(DropPanel):
             ),
             None,
         )
+
+    def _section_edge_flags(self) -> dict[int, tuple[bool, bool]]:
+        """当前 track/style 的段首页/段尾页行标记；与渲染共用同一份判定。"""
+        if self._track is None or self._title_mode:
+            return {}
+        heads, tails = section_edge_line_flags(
+            self._track, self._style
+        ) or (frozenset(), frozenset())
+        return {
+            index: (index in heads, index in tails)
+            for index in range(len(self._track.lines))
+            if index in heads or index in tails
+        }
 
     def _track_rows_for_presentation_row(self, row: int) -> list[int]:
         if not 0 <= row < len(self._presentation_rows):
@@ -2237,6 +2286,7 @@ class LyricsPanel(DropPanel):
         style = self._style
         dual = bool(style.dual_line_layout)
         lane_color = QColor(palette().text_hint)
+        edge_flags = self._section_edge_flags()
 
         self._table.setColumnHidden(COL_LANE, False if self._title_mode else not dual)
         self._table.setColumnHidden(COL_EFFECT, self._title_mode)
@@ -2380,7 +2430,13 @@ class LyricsPanel(DropPanel):
                         )
                     )
                 if line is not None and not self._title_mode:
-                    effect_item.setText(_animation_summary(style, line.animation_override))
+                    effect_item.setText(
+                        _animation_summary(
+                            style,
+                            line.animation_override,
+                            edge_flags.get(track_index, (False, False)),
+                        )
+                    )
                     if line.animation_override is None:
                         effect_item.setIcon(QIcon())
                         effect_item.setForeground(QBrush(QColor(palette().text_hint)))

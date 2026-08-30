@@ -38,6 +38,9 @@ from krok_helper.subtitle_render.engine.layout.page.placement import (
     solve_page_axis_offsets,
     time_windows_overlap,
 )
+from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+    section_edge_context,
+)
 from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_head_context,
     signal_lead_in_ms,
@@ -966,6 +969,9 @@ def resolve_display_lines_for_style(
     if signal_heads is not None:
         base_kwargs["signal_head_indexes"] = signal_heads
         base_kwargs["signal_lead_ms"] = signal_lead_in_ms(style)
+    # 段首/段尾页标记供逐行动画解析（style_for_line）读取；此处注册后，
+    # 本函数产出的显示窗口与后续布局计划看到的替换结果保持一致。
+    section_edge_context(track, style)
     if logical_w is None or logical_h is None:
         default_h = max(int(style.layout_reference_height), 1)
         default_w = max(int(round(default_h * 16 / 9)), 1)

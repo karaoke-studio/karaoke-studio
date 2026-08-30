@@ -6,6 +6,10 @@ from dataclasses import replace
 from typing import Callable
 
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
+from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+    apply_section_edge_animation,
+    line_section_edge_flags,
+)
 from krok_helper.subtitle_render.engine.timing.show_time import (
     MIN_AUTO_ENTRY_ANIMATION_MS,
     MIN_AUTO_EXIT_ANIMATION_MS,
@@ -147,6 +151,9 @@ def style_for_line(style: Style, line: TimingLine) -> Style:
             int(override.exit_duration_ms),
             override.karaoke_anim,
         ),
+        # 段首页/段尾页标记：同一 layout/歌手/覆盖组合下，处于段边缘页与
+        # 不在的两行会解析出不同入退场动画，键里不带标记就会串缓存。
+        line_section_edge_flags(line),
     )
     hit = cache.get(cache_key)
     if hit is not None:
@@ -170,6 +177,9 @@ def _style_for_line_uncached(style: Style, line: TimingLine) -> Style:
         style,
         **{name: getattr(layout_style, name) for name in LYRICS_LAYOUT_FIELDS},
     )
+    # 段边缘页替换先套（按各页一侧/两侧规则），手动逐行覆盖最后套——
+    # 用户显式改过的行优先。
+    style = apply_section_edge_animation(style, *line_section_edge_flags(line))
     return style_with_line_animation(style, line)
 
 

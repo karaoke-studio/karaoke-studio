@@ -211,3 +211,317 @@ class TestGpuParity:
         style = Style()
         style.karaoke_anim = "utopia"
         assert gpu_unsupported_features(self._track(), style) == ()
+
+
+def _section_edge_track():
+    """段A 三页（每页 2 行）：首 {0,1}、中 {2,3}、尾 {4,5}；
+    段B 单页（2 行）{6,7} 既是首又是尾。"""
+    from krok_helper.subtitle_render.domain.models import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.domain.timing import (
+        TrackPage,
+        TrackPagePlan,
+        TrackSection,
+    )
+
+    def line(text: str, start: int, override=None) -> TimingLine:
+        item = TimingLine()
+        item.chars = [
+            TimingChar(text=ch, start_ms=start + i * 200)
+            for i, ch in enumerate(text)
+        ]
+        item.end_ms = start + len(text) * 200
+        item.animation_override = override
+        return item
+
+    track = TimingTrack()
+    track.lines = [
+        line("AA", 0),
+        line("BB", 3000),
+        line("CC", 9000),
+        line("DD", 12000),
+        line("EE", 15000),
+        line("FF", 18000),
+        line("GG", 40000),
+        line("HH", 43000),
+    ]
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[
+                    TrackPage(2, "default"),
+                    TrackPage(2, "default"),
+                    TrackPage(2, "default"),
+                ]
+            ),
+            TrackSection(pages=[TrackPage(2, "default")]),
+        ]
+    )
+    return track
+
+
+class TestSectionEdgeAnimation:
+    """段首尾独立动画：默认各页只替换自己一侧，单页段两侧都换。"""
+
+    @staticmethod
+    def _style(**extra):
+        return Style(
+            section_edge_anim_enabled=True,
+            section_head_anim="utopia",
+            section_tail_anim="slide_out",
+            **extra,
+        )
+
+    def test_each_edge_page_replaces_only_its_own_side_by_default(self) -> None:
+        from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+            section_edge_context,
+        )
+        from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+        from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
+        track = _section_edge_track()
+        style = self._style()
+        # 八行 layout_index/歌手/覆盖完全一致：如果逐行样式缓存键漏了段边缘
+        # 标记，中页会直接命中首页的缓存条目、跟着一起换动画。
+        with layout_pass():
+            section_edge_context(track, style)
+            resolved = [style_for_line(style, line) for line in track.lines]
+        assert [(s.entry_anim, s.exit_anim) for s in resolved] == [
+            ("utopia", "fade"),  # 段A 首页：只换入场
+            ("utopia", "fade"),
+            ("fade", "fade"),  # 中页：不动
+            ("fade", "fade"),
+            ("fade", "slide_out"),  # 段A 尾页：只换退场
+            ("fade", "slide_out"),
+            ("utopia", "slide_out"),  # 段B 单页：既是首又是尾，两侧都换
+            ("utopia", "slide_out"),
+        ]
+
+    def test_both_animations_replaces_both_sides_on_every_edge_page(self) -> None:
+        from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+            section_edge_context,
+        )
+        from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+        from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
+        track = _section_edge_track()
+        style = self._style(section_edge_both_animations=True)
+        with layout_pass():
+            section_edge_context(track, style)
+            resolved = [style_for_line(style, line) for line in track.lines]
+        assert [(s.entry_anim, s.exit_anim) for s in resolved] == [
+            ("utopia", "slide_out"),
+            ("utopia", "slide_out"),
+            ("fade", "fade"),
+            ("fade", "fade"),
+            ("utopia", "slide_out"),
+            ("utopia", "slide_out"),
+            ("utopia", "slide_out"),
+            ("utopia", "slide_out"),
+        ]
+
+    def test_reverse_resolution_order_keeps_the_cache_honest(self) -> None:
+        from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+            section_edge_context,
+        )
+        from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+        from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
+        track = _section_edge_track()
+        style = self._style()
+        with layout_pass():
+            section_edge_context(track, style)
+            middle = style_for_line(style, track.lines[2])
+            head = style_for_line(style, track.lines[0])
+        assert (middle.entry_anim, middle.exit_anim) == ("fade", "fade")
+        assert (head.entry_anim, head.exit_anim) == ("utopia", "fade")
+
+    def test_disabled_leaves_every_line_untouched(self) -> None:
+        from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+            section_edge_context,
+        )
+        from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+        from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
+        track = _section_edge_track()
+        style = Style(
+            section_edge_anim_enabled=False,
+            section_edge_both_animations=True,
+            section_head_anim="utopia",
+            section_tail_anim="slide_out",
+        )
+        with layout_pass():
+            section_edge_context(track, style)
+            resolved = [style_for_line(style, line) for line in track.lines]
+        assert all(
+            (s.entry_anim, s.exit_anim) == ("fade", "fade") for s in resolved
+        )
+
+    def test_a_manual_override_wins_on_edge_lines(self) -> None:
+        from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+            section_edge_context,
+        )
+        from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+        from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
+        track = _section_edge_track()
+        track.lines[0].animation_override = LineAnimationOverride(
+            entry_anim="rise", exit_anim="rise"
+        )
+        style = self._style()
+        with layout_pass():
+            section_edge_context(track, style)
+            resolved = [style_for_line(style, line) for line in track.lines]
+        assert (resolved[0].entry_anim, resolved[0].exit_anim) == ("rise", "rise")
+        assert (resolved[1].entry_anim, resolved[1].exit_anim) == (
+            "utopia",
+            "fade",
+        )
+
+    def test_the_style_cache_key_includes_the_edge_flag(self) -> None:
+        """缓存键是逐字段列举的；漏掉段边缘标记，中页会串首页的动画。"""
+        import inspect
+
+        from krok_helper.subtitle_render.engine.layout.line import style as line_style
+
+        source = inspect.getsource(line_style.style_for_line)
+        assert "line_section_edge_flags" in source
+
+
+class TestSectionEdgeSummary:
+    """歌词列表「特效」列显示替换后的实际生效值，手动覆盖仍优先。"""
+
+    def test_each_side_shows_only_its_own_replacement_by_default(self) -> None:
+        from krok_helper.subtitle_render.frontend.editor.lyrics_list import (
+            _animation_summary,
+        )
+
+        style = Style(
+            section_edge_anim_enabled=True,
+            section_head_anim="utopia",
+            section_tail_anim="slide_out",
+        )
+        assert _animation_summary(style, None, (True, False)) == "全局：Utopia / 淡出"
+        assert _animation_summary(style, None, (False, True)) == "全局：淡入 / 滑出"
+        # 单页段两侧都替换。
+        assert _animation_summary(style, None, (True, True)) == "全局：Utopia / 滑出"
+        assert _animation_summary(style, None) == "全局：淡入 / 淡出"
+
+    def test_both_mode_replaces_the_other_side_too(self) -> None:
+        from krok_helper.subtitle_render.frontend.editor.lyrics_list import (
+            _animation_summary,
+        )
+
+        style = Style(
+            section_edge_anim_enabled=True,
+            section_edge_both_animations=True,
+            section_head_anim="utopia",
+            section_tail_anim="slide_out",
+        )
+        assert _animation_summary(style, None, (True, False)) == "全局：Utopia / 滑出"
+        assert _animation_summary(style, None, (False, True)) == "全局：Utopia / 滑出"
+
+    def test_a_manual_override_still_wins_in_the_summary(self) -> None:
+        from krok_helper.subtitle_render.frontend.editor.lyrics_list import (
+            _animation_summary,
+        )
+
+        style = Style(
+            section_edge_anim_enabled=True,
+            section_head_anim="utopia",
+            section_tail_anim="slide_out",
+        )
+        override = LineAnimationOverride(entry_anim="rise", exit_anim="rise")
+        assert _animation_summary(style, override, (True, False)) == "上升 / 上升"
+
+
+class TestSectionEdgeGpuParity:
+    """GPU 拿到的逐行入退场必须已经是替换后的值——协议按行发字段，无需 C++ 改动。"""
+
+    def test_the_ir_carries_the_replaced_per_line_animations(self, qapp) -> None:
+        from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
+        from krok_helper.subtitle_render.native.protocol import track_to_ir
+
+        track = _section_edge_track()
+        style = TestSectionEdgeAnimation._style()
+        ir = track_to_ir(
+            track,
+            style,
+            layout_plan=build_track_layout_plan(track, style),
+        )
+        assert [line["entry_anim"] for line in ir["lines"]] == [
+            "utopia", "utopia", "fade", "fade", "fade", "fade", "utopia", "utopia",
+        ]
+        assert [line["exit_anim"] for line in ir["lines"]] == [
+            "fade", "fade", "fade", "fade", "slide_out", "slide_out",
+            "slide_out", "slide_out",
+        ]
+
+    def test_it_does_not_force_a_painter_fallback(self, qapp) -> None:
+        from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
+
+        assert gpu_unsupported_features(
+            _section_edge_track(), TestSectionEdgeAnimation._style()
+        ) == ()
+
+
+class TestSectionEdgeListRefresh:
+    """段首尾设置变化后，歌词列表「特效」列跟着显示生效值。"""
+
+    @staticmethod
+    def _effect_texts(panel) -> list[str]:
+        table = panel.table_widget
+        texts = []
+        for row in range(table.rowCount()):
+            item = table.item(row, 2)  # COL_EFFECT
+            if item is not None and item.text():
+                texts.append(item.text())
+        return texts
+
+    def test_the_effect_column_follows_the_section_edge_settings(self, qapp) -> None:
+        from krok_helper.subtitle_render.frontend.editor.lyrics_list import LyricsPanel
+
+        panel = LyricsPanel()
+        panel.set_track(_section_edge_track())
+        assert self._effect_texts(panel) == ["全局：淡入 / 淡出"] * 8
+
+        panel.set_style(
+            Style(
+                section_edge_anim_enabled=True,
+                section_head_anim="utopia",
+                section_tail_anim="slide_out",
+            )
+        )
+        assert self._effect_texts(panel) == [
+            "全局：Utopia / 淡出",
+            "全局：Utopia / 淡出",
+            "全局：淡入 / 淡出",
+            "全局：淡入 / 淡出",
+            "全局：淡入 / 滑出",
+            "全局：淡入 / 滑出",
+            "全局：Utopia / 滑出",
+            "全局：Utopia / 滑出",
+        ]
+
+        # 打开「同时设置出入场」：段边缘页两侧一起换。
+        panel.set_style(
+            Style(
+                section_edge_anim_enabled=True,
+                section_edge_both_animations=True,
+                section_head_anim="utopia",
+                section_tail_anim="slide_out",
+            )
+        )
+        assert self._effect_texts(panel) == [
+            "全局：Utopia / 滑出",
+            "全局：Utopia / 滑出",
+            "全局：淡入 / 淡出",
+            "全局：淡入 / 淡出",
+            "全局：Utopia / 滑出",
+            "全局：Utopia / 滑出",
+            "全局：Utopia / 滑出",
+            "全局：Utopia / 滑出",
+        ]
+
+        # 关掉开关回到全局值——来回切都要跟得上。
+        panel.set_style(Style())
+        assert self._effect_texts(panel) == ["全局：淡入 / 淡出"] * 8

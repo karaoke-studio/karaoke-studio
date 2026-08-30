@@ -15,6 +15,7 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
     project_page_plan_to_legacy_fields,
     reflow_pages_for_layout_capacity,
     resolve_page_plan,
+    section_edge_page_line_indices,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import compute_display_lines
 from krok_helper.subtitle_render.domain.models import (
@@ -691,3 +692,79 @@ def test_insert_section_at_page_head_round_trips_with_delete():
         [(page.line_count, page.layout_id) for page in section.pages]
         for section in track.page_plan.sections
     ] == [[(2, "default"), (2, "default")]]
+
+
+def test_section_edge_page_line_indices_skip_middle_pages():
+    """段首页/段尾页之间的中页不属于任何一侧。"""
+
+    track = _track(4)
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[
+                    TrackPage(1, "default"),
+                    TrackPage(1, "default"),
+                    TrackPage(1, "default"),
+                ]
+            ),
+            TrackSection(pages=[TrackPage(1, "default")]),
+        ]
+    )
+    assert section_edge_page_line_indices(track, Style()) == (
+        frozenset({0, 3}),
+        frozenset({2, 3}),
+    )
+
+
+def test_section_edge_page_line_indices_cover_every_row_of_edge_pages():
+    """段首页/段尾页的「所有行」都在对应集合里，不只是首末行。"""
+
+    track = _track(5)
+    track.page_plan = TrackPagePlan(
+        sections=[
+            TrackSection(
+                pages=[
+                    TrackPage(2, "default"),
+                    TrackPage(2, "default"),
+                    TrackPage(1, "default"),
+                ]
+            ),
+        ]
+    )
+    assert section_edge_page_line_indices(track, Style()) == (
+        frozenset({0, 1}),
+        frozenset({4}),
+    )
+
+
+def test_single_page_section_is_both_head_and_tail():
+    """单页段既是首又是尾：其行同时进入首、尾两个集合。"""
+
+    track = _track(2)
+    track.page_plan = TrackPagePlan(
+        sections=[TrackSection(pages=[TrackPage(2, "default")])]
+    )
+    assert section_edge_page_line_indices(track, Style()) == (
+        frozenset({0, 1}),
+        frozenset({0, 1}),
+    )
+
+
+def test_section_edge_page_line_indices_fall_back_to_legacy_plan():
+    """无 page_plan 的 track 用 legacy 行字段加间奏口径推导同一规则。"""
+
+    track = TimingTrack(
+        lines=[
+            _line(0, start=0),
+            _line(1, start=1000),
+            _line(2, start=2000),
+            _line(3, start=3000),
+            _line(4, start=4000),
+            _line(5, start=30000),
+        ]
+    )
+    # 段A（0-4 行）按容量 2 分三页：首 {0,1}、中 {2,3}、尾 {4}；段B 单页
+    # 的行 {5} 既是首又是尾。
+    assert section_edge_page_line_indices(
+        track, Style(), section_gap_ms=4000
+    ) == (frozenset({0, 1, 5}), frozenset({4, 5}))

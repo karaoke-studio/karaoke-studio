@@ -65,6 +65,10 @@ from krok_helper.subtitle_render.engine.render.render_bands import (
     packed_offsets as _packed_offsets,
 )
 from krok_helper.subtitle_render.engine.render.core.animator import max_line_animation_excursion
+from krok_helper.subtitle_render.engine.layout.display.section_edges import (
+    apply_section_edge_animation,
+    section_edge_line_flags,
+)
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
     frame_vertical_bounds,
@@ -215,11 +219,17 @@ def _strip_safety_margin(job: RenderJob) -> int | None:
     font_px = _max_project_font_size(job.style, tracks)
     glyph_span_em = max(1.5, _max_guide_span_em(tracks) * 1.3)  # 1.3 = utopia intro 放大
     styles: list[Style] = [job.style]
-    styles.extend(
-        style_with_line_animation(job.style, line)
-        for track in tracks
-        for line in track.lines
-    )
+    for track in tracks:
+        heads, tails = section_edge_line_flags(track, job.style) or (
+            frozenset(),
+            frozenset(),
+        )
+        for index, line in enumerate(track.lines):
+            # 段首页/段尾页替换与行级覆盖（N3 逐行动画）都在逐行解析后取最大值。
+            candidate = apply_section_edge_animation(
+                job.style, index in heads, index in tails
+            )
+            styles.append(style_with_line_animation(candidate, line))
     for candidate in styles:
         excursion = max_line_animation_excursion(
             candidate, job.height, font_size_px=font_px, glyph_span_em=glyph_span_em
