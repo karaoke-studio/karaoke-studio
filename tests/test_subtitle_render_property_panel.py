@@ -384,8 +384,9 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     assert not panel._allow_inter_page_line_overlap_check.isChecked()
     assert not panel._allow_animation_overlap_check.isChecked()
     assert panel._auto_fill_section_time_check.isChecked()
-    assert not panel._sync_each_page_check.isChecked()
-    assert not panel._sync_each_page_check.isEnabled()
+    # 出厂预设（74f5c7b）默认开启同步入场/退场与每句同步，控件可用。
+    assert panel._sync_each_page_check.isChecked()
+    assert panel._sync_each_page_check.isEnabled()
     assert panel._n3_style_row.indexOf(panel._ruby_main_reading_units_check) == 0
     assert panel._n3_style_row.indexOf(panel._allow_animation_overlap_check) == 1
     assert panel._n3_style_row.indexOf(panel._auto_fill_section_time_check) == 2
@@ -419,6 +420,8 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
 
 def test_sync_each_page_is_enabled_only_for_active_sync_parent(qapp):
     panel = PropertyPanel()
+    # 出厂预设默认全开；本测试验证 enable 只跟随同步父开关，先显式归零。
+    panel.set_style(Style(sync_entry=False, sync_ending=False, sync_each_page=False))
 
     assert not panel._sync_each_page_check.isEnabled()
     panel._sync_entry_check.setChecked(True)
@@ -1864,7 +1867,8 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.viewport_scale_pct == 100
     assert style.viewport_rotation_deg == 0
     assert style.line_y_position == "bottom"
-    assert style.line_y_margin_px == 80
+    # 出厂预设（74f5c7b）相对 Nicokara 基线收窄了下边距与行距。
+    assert style.line_y_margin_px == 60
     assert style.dual_line_layout is True
     assert style.line_horizontal_layout == "asymmetric"
     assert style.right_to_left is False
@@ -1875,7 +1879,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.row2_align == "right"
     assert style.row2_offset_x == -50
     assert style.row2_offset_y == 0
-    assert style.line_gap_px == 90
+    assert style.line_gap_px == 45
     assert style.stroke_width_px == 15
     assert style.stroke2_width_px == 5
     assert style.decoration_kind == "shadow"
@@ -1889,13 +1893,13 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.line_tail_ms == 1000
     assert style.timing_offset_ms == 0
     assert style.section_gap_ms == 4000
-    assert style.sync_entry is False
-    assert style.sync_ending is False
+    assert style.sync_entry is True
+    assert style.sync_ending is True
     assert style.section_ending_mode == "hold"
     assert style.line_lane_gap_ms == 300
-    assert style.entry_anim == "none"
+    assert style.entry_anim == "fade"
     assert style.entry_lead_ms == 300
-    assert style.exit_anim == "none"
+    assert style.exit_anim == "fade"
     assert style.exit_fade_ms == 300
     assert style.lit_enabled is False
     assert style.lit_style == "volume"
@@ -3106,8 +3110,9 @@ def test_default_style_stroke2_sub_slots_show_inherited_state(qapp):
 
     # 日文-主文字是唯一非三态槽，默认仍是显式勾选。
     assert panel._stroke2_enabled_check.isChecked() is True
-    # 其余三个槽默认半选：None = 跟随上一级字体槽。
-    for prefix in ("latin_", "ruby_", "ruby_latin_"):
+    # 出厂预设（74f5c7b）显式开启注音描边 2；英数与注音英数保持半选继承。
+    assert panel._ruby_stroke2_enabled_check.checkState() is Qt.CheckState.Checked
+    for prefix in ("latin_", "ruby_latin_"):
         check = getattr(panel, f"_{prefix}stroke2_enabled_check")
         assert check.checkState() == Qt.CheckState.PartiallyChecked
 
@@ -4552,8 +4557,9 @@ def test_karaoke_animation_round_trips_and_rejects_unknown_values():
         style_from_dict(style_to_dict(Style(karaoke_anim="utopia"))).karaoke_anim
         == "utopia"
     )
-    assert style_from_dict({}).karaoke_anim == "inherit"
-    assert style_from_dict({"karaoke_anim": "unknown"}).karaoke_anim == "inherit"
+    # 出厂预设（74f5c7b）默认走字动画为 utopia；缺省与非法值都落回默认。
+    assert style_from_dict({}).karaoke_anim == "utopia"
+    assert style_from_dict({"karaoke_anim": "unknown"}).karaoke_anim == "utopia"
 
 
 def test_property_panel_animation_controls_emit_style(qapp):
@@ -4585,6 +4591,9 @@ def test_property_panel_animation_controls_emit_style(qapp):
 
 def test_property_panel_shows_legacy_utopia_as_utopia_karaoke_effect(qapp):
     panel = PropertyPanel()
+    # 出厂预设默认走字动画已是 utopia；本测试验证 legacy 映射不动显式 inherit，
+    # 先显式回到 inherit 基线。
+    panel.set_style(Style(karaoke_anim="inherit"))
 
     panel._entry_anim_combo.setCurrentIndex(
         panel._entry_anim_combo.findData("utopia")
@@ -4592,7 +4601,7 @@ def test_property_panel_shows_legacy_utopia_as_utopia_karaoke_effect(qapp):
     assert panel.subtitle_style.karaoke_anim == "inherit"
     assert panel._karaoke_anim_combo.currentData() == "utopia"
 
-    panel.set_style(Style(entry_anim="utopia"), emit=False)
+    panel.set_style(Style(entry_anim="utopia", karaoke_anim="inherit"), emit=False)
     assert panel.subtitle_style.karaoke_anim == "inherit"
     assert panel._karaoke_anim_combo.currentData() == "utopia"
 
@@ -6995,7 +7004,7 @@ def test_video_import_syncs_output_size_and_rescales_style(qapp, monkeypatch, tm
     assert win._style.font_size_px == 200
     assert win._style.stroke_width_px == 30
     assert win._style.layout_reference_height == 2160
-    assert win._style.line_gap_px == 180
+    assert win._style.line_gap_px == 90
     assert win._preview_panel.canvas._output_width == 3840
     assert win._preview_panel.canvas._output_height == 2160
     assert win._property_panel._layout_schematic._virtual_width == 3840
@@ -7009,7 +7018,7 @@ def test_video_import_syncs_output_size_and_rescales_style(qapp, monkeypatch, tm
     assert win._style.font_size_px == 66
     assert win._style.stroke_width_px == 10
     assert win._style.layout_reference_height == 720
-    assert win._style.line_gap_px == 60
+    assert win._style.line_gap_px == 30
     assert win._property_panel._layout_schematic._virtual_width == 1280
     assert win._property_panel._layout_schematic._virtual_height == 720
     win._flush_persisted_state_save()

@@ -534,7 +534,10 @@ def test_multiple_guide_line_hits_layout_and_layer_caches(tmp_path):
             )
         ]
     )
-    style = Style(font_family="Arial", font_size_px=72)
+    # 出厂预设（74f5c7b）默认走字动画为 utopia——其图层逐帧动态填充、不经
+    # _TEXT_RUN_LAYER_CACHE 烘焙；本测试的对象是常规走字的图层缓存，显式
+    # 锁定 inherit 路径，不随出厂默认漂移。
+    style = Style(font_family="Arial", font_size_px=72, karaoke_anim="inherit")
     image = QImage(900, 450, QImage.Format.Format_ARGB32_Premultiplied)
     subtitle_painter.clear_before_layer_cache()
 
