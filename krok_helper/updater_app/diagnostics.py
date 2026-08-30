@@ -8,6 +8,7 @@ successful update into a failed one.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import platform
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-_BUNDLE_SCHEMA_VERSION = 1
+_BUNDLE_SCHEMA_VERSION = 2
 _BUNDLE_KEEP_COUNT = 5
 _BUNDLE_NAME_RE = re.compile(
     r"^\d{8}T\d{6}\.\d{3}[+-]\d{4}-pid\d+(?:-\d+)?$"
@@ -268,10 +269,13 @@ class _Session:
     attempts: list[dict[str, Any]] = field(default_factory=list)
     restart_manager: list[dict[str, Any]] = field(default_factory=list)
     process_cleanup: list[dict[str, Any]] = field(default_factory=list)
+    access_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
     filesystem: list[dict[str, Any]] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
     collection_errors: list[dict[str, Any]] = field(default_factory=list)
     bundle_dir: Path | None = None
+    live_event_path: Path | None = None
     final_exit_code: int | None = None
 
 
@@ -287,6 +291,109 @@ def _default_root() -> Path:
     return Path(tempfile.gettempdir()) / "KaraokeStudioUpdater" / "diagnostics"
 
 
+def _file_fingerprint(path: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {"path": str(path), "exists": path.is_file()}
+    if not result["exists"]:
+        return result
+    try:
+        stat_result = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        result.update(
+            {
+                "size": stat_result.st_size,
+                "modified_ns": stat_result.st_mtime_ns,
+                "sha256": digest.hexdigest(),
+            }
+        )
+    except OSError as exc:
+        result["error"] = exception_details(exc)
+    return result
+
+
+def _filesystem_info(path: object) -> dict[str, Any]:
+    result: dict[str, Any] = {"available": False}
+    if os.name != "nt" or not path:
+        result["reason"] = "non_windows" if os.name != "nt" else "missing_path"
+        return result
+    try:
+        kernel32 = ctypes.windll.kernel32
+        absolute = os.path.abspath(os.fspath(path))
+        volume_path = ctypes.create_unicode_buffer(32768)
+        if not kernel32.GetVolumePathNameW(absolute, volume_path, len(volume_path)):
+            result["win32_error"] = int(kernel32.GetLastError())
+            return result
+        volume_name = ctypes.create_unicode_buffer(261)
+        filesystem_name = ctypes.create_unicode_buffer(261)
+        serial = ctypes.c_uint32(0)
+        max_component = ctypes.c_uint32(0)
+        flags = ctypes.c_uint32(0)
+        if not kernel32.GetVolumeInformationW(
+            volume_path.value,
+            volume_name,
+            len(volume_name),
+            ctypes.byref(serial),
+            ctypes.byref(max_component),
+            ctypes.byref(flags),
+            filesystem_name,
+            len(filesystem_name),
+        ):
+            result["win32_error"] = int(kernel32.GetLastError())
+            return result
+        return {
+            "available": True,
+            "volume_path": volume_path.value,
+            "filesystem": filesystem_name.value,
+            "drive_type": int(kernel32.GetDriveTypeW(volume_path.value)),
+            "volume_serial": f"{serial.value:08X}",
+            "filesystem_flags": f"0x{flags.value:08X}",
+            "max_component_length": int(max_component.value),
+        }
+    except Exception as exc:
+        result["error"] = exception_details(exc)
+        return result
+
+
+def _append_event_locked(
+    session: _Session,
+    event: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    payload = {
+        "wall_time": _wall_time(),
+        "monotonic_ms": _elapsed_ms(session),
+        "event": event,
+        "details": _redact_value(details or {}),
+    }
+    session.events.append(payload)
+    if session.live_event_path is None:
+        return
+    try:
+        session.live_event_path.parent.mkdir(parents=True, exist_ok=True)
+        with session.live_event_path.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as exc:
+        session.collection_errors.append(
+            {"stage": "append_live_event", "error": exception_details(exc)}
+        )
+        session.live_event_path = None
+
+
+def record_event(event: str, details: dict[str, Any] | None = None) -> None:
+    """Append one crash-resilient structured event, best effort."""
+
+    try:
+        with _state_lock:
+            if _active is not None:
+                _append_event_locked(_active, event, details)
+    except Exception:
+        pass
+
+
 def begin_session(
     args: object,
     *,
@@ -297,27 +404,54 @@ def begin_session(
     global _active, _latest_bundle_path
     try:
         work_dir = Path(tempfile.gettempdir()) / "KaraokeStudioUpdater"
+        try:
+            from krok_helper.config import APP_VERSION
+        except Exception:
+            APP_VERSION = "unknown"
+        executable = Path(sys.executable)
         metadata = {
             "updater_pid": os.getpid(),
             "parent_pid": getattr(args, "pid", None),
+            "source_version": os.environ.get("KROK_UPDATE_SOURCE_VERSION", ""),
             "target_version": getattr(args, "target_version", ""),
             "target_tag": getattr(args, "target_tag", ""),
             "app_dir": os.fspath(getattr(args, "app_dir", "")),
+            "app_filesystem": _filesystem_info(getattr(args, "app_dir", "")),
             "app_exe": getattr(args, "app_exe", ""),
             "internal_name": getattr(args, "internal_name", ""),
+            "updater_product_version": APP_VERSION,
+            "updater_bootstrap_result": os.environ.get(
+                "KROK_UPDATE_BOOTSTRAP_RESULT", "unknown"
+            ),
+            "updater_executable": _file_fingerprint(executable),
+            "updater_cwd": os.getcwd(),
+            "updater_argv": list(sys.argv),
             "platform": platform.platform(),
             "python": platform.python_version(),
             "frozen": bool(getattr(sys, "frozen", False)),
         }
         with _state_lock:
+            previous_live = _active.live_event_path if _active is not None else None
+            if previous_live is not None:
+                try:
+                    previous_live.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            session_id = f"pid{os.getpid()}-{uuid.uuid4().hex}"
             _active = _Session(
                 started_at=_wall_time(),
                 started_monotonic_ns=time.monotonic_ns(),
                 root=Path(root) if root is not None else _default_root(),
                 log_path=Path(log_path) if log_path is not None else work_dir / "updater.log",
                 metadata=metadata,
+                live_event_path=(
+                    Path(tempfile.gettempdir())
+                    / "KaraokeStudioUpdaterLive"
+                    / f"{session_id}.jsonl"
+                ),
             )
             _latest_bundle_path = None
+            _append_event_locked(_active, "session_started", metadata)
     except Exception:
         # Diagnostics may never block the updater from starting.
         with _state_lock:
@@ -345,19 +479,19 @@ def record_attempt(
         with _state_lock:
             if _active is None:
                 return
-            _active.attempts.append(
-                {
-                    "wall_time": _wall_time(),
-                    "monotonic_ms": _elapsed_ms(_active, finished_ns),
-                    "duration_ms": round((finished_ns - started_ns) / 1_000_000, 3),
-                    "operation": op_desc,
-                    "phase": phase,
-                    "attempt": attempt,
-                    "max_attempts": max_attempts,
-                    "outcome": outcome,
-                    "exception": exception_details(exc),
-                }
-            )
+            detail = {
+                "wall_time": _wall_time(),
+                "monotonic_ms": _elapsed_ms(_active, finished_ns),
+                "duration_ms": round((finished_ns - started_ns) / 1_000_000, 3),
+                "operation": op_desc,
+                "phase": phase,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "outcome": outcome,
+                "exception": exception_details(exc),
+            }
+            _active.attempts.append(detail)
+            _append_event_locked(_active, "file_operation_attempt", detail)
     except Exception:
         pass
 
@@ -387,6 +521,7 @@ def record_restart_manager(
             if _active is not None:
                 detail["monotonic_ms"] = _elapsed_ms(_active, finished_ns)
                 _active.restart_manager.append(detail)
+                _append_event_locked(_active, "restart_manager_query", detail)
     except Exception:
         pass
 
@@ -401,6 +536,23 @@ def record_process_cleanup(detail: dict[str, Any]) -> None:
                 payload["wall_time"] = _wall_time()
                 payload["monotonic_ms"] = _elapsed_ms(_active)
                 _active.process_cleanup.append(payload)
+                _append_event_locked(_active, "process_cleanup", payload)
+    except Exception:
+        pass
+
+
+def record_access_diagnostic(op_desc: str, detail: dict[str, Any]) -> None:
+    """Record directory-handle, process, identity and mutation probes."""
+
+    try:
+        with _state_lock:
+            if _active is not None:
+                payload = _redact_value(dict(detail))
+                payload["operation"] = op_desc
+                payload["wall_time"] = _wall_time()
+                payload["monotonic_ms"] = _elapsed_ms(_active)
+                _active.access_diagnostics.append(payload)
+                _append_event_locked(_active, "access_diagnostic", payload)
     except Exception:
         pass
 
@@ -484,10 +636,13 @@ def _report(session: _Session) -> dict[str, Any]:
             "attempts": len(session.attempts),
             "restart_manager_queries": len(session.restart_manager),
             "process_cleanup_events": len(session.process_cleanup),
+            "access_diagnostics": len(session.access_diagnostics),
+            "structured_events": len(session.events),
             "filesystem_captures": len(session.filesystem),
             "failures": len(session.failures),
         },
         "process_cleanup": session.process_cleanup,
+        "access_diagnostics": session.access_diagnostics,
         "failures": session.failures,
         "collection_errors": session.collection_errors,
         "privacy": "不包含文件内容；用户目录、临时目录和常见 URL 密钥已脱敏。",
@@ -532,7 +687,15 @@ def _write_bundle(session: _Session) -> Path:
     _atomic_write_json(
         session.bundle_dir / "restart-manager.json", session.restart_manager
     )
+    _atomic_write_json(
+        session.bundle_dir / "access-diagnostics.json", session.access_diagnostics
+    )
     _atomic_write_json(session.bundle_dir / "filesystem.json", session.filesystem)
+    event_text = "".join(
+        json.dumps(_redact_value(item), ensure_ascii=False) + "\n"
+        for item in session.events
+    )
+    _atomic_write_text(session.bundle_dir / "events.jsonl", event_text)
     _copy_redacted_log(session)
     _atomic_write_json(session.bundle_dir / "report.json", _report(session))
     _latest_bundle_path = session.bundle_dir
@@ -561,6 +724,7 @@ def persist_failure(
                 "details": details or {},
             }
             _active.failures.append(failure)
+            _append_event_locked(_active, "failure", failure)
             _active.filesystem.append(
                 {
                     "wall_time": failure["wall_time"],
@@ -591,6 +755,11 @@ def finish_session(code: int, *, exc: BaseException | None = None) -> Path | Non
                 return _latest_bundle_path
             session = _active
             _active.final_exit_code = int(code)
+            _append_event_locked(
+                _active,
+                "session_finished",
+                {"exit_code": int(code), "exception": exception_details(exc)},
+            )
             needs_bundle = code != 0 or _active.bundle_dir is not None
         if code != 0:
             persist_failure(
@@ -610,6 +779,15 @@ def finish_session(code: int, *, exc: BaseException | None = None) -> Path | Non
             with _state_lock:
                 if _active is session:
                     _active = None
+            try:
+                if session.live_event_path is not None:
+                    session.live_event_path.unlink(missing_ok=True)
+                    try:
+                        session.live_event_path.parent.rmdir()
+                    except OSError:
+                        pass
+            except OSError:
+                pass
 
 
 def latest_bundle_path() -> Path | None:

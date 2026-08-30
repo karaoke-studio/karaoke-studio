@@ -100,4 +100,9 @@ def test_launch_updater_uses_temp_cwd_and_fresh_pyinstaller_environment(
     assert captured["cwd"] == str(temp_dir)
     assert captured["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
     assert captured["env"][installer.UPDATE_DESCENDANTS_ENV].startswith("[")
+    assert captured["env"][installer.UPDATE_SOURCE_VERSION_ENV] == installer.APP_VERSION
+    assert (
+        captured["env"][installer.UPDATE_BOOTSTRAP_RESULT_ENV]
+        == "fallback_old_updater"
+    )
     assert captured["env"] is not os.environ

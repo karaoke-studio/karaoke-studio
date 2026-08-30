@@ -103,6 +103,36 @@ def test_wait_for_pid_exit_terminates_only_orphaned_host_descendants(
     }
 
 
+def test_wait_for_pid_exit_records_zero_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        lock_diag.ProcessTreeEntry(100, 1, "Lin-K Lyrics.exe"),
+        lock_diag.ProcessTreeEntry(111, 100, "Updater.exe"),
+    ]
+    recorded: list[dict] = []
+    monkeypatch.setattr(workbench_updater.os, "getpid", lambda: 111)
+    monkeypatch.setenv(workbench_updater._UPDATE_DESCENDANTS_ENV, "[]")
+    monkeypatch.setattr(workbench_updater.lock_diag, "snapshot_processes", lambda: rows)
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "process_snapshot_details",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(workbench_updater, "_original_wait_for_pid_exit", lambda *_args: True)
+    monkeypatch.setattr(
+        workbench_updater.diagnostics,
+        "record_process_cleanup",
+        recorded.append,
+    )
+
+    assert workbench_updater._wait_for_pid_exit_workbench(
+        100, logging.getLogger("sug.updater"), timeout=1
+    )
+    assert recorded[0]["candidate_count"] == 0
+    assert recorded[0]["processes"] == []
+
+
 def test_retry_uses_three_second_intervals_and_names_holders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -134,6 +164,64 @@ def test_retry_uses_three_second_intervals_and_names_holders(
     assert workbench_updater._blocked_lock is not None
     assert workbench_updater._blocked_lock.entries == [(42, "demo.exe")]
     assert any("最终重试仍被系统拒绝" in message for message in caplog.messages)
+
+
+def test_retry_records_directory_handle_and_permission_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "_internal"
+    source.mkdir()
+    destination = tmp_path / "_internal.old"
+    recorded: list[tuple[str, dict]] = []
+    monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis(),
+    )
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "diagnose_directory_handles",
+        lambda paths: {
+            "status": "found",
+            "complete": True,
+            "entries": [
+                {
+                    "pid": 4321,
+                    "process_name": "terminal.exe",
+                    "is_directory": True,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "diagnose_path_access",
+        lambda exc: {"classification": "source_handle_conflict"},
+    )
+    monkeypatch.setattr(workbench_updater.lock_diag, "snapshot_processes", lambda: [])
+    monkeypatch.setattr(
+        workbench_updater.diagnostics,
+        "record_access_diagnostic",
+        lambda operation, detail: recorded.append((operation, detail)),
+    )
+
+    def fail() -> None:
+        raise _lock_error(source, destination)
+
+    with pytest.raises(PermissionError):
+        workbench_updater._retry_workbench(
+            "备份 _internal",
+            fail,
+            logging.getLogger("sug.updater"),
+            max_retries=1,
+            interval=0,
+        )
+
+    assert recorded[0][0] == "备份 _internal"
+    assert recorded[0][1]["classification"] == "directory_handle_found"
+    assert recorded[0][1]["directory_handles"]["entries"][0]["pid"] == 4321
 
 
 def test_retry_succeeds_on_final_attempt_after_diagnostics(

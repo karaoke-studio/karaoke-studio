@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
+import os
 import time
+from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -209,6 +212,8 @@ def test_failure_bundle_contains_all_artifacts_and_redacts_secrets(
         "updater.log",
         "attempts.json",
         "restart-manager.json",
+        "access-diagnostics.json",
+        "events.jsonl",
         "filesystem.json",
     }
     assert _load(bundle / "attempts.json")[0]["exception"]["winerror"] == 5
@@ -232,6 +237,96 @@ def test_failure_bundle_contains_all_artifacts_and_redacts_secrets(
     assert "temporary-credential" not in copied_log
     assert "<redacted>" in copied_log
     assert str(tmp_path) not in copied_log
+    event_lines = (bundle / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in event_lines]
+    assert {item["event"] for item in events} >= {
+        "session_started",
+        "file_operation_attempt",
+        "restart_manager_query",
+        "process_cleanup",
+        "failure",
+    }
+
+
+def test_missing_rename_destination_does_not_reduce_source_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "module.py").write_text("pass", encoding="utf-8")
+    destination = tmp_path / "source.old"
+    monkeypatch.setattr(
+        lock_diag,
+        "_rm_lockers",
+        lambda paths: lock_diag.RestartManagerResult(
+            status="none", stage="complete", registered_paths=list(paths)
+        ),
+    )
+
+    result = lock_diag.diagnose_lockers([source, destination])
+
+    assert result.coverage["source_scan_complete"] is True
+    assert result.coverage["complete"] is True
+    assert result.coverage["missing_paths"] == [str(destination)]
+    assert result.coverage["directory_handles_covered"] is False
+
+
+def test_access_probe_classifies_source_handle_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    destination = tmp_path / "source.old"
+    exc = PermissionError(5, "拒绝访问", str(source), 5, str(destination))
+    monkeypatch.setattr(lock_diag, "_windows_identity", lambda: {"available": True})
+    monkeypatch.setattr(
+        lock_diag,
+        "_open_for_delete_probe",
+        lambda path: {
+            "available": True,
+            "opened": False,
+            "win32_error": 32,
+            "classification": "sharing_violation",
+        },
+    )
+    monkeypatch.setattr(
+        lock_diag,
+        "_parent_rename_probe",
+        lambda parent: {"succeeded": True},
+    )
+
+    result = lock_diag.diagnose_path_access(exc)
+
+    assert result["classification"] == "source_handle_conflict"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle table only")
+def test_directory_handle_scan_finds_open_directory(tmp_path: Path) -> None:
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel32.CreateFileW(
+        str(tmp_path),
+        0x00000080,  # FILE_READ_ATTRIBUTES
+        0x00000001 | 0x00000002 | 0x00000004,
+        None,
+        3,
+        0x02000000,  # FILE_FLAG_BACKUP_SEMANTICS
+        None,
+    )
+    try:
+        result = lock_diag.diagnose_directory_handles(
+            [tmp_path], handle_limit=500_000, time_limit=5.0
+        )
+    finally:
+        kernel32.CloseHandle(handle)
+
+    assert result["status"] == "found"
+    assert any(
+        item["pid"] == os.getpid() and item["is_directory"]
+        for item in result["entries"]
+    )
 
 
 def test_bundle_records_recovered_full_fallback(tmp_path: Path) -> None:
@@ -255,6 +350,27 @@ def test_bundle_records_recovered_full_fallback(tmp_path: Path) -> None:
     assert report["outcome"] == "recovered"
     assert report["final_exit_code"] == 0
     assert (final / "updater.log").read_text(encoding="utf-8") == "增量替换失败\n"
+
+
+def test_session_metadata_identifies_source_and_actual_updater(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KROK_UPDATE_SOURCE_VERSION", "4.2.7.2")
+    monkeypatch.setenv("KROK_UPDATE_BOOTSTRAP_RESULT", "updated_or_current")
+    diagnostics.begin_session(_args(tmp_path / "app"), root=tmp_path / "diagnostics")
+
+    bundle = diagnostics.persist_failure("metadata_test")
+
+    assert bundle is not None
+    report = _load(bundle / "report.json")
+    assert report["schema_version"] == 2
+    assert report["session"]["source_version"] == "4.2.7.2"
+    assert report["session"]["updater_product_version"]
+    assert report["session"]["updater_bootstrap_result"] == "updated_or_current"
+    assert len(report["session"]["updater_executable"]["sha256"]) == 64
+    assert report["session"]["app_filesystem"]["available"] is True
+    assert report["session"]["app_filesystem"]["filesystem"]
 
 
 def test_bundle_falls_back_to_temp_when_local_root_is_unusable(

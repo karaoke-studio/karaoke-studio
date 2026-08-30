@@ -14,10 +14,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from krok_helper.config import APP_VERSION
+
 log = logging.getLogger(__name__)
 
 UPDATER_EXE_NAME = "Updater.exe"
 UPDATE_DESCENDANTS_ENV = "KROK_UPDATE_DESCENDANTS"
+UPDATE_SOURCE_VERSION_ENV = "KROK_UPDATE_SOURCE_VERSION"
+UPDATE_BOOTSTRAP_RESULT_ENV = "KROK_UPDATE_BOOTSTRAP_RESULT"
 TMP_DIR_NAME = "KaraokeStudioUpdater"
 #: 非冻结运行时的兜底 EXE 名。冻结运行时 :func:`find_app_exe_name` 取的是用户
 #: 实际启动的那个文件名 —— 包里同时有 ``Lin-K Lyrics.exe`` 与改名前的
@@ -394,13 +398,21 @@ def launch_updater(
         )
 
     # 先尝试自更新 Updater.exe（失败仅降级，不阻断更新流程）
+    bootstrap_result = "failed"
     try:
-        _update_updater_from_remote(plan, progress_cb=progress_cb, cancel_check=cancel_check)
+        bootstrap_result = (
+            "updated_or_current"
+            if _update_updater_from_remote(
+                plan, progress_cb=progress_cb, cancel_check=cancel_check
+            )
+            else "fallback_old_updater"
+        )
         updater = find_updater_exe(plan.app_dir) or updater
     except UpdateCancelledError:
         raise
     except Exception as exc:  # noqa: BLE001
         log.warning("自更新 Updater.exe 失败（忽略，继续使用旧版）: %s", exc)
+        bootstrap_result = f"exception:{type(exc).__name__}"
 
     if progress_cb is not None:
         progress_cb("正在启动更新器…")
@@ -424,6 +436,8 @@ def launch_updater(
     env = os.environ.copy()
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     env[UPDATE_DESCENDANTS_ENV] = _snapshot_update_descendants()
+    env[UPDATE_SOURCE_VERSION_ENV] = APP_VERSION
+    env[UPDATE_BOOTSTRAP_RESULT_ENV] = bootstrap_result
     try:
         proc = subprocess.Popen(
             args,

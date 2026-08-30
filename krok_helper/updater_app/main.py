@@ -61,6 +61,7 @@ class BlockedLockInfo:
 _blocked_lock: BlockedLockInfo | None = None
 # GUI 模式下 run_gui 的 (args, run_func)，失败弹窗重试时重建 worker 用。
 _retry_context: tuple | None = None
+_diagnostic_app_dir = None
 
 
 _original_run_incremental = updater_main.run_incremental
@@ -179,16 +180,78 @@ def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RE
         diagnosis,
         started_ns=diagnosis_started_ns,
     )
+    failed_paths = [
+        path
+        for path in (
+            getattr(last_exc, "filename", None),
+            getattr(last_exc, "filename2", None),
+        )
+        if path
+    ]
+    directory_handles = _best_effort_diagnostic(
+        lock_diag.diagnose_directory_handles, failed_paths
+    ) or {"status": "failed", "stage": "collector_unavailable", "entries": []}
+    access_probe = _best_effort_diagnostic(
+        lock_diag.diagnose_path_access, last_exc
+    ) or {"classification": "collector_unavailable"}
+    process_rows = _best_effort_diagnostic(lock_diag.snapshot_processes) or []
+    relevant_processes = _best_effort_diagnostic(
+        lock_diag.process_snapshot_details,
+        process_rows,
+        app_dir=_diagnostic_app_dir,
+        image_names=_MANAGED_DESCENDANT_PROCESS_IMAGES,
+    ) or []
+    handle_entries = list(directory_handles.get("entries", []))
+    probe_classification = access_probe.get("classification", "unresolved")
+    if handle_entries:
+        classification = (
+            "directory_handle_found"
+            if any(item.get("is_directory") for item in handle_entries)
+            else "file_handle_found"
+        )
+    elif (
+        probe_classification
+        in {
+            "source_delete_access_denied_or_directory_in_use",
+            "rename_denied_despite_delete_access",
+        }
+        and directory_handles.get("inaccessible_process_count", 0)
+    ):
+        classification = "security_software_or_inaccessible_process_suspected"
+    elif probe_classification != "unresolved":
+        classification = probe_classification
+    elif relevant_processes:
+        classification = "product_process_suspected"
+    else:
+        classification = "access_denied_unresolved"
+    access_detail = {
+        "classification": classification,
+        "directory_handles": directory_handles,
+        "access_probe": access_probe,
+        "relevant_processes": relevant_processes,
+    }
+    _best_effort_diagnostic(
+        diagnostics.record_access_diagnostic, op_desc, access_detail
+    )
+    log.info("%s 访问拒绝分类：%s", op_desc, classification)
     entries = diagnosis.entries
     holders = lock_diag.format_lockers(entries) if entries else ""
     if holders:
         log.warning("%s 诊断发现可能使用目标路径的进程：%s", op_desc, holders)
+    elif handle_entries:
+        shown = "、".join(
+            f"{item.get('process_name') or '未知进程'}(PID {item.get('pid')})"
+            for item in handle_entries
+        )
+        log.warning("%s 目录句柄诊断发现占用：%s", op_desc, shown)
     elif diagnosis.status == "none":
         log.warning(
-            "%s Restart Manager 未发现占用进程（覆盖完整=%s，注册文件=%d）",
+            "%s Restart Manager 未发现文件占用（源扫描完整=%s，注册文件=%d；目录句柄状态=%s，扫描完整=%s）",
             op_desc,
-            diagnosis.coverage.get("complete", False),
+            diagnosis.coverage.get("source_scan_complete", False),
             diagnosis.coverage.get("registered_file_count", 0),
+            directory_handles.get("status", "failed"),
+            directory_handles.get("complete", False),
         )
     else:
         log.warning(
@@ -251,6 +314,8 @@ def _retry_workbench(op_desc, func, log, max_retries=None, interval=FILE_LOCK_RE
             "restart_manager_status": diagnosis.status,
             "restart_manager_stage": diagnosis.stage,
             "restart_manager_win32_error": diagnosis.win32_error,
+            "access_classification": classification,
+            "directory_handle_count": len(handle_entries),
         },
     )
     if bundle_path is not None:
@@ -288,6 +353,8 @@ def _wait_for_pid_exit_workbench(pid, log, timeout=None) -> bool:
         before,
         exclude_pids=updater_lineage,
     )
+    inherited_count = 0
+    inherited_error = ""
     try:
         inherited = json.loads(os.environ.get(_UPDATE_DESCENDANTS_ENV, "[]"))
         for item in inherited if isinstance(inherited, list) else []:
@@ -298,8 +365,21 @@ def _wait_for_pid_exit_workbench(pid, log, timeout=None) -> bool:
             )
             if entry.pid > 0 and entry.pid not in updater_lineage:
                 candidates.append(entry)
+                inherited_count += 1
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        inherited_error = "invalid_json_or_entry"
         log.warning("主程序子进程交接快照无效，回退到 Updater 实时进程树")
+    before_relevant = _best_effort_diagnostic(
+        lock_diag.process_snapshot_details,
+        before,
+        include_pids=(
+            set(updater_lineage)
+            | {int(pid)}
+            | {entry.pid for entry in candidates}
+        ),
+        app_dir=_diagnostic_app_dir,
+        image_names=_MANAGED_DESCENDANT_PROCESS_IMAGES,
+    ) or []
     resolved_timeout = (
         updater_main.WAIT_PID_TIMEOUT if timeout is None else timeout
     )
@@ -314,6 +394,17 @@ def _wait_for_pid_exit_workbench(pid, log, timeout=None) -> bool:
         exclude_pids=updater_lineage,
     ):
         merged[entry.pid] = entry
+    after_relevant = _best_effort_diagnostic(
+        lock_diag.process_snapshot_details,
+        after,
+        include_pids=(
+            set(updater_lineage)
+            | {int(pid)}
+            | set(merged)
+        ),
+        app_dir=_diagnostic_app_dir,
+        image_names=_MANAGED_DESCENDANT_PROCESS_IMAGES,
+    ) or []
 
     outcomes: list[dict[str, object]] = []
     if not exited:
@@ -376,25 +467,30 @@ def _wait_for_pid_exit_workbench(pid, log, timeout=None) -> bool:
                 }
             )
 
-    if outcomes:
-        diagnostics.record_process_cleanup(
-            {
-                "parent_pid": int(pid),
-                "parent_exited": bool(exited),
-                "updater_lineage": sorted(updater_lineage),
-                "processes": outcomes,
-            }
-        )
-        terminated = sum(item["outcome"] == "terminated" for item in outcomes)
-        failed = sum(item["outcome"] == "terminate_failed" for item in outcomes)
-        log.info(
-            "主程序子进程清理完成：发现 %d，结束 %d，失败 %d",
-            len(outcomes),
-            terminated,
-            failed,
-        )
-        if terminated:
-            time.sleep(0.5)
+    _best_effort_diagnostic(
+        diagnostics.record_process_cleanup,
+        {
+            "parent_pid": int(pid),
+            "parent_exited": bool(exited),
+            "updater_lineage": sorted(updater_lineage),
+            "inherited_candidate_count": inherited_count,
+            "inherited_snapshot_error": inherited_error,
+            "candidate_count": len(merged),
+            "before_relevant_processes": before_relevant,
+            "after_relevant_processes": after_relevant,
+            "processes": outcomes,
+        },
+    )
+    terminated = sum(item["outcome"] == "terminated" for item in outcomes)
+    failed = sum(item["outcome"] == "terminate_failed" for item in outcomes)
+    log.info(
+        "主程序子进程清理完成：候选 %d，结束 %d，失败 %d",
+        len(outcomes),
+        terminated,
+        failed,
+    )
+    if terminated:
+        time.sleep(0.5)
     return exited
 
 
@@ -811,6 +907,8 @@ def _setup_workbench_logger(log_path):
 
 def _run_with_diagnostics(args, run_func, *run_args, **run_kwargs):
     """Run one updater attempt with a non-interfering diagnostic session."""
+    global _diagnostic_app_dir
+    _diagnostic_app_dir = getattr(args, "app_dir", None)
     _best_effort_diagnostic(diagnostics.begin_session, args)
     try:
         code = run_func(args, *run_args, **run_kwargs)
@@ -820,12 +918,15 @@ def _run_with_diagnostics(args, run_func, *run_args, **run_kwargs):
         _flush_logger(log)
         _best_effort_diagnostic(diagnostics.finish_session, 99, exc=exc)
         _flush_logger(log)
+        _diagnostic_app_dir = None
         return 99
     except BaseException as exc:
         _best_effort_diagnostic(diagnostics.finish_session, 99, exc=exc)
+        _diagnostic_app_dir = None
         raise
     _best_effort_diagnostic(diagnostics.finish_session, code)
     _flush_logger(logging.getLogger("sug.updater"))
+    _diagnostic_app_dir = None
     return code
 
 
