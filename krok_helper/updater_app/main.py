@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -65,6 +66,8 @@ _retry_context: tuple | None = None
 _original_run_incremental = updater_main.run_incremental
 _original_apply_part = updater_main._apply_part
 _original_wait_for_pid_exit = updater_main.wait_for_pid_exit
+_original_download_one = updater_main.download_one
+_original_verify_content_hash = updater_main.verify_content_hash
 
 
 def _best_effort_diagnostic(func, *args, **kwargs):
@@ -448,6 +451,67 @@ def _run_incremental_workbench(args, manifest, work_dir, log):
             details={"exit_code": rc},
         )
     return rc
+
+
+def _discard_invalid_part(zip_path, log, exc: BaseException) -> None:
+    """Remove an unreadable part archive so the updater can recover automatically."""
+    log.warning("分包缓存不是有效 ZIP，将删除后重新获取：%s（%s）", zip_path.name, exc)
+    try:
+        zip_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as remove_exc:
+        log.warning("删除无效分包缓存失败：%s（%s）", zip_path, remove_exc)
+
+
+def _verify_content_hash_workbench(zip_path, expected_hex, log) -> bool:
+    """Treat malformed or unreadable part archives as cache misses, not fatal errors."""
+    try:
+        return _original_verify_content_hash(zip_path, expected_hex, log)
+    except (
+        zipfile.BadZipFile,
+        EOFError,
+        NotImplementedError,
+        OSError,
+        RuntimeError,
+    ) as exc:
+        _discard_invalid_part(zip_path, log, exc)
+        return False
+
+
+def _download_one_workbench(url, dest, proxies, log):
+    """Download into a resumable .part file and publish it with an atomic rename."""
+    partial = dest.with_name(dest.name + ".part")
+    ok, error = _original_download_one(url, partial, proxies, log)
+    if not ok:
+        # The caller may switch mirrors. Never resume bytes from one source against
+        # another source during the same attempt.
+        try:
+            partial.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_exc:
+            log.warning("清理未完成下载失败：%s（%s）", partial, cleanup_exc)
+        return False, error
+    try:
+        # HTTP 200 only proves that bytes arrived. Reject HTML error pages and
+        # truncated archives before they can become the canonical cache file.
+        with zipfile.ZipFile(str(partial), "r") as archive:
+            archive.infolist()
+    except (zipfile.BadZipFile, EOFError, OSError) as exc:
+        log.warning("下载结果不是有效 ZIP：%s（%s）", partial, exc)
+        try:
+            partial.unlink()
+        except OSError:
+            pass
+        return False, f"下载结果不是有效 ZIP: {exc}"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(str(partial), str(dest))
+    except OSError as exc:
+        log.error("提交下载文件失败：%s → %s（%s）", partial, dest, exc)
+        return False, f"提交下载文件失败: {exc}"
+    return True, ""
 
 
 def _apply_part_workbench(part_zip, targets, app_dir, work_dir, part_id, log):
@@ -930,6 +994,8 @@ def _configure_product() -> None:
     # 替换模块属性即可生效。
     updater_main._retry_on_permission_error = _retry_workbench
     updater_main.wait_for_pid_exit = _wait_for_pid_exit_workbench
+    updater_main.download_one = _download_one_workbench
+    updater_main.verify_content_hash = _verify_content_hash_workbench
     updater_main.run_incremental = _run_incremental_workbench
     updater_main._apply_part = _apply_part_workbench
 
