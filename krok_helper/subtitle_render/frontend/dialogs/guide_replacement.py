@@ -412,6 +412,7 @@ class GuideBitmapOptionsRow(QWidget):
 
         row.addSpacing(8)
         row.addWidget(BodyLabel("余白", self))
+        offset_warning = "偏移量过度超出第一个字符可能导致显示异常。"
         for key, label, tooltip in (
             (
                 "margin_left_px",
@@ -433,7 +434,7 @@ class GuideBitmapOptionsRow(QWidget):
             edit = LineEdit(self)
             edit.setMinimumWidth(60)
             edit.setPlaceholderText("0")
-            edit.setToolTip(tooltip)
+            edit.setToolTip(f"{tooltip}\n{offset_warning}")
             setattr(self, f"{key}_edit", edit)
             row.addWidget(edit)
         row.addStretch(1)

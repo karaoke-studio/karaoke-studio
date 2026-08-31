@@ -4133,6 +4133,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             D2D1_RECT_F bounds = line->bounds;
             if (ch.bitmapGuide.has_value()) {
                 bounds = ch.bitmapRect;
+                const float imageHeight = std::max(
+                    ch.bitmapRect.bottom - ch.bitmapRect.top, 0.0f
+                );
+                const float bottomOffset = std::abs(
+                    ch.bitmapGuide->marginBottom
+                        * std::max(scene.layoutReferenceScale, 0.01f)
+                );
+                // A bitmap shifted by at least its own height has visually
+                // left the row, but it still belongs to this source line.
+                // Keep the offset bitmap rect for clipping and reuse the
+                // owning line's main wipe front instead of the collapsed
+                // zero-width character interval.
+                if (imageHeight > 0.0f && bottomOffset >= imageHeight) {
+                    edge = wipeEdge;
+                }
             } else if (useUtopiaTransition || charTransformedAt(charIndex)) {
                 const auto animated = utopiaCharWipe(charIndex);
                 bounds = animated.first;

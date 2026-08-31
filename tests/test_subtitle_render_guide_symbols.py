@@ -298,6 +298,10 @@ def test_guide_bitmap_options_row_round_trips_settings():
         "margin_bottom_px": 4,
     }
     assert not row.zoom_value_edit.isEnabled()
+    warning = "偏移量过度超出第一个字符可能导致显示异常"
+    assert warning in row.margin_left_px_edit.toolTip()
+    assert warning in row.margin_right_px_edit.toolTip()
+    assert warning in row.margin_bottom_px_edit.toolTip()
 
     kwargs = guide_replacement_module.bitmap_options_kwargs(row.options())
     assert kwargs == {
