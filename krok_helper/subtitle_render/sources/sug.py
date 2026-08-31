@@ -47,8 +47,7 @@ def load_sug_timing_track(
     """
 
     source_path = Path(path)
-    project = SugProjectParser.load(str(source_path))
-    extras = SugProjectParser.load_extras(str(source_path))
+    project, extras = SugProjectParser.load_with_extras(str(source_path))
     tags = extras.get("nicokara_tags") if isinstance(extras, dict) else None
     return timing_track_from_sug_project(
         project,
