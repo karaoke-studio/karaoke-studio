@@ -5,12 +5,35 @@ import sys
 import zipfile
 from types import SimpleNamespace
 
+import pytest
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
 from krok_helper.updater.progress_window import UpdateProgressWindow
 from krok_helper.updater_app import build_updater
 from krok_helper.updater_app import diagnostics
 from krok_helper.updater_app import main as workbench_updater
+
+
+@pytest.fixture(autouse=True)
+def _updater_windows_close_without_modal_prompt(qapp):
+    """让游离的更新器窗口能被无模态回收。
+
+    SUG 的 ``_UpdaterWindow`` 构造即 ``_running=True``，``closeEvent`` 在运行中
+    会弹模态确认框；offscreen 下无人应答，根 conftest 的
+    ``_reap_stray_toplevel_widgets`` 在 teardown 调 ``close()`` 时就永久阻塞。
+    本文件级 fixture 比根 conftest 的回收后实例化、先 teardown，在此把
+    ``_running`` 归零，使回收关闭不再弹窗。
+    """
+
+    yield
+    if "updater_app.gui" not in sys.modules:
+        return
+    from updater_app.gui import _UpdaterWindow
+
+    for widget in QApplication.topLevelWidgets():
+        if isinstance(widget, _UpdaterWindow) and getattr(widget, "_running", False):
+            widget._running = False
 
 
 def test_updater_is_built_as_windowed_gui() -> None:
