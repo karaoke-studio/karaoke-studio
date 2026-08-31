@@ -126,16 +126,16 @@ def _insert_changelog_placeholder(version: str) -> bool:
 #: GitHub 的网页版 release 会过滤掉 ``style``，那边降级成黑色粗体——文字本身
 #: 两边都在。
 ANNOUNCEMENT_BANNER = (
-    '<span style="color:#d64545"><b>Lin-K 官方QQ交流群 1108437280</b></span>'
+    '<span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>'
 )
 
 
 def _with_announcement_banner(body: str) -> str:
     """Put the standing announcement above every release body.
 
-    Generating it here rather than writing it into each CHANGELOG section keeps
-    the changelog about the changes, and means no release can forget it: CI
-    feeds this command's output straight to the GitHub release body.
+    Current CHANGELOG sections include the banner explicitly.  Keep this
+    fallback for older or manually prepared sections so CI cannot publish a
+    release body without the standing feedback notice.
     """
 
     text = body.lstrip("\n")
