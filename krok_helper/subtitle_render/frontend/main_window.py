@@ -825,6 +825,7 @@ class SubtitleRenderWindow(QWidget):
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[Any] = None
+        self._export_start_pending = False
         self._watch_primary_subtitle_source = False
         self._source_watch_runtime = SubtitleSourceWatchRuntime(
             self,
@@ -6576,21 +6577,36 @@ class SubtitleRenderWindow(QWidget):
         return self._save_project()
 
     def _start_render_export(self) -> None:
+        if self._export_start_pending:
+            return
         if self._export_runtime_controller.is_active(
             self._current_export_runtime()
         ):
             fluent_info(self, "导出中", "当前导出任务还在处理中，请稍等。")
             return
-        try:
-            job = self._build_render_job()
-        except ProcessingError as exc:
-            fluent_error(self, "无法导出", str(exc))
-            return
-        # 先校验再问保存：素材都没齐时不该先把用户拖进另存为对话框。
-        if not self._confirm_project_saved_before_export():
-            return
-
+        # 「保存并导出」确认框是非模态嵌套事件循环，期间主窗口仍可交互，而
+        # _render_thread 要到 prepare 之后才赋值，is_active 拦不住确认框期间的
+        # 第二次「开始导出」。进入时先禁用按钮并上闩锁；未走到启动的返回路径
+        # （构建失败、用户取消保存、链路异常）就地恢复按钮，真正启动后由
+        # success/cancelled/failed 三个 finish 回调恢复。
+        self._export_start_pending = True
         self._export_start_button.setEnabled(False)
+        launching = False
+        try:
+            try:
+                job = self._build_render_job()
+            except ProcessingError as exc:
+                fluent_error(self, "无法导出", str(exc))
+                return
+            # 先校验再问保存：素材都没齐时不该先把用户拖进另存为对话框。
+            if not self._confirm_project_saved_before_export():
+                return
+            launching = True
+        finally:
+            self._export_start_pending = False
+            if not launching:
+                self._export_start_button.setEnabled(True)
+
         self._export_stop_button.setEnabled(True)
         self._export_progress.setPaused(False)
         self._export_progress.setError(False)

@@ -1898,6 +1898,85 @@ def test_export_thread_never_starts_when_the_save_prompt_is_cancelled(qapp, monk
     assert win._export_start_button.isEnabled()
 
 
+def test_start_button_is_disabled_while_the_save_prompt_is_open(qapp, monkeypatch):
+    """保存确认框是非模态嵌套事件循环，期间主窗口仍可交互，按钮必须已禁用。"""
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(win, "_build_render_job", lambda: object())
+    states = {}
+
+    def fake_confirm():
+        states["during_prompt"] = win._export_start_button.isEnabled()
+        return False
+
+    monkeypatch.setattr(win, "_confirm_project_saved_before_export", fake_confirm)
+
+    win._start_render_export()
+
+    assert states["during_prompt"] is False
+    # 用户取消保存后按钮必须恢复，导出页不能被锁死。
+    assert win._export_start_button.isEnabled() is True
+
+
+def test_start_button_recovers_when_the_job_build_fails(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+
+    def build_error():
+        raise mw.ProcessingError("请先加载字幕文件。")
+
+    monkeypatch.setattr(win, "_build_render_job", build_error)
+
+    win._start_render_export()
+
+    assert win._export_start_button.isEnabled() is True
+
+
+def test_reentrant_start_during_the_save_prompt_is_ignored(qapp, monkeypatch):
+    """确认框期间的第二次「开始导出」（重入调用）不得再走一遍启动链路。"""
+    from types import SimpleNamespace
+
+    win = _make_window(qapp, monkeypatch)
+
+    class _RecordingController:
+        def __init__(self):
+            self.prepared = 0
+            self.started = 0
+
+        def is_active(self, handles):
+            return False
+
+        def prepare(self, **kwargs):
+            self.prepared += 1
+            return SimpleNamespace(thread=None, worker=None)
+
+        def start(self, handles):
+            self.started += 1
+
+    controller = _RecordingController()
+    monkeypatch.setattr(win, "_export_runtime_controller", controller)
+    monkeypatch.setattr(
+        win,
+        "_build_render_job",
+        lambda: SimpleNamespace(
+            codec="h264", width=1920, height=1080, fps=60,
+            output_path=Path("out") / "demo.mp4",
+        ),
+    )
+
+    def fake_confirm():
+        win._start_render_export()
+        return True
+
+    monkeypatch.setattr(win, "_confirm_project_saved_before_export", fake_confirm)
+
+    win._start_render_export()
+    win._cleanup_export_preview_dir()
+
+    assert controller.prepared == 1
+    assert controller.started == 1
+    # 启动成功后按钮保持禁用，由 success/cancelled/failed 回调恢复。
+    assert win._export_start_button.isEnabled() is False
+
+
 def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     monkeypatch.setattr(
