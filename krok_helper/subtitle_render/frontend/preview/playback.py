@@ -26,6 +26,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, QProcess, QUrl, pyqtSignal as Signal
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 
+from krok_helper.qt_audio import follow_default_audio_output
 from krok_helper.subtitle_render.frontend.preview import preview_media
 
 
@@ -64,6 +65,7 @@ class PlaybackController(QObject):
         super().__init__(parent)
         self._player = QMediaPlayer(self)
         self._audio_out = QAudioOutput(self)
+        follow_default_audio_output(self._audio_out)
         self._player.setAudioOutput(self._audio_out)
         self._has_media = False
         self._media_path: Optional[Path] = None

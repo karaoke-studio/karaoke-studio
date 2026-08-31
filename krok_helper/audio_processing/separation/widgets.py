@@ -1351,6 +1351,9 @@ class ResultsPanel(CardWidget):
             return
         if self._player is None:
             self._audio_output = QAudioOutput(self)
+            from krok_helper.qt_audio import follow_default_audio_output
+
+            follow_default_audio_output(self._audio_output)
             self._player = QMediaPlayer(self)
             self._player.setAudioOutput(self._audio_output)
             self._player.playbackStateChanged.connect(self._on_playback_state)

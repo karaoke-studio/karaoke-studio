@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from krok_helper.qt_audio import follow_default_audio_output
 from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.preview.preview_async import (
     AsyncSubtitleRenderer,
@@ -717,6 +718,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._video_player = QMediaPlayer(self)
         self._video_player.setVideoOutput(self._video_item)
         self._video_audio_out = QAudioOutput(self)
+        follow_default_audio_output(self._video_audio_out)
         self._video_audio_out.setVolume(0.0)
         self._video_player.setAudioOutput(self._video_audio_out)
         return self._video_player

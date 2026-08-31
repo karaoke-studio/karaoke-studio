@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.background_throttle import UiActivityGuard
+from krok_helper.qt_audio import follow_default_audio_output
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR
 from krok_helper.subtitle_render.frontend.widgets.drop_panel import DropPanel
@@ -377,6 +378,7 @@ class PreviewCanvas(QWidget):
         self._video_player = QMediaPlayer(self)
         self._video_player.setVideoSink(self._video_sink)
         self._video_audio_out = QAudioOutput(self)
+        follow_default_audio_output(self._video_audio_out)
         self._video_audio_out.setVolume(0.0)
         self._video_player.setAudioOutput(self._video_audio_out)
         return self._video_player
@@ -1137,6 +1139,7 @@ class TransportBar(QWidget):
             return self._player
         self._player = QMediaPlayer(self)
         self._audio_out = QAudioOutput(self)
+        follow_default_audio_output(self._audio_out)
         self._audio_out.setVolume(self._volume_slider.value() / 100.0)
         self._player.setAudioOutput(self._audio_out)
         self._player.positionChanged.connect(self._on_player_position)
