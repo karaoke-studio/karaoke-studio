@@ -71,6 +71,30 @@ def test_subtitle_source_loader_preserves_in_memory_sug_arguments(monkeypatch) -
     assert calls == [
         (
             (project,),
-            {"nicokara_tags": tags, "software_compensation_ms": -30},
+            {
+                "nicokara_tags": tags,
+                "software_compensation_ms": -30,
+                "base_dir": None,
+            },
         )
     ]
+
+
+def test_subtitle_source_loader_forwards_in_memory_sug_base_dir(monkeypatch, tmp_path: Path) -> None:
+    expected = TimingTrack()
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        loader_module,
+        "timing_track_from_sug_project",
+        lambda *args, **kwargs: (calls.append((args, kwargs)), expected)[1],
+    )
+
+    result = SubtitleSourceLoader.load_sug_project(
+        object(),
+        nicokara_tags=None,
+        software_compensation_ms=0,
+        base_dir=tmp_path,
+    )
+
+    assert result is expected
+    assert calls[-1][1]["base_dir"] == tmp_path
