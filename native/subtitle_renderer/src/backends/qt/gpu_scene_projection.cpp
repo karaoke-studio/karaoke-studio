@@ -352,6 +352,7 @@ void applyGpuLineLayout(
         ? layout.smartHorizontal.toStdString()
         : "none";
     target.letterSpacing = static_cast<float>(layout.letterSpacingPx * scale);
+    target.spaceWidthPercent = layout.spaceWidthPercent;
     target.allowBiting = layout.allowBiting;
     target.rubyInterval = static_cast<float>(layout.rubyIntervalPx * scale);
     target.rubyAlignment = layout.rubyAlignment.toStdString();
@@ -552,8 +553,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     sourceLine.singerId, sourceLine.chars[index].roleLabel
                 );
                 if (sourceLine.layout.present) {
-                    key += QStringLiteral("|layout:%1:%2:%3:%4:%5")
+                    key += QStringLiteral("|layout:%1:%2:%3:%4:%5:%6")
                         .arg(sourceLine.layout.letterSpacingPx)
+                        .arg(sourceLine.layout.spaceWidthPercent)
                         .arg(sourceLine.layout.allowBiting ? 1 : 0)
                         .arg(sourceLine.layout.rubyIntervalPx)
                         .arg(sourceLine.layout.rubyAlignment)

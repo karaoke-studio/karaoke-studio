@@ -43,6 +43,7 @@ struct ResolvedLineLayout {
     int row2OffsetX = -50;
     int row2OffsetY = 0;
     int letterSpacingPx = 0;
+    int spaceWidthPercent = 20;
     bool allowBiting = false;
     int rubyIntervalPx = 0;
     QString rubyAlignment = QStringLiteral("auto");

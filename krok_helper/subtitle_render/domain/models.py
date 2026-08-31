@@ -20,7 +20,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from difflib import SequenceMatcher
-from typing import Literal, Optional
+from typing import Iterable, Literal, Optional
 from uuid import uuid4
 
 from krok_helper.subtitle_render.domain.background import (
@@ -269,6 +269,8 @@ class LyricsLayout:
         default_factory=lambda: ["left", "right"]
     )
     letter_spacing_px: Optional[int] = None
+    space_width_percent: Optional[int] = None
+    """空格宽度（占字号百分比）的布局级覆盖；``None`` 继承全局 ``Style``。"""
     allow_biting: Optional[bool] = None
     ruby_interval_px: Optional[int] = None
     ruby_alignment: Optional[RubyAlignment] = None
@@ -286,6 +288,7 @@ LYRICS_LAYOUT_GEOMETRY_FIELDS: tuple[str, ...] = (
 
 LYRICS_LAYOUT_CHAR_FIELDS: tuple[str, ...] = (
     "letter_spacing_px",
+    "space_width_percent",
     "allow_biting",
     "ruby_interval_px",
     "ruby_alignment",
@@ -1807,6 +1810,7 @@ def lyrics_layout_to_dict(layout: LyricsLayout) -> dict:
         "horizontal_margin_px": layout.horizontal_margin_px,
         "line_alignments": list(layout.line_alignments),
         "letter_spacing_px": layout.letter_spacing_px,
+        "space_width_percent": layout.space_width_percent,
         "allow_biting": layout.allow_biting,
         "ruby_interval_px": layout.ruby_interval_px,
         "ruby_alignment": layout.ruby_alignment,
@@ -1840,6 +1844,11 @@ def lyrics_layout_from_dict(payload: object) -> LyricsLayout:
             if payload.get("letter_spacing_px") is not None
             else None
         ),
+        space_width_percent=(
+            _int_value(payload.get("space_width_percent"), 20)
+            if payload.get("space_width_percent") is not None
+            else None
+        ),
         allow_biting=(
             bool(payload.get("allow_biting"))
             if payload.get("allow_biting") is not None
@@ -1867,6 +1876,85 @@ def _layouts_from_payload(payload: object) -> list[LyricsLayout]:
     if not isinstance(payload, list):
         return []
     return [lyrics_layout_from_dict(item) for item in payload[:32]]
+
+
+def migrate_spacing_bindings_to_used_layouts(
+    style: Style,
+    lines: Iterable[object],
+) -> Style:
+    """旧工程迁移：空格宽度 / 字间距从方案域收敛到布局域。
+
+    - 空格宽度：按旧语义逐行统计实际生效值（歌手覆盖优先，否则全局），
+      取覆盖行数最多的值（并列时全局值优先）绑定到所有被引用的布局
+      （含默认布局=全局字段与标题引用的布局）；方案 / 歌手覆盖里的空格
+      宽度槽位全部丢弃（置 ``None``）。
+    - 字间距：被引用布局槽位为 ``None`` 时物化为全局值，已有显式值保留。
+
+    对迁移后的样式重复执行是幂等的。
+    """
+
+    counts: dict[int, int] = {}
+    for line in lines:
+        singer_id = getattr(line, "singer_id", None)
+        override = (
+            style.singer_style_overrides.get(singer_id)
+            if singer_id is not None
+            else None
+        )
+        value = (
+            override.space_width_percent
+            if override is not None and override.space_width_percent is not None
+            else style.space_width_percent
+        )
+        value = int(value)
+        counts[value] = counts.get(value, 0) + 1
+    global_space = int(style.space_width_percent)
+    if counts:
+        space = max(counts, key=lambda v: (counts[v], v == global_space, v))
+    else:
+        space = global_space
+
+    used = {0}
+    for line in lines:
+        index = int(getattr(line, "layout_index", 0) or 0)
+        if 0 <= index <= len(style.layouts):
+            used.add(index)
+    title = style.title_overlay
+    if title is not None and title.layout_index is not None:
+        title_index = int(title.layout_index)
+        if 0 <= title_index <= len(style.layouts):
+            used.add(title_index)
+
+    letter_global = int(style.letter_spacing_px)
+    layouts = [
+        (
+            replace(
+                layout,
+                space_width_percent=space,
+                letter_spacing_px=(
+                    layout.letter_spacing_px
+                    if layout.letter_spacing_px is not None
+                    else letter_global
+                ),
+            )
+            if index in used
+            else layout
+        )
+        for index, layout in enumerate(style.layouts, start=1)
+    ]
+    return replace(
+        style,
+        space_width_percent=space,
+        layouts=layouts,
+        custom_style_schemes={
+            name: replace(scheme, space_width_percent=None)
+            for name, scheme in style.custom_style_schemes.items()
+        },
+        singer_style_overrides={
+            singer_id: replace(scheme, space_width_percent=None)
+            for singer_id, scheme in style.singer_style_overrides.items()
+        },
+    )
 
 
 def _line_alignments_from_payload(payload: object) -> list[HorizontalAlign]:

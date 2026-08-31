@@ -2782,6 +2782,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
                 line_y_margin_px=33,
                 line_alignments=["right"],
                 letter_spacing_px=9,
+                space_width_percent=44,
                 ruby_gap_px=7,
             )
         ]
@@ -2794,6 +2795,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert line_layout["line_y_margin_px"] == 33
     assert line_layout["line_alignments"] == ["right"]
     assert line_layout["letter_spacing_px"] == 9
+    assert line_layout["space_width_percent"] == 44
     assert line_layout["ruby_gap_px"] == 7
 
 

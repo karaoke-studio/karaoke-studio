@@ -43,9 +43,13 @@ from strange_uta_game.backend.infrastructure.persistence.sug_io import (  # noqa
 from krok_helper.models import MediaInfo  # noqa: E402
 from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     GuideSymbol,
+    LyricsLayout,
+    Style,
+    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
+    style_to_dict,
 )
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.editor.lyrics_list import COL_CONTENT  # noqa: E402
@@ -95,6 +99,44 @@ def _make_window(qapp, monkeypatch):
 # ---------------------------------------------------------------------------
 # A1 字幕：填充左侧歌词列表
 # ---------------------------------------------------------------------------
+
+
+def test_legacy_project_load_migrates_spacing_to_used_layouts(qapp, monkeypatch, tmp_path):
+    """schema<3 的旧工程装载时迁移：空格宽度绑定使用过的布局，方案槽位丢弃。"""
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "legacy.lrc"
+    lrc.write_text("[00:01:00]a[00:02:00]b[00:03:00]\n", encoding="utf-8")
+    style = Style(
+        space_width_percent=20,
+        layouts=[LyricsLayout(name="A", layout_id="a", line_alignments=["left"])],
+        custom_style_schemes={"标题": SubtitleStyleScheme(space_width_percent=80)},
+    )
+
+    win._apply_project_data(
+        {
+            "schema_version": 2,
+            "subtitle_path": str(lrc),
+            "style": style_to_dict(style),
+            "line_layout_indices": [1, 0],
+        }
+    )
+
+    assert win._style.space_width_percent == 20
+    assert win._style.layouts[0].space_width_percent == 20
+    assert win._style.layouts[0].letter_spacing_px == 0
+    assert win._style.custom_style_schemes["标题"].space_width_percent is None
+
+    # v3 工程（含迁移后重新保存的）不再迁移，布局缺键即继承全局
+    win._apply_project_data(
+        {
+            "schema_version": 3,
+            "subtitle_path": str(lrc),
+            "style": style_to_dict(style),
+            "line_layout_indices": [1, 0],
+        }
+    )
+    assert win._style.layouts[0].space_width_percent is None
+    assert win._style.custom_style_schemes["标题"].space_width_percent == 80
 
 
 def test_load_subtitle_wires_preview_and_transport(qapp, monkeypatch, tmp_path):

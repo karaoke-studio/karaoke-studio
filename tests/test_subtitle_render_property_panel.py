@@ -3053,6 +3053,81 @@ def test_property_panel_font_controls_emit_style(qapp):
     assert emitted[-1].allow_biting is True
 
 
+def test_space_width_spin_writes_layout_scope_even_with_scheme_selected(qapp):
+    """回归：空格宽度归属布局页，字体页停在自定义方案时也必须写全局。
+
+    旧实现走 ``_update_style``（跟随方案选择器），「标题」方案选中时改动被
+    静默吞进方案槽位，正文渲染毫无变化。
+    """
+    panel = PropertyPanel()
+    style = Style(
+        custom_style_schemes={"标题": SubtitleStyleScheme(font_size_px=40)},
+    )
+    panel.set_style(style)
+    panel.set_current_scheme_key("custom:标题")
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._space_width_spin.setValue(60)
+
+    assert emitted[-1].space_width_percent == 60
+    assert emitted[-1].custom_style_schemes["标题"].space_width_percent is None
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_space_width_spin_writes_named_layout_slot(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            layouts=[
+                LyricsLayout(name="测试布局", layout_id="test-1", line_alignments=["left"])
+            ]
+        )
+    )
+    panel._layout_combo.setCurrentIndex(
+        max(0, panel._layout_combo.findData(1))
+    )
+    qapp.processEvents()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._space_width_spin.setValue(45)
+
+    assert emitted[-1].layouts[0].space_width_percent == 45
+    assert emitted[-1].space_width_percent == 20
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_space_width_spin_readback_follows_selected_layout(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            space_width_percent=25,
+            layouts=[
+                LyricsLayout(
+                    name="宽空格",
+                    layout_id="wide",
+                    line_alignments=["left"],
+                    space_width_percent=70,
+                )
+            ],
+        )
+    )
+
+    assert panel._space_width_spin.value() == 25
+
+    panel._layout_combo.setCurrentIndex(
+        max(0, panel._layout_combo.findData(1))
+    )
+    qapp.processEvents()
+
+    assert panel._space_width_spin.value() == 70
+    panel.deleteLater()
+    qapp.processEvents()
+
+
 def test_font_tabs_own_four_independent_stroke_groups(qapp):
     panel = PropertyPanel()
     panel.set_style(

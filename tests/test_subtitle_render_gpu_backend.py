@@ -4388,7 +4388,53 @@ def test_gpu_g4_line_layout_override_geometry_and_ruby_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
-def test_gpu_n3_smart_horizontal_uses_painter_page_geometry(monkeypatch) -> None:
+def test_gpu_line_layout_space_width_override_follows_painter(monkeypatch) -> None:
+    """布局级空格宽度：D2D 与 Painter 同语义，且布局覆盖优先于全局值。"""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 0), TimingChar(" ", 500), TimingChar("A", 1_000)],
+                end_ms=1_500,
+                layout_index=1,
+            )
+        ],
+    )
+    layout = LyricsLayout(
+        name="GPU space",
+        line_alignments=["center"],
+        smart_horizontal="none",
+        space_width_percent=80,
+    )
+    base = _g1_style(
+        font_family="Times New Roman",
+        font_family_latin="Times New Roman",
+        font_size_px=100,
+        space_width_percent=20,
+        stroke_width_px=15,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="asymmetric",
+    )
+    style = replace(base, layouts=[layout])
+
+    painter_override = _render_painter_oracle(style, track=track)
+    painter_global = _render_painter_oracle(base, track=track)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(renderer, style, (750,), force_warp=True, track=track)
+
+    override_bounds = _payload_alpha_bounds(painter_override)
+    global_bounds = _payload_alpha_bounds(painter_global)
+    assert (
+        override_bounds[2] - override_bounds[0] > global_bounds[2] - global_bounds[0] + 30
+    ), (override_bounds, global_bounds)
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    assert all(
+        abs(actual - expected) <= 10
+        for actual, expected in zip(gpu_bounds, override_bounds)
+    ), (gpu_bounds, override_bounds)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(
         lines=[

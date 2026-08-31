@@ -252,6 +252,7 @@ def timing_line_to_ir(
                 "row2_offset_x": int(layout_style.row2_offset_x),
                 "row2_offset_y": int(layout_style.row2_offset_y),
                 "letter_spacing_px": int(layout_style.letter_spacing_px),
+                "space_width_percent": int(layout_style.space_width_percent),
                 "allow_biting": bool(layout_style.allow_biting),
                 "ruby_interval_px": int(layout_style.ruby_interval_px),
                 "ruby_alignment": layout_style.ruby_alignment,

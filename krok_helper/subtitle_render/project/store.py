@@ -27,7 +27,8 @@ from uuid import uuid4
 
 from krok_helper.subtitle_render.domain.models import PROJECT_FILE_SUFFIX
 
-PROJECT_SCHEMA_VERSION = 2
+PROJECT_SCHEMA_VERSION = 3
+"""v3：空格宽度/字间距归属布局域——保存时布局携带显式值，方案槽位不再存空格宽度。"""
 _RECOVERY_WRITE_LOCK = threading.Lock()
 _RECOVERY_SNAPSHOT_FLOORS: dict[Path, int] = {}
 

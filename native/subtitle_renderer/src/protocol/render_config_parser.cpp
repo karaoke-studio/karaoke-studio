@@ -1192,6 +1192,14 @@ std::optional<RenderConfig> parseRenderConfig(const QJsonObject &ir, QString *er
                     layoutObject, QStringLiteral("letter_spacing_px"),
                     line.layout.letterSpacingPx
                 );
+                line.layout.spaceWidthPercent = std::clamp(
+                    intValue(
+                        layoutObject, QStringLiteral("space_width_percent"),
+                        line.layout.spaceWidthPercent
+                    ),
+                    10,
+                    100
+                );
                 line.layout.allowBiting = layoutObject.value(
                     QStringLiteral("allow_biting")
                 ).toBool(line.layout.allowBiting);

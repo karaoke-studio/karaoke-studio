@@ -1231,7 +1231,7 @@ class PropertyPanel(QWidget):
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         self._space_width_spin.valueChanged.connect(
-            lambda value: self._update_style(space_width_percent=value)
+            lambda value: self._update_layout_field(space_width_percent=value)
         )
         fields_layout.addWidget(_field("空格宽度", self._space_width_spin))
 
@@ -1942,6 +1942,7 @@ class PropertyPanel(QWidget):
             )
             self._horizontal_margin_spin.setValue(int(values["horizontal_margin_px"]))
             self._letter_spacing_spin.setValue(int(values["letter_spacing_px"]))
+            self._space_width_spin.setValue(int(values["space_width_percent"]))
             self._allow_biting_check.setChecked(bool(values["allow_biting"]))
             self._ruby_interval_spin.setValue(int(values["ruby_interval_px"]))
             self._ruby_alignment_combo.setCurrentIndex(
@@ -3042,7 +3043,6 @@ class PropertyPanel(QWidget):
             self._font_latin_size_spin.setValue(
                 0 if latin_size is None else int(latin_size)
             )
-            self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
             latin_weight = self._scheme_value("latin_font_weight")
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
             self._ruby_anchor_check.setChecked(

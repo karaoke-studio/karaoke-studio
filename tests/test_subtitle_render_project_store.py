@@ -816,6 +816,104 @@ def test_style_timing_nested_view_preserves_flat_and_project_compatibility():
         style.with_timing(font_size_px=123)
 
 
+def test_lyrics_layout_space_width_percent_roundtrip_and_legacy_default():
+    """布局级空格宽度序列化往返；旧工程缺键时为 None（继承全局）。"""
+    layout = subtitle_models.LyricsLayout(name="布局", space_width_percent=55)
+
+    payload = subtitle_models.lyrics_layout_to_dict(layout)
+    assert payload["space_width_percent"] == 55
+    restored = subtitle_models.lyrics_layout_from_dict(payload)
+    assert restored.space_width_percent == 55
+
+    legacy = {key: value for key, value in payload.items() if key != "space_width_percent"}
+    legacy_layout = subtitle_models.lyrics_layout_from_dict(legacy)
+    assert legacy_layout.space_width_percent is None
+
+
+def test_migrate_spacing_bindings_most_used_space_width_to_used_layouts():
+    """旧工程迁移：频率最高的空格宽度绑定到使用过的布局，方案槽位丢弃。"""
+    style = Style(
+        space_width_percent=20,
+        letter_spacing_px=7,
+        layouts=[
+            subtitle_models.LyricsLayout(
+                name="A", layout_id="a", line_alignments=["left"]
+            ),
+            subtitle_models.LyricsLayout(
+                name="B",
+                layout_id="b",
+                line_alignments=["left"],
+                letter_spacing_px=11,
+            ),
+        ],
+        title_overlay=TitleOverlay(enabled=True),
+        custom_style_schemes={"标题": SubtitleStyleScheme(space_width_percent=80)},
+        singer_style_overrides={1: SubtitleStyleScheme(space_width_percent=40)},
+    )
+    lines = [
+        TimingLine(
+            chars=[TimingChar("あ", 0)], end_ms=500, singer_id=1, layout_index=2
+        ),
+        TimingLine(chars=[TimingChar("い", 100)], end_ms=600),
+        TimingLine(chars=[TimingChar("う", 200)], end_ms=700),
+    ]
+
+    migrated = subtitle_models.migrate_spacing_bindings_to_used_layouts(style, lines)
+
+    # 频率：全局 20 覆盖 2 行，歌手覆盖 40 覆盖 1 行 → V=20
+    assert migrated.space_width_percent == 20
+    # 标题默认引用布局 1（"A"），行 0 引用布局 2（"B"）→ 都算使用过
+    assert migrated.layouts[0].space_width_percent == 20
+    assert migrated.layouts[0].letter_spacing_px == 7  # None → 物化全局值
+    assert migrated.layouts[1].space_width_percent == 20
+    assert migrated.layouts[1].letter_spacing_px == 11  # 显式值保留
+    # 方案与歌手覆盖的空格宽度槽位全部丢弃
+    assert migrated.custom_style_schemes["标题"].space_width_percent is None
+    assert migrated.singer_style_overrides[1].space_width_percent is None
+
+    # 迁移幂等：重复执行结果不变
+    again = subtitle_models.migrate_spacing_bindings_to_used_layouts(migrated, lines)
+    assert again == migrated
+
+
+def test_migrate_spacing_bindings_singer_majority_wins_over_global():
+    """歌手覆盖值覆盖多数行时，迁移取歌手值（保持迁移前的主视觉）。"""
+    style = Style(
+        space_width_percent=20,
+        singer_style_overrides={2: SubtitleStyleScheme(space_width_percent=60)},
+    )
+    lines = [
+        TimingLine(chars=[TimingChar("あ", 0)], end_ms=500, singer_id=2),
+        TimingLine(chars=[TimingChar("い", 100)], end_ms=600, singer_id=2),
+        TimingLine(chars=[TimingChar("う", 200)], end_ms=700),
+    ]
+
+    migrated = subtitle_models.migrate_spacing_bindings_to_used_layouts(style, lines)
+
+    assert migrated.space_width_percent == 60
+    assert migrated.singer_style_overrides[2].space_width_percent is None
+
+
+def test_migrate_spacing_bindings_without_lines_falls_back_to_global():
+    """无轨道且无标题（缺字幕源的旧工程）时：仅默认布局绑定，不崩溃。"""
+    style = Style(
+        space_width_percent=30,
+        letter_spacing_px=5,
+        layouts=[
+            subtitle_models.LyricsLayout(name="A", layout_id="a", line_alignments=["left"])
+        ],
+        custom_style_schemes={"标题": SubtitleStyleScheme(space_width_percent=80)},
+    )
+
+    migrated = subtitle_models.migrate_spacing_bindings_to_used_layouts(style, [])
+
+    assert migrated.space_width_percent == 30
+    # 没有任何行引用且无标题 → 布局保持继承（None → 全局 30）
+    assert migrated.layouts[0].space_width_percent is None
+    assert migrated.layouts[0].letter_spacing_px is None
+    assert migrated.custom_style_schemes["标题"].space_width_percent is None
+
+
 def test_style_default_layout_view_preserves_flat_project_compatibility():
     style = Style(
         line_y_position="top",

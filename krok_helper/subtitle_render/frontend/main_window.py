@@ -287,6 +287,7 @@ from krok_helper.subtitle_render.domain.models import (
     layout_capacity,
     layout_display_name,
     layout_id_for_index,
+    migrate_spacing_bindings_to_used_layouts,
     normalize_title_char_role_labels,
     remap_title_char_role_labels,
     rescale_font_sizes,
@@ -331,6 +332,7 @@ from krok_helper.subtitle_render.n3.project_import import (
     N3_PROJECT_FILE_SUFFIX,
 )
 from krok_helper.subtitle_render.project.store import (
+    PROJECT_SCHEMA_VERSION,
     ProjectFileRevision,
     RecoveryCandidate,
     project_output_payload,
@@ -1606,6 +1608,19 @@ class SubtitleRenderWindow(QWidget):
             self._lyrics_panel.set_track(self._timing_track)
             self._preview_panel.set_track(self._timing_track)
             self._refresh_tracks_view_windows()
+        # 旧工程（schema < v3）与 N3 导入产物：空格宽度/字间距从方案域迁移到
+        # 布局域。轨道可能缺失（无字幕源），此时按空行统计退化为全局值绑定。
+        if plan.schema_version < PROJECT_SCHEMA_VERSION:
+            migrated = migrate_spacing_bindings_to_used_layouts(
+                self._style,
+                self._timing_track.lines if self._timing_track is not None else (),
+            )
+            if migrated != self._style:
+                self._style = migrated
+                self._property_panel.set_style(self._style)
+                self._preview_panel.set_style(self._style)
+                self._lyrics_panel.set_style(self._style)
+                self._mark_project_dirty()
         if self._defer_project_assets:
             self._queue_project_deferred_loads(plan)
         else:

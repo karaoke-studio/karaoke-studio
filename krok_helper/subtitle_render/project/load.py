@@ -206,6 +206,14 @@ def _apply_display_overrides(track: TimingTrack, payload: object) -> None:
         )
 
 
+def _schema_version(value: object) -> int:
+    """Best-effort schema stamp; missing/non-numeric counts as legacy ``0``."""
+    try:
+        return max(int(value), 0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 def _apply_animation_overrides(track: TimingTrack, payload: object) -> None:
     if not isinstance(payload, list):
         return
@@ -226,15 +234,16 @@ class ProjectLoadPlan:
     fallback_video_path: Optional[Path]
     audio_path: Optional[Path]
     background: Optional[dict]
-    line_breaks_before: Any
-    line_layout_indices: Any
-    char_role_labels: Any
-    line_guide_symbols: Any
-    line_inline_guide_symbols: Any
-    line_display_overrides: Any
-    line_animation_overrides: Any
-    extra_subtitle_sources: Any
-    project_role_names: Any
+    schema_version: int = 0
+    line_breaks_before: Any = None
+    line_layout_indices: Any = None
+    char_role_labels: Any = None
+    line_guide_symbols: Any = None
+    line_inline_guide_symbols: Any = None
+    line_display_overrides: Any = None
+    line_animation_overrides: Any = None
+    extra_subtitle_sources: Any = None
+    project_role_names: Any = None
 
     @classmethod
     def from_data(cls, data: dict) -> "ProjectLoadPlan":
@@ -271,6 +280,7 @@ class ProjectLoadPlan:
             fallback_video_path=paths["video_path"],
             audio_path=paths["audio_path"],
             background=background if isinstance(background, dict) else None,
+            schema_version=_schema_version(source.get("schema_version")),
             line_breaks_before=source.get("line_breaks_before"),
             line_layout_indices=source.get("line_layout_indices"),
             char_role_labels=source.get("char_role_labels"),
