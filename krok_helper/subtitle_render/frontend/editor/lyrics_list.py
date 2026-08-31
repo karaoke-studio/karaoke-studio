@@ -3038,20 +3038,36 @@ class LyricsPanel(DropPanel):
             return
         guide = line.guide_symbol if not self._title_mode else None
         replacement_count = guide_symbol_replacement_count(line)
-        visible_chars = line.chars[replacement_count:]
-        texts = [ch.text for ch in visible_chars]
-        labels = [ch.role_label for ch in visible_chars]
-        vector_symbols: list[Optional[GuideSymbol]] = [
-            line.inline_guide_symbols.get(index)
-            for index in range(replacement_count, len(line.chars))
-        ]
-        original_visible_vectors = list(vector_symbols)
-        guide_count = 0
-        if guide is not None:
-            guide_count = max(int(guide.count), 1)
-            texts[0:0] = ["导"] * guide_count
-            labels[0:0] = list(guide_symbol_role_labels(guide))
-            vector_symbols[0:0] = [guide] * guide_count
+        if replacement_count:
+            # 行首标记替换：替换区芯片并入正文序列（保留原字符文本，可再
+            # 替换 / 还原）；只有「不占字符」的行前插入式导唱符才是保护前缀。
+            texts = [ch.text for ch in line.chars]
+            labels = [ch.role_label for ch in line.chars]
+            vector_symbols = [
+                line.inline_guide_symbols.get(index) or guide
+                if index < replacement_count
+                else line.inline_guide_symbols.get(index)
+                for index in range(len(line.chars))
+            ]
+            original_vectors = list(vector_symbols)
+            protected_count = 0
+            guide_count = replacement_count
+        else:
+            visible_chars = line.chars[replacement_count:]
+            texts = [ch.text for ch in visible_chars]
+            labels = [ch.role_label for ch in visible_chars]
+            vector_symbols = [
+                line.inline_guide_symbols.get(index)
+                for index in range(replacement_count, len(line.chars))
+            ]
+            original_vectors = list(vector_symbols)
+            guide_count = 0
+            if guide is not None:
+                guide_count = max(int(guide.count), 1)
+                texts[0:0] = ["导"] * guide_count
+                labels[0:0] = list(guide_symbol_role_labels(guide))
+                vector_symbols[0:0] = [guide] * guide_count
+            protected_count = guide_count
         dialog = _CharRoleDialog(
             row,
             texts,
@@ -3062,24 +3078,37 @@ class LyricsPanel(DropPanel):
             default_role_text="标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT,
             default_swatch_role=TITLE_SCHEME_NAME if self._title_mode else "",
             vector_symbols=vector_symbols,
-            protected_prefix_count=guide_count,
+            protected_prefix_count=protected_count,
             allow_svg_replacement=not self._title_mode,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         labels = dialog.char_labels()
         vectors = dialog.char_vector_symbols()
+        if replacement_count:
+            # 全序列模式：guide_labels=None 标记，labels/vectors 对齐全部源字符。
+            if vectors != original_vectors:
+                self.inlineCharEditChanged.emit(row, None, labels, vectors)
+                return
+            guide_labels = labels[:replacement_count]
+            char_labels = labels[replacement_count:]
+            if guide_labels == list(guide_symbol_role_labels(guide)) and char_labels == [
+                ch.role_label for ch in line.chars[replacement_count:]
+            ]:
+                return
+            self.guideCharRolesChanged.emit(row, guide_labels, char_labels)
+            return
         guide_labels = labels[:guide_count] if guide is not None else None
         char_labels = labels[guide_count:]
         char_vectors = vectors[guide_count:]
-        if char_vectors != original_visible_vectors:
+        if char_vectors != original_vectors:
             self.inlineCharEditChanged.emit(
                 row, guide_labels, char_labels, char_vectors
             )
             return
         if guide is not None:
             if guide_labels == list(guide_symbol_role_labels(guide)) and char_labels == [
-                ch.role_label for ch in visible_chars
+                ch.role_label for ch in line.chars[replacement_count:]
             ]:
                 return
             self.guideCharRolesChanged.emit(row, guide_labels, char_labels)

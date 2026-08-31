@@ -5757,7 +5757,7 @@ class SubtitleRenderWindow(QWidget):
     def _on_inline_char_edit_changed(
         self, row: int, guide_labels: object, labels: list, vector_symbols: object
     ) -> None:
-        """Commit SVG replacements selected in the per-character role dialog."""
+        """Commit guide replacements selected in the per-character role dialog."""
         if self._title_source_active:
             return
         track = self._active_track()
@@ -5766,6 +5766,19 @@ class SubtitleRenderWindow(QWidget):
         line = track.lines[row]
         symbol = line.guide_symbol
         replacement_count = guide_symbol_replacement_count(line)
+        if (
+            guide_labels is None
+            and symbol is not None
+            and replacement_count > 0
+            and len(labels) == len(line.chars)
+            and isinstance(vector_symbols, list)
+            and len(vector_symbols) == len(line.chars)
+        ):
+            # 全序列模式：行首标记替换的芯片也在编辑范围内（可再替换 / 还原）。
+            self._apply_full_sequence_inline_edit(
+                row, line, symbol, replacement_count, labels, vector_symbols
+            )
+            return
         visible_chars = line.chars[replacement_count:]
         if (
             len(labels) != len(visible_chars)
@@ -5823,6 +5836,72 @@ class SubtitleRenderWindow(QWidget):
         self._materialize_role_schemes(
             {label for label in [*normalized_guides, *normalized] if label}
         )
+        self._undo_stack.append(
+            ("inline_char_edit", self._active_source_index, row, old_value, new_value)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed((row,))
+
+    def _apply_full_sequence_inline_edit(
+        self,
+        row: int,
+        line: TimingLine,
+        symbol: GuideSymbol,
+        replacement_count: int,
+        labels: list,
+        vector_symbols: list,
+    ) -> None:
+        """应用全序列逐字编辑（行首标记替换的芯片可再替换 / 还原）。
+
+        替换区全部芯片仍等于行级导唱符时保留该导唱符（角色随标签更新）；
+        任一芯片被替换或还原时拆成逐字符行内替换：还原的字符回到原文本，
+        保留的芯片把原导唱符对象原样存为该字符的行内符号，视觉不变。
+        """
+        normalized = [
+            str(label).strip() or None if label else None for label in labels
+        ]
+        if len(normalized) != len(line.chars) or len(vector_symbols) != len(line.chars):
+            return
+        for value in vector_symbols:
+            if value is not None and not guide_symbol_has_visual(value):
+                return
+        guide_intact = all(
+            value == symbol for value in vector_symbols[:replacement_count]
+        )
+        old_value = (
+            symbol,
+            tuple(ch.role_label for ch in line.chars),
+            tuple(sorted(line.inline_guide_symbols.items())),
+        )
+        if guide_intact:
+            new_symbol = guide_symbol_with_role_labels(
+                symbol, normalized[:replacement_count]
+            )
+            new_inline = {
+                replacement_count + offset: value
+                for offset, value in enumerate(vector_symbols[replacement_count:])
+                if value is not None
+            }
+        else:
+            new_symbol = None
+            new_inline = {
+                index: value
+                for index, value in enumerate(vector_symbols)
+                if value is not None
+            }
+        new_value = (
+            new_symbol,
+            tuple(normalized),
+            tuple(sorted(new_inline.items())),
+        )
+        if old_value == new_value:
+            return
+        line.guide_symbol = new_symbol
+        line.inline_guide_symbols = new_inline
+        for char, label in zip(line.chars, normalized):
+            char.role_label = label
+        self._materialize_role_schemes({label for label in normalized if label})
         self._undo_stack.append(
             ("inline_char_edit", self._active_source_index, row, old_value, new_value)
         )
