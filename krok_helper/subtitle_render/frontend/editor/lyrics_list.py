@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialog,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -84,13 +83,14 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
 from krok_helper.subtitle_render.engine.guide.metrics import bitmap_guide_image
 from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from krok_helper.subtitle_render.sources.guide_symbols import (
-    GuideSymbolImportError,
-    import_svg_guide_symbol,
     scaled_guide_symbol_path,
+)
+from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
+    GuideBitmapSettingsDialog,
+    guide_symbol_from_bitmap_dialog,
 )
 from krok_helper.subtitle_render.frontend.widgets.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
-    fluent_error,
     fluent_get_text,
     fluent_question,
 )
@@ -492,10 +492,10 @@ def _line_guide_tooltip(line: TimingLine) -> str:
     inline_count = sum(
         1
         for index, symbol in line.inline_guide_symbols.items()
-        if 0 <= index < len(line.chars) and symbol.path_commands
+        if 0 <= index < len(line.chars) and guide_symbol_has_visual(symbol)
     )
     if inline_count:
-        parts.append(f"行内 SVG 导唱符：{inline_count} 个 · 保留原字符打轴时间")
+        parts.append(f"行内导唱符：{inline_count} 个 · 保留原字符打轴时间")
     return "\n".join(parts)
 
 
@@ -935,7 +935,9 @@ class _CharChipsView(QWidget):
             if symbol is not None and guide_symbol_is_bitmap(symbol):
                 # @Emoji 位图头像没有轮廓路径，旧实现画空路径 → 整块空白。
                 # 画真实头像缩略图；图片缺失或全透明（分色占位）时退 ◆ 占位。
-                thumbnail = _bitmap_chip_thumbnail(symbol.bitmap_before_path)
+                thumbnail = _bitmap_chip_thumbnail(
+                    symbol.bitmap_before_path or symbol.bitmap_after_path
+                )
                 if thumbnail is not None:
                     target = rect.adjusted(6, 8, -6, -12)
                     painter.drawImage(
@@ -1041,16 +1043,16 @@ class _CharRoleDialog(ModelessDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        self._replace_svg_button = FluentPushButton("替换为 SVG 导唱符…", self)
-        self._replace_svg_button.setAutoDefault(False)
-        self._replace_svg_button.clicked.connect(self._replace_selected_with_svg)
-        self._replace_svg_button.setVisible(bool(allow_svg_replacement))
-        buttons.addWidget(self._replace_svg_button)
-        self._restore_svg_button = FluentPushButton("还原 SVG 为原字符", self)
-        self._restore_svg_button.setAutoDefault(False)
-        self._restore_svg_button.clicked.connect(self._restore_selected_svg)
-        self._restore_svg_button.setVisible(bool(allow_svg_replacement))
-        buttons.addWidget(self._restore_svg_button)
+        self._replace_symbol_button = FluentPushButton("替换为图片导唱符…", self)
+        self._replace_symbol_button.setAutoDefault(False)
+        self._replace_symbol_button.clicked.connect(self._replace_selected_with_symbol)
+        self._replace_symbol_button.setVisible(bool(allow_svg_replacement))
+        buttons.addWidget(self._replace_symbol_button)
+        self._restore_symbol_button = FluentPushButton("还原导唱符为原字符", self)
+        self._restore_symbol_button.setAutoDefault(False)
+        self._restore_symbol_button.clicked.connect(self._restore_selected_symbol)
+        self._restore_symbol_button.setVisible(bool(allow_svg_replacement))
+        buttons.addWidget(self._restore_symbol_button)
         cancel = FluentPushButton("取消", self)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
@@ -1094,34 +1096,32 @@ class _CharRoleDialog(ModelessDialog):
                 and len(assigned) == 1
                 and str(button.property("roleLabel") or "") == str(current or "")
             )
-        self._replace_svg_button.setEnabled(
+        self._replace_symbol_button.setEnabled(
             any(
                 index >= self._protected_prefix_count
                 for index in self._chips.selected_indices()
             )
         )
-        self._restore_svg_button.setEnabled(
+        self._restore_symbol_button.setEnabled(
             self._chips.selected_has_vector_symbol(
                 minimum_index=self._protected_prefix_count
             )
         )
 
-    def _replace_selected_with_svg(self) -> None:
-        path_text, _ = QFileDialog.getOpenFileName(
-            self, "选择 SVG 导唱符", "", "SVG 文件 (*.svg)"
-        )
-        if not path_text:
+    def _replace_selected_with_symbol(self) -> None:
+        # 直接打开图片导唱符设置：走字前/后图片由用户自选槽位（不固定进
+        # 走字前），走字前选 SVG 时保持原有矢量替换。
+        dialog = GuideBitmapSettingsDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        try:
-            symbol = import_svg_guide_symbol(Path(path_text), count=1)
-        except GuideSymbolImportError as exc:
-            fluent_error(self, "无法导入导唱符", str(exc))
+        symbol = guide_symbol_from_bitmap_dialog(dialog, count=1)
+        if symbol is None:
             return
         self._chips.replace_selected_vector_symbol(
             symbol, minimum_index=self._protected_prefix_count
         )
 
-    def _restore_selected_svg(self) -> None:
+    def _restore_selected_symbol(self) -> None:
         self._chips.clear_selected_vector_symbols(
             minimum_index=self._protected_prefix_count
         )
@@ -2590,7 +2590,7 @@ class LyricsPanel(DropPanel):
             menu.addAction(char_role_action)
             menu.addSeparator()
         if not self._title_mode:
-            guide_action = Action("导入 SVG 导唱符…", menu)
+            guide_action = Action("导入图片导唱符…", menu)
             guide_action.triggered.connect(
                 lambda _checked=False, rs=list(rows): self.guideSymbolImportRequested.emit(rs)
             )

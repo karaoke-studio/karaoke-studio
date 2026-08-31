@@ -212,12 +212,14 @@ def guide_symbol_has_visual(symbol: object) -> bool:
     """是否是能真正画出东西的导唱符：SVG 轮廓，或 ``@Emoji`` 这类位图小头像。
 
     位图导唱符没有 ``path_commands``，早期只按轮廓判断的校验会把它当成非法值
-    整条丢弃（行内小头像因此在保存/撤销/逐字符编辑里消失）。
+    整条丢弃（行内小头像因此在保存/撤销/逐字符编辑里消失）。位图两侧（走字
+    前/后）任一有图片即视为可见；两侧都留空则整侧透明，不占视觉。
     """
     if not isinstance(symbol, GuideSymbol):
         return False
     return bool(symbol.path_commands) or (
-        symbol.kind == "bitmap" and bool(symbol.bitmap_before_path)
+        symbol.kind == "bitmap"
+        and bool(symbol.bitmap_before_path or symbol.bitmap_after_path)
     )
 
 

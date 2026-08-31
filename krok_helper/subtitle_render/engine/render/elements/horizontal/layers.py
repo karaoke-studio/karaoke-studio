@@ -6,18 +6,21 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Hashable
 
-from PyQt6.QtCore import QPointF, QRectF
-from PyQt6.QtGui import QImage, QPainter, QTransform
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter, QTransform
 
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine
 from krok_helper.subtitle_render.domain.paint import (
     KaraokeColors,
     KaraokeColorState,
+    PaintFill,
 )
 from krok_helper.subtitle_render.engine.render.effects import (
+    brush_for_fill,
     fill_is_alpha,
     fill_signature,
+    glow_blur_radii,
     glow_extent,
     glow_concentration_level,
     glow_radius,
@@ -33,6 +36,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     text_visual_padding,
     visual_stroke_extent,
 )
+from krok_helper.subtitle_render.engine.render.core.raster_blur import blur_image
 from krok_helper.subtitle_render.engine.guide import (
     bitmap_guide_content_size,
     bitmap_guide_image,
@@ -1138,6 +1142,102 @@ def bitmap_guide_target_rect(
     return QRectF(left, top, float(max(width, 1)), float(max(height, 1)))
 
 
+def _tinted_guide_silhouette(
+    image: QImage, fill: PaintFill, rect: QRectF, gradient_rect: QRectF
+) -> QImage:
+    """把位图导唱符图片的 Alpha 剪影按飾り画刷染色（支持渐变 / 贴图）。
+
+    输出按 ``rect`` 的设备像素分辨率生成：画刷以设备坐标映射，渐变跨度取
+    ``gradient_rect``（整行填充范围，与 GPU 侧 ``line->fillBounds`` 同口径）。
+    """
+    width = max(int(math.ceil(rect.width())), 1)
+    height = max(int(math.ceil(rect.height())), 1)
+    silhouette = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+    silhouette.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(silhouette)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.translate(-rect.left(), -rect.top())
+        painter.drawImage(rect, image)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceIn
+        )
+        painter.fillRect(gradient_rect, brush_for_fill(fill, gradient_rect))
+    finally:
+        painter.end()
+    return silhouette
+
+
+def paint_bitmap_guide_decor(
+    painter: QPainter,
+    glyph: GlyphLayout,
+    image: QImage,
+    rect: QRectF,
+    *,
+    after: bool,
+    gradient_rect: QRectF | None = None,
+) -> None:
+    """把 N3 文字装饰（shadow / glow）套用到位图导唱符图片上。
+
+    飾り画刷取走字前后两态（含渐变 / 贴图），与图片同侧受 wipe 前沿裁切
+    （调用方已设置好裁切区）；仅有走字后图片时装饰才切换到后态——前后同图
+    / 仅前图时保持前态，对应 @Emoji 未加 ForceWipeDecor 的默认行为。
+    ``bitmap_no_decor`` 整体跳过（@Emoji ``NoDecor`` 语义）。渐变跨度取
+    ``gradient_rect``（整行范围）；缺省回落到图片自身矩形。
+    """
+    symbol = glyph.vector_glyph
+    if symbol is None or symbol.bitmap_no_decor:
+        return
+    style = glyph.style
+    decoration = getattr(style, "decoration_kind", "none")
+    if decoration not in {"shadow", "glow"}:
+        return
+    wiped = after and bool(symbol.bitmap_after_path)
+    colors = effective_karaoke_colors(style)
+    fill = (colors.after if wiped else colors.before).shadow
+    if not fill.color:
+        return
+    span = gradient_rect if gradient_rect is not None else rect
+    if decoration == "glow":
+        radius = glow_radius(style, after=wiped)
+        if radius <= 0:
+            return
+        pad = glow_extent(0, 0, radius) + 2
+        silhouette = _tinted_guide_silhouette(image, fill, rect, span)
+        source = QImage(
+            max(int(math.ceil(rect.width())) + pad * 2, 1),
+            max(int(math.ceil(rect.height())) + pad * 2, 1),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        source.fill(0)
+        source_painter = QPainter(source)
+        try:
+            source_painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform, True
+            )
+            source_painter.drawImage(QPointF(pad, pad), silhouette)
+        finally:
+            source_painter.end()
+        painter.save()
+        try:
+            for blur_value in glow_blur_radii(
+                radius, glow_concentration_level(style)
+            ):
+                painter.drawImage(
+                    QPointF(rect.left() - pad, rect.top() - pad),
+                    blur_image(source, blur_value),
+                )
+        finally:
+            painter.restore()
+        return
+    shadow_dx = int(getattr(style, "shadow_offset_x", 0) or 0)
+    shadow_dy = int(getattr(style, "shadow_offset_y", 0) or 0)
+    if not (shadow_dx or shadow_dy):
+        return
+    silhouette = _tinted_guide_silhouette(image, fill, rect, span)
+    painter.drawImage(rect.translated(shadow_dx, shadow_dy), silhouette)
+
+
 def paint_bitmap_guide_glyph(
     painter: QPainter,
     glyph: GlyphLayout,
@@ -1146,6 +1246,7 @@ def paint_bitmap_guide_glyph(
     after: bool,
     band: tuple[int, int] | None,
     rtl: bool,
+    gradient_rect: QRectF | None = None,
 ) -> None:
     """Draw one bitmap guide avatar as a two-sided wipe mask.
 
@@ -1153,7 +1254,9 @@ def paint_bitmap_guide_glyph(
     (right of the wipe edge, or left in RTL) keeps the before image and the
     sung side shows the after image — the before image must not stay
     composited underneath a partly transparent after image.  Before-only
-    symbols have no wipe and always draw unclipped.
+    symbols have no wipe and always draw unclipped.  Unless ``NoDecor`` is
+    set, the style's text decoration (shadow / glow, 飾り色) is painted
+    behind the image with the same side clipping.
     """
     symbol = glyph.vector_glyph
     if not guide_symbol_is_bitmap(symbol):
@@ -1175,6 +1278,11 @@ def paint_bitmap_guide_glyph(
                 painter.setClipRect(horizontal_after_clip_rect(band, rtl))
             elif symbol.bitmap_after_path:
                 painter.setClipRect(horizontal_before_clip_rect(band, rtl))
+        # 装饰剪影跟随当前侧实际绘制的图片（后侧用后图 Alpha），透明占位
+        # 前图不会把发光/阴影贴成 1px 细条。
+        paint_bitmap_guide_decor(
+            painter, glyph, image, rect, after=after, gradient_rect=gradient_rect
+        )
         painter.drawImage(rect, image)
     finally:
         painter.restore()
@@ -1240,6 +1348,7 @@ def paint_bitmap_guide_glyphs(
             after=after,
             band=band,
             rtl=layout.rtl,
+            gradient_rect=layout.line_rect,
         )
 
 

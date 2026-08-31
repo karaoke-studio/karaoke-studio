@@ -133,7 +133,9 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
+    import_bitmap_guide_symbol,
     import_svg_guide_symbol,
+    is_vector_guide_symbol_file,
 )
 from krok_helper.subtitle_render.frontend.workflow.background_tasks import (
     _MediaProbeWorker,
@@ -161,9 +163,13 @@ from krok_helper.subtitle_render.frontend.dialogs.workspace_dialogs import (
 )
 from krok_helper.subtitle_render.frontend.widgets.font_loading import font_list_loading_overlay
 from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
+    GuideBitmapSettingsDialog,
     GuidePrefixMatch,
     GuidePrefixReplaceDialog,
+    bitmap_options_kwargs,
     choose_guide_role_scheme,
+    guide_symbol_from_bitmap_dialog,
+    remember_bitmap_settings,
     replacement_symbol_for_match,
 )
 from krok_helper.subtitle_render.frontend.workflow.import_controller import (
@@ -5293,10 +5299,12 @@ class SubtitleRenderWindow(QWidget):
         if not valid_rows:
             return
         start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
-        path_str, _ = QFileDialog.getOpenFileName(
-            self, "选择 SVG 导唱符", start_dir, "SVG 文件 (*.svg)"
+        # 先在图片导唱符设置里选定走字前/后图片（自选槽位）与选项，再走
+        # 共用的数量/间隔设置；走字前选 SVG 时保持原有矢量替换流程。
+        bitmap_dialog = GuideBitmapSettingsDialog(
+            start_dir=start_dir, parent=self
         )
-        if not path_str:
+        if bitmap_dialog.exec() != QDialog.DialogCode.Accepted:
             return
         current = track.lines[valid_rows[0]].guide_symbol
         settings_dialog = _GuideSymbolSettingsDialog(
@@ -5307,12 +5315,10 @@ class SubtitleRenderWindow(QWidget):
         if settings_dialog.exec() != QDialog.DialogCode.Accepted:
             return
         count, duration_ms = settings_dialog.settings()
-        try:
-            symbol = import_svg_guide_symbol(
-                Path(path_str), duration_ms=duration_ms, count=count
-            )
-        except GuideSymbolImportError as exc:
-            fluent_error(self, "无法导入导唱符", str(exc))
+        symbol = guide_symbol_from_bitmap_dialog(
+            bitmap_dialog, duration_ms=duration_ms, count=count
+        )
+        if symbol is None:
             return
         old_values = tuple(track.lines[row].guide_symbol for row in valid_rows)
         new_values = tuple(symbol for _row in valid_rows)
@@ -5464,12 +5470,28 @@ class SubtitleRenderWindow(QWidget):
             role_signal.connect(self._on_guide_matches_role_scheme_requested)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        svg_path = dialog.svg_path()
+        before_path = dialog.before_path()
+        after_path = dialog.after_path()
         selected = dialog.selected_matches()
-        if svg_path is None or not selected:
+        if (before_path is None and after_path is None) or not selected:
             return
         try:
-            base_symbol = import_svg_guide_symbol(svg_path)
+            if before_path is not None and is_vector_guide_symbol_file(before_path):
+                base_symbol = import_svg_guide_symbol(before_path)
+            else:
+                options = dialog.bitmap_options()
+                base_symbol = import_bitmap_guide_symbol(
+                    before_path,
+                    after_path,
+                    **bitmap_options_kwargs(options),
+                )
+                remember_bitmap_settings(
+                    {
+                        "before_path": str(before_path) if before_path else "",
+                        "after_path": str(after_path) if after_path else "",
+                        **options,
+                    }
+                )
         except GuideSymbolImportError as exc:
             fluent_error(self, "无法导入导唱符", str(exc))
             return

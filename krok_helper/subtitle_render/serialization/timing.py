@@ -215,7 +215,7 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         raw_commands = []
     before_path = str(value.get("bitmap_before_path") or "").strip() or None
     after_path = str(value.get("bitmap_after_path") or "").strip() or None
-    if kind == "bitmap" and before_path is None:
+    if kind == "bitmap" and before_path is None and after_path is None:
         return None
     commands: list[tuple[object, ...]] = []
     expected_lengths = {"M": 3, "L": 3, "C": 7, "Q": 5, "Z": 1}

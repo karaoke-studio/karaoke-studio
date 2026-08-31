@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QImage
 from PyQt6.QtTest import QTest
@@ -36,9 +37,13 @@ from krok_helper.subtitle_render.frontend.main_window import (
 )
 from krok_helper.subtitle_render.domain.timing import assign_role_to_track_rows
 from krok_helper.subtitle_render.engine.guide.metrics import vector_glyph_width
+from krok_helper.subtitle_render.engine.guide.semantics import guide_symbol_is_bitmap
 from krok_helper.subtitle_render.sources.guide_symbols import (
+    GuideSymbolImportError,
     guide_symbol_path,
+    import_bitmap_guide_symbol,
     import_svg_guide_symbol,
+    is_vector_guide_symbol_file,
 )
 from krok_helper.subtitle_render.domain.models import (
     GuideSymbol,
@@ -48,6 +53,7 @@ from krok_helper.subtitle_render.domain.models import (
     TimingLine,
     TimingTrack,
     guide_symbol_from_dict,
+    guide_symbol_has_visual,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
     guide_symbol_to_dict,
@@ -84,6 +90,13 @@ def _bitmap_symbol(tmp_path, *, color: str = "#FF0000") -> GuideSymbol:
         bitmap_no_decor=True,
         prefix_timing="anchored",
     )
+
+
+def _write_png(path, color: str = "#FF0000") -> str:
+    image = QImage(10, 6, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(color))
+    assert image.save(str(path))
+    return str(path)
 
 
 def test_line_content_text_marks_bitmap_inline_symbols(tmp_path):
@@ -205,6 +218,158 @@ def test_bitmap_guide_symbol_round_trips_optional_fields(tmp_path):
     assert restored == symbol
 
 
+def test_bitmap_guide_import_wraps_before_and_after_images(tmp_path):
+    before = _write_png(tmp_path / "before.png", "#FF0000")
+    after = _write_png(tmp_path / "after.png", "#0000FF")
+
+    symbol = import_bitmap_guide_symbol(before, after, duration_ms=800, count=2)
+
+    assert symbol.kind == "bitmap"
+    assert symbol.name == "before"
+    assert symbol.bitmap_before_path == before
+    assert symbol.bitmap_after_path == after
+    assert symbol.duration_ms == 800
+    assert symbol.count == 2
+    assert not symbol.path_commands
+
+    after_only = import_bitmap_guide_symbol(None, after)
+    assert after_only.kind == "bitmap"
+    assert after_only.bitmap_before_path is None
+    assert after_only.bitmap_after_path == after
+    assert after_only.name == "after"
+
+    with pytest.raises(GuideSymbolImportError):
+        import_bitmap_guide_symbol(None, None)
+    with pytest.raises(GuideSymbolImportError):
+        import_bitmap_guide_symbol(tmp_path / "missing.png", None)
+
+
+def test_vector_dispatch_follows_svg_suffix(tmp_path):
+    assert is_vector_guide_symbol_file(tmp_path / "lead.svg")
+    assert is_vector_guide_symbol_file("a.SVG")
+    assert not is_vector_guide_symbol_file(tmp_path / "avatar.png")
+
+
+def test_after_only_bitmap_guide_keeps_visual_and_persists(tmp_path):
+    """「走字前图片留空」是合法状态：走字前透明、走字后显示，不能被校验丢掉。"""
+    after = _write_png(tmp_path / "after.png", "#00FF00")
+    symbol = import_bitmap_guide_symbol(None, after)
+
+    assert guide_symbol_has_visual(symbol)
+    assert guide_symbol_is_bitmap(symbol)
+    assert guide_symbol_from_dict(guide_symbol_to_dict(symbol)) == symbol
+
+
+def test_guide_bitmap_settings_dialog_requires_at_least_one_image(tmp_path):
+    guide_replacement_module.remember_bitmap_settings({})
+    before = _write_png(tmp_path / "before.png", "#FF0000")
+    dialog = guide_replacement_module.GuideBitmapSettingsDialog()
+
+    assert not dialog.ok_button.isEnabled()
+    dialog.before_edit.setText(before)
+    assert dialog.ok_button.isEnabled()
+    dialog.before_clear_button.click()
+    assert not dialog.ok_button.isEnabled()
+    dialog.after_edit.setText(str(tmp_path / "after.png"))
+    assert dialog.ok_button.isEnabled()
+    assert dialog.before_path() == ""
+    assert dialog.after_path() == str(tmp_path / "after.png")
+    dialog.close()
+
+
+def test_guide_bitmap_options_row_round_trips_settings():
+    row = guide_replacement_module.GuideBitmapOptionsRow(
+        defaults={
+            "zoom_mode": "Fix",
+            "zoom_value": 250,
+            "no_decor": True,
+            "margin_left_px": 3,
+            "margin_right_px": -170,
+            "margin_bottom_px": 4,
+        }
+    )
+
+    assert row.options() == {
+        "zoom_mode": "Fix",
+        "zoom_value": 250,
+        "no_decor": True,
+        "margin_left_px": 3,
+        "margin_right_px": -170,
+        "margin_bottom_px": 4,
+    }
+    assert not row.zoom_value_edit.isEnabled()
+
+    kwargs = guide_replacement_module.bitmap_options_kwargs(row.options())
+    assert kwargs == {
+        "zoom_percent": 250,
+        "fix_size": True,
+        "no_decor": True,
+        "margin_left_px": 3,
+        "margin_right_px": -170,
+        "margin_bottom_px": 4,
+    }
+
+    row.set_options(
+        {"zoom_mode": "Zoom", "zoom_value": 80, "no_decor": False,
+         "margin_left_px": 0, "margin_right_px": 0, "margin_bottom_px": 0}
+    )
+    assert guide_replacement_module.bitmap_options_kwargs(row.options())[
+        "fix_size"
+    ] is False
+    assert row.zoom_value_edit.isEnabled()
+
+
+def test_guide_bitmap_settings_dialog_prefills_from_session_memory(tmp_path):
+    before = _write_png(tmp_path / "mem.png", "#FF0000")
+    guide_replacement_module.remember_bitmap_settings(
+        {
+            "before_path": before,
+            "after_path": "",
+            "zoom_mode": "Zoom",
+            "zoom_value": 90,
+            "no_decor": True,
+            "margin_left_px": 0,
+            "margin_right_px": -20,
+            "margin_bottom_px": 0,
+        }
+    )
+    try:
+        dialog = guide_replacement_module.GuideBitmapSettingsDialog()
+
+        assert dialog.before_path() == before
+        assert dialog.after_path() == ""
+        assert dialog.ok_button.isEnabled()
+        assert dialog.options_row.zoom_value_edit.text() == "90"
+        assert dialog.options_row.no_decor_check.isChecked()
+        assert dialog.options_row.margin_right_px_edit.text() == "-20"
+        dialog.close()
+    finally:
+        guide_replacement_module.remember_bitmap_settings({})
+
+
+def test_bitmap_guide_import_applies_emoji_style_options(tmp_path):
+    before = _write_png(tmp_path / "before.png", "#FF0000")
+    after = _write_png(tmp_path / "after.png", "#0000FF")
+
+    symbol = import_bitmap_guide_symbol(
+        before,
+        after,
+        zoom_percent=40,
+        fix_size=True,
+        no_decor=True,
+        margin_left_px=1,
+        margin_right_px=-170,
+        margin_bottom_px=2,
+    )
+
+    assert symbol.bitmap_zoom_percent == 40
+    assert symbol.bitmap_fix_size is True
+    assert symbol.bitmap_no_decor is True
+    assert (symbol.bitmap_margin_left_px, symbol.bitmap_margin_right_px,
+            symbol.bitmap_margin_bottom_px) == (1, -170, 2)
+    assert guide_symbol_from_dict(guide_symbol_to_dict(symbol)) == symbol
+
+
 def test_guide_symbol_cache_signature_reuses_frozen_outline_model(tmp_path):
     symbol = _symbol(tmp_path)
 
@@ -258,6 +423,204 @@ def test_bitmap_prefix_guide_paints_image_pixels(tmp_path):
     paint_frame(image, track, 1200, style)
 
     assert _count_red_pixels(image) > 20
+
+
+def _count_color_pixels(image: QImage, color: str) -> int:
+    target = QColor(color)
+    count = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() <= 0:
+                continue
+            if all(
+                abs(getattr(pixel, channel)() - getattr(target, channel)())
+                <= 24
+                for channel in ("red", "green", "blue")
+            ):
+                count += 1
+    return count
+
+
+def _count_magenta_halo_pixels(image: QImage) -> int:
+    """半透明光晕与深色背景合成后不再是纯色，按「红蓝同强、绿弱」判晕。"""
+    count = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            red, green, blue = pixel.red(), pixel.green(), pixel.blue()
+            if red > 90 and blue > 60 and red > green + 50 and blue > green + 30:
+                count += 1
+    return count
+
+
+def _decor_frames(tmp_path, *, decoration_kind: str):
+    """同一条位图导唱符行在「有装饰 / NoDecor」两帧下的着色计数。"""
+    before = _write_png(tmp_path / "avatar.png", "#FF0000")
+    symbol = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=before,
+        prefix_timing="anchored",
+    )
+    line = TimingLine(
+        chars=[TimingChar("a", 1000), TimingChar("b", 1800)],
+        end_ms=2600,
+        guide_symbol=symbol,
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+        decoration_kind=decoration_kind,
+        shadow_color="#FF00FF",
+        shadow_offset_x=6,
+        shadow_offset_y=6,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+    )
+
+    def frame(guide) -> QImage:
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#101010"))
+        paint_frame(
+            image,
+            TimingTrack(lines=[replace(line, guide_symbol=guide)]),
+            1200,
+            style,
+        )
+        return image
+
+    return frame(symbol), frame(replace(symbol, bitmap_no_decor=True))
+
+
+def test_bitmap_guide_shadow_decor_paints_tinted_silhouette(tmp_path):
+    """shadow 装饰：图片 Alpha 剪影按偏移平移、飾り色着色；NoDecor 跳过。"""
+    decor_frame, no_decor_frame = _decor_frames(
+        tmp_path, decoration_kind="shadow"
+    )
+
+    decor_count = _count_color_pixels(decor_frame, "#FF00FF")
+    no_decor_count = _count_color_pixels(no_decor_frame, "#FF00FF")
+
+    assert decor_count > no_decor_count
+    assert decor_frame.constBits().asstring(
+        decor_frame.sizeInBytes()
+    ) != no_decor_frame.constBits().asstring(no_decor_frame.sizeInBytes())
+
+
+def test_bitmap_guide_glow_decor_paints_blurred_halo(tmp_path):
+    """glow 装饰：剪影按发光半径模糊出光晕；NoDecor 跳过。"""
+    decor_frame, no_decor_frame = _decor_frames(
+        tmp_path, decoration_kind="glow"
+    )
+
+    decor_count = _count_magenta_halo_pixels(decor_frame)
+    no_decor_count = _count_magenta_halo_pixels(no_decor_frame)
+
+    assert decor_count > no_decor_count
+    assert decor_count - no_decor_count > 100
+
+
+def test_bitmap_guide_gradient_decor_uses_fill_brush(tmp_path):
+    """飾り画刷为渐变时，剪影按整行跨度取渐变色，而不是主色纯色。"""
+    from krok_helper.subtitle_render.domain.paint import (
+        KaraokeColors,
+        KaraokeColorState,
+        PaintFill,
+    )
+
+    avatar = _write_png(tmp_path / "avatar.png", "#00FF00")
+    gradient = PaintFill(
+        mode="gradient_horizontal",
+        color="#FF0000",
+        start_color="#FF0000",
+        end_color="#FF00FF",
+        gradient_stops=[(0, "#FF0000"), (100, "#FF00FF")],
+    )
+    colors = KaraokeColors(
+        before=KaraokeColorState(shadow=gradient),
+        after=KaraokeColorState(shadow=gradient),
+    )
+    line = TimingLine(
+        chars=[TimingChar("a", 1000), TimingChar("b", 1800)],
+        end_ms=2600,
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+        decoration_kind="shadow",
+        shadow_offset_x=6,
+        shadow_offset_y=6,
+        karaoke_colors=colors,
+    )
+
+    def warm_green_counts(no_decor: bool) -> tuple[int, int]:
+        symbol = GuideSymbol(
+            kind="bitmap",
+            bitmap_before_path=avatar,
+            bitmap_no_decor=no_decor,
+            prefix_timing="anchored",
+        )
+        frame = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        frame.fill(QColor("#101010"))
+        paint_frame(
+            frame,
+            TimingTrack(lines=[replace(line, guide_symbol=symbol)]),
+            1200,
+            style,
+        )
+        warm = 0
+        green = 0
+        for y in range(frame.height()):
+            for x in range(frame.width()):
+                pixel = frame.pixelColor(x, y)
+                red, g, blue = pixel.red(), pixel.green(), pixel.blue()
+                if red > 120 and blue > 80 and red > g + 60 and blue > g + 40:
+                    warm += 1
+                elif g > 120 and g > red + 50 and g > blue + 50:
+                    green += 1
+        return warm, green
+
+    decor_warm, decor_green = warm_green_counts(False)
+    plain_warm, plain_green = warm_green_counts(True)
+
+    assert decor_warm > plain_warm
+    assert decor_green == plain_green
+
+
+def test_bitmap_guide_without_decor_style_keeps_plain_image(tmp_path):
+    """decoration_kind=none 时位图导唱符保持纯图片，不画任何装饰。"""
+    before = _write_png(tmp_path / "avatar.png", "#FF0000")
+    symbol = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=before,
+        prefix_timing="anchored",
+    )
+    line = TimingLine(
+        chars=[TimingChar("a", 1000), TimingChar("b", 1800)],
+        end_ms=2600,
+        guide_symbol=symbol,
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+        decoration_kind="none",
+        shadow_color="#FF00FF",
+        shadow_offset_x=6,
+        shadow_offset_y=6,
+    )
+    image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor("#101010"))
+
+    paint_frame(image, TimingTrack(lines=[line]), 1200, style)
+
+    assert _count_color_pixels(image, "#FF00FF") == 0
+    assert _count_red_pixels(image) > 0
 
 
 def _transparent_png(path, size: int = 8) -> None:
@@ -796,6 +1159,38 @@ def test_char_role_dialog_exposes_guide_as_first_selectable_character(tmp_path):
     dialog.close()
 
 
+def _fake_bitmap_settings_dialog(
+    monkeypatch, module, *, before="", after="", options=None
+):
+    """把模块里的图片导唱符设置对话框换成一个已确认的假对话框。"""
+
+    class _SettingsDialog:
+        def __init__(self, *, start_dir: str = "", parent=None) -> None:
+            pass
+
+        def exec(self) -> int:
+            return QDialog.DialogCode.Accepted.value
+
+        def before_path(self) -> str:
+            return before
+
+        def after_path(self) -> str:
+            return after
+
+        def options(self) -> dict:
+            return dict(options or {})
+
+        def settings(self) -> dict:
+            return {
+                "before_path": before,
+                "after_path": after,
+                **(options or {}),
+            }
+
+    monkeypatch.setattr(module, "GuideBitmapSettingsDialog", _SettingsDialog)
+    return _SettingsDialog
+
+
 def test_char_role_dialog_replaces_only_selected_source_chars_with_svg(
     tmp_path, monkeypatch
 ):
@@ -805,10 +1200,10 @@ def test_char_role_dialog_replaces_only_selected_source_chars_with_svg(
         '<svg viewBox="0 0 20 20"><path d="M2 2 L18 10 L2 18 Z"/></svg>',
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        lyrics_list_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(replacement_path), "SVG 文件 (*.svg)"),
+    _fake_bitmap_settings_dialog(
+        monkeypatch,
+        lyrics_list_module,
+        before=str(replacement_path),
     )
     dialog = _CharRoleDialog(
         0,
@@ -822,13 +1217,122 @@ def test_char_role_dialog_replaces_only_selected_source_chars_with_svg(
     dialog._chips._selected = {0, 2}
     dialog._chips.selectionChanged.emit()
 
-    dialog._replace_selected_with_svg()
+    dialog._replace_selected_with_symbol()
 
     symbols = dialog.char_vector_symbols()
     assert symbols[0] == prefix_symbol
     assert symbols[1] is None
     assert symbols[2] is not None
     assert symbols[2].name == "replacement"
+    assert symbols[2].kind == "vector"
+    dialog.close()
+
+
+def test_char_role_dialog_replaces_selected_chars_with_bitmap_image(
+    tmp_path, monkeypatch
+):
+    """走字前/后图片由用户在设置对话框里自选槽位，选项随符号写入。"""
+    before = _write_png(tmp_path / "before.png", "#FF0000")
+    after = _write_png(tmp_path / "after.png", "#0000FF")
+    _fake_bitmap_settings_dialog(
+        monkeypatch,
+        lyrics_list_module,
+        before=before,
+        after=after,
+        options={
+            "zoom_mode": "Zoom",
+            "zoom_value": 130,
+            "no_decor": True,
+            "margin_left_px": 2,
+            "margin_right_px": -170,
+            "margin_bottom_px": 0,
+        },
+    )
+    dialog = _CharRoleDialog(
+        0,
+        ["歌", "詞"],
+        [None, None],
+        [],
+        Style(),
+        vector_symbols=[None, None],
+    )
+    dialog._chips._selected = {1}
+    dialog._chips.selectionChanged.emit()
+
+    dialog._replace_selected_with_symbol()
+
+    symbols = dialog.char_vector_symbols()
+    assert symbols[0] is None
+    assert symbols[1] is not None
+    assert symbols[1].kind == "bitmap"
+    assert symbols[1].bitmap_before_path == before
+    assert symbols[1].bitmap_after_path == after
+    assert symbols[1].name == "before"
+    assert symbols[1].bitmap_zoom_percent == 130
+    assert symbols[1].bitmap_no_decor is True
+    assert symbols[1].bitmap_margin_left_px == 2
+    assert symbols[1].bitmap_margin_right_px == -170
+    dialog.close()
+
+
+def test_char_role_dialog_after_only_bitmap_replacement(tmp_path, monkeypatch):
+    """走字前留空是合法用法：只有走字后图片也能替换（走字前透明）。"""
+    after = _write_png(tmp_path / "after.png", "#0000FF")
+    _fake_bitmap_settings_dialog(
+        monkeypatch,
+        lyrics_list_module,
+        after=after,
+    )
+    dialog = _CharRoleDialog(
+        0,
+        ["歌"],
+        [None],
+        [],
+        Style(),
+        vector_symbols=[None],
+    )
+    dialog._chips._selected = {0}
+    dialog._chips.selectionChanged.emit()
+
+    dialog._replace_selected_with_symbol()
+
+    symbols = dialog.char_vector_symbols()
+    assert symbols[0] is not None
+    assert symbols[0].kind == "bitmap"
+    assert symbols[0].bitmap_before_path is None
+    assert symbols[0].bitmap_after_path == after
+    dialog.close()
+
+
+def test_char_role_dialog_bitmap_replacement_cancel_keeps_chars(
+    tmp_path, monkeypatch
+):
+    """图片导唱符设置取消时不应替换任何字符。"""
+
+    class _CancelledSettingsDialog:
+        def __init__(self, *, start_dir: str = "", parent=None) -> None:
+            pass
+
+        def exec(self) -> int:
+            return QDialog.DialogCode.Rejected.value
+
+    monkeypatch.setattr(
+        lyrics_list_module, "GuideBitmapSettingsDialog", _CancelledSettingsDialog
+    )
+    dialog = _CharRoleDialog(
+        0,
+        ["歌", "詞"],
+        [None, None],
+        [],
+        Style(),
+        vector_symbols=[None, None],
+    )
+    dialog._chips._selected = {1}
+    dialog._chips.selectionChanged.emit()
+
+    dialog._replace_selected_with_symbol()
+
+    assert dialog.char_vector_symbols() == [None, None]
     dialog.close()
 
 
@@ -846,23 +1350,23 @@ def test_char_role_dialog_restores_selected_svg_replacements_only(tmp_path):
         protected_prefix_count=1,
     )
 
-    assert not dialog._restore_svg_button.isEnabled()
+    assert not dialog._restore_symbol_button.isEnabled()
 
     dialog._chips._selected = {0}
     dialog._chips.selectionChanged.emit()
-    assert not dialog._restore_svg_button.isEnabled()
+    assert not dialog._restore_symbol_button.isEnabled()
 
     dialog._chips._selected = {1, 3}
     dialog._chips.selectionChanged.emit()
-    assert dialog._restore_svg_button.isEnabled()
-    dialog._restore_selected_svg()
+    assert dialog._restore_symbol_button.isEnabled()
+    dialog._restore_selected_symbol()
 
     symbols = dialog.char_vector_symbols()
     assert symbols[0] == prefix_symbol
     assert symbols[1] is None
     assert symbols[2] == second_symbol
     assert symbols[3] is None
-    assert not dialog._restore_svg_button.isEnabled()
+    assert not dialog._restore_symbol_button.isEnabled()
     dialog.close()
 
 
@@ -937,7 +1441,7 @@ def test_prefix_replace_dialog_lists_candidates_and_keeps_ambiguous_rows_selecta
         ]
     )
     dialog = GuidePrefixReplaceDialog(track)
-    dialog.set_svg_path(tmp_path / "lead.svg")
+    dialog.set_before_path(tmp_path / "lead.svg")
 
     assert dialog.windowTitle() == "批量识别导唱标记"
     assert dialog.non_prefix_check.text() == "允许搜索非行首字符"
@@ -979,8 +1483,37 @@ def test_existing_guide_candidate_checkbox_and_batch_role_button_are_available(
     assert dialog.selected_matches() == [dialog._matches[0]]
     assert dialog.batch_role_button.isEnabled()
     assert not dialog.ok_button.isEnabled()
-    dialog.set_svg_path(tmp_path / "lead.svg")
+    dialog.set_before_path(tmp_path / "lead.svg")
     assert dialog.ok_button.isEnabled()
+    dialog.close()
+
+
+def test_prefix_replace_dialog_accepts_after_only_image_symbol(tmp_path):
+    """走字前可留空：只填走字后图片也应满足应用条件（走字前透明）。"""
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])]
+    )
+    dialog = GuidePrefixReplaceDialog(track)
+
+    assert dialog.before_path() is None
+    assert dialog.after_path() is None
+    assert not dialog.ok_button.isEnabled()
+
+    after = tmp_path / "after.png"
+    dialog.set_after_path(after)
+    assert dialog.after_path() == after
+    assert dialog.ok_button.isEnabled()
+
+    dialog.after_clear_button.click()
+    assert not dialog.ok_button.isEnabled()
+
+    dialog.set_before_path(tmp_path / "before.png")
+    assert dialog.ok_button.isEnabled()
+
+    dialog.before_clear_button.click()
+    dialog.after_edit.setText(str(after))
+    assert dialog.ok_button.isEnabled()
+    assert dialog.bitmap_options()["zoom_mode"] == "Zoom"
     dialog.close()
 
 
@@ -991,7 +1524,8 @@ def test_batch_role_button_does_not_require_svg_or_cached_role_options():
     dialog = GuidePrefixReplaceDialog(track)
 
     assert dialog.selected_matches()
-    assert dialog.svg_path() is None
+    assert dialog.before_path() is None
+    assert dialog.after_path() is None
     assert dialog.batch_role_button.isEnabled()
     assert not dialog.ok_button.isEnabled()
     dialog.close()
@@ -1226,10 +1760,27 @@ def test_direct_guide_import_refreshes_lyrics_and_preview_immediately(
         def settings(self):
             return 1, 1000
 
+    class AcceptedBitmapDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def before_path(self):
+            return str(svg_path)
+
+        def after_path(self):
+            return ""
+
+        def options(self):
+            return {}
+
+        def settings(self):
+            return {"before_path": str(svg_path), "after_path": ""}
+
     monkeypatch.setattr(
-        main_window_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(svg_path), "SVG 文件 (*.svg)"),
+        main_window_module, "GuideBitmapSettingsDialog", AcceptedBitmapDialog
     )
     monkeypatch.setattr(
         main_window_module, "_GuideSymbolSettingsDialog", AcceptedSettingsDialog
@@ -1292,7 +1843,7 @@ def test_lyrics_preview_marks_inline_svg_without_changing_source_text(tmp_path):
     assert item is not None
     assert item.text() == "歌◆詞"
     assert not item.icon().isNull()
-    assert "行内 SVG 导唱符：1 个" in item.toolTip()
+    assert "行内导唱符：1 个" in item.toolTip()
     assert "".join(char.text for char in line.chars) == "歌h詞"
     panel.close()
 
@@ -1335,8 +1886,14 @@ def test_batch_prefix_replacement_is_one_undoable_command(tmp_path, monkeypatch)
         def exec(self):
             return QDialog.DialogCode.Accepted
 
-        def svg_path(self):
+        def before_path(self):
             return tmp_path / "lead.svg"
+
+        def after_path(self):
+            return None
+
+        def bitmap_options(self):
+            return {}
 
         def selected_matches(self):
             return matches
@@ -1400,8 +1957,14 @@ def test_batch_non_prefix_replacement_uses_inline_svg_and_is_undoable(
         def exec(self):
             return QDialog.DialogCode.Accepted
 
-        def svg_path(self):
+        def before_path(self):
             return tmp_path / "lead.svg"
+
+        def after_path(self):
+            return None
+
+        def bitmap_options(self):
+            return {}
 
         def selected_matches(self):
             return matches
@@ -1467,8 +2030,14 @@ def test_batch_replacement_overwrites_existing_prefix_and_inline_guides(
         def exec(self):
             return QDialog.DialogCode.Accepted
 
-        def svg_path(self):
+        def before_path(self):
             return tmp_path / "lead.svg"
+
+        def after_path(self):
+            return None
+
+        def bitmap_options(self):
+            return {}
 
         def selected_matches(self):
             return matches
@@ -1589,8 +2158,14 @@ def test_batch_replacement_prompts_to_apply_existing_role_scheme(
         def exec(self):
             return QDialog.DialogCode.Accepted
 
-        def svg_path(self):
+        def before_path(self):
             return tmp_path / "lead.svg"
+
+        def after_path(self):
+            return None
+
+        def bitmap_options(self):
+            return {}
 
         def selected_matches(self):
             return matches
@@ -1753,8 +2328,14 @@ def test_batch_prefix_replacement_keeps_bitmap_avatar_guide(tmp_path, monkeypatc
         def exec(self):
             return QDialog.DialogCode.Accepted
 
-        def svg_path(self):
+        def before_path(self):
             return tmp_path / "lead.svg"
+
+        def after_path(self):
+            return None
+
+        def bitmap_options(self):
+            return {}
 
         def selected_matches(self):
             return matches

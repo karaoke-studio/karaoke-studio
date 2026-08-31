@@ -175,6 +175,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     // line's composite has been flushed to the frame target.
     impl_->glowScratchInUse = 0;
     impl_->glowEffectInUse = 0;
+    impl_->decorTintEffectInUse = 0;
+    impl_->decorBlurEffectInUse = 0;
+    impl_->decorCompositeEffectInUse = 0;
     auto acquireGlowScratch = [&](float requestedWidth,
                                   float requestedHeight) -> ID2D1Bitmap1 * {
         const UINT32 width = impl_->glowDirtyRectEnabled
@@ -2183,6 +2186,400 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto bitmapGuideNoWipe = [&](const Impl::CachedChar &ch) {
             return ch.bitmapGuide.has_value() && ch.bitmapGuide->afterPath.empty();
         };
+        // N3 文字装饰（shadow / glow）套用到位图导唱符：ColorMatrix 把图片
+        // Alpha 染成飾り色（走字前后两态，仅有走字后图片时切到后态），
+        // shadow 按偏移平移绘制、glow 级联 GaussianBlur（BlurLevel+1 层，
+        // 与文字发光同一 sigma 公式）。效果直接画到帧目标上，继承调用方已
+        // 设置的 wipe 分侧裁切；NoDecor 跳过（@Emoji NoDecor 语义）。
+        auto acquireDecorEffect = [&](
+            const IID &effectId,
+            std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> &pool,
+            std::size_t &inUse,
+            const char *operation
+        ) -> ID2D1Effect * {
+            if (inUse < pool.size()) {
+                return pool[inUse++].Get();
+            }
+            Microsoft::WRL::ComPtr<ID2D1Effect> effect;
+            checkHr(
+                context->CreateEffect(
+                    effectId, effect.ReleaseAndGetAddressOf()
+                ),
+                operation,
+                device_
+            );
+            pool.push_back(effect);
+            ++inUse;
+            return pool.back().Get();
+        };
+        // 渐变飾り（gradient_horizontal / gradient_vertical / split_vertical）
+        // 按画刷语义在 CPU 上采样成位图：native 像素 (x,y) 对应位图导唱符矩形
+        // 内的设备坐标，t 沿整行 fillBounds 量取，与 createPaintBrush 的
+        // 线性渐变映射同口径（GAMMA_2_2 = 分量直插，split 为硬边界）。
+        auto decorGradientBitmap = [&](
+            const PaintStyle &paint,
+            const D2D1_RECT_F &fillBounds,
+            const D2D1_RECT_F &bitmapRect,
+            float pixelW,
+            float pixelH
+        ) -> ID2D1Bitmap1 * {
+            const bool gradient = paint.mode == "gradient_horizontal"
+                || paint.mode == "gradient_vertical"
+                || paint.mode == "split_vertical";
+            if (!gradient || paint.stops.empty()) {
+                return nullptr;
+            }
+            const std::uint32_t width = std::max<std::uint32_t>(
+                static_cast<std::uint32_t>(std::lround(pixelW)), 1
+            );
+            const std::uint32_t height = std::max<std::uint32_t>(
+                static_cast<std::uint32_t>(std::lround(pixelH)), 1
+            );
+            const auto sameRect = [](const D2D1_RECT_F &left,
+                                     const D2D1_RECT_F &right) {
+                return std::abs(left.left - right.left) < 0.5f
+                    && std::abs(left.top - right.top) < 0.5f
+                    && std::abs(left.right - right.right) < 0.5f
+                    && std::abs(left.bottom - right.bottom) < 0.5f;
+            };
+            for (Impl::CachedDecorGradient &entry : impl_->decorGradientCache) {
+                if (entry.paint == paint
+                    && entry.width == width
+                    && entry.height == height
+                    && sameRect(entry.fillBounds, fillBounds)
+                    && sameRect(entry.bitmapRect, bitmapRect)) {
+                    entry.lastUse = ++impl_->decorGradientUseSerial;
+                    return entry.bitmap.Get();
+                }
+            }
+            std::vector<PaintStop> ordered = paint.stops;
+            std::stable_sort(
+                ordered.begin(), ordered.end(),
+                [](const PaintStop &left, const PaintStop &right) {
+                    return left.position < right.position;
+                }
+            );
+            if (ordered.size() == 1) {
+                ordered.push_back(PaintStop{1.0f, ordered.front().color});
+            }
+            const bool split = paint.mode == "split_vertical";
+            const auto sampleAt = [&](float t) -> RgbaColor {
+                if (split) {
+                    if (t <= ordered.front().position) {
+                        return ordered.front().color;
+                    }
+                    for (std::size_t index = 1; index < ordered.size(); ++index) {
+                        if (t <= ordered[index].position) {
+                            return ordered[index - 1].color;
+                        }
+                    }
+                    return ordered.back().color;
+                }
+                t = std::clamp(t, 0.0f, 1.0f);
+                if (t <= ordered.front().position) {
+                    return ordered.front().color;
+                }
+                for (std::size_t index = 1; index < ordered.size(); ++index) {
+                    if (t <= ordered[index].position) {
+                        const PaintStop &lo = ordered[index - 1];
+                        const PaintStop &hi = ordered[index];
+                        const float span = std::max(
+                            hi.position - lo.position, 1e-6f
+                        );
+                        const float factor = std::clamp(
+                            (t - lo.position) / span, 0.0f, 1.0f
+                        );
+                        const auto mix = [&](std::uint8_t a, std::uint8_t b) {
+                            return static_cast<std::uint8_t>(
+                                std::lround(a + (b - a) * factor)
+                            );
+                        };
+                        return RgbaColor{
+                            mix(lo.color.red, hi.color.red),
+                            mix(lo.color.green, hi.color.green),
+                            mix(lo.color.blue, hi.color.blue),
+                            mix(lo.color.alpha, hi.color.alpha),
+                        };
+                    }
+                }
+                return ordered.back().color;
+            };
+            const float scaleX = (bitmapRect.right - bitmapRect.left) / pixelW;
+            const float scaleY = (bitmapRect.bottom - bitmapRect.top) / pixelH;
+            const float fillW = std::max(
+                fillBounds.right - fillBounds.left, 1.0f
+            );
+            const float fillH = std::max(
+                fillBounds.bottom - fillBounds.top, 1.0f
+            );
+            const bool horizontal = paint.mode == "gradient_horizontal";
+            std::vector<std::uint8_t> pixels(
+                static_cast<std::size_t>(width) * height * 4, 0
+            );
+            for (std::uint32_t y = 0; y < height; ++y) {
+                for (std::uint32_t x = 0; x < width; ++x) {
+                    const float deviceX = bitmapRect.left + (x + 0.5f) * scaleX;
+                    const float deviceY = bitmapRect.top + (y + 0.5f) * scaleY;
+                    const float t = horizontal
+                        ? (deviceX - fillBounds.left) / fillW
+                        : (deviceY - fillBounds.top) / fillH;
+                    const RgbaColor color = sampleAt(t);
+                    const float alpha = color.alpha / 255.0f;
+                    std::uint8_t *pixel = &pixels[
+                        (static_cast<std::size_t>(y) * width + x) * 4
+                    ];
+                    pixel[0] = static_cast<std::uint8_t>(
+                        std::lround(color.blue * alpha)
+                    );
+                    pixel[1] = static_cast<std::uint8_t>(
+                        std::lround(color.green * alpha)
+                    );
+                    pixel[2] = static_cast<std::uint8_t>(
+                        std::lround(color.red * alpha)
+                    );
+                    pixel[3] = color.alpha;
+                }
+            }
+            const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+                D2D1_BITMAP_OPTIONS_NONE,
+                D2D1::PixelFormat(
+                    DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED
+                )
+            );
+            Impl::CachedDecorGradient entry;
+            entry.paint = paint;
+            entry.fillBounds = fillBounds;
+            entry.bitmapRect = bitmapRect;
+            entry.width = width;
+            entry.height = height;
+            checkHr(
+                context->CreateBitmap(
+                    D2D1::SizeU(width, height),
+                    pixels.data(),
+                    width * 4,
+                    properties,
+                    entry.bitmap.ReleaseAndGetAddressOf()
+                ),
+                "ID2D1DeviceContext::CreateBitmap(bitmap guide decor gradient)",
+                device_
+            );
+            entry.lastUse = ++impl_->decorGradientUseSerial;
+            constexpr std::size_t kDecorGradientCap = 8;
+            if (impl_->decorGradientCache.size() >= kDecorGradientCap) {
+                const auto oldest = std::min_element(
+                    impl_->decorGradientCache.begin(),
+                    impl_->decorGradientCache.end(),
+                    [](const Impl::CachedDecorGradient &left,
+                       const Impl::CachedDecorGradient &right) {
+                        return left.lastUse < right.lastUse;
+                    }
+                );
+                impl_->decorGradientCache.erase(oldest);
+            }
+            impl_->decorGradientCache.push_back(std::move(entry));
+            return impl_->decorGradientCache.back().bitmap.Get();
+        };
+        auto drawBitmapGuideDecor = [&](
+            const Impl::CachedChar &ch,
+            ID2D1Bitmap1 *bitmap,
+            bool after,
+            float opacity
+        ) {
+            const BitmapGuide &guide = *ch.bitmapGuide;
+            if (guide.noDecor || opacity <= 0.0f) {
+                return;
+            }
+            const TextStyle &charStyle = ch.styleIndex >= 0
+                && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                : style;
+            const bool isGlow = charStyle.decorationKind == "glow";
+            const bool isShadow = charStyle.decorationKind == "shadow"
+                && (charStyle.shadowOffsetX != 0.0f
+                    || charStyle.shadowOffsetY != 0.0f);
+            if (!isGlow && !isShadow) {
+                return;
+            }
+            const bool wiped = after && !guide.afterPath.empty();
+            const PaintStyle &paint = wiped
+                ? charStyle.afterDecorPaint
+                : charStyle.beforeDecorPaint;
+            const RgbaColor &decor = wiped
+                ? charStyle.afterDecor
+                : charStyle.beforeDecor;
+            const D2D1_SIZE_U pixelSize = bitmap->GetPixelSize();
+            const float pixelW = std::max(
+                static_cast<float>(pixelSize.width), 1.0f
+            );
+            const float pixelH = std::max(
+                static_cast<float>(pixelSize.height), 1.0f
+            );
+            const float rectW = ch.bitmapRect.right - ch.bitmapRect.left;
+            const float rectH = ch.bitmapRect.bottom - ch.bitmapRect.top;
+            if (rectW <= 0.0f || rectH <= 0.0f) {
+                return;
+            }
+            // shadow 装饰用 FillOpacityMask + 完整画刷：纯色 / 渐变 /
+            // 千层 / 贴图统一支持，剪影平移到偏移位置（src→dest 隐含缩放）。
+            if (isShadow) {
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
+                    paint, line->fillBounds, decor
+                );
+                if (!brush) {
+                    return;
+                }
+                brush->SetOpacity(opacity);
+                const D2D1_RECT_F shadowDest = D2D1::RectF(
+                    ch.bitmapRect.left + charStyle.shadowOffsetX,
+                    ch.bitmapRect.top + charStyle.shadowOffsetY,
+                    ch.bitmapRect.right + charStyle.shadowOffsetX,
+                    ch.bitmapRect.bottom + charStyle.shadowOffsetY
+                );
+                const D2D1_RECT_F sourceRect = D2D1::RectF(
+                    0.0f, 0.0f, pixelW, pixelH
+                );
+                context->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+                context->FillOpacityMask(
+                    bitmap,
+                    brush.Get(),
+                    D2D1_OPACITY_MASK_CONTENT_GRAPHICS,
+                    &shadowDest,
+                    &sourceRect
+                );
+                context->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                return;
+            }
+            const float requestedRadius = wiped
+                ? charStyle.glowAfterRadius
+                : charStyle.glowBeforeRadius;
+            const int radius = std::max(
+                0, static_cast<int>(std::lround(requestedRadius))
+            );
+            if (radius <= 0) {
+                return;
+            }
+            // glow 的模糊输入需要独立图像：渐变飾り用 CPU 栅格化的渐变位图
+            // 经 Composite(SOURCE_IN) 与位图 Alpha 相乘；纯色 / 贴图回落到
+            // ColorMatrix 主色（贴图模式与 shadow 的画刷路径存在差异）。
+            Microsoft::WRL::ComPtr<ID2D1Image> tintOutput;
+            ID2D1Bitmap1 *gradientRaster = decorGradientBitmap(
+                paint, line->fillBounds, ch.bitmapRect, pixelW, pixelH
+            );
+            if (gradientRaster != nullptr) {
+                ID2D1Effect *composite = acquireDecorEffect(
+                    CLSID_D2D1Composite,
+                    impl_->decorCompositeEffectPool,
+                    impl_->decorCompositeEffectInUse,
+                    "ID2D1DeviceContext::CreateEffect(bitmap guide decor composite)"
+                );
+                checkHr(
+                    composite->SetValue(
+                        D2D1_COMPOSITE_PROP_MODE,
+                        D2D1_COMPOSITE_MODE_SOURCE_IN
+                    ),
+                    "ID2D1Effect::SetValue(bitmap guide decor composite)",
+                    device_
+                );
+                // SOURCE_IN 保留 source：Input 1 = source（渐变栅格）、
+                // Input 0 = destination（位图 Alpha）。接反会把位图自身的
+                // 颜色当剪影（探针：绿色头像会把光晕染成绿色）。
+                composite->SetInput(0, bitmap);
+                composite->SetInput(1, gradientRaster);
+                composite->GetOutput(tintOutput.ReleaseAndGetAddressOf());
+            } else {
+                ID2D1Effect *tint = acquireDecorEffect(
+                    CLSID_D2D1ColorMatrix,
+                    impl_->decorTintEffectPool,
+                    impl_->decorTintEffectInUse,
+                    "ID2D1DeviceContext::CreateEffect(bitmap guide decor tint)"
+                );
+                // 行 = 输入 R/G/B/A/1，列 = 输出 RGBA：RGB 取飾り色常量、
+                // A 保留位图 Alpha（× 本次绘制透明度）。PREMULTIPLIED 模式下
+                // 效果对矩阵输出做预乘回转换——直通输出 decor×a 才是正确的
+                // 剪影染色；STRAIGHT 模式不回转换，非黑颜色会被当作预乘值
+                // 过亮失真（黑色对预乘不变，唯一"看起来对"的颜色）。
+                const auto matrix = D2D1::Matrix5x4F(
+                    0.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, 0.0f, 0.0f, opacity,
+                    decor.red / 255.0f, decor.green / 255.0f,
+                    decor.blue / 255.0f, 0.0f
+                );
+                checkHr(
+                    tint->SetValue(
+                        D2D1_COLORMATRIX_PROP_COLOR_MATRIX, matrix
+                    ),
+                    "ID2D1Effect::SetValue(bitmap guide decor matrix)",
+                    device_
+                );
+                checkHr(
+                    tint->SetValue(
+                        D2D1_COLORMATRIX_PROP_ALPHA_MODE,
+                        D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED
+                    ),
+                    "ID2D1Effect::SetValue(bitmap guide decor alpha mode)",
+                    device_
+                );
+                tint->SetInput(0, bitmap);
+                tint->GetOutput(tintOutput.ReleaseAndGetAddressOf());
+            }
+            ID2D1Effect *blur = acquireDecorEffect(
+                CLSID_D2D1GaussianBlur,
+                impl_->decorBlurEffectPool,
+                impl_->decorBlurEffectInUse,
+                "ID2D1DeviceContext::CreateEffect(bitmap guide decor blur)"
+            );
+            blur->SetInput(0, tintOutput.Get());
+            // 半径是设备像素；效果输入是原始分辨率图片，sigma 随缩放折算，
+            // 与 Painter 在设备空间模糊的结果一致。DrawImage 只有
+            // targetPoint 重载，缩放通过临时世界变换完成。
+            D2D1_MATRIX_3X2_F previousTransform = D2D1::Matrix3x2F::Identity();
+            context->GetTransform(&previousTransform);
+            const float scaleX = rectW / pixelW;
+            const float scaleY = rectH / pixelH;
+            const float padDevice = std::ceil(radius * 3.5f) + 2.0f;
+            const float padNative = padDevice / std::max(scaleX, 0.0001f);
+            const int passes = std::clamp(
+                charStyle.glowConcentrationLevel, 0, 2
+            ) + 1;
+            context->SetTransform(
+                D2D1::Matrix3x2F::Scale(scaleX, scaleY)
+                    * D2D1::Matrix3x2F::Translation(
+                        ch.bitmapRect.left - padDevice,
+                        ch.bitmapRect.top - padDevice
+                    )
+                    * previousTransform
+            );
+            for (int index = 0; index < passes; ++index) {
+                const float sigma = std::max(
+                    0.0f,
+                    static_cast<float>(
+                        radius - index * radius / passes
+                    ) / std::max(scaleX, 0.0001f)
+                );
+                checkHr(
+                    blur->SetValue(
+                        D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, sigma
+                    ),
+                    "ID2D1Effect::SetValue(bitmap guide decor sigma)",
+                    device_
+                );
+                context->DrawImage(
+                    blur,
+                    D2D1::Point2F(0.0f, 0.0f),
+                    D2D1::RectF(
+                        -padNative,
+                        -padNative,
+                        pixelW + padNative,
+                        pixelH + padNative
+                    ),
+                    D2D1_INTERPOLATION_MODE_LINEAR,
+                    D2D1_COMPOSITE_MODE_SOURCE_OVER
+                );
+            }
+            context->SetTransform(previousTransform);
+        };
         auto drawBitmapGuidePart = [&](std::size_t charIndex, bool after) {
             if (charIndex >= line->chars.size()) {
                 return;
@@ -2230,6 +2627,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     pushAxisAlignedClip(
                         beforeClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
+                    drawBitmapGuideDecor(ch, bitmap, after, opacity);
                     context->DrawBitmap(
                         bitmap,
                         ch.bitmapRect,
@@ -2241,6 +2639,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     return;
                 }
             }
+            drawBitmapGuideDecor(ch, bitmap, after, opacity);
             context->DrawBitmap(
                 bitmap,
                 ch.bitmapRect,
@@ -4363,6 +4762,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         if (impl_->glowEffectPool.size() > kGlowPoolCap) {
             impl_->glowEffectPool.resize(kGlowPoolCap);
+        }
+        // Bitmap-guide decor effects bind fresh inputs on every draw, so
+        // rewinding the counters is enough to reuse them on the next line.
+        impl_->decorTintEffectInUse = 0;
+        impl_->decorBlurEffectInUse = 0;
+        impl_->decorCompositeEffectInUse = 0;
+        if (impl_->decorTintEffectPool.size() > kGlowPoolCap) {
+            impl_->decorTintEffectPool.resize(kGlowPoolCap);
+        }
+        if (impl_->decorBlurEffectPool.size() > kGlowPoolCap) {
+            impl_->decorBlurEffectPool.resize(kGlowPoolCap);
+        }
+        if (impl_->decorCompositeEffectPool.size() > kGlowPoolCap) {
+            impl_->decorCompositeEffectPool.resize(kGlowPoolCap);
         }
       }
     }

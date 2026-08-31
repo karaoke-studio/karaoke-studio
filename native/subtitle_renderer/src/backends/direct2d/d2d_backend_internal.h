@@ -194,6 +194,31 @@ struct Direct2DGpuBackend::Impl {
     std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> glowEffectPool;
     std::size_t glowScratchInUse = 0;
     std::size_t glowEffectInUse = 0;
+    // Bitmap-guide decor (N3 shadow/glow) renders through its own ColorMatrix
+    // + GaussianBlur effects. They cannot share the text-glow pools: those
+    // entries may still be pending composite when a bitmap guide is drawn,
+    // and re-binding their inputs would corrupt the pending text glow.
+    std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> decorTintEffectPool;
+    std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> decorBlurEffectPool;
+    std::size_t decorTintEffectInUse = 0;
+    std::size_t decorBlurEffectInUse = 0;
+    std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> decorCompositeEffectPool;
+    std::size_t decorCompositeEffectInUse = 0;
+    // Gradient decor paints are rasterized on the CPU (avatar-native size,
+    // sampled through the line fill bounds) so the glow pipeline can consume
+    // them as a plain bitmap input of the Composite effect. Keyed by the full
+    // geometric context; small LRU because gradient avatars are rare.
+    struct CachedDecorGradient {
+        PaintStyle paint;
+        D2D1_RECT_F fillBounds;
+        D2D1_RECT_F bitmapRect;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        std::uint64_t lastUse = 0;
+    };
+    std::vector<CachedDecorGradient> decorGradientCache;
+    std::uint64_t decorGradientUseSerial = 0;
 #if KROK_GPU_DIAGNOSTICS
     bool countersEnabled = direct2d::environmentFlagEnabled("KROK_GPU_COUNTERS", true);
 #else

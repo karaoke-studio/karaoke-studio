@@ -1,4 +1,4 @@
-"""SVG 导唱符导入与 QPainterPath 轮廓转换。"""
+"""导唱符导入：SVG 矢量轮廓转换 + 位图图片（走字前后双态）。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,26 @@ import xml.etree.ElementTree as ET
 from fontTools.pens.basePen import BasePen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.svgLib.path import parse_path
-from PyQt6.QtGui import QPainterPath, QTransform
+from PyQt6.QtGui import QImage, QPainterPath, QTransform
 
 from krok_helper.subtitle_render.domain.timing import GuideSymbol
 
 
 class GuideSymbolImportError(ValueError):
-    """SVG 无法转换成单色闭合字形轮廓。"""
+    """导唱符文件无法转换成可渲染的矢量轮廓或位图。"""
+
+
+GUIDE_SYMBOL_IMAGE_SUFFIXES = frozenset(
+    {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".ico", ".tiff", ".tif"}
+)
+GUIDE_SYMBOL_FILE_FILTER = (
+    "导唱符 (*.svg *.png *.jpg *.jpeg *.bmp *.webp *.gif *.ico *.tiff *.tif)"
+)
+
+
+def is_vector_guide_symbol_file(path: Path | str) -> bool:
+    """SVG 走原有矢量轮廓路径；其余图片一律按位图导唱符导入。"""
+    return Path(path).suffix.lower() == ".svg"
 
 
 class _PainterPathPen(BasePen):
@@ -100,6 +113,59 @@ def import_svg_guide_symbol(
         duration_ms=max(int(duration_ms), 0),
         count=max(int(count), 1),
         role_label=role_label or None,
+    )
+
+
+def import_bitmap_guide_symbol(
+    before_path: Path | str | None,
+    after_path: Path | str | None = None,
+    *,
+    duration_ms: int = 1000,
+    count: int = 1,
+    role_label: str | None = None,
+    zoom_percent: int = 100,
+    fix_size: bool = False,
+    no_decor: bool = False,
+    margin_left_px: int = 0,
+    margin_right_px: int = 0,
+    margin_bottom_px: int = 0,
+) -> GuideSymbol:
+    """把位图图片包装成「走字前 / 走字后」双态导唱符。
+
+    ``before_path`` 是走字到达前显示的图片，``after_path`` 是走字经过后显示的
+    图片；两者都允许留空，留空的一侧渲染为透明（两侧都为空则无法导入）。
+    其余选项与 ``@Emoji`` 标签对应：``zoom_percent``（按字幕行高缩放，
+    默认 100）、``fix_size``（``Fix`` 保持原图尺寸）、``no_decor``（不套用
+    样式方案的文字装饰 shadow / glow）与三个方向的留白像素（允许负值；
+    ``ForceWipeDecor`` 渲染端未实现，不暴露）。与 SVG 不同，位图不提取矢量
+    轮廓，按图片原样缩放绘制，布局宽度跟随图片。
+    """
+    before = str(before_path).strip() if before_path else ""
+    after = str(after_path).strip() if after_path else ""
+    if not before and not after:
+        raise GuideSymbolImportError("走字前后图片不能都为空。")
+    for label, value in (("走字前图片", before), ("走字后图片", after)):
+        if not value:
+            continue
+        if not Path(value).is_file():
+            raise GuideSymbolImportError(f"{label}不存在：{value}")
+        if QImage(str(value)).isNull():
+            raise GuideSymbolImportError(f"{label}无法读取：{value}")
+    primary = Path(before if before else after)
+    return GuideSymbol(
+        name=primary.stem or "导唱符",
+        kind="bitmap",
+        bitmap_before_path=before or None,
+        bitmap_after_path=after or None,
+        duration_ms=max(int(duration_ms), 0),
+        count=max(int(count), 1),
+        role_label=role_label or None,
+        bitmap_zoom_percent=max(int(zoom_percent), 1),
+        bitmap_fix_size=bool(fix_size),
+        bitmap_no_decor=bool(no_decor),
+        bitmap_margin_left_px=int(margin_left_px),
+        bitmap_margin_right_px=int(margin_right_px),
+        bitmap_margin_bottom_px=int(margin_bottom_px),
     )
 
 
