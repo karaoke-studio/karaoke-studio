@@ -2221,11 +2221,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         : (rtl
                             ? D2D1::RectF(
                                 line->bounds.left - geometryPad, fullWipeClipTop,
-                                wipeEdge, fullWiveClipBottom
+                                wipeEdge, fullWipeClipBottom
                             )
                             : D2D1::RectF(
                                 wipeEdge, fullWipeClipTop,
-                                line->bounds.right + geometryPad, fullWiveClipBottom
+                                line->bounds.right + geometryPad, fullWipeClipBottom
                             ));
                     pushAxisAlignedClip(
                         beforeClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
