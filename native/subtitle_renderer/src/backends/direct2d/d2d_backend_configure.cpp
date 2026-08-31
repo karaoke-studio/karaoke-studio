@@ -611,9 +611,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     ) * layoutScale
                 );
                 const float bitmapBottom = anchorDescent - marginBottom;
+                // Negative margins may deliberately collapse the cell to zero
+                // width (N3 colour separation pulls following text over the
+                // avatar); the advance only floors at zero so ranges stay
+                // ordered, while bitmapRect keeps the overflowing image box.
                 layoutWidth = std::max(
                     contentWidth + marginLeft + marginRight,
-                    1.0f * layoutScale
+                    0.0f
                 );
                 bitmapRect = D2D1::RectF(
                     cursor + marginLeft,

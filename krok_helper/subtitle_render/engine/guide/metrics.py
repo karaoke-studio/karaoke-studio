@@ -78,13 +78,20 @@ def bitmap_guide_content_size(
 
 
 def vector_glyph_width(symbol: GuideSymbol, style: Style) -> int:
-    """Resolve the layout width of a vector or bitmap guide glyph."""
+    """Resolve the layout width of a vector or bitmap guide glyph.
+
+    负余白（N3 分色用 ``MarginRight=-400`` 之类）故意把单元格压成**零宽**，
+    让后续文字左移与头像重叠——这是合法用法。布局 advance 钳到 ≥0（负宽
+    会让 char_x_ranges 反转、走字分段碎掉，且与 GPU 口径不一致）；图片矩形
+    与走字墨心仍按内容矩形（``margin_left`` 偏移、允许溢出单元格）计算。
+    """
     if guide_symbol_is_bitmap(symbol):
-        content_w, _ = bitmap_guide_content_size(symbol, style)
-        return (
+        content_w, _content_h = bitmap_guide_content_size(symbol, style)
+        return max(
             content_w
             + int(symbol.bitmap_margin_left_px)
-            + int(symbol.bitmap_margin_right_px)
+            + int(symbol.bitmap_margin_right_px),
+            0,
         )
     return max(
         int(

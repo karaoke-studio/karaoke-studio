@@ -1336,6 +1336,232 @@ def test_char_role_dialog_bitmap_replacement_cancel_keeps_chars(
     dialog.close()
 
 
+def test_char_role_dialog_enables_replacement_on_unprotected_chips(tmp_path):
+    """保护前缀为 0（行首标记替换模式）时，第 0 个芯片也能替换/还原。"""
+    symbol = _symbol(tmp_path)
+    dialog = _CharRoleDialog(
+        0,
+        ["h", "歌"],
+        [None, None],
+        [],
+        Style(),
+        vector_symbols=[symbol, None],
+        protected_prefix_count=0,
+    )
+
+    dialog._chips._selected = {0}
+    dialog._chips.selectionChanged.emit()
+
+    assert dialog._replace_symbol_button.isEnabled()
+    assert dialog._restore_symbol_button.isEnabled()
+    dialog.close()
+
+
+def test_char_role_dialog_opens_prefix_replacement_without_protection(
+    tmp_path, monkeypatch
+):
+    """行首标记替换的行：芯片并入正文序列（原字符文本可见），不再是保护前缀。
+
+    批量识别替换后双击进入逐字符角色，「替换为图片导唱符」「还原导唱符为
+    原字符」必须对被替换的标记芯片可用。
+    """
+    before = _write_png(tmp_path / "avatar.png", "#FF0000")
+    guide = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=before,
+        count=2,
+        replacement_prefix=("h", "h"),
+        role_labels=(None, None),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", 1000),
+                    TimingChar("h", 1200),
+                    TimingChar("歌", 1500),
+                ],
+                end_ms=2000,
+                guide_symbol=guide,
+            )
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    class CapturingDialog:
+        def __init__(self, row, texts, labels, role_options, style, parent, **kwargs):
+            captured.update(kwargs)
+            captured["texts"] = list(texts)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(lyrics_list_module, "_CharRoleDialog", CapturingDialog)
+    panel = LyricsPanel()
+    panel.set_track(track)
+    panel._edit_char_roles(0)
+    panel.close()
+
+    assert captured["texts"] == ["h", "h", "歌"]
+    assert captured["protected_prefix_count"] == 0
+    vector_symbols = captured["vector_symbols"]
+    assert vector_symbols == [guide, guide, None]
+
+
+def _prefix_replacement_window(tmp_path, monkeypatch, guide):
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", 1000),
+                    TimingChar("h", 1200),
+                    TimingChar("歌", 1500),
+                ],
+                end_ms=2000,
+                guide_symbol=guide,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv(
+        "KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings")
+    )
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    return window, track
+
+
+def test_prefix_chip_edits_convert_guide_to_inline_replacements(tmp_path, monkeypatch):
+    """全序列逐字编辑：任一前缀芯片被还原/替换时拆成行内替换，视觉不变。"""
+    before = _write_png(tmp_path / "avatar.png", "#FF0000")
+    guide = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=before,
+        count=2,
+        replacement_prefix=("h", "h"),
+        role_labels=(None, None),
+    )
+    replacement = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=before,
+        bitmap_no_decor=True,
+    )
+    window, track = _prefix_replacement_window(tmp_path, monkeypatch, guide)
+    line = track.lines[0]
+
+    # 第二个芯片还原为原字符，第一个芯片换成新符号
+    window._on_inline_char_edit_changed(
+        0, None, [None, None, None], [replacement, None, None]
+    )
+
+    assert line.guide_symbol is None
+    assert line.inline_guide_symbols == {0: replacement}
+    assert "".join(ch.text for ch in line.chars) == "hh歌"
+    window.close()
+
+
+def test_prefix_chip_edits_keep_guide_when_all_chips_unchanged(tmp_path, monkeypatch):
+    """全部前缀芯片未改动时保留行级导唱符（仅角色随标签更新）。"""
+    before = _write_png(tmp_path / "avatar.png", "#FF0000")
+    guide = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=before,
+        count=2,
+        replacement_prefix=("h", "h"),
+        role_labels=(None, None),
+    )
+    window, track = _prefix_replacement_window(tmp_path, monkeypatch, guide)
+    line = track.lines[0]
+
+    window._on_inline_char_edit_changed(
+        0, None, ["导唱", "导唱", None], [guide, guide, None]
+    )
+
+    assert line.guide_symbol is not None
+    assert line.guide_symbol.replacement_prefix == ("h", "h")
+    assert guide_symbol_role_labels(line.guide_symbol) == ("导唱", "导唱")
+    assert line.inline_guide_symbols == {}
+    window.close()
+
+
+def test_replaced_narrow_marker_takes_guide_width_in_layout(tmp_path):
+    """窄字符（i/!）替换为导唱符后，布局与整行宽度按导唱符自身宽度计算。
+
+    锁定智能水平布局的行宽输入：``line_total_width`` 与逐字符布局宽度都
+    必须取图片/SVG 的内容宽度，而不是原始标记字符的文本宽度。
+    """
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning import (
+        line_total_width,
+    )
+
+    before = _write_png(tmp_path / "avatar.png", "#FF0000")
+    image = QImage(96, 48, QImage.Format.Format_ARGB32_Premultiplied)
+    assert image.save(before)
+    symbol = GuideSymbol(kind="bitmap", bitmap_before_path=before)
+    prefix_symbol = replace(symbol, count=1, replacement_prefix=("i",))
+    style = Style(font_family="Arial", font_size_px=48)
+
+    plain = TimingLine(
+        chars=[TimingChar("i", 1000), TimingChar("歌", 1500)], end_ms=2000
+    )
+    inline = replace(plain, inline_guide_symbols={0: symbol})
+    prefix = replace(plain, guide_symbol=prefix_symbol)
+
+    for line, label in ((inline, "inline"), (prefix, "prefix")):
+        layout = _layout_line_uncached(
+            TimingTrack(lines=[line]), line, style, 640, 360
+        )
+        widths = [right - left for left, right in layout.char_x_ranges]
+        assert widths[0] >= 90, f"{label}: guide slot width {widths[0]}"
+        assert line_total_width(line, style) >= line_total_width(plain, style) + 30, (
+            f"{label}: smart line width must follow the guide width"
+        )
+
+
+def test_extreme_negative_margin_keeps_ordered_layout_and_wipe(tmp_path):
+    """右余白 -400 / 底余白 220（故意超出、占零宽）不能打碎布局与走字。
+
+    负余白故意把单元格 advance 压成零宽、让后续文字左移与头像重叠——这是
+    分色合法用法。负宽会让布局区间反转、走字分段与配色碎掉，因此 advance
+    钳到 ≥0；图片矩形与走字墨心按内容矩形（允许溢出单元格）保持有序。
+    """
+    avatar = _write_png(tmp_path / "avatar.png", "#00FF00")
+    symbol = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=avatar,
+        bitmap_margin_right_px=-400,
+        bitmap_margin_bottom_px=220,
+    )
+    line = TimingLine(
+        chars=[
+            TimingChar("i", 1000),
+            TimingChar("歌", 1500),
+            TimingChar("詞", 2000),
+        ],
+        end_ms=2500,
+        inline_guide_symbols={0: symbol},
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(font_family="Arial", font_size_px=48)
+
+    layout = _layout_line_uncached(track, line, style, 640, 360)
+
+    widths = [right - left for left, right in layout.char_x_ranges]
+    assert widths[0] == 0
+    assert widths[1] == widths[2]
+    assert all(left <= right for left, right in layout.char_x_ranges)
+    assert all(left <= right for left, right in layout.ink_x_ranges)
+    assert layout.ink_x_ranges[0][1] > layout.ink_x_ranges[0][0]
+    frame = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    frame.fill(QColor("#101010"))
+    paint_frame(frame, track, 1200, style)
+    assert any(frame.constBits().asstring(frame.sizeInBytes()))
+
+
 def test_char_role_dialog_restores_selected_svg_replacements_only(tmp_path):
     prefix_symbol = _symbol(tmp_path)
     first_symbol = replace(_symbol(tmp_path), name="first")
