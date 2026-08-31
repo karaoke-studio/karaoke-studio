@@ -271,6 +271,8 @@ class LyricsLayout:
     letter_spacing_px: Optional[int] = None
     space_width_percent: Optional[int] = None
     """空格宽度（占字号百分比）的布局级覆盖；``None`` 继承全局 ``Style``。"""
+    force_top_bottom_n3: Optional[bool] = None
+    """单行底部页是否启用 N3「强制顶底」行位机制；``None`` 继承全局 ``Style``。"""
     allow_biting: Optional[bool] = None
     ruby_interval_px: Optional[int] = None
     ruby_alignment: Optional[RubyAlignment] = None
@@ -284,6 +286,7 @@ LYRICS_LAYOUT_GEOMETRY_FIELDS: tuple[str, ...] = (
     "smart_horizontal",
     "horizontal_margin_px",
     "line_alignments",
+    "force_top_bottom_n3",
 )
 
 LYRICS_LAYOUT_CHAR_FIELDS: tuple[str, ...] = (
@@ -816,6 +819,11 @@ class Style:
     中心位置对齐（逐行判断，N3 Single）；``equal_margins`` = 左右余白对齐
     （整页判断，N3 Multi，N3 默认）。"""
 
+    force_top_bottom_n3: bool = True
+    """单行底部对齐页的 N3「强制顶底」行位机制（默认开）：先把孤行强制到
+    最下行，与上一页同位行冲突时再上移一行；关闭时孤行直接显示在天然
+    行位（T1），不做任何强制/上移。"""
+
     layouts: list["LyricsLayout"] = field(default_factory=default_page_layouts)
     """额外的命名布局定义（N3 ``LyricsLayouts``）。``Style`` 自身的布局字段是
     「默认布局」（index 0），本列表从 index 1 起被 ``TimingLine.layout_index``
@@ -1137,6 +1145,7 @@ def _builtin_page_layout(style: Style, rows: int) -> LyricsLayout:
         smart_horizontal=style.smart_horizontal,
         horizontal_margin_px=style.horizontal_margin_px,
         line_alignments=list(alignments),
+        force_top_bottom_n3=style.force_top_bottom_n3,
         letter_spacing_px=style.letter_spacing_px,
         allow_biting=style.allow_biting,
         ruby_interval_px=style.ruby_interval_px,
@@ -1400,6 +1409,7 @@ def style_from_dict(payload: object) -> Style:
             "affects_ruby_anchor",
             "allow_biting",
             "allow_inter_page_line_overlap",
+            "force_top_bottom_n3",
             "stroke2_enabled",
             "ruby_font_follow_main",
             "ruby_colors_follow_main",
@@ -1809,6 +1819,7 @@ def lyrics_layout_to_dict(layout: LyricsLayout) -> dict:
         "smart_horizontal": layout.smart_horizontal,
         "horizontal_margin_px": layout.horizontal_margin_px,
         "line_alignments": list(layout.line_alignments),
+        "force_top_bottom_n3": layout.force_top_bottom_n3,
         "letter_spacing_px": layout.letter_spacing_px,
         "space_width_percent": layout.space_width_percent,
         "allow_biting": layout.allow_biting,
@@ -1852,6 +1863,11 @@ def lyrics_layout_from_dict(payload: object) -> LyricsLayout:
         allow_biting=(
             bool(payload.get("allow_biting"))
             if payload.get("allow_biting") is not None
+            else None
+        ),
+        force_top_bottom_n3=(
+            bool(payload.get("force_top_bottom_n3"))
+            if payload.get("force_top_bottom_n3") is not None
             else None
         ),
         ruby_interval_px=(

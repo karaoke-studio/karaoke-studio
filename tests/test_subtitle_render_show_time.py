@@ -429,6 +429,28 @@ def test_single_bottom_page_takes_the_bottom_row_when_nothing_overlaps():
     assert out.force_bottom[1] is True
 
 
+def test_disabled_force_bottom_keeps_single_page_unforced():
+    # 「强制顶底(N3)」关闭：即使上一页无重叠（本应强制占最下行），
+    # force_bottom 也恒为 False，孤行保持天然行位（T1）。
+    begins, ends = [10_000, 40_000], [13_000, 43_000]
+    pages = [
+        ShowTimePage(
+            lines=(0,), section=0, configured_rows=2, vertical_position="bottom"
+        ),
+        ShowTimePage(
+            lines=(1,),
+            section=0,
+            configured_rows=2,
+            vertical_position="bottom",
+            force_bottom_enabled=False,
+        ),
+    ]
+    out = _run(begins, ends, pages)
+
+    assert out.force_bottom[0] is True
+    assert out.force_bottom[1] is False
+
+
 def test_single_bottom_page_is_pushed_up_when_the_previous_page_still_shows():
     # 前一页单行页挂到 13_000 + PostTime = 14_000，本页 14_000 − 1800 前就要上屏
     # → 重叠 → ForceBottom = False（N3 把它上移一行）。

@@ -92,6 +92,10 @@ def assemble_track_layout_plan(
             if page_rows >= configured_rows:
                 continue
             if page_style.line_y_position == "bottom":
+                if page_rows == 1 and configured_rows > 1:
+                    # 单行页保持天然行位（T1）；强制占最下行由渲染期
+                    # show_time ForceBottom 机制处理，不进静态 lane。
+                    continue
                 authored_lanes[track_index] += configured_rows - page_rows
             elif page_style.line_y_position == "center":
                 authored_lanes[track_index] += max(

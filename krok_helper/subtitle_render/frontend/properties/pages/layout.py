@@ -302,6 +302,15 @@ class LayoutPropertyPageBuilder:
         )
         host._character_layout_group = host._make_character_layout_group(section)
 
+        host._force_top_bottom_check = CheckBox("强制顶底(N3)", section)
+        host._force_top_bottom_check.setToolTip(
+            "单行底部页的 N3 行位机制：先把孤行强制到最下行，与上一页同位行"
+            "冲突时再上移一行。关闭时孤行直接显示在天然行位（T1）。"
+        )
+        host._force_top_bottom_check.toggled.connect(
+            lambda checked: host._update_layout_field(force_top_bottom_n3=checked)
+        )
+
         host._allow_biting_check = CheckBox("启用文字咬合", section)
         host._allow_biting_check.setToolTip(
             "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
@@ -309,6 +318,13 @@ class LayoutPropertyPageBuilder:
         host._allow_biting_check.toggled.connect(
             lambda checked: host._update_layout_field(allow_biting=checked)
         )
+
+        host._page_anchor_checks = QWidget(section)
+        anchor_checks_layout = QHBoxLayout(host._page_anchor_checks)
+        anchor_checks_layout.setContentsMargins(0, 0, 0, 0)
+        anchor_checks_layout.setSpacing(8)
+        anchor_checks_layout.addWidget(host._force_top_bottom_check)
+        anchor_checks_layout.addWidget(host._allow_biting_check)
 
         host._layout_schematic = self._layout_schematic_factory(section)
         host._layout_schematic.setFixedWidth(round(150 * 16 / 9))
@@ -359,7 +375,7 @@ class LayoutPropertyPageBuilder:
             top_left=host._left_layout_controls,
             top_center=host._line_position_field,
             bottom_left=host._character_layout_group,
-            bottom_right=host._allow_biting_check,
+            bottom_right=host._page_anchor_checks,
         )
         layout.addWidget(host._schematic_board)
         return section

@@ -23,6 +23,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     entry_animation_resolver,
     exit_animation_ms,
     exit_animation_resolver,
+    force_top_bottom_resolver,
     lane_count,
     line_end_ms,
     line_start_ms,
@@ -606,6 +607,7 @@ def display_line_compute_kwargs(style: Style) -> dict[str, object]:
         "row_count_of": row_count_resolver(style),
         "bottom_align_of": bottom_align_resolver(style),
         "vertical_position_of": vertical_position_resolver(style),
+        "force_bottom_of": force_top_bottom_resolver(style),
         # 「保护时间」与入场/退场动画的自动下限取大：两者都是自动压缩必须在走字
         # 两侧留下的余量，求解器只认一个数。
         "auto_entry_reserve_ms_of": _reserve_with_floor(

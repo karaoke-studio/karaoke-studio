@@ -1944,6 +1944,7 @@ class PropertyPanel(QWidget):
             self._letter_spacing_spin.setValue(int(values["letter_spacing_px"]))
             self._space_width_spin.setValue(int(values["space_width_percent"]))
             self._allow_biting_check.setChecked(bool(values["allow_biting"]))
+            self._force_top_bottom_check.setChecked(bool(values["force_top_bottom_n3"]))
             self._ruby_interval_spin.setValue(int(values["ruby_interval_px"]))
             self._ruby_alignment_combo.setCurrentIndex(
                 max(0, self._ruby_alignment_combo.findData(values["ruby_alignment"]))

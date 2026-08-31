@@ -315,6 +315,10 @@ def resolve_page_plan(
             position = _layout_position(style, page.layout_id)
             if position == "bottom":
                 lane_offset = max(capacity - len(members), 0)
+                if len(members) == 1 and capacity > 1:
+                    # 单行页的行位恒为天然 T1：底部锚定的「强制占最下行」是
+                    # N3 渲染期机制（show_time ForceBottom），不写进静态 lane。
+                    lane_offset = 0
             elif position == "center":
                 lane_offset = max((capacity - len(members) + 1) // 2, 0)
             else:

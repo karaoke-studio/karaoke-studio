@@ -483,6 +483,50 @@ def test_timeline_offsets_short_bottom_and_center_pages():
     assert [item.lane for item in center] == [1, 2]
 
 
+def test_static_plan_keeps_single_line_bottom_page_at_natural_lane():
+    # 单行页的静态行位恒为天然 T1；强制占最下行是渲染期 N3 ForceBottom
+    # 机制，不写进 resolve_page_plan 的 lane（歌词列表 T 标签同源）。
+    style = Style()
+    track = _track(3)
+    track.page_plan = TrackPagePlan(
+        [
+            TrackSection([TrackPage(2, "default")]),
+            TrackSection([TrackPage(1, "default")]),
+        ]
+    )
+
+    resolved = resolve_page_plan(track, style)
+    assert [line.lane for line in resolved.lines] == [0, 1, 0]
+
+
+def test_disabled_force_bottom_renders_single_page_at_natural_lane():
+    track = TimingTrack(
+        lines=[
+            _line(0, start=10_000, end=13_000),
+            _line(1, start=14_000, end=17_000),
+            _line(2, start=40_000, end=43_000),
+        ]
+    )
+    track.page_plan = TrackPagePlan(
+        [TrackSection([TrackPage(2, "default"), TrackPage(1, "default")])]
+    )
+    base = dict(
+        lead_in_ms=0,
+        tail_ms=0,
+        lane_gap_ms=0,
+        lane_count=2,
+        vertical_position_of=lambda _line: "bottom",
+    )
+
+    enabled = compute_display_lines(track, **base, force_bottom_of=lambda _line: True)
+    disabled = compute_display_lines(track, **base, force_bottom_of=lambda _line: False)
+
+    # 开（N3 机制）：无重叠的孤行被强制到最下行（T2）。
+    assert [item.lane for item in enabled] == [0, 1, 1]
+    # 关：孤行不做任何偏移，直接显示在天然行位（T1）。
+    assert [item.lane for item in disabled] == [0, 1, 0]
+
+
 def test_layout_shrink_reflows_before_normalizing_the_old_reference():
     custom = LyricsLayout(
         name="四行",

@@ -2427,7 +2427,8 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
 def test_layout_schematic_preserves_columns_until_controls_would_collide(qapp):
     panel = PropertyPanel()
     panel.setCurrentIndex(1)
-    panel.resize(680, 800)
+    # 「强制顶底(N3)」+「启用文字咬合」并排加宽右下角，三列断点随之抬高。
+    panel.resize(780, 800)
     panel.show()
     qapp.processEvents()
 
@@ -2446,7 +2447,7 @@ def test_layout_schematic_preserves_columns_until_controls_would_collide(qapp):
 def test_layout_schematic_stacks_cleanly_after_collision_breakpoint(qapp):
     panel = PropertyPanel()
     panel.setCurrentIndex(1)
-    panel.resize(660, 1000)
+    panel.resize(700, 1000)
     panel.show()
     qapp.processEvents()
 

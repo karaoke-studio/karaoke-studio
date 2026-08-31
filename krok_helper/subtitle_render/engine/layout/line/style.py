@@ -82,6 +82,15 @@ def vertical_position_resolver(
     return lambda line: layout_style_for_line(style, line).line_y_position
 
 
+def force_top_bottom_resolver(
+    style: Style,
+) -> Callable[[TimingLine], bool] | None:
+    """单行底部页的「强制顶底(N3)」开关解析（页取页首行布局）。"""
+    if style.vertical:
+        return None
+    return lambda line: layout_style_for_line(style, line).force_top_bottom_n3
+
+
 def auto_entry_reserve_ms(style: Style, line: TimingLine) -> int:
     """Return the automatic pre-wipe reserve for this line's entry animation."""
 
@@ -214,6 +223,7 @@ __all__ = [
     "exit_animation_resolver",
     "lane_count",
     "layout_style_for_line",
+    "force_top_bottom_resolver",
     "line_end_ms",
     "line_start_ms",
     "row_count_resolver",

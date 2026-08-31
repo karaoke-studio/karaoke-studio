@@ -2482,11 +2482,11 @@ def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
     assert [(line["page_index"], line["layout_lane"]) for line in lines] == [
         (0, 0),
         (0, 1),
-        (2, 1),
+        (2, 0),
     ]
     assert lines[0]["layout"]["smart_horizontal"] == "equal_margins"
-    # 末页先保留作者布局中的 Bottom 行位；若与前页真实像素冲突，由共享
-    # layout_offset_windows 整页避让，不再提前套用 N3 ForceBottom 上移一次。
+    # 单行页的静态行位恒为天然 T1；开启「强制顶底(N3)」时由渲染期
+    # show_time ForceBottom 强制到最下行 / 冲突上移，不写进 layout_lane。
     assert [line["page_line_count"] for line in lines] == [2, 2, 1]
 
 

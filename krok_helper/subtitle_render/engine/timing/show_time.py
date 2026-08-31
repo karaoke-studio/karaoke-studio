@@ -47,6 +47,9 @@ class ShowTimePage:
     section: int
     configured_rows: int = 1
     vertical_position: str = "bottom"
+    force_bottom_enabled: bool = True
+    """是否启用 N3「强制顶底」行位机制（单行底部页）；关闭时孤行恒在天然
+    行位（T1），既不强制占最下行也不做冲突上移。"""
 
 
 @dataclass
@@ -766,8 +769,9 @@ class _Solver:
                     self._apply_override(line)
                     # N3 先假定占最下行再探测重叠，顺序不能颠倒：
                     # PrevPageSamePositionLineIndex 的取行位置依赖这个值。
-                    force_bottom[line] = True
-                    if self.dynamic_single_page_reflow:
+                    # 「强制顶底(N3)」关闭时不走该机制，孤行保持天然行位。
+                    force_bottom[line] = bool(page.force_bottom_enabled)
+                    if page.force_bottom_enabled and self.dynamic_single_page_reflow:
                         force_bottom[line] = (
                             self._prev_page_overlap_line(line, True) is None
                         )

@@ -149,6 +149,7 @@ def visible_display_lines(
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
+    force_bottom_of: Optional[Callable[[TimingLine], bool]] = None,
     auto_entry_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
     auto_exit_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
     entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
@@ -176,6 +177,7 @@ def visible_display_lines(
         row_count_of=row_count_of,
         bottom_align_of=bottom_align_of,
         vertical_position_of=vertical_position_of,
+        force_bottom_of=force_bottom_of,
         auto_entry_reserve_ms_of=auto_entry_reserve_ms_of,
         auto_exit_reserve_ms_of=auto_exit_reserve_ms_of,
         entry_animation_ms_of=entry_animation_ms_of,
@@ -208,6 +210,7 @@ def compute_display_lines(
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
+    force_bottom_of: Optional[Callable[[TimingLine], bool]] = None,
     auto_entry_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
     auto_exit_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
     entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
@@ -281,6 +284,7 @@ def compute_display_lines(
         row_count_of,
         bottom_align_of,
         vertical_position_of,
+        force_bottom_of,
     )
     show_times = compute_show_times(
         [timing_line_start_ms(line) for line in render_lines],
@@ -378,6 +382,7 @@ def _show_time_pages(
     row_count_of: Optional[Callable[[TimingLine], int]],
     bottom_align_of: Optional[Callable[[TimingLine], bool]],
     vertical_position_of: Optional[Callable[[TimingLine], str]],
+    force_bottom_of: Optional[Callable[[TimingLine], bool]] = None,
 ) -> list[ShowTimePage]:
     """把 lane 结构折叠成 :class:`ShowTimePage` 序列（渲染行索引空间）。
 
@@ -402,12 +407,16 @@ def _show_time_pages(
             position = "bottom" if bottom_align_of(first) else "top"
         else:
             position = "top"
+        force_bottom_enabled = (
+            bool(force_bottom_of(first)) if force_bottom_of is not None else True
+        )
         pages.append(
             ShowTimePage(
                 lines=tuple(range(index, page_end)),
                 section=section_ids[index],
                 configured_rows=configured_rows,
                 vertical_position=position,
+                force_bottom_enabled=force_bottom_enabled,
             )
         )
         index = page_end
@@ -423,7 +432,7 @@ def _apply_page_lane_offsets(
 
     单行底部页正常占最下行；若上一页与它按稳定时间和最终二维行盒确认冲突
     （``force_bottom`` 为 False），N3 把它上移一行，后面再重叠的单行页又能用回
-    最下行。
+    最下行。「强制顶底(N3)」关闭的页不走该机制，孤行保持天然行位（T1）。
     """
 
     for page in pages:
@@ -431,6 +440,13 @@ def _apply_page_lane_offsets(
         if page_size <= 0 or page_size >= max(int(page.configured_rows), 1):
             continue
         configured_rows = max(int(page.configured_rows), 1)
+        single_bottom = (
+            page.vertical_position == "bottom"
+            and page_size == 1
+            and configured_rows > 1
+        )
+        if single_bottom and not page.force_bottom_enabled:
+            continue
         if page.vertical_position == "bottom":
             shift = configured_rows - page_size
         elif page.vertical_position == "center":
@@ -439,12 +455,7 @@ def _apply_page_lane_offsets(
             continue
         for line in page.lines:
             lanes[line] += shift
-        if (
-            page.vertical_position == "bottom"
-            and page_size == 1
-            and configured_rows > 1
-            and not force_bottom[page.lines[0]]
-        ):
+        if single_bottom and not force_bottom[page.lines[0]]:
             first = page.lines[0]
             lanes[first] = max(lanes[first] - 1, 0)
 
