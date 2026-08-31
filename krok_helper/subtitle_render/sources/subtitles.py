@@ -160,22 +160,24 @@ def _apply_emoji_guides(
     也不占用 ``guide_symbol`` 行前槽位（SUG 分色标签设置助手的透明 1x1
     占位 + 负 MarginRight 隐形分色即依赖这一语义）。标签本身已被正文解析
     剥成角色，``line.chars`` 里没有对应字符，因此必须插入合成字符承载头像。
+    整行只有 ``[ts]【朵】`` 这种独立标签（间奏喊话 / 应援）时正文解析不产
+    出任何字符，这里同样插入合成头像字符，起点取标签自带的时间戳。
     """
     specs = _parse_emoji_specs(track.meta.custom, base_dir)
     if not specs:
         return
     specs_by_trigger = {str(spec["trigger"]): spec for spec in specs}
     for row, (line, raw_line) in enumerate(zip(track.lines, body_lines)):
-        if line.is_blank or not line.chars:
+        if line.is_blank:
             continue
         raw_text = str(raw_line)
         matched = [trigger for trigger in specs_by_trigger if trigger and trigger in raw_text]
         if not matched:
             continue
-        # 可见字符触发（如 ``@Emoji=♪``）：替换该字符本身，打轴时间不变。
+        # 可见字符触发（如 ``@Emoji=♪``）：替换该字符本身（每个出现都替换），
+        # 打轴时间不变。
         for trigger in matched:
-            inline_index = _line_text_index(line, trigger)
-            if inline_index is not None:
+            for inline_index in _line_text_indices(line, trigger):
                 line.inline_guide_symbols[inline_index] = _emoji_guide_symbol(
                     specs_by_trigger[trigger], anchored=False
                 )
@@ -191,20 +193,25 @@ def _insert_inline_emoji_tags(
 ) -> None:
     """在行内每个标签触发位置插入头像字符。
 
-    头像起点取后继字符的 ``start_ms``（SUG 导出器把标签写在后继字符时间戳
-    之后，``[ts]【B】い``）；标签在行尾时取 ``line.end_ms``。这样原有字符的
-    走字区间一个都不变，头像自身是零时长窗口、起点瞬间切换到 after 图。
+    头像起点优先取后继字符的 ``start_ms``（SUG 导出器把标签写在后继字符
+    时间戳之后，``[ts]【B】い``）；无后继字符时取标签自带的 ``[ts]``
+    （``[ts]【朵】`` 这种间奏喊话行——标签是本时间戳的唯一内容）；
+    都没有才退回 ``line.end_ms``。这样原有字符的走字区间一个都不变，
+    独立标签行也能拿到自己的窗口做头像 wipe。
     """
     offset = 0
-    for trigger, raw_index in _emoji_tag_occurrences(raw_text, set(specs_by_trigger)):
+    for trigger, raw_index, own_ts in _emoji_tag_occurrences(raw_text, set(specs_by_trigger)):
         index = raw_index + offset
         following = line.chars[index] if index < len(line.chars) else None
         if following is not None:
             start_ms = following.start_ms
+        elif own_ts is not None:
+            start_ms = own_ts
         elif line.end_ms is not None:
             start_ms = line.end_ms
         else:
-            start_ms = line.chars[-1].start_ms
+            # 无任何时间锚点（无时间戳的纯标签行）：无法定位，跳过该次插入。
+            continue
         line.inline_guide_symbols = {
             (key + 1 if key >= index else key): symbol
             for key, symbol in line.inline_guide_symbols.items()
@@ -222,23 +229,38 @@ def _insert_inline_emoji_tags(
 
 def _emoji_tag_occurrences(
     raw_line: str, triggers: set[str]
-) -> list[tuple[str, int]]:
-    """按出现顺序列出命中 emoji 触发的 ``【…】`` 标签及其插入下标。
+) -> list[tuple[str, int, Optional[int]]]:
+    """按出现顺序列出命中 emoji 触发的 ``【…】`` 标签、插入下标与自带时间戳。
 
     插入下标 = 标签之前已产出的可见字符数。这里复用正文解析同一套
     token / 角色切分 / 文本元素计数逻辑，保证与 ``line.chars`` 严格对齐。
+
+    自带时间戳 = 标签是其文本 token 首个元素时，紧邻该 token 之前的
+    ``[ts]``——即 ``[ts]【朵】`` 里直接属于该标签的时间戳。标签前面还有
+    其他文字（``あ【B】``）时该标签没有独立时间戳，返回 ``None``。
     """
-    occurrences: list[tuple[str, int]] = []
+    occurrences: list[tuple[str, int, Optional[int]]] = []
     char_index = 0
+    pending_ts: Optional[int] = None
     for token_type, token_value in _tokenize_line(raw_line):
         if token_type == "ts":
+            pending_ts = int(token_value)  # type: ignore[arg-type]
             continue
+        # ``_tokenize_line`` 里 ts / text 严格交替：紧邻本文本 token 之前的
+        # ``[ts]`` 就是它的前导时间戳；行首直接以文字开头时为 None。
+        token_ts = pending_ts
+        pending_ts = None
+        token_first_element = True
         for kind, value in _split_role_labels(str(token_value)):
             if kind == "role":
                 tag = f"【{value}】"
                 if tag in triggers:
-                    occurrences.append((tag, char_index))
+                    occurrences.append(
+                        (tag, char_index, token_ts if token_first_element else None)
+                    )
+                token_first_element = False
                 continue
+            token_first_element = False
             char_index += len(_text_elements(value))
     return occurrences
 
@@ -343,19 +365,16 @@ def _emoji_guide_symbol(spec: dict[str, object], *, anchored: bool) -> GuideSymb
     )
 
 
-def _line_text_index(line: TimingLine, trigger: str) -> Optional[int]:
+def _line_text_indices(line: TimingLine, trigger: str) -> list[int]:
+    """行内所有与触发串完整对齐的字符下标（原位替换用）。
+
+    与正文解析同一套「字符文本 == 触发串」对齐口径：单字触发（``♪`` /
+    ``朵`` / 单个文本元素）每个出现都返回；跨多字符的触发串若从未与
+    单个字符对齐则不匹配，维持历史行为。
+    """
     if not trigger:
-        return None
-    position = 0
-    text = "".join(char.text for char in line.chars)
-    found = text.find(trigger)
-    if found < 0:
-        return None
-    for index, char in enumerate(line.chars):
-        if position == found and char.text == trigger:
-            return index
-        position += len(char.text)
-    return None
+        return []
+    return [index for index, char in enumerate(line.chars) if char.text == trigger]
 
 
 # ---------------------------------------------------------------------------

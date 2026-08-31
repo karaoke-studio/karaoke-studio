@@ -709,6 +709,63 @@ def test_load_lrc_replaces_repeated_singer_tag_occurrences_inline(tmp_path):
     )
 
 
+def test_load_lrc_standalone_emoji_tag_chant_line_becomes_avatar_chars(tmp_path):
+    """间奏应援行：整行只有 ``[ts]【朵】`` 标签时不再被解析成空行。
+
+    每个标签按自带时间戳变成头像字符，拿到 [ts_i, ts_{i+1}] 的独立
+    wipe 窗口（后继无正文字符，起点不能再取后继字符）。
+    """
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "透明图像.png").write_bytes(b"fake")
+    (tmp_path / "chieru.png").write_bytes(b"fake")
+    lrc.write_text(
+        "[00:14:12]【朵】[00:15:12]【朵】[00:16:12]【朵】[00:17:12]【朵】[00:18:12]\n"
+        "\n"
+        "@Offset=-100\n"
+        "@Emoji=【朵】,透明图像.png,chieru.png,zoom=100,NoDecor,Marginright=0\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+    line = track.lines[0]
+
+    assert line.chars
+    assert [(c.text, c.start_ms) for c in line.chars] == [
+        ("【朵】", 14_120),
+        ("【朵】", 15_120),
+        ("【朵】", 16_120),
+        ("【朵】", 17_120),
+    ]
+    assert line.end_ms == 18_120
+    assert set(line.inline_guide_symbols) == {0, 1, 2, 3}
+    assert line.inline_guide_symbols[1].bitmap_after_path == str(tmp_path / "chieru.png")
+
+
+def test_load_lrc_visible_emoji_trigger_replaces_every_occurrence(tmp_path):
+    """可见触发字符（如 ``@Emoji=朵``）一行内多次出现：每个都原位替换为头像，
+    不能只替换第一个。"""
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "透明图像.png").write_bytes(b"fake")
+    (tmp_path / "chieru.png").write_bytes(b"fake")
+    lrc.write_text(
+        "[00:14:12]朵[00:15:12]朵[00:16:12]朵[00:17:12]朵[00:18:12]\n"
+        "\n"
+        "@Emoji=朵,透明图像.png,chieru.png,zoom=100,NoDecor,Marginright=0\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+    line = track.lines[0]
+
+    # 打轴时间保持不变，四个字符全部换成头像。
+    assert [c.start_ms for c in line.chars] == [14_120, 15_120, 16_120, 17_120]
+    assert set(line.inline_guide_symbols) == {0, 1, 2, 3}
+    assert all(
+        s.bitmap_after_path == str(tmp_path / "chieru.png")
+        for s in line.inline_guide_symbols.values()
+    )
+
+
 def test_load_lrc_inline_emoji_tag_at_line_end_uses_line_end(tmp_path):
     lrc = tmp_path / "demo.lrc"
     (tmp_path / "a.png").write_bytes(b"fake")

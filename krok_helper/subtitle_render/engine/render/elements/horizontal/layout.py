@@ -16,6 +16,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingTrack,
 )
 from krok_helper.subtitle_render.engine.guide import (
+    bitmap_guide_content_size,
     guide_symbol_is_bitmap,
     render_line_with_guide_symbols,
     vector_glyph_width,
@@ -509,6 +510,12 @@ def role_char_ink_ranges_by_index(
 
     Missing and whitespace glyphs fall back to a zero-width range at the
     character advance box's left edge, matching the plain-text wipe contract.
+    Bitmap guide glyphs have no outline path, so their ink is the avatar's
+    content rectangle (``left + margin_left`` .. ``+ content width``) — the
+    same rect the painter draws and the GPU backend uses as ``bitmapRect``.
+    Without it the avatar's wipe segment is zero-width and its after-image
+    reveal degenerates to the following text char's scanline (or never
+    appears on avatar-only lines).
     ``line`` remains in the signature for compatibility with the established
     layout call boundary.
     """
@@ -519,6 +526,15 @@ def role_char_ink_ranges_by_index(
             continue
         text = glyph.text
         left = glyph.left
+        symbol = glyph.vector_glyph
+        if symbol is not None and guide_symbol_is_bitmap(symbol):
+            content_left = left + int(symbol.bitmap_margin_left_px)
+            content_width, _content_height = bitmap_guide_content_size(
+                symbol, glyph.style
+            )
+            content_right = content_left + max(int(content_width), 1)
+            ranges[glyph.index] = (content_left, max(content_right, content_left))
+            continue
         if not text or text.isspace():
             ranges[glyph.index] = (left, left)
             continue

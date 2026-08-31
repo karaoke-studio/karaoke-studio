@@ -1147,6 +1147,14 @@ def paint_bitmap_guide_glyph(
     band: tuple[int, int] | None,
     rtl: bool,
 ) -> None:
+    """Draw one bitmap guide avatar as a two-sided wipe mask.
+
+    With an after-state image the avatar is a strict mask: the unsung side
+    (right of the wipe edge, or left in RTL) keeps the before image and the
+    sung side shows the after image — the before image must not stay
+    composited underneath a partly transparent after image.  Before-only
+    symbols have no wipe and always draw unclipped.
+    """
     symbol = glyph.vector_glyph
     if not guide_symbol_is_bitmap(symbol):
         return
@@ -1162,8 +1170,11 @@ def paint_bitmap_guide_glyph(
     painter.save()
     try:
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        if after and band is not None:
-            painter.setClipRect(horizontal_after_clip_rect(band, rtl))
+        if band is not None:
+            if after:
+                painter.setClipRect(horizontal_after_clip_rect(band, rtl))
+            elif symbol.bitmap_after_path:
+                painter.setClipRect(horizontal_before_clip_rect(band, rtl))
         painter.drawImage(rect, image)
     finally:
         painter.restore()

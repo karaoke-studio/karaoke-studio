@@ -556,12 +556,19 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             bool bitmapHasBounds = false;
             if (bitmapGuide) {
                 const BitmapGuide &guide = *sourceChar.bitmapGuide;
-                ID2D1Bitmap1 *bitmap = imageForBitmapGuide(
-                    guide.beforePath, guide.beforeModifiedMs, guide.beforeSize
-                );
-                if (bitmap == nullptr && !guide.afterPath.empty()) {
+                // Size the cell by the after-state image first: the SHINTA
+                // @Emoji avatar pattern pairs a transparent spacer (before)
+                // with the real picture (after); sizing by the spacer would
+                // collapse the avatar into a pixel-wide sliver.
+                ID2D1Bitmap1 *bitmap = nullptr;
+                if (!guide.afterPath.empty()) {
                     bitmap = imageForBitmapGuide(
                         guide.afterPath, guide.afterModifiedMs, guide.afterSize
+                    );
+                }
+                if (bitmap == nullptr) {
+                    bitmap = imageForBitmapGuide(
+                        guide.beforePath, guide.beforeModifiedMs, guide.beforeSize
                     );
                 }
                 float contentWidth = 1.0f * layoutScale;

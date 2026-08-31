@@ -35,6 +35,7 @@ from krok_helper.subtitle_render.frontend.main_window import (
     _GuideSymbolSettingsDialog,
 )
 from krok_helper.subtitle_render.domain.timing import assign_role_to_track_rows
+from krok_helper.subtitle_render.engine.guide.metrics import vector_glyph_width
 from krok_helper.subtitle_render.sources.guide_symbols import (
     guide_symbol_path,
     import_svg_guide_symbol,
@@ -257,6 +258,159 @@ def test_bitmap_prefix_guide_paints_image_pixels(tmp_path):
     paint_frame(image, track, 1200, style)
 
     assert _count_red_pixels(image) > 20
+
+
+def _transparent_png(path, size: int = 8) -> None:
+    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(0, 0, 0, 0))
+    assert image.save(str(path))
+
+
+def _red_png(path, size: int = 64) -> None:
+    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(255, 0, 0, 255))
+    assert image.save(str(path))
+
+
+def test_bitmap_inline_avatar_wipes_across_own_interval(tmp_path):
+    """带 after 图的行内位图头像必须按自身字符区间做走字 wipe。
+
+    头像字符没有文字轮廓，旧实现墨水范围恒为零宽：after 图要么不出现、
+    要么等后继文字扫过时整块弹出（间奏 ``[ts]【朵】`` 应援行两者必占其一）。
+    现在以头像内容矩形为墨水，reveal 随自身区间渐进推进。
+    """
+    before_path = tmp_path / "透明图像.png"
+    after_path = tmp_path / "chieru.png"
+    _transparent_png(before_path)
+    _red_png(after_path)
+    symbol = replace(
+        _bitmap_symbol(tmp_path),
+        bitmap_before_path=str(before_path),
+        bitmap_after_path=str(after_path),
+        prefix_timing="pre_roll",
+    )
+    line = TimingLine(
+        chars=[TimingChar("朵", 1000), TimingChar("朵", 2000)],
+        end_ms=3000,
+        inline_guide_symbols={0: symbol, 1: symbol},
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+    )
+
+    def red_at(t_ms: int) -> int:
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#101010"))
+        paint_frame(image, track, t_ms, style)
+        return _count_red_pixels(image)
+
+    start = red_at(1000)
+    early = red_at(1500)
+    late_first = red_at(1995)
+    mid_second = red_at(2500)
+    done = red_at(2999)
+
+    assert start == 0
+    # 第一个头像在自己的窗口内渐进显现，窗口结束时接近完整（单个头像
+    # 48×48 ≈ 2304 px，第二个尚未开始）。
+    assert 0 < early < late_first <= 2600
+    # 第二个头像同样渐进，最终两个都完整。
+    assert late_first < mid_second < done
+    assert done <= 5000
+
+
+def test_bitmap_inline_avatar_content_size_prefers_after_image(tmp_path):
+    """窄长透明占位 before 图 + 真图 after：格子尺寸按 after 图计算。
+
+    旧实现按 before 图定宽高比，2×400 的透明占位会把头像格子压成
+    像素级细条——after 图被挤进 1px 宽的竖线里，表现为「一条细线」。
+    """
+    narrow = QImage(2, 400, QImage.Format.Format_ARGB32_Premultiplied)
+    narrow.fill(QColor(0, 0, 0, 0))
+    assert narrow.save(str(tmp_path / "spacer.png"))
+    square = QImage(64, 64, QImage.Format.Format_ARGB32_Premultiplied)
+    square.fill(QColor(255, 0, 0, 255))
+    assert square.save(str(tmp_path / "avatar.png"))
+    symbol = GuideSymbol(
+        name="avatar",
+        kind="bitmap",
+        bitmap_before_path=str(tmp_path / "spacer.png"),
+        bitmap_after_path=str(tmp_path / "avatar.png"),
+        bitmap_no_decor=True,
+    )
+    style = Style(font_family="Arial", font_size_px=64)
+
+    assert vector_glyph_width(symbol, style) == 64
+
+    # 无 after 图的符号（分色 1x1 占位）仍按 before 图定尺寸。
+    before_only = replace(symbol, bitmap_after_path=None)
+    spacer_square = QImage(1, 1, QImage.Format.Format_ARGB32_Premultiplied)
+    spacer_square.fill(QColor(0, 0, 0, 0))
+    assert spacer_square.save(str(tmp_path / "sq.png"))
+    before_only = replace(before_only, bitmap_before_path=str(tmp_path / "sq.png"))
+    assert vector_glyph_width(before_only, style) == 64
+
+
+def test_bitmap_inline_avatar_before_image_wipes_to_unsung_side(tmp_path):
+    """不透明 before + after 的头像走严格双侧遮罩。
+
+    未唱侧显示 before 图、已唱侧显示 after 图；全部唱完后 before 图
+    必须消失，不能继续垫在 after 图下面（半透明 after 图时会露底）。
+    """
+    before_path = tmp_path / "before.png"
+    after_path = tmp_path / "after.png"
+    blue = QImage(64, 64, QImage.Format.Format_ARGB32_Premultiplied)
+    blue.fill(QColor(0, 80, 255, 255))
+    assert blue.save(str(before_path))
+    red = QImage(64, 64, QImage.Format.Format_ARGB32_Premultiplied)
+    red.fill(QColor(255, 0, 0, 255))
+    assert red.save(str(after_path))
+    symbol = GuideSymbol(
+        name="avatar",
+        kind="bitmap",
+        bitmap_before_path=str(before_path),
+        bitmap_after_path=str(after_path),
+        bitmap_no_decor=True,
+    )
+    line = TimingLine(
+        chars=[TimingChar("朵", 1000), TimingChar("朵", 2000)],
+        end_ms=3000,
+        inline_guide_symbols={0: symbol, 1: symbol},
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+    )
+
+    def blue_pixels(t_ms: int) -> int:
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#101010"))
+        paint_frame(image, track, t_ms, style)
+        count = 0
+        for y in range(image.height()):
+            for x in range(image.width()):
+                c = image.pixelColor(x, y)
+                if c.blue() > 200 and c.green() < 150 and c.red() < 80:
+                    count += 1
+        return count
+
+    idle = blue_pixels(900)
+    wiping = blue_pixels(1500)
+    done = blue_pixels(2999)
+
+    # 未开唱：两个 before 图完整可见（各 48×48）。
+    assert idle > 2 * 1800
+    # 走字中：第一个头像的 before 只剩未唱侧（严格小于完整）。
+    assert 0 < wiping < idle
+    # 全部唱完：before 图彻底消失。
+    assert done == 0
 
 
 def test_bitmap_prefix_guide_does_not_consume_text_wipe_segment(tmp_path):

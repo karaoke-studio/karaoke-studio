@@ -49,10 +49,17 @@ def bitmap_guide_content_size(
     symbol: GuideSymbol,
     style: Style,
 ) -> tuple[int, int]:
-    """Resolve a guide bitmap's layout content size before outer margins."""
-    image = bitmap_guide_image(symbol.bitmap_before_path)
+    """Resolve a guide bitmap's layout content size before outer margins.
+
+    Sizing prefers the after-state image: the SHINTA ``@Emoji`` avatar pattern
+    pairs a transparent spacer as the before image with the real picture as
+    the after image, and the cell must follow the picture or the avatar
+    collapses into a sliver a few pixels wide.  A before-only symbol (the
+    colour-separation 1x1 placeholder) keeps sizing by its own image.
+    """
+    image = bitmap_guide_image(symbol.bitmap_after_path)
     if image is None:
-        image = bitmap_guide_image(symbol.bitmap_after_path)
+        image = bitmap_guide_image(symbol.bitmap_before_path)
     if image is None or image.isNull():
         return 1, max(int(style.font_size_px), 1)
     if symbol.bitmap_fix_size:

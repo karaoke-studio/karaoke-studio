@@ -2202,6 +2202,45 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             if (opacity <= 0.0f) {
                 return;
             }
+            // Wipe-capable avatars are a strict two-sided mask: the before
+            // image stays only on the unsung side of the wipe edge (it must
+            // not remain composited under a partly transparent after image).
+            // The per-char phase path already clips both sides; this branch
+            // matters for the legacy stack, whose before pass is unclipped.
+            if (!after && !ch.bitmapGuide->afterPath.empty()) {
+                if (mainWipeComplete) {
+                    return;
+                }
+                if (hasAfterWipe) {
+                    const D2D1_RECT_F beforeClip = style.vertical
+                        ? D2D1::RectF(
+                            line->bounds.left - geometryPad, wipeEdge,
+                            line->bounds.right + geometryPad,
+                            line->fillBounds.bottom + geometryPad
+                        )
+                        : (rtl
+                            ? D2D1::RectF(
+                                line->bounds.left - geometryPad, fullWipeClipTop,
+                                wipeEdge, fullWiveClipBottom
+                            )
+                            : D2D1::RectF(
+                                wipeEdge, fullWipeClipTop,
+                                line->bounds.right + geometryPad, fullWiveClipBottom
+                            ));
+                    pushAxisAlignedClip(
+                        beforeClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                    context->DrawBitmap(
+                        bitmap,
+                        ch.bitmapRect,
+                        opacity,
+                        D2D1_INTERPOLATION_MODE_LINEAR,
+                        nullptr
+                    );
+                    context->PopAxisAlignedClip();
+                    return;
+                }
+            }
             context->DrawBitmap(
                 bitmap,
                 ch.bitmapRect,
