@@ -39,7 +39,7 @@ def test_to_payload_roundtrip_and_source_normalization():
     app = AppSettings(updater=value.to_payload())
     loaded = UpdaterSettings.load(app)
     assert loaded.enabled is False
-    assert loaded.source_order == ["gh-proxy", "github", "ghproxy", "ghproxy-net"]
+    assert loaded.source_order == ["gh-proxy", "github"]
     assert loaded.to_payload()["proxy"] == {"mode": "manual", "manual_url": "127.0.0.1:7890"}
 
 

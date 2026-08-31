@@ -32,17 +32,46 @@ def test_workbench_updater_settings_roundtrip_defaults() -> None:
 
     assert updater.enabled is True
     assert updater.check_on_startup is True
-    assert settings.updater["source_order"] == ["github", "ghproxy", "gh-proxy", "ghproxy-net"]
+    assert settings.updater["source_order"] == ["github", "gh-proxy"]
     assert UpdaterSettings.load(settings).min_check_interval_hours == 8
 
 
 def test_workbench_updater_normalizes_source_order() -> None:
-    assert normalize_order(["ghproxy", "bogus", "github", "ghproxy"]) == [
-        "ghproxy",
+    # 旧设置里遗留的 ghfast.top / ghproxy.net 源 id 会被过滤，收敛到现行清单。
+    assert normalize_order(["ghproxy", "bogus", "github", "ghproxy-net"]) == [
         "github",
         "gh-proxy",
-        "ghproxy-net",
     ]
+
+
+def test_workbench_updater_source_urls_expand_gh_proxy_nodes() -> None:
+    """gh-proxy 源展开为每个镜像节点一条候选，调用方按列表接力。"""
+    from krok_helper.updater.sources import (
+        GH_PROXY_PREFIXES,
+        build_api_urls,
+        build_release_urls,
+    )
+
+    release_urls = build_release_urls(["github", "gh-proxy"], "v3.0.2", "app.zip")
+    assert release_urls[0] == (
+        "github",
+        "https://github.com/karaoke-studio/karaoke-studio/releases/download/v3.0.2/app.zip",
+    )
+    mirrors = release_urls[1:]
+    assert [source for source, _ in mirrors] == ["gh-proxy"] * len(GH_PROXY_PREFIXES)
+    assert [url for _, url in mirrors] == [
+        f"{prefix}/https://github.com/karaoke-studio/karaoke-studio/releases/download/v3.0.2/app.zip"
+        for prefix in GH_PROXY_PREFIXES
+    ]
+
+    api_urls = build_api_urls(["github", "gh-proxy"])
+    assert api_urls[0] == (
+        "github",
+        "https://api.github.com/repos/karaoke-studio/karaoke-studio/releases/latest",
+    )
+    assert api_urls[1][1].endswith(
+        "/https://api.github.com/repos/karaoke-studio/karaoke-studio/releases/latest"
+    )
 
 
 def test_workbench_updater_version_and_asset_selection(monkeypatch) -> None:

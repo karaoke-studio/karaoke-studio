@@ -274,10 +274,13 @@ def test_do_check_carries_primary_sha256_for_updater(monkeypatch) -> None:
 
 
 def test_build_api_list_urls_covers_all_sources() -> None:
+    from krok_helper.updater.sources import GH_PROXY_PREFIXES
+
     urls = build_api_list_urls(["github", "ghproxy"])
     assert urls[0][1] == "https://api.github.com/repos/karaoke-studio/karaoke-studio/releases?per_page=100"
     assert all("releases?per_page=100" in u for _s, u in urls)
-    assert len(urls) == 4  # normalize_order 兜底补齐
+    # 失效源 id 被过滤兜底；gh-proxy 按镜像节点逐个展开
+    assert len(urls) == 1 + len(GH_PROXY_PREFIXES)
 
 
 # ── SourceTrialRunner ────────────────────────────────────────────────

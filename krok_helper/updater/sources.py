@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import Literal
 
+from krok_helper.network import GH_PROXY_PREFIXES
+
 REPO_OWNER = "karaoke-studio"
 REPO_NAME = "karaoke-studio"
 
-SourceId = Literal["github", "ghproxy", "gh-proxy", "ghproxy-net"]
-SOURCE_IDS: tuple[SourceId, ...] = ("github", "ghproxy", "gh-proxy", "ghproxy-net")
+SourceId = Literal["github", "gh-proxy"]
+SOURCE_IDS: tuple[SourceId, ...] = ("github", "gh-proxy")
 SOURCE_LABELS: dict[SourceId, str] = {
     "github": "GitHub Release（官方）",
-    "ghproxy": "GitHub Proxy（ghfast.top）",
-    "gh-proxy": "GitHub Proxy（gh-proxy.com）",
-    "ghproxy-net": "GitHub Proxy（ghproxy.net）",
+    "gh-proxy": "GitHub Proxy（gh-proxy 多节点）",
 }
 DEFAULT_ORDER: list[SourceId] = list(SOURCE_IDS)
 
@@ -31,17 +31,28 @@ def build_download_url(source: SourceId, tag: str, asset_name: str) -> str:
     path = f"{REPO_OWNER}/{REPO_NAME}/releases/download/{tag}/{asset_name}"
     if source == "github":
         return f"https://github.com/{path}"
-    if source == "ghproxy":
-        return f"https://ghfast.top/https://github.com/{path}"
     if source == "gh-proxy":
-        return f"https://gh-proxy.com/https://github.com/{path}"
-    if source == "ghproxy-net":
-        return f"https://ghproxy.net/https://github.com/{path}"
+        return f"{GH_PROXY_PREFIXES[0]}/https://github.com/{path}"
     raise ValueError(f"未知的更新源 id: {source!r}")
 
 
 def build_release_urls(order: list[str] | tuple[str, ...], tag: str, asset_name: str) -> list[tuple[SourceId, str]]:
-    return [(source, build_download_url(source, tag, asset_name)) for source in normalize_order(order)]
+    """按用户排序构造下载 URL 列表，元素为 ``(source_id, url)``。
+
+    ``gh-proxy`` 展开为每个节点一条候选（保持节点顺序），同一源 id 出现
+    多次；调用方按列表顺序接力即可。旧设置里遗留的 ``ghproxy`` /
+    ``ghproxy-net`` 源 id 会被 :func:`normalize_order` 过滤掉，自然收敛
+    到现行清单。
+    """
+    path = f"{REPO_OWNER}/{REPO_NAME}/releases/download/{tag}/{asset_name}"
+    out: list[tuple[SourceId, str]] = []
+    for source in normalize_order(order):
+        if source == "github":
+            out.append((source, f"https://github.com/{path}"))
+        elif source == "gh-proxy":
+            for prefix in GH_PROXY_PREFIXES:
+                out.append((source, f"{prefix}/https://github.com/{path}"))
+    return out
 
 
 def _build_api_urls_for_path(order: list[str] | tuple[str, ...], api_path: str) -> list[tuple[SourceId, str]]:
@@ -49,12 +60,9 @@ def _build_api_urls_for_path(order: list[str] | tuple[str, ...], api_path: str) 
     for source in normalize_order(order):
         if source == "github":
             urls.append((source, f"https://api.github.com/{api_path}"))
-        elif source == "ghproxy":
-            urls.append((source, f"https://ghfast.top/https://api.github.com/{api_path}"))
         elif source == "gh-proxy":
-            urls.append((source, f"https://gh-proxy.com/https://api.github.com/{api_path}"))
-        elif source == "ghproxy-net":
-            urls.append((source, f"https://ghproxy.net/https://api.github.com/{api_path}"))
+            for prefix in GH_PROXY_PREFIXES:
+                urls.append((source, f"{prefix}/https://api.github.com/{api_path}"))
     return urls
 
 

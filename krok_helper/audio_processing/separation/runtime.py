@@ -20,6 +20,7 @@ from typing import Callable
 
 import requests
 
+from krok_helper.network import github_url_attempts
 from krok_helper.windows import hidden_subprocess_kwargs
 
 from .integration import (
@@ -315,8 +316,22 @@ def fetch_runtime_package(
     timeout: tuple[float, float] = (10.0, 30.0),
 ) -> RuntimePackage:
     client = session or _default_download_session()
-    response = client.get(manifest_url, timeout=timeout)
-    response.raise_for_status()
+    response = None
+    last_error: Exception | None = None
+    # GitHub 直链按「官方 → gh-proxy 各节点」接力；单节点失败换下一个，
+    # 全部失败才抛最后一个异常（与 SUG updater 的下载链同语义）。
+    for candidate in github_url_attempts(manifest_url):
+        try:
+            response = client.get(candidate, timeout=timeout)
+            response.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            last_error = exc
+            response = None
+    if response is None:
+        raise last_error if last_error is not None else RuntimeError(
+            "Runtime 清单拉取失败。"
+        )
     package = RuntimePackage.from_payload(response.json())
     if package.pymss_version != PYMSS_VERSION:
         raise ValueError(
@@ -712,17 +727,34 @@ class ManagedRuntimeInstaller:
         不做字节级续传；torch wheel（数 GB）在 _download_wheel 里走
         Range 断点续传。大小不符视为连接中断的截断，同样重试；SHA
         不匹配是内容问题，不重试直接失败。
+
+        分卷 URL 为 GitHub 直链时，重试轮次按「官方 → gh-proxy 各节点」
+        尝试链轮换（与 SUG updater 的下载链同语义）：第 N 轮重试用链中
+        第 N 个候选，链耗尽后停留末尾节点；非 GitHub URL（测试镜像）链
+        长为 1，行为与原版一致。
         """
         import requests as _requests
 
-        attempts = len(_DOWNLOAD_RETRY_DELAYS) + 1
+        chains = {
+            part.url: github_url_attempts(part.url)
+            for part in package.archive_parts
+        }
+        chain_length = max((len(chain) for chain in chains.values()), default=1)
+        # 链内每个候选立即轮换一轮；链耗尽后再按退避表整体重试（clamp 到
+        # 末候选），保留原版对网络抖动的恢复能力。
+        attempts = chain_length + len(_DOWNLOAD_RETRY_DELAYS)
         last_error: Exception | None = None
         for attempt in range(attempts):
             if cancelled is not None and cancelled.is_set():
                 raise InterruptedError("下载已取消。")
             try:
                 self._download_once(
-                    package, destination, progress=progress, cancelled=cancelled
+                    package,
+                    destination,
+                    progress=progress,
+                    cancelled=cancelled,
+                    url_chain=chains,
+                    chain_index=attempt,
                 )
                 return
             except InterruptedError:
@@ -738,22 +770,45 @@ class ManagedRuntimeInstaller:
                         raise
                 last_error = exc
             if attempt < attempts - 1:
-                if _sleep_cancelable(
-                    _DOWNLOAD_RETRY_DELAYS[attempt], cancelled
-                ):
+                # 链内换源（GitHub → 各镜像节点）不退避、立即尝试下一候选；
+                # 链耗尽后的整体重试才按退避表等待（网络抖动恢复）。
+                if attempt < chain_length - 1:
+                    delay = 0.0
+                elif attempt - (chain_length - 1) < len(_DOWNLOAD_RETRY_DELAYS):
+                    delay = _DOWNLOAD_RETRY_DELAYS[
+                        attempt - (chain_length - 1)
+                    ]
+                else:
+                    delay = _DOWNLOAD_RETRY_DELAYS[-1]
+                if delay <= 0:
+                    if cancelled is not None and cancelled.is_set():
+                        raise InterruptedError("下载已取消。")
+                    continue
+                if _sleep_cancelable(delay, cancelled):
                     raise InterruptedError("下载已取消。")
         raise ValueError(
             f"PyMSS Runtime 下载失败（已重试 {attempts - 1} 次）：{last_error}"
         )
 
-    def _download_once(self, package, destination, *, progress=None, cancelled=None) -> None:
+    def _download_once(
+        self,
+        package,
+        destination,
+        *,
+        progress=None,
+        cancelled=None,
+        url_chain: dict[str, tuple[str, ...]] | None = None,
+        chain_index: int = 0,
+    ) -> None:
         done = 0
         archive_digest = hashlib.sha256()
         with destination.open("wb") as stream:
             for index, part in enumerate(package.archive_parts, start=1):
+                chain = (url_chain or {}).get(part.url) or (part.url,)
+                url = chain[min(chain_index, len(chain) - 1)]
                 part_done = 0
                 part_digest = hashlib.sha256()
-                with self._session.get(part.url, stream=True, timeout=(10.0, 60.0)) as response:
+                with self._session.get(url, stream=True, timeout=(10.0, 60.0)) as response:
                     response.raise_for_status()
                     for chunk in response.iter_content(_CHUNK_SIZE):
                         if cancelled is not None and cancelled.is_set():

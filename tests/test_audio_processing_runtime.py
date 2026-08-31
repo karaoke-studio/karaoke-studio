@@ -703,6 +703,98 @@ def test_download_retries_on_connection_error(tmp_path, monkeypatch) -> None:
     assert flaky.calls == 3  # 失败 2 次 + 成功 1 次
 
 
+def _github_package(archive: bytes, files: dict[str, bytes]) -> RuntimePackage:
+    """与 :func:`_package` 相同，但分卷 URL 是 GitHub Release 直链。"""
+    return RuntimePackage.from_payload(
+        {
+            "schema": 1,
+            "runtime_version": PYMSS_RUNTIME_VERSION,
+            "pymss_version": PYMSS_VERSION,
+            "python_version": PYMSS_PYTHON_VERSION,
+            "variant": "windows-cpu",
+            "archive": {
+                "url": (
+                    "https://github.com/karaoke-studio/karaoke-studio-runtime/"
+                    "releases/download/pymss-runtime-v0/runtime.zip"
+                ),
+                "size": len(archive),
+                "sha256": _sha(archive),
+            },
+            "files": [
+                {"path": name, "size": len(data), "sha256": _sha(data)}
+                for name, data in files.items()
+            ],
+        }
+    )
+
+
+def test_download_rotates_gh_proxy_mirrors_for_github_urls(
+    tmp_path, monkeypatch
+) -> None:
+    """GitHub 直链失败立即换 gh-proxy 镜像节点，成功后完成安装。"""
+    import requests
+
+    from krok_helper.network import github_url_attempts
+
+    monkeypatch.setattr(runtime_module, "_DOWNLOAD_RETRY_DELAYS", (0.0,) * 4)
+    files = {"runtime/python.exe": b"python-runtime"}
+    archive = _archive(files)
+    package = _github_package(archive, files)
+    part_url = package.archive_parts[0].url
+    candidates = github_url_attempts(part_url)
+    assert candidates[0] == part_url
+    assert len(candidates) > 1
+
+    class MirrorSession:
+        def __init__(self) -> None:
+            self.requested: list[str] = []
+
+        def get(self, url, **_kwargs):
+            self.requested.append(url)
+            if url == part_url:
+                raise requests.exceptions.ConnectionError("github direct down")
+            return _Response(archive)
+
+    session = MirrorSession()
+    ManagedRuntimeInstaller(session).install(package, tmp_path / "rt")
+    assert validate_runtime(tmp_path / "rt").status is RuntimeStatus.READY
+    # 直连失败后立即换首个镜像节点，不重试直连
+    assert session.requested == [part_url, candidates[1]]
+
+
+def test_fetch_runtime_package_rotates_mirrors_on_github_failure(
+    monkeypatch,
+) -> None:
+    """清单拉取同样按「官方 → gh-proxy 各节点」接力。"""
+    import requests
+
+    class ManifestResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return _production_manifest()
+
+    class FailingFirstSession:
+        def __init__(self) -> None:
+            self.requested: list[str] = []
+
+        def get(self, url, **_kwargs):
+            self.requested.append(url)
+            if url.startswith("https://github.com/"):
+                raise requests.exceptions.ConnectionError("github direct down")
+            return ManifestResponse()
+
+    session = FailingFirstSession()
+    package = fetch_runtime_package(
+        "https://github.com/karaoke-studio/karaoke-studio-runtime/manifest.json",
+        session=session,
+    )
+    assert package is not None
+    assert session.requested[0].startswith("https://github.com/")
+    assert session.requested[1].startswith("https://gh-proxy.com/")
+
+
 def test_download_retry_exhaustion_raises_value_error(
     tmp_path, monkeypatch
 ) -> None:

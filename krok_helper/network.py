@@ -40,6 +40,35 @@ PROXY_ENV_KEYS: tuple[str, ...] = (
     "all_proxy",
 )
 
+GH_PROXY_PREFIXES: tuple[str, ...] = (
+    "https://gh-proxy.com",
+    "https://gh-proxy.org",
+    "https://cdn.gh-proxy.org",
+    "https://v4.gh-proxy.org",
+    "https://v6.gh-proxy.org",
+    "https://axisnow.gh-proxy.org",
+)
+"""gh-proxy 反代族节点前缀（按尝试顺序），与 SUG updater 的清单保持同步。
+
+gh-proxy 是同一服务的多个 CDN 入口（官网 https://gh-proxy.com 首页 REGIONS
+节点表）。2026-08 实测：ghfast.top 已禁止包装 ``api.github.com``（403）、
+ghproxy.net 证书过期，均已移除；以上节点全部实测支持 API 包装与下载直链。
+"""
+
+
+def github_url_attempts(url: str) -> tuple[str, ...]:
+    """GitHub 直链的下载尝试链：原 URL 在前，gh-proxy 各节点随后。
+
+    非 GitHub URL（如 PyTorch 官方 wheel、测试镜像）原样返回单候选；
+    已经是 gh-proxy 节点包装的 URL 不再二次包装。调用方按顺序逐个尝试，
+    单源失败自动换下一个。
+    """
+
+    text = str(url or "").strip()
+    if not text.startswith("https://github.com/"):
+        return (text,)
+    return (text, *(f"{prefix}/{text}" for prefix in GH_PROXY_PREFIXES))
+
 
 @dataclass(frozen=True)
 class ProxyInfo:
