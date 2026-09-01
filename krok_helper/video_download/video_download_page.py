@@ -3372,13 +3372,19 @@ class VideoDownloadPage(QWidget):
         return self._task_index.get(self._current_task_id)
 
     def is_busy(self) -> bool:
-        """Return whether any download-page worker is still active."""
+        """Return whether user-started work must finish before an app update.
+
+        The Bilibili QR worker is deliberately excluded.  It starts automatically
+        when the page is constructed and may poll until the QR code expires, even
+        when the user has not started any video-download operation.  Treating it
+        as busy therefore blocks a startup update for a long time for logged-out
+        users, although exiting the app can safely end that login-only polling.
+        """
 
         workers = [
             self._parse_worker,
             self._cookie_import_worker,
             self._ytdlp_update_worker,
-            self._qr_login_worker,
             *self._running_workers.values(),
         ]
         for worker in workers:
@@ -3388,3 +3394,25 @@ class VideoDownloadPage(QWidget):
             except RuntimeError:
                 continue
         return False
+
+    def update_blocking_labels(self) -> list[str]:
+        """Describe user-started work that blocks handing off to Updater."""
+
+        candidates = (
+            (self._parse_worker, "视频下载－视频解析中"),
+            (self._cookie_import_worker, "视频下载－Cookie 导入中"),
+            (self._ytdlp_update_worker, "视频下载－yt-dlp 更新中"),
+        )
+        labels: list[str] = []
+        for worker, label in candidates:
+            try:
+                if worker is not None and worker.isRunning():
+                    labels.append(label)
+            except RuntimeError:
+                continue
+        try:
+            if any(worker.isRunning() for worker in self._running_workers.values()):
+                labels.append("视频下载－文件下载中")
+        except RuntimeError:
+            pass
+        return labels

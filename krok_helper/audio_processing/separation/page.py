@@ -54,6 +54,7 @@ from krok_helper.audio_processing.separation.states import (
     ACTION_STOP_TASK,
     ACTION_UPDATE_RUNTIME,
     BUSY_STATES,
+    STATE_META,
     TASK_CAPABLE_STATES,
     TASK_SPECS,
     TASK_STAGES,
@@ -634,6 +635,12 @@ class AudioSeparationPage(QWidget):
     def is_busy(self) -> bool:
         """Return whether closing now would interrupt installation or a task."""
         return self._backend.snapshot().state in BUSY_STATES
+
+    def update_blocking_labels(self) -> list[str]:
+        snapshot = self._backend.snapshot()
+        if snapshot.state not in BUSY_STATES:
+            return []
+        return [f"音频分离－{STATE_META[snapshot.state].label}"]
 
     def shutdown(self, timeout_ms: int = 5000) -> bool:
         """Stop the managed backend before the host exits or updates."""

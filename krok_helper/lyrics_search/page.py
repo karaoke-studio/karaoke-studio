@@ -325,6 +325,13 @@ class LyricsSearchPage(QWidget):
     def running_tasks(self) -> list[BackgroundTask]:
         return [t for t in (self._search_task, self._fetch_task) if t is not None and t.isRunning()]
 
+    def update_blocking_labels(self) -> list[str]:
+        candidates = (
+            (self._search_task, "歌词检索－搜索中"),
+            (self._fetch_task, "歌词检索－歌词获取中"),
+        )
+        return [label for task, label in candidates if task is not None and task.isRunning()]
+
     def _register_task(self, slot: str, task: BackgroundTask) -> BackgroundTask:
         setattr(self, slot, task)
         task.finished.connect(lambda slot=slot: setattr(self, slot, None))

@@ -561,23 +561,32 @@ class KrokHelperQtApp(QMainWindow):
         """Describe work that must finish before handing files to Updater."""
 
         labels: list[str] = []
-        if self._running_background_tasks():
-            labels.append("工作流后台任务")
-
-        for label, attr_name in (
+        for fallback_label, attr_name in (
+            ("波形对齐－后台任务运行中", "align_page"),
+            ("歌词检索－后台任务运行中", "lyrics_page"),
+            ("Hi-Res 混流－后台任务运行中", "hires_page"),
             ("视频下载", "video_download_page"),
             ("音频分离", "audio_separation_page"),
             ("字幕视频生成", "subtitle_render_page"),
         ):
             page = getattr(self, attr_name, None)
+            blocking_labels = getattr(page, "update_blocking_labels", None) if page is not None else None
+            if callable(blocking_labels):
+                try:
+                    labels.extend(blocking_labels())
+                    continue
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "读取%s具体任务状态失败", fallback_label, exc_info=True
+                    )
             is_busy = getattr(page, "is_busy", None) if page is not None else None
             if callable(is_busy):
                 try:
                     if is_busy():
-                        labels.append(label)
+                        labels.append(fallback_label)
                 except Exception:
                     logging.getLogger(__name__).warning(
-                        "检查%s任务状态失败", label, exc_info=True
+                        "检查%s任务状态失败", fallback_label, exc_info=True
                     )
 
         timing_page = getattr(self, "lyrics_timing_page", None)
@@ -589,7 +598,7 @@ class KrokHelperQtApp(QMainWindow):
                 bool(getattr(ai_dialog, "_busy", False))
                 or (ai_thread is not None and ai_thread.isRunning())
             ):
-                labels.append("AI 打轴")
+                labels.append("歌词打轴－AI 打轴中")
         except (AttributeError, RuntimeError):
             pass
 
@@ -598,7 +607,7 @@ class KrokHelperQtApp(QMainWindow):
             thread = getattr(store, thread_name, None)
             try:
                 if thread is not None and thread.isRunning():
-                    labels.append("歌词项目保存")
+                    labels.append("歌词打轴－项目保存中")
                     break
             except RuntimeError:
                 pass

@@ -718,6 +718,9 @@ class HiResPage(QWidget):
     def running_tasks(self) -> list[BackgroundTask]:
         return [self._task] if self._task is not None and self._task.isRunning() else []
 
+    def update_blocking_labels(self) -> list[str]:
+        return ["Hi-Res 混流－混流处理中"] if self.is_busy() else []
+
     def accept_separated_accompaniment(self, paths: Sequence[Path]) -> list[Path]:
         """第 2 步分离出的伴奏放进第 6 步的伴奏卡（追加，不顶掉已有的）。
 

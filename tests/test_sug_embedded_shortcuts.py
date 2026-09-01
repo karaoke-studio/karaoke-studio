@@ -13,6 +13,7 @@ from krok_helper.gui_qt import (
     WORKFLOW_LYRICS_TIMING,
     WORKFLOW_WAVEFORM_ALIGN,
 )
+from krok_helper.video_download.video_download_page import VideoDownloadPage
 
 
 class _FakeShortcut:
@@ -335,8 +336,43 @@ def test_update_task_labels_cover_video_ai_and_project_save() -> None:
 
     assert KrokHelperQtApp._active_update_task_labels(app) == [
         "视频下载",
-        "AI 打轴",
-        "歌词项目保存",
+        "歌词打轴－AI 打轴中",
+        "歌词打轴－项目保存中",
+    ]
+
+
+def test_startup_qr_login_polling_does_not_block_update_handoff() -> None:
+    running = SimpleNamespace(isRunning=lambda: True)
+    page = SimpleNamespace(
+        _parse_worker=None,
+        _cookie_import_worker=None,
+        _ytdlp_update_worker=None,
+        _qr_login_worker=running,
+        _running_workers={},
+    )
+
+    assert not VideoDownloadPage.is_busy(page)
+    assert VideoDownloadPage.update_blocking_labels(page) == []
+
+    page._running_workers = {"download": running}
+    assert VideoDownloadPage.is_busy(page)
+    assert VideoDownloadPage.update_blocking_labels(page) == ["视频下载－文件下载中"]
+
+
+def test_video_download_update_labels_identify_each_operation() -> None:
+    running = SimpleNamespace(isRunning=lambda: True)
+    page = SimpleNamespace(
+        _parse_worker=running,
+        _cookie_import_worker=running,
+        _ytdlp_update_worker=running,
+        _qr_login_worker=running,
+        _running_workers={},
+    )
+
+    assert VideoDownloadPage.update_blocking_labels(page) == [
+        "视频下载－视频解析中",
+        "视频下载－Cookie 导入中",
+        "视频下载－yt-dlp 更新中",
     ]
 
 

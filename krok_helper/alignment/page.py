@@ -180,6 +180,14 @@ class AlignmentPage(QWidget):
     def is_busy(self) -> bool:
         return bool(self.running_tasks())
 
+    def update_blocking_labels(self) -> list[str]:
+        candidates = (
+            (self.align_analysis_task, "波形对齐－音频分析中"),
+            (self.align_auto_task, "波形对齐－自动对齐中"),
+            (self.align_export_task, "波形对齐－导出处理中"),
+        )
+        return [label for task, label in candidates if task is not None and task.isRunning()]
+
     def _register_task(self, slot: str, task: BackgroundTask) -> BackgroundTask:
         """把任务放进本页的槽位，并登记到外壳去统一收尾。
 

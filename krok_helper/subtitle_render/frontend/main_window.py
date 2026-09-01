@@ -1359,6 +1359,9 @@ class SubtitleRenderWindow(QWidget):
         """Return whether a render export is still running."""
         return self._render_thread is not None
 
+    def update_blocking_labels(self) -> list[str]:
+        return ["字幕视频生成－视频导出中"] if self.is_busy() else []
+
     def _set_project_dirty(self, dirty: bool) -> None:
         self._project_session.set_dirty(dirty)
         if dirty:
