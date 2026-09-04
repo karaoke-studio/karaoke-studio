@@ -1866,6 +1866,55 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
     win.close()
 
 
+def test_timeline_line_selection_switches_source_and_selects_row(
+    qapp, monkeypatch, tmp_path
+):
+    """点击底部字幕轨道的句子块 → 歌词列表切到对应源并选中该行。"""
+    win = _make_window(qapp, monkeypatch)
+    win._apply_timing_track(
+        TimingTrack(
+            lines=[
+                TimingLine(chars=[TimingChar(text="あ", start_ms=1_000)], end_ms=2_000),
+                TimingLine(is_blank=True),
+                TimingLine(chars=[TimingChar(text="け", start_ms=3_500)], end_ms=4_500),
+            ]
+        ),
+        None,
+    )
+    extra_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar(text="こ", start_ms=1_200)], end_ms=2_000),
+            TimingLine(chars=[TimingChar(text="そ", start_ms=3_000)], end_ms=4_000),
+        ]
+    )
+    win._extra_sources = [
+        mw.ExtraSubtitleSource(
+            name="コーラス", path=tmp_path / "extra.lrc", track=extra_track
+        )
+    ]
+    win._refresh_source_ui()
+    win._sync_tracks_view()
+
+    # 同源（主字幕）选中：不切源，直接选中并滚动到该行（中间隔空行 → 行 2）
+    win._tracks_view.lineSelected.emit(0, 2)
+    assert win._lyrics_panel.current_source_index() == 0
+    assert win._lyrics_panel.table_widget.currentRow() == (
+        win._lyrics_panel._display_row_for_track_line(2)
+    )
+
+    # 副字幕源（轨道 1）：切源后选中该轨的行
+    win._tracks_view.lineSelected.emit(1, 1)
+    assert win._lyrics_panel.current_source_index() == 1
+    extra_row = win._lyrics_panel._display_row_for_track_line(1)
+    assert extra_row is not None
+    assert win._lyrics_panel.table_widget.currentRow() == extra_row
+
+    # 越界行号静默忽略，不抛异常也不改选区
+    win._tracks_view.lineSelected.emit(0, 99)
+    assert win._lyrics_panel.current_source_index() == 1
+    win.close()
+
+
 def test_playback_shortcut_is_disabled_outside_preview_tab(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     toggles: list[bool] = []

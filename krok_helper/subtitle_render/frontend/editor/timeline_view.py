@@ -220,6 +220,12 @@ class TrackTimelineView(QWidget):
     seekRequested = Signal(int)
     """用户点击 / 拖动轨道请求跳转（毫秒）。"""
 
+    lineSelected = Signal(int, int)
+    """用户点击选中某句：``(轨道序号, ``track.lines`` 行索引)``。
+
+    轨道序号即字幕源序号（0 = 主字幕）；宿主收到后联动歌词列表切源、
+    选中并滚动到对应行。"""
+
     displayWindowEdited = Signal(int, int, object, object)
     """用户拖动把手完成了一次显示/隐藏时间编辑：
     ``(轨道序号, 行索引, 旧 (上屏覆盖, 消失覆盖), 新 (上屏覆盖, 消失覆盖))``。
@@ -1049,6 +1055,7 @@ class TrackTimelineView(QWidget):
         if block is not None:
             # 单击句子 → 选中（出现显示/隐藏余量把手）并跳到点击的字符
             self._selected = (lane_index, block.line_index)
+            self.lineSelected.emit(lane_index, block.line_index)
             self.seekRequested.emit(
                 cell.start_ms if cell is not None else block.start_ms
             )

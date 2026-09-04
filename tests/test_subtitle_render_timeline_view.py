@@ -199,6 +199,26 @@ def test_click_block_snaps_to_char_start(qapp) -> None:
     assert received == [1500]
 
 
+def test_click_block_emits_line_selected(qapp) -> None:
+    widget = TrackTimelineView()
+    widget.resize(800, 160)
+    widget.set_tracks([("主字幕", _make_track()), ("コーラス", _make_track())])
+    widget.set_duration(10_000)
+
+    received: list[tuple[int, int]] = []
+    widget.lineSelected.connect(lambda lane, line: received.append((lane, line)))
+
+    # 第二轨的第二句：track line 2（中间隔一个空行）
+    _lane, rect = widget._lane_geometry()[1]
+    _click(widget, widget._x_for_ms(4400), rect.center().y())
+    assert received == [(1, 2)]
+
+    # 空白处点击只 seek，不产生行选中
+    _lane0, rect0 = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(8000), rect0.center().y())
+    assert received == [(1, 2)]
+
+
 def test_click_empty_area_seeks_to_time(qapp) -> None:
     widget = TrackTimelineView()
     widget.resize(800, 160)

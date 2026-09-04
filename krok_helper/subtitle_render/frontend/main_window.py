@@ -2476,6 +2476,7 @@ class SubtitleRenderWindow(QWidget):
             self._on_preview_splitter_moved
         )
         self._tracks_view.seekRequested.connect(self._transport_bar.set_time)
+        self._tracks_view.lineSelected.connect(self._on_timeline_line_selected)
         self._tracks_view.displayWindowEdited.connect(
             self._on_display_window_edited
         )
@@ -6610,6 +6611,24 @@ class SubtitleRenderWindow(QWidget):
             return
         start_ms = timing_line_start_ms(line)
         self._transport_bar.set_time(start_ms)
+
+    def _on_timeline_line_selected(self, track_index: int, line_index: int) -> None:
+        """点击底部字幕轨道的句子块 → 歌词列表切到对应源并选中、滚动到该行。
+
+        预览跳转由轨道自己的 ``seekRequested`` 负责（定位到点击的字符起始），
+        这里只联动歌词列表；源未变化时不重建面板，连点同轨句子保持轻量。
+        """
+        track = self._track_by_index(track_index)
+        if track is None or not 0 <= line_index < len(track.lines):
+            return
+        if self._title_source_active or self._active_source_index != track_index:
+            self._title_source_active = False
+            self._active_source_index = max(
+                0, min(int(track_index), len(self._extra_sources))
+            )
+            self._refresh_source_ui()
+            self._refresh_lyrics_panel_source()
+        self._lyrics_panel.select_row(line_index)
 
     @staticmethod
     def _layout_name_for_index(style: Style, index: object) -> Optional[str]:
