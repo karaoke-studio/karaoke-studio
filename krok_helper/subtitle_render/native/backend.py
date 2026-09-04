@@ -816,6 +816,17 @@ class NativeRendererProcess:
                 if thread is not threading.current_thread():
                     thread.join(timeout=self.close_timeout_s)
             self._pipe_threads.clear()
+            # 显式关闭三根管道并吞掉句柄失效错误：进程已死，若留给 GC 的
+            # TextIOWrapper finalizer 去对死管道 flush，Windows 上会以
+            # 「Exception ignored in: <_io.TextIOWrapper ...>」+ OSError 22
+            # （Invalid argument）在关闭 / 回退路径上刷未捕获栈。
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
     def _await_exit(self, process: subprocess.Popen[str]) -> None:
         """先给 sidecar 自己退干净的时间，逼不得已才 terminate / kill。
