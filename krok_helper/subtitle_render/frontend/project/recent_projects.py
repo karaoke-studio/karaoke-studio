@@ -72,6 +72,16 @@ class RecentProjectsController:
         for action in old_actions:
             action.deleteLater()
 
+        # RoundMenu.clear() 不移除 addSeparator() 留在视图里的分隔条条目，
+        # 需手动清空，否则每次刷新都残留一条空白分隔条并越堆越多。
+        view = menu.view
+        while view.count():
+            item = view.item(0)
+            widget = view.itemWidget(item)
+            view.takeItem(0)
+            if widget:
+                widget.deleteLater()
+
         if not self._paths:
             empty_action = Action("暂无最近打开的项目", menu)
             empty_action.setEnabled(False)

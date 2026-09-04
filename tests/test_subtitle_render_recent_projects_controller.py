@@ -7,6 +7,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 import pytest  # noqa: E402
 from qfluentwidgets import RoundMenu  # noqa: E402
@@ -95,6 +96,32 @@ def test_recent_projects_controller_builds_existing_menu_contract(
     assert action.toolTip() == str(project)
     action.trigger()
     assert opened == [str(project)]
+
+
+def test_recent_projects_controller_rebuild_does_not_accumulate_separator_rows(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "song.yurika"
+    project.write_text("{}", encoding="utf-8")
+    controller = _controller(_MemoryStore({}))
+    controller.paths = [str(project), str(project.with_name("other.yurika"))]
+    menu = RoundMenu()
+
+    for _ in range(3):
+        controller.rebuild_menu(
+            menu,
+            open_recent=lambda _path: None,
+            clear_recent=lambda: None,
+        )
+
+    separator_rows = sum(
+        1
+        for row in range(menu.view.count())
+        if menu.view.item(row).data(Qt.ItemDataRole.DecorationRole) == "seperator"
+    )
+    assert separator_rows == 1
+    assert menu.view.count() == len(controller.paths) + 2
 
 
 def test_recent_projects_controller_warns_and_prunes_a_missing_selection(
