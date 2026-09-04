@@ -51,7 +51,11 @@ from krok_helper.subtitle_render.engine.timing.show_time import (
     compression_floor_ms,
     protect_time_ms,
 )
-from krok_helper.subtitle_render.engine.render_progress import report_render_progress
+from krok_helper.subtitle_render.engine.render_progress import (
+    clear_display_phase_head,
+    report_render_progress,
+    set_display_phase_head,
+)
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
@@ -900,68 +904,79 @@ def resolve_display_lines(
     policy no longer depends on the Painter implementation.
 
     每个多趟步骤完成后按 ``display`` 阶段上报进度（步骤即真实工作量：
-    逐趟碰撞测量占整轨重排的大头），供预览 worker 合成百分比。
+    逐趟碰撞测量占整轨重排的大头）。步骤开始前还会登记当前槽位，供
+    ``measure_collision_bands`` 的逐行回调把进度折算进槽位内连续推进。
     """
 
-    ideal = ports.compute(
-        adjust_same_position=False,
-        dynamic_single_page_reflow=not avoid_collisions,
-        independent_line_entry=True,
-    )
-    report_render_progress("display", 1, _DISPLAY_RESOLUTION_PHASES)
-    resolved = ideal
-    timing_resolved = False
-    if avoid_collisions:
-        # ForceBottom inspects the schedule only after automatic timing has
-        # separated pages; measuring the raw lead/tail windows latches stale
-        # spatial reflow decisions.
-        resolved = ports.resolve_timing(resolved, True)
-        timing_resolved = True
-        report_render_progress("display", 2, _DISPLAY_RESOLUTION_PHASES)
-        force_bottom_pairs = ports.collision_pairs(resolved)
-        if force_bottom_pairs:
-            resolved = ports.compute(
-                adjust_same_position=False,
-                force_bottom_pairs=force_bottom_pairs,
-                dynamic_single_page_reflow=True,
-                independent_line_entry=True,
-            )
+    try:
+        set_display_phase_head(0, _DISPLAY_RESOLUTION_PHASES)
+        ideal = ports.compute(
+            adjust_same_position=False,
+            dynamic_single_page_reflow=not avoid_collisions,
+            independent_line_entry=True,
+        )
+        report_render_progress("display", 1, _DISPLAY_RESOLUTION_PHASES)
+        resolved = ideal
+        timing_resolved = False
+        if avoid_collisions:
+            # ForceBottom inspects the schedule only after automatic timing has
+            # separated pages; measuring the raw lead/tail windows latches stale
+            # spatial reflow decisions.
+            set_display_phase_head(1, _DISPLAY_RESOLUTION_PHASES)
             resolved = ports.resolve_timing(resolved, True)
-        report_render_progress("display", 3, _DISPLAY_RESOLUTION_PHASES)
-        squeeze_pairs = ports.collision_pairs(resolved)
-        if squeeze_pairs:
-            resolved = ports.compute(
-                adjust_same_position=False,
-                squeeze_pairs=squeeze_pairs,
-                force_bottom_pairs=force_bottom_pairs,
-                dynamic_single_page_reflow=True,
-                independent_line_entry=True,
-            )
-            resolved = ports.resolve_timing(resolved, True)
-        report_render_progress("display", 4, _DISPLAY_RESOLUTION_PHASES)
-        secondary_pairs = ports.secondary_collision_pairs(resolved)
-        if secondary_pairs:
-            combined_pairs = tuple(dict.fromkeys((*squeeze_pairs, *secondary_pairs)))
-            resolved = ports.compute(
-                adjust_same_position=False,
-                squeeze_pairs=combined_pairs,
-                force_bottom_pairs=force_bottom_pairs,
-                dynamic_single_page_reflow=True,
-                independent_line_entry=True,
-            )
-            timing_resolved = False
-        report_render_progress("display", 5, _DISPLAY_RESOLUTION_PHASES)
-    if not timing_resolved:
-        resolved = ports.resolve_timing(resolved, avoid_collisions)
-    report_render_progress("display", 6, _DISPLAY_RESOLUTION_PHASES)
-    # Geometry-dependent section filling is the final layout pass.  It may
-    # extend windows, so restore the animation guard without changing geometry.
-    if auto_fill_section_time:
-        filled = ports.fill_section_time(resolved)
-        if filled != resolved:
-            resolved = ports.apply_animation_guard(filled, avoid_collisions)
-    report_render_progress("display", 7, _DISPLAY_RESOLUTION_PHASES)
-    return resolved
+            timing_resolved = True
+            report_render_progress("display", 2, _DISPLAY_RESOLUTION_PHASES)
+            set_display_phase_head(2, _DISPLAY_RESOLUTION_PHASES)
+            force_bottom_pairs = ports.collision_pairs(resolved)
+            if force_bottom_pairs:
+                resolved = ports.compute(
+                    adjust_same_position=False,
+                    force_bottom_pairs=force_bottom_pairs,
+                    dynamic_single_page_reflow=True,
+                    independent_line_entry=True,
+                )
+                resolved = ports.resolve_timing(resolved, True)
+            report_render_progress("display", 3, _DISPLAY_RESOLUTION_PHASES)
+            set_display_phase_head(3, _DISPLAY_RESOLUTION_PHASES)
+            squeeze_pairs = ports.collision_pairs(resolved)
+            if squeeze_pairs:
+                resolved = ports.compute(
+                    adjust_same_position=False,
+                    squeeze_pairs=squeeze_pairs,
+                    force_bottom_pairs=force_bottom_pairs,
+                    dynamic_single_page_reflow=True,
+                    independent_line_entry=True,
+                )
+                resolved = ports.resolve_timing(resolved, True)
+            report_render_progress("display", 4, _DISPLAY_RESOLUTION_PHASES)
+            set_display_phase_head(4, _DISPLAY_RESOLUTION_PHASES)
+            secondary_pairs = ports.secondary_collision_pairs(resolved)
+            if secondary_pairs:
+                combined_pairs = tuple(dict.fromkeys((*squeeze_pairs, *secondary_pairs)))
+                resolved = ports.compute(
+                    adjust_same_position=False,
+                    squeeze_pairs=combined_pairs,
+                    force_bottom_pairs=force_bottom_pairs,
+                    dynamic_single_page_reflow=True,
+                    independent_line_entry=True,
+                )
+                timing_resolved = False
+            report_render_progress("display", 5, _DISPLAY_RESOLUTION_PHASES)
+        if not timing_resolved:
+            set_display_phase_head(5, _DISPLAY_RESOLUTION_PHASES)
+            resolved = ports.resolve_timing(resolved, avoid_collisions)
+        report_render_progress("display", 6, _DISPLAY_RESOLUTION_PHASES)
+        # Geometry-dependent section filling is the final layout pass.  It may
+        # extend windows, so restore the animation guard without changing geometry.
+        set_display_phase_head(6, _DISPLAY_RESOLUTION_PHASES)
+        if auto_fill_section_time:
+            filled = ports.fill_section_time(resolved)
+            if filled != resolved:
+                resolved = ports.apply_animation_guard(filled, avoid_collisions)
+        report_render_progress("display", 7, _DISPLAY_RESOLUTION_PHASES)
+        return resolved
+    finally:
+        clear_display_phase_head()
 
 
 def resolve_display_lines_for_style(

@@ -132,6 +132,7 @@ from krok_helper.subtitle_render.engine.layout.plan.cache import (
     clear_track_layout_plan_cache,
 )
 from krok_helper.subtitle_render.engine.render_progress import (
+    report_display_measure_progress,
     report_render_progress,
 )
 from krok_helper.subtitle_render.engine.render.core.cache_keys import (
@@ -2360,7 +2361,11 @@ def measure_collision_bands(
         layout_cache_sig = _layout_cache_sig(track, style)
 
     geometries: list[CollisionLineGeometry | None] = []
-    for display_line in display_lines:
+    measure_total = len(display_lines)
+    for measure_index, display_line in enumerate(display_lines):
+        # 逐行墨迹实测是 display 阶段的主要耗时：按当前槽位逐行上报，
+        # 让百分比连续爬升而非每趟一跳（无 reporter 时为 no-op）。
+        report_display_measure_progress(measure_index, measure_total)
         line_style = _style_for_line(style, display_line.line)
         if style.vertical:
             ink_rect = _display_line_vertical_ink_rect(
@@ -2420,6 +2425,7 @@ def measure_collision_bands(
                 gap_px=float(line_style.line_gap_px),
             )
         )
+    report_display_measure_progress(measure_total, measure_total)
     return _build_measured_collision_bands(
         display_lines,
         style,

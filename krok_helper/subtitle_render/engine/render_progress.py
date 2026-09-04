@@ -43,4 +43,45 @@ def report_render_progress(stage: str, done: int, total: int) -> None:
         reporter(stage, int(done), int(total))
 
 
-__all__ = ["ProgressReporter", "render_progress_scope", "report_render_progress"]
+def set_display_phase_head(head: float, total: float) -> None:
+    """登记 display 阶段当前所处的步骤槽位（head = 已完成步骤数）。
+
+    ``resolve_display_lines`` 的 driver 在每个多趟步骤前登记；步骤内部的
+    实测循环（``measure_collision_bands``）据此把逐行进度折算成
+    ``head + 行比例`` 的总刻度，使 display 阶段逐行连续推进而非每趟一跳。
+    """
+
+    _REPORTER.display_phase_head = (float(head), float(total))
+
+
+def clear_display_phase_head() -> None:
+    _REPORTER.display_phase_head = None
+
+
+def report_display_measure_progress(done: int, total: int) -> None:
+    """display 阶段内一次实测调用的逐行进度，折算进当前步骤槽位。
+
+    同一槽位内可能有多次实测调用（趟内复测）：每次都从槽位内 0 起算，
+    worker 侧的单调保护会忽略后续调用的回退刻度——后续调用期间进度
+    停在槽位顶，偏差上界为一个步骤槽（总刻度的 1/7）。
+    """
+
+    reporter = getattr(_REPORTER, "reporter", None)
+    if reporter is None:
+        return
+    head = getattr(_REPORTER, "display_phase_head", None)
+    if head is None or total <= 0:
+        return
+    head_value, head_total = head
+    fraction = min(max(float(done) / float(total), 0.0), 1.0)
+    reporter("display", head_value + fraction, head_total)
+
+
+__all__ = [
+    "ProgressReporter",
+    "clear_display_phase_head",
+    "render_progress_scope",
+    "report_display_measure_progress",
+    "report_render_progress",
+    "set_display_phase_head",
+]

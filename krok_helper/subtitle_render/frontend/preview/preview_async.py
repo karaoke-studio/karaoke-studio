@@ -91,17 +91,19 @@ _RENDER_STAGE_LABELS = {
     "lines": "逐行排版",
 }
 
-# 各阶段在总进度里的起止比例。GPU 路径的 configure 除整轨重排（引擎刻度）外
-# 还包含 sidecar 场景构建与首帧出帧，重排只占前段；Painter 路径整段就是重排。
+# 各阶段在总进度里的起止比例。display 阶段的实测碰撞循环带逐行回调，
+# 占用最大权重让百分比从接近 0% 连续爬升；GPU 路径的 configure 除整轨重排
+# （引擎刻度）外还有 sidecar 场景构建与首帧实现两段无 Python 刻度的等待，
+# 压缩在高位（92% 之后）；Painter 路径整段就是重排，直接爬到 100%。
 _RENDER_STAGE_SPANS_PAINTER = {
-    "display": (0.00, 0.55),
-    "page_offsets": (0.55, 0.80),
-    "lines": (0.80, 1.00),
+    "display": (0.00, 0.60),
+    "page_offsets": (0.60, 0.82),
+    "lines": (0.82, 1.00),
 }
 _RENDER_STAGE_SPANS_GPU = {
-    "display": (0.00, 0.45),
-    "page_offsets": (0.45, 0.62),
-    "lines": (0.62, 0.70),
+    "display": (0.00, 0.60),
+    "page_offsets": (0.60, 0.72),
+    "lines": (0.72, 0.78),
 }
 
 

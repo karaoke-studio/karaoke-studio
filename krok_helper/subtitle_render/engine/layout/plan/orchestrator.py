@@ -124,8 +124,10 @@ def resolve_track_layout_plan(
             if logical_w is not None and logical_h is not None
             else {}
         )
-        # 页偏移解析内部的逐测量行刻度在此收口。
-        report_render_progress("page_offsets", 1, 1)
+        # 页偏移解析内部的逐测量行刻度在此收口；单行 / 允许跨页重叠模式解析
+        # 直接返回空字典（没有做实际工作），不空跳一格进度。
+        if page_offset_windows:
+            report_render_progress("page_offsets", 1, 1)
         line_total = max(len(track.lines), 1)
         report_render_progress("lines", 0, line_total)
         render_lines: list = []

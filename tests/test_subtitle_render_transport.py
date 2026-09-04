@@ -2521,17 +2521,17 @@ def test_render_progress_reporter_composes_monotonic_percent():
         _RENDER_STAGE_SPANS_PAINTER, lambda pct, label: emitted.append((pct, label))
     )
 
-    reporter("display", 1, 7)   # 0 + 0.55 × 1/7 ≈ 8%
-    reporter("display", 4, 7)   # ≈ 31%
+    reporter("display", 1, 7)   # 0 + 0.60 × 1/7 ≈ 9%
+    reporter("display", 4, 7)   # ≈ 34%
     reporter("display", 2, 7)   # 回退刻度必须被丢弃
     reporter("unknown", 1, 1)   # 未映射阶段忽略
-    reporter("lines", 1, 10)    # 0.8 + 0.2 × 1/10 = 82%
+    reporter("lines", 1, 10)    # 0.82 + 0.18 × 1/10 = 84%
     reporter("lines", 10, 10)   # 100% 封顶到 99，留给真实帧完成
 
     assert emitted == [
-        (8, "显示窗口"),
-        (31, "显示窗口"),
-        (82, "逐行排版"),
+        (9, "显示窗口"),
+        (34, "显示窗口"),
+        (84, "逐行排版"),
         (99, "逐行排版"),
     ]
 
