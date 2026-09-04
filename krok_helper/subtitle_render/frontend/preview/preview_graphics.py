@@ -558,7 +558,10 @@ class PreviewGraphicsView(QGraphicsView):
         elapsed = time.monotonic() - since
         if elapsed < _RENDER_BUSY_DELAY_S and not self._render_busy_badge.isVisible():
             return
-        self._render_busy_badge.set_status(self._render_progress_text or "字幕渲染中")
+        # 耗时随轮询持续走字：布局计划缓存命中等场景下引擎没有逐行刻度，
+        # 百分比会停住，走动的秒数保证徽标始终有「在推进」的可信反馈。
+        text = self._render_progress_text or "字幕渲染中"
+        self._render_busy_badge.set_status(f"{text} · {elapsed:.1f}s")
         self._render_busy_badge.setVisible(True)
         self._layout_render_badge()
 

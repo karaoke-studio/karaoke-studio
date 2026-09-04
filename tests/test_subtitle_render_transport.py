@@ -2443,15 +2443,15 @@ def test_preview_graphics_render_badge_tracks_progress(qapp, monkeypatch):
         badge = graphics._render_busy_badge
         assert graphics._render_pending_since is not None
 
-        # 无帧区间超阈值 → 徽标出现（尚无刻度时为不定态文本）。
+        # 无帧区间超阈值 → 徽标出现（尚无刻度时为不定态文本 + 走字耗时）。
         graphics._update_render_busy_badge()
         assert not badge.isHidden()
-        assert badge._text == "字幕渲染中"
+        assert badge._text.startswith("字幕渲染中 · ")
 
-        # 进度事件 → 百分比文本实时更新。
+        # 进度事件 → 百分比文本实时更新（耗时后缀随轮询走字）。
         graphics._on_render_progress(43, "逐行排版")
         graphics._update_render_busy_badge()
-        assert badge._text == "字幕渲染 · 逐行排版 43%"
+        assert badge._text.startswith("字幕渲染 · 逐行排版 43% · ")
 
         # 可接受的新帧到达 → 徽标隐藏、区间闭合。
         image = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
@@ -2503,7 +2503,7 @@ def test_preview_graphics_render_badge_closes_on_empty_track(qapp, monkeypatch):
         # 卸载字幕轨：请求不会再有帧回来，区间必须闭合，徽标不悬死。
         graphics.set_track(None)
         assert graphics._render_pending_since is None
-        assert not graphics._render_busy_badge.isVisible()
+        assert graphics._render_busy_badge.isHidden()
     finally:
         graphics.close()
         graphics.deleteLater()
