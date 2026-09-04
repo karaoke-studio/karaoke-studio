@@ -13,6 +13,7 @@ from krok_helper.subtitle_render.engine.export.encoder_select import video_encod
 from krok_helper.subtitle_render.engine.render.render_bands import packed_offsets
 from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_MOV_QTRLE,
     OUTPUT_FORMAT_MOV_TRANSPARENT,
     RenderJob,
     format_has_alpha,
@@ -270,10 +271,9 @@ def build_render_command(
             command.extend(["-c:a", "aac", "-b:a", "192k"])
         command.extend(["-movflags", "+faststart", str(job.output_path)])
     elif job.output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
-        # ProRes 4444：NLE（PR/AE/达芬奇）对 4444 的 alpha 解释最成熟可靠；
-        # qtrle 虽然无损且更小，但消费端常把 straight alpha 按预乘处理，
-        # 发光/描边的半透明渐变会出现明显脏边。prores_ks 仅 4444/4444 XQ
-        # 两档支持 alpha，这里固定 4444 + yuva444p10le。
+        # ProRes 4444：NLE（PR/AE/达芬奇）对 4444 的 alpha 解释最成熟可靠，
+        # 是透明 MOV 的默认推荐。prores_ks 仅 4444/4444 XQ 两档支持 alpha，
+        # 这里固定 4444 + yuva444p10le。追求无损/小体积用 QuickTime 动画档。
         command.extend(
             [
                 "-c:v",
@@ -286,6 +286,14 @@ def build_render_command(
         )
         if audio_input_index is not None:
             # ProRes 素材惯例配 PCM，避免个别工具对 MOV 内 AAC 的兼容问题。
+            command.extend(["-c:a", "pcm_s16le"])
+        command.extend([str(job.output_path)])
+    elif job.output_format == OUTPUT_FORMAT_MOV_QTRLE:
+        # QuickTime Animation：无损真 alpha、行程编码对大面积透明的字幕层
+        # 体积友好。注意多数播放器不合成它的 straight alpha（显示为黑底），
+        # 导入 PR/AE 等剪辑软件才是正确的预览方式。
+        command.extend(["-c:v", "qtrle", "-pix_fmt", "rgba"])
+        if audio_input_index is not None:
             command.extend(["-c:a", "pcm_s16le"])
         command.extend([str(job.output_path)])
     else:

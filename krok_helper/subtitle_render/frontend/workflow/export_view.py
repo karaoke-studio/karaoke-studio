@@ -46,6 +46,7 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
     ENCODER_QSV,
 )
 from krok_helper.subtitle_render.engine.export.render_job import (
+    OUTPUT_FORMAT_MOV_QTRLE,
     OUTPUT_FORMAT_MOV_TRANSPARENT,
     OUTPUT_FORMAT_MP4,
     OUTPUT_FORMAT_PNG_COMPOSITED,
@@ -72,12 +73,14 @@ EXPORT_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
     (OUTPUT_FORMAT_PNG_TRANSPARENT, "PNG 序列（透明字幕）"),
     (OUTPUT_FORMAT_PNG_COMPOSITED, "PNG 序列（含背景）"),
     (OUTPUT_FORMAT_MOV_TRANSPARENT, "透明视频 ProRes 4444"),
+    (OUTPUT_FORMAT_MOV_QTRLE, "透明视频 QuickTime 动画"),
 )
 """(output_format, 显示名) 供导出页「输出格式」下拉与状态栏文案共用。"""
 
 EXPORT_FORMAT_SUFFIX_LABELS = {
     OUTPUT_FORMAT_MP4: ".mp4",
     OUTPUT_FORMAT_MOV_TRANSPARENT: ".mov",
+    OUTPUT_FORMAT_MOV_QTRLE: ".mov",
     OUTPUT_FORMAT_PNG_TRANSPARENT: "\\ PNG 序列文件夹",
     OUTPUT_FORMAT_PNG_COMPOSITED: "\\ PNG 序列文件夹",
 }
@@ -564,8 +567,10 @@ class ExportWorkspaceView(QWidget):
             format_combo.addItem(format_text, userData=format_value)
         format_combo.setToolTip(
             "PNG 序列输出到以导出名命名的独立子文件夹（名称_000001.png 起）；"
-            "透明视频为 ProRes 4444（.mov，带 alpha 通道，剪辑软件导入即透明，"
-            "体积较大属正常）。"
+            "透明视频两种编码均带 alpha 通道：ProRes 4444 体积大但剪辑软件"
+            "兼容性最好（推荐），QuickTime 动画无损且体积小——注意多数播放器"
+            "不合成透明视频的 alpha（显示为黑底），属正常现象，导入剪辑软件"
+            "即为透明。"
         )
         format_combo.currentIndexChanged.connect(
             lambda _index: self.formatChanged.emit()

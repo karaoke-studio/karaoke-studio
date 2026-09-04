@@ -2367,6 +2367,47 @@ def test_render_mov_transparent_success_uses_file_check(monkeypatch, tmp_path):
     assert job.output_path.is_file()
 
 
+def test_build_render_command_mov_qtrle_uses_animation_codec(tmp_path):
+    job = _format_job(tmp_path, "mov_qtrle", output_path=tmp_path / "q.mov")
+
+    command = build_render_command_contract("ffmpeg", job)
+
+    # QuickTime 动画档：无损 qtrle + rgba，音频同样取背景视频内嵌轨。
+    assert command.count("-i") == 2
+    assert "1:a:0?" in command
+    assert command[command.index("-c:v") + 1] == "qtrle"
+    pix_fmts = [command[i + 1] for i, part in enumerate(command) if part == "-pix_fmt"]
+    assert pix_fmts == ["rgba", "rgba"]
+    assert command[command.index("-c:a") + 1] == "pcm_s16le"
+    assert str(job.output_path) == command[-1]
+
+
+def test_render_reports_stage_progress_logs(monkeypatch, tmp_path, qapp):
+    """准备/收尾各阶段要有状态日志，长导出不能只显示「正在准备…」。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "1")
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_BANDS", "0")
+    job = replace(
+        _format_job(tmp_path, "mov_transparent"),
+        width=320,
+        height=180,
+        duration_ms=1000,
+    )
+    fake_process = _FakeRenderProcess(job.output_path)
+    logs: list[str] = []
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(
+        renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process
+    )
+
+    render_subtitle_video(job, logger=logs.append)
+
+    assert any("准备：预扫字幕渲染范围" in line for line in logs)
+    assert any("预扫字幕渲染范围（" in line for line in logs)  # 百分比进度行
+    assert any("单进程渲染" in line for line in logs)
+    assert any("帧已全部提交" in line for line in logs)
+
+
 def test_preview_tap_composites_gray_base_for_transparent_formats(tmp_path):
     """透明格式的导出监视 jpg 垫中灰底：jpg 无 alpha，黑底看起来像渲染失败。"""
 

@@ -196,6 +196,15 @@ def test_export_job_controller_builds_mov_transparent_file_contract(tmp_path) ->
     assert result.job.output_format == "mov_transparent"
 
 
+def test_export_job_controller_builds_mov_qtrle_file_contract(tmp_path) -> None:
+    result = ExportJobController.build(
+        replace(_inputs(tmp_path), output_format="mov_qtrle")
+    )
+
+    assert result.job.output_path == tmp_path / "result.mov"
+    assert result.job.output_format == "mov_qtrle"
+
+
 @pytest.mark.parametrize("output_format", ["png_transparent", "mov_transparent"])
 def test_transparent_formats_do_not_require_background(
     tmp_path, output_format

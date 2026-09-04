@@ -53,6 +53,7 @@ from krok_helper.subtitle_render.engine.export.parallel_schedule import (
 )
 from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_MOV_QTRLE,
     OUTPUT_FORMAT_MOV_TRANSPARENT,
     OUTPUT_FORMAT_PNG_COMPOSITED,
     OUTPUT_FORMAT_PNG_TRANSPARENT,
@@ -310,6 +311,8 @@ def render_subtitle_video(
         and not native_export_active
         and (not gpu_export_active or gpu_packed_active)
     ):
+        # 条带/多带预扫与歌曲时长成正比、可能耗时数十秒，让用户知道在等什么。
+        logger("准备：预扫字幕渲染范围（条带渲染优化用）…")
         if _bands_enabled():
             bands = _compute_content_bands(
                 job, duration_ms, should_cancel=should_cancel, logger=logger
@@ -420,16 +423,21 @@ def render_subtitle_video(
                     worker_count, should_cancel, on_progress, logger=logger,
                 )
         elif bands is not None:
+            logger(f"单进程多带渲染: {len(bands)} 条带 / 共 {total_frames} 帧")
             _write_frames_single_bands(
                 process, job, bands, packed_h, total_frames,
                 should_cancel, on_progress,
             )
         else:
+            logger(f"单进程渲染: 共 {total_frames} 帧")
             _write_frames_single(
                 process, job, strip_top, render_h, total_frames,
                 should_cancel, on_progress,
             )
         process.stdin.close()
+        # 帧全部写完后 ffmpeg 还要编码落盘（慢编码器如 ProRes 的收尾可达
+        # 数十秒且进度条已满格），明确告知用户在等什么。
+        logger("帧已全部提交，等待编码器完成编码与写盘…")
         return_code = process.wait()
         output_drain_thread.join()
     except ExportCancelled:
@@ -719,15 +727,23 @@ def _compute_subtitle_strip(
     times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
     if not times:
         return None
+    total_samples = len(times)
+    last_bucket = -1
 
     extras = list(job.extra_tracks)
     scratch: QImage | None = None
     transparent = QColor(0, 0, 0, 0)
     top = height
     bottom = -1
-    for t_ms in times:
+    for index, t_ms in enumerate(times):
         if should_cancel is not None and should_cancel():
             return None
+        if logger is not None:
+            percent = index * 100 // total_samples
+            bucket = percent // 10
+            if bucket != last_bucket:
+                last_bucket = bucket
+                logger(f"预扫字幕渲染范围（单条带）… {index}/{total_samples}（{percent}%）")
         if not frame_has_content(
             job.track,
             t_ms,
@@ -822,12 +838,20 @@ def _compute_content_bands(
     times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
     if not times:
         return None
+    total_samples = len(times)
+    last_bucket = -1
 
     extras = list(job.extra_tracks)
     collected: list[tuple[int, int]] = []
-    for t_ms in times:
+    for index, t_ms in enumerate(times):
         if should_cancel is not None and should_cancel():
             return None
+        if logger is not None:
+            percent = index * 100 // total_samples
+            bucket = percent // 10
+            if bucket != last_bucket:
+                last_bucket = bucket
+                logger(f"预扫字幕渲染范围（多带）… {index}/{total_samples}（{percent}%）")
         if not frame_has_content(
             job.track,
             t_ms,
@@ -1660,6 +1684,8 @@ def _output_format_label(output_format: str) -> str:
         return "PNG 序列（含背景）"
     if output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
         return "ProRes 4444（透明）"
+    if output_format == OUTPUT_FORMAT_MOV_QTRLE:
+        return "QuickTime 动画（透明）"
     return "MP4"
 
 

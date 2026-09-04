@@ -10,6 +10,7 @@ from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_MOV_QTRLE,
     OUTPUT_FORMAT_MOV_TRANSPARENT,
     RenderJob,
     format_needs_background,
@@ -93,7 +94,7 @@ class ExportJobController:
         if is_png_sequence(output_format):
             # PNG 序列独占以导出名命名的子文件夹，帧为 <名称>_000001.png。
             output_path = Path(directory).expanduser() / output_name
-        elif output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
+        elif output_format in {OUTPUT_FORMAT_MOV_TRANSPARENT, OUTPUT_FORMAT_MOV_QTRLE}:
             output_path = Path(directory).expanduser() / f"{output_name}.mov"
         else:
             output_path = Path(directory).expanduser() / f"{output_name}.mp4"

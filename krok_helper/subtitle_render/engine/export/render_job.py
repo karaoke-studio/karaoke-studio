@@ -14,13 +14,20 @@ OUTPUT_FORMAT_MP4 = "mp4"
 OUTPUT_FORMAT_PNG_TRANSPARENT = "png_transparent"
 OUTPUT_FORMAT_PNG_COMPOSITED = "png_composited"
 OUTPUT_FORMAT_MOV_TRANSPARENT = "mov_transparent"
-"""Export output formats selectable on the export page."""
+OUTPUT_FORMAT_MOV_QTRLE = "mov_qtrle"
+"""Export output formats selectable on the export page.
+
+``mov_transparent`` is ProRes 4444 (best NLE alpha compatibility); ``mov_qtrle``
+is QuickTime Animation (lossless, smaller, but many players don't composite its
+straight alpha — import into an NLE to preview correctly).
+"""
 
 OUTPUT_FORMATS = (
     OUTPUT_FORMAT_MP4,
     OUTPUT_FORMAT_PNG_TRANSPARENT,
     OUTPUT_FORMAT_PNG_COMPOSITED,
     OUTPUT_FORMAT_MOV_TRANSPARENT,
+    OUTPUT_FORMAT_MOV_QTRLE,
 )
 
 
@@ -39,6 +46,7 @@ def format_has_alpha(output_format: str) -> bool:
     return output_format in {
         OUTPUT_FORMAT_PNG_TRANSPARENT,
         OUTPUT_FORMAT_MOV_TRANSPARENT,
+        OUTPUT_FORMAT_MOV_QTRLE,
     }
 
 
