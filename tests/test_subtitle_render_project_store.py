@@ -1888,8 +1888,14 @@ def test_cancelling_the_save_prompt_cancels_the_export(qapp, monkeypatch):
 
 def test_export_thread_never_starts_when_the_save_prompt_is_cancelled(qapp, monkeypatch):
     """光有确认还不够 —— 取消之后导出线程一定不能起来。"""
+    from types import SimpleNamespace
+
     win = _make_window(qapp, monkeypatch)
-    monkeypatch.setattr(win, "_build_render_job", lambda: object())
+    monkeypatch.setattr(
+        win,
+        "_build_render_job",
+        lambda: SimpleNamespace(output_format="mp4"),
+    )
     monkeypatch.setattr(win, "_confirm_project_saved_before_export", lambda: False)
 
     win._start_render_export()
@@ -1900,8 +1906,14 @@ def test_export_thread_never_starts_when_the_save_prompt_is_cancelled(qapp, monk
 
 def test_start_button_is_disabled_while_the_save_prompt_is_open(qapp, monkeypatch):
     """保存确认框是非模态嵌套事件循环，期间主窗口仍可交互，按钮必须已禁用。"""
+    from types import SimpleNamespace
+
     win = _make_window(qapp, monkeypatch)
-    monkeypatch.setattr(win, "_build_render_job", lambda: object())
+    monkeypatch.setattr(
+        win,
+        "_build_render_job",
+        lambda: SimpleNamespace(output_format="mp4"),
+    )
     states = {}
 
     def fake_confirm():
@@ -1959,6 +1971,7 @@ def test_reentrant_start_during_the_save_prompt_is_ignored(qapp, monkeypatch):
         lambda: SimpleNamespace(
             codec="h264", width=1920, height=1080, fps=60,
             output_path=Path("out") / "demo.mp4",
+            output_format="mp4",
         ),
     )
 
