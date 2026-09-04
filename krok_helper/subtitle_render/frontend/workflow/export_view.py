@@ -45,6 +45,12 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
     ENCODER_NVENC,
     ENCODER_QSV,
 )
+from krok_helper.subtitle_render.engine.export.render_job import (
+    OUTPUT_FORMAT_MOV_TRANSPARENT,
+    OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_PNG_COMPOSITED,
+    OUTPUT_FORMAT_PNG_TRANSPARENT,
+)
 from krok_helper.subtitle_render.domain.models import (
     DEFAULT_EXPORT_NAME_TEMPLATE,
     EXPORT_NAME_TEMPLATE_FIELDS,
@@ -60,6 +66,22 @@ EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
 EXPORT_PREVIEW_DEFAULT_WIDTH = 640
 EXPORT_PREVIEW_MIN_WIDTH = 320
+
+EXPORT_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
+    (OUTPUT_FORMAT_MP4, "MP4 视频"),
+    (OUTPUT_FORMAT_PNG_TRANSPARENT, "PNG 序列（透明字幕）"),
+    (OUTPUT_FORMAT_PNG_COMPOSITED, "PNG 序列（含背景）"),
+    (OUTPUT_FORMAT_MOV_TRANSPARENT, "透明视频 QuickTime 动画"),
+)
+"""(output_format, 显示名) 供导出页「输出格式」下拉与状态栏文案共用。"""
+
+EXPORT_FORMAT_SUFFIX_LABELS = {
+    OUTPUT_FORMAT_MP4: ".mp4",
+    OUTPUT_FORMAT_MOV_TRANSPARENT: ".mov",
+    OUTPUT_FORMAT_PNG_TRANSPARENT: "\\ PNG 序列文件夹",
+    OUTPUT_FORMAT_PNG_COMPOSITED: "\\ PNG 序列文件夹",
+}
+"""导出文件名输入框后缀徽标文案（PNG 序列以导出名建子文件夹）。"""
 
 
 def make_card_icon_badge(icon: FIF) -> QLabel:
@@ -412,6 +434,8 @@ class ExportWorkspaceControls:
     directory_edit: FluentLineEdit
     browse_button: FluentPushButton
     name_edit: FluentLineEdit
+    format_combo: FluentComboBox
+    name_suffix_label: QLabel
     width_spin: FluentSpinBox
     height_spin: FluentSpinBox
     fps_combo: FluentComboBox
@@ -444,6 +468,7 @@ class ExportWorkspaceView(QWidget):
     browseRequested = Signal()
     encoderChanged = Signal()
     codecChanged = Signal()
+    formatChanged = Signal()
     startRequested = Signal()
     stopRequested = Signal()
 
@@ -551,7 +576,23 @@ class ExportWorkspaceView(QWidget):
                 ),
             ),
         )
+        # 输出格式与文件名同行：文件名 → 格式 → 后缀徽标 顺序读起来是一句话，
+        # 也避免给固定宽度的设置列再添一行、压缩 800px 窗口下的上下留白。
+        format_combo = FluentComboBox()
+        format_combo.setMinimumHeight(32)
+        format_combo.setMinimumWidth(150)
+        for format_value, format_text in EXPORT_FORMAT_CHOICES:
+            format_combo.addItem(format_text, userData=format_value)
+        format_combo.setToolTip(
+            "PNG 序列输出到以导出名命名的独立子文件夹（名称_000001.png 起）；"
+            "透明视频为 QuickTime 动画编码（.mov，保留无损 alpha 通道），"
+            "适合导入剪辑软件叠加素材。"
+        )
+        format_combo.currentIndexChanged.connect(
+            lambda _index: self.formatChanged.emit()
+        )
         name_row.addWidget(name_edit, 1)
+        name_row.addWidget(format_combo)
         name_row.addWidget(name_suffix)
         output_layout.addLayout(name_row)
         settings_layout.addWidget(output_card)
@@ -767,6 +808,8 @@ class ExportWorkspaceView(QWidget):
             directory_edit=directory_edit,
             browse_button=browse_button,
             name_edit=name_edit,
+            format_combo=format_combo,
+            name_suffix_label=name_suffix,
             width_spin=width_spin,
             height_spin=height_spin,
             fps_combo=fps_combo,

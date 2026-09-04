@@ -11,7 +11,14 @@ from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.engine.export.encoder_select import video_encoder_options
 from krok_helper.subtitle_render.engine.render.render_bands import packed_offsets
-from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+from krok_helper.subtitle_render.engine.export.render_job import (
+    OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_MOV_TRANSPARENT,
+    RenderJob,
+    format_has_alpha,
+    format_needs_background,
+    is_png_sequence,
+)
 from krok_helper.subtitle_render.engine.export.render_job_policy import (
     resolve_duration_ms,
     resolved_background,
@@ -41,9 +48,40 @@ def resolved_preview_width(output_width: int, requested_width: int | None) -> in
     return min(max(int(output_width), 1), max(_PREVIEW_MIN_WIDTH, requested))
 
 
+def sequence_output_pattern(sequence_dir: Path) -> str:
+    """Build the image2 output pattern ``<dir>/<name>_%06d.png`` (1-based).
+
+    The frames live *inside* ``sequence_dir`` and are prefixed with the folder
+    name, e.g. ``out/名称/名称_000001.png``.  Unlike
+    :func:`ffmpeg_sequence_pattern` this escapes every literal ``%`` in the
+    path — the ``%06d`` placeholder is appended afterwards and must stay the
+    only conversion in the pattern.
+    """
+
+    folder = re.sub("%", "%%", sequence_dir.as_posix())
+    name = re.sub("%", "%%", sequence_dir.name)
+    return f"{folder}/{name}_%06d.png"
+
+
+def transparent_background_chain(job: RenderJob, duration_seconds: float) -> str:
+    """Fully transparent full-canvas base for alpha-preserving exports.
+
+    Alpha formats (transparent PNG sequence / QuickTime Animation MOV) skip the
+    background input entirely; the subtitle layer is overlaid onto this source
+    so the strip/bands packing optimizations keep working unchanged.
+    """
+
+    return (
+        f"color=c=black@0.0:s={job.width}x{job.height}:r={job.fps}"
+        f":d={duration_seconds:.6f}[bg];"
+    )
+
+
 def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
     """Build the background scaling chain with preview-equivalent semantics."""
 
+    if not format_needs_background(job.output_format):
+        return transparent_background_chain(job, duration_seconds)
     source = resolved_background(job)
     cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
     if cover:
@@ -157,6 +195,7 @@ def build_render_command(
         )
         video_label = "[venc]"
     background = resolved_background(job)
+    needs_background = format_needs_background(job.output_format)
     command = [
         ffmpeg_path,
         "-y",
@@ -173,13 +212,25 @@ def build_render_command(
         str(job.fps),
         "-i",
         "pipe:0",
-        *background_input_args(background, job, duration_seconds),
+        *(
+            background_input_args(background, job, duration_seconds)
+            if needs_background
+            else []
+        ),
     ]
     audio_input_index: int | None = None
-    if job.include_audio and job.audio_path is not None:
+    if (
+        job.output_format == OUTPUT_FORMAT_MP4
+        and job.include_audio
+        and job.audio_path is not None
+    ):
         audio_input_index = 2
         command.extend(["-i", str(job.audio_path)])
-    elif job.include_audio and background.kind == "video":
+    elif (
+        job.output_format == OUTPUT_FORMAT_MP4
+        and job.include_audio
+        and background.kind == "video"
+    ):
         audio_input_index = 1
     command.extend(["-filter_complex", filter_graph, "-map", video_label])
     if audio_input_index is not None:
@@ -187,19 +238,38 @@ def build_render_command(
     command.extend(
         ["-t", f"{duration_seconds:.6f}", "-r", str(job.fps), "-fps_mode", "cfr"]
     )
-    command.extend(
-        video_encoder_options(
-            ffmpeg_path,
-            job.encoder_mode,
-            crf=job.crf,
-            preset=job.preset,
-            codec=job.codec,
+    if job.output_format == OUTPUT_FORMAT_MP4:
+        command.extend(
+            video_encoder_options(
+                ffmpeg_path,
+                job.encoder_mode,
+                crf=job.crf,
+                preset=job.preset,
+                codec=job.codec,
+            )
         )
-    )
-    command.extend(["-pix_fmt", "yuv420p"])
-    if audio_input_index is not None:
-        command.extend(["-c:a", "aac", "-b:a", "192k"])
-    command.extend(["-movflags", "+faststart", str(job.output_path)])
+        command.extend(["-pix_fmt", "yuv420p"])
+        if audio_input_index is not None:
+            command.extend(["-c:a", "aac", "-b:a", "192k"])
+        command.extend(["-movflags", "+faststart", str(job.output_path)])
+    elif job.output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
+        # QuickTime Animation：无损真 alpha，行程编码对大面积透明的字幕层友好。
+        command.extend(["-c:v", "qtrle", "-pix_fmt", "rgba", str(job.output_path)])
+    else:
+        assert is_png_sequence(job.output_format)
+        command.extend(
+            [
+                "-c:v",
+                "png",
+                "-pix_fmt",
+                "rgba" if format_has_alpha(job.output_format) else "rgb24",
+                "-start_number",
+                "1",
+                "-f",
+                "image2",
+                sequence_output_pattern(job.output_path),
+            ]
+        )
     if preview_image_path is not None:
         command.extend(
             [

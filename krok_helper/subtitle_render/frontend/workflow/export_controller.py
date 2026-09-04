@@ -8,10 +8,17 @@ from typing import Any
 
 from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.domain.background import BackgroundSource
-from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+from krok_helper.subtitle_render.engine.export.render_job import (
+    OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_MOV_TRANSPARENT,
+    RenderJob,
+    format_needs_background,
+    is_png_sequence,
+)
 from krok_helper.subtitle_render.engine.export.render_job_policy import (
     ensure_output_is_not_input,
     validate_output_target,
+    validate_sequence_output_target,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import track_duration_ms
 from krok_helper.subtitle_render.domain.models import Style
@@ -42,6 +49,7 @@ class ExportJobInputs:
     codec: str
     gpu_export_enabled: bool
     render_workers: int | None
+    output_format: str = OUTPUT_FORMAT_MP4
 
 
 @dataclass(frozen=True)
@@ -73,7 +81,8 @@ class ExportJobController:
     def build(inputs: ExportJobInputs) -> ExportJobBuildResult:
         if inputs.track is None:
             raise ProcessingError("请先加载字幕文件。")
-        if inputs.background_source is None:
+        output_format = inputs.output_format
+        if format_needs_background(output_format) and inputs.background_source is None:
             raise ProcessingError("请先选择背景源。")
         directory = inputs.output_directory.strip()
         if not directory:
@@ -81,7 +90,13 @@ class ExportJobController:
 
         output_name = inputs.output_name or inputs.default_output_name
         used_default_name = not bool(inputs.output_name)
-        output_path = Path(directory).expanduser() / f"{output_name}.mp4"
+        if is_png_sequence(output_format):
+            # PNG 序列独占以导出名命名的子文件夹，帧为 <名称>_000001.png。
+            output_path = Path(directory).expanduser() / output_name
+        elif output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
+            output_path = Path(directory).expanduser() / f"{output_name}.mov"
+        else:
+            output_path = Path(directory).expanduser() / f"{output_name}.mp4"
         job = RenderJob(
             track=inputs.track,
             style=inputs.style,
@@ -99,13 +114,17 @@ class ExportJobController:
             crf=inputs.crf,
             preset=inputs.preset,
             codec=inputs.codec,
+            output_format=output_format,
             native_export_enabled=False,
             gpu_export_enabled=inputs.gpu_export_enabled,
             render_workers=inputs.render_workers,
         )
         # 组装阶段就拦下「导出名压在素材上」与非法/超长输出路径：留到渲染线程
         # 才报错的话，用户要先走一遍保存工程弹窗、看进度条起跑，才等来一句失败。
-        validate_output_target(output_path, output_name=output_name)
+        if is_png_sequence(output_format):
+            validate_sequence_output_target(output_path, output_name=output_name)
+        else:
+            validate_output_target(output_path, output_name=output_name)
         ensure_output_is_not_input(job)
         return ExportJobBuildResult(
             job=job,

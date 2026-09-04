@@ -153,6 +153,7 @@ class AppOutputPreferenceValues:
     crf: object
     render_workers: object
     allowed_render_workers: tuple[int, ...]
+    output_format: str = "mp4"
 
 
 @dataclass(frozen=True)
@@ -469,8 +470,11 @@ def update_app_output_preferences(
     crf: object,
     render_workers: object,
     allowed_render_workers: tuple[int, ...],
+    output_format: str = "mp4",
 ) -> dict:
     """Return the app-local output settings while preserving unknown keys."""
+    from krok_helper.subtitle_render.engine.export.render_job import OUTPUT_FORMATS
+
     output = dict(existing) if isinstance(existing, dict) else {}
     output.update(
         {
@@ -492,6 +496,11 @@ def update_app_output_preferences(
                 if isinstance(render_workers, int)
                 and render_workers in allowed_render_workers
                 else 0
+            ),
+            "output_format": (
+                str(output_format)
+                if str(output_format) in OUTPUT_FORMATS
+                else "mp4"
             ),
         }
     )
@@ -593,6 +602,7 @@ def prepare_app_preferences(
             crf=output.crf,
             render_workers=output.render_workers,
             allowed_render_workers=output.allowed_render_workers,
+            output_format=output.output_format,
         )
     return PreparedAppPreferences(
         data=data,

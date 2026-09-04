@@ -2068,3 +2068,255 @@ def test_render_progress_callback_error_cleans_up(monkeypatch, tmp_path):
 
     assert fake_process.terminated is True
     assert not job.output_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# 输出格式：PNG 序列（透明/含背景）与透明 MOV（QuickTime 动画）
+# ---------------------------------------------------------------------------
+
+
+def _format_job(tmp_path: Path, output_format: str, output_path: Path | None = None):
+    job = _job(tmp_path)
+    if output_path is None:
+        if output_format in {"png_transparent", "png_composited"}:
+            output_path = tmp_path / "seq"
+        elif output_format == "mov_transparent":
+            output_path = tmp_path / "alpha.mov"
+        else:
+            output_path = job.output_path
+    return replace(job, output_format=output_format, output_path=output_path)
+
+
+def test_build_render_command_png_transparent_skips_background(tmp_path):
+    job = _format_job(tmp_path, "png_transparent")
+
+    command = build_render_command_contract("ffmpeg", job)
+
+    # 透明格式没有背景输入：唯一输入就是字幕层 rawvideo pipe。
+    assert command.count("-i") == 1
+    fg = command[command.index("-filter_complex") + 1]
+    assert "color=c=black@0.0:s=320x180:r=60" in fg
+    assert "overlay=0:0:format=auto" in fg
+    assert "[1:v:0]" not in fg
+    assert command[command.index("-c:v") + 1] == "png"
+    pix_fmts = [command[i + 1] for i, part in enumerate(command) if part == "-pix_fmt"]
+    assert pix_fmts == ["rgba", "rgba"]  # 输入 pipe 与输出 PNG 都保留 alpha
+    assert command[command.index("image2") - 1] == "-f"
+    assert command[command.index("-start_number") + 1] == "1"
+    pattern = (tmp_path / "seq" / "seq_%06d.png").as_posix()
+    assert pattern in command
+    # PNG 序列不携带音频，也不该出现 MP4 专属参数。
+    assert "1:a:0?" not in command
+    assert "-movflags" not in command
+    assert "libx264" not in command
+
+
+def test_build_render_command_png_composited_keeps_background(tmp_path):
+    job = _format_job(tmp_path, "png_composited")
+
+    command = build_render_command_contract("ffmpeg", job)
+
+    assert command.count("-i") == 2  # pipe + 背景
+    fg = command[command.index("-filter_complex") + 1]
+    assert "[1:v:0]scale=320:180" in fg
+    assert command[command.index("-c:v") + 1] == "png"
+    pix_fmts = [command[i + 1] for i, part in enumerate(command) if part == "-pix_fmt"]
+    assert pix_fmts == ["rgba", "rgb24"]  # 合成画面不透明，输出用 rgb24
+    assert "1:a:0?" not in command
+
+
+def test_build_render_command_mov_transparent_uses_qtrle(tmp_path):
+    job = _format_job(tmp_path, "mov_transparent")
+
+    command = build_render_command_contract("ffmpeg", job)
+
+    assert command.count("-i") == 1
+    assert command[command.index("-c:v") + 1] == "qtrle"
+    assert str(job.output_path) == command[-1]
+    assert "-movflags" not in command
+    assert "libx264" not in command
+    assert "1:a:0?" not in command
+
+
+def test_build_render_command_transparent_strip_keeps_full_canvas_base(tmp_path):
+    job = _format_job(tmp_path, "mov_transparent")
+
+    command = build_render_command_contract("ffmpeg", job, strip=(40, 60))
+
+    # 条带优化只缩小 pipe 高度；透明底图仍是全画布，overlay 摆回原位。
+    assert "320x60" in command
+    fg = command[command.index("-filter_complex") + 1]
+    assert "color=c=black@0.0:s=320x180:r=60" in fg
+    assert "overlay=0:40:format=auto" in fg
+
+
+def test_build_render_command_transparent_bands_drop_background_input(tmp_path):
+    job = replace(
+        _band_job(tmp_path), output_format="png_transparent", output_path=tmp_path / "seq"
+    )
+
+    command = build_render_command_contract("ffmpeg", job, bands=[(0, 40), (600, 60)])
+
+    fg = command[command.index("-filter_complex") + 1]
+    assert "[1:v:0]" not in fg
+    assert "color=c=black@0.0:s=320x720" in fg
+    assert "split=2[p0][p1]" in fg
+    assert "[bg][c0]overlay=0:0" in fg
+
+
+def test_sequence_output_pattern_escapes_literal_percent():
+    from krok_helper.subtitle_render.engine.export.export_command import (
+        sequence_output_pattern,
+    )
+
+    assert (
+        sequence_output_pattern(Path("out") / "100%Love")
+        == "out/100%%Love/100%%Love_%06d.png"
+    )
+
+
+def test_validate_render_job_rejects_unknown_output_format(tmp_path):
+    with pytest.raises(ProcessingError, match="不支持的输出格式"):
+        validate_render_job(replace(_job(tmp_path), output_format="avi"))
+
+
+def test_validate_render_job_allows_missing_background_for_transparent_formats(
+    tmp_path,
+):
+    job = replace(
+        _format_job(tmp_path, "mov_transparent"),
+        background_video_path=None,
+        background_source=None,
+    )
+    validate_render_job(job)  # 不抛错：透明格式不需要背景
+
+
+def test_validate_render_job_rejects_non_empty_sequence_folder(tmp_path):
+    seq = tmp_path / "seq"
+    seq.mkdir()
+    (seq / "seq_000001.png").write_bytes(b"old frame")
+
+    with pytest.raises(ProcessingError, match="不是空的"):
+        validate_render_job(_format_job(tmp_path, "png_transparent", output_path=seq))
+
+
+def test_validate_render_job_allows_missing_sequence_folder(tmp_path):
+    validate_render_job(_format_job(tmp_path, "png_composited"))
+
+
+def test_incomplete_sequence_cleanup_removes_pattern_frames_and_folder(tmp_path):
+    job = _format_job(tmp_path, "png_transparent")
+    seq = job.output_path
+    seq.mkdir()
+    (seq / "seq_000001.png").write_bytes(b"a")
+    (seq / "seq_000002.png").write_bytes(b"b")
+    logs: list[str] = []
+
+    renderer._remove_incomplete_output(job, logs.append)
+
+    assert not list(seq.glob("seq_*.png"))
+    assert not seq.exists()  # 帧删完后目录已空，顺手移除
+    assert any("已清理未完成的 PNG 序列输出" in line for line in logs)
+
+
+def test_incomplete_sequence_cleanup_keeps_unrelated_files(tmp_path):
+    job = _format_job(tmp_path, "png_transparent")
+    seq = job.output_path
+    seq.mkdir()
+    (seq / "seq_000001.png").write_bytes(b"a")
+    (seq / "notes.txt").write_bytes(b"keep me")
+    logs: list[str] = []
+
+    renderer._remove_incomplete_output(job, logs.append)
+
+    assert (seq / "notes.txt").exists()
+    assert seq.is_dir()  # 目录里还有用户文件，保留目录本身
+
+
+def _patch_render_single(monkeypatch, fake_process, writer=None):
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    if writer is not None:
+        monkeypatch.setattr(renderer, "_write_frames_single", writer)
+    monkeypatch.setattr(
+        renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process
+    )
+
+
+class _FakeSequenceProcess(_FakeRenderProcess):
+    """ffmpeg 假进程：wait() 时按 fps/时长往序列目录里写帧。"""
+
+    def __init__(self, sequence_dir: Path, frame_count: int, *, write_frames: bool = True):
+        super().__init__(sequence_dir)
+        self.frame_count = frame_count
+        self.write_frames = write_frames
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            if self.write_frames:
+                for index in range(1, self.frame_count + 1):
+                    name = f"{self.output_path.name}_{index:06d}.png"
+                    (self.output_path / name).write_bytes(b"png")
+            self.returncode = 0
+        return self.returncode
+
+
+def test_render_png_sequence_success_requires_frames(monkeypatch, tmp_path):
+    job = replace(
+        _format_job(tmp_path, "png_transparent"), width=2, height=2, fps=2, duration_ms=1000
+    )
+    fake_process = _FakeSequenceProcess(job.output_path, frame_count=2)
+    _patch_render_single(monkeypatch, fake_process)
+
+    result = render_subtitle_video(job)
+
+    assert result == job.output_path
+    assert len(list(job.output_path.glob("seq_*.png"))) == 2
+
+
+def test_render_png_sequence_without_frames_is_failure(monkeypatch, tmp_path):
+    job = replace(
+        _format_job(tmp_path, "png_transparent"), width=2, height=2, fps=2, duration_ms=1000
+    )
+    fake_process = _FakeSequenceProcess(job.output_path, frame_count=2, write_frames=False)
+    _patch_render_single(monkeypatch, fake_process)
+
+    with pytest.raises(ProcessingError, match="未生成 PNG 序列帧"):
+        render_subtitle_video(job)
+
+    assert not job.output_path.exists()  # 空目录也要清掉
+
+
+def test_render_png_sequence_cancel_cleans_partial_frames(monkeypatch, tmp_path):
+    job = replace(
+        _format_job(tmp_path, "png_transparent"), width=2, height=2, fps=2, duration_ms=1000
+    )
+
+    def writer(process, _job, strip_top, render_h, total_frames, should_cancel, on_progress):
+        process.stdin.write(b"p")
+        # 模拟 ffmpeg 已经落了两帧半成品
+        for index in (1, 2):
+            name = f"{job.output_path.name}_{index:06d}.png"
+            (job.output_path / name).write_bytes(b"partial")
+
+    fake_process = _FakeSequenceProcess(job.output_path, frame_count=0)
+    _patch_render_single(monkeypatch, fake_process, writer=writer)
+
+    with pytest.raises(ExportCancelled):
+        render_subtitle_video(job, should_cancel=lambda: True)
+
+    # 假 ffmpeg 已正常退出（终止标记不适用），但半成品帧与目录必须清掉。
+    assert not job.output_path.exists()
+
+
+def test_render_mov_transparent_success_uses_file_check(monkeypatch, tmp_path):
+    job = replace(
+        _format_job(tmp_path, "mov_transparent"), width=2, height=2, fps=2, duration_ms=1000
+    )
+    fake_process = _FakeRenderProcess(job.output_path)
+    _patch_render_single(monkeypatch, fake_process)
+
+    result = render_subtitle_video(job)
+
+    assert result == job.output_path
+    assert job.output_path.is_file()

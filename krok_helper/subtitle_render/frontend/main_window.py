@@ -130,7 +130,10 @@ from krok_helper.subtitle_render.engine.layout.page.plan import (
     reflow_pages_for_layout_capacity,
     resolve_page_plan,
 )
-from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+from krok_helper.subtitle_render.engine.export.render_job import (
+    OUTPUT_FORMAT_MP4,
+    RenderJob,
+)
 from krok_helper.subtitle_render.sources.guide_symbols import (
     GuideSymbolImportError,
     import_bitmap_guide_symbol,
@@ -182,6 +185,8 @@ from krok_helper.subtitle_render.frontend.workflow.export_controller import (
 from krok_helper.subtitle_render.frontend.workflow.export_view import (
     EXPORT_DIR_CUSTOM,
     EXPORT_DIR_SOURCE_VIDEO,
+    EXPORT_FORMAT_CHOICES,
+    EXPORT_FORMAT_SUFFIX_LABELS,
     EXPORT_PREVIEW_DEFAULT_WIDTH as _EXPORT_PREVIEW_DEFAULT_WIDTH,
     EXPORT_PREVIEW_MIN_WIDTH as _EXPORT_PREVIEW_MIN_WIDTH,
     ExportLocationDialog as _ExportLocationDialog,
@@ -1770,6 +1775,11 @@ class SubtitleRenderWindow(QWidget):
             c_idx = self._export_codec_combo.findData(codec)
             if c_idx >= 0:
                 self._export_codec_combo.setCurrentIndex(c_idx)
+        output_format = output.get("output_format")
+        if isinstance(output_format, str):
+            f_idx = self._export_format_combo.findData(output_format)
+            if f_idx >= 0:
+                self._export_format_combo.setCurrentIndex(f_idx)
         render_workers = output.get("render_workers")
         if (
             not self._loading_project
@@ -2502,6 +2512,7 @@ class SubtitleRenderWindow(QWidget):
         page.browseRequested.connect(self._browse_export_output)
         page.encoderChanged.connect(self._update_export_preset_enabled)
         page.codecChanged.connect(self._refresh_export_format_label)
+        page.formatChanged.connect(self._on_export_format_changed)
         page.startRequested.connect(self._start_render_export)
         page.stopRequested.connect(self._stop_render_export)
 
@@ -2514,6 +2525,8 @@ class SubtitleRenderWindow(QWidget):
         self._export_dir_edit = controls.directory_edit
         self._export_browse_button = controls.browse_button
         self._export_name_edit = controls.name_edit
+        self._export_format_combo = controls.format_combo
+        self._export_name_suffix_label = controls.name_suffix_label
         self._export_width_spin = controls.width_spin
         self._export_height_spin = controls.height_spin
         self._export_fps_combo = controls.fps_combo
@@ -2537,6 +2550,8 @@ class SubtitleRenderWindow(QWidget):
         self._export_start_button = controls.start_button
         self._export_stop_button = controls.stop_button
         self._export_auto_name = ""
+        # 本次导出实际使用的输出格式；完成弹窗据此决定是否提供「进入下一步」。
+        self._export_active_output_format = OUTPUT_FORMAT_MP4
 
         # Keep export runtime ownership and visibility semantics unchanged.
         self._export_preview_timer = QTimer(self)
@@ -2561,6 +2576,23 @@ class SubtitleRenderWindow(QWidget):
             self._export_encoder_combo,
             self._export_preset_combo,
         )
+
+    def _export_format_value(self) -> str:
+        return str(self._export_format_combo.currentData() or OUTPUT_FORMAT_MP4)
+
+    def _on_export_format_changed(self) -> None:
+        output_format = self._export_format_value()
+        self._export_name_suffix_label.setText(
+            EXPORT_FORMAT_SUFFIX_LABELS.get(output_format, ".mp4")
+        )
+        # 非 MP4 输出由 ffmpeg 内置的 png / qtrle 编码器承担，
+        # 编码器/编码/preset/CRF 不参与；渲染进程与 GPU 开关仍然有效。
+        uses_encoder_options = output_format == OUTPUT_FORMAT_MP4
+        self._export_encoder_combo.setEnabled(uses_encoder_options)
+        self._export_codec_combo.setEnabled(uses_encoder_options)
+        self._export_preset_combo.setEnabled(uses_encoder_options)
+        self._export_crf_spin.setEnabled(uses_encoder_options)
+        self._refresh_export_format_label()
 
     # ------------------------------------------------------------------ browse fallback
 
@@ -6302,6 +6334,7 @@ class SubtitleRenderWindow(QWidget):
                 crf=local_output.get("crf", 18),
                 render_workers=local_output.get("render_workers", 0),
                 allowed_render_workers=RENDER_WORKER_OPTIONS,
+                output_format=self._export_format_value(),
             )
         prepared = prepare_app_preferences(
             self._load_subtitle_settings(),
@@ -6638,6 +6671,7 @@ class SubtitleRenderWindow(QWidget):
                 codec=self._export_codec_value(),
                 gpu_export_enabled=self._gpu_export_check.isChecked(),
                 render_workers=self._export_render_workers_value(),
+                output_format=self._export_format_value(),
             )
         )
         if result.used_default_name:
@@ -6702,6 +6736,7 @@ class SubtitleRenderWindow(QWidget):
             except ProcessingError as exc:
                 fluent_error(self, "无法导出", str(exc))
                 return
+            self._export_active_output_format = job.output_format
             # 先校验再问保存：素材都没齐时不该先把用户拖进另存为对话框。
             if not self._confirm_project_saved_before_export():
                 return
@@ -6857,6 +6892,7 @@ class SubtitleRenderWindow(QWidget):
                 height=self._export_height_spin.value(),
                 fps=self._export_fps_value(),
                 output_directory=directory,
+                output_format=self._export_format_value(),
             )
         )
 
@@ -6867,6 +6903,7 @@ class SubtitleRenderWindow(QWidget):
             height=job.height,
             fps=job.fps,
             output_directory=job.output_path.parent,
+            output_format=job.output_format,
         )
 
     def _export_format_values_text(
@@ -6877,9 +6914,15 @@ class SubtitleRenderWindow(QWidget):
         height: int,
         fps: int,
         output_directory: Optional[Path],
+        output_format: str = OUTPUT_FORMAT_MP4,
     ) -> str:
+        format_name = (
+            f"MP4 · {self._codec_display(codec)}"
+            if output_format == OUTPUT_FORMAT_MP4
+            else dict(EXPORT_FORMAT_CHOICES).get(output_format, output_format)
+        )
         text = (
-            f"输出格式: MP4 · {self._codec_display(codec)}"
+            f"输出格式: {format_name}"
             f" · {width}×{height} @ {fps}fps"
         )
         if output_directory is None:
@@ -6942,6 +6985,21 @@ class SubtitleRenderWindow(QWidget):
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
         play_completion_sound()
+        # PNG 序列 / 透明 MOV 不是可交接到第 6 步混流的成片，完成弹窗只保留
+        # 「打开文件夹」；只有 MP4 导出才询问「进入下一步」。
+        if self._export_active_output_format != OUTPUT_FORMAT_MP4:
+            fluent_choice(
+                self,
+                "导出完成",
+                (
+                    f"字幕已成功导出：\n{output_path}"
+                    f"\n\n本次导出耗时：{elapsed_text}"
+                ),
+                ("打开文件夹", "关闭"),
+                default=1,
+                sticky={0: lambda: self._open_export_folder(output_path)},
+            )
+            return
         choice = fluent_choice(
             self,
             "视频导出完成",
@@ -6971,6 +7029,10 @@ class SubtitleRenderWindow(QWidget):
             host.accept_subtitle_video(output_path)
 
     def _open_export_folder(self, output_path: Path) -> None:
+        # PNG 序列的 output_path 是文件夹本身，直接打开该文件夹。
+        if output_path.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path)))
+            return
         # Windows 下用资源管理器直接选中导出文件，其余平台退回打开所在目录。
         if sys.platform == "win32" and output_path.exists():
             subprocess.Popen(["explorer", "/select,", str(output_path)])

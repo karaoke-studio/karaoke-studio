@@ -170,3 +170,67 @@ def test_export_job_controller_resolves_longest_track_or_media_duration() -> Non
     )
 
     assert duration == 3_457
+
+
+# ---------------------------------------------------------------------------
+# 输出格式：PNG 序列（透明/含背景）与透明 MOV
+# ---------------------------------------------------------------------------
+
+
+def test_export_job_controller_builds_png_sequence_folder_contract(tmp_path) -> None:
+    result = ExportJobController.build(
+        replace(_inputs(tmp_path), output_format="png_transparent")
+    )
+
+    # PNG 序列独占以导出名命名的子文件夹，帧为 <名称>_000001.png。
+    assert result.job.output_path == tmp_path / "result"
+    assert result.job.output_format == "png_transparent"
+
+
+def test_export_job_controller_builds_mov_transparent_file_contract(tmp_path) -> None:
+    result = ExportJobController.build(
+        replace(_inputs(tmp_path), output_format="mov_transparent")
+    )
+
+    assert result.job.output_path == tmp_path / "result.mov"
+    assert result.job.output_format == "mov_transparent"
+
+
+@pytest.mark.parametrize("output_format", ["png_transparent", "mov_transparent"])
+def test_transparent_formats_do_not_require_background(
+    tmp_path, output_format
+) -> None:
+    """透明格式只导出字幕层，没有背景源也允许导出。"""
+
+    result = ExportJobController.build(
+        replace(
+            _inputs(tmp_path),
+            background_source=None,
+            background_video_path=None,
+            output_format=output_format,
+        )
+    )
+
+    assert result.job.output_format == output_format
+
+
+def test_png_sequence_rejects_existing_non_empty_folder(tmp_path) -> None:
+    """序列目录已存在且非空时拦下，避免新旧两次导出的帧混在一起。"""
+
+    (tmp_path / "result").mkdir()
+    (tmp_path / "result" / "old_000001.png").write_bytes(b"x")
+
+    with pytest.raises(ProcessingError, match="不是空的"):
+        ExportJobController.build(
+            replace(_inputs(tmp_path), output_format="png_composited")
+        )
+
+
+def test_png_sequence_allows_existing_empty_folder(tmp_path) -> None:
+    (tmp_path / "result").mkdir()
+
+    result = ExportJobController.build(
+        replace(_inputs(tmp_path), output_format="png_transparent")
+    )
+
+    assert result.job.output_path == tmp_path / "result"

@@ -51,7 +51,14 @@ from krok_helper.subtitle_render.engine.export.parallel_schedule import (
     _resolve_stall_timeout_s,
     _resolve_worker_count,
 )
-from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+from krok_helper.subtitle_render.engine.export.render_job import (
+    OUTPUT_FORMAT_MP4,
+    OUTPUT_FORMAT_MOV_TRANSPARENT,
+    OUTPUT_FORMAT_PNG_COMPOSITED,
+    OUTPUT_FORMAT_PNG_TRANSPARENT,
+    RenderJob,
+    is_png_sequence,
+)
 from krok_helper.subtitle_render.engine.export.render_job_policy import (
     is_same_path as _is_same_path,
     job_input_paths as _job_input_paths,
@@ -330,11 +337,23 @@ def render_subtitle_video(
             preview_width=preview_width,
         )
 
-    job.output_path.parent.mkdir(parents=True, exist_ok=True)
-    logger(f"导出字幕视频: {job.output_path.name}")
+    if is_png_sequence(job.output_format):
+        # PNG 序列独占一个子文件夹；非空目录已在 validate_render_job 拦下。
+        job.output_path.mkdir(parents=True, exist_ok=True)
+    else:
+        job.output_path.parent.mkdir(parents=True, exist_ok=True)
+    action_label = (
+        "导出字幕 PNG 序列" if is_png_sequence(job.output_format) else "导出字幕视频"
+    )
+    logger(f"{action_label}: {job.output_path.name}")
+    params_tail = (
+        f"{resolved_encoder_label(ffmpeg_path, job.encoder_mode, job.codec)} / CRF {job.crf}"
+        if job.output_format == OUTPUT_FORMAT_MP4
+        else _output_format_label(job.output_format)
+    )
     logger(
         f"输出参数: {job.width}x{job.height} / {job.fps}fps / "
-        f"{duration_ms / 1000:.3f}s / {resolved_encoder_label(ffmpeg_path, job.encoder_mode, job.codec)} / CRF {job.crf}"
+        f"{duration_ms / 1000:.3f}s / {params_tail}"
     )
     logger("执行命令:")
     logger(" ".join(f'"{part}"' if " " in part else part for part in command))
@@ -504,10 +523,18 @@ def render_subtitle_video(
             f"ffmpeg 执行失败，退出码: {return_code}"
             f"{_ffmpeg_failure_hint(ffmpeg_output_tail)}"
         )
-    if not job.output_path.is_file() or os.path.getsize(job.output_path) == 0:
-        raise ProcessingError(f"导出失败，未生成有效文件: {job.output_path}")
-
-    logger(f"字幕视频导出完成: {job.output_path}")
+    if is_png_sequence(job.output_format):
+        frame_count = _sequence_frame_count(job)
+        if frame_count <= 0:
+            # ffmpeg 退出码为 0 却一帧没落（如 pattern 目录被外部清空）：
+            # 与其他失败路径一致地清掉空目录再报错。
+            _remove_incomplete_output(job, logger)
+            raise ProcessingError(f"导出失败，未生成 PNG 序列帧: {job.output_path}")
+        logger(f"字幕 PNG 序列导出完成: {job.output_path}（{frame_count} 帧）")
+    else:
+        if not job.output_path.is_file() or os.path.getsize(job.output_path) == 0:
+            raise ProcessingError(f"导出失败，未生成有效文件: {job.output_path}")
+        logger(f"字幕视频导出完成: {job.output_path}")
     return job.output_path
 
 
@@ -1626,6 +1653,57 @@ def _ffmpeg_failure_hint(output_tail: deque[str]) -> str:
     return ""
 
 
+def _output_format_label(output_format: str) -> str:
+    if output_format == OUTPUT_FORMAT_PNG_TRANSPARENT:
+        return "PNG 序列（透明字幕）"
+    if output_format == OUTPUT_FORMAT_PNG_COMPOSITED:
+        return "PNG 序列（含背景）"
+    if output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
+        return "QuickTime 动画（透明）"
+    return "MP4"
+
+
+def _sequence_frame_count(job: RenderJob) -> int:
+    """Count this sequence's frames (``<名称>_*.png``) in the output folder."""
+
+    directory = job.output_path
+    if not directory.is_dir():
+        return 0
+    prefix = f"{directory.name}_"
+    return sum(
+        1
+        for entry in directory.iterdir()
+        if entry.name.startswith(prefix) and entry.name.endswith(".png")
+    )
+
+
+def _remove_incomplete_sequence(job: RenderJob, logger: Logger) -> None:
+    """删掉这次 PNG 序列导出留下的半成品帧；目录里的其他文件一律不碰。
+
+    只按本序列 ``<名称>_*.png`` 的帧名模式删除（导出目录要么是本次新建的、
+    要么已通过非空拦截，不会混入素材），删完后目录已空则顺手移除目录本身。
+    """
+
+    directory = job.output_path
+    prefix = f"{directory.name}_"
+    removed = 0
+    try:
+        for entry in list(directory.iterdir()):
+            if not entry.name.startswith(prefix) or not entry.name.endswith(".png"):
+                continue
+            entry.unlink(missing_ok=True)
+            removed += 1
+    except OSError as exc:
+        logger(f"清理未完成的 PNG 序列帧失败: {directory} ({exc})")
+        return
+    logger(f"已清理未完成的 PNG 序列输出: {directory}（{removed} 帧）")
+    try:
+        directory.rmdir()
+    except OSError:
+        # 目录里还剩用户自己的文件（或删除竞态），保留目录即可。
+        pass
+
+
 def _remove_incomplete_output(job: RenderJob, logger: Logger) -> None:
     """删掉这次导出留下的半成品；素材文件一律不碰。
 
@@ -1636,6 +1714,9 @@ def _remove_incomplete_output(job: RenderJob, logger: Logger) -> None:
 
     output_path = job.output_path
     if not output_path.exists():
+        return
+    if is_png_sequence(job.output_format):
+        _remove_incomplete_sequence(job, logger)
         return
     for source in _job_input_paths(job):
         if _is_same_path(output_path, source):

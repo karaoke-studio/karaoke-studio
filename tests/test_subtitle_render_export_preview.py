@@ -323,3 +323,71 @@ def test_export_cards_are_vertically_centered_above_actions(qapp):
         window.close()
         window.deleteLater()
         qapp.processEvents()
+
+
+def test_export_workspace_format_combo_reports_changes(qapp):
+    from krok_helper.subtitle_render.frontend.workflow.export_view import (
+        EXPORT_FORMAT_CHOICES,
+    )
+
+    view = ExportWorkspaceView(
+        fps_options=(60, 120),
+        render_worker_options=(0, 4, 8, 12, 16),
+        gpu_preview_checked=True,
+        gpu_controls_visible=True,
+    )
+    try:
+        combo = view.controls.format_combo
+        assert combo.count() == len(EXPORT_FORMAT_CHOICES)
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            value for value, _text in EXPORT_FORMAT_CHOICES
+        ]
+        assert combo.currentData() == "mp4"
+        assert view.controls.name_suffix_label.text() == ".mp4"
+
+        spy = QSignalSpy(view.formatChanged)
+        combo.setCurrentIndex(combo.findData("png_transparent"))
+
+        assert len(spy) == 1
+        assert combo.currentData() == "png_transparent"
+    finally:
+        view.close()
+        view.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_format_switch_updates_badge_encoder_state_and_label(qapp):
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        # 初始 MP4：编码参数可用，后缀徽标为 .mp4。
+        assert window._export_encoder_combo.isEnabled()
+        assert window._export_codec_combo.isEnabled()
+        assert window._export_preset_combo.isEnabled()
+        assert window._export_crf_spin.isEnabled()
+        assert window._export_name_suffix_label.text() == ".mp4"
+
+        combo = window._export_format_combo
+        combo.setCurrentIndex(combo.findData("png_transparent"))
+        qapp.processEvents()
+        assert window._export_name_suffix_label.text() == "\\ PNG 序列文件夹"
+        assert not window._export_encoder_combo.isEnabled()
+        assert not window._export_codec_combo.isEnabled()
+        assert not window._export_preset_combo.isEnabled()
+        assert not window._export_crf_spin.isEnabled()
+        assert "PNG 序列（透明字幕）" in window._export_format_label.text()
+
+        combo.setCurrentIndex(combo.findData("mov_transparent"))
+        qapp.processEvents()
+        assert window._export_name_suffix_label.text() == ".mov"
+        assert "QuickTime 动画" in window._export_format_label.text()
+
+        # 切回 MP4 后编码控件恢复可用。
+        combo.setCurrentIndex(combo.findData("mp4"))
+        qapp.processEvents()
+        assert window._export_encoder_combo.isEnabled()
+        assert window._export_name_suffix_label.text() == ".mp4"
+        assert "MP4 · H.264" in window._export_format_label.text()
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
