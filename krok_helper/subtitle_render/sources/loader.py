@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 from typing import Optional
 
 from krok_helper.subtitle_render.sources.subtitles import load_nicokara_lrc
 from krok_helper.subtitle_render.sources.sug import (
+    SugAxisTrack,
+    load_sug_axis_tracks,
     load_sug_timing_track,
     timing_track_from_sug_project,
 )
@@ -21,6 +24,7 @@ class SubtitleSourceLoader:
         path: Path,
         *,
         software_compensation_ms: int = 0,
+        singer_filter: Collection[str] | None = None,
     ) -> TimingTrack:
         """Load ``.sug`` with compensation and all other paths as Nicokara LRC."""
         path = Path(path)
@@ -28,6 +32,7 @@ class SubtitleSourceLoader:
             return load_sug_timing_track(
                 path,
                 software_compensation_ms=int(software_compensation_ms),
+                singer_filter=singer_filter,
             )
         return load_nicokara_lrc(path)
 
@@ -40,8 +45,22 @@ class SubtitleSourceLoader:
         path: Path,
         *,
         software_compensation_ms: int = 0,
+        singer_filter: Collection[str] | None = None,
     ) -> TimingTrack:
         return load_sug_timing_track(
+            Path(path),
+            software_compensation_ms=int(software_compensation_ms),
+            singer_filter=singer_filter,
+        )
+
+    @staticmethod
+    def load_sug_axes(
+        path: Path,
+        *,
+        software_compensation_ms: int = 0,
+    ) -> list[SugAxisTrack]:
+        """Parse a ``.sug`` into one track per axis group (single axis if none)."""
+        return load_sug_axis_tracks(
             Path(path),
             software_compensation_ms=int(software_compensation_ms),
         )

@@ -37,6 +37,7 @@ _PROJECT_OWNED_KEYS = frozenset(
     {
         "schema_version",
         "subtitle_path",
+        "subtitle_sug_axis_singer_ids",
         "video_path",
         "audio_path",
         "style",
@@ -84,6 +85,11 @@ class ExtraSubtitleSource:
     name: str
     path: Path
     track: TimingTrack
+    sug_axis_singer_ids: Optional[frozenset[str]] = None
+    """SUG 分色分轴：该副源对应的分组歌手集合；``None`` = 普通整份源。"""
+
+    source_baseline: Optional[TimingTrack] = None
+    """该源上一次接受的解析基线（供分轴重载合并本地编辑；不持久化）。"""
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,8 @@ class SubtitleProjectDocument:
     timing_track: Optional[TimingTrack] = None
     extra_sources: list[ExtraSubtitleSource] = field(default_factory=list)
     subtitle_path: Optional[Path] = None
+    subtitle_axis_singer_ids: Optional[frozenset[str]] = None
+    """主字幕槽位的 SUG 轴过滤（主分组的歌手集合）；``None`` = 未分轴。"""
     video_path: Optional[Path] = None
     video_info: Optional[MediaInfo] = None
     background_source: Optional[BackgroundSource] = None
@@ -199,6 +207,7 @@ class SubtitleProjectDocument:
         self.timing_track = None
         self.extra_sources = []
         self.subtitle_path = None
+        self.subtitle_axis_singer_ids = None
         self.video_path = None
         self.video_info = None
         self.background_source = None
@@ -230,6 +239,13 @@ class SubtitleProjectDocument:
             {
                 "name": source.name,
                 "path": str(source.path),
+                **(
+                    {
+                        "sug_axis_singer_ids": sorted(source.sug_axis_singer_ids)
+                    }
+                    if source.sug_axis_singer_ids is not None
+                    else {}
+                ),
                 **_track_project_data(source.track),
             }
             for source in self.extra_sources
@@ -237,6 +253,11 @@ class SubtitleProjectDocument:
         background = self.background_source
         payload = project_payload(
             subtitle_path=self.subtitle_path,
+            subtitle_sug_axis_singer_ids=(
+                sorted(self.subtitle_axis_singer_ids)
+                if self.subtitle_axis_singer_ids is not None
+                else None
+            ),
             video_path=self.video_path,
             audio_path=independent_audio,
             background=(

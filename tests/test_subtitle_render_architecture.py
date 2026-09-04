@@ -4079,7 +4079,13 @@ def test_subtitle_render_window_delegates_subtitle_source_loading() -> None:
         and isinstance(node.func.value, ast.Attribute)
         and node.func.value.attr == "_subtitle_source_loader"
     }
-    assert loader_calls == {"load_file", "load_lrc", "load_sug", "load_sug_project"}
+    assert loader_calls == {
+        "load_file",
+        "load_lrc",
+        "load_sug",
+        "load_sug_axes",
+        "load_sug_project",
+    }
 
 
 def test_subtitle_render_window_delegates_source_reload_preparation() -> None:

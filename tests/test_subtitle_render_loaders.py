@@ -285,6 +285,164 @@ def _save_timing_sug(path: Path, lines: list[tuple[str, int, int]]) -> None:
     SugProjectParser.save(Project(singers=[singer], sentences=sentences), str(path))
 
 
+def _save_grouped_sug(
+    path: Path,
+    lines: list[tuple[str, str, int, int]],
+    groups: list[tuple[str, list[str], bool]],
+) -> None:
+    """写一个带分色分轴计划的 SUG：每元素为 (歌手id, 文本, 起始, 行末)。"""
+    from strange_uta_game.backend.domain import AxisGroup
+
+    singers = [
+        Singer(id="a", name="主唱", color="#ff0000", is_default=True),
+        Singer(id="b", name="和声", color="#00ff00"),
+    ]
+    sentences = [
+        Sentence(
+            singer_id=singer_id,
+            characters=[
+                Character(
+                    char=text,
+                    check_count=1,
+                    timestamps=[start_ms],
+                    sentence_end_ts=end_ms,
+                    is_sentence_end=True,
+                    is_line_end=True,
+                    singer_id=singer_id,
+                )
+            ],
+        )
+        for singer_id, text, start_ms, end_ms in lines
+    ]
+    project = Project(singers=singers, sentences=sentences)
+    project.set_axis_groups(
+        [AxisGroup(name=name, singer_ids=ids, is_primary=primary) for name, ids, primary in groups]
+    )
+    SugProjectParser.save(project, str(path))
+
+
+def test_workflow_handoff_splits_grouped_sug_into_sources(qapp, monkeypatch, tmp_path):
+    """第 4→5 步交接：带 axis_groups 的 .sug 拆成主字幕 + 分组副字幕源。"""
+    sug = tmp_path / "grouped.sug"
+    _save_grouped_sug(
+        sug,
+        [("a", "君", 1000, 1400), ("b", "酱", 2000, 2400)],
+        [("主轴", ["a"], True), ("副轴", ["b"], False)],
+    )
+    win = _make_window(qapp, monkeypatch)
+
+    returned = win.load_or_reload_sug(sug)
+
+    assert returned is win._timing_track
+    assert ["".join(ch.text for ch in line.chars) for line in win._timing_track.lines] == ["君"]
+    assert [source.name for source in win._extra_sources] == ["副轴"]
+    assert [
+        "".join(ch.text for ch in line.chars) for line in win._extra_sources[0].track.lines
+    ] == ["酱"]
+    assert win._extra_sources[0].sug_axis_singer_ids == frozenset({"b"})
+    assert win._project_document.subtitle_axis_singer_ids == frozenset({"a"})
+
+
+def test_workflow_handoff_same_groups_reload_updates_all_axes(
+    qapp, monkeypatch, tmp_path
+):
+    """分组不变、纯改时间：主轴与轴副源都走增量合并，本地编辑保留。"""
+    sug = tmp_path / "grouped.sug"
+    _save_grouped_sug(
+        sug,
+        [("a", "君", 1000, 1400), ("b", "酱", 2000, 2400)],
+        [("主轴", ["a"], True), ("副轴", ["b"], False)],
+    )
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_or_reload_sug(sug) is not None
+    win._timing_track.lines[0].layout_index = 2
+    win._extra_sources[0].track.lines[0].chars[0].role_label = "手工角色"
+    win._project_dirty = False
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.InfoBar, "success", lambda **kwargs: notices.append(kwargs["content"])
+    )
+    monkeypatch.setattr(
+        mw,
+        "fluent_question",
+        lambda *args, **kwargs: pytest.fail("纯时间变化不应要求确认"),
+    )
+
+    _save_grouped_sug(
+        sug,
+        [("a", "君", 1300, 1700), ("b", "酱", 2300, 2700)],
+        [("主轴", ["a"], True), ("副轴", ["b"], False)],
+    )
+    win.load_or_reload_sug(sug)
+
+    assert win._timing_track.lines[0].chars[0].start_ms == 1300
+    assert win._timing_track.lines[0].layout_index == 2
+    extra_line = win._extra_sources[0].track.lines[0]
+    assert extra_line.chars[0].start_ms == 2300
+    assert extra_line.chars[0].role_label == "手工角色"
+    assert win._project_dirty is True
+    assert notices == ["已自动载入 grouped.sug 的最新时间轴。"]
+
+
+def test_workflow_handoff_group_added_after_single_load_splits(qapp, monkeypatch, tmp_path):
+    """单轴加载后 SUG 里新增分组：重交接整体重装为分轴。"""
+    sug = tmp_path / "late.sug"
+    _save_grouped_sug(sug, [("a", "君", 1000, 1400), ("b", "酱", 2000, 2400)], [])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_or_reload_sug(sug) is not None
+    assert win._extra_sources == []
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.InfoBar, "success", lambda **kwargs: notices.append(kwargs["content"])
+    )
+
+    _save_grouped_sug(
+        sug,
+        [("a", "君", 1000, 1400), ("b", "酱", 2000, 2400)],
+        [("主轴", ["a"], True), ("副轴", ["b"], False)],
+    )
+    win.load_or_reload_sug(sug)
+
+    assert [source.name for source in win._extra_sources] == ["副轴"]
+    assert win._project_document.subtitle_axis_singer_ids == frozenset({"a"})
+    assert [
+        "".join(ch.text for ch in line.chars) for line in win._timing_track.lines
+    ] == ["君"]
+    assert any("重新分轴" in notice for notice in notices)
+
+
+def test_project_reopen_restores_axis_filters_from_snapshot(qapp, monkeypatch, tmp_path):
+    """.yurika 快照里的主/副轴过滤在工程打开时按各自口径重建。"""
+    sug = tmp_path / "grouped.sug"
+    _save_grouped_sug(
+        sug,
+        [("a", "君", 1000, 1400), ("b", "酱", 2000, 2400)],
+        [("主轴", ["a"], True), ("副轴", ["b"], False)],
+    )
+    win = _make_window(qapp, monkeypatch)
+
+    win._apply_project_data(
+        {
+            "subtitle_path": str(sug),
+            "subtitle_sug_axis_singer_ids": ["a"],
+            "extra_subtitle_sources": [
+                {"name": "副轴", "path": str(sug), "sug_axis_singer_ids": ["b"]}
+            ],
+        }
+    )
+
+    assert [
+        "".join(ch.text for ch in line.chars) for line in win._timing_track.lines
+    ] == ["君"]
+    assert [source.name for source in win._extra_sources] == ["副轴"]
+    assert [
+        "".join(ch.text for ch in line.chars)
+        for line in win._extra_sources[0].track.lines
+    ] == ["酱"]
+    assert win._extra_sources[0].sug_axis_singer_ids == frozenset({"b"})
+    assert win._project_document.subtitle_axis_singer_ids == frozenset({"a"})
+
+
 def test_workflow_handoff_same_path_merges_preserving_overlays(
     qapp, monkeypatch, tmp_path
 ):

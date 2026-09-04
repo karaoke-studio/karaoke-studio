@@ -34,7 +34,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Collection, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持模块可独立运行
     from krok_helper.workflow_host import SubtitleVideoSink
@@ -351,9 +351,15 @@ from krok_helper.subtitle_render.project.store import (
     save_recovery_project,
 )
 from krok_helper.subtitle_render.sources.loader import SubtitleSourceLoader
+from krok_helper.subtitle_render.sources.loader import SugAxisTrack
 from krok_helper.subtitle_render.sources.reload import (
     apply_reloaded_tracks,
     merge_reloaded_track,
+)
+from krok_helper.subtitle_render.sources.sug_axes import (
+    AxisSlotState,
+    plan_single_axis_reload,
+    plan_split_axis_reload,
 )
 from krok_helper.subtitle_render.project.session import (
     ExtraSubtitleSource,
@@ -838,6 +844,8 @@ class SubtitleRenderWindow(QWidget):
         self._render_worker: Optional[Any] = None
         self._export_start_pending = False
         self._watch_primary_subtitle_source = False
+        # 主字幕槽位上一次接受的源解析（.sug 分轴重载合并本地编辑用）。
+        self._primary_source_baseline: Optional[TimingTrack] = None
         self._source_watch_runtime = SubtitleSourceWatchRuntime(
             self,
             reload_suspended=lambda: self._render_thread is not None,
@@ -1590,7 +1598,10 @@ class SubtitleRenderWindow(QWidget):
         self._apply_output_settings(plan.output)
         # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
         if plan.subtitle_path is not None and plan.subtitle_path.is_file():
-            self.load_subtitle_source(plan.subtitle_path)
+            self.load_subtitle_source(
+                plan.subtitle_path,
+                sug_axis_singer_ids=plan.subtitle_sug_axis_singer_ids,
+            )
             if self._timing_track is not None:
                 applied_track_state = apply_track_project_data(
                     self._timing_track,
@@ -2810,11 +2821,20 @@ class SubtitleRenderWindow(QWidget):
 
     # ------------------------------------------------------------------ public
 
-    def load_subtitle_source(self, path: Path) -> Optional[TimingTrack]:
-        """加载字幕源文件。支持 SUG 项目（.sug）与 Nicokara 逐字 LRC（.lrc）。"""
+    def load_subtitle_source(
+        self,
+        path: Path,
+        *,
+        sug_axis_singer_ids: Optional[Collection[str]] = None,
+    ) -> Optional[TimingTrack]:
+        """加载字幕源文件。支持 SUG 项目（.sug）与 Nicokara 逐字 LRC（.lrc）。
+
+        ``sug_axis_singer_ids`` 仅供工程打开使用：按工程快照里持久化的主轴
+        过滤解析 ``.sug``（快照语义），而不是按文件当前的分组计划分轴。
+        """
         suffix = path.suffix.lower()
         if suffix == ".sug":
-            return self.load_from_sug(path)
+            return self.load_from_sug(path, axis_singer_ids=sug_axis_singer_ids)
         return self.load_from_lrc(path)
 
     def load_from_lrc(self, path: Path) -> Optional[TimingTrack]:
@@ -2829,20 +2849,117 @@ class SubtitleRenderWindow(QWidget):
         self._apply_timing_track(track, path, watch_source=True)
         return track
 
-    def load_from_sug(self, path: Path) -> Optional[TimingTrack]:
-        """加载 SUG 项目文件，直接读取打轴数据而不导出中间 LRC。"""
+    def load_from_sug(
+        self,
+        path: Path,
+        *,
+        axis_singer_ids: Optional[Collection[str]] = None,
+    ) -> Optional[TimingTrack]:
+        """加载 SUG 项目文件，直接读取打轴数据而不导出中间 LRC。
+
+        项目含 ``axis_groups``（分色分轴）时拆成「主分组 → 主字幕 + 其余
+        分组 → 副字幕源」，同路径旧轴源整体替换，其他副源保留。
+
+        工程打开（``_loading_project``）走快照语义：只按传入的
+        ``axis_singer_ids`` 过滤主字幕（缺省 = 未分轴），副轴交给
+        ``_apply_extra_subtitle_sources`` 按各自持久化的过滤重建，不在
+        这里按文件现状自动分轴。
+        """
+        axes: Optional[list[SugAxisTrack]] = None
+        persisted_filter: Optional[frozenset[str]] = None
         try:
-            track = self._subtitle_source_loader.load_sug(
-                path,
-                software_compensation_ms=self._sug_compensation_value(),
-            )
+            if self._loading_project:
+                if axis_singer_ids is not None:
+                    persisted_filter = frozenset(
+                        str(value) for value in axis_singer_ids
+                    )
+                track = self._subtitle_source_loader.load_sug(
+                    path,
+                    software_compensation_ms=self._sug_compensation_value(),
+                    singer_filter=persisted_filter,
+                )
+            else:
+                axes = self._subtitle_source_loader.load_sug_axes(
+                    path,
+                    software_compensation_ms=self._sug_compensation_value(),
+                )
+                track = axes[0].track
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
             fluent_error(
                 self, "加载字幕失败", f"无法解析 SUG 项目：\n{path}\n\n错误：{exc}"
             )
             return None
         self._apply_timing_track(track, path, watch_source=True)
+        if axes is not None:
+            self._install_sug_axis_tracks(path, axes)
+            if len(axes) > 1:
+                InfoBar.success(
+                    title="已按 SUG 分组分轴",
+                    content=(
+                        f"「{path.name}」共 {len(axes)} 个分组：主分组进入主字幕，"
+                        "其余分组已添加为副字幕源。"
+                    ),
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=4000,
+                )
+        else:
+            self._project_document.subtitle_axis_singer_ids = persisted_filter
+            self._primary_source_baseline = deepcopy(track)
         return track
+
+    def _install_sug_axis_tracks(
+        self,
+        path: Path,
+        axes: list[SugAxisTrack],
+    ) -> None:
+        """把新解析的 SUG 轴集合装配为「主字幕 + 副字幕源」。
+
+        主分组占主字幕（``_apply_timing_track`` 已完成主轨道装配），其余分
+        组各成一个副字幕源；同路径的旧轴源整体替换，其他路径的副源保留。
+        """
+        primary_axis = axes[0]
+        self._project_document.subtitle_axis_singer_ids = (
+            primary_axis.singer_ids if primary_axis.is_split else None
+        )
+        self._primary_source_baseline = deepcopy(primary_axis.track)
+        key = self._subtitle_source_key(path)
+        kept = [
+            source
+            for source in self._extra_sources
+            if self._subtitle_source_key(source.path) != key
+        ]
+        for axis in axes[1:]:
+            track = axis.track
+            source_baseline = deepcopy(track)
+            track.loading_settings_mode = "global"
+            track.loading_settings = None
+            track.loading_settings_snapshot = self._subtitle_loading_defaults
+            track.page_plan = build_page_plan(
+                track, self._subtitle_loading_defaults, self._style
+            )
+            project_page_plan_to_legacy_fields(track, self._style)
+            self._apply_remembered_layout_assignment(track)
+            kept.append(
+                ExtraSubtitleSource(
+                    name=axis.name,
+                    path=path,
+                    track=track,
+                    sug_axis_singer_ids=frozenset(axis.singer_ids),
+                    source_baseline=source_baseline,
+                )
+            )
+        self._extra_sources = kept
+        # _apply_timing_track 只物化了主轴的角色配色预设；仅出现在副轴的角色
+        # （如和声组）在这里补齐（幂等，已有方案的角色会被跳过）。
+        self._apply_imported_role_preset_choices(self._content_role_options())
+        self._property_panel.merge_roles(self._content_role_options())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._sync_subtitle_source_watcher()
+        self._mark_project_dirty()
 
     def load_or_reload_sug(self, path: Path) -> Optional[TimingTrack]:
         """工作流第 4→5 步交接入口：同一路径的已监视主字幕源走增量合并，否则整体重载。"""
@@ -2893,6 +3010,10 @@ class SubtitleRenderWindow(QWidget):
         self._watch_primary_subtitle_source = bool(watch_source and source_path)
         if self._watch_primary_subtitle_source and source_path is not None:
             self._set_subtitle_source_baseline(source_path, track)
+        # 主字幕换了内容来源：旧的 .sug 轴身份与基线作废（SUG 路径随后会重新
+        # 写入各自的值）。
+        self._project_document.subtitle_axis_singer_ids = None
+        self._primary_source_baseline = deepcopy(track)
         self._timing_track = track
         self._subtitle_path = source_path
         if not self._loading_project:
@@ -2981,6 +3102,11 @@ class SubtitleRenderWindow(QWidget):
             self._reload_external_subtitle_source(key)
 
     def _reload_external_subtitle_source(self, key: str) -> None:
+        if self._source_key_is_sug(key):
+            # .sug 可能带分色分轴计划：主槽位/轴副源各自按歌手集合过滤重解
+            # 析，无法复用「整文件一份候选」的 LRC 合并路径。
+            self._reload_external_sug_source(key)
+            return
         primary_track = None
         if (
             self._watch_primary_subtitle_source
@@ -3103,6 +3229,313 @@ class SubtitleRenderWindow(QWidget):
             duration=3000,
         )
         self._sync_subtitle_source_watcher()
+
+    def _source_key_is_sug(self, key: str) -> bool:
+        """该源键当前引用的文件是否是 ``.sug``（主字幕或任一副源）。"""
+        paths: list[Path] = []
+        if self._subtitle_path is not None:
+            paths.append(self._subtitle_path)
+        paths.extend(source.path for source in self._extra_sources)
+        return any(
+            self._subtitle_source_key(path) == key and path.suffix.lower() == ".sug"
+            for path in paths
+        )
+
+    def _reload_external_sug_source(self, key: str) -> None:
+        """重载外部 ``.sug``：一次解析出全部分轴，再按当前槽位协调应用。"""
+        primary_track = None
+        if (
+            self._watch_primary_subtitle_source
+            and self._subtitle_path is not None
+            and self._timing_track is not None
+            and self._subtitle_source_key(self._subtitle_path) == key
+        ):
+            primary_track = self._timing_track
+        owner_track = primary_track
+        if owner_track is None:
+            owner_track = next(
+                (
+                    source.track
+                    for source in self._extra_sources
+                    if self._subtitle_source_key(source.path) == key
+                ),
+                None,
+            )
+        parsed: Optional[list[SugAxisTrack]] = None
+
+        def load_candidate(source_path: Path) -> TimingTrack:
+            nonlocal parsed
+            parsed = self._subtitle_source_loader.load_sug_axes(
+                source_path,
+                software_compensation_ms=(
+                    _sug_software_compensation_ms()
+                    if self._sug_compensation_enabled_for_track(owner_track)
+                    else 0
+                ),
+            )
+            return parsed[0].track
+
+        preparation = self._source_watch_runtime.prepare_reload(
+            key,
+            load_candidate=load_candidate,
+            primary_track=None,
+            extra_tracks=(),
+        )
+        if preparation is None:
+            return
+        path = preparation.path
+        disposition = preparation.disposition
+        if disposition == SourceReloadDisposition.MISSING:
+            if preparation.notify:
+                InfoBar.warning(
+                    title="字幕源不可用",
+                    content=f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+            return
+        if disposition == SourceReloadDisposition.RETRYING:
+            return
+        if disposition == SourceReloadDisposition.FAILED:
+            logging.getLogger(__name__).warning(
+                "外部 SUG 字幕源重新解析失败: path=%s error=%s",
+                path,
+                preparation.error,
+            )
+            InfoBar.warning(
+                title="字幕源更新失败",
+                content=f"无法读取更新后的 SUG 项目，已保留当前内容：\n{path}",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=5000,
+            )
+            return
+        if disposition == SourceReloadDisposition.DUPLICATE:
+            self._sync_subtitle_source_watcher()
+            return
+        # UNCHANGED 只说明主轴解析相同：其他分组仍可能变化，交给协调计划的
+        # no-op 判定统一处理。
+        axes = parsed or []
+        if not axes:
+            return
+        self._apply_sug_axis_reload(preparation, axes)
+
+    def _apply_sug_axis_reload(
+        self,
+        preparation: Any,
+        axes: list[SugAxisTrack],
+    ) -> None:
+        """按新解析的轴集合协调主槽位与轴副源（结构变化时整体重装）。"""
+        key = preparation.key
+        path = preparation.path
+        primary_owned = bool(
+            self._watch_primary_subtitle_source
+            and self._subtitle_path is not None
+            and self._timing_track is not None
+            and self._subtitle_source_key(self._subtitle_path) == key
+        )
+        axis_extra_slots = [
+            (
+                index,
+                AxisSlotState(
+                    track=source.track,
+                    baseline=source.source_baseline,
+                    name=source.name,
+                    singer_ids=source.sug_axis_singer_ids,
+                ),
+            )
+            for index, source in enumerate(self._extra_sources)
+            if source.sug_axis_singer_ids is not None
+            and self._subtitle_source_key(source.path) == key
+        ]
+        file_split = bool(axes[0].is_split)
+        primary_split = self._project_document.subtitle_axis_singer_ids is not None
+
+        if primary_owned and file_split != primary_split:
+            # 分组出现/消失是结构性变化：本地逐行编辑没有可靠的迁移锚点，
+            # 整体重装（其他路径的副源不受影响）。
+            primary_track = axes[0].track
+            primary_track.loading_settings_mode = "global"
+            primary_track.loading_settings = None
+            primary_track.loading_settings_snapshot = self._subtitle_loading_defaults
+            primary_track.page_plan = build_page_plan(
+                primary_track, self._subtitle_loading_defaults, self._style
+            )
+            project_page_plan_to_legacy_fields(primary_track, self._style)
+            self._apply_remembered_layout_assignment(primary_track)
+            self._project_document.replace_track(0, primary_track)
+            self._install_sug_axis_tracks(path, axes)
+            self._clear_undo_history()
+            self._source_watch_runtime.accept_prepared(preparation)
+            self._refresh_source_ui()
+            self._refresh_lyrics_panel_source()
+            self._lyrics_panel.set_track(self._timing_track)
+            self._preview_panel.set_track(self._timing_track)
+            InfoBar.success(
+                title="SUG 分组已变化",
+                content=(
+                    f"「{path.name}」已按 {len(axes)} 个分组重新分轴。"
+                    if file_split
+                    else f"「{path.name}」的分组已清除，已恢复单轴。"
+                ),
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=4000,
+            )
+            return
+
+        if not primary_owned and axis_extra_slots and not file_split:
+            # 主字幕已换成其他文件，剩下的轴副源随分组清除一并移除。
+            self._extra_sources = [
+                source
+                for source in self._extra_sources
+                if not (
+                    source.sug_axis_singer_ids is not None
+                    and self._subtitle_source_key(source.path) == key
+                )
+            ]
+            self._active_source_index = 0
+            self._clear_undo_history()
+            self._source_watch_runtime.accept_prepared(preparation)
+            self._refresh_source_ui()
+            self._refresh_lyrics_panel_source()
+            self._sync_extra_tracks_to_preview()
+            self._refresh_transport_duration()
+            self._sync_subtitle_source_watcher()
+            return
+
+        primary_slot = (
+            AxisSlotState(
+                track=self._timing_track,
+                baseline=self._primary_source_baseline,
+                name=None,
+                singer_ids=self._project_document.subtitle_axis_singer_ids,
+            )
+            if primary_owned and self._timing_track is not None
+            else None
+        )
+        if file_split:
+            plan = plan_split_axis_reload(
+                primary=primary_slot,
+                primary_axis=axes[0],
+                axis_extra_slots=axis_extra_slots,
+                axes=axes,
+            )
+        else:
+            state = self._source_watch_runtime.state(key)
+            plain_baseline = state.baseline if state is not None else None
+            plain_extra_slots = [
+                (
+                    index,
+                    AxisSlotState(
+                        track=source.track,
+                        baseline=plain_baseline,
+                        name=None,
+                        singer_ids=None,
+                    ),
+                )
+                for index, source in enumerate(self._extra_sources)
+                if source.sug_axis_singer_ids is None
+                and self._subtitle_source_key(source.path) == key
+            ]
+            plan = plan_single_axis_reload(
+                primary=primary_slot,
+                candidate=axes[0].track,
+                extra_slots=plain_extra_slots,
+            )
+
+        if not plan.changed:
+            self._source_watch_runtime.accept_prepared(preparation)
+            self._sync_subtitle_source_watcher()
+            return
+        if plan.conflicts:
+            details = "\n".join(f"• {item}" for item in plan.conflicts[:8])
+            suffix = "\n• 还有其他冲突……" if len(plan.conflicts) > 8 else ""
+            accepted = fluent_question(
+                self,
+                "字幕源结构已变化",
+                "更新后的歌词结构与当前项目不同，以下设置无法自动迁移：\n"
+                f"{details}{suffix}\n\n是否仍然载入新字幕？",
+                yes_text="载入新字幕",
+                no_text="保留当前内容",
+                default_cancel=True,
+            )
+            if not accepted:
+                self._source_watch_runtime.ignore_prepared(preparation)
+                self._sync_subtitle_source_watcher()
+                return
+
+        merged_tracks: list[TimingTrack] = []
+        if plan.primary_merge is not None and primary_slot is not None:
+            self._project_document.replace_track(0, plan.primary_merge.track)
+            merged_tracks.append(plan.primary_merge.track)
+        for update in plan.extra_updates:
+            self._project_document.replace_track(update.index + 1, update.merge.track)
+            merged_tracks.append(update.merge.track)
+        # 各轴基线推进到本次接受的新解析（本地编辑已迁移进 merge 结果）；
+        # 必须在移除失效副源之前做，删除会移动列表下标。
+        if primary_slot is not None:
+            self._primary_source_baseline = deepcopy(axes[0].track)
+        for update in plan.extra_updates:
+            source = self._extra_sources[update.index]
+            source.source_baseline = deepcopy(update.candidate)
+        for index in sorted(plan.removed_extra_indices, reverse=True):
+            del self._extra_sources[index]
+        if plan.extra_additions:
+            self._apply_imported_role_preset_choices(self._content_role_options())
+        for addition in plan.extra_additions:
+            track = addition.track
+            source_baseline = deepcopy(track)
+            track.loading_settings_mode = "global"
+            track.loading_settings = None
+            track.loading_settings_snapshot = self._subtitle_loading_defaults
+            track.page_plan = build_page_plan(
+                track, self._subtitle_loading_defaults, self._style
+            )
+            project_page_plan_to_legacy_fields(track, self._style)
+            self._apply_remembered_layout_assignment(track)
+            self._extra_sources.append(
+                ExtraSubtitleSource(
+                    name=addition.name,
+                    path=path,
+                    track=track,
+                    sug_axis_singer_ids=frozenset(addition.singer_ids),
+                    source_baseline=source_baseline,
+                )
+            )
+        for track in merged_tracks:
+            track.page_plan = build_legacy_page_plan(track, self._style)
+            project_page_plan_to_legacy_fields(track, self._style)
+        self._active_source_index = min(
+            self._active_source_index, len(self._extra_sources)
+        )
+        if plan.structure_changed:
+            self._clear_undo_history()
+        self._source_watch_runtime.accept_prepared(preparation)
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._property_panel.merge_roles(self._content_role_options())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        if self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._mark_project_dirty()
+        InfoBar.success(
+            title="字幕源已更新",
+            content=(
+                f"已自动载入 {path.name} 的最新时间轴。"
+                if plan.timing_only
+                else f"已自动载入 {path.name} 的最新内容。"
+            ),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=3000,
+        )
+        self._sync_subtitle_source_watcher()
+
     def _apply_imported_role_preset_choices(self, role_names: list[str]) -> None:
         """Resolve cross-group preset collisions before roles are materialized."""
 
@@ -3748,17 +4181,54 @@ class SubtitleRenderWindow(QWidget):
                             item.get("loading_settings")
                         ).apply_sug_export_compensation
                     )
-                try:
-                    track = self._load_timing_track_file(
-                        path, apply_sug_export_compensation=apply_compensation
+                axis_ids_raw = item.get("sug_axis_singer_ids")
+                axis_singer_ids = (
+                    frozenset(
+                        str(value).strip()
+                        for value in axis_ids_raw
+                        if str(value).strip()
                     )
+                    if isinstance(axis_ids_raw, list)
+                    else None
+                )
+                try:
+                    if axis_singer_ids is not None and path.suffix.lower() == ".sug":
+                        # 分轴副源：按持久化的分组歌手集合过滤解析（快照语义，
+                        # 不随 .sug 当前的分组计划漂移）。
+                        track = self._subtitle_source_loader.load_sug(
+                            path,
+                            software_compensation_ms=(
+                                _sug_software_compensation_ms()
+                                if apply_compensation
+                                else 0
+                            ),
+                            singer_filter=axis_singer_ids,
+                        )
+                    else:
+                        track = self._load_timing_track_file(
+                            path, apply_sug_export_compensation=apply_compensation
+                        )
                 except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
                     continue
-                self._set_subtitle_source_baseline(path, track)
+                source_baseline = deepcopy(track)
+                # 主字幕路径的 watch 基线已在加载主字幕时设置；这里只给独立
+                # 路径的副源建立基线，避免后写的副源覆盖主槽位的键。
+                if not (
+                    self._subtitle_path is not None
+                    and self._subtitle_source_key(path)
+                    == self._subtitle_source_key(self._subtitle_path)
+                ):
+                    self._set_subtitle_source_baseline(path, track)
                 apply_track_project_data(track, self._style, item)
                 name = str(item.get("name") or "").strip() or path.stem
                 self._extra_sources.append(
-                    ExtraSubtitleSource(name=name, path=path, track=track)
+                    ExtraSubtitleSource(
+                        name=name,
+                        path=path,
+                        track=track,
+                        sug_axis_singer_ids=axis_singer_ids,
+                        source_baseline=source_baseline,
+                    )
                 )
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()

@@ -311,6 +311,7 @@ def project_payload(
     selected_scheme_key: str,
     output: dict,
     background: Optional[dict] = None,
+    subtitle_sug_axis_singer_ids: Optional[list[str]] = None,
     line_layout_indices: Optional[list[int]] = None,
     line_breaks_before: Optional[list[str]] = None,
     char_role_labels: Optional[list] = None,
@@ -375,6 +376,12 @@ def project_payload(
     }
     if background is not None:
         payload["background"] = dict(background)
+    if subtitle_sug_axis_singer_ids is not None:
+        payload["subtitle_sug_axis_singer_ids"] = [
+            str(value).strip()
+            for value in subtitle_sug_axis_singer_ids
+            if str(value).strip()
+        ]
     if line_layout_indices is not None:
         payload["line_layout_indices"] = [int(v) for v in line_layout_indices]
     if line_breaks_before is not None:

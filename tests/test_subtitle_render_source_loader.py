@@ -28,7 +28,10 @@ def test_subtitle_source_loader_routes_sug_with_compensation(
 
     assert result is expected
     assert calls == [
-        ((tmp_path / "song.SUG",), {"software_compensation_ms": 125})
+        (
+            (tmp_path / "song.SUG",),
+            {"software_compensation_ms": 125, "singer_filter": None},
+        )
     ]
 
 

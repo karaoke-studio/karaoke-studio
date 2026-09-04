@@ -8,7 +8,8 @@ export step in the host workflow.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +36,48 @@ from krok_helper.subtitle_render.sources.subtitles import (
 _DEFAULT_PLACEHOLDER_SINGER_NAMES = {"未命名", "Untitled"}
 
 
+@dataclass(frozen=True)
+class SugAxisSpec:
+    """One normalized SUG axis group (``project.axis_groups`` entry).
+
+    Semantics mirror SUG's embedded ``_build_axis_plan`` snapshot: an empty
+    singer list is materialized to every *enabled* singer, invalid ids are
+    dropped, and exactly one group is primary (first flag wins; nobody
+    flagged → first group).
+    """
+
+    name: str
+    singer_ids: frozenset[str]
+    is_primary: bool
+
+
+@dataclass(frozen=True)
+class SugAxisTrack:
+    """One axis of a ``.sug`` split: the group identity plus its track."""
+
+    spec: SugAxisSpec
+    track: TimingTrack
+    is_split: bool = False
+    """``False`` = 项目没有 ``axis_groups``（单轴、未过滤）。"""
+
+    @property
+    def name(self) -> str:
+        return self.spec.name
+
+    @property
+    def is_primary(self) -> bool:
+        return self.spec.is_primary
+
+    @property
+    def singer_ids(self) -> frozenset[str]:
+        return self.spec.singer_ids
+
+
 def load_sug_timing_track(
-    path: str | Path, *, software_compensation_ms: int = 0
+    path: str | Path,
+    *,
+    software_compensation_ms: int = 0,
+    singer_filter: Collection[str] | None = None,
 ) -> TimingTrack:
     """Load a ``.sug`` file and convert it to :class:`TimingTrack`.
 
@@ -44,6 +85,9 @@ def load_sug_timing_track(
     (``export.software_compensation_ms``); passing it replicates what a SUG
     export to LRC would contain.  See
     :func:`timing_track_from_sug_project`.
+
+    ``singer_filter`` restricts the content to one SUG axis group's singer
+    ids (Nicokara singer-filter semantics); ``None`` keeps everything.
     """
 
     source_path = Path(path)
@@ -54,7 +98,116 @@ def load_sug_timing_track(
         nicokara_tags=tags,
         software_compensation_ms=software_compensation_ms,
         base_dir=source_path.parent,
+        singer_filter=singer_filter,
     )
+
+
+def load_sug_axis_tracks(
+    path: str | Path, *, software_compensation_ms: int = 0
+) -> list[SugAxisTrack]:
+    """Load a ``.sug`` and derive one track per axis group.
+
+    A project without ``axis_groups`` yields a single unfiltered axis.
+    """
+
+    source_path = Path(path)
+    project, extras = SugProjectParser.load_with_extras(str(source_path))
+    tags = extras.get("nicokara_tags") if isinstance(extras, dict) else None
+    return sug_axis_tracks_from_project(
+        project,
+        nicokara_tags=tags,
+        software_compensation_ms=software_compensation_ms,
+        base_dir=source_path.parent,
+    )
+
+
+def sug_axis_specs_from_project(project: Any) -> list[SugAxisSpec]:
+    """Normalize ``project.axis_groups`` into host-side axis specs.
+
+    Host-side twin of SUG's ``_build_axis_plan`` normalization; the project
+    may be any object exposing ``singers`` / ``axis_groups`` so tests (and
+    older SUG builds without the attribute) degrade to single-axis.
+    """
+
+    groups_raw = list(getattr(project, "axis_groups", None) or [])
+    singers = list(getattr(project, "singers", []) or [])
+    known_ids: dict[str, bool] = {}
+    for singer in singers:
+        singer_id = getattr(singer, "id", None)
+        if singer_id is not None:
+            known_ids[str(singer_id)] = bool(getattr(singer, "enabled", True))
+
+    specs: list[SugAxisSpec] = []
+    primary_seen = False
+    for index, group in enumerate(groups_raw):
+        raw_ids = [str(sid) for sid in (getattr(group, "singer_ids", None) or [])]
+        if raw_ids:
+            singer_ids = frozenset(sid for sid in raw_ids if sid in known_ids)
+        else:
+            # 空 = 全部演唱者（过滤器「不勾选则导出全部」口径）：物化为
+            # 当前全部启用歌手，随本次解析反映最新名单。
+            singer_ids = frozenset(
+                sid for sid, enabled in known_ids.items() if enabled
+            )
+        name = str(getattr(group, "name", "") or "").strip() or f"轴{index + 1}"
+        is_primary = bool(getattr(group, "is_primary", False)) and not primary_seen
+        primary_seen = primary_seen or is_primary
+        specs.append(
+            SugAxisSpec(name=name, singer_ids=singer_ids, is_primary=is_primary)
+        )
+    if specs and not primary_seen:
+        specs[0] = SugAxisSpec(
+            name=specs[0].name,
+            singer_ids=specs[0].singer_ids,
+            is_primary=True,
+        )
+    return specs
+
+
+def sug_axis_tracks_from_project(
+    project: Any,
+    *,
+    nicokara_tags: Mapping[str, Any] | None = None,
+    software_compensation_ms: int = 0,
+    base_dir: Path | None = None,
+) -> list[SugAxisTrack]:
+    """Convert one SUG ``Project`` into per-axis :class:`TimingTrack`s.
+
+    The primary group's track comes first regardless of ``axis_groups``
+    order so callers can map it onto the renderer's 主字幕 slot directly;
+    remaining groups keep their project order.
+    """
+
+    specs = sug_axis_specs_from_project(project)
+    if not specs:
+        return [
+            SugAxisTrack(
+                spec=SugAxisSpec(name="", singer_ids=frozenset(), is_primary=True),
+                track=timing_track_from_sug_project(
+                    project,
+                    nicokara_tags=nicokara_tags,
+                    software_compensation_ms=software_compensation_ms,
+                    base_dir=base_dir,
+                ),
+                is_split=False,
+            )
+        ]
+    axes = [
+        SugAxisTrack(
+            spec=spec,
+            track=timing_track_from_sug_project(
+                project,
+                nicokara_tags=nicokara_tags,
+                software_compensation_ms=software_compensation_ms,
+                base_dir=base_dir,
+                singer_filter=spec.singer_ids,
+            ),
+            is_split=True,
+        )
+        for spec in specs
+    ]
+    axes.sort(key=lambda axis: not axis.is_primary)
+    return axes
 
 
 def timing_track_from_sug_project(
@@ -63,6 +216,7 @@ def timing_track_from_sug_project(
     nicokara_tags: Mapping[str, Any] | None = None,
     software_compensation_ms: int = 0,
     base_dir: Path | None = None,
+    singer_filter: Collection[str] | None = None,
 ) -> TimingTrack:
     """Convert a StrangeUtaGame ``Project`` object to :class:`TimingTrack`.
 
@@ -89,6 +243,16 @@ def timing_track_from_sug_project(
     project directly should be able to match that.  The compensation never
     touches ``meta.offset_ms`` (LRC ``@Offset``) or ``style.timing_offset_ms``
     — those stay independent and cumulative.
+
+    ``singer_filter`` restricts the track to one axis group (SUG 分色分轴).
+    Content follows the Nicokara exporter's singer filter: a line survives
+    when the sentence singer or any character singer is in the set (blank
+    lines always survive), and characters outside the set are dropped from
+    surviving lines.  Dropped characters never perturb timing — anchors,
+    spread intervals, and line ends are still computed over the full
+    project, so every kept element keeps the exact timing it has in the
+    unsplit track.  A ruby group is kept only when every character it
+    covers survives.
     """
 
     offset_ms = int(getattr(project, "global_offset_ms", 0) or 0)
@@ -99,6 +263,9 @@ def timing_track_from_sug_project(
     }
     default_singer_id = _default_singer_id(singers)
     ruby_pause_texts = _ruby_pause_texts()
+    axis_singer_ids = (
+        frozenset(str(sid) for sid in singer_filter) if singer_filter is not None else None
+    )
 
     lines: list[TimingLine] = []
     rubies: list[RubyAnnotation] = []
@@ -116,7 +283,15 @@ def timing_track_from_sug_project(
             )
             continue
 
-        line_chars: list[TimingChar] = []
+        if axis_singer_ids is not None and not _sentence_in_axis(
+            getattr(sentence, "singer_id", ""),
+            chars,
+            axis_singer_ids,
+            default_singer_id,
+            singer_by_id,
+        ):
+            continue
+
         line_singer_id = _effective_singer_id(
             getattr(sentence, "singer_id", ""), default_singer_id
         )
@@ -136,6 +311,7 @@ def timing_track_from_sug_project(
             sentence_singer_id=getattr(sentence, "singer_id", ""),
             default_singer_id=default_singer_id,
             singer_by_id=singer_by_id,
+            axis_singer_ids=axis_singer_ids,
         )
         line_end_ms = _group_end_ms(
             chars, len(chars), offset_ms, project, sentence_index
@@ -151,6 +327,13 @@ def timing_track_from_sug_project(
                 # The line this sentence is about to occupy.  Blank sentences
                 # append a placeholder line too, so this stays in step.
                 line_index=len(lines),
+                kept_char_positions=kept_axis_char_positions(
+                    chars,
+                    getattr(sentence, "singer_id", ""),
+                    default_singer_id,
+                    singer_by_id,
+                    axis_singer_ids,
+                ),
             )
         )
         lines.append(
@@ -313,6 +496,7 @@ def _timing_chars_for_sentence(
     sentence_singer_id: object,
     default_singer_id: str | None,
     singer_by_id: dict[str, Any],
+    axis_singer_ids: frozenset[str] | None = None,
 ) -> list[TimingChar]:
     timed_indices = [
         index
@@ -344,6 +528,7 @@ def _timing_chars_for_sentence(
                     default_singer_id=default_singer_id,
                     singer_by_id=singer_by_id,
                     has_following_anchor=True,
+                    axis_singer_ids=axis_singer_ids,
                 )
             )
     for timed_index_position, timed_index in enumerate(timed_indices):
@@ -384,6 +569,16 @@ def _timing_chars_for_sentence(
                 (index, ch, text)
                 for index, ch in enumerate(chars[cursor:span_end_index], start=cursor)
                 if (text := str(getattr(ch, "char", "")))
+                and (
+                    axis_singer_ids is None
+                    or _axis_char_singer_id(
+                        ch,
+                        sentence_singer_id,
+                        default_singer_id,
+                        singer_by_id,
+                    )
+                    in axis_singer_ids
+                )
             ]
             if not group_items:
                 cursor = span_end_index
@@ -456,6 +651,7 @@ def _timing_chars_for_span(
     default_singer_id: str | None,
     singer_by_id: dict[str, Any],
     has_following_anchor: bool,
+    axis_singer_ids: frozenset[str] | None = None,
 ) -> list[TimingChar]:
     """Map one source-character span without moving its boundary anchor.
 
@@ -469,6 +665,16 @@ def _timing_chars_for_span(
         (index, ch, text)
         for index, ch in enumerate(chars[start_index:end_index], start=start_index)
         if (text := str(getattr(ch, "char", "")))
+        and (
+            axis_singer_ids is None
+            or _axis_char_singer_id(
+                ch,
+                sentence_singer_id,
+                default_singer_id,
+                singer_by_id,
+            )
+            in axis_singer_ids
+        )
     ]
     starts = _spread_text_starts(span_start_ms, span_end_ms, len(items))
     shared_span = (
@@ -523,6 +729,7 @@ def _ruby_annotations_for_sentence(
     ruby_pause_texts: tuple[str, ...],
     *,
     line_index: int,
+    kept_char_positions: dict[int, int] | None = None,
 ) -> list[RubyAnnotation]:
     result: list[RubyAnnotation] = []
     index = 0
@@ -538,6 +745,15 @@ def _ruby_annotations_for_sentence(
         ):
             index += 1
         end = index
+        target_range: tuple[int, int] | None = (start, end)
+        if kept_char_positions is not None:
+            # 分轴口径：注音覆盖的字符里只要有一个被剔除，注音正文就对不上，
+            # 整条丢弃；保留时把源句下标重映射到过滤后的行内字符下标。
+            target_range = _remap_ruby_target_range(
+                kept_char_positions, start, end
+            )
+            if target_range is None:
+                continue
         ruby = _ruby_annotation_for_group(
             chars,
             start,
@@ -547,10 +763,56 @@ def _ruby_annotations_for_sentence(
             sentence_index,
             ruby_pause_texts,
             line_index=line_index,
+            target_char_range=target_range,
         )
         if ruby is not None:
             result.append(ruby)
     return result
+
+
+def _remap_ruby_target_range(
+    kept_char_positions: dict[int, int], start: int, end: int
+) -> tuple[int, int] | None:
+    new_start = kept_char_positions.get(start)
+    new_last = kept_char_positions.get(end - 1)
+    if new_start is None or new_last is None:
+        return None
+    for index in range(start, end):
+        if index not in kept_char_positions:
+            return None
+    return (new_start, new_last + 1)
+
+
+def kept_axis_char_positions(
+    chars: list[Any],
+    sentence_singer_id: object,
+    default_singer_id: str | None,
+    singer_by_id: dict[str, Any],
+    axis_singer_ids: frozenset[str] | None,
+) -> dict[int, int] | None:
+    """源句字符下标 → 过滤后行内字符下标的映射；未过滤时返回 ``None``。
+
+    行字符的构建顺序（先按源序、再剔除无文本与组外歌手的字符）在这里独
+    立重放一遍，供注音目标下标重映射使用。
+    """
+
+    if axis_singer_ids is None:
+        return None
+    positions: dict[int, int] = {}
+    count = 0
+    for index, ch in enumerate(chars):
+        if not str(getattr(ch, "char", "")):
+            continue
+        if (
+            _axis_char_singer_id(
+                ch, sentence_singer_id, default_singer_id, singer_by_id
+            )
+            not in axis_singer_ids
+        ):
+            continue
+        positions[index] = count
+        count += 1
+    return positions
 
 
 def _ruby_annotation_for_group(
@@ -563,6 +825,7 @@ def _ruby_annotation_for_group(
     ruby_pause_texts: tuple[str, ...],
     *,
     line_index: int,
+    target_char_range: tuple[int, int] | None = None,
 ) -> RubyAnnotation | None:
     group_chars = chars[start:end]
     start_ms = _first_timestamp(group_chars[0], offset_ms)
@@ -598,9 +861,14 @@ def _ruby_annotation_for_group(
         # exact.  Keeping them is what stops a line like ケロケロケロ… from
         # stacking every け on the first ケ once the renderer has to guess by
         # text, and stops an overlapping harmony line's ruby from landing here.
+        # 分轴时目标下标按过滤后的行内字符重映射（target_char_range）。
         target_line_index=line_index,
-        target_char_start=start,
-        target_char_end=end,
+        target_char_start=(
+            target_char_range[0] if target_char_range is not None else start
+        ),
+        target_char_end=(
+            target_char_range[1] if target_char_range is not None else end
+        ),
     )
 
 
@@ -634,6 +902,62 @@ def _ruby_reading_parts_for_group(
     if has_part:
         reading_parts.append("".join(current_part))
     return reading_parts, part_offsets
+
+
+def _sentence_in_axis(
+    sentence_singer_id: object,
+    chars: list[Any],
+    axis_singer_ids: frozenset[str],
+    default_singer_id: str | None,
+    singer_by_id: dict[str, Any],
+) -> bool:
+    """行级去留，与 ``nicokara_exporter._sentence_has_singer`` 同口径。"""
+
+    sentence_effective = _normalized_axis_singer_id(
+        sentence_singer_id, default_singer_id, singer_by_id
+    )
+    if sentence_effective in axis_singer_ids:
+        return True
+    for ch in chars:
+        if (
+            _axis_char_singer_id(
+                ch, sentence_singer_id, default_singer_id, singer_by_id
+            )
+            in axis_singer_ids
+        ):
+            return True
+    return False
+
+
+def _normalized_axis_singer_id(
+    value: object,
+    default_singer_id: str | None,
+    singer_by_id: dict[str, Any],
+) -> str | None:
+    """过滤口径的歌手归一化，对齐 ``nicokara_exporter._normalize_singer_id``。
+
+    空 / ``?`` / ``未知`` / 不在歌手表中的 id 都归到默认歌手；与标签路径
+    的 :func:`_effective_singer_id` 不同——那条路径保留原始 id 供 UI 显示。
+    """
+
+    text = str(value or "").strip()
+    if not text or text in {"?", "未知"}:
+        return default_singer_id
+    if text not in singer_by_id:
+        return default_singer_id
+    return text
+
+
+def _axis_char_singer_id(
+    ch: Any,
+    sentence_singer_id: object,
+    default_singer_id: str | None,
+    singer_by_id: dict[str, Any],
+) -> str | None:
+    effective = getattr(ch, "singer_id", "") or sentence_singer_id
+    return _normalized_axis_singer_id(
+        effective, default_singer_id, singer_by_id
+    )
 
 
 def _ruby_pause_texts() -> tuple[str, ...]:

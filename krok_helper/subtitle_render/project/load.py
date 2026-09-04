@@ -244,6 +244,16 @@ def _schema_version(value: object) -> int:
         return 0
 
 
+def _sug_axis_singer_ids(value: object) -> Optional[frozenset[str]]:
+    """主字幕槽位的 SUG 轴过滤（快照字段）；非列表或缺省 = 未分轴。
+
+    列表允许出现（空 = 空轴，全部行剔除），与「未分轴」用缺省/非列表区分。
+    """
+    if not isinstance(value, list):
+        return None
+    return frozenset(str(item).strip() for item in value if str(item).strip())
+
+
 def _apply_animation_overrides(track: TimingTrack, payload: object) -> None:
     if not isinstance(payload, list):
         return
@@ -263,7 +273,8 @@ class ProjectLoadPlan:
     subtitle_path: Optional[Path]
     fallback_video_path: Optional[Path]
     audio_path: Optional[Path]
-    background: Optional[dict]
+    background: Optional[dict] = None
+    subtitle_sug_axis_singer_ids: Optional[frozenset[str]] = None
     schema_version: int = 0
     line_breaks_before: Any = None
     line_layout_indices: Any = None
@@ -310,6 +321,9 @@ class ProjectLoadPlan:
             fallback_video_path=paths["video_path"],
             audio_path=paths["audio_path"],
             background=background if isinstance(background, dict) else None,
+            subtitle_sug_axis_singer_ids=_sug_axis_singer_ids(
+                source.get("subtitle_sug_axis_singer_ids")
+            ),
             schema_version=_schema_version(source.get("schema_version")),
             line_breaks_before=source.get("line_breaks_before"),
             line_layout_indices=source.get("line_layout_indices"),
