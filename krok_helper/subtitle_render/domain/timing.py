@@ -176,6 +176,13 @@ class TimingLine:
     """可选导唱符；可插在正文前或替代行首标记，但不改变源 ``chars`` 索引。"""
     inline_guide_symbols: dict[int, GuideSymbol] = field(default_factory=dict)
     """按源 ``chars`` 索引保存的行内 SVG 字形替换；原字符与打轴时间保持不变。"""
+    wipe_reverse: bool = False
+    """整行时间戳原本严格逆序；加载时已镜像理顺为顺序，仅走字反向。
+
+    由 :func:`normalize_reversed_wipe_lines` 在源入口写入，不持久化——
+    源文件（.sug / LRC / N3）保持原始逆序数据，每次加载重新理顺。
+    出入场 / 显示窗口 / 分页等一切时间计算按理顺后的普通行处理，
+    只有 wipe（横排从右往左、竖排从下往上）消费本标记。"""
 
 
 @dataclass(frozen=True)
@@ -536,6 +543,54 @@ def remap_track_role_labels(
                 )
                 changed = True
     return changed
+
+
+def line_time_reversed(line: "TimingLine") -> bool:
+    """字符起点到行末的完整边界序列是否全部严格逆序。
+
+    行末时间戳必须存在，且 ``[*char_starts, end_ms]`` 的每个相邻对都严格
+    递减；缺行末、等值、局部乱序，或字符逆序但行末回到更晚时刻，均属于
+    非法/非反向 wipe 数据，不触发兼容。单字符行只要行末早于字符起点也成立。
+    """
+    if not line.chars or line.end_ms is None:
+        return False
+    boundaries = [*(int(ch.start_ms) for ch in line.chars), int(line.end_ms)]
+    return all(
+        boundaries[index + 1] < boundaries[index]
+        for index in range(len(boundaries) - 1)
+    )
+
+
+def normalize_reversed_wipe_lines(track: "TimingTrack") -> None:
+    """把整行时间戳严格逆序的行在加载入口镜像理顺为顺序，并打逆序标记。
+
+    仅接受包含行末时间戳在内的完整边界序列严格递减，例如
+    ``[5]A[3]B[2]C[1]``；字符 ``[3, 2, 1]`` 但行末为 ``4`` 属于非法输入，
+    不触发本兼容。合法序列以首、末边界为轴整体镜像，间隙集合不变，理顺后
+    所有时间计算（出入场、显示窗口、分页、注音归属）与普通顺序行一致；
+    仅 ``wipe_reverse`` 标记让走字反向消费。
+
+    例：``[5]A[3]B[2]C[>1]`` → ``[1]A[3]B[4]C[>5]``。
+
+    理顺是幂等的：顺序行（含已理顺行）不满足严格逆序，直接跳过。
+    """
+    for line in track.lines:
+        if line.is_blank or not line_time_reversed(line):
+            continue
+        chars = line.chars
+        starts = [int(ch.start_ms) for ch in chars]
+        axis_low = int(line.end_ms)
+        axis_high = starts[0]
+
+        def mirror(value: int) -> int:
+            return axis_low + axis_high - value
+
+        for ch in chars:
+            ch.start_ms = mirror(int(ch.start_ms))
+            if ch.pause_release_ms is not None:
+                ch.pause_release_ms = mirror(int(ch.pause_release_ms))
+        line.end_ms = axis_high
+        line.wipe_reverse = True
 
 
 def timing_line_start_ms(line: TimingLine) -> int:

@@ -795,6 +795,9 @@ def compute_char_intervals(
     没有 ``pause_release_ms`` 时仍然接到下一字起点，因此**只有源数据真的重叠**
     才会与从前不同；LRC 来源在结构上不可能重叠（``[t1]字[t2]`` 里释放点必早于
     下一字起点），所以那条路径一帧都不会变。
+
+    整行时间戳逆序的行在源加载入口已被 :func:`normalize_reversed_wipe_lines`
+    镜像理顺为顺序，本函数无需感知逆序。
     """
     chars = line.chars
     n = len(chars)

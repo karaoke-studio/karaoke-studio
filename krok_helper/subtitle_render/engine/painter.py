@@ -2860,6 +2860,7 @@ def _vertical_fill_band(
     line: TimingLine | None = None,
     active_rubies: list[RubyAnnotation] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
+    reverse: bool = False,
 ) -> tuple[int, int] | None:
     return _vertical_fill_band_with_ports(
         cells,
@@ -2869,6 +2870,7 @@ def _vertical_fill_band(
         line=line,
         active_rubies=active_rubies,
         ruby_main_progress_mode=ruby_main_progress_mode,
+        reverse=reverse,
     )
 
 
@@ -4385,7 +4387,8 @@ def _paint_rubies(
     draw_glow: bool = True,
     precomputed_layouts: tuple[_RubyLayout, ...] | None = None,
 ) -> None:
-    rtl = style.right_to_left
+    # 理顺过的整行逆序行：注音分侧与主文字同向（从右往左），与 layout_rubies 同源。
+    rtl = style.right_to_left != line.wipe_reverse
     painter.save()
     try:
         painter.setFont(ruby_font)

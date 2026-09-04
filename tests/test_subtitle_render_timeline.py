@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from krok_helper.subtitle_render.engine.timing.timeline import (
+    _line_end_ms,
     apply_n3_seq_line_breaks,
     assign_lanes,
     char_fill_ratio,
@@ -13,6 +14,11 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     paragraph_last_line_flags,
     track_duration_ms,
     visible_display_lines,
+)
+from krok_helper.subtitle_render.domain.timing import (
+    line_time_reversed,
+    normalize_reversed_wipe_lines,
+    timing_line_start_ms,
 )
 from krok_helper.subtitle_render.domain.models import (
     TrackPage,
@@ -204,6 +210,89 @@ def test_compute_char_intervals_clamps_when_end_before_start():
     # 异常数据：line.end_ms 比末字 start_ms 还早 → 末字区间退化为零
     line = _make_line([("a", 2000)], end_ms=1000)
     assert compute_char_intervals(line) == [(2000, 2000)]
+
+
+# ---------------------------------------------------------------------------
+# 整行时间戳逆序 → 反向走字
+# ---------------------------------------------------------------------------
+
+
+def _reversed_line(end_ms=0):
+    return _make_line([("あ", 4000), ("い", 3000), ("う", 2000), ("え", 1000)], end_ms)
+
+
+def _normalized_reversed_line(end_ms=0):
+    line = _reversed_line(end_ms)
+    normalize_reversed_wipe_lines(_track(line))
+    return line
+
+
+def test_line_time_reversed_requires_strict_full_descent_including_end():
+    assert line_time_reversed(_reversed_line())
+    # 等值不算逆序
+    assert not line_time_reversed(
+        _make_line([("あ", 3000), ("い", 2000), ("う", 1000)], 1000)
+    )
+    # 局部乱序不算逆序
+    assert not line_time_reversed(
+        _make_line([("あ", 3000), ("い", 1000), ("う", 2000)], 0)
+    )
+    # 字符虽逆序，但行末回到更晚时刻仍是非法输入。
+    assert not line_time_reversed(
+        _make_line([("あ", 3000), ("い", 2000), ("う", 1000)], 4000)
+    )
+    assert line_time_reversed(_make_line([("あ", 1000)], 0))
+    assert not line_time_reversed(_make_line([], 0))
+    assert not line_time_reversed(_make_line([("あ", 1000)], None))
+
+
+def test_normalize_reversed_line_mirrors_complete_boundary_sequence():
+    line = _normalized_reversed_line()
+    assert [char.start_ms for char in line.chars] == [0, 1000, 2000, 3000]
+    assert line.end_ms == 4000
+    assert line.wipe_reverse is True
+    assert compute_char_intervals(line) == [
+        (0, 1000),
+        (1000, 2000),
+        (2000, 3000),
+        (3000, 4000),
+    ]
+
+    invalid_end = _make_line(
+        [("A", 3000), ("B", 2000), ("C", 1000)], end_ms=4000
+    )
+    normalize_reversed_wipe_lines(_track(invalid_end))
+    assert [char.start_ms for char in invalid_end.chars] == [3000, 2000, 1000]
+    assert invalid_end.end_ms == 4000
+    assert invalid_end.wipe_reverse is False
+
+
+def test_compute_char_intervals_reversed_line_pause_release():
+    # 时间窗口字段随反向位置一起归一化，显式释放点仍属于原演唱窗口。
+    line = _make_line([("あ", 3000), ("い", 2000)], end_ms=1000)
+    line.chars[1].pause_release_ms = 1500
+    normalize_reversed_wipe_lines(_track(line))
+    assert compute_char_intervals(line) == [(1000, 2000), (2000, 2500)]
+
+
+def test_reversed_line_start_and_end_cover_actual_singing():
+    line = _normalized_reversed_line()
+    assert timing_line_start_ms(line) == 0
+    assert _line_end_ms(line) == 4000
+    # 演唱中段能命中活跃行
+    assert find_active_line(_track(line), 500) is line
+
+
+def test_reversed_line_appears_in_visible_display_lines():
+    track = _track(_normalized_reversed_line())
+    visible = visible_display_lines(
+        track,
+        1500,
+        lead_in_ms=500,
+        tail_ms=500,
+        lane_gap_ms=300,
+    )
+    assert [item.line for item in visible] == [track.lines[0]]
 
 
 # ---------------------------------------------------------------------------

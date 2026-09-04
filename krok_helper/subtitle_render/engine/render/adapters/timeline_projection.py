@@ -41,6 +41,8 @@ def source_char_intervals(
 ) -> tuple[tuple[int, int], ...]:
     """Project authored character timing into passive timeline cells."""
 
+    # 整行逆序的行在源加载入口已被镜像理顺为顺序（见
+    # normalize_reversed_wipe_lines），这里按普通行投影即可。
     intervals: list[tuple[int, int]] = []
     for index, char in enumerate(line.chars):
         next_ms = (

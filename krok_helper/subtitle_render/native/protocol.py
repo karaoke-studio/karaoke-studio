@@ -263,6 +263,9 @@ def timing_line_to_ir(
             for ch in render_line.chars
         ],
         "end_ms": int(line.end_ms) if line.end_ms is not None else None,
+        # 整行逆序已理顺的标记：sidecar 据此对齐 Painter 的反向走字
+        # （横排 rtl 翻转 / 竖排自下而上），缺省 false 兼容旧 IR。
+        "wipe_reverse": bool(getattr(render_line, "wipe_reverse", False)),
         "singer_label": line.singer_label,
         "singer_id": line.singer_id,
         "is_blank": bool(line.is_blank),

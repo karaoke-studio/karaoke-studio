@@ -138,9 +138,17 @@ def karaoke_fill_segments(
     release_x_ranges: list[tuple[int, int]] | None = None,
     layout_x_ranges: list[tuple[int, int]] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
+    wipe_reverse: bool = False,
 ) -> list[FillSegment]:
     """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
-    扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
+    扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。
+
+    ``wipe_reverse``（加载入口镜像理顺过的整行逆序行）时按**演唱时间序**返回
+    分段：段列表是扫光锋面的迭代序，正常行 = 字符序；逆序行把**时间窗口与
+    字符位置反序配对**（位置 i 用窗口 n-1-i）后反转段表——行尾几何段携带
+    最早窗口、几何自右向左递降，与 RTL 文本同构，复用 rtl 扫光管线。
+    N3 的 ``AdjustWipeEnd`` 重叠收缩在反转**之后**执行，保证相邻对的
+    "后继"是时间后继；该公式本身方向感知，无需另改。"""
     segments: list[FillSegment] = []
     release_x_ranges = release_x_ranges or ink_x_ranges
     layout_x_ranges = layout_x_ranges or release_x_ranges
@@ -257,6 +265,8 @@ def karaoke_fill_segments(
                 )
             )
         index = max(indices) + 1
+    if wipe_reverse:
+        segments.reverse()
     return adjust_fill_release_edges(segments)
 
 
@@ -720,6 +730,8 @@ def layout_plain_line(
         if resolved_intervals is not None
         else compute_char_intervals(line, char_widths)
     )
+    if line.wipe_reverse:
+        intervals.reverse()
     char_gaps, ruby_left_ext, ruby_right_ext = ruby_char_gaps(
         line,
         char_widths,
@@ -767,11 +779,12 @@ def layout_plain_line(
         if baseline_y is not None
         else resolve_baseline_y(metrics, img_h, style, ruby_metrics)
     )
-    rtl = style.right_to_left
+    text_rtl = style.right_to_left
+    # 加载入口已理顺的整行逆序行：摆放仍按文本方向，仅走字方向反向（XOR）。
     char_lefts = char_left_positions(
         char_widths,
         x0,
-        rtl,
+        text_rtl,
         letter_spacing(style),
         char_gaps=char_gaps,
         n3_no_backtracking=style.layout_semantics == "n3_1074",
@@ -808,6 +821,7 @@ def layout_plain_line(
         release_x_ranges=wipe_x_ranges,
         layout_x_ranges=char_x_ranges,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
+        wipe_reverse=line.wipe_reverse,
     )
     line_rect = QRectF(
         float(x0),
@@ -851,7 +865,7 @@ def layout_plain_line(
         fill_segments=fill_segments,
         line_rect=line_rect,
         colors=colors,
-        rtl=rtl,
+        rtl=text_rtl != line.wipe_reverse,
         has_inline_styles=False,
         ink_x_ranges=ink_x_ranges,
         ruby_layouts=ruby_layouts,
@@ -888,6 +902,8 @@ def layout_role_line(
         if resolved_intervals is not None
         else compute_char_intervals(line, char_widths)
     )
+    if line.wipe_reverse:
+        intervals.reverse()
     ruby_extra = ports.role_ruby_vertical_extra(
         line,
         active_rubies,
@@ -956,6 +972,8 @@ def layout_role_line(
         if resolved_intervals is not None
         else compute_char_intervals(line, char_widths)
     )
+    if line.wipe_reverse:
+        intervals.reverse()
     ink_x_ranges = role_char_ink_ranges_by_index(
         line,
         text_layout,
@@ -976,6 +994,7 @@ def layout_role_line(
         release_x_ranges=wipe_x_ranges,
         layout_x_ranges=char_x_ranges,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
+        wipe_reverse=line.wipe_reverse,
     )
     ruby_layouts = tuple(
         ports.layout_rubies(
@@ -1012,7 +1031,7 @@ def layout_role_line(
         fill_segments=fill_segments,
         line_rect=text_layout.line_rect,
         colors=effective_karaoke_colors(style),
-        rtl=style.right_to_left,
+        rtl=style.right_to_left != line.wipe_reverse,
         has_inline_styles=True,
         ink_x_ranges=ink_x_ranges,
         ruby_layouts=ruby_layouts,

@@ -1919,7 +1919,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             style.afterDecorPaint, line->fillBounds, style.afterDecor
         );
 
-        const bool rtl = style.rightToLeft && !style.vertical;
+        const bool reverseVertical = style.vertical && line->wipeReverse;
+        const bool rtl = !style.vertical
+            && (style.rightToLeft != line->wipeReverse);
         const auto wipePositionAt = [&](const Impl::CachedChar &ch) {
             if (ch.wipePoints.empty()) {
                 const int duration = std::max(ch.endMs - ch.startMs, 1);
@@ -1957,7 +1959,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const auto wipeCoordinateAt = [&](const Impl::CachedChar &ch) {
             const float position = wipePositionAt(ch);
             return style.vertical
-                ? ch.top + (ch.bottom - ch.top) * position
+                ? (reverseVertical
+                    ? ch.bottom - (ch.bottom - ch.top) * position
+                    : ch.top + (ch.bottom - ch.top) * position)
                 : (rtl
                     ? ch.right - (ch.right - ch.left) * position
                      : ch.left + (ch.right - ch.left) * position);
@@ -1992,7 +1996,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const auto unclampedWipeCoordinateAt = [&](const Impl::CachedChar &ch) {
             const float position = unclampedWipePositionAt(ch);
             return style.vertical
-                ? ch.top + (ch.bottom - ch.top) * position
+                ? (reverseVertical
+                    ? ch.bottom - (ch.bottom - ch.top) * position
+                    : ch.top + (ch.bottom - ch.top) * position)
                 : (rtl
                     ? ch.right - (ch.right - ch.left) * position
                     : ch.left + (ch.right - ch.left) * position);
@@ -2031,7 +2037,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 && wipePhaseAt(line->chars, charIndex) == N3WipePhase::After;
         };
         float wipeEdge = style.vertical
-            ? line->fillBounds.top
+            ? (reverseVertical ? line->fillBounds.bottom : line->fillBounds.top)
             : (rtl ? line->bounds.right : line->bounds.left);
         for (const Impl::CachedChar &ch : line->chars) {
             if (tMs < wipeStartMs(ch)) {
@@ -2121,7 +2127,23 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             utopiaCharWipeReady[charIndex] = true;
             utopiaCharWipeCache[charIndex] = UtopiaWipe{
                 bounds,
-                left + std::max(right - left, 1.0f) * ratio
+                style.vertical
+                    ? (reverseVertical
+                        ? std::ceil(wipeBounds.bottom) + edgeHalf
+                            - std::max(
+                                std::ceil(wipeBounds.bottom)
+                                    - std::floor(wipeBounds.top) + edgeHalf * 2.0f,
+                                1.0f
+                            ) * ratio
+                        : std::floor(wipeBounds.top) - edgeHalf
+                            + std::max(
+                                std::ceil(wipeBounds.bottom)
+                                    - std::floor(wipeBounds.top) + edgeHalf * 2.0f,
+                                1.0f
+                            ) * ratio)
+                    : (rtl
+                        ? right - std::max(right - left, 1.0f) * ratio
+                        : left + std::max(right - left, 1.0f) * ratio)
             };
             return utopiaCharWipeCache[charIndex];
         };
@@ -2174,7 +2196,23 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             utopiaRubyWipeReady[rubyIndex][unitIndex] = true;
             utopiaRubyWipeCache[rubyIndex][unitIndex] = UtopiaWipe{
                 bounds,
-                left + std::max(right - left, 1.0f) * ratio
+                style.vertical
+                    ? (reverseVertical
+                        ? std::ceil(bounds.bottom) + edgeHalf
+                            - std::max(
+                                std::ceil(bounds.bottom) - std::floor(bounds.top)
+                                    + edgeHalf * 2.0f,
+                                1.0f
+                            ) * ratio
+                        : std::floor(bounds.top) - edgeHalf
+                            + std::max(
+                                std::ceil(bounds.bottom) - std::floor(bounds.top)
+                                    + edgeHalf * 2.0f,
+                                1.0f
+                            ) * ratio)
+                    : (rtl
+                        ? right - std::max(right - left, 1.0f) * ratio
+                        : left + std::max(right - left, 1.0f) * ratio)
             };
             return utopiaRubyWipeCache[rubyIndex][unitIndex];
         };
@@ -2187,13 +2225,65 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // surface, not the row box, is the only vertical boundary.
         const float fullWipeClipTop = -static_cast<float>(scene.height) * 2.0f;
         const float fullWipeClipBottom = static_cast<float>(scene.height) * 2.0f;
+        const auto directionalWipeClip = [&](const D2D1_RECT_F &bounds,
+                                             float edge, float pad, bool after) {
+            if (style.vertical) {
+                if (reverseVertical) {
+                    return after
+                        ? D2D1::RectF(
+                            bounds.left - pad, edge,
+                            bounds.right + pad, bounds.bottom + pad
+                        )
+                        : D2D1::RectF(
+                            bounds.left - pad, bounds.top - pad,
+                            bounds.right + pad, edge
+                        );
+                }
+                return after
+                    ? D2D1::RectF(
+                        bounds.left - pad, bounds.top - pad,
+                        bounds.right + pad, edge
+                    )
+                    : D2D1::RectF(
+                        bounds.left - pad, edge,
+                        bounds.right + pad, bounds.bottom + pad
+                    );
+            }
+            if (rtl) {
+                return after
+                    ? D2D1::RectF(
+                        edge, fullWipeClipTop,
+                        bounds.right + pad, fullWipeClipBottom
+                    )
+                    : D2D1::RectF(
+                        bounds.left - pad, fullWipeClipTop,
+                        edge, fullWipeClipBottom
+                    );
+            }
+            return after
+                ? D2D1::RectF(
+                    bounds.left - pad, fullWipeClipTop,
+                    edge, fullWipeClipBottom
+                )
+                : D2D1::RectF(
+                    edge, fullWipeClipTop,
+                    bounds.right + pad, fullWipeClipBottom
+                );
+        };
         const D2D1_RECT_F afterClip = style.vertical
-            ? D2D1::RectF(
-                line->bounds.left - geometryPad,
-                line->fillBounds.top - geometryPad,
-                line->bounds.right + geometryPad,
-                wipeEdge
-            )
+            ? (reverseVertical
+                ? D2D1::RectF(
+                    line->bounds.left - geometryPad,
+                    wipeEdge,
+                    line->bounds.right + geometryPad,
+                    line->fillBounds.bottom + geometryPad
+                )
+                : D2D1::RectF(
+                    line->bounds.left - geometryPad,
+                    line->fillBounds.top - geometryPad,
+                    line->bounds.right + geometryPad,
+                    wipeEdge
+                ))
             : (rtl
                 ? D2D1::RectF(
                     wipeEdge,
@@ -2208,7 +2298,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     fullWipeClipBottom
                 ));
         const bool hasAfterWipe = style.vertical
-            ? wipeEdge > line->fillBounds.top
+            ? (reverseVertical
+                ? wipeEdge < line->fillBounds.bottom
+                : wipeEdge > line->fillBounds.top)
             : (rtl ? wipeEdge < line->bounds.right : wipeEdge > line->bounds.left);
         auto bitmapGuideNoWipe = [&](const Impl::CachedChar &ch) {
             return ch.bitmapGuide.has_value() && ch.bitmapGuide->afterPath.empty();
@@ -2637,11 +2729,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
                 if (hasAfterWipe) {
                     const D2D1_RECT_F beforeClip = style.vertical
-                        ? D2D1::RectF(
-                            line->bounds.left - geometryPad, wipeEdge,
-                            line->bounds.right + geometryPad,
-                            line->fillBounds.bottom + geometryPad
-                        )
+                        ? (reverseVertical
+                            ? D2D1::RectF(
+                                line->bounds.left - geometryPad,
+                                line->fillBounds.top - geometryPad,
+                                line->bounds.right + geometryPad,
+                                wipeEdge
+                            )
+                            : D2D1::RectF(
+                                line->bounds.left - geometryPad, wipeEdge,
+                                line->bounds.right + geometryPad,
+                                line->fillBounds.bottom + geometryPad
+                            ))
                         : (rtl
                             ? D2D1::RectF(
                                 line->bounds.left - geometryPad, fullWipeClipTop,
@@ -2677,7 +2776,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         auto rubyWipeEdgeAt = [&](const Impl::CachedRuby &ruby) {
             float edge = style.vertical
-                ? ruby.bounds.top
+                ? (reverseVertical ? ruby.bounds.bottom : ruby.bounds.top)
                 : (rtl ? ruby.bounds.right : ruby.bounds.left);
             for (const Impl::CachedChar &ch : ruby.chars) {
                 if (tMs < wipeStartMs(ch)) {
@@ -2732,7 +2831,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto rubyPhaseVisible = [&](const Impl::CachedRuby &ruby,
                                     float edge, bool after) {
             if (style.vertical) {
-                return after ? edge > ruby.bounds.top : edge < ruby.bounds.bottom;
+                return reverseVertical
+                    ? (after ? edge < ruby.bounds.bottom : edge > ruby.bounds.top)
+                    : (after ? edge > ruby.bounds.top : edge < ruby.bounds.bottom);
             }
             if (rtl) {
                 return after ? edge < ruby.bounds.right : edge > ruby.bounds.left;
@@ -2885,40 +2986,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     edge = animated.second;
                 }
                 const float pad = sourceWidth + 4.0f;
-                D2D1_RECT_F clip{};
-                if (style.vertical) {
-                    clip = after
-                        ? D2D1::RectF(
-                            bounds.left - pad, bounds.top - pad,
-                            bounds.right + pad, edge
-                        )
-                        : D2D1::RectF(
-                            bounds.left - pad, edge,
-                            bounds.right + pad, bounds.bottom + pad
-                        );
-                } else if (rtl) {
-                    clip = after
-                        ? D2D1::RectF(
-                            edge, bounds.top - pad,
-                            bounds.right + pad, bounds.bottom + pad
-                        )
-                        : D2D1::RectF(
-                            bounds.left - pad, bounds.top - pad,
-                            edge, bounds.bottom + pad
-                        );
-                } else {
-                    clip = after
-                        ? D2D1::RectF(
-                            bounds.left - pad, bounds.top - pad,
-                            edge, bounds.bottom + pad
-                        )
-                        : D2D1::RectF(
-                            edge, bounds.top - pad,
-                            bounds.right + pad, bounds.bottom + pad
-                        );
-                }
                 pushAxisAlignedClip(
-                    clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    directionalWipeClip(bounds, edge, pad, after),
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                 );
             };
             const auto drawGlowPhase = [&](std::size_t index, N3WipePhase phase) {
@@ -3151,41 +3221,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         phaseBounds = animated.first;
                         edge = animated.second;
                     }
-                    const D2D1_RECT_F clip = style.vertical
-                        ? (after
-                            ? D2D1::RectF(
-                                phaseBounds.left - pad,
-                                phaseBounds.top - pad,
-                                phaseBounds.right + pad, edge
-                            )
-                            : D2D1::RectF(
-                                phaseBounds.left - pad, edge,
-                                phaseBounds.right + pad,
-                                phaseBounds.bottom + pad
-                            ))
-                        : (rtl
-                            ? (after
-                                ? D2D1::RectF(
-                                    edge, phaseBounds.top - pad,
-                                    phaseBounds.right + pad,
-                                    phaseBounds.bottom + pad
-                                )
-                                : D2D1::RectF(
-                                    phaseBounds.left - pad,
-                                    phaseBounds.top - pad, edge,
-                                    phaseBounds.bottom + pad
-                                ))
-                            : (after
-                                ? D2D1::RectF(
-                                    phaseBounds.left - pad,
-                                    phaseBounds.top - pad, edge,
-                                    phaseBounds.bottom + pad
-                                )
-                                : D2D1::RectF(
-                                    edge, phaseBounds.top - pad,
-                                    phaseBounds.right + pad,
-                                    phaseBounds.bottom + pad
-                                )));
+                    const D2D1_RECT_F clip = directionalWipeClip(
+                        phaseBounds, edge, pad, after
+                    );
                     if (phase == N3WipePhase::Wiping) {
                         pushAxisAlignedClip(
                             clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
@@ -3498,19 +3536,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         if (phase == N3WipePhase::Wiping) {
                             const auto [animatedBounds, animatedEdge] =
                                 utopiaCharWipe(charIndex);
-                            clip = after
-                                ? D2D1::RectF(
-                                    animatedBounds.left - pad,
-                                    fullWipeClipTop,
-                                    animatedEdge,
-                                    fullWipeClipBottom
-                                )
-                                : D2D1::RectF(
-                                    animatedEdge,
-                                    fullWipeClipTop,
-                                    animatedBounds.right + pad,
-                                    fullWipeClipBottom
-                                );
+                            clip = directionalWipeClip(
+                                animatedBounds, animatedEdge, pad, after
+                            );
                             needClip = true;
                         }
                     } else if (!mainWipeComplete) {
@@ -3581,19 +3609,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     if (useUtopiaTransition) {
                         const auto [animatedBounds, animatedEdge] =
                             utopiaCharWipe(charIndex);
-                        clip = after
-                            ? D2D1::RectF(
-                                animatedBounds.left - pad,
-                                fullWipeClipTop,
-                                animatedEdge,
-                                fullWipeClipBottom
-                            )
-                            : D2D1::RectF(
-                                animatedEdge,
-                                fullWipeClipTop,
-                                animatedBounds.right + pad,
-                                fullWipeClipBottom
-                            );
+                        clip = directionalWipeClip(
+                            animatedBounds, animatedEdge, pad, after
+                        );
                     } else {
                         clip = rtl
                             ? (after
@@ -3822,19 +3840,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         if (useUtopiaTransition) {
                             const auto [animatedBounds, animatedEdge]
                                 = utopiaCharWipe(charIndex);
-                            if (animatedEdge <= animatedBounds.left) {
-                                continue;
-                            }
                             const float pad = std::max(
                                 charStyle.strokeWidth + charStyle.stroke2Width,
                                 2.0f
                             ) + 4.0f;
+                            D2D1_RECT_F shiftedBounds = animatedBounds;
+                            shiftedBounds.left -= shadowX;
+                            shiftedBounds.right -= shadowX;
+                            shiftedBounds.top -= shadowY;
+                            shiftedBounds.bottom -= shadowY;
+                            const float shiftedEdge = animatedEdge
+                                - (style.vertical ? shadowY : shadowX);
                             pushAxisAlignedClip(
-                                D2D1::RectF(
-                                    animatedBounds.left - pad - shadowX,
-                                    fullWipeClipTop,
-                                    animatedEdge - shadowX,
-                                    fullWipeClipBottom
+                                directionalWipeClip(
+                                    shiftedBounds, shiftedEdge, pad, true
                                 ),
                                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                             );
@@ -4012,20 +4031,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             utopiaRubyUnitWipe(
                                 ruby, rubyIndex, geometryIndex, rubyStyle
                             );
-                        if (animatedEdge <= animatedBounds.left) {
-                            continue;
-                        }
                         const float pad = std::max(
                             rubyStyle.rubyStrokeWidth
                                 + rubyStyle.rubyStroke2Width,
                             2.0f
                         ) + 4.0f;
+                        D2D1_RECT_F shiftedBounds = animatedBounds;
+                        shiftedBounds.left -= shadowX;
+                        shiftedBounds.right -= shadowX;
+                        shiftedBounds.top -= shadowY;
+                        shiftedBounds.bottom -= shadowY;
+                        const float shiftedEdge = animatedEdge
+                            - (style.vertical ? shadowY : shadowX);
                         pushAxisAlignedClip(
-                            D2D1::RectF(
-                                animatedBounds.left - pad - shadowX,
-                                fullWipeClipTop,
-                                animatedEdge - shadowX,
-                                fullWipeClipBottom
+                            directionalWipeClip(
+                                shiftedBounds, shiftedEdge, pad, true
                             ),
                             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                         );
@@ -4183,40 +4203,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float pad = std::max(
                 charStyle.strokeWidth + charStyle.stroke2Width, 2.0f
             ) + 4.0f;
-            D2D1_RECT_F clip{};
-            if (style.vertical) {
-                clip = after
-                    ? D2D1::RectF(
-                        bounds.left - pad, bounds.top - pad,
-                        bounds.right + pad, edge
-                    )
-                    : D2D1::RectF(
-                        bounds.left - pad, edge,
-                        bounds.right + pad, bounds.bottom + pad
-                    );
-            } else if (rtl) {
-                clip = after
-                    ? D2D1::RectF(
-                        edge, fullWipeClipTop,
-                        bounds.right + pad, fullWipeClipBottom
-                    )
-                    : D2D1::RectF(
-                        bounds.left - pad, fullWipeClipTop,
-                        edge, fullWipeClipBottom
-                    );
-            } else {
-                clip = after
-                    ? D2D1::RectF(
-                        bounds.left - pad, fullWipeClipTop,
-                        edge, fullWipeClipBottom
-                    )
-                    : D2D1::RectF(
-                        edge, fullWipeClipTop,
-                        bounds.right + pad, fullWipeClipBottom
-                    );
-            }
             pushAxisAlignedClip(
-                clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                directionalWipeClip(bounds, edge, pad, after),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
             );
         };
         const auto drawMainLayerPart = [&](std::size_t charIndex,
@@ -4429,19 +4418,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const auto [animatedBounds, animatedEdge] = utopiaRubyUnitWipe(
                         ruby, rubyIndex, index, rubyStyle
                     );
-                    if (animatedEdge <= animatedBounds.left) {
-                        continue;
-                    }
                     const float pad = std::max(
                         rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
                         2.0f
                     ) + 4.0f;
                     pushAxisAlignedClip(
-                        D2D1::RectF(
-                            animatedBounds.left - pad,
-                            fullWipeClipTop,
-                            animatedEdge,
-                            fullWipeClipBottom
+                        directionalWipeClip(
+                            animatedBounds, animatedEdge, pad, true
                         ),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
@@ -4548,12 +4531,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width, 2.0f
             ) + 4.0f;
             const D2D1_RECT_F rubyAfterClip = style.vertical
-                ? D2D1::RectF(
-                    ruby.bounds.left - rubyPad,
-                    ruby.bounds.top - rubyPad,
-                    ruby.bounds.right + rubyPad,
-                    rubyWipeEdge
-                )
+                ? (reverseVertical
+                    ? D2D1::RectF(
+                        ruby.bounds.left - rubyPad,
+                        rubyWipeEdge,
+                        ruby.bounds.right + rubyPad,
+                        ruby.bounds.bottom + rubyPad
+                    )
+                    : D2D1::RectF(
+                        ruby.bounds.left - rubyPad,
+                        ruby.bounds.top - rubyPad,
+                        ruby.bounds.right + rubyPad,
+                        rubyWipeEdge
+                    ))
                 : (rtl
                     ? D2D1::RectF(
                         rubyWipeEdge,

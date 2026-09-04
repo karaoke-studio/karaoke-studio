@@ -435,6 +435,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.pageIndex = sourceLine.pageIndex;
         cached.compositeOrder = sourceLine.compositeOrder;
         cached.signalHead = sourceLine.signalHead;
+        cached.wipeReverse = sourceLine.wipeReverse;
         cached.guideAnchorLeft = sourceLine.guideAnchorLeft;
         cached.guideAnchorRight = sourceLine.guideAnchorRight;
         cached.centerOverride = sourceLine.centerOverride;
@@ -1867,6 +1868,42 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
             cached.fillBounds.right = std::max(cursor, 1.0f);
         }
+        if (cached.wipeReverse) {
+            // Python 在源加载入口已把整行时间戳严格逆序的行镜像理顺为顺序，
+            // 仅保留 wipeReverse 标记。这里把缓存字符反转为演唱时间序，并把
+            // 时间窗口反序配对（位置 i 用窗口 n-1-i）：反转后数组序 = 时间序，
+            // 几何自右向左递降（竖排自下而上），与 RTL 文本同构，render 期
+            // 的方向 XOR 直接复用既有扫描/分侧逻辑。几何、位图导唱符与逐字
+            // 样式随字符走，仅时间字段跨字符交换；ruby 的字符索引同步重映射。
+            if (cached.chars.size() > 1) {
+                std::vector<std::pair<int, int>> windows;
+                std::vector<std::vector<WipePoint>> pointTracks;
+                windows.reserve(cached.chars.size());
+                pointTracks.reserve(cached.chars.size());
+                for (Impl::CachedChar &ch : cached.chars) {
+                    windows.emplace_back(ch.startMs, ch.endMs);
+                    pointTracks.push_back(std::move(ch.wipePoints));
+                }
+                std::reverse(windows.begin(), windows.end());
+                std::reverse(pointTracks.begin(), pointTracks.end());
+                for (std::size_t index = 0; index < cached.chars.size(); ++index) {
+                    Impl::CachedChar &ch = cached.chars[index];
+                    ch.startMs = windows[index].first;
+                    ch.endMs = windows[index].second;
+                    ch.wipePoints = std::move(pointTracks[index]);
+                }
+                std::reverse(cached.chars.begin(), cached.chars.end());
+                std::reverse(cached.geometries.begin(), cached.geometries.end());
+            }
+            const int charCount = static_cast<int>(cached.chars.size());
+            for (Impl::CachedRuby &ruby : cached.rubies) {
+                const int oldFirst = ruby.firstCharIndex;
+                const int oldLast = ruby.lastCharIndex;
+                ruby.firstCharIndex = charCount - 1 - oldLast;
+                ruby.lastCharIndex = charCount - 1 - oldFirst;
+                ruby.transitionCharIndex = charCount - 1 - ruby.transitionCharIndex;
+            }
+        }
         const auto adjustWipeEnd = [](Impl::CachedChar &current,
                                       const Impl::CachedChar &following,
                                       bool rtl) {
@@ -1889,7 +1926,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         };
         if (!style.vertical) {
-            const bool rtl = style.rightToLeft;
+            const bool rtl = style.rightToLeft != cached.wipeReverse;
             for (std::size_t index = 0; index + 1 < cached.chars.size(); ++index) {
                 adjustWipeEnd(cached.chars[index], cached.chars[index + 1], rtl);
             }

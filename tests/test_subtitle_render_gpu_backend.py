@@ -40,6 +40,7 @@ from krok_helper.subtitle_render.domain.models import (
     TrackSection,
     style_from_dict,
 )
+from krok_helper.subtitle_render.domain.timing import normalize_reversed_wipe_lines
 from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
 from krok_helper.subtitle_render.n3.font_catalog import invalidate_n3_font_caches
 from krok_helper.subtitle_render.n3.project_import import load_n3proj
@@ -1148,6 +1149,134 @@ def test_gpu_g1_directwrite_wipe_progresses_monotonically(monkeypatch) -> None:
     ]
     assert red_counts[0] < red_counts[1] < red_counts[2]
     assert len({_alpha_count(payload) for payload in frames}) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("vertical", [False, True])
+@pytest.mark.parametrize("karaoke_anim", ["inherit", "utopia"])
+def test_gpu_reversed_line_wipe_matches_painter_direction(
+    monkeypatch, vertical, karaoke_anim
+) -> None:
+    """严格逆序行仍按 before -> after，且单字锋面从右/下向左/上。"""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 4_000),
+                    TimingChar("B", 3_000),
+                    TimingChar("C", 2_000),
+                ],
+                end_ms=1_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="C",
+                reading="しー",
+                pos_start_ms=2_000,
+                pos_end_ms=1_000,
+                target_line_index=0,
+                target_char_start=2,
+                target_char_end=3,
+            )
+        ],
+    )
+    normalize_reversed_wipe_lines(track)
+    style = _g1_style(
+        vertical=vertical,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        karaoke_anim=karaoke_anim,
+    )
+    t_ms = 1_500
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, gpu_frames = _render_g1_frames(
+            renderer,
+            style,
+            (t_ms,),
+            force_warp=True,
+            track=track,
+        )
+    assert configured["cached_rubies"] == 0
+    painter = _render_painter_oracle(style, t_ms=t_ms, track=track)
+
+    def red_center(payload: bytes) -> tuple[float, float]:
+        points = [
+            ((index // 4) % 640, (index // 4) // 640)
+            for index in range(0, len(payload), 4)
+            if payload[index] > 180
+            and payload[index + 1] < 100
+            and payload[index + 3] > 16
+        ]
+        assert points
+        return (
+            sum(point[0] for point in points) / len(points),
+            sum(point[1] for point in points) / len(points),
+        )
+
+    gpu_center = red_center(gpu_frames[0])
+    painter_center = red_center(painter)
+    if vertical:
+        assert gpu_center[1] > 180
+        assert painter_center[1] > 180
+    else:
+        assert gpu_center[0] > 320
+        assert painter_center[0] > 320
+
+    single_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("M", 2_000)], end_ms=1_000)]
+    )
+    normalize_reversed_wipe_lines(single_track)
+    sample_times = (1_000, 1_500, 1_999)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, single_gpu = _render_g1_frames(
+            renderer,
+            style,
+            sample_times,
+            force_warp=True,
+            track=single_track,
+        )
+    single_painter = [
+        _render_painter_oracle(style, t_ms=t, track=single_track)
+        for t in sample_times
+    ]
+
+    def color_counts(payload: bytes) -> tuple[int, int]:
+        red = white = 0
+        for index in range(0, len(payload), 4):
+            r, g, b, a = payload[index : index + 4]
+            if a <= 16:
+                continue
+            red += r > 180 and g < 100 and b < 120
+            white += r > 180 and g > 180 and b > 180
+        return red, white
+
+    def mid_after_halves(payload: bytes) -> tuple[int, int]:
+        left, top, right, bottom = _payload_alpha_bounds(payload)
+        split = (top + bottom) // 2 if vertical else (left + right) // 2
+        first = second = 0
+        for index in range(0, len(payload), 4):
+            r, g, b, a = payload[index : index + 4]
+            if not (a > 16 and r > 180 and g < 100 and b < 120):
+                continue
+            pixel = index // 4
+            coordinate = pixel // 640 if vertical else pixel % 640
+            if coordinate <= split:
+                first += 1
+            else:
+                second += 1
+        return first, second
+
+    for frames in (single_gpu, single_painter):
+        before_red, before_white = color_counts(frames[0])
+        after_red, after_white = color_counts(frames[2])
+        assert before_white > before_red
+        assert after_red > after_white
+        first_half, second_half = mid_after_halves(frames[1])
+        assert second_half > first_half
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

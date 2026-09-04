@@ -1081,6 +1081,11 @@ std::optional<RenderConfig> parseRenderConfig(const QJsonObject &ir, QString *er
             line.signalHead = lineObject.value(
                 QStringLiteral("signal_head")
             ).toBool(true);
+            // Python 在源加载入口把整行时间戳严格逆序的行镜像理顺为顺序，
+            // 并只在此处打标记；sidecar 据此对齐 Painter 的反向走字。
+            line.wipeReverse = lineObject.value(
+                QStringLiteral("wipe_reverse")
+            ).toBool(false);
             line.sourceOffsetMs = sourceOffsetMs;
             line.lane = std::max(0, intValue(lineObject, QStringLiteral("lane"), 0));
             line.layoutOffsetX = lineObject.value(

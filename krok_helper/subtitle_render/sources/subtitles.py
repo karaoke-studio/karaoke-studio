@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    normalize_reversed_wipe_lines,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 
@@ -81,6 +82,8 @@ def load_nicokara_lrc(path: str | Path) -> TimingTrack:
     track = parse_nicokara_lrc(text)
     body_lines, _tail_lines = _split_body_tail(_normalized_lines(text))
     _apply_emoji_guides(track, p.parent, body_lines)
+    # 手工编辑的 LRC 理论上可含整行逆序；入口统一理顺 + 打标记。
+    normalize_reversed_wipe_lines(track)
     return track
 
 

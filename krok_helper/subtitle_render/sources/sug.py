@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    normalize_reversed_wipe_lines,
 )
 from krok_helper.subtitle_render.sources.subtitles import (
     _emoji_guide_symbol,
@@ -374,6 +375,9 @@ def timing_track_from_sug_project(
     )
     _apply_software_compensation(track, software_compensation_ms)
     _apply_sug_emoji_guides(track, base_dir)
+    # 整行时间戳严格逆序的行在此理顺为顺序并打 wipe_reverse 标记：
+    # 下游一切时间计算按普通行处理，仅走字反向。
+    normalize_reversed_wipe_lines(track)
     return track
 
 

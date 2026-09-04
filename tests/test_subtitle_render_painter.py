@@ -40,6 +40,10 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (  # n
     ruby as horizontal_ruby,
     utopia as horizontal_utopia,
 )
+from krok_helper.subtitle_render.engine.render.elements.vertical import (  # noqa: E402
+    vertical_after_clip_rect as _vertical_after_clip_rect,
+    vertical_before_clip_rect as _vertical_before_clip_rect,
+)
 from krok_helper.subtitle_render.engine.layout.page.placement import (  # noqa: E402
     LineVisualBand,
 )
@@ -153,6 +157,9 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     TrackPagePlan,
     TrackSection,
     TitleOverlay,
+)
+from krok_helper.subtitle_render.domain.timing import (  # noqa: E402
+    normalize_reversed_wipe_lines,
 )
 from krok_helper.subtitle_render.sources.subtitles import parse_nicokara_lrc  # noqa: E402
 
@@ -1484,6 +1491,128 @@ def test_fill_clip_band_rtl_grows_from_right(qapp):
     assert _fill_clip_band(segments, 0, rtl=True) is None
 
 
+def _reversed_timing_track() -> TimingTrack:
+    """整行时间戳严格逆序：文字仍从左到右排，但行尾字符最先唱。"""
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=4000),
+            TimingChar(text="B", start_ms=3000),
+            TimingChar(text="C", start_ms=2000),
+        ],
+        end_ms=1000,
+    )
+    track = TimingTrack(lines=[line])
+    normalize_reversed_wipe_lines(track)
+    return track
+
+
+def test_time_reversed_line_layout_flips_wipe_direction(qapp):
+    track = _reversed_timing_track()
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    layout = _layout_line(track, track.lines[0], style, 600, 240)
+    assert layout is not None
+    # 文本摆放保持 LTR（A 在最左），只是走字方向翻转
+    assert layout.rtl is True
+    assert layout.char_x_ranges[0][0] < layout.char_x_ranges[2][0]
+    # 段表按演唱时间序：行尾字符（C）最先
+    assert [segment.indices[0] for segment in layout.fill_segments] == [2, 1, 0]
+    # t=1500：C 唱一半 → 已唱带在行右缘、锋面向左推进
+    assert _fill_clip_band(layout.fill_segments, 500, rtl=layout.rtl) is None
+    band = _fill_clip_band(layout.fill_segments, 1500, rtl=layout.rtl)
+    assert band is not None
+    line_right = max(seg.right for seg in layout.fill_segments)
+    assert band[1] == line_right
+    assert band[0] > layout.fill_segments[1].right
+    # t=3500：A 唱一半 → 锋面推进到最左字符（时间上最后一段）内部
+    late = _fill_clip_band(layout.fill_segments, 3500, rtl=layout.rtl)
+    assert late is not None
+    last_segment = layout.fill_segments[2]
+    assert last_segment.left < late[0] < last_segment.right
+
+
+def test_time_reversed_line_paints_after_color_from_right(qapp):
+    track = _reversed_timing_track()
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#00FF00")),
+            after=KaraokeColorState(text=_solid_fill("#FF0000")),
+        ),
+    )
+    mid = _blank(600, 240)
+    paint_frame(mid, track, 1500, style)
+    # 已唱（红）出现在右侧，未唱（绿）整体在红的左侧
+    red = _dominant_bounds(mid, channel="red")
+    assert _bounds_size(red)[0] > 10
+    green = _dominant_bounds(mid, channel="green", right=red[0] - 1)
+    assert _bounds_size(green)[0] > 10
+    # 全部唱完后整行变红、绿色消失
+    done = _blank(600, 240)
+    paint_frame(done, track, 4200, style)
+    assert _bounds_size(_dominant_bounds(done, channel="green"))[0] == 0
+    assert _bounds_size(_dominant_bounds(done, channel="red"))[0] > 10
+
+
+def test_time_reversed_line_ignores_ruby(qapp):
+    """逆序兼容暂不处理独立 Ruby 时钟，正文仍应正常渲染。"""
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=4000),
+            TimingChar(text="B", start_ms=3000),
+            TimingChar(text="C", start_ms=2000),
+        ],
+        end_ms=1000,
+    )
+    ruby = RubyAnnotation(
+        kanji="C",
+        reading="しー",
+        pos_start_ms=2000,
+        pos_end_ms=1000,
+        reading_parts=["し", "ー"],
+        reading_part_ms=[500],
+        target_line_index=0,
+        target_char_start=2,
+        target_char_end=3,
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    normalize_reversed_wipe_lines(track)
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    layout = _layout_line(track, track.lines[0], style, 600, 240)
+    assert layout is not None
+    assert not layout.ruby_layouts
+    img = _blank(600, 240)
+    paint_frame(img, track, 1800, style)
+    assert _bounds_size(_dominant_bounds(img, channel="red"))[0] > 0
+
+
 def test_run_fill_complete_scopes_to_run_indices(qapp):
     segments = [
         _FillSegment(0, 100, 0, 1000, indices=(0,)),
@@ -1884,6 +2013,33 @@ def test_vertical_fill_band_grows_downward(qapp):
     assert _vertical_fill_band(cells, intervals, 500) == (100, 150)
     # t=1500：第一字满 + 第二字一半 → 扫到 250
     assert _vertical_fill_band(cells, intervals, 1500) == (100, 250)
+
+
+def test_vertical_fill_band_grows_upward_when_reversed(qapp):
+    cells = [(100, 200), (200, 300)]
+    intervals = [(2000, 3000), (1000, 2000)]  # 按文字位置：下方字符先唱
+    assert _vertical_fill_band(cells, intervals, 500, reverse=True) is None
+    # t=1500：下方格填一半 → 锋面从底沿 300 扫到 250
+    assert _vertical_fill_band(cells, intervals, 1500, reverse=True) == (250, 300)
+    # t=2500：下方格满 + 上方格一半 → 锋面扫到 150
+    assert _vertical_fill_band(cells, intervals, 2500, reverse=True) == (150, 300)
+    # 唱完覆盖整列
+    assert _vertical_fill_band(cells, intervals, 3500, reverse=True) == (100, 300)
+
+
+def test_vertical_clip_rects_mirror_when_reversed(qapp):
+    after = _vertical_after_clip_rect(300, 40, 250, 300, 6, reverse=True)
+    # 逆序：锋面在 250（上沿），pad 留在移动侧上方；底沿 300 为固定端
+    assert after.top() == 244.0
+    assert after.bottom() == 306.0
+    before = _vertical_before_clip_rect(300, 40, 250, 6, reverse=True)
+    # 未唱区在锋面上方
+    assert before.top() < -999_000.0
+    assert before.bottom() == 250.0
+    # 正常走向的 before 在锋面下方
+    forward = _vertical_before_clip_rect(300, 40, 250, 6)
+    assert forward.top() == 250.0
+    assert forward.bottom() > 999_000.0
 
 
 def test_vertical_reading_unit_mode_uses_same_base_character_mapping(qapp):

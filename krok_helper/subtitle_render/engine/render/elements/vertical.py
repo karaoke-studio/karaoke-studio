@@ -54,7 +54,11 @@ from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
-from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine, TimingTrack
+from krok_helper.subtitle_render.domain.timing import (
+    RubyAnnotation,
+    TimingLine,
+    TimingTrack,
+)
 
 
 VERTICAL_REFERENCE_CHAR = "永"
@@ -377,7 +381,22 @@ def vertical_after_clip_rect(
     y0: int,
     y_scan: int,
     pad: int,
+    *,
+    reverse: bool = False,
 ) -> QRectF:
+    """已唱层的纵向裁切。
+
+    正常走向（自上而下）时锋面在 ``y_scan``、pad 留在移动侧下方；逆序行
+    （``reverse``，自下而上）时 ``(y0, y_scan)`` 是已唱区间的 ``(上沿, 固定底沿)``，
+    锋面在 ``y0``、pad 留在移动侧上方。
+    """
+    if reverse:
+        return QRectF(
+            float(column_x - cell_w / 2 - pad),
+            float(y0 - pad),
+            float(cell_w + pad * 2),
+            float((y_scan - y0) + pad * 2),
+        )
     return QRectF(
         float(column_x - cell_w / 2 - pad),
         float(y0 - pad),
@@ -391,8 +410,19 @@ def vertical_before_clip_rect(
     cell_w: float,
     y_scan: float,
     pad: int,
+    *,
+    reverse: bool = False,
 ) -> QRectF:
     """Return the complementary unsung layer below the vertical wipe."""
+
+    if reverse:
+        # 逆序行未唱区在锋面上方。
+        return QRectF(
+            float(column_x - cell_w / 2 - pad),
+            -1_000_000.0,
+            float(cell_w + pad * 2),
+            float(y_scan) + 1_000_000.0,
+        )
     return QRectF(
         float(column_x - cell_w / 2 - pad),
         float(y_scan),
@@ -410,12 +440,17 @@ def vertical_fill_band(
     line: TimingLine | None = None,
     active_rubies: list[RubyAnnotation] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
+    reverse: bool = False,
 ) -> tuple[int, int] | None:
-    """Return the sung vertical band ``(y_top, y_scan)``."""
+    """Return the sung vertical band ``(y_top, y_bottom)``.
+
+    正常走向从 ``cells[0]`` 顶部向下推进；``reverse``（加载入口镜像理顺过的
+    整行逆序行）时时间窗口与单元格反序配对（位置 i 用窗口 n-1-i），从最后一
+    格底部向上推进，返回 ``(移动锋面, 固定底沿)``——消费方按有序区间处理，
+    两侧 clip 构建器经 ``reverse`` 参数感知方向。
+    """
     if not cells:
         return None
-    y_top = cells[0][0]
-    scan = float(y_top)
     ruby_groups = (
         ports.resolve_char_ruby_groups(active_rubies, line, intervals)
         if ruby_main_progress_mode == "reading_units"
@@ -423,9 +458,40 @@ def vertical_fill_band(
         and active_rubies
         else None
     )
-    for index, ((cell_top, cell_bottom), (start, end)) in enumerate(
-        zip(cells, intervals)
-    ):
+    order = reversed(range(len(cells))) if reverse else range(len(cells))
+    if reverse:
+        y_bottom = float(cells[-1][1])
+        scan = y_bottom
+        for index in order:
+            (cell_top, cell_bottom), (start, end) = cells[index], intervals[index]
+            ratio = (
+                ports.character_fill_ratio(
+                    line,
+                    intervals,
+                    cells,
+                    active_rubies or [],
+                    index,
+                    t_ms,
+                    groups=ruby_groups,
+                    ruby_main_progress_mode=ruby_main_progress_mode,
+                )
+                if ruby_groups is not None and line is not None
+                else char_fill_ratio(start, end, t_ms)
+            )
+            if ratio <= 0.0:
+                break
+            if ratio >= 1.0:
+                scan = cell_top
+                continue
+            scan = cell_bottom - (cell_bottom - cell_top) * ratio
+            break
+        if scan >= y_bottom:
+            return None
+        return int(round(scan)), int(round(y_bottom))
+    y_top = cells[0][0]
+    scan = float(y_top)
+    for index in order:
+        (cell_top, cell_bottom), (start, end) = cells[index], intervals[index]
         ratio = (
             ports.character_fill_ratio(
                 line,
@@ -1076,6 +1142,7 @@ def vertical_layer_stack(
     layers: list = []
     stroke2_width = ports.main_stroke2_width(style)
     main_signature = vertical_main_path_signature(line, style, layout)
+    reverse = line.wipe_reverse
     band = vertical_fill_band(
         layout.cells,
         layout.intervals,
@@ -1084,6 +1151,7 @@ def vertical_layer_stack(
         line=line,
         active_rubies=layout.active_rubies,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
+        reverse=reverse,
     )
     before_glow_radius = ports.glow_radius(style, after=False)
     before_clip = None
@@ -1095,7 +1163,7 @@ def vertical_layer_stack(
         before_clip = vertical_before_clip_rect(
             layout.column_x,
             layout.cell_w,
-            band[1],
+            band[0] if reverse else band[1],
             vertical_before_clip_pad(
                 style.stroke_width_px,
                 stroke2_width,
@@ -1104,6 +1172,7 @@ def vertical_layer_stack(
                 style.shadow_offset_y,
                 raster=ports.raster,
             ),
+            reverse=reverse,
         )
     layers.append(
         BakedPathStackLayer(
@@ -1168,6 +1237,7 @@ def vertical_layer_stack(
                     y0,
                     y_scan,
                     vertical_after_clip_pad(style, ports=ports),
+                    reverse=reverse,
                 ),
                 z_index=1,
             )
@@ -1217,6 +1287,7 @@ def paint_line_vertical_direct(
     """Paint the vertical pixel-equivalence fallback without cached layers."""
 
     stroke2_width = ports.main_stroke2_width(style)
+    reverse = line.wipe_reverse
     band = vertical_fill_band(
         layout.cells,
         layout.intervals,
@@ -1225,6 +1296,7 @@ def paint_line_vertical_direct(
         line=line,
         active_rubies=layout.active_rubies,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
+        reverse=reverse,
     )
     before_clip = None
     before_glow_radius = ports.glow_radius(style, after=False)
@@ -1236,7 +1308,7 @@ def paint_line_vertical_direct(
         before_clip = vertical_before_clip_rect(
             layout.column_x,
             layout.cell_w,
-            band[1],
+            band[0] if reverse else band[1],
             vertical_before_clip_pad(
                 style.stroke_width_px,
                 stroke2_width,
@@ -1245,6 +1317,7 @@ def paint_line_vertical_direct(
                 style.shadow_offset_y,
                 raster=ports.raster,
             ),
+            reverse=reverse,
         )
     painter.save()
     try:
@@ -1276,6 +1349,7 @@ def paint_line_vertical_direct(
                     y0,
                     y_scan,
                     vertical_after_clip_pad(style, ports=ports),
+                    reverse=reverse,
                 )
             )
             ports.raster.paint_text_layer_stack(
@@ -1345,6 +1419,8 @@ def layout_vertical_line(
         if resolved_intervals is not None
         else compute_char_intervals(line)
     )
+    if line.wipe_reverse:
+        intervals.reverse()
     text_path = QPainterPath()
     cells: list[tuple[int, int]] = []
     for index, char in enumerate(chars):

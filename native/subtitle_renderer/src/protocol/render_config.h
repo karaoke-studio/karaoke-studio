@@ -67,6 +67,9 @@ struct TimingLine {
     // first page's first line; Python stamps the flag so both backends share
     // one decision. Absent field parses as true to keep legacy per-line IRs.
     bool signalHead = false;
+    // Python 在源加载入口已把整行时间戳严格逆序的行镜像理顺为顺序，仅保留
+    // 本标记让走字反向（横排 rtl 翻转 / 竖排自下而上），与 Painter 同口径。
+    bool wipeReverse = false;
     int sourceOffsetMs = 0;
     int lane = 0;
     double layoutOffsetX = 0.0;

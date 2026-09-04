@@ -283,7 +283,10 @@ def _active_rubies_for_line_uncached(
     rubies: list[RubyAnnotation],
     line: TimingLine,
 ) -> list[RubyAnnotation]:
-    if not rubies or not line.chars:
+    # Reverse-wipe compatibility intentionally covers the main text only.
+    # Ruby timing can carry its own per-reading clock and is left unsupported
+    # until that clock has a single, verified normalization contract.
+    if line.wipe_reverse or not rubies or not line.chars:
         return []
     line_start = line.chars[0].start_ms
     line_end = line.end_ms if line.end_ms is not None else line.chars[-1].start_ms

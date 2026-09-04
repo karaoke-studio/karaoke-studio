@@ -488,6 +488,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.pageIndex = sourceLine.pageIndex;
         line.lane = sourceLine.lane;
         line.signalHead = sourceLine.signalHead;
+        line.wipeReverse = sourceLine.wipeReverse;
         line.centerOverride = sourceLine.centerOverride;
         // 标题钉在最下层（compositeOrder = kTitleCompositeOrder），所以源之间不必
         // 再为它预留 1 号槽位：主字幕 0，副源依次 1、2……
@@ -605,6 +606,13 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 krok::subtitle::native::WipePoint{line.chars.back().startMs, 0.0f},
                 krok::subtitle::native::WipePoint{line.chars.back().endMs, 1.0f},
             };
+        }
+        if (sourceLine.wipeReverse) {
+            // Reverse-wipe compatibility is deliberately limited to main text.
+            // Ruby has an independent per-reading clock and is omitted until
+            // that clock has a verified reverse-normalization contract.
+            scene.lines.push_back(std::move(line));
+            continue;
         }
         const auto intervals = lineIntervals(sourceLine);
         const int sourceLineStart = lineStartMs(sourceLine);

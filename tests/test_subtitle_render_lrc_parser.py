@@ -342,6 +342,28 @@ def test_load_nicokara_lrc_from_file(tmp_path):
     assert track.meta.offset_ms == 100
 
 
+def test_load_nicokara_lrc_normalizes_only_fully_reversed_boundaries(tmp_path):
+    reversed_path = tmp_path / "reversed.lrc"
+    reversed_path.write_text(
+        "[00:04:00]A[00:03:00]B[00:02:00]C[00:01:00]\n",
+        encoding="utf-8",
+    )
+    line = load_nicokara_lrc(reversed_path).lines[0]
+    assert [char.start_ms for char in line.chars] == [1000, 2000, 3000]
+    assert line.end_ms == 4000
+    assert line.wipe_reverse is True
+
+    invalid_path = tmp_path / "invalid-reversed.lrc"
+    invalid_path.write_text(
+        "[00:03:00]A[00:02:00]B[00:01:00]C[00:04:00]\n",
+        encoding="utf-8",
+    )
+    invalid = load_nicokara_lrc(invalid_path).lines[0]
+    assert [char.start_ms for char in invalid.chars] == [3000, 2000, 1000]
+    assert invalid.end_ms == 4000
+    assert invalid.wipe_reverse is False
+
+
 # ---------------------------------------------------------------------------
 # 健壮性
 # ---------------------------------------------------------------------------

@@ -684,7 +684,9 @@ def layout_rubies(
                 baseline_y,
                 target_width,
                 ruby_style,
-                rtl=style.right_to_left,
+                # 理顺过的整行逆序行：注音扫光与主文字同向镜像，避免主文字
+                # 从右往左、注音仍从左往右的错位。
+                rtl=style.right_to_left != line.wipe_reverse,
             )
         )
         layouts.append(

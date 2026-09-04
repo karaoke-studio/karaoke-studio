@@ -40,6 +40,7 @@ from krok_helper.subtitle_render.domain.models import (
     TitleOverlay,
     default_title_scheme,
 )
+from krok_helper.subtitle_render.domain.timing import normalize_reversed_wipe_lines
 from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
@@ -2883,6 +2884,47 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert line_layout["letter_spacing_px"] == 9
     assert line_layout["space_width_percent"] == 44
     assert line_layout["ruby_gap_px"] == 7
+
+
+def test_render_ir_carries_reversed_wipe_to_gpu_backend():
+    """加载入口理顺时间轴后，GPU 通过显式标记复现反向走字。"""
+    reversed_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 4_000),
+                    TimingChar("B", 3_000),
+                    TimingChar("C", 2_000),
+                ],
+                end_ms=1_000,
+            )
+        ]
+    )
+    normalize_reversed_wipe_lines(reversed_track)
+    assert gpu_unsupported_features(reversed_track, Style()) == ()
+    line_ir = build_render_ir(
+        reversed_track, Style(), width=640, height=360, fps=60
+    )["track"]["lines"][0]
+    assert line_ir["wipe_reverse"] is True
+    assert [char["start_ms"] for char in line_ir["chars"]] == [1000, 2000, 3000]
+    # 局部乱序 / 等值不触发
+    messy_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 3_000),
+                    TimingChar("B", 3_000),
+                    TimingChar("C", 1_000),
+                ],
+                end_ms=4_000,
+            )
+        ]
+    )
+    assert gpu_unsupported_features(messy_track, Style()) == ()
+    messy_ir = build_render_ir(
+        messy_track, Style(), width=640, height=360, fps=60
+    )["track"]["lines"][0]
+    assert messy_ir["wipe_reverse"] is False
 
 
 def test_build_render_ir_expands_display_window_for_volume_signal_lead_in():
