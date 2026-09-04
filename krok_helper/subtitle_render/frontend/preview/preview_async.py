@@ -952,9 +952,9 @@ class GpuAsyncSubtitleRenderer(QObject):
                         self._note("configure_count")
                         scene_configured = True
                     if scene_configured:
-                        # configure 完成（IR 重排 + sidecar 场景就绪）；剩余是首帧
-                        # 实现/出帧，帧到达即由 GUI 徽标收尾。
-                        self.renderProgress.emit(92, "场景构建")
+                        # configure 完成（IR 重排 + sidecar 场景就绪）；此刻起等待的
+                        # 是首帧实现（字形光栅化）与出帧，帧到达即由 GUI 徽标收尾。
+                        self.renderProgress.emit(92, "出帧")
                     if (
                         self._active_worker_count > 1
                         and not self._native_preview

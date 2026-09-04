@@ -86,6 +86,13 @@ _RENDER_BUSY_DELAY_S = 0.25
 _RENDER_BUSY_POLL_MS = 120
 """徽标可见性/文本的轮询周期。"""
 
+_RENDER_DURATION_HISTORY_MAX = 5
+"""参与「预计还需」估算的最近慢渲染耗时样本数（取中位数，抗单次抖动）。"""
+
+_RENDER_PROGRESS_STALL_S = 1.0
+"""进度事件停驻超过该时长视为进入无刻度等待（sidecar 场景构建/首帧实现），
+徽标撤掉冻结的百分比，只显示阶段无关的倒计时。"""
+
 
 class _RenderBusyBadge(QWidget):
     """预览画布角落的「字幕渲染」徽标：半透明 pill + 阶段/百分比文本。
@@ -361,6 +368,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._render_busy_badge = _RenderBusyBadge(self)
         self._render_pending_since: Optional[float] = None
         self._render_progress_text: Optional[str] = None
+        self._render_progress_at: Optional[float] = None
+        self._render_duration_history: list[float] = []
         self._render_busy_timer = QTimer(self)
         self._render_busy_timer.setInterval(_RENDER_BUSY_POLL_MS)
         self._render_busy_timer.timeout.connect(self._update_render_busy_badge)
@@ -532,13 +541,23 @@ class PreviewGraphicsView(QGraphicsView):
         if self._render_pending_since is None:
             self._render_pending_since = time.monotonic()
             self._render_progress_text = None
+            self._render_progress_at = None
         if not self._render_busy_timer.isActive():
             self._render_busy_timer.start()
 
     def _note_frame_delivered(self) -> None:
         """可接受的新帧到达：闭合无帧区间并隐藏徽标。"""
+        since = self._render_pending_since
+        if since is not None:
+            duration = time.monotonic() - since
+            if duration >= _RENDER_BUSY_DELAY_S:
+                # 只采「徽标可见级别」的慢渲染样本：快速渲染（播放稳态）会把
+                # 预估拉低到毫无参考价值。
+                self._render_duration_history.append(duration)
+                del self._render_duration_history[:-_RENDER_DURATION_HISTORY_MAX]
         self._render_pending_since = None
         self._render_progress_text = None
+        self._render_progress_at = None
         self._render_busy_badge.setVisible(False)
         self._render_busy_timer.stop()
 
@@ -546,8 +565,17 @@ class PreviewGraphicsView(QGraphicsView):
         if self._render_pending_since is None:
             return
         self._render_progress_text = f"字幕渲染 · {label} {int(percent)}%"
+        self._render_progress_at = time.monotonic()
         if self._render_busy_badge.isVisible():
             self._update_render_busy_badge()
+
+    def _render_eta_remaining(self, elapsed: float) -> Optional[float]:
+        """按本会话历史慢渲染时长的中位数预估剩余时间；无样本或已超出为 None。"""
+        history = self._render_duration_history
+        if not history:
+            return None
+        remaining = sorted(history)[len(history) // 2] - elapsed
+        return remaining if remaining > 0.05 else None
 
     def _update_render_busy_badge(self) -> None:
         since = self._render_pending_since
@@ -555,13 +583,29 @@ class PreviewGraphicsView(QGraphicsView):
             self._render_busy_badge.setVisible(False)
             self._render_busy_timer.stop()
             return
-        elapsed = time.monotonic() - since
+        now = time.monotonic()
+        elapsed = now - since
         if elapsed < _RENDER_BUSY_DELAY_S and not self._render_busy_badge.isVisible():
             return
-        # 耗时随轮询持续走字：布局计划缓存命中等场景下引擎没有逐行刻度，
-        # 百分比会停住，走动的秒数保证徽标始终有「在推进」的可信反馈。
-        text = self._render_progress_text or "字幕渲染中"
-        self._render_busy_badge.set_status(f"{text} · {elapsed:.1f}s")
+        # 进度事件停驻超阈值 = 进入无 Python 刻度的等待段（sidecar 场景构建 /
+        # 首帧实现）：撤掉冻结的「阶段 xx%」，避免百分比长时间不动损害可信度。
+        stalled = (
+            self._render_progress_text is not None
+            and self._render_progress_at is not None
+            and now - self._render_progress_at > _RENDER_PROGRESS_STALL_S
+        )
+        if stalled:
+            text = "字幕渲染"
+        else:
+            text = self._render_progress_text or "字幕渲染中"
+        # 尾缀优先「预计还需」（按历史慢渲染时长估算），超出预估或尚无样本时
+        # 退回走字耗时——保证任何场景下都有在推进的可信反馈。
+        remaining = self._render_eta_remaining(elapsed)
+        if remaining is not None:
+            suffix = f"预计还需 {remaining:.1f}s"
+        else:
+            suffix = f"{elapsed:.1f}s"
+        self._render_busy_badge.set_status(f"{text} · {suffix}")
         self._render_busy_badge.setVisible(True)
         self._layout_render_badge()
 

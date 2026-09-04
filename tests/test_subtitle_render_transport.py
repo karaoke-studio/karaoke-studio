@@ -2448,16 +2448,35 @@ def test_preview_graphics_render_badge_tracks_progress(qapp, monkeypatch):
         assert not badge.isHidden()
         assert badge._text.startswith("字幕渲染中 · ")
 
-        # 进度事件 → 百分比文本实时更新（耗时后缀随轮询走字）。
+        # 进度事件 → 百分比文本实时更新（未停驻时保留阶段与百分比）。
         graphics._on_render_progress(43, "逐行排版")
         graphics._update_render_busy_badge()
         assert badge._text.startswith("字幕渲染 · 逐行排版 43% · ")
 
-        # 可接受的新帧到达 → 徽标隐藏、区间闭合。
+        # 进度停驻超阈值（sidecar 无刻度等待）→ 撤掉冻结的百分比。
+        graphics._render_progress_at = time.monotonic() - 2.0
+        graphics._update_render_busy_badge()
+        assert badge._text.startswith("字幕渲染 · ")
+
+        # 历史样本给出「预计还需」尾缀。
+        graphics._render_duration_history = [3.0, 4.0, 5.0]
+        graphics._render_progress_text = None
+        graphics._render_progress_at = None
+        graphics._update_render_busy_badge()
+        assert "预计还需" in badge._text
+        # 超出预估后回退为走字耗时。
+        graphics._render_pending_since = time.monotonic() - 10.0
+        graphics._update_render_busy_badge()
+        assert "预计还需" not in badge._text
+        assert "10.0s" in badge._text
+
+        # 可接受的新帧到达 → 徽标隐藏、区间闭合，且慢渲染耗时进入历史。
+        graphics._render_pending_since = time.monotonic() - 1.0
         image = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
         graphics._on_async_frame(image, graphics.current_time_ms)
         assert badge.isHidden()
         assert graphics._render_pending_since is None
+        assert graphics._render_duration_history  # ≥ 阈值的样本被记录
 
         # 过期帧（超出容差）不能闭合区间，徽标再次出现后保持。
         graphics.set_time(5_000)
