@@ -25,6 +25,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlo
 from PyQt6.QtGui import QImage, QPainter
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
+from krok_helper.subtitle_render.engine.render_progress import render_progress_scope
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.native.backend import (
@@ -78,6 +79,48 @@ def _env_enabled(name: str, default: str) -> bool:
         "no",
         "off",
     )
+
+
+_RENDER_STAGE_LABELS = {
+    "display": "显示窗口",
+    "page_offsets": "页偏移",
+    "lines": "逐行排版",
+}
+
+# 各阶段在总进度里的起止比例。GPU 路径的 configure 除整轨重排（引擎刻度）外
+# 还包含 sidecar 场景构建与首帧出帧，重排只占前段；Painter 路径整段就是重排。
+_RENDER_STAGE_SPANS_PAINTER = {
+    "display": (0.00, 0.55),
+    "page_offsets": (0.55, 0.80),
+    "lines": (0.80, 1.00),
+}
+_RENDER_STAGE_SPANS_GPU = {
+    "display": (0.00, 0.45),
+    "page_offsets": (0.45, 0.62),
+    "lines": (0.62, 0.70),
+}
+
+
+def _render_progress_reporter(spans, emit):
+    """把引擎 ``(stage, done, total)`` 刻度合成单调整数百分比再 ``emit``。
+
+    同一次重排内阶段会交错复用（页偏移解析内部复跑显示窗口解析），取历史
+    最大值防回退；只在整数百分比变化时发射，避免长曲目的信号风暴。99% 封顶，
+    100% 保留给真实帧完成（届时徽标由帧到达隐藏）。
+    """
+    state = {"percent": -1}
+
+    def report(stage: str, done: int, total: int) -> None:
+        span = spans.get(stage)
+        if span is None or total <= 0:
+            return
+        fraction = min(max(float(done) / float(total), 0.0), 1.0)
+        percent = int(round((span[0] + (span[1] - span[0]) * fraction) * 100))
+        if percent > state["percent"]:
+            state["percent"] = percent
+            emit(min(percent, 99), _RENDER_STAGE_LABELS.get(stage, stage))
+
+    return report
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -253,6 +296,7 @@ class _AsyncSubtitleWorker(QObject):
     """Qt-thread resident worker that rasterises latest-wins subtitle requests."""
 
     frame_ready = Signal(QImage, int)
+    render_progress = Signal(int, str)
     finished = Signal()
 
     def __init__(self, width: int, height: int) -> None:
@@ -325,16 +369,21 @@ class _AsyncSubtitleWorker(QObject):
             image.fill(0)
             painter = QPainter(image)
             try:
-                paint_frame_to_painter(
-                    painter,
-                    logical_w,
-                    logical_h,
-                    track,
-                    int(t_ms),
-                    style,
-                    extra_tracks,
-                    duration_ms=duration_ms,
-                )
+                with render_progress_scope(
+                    _render_progress_reporter(
+                        _RENDER_STAGE_SPANS_PAINTER, self.render_progress.emit
+                    )
+                ):
+                    paint_frame_to_painter(
+                        painter,
+                        logical_w,
+                        logical_h,
+                        track,
+                        int(t_ms),
+                        style,
+                        extra_tracks,
+                        duration_ms=duration_ms,
+                    )
             finally:
                 painter.end()
             self.frame_ready.emit(image, int(t_ms))
@@ -358,6 +407,7 @@ class AsyncSubtitleRenderer(QObject):
     """
 
     frame_ready = Signal(QImage, int)
+    renderProgress = Signal(int, str)
     _state_changed = Signal(object, object, object, object)
     _target_changed = Signal(int, int, float)
     _frame_requested = Signal(int)
@@ -378,6 +428,7 @@ class AsyncSubtitleRenderer(QObject):
         self._target_changed.connect(self._worker.set_render_target)
         self._frame_requested.connect(self._worker.request)
         self._worker.frame_ready.connect(self.frame_ready)
+        self._worker.render_progress.connect(self.renderProgress)
         self._worker.finished.connect(self._thread.quit)
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.start()
@@ -455,6 +506,7 @@ class GpuAsyncSubtitleRenderer(QObject):
 
     frame_ready = Signal(QImage, int)
     frame_presented = Signal(int)
+    renderProgress = Signal(int, str)
     fallback_occurred = Signal(str)
 
     _STALE_TOLERANCE_MS = 120
@@ -817,39 +869,13 @@ class GpuAsyncSubtitleRenderer(QObject):
                 work_started = time.monotonic()
                 try:
                     renderer = self._ensure_renderer()
+                    scene_configured = False
                     if needs_configure:
-                        configured = renderer.configure_gpu(
-                            track,
-                            style,
-                            width=width,
-                            height=height,
-                            fps=60,
-                            dpr=dpr,
-                            force_warp=force_warp,
-                            extra_tracks=extra_tracks,
-                            duration_ms=duration_ms,
-                            prewarm_t_ms=t_ms,
-                            worker_count=self._worker_count_requested,
-                            defer_followers=True,
-                            defer_realizations_until_first_frame=True,
-                        )
-                        self._active_worker_count = max(
-                            1, min(int(configured.get("worker_count", 1)), 8)
-                        )
-                        dedicated_vram = max(
-                            int(configured.get("dedicated_video_memory", 0)), 0
-                        )
-                        min_multiworker_vram = _env_int(
-                            "KROK_SUBTITLE_GPU_MIN_MULTIWORKER_VRAM_MB",
-                            2048,
-                            minimum=0,
-                        ) * 1024 * 1024
-                        if (
-                            self._worker_count_requested > 1
-                            and dedicated_vram > 0
-                            and dedicated_vram < min_multiworker_vram
+                        with render_progress_scope(
+                            _render_progress_reporter(
+                                _RENDER_STAGE_SPANS_GPU, self.renderProgress.emit
+                            )
                         ):
-                            self._worker_count_requested = 1
                             configured = renderer.configure_gpu(
                                 track,
                                 style,
@@ -861,14 +887,47 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 extra_tracks=extra_tracks,
                                 duration_ms=duration_ms,
                                 prewarm_t_ms=t_ms,
-                                worker_count=1,
+                                worker_count=self._worker_count_requested,
                                 defer_followers=True,
                                 defer_realizations_until_first_frame=True,
                             )
-                            self._active_worker_count = 1
-                        with self._stats_lock:
-                            self._stats["worker_count"] = self._active_worker_count
-                        self._note("configure_count")
+                            self._active_worker_count = max(
+                                1, min(int(configured.get("worker_count", 1)), 8)
+                            )
+                            dedicated_vram = max(
+                                int(configured.get("dedicated_video_memory", 0)), 0
+                            )
+                            min_multiworker_vram = _env_int(
+                                "KROK_SUBTITLE_GPU_MIN_MULTIWORKER_VRAM_MB",
+                                2048,
+                                minimum=0,
+                            ) * 1024 * 1024
+                            if (
+                                self._worker_count_requested > 1
+                                and dedicated_vram > 0
+                                and dedicated_vram < min_multiworker_vram
+                            ):
+                                self._worker_count_requested = 1
+                                configured = renderer.configure_gpu(
+                                    track,
+                                    style,
+                                    width=width,
+                                    height=height,
+                                    fps=60,
+                                    dpr=dpr,
+                                    force_warp=force_warp,
+                                    extra_tracks=extra_tracks,
+                                    duration_ms=duration_ms,
+                                    prewarm_t_ms=t_ms,
+                                    worker_count=1,
+                                    defer_followers=True,
+                                    defer_realizations_until_first_frame=True,
+                                )
+                                self._active_worker_count = 1
+                            with self._stats_lock:
+                                self._stats["worker_count"] = self._active_worker_count
+                            self._note("configure_count")
+                        scene_configured = True
                     elif needs_target_resize:
                         configured = renderer.resize_gpu_target(
                             width=width,
@@ -884,6 +943,11 @@ class GpuAsyncSubtitleRenderer(QObject):
                         with self._stats_lock:
                             self._stats["worker_count"] = self._active_worker_count
                         self._note("configure_count")
+                        scene_configured = True
+                    if scene_configured:
+                        # configure 完成（IR 重排 + sidecar 场景就绪）；剩余是首帧
+                        # 实现/出帧，帧到达即由 GUI 徽标收尾。
+                        self.renderProgress.emit(92, "场景构建")
                     if (
                         self._active_worker_count > 1
                         and not self._native_preview
@@ -1220,16 +1284,21 @@ class GpuAsyncSubtitleRenderer(QObject):
         image.fill(0)
         painter = QPainter(image)
         try:
-            paint_frame_to_painter(
-                painter,
-                width,
-                height,
-                track,
-                int(t_ms),
-                style,
-                extra_tracks,
-                duration_ms=duration_ms,
-            )
+            with render_progress_scope(
+                _render_progress_reporter(
+                    _RENDER_STAGE_SPANS_PAINTER, self.renderProgress.emit
+                )
+            ):
+                paint_frame_to_painter(
+                    painter,
+                    width,
+                    height,
+                    track,
+                    int(t_ms),
+                    style,
+                    extra_tracks,
+                    duration_ms=duration_ms,
+                )
         finally:
             painter.end()
         if self._may_emit(t_ms, generation):
@@ -1285,6 +1354,7 @@ class NativeAsyncSubtitleRenderer(QObject):
     """Preview renderer backed by the native sidecar shared-memory range path."""
 
     frame_ready = Signal(QImage, int)
+    renderProgress = Signal(int, str)
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -1578,15 +1648,20 @@ class NativeAsyncSubtitleRenderer(QObject):
             if renderer_was_missing or needs_configure:
                 # dpr 让 native 按显示分辨率光栅化（布局仍在逻辑坐标系），
                 # 与 Python 预览路径一致；4K 工程预览不再渲染全分辨率帧。
-                renderer.configure(
-                    track,
-                    style,
-                    width=width,
-                    height=height,
-                    fps=60,
-                    dpr=dpr,
-                    duration_ms=duration_ms,
-                )
+                with render_progress_scope(
+                    _render_progress_reporter(
+                        _RENDER_STAGE_SPANS_GPU, self.renderProgress.emit
+                    )
+                ):
+                    renderer.configure(
+                        track,
+                        style,
+                        width=width,
+                        height=height,
+                        fps=60,
+                        dpr=dpr,
+                        duration_ms=duration_ms,
+                    )
             # 资源常驻（G2 硬性要求 4）：shm_key 与 renderer 同生命周期，
             # sidecar 端据此跨 range 复用同一块 ring，不再逐 range 重建。
             shm_key = self._shm_key
@@ -1680,15 +1755,20 @@ class NativeAsyncSubtitleRenderer(QObject):
         image.fill(0)
         painter = QPainter(image)
         try:
-            paint_frame_to_painter(
-                painter,
-                width,
-                height,
-                track,
-                int(t_ms),
-                style,
-                duration_ms=duration_ms,
-            )
+            with render_progress_scope(
+                _render_progress_reporter(
+                    _RENDER_STAGE_SPANS_PAINTER, self.renderProgress.emit
+                )
+            ):
+                paint_frame_to_painter(
+                    painter,
+                    width,
+                    height,
+                    track,
+                    int(t_ms),
+                    style,
+                    duration_ms=duration_ms,
+                )
         finally:
             painter.end()
         if self._is_current_generation(generation):

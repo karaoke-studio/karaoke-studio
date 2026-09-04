@@ -29,6 +29,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     style_for_line_display_window,
 )
 from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+from krok_helper.subtitle_render.engine.render_progress import report_render_progress
 from krok_helper.subtitle_render.engine.layout.display.section_edges import (
     section_edge_context,
 )
@@ -108,6 +109,8 @@ def resolve_track_layout_plan(
                 logical_w=logical_w,
                 logical_h=logical_h,
             )
+            # 显示窗口解析内部的分阶段刻度在此收口，保证该阶段必然到达满值。
+            report_render_progress("display", 1, 1)
             schedule = display_schedule_from_items(track, display_items)
         else:
             schedule = single_line_display_schedule(track, display_style)
@@ -121,24 +124,32 @@ def resolve_track_layout_plan(
             if logical_w is not None and logical_h is not None
             else {}
         )
-        render_lines = [render_line_with_guide_symbols(line) for line in track.lines]
-        layout_styles = [style_for_line(style, line) for line in track.lines]
-        resolved_intervals = [
-            resolved_char_intervals_for_line(line, style) for line in render_lines
-        ]
-        guide_anchor_bounds = [
-            resolved_guide_anchor_bounds_for_line(track, line, style)
-            for line in track.lines
-        ]
-        animation_styles = [
-            style_for_line_display_window(
-                style,
-                line,
-                schedule[index][1] if index in schedule else None,
-                schedule[index][2] if index in schedule else None,
+        # 页偏移解析内部的逐测量行刻度在此收口。
+        report_render_progress("page_offsets", 1, 1)
+        line_total = max(len(track.lines), 1)
+        report_render_progress("lines", 0, line_total)
+        render_lines: list = []
+        layout_styles: list = []
+        resolved_intervals: list = []
+        guide_anchor_bounds: list = []
+        animation_styles: list = []
+        for index, line in enumerate(track.lines):
+            rendered = render_line_with_guide_symbols(line)
+            render_lines.append(rendered)
+            layout_styles.append(style_for_line(style, line))
+            resolved_intervals.append(resolved_char_intervals_for_line(rendered, style))
+            guide_anchor_bounds.append(
+                resolved_guide_anchor_bounds_for_line(track, line, style)
             )
-            for index, line in enumerate(track.lines)
-        ]
+            animation_styles.append(
+                style_for_line_display_window(
+                    style,
+                    line,
+                    schedule[index][1] if index in schedule else None,
+                    schedule[index][2] if index in schedule else None,
+                )
+            )
+            report_render_progress("lines", index + 1, line_total)
 
         plan = assemble_track_layout_plan(
             track,

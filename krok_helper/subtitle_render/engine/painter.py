@@ -131,6 +131,9 @@ from krok_helper.subtitle_render.engine.render.image_resource import (
 from krok_helper.subtitle_render.engine.layout.plan.cache import (
     clear_track_layout_plan_cache,
 )
+from krok_helper.subtitle_render.engine.render_progress import (
+    report_render_progress,
+)
 from krok_helper.subtitle_render.engine.render.core.cache_keys import (
     layout_cache_signature as _layout_cache_sig,
     line_layout_signature as _line_layout_signature,
@@ -1446,6 +1449,9 @@ def _measure_page_offset_lines(
 
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     measurements: list[MeasuredPageLine] = []
+    measured_total = max(len(display_lines), 1)
+    measured_done = 0
+    report_render_progress("page_offsets", 0, measured_total)
 
     if style.vertical:
         baselines: dict[int, int] = {}
@@ -1469,6 +1475,8 @@ def _measure_page_offset_lines(
         layout_cache_sig = _layout_cache_sig(track, style)
 
     for display_line in display_lines:
+        measured_done += 1
+        report_render_progress("page_offsets", measured_done, measured_total)
         track_index = index_of.get(id(display_line.line))
         if track_index is None:
             continue

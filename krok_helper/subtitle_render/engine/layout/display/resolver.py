@@ -51,6 +51,7 @@ from krok_helper.subtitle_render.engine.timing.show_time import (
     compression_floor_ms,
     protect_time_ms,
 )
+from krok_helper.subtitle_render.engine.render_progress import report_render_progress
 from krok_helper.subtitle_render.engine.value_signature import value_signature
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
@@ -60,6 +61,9 @@ DisplayLines = list[DisplayLine]
 CollisionPairs = tuple[tuple[int, int], ...]
 MeasuredCollisionBand = tuple[int, Hashable, LineVisualBand, float]
 MeasuredCollisionBands = list[MeasuredCollisionBand]
+
+_DISPLAY_RESOLUTION_PHASES = 7
+"""``resolve_display_lines`` 的多趟步骤数，用作 display 阶段的进度刻度。"""
 
 
 @dataclass(frozen=True)
@@ -894,6 +898,9 @@ def resolve_display_lines(
     The caller supplies rendering-specific measurement operations.  This module
     owns only the ordering and data flow between those operations, so layout
     policy no longer depends on the Painter implementation.
+
+    每个多趟步骤完成后按 ``display`` 阶段上报进度（步骤即真实工作量：
+    逐趟碰撞测量占整轨重排的大头），供预览 worker 合成百分比。
     """
 
     ideal = ports.compute(
@@ -901,6 +908,7 @@ def resolve_display_lines(
         dynamic_single_page_reflow=not avoid_collisions,
         independent_line_entry=True,
     )
+    report_render_progress("display", 1, _DISPLAY_RESOLUTION_PHASES)
     resolved = ideal
     timing_resolved = False
     if avoid_collisions:
@@ -909,6 +917,7 @@ def resolve_display_lines(
         # spatial reflow decisions.
         resolved = ports.resolve_timing(resolved, True)
         timing_resolved = True
+        report_render_progress("display", 2, _DISPLAY_RESOLUTION_PHASES)
         force_bottom_pairs = ports.collision_pairs(resolved)
         if force_bottom_pairs:
             resolved = ports.compute(
@@ -918,6 +927,7 @@ def resolve_display_lines(
                 independent_line_entry=True,
             )
             resolved = ports.resolve_timing(resolved, True)
+        report_render_progress("display", 3, _DISPLAY_RESOLUTION_PHASES)
         squeeze_pairs = ports.collision_pairs(resolved)
         if squeeze_pairs:
             resolved = ports.compute(
@@ -928,6 +938,7 @@ def resolve_display_lines(
                 independent_line_entry=True,
             )
             resolved = ports.resolve_timing(resolved, True)
+        report_render_progress("display", 4, _DISPLAY_RESOLUTION_PHASES)
         secondary_pairs = ports.secondary_collision_pairs(resolved)
         if secondary_pairs:
             combined_pairs = tuple(dict.fromkeys((*squeeze_pairs, *secondary_pairs)))
@@ -939,14 +950,17 @@ def resolve_display_lines(
                 independent_line_entry=True,
             )
             timing_resolved = False
+        report_render_progress("display", 5, _DISPLAY_RESOLUTION_PHASES)
     if not timing_resolved:
         resolved = ports.resolve_timing(resolved, avoid_collisions)
+    report_render_progress("display", 6, _DISPLAY_RESOLUTION_PHASES)
     # Geometry-dependent section filling is the final layout pass.  It may
     # extend windows, so restore the animation guard without changing geometry.
     if auto_fill_section_time:
         filled = ports.fill_section_time(resolved)
         if filled != resolved:
             resolved = ports.apply_animation_guard(filled, avoid_collisions)
+    report_render_progress("display", 7, _DISPLAY_RESOLUTION_PHASES)
     return resolved
 
 

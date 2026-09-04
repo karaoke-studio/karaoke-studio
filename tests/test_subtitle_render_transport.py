@@ -2321,6 +2321,170 @@ def test_preview_graphics_clears_async_frame_on_style_change(qapp, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 渲染忙碌徽标：百分比进度反馈
+# ---------------------------------------------------------------------------
+
+
+def _badge_view(monkeypatch):
+    """构造带 fake 异步 renderer（含 renderProgress 信号）的预览画布。"""
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import (
+        PreviewGraphicsView,
+    )
+    from krok_helper.subtitle_render.domain.models import (
+        TimingChar,
+        TimingLine,
+        TimingTrack,
+    )
+
+    class FakeSignal:
+        def __init__(self):
+            self.slots = []
+
+        def connect(self, slot, *args, **kwargs):
+            self.slots.append(slot)
+
+        def emit(self, *args):
+            for slot in self.slots:
+                slot(*args)
+
+    class FakeAsyncRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.frame_ready = FakeSignal()
+            self.renderProgress = FakeSignal()
+            self.requests = []
+            FakeAsyncRenderer.instances.append(self)
+
+        def set_render_target(self, width, height, device_pixel_ratio=1.0):
+            pass
+
+        def set_state(self, *args, **kwargs):
+            pass
+
+        def request(self, t_ms):
+            self.requests.append(t_ms)
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "AsyncSubtitleRenderer", FakeAsyncRenderer)
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("テ", 0)], end_ms=900)]
+    )
+    graphics = PreviewGraphicsView()
+    graphics.set_track(track)
+    return graphics
+
+
+def test_preview_graphics_render_badge_tracks_progress(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+
+    monkeypatch.setattr(pg, "_RENDER_BUSY_DELAY_S", 0.0)
+    graphics = _badge_view(monkeypatch)
+    try:
+        badge = graphics._render_busy_badge
+        assert graphics._render_pending_since is not None
+
+        # 无帧区间超阈值 → 徽标出现（尚无刻度时为不定态文本）。
+        graphics._update_render_busy_badge()
+        assert not badge.isHidden()
+        assert badge._text == "字幕渲染中"
+
+        # 进度事件 → 百分比文本实时更新。
+        graphics._on_render_progress(43, "逐行排版")
+        graphics._update_render_busy_badge()
+        assert badge._text == "字幕渲染 · 逐行排版 43%"
+
+        # 可接受的新帧到达 → 徽标隐藏、区间闭合。
+        image = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
+        graphics._on_async_frame(image, graphics.current_time_ms)
+        assert badge.isHidden()
+        assert graphics._render_pending_since is None
+
+        # 过期帧（超出容差）不能闭合区间，徽标再次出现后保持。
+        graphics.set_time(5_000)
+        graphics._on_async_frame(image, 1_000)
+        assert graphics._render_pending_since is not None
+        graphics._update_render_busy_badge()
+        assert not badge.isHidden()
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_render_badge_hidden_for_fast_render(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+
+    # 阈值拉长：快速回帧的正常渲染绝不显示徽标（防闪烁）。
+    monkeypatch.setattr(pg, "_RENDER_BUSY_DELAY_S", 5.0)
+    graphics = _badge_view(monkeypatch)
+    try:
+        badge = graphics._render_busy_badge
+        assert graphics._render_pending_since is not None
+        graphics._update_render_busy_badge()
+        assert badge.isHidden()
+
+        image = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
+        graphics._on_async_frame(image, graphics.current_time_ms)
+        assert badge.isHidden()
+        assert not graphics._render_busy_timer.isActive()
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_render_badge_closes_on_empty_track(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+
+    monkeypatch.setattr(pg, "_RENDER_BUSY_DELAY_S", 0.0)
+    graphics = _badge_view(monkeypatch)
+    try:
+        assert graphics._render_pending_since is not None
+        # 卸载字幕轨：请求不会再有帧回来，区间必须闭合，徽标不悬死。
+        graphics.set_track(None)
+        assert graphics._render_pending_since is None
+        assert not graphics._render_busy_badge.isVisible()
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_render_progress_reporter_composes_monotonic_percent():
+    from krok_helper.subtitle_render.frontend.preview.preview_async import (
+        _RENDER_STAGE_SPANS_PAINTER,
+        _render_progress_reporter,
+    )
+
+    emitted: list[tuple[int, str]] = []
+    reporter = _render_progress_reporter(
+        _RENDER_STAGE_SPANS_PAINTER, lambda pct, label: emitted.append((pct, label))
+    )
+
+    reporter("display", 1, 7)   # 0 + 0.55 × 1/7 ≈ 8%
+    reporter("display", 4, 7)   # ≈ 31%
+    reporter("display", 2, 7)   # 回退刻度必须被丢弃
+    reporter("unknown", 1, 1)   # 未映射阶段忽略
+    reporter("lines", 1, 10)    # 0.8 + 0.2 × 1/10 = 82%
+    reporter("lines", 10, 10)   # 100% 封顶到 99，留给真实帧完成
+
+    assert emitted == [
+        (8, "显示窗口"),
+        (31, "显示窗口"),
+        (82, "逐行排版"),
+        (99, "逐行排版"),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 基础：set_time / timecode
 # ---------------------------------------------------------------------------
 

@@ -9,11 +9,29 @@ handled by ``QGraphicsVideoItem`` and the subtitles are painted by a transparent
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QEvent, QRectF, QSizeF, Qt, QTimer, QUrl, pyqtSignal as Signal
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtCore import (
+    QEvent,
+    QRectF,
+    QSize,
+    QSizeF,
+    Qt,
+    QTimer,
+    QUrl,
+    pyqtSignal as Signal,
+)
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
@@ -61,6 +79,46 @@ _VIDEO_EDGE_OVERSCAN_PX = 4
 
 _RESIZE_RENDER_DEBOUNCE_MS = 150
 """Keep the previous subtitle frame visible until an interactive resize settles."""
+
+_RENDER_BUSY_DELAY_S = 0.25
+"""请求派发后持续无新帧到达超过该时长才显示徽标，避免快速渲染时闪烁。"""
+
+_RENDER_BUSY_POLL_MS = 120
+"""徽标可见性/文本的轮询周期。"""
+
+
+class _RenderBusyBadge(QWidget):
+    """预览画布角落的「字幕渲染」徽标：半透明 pill + 阶段/百分比文本。
+
+    纯覆盖层：不拦截鼠标（穿透到预览区），主题无关（舞台区恒为深色）。
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._text = ""
+        self.setVisible(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_status(self, text: str) -> None:
+        if text != self._text:
+            self._text = text
+            self.updateGeometry()
+            self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        metrics = QFontMetrics(self.font())
+        return QSize(metrics.horizontalAdvance(self._text) + 30, metrics.height() + 14)
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(14, 16, 22, 210))
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.drawRoundedRect(rect, self.height() / 2.0, self.height() / 2.0)
+        painter.setPen(QColor("#E8EAF0"))
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
+
 
 class SubtitleGraphicsItem(QGraphicsItem):
     """Transparent subtitle layer placed above the video item."""
@@ -296,6 +354,16 @@ class PreviewGraphicsView(QGraphicsView):
         # 把字幕栅格化搬到工作线程，GUI 线程只 blit → 主呈现循环不再被
         # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认开，env KROK_SUBTITLE_ASYNC_PREVIEW=0 回退。
         self._async_renderer: Optional[AsyncSubtitleRenderer] = None
+        # 渲染忙碌徽标状态：_render_pending_since 记录「最近一次派发请求后尚未
+        # 收到可接受新帧」这一连续无帧区间的起点（播放期每次 tick 都派发请求，
+        # 但帧正常到达时区间被频繁闭合，时长永远低于显示阈值 → 不闪烁；worker
+        # 卡住/整轨重排时区间持续增长 → 徽标出现并跟随进度事件更新文本）。
+        self._render_busy_badge = _RenderBusyBadge(self)
+        self._render_pending_since: Optional[float] = None
+        self._render_progress_text: Optional[str] = None
+        self._render_busy_timer = QTimer(self)
+        self._render_busy_timer.setInterval(_RENDER_BUSY_POLL_MS)
+        self._render_busy_timer.timeout.connect(self._update_render_busy_badge)
         if async_preview_enabled():
             if gpu_preview_enabled():
                 renderer_cls = GpuAsyncSubtitleRenderer
@@ -307,6 +375,7 @@ class PreviewGraphicsView(QGraphicsView):
             self._async_renderer.frame_ready.connect(
                 self._on_async_frame, Qt.ConnectionType.QueuedConnection
             )
+            self._connect_render_progress_signal()
             self._connect_native_preview_signal()
             self._connect_gpu_fallback_signal()
             self._subtitle_item.set_async_mode(True)
@@ -317,6 +386,7 @@ class PreviewGraphicsView(QGraphicsView):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self._fit_scene_to_view()
+        self._layout_render_badge()
         # fitInView immediately scales the scene, including the last completed
         # subtitle image.  Defer the expensive sharp rerender until the drag
         # settles instead of rebuilding the native scene for every mouse move.
@@ -346,6 +416,9 @@ class PreviewGraphicsView(QGraphicsView):
     def set_track(self, track: Optional[TimingTrack]) -> None:
         self._subtitle_item.set_track(track)
         self._subtitle_item.clear_async_image()
+        if track is None:
+            # 空轨的请求不会有帧回来，直接闭合忙碌区间，避免徽标悬死。
+            self._note_frame_delivered()
         self._refresh_async_state()
 
     def set_extra_tracks(self, tracks: list[TimingTrack]) -> None:
@@ -382,6 +455,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._async_renderer.frame_ready.connect(
             self._on_async_frame, Qt.ConnectionType.QueuedConnection
         )
+        self._connect_render_progress_signal()
         self._connect_native_preview_signal()
         self._connect_gpu_fallback_signal()
         self._subtitle_item.set_async_mode(True)
@@ -408,6 +482,13 @@ class PreviewGraphicsView(QGraphicsView):
         if signal is not None:
             signal.connect(self.gpuFallback.emit, Qt.ConnectionType.QueuedConnection)
 
+    def _connect_render_progress_signal(self) -> None:
+        signal = getattr(self._async_renderer, "renderProgress", None)
+        if signal is not None:
+            signal.connect(
+                self._on_render_progress, Qt.ConnectionType.QueuedConnection
+            )
+
     def _connect_native_preview_signal(self) -> None:
         signal = getattr(self._async_renderer, "frame_presented", None)
         if signal is not None:
@@ -421,6 +502,7 @@ class PreviewGraphicsView(QGraphicsView):
         if self._background_source.kind == "image_sequence":
             self._refresh_background_image()
         if self._async_renderer is not None:
+            self._note_render_requested()
             self._async_renderer.request(t_ms)
         else:
             self._subtitle_item.set_time(t_ms)
@@ -440,13 +522,59 @@ class PreviewGraphicsView(QGraphicsView):
             # Compatibility with third-party/older preview workers that only
             # implement the original two-argument embedding contract.
             self._async_renderer.set_state(self._track, self._style)
+        self._note_render_requested()
         self._async_renderer.request(self._t_ms)
+
+    def _note_render_requested(self) -> None:
+        """记一次请求派发：无帧区间的第一格（连续派发不重置区间起点）。"""
+        if self._async_renderer is None or self._track is None:
+            return
+        if self._render_pending_since is None:
+            self._render_pending_since = time.monotonic()
+            self._render_progress_text = None
+        if not self._render_busy_timer.isActive():
+            self._render_busy_timer.start()
+
+    def _note_frame_delivered(self) -> None:
+        """可接受的新帧到达：闭合无帧区间并隐藏徽标。"""
+        self._render_pending_since = None
+        self._render_progress_text = None
+        self._render_busy_badge.setVisible(False)
+        self._render_busy_timer.stop()
+
+    def _on_render_progress(self, percent: int, label: str) -> None:
+        if self._render_pending_since is None:
+            return
+        self._render_progress_text = f"字幕渲染 · {label} {int(percent)}%"
+        if self._render_busy_badge.isVisible():
+            self._update_render_busy_badge()
+
+    def _update_render_busy_badge(self) -> None:
+        since = self._render_pending_since
+        if since is None:
+            self._render_busy_badge.setVisible(False)
+            self._render_busy_timer.stop()
+            return
+        elapsed = time.monotonic() - since
+        if elapsed < _RENDER_BUSY_DELAY_S and not self._render_busy_badge.isVisible():
+            return
+        self._render_busy_badge.set_status(self._render_progress_text or "字幕渲染中")
+        self._render_busy_badge.setVisible(True)
+        self._layout_render_badge()
+
+    def _layout_render_badge(self) -> None:
+        badge = self._render_busy_badge
+        hint = badge.sizeHint()
+        badge.resize(hint)
+        badge.move(max(self.width() - hint.width() - 12, 0), 12)
+        badge.raise_()
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
         if int(t_ms) != int(self._t_ms):
             tolerance = _ASYNC_PLAYBACK_STALE_TOLERANCE_MS if self._video_playing else 0
             if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:
                 return
+        self._note_frame_delivered()
         self._subtitle_item.set_async_image(image)
 
     def _on_native_frame_presented(self, t_ms: int) -> None:
@@ -454,6 +582,7 @@ class PreviewGraphicsView(QGraphicsView):
             tolerance = _ASYNC_PLAYBACK_STALE_TOLERANCE_MS if self._video_playing else 0
             if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:
                 return
+        self._note_frame_delivered()
         self._subtitle_item.clear_async_image()
         self.framePainted.emit()
 
@@ -547,6 +676,7 @@ class PreviewGraphicsView(QGraphicsView):
                 physical_w,
                 physical_h,
             )
+        self._note_render_requested()
         self._async_renderer.request(self._t_ms)
 
     def _stop_async_renderer(self) -> None:
