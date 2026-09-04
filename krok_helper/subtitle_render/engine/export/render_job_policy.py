@@ -182,6 +182,15 @@ def validate_render_job(job: RenderJob) -> None:
                 raise ProcessingError(f"背景图片序列不存在: {path}")
     if job.audio_path is not None and not job.audio_path.is_file():
         raise ProcessingError(f"独立音频不存在: {job.audio_path}")
+    if (
+        not format_needs_background(job.output_format)
+        and job.include_audio
+        and job.audio_path is None
+        and background.kind == "video"
+    ):
+        # 透明 MOV 会把背景视频当「仅音频」输入用，文件必须存在。
+        if not background.path or not Path(background.path).is_file():
+            raise ProcessingError(f"背景素材不存在: {background.path}")
     if job.width <= 0 or job.height <= 0:
         raise ProcessingError("输出分辨率无效。")
     if job.width % 2 != 0 or job.height % 2 != 0:

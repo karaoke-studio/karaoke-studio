@@ -554,6 +554,27 @@ class ExportWorkspaceView(QWidget):
         dir_row.addWidget(browse_button)
         output_layout.addLayout(dir_row)
 
+        # 输出格式独占一行：与文件名同行会严重挤压文件名输入框。
+        format_row = QHBoxLayout()
+        format_row.setContentsMargins(0, 0, 0, 0)
+        format_row.setSpacing(8)
+        format_combo = FluentComboBox()
+        format_combo.setMinimumHeight(32)
+        for format_value, format_text in EXPORT_FORMAT_CHOICES:
+            format_combo.addItem(format_text, userData=format_value)
+        format_combo.setToolTip(
+            "PNG 序列输出到以导出名命名的独立子文件夹（名称_000001.png 起）；"
+            "透明视频为 QuickTime 动画编码（.mov，保留无损 alpha 通道），"
+            "适合导入剪辑软件叠加素材。"
+        )
+        format_combo.currentIndexChanged.connect(
+            lambda _index: self.formatChanged.emit()
+        )
+        format_row.addWidget(
+            make_labeled_export_control("输出格式", format_combo, theme_labels)
+        )
+        output_layout.addLayout(format_row)
+
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
         name_row.setSpacing(8)
@@ -576,23 +597,7 @@ class ExportWorkspaceView(QWidget):
                 ),
             ),
         )
-        # 输出格式与文件名同行：文件名 → 格式 → 后缀徽标 顺序读起来是一句话，
-        # 也避免给固定宽度的设置列再添一行、压缩 800px 窗口下的上下留白。
-        format_combo = FluentComboBox()
-        format_combo.setMinimumHeight(32)
-        format_combo.setMinimumWidth(150)
-        for format_value, format_text in EXPORT_FORMAT_CHOICES:
-            format_combo.addItem(format_text, userData=format_value)
-        format_combo.setToolTip(
-            "PNG 序列输出到以导出名命名的独立子文件夹（名称_000001.png 起）；"
-            "透明视频为 QuickTime 动画编码（.mov，保留无损 alpha 通道），"
-            "适合导入剪辑软件叠加素材。"
-        )
-        format_combo.currentIndexChanged.connect(
-            lambda _index: self.formatChanged.emit()
-        )
         name_row.addWidget(name_edit, 1)
-        name_row.addWidget(format_combo)
         name_row.addWidget(name_suffix)
         output_layout.addLayout(name_row)
         settings_layout.addWidget(output_card)

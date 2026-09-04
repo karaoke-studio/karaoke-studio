@@ -67,7 +67,7 @@ class RenderJob:
     fps: int = 60
     duration_ms: int | None = None
     include_audio: bool = True
-    """MP4 only; PNG sequence and transparent MOV exports carry no audio."""
+    """MP4 与透明 MOV 携带音频（背景视频内嵌音轨或独立音频）；PNG 序列无音频。"""
     encoder_mode: str = "cpu"
     crf: int = 18
     preset: str = "medium"

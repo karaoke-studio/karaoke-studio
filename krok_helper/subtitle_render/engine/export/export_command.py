@@ -189,10 +189,22 @@ def build_render_command(
     video_label = "[v]"
     if preview_image_path is not None:
         preview_width = resolved_preview_width(job.width, preview_width)
-        filter_graph += (
-            ";[v]split=2[venc][vpin];"
-            f"[vpin]fps={_PREVIEW_FPS},scale={preview_width}:-2[vprev]"
-        )
+        if format_has_alpha(job.output_format):
+            # 透明格式的 [v] 是无背景的透明字幕层，而 jpg 预览承载不了 alpha
+            # （直接编码会变成「黑底白字」，看起来像渲染失败）。给预览支路垫
+            # 一层中灰底，明确表达「这是透明字幕层、画面里没有背景」。
+            filter_graph += (
+                ";[v]split=2[venc][vpin];"
+                f"color=c=0x3F444C:s={job.width}x{job.height}:r={job.fps}"
+                f":d={duration_seconds:.6f}[vpbg];"
+                "[vpbg][vpin]overlay=0:0:format=auto[vpcomp];"
+                f"[vpcomp]fps={_PREVIEW_FPS},scale={preview_width}:-2[vprev]"
+            )
+        else:
+            filter_graph += (
+                ";[v]split=2[venc][vpin];"
+                f"[vpin]fps={_PREVIEW_FPS},scale={preview_width}:-2[vprev]"
+            )
         video_label = "[venc]"
     background = resolved_background(job)
     needs_background = format_needs_background(job.output_format)
@@ -219,19 +231,24 @@ def build_render_command(
         ),
     ]
     audio_input_index: int | None = None
-    if (
-        job.output_format == OUTPUT_FORMAT_MP4
-        and job.include_audio
-        and job.audio_path is not None
-    ):
-        audio_input_index = 2
-        command.extend(["-i", str(job.audio_path)])
-    elif (
-        job.output_format == OUTPUT_FORMAT_MP4
-        and job.include_audio
-        and background.kind == "video"
-    ):
-        audio_input_index = 1
+    if job.include_audio and not is_png_sequence(job.output_format):
+        # MP4 与透明 MOV 都携带音频；PNG 序列的 image2 输出装不下音频。
+        if job.audio_path is not None:
+            # 独立音频：含背景格式排在输入 2；透明格式没有背景输入，排 1。
+            audio_input_index = 2 if needs_background else 1
+            command.extend(["-i", str(job.audio_path)])
+        elif background.kind == "video":
+            if needs_background:
+                audio_input_index = 1
+            else:
+                # 透明 MOV 不解码背景画面，但音频与 MP4 同源：把背景视频
+                # 作为「仅音频」输入（视频流未被引用，不参与解码）。
+                audio_input_index = 1
+                if background.video_offset_ms:
+                    command.extend(
+                        ["-ss", f"{background.video_offset_ms / 1000.0:.6f}"]
+                    )
+                command.extend(["-i", str(background.path)])
     command.extend(["-filter_complex", filter_graph, "-map", video_label])
     if audio_input_index is not None:
         command.extend(["-map", f"{audio_input_index}:a:0?"])
@@ -254,7 +271,10 @@ def build_render_command(
         command.extend(["-movflags", "+faststart", str(job.output_path)])
     elif job.output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
         # QuickTime Animation：无损真 alpha，行程编码对大面积透明的字幕层友好。
-        command.extend(["-c:v", "qtrle", "-pix_fmt", "rgba", str(job.output_path)])
+        command.extend(["-c:v", "qtrle", "-pix_fmt", "rgba"])
+        if audio_input_index is not None:
+            command.extend(["-c:a", "aac", "-b:a", "192k"])
+        command.extend([str(job.output_path)])
     else:
         assert is_png_sequence(job.output_format)
         command.extend(

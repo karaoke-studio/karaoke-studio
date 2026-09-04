@@ -1677,6 +1677,25 @@ def _sequence_frame_count(job: RenderJob) -> int:
     )
 
 
+def _unlink_with_retry(path: Path, *, attempts: int = 4, delay_s: float = 0.3) -> bool:
+    """删除文件，容忍 Windows 杀软扫描刚写完的帧文件造成的短暂句柄占用。
+
+    取消导出后立刻清理半成品时，杀毒软件可能正在扫描刚落盘的 PNG/MOV，
+    ``unlink`` 会以 ``PermissionError`` 失败；重试几次即可通过，全部失败才
+    返回 ``False``（调用方记日志，用户可稍后手动删除）。
+    """
+
+    for attempt in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except PermissionError:
+            if attempt == attempts - 1:
+                return False
+            time.sleep(delay_s)
+    return False
+
+
 def _remove_incomplete_sequence(job: RenderJob, logger: Logger) -> None:
     """删掉这次 PNG 序列导出留下的半成品帧；目录里的其他文件一律不碰。
 
@@ -1691,8 +1710,10 @@ def _remove_incomplete_sequence(job: RenderJob, logger: Logger) -> None:
         for entry in list(directory.iterdir()):
             if not entry.name.startswith(prefix) or not entry.name.endswith(".png"):
                 continue
-            entry.unlink(missing_ok=True)
-            removed += 1
+            if _unlink_with_retry(entry):
+                removed += 1
+            else:
+                logger(f"清理未完成的 PNG 序列帧失败（文件被占用）: {entry}")
     except OSError as exc:
         logger(f"清理未完成的 PNG 序列帧失败: {directory} ({exc})")
         return
@@ -1723,7 +1744,9 @@ def _remove_incomplete_output(job: RenderJob, logger: Logger) -> None:
             logger(f"输出路径就是素材本身，已跳过清理以免删除源文件: {output_path}")
             return
     try:
-        output_path.unlink()
-        logger(f"已清理未完成的输出文件: {output_path}")
+        if _unlink_with_retry(output_path):
+            logger(f"已清理未完成的输出文件: {output_path}")
+        else:
+            logger(f"清理未完成的输出文件失败（文件被占用，稍后可手动删除）: {output_path}")
     except OSError as exc:
         logger(f"清理未完成的输出文件失败: {output_path} ({exc})")

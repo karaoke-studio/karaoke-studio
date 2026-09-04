@@ -2130,12 +2130,52 @@ def test_build_render_command_mov_transparent_uses_qtrle(tmp_path):
 
     command = build_render_command_contract("ffmpeg", job)
 
-    assert command.count("-i") == 1
+    # 透明 MOV 不解码背景画面，但音频与 MP4 同源（背景视频仅作音频输入）。
+    assert command.count("-i") == 2
+    assert "1:a:0?" in command
     assert command[command.index("-c:v") + 1] == "qtrle"
+    assert "-c:a" in command
     assert str(job.output_path) == command[-1]
     assert "-movflags" not in command
     assert "libx264" not in command
+
+
+def test_build_render_command_mov_transparent_can_skip_audio(tmp_path):
+    job = replace(_format_job(tmp_path, "mov_transparent"), include_audio=False)
+
+    command = build_render_command_contract("ffmpeg", job)
+
+    assert command.count("-i") == 1
     assert "1:a:0?" not in command
+    assert "-c:a" not in command
+
+
+def test_build_render_command_mov_transparent_uses_independent_audio(tmp_path):
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"fake")
+    job = replace(
+        _format_job(tmp_path, "mov_transparent"),
+        background_video_path=None,
+        background_source=BackgroundSource(kind="solid", color="#000000"),
+        audio_path=audio,
+    )
+
+    command = build_render_command_contract("ffmpeg", job)
+
+    assert command[command.index(str(audio)) - 1] == "-i"
+    assert "1:a:0?" in command  # 透明格式没有背景输入，独立音频排输入 1
+
+
+def test_validate_render_job_transparent_requires_audio_source_video(tmp_path):
+    missing = tmp_path / "gone.mp4"
+    job = replace(
+        _format_job(tmp_path, "mov_transparent"),
+        background_video_path=missing,
+        background_source=BackgroundSource(kind="video", path=str(missing)),
+    )
+
+    with pytest.raises(ProcessingError, match="背景素材不存在"):
+        validate_render_job(job)
 
 
 def test_build_render_command_transparent_strip_keeps_full_canvas_base(tmp_path):
@@ -2320,3 +2360,55 @@ def test_render_mov_transparent_success_uses_file_check(monkeypatch, tmp_path):
 
     assert result == job.output_path
     assert job.output_path.is_file()
+
+
+def test_preview_tap_composites_gray_base_for_transparent_formats(tmp_path):
+    """透明格式的导出监视 jpg 垫中灰底：jpg 无 alpha，黑底看起来像渲染失败。"""
+
+    job = _format_job(tmp_path, "mov_transparent")
+    command = build_render_command_contract(
+        "ffmpeg", job, preview_image_path=tmp_path / "frame.jpg", preview_width=320
+    )
+
+    fg = command[command.index("-filter_complex") + 1]
+    assert "color=c=0x3F444C:s=320x180:r=60" in fg
+    assert "[vpbg][vpin]overlay=0:0:format=auto[vpcomp]" in fg
+    assert "[vpcomp]fps=2,scale=320:-2[vprev]" in fg
+
+
+def test_preview_tap_keeps_plain_split_for_background_formats(tmp_path):
+    job = _job(tmp_path, include_audio=False)
+    command = build_render_command_contract(
+        "ffmpeg", job, preview_image_path=tmp_path / "frame.jpg"
+    )
+
+    fg = command[command.index("-filter_complex") + 1]
+    assert "[vpbg]" not in fg
+    assert ";[v]split=2[venc][vpin];" in fg
+
+
+def test_sequence_cleanup_retries_transient_file_locks(tmp_path, monkeypatch):
+    """杀软短暂锁定刚写完的帧时，清理要重试而不是留下半成品目录。"""
+
+    job = _format_job(tmp_path, "png_transparent")
+    seq = job.output_path
+    seq.mkdir()
+    (seq / "seq_000001.png").write_bytes(b"a")
+    calls = {"n": 0}
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, missing_ok=False):  # noqa: ANN001
+        if self.name.endswith(".png") and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError(13, "file locked by scanner")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    logs: list[str] = []
+    try:
+        renderer._remove_incomplete_output(job, logs.append)
+    finally:
+        monkeypatch.undo()
+
+    assert calls["n"] == 1  # 第一次被锁、重试成功
+    assert not seq.exists()
