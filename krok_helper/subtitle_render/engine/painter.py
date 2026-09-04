@@ -2071,7 +2071,12 @@ def _resolve_sayatoo_line_layouts(
         if signal_head_ids is not None
         else None
     )
-    for display_line in display_lines:
+    layout_total = max(len(display_lines), 1)
+    for layout_index, display_line in enumerate(display_lines):
+        # 冷缓存时逐行字形排版（字体构建 + 逐字宽度）是整轨重排的主要耗时，
+        # 且发生在 measure_collision_bands 的逐行循环之前：在此同样按当前
+        # display 槽位逐行上报，消除整段无刻度死区（无 reporter 时为 no-op）。
+        report_display_measure_progress(layout_index, layout_total)
         line = display_line.line
         if line.is_blank or not line.chars:
             continue
