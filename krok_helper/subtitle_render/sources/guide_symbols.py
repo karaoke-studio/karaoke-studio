@@ -105,6 +105,16 @@ def import_svg_guide_symbol(
     commands = _path_commands(fitted)
     if not commands:
         raise GuideSymbolImportError("SVG 转换后的字形轮廓为空。")
+    if any(
+        not math.isfinite(float(value))
+        for command in commands
+        for value in command[1:]
+    ):
+        # NaN/∞ 坐标能穿过 boundingRect 的宽度/高度校验（NaN 比较恒为 False），
+        # 但会让渲染 IR 序列化出非法 JSON、GPU 几何与 QPainter 路径全部失效。
+        raise GuideSymbolImportError(
+            "SVG 轮廓包含非法坐标（NaN 或无穷大），无法导入；请检查源文件。"
+        )
     return GuideSymbol(
         name=path.stem or "导唱符",
         path_commands=commands,
@@ -197,6 +207,9 @@ def scaled_guide_symbol_path(
     left: float = 0.0,
     baseline_y: float = 0.0,
 ) -> QPainterPath:
+    # 不在此处按 (symbol, pixel_size) 缓存缩放结果：GuideSymbol 的哈希要
+    # 遍历整份轮廓命令（可达数万条），每次查缓存的代价与变换本身相当，
+    # 大符号实测反而显著变慢。跨帧复用由上层字形层缓存负责。
     scale = max(float(pixel_size), 1.0) / max(int(symbol.units_per_em), 1)
     transform = QTransform()
     transform.translate(float(left), float(baseline_y))

@@ -3505,6 +3505,72 @@ def test_gpu_g4_guide_symbols_follow_painter_vector_glyphs(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_detailed_svg_guide_symbol_configures_within_budget(monkeypatch) -> None:
+    """精细 SVG（数千轮廓命令）× 多行导唱符必须在 configure 超时预算内完成。
+
+    Schema 2 之前每个导唱字符内嵌整份轮廓且逐字符重建 D2D geometry，
+    3000 命令 × 200 行的 configure 实测超过 50 秒（产品超时 30 秒），
+    表现为「GPU 渲染错误回退 CPU、CPU 也几乎不渲染」。
+    """
+    import time
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    commands = tuple(
+        ("C", float(i % 40) * 12.0, -6.0, float(i % 40) * 12.0 + 4.0, -18.0,
+         float(i % 40) * 12.0 + 8.0, -12.0)
+        for i in range(3_000)
+    )
+    base_symbol = GuideSymbol(
+        path_commands=commands,
+        duration_ms=400,
+        count=2,
+        replacement_prefix=("h", "h"),
+        role_labels=(None, None),
+    )
+    # 批量替换的真实形态：每行 duration/角色各异，但共享同一份轮廓。
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", row * 3_000),
+                    TimingChar("h", row * 3_000 + 600),
+                ],
+                end_ms=row * 3_000 + 2_600,
+                guide_symbol=replace(
+                    base_symbol,
+                    duration_ms=300 + row,
+                    role_labels=("lead", None) if row % 2 else (None, None),
+                ),
+            )
+            for row in range(60)
+        ]
+    )
+    style = _g1_style(
+        font_size_px=64,
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+    )
+    painter_frame = _render_painter_oracle(style, t_ms=5_000, track=track)
+    assert _alpha_count(painter_frame) > 0
+
+    started = time.perf_counter()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        _, gpu_frames = _render_g1_frames(
+            renderer,
+            style,
+            (5_000,),
+            force_warp=True,
+            track=track,
+        )
+    elapsed = time.perf_counter() - started
+    assert _alpha_count(gpu_frames[0]) > 0
+    assert elapsed < 10.0, f"configure+render took {elapsed:.1f}s; outline dedup regressed"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_bitmap_guide_symbol_renders_during_utopia_exit(
     monkeypatch,
     tmp_path: Path,

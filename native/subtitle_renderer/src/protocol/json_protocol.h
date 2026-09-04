@@ -7,7 +7,9 @@
 
 namespace krok::subtitle::native::protocol {
 
-inline constexpr int kRenderIrSchema = 1;
+// Schema 2 adds the root ``vector_glyphs`` outline table; characters reference
+// entries through ``vector_glyph_id`` instead of embedding a full outline copy.
+inline constexpr int kRenderIrSchema = 2;
 
 enum class Command {
     BackendInfo,

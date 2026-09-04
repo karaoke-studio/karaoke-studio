@@ -15,6 +15,7 @@ from typing import Any
 from krok_helper.subtitle_render.engine.layout.plan.model import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.layout.page.plan import section_head_line_indices
 from krok_helper.subtitle_render.domain.timing import (
+    GuideSymbol,
     RubyAnnotation,
     TimingChar,
     TimingLine,
@@ -29,7 +30,46 @@ from krok_helper.subtitle_render.domain.models import (
 )
 from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
 
-RENDER_IR_SCHEMA = 1
+RENDER_IR_SCHEMA = 2
+
+
+class VectorGlyphTable:
+    """按轮廓去重的矢量导唱符表（一份 IR 内全轨共享）。
+
+    SVG 导唱符的 ``path_commands`` 可达数千条，而一条 IR 会为每一行的每一个
+    导唱虚拟字符重复内嵌整份轮廓——N 行 × K 命令的体积与序列化成本会让
+    ``gpu_configure`` 远超超时上限。表键取**渲染投影**（轮廓命令 + em +
+    advance）：sidecar 只消费这三个字段，逐行不同的走字时长 / 角色标签 /
+    替换前缀不影响字形几何，因此替换型导唱符（每行 duration_ms 各异）也能
+    共享同一份轮廓。字符侧通过 ``vector_glyph_id`` 引用；sidecar 据此按
+    符号建一次 D2D geometry。
+    """
+
+    def __init__(self) -> None:
+        self._ids: dict[tuple, str] = {}
+        self.payload: dict[str, dict[str, Any]] = {}
+
+    def reference(self, symbol: GuideSymbol) -> str | None:
+        """把符号登记进表并返回其 ID；位图导唱符返回 None（走 bitmap_guide）。"""
+        if getattr(symbol, "kind", "vector") != "vector" or not symbol.path_commands:
+            return None
+        units = max(int(symbol.units_per_em), 1)
+        advance = max(float(symbol.advance_width), 0.0)
+        key = (tuple(symbol.path_commands), units, advance)
+        glyph_id = self._ids.get(key)
+        if glyph_id is None:
+            glyph_id = f"g{len(self._ids)}"
+            self._ids[key] = glyph_id
+            self.payload[glyph_id] = {
+                "path_commands": [list(command) for command in symbol.path_commands],
+                "units_per_em": units,
+                "advance_width": advance,
+            }
+        return glyph_id
+
+    @property
+    def empty(self) -> bool:
+        return not self.payload
 GPU_UNSUPPORTED_FEATURE_LABELS = {
     "line_animation": "\u672a\u77e5\u6574\u884c\u52a8\u753b",
     "karaoke_animation": "\u672a\u77e5\u8d70\u5b57\u7279\u6548",
@@ -148,8 +188,11 @@ def bitmap_guide_to_ir(symbol: object | None) -> dict[str, Any] | None:
     }
 
 
-def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
-    return {
+def timing_char_to_ir(
+    ch: TimingChar,
+    glyph_table: VectorGlyphTable | None = None,
+) -> dict[str, Any]:
+    char: dict[str, Any] = {
         "text": ch.text,
         "start_ms": int(ch.start_ms),
         "explicit_start": bool(ch.explicit_start),
@@ -158,9 +201,17 @@ def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
             int(ch.pause_release_ms) if ch.pause_release_ms is not None else None
         ),
         "role_label": ch.role_label,
-        "vector_glyph": guide_symbol_to_dict(ch.vector_glyph),
         "bitmap_guide": bitmap_guide_to_ir(ch.vector_glyph),
     }
+    if glyph_table is not None:
+        if ch.vector_glyph is not None:
+            glyph_id = glyph_table.reference(ch.vector_glyph)
+            if glyph_id is not None:
+                char["vector_glyph_id"] = glyph_id
+    else:
+        # Legacy inline form：无符号表的调用方（旧测试 / 探针）仍可整包内嵌。
+        char["vector_glyph"] = guide_symbol_to_dict(ch.vector_glyph)
+    return char
 
 
 def timing_line_to_ir(
@@ -187,10 +238,13 @@ def timing_line_to_ir(
     layout_offset_x: float = 0.0,
     layout_offset_y: float = 0.0,
     layout_offset_windows: list[tuple[int, int, float, float]] | None = None,
+    glyph_table: VectorGlyphTable | None = None,
 ) -> dict[str, Any]:
     render_line = render_line or line
     return {
-        "chars": [timing_char_to_ir(ch) for ch in render_line.chars],
+        "chars": [
+            timing_char_to_ir(ch, glyph_table) for ch in render_line.chars
+        ],
         "end_ms": int(line.end_ms) if line.end_ms is not None else None,
         "singer_label": line.singer_label,
         "singer_id": line.singer_id,
@@ -301,6 +355,7 @@ def track_to_ir(
     style: Style | None = None,
     *,
     layout_plan: TrackLayoutPlan | None = None,
+    glyph_table: VectorGlyphTable | None = None,
 ) -> dict[str, Any]:
     schedule: dict[int, tuple[int, int, int]] = {}
     if style is not None:
@@ -409,6 +464,7 @@ def track_to_ir(
                     else "none"
                 ),
                 layout_offset_windows=list(page_offset_windows.get(index, ())),
+                glyph_table=glyph_table,
             )
             for index, line in enumerate(track.lines)
         ],

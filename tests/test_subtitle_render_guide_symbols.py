@@ -2684,3 +2684,107 @@ def test_project_payload_keeps_bitmap_inline_guide_symbols(tmp_path):
     rows = SubtitleRenderWindow._inline_guide_symbol_rows(track)
 
     assert rows == [{"1": guide_symbol_to_dict(avatar)}]
+
+
+def test_svg_import_rejects_non_finite_coordinates(tmp_path):
+    """NaN/∞ 轮廓会让渲染 IR 序列化出非法 JSON（sidecar "illegal number"）
+    并同时破坏 QPainter 路径，导入阶段必须拒绝（含归一化变换放大出的 ∞/NaN）。"""
+    path = tmp_path / "nan.svg"
+    path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<path d="M0,0 C1e400,1e400 10,10 20,20 Z"/></svg>',
+        encoding="utf-8",
+    )
+    with pytest.raises(GuideSymbolImportError):
+        import_svg_guide_symbol(path)
+
+
+def test_guide_symbol_from_dict_rejects_non_finite_coordinates():
+    """项目文件里的 NaN 轮廓在反序列化时整符丢弃，不进渲染管线。"""
+    payload = guide_symbol_to_dict(
+        _symbol_dict_fallback()
+    )
+    payload["path_commands"] = [["M", 0.0, 0.0], ["L", float("nan"), 10.0], ["Z"]]
+    assert guide_symbol_from_dict(payload) is None
+
+
+def _symbol_dict_fallback() -> GuideSymbol:
+    return GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 10.0, -10.0), ("Z",)),
+        duration_ms=400,
+    )
+
+
+def test_replacement_anchor_round_trips_through_serialization():
+    symbol = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 10.0, -10.0), ("Z",)),
+        replacement_prefix=("h", "h"),
+        replacement_anchor=("あ", "か"),
+        count=2,
+    )
+    restored = guide_symbol_from_dict(guide_symbol_to_dict(symbol))
+    assert restored == symbol
+    assert restored.replacement_anchor == ("あ", "か")
+
+    plain = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 10.0, -10.0), ("Z",)),
+    )
+    assert "replacement_anchor" not in guide_symbol_to_dict(plain)
+
+
+def test_replacement_symbol_for_match_records_anchor(tmp_path):
+    """批量替换对话框生成的符号要带上可见文字锚点（防换行错位）。"""
+    from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
+        detect_guide_prefix_matches,
+        replacement_symbol_for_match,
+    )
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", 0),
+                    TimingChar("h", 500),
+                    TimingChar("歌", 1000),
+                    TimingChar("词", 1500),
+                ],
+                end_ms=2000,
+            )
+        ]
+    )
+    matches = detect_guide_prefix_matches(track, "h")
+    assert len(matches) == 1
+    symbol = replacement_symbol_for_match(_symbol(tmp_path), track.lines[0], matches[0])
+    assert symbol is not None
+    assert symbol.replacement_prefix == ("h", "h")
+    assert symbol.replacement_anchor == ("歌", "词")
+
+
+def test_scaled_guide_symbol_path_matches_composed_transform(tmp_path):
+    """公开契约：先按字号缩放、再平移到 (left, baseline) 的复合变换语义。
+
+    将来若重新引入按 (symbol, pixel_size) 的缩放缓存，必须保持该等价性
+    （直接缓存曾因大轮廓哈希成本反而变慢而被移除，见实现处注释）。
+    """
+    from PyQt6.QtGui import QTransform
+
+    from krok_helper.subtitle_render.sources.guide_symbols import (
+        scaled_guide_symbol_path,
+    )
+
+    symbol = _symbol(tmp_path)
+    cache_result = scaled_guide_symbol_path(
+        symbol, pixel_size=64, left=37.5, baseline_y=200.25
+    )
+    legacy = QTransform()
+    legacy.translate(37.5, 200.25)
+    scale = 64.0 / max(int(symbol.units_per_em), 1)
+    legacy.scale(scale, scale)
+    expected = legacy.map(guide_symbol_path(symbol))
+
+    assert cache_result.elementCount() == expected.elementCount()
+    for index in range(cache_result.elementCount()):
+        got = cache_result.elementAt(index)
+        want = expected.elementAt(index)
+        assert got.x == pytest.approx(want.x, abs=1e-9)
+        assert got.y == pytest.approx(want.y, abs=1e-9)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from krok_helper.subtitle_render.domain.models import (
     Style,
@@ -17,7 +17,7 @@ from krok_helper.subtitle_render.domain.timing import (
     SubtitleLoadingSettings,
     TimingTrack,
     guide_symbol_has_visual,
-    guide_symbol_replacement_count,
+    guide_symbol_replacement_anchored,
 )
 from krok_helper.subtitle_render.engine.layout.page.plan import (
     build_legacy_page_plan,
@@ -66,17 +66,37 @@ def apply_track_project_data(
     _apply_layout_indices(track, style, data.get("line_layout_indices"))
     _restore_page_state(track, style, data)
     roles_changed = _apply_char_role_labels(track, data.get("char_role_labels"))
+    resolve_guide_row = _guide_symbol_row_resolver(data)
     guide_mismatches = _apply_guide_symbols(
         track,
         data.get("line_guide_symbols"),
+        resolve_guide_row,
     )
-    _apply_inline_guide_symbols(track, data.get("line_inline_guide_symbols"))
+    _apply_inline_guide_symbols(
+        track,
+        data.get("line_inline_guide_symbols"),
+        resolve_guide_row,
+    )
     _apply_display_overrides(track, data.get("line_display_overrides"))
     _apply_animation_overrides(track, data.get("line_animation_overrides"))
     return AppliedTrackProjectState(
         char_role_labels_changed=roles_changed,
         guide_symbol_mismatches=tuple(guide_mismatches),
     )
+
+
+def _guide_symbol_row_resolver(data: dict) -> Callable[[object], object]:
+    """解析 ``guide_symbol_table``：行数据里的字符串 ID 映射回符号字典。"""
+    table = data.get("guide_symbol_table")
+    if not isinstance(table, dict):
+        return lambda value: value
+
+    def resolve(value: object) -> object:
+        if isinstance(value, str):
+            return table.get(value)
+        return value
+
+    return resolve
 
 
 def _apply_layout_indices(track: TimingTrack, style: Style, payload: object) -> None:
@@ -156,17 +176,23 @@ def _apply_char_role_labels(track: TimingTrack, payload: object) -> bool:
     return changed
 
 
-def _apply_guide_symbols(track: TimingTrack, payload: object) -> list[int]:
+def _apply_guide_symbols(
+    track: TimingTrack,
+    payload: object,
+    resolve_row: Callable[[object], object] = lambda value: value,
+) -> list[int]:
     if not isinstance(payload, list):
         return []
     mismatches: list[int] = []
     for row, (line, value) in enumerate(zip(track.lines, payload)):
-        symbol = guide_symbol_from_dict(value)
+        symbol = guide_symbol_from_dict(resolve_row(value))
         if (
             symbol is not None
             and symbol.replacement_prefix
-            and guide_symbol_replacement_count(line, symbol) == 0
+            and not guide_symbol_replacement_anchored(line, symbol)
         ):
+            # 源文件在保存后被改过（换行重排）时行号即错位；行首前缀 + 可见
+            # 文字锚点都对得上才回放，否则丢弃并上报，避免静默替换错歌词。
             line.guide_symbol = None
             mismatches.append(row)
             continue
@@ -174,7 +200,11 @@ def _apply_guide_symbols(track: TimingTrack, payload: object) -> list[int]:
     return mismatches
 
 
-def _apply_inline_guide_symbols(track: TimingTrack, payload: object) -> None:
+def _apply_inline_guide_symbols(
+    track: TimingTrack,
+    payload: object,
+    resolve_row: Callable[[object], object] = lambda value: value,
+) -> None:
     if not isinstance(payload, list):
         return
     for line, value in zip(track.lines, payload):
@@ -185,7 +215,7 @@ def _apply_inline_guide_symbols(track: TimingTrack, payload: object) -> None:
                     index = int(raw_index)
                 except (TypeError, ValueError):
                     continue
-                symbol = guide_symbol_from_dict(raw_symbol)
+                symbol = guide_symbol_from_dict(resolve_row(raw_symbol))
                 if 0 <= index < len(line.chars) and guide_symbol_has_visual(symbol):
                     symbols[index] = symbol
         line.inline_guide_symbols = symbols

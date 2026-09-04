@@ -760,6 +760,34 @@ std::optional<RenderConfig> parseRenderConfig(const QJsonObject &ir, QString *er
     }
 
     RenderConfig cfg;
+    // Schema 2：根级矢量导唱符轮廓表。相同 SVG 符号只出现一次，字符通过
+    // ``vector_glyph_id`` 引用；共享同一不可变对象使 D2D geometry 可按符号缓存。
+    const QJsonObject vectorGlyphTable = ir.value(QStringLiteral("vector_glyphs")).toObject();
+    for (auto it = vectorGlyphTable.constBegin(); it != vectorGlyphTable.constEnd(); ++it) {
+        if (auto glyph = parseVectorGlyph(it.value())) {
+            cfg.vectorGlyphs.insert(
+                it.key(),
+                std::make_shared<const krok::subtitle::native::VectorGlyph>(std::move(*glyph))
+            );
+        }
+    }
+    const auto resolveVectorGlyph = [&cfg](const QJsonObject &charObject) {
+        const QString glyphId = stringValue(
+            charObject, QStringLiteral("vector_glyph_id")
+        );
+        if (!glyphId.isEmpty()) {
+            return cfg.vectorGlyphs.value(glyphId, nullptr);
+        }
+        // 旧内嵌格式（无符号表）：按值解析后包装成共享指针。
+        if (auto glyph = parseVectorGlyph(
+                charObject.value(QStringLiteral("vector_glyph"))
+            )) {
+            return std::shared_ptr<const krok::subtitle::native::VectorGlyph>(
+                new krok::subtitle::native::VectorGlyph(std::move(*glyph))
+            );
+        }
+        return std::shared_ptr<const krok::subtitle::native::VectorGlyph>();
+    };
     const QJsonObject screen = ir.value(QStringLiteral("screen")).toObject();
     cfg.width = std::max(1, intValue(screen, QStringLiteral("width"), cfg.width));
     cfg.height = std::max(1, intValue(screen, QStringLiteral("height"), cfg.height));
@@ -1234,9 +1262,7 @@ std::optional<RenderConfig> parseRenderConfig(const QJsonObject &ir, QString *er
                     ch.pauseReleaseMs = charObject.value(QStringLiteral("pause_release_ms")).toInt();
                 }
                 ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
-                ch.vectorGlyph = parseVectorGlyph(
-                    charObject.value(QStringLiteral("vector_glyph"))
-                );
+                ch.vectorGlyph = resolveVectorGlyph(charObject);
                 ch.bitmapGuide = parseBitmapGuide(
                     charObject.value(QStringLiteral("bitmap_guide"))
                 );

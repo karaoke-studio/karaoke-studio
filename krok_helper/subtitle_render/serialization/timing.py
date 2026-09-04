@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from krok_helper.subtitle_render.domain.timing import (
@@ -181,6 +182,8 @@ def guide_symbol_to_dict(symbol: Optional[GuideSymbol]) -> Optional[dict[str, ob
         "role_labels": [label or None for label in symbol.role_labels],
         "replacement_prefix": list(symbol.replacement_prefix),
     }
+    if symbol.replacement_anchor:
+        data["replacement_anchor"] = list(symbol.replacement_anchor)
     if symbol.kind != "vector" or symbol.bitmap_before_path:
         data.update(
             {
@@ -226,7 +229,12 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
             command_kind = str(raw[0]).upper()
             if len(raw) != expected_lengths.get(command_kind, -1):
                 return None
-            commands.append((command_kind, *(float(item) for item in raw[1:])))
+            values = [float(item) for item in raw[1:]]
+            # NaN/∞ 会穿进渲染 IR 的 JSON（"illegal number"）并让两条后端
+            # 的路径几何同时失效，反序列化阶段直接整符丢弃。
+            if not all(math.isfinite(value) for value in values):
+                return None
+            commands.append((command_kind, *values))
         units_per_em = max(int(value.get("units_per_em", 1000)), 1)
         advance_width = max(float(value.get("advance_width", units_per_em)), 0.0)
         duration_ms = max(int(value.get("duration_ms", 1000)), 0)
@@ -255,6 +263,12 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         if isinstance(raw_replacement_prefix, list)
         else ()
     )
+    raw_replacement_anchor = value.get("replacement_anchor")
+    replacement_anchor = (
+        tuple(str(text) for text in raw_replacement_anchor if str(text))
+        if isinstance(raw_replacement_anchor, list)
+        else ()
+    )
     return GuideSymbol(
         name=str(value.get("name") or "导唱符"),
         path_commands=tuple(commands),
@@ -265,6 +279,7 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         role_label=str(role).strip() or None if role else None,
         role_labels=role_labels,
         replacement_prefix=replacement_prefix,
+        replacement_anchor=replacement_anchor,
         kind=kind,  # type: ignore[arg-type]
         bitmap_before_path=before_path,
         bitmap_after_path=after_path,

@@ -13,7 +13,7 @@ from typing import Callable, Protocol
 from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
-    guide_symbol_replacement_count,
+    guide_symbol_replacement_anchored,
 )
 
 
@@ -316,7 +316,11 @@ def _merge_line_overlays(
 
     if current.guide_symbol is not None:
         symbol = deepcopy(current.guide_symbol)
-        if symbol.replacement_prefix and guide_symbol_replacement_count(target, symbol) == 0:
+        # 只对「替换行首标记」的符号做锚点复核；pre-roll 型（额外插在正文前）
+        # 不占任何真实字符，随行迁移即可。
+        if symbol.replacement_prefix and not guide_symbol_replacement_anchored(
+            target, symbol
+        ):
             conflicts.append(f"第 {old_index + 1} 行的前缀导唱符与新歌词不匹配")
         else:
             target.guide_symbol = symbol

@@ -23,6 +23,7 @@ from krok_helper.subtitle_render.domain.models import (
 )
 from krok_helper.subtitle_render.native.protocol import (
     RENDER_IR_SCHEMA,
+    VectorGlyphTable,
     title_overlay_to_ir,
     track_to_ir,
 )
@@ -79,6 +80,8 @@ def build_render_ir(
     """Build one JSON-friendly native snapshot from shared layout plans."""
 
     with layout_pass():
+        # 主轨与附加轨共用一张轮廓表：同一 SVG 导唱符全片只序列化一次。
+        glyph_table = VectorGlyphTable()
         primary_plan = build_track_layout_plan(
             track,
             style,
@@ -95,7 +98,7 @@ def build_render_ir(
             )
             for source in extra_sources
         ]
-        return {
+        ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
                 "width": max(int(width), 1),
@@ -104,12 +107,15 @@ def build_render_ir(
                 "dpr": max(float(dpr or 1.0), 0.01),
             },
             "style": style_to_dict(style),
-            "track": track_to_ir(track, style, layout_plan=primary_plan),
+            "track": track_to_ir(track, style, layout_plan=primary_plan, glyph_table=glyph_table),
             # Each source retains independent page/lane scheduling before the
             # renderer composites primary then extras.
             "extra_tracks": [
-                track_to_ir(source, style, layout_plan=plan)
+                track_to_ir(source, style, layout_plan=plan, glyph_table=glyph_table)
                 for source, plan in zip(extra_sources, extra_plans, strict=True)
             ],
             "title": title_to_ir(track, style, duration_ms=duration_ms),
         }
+        if not glyph_table.empty:
+            ir["vector_glyphs"] = glyph_table.payload
+        return ir

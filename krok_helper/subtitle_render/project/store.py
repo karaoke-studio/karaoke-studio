@@ -292,6 +292,15 @@ def _clean_path(value: object) -> Optional[str]:
     return str(value) if isinstance(value, str) and value.strip() else None
 
 
+def _guide_symbol_payload_row(row: object) -> object:
+    """行级导唱符条目：完整字典、或符号表引用 ID（字符串），其余丢弃。"""
+    if isinstance(row, dict):
+        return dict(row)
+    if isinstance(row, str):
+        return str(row)
+    return None
+
+
 def project_payload(
     *,
     subtitle_path: Optional[Path],
@@ -307,6 +316,7 @@ def project_payload(
     char_role_labels: Optional[list] = None,
     line_guide_symbols: Optional[list] = None,
     line_inline_guide_symbols: Optional[list] = None,
+    guide_symbol_table: Optional[dict] = None,
     line_display_overrides: Optional[list] = None,
     line_animation_overrides: Optional[list] = None,
     page_plan: Optional[dict] = None,
@@ -333,6 +343,10 @@ def project_payload(
 
     ``line_inline_guide_symbols`` 同样与 ``track.lines`` 对齐：每项为 None 或
     ``{源字符索引: SVG 导唱符}``，用于保持句中字符的原打轴时间与布局位置。
+
+    ``guide_symbol_table``：被多行/多处引用的导唱符轮廓去重表。行数据里的
+    字符串 ID（如 ``"g0"``）引用表内条目，同一符号只序列化一份；仅被引用
+    一次的符号仍在行数据内嵌完整字典，旧版本按字典解析保持兼容。
 
     ``line_display_overrides`` 同样与 ``track.lines`` 对齐：每项为 None（该行
     无手动覆盖）或 ``[上屏覆盖毫秒或 None, 消失覆盖毫秒或 None]``（字幕轨道
@@ -375,20 +389,24 @@ def project_payload(
         ]
     if line_guide_symbols is not None:
         payload["line_guide_symbols"] = [
-            dict(row) if isinstance(row, dict) else None
-            for row in line_guide_symbols
+            _guide_symbol_payload_row(row) for row in line_guide_symbols
         ]
     if line_inline_guide_symbols is not None:
         payload["line_inline_guide_symbols"] = [
             {
-                str(index): dict(symbol)
+                str(index): _guide_symbol_payload_row(symbol)
                 for index, symbol in row.items()
-                if isinstance(symbol, dict)
             }
             if isinstance(row, dict)
             else None
             for row in line_inline_guide_symbols
         ]
+    if guide_symbol_table is not None:
+        payload["guide_symbol_table"] = {
+            str(glyph_id): dict(symbol)
+            for glyph_id, symbol in guide_symbol_table.items()
+            if isinstance(symbol, dict)
+        }
     if line_display_overrides is not None:
         payload["line_display_overrides"] = [
             list(row) if isinstance(row, (list, tuple)) else None

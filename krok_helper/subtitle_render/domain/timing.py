@@ -35,6 +35,14 @@ class GuideSymbol:
     role_labels: tuple[Optional[str], ...] = ()
     replacement_prefix: tuple[str, ...] = ()
     """被导唱符替代的原始行首打轴单元；空元组表示在正文前额外插入。"""
+    replacement_anchor: tuple[str, ...] = ()
+    """替换应用时行首前缀之后的可见字符（截取前几个）。
+
+    行首标记（如 ``hh``）在合唱段几乎行行都有，仅凭前缀无法区分「同一行」
+    与「恰好也以 hh 开头的另一行」。源结构变化（SUG 换行重排）时按行号迁移
+    导唱符会用这个锚点复核：后续可见文字对不上即视为错位，丢弃并提示，
+    而不是静默替换到错误歌词上。空元组为旧数据，保持旧的宽松行为。
+    """
     kind: Literal["vector", "bitmap"] = "vector"
     bitmap_before_path: Optional[str] = None
     bitmap_after_path: Optional[str] = None
@@ -248,6 +256,38 @@ def guide_symbol_replacement_count(
     if tuple(char.text for char in line.chars[: len(prefix)]) != prefix:
         return 0
     return len(prefix)
+
+
+REPLACEMENT_ANCHOR_CHARS = 4
+
+
+def guide_symbol_replacement_anchor(line: TimingLine, count: int) -> tuple[str, ...]:
+    """取替换点之后的可见字符锚点（用于结构变化后的错位复核）。"""
+    return tuple(
+        char.text
+        for char in line.chars[count : count + REPLACEMENT_ANCHOR_CHARS]
+    )
+
+
+def guide_symbol_replacement_anchored(
+    line: TimingLine, symbol: Optional[GuideSymbol] = None
+) -> bool:
+    """前缀替换是否仍锚定在原歌词内容上（而非仅行首标记巧合匹配）。
+
+    无锚点的旧符号返回 True，保持既有宽松行为；有锚点时要求替换点之后
+    的可见文字仍以锚点开头（换行可截短/续长行尾，按短侧逐字比较），
+    SUG 换行把导唱符挪到另一句歌词时即失配。
+    """
+    guide = symbol if symbol is not None else line.guide_symbol
+    count = guide_symbol_replacement_count(line, guide)
+    if count == 0:
+        return False
+    anchor = guide.replacement_anchor if guide is not None else ()
+    if not anchor:
+        return True
+    visible = tuple(char.text for char in line.chars[count:])
+    compare_len = min(len(anchor), len(visible))
+    return compare_len > 0 and visible[:compare_len] == anchor[:compare_len]
 
 
 def line_visible_chars(line: TimingLine) -> list[TimingChar]:

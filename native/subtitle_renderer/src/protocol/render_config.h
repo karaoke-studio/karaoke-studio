@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -22,7 +23,8 @@ struct TimingChar {
     bool explicitStart = false;
     bool explicitEnd = false;
     QString roleLabel;
-    std::optional<krok::subtitle::native::VectorGlyph> vectorGlyph;
+    // Shared pointer into RenderConfig::vectorGlyphs (schema 2 dedup table).
+    std::shared_ptr<const krok::subtitle::native::VectorGlyph> vectorGlyph;
     std::optional<krok::subtitle::native::BitmapGuide> bitmapGuide;
 };
 
@@ -297,6 +299,10 @@ struct RenderConfig {
     QJsonObject customStyleSchemes;
     // Built during configure. render_frame must not insert here because LineLayout stores pointers into this QHash.
     QHash<QString, ResolvedStyle> resolvedStyles;
+    // Render IR schema 2: deduplicated vector guide glyph outlines. Characters
+    // reference entries through ``vector_glyph_id`` and share the same immutable
+    // object, so a thousand inline guide glyphs pay for one outline only.
+    QHash<QString, std::shared_ptr<const krok::subtitle::native::VectorGlyph>> vectorGlyphs;
     std::vector<TimingLine> lines;
     std::vector<RubyAnnotation> rubies;
     QJsonObject title;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -169,10 +170,24 @@ struct TextChar {
     int startMs = 0;
     int endMs = 0;
     int styleIndex = -1;
-    std::optional<VectorGlyph> vectorGlyph;
+    // Shared outline deduplicated per render IR (schema 2): every inline guide
+    // glyph references the same immutable VectorGlyph, so per-glyph D2D geometry
+    // can be cached and reused across all characters that reference it.
+    std::shared_ptr<const VectorGlyph> vectorGlyph;
     std::optional<BitmapGuide> bitmapGuide;
     std::vector<WipePoint> wipePoints;
-    bool operator==(const TextChar &) const = default;
+    bool operator==(const TextChar &other) const {
+        const auto sameGlyph =
+            (vectorGlyph == other.vectorGlyph)
+            || (vectorGlyph && other.vectorGlyph && *vectorGlyph == *other.vectorGlyph);
+        return text == other.text
+            && startMs == other.startMs
+            && endMs == other.endMs
+            && styleIndex == other.styleIndex
+            && sameGlyph
+            && bitmapGuide == other.bitmapGuide
+            && wipePoints == other.wipePoints;
+    }
 };
 
 struct RubyUnit {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import stat
@@ -54,6 +55,7 @@ from krok_helper.subtitle_render.native.protocol import (
     RENDER_IR_SCHEMA,
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
+    track_to_ir,
 )
 
 
@@ -2557,9 +2559,8 @@ def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():
         ]
     )
 
-    line = build_render_ir(track, Style(), width=640, height=360, fps=60)[
-        "track"
-    ]["lines"][0]
+    ir = build_render_ir(track, Style(), width=640, height=360, fps=60)
+    line = ir["track"]["lines"][0]
 
     assert [ch["text"] for ch in line["chars"]] == ["\uFFFC", "\uFFFC", "A"]
     assert [ch["start_ms"] for ch in line["chars"]] == [200, 600, 1_000]
@@ -2567,10 +2568,95 @@ def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():
         "lead-a",
         "lead-b",
     ]
-    assert line["chars"][0]["vector_glyph"]["advance_width"] == 1_000.0
+    # 轮廓进根级符号表，字符只带引用 ID（schema 2 去重）。
+    glyph_id = line["chars"][0]["vector_glyph_id"]
+    assert glyph_id in ir["vector_glyphs"]
+    assert ir["vector_glyphs"][glyph_id]["advance_width"] == 1_000.0
+    assert "vector_glyph" not in line["chars"][0]
     assert line["resolved_intervals"][0][0] == 200
     assert len(line["resolved_intervals"]) == 3
     assert gpu_unsupported_features(track, Style()) == ()
+
+
+def test_build_render_ir_deduplicates_shared_guide_outlines():
+    """同一 SVG 轮廓被多行引用时，IR 只内嵌一份轮廓。
+
+    表键是渲染投影（轮廓 + em + advance）：批量替换流程里每行的走字时长、
+    角色标签各不相同，仍必须共享同一份轮廓。
+    """
+    commands = tuple(
+        ("C", float(i), 10.0, float(i) + 1.0, 20.0, float(i) + 2.0, 30.0)
+        for i in range(500)
+    )
+    symbol = GuideSymbol(path_commands=commands, duration_ms=400, count=2)
+    inline = replace(symbol, count=1)
+    per_line_timings = [
+        replace(symbol, duration_ms=300 + row, role_labels=("lead", None))
+        for row in range(50)
+    ]
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", row * 2_000)],
+                end_ms=row * 2_000 + 1_500,
+                guide_symbol=per_line_timings[row],
+                inline_guide_symbols={0: inline},
+            )
+            for row in range(50)
+        ]
+    )
+
+    ir = build_render_ir(track, Style(), width=640, height=360, fps=60)
+
+    table = ir["vector_glyphs"]
+    # 行级替换符号（逐行时长/角色不同）与行内符号共享同一份轮廓。
+    assert len(table) == 1
+    referenced = {
+        ch["vector_glyph_id"]
+        for line in ir["track"]["lines"]
+        for ch in line["chars"]
+        if "vector_glyph_id" in ch
+    }
+    assert referenced == set(table)
+    assert all("vector_glyph" not in ch for line in ir["track"]["lines"] for ch in line["chars"])
+
+    other_outline = GuideSymbol(
+        path_commands=(("M", 1.0, 2.0), ("L", 3.0, 4.0), ("Z",)),
+        duration_ms=400,
+    )
+    track2 = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=1_500,
+                guide_symbol=other_outline,
+            )
+        ]
+    )
+    ir2 = build_render_ir(track2, Style(), width=640, height=360, fps=60)
+    assert len(ir2["vector_glyphs"]) == 1
+    assert ir2["vector_glyphs"] != table
+
+
+def test_track_to_ir_without_table_keeps_inline_vector_glyph():
+    """旧调用方（无符号表）仍得到逐字符内嵌的完整轮廓。"""
+    symbol = GuideSymbol(
+        path_commands=(("M", 10.0, 0.0), ("L", 20.0, -30.0), ("Z",)),
+        duration_ms=400,
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=1_500,
+                guide_symbol=symbol,
+            )
+        ]
+    )
+    style = Style()
+    plan = build_track_layout_plan(track, style, logical_w=640, logical_h=360)
+    line = track_to_ir(track, style, layout_plan=plan)["lines"][0]
+    assert line["chars"][0]["vector_glyph"]["path_commands"][0] == ["M", 10.0, 0.0]
 
 
 def test_build_render_ir_serializes_bitmap_guide_symbol(tmp_path: Path):

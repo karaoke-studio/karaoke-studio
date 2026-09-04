@@ -825,7 +825,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                         1000000000,
                         1000000001,
                         styleIndex,
-                        std::nullopt,
+                        nullptr,
                         std::nullopt,
                     });
                 }

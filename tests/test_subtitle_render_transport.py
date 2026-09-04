@@ -378,6 +378,58 @@ def test_gpu_preview_explicit_warp_request_is_preserved(qapp, monkeypatch):
         renderer.stop()
 
 
+def test_gpu_preview_cpu_fallback_failure_does_not_kill_worker(qapp, monkeypatch):
+    """回退帧渲染抛出非预期异常时只计数，worker 线程必须存活。
+
+    旧行为：异常逃逸 ``_run`` → 线程死亡 → GPU 与 CPU 预览从此永久停摆。
+    """
+    import time
+
+    import krok_helper.subtitle_render.frontend.preview.preview_async as preview_async
+    from krok_helper.subtitle_render.domain.models import Style
+    from krok_helper.subtitle_render.domain.timing import (
+        TimingChar,
+        TimingLine,
+        TimingTrack,
+    )
+    from krok_helper.subtitle_render.native.backend import NativeRendererError
+
+    class BrokenSidecar:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            raise NativeRendererError("sidecar unavailable in test")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(preview_async, "NativeRendererProcess", BrokenSidecar)
+
+    def exploding_paint(*_args, **_kwargs):
+        raise ValueError("painter exploded")
+
+    monkeypatch.setattr(preview_async, "paint_frame_to_painter", exploding_paint)
+
+    renderer = preview_async.GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        track = TimingTrack(
+            lines=[TimingLine(chars=[TimingChar("歌", 0)], end_ms=1_000)]
+        )
+        renderer.set_state(track, Style())
+        renderer.request(100)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if renderer.stats_snapshot().get("fallback_failures", 0) > 0:
+                break
+            time.sleep(0.01)
+        assert renderer.stats_snapshot()["fallback_failures"] > 0
+        assert renderer._thread.is_alive()
+    finally:
+        renderer.stop()
+
+
 def test_native_preview_frame_cache_detaches_and_evicts_oldest():
     from krok_helper.subtitle_render.frontend.preview.preview_async import NativePreviewFrameCache
 

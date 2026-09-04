@@ -471,3 +471,114 @@ def test_reload_plan_installs_tracks_through_project_contract() -> None:
 
     assert [index for index, _track_value in target.replacements] == [0, 1]
     assert applied == tuple(track for _index, track in target.replacements)
+
+
+def _rewrap_tracks():
+    """SUG 换行重排：行数不变、每行行首仍是 hh、正文重新分配。"""
+
+    def line(text, start):
+        return TimingLine(
+            chars=[TimingChar(ch, start + i * 600) for i, ch in enumerate(text)],
+            end_ms=start + len(text) * 600,
+        )
+
+    baseline = TimingTrack(
+        lines=[
+            line("hhあかさたな", 0),
+            line("hhはまやらわ", 8000),
+            line("hhをん", 16000),
+        ]
+    )
+    rewrapped = TimingTrack(
+        lines=[
+            line("hhあかさ", 0),
+            line("hhたなはまや", 8000),
+            line("hhらわをん", 16000),
+        ]
+    )
+    return baseline, rewrapped
+
+
+def _anchored_guide(anchor: tuple[str, ...]) -> GuideSymbol:
+    return GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 1.0, 1.0)),
+        replacement_prefix=("h", "h"),
+        replacement_anchor=anchor,
+        count=2,
+    )
+
+
+def test_anchored_prefix_guide_survives_unchanged_reload() -> None:
+    baseline, _rewrapped = _rewrap_tracks()
+    current = deepcopy(baseline)
+    current.lines[0].guide_symbol = _anchored_guide(("あ", "か", "さ", "た"))
+
+    result = merge_reloaded_track(current, baseline, deepcopy(baseline))
+
+    assert result.conflicts == ()
+    assert result.track.lines[0].guide_symbol is not None
+
+
+def test_anchored_prefix_guide_kept_when_visible_text_extends() -> None:
+    """行尾续字（换行把下一行开头并进来）不丢导唱符。"""
+    baseline, _rewrapped = _rewrap_tracks()
+    current = deepcopy(baseline)
+    current.lines[0].guide_symbol = _anchored_guide(("あ", "か", "さ", "た"))
+    extended = deepcopy(baseline)
+    extended.lines[0].chars.append(TimingChar("に", 9000))
+    extended.lines[0].end_ms = 10000
+
+    result = merge_reloaded_track(current, baseline, extended)
+
+    assert result.conflicts == ()
+    assert result.track.lines[0].guide_symbol is not None
+
+
+def test_anchored_prefix_guide_kept_through_positional_rewrap_pairing() -> None:
+    """换行重排但按位置配对的行锚点仍吻合：正常跟随迁移。"""
+    baseline, rewrapped = _rewrap_tracks()
+    current = deepcopy(baseline)
+    current.lines[0].guide_symbol = _anchored_guide(("あ", "か", "さ", "た"))
+
+    result = merge_reloaded_track(current, baseline, deepcopy(rewrapped))
+
+    assert result.conflicts == ()
+    assert result.track.lines[0].guide_symbol is not None
+
+
+def test_anchored_prefix_guide_conflicts_when_head_matches_other_content() -> None:
+    """行首仍是 hh 但正文已是另一句：必须报冲突丢弃，不能静默替换错位。"""
+    baseline, _rewrapped = _rewrap_tracks()
+    current = deepcopy(baseline)
+    current.lines[0].guide_symbol = _anchored_guide(("た", "な", "は", "ま"))
+    candidate = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", 0),
+                    TimingChar("h", 600),
+                    TimingChar("あ", 1200),
+                    TimingChar("か", 1800),
+                ],
+                end_ms=3000,
+            )
+        ]
+    )
+
+    result = merge_reloaded_track(current, baseline, candidate)
+
+    assert result.track.lines[0].guide_symbol is None
+    assert result.conflicts
+    assert "前缀导唱符与新歌词不匹配" in result.conflicts[0]
+
+
+def test_legacy_prefix_guide_without_anchor_keeps_positional_carry() -> None:
+    """旧数据（无锚点）保持宽松迁移：行首匹配即跟随。"""
+    baseline, rewrapped = _rewrap_tracks()
+    current = deepcopy(baseline)
+    current.lines[0].guide_symbol = _guide(prefix=("h", "h"))
+
+    result = merge_reloaded_track(current, baseline, deepcopy(rewrapped))
+
+    assert result.conflicts == ()
+    assert result.track.lines[0].guide_symbol is not None

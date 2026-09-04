@@ -13,9 +13,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 namespace krok::subtitle::native {
 
@@ -266,6 +268,112 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         return found == impl_->images.end() ? nullptr : found->bitmap.Get();
     };
 
+    // Vector guide glyphs share one immutable outline per render IR (schema 2),
+    // and one outline may be instanced by hundreds of characters. Building the
+    // path, its preview-scale simplification and the widened strokes per
+    // character is O(chars x outline segments) and can exceed the GPU configure
+    // timeout by orders of magnitude, so they are cached per (glyph, unit) and
+    // instanced with cheap lazy translation wrappers per character.
+    struct VectorGlyphRealization {
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
+        bool hasBounds = false;
+        D2D1_RECT_F bounds{};
+        std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> strokeGeometries;
+        std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> stroke2Geometries;
+        std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> protectedGeometries;
+    };
+    std::map<std::pair<const krok::subtitle::native::VectorGlyph *, int>, VectorGlyphRealization>
+        vectorGlyphRealizations;
+    auto vectorRealizationFor = [&](
+        const std::shared_ptr<const krok::subtitle::native::VectorGlyph> &glyph,
+        int unit
+    ) -> VectorGlyphRealization & {
+        const auto key = std::make_pair(glyph.get(), unit);
+        const auto found = vectorGlyphRealizations.find(key);
+        if (found != vectorGlyphRealizations.end()) {
+            return found->second;
+        }
+        VectorGlyphRealization realization;
+        auto path = vectorGlyphGeometry(
+            device_.d2dFactory(), *glyph, static_cast<float>(unit), device_
+        );
+        bool hasBounds = false;
+        if (path) {
+            D2D1_RECT_F referenceBounds{};
+            checkHr(
+                path->GetBounds(nullptr, &referenceBounds),
+                "ID2D1Geometry::GetBounds(vector glyph)",
+                device_
+            );
+            hasBounds = std::isfinite(referenceBounds.left)
+                && std::isfinite(referenceBounds.top)
+                && std::isfinite(referenceBounds.right)
+                && std::isfinite(referenceBounds.bottom)
+                && referenceBounds.right > referenceBounds.left;
+        }
+        scaleReferenceGeometry(
+            path, "ID2D1Factory::CreateTransformedGeometry(scale preview character)"
+        );
+        if (path && hasBounds) {
+            checkHr(
+                path->GetBounds(nullptr, &realization.bounds),
+                "ID2D1Geometry::GetBounds(scaled preview character)",
+                device_
+            );
+        }
+        realization.path = path;
+        realization.hasBounds = hasBounds;
+        return vectorGlyphRealizations
+            .emplace(key, std::move(realization))
+            .first->second;
+    };
+    auto translatedGeometry = [&](
+        ID2D1Geometry *source,
+        float offsetX,
+        const char *operation
+    ) -> Microsoft::WRL::ComPtr<ID2D1Geometry> {
+        if (source == nullptr) {
+            return {};
+        }
+        const D2D1_MATRIX_3X2_F matrix =
+            D2D1::Matrix3x2F::Translation(offsetX, 0.0f);
+        Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+        checkHr(
+            device_.d2dFactory()->CreateTransformedGeometry(
+                source, &matrix, transformed.ReleaseAndGetAddressOf()
+            ),
+            operation,
+            device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+        transformed.As(&geometry);
+        return geometry;
+    };
+    auto cachedWidenedStroke = [&](
+        std::map<float, Microsoft::WRL::ComPtr<ID2D1Geometry>> &cache,
+        ID2D1Geometry *body,
+        float width,
+        float offsetX,
+        const char *operation
+    ) -> Microsoft::WRL::ComPtr<ID2D1Geometry> {
+        if (body == nullptr || width <= 0.0f) {
+            return {};
+        }
+        auto entry = cache.find(width);
+        if (entry == cache.end()) {
+            entry = cache
+                .emplace(
+                    width,
+                    widenedStrokeGeometry(device_.d2dFactory(), body, width, device_)
+                )
+                .first;
+        }
+        if (!entry->second) {
+            return {};
+        }
+        return translatedGeometry(entry->second.Get(), offsetX, operation);
+    };
+
     for (std::size_t lineIndex = 0; lineIndex < scene.lines.size(); ++lineIndex) {
         const TextLine &sourceLine = scene.lines[lineIndex];
         const TextStyle &style = lineIndex < scene.lineStyles.size()
@@ -408,7 +516,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     || charStyle.strokeWidth != style.strokeWidth
                     || charStyle.stroke2Width != style.stroke2Width
                 ));
-            const bool vectorGlyph = sourceChar.vectorGlyph.has_value();
+            const bool vectorGlyph = sourceChar.vectorGlyph != nullptr;
             const bool bitmapGuide = sourceChar.bitmapGuide.has_value();
             const bool latin = !vectorGlyph && !bitmapGuide && isLatinText(sourceChar.text);
             Microsoft::WRL::ComPtr<IDWriteFontFace> requestedFace = latin
@@ -493,11 +601,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             std::vector<UINT16> glyphs;
             Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace;
             Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
+            VectorGlyphRealization *vectorRealized = nullptr;
             if (vectorGlyph) {
-                path = vectorGlyphGeometry(
-                    device_.d2dFactory(), *sourceChar.vectorGlyph,
-                    static_cast<float>(unit), device_
-                );
+                vectorRealized = &vectorRealizationFor(sourceChar.vectorGlyph, unit);
+                path = vectorRealized->path;
             } else if (!bitmapGuide) {
                 if (containsEmoji(sourceChar.text)) {
                     outlineFace = createFontFace(
@@ -541,7 +648,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
             D2D1_RECT_F referenceCharBounds{};
             bool charHasBounds = path != nullptr;
-            if (path) {
+            if (path && vectorRealized != nullptr) {
+                charHasBounds = vectorRealized->hasBounds;
+            } else if (path) {
                 checkHr(path->GetBounds(nullptr, &referenceCharBounds), "ID2D1Geometry::GetBounds(character)", device_);
                 charHasBounds = std::isfinite(referenceCharBounds.left)
                     && std::isfinite(referenceCharBounds.top)
@@ -683,11 +792,15 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ) * layoutScale;
             }
 
-            scaleReferenceGeometry(
-                path, "ID2D1Factory::CreateTransformedGeometry(scale preview character)"
-            );
+            if (vectorRealized == nullptr) {
+                scaleReferenceGeometry(
+                    path, "ID2D1Factory::CreateTransformedGeometry(scale preview character)"
+                );
+            }
             D2D1_RECT_F charBounds{};
-            if (path && charHasBounds) {
+            if (vectorRealized != nullptr) {
+                charBounds = vectorRealized->bounds;
+            } else if (path && charHasBounds) {
                 checkHr(
                     path->GetBounds(nullptr, &charBounds),
                     "ID2D1Geometry::GetBounds(scaled preview character)",
@@ -700,6 +813,22 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             if (bitmapHasBounds) {
                 positionedCharBounds = bitmapRect;
                 positionedHasBounds = true;
+            } else if (path && charHasBounds && vectorRealized != nullptr) {
+                // Cached vector glyph: bounds of a pure translation are the
+                // translated bounds, so extend them arithmetically and wrap the
+                // shared outline in a lazy translation geometry per character.
+                D2D1_RECT_F bounds = vectorRealized->bounds;
+                const float positionDx = cursor + pathOffset;
+                bounds.left += positionDx;
+                bounds.right += positionDx;
+                extendBounds(positionedCharBounds, positionedHasBounds, bounds);
+                extendBounds(cached.bounds, lineHasBounds, bounds);
+                Microsoft::WRL::ComPtr<ID2D1Geometry> positioned = translatedGeometry(
+                    path.Get(),
+                    positionDx,
+                    "ID2D1Factory::CreateTransformedGeometry(position character)"
+                );
+                cached.geometries.push_back(positioned);
             } else if (path && charHasBounds) {
                 const D2D1_MATRIX_3X2_F position = D2D1::Matrix3x2F::Translation(
                     cursor + pathOffset,
@@ -747,30 +876,82 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             cached.chars.back().pivotY = (charDescent - charAscent) * 0.5f;
             if (positionedHasBounds && path) {
                 cached.chars.back().geometry = cached.geometries.back();
-                cached.chars.back().strokeGeometry = widenedStrokeGeometry(
-                    device_.d2dFactory(),
-                    cached.chars.back().geometry.Get(),
-                    charStyle.strokeWidth,
-                    device_
-                );
-                cached.chars.back().stroke2Geometry = widenedStrokeGeometry(
-                    device_.d2dFactory(),
-                    cached.chars.back().geometry.Get(),
-                    charStyle.stroke2Width > 0.0f
-                        ? std::max(charStyle.strokeWidth, 0.0f)
-                            + charStyle.stroke2Width
-                        : 0.0f,
-                    device_
-                );
-                if (charStyle.strokeWidth > 0.0f
-                    && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
-                        || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
-                    cached.chars.back().protectedStrokeGeometry = outsideStrokeGeometry(
+                if (vectorRealized != nullptr) {
+                    const float strokeDx = cursor + pathOffset;
+                    const float stroke2Width =
+                        charStyle.stroke2Width > 0.0f
+                            ? std::max(charStyle.strokeWidth, 0.0f)
+                                + charStyle.stroke2Width
+                            : 0.0f;
+                    cached.chars.back().strokeGeometry = cachedWidenedStroke(
+                        vectorRealized->strokeGeometries,
+                        path.Get(),
+                        charStyle.strokeWidth,
+                        strokeDx,
+                        "ID2D1Factory::CreateTransformedGeometry(position vector stroke)"
+                    );
+                    cached.chars.back().stroke2Geometry = cachedWidenedStroke(
+                        vectorRealized->stroke2Geometries,
+                        path.Get(),
+                        stroke2Width,
+                        strokeDx,
+                        "ID2D1Factory::CreateTransformedGeometry(position vector stroke2)"
+                    );
+                    if (charStyle.strokeWidth > 0.0f
+                        && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
+                            || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
+                        Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStroke;
+                        auto &cache = vectorRealized->protectedGeometries;
+                        const float width = charStyle.strokeWidth;
+                        if (width > 0.0f) {
+                            auto entry = cache.find(width);
+                            if (entry == cache.end()) {
+                                entry = cache
+                                    .emplace(
+                                        width,
+                                        outsideStrokeGeometry(
+                                            device_.d2dFactory(),
+                                            path.Get(),
+                                            width,
+                                            device_
+                                        )
+                                    )
+                                    .first;
+                            }
+                            protectedStroke = translatedGeometry(
+                                entry->second.Get(),
+                                strokeDx,
+                                "ID2D1Factory::CreateTransformedGeometry(position vector protected stroke)"
+                            );
+                        }
+                        cached.chars.back().protectedStrokeGeometry = protectedStroke;
+                    }
+                } else {
+                    cached.chars.back().strokeGeometry = widenedStrokeGeometry(
                         device_.d2dFactory(),
                         cached.chars.back().geometry.Get(),
                         charStyle.strokeWidth,
                         device_
                     );
+                    cached.chars.back().stroke2Geometry = widenedStrokeGeometry(
+                        device_.d2dFactory(),
+                        cached.chars.back().geometry.Get(),
+                        charStyle.stroke2Width > 0.0f
+                            ? std::max(charStyle.strokeWidth, 0.0f)
+                                + charStyle.stroke2Width
+                            : 0.0f,
+                        device_
+                    );
+                    if (charStyle.strokeWidth > 0.0f
+                        && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
+                            || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
+                        cached.chars.back().protectedStrokeGeometry = outsideStrokeGeometry(
+                            device_.d2dFactory(),
+                            cached.chars.back().geometry.Get(),
+                            charStyle.strokeWidth,
+                            device_
+                        );
+                    }
                 }
             }
             if (charIndex + 1 < sourceLine.chars.size()) {
@@ -916,7 +1097,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 const auto [offsetX, offsetY] = verticalGlyphOffset(
                     sourceLine.chars[index].text, cellWidth, cellHeight
                 );
-                const bool vectorGlyph = sourceLine.chars[index].vectorGlyph.has_value();
+                const bool vectorGlyph = sourceLine.chars[index].vectorGlyph != nullptr;
                 D2D1_MATRIX_3X2_F matrix{};
                 if (vectorGlyph && ch.geometry) {
                     D2D1_RECT_F vectorBounds{};

@@ -40,6 +40,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     guide_symbol_replaces_prefix,
+    guide_symbol_replacement_anchor,
     guide_symbol_with_role_labels,
 )
 from krok_helper.subtitle_render.sources.guide_symbols import (
@@ -181,6 +182,7 @@ def replacement_symbol_for_match(
         count=prefix_count,
         duration_ms=intervals[-1] if intervals else 0,
         replacement_prefix=match.prefix,
+        replacement_anchor=guide_symbol_replacement_anchor(line, prefix_count),
     )
     return guide_symbol_with_role_labels(
         symbol, [char.role_label for char in prefix_chars]

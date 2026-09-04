@@ -156,3 +156,131 @@ def test_apply_track_project_data_restores_all_line_projections() -> None:
     assert track.lines[1].animation_override is None
     assert track.page_plan is not None
     assert track.loading_settings_mode == "custom"
+
+
+def test_guide_symbol_table_round_trips_through_project_data() -> None:
+    """同一符号应用到多行时，.yurika 只存一份轮廓 + 行数据引用 ID。"""
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    from krok_helper.subtitle_render.project.session import _track_project_data
+
+    symbol = GuideSymbol(
+        path_commands=tuple(
+            ("C", float(i), 1.0, float(i) + 1.0, 2.0, float(i) + 2.0, 3.0)
+            for i in range(200)
+        ),
+        duration_ms=400,
+        count=1,
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 1000)],
+                guide_symbol=symbol,
+            )
+            for _row in range(20)
+        ]
+    )
+
+    data = _track_project_data(track)
+    rows = data["line_guide_symbols"]
+    table = data["guide_symbol_table"]
+
+    assert len(table) == 1
+    glyph_id = next(iter(table))
+    assert rows == [glyph_id] * 20
+    assert len(table[glyph_id]["path_commands"]) == 200
+
+    restored = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("歌", 1000)]) for _row in range(20)]
+    )
+    result = apply_track_project_data(restored, Style(), data)
+
+    assert result.guide_symbol_mismatches == ()
+    assert all(line.guide_symbol == symbol for line in restored.lines)
+
+
+def test_single_use_guide_symbol_stays_inline_in_project_data() -> None:
+    """只被引用一次的符号保持内嵌，兼容旧版本读取。"""
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    from krok_helper.subtitle_render.project.session import _track_project_data
+    from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
+
+    symbol = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 5.0, -5.0), ("Z",)),
+        duration_ms=400,
+    )
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("歌", 1000)], guide_symbol=symbol)])
+
+    data = _track_project_data(track)
+
+    assert data["line_guide_symbols"] == [guide_symbol_to_dict(symbol)]
+    assert "guide_symbol_table" not in data
+
+
+def test_session_to_project_data_accepts_guide_symbol_table() -> None:
+    """符号表键必须能穿过 ``project_payload``（恢复自动保存的崩溃路径）。
+
+    回归：``_track_project_data`` 产出 ``guide_symbol_table`` 后经 ``**track_data``
+    展开，而 ``project_payload`` 参数表没有该键时保存链路直接 TypeError。
+    """
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    from krok_helper.subtitle_render.project.session import SubtitleProjectDocument
+
+    symbol = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 5.0, -5.0), ("Z",)),
+        duration_ms=400,
+    )
+    session = SubtitleProjectDocument()
+    session.timing_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("歌", 1000)], guide_symbol=symbol)
+            for _row in range(3)
+        ]
+    )
+
+    payload = session.to_project_data(
+        screen={"width": 1920, "height": 1080, "fps": 60},
+        selected_scheme_key="",
+        output={"encoder_mode": "cpu"},
+    )
+
+    assert payload["line_guide_symbols"] == ["g0", "g0", "g0"]
+    from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
+
+    assert payload["guide_symbol_table"]["g0"] == guide_symbol_to_dict(symbol)
+
+
+def test_anchored_guide_rows_report_mismatch_after_source_rewrap() -> None:
+    """保存后源被换行重排：行号错位 + 锚点对不上时报 mismatch，不静默回放。"""
+    from krok_helper.subtitle_render.domain.timing import GuideSymbol
+    from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
+
+    symbol = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 5.0, -5.0), ("Z",)),
+        replacement_prefix=("h", "h"),
+        replacement_anchor=("歌", "词"),
+        count=2,
+    )
+    # 新源的第一行行首仍是 hh，但正文换成了别句。
+    restored = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", 0),
+                    TimingChar("h", 500),
+                    TimingChar("别", 1000),
+                    TimingChar("句", 1500),
+                ],
+                end_ms=2000,
+            )
+        ]
+    )
+
+    result = apply_track_project_data(
+        restored,
+        Style(),
+        {"line_guide_symbols": [guide_symbol_to_dict(symbol)]},
+    )
+
+    assert result.guide_symbol_mismatches == (0,)
+    assert restored.lines[0].guide_symbol is None

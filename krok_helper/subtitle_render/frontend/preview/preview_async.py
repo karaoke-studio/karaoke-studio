@@ -13,6 +13,7 @@ Background (§9 A4 诊断)：预览预览的真实帧率天花板**不是单帧�
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -38,6 +39,9 @@ from krok_helper.subtitle_render.native.protocol import (
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )
+
+
+_log = logging.getLogger(__name__)
 
 
 PREVIEW_QUALITY_OPTIONS: tuple[tuple[str, str, float], ...] = (
@@ -584,6 +588,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             "renderer_failures": 0,
             "renderer_restarts": 0,
             "fallback_frames": 0,
+            "fallback_failures": 0,
             "capability_fallbacks": 0,
             "max_pending": 0,
             "max_in_flight": 0,
@@ -1041,9 +1046,15 @@ class GpuAsyncSubtitleRenderer(QObject):
                         self._schedule_lookahead(t_ms, serial, generation)
                     else:
                         self._note("stale_frames_dropped")
-                except (NativeRendererError, RuntimeError) as exc:
+                except Exception as exc:  # noqa: BLE001 - worker 线程必须自愈
+                    # 只捕获 NativeRendererError/RuntimeError 时，sidecar 协议层
+                    # 之外的任何异常（IR 构建的 ValueError、读帧的 KeyError…）
+                    # 都会让 _run 线程直接死亡——GPU 与 CPU 预览此后永久停摆。
+                    # 统一按渲染失败处理：回退本帧、稍后重试。
                     if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
                         print(f"GPU preview failed: {exc}")
+                    if not isinstance(exc, (NativeRendererError, RuntimeError)):
+                        _log.exception("GPU 预览路径出现非预期异常")
                     self._renderer_failed = True
                     self._retry_after = time.monotonic() + 1.0
                     with self._condition:
@@ -1299,6 +1310,11 @@ class GpuAsyncSubtitleRenderer(QObject):
                     extra_tracks,
                     duration_ms=duration_ms,
                 )
+        except Exception:  # noqa: BLE001 - 回退帧自身的异常绝不能杀死 worker 线程
+            # 线程一旦死亡，GPU 与 CPU 两条预览路径都会永久停摆，只能重启页面。
+            _log.exception("CPU 回退帧渲染失败（worker 继续运行）")
+            self._note("fallback_failures")
+            return
         finally:
             painter.end()
         if self._may_emit(t_ms, generation):
@@ -1564,6 +1580,13 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._emit_python_fallback(
                     track, style, width, height, dpr, t_ms, generation, duration_ms
                 )
+            except Exception:  # noqa: BLE001 - worker 线程必须自愈，不得静默死亡
+                _log.exception("native 预览路径出现非预期异常（本帧回退 Painter）")
+                self._renderer_failed = True
+                self._close_renderer()
+                self._emit_python_fallback(
+                    track, style, width, height, dpr, t_ms, generation, duration_ms
+                )
 
     def _take_next_request(
         self,
@@ -1769,6 +1792,9 @@ class NativeAsyncSubtitleRenderer(QObject):
                     style,
                     duration_ms=duration_ms,
                 )
+        except Exception:  # noqa: BLE001 - 回退帧自身的异常绝不能杀死 worker 线程
+            _log.exception("CPU 回退帧渲染失败（worker 继续运行）")
+            return
         finally:
             painter.end()
         if self._is_current_generation(generation):

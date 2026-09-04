@@ -12,6 +12,7 @@ from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.contracts import SubtitleProjectState
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
 from krok_helper.subtitle_render.domain.timing import (
+    GuideSymbol,
     TimingTrack,
     guide_symbol_has_visual,
 )
@@ -48,6 +49,7 @@ _PROJECT_OWNED_KEYS = frozenset(
         "char_role_labels",
         "line_guide_symbols",
         "line_inline_guide_symbols",
+        "guide_symbol_table",
         "line_display_overrides",
         "line_animation_overrides",
         "page_plan",
@@ -301,7 +303,8 @@ def _track_project_data(track: Optional[TimingTrack]) -> dict:
             "loading_settings": None,
             "loading_settings_snapshot": None,
         }
-    return {
+    glyph_table, table_payload = _guide_symbol_dedup_table(track)
+    data = {
         "line_layout_indices": [
             int(getattr(line, "layout_index", 0) or 0) for line in track.lines
         ],
@@ -309,8 +312,8 @@ def _track_project_data(track: Optional[TimingTrack]) -> dict:
             str(getattr(line, "break_before", "none")) for line in track.lines
         ],
         "char_role_labels": _char_role_rows(track),
-        "line_guide_symbols": _guide_symbol_rows(track),
-        "line_inline_guide_symbols": _inline_guide_symbol_rows(track),
+        "line_guide_symbols": _guide_symbol_rows(track, glyph_table),
+        "line_inline_guide_symbols": _inline_guide_symbol_rows(track, glyph_table),
         "line_display_overrides": _display_override_rows(track),
         "line_animation_overrides": _animation_override_rows(track),
         "page_plan": track_page_plan_to_dict(track.page_plan),
@@ -324,6 +327,9 @@ def _track_project_data(track: Optional[TimingTrack]) -> dict:
             track.loading_settings_snapshot
         ),
     }
+    if table_payload:
+        data["guide_symbol_table"] = table_payload
+    return data
 
 
 def _char_role_rows(track: TimingTrack) -> Optional[list]:
@@ -336,15 +342,54 @@ def _char_role_rows(track: TimingTrack) -> Optional[list]:
     return rows if any(row is not None for row in rows) else None
 
 
-def _guide_symbol_rows(track: TimingTrack) -> Optional[list]:
-    rows = [guide_symbol_to_dict(line.guide_symbol) for line in track.lines]
+def _guide_symbol_dedup_table(
+    track: TimingTrack,
+) -> tuple[dict[GuideSymbol, str], dict[str, dict]]:
+    """收集被 ≥2 个槽位引用的导唱符；它们只序列化一次，行数据存 ID。
+
+    精细 SVG 的完整轮廓可达上万条命令，而典型用法是同一符号应用到几十上百
+    行——按行内嵌会让 ``.yurika`` 与保存/加载一起膨胀。仅被引用一次的符号
+    保持内嵌，旧版本（以及旧程序）读到的仍是完整行数据。
+    """
+    counts: dict[GuideSymbol, int] = {}
+    for line in track.lines:
+        if line.guide_symbol is not None:
+            counts[line.guide_symbol] = counts.get(line.guide_symbol, 0) + 1
+        for index, symbol in line.inline_guide_symbols.items():
+            if 0 <= index < len(line.chars) and guide_symbol_has_visual(symbol):
+                counts[symbol] = counts.get(symbol, 0) + 1
+    table: dict[GuideSymbol, str] = {}
+    payload: dict[str, dict] = {}
+    for symbol, count in counts.items():
+        if count >= 2:
+            glyph_id = f"g{len(payload)}"
+            table[symbol] = glyph_id
+            payload[glyph_id] = guide_symbol_to_dict(symbol)
+    return table, payload
+
+
+def _guide_symbol_row(
+    symbol: Optional[GuideSymbol], table: dict[GuideSymbol, str]
+) -> object:
+    glyph_id = table.get(symbol) if symbol is not None else None
+    if glyph_id is not None:
+        return glyph_id
+    return guide_symbol_to_dict(symbol)
+
+
+def _guide_symbol_rows(
+    track: TimingTrack, table: dict[GuideSymbol, str]
+) -> Optional[list]:
+    rows = [_guide_symbol_row(line.guide_symbol, table) for line in track.lines]
     return rows if any(row is not None for row in rows) else None
 
 
-def _inline_guide_symbol_rows(track: TimingTrack) -> Optional[list]:
+def _inline_guide_symbol_rows(
+    track: TimingTrack, table: dict[GuideSymbol, str]
+) -> Optional[list]:
     rows = [
         {
-            str(index): guide_symbol_to_dict(symbol)
+            str(index): _guide_symbol_row(symbol, table)
             for index, symbol in sorted(line.inline_guide_symbols.items())
             if 0 <= index < len(line.chars) and guide_symbol_has_visual(symbol)
         }
