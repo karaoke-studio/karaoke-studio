@@ -2125,7 +2125,7 @@ def test_build_render_command_png_composited_keeps_background(tmp_path):
     assert "1:a:0?" not in command
 
 
-def test_build_render_command_mov_transparent_uses_qtrle(tmp_path):
+def test_build_render_command_mov_transparent_uses_prores4444(tmp_path):
     job = _format_job(tmp_path, "mov_transparent")
 
     command = build_render_command_contract("ffmpeg", job)
@@ -2133,8 +2133,13 @@ def test_build_render_command_mov_transparent_uses_qtrle(tmp_path):
     # 透明 MOV 不解码背景画面，但音频与 MP4 同源（背景视频仅作音频输入）。
     assert command.count("-i") == 2
     assert "1:a:0?" in command
-    assert command[command.index("-c:v") + 1] == "qtrle"
-    assert "-c:a" in command
+    assert command[command.index("-c:v") + 1] == "prores_ks"
+    assert command[command.index("-profile:v") + 1] == "4444"
+    # prores_ks 只有 4444/4444 XQ 档支持 alpha，像素格式必须带 A。
+    assert command[command.index("-pix_fmt", command.index("-profile:v")) + 1] == (
+        "yuva444p10le"
+    )
+    assert command[command.index("-c:a") + 1] == "pcm_s16le"
     assert str(job.output_path) == command[-1]
     assert "-movflags" not in command
     assert "libx264" not in command

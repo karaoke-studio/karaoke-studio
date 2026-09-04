@@ -270,10 +270,23 @@ def build_render_command(
             command.extend(["-c:a", "aac", "-b:a", "192k"])
         command.extend(["-movflags", "+faststart", str(job.output_path)])
     elif job.output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
-        # QuickTime Animation：无损真 alpha，行程编码对大面积透明的字幕层友好。
-        command.extend(["-c:v", "qtrle", "-pix_fmt", "rgba"])
+        # ProRes 4444：NLE（PR/AE/达芬奇）对 4444 的 alpha 解释最成熟可靠；
+        # qtrle 虽然无损且更小，但消费端常把 straight alpha 按预乘处理，
+        # 发光/描边的半透明渐变会出现明显脏边。prores_ks 仅 4444/4444 XQ
+        # 两档支持 alpha，这里固定 4444 + yuva444p10le。
+        command.extend(
+            [
+                "-c:v",
+                "prores_ks",
+                "-profile:v",
+                "4444",
+                "-pix_fmt",
+                "yuva444p10le",
+            ]
+        )
         if audio_input_index is not None:
-            command.extend(["-c:a", "aac", "-b:a", "192k"])
+            # ProRes 素材惯例配 PCM，避免个别工具对 MOV 内 AAC 的兼容问题。
+            command.extend(["-c:a", "pcm_s16le"])
         command.extend([str(job.output_path)])
     else:
         assert is_png_sequence(job.output_format)

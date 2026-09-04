@@ -71,7 +71,7 @@ EXPORT_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
     (OUTPUT_FORMAT_MP4, "MP4 视频"),
     (OUTPUT_FORMAT_PNG_TRANSPARENT, "PNG 序列（透明字幕）"),
     (OUTPUT_FORMAT_PNG_COMPOSITED, "PNG 序列（含背景）"),
-    (OUTPUT_FORMAT_MOV_TRANSPARENT, "透明视频 QuickTime 动画"),
+    (OUTPUT_FORMAT_MOV_TRANSPARENT, "透明视频 ProRes 4444"),
 )
 """(output_format, 显示名) 供导出页「输出格式」下拉与状态栏文案共用。"""
 
@@ -564,8 +564,8 @@ class ExportWorkspaceView(QWidget):
             format_combo.addItem(format_text, userData=format_value)
         format_combo.setToolTip(
             "PNG 序列输出到以导出名命名的独立子文件夹（名称_000001.png 起）；"
-            "透明视频为 QuickTime 动画编码（.mov，保留无损 alpha 通道），"
-            "适合导入剪辑软件叠加素材。"
+            "透明视频为 ProRes 4444（.mov，带 alpha 通道，剪辑软件导入即透明，"
+            "体积较大属正常）。"
         )
         format_combo.currentIndexChanged.connect(
             lambda _index: self.formatChanged.emit()

@@ -381,7 +381,7 @@ def test_export_format_switch_updates_badge_encoder_state_and_label(qapp):
         combo.setCurrentIndex(combo.findData("mov_transparent"))
         qapp.processEvents()
         assert window._export_name_suffix_label.text() == ".mov"
-        assert "QuickTime 动画" in window._export_format_label.text()
+        assert "ProRes 4444" in window._export_format_label.text()
 
         # 切回 MP4 后编码控件恢复可用。
         combo.setCurrentIndex(combo.findData("mp4"))

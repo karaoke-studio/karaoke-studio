@@ -1659,7 +1659,7 @@ def _output_format_label(output_format: str) -> str:
     if output_format == OUTPUT_FORMAT_PNG_COMPOSITED:
         return "PNG 序列（含背景）"
     if output_format == OUTPUT_FORMAT_MOV_TRANSPARENT:
-        return "QuickTime 动画（透明）"
+        return "ProRes 4444（透明）"
     return "MP4"
 
 
