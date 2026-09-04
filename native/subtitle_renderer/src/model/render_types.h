@@ -156,6 +156,9 @@ struct BitmapGuide {
     std::uint64_t beforeSize = 0;
     std::uint64_t afterModifiedMs = 0;
     std::uint64_t afterSize = 0;
+    // 动图（GIF）循环锚点：行显示窗口起点（Python 侧单一事实源写入 IR，
+    // 投影时补 sourceTimingOffset）。渲染帧时间减锚点后按累积延时表选帧。
+    int animAnchorMs = 0;
     bool operator==(const BitmapGuide &) const = default;
 };
 

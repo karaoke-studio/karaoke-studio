@@ -199,11 +199,25 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         );
         if (!cached) {
+            // GIF 先解多帧（帧上限与 Python GUIDE_ANIM_MAX_FRAMES 一致，
+            // 头像级小图 ×60 的解码在 configure 预算内）；静态格式回退
+            // 单帧。动图首帧直接复用为 bitmap，避免二次解码。
+            direct2d::AnimatedBitmapFrames animated = direct2d::loadWicAnimatedBitmaps(
+                device_.d2dContext(), path, 60
+            );
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> single;
+            if (animated.bitmaps.empty()) {
+                single = direct2d::loadWicBitmap(device_.d2dContext(), path);
+            } else {
+                single = animated.bitmaps.front();
+            }
             impl_->images.push_back(Impl::CachedImage{
                 path,
                 modifiedMs,
                 size,
-                loadWicBitmap(device_.d2dContext(), path),
+                std::move(single),
+                std::move(animated.bitmaps),
+                std::move(animated.delaysMs),
             });
         }
     };

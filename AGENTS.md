@@ -200,6 +200,17 @@ git submodule status
     `--basetemp=%TEMP%/ks_pytest_basetemp`），在仓库根目录运行。
     正常终端 / CI 不受影响。
 
+11. **改 sidecar 共享头文件后增量构建不可信，必须 `--clean-first`**——本机
+    中文 VS 工具链下 MSVC 的 `/showIncludes` 输出是本地化的「注意: 包含文件:」，
+    ninja 的头文件依赖解析失效；改了 `render_types.h` 这类被大量 TU 包含的
+    头（例如给结构体加字段）后，增量构建只会重编少数几个 .cpp，新旧
+    sizeof 不同的对象文件混链，运行期随机 0xC0000409 / 0xC0000005 崩溃
+    （2026-09 动图导唱符改造首踩：改 `BitmapGuide` 后 configure 即崩，
+    GPU 预览拉起 sidecar 死亡连带 `preview_async` 报 `OSError 22`）。
+    预防：凡动 `native/subtitle_renderer` 的头文件，用
+    `cmake --build build\native-renderer --config Release --clean-first`
+    全量重建后再验证。
+
 ---
 
 ## 9. 字幕渲染模块
@@ -257,11 +268,12 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
 - **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
 - **视频成片只输出 MP4、只支持 60/120fps**；另支持两种附加导出：**PNG 序列**
   （透明字幕层 / 含背景合成，输出到以导出名命名的独立子文件夹，帧名
-  `名称_000001.png`，重名非空目录前置拦截，无音频）与**透明字幕视频 QuickTime
-  动画**（`.mov`，qtrle 无损 alpha，仅字幕层不带背景，携带与 MP4 同源的音频，
-  2026-09 新增）。仍不做 30fps 原样输出、AVI 或 N3 ARGB 帧序列；PNG/mov 格式的
-  完成弹窗不提供「进入下一步」（第 6 步混流只收 MP4）。输出格式偏好持久化在
-  app-local `output` 命名空间。
+  `名称_000001.png`，重名非空目录前置拦截，无音频）与**透明字幕视频 ProRes
+  4444**（`.mov`，`prores_ks` + `yuva444p10le`，仅字幕层不带背景，携带与
+  MP4 同源的音频，2026-09 新增；曾用 qtrle，因消费端对 straight alpha 解释
+  不一致致发光/描边脏边而弃用）。仍不做 30fps 原样输出、AVI 或 N3 ARGB 帧
+  序列；PNG/mov 格式的完成弹窗不提供「进入下一步」（第 6 步混流只收 MP4）。
+  输出格式偏好持久化在 app-local `output` 命名空间。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
 - **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
 - **所有用户面向字符串中文**。

@@ -586,14 +586,21 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     charStyleIndices.insert(key, styleIndex);
                 }
             }
-            line.chars.push_back(TextChar{
+            krok::subtitle::native::TextChar sceneChar{
                 sourceLine.chars[index].text.toStdWString(),
                 sourceLine.chars[index].startMs + sourceTimingOffset,
                 charEndMs(sourceLine, index) + sourceTimingOffset,
                 styleIndex,
                 sourceLine.chars[index].vectorGlyph,
                 sourceLine.chars[index].bitmapGuide,
-            });
+            };
+            if (sceneChar.bitmapGuide.has_value()) {
+                // 动图锚点与 displayWindows 同口径：IR 侧是 track 时间，
+                // 渲染 tMs 含 timingOffset / sourceOffset，这里补齐偏移，
+                // 与 Python painter 的有效时间换算保持一致。
+                sceneChar.bitmapGuide->animAnchorMs += sourceTimingOffset;
+            }
+            line.chars.push_back(std::move(sceneChar));
             line.chars.back().wipePoints = {
                 krok::subtitle::native::WipePoint{line.chars.back().startMs, 0.0f},
                 krok::subtitle::native::WipePoint{line.chars.back().endMs, 1.0f},

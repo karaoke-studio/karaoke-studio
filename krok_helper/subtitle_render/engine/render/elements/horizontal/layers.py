@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Callable, Hashable
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
@@ -39,6 +41,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
 from krok_helper.subtitle_render.engine.render.core.raster_blur import blur_image
 from krok_helper.subtitle_render.engine.guide import (
     bitmap_guide_content_size,
+    bitmap_guide_frame_at,
     bitmap_guide_image,
     guide_symbol_is_bitmap,
 )
@@ -459,6 +462,7 @@ def paint_line_direct(
     *,
     glyph_ports: GlyphLayerPorts,
     bitmap_ports: BitmapGuidePorts,
+    anim_ms: int | None = None,
 ) -> None:
     """Paint a complete horizontal line without cached raster layers."""
 
@@ -598,6 +602,7 @@ def paint_line_direct(
         t_ms,
         after=False,
         ports=bitmap_ports,
+        anim_ms=anim_ms,
     )
 
     for run in runs:
@@ -655,6 +660,7 @@ def paint_line_direct(
         t_ms,
         after=True,
         ports=bitmap_ports,
+        anim_ms=anim_ms,
     )
 
 
@@ -883,6 +889,8 @@ def line_layer_stack(
     layout: LineLayout,
     t_ms: int,
     ports: LayerStackPorts,
+    *,
+    guide_anim_anchor_ms: int = 0,
 ) -> list:
     """Build the ordered static horizontal text layer stack."""
     runs = text_glyph_runs(layout.text_layout, layout.has_inline_styles)
@@ -937,6 +945,7 @@ def line_layer_stack(
             layout.rtl,
             after=False,
             z_index=len(runs) * 2,
+            guide_anim_anchor_ms=guide_anim_anchor_ms,
         )
         for glyph in bitmap_guide_glyphs(layout.text_layout)
     ]
@@ -994,6 +1003,7 @@ def line_layer_stack(
                 layout.rtl,
                 after=True,
                 z_index=z_index,
+                guide_anim_anchor_ms=guide_anim_anchor_ms,
             )
         )
         z_index += 1
@@ -1168,6 +1178,133 @@ def _tinted_guide_silhouette(
     return silhouette
 
 
+# 动图导唱符的飾り剪影与发光模糊结果按（帧、填充、矩形）缓存：帧数被
+# ``GUIDE_ANIM_MAX_FRAMES`` 限制住，缓存天然有界；静态图退化为每符号一条。
+_GUIDE_SILHOUETTE_CACHE_MAX = 192
+_GUIDE_SILHOUETTE_CACHE: OrderedDict[tuple, QImage] = OrderedDict()
+_GUIDE_GLOW_CACHE_MAX = 192
+_GUIDE_GLOW_CACHE: OrderedDict[tuple, QImage] = OrderedDict()
+_GUIDE_DECOR_CACHE_LOCK = Lock()
+
+
+def _guide_decor_cache_key(
+    frame_identity: tuple | None,
+    fill: PaintFill,
+    rect: QRectF,
+    gradient_rect: QRectF,
+) -> tuple | None:
+    """None（未提供身份）时不走缓存，保持直调路径不变。"""
+    if frame_identity is None:
+        return None
+    return (
+        frame_identity,
+        fill_signature(fill),
+        (
+            int(round(rect.left())),
+            int(round(rect.top())),
+            int(round(rect.width() * 1000)),
+            int(round(rect.height() * 1000)),
+        ),
+        (
+            int(round(gradient_rect.left())),
+            int(round(gradient_rect.top())),
+            int(round(gradient_rect.width() * 1000)),
+            int(round(gradient_rect.height() * 1000)),
+        ),
+    )
+
+
+def _cached_guide_silhouette(
+    image: QImage,
+    fill: PaintFill,
+    rect: QRectF,
+    span: QRectF,
+    key: tuple | None,
+) -> QImage:
+    if key is None:
+        return _tinted_guide_silhouette(image, fill, rect, span)
+    with _GUIDE_DECOR_CACHE_LOCK:
+        cached = _GUIDE_SILHOUETTE_CACHE.get(key)
+        if cached is not None:
+            _GUIDE_SILHOUETTE_CACHE.move_to_end(key)
+            return cached
+    silhouette = _tinted_guide_silhouette(image, fill, rect, span)
+    with _GUIDE_DECOR_CACHE_LOCK:
+        existing = _GUIDE_SILHOUETTE_CACHE.get(key)
+        if existing is not None:
+            _GUIDE_SILHOUETTE_CACHE.move_to_end(key)
+            return existing
+        _GUIDE_SILHOUETTE_CACHE[key] = silhouette
+        while len(_GUIDE_SILHOUETTE_CACHE) > _GUIDE_SILHOUETTE_CACHE_MAX:
+            _GUIDE_SILHOUETTE_CACHE.popitem(last=False)
+    return silhouette
+
+
+def _build_guide_glow_source(silhouette: QImage, pad: int, rect: QRectF) -> QImage:
+    source = QImage(
+        max(int(math.ceil(rect.width())) + pad * 2, 1),
+        max(int(math.ceil(rect.height())) + pad * 2, 1),
+        QImage.Format.Format_ARGB32_Premultiplied,
+    )
+    source.fill(0)
+    source_painter = QPainter(source)
+    try:
+        source_painter.setRenderHint(
+            QPainter.RenderHint.SmoothPixmapTransform, True
+        )
+        source_painter.drawImage(QPointF(pad, pad), silhouette)
+    finally:
+        source_painter.end()
+    return source
+
+
+def _cached_guide_glow_source(
+    silhouette: QImage,
+    key: tuple | None,
+    pad: int,
+    rect: QRectF,
+) -> QImage:
+    """Pad ``silhouette`` into the blur input image, cached per decor key."""
+    if key is None:
+        return _build_guide_glow_source(silhouette, pad, rect)
+    with _GUIDE_DECOR_CACHE_LOCK:
+        cached = _GUIDE_GLOW_CACHE.get(key)
+        if cached is not None:
+            _GUIDE_GLOW_CACHE.move_to_end(key)
+            return cached
+    source = _build_guide_glow_source(silhouette, pad, rect)
+    with _GUIDE_DECOR_CACHE_LOCK:
+        existing = _GUIDE_GLOW_CACHE.get(key)
+        if existing is not None:
+            _GUIDE_GLOW_CACHE.move_to_end(key)
+            return existing
+        _GUIDE_GLOW_CACHE[key] = source
+        while len(_GUIDE_GLOW_CACHE) > _GUIDE_GLOW_CACHE_MAX:
+            _GUIDE_GLOW_CACHE.popitem(last=False)
+    return source
+
+
+def _cached_blur_image(source: QImage, blur_value: int, key: tuple | None) -> QImage:
+    if key is None:
+        return blur_image(source, blur_value)
+    cache_key = (key, "blur", int(blur_value))
+    with _GUIDE_DECOR_CACHE_LOCK:
+        cached = _GUIDE_GLOW_CACHE.get(cache_key)
+        if cached is not None:
+            _GUIDE_GLOW_CACHE.move_to_end(cache_key)
+            return cached
+    blurred = blur_image(source, blur_value)
+    with _GUIDE_DECOR_CACHE_LOCK:
+        existing = _GUIDE_GLOW_CACHE.get(cache_key)
+        if existing is not None:
+            _GUIDE_GLOW_CACHE.move_to_end(cache_key)
+            return existing
+        _GUIDE_GLOW_CACHE[cache_key] = blurred
+        while len(_GUIDE_GLOW_CACHE) > _GUIDE_GLOW_CACHE_MAX:
+            _GUIDE_GLOW_CACHE.popitem(last=False)
+    return blurred
+
+
 def paint_bitmap_guide_decor(
     painter: QPainter,
     glyph: GlyphLayout,
@@ -1176,6 +1313,7 @@ def paint_bitmap_guide_decor(
     *,
     after: bool,
     gradient_rect: QRectF | None = None,
+    frame_identity: tuple[str, int] | None = None,
 ) -> None:
     """把 N3 文字装饰（shadow / glow）套用到位图导唱符图片上。
 
@@ -1183,7 +1321,9 @@ def paint_bitmap_guide_decor(
     （调用方已设置好裁切区）；仅有走字后图片时装饰才切换到后态——前后同图
     / 仅前图时保持前态，对应 @Emoji 未加 ForceWipeDecor 的默认行为。
     ``bitmap_no_decor`` 整体跳过（@Emoji ``NoDecor`` 语义）。渐变跨度取
-    ``gradient_rect``（整行范围）；缺省回落到图片自身矩形。
+    ``gradient_rect``（整行范围）；缺省回落到图片自身矩形。动图符号传入
+    ``frame_identity``（路径 + 帧序号）后，剪影与模糊结果按帧进有界缓存，
+    循环回到同一帧时直接复用，不再每帧重算。
     """
     symbol = glyph.vector_glyph
     if symbol is None or symbol.bitmap_no_decor:
@@ -1198,26 +1338,19 @@ def paint_bitmap_guide_decor(
     if not fill.color:
         return
     span = gradient_rect if gradient_rect is not None else rect
+    cache_key = _guide_decor_cache_key(frame_identity, fill, rect, span)
     if decoration == "glow":
         radius = glow_radius(style, after=wiped)
         if radius <= 0:
             return
         pad = glow_extent(0, 0, radius) + 2
-        silhouette = _tinted_guide_silhouette(image, fill, rect, span)
-        source = QImage(
-            max(int(math.ceil(rect.width())) + pad * 2, 1),
-            max(int(math.ceil(rect.height())) + pad * 2, 1),
-            QImage.Format.Format_ARGB32_Premultiplied,
+        silhouette = _cached_guide_silhouette(image, fill, rect, span, cache_key)
+        source = _cached_guide_glow_source(
+            silhouette,
+            (cache_key + ("source",)) if cache_key is not None else None,
+            pad,
+            rect,
         )
-        source.fill(0)
-        source_painter = QPainter(source)
-        try:
-            source_painter.setRenderHint(
-                QPainter.RenderHint.SmoothPixmapTransform, True
-            )
-            source_painter.drawImage(QPointF(pad, pad), silhouette)
-        finally:
-            source_painter.end()
         painter.save()
         try:
             for blur_value in glow_blur_radii(
@@ -1225,7 +1358,15 @@ def paint_bitmap_guide_decor(
             ):
                 painter.drawImage(
                     QPointF(rect.left() - pad, rect.top() - pad),
-                    blur_image(source, blur_value),
+                    _cached_blur_image(
+                        source,
+                        blur_value,
+                        (
+                            (cache_key + (int(blur_value),))
+                            if cache_key is not None
+                            else None
+                        ),
+                    ),
                 )
         finally:
             painter.restore()
@@ -1234,7 +1375,7 @@ def paint_bitmap_guide_decor(
     shadow_dy = int(getattr(style, "shadow_offset_y", 0) or 0)
     if not (shadow_dx or shadow_dy):
         return
-    silhouette = _tinted_guide_silhouette(image, fill, rect, span)
+    silhouette = _cached_guide_silhouette(image, fill, rect, span, cache_key)
     painter.drawImage(rect.translated(shadow_dx, shadow_dy), silhouette)
 
 
@@ -1247,6 +1388,7 @@ def paint_bitmap_guide_glyph(
     band: tuple[int, int] | None,
     rtl: bool,
     gradient_rect: QRectF | None = None,
+    anim_ms: int | None = None,
 ) -> None:
     """Draw one bitmap guide avatar as a two-sided wipe mask.
 
@@ -1257,6 +1399,9 @@ def paint_bitmap_guide_glyph(
     symbols have no wipe and always draw unclipped.  Unless ``NoDecor`` is
     set, the style's text decoration (shadow / glow, 飾り色) is painted
     behind the image with the same side clipping.
+
+    ``anim_ms`` 是相对行显示窗口起点已过的毫秒数：动图（GIF）按它选帧，
+    装饰剪影随当前帧重取；``None`` 维持旧的静态首帧行为。
     """
     symbol = glyph.vector_glyph
     if not guide_symbol_is_bitmap(symbol):
@@ -1266,10 +1411,11 @@ def paint_bitmap_guide_glyph(
         if after and symbol.bitmap_after_path
         else symbol.bitmap_before_path
     )
-    image = bitmap_guide_image(image_path)
+    frame = bitmap_guide_frame_at(image_path, anim_ms)
     rect = bitmap_guide_target_rect(glyph, baseline_y)
-    if image is None or rect is None or image.isNull():
+    if frame is None or rect is None or frame.image.isNull():
         return
+    image = frame.image
     painter.save()
     try:
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -1279,9 +1425,16 @@ def paint_bitmap_guide_glyph(
             elif symbol.bitmap_after_path:
                 painter.setClipRect(horizontal_before_clip_rect(band, rtl))
         # 装饰剪影跟随当前侧实际绘制的图片（后侧用后图 Alpha），透明占位
-        # 前图不会把发光/阴影贴成 1px 细条。
+        # 前图不会把发光/阴影贴成 1px 细条。frame_identity 带文件签名，
+        # GIF 换内容后旧剪影自动失效。
         paint_bitmap_guide_decor(
-            painter, glyph, image, rect, after=after, gradient_rect=gradient_rect
+            painter,
+            glyph,
+            image,
+            rect,
+            after=after,
+            gradient_rect=gradient_rect,
+            frame_identity=frame.identity,
         )
         painter.drawImage(rect, image)
     finally:
@@ -1336,6 +1489,7 @@ def paint_bitmap_guide_glyphs(
     ports: BitmapGuidePorts,
     *,
     after: bool,
+    anim_ms: int | None = None,
 ) -> None:
     for glyph in bitmap_guide_glyphs(layout.text_layout):
         band = bitmap_guide_band_for_glyph(layout, glyph, t_ms, ports)
@@ -1349,6 +1503,7 @@ def paint_bitmap_guide_glyphs(
             band=band,
             rtl=layout.rtl,
             gradient_rect=layout.line_rect,
+            anim_ms=anim_ms,
         )
 
 
@@ -1366,6 +1521,7 @@ def paint_bitmap_guide_transition_glyph(
     ports: BitmapGuidePorts,
     *,
     rtl: bool,
+    anim_ms: int | None = None,
 ) -> None:
     if not glyph_is_bitmap_guide(glyph):
         return
@@ -1410,6 +1566,7 @@ def paint_bitmap_guide_transition_glyph(
             after=False,
             band=band,
             rtl=rtl,
+            anim_ms=anim_ms,
         )
         if band is not None:
             paint_bitmap_guide_glyph(
@@ -1419,6 +1576,7 @@ def paint_bitmap_guide_transition_glyph(
                 after=True,
                 band=band,
                 rtl=rtl,
+                anim_ms=anim_ms,
             )
     finally:
         painter.restore()
@@ -1435,6 +1593,7 @@ class BitmapGuideLayer:
     ports: BitmapGuidePorts
     z_index: int = 0
     scope: str = SCOPE_LINE
+    anim_anchor_ms: int = 0
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -1478,6 +1637,7 @@ class BitmapGuideLayer:
             after=self.after,
             band=band,
             rtl=self.rtl,
+            anim_ms=self.t_ms - self.anim_anchor_ms,
         )
 
     def vertical_bounds(

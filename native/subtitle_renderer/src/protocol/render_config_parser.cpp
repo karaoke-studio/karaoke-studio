@@ -391,6 +391,11 @@ std::optional<krok::subtitle::native::BitmapGuide> parseBitmapGuide(
     guide.afterSize = static_cast<std::uint64_t>(
         std::max(object.value(QStringLiteral("after_size")).toDouble(0.0), 0.0)
     );
+    guide.animAnchorMs = static_cast<int>(std::clamp(
+        object.value(QStringLiteral("anim_anchor_ms")).toDouble(0.0),
+        -2147483648.0,
+        2147483647.0
+    ));
     return guide;
 }
 

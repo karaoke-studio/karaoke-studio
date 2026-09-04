@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from krok_helper.subtitle_render.engine.layout.line.style import line_start_ms
 from krok_helper.subtitle_render.engine.layout.plan.model import TrackLayoutPlan
 from krok_helper.subtitle_render.engine.layout.page.plan import section_head_line_indices
 from krok_helper.subtitle_render.domain.timing import (
@@ -164,7 +165,10 @@ def _image_file_signature(path_text: str | None) -> tuple[int, int]:
     return (max(int(stat.st_mtime_ns // 1_000_000), 0), max(int(stat.st_size), 0))
 
 
-def bitmap_guide_to_ir(symbol: object | None) -> dict[str, Any] | None:
+def bitmap_guide_to_ir(
+    symbol: object | None,
+    anim_anchor_ms: int | None = None,
+) -> dict[str, Any] | None:
     if symbol is None or getattr(symbol, "kind", "vector") != "bitmap":
         return None
     before_path = str(getattr(symbol, "bitmap_before_path", "") or "")
@@ -185,12 +189,16 @@ def bitmap_guide_to_ir(symbol: object | None) -> dict[str, Any] | None:
         "before_size": before_size,
         "after_modified_ms": after_modified,
         "after_size": after_size,
+        # 动图循环锚点（行显示窗口起点；schedule 缺窗口时回退行起点）。
+        # Python painter 与 GPU sidecar 都以该值为 t=0 选帧，单一事实源。
+        "anim_anchor_ms": int(anim_anchor_ms if anim_anchor_ms is not None else 0),
     }
 
 
 def timing_char_to_ir(
     ch: TimingChar,
     glyph_table: VectorGlyphTable | None = None,
+    anim_anchor_ms: int | None = None,
 ) -> dict[str, Any]:
     char: dict[str, Any] = {
         "text": ch.text,
@@ -201,7 +209,7 @@ def timing_char_to_ir(
             int(ch.pause_release_ms) if ch.pause_release_ms is not None else None
         ),
         "role_label": ch.role_label,
-        "bitmap_guide": bitmap_guide_to_ir(ch.vector_glyph),
+        "bitmap_guide": bitmap_guide_to_ir(ch.vector_glyph, anim_anchor_ms),
     }
     if glyph_table is not None:
         if ch.vector_glyph is not None:
@@ -241,9 +249,18 @@ def timing_line_to_ir(
     glyph_table: VectorGlyphTable | None = None,
 ) -> dict[str, Any]:
     render_line = render_line or line
+    # 与 painter._paint_line_static 的动图锚点同一公式：行显示窗口起点，
+    # schedule 缺窗口时回退行起点。锚点在 IR 里是唯一事实源，sidecar 不再
+    # 自行推导，避免两后端选帧错位。
+    guide_anim_anchor_ms = (
+        int(display_start_ms)
+        if display_start_ms is not None
+        else line_start_ms(render_line)
+    )
     return {
         "chars": [
-            timing_char_to_ir(ch, glyph_table) for ch in render_line.chars
+            timing_char_to_ir(ch, glyph_table, guide_anim_anchor_ms)
+            for ch in render_line.chars
         ],
         "end_ms": int(line.end_ms) if line.end_ms is not None else None,
         "singer_label": line.singer_label,

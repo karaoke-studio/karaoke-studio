@@ -1401,7 +1401,13 @@ def _display_line_vertical_bounds(
         return None
 
     ctx = LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h)
-    layers = _line_layer_stack(layout, track_t_ms)
+    layers = _line_layer_stack(
+        layout,
+        track_t_ms,
+        int(display_line.display_start_ms)
+        if display_line.display_start_ms is not None
+        else _line_start_ms(line),
+    )
     if layout.active_rubies and layout.ruby_metrics is not None:
         layers.extend(_ruby_layer_stack(layout, line, track_t_ms, line_style))
     line_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(ctx, layers)
@@ -3058,6 +3064,15 @@ def _paint_line_static(
         style, render_line, t_ms, display_start_ms, display_end_ms, len(render_line.chars),
         intervals=layout.intervals,
     )
+    # 动图导唱符的循环锚点 = 行的出现时刻（与入退场动画同一时间基准）。
+    # 该值同时写入渲染 IR（bitmap_guide.anim_anchor_ms），GPU 侧照用，保证
+    # 两条后端逐帧选到同一帧。schedule 缺窗口时回落到行起点，与 transitions
+    # 的 display_start 回退口径一致。
+    guide_anim_anchor_ms = (
+        int(display_start_ms)
+        if display_start_ms is not None
+        else _line_start_ms(render_line)
+    )
     def paint_ruby_glow_under_main() -> None:
         if (
             transition is not None
@@ -3110,6 +3125,7 @@ def _paint_line_static(
                 layout.active_rubies, layout.baseline_y, t_ms, transition, style,
                 rtl=layout.rtl, ink_x_ranges=layout.ink_x_ranges,
                 fill_segments=layout.fill_segments,
+                guide_anim_anchor_ms=guide_anim_anchor_ms,
             )
         else:
             _paint_line_with_character_transition(
@@ -3122,6 +3138,7 @@ def _paint_line_static(
                     layout.text_layout, layout.baseline_y
                 ),
                 fill_segments=layout.fill_segments,
+                guide_anim_anchor_ms=guide_anim_anchor_ms,
             )
         paint_rubies_on_top()
         return
@@ -3129,9 +3146,9 @@ def _paint_line_static(
     # paint 段：消费 layout。默认 blit 未唱层 + 已唱层；测试/调试可回退同 layout 直绘。
     paint_ruby_glow_under_main()
     if _horizontal_layer_enabled():
-        _paint_line_layers(painter, layout, t_ms)
+        _paint_line_layers(painter, layout, t_ms, guide_anim_anchor_ms)
     else:
-        _paint_line_direct(painter, layout, t_ms)
+        _paint_line_direct(painter, layout, t_ms, guide_anim_anchor_ms)
     paint_rubies_on_top()
 
 
@@ -3292,12 +3309,13 @@ def _paint_line_layers(
     painter: QPainter,
     layout: _LineLayout,
     t_ms: int,
+    guide_anim_anchor_ms: int = 0,
 ) -> None:
     """paint 段：消费 :class:`_LineLayout`，逐 run blit 未唱层 + 已唱层。"""
     _TEXT_RUN_COMPOSITOR.paint_ordered(
         painter,
         LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
-        _line_layer_stack(layout, t_ms),
+        _line_layer_stack(layout, t_ms, guide_anim_anchor_ms),
     )
 
 
@@ -3305,6 +3323,7 @@ def _paint_line_direct(
     painter: QPainter,
     layout: _LineLayout,
     t_ms: int,
+    guide_anim_anchor_ms: int = 0,
 ) -> None:
     """Bind the vector oracle to the horizontal layer owner."""
 
@@ -3314,14 +3333,20 @@ def _paint_line_direct(
         t_ms,
         glyph_ports=_GLYPH_LAYER_PORTS,
         bitmap_ports=_BITMAP_GUIDE_PORTS,
+        anim_ms=t_ms - guide_anim_anchor_ms,
     )
 
 
-def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
+def _line_layer_stack(
+    layout: _LineLayout,
+    t_ms: int,
+    guide_anim_anchor_ms: int = 0,
+) -> list:
     return _build_horizontal_line_layer_stack(
         layout,
         t_ms,
         _HORIZONTAL_LAYER_STACK_PORTS,
+        guide_anim_anchor_ms=guide_anim_anchor_ms,
     )
 
 
@@ -3385,6 +3410,7 @@ def _paint_bitmap_guide_glyphs(
     t_ms: int,
     *,
     after: bool,
+    anim_ms: int | None = None,
 ) -> None:
     _paint_horizontal_bitmap_guide_glyphs(
         painter,
@@ -3392,6 +3418,7 @@ def _paint_bitmap_guide_glyphs(
         t_ms,
         _BITMAP_GUIDE_PORTS,
         after=after,
+        anim_ms=anim_ms,
     )
 
 
@@ -3408,6 +3435,7 @@ def _paint_bitmap_guide_transition_glyph(
     style: Style,
     *,
     rtl: bool,
+    anim_ms: int | None = None,
 ) -> None:
     _paint_horizontal_bitmap_guide_transition_glyph(
         painter,
@@ -3422,6 +3450,7 @@ def _paint_bitmap_guide_transition_glyph(
         style,
         _BITMAP_GUIDE_PORTS,
         rtl=rtl,
+        anim_ms=anim_ms,
     )
 
 
@@ -3434,6 +3463,7 @@ def _BitmapGuideLayer(
     after: bool,
     z_index: int = 0,
     scope: str = SCOPE_LINE,
+    guide_anim_anchor_ms: int = 0,
 ) -> _HorizontalBitmapGuideLayer:
     return _HorizontalBitmapGuideLayer(
         glyph=glyph,
@@ -3445,6 +3475,7 @@ def _BitmapGuideLayer(
         ports=_BITMAP_GUIDE_PORTS,
         z_index=z_index,
         scope=scope,
+        anim_anchor_ms=guide_anim_anchor_ms,
     )
 
 
@@ -3629,6 +3660,7 @@ def _paint_role_line_with_character_transition(
     rtl: bool = False,
     ink_x_ranges: list[tuple[int, int]] | None = None,
     fill_segments: list[_FillSegment] | None = None,
+    guide_anim_anchor_ms: int = 0,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -3655,6 +3687,7 @@ def _paint_role_line_with_character_transition(
                 transition,
                 style,
                 rtl=rtl,
+                anim_ms=t_ms - guide_anim_anchor_ms,
             )
             continue
 
@@ -3853,6 +3886,7 @@ def _paint_line_with_character_transition(
     glyphs_by_index: list[_GlyphLayout | None] | None = None,
     fill_rect: QRectF | None = None,
     fill_segments: list[_FillSegment] | None = None,
+    guide_anim_anchor_ms: int = 0,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -3879,6 +3913,7 @@ def _paint_line_with_character_transition(
                 transition,
                 style,
                 rtl=rtl,
+                anim_ms=t_ms - guide_anim_anchor_ms,
             )
             continue
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None

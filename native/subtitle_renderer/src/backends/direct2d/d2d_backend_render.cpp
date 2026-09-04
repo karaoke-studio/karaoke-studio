@@ -1770,7 +1770,34 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         && image.size == size;
                 }
             );
-            return found == impl_->images.end() ? nullptr : found->bitmap.Get();
+            if (found == impl_->images.end()) {
+                return nullptr;
+            }
+            // 动图（GIF）按渲染时间选帧：与 Python 侧
+            // metrics.AnimatedGuideImage.frame_at 同一契约（循环取模 +
+            // 累积延时表线性查找），锚点来自 IR 的 anim_anchor_ms。
+            if (found->frames.size() > 1 && found->frames.size() == found->frameDelaysMs.size()) {
+                int totalMs = 0;
+                for (int delay : found->frameDelaysMs) {
+                    totalMs += delay;
+                }
+                if (totalMs > 0) {
+                    const long long elapsed = std::max(
+                        static_cast<long long>(tMs) - static_cast<long long>(guide.animAnchorMs),
+                        0LL
+                    );
+                    const long long position = elapsed % totalMs;
+                    long long cumulative = 0;
+                    for (std::size_t index = 0; index < found->frameDelaysMs.size(); ++index) {
+                        cumulative += found->frameDelaysMs[index];
+                        if (position < cumulative) {
+                            return found->frames[index].Get();
+                        }
+                    }
+                }
+                return found->frames.back().Get();
+            }
+            return found->bitmap.Get();
         };
         auto paintBrushAt = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
                                 const RgbaColor &fallback,

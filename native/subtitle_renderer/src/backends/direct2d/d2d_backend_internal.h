@@ -21,6 +21,11 @@ struct Direct2DGpuBackend::Impl {
         std::uint64_t modifiedMs = 0;
         std::uint64_t size = 0;
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        // 动图（GIF）合成帧序列 + 每帧时长；空 = 静态图，走 bitmap。
+        // 选帧规则见 d2d_backend_render.cpp 的 guideBitmapAt，与 Python
+        // metrics.AnimatedGuideImage.frame_at 是同一契约。
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> frames;
+        std::vector<int> frameDelaysMs;
     };
     struct CachedChar {
         int startMs = 0;

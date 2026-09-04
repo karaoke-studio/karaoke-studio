@@ -1,9 +1,11 @@
 #include "d2d_paint_resources.h"
 
 #include <d2d1helper.h>
+#include <propidl.h>
 #include <wincodec.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 #include <vector>
@@ -299,6 +301,319 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
         return {};
     }
     return bitmap;
+}
+
+namespace {
+
+// /grctlext/Delay 以 1/100 秒计；0 视为非法并钳到 10ms——该规则必须与
+// Python 侧 metrics.GUIDE_ANIM_MIN_FRAME_MS 完全一致，否则两条后端会在
+// 相同 tMs 上选到不同帧。
+constexpr int kAnimatedFrameMinMs = 10;
+
+int animatedFrameDelayMs(IWICMetadataQueryReader *reader) {
+    if (reader == nullptr) {
+        return kAnimatedFrameMinMs;
+    }
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    if (FAILED(reader->GetMetadataByName(L"/grctlext/Delay", &value))) {
+        return kAnimatedFrameMinMs;
+    }
+    // GIF 元数据走 16 位（VT_UI2），别只认 VT_UI4。
+    UINT centiseconds = 0;
+    if (value.vt == VT_UI4) {
+        centiseconds = value.ulVal;
+    } else if (value.vt == VT_UI2) {
+        centiseconds = static_cast<UINT>(value.uiVal);
+    }
+    PropVariantClear(&value);
+    return std::max(static_cast<int>(centiseconds) * 10, kAnimatedFrameMinMs);
+}
+
+int gifDisposalMethod(IWICMetadataQueryReader *reader) {
+    if (reader == nullptr) {
+        return 0;
+    }
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    if (FAILED(reader->GetMetadataByName(L"/grctlext/Disposal", &value))
+        || value.vt != VT_UI1) {
+        PropVariantClear(&value);
+        return 0;
+    }
+    const BYTE raw = value.bVal;
+    PropVariantClear(&value);
+    return static_cast<int>(raw & 0x07);
+}
+
+int frameOffset(IWICMetadataQueryReader *reader, const wchar_t *name) {
+    if (reader == nullptr) {
+        return 0;
+    }
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    if (FAILED(reader->GetMetadataByName(name, &value))) {
+        return 0;
+    }
+    int result = 0;
+    if (value.vt == VT_I2) {
+        result = value.iVal;
+    } else if (value.vt == VT_I4) {
+        result = value.lVal;
+    } else if (value.vt == VT_UI2) {
+        result = static_cast<int>(value.uiVal);
+    } else if (value.vt == VT_UI4) {
+        result = static_cast<int>(value.ulVal);
+    }
+    PropVariantClear(&value);
+    return std::max(result, 0);
+}
+
+void blendPremultipliedRow(
+    std::uint8_t *destination,
+    const std::uint8_t *source,
+    std::size_t pixels
+) {
+    for (std::size_t index = 0; index < pixels; ++index) {
+        const std::size_t offset = index * 4;
+        const std::uint8_t alpha = source[offset + 3];
+        if (alpha == 255) {
+            destination[offset] = source[offset];
+            destination[offset + 1] = source[offset + 1];
+            destination[offset + 2] = source[offset + 2];
+            destination[offset + 3] = 255;
+        } else if (alpha != 0) {
+            for (int channel = 0; channel < 4; ++channel) {
+                const int src = source[offset + channel];
+                const int dst = destination[offset + channel];
+                // src、dst 均为预乘 PBGRA：src-over = src + dst * (1 - sa)。
+                destination[offset + channel] = static_cast<std::uint8_t>(
+                    src + dst * (255 - alpha) / 255
+                );
+            }
+        }
+    }
+}
+
+int logicalScreenExtent(
+    IWICMetadataQueryReader *reader,
+    const wchar_t *name
+) {
+    if (reader == nullptr) {
+        return 0;
+    }
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    if (FAILED(reader->GetMetadataByName(name, &value))) {
+        return 0;
+    }
+    int result = 0;
+    if (value.vt == VT_UI2) {
+        result = static_cast<int>(value.uiVal);
+    } else if (value.vt == VT_UI4) {
+        result = static_cast<int>(value.ulVal);
+    }
+    PropVariantClear(&value);
+    return result;
+}
+
+}  // namespace
+
+AnimatedBitmapFrames loadWicAnimatedBitmaps(
+    ID2D1DeviceContext *context,
+    const std::wstring &path,
+    int maxFrames
+) {
+    AnimatedBitmapFrames result;
+    if (path.empty() || maxFrames <= 0) {
+        return result;
+    }
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) {
+        return result;
+    }
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(factory.ReleaseAndGetAddressOf())))) {
+        return result;
+    }
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromFilename(
+            path.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnLoad,
+            decoder.ReleaseAndGetAddressOf()))) {
+        return result;
+    }
+    GUID container = {};
+    if (FAILED(decoder->GetContainerFormat(&container))
+        || container != GUID_ContainerFormatGif) {
+        // 仅 GIF 走动图路径；其余格式（含多页 TIFF）保持静态首帧。
+        return result;
+    }
+    UINT frameCount = 0;
+    if (FAILED(decoder->GetFrameCount(&frameCount)) || frameCount <= 1) {
+        return result;
+    }
+    // 逻辑画布尺寸在 /logscrdesc；读不到时（理论不应发生）回退第 0 帧尺寸。
+    UINT canvasWidth = 0;
+    UINT canvasHeight = 0;
+    {
+        Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> firstFrame;
+        Microsoft::WRL::ComPtr<IWICMetadataQueryReader> firstReader;
+        if (SUCCEEDED(decoder->GetFrame(0, firstFrame.ReleaseAndGetAddressOf()))
+            && SUCCEEDED(
+                firstFrame->GetMetadataQueryReader(firstReader.ReleaseAndGetAddressOf()))) {
+            canvasWidth = static_cast<UINT>(
+                logicalScreenExtent(firstReader.Get(), L"/logscrdesc/Width"));
+            canvasHeight = static_cast<UINT>(
+                logicalScreenExtent(firstReader.Get(), L"/logscrdesc/Height"));
+        }
+        if (canvasWidth == 0 || canvasHeight == 0) {
+            UINT frameWidth = 0;
+            UINT frameHeight = 0;
+            if (FAILED(firstFrame->GetSize(&frameWidth, &frameHeight))) {
+                return result;
+            }
+            canvasWidth = frameWidth;
+            canvasHeight = frameHeight;
+        }
+    }
+    if (canvasWidth == 0 || canvasHeight == 0) {
+        return result;
+    }
+    const std::size_t canvasStride = static_cast<std::size_t>(canvasWidth) * 4;
+    const std::size_t canvasPixels =
+        canvasStride * static_cast<std::size_t>(canvasHeight);
+    // GIF 帧是增量矩形 + dispose 语义：按规范在 CPU 侧逐帧合成全尺寸
+    // 画布（背景透明，Qt 的 gif handler 同口径），再各自上传为 D2D 位图。
+    std::vector<std::uint8_t> canvas(canvasPixels, 0);
+    std::vector<std::uint8_t> snapshot;
+    int previousDisposal = 0;
+    RECT previousRect{0, 0, 0, 0};
+    const UINT limitedFrames = std::min<UINT>(frameCount, static_cast<UINT>(maxFrames));
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    for (UINT frameIndex = 0; frameIndex < limitedFrames; ++frameIndex) {
+        Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+        if (FAILED(decoder->GetFrame(frameIndex, frame.ReleaseAndGetAddressOf()))) {
+            break;
+        }
+        Microsoft::WRL::ComPtr<IWICMetadataQueryReader> reader;
+        frame->GetMetadataQueryReader(reader.ReleaseAndGetAddressOf());
+        // 先应用上一帧的 dispose，再叠加本帧。
+        if (previousDisposal == 2) {
+            const int left = std::max<LONG>(previousRect.left, 0);
+            const int top = std::max<LONG>(previousRect.top, 0);
+            const int right = std::min<LONG>(previousRect.right, static_cast<LONG>(canvasWidth));
+            const int bottom = std::min<LONG>(previousRect.bottom, static_cast<LONG>(canvasHeight));
+            for (LONG y = top; y < bottom; ++y) {
+                std::fill_n(
+                    canvas.begin()
+                        + static_cast<std::ptrdiff_t>(y) * static_cast<std::ptrdiff_t>(canvasStride)
+                        + static_cast<std::ptrdiff_t>(left) * 4,
+                    static_cast<std::size_t>(std::max(right - left, 0)) * 4,
+                    0
+                );
+            }
+        } else if (previousDisposal == 3 && snapshot.size() == canvasPixels) {
+            canvas = snapshot;
+        }
+        Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+        if (FAILED(factory->CreateFormatConverter(
+                converter.ReleaseAndGetAddressOf()))
+            || FAILED(converter->Initialize(
+                frame.Get(),
+                GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone,
+                nullptr,
+                0.0,
+                WICBitmapPaletteTypeMedianCut))) {
+            break;
+        }
+        UINT frameWidth = 0;
+        UINT frameHeight = 0;
+        if (FAILED(converter->GetSize(&frameWidth, &frameHeight))
+            || frameWidth == 0
+            || frameHeight == 0) {
+            break;
+        }
+        const int offsetX = std::min(
+            frameOffset(reader.Get(), L"/imgdesc/Left"),
+            static_cast<int>(canvasWidth)
+        );
+        const int offsetY = std::min(
+            frameOffset(reader.Get(), L"/imgdesc/Top"),
+            static_cast<int>(canvasHeight)
+        );
+        const std::size_t frameStride = static_cast<std::size_t>(frameWidth) * 4;
+        std::vector<std::uint8_t> framePixels(frameStride * frameHeight);
+        if (FAILED(converter->CopyPixels(
+                nullptr,
+                static_cast<UINT>(frameStride),
+                static_cast<UINT>(framePixels.size()),
+                framePixels.data()))) {
+            break;
+        }
+        const int disposal = gifDisposalMethod(reader.Get());
+        if (disposal == 3) {
+            snapshot = canvas;
+        }
+        for (UINT row = 0; row < frameHeight; ++row) {
+            const int canvasY = static_cast<int>(row) + offsetY;
+            if (canvasY < 0 || canvasY >= static_cast<int>(canvasHeight)) {
+                continue;
+            }
+            const int canvasX = offsetX;
+            const std::size_t copyPixels = std::min<std::size_t>(
+                frameWidth,
+                static_cast<std::size_t>(static_cast<int>(canvasWidth) - canvasX)
+            );
+            if (copyPixels <= 0) {
+                continue;
+            }
+            std::uint8_t *destination = canvas.data()
+                + static_cast<std::size_t>(canvasY) * canvasStride
+                + static_cast<std::size_t>(canvasX) * 4;
+            const std::uint8_t *source = framePixels.data()
+                + static_cast<std::size_t>(row) * frameStride;
+            blendPremultipliedRow(destination, source, copyPixels);
+        }
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        if (FAILED(context->CreateBitmap(
+                D2D1::SizeU(canvasWidth, canvasHeight),
+                canvas.data(),
+                static_cast<UINT>(canvasStride),
+                &properties,
+                bitmap.ReleaseAndGetAddressOf()))) {
+            break;
+        }
+        result.bitmaps.push_back(std::move(bitmap));
+        result.delaysMs.push_back(animatedFrameDelayMs(reader.Get()));
+        previousDisposal = disposal;
+        previousRect = RECT{
+            offsetX,
+            offsetY,
+            offsetX + static_cast<LONG>(frameWidth),
+            offsetY + static_cast<LONG>(frameHeight),
+        };
+    }
+    if (result.bitmaps.size() <= 1) {
+        result.bitmaps.clear();
+        result.delaysMs.clear();
+    }
+    return result;
 }
 
 }  // namespace krok::subtitle::native::direct2d
