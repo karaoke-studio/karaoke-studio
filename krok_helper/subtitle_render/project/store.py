@@ -320,6 +320,7 @@ def project_payload(
     guide_symbol_table: Optional[dict] = None,
     line_display_overrides: Optional[list] = None,
     line_animation_overrides: Optional[list] = None,
+    line_wipe_reverse_overrides: Optional[list] = None,
     page_plan: Optional[dict] = None,
     loading_settings_mode: Optional[str] = None,
     loading_settings: Optional[dict] = None,
@@ -355,6 +356,10 @@ def project_payload(
 
     ``line_animation_overrides`` 同样与 ``track.lines`` 对齐：每项为 None（继承
     全局特效）或逐行动画覆盖字典。
+
+    ``line_wipe_reverse_overrides`` 同样与 ``track.lines`` 对齐：每项为 None
+    （按源文件逆序检测自动判定）或该行手动指定的反向走字布尔值（项目 UI
+    右键「反向走字」写入）。
 
     ``extra_subtitle_sources``：副字幕源列表（N3 多歌词文件，如コーラス轨），
     每项为 ``{"name", "path", "line_layout_indices", "char_role_labels",
@@ -423,6 +428,11 @@ def project_payload(
         payload["line_animation_overrides"] = [
             dict(row) if isinstance(row, dict) else None
             for row in line_animation_overrides
+        ]
+    if line_wipe_reverse_overrides is not None:
+        payload["line_wipe_reverse_overrides"] = [
+            bool(row) if isinstance(row, bool) else None
+            for row in line_wipe_reverse_overrides
         ]
     if page_plan is not None:
         payload["page_plan"] = dict(page_plan)

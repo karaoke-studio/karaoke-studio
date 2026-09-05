@@ -158,6 +158,67 @@ def test_apply_track_project_data_restores_all_line_projections() -> None:
     assert track.loading_settings_mode == "custom"
 
 
+def test_apply_track_project_data_applies_wipe_reverse_overrides() -> None:
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("甲", 1000)], end_ms=2000),
+            TimingLine(chars=[TimingChar("乙", 3000)], end_ms=4000),
+            TimingLine(chars=[TimingChar("丙", 5000)], end_ms=6000),
+        ]
+    )
+
+    apply_track_project_data(
+        track,
+        Style(),
+        {"line_wipe_reverse_overrides": [True, False, "invalid"]},
+    )
+
+    # 手动覆盖回放时同时改写渲染消费的有效标记；非布尔项忽略
+    assert track.lines[0].wipe_reverse is True
+    assert track.lines[0].wipe_reverse_override is True
+    assert track.lines[1].wipe_reverse is False
+    assert track.lines[1].wipe_reverse_override is False
+    assert track.lines[2].wipe_reverse is False
+    assert track.lines[2].wipe_reverse_override is None
+
+
+def test_wipe_reverse_overrides_round_trip_through_project_data() -> None:
+    from krok_helper.subtitle_render.project.session import _track_project_data
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("甲", 1000)], end_ms=2000, wipe_reverse=True
+            ),
+            TimingLine(
+                chars=[TimingChar("乙", 3000)], end_ms=4000, wipe_reverse=False
+            ),
+        ]
+    )
+    track.lines[0].wipe_reverse_override = True
+    # 源逆序自动判定为反向、用户手动取消的行也保留覆盖值
+    track.lines[1].wipe_reverse_override = False
+
+    data = _track_project_data(track)
+    assert data["line_wipe_reverse_overrides"] == [True, False]
+
+    # 全部行为自动判定时不写项目字段
+    auto = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("甲", 1000)], end_ms=2000, wipe_reverse=True)
+        ]
+    )
+    assert _track_project_data(auto)["line_wipe_reverse_overrides"] is None
+
+    # 重新解析出的顺序行回放覆盖后恢复手动反向
+    restored = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("甲", 1000)], end_ms=2000)]
+    )
+    apply_track_project_data(restored, Style(), data)
+    assert restored.lines[0].wipe_reverse is True
+    assert restored.lines[0].wipe_reverse_override is True
+
+
 def test_guide_symbol_table_round_trips_through_project_data() -> None:
     """同一符号应用到多行时，.yurika 只存一份轮廓 + 行数据引用 ID。"""
     from krok_helper.subtitle_render.domain.timing import GuideSymbol

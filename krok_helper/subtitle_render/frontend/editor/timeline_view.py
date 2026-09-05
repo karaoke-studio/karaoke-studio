@@ -17,15 +17,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIntValidator, QPainter, QPixmap
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIntValidator,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QStyle,
     QStyleOption,
     QWidget,
 )
-from qfluentwidgets import BodyLabel, CardWidget, LineEdit, PrimaryPushButton
+from qfluentwidgets import Action, BodyLabel, CardWidget, LineEdit, PrimaryPushButton, RoundMenu
 
 from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
 from krok_helper.subtitle_render.engine.render.adapters.timeline_projection import (
@@ -116,6 +125,8 @@ class LineBlock:
     singer_label: Optional[str]
     text: str
     cells: tuple[CharCell, ...]
+    wipe_reverse: bool = False
+    """该行是否反向走字（源逆序检测或手动覆盖）；块上画向左箭头标记。"""
 
 
 @dataclass(frozen=True)
@@ -182,6 +193,7 @@ def _line_block(
         singer_label=line.singer_label,
         text="".join(ch.text for ch in line.chars),
         cells=tuple(cells),
+        wipe_reverse=bool(line.wipe_reverse),
     )
 
 
@@ -231,6 +243,12 @@ class TrackTimelineView(QWidget):
     ``(轨道序号, 行索引, 旧 (上屏覆盖, 消失覆盖), 新 (上屏覆盖, 消失覆盖))``。
     新值已直接写在 ``TimingLine`` 上；宿主收到后刷新预览、标脏，并用
     旧值入撤销栈（Ctrl+Z）。拖动无实际变化时不发。"""
+
+    wipeReverseEdited = Signal(int, int, object, object)
+    """用户右键切换某句反向走字：
+    ``(轨道序号, 行索引, 旧 (手动覆盖, 生效值), 新 (手动覆盖, 生效值))``。
+    新值已直接写在 ``TimingLine`` 上（含 ``wipe_reverse_override`` 手动覆盖
+    字段）；宿主收到后刷新预览、标脏，并用旧值入撤销栈（Ctrl+Z）。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -305,13 +323,25 @@ class TrackTimelineView(QWidget):
         if style == self._style:
             return
         self._style = style
-        if self._track_refs:
-            self._lanes = build_lanes(
-                list(zip(self._track_names, self._track_refs)),
-                self._style,
-            )
-            self._lanes_pixmap = None
+        self._rebuild_lanes()
         self.update()
+
+    def refresh_tracks(self) -> None:
+        """track 行数据被外部改动（撤销/重做等）后原地重建块快照。
+
+        与 ``set_tracks`` 不同：保留视口位置、比例尺与句子选中态。"""
+        self._rebuild_lanes()
+        self.update()
+
+    def _rebuild_lanes(self) -> None:
+        """按当前 track 引用与样式重建轨道块快照（不动视口与选中态）。"""
+        if not self._track_refs:
+            return
+        self._lanes = build_lanes(
+            list(zip(self._track_names, self._track_refs)),
+            self._style,
+        )
+        self._lanes_pixmap = None
 
     def set_duration(self, ms: int) -> None:
         self._duration_ms = max(int(ms), 0)
@@ -846,6 +876,9 @@ class TrackTimelineView(QWidget):
         painter.setBrush(fill)
         painter.drawRoundedRect(block_rect, 2.0, 2.0)
 
+        if block.wipe_reverse:
+            _paint_wipe_reverse_marker(painter, block_rect, border)
+
         painter.setFont(char_font)
         for cell in block.cells:
             cx0 = self._x_for_ms(cell.start_ms)
@@ -1065,6 +1098,54 @@ class TrackTimelineView(QWidget):
         self.update()
         event.accept()
 
+    def contextMenuEvent(self, event) -> None:  # noqa: N802 — Qt override
+        """右键句子块：弹出「反向走字」勾选菜单，手动设置/取消反向标记。"""
+        if self._lanes:
+            pos = event.pos()
+            lane_index, block, _cell = self._hit_test(float(pos.x()), float(pos.y()))
+            if (
+                block is not None
+                and lane_index is not None
+                and 0 <= lane_index < len(self._track_refs)
+            ):
+                self._show_wipe_reverse_menu(lane_index, block, event.globalPos())
+                event.accept()
+                return
+        super().contextMenuEvent(event)
+
+    def _show_wipe_reverse_menu(
+        self, lane_index: int, block: LineBlock, global_pos: QPoint
+    ) -> None:
+        line = self._track_refs[lane_index].lines[block.line_index]
+        menu = RoundMenu(parent=self)
+        action = Action("反向走字", menu)
+        action.setCheckable(True)
+        action.setChecked(bool(line.wipe_reverse))
+        action.setToolTip("反向消费本行时间戳（横排从右往左、竖排从下往上走字）")
+        action.triggered.connect(
+            lambda _checked=False, li=lane_index, ri=block.line_index: (
+                self._toggle_wipe_reverse(li, ri)
+            )
+        )
+        menu.addAction(action)
+        menu.exec(global_pos)
+
+    def _toggle_wipe_reverse(self, lane_index: int, line_index: int) -> None:
+        """翻转某句反向走字：写有效标记 + 手动覆盖，重建块快照并上报宿主。"""
+        track = self._track_refs[lane_index]
+        if not 0 <= line_index < len(track.lines):
+            return
+        line = track.lines[line_index]
+        old_values = (line.wipe_reverse_override, bool(line.wipe_reverse))
+        new_value = not bool(line.wipe_reverse)
+        line.wipe_reverse = new_value
+        line.wipe_reverse_override = new_value
+        self._rebuild_lanes()
+        self.update()
+        self.wipeReverseEdited.emit(
+            lane_index, line_index, old_values, (new_value, new_value)
+        )
+
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 — Qt override
         if event.button() != Qt.MouseButton.LeftButton or not self._lanes:
             super().mouseDoubleClickEvent(event)
@@ -1262,6 +1343,51 @@ def _format_ms(ms: int) -> str:
     return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
 
 
+def _paint_wipe_reverse_marker(
+    painter: QPainter, block_rect: QRectF, color: QColor
+) -> None:
+    """反向走字标记：块底左端一条指向左的短箭头（横排反向 = 从右往左走字）。
+
+    画在块底部边缘，避开居中的字符文本；块太窄放不下箭头时退化为左缘
+    竖条，保证任何宽度下标记都可见。"""
+    if block_rect.width() >= 18.0:
+        baseline = block_rect.bottom() - 2.2
+        tip_x = block_rect.left() + 3.0
+        tail_x = min(
+            block_rect.left() + 18.0,
+            block_rect.right() - 2.0,
+        )
+        size = max(2.2, min(3.2, block_rect.height() * 0.18))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(tip_x, baseline),
+                    QPointF(tip_x + size * 1.6, baseline - size),
+                    QPointF(tip_x + size * 1.6, baseline + size),
+                ]
+            )
+        )
+        pen = QPen(color, 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(
+            QPointF(tip_x + size * 1.6, baseline), QPointF(tail_x, baseline)
+        )
+    else:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawRect(
+            QRectF(
+                block_rect.left(),
+                block_rect.top() + 2.0,
+                2.5,
+                block_rect.height() - 4.0,
+            )
+        )
+
+
 def _format_precise_ms(ms: int) -> str:
     value = max(int(ms), 0)
     total_seconds, millis = divmod(value, 1000)
@@ -1270,8 +1396,9 @@ def _format_precise_ms(ms: int) -> str:
 
 def _line_block_tooltip(block: LineBlock) -> str:
     singer = f"{block.singer_label}：" if block.singer_label else ""
+    reverse = "\n反向走字（右键可取消）" if block.wipe_reverse else ""
     return (
         f"开始：{_format_precise_ms(block.start_ms)}\n"
         f"结束：{_format_precise_ms(block.end_ms)}\n"
-        f"{singer}{block.text}"
+        f"{singer}{block.text}{reverse}"
     )

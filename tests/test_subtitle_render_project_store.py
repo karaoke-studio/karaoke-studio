@@ -3527,6 +3527,47 @@ def test_selected_rows_context_menu_exposes_role_schemes(qapp, monkeypatch):
     assert emitted == [([0, 1], "新导入配色")]
 
 
+def test_selected_rows_context_menu_toggles_wipe_reverse(qapp, monkeypatch):
+    panel = lyrics_list.LyricsPanel()
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("甲", 1000)], end_ms=1500, wipe_reverse=True
+            ),
+            TimingLine(chars=[TimingChar("乙", 2000)], end_ms=2500),
+        ]
+    )
+    panel.set_track(track)
+    for row in (0, 1):
+        for column in range(panel.table_widget.columnCount()):
+            panel.table_widget.item(row, column).setSelected(True)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        lyrics_list._StableRoundMenu,
+        "exec",
+        lambda menu, *_args: captured.setdefault("menu", menu),
+    )
+    emitted: list[tuple[list[int], bool]] = []
+    panel.wipeReverseRequested.connect(
+        lambda rows, value: emitted.append((list(rows), value))
+    )
+
+    panel._show_context_menu(QPoint(4, 4))
+
+    # 特效列摘要标注反向行
+    assert "反向走字" in panel.table_widget.item(0, lyrics_list.COL_EFFECT).text()
+    assert "反向走字" not in panel.table_widget.item(1, lyrics_list.COL_EFFECT).text()
+
+    menu = captured["menu"]
+    action = next(
+        item for item in menu.actions() if item.text() == "反向走字"
+    )
+    assert action.isCheckable()
+    assert not action.isChecked()  # 混合状态显示未勾选
+    action.trigger()
+    assert emitted == [([0, 1], True)]
+
+
 def test_selected_rows_context_menu_marks_applied_layouts(qapp, monkeypatch):
     panel = lyrics_list.LyricsPanel()
     track = TimingTrack(

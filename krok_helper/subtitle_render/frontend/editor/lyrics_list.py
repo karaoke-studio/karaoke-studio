@@ -176,6 +176,7 @@ def _animation_summary(
     style: Style,
     override: Optional[LineAnimationOverride],
     edge_flags: tuple[bool, bool] = (False, False),
+    wipe_reverse: bool = False,
 ) -> str:
     prefix = "全局：" if override is None else ""
     entry = style.entry_anim if override is None else override.entry_anim
@@ -189,6 +190,8 @@ def _animation_summary(
     # 唱字只在这一行真的改了它时才标出来，免得每行都拖一截重复文字。
     if override is not None and override.karaoke_anim != "inherit":
         summary += f" · 唱字{_KARAOKE_LABELS.get(override.karaoke_anim, override.karaoke_anim)}"
+    if wipe_reverse:
+        summary += " · 反向走字"
     return summary
 
 
@@ -1168,6 +1171,8 @@ class LyricsPanel(DropPanel):
     """标题模式打开逐字符编辑器前，请宿主把动态模板固定为当前实际文字。"""
     animationOverrideRequested = Signal(list, object)
     """逐行动画编辑请求：track.lines 行号列表 + ``LineAnimationOverride | None``。"""
+    wipeReverseRequested = Signal(list, bool)
+    """右键菜单批量设置/取消反向走字：(track.lines 行号列表, 目标值)。"""
     rowClicked = Signal(int)  # 用户点击歌词行时发出行号
     layoutChangeRequested = Signal(list, int)
     """右键菜单选择布局：(选中的 track.lines 行号列表, 布局 index)。宿主按页联动应用。"""
@@ -1611,6 +1616,7 @@ class LyricsPanel(DropPanel):
                         self._style,
                         line.animation_override,
                         edge_flags.get(presentation.track_line_index, (False, False)),
+                        wipe_reverse=bool(line.wipe_reverse),
                     )
                     if line is not None
                     else ""
@@ -2513,6 +2519,7 @@ class LyricsPanel(DropPanel):
                             style,
                             line.animation_override,
                             edge_flags.get(track_index, (False, False)),
+                            wipe_reverse=bool(line.wipe_reverse),
                         )
                     )
                     if line.animation_override is None:
@@ -2681,6 +2688,21 @@ class LyricsPanel(DropPanel):
                 lambda _checked=False, rs=list(rows): self.animationOverrideRequested.emit(rs, None)
             )
             menu.addAction(reset_action)
+            wipe_values = {
+                bool(self._track.lines[row].wipe_reverse)
+                for row in rows
+                if row < len(self._track.lines)
+            }
+            wipe_action = Action("反向走字", menu)
+            wipe_action.setCheckable(True)
+            wipe_action.setChecked(wipe_values == {True})
+            wipe_action.setToolTip("反向消费所选行时间戳（横排从右往左、竖排从下往上走字）")
+            wipe_action.triggered.connect(
+                lambda checked=False, rs=list(rows): self.wipeReverseRequested.emit(
+                    rs, bool(checked)
+                )
+            )
+            menu.addAction(wipe_action)
             menu.addSeparator()
         layout_menu = _StableRoundMenu("应用布局", menu)
         current_indices = {

@@ -313,6 +313,10 @@ def _merge_line_overlays(
     target.display_start_override_ms = current.display_start_override_ms
     target.display_end_override_ms = current.display_end_override_ms
     target.animation_override = deepcopy(current.animation_override)
+    # 手动反向走字覆盖优先于新源解析出的自动逆序判定。
+    target.wipe_reverse_override = current.wipe_reverse_override
+    if current.wipe_reverse_override is not None:
+        target.wipe_reverse = bool(current.wipe_reverse_override)
 
     if current.guide_symbol is not None:
         symbol = deepcopy(current.guide_symbol)
@@ -403,6 +407,7 @@ def _line_has_local_state(
         or current.display_start_override_ms is not None
         or current.display_end_override_ms is not None
         or current.animation_override is not None
+        or current.wipe_reverse_override is not None
         or current.guide_symbol is not None
         or _has_local_inline_guides(current, baseline)
     ):

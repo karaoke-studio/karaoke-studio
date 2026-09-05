@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from krok_helper.subtitle_render.frontend.editor.timeline_view import (  # noqa: E402
     TrackTimelineView,
     _format_precise_ms,
+    _line_block_tooltip,
     build_lanes,
 )
 from krok_helper.subtitle_render.domain.models import (  # noqa: E402
@@ -693,3 +694,107 @@ def test_selection_paint_smoke(qapp) -> None:
     _lane, rect = widget._lane_geometry()[0]
     _click(widget, widget._x_for_ms(1650), rect.center().y())
     widget.grab()  # 选中态 + 把手绘制
+
+
+# ---------------------------------------------------------------------------
+# 反向走字标记：块快照携带标记、绘制差异、右键菜单切换
+# ---------------------------------------------------------------------------
+
+
+def test_build_lanes_carries_wipe_reverse_flag() -> None:
+    track = _make_track()
+    track.lines[0].wipe_reverse = True
+    lanes = build_lanes([("主字幕", track)])
+    assert lanes[0].blocks[0].wipe_reverse is True
+    assert lanes[0].blocks[1].wipe_reverse is False
+
+
+def test_toggle_wipe_reverse_writes_override_and_emits(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+
+    edits: list[tuple] = []
+    widget.wipeReverseEdited.connect(lambda *args: edits.append(args))
+
+    widget._toggle_wipe_reverse(0, 0)
+
+    line = track.lines[0]
+    assert line.wipe_reverse is True
+    assert line.wipe_reverse_override is True
+    assert edits == [(0, 0, (None, False), (True, True))]
+    # 块快照随标记原地重建（保留视口与选中态）
+    assert widget._lanes[0].blocks[0].wipe_reverse is True
+    assert "反向走字" in _line_block_tooltip(widget._lanes[0].blocks[0])
+
+    widget._toggle_wipe_reverse(0, 0)
+    assert line.wipe_reverse is False
+    assert line.wipe_reverse_override is False
+    assert edits[-1] == (0, 0, (True, True), (False, False))
+    assert widget._lanes[0].blocks[0].wipe_reverse is False
+
+
+def test_wipe_reverse_marker_changes_static_pixmap(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+
+    before = widget._render_static_pixmap().toImage()
+    track.lines[0].wipe_reverse = True
+    widget.refresh_tracks()
+    after = widget._render_static_pixmap().toImage()
+
+    assert before.size() == after.size()
+    assert before != after
+
+
+def test_context_menu_on_block_toggles_wipe_reverse(qapp, monkeypatch) -> None:
+    from PyQt6.QtGui import QContextMenuEvent
+
+    from krok_helper.subtitle_render.frontend.editor import timeline_view
+
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        timeline_view.RoundMenu,
+        "exec",
+        lambda menu, *_args, **_kwargs: captured.setdefault("menu", menu),
+    )
+
+    edits: list[tuple] = []
+    widget.wipeReverseEdited.connect(lambda *args: edits.append(args))
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    event = QContextMenuEvent(
+        QContextMenuEvent.Reason.Mouse,
+        QPoint(round(widget._x_for_ms(1500)), round(lane_rect.center().y())),
+    )
+    widget.contextMenuEvent(event)
+
+    menu = captured["menu"]
+    action = {item.text(): item for item in menu.actions()}["反向走字"]
+    assert action.isCheckable()
+    assert not action.isChecked()
+
+    action.trigger()
+    assert track.lines[0].wipe_reverse is True
+    assert track.lines[0].wipe_reverse_override is True
+    assert edits == [(0, 0, (None, False), (True, True))]
+
+    # 右键空白轨道区不弹菜单
+    captured.clear()
+    empty = QContextMenuEvent(
+        QContextMenuEvent.Reason.Mouse,
+        QPoint(round(widget._x_for_ms(8000)), round(lane_rect.center().y())),
+    )
+    widget.contextMenuEvent(empty)
+    assert "menu" not in captured

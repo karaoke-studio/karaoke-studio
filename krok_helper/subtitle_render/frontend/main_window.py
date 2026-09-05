@@ -2357,6 +2357,9 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.animationOverrideRequested.connect(
             self._on_line_animation_override_requested
         )
+        self._lyrics_panel.wipeReverseRequested.connect(
+            self._on_wipe_reverse_requested
+        )
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
         self._lyrics_panel.layoutChangeRequested.connect(
             self._on_layout_change_requested
@@ -2479,6 +2482,9 @@ class SubtitleRenderWindow(QWidget):
         self._tracks_view.lineSelected.connect(self._on_timeline_line_selected)
         self._tracks_view.displayWindowEdited.connect(
             self._on_display_window_edited
+        )
+        self._tracks_view.wipeReverseEdited.connect(
+            self._on_wipe_reverse_edited
         )
         self._transport_bar.timeChanged.connect(self._tracks_view.set_time)
         return page
@@ -4507,6 +4513,49 @@ class SubtitleRenderWindow(QWidget):
             if first_window is not None:
                 self._transport_bar.set_time(max(first_window[0], 0))
 
+    def _on_wipe_reverse_edited(
+        self, track_index: int, line_index: int, old_values: object, new_values: object
+    ) -> None:
+        """字幕轨道右键切换反向走字：入撤销栈 + 刷新预览 + 标脏。"""
+        if self._track_by_index(track_index) is None:
+            return
+        self._undo_stack.append(
+            ("wipe_reverse", track_index, (int(line_index),), (old_values,), (new_values,))
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_display_edit(track_index)
+        if track_index == self._active_source_index:
+            self._lyrics_panel.refresh_row_effect(int(line_index))
+
+    def _on_wipe_reverse_requested(self, rows: list, value: bool) -> None:
+        """歌词列表右键批量切换反向走字：应用、入撤销栈并立即刷新预览。"""
+        track_index = self._active_source_index
+        track = self._track_by_index(track_index)
+        if track is None:
+            return
+        valid_rows = sorted({int(row) for row in rows if 0 <= int(row) < len(track.lines)})
+        if not valid_rows:
+            return
+        old_values = tuple(
+            (line.wipe_reverse_override, bool(line.wipe_reverse))
+            for line in (track.lines[row] for row in valid_rows)
+        )
+        new_values = tuple((bool(value), bool(value)) for _row in valid_rows)
+        if old_values == new_values:
+            return
+        for row in valid_rows:
+            track.lines[row].wipe_reverse = bool(value)
+            track.lines[row].wipe_reverse_override = bool(value)
+        self._undo_stack.append(
+            ("wipe_reverse", track_index, tuple(valid_rows), old_values, new_values)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_display_edit(track_index)
+        for row in valid_rows:
+            self._lyrics_panel.refresh_row_effect(row)
+
     def _refresh_after_display_edit(self, track_index: int) -> None:
         # 覆盖值已直接写在 TimingLine 上；track 是原地修改的，
         # 预览（含异步渲染 worker）不会自己发现——重新喂一次。
@@ -4515,6 +4564,8 @@ class SubtitleRenderWindow(QWidget):
         elif track_index > 0:
             # 不走 _sync_extra_tracks_to_preview：它会重建轨道视图、丢掉选中态
             self._preview_panel.set_extra_tracks(self._extra_track_list())
+        # 反向走字等行级标记会进轨道块快照，原地重建（保留视口与选中态）
+        self._tracks_view.refresh_tracks()
         self._schedule_tracks_view_window_refresh()
         self._margin_check_timer.start()
         self._mark_project_dirty()
@@ -4549,6 +4600,27 @@ class SubtitleRenderWindow(QWidget):
             return False
         for row, value in zip(rows, values):
             track.lines[row].animation_override = value
+        self._refresh_after_display_edit(track_index)
+        if track_index == self._active_source_index:
+            for row in rows:
+                self._lyrics_panel.refresh_row_effect(row)
+        return True
+
+    def _restore_wipe_reverse_rows(
+        self, track_index: int, rows: object, values: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if track is None or not isinstance(rows, tuple) or not isinstance(values, tuple):
+            return False
+        if len(rows) != len(values) or any(not 0 <= row < len(track.lines) for row in rows):
+            return False
+        for row, value in zip(rows, values):
+            if not isinstance(value, tuple) or len(value) != 2:
+                return False
+            override, effective = value
+            line = track.lines[row]
+            line.wipe_reverse_override = override if isinstance(override, bool) else None
+            line.wipe_reverse = bool(effective)
         self._refresh_after_display_edit(track_index)
         if track_index == self._active_source_index:
             for row in rows:

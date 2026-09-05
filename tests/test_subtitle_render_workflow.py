@@ -1315,7 +1315,10 @@ def _bind_undo_host(track, extra_sources=()):
         "_redo_edit",
         "_restore_display_override",
         "_restore_animation_overrides",
+        "_restore_wipe_reverse_rows",
         "_on_line_animation_override_requested",
+        "_on_wipe_reverse_edited",
+        "_on_wipe_reverse_requested",
         "_track_by_index",
         "_clear_undo_history",
     ):
@@ -1412,6 +1415,66 @@ def test_line_animation_batch_edit_supports_undo_redo() -> None:
 
     host._redo_edit()
     assert [line.animation_override for line in track.lines] == [override, override]
+
+
+def test_timeline_wipe_reverse_edit_supports_undo_redo() -> None:
+    from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine, TimingTrack
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("あ", 1000)], end_ms=2000)]
+    )
+    host = _bind_undo_host(track)
+    line = track.lines[0]
+    # 源逆序检测自动判定为反向（无手动覆盖）后，用户右键取消：
+    # 视图先把新值写在 TimingLine 上，再向宿主上报旧值 → 新值
+    line.wipe_reverse = False
+    line.wipe_reverse_override = False
+
+    host._on_wipe_reverse_edited(0, 0, (None, True), (False, False))
+    assert line.wipe_reverse is False
+    assert line.wipe_reverse_override is False
+    assert len(host._undo_stack) == 1
+
+    host._undo_edit()
+    # 撤销回到「自动判定」态：覆盖为 None、生效值恢复 True
+    assert line.wipe_reverse is True
+    assert line.wipe_reverse_override is None
+    assert len(host._redo_stack) == 1
+
+    host._redo_edit()
+    assert line.wipe_reverse is False
+    assert line.wipe_reverse_override is False
+
+
+def test_wipe_reverse_batch_edit_supports_undo_redo() -> None:
+    from krok_helper.subtitle_render.domain.models import TimingChar, TimingLine, TimingTrack
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("あ", 1000)], end_ms=2000),
+            TimingLine(chars=[TimingChar("い", 3000)], end_ms=4000),
+            TimingLine(chars=[TimingChar("う", 5000)], end_ms=6000),
+        ]
+    )
+    host = _bind_undo_host(track)
+
+    host._on_wipe_reverse_requested([0, 2], True)
+    assert [line.wipe_reverse for line in track.lines] == [True, False, True]
+    assert [line.wipe_reverse_override for line in track.lines] == [
+        True,
+        None,
+        True,
+    ]
+
+    # 全部已是目标值时不产生可撤销编辑
+    host._on_wipe_reverse_requested([0], True)
+    assert len(host._undo_stack) == 1
+
+    host._undo_edit()
+    assert [line.wipe_reverse for line in track.lines] == [False, False, False]
+
+    host._redo_edit()
+    assert [line.wipe_reverse for line in track.lines] == [True, False, True]
 
 
 @pytest.mark.parametrize(

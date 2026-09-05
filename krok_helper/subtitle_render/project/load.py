@@ -79,6 +79,7 @@ def apply_track_project_data(
     )
     _apply_display_overrides(track, data.get("line_display_overrides"))
     _apply_animation_overrides(track, data.get("line_animation_overrides"))
+    _apply_wipe_reverse_overrides(track, data.get("line_wipe_reverse_overrides"))
     return AppliedTrackProjectState(
         char_role_labels_changed=roles_changed,
         guide_symbol_mismatches=tuple(guide_mismatches),
@@ -234,6 +235,16 @@ def _apply_display_overrides(track: TimingTrack, payload: object) -> None:
         line.display_end_override_ms = (
             int(end) if isinstance(end, (int, float)) else None
         )
+
+
+def _apply_wipe_reverse_overrides(track: TimingTrack, payload: object) -> None:
+    """回放手动反向走字覆盖；覆盖值同时改写渲染消费的有效标记。"""
+    if not isinstance(payload, list):
+        return
+    for line, value in zip(track.lines, payload):
+        if isinstance(value, bool):
+            line.wipe_reverse_override = value
+            line.wipe_reverse = value
 
 
 def _schema_version(value: object) -> int:

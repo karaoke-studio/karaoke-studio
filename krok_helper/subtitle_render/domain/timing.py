@@ -179,10 +179,15 @@ class TimingLine:
     wipe_reverse: bool = False
     """整行时间戳原本严格逆序；加载时已镜像理顺为顺序，仅走字反向。
 
-    由 :func:`normalize_reversed_wipe_lines` 在源入口写入，不持久化——
-    源文件（.sug / LRC / N3）保持原始逆序数据，每次加载重新理顺。
-    出入场 / 显示窗口 / 分页等一切时间计算按理顺后的普通行处理，
-    只有 wipe（横排从右往左、竖排从下往上）消费本标记。"""
+    由 :func:`normalize_reversed_wipe_lines` 在源入口写入——源文件
+    （.sug / LRC / N3）保持原始逆序数据，每次加载重新理顺；用户在项目
+    UI 右键写入的 :attr:`wipe_reverse_override` 会在项目加载与源重载入口
+    回放并改写本标记。出入场 / 显示窗口 / 分页等一切时间计算按理顺后的
+    普通行处理，只有 wipe（横排从右往左、竖排从下往上）消费本标记。"""
+    wipe_reverse_override: Optional[bool] = None
+    """手动反向走字覆盖：``None`` = 按源文件逆序检测自动判定，``True``/``False``
+    = 手动指定。由项目 UI（字幕轨道 / 歌词列表右键）写入，随 ``.yurika``
+    持久化并跨源重载保留；渲染消费的仍是 :attr:`wipe_reverse` 有效值。"""
 
 
 @dataclass(frozen=True)

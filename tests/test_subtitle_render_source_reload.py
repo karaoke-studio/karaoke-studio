@@ -70,6 +70,32 @@ def test_timestamp_only_reload_preserves_all_renderer_overlays() -> None:
     ]
 
 
+def test_reload_preserves_wipe_reverse_override_and_beats_auto_detection() -> None:
+    baseline = _track()
+    # 新源解析把该行判定为反向（load_candidate 已跑 normalize）
+    candidate = deepcopy(baseline)
+    candidate.lines[0].wipe_reverse = True
+    # 用户此前在项目 UI 手动取消了反向
+    current = deepcopy(baseline)
+    current.lines[0].wipe_reverse = False
+    current.lines[0].wipe_reverse_override = False
+
+    merged = merge_reloaded_track(current, baseline, candidate).track.lines[0]
+
+    assert merged.wipe_reverse is False
+    assert merged.wipe_reverse_override is False
+
+
+def test_wipe_reverse_override_counts_as_local_state() -> None:
+    from krok_helper.subtitle_render.sources.reload import _line_has_local_state
+
+    baseline = _track()
+    current = deepcopy(baseline)
+    assert _line_has_local_state(current.lines[0], baseline.lines[0]) is False
+    current.lines[0].wipe_reverse_override = True
+    assert _line_has_local_state(current.lines[0], baseline.lines[0]) is True
+
+
 def test_source_roles_update_except_for_sparse_user_overrides() -> None:
     baseline = _track(role="旧源角色")
     current = deepcopy(baseline)

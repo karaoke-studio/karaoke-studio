@@ -53,6 +53,7 @@ _PROJECT_OWNED_KEYS = frozenset(
         "guide_symbol_table",
         "line_display_overrides",
         "line_animation_overrides",
+        "line_wipe_reverse_overrides",
         "page_plan",
         "loading_settings_mode",
         "loading_settings",
@@ -319,6 +320,7 @@ def _track_project_data(track: Optional[TimingTrack]) -> dict:
             "line_inline_guide_symbols": None,
             "line_display_overrides": None,
             "line_animation_overrides": None,
+            "line_wipe_reverse_overrides": None,
             "page_plan": None,
             "loading_settings_mode": None,
             "loading_settings": None,
@@ -337,6 +339,7 @@ def _track_project_data(track: Optional[TimingTrack]) -> dict:
         "line_inline_guide_symbols": _inline_guide_symbol_rows(track, glyph_table),
         "line_display_overrides": _display_override_rows(track),
         "line_animation_overrides": _animation_override_rows(track),
+        "line_wipe_reverse_overrides": _wipe_reverse_override_rows(track),
         "page_plan": track_page_plan_to_dict(track.page_plan),
         "loading_settings_mode": track.loading_settings_mode,
         "loading_settings": (
@@ -435,6 +438,11 @@ def _animation_override_rows(track: TimingTrack) -> Optional[list]:
     rows = [
         line_animation_override_to_dict(line.animation_override) for line in track.lines
     ]
+    return rows if any(row is not None for row in rows) else None
+
+
+def _wipe_reverse_override_rows(track: TimingTrack) -> Optional[list]:
+    rows = [line.wipe_reverse_override for line in track.lines]
     return rows if any(row is not None for row in rows) else None
 
 
