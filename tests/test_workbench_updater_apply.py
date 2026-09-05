@@ -30,6 +30,9 @@ def _write_release_zip(path: Path) -> str:
         zf.writestr("Lin-K Lyrics/Lin-K Lyrics.exe", "new exe\n")
         zf.writestr("Lin-K Lyrics/Karaoke Studio.exe", "new exe\n")
         zf.writestr("Lin-K Lyrics/Updater.exe", "new updater\n")
+        # GPU sidecar 是必备根目录负载（_apply_workbench_update 前置校验），
+        # 缺失的包会被当损坏包拒绝（rc=6）。
+        zf.writestr("Lin-K Lyrics/krok_subtitle_renderer.exe", "new sidecar\n")
         zf.writestr("Lin-K Lyrics/_internal/version.txt", "3.0.1\n")
         zf.writestr("Lin-K Lyrics/_internal/runtime/new.txt", "new runtime\n")
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -154,6 +157,9 @@ def test_old_install_applies_renamed_full_zip_from_local_http(tmp_path, monkeypa
     internal_dir.mkdir(parents=True)
     (app_dir / "Karaoke Studio.exe").write_text("old exe\n", encoding="utf-8")
     (app_dir / "Updater.exe").write_text("old updater\n", encoding="utf-8")
+    # 旧安装里带一份旧版 sidecar：全量更新必须把它替换掉（2026-09 混合安装
+    # 事故的端到端回归——sidecar 未更新会让 GPU configure 全部回退 Painter）。
+    (app_dir / "krok_subtitle_renderer.exe").write_text("old sidecar\n", encoding="utf-8")
     (internal_dir / "version.txt").write_text("3.0.0\n", encoding="utf-8")
     (internal_dir / "runtime").mkdir()
     (internal_dir / "runtime" / "old.txt").write_text("old runtime\n", encoding="utf-8")
@@ -203,6 +209,9 @@ def test_old_install_applies_renamed_full_zip_from_local_http(tmp_path, monkeypa
     assert (app_dir / "Karaoke Studio.exe").read_text(encoding="utf-8") == "new exe\n"
     assert (app_dir / "Lin-K Lyrics.exe").read_text(encoding="utf-8") == "new exe\n"
     assert (app_dir / "Updater.exe").read_text(encoding="utf-8") == "new updater\n"
+    assert (app_dir / "krok_subtitle_renderer.exe").read_text(encoding="utf-8") == (
+        "new sidecar\n"
+    )
     assert (internal_dir / "version.txt").read_text(encoding="utf-8") == "3.0.1\n"
     assert (internal_dir / "runtime" / "new.txt").read_text(encoding="utf-8") == "new runtime\n"
     assert not (internal_dir / "runtime" / "old.txt").exists()
