@@ -20,7 +20,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
 from PyQt6.QtGui import QImage, QPainter
@@ -139,6 +139,55 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
 
 def _default_native_preview_threads() -> int:
     return min(max(os.cpu_count() or 4, 1), 6)
+
+
+_FALLBACK_CHANGED_COOLDOWN_S = 10.0
+
+
+class _FallbackReportGate:
+    """GPU/native 预览回退原因的上报闸：按原因去重 + 冷却 + 文件日志。
+
+    旧行为是渲染器整个生命周期只上报第一次回退，之后原因变化（sidecar 崩溃、
+    场景构建异常…）对用户完全不可见，事后也无日志可查。本闸的语义：
+
+    - 与上次已上报相同的原因：完全静默（能力回退会随每个非投机请求命中一次，
+      必须永久抑制避免风暴）。
+    - 新原因：无论是否在冷却期内，都先以 WARNING 落 ``lin-k-lyrics.log``，
+      保证事后可查；InfoBar 信号受冷却约束——冷却期内的新原因只落日志，
+      冷却结束后该原因再次命中才弹出，避免重试风暴刷屏。
+    """
+
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        *,
+        log_label: str,
+        cooldown_s: float | None = None,
+    ) -> None:
+        self._emit = emit
+        self._log_label = str(log_label)
+        self._cooldown_s = (
+            _FALLBACK_CHANGED_COOLDOWN_S if cooldown_s is None else max(float(cooldown_s), 0.0)
+        )
+        self._last_message: str | None = None
+        self._logged_messages: set[str] = set()
+        self._emitted_at = 0.0
+
+    def report(self, message: str) -> None:
+        text = str(message)
+        if text == self._last_message:
+            return
+        if text not in self._logged_messages:
+            self._logged_messages.add(text)
+            _log.warning("%s：%s", self._log_label, text)
+        if (
+            self._last_message is not None
+            and time.monotonic() - self._emitted_at < self._cooldown_s
+        ):
+            return
+        self._last_message = text
+        self._emitted_at = time.monotonic()
+        self._emit(text)
 
 
 def async_preview_enabled() -> bool:
@@ -536,7 +585,9 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._playing = False
         self._stopped = False
         self._renderer_failed = False
-        self._fallback_reported = False
+        self._fallback_gate = _FallbackReportGate(
+            self.fallback_occurred.emit, log_label="GPU 字幕预览回退"
+        )
         self._retry_after = 0.0
         self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
         self._native_preview = gpu_native_preview_enabled()
@@ -1189,10 +1240,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._note("stale_frames_dropped")
 
     def _report_fallback(self, message: str) -> None:
-        if self._fallback_reported:
-            return
-        self._fallback_reported = True
-        self.fallback_occurred.emit(str(message))
+        self._fallback_gate.report(message)
 
     def _ensure_renderer(self) -> NativeRendererProcess:
         return self._renderer_owner.ensure()
@@ -1373,6 +1421,7 @@ class NativeAsyncSubtitleRenderer(QObject):
 
     frame_ready = Signal(QImage, int)
     renderProgress = Signal(int, str)
+    fallback_occurred = Signal(str)
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -1399,6 +1448,9 @@ class NativeAsyncSubtitleRenderer(QObject):
         )
         self._shm_key = ""
         self._renderer_failed = False
+        self._fallback_gate = _FallbackReportGate(
+            self.fallback_occurred.emit, log_label="native 字幕预览回退"
+        )
         self._playing = False
         self._last_t: Optional[int] = None
         self._fps = 60
@@ -1577,13 +1629,19 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._stats.note_native_renderer_failure()
                 if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
                     print(f"native preview failed: {exc}")
+                self._report_fallback(
+                    f"native 字幕预览异常，当前帧已回退 Painter：{exc}"
+                )
                 self._renderer_failed = True
                 self._close_renderer()
                 self._emit_python_fallback(
                     track, style, width, height, dpr, t_ms, generation, duration_ms
                 )
-            except Exception:  # noqa: BLE001 - worker 线程必须自愈，不得静默死亡
+            except Exception as exc:  # noqa: BLE001 - worker 线程必须自愈，不得静默死亡
                 _log.exception("native 预览路径出现非预期异常（本帧回退 Painter）")
+                self._report_fallback(
+                    f"native 字幕预览出现非预期异常，当前帧已回退 Painter：{exc}"
+                )
                 self._renderer_failed = True
                 self._close_renderer()
                 self._emit_python_fallback(
@@ -1760,6 +1818,9 @@ class NativeAsyncSubtitleRenderer(QObject):
     def _close_renderer(self) -> None:
         with self._process_lock:
             self._renderer_owner.close()
+
+    def _report_fallback(self, message: str) -> None:
+        self._fallback_gate.report(message)
 
     def _emit_python_fallback(
         self,

@@ -5618,12 +5618,13 @@ class SubtitleRenderWindow(QWidget):
         self._preview_preference_controller.report_gpu_fallback(message)
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
+        # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
         InfoBar.warning(
             title="GPU 预览已回退",
             content=str(message),
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
-            duration=6000,
+            duration=10000,
         )
 
     def _on_scheme_selection_changed(self, key: str) -> None:

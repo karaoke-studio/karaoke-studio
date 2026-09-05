@@ -1194,6 +1194,112 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
         renderer.stop()
 
 
+def test_fallback_report_gate_surfaces_each_reason_once(qapp, caplog):
+    """回退上报闸：相同原因静默；新原因冷却期内落日志、冷却后弹出。"""
+    import logging
+
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+
+    emitted: list[str] = []
+    gate = pa._FallbackReportGate(emitted.append, log_label="GPU 字幕预览回退")
+
+    with caplog.at_level(logging.WARNING, logger=pa._log.name):
+        gate.report("原因 A")
+        gate.report("原因 A")
+        gate.report("原因 B")
+    assert emitted == ["原因 A"]
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "原因 A" in logged
+    assert "原因 B" in logged
+
+    # 冷却结束后，新原因再次命中才弹出；之后又归于静默。
+    gate._emitted_at -= gate._cooldown_s + 1.0
+    gate.report("原因 B")
+    gate.report("原因 B")
+    assert emitted == ["原因 A", "原因 B"]
+
+
+def test_gpu_async_renderer_surfaces_changed_fallback_reason(qapp, monkeypatch):
+    """原因变化的 GPU 预览回退必须再次上报，不能被第一次回退永远吞掉。"""
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+    from krok_helper.subtitle_render.domain.models import Style, TimingTrack
+
+    failures = iter(range(100))
+
+    class FlakyGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure_gpu(self, *args, **kwargs):
+            raise pa.NativeRendererError(f"injected failure #{next(failures)}")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FlakyGpuProcess)
+    monkeypatch.setattr(pa, "_FALLBACK_CHANGED_COOLDOWN_S", 0.0)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    fallbacks: list[str] = []
+    renderer.fallback_occurred.connect(fallbacks.append)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        # 失败后进入 1s 重试窗口；持续请求直到第二个不同原因被上报。
+        deadline = time.monotonic() + 5.0
+        while len(fallbacks) < 2 and time.monotonic() < deadline:
+            renderer.request(1_000)
+            qapp.processEvents()
+            time.sleep(0.05)
+
+        assert len(fallbacks) >= 2
+        assert "injected failure #0" in fallbacks[0]
+        assert any("injected failure #1" in message for message in fallbacks[1:])
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_failure_reports_fallback_reason(qapp, monkeypatch):
+    """native 预览路径失败必须给出原因（此前完全静默地退到 CPU 帧）。"""
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+    from krok_helper.subtitle_render.domain.models import Style, TimingTrack
+
+    class FailingNativeProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            raise pa.NativeRendererError("injected native failure")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FailingNativeProcess)
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    frames: list[int] = []
+    fallbacks: list[str] = []
+    renderer.frame_ready.connect(lambda _image, t_ms: frames.append(int(t_ms)))
+    renderer.fallback_occurred.connect(fallbacks.append)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        deadline = time.monotonic() + 2.0
+        while (not frames or not fallbacks) and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+
+        assert frames and frames[0] == 1_000
+        assert len(fallbacks) == 1
+        assert "injected native failure" in fallbacks[0]
+        assert "Painter" in fallbacks[0]
+    finally:
+        renderer.stop()
+
+
 def test_gpu_async_renderer_one_frame_lookahead_uses_bounded_cache(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend.preview import preview_async as pa
     from krok_helper.subtitle_render.domain.models import Style, TimingTrack
