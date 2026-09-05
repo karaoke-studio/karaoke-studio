@@ -522,9 +522,9 @@ Run <code>python -m pytest tests</code> before opening a PR. All user-facing str
 
 都在。首次启动新版时，应用会把 `%APPDATA%\Karaoke Studio\` 整个目录改名成 `%APPDATA%\Lin-K Lyrics\` —— 设置、未保存工程的恢复文件、备份历史、已下载的 AI 模型、登录 Cookie 全部跟着走，不需要重新下载或重新配置。
 
-安装目录里会同时出现 <code>Lin-K Lyrics.exe</code> 和改名前的 <code>Karaoke Studio.exe</code>，两个是同一个程序。保留旧名是为了让老版本的自动更新能正常完成 —— 执行更新的是旧版代码，它只认旧文件名。桌面快捷方式如果指向旧名，也照样能用。
+安装目录里会同时出现 <code>Lin-K Lyrics.exe</code> 和改名前的 <code>Karaoke Studio.exe</code>，两个是同一个程序。保留旧名是为了让老版本的自动更新能正常完成 —— 执行更新的是旧版代码，它只认旧文件名。更新到新版后，更新器会尽量把指向旧名的快捷方式自动改为指向新程序，并清理旧名副本；万一自动改写没有成功，旧快捷方式会失效，重新创建一次即可。
 
-Nothing is lost. On first launch the app renames the whole `%APPDATA%\Karaoke Studio\` directory to `%APPDATA%\Lin-K Lyrics\`, carrying settings, unsaved-project recovery files, backup history, downloaded AI models, and login cookies with it—nothing needs to be downloaded or configured again. The install folder ships both <code>Lin-K Lyrics.exe</code> and the old <code>Karaoke Studio.exe</code> (identical binaries) so that updates launched from older versions still complete and relaunch correctly. Existing desktop shortcuts that point to the old name continue to work.
+Nothing is lost. On first launch the app renames the whole `%APPDATA%\Karaoke Studio\` directory to `%APPDATA%\Lin-K Lyrics\`, carrying settings, unsaved-project recovery files, backup history, downloaded AI models, and login cookies with it—nothing needs to be downloaded or configured again. The install folder ships both `Lin-K Lyrics.exe` and the old `Karaoke Studio.exe` (identical binaries) so that updates launched from older versions still complete and relaunch correctly. When updating, the updater tries to retarget shortcuts that point to the old name to the new executable and then removes the old copy; if the automatic retouch fails, the old shortcut stops working and can simply be recreated.
 
 </details>
 

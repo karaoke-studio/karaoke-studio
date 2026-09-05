@@ -1088,8 +1088,9 @@ def _migrate_legacy_shortcuts(app_dir, log) -> bool:
     同文件名」兜底，容纳大小写/8.3 路径变体，不碰指向其他安装的快捷方式。
 
     返回 True 表示扫描已完成（无论改了几个）；False 表示迁移工具本身没跑起来
-    （PowerShell 缺失/被拒/超时）——调用方此时必须推迟清理，宁可让旧名副本
-    残留到下次更新重试，也不能留下指向已删除文件的死快捷方式。
+    （PowerShell 缺失/被拒/超时）。返回值只用于日志与测试观测——产品决策是
+    宁可留个别坏快捷方式也不留旧名副本，调用方**不据此阻断清理**，只会照常
+    删除旧名副本；此时指向旧名的快捷方式失效，用户重建一次即可。
     """
 
     if sys.platform != "win32":
@@ -1131,14 +1132,14 @@ def _cleanup_legacy_main_exe(app_dir, app_exe, log) -> None:
     """新版本成功拉起后迁移/移除旧名主程序副本（改名迁移收尾，见 docs/auto_update.md §8.1）。
 
     仅当本次更新按新名（``--app-exe Lin-K Lyrics.exe``，新版主程序固定传新名）执行时
-    清理；存量客户端传上来的仍是旧名，副本必须原样保留给它的下一次更新。两道安全闸：
+    清理；存量客户端传上来的仍是旧名，副本必须原样保留给它的下一次更新。安全闸只有
+    一道：新名入口必须已存在——旧名可能是该安装唯一可运行入口（如降级旧 Updater 的
+    全量更新只回写了旧名），没有新入口兜底时绝不删除。
 
-    - 新名入口必须已存在——旧名可能是该安装唯一可运行入口（如降级旧 Updater 全量
-      更新只回写了旧名的混合安装），没有新入口兜底时绝不删除；
-    - 旧名本体删除前先把指向它的快捷方式迁移到新名（:func:`_migrate_legacy_shortcuts`），
-      迁移工具没跑起来就本次整体不清理，下次更新重试。
-
-    删除本身纯 best-effort：失败（罕见：旧名镜像仍被另一实例占用）时降级 rename 成
+    删除旧名本体前先尽力把指向它的快捷方式迁移到新名
+    （:func:`_migrate_legacy_shortcuts`），迁移失败**不阻断清理**——产品决策：
+    宁可留个别坏快捷方式也不留旧名副本，坏快捷方式用户重建一次即可。删除本身
+    纯 best-effort：失败（罕见：旧名镜像仍被另一实例占用）时降级 rename 成
     ``.old`` 交给下次更新的同一清理回收，绝不让清理失败影响更新结果。
     """
 
@@ -1153,8 +1154,8 @@ def _cleanup_legacy_main_exe(app_dir, app_exe, log) -> None:
     victims.append(root / LEGACY_APP_EXE_NAME)
     if not any(_path_lexists(victim) for victim in victims):
         return
-    if _path_lexists(root / LEGACY_APP_EXE_NAME) and not _migrate_legacy_shortcuts(root, log):
-        return
+    if _path_lexists(root / LEGACY_APP_EXE_NAME):
+        _migrate_legacy_shortcuts(root, log)
     for victim in victims:
         if not _path_lexists(victim):
             continue

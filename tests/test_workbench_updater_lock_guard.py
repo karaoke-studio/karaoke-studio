@@ -941,16 +941,13 @@ def test_cleanup_keeps_legacy_when_new_entry_is_missing(
     assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"legacy-only"
 
 
-def test_cleanup_defers_when_shortcut_migration_fails(
+def test_cleanup_deletes_legacy_even_if_shortcut_migration_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """快捷方式迁移工具没跑起来时本次整体不清理，下次更新重试。
-
-    否则会留下指向已删除文件的死快捷方式——正是迁移要消除的破坏面。
-    """
+    """快捷方式迁移失败不阻断清理：宁可留个别坏快捷方式也不留旧名副本。"""
     app_dir = tmp_path / "app"
     _make_dual_name_install(app_dir)
-    _mock_shortcut_migration(monkeypatch, False)
+    migration_calls = _mock_shortcut_migration(monkeypatch, False)
 
     workbench_updater._cleanup_legacy_main_exe(
         app_dir,
@@ -958,8 +955,10 @@ def test_cleanup_defers_when_shortcut_migration_fails(
         logging.getLogger("sug.updater"),
     )
 
-    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"legacy"
-    assert (app_dir / "Karaoke Studio.exe.old").read_bytes() == b"legacy-backup"
+    assert migration_calls == [app_dir]
+    assert not (app_dir / "Karaoke Studio.exe").exists()
+    assert not (app_dir / "Karaoke Studio.exe.old").exists()
+    assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"primary"
 
 
 def test_incremental_success_defers_cleanup_to_relaunch(

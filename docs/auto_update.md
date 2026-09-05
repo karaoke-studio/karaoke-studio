@@ -194,7 +194,7 @@ runtime 内容哈希、迫使所有用户重下运行库。
 `scripts/build_parts.py` 在缺少兼容副本时会直接 `SystemExit`，`scripts/build_windows.bat`
 复制失败时会中止构建。
 
-#### 2026-09 迁移机制：新名会话 + 旧名副本清理
+#### 2026-09 迁移机制：新名会话 + 快捷方式迁移 + 旧名副本清理
 
 为了让安装逐步收敛到新名、为将来停发旧名副本做准备：
 
@@ -202,25 +202,36 @@ runtime 内容哈希、迫使所有用户重下运行库。
   `DEFAULT_APP_EXE_NAME`（`Lin-K Lyrics.exe`），与实际启动的文件名无关。
   改名后的发布包双名并存，本地与包内新名都必然存在，Updater 按新名校验/回写/
   重启总是可行。存量客户端传上来的仍是旧名，它的更新不受影响。
-- **Updater 清理旧名副本**：`updater_app/main.py::_cleanup_legacy_main_exe`
-  仅当 `--app-exe` 是新名时执行，挂在三个成功收尾点——全量 `_apply_workbench_update`
-  成功尾部（同时跳过旧名副本的回写）、增量 `_run_incremental_workbench` rc==0、
-  `_launch_main_app_workbench` 启动前（覆盖「已是最新」路径）。删除被持续拒绝
-  （旧名镜像仍被另一实例占用）时降级 rename 成 `.old` 交给下次更新回收，纯
-  best-effort，绝不让清理失败影响更新结果。
+- **清理只挂在成功拉起之后**：`_launch_main_app_workbench` 在新版本进程成功
+  `Popen` 后才调用 `_cleanup_legacy_main_exe`——这是全量/增量/「已是最新」三条
+  路径共用的唯一挂钩（全量 `_apply_workbench_update` 同时跳过旧名副本的回写，
+  增量尾部不做清理）。清理先于成功启动会让「启动失败 + 旧名已删」的安装失去
+  任何可用入口；统一后置则保证任何时刻安装里至少有一个能运行的 EXE。
+- **安全闸 + 尽力而为的缓解**：唯一硬性安全闸是新名入口必须已存在——旧名可能是
+  该安装唯一可运行入口（如降级旧 Updater 的全量更新只回写了旧名），没有新入口
+  兜底时绝不清理。删除旧名本体前会先尽力迁移快捷方式
+  （`_migrate_legacy_shortcuts`：PowerShell WScript.Shell 原地改写 .lnk 的
+  TargetPath，覆盖桌面/开始菜单/快速启动/任务栏固定），但迁移失败（PowerShell
+  缺失/被拒/超时）**不阻断清理**——产品决策：宁可留个别坏快捷方式也不留旧名
+  副本，坏快捷方式用户重建一次即可。
+- 删除被持续拒绝（旧名镜像仍被另一实例占用）时降级 rename 成 `.old` 交给
+  下次更新的同一清理回收，纯 best-effort，绝不让清理失败影响更新结果。
 - 迁移期 `APP_TARGETS` 与发布包**仍带旧名副本不动**：存量客户端的增量更新依赖
   manifest targets 里有它（否则 orphan cleanup 会在它的更新中途删掉它正在用的 EXE）。
 
-**已知代价**：旧名快捷方式用户更新后由新名 EXE 接管启动、旧名副本被清理，指向
-旧名的快捷方式/固定图标会失效，需要用户重新固定一次。
+**快捷方式兼容**：更新时会尽力把旧名快捷方式原地改指到新名 EXE（图标沿用目标
+程序），多数用户无需重建；迁移工具失败的少数情况下旧名快捷方式失效，重建一次
+即可（产品决策接受此代价，换取安装彻底收敛到新名）。残余盲区还有开始菜单磁贴
+等极少数非 .lnk 入口。
 
 #### 停发旧名副本的手工收尾（迁移观察期后执行）
 
 1. `scripts/build_windows.bat`：删除「Creating legacy-name EXE copy」步骤。
 2. `scripts/build_parts.py`：从 `APP_TARGETS` 与 `LEGACY_APP_EXE_NAME` 相关
    收集逻辑中移除旧名。
-3. `updater_app/main.py`：`_apply_workbench_update` 的双名包校验改为只要求新名；
-   `_cleanup_legacy_main_exe` 保留（回收存量安装里的旧名副本）。
+3. `updater_app/main.py`：`_apply_workbench_update` 的必备根目录 EXE 前置校验
+   改为不再要求旧名；`_cleanup_legacy_main_exe` / `_migrate_legacy_shortcuts`
+   保留（回收存量安装里的旧名副本并迁移快捷方式）。
 4. `tests/test_rename_release_invariants.py`：同步调整 `test_legacy_named_exe_ships_alongside_the_new_one`
    等护栏。
 5. 残余风险自担：观察期内没更新过的存量客户端（传旧名、包里没有旧名）将永久
