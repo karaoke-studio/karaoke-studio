@@ -117,7 +117,7 @@ git submodule status
 - [`krok_helper/updater_app/`](krok_helper/updater_app/)：独立 GUI `Updater.exe`（复用 SUG `updater_app` 的 PyQt6 界面与增量更新逻辑），主程序退出后由它显示进度、替换文件并重启，不弹控制台。需要 `build_updater.py` 单独打包。
 - **增量更新**：[`scripts/build_parts.py`](scripts/build_parts.py) 产出 `KaraokeStudio-windows.json`（manifest）+ `-app.zip` + `-runtime.zip`；Updater 按 manifest diff 只下变化的 part，失败自动回退全量 zip。依赖未变时 CI 复用上一版 runtime zip 原文件（`--require-runtime-reuse` 安全闸）。完整机制、配置与失败矩阵见 [`docs/auto_update.md`](docs/auto_update.md)；设计取舍见 [`docs/工作台更新器完善计划.md`](docs/工作台更新器完善计划.md)。
 - 资产命名是硬编码的：`KaraokeStudio-windows.zip` / `KaraokeStudio-macos.zip`（见 `worker.current_asset_name()`）。**manifest 名 `KaraokeStudio-windows.json` 由存量客户端从 zip 名派生，全都不可改** —— 应用 2026-08 已更名为 Lin-K Lyrics，但这套 `KaraokeStudio-*` 资产名刻意保持原样。
-- **主程序 EXE 双名并存**：包里主程序是 `Lin-K Lyrics.exe`，同时必须带一份同内容的`Karaoke Studio.exe`，并且它要在 `build_parts.APP_TARGETS` 里。执行更新的是旧版代码，它按旧文件名校验更新包并重启 —— 删掉副本会让存量用户全量路径彻底断更、增量路径「装上了却拉不起来」。原理与失败矩阵见 [docs/auto_update.md §8.1](docs/auto_update.md)，护栏见 `tests/test_rename_release_invariants.py`。
+- **主程序 EXE 双名并存**：包里主程序是 `Lin-K Lyrics.exe`，同时必须带一份同内容的`Karaoke Studio.exe`，并且它要在 `build_parts.APP_TARGETS` 里。执行更新的是旧版代码，它按旧文件名校验更新包并重启 —— 删掉副本会让存量用户全量路径彻底断更、增量路径「装上了却拉不起来」。原理与失败矩阵见 [docs/auto_update.md §8.1](docs/auto_update.md)，护栏见 `tests/test_rename_release_invariants.py`。**2026-09 迁移机制**（为将来停发旧名副本做准备，见 §8.1 末尾的收尾清单）：新版主程序 `installer.find_app_exe_name()` 固定返回新名（与启动文件名无关），Updater 在新名会话成功后由 `_cleanup_legacy_main_exe` 清理本地旧名副本；迁移期打包与 `APP_TARGETS` 保持双名不动。
 - **更新弹窗会直接展示 GitHub Release 的 body**，所以 release body 必须是中文。详见 §6。
 
 ---

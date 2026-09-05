@@ -538,6 +538,10 @@ def _remove_stale_backup(path, log, label: str) -> tuple[bool, str]:
 def _run_incremental_workbench(args, manifest, work_dir, log):
     """Keep full fallback enabled and discard stale incremental lock state."""
     rc = _original_run_incremental(args, manifest, work_dir, log)
+    if rc == 0:
+        # 迁移期 manifest targets 仍含旧名副本，orphan cleanup 不会删它；新名
+        # 更新成功后在这里补一刀（存量客户端按旧名更新时是 no-op）。
+        _cleanup_legacy_main_exe(args.app_dir, args.app_exe, log)
     if rc != 0:
         global _blocked_lock
         _blocked_lock = None
@@ -1027,6 +1031,47 @@ def _replace_root_payload_file(source: Path, app_dir: Path, log) -> tuple[bool, 
     return True, ""
 
 
+def _cleanup_legacy_main_exe(app_dir, app_exe, log) -> None:
+    """新名更新成功后移除旧名主程序副本（改名迁移收尾，详见 docs/auto_update.md §8.1）。
+
+    仅当本次更新按新名（``--app-exe Lin-K Lyrics.exe``，新版主程序固定传新名）执行时
+    清理；存量客户端传上来的仍是旧名，副本必须原样保留给它的下一次更新。纯
+    best-effort：删除失败（罕见：旧名镜像仍被另一实例占用）时降级 rename 成
+    ``.old`` 交给下次更新的同一清理回收，绝不让清理失败影响更新结果。
+    """
+
+    if app_exe != PRIMARY_APP_EXE_NAME:
+        return
+    root = Path(app_dir)
+    # 先清 .old 残留再动本体：本体的 rename 兜底目标是 .old，得先腾出位置。
+    victims = sorted(root.glob(LEGACY_APP_EXE_NAME + ".old*"), key=lambda p: p.name)
+    victims.append(root / LEGACY_APP_EXE_NAME)
+    for victim in victims:
+        if not _path_lexists(victim):
+            continue
+        last_exc: OSError | None = None
+        for _ in range(3):
+            try:
+                victim.unlink()
+                last_exc = None
+                break
+            except OSError as exc:
+                last_exc = exc
+                time.sleep(1.0)
+        if last_exc is None:
+            log.info("已清理旧名主程序副本: %s", victim.name)
+            continue
+        # Windows 不允许删除运行中的镜像、但允许 rename：挪成 .old 让下次更新的
+        # 同一清理路径回收（SUG _cleanup_old_files 因旧名本体已不存在不会动它）。
+        try:
+            os.rename(str(victim), str(victim) + ".old")
+            log.info("旧名主程序副本 %s 仍被占用，已暂存为 .old 待下次清理", victim.name)
+        except OSError:
+            log.warning(
+                "清理旧名主程序副本 %s 失败（不影响更新结果）: %s", victim.name, last_exc
+            )
+
+
 def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
     """Replace the package's full root payload, not only the ``--app-exe`` entry.
 
@@ -1112,6 +1157,10 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
         updater_main.UPDATER_EXE_NAME,
         updater_main.UPDATER_EX_NAME,
     }
+    # 新名更新不回写旧名副本——写完也会在收尾立刻清理；迁移期发布包仍带旧名，
+    # 上面的包校验不变。旧名更新（存量客户端）必须照旧回写，保住它的下一次更新。
+    if app_exe == PRIMARY_APP_EXE_NAME:
+        handled.add(LEGACY_APP_EXE_NAME)
     for entry in sorted(new_root.iterdir(), key=lambda item: item.name):
         if entry.is_dir() or entry.name in handled:
             continue
@@ -1123,11 +1172,15 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
         ok, error = _replace_root_payload_file(entry, app_dir, log)
         if not ok:
             return False, error
+    _cleanup_legacy_main_exe(app_dir, app_exe, log)
     return True, ""
 
 
 def _launch_main_app_workbench(app_dir, app_exe, log) -> bool:
     """Launch the updated frozen app as a fresh PyInstaller instance."""
+    # 覆盖「已是最新」等未经过 apply/incremental 的成功路径：新名会话结束前
+    # 确保旧名副本已清理（另外两条路径清过一次，这里幂等重试）。
+    _cleanup_legacy_main_exe(app_dir, app_exe, log)
     exe_path = app_dir / app_exe
     if not exe_path.exists():
         log.error("找不到主程序 EXE: %s", exe_path)

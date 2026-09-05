@@ -23,11 +23,10 @@ UPDATE_DESCENDANTS_ENV = "KROK_UPDATE_DESCENDANTS"
 UPDATE_SOURCE_VERSION_ENV = "KROK_UPDATE_SOURCE_VERSION"
 UPDATE_BOOTSTRAP_RESULT_ENV = "KROK_UPDATE_BOOTSTRAP_RESULT"
 TMP_DIR_NAME = "KaraokeStudioUpdater"
-#: 非冻结运行时的兜底 EXE 名。冻结运行时 :func:`find_app_exe_name` 取的是用户
-#: 实际启动的那个文件名 —— 包里同时有 ``Lin-K Lyrics.exe`` 与改名前的
-#: ``Karaoke Studio.exe`` 兼容副本，两者都能自洽走完更新流程。
+#: 主程序 EXE 的正式名。更新一律按它校验/回写/重启（见 :func:`find_app_exe_name`）。
 DEFAULT_APP_EXE_NAME = "Lin-K Lyrics.exe"
-#: 改名前的主程序名。存量客户端会把它当 ``--app-exe`` 传进来，发布包必须一直带着它。
+#: 改名前的主程序名。存量客户端会把它当 ``--app-exe`` 传进来，发布包必须一直带着它，
+#: 直到手动关闭双名打包（见 docs/auto_update.md §8.1 的迁移与收尾清单）。
 LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
 LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 
@@ -87,8 +86,13 @@ def find_app_dir() -> Path:
 
 
 def find_app_exe_name() -> str:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).name
+    """Updater 校验与重启一律使用新名，与实际启动的文件名无关。
+
+    存量快捷方式仍会以旧名 ``Karaoke Studio.exe`` 启动主程序，但改名后的发布包
+    双名并存，本地与更新包里新名都必然存在；统一传新名可以让 Updater 按新名走完
+    校验/回写/重启，并在更新成功后清理旧名副本（见 docs/auto_update.md §8.1），
+    让安装逐步收敛到新名，为将来停发旧名副本做准备。
+    """
     return DEFAULT_APP_EXE_NAME
 
 

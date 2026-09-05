@@ -75,6 +75,39 @@ def test_full_update_payload_names_match_installer() -> None:
     assert PRIMARY_APP_EXE_NAME == DEFAULT_APP_EXE_NAME
 
 
+def test_updater_sessions_always_use_the_canonical_exe_name(
+    tmp_path, monkeypatch
+) -> None:
+    """新版主程序无论以哪个文件名启动，更新会话都按新名走（2026-09 迁移机制）。
+
+    旧名快捷方式启动的用户也会传 ``Lin-K Lyrics.exe`` 给 Updater：按新名校验/
+    回写/重启，并触发旧名副本清理（docs/auto_update.md §8.1）。回到「传实际
+    启动名」的旧逻辑会让旧名安装永远收敛不到新名，停发旧名副本时全部断更。
+    """
+    import sys
+
+    from krok_helper.updater import installer
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        sys, "executable", str(tmp_path / LEGACY_APP_EXE_NAME), raising=False
+    )
+    assert installer.find_app_exe_name() == DEFAULT_APP_EXE_NAME
+
+
+def test_updater_app_names_migration_constants_match_installer() -> None:
+    """清理旧名副本用的双名常量必须与 installer 口径一致，改一处漏一处会误删/漏删。"""
+
+    from krok_helper.updater.installer import LEGACY_APP_EXE_NAME
+    from krok_helper.updater_app.main import (
+        LEGACY_APP_EXE_NAME as UPDATER_APP_LEGACY,
+        PRIMARY_APP_EXE_NAME,
+    )
+
+    assert UPDATER_APP_LEGACY == LEGACY_APP_EXE_NAME
+    assert PRIMARY_APP_EXE_NAME == DEFAULT_APP_EXE_NAME
+
+
 def test_updater_temp_dir_name_is_consistent_across_copies() -> None:
     """同一个临时目录名散在三处，改一处漏两处会让更新交接直接错位。"""
 

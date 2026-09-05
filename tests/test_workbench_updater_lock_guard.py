@@ -563,9 +563,9 @@ def test_full_update_removes_stale_backups_before_generic_apply(
     )
 
     assert ok is True and err == ""
-    # 双主程序名都会被回写：启动名与兼容副本不允许分家。
     assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new"
-    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new"
+    # 新名更新不再回写旧名副本，而是清理它（改名迁移，详见 §8.1）。
+    assert not (app_dir / "Karaoke Studio.exe").exists()
 
 
 def test_full_update_uses_neutral_rename_error_wording(
@@ -725,6 +725,10 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
     2026-09 事故：全量路径只回写 --app-exe 指定的主程序 + _internal，包内
     ``krok_subtitle_renderer.exe`` 与另一份主程序名被跳过，用户得到「新 Python
     代码 + 旧 schema sidecar」的混合安装，GPU 全量回退 Painter。
+
+    2026-09 改名迁移后按启动名分家：存量客户端按旧名更新时双名都回写（它的
+    下一次更新仍按旧名校验包）；新版主程序固定传新名，更新成功后不再回写
+    旧名副本、而是清理它（见 docs/auto_update.md §8.1）。
     """
     for launched_name in ("Lin-K Lyrics.exe", "Karaoke Studio.exe"):
         app_dir = tmp_path / f"app-{launched_name}"
@@ -759,8 +763,13 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
         assert ok is True and err == ""
         assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"new-sidecar"
         assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new-primary"
-        assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new-legacy"
         assert not (app_dir / "krok_subtitle_renderer.exe.old").exists()
+        if launched_name == workbench_updater.PRIMARY_APP_EXE_NAME:
+            # 新名更新：旧名副本不回写，安装目录里的存量副本被清理。
+            assert not (app_dir / "Karaoke Studio.exe").exists()
+        else:
+            # 旧名更新（存量客户端）：双主程序名都回写，不许分家。
+            assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new-legacy"
 
 
 def test_full_update_rejects_package_missing_dual_named_exe(
@@ -834,3 +843,109 @@ def test_full_update_sidecar_copy_blocked_reports_failure(
     # rename 已回滚：旧 sidecar 原位保留，不留 .old
     assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"old-sidecar"
     assert not (app_dir / "krok_subtitle_renderer.exe.old").exists()
+
+
+# ───────────────── 旧名主程序副本的迁移清理 ─────────────────
+
+
+def _make_dual_name_install(app_dir: Path) -> None:
+    (app_dir / "_internal").mkdir(parents=True, exist_ok=True)
+    (app_dir / "Lin-K Lyrics.exe").write_bytes(b"primary")
+    (app_dir / "Karaoke Studio.exe").write_bytes(b"legacy")
+    (app_dir / "Karaoke Studio.exe.old").write_bytes(b"legacy-backup")
+
+
+def test_cleanup_legacy_exe_runs_only_for_new_name_sessions(
+    tmp_path: Path,
+) -> None:
+    """新名会话清理旧名副本（含 .old 残留）；旧名会话（存量客户端）绝不动它。"""
+    new_name_dir = tmp_path / "new-session"
+    legacy_name_dir = tmp_path / "legacy-session"
+    for app_dir in (new_name_dir, legacy_name_dir):
+        _make_dual_name_install(app_dir)
+    log = logging.getLogger("sug.updater")
+
+    workbench_updater._cleanup_legacy_main_exe(
+        new_name_dir, workbench_updater.PRIMARY_APP_EXE_NAME, log
+    )
+    assert not (new_name_dir / "Karaoke Studio.exe").exists()
+    assert not (new_name_dir / "Karaoke Studio.exe.old").exists()
+    assert (new_name_dir / "Lin-K Lyrics.exe").read_bytes() == b"primary"
+
+    workbench_updater._cleanup_legacy_main_exe(
+        legacy_name_dir, workbench_updater.LEGACY_APP_EXE_NAME, log
+    )
+    assert (legacy_name_dir / "Karaoke Studio.exe").read_bytes() == b"legacy"
+    assert (legacy_name_dir / "Karaoke Studio.exe.old").read_bytes() == b"legacy-backup"
+
+
+def test_incremental_success_cleans_legacy_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """增量路径 rc==0 后补清理：迁移期 manifest targets 仍含旧名，orphan cleanup 不删它。"""
+    from types import SimpleNamespace
+
+    app_dir = tmp_path / "app"
+    _make_dual_name_install(app_dir)
+    monkeypatch.setattr(workbench_updater, "_original_run_incremental", lambda *args: 0)
+    args = SimpleNamespace(
+        app_dir=app_dir, app_exe=workbench_updater.PRIMARY_APP_EXE_NAME
+    )
+
+    rc = workbench_updater._run_incremental_workbench(
+        args, {}, tmp_path, logging.getLogger("sug.updater")
+    )
+
+    assert rc == 0
+    assert not (app_dir / "Karaoke Studio.exe").exists()
+    assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"primary"
+
+
+def test_launch_hook_cleans_legacy_exe_before_relaunch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """「已是最新」等未走 apply 的成功路径由启动前挂钩兜底清理。"""
+    app_dir = tmp_path
+    _make_dual_name_install(app_dir)
+    monkeypatch.setattr(
+        workbench_updater.subprocess, "Popen", lambda *args, **kwargs: object()
+    )
+
+    assert workbench_updater._launch_main_app_workbench(
+        app_dir,
+        workbench_updater.PRIMARY_APP_EXE_NAME,
+        logging.getLogger("sug.updater"),
+    )
+    assert not (app_dir / "Karaoke Studio.exe").exists()
+    assert not (app_dir / "Karaoke Studio.exe.old").exists()
+
+
+def test_cleanup_falls_back_to_rename_when_delete_is_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """删除被持续拒绝（如旧名镜像仍被占用）时 rename 成 .old 交给下次清理，不影响更新。"""
+    app_dir = tmp_path / "app"
+    _make_dual_name_install(app_dir)
+    monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
+    real_unlink = Path.unlink
+
+    def refusing_unlink(self, missing_ok=False):
+        if self.name == "Karaoke Studio.exe":
+            raise PermissionError(5, "拒绝访问。", str(self), 5, str(self))
+        return real_unlink(self, missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refusing_unlink)
+
+    with caplog.at_level(logging.INFO, logger="sug.updater"):
+        workbench_updater._cleanup_legacy_main_exe(
+            app_dir,
+            workbench_updater.PRIMARY_APP_EXE_NAME,
+            logging.getLogger("sug.updater"),
+        )
+
+    # 本体被挪成 .old（原 .old 已先行删除），内容不丢，等下次更新回收。
+    assert not (app_dir / "Karaoke Studio.exe").exists()
+    assert (app_dir / "Karaoke Studio.exe.old").read_bytes() == b"legacy"
+    assert any("已暂存为 .old" in message for message in caplog.messages)

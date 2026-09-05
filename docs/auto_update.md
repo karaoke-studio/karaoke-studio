@@ -154,6 +154,8 @@ runtime 内容哈希、迫使所有用户重下运行库。
   但资产名刻意保持原样：旧 worker 硬编码全量 zip 名，并从 zip 名派生 manifest 名。
 - **`Karaoke Studio.exe` 必须一直随包分发**（改名后它是 `Lin-K Lyrics.exe` 的同内容副本），
   且必须列在 `build_parts.APP_TARGETS` 里。更新器名 `Updater.exe` 同样不可改。
+  （2026-09 起新版主程序固定传新名、Updater 在新名会话成功后清理本地旧名副本，
+  安装正逐步收敛到新名；停发包内旧名副本的手工收尾清单见 §8.1 末尾。）
 - **全量回退路径必须回写包内全部根目录 EXE**（双主程序名 + `krok_subtitle_renderer.exe`
   GPU sidecar），不只回写 `--app-exe` 指定的那一个。2026-09 事故：SUG 原版
   `apply_update` 只回写 `--app-exe` + `_internal`，sidecar 与另一份主程序名被静默
@@ -166,12 +168,13 @@ runtime 内容哈希、迫使所有用户重下运行库。
 - KS 的四段 `_version_key` 比较语义；`3.1.7.4` 必须大于 `3.1.7`。
 - 已发布 tag 不得 force-push。
 
-### 8.1 为什么旧名 EXE 不能删
+### 8.1 为什么旧名 EXE 不能删（以及 2026-09 起的迁移机制）
 
 执行更新的是**用户机器上的旧版代码**，新版怎么写都救不了它：
 
-1. `updater/installer.py::find_app_exe_name()` 返回 `Path(sys.executable).name` ——
-   也就是用户当前装着的那个文件名 —— 并作为 `--app-exe` 传给 Updater。
+1. 旧版客户端的 `updater/installer.py::find_app_exe_name()` 返回
+   `Path(sys.executable).name` —— 也就是用户当前装着的那个文件名 —— 并作为
+   `--app-exe` 传给 Updater。
 2. `updater_app/main.py::apply_update()` 第一句就是
    `if not (new_root / app_exe).exists(): return False`。
 3. 同文件的 `launch_main_app()` 更新后按同一个名字重启。
@@ -189,6 +192,38 @@ runtime 内容哈希、迫使所有用户重下运行库。
 护栏见 [`tests/test_rename_release_invariants.py`](../tests/test_rename_release_invariants.py)；
 `scripts/build_parts.py` 在缺少兼容副本时会直接 `SystemExit`，`scripts/build_windows.bat`
 复制失败时会中止构建。
+
+#### 2026-09 迁移机制：新名会话 + 旧名副本清理
+
+为了让安装逐步收敛到新名、为将来停发旧名副本做准备：
+
+- **主程序固定传新名**：`installer.find_app_exe_name()` 一律返回
+  `DEFAULT_APP_EXE_NAME`（`Lin-K Lyrics.exe`），与实际启动的文件名无关。
+  改名后的发布包双名并存，本地与包内新名都必然存在，Updater 按新名校验/回写/
+  重启总是可行。存量客户端传上来的仍是旧名，它的更新不受影响。
+- **Updater 清理旧名副本**：`updater_app/main.py::_cleanup_legacy_main_exe`
+  仅当 `--app-exe` 是新名时执行，挂在三个成功收尾点——全量 `_apply_workbench_update`
+  成功尾部（同时跳过旧名副本的回写）、增量 `_run_incremental_workbench` rc==0、
+  `_launch_main_app_workbench` 启动前（覆盖「已是最新」路径）。删除被持续拒绝
+  （旧名镜像仍被另一实例占用）时降级 rename 成 `.old` 交给下次更新回收，纯
+  best-effort，绝不让清理失败影响更新结果。
+- 迁移期 `APP_TARGETS` 与发布包**仍带旧名副本不动**：存量客户端的增量更新依赖
+  manifest targets 里有它（否则 orphan cleanup 会在它的更新中途删掉它正在用的 EXE）。
+
+**已知代价**：旧名快捷方式用户更新后由新名 EXE 接管启动、旧名副本被清理，指向
+旧名的快捷方式/固定图标会失效，需要用户重新固定一次。
+
+#### 停发旧名副本的手工收尾（迁移观察期后执行）
+
+1. `scripts/build_windows.bat`：删除「Creating legacy-name EXE copy」步骤。
+2. `scripts/build_parts.py`：从 `APP_TARGETS` 与 `LEGACY_APP_EXE_NAME` 相关
+   收集逻辑中移除旧名。
+3. `updater_app/main.py`：`_apply_workbench_update` 的双名包校验改为只要求新名；
+   `_cleanup_legacy_main_exe` 保留（回收存量安装里的旧名副本）。
+4. `tests/test_rename_release_invariants.py`：同步调整 `test_legacy_named_exe_ships_alongside_the_new_one`
+   等护栏。
+5. 残余风险自担：观察期内没更新过的存量客户端（传旧名、包里没有旧名）将永久
+   无法自动更新，只能手动重下全量包。
 
 ## 9. 发布 checklist
 
