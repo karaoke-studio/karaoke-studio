@@ -106,6 +106,7 @@ class LoadedAppRuntimePreferences:
     auto_chorus_begin_chars: str
     auto_chorus_end_chars: str
     auto_chorus_overwrite: bool
+    guide_replacement: dict
     selected_scheme_key: str
     preview_splitter_ratio: float
     auto_save_enabled: bool
@@ -126,6 +127,7 @@ class LoadedAppPreferences:
     auto_chorus_begin_chars: str
     auto_chorus_end_chars: str
     auto_chorus_overwrite: bool
+    guide_replacement: dict
     style_presets: dict[str, StylePreset]
     screen: ScreenSettings
     selected_scheme_key: str
@@ -177,6 +179,8 @@ class AppPreferenceSaveInput:
     auto_save_interval_minutes: int
     project_backup_count: int
     output: Optional[AppOutputPreferenceValues] = None
+    guide_replacement: Optional[dict] = None
+    """「批量识别导唱标记」对话框的上次设置；``None``/空保持磁盘现状。"""
     style_presets_baseline: Optional[dict] = None
     """本实例上次见到的磁盘预设库；给出后只提交自己的增量，见
     :func:`merge_style_preset_library`。``None`` 保持整份覆盖的旧行为。"""
@@ -231,6 +235,7 @@ def load_app_runtime_preferences(
             str(auto_chorus.get("end_chars") or "") or chorus_end_default
         ),
         auto_chorus_overwrite=bool(auto_chorus.get("overwrite")),
+        guide_replacement=_guide_replacement_memory(data.get("guide_replacement")),
         selected_scheme_key=selected_scheme_key,
         preview_splitter_ratio=preview_splitter_ratio,
         auto_save_enabled=bool(auto_save.get("enabled", True)),
@@ -257,6 +262,43 @@ def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> 
     return max(minimum, min(maximum, parsed))
 
 
+_GUIDE_REPLACEMENT_TEXT_FIELDS = ("before_path", "after_path", "marker")
+_GUIDE_REPLACEMENT_MARGIN_FIELDS = (
+    "margin_left_px",
+    "margin_right_px",
+    "margin_bottom_px",
+)
+
+
+def _guide_replacement_memory(value: object) -> dict:
+    """Normalize the remembered「批量识别导唱标记」dialog state.
+
+    字段名与 :class:`~krok_helper.subtitle_render.frontend.dialogs.\
+guide_replacement.GuidePrefixReplaceDialog` 的 ``batch_settings()`` 一致；
+    坏值逐项回落默认，整个段缺失或非法时返回空 dict（等于没有记忆）。
+    """
+
+    if not isinstance(value, dict) or not value:
+        return {}
+    memory: dict[str, object] = {
+        name: str(value.get(name) or "").strip()
+        for name in _GUIDE_REPLACEMENT_TEXT_FIELDS
+    }
+    memory["non_prefix"] = bool(value.get("non_prefix"))
+    memory["no_decor"] = bool(value.get("no_decor"))
+    # Zoom / Fix 与 GuideBitmapOptionsRow 的字面量一致；这里不 import 前端模块。
+    memory["zoom_mode"] = "Fix" if value.get("zoom_mode") == "Fix" else "Zoom"
+    memory["zoom_value"] = _bounded_int(
+        value.get("zoom_value"), default=100, minimum=1, maximum=1000
+    )
+    for name in _GUIDE_REPLACEMENT_MARGIN_FIELDS:
+        try:
+            memory[name] = int(value.get(name))
+        except (TypeError, ValueError):
+            memory[name] = 0
+    return memory
+
+
 def update_app_runtime_preferences(
     existing: dict,
     *,
@@ -269,6 +311,7 @@ def update_app_runtime_preferences(
     auto_save_enabled: bool,
     auto_save_interval_minutes: int,
     project_backup_count: int,
+    guide_replacement: Optional[dict] = None,
 ) -> dict:
     """Project current runtime preferences onto a preserved settings payload."""
 
@@ -305,6 +348,12 @@ def update_app_runtime_preferences(
         },
         key="backup",
     )
+    if guide_replacement:
+        data["guide_replacement"] = merge_app_setting_field(
+            data.get("guide_replacement"),
+            guide_replacement,
+            key="guide_replacement",
+        )
     return data
 
 
@@ -584,6 +633,7 @@ def prepare_app_preferences(
         auto_save_enabled=values.auto_save_enabled,
         auto_save_interval_minutes=values.auto_save_interval_minutes,
         project_backup_count=values.project_backup_count,
+        guide_replacement=values.guide_replacement,
     )
     if values.output is not None:
         output = values.output
@@ -825,6 +875,7 @@ def load_app_preferences(
         auto_chorus_begin_chars=runtime.auto_chorus_begin_chars,
         auto_chorus_end_chars=runtime.auto_chorus_end_chars,
         auto_chorus_overwrite=runtime.auto_chorus_overwrite,
+        guide_replacement=deepcopy(runtime.guide_replacement),
         style_presets=style_presets,
         screen=screen,
         selected_scheme_key=runtime.selected_scheme_key,

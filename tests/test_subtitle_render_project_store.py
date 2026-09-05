@@ -553,6 +553,7 @@ def test_load_app_preferences_owns_the_complete_load_projection():
             },
             "screen": {"width": 1280, "height": 720, "fps": 120},
             "output": {"codec": "hevc"},
+            "guide_replacement": {"marker": "「", "zoom_value": 130},
             "selected_scheme_key": "custom:标题",
             "preview_splitter_ratio": 0.55,
         },
@@ -562,6 +563,8 @@ def test_load_app_preferences_owns_the_complete_load_projection():
 
     assert loaded.subtitle_loading_defaults.rows_per_page == 3
     assert loaded.output == {"codec": "hevc"}
+    assert loaded.guide_replacement["marker"] == "「"
+    assert loaded.guide_replacement["zoom_value"] == 130
     assert loaded.app_default_style.line_lead_in_ms == 2345
     assert loaded.project_style.line_lead_in_ms == 2345
     assert [preset.name for preset in loaded.style_presets.values()] == ["旧预设"]
@@ -584,6 +587,18 @@ def test_app_runtime_preferences_normalize_persisted_values():
                 "end_chars": "]}",
                 "overwrite": 1,
             },
+            "guide_replacement": {
+                "before_path": " D:/lead.svg ",
+                "after_path": "",
+                "marker": "「",
+                "non_prefix": 1,
+                "zoom_mode": "Fix",
+                "zoom_value": "250",
+                "no_decor": 1,
+                "margin_left_px": "3",
+                "margin_right_px": -170,
+                "margin_bottom_px": None,
+            },
             "selected_scheme_key": "custom:标题",
             "preview_splitter_ratio": 2.0,
             "auto_save": {"enabled": 0, "interval_minutes": "99"},
@@ -598,6 +613,18 @@ def test_app_runtime_preferences_normalize_persisted_values():
     assert loaded.auto_chorus_begin_chars == "[{"
     assert loaded.auto_chorus_end_chars == "]}"
     assert loaded.auto_chorus_overwrite is True
+    assert loaded.guide_replacement == {
+        "before_path": "D:/lead.svg",
+        "after_path": "",
+        "marker": "「",
+        "non_prefix": True,
+        "no_decor": True,
+        "zoom_mode": "Fix",
+        "zoom_value": 250,
+        "margin_left_px": 3,
+        "margin_right_px": -170,
+        "margin_bottom_px": 0,
+    }
     assert loaded.selected_scheme_key == "custom:标题"
     assert loaded.preview_splitter_ratio == 0.85
     assert loaded.auto_save_enabled is False
@@ -610,6 +637,7 @@ def test_app_runtime_preferences_fall_back_for_malformed_sections():
         {
             "output": [],
             "auto_chorus": None,
+            "guide_replacement": "bad",
             "selected_scheme_key": "",
             "preview_splitter_ratio": False,
             "auto_save": "bad",
@@ -622,6 +650,7 @@ def test_app_runtime_preferences_fall_back_for_malformed_sections():
     assert loaded.output == {}
     assert loaded.auto_chorus_begin_chars == "[{"
     assert loaded.auto_chorus_end_chars == "]}"
+    assert loaded.guide_replacement == {}
     assert loaded.selected_scheme_key == "global"
     assert loaded.preview_splitter_ratio == 0.15
     assert loaded.auto_save_enabled is True
@@ -635,6 +664,7 @@ def test_app_runtime_preferences_update_preserves_future_fields():
         "auto_chorus": {"future_chorus": 2},
         "auto_save": {"future_auto_save": 3},
         "backup": {"future_backup": 4},
+        "guide_replacement": {"future_guide": 5},
     }
 
     updated = update_app_runtime_preferences(
@@ -648,6 +678,7 @@ def test_app_runtime_preferences_update_preserves_future_fields():
         auto_save_enabled=False,
         auto_save_interval_minutes=7,
         project_backup_count=9,
+        guide_replacement={"marker": "「"},
     )
 
     assert updated["future_root"] == 1
@@ -657,6 +688,10 @@ def test_app_runtime_preferences_update_preserves_future_fields():
         "begin_chars": "[{",
         "end_chars": "]}",
         "overwrite": True,
+    }
+    assert updated["guide_replacement"] == {
+        "future_guide": 5,
+        "marker": "「",
     }
     assert updated["selected_scheme_key"] == "global"
     assert updated["preview_splitter_ratio"] == 0.5555
@@ -675,6 +710,7 @@ def test_app_runtime_preferences_update_preserves_future_fields():
         "auto_chorus": {"future_chorus": 2},
         "auto_save": {"future_auto_save": 3},
         "backup": {"future_backup": 4},
+        "guide_replacement": {"future_guide": 5},
     }
 
 
@@ -747,6 +783,7 @@ def test_prepare_app_preferences_owns_the_complete_save_projection():
             auto_save_enabled=True,
             auto_save_interval_minutes=5,
             project_backup_count=5,
+            guide_replacement={"marker": "「", "future_key": 6},
             output=AppOutputPreferenceValues(
                 gpu_preview_enabled=True,
                 gpu_preview_default_version=2,
@@ -778,6 +815,8 @@ def test_prepare_app_preferences_owns_the_complete_save_projection():
     assert prepared.data["output"]["future_output"] == 3
     assert prepared.data["output"]["encoder_mode"] == "nvenc"
     assert prepared.data["output"]["render_workers"] == 8
+    assert prepared.data["guide_replacement"]["marker"] == "「"
+    assert prepared.data["guide_replacement"]["future_key"] == 6
     assert existing == {
         "future_root": {"keep": True},
         "style": {"future_style": 1},

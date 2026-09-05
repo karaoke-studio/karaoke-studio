@@ -328,11 +328,13 @@ def choose_guide_role_scheme(
 
 
 _BITMAP_SETTINGS_MEMORY: dict[str, object] = {}
-"""会话内记忆的上次图片导唱符设置（走字前/后图片 + @Emoji 式选项）。
+"""上次的导唱符对话框设置（走字前/后图片 + @Emoji 式选项 + 检测条件）。
 
-与 SUG「分色标签设置助手」的记忆首行参数等价，但只在当前进程内生效、
-不落盘。键与 :meth:`GuideBitmapOptionsRow.options` 一致，另含
-``before_path`` / ``after_path`` 两个字符串。
+与 SUG「分色标签设置助手」的记忆首行参数等价。窗口加载时由应用偏好
+（``settings.json`` 的 ``guide_replacement`` 段）播种，因此跨重启也生效；
+键与 :meth:`GuideBitmapOptionsRow.options` 一致，另含 ``before_path`` /
+``after_path`` / ``marker`` / ``non_prefix``。图片导唱符设置对话框只消费
+其中图片与选项键，批量识别对话框消费全部。
 """
 
 
@@ -606,9 +608,10 @@ def guide_symbol_from_bitmap_dialog(
     """把已确认的图片导唱符设置变成 :class:`GuideSymbol`，失败弹错并返回 None。
 
     走字前是 SVG 时保持原有矢量替换；否则按位图导入并带上缩放 / 文字装饰 /
-    余白选项。成功路径上先把这次设置记入会话记忆，供下次打开预填。
+    余白选项。成功路径上先把这次设置记入记忆（覆盖图片与选项键，保留批量
+    对话框的 ``marker`` / ``non_prefix``），供下次打开预填。
     """
-    remember_bitmap_settings(dialog.settings())
+    remember_bitmap_settings({**last_bitmap_settings(), **dialog.settings()})
     before = dialog.before_path()
     after = dialog.after_path()
     try:
@@ -645,6 +648,7 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         super().__init__(parent.window() if parent is not None else None)
         self._track = track
         self._start_dir = start_dir
+        self._remembered = last_bitmap_settings()
         self._role_options = list(role_options or ())
         self._role_options_provider = role_options_provider
         self._matches: list[GuidePrefixMatch] = []
@@ -689,7 +693,7 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         layout.addLayout(after_row)
 
         self.options_row = GuideBitmapOptionsRow(
-            self, defaults=last_bitmap_settings()
+            self, defaults=self._remembered
         )
         layout.addWidget(self.options_row)
 
@@ -778,6 +782,11 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         self.select_all_button.clicked.connect(lambda: self._set_all_checked(True))
         self.select_none_button.clicked.connect(lambda: self._set_all_checked(False))
         self.batch_role_button.clicked.connect(self._request_role_scheme)
+        # 上次确认过的整套设置按记忆预填；标记字符交给 _load_candidate_options，
+        # 它要在候选下拉建好之后决定是命中候选还是直接手输回填。
+        self.before_edit.setText(str(self._remembered.get("before_path") or ""))
+        self.after_edit.setText(str(self._remembered.get("after_path") or ""))
+        self.non_prefix_check.setChecked(bool(self._remembered.get("non_prefix")))
         self._load_candidate_options()
         self._sync_ok_button()
 
@@ -786,7 +795,22 @@ class GuidePrefixReplaceDialog(ModelessDialog):
         self.candidate_combo.clear()
         for marker, count in options:
             self.candidate_combo.addItem(f"{marker}（{count} 行）", userData=marker)
-        if options:
+        remembered_marker = str(self._remembered.get("marker") or "").strip()
+        remembered_index = next(
+            (
+                index
+                for index in range(self.candidate_combo.count())
+                if str(self.candidate_combo.itemData(index)) == remembered_marker
+            ),
+            -1,
+        )
+        if remembered_index >= 0:
+            # 命中候选：setCurrentIndex 触发 _candidate_changed 回填并刷新。
+            self.candidate_combo.setCurrentIndex(remembered_index)
+        elif remembered_marker:
+            self.marker_edit.setText(remembered_marker)
+            self.refresh_matches()
+        elif options:
             self.marker_edit.setText(options[0][0])
             self.refresh_matches()
         else:
@@ -825,6 +849,23 @@ class GuidePrefixReplaceDialog(ModelessDialog):
 
     def bitmap_options(self) -> dict:
         return self.options_row.options()
+
+    def batch_settings(self) -> dict:
+        """整套要在下次打开时预填的对话框状态（图片 + 选项 + 检测条件）。"""
+        return {
+            "before_path": str(self.before_path() or ""),
+            "after_path": str(self.after_path() or ""),
+            **self.options_row.options(),
+            "marker": self.marker_edit.text().strip(),
+            "non_prefix": self.non_prefix_check.isChecked(),
+        }
+
+    def done(self, result: int) -> None:
+        # 「应用替换」确认即记忆：标记字符、非行首开关与图片/选项一起，
+        # 供下次打开预填，并经窗口的应用偏好落盘（跨重启生效）。
+        if result == QDialog.DialogCode.Accepted:
+            remember_bitmap_settings(self.batch_settings())
+        super().done(result)
 
     def refresh_matches(self) -> None:
         self._matches = detect_guide_prefix_matches(

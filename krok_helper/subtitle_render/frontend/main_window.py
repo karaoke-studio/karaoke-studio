@@ -172,6 +172,7 @@ from krok_helper.subtitle_render.frontend.dialogs.guide_replacement import (
     bitmap_options_kwargs,
     choose_guide_role_scheme,
     guide_symbol_from_bitmap_dialog,
+    last_bitmap_settings,
     remember_bitmap_settings,
     replacement_symbol_for_match,
 )
@@ -6120,6 +6121,9 @@ class SubtitleRenderWindow(QWidget):
             role_signal.connect(self._on_guide_matches_role_scheme_requested)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        # 对话框在 done(Accepted) 里已把整套设置（图片 / 选项 / 标记字符 /
+        # 非行首开关）写入记忆，这里调度一次应用偏好落盘让它跨重启生效。
+        self._schedule_persisted_state_save()
         before_path = dialog.before_path()
         after_path = dialog.after_path()
         selected = dialog.selected_matches()
@@ -6134,13 +6138,6 @@ class SubtitleRenderWindow(QWidget):
                     before_path,
                     after_path,
                     **bitmap_options_kwargs(options),
-                )
-                remember_bitmap_settings(
-                    {
-                        "before_path": str(before_path) if before_path else "",
-                        "after_path": str(after_path) if after_path else "",
-                        **options,
-                    }
                 )
         except GuideSymbolImportError as exc:
             fluent_error(self, "无法导入导唱符", str(exc))
@@ -6910,6 +6907,10 @@ class SubtitleRenderWindow(QWidget):
         self._auto_chorus_begin_chars = loaded.auto_chorus_begin_chars
         self._auto_chorus_end_chars = loaded.auto_chorus_end_chars
         self._auto_chorus_overwrite = loaded.auto_chorus_overwrite
+        # 「批量识别导唱标记」对话框的上次设置：导入歌单/开窗前先重置成磁盘口径，
+        # 两个导唱符对话框的预填都以这份记忆为准。
+        remember_bitmap_settings({})
+        remember_bitmap_settings(loaded.guide_replacement)
         self._style_presets = loaded.style_presets
         # 预设库是多实例共享的，保存时要靠这份基线区分「自己改的」和「别人加的」。
         # 基线必须是**磁盘原样**，不能用 loaded 的结果：加载会顺手做字体别名归一化，
@@ -6992,6 +6993,7 @@ class SubtitleRenderWindow(QWidget):
                 auto_chorus_begin_chars=self._auto_chorus_begin_chars,
                 auto_chorus_end_chars=self._auto_chorus_end_chars,
                 auto_chorus_overwrite=self._auto_chorus_overwrite,
+                guide_replacement=last_bitmap_settings(),
                 selected_scheme_key=self._selected_scheme_key,
                 preview_splitter_ratio=self._preview_splitter_ratio,
                 auto_save_enabled=self._auto_save_enabled,

@@ -351,6 +351,27 @@ def test_guide_bitmap_settings_dialog_prefills_from_session_memory(tmp_path):
         guide_replacement_module.remember_bitmap_settings({})
 
 
+def test_bitmap_dialog_apply_keeps_batch_detection_memory(tmp_path):
+    """图片导唱符设置只覆盖图片与选项键，批量对话框的检测条件记忆不能被抹掉。"""
+    before = _write_png(tmp_path / "before.png", "#FF0000")
+    guide_replacement_module.remember_bitmap_settings(
+        {"marker": "「", "non_prefix": True}
+    )
+    try:
+        dialog = guide_replacement_module.GuideBitmapSettingsDialog()
+        dialog.before_edit.setText(str(before))
+
+        symbol = guide_replacement_module.guide_symbol_from_bitmap_dialog(dialog)
+
+        assert symbol is not None
+        remembered = guide_replacement_module.last_bitmap_settings()
+        assert remembered["before_path"] == str(before)
+        assert remembered["marker"] == "「"
+        assert remembered["non_prefix"] is True
+    finally:
+        guide_replacement_module.remember_bitmap_settings({})
+
+
 def test_bitmap_guide_import_applies_emoji_style_options(tmp_path):
     before = _write_png(tmp_path / "before.png", "#FF0000")
     after = _write_png(tmp_path / "after.png", "#0000FF")
@@ -1947,6 +1968,95 @@ def test_dialog_checkbox_enables_non_prefix_detection():
     assert dialog.selected_matches()[0].start_index == 1
     assert "1 处" in dialog.summary_label.text()
     dialog.close()
+
+
+def test_prefix_replace_dialog_prefills_last_batch_settings(tmp_path):
+    """上次确认过的整套设置（图片/选项/标记/非行首）在下次打开时预填。"""
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)]),
+            TimingLine(chars=[TimingChar("h", 3000), TimingChar("詞", 4100)]),
+        ]
+    )
+    guide_replacement_module.remember_bitmap_settings(
+        {
+            "before_path": "D:/lead.svg",
+            "after_path": "D:/after.png",
+            "zoom_mode": "Fix",
+            "zoom_value": 250,
+            "no_decor": True,
+            "margin_left_px": 3,
+            "margin_right_px": -170,
+            "margin_bottom_px": 4,
+            "marker": "h",
+            "non_prefix": True,
+        }
+    )
+    try:
+        dialog = GuidePrefixReplaceDialog(track)
+
+        assert dialog.before_edit.text() == "D:/lead.svg"
+        assert dialog.after_edit.text() == "D:/after.png"
+        assert dialog.bitmap_options() == {
+            "zoom_mode": "Fix",
+            "zoom_value": 250,
+            "no_decor": True,
+            "margin_left_px": 3,
+            "margin_right_px": -170,
+            "margin_bottom_px": 4,
+        }
+        assert dialog.non_prefix_check.isChecked()
+        assert dialog.marker_edit.text() == "h"
+        assert "2 处" in dialog.summary_label.text()
+        dialog.close()
+    finally:
+        guide_replacement_module.remember_bitmap_settings({})
+
+
+def test_prefix_replace_dialog_keeps_unlisted_marker_from_memory():
+    """记忆的标记字符不在候选里时直接回填输入框并按它检测。"""
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("あ", 1000), TimingChar("い", 2000)])]
+    )
+    guide_replacement_module.remember_bitmap_settings({"marker": "ｘ"})
+    try:
+        dialog = GuidePrefixReplaceDialog(track)
+
+        assert dialog.candidate_combo.count() == 0
+        assert dialog.marker_edit.text() == "ｘ"
+        assert "0 处" in dialog.summary_label.text()
+        dialog.close()
+    finally:
+        guide_replacement_module.remember_bitmap_settings({})
+
+
+def test_prefix_replace_dialog_accept_remembers_full_batch_settings():
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])]
+    )
+    guide_replacement_module.remember_bitmap_settings({})
+    try:
+        dialog = GuidePrefixReplaceDialog(track)
+        dialog.set_before_path("D:/lead.svg")
+        dialog.after_edit.setText(" D:/after.png ")
+        dialog.marker_edit.setText(" h ")
+        dialog.non_prefix_check.setChecked(True)
+
+        dialog.done(QDialog.DialogCode.Rejected)
+        assert guide_replacement_module.last_bitmap_settings() == {}
+
+        dialog.done(QDialog.DialogCode.Accepted)
+        remembered = guide_replacement_module.last_bitmap_settings()
+        # before_path() 过一道 Path，Windows 下分隔符归一成反斜杠。
+        assert remembered["before_path"] == "D:\\lead.svg"
+        assert remembered["after_path"] == "D:\\after.png"
+        assert remembered["marker"] == "h"
+        assert remembered["non_prefix"] is True
+        assert remembered["zoom_mode"] == "Zoom"
+        assert remembered["zoom_value"] == 100
+        dialog.close()
+    finally:
+        guide_replacement_module.remember_bitmap_settings({})
 
 
 def test_lyrics_preview_shows_embedded_guide_icon(tmp_path):
