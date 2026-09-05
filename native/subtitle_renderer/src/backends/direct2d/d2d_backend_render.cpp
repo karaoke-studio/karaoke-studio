@@ -1922,13 +1922,22 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const bool reverseVertical = style.vertical && line->wipeReverse;
         const bool rtl = !style.vertical
             && (style.rightToLeft != line->wipeReverse);
+        const bool noWipe = line->karaokeAnimation == "no_wipe";
         const auto wipePositionAt = [&](const Impl::CachedChar &ch) {
             if (ch.wipePoints.empty()) {
+                if (noWipe) {
+                    return tMs >= ch.endMs ? 1.0f : 0.0f;
+                }
                 const int duration = std::max(ch.endMs - ch.startMs, 1);
                 return std::clamp(
                     static_cast<float>(tMs - ch.startMs) / static_cast<float>(duration),
                     0.0f, 1.0f
                 );
+            }
+            if (noWipe) {
+                return tMs >= ch.wipePoints.back().timeMs
+                    ? ch.wipePoints.back().position
+                    : ch.wipePoints.front().position;
             }
             if (tMs <= ch.wipePoints.front().timeMs) {
                 return ch.wipePoints.front().position;
@@ -1967,6 +1976,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                      : ch.left + (ch.right - ch.left) * position);
         };
         const auto unclampedWipePositionAt = [&](const Impl::CachedChar &ch) {
+            if (noWipe) {
+                if (ch.wipePoints.empty()) {
+                    return tMs >= ch.endMs ? 1.0f : 0.0f;
+                }
+                return tMs >= ch.wipePoints.back().timeMs
+                    ? ch.wipePoints.back().position
+                    : ch.wipePoints.front().position;
+            }
             if (ch.wipePoints.size() < 2) {
                 const int duration = std::max(ch.endMs - ch.startMs, 1);
                 return static_cast<float>(tMs - ch.startMs)

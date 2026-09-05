@@ -2015,6 +2015,23 @@ def test_vertical_fill_band_grows_downward(qapp):
     assert _vertical_fill_band(cells, intervals, 1500) == (100, 250)
 
 
+def test_no_wipe_effect_holds_then_switches_at_interval_end(qapp):
+    segment = _FillSegment(
+        0, 100, 1000, 2000, karaoke_effect="no_wipe"
+    )
+    assert subtitle_painter._segment_fill_ratio(segment, 1999) == 0.0
+    assert subtitle_painter._segment_fill_ratio(segment, 2000) == 1.0
+
+    cells = [(100, 200)]
+    intervals = [(1000, 2000)]
+    assert _vertical_fill_band(
+        cells, intervals, 1999, karaoke_effect="no_wipe"
+    ) is None
+    assert _vertical_fill_band(
+        cells, intervals, 2000, karaoke_effect="no_wipe"
+    ) == (100, 200)
+
+
 def test_vertical_fill_band_grows_upward_when_reversed(qapp):
     cells = [(100, 200), (200, 300)]
     intervals = [(2000, 3000), (1000, 2000)]  # 按文字位置：下方字符先唱

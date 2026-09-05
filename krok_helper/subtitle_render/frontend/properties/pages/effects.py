@@ -233,7 +233,11 @@ class EffectsPropertyPageBuilder:
 
         host._karaoke_anim_combo = WheelFocusedComboBox(section)
         compact_property_control(host._karaoke_anim_combo)
-        for label, value in (("无", "none"), ("utopia", "utopia")):
+        for label, value in (
+            ("无", "none"),
+            ("无 Wipe", "no_wipe"),
+            ("utopia", "utopia"),
+        ):
             host._karaoke_anim_combo.addItem(label, value)
         host._karaoke_anim_combo.setToolTip(
             "控制歌词正在着色时的逐字动画；旧项目的 Utopia 入退场会自动兼容"
@@ -244,6 +248,27 @@ class EffectsPropertyPageBuilder:
             )
         )
         host._animation_grid.add_field("唱字特效", host._karaoke_anim_combo)
+
+        host._reverse_karaoke_anim_combo = WheelFocusedComboBox(section)
+        compact_property_control(host._reverse_karaoke_anim_combo)
+        for label, value in (
+            ("跟随唱字特效", "inherit"),
+            ("Wipe", "none"),
+            ("无 Wipe", "no_wipe"),
+            ("Utopia", "utopia"),
+        ):
+            host._reverse_karaoke_anim_combo.addItem(label, value)
+        host._reverse_karaoke_anim_combo.setToolTip(
+            "仅对标记为反向唱字的歌词行生效；无 Wipe 会在区间结束时整字瞬切"
+        )
+        host._reverse_karaoke_anim_combo.currentIndexChanged.connect(
+            lambda _index: host._update_style(
+                reverse_karaoke_anim=host._reverse_karaoke_anim_combo.currentData()
+            )
+        )
+        host._animation_grid.add_field(
+            "反向唱字特效", host._reverse_karaoke_anim_combo
+        )
 
         host._section_edge_check = CheckBox("段首尾独立动画", section)
         host._section_edge_check.toggled.connect(host._on_section_edge_toggled)

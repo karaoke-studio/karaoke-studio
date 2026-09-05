@@ -42,6 +42,32 @@ class TestPerLineOverride:
         style_with_line_animation(style, line)
         assert style.karaoke_anim == "utopia"
 
+    def test_reverse_lines_use_the_independent_effect(self) -> None:
+        style = Style(karaoke_anim="utopia", reverse_karaoke_anim="no_wipe")
+        line = TimingLine(wipe_reverse=True)
+        assert effective_karaoke_animation(
+            style_with_line_animation(style, line)
+        ) == "no_wipe"
+
+    def test_normal_lines_ignore_the_reverse_effect(self) -> None:
+        style = Style(karaoke_anim="none", reverse_karaoke_anim="utopia")
+        assert effective_karaoke_animation(
+            style_with_line_animation(style, TimingLine())
+        ) == "none"
+
+    def test_reverse_effect_does_not_leak_through_the_line_style_cache(self) -> None:
+        from krok_helper.subtitle_render.engine.layout.layout_context import layout_pass
+        from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
+        style = Style(karaoke_anim="utopia", reverse_karaoke_anim="no_wipe")
+        reverse = TimingLine(wipe_reverse=True)
+        normal = TimingLine(wipe_reverse=False)
+        with layout_pass():
+            reverse_style = style_for_line(style, reverse)
+            normal_style = style_for_line(style, normal)
+        assert effective_karaoke_animation(reverse_style) == "no_wipe"
+        assert effective_karaoke_animation(normal_style) == "utopia"
+
 
 class TestInheritKeepsFollowingTheGlobal:
     """踩过的坑：把 "inherit" 写进行样式，会让 effective_ 转而去看这一行被覆盖后的
@@ -134,7 +160,7 @@ class TestDialog:
             dialog._karaoke_combo.itemData(i)
             for i in range(dialog._karaoke_combo.count())
         }
-        assert values == {"inherit", "none", "utopia"}
+        assert values == {"inherit", "none", "no_wipe", "utopia"}
 
     def test_it_round_trips_the_choice(self) -> None:
         override = LineAnimationOverride(
@@ -211,6 +237,44 @@ class TestGpuParity:
         style = Style()
         style.karaoke_anim = "utopia"
         assert gpu_unsupported_features(self._track(), style) == ()
+
+    def test_the_ir_uses_the_independent_reverse_effect(self, qapp) -> None:
+        from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
+        from krok_helper.subtitle_render.native.protocol import track_to_ir
+
+        track = self._track()
+        track.lines[0].wipe_reverse = True
+        style = Style(karaoke_anim="utopia", reverse_karaoke_anim="no_wipe")
+        ir = track_to_ir(
+            track,
+            style,
+            layout_plan=build_track_layout_plan(track, style),
+        )
+        assert ir["lines"][0]["karaoke_anim"] == "no_wipe"
+
+    def test_reverse_effect_does_not_leak_to_a_matching_normal_line_ir(self, qapp) -> None:
+        from krok_helper.subtitle_render.domain.models import TimingChar, TimingTrack
+        from krok_helper.subtitle_render.engine.painter import build_track_layout_plan
+        from krok_helper.subtitle_render.native.protocol import track_to_ir
+
+        track = TimingTrack(lines=[
+            TimingLine(
+                chars=[TimingChar("反", 0)], end_ms=500, wipe_reverse=True
+            ),
+            TimingLine(
+                chars=[TimingChar("正", 1000)], end_ms=1500
+            ),
+        ])
+        style = Style(karaoke_anim="utopia", reverse_karaoke_anim="no_wipe")
+        ir = track_to_ir(
+            track,
+            style,
+            layout_plan=build_track_layout_plan(track, style),
+        )
+        assert [line["karaoke_anim"] for line in ir["lines"]] == [
+            "no_wipe",
+            "utopia",
+        ]
 
 
 def _section_edge_track():

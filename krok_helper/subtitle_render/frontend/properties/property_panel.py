@@ -991,6 +991,14 @@ class PropertyPanel(QWidget):
                     ),
                 )
             )
+            self._reverse_karaoke_anim_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._reverse_karaoke_anim_combo.findData(
+                        timing.reverse_karaoke_anim
+                    ),
+                )
+            )
             self._section_edge_check.setChecked(timing.section_edge_anim_enabled)
             self._section_edge_both_check.setChecked(timing.section_edge_both_animations)
             self._section_head_anim_combo.setCurrentIndex(

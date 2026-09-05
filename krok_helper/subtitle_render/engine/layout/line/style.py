@@ -160,6 +160,8 @@ def style_for_line(style: Style, line: TimingLine) -> Style:
             int(override.exit_duration_ms),
             override.karaoke_anim,
         ),
+        # 反向走字可独立覆盖唱字特效；其余条件相同的正向/反向行不能共用样式缓存。
+        bool(line.wipe_reverse),
         # 段首页/段尾页标记：同一 layout/歌手/覆盖组合下，处于段边缘页与
         # 不在的两行会解析出不同入退场动画，键里不带标记就会串缓存。
         line_section_edge_flags(line),

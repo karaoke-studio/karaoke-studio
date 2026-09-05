@@ -175,6 +175,9 @@ def offset_fill_segments(
             end_ms=segment.end_ms,
             ruby=segment.ruby,
             indices=segment.indices,
+            ruby_base_index=segment.ruby_base_index,
+            ruby_base_count=segment.ruby_base_count,
+            karaoke_effect=segment.karaoke_effect,
         )
         for segment in segments
     ]
@@ -222,6 +225,9 @@ def segment_wipe_times(segment: FillSegment) -> tuple[int, int]:
 
 
 def segment_fill_ratio(segment: FillSegment, t_ms: int) -> float:
+    if segment.karaoke_effect == "no_wipe":
+        _start_ms, end_ms = segment_wipe_times(segment)
+        return 1.0 if t_ms >= end_ms else 0.0
     if segment.ruby is None:
         return char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
     if segment.ruby_base_index is not None:

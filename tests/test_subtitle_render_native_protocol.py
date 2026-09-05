@@ -2737,7 +2737,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     ) == ("karaoke_animation",)
     assert gpu_unsupported_feature_labels(
         ("bitmap_guide_symbol", "karaoke_animation")
-    ) == ("图片导唱符 / N3 Emoji 头像", "未知走字特效")
+    ) == ("图片导唱符 / N3 Emoji 头像", "未知唱字特效")
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
     assert gpu_unsupported_features(track, Style(right_to_left=True)) == ()
     assert gpu_unsupported_features(

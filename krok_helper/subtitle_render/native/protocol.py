@@ -73,7 +73,7 @@ class VectorGlyphTable:
         return not self.payload
 GPU_UNSUPPORTED_FEATURE_LABELS = {
     "line_animation": "\u672a\u77e5\u6574\u884c\u52a8\u753b",
-    "karaoke_animation": "\u672a\u77e5\u8d70\u5b57\u7279\u6548",
+    "karaoke_animation": "未知唱字特效",
     "line_animation_override": "\u672a\u77e5\u9010\u884c\u7279\u6548",
     "bitmap_guide_symbol": "\u56fe\u7247\u5bfc\u5531\u7b26 / N3 Emoji \u5934\u50cf",
 }
@@ -127,7 +127,11 @@ def gpu_unsupported_features(
         }
     ):
         reasons.append("line_animation")
-    if style.karaoke_anim not in {"inherit", "none", "utopia"}:
+    karaoke_effects = {"inherit", "none", "no_wipe", "utopia"}
+    if (
+        style.karaoke_anim not in karaoke_effects
+        or style.reverse_karaoke_anim not in karaoke_effects
+    ):
         reasons.append("karaoke_animation")
     for source in sources:
         for line in source.lines:

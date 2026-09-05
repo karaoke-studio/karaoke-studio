@@ -27,6 +27,7 @@ class FillSegment:
     layout_right: int | None = None
     ruby_base_index: int | None = None
     ruby_base_count: int = 1
+    karaoke_effect: str = "none"
 
 
 @dataclass(frozen=True)

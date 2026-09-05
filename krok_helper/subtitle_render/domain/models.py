@@ -702,6 +702,7 @@ class StyleTimingConfig:
     exit_anim: ExitAnimation
     exit_fade_ms: int
     karaoke_anim: KaraokeAnimation
+    reverse_karaoke_anim: KaraokeAnimation
     section_edge_anim_enabled: bool
     section_edge_both_animations: bool
     section_head_anim: EntryAnimation
@@ -1001,6 +1002,9 @@ class Style:
     karaoke_anim: KaraokeAnimation = "utopia"
     """唱字动画：inherit（兼容旧 Utopia）/ none / utopia。"""
 
+    reverse_karaoke_anim: KaraokeAnimation = "inherit"
+    """反向走字行的唱字动画；inherit 表示沿用普通唱字特效。"""
+
     section_edge_anim_enabled: bool = False
     """段首尾独立动画：开启后段首页/段尾页各行按下面两个动画替换入退场。"""
 
@@ -1158,29 +1162,33 @@ STYLE_APPEARANCE_FIELDS = tuple(
 def style_with_line_animation(style: Style, line: TimingLine) -> Style:
     """把逐行动画覆盖套到样式上；其他视觉与布局字段保持不变。"""
     override = line.animation_override
-    if override is None:
-        return style
-    changes: dict[str, object] = {
-        "entry_anim": override.entry_anim,
-        "entry_lead_ms": max(int(override.entry_duration_ms), 0),
-        "exit_anim": override.exit_anim,
-        "exit_fade_ms": max(int(override.exit_duration_ms), 0),
-    }
-    if override.karaoke_anim != "inherit":
+    changes: dict[str, object] = {}
+    if override is not None:
+        changes.update({
+            "entry_anim": override.entry_anim,
+            "entry_lead_ms": max(int(override.entry_duration_ms), 0),
+            "exit_anim": override.exit_anim,
+            "exit_fade_ms": max(int(override.exit_duration_ms), 0),
+        })
+    if override is not None and override.karaoke_anim != "inherit":
         # inherit 表示「保持全局那一档」，必须原样留下 style.karaoke_anim。
         # 若把 "inherit" 写进行样式，effective_karaoke_animation 会转而去看这一行
         # 被覆盖后的入退场——全局显式设的 utopia 就这么丢了。
         changes["karaoke_anim"] = override.karaoke_anim
-    return style.with_timing(**changes)
+    if line.wipe_reverse and style.reverse_karaoke_anim != "inherit":
+        changes["karaoke_anim"] = style.reverse_karaoke_anim
+    return style.with_timing(**changes) if changes else style
 
 
-def effective_karaoke_animation(style: Style) -> Literal["none", "utopia"]:
+def effective_karaoke_animation(style: Style) -> Literal["none", "no_wipe", "utopia"]:
     """Resolve the singing animation while preserving legacy Utopia projects."""
     timing = style.timing
     if timing.karaoke_anim == "utopia":
         return "utopia"
     if timing.karaoke_anim == "none":
         return "none"
+    if timing.karaoke_anim == "no_wipe":
+        return "no_wipe"
     return (
         "utopia"
         if "utopia" in {timing.entry_anim, timing.exit_anim}
@@ -1614,9 +1622,11 @@ def style_from_dict(payload: object) -> Style:
                 }
                 else defaults.exit_anim
             )
-        elif key == "karaoke_anim":
+        elif key in {"karaoke_anim", "reverse_karaoke_anim"}:
             changes[key] = (
-                value if value in {"inherit", "none", "utopia"} else defaults.karaoke_anim
+                value
+                if value in {"inherit", "none", "no_wipe", "utopia"}
+                else getattr(defaults, key)
             )
         elif key == "section_head_anim":
             changes[key] = (

@@ -165,6 +165,7 @@ _EXIT_EFFECTS = (
 _KARAOKE_EFFECTS = (
     ("inherit", "跟随全局"),
     ("none", "无"),
+    ("no_wipe", "无 Wipe"),
     ("utopia", "Utopia"),
 )
 _ENTRY_LABELS = dict(_ENTRY_EFFECTS)

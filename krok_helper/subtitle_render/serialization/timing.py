@@ -156,7 +156,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
             return fallback
 
     karaoke = value.get("karaoke_anim")
-    if karaoke not in {"inherit", "none", "utopia"}:
+    if karaoke not in {"inherit", "none", "no_wipe", "utopia"}:
         # 旧项目没有这一项，按继承处理——渲染结果与加这个字段之前一致。
         karaoke = "inherit"
     return LineAnimationOverride(

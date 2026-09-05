@@ -13,7 +13,7 @@ EntryAnimation = Literal[
 ExitAnimation = Literal[
     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
 ]
-KaraokeAnimation = Literal["inherit", "none", "utopia"]
+KaraokeAnimation = Literal["inherit", "none", "no_wipe", "utopia"]
 
 
 @dataclass(frozen=True)

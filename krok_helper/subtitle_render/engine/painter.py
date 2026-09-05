@@ -2867,6 +2867,7 @@ def _vertical_fill_band(
     active_rubies: list[RubyAnnotation] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
     reverse: bool = False,
+    karaoke_effect: str = "none",
 ) -> tuple[int, int] | None:
     return _vertical_fill_band_with_ports(
         cells,
@@ -2877,6 +2878,7 @@ def _vertical_fill_band(
         active_rubies=active_rubies,
         ruby_main_progress_mode=ruby_main_progress_mode,
         reverse=reverse,
+        karaoke_effect=karaoke_effect,
     )
 
 

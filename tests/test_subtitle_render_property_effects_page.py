@@ -60,7 +60,14 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     assert host._exit_fade_spin.maximum() == 3000
     assert host._entry_lead_spin.toolTip() == "入场动画时长"
     assert host._exit_fade_spin.toolTip() == "退场动画时长"
-    assert host._karaoke_anim_combo.count() == 2
+    assert [
+        host._karaoke_anim_combo.itemData(index)
+        for index in range(host._karaoke_anim_combo.count())
+    ] == ["none", "no_wipe", "utopia"]
+    assert [
+        host._reverse_karaoke_anim_combo.itemData(index)
+        for index in range(host._reverse_karaoke_anim_combo.count())
+    ] == ["inherit", "none", "no_wipe", "utopia"]
 
 
 def test_effects_section_edge_builder_defaults_and_order(qapp) -> None:
@@ -126,13 +133,15 @@ def test_effects_animation_builder_routes_controls_to_style_fields(qapp) -> None
     host._exit_anim_combo.setCurrentIndex(2)
     host._exit_fade_spin.setValue(300)
     host._karaoke_anim_combo.setCurrentIndex(1)
+    host._reverse_karaoke_anim_combo.setCurrentIndex(2)
 
     assert host.updates == [
         {"entry_anim": "fade"},
         {"entry_lead_ms": 250},
         {"exit_anim": "slide_out"},
         {"exit_fade_ms": 300},
-        {"karaoke_anim": "utopia"},
+        {"karaoke_anim": "no_wipe"},
+        {"reverse_karaoke_anim": "no_wipe"},
     ]
 
 

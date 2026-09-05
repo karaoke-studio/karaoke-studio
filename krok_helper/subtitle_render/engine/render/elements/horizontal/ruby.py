@@ -9,7 +9,7 @@ from typing import Callable, Hashable, Optional
 from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 
-from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from krok_helper.subtitle_render.engine.render.effects import (
     fill_signature,
@@ -933,6 +933,10 @@ def ruby_wipe_state(
     t_ms: int,
 ) -> tuple[bool, bool, float]:
     """Return ``(visible, complete, front)`` for the ruby glyph wipe."""
+    if effective_karaoke_animation(layout.style) == "no_wipe":
+        complete = t_ms >= int(layout.ruby.pos_end_ms)
+        front = layout.wipe_right if complete else layout.wipe_left
+        return complete, complete, front
     segments = layout.wipe_segments
     if not segments:
         ratio = ruby_progress_ratio(layout.ruby, t_ms)

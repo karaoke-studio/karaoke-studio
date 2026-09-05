@@ -1152,6 +1152,28 @@ def test_gpu_g1_directwrite_wipe_progresses_monotonically(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_no_wipe_holds_before_pixels_then_switches_at_end(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = _g1_track()
+    track.lines[0].wipe_reverse = True
+    style = _g1_style(
+        karaoke_anim="utopia",
+        reverse_karaoke_anim="no_wipe",
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (100, 400, 500),
+            force_warp=True,
+            track=track,
+        )
+
+    assert frames[0] == frames[1]
+    assert frames[1] != frames[2]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("vertical", [False, True])
 @pytest.mark.parametrize("karaoke_anim", ["inherit", "utopia"])
 def test_gpu_reversed_line_wipe_matches_painter_direction(

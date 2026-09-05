@@ -51,7 +51,7 @@ from krok_helper.subtitle_render.engine.timing.timeline import (
     compute_char_intervals,
 )
 from krok_helper.subtitle_render.engine.value_signature import value_signature
-from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
 from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState
 from krok_helper.subtitle_render.sources.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.domain.timing import (
@@ -319,9 +319,14 @@ def vertical_ruby_segment_wipe_state(
     segments: tuple[VerticalRubyWipeSegment, ...],
     pos_end_ms: int,
     t_ms: int,
+    *,
+    karaoke_effect: str = "none",
 ) -> tuple[bool, bool, float]:
     """Evaluate timed vertical glyph segments, including empty-part pauses."""
     first = segments[0]
+    if karaoke_effect == "no_wipe":
+        complete = t_ms >= max(int(pos_end_ms), segments[-1].end_ms)
+        return complete, complete, segments[-1].axis_end if complete else first.axis_start
     if t_ms <= first.start_ms:
         return False, False, first.axis_start
     previous_front = first.axis_start
@@ -441,6 +446,7 @@ def vertical_fill_band(
     active_rubies: list[RubyAnnotation] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
     reverse: bool = False,
+    karaoke_effect: str = "none",
 ) -> tuple[int, int] | None:
     """Return the sung vertical band ``(y_top, y_bottom)``.
 
@@ -478,6 +484,8 @@ def vertical_fill_band(
                 if ruby_groups is not None and line is not None
                 else char_fill_ratio(start, end, t_ms)
             )
+            if karaoke_effect == "no_wipe":
+                ratio = 1.0 if t_ms >= end else 0.0
             if ratio <= 0.0:
                 break
             if ratio >= 1.0:
@@ -506,6 +514,8 @@ def vertical_fill_band(
             if ruby_groups is not None and line is not None
             else char_fill_ratio(start, end, t_ms)
         )
+        if karaoke_effect == "no_wipe":
+            ratio = 1.0 if t_ms >= end else 0.0
         if ratio <= 0.0:
             break
         if ratio >= 1.0:
@@ -861,6 +871,7 @@ def vertical_ruby_layers(
             wipe_segments,
             ruby.pos_end_ms,
             t_ms,
+            karaoke_effect=effective_karaoke_animation(style),
         )
         glow_split = (
             ports.decoration_kind(style) == "glow" and before_glow_radius > 0
@@ -1047,6 +1058,7 @@ def paint_rubies_vertical(
             wipe_segments,
             ruby.pos_end_ms,
             t_ms,
+            karaoke_effect=effective_karaoke_animation(style),
         )
         glow_split = (
             ports.decoration_kind(style) == "glow" and before_glow_radius > 0
@@ -1152,6 +1164,7 @@ def vertical_layer_stack(
         active_rubies=layout.active_rubies,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
         reverse=reverse,
+        karaoke_effect=effective_karaoke_animation(style),
     )
     before_glow_radius = ports.glow_radius(style, after=False)
     before_clip = None
@@ -1297,6 +1310,7 @@ def paint_line_vertical_direct(
         active_rubies=layout.active_rubies,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
         reverse=reverse,
+        karaoke_effect=effective_karaoke_animation(style),
     )
     before_clip = None
     before_glow_radius = ports.glow_radius(style, after=False)

@@ -4664,6 +4664,13 @@ def test_karaoke_animation_round_trips_and_rejects_unknown_values():
     # 出厂预设（74f5c7b）默认走字动画为 utopia；缺省与非法值都落回默认。
     assert style_from_dict({}).karaoke_anim == "utopia"
     assert style_from_dict({"karaoke_anim": "unknown"}).karaoke_anim == "utopia"
+    restored = style_from_dict(
+        style_to_dict(
+            Style(karaoke_anim="no_wipe", reverse_karaoke_anim="no_wipe")
+        )
+    )
+    assert restored.karaoke_anim == "no_wipe"
+    assert restored.reverse_karaoke_anim == "no_wipe"
 
 
 def test_property_panel_animation_controls_emit_style(qapp):
@@ -4674,7 +4681,11 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert [
         panel._karaoke_anim_combo.itemText(index)
         for index in range(panel._karaoke_anim_combo.count())
-    ] == ["无", "utopia"]
+    ] == ["无", "无 Wipe", "utopia"]
+    assert [
+        panel._reverse_karaoke_anim_combo.itemText(index)
+        for index in range(panel._reverse_karaoke_anim_combo.count())
+    ] == ["跟随唱字特效", "Wipe", "无 Wipe", "Utopia"]
 
     panel._entry_anim_combo.setCurrentIndex(
         panel._entry_anim_combo.findData("char_fade")

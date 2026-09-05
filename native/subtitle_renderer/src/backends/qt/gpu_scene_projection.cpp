@@ -523,6 +523,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             ? 0
             : sourceLine.exitDurationMs;
         line.karaokeAnimation = config.vertical
+            && sourceLine.karaokeAnimation != QStringLiteral("no_wipe")
             ? "none"
             : sourceLine.karaokeAnimation.toStdString();
         if (sourceLine.displayStartMs.has_value()

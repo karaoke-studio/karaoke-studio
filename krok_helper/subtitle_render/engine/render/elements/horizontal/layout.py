@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QFontMetrics, QPainterPath
 
-from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
 from krok_helper.subtitle_render.domain.timing import (
     RubyAnnotation,
     TimingLine,
@@ -139,6 +139,7 @@ def karaoke_fill_segments(
     layout_x_ranges: list[tuple[int, int]] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
     wipe_reverse: bool = False,
+    karaoke_effect: str = "none",
 ) -> list[FillSegment]:
     """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
     扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。
@@ -267,7 +268,10 @@ def karaoke_fill_segments(
         index = max(indices) + 1
     if wipe_reverse:
         segments.reverse()
-    return adjust_fill_release_edges(segments)
+    return [
+        replace(segment, karaoke_effect=karaoke_effect)
+        for segment in adjust_fill_release_edges(segments)
+    ]
 
 
 def fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
@@ -822,6 +826,7 @@ def layout_plain_line(
         layout_x_ranges=char_x_ranges,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
         wipe_reverse=line.wipe_reverse,
+        karaoke_effect=effective_karaoke_animation(style),
     )
     line_rect = QRectF(
         float(x0),
@@ -995,6 +1000,7 @@ def layout_role_line(
         layout_x_ranges=char_x_ranges,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
         wipe_reverse=line.wipe_reverse,
+        karaoke_effect=effective_karaoke_animation(style),
     )
     ruby_layouts = tuple(
         ports.layout_rubies(
