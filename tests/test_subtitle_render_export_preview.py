@@ -327,6 +327,22 @@ def test_export_cards_are_vertically_centered_above_actions(qapp):
         qapp.processEvents()
 
 
+def test_export_progress_tracks_frame_updates_without_animation(qapp):
+    window = SubtitleRenderWindow(embedded=True)
+    try:
+        window.show()
+        qapp.processEvents()
+
+        window._apply_render_progress(3002, 3003)
+
+        assert window._export_progress.value() == 3002
+        assert window._export_progress.getVal() == 3002
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
 def test_export_workspace_format_combo_reports_changes(qapp):
     from krok_helper.subtitle_render.frontend.workflow.export_view import (
         EXPORT_FORMAT_CHOICES,

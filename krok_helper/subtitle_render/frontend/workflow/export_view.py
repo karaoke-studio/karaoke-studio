@@ -781,6 +781,9 @@ class ExportWorkspaceView(QWidget):
         layout.addStretch(1)
 
         progress = FluentProgressBar()
+        # 导出会逐帧高频上报；Fluent 的 150ms 插值动画每次 setValue() 都会
+        # 重新开始，导致画面进度长期落后于已经接近完成的帧数。
+        progress.setUseAni(False)
         progress.setRange(0, 1)
         progress.setValue(0)
         layout.addWidget(progress)
