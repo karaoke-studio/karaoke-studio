@@ -752,8 +752,9 @@ def test_load_lrc_applies_emoji_role_tag_to_explicit_singer_line(tmp_path):
 def test_load_lrc_color_separation_placeholder_emoji_tag(tmp_path):
     """SUG 分色标签设置助手的无图标分色：透明 1x1 + Zoom=1 + 负 MarginRight。
 
-    标签原位替换为一个近乎零宽的隐形图片，负边距把后续文字左拉——
-    排版推进由 ``vector_glyph_width`` 决定（图宽 + 左右边距）。
+    标签原位替换为一个隐形图片；负余白把单元格 advance 钳到零宽
+    （``vector_glyph_width`` 对负宽的既定口径，见 1080bbf），占位符不占
+    横排空间、后续文字不右推。
     """
     lrc = tmp_path / "demo.lrc"
     lrc.write_text(
@@ -774,8 +775,8 @@ def test_load_lrc_color_separation_placeholder_emoji_tag(tmp_path):
     assert symbol.bitmap_margin_right_px == -170
 
     style = Style(font_family="Arial", font_size_px=64)
-    # 图片缺失时布局回退为 1px 宽：1 + 0 + (-170) = -169，文字整体左拉
-    assert vector_glyph_width(symbol, style) == -169
+    # 图片缺失时内容宽回退 1px：1 + 0 + (-170) 为负，advance 钳到零宽
+    assert vector_glyph_width(symbol, style) == 0
 
 
 def test_load_lrc_applies_single_visible_emoji_token_inline(tmp_path):
