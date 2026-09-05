@@ -566,7 +566,7 @@ def test_full_update_removes_stale_backups_before_generic_apply(
 
     assert ok is True and err == ""
     assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new"
-    # 新名更新不再回写旧名副本，而是清理它（改名迁移，详见 §8.1）。
+    # 新名更新不回写旧名副本（清理由成功拉起后的启动挂钩统一做，详见 §8.1）。
     assert not (app_dir / "Karaoke Studio.exe").exists()
     # sidecar 属必备根目录负载，一并回写。
     assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"new"
@@ -770,8 +770,9 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
         assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new-primary"
         assert not (app_dir / "krok_subtitle_renderer.exe.old").exists()
         if launched_name == workbench_updater.PRIMARY_APP_EXE_NAME:
-            # 新名更新：旧名副本不回写，安装目录里的存量副本被清理。
-            assert not (app_dir / "Karaoke Studio.exe").exists()
+            # 新名更新：旧名副本不回写也不删除——清理统一由成功拉起后的启动
+            # 挂钩做（先删后启动失败会让安装失去可用入口）。
+            assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"old-legacy"
         else:
             # 旧名更新（存量客户端）：双主程序名都回写，不许分家。
             assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new-legacy"
@@ -872,14 +873,27 @@ def _make_dual_name_install(app_dir: Path) -> None:
     (app_dir / "Karaoke Studio.exe.old").write_bytes(b"legacy-backup")
 
 
+def _mock_shortcut_migration(monkeypatch: pytest.MonkeyPatch, result: bool) -> list[Path]:
+    """拦下真实 PowerShell 迁移，记录调用并返回指定结果。"""
+    calls: list[Path] = []
+
+    def fake_migration(app_dir, log):
+        calls.append(app_dir)
+        return result
+
+    monkeypatch.setattr(workbench_updater, "_migrate_legacy_shortcuts", fake_migration)
+    return calls
+
+
 def test_cleanup_legacy_exe_runs_only_for_new_name_sessions(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """新名会话清理旧名副本（含 .old 残留）；旧名会话（存量客户端）绝不动它。"""
     new_name_dir = tmp_path / "new-session"
     legacy_name_dir = tmp_path / "legacy-session"
     for app_dir in (new_name_dir, legacy_name_dir):
         _make_dual_name_install(app_dir)
+    migration_calls = _mock_shortcut_migration(monkeypatch, True)
     log = logging.getLogger("sug.updater")
 
     workbench_updater._cleanup_legacy_main_exe(
@@ -894,17 +908,74 @@ def test_cleanup_legacy_exe_runs_only_for_new_name_sessions(
     )
     assert (legacy_name_dir / "Karaoke Studio.exe").read_bytes() == b"legacy"
     assert (legacy_name_dir / "Karaoke Studio.exe.old").read_bytes() == b"legacy-backup"
+    # 迁移只在删旧名本体的新名会话里触发过一次。
+    assert migration_calls == [new_name_dir]
 
 
-def test_incremental_success_cleans_legacy_exe(
+def test_cleanup_keeps_legacy_when_new_entry_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """增量路径 rc==0 后补清理：迁移期 manifest targets 仍含旧名，orphan cleanup 不删它。"""
+    """P1 回归：新名入口缺失时绝不清理——旧名可能是该安装唯一可运行入口。
+
+    最小复现：仅有可运行的 Karaoke Studio.exe（如降级旧 Updater 的全量更新只
+    回写了旧名）。清理先于存在性检查会删掉它再启动失败，两个入口全灭。
+    """
+    app_dir = tmp_path / "app"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "Karaoke Studio.exe").write_bytes(b"legacy-only")
+    (app_dir / "Karaoke Studio.exe.old").write_bytes(b"legacy-backup")
+    migration_calls = _mock_shortcut_migration(monkeypatch, True)
+    log = logging.getLogger("sug.updater")
+
+    workbench_updater._cleanup_legacy_main_exe(
+        app_dir, workbench_updater.PRIMARY_APP_EXE_NAME, log
+    )
+    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"legacy-only"
+    assert (app_dir / "Karaoke Studio.exe.old").read_bytes() == b"legacy-backup"
+    assert migration_calls == []
+
+    # 启动挂钩同样先失败退出（找不到新名 EXE），不会碰旧名。
+    assert not workbench_updater._launch_main_app_workbench(
+        app_dir, workbench_updater.PRIMARY_APP_EXE_NAME, log
+    )
+    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"legacy-only"
+
+
+def test_cleanup_defers_when_shortcut_migration_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """快捷方式迁移工具没跑起来时本次整体不清理，下次更新重试。
+
+    否则会留下指向已删除文件的死快捷方式——正是迁移要消除的破坏面。
+    """
+    app_dir = tmp_path / "app"
+    _make_dual_name_install(app_dir)
+    _mock_shortcut_migration(monkeypatch, False)
+
+    workbench_updater._cleanup_legacy_main_exe(
+        app_dir,
+        workbench_updater.PRIMARY_APP_EXE_NAME,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"legacy"
+    assert (app_dir / "Karaoke Studio.exe.old").read_bytes() == b"legacy-backup"
+
+
+def test_incremental_success_defers_cleanup_to_relaunch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """增量成功本身不清理：统一等成功拉起后的启动挂钩，保证任何时刻有可用入口。"""
     from types import SimpleNamespace
 
     app_dir = tmp_path / "app"
     _make_dual_name_install(app_dir)
     monkeypatch.setattr(workbench_updater, "_original_run_incremental", lambda *args: 0)
+    monkeypatch.setattr(
+        workbench_updater,
+        "_cleanup_legacy_main_exe",
+        lambda *args: pytest.fail("清理必须由启动挂钩触发，不得在增量尾部执行"),
+    )
     args = SimpleNamespace(
         app_dir=app_dir, app_exe=workbench_updater.PRIMARY_APP_EXE_NAME
     )
@@ -914,27 +985,77 @@ def test_incremental_success_cleans_legacy_exe(
     )
 
     assert rc == 0
-    assert not (app_dir / "Karaoke Studio.exe").exists()
-    assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"primary"
+    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"legacy"
 
 
-def test_launch_hook_cleans_legacy_exe_before_relaunch(
+def test_launch_hook_cleans_legacy_exe_after_relaunch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """「已是最新」等未走 apply 的成功路径由启动前挂钩兜底清理。"""
+    """清理必须发生在成功拉起之后：Popen 执行时旧名仍在，返回 True 时已清理。"""
     app_dir = tmp_path
     _make_dual_name_install(app_dir)
-    monkeypatch.setattr(
-        workbench_updater.subprocess, "Popen", lambda *args, **kwargs: object()
-    )
+    legacy_at_popen: list[bool] = []
+    migration_calls = _mock_shortcut_migration(monkeypatch, True)
+
+    def fake_popen(args, **kwargs):
+        legacy_at_popen.append((app_dir / "Karaoke Studio.exe").exists())
+        return object()
+
+    monkeypatch.setattr(workbench_updater.subprocess, "Popen", fake_popen)
 
     assert workbench_updater._launch_main_app_workbench(
         app_dir,
         workbench_updater.PRIMARY_APP_EXE_NAME,
         logging.getLogger("sug.updater"),
     )
+    assert legacy_at_popen == [True]
     assert not (app_dir / "Karaoke Studio.exe").exists()
     assert not (app_dir / "Karaoke Studio.exe.old").exists()
+    assert migration_calls == [app_dir]
+
+
+def test_migrate_legacy_shortcuts_invokes_powershell_with_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """迁移用 PowerShell 原地改写 .lnk：路径经环境变量传入，退出码决定结果。"""
+    import subprocess
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("仅 Windows")
+    captured: dict = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr(workbench_updater.subprocess, "run", fake_run)
+    assert workbench_updater._migrate_legacy_shortcuts(
+        tmp_path, logging.getLogger("sug.updater")
+    )
+
+    assert captured["args"][0] == "powershell"
+    assert "WScript.Shell" in captured["args"][-1]
+    assert captured["env"]["KROK_MIGRATE_LEGACY_EXE"].endswith("Karaoke Studio.exe")
+    assert captured["env"]["KROK_MIGRATE_PRIMARY_EXE"].endswith("Lin-K Lyrics.exe")
+
+    monkeypatch.setattr(
+        workbench_updater.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(args=a, returncode=2),
+    )
+    assert not workbench_updater._migrate_legacy_shortcuts(
+        tmp_path, logging.getLogger("sug.updater")
+    )
+
+    def broken_run(*args, **kwargs):
+        raise OSError("powershell not found")
+
+    monkeypatch.setattr(workbench_updater.subprocess, "run", broken_run)
+    assert not workbench_updater._migrate_legacy_shortcuts(
+        tmp_path, logging.getLogger("sug.updater")
+    )
 
 
 def test_cleanup_falls_back_to_rename_when_delete_is_denied(
@@ -945,6 +1066,7 @@ def test_cleanup_falls_back_to_rename_when_delete_is_denied(
     """删除被持续拒绝（如旧名镜像仍被占用）时 rename 成 .old 交给下次清理，不影响更新。"""
     app_dir = tmp_path / "app"
     _make_dual_name_install(app_dir)
+    _mock_shortcut_migration(monkeypatch, True)
     monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
     real_unlink = Path.unlink
 

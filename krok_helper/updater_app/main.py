@@ -538,10 +538,6 @@ def _remove_stale_backup(path, log, label: str) -> tuple[bool, str]:
 def _run_incremental_workbench(args, manifest, work_dir, log):
     """Keep full fallback enabled and discard stale incremental lock state."""
     rc = _original_run_incremental(args, manifest, work_dir, log)
-    if rc == 0:
-        # 迁移期 manifest targets 仍含旧名副本，orphan cleanup 不会删它；新名
-        # 更新成功后在这里补一刀（存量客户端按旧名更新时是 no-op）。
-        _cleanup_legacy_main_exe(args.app_dir, args.app_exe, log)
     if rc != 0:
         global _blocked_lock
         _blocked_lock = None
@@ -1035,21 +1031,130 @@ def _replace_root_payload_file(source: Path, app_dir: Path, log) -> tuple[bool, 
     return True, ""
 
 
+_LEGACY_SHORTCUT_MIGRATE_PS = r"""
+$ErrorActionPreference = 'Stop'
+$legacy = $env:KROK_MIGRATE_LEGACY_EXE
+$primary = $env:KROK_MIGRATE_PRIMARY_EXE
+if (-not $legacy -or -not $primary) { exit 3 }
+try { $sh = New-Object -ComObject WScript.Shell } catch { exit 2 }
+$legacyName = [IO.Path]::GetFileName($legacy)
+$legacyDir = [IO.Path]::GetDirectoryName($legacy)
+$dirs = @(
+    [Environment]::GetFolderPath('Desktop'),
+    [Environment]::GetFolderPath('CommonDesktopDirectory'),
+    [Environment]::GetFolderPath('Programs'),
+    [Environment]::GetFolderPath('CommonPrograms')
+)
+if ($env:APPDATA) {
+    # QuickLaunch 不是 SpecialFolder 枚举成员，只能从 %APPDATA% 拼。
+    $ql = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch'
+    $dirs += $ql
+    $dirs += (Join-Path $ql 'User Pinned\TaskBar')
+}
+$seen = @{}
+foreach ($d in $dirs) {
+    if (-not $d -or -not (Test-Path -LiteralPath $d) -or $seen.ContainsKey($d)) { continue }
+    $seen[$d] = $true
+    Get-ChildItem -LiteralPath $d -Filter *.lnk -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $s = $sh.CreateShortcut($_.FullName)
+            $t = $s.TargetPath
+            if (-not $t) { return }
+            $resolved = $t
+            try { $resolved = (Resolve-Path -LiteralPath $t -ErrorAction Stop).Path } catch { }
+            $match = [string]::Equals($resolved, $legacy, [StringComparison]::OrdinalIgnoreCase)
+            if (-not $match) {
+                $match = ([string]::Equals([IO.Path]::GetFileName($t), $legacyName, [StringComparison]::OrdinalIgnoreCase)) -and ([string]::Equals([IO.Path]::GetDirectoryName($resolved), $legacyDir, [StringComparison]::OrdinalIgnoreCase))
+            }
+            if ($match) {
+                $s.TargetPath = $primary
+                $icon = $s.IconLocation
+                if ($icon -and ($icon -like ('*' + $legacyName + '*'))) { $s.IconLocation = $primary }
+                $s.Save()
+            }
+        } catch { }
+    }
+}
+exit 0
+"""
+
+
+def _migrate_legacy_shortcuts(app_dir, log) -> bool:
+    """把指向旧名主程序 EXE 的快捷方式/固定图标原地改指到新名（轻量迁移）。
+
+    覆盖桌面（用户/公共）、开始菜单程序组（用户/公共）、快速启动与任务栏固定
+    目录，用 PowerShell WScript.Shell COM 改写 .lnk 的 TargetPath（IconLocation
+    引用旧名时一并更新）；匹配口径为「解析后全路径等于旧名 EXE」并辅以「同目录
+    同文件名」兜底，容纳大小写/8.3 路径变体，不碰指向其他安装的快捷方式。
+
+    返回 True 表示扫描已完成（无论改了几个）；False 表示迁移工具本身没跑起来
+    （PowerShell 缺失/被拒/超时）——调用方此时必须推迟清理，宁可让旧名副本
+    残留到下次更新重试，也不能留下指向已删除文件的死快捷方式。
+    """
+
+    if sys.platform != "win32":
+        return True
+    root = Path(app_dir)
+    env = os.environ.copy()
+    env["KROK_MIGRATE_LEGACY_EXE"] = str(root / LEGACY_APP_EXE_NAME)
+    env["KROK_MIGRATE_PRIMARY_EXE"] = str(root / PRIMARY_APP_EXE_NAME)
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                _LEGACY_SHORTCUT_MIGRATE_PS,
+            ],
+            env=env,
+            capture_output=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.warning("旧名快捷方式迁移未能执行（本次不清理，下次更新重试）: %s", exc)
+        return False
+    if proc.returncode != 0:
+        log.warning(
+            "旧名快捷方式迁移脚本退出码 %s（本次不清理，下次更新重试）",
+            proc.returncode,
+        )
+        return False
+    log.info("旧名快捷方式迁移扫描完成")
+    return True
+
+
 def _cleanup_legacy_main_exe(app_dir, app_exe, log) -> None:
-    """新名更新成功后移除旧名主程序副本（改名迁移收尾，详见 docs/auto_update.md §8.1）。
+    """新版本成功拉起后迁移/移除旧名主程序副本（改名迁移收尾，见 docs/auto_update.md §8.1）。
 
     仅当本次更新按新名（``--app-exe Lin-K Lyrics.exe``，新版主程序固定传新名）执行时
-    清理；存量客户端传上来的仍是旧名，副本必须原样保留给它的下一次更新。纯
-    best-effort：删除失败（罕见：旧名镜像仍被另一实例占用）时降级 rename 成
+    清理；存量客户端传上来的仍是旧名，副本必须原样保留给它的下一次更新。两道安全闸：
+
+    - 新名入口必须已存在——旧名可能是该安装唯一可运行入口（如降级旧 Updater 全量
+      更新只回写了旧名的混合安装），没有新入口兜底时绝不删除；
+    - 旧名本体删除前先把指向它的快捷方式迁移到新名（:func:`_migrate_legacy_shortcuts`），
+      迁移工具没跑起来就本次整体不清理，下次更新重试。
+
+    删除本身纯 best-effort：失败（罕见：旧名镜像仍被另一实例占用）时降级 rename 成
     ``.old`` 交给下次更新的同一清理回收，绝不让清理失败影响更新结果。
     """
 
     if app_exe != PRIMARY_APP_EXE_NAME:
         return
     root = Path(app_dir)
+    if not (root / PRIMARY_APP_EXE_NAME).is_file():
+        log.info("新名主程序 %s 不存在，跳过旧名副本清理（保留可用入口）", PRIMARY_APP_EXE_NAME)
+        return
     # 先清 .old 残留再动本体：本体的 rename 兜底目标是 .old，得先腾出位置。
     victims = sorted(root.glob(LEGACY_APP_EXE_NAME + ".old*"), key=lambda p: p.name)
     victims.append(root / LEGACY_APP_EXE_NAME)
+    if not any(_path_lexists(victim) for victim in victims):
+        return
+    if _path_lexists(root / LEGACY_APP_EXE_NAME) and not _migrate_legacy_shortcuts(root, log):
+        return
     for victim in victims:
         if not _path_lexists(victim):
             continue
@@ -1166,8 +1271,8 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
         updater_main.UPDATER_EXE_NAME,
         updater_main.UPDATER_EX_NAME,
     }
-    # 新名更新不回写旧名副本——写完也会在收尾立刻清理；迁移期发布包仍带旧名，
-    # 上面的包校验不变。旧名更新（存量客户端）必须照旧回写，保住它的下一次更新。
+    # 新名更新不回写旧名副本——成功拉起后由启动挂钩统一清理；迁移期发布包仍带
+    # 旧名，上面的包校验不变。旧名更新（存量客户端）必须照旧回写，保住它的下一次更新。
     if app_exe == PRIMARY_APP_EXE_NAME:
         handled.add(LEGACY_APP_EXE_NAME)
     for entry in sorted(new_root.iterdir(), key=lambda item: item.name):
@@ -1181,15 +1286,11 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
         ok, error = _replace_root_payload_file(entry, app_dir, log)
         if not ok:
             return False, error
-    _cleanup_legacy_main_exe(app_dir, app_exe, log)
     return True, ""
 
 
 def _launch_main_app_workbench(app_dir, app_exe, log) -> bool:
     """Launch the updated frozen app as a fresh PyInstaller instance."""
-    # 覆盖「已是最新」等未经过 apply/incremental 的成功路径：新名会话结束前
-    # 确保旧名副本已清理（另外两条路径清过一次，这里幂等重试）。
-    _cleanup_legacy_main_exe(app_dir, app_exe, log)
     exe_path = app_dir / app_exe
     if not exe_path.exists():
         log.error("找不到主程序 EXE: %s", exe_path)
@@ -1213,10 +1314,14 @@ def _launch_main_app_workbench(app_dir, app_exe, log) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        return True
     except OSError as exc:
         log.error("启动主程序失败: %s", exc)
         return False
+    # 新版本已成功拉起，此刻才迁移快捷方式并清理旧名副本——清理必须晚于成功
+    # 启动，任何时刻安装里都保住至少一个可运行入口（新名 EXE 缺失/启动失败时
+    # 旧名原样保留）。这里也是清理的唯一挂钩，覆盖全量/增量/「已是最新」路径。
+    _cleanup_legacy_main_exe(app_dir, app_exe, log)
+    return True
 
 
 def _configure_product() -> None:
