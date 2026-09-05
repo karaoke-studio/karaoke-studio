@@ -9,12 +9,23 @@ from __future__ import annotations
 from typing import Callable, Mapping, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QApplication, QDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QListWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
     BodyLabel,
+    CaptionLabel,
     Dialog,
     EditableComboBox,
     LineEdit,
+    ListWidget as FluentListWidget,
     PrimaryPushButton,
     PushButton,
     SpinBox,
@@ -267,6 +278,165 @@ class FluentIntInputDialog(ModelessDialog):
         return int(self.control.value())
 
 
+class _RowToggleListWidget(FluentListWidget):
+    """整行可点的勾选列表：点名称等任意位置都能切换勾选状态。
+
+    指示器区域的点击由 Qt 自己切换，这里不能重复切。区分方式不靠几何
+    计算（各样式下指示器的位置和大小不一样），而是记住**按下时**该行的
+    勾选状态：松开时若状态已被 Qt 改过，说明点在了指示器上。
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._pressed_check_state: Optional[Qt.CheckState] = None
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        item = self.itemAt(event.position().toPoint())
+        self._pressed_check_state = (
+            item.checkState() if item is not None else None
+        )
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        item = self.itemAt(event.position().toPoint())
+        pressed_state = self._pressed_check_state
+        super().mouseReleaseEvent(event)
+        if event.button() != Qt.MouseButton.LeftButton or item is None:
+            return
+        if not item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            return
+        if pressed_state is not None and item.checkState() != pressed_state:
+            return  # 指示器上的点击，Qt 已经切换过一次
+        item.setCheckState(
+            Qt.CheckState.Unchecked
+            if item.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+
+
+class FluentMultiChoiceDialog(ModelessDialog):
+    """Fluent dialog returning the subset of offered choices the user ticked.
+
+    The choice list defaults to all-checked, and the primary button always
+    reads how many entries will be acted on (and disables itself at zero), so
+    confirming an empty or unintended batch is hard to do by accident.
+    """
+
+    #: 列表里最多直接铺开这么多行，超出的部分靠内部滚动。
+    _MAX_VISIBLE_ROWS = 8
+
+    def __init__(
+        self,
+        title: str,
+        label: str,
+        choices: Sequence[str],
+        *,
+        parent: Optional[QWidget] = None,
+        checked: Optional[Sequence[bool]] = None,
+        icons: Optional[Sequence[Optional[QIcon]]] = None,
+        hint: Optional[str] = None,
+        ok_text: str = "应用",
+        select_all_text: str = "全选",
+        clear_text: str = "全部取消",
+    ) -> None:
+        super().__init__(_resolve_window(parent))
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setMinimumWidth(420)
+        self._ok_text = str(ok_text)
+        self._choices = [str(choice) for choice in choices]
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        prompt = BodyLabel(label, self)
+        prompt.setWordWrap(True)
+        layout.addWidget(prompt)
+        if hint:
+            hint_label = CaptionLabel(hint, self)
+            hint_label.setWordWrap(True)
+            layout.addWidget(hint_label)
+
+        self._list = _RowToggleListWidget(self)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setVerticalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
+        for index, name in enumerate(self._choices):
+            item = QListWidgetItem(name)
+            item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            want = True
+            if checked is not None and index < len(checked):
+                want = bool(checked[index])
+            item.setCheckState(
+                Qt.CheckState.Checked if want else Qt.CheckState.Unchecked
+            )
+            if icons is not None and index < len(icons) and icons[index] is not None:
+                item.setIcon(icons[index])
+            self._list.addItem(item)
+        if self._list.count():
+            row_height = max(self._list.sizeHintForRow(0), 24)
+            visible = min(self._list.count(), self._MAX_VISIBLE_ROWS)
+            self._list.setFixedHeight(row_height * visible + 10)
+        self._list.itemChanged.connect(lambda _item: self._sync_footer())
+        layout.addWidget(self._list, 1)
+
+        selection_row = QHBoxLayout()
+        selection_row.setContentsMargins(0, 0, 0, 0)
+        self._select_all_button = PushButton(select_all_text, self)
+        self._select_all_button.clicked.connect(
+            lambda _checked=False: self._set_all_checked(True)
+        )
+        self._clear_button = PushButton(clear_text, self)
+        self._clear_button.clicked.connect(
+            lambda _checked=False: self._set_all_checked(False)
+        )
+        self._selection_stats = CaptionLabel("", self)
+        selection_row.addWidget(self._select_all_button)
+        selection_row.addWidget(self._clear_button)
+        selection_row.addStretch(1)
+        selection_row.addWidget(self._selection_stats)
+        layout.addLayout(selection_row)
+
+        button_row, self.ok_button, _cancel_button = fluent_button_row(self)
+        layout.addLayout(button_row)
+        self._sync_footer()
+
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for index in range(self._list.count()):
+            self._list.item(index).setCheckState(state)
+
+    def _checked_names(self) -> list[str]:
+        return [
+            self._list.item(index).text()
+            for index in range(self._list.count())
+            if self._list.item(index).checkState() == Qt.CheckState.Checked
+        ]
+
+    def _sync_footer(self, *_args) -> None:
+        selected = len(self._checked_names())
+        total = self._list.count()
+        self._selection_stats.setText(f"已选 {selected}/{total}")
+        self.ok_button.setText(f"{self._ok_text}（{selected}）")
+        self.ok_button.setEnabled(selected > 0)
+
+    def set_checked_names(self, names: Sequence[str]) -> None:
+        """Tick the items whose text appears in ``names`` and only those."""
+        wanted = set(names)
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            item.setCheckState(
+                Qt.CheckState.Checked if item.text() in wanted else Qt.CheckState.Unchecked
+            )
+        self._sync_footer()
+
+    def value(self) -> list[str]:
+        return self._checked_names()
+
+
 def fluent_get_text(
     parent: Optional[QWidget],
     title: str,
@@ -300,6 +470,32 @@ def fluent_get_int(
         maximum=maximum,
         step=step,
         parent=parent,
+    )
+    accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
+    return dialog.value(), accepted
+
+
+def fluent_get_multiple(
+    parent: Optional[QWidget],
+    title: str,
+    label: str,
+    choices: Sequence[str],
+    *,
+    checked: Optional[Sequence[bool]] = None,
+    icons: Optional[Sequence[Optional[QIcon]]] = None,
+    hint: Optional[str] = None,
+    ok_text: str = "应用",
+) -> tuple[list[str], bool]:
+    """Ask for a subset of ``choices``; empty list + ``False`` means cancelled."""
+    dialog = FluentMultiChoiceDialog(
+        title,
+        label,
+        choices,
+        parent=parent,
+        checked=checked,
+        icons=icons,
+        hint=hint,
+        ok_text=ok_text,
     )
     accepted = exec_modeless_dialog(dialog) == QDialog.DialogCode.Accepted
     return dialog.value(), accepted

@@ -75,6 +75,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_button_row,
     fluent_choice,
     fluent_get_editable_choice,
+    fluent_get_multiple,
     fluent_get_text,
     fluent_question,
     fluent_warning,
@@ -246,6 +247,40 @@ _FONT_WEIGHT_LABELS = {
     800: "特粗",
     900: "黑体",
 }
+_FONT_CARD_FIELDS: tuple[str, ...] = (
+    # 主文字·日文
+    "font_family",
+    "font_size_px",
+    "font_weight",
+    "stroke_width_px",
+    "stroke2_enabled",
+    "stroke2_width_px",
+    # 主文字·英数
+    "font_family_latin",
+    "latin_font_size_px",
+    "latin_font_weight",
+    "latin_stroke_width_px",
+    "latin_stroke2_enabled",
+    "latin_stroke2_width_px",
+    # 注音·日文
+    "ruby_font_family",
+    "ruby_font_size_px",
+    "ruby_font_weight",
+    "ruby_stroke_width_px",
+    "ruby_stroke2_enabled",
+    "ruby_stroke2_width_px",
+    # 注音·英数
+    "ruby_font_family_latin",
+    "ruby_latin_font_size_px",
+    "ruby_latin_font_weight",
+    "ruby_latin_stroke_width_px",
+    "ruby_latin_stroke2_enabled",
+    "ruby_latin_stroke2_width_px",
+)
+"""字体卡四个槽页面（主文字/注音 × 日文/英数）内的全部属性字段。
+
+「应用到其他角色」只搬这些；斜体、参与注音高度计算与配色等卡外项不动。
+"""
 
 
 def _available_font_weights(family: str) -> tuple[int, ...]:
@@ -349,6 +384,7 @@ from krok_helper.subtitle_render.frontend.properties.preset_manager import (
     _new_preset_id,
     _normalize_style_presets,
     _preset_ids_for_pair,
+    _scheme_icon,
 )
 def _fill_mode_icons() -> dict[str, QIcon]:
     """Load packaged SVG icons for the five PaintFill modes."""
@@ -2912,6 +2948,87 @@ class PropertyPanel(QWidget):
         changes = self._style_controller.changes_from_scheme(scheme)
         if changes:
             self._update_style(**changes)
+
+    def _on_apply_font_to_roles_requested(self) -> None:
+        """字体卡右下角「应用到其他角色」按钮的入口。"""
+        self._ensure_role_schemes()
+        source = self._current_custom_scheme_name()
+        candidates = [name for name in self._role_controller.names if name != source]
+        if not candidates:
+            InfoBar.warning(
+                title="没有可应用的角色",
+                content="当前项目中没有其他角色。",
+                parent=self,
+                duration=2500,
+            )
+            return
+        schemes = self._style.custom_style_schemes
+        icons = [
+            _scheme_icon(schemes[name]) if name in schemes else None
+            for name in candidates
+        ]
+        selected, ok = fluent_get_multiple(
+            self,
+            "应用到其他角色",
+            (
+                f"将“{self._current_target_label()}”的字体设置"
+                "（主文字/注音 × 日文/英数）应用到所选角色："
+            ),
+            candidates,
+            icons=icons,
+            hint="只应用字体、字号、字重与描边；配色、斜体等设置保持不变。",
+        )
+        if not ok or not selected:
+            return
+        self._apply_font_card_to_roles(source, selected)
+
+    def _apply_font_card_to_roles(
+        self, source: Optional[str], target_names: list[str]
+    ) -> None:
+        """Copy the four font-card slots from one scheme onto other roles."""
+        schemes = dict(self._style.custom_style_schemes)
+        # 弹窗期间工作台仍可交互（modeless），源方案可能已被删除。
+        if source is not None and source not in schemes:
+            InfoBar.warning(
+                title="无法应用",
+                content=f"方案“{source}”已不存在。",
+                parent=self,
+                duration=2500,
+            )
+            return
+        source_scheme = schemes.get(source) if source is not None else None
+        # 复制方案**自己存储**的值而不是解析后的生效值：``None`` 表示该槽
+        # 「跟随上一级」，原样带走后目标角色保留同样的跟随关系（卡片里显示
+        # 的“（0）”状态也一致）。``n3_font_inheritance`` 决定空槽是在方案内
+        # 还是回全局解析，必须连同字段一起复制，否则同样的空槽在目标角色
+        # 上可能解析出不同的结果。
+        font_changes = {
+            field: deepcopy(
+                self._style_controller.own_value(self._style, source, field)
+            )
+            for field in _FONT_CARD_FIELDS
+        }
+        inheritance = (
+            source_scheme.n3_font_inheritance if source_scheme is not None else False
+        )
+        applied: list[str] = []
+        for name in target_names:
+            scheme = schemes.get(name)
+            if scheme is None:
+                continue
+            schemes[name] = replace(
+                scheme, n3_font_inheritance=inheritance, **font_changes
+            )
+            applied.append(name)
+        if not applied:
+            return
+        self._update_style(custom_style_schemes=schemes)
+        InfoBar.success(
+            title="已应用字体设置",
+            content=f"已应用到 {len(applied)} 个角色。",
+            parent=self,
+            duration=2500,
+        )
 
     def _current_scheme_key(self) -> Optional[str]:
         if not hasattr(self, "_singer_combo"):

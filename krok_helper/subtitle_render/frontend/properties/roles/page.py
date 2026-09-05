@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QStackedWidget, QWidget
-from qfluentwidgets import CheckBox
+from qfluentwidgets import CheckBox, PushButton
 
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     inline_property_section,
@@ -127,6 +128,18 @@ class RolePropertyPageBuilder:
         host._ruby_anchor_check.toggled.connect(
             lambda checked: host._update_style(affects_ruby_anchor=checked)
         )
+        # 按钮独占一行、右对齐（卡片右下角）。不能塞进上面的复选框行：
+        # ResponsivePropertyPair 按两张卡片 sizeHint 宽度之和判定是否并排，
+        # 文字按钮的最小宽度会显著抬高字体卡的横向宽度，非最大化窗口下
+        # 会把颜色卡和字体卡提前挤成上下堆叠。
+        host._apply_font_to_roles_button = PushButton("应用到其他角色", section)
+        host._apply_font_to_roles_button.setToolTip(
+            "把当前方案的字体设置（主文字/注音 × 日文/英数）应用到其他角色。"
+        )
+        host._apply_font_to_roles_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        host._apply_font_to_roles_button.clicked.connect(
+            lambda _checked=False: host._on_apply_font_to_roles_requested()
+        )
         flags_row = QHBoxLayout()
         flags_row.setContentsMargins(0, 0, 0, 0)
         flags_row.setSpacing(12)
@@ -134,4 +147,9 @@ class RolePropertyPageBuilder:
         flags_row.addWidget(host._ruby_anchor_check)
         flags_row.addStretch(1)
         layout.addLayout(flags_row)
+        apply_row = QHBoxLayout()
+        apply_row.setContentsMargins(0, 0, 0, 0)
+        apply_row.addStretch(1)
+        apply_row.addWidget(host._apply_font_to_roles_button)
+        layout.addLayout(apply_row)
         return section

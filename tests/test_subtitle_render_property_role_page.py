@@ -21,6 +21,7 @@ class _Host:
         self.updates = []
         self.font_script_changes = []
         self.font_page_syncs = 0
+        self.apply_font_requests = 0
 
     def _make_scheme_navigation(self, parent):
         return QWidget(parent)
@@ -43,6 +44,9 @@ class _Host:
 
     def _sync_font_settings_page(self):
         self.font_page_syncs += 1
+
+    def _on_apply_font_to_roles_requested(self):
+        self.apply_font_requests += 1
 
     def _update_style(self, **changes):
         self.updates.append(changes)
@@ -111,8 +115,10 @@ def test_role_font_builder_routes_role_flags(qapp) -> None:
 
     host._italic_check.setChecked(True)
     host._ruby_anchor_check.setChecked(True)
+    host._apply_font_to_roles_button.click()
 
     assert host.updates == [
         {"italic": True},
         {"affects_ruby_anchor": True},
     ]
+    assert host.apply_font_requests == 1

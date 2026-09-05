@@ -59,6 +59,7 @@ from krok_helper.subtitle_render.frontend.properties.roles import (  # noqa: E40
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (  # noqa: E402
     FluentIntInputDialog,
     FluentMessageDialog,
+    FluentMultiChoiceDialog,
     FluentTextInputDialog,
 )
 from krok_helper.subtitle_render.frontend.properties.property_panel import (  # noqa: E402
@@ -5496,6 +5497,115 @@ def test_property_panel_ruby_anchor_toggle_is_saved_per_role(qapp):
     assert panel._ruby_anchor_check.isChecked()
 
 
+def test_apply_font_to_roles_button_applies_four_slot_cards_to_selected_roles(
+    qapp, monkeypatch
+):
+    """「应用到其他角色」只搬字体卡四个槽；卡外的配色、斜体、注音锚点不动。"""
+    panel = PropertyPanel()
+    panel.set_roles(["A", "B", "C"])
+    panel.set_current_scheme_key("custom:A")
+    panel._update_style(
+        font_size_px=88,
+        latin_font_size_px=74,
+        ruby_font_size_px=45,
+        stroke2_enabled=True,
+        stroke2_width_px=6,
+        italic=True,
+        affects_ruby_anchor=False,
+    )
+    panel._set_color("fill_color", "#00AAEE")
+    calls: list[tuple[str, list[str]]] = []
+    icon_specs: list[object] = []
+
+    def fake_get_multiple(parent, title, label, choices, *, icons=None, **kwargs):
+        calls.append((title, list(choices)))
+        icon_specs.append(list(icons or []))
+        return ["B", "C"], True
+
+    monkeypatch.setattr(pp, "fluent_get_multiple", fake_get_multiple)
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._apply_font_to_roles_button.click()
+
+    # 弹窗拿到的候选不含当前角色 A；标题与全局默认也不在角色列表里
+    assert calls == [("应用到其他角色", ["B", "C"])]
+    # 每个候选角色带一个「未唱/已唱」双色预览图标
+    assert len(icon_specs[0]) == 2
+    assert all(not icon.isNull() for icon in icon_specs[0])
+    style = emitted[-1]
+    for name in ("B", "C"):
+        scheme = style.custom_style_schemes[name]
+        assert scheme.font_size_px == 88
+        assert scheme.latin_font_size_px == 74
+        assert scheme.ruby_font_size_px == 45
+        assert scheme.stroke2_enabled is True
+        assert scheme.stroke2_width_px == 6
+        # 卡外项保持目标角色原值（自动配色），不随源角色改写
+        assert scheme.italic is not True
+        assert scheme.affects_ruby_anchor is not False
+        assert scheme.fill_color != "#00AAEE"
+    # 源角色与当前选中不变
+    assert panel._current_custom_scheme_name() == "A"
+    assert style.custom_style_schemes["A"].font_size_px == 88
+    assert style.custom_style_schemes["A"].italic is True
+    assert style.custom_style_schemes["A"].fill_color == "#00AAEE"
+
+
+def test_apply_font_to_roles_carries_follow_states_not_global_values(qapp, monkeypatch):
+    """源角色的「跟随」槽复制后仍是跟随，不被固化成全局/源的实际生效值。"""
+    panel = _role_panel(global_latin=72)
+    panel.set_roles(["A", "B"])
+    panel.set_current_scheme_key("custom:A")
+    _latin_follow_check(panel).setChecked(True)
+    scheme_a = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme_a.latin_font_size_px is None
+    assert scheme_a.n3_font_inheritance is True
+
+    panel._apply_font_card_to_roles("A", ["B"])
+
+    scheme_b = panel.subtitle_style.custom_style_schemes["B"]
+    assert scheme_b.latin_font_size_px is None
+    assert scheme_b.n3_font_inheritance is True
+    # 渲染口径：B 跟随 B 自己的主文字字号，而不是全局写死的 72
+    merged_b = style_for_role(panel.subtitle_style, "B")
+    assert merged_b.font_size_px == 120
+    assert merged_b.latin_font_size_px is None
+
+
+def test_apply_font_to_roles_without_other_roles_shows_warning(qapp, monkeypatch):
+    panel = PropertyPanel()
+    panel.set_roles(["独唱"])
+    panel.set_current_scheme_key("custom:独唱")
+
+    def fail_if_dialog_opens(*args, **kwargs):
+        raise AssertionError("没有其他角色时不应弹出选择框")
+
+    monkeypatch.setattr(pp, "fluent_get_multiple", fail_if_dialog_opens)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        pp.InfoBar, "warning", staticmethod(lambda **kwargs: warnings.append(kwargs))
+    )
+
+    panel._on_apply_font_to_roles_requested()
+
+    assert warnings and warnings[0]["title"] == "没有可应用的角色"
+
+
+def test_apply_font_to_roles_cancel_keeps_target_schemes(qapp, monkeypatch):
+    panel = PropertyPanel()
+    panel.set_roles(["A", "B"])
+    panel.set_current_scheme_key("custom:A")
+    before = panel.subtitle_style.custom_style_schemes["B"]
+    monkeypatch.setattr(
+        pp, "fluent_get_multiple", lambda *args, **kwargs: ([], False)
+    )
+
+    panel._apply_font_to_roles_button.click()
+
+    assert panel.subtitle_style.custom_style_schemes["B"] is before
+
+
 def test_style_preset_manager_dialog_saves_current_scheme(qapp):
     dialog = StylePresetManagerDialog(
         presets={},
@@ -5604,6 +5714,74 @@ def test_common_input_dialogs_use_qfluentwidgets_controls(qapp):
     int_dialog.close()
     text_dialog.deleteLater()
     int_dialog.deleteLater()
+    qapp.processEvents()
+
+
+def test_multi_choice_dialog_reports_ticked_subset(qapp):
+    dialog = FluentMultiChoiceDialog(
+        "应用到其他角色",
+        "选择角色：",
+        ["主唱", "和声", "导唱符"],
+    )
+
+    # 默认全选，确认按钮实时显示将要应用的数量
+    assert dialog.value() == ["主唱", "和声", "导唱符"]
+    assert dialog.ok_button.text() == "应用（3）"
+    assert dialog.ok_button.isEnabled()
+    assert dialog._selection_stats.text() == "已选 3/3"
+
+    dialog.set_checked_names(["和声"])
+    assert dialog.value() == ["和声"]
+    assert dialog.ok_button.text() == "应用（1）"
+    assert dialog._selection_stats.text() == "已选 1/3"
+
+    dialog._clear_button.click()
+    assert dialog.value() == []
+    assert dialog.ok_button.text() == "应用（0）"
+    assert not dialog.ok_button.isEnabled()  # 0 个时不能误确认
+
+    dialog._select_all_button.click()
+    assert dialog.value() == ["主唱", "和声", "导唱符"]
+
+    dialog.close()
+    dialog.deleteLater()
+    qapp.processEvents()
+
+
+def test_multi_choice_dialog_clicking_name_toggles(qapp):
+    """点行内名称部分也要能切换勾选，而不是只有小指示器可以点。"""
+    dialog = FluentMultiChoiceDialog(
+        "应用到其他角色",
+        "选择角色：",
+        ["主唱", "和声"],
+    )
+    dialog.show()
+    qapp.processEvents()
+    item_list = dialog._list
+    rect = item_list.visualItemRect(item_list.item(0))
+
+    # 默认全选；点行中部（名称区域，避开左侧指示器）→ 取消勾选
+    QTest.mouseClick(
+        item_list.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(rect.left() + rect.width() - 30, rect.center().y()),
+    )
+    assert item_list.item(0).checkState() == Qt.CheckState.Unchecked
+    assert dialog.ok_button.text() == "应用（1）"
+
+    # 点指示器本身：Qt 已切换一次，不能被二次翻转
+    QTest.mouseClick(
+        item_list.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(rect.left() + 10, rect.center().y()),
+    )
+    assert item_list.item(0).checkState() == Qt.CheckState.Checked
+    assert dialog.value() == ["主唱", "和声"]
+
+    dialog.close()
+    dialog.deleteLater()
     qapp.processEvents()
 
 
