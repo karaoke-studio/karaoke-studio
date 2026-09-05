@@ -6,6 +6,7 @@ from qfluentwidgets import ComboBox
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 
 from krok_helper.settings import AppSettings
+from krok_helper.ui_kit import StyledComboBox, WhiteComboBoxMenu, combo_box_view_qss
 from krok_helper.video_download.video_download_page import VIDEO_INFO_COLLAPSED_HEIGHT, VideoDownloadPage
 
 
@@ -20,6 +21,49 @@ def test_format_selector_uses_native_fluent_combo(monkeypatch) -> None:
         assert type(page.format_combo) is ComboBox
         assert type(page.format_combo._createComboMenu()) is ComboBoxMenu
     finally:
+        page.close()
+        page.deleteLater()
+        app.processEvents()
+
+
+def test_styled_combo_popups_follow_the_theme(monkeypatch) -> None:
+    """下拉面板必须用 ``ui_kit`` 的主题化菜单，深色下不得仍是浅色底。
+
+    回归：本页曾自带一份硬编码白底 + ``#FFF1F2`` 选中色的 ``WhiteComboBoxMenu``
+    拷贝，深色模式下弹窗整块仍是浅色（非选中项还继承了深色主题的白字，白底白字
+    直接不可读）。修复方式是删掉本地拷贝、复用 ``ui_kit`` 按 ``palette()`` 出样式
+    的版本 —— 这里同时钉住血统（不许再冒出本地拷贝）与行为（深色下样式翻黑）。
+    """
+    import krok_helper.theme_workbench as workbench
+    import krok_helper.video_download.video_download_page as page_module
+
+    assert page_module.StyledComboBox is StyledComboBox
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(VideoDownloadPage, "_refresh_cookie_status", lambda _self: None)
+    monkeypatch.setattr(VideoDownloadPage, "_refresh_youtube_cookie_status", lambda _self: None)
+    monkeypatch.setattr(VideoDownloadPage, "_ensure_qr_login", lambda _self: None)
+
+    class _FakeTheme:
+        def __init__(self, is_dark: bool) -> None:
+            self.is_dark = is_dark
+
+    page = VideoDownloadPage(AppSettings(), lambda: None)
+    menus = []
+    try:
+        for combo in (page.task_switch_combo, page.naming_rule_combo):
+            assert type(combo) is StyledComboBox
+
+        monkeypatch.setattr(workbench, "theme", _FakeTheme(is_dark=True))
+        for combo in (page.task_switch_combo, page.naming_rule_combo):
+            menu = combo._createComboMenu()
+            menus.append(menu)
+            assert type(menu) is WhiteComboBoxMenu
+            assert menu.view.styleSheet() == combo_box_view_qss()
+            assert "#FFF1F2" not in menu.view.styleSheet(), "深色下拉面板仍在用浅色选中底"
+    finally:
+        for menu in menus:
+            menu.deleteLater()
         page.close()
         page.deleteLater()
         app.processEvents()

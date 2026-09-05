@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import logging
 import subprocess
 import time
@@ -42,8 +41,6 @@ from qfluentwidgets import (
     ToolButton,
     ToolTipPosition,
 )
-from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
-from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from krok_helper.background_throttle import UiActivityGuard, ui_active
 from krok_helper.qfluent_compat import (
     ask_fluent_confirm,
@@ -52,6 +49,7 @@ from krok_helper.qfluent_compat import (
     resolve_fluent_dialog_parent,
     show_fluent_info,
 )
+from krok_helper.ui_kit import StyledComboBox
 
 
 log = logging.getLogger(__name__)
@@ -131,8 +129,6 @@ SEGMENT_STYLE_SELECTED = (
 )
 SEGMENT_TITLE_COLOR_NORMAL = "#475467"
 SEGMENT_TITLE_COLOR_SELECTED = "#111827"
-DWMWA_WINDOW_CORNER_PREFERENCE = 33
-DWMWCP_DONOTROUND = 1
 DOWNLOAD_TABLE_FIXED_WIDTHS = {
     0: 88,
     2: 92,
@@ -141,26 +137,6 @@ DOWNLOAD_TABLE_FIXED_WIDTHS = {
     5: 118,
     6: 124,
 }
-COMBO_BOX_VIEW_QSS = """
-QAbstractItemView {
-    background-color: transparent;
-    border: none;
-    border-radius: 0px;
-    padding: 4px;
-    outline: none;
-}
-
-QAbstractItemView::item {
-    height: 32px;
-    padding: 0 12px;
-    border-radius: 6px;
-}
-
-QAbstractItemView::item:selected {
-    background-color: #FFF1F2;
-    color: black;
-}
-"""
 
 
 def open_in_explorer(path: Path) -> None:
@@ -320,54 +296,6 @@ class ExpandablePanelCard(PanelCard):
 
     def toggle_expanded(self) -> None:
         self.set_expanded(not self._expanded)
-
-
-class WhiteComboBoxMenu(ComboBoxMenu):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.NoDropShadowWindowHint)
-        self.view.setStyleSheet(COMBO_BOX_VIEW_QSS)
-        self.view.setFrameShape(QFrame.Shape.NoFrame)
-        self.hBoxLayout.setContentsMargins(0, 0, 0, 0)
-        self.hBoxLayout.setSpacing(0)
-        self.view.setViewportMargins(0, 0, 0, 0)
-        self.setShadowEffect(blurRadius=0, offset=(0, 0), color=QColor(0, 0, 0, 0))
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        super().showEvent(event)
-        try:
-            preference = ctypes.c_int(DWMWCP_DONOTROUND)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                int(self.winId()),
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                ctypes.byref(preference),
-                ctypes.sizeof(preference),
-            )
-        except Exception:
-            pass
-
-    def exec(self, pos, ani=True, aniType=MenuAnimationType.DROP_DOWN):
-        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.view.adjustSize(pos, aniType)
-
-        overflow = self.view.verticalScrollBar().maximum()
-        if overflow > 0:
-            self.view.setFixedHeight(self.view.height() + overflow + 8)
-
-        self.adjustSize()
-        return super().exec(pos, ani, aniType)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#EAEAEA"), 1))
-        painter.setBrush(QColor("white"))
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
-
-
-class StyledComboBox(ComboBox):
-    def _createComboMenu(self):
-        return WhiteComboBoxMenu(self)
 
 
 class QrPlaceholder(QLabel):
