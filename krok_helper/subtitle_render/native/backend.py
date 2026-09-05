@@ -867,6 +867,7 @@ class NativeRendererProcess:
         dpr: float = 1.0,
         extra_tracks: list[TimingTrack] | None = None,
         duration_ms: int | None = None,
+        relayout_scope: str | None = None,
     ) -> dict[str, Any]:
         ir_kwargs: dict[str, Any] = {
             "width": width,
@@ -877,6 +878,10 @@ class NativeRendererProcess:
         }
         if duration_ms is not None:
             ir_kwargs["duration_ms"] = duration_ms
+        if relayout_scope is not None:
+            # None = 全量重排（默认，行为同历史版本）；"titles" = 仅标题
+            # 变化，歌词布局计划按签名复用（见 build_render_ir）。
+            ir_kwargs["relayout_scope"] = relayout_scope
         ir = build_render_ir(track, style, **ir_kwargs)
         self._send({"cmd": "configure", "ir": ir})
         return self._expect_ok(
@@ -911,6 +916,7 @@ class NativeRendererProcess:
         export_crop_top: int = 0,
         export_crop_height: int = 0,
         export_bands: list[tuple[int, int]] | None = None,
+        relayout_scope: str | None = None,
     ) -> dict[str, Any]:
         """Configure the G1 DirectWrite scene without enabling the product path."""
         self.configure(
@@ -922,6 +928,7 @@ class NativeRendererProcess:
             dpr=dpr,
             extra_tracks=extra_tracks,
             duration_ms=duration_ms,
+            relayout_scope=relayout_scope,
         )
         payload: dict[str, Any] = {
             "cmd": "gpu_configure",

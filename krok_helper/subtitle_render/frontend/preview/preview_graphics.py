@@ -361,6 +361,9 @@ class PreviewGraphicsView(QGraphicsView):
         # 把字幕栅格化搬到工作线程，GUI 线程只 blit → 主呈现循环不再被
         # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认开，env KROK_SUBTITLE_ASYNC_PREVIEW=0 回退。
         self._async_renderer: Optional[AsyncSubtitleRenderer] = None
+        # 最近一次 set_style 附带的局部重排 scope（None = 全量），
+        # 供 _refresh_async_state 透传给 worker 的 configure。
+        self._style_relayout_scope: Optional[str] = None
         # 渲染忙碌徽标状态：_render_pending_since 记录「最近一次派发请求后尚未
         # 收到可接受新帧」这一连续无帧区间的起点（播放期每次 tick 都派发请求，
         # 但帧正常到达时区间被频繁闭合，时长永远低于显示阈值 → 不闪烁；worker
@@ -436,9 +439,15 @@ class PreviewGraphicsView(QGraphicsView):
         self._subtitle_item.clear_async_image()
         self._refresh_async_state()
 
-    def set_style(self, style: Style) -> None:
+    def set_style(self, style: Style, *, relayout_scope: str | None = None) -> None:
+        """样式变化后重渲当前帧。
+
+        ``relayout_scope``：None = 全量重排（默认）；``"titles"`` = 仅标题
+        属性变化，worker configure 时歌词布局计划按签名复用（分轴局部重排）。
+        """
         self._subtitle_item.set_style(style)
         self._subtitle_item.clear_async_image()
+        self._style_relayout_scope = relayout_scope if relayout_scope else None
         self._refresh_async_state()
 
     def set_duration(self, duration_ms: int) -> None:
@@ -526,6 +535,7 @@ class PreviewGraphicsView(QGraphicsView):
                 self._style,
                 self._subtitle_item._extra_tracks,  # noqa: SLF001
                 duration_ms=self._duration_ms,
+                relayout_scope=self._style_relayout_scope,
             )
         except TypeError:
             # Compatibility with third-party/older preview workers that only

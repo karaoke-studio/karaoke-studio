@@ -14,7 +14,10 @@ from krok_helper.subtitle_render.engine.layout.page.placement import (
     PageVisualBands,
     solve_page_axis_offsets,
 )
-from krok_helper.subtitle_render.engine.value_signature import value_signature
+from krok_helper.subtitle_render.engine.value_signature import (
+    lyric_layout_style_signature,
+    value_signature,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.models import LYRICS_LAYOUT_FIELDS, Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
@@ -84,7 +87,7 @@ def _page_offset_cache_key(
         max(int(logical_w), 1),
         max(int(logical_h), 1),
         value_signature(track),
-        value_signature(style),
+        lyric_layout_style_signature(style),
     )
 
 

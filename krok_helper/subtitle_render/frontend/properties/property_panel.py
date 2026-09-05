@@ -626,6 +626,11 @@ class PropertyPanel(QWidget):
         super().__init__(parent)
         self._style = Style()
         self._syncing = False
+        # 最近一次样式变更的局部重排 scope（None = 全量）：
+        # _update_title 置 "titles"，_update_style / set_style 全量同步路径置
+        # None；主窗口防抖刷新时经 take_style_relayout_scope() 取走并透传给
+        # 预览。scope 只是性能提示——正确性由歌词布局样式签名把关。
+        self._pending_style_relayout_scope: Optional[str] = None
         # 控件是否已按 _style 完整同步过一次；未同步前不能走 set_style 的等值快路径。
         self._style_synced = False
         self._title_text_pending: set[int] = set()
@@ -933,6 +938,10 @@ class PropertyPanel(QWidget):
             self._style = replace(style)
             self._sync_font_preview()
             return
+        # 全量同步（外部灌入 / 撤销重做 / 恢复默认等）不再是「仅标题变化」，
+        # 清掉待取的局部 scope。注意必须放在等值快路径之后：刚由 _update_title
+        # 发出的样式被宿主回流时，scope 还要留给随后的预览刷新取用。
+        self._pending_style_relayout_scope = None
         self._style = replace(style)
         current_key = self._current_scheme_key()
         self._syncing = True
@@ -1809,7 +1818,19 @@ class PropertyPanel(QWidget):
             self._sync_title_controls()
         finally:
             self._syncing = False
+        # 仅标题条目变化：预览重排可走局部路径（歌词计划按签名复用）。
+        self._pending_style_relayout_scope = "titles"
         self.styleChanged.emit(self._style)
+
+    def take_style_relayout_scope(self) -> Optional[str]:
+        """取走最近一次样式变更的局部重排 scope（取后复位为全量）。
+
+        返回 ``"titles"`` 表示自上次取走后只有标题条目变化；``None`` 表示
+        走全量重排。主窗口在防抖刷新预览前调用。
+        """
+        scope = self._pending_style_relayout_scope
+        self._pending_style_relayout_scope = None
+        return scope
 
     def _derive_title_custom_windows(
         self, title: TitleOverlay
@@ -3652,6 +3673,8 @@ class PropertyPanel(QWidget):
     def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:
             return
+        # 常规样式编辑不再属于「仅标题变化」，复位局部重排 scope。
+        self._pending_style_relayout_scope = None
         result = self._style_controller.update(
             self._style,
             changes,

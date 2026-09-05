@@ -27,8 +27,13 @@ def build_track_layout_plan(
     *,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    use_cache: bool = True,
 ) -> TrackLayoutPlan:
-    """Build the shared plan using Painter's current geometry backend."""
+    """Build the shared plan using Painter's current geometry backend.
+
+    ``use_cache=False`` 强制全量重排；``True`` 时按签名复用（见
+    :func:`resolve_track_layout_plan`）。
+    """
 
     return build_semantic_layout_plan(
         track,
@@ -36,6 +41,7 @@ def build_track_layout_plan(
         _PAINTER_LAYOUT_RESOLVERS,
         logical_w=logical_w,
         logical_h=logical_h,
+        use_cache=use_cache,
     )
 
 

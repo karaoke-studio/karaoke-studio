@@ -19,6 +19,7 @@ def build_track_layout_plan(
     *,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    use_cache: bool = True,
 ) -> TrackLayoutPlan:
     """Build one immutable semantic plan through explicit backend ports."""
 
@@ -28,6 +29,7 @@ def build_track_layout_plan(
         resolvers,
         logical_w=logical_w,
         logical_h=logical_h,
+        use_cache=use_cache,
     )
 
 __all__ = ["LayoutPlanResolvers", "build_track_layout_plan", "layout_pass"]

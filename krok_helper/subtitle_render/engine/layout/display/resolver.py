@@ -56,7 +56,10 @@ from krok_helper.subtitle_render.engine.render_progress import (
     report_render_progress,
     set_display_phase_head,
 )
-from krok_helper.subtitle_render.engine.value_signature import value_signature
+from krok_helper.subtitle_render.engine.value_signature import (
+    lyric_layout_style_signature,
+    value_signature,
+)
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
@@ -1015,7 +1018,7 @@ def resolve_display_lines_for_style(
         logical_h,
         id(track),
         value_signature(track),
-        value_signature(style),
+        lyric_layout_style_signature(style),
     )
     cached = cached_display_line_resolution(cache_key)
     if cached is not None:

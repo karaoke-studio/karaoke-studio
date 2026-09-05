@@ -8430,3 +8430,36 @@ def test_main_window_screen_size_undo_merges_rapid_edits(qapp, monkeypatch):
     # 一条 Ctrl+Z 回到第一个旧值
     win._undo_edit()
     assert win._screen_settings.width == 1920
+
+
+def test_title_update_marks_partial_relayout_scope(qapp):
+    """标题条目编辑标记 "titles" 局部重排；常规样式编辑与全量同步复位。"""
+    panel = PropertyPanel()
+    panel.set_style(Style())
+
+    panel._update_title(0, fade_in_ms=700)
+    assert panel.take_style_relayout_scope() == "titles"
+    # 取后复位：第二次取为全量
+    assert panel.take_style_relayout_scope() is None
+
+    # 常规样式编辑复位 scope
+    panel._update_title(0, fade_in_ms=900)
+    panel._update_style(stroke_width_px=max(Style.stroke_width_px + 1, 1))
+    assert panel.take_style_relayout_scope() is None
+
+    # 全量 set_style（外部灌入 / 撤销重做等）复位 scope
+    panel._update_title(0, fade_in_ms=800)
+    panel.set_style(replace(Style(), font_size_px=Style.font_size_px + 4), emit=True)
+    assert panel.take_style_relayout_scope() is None
+
+
+def test_title_edit_then_host_reflow_keeps_scope_for_preview(qapp):
+    """宿主把面板发出的样式原样回流（等值快路径）不得吃掉待取的 scope。"""
+    panel = PropertyPanel()
+    panel.set_style(Style())
+
+    panel._update_title(0, text_template="{title}")
+    emitted = panel._style
+    # main_window _apply_style 的回流：等值 + emit=False → 走快路径
+    panel.set_style(emitted)
+    assert panel.take_style_relayout_scope() == "titles"

@@ -2375,6 +2375,174 @@ def test_build_render_ir_resolves_title_metadata_and_windows():
     assert ir["titles"][0]["windows"] == [[100, 1_600, 300, 300]]
 
 
+def _scoped_ir_track() -> TimingTrack:
+    return TimingTrack(
+        meta=TimingTrackMeta(title="曲名"),
+        lines=[TimingLine(chars=[TimingChar("終", 3_000)], end_ms=4_000)],
+    )
+
+
+def _count_plan_rebuilds(monkeypatch):
+    """数真实重建次数：store 只在重建路径发生（缓存命中不会 store）。
+
+    返回重建过的轨道 id 列表（按重建顺序，含重复）。
+    """
+    import krok_helper.subtitle_render.engine.layout.plan.orchestrator as orchestrator
+
+    rebuilds: list[int] = []
+    real_store = orchestrator.store_track_layout_plan
+
+    def counting_store(key, track, style, plan):
+        rebuilds.append(id(track))
+        return real_store(key, track, style, plan)
+
+    monkeypatch.setattr(orchestrator, "store_track_layout_plan", counting_store)
+    return rebuilds
+
+
+def test_build_render_ir_titles_scope_reuses_layout_plans(monkeypatch):
+    """relayout_scope="titles"：歌词布局计划按签名复用，标题仍重新序列化。"""
+    from krok_helper.subtitle_render.engine.layout.plan.cache import (
+        clear_track_layout_plan_cache,
+    )
+
+    rebuilds = _count_plan_rebuilds(monkeypatch)
+    clear_track_layout_plan_cache()
+    track = _scoped_ir_track()
+    track_id = id(track)
+    style = Style(title_overlays=[TitleOverlay(enabled=True, text_template="A")])
+
+    # 全量（无入参）：绕过缓存直建计划，结果写回缓存。
+    ir = build_render_ir(track, style, width=640, height=360, fps=60)
+    assert rebuilds == [track_id]
+    assert ir["titles"][0]["text"] == "A"
+
+    # 仅标题变化 + 局部 scope：签名未变 → 计划全部复用（0 次重建），
+    # 但标题序列化必须反映新模板。
+    title_changed = replace(
+        style, title_overlays=[TitleOverlay(enabled=True, text_template="B")]
+    )
+    ir = build_render_ir(
+        track, title_changed, width=640, height=360, fps=60, relayout_scope="titles"
+    )
+    assert rebuilds == [track_id]
+    assert ir["titles"][0]["text"] == "B"
+
+    # 全量即使签名未变也强制直建（时间/布局编辑的预期行为）。
+    build_render_ir(track, title_changed, width=640, height=360, fps=60)
+    assert len(rebuilds) == 2
+
+    # 歌词布局相关字段变化时，局部 scope 也必须回退重建（签名闸门）。
+    font_changed = replace(title_changed, font_size_px=style.font_size_px + 10)
+    build_render_ir(
+        track, font_changed, width=640, height=360, fps=60, relayout_scope="titles"
+    )
+    assert len(rebuilds) == 3
+
+    # 未知 scope 一律按全量处理（防御）。
+    build_render_ir(
+        track, font_changed, width=640, height=360, fps=60, relayout_scope="bogus"
+    )
+    assert len(rebuilds) == 4
+    clear_track_layout_plan_cache()
+
+
+def test_build_render_ir_titles_scope_rebuilds_only_changed_source(monkeypatch):
+    """分轴：副轴轨道变化时，主轴计划按签名复用，只重建副轴。"""
+    from krok_helper.subtitle_render.engine.layout.plan.cache import (
+        clear_track_layout_plan_cache,
+    )
+
+    rebuilds = _count_plan_rebuilds(monkeypatch)
+    clear_track_layout_plan_cache()
+    primary = _scoped_ir_track()
+    extra = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("副", 500)], end_ms=1_000)]
+    )
+    primary_id, extra_id = id(primary), id(extra)
+    style = Style(title_overlays=[TitleOverlay(enabled=True, text_template="A")])
+
+    build_render_ir(
+        primary, style, width=640, height=360, fps=60, extra_tracks=[extra]
+    )
+    primary_id, extra_id = id(primary), id(extra)
+    assert rebuilds == [primary_id, extra_id]
+
+    build_render_ir(
+        primary,
+        style,
+        width=640,
+        height=360,
+        fps=60,
+        extra_tracks=[extra],
+        relayout_scope="titles",
+    )
+    assert len(rebuilds) == 2  # 主副轴签名都未变：全部复用
+
+    # 副轴时间改动：局部 scope 下只重建副轴（主轴命中缓存）。
+    extra.lines[0].chars[0].start_ms = 900
+    build_render_ir(
+        primary,
+        style,
+        width=640,
+        height=360,
+        fps=60,
+        extra_tracks=[extra],
+        relayout_scope="titles",
+    )
+    assert rebuilds == [primary_id, extra_id, extra_id]
+    clear_track_layout_plan_cache()
+
+
+def test_backend_configure_forwards_relayout_scope(monkeypatch):
+    """configure / configure_gpu 的 relayout_scope 入参必须到达 build_render_ir。"""
+    import krok_helper.subtitle_render.native.backend as backend_module
+    from krok_helper.subtitle_render.native.backend import NativeRendererProcess
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        backend_module,
+        "build_render_ir",
+        lambda track, style, **kwargs: seen.append(kwargs) or {},
+    )
+
+    class _StubProcess(NativeRendererProcess):
+        def __init__(self) -> None:  # noqa: D107 — 不拉起真实 sidecar
+            self.sent: list[dict] = []
+            self.configure_timeout_s = 1.0
+            self.gpu_configure_timeout_s = 1.0
+
+        def _send(self, payload):
+            self.sent.append(payload)
+
+        def _read_until_event(self, *args, **kwargs):
+            return {}
+
+        def _expect_ok(self, payload):
+            return payload
+
+    track = _scoped_ir_track()
+    proc = _StubProcess()
+    proc.configure(track, Style(), width=640, height=360, fps=60)
+    assert "relayout_scope" not in seen[-1]
+
+    proc.configure(
+        track, Style(), width=640, height=360, fps=60, relayout_scope="titles"
+    )
+    assert seen[-1]["relayout_scope"] == "titles"
+
+    proc.configure_gpu(
+        track,
+        Style(),
+        width=640,
+        height=360,
+        fps=60,
+        relayout_scope="titles",
+    )
+    assert seen[-1]["relayout_scope"] == "titles"
+    assert proc.sent[-1]["cmd"] == "gpu_configure"
+
+
 def test_build_render_ir_anchors_two_segment_title_tail_to_project_duration():
     track = TimingTrack(
         meta=TimingTrackMeta(title="曲名"),

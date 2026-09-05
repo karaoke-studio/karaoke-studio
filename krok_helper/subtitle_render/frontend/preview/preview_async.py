@@ -582,6 +582,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._pending: Optional[tuple[int, int, bool, float]] = None
         self._needs_configure = True
         self._needs_target_resize = False
+        self._relayout_scope: Optional[str] = None
         self._playing = False
         self._stopped = False
         self._renderer_failed = False
@@ -671,6 +672,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         extra_tracks: Optional[list[TimingTrack]] = None,
         *,
         duration_ms: int | None = None,
+        relayout_scope: str | None = None,
     ) -> None:
         with self._condition:
             if self._stopped:
@@ -680,6 +682,9 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._style = style
             self._extra_tracks = list(extra_tracks or ())
             self._duration_ms = max(int(duration_ms or 0), 0)
+            # relayout_scope：None = 全量重排（默认）；"titles" = 仅标题
+            # 变化，configure 时歌词布局计划按签名复用（build_render_ir）。
+            self._relayout_scope = relayout_scope if relayout_scope else None
             with self._stats_lock:
                 self._stats["warp_selected"] = int(self._force_warp)
             self._generation += 1
@@ -854,6 +859,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 submitted_at,
                 self._native_target,
                 self._force_warp,
+                self._relayout_scope,
             )
 
     def _run(self) -> None:
@@ -880,6 +886,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     submitted_at,
                     native_target,
                     force_warp,
+                    relayout_scope,
                 ) = snapshot
                 if track is None or style is None:
                     continue
@@ -948,6 +955,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 worker_count=self._worker_count_requested,
                                 defer_followers=True,
                                 defer_realizations_until_first_frame=True,
+                                relayout_scope=relayout_scope,
                             )
                             self._active_worker_count = max(
                                 1, min(int(configured.get("worker_count", 1)), 8)
@@ -1437,6 +1445,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._pending_skip_current = False
         self._stopped = False
         self._needs_configure = True
+        self._relayout_scope: Optional[str] = None
         self._restart_renderer = False
         self._renderer_owner = NativeRendererProcessOwner(
             process_factory=NativeRendererProcess,
@@ -1495,6 +1504,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         extra_tracks: Optional[list[TimingTrack]] = None,  # noqa: ARG002 — native 预览暂不支持副轨
         *,
         duration_ms: int | None = None,
+        relayout_scope: str | None = None,
     ) -> None:
         with self._condition:
             if self._stopped:
@@ -1502,6 +1512,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._track = track
             self._style = style
             self._duration_ms = max(int(duration_ms or 0), 0)
+            self._relayout_scope = relayout_scope if relayout_scope else None
             self._advance_generation_locked()
             self._needs_configure = True
             self._frame_cache.clear()
@@ -1602,6 +1613,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 playing,
                 skip_current,
                 duration_ms,
+                relayout_scope,
             ) = snapshot
             if track is None or style is None:
                 continue
@@ -1624,6 +1636,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     restart_renderer=restart_renderer,
                     playing=playing,
                     skip_current=skip_current,
+                    relayout_scope=relayout_scope,
                 )
             except NativeRendererError as exc:
                 self._stats.note_native_renderer_failure()
@@ -1690,6 +1703,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._playing,
                 skip_current,
                 self._duration_ms,
+                self._relayout_scope,
             )
 
     def _render_native(
@@ -1707,6 +1721,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         playing: bool,
         skip_current: bool,
         duration_ms: int = 0,
+        relayout_scope: str | None = None,
     ) -> None:
         timestamps = native_preview_timestamps(
             t_ms,
@@ -1744,6 +1759,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                         fps=60,
                         dpr=dpr,
                         duration_ms=duration_ms,
+                        relayout_scope=relayout_scope,
                     )
             # 资源常驻（G2 硬性要求 4）：shm_key 与 renderer 同生命周期，
             # sidecar 端据此跨 range 复用同一块 ring，不再逐 range 重建。

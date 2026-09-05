@@ -188,7 +188,7 @@ class PreviewCanvas(QWidget):
         self._extra_tracks = list(tracks)
         self.update()
 
-    def set_style(self, style: Style) -> None:
+    def set_style(self, style: Style, *, relayout_scope: str | None = None) -> None:  # noqa: ARG001
         self._style = style
         self.update()
 
@@ -531,8 +531,12 @@ class PreviewPanel(DropPanel):
         if setter is not None:
             setter(duration_ms)
 
-    def set_style(self, style: Style) -> None:
-        self._canvas.set_style(style)
+    def set_style(self, style: Style, *, relayout_scope: str | None = None) -> None:
+        """样式变化；``relayout_scope`` 见画布 ``set_style``（None = 全量重排）。"""
+        try:
+            self._canvas.set_style(style, relayout_scope=relayout_scope)
+        except TypeError:
+            self._canvas.set_style(style)
 
     def set_gpu_preview_enabled(self, enabled: bool) -> bool:
         setter = getattr(self._canvas, "set_gpu_preview_enabled", None)

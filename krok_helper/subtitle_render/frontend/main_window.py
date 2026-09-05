@@ -4426,7 +4426,9 @@ class SubtitleRenderWindow(QWidget):
 
     def _apply_preview_style_now(self) -> None:
         self._preview_style_refresh_timer.stop()
-        self._preview_panel.set_style(self._style)
+        # 标题条目编辑走局部重排（歌词布局计划按签名复用）；其余全量。
+        relayout_scope = self._property_panel.take_style_relayout_scope()
+        self._preview_panel.set_style(self._style, relayout_scope=relayout_scope)
         self._lyrics_panel.set_style(self._style)
 
     def _title_total_duration_ms(self) -> int:

@@ -101,9 +101,22 @@ def build_render_ir(
     dpr: float = 1.0,
     extra_tracks: list[TimingTrack] | None = None,
     duration_ms: int | None = None,
+    relayout_scope: str | None = None,
 ) -> dict[str, Any]:
-    """Build one JSON-friendly native snapshot from shared layout plans."""
+    """Build one JSON-friendly native snapshot from shared layout plans.
 
+    ``relayout_scope``（新增入参，默认 None = 全量）：
+    - ``None``：全轨重排——各源布局计划绕过缓存直接重建（时间/布局等
+      变化走这条，行为与历史版本一致），结果写回缓存；
+    - ``"titles"``：局部重排——只改了标题属性时，各源布局计划按
+      (轨道值签名, 歌词布局样式签名) 命中缓存复用，签名不匹配的源自动
+      回退重建（分轴粒度：主轨/副轨各自校验各自命中），标题部分始终
+      重新序列化。签名是正确性闸门，scope 只是性能提示。
+    其余取值一律按全量处理（防御）。
+    """
+
+    # 局部复用仅对已知 scope 生效；未知值按全量。
+    use_plan_cache = relayout_scope == "titles"
     with layout_pass():
         # 主轨与附加轨共用一张轮廓表：同一 SVG 导唱符全片只序列化一次。
         glyph_table = VectorGlyphTable()
@@ -112,6 +125,7 @@ def build_render_ir(
             style,
             logical_w=width,
             logical_h=height,
+            use_cache=use_plan_cache,
         )
         extra_sources = list(extra_tracks or ())
         extra_plans = [
@@ -120,6 +134,7 @@ def build_render_ir(
                 style,
                 logical_w=width,
                 logical_h=height,
+                use_cache=use_plan_cache,
             )
             for source in extra_sources
         ]

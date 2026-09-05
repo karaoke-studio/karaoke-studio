@@ -6,7 +6,10 @@ from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 from krok_helper.subtitle_render.engine.layout.page.plan import page_plan_signature
 from krok_helper.subtitle_render.engine.layout.plan.cache import layout_cache_enabled
-from krok_helper.subtitle_render.engine.value_signature import value_signature
+from krok_helper.subtitle_render.engine.value_signature import (
+    lyric_layout_style_signature,
+    value_signature,
+)
 
 
 def track_layout_signature(track: TimingTrack) -> tuple:
@@ -94,7 +97,12 @@ def layout_cache_signature(
 
     if not layout_cache_enabled() or display_style.vertical:
         return None
-    return (track_layout_signature(track), value_signature(display_style))
+    # 样式侧只签歌词布局相关字段：标题属性（title_overlays 等）不进 key，
+    # 否则改标题会把全部歌词行布局缓存连带作废、整轨重排。
+    return (
+        track_layout_signature(track),
+        lyric_layout_style_signature(display_style),
+    )
 
 
 __all__ = [

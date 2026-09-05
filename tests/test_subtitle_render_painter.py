@@ -239,6 +239,47 @@ def test_painter_keeps_layout_cache_key_compatibility_exports() -> None:
     assert subtitle_painter._value_signature is value_signature
 
 
+def test_layout_cache_signature_ignores_title_only_style_fields() -> None:
+    """标题属性编辑不得作废歌词行布局缓存（整轨重排根因之一）。"""
+    from dataclasses import replace
+
+    from krok_helper.subtitle_render.domain.models import TitleOverlay
+    from krok_helper.subtitle_render.engine.render.core.cache_keys import (
+        layout_cache_signature,
+    )
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=0),
+                    TimingChar(text="い", start_ms=400),
+                ],
+                end_ms=1_200,
+            )
+        ]
+    )
+    base = layout_cache_signature(track, Style())
+
+    title_changed = replace(
+        Style(),
+        title_overlays=[
+            TitleOverlay(enabled=True, text_template="{title}", fade_in_ms=777)
+        ],
+    )
+    hidden_changed = replace(Style(), hidden_builtin_layout_ids=["builtin-3"])
+    assert base == layout_cache_signature(track, title_changed)
+    assert base == layout_cache_signature(track, hidden_changed)
+
+    # 影响歌词布局的字段仍要使签名失效。
+    font_changed = replace(Style(), font_size_px=Style.font_size_px + 12)
+    assert base != layout_cache_signature(track, font_changed)
+    track_changed = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="い", start_ms=0)], end_ms=900)]
+    )
+    assert base != layout_cache_signature(track_changed, Style())
+
+
 def test_painter_keeps_horizontal_wipe_compatibility_exports() -> None:
     from krok_helper.subtitle_render.engine.render.elements.horizontal import wipe
 

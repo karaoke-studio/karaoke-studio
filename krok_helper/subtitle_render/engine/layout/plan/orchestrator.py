@@ -41,7 +41,10 @@ from krok_helper.subtitle_render.engine.layout.line.qt_geometry import (
     resolved_guide_anchor_bounds_for_line,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
-from krok_helper.subtitle_render.engine.value_signature import value_signature
+from krok_helper.subtitle_render.engine.value_signature import (
+    lyric_layout_style_signature,
+    value_signature,
+)
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
@@ -82,16 +85,23 @@ def resolve_track_layout_plan(
     *,
     logical_w: int | None = None,
     logical_h: int | None = None,
+    use_cache: bool = True,
 ) -> TrackLayoutPlan:
-    """Resolve frame-independent line semantics for CPU and GPU consumers."""
+    """Resolve frame-independent line semantics for CPU and GPU consumers.
+
+    ``use_cache=False`` 表示强制全量重排（时间/布局等变化，绕过缓存直建），
+    结果仍写回缓存供后续局部复用；``use_cache=True`` 时按 (轨道值签名,
+    歌词布局样式签名) 命中复用——签名不匹配自动回退重建，因此局部复用
+    永远是签名校验过的，调用方的 scope 只是性能提示而非正确性依据。
+    """
     cache_key = (
         logical_w,
         logical_h,
         id(track),
         value_signature(track),
-        value_signature(style),
+        lyric_layout_style_signature(style),
     )
-    if layout_cache_enabled():
+    if use_cache and layout_cache_enabled():
         cached = cached_track_layout_plan(cache_key)
         if cached is not None:
             return cached
