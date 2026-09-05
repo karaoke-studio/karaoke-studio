@@ -10,6 +10,7 @@ import time
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from krok_helper import ensure_sug_root_path
 from krok_helper.updater_app import diagnostics, lock_diag
@@ -829,6 +830,9 @@ _original_cleanup_temp_workdir = updater_main._cleanup_temp_workdir
 _original_apply_update = updater_main.apply_update
 
 PRIMARY_APP_EXE_NAME = "Lin-K Lyrics.exe"
+# 改名前的主程序名。全量更新路径必须与新版主程序一起回写（详见
+# _apply_workbench_update），否则存量客户端的下一次更新会按旧文件名校验失败。
+LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
 
 
 def _close_logger_handlers(logger: logging.Logger) -> None:
@@ -961,14 +965,79 @@ def _cleanup_workbench_temp_workdir(work_dir) -> None:
                 pass
 
 
-def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
-    """Keep the renamed primary EXE when an old client requests the legacy name.
+def _replace_root_payload_file(source: Path, app_dir: Path, log) -> tuple[bool, str]:
+    """rename-first 替换一个根目录 EXE。
 
-    SUG's generic full-package updater copies only the EXE named by ``--app-exe``.
-    Existing workbench installs pass ``Karaoke Studio.exe``, while renamed release
-    packages intentionally contain both that compatibility copy and
-    ``Lin-K Lyrics.exe``.  Preserve the generic updater's rollback behavior, then
-    add the renamed entry point after the legacy target has updated successfully.
+    Windows 允许 rename 运行中的 exe、不允许 delete/overwrite：先把旧文件挪成
+    ``.old`` 再写入新文件，即使旧进程仍占着旧镜像也能让新文件落位。残留的
+    ``.old`` 由下次启动的 ``_cleanup_old_files`` / 下次更新的 stale 清理回收。
+    """
+
+    dest = app_dir / source.name
+    backup = app_dir / (source.name + ".old")
+    ok, error = _remove_stale_backup(backup, log, source.name + ".old")
+    if not ok:
+        return False, error
+    if dest.exists():
+        try:
+            _retry_workbench(
+                f"备份 {source.name}",
+                lambda d=dest, b=backup: os.rename(str(d), str(b)),
+                log,
+            )
+        except OSError as exc:
+            _flush_logger(log)
+            _persist_diagnostic_failure(
+                f"full_update_backup_{source.name}_failed",
+                exc=exc,
+                extra_paths=[dest, backup],
+            )
+            return False, f"备份 {source.name} 失败: {exc}"
+    try:
+        _retry_workbench(
+            f"写入 {source.name}",
+            lambda s=source, d=dest: shutil.copy2(str(s), str(d)),
+            log,
+        )
+    except OSError as exc:
+        _flush_logger(log)
+        _persist_diagnostic_failure(
+            f"full_update_write_{source.name}_failed",
+            exc=exc,
+            extra_paths=[source, dest],
+        )
+        if backup.exists():
+            # copy2 中途失败可能已创建半成品目标：先删残留再恢复备份（与 SUG
+            # apply_update 的回滚同口径）。删除失败时保留 .old 供手动恢复。
+            try:
+                if dest.exists():
+                    dest.unlink()
+                os.rename(str(backup), str(dest))
+            except OSError as rollback_exc:
+                log.error(
+                    "回滚 %s 失败: %s（备份保留在 %s）", source.name, rollback_exc, backup
+                )
+        return False, f"写入 {source.name} 失败: {exc}"
+    try:
+        if backup.exists():
+            backup.unlink()
+    except OSError as exc:
+        log.warning("清理备份 %s 失败（不影响更新结果）: %s", backup.name, exc)
+    log.info("已写入 %s", source.name)
+    return True, ""
+
+
+def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
+    """Replace the package's full root payload, not only the ``--app-exe`` entry.
+
+    SUG's generic full-package updater writes back only the EXE named by
+    ``--app-exe`` plus ``_internal`` and the Updater self-update.  The workbench
+    package root also carries the renamed/legacy main-EXE pair and the GPU
+    sidecar; skipping them produced silently mixed installs (new Python code +
+    stale ``krok_subtitle_renderer.exe`` → every GPU configure rejected as
+    "unsupported Render IR schema").  After the generic apply succeeds, every
+    remaining root-level EXE is copied with rename-first semantics so a
+    still-running old image cannot block the replacement.
     """
 
     # Validate the package before touching any recovery backup.  The generic
@@ -990,6 +1059,17 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
             details={"error": error},
         )
         return False, error
+    # 双主程序名是发布不变量（tests/test_rename_release_invariants.py）；
+    # 缺任何一个都按损坏包处理，宁可更新失败也不产出混合安装。
+    for required_name in (PRIMARY_APP_EXE_NAME, LEGACY_APP_EXE_NAME):
+        if not (new_root / required_name).is_file():
+            error = f"更新包中找不到 {required_name}"
+            _persist_diagnostic_failure(
+                "full_update_package_validation_failed",
+                extra_paths=[new_root / required_name],
+                details={"error": error},
+            )
+            return False, error
 
     backup_targets = (
         (app_dir / internal_name, app_dir / f"{internal_name}.old", f"{internal_name}.old"),
@@ -1022,30 +1102,27 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
             ],
             details={"error": error},
         )
-    if not ok or app_exe == PRIMARY_APP_EXE_NAME:
         return ok, error
 
-    primary_source = new_root / PRIMARY_APP_EXE_NAME
-    if not primary_source.is_file():
-        error = f"更新包中找不到 {PRIMARY_APP_EXE_NAME}"
-        _persist_diagnostic_failure(
-            "full_update_package_validation_failed",
-            extra_paths=[primary_source],
-            details={"error": error},
-        )
-        return False, error
-
-    try:
-        shutil.copy2(str(primary_source), str(app_dir / PRIMARY_APP_EXE_NAME))
-    except OSError as exc:
-        _flush_logger(log)
-        _persist_diagnostic_failure(
-            "primary_executable_copy_failed",
-            exc=exc,
-            extra_paths=[primary_source, app_dir / PRIMARY_APP_EXE_NAME],
-        )
-        return False, f"写入 {PRIMARY_APP_EXE_NAME} 失败: {exc}"
-    log.info("已写入改名后的主程序 %s", PRIMARY_APP_EXE_NAME)
+    # 原版 apply_update 只回写 app_exe + _internal + Updater 自更新；其余根目录
+    # EXE（另一份主程序名、GPU sidecar）在这里补齐，全部成功才算更新成功。
+    handled = {
+        app_exe,
+        internal_name,
+        updater_main.UPDATER_EXE_NAME,
+        updater_main.UPDATER_EX_NAME,
+    }
+    for entry in sorted(new_root.iterdir(), key=lambda item: item.name):
+        if entry.is_dir() or entry.name in handled:
+            continue
+        if not entry.name.lower().endswith(".exe"):
+            # 根目录按约定只有产品 EXE（build_windows.bat 校验）；其余文件不
+            # 认识就不写，避免误覆盖将来可能出现的用户数据。
+            log.warning("全量包根目录存在未识别文件，跳过: %s", entry.name)
+            continue
+        ok, error = _replace_root_payload_file(entry, app_dir, log)
+        if not ok:
+            return False, error
     return True, ""
 
 

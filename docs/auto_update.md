@@ -154,6 +154,13 @@ runtime 内容哈希、迫使所有用户重下运行库。
   但资产名刻意保持原样：旧 worker 硬编码全量 zip 名，并从 zip 名派生 manifest 名。
 - **`Karaoke Studio.exe` 必须一直随包分发**（改名后它是 `Lin-K Lyrics.exe` 的同内容副本），
   且必须列在 `build_parts.APP_TARGETS` 里。更新器名 `Updater.exe` 同样不可改。
+- **全量回退路径必须回写包内全部根目录 EXE**（双主程序名 + `krok_subtitle_renderer.exe`
+  GPU sidecar），不只回写 `--app-exe` 指定的那一个。2026-09 事故：SUG 原版
+  `apply_update` 只回写 `--app-exe` + `_internal`，sidecar 与另一份主程序名被静默
+  跳过，走全量回退的用户得到「新 Python 代码 + 旧 schema sidecar」的混合安装，
+  GPU 全量回退 Painter 且本地 manifest 谎报已是新版。修复与回归测试见
+  `updater_app/main.py::_apply_workbench_update` 与
+  `tests/test_workbench_updater_lock_guard.py`。
 - onedir 的「根目录 EXE + `_internal/`」布局。
 - tag 格式 `vX.Y.Z[.N]`。
 - KS 的四段 `_version_key` 比较语义；`3.1.7.4` 必须大于 `3.1.7`。

@@ -497,6 +497,7 @@ def test_full_update_stops_when_old_backup_cannot_be_removed(
     (app_dir / "Karaoke Studio.exe").write_bytes(b"old")
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Karaoke Studio.exe").write_bytes(b"new")
+    (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
     called = False
 
     def fail_rmtree(*args, **kwargs):
@@ -540,10 +541,15 @@ def test_full_update_removes_stale_backups_before_generic_apply(
     (app_dir / "Lin-K Lyrics.exe.old").write_bytes(b"older")
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
+    (new_root / "Karaoke Studio.exe").write_bytes(b"new")
 
-    def generic_apply(*args):
+    def generic_apply(app_dir, app_exe, _internal_name, new_root, _log):
         assert not (app_dir / "_internal.old").exists()
         assert not (app_dir / "Lin-K Lyrics.exe.old").exists()
+        # 忠实模拟原版行为：回写 --app-exe 指定的那一个 EXE
+        workbench_updater.shutil.copy2(
+            str(new_root / app_exe), str(app_dir / app_exe)
+        )
         return True, ""
 
     monkeypatch.setattr(workbench_updater, "_original_apply_update", generic_apply)
@@ -557,6 +563,9 @@ def test_full_update_removes_stale_backups_before_generic_apply(
     )
 
     assert ok is True and err == ""
+    # 双主程序名都会被回写：启动名与兼容副本不允许分家。
+    assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new"
+    assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new"
 
 
 def test_full_update_uses_neutral_rename_error_wording(
@@ -568,6 +577,7 @@ def test_full_update_uses_neutral_rename_error_wording(
     (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old")
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
+    (new_root / "Karaoke Studio.exe").write_bytes(b"new")
     monkeypatch.setattr(
         workbench_updater,
         "_original_apply_update",
@@ -702,3 +712,125 @@ def test_lock_dialog_construction_and_retry_flag() -> None:
     # parent 缺失时必须显式失败（MaskDialogBase 依赖父窗口铺蒙层）
     with pytest.raises(ValueError):
         lock_dialog.LockRecoveryDialog("正文", "明细", "重试", parent=None)
+
+
+# ───────────────── 全量回退路径的根目录负载回写 ─────────────────
+
+
+def test_full_update_replaces_sidecar_and_dual_named_exes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全量回退必须回写 --app-exe 之外的根目录 EXE（回归：GPU sidecar 停留旧版）。
+
+    2026-09 事故：全量路径只回写 --app-exe 指定的主程序 + _internal，包内
+    ``krok_subtitle_renderer.exe`` 与另一份主程序名被跳过，用户得到「新 Python
+    代码 + 旧 schema sidecar」的混合安装，GPU 全量回退 Painter。
+    """
+    for launched_name in ("Lin-K Lyrics.exe", "Karaoke Studio.exe"):
+        app_dir = tmp_path / f"app-{launched_name}"
+        new_root = tmp_path / f"new-{launched_name}"
+        (app_dir / "_internal").mkdir(parents=True)
+        (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old-primary")
+        (app_dir / "Karaoke Studio.exe").write_bytes(b"old-legacy")
+        (app_dir / "krok_subtitle_renderer.exe").write_bytes(b"old-sidecar")
+        (new_root / "_internal").mkdir(parents=True)
+        (new_root / "Lin-K Lyrics.exe").write_bytes(b"new-primary")
+        (new_root / "Karaoke Studio.exe").write_bytes(b"new-legacy")
+        (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new-sidecar")
+        def faithful_generic_apply(app_dir, app_exe, _internal_name, new_root, _log):
+            # 忠实模拟原版行为：回写 --app-exe 指定的那一个 EXE
+            workbench_updater.shutil.copy2(
+                str(new_root / app_exe), str(app_dir / app_exe)
+            )
+            return True, ""
+
+        monkeypatch.setattr(
+            workbench_updater, "_original_apply_update", faithful_generic_apply
+        )
+
+        ok, err = workbench_updater._apply_workbench_update(
+            app_dir,
+            launched_name,
+            "_internal",
+            new_root,
+            logging.getLogger("sug.updater"),
+        )
+
+        assert ok is True and err == ""
+        assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"new-sidecar"
+        assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new-primary"
+        assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new-legacy"
+        assert not (app_dir / "krok_subtitle_renderer.exe.old").exists()
+
+
+def test_full_update_rejects_package_missing_dual_named_exe(
+    tmp_path: Path,
+) -> None:
+    """缺任意一份主程序名的全量包按损坏包处理，不允许产出混合安装。"""
+    app_dir = tmp_path / "app"
+    new_root = tmp_path / "new"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old")
+    (new_root / "_internal").mkdir(parents=True)
+    (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
+    # 缺 Karaoke Studio.exe 兼容副本
+
+    ok, err = workbench_updater._apply_workbench_update(
+        app_dir,
+        "Lin-K Lyrics.exe",
+        "_internal",
+        new_root,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert ok is False
+    assert "更新包中找不到 Karaoke Studio.exe" in err
+    # 包校验失败必须发生在触碰任何文件之前
+    assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"old"
+
+
+def test_full_update_sidecar_copy_blocked_reports_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sidecar 回写被持续拒绝时更新必须显式失败，并回滚该文件的 rename。"""
+    app_dir = tmp_path / "app"
+    new_root = tmp_path / "new"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old-primary")
+    (app_dir / "krok_subtitle_renderer.exe").write_bytes(b"old-sidecar")
+    (new_root / "_internal").mkdir(parents=True)
+    (new_root / "Lin-K Lyrics.exe").write_bytes(b"new-primary")
+    (new_root / "Karaoke Studio.exe").write_bytes(b"new-legacy")
+    (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new-sidecar")
+    monkeypatch.setattr(
+        workbench_updater, "_original_apply_update", lambda *args: (True, "")
+    )
+    monkeypatch.setattr(workbench_updater.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        workbench_updater.lock_diag,
+        "diagnose_lockers_for_exception",
+        lambda exc: _rm_diagnosis(),
+    )
+
+    real_copy2 = workbench_updater.shutil.copy2
+
+    def blocked_copy2(src, dst, *args, **kwargs):
+        if str(dst).endswith("krok_subtitle_renderer.exe"):
+            raise PermissionError(5, "拒绝访问。", str(src), 5, str(dst))
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(workbench_updater.shutil, "copy2", blocked_copy2)
+
+    ok, err = workbench_updater._apply_workbench_update(
+        app_dir,
+        "Lin-K Lyrics.exe",
+        "_internal",
+        new_root,
+        logging.getLogger("sug.updater"),
+    )
+
+    assert ok is False
+    assert "写入 krok_subtitle_renderer.exe 失败" in err
+    # rename 已回滚：旧 sidecar 原位保留，不留 .old
+    assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"old-sidecar"
+    assert not (app_dir / "krok_subtitle_renderer.exe.old").exists()

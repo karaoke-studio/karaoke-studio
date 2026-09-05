@@ -57,6 +57,24 @@ def test_onedir_layout_names_are_unchanged() -> None:
     assert TMP_DIR_NAME == "KaraokeStudioUpdater"
 
 
+def test_full_update_payload_names_match_installer() -> None:
+    """全量回退路径回写根目录负载用的双主程序名必须与 installer 口径一致。
+
+    2026-09 事故根因之一：全量 ``_apply_workbench_update`` 的回写清单与包内容
+    脱节，sidecar 与另一份主程序名被静默跳过（详见
+    tests/test_workbench_updater_lock_guard.py 的回归测试）。
+    """
+
+    from krok_helper.updater_app.main import (
+        LEGACY_APP_EXE_NAME as UPDATER_APP_LEGACY,
+        PRIMARY_APP_EXE_NAME,
+    )
+    from krok_helper.updater.installer import LEGACY_APP_EXE_NAME
+
+    assert UPDATER_APP_LEGACY == LEGACY_APP_EXE_NAME
+    assert PRIMARY_APP_EXE_NAME == DEFAULT_APP_EXE_NAME
+
+
 def test_updater_temp_dir_name_is_consistent_across_copies() -> None:
     """同一个临时目录名散在三处，改一处漏两处会让更新交接直接错位。"""
 
