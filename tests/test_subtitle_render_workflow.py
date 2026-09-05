@@ -738,6 +738,11 @@ def test_lyrics_timing_export_loads_saved_sug_into_subtitle_render(
         ),
         subtitle_render_page=RenderPage(),
         _show_module=lambda module: calls.append(("show", module)),
+        _resolve_workflow_subtitle_disposition=(
+            lambda page, path: (
+                KrokHelperQtApp._resolve_workflow_subtitle_disposition(app, page, path)
+            )
+        ),
     )
 
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
@@ -773,6 +778,11 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
             ),
         ),
         _show_module=lambda module: calls.append(("show", module)),
+        _resolve_workflow_subtitle_disposition=(
+            lambda page, path: (
+                KrokHelperQtApp._resolve_workflow_subtitle_disposition(app, page, path)
+            )
+        ),
     )
 
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
@@ -781,6 +791,172 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
         ("track", source),
         ("show", WORKFLOW_SUBTITLE_RENDER),
         ("media_async", audio, False),
+    ]
+
+
+class _DisposingRenderPage:
+    """带安置询问接口的渲染页桩：记录调用并按预设返回轨道。"""
+
+    def __init__(self, calls: list[object], conflict: bool = True) -> None:
+        self._calls = calls
+        self._conflict = conflict
+
+    def has_project_conflicting_sug(self, path):
+        self._calls.append(("conflict_check", path))
+        return self._conflict
+
+    def project_state(self):
+        return SimpleNamespace(display_name="旧项目.yurika")
+
+    def new_project_from_sug(self, path):
+        self._calls.append(("new_project", path))
+        return object()
+
+    def add_sug_as_extra_source(self, path):
+        self._calls.append(("extra_source", path))
+        return object()
+
+    def load_or_reload_sug(self, path):
+        self._calls.append(("track", path))
+        return object()
+
+    def load_media_async(self, path, *, as_video):
+        self._calls.append(("media_async", path, as_video))
+
+
+def _make_disposition_app(
+    tmp_path: Path, calls: list[object], *, conflict: bool = True
+) -> SimpleNamespace:
+    source = tmp_path / "new.sug"
+    source.write_text("{}", encoding="utf-8")
+    video = tmp_path / "song.mp4"
+    video.write_bytes(b"video")
+    app = SimpleNamespace(
+        lyrics_timing_page=SimpleNamespace(
+            export_to_next_payload=lambda: {
+                "project": object(),
+                "nicokara_tags": {},
+                "source_path": str(source),
+                "media_path": str(video),
+                "media_kind": "video",
+                "audio_path": None,
+            }
+        ),
+        subtitle_render_page=_DisposingRenderPage(calls, conflict=conflict),
+        _show_module=lambda module: calls.append(("show", module)),
+        _resolve_workflow_subtitle_disposition=(
+            lambda page, path: (
+                KrokHelperQtApp._resolve_workflow_subtitle_disposition(app, page, path)
+            )
+        ),
+    )
+    return app
+
+
+def _patch_disposition_choice(monkeypatch, result: int) -> list[dict]:
+    choices: list[dict] = []
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs.fluent_choice",
+        lambda parent, title, content, buttons, default=0: choices.append(
+            {
+                "title": title,
+                "content": content,
+                "buttons": tuple(buttons),
+                "default": default,
+            }
+        )
+        or result,
+    )
+    return choices
+
+
+def test_disposition_new_project_creates_project_and_loads_media(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """冲突时选「新建视频渲染项目」：新建工程安置并照常接管媒体。"""
+    calls: list[object] = []
+    app = _make_disposition_app(tmp_path, calls)
+    choices = _patch_disposition_choice(monkeypatch, 0)
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert len(choices) == 1
+    assert choices[0]["title"] == "第 5 步已有打开的项目"
+    assert choices[0]["buttons"] == (
+        "新建视频渲染项目",
+        "直接导入",
+        "新建字幕轨道",
+        "取消",
+    )
+    assert choices[0]["default"] == 0
+    assert "旧项目.yurika" in choices[0]["content"]
+    assert calls == [
+        ("conflict_check", tmp_path / "new.sug"),
+        ("new_project", tmp_path / "new.sug"),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+        ("media_async", tmp_path / "song.mp4", True),
+    ]
+
+
+def test_disposition_import_replaces_primary_and_loads_media(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """冲突时选「直接导入」：维持既有行为（替换主字幕 + 接管媒体）。"""
+    calls: list[object] = []
+    app = _make_disposition_app(tmp_path, calls)
+    _patch_disposition_choice(monkeypatch, 1)
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [
+        ("conflict_check", tmp_path / "new.sug"),
+        ("track", tmp_path / "new.sug"),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+        ("media_async", tmp_path / "song.mp4", True),
+    ]
+
+
+def test_disposition_extra_track_keeps_current_media(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """冲突时选「新建字幕轨道」：作为副字幕源加入且不接管当前工程的媒体。"""
+    calls: list[object] = []
+    app = _make_disposition_app(tmp_path, calls)
+    _patch_disposition_choice(monkeypatch, 2)
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [
+        ("conflict_check", tmp_path / "new.sug"),
+        ("extra_source", tmp_path / "new.sug"),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+    ]
+
+
+def test_disposition_cancelled_stops_export(monkeypatch, tmp_path: Path) -> None:
+    """冲突时取消：不加载字幕、不切页、不接管媒体。"""
+    calls: list[object] = []
+    app = _make_disposition_app(tmp_path, calls)
+    _patch_disposition_choice(monkeypatch, 3)
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [("conflict_check", tmp_path / "new.sug")]
+
+
+def test_disposition_not_asked_without_conflict(monkeypatch, tmp_path: Path) -> None:
+    """无冲突（同一文件或尚未载入主字幕）：不弹询问，走既有交接路径。"""
+    calls: list[object] = []
+    app = _make_disposition_app(tmp_path, calls, conflict=False)
+    _patch_disposition_choice(monkeypatch, 0)
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [
+        ("conflict_check", tmp_path / "new.sug"),
+        ("track", tmp_path / "new.sug"),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+        ("media_async", tmp_path / "song.mp4", True),
     ]
 
 
@@ -977,6 +1153,11 @@ def test_dirty_sug_save_waits_for_success_before_loading_file(
             load_or_reload_sug=lambda path: calls.append(("load", path)) or object()
         ),
         _show_module=lambda module: calls.append(("show", module)),
+        _resolve_workflow_subtitle_disposition=(
+            lambda page, path: (
+                KrokHelperQtApp._resolve_workflow_subtitle_disposition(app, page, path)
+            )
+        ),
         _save_lyrics_timing_then_export=lambda page, **kwargs: (
             KrokHelperQtApp._save_lyrics_timing_then_export(app, page, **kwargs)
         ),
@@ -1037,6 +1218,11 @@ def test_missing_sug_save_as_waits_for_new_file_before_loading(
             load_or_reload_sug=lambda path: calls.append(("load", path)) or object()
         ),
         _show_module=lambda module: calls.append(("show", module)),
+        _resolve_workflow_subtitle_disposition=(
+            lambda page, path: (
+                KrokHelperQtApp._resolve_workflow_subtitle_disposition(app, page, path)
+            )
+        ),
     )
     app._trigger_lyrics_timing_save_as = lambda page: (
         KrokHelperQtApp._trigger_lyrics_timing_save_as(page)

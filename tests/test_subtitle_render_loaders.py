@@ -591,6 +591,147 @@ def test_workflow_handoff_different_path_full_reloads(
     assert win._subtitle_source_key(sug_a) not in win._source_watch_states
 
 
+def test_has_project_conflicting_sug_requires_other_primary_source(
+    qapp, monkeypatch, tmp_path
+):
+    """询问条件：已载入主字幕且不是同一文件才需要选择安置方式。"""
+    sug_a = tmp_path / "a.sug"
+    sug_b = tmp_path / "b.sug"
+    _save_timing_sug(sug_a, [("歌", 1000, 1800)])
+    _save_timing_sug(sug_b, [("词", 3300, 4100)])
+    win = _make_window(qapp, monkeypatch)
+
+    assert win.has_project_conflicting_sug(sug_a) is False
+
+    assert win.load_from_sug(sug_a) is not None
+    assert win.has_project_conflicting_sug(sug_a) is False
+    assert win.has_project_conflicting_sug(sug_b) is True
+
+
+def test_new_project_from_sug_prompts_save_then_loads_fresh(
+    qapp, monkeypatch, tmp_path
+):
+    """新建项目安置：先走未保存确认，确认后新建工程并载入该 SUG 为主字幕。"""
+    sug_a = tmp_path / "a.sug"
+    sug_b = tmp_path / "b.sug"
+    _save_timing_sug(sug_a, [("歌", 1000, 1800)])
+    _save_timing_sug(sug_b, [("词", 3300, 4100)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug_a) is not None
+    win._timing_track.lines[0].layout_index = 3
+    win._undo_stack.append(("keep",))
+    win._project_dirty = True
+    choices: list[object] = []
+    monkeypatch.setattr(
+        mw, "fluent_choice", lambda *args, **kwargs: choices.append(args[1]) or 0
+    )
+
+    def fake_save() -> bool:
+        choices.append(("save",))
+        win._project_dirty = False
+        return True
+
+    monkeypatch.setattr(win, "_save_project", fake_save)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+
+    returned = win.new_project_from_sug(sug_b)
+
+    assert returned is win._timing_track
+    assert "未保存的改动" in choices
+    assert ("save",) in choices
+    assert win._subtitle_path == sug_b
+    assert win._timing_track.lines[0].chars[0].start_ms == 3300
+    # 新工程：旧主字幕的本地编辑与撤销历史一并作废
+    assert win._timing_track.lines[0].layout_index != 3
+    assert ("keep",) not in win._undo_stack
+    assert win._project_dirty is True
+
+
+def test_new_project_from_sug_cancelled_keeps_current(qapp, monkeypatch, tmp_path):
+    """新建项目安置：未保存确认选择取消时中止，当前工程保持不变。"""
+    sug_a = tmp_path / "a.sug"
+    sug_b = tmp_path / "b.sug"
+    _save_timing_sug(sug_a, [("歌", 1000, 1800)])
+    _save_timing_sug(sug_b, [("词", 3300, 4100)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug_a) is not None
+    win._project_dirty = True
+    monkeypatch.setattr(mw, "fluent_choice", lambda *args, **kwargs: 2)
+
+    returned = win.new_project_from_sug(sug_b)
+
+    assert returned is None
+    assert win._subtitle_path == sug_a
+    assert win._timing_track.lines[0].chars[0].start_ms == 1000
+    assert win._project_dirty is True
+
+
+def test_add_sug_as_extra_source_appends_track(qapp, monkeypatch, tmp_path):
+    """新建字幕轨道安置：SUG 作为副字幕源加入，主字幕与工程上下文保留。"""
+    sug_a = tmp_path / "a.sug"
+    sug_b = tmp_path / "b.sug"
+    _save_timing_sug(sug_a, [("歌", 1000, 1800)])
+    _save_timing_sug(sug_b, [("词", 3300, 4100)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug_a) is not None
+    win._project_dirty = False
+
+    returned = win.add_sug_as_extra_source(sug_b)
+
+    assert returned is not None
+    assert [source.name for source in win._extra_sources] == ["b"]
+    assert win._extra_sources[0].path == sug_b
+    assert [
+        "".join(ch.text for ch in line.chars)
+        for line in win._extra_sources[0].track.lines
+    ] == ["词"]
+    # 主字幕不受影响
+    assert win._subtitle_path == sug_a
+    assert win._timing_track.lines[0].chars[0].start_ms == 1000
+    assert win._active_source_index == 1
+    assert win._project_dirty is True
+
+
+def test_add_sug_as_extra_source_replaces_same_path(qapp, monkeypatch, tmp_path):
+    """新建字幕轨道安置：同路径副源整体替换，不产生重复源。"""
+    sug_a = tmp_path / "a.sug"
+    sug_b = tmp_path / "b.sug"
+    _save_timing_sug(sug_a, [("歌", 1000, 1800)])
+    _save_timing_sug(sug_b, [("词", 3300, 4100)])
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug_a) is not None
+    assert win.add_sug_as_extra_source(sug_b) is not None
+
+    _save_timing_sug(sug_b, [("新", 500, 900)])
+    returned = win.add_sug_as_extra_source(sug_b)
+
+    assert returned is not None
+    assert len(win._extra_sources) == 1
+    assert [
+        "".join(ch.text for ch in line.chars)
+        for line in win._extra_sources[0].track.lines
+    ] == ["新"]
+
+
+def test_add_sug_as_extra_source_without_primary_is_rejected(
+    qapp, monkeypatch, tmp_path
+):
+    """新建字幕轨道安置：没有主字幕时拒绝并提示（正常交接不会走到这里）。"""
+    sug = tmp_path / "solo.sug"
+    _save_timing_sug(sug, [("歌", 1000, 1800)])
+    win = _make_window(qapp, monkeypatch)
+    infos: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        mw, "fluent_info", lambda parent, title, content: infos.append((title, content))
+    )
+
+    returned = win.add_sug_as_extra_source(sug)
+
+    assert returned is None
+    assert win._extra_sources == []
+    assert infos == [("无法新建字幕轨道", "当前项目没有主字幕，请先导入主字幕。")]
+
+
 def test_in_memory_sug_handoff_does_not_enable_file_watching(
     qapp, monkeypatch, tmp_path
 ):

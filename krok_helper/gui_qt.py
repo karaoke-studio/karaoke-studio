@@ -1164,9 +1164,12 @@ class KrokHelperQtApp(QMainWindow):
             )
             return
 
-        track = render_page.load_or_reload_sug(source_path)
-        if track is None:
+        disposition = self._resolve_workflow_subtitle_disposition(
+            render_page, source_path
+        )
+        if disposition is None or disposition[0] is None:
             return
+        _, should_load_media = disposition
 
         # SUG 保存的是用户最初选择的媒体；视频直接作为第 5 步背景，纯音频
         # 则作为独立音轨。原始媒体不可用时再回退到当前播放音频。
@@ -1184,12 +1187,71 @@ class KrokHelperQtApp(QMainWindow):
         # 走到这里保存已完成（脏路径经 _save_lyrics_timing_then_export 等到
         # project_save_finished 才会重入本方法），立即进入第 5 步；媒体加载
         # 交给页面后台执行（ffprobe 探测起子进程是这条链上唯一的同步重活），
-        # 避免切换瞬间在 UI 线程上卡顿。
+        # 避免切换瞬间在 UI 线程上卡顿。选择「新建字幕轨道」时保留当前工程
+        # 的媒体上下文，不接管打轴侧的媒体。
         self._show_module(WORKFLOW_SUBTITLE_RENDER)
-        if handoff_media is not None:
+        if handoff_media is not None and should_load_media:
             render_page.load_media_async(
                 handoff_media[0], as_video=handoff_media[1]
             )
+
+    def _resolve_workflow_subtitle_disposition(
+        self,
+        render_page: object,
+        source_path: Path,
+    ) -> tuple[object, bool] | None:
+        """决定交接 SUG 在第 5 步的安置方式。
+
+        工程已载入主字幕且不是同一文件时先问用户：新建视频渲染项目 /
+        直接导入 / 新建字幕轨道；用户取消时返回 ``None`` 由调用方中止
+        交接。返回 ``(track, 是否接管媒体)``。
+        """
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
+            fluent_choice,
+        )
+
+        checker = getattr(render_page, "has_project_conflicting_sug", None)
+        needs_choice = False
+        if callable(checker):
+            try:
+                needs_choice = bool(checker(source_path))
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "检查第 5 步字幕项目状态失败", exc_info=True
+                )
+        if not needs_choice:
+            return render_page.load_or_reload_sug(source_path), True
+
+        project_name = "当前项目"
+        state_provider = getattr(render_page, "project_state", None)
+        if callable(state_provider):
+            try:
+                project_name = str(state_provider().display_name)
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "读取第 5 步项目显示名失败", exc_info=True
+                )
+        choice = fluent_choice(
+            self,
+            "第 5 步已有打开的项目",
+            (
+                f"第 5 步已打开项目「{project_name}」，其主字幕不是"
+                f"「{source_path.name}」。\n"
+                f"要如何安置「{source_path.name}」的打轴结果？\n\n"
+                "· 新建视频渲染项目：先保存或放弃当前项目，再为这份打轴新建项目\n"
+                "· 直接导入：替换当前项目的主字幕，样式与背景保留\n"
+                "· 新建字幕轨道：作为副字幕源加入当前项目，与现有主字幕同时显示"
+            ),
+            ("新建视频渲染项目", "直接导入", "新建字幕轨道", "取消"),
+            default=0,
+        )
+        if choice == 0:
+            return render_page.new_project_from_sug(source_path), True
+        if choice == 2:
+            return render_page.add_sug_as_extra_source(source_path), False
+        if choice == 1:
+            return render_page.load_or_reload_sug(source_path), True
+        return None
 
     def _save_lyrics_timing_then_export(
         self,

@@ -106,6 +106,21 @@ class SubtitleRenderPage(Protocol):
         primary source, otherwise fall back to a full load."""
         ...
 
+    def has_project_conflicting_sug(self, path: Path) -> bool:
+        """Return whether the open project's primary subtitle source is a
+        different file, so the workflow handoff must ask for a disposition."""
+        ...
+
+    def new_project_from_sug(self, path: Path) -> object | None:
+        """Workflow handoff disposition: confirm unsaved changes, then load
+        the SUG as the primary subtitle of a brand-new project."""
+        ...
+
+    def add_sug_as_extra_source(self, path: Path) -> object | None:
+        """Workflow handoff disposition: append the SUG as an extra subtitle
+        source alongside the current primary track."""
+        ...
+
     def load_video(self, path: Path, info: object | None = None) -> object | None:
         """Load a video as the current background source.
 

@@ -2976,6 +2976,76 @@ class SubtitleRenderWindow(QWidget):
             return self._timing_track
         return self.load_from_sug(path)
 
+    def has_project_conflicting_sug(self, path: Path) -> bool:
+        """工作流交接询问条件：工程已载入主字幕，且主字幕源不是该 SUG 同一文件。"""
+        key = self._subtitle_source_key(Path(path))
+        return bool(
+            self._timing_track is not None
+            and self._subtitle_path is not None
+            and self._subtitle_source_key(self._subtitle_path) != key
+        )
+
+    def new_project_from_sug(self, path: Path) -> Optional[TimingTrack]:
+        """工作流交接安置方式之一：先确认未保存改动，再新建工程并载入该 SUG 为主字幕。"""
+        if not self._confirm_discard_changes():
+            return None
+        # _confirm_discard_changes 已经把脏状态处理完，_new_project 内部的
+        # 二次确认只会看到干净状态，直接放行。
+        self._new_project()
+        return self.load_from_sug(path)
+
+    def add_sug_as_extra_source(self, path: Path) -> Optional[TimingTrack]:
+        """工作流交接安置方式之一：把该 SUG 作为新的副字幕源加入当前工程。
+
+        与「添加副字幕源」入口同口径：整份内容合并为一个轨道（不按
+        ``axis_groups`` 拆分）；同路径的旧副源整体替换，不产生重复源。
+        """
+        if self._timing_track is None:
+            fluent_info(
+                self, "无法新建字幕轨道", "当前项目没有主字幕，请先导入主字幕。"
+            )
+            return None
+        try:
+            track = self._load_timing_track_file(
+                path,
+                apply_sug_export_compensation=(
+                    self._subtitle_loading_defaults.apply_sug_export_compensation
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
+            fluent_error(
+                self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
+            )
+            return None
+        track.loading_settings_mode = "global"
+        track.loading_settings_snapshot = self._subtitle_loading_defaults
+        track.page_plan = build_page_plan(
+            track, self._subtitle_loading_defaults, self._style
+        )
+        project_page_plan_to_legacy_fields(track, self._style)
+        self._apply_remembered_layout_assignment(track)
+        self._apply_imported_role_preset_choices(track.role_options)
+        self._set_subtitle_source_baseline(path, track)
+        key = self._subtitle_source_key(path)
+        kept = [
+            source
+            for source in self._extra_sources
+            if self._subtitle_source_key(source.path) != key
+        ]
+        kept.append(ExtraSubtitleSource(name=path.stem, path=path, track=track))
+        self._extra_sources = kept
+        self._active_source_index = len(self._extra_sources)
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._property_panel.merge_roles(self._content_role_options())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._sync_subtitle_source_watcher()
+        self._mark_project_dirty()
+        return track
+
     def load_from_sug_project(
         self,
         project: object,
