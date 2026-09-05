@@ -1116,11 +1116,14 @@ def _migrate_legacy_shortcuts(app_dir, log) -> bool:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("旧名快捷方式迁移未能执行（本次不清理，下次更新重试）: %s", exc)
+        log.warning(
+            "旧名快捷方式迁移未能执行（%s）；仍按既定策略清理旧名副本，旧名快捷方式可能失效",
+            exc,
+        )
         return False
     if proc.returncode != 0:
         log.warning(
-            "旧名快捷方式迁移脚本退出码 %s（本次不清理，下次更新重试）",
+            "旧名快捷方式迁移脚本退出码 %s；仍按既定策略清理旧名副本，旧名快捷方式可能失效",
             proc.returncode,
         )
         return False
