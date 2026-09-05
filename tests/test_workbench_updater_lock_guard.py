@@ -498,6 +498,7 @@ def test_full_update_stops_when_old_backup_cannot_be_removed(
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Karaoke Studio.exe").write_bytes(b"new")
     (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
+    (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     called = False
 
     def fail_rmtree(*args, **kwargs):
@@ -542,6 +543,7 @@ def test_full_update_removes_stale_backups_before_generic_apply(
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
     (new_root / "Karaoke Studio.exe").write_bytes(b"new")
+    (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
 
     def generic_apply(app_dir, app_exe, _internal_name, new_root, _log):
         assert not (app_dir / "_internal.old").exists()
@@ -566,6 +568,8 @@ def test_full_update_removes_stale_backups_before_generic_apply(
     assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new"
     # 新名更新不再回写旧名副本，而是清理它（改名迁移，详见 §8.1）。
     assert not (app_dir / "Karaoke Studio.exe").exists()
+    # sidecar 属必备根目录负载，一并回写。
+    assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"new"
 
 
 def test_full_update_uses_neutral_rename_error_wording(
@@ -578,6 +582,7 @@ def test_full_update_uses_neutral_rename_error_wording(
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
     (new_root / "Karaoke Studio.exe").write_bytes(b"new")
+    (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     monkeypatch.setattr(
         workbench_updater,
         "_original_apply_update",
@@ -772,17 +777,28 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
             assert (app_dir / "Karaoke Studio.exe").read_bytes() == b"new-legacy"
 
 
-def test_full_update_rejects_package_missing_dual_named_exe(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "missing_name",
+    ["Karaoke Studio.exe", "krok_subtitle_renderer.exe"],
+)
+def test_full_update_rejects_package_missing_required_root_exe(
+    tmp_path: Path, missing_name: str
 ) -> None:
-    """缺任意一份主程序名的全量包按损坏包处理，不允许产出混合安装。"""
+    """缺必备根目录 EXE（主程序双名之一 / GPU sidecar）的全量包按损坏包处理。
+
+    sidecar 与主程序名同样走前置校验：缺失即拒绝，不允许「更新成功却保留
+    旧 sidecar」——那正是 2026-09 混合安装事故的形态。
+    """
     app_dir = tmp_path / "app"
     new_root = tmp_path / "new"
     (app_dir / "_internal").mkdir(parents=True)
     (app_dir / "Lin-K Lyrics.exe").write_bytes(b"old")
+    (app_dir / "krok_subtitle_renderer.exe").write_bytes(b"old-sidecar")
     (new_root / "_internal").mkdir(parents=True)
     (new_root / "Lin-K Lyrics.exe").write_bytes(b"new")
-    # 缺 Karaoke Studio.exe 兼容副本
+    (new_root / "Karaoke Studio.exe").write_bytes(b"new")
+    (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
+    (new_root / missing_name).unlink()
 
     ok, err = workbench_updater._apply_workbench_update(
         app_dir,
@@ -793,9 +809,10 @@ def test_full_update_rejects_package_missing_dual_named_exe(
     )
 
     assert ok is False
-    assert "更新包中找不到 Karaoke Studio.exe" in err
+    assert f"更新包中找不到 {missing_name}" in err
     # 包校验失败必须发生在触碰任何文件之前
     assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"old"
+    assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"old-sidecar"
 
 
 def test_full_update_sidecar_copy_blocked_reports_failure(

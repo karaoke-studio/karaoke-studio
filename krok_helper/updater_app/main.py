@@ -837,6 +837,10 @@ PRIMARY_APP_EXE_NAME = "Lin-K Lyrics.exe"
 # 改名前的主程序名。全量更新路径必须与新版主程序一起回写（详见
 # _apply_workbench_update），否则存量客户端的下一次更新会按旧文件名校验失败。
 LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
+# GPU 渲染 sidecar。合法全量包必含（build_windows.bat 打包校验与
+# build_parts.APP_TARGETS 双保险）；前置校验缺失即按损坏包拒绝，避免静默
+# 保留旧 sidecar 重新产出混合安装。
+NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
 
 
 def _close_logger_handlers(logger: logging.Logger) -> None:
@@ -1104,9 +1108,14 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
             details={"error": error},
         )
         return False, error
-    # 双主程序名是发布不变量（tests/test_rename_release_invariants.py）；
-    # 缺任何一个都按损坏包处理，宁可更新失败也不产出混合安装。
-    for required_name in (PRIMARY_APP_EXE_NAME, LEGACY_APP_EXE_NAME):
+    # 双主程序名与 GPU sidecar 都是发布不变量（tests/test_rename_release_invariants.py
+    # 与 build_windows.bat 打包校验双保险）；缺任何一个都按损坏包处理，宁可更新
+    # 失败也不产出混合安装。
+    for required_name in (
+        PRIMARY_APP_EXE_NAME,
+        LEGACY_APP_EXE_NAME,
+        NATIVE_RENDERER_EXE_NAME,
+    ):
         if not (new_root / required_name).is_file():
             error = f"更新包中找不到 {required_name}"
             _persist_diagnostic_failure(

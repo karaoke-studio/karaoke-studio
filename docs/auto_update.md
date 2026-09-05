@@ -157,7 +157,8 @@ runtime 内容哈希、迫使所有用户重下运行库。
   （2026-09 起新版主程序固定传新名、Updater 在新名会话成功后清理本地旧名副本，
   安装正逐步收敛到新名；停发包内旧名副本的手工收尾清单见 §8.1 末尾。）
 - **全量回退路径必须回写包内全部根目录 EXE**（双主程序名 + `krok_subtitle_renderer.exe`
-  GPU sidecar），不只回写 `--app-exe` 指定的那一个。2026-09 事故：SUG 原版
+  GPU sidecar），不只回写 `--app-exe` 指定的那一个；三者同为**前置校验必备项**——
+  包里缺任何一个都按损坏包拒绝，不触碰磁盘。2026-09 事故：SUG 原版
   `apply_update` 只回写 `--app-exe` + `_internal`，sidecar 与另一份主程序名被静默
   跳过，走全量回退的用户得到「新 Python 代码 + 旧 schema sidecar」的混合安装，
   GPU 全量回退 Painter 且本地 manifest 谎报已是新版。修复与回归测试见

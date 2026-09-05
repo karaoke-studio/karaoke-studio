@@ -58,7 +58,7 @@ def test_onedir_layout_names_are_unchanged() -> None:
 
 
 def test_full_update_payload_names_match_installer() -> None:
-    """全量回退路径回写根目录负载用的双主程序名必须与 installer 口径一致。
+    """全量回退路径的必备根目录负载命名必须与 installer / build_parts 口径一致。
 
     2026-09 事故根因之一：全量 ``_apply_workbench_update`` 的回写清单与包内容
     脱节，sidecar 与另一份主程序名被静默跳过（详见
@@ -67,12 +67,15 @@ def test_full_update_payload_names_match_installer() -> None:
 
     from krok_helper.updater_app.main import (
         LEGACY_APP_EXE_NAME as UPDATER_APP_LEGACY,
+        NATIVE_RENDERER_EXE_NAME as UPDATER_APP_SIDECAR,
         PRIMARY_APP_EXE_NAME,
     )
     from krok_helper.updater.installer import LEGACY_APP_EXE_NAME
 
     assert UPDATER_APP_LEGACY == LEGACY_APP_EXE_NAME
     assert PRIMARY_APP_EXE_NAME == DEFAULT_APP_EXE_NAME
+    assert UPDATER_APP_SIDECAR == build_parts.NATIVE_RENDERER_EXE_NAME
+    assert build_parts.NATIVE_RENDERER_EXE_NAME in build_parts.APP_TARGETS
 
 
 def test_updater_sessions_always_use_the_canonical_exe_name(
