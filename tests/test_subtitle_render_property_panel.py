@@ -102,7 +102,7 @@ from krok_helper.subtitle_render.settings.property_controllers import (  # noqa:
     LayoutCatalogController,
     PropertyStyleController,
     RoleSchemeController,
-    TitleOverlayController,
+    TitleOverlaysController,
 )
 from krok_helper.subtitle_render.project.session import ExtraSubtitleSource  # noqa: E402
 
@@ -251,7 +251,7 @@ def test_layout_catalog_controller_preserves_inheritance_and_title_references():
             LyricsLayout(name="A", letter_spacing_px=None),
             LyricsLayout(name="布局 3", letter_spacing_px=8),
         ],
-        title_overlay=TitleOverlay(layout_index=2),
+        title_overlays=[TitleOverlay(layout_index=2)],
     )
 
     assert controller.resolved_values(style, 1)["letter_spacing_px"] == 13
@@ -274,29 +274,29 @@ def test_layout_catalog_controller_preserves_inheritance_and_title_references():
 
     deleted = replace(style, **controller.delete_changes(style, 1))
     assert [layout.name for layout in deleted.layouts] == ["布局 3"]
-    assert deleted.title_overlay is not None
-    assert deleted.title_overlay.layout_index == 1
+    assert deleted.title_overlays
+    assert deleted.title_overlays[0].layout_index == 1
 
 
 def test_title_overlay_controller_migrates_roles_and_normalizes_mode():
-    controller = TitleOverlayController()
+    controller = TitleOverlaysController()
     style = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             text_template="AB",
             char_role_labels=[["A角色", "B角色"]],
             show_mode="head",
-        )
-    )
+        )])
 
     edited = controller.update(
         style,
+        0,
         {"text_template": "ACB", "show_mode": "invalid"},
     )
 
-    assert edited.title_overlay is not None
-    assert edited.title_overlay.text_template == "ACB"
-    assert edited.title_overlay.char_role_labels == [["A角色", None, "B角色"]]
-    assert edited.title_overlay.show_mode == "whole"
+    assert edited.title_overlays
+    assert edited.title_overlays[0].text_template == "ACB"
+    assert edited.title_overlays[0].char_role_labels == [["A角色", None, "B角色"]]
+    assert edited.title_overlays[0].show_mode == "whole"
     assert controller.current(Style()) == TitleOverlay()
 
 
@@ -458,16 +458,18 @@ def test_sync_each_page_is_enabled_only_for_active_sync_parent(qapp):
 
 def test_property_panel_uses_fluent_form_controls(qapp):
     panel = PropertyPanel()
+    # 标题控件住在卡片里：set_style 之后卡片才存在
+    panel.set_style(Style())
 
     assert isinstance(panel._font_combo, ComboBox)
     assert isinstance(panel._font_latin_combo, ComboBox)
-    assert isinstance(panel._title_layout_combo, ComboBox)
+    assert isinstance(panel._title_cards[0].layout_combo, ComboBox)
     assert isinstance(panel._font_weight_combo, ComboBox)
     assert isinstance(panel._font_latin_weight_combo, ComboBox)
     assert isinstance(panel._font_size_spin, SpinBox)
     assert isinstance(panel._font_latin_size_spin, SpinBox)
     assert isinstance(panel._paint_image_path_edit, LineEdit)
-    assert isinstance(panel._title_text_edit, PlainTextEdit)
+    assert isinstance(panel._title_cards[0].text_edit, PlainTextEdit)
     assert isinstance(panel._pages[0], ScrollArea)
     # 角色卡片的操作收成单行紧凑图标按钮（下拉框吸收剩余宽度）
     assert isinstance(panel._add_scheme_button, TransparentToolButton)
@@ -1062,16 +1064,17 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
     current = Style(
         layouts=[LyricsLayout(name="用户标题布局")],
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="当前项目标题",
             layout_index=1,
-        ),
+        )],
     )
     win._apply_style(current)
     win._flush_persisted_state_save()
 
     assert "title_overlay" not in provider.data["style"]
+    assert "title_overlays" not in provider.data["style"]
     defaults = provider.data["new_project_defaults"]
     # 这里断的是"标题的哪些习惯被记住了"，不是这个字典的完整形状 —— 后来又加了
     # title_fades（淡入淡出时长），再往里加东西也不该让这条无关的测试红。
@@ -1081,48 +1084,50 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
         "当前项目标题" in str(value) for value in defaults.values()
     ), defaults
     reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
-    assert reloaded._style.title_overlay is not None
-    assert reloaded._style.title_overlay.enabled is True
-    assert reloaded._style.title_overlay.text_template == "{title} / {artist}"
-    assert reloaded._style.title_overlay.layout_index == 1
+    assert reloaded._style.title_overlays
+    assert reloaded._style.title_overlays[0].enabled is True
+    assert reloaded._style.title_overlays[0].text_template == "{title} / {artist}"
+    assert reloaded._style.title_overlays[0].layout_index == 1
     assert reloaded._style.layouts[0].name == "用户标题布局"
     assert {
         layout.layout_id for layout in reloaded._style.layouts[1:]
     } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)}
     project_style = style_from_dict(win._current_project_data()["style"])
-    assert project_style.title_overlay is not None
-    assert project_style.title_overlay.enabled is True
-    assert project_style.title_overlay.text_template == "当前项目标题"
+    assert project_style.title_overlays
+    assert project_style.title_overlays[0].enabled is True
+    assert project_style.title_overlays[0].text_template == "当前项目标题"
 
     # Opening a project uses its own state and does not overwrite the user's
     # new-project preference merely because the project was loaded.
     reloaded._apply_project_data(
         {
             "style": style_to_dict(
-                Style(title_overlay=TitleOverlay(enabled=False, text_template="项目值"))
+                Style(title_overlays=[TitleOverlay(enabled=False, text_template="项目值")])
             )
         }
     )
-    assert reloaded._style.title_overlay is not None
-    assert reloaded._style.title_overlay.enabled is False
+    assert reloaded._style.title_overlays
+    assert reloaded._style.title_overlays[0].enabled is False
     reloaded._project_dirty = False
     reloaded._new_project()
-    assert reloaded._style.title_overlay is not None
-    assert reloaded._style.title_overlay.enabled is True
-    assert reloaded._style.title_overlay.text_template == "{title} / {artist}"
+    assert reloaded._style.title_overlays
+    assert reloaded._style.title_overlays[0].enabled is True
+    assert reloaded._style.title_overlays[0].text_template == "{title} / {artist}"
 
     reloaded._apply_style(
         replace(
             reloaded._style,
-            title_overlay=replace(reloaded._style.title_overlay, enabled=False),
+            title_overlays=[
+                replace(reloaded._style.title_overlays[0], enabled=False)
+            ],
         )
     )
     reloaded._flush_persisted_state_save()
     disabled_reload = mw.SubtitleRenderWindow(
         embedded=True, settings_provider=provider
     )
-    assert disabled_reload._style.title_overlay is not None
-    assert disabled_reload._style.title_overlay.enabled is False
+    assert disabled_reload._style.title_overlays
+    assert disabled_reload._style.title_overlays[0].enabled is False
 
 
 def test_fresh_install_selects_builtin_title_top_left_layout(qapp):
@@ -1132,10 +1137,11 @@ def test_fresh_install_selects_builtin_title_top_left_layout(qapp):
 
     assert win._app_default_style.layouts[0].name == "タイトル左上"
     assert win._app_default_style.layouts[0].layout_id == "title-default"
-    assert win._style.title_overlay is not None
-    assert win._style.title_overlay.layout_index == 1
-    assert win._property_panel._title_layout_combo.currentData() == 1
-    assert win._property_panel._title_layout_combo.currentText() == "タイトル左上"
+    assert win._style.title_overlays
+    assert win._style.title_overlays[0].layout_index == 1
+    card = win._property_panel._title_cards[0]
+    assert card.layout_combo.currentData() == 1
+    assert card.layout_combo.currentText() == "タイトル左上"
 
 
 def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
@@ -2057,15 +2063,19 @@ def test_effects_page_uses_compact_responsive_groups(qapp):
 
 def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
     panel = PropertyPanel()
+    panel.set_style(
+        Style(title_overlays=[TitleOverlay(show_mode="whole")])
+    )
     panel.resize(1050, 820)
     panel.show()
     panel.setCurrentIndex(4)
     qapp.processEvents()
 
-    assert panel._title_appearance_grid._columns == 2
-    assert panel._title_time_grid._columns == 1
-    assert panel._title_head_grid._columns == 4
-    assert panel._title_tail_row.isHidden()
+    card = panel._title_cards[0]
+    # 开头时间行四列并排；whole 模式没有片尾行
+    head_grid = card.head_row.layout().itemAt(1).widget()
+    assert head_grid._columns == 4
+    assert card.tail_row.isHidden()
 
     subgroup_titles = [
         label.text()
@@ -2075,11 +2085,9 @@ def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
 
     panel.resize(360, 820)
     qapp.processEvents()
-    assert panel._title_appearance_grid._columns == 1
-    assert panel._title_time_grid._columns == 1
     # 单个 timecode 框在窄面板下也放不进两列（四个字段退成单列），
     # 不会把 "99:59.990" 截断。
-    assert panel._title_head_grid._columns == 1
+    assert head_grid._columns == 1
     title_page = panel.widget(4)
     assert title_page.horizontalScrollBar().maximum() == 0
 
@@ -2088,7 +2096,7 @@ def test_title_head_tail_mode_has_independent_timing_rows(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
-            title_overlay=TitleOverlay(
+            title_overlays=[TitleOverlay(
                 enabled=True,
                 show_mode="head_tail",
                 head_offset_ms=100,
@@ -2099,22 +2107,21 @@ def test_title_head_tail_mode_has_independent_timing_rows(qapp):
                 tail_duration_ms=3_000,
                 tail_fade_in_ms=600,
                 tail_fade_out_ms=700,
-            )
-        )
+            )])
     )
 
-    assert not panel._title_head_row.isHidden()
-    assert not panel._title_tail_row.isHidden()
-    assert panel._title_head_row_label.text() == "开头"
-    assert panel._title_tail_duration_edit.value() == 3_000
-    assert panel._title_tail_fade_in_edit.value() == 600
-    assert panel._title_tail_fade_out_edit.value() == 700
+    card = panel._title_cards[0]
+    assert not card.head_row.isHidden()
+    assert not card.tail_row.isHidden()
+    assert card.head_row_label.text() == "开头"
+    assert card.tail_edits["tail_duration_ms"].value() == 3_000
+    assert card.tail_edits["tail_fade_in_ms"].value() == 600
+    assert card.tail_edits["tail_fade_out_ms"].value() == 700
 
-    panel._title_tail_duration_edit.setValue(4_000)
-    panel._title_tail_fade_in_edit.setValue(800)
-    panel._title_tail_fade_out_edit.setValue(900)
-    title = panel._style.title_overlay
-    assert title is not None
+    card.tail_edits["tail_duration_ms"].setValue(4_000)
+    card.tail_edits["tail_fade_in_ms"].setValue(800)
+    card.tail_edits["tail_fade_out_ms"].setValue(900)
+    title = panel._style.title_overlays[0]
     assert title.duration_ms == 2_000
     assert title.fade_in_ms == 300
     assert title.fade_out_ms == 400
@@ -2152,42 +2159,41 @@ def test_title_timing_fields_use_single_timecode_edit(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
-            title_overlay=TitleOverlay(
+            title_overlays=[TitleOverlay(
                 enabled=True,
                 # N3 的时间标签是 10ms 粒度，导入值本来就不是整秒。
                 head_offset_ms=1_230,
                 duration_ms=10_000,
                 fade_in_ms=300,
-            )
-        )
+            )])
     )
 
     # 单个输入框显示 M:SS.mmm，对外仍然是整数毫秒。
-    assert panel._title_head_edit.value() == 1_230
-    assert panel._title_head_edit.text() == "0:01.230"
-    assert panel._title_duration_edit.text() == "0:10.000"
-    assert panel._title_fade_in_edit.text() == "0:00.300"
+    card = panel._title_cards[0]
+    assert card.head_edits["head_offset_ms"].value() == 1_230
+    assert card.head_edits["head_offset_ms"].text() == "0:01.230"
+    assert card.head_edits["duration_ms"].text() == "0:10.000"
+    assert card.head_edits["fade_in_ms"].text() == "0:00.300"
 
     # 常见格式与纯秒数都能输入，写回模型的仍是整数毫秒，且回显规范化。
-    assert panel._title_duration_edit.submit_text("12.045")
-    assert panel._title_head_edit.submit_text("2:03")
-    assert panel._title_fade_in_edit.submit_text("0,45")
-    title = panel._style.title_overlay
-    assert title is not None
+    assert card.head_edits["duration_ms"].submit_text("12.045")
+    assert card.head_edits["head_offset_ms"].submit_text("2:03")
+    assert card.head_edits["fade_in_ms"].submit_text("0,45")
+    title = panel._style.title_overlays[0]
     assert title.duration_ms == 12_045
     assert title.head_offset_ms == 123_000
     assert title.fade_in_ms == 450
-    assert panel._title_duration_edit.text() == "0:12.045"
-    assert panel._title_head_edit.text() == "2:03.000"
+    assert card.head_edits["duration_ms"].text() == "0:12.045"
+    assert card.head_edits["head_offset_ms"].text() == "2:03.000"
 
 
 def test_title_timing_step_adjusts_by_second_and_fine_millis(qapp):
     panel = PropertyPanel()
     panel.set_style(
-        Style(title_overlay=TitleOverlay(enabled=True, duration_ms=1_999))
+        Style(title_overlays=[TitleOverlay(enabled=True, duration_ms=1_999)])
     )
 
-    edit = panel._title_duration_edit
+    edit = panel._title_cards[0].head_edits["duration_ms"]
     edit.stepBy(1)  # 默认 ±1 秒
     assert edit.value() == 2_999
     assert edit.text() == "0:02.999"
@@ -2195,16 +2201,15 @@ def test_title_timing_step_adjusts_by_second_and_fine_millis(qapp):
     edit.stepBy(-1, fine=True)  # Ctrl ±10 毫秒
     assert edit.value() == 2_989
 
-    title = panel._style.title_overlay
-    assert title is not None
+    title = panel._style.title_overlays[0]
     assert title.duration_ms == 2_989
 
 
 def test_title_timing_input_clamps_to_field_range(qapp):
     panel = PropertyPanel()
-    panel.set_style(Style(title_overlay=TitleOverlay(enabled=True)))
+    panel.set_style(Style(title_overlays=[TitleOverlay(enabled=True)]))
 
-    edit = panel._title_fade_in_edit  # 上限 10 000ms
+    edit = panel._title_cards[0].head_edits["fade_in_ms"]  # 上限 10 000ms
     # 越界输入在提交时钳到上限。
     assert edit.submit_text("15")
     assert edit.value() == 10_000
@@ -2228,13 +2233,13 @@ def test_title_timing_timecode_typing_survives_panel_round_trip(qapp):
     """timecode 打字提交后，样式回流不能把用户正在敲的文本改写掉。"""
     panel = PropertyPanel()
     panel.set_style(
-        Style(title_overlay=TitleOverlay(enabled=True, duration_ms=2_500))
+        Style(title_overlays=[TitleOverlay(enabled=True, duration_ms=2_500)])
     )
     panel.show()
     panel.setCurrentIndex(4)
     qapp.processEvents()
 
-    editor = panel._title_duration_edit
+    editor = panel._title_cards[0].head_edits["duration_ms"]
     editor.setFocus()
     editor.selectAll()
     QTest.keyClicks(editor, "045")
@@ -2243,8 +2248,7 @@ def test_title_timing_timecode_typing_survives_panel_round_trip(qapp):
 
     # 纯数字按秒计："045" = 45 秒。
     assert editor.value() == 45_000
-    title = panel._style.title_overlay
-    assert title is not None
+    title = panel._style.title_overlays[0]
     assert title.duration_ms == 45_000
     # 提交走的是防抖 → _update_title → _sync_title_controls → setValue 这条
     # 回路，途中不能把 "045" 规范化成 "0:45.000"。
@@ -2261,15 +2265,15 @@ def test_title_timing_timecode_edit_does_not_touch_undo_or_dirty_state(qapp, tmp
     """单个 timecode 框只是显示方式：同一个毫秒值不该产生多余的样式变更。"""
     panel = PropertyPanel()
     panel.set_style(
-        Style(title_overlay=TitleOverlay(enabled=True, duration_ms=2_500))
+        Style(title_overlays=[TitleOverlay(enabled=True, duration_ms=2_500)])
     )
 
     emitted: list[int] = []
     panel.styleChanged.connect(lambda style: emitted.append(
-        style.title_overlay.duration_ms if style.title_overlay else -1
+        style.title_overlays[0].duration_ms if style.title_overlays else -1
     ))
 
-    edit = panel._title_duration_edit
+    edit = panel._title_cards[0].head_edits["duration_ms"]
     edit.setValue(2_500)  # 值没变
     assert emitted == []
 
@@ -2734,7 +2738,7 @@ def test_font_preview_neutralizes_project_overlays_and_layout(qapp):
     preview = pp._FontPreviewWidget(owner)
     preview.set_preview_state(
         Style(
-            title_overlay=TitleOverlay(enabled=True, text_template="不应显示的标题"),
+            title_overlays=[TitleOverlay(enabled=True, text_template="不应显示的标题")],
             lit_enabled=True,
             viewport_offset_x=600,
             viewport_offset_y=-300,
@@ -2748,7 +2752,7 @@ def test_font_preview_neutralizes_project_overlays_and_layout(qapp):
         "japanese",
     )
 
-    assert preview._style.title_overlay is None
+    assert preview._style.title_overlays == []
     assert preview._style.lit_enabled is False
     assert preview._style.viewport_offset_x == 0
     assert preview._style.viewport_scale_pct == 100
@@ -2946,7 +2950,7 @@ def test_font_preview_uses_isolated_production_glyph_stacks(qapp, monkeypatch):
     monkeypatch.setattr(engine_painter, "paint_frame", reject_full_frame)
 
     image = pp._FontSampleCanvas._render_sample_image(
-        Style(title_overlay=TitleOverlay(enabled=True, text_template="标题")),
+        Style(title_overlays=[TitleOverlay(enabled=True, text_template="标题")]),
         "latin",
     )
 
@@ -6936,6 +6940,9 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
         win._property_panel._singer_combo.findData("custom:A")
     )
     win._property_panel._set_color("fill_color", "#ffcc00")
+
+    # 预览重刷有连发合并（首拍立即、停顿后补一拍）；断言前手动补齐最后一拍。
+    win._apply_preview_style_now()
 
     assert win._style.font_size_px == 96
     assert win._style.fill_color == "#00AAEE"

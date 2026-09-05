@@ -18,6 +18,7 @@ from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.domain.models import (
     TITLE_SCHEME_NAME,
     Style,
+    TitleOverlay,
     normalize_title_char_role_labels,
     style_to_dict,
 )
@@ -34,18 +35,26 @@ def title_to_ir(
     style: Style,
     *,
     duration_ms: int | None = None,
+    overlay: TitleOverlay | None = None,
 ) -> dict[str, Any] | None:
-    """Resolve the shared title contract into a renderer-ready snapshot."""
+    """Resolve one title overlay into a renderer-ready snapshot.
 
-    title = resolve_title_overlay(style)
+    ``overlay`` 缺省取第一条（单标题时期的调用方）。条目 ``scheme_name``
+    引用的方案缺失时回落内置「标题」方案，与 Painter 侧解析一致。
+    """
+
+    title = resolve_title_overlay(style, overlay)
     if title is None or not title.enabled:
         return None
     text = resolve_title_text(title, track)
     if not any(line.strip() for line in text.split("\n")):
         return None
+    scheme_name = title.scheme_name
+    if not scheme_name or scheme_name not in style.custom_style_schemes:
+        scheme_name = TITLE_SCHEME_NAME
     payload = title_overlay_to_ir(
         title,
-        style.custom_style_schemes.get(TITLE_SCHEME_NAME),
+        style.custom_style_schemes.get(scheme_name),
     )
     payload["text"] = text
     payload["windows"] = [
@@ -64,6 +73,22 @@ def title_to_ir(
         if label
     }
     return payload
+
+
+def titles_to_ir(
+    track: TimingTrack,
+    style: Style,
+    *,
+    duration_ms: int | None = None,
+) -> list[dict[str, Any]]:
+    """Resolve every enabled title overlay, preserving entry list order."""
+
+    payloads: list[dict[str, Any]] = []
+    for overlay in style.title_overlays:
+        payload = title_to_ir(track, style, duration_ms=duration_ms, overlay=overlay)
+        if payload is not None:
+            payloads.append(payload)
+    return payloads
 
 
 def build_render_ir(
@@ -114,7 +139,7 @@ def build_render_ir(
                 track_to_ir(source, style, layout_plan=plan, glyph_table=glyph_table)
                 for source, plan in zip(extra_sources, extra_plans, strict=True)
             ],
-            "title": title_to_ir(track, style, duration_ms=duration_ms),
+            "titles": titles_to_ir(track, style, duration_ms=duration_ms),
         }
         if not glyph_table.empty:
             ir["vector_glyphs"] = glyph_table.payload

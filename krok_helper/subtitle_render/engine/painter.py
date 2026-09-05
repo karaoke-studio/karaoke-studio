@@ -673,7 +673,8 @@ def _resolve_visible_content(
     logical_h: int | None = None,
 ):
     """计算某帧的可见内容元组：``(track_t_ms, display_style, display_lines,
-    signal_lines, title_opacity)``。
+    signal_lines, title_states)``。``title_states`` 为当前帧可见的
+    ``(TitleOverlay, opacity)`` 条目对（多标题，按条目列表顺序）。
 
     :func:`paint_frame_to_painter` 的早退判断与 :func:`frame_has_content` 共用本函数，
     保证"是否有可见内容"两处口径一致（A4 空帧短路用）。
@@ -730,18 +731,19 @@ def _resolve_visible_content_with_plan(
     )
     # Lyrics follow the track/global offset; the project title does not. N3
     # anchors title show times to the background movie timeline.
-    title_opacity = _title_overlay_opacity(
-        style.title_overlay,
-        track,
-        t_ms,
-        duration_ms=duration_ms,
+    title_states = tuple(
+        (overlay, opacity)
+        for overlay in style.title_overlays
+        if (opacity := _title_overlay_opacity(
+            overlay, track, t_ms, duration_ms=duration_ms
+        )) > 0.0
     )
     return (
         track_t_ms,
         display_style,
         display_lines,
         signal_lines,
-        title_opacity,
+        title_states,
         layout_plan,
     )
 
@@ -752,9 +754,10 @@ def _frame_title_vertical_bounds(
     track: TimingTrack,
     track_t_ms: int,
     style: Style,
-    title_opacity: float,
+    overlay: TitleOverlay,
+    opacity: float,
 ) -> tuple[int, int] | None:
-    resolved_title = resolve_title_overlay(style)
+    resolved_title = resolve_title_overlay(style, overlay)
     title_layout = _layout_title_overlay(
         logical_w,
         logical_h,
@@ -774,7 +777,7 @@ def _frame_title_vertical_bounds(
             _make_title_overlay_layer(
                 title_layout,
                 resolved_title,
-                title_opacity,
+                opacity,
                 ports=_TITLE_RENDER_PORTS,
             )
         ],
@@ -989,7 +992,7 @@ def _paint_track_to_painter(
         display_style,
         display_lines,
         signal_lines,
-        title_opacity,
+        title_states,
         layout_plan,
     ) = _resolve_visible_content_with_plan(
             track,
@@ -1000,16 +1003,17 @@ def _paint_track_to_painter(
             logical_h=logical_h,
     )
     if not draw_title:
-        title_opacity = 0.0
-    if not display_lines and not signal_lines and title_opacity <= 0.0:
+        title_states = ()
+    if not display_lines and not signal_lines and not title_states:
         return
 
     # 标题字幕 overlay（B7）：静态文字，画在屏幕坐标系（不随「视图」变换 / 行布局），
-    # 外观由「标题」配色方案与布局引用解析。**钉在最下层**——先画标题，本轨歌词与
-    # 随后叠绘的副字幕源都压在它之上（GPU 侧对应 compositeOrder 最小）。
-    if title_opacity > 0.0 and style.title_overlay is not None:
+    # 外观由各条目引用的配色方案与布局解析。**钉在最下层**——先画标题，本轨歌词与
+    # 随后叠绘的副字幕源都压在它之上（GPU 侧对应 compositeOrder 最小）；多条目按
+    # 列表顺序依次叠放。
+    for overlay, opacity in title_states:
         _paint_title_overlay(
-            painter, logical_w, logical_h, track, style, title_opacity
+            painter, logical_w, logical_h, track, style, overlay, opacity
         )
 
     painter.save()
@@ -1145,6 +1149,7 @@ def _paint_title_overlay(
     img_h: int,
     track: TimingTrack,
     style: Style,
+    overlay: TitleOverlay,
     opacity: float,
 ) -> None:
     _paint_title_overlay_with_ports(
@@ -1153,6 +1158,7 @@ def _paint_title_overlay(
         img_h,
         track,
         style,
+        overlay,
         opacity,
         compositor=_TEXT_RUN_COMPOSITOR,
         ports=_TITLE_RENDER_PORTS,

@@ -114,8 +114,9 @@ def _referenced_style_sources(style: Style, tracks: list[TimingTrack]) -> list[o
 
     歌手方案只保留 tracks 里出现的 ``singer_id``；行内配色只保留任一字符
     ``role_label`` 引用到的名字（标签跨行延续时，延续源头的字符必带标签）；
-    标题方案只在 ``title_overlay.enabled`` 时计入。N3 导入或编辑遗留的
-    未使用超大字号方案不应把安全边撑到数千像素、让整个 4K 导出退回全帧。
+    标题方案只在对应条目 ``enabled`` 时计入（含条目 ``scheme_name`` 引用的
+    自定义方案与逐字角色标签）。N3 导入或编辑遗留的未使用超大字号方案不应
+    把安全边撑到数千像素、让整个 4K 导出退回全帧。
     """
     sources: list[object] = [style]
     used_singers = {
@@ -139,10 +140,21 @@ def _referenced_style_sources(style: Style, tracks: list[TimingTrack]) -> list[o
                 for label in guide_symbol_role_labels(line.guide_symbol):
                     if label:
                         used_roles.add(label)
-    title = getattr(style, "title_overlay", None)
-    title_active = title is not None and bool(getattr(title, "enabled", False))
+    title_scheme_names: set[str] = set()
+    for title in getattr(style, "title_overlays", None) or ():
+        if not bool(getattr(title, "enabled", False)):
+            continue
+        # 基础外观（scheme_name 缺失或被删时回落内置「标题」方案）。
+        title_scheme_names.add(TITLE_SCHEME_NAME)
+        scheme_name = getattr(title, "scheme_name", None)
+        if scheme_name:
+            title_scheme_names.add(scheme_name)
+        for row in getattr(title, "char_role_labels", None) or ():
+            for label in row:
+                if label:
+                    used_roles.add(label)
     for name, scheme in (getattr(style, "custom_style_schemes", None) or {}).items():
-        if name in used_roles or (title_active and name == TITLE_SCHEME_NAME):
+        if name in used_roles or name in title_scheme_names:
             sources.append(scheme)
     return sources
 

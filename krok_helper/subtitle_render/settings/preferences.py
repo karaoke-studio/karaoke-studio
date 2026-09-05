@@ -18,6 +18,7 @@ from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
     PRESET_REFERENCE_HEIGHT,
     STYLE_APPEARANCE_FIELDS,
+    TITLE_LAYOUT_NAME,
     TITLE_SCHEME_NAME,
     Style,
     StylePreset,
@@ -55,7 +56,13 @@ LAYOUT_DEFAULT_STYLE_FIELDS = frozenset(
 )
 FONT_DEFAULT_STYLE_FIELDS = frozenset({"font_reference_height"})
 PROJECT_ONLY_STYLE_FIELDS = frozenset(
-    {"custom_style_schemes", "singer_style_overrides", "title_overlay"}
+    {
+        "custom_style_schemes",
+        "singer_style_overrides",
+        "title_overlays",
+        # 软件预设布局的删除标记只属于当前工程，不能污染新项目的出厂布局。
+        "hidden_builtin_layout_ids",
+    }
 )
 APP_STYLE_EXPLICIT_DEFAULT_FIELDS = (
     BUILTIN_SCHEME_STYLE_FIELDS
@@ -373,20 +380,27 @@ def load_app_style_preferences(
         Style().custom_style_schemes[TITLE_SCHEME_NAME],
     )
     persisted_style = data.get("style")
-    had_persisted_title = (
-        isinstance(persisted_style, dict) and "title_overlay" in persisted_style
+    had_persisted_title = isinstance(persisted_style, dict) and (
+        "title_overlay" in persisted_style or "title_overlays" in persisted_style
     )
     defaults = (
         dict(data.get("new_project_defaults"))
         if isinstance(data.get("new_project_defaults"), dict)
         else {}
     )
-    legacy_title = normalized_style.title_overlay or TitleOverlay()
+    # 应用偏好只记忆一份「新标题默认值」：取（可能来自旧版单标题 key 的）
+    # 首条目。
+    legacy_title = (normalized_style.title_overlays or [TitleOverlay()])[0]
     title_enabled = (
         bool(defaults.get("title_enabled"))
         if "title_enabled" in defaults
         else bool(legacy_title.enabled) if had_persisted_title else False
     )
+    def _default_title_layout_index(style: Style) -> int:
+        """出厂回落：优先「タイトル左上」，找不到才用条目默认的 index 1。"""
+        seeded = _layout_index_for_name(style, TITLE_LAYOUT_NAME)
+        return seeded if seeded > 0 else int(TitleOverlay().layout_index or 0)
+
     if "title_layout_name" in defaults:
         title_layout_index = _layout_index_for_name(
             normalized_style,
@@ -395,7 +409,7 @@ def load_app_style_preferences(
     elif had_persisted_title:
         title_layout_index = int(legacy_title.layout_index or 0)
     else:
-        title_layout_index = int(TitleOverlay().layout_index or 0)
+        title_layout_index = _default_title_layout_index(normalized_style)
     persisted_fades = defaults.get("title_fades")
     title_fades: dict[str, object] = {}
     if isinstance(persisted_fades, dict):
@@ -411,16 +425,18 @@ def load_app_style_preferences(
         normalized_style,
         custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
         singer_style_overrides={},
-        title_overlay=replace(
-            TitleOverlay(),
-            enabled=title_enabled,
-            layout_index=title_layout_index,
-            **title_fades,
-        ),
+        title_overlays=[
+            replace(
+                TitleOverlay(),
+                enabled=title_enabled,
+                layout_index=title_layout_index,
+                **title_fades,
+            )
+        ],
     )
     changed |= had_persisted_title or replace(
         app_default_style,
-        title_overlay=normalized_style.title_overlay,
+        title_overlays=normalized_style.title_overlays,
     ) != normalized_style
     assignment = defaults.get("layout_assignment")
     layout_assignment = (
@@ -486,9 +502,10 @@ def merge_common_style_preferences(
 
 
 def app_default_style_to_dict(style: Style) -> dict:
-    """Serialize an app default without the per-project title overlay."""
+    """Serialize an app default without the per-project title overlays."""
     payload = style_to_dict(style)
     payload.pop("title_overlay", None)
+    payload.pop("title_overlays", None)
     return payload
 
 
@@ -499,6 +516,7 @@ def merge_app_setting_field(existing: object, current: object, *, key: str) -> A
         if key == "style" and isinstance(source, dict):
             # Application defaults deliberately exclude per-project title text.
             source.pop("title_overlay", None)
+            source.pop("title_overlays", None)
         return merge_extensible_value(source, current, path=(str(key),))
     return deepcopy(current)
 
@@ -573,7 +591,7 @@ def prepare_app_preferences(
         app_default_style_to_dict(app_default_style),
         key="style",
     )
-    default_title = app_default_style.title_overlay or TitleOverlay()
+    default_title = (app_default_style.title_overlays or [TitleOverlay()])[0]
     new_project_defaults = (
         dict(data.get("new_project_defaults"))
         if isinstance(data.get("new_project_defaults"), dict)

@@ -3,6 +3,7 @@
 #include "../model/render_types.h"
 
 #include <QtCore/QHash>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
 
@@ -308,7 +309,10 @@ struct RenderConfig {
     QHash<QString, std::shared_ptr<const krok::subtitle::native::VectorGlyph>> vectorGlyphs;
     std::vector<TimingLine> lines;
     std::vector<RubyAnnotation> rubies;
-    QJsonObject title;
+    // Render IR schema: ``titles`` is an array of per-entry title payloads
+    // (multi-title). Python and sidecar ship together, so the legacy single
+    // ``title`` object key is not read anymore.
+    QJsonArray titles;
 };
 
 }  // namespace krok::subtitle::native::protocol

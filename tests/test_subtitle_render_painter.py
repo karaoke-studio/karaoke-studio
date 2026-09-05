@@ -7345,12 +7345,12 @@ def test_title_overlay_renders_only_when_enabled(qapp):
 
     on_img = _blank()
     title = TitleOverlay(enabled=True, anchor="top_left", font_size_px=48)
-    paint_frame(on_img, track, 500, replace(base, title_overlay=title))
+    paint_frame(on_img, track, 500, replace(base, title_overlays=[title]))
     # 标题在左上，会改变像素
     assert _pixel_hash(off) != _pixel_hash(on_img)
     # 关闭则与无标题一致
     disabled = _blank()
-    paint_frame(disabled, track, 500, replace(base, title_overlay=replace(title, enabled=False)))
+    paint_frame(disabled, track, 500, replace(base, title_overlays=[replace(title, enabled=False)]))
     assert _pixel_hash(off) == _pixel_hash(disabled)
 
 
@@ -7414,7 +7414,7 @@ def test_title_overlay_draws_below_lyrics(qapp):
     style = replace(
         base,
         custom_style_schemes=schemes,
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             # 显式 anchor/offset 生效，避免内置「タイトル左上」布局把标题移开歌词。
             layout_index=None,
@@ -7424,7 +7424,7 @@ def test_title_overlay_draws_below_lyrics(qapp):
             anchor="bottom_left",
             offset_x=0,
             offset_y=0,
-        ),
+        )],
     )
 
     lyrics_only = _blank()
@@ -7463,20 +7463,20 @@ def test_title_overlay_applies_role_scheme_per_character(qapp):
     uniform = replace(
         base,
         custom_style_schemes=schemes,
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="AB",
             char_role_labels=[[None, None]],
             fade_in_ms=0,
             fade_out_ms=0,
-        ),
+        )],
     )
     mixed = replace(
         uniform,
-        title_overlay=replace(
-            uniform.title_overlay,
+        title_overlays=[replace(
+            uniform.title_overlays[0],
             char_role_labels=[[None, "蓝色大字"]],
-        ),
+        )],
     )
 
     uniform_image = _blank()
@@ -7524,13 +7524,13 @@ def test_title_row_role_covers_expanded_template(qapp):
     style = replace(
         base,
         custom_style_schemes=schemes,
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template=template,
             char_role_labels=[["蓝色标题"] * len(template)],
             fade_in_ms=0,
             fade_out_ms=0,
-        ),
+        )],
     )
 
     image = _blank()
@@ -7616,16 +7616,15 @@ def test_title_timing_does_not_follow_lyrics_track_offset(qapp):
         meta=replace(_title_track().meta, offset_ms=5000),
     )
     style = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             show_mode="head",
             duration_ms=1000,
             fade_in_ms=0,
             fade_out_ms=0,
-        )
-    )
+        )])
 
-    _track_t, _style, _lines, _signals, title_opacity = (
+    _track_t, _style, _lines, _signals, title_states = (
         subtitle_painter._resolve_visible_content(
             track,
             500,
@@ -7633,7 +7632,9 @@ def test_title_timing_does_not_follow_lyrics_track_offset(qapp):
             duration_ms=60000,
         )
     )
-    assert title_opacity == 1.0
+    # 第 5 项现在是 (overlay, opacity) 序列；标题不受歌词轨偏移影响，500ms 可见
+    assert len(title_states) == 1
+    assert title_states[0][1] == 1.0
 
 
 def test_title_overlay_anchor_moves_block(qapp):
@@ -7643,10 +7644,10 @@ def test_title_overlay_anchor_moves_block(qapp):
     title = TitleOverlay(enabled=True, font_size_px=40, align="left", layout_index=None)
 
     top_left = _blank()
-    paint_frame(top_left, track, 500, replace(base, title_overlay=replace(title, anchor="top_left")))
+    paint_frame(top_left, track, 500, replace(base, title_overlays=[replace(title, anchor="top_left")]))
     bottom_right = _blank()
     paint_frame(
-        bottom_right, track, 500, replace(base, title_overlay=replace(title, anchor="bottom_right"))
+        bottom_right, track, 500, replace(base, title_overlays=[replace(title, anchor="bottom_right")])
     )
     # 标题文字是非背景像素；不同锚点 ink 重心明显不同
     tl = _ink_bounds(top_left)
@@ -7671,7 +7672,7 @@ def test_title_overlay_defaults_match_nicokara(qapp):
 def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
     from krok_helper.subtitle_render.engine.painter import resolve_title_overlay
 
-    style = Style(title_overlay=TitleOverlay(enabled=True))
+    style = Style(title_overlays=[TitleOverlay(enabled=True)])
     resolved = resolve_title_overlay(style)
     # 默认「标题」方案 = 指定 N3 项目的「情報小」
     assert resolved.font_family == "UD デジタル 教科書体 N-B"
@@ -7696,8 +7697,7 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
 
     # 布局引用悬空 → 位置保留字段原值
     dangling = replace(
-        style, title_overlay=replace(style.title_overlay, layout_index=9)
-    )
+        style, title_overlays=[replace(style.title_overlays[0], layout_index=9)])
     assert resolve_title_overlay(dangling).anchor == "top_left"
 
 
@@ -7719,12 +7719,12 @@ def test_title_layout_letter_spacing_overrides_title_and_character_schemes(qapp)
                 letter_spacing_px=-8,
             )
         ],
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="AB",
             char_role_labels=[["角色A", "角色A"]],
             layout_index=1,
-        ),
+        )],
     )
 
     resolved = resolve_title_overlay(style)
@@ -7763,14 +7763,14 @@ def test_title_line_box_uses_n3_char_box_not_font_metrics(qapp):
     # 这里要测的是布局几何，让 TitleOverlay 自己的字段生效。
     style = Style(
         custom_style_schemes={},
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="AB",
             font_size_px=48,
             stroke_width_px=6,
             stroke2_width_px=4,
             layout_index=None,
-        ),
+        )],
     )
     resolved = resolve_title_overlay(style)
     assert resolved is not None
@@ -7810,7 +7810,7 @@ def test_title_line_box_follows_the_scheme_each_glyph_actually_uses(qapp):
         schemes["角色A"] = SubtitleStyleScheme(font_size_px=60, stroke_width_px=4)
         style = Style(
             custom_style_schemes=schemes,
-            title_overlay=TitleOverlay(
+            title_overlays=[TitleOverlay(
                 enabled=True,
                 text_template="AB",
                 char_role_labels=[["角色A", "角色A"]],
@@ -7819,7 +7819,7 @@ def test_title_line_box_follows_the_scheme_each_glyph_actually_uses(qapp):
                 offset_x=40,
                 offset_y=40,
                 layout_index=None,
-            ),
+            )],
         )
         resolved = resolve_title_overlay(style)
         assert resolved is not None
@@ -7849,7 +7849,7 @@ def test_title_edge_anchor_keeps_stroke_inside_the_margin(qapp):
     def _layout(anchor: str, stroke: int):
         style = Style(
             custom_style_schemes={},
-            title_overlay=TitleOverlay(
+            title_overlays=[TitleOverlay(
                 enabled=True,
                 text_template="AB",
                 font_size_px=48,
@@ -7859,7 +7859,7 @@ def test_title_edge_anchor_keeps_stroke_inside_the_margin(qapp):
                 offset_x=40,
                 offset_y=40,
                 layout_index=None,
-            ),
+            )],
         )
         resolved = resolve_title_overlay(style)
         assert resolved is not None
@@ -7895,7 +7895,7 @@ def test_default_title_latin_font_does_not_inherit_global_lyrics_font(qapp):
         latin_stroke_width_px=1,
         latin_stroke2_enabled=False,
         latin_stroke2_width_px=0,
-        title_overlay=TitleOverlay(enabled=True, text_template="English Title"),
+        title_overlays=[TitleOverlay(enabled=True, text_template="English Title")],
     )
 
     scheme = style.custom_style_schemes["标题"]
@@ -7933,7 +7933,7 @@ def test_old_project_title_fields_migrate_to_scheme_and_layout():
     assert scheme.font_size_px == 77
     assert scheme.karaoke_colors.before.text.color == "#EBEBEB"
     # 位置折算成新布局并被标题引用
-    assert restored.title_overlay.layout_index == 1
+    assert restored.title_overlays[0].layout_index == 1
     layout = restored.layouts[0]
     assert layout.line_y_position == "bottom"
     assert layout.line_alignments == ["right"]
@@ -8277,7 +8277,7 @@ def test_style_dict_roundtrip_keeps_glow_concentration_levels():
                 ruby_glow_concentration_level=2,
             )
         },
-        title_overlay=TitleOverlay(glow_concentration_level=2),
+        title_overlays=[TitleOverlay(glow_concentration_level=2)],
     )
 
     restored = style_from_dict(style_to_dict(style))
@@ -8286,8 +8286,8 @@ def test_style_dict_roundtrip_keeps_glow_concentration_levels():
     assert restored.ruby_glow_concentration_level == 1
     assert restored.custom_style_schemes["B"].glow_concentration_level == 1
     assert restored.custom_style_schemes["B"].ruby_glow_concentration_level == 2
-    assert restored.title_overlay is not None
-    assert restored.title_overlay.glow_concentration_level == 2
+    assert restored.title_overlays
+    assert restored.title_overlays[0].glow_concentration_level == 2
 
     disabled = style_from_dict(style_to_dict(Style(glow_concentration_level=-1)))
     assert disabled.glow_concentration_level == -1
@@ -8313,8 +8313,8 @@ def test_glow_concentration_payloads_are_clamped():
     assert restored.ruby_glow_concentration_level == 2
     assert restored.custom_style_schemes["B"].glow_concentration_level == -1
     assert restored.custom_style_schemes["B"].ruby_glow_concentration_level == 2
-    assert restored.title_overlay is not None
-    assert restored.title_overlay.glow_concentration_level == 2
+    assert restored.title_overlays
+    assert restored.title_overlays[0].glow_concentration_level == 2
 
 
 def _margin_track(text: str) -> TimingTrack:
@@ -9024,14 +9024,15 @@ def test_style_dict_roundtrip_keeps_layout_definitions():
     style = Style(layouts=[_three_row_layout("下寄せ3行")])
     restored = style_from_dict(style_to_dict(style))
 
-    assert len(restored.layouts) == 8
+    # 用户布局 + 内置 1/3..8 行 + 恒确保的出厂标题布局（title-default）。
+    assert len(restored.layouts) == 9
     layout = restored.layouts[0]
     assert layout.name == "下寄せ3行"
     assert layout.line_y_position == "top"
     assert layout.line_alignments == ["left", "center", "right"]
     assert {
         item.layout_id for item in restored.layouts[1:]
-    } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)}
+    } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)} | {"title-default"}
     assert layout.horizontal_margin_px == 60
     assert layout.letter_spacing_px == -6
     assert layout.allow_biting is True
@@ -9100,7 +9101,7 @@ def test_rescale_font_sizes_scales_all_visual_font_slots():
         font_reference_height=1080,
         custom_style_schemes={"角色": scheme},
         singer_style_overrides={1: scheme},
-        title_overlay=TitleOverlay(font_size_px=40, stroke_width_px=5),
+        title_overlays=[TitleOverlay(font_size_px=40, stroke_width_px=5)],
     )
 
     scaled = rescale_font_sizes(style, 2160)
@@ -9118,9 +9119,9 @@ def test_rescale_font_sizes_scales_all_visual_font_slots():
     assert scaled.custom_style_schemes["角色"].latin_font_size_px is None
     assert scaled.custom_style_schemes["角色"].ruby_shadow_offset_x == -8
     assert scaled.singer_style_overrides[1].stroke_width_px == 24
-    assert scaled.title_overlay is not None
-    assert scaled.title_overlay.font_size_px == 80
-    assert scaled.title_overlay.stroke_width_px == 10
+    assert scaled.title_overlays
+    assert scaled.title_overlays[0].font_size_px == 80
+    assert scaled.title_overlays[0].stroke_width_px == 10
     assert rescale_font_sizes(scaled, 2160) is scaled
 
 
@@ -11877,7 +11878,7 @@ def test_title_overlay_space_uses_n3_space_width(qapp):
         font_size_px=48,
         stroke_width_px=0,
     )
-    style = replace(Style(), space_width_percent=20, title_overlay=title)
+    style = replace(Style(), space_width_percent=20, title_overlays=[title])
     track = TimingTrack(
         meta=TimingTrackMeta(title="星空", artist="歌手"),
         lines=[TimingLine(chars=[TimingChar("尾", 0)], end_ms=1_000)],

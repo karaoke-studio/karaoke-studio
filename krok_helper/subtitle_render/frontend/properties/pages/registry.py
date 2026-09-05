@@ -64,9 +64,7 @@ def _build_effects_page(host: Any, scroll_page: Callable, _section_pair: Callabl
 
 def _build_title_page(host: Any, scroll_page: Callable, _section_pair: Callable) -> Any:
     scroll, layout = scroll_page()
-    layout.addWidget(host._make_title_text_section())
-    layout.addWidget(host._make_title_style_section())
-    layout.addWidget(host._make_title_time_section())
+    layout.addWidget(host._make_title_page())
     layout.addStretch(1)
     return scroll
 

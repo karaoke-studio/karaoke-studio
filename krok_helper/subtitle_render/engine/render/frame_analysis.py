@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
-from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.models import Style, TitleOverlay
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
-FrameContent = tuple[int, Style, Sequence[object], Sequence[object], float]
+FrameContent = tuple[int, Style, Sequence[object], Sequence[object], Sequence[tuple[TitleOverlay, float]]]
 
 
 class VisibleContentResolver(Protocol):
@@ -46,7 +46,8 @@ class TitleBoundsResolver(Protocol):
         track: TimingTrack,
         track_t_ms: int,
         style: Style,
-        title_opacity: float,
+        overlay: TitleOverlay,
+        opacity: float,
     ) -> tuple[int, int] | None: ...
 
 
@@ -73,7 +74,7 @@ def frame_has_content(
     """Return whether any main, extra, signal, or title content is visible."""
 
     if track is not None:
-        _, _, display_lines, signal_lines, title_opacity = (
+        _, _, display_lines, signal_lines, title_states = (
             ports.resolve_visible_content(
                 track,
                 t_ms,
@@ -83,7 +84,7 @@ def frame_has_content(
                 logical_h=logical_h,
             )
         )
-        if display_lines or signal_lines or title_opacity > 0.0:
+        if display_lines or signal_lines or title_states:
             return True
     for extra in extra_tracks or ():
         _, _, display_lines, signal_lines, _unused = ports.resolve_visible_content(
@@ -121,7 +122,7 @@ def frame_content_intervals(
     intervals: list[tuple[int, int]] = []
     any_content = False
     for entry_track, with_title in track_entries:
-        track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
+        track_t_ms, display_style, display_lines, signal_lines, title_states = (
             ports.resolve_visible_content(
                 entry_track,
                 t_ms,
@@ -132,8 +133,8 @@ def frame_content_intervals(
             )
         )
         if not with_title:
-            title_opacity = 0.0
-        if not display_lines and not signal_lines and title_opacity <= 0.0:
+            title_states = ()
+        if not display_lines and not signal_lines and not title_states:
             continue
         any_content = True
         if display_lines:
@@ -150,14 +151,16 @@ def frame_content_intervals(
                 return None
             intervals.append(lyric_bounds)
 
-        if with_title and title_opacity > 0.0 and style.title_overlay is not None:
+        # 每个可见标题条目一个独立 interval（多标题天然拆组）。
+        for overlay, opacity in title_states:
             title_bounds = ports.title_vertical_bounds(
                 logical_w,
                 logical_h,
                 entry_track,
                 track_t_ms,
                 style,
-                title_opacity,
+                overlay,
+                opacity,
             )
             if title_bounds is not None:
                 intervals.append(title_bounds)

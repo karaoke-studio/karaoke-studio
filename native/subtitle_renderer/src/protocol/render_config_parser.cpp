@@ -1347,7 +1347,7 @@ std::optional<RenderConfig> parseRenderConfig(const QJsonObject &ir, QString *er
         }
     }
 
-    cfg.title = ir.value(QStringLiteral("title")).toObject();
+    cfg.titles = ir.value(QStringLiteral("titles")).toArray();
 
     buildResolvedStyleCache(cfg);
     return cfg;

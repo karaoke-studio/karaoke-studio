@@ -11,7 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 import math
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PyQt6.QtCore import (
     QEvent,
@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -77,6 +78,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_get_editable_choice,
     fluent_get_multiple,
     fluent_get_text,
+    fluent_info,
     fluent_question,
     fluent_warning,
 )
@@ -155,6 +157,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.widgets import (
     subgroup_label as _subgroup_label,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.title import (
+    TitleCard,
     TitlePropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.timing import (
@@ -174,17 +177,19 @@ from krok_helper.subtitle_render.domain.models import (
     Style,
     TITLE_SCHEME_NAME,
     TitleOverlay,
+    TitleTimeWindow,
     effective_karaoke_animation,
     layout_display_name,
     rescale_scheme_font_sizes,
 )
 from krok_helper.subtitle_render.settings.property_controllers import (
+    _BUILTIN_LAYOUT_PRESET_IDS,
     LayoutCatalogController,
     PropertyStyleController,
     RoleSchemeController,
     SCHEME_FIELDS as _SCHEME_FIELDS,
     SCHEME_ONLY_FIELDS as _SCHEME_ONLY_FIELDS,
-    TitleOverlayController,
+    TitleOverlaysController,
     normalize_decoration_kind as _normalize_decoration_kind,
     normalize_entry_animation as _normalize_entry_animation,
     normalize_exit_animation as _normalize_exit_animation,
@@ -502,6 +507,86 @@ class _WheelFocusedFontComboBox(WheelFocusedFontComboBox):
         )
 
 
+# 具名字段在标签对话框里的展示名（占位符仍用小写约定）。
+_TITLE_TAG_DISPLAY_NAMES = {
+    "title": "Title",
+    "artist": "Artist",
+    "album": "Album",
+    "tagging_by": "TaggingBy",
+}
+
+
+class _TitleTagDialog(QDialog):
+    """列出当前字幕源的可用标签；点选插入 ``{占位符}``，可连续插入多个。"""
+
+    tagChosen = Signal(str)
+
+    def __init__(
+        self,
+        tags: list[tuple[str, str]],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("可用标签")
+        self.setModal(True)
+        self.setMinimumSize(420, 300)
+        self._tag_rows = list(tags)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        hint = QLabel(
+            "以下标签读自当前字幕源文件（已排除 @Emoji 图片标签）。"
+            "双击或选中后点「插入」，把 {占位符} 加到标题文字光标处；"
+            "插入后窗口不关闭，可调整光标继续插入。"
+        )
+        hint.setWordWrap(True)
+        themed(hint, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+        layout.addWidget(hint)
+
+        self._list = QListWidget(self)
+        themed(
+            self._list,
+            lambda: (
+                f"QListWidget {{ background: {palette().input_bg}; "
+                f"border: 1px solid {palette().input_border}; border-radius: 6px; "
+                f"color: {palette().text_primary}; font-size: 10pt; }}"
+                f"QListWidget::item {{ padding: 6px 8px; }}"
+                f"QListWidget::item:selected {{ background: {palette().accent_primary}; "
+                f"color: #FFFFFF; }}"
+            ),
+        )
+        for name, value in tags:
+            display_name = _TITLE_TAG_DISPLAY_NAMES.get(name.lower(), name)
+            item_text = f"@{display_name} = {value}    →  {{{name}}}"
+            self._list.addItem(item_text)
+        if self._list.count():
+            self._list.setCurrentRow(0)
+        self._list.itemDoubleClicked.connect(lambda _item: self._emit_chosen())
+        layout.addWidget(self._list, 1)
+
+        button_row = QWidget(self)
+        button_layout = QHBoxLayout(button_row)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+        insert_button = QPushButton("插入", button_row)
+        insert_button.setMinimumHeight(32)
+        insert_button.setDefault(True)
+        insert_button.clicked.connect(self._emit_chosen)
+        close_button = QPushButton("关闭", button_row)
+        close_button.setMinimumHeight(32)
+        close_button.clicked.connect(self.accept)
+        button_layout.addStretch(1)
+        button_layout.addWidget(close_button)
+        button_layout.addWidget(insert_button)
+        layout.addWidget(button_row)
+
+    def _emit_chosen(self) -> None:
+        row = self._list.currentRow()
+        if 0 <= row < len(self._tag_rows):
+            self.tagChosen.emit(self._tag_rows[row][0])
+
+
 class PropertyPanel(QWidget):
     """字体 / 布局 / 特效 / 标题属性面板。"""
 
@@ -543,19 +628,25 @@ class PropertyPanel(QWidget):
         self._syncing = False
         # 控件是否已按 _style 完整同步过一次；未同步前不能走 set_style 的等值快路径。
         self._style_synced = False
-        self._title_text_change_pending = False
+        self._title_text_pending: set[int] = set()
         self._title_text_change_timer = QTimer(self)
         self._title_text_change_timer.setSingleShot(True)
         self._title_text_change_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
         self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
         self._role_controller = RoleSchemeController()
         self._layout_controller = LayoutCatalogController()
-        self._title_controller = TitleOverlayController()
+        self._title_controller = TitleOverlaysController()
         self._style_controller = PropertyStyleController()
         self._title_page_builder = TitlePropertyPageBuilder(
             self,
             timecode_factory=_TimecodeEdit,
         )
+        self._title_timecode_factory = _TimecodeEdit
+        self._title_cards: list[TitleCard] = []
+        self._title_window_provider: Optional[Callable[[TitleOverlay], list]] = None
+        self._title_entry_defaults_provider: Optional[Callable[[], TitleOverlay]] = None
+        self._title_tag_provider: Optional[Callable[[], list]] = None
+        self._title_duration_provider: Optional[Callable[[], int]] = None
         self._timing_page_builder = TimingPropertyPageBuilder(
             self,
             spin_factory=_spin,
@@ -833,7 +924,7 @@ class PropertyPanel(QWidget):
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._title_text_change_timer.stop()
-        self._title_text_change_pending = False
+        self._title_text_pending.clear()
         if self._style_synced and not emit and style == self._style:
             # 宿主把面板自己发出的样式原样回流是常态（`styleChanged` →
             # `_apply_style` → `set_style`）。重新灌一遍全部控件要跑几百次
@@ -1599,74 +1690,112 @@ class PropertyPanel(QWidget):
         for audio_edit in self._audio_path_edits:
             audio_edit.setText(text)
 
-    def _make_title_text_section(self) -> QFrame:
-        return self._title_page_builder.make_text_section()
+    # ---------------------------------------------------- 标题（多条目卡片列表）
 
-    def _make_title_style_section(self) -> QFrame:
-        return self._title_page_builder.make_style_section()
+    def _make_title_page(self) -> QWidget:
+        page = self._title_page_builder.make_page()
+        self._rebuild_title_cards()
+        return page
 
-    def _on_title_layout_changed(self, _index: int) -> None:
-        if self._syncing:
-            return
-        data = self._title_layout_combo.currentData()
-        self._update_title(layout_index=int(data) if data is not None else 0)
+    def _title_card(self, index: int) -> Optional[TitleCard]:
+        if 0 <= index < len(self._title_cards):
+            return self._title_cards[index]
+        return None
 
-    def _open_title_scheme(self) -> None:
-        """跳到字体页并选中「标题」方案。"""
-        self.setCurrentIndex(0)
-        self.set_current_scheme_key(f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}")
+    def set_title_window_provider(
+        self, provider: Optional[Callable[[TitleOverlay], list]]
+    ) -> None:
+        """注入「当前四档推导窗口」计算器（首次切入自定义模式时预填）。"""
+        self._title_window_provider = provider
 
-    def _refresh_title_layout_combo(self) -> None:
-        if not hasattr(self, "_title_layout_combo"):
-            return
-        combo = self._title_layout_combo
-        blocked = combo.blockSignals(True)
+    def set_title_entry_defaults_provider(
+        self, provider: Optional[Callable[[], TitleOverlay]]
+    ) -> None:
+        """注入新标题条目的默认值来源（应用偏好：启用/布局/淡入淡出）。"""
+        self._title_entry_defaults_provider = provider
+
+    def set_title_tag_provider(
+        self, provider: Optional[Callable[[], list]]
+    ) -> None:
+        """注入「当前字幕源可用标签」查询（返回 ``(名称, 值)`` 列表）。"""
+        self._title_tag_provider = provider
+
+    def set_title_duration_provider(
+        self, provider: Optional[Callable[[], int]]
+    ) -> None:
+        """注入「当前工程时长」查询（毫秒），用于自定义窗口的默认结束时间。"""
+        self._title_duration_provider = provider
+
+    def _title_total_duration_ms(self) -> Optional[int]:
+        if self._title_duration_provider is None:
+            return None
         try:
-            combo.clear()
-            combo.addItem(layout_display_name(self._style, "default"), 0)
-            for index, layout_def in enumerate(self._style.layouts, start=1):
-                combo.addItem(layout_def.name, index)
-            title = self._current_title()
-            target = title.layout_index if title.layout_index is not None else 0
-            combo.setCurrentIndex(max(0, combo.findData(int(target))))
-        finally:
-            combo.blockSignals(blocked)
+            value = int(self._title_duration_provider())
+        except Exception:  # noqa: BLE001 - 时长查询是尽力而为
+            return None
+        return value if value > 0 else None
 
-    def _make_title_time_section(self) -> QFrame:
-        return self._title_page_builder.make_time_section()
+    def _on_title_tags_requested(self, index: int) -> None:
+        """弹出当前字幕源的可用标签；插入不关窗，可连续插入多个占位符。"""
+        card = self._title_card(index)
+        if card is None:
+            return
+        tags: list[tuple[str, str]] = []
+        if self._title_tag_provider is not None:
+            try:
+                tags = [
+                    (str(name), str(value))
+                    for name, value in (self._title_tag_provider() or [])
+                ]
+            except Exception:  # noqa: BLE001 - 标签查询是尽力而为
+                tags = []
+        if not tags:
+            fluent_info(
+                self,
+                "暂无可用标签",
+                "当前字幕源没有读到可用的标签；先在前面步骤加载字幕文件。",
+            )
+            return
+        dialog = _TitleTagDialog(tags, self)
+        dialog.tagChosen.connect(card.insert_tag_placeholder)
+        dialog.exec()
 
-    def _current_title(self) -> TitleOverlay:
-        return self._title_controller.current(self._style)
+    def _on_title_enabled_toggled(self, index: int, checked: bool) -> None:
+        self._update_title(index, enabled=checked)
 
-    def _on_title_enabled_toggled(self, checked: bool) -> None:
-        self._update_title(enabled=checked)
-
-    def _on_title_text_changed(self) -> None:
+    def _on_title_card_text_changed(self, index: int) -> None:
         if self._syncing:
             return
-        new_text = self._title_text_edit.toPlainText()
+        card = self._title_card(index)
+        if card is None:
+            return
         self._style = self._title_controller.update(
             self._style,
-            {"text_template": new_text},
+            index,
+            {"text_template": card.text_edit.toPlainText()},
         )
-        # Keep typing responsive by coalescing the expensive host-side preview,
-        # source-table, undo snapshot and settings updates.
-        self._title_text_change_pending = True
+        # 打字期间只更新模型；预览/撤销等昂贵联动 debounce 后统一提交。
+        self._title_text_pending.add(index)
         self._title_text_change_timer.start()
 
     def _commit_title_text_edit(self) -> None:
-        if self._syncing or not self._title_text_change_pending:
+        if self._syncing or not self._title_text_pending:
             return
         self._title_text_change_timer.stop()
-        self._title_text_change_pending = False
+        self._title_text_pending.clear()
         self.styleChanged.emit(self._style)
 
-    def _update_title(self, **changes) -> None:
+    def _update_title(self, index: int, **changes) -> None:
         if self._syncing:
             return
         self._title_text_change_timer.stop()
-        self._title_text_change_pending = False
-        self._style = self._title_controller.update(self._style, changes)
+        self._title_text_pending.clear()
+        current = self._title_controller.current(self._style, index)
+        if changes.get("show_mode") == "custom" and not current.custom_windows:
+            windows = self._derive_title_custom_windows(current)
+            if windows:
+                changes["custom_windows"] = windows
+        self._style = self._title_controller.update(self._style, index, changes)
         self._syncing = True
         try:
             self._sync_title_controls()
@@ -1674,45 +1803,217 @@ class PropertyPanel(QWidget):
             self._syncing = False
         self.styleChanged.emit(self._style)
 
-    def _sync_title_controls(self) -> None:
-        if not hasattr(self, "_title_enabled_switch"):
-            return
-        title = self._current_title()
-        self._title_enabled_switch.setChecked(title.enabled)
-        # 仅在内容不同才回填，避免实时输入时把光标弹到末尾。
-        if self._title_text_edit.toPlainText() != title.text_template:
-            self._title_text_edit.setPlainText(title.text_template)
-        self._refresh_title_layout_combo()
-        self._title_mode_combo.setCurrentIndex(
-            max(0, self._title_mode_combo.findData(title.show_mode))
-        )
-        self._title_head_edit.setValue(title.head_offset_ms)
-        self._title_duration_edit.setValue(title.duration_ms)
-        self._title_tail_edit.setValue(title.tail_offset_ms)
-        self._title_fade_in_edit.setValue(title.fade_in_ms)
-        self._title_fade_out_edit.setValue(title.fade_out_ms)
-        self._title_tail_duration_edit.setValue(
-            title.duration_ms
-            if title.tail_duration_ms is None
-            else title.tail_duration_ms
-        )
-        self._title_tail_fade_in_edit.setValue(
-            title.fade_in_ms
-            if title.tail_fade_in_ms is None
-            else title.tail_fade_in_ms
-        )
-        self._title_tail_fade_out_edit.setValue(
-            title.fade_out_ms
-            if title.tail_fade_out_ms is None
-            else title.tail_fade_out_ms
-        )
-        self._sync_title_time_visibility()
+    def _derive_title_custom_windows(
+        self, title: TitleOverlay
+    ) -> list[TitleTimeWindow]:
+        """首次切入「自定义」时的预填窗口（不反向修改四档字段）。"""
+        windows: list = []
+        if self._title_window_provider is not None:
+            try:
+                windows = list(self._title_window_provider(title) or [])
+            except Exception:  # noqa: BLE001 - 预填是尽力而为
+                windows = []
+        if not windows:
+            # 兜底：按工程时长给一段全程窗口；完全拿不到时长才退回开头窗口
+            # （旧 duration_ms=10s 的静态默认会让标题在 10 秒处凭空消失）。
+            begin = max(int(title.head_offset_ms), 0)
+            total = self._title_total_duration_ms()
+            end = (
+                max(int(total), begin + 1)
+                if total is not None
+                else begin + max(int(title.duration_ms), 0)
+            )
+            windows = [
+                TitleTimeWindow(
+                    begin_ms=begin,
+                    end_ms=end,
+                    fade_in_ms=max(int(title.fade_in_ms), 0),
+                    fade_out_ms=max(int(title.fade_out_ms), 0),
+                )
+            ]
+        return [
+            window
+            for window in (item.normalized() for item in windows)
+            if window.end_ms > window.begin_ms
+        ]
 
-    def _sync_title_time_visibility(self) -> None:
-        mode = self._current_title().show_mode
-        self._title_head_row.setVisible(mode in {"whole", "head", "head_tail"})
-        self._title_tail_row.setVisible(mode in {"tail", "head_tail"})
-        self._title_head_row_label.setText("全程" if mode == "whole" else "开头")
+    def _on_title_card_layout_changed(self, index: int) -> None:
+        if self._syncing:
+            return
+        card = self._title_card(index)
+        if card is None:
+            return
+        data = card.layout_combo.currentData()
+        self._update_title(index, layout_index=int(data) if data is not None else 0)
+
+    def _on_title_card_scheme_changed(self, index: int) -> None:
+        if self._syncing:
+            return
+        card = self._title_card(index)
+        if card is None:
+            return
+        self._update_title(index, scheme_name=card.scheme_combo.currentData())
+
+    def _open_title_scheme(self, index: int) -> None:
+        """跳到字体页并选中该标题引用的配色方案。"""
+        card = self._title_card(index)
+        scheme = TITLE_SCHEME_NAME
+        if card is not None:
+            data = card.scheme_combo.currentData()
+            if data:
+                scheme = str(data)
+        self.setCurrentIndex(0)
+        self.set_current_scheme_key(f"{_CUSTOM_SCHEME_PREFIX}{scheme}")
+
+    def _on_title_card_renamed(self, index: int, name: str) -> None:
+        if self._syncing:
+            return
+        card = self._title_card(index)
+        current = self._title_controller.current(self._style, index)
+        cleaned = str(name).strip()
+        if card is None:
+            return
+        if not cleaned or cleaned == current.name:
+            card.name_edit.setText(current.name)
+            return
+        self._update_title(index, name=cleaned)
+
+    def _on_title_card_delete_requested(self, index: int) -> None:
+        if self._syncing:
+            return
+        changes = self._title_controller.delete_changes(self._style, index)
+        self._title_text_change_timer.stop()
+        self._title_text_pending.clear()
+        self._style = replace(self._style, **changes)
+        self._syncing = True
+        try:
+            self._sync_title_controls()
+        finally:
+            self._syncing = False
+        self.styleChanged.emit(self._style)
+
+    def _on_title_add_requested(self) -> None:
+        if self._syncing:
+            return
+        defaults: Optional[TitleOverlay] = None
+        if self._title_entry_defaults_provider is not None:
+            try:
+                defaults = self._title_entry_defaults_provider()
+            except Exception:  # noqa: BLE001 - 默认值是尽力而为
+                defaults = None
+        # 新条目默认文字用条目名（立即可见可辨）；布局沿用应用偏好记忆的
+        # 默认标题布局（与第一条一致，用户可在卡片里再改）。
+        name = TitleOverlaysController.next_entry_name(
+            list(self._style.title_overlays)
+        )
+        entry = replace(
+            defaults if defaults is not None else TitleOverlay(),
+            name=name,
+            text_template=name,
+        )
+        if entry.show_mode == "custom":
+            # 自定义模式的默认窗口按工程时长铺满全程（静态 0-10s 会让标题
+            # 在 10 秒处凭空消失）；拿不到时长时保持模型默认值。
+            windows = self._derive_title_custom_windows(
+                replace(entry, show_mode="whole")
+            )
+            if windows:
+                entry = replace(entry, custom_windows=windows)
+        changes, _new_index = self._title_controller.add_changes(
+            self._style, entry
+        )
+        self._title_text_change_timer.stop()
+        self._title_text_pending.clear()
+        self._style = replace(self._style, **changes)
+        self._syncing = True
+        try:
+            self._sync_title_controls()
+        finally:
+            self._syncing = False
+        self.styleChanged.emit(self._style)
+
+    def _on_title_card_windows_changed(self, index: int) -> None:
+        if self._syncing:
+            return
+        card = self._title_card(index)
+        if card is None:
+            return
+        self._update_title(index, custom_windows=card.window_rows_windows())
+
+    def _on_title_card_window_added(self, index: int) -> None:
+        if self._syncing:
+            return
+        card = self._title_card(index)
+        if card is None:
+            return
+        current = self._title_controller.current(self._style, index)
+        windows = card.window_rows_windows()
+        begin = max(int(current.head_offset_ms), 0)
+        # 新时间段默认铺满「开始 → 工程结束」；拿不到时长才退回 duration_ms
+        # （静态 10s 会让标题在中途凭空消失）。
+        total = self._title_total_duration_ms()
+        if total is not None and total > begin:
+            end = int(total)
+        else:
+            end = begin + max(int(current.duration_ms), 0)
+        windows.append(TitleTimeWindow(begin_ms=begin, end_ms=end))
+        self._update_title(index, custom_windows=windows)
+
+    def _on_title_card_window_removed(self, index: int, row: Any) -> None:
+        if self._syncing:
+            return
+        card = self._title_card(index)
+        if card is None:
+            return
+        self._update_title(index, custom_windows=card.remove_window_row(row))
+
+    def _sync_title_controls(self) -> None:
+        builder = self._title_page_builder
+        if builder.cards_layout is None:
+            return
+        overlays = list(self._style.title_overlays)
+        names = [
+            overlay.name or f"标题 {i + 1}" for i, overlay in enumerate(overlays)
+        ]
+        current_names = [card.name_edit.text() for card in self._title_cards]
+        if len(self._title_cards) != len(overlays) or current_names != names:
+            self._rebuild_title_cards()
+            return
+        for card, overlay in zip(self._title_cards, overlays):
+            card.sync(overlay)
+            card.sync_layout_combo(overlay, self._style)
+            card.sync_scheme_combo(overlay, self._style)
+
+    def _rebuild_title_cards(self) -> None:
+        builder = self._title_page_builder
+        if builder.cards_layout is None:
+            return
+        for card in self._title_cards:
+            card.section.setParent(None)
+            card.section.deleteLater()
+        self._title_cards = []
+        for index, overlay in enumerate(self._style.title_overlays):
+            card = TitleCard(
+                self,
+                index,
+                overlay,
+                timecode_factory=builder.timecode_factory,
+            )
+            card.sync_layout_combo(overlay, self._style)
+            card.sync_scheme_combo(overlay, self._style)
+            self._title_cards.append(card)
+            builder.cards_layout.addWidget(card.section)
+        if builder.empty_label is not None:
+            builder.empty_label.setVisible(not self._style.title_overlays)
+
+    def _refresh_title_layout_combo(self) -> None:
+        """布局目录变化（改名/增删）后刷新所有标题卡片的布局下拉。"""
+        for card in self._title_cards:
+            overlay = self._title_controller.current(self._style, card.index)
+            card.sync_layout_combo(overlay, self._style)
+
+    def _layout_display_name(self, style: Style, key: str) -> str:
+        return layout_display_name(style, key)
 
     def _make_lit_section(self) -> QFrame:
         return self._effects_page_builder.make_lit_section()
@@ -2029,11 +2330,17 @@ class PropertyPanel(QWidget):
             return
         name = self._style.layouts[index - 1].name
         fallback_name = layout_display_name(self._style, "default")
+        layout_id = str(self._style.layouts[index - 1].layout_id or "")
+        preset_hint = (
+            "\n这是软件预设布局：删除后不会自动恢复（仅影响当前工程）。"
+            if layout_id in _BUILTIN_LAYOUT_PRESET_IDS
+            else ""
+        )
         confirmed = fluent_question(
             self,
             "删除布局",
             f"确定要删除布局“{name}”吗？\n"
-            f"使用它的页面（和标题）会回到“{fallback_name}”。",
+            f"使用它的页面（和标题）会回到“{fallback_name}”。{preset_hint}",
             yes_text="删除",
             no_text="取消",
             default_cancel=True,

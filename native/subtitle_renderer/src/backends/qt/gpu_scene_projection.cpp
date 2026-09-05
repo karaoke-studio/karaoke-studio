@@ -693,18 +693,28 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         scene.lines.push_back(std::move(line));
     }
 
-    if (!config.title.isEmpty()
-        && config.title.value(QStringLiteral("enabled")).toBool(false)) {
-        const QString text = stringValue(config.title, QStringLiteral("text"));
+    // Multi-title: every entry projects into the shared TextLine pipeline with
+    // its own windows/styles.  Entry z-order = list order: compositeOrder
+    // decreases from kTitleCompositeOrder so title[0] stays lowest and all
+    // titles remain below the lyrics (line sort is ascending by compositeOrder).
+    int titleIndex = 0;
+    for (const auto &titleValue : config.titles) {
+        const QJsonObject title = titleValue.toObject();
+        ++titleIndex;
+        if (title.isEmpty()
+            || !title.value(QStringLiteral("enabled")).toBool(false)) {
+            continue;
+        }
+        const QString text = stringValue(title, QStringLiteral("text"));
         const QStringList rows = text.split(u'\n', Qt::KeepEmptyParts);
         std::vector<krok::subtitle::native::DisplayWindow> windows;
         const int defaultFadeInMs = std::max(
-            0, intValue(config.title, QStringLiteral("fade_in_ms"), 0)
+            0, intValue(title, QStringLiteral("fade_in_ms"), 0)
         );
         const int defaultFadeOutMs = std::max(
-            0, intValue(config.title, QStringLiteral("fade_out_ms"), 0)
+            0, intValue(title, QStringLiteral("fade_out_ms"), 0)
         );
-        for (const auto &windowValue : config.title.value(
+        for (const auto &windowValue : title.value(
                  QStringLiteral("windows")
              ).toArray()) {
             const QJsonArray window = windowValue.toArray();
@@ -726,127 +736,133 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 windows.push_back({start, end, fadeInMs, fadeOutMs});
             }
         }
-        if (!windows.empty() && std::any_of(
+        if (windows.empty() || !std::any_of(
                 rows.begin(), rows.end(), [](const QString &row) {
                     return !row.trimmed().isEmpty();
                 }
             )) {
-            TextStyle titleStyle;
+            continue;
+        }
+        TextStyle titleStyle;
+        applyGpuResolvedStyle(
+            titleStyle,
+            resolvedStyleFromTitle(sourceStyle, title),
+            scale
+        );
+        // The title always uses N3 char-box geometry, independent of the
+        // project's layout semantics: box height = font size + edge with the
+        // baseline split by the face's A:D ratio.  Qt/DWrite ascent carries
+        // the em's internal leading, which would leave the top margin
+        // visibly larger than the side margins for the same number.  Mirrors
+        // Painter's _layout_title_overlay.
+        titleStyle.layoutSemantics = "n3_1074";
+        titleStyle.lineGap = static_cast<float>(std::max(
+            0, intValue(title, QStringLiteral("line_gap_px"), 0)
+        ) * scale);
+        titleStyle.dualLineLayout = rows.size() > 1;
+        titleStyle.laneCount = std::max(static_cast<int>(rows.size()), 1);
+        titleStyle.leadInMs = 0;
+        titleStyle.tailMs = 0;
+        const QString anchor = stringValue(
+            title, QStringLiteral("anchor"), QStringLiteral("top_left")
+        );
+        const float offsetX = static_cast<float>(
+            intValue(title, QStringLiteral("offset_x"), 0) * scale
+        );
+        const float offsetY = static_cast<float>(
+            intValue(title, QStringLiteral("offset_y"), 0) * scale
+        );
+        // N3 counts half the edge inside the char box on every side, so an
+        // edge-anchored title keeps its stroke inside the margin.  The
+        // vertical half is already part of the N3 box height; the horizontal
+        // one has to be folded into the margin here, exactly as Painter does
+        // in _title_block_origin.
+        const float titleHalfEdge = std::max(titleStyle.strokeWidth, 0.0f) * 0.5f;
+        if (anchor.endsWith(QStringLiteral("left"))) {
+            titleStyle.alignment = "left";
+            titleStyle.horizontalMargin = offsetX + titleHalfEdge;
+        } else if (anchor.endsWith(QStringLiteral("right"))) {
+            titleStyle.alignment = "right";
+            titleStyle.horizontalMargin = offsetX + titleHalfEdge;
+        } else {
+            titleStyle.alignment = "center";
+            titleStyle.centerOffsetX = offsetX;
+        }
+        if (anchor.startsWith(QStringLiteral("top"))) {
+            titleStyle.verticalPosition = "top";
+            titleStyle.bottomMargin = offsetY;
+        } else if (anchor.startsWith(QStringLiteral("bottom"))) {
+            titleStyle.verticalPosition = "bottom";
+            titleStyle.bottomMargin = offsetY;
+        } else {
+            titleStyle.verticalPosition = "center";
+            titleStyle.centerOffsetY = offsetY;
+        }
+
+        const QJsonObject titleRoleStyles = title.value(
+            QStringLiteral("role_styles")
+        ).toObject();
+        const QJsonArray titleRoleRows = title.value(
+            QStringLiteral("resolved_role_labels")
+        ).toArray();
+        QHash<QString, int> titleRoleStyleIndices;
+        for (auto it = titleRoleStyles.begin(); it != titleRoleStyles.end(); ++it) {
+            if (!it.value().isObject()) {
+                continue;
+            }
+            TextStyle roleStyle = titleStyle;
             applyGpuResolvedStyle(
-                titleStyle,
-                resolvedStyleFromTitle(sourceStyle, config.title),
+                roleStyle,
+                resolvedStyleFromTitle(sourceStyle, it.value().toObject()),
                 scale
             );
-            // The title always uses N3 char-box geometry, independent of the
-            // project's layout semantics: box height = font size + edge with the
-            // baseline split by the face's A:D ratio.  Qt/DWrite ascent carries
-            // the em's internal leading, which would leave the top margin
-            // visibly larger than the side margins for the same number.  Mirrors
-            // Painter's _layout_title_overlay.
-            titleStyle.layoutSemantics = "n3_1074";
-            titleStyle.lineGap = static_cast<float>(std::max(
-                0, intValue(config.title, QStringLiteral("line_gap_px"), 0)
-            ) * scale);
-            titleStyle.dualLineLayout = rows.size() > 1;
-            titleStyle.laneCount = std::max(static_cast<int>(rows.size()), 1);
-            titleStyle.leadInMs = 0;
-            titleStyle.tailMs = 0;
-            const QString anchor = stringValue(
-                config.title, QStringLiteral("anchor"), QStringLiteral("top_left")
-            );
-            const float offsetX = static_cast<float>(
-                intValue(config.title, QStringLiteral("offset_x"), 0) * scale
-            );
-            const float offsetY = static_cast<float>(
-                intValue(config.title, QStringLiteral("offset_y"), 0) * scale
-            );
-            // N3 counts half the edge inside the char box on every side, so an
-            // edge-anchored title keeps its stroke inside the margin.  The
-            // vertical half is already part of the N3 box height; the horizontal
-            // one has to be folded into the margin here, exactly as Painter does
-            // in _title_block_origin.
-            const float titleHalfEdge = std::max(titleStyle.strokeWidth, 0.0f) * 0.5f;
-            if (anchor.endsWith(QStringLiteral("left"))) {
-                titleStyle.alignment = "left";
-                titleStyle.horizontalMargin = offsetX + titleHalfEdge;
-            } else if (anchor.endsWith(QStringLiteral("right"))) {
-                titleStyle.alignment = "right";
-                titleStyle.horizontalMargin = offsetX + titleHalfEdge;
-            } else {
-                titleStyle.alignment = "center";
-                titleStyle.centerOffsetX = offsetX;
-            }
-            if (anchor.startsWith(QStringLiteral("top"))) {
-                titleStyle.verticalPosition = "top";
-                titleStyle.bottomMargin = offsetY;
-            } else if (anchor.startsWith(QStringLiteral("bottom"))) {
-                titleStyle.verticalPosition = "bottom";
-                titleStyle.bottomMargin = offsetY;
-            } else {
-                titleStyle.verticalPosition = "center";
-                titleStyle.centerOffsetY = offsetY;
-            }
+            const int styleIndex = static_cast<int>(scene.charStyles.size());
+            scene.charStyles.push_back(std::move(roleStyle));
+            titleRoleStyleIndices.insert(it.key(), styleIndex);
+        }
 
-            const QJsonObject titleRoleStyles = config.title.value(
-                QStringLiteral("role_styles")
-            ).toObject();
-            const QJsonArray titleRoleRows = config.title.value(
-                QStringLiteral("resolved_role_labels")
-            ).toArray();
-            QHash<QString, int> titleRoleStyleIndices;
-            for (auto it = titleRoleStyles.begin(); it != titleRoleStyles.end(); ++it) {
-                if (!it.value().isObject()) {
-                    continue;
-                }
-                TextStyle roleStyle = titleStyle;
-                applyGpuResolvedStyle(
-                    roleStyle,
-                    resolvedStyleFromTitle(sourceStyle, it.value().toObject()),
-                    scale
-                );
-                const int styleIndex = static_cast<int>(scene.charStyles.size());
-                scene.charStyles.push_back(std::move(roleStyle));
-                titleRoleStyleIndices.insert(it.key(), styleIndex);
+        for (int rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+            const QString &row = rows.at(rowIndex);
+            if (row.isEmpty()) {
+                continue;
             }
-
-            for (int rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
-                const QString &row = rows.at(rowIndex);
-                if (row.isEmpty()) {
-                    continue;
-                }
-                TextLine titleLine;
-                titleLine.startMs = windows.front().startMs;
-                titleLine.endMs = windows.back().endMs;
-                titleLine.sourceIndex = -1;
-                titleLine.sourceLineIndex = rowIndex;
-                titleLine.lane = rowIndex;
-                titleLine.compositeOrder =
-                    krok::subtitle::native::kTitleCompositeOrder;
-                titleLine.staticOverlay = true;
-                titleLine.fadeInMs = defaultFadeInMs;
-                titleLine.fadeOutMs = defaultFadeOutMs;
-                titleLine.displayWindows = windows;
-                titleLine.chars.reserve(static_cast<std::size_t>(row.size()));
-                const QJsonArray roleLabels = rowIndex < titleRoleRows.size()
-                    ? titleRoleRows.at(rowIndex).toArray()
-                    : QJsonArray{};
-                for (int charIndex = 0; charIndex < row.size(); ++charIndex) {
-                    const QString roleLabel = charIndex < roleLabels.size()
-                        ? roleLabels.at(charIndex).toString()
-                        : QString{};
-                    const int styleIndex = titleRoleStyleIndices.value(roleLabel, -1);
-                    titleLine.chars.push_back(TextChar{
-                        QString(row.at(charIndex)).toStdWString(),
-                        1000000000,
-                        1000000001,
-                        styleIndex,
-                        nullptr,
-                        std::nullopt,
-                    });
-                }
-                scene.lineStyles.push_back(titleStyle);
-                scene.lines.push_back(std::move(titleLine));
+            TextLine titleLine;
+            titleLine.startMs = windows.front().startMs;
+            titleLine.endMs = windows.back().endMs;
+            // 每个标题占一个独立的负 sourceIndex：D2D 活动行按
+            // (sourceIndex, sourceLineIndex) 去重，全部用 -1 会让时间重叠的
+            // 第二个标题被当成同一行丢掉（无法同时显示）。
+            titleLine.sourceIndex = -titleIndex;
+            titleLine.sourceLineIndex = rowIndex;
+            // lane 只表示标题块内的行号（纵向 dy = firstBaseline + step*lane），
+            // 不能做跨标题唯一化，否则第二个标题会被推出屏幕。
+            titleLine.lane = rowIndex;
+            titleLine.compositeOrder =
+                krok::subtitle::native::kTitleCompositeOrder - (titleIndex - 1);
+            titleLine.staticOverlay = true;
+            titleLine.fadeInMs = defaultFadeInMs;
+            titleLine.fadeOutMs = defaultFadeOutMs;
+            titleLine.displayWindows = windows;
+            titleLine.chars.reserve(static_cast<std::size_t>(row.size()));
+            const QJsonArray roleLabels = rowIndex < titleRoleRows.size()
+                ? titleRoleRows.at(rowIndex).toArray()
+                : QJsonArray{};
+            for (int charIndex = 0; charIndex < row.size(); ++charIndex) {
+                const QString roleLabel = charIndex < roleLabels.size()
+                    ? roleLabels.at(charIndex).toString()
+                    : QString{};
+                const int styleIndex = titleRoleStyleIndices.value(roleLabel, -1);
+                titleLine.chars.push_back(TextChar{
+                    QString(row.at(charIndex)).toStdWString(),
+                    1000000000,
+                    1000000001,
+                    styleIndex,
+                    nullptr,
+                    std::nullopt,
+                });
             }
+            scene.lineStyles.push_back(titleStyle);
+            scene.lines.push_back(std::move(titleLine));
         }
     }
     return scene;

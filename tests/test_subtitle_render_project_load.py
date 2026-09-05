@@ -23,7 +23,8 @@ def test_project_load_plan_resolves_legacy_style_reference_height() -> None:
 
     assert plan.style.font_size_px == 96
     assert plan.style.font_reference_height == 2160
-    assert plan.style.title_overlay is not None
+    # 旧工程 ``title_overlay: null`` 现在加载为默认一条（禁用）条目
+    assert plan.style.title_overlays
     assert (plan.screen.width, plan.screen.height, plan.screen.fps) == (3840, 2160, 120)
     assert plan.selected_scheme_key == "custom:瑞"
 

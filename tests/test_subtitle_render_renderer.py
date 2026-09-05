@@ -115,13 +115,15 @@ def _track() -> TimingTrack:
 def test_frame_analysis_aggregates_main_title_and_extra_bounds() -> None:
     main = TimingTrack()
     extra = TimingTrack()
-    style = Style(title_overlay=TitleOverlay(enabled=True))
+    style = Style(title_overlays=[TitleOverlay(enabled=True)])
     durations: list[int | None] = []
 
     def resolve_visible_content(track, _t_ms, resolved_style, **kwargs):
         durations.append(kwargs.get("duration_ms"))
         top = 10 if track is main else 40
-        return 0, resolved_style, [top], [], 0.5
+        # 第 5 项是 (overlay, opacity) 标题条目序列（多标题模型）
+        title_states = [(resolved_style.title_overlays[0], 0.5)]
+        return 0, resolved_style, [top], [], title_states
 
     def subtitle_bounds(
         _logical_w,
@@ -1317,14 +1319,14 @@ def _band_job(tmp_path: Path) -> RenderJob:
     style = Style(
         font_size_px=48,
         line_y_position="bottom",
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="标题",
             anchor="top_center",
             font_size_px=48,
             offset_y=20,
             show_mode="whole",
-        ),
+        )],
     )
     return RenderJob(
         track=_track(),
@@ -1390,13 +1392,12 @@ def test_title_overlay_bake_uses_target_device_pixel_ratio(qapp):
     image.setDevicePixelRatio(2.0)
     image.fill(QColor(0, 0, 0, 0))
     style = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="Title",
             font_size_px=48,
             show_mode="whole",
-        )
-    )
+        )])
 
     paint_frame(image, _track(), 200, style)
 

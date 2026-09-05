@@ -126,10 +126,11 @@ def test_legacy_project_load_migrates_spacing_to_used_layouts(qapp, monkeypatch,
     assert win._style.layouts[0].letter_spacing_px == 0
     assert win._style.custom_style_schemes["标题"].space_width_percent is None
 
-    # v3 工程（含迁移后重新保存的）不再迁移，布局缺键即继承全局
+    # 当前版本工程（含迁移后重新保存的）不再迁移，布局缺键即继承全局。
+    # v4 引入多标题，v3 工程装载时仍会走一次迁移。
     win._apply_project_data(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "subtitle_path": str(lrc),
             "style": style_to_dict(style),
             "line_layout_indices": [1, 0],

@@ -167,9 +167,16 @@ TITLE_ANCHORS: tuple[TitleAnchor, ...] = (
     "bottom_right",
 )
 # whole=整段显示（ニコカラ Head 默认，0→曲尾）；head=仅开头一段；
-# tail=仅片尾一段；head_tail=开始和片尾各显示一段。
-TitleShowMode = Literal["whole", "head", "tail", "head_tail"]
-TITLE_SHOW_MODES: tuple[TitleShowMode, ...] = ("whole", "head", "tail", "head_tail")
+# tail=仅片尾一段；head_tail=开始和片尾各显示一段；custom=用户自定义
+# 任意时间段（``custom_windows``，可多段、每段独立淡入淡出）。
+TitleShowMode = Literal["whole", "head", "tail", "head_tail", "custom"]
+TITLE_SHOW_MODES: tuple[TitleShowMode, ...] = (
+    "whole",
+    "head",
+    "tail",
+    "head_tail",
+    "custom",
+)
 
 TITLE_SCHEME_NAME = "标题"
 """标题外观所引用的配色方案名：标题的字体与颜色统一由
@@ -181,6 +188,51 @@ TITLE_LAYOUT_NAME = "タイトル左上"
 
 
 @dataclass
+class TitleTimeWindow:
+    """「自定义」显示模式的单个时间段（绝对时间，项目时间轴坐标）。
+
+    ``fade_in_ms`` / ``fade_out_ms`` 是**淡入/淡出动画的持续时长**（毫秒），
+    不是起止时间。
+    """
+
+    begin_ms: int = 0
+    end_ms: int = 10_000
+    fade_in_ms: int = 500
+    fade_out_ms: int = 500
+
+    def normalized(self) -> "TitleTimeWindow":
+        """Clamp values and drop degenerate windows via ``end <= begin``."""
+        begin = max(int(self.begin_ms), 0)
+        end = max(int(self.end_ms), 0)
+        return TitleTimeWindow(
+            begin_ms=begin,
+            end_ms=end,
+            fade_in_ms=max(int(self.fade_in_ms), 0),
+            fade_out_ms=max(int(self.fade_out_ms), 0),
+        )
+
+
+def title_time_window_to_dict(window: TitleTimeWindow) -> dict:
+    return {
+        "begin_ms": int(window.begin_ms),
+        "end_ms": int(window.end_ms),
+        "fade_in_ms": int(window.fade_in_ms),
+        "fade_out_ms": int(window.fade_out_ms),
+    }
+
+
+def title_time_window_from_dict(payload: object) -> Optional[TitleTimeWindow]:
+    if not isinstance(payload, dict):
+        return None
+    return TitleTimeWindow(
+        begin_ms=_int_value(payload.get("begin_ms"), 0),
+        end_ms=_int_value(payload.get("end_ms"), 0),
+        fade_in_ms=_int_value(payload.get("fade_in_ms"), 0),
+        fade_out_ms=_int_value(payload.get("fade_out_ms"), 0),
+    )
+
+
+@dataclass
 class TitleOverlay:
     """标题字幕叠加层（B7）。
 
@@ -189,6 +241,9 @@ class TitleOverlay:
     文字模板 ``{title}`` / ``{artist}`` 由字幕源
     ``@Title`` / ``@Artist`` 元数据替换；也可直接填任意自定义文字（含换行）。
     """
+
+    name: str = "标题 1"
+    """条目显示名（属性页卡片标题与字幕源下拉共用；新增时按「标题 N」避让）。"""
 
     enabled: bool = False
     text_template: str = "{title} / {artist}"
@@ -230,13 +285,20 @@ class TitleOverlay:
     offset_x: int = 50
     offset_y: int = 50
 
+    scheme_name: Optional[str] = None
+    """标题基础外观引用的配色方案名；``None`` 表示内置「标题」方案。
+    引用的方案被删除时回落内置方案（逐字角色标签不受影响）。"""
+
     layout_index: Optional[int] = 1
     """标题引用的布局方案（同 ``TimingLine.layout_index``：0 = 默认布局，
     n = ``Style.layouts[n-1]``）。默认 1 指向内置「タイトル左上」；``None``
     表示旧工程的显式 anchor/offset 字段仍然生效（加载时会自动迁移）。"""
 
-    # 显示时段（逆向 ニコカラ TitleShowTime，默认 Head=整段显示）
-    show_mode: TitleShowMode = "whole"
+    # 显示时段（逆向 ニコカラ TitleShowTime）。新工程/新增条目默认「自定义」
+    # 且窗口为空 = 全程显示（不再用静态 0-10s 窗口，避免标题中途消失）；
+    # 旧工程加载在 ``title_overlay_from_dict`` 中对缺失字段固定回落 whole，
+    # 字节语义不变。
+    show_mode: TitleShowMode = "custom"
     head_offset_ms: int = 0
     duration_ms: int = 10000
     tail_offset_ms: int = 0
@@ -247,6 +309,9 @@ class TitleOverlay:
     tail_duration_ms: Optional[int] = None
     tail_fade_in_ms: Optional[int] = None
     tail_fade_out_ms: Optional[int] = None
+    # 「自定义」模式的显示时间段；空列表 = 全程显示（见 ``title_show_window``）。
+    # ``show_mode != "custom"`` 时忽略不删，切回自定义模式后原样恢复。
+    custom_windows: list[TitleTimeWindow] = field(default_factory=list)
 
 
 @dataclass
@@ -990,8 +1055,12 @@ class Style:
     volume_flash_duration_ratio: float = 1.0
     volume_transition_ratio_pct: int = 67
 
-    # 标题字幕 overlay（B7）。None = 用默认（关闭）。
-    title_overlay: Optional[TitleOverlay] = None
+    # 标题字幕 overlay 列表（B7 → 多标题）。默认一条（关闭），保持「至少
+    # 一条」的现状不变量；用户在属性页删除全部条目后允许为空列表。
+    title_overlays: list[TitleOverlay] = field(default_factory=lambda: [TitleOverlay()])
+    # 用户显式删除的软件预设布局 id（``title-default`` / ``builtin-N``）：
+    # ``ensure_page_layout_defaults`` 不再自动补回这些预设，删除才能持久。
+    hidden_builtin_layout_ids: list[str] = field(default_factory=list)
 
     @property
     def timing(self) -> StyleTimingConfig:
@@ -1170,14 +1239,26 @@ def _builtin_page_layout(style: Style, rows: int) -> LyricsLayout:
     )
 
 
+def _builtin_preset_ids() -> set[str]:
+    return {"title-default", *(f"builtin-{rows}" for rows in range(1, 9))}
+
+
 def ensure_page_layout_defaults(style: Style) -> Style:
     """Return a style with stable unique IDs and complete 1..8 defaults.
 
     Missing built-ins are appended, never inserted, so numeric layout indices
-    from schema-v1 projects and N3 imports retain their meaning.
+    from schema-v1 projects and N3 imports retain their meaning.  Presets the
+    user explicitly deleted (``hidden_builtin_layout_ids``) stay deleted, and
+    ``title-default`` is re-seeded whenever it is missing — the default title
+    (``layout_index=1``) must always resolve to the shipped top-left preset.
     """
 
     layouts = deepcopy(style.layouts)
+    hidden = {
+        str(value)
+        for value in style.hidden_builtin_layout_ids
+        if str(value) in _builtin_preset_ids()
+    }
     used: set[str] = {"default"}
     for index, layout in enumerate(layouts):
         candidate = str(layout.layout_id or "").strip()
@@ -1198,12 +1279,16 @@ def ensure_page_layout_defaults(style: Style) -> Style:
                 layout.name = f"{builtin_rows} 行布局"
         used.add(candidate)
 
+    if "title-default" not in used and "title-default" not in hidden:
+        layouts.append(default_title_layout())
+        used.add("title-default")
+
     required_rows = [1, 3, 4, 5, 6, 7, 8]
     if max(1, min(len(style.line_alignments), 8)) != 2:
         required_rows.append(2)
     for rows in required_rows:
         layout_id = f"builtin-{rows}"
-        if layout_id in used:
+        if layout_id in used or layout_id in hidden:
             continue
         layouts.append(_builtin_page_layout(style, rows))
         used.add(layout_id)
@@ -1214,11 +1299,21 @@ def ensure_page_layout_defaults(style: Style) -> Style:
         layout.layout_id: max(1, min(len(layout.line_alignments), 8))
         for layout in layouts
     }
+
+    def _fallback_for(rows: int, default_capacity: int) -> str:
+        # 预设被显式删除时按容量找不到目标，退回全局默认布局。
+        preferred = (
+            "default"
+            if default_capacity == 2 and rows == 2
+            else f"builtin-{rows}"
+        )
+        return preferred if preferred in capacity_by_id else "default"
+
     for rows in range(1, 9):
         layout_id = str(raw_mapping.get(rows, "") or "")
         if rows == 2:
             default_capacity = max(1, min(len(style.line_alignments), 8))
-            fallback = "default" if default_capacity == 2 else "builtin-2"
+            fallback = _fallback_for(rows, default_capacity)
             mapping[rows] = (
                 layout_id
                 if (
@@ -1228,7 +1323,7 @@ def ensure_page_layout_defaults(style: Style) -> Style:
                 else fallback
             )
             continue
-        fallback = f"builtin-{rows}"
+        fallback = _fallback_for(rows, rows)
         mapping[rows] = (
             layout_id if capacity_by_id.get(layout_id) == rows else fallback
         )
@@ -1292,8 +1387,12 @@ def style_to_dict(style: Style) -> dict:
             data[item.name] = [lyrics_layout_to_dict(layout) for layout in value]
         elif item.name == "default_layout_by_row_count":
             data[item.name] = {str(key): str(item) for key, item in value.items()}
-        elif item.name == "title_overlay":
-            data[item.name] = title_overlay_to_dict(value) if value is not None else None
+        elif item.name == "title_overlays":
+            overlays = [title_overlay_to_dict(overlay) for overlay in value]
+            data["title_overlays"] = overlays
+            # 兼容镜像：旧版本程序读新文件时至少保住第一个标题（权威 key
+            # 是 ``title_overlays``，读取端优先采用）。
+            data["title_overlay"] = overlays[0] if overlays else None
         elif item.name == "singer_style_overrides":
             data[item.name] = {
                 str(key): subtitle_style_scheme_to_dict(scheme)
@@ -1317,6 +1416,14 @@ def style_from_dict(payload: object) -> Style:
     changes: dict = {}
     style_fields = {item.name for item in fields(Style)}
     for key, value in payload.items():
+        if key == "title_overlay":
+            # 旧版单标题 key 已不是 Style 字段，必须在字段过滤之前处理：
+            # 折算成单条目列表；不覆盖权威 key ``title_overlays``（两个 key
+            # 同时出现时以 ``title_overlays`` 为准，与写出端的镜像语义一致）。
+            legacy = title_overlay_from_dict(value)
+            if legacy is not None:
+                changes.setdefault("title_overlays", [legacy])
+            continue
         if key not in style_fields:
             continue
         if key in {"karaoke_colors", "ruby_karaoke_colors"}:
@@ -1334,12 +1441,26 @@ def style_from_dict(payload: object) -> Style:
                     if 1 <= rows <= 8 and str(raw_id).strip():
                         parsed_mapping[rows] = str(raw_id).strip()
                 changes[key] = parsed_mapping
-        elif key == "title_overlay":
-            changes[key] = title_overlay_from_dict(value)
+        elif key == "title_overlays":
+            # 权威 key：条目列表。非法条目跳过；空列表 = 用户删除了全部标题。
+            if isinstance(value, list):
+                changes[key] = [
+                    overlay
+                    for overlay in (
+                        title_overlay_from_dict(entry) for entry in value
+                    )
+                    if overlay is not None
+                ]
         elif key == "singer_style_overrides":
             changes[key] = _singer_overrides_from_dict(value)
         elif key == "custom_style_schemes":
             changes[key] = _custom_schemes_from_dict(value)
+        elif key == "hidden_builtin_layout_ids":
+            # 只保留合法预设 id，未知值丢弃。
+            valid = _builtin_preset_ids()
+            changes[key] = [
+                str(item) for item in value if str(item) in valid
+            ] if isinstance(value, list) else []
         elif key == "glow_concentration_level":
             changes[key] = normalize_glow_concentration_level(value)
         elif key == "ruby_glow_concentration_level":
@@ -1568,22 +1689,24 @@ def _migrate_title_references(changes: dict) -> None:
     """旧工程标题迁移：显式外观/位置字段 → 「标题」方案 + 布局引用。
 
     新版工程恒满足两个不变量：``custom_style_schemes`` 含 ``TITLE_SCHEME_NAME``、
-    启用标题时 ``title_overlay.layout_index`` 非 None。旧工程加载时按原
-    ``TitleOverlay`` 字段折算补齐，保证外观不变。
+    启用标题时 ``layout_index`` 非 None。旧工程加载时按原 ``TitleOverlay``
+    字段折算补齐，保证外观不变。多标题条目只可能来自新版工程（旧版单标题
+    key 只折算出一条），因此方案补齐只看第一条，布局引用逐条目处理。
     """
-    title = changes.get("title_overlay")
+    titles = list(changes.get("title_overlays") or [])
+    first_title = titles[0] if titles else None
     schemes = changes.get("custom_style_schemes")
     if schemes is None:
         # 快照没有方案字典：仅当标题需要迁移时显式给出（否则交给默认值）。
-        if title is not None:
+        if first_title is not None:
             changes["custom_style_schemes"] = {
-                TITLE_SCHEME_NAME: title_scheme_from_overlay(title)
+                TITLE_SCHEME_NAME: title_scheme_from_overlay(first_title)
             }
     elif TITLE_SCHEME_NAME not in schemes:
         schemes = dict(schemes)
         schemes[TITLE_SCHEME_NAME] = (
-            title_scheme_from_overlay(title)
-            if title is not None
+            title_scheme_from_overlay(first_title)
+            if first_title is not None
             else default_title_scheme()
         )
         changes["custom_style_schemes"] = schemes
@@ -1643,14 +1766,28 @@ def _migrate_title_references(changes: dict) -> None:
             schemes = dict(schemes)
             schemes[TITLE_SCHEME_NAME] = completed
             changes["custom_style_schemes"] = schemes
-    if title is None or title.layout_index is not None:
-        return
+    migrated_titles: list[TitleOverlay] = []
+    titles_changed = False
     layouts = list(changes.get("layouts") or [])
-    layouts.append(
-        _layout_from_title_position(title, {layout.name for layout in layouts})
-    )
-    changes["layouts"] = layouts
-    changes["title_overlay"] = replace(title, layout_index=len(layouts))
+    for title in titles:
+        if title.layout_index is not None:
+            migrated_titles.append(title)
+            continue
+        layouts.append(
+            _layout_from_title_position(title, {layout.name for layout in layouts})
+        )
+        migrated_titles.append(replace(title, layout_index=len(layouts)))
+        titles_changed = True
+    if titles_changed:
+        changes["layouts"] = layouts
+        changes["title_overlays"] = migrated_titles
+    if "title_overlays" not in changes:
+        # 旧工程没有标题配置（key 缺失或 null）：补默认**禁用**条目并固定
+        # whole 语义——不跟随 TitleOverlay 的新默认（custom），保证旧工程
+        # 启用标题后的行为与历史版本一致。
+        changes["title_overlays"] = [
+            replace(TitleOverlay(), show_mode="whole", custom_windows=[])
+        ]
 
 
 def _layout_from_title_position(
@@ -1834,12 +1971,10 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
         singer: rescale_scheme_font_sizes(scheme, reference, new_height)
         for singer, scheme in style.singer_style_overrides.items()
     }
-    title_overlay = style.title_overlay
-    if title_overlay is not None:
-        title_overlay = scale_dataclass(
-            title_overlay,
-            _TITLE_FONT_VISUAL_SIZE_FIELDS,
-        )
+    title_overlays = [
+        scale_dataclass(overlay, _TITLE_FONT_VISUAL_SIZE_FIELDS)
+        for overlay in style.title_overlays
+    ]
     changes = {
         name: scaled(getattr(style, name)) for name in _FONT_VISUAL_SIZE_FIELDS
     }
@@ -1848,7 +1983,7 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
         **changes,
         custom_style_schemes=custom_schemes,
         singer_style_overrides=singer_overrides,
-        title_overlay=title_overlay,
+        title_overlays=title_overlays,
         font_reference_height=new_height,
     )
 
@@ -1979,11 +2114,11 @@ def migrate_spacing_bindings_to_used_layouts(
         index = int(getattr(line, "layout_index", 0) or 0)
         if 0 <= index <= len(style.layouts):
             used.add(index)
-    title = style.title_overlay
-    if title is not None and title.layout_index is not None:
-        title_index = int(title.layout_index)
-        if 0 <= title_index <= len(style.layouts):
-            used.add(title_index)
+    for title in style.title_overlays:
+        if title.layout_index is not None:
+            title_index = int(title.layout_index)
+            if 0 <= title_index <= len(style.layouts):
+                used.add(title_index)
 
     letter_global = int(style.letter_spacing_px)
     layouts = [
@@ -2090,9 +2225,11 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
 
 def title_overlay_to_dict(title: TitleOverlay) -> dict:
     return {
+        "name": title.name,
         "enabled": title.enabled,
         "text_template": title.text_template,
         "char_role_labels": [list(row) for row in title.char_role_labels],
+        "scheme_name": title.scheme_name,
         "font_family": title.font_family,
         "font_family_latin": title.font_family_latin,
         "font_size_px": title.font_size_px,
@@ -2125,6 +2262,9 @@ def title_overlay_to_dict(title: TitleOverlay) -> dict:
         "tail_duration_ms": title.tail_duration_ms,
         "tail_fade_in_ms": title.tail_fade_in_ms,
         "tail_fade_out_ms": title.tail_fade_out_ms,
+        "custom_windows": [
+            title_time_window_to_dict(window) for window in title.custom_windows
+        ],
     }
 
 
@@ -2138,16 +2278,23 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
     align = payload.get("align", defaults.align)
     if align not in HORIZONTAL_ALIGNS:
         align = defaults.align
-    show_mode = payload.get("show_mode", defaults.show_mode)
+    # 缺失 show_mode（更老的工程）固定回落 whole：不能跟随 TitleOverlay 的
+    # 新默认 custom，否则旧工程重存后显示行为会变。
+    show_mode = payload.get("show_mode", "whole")
     if show_mode not in TITLE_SHOW_MODES:
-        show_mode = defaults.show_mode
+        show_mode = "whole"
     decoration = payload.get("decoration_kind", defaults.decoration_kind)
     if decoration not in {"none", "shadow", "glow"}:
         decoration = defaults.decoration_kind
     text_template = str(payload.get("text_template", defaults.text_template))
+    scheme_name = payload.get("scheme_name", defaults.scheme_name)
+    if scheme_name is not None:
+        scheme_name = str(scheme_name).strip() or None
     return TitleOverlay(
+        name=str(payload.get("name", defaults.name)) or defaults.name,
         enabled=bool(payload.get("enabled", defaults.enabled)),
         text_template=text_template,
+        scheme_name=scheme_name,
         char_role_labels=normalize_title_char_role_labels(
             text_template, payload.get("char_role_labels")
         ),
@@ -2208,6 +2355,18 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
             if payload.get("tail_fade_out_ms") is not None
             else None
         ),
+        custom_windows=[
+            window
+            for window in (
+                title_time_window_from_dict(item)
+                for item in (
+                    payload.get("custom_windows")
+                    if isinstance(payload.get("custom_windows"), list)
+                    else []
+                )
+            )
+            if window is not None
+        ],
     )
 
 

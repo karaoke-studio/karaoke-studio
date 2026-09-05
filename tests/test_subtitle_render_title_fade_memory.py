@@ -60,9 +60,12 @@ def make_window(settings):
 
 
 def _edit_title(window: SubtitleRenderWindow, **changes) -> None:
-    title = window._style.title_overlay or TitleOverlay()
+    title = (window._style.title_overlays or [TitleOverlay()])[0]
     window._property_panel.set_style(
-        replace(window._style, title_overlay=replace(title, enabled=True, **changes)),
+        replace(
+            window._style,
+            title_overlays=[replace(title, enabled=True, **changes)],
+        ),
         emit=True,
     )
     QApplication.instance().processEvents()
@@ -73,7 +76,7 @@ def test_editing_the_fade_updates_the_app_default(make_window) -> None:
 
     _edit_title(window, fade_in_ms=250, fade_out_ms=180)
 
-    app_title = window._app_default_style.title_overlay
+    app_title = window._app_default_style.title_overlays[0]
     assert app_title.fade_in_ms == 250
     assert app_title.fade_out_ms == 180
 
@@ -97,9 +100,9 @@ def test_a_new_instance_starts_from_the_remembered_fade(make_window) -> None:
 
     second = make_window()
 
-    assert second._app_default_style.title_overlay.fade_in_ms == 250
-    assert second._style.title_overlay.fade_in_ms == 250
-    assert second._style.title_overlay.fade_out_ms == 180
+    assert second._app_default_style.title_overlays[0].fade_in_ms == 250
+    assert second._style.title_overlays[0].fade_in_ms == 250
+    assert second._style.title_overlays[0].fade_out_ms == 180
 
 
 def test_the_tail_none_means_follow_the_head_and_round_trips(make_window, settings) -> None:
@@ -112,7 +115,7 @@ def test_the_tail_none_means_follow_the_head_and_round_trips(make_window, settin
 
     reopened = make_window()
 
-    assert reopened._app_default_style.title_overlay.tail_fade_in_ms is None
+    assert reopened._app_default_style.title_overlays[0].tail_fade_in_ms is None
 
 
 def test_an_explicit_tail_fade_is_remembered_too(make_window) -> None:
@@ -122,7 +125,7 @@ def test_an_explicit_tail_fade_is_remembered_too(make_window) -> None:
 
     second = make_window()
 
-    title = second._app_default_style.title_overlay
+    title = second._app_default_style.title_overlays[0]
     assert title.tail_fade_in_ms == 120
     assert title.tail_fade_out_ms == 90
 
@@ -135,8 +138,11 @@ def test_the_title_text_stays_per_song(make_window) -> None:
 
     second = make_window()
 
-    assert second._app_default_style.title_overlay.fade_in_ms == 250
-    assert second._app_default_style.title_overlay.text_template == TitleOverlay().text_template
+    assert second._app_default_style.title_overlays[0].fade_in_ms == 250
+    assert (
+        second._app_default_style.title_overlays[0].text_template
+        == TitleOverlay().text_template
+    )
 
 
 def test_garbage_in_the_settings_falls_back_to_the_defaults(make_window, settings) -> None:
@@ -149,6 +155,6 @@ def test_garbage_in_the_settings_falls_back_to_the_defaults(make_window, setting
 
     window = make_window()
 
-    title = window._app_default_style.title_overlay
+    title = window._app_default_style.title_overlays[0]
     assert title.fade_in_ms == TitleOverlay().fade_in_ms
     assert title.fade_out_ms == 0

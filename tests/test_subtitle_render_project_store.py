@@ -374,7 +374,7 @@ def test_project_document_preserves_nested_future_fields_by_object_identity(tmp_
         custom_style_schemes={
             "主唱": SubtitleStyleScheme(fill_color="#112233")
         },
-        title_overlay=TitleOverlay(enabled=True),
+        title_overlays=[TitleOverlay(enabled=True)],
     )
     page_plan = subtitle_models.TrackPagePlan(
         [subtitle_models.TrackSection([subtitle_models.TrackPage(1, "layout-a")])]
@@ -406,8 +406,8 @@ def test_project_document_preserves_nested_future_fields_by_object_identity(tmp_
         output={"crf": 18},
     )
     source["style"]["future_style"] = {"enabled": True}
-    source["style"]["title_overlay"]["future_title"] = "keep"
-    source["style"]["title_overlay"]["fill"]["future_fill"] = 7
+    source["style"]["title_overlays"][0]["future_title"] = "keep"
+    source["style"]["title_overlays"][0]["fill"]["future_fill"] = 7
     source["style"]["custom_style_schemes"]["主唱"]["future_scheme"] = {
         "mode": "new"
     }
@@ -439,8 +439,11 @@ def test_project_document_preserves_nested_future_fields_by_object_identity(tmp_
 
     assert payload["style"]["font_size_px"] == 96
     assert payload["style"]["future_style"] == {"enabled": True}
+    assert payload["style"]["title_overlays"][0]["future_title"] == "keep"
+    assert payload["style"]["title_overlays"][0]["fill"]["future_fill"] == 7
+    # 双 key 序列化：旧单标题 key 是首条目的镜像（内容一致）
+    assert payload["style"]["title_overlay"] == payload["style"]["title_overlays"][0]
     assert payload["style"]["title_overlay"]["future_title"] == "keep"
-    assert payload["style"]["title_overlay"]["fill"]["future_fill"] == 7
     assert payload["style"]["custom_style_schemes"]["主唱"]["future_scheme"] == {
         "mode": "new"
     }
@@ -478,7 +481,7 @@ def test_app_style_preferences_do_not_leak_project_only_content():
         font_size_px=80,
         line_lead_in_ms=1200,
         custom_style_schemes={TITLE_SCHEME_NAME: app_title_scheme},
-        title_overlay=app_title,
+        title_overlays=[app_title],
     )
     project = Style(
         font_size_px=140,
@@ -488,7 +491,7 @@ def test_app_style_preferences_do_not_leak_project_only_content():
             "主唱": SubtitleStyleScheme(fill_color="#FF0000"),
         },
         singer_style_overrides={1: SubtitleStyleScheme(fill_color="#00FF00")},
-        title_overlay=TitleOverlay(enabled=False, text_template="逐曲标题"),
+        title_overlays=[TitleOverlay(enabled=False, text_template="逐曲标题")],
     )
 
     merged = merge_common_style_preferences(app_default, project)
@@ -497,8 +500,10 @@ def test_app_style_preferences_do_not_leak_project_only_content():
     assert merged.font_size_px == 80
     assert merged.custom_style_schemes == {TITLE_SCHEME_NAME: app_title_scheme}
     assert merged.singer_style_overrides == {}
-    assert merged.title_overlay == app_title
+    # 应用偏好只记忆一份「新标题默认值」：项目标题条目不并入应用默认
+    assert merged.title_overlays == [app_title]
     assert "title_overlay" not in app_default_style_to_dict(merged)
+    assert "title_overlays" not in app_default_style_to_dict(merged)
 
 
 def test_app_style_preferences_load_title_habits_without_project_content():
@@ -508,7 +513,7 @@ def test_app_style_preferences_load_title_habits_without_project_content():
             "逐曲角色": SubtitleStyleScheme(fill_color="#FF0000"),
         },
         singer_style_overrides={1: SubtitleStyleScheme(fill_color="#00FF00")},
-        title_overlay=TitleOverlay(enabled=False, text_template="不得继承"),
+        title_overlays=[TitleOverlay(enabled=False, text_template="不得继承")],
     )
 
     loaded = load_app_style_preferences(
@@ -526,8 +531,9 @@ def test_app_style_preferences_load_title_habits_without_project_content():
         }
     )
 
-    title = loaded.style.title_overlay
-    assert title is not None
+    # 应用偏好只保留单条「新标题默认值」条目
+    assert len(loaded.style.title_overlays) == 1
+    title = loaded.style.title_overlays[0]
     assert title.enabled is True
     assert title.layout_index == 1
     assert title.fade_in_ms == 0
@@ -758,12 +764,11 @@ def test_prepare_app_preferences_owns_the_complete_save_projection():
         "output": {"future_output": 3},
     }
     app_default = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             layout_index=1,
             fade_in_ms=123,
-        )
-    )
+        )])
     project_style = replace(app_default, line_lead_in_ms=2345)
     prepared = prepare_app_preferences(
         existing,
@@ -885,7 +890,7 @@ def test_migrate_spacing_bindings_most_used_space_width_to_used_layouts():
                 letter_spacing_px=11,
             ),
         ],
-        title_overlay=TitleOverlay(enabled=True),
+        title_overlays=[TitleOverlay(enabled=True)],
         custom_style_schemes={"标题": SubtitleStyleScheme(space_width_percent=80)},
         singer_style_overrides={1: SubtitleStyleScheme(space_width_percent=40)},
     )
@@ -942,6 +947,8 @@ def test_migrate_spacing_bindings_without_lines_falls_back_to_global():
             subtitle_models.LyricsLayout(name="A", layout_id="a", line_alignments=["left"])
         ],
         custom_style_schemes={"标题": SubtitleStyleScheme(space_width_percent=80)},
+        # 新版默认恒有一条（禁用）标题条目；显式删光才能表达「无标题」
+        title_overlays=[],
     )
 
     migrated = subtitle_models.migrate_spacing_bindings_to_used_layouts(style, [])
@@ -1349,7 +1356,7 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     default_font_size = win._app_default_style.font_size_px
 
     # 改样式 → 标脏
-    win._style = Style(font_size_px=88, title_overlay=TitleOverlay(enabled=True))
+    win._style = Style(font_size_px=88, title_overlays=[TitleOverlay(enabled=True)])
     win._property_panel.set_style(win._style)
     win._export_crf_spin.setValue(23)
     win._export_native_check.setChecked(True)
@@ -1372,7 +1379,7 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     data = load_render_project(path)
     win._apply_project_data(data)
     assert win._style.font_size_px == 88
-    assert win._style.title_overlay is not None and win._style.title_overlay.enabled
+    assert win._style.title_overlays and win._style.title_overlays[0].enabled
     assert win._export_crf_spin.value() == 23
     assert win._export_native_check.isChecked() is False
     # 加载过程中不应把项目标脏
@@ -1390,11 +1397,11 @@ def test_window_open_edit_save_preserves_future_project_fields(
             custom_style_schemes={
                 "主唱": SubtitleStyleScheme(fill_color="#123456")
             },
-            title_overlay=TitleOverlay(enabled=True),
+            title_overlays=[TitleOverlay(enabled=True)],
         )
     )
     future_style["future_style"] = {"version": 2}
-    future_style["title_overlay"]["future_title"] = True
+    future_style["title_overlays"][0]["future_title"] = True
     future_style["custom_style_schemes"]["主唱"]["future_scheme"] = 7
     future_style["layouts"][0]["future_layout"] = "keep"
     win._apply_project_data(
@@ -1427,7 +1434,7 @@ def test_window_open_edit_save_preserves_future_project_fields(
     assert saved["future_section"] == {"mode": "new"}
     assert saved["style"]["font_size_px"] == 91
     assert saved["style"]["future_style"] == {"version": 2}
-    assert saved["style"]["title_overlay"]["future_title"] is True
+    assert saved["style"]["title_overlays"][0]["future_title"] is True
     assert saved["style"]["custom_style_schemes"]["主唱"]["future_scheme"] == 7
     assert saved["style"]["layouts"][0]["future_layout"] == "keep"
     assert saved["screen"]["future_screen"] == "keep"
@@ -1570,7 +1577,7 @@ def test_title_text_is_isolated_between_yurika_projects(qapp, monkeypatch, tmp_p
 
     first_style = replace(
         win._style,
-        title_overlay=TitleOverlay(enabled=True, text_template="第一个项目"),
+        title_overlays=[TitleOverlay(enabled=True, text_template="第一个项目")],
     )
     win._style = first_style
     win._property_panel.set_style(first_style)
@@ -1578,19 +1585,19 @@ def test_title_text_is_isolated_between_yurika_projects(qapp, monkeypatch, tmp_p
 
     second_style = replace(
         win._style,
-        title_overlay=TitleOverlay(enabled=True, text_template="第二个项目"),
+        title_overlays=[TitleOverlay(enabled=True, text_template="第二个项目")],
     )
     win._style = second_style
     win._property_panel.set_style(second_style)
     assert win._write_project(second_path) is True
 
     win._apply_project_data(load_render_project(first_path))
-    assert win._style.title_overlay is not None
-    assert win._style.title_overlay.text_template == "第一个项目"
+    assert win._style.title_overlays
+    assert win._style.title_overlays[0].text_template == "第一个项目"
 
     win._apply_project_data(load_render_project(second_path))
-    assert win._style.title_overlay is not None
-    assert win._style.title_overlay.text_template == "第二个项目"
+    assert win._style.title_overlays
+    assert win._style.title_overlays[0].text_template == "第二个项目"
 
 
 def test_open_project_clears_previous_media_before_applying_snapshot(
@@ -2509,8 +2516,9 @@ def test_title_char_roles_round_trip_and_follow_text_edits():
         tail_fade_in_ms=900,
         tail_fade_out_ms=1_100,
     )
-    restored = style_from_dict(style_to_dict(Style(title_overlay=title))).title_overlay
-    assert restored is not None
+    restored = style_from_dict(
+        style_to_dict(Style(title_overlays=[title]))
+    ).title_overlays[0]
     assert restored.char_role_labels == [["red", None], ["blue", "blue"]]
     assert restored.tail_duration_ms == 8_000
     assert restored.tail_fade_in_ms == 900
@@ -2667,25 +2675,23 @@ def test_title_context_actions_persist_role_scheme_and_layout(qapp, monkeypatch)
             subtitle_models.LyricsLayout(name="标题左上"),
             subtitle_models.LyricsLayout(name="标题中央"),
         ],
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="标题甲\n标题乙",
             layout_index=1,
-        ),
+        )],
     )
     win._style = style
     win._property_panel.set_style(style)
-    win._title_source_active = True
+    win._active_title_index = 0
     win._refresh_lyrics_panel_source()
 
     win._on_lyrics_roles_changed([0, 1], "A")
-    title = win._style.title_overlay
-    assert title is not None
+    title = win._style.title_overlays[0]
     assert title.char_role_labels == [["A", "A", "A"], ["A", "A", "A"]]
 
     win._on_layout_change_requested([0, 1], 2)
-    title = win._style.title_overlay
-    assert title is not None
+    title = win._style.title_overlays[0]
     assert title.layout_index == 2
     assert win._lyrics_panel._track is not None
     assert {line.layout_index for line in win._lyrics_panel._track.lines} == {2}
@@ -2740,26 +2746,30 @@ def test_title_source_is_last_and_title_text_syncs_from_tab(qapp, monkeypatch, t
         text_template="AB",
         char_role_labels=[["A", "B"]],
     )
-    win._style = Style(title_overlay=title)
+    win._style = Style(title_overlays=[title])
     win._property_panel.set_style(win._style)
     win._refresh_source_ui()
 
     combo = win._lyrics_panel._source_combo
-    assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "副字幕", "标题"]
+    # 副字幕源之后为每个标题条目列一行（名称 = 条目 name）
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "主字幕", "副字幕", "标题 1"
+    ]
 
     win._on_source_selected(2)
     win._clear_undo_history()
-    win._property_panel._update_title(text_template="AXB")
-    assert win._style.title_overlay.char_role_labels == [["A", None, "B"]]
+    win._property_panel._update_title(0, text_template="AXB")
+    assert win._style.title_overlays[0].char_role_labels == [["A", None, "B"]]
     assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "AXB"
     win._undo_edit()
-    assert win._style.title_overlay.text_template == "AB"
+    assert win._style.title_overlays[0].text_template == "AB"
     assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "AB"
 
     win._active_source_index = 1
     win._on_source_selected(2)
-    win._property_panel._update_title(enabled=False)
-    assert win._lyrics_panel.current_source_index() == 0
+    win._property_panel._update_title(0, enabled=False)
+    # 禁用条目不再从下拉移除：仍停在标题条目行，可继续编辑逐字角色
+    assert win._lyrics_panel.current_source_index() == 2
 
 
 def test_title_roles_join_current_options_and_template_freezes_on_edit(qapp, monkeypatch, tmp_path):
@@ -2771,33 +2781,32 @@ def test_title_roles_join_current_options_and_template_freezes_on_edit(qapp, mon
     )
     win._property_panel.set_roles(["A"])
     win._style = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="{title} / {artist}",
             char_role_labels=[],
-        )
-    )
+        )])
     win._property_panel.set_style(win._style)
-    win._title_source_active = True
+    win._active_title_index = 0
     win._refresh_source_ui()
     win._refresh_lyrics_panel_source()
 
     assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "曲名 / 歌手"
 
     title = replace(
-        win._style.title_overlay,
+        win._style.title_overlays[0],
         text_template="固定",
         char_role_labels=[["标题角色", None]],
     )
-    win._style = replace(win._style, title_overlay=title)
+    win._style = replace(win._style, title_overlays=[title])
     assert win._merged_role_options() == ["A", "标题角色"]
 
     win._style = replace(
         win._style,
-        title_overlay=replace(title, text_template="{title} / {artist}", char_role_labels=[]),
+        title_overlays=[replace(title, text_template="{title} / {artist}", char_role_labels=[])],
     )
     win._freeze_title_template_for_character_edit()
-    assert win._style.title_overlay.text_template == "曲名 / 歌手"
+    assert win._style.title_overlays[0].text_template == "曲名 / 歌手"
 
 
 def test_title_role_keeps_metadata_template_dynamic(qapp, monkeypatch, tmp_path):
@@ -2810,20 +2819,19 @@ def test_title_role_keeps_metadata_template_dynamic(qapp, monkeypatch, tmp_path)
     )
     win._property_panel.set_roles(["A"])
     win._style = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="{title} / {artist}",
             char_role_labels=[],
-        )
-    )
+        )])
     win._property_panel.set_style(win._style)
-    win._title_source_active = True
+    win._active_title_index = 0
     win._refresh_source_ui()
     win._refresh_lyrics_panel_source()
 
     win._on_lyrics_roles_changed([0], "A")
 
-    title = win._style.title_overlay
+    title = win._style.title_overlays[0]
     assert title.text_template == "{title} / {artist}"
     assert subtitle_models.normalize_title_char_role_labels(
         "曲名 / 歌手", title.char_role_labels
@@ -3135,9 +3143,10 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     assert restored.track.lines[0].break_before == "none"
     assert [c.role_label for c in restored.track.lines[0].chars] == ["コーラス配色", "コーラス配色"]
     combo = win2._lyrics_panel._source_combo
-    expected_sources = ["主字幕", "コーラス1"]
-    if win2._style.title_overlay is not None and win2._style.title_overlay.enabled:
-        expected_sources.append("标题")
+    # 每个标题条目各占一行（名称 = 条目 name；禁用条目不再隐藏）
+    expected_sources = ["主字幕", "コーラス1"] + [
+        overlay.name or "标题" for overlay in win2._style.title_overlays
+    ]
     assert [combo.itemText(i) for i in range(combo.count())] == expected_sources
     assert win2._subtitle_source_key(main_lrc) in win2._source_watch_states
     assert win2._subtitle_source_key(chorus_lrc) in win2._source_watch_states

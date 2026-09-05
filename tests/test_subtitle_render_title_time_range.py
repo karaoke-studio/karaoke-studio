@@ -31,11 +31,16 @@ from krok_helper.subtitle_render.domain.models import Style, TitleOverlay  # noq
 def panel():
     app = QApplication.instance() or QApplication([])
     widget = PropertyPanel()
-    widget.set_style(Style(title_overlay=TitleOverlay(enabled=True)))
+    widget.set_style(Style(title_overlays=[TitleOverlay(enabled=True)]))
     yield widget
     widget.close()
     widget.deleteLater()
     app.processEvents()
+
+
+def _card_edit(widget: PropertyPanel, container: str, name: str):
+    """首张标题卡片里的时刻控件（head_edits / tail_edits 按 key 取）。"""
+    return getattr(widget._title_cards[0], container)[name]
 
 
 def test_the_cap_matches_the_n3_time_tag_limit() -> None:
@@ -44,16 +49,18 @@ def test_the_cap_matches_the_n3_time_tag_limit() -> None:
 
 
 @pytest.mark.parametrize(
-    "name",
+    ("container", "name"),
     [
-        "_title_duration_edit",
-        "_title_head_edit",
-        "_title_tail_edit",
-        "_title_tail_duration_edit",
+        ("head_edits", "duration_ms"),
+        ("head_edits", "head_offset_ms"),
+        ("tail_edits", "tail_offset_ms"),
+        ("tail_edits", "tail_duration_ms"),
     ],
 )
-def test_every_title_time_field_accepts_the_full_range(panel, name: str) -> None:
-    edit = getattr(panel, name)
+def test_every_title_time_field_accepts_the_full_range(
+    panel, container: str, name: str
+) -> None:
+    edit = _card_edit(panel, container, name)
 
     assert edit._maximum == TITLE_TIME_MAX_MS
     assert edit.maximum() == TITLE_TIME_MAX_MS
@@ -63,20 +70,23 @@ def test_every_title_time_field_accepts_the_full_range(panel, name: str) -> None
 
 
 def test_the_duration_reaches_the_model_unclamped(panel) -> None:
-    panel._title_duration_edit.setValue(TITLE_TIME_MAX_MS)
+    _card_edit(panel, "head_edits", "duration_ms").setValue(TITLE_TIME_MAX_MS)
 
-    assert panel._title_duration_edit.value() == TITLE_TIME_MAX_MS
-    assert panel.subtitle_style.title_overlay.duration_ms == TITLE_TIME_MAX_MS
+    assert _card_edit(panel, "head_edits", "duration_ms").value() == TITLE_TIME_MAX_MS
+    assert panel.subtitle_style.title_overlays[0].duration_ms == TITLE_TIME_MAX_MS
 
 
 def test_a_value_past_the_old_cap_survives(panel) -> None:
     """旧上限是 600000；这一档以前根本填不进去。"""
-    panel._title_duration_edit.setValue(1_200_000)
+    _card_edit(panel, "head_edits", "duration_ms").setValue(1_200_000)
 
-    assert panel.subtitle_style.title_overlay.duration_ms == 1_200_000
+    assert panel.subtitle_style.title_overlays[0].duration_ms == 1_200_000
 
 
-@pytest.mark.parametrize("name", ["_title_fade_in_edit", "_title_fade_out_edit"])
-def test_the_fades_keep_their_own_range(panel, name: str) -> None:
+@pytest.mark.parametrize(
+    ("container", "name"),
+    [("head_edits", "fade_in_ms"), ("head_edits", "fade_out_ms")],
+)
+def test_the_fades_keep_their_own_range(panel, container: str, name: str) -> None:
     """淡入淡出是动画时长，不跟着放宽。"""
-    assert getattr(panel, name)._maximum == 10_000
+    assert _card_edit(panel, container, name)._maximum == 10_000

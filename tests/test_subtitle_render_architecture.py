@@ -4703,9 +4703,7 @@ def test_subtitle_property_panel_delegates_title_page_construction() -> None:
         if isinstance(node, ast.ClassDef) and node.name == "PropertyPanel"
     )
     delegated = {
-        "_make_title_text_section": "make_text_section",
-        "_make_title_style_section": "make_style_section",
-        "_make_title_time_section": "make_time_section",
+        "_make_title_page": "make_page",
     }
     for method_name, builder_method in delegated.items():
         method = next(

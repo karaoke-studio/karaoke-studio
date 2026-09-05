@@ -277,9 +277,9 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes["custom_style_schemes"] = custom
 
     title_infos = [_dict(item) for item in _list(data.get("TitleInfos"))]
-    title_overlay = _build_title_overlay(title_infos, layouts, font_names, warnings)
-    if title_overlay is not None:
-        changes["title_overlay"] = title_overlay
+    title_overlays = _build_title_overlays(title_infos, layouts, font_names, warnings)
+    if title_overlays:
+        changes["title_overlays"] = title_overlays
     # 「标题」方案恒存在。N3 标题引用的 フォント設定 已经在上面 append 过，标题
     # 逐字角色去引用它，所以这里保持出厂标题外观、不被 N3 覆写。
     custom_schemes = changes.get("custom_style_schemes")
@@ -733,79 +733,85 @@ def _title_character_rows(title: dict) -> list[list[dict]]:
     return rows
 
 
-def _build_title_overlay(
+def _build_title_overlays(
     title_infos: list[dict],
     layouts: list[dict],
     font_names: list[str],
     warnings: list[str],
-) -> Optional[TitleOverlay]:
-    """标题 → 文字 / 布局引用 / 显示时段 / 逐字角色。
+) -> list[TitleOverlay]:
+    """标题 → 文字 / 布局引用 / 显示时段 / 逐字角色（多标题全量导入）。
 
-    字体与颜色不展开进 ``TitleOverlay``，也不写进内置的「标题」方案：标题用到
-    的每套 フォント設定 都已经作为角色方案 append 进 ``custom_style_schemes``，
-    这里只按 ``FontIndex`` 给每个标题字符贴上对应的角色名 —— 包括标题的主字体，
-    这样内置「标题」角色保持出厂值，N3 的配色也不会被改名。
-    位置改为 ``layout_index`` 引用（与 N3 ``TitleInfoModel.LayoutIndex`` 同序）。
+    N3 的多个 ``TitleInfos`` 逐条导入为「标题 N」条目，每条独立映射文字 /
+    布局引用 / 显示时段 / 逐字角色。字体与颜色不展开进 ``TitleOverlay``，
+    也不写进内置的「标题」方案：标题用到的每套 フォント設定 都已经作为
+    角色方案 append 进 ``custom_style_schemes``，这里只按 ``FontIndex``
+    给每个标题字符贴上对应的角色名 —— 包括标题的主字体，这样内置「标题」
+    角色保持出厂值，N3 的配色也不会被改名。
     """
-    candidates = [(title, _title_lines(title)) for title in title_infos]
-    candidates = [(title, lines) for title, lines in candidates if any(line.strip() for line in lines)]
-    if not candidates:
-        return None
-    if len(candidates) > 1:
-        skipped = "、".join(str(title.get("SettingsName") or "?") for title, _lines in candidates[1:])
-        warnings.append(f"N3 项目包含多个标题设置，仅导入第一个（{skipped} 被忽略）")
-    title, lines = candidates[0]
-    kwargs: dict[str, Any] = {
-        "enabled": True,
-        "text_template": "\n".join(lines),
-        # N3 标题无淡入淡出动作，直接显示/消失。
-        "fade_in_ms": 0,
-        "fade_out_ms": 0,
-    }
+    candidates: list[tuple[dict, list[str]]] = []
+    for title in title_infos:
+        lines = _title_lines(title)
+        if any(line.strip() for line in lines):
+            candidates.append((title, lines))
+    overlays: list[TitleOverlay] = []
+    for number, (title, lines) in enumerate(candidates, start=1):
+        kwargs: dict[str, Any] = {
+            "name": f"标题 {number}",
+            "enabled": True,
+            "text_template": "\n".join(lines),
+            # N3 标题无淡入淡出动作，直接显示/消失。
+            "fade_in_ms": 0,
+            "fade_out_ms": 0,
+        }
 
-    role_rows: list[list[Optional[str]]] = []
-    for row in _title_character_rows(title):
-        labels: list[Optional[str]] = []
-        for char in row:
-            index = _int(char.get("FontIndex"), 0)
-            # 索引越界（N3 删过配色）时留空，落回内置「标题」角色。
-            labels.append(font_names[index] if 0 <= index < len(font_names) else None)
-        role_rows.append(labels)
-    kwargs["char_role_labels"] = role_rows
+        role_rows: list[list[Optional[str]]] = []
+        for row in _title_character_rows(title):
+            labels: list[Optional[str]] = []
+            for char in row:
+                index = _int(char.get("FontIndex"), 0)
+                # 索引越界（N3 删过配色）时留空，落回内置「标题」角色。
+                labels.append(
+                    font_names[index] if 0 <= index < len(font_names) else None
+                )
+            role_rows.append(labels)
+        kwargs["char_role_labels"] = role_rows
 
-    layout_index = _int(title.get("LayoutIndex"), 0)
-    if not (0 <= layout_index < len(layouts)):
-        layout_index = 0
-    kwargs["layout_index"] = layout_index
+        layout_index = _int(title.get("LayoutIndex"), 0)
+        if not (0 <= layout_index < len(layouts)):
+            layout_index = 0
+        kwargs["layout_index"] = layout_index
 
-    show_time = _dict(title.get("ShowTime"))
-    kind = _int(show_time.get("Kind"), 0)
-    head_offset = _int(show_time.get("HeadOffset"), 0)
-    head_end = _int(show_time.get("HeadEnd"), _HEAD_END_MAX_MS)
-    interval = _int(show_time.get("Interval"), 10000)
-    tail_offset = _int(show_time.get("TailOffset"), 0)
-    if kind == 0:
-        if head_offset <= 0 and head_end >= _HEAD_END_MAX_MS:
-            kwargs["show_mode"] = "whole"
-        else:
+        show_time = _dict(title.get("ShowTime"))
+        kind = _int(show_time.get("Kind"), 0)
+        head_offset = _int(show_time.get("HeadOffset"), 0)
+        head_end = _int(show_time.get("HeadEnd"), _HEAD_END_MAX_MS)
+        interval = _int(show_time.get("Interval"), 10000)
+        tail_offset = _int(show_time.get("TailOffset"), 0)
+        if kind == 0:
+            if head_offset <= 0 and head_end >= _HEAD_END_MAX_MS:
+                kwargs["show_mode"] = "whole"
+            else:
+                kwargs["show_mode"] = "head"
+                kwargs["head_offset_ms"] = head_offset
+                kwargs["duration_ms"] = max(head_end - head_offset, 0)
+        elif kind == 1:
             kwargs["show_mode"] = "head"
             kwargs["head_offset_ms"] = head_offset
-            kwargs["duration_ms"] = max(head_end - head_offset, 0)
-    elif kind == 1:
-        kwargs["show_mode"] = "head"
-        kwargs["head_offset_ms"] = head_offset
-        kwargs["duration_ms"] = interval
-    elif kind == 2:
-        # N3 HeadAndTail 是从开始偏移连续显示到片尾偏移；本模块的
-        # head_tail 是“开始和片尾各一段”，不能直接映射。
-        kwargs["show_mode"] = "whole"
-        if head_offset or tail_offset:
-            warnings.append("标题显示时段「開始～終了」带首尾偏移，本模块按整段显示导入")
-    else:
-        kwargs["show_mode"] = "tail"
-        kwargs["duration_ms"] = interval
-        kwargs["tail_offset_ms"] = tail_offset
-    return TitleOverlay(**kwargs)
+            kwargs["duration_ms"] = interval
+        elif kind == 2:
+            # N3 HeadAndTail 是从开始偏移连续显示到片尾偏移；本模块的
+            # head_tail 是“开始和片尾各一段”，不能直接映射。
+            kwargs["show_mode"] = "whole"
+            if head_offset or tail_offset:
+                warnings.append(
+                    "标题显示时段「開始～終了」带首尾偏移，本模块按整段显示导入"
+                )
+        else:
+            kwargs["show_mode"] = "tail"
+            kwargs["duration_ms"] = interval
+            kwargs["tail_offset_ms"] = tail_offset
+        overlays.append(TitleOverlay(**kwargs))
+    return overlays
 
 
 # ---------------------------------------------------------------------------

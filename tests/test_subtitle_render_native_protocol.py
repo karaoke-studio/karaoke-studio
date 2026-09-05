@@ -2359,20 +2359,20 @@ def test_build_render_ir_resolves_title_metadata_and_windows():
     )
     style = Style(
         custom_style_schemes={},
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="{title} / {artist}",
             layout_index=None,
             show_mode="head",
             head_offset_ms=100,
             duration_ms=1_500,
-        ),
+        )],
     )
 
     ir = build_render_ir(track, style, width=640, height=360, fps=60)
 
-    assert ir["title"]["text"] == "曲名 / 歌手"
-    assert ir["title"]["windows"] == [[100, 1_600, 300, 300]]
+    assert ir["titles"][0]["text"] == "曲名 / 歌手"
+    assert ir["titles"][0]["windows"] == [[100, 1_600, 300, 300]]
 
 
 def test_build_render_ir_anchors_two_segment_title_tail_to_project_duration():
@@ -2381,7 +2381,7 @@ def test_build_render_ir_anchors_two_segment_title_tail_to_project_duration():
         lines=[TimingLine(chars=[TimingChar("終", 3_000)], end_ms=4_000)],
     )
     style = Style(
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             show_mode="head_tail",
             head_offset_ms=2_000,
@@ -2392,8 +2392,7 @@ def test_build_render_ir_anchors_two_segment_title_tail_to_project_duration():
             tail_duration_ms=9_000,
             tail_fade_in_ms=1_100,
             tail_fade_out_ms=1_300,
-        )
-    )
+        )])
 
     ir = build_render_ir(
         track,
@@ -2404,7 +2403,7 @@ def test_build_render_ir_anchors_two_segment_title_tail_to_project_duration():
         duration_ms=60_000,
     )
 
-    assert ir["title"]["windows"] == [
+    assert ir["titles"][0]["windows"] == [
         [2_000, 8_000, 500, 700],
         [48_000, 57_000, 1_100, 1_300],
     ]
@@ -2426,10 +2425,12 @@ def test_build_render_ir_keeps_title_latin_metrics_out_of_global_lyrics_style():
         latin_font_size_px=140,
         latin_font_weight=900,
         custom_style_schemes={"标题": title_scheme},
-        title_overlay=TitleOverlay(enabled=True),
+        title_overlays=[TitleOverlay(enabled=True)],
     )
 
-    title = build_render_ir(track, style, width=640, height=360, fps=60)["title"]
+    title = build_render_ir(track, style, width=640, height=360, fps=60)[
+        "titles"
+    ][0]
 
     assert title["font_size_px"] == 36
     assert title["latin_font_size_px"] == 28
@@ -2803,7 +2804,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
             vertical=True,
             right_to_left=True,
             lit_enabled=True,
-            title_overlay=TitleOverlay(enabled=True, text_template="Title"),
+            title_overlays=[TitleOverlay(enabled=True, text_template="Title")],
         ),
     ) == ()
     span_track = TimingTrack(
@@ -3535,7 +3536,7 @@ def test_native_gpu_title_uses_title_latin_size_and_reconfigures_when_exe_exists
             stroke2_width_px=0,
             decoration_kind="none",
             custom_style_schemes={"标题": scheme},
-            title_overlay=TitleOverlay(
+            title_overlays=[TitleOverlay(
                 enabled=True,
                 text_template="{title}",
                 layout_index=None,
@@ -3543,7 +3544,7 @@ def test_native_gpu_title_uses_title_latin_size_and_reconfigures_when_exe_exists
                 offset_y=10,
                 fade_in_ms=0,
                 fade_out_ms=0,
-            ),
+            )],
         )
 
     def alpha_height(slot) -> int:
@@ -3615,7 +3616,7 @@ def test_native_gpu_title_uses_project_timeline_and_independent_segment_fades(
     style = Style(
         timing_offset_ms=3_000,
         custom_style_schemes={"标题": scheme},
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             text_template="{title}",
             layout_index=None,
@@ -3627,7 +3628,7 @@ def test_native_gpu_title_uses_project_timeline_and_independent_segment_fades(
             tail_duration_ms=2_000,
             tail_fade_in_ms=2_000,
             tail_fade_out_ms=0,
-        ),
+        )],
     )
 
     def max_alpha(renderer: NativeRendererProcess, t_ms: int, generation: int) -> int:

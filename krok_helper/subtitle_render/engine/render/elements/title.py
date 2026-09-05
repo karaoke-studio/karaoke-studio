@@ -563,12 +563,13 @@ def paint_title_overlay(
     img_h: int,
     track: TimingTrack,
     style: Style,
+    overlay: Optional[TitleOverlay],
     opacity: float,
     *,
     compositor: LayerCompositor,
     ports: TitleRenderPorts,
 ) -> None:
-    title = resolve_title_overlay(style)
+    title = resolve_title_overlay(style, overlay)
     if title is None:
         return
     layout = layout_title_overlay(img_w, img_h, track, title, style=style)

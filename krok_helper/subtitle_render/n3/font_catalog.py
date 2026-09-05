@@ -25,7 +25,11 @@ from typing import Callable, Mapping, Sequence
 
 from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QGuiApplication
 
-from krok_helper.subtitle_render.domain.models import Style, SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import (
+    Style,
+    SubtitleStyleScheme,
+    TitleOverlay,
+)
 
 
 log = logging.getLogger(__name__)
@@ -706,8 +710,9 @@ def normalize_style_font_families(
     if custom_changed:
         changes["custom_style_schemes"] = custom_schemes
 
-    title = style.title_overlay
-    if title is not None:
+    title_overlays: list[TitleOverlay] = []
+    titles_changed = False
+    for title in style.title_overlays:
         title_changes: dict[str, str | None] = {}
         title_root = _canonicalize_family_with_weight(
             catalog, title.font_family, title.font_weight
@@ -723,7 +728,12 @@ def normalize_style_font_families(
             if title_latin != title.font_family_latin:
                 title_changes["font_family_latin"] = title_latin
         if title_changes:
-            changes["title_overlay"] = replace(title, **title_changes)
+            title_overlays.append(replace(title, **title_changes))
+            titles_changed = True
+        else:
+            title_overlays.append(title)
+    if titles_changed:
+        changes["title_overlays"] = title_overlays
 
     if not changes:
         return style, False

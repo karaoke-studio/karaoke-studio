@@ -774,15 +774,17 @@ def test_import_blur_concentration_is_scheme_shared_and_reaches_title(tmp_path):
     assert scheme.glow_concentration_level == 2
     assert scheme.ruby_glow_concentration_level is None
     # 标题 FontIndex=1 → 逐字角色引用同一套「青配色」，内置「标题」角色不被改写
-    assert style.title_overlay.char_role_labels == [["青配色", "青配色"]]
+    assert style.title_overlays[0].char_role_labels == [["青配色", "青配色"]]
     assert style.custom_style_schemes["标题"] == default_title_scheme()
     assert not any("BlurLevel" in warning or "ブラー浓度" in warning for warning in result.warnings)
 
 
 def test_import_title_overlay(imported):
     style = style_from_dict(imported.project_data["style"])
-    title = style.title_overlay
-    assert title is not None and title.enabled
+    assert style.title_overlays
+    title = style.title_overlays[0]
+    assert title.name == "标题 1"
+    assert title.enabled
     assert title.text_template == "曲名"
     # LayoutIndex=1 → 引用タイトル左上布局（几何由布局解析，不再展开进 TitleOverlay）
     assert title.layout_index == 1
@@ -811,9 +813,8 @@ def test_import_n3_continuous_head_and_tail_does_not_map_to_two_segments(tmp_pat
     }
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
-    title = style_from_dict(result.project_data["style"]).title_overlay
+    title = style_from_dict(result.project_data["style"]).title_overlays[0]
 
-    assert title is not None
     assert title.show_mode == "whole"
     assert any("開始～終了" in warning for warning in result.warnings)
 
@@ -829,14 +830,48 @@ def test_import_title_preserves_per_character_font_roles(tmp_path):
 
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
-    title = style.title_overlay
+    title = style.title_overlays[0]
 
-    assert title is not None
     assert title.text_template == "青標青"
     # 主字体那两个字符同样贴标签 —— 只有内置「标题」角色留给用户自己改。
     assert title.char_role_labels == [["青配色", "標準配色", "青配色"]]
     assert style.custom_style_schemes["标题"] == default_title_scheme()
     assert {"標準配色", "青配色"} <= set(style.custom_style_schemes)
+
+
+def test_import_multiple_title_infos_all_imported_with_entry_names(tmp_path):
+    """多 TitleInfos 全量导入：逐条命名「标题 1..N」，不再只取第一条。"""
+    payload = _project_payload(tmp_path)
+    payload["TitleInfos"].append(
+        {
+            "ShowTime": {"Kind": 1, "HeadOffset": 2000, "HeadEnd": 9000,
+                         "Interval": 7000, "TailOffset": 0},
+            "LayoutIndex": 0,
+            "LineInfos": [
+                {"Kind": 5, "LyricsCharInfos": [
+                    _char("副", 5999990, 5999990),
+                    _char("題", 5999990, 5999990),
+                ]},
+            ],
+            "SettingsName": "タイトル2",
+        }
+    )
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert [overlay.name for overlay in style.title_overlays] == ["标题 1", "标题 2"]
+    assert [overlay.enabled for overlay in style.title_overlays] == [True, True]
+    assert [overlay.text_template for overlay in style.title_overlays] == [
+        "曲名",
+        "副題",
+    ]
+    assert style.title_overlays[0].show_mode == "whole"
+    second = style.title_overlays[1]
+    assert second.show_mode == "head"
+    assert second.head_offset_ms == 2000
+    assert second.duration_ms == 7000
+    assert not any("仅" in warning and "标题" in warning for warning in result.warnings)
 
 
 def test_import_title_scheme_always_present(tmp_path):
@@ -845,7 +880,9 @@ def test_import_title_scheme_always_present(tmp_path):
     payload["TitleInfos"] = []
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     style = style_from_dict(result.project_data["style"])
-    assert style.title_overlay is None
+    # 无标题 N3 项目不写 title_overlays：加载后保持默认的一条禁用条目
+    assert len(style.title_overlays) == 1
+    assert not style.title_overlays[0].enabled
     assert "标题" in style.custom_style_schemes
 
 
@@ -1099,8 +1136,8 @@ def test_import_real_project_smoke():
     assert set(style.custom_style_schemes) == {
         "青配色", "緑配色", "グラデーション配色", "コーラス配色", "情報小", "情報中", "情報大",
     }
-    assert style.title_overlay is not None
-    assert style.title_overlay.show_mode == "whole"
+    assert style.title_overlays
+    assert style.title_overlays[0].show_mode == "whole"
     assert len(result.project_data["line_layout_indices"]) == 34
     direct_track = load_nicokara_lrc(Path(result.project_data["subtitle_path"]))
     assert all(line.break_before == "none" for line in direct_track.lines)
@@ -1139,18 +1176,22 @@ def test_import_dark_spiral_layout_character_spacing_parity():
     assert result.warnings == []
     assert style.letter_spacing_px == 4
     assert set(result.project_data["line_layout_indices"]) == {0}
-    assert style.title_overlay is not None
-    assert style.title_overlay.layout_index == 4
+    assert style.title_overlays
+    assert style.title_overlays[0].layout_index == 4
     used_layout_indices = {
         *result.project_data["line_layout_indices"],
-        style.title_overlay.layout_index,
+        *(
+            overlay.layout_index
+            for overlay in style.title_overlays
+            if overlay.layout_index
+        ),
     }
     assert all(
         style.layouts[index - 1].letter_spacing_px == 0
         for index in used_layout_indices
         if index > 0
     )
-    assert style.title_overlay.letter_spacing_px == 0
+    assert all(overlay.letter_spacing_px == 0 for overlay in style.title_overlays)
 
 
 @pytest.mark.skipif(

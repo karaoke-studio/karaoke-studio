@@ -462,7 +462,7 @@ class _FontPreviewWidget(QWidget):
     def set_preview_state(self, style: Style, scheme_key: str, script: str) -> None:
         self._style = replace(
             style,
-            title_overlay=None,
+            title_overlays=[],
             lit_enabled=False,
             layouts=[],
             viewport_align="center",

@@ -3834,7 +3834,7 @@ def test_gpu_g4_vertical_title_remains_in_screen_coordinates(monkeypatch) -> Non
         font_family="Meiryo",
         font_family_latin="Meiryo",
         vertical=True,
-        title_overlay=title,
+        title_overlays=[title],
     )
     painter = _render_painter_oracle(style, t_ms=1_000, track=track)
     flat_style = replace(style, vertical=False)
@@ -3928,7 +3928,7 @@ def test_gpu_title_overlay_draws_below_lyrics(monkeypatch) -> None:
     style = replace(
         lyrics_style,
         custom_style_schemes=schemes,
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             enabled=True,
             # 显式 anchor/offset 生效，把标题抬到与歌词重叠的位置。
             layout_index=None,
@@ -3941,12 +3941,11 @@ def test_gpu_title_overlay_draws_below_lyrics(monkeypatch) -> None:
             anchor="bottom_left",
             offset_x=0,
             offset_y=20,
-        ),
+        )],
     )
 
     titleless = replace(
-        style, title_overlay=replace(style.title_overlay, enabled=False)
-    )
+        style, title_overlays=[replace(style.title_overlays[0], enabled=False)])
 
     # 三帧全部由 sidecar 自己光栅化，才能直接比核心像素集合——跨后端比会被
     # DirectWrite 与 Qt 的抗锯齿差异淹没（同一几何下红/蓝核心只重合几百像素）。
@@ -5179,7 +5178,7 @@ def test_gpu_g3_real_n3_ruby_frame_is_bounded_by_painter_oracle(monkeypatch) -> 
         ruby_font_follow_main=False,
         karaoke_colors=solid_colors(imported_style.karaoke_colors),
         ruby_karaoke_colors=solid_colors(imported_style.ruby_karaoke_colors),
-        title_overlay=None,
+        title_overlays=[],
         custom_style_schemes={},
         singer_style_overrides={},
         dual_line_layout=False,
@@ -5428,7 +5427,7 @@ def test_gpu_g3_title_overlay_matches_painter_window_fade_and_anchor(monkeypatch
         line_lead_in_ms=0,
         line_tail_ms=0,
         custom_style_schemes={},
-        title_overlay=title,
+        title_overlays=[title],
     )
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         configured, frames = _render_g1_frames(
@@ -5509,7 +5508,7 @@ def test_gpu_g3_multiline_title_role_styles_match_painter(monkeypatch) -> None:
             "red": role_scheme("#FF2020", 52),
             "green": role_scheme("#20FF40", 38),
         },
-        title_overlay=title,
+        title_overlays=[title],
     )
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         _, frames = _render_g1_frames(
@@ -5584,7 +5583,7 @@ def test_gpu_g3_role_styled_title_ignores_base_scheme_font_size(monkeypatch) -> 
             line_lead_in_ms=0,
             line_tail_ms=0,
             custom_style_schemes={"role": role},
-            title_overlay=title,
+            title_overlays=[title],
         )
 
     small = _style_for(40)
@@ -5675,7 +5674,7 @@ def test_gpu_g3_banded_readback_reconstructs_full_frame_exactly(monkeypatch) -> 
         glow_after_radius_px=10,
         dual_line_layout=False,
         custom_style_schemes={},
-        title_overlay=title,
+        title_overlays=[title],
     )
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         renderer.configure_gpu(
@@ -9218,7 +9217,7 @@ def test_gpu_g4_viewport_transform_applies_to_title_and_volume_signal(
     style = _g1_style(
         font_family="Meiryo",
         font_family_latin="Meiryo",
-        title_overlay=title,
+        title_overlays=[title],
         dual_line_layout=False,
         line_lead_in_ms=500,
         line_tail_ms=500,
@@ -9241,7 +9240,7 @@ def test_gpu_g4_viewport_transform_applies_to_title_and_volume_signal(
     )
     scenarios = [
         (replace(style, lit_enabled=False), 1_000),
-        (replace(style, title_overlay=None), 3_000),
+        (replace(style, title_overlays=[]), 3_000),
     ]
     painter = [
         _render_painter_oracle(layer_style, t_ms=t_ms, track=track)
@@ -9262,6 +9261,68 @@ def test_gpu_g4_viewport_transform_applies_to_title_and_volume_signal(
             abs(actual - expected) <= 15
             for actual, expected in zip(gpu_bounds, painter_bounds)
         ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_overlapping_titles_render_simultaneously(monkeypatch) -> None:
+    """时间重叠的两个标题必须同时显示（GPU 去重与 lane 定位回归护栏）。
+
+    - 所有标题行的 ``sourceIndex`` 若同为 -1，D2D 活动行按
+      (sourceIndex, sourceLineIndex) 去重会把第二个标题整块丢掉；
+    - ``lane`` 若做跨标题唯一化，``dy = firstBaseline + step*lane`` 会把
+      第二个标题推出屏幕。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def title(name: str, text: str, anchor: str) -> TitleOverlay:
+        return TitleOverlay(
+            enabled=True,
+            name=name,
+            text_template=text,
+            layout_index=None,
+            anchor=anchor,  # type: ignore[arg-type]
+            show_mode="whole",
+            fade_in_ms=0,
+            fade_out_ms=0,
+            font_size_px=28,
+        )
+
+    style = _g1_style(
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+        title_overlays=[
+            title("A", "AAAAAA", "top_left"),
+            title("B", "BBBBBB", "bottom_right"),
+        ],
+    )
+    track = _g1_track()
+
+    def quadrant_pixels(frame: bytes, box: tuple[int, int, int, int]) -> int:
+        x0, y0, x1, y1 = box
+        stride = 640 * 4
+        count = 0
+        for y in range(y0, y1):
+            row = frame[y * stride:(y * stride) + stride]
+            for x in range(x0, x1):
+                if row[x * 4 + 3] > 40:
+                    count += 1
+        return count
+
+    top_left = (0, 0, 300, 120)
+    bottom_right = (340, 240, 640, 360)
+    painter_frame = _render_painter_oracle(style, t_ms=500, track=track)
+    assert quadrant_pixels(painter_frame, top_left) > 50
+    assert quadrant_pixels(painter_frame, bottom_right) > 50
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu_frames = _render_g1_frames(renderer, style, (500,), force_warp=True, track=track)
+    assert quadrant_pixels(gpu_frames[0], top_left) > 50
+    assert quadrant_pixels(gpu_frames[0], bottom_right) > 50
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

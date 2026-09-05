@@ -268,10 +268,10 @@ def test_normalize_style_canonicalizes_aliases_and_clears_missing_optional_fonts
         font_family="UD Digi Kyokasho N-B",
         font_family_latin="Missing Latin",
         ruby_font_family="Missing Ruby",
-        title_overlay=TitleOverlay(
+        title_overlays=[TitleOverlay(
             font_family="UD Digi Kyokasho N-B",
             font_family_latin="Missing Title Latin",
-        ),
+        )],
     )
 
     normalized, changed = normalize_style_font_families(
@@ -282,9 +282,9 @@ def test_normalize_style_canonicalizes_aliases_and_clears_missing_optional_fonts
     assert normalized.font_family == "UD デジタル 教科書体 N-B"
     assert normalized.font_family_latin is None
     assert normalized.ruby_font_family is None
-    assert normalized.title_overlay is not None
-    assert normalized.title_overlay.font_family == "UD デジタル 教科書体 N-B"
-    assert normalized.title_overlay.font_family_latin is None
+    assert normalized.title_overlays
+    assert normalized.title_overlays[0].font_family == "UD デジタル 教科書体 N-B"
+    assert normalized.title_overlays[0].font_family_latin is None
 
 
 def test_normalize_style_resolves_physical_family_from_n3_face_weight():

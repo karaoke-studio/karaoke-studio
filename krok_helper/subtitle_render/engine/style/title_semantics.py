@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import Optional
 
@@ -30,14 +31,26 @@ def title_layout_source(style: Style, index: Optional[int]):
     return None
 
 
-def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
-    """Resolve the title scheme and layout reference into an effective overlay."""
-    title = style.title_overlay
-    if title is None:
-        return None
+def resolve_title_overlay(
+    style: Style, overlay: Optional[TitleOverlay] = None
+) -> Optional[TitleOverlay]:
+    """Resolve the title scheme and layout reference into an effective overlay.
+
+    ``overlay`` 缺省时取第一条（兼容单标题时期的调用方）；条目 ``scheme_name``
+    引用的方案不存在时回落内置「标题」方案。
+    """
+    if overlay is None:
+        overlays = style.title_overlays
+        if not overlays:
+            return None
+        overlay = overlays[0]
+    title = overlay
+    scheme_name = title.scheme_name
+    if not scheme_name or scheme_name not in style.custom_style_schemes:
+        scheme_name = TITLE_SCHEME_NAME
     changes: dict[str, object] = {}
-    if TITLE_SCHEME_NAME in style.custom_style_schemes:
-        merged = style_for_role(style, TITLE_SCHEME_NAME)
+    if scheme_name in style.custom_style_schemes:
+        merged = style_for_role(style, scheme_name)
         colors = effective_karaoke_colors(merged).before
         changes.update(
             font_family=merged.font_family,
@@ -124,15 +137,72 @@ def resolve_title_role_overlay(
 
 _TITLE_SEPARATOR_CHARS = " \t/|・-–—~　"
 
+_CUSTOM_TAG_RE = re.compile(r"^@([^\s=]+)\s*=\s*(.*)$")
+_PLACEHOLDER_RE = re.compile(r"\{([^{}\s]+)\}")
+
+
+def title_available_tags(track: TimingTrack) -> list[tuple[str, str]]:
+    """列出当前字幕源可用于 ``{占位符}`` 的标签，``(名称, 值)`` 有序去重。
+
+    覆盖具名字段（Title / Artist / Album / TaggingBy）与尾部自定义
+    ``@Key=Value`` 行（功能性 / 信息性 / 用户自定义一视同仁）；排除
+    ``@Emoji*`` 图片标签与 ``@RubyN`` 注音（非文字信息，无可读值）。
+    """
+    tags: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, value: object) -> None:
+        text = str(value or "").strip()
+        key = name.lower()
+        if not name or not text or key in seen:
+            return
+        seen.add(key)
+        tags.append((name, text))
+
+    meta = track.meta
+    add("title", meta.title)
+    add("artist", meta.artist)
+    add("album", meta.album)
+    add("tagging_by", meta.tagging_by)
+    for raw in meta.custom:
+        match = _CUSTOM_TAG_RE.match(str(raw).strip())
+        if match is None:
+            continue
+        name = match.group(1)
+        lowered = name.lower()
+        if lowered.startswith("emoji") or lowered.startswith("ruby"):
+            continue
+        add(name, match.group(2))
+    return tags
+
 
 def resolve_title_text(title: TitleOverlay, track: TimingTrack) -> str:
-    """Replace title metadata placeholders and clean orphan separators."""
+    """Replace ``{tag}`` placeholders from source tags and clean orphan separators.
+
+    任意标签占位符（``{title}`` / ``{artist}`` / 自定义 ``@Key`` → ``{Key}``）
+    都按 :func:`title_available_tags` 的大小写不敏感查表替换；未知占位符
+    原样保留。
+    """
     template = title.text_template or ""
-    if "{title}" not in template and "{artist}" not in template:
+    if "{" not in template:
         return template.strip("\n")
-    meta_title = (track.meta.title or "").strip()
-    meta_artist = (track.meta.artist or "").strip()
-    text = template.replace("{title}", meta_title).replace("{artist}", meta_artist)
+    lookup = {name.lower(): value for name, value in title_available_tags(track)}
+    # 具名字段即使没值也按「已知但为空」替换成空串（沿用旧行为：缺 artist 时
+    # ``{title} / {artist}`` 清成 ``曲名``）；只有文件里不存在的未知占位符才
+    # 原样保留，方便用户看出哪个标签没解析到。
+    meta = track.meta
+    for name, raw in (
+        ("title", meta.title),
+        ("artist", meta.artist),
+        ("album", meta.album),
+        ("tagging_by", meta.tagging_by),
+    ):
+        lookup.setdefault(name, str(raw or ""))
+
+    def _substitute(match: "re.Match[str]") -> str:
+        return lookup.get(match.group(1).strip().lower(), match.group(0))
+
+    text = _PLACEHOLDER_RE.sub(_substitute, template)
     lines = [
         raw.strip().strip(_TITLE_SEPARATOR_CHARS).strip()
         for raw in text.split("\n")
@@ -166,6 +236,17 @@ def title_show_window(
     tail_off = max(int(title.tail_offset_ms), 0)
     tail_base_end = max(total - tail_off, 0)
     tail_end = tail_base_end + (10 if total > 0 and tail_off == 0 else 0)
+    if title.show_mode == "custom":
+        rows = [
+            (window.begin_ms, window.end_ms)
+            for window in (item.normalized() for item in title.custom_windows)
+            if window.end_ms > window.begin_ms
+        ]
+        if rows:
+            return rows
+        # 空「自定义」窗口 = 全程显示：新默认条目（custom + 空）不配静态
+        # 0-10s 窗口，避免标题在媒体中途凭空消失。
+        return [(0, tail_end)]
     if title.show_mode == "whole":
         return [(0, tail_end)]
     if title.show_mode == "head":
@@ -200,6 +281,20 @@ def title_show_specs(
         else head_fade_out,
         0,
     )
+    if title.show_mode == "custom":
+        rows = [
+            (window.begin_ms, window.end_ms, window.fade_in_ms, window.fade_out_ms)
+            for window in (item.normalized() for item in title.custom_windows)
+            if window.end_ms > window.begin_ms
+        ]
+        if rows:
+            return rows
+        # 空「自定义」窗口 = 全程显示且无淡入淡出（直接切显/切隐，与
+        # ``title_show_window`` 的空窗口语义配套）。
+        return [
+            (begin, end, 0, 0)
+            for begin, end in title_show_window(title, track, duration_ms=duration_ms)
+        ]
     if title.show_mode == "tail":
         return [(begin, end, tail_fade_in, tail_fade_out) for begin, end in windows]
     if title.show_mode == "head_tail" and len(windows) > 1:

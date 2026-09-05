@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import Callable, Optional
 
 from krok_helper.subtitle_render.domain.models import (
     DecorationKind,
@@ -38,6 +38,12 @@ from krok_helper.subtitle_render.domain.paint import (
 
 
 SCHEME_ONLY_FIELDS = frozenset({"n3_font_inheritance"})
+
+# 软件预设布局 id（与 models._builtin_preset_ids 同源；此处复制避免
+# settings 层反向依赖 engine 层）。
+_BUILTIN_LAYOUT_PRESET_IDS = frozenset(
+    {"title-default", *(f"builtin-{rows}" for rows in range(1, 9))}
+)
 
 SCHEME_FIELDS = frozenset(
     {
@@ -632,31 +638,68 @@ class LayoutCatalogController:
     @staticmethod
     def delete_changes(style: Style, index: int) -> dict:
         layouts = list(style.layouts)
+        removed = layouts[index - 1]
         del layouts[index - 1]
         changes: dict = {"layouts": layouts}
-        title = style.title_overlay
-        if title is not None and title.layout_index is not None:
+        # 软件预设（title-default / builtin-N）删除后记入隐藏清单，否则
+        # ``ensure_page_layout_defaults`` 在下一次样式往返时会把它们补回来。
+        removed_id = str(removed.layout_id or "").strip()
+        if removed_id in _BUILTIN_LAYOUT_PRESET_IDS:
+            hidden = {
+                str(value) for value in style.hidden_builtin_layout_ids
+            }
+            hidden.add(removed_id)
+            changes["hidden_builtin_layout_ids"] = sorted(hidden)
+        overlays: list[TitleOverlay] = []
+        overlays_changed = False
+        for title in style.title_overlays:
+            if title.layout_index is None:
+                overlays.append(title)
+                continue
             title_index = int(title.layout_index)
             if title_index == index:
-                changes["title_overlay"] = replace(title, layout_index=0)
+                overlays.append(replace(title, layout_index=0))
+                overlays_changed = True
             elif title_index > index:
-                changes["title_overlay"] = replace(
-                    title,
-                    layout_index=title_index - 1,
-                )
+                overlays.append(replace(title, layout_index=title_index - 1))
+                overlays_changed = True
+            else:
+                overlays.append(title)
+        if overlays_changed:
+            changes["title_overlays"] = overlays
         return changes
 
 
-class TitleOverlayController:
-    """Apply title-overlay edits while preserving per-character role labels."""
+class TitleOverlaysController:
+    """Apply per-entry title-overlay edits, preserving per-character role labels."""
 
     @staticmethod
-    def current(style: Style) -> TitleOverlay:
-        return style.title_overlay if style.title_overlay is not None else TitleOverlay()
+    def current(style: Style, index: int = 0) -> TitleOverlay:
+        overlays = style.title_overlays
+        if 0 <= index < len(overlays):
+            return overlays[index]
+        return TitleOverlay()
 
-    def update(self, style: Style, changes: dict) -> Style:
-        title = self.current(style)
+    @staticmethod
+    def next_entry_name(overlays: list[TitleOverlay]) -> str:
+        """生成不与现有条目重名的「标题 N」。"""
+        existing = {str(overlay.name).strip() for overlay in overlays}
+        number = len(overlays) + 1
+        name = f"标题 {number}"
+        while name in existing:
+            number += 1
+            name = f"标题 {number}"
+        return name
+
+    def update(self, style: Style, index: int, changes: dict) -> Style:
+        overlays = list(style.title_overlays)
+        if not 0 <= index < len(overlays):
+            return style
+        title = overlays[index]
         normalized = dict(changes)
+        if "name" in normalized:
+            name = str(normalized["name"]).strip()
+            normalized["name"] = name or title.name
         if "text_template" in normalized:
             new_text = str(normalized["text_template"])
             normalized["text_template"] = new_text
@@ -670,4 +713,22 @@ class TitleOverlayController:
             and normalized["show_mode"] not in TITLE_SHOW_MODES
         ):
             normalized["show_mode"] = "whole"
-        return replace(style, title_overlay=replace(title, **normalized))
+        overlays[index] = replace(title, **normalized)
+        return replace(style, title_overlays=overlays)
+
+    def add_changes(
+        self, style: Style, defaults: Optional[TitleOverlay] = None
+    ) -> tuple[dict, int]:
+        overlays = list(style.title_overlays)
+        entry = replace(
+            defaults if defaults is not None else TitleOverlay(),
+            name=self.next_entry_name(overlays),
+        )
+        overlays.append(entry)
+        return {"title_overlays": overlays}, len(overlays) - 1
+
+    def delete_changes(self, style: Style, index: int) -> dict:
+        overlays = list(style.title_overlays)
+        if 0 <= index < len(overlays):
+            del overlays[index]
+        return {"title_overlays": overlays}

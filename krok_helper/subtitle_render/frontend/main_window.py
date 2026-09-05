@@ -117,7 +117,11 @@ from krok_helper.subtitle_render.engine.render.adapters.layout_diagnostics impor
     display_windows_for_style,
     layout_timing_diagnostics_for_style,
 )
-from krok_helper.subtitle_render.engine.style.title_semantics import resolve_title_text
+from krok_helper.subtitle_render.engine.style.title_semantics import (
+    resolve_title_text,
+    title_available_tags,
+    title_show_specs,
+)
 from krok_helper.subtitle_render.engine.layout.page.plan import (
     build_legacy_page_plan,
     build_page_plan,
@@ -295,6 +299,7 @@ from krok_helper.subtitle_render.domain.models import (
     Style,
     TITLE_SCHEME_NAME,
     TitleOverlay,
+    TitleTimeWindow,
     ensure_page_layout_defaults,
     layout_capacity,
     layout_display_name,
@@ -380,6 +385,8 @@ SUBTITLE_FILTER = "SUG 项目 / Nicokara LRC (*.sug *.lrc);;SUG 项目 (*.sug);;
 
 _UNDO_STACK_LIMIT = 200
 """撤销栈上限（字幕轨道显示/隐藏时间编辑）。"""
+_PREVIEW_STYLE_REFRESH_MS = 220
+"""预览重刷的纯尾沿防抖窗口：属性面板连打停止后过这么久才渲一帧。"""
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
 IMAGE_FILTER = "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;所有文件 (*.*)"
 AUDIO_FILTER = "音频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus);;所有文件 (*.*)"
@@ -805,8 +812,9 @@ class SubtitleRenderWindow(QWidget):
         # 副字幕源（N3 多歌词文件，如コーラス轨）与主字幕同帧叠绘。
         self._active_source_index = 0
         """歌词列表当前显示的源：0 = 主字幕，k >= 1 = ``_extra_sources[k-1]``。"""
-        self._title_source_active = False
-        """左侧列表当前是否显示末位的特殊「标题」源。"""
+        self._active_title_index: Optional[int] = None
+        """歌词列表当前显示的标题条目（``title_overlays`` 下标）；``None`` = 非
+        标题源。字幕源下拉在副字幕源之后为**每个**标题条目各列一行。"""
         self._audio_menu_actions: list[Action] = []
         self._app_default_style: Style = Style()
         self._subtitle_loading_defaults = SubtitleLoadingSettings()
@@ -891,6 +899,19 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.setSingleShot(True)
         self._margin_check_timer.setInterval(400)
         self._margin_check_timer.timeout.connect(self._check_layout_margins)
+        # 预览 / 歌词面板的重刷防抖（纯尾沿）：连打期间（滚轮、逐键、拖色、
+        # 字体下拉连选）完全不渲，停手 ``_PREVIEW_STYLE_REFRESH_MS`` 后渲最后
+        # 一版——每次都整帧重渲会卡住界面线程。离散动作（撤销/重做/加载）不走
+        # 这里，直接 ``_apply_preview_style_now`` 即时生效。触发时应用**当时**
+        # 的 ``self._style``，撤销后的过期触发只会把当前样式再刷一遍，无害。
+        self._preview_style_refresh_timer = QTimer(self)
+        self._preview_style_refresh_timer.setSingleShot(True)
+        self._preview_style_refresh_timer.setInterval(
+            _PREVIEW_STYLE_REFRESH_MS
+        )
+        self._preview_style_refresh_timer.timeout.connect(
+            self._apply_preview_style_now
+        )
         self._last_margin_warning_key = ""
         self._layout_issues: list[_LayoutIssue | _TimingIssue] = []
         self._layout_issues_dialog: Optional[_LayoutIssuesDialog] = None
@@ -1938,7 +1959,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             self._project_document.clear_loaded_media()
             self._active_source_index = 0
-            self._title_source_active = False
+            self._active_title_index = None
             self._clear_undo_history()
             self._watch_primary_subtitle_source = False
             self._property_panel.set_n3_template_lyrics_directory(None)
@@ -2410,6 +2431,14 @@ class SubtitleRenderWindow(QWidget):
                 self._transport_bar.attach_playback_controller(controller)
 
         self._property_panel.styleChanged.connect(self._apply_style)
+        self._property_panel.set_title_window_provider(self._derive_title_windows)
+        self._property_panel.set_title_entry_defaults_provider(
+            self._new_title_entry_defaults
+        )
+        self._property_panel.set_title_tag_provider(self._available_title_tags)
+        self._property_panel.set_title_duration_provider(
+            self._title_total_duration_ms
+        )
         self._property_panel.rolesChanged.connect(
             self._apply_project_role_names
         )
@@ -3109,7 +3138,7 @@ class SubtitleRenderWindow(QWidget):
             source_path.parent if source_path is not None else None
         )
         self._active_source_index = 0
-        self._title_source_active = False
+        self._active_title_index = None
         # 换字幕源后旧的行索引全部失效
         self._clear_undo_history()
         self._refresh_source_ui()
@@ -3984,13 +4013,28 @@ class SubtitleRenderWindow(QWidget):
             for track in tracks:
                 if remap_track_role_labels(track, role_remap):
                     role_remap_applied = True
-            title = style.title_overlay
-            if title is not None:
+            remapped_overlays: list[TitleOverlay] = []
+            overlays_remap_changed = False
+            for title in style.title_overlays:
                 remapped_title = remap_title_char_role_labels(title, role_remap)
-                if remapped_title is not None:
-                    style = replace(style, title_overlay=remapped_title)
-                    self._style = style
-                    role_remap_applied = True
+                title_changed = remapped_title is not None
+                if remapped_title is None:
+                    remapped_title = title
+                scheme_name = remapped_title.scheme_name
+                if scheme_name is not None and scheme_name in role_remap:
+                    # 方案改名/删除连带标题条目的基础配色引用（删除 → None
+                    # 回落内置「标题」方案）。
+                    remapped_title = replace(
+                        remapped_title,
+                        scheme_name=role_remap.get(scheme_name),
+                    )
+                    title_changed = True
+                remapped_overlays.append(remapped_title)
+                overlays_remap_changed |= title_changed
+            if overlays_remap_changed:
+                style = replace(style, title_overlays=remapped_overlays)
+                self._style = style
+                role_remap_applied = True
             if not role_remap_applied:
                 track_indices = ()
                 tracks_before = ()
@@ -4010,18 +4054,13 @@ class SubtitleRenderWindow(QWidget):
                     added_pages += added
         self._property_panel.set_style(style)
         self._remember_style_preferences(previous, style)
-        self._preview_panel.set_style(style)
-        self._lyrics_panel.set_style(style)
+        self._refresh_preview_style_soon()
         # 角色在属性面板中新建 / 重命名 / 删除时，同步逐字符编辑器的可选项。
         self._lyrics_panel.set_role_options(self._merged_role_options())
-        if (
-            bool(previous.title_overlay and previous.title_overlay.enabled)
-            != bool(style.title_overlay and style.title_overlay.enabled)
-        ):
-            if not (style.title_overlay and style.title_overlay.enabled):
-                if self._title_source_active:
-                    self._active_source_index = 0
-                self._title_source_active = False
+        # 标题条目数 / 名称变化（增删、改名、撤销重做）才需要刷新字幕源下拉；
+        # 启用开关不再增删下拉行（禁用条目仍可选中编辑逐字角色）。
+        if self._title_source_names(previous) != self._title_source_names(style):
+            self._clamp_active_title_index()
             self._refresh_source_ui()
         if self._title_source_active:
             self._refresh_lyrics_panel_source()
@@ -4124,12 +4163,9 @@ class SubtitleRenderWindow(QWidget):
         self._style = style
         self._remember_style_preferences(previous, style)
         self._property_panel.set_style(style)
-        self._preview_panel.set_style(style)
-        self._lyrics_panel.set_style(style)
-        if not (style.title_overlay and style.title_overlay.enabled):
-            if self._title_source_active:
-                self._active_source_index = 0
-            self._title_source_active = False
+        # 撤销/重做是离散动作：停掉防抖计时器后即时重刷，不给过期触发留窗口。
+        self._apply_preview_style_now()
+        self._clamp_active_title_index()
         self._refresh_source_ui()
         if self._title_source_active:
             self._refresh_lyrics_panel_source()
@@ -4238,7 +4274,7 @@ class SubtitleRenderWindow(QWidget):
         """从项目快照 / N3 导入恢复副字幕源（含每行布局与逐字角色）。"""
         self._extra_sources = []
         self._active_source_index = 0
-        self._title_source_active = False
+        self._active_title_index = None
         if isinstance(payload, list):
             for item in payload:
                 if not isinstance(item, dict):
@@ -4327,9 +4363,112 @@ class SubtitleRenderWindow(QWidget):
         index = max(int(self._active_source_index), 0)
         return self._project_document.track_at(index) or self._timing_track
 
-    def _title_source_index(self) -> Optional[int]:
-        title = self._style.title_overlay
-        if title is None or not title.enabled or self._timing_track is None:
+    @property
+    def _title_source_active(self) -> bool:
+        """歌词列表当前是否显示某个标题条目（只读，写 ``_active_title_index``）。"""
+        return self._active_title_index is not None
+
+    @staticmethod
+    def _title_source_names(style: Style) -> list[str]:
+        """标题条目在字幕源下拉里的显示名（识别结构变化的签名）。"""
+        return [overlay.name or "标题" for overlay in style.title_overlays]
+
+    def _clamp_active_title_index(self) -> None:
+        """条目被删除 / 撤销后修正越界的活动标题下标。"""
+        if self._active_title_index is None:
+            return
+        if not 0 <= self._active_title_index < len(self._style.title_overlays):
+            self._active_title_index = None
+
+    def _active_title_overlay(self) -> Optional[TitleOverlay]:
+        index = self._active_title_index
+        overlays = self._style.title_overlays
+        if index is None or not 0 <= index < len(overlays):
+            return None
+        return overlays[index]
+
+    def _derive_title_windows(self, title: TitleOverlay) -> list:
+        """用当前轨道推导四档模式的实际显示窗口（切入自定义模式的预填）。
+
+        时长锚定与预览/导出同口径：媒体（视频/音频）时长优先，歌词轨时长
+        兜底——否则歌词只唱到半首时，预填的自定义窗口会在一半处截断。
+        """
+        track = self._timing_track
+        if track is None:
+            return []
+        duration_ms = self._preview_duration_controller.resolve_duration_ms(
+            self._all_tracks(),
+            video_info=self._video_info,
+            audio_info=self._audio_info,
+        )
+        return [
+            TitleTimeWindow(
+                begin_ms=begin,
+                end_ms=end,
+                fade_in_ms=fade_in,
+                fade_out_ms=fade_out,
+            )
+            for begin, end, fade_in, fade_out in title_show_specs(
+                title, track, duration_ms=duration_ms or None
+            )
+        ]
+
+    def _available_title_tags(self) -> list:
+        """当前字幕源可用于 {占位符} 的标签（含自定义 @ 标签，排除 @Emoji）。"""
+        track = self._timing_track
+        if track is None:
+            return []
+        return title_available_tags(track)
+
+    def _refresh_preview_style_soon(self) -> None:
+        """纯尾沿防抖：每次样式变化只重置计时器，停手后才渲最后一版。"""
+        self._preview_style_refresh_timer.start()
+
+    def _apply_preview_style_now(self) -> None:
+        self._preview_style_refresh_timer.stop()
+        self._preview_panel.set_style(self._style)
+        self._lyrics_panel.set_style(self._style)
+
+    def _title_total_duration_ms(self) -> int:
+        """标题自定义窗口默认结束时间的时长口径（媒体优先，歌词轨兜底）。"""
+        return self._preview_duration_controller.resolve_duration_ms(
+            self._all_tracks(),
+            video_info=self._video_info,
+            audio_info=self._audio_info,
+        )
+
+    def _new_title_entry_defaults(self) -> TitleOverlay:
+        """新增标题条目套用应用偏好（启用/布局/淡入淡出）。"""
+        return replace(
+            TitleOverlay(),
+            **{
+                field: value
+                for field in (
+                    "enabled",
+                    "layout_index",
+                    *_TITLE_FADE_FIELDS,
+                )
+                if (value := getattr(
+                    self._preferred_title_for_preferences(self._app_default_style),
+                    field,
+                )) is not None
+            }
+        )
+
+    def _replace_active_title_overlay(self, title: TitleOverlay) -> None:
+        index = self._active_title_index
+        if index is None or not 0 <= index < len(self._style.title_overlays):
+            return
+        overlays = list(self._style.title_overlays)
+        overlays[index] = title
+        self._property_panel.set_style(
+            replace(self._style, title_overlays=overlays),
+            emit=True,
+        )
+
+    def _title_source_start(self) -> Optional[int]:
+        """字幕源下拉里第一个标题条目的下标；无主字幕时不显示标题源。"""
+        if self._timing_track is None:
             return None
         return len(self._extra_sources) + 1
 
@@ -4337,29 +4476,34 @@ class SubtitleRenderWindow(QWidget):
         """刷新歌词面板的字幕源下拉；无主字幕时隐藏。"""
         if self._timing_track is None:
             self._active_source_index = 0
-            self._title_source_active = False
+            self._active_title_index = None
             self._lyrics_panel.set_sources([], 0)
             return
         names = ["主字幕"] + [source.name for source in self._extra_sources]
-        title_index = self._title_source_index()
-        if title_index is not None:
-            names.append("标题")
+        names.extend(self._title_source_names(self._style))
         self._active_source_index = max(
             0, min(self._active_source_index, len(self._extra_sources))
         )
-        active_index = title_index if self._title_source_active and title_index is not None else self._active_source_index
+        active_index = self._active_source_index
+        start = self._title_source_start()
+        if (
+            self._active_title_index is not None
+            and start is not None
+            and 0 <= self._active_title_index < len(self._style.title_overlays)
+        ):
+            active_index = start + self._active_title_index
         self._lyrics_panel.set_sources(
             names,
             active_index,
             removable_indices=set(range(1, len(self._extra_sources) + 1)),
-            # 「标题」没有歌词文件，不能换文件；其余每个源都能。
+            # 标题条目没有歌词文件，不能换文件；其余每个源都能。
             replaceable_indices=set(range(len(self._extra_sources) + 1)),
         )
 
     def _refresh_lyrics_panel_source(self) -> None:
         """把当前选中源的行喂给歌词列表。"""
         if self._title_source_active:
-            title = self._style.title_overlay
+            title = self._active_title_overlay()
             if title is not None and self._timing_track is not None:
                 title = replace(
                     title,
@@ -5113,9 +5257,12 @@ class SubtitleRenderWindow(QWidget):
 
     def _on_source_selected(self, index: int) -> None:
         index = max(int(index), 0)
-        title_index = self._title_source_index()
-        self._title_source_active = title_index is not None and index == title_index
-        if not self._title_source_active:
+        start = self._title_source_start()
+        title_count = len(self._style.title_overlays)
+        if start is not None and start <= index < start + title_count:
+            self._active_title_index = index - start
+        else:
+            self._active_title_index = None
             self._active_source_index = min(index, len(self._extra_sources))
         self._refresh_lyrics_panel_source()
 
@@ -5259,7 +5406,7 @@ class SubtitleRenderWindow(QWidget):
         if renamed:
             source.name = path.stem
         self._active_source_index = track_index
-        self._title_source_active = False
+        self._active_title_index = None
         # 换文件后旧的行索引全部失效
         self._clear_undo_history()
         self._refresh_source_ui()
@@ -5285,19 +5432,13 @@ class SubtitleRenderWindow(QWidget):
     def _on_layout_change_requested(self, rows: list, layout_index: int) -> None:
         """歌词列表右键应用布局：对每个选中行按页联动写入（作用于当前选中源）。"""
         if self._title_source_active:
-            title = self._style.title_overlay
+            title = self._active_title_overlay()
             if title is None:
                 return
             index = max(0, min(int(layout_index), len(self._style.layouts)))
             if int(title.layout_index or 0) == index:
                 return
-            self._property_panel.set_style(
-                replace(
-                    self._style,
-                    title_overlay=replace(title, layout_index=index),
-                ),
-                emit=True,
-            )
+            self._replace_active_title_overlay(replace(title, layout_index=index))
             return
         track = self._active_track()
         if track is None:
@@ -5513,7 +5654,7 @@ class SubtitleRenderWindow(QWidget):
         track = self._track_by_index(track_index)
         if track is None or not 0 <= line_index < len(track.lines):
             return
-        self._title_source_active = False
+        self._active_title_index = None
         self._active_source_index = max(
             0,
             min(int(track_index), len(self._extra_sources)),
@@ -5803,8 +5944,7 @@ class SubtitleRenderWindow(QWidget):
                 if name and name != TITLE_SCHEME_NAME and name not in seen:
                     seen.add(name)
                     options.append(name)
-        title = self._style.title_overlay
-        if title is not None:
+        for title in self._style.title_overlays:
             for row in title.char_role_labels:
                 for label in row:
                     name = str(label or "").strip()
@@ -5815,7 +5955,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _freeze_title_template_for_character_edit(self) -> None:
         """首次逐字编辑前把标题元数据模板展开为当前固定文字。"""
-        title = self._style.title_overlay
+        title = self._active_title_overlay()
         if (
             title is None
             or self._timing_track is None
@@ -5837,9 +5977,7 @@ class SubtitleRenderWindow(QWidget):
             text_template=resolved,
             char_role_labels=[[None] * len(line) for line in resolved.split("\n")],
         )
-        self._property_panel.set_style(
-            replace(self._style, title_overlay=fixed), emit=True
-        )
+        self._replace_active_title_overlay(fixed)
         InfoBar.info(
             title="标题模板已固定",
             content="已按当前歌曲信息展开为固定文字，可逐字符分配角色。",
@@ -5851,7 +5989,7 @@ class SubtitleRenderWindow(QWidget):
     def _on_lyrics_role_changed(self, row: int, role_name: str) -> None:
         """用户修改了某句歌词的角色时，将角色名写入该行所有字素（当前选中源）。"""
         if self._title_source_active:
-            title = self._style.title_overlay
+            title = self._active_title_overlay()
             if title is None:
                 return
             lines = title.text_template.split("\n")
@@ -5874,7 +6012,7 @@ class SubtitleRenderWindow(QWidget):
         """把一个角色方案批量覆盖到所选歌词行，并作为一条命令撤销/重做。"""
         if self._title_source_active:
             # 整行覆盖不展开 {title} / {artist}：整行角色本来就与字符数无关。
-            title = self._style.title_overlay
+            title = self._active_title_overlay()
             if title is None:
                 return
             assignment = assign_role_to_title_rows(title, rows, role_name)
@@ -5882,13 +6020,7 @@ class SubtitleRenderWindow(QWidget):
                 return
             if assignment.role_label:
                 self._materialize_role_schemes({assignment.role_label})
-            self._property_panel.set_style(
-                replace(
-                    self._style,
-                    title_overlay=assignment.title,
-                ),
-                emit=True,
-            )
+            self._replace_active_title_overlay(assignment.title)
             return
         track_index = self._active_source_index
         track = self._track_by_index(track_index)
@@ -6570,8 +6702,8 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
 
     def _set_title_role_labels(self, row: int, labels: list) -> None:
-        """写回标题某行逐字符角色，作为 Style 修改进入统一撤销栈。"""
-        title = self._style.title_overlay
+        """写回活动标题条目某行逐字符角色，作为 Style 修改进入统一撤销栈。"""
+        title = self._active_title_overlay()
         if title is None:
             return
         rows = [list(values) for values in title.char_role_labels]
@@ -6585,12 +6717,8 @@ class SubtitleRenderWindow(QWidget):
             return
         rows[row] = normalized
         self._materialize_role_schemes({label for label in normalized if label})
-        self._property_panel.set_style(
-            replace(
-                self._style,
-                title_overlay=replace(title, char_role_labels=rows),
-            ),
-            emit=True,
+        self._replace_active_title_overlay(
+            replace(title, char_role_labels=rows),
         )
 
     def _set_line_role_labels(
@@ -6768,7 +6896,7 @@ class SubtitleRenderWindow(QWidget):
         if track is None or not 0 <= line_index < len(track.lines):
             return
         if self._title_source_active or self._active_source_index != track_index:
-            self._title_source_active = False
+            self._active_title_index = None
             self._active_source_index = max(
                 0, min(int(track_index), len(self._extra_sources))
             )
@@ -6804,11 +6932,23 @@ class SubtitleRenderWindow(QWidget):
 
         target_reference = max(int(self._app_default_style.layout_reference_height), 1)
         source = rescale_layout_sizes(deepcopy(style), target_reference)
+        # 同步当前工程目录后补种缺失预设（尤其「タイトル左上」）：否则用
+        # N3 工程的布局目录覆盖应用默认后，新工程/交接工程永远丢标题预设。
+        source = ensure_page_layout_defaults(source)
         changes = {
             field_name: deepcopy(getattr(source, field_name))
             for field_name in _LAYOUT_DEFAULT_STYLE_FIELDS
         }
         self._app_default_style = replace(self._app_default_style, **changes)
+
+    @staticmethod
+    def _preferred_title_for_preferences(style: Style) -> TitleOverlay:
+        """应用偏好记忆的标题条目：首个启用条目，否则首条。"""
+        overlays = style.title_overlays
+        for overlay in overlays:
+            if overlay.enabled:
+                return overlay
+        return overlays[0] if overlays else TitleOverlay()
 
     def _remember_style_preferences(self, previous: Style, current: Style) -> None:
         """Copy user-edited title/layout habits into new-project defaults."""
@@ -6817,8 +6957,8 @@ class SubtitleRenderWindow(QWidget):
             getattr(previous, field_name) != getattr(current, field_name)
             for field_name in _LAYOUT_DEFAULT_STYLE_FIELDS
         )
-        previous_title = previous.title_overlay or TitleOverlay()
-        current_title = current.title_overlay or TitleOverlay()
+        previous_title = self._preferred_title_for_preferences(previous)
+        current_title = self._preferred_title_for_preferences(current)
         title_preference_changed = (
             bool(previous_title.enabled),
             int(previous_title.layout_index or 0),
@@ -6828,7 +6968,7 @@ class SubtitleRenderWindow(QWidget):
             int(current_title.layout_index or 0),
             *(getattr(current_title, name) for name in _TITLE_FADE_FIELDS),
         )
-        app_title = self._app_default_style.title_overlay or TitleOverlay()
+        app_title = self._preferred_title_for_preferences(self._app_default_style)
         remembered_layout_name = self._layout_name_for_index(
             self._app_default_style, app_title.layout_index
         )
@@ -6845,19 +6985,21 @@ class SubtitleRenderWindow(QWidget):
             source_title = current_title if title_preference_changed else app_title
             self._app_default_style = replace(
                 self._app_default_style,
-                title_overlay=replace(
-                    TitleOverlay(),
-                    enabled=(
-                        bool(current_title.enabled)
-                        if title_preference_changed
-                        else bool(app_title.enabled)
-                    ),
-                    layout_index=app_layout_index,
-                    **{
-                        name: getattr(source_title, name)
-                        for name in _TITLE_FADE_FIELDS
-                    },
-                ),
+                title_overlays=[
+                    replace(
+                        TitleOverlay(),
+                        enabled=(
+                            bool(current_title.enabled)
+                            if title_preference_changed
+                            else bool(app_title.enabled)
+                        ),
+                        layout_index=app_layout_index,
+                        **{
+                            name: getattr(source_title, name)
+                            for name in _TITLE_FADE_FIELDS
+                        },
+                    )
+                ],
             )
 
     def _remember_layout_assignment(

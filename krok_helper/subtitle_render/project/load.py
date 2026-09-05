@@ -9,7 +9,6 @@ from typing import Any, Callable, Optional
 
 from krok_helper.subtitle_render.domain.models import (
     Style,
-    TitleOverlay,
     style_from_dict,
 )
 from krok_helper.subtitle_render.domain.timing import (
@@ -314,8 +313,8 @@ class ProjectLoadPlan:
                 style,
                 font_reference_height=max(int(screen.height), 1),
             )
-        if style.title_overlay is None:
-            style = replace(style, title_overlay=TitleOverlay())
+        # 标题条目默认值由 ``style_from_dict`` 统一补齐（缺 key → 一条默认
+        # 禁用条目），这里不再额外回填。
 
         key = source.get("selected_scheme_key")
         selected_scheme_key = key if isinstance(key, str) and key else None
