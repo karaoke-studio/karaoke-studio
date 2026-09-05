@@ -395,6 +395,15 @@ N3_FONT_INHERITANCE_FIELDS: tuple[str, ...] = (
 )
 
 
+PRESET_REFERENCE_HEIGHT = 1080
+"""样式预设库存放像素字段的统一基准高度。
+
+预设库是跨项目共享的应用级数据，保存时统一把字号等像素字段换算到该高度；
+应用时再按目标项目的输出高度换算回去。每条预设用 ``reference_height``
+记录自身像素实际对应的高度，因此该基准将来变化也不会让旧预设失配。
+"""
+
+
 @dataclass
 class StylePreset:
     """应用级可复用的单目标字幕样式预设。
@@ -412,6 +421,13 @@ class StylePreset:
     # again for the target project's output height when the preset is used.
     source_type: str = ""
     source_data: dict[str, Any] = field(default_factory=dict)
+    reference_height: int = PRESET_REFERENCE_HEIGHT
+    """``scheme`` 像素字段对应的输出高度。
+
+    用户保存的预设统一归一化到 :data:`PRESET_REFERENCE_HEIGHT`；N3 模板预设
+    的 ``scheme`` 只是缓存，该字段记录解析时的目标高度，权威值仍在 payload。
+    缺省 ``1080`` 同时充当旧库数据（从未记录高度）的兜底。
+    """
 
 
 def default_title_layout() -> LyricsLayout:
@@ -1758,6 +1774,34 @@ _TITLE_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
 )
 
 
+def rescale_scheme_font_sizes(
+    scheme: SubtitleStyleScheme,
+    reference_height: int,
+    target_height: int,
+) -> SubtitleStyleScheme:
+    """按 N3 ``SizeAndRatio`` 语义在两个输出高度之间换算单个配色方案。
+
+    与 :func:`rescale_font_sizes` 共用字段表和向 0 截断规则；``None`` 字段
+    保持 ``None`` 以保留继承语义，高度一致或非法时原样返回。样式预设库
+    保存/应用时用它把像素字段在 ``PRESET_REFERENCE_HEIGHT`` 与项目输出
+    高度之间互转。
+    """
+    reference = max(int(reference_height), 1)
+    target = int(target_height)
+    if target <= 0 or target == reference:
+        return scheme
+
+    def scaled(value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        return int(target * (int(value) / reference))
+
+    return replace(
+        scheme,
+        **{name: scaled(getattr(scheme, name)) for name in _FONT_VISUAL_SIZE_FIELDS},
+    )
+
+
 def rescale_font_sizes(style: Style, new_height: int) -> Style:
     """Scale font visual pixel fields when the output height changes.
 
@@ -1783,11 +1827,11 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
         )
 
     custom_schemes = {
-        name: scale_dataclass(scheme, _FONT_VISUAL_SIZE_FIELDS)
+        name: rescale_scheme_font_sizes(scheme, reference, new_height)
         for name, scheme in style.custom_style_schemes.items()
     }
     singer_overrides = {
-        singer: scale_dataclass(scheme, _FONT_VISUAL_SIZE_FIELDS)
+        singer: rescale_scheme_font_sizes(scheme, reference, new_height)
         for singer, scheme in style.singer_style_overrides.items()
     }
     title_overlay = style.title_overlay

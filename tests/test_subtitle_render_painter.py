@@ -9124,6 +9124,33 @@ def test_rescale_font_sizes_scales_all_visual_font_slots():
     assert rescale_font_sizes(scaled, 2160) is scaled
 
 
+def test_rescale_scheme_font_sizes_matches_font_rescale_semantics():
+    from krok_helper.subtitle_render.domain.models import rescale_scheme_font_sizes
+
+    scheme = SubtitleStyleScheme(
+        font_size_px=48,
+        latin_font_size_px=None,
+        stroke_width_px=6,
+        ruby_font_size_px=24,
+        shadow_offset_x=-5,
+    )
+
+    up = rescale_scheme_font_sizes(scheme, 1080, 2160)
+    assert up.font_size_px == 96
+    assert up.latin_font_size_px is None
+    assert up.stroke_width_px == 12
+    assert up.ruby_font_size_px == 48
+    assert up.shadow_offset_x == -10
+    # 原方案不被就地修改（预设库存值不能被应用/换算污染）。
+    assert scheme.font_size_px == 48
+
+    down = rescale_scheme_font_sizes(scheme, 1080, 720)
+    assert down.font_size_px == 32
+    # 高度一致或非法目标高度时原样返回同一对象。
+    assert rescale_scheme_font_sizes(scheme, 1080, 1080) is scheme
+    assert rescale_scheme_font_sizes(scheme, 1080, 0) is scheme
+
+
 # ---------------------------------------------------------------------------
 # 像素级规则：相邻 ruby 避让（N3 无条件）+ 行缘 ruby 溢出
 # ---------------------------------------------------------------------------

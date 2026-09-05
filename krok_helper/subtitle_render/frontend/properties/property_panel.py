@@ -168,6 +168,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
 )
 from krok_helper.subtitle_render.domain.models import (
     N3_FONT_INHERITANCE_FIELDS,
+    PRESET_REFERENCE_HEIGHT,
     StylePreset,
     SubtitleStyleScheme,
     Style,
@@ -175,6 +176,7 @@ from krok_helper.subtitle_render.domain.models import (
     TitleOverlay,
     effective_karaoke_animation,
     layout_display_name,
+    rescale_scheme_font_sizes,
 )
 from krok_helper.subtitle_render.settings.property_controllers import (
     LayoutCatalogController,
@@ -205,9 +207,6 @@ from krok_helper.subtitle_render.settings.screen import (
     screen_settings_to_dict,
 )
 from krok_helper.subtitle_render.engine.timing.timecode import format_timecode_ms, parse_timecode_ms
-from krok_helper.subtitle_render.n3.template_import import (
-    resolve_n3_template_preset,
-)
 
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
@@ -379,6 +378,7 @@ from krok_helper.subtitle_render.frontend.properties.color_controls import (
 )
 from krok_helper.subtitle_render.frontend.properties.preset_manager import (
     StylePresetManagerDialog,
+    resolve_preset_for_target,
     _RolePresetGroupDialog,
     _StylePresetDetailsDialog,
     _new_preset_id,
@@ -787,7 +787,7 @@ class PropertyPanel(QWidget):
             for preset_id, preset in self._preset_schemes.items():
                 if preset.name != name or preset.group in by_group:
                     continue
-                resolved, _warnings = resolve_n3_template_preset(
+                resolved = resolve_preset_for_target(
                     preset,
                     target_height=self._n3_template_target_height,
                     lyrics_dir=self._n3_template_lyrics_dir,
@@ -811,7 +811,7 @@ class PropertyPanel(QWidget):
         return selected
 
     def set_n3_template_target_height(self, height: int) -> None:
-        """Set the output height used when an N3 template preset is applied."""
+        """Set the output height used when preset schemes are resolved."""
         self._n3_template_target_height = max(1, int(height))
 
     def set_output_size(self, width: int, height: int) -> None:
@@ -2861,8 +2861,14 @@ class PropertyPanel(QWidget):
         presets[preset_id] = StylePreset(
             name=name,
             group=group,
-            scheme=deepcopy(self._current_scheme_snapshot()),
+            # 与样式预设库一致：统一存基准高度下的值，应用时按项目输出高度还原。
+            scheme=rescale_scheme_font_sizes(
+                deepcopy(self._current_scheme_snapshot()),
+                self._n3_template_target_height,
+                PRESET_REFERENCE_HEIGHT,
+            ),
             preset_id=preset_id,
+            reference_height=PRESET_REFERENCE_HEIGHT,
         )
         self._preset_schemes = presets
         self.presetSchemesChanged.emit(self.preset_schemes)

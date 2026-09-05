@@ -303,6 +303,7 @@ from krok_helper.subtitle_render.domain.models import (
     remap_title_char_role_labels,
     rescale_font_sizes,
     rescale_layout_sizes,
+    rescale_scheme_font_sizes,
     style_from_dict,
     style_to_dict,
 )
@@ -6653,7 +6654,12 @@ class SubtitleRenderWindow(QWidget):
                 if preset.name == label
             ]
             if len(matches) == 1:
-                from_presets[label] = deepcopy(matches[0].scheme)
+                # 预设库存的是基准高度下的值，物化进工程时换算到工程输出高度。
+                from_presets[label] = rescale_scheme_font_sizes(
+                    matches[0].scheme,
+                    matches[0].reference_height,
+                    self._style.font_reference_height,
+                )
         if from_presets:
             schemes = dict(self._style.custom_style_schemes)
             schemes.update(from_presets)

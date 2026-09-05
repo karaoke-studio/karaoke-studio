@@ -16,6 +16,7 @@ from uuid import uuid4
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
 from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
+    PRESET_REFERENCE_HEIGHT,
     STYLE_APPEARANCE_FIELDS,
     TITLE_SCHEME_NAME,
     Style,
@@ -611,6 +612,19 @@ def prepare_app_preferences(
     )
 
 
+def _preset_reference_height(value: object) -> int:
+    """Load one preset's reference height; bad or missing values fall back.
+
+    旧库数据从未记录保存时的高度，统一按 :data:`PRESET_REFERENCE_HEIGHT`
+    （1080）解释——多数工程即 1080p，其余来源的偏差无法事后挽回。
+    """
+    try:
+        height = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return PRESET_REFERENCE_HEIGHT
+    return height if height > 0 else PRESET_REFERENCE_HEIGHT
+
+
 def style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
     """Load stable-ID presets and migrate the legacy name-to-scheme mapping."""
 
@@ -635,6 +649,7 @@ def style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
                 preset_id=resolved_id,
                 source_type=str(value.source_type).strip(),
                 source_data=deepcopy(value.source_data),
+                reference_height=_preset_reference_height(value.reference_height),
             )
             return
         if isinstance(value, SubtitleStyleScheme):
@@ -646,12 +661,14 @@ def style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
             return
         source_type = ""
         source_data: dict = {}
+        reference_height = PRESET_REFERENCE_HEIGHT
         if isinstance(value, dict) and isinstance(value.get("scheme"), dict):
             group = str(value.get("group") or "").strip()
             scheme_payload = value["scheme"]
             source_type = str(value.get("source_type") or "").strip()
             if isinstance(value.get("source_data"), dict):
                 source_data = deepcopy(value["source_data"])
+            reference_height = _preset_reference_height(value.get("reference_height"))
         else:
             group = ""
             scheme_payload = value
@@ -662,6 +679,7 @@ def style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
             preset_id=preset_id,
             source_type=source_type,
             source_data=source_data,
+            reference_height=reference_height,
         )
 
     if isinstance(payload, list):
@@ -756,6 +774,7 @@ def style_presets_to_dict(presets: dict[str, StylePreset]) -> list[dict]:
             "scheme": subtitle_style_scheme_to_dict(preset.scheme),
             "source_type": str(preset.source_type).strip(),
             "source_data": deepcopy(preset.source_data),
+            "reference_height": _preset_reference_height(preset.reference_height),
         }
         for preset_id, preset in presets.items()
         if str(preset.name).strip()

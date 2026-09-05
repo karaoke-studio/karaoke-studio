@@ -228,6 +228,8 @@ def load_n3_font_template(
             "path": str(template_path),
             "guid": guid,
         },
+        # scheme 是按 target_height 解析出的缓存，记录解析高度保持自洽。
+        reference_height=max(1, int(target_height)),
     )
     return N3TemplateLoadResult(
         path=template_path,
@@ -267,6 +269,7 @@ def resolve_n3_template_preset(
             preset_id=preset.preset_id,
             source_type=preset.source_type,
             source_data=deepcopy(preset.source_data),
+            reference_height=max(1, int(target_height)),
         ),
         tuple(warnings),
     )

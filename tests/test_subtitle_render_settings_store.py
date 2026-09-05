@@ -160,6 +160,34 @@ def test_preset_library_merge_keeps_both_sides_of_a_concurrent_edit():
     assert edited.scheme.font_size_px == 99
 
 
+def test_style_preset_roundtrip_keeps_reference_height_legacy_defaults_to_1080():
+    """预设的换算基准随行持久化；旧库没有该字段时按统一基准 1080 解释。"""
+
+    from dataclasses import replace as _replace
+
+    from krok_helper.subtitle_render.domain.models import PRESET_REFERENCE_HEIGHT
+    from krok_helper.subtitle_render.settings.preferences import (
+        style_presets_from_dict,
+        style_presets_to_dict,
+    )
+
+    rows = style_presets_to_dict(
+        {
+            "id720": _replace(_preset("P720", "id720"), reference_height=720),
+            "id1080": _preset("P1080", "id1080"),
+        }
+    )
+    assert [row["reference_height"] for row in rows] == [720, PRESET_REFERENCE_HEIGHT]
+
+    # 旧版库行没有 reference_height，加载时回退到统一基准。
+    legacy_row = {"id": "old", "name": "旧预设", "scheme": {}}
+    loaded = style_presets_from_dict(rows + [legacy_row])
+
+    assert loaded["id720"].reference_height == 720
+    assert loaded["id1080"].reference_height == PRESET_REFERENCE_HEIGHT
+    assert loaded["old"].reference_height == PRESET_REFERENCE_HEIGHT
+
+
 def test_preset_library_without_a_baseline_keeps_the_wholesale_behaviour():
     """未提供基线的调用方（旧测试 / 旧路径）行为不变。"""
 

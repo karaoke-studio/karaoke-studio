@@ -33,7 +33,12 @@ from qfluentwidgets import (
 )
 
 from krok_helper.qfluent_compat import ModelessDialog
-from krok_helper.subtitle_render.domain.models import StylePreset, SubtitleStyleScheme
+from krok_helper.subtitle_render.domain.models import (
+    PRESET_REFERENCE_HEIGHT,
+    StylePreset,
+    SubtitleStyleScheme,
+    rescale_scheme_font_sizes,
+)
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_button_row,
     fluent_choice,
@@ -45,6 +50,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.n3.template_import import (
     N3_TEMPLATE_FILTER,
+    N3_TEMPLATE_SOURCE_TYPE,
     default_n3_template_directories,
     find_n3_template_files,
     load_n3_font_templates,
@@ -54,6 +60,41 @@ from krok_helper.subtitle_render.n3.template_import import (
 
 
 _PRESET_NO_GROUP = "\x00ungrouped"
+
+
+def resolve_preset_for_target(
+    preset: StylePreset,
+    *,
+    target_height: int,
+    lyrics_dir: str | Path | None = None,
+) -> StylePreset:
+    """把预设解析到目标输出高度，供应用到工程时使用。
+
+    N3 模板预设优先按保留的 payload 重新解析（精确）；其余预设按记录的
+    ``reference_height`` 等比换算。返回的预设身份字段原样保留，仅 scheme
+    换算到目标高度，``reference_height`` 同步改写为 ``target_height``。
+    """
+
+    if preset.source_type == N3_TEMPLATE_SOURCE_TYPE:
+        resolved, _warnings = resolve_n3_template_preset(
+            preset,
+            target_height=target_height,
+            lyrics_dir=lyrics_dir,
+        )
+        return resolved
+    return StylePreset(
+        name=preset.name,
+        group=preset.group,
+        scheme=rescale_scheme_font_sizes(
+            deepcopy(preset.scheme),
+            preset.reference_height,
+            target_height,
+        ),
+        preset_id=preset.preset_id,
+        source_type=preset.source_type,
+        source_data=deepcopy(preset.source_data),
+        reference_height=max(1, int(target_height)),
+    )
 
 
 def _normalize_style_presets(
@@ -81,6 +122,7 @@ def _normalize_style_presets(
                 preset_id=preset_id,
                 source_type=str(value.source_type).strip(),
                 source_data=deepcopy(value.source_data),
+                reference_height=value.reference_height,
             )
         elif isinstance(value, SubtitleStyleScheme):
             name = fallback
@@ -392,8 +434,15 @@ class StylePresetManagerDialog(ModelessDialog):
         self._presets[preset_id] = StylePreset(
             name=name,
             group=group,
-            scheme=deepcopy(self._current_scheme),
+            # 预设库统一存基准高度的值：库是跨项目共享的，记录像素对应的
+            # 高度后，应用到任意输出高度的项目都能等比还原。
+            scheme=rescale_scheme_font_sizes(
+                deepcopy(self._current_scheme),
+                self._target_height,
+                PRESET_REFERENCE_HEIGHT,
+            ),
             preset_id=preset_id,
+            reference_height=PRESET_REFERENCE_HEIGHT,
         )
         self._populate_list(selected=preset_id)
         self._emit_preset_library_changed()
@@ -769,7 +818,11 @@ class StylePresetManagerDialog(ModelessDialog):
         if preset_id is None:
             InfoBar.warning(title="未选择", content="请先选择一个预设。", parent=self, duration=2000)
             return
-        self._applied_scheme = deepcopy(self._presets[preset_id].scheme)
+        self._applied_scheme = resolve_preset_for_target(
+            self._presets[preset_id],
+            target_height=self._target_height,
+            lyrics_dir=self._lyrics_dir,
+        ).scheme
         self.accept()
 
     def _on_import_selected(self) -> None:
@@ -797,7 +850,11 @@ class StylePresetManagerDialog(ModelessDialog):
             )
             return
         self._imported_schemes = {
-            preset_id: deepcopy(self._presets[preset_id])
+            preset_id: resolve_preset_for_target(
+                self._presets[preset_id],
+                target_height=self._target_height,
+                lyrics_dir=self._lyrics_dir,
+            )
             for preset_id in preset_ids
             if preset_id in self._presets
         }
@@ -838,6 +895,7 @@ class StylePresetManagerDialog(ModelessDialog):
             preset_id=preset_id,
             source_type=preset.source_type,
             source_data=deepcopy(preset.source_data),
+            reference_height=preset.reference_height,
         )
         self._populate_list(selected=preset_id)
         self._emit_preset_library_changed()

@@ -23,6 +23,7 @@ from krok_helper.subtitle_render.domain.models import (
     VIEWPORT_ALIGNS,
     ViewportAlign,
     migrate_title_char_role_labels,
+    rescale_scheme_font_sizes,
 )
 from krok_helper.subtitle_render.domain.timing import (
     EntryAnimation,
@@ -571,9 +572,15 @@ class RoleSchemeController:
             if name in schemes:
                 continue
             matches = [preset for preset in presets.values() if preset.name == name]
-            schemes[name] = (
-                deepcopy(matches[0].scheme) if len(matches) == 1 else fallback(index)
-            )
+            if len(matches) == 1:
+                # 预设库存的是基准高度下的值，物化进工程时换算到工程输出高度。
+                schemes[name] = rescale_scheme_font_sizes(
+                    deepcopy(matches[0].scheme),
+                    matches[0].reference_height,
+                    style.font_reference_height,
+                )
+            else:
+                schemes[name] = fallback(index)
             changed = True
         if not changed:
             return style, False

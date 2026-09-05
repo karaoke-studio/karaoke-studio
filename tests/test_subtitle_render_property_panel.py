@@ -220,6 +220,29 @@ def test_role_scheme_controller_owns_registry_and_scheme_defaults():
     assert applied.custom_style_schemes["B"].fill_color == "#555555"
 
 
+def test_ensure_style_schemes_rescales_named_preset_to_project_height():
+    """按名物化角色方案时，预设库的基准高度值要换算到工程输出高度。"""
+
+    controller = RoleSchemeController()
+    controller.replace(["角色A"])
+    preset = StylePreset(
+        name="角色A",
+        scheme=SubtitleStyleScheme(font_size_px=54, stroke_width_px=8),
+        preset_id="pid",
+    )
+    style = replace(Style(), font_reference_height=720)
+
+    result, changed = controller.ensure_style_schemes(
+        style, {"pid": preset}, lambda index: SubtitleStyleScheme()
+    )
+
+    assert changed is True
+    assert result.custom_style_schemes["角色A"].font_size_px == 36
+    assert result.custom_style_schemes["角色A"].stroke_width_px == 5
+    # 库内预设保持基准高度下的原值。
+    assert preset.scheme.font_size_px == 54
+
+
 def test_layout_catalog_controller_preserves_inheritance_and_title_references():
     controller = LayoutCatalogController()
     style = Style(
@@ -6102,6 +6125,93 @@ def test_style_preset_manager_publishes_n3_import_before_dialog_closes(
     assert saved.name == "N3 模板"
     assert saved.source_type == "n3_font_template"
     assert dialog.result() == 0
+
+
+def test_style_preset_save_normalizes_scheme_to_reference_height(qapp):
+    """720p 工程保存的预设统一换算到基准高度 1080 入库。"""
+
+    dialog = StylePresetManagerDialog(
+        presets={},
+        current_scheme=SubtitleStyleScheme(font_size_px=48, stroke_width_px=6),
+        target_label="角色A",
+        target_height=720,
+    )
+
+    assert dialog.add_preset("角色A") is True
+
+    saved = dialog.preset_schemes()["角色A"]
+    assert saved.reference_height == 1080
+    assert saved.scheme.font_size_px == 72
+    assert saved.scheme.stroke_width_px == 9
+
+
+def test_style_preset_apply_rescales_to_project_output_height(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "p": StylePreset(
+                name="角色A",
+                scheme=SubtitleStyleScheme(font_size_px=54),
+                preset_id="p",
+            )
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="角色A",
+        target_height=720,
+    )
+    dialog._preset_list.setCurrentRow(0)
+
+    dialog._on_apply()
+
+    applied = dialog.applied_scheme()
+    assert applied is not None
+    assert applied.font_size_px == 36
+    # 应用只做换算，不把目标高度的值回写进库。
+    assert dialog.preset_schemes()["p"].scheme.font_size_px == 54
+    assert dialog.preset_schemes()["p"].reference_height == 1080
+
+
+def test_style_preset_import_selected_rescales_schemes_to_project_height(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "p": StylePreset(
+                name="角色A",
+                scheme=SubtitleStyleScheme(font_size_px=54),
+                preset_id="p",
+            )
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+        target_height=720,
+    )
+    dialog._preset_list.item(0).setCheckState(Qt.CheckState.Checked)
+
+    dialog._on_import_selected()
+
+    imported = dialog.imported_schemes()
+    assert imported["p"].scheme.font_size_px == 36
+    assert imported["p"].reference_height == 720
+
+
+def test_resolve_preset_for_target_scales_user_preset_keeps_identity():
+    from krok_helper.subtitle_render.frontend.properties.preset_manager import (
+        resolve_preset_for_target,
+    )
+
+    preset = StylePreset(
+        name="角色A",
+        group="常用",
+        scheme=SubtitleStyleScheme(font_size_px=54),
+        preset_id="pid",
+    )
+
+    resolved = resolve_preset_for_target(preset, target_height=720)
+
+    assert resolved.scheme.font_size_px == 36
+    assert (resolved.name, resolved.group, resolved.preset_id) == ("角色A", "常用", "pid")
+    assert resolved.reference_height == 720
+    # 库内原值不被就地修改。
+    assert preset.scheme.font_size_px == 54
+    assert preset.reference_height == 1080
 
 
 def test_style_preset_manager_filters_groups_without_losing_checks(qapp):
