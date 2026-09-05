@@ -7650,7 +7650,12 @@ class SubtitleRenderWindow(QWidget):
         ):
             return
         if not ui_active(self):
+            # 日志是低频事件（秒级一条），隐藏期直接落 UI 没有绘制成本；
+            # 只缓存不上屏的话，长「准备」阶段（预扫/GPU 预热）在恢复可见前
+            # 会一直停留在「正在准备导出…」，用户无从得知当前阶段。
+            # pending 仍照旧记录，保持恢复可见时的重放语义。
             self._export_pending_log = message
+            self._export_status_label.setText(message)
             return
         self._export_status_label.setText(message)
 
