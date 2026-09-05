@@ -219,6 +219,7 @@ def test_sug_adapter_merges_nicokara_metadata_and_custom_tags() -> None:
             "album": "标签专辑",
             "tagging_by": "打轴者",
             "silence_ms": "1250",
+            "head_offset": -500,
             "custom": ["@Emoji=主唱", "@Custom=保留"],
         },
     )
@@ -230,6 +231,43 @@ def test_sug_adapter_merges_nicokara_metadata_and_custom_tags() -> None:
     assert track.meta.silence_ms == 1250
     assert track.meta.custom == ["@Emoji=主唱", "@Custom=保留"]
     assert track.meta.offset_ms == 0
+    # .sug 直读同为下游：head_offset 烘焙进行首时间戳（1050 → 550）
+    assert track.meta.head_offset_ms == -500
+    assert track.lines[0].chars[0].start_ms == 550
+
+
+def test_sug_adapter_applies_head_offset_to_line_heads_only() -> None:
+    track = timing_track_from_sug_project(
+        _sample_sug_project(),
+        nicokara_tags={"head_offset": -500},
+    )
+
+    # 仅行首时间戳平移：愛 1050 → 550、空 2250 → 1750；行尾不动
+    assert track.lines[0].chars[0].start_ms == 550
+    assert track.lines[0].end_ms == 1850
+    assert track.lines[1].chars[0].start_ms == 1750
+    assert track.lines[1].end_ms == 2650
+    # 挂在行首时间戳上的 ruby 起点同步平移，词尾界不动
+    ruby = track.rubies[0]
+    assert ruby.pos_start_ms == 550
+    assert ruby.pos_end_ms == 1850
+
+
+@pytest.mark.parametrize(
+    ("head_offset", "expected_start_ms"),
+    [(100, 1150), (2000, 1850)],
+)
+def test_sug_adapter_head_offset_positive_clamped(
+    head_offset: int,
+    expected_start_ms: int,
+) -> None:
+    track = timing_track_from_sug_project(
+        _sample_sug_project(),
+        nicokara_tags={"head_offset": head_offset},
+    )
+
+    # 正值不越过行内下一个不同时间戳 / 行尾：单字行的上限是 line.end_ms
+    assert track.lines[0].chars[0].start_ms == expected_start_ms
 
 
 @pytest.mark.parametrize(
@@ -360,6 +398,22 @@ def test_load_sug_timing_track_reads_nicokara_extras(tmp_path: Path) -> None:
     assert track.meta.album == "专辑"
     assert track.meta.tagging_by == "标签作者"
     assert track.meta.custom == ["@Emoji=和声"]
+
+
+def test_load_sug_timing_track_applies_head_offset_tag(tmp_path: Path) -> None:
+    sug_path = tmp_path / "song-head-offset.sug"
+    SugProjectParser.save(
+        _sample_sug_project(),
+        str(sug_path),
+        nicokara_tags={"head_offset": -400},
+    )
+
+    track = load_sug_timing_track(sug_path)
+
+    assert track.meta.head_offset_ms == -400
+    assert track.meta.offset_ms == 0
+    assert track.lines[0].chars[0].start_ms == 650
+    assert track.lines[1].chars[0].start_ms == 1850
 
 
 def test_sug_adapter_preserves_n3_main_text_boundary_provenance() -> None:

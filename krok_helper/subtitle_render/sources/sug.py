@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    apply_head_offset,
     normalize_reversed_wipe_lines,
 )
 from krok_helper.subtitle_render.sources.subtitles import (
@@ -230,14 +231,18 @@ def timing_track_from_sug_project(
       the existing role styling path can address them.
 
     Timing is assembled exactly the way SUG's own export pipeline does, in
-    two additive, individually clamped steps:
+    three additive, individually clamped steps:
 
     1. the project's ``global_offset_ms`` (「导出偏移」) is always baked into
        every timestamp — ``max(0, raw + offset)``, mirroring
        ``Character.set_offset``;
     2. ``software_compensation_ms`` (「软件导出补偿」，``export_service``
        applies it to every format except ``.sug`` at export time) is then
-       added on top — ``max(0, shifted + compensation)``.
+       added on top — ``max(0, shifted + compensation)``;
+    3. the nicokara tag ``head_offset`` (``@HeadOffset``) is finally baked
+       into each line's head timestamps — only the first timestamped char of
+       every line moves (see :func:`apply_head_offset`), matching what any
+       downstream karaoke renderer consuming a SUG-exported LRC would do.
 
     Step 2 exists because ``.sug`` stores uncompensated timestamps; a SUG
     LRC export shifts them by the module's current setting, and reading the
@@ -366,8 +371,10 @@ def timing_track_from_sug_project(
             # ``global_offset_ms`` 已在构建本轨道时加算进所有检查点、行尾
             # 与 ruby 位置；软件导出补偿随后独立叠加。无论补偿多少，这里都
             # 保持 0 —— LRC ``@Offset`` 与 ``style.timing_offset_ms`` 是独立
-            # 的叠加偏移，不能被覆盖。
+            # 的叠加偏移，不能被覆盖。``@HeadOffset`` 不同：它只作用于行首
+            # 时间戳（见 :func:`apply_head_offset`），原值记录在此供追溯。
             offset_ms=0,
+            head_offset_ms=_tag_int(tags, "head_offset"),
             custom=_custom_tag_lines(tags.get("custom")),
         ),
         lines=lines,
@@ -378,6 +385,8 @@ def timing_track_from_sug_project(
     # 整行时间戳严格逆序的行在此理顺为顺序并打 wipe_reverse 标记：
     # 下游一切时间计算按普通行处理，仅走字反向。
     normalize_reversed_wipe_lines(track)
+    # @HeadOffset 在逆序理顺之后烘焙，逆序行镜像出的「行首字」才是正确目标。
+    apply_head_offset(track)
     return track
 
 

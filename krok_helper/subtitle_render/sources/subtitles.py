@@ -16,6 +16,7 @@
 - 演唱者切换通过 ``【演唱者名】`` 标签标注
 - 文件尾部依次为：空行 + ``@Title=...`` / ``@Artist=...`` / ``@Album=...``
   / ``@TaggingBy=...`` / ``@SilencemSec=...`` / 用户自定义行 / ``@Offset=±N``
+  / ``@HeadOffset=±N``（加载时烘焙进行首共享时间戳，见 :func:`apply_head_offset`）
   / ``@RubyN=漢字,読み[t]...,pos1,pos2``
 - 文件编码 UTF-8-BOM、CRLF 行尾、末尾换行
 """
@@ -36,6 +37,7 @@ from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    apply_head_offset,
     normalize_reversed_wipe_lines,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
@@ -84,6 +86,8 @@ def load_nicokara_lrc(path: str | Path) -> TimingTrack:
     _apply_emoji_guides(track, p.parent, body_lines)
     # 手工编辑的 LRC 理论上可含整行逆序；入口统一理顺 + 打标记。
     normalize_reversed_wipe_lines(track)
+    # @HeadOffset 在逆序理顺之后烘焙，逆序行镜像出的「行首字」才是正确目标。
+    apply_head_offset(track)
     return track
 
 
@@ -764,7 +768,7 @@ def _parse_tail(tail_lines: Iterable[str]) -> Tuple[TimingTrackMeta, list[_Parse
             if entry is not None:
                 rubies.append(entry)
             continue
-        # @Title= / @Artist= / @Album= / @TaggingBy= / @SilencemSec= / @Offset=
+        # @Title= / @Artist= / @Album= / @TaggingBy= / @SilencemSec= / @Offset= / @HeadOffset=
         m_kv = re.match(r"^@([A-Za-z]+)\s*=\s*(.*)$", ln)
         if m_kv:
             key = m_kv.group(1).lower()
@@ -781,6 +785,8 @@ def _parse_tail(tail_lines: Iterable[str]) -> Tuple[TimingTrackMeta, list[_Parse
                 meta.silence_ms = _parse_int(val, 0)
             elif key == "offset":
                 meta.offset_ms = _parse_signed_int(val, 0)
+            elif key == "headoffset":
+                meta.head_offset_ms = _parse_signed_int(val, 0)
             else:
                 # 未知 @标签：原样进 custom 便于 round-trip
                 meta.custom.append(ln)
@@ -798,7 +804,7 @@ def _parse_int(value: str, default: int) -> int:
 
 
 def _parse_signed_int(value: str, default: int) -> int:
-    # @Offset 可能形如 "+1200" / "-300"
+    # @Offset / @HeadOffset 可能形如 "+1200" / "-300"
     v = value.strip()
     sign = 1
     if v.startswith("+"):

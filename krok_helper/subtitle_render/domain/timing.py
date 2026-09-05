@@ -357,6 +357,13 @@ class TimingTrackMeta:
     """``@SilencemSec``：曲首静音长度（毫秒）。"""
     offset_ms: int = 0
     """``@Offset``：全局时间偏移（毫秒，有符号）。"""
+    head_offset_ms: int = 0
+    """``@HeadOffset``：行首时间戳偏移（毫秒，有符号）。
+
+    加载入口已按 N3 语义把它烘焙进每行行首共享时间戳（正值延后、负值提前，
+    见 :func:`apply_head_offset`），本字段承载原值供追溯。LRC 与 ``.sug``
+    直读同口径——SUG 的 nicokara 标签本就是给下游渲染软件消费的。
+    """
     custom: list[str] = field(default_factory=list)
     """无法识别的自定义尾部行（原样保留，便于 round-trip）。"""
 
@@ -596,6 +603,59 @@ def normalize_reversed_wipe_lines(track: "TimingTrack") -> None:
                 ch.pause_release_ms = mirror(int(ch.pause_release_ms))
         line.end_ms = axis_high
         line.wipe_reverse = True
+
+
+def apply_head_offset(track: "TimingTrack") -> None:
+    """把 ``@HeadOffset`` 烘焙进每行行首共享时间戳（N3 语义，就地修改）。
+
+    每行第一个带时间戳的字——连同与它共享该时间戳的行首继承字 / 同刻空格
+    ——整体平移 ``meta.head_offset_ms``，行内其余时间戳不动（正值延后、负值
+    提前）。负值不早于 0；正值不越过行内下一个不同时间戳（或行尾），保持
+    走字区间单调。行的上屏窗口由行首时间戳派生，随之一同移动；挂在行首组
+    上的 ruby ``pos_start_ms``（及同刻 ``pos_end_ms``）同步平移。空行不参与。
+
+    LRC 与 ``.sug`` 两个加载入口都在逆序行理顺（
+    :func:`normalize_reversed_wipe_lines`）之后调用本函数——SUG 的 nicokara
+    标签本就是导出给下游渲染软件消费的，本渲染模块同为下游，``.sug`` 直读
+    与 LRC 交换走同一语义。
+    """
+    delta = int(getattr(track.meta, "head_offset_ms", 0) or 0)
+    if delta == 0:
+        return
+    for line_index, line in enumerate(track.lines):
+        if line.is_blank or not line.chars:
+            continue
+        head = int(line.chars[0].start_ms)
+        # 行首共享同一时间戳的最大前缀：继承字 + 首个带时间戳字 + 同刻空格
+        count = 1
+        while (
+            count < len(line.chars)
+            and int(line.chars[count].start_ms) == head
+        ):
+            count += 1
+        new_head = max(0, head + delta)
+        if delta > 0:
+            if count < len(line.chars):
+                limit = int(line.chars[count].start_ms)
+            elif line.end_ms is not None:
+                limit = int(line.end_ms)
+            else:
+                limit = None
+            if limit is not None:
+                new_head = min(new_head, limit)
+        if new_head == head:
+            continue
+        for ch in line.chars[:count]:
+            ch.start_ms = new_head
+        for ruby in track.rubies:
+            if ruby.target_line_index != line_index:
+                continue
+            if ruby.target_char_start is None or ruby.target_char_start >= count:
+                continue
+            if ruby.pos_start_ms == head:
+                ruby.pos_start_ms = new_head
+            if ruby.pos_end_ms == head:
+                ruby.pos_end_ms = new_head
 
 
 def timing_line_start_ms(line: TimingLine) -> int:

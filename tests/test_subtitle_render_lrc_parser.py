@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.timing import timing_line_start_ms
 from krok_helper.subtitle_render.engine.guide.metrics import vector_glyph_width
+from krok_helper.subtitle_render.engine.timing.timeline import compute_char_intervals
 from krok_helper.subtitle_render.sources.subtitles import (
+    apply_head_offset,
     load_nicokara_lrc,
     parse_nicokara_lrc,
 )
@@ -194,6 +197,123 @@ def test_body_internal_blank_lines_not_swallowed_by_tail():
     assert len(track.lines) == 3
     assert track.lines[1].is_blank
     assert track.meta.title == "Foo"
+
+
+# ---------------------------------------------------------------------------
+# @HeadOffset（行首时间戳偏移，N3 语义：仅首字受影响）
+# ---------------------------------------------------------------------------
+
+
+def test_head_offset_tag_parsed_case_insensitive_and_signed():
+    lower = parse_nicokara_lrc("[00:00:00]a[00:00:50]\n\n@headoffset=-500\n")
+    upper = parse_nicokara_lrc("[00:00:00]a[00:00:50]\n\n@HEADOFFSET=+250\n")
+    mixed = parse_nicokara_lrc("[00:00:00]a[00:00:50]\n\n@HeadOffset=+1200\n")
+    assert lower.meta.head_offset_ms == -500
+    assert upper.meta.head_offset_ms == 250
+    assert mixed.meta.head_offset_ms == 1200
+    # 识别为标准标签后不再落入 custom
+    assert lower.meta.custom == []
+
+
+def test_head_offset_parse_keeps_raw_timestamps():
+    # parse 层保持原始时间戳；烘焙只发生在 load 入口（apply_head_offset）
+    text = "[00:10:00]あ[00:10:50]い[00:11:00]\n\n@HeadOffset=-500\n"
+    track = parse_nicokara_lrc(text)
+    assert [c.start_ms for c in track.lines[0].chars] == [10_000, 10_500]
+
+
+def test_head_offset_shifts_first_timed_group_only():
+    text = "[00:10:00]あ[00:10:50]い[00:11:00]\n\n@HeadOffset=-500\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    assert [c.start_ms for c in track.lines[0].chars] == [9_500, 10_500]
+    assert track.lines[0].end_ms == 11_000
+
+
+def test_head_offset_positive_clamped_to_next_timestamp():
+    text = "[00:10:00]あ[00:10:50]い[00:11:00]\n\n@HeadOffset=+600\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    # 10.00 + 600ms 越过第二个时间戳 10.50，钳制到 10.50 保持走字单调
+    assert [c.start_ms for c in track.lines[0].chars] == [10_500, 10_500]
+
+
+def test_head_offset_negative_clamped_to_zero():
+    text = "[00:01:00]あ[00:01:50]い[00:02:00]\n\n@HeadOffset=-1500\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    assert [c.start_ms for c in track.lines[0].chars] == [0, 1_500]
+
+
+def test_head_offset_shifts_leading_inherited_chars_together():
+    # さ/よ 是行首无时间戳继承字，与首个带时间戳字「な」共享 10.00，整组平移
+    text = "さよ[00:10:00]な[00:10:50]ら[00:11:00]\n\n@HeadOffset=-400\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    assert [c.text for c in track.lines[0].chars] == list("さよなら")
+    assert [c.start_ms for c in track.lines[0].chars] == [9_600, 9_600, 9_600, 10_500]
+
+
+def test_head_offset_first_char_of_interpolated_block_only():
+    # 「どう」共享一个时间块被等分（38.05 / 38.185），只移首字
+    text = "[00:38:05]どう[00:38:32]し[00:38:37]\n\n@HeadOffset=-1000\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    assert [c.start_ms for c in track.lines[0].chars] == [37_050, 38_185, 38_320]
+
+
+def test_head_offset_applies_per_line_across_blank():
+    text = "[00:01:00]あ[00:01:50]\n\n[00:02:00]い[00:02:50]\n\n@HeadOffset=-200\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    assert track.lines[0].chars[0].start_ms == 800
+    assert track.lines[2].chars[0].start_ms == 1_800
+
+
+def test_head_offset_moves_ruby_at_line_head():
+    text = (
+        "[00:03:00]漢[00:04:00]字[00:05:00]\n"
+        "\n"
+        "@Ruby1=漢,かん,[00:03:00],[00:04:00]\n"
+        "@HeadOffset=-300\n"
+    )
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    ruby = track.rubies[0]
+    assert track.lines[0].chars[0].start_ms == 2_700
+    # 挂在行首时间戳上的 ruby 起点同步平移；词尾界 4.00 不动
+    assert ruby.pos_start_ms == 2_700
+    assert ruby.pos_end_ms == 4_000
+
+
+def test_head_offset_updates_intervals_and_line_start():
+    text = "[00:10:00]あ[00:10:50]い[00:11:00]\n\n@HeadOffset=-500\n"
+    track = parse_nicokara_lrc(text)
+    apply_head_offset(track)
+    intervals = compute_char_intervals(track.lines[0])
+    # 首字走字窗口被拉长到第二个时间戳，第二字不受影响
+    assert intervals == [(9_500, 10_500), (10_500, 11_000)]
+    assert timing_line_start_ms(track.lines[0]) == 9_500
+
+
+def test_head_offset_zero_or_absent_is_noop():
+    zero = parse_nicokara_lrc("[00:01:00]a[00:01:50]\n\n@HeadOffset=+0\n")
+    apply_head_offset(zero)
+    absent = parse_nicokara_lrc("[00:01:00]a[00:01:50]\n")
+    apply_head_offset(absent)
+    assert zero.lines[0].chars[0].start_ms == 1_000
+    assert absent.lines[0].chars[0].start_ms == 1_000
+
+
+def test_load_nicokara_lrc_applies_head_offset(tmp_path):
+    path = tmp_path / "head.lrc"
+    path.write_text(
+        "[00:10:00]あ[00:10:50]い[00:11:00]\n\n@HeadOffset=-500\n",
+        encoding="utf-8-sig",
+    )
+    track = load_nicokara_lrc(path)
+    assert [c.start_ms for c in track.lines[0].chars] == [9_500, 10_500]
+    assert track.meta.head_offset_ms == -500
 
 
 # ---------------------------------------------------------------------------
