@@ -933,6 +933,8 @@ class SubtitleRenderWindow(QWidget):
         self._auto_chorus_begin_chars = DEFAULT_CHORUS_BEGIN_CHARS
         self._auto_chorus_end_chars = DEFAULT_CHORUS_END_CHARS
         self._auto_chorus_overwrite = False
+        #: 新歌词源落位后是否按上面的记忆参数自动识别括号和声（不弹窗）。
+        self._auto_chorus_auto_apply = True
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
         self._layout_assignment_preference: Optional[dict[str, object]] = None
@@ -3296,6 +3298,11 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.start()
         self._sync_subtitle_source_watcher()
         self._mark_project_dirty()
+        if not self._loading_project:
+            # 普通导入（拖入/浏览/工作流交接）按记忆参数自动识别括号和声；打开
+            # 工程时角色是持久化数据，不走这里。_clear_undo_history 在前，自动
+            # 识别照常入撤销栈，Ctrl+Z 可以整体回退。
+            self._auto_apply_chorus_on_import(track)
 
     @staticmethod
     def _subtitle_source_key(path: Path) -> str:
@@ -5552,6 +5559,9 @@ class SubtitleRenderWindow(QWidget):
             anchor=anchor if isinstance(anchor, QWidget) else None,
             parent=self,
         )
+        # 加载设置里嵌的「自动识别和声…」入口：与歌词列表右键菜单同一条路径。
+        # AutoChorusDialog 的 parent 是主窗口，嵌套 exec 与右键菜单场景同构。
+        dialog.autoChorusRequested.connect(self._on_auto_chorus_requested)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         mode, settings = dialog.result_value()
@@ -6597,6 +6607,7 @@ class SubtitleRenderWindow(QWidget):
             begin_chars=self._auto_chorus_begin_chars,
             end_chars=self._auto_chorus_end_chars,
             overwrite=self._auto_chorus_overwrite,
+            auto_apply=self._auto_chorus_auto_apply,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -6606,6 +6617,7 @@ class SubtitleRenderWindow(QWidget):
         self._auto_chorus_begin_chars = dialog.begin_chars()
         self._auto_chorus_end_chars = dialog.end_chars()
         self._auto_chorus_overwrite = dialog.overwrite()
+        self._auto_chorus_auto_apply = dialog.auto_apply()
         self._schedule_persisted_state_save()
 
         changed_rows = self._apply_auto_chorus_roles(
@@ -6688,6 +6700,45 @@ class SubtitleRenderWindow(QWidget):
         self._redo_stack.clear()
         self._refresh_after_role_labels_changed(tuple(rows))
         return tuple(rows)
+
+    def _auto_apply_chorus_on_import(self, track: Optional[TimingTrack]) -> None:
+        """新歌词源落位后按记忆参数自动识别括号和声（弹窗里可关）。
+
+        只在普通导入路径调用（``_loading_project`` 由调用点排除）：打开
+        .yurika / .n3proj 工程时角色是持久化的创作数据，不走这里。
+        """
+        if not self._auto_chorus_auto_apply or self._title_source_active:
+            return
+        if track is None or not (
+            self._auto_chorus_begin_chars and self._auto_chorus_end_chars
+        ):
+            return
+        role_options = self._content_role_options()
+        role = (
+            self._auto_chorus_role
+            if self._auto_chorus_role in role_options
+            else pick_chorus_role(role_options)
+        )
+        changed_rows = self._apply_auto_chorus_roles(
+            track,
+            role=role,
+            begin_chars=self._auto_chorus_begin_chars,
+            end_chars=self._auto_chorus_end_chars,
+            overwrite=self._auto_chorus_overwrite,
+        )
+        if not changed_rows:
+            # 没有括号的源每次导入都弹提示只会变成噪音。
+            return
+        InfoBar.success(
+            title="已自动识别和声",
+            content=(
+                f"导入时按括号把 {len(changed_rows)} 行内容分配到「{role}」。"
+                "可在「加载字幕设置 → 自动识别和声…」里调整。"
+            ),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
 
     def _on_guide_prefix_replace_requested(self) -> None:
         track = self._active_track()
@@ -7543,6 +7594,7 @@ class SubtitleRenderWindow(QWidget):
         self._auto_chorus_begin_chars = loaded.auto_chorus_begin_chars
         self._auto_chorus_end_chars = loaded.auto_chorus_end_chars
         self._auto_chorus_overwrite = loaded.auto_chorus_overwrite
+        self._auto_chorus_auto_apply = loaded.auto_chorus_auto_apply
         # 「批量识别导唱标记」对话框的上次设置：导入歌单/开窗前先重置成磁盘口径，
         # 两个导唱符对话框的预填都以这份记忆为准。
         remember_bitmap_settings({})
@@ -7629,6 +7681,7 @@ class SubtitleRenderWindow(QWidget):
                 auto_chorus_begin_chars=self._auto_chorus_begin_chars,
                 auto_chorus_end_chars=self._auto_chorus_end_chars,
                 auto_chorus_overwrite=self._auto_chorus_overwrite,
+                auto_chorus_auto_apply=self._auto_chorus_auto_apply,
                 guide_replacement=last_bitmap_settings(),
                 selected_scheme_key=self._selected_scheme_key,
                 preview_splitter_ratio=self._preview_splitter_ratio,

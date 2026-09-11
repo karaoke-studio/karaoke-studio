@@ -47,6 +47,7 @@ class AutoChorusDialog(ModelessDialog):
         begin_chars: str = DEFAULT_CHORUS_BEGIN_CHARS,
         end_chars: str = DEFAULT_CHORUS_END_CHARS,
         overwrite: bool = False,
+        auto_apply: bool = True,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
@@ -107,6 +108,15 @@ class AutoChorusDialog(ModelessDialog):
         )
         layout.addWidget(self.overwrite_check)
 
+        self.auto_apply_check = CheckBox("加载歌词源时自动应用（使用本次设置，不弹窗）", self)
+        self.auto_apply_check.setChecked(bool(auto_apply))
+        self.auto_apply_check.setToolTip(
+            "启用后，导入或新载入歌词源时按这里的设置自动识别括号和声；"
+            "打开 .yurika / .n3proj 工程不会自动执行。也可以在歌词列表"
+            "「加载字幕设置」里打开本对话框。"
+        )
+        layout.addWidget(self.auto_apply_check)
+
         layout.addSpacing(6)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -137,6 +147,9 @@ class AutoChorusDialog(ModelessDialog):
 
     def overwrite(self) -> bool:
         return self.overwrite_check.isChecked()
+
+    def auto_apply(self) -> bool:
+        return self.auto_apply_check.isChecked()
 
     # ── 内部 ────────────────────────────────────────────────────
 

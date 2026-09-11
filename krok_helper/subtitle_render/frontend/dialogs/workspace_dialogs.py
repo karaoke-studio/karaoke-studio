@@ -268,6 +268,9 @@ class GuideSymbolSettingsDialog(ModelessDialog):
 class SubtitleLoadingSettingsDialog(ModelessDialog):
     """Source-loading settings card, positioned to the right of its gear button."""
 
+    autoChorusRequested = Signal()
+    """「自动识别和声…」入口被点击：由宿主打开 AutoChorusDialog。"""
+
     def __init__(
         self,
         *,
@@ -289,7 +292,8 @@ class SubtitleLoadingSettingsDialog(ModelessDialog):
         root.addWidget(title)
         hint = CaptionLabel(
             "这些设置控制字幕如何分段、分页，以及读取 .sug 项目时是否应用"
-            "打轴模块的软件导出补偿；与渲染样式隔离。",
+            "打轴模块的软件导出补偿；与渲染样式隔离。括号和声识别的入口也在这里"
+            "（「自动识别和声…」），并可在其弹窗里开启导入时自动应用。",
             self,
         )
         hint.setWordWrap(True)
@@ -365,6 +369,13 @@ class SubtitleLoadingSettingsDialog(ModelessDialog):
             "对 .lrc 字幕源无影响。"
         )
         form.addRow("", self._sug_offset_check)
+        self._auto_chorus_button = FluentPushButton("自动识别和声…", self)
+        self._auto_chorus_button.setToolTip(
+            "按括号把和声部分整源分配到一个角色方案；可在弹窗里开启"
+            "「加载歌词源时自动应用」。"
+        )
+        self._auto_chorus_button.clicked.connect(self.autoChorusRequested.emit)
+        form.addRow("", self._auto_chorus_button)
         root.addLayout(form)
 
         buttons = QHBoxLayout()

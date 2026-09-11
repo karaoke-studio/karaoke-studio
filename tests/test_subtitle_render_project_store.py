@@ -700,6 +700,7 @@ def test_app_runtime_preferences_update_preserves_future_fields():
         auto_chorus_begin_chars="[{",
         auto_chorus_end_chars="]}",
         auto_chorus_overwrite=True,
+        auto_chorus_auto_apply=True,
         selected_scheme_key="custom:不存在",
         preview_splitter_ratio=0.55555,
         auto_save_enabled=False,
@@ -715,6 +716,7 @@ def test_app_runtime_preferences_update_preserves_future_fields():
         "begin_chars": "[{",
         "end_chars": "]}",
         "overwrite": True,
+        "auto_apply": True,
     }
     assert updated["guide_replacement"] == {
         "future_guide": 5,

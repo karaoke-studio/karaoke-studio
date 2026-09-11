@@ -239,6 +239,228 @@ def test_nothing_to_do_returns_no_rows_and_no_undo(window) -> None:
     assert window._undo_stack == []
 
 
+# ── 导入时自动应用 ──────────────────────────────────────────
+
+
+def test_import_auto_apply_fills_brackets_and_stays_undoable(window) -> None:
+    """导入后自动识别：括号内容进「和声」，且整体一条撤销能退干净。"""
+    track = _track(["駅前で（僕は窓辺で）", "月を見あげた"])
+    window._timing_track = track
+    window._undo_stack.clear()
+
+    window._auto_apply_chorus_on_import(track)
+
+    assert _labels(track.lines[0]) == "---CCCCCCC"
+    assert _labels(track.lines[1]) == "------"
+    assert "和声" in window._style.custom_style_schemes
+    role_entries = [e for e in window._undo_stack if e[0] == "char_roles_batch"]
+    assert len(role_entries) == 1
+
+    window._undo_edit()
+
+    assert all(ch.role_label is None for line in track.lines for ch in line.chars)
+
+
+def test_import_auto_apply_honors_the_remembered_role(window) -> None:
+    """上次弹窗里选过的角色优先于「和声」回落。"""
+    track = _track(["（あ）"])
+    # 让当前角色列表里出现「コーラス」，记忆值才有效。
+    track.lines[0].chars[0].role_label = "コーラス"
+    window._timing_track = track
+    window._auto_chorus_role = "コーラス"
+    window._undo_stack.clear()
+
+    window._auto_apply_chorus_on_import(track)
+
+    assert track.lines[0].chars[1].role_label == "コーラス"
+    assert "コーラス" in window._style.custom_style_schemes
+
+
+def test_import_auto_apply_is_a_no_op_when_disabled(window) -> None:
+    track = _track(["（あ）"])
+    window._timing_track = track
+    window._auto_chorus_auto_apply = False
+    window._undo_stack.clear()
+
+    window._auto_apply_chorus_on_import(track)
+
+    assert all(ch.role_label is None for ch in track.lines[0].chars)
+    assert window._undo_stack == []
+    assert "和声" not in window._style.custom_style_schemes
+
+
+def test_import_auto_apply_is_silent_without_brackets(window) -> None:
+    """没有括号的源不该物化方案、留撤销记录或弹提示。"""
+    track = _track(["月を見あげた"])
+    window._timing_track = track
+    window._undo_stack.clear()
+
+    window._auto_apply_chorus_on_import(track)
+
+    assert window._undo_stack == []
+    assert "和声" not in window._style.custom_style_schemes
+
+
+def test_apply_timing_track_runs_auto_chorus_for_plain_imports(window, monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        window, "_auto_apply_chorus_on_import", lambda track: calls.append(track)
+    )
+    track = _track(["（あ）"])
+
+    window._apply_timing_track(track, None)
+
+    assert calls == [track]
+
+
+def test_apply_timing_track_skips_auto_chorus_while_loading_project(
+    window, monkeypatch
+) -> None:
+    """打开 .yurika / .n3proj 工程时角色是持久化数据，不能被自动识别改写。"""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        window, "_auto_apply_chorus_on_import", lambda track: calls.append(track)
+    )
+    track = _track(["（あ）"])
+    window._loading_project = True
+    try:
+        window._apply_timing_track(track, None)
+    finally:
+        window._loading_project = False
+
+    assert calls == []
+
+
+# ── 偏好读写（auto_chorus.auto_apply） ───────────────────────
+
+
+def test_runtime_preferences_default_auto_apply_to_enabled() -> None:
+    from krok_helper.subtitle_render.settings.preferences import (
+        load_app_runtime_preferences,
+    )
+
+    loaded = load_app_runtime_preferences(
+        {}, chorus_begin_default="（(", chorus_end_default="）)"
+    )
+
+    assert loaded.auto_chorus_auto_apply is True
+
+
+@pytest.mark.parametrize("raw,expected", [(False, False), (True, True), ("nope", True)])
+def test_runtime_preferences_parse_auto_apply(raw, expected) -> None:
+    from krok_helper.subtitle_render.settings.preferences import (
+        load_app_runtime_preferences,
+    )
+
+    loaded = load_app_runtime_preferences(
+        {"auto_chorus": {"auto_apply": raw}},
+        chorus_begin_default="（(",
+        chorus_end_default="）)",
+    )
+
+    assert loaded.auto_chorus_auto_apply is expected
+
+
+def test_update_app_runtime_preferences_writes_auto_apply_and_keeps_unknown_keys() -> None:
+    from krok_helper.subtitle_render.settings.preferences import (
+        update_app_runtime_preferences,
+    )
+
+    data = update_app_runtime_preferences(
+        {"auto_chorus": {"future_key": 1}},
+        auto_chorus_role="和声",
+        auto_chorus_begin_chars="（(",
+        auto_chorus_end_chars="）)",
+        auto_chorus_overwrite=False,
+        auto_chorus_auto_apply=False,
+        selected_scheme_key="global",
+        preview_splitter_ratio=0.4,
+        auto_save_enabled=True,
+        auto_save_interval_minutes=5,
+        project_backup_count=5,
+    )
+
+    assert data["auto_chorus"]["auto_apply"] is False
+    assert data["auto_chorus"]["future_key"] == 1
+
+
+# ── 弹窗与入口 ───────────────────────────────────────────────
+
+
+def test_auto_chorus_dialog_auto_apply_checkbox_roundtrips(window) -> None:
+    from krok_helper.subtitle_render.frontend.dialogs.auto_chorus_dialog import (
+        AutoChorusDialog,
+    )
+
+    dialog = AutoChorusDialog(role_options=["主唱"], auto_apply=False, parent=window)
+    try:
+        assert dialog.auto_apply() is False
+        dialog.auto_apply_check.setChecked(True)
+        assert dialog.auto_apply() is True
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_loading_settings_dialog_has_auto_chorus_entry_emitting_signal(window) -> None:
+    from krok_helper.subtitle_render.domain.timing import SubtitleLoadingSettings
+    from krok_helper.subtitle_render.frontend.dialogs.workspace_dialogs import (
+        SubtitleLoadingSettingsDialog,
+    )
+
+    dialog = SubtitleLoadingSettingsDialog(
+        mode="global",
+        effective=SubtitleLoadingSettings(),
+        global_defaults=SubtitleLoadingSettings(),
+        anchor=None,
+        parent=window,
+    )
+    try:
+        fired: list[bool] = []
+        dialog.autoChorusRequested.connect(lambda: fired.append(True))
+
+        dialog._auto_chorus_button.click()
+
+        assert fired == [True]
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_source_settings_entry_routes_to_auto_chorus(window, monkeypatch) -> None:
+    """「加载字幕设置 → 自动识别和声…」与右键菜单走同一条 _on_auto_chorus_requested。"""
+    from krok_helper.subtitle_render.frontend import main_window as mw_mod
+
+    fired: list[bool] = []
+    monkeypatch.setattr(
+        window, "_on_auto_chorus_requested", lambda: fired.append(True)
+    )
+
+    real_cls = mw_mod._SubtitleLoadingSettingsDialog
+    created: dict[str, object] = {}
+
+    class _FakeDialog(real_cls):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            created["dialog"] = self
+
+        def exec(self):
+            self.autoChorusRequested.emit()
+            return mw_mod.QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(mw_mod, "_SubtitleLoadingSettingsDialog", _FakeDialog)
+    window._timing_track = _track(["（あ）"])
+    try:
+        window._on_source_settings_requested(None)
+    finally:
+        dialog = created.get("dialog")
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+
+    assert fired == [True]
+
+
 def test_the_guide_symbol_is_left_alone(window) -> None:
     """导唱符是行首的引导标记，不属于括号里的和声段。"""
     from krok_helper.subtitle_render.domain.models import GuideSymbol
@@ -329,6 +551,7 @@ def test_the_preferences_survive_a_save_load_round_trip(window) -> None:
     window._auto_chorus_begin_chars = "[{"
     window._auto_chorus_end_chars = "]}"
     window._auto_chorus_overwrite = True
+    window._auto_chorus_auto_apply = False
     saved: dict = {}
     # 窗口在构造时把 provider 包进了 SubtitleRenderSettingsStore，
     # 事后替换 _settings_provider 不会生效；持久化走的是 _settings_store。
@@ -348,4 +571,5 @@ def test_the_preferences_survive_a_save_load_round_trip(window) -> None:
         "begin_chars": "[{",
         "end_chars": "]}",
         "overwrite": True,
+        "auto_apply": False,
     }

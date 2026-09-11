@@ -116,6 +116,7 @@ class LoadedAppRuntimePreferences:
     auto_chorus_begin_chars: str
     auto_chorus_end_chars: str
     auto_chorus_overwrite: bool
+    auto_chorus_auto_apply: bool
     guide_replacement: dict
     selected_scheme_key: str
     preview_splitter_ratio: float
@@ -137,6 +138,7 @@ class LoadedAppPreferences:
     auto_chorus_begin_chars: str
     auto_chorus_end_chars: str
     auto_chorus_overwrite: bool
+    auto_chorus_auto_apply: bool
     guide_replacement: dict
     style_presets: dict[str, StylePreset]
     screen: ScreenSettings
@@ -189,6 +191,8 @@ class AppPreferenceSaveInput:
     auto_save_interval_minutes: int
     project_backup_count: int
     output: Optional[AppOutputPreferenceValues] = None
+    #: 新歌词源落位后是否自动识别括号和声；默认开启，未传时按出厂语义处理。
+    auto_chorus_auto_apply: bool = True
     guide_replacement: Optional[dict] = None
     """「批量识别导唱标记」对话框的上次设置；``None``/空保持磁盘现状。"""
     style_presets_baseline: Optional[dict] = None
@@ -245,6 +249,8 @@ def load_app_runtime_preferences(
             str(auto_chorus.get("end_chars") or "") or chorus_end_default
         ),
         auto_chorus_overwrite=bool(auto_chorus.get("overwrite")),
+        # 缺失（老配置）按默认开启回落：这正是本开关的出厂语义。
+        auto_chorus_auto_apply=bool(auto_chorus.get("auto_apply", True)),
         guide_replacement=_guide_replacement_memory(data.get("guide_replacement")),
         selected_scheme_key=selected_scheme_key,
         preview_splitter_ratio=preview_splitter_ratio,
@@ -316,6 +322,7 @@ def update_app_runtime_preferences(
     auto_chorus_begin_chars: str,
     auto_chorus_end_chars: str,
     auto_chorus_overwrite: bool,
+    auto_chorus_auto_apply: bool,
     selected_scheme_key: str,
     preview_splitter_ratio: float,
     auto_save_enabled: bool,
@@ -333,6 +340,7 @@ def update_app_runtime_preferences(
             "begin_chars": auto_chorus_begin_chars,
             "end_chars": auto_chorus_end_chars,
             "overwrite": bool(auto_chorus_overwrite),
+            "auto_apply": bool(auto_chorus_auto_apply),
         },
         key="auto_chorus",
     )
@@ -649,6 +657,7 @@ def prepare_app_preferences(
         auto_chorus_begin_chars=values.auto_chorus_begin_chars,
         auto_chorus_end_chars=values.auto_chorus_end_chars,
         auto_chorus_overwrite=values.auto_chorus_overwrite,
+        auto_chorus_auto_apply=values.auto_chorus_auto_apply,
         selected_scheme_key=values.selected_scheme_key,
         preview_splitter_ratio=values.preview_splitter_ratio,
         auto_save_enabled=values.auto_save_enabled,
@@ -896,6 +905,7 @@ def load_app_preferences(
         auto_chorus_begin_chars=runtime.auto_chorus_begin_chars,
         auto_chorus_end_chars=runtime.auto_chorus_end_chars,
         auto_chorus_overwrite=runtime.auto_chorus_overwrite,
+        auto_chorus_auto_apply=runtime.auto_chorus_auto_apply,
         guide_replacement=deepcopy(runtime.guide_replacement),
         style_presets=style_presets,
         screen=screen,
