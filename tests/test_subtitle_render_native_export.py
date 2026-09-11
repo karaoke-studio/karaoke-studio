@@ -734,6 +734,13 @@ def test_iter_gpu_rgba_frames_multiworker_cancel_closes_transport(monkeypatch) -
     _FakeGpuRingReader.instances.clear()
     monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
     monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    # 预检的首个取消检查在 configure 前发生；从第 2 次起才取消，
+    # 覆盖「configure 完成后、帧循环首检」的原有关闭语义。
+    calls = {"count": 0}
+
+    def should_cancel() -> bool:
+        calls["count"] += 1
+        return calls["count"] > 1
 
     with pytest.raises(ExportCancelled):
         list(
@@ -745,7 +752,7 @@ def test_iter_gpu_rgba_frames_multiworker_cancel_closes_transport(monkeypatch) -
                 fps=4,
                 total_frames=6,
                 worker_count=4,
-                should_cancel=lambda: True,
+                should_cancel=should_cancel,
             )
         )
 
@@ -1158,3 +1165,42 @@ def test_iter_gpu_rgba_frames_growth_env_relaxes_preflight(monkeypatch) -> None:
 
     assert frames == [bytes([20, 40, 60, 128])]
     assert len(_FakeVramGpuRendererProcess.instances) == 1
+
+
+def test_iter_gpu_rgba_frames_cancels_before_first_configure(monkeypatch) -> None:
+    # 取消在 configure 开始前就已请求：不应再拉起任何 sidecar。
+    with pytest.raises(ExportCancelled):
+        _run_vram_export(
+            monkeypatch,
+            worker_count=2,
+            reports=[_report(100, 1000)],
+            should_cancel=lambda: True,
+        )
+
+    assert _FakeVramGpuRendererProcess.instances == []
+
+
+def test_iter_gpu_rgba_frames_cancels_between_degradation_attempts(monkeypatch) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_PREFLIGHT", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_VRAM_GROWTH", raising=False)
+    # 第一档 3 worker 预检超预算触发降级重配；重配前取消必须立即生效，
+    # 而不是把第二档 configure 跑完才停（大工程上是分钟级假死）。
+    calls = {"count": 0}
+
+    def should_cancel() -> bool:
+        calls["count"] += 1
+        return calls["count"] > 1
+
+    with pytest.raises(ExportCancelled):
+        _run_vram_export(
+            monkeypatch,
+            worker_count=3,
+            reports=[_report(900, 1000)],
+            should_cancel=should_cancel,
+        )
+
+    # 第一档 sidecar 已被降级路径关闭，且没有第二次 configure。
+    assert len(_FakeVramGpuRendererProcess.instances) == 1
+    instance = _FakeVramGpuRendererProcess.instances[0]
+    assert [c["worker_count"] for c in instance.configures] == [3]
+    assert instance.closed is True

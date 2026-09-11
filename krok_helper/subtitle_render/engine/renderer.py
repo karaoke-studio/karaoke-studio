@@ -401,6 +401,11 @@ def render_subtitle_video(
     amf_pipe_failure = False
     try:
         assert process.stdin is not None
+        # 预扫（条带/多带）阶段可被取消，但取消后原实现仍会走完 Popen 并拉起
+        # 渲染 worker 池 / GPU configure，等写帧器第一轮检查才退出——多进程
+        # 池与 sidecar 场景构建在这里白烧数十秒。进写帧器前先就地退出。
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。")
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
         # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带/多带）。
         worker_count = _resolve_worker_count(total_frames, job.render_workers)

@@ -754,6 +754,70 @@ def test_render_cancel_removes_incomplete_output(monkeypatch, tmp_path):
     assert not job.output_path.exists()
 
 
+def test_render_cancel_during_prescan_skips_writer_startup(monkeypatch, tmp_path):
+    """预扫阶段被取消后，不得再拉起写帧器（worker 池 / GPU configure）。"""
+    job = replace(_job(tmp_path), duration_ms=30_000)
+    job.output_path.write_bytes(b"partial")
+
+    class FakeStdin:
+        def write(self, _data):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = []
+            self.returncode = None
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    fake_process = FakeProcess()
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+    for writer_name in (
+        "_write_frames_single",
+        "_write_frames_single_bands",
+        "_write_frames_multiprocess",
+        "_write_frames_multiprocess_bands",
+        "_write_frames_gpu",
+        "_write_frames_native",
+    ):
+        monkeypatch.setattr(
+            renderer,
+            writer_name,
+            lambda *args, **kwargs: pytest.fail(f"{writer_name} 不应在取消后被调用"),
+        )
+
+    calls = {"count": 0}
+
+    def should_cancel() -> bool:
+        calls["count"] += 1
+        return calls["count"] > 1  # 预扫的第一次检查之后即视为已取消
+
+    with pytest.raises(ExportCancelled):
+        render_subtitle_video(job, should_cancel=should_cancel)
+
+    assert fake_process.terminated is True
+    assert not job.output_path.exists()
+
+
 def test_render_rejects_output_that_is_the_background_video(tmp_path):
     """导出名和背景视频同名时必须提前报错，且绝不能删掉那个源文件。"""
 

@@ -8096,6 +8096,12 @@ class SubtitleRenderWindow(QWidget):
         )
         if not confirmed:
             return
+        # 确认框是非模态嵌套事件循环，期间主窗口仍可交互，导出也可能已经
+        # success/cancelled/failed 收尾（按钮与文案已被 finish 回调重写）。
+        # 此刻再按下闩锁会把「正在停止导出…」永久留在界面上——没有任何
+        # 回调会再改它。复查运行状态，已结束就原样返回。
+        if not self._export_runtime_controller.is_active(runtime):
+            return
         self._export_stop_button.setEnabled(False)
         self._export_status_label.setText("正在停止导出…")
         self._export_runtime_controller.cancel(runtime)

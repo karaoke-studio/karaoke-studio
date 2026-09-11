@@ -2094,6 +2094,39 @@ def test_stop_render_export_keeps_running_when_confirmation_is_rejected(
     assert win._export_status_label.text() == "正在导出… 10/100 帧"
 
 
+def test_stop_render_export_skips_cancel_when_runtime_finished_during_dialog(
+    qapp, monkeypatch
+):
+    """确认框是非模态嵌套循环，期间导出可能已收尾：不得再下「正在停止导出…」闩锁。"""
+    win = _make_window(qapp, monkeypatch)
+    worker = _install_active_render(win)
+    calls = {"count": 0}
+
+    class FlippableThread:
+        def isRunning(self):
+            calls["count"] += 1
+            return calls["count"] == 1  # 弹框前活跃，确认后线程已结束
+
+    win._render_thread = FlippableThread()
+    win._export_status_label.setText("正在导出… 10/100 帧")
+
+    def confirm_then_finish(*_args, **_kwargs):
+        # 模拟确认框打开期间导出完成：finish 回调重写按钮与文案，
+        # 线程随后退出（下一次 isRunning 返回 False）。
+        win._export_stop_button.setEnabled(False)
+        win._export_status_label.setText("导出完成: out.mp4")
+        return True
+
+    monkeypatch.setattr(mw, "fluent_question", confirm_then_finish)
+
+    win._stop_render_export()
+
+    assert worker.cancel_called is False
+    # 不得把 finish 回调写好的终态改写成永远等不到更新的「正在停止导出…」。
+    assert win._export_status_label.text() == "导出完成: out.mp4"
+    assert win._export_stop_button.isEnabled() is False
+
+
 def test_render_log_does_not_flash_ffmpeg_command_in_status(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     # 页面隐藏期间 log 会转为 pending 攒批（见 background_throttle），

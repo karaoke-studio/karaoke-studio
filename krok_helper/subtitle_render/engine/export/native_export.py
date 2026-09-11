@@ -201,6 +201,7 @@ def _configure_gpu_export_with_preflight(
     crop_height: int,
     packed_bands: list[tuple[int, int]],
     logger: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[NativeRendererProcess, dict[str, object], str]:
     """启动 sidecar 并 configure，附显存预检与 worker 降级。
 
@@ -209,6 +210,10 @@ def _configure_gpu_export_with_preflight(
     sidecar、按降级序列用更少 worker 重配；单 worker 仍逼近预算时抛
     :class:`NativeRendererError`，由上层整单回退 CPU Painter 保证导出完成。
     返回 ``(已启动的 renderer, configure 响应, 共享内存 key)``。
+
+    每次起 sidecar / 降级重配前检查 ``should_cancel``：configure 阶段可能
+    长达数十秒且没有别的取消探测点，用户点「停止导出」必须能立即生效，
+    否则降级重试会把「正在停止导出…」拖成分钟级假死。
     """
     response_timeout_s = gpu_export_response_timeout_s(realizations)
     configure_timeout_s = gpu_export_configure_timeout_s(realizations)
@@ -222,6 +227,8 @@ def _configure_gpu_export_with_preflight(
         # 高于物理显存分档上限的中间并发数，避免重复做昂贵配置。
         if fallback_worker_limit is not None and attempt_workers > fallback_worker_limit:
             continue
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。")
         shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
         renderer = NativeRendererProcess(
             renderer_path,
@@ -714,6 +721,7 @@ def iter_gpu_rgba_frames(
         crop_height=crop_height,
         packed_bands=packed_bands,
         logger=logger,
+        should_cancel=should_cancel,
     )
     try:
         with gpu_renderer as renderer, _detach_reader_before_shutdown(lambda: reader):
