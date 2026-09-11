@@ -130,8 +130,7 @@ def build_page_plan(
         if render_index:
             explicit = str(getattr(line, "break_before", "none"))
             blank_between = bool(
-                settings.blank_line_section_enabled
-                and previous_track_index is not None
+                previous_track_index is not None
                 and any(
                     track.lines[index].is_blank or not track.lines[index].chars
                     for index in range(previous_track_index + 1, track_index)
@@ -143,10 +142,16 @@ def build_page_plan(
                 and timing_line_start_ms(line) - _line_end_ms(previous_line)
                 > max(int(settings.section_gap_ms), 0)
             )
-            if explicit == "paragraph" or blank_between or timed_gap:
+            if (
+                explicit == "paragraph"
+                or (blank_between and settings.blank_line_section_enabled)
+                or timed_gap
+            ):
                 start_page()
                 start_section()
-            elif explicit == "page":
+            elif explicit == "page" or (
+                blank_between and settings.blank_line_page_enabled
+            ):
                 start_page()
             elif current_page_count >= rows_per_page:
                 start_page()

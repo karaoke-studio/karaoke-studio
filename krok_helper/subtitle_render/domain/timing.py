@@ -202,6 +202,7 @@ class SubtitleLoadingSettings:
     time_gap_section_enabled: bool = True
     section_gap_ms: int = 3100
     blank_line_section_enabled: bool = True
+    blank_line_page_enabled: bool = False
     rows_per_page: int = 2
     allocate_layout_by_actual_rows: bool = False
     apply_sug_export_compensation: bool = True

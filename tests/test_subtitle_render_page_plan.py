@@ -194,6 +194,31 @@ def test_blank_lines_collapse_to_one_section_boundary():
     ]
 
 
+def test_blank_lines_can_start_a_page_without_starting_a_section():
+    style = Style()
+    track = TimingTrack(
+        lines=[
+            _line(0),
+            TimingLine(is_blank=True),
+            TimingLine(is_blank=True),
+            _line(1),
+        ]
+    )
+    plan = build_page_plan(
+        track,
+        SubtitleLoadingSettings(
+            time_gap_section_enabled=False,
+            blank_line_section_enabled=False,
+            blank_line_page_enabled=True,
+            rows_per_page=4,
+        ),
+        style,
+    )
+    assert [[page.line_count for page in section.pages] for section in plan.sections] == [
+        [1, 1]
+    ]
+
+
 def test_partial_pages_keep_the_base_row_default_layout():
     base = Style()
     custom_three = LyricsLayout(
@@ -674,6 +699,24 @@ def test_subtitle_loading_settings_round_trips_sug_export_compensation_flag() ->
         ).apply_sug_export_compensation
         is True
     )
+
+
+def test_subtitle_loading_settings_round_trips_blank_line_page_flag() -> None:
+    from krok_helper.subtitle_render.domain.models import (
+        subtitle_loading_settings_from_dict,
+        subtitle_loading_settings_to_dict,
+    )
+
+    settings = SubtitleLoadingSettings(
+        blank_line_section_enabled=False,
+        blank_line_page_enabled=True,
+    )
+    payload = subtitle_loading_settings_to_dict(settings)
+    assert payload["blank_line_page_enabled"] is True
+    assert subtitle_loading_settings_from_dict(payload) == settings
+
+    payload.pop("blank_line_page_enabled")
+    assert subtitle_loading_settings_from_dict(payload).blank_line_page_enabled is False
 
 
 def test_insert_section_at_page_head_splits_before_whole_page():

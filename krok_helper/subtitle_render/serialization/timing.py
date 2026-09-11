@@ -22,6 +22,7 @@ def subtitle_loading_settings_to_dict(
         "time_gap_section_enabled": bool(settings.time_gap_section_enabled),
         "section_gap_ms": max(int(settings.section_gap_ms), 0),
         "blank_line_section_enabled": bool(settings.blank_line_section_enabled),
+        "blank_line_page_enabled": bool(settings.blank_line_page_enabled),
         "rows_per_page": max(1, min(int(settings.rows_per_page), 4)),
         "allocate_layout_by_actual_rows": bool(
             settings.allocate_layout_by_actual_rows
@@ -49,6 +50,9 @@ def subtitle_loading_settings_from_dict(value: object) -> SubtitleLoadingSetting
         section_gap_ms=gap,
         blank_line_section_enabled=bool(
             value.get("blank_line_section_enabled", defaults.blank_line_section_enabled)
+        ),
+        blank_line_page_enabled=bool(
+            value.get("blank_line_page_enabled", defaults.blank_line_page_enabled)
         ),
         rows_per_page=rows,
         allocate_layout_by_actual_rows=bool(

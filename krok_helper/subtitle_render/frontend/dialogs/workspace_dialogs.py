@@ -325,13 +325,20 @@ class SubtitleLoadingSettingsDialog(ModelessDialog):
             "开始新段落。仅在“按演唱空隙分段”启用时生效。"
         )
         form.addRow("分段间隔", self._gap_spin)
-        self._blank_enabled = CheckBox("空行开始新段落", self)
+        self._blank_enabled = CheckBox("空行识别为分段", self)
         self._blank_enabled.setToolTip(
             "启用后，字幕源中的一个或多个连续空行会在下一条有效歌词前开始新段落。"
             "空行不占用字幕轨道，也不计入每页行数。关闭后，空行不影响段落和分页，"
             "也不会在歌词表中单独占一行。"
         )
         form.addRow("", self._blank_enabled)
+        self._blank_page_enabled = CheckBox("空行识别为分页", self)
+        self._blank_page_enabled.setToolTip(
+            "启用后，字幕源中的一个或多个连续空行会在下一条有效歌词前开始新页面，"
+            "但不会开始新段落。此选项与“空行识别为分段”互斥，也可以都不启用。"
+            "空行不占用字幕轨道，也不计入每页行数。"
+        )
+        form.addRow("", self._blank_page_enabled)
         self._rows_spin = FluentSpinBox(self)
         self._rows_spin.setRange(1, 4)
         self._rows_spin.setToolTip(
@@ -373,6 +380,8 @@ class SubtitleLoadingSettingsDialog(ModelessDialog):
         self._global_defaults = global_defaults
         self._custom_draft = effective
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._blank_enabled.toggled.connect(self._on_blank_section_toggled)
+        self._blank_page_enabled.toggled.connect(self._on_blank_page_toggled)
         self._set_values(global_defaults if mode == "global" else effective)
         self.adjustSize()
         if anchor is not None:
@@ -383,6 +392,10 @@ class SubtitleLoadingSettingsDialog(ModelessDialog):
         self._gap_enabled.setChecked(settings.time_gap_section_enabled)
         self._gap_spin.setValue(settings.section_gap_ms)
         self._blank_enabled.setChecked(settings.blank_line_section_enabled)
+        self._blank_page_enabled.setChecked(
+            settings.blank_line_page_enabled
+            and not settings.blank_line_section_enabled
+        )
         self._rows_spin.setValue(settings.rows_per_page)
         self._actual_rows_layout.setChecked(settings.allocate_layout_by_actual_rows)
         self._sug_offset_check.setChecked(settings.apply_sug_export_compensation)
@@ -392,10 +405,19 @@ class SubtitleLoadingSettingsDialog(ModelessDialog):
             time_gap_section_enabled=self._gap_enabled.isChecked(),
             section_gap_ms=self._gap_spin.value(),
             blank_line_section_enabled=self._blank_enabled.isChecked(),
+            blank_line_page_enabled=self._blank_page_enabled.isChecked(),
             rows_per_page=self._rows_spin.value(),
             allocate_layout_by_actual_rows=self._actual_rows_layout.isChecked(),
             apply_sug_export_compensation=self._sug_offset_check.isChecked(),
         )
+
+    def _on_blank_section_toggled(self, checked: bool) -> None:
+        if checked:
+            self._blank_page_enabled.setChecked(False)
+
+    def _on_blank_page_toggled(self, checked: bool) -> None:
+        if checked:
+            self._blank_enabled.setChecked(False)
 
     def _on_mode_changed(self, _index: int) -> None:
         mode = str(self._mode_combo.currentData() or "global")
