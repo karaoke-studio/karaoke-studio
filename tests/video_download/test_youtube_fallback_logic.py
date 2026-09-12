@@ -86,6 +86,20 @@ def test_returns_true_for_youtube_reload_error() -> None:
     assert service._should_retry_youtube_reload(YOUTUBE_URL, normalized) is True
 
 
+def test_reload_profile_failure_can_advance_to_visionos_fallback() -> None:
+    service = YtDlpService()
+    message = service._normalize_error_message(Exception("The page needs to be reloaded."))
+
+    assert (
+        service._should_retry_youtube_with_fallback(
+            YOUTUBE_URL,
+            message,
+            extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+        )
+        is True
+    )
+
+
 def test_youtube_reload_retry_is_limited_to_first_client_profile() -> None:
     service = YtDlpService()
 
@@ -149,7 +163,31 @@ def test_extract_generic_fallback_never_drops_cookie(monkeypatch) -> None:
     ]
 
 
-def test_extract_reload_retry_stops_after_one_client_switch(monkeypatch) -> None:
+def test_extract_reload_retry_advances_to_visionos_without_dropping_cookie(monkeypatch) -> None:
+    service = YtDlpService()
+    calls: list[tuple[str | None, str]] = []
+
+    def fake_extract(_youtube_dl, url, cookie_file, *, extractor_args_hint="", allow_playlist=False):
+        del _youtube_dl, url, allow_playlist
+        calls.append((cookie_file, extractor_args_hint))
+        if extractor_args_hint != YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
+            raise VideoDownloadError("The page needs to be reloaded.")
+        return {"title": "ok", "duration": 1, "formats": []}
+
+    monkeypatch.setattr(service, "_extract_info_with_python_api", fake_extract)
+
+    raw_info, hint = service._extract_info_with_python_retry(object, YOUTUBE_URL, "cookies.txt")
+
+    assert raw_info["title"] == "ok"
+    assert hint == YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+    assert calls == [
+        ("cookies.txt", ""),
+        ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
+        ("cookies.txt", YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
+    ]
+
+
+def test_extract_reload_retry_stops_after_all_client_profiles_fail(monkeypatch) -> None:
     service = YtDlpService()
     calls: list[tuple[str | None, str]] = []
 
@@ -166,6 +204,7 @@ def test_extract_reload_retry_stops_after_one_client_switch(monkeypatch) -> None
     assert calls == [
         ("cookies.txt", ""),
         ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
+        ("cookies.txt", YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
     ]
 
 
@@ -190,6 +229,85 @@ def test_cli_reload_retry_preserves_cookie_and_client_hint(monkeypatch) -> None:
         ("cookies.txt", ""),
         ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
     ]
+
+
+def test_cli_reload_retry_advances_to_visionos_without_dropping_cookie(monkeypatch) -> None:
+    service = YtDlpService()
+    calls: list[tuple[str | None, str]] = []
+
+    def fake_extract(url, cookie_file, *, extractor_args_hint="", allow_playlist=False):
+        del url, allow_playlist
+        calls.append((cookie_file, extractor_args_hint))
+        if extractor_args_hint != YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
+            raise VideoDownloadError("The page needs to be reloaded.")
+        return {"title": "ok", "duration": 1, "formats": []}
+
+    monkeypatch.setattr(service, "_extract_info_with_cli", fake_extract)
+
+    raw_info, hint = service._extract_info_with_cli_retry(YOUTUBE_URL, "cookies.txt")
+
+    assert raw_info["title"] == "ok"
+    assert hint == YOUTUBE_FALLBACK_EXTRACTOR_ARGS
+    assert calls == [
+        ("cookies.txt", ""),
+        ("cookies.txt", YOUTUBE_RELOAD_EXTRACTOR_ARGS),
+        ("cookies.txt", YOUTUBE_FALLBACK_EXTRACTOR_ARGS),
+    ]
+
+
+def test_python_download_reload_failure_advances_to_visionos(monkeypatch, tmp_path) -> None:
+    service = YtDlpService()
+    task = type("Task", (), {"url": YOUTUBE_URL})()
+    calls: list[str] = []
+
+    def fake_download(*args, extractor_args_hint="", **kwargs):
+        del args, kwargs
+        calls.append(extractor_args_hint)
+        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
+            raise VideoDownloadError("The page needs to be reloaded.")
+
+    monkeypatch.setattr(service, "_download_with_python_api", fake_download)
+
+    service._download_with_python_retry(
+        object,
+        task,
+        object(),
+        lambda _progress: None,
+        save_dir=tmp_path,
+        output_stem="video",
+        outtmpl=str(tmp_path / "video.%(ext)s"),
+        selected_format="best",
+        extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+    )
+
+    assert calls == [YOUTUBE_RELOAD_EXTRACTOR_ARGS, YOUTUBE_FALLBACK_EXTRACTOR_ARGS]
+
+
+def test_cli_download_reload_failure_advances_to_visionos(monkeypatch, tmp_path) -> None:
+    service = YtDlpService()
+    task = type("Task", (), {"url": YOUTUBE_URL})()
+    calls: list[str] = []
+
+    def fake_download(*args, extractor_args_hint="", **kwargs):
+        del args, kwargs
+        calls.append(extractor_args_hint)
+        if extractor_args_hint == YOUTUBE_RELOAD_EXTRACTOR_ARGS:
+            raise VideoDownloadError("The page needs to be reloaded.")
+
+    monkeypatch.setattr(service, "_download_with_cli", fake_download)
+
+    service._download_with_cli_retry(
+        task,
+        object(),
+        lambda _progress: None,
+        save_dir=tmp_path,
+        output_stem="video",
+        outtmpl=str(tmp_path / "video.%(ext)s"),
+        selected_format="best",
+        extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+    )
+
+    assert calls == [YOUTUBE_RELOAD_EXTRACTOR_ARGS, YOUTUBE_FALLBACK_EXTRACTOR_ARGS]
 
 
 def test_returns_false_when_already_using_fallback_args() -> None:

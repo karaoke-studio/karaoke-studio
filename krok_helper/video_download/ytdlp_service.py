@@ -469,16 +469,34 @@ class YtDlpService:
             return self._extract_info_with_python_api(youtube_dl, url, cookie_file, allow_playlist=allow_playlist), ""
         except VideoDownloadError as exc:
             if self._should_retry_youtube_reload(url, str(exc)):
-                return (
-                    self._extract_info_with_python_api(
-                        youtube_dl,
+                try:
+                    return (
+                        self._extract_info_with_python_api(
+                            youtube_dl,
+                            url,
+                            cookie_file,
+                            extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                            allow_playlist=allow_playlist,
+                        ),
+                        YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                    )
+                except VideoDownloadError as reload_exc:
+                    if self._should_retry_youtube_with_fallback(
                         url,
-                        cookie_file,
-                        extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
-                        allow_playlist=allow_playlist,
-                    ),
-                    YOUTUBE_RELOAD_EXTRACTOR_ARGS,
-                )
+                        str(reload_exc),
+                        YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                    ):
+                        return (
+                            self._extract_info_with_python_api(
+                                youtube_dl,
+                                url,
+                                cookie_file,
+                                extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+                                allow_playlist=allow_playlist,
+                            ),
+                            YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+                        )
+                    raise
             if self._should_retry_youtube_with_fallback(url, str(exc)):
                 return (
                     self._extract_info_with_python_api(
@@ -534,15 +552,32 @@ class YtDlpService:
             return self._extract_info_with_cli(url, cookie_file, allow_playlist=allow_playlist), ""
         except VideoDownloadError as exc:
             if self._should_retry_youtube_reload(url, str(exc)):
-                return (
-                    self._extract_info_with_cli(
+                try:
+                    return (
+                        self._extract_info_with_cli(
+                            url,
+                            cookie_file,
+                            extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                            allow_playlist=allow_playlist,
+                        ),
+                        YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                    )
+                except VideoDownloadError as reload_exc:
+                    if self._should_retry_youtube_with_fallback(
                         url,
-                        cookie_file,
-                        extractor_args_hint=YOUTUBE_RELOAD_EXTRACTOR_ARGS,
-                        allow_playlist=allow_playlist,
-                    ),
-                    YOUTUBE_RELOAD_EXTRACTOR_ARGS,
-                )
+                        str(reload_exc),
+                        YOUTUBE_RELOAD_EXTRACTOR_ARGS,
+                    ):
+                        return (
+                            self._extract_info_with_cli(
+                                url,
+                                cookie_file,
+                                extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+                                allow_playlist=allow_playlist,
+                            ),
+                            YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+                        )
+                    raise
             if self._should_retry_youtube_with_fallback(url, str(exc)):
                 return (
                     self._extract_info_with_cli(
@@ -1717,6 +1752,8 @@ class YtDlpService:
         return (
             "not a bot" in lower
             or "cookies-from-browser" in lower
+            or "the page needs to be reloaded" in lower
+            or "please reload this page" in lower
             or "http error 403" in lower
             or "requested format is not available" in lower
             or "video is not available" in lower
@@ -1725,6 +1762,7 @@ class YtDlpService:
             or "empty file" in lower
             or "空文件" in message
             or "机器人校验" in message
+            or "YouTube 播放客户端返回临时错误" in message
             or "访问被拒绝" in message
         )
 
