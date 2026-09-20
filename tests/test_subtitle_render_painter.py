@@ -11113,6 +11113,192 @@ def test_mixed_row_layouts_judge_conflicts_by_visual_row(qapp):
     assert windows[2][1] + 300 == windows[4][0]
 
 
+def _shrinking_page_style(*layouts: LyricsLayout) -> Style:
+    """底部对齐、无动画的缩页切换测试样式（同步退场 + 每句同步全开）。"""
+    return replace(
+        Style(font_family="Arial", font_family_latin="Arial"),
+        layouts=list(layouts),
+        sync_entry=True,
+        sync_ending=True,
+        sync_each_page=True,
+        entry_anim="none",
+        exit_anim="none",
+        auto_fill_section_time=True,
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+
+
+def test_sync_ending_air_row_exits_with_the_page_turn(qapp):
+    """3行→2行缩页：旧页顶行没有同视觉行后继，不得活过本页翻页点。
+
+    同步退场曾把顶行挂到页内最晚边界（A2 演唱结束 + tail = 5_400），
+    而中 / 底行已被下一页顶掉——顶行「和空气同步」，在下一页上场后
+    还挂在屏幕上。修复后顶行与本页最后一行同时退场。
+    """
+
+    three = LyricsLayout(
+        name="三行",
+        layout_id="L3",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "center", "right"],
+    )
+    two = LyricsLayout(
+        name="两行",
+        layout_id="L2",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "right"],
+    )
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A0", 1_000, 2_000),
+            ("A1", 2_200, 3_200),
+            ("A2", 3_400, 4_400),
+            ("B0", 4_600, 5_600),
+            ("B1", 5_800, 6_800),
+        )
+    ]
+    for line in lines[:3]:
+        line.layout_index = 1
+    for line in lines[3:]:
+        line.layout_index = 2
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(3, "L3"), TrackPage(2, "L2")])]
+        ),
+    )
+    style = _shrinking_page_style(three, two)
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+
+    # 中 / 底行被同视觉行的 B0 / B1 顶掉（同轨间隔 300）。
+    assert windows[1][1] + 300 == windows[3][0]
+    assert windows[2][1] + 300 == windows[4][0]
+    # 顶行与本页最后退场的行一起消失，不再活到同步终点 5_400。
+    assert windows[0][1] == max(windows[1][1], windows[2][1]) == 4_400
+
+
+def test_sync_ending_air_rows_exit_with_the_page_turn_on_wider_shrink(qapp):
+    """4行→2行缩页：顶部两条空气行都收到本页翻页点。"""
+
+    four = LyricsLayout(
+        name="四行",
+        layout_id="L4",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "center", "right", "left"],
+    )
+    two = LyricsLayout(
+        name="两行",
+        layout_id="L2",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "right"],
+    )
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A0", 1_000, 2_000),
+            ("A1", 2_200, 3_200),
+            ("A2", 3_400, 4_400),
+            ("A3", 4_600, 5_600),
+            ("B0", 5_800, 6_800),
+            ("B1", 7_000, 8_000),
+        )
+    ]
+    for line in lines[:4]:
+        line.layout_index = 1
+    for line in lines[4:]:
+        line.layout_index = 2
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(4, "L4"), TrackPage(2, "L2")])]
+        ),
+    )
+    style = _shrinking_page_style(four, two)
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+
+    # 顶两条空气行与最后退场的底行（A3）同时消失。
+    assert windows[0][1] == windows[1][1] == windows[3][1] == 5_600
+    assert windows[2][1] + 300 == windows[4][0]
+    assert windows[3][1] + 300 == windows[5][0]
+
+
+def test_sync_ending_air_row_keeps_manual_end_and_section_tail(qapp):
+    """空气行的手工消失时刻不被钳制；段尾页没有同段下一页，保持段尾填充。"""
+
+    three = LyricsLayout(
+        name="三行",
+        layout_id="L3",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "center", "right"],
+    )
+    two = LyricsLayout(
+        name="两行",
+        layout_id="L2",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "right"],
+    )
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A0", 1_000, 2_000),
+            ("A1", 2_200, 3_200),
+            ("A2", 3_400, 4_400),
+            ("B0", 4_600, 5_600),
+            ("B1", 5_800, 6_800),
+            ("C0", 30_000, 31_000),
+            ("C1", 31_200, 32_200),
+            ("C2", 32_400, 33_400),
+        )
+    ]
+    for line in lines[:3]:
+        line.layout_index = 1
+    for line in lines[3:5]:
+        line.layout_index = 2
+    for line in lines[5:]:
+        line.layout_index = 1
+    lines[0].display_end_override_ms = 9_000  # 缩页空气行的手工消失时刻
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [
+                TrackSection([TrackPage(3, "L3"), TrackPage(2, "L2")]),
+                TrackSection([TrackPage(3, "L3")]),
+            ]
+        ),
+    )
+    style = _shrinking_page_style(three, two)
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+
+    # 缩页空气行带手工消失时刻：原样保留，不参与钳制。
+    assert windows[0][1] == 9_000
+    # 段尾页（第二段）没有同段下一页：顶行保持段尾填充到本页结束。
+    assert windows[5][1] == windows[6][1] == windows[7][1] == 34_400
+
+
 def test_cross_page_line_ink_height_excludes_layout_line_gap(qapp):
     line = TimingLine(chars=[TimingChar("Ag", 1_000)], end_ms=2_000)
     track = TimingTrack(lines=[line])

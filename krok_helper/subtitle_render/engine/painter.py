@@ -281,6 +281,7 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     apply_animation_time_guard,
     build_measured_collision_bands as _build_measured_collision_bands,
     clear_display_line_resolution_cache,
+    clamp_synced_air_rows_to_page_turn as _clamp_synced_air_rows_to_page_turn,
     collision_squeeze_pairs as _collision_squeeze_pairs,
     display_line_collision_time_window as _display_line_collision_time_window,
     display_line_compute_kwargs,
@@ -2713,6 +2714,38 @@ def _apply_measured_section_time_fill(
     )
 
 
+def _clamp_synced_air_rows(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+    *,
+    geometry_cache: CollisionGeometryCache | None = None,
+) -> list[DisplayLine]:
+    """Bind Painter geometry to the layout-owned air-row page-turn clamp."""
+
+    if not (style.sync_ending and style.sync_each_page) or not display_lines:
+        return display_lines
+    time_window = (
+        "stable" if style.allow_entry_exit_animation_overlap else "display"
+    )
+    measured = measure_collision_bands(
+        logical_w,
+        logical_h,
+        track,
+        style,
+        display_lines,
+        time_window=time_window,
+        geometry_cache=geometry_cache,
+    )
+    return _clamp_synced_air_rows_to_page_turn(
+        display_lines,
+        style,
+        measured,
+    )
+
+
 def animation_guard_ports_for_style(
     logical_w: int,
     logical_h: int,
@@ -2811,6 +2844,10 @@ def display_lines_for_style(
                     guard_ports,
                     enforce_inter_page_gap=enforce_gap,
                 )
+            ),
+            clamp_synced_air_rows=lambda items: _clamp_synced_air_rows(
+                width, height, track, style, items,
+                geometry_cache=geometry_cache,
             ),
         )
 

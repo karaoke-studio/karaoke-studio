@@ -423,6 +423,100 @@ def fill_section_time_from_measurements(
     return changed
 
 
+def clamp_synced_air_rows_to_page_turn(
+    display_lines: DisplayLines,
+    style: Style,
+    measured: MeasuredCollisionBands,
+) -> DisplayLines:
+    """缩行页切换时收紧旧页没有后继的「空气行」，不让它活过翻页点。
+
+    同步退场把整页统一到页内最晚退场边界，随后守卫按同一视觉行逐对顶掉
+    有后继的行。旧页比新页高时（3→2、4→3、4→2…），顶部若干行在下一页
+    没有同视觉行的句子——既不会被顶掉也不参与段内挂靠，于是保持同步
+    终点、活过翻页点继续挂在屏幕上（「和空气同步」）。这里以同页其余行
+    的最终退场为上界收紧这些行：本页最后一行退场时空气行一起消失，
+    与同页行为一致；页面未被顶掉（自然翻页）时钳制是空操作。
+    """
+
+    if not (style.sync_ending and style.sync_each_page):
+        return display_lines
+    if not display_lines or not measured:
+        return display_lines
+    bands = {
+        render_index: band
+        for render_index, _page_id, band, _gap in measured
+    }
+    if not bands:
+        return display_lines
+
+    page_order: list[tuple[int, int]] = []
+    page_indices: dict[tuple[int, int], list[int]] = {}
+    for index, item in enumerate(display_lines):
+        page_id = (int(item.section_index), int(item.page_index))
+        if page_id not in page_indices:
+            page_order.append(page_id)
+            page_indices[page_id] = []
+        page_indices[page_id].append(index)
+    next_page: dict[tuple[int, int], tuple[int, int] | None] = {}
+    for position, page_id in enumerate(page_order):
+        following = (
+            page_order[position + 1]
+            if position + 1 < len(page_order)
+            else None
+        )
+        # 相邻页必须同段：跨段的下一页按「无下一页」处理，段尾页交给
+        # 段内填充与段末清屏，不在这里收紧。
+        next_page[page_id] = (
+            following
+            if following is not None and following[0] == page_id[0]
+            else None
+        )
+
+    def visible_end_ms(item: DisplayLine) -> int:
+        if item.takeover_end_ms is not None:
+            return min(int(item.display_end_ms), int(item.takeover_end_ms))
+        return int(item.display_end_ms)
+
+    changed = list(display_lines)
+    for page_id in page_order:
+        following = next_page[page_id]
+        if following is None:
+            continue
+        following_bands = [
+            bands[index]
+            for index in page_indices[following]
+            if index in bands
+        ]
+        if not following_bands:
+            continue
+        matched: list[int] = []
+        air: list[int] = []
+        for index in page_indices[page_id]:
+            if index not in bands:
+                continue
+            item = changed[index]
+            has_successor = any(
+                bands_share_layout_axis(bands[index], band)
+                for band in following_bands
+            )
+            if has_successor:
+                matched.append(index)
+            elif item.line.display_end_override_ms is None:
+                air.append(index)
+        if not air or not matched:
+            continue
+        boundary = max(visible_end_ms(changed[index]) for index in matched)
+        for index in air:
+            item = changed[index]
+            new_end = max(
+                min(int(item.display_end_ms), boundary),
+                int(item.display_start_ms),
+            )
+            if new_end != item.display_end_ms:
+                changed[index] = replace(item, display_end_ms=new_end)
+    return changed
+
+
 class DisplayResolutionCache:
     """Bounded LRU cache that retains each display line's track owner."""
 
@@ -485,6 +579,8 @@ class DisplayResolutionPorts:
     secondary_collision_pairs: Callable[[DisplayLines], CollisionPairs]
     fill_section_time: Callable[[DisplayLines], DisplayLines]
     apply_animation_guard: Callable[[DisplayLines, bool], DisplayLines]
+    clamp_synced_air_rows: Callable[[DisplayLines], DisplayLines] | None = None
+    """可选的「空气行翻页钳制」；None = 该调用方不提供几何测量，跳过。"""
 
 
 @dataclass(frozen=True)
@@ -1000,7 +1096,9 @@ def resolve_display_lines(
     冲突解算；**自动填充段内时间挂在全部冲突解完之后**，再由与填充无关的
     无条件兜底守卫收口——填充造出的重叠当场兜掉，守卫内循环有趟数
     上限，密集冲突时最后一轮可能未完全收敛，输出前统一再兜一次底。
-    （把填充提前进每轮曾引发实际工程的显示窗错误，已回退。）
+    （把填充提前进每轮曾引发实际工程的显示窗错误，已回退。）最后一步
+    是「空气行翻页钳制」：缩行页切换时旧页没有后继的行以同页其余行的
+    最终退场为上界收紧，钳制只依赖最终边界，因此必须收在末尾。
 
     每个多趟步骤完成后按 ``display`` 阶段上报进度（步骤即真实工作量：
     逐趟碰撞测量占整轨重排的大头）。步骤开始前还会登记当前槽位，供
@@ -1077,6 +1175,11 @@ def resolve_display_lines(
         # 与填充无关的无条件兜底守卫：既兜填充造出的重叠，也兜守卫内循
         # 环未收敛的残余（含段末清屏钳制）。
         resolved = ports.apply_animation_guard(resolved, avoid_collisions)
+        # 缩行页切换的「空气行」翻页钳制挂在最后：钳制上界取同页其余行的
+        # 最终退场，必须等填充与兜底守卫都落定后再算；它只收紧显示窗口，
+        # 不会造出新的冲突。
+        if ports.clamp_synced_air_rows is not None:
+            resolved = ports.clamp_synced_air_rows(resolved)
         report_render_progress("display", 7, _DISPLAY_RESOLUTION_PHASES)
         return resolved
     finally:
@@ -1147,6 +1250,7 @@ __all__ = [
     "StyleDisplayResolutionPorts",
     "apply_animation_time_guard",
     "cached_display_line_resolution",
+    "clamp_synced_air_rows_to_page_turn",
     "clear_display_line_resolution_cache",
     "display_line_compute_kwargs",
     "resolve_display_lines",
