@@ -3127,8 +3127,11 @@ class SubtitleRenderWindow(QWidget):
                 )
         else:
             self._project_document.subtitle_axis_singer_ids = persisted_filter
+            # 旧工程快照没有分组名 key；None 必须先判型再 strip，否则会变成
+            # 字面量 "None" 显示在下拉里。
+            name_text = axis_name if isinstance(axis_name, str) else ""
             self._project_document.subtitle_axis_name = (
-                (str(axis_name).strip() or None) if persisted_filter is not None else None
+                (name_text.strip() or None) if persisted_filter is not None else None
             )
             self._primary_source_baseline = deepcopy(track)
         return track

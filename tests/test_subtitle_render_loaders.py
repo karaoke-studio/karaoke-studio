@@ -922,6 +922,34 @@ def test_project_reopen_restores_axis_filters_from_snapshot(qapp, monkeypatch, t
     ]
 
 
+def test_project_reopen_legacy_snapshot_without_axis_name(qapp, monkeypatch, tmp_path):
+    """旧工程快照只有轴过滤、没有分组名 key：重开不得显示「主字幕（None）」。"""
+    sug = tmp_path / "grouped.sug"
+    _save_grouped_sug(
+        sug,
+        [("a", "君", 1000, 1400), ("b", "酱", 2000, 2400)],
+        [("主轴", ["a"], True), ("副轴", ["b"], False)],
+    )
+    win = _make_window(qapp, monkeypatch)
+
+    win._apply_project_data(
+        {
+            "subtitle_path": str(sug),
+            "subtitle_sug_axis_singer_ids": ["a"],
+            "extra_subtitle_sources": [
+                {"name": "副轴", "path": str(sug), "sug_axis_singer_ids": ["b"]}
+            ],
+        }
+    )
+
+    assert win._project_document.subtitle_axis_singer_ids == frozenset({"a"})
+    assert win._project_document.subtitle_axis_name is None
+    combo = win._lyrics_panel._source_combo
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "主字幕", "副轴", "标题 1"
+    ]
+
+
 def test_workflow_handoff_same_path_merges_preserving_overlays(
     qapp, monkeypatch, tmp_path
 ):
