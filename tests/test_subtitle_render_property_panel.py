@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 from dataclasses import replace
 import json
 import os
@@ -1128,8 +1129,10 @@ def test_pending_app_preferences_are_flushed_on_close(qapp):
     win.close()
 
     assert provider.saves == baseline + 1
+    # 布局标量改动只留在工程里；关闭时补写的是软件级默认的当前值。
     assert (
-        style_from_dict(provider.data["style"]).line_gap_px == win._style.line_gap_px
+        style_from_dict(provider.data["style"]).line_gap_px
+        == win._app_default_style.line_gap_px
     )
 
 
@@ -1386,10 +1389,11 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     win._save_builtin_scheme_default("global")
     saved = style_from_dict(provider.data["style"])
     assert saved.fill_color == "#333333"
-    # Layout preferences are remembered automatically; the explicit font/color
-    # save action still updates only its requested scheme target.  The layout
-    # catalog merges by name: previous library entries are never dropped.
-    assert saved.line_gap_px == 99
+    # Layout edits stay in the project: neither the default-layout scalars nor
+    # same-named catalog entries auto-persist into app defaults — only the
+    # explicit "保存为软件默认布局" action updates them.  The layout catalog
+    # still accumulates new names; previous library entries are never dropped.
+    assert saved.line_gap_px == 21
     saved_gap_by_name = {
         layout.name: layout.line_gap_px for layout in saved.layouts
     }
@@ -1422,7 +1426,7 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     assert win._style.fill_color == "#333333"
     assert win._style.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#444444"
     assert "镜音" not in win._style.custom_style_schemes
-    assert win._style.line_gap_px == 99
+    assert win._style.line_gap_px == 21
     new_project_names = [layout.name for layout in win._style.layouts]
     assert new_project_names[0] == "保留布局"
     assert "项目布局" in new_project_names
@@ -1439,7 +1443,8 @@ def test_layout_library_merges_on_project_load_and_keeps_entries(qapp):
     names = {layout.name for layout in win._app_default_style.layouts}
     assert {"我的布局", "タイトル左上"} <= names
 
-    # 打开另一个工程：库条目保留，工程自带布局并入，同名以最新为准
+    # 打开另一个工程：库条目保留，工程自带的新名字并入；同名条目以库为准，
+    # 工程内的同名修改只留在工程里（须显式保存才更新软件级默认）
     win._apply_project_data(
         {
             "style": style_to_dict(
@@ -1458,8 +1463,73 @@ def test_layout_library_merges_on_project_load_and_keeps_entries(qapp):
         for layout in win._app_default_style.layouts
     }
     assert gap_by_name["工程B布局"] == 66
-    assert gap_by_name["我的布局"] == 77
+    assert gap_by_name["我的布局"] == 55
     assert "タイトル左上" in gap_by_name
+    project_gap_by_name = {
+        layout.name: layout.line_gap_px for layout in win._style.layouts
+    }
+    assert project_gap_by_name["我的布局"] == 77
+
+
+def test_layout_edits_stay_in_project_until_explicitly_saved(qapp):
+    provider = _FontMigrationSettingsProvider({})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    # 1) 默认布局（「N 行布局（默认）」，Style 上的标量）在工程里改：
+    #    只留在工程，软件级默认不受影响。
+    scalar_gap_before = win._app_default_style.line_gap_px
+    win._apply_style(replace(Style(), line_gap_px=123))
+    assert win._style.line_gap_px == 123
+    assert win._app_default_style.line_gap_px == scalar_gap_before
+
+    # 2) 同名布局条目（出厂「3 行布局」）在工程里改：库中同名条目不动。
+    #    （2 行没有命名预设——「2 行布局（默认）」就是上面的默认标量布局。）
+    entry_before = deepcopy(
+        next(
+            layout
+            for layout in win._app_default_style.layouts
+            if layout.name == "3 行布局"
+        )
+    )
+    win._apply_style(
+        replace(
+            Style(),
+            line_gap_px=123,
+            layouts=[replace(entry_before, line_gap_px=177)],
+        )
+    )
+    entry_after = next(
+        layout
+        for layout in win._app_default_style.layouts
+        if layout.name == "3 行布局"
+    )
+    assert entry_after == entry_before
+    assert (
+        next(
+            layout
+            for layout in win._style.layouts
+            if layout.name == "3 行布局"
+        ).line_gap_px
+        == 177
+    )
+
+    # 3) 显式「保存为软件默认布局」：同名条目按当前工程值落库。
+    index = next(
+        i
+        for i, layout in enumerate(win._style.layouts, start=1)
+        if layout.name == "3 行布局"
+    )
+    win._save_layout_default(index)
+    entry_saved = next(
+        layout
+        for layout in win._app_default_style.layouts
+        if layout.name == "3 行布局"
+    )
+    assert entry_saved.line_gap_px == 177
+
+    # 4) 默认布局标量同理：显式保存（index 0）才写入软件级默认。
+    win._save_layout_default(0)
+    assert win._app_default_style.line_gap_px == 123
 
 
 def test_deleting_custom_layout_removes_it_from_library(qapp):
@@ -1619,7 +1689,7 @@ def test_current_style_is_resolved_for_persisted_output_height(qapp):
     assert win._style.layout_reference_height == 2160
 
 
-def test_layout_defaults_follow_live_user_edits_at_app_reference_height(
+def test_layout_defaults_require_explicit_save_at_app_reference_height(
     qapp, monkeypatch
 ):
     initial_style = Style(
@@ -1649,21 +1719,30 @@ def test_layout_defaults_follow_live_user_edits_at_app_reference_height(
         layout_reference_height=720,
     )
 
-    # User layout edits automatically become the next new project's defaults,
-    # normalized from the current 720p project to the app's 1080p reference.
-    # The layout library merges by name: pre-existing entries (保留布局) are
-    # kept at their stored reference values instead of being dropped.
+    # 布局编辑只留在工程里：软件级标量默认与同名库条目都不自动跟随。
     win._apply_style(project_style)
     win._flush_persisted_state_save()
+    saved = style_from_dict(provider.data["style"])
+    assert saved.line_gap_px == 21
+    assert saved.horizontal_margin_px == 31
+    saved_margin_by_name = {
+        layout.name: layout.line_y_margin_px for layout in saved.layouts
+    }
+    assert saved_margin_by_name["副歌布局"] == 41
+    assert saved_margin_by_name["保留布局"] == 51
+    # 库里没有的新名字仍跨工程积累，并归一到软件级基准高度（720→1080）。
+    assert saved_margin_by_name["项目新增"] == 90
+
+    # 显式「保存为软件默认布局」才落库，标量同样按 720→1080 等比归一。
+    win._save_layout_default(0)
     saved = style_from_dict(provider.data["style"])
     assert saved.line_gap_px == 105
     assert saved.horizontal_margin_px == 120
     saved_margin_by_name = {
         layout.name: layout.line_y_margin_px for layout in saved.layouts
     }
-    assert saved_margin_by_name["副歌布局"] == 108
+    assert saved_margin_by_name["副歌布局"] == 41
     assert saved_margin_by_name["项目新增"] == 90
-    assert saved_margin_by_name["保留布局"] == 51
 
     win._project_dirty = False
     win._new_project()

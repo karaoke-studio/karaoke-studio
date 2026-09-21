@@ -1775,8 +1775,10 @@ class SubtitleRenderWindow(QWidget):
         self._style, _font_names_changed = normalize_style_font_families(
             plan.style, catalog
         )
-        # 布局库跨工程积累：任何加载进来的布局（含被删后仍随 .yurika 存在的
-        # 自定义布局）都按名字并入软件级库；新建项目传入库自身，合并为幂等。
+        # 布局库跨工程积累：加载进来的布局（含被删后仍随 .yurika 存在的
+        # 自定义布局）里库中没有的名字补进软件级库；同名条目以库为准，
+        # 工程内的同名修改不回写（要更新须显式「保存为软件默认布局」）。
+        # 新建项目传入库自身，合并为幂等。
         self._merge_layouts_into_library(self._style)
         if plan.selected_scheme_key is not None:
             self._selected_scheme_key = plan.selected_scheme_key
@@ -7568,10 +7570,13 @@ class SubtitleRenderWindow(QWidget):
         )
 
     def _merge_layouts_into_library(self, style: Style) -> None:
-        """把一份样式的布局目录按名字并入软件级布局库（同名以最新为准）。
+        """把样式中库里没有的布局按名字补进软件级布局库（只增不改）。
 
         库里已有而来源没有的条目一律保留——布局库跨工程积累，被删除的
-        自定义布局会随仍使用它的工程文件自动回来。仅当库真的变化时落盘。
+        自定义布局会随仍使用它的工程文件自动回来。同名条目以库为准：
+        工程内对同名布局（含出厂「N 行布局」）的修改只留在工程里，要
+        更新软件级默认须在布局导航条点「保存为软件默认布局」。
+        仅当库真的变化时落盘。
         """
 
         target_reference = max(int(self._app_default_style.layout_reference_height), 1)
@@ -7579,46 +7584,20 @@ class SubtitleRenderWindow(QWidget):
             rescale_layout_sizes(deepcopy(style), target_reference)
         )
         library = deepcopy(self._app_default_style.layouts)
+        known_names = {entry.name for entry in library}
         changed = False
         for layout in source.layouts:
-            matched = next(
-                (
-                    index
-                    for index, entry in enumerate(library)
-                    if entry.name == layout.name
-                ),
-                None,
-            )
-            if matched is None:
-                library.append(deepcopy(layout))
-                changed = True
-            elif library[matched] != layout:
-                library[matched] = deepcopy(layout)
-                changed = True
+            if layout.name in known_names:
+                continue
+            library.append(deepcopy(layout))
+            known_names.add(layout.name)
+            changed = True
         if not changed:
             return
         self._app_default_style = ensure_page_layout_defaults(
             replace(self._app_default_style, layouts=library)
         )
         self._schedule_persisted_state_save()
-
-    def _sync_app_layout_defaults(self, style: Style) -> None:
-        """Remember the current layout habits at the app-default reference size."""
-
-        # 布局目录走同名合并（见 _merge_layouts_into_library），不再整体
-        # 覆盖软件默认库；这里只同步默认布局的标量参数。
-        self._merge_layouts_into_library(style)
-        target_reference = max(int(self._app_default_style.layout_reference_height), 1)
-        source = rescale_layout_sizes(deepcopy(style), target_reference)
-        changes = {
-            field_name: deepcopy(getattr(source, field_name))
-            for field_name in _LAYOUT_DEFAULT_VALUE_FIELDS
-        }
-        self._app_default_style = replace(
-            self._app_default_style,
-            layout_reference_height=target_reference,
-            **changes,
-        )
 
     @staticmethod
     def _preferred_title_for_preferences(style: Style) -> TitleOverlay:
@@ -7630,13 +7609,17 @@ class SubtitleRenderWindow(QWidget):
         return overlays[0] if overlays else TitleOverlay()
 
     def _remember_style_preferences(self, previous: Style, current: Style) -> None:
-        """Copy user-edited title/layout habits into new-project defaults.
+        """Copy user-edited title habits into new-project defaults.
 
         标题记忆的是「正在编辑的那个条目」的属性：按前后样式差分定位被改
         条目（改哪条记哪条），而不是固定采样首个启用条目 —— 多标题并存时
         二者会指向不同条目。纯删除条目不算编辑属性，不触发记忆，避免被
         移位条目的属性意外覆盖已有习惯。落盘本身有停手防抖
         （``_PERSISTED_STATE_SAVE_DEBOUNCE_MS``），连续输入只在停手后写盘。
+
+        布局参数不自动进软件默认：布局目录只把库里没有的新名字补进库
+        （同名条目以库为准），默认布局标量也只留在工程里 —— 两者都要经
+        「保存为软件默认布局」显式落库（见 ``_save_layout_default``）。
         """
 
         layout_changed = any(
@@ -7674,7 +7657,9 @@ class SubtitleRenderWindow(QWidget):
             self._app_default_style, app_title.layout_index
         )
         if layout_changed or title_preference_changed:
-            self._sync_app_layout_defaults(current)
+            # 只补新名字，保证标题偏好里的布局名能在库中解析；同名条目
+            # 的工程内修改不回写（须显式「保存为软件默认布局」）。
+            self._merge_layouts_into_library(current)
             layout_name = (
                 self._layout_name_for_index(current, current_title.layout_index)
                 if title_preference_changed
@@ -7713,7 +7698,7 @@ class SubtitleRenderWindow(QWidget):
     ) -> None:
         """Remember an explicit batch-assignment action for future subtitle sources."""
 
-        self._sync_app_layout_defaults(self._style)
+        self._merge_layouts_into_library(self._style)
         if mode == "auto":
             self._layout_assignment_preference = {"mode": "auto"}
         else:
