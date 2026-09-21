@@ -1135,6 +1135,15 @@ class PropertyPanel(QWidget):
             self._sync_layout_editor_controls()
             self._sync_subtitle_scheme_controls()
             self._sync_title_controls()
+            if hasattr(self, "_scanline_width_spin"):
+                # 粗细/柔化是像素字段，随输出高度重算；模式、颜色、亮度
+                # 无量纲，不随画布变化。
+                self._scanline_width_spin.setValue(
+                    max(int(style.scanline_width_px), 1)
+                )
+                self._scanline_glow_spin.setValue(
+                    max(int(style.scanline_glow_px), 0)
+                )
         finally:
             self._syncing = False
         self._style_synced = True

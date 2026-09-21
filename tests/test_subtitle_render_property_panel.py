@@ -95,6 +95,7 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     effective_karaoke_animation,
     ensure_page_layout_defaults,
     paint_fill_from_dict,
+    rescale_font_sizes,
     subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
@@ -5693,6 +5694,29 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert emitted[-1].exit_anim == "utopia"
     assert emitted[-1].exit_fade_ms == 900
     assert effective_karaoke_animation(emitted[-1]) == "utopia"
+
+
+def test_property_panel_set_rescaled_style_updates_scanline_spins(qapp):
+    """切画布走 set_rescaled_style 定向同步时，扫字线像素 spin 也要回显换算值。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            karaoke_anim="scanline",
+            scanline_width_px=16,
+            scanline_glow_px=8,
+            font_reference_height=1080,
+        )
+    )
+    assert panel._scanline_width_spin.value() == 16
+    assert panel._scanline_glow_spin.value() == 8
+
+    panel.set_rescaled_style(rescale_font_sizes(panel.subtitle_style, 2160))
+    assert panel._scanline_width_spin.value() == 32
+    assert panel._scanline_glow_spin.value() == 16
+
+    panel.set_rescaled_style(rescale_font_sizes(panel.subtitle_style, 1080))
+    assert panel._scanline_width_spin.value() == 16
+    assert panel._scanline_glow_spin.value() == 8
 
 
 def test_property_panel_shows_legacy_utopia_as_utopia_karaoke_effect(qapp):

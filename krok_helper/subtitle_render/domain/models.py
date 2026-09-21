@@ -2130,6 +2130,13 @@ _TITLE_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
     "shadow_offset_y",
 )
 
+# 扫字线像素字段（粗细 / 柔化半径）按 N3 ``SizeAndRatio`` 语义跟随
+# ``font_reference_height`` 换算。它们是 Style 上的全局绘制参数，
+# ``SubtitleStyleScheme``（配色方案 / 样式预设）不含这些字段，因此不能并入
+# ``_FONT_VISUAL_SIZE_FIELDS``——``rescale_scheme_font_sizes`` 会按该表对
+# scheme 逐字段 ``getattr``，混入会导致 AttributeError。
+_SCANLINE_SIZE_FIELDS: tuple[str, ...] = ("scanline_width_px", "scanline_glow_px")
+
 
 def rescale_scheme_font_sizes(
     scheme: SubtitleStyleScheme,
@@ -2166,6 +2173,9 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
     ``new_height / font_reference_height`` and truncated toward zero. Optional
     overrides remain ``None`` so their inheritance semantics are preserved.
     Character/layout spacing is handled separately by ``rescale_layout_sizes``.
+    Scanline pixel fields (``_SCANLINE_SIZE_FIELDS``) scale alongside the font
+    visual fields; schemes never carry them, so they are only touched here on
+    the base style.
     """
     reference = max(int(style.font_reference_height), 1)
     new_height = int(new_height)
@@ -2196,7 +2206,8 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
         for overlay in style.title_overlays
     ]
     changes = {
-        name: scaled(getattr(style, name)) for name in _FONT_VISUAL_SIZE_FIELDS
+        name: scaled(getattr(style, name))
+        for name in _FONT_VISUAL_SIZE_FIELDS + _SCANLINE_SIZE_FIELDS
     }
     return replace(
         style,

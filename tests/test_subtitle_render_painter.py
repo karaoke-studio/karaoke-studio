@@ -10016,6 +10016,8 @@ def test_rescale_font_sizes_scales_all_visual_font_slots():
         ruby_font_size_px=45,
         letter_spacing_px=7,
         ruby_gap_px=3,
+        scanline_width_px=16,
+        scanline_glow_px=8,
         font_reference_height=1080,
         custom_style_schemes={"角色": scheme},
         singer_style_overrides={1: scheme},
@@ -10033,6 +10035,8 @@ def test_rescale_font_sizes_scales_all_visual_font_slots():
     assert scaled.ruby_font_size_px == 90
     assert scaled.letter_spacing_px == 7
     assert scaled.ruby_gap_px == 3
+    assert scaled.scanline_width_px == 32
+    assert scaled.scanline_glow_px == 16
     assert scaled.custom_style_schemes["角色"].font_size_px == 160
     assert scaled.custom_style_schemes["角色"].latin_font_size_px is None
     assert scaled.custom_style_schemes["角色"].ruby_shadow_offset_x == -8

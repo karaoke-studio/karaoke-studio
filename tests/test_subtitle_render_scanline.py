@@ -16,8 +16,10 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     Style,
+    SubtitleStyleScheme,
     effective_karaoke_animation,
     effective_karaoke_scanline,
+    rescale_font_sizes,
     style_from_dict,
     style_to_dict,
     style_with_line_animation,
@@ -135,6 +137,39 @@ def test_scanline_style_fields_round_trip() -> None:
     assert restored.scanline_glow_px == 12
     # 非法模式回落 color，亮度越界钳制在 style 层由参数面板/渲染端兜底。
     assert style_from_dict({"scanline_mode": "wat"}).scanline_mode == "color"
+
+
+def test_scanline_pixel_fields_rescale_with_output_height() -> None:
+    """扫字线像素字段与字号共用 SizeAndRatio 语义随输出高度换算。"""
+    style = _scanline_style(
+        karaoke_anim="utopia_scanline",
+        font_reference_height=1080,
+        scanline_width_px=16,
+        scanline_glow_px=8,
+        scanline_mode="brighten",
+        scanline_brightness_pct=60,
+        custom_style_schemes={"主唱": SubtitleStyleScheme(font_size_px=80)},
+    )
+
+    up = rescale_font_sizes(style, 2160)
+    assert up.font_reference_height == 2160
+    assert up.scanline_width_px == 32
+    assert up.scanline_glow_px == 16
+    # 模式 / 颜色 / 亮度无量纲，不随画布变化。
+    assert up.scanline_mode == "brighten"
+    assert up.scanline_color == "#40E0FF"
+    assert up.scanline_brightness_pct == 60
+    # 配色方案不携带扫字线字段，只有常规字体字段换算。
+    assert up.custom_style_schemes["主唱"].font_size_px == 160
+    # 柔化半径 0 在任何高度下保持 0。
+    zero_glow = rescale_font_sizes(replace(style, scanline_glow_px=0), 2160)
+    assert zero_glow.scanline_glow_px == 0
+    # 往返一致：切回 1080 恢复原值；等高度 no-op 返回同一对象。
+    back = rescale_font_sizes(up, 1080)
+    assert back.font_reference_height == 1080
+    assert back.scanline_width_px == 16
+    assert back.scanline_glow_px == 8
+    assert rescale_font_sizes(back, 1080) is back
 
 
 def test_reverse_karaoke_scanline_bakes_per_line() -> None:
