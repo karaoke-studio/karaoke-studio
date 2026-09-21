@@ -100,9 +100,10 @@ class EffectsPropertyPageBuilder:
             "volume_appearance_mode",
         )
         host._volume_appearance_mode_combo.setToolTip(
-            "自动配合字体：整体高度、柱宽、描边宽按主文字字号推导，柱体颜色跟随"
-            "主文字配色（未唱/已唱填充与描边），下方对应控件停用并回显推导值，"
-            "改字号或输出高度后自动跟随；自定义：全部参数独立设置"
+            "自动配合字体：整体高度、柱宽、描边宽按主文字字号推导；柱体改用主文字的"
+            "完整装饰管线——填充/渐变取主文字配色（未唱/已唱），描边与二重描边、"
+            "发光/阴影、整字放大动画与文字同款同比缩放。下方对应控件停用并回显"
+            "推导值，改字号或输出高度后自动跟随；自定义：全部参数独立设置"
         )
         add("外观模式", host._volume_appearance_mode_combo)
         self._add_canvas_spin(add, "_volume_size_spin", "整体高度", 4, 240, "volume_size", "short_quarter", suffix=" px")

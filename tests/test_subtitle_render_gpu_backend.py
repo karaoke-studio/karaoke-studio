@@ -5703,6 +5703,67 @@ def test_gpu_g5_volume_bars_follow_char_exit_animations_painter(monkeypatch) -> 
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g5_volume_auto_decorations_follow_painter(monkeypatch) -> None:
+    # auto 外观模式柱体走主文字装饰管线（渐变填充/描边/发光/整字放大），
+    # native 端镜像 _draw_volume_decorated_group：alpha 包络逐帧对齐。
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 1_000), TimingChar("詞", 1_400)],
+                end_ms=2_000,
+            )
+        ]
+    )
+    for decoration, karaoke in (("glow", "zoom_pulse"), ("shadow", "inherit")):
+        style = _g1_style(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=64,
+            stroke_width_px=4,
+            stroke2_enabled=True,
+            stroke2_width_px=2,
+            decoration_kind=decoration,
+            glow_radius_px=6,
+            glow_before_radius_px=6,
+            glow_after_radius_px=6,
+            base_color="#FFFFFF",
+            fill_color="#FF2030",
+            karaoke_anim=karaoke,
+            dual_line_layout=False,
+            line_horizontal_layout="center",
+            line_lead_in_ms=0,
+            line_tail_ms=1_000,
+            volume_enabled=True,
+            volume_appearance_mode="auto",
+            volume_duration_ms=1_500,
+            volume_waiting_time_ms=0,
+            volume_time_offset_ms=0,
+            volume_flash_times=0,
+            volume_size=36,
+            volume_column_spacing=2,
+        )
+        timestamps = (600, 1_200, 1_800)
+        painter = [
+            _render_painter_oracle(style, t_ms=t_ms, track=track)
+            for t_ms in timestamps
+        ]
+        with NativeRendererProcess(
+            _renderer_path(), response_timeout_s=15.0
+        ) as renderer:
+            _, gpu = _render_g1_frames(
+                renderer, style, timestamps, force_warp=True, track=track
+            )
+        for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+            gpu_bounds = _payload_alpha_bounds(gpu_frame)
+            painter_bounds = _payload_alpha_bounds(painter_frame)
+            assert all(
+                abs(actual - expected) <= 14
+                for actual, expected in zip(gpu_bounds, painter_bounds)
+            ), (decoration, karaoke, t_ms, gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_volume_column_ink_gaps_follow_painter(monkeypatch) -> None:
     """相邻柱的墨迹间隔必须与 Painter 同口径（pitch 含 2×stroke 预留）。
 

@@ -10,7 +10,15 @@ from threading import Lock
 from typing import Hashable, Protocol
 
 from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QImage, QPainter, QPen
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 
 from krok_helper.subtitle_render.engine.layout.line.style import (
     line_end_ms,
@@ -29,11 +37,27 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
 from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature,
 )
-from krok_helper.subtitle_render.domain.models import Style, resolve_volume_appearance
+from krok_helper.subtitle_render.domain.models import (
+    Style,
+    effective_karaoke_zoom_pulse,
+    resolve_volume_appearance,
+)
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
     character_transform,
     line_char_transition_context,
     transition_char_state,
+    zoom_pulse_curve_level,
+    zoom_pulse_wipe_scale,
+)
+from krok_helper.subtitle_render.engine.render.effects.metrics import (
+    glow_radius,
+    main_stroke2_width,
+)
+from krok_helper.subtitle_render.engine.render.effects.raster import (
+    paint_text_layer_stack,
+)
+from krok_helper.subtitle_render.engine.style.style_semantics import (
+    effective_karaoke_colors,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
@@ -776,11 +800,30 @@ def _shape_signal_vertical_bounds(
     return int(math.floor(top)), int(math.ceil(bottom))
 
 
+def _scaled_signed_px(value: int, scale: float) -> int:
+    if value >= 0:
+        return int(value * scale + 0.5)
+    return -int(-value * scale + 0.5)
+
+
 def _draw_volume_lit_group(
     painter: QPainter,
     group: SignalLitGroup,
     style: Style,
 ) -> None:
+    geometry = volume_signal_geometry(style)
+    if group.opacity <= 0:
+        return
+    rects = volume_signal_column_rects(group.x, group.y, geometry)
+    active_index = group.active_index if group.active_index is not None else -1
+    bar_animations = group.bar_animations
+
+    if style.volume_appearance_mode == "auto":
+        _draw_volume_decorated_group(
+            painter, group, style, geometry, rects, active_index, bar_animations
+        )
+        return
+
     fill = _valid_signal_color(style.volume_fill_color, "#FFFFFF")
     stroke = _valid_signal_color(style.volume_stroke_color, "#0000FF")
     overlay_fill = _valid_signal_color(style.volume_overlay_fill_color, "#0000FF")
@@ -789,33 +832,107 @@ def _draw_volume_lit_group(
         "#FFFFFF",
     )
     stroke_width = max(int(style.lit_stroke_width), 0)
-    geometry = volume_signal_geometry(style)
-    if group.opacity <= 0:
-        return
 
     painter.save()
     try:
         painter.setOpacity(painter.opacity() * group.opacity)
-        rects = volume_signal_column_rects(group.x, group.y, geometry)
-        active_index = group.active_index if group.active_index is not None else -1
-        bar_animations = group.bar_animations
         for index in range(active_index + 1, geometry.count):
             _draw_volume_column_animated(
                 painter,
                 rects[index],
-                fill,
-                stroke,
-                stroke_width,
+                (fill, stroke, stroke_width),
                 bar_animations[index] if bar_animations is not None else None,
             )
         for index in range(0, active_index + 1):
             _draw_volume_column_animated(
                 painter,
                 rects[index],
-                overlay_fill,
-                overlay_stroke,
-                stroke_width,
+                (overlay_fill, overlay_stroke, stroke_width),
                 bar_animations[index] if bar_animations is not None else None,
+            )
+    finally:
+        painter.restore()
+
+
+def _draw_volume_decorated_group(
+    painter: QPainter,
+    group: SignalLitGroup,
+    style: Style,
+    geometry: VolumeSignalGeometry,
+    rects: list[QRectF],
+    active_index: int,
+    bar_animations: tuple[BarAnimationState, ...] | None,
+) -> None:
+    """auto 档柱体走主文字装饰管线。
+
+    填充（含渐变/图片填充）取文字配色矩阵的 before/after 状态，渐变跨度
+    为柱组自身外接框；描边/二重描边宽度 = 文字对应宽度 ×（柱高/字号），
+    描边已在 ``volume_auto_values`` 里按同一公式解析进几何（列距口径一致）；
+    发光/阴影半径与偏移同比缩放；「整字放大」唱字动画开启时，倒计时扫到
+    的那根柱按同一曲线在其覆盖窗口内放大-缩回。
+    """
+    colors = effective_karaoke_colors(style)
+    font_size = max(int(style.font_size_px), 1)
+    scale = geometry.size / float(font_size)
+    stroke_width = max(int(style.volume_stroke_width), 0)
+    stroke2_width = min(
+        max(int(main_stroke2_width(style) * scale + 0.5), 0),
+        max(geometry.column_width // 2, 0),
+    )
+    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
+    glow_before = int(glow_radius(style, after=False) * scale + 0.5)
+    glow_after = int(glow_radius(style, after=True) * scale + 0.5)
+    # 渐变/图片填充的画刷跨度：柱组自身外接框（未覆盖柱与覆盖柱共享）。
+    group_rect = rects[0].united(rects[-1]) if rects else QRectF()
+
+    pulse_enabled = effective_karaoke_zoom_pulse(style)
+    pulse_level = zoom_pulse_curve_level(style)
+    duration = max(int(group.duration_ms), 0)
+    times = max(int(style.volume_flash_times), 0)
+    flash_ratio = max(float(style.volume_flash_duration_ratio), 0.0)
+    if times > 0 and flash_ratio > 0.0:
+        fill_duration = duration / (times * flash_ratio + 1.0)
+        flash_duration = max(duration - fill_duration, 0.0)
+    else:
+        fill_duration = float(duration)
+        flash_duration = 0.0
+    fill_elapsed = max(float(group.elapsed_ms) - flash_duration, 0.0)
+
+    painter.save()
+    try:
+        painter.setOpacity(painter.opacity() * group.opacity)
+        for index in range(geometry.count):
+            animation = (
+                bar_animations[index] if bar_animations is not None else None
+            )
+            if animation is not None and animation[0] <= 0.0:
+                continue
+            covered = index <= active_index
+            state = colors.after if covered else colors.before
+            pulse = 1.0
+            if pulse_enabled and fill_duration > 0.0:
+                bar_start = int(fill_duration * index / geometry.count)
+                bar_end = int(fill_duration * (index + 1) / geometry.count)
+                pulse = zoom_pulse_wipe_scale(
+                    int(fill_elapsed), bar_start, bar_end, pulse_level
+                )
+            _draw_volume_column_animated(
+                painter,
+                rects[index],
+                None,
+                animation,
+                decorated=(
+                    state,
+                    style,
+                    stroke_width,
+                    stroke2_width,
+                    shadow_dx,
+                    shadow_dy,
+                    glow_after if covered else glow_before,
+                    group_rect,
+                    pulse,
+                ),
             )
     finally:
         painter.restore()
@@ -824,40 +941,80 @@ def _draw_volume_lit_group(
 def _draw_volume_column_animated(
     painter: QPainter,
     rect: QRectF,
-    fill: QColor,
-    stroke: QColor,
-    stroke_width: int,
+    solid: tuple[QColor, QColor, int] | None,
     animation: BarAnimationState | None,
+    decorated: tuple | None = None,
 ) -> None:
     """Draw one volume bar, optionally through its character-animation state.
 
     变换语义与文字字符一致（``character_transform``：柱中心为轴的
-    位移/旋转/剪切/缩放），透明度与组级行动画相乘。
+    位移/旋转/剪切/缩放），透明度与组级行动画相乘。``solid`` 为传统
+    纯色柱参数；``decorated`` 提供 auto 档的装饰管线参数（改走
+    ``paint_text_layer_stack``，pulse 为整字放大附加缩放）。
     """
-    if animation is None:
+    if animation is None and solid is not None:
+        fill, stroke, stroke_width = solid
         _draw_volume_column(painter, rect, fill, stroke, stroke_width)
         return
-    opacity, dx, dy, rotation, scale_x, scale_y, skew_y = animation
-    if opacity <= 0.0:
+    if animation is not None and animation[0] <= 0.0:
         return
     center = rect.center()
-    transform = character_transform(
-        center_x=center.x(),
-        center_y=center.y(),
-        dx=dx,
-        dy=dy,
-        rotation=rotation,
-        scale_x=scale_x,
-        scale_y=scale_y,
-        skew_y=skew_y,
-    )
     painter.save()
     try:
-        if opacity < 1.0:
-            painter.setOpacity(painter.opacity() * opacity)
-        if not transform.isIdentity():
-            painter.setTransform(transform, combine=True)
-        _draw_volume_column(painter, rect, fill, stroke, stroke_width)
+        if animation is not None:
+            opacity, dx, dy, rotation, scale_x, scale_y, skew_y = animation
+            if opacity < 1.0:
+                painter.setOpacity(painter.opacity() * opacity)
+            transform = character_transform(
+                center_x=center.x(),
+                center_y=center.y(),
+                dx=dx,
+                dy=dy,
+                rotation=rotation,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                skew_y=skew_y,
+            )
+            if not transform.isIdentity():
+                painter.setTransform(transform, combine=True)
+        if decorated is not None:
+            (
+                state,
+                style,
+                stroke_width,
+                stroke2_width,
+                shadow_dx,
+                shadow_dy,
+                glow_r,
+                group_rect,
+                pulse,
+            ) = decorated
+            if pulse != 1.0:
+                painter.translate(center.x(), center.y())
+                painter.scale(pulse, pulse)
+                painter.translate(-center.x(), -center.y())
+            path = QPainterPath()
+            path.addRoundedRect(
+                rect,
+                max(min(rect.width(), rect.height()) * 0.22, 1.0),
+                max(min(rect.width(), rect.height()) * 0.22, 1.0),
+            )
+            paint_text_layer_stack(
+                painter,
+                path,
+                rect,
+                state,
+                style,
+                stroke_width=stroke_width,
+                stroke2_width=stroke2_width,
+                shadow_dx=shadow_dx,
+                shadow_dy=shadow_dy,
+                glow_radius=glow_r,
+                fill_rect=group_rect,
+            )
+        elif solid is not None:
+            fill, stroke, stroke_width = solid
+            _draw_volume_column(painter, rect, fill, stroke, stroke_width)
     finally:
         painter.restore()
 

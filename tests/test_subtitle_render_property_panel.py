@@ -2455,7 +2455,7 @@ def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
         assert not control.isEnabled()
     assert panel._volume_size_spin.value() == 50
     assert panel._volume_column_width_spin.value() == 13
-    assert panel._volume_stroke_width_spin.value() == 2
+    assert panel._volume_stroke_width_spin.value() == 6
     assert panel._volume_fill_btn.color == "#010203"
     assert panel._volume_stroke_btn.color == "#070809"
     assert panel._volume_overlay_fill_btn.color == "#040506"

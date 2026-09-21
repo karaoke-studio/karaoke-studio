@@ -281,6 +281,7 @@ void applySignalStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
         cfg.volumeEnabled = style.value(QStringLiteral("volume_enabled")).toBool(cfg.volumeEnabled);
     }
     cfg.volumeDurationMs = std::max(0, intValue(style, QStringLiteral("volume_duration_ms"), cfg.volumeDurationMs));
+    cfg.volumeAppearanceMode = stringValue(style, QStringLiteral("volume_appearance_mode"), cfg.volumeAppearanceMode);
     cfg.volumeWaitingTimeMs = std::max(0, intValue(style, QStringLiteral("volume_waiting_time_ms"), cfg.volumeWaitingTimeMs));
     cfg.volumeTimeOffsetMs = intValue(style, QStringLiteral("volume_time_offset_ms"), cfg.volumeTimeOffsetMs);
     cfg.volumeStrokeWidth = std::max(0, intValue(style, QStringLiteral("volume_stroke_width"), cfg.volumeStrokeWidth));

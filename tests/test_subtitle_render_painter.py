@@ -1095,7 +1095,7 @@ def test_volume_auto_appearance_derives_size_and_colors_from_font():
         stroke_color="#070809",
     )
     projected = volume_style(style)
-    assert (projected.volume_size, projected.volume_column_width, projected.volume_stroke_width) == (50, 13, 2)
+    assert (projected.volume_size, projected.volume_column_width, projected.volume_stroke_width) == (50, 13, 6)
     assert projected.volume_fill_color == "#010203"
     assert projected.volume_stroke_color == "#070809"
     assert projected.volume_overlay_fill_color == "#040506"
@@ -1106,7 +1106,7 @@ def test_volume_auto_appearance_derives_size_and_colors_from_font():
     # custom 模式与未启用模块时原样返回
     assert volume_style(replace(style, volume_appearance_mode="custom")).volume_size == 48
     smaller = volume_style(replace(style, font_size_px=40))
-    assert (smaller.volume_size, smaller.volume_column_width, smaller.volume_stroke_width) == (20, 5, 1)
+    assert (smaller.volume_size, smaller.volume_column_width, smaller.volume_stroke_width) == (20, 5, 2)
 
 
 def test_volume_auto_appearance_layout_follows_font_size(qapp):
@@ -1118,9 +1118,9 @@ def test_volume_auto_appearance_layout_follows_font_size(qapp):
     assert big_metrics.group_width > small_metrics.group_width
 
 
-def test_volume_auto_appearance_paints_like_explicit_equivalent(qapp):
-    # auto 模式与「手动填入同等数值」的工程必须整帧同画（含 union 布局与
-    # 柱体颜色），这是 CPU/GPU 两后端同口径的基底。
+def test_volume_auto_layout_geometry_matches_explicit_equivalent(qapp):
+    # auto 解析出的大小与「手动填入同等数值」的几何完全一致（union 布局
+    # 同源）；auto 档绘制走文字装饰管线，与手动纯色柱的画面差异是设计使然。
     auto_style = Style(
         font_family="Arial",
         font_size_px=64,
@@ -1145,13 +1145,103 @@ def test_volume_auto_appearance_paints_like_explicit_equivalent(qapp):
         volume_overlay_fill_color=projected.volume_overlay_fill_color,
         volume_overlay_stroke_color=projected.volume_overlay_stroke_color,
     )
+    assert _volume_signal_geometry(volume_style(auto_style)) == _volume_signal_geometry(
+        volume_style(manual_style)
+    )
     track = _track()
     img_auto = _blank(800, 450)
-    img_manual = _blank(800, 450)
     paint_frame(img_auto, track, 500, auto_style)
-    paint_frame(img_manual, track, 500, manual_style)
-    assert _pixel_hash(img_auto) == _pixel_hash(img_manual)
     assert _ink_bounds(img_auto) is not None
+
+
+def test_volume_auto_decorations_follow_text_pipeline(qapp):
+    # auto 档柱体走文字装饰管线：发光装饰在柱体外扩出光晕（柱区墨迹行数
+    # 显著多于关装饰的纯色柱），描边跟随文字描边色。
+    track = _volume_exit_track()
+    base = dict(
+        font_family="Arial",
+        font_size_px=64,
+        volume_enabled=True,
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        volume_flash_times=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=500,
+        stroke_width_px=8,
+        base_color="#FFFFFF",
+        stroke_color="#222222",
+        decoration_kind="glow",
+        glow_radius_px=8,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+    )
+
+    def bar_row_span(mode: str, kind: str) -> int:
+        style = Style(
+            volume_appearance_mode=mode,
+            decoration_kind=kind,
+            **{key: value for key, value in base.items() if key != "decoration_kind"},
+        )
+        layout = _sayatoo_layout_for(track, style, 1200, w=800, h=450)
+        img = _blank(800, 450)
+        paint_frame(img, track, 1200, style)
+        x0 = max(int(layout.signal_x) - 20, 0)
+        x1 = int(layout.text_x)
+        rows = [
+            y
+            for y in range(img.height())
+            if any(
+                QColor(img.pixel(x, y)) != QColor("#101010")
+                for x in range(x0, x1, 2)
+            )
+        ]
+        return (max(rows) - min(rows) + 1) if rows else 0
+
+    glow_rows = bar_row_span("auto", "glow")
+    plain_rows = bar_row_span("custom", "none")
+    assert glow_rows > plain_rows * 1.5
+
+
+def test_volume_auto_zoom_pulse_scales_active_bar(qapp):
+    # 「整字放大」唱字动画开启时，倒计时扫到的柱按同一曲线放大：
+    # 扫描中段柱区纵向墨迹明显高于关闭整字放大的同帧。
+    track = _volume_exit_track()
+    base = dict(
+        font_family="Arial",
+        font_size_px=64,
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        volume_flash_times=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=500,
+        stroke_width_px=0,
+        decoration_kind="none",
+    )
+
+    def bar_row_span(karaoke: str) -> int:
+        style = Style(karaoke_anim=karaoke, **base)
+        layout = _sayatoo_layout_for(track, style, 1200, w=800, h=450)
+        img = _blank(800, 450)
+        paint_frame(img, track, 1200, style)
+        x0 = max(int(layout.signal_x) - 20, 0)
+        x1 = int(layout.text_x)
+        rows = [
+            y
+            for y in range(img.height())
+            if any(
+                QColor(img.pixel(x, y)) != QColor("#101010")
+                for x in range(x0, x1, 2)
+            )
+        ]
+        return (max(rows) - min(rows) + 1) if rows else 0
+
+    assert bar_row_span("zoom_pulse") > bar_row_span("none")
 
 
 def test_volume_auto_colors_reach_painting(qapp):

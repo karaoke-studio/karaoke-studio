@@ -2269,7 +2269,7 @@ def test_build_render_ir_materializes_volume_auto_appearance():
     assert ir["style"]["volume_appearance_mode"] == "auto"
     assert ir["style"]["volume_size"] == 50
     assert ir["style"]["volume_column_width"] == 13
-    assert ir["style"]["volume_stroke_width"] == 2
+    assert ir["style"]["volume_stroke_width"] == 6
     assert ir["style"]["volume_fill_color"] == "#010203"
     assert ir["style"]["volume_stroke_color"] == "#070809"
     assert ir["style"]["volume_overlay_fill_color"] == "#040506"

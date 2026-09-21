@@ -1391,6 +1391,226 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const ShapeSignalGeometry shapeGeometry = shapeSignalGeometry(style);
         const bool independentVolume = style.volumeEnabled;
         const bool legacyVolume = style.litEnabled && style.litStyle == "volume";
+        // auto 外观模式：柱体走主文字装饰管线（渐变/描边/二重描边/发光/
+        // 阴影/整字放大），与 Painter 的 _draw_volume_decorated_group 同口径。
+        const bool volumeAutoDecorated = independentVolume
+            && style.volumeAppearanceMode == "auto";
+        const float volumeDecorScale = style.fontSize > 0.0f
+            ? signalGeometry.size / style.fontSize
+            : 1.0f;
+        const float volumeDecorStrokeWidth = std::max(style.volumeStrokeWidth, 0.0f);
+        const float volumeDecorStroke2Width = std::min(
+            std::max(style.stroke2Width * volumeDecorScale, 0.0f),
+            std::floor(signalGeometry.columnWidth * 0.5f)
+        );
+        // 柱体逐字入退场动画：镜像 Painter 的
+        // volume_bar_transition_states —— 同一行、同一显示窗口，柱
+        // index 走字符交错公式（count = 柱数）。utopia 退场文字按
+        // 「后一字唱完」逐字离场，柱体不演唱，done 时刻均匀铺在演唱
+        // 窗口 [startMs, endMs] 上保持同节奏。柱以中心为轴（文字的
+        // utopia/drip 用字框角轴），两端都用中心轴即保持一致。
+        struct BarAnimationState {
+            float opacity = 1.0f;
+            D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Identity();
+        };
+        const int barCount = signalGeometry.count;
+        const bool hasBarCharFadeExit
+            = (independentVolume || legacyVolume)
+            && (line->exitAnimation == "char_fade"
+                || line->exitAnimation == "char_drip"
+                || line->exitAnimation == "spin_flip")
+            && line->exitDurationMs > 0;
+        const bool hasBarCharFadeEntry
+            = (independentVolume || legacyVolume)
+            && (line->entryAnimation == "char_fade"
+                || line->entryAnimation == "char_drip"
+                || line->entryAnimation == "spin_flip")
+            && line->entryDurationMs > 0;
+        const bool hasBarUtopia
+            = (independentVolume || legacyVolume)
+            && (line->entryAnimation == "utopia"
+                || line->exitAnimation == "utopia");
+        const int barWindowStartMs = line->displayWindows.empty()
+            ? line->startMs
+            : line->displayWindows.front().startMs;
+        auto barCharFadeProgress = [&](int index) {
+            const int count = std::max(barCount, 1);
+            const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
+            if (line->displayWindows.empty()) {
+                return 1.0f;
+            }
+            const DisplayWindow &window = line->displayWindows.front();
+            if (hasBarCharFadeExit) {
+                const int exitStart = std::max(
+                    line->endMs, window.endMs - 600
+                );
+                if (tMs >= exitStart) {
+                    const int endMs = window.endMs
+                        - delayStep * (count - index - 1);
+                    return std::clamp(
+                        static_cast<float>(endMs - tMs) / 250.0f,
+                        0.0f,
+                        1.0f
+                    );
+                }
+            }
+            if (hasBarCharFadeEntry && tMs <= window.startMs + 600) {
+                const int startMs = window.startMs + delayStep * index;
+                return std::clamp(
+                    static_cast<float>(tMs - startMs) / 250.0f,
+                    0.0f,
+                    1.0f
+                );
+            }
+            return 1.0f;
+        };
+        auto barCenteredMatrix = [&](
+            float dx, float dy, float rotation,
+            float scaleX, float scaleY, float skewY,
+            float cx, float cy
+        ) {
+            // Painter character_transform 无 scale-origin 分支的逐项
+            // 镜像。QTransform 的 translate/rotate/... 是前乘（坐标
+            // 系语义），因此最终矩阵是
+            // T(−c)·Scale·Shear·Rotate·T(c+dx)（行向量布局，D2D 的
+            // operator* 组合顺序与矩阵积一致）。
+            D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Translation(
+                -cx, -cy
+            );
+            if (scaleX != 1.0f || scaleY != 1.0f) {
+                matrix = matrix * D2D1::Matrix3x2F::Scale(scaleX, scaleY);
+            }
+            if (skewY != 0.0f) {
+                matrix = matrix * D2D1::Matrix3x2F(
+                    1.0f, skewY, 0.0f, 1.0f, 0.0f, 0.0f
+                );
+            }
+            if (rotation != 0.0f) {
+                matrix = matrix * D2D1::Matrix3x2F::Rotation(rotation);
+            }
+            matrix = matrix * D2D1::Matrix3x2F::Translation(
+                cx + dx, cy + dy
+            );
+            return matrix;
+        };
+        auto barAnimationAt = [&](int index, float cx, float cy) {
+            BarAnimationState state;
+            if (!(independentVolume || legacyVolume)) {
+                return state;
+            }
+            const int count = std::max(barCount, 1);
+            if (activeCharacterTransition == "char_fade"
+                || activeCharacterTransition == "char_drip"
+                || activeCharacterTransition == "spin_flip") {
+                const float progress = barCharFadeProgress(index);
+                if (progress <= 0.0f) {
+                    state.opacity = 0.0f;
+                    return state;
+                }
+                constexpr float pi = 3.14159265358979323846f;
+                const float clamped = std::clamp(progress, 0.0f, 1.0f);
+                const float angle = std::min(
+                    (pi * 0.5f) * (1.0f - clamped),
+                    pi * 89.0f / 180.0f
+                );
+                const float skew = std::tan(angle);
+                if (activeCharacterTransition == "spin_flip") {
+                    state.opacity = progress;
+                    const float direction = static_cast<float>(
+                        activeCharacterDirection
+                    );
+                    state.matrix = barCenteredMatrix(
+                        0.0f, 0.0f, 0.0f,
+                        clamped, clamped, direction * skew,
+                        cx, cy
+                    );
+                } else if (activeCharacterTransition == "char_drip") {
+                    state.opacity = 1.0f;
+                    const float direction = -static_cast<float>(
+                        activeCharacterDirection
+                    );
+                    state.matrix = barCenteredMatrix(
+                        0.0f, 0.0f, 0.0f,
+                        1.0f, 1.0f, direction * skew,
+                        cx, cy
+                    );
+                } else {
+                    state.opacity = progress;
+                }
+                return state;
+            }
+            if (hasBarUtopia) {
+                constexpr float pi = 3.14159265358979323846f;
+                if (line->entryAnimation == "utopia"
+                    && tMs <= barWindowStartMs + 700) {
+                    const int delayStep = count <= 1
+                        ? 0
+                        : 200 / (count - 1);
+                    const int elapsed = tMs - barWindowStartMs
+                        - delayStep * index;
+                    if (elapsed < 0) {
+                        state.opacity = 0.0f;
+                        return state;
+                    }
+                    state.opacity = std::min(
+                        static_cast<float>(elapsed) / 400.0f, 1.0f
+                    );
+                    float scale = 1.0f;
+                    if (elapsed < 400) {
+                        scale = 1.3f * static_cast<float>(elapsed) / 400.0f;
+                    } else if (elapsed < 500) {
+                        const float remaining = static_cast<float>(500 - elapsed);
+                        scale = 1.0f + 0.3f * remaining / 100.0f;
+                    }
+                    state.matrix = barCenteredMatrix(
+                        0.0f, 0.0f, 0.0f, scale, scale, 0.0f, cx, cy
+                    );
+                    return state;
+                }
+                if (line->exitAnimation == "utopia") {
+                    const int span = std::max(line->endMs - line->startMs, 0);
+                    const int doneMs = line->startMs + static_cast<int>(
+                        static_cast<float>(span * index)
+                            / static_cast<float>(std::max(count - 1, 1))
+                    );
+                    if (tMs > doneMs) {
+                        const float local = std::clamp(
+                            static_cast<float>(tMs - doneMs) / 750.0f,
+                            0.0f,
+                            1.0f
+                        );
+                        state.opacity = 1.0f - local;
+                        if (state.opacity <= 0.0f) {
+                            return state;
+                        }
+                        const float shrink = 1.0f - local;
+                        const float amplitude = static_cast<float>(scene.height) / 15.0f;
+                        const float xTravel = local <= 0.5f
+                            ? std::sin(pi * local) * amplitude
+                            : amplitude + std::sin((local - 0.5f) * pi) * amplitude;
+                        const float yTravel = std::sin(pi * local * 0.5f) * amplitude;
+                        state.matrix = barCenteredMatrix(
+                            -xTravel, yTravel, -180.0f * local,
+                            shrink * std::cos(pi * local), shrink, 0.0f,
+                            cx, cy
+                        );
+                        return state;
+                    }
+                }
+            }
+            return state;
+        };
+        // auto 档柱体发光层：源位图在最终批次前烘好（含每柱动画透明度），
+        // 模糊后于柱体绘制点套柱动画矩阵合成（blur-then-transform，与
+        // 文字变换柱的发光同语义，镜像 Painter 每柱 paint_glow_path）。
+        struct VolumeBarGlowLayer {
+            ID2D1Bitmap1 *source = nullptr;
+            ID2D1Effect *blur = nullptr;
+            std::vector<int> sigmas;
+            D2D1_RECT_F layerRect{};
+            int barIndex = 0;
+        };
+        std::vector<VolumeBarGlowLayer> volumeBarGlowLayers;
         const int signalActiveDuration = std::max(
             (independentVolume ? style.volumeDurationMs : style.signalsDurationMs)
                 - std::max(
@@ -1831,6 +2051,36 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             - signalGeometry.strokeExtent
             - signalGeometry.size * 0.5f
             - signalTextMetric;
+        const float volumeGroupX
+            = style.volumeOffsetX - signalGeometry.groupWidth;
+        // 柱体几何（供绘制、发光源与合成三处共用）。
+        auto volumeBarRectAt = [&](int index) {
+            const float left = volumeGroupX + signalGeometry.strokeExtent
+                + static_cast<float>(index) * signalGeometry.pitch;
+            const float top = signalGroupY + signalGeometry.strokeExtent
+                + signalGeometry.alignBaseShift
+                + static_cast<float>(index) * signalGeometry.alignDeltaShift;
+            const float height = std::max(
+                signalGeometry.frontHeight
+                    + static_cast<float>(index) * signalGeometry.heightDelta,
+                1.0f
+            );
+            return D2D1::RectF(
+                left, top, left + signalGeometry.columnWidth, top + height
+            );
+        };
+        auto volumeBarRoundedRectAt = [&](int index) {
+            const D2D1_RECT_F rect = volumeBarRectAt(index);
+            const float radius = std::max(
+                std::min(
+                    rect.right - rect.left, rect.bottom - rect.top
+                ) * 0.22f,
+                1.0f
+            );
+            return D2D1::RoundedRect(rect, radius, radius);
+        };
+
+
         if (signalState.visible) {
             for (int index = 0; index < signalGeometry.count; ++index) {
                 const float top = signalGroupY + signalGeometry.strokeExtent
@@ -4314,6 +4564,117 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         frameDiagnostics.glowMs += elapsedMs(glowStart);
 
+        // auto 档柱体发光源：每柱一枚（镜像 Painter 逐柱 paint_glow_path，
+        // 覆盖/未覆盖柱各自的半径与配色）。柱动画不在源里，合成时套在
+        // 模糊结果上（blur-then-transform）。源笔宽 = 描边(+二重)+半径，
+        // padding 与 Painter glow_extent 同式（笔宽/2 + 3R + 2）。
+        if (volumeAutoDecorated
+            && signalState.visible
+            && style.decorationKind == "glow"
+            && signalState.opacity > 0.0f
+            && style.volumeOpacity > 0.0f) {
+            const float groupOpacityBase = std::clamp(
+                style.volumeOpacity * signalState.opacity * lineAnimationOpacity,
+                0.0f,
+                1.0f
+            );
+            const float glowBase
+                = volumeDecorStroke2Width > 0.0f
+                ? volumeDecorStrokeWidth + volumeDecorStroke2Width
+                : volumeDecorStrokeWidth;
+            for (int index = 0; index < signalGeometry.count; ++index) {
+                const bool covered = index <= signalState.activeIndex;
+                const int radius = static_cast<int>(std::lround(
+                    std::max(
+                        0.0f,
+                        (covered
+                            ? style.glowAfterRadius
+                            : style.glowBeforeRadius)
+                            * volumeDecorScale
+                    )
+                ));
+                if (radius <= 0) {
+                    continue;
+                }
+                const BarAnimationState animation = barAnimationAt(
+                    index, 0.0f, 0.0f
+                );
+                if (animation.opacity <= 0.0f) {
+                    continue;
+                }
+                const float glowPen = std::max(
+                    1.0f, glowBase + static_cast<float>(radius)
+                );
+                const float pad = std::ceil(
+                    glowPen / 2.0f + static_cast<float>(radius) * 3.0f
+                ) + 2.0f;
+                const D2D1_RECT_F barRect = volumeBarRectAt(index);
+                VolumeBarGlowLayer layer;
+                layer.layerRect = D2D1::RectF(
+                    barRect.left - pad,
+                    barRect.top - pad,
+                    barRect.right + pad,
+                    barRect.bottom + pad
+                );
+                const float layerW = std::max(
+                    layer.layerRect.right - layer.layerRect.left, 1.0f
+                );
+                const float layerH = std::max(
+                    layer.layerRect.bottom - layer.layerRect.top, 1.0f
+                );
+                layer.source = acquireGlowScratch(layerW, layerH);
+                layer.blur = acquireGlowEffect();
+                const int passes
+                    = std::clamp(style.glowConcentrationLevel, 0, 2) + 1;
+                for (int pass = 0; pass < passes; ++pass) {
+                    layer.sigmas.push_back(
+                        radius - pass * radius / passes
+                    );
+                }
+                context->SetTarget(layer.source);
+                context->BeginDraw();
+                context->Clear(D2D1::ColorF(0.0f, 0.0f));
+                context->SetTransform(D2D1::Matrix3x2F::Translation(
+                    -layer.layerRect.left, -layer.layerRect.top
+                ));
+                const PaintStyle &decorPaint = covered
+                    ? style.afterDecorPaint
+                    : style.beforeDecorPaint;
+                const RgbaColor &decorColor = covered
+                    ? style.afterDecor
+                    : style.beforeDecor;
+                D2D1_RECT_F groupRect = volumeBarRectAt(0);
+                for (int other = 1; other < signalGeometry.count; ++other) {
+                    const D2D1_RECT_F otherRect = volumeBarRectAt(other);
+                    groupRect = D2D1::RectF(
+                        std::min(groupRect.left, otherRect.left),
+                        std::min(groupRect.top, otherRect.top),
+                        std::max(groupRect.right, otherRect.right),
+                        std::max(groupRect.bottom, otherRect.bottom)
+                    );
+                }
+                Microsoft::WRL::ComPtr<ID2D1Brush> decorBrush = paintBrush(
+                    decorPaint, groupRect, decorColor
+                );
+                decorBrush->SetOpacity(
+                    groupOpacityBase * animation.opacity
+                );
+                context->DrawRoundedRectangle(
+                    volumeBarRoundedRectAt(index),
+                    decorBrush.Get(),
+                    glowPen
+                );
+                checkHr(
+                    context->EndDraw(),
+                    "ID2D1DeviceContext::EndDraw(volume bar glow source)",
+                    device_
+                );
+                layer.blur->SetInput(0, layer.source);
+                layer.barIndex = index;
+                volumeBarGlowLayers.push_back(std::move(layer));
+            }
+        }
+
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
@@ -5396,261 +5757,139 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 paint.color = color;
                 return paintBrush(paint, line->fillBounds, color);
             };
-            // 柱体逐字入退场动画：镜像 Painter 的
-            // volume_bar_transition_states —— 同一行、同一显示窗口，柱
-            // index 走字符交错公式（count = 柱数）。utopia 退场文字按
-            // 「后一字唱完」逐字离场，柱体不演唱，done 时刻均匀铺在演唱
-            // 窗口 [startMs, endMs] 上保持同节奏。柱以中心为轴（文字的
-            // utopia/drip 用字框角轴），两端都用中心轴即保持一致。
-            struct BarAnimationState {
-                float opacity = 1.0f;
-                D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Identity();
-            };
-            const int barCount = signalGeometry.count;
-            const bool hasBarCharFadeExit
-                = (independentVolume || legacyVolume)
-                && (line->exitAnimation == "char_fade"
-                    || line->exitAnimation == "char_drip"
-                    || line->exitAnimation == "spin_flip")
-                && line->exitDurationMs > 0;
-            const bool hasBarCharFadeEntry
-                = (independentVolume || legacyVolume)
-                && (line->entryAnimation == "char_fade"
-                    || line->entryAnimation == "char_drip"
-                    || line->entryAnimation == "spin_flip")
-                && line->entryDurationMs > 0;
-            const bool hasBarUtopia
-                = (independentVolume || legacyVolume)
-                && (line->entryAnimation == "utopia"
-                    || line->exitAnimation == "utopia");
-            const int barWindowStartMs = line->displayWindows.empty()
-                ? line->startMs
-                : line->displayWindows.front().startMs;
-            auto barCharFadeProgress = [&](int index) {
-                const int count = std::max(barCount, 1);
-                const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
-                if (line->displayWindows.empty()) {
-                    return 1.0f;
-                }
-                const DisplayWindow &window = line->displayWindows.front();
-                if (hasBarCharFadeExit) {
-                    const int exitStart = std::max(
-                        line->endMs, window.endMs - 600
-                    );
-                    if (tMs >= exitStart) {
-                        const int endMs = window.endMs
-                            - delayStep * (count - index - 1);
-                        return std::clamp(
-                            static_cast<float>(endMs - tMs) / 250.0f,
-                            0.0f,
-                            1.0f
-                        );
-                    }
-                }
-                if (hasBarCharFadeEntry && tMs <= window.startMs + 600) {
-                    const int startMs = window.startMs + delayStep * index;
-                    return std::clamp(
-                        static_cast<float>(tMs - startMs) / 250.0f,
-                        0.0f,
-                        1.0f
-                    );
-                }
-                return 1.0f;
-            };
-            auto barCenteredMatrix = [&](
-                float dx, float dy, float rotation,
-                float scaleX, float scaleY, float skewY,
-                float cx, float cy
-            ) {
-                // Painter character_transform 无 scale-origin 分支的逐项
-                // 镜像。QTransform 的 translate/rotate/... 是前乘（坐标
-                // 系语义），因此最终矩阵是
-                // T(−c)·Scale·Shear·Rotate·T(c+dx)（行向量布局，D2D 的
-                // operator* 组合顺序与矩阵积一致）。
-                D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Translation(
-                    -cx, -cy
-                );
-                if (scaleX != 1.0f || scaleY != 1.0f) {
-                    matrix = matrix * D2D1::Matrix3x2F::Scale(scaleX, scaleY);
-                }
-                if (skewY != 0.0f) {
-                    matrix = matrix * D2D1::Matrix3x2F(
-                        1.0f, skewY, 0.0f, 1.0f, 0.0f, 0.0f
-                    );
-                }
-                if (rotation != 0.0f) {
-                    matrix = matrix * D2D1::Matrix3x2F::Rotation(rotation);
-                }
-                matrix = matrix * D2D1::Matrix3x2F::Translation(
-                    cx + dx, cy + dy
-                );
-                return matrix;
-            };
-            auto barAnimationAt = [&](int index, float cx, float cy) {
-                BarAnimationState state;
-                if (!(independentVolume || legacyVolume)) {
-                    return state;
-                }
-                const int count = std::max(barCount, 1);
-                if (activeCharacterTransition == "char_fade"
-                    || activeCharacterTransition == "char_drip"
-                    || activeCharacterTransition == "spin_flip") {
-                    const float progress = barCharFadeProgress(index);
-                    if (progress <= 0.0f) {
-                        state.opacity = 0.0f;
-                        return state;
-                    }
-                    constexpr float pi = 3.14159265358979323846f;
-                    const float clamped = std::clamp(progress, 0.0f, 1.0f);
-                    const float angle = std::min(
-                        (pi * 0.5f) * (1.0f - clamped),
-                        pi * 89.0f / 180.0f
-                    );
-                    const float skew = std::tan(angle);
-                    if (activeCharacterTransition == "spin_flip") {
-                        // 与文字 spin_flip 同构：透明度=progress，缩放=progress
-                        // + 定向剪切。
-                        state.opacity = progress;
-                        const float direction = static_cast<float>(
-                            activeCharacterDirection
-                        );
-                        state.matrix = barCenteredMatrix(
-                            0.0f, 0.0f, 0.0f,
-                            clamped, clamped, direction * skew,
-                            cx, cy
-                        );
-                    } else if (activeCharacterTransition == "char_drip") {
-                        // N3 CharDrip 保持不透明、纯剪切垂落（progress 仅
-                        // 驱动剪切量），镜像 transitions.py 的二值透明度。
-                        state.opacity = 1.0f;
-                        const float direction = -static_cast<float>(
-                            activeCharacterDirection
-                        );
-                        state.matrix = barCenteredMatrix(
-                            0.0f, 0.0f, 0.0f,
-                            1.0f, 1.0f, direction * skew,
-                            cx, cy
-                        );
-                    } else {
-                        state.opacity = progress;
-                    }
-                    return state;
-                }
-                if (hasBarUtopia) {
-                    constexpr float pi = 3.14159265358979323846f;
-                    if (line->entryAnimation == "utopia"
-                        && tMs <= barWindowStartMs + 700) {
-                        const int delayStep = count <= 1
-                            ? 0
-                            : 200 / (count - 1);
-                        const int elapsed = tMs - barWindowStartMs
-                            - delayStep * index;
-                        if (elapsed < 0) {
-                            state.opacity = 0.0f;
-                            return state;
-                        }
-                        state.opacity = std::min(
-                            static_cast<float>(elapsed) / 400.0f, 1.0f
-                        );
-                        float scale = 1.0f;
-                        if (elapsed < 400) {
-                            scale = 1.3f * static_cast<float>(elapsed) / 400.0f;
-                        } else if (elapsed < 500) {
-                            const float remaining = static_cast<float>(500 - elapsed);
-                            scale = 1.0f + 0.3f * remaining / 100.0f;
-                        }
-                        state.matrix = barCenteredMatrix(
-                            0.0f, 0.0f, 0.0f, scale, scale, 0.0f, cx, cy
-                        );
-                        return state;
-                    }
-                    if (line->exitAnimation == "utopia") {
-                        const int span = std::max(line->endMs - line->startMs, 0);
-                        const int doneMs = line->startMs + static_cast<int>(
-                            static_cast<float>(span * index)
-                                / static_cast<float>(std::max(count - 1, 1))
-                        );
-                        if (tMs > doneMs) {
-                            const float local = std::clamp(
-                                static_cast<float>(tMs - doneMs) / 750.0f,
-                                0.0f,
-                                1.0f
-                            );
-                            state.opacity = 1.0f - local;
-                            if (state.opacity <= 0.0f) {
-                                return state;
-                            }
-                            const float shrink = 1.0f - local;
-                            const float amplitude = static_cast<float>(scene.height) / 15.0f;
-                            const float xTravel = local <= 0.5f
-                                ? std::sin(pi * local) * amplitude
-                                : amplitude + std::sin((local - 0.5f) * pi) * amplitude;
-                            const float yTravel = std::sin(pi * local * 0.5f) * amplitude;
-                            state.matrix = barCenteredMatrix(
-                                -xTravel, yTravel, -180.0f * local,
-                                shrink * std::cos(pi * local), shrink, 0.0f,
-                                cx, cy
-                            );
-                            return state;
-                        }
-                    }
-                }
-                return state;
-            };
             auto normalFill = signalBrush(style.volumeFill);
             auto normalStroke = signalBrush(style.volumeStroke);
             auto overlayFill = signalBrush(style.volumeOverlayFill);
             auto overlayStroke = signalBrush(style.volumeOverlayStroke);
             const float groupX = style.volumeOffsetX - signalGeometry.groupWidth;
+
+            // 的柱按同一曲线在其覆盖窗口内放大-缩回（fill 阶段折算与
+            // Painter 相同：先扣闪烁段再按柱均分）。
+            const bool barZoomPulse = volumeAutoDecorated
+                && line->karaokeAnimation == "utopia"
+                && line->zoomPulseEnabled;
+            float barFillDuration = static_cast<float>(signalActiveDuration);
+            float barFlashDuration = 0.0f;
+            if (style.volumeFlashTimes > 0
+                && style.volumeFlashDurationRatio > 0.0f) {
+                barFillDuration = signalActiveDuration
+                    / (style.volumeFlashTimes * style.volumeFlashDurationRatio
+                        + 1.0f);
+                barFlashDuration = std::max(
+                    static_cast<float>(signalActiveDuration) - barFillDuration,
+                    0.0f
+                );
+            }
+            const int barElapsed = std::clamp(
+                tMs - (signalEndMs - signalActiveDuration),
+                0,
+                std::max(signalActiveDuration - 1, 0)
+            );
+            const float barFillElapsed = std::max(
+                static_cast<float>(barElapsed) - barFlashDuration, 0.0f
+            );
+            // auto 档发光合成：源已预烘焙，这里套柱动画矩阵（含整字放大）
+            // 后逐层 DrawImage（blur-then-transform）。
+            for (VolumeBarGlowLayer &layer : volumeBarGlowLayers) {
+                const D2D1_RECT_F barRect = volumeBarRectAt(layer.barIndex);
+                BarAnimationState barAnimation = barAnimationAt(
+                    layer.barIndex,
+                    (barRect.left + barRect.right) * 0.5f,
+                    (barRect.top + barRect.bottom) * 0.5f
+                );
+                if (barAnimation.opacity <= 0.0f) {
+                    continue;
+                }
+                float pulse = 1.0f;
+                if (barZoomPulse && barFillDuration > 0.0f) {
+                    const int barStart = static_cast<int>(
+                        barFillDuration * layer.barIndex / signalGeometry.count
+                    );
+                    const int barEnd = static_cast<int>(
+                        barFillDuration * (layer.barIndex + 1)
+                            / signalGeometry.count
+                    );
+                    pulse = zoomPulseScale(
+                        static_cast<int>(barFillElapsed),
+                        barStart,
+                        barEnd,
+                        style.zoomPulseCurveLevel
+                    );
+                }
+                if (pulse != 1.0f) {
+                    barAnimation.matrix = barCenteredMatrix(
+                        0.0f, 0.0f, 0.0f, pulse, pulse, 0.0f,
+                        (barRect.left + barRect.right) * 0.5f,
+                        (barRect.top + barRect.bottom) * 0.5f
+                    ) * barAnimation.matrix;
+                }
+                const D2D1_MATRIX_3X2_F base =
+                    D2D1::Matrix3x2F::Translation(signalDx, dy);
+                context->SetTransform(
+                    withViewport(barAnimation.matrix * base)
+                );
+                for (int sigma : layer.sigmas) {
+                    checkHr(
+                        layer.blur->SetValue(
+                            D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+                            static_cast<float>(sigma)
+                        ),
+                        "ID2D1Effect::SetValue(volume bar glow sigma)",
+                        device_
+                    );
+                    context->DrawImage(
+                        layer.blur,
+                        D2D1::Point2F(
+                            layer.layerRect.left, layer.layerRect.top
+                        ),
+                        D2D1::RectF(
+                            0.0f,
+                            0.0f,
+                            layer.layerRect.right - layer.layerRect.left,
+                            layer.layerRect.bottom - layer.layerRect.top
+                        )
+                    );
+                }
+                context->SetTransform(
+                    withViewport(D2D1::Matrix3x2F::Translation(signalDx, dy))
+                );
+            }
             auto drawColumn = [&](int index, bool overlay) {
-                const float left = groupX + signalGeometry.strokeExtent
-                    + static_cast<float>(index) * signalGeometry.pitch;
-                const float top = signalGroupY + signalGeometry.strokeExtent
-                    + signalGeometry.alignBaseShift
-                    + static_cast<float>(index) * signalGeometry.alignDeltaShift;
-                const float height = std::max(
-                    signalGeometry.frontHeight
-                        + static_cast<float>(index) * signalGeometry.heightDelta,
-                    1.0f
-                );
-                const D2D1_ROUNDED_RECT rect = D2D1::RoundedRect(
-                    D2D1::RectF(
-                        left,
-                        top,
-                        left + signalGeometry.columnWidth,
-                        top + height
-                    ),
-                    std::max(
-                        std::min(signalGeometry.columnWidth, height) * 0.22f,
-                        1.0f
-                    ),
-                    std::max(
-                        std::min(signalGeometry.columnWidth, height) * 0.22f,
-                        1.0f
-                    )
-                );
-                const BarAnimationState barAnimation = barAnimationAt(
-                    index,
-                    left + signalGeometry.columnWidth * 0.5f,
-                    top + height * 0.5f
+                const D2D1_RECT_F rectF = volumeBarRectAt(index);
+                const D2D1_ROUNDED_RECT rect = volumeBarRoundedRectAt(index);
+                const float centerX = (rectF.left + rectF.right) * 0.5f;
+                const float centerY = (rectF.top + rectF.bottom) * 0.5f;
+                BarAnimationState barAnimation = barAnimationAt(
+                    index, centerX, centerY
                 );
                 if (barAnimation.opacity <= 0.0f) {
                     return;
                 }
-                Microsoft::WRL::ComPtr<ID2D1Brush> fill =
-                    overlay ? overlayFill : normalFill;
-                Microsoft::WRL::ComPtr<ID2D1Brush> stroke =
-                    overlay ? overlayStroke : normalStroke;
-                fill->SetOpacity(signalGroupOpacity * barAnimation.opacity);
-                stroke->SetOpacity(signalGroupOpacity * barAnimation.opacity);
-                const RgbaColor &strokeColor = overlay
-                    ? style.volumeOverlayStroke
-                    : style.volumeStroke;
-                const float volumeStrokeWidth = style.volumeEnabled
-                    ? style.volumeStrokeWidth
-                    : style.litStrokeWidth;
-                // 填充与描边都要在同一柱动画变换内绘制（utopia 翻转/飞行
-                // 时描边跟着柱体走）；绘制完恢复组级基准变换。
+                float pulse = 1.0f;
+                if (barZoomPulse && barFillDuration > 0.0f) {
+                    const int barStart = static_cast<int>(
+                        barFillDuration * index / signalGeometry.count
+                    );
+                    const int barEnd = static_cast<int>(
+                        barFillDuration * (index + 1) / signalGeometry.count
+                    );
+                    pulse = zoomPulseScale(
+                        static_cast<int>(barFillElapsed),
+                        barStart,
+                        barEnd,
+                        style.zoomPulseCurveLevel
+                    );
+                }
+                if (pulse != 1.0f) {
+                    barAnimation.matrix
+                        = barCenteredMatrix(
+                            0.0f, 0.0f, 0.0f, pulse, pulse, 0.0f,
+                            centerX, centerY
+                        )
+                        * barAnimation.matrix;
+                }
+                // 填充/描边/阴影都在同一柱动画变换内绘制（utopia 翻转/飞行
+                // 时跟着柱体走）；绘制完恢复组级基准变换。
                 const D2D1_MATRIX_3X2_F base =
                     D2D1::Matrix3x2F::Translation(signalDx, dy);
                 const bool transformed = !barAnimation.matrix.IsIdentity();
@@ -5661,11 +5900,135 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         withViewport(barAnimation.matrix * base)
                     );
                 }
-                context->FillRoundedRectangle(rect, fill.Get());
-                if (volumeStrokeWidth > 0.0f && strokeColor.alpha > 0) {
-                    context->DrawRoundedRectangle(
-                        rect, stroke.Get(), volumeStrokeWidth
+                const float barOpacity = signalGroupOpacity
+                    * barAnimation.opacity;
+                if (volumeAutoDecorated) {
+                    const PaintStyle &fillPaint = overlay
+                        ? style.afterFillPaint
+                        : style.beforeFillPaint;
+                    const PaintStyle &strokePaint = overlay
+                        ? style.afterStrokePaint
+                        : style.beforeStrokePaint;
+                    const PaintStyle &stroke2Paint = overlay
+                        ? style.afterStroke2Paint
+                        : style.beforeStroke2Paint;
+                    const PaintStyle &decorPaint = overlay
+                        ? style.afterDecorPaint
+                        : style.beforeDecorPaint;
+                    const RgbaColor &fillColor = overlay
+                        ? style.afterFill
+                        : style.beforeFill;
+                    const RgbaColor &strokeColor = overlay
+                        ? style.afterStroke
+                        : style.beforeStroke;
+                    const RgbaColor &stroke2Color = overlay
+                        ? style.afterStroke2
+                        : style.beforeStroke2;
+                    const RgbaColor &decorColor = overlay
+                        ? style.afterDecor
+                        : style.beforeDecor;
+                    // 渐变/图片填充的画刷跨度 = 柱组外接框（与 Painter 的
+                    // group_rect 同口径）。
+                    D2D1_RECT_F groupRect = volumeBarRectAt(0);
+                    for (int other = 1; other < signalGeometry.count; ++other) {
+                        const D2D1_RECT_F otherRect = volumeBarRectAt(other);
+                        groupRect = D2D1::RectF(
+                            std::min(groupRect.left, otherRect.left),
+                            std::min(groupRect.top, otherRect.top),
+                            std::max(groupRect.right, otherRect.right),
+                            std::max(groupRect.bottom, otherRect.bottom)
+                        );
+                    }
+                    // 阴影装饰：偏移整影（外圈描边宽 + 填充），镜像
+                    // drawShadowSilhouette。
+                    if (style.decorationKind == "shadow"
+                        && (style.shadowOffsetX != 0.0f
+                            || style.shadowOffsetY != 0.0f)) {
+                        const float shadowDx
+                            = style.shadowOffsetX * volumeDecorScale;
+                        const float shadowDy
+                            = style.shadowOffsetY * volumeDecorScale;
+                        if (shadowDx != 0.0f || shadowDy != 0.0f) {
+                            const float shadowOuter
+                                = volumeDecorStroke2Width > 0.0f
+                                ? volumeDecorStrokeWidth
+                                    + volumeDecorStroke2Width
+                                : volumeDecorStrokeWidth;
+                            Microsoft::WRL::ComPtr<ID2D1Brush> decorBrush
+                                = paintBrush(decorPaint, groupRect, decorColor);
+                            decorBrush->SetOpacity(barOpacity);
+                            const D2D1_RECT_F shadowRect = D2D1::RectF(
+                                rectF.left + shadowDx,
+                                rectF.top + shadowDy,
+                                rectF.right + shadowDx,
+                                rectF.bottom + shadowDy
+                            );
+                            const float shadowRadius = std::max(
+                                std::min(
+                                    shadowRect.right - shadowRect.left,
+                                    shadowRect.bottom - shadowRect.top
+                                ) * 0.22f,
+                                1.0f
+                            );
+                            const D2D1_ROUNDED_RECT shadowRounded
+                                = D2D1::RoundedRect(
+                                    shadowRect, shadowRadius, shadowRadius
+                                );
+                            if (shadowOuter > 0.0f) {
+                                context->DrawRoundedRectangle(
+                                    shadowRounded,
+                                    decorBrush.Get(),
+                                    shadowOuter
+                                );
+                            }
+                            context->FillRoundedRectangle(
+                                shadowRounded, decorBrush.Get()
+                            );
+                        }
+                    }
+                    if (volumeDecorStroke2Width > 0.0f
+                        && stroke2Color.alpha > 0) {
+                        Microsoft::WRL::ComPtr<ID2D1Brush> stroke2Brush
+                            = paintBrush(stroke2Paint, groupRect, stroke2Color);
+                        stroke2Brush->SetOpacity(barOpacity);
+                        context->DrawRoundedRectangle(
+                            rect,
+                            stroke2Brush.Get(),
+                            volumeDecorStrokeWidth + volumeDecorStroke2Width
+                        );
+                    }
+                    if (volumeDecorStrokeWidth > 0.0f && strokeColor.alpha > 0) {
+                        Microsoft::WRL::ComPtr<ID2D1Brush> strokeBrush
+                            = paintBrush(strokePaint, groupRect, strokeColor);
+                        strokeBrush->SetOpacity(barOpacity);
+                        context->DrawRoundedRectangle(
+                            rect, strokeBrush.Get(), volumeDecorStrokeWidth
+                        );
+                    }
+                    Microsoft::WRL::ComPtr<ID2D1Brush> fillBrush = paintBrush(
+                        fillPaint, groupRect, fillColor
                     );
+                    fillBrush->SetOpacity(barOpacity);
+                    context->FillRoundedRectangle(rect, fillBrush.Get());
+                } else {
+                    Microsoft::WRL::ComPtr<ID2D1Brush> fill =
+                        overlay ? overlayFill : normalFill;
+                    Microsoft::WRL::ComPtr<ID2D1Brush> stroke =
+                        overlay ? overlayStroke : normalStroke;
+                    fill->SetOpacity(barOpacity);
+                    stroke->SetOpacity(barOpacity);
+                    const RgbaColor &strokeColor = overlay
+                        ? style.volumeOverlayStroke
+                        : style.volumeStroke;
+                    const float volumeStrokeWidth = style.volumeEnabled
+                        ? style.volumeStrokeWidth
+                        : style.litStrokeWidth;
+                    context->FillRoundedRectangle(rect, fill.Get());
+                    if (volumeStrokeWidth > 0.0f && strokeColor.alpha > 0) {
+                        context->DrawRoundedRectangle(
+                            rect, stroke.Get(), volumeStrokeWidth
+                        );
+                    }
                 }
                 if (transformed) {
                     context->SetTransform(withViewport(base));

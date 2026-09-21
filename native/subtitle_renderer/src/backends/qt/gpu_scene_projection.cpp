@@ -326,6 +326,7 @@ void applyGpuResolvedStyle(
     target.litTransitionDistance = static_cast<float>(source.litTransitionDistance * scale);
     target.signalsDurationMs = source.signalsDurationMs;
     target.volumeEnabled = source.volumeEnabled;
+    target.volumeAppearanceMode = source.volumeAppearanceMode.toStdString();
     target.volumeDurationMs = source.volumeDurationMs;
     target.volumeWaitingTimeMs = source.volumeWaitingTimeMs;
     target.volumeTimeOffsetMs = source.volumeTimeOffsetMs;

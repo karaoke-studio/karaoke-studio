@@ -1121,10 +1121,12 @@ class Style:
     volume_enabled: bool = False
     volume_appearance_mode: VolumeAppearanceMode = "custom"
     """音量柱外观联动：``auto`` 时整体高度/柱宽/描边宽按主文字字号推导，
-    四个柱体颜色跟随主文字配色（未唱←``base_color``、已唱←``fill_color``、
-    描边←``stroke_color``）；``custom`` 时全部使用下面的独立字段。推导在
-    渲染期实时进行（``resolve_volume_appearance``），改字号/配色/输出高度
-    后音量柱自动跟随，工程里不落具体值。"""
+    且柱体改用主文字的完整装饰管线——填充/渐变取文字配色矩阵（未唱
+    ``before`` / 已唱 ``after``），描边/二重描边、发光/阴影、整字放大
+    唱字动画与文字同款并按 柱高/字号 同比缩放（见
+    ``signal._draw_volume_decorated_group``）；``custom`` 时全部使用下面
+    的独立字段。推导在渲染期实时进行，改字号/配色/输出高度后音量柱自动
+    跟随，工程里不落具体值。"""
     # Keep the serialized/default discriminator for source compatibility with
     # direct Style(lit_enabled=True) callers; the new UI always writes a shape.
     lit_style: LitStyle = "volume"
@@ -1562,14 +1564,19 @@ def style_for_track(style: Style, track: object) -> Style:
 def volume_auto_values(style: "Style") -> dict[str, object]:
     """Derive auto-mode volume metrics/colors from the main lyric font.
 
-    比例链与 N3 默认值（整体 48 : 柱宽 12 : 描边 2，字号 100）一致：
-    整体高度 = 字号 1/2，柱宽 = 高度 1/4，描边宽 = 柱宽 1/6。取整统一
-    半向上（与面板浮点回显口径相同），避免 banker's rounding 抖动。
+    比例链与 N3 默认值（整体 48 : 柱宽 12，字号 100）一致：整体高度 =
+    字号 1/2，柱宽 = 高度 1/4。auto 档的绘制走文字装饰管线（描边宽 =
+    文字描边宽 × 高度比、上限半个柱宽，颜色取自文字配色矩阵），见
+    ``signal._draw_volume_lit_group``。取整统一半向上（与面板浮点回显
+    口径相同），避免 banker's rounding 抖动。
     """
     font_size = max(int(style.font_size_px), 1)
     size = max(4, int(font_size * 0.5 + 0.5))
     column_width = max(1, int(size / 4.0 + 0.5))
-    stroke_width = min(max(int(column_width / 6.0 + 0.5), 0), 40)
+    stroke_width = min(
+        max(int(int(style.stroke_width_px or 0) * size / font_size + 0.5), 0),
+        column_width // 2,
+    )
     return {
         "volume_size": size,
         "volume_column_width": column_width,

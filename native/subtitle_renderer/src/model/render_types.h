@@ -393,6 +393,9 @@ struct TextStyle {
     float litTransitionDistance = 0.0f;
     int signalsDurationMs = 4000;
     bool volumeEnabled = false;
+    // auto 外观模式：柱体走主文字装饰管线（填充/渐变、描边/二重描边、
+    // 发光/阴影、整字放大），镜像 Painter 的 _draw_volume_decorated_group。
+    std::string volumeAppearanceMode = "custom";
     int volumeDurationMs = 4000;
     int volumeWaitingTimeMs = 0;
     int volumeTimeOffsetMs = 0;

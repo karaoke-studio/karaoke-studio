@@ -243,6 +243,7 @@ struct ResolvedStyle {
     int litTransitionDistance = 0;
     int signalsDurationMs = 4000;
     bool volumeEnabled = false;
+    QString volumeAppearanceMode = QStringLiteral("custom");
     int volumeDurationMs = 4000;
     int volumeWaitingTimeMs = 0;
     int volumeTimeOffsetMs = 0;
