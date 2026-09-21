@@ -10765,6 +10765,60 @@ def test_per_track_timing_overrides_do_not_leak_across_tracks(qapp):
         assert windows(wide) == {0: (8_400, 12_000)}
 
 
+def test_per_track_overlap_overrides_reach_page_placement(qapp):
+    """防重叠开关与收尾策略按轴生效：副轴覆盖走该轴解算，跟随轴同全局。
+
+    复用「跨页空间避让」场景：同一份重叠页面数据，全局 lift 会为后进入的
+    页解出非零偏移；副轴覆盖 ``allow_inter_page_line_overlap`` 或
+    ``overlap_fallback_mode="displace"`` 后该轴不再做页面平移避让，
+    跟随副轴仍与主轴逐字节一致。
+    """
+
+    def overlap_placement_track() -> TimingTrack:
+        lines = [
+            TimingLine(
+                chars=[TimingChar(text, start)],
+                end_ms=start + 500,
+                display_start_override_ms=0,
+                display_end_override_ms=5_000,
+            )
+            for text, start in (("A", 1_000), ("B", 2_000), ("C", 3_000), ("D", 4_000))
+        ]
+        return TimingTrack(
+            lines=lines,
+            page_plan=TrackPagePlan(
+                [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+            ),
+        )
+
+    style = Style()
+    main = overlap_placement_track()
+    following = overlap_placement_track()
+    allow_overlap = overlap_placement_track()
+    allow_overlap.display_timing.follow_main = False
+    allow_overlap.display_timing.overrides["allow_inter_page_line_overlap"] = True
+    displace = overlap_placement_track()
+    displace.display_timing.follow_main = False
+    displace.display_timing.overrides["overlap_fallback_mode"] = "displace"
+
+    def offsets(track):
+        return subtitle_painter.resolved_page_offsets_for_style(
+            1280, 1080, track, style
+        )
+
+    # 主轴：lift 避让为后进入的页解出非零偏移（同既有跨页避让行为）。
+    main_offsets = offsets(main)
+    assert main_offsets[2] != (0.0, 0.0)
+    # 跟随副轴与主轴一致；覆盖副轴两种方式都不再做页面平移避让。
+    assert offsets(following) == main_offsets
+    assert offsets(allow_overlap) == {}
+    assert offsets(displace) == {}
+    # 覆盖不泄漏：全局样式保持 lift，主轴重解结果不变。
+    assert style.allow_inter_page_line_overlap is False
+    assert style.overlap_fallback_mode == "lift"
+    assert offsets(main) == main_offsets
+
+
 def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     lines = [
         TimingLine(

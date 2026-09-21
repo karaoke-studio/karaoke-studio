@@ -707,6 +707,8 @@ class StyleTimingConfig:
     sync_entry: bool
     sync_ending: bool
     allow_entry_exit_animation_overlap: bool
+    allow_inter_page_line_overlap: bool
+    overlap_fallback_mode: OverlapFallbackMode
     sync_each_page: bool
     auto_fill_section_time: bool
     section_ending_mode: SectionEndingMode
@@ -738,6 +740,8 @@ TRACK_TIMING_FIELDS: tuple[str, ...] = (
     "sync_ending",
     "sync_each_page",
     "allow_entry_exit_animation_overlap",
+    "allow_inter_page_line_overlap",
+    "overlap_fallback_mode",
     "auto_fill_section_time",
     "ruby_main_progress_mode",
 )
@@ -787,8 +791,9 @@ class Style:
     """允许不同页面的字幕行保持旧式重叠行为。
 
     关闭时，渲染器按最终主文字像素范围压缩冲突时间，仍无法消除时移动后进入的
-    整页字幕；开启时跳过这两类跨页避让。该字段是项目级设置，不属于
-    ``LyricsLayout``，也不随分页布局预设切换。
+    整页字幕；开启时跳过这两类跨页避让。主轨取本字段全局值，副字幕源可在
+    时间卡片按轴覆盖（``TRACK_TIMING_FIELDS``）。不属于 ``LyricsLayout``，
+    也不随分页布局预设切换。
     """
 
     overlap_fallback_mode: OverlapFallbackMode = "lift"
@@ -800,7 +805,8 @@ class Style:
     时刻结束（走字显示到退场开始为止，退场动画充当交接过渡）。手工拖过
     消失时间的句子不参与自动压缩，时间数据保持原值，顶掉只发生在渲染层。
     该模式不做页面平移避让（抬升画面）；ForceBottom 行位上移照常保留。
-    仅在 ``allow_inter_page_line_overlap`` 关闭时参与解算。
+    仅在 ``allow_inter_page_line_overlap`` 关闭时参与解算。主轨取本字段
+    全局值，副字幕源可在时间卡片按轴覆盖（``TRACK_TIMING_FIELDS``）。
     """
 
     font_weight: int = 400  # Qt 习惯 100-900

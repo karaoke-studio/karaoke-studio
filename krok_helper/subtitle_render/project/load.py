@@ -101,11 +101,13 @@ _TIMING_OVERRIDE_BOOL_FIELDS = frozenset({
     "sync_ending",
     "sync_each_page",
     "allow_entry_exit_animation_overlap",
+    "allow_inter_page_line_overlap",
     "auto_fill_section_time",
 })
 _TIMING_OVERRIDE_ENUM_FIELDS = {
     "section_ending_mode": frozenset({"hold", "clear"}),
     "ruby_main_progress_mode": frozenset({"checkpoint_segments", "reading_units"}),
+    "overlap_fallback_mode": frozenset({"lift", "displace"}),
 }
 
 

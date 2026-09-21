@@ -25,9 +25,6 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
 )
 from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
-from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import (
-    WorkspaceSwitcher,
-)
 
 
 VIEWPORT_ALIGNMENT_OPTIONS = (
@@ -47,10 +44,6 @@ POSITION_SEGMENT_OPTIONS = (
     ("top", "pos_top", "顶部"),
     ("center", "pos_middle", "居中"),
     ("bottom", "pos_bottom", "底部"),
-)
-OVERLAP_FALLBACK_OPTIONS = (
-    ("lift", "抬升避让"),
-    ("displace", "吃掉走字时长"),
 )
 
 
@@ -154,82 +147,6 @@ class LayoutPropertyPageBuilder:
 
         compact_layout.addStretch(1)
         layout.addWidget(compact_row)
-        return section
-
-    def make_overlap_section(self) -> QFrame:
-        """「重叠设置」：行间重叠总开关 + 残余冲突的收尾策略（同一行）。"""
-
-        host = self._host
-        section, layout = property_section("重叠设置")
-
-        host._allow_inter_page_line_overlap_check = CheckBox(
-            "启用行间重叠",
-            section,
-        )
-        host._allow_inter_page_line_overlap_check.setToolTip(
-            "关闭时，系统按每一行不含注音、描边、阴影和发光的主文字字形"
-            "像素范围检测真实跨页冲突，只缩短发生冲突的两行的提前入场和延迟"
-            "退场时间，不会截断任何走字区间或改变页内上屏顺序。自动压缩可以"
-            "缩短动画时段：不会把非零入场动画自动压到时间设置中的"
-            "「入场动画保护时间」以下；若动画时长或上屏时间由用户手工设定，"
-            "则保留用户值；非零退场动画自动压缩时至少保留"
-            "「出场动画保护时间」。是否允许入场和退场动画"
-            "互相重叠，由时间设置中的“允许出入场动画重叠”单独控制。"
-            "时间压缩仍无法消除冲突时，按右侧胶囊选择的收尾策略处理："
-            "抬升避让 = 移动后进入的整页字幕；吃掉走字时长 = 由将要演唱的"
-            "下一句直接顶掉还在走字的上一句。入场、退场和字符动画允许互相"
-            "穿越，不因页面排版变化而扩大碰撞时间。开启后不执行跨页时间压缩"
-            "或空间避让，允许跨页字幕直接重叠，适合需要刻意叠放的特殊效果。"
-            "同一页内部的负行间距或手工重叠不受此开关影响。"
-        )
-        host._allow_inter_page_line_overlap_check.toggled.connect(
-            lambda checked: host._update_style(
-                allow_inter_page_line_overlap=checked
-            )
-        )
-
-        host._overlap_fallback_switch = WorkspaceSwitcher(section)
-        host._overlap_fallback_switch.setAccessibleName("残余冲突处理")
-        for key, label in OVERLAP_FALLBACK_OPTIONS:
-            host._overlap_fallback_switch.addItem(key, label)
-        host._overlap_fallback_switch.setToolTip(
-            "时间压缩（含两侧保护时间底线）仍无法消除跨页冲突时的收尾策略：\n"
-            "抬升避让 = 移动后进入的整页字幕（默认，旧行为）：避让优先吸附到"
-            "已有布局行位，再沿布局方向寻找画布内空间，跨页空隙采用被重叠页面"
-            "布局的行间距；放不下时改向反方向寻找，两边都放不下则保持原布局"
-            "位置和绘制优先级；页面一旦移动，会保持位置直到本页播放完毕。\n"
-            "吃掉走字时长 = 由将要演唱的下一句直接顶掉还在走字的上一句：被顶掉"
-            "的句子按其「出场动画保护时间」播放退场动画，动画恰好在下一句上屏"
-            "时刻结束（走字显示到退场开始为止，退场动画充当交接过渡）；手工拖过"
-            "消失时间的句子不参与自动压缩、时间保持原值，顶掉只发生在渲染层。"
-            "该模式不移动整页字幕（无页面平移避让）；单行页的行位上移"
-            "（强制顶底 N3）照常。\n"
-            "仅在关闭「启用行间重叠」时参与解算。"
-        )
-        host._overlap_fallback_switch.currentItemChanged.connect(
-            lambda mode: host._update_style(overlap_fallback_mode=mode)
-        )
-        # 勾选「启用行间重叠」后不存在跨页避让，收尾策略随之失效。
-        host._allow_inter_page_line_overlap_check.toggled.connect(
-            lambda checked: host._overlap_fallback_switch.setEnabled(not checked)
-        )
-
-        row = QWidget(section)
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
-        row_layout.addWidget(
-            host._allow_inter_page_line_overlap_check,
-            0,
-            Qt.AlignmentFlag.AlignVCenter,
-        )
-        row_layout.addStretch(1)
-        row_layout.addWidget(
-            host._overlap_fallback_switch,
-            0,
-            Qt.AlignmentFlag.AlignVCenter,
-        )
-        layout.addWidget(row)
         return section
 
     def make_ruby_section(

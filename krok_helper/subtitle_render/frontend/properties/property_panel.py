@@ -985,15 +985,6 @@ class PropertyPanel(QWidget):
             self._viewport_rotation_spin.setValue(self._style.viewport_rotation_deg)
             self._rtl_check.setChecked(self._style.right_to_left)
             self._vertical_check.setChecked(self._style.vertical)
-            self._allow_inter_page_line_overlap_check.setChecked(
-                self._style.allow_inter_page_line_overlap
-            )
-            self._overlap_fallback_switch.setCurrentItem(
-                self._style.overlap_fallback_mode
-            )
-            self._overlap_fallback_switch.setEnabled(
-                not self._style.allow_inter_page_line_overlap
-            )
             self._refresh_layout_combo()
             self._sync_layout_editor_controls()
             timing = self._style.timing
@@ -2419,7 +2410,7 @@ class PropertyPanel(QWidget):
         return self._layout_page_builder.make_vertical_section()
 
     def _make_overlap_section(self) -> QFrame:
-        return self._layout_page_builder.make_overlap_section()
+        return self._timing_page_builder.make_overlap_section()
 
     def _on_line_position_changed(self, _value: str = "") -> None:
         self._update_layout_field(
@@ -2965,6 +2956,14 @@ class PropertyPanel(QWidget):
         self._line_protect_spin.setValue(timing.line_protect_ms)
         self._entry_anim_protect_spin.setValue(timing.entry_anim_protect_ms)
         self._exit_anim_protect_spin.setValue(timing.exit_anim_protect_ms)
+        # 重叠设置随轴回显：胶囊先于开关设值，再统一按开关恢复可用性。
+        self._overlap_fallback_switch.setCurrentItem(timing.overlap_fallback_mode)
+        self._allow_inter_page_line_overlap_check.setChecked(
+            timing.allow_inter_page_line_overlap
+        )
+        self._overlap_fallback_switch.setEnabled(
+            not timing.allow_inter_page_line_overlap
+        )
         self._sync_entry_check.setChecked(timing.sync_entry)
         self._sync_ending_check.setChecked(timing.sync_ending)
         self._sync_each_page_check.setChecked(timing.sync_each_page)
@@ -2991,6 +2990,17 @@ class PropertyPanel(QWidget):
         read_only = index > 0 and follow
         for control in getattr(self, "_timing_scope_managed_controls", ()) or ():
             control.setEnabled(not read_only)
+        # 「启用行间重叠」勾选时收尾策略无效：通用恢复循环会重新启用胶囊，
+        # 这里在可编辑态下按开关重新压掉（只读态两者都保持禁用）。
+        fallback_switch = getattr(self, "_overlap_fallback_switch", None)
+        overlap_check = getattr(self, "_allow_inter_page_line_overlap_check", None)
+        if (
+            fallback_switch is not None
+            and overlap_check is not None
+            and not read_only
+            and overlap_check.isChecked()
+        ):
+            fallback_switch.setEnabled(False)
         follow_check = getattr(self, "_timing_follow_check", None)
         if follow_check is not None:
             follow_check.blockSignals(True)

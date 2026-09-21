@@ -40,7 +40,6 @@ def _build_layout_page(
     layout.addWidget(
         section_pair(host._ruby_section, host._make_vertical_layout_section())
     )
-    layout.addWidget(host._make_overlap_section())
     viewport = host._make_viewport_section()
     viewport.set_expanded(False)
     layout.addWidget(viewport)
@@ -51,6 +50,7 @@ def _build_layout_page(
 def _build_timing_page(host: Any, scroll_page: Callable, _section_pair: Callable) -> Any:
     scroll, layout = scroll_page()
     layout.addWidget(host._make_timing_section())
+    layout.addWidget(host._make_overlap_section())
     layout.addStretch(1)
     return scroll
 

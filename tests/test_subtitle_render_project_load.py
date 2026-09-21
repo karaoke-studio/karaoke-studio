@@ -231,12 +231,22 @@ def test_display_timing_round_trips_through_project_data() -> None:
 
     track.display_timing.follow_main = False
     track.display_timing.overrides.update(
-        {"line_lead_in_ms": 900, "sync_entry": False}
+        {
+            "line_lead_in_ms": 900,
+            "sync_entry": False,
+            "allow_inter_page_line_overlap": True,
+            "overlap_fallback_mode": "displace",
+        }
     )
     data = _track_project_data(track)
     assert data["display_timing"] == {
         "follow_main": False,
-        "overrides": {"line_lead_in_ms": 900, "sync_entry": False},
+        "overrides": {
+            "line_lead_in_ms": 900,
+            "sync_entry": False,
+            "allow_inter_page_line_overlap": True,
+            "overlap_fallback_mode": "displace",
+        },
     }
 
     restored = TimingTrack(
@@ -247,6 +257,8 @@ def test_display_timing_round_trips_through_project_data() -> None:
     assert restored.display_timing.overrides == {
         "line_lead_in_ms": 900,
         "sync_entry": False,
+        "allow_inter_page_line_overlap": True,
+        "overlap_fallback_mode": "displace",
     }
 
 
@@ -289,8 +301,10 @@ def test_display_timing_defaults_for_missing_or_broken_payloads() -> None:
                     "section_ending_mode": "explode",
                     "auto_fill_section_time": False,
                     "ruby_main_progress_mode": "reading_units",
+                    "allow_inter_page_line_overlap": "on",
+                    "overlap_fallback_mode": "fly",
                 },
-            }
+            },
         },
     )
     assert track.display_timing.follow_main is False

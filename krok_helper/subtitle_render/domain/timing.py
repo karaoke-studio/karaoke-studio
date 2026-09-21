@@ -403,10 +403,10 @@ class TrackDisplayTiming:
 
     ``follow_main=True``（默认，含全部旧工程）时该轴 effective style 就是
     全局 Style——主轴改时间该轴即时跟随；``overrides`` 被忽略。关闭跟随后
-    ``overrides`` 以绝对值记录该轴自己的时间字段（键为
-    ``_STYLE_TIMING_FIELDS`` 中时间卡片编辑的字段名），通过
-    ``Style.with_timing`` 叠加出该轴的 effective style。重新开启跟随时
-    ``overrides`` 整体清空，回到推送语义。
+    ``overrides`` 以绝对值记录该轴自己的时间卡片字段（含防重叠开关与残余
+    冲突策略，键为 ``_STYLE_TIMING_FIELDS`` 中 ``TRACK_TIMING_FIELDS``
+    收录的字段名），通过 ``Style.with_timing`` 叠加出该轴的 effective
+    style。重新开启跟随时 ``overrides`` 整体清空，回到推送语义。
     """
 
     follow_main: bool = True

@@ -597,6 +597,56 @@ def test_timing_scope_custom_edits_leave_global_style_untouched(qapp):
     ]
 
 
+def test_timing_scope_routes_overlap_settings_per_track(qapp):
+    """防重叠开关与残余冲突策略随字幕轴编辑：副轴改道、主轴走全局。"""
+
+    panel = PropertyPanel()
+    emitted: list[tuple[int, dict]] = []
+    panel.trackTimingChanged.connect(
+        lambda index, changes: emitted.append((index, dict(changes)))
+    )
+    global_emitted: list[Style] = []
+    panel.styleChanged.connect(global_emitted.append)
+
+    # 跟随副轴（默认）：重叠控件只读、显示主轴值（关 + lift）。
+    panel.set_timing_context(["主字幕", "和声"], [True, True], [None, None])
+    panel._timing_scope_combo.setCurrentIndex(1)
+    assert not panel._allow_inter_page_line_overlap_check.isEnabled()
+    assert not panel._overlap_fallback_switch.isEnabled()
+    assert panel._allow_inter_page_line_overlap_check.isChecked() is False
+    assert panel._overlap_fallback_switch.currentRouteKey() == "lift"
+
+    # 非跟随副轴带覆盖值：开关回显轴值，勾选重叠后胶囊联动禁用。
+    panel.set_timing_context(
+        ["主字幕", "和声"],
+        [True, False],
+        [None, {"allow_inter_page_line_overlap": True, "overlap_fallback_mode": "displace"}],
+    )
+    assert panel._allow_inter_page_line_overlap_check.isEnabled()
+    assert panel._allow_inter_page_line_overlap_check.isChecked() is True
+    assert panel._overlap_fallback_switch.currentRouteKey() == "displace"
+    assert not panel._overlap_fallback_switch.isEnabled()
+    # 全局样式保持主轴值：副轴覆盖不泄漏回全局。
+    assert panel._style.allow_inter_page_line_overlap is False
+    assert panel._style.overlap_fallback_mode == "lift"
+
+    # 副轴编辑改道 trackTimingChanged；取消重叠后胶囊恢复可用。
+    panel._allow_inter_page_line_overlap_check.setChecked(False)
+    assert emitted[-1] == (1, {"allow_inter_page_line_overlap": False})
+    assert panel._overlap_fallback_switch.isEnabled()
+    panel._overlap_fallback_switch._items["lift"].click()
+    assert emitted[-1] == (1, {"overlap_fallback_mode": "lift"})
+    assert global_emitted == []
+
+    # 切回主轴：显示全局值，编辑走全局样式流。
+    panel._timing_scope_combo.setCurrentIndex(0)
+    assert panel._allow_inter_page_line_overlap_check.isChecked() is False
+    assert panel._overlap_fallback_switch.currentRouteKey() == "lift"
+    panel._allow_inter_page_line_overlap_check.setChecked(True)
+    assert panel._style.allow_inter_page_line_overlap is True
+    assert len(global_emitted) == 1
+
+
 def test_timing_context_reset_clamps_stale_scope(qapp):
     """源列表缩短后 scope 越界自动重置主轴，杜绝写错轴。"""
 
@@ -3111,7 +3161,8 @@ def test_property_panel_basic_page_has_no_screen_section(qapp):
         timing_layout.itemAt(index).widget().header.text()
         for index in range(timing_layout.count() - 1)
     ]
-    assert timing_titles == ["时间"]
+    # 「重叠设置」随字幕轴编辑迁入时间卡片（布局页不再持有）。
+    assert timing_titles == ["时间", "重叠设置"]
 
 
 def test_layout_navigation_is_merged_above_row_structure(qapp):

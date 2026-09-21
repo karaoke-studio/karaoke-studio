@@ -30,7 +30,7 @@ from krok_helper.subtitle_render.engine.layout.display.signal import (
     signal_lead_in_ms,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
-from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.models import Style, style_for_track
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
@@ -87,6 +87,9 @@ def layout_timing_diagnostics_for_style(
 
     if not style.dual_line_layout:
         return []
+    # 入口按轴解析（幂等兜底）：防重叠开关允许副轴覆盖，碰撞守卫与页偏移
+    # 诊断必须按该轴生效样式判断；主轨 / 跟随副轨拿到原全局 style。
+    style = style_for_track(style, track)
     # CPU and GPU both consume the layout plan built from this effective
     # signal-window style. Diagnostics must inspect the same display window.
     style = display_style_for_signal_window(style)

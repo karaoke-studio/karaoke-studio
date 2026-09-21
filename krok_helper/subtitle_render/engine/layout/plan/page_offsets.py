@@ -19,7 +19,11 @@ from krok_helper.subtitle_render.engine.value_signature import (
     value_signature,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
-from krok_helper.subtitle_render.domain.models import LYRICS_LAYOUT_FIELDS, Style
+from krok_helper.subtitle_render.domain.models import (
+    LYRICS_LAYOUT_FIELDS,
+    Style,
+    style_for_track,
+)
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 
 
@@ -134,6 +138,10 @@ def resolve_page_offset_windows(
 ) -> dict[int, tuple[LayoutOffsetWindow, ...]]:
     """Resolve and cache page translations through backend measurement ports."""
 
+    # 入口按轴解析（幂等兜底）：防重叠开关与收尾策略允许副轴覆盖，早退
+    # 闸门与缓存 key 都必须按该轴生效样式判断（渲染路径已解析过，重复
+    # 调用结果不变）；检查 / 诊断类调用方传全局 style + 具体轨也自动正确。
+    style = style_for_track(style, track)
     if (
         style.allow_inter_page_line_overlap
         # 「吃掉走字时长」不做页面平移避让（抬升画面）：残余冲突由时间

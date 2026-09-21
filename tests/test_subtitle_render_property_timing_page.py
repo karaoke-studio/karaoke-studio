@@ -86,3 +86,67 @@ def test_timing_property_builder_routes_controls_to_style_fields(qapp) -> None:
         {"auto_fill_section_time": True},
     ]
     assert host.sync_refreshes == 1
+
+
+def test_timing_overlap_builder_groups_switch_and_fallback_capsule(qapp) -> None:
+    """「重叠设置」随时间卡片落位：控件契约与轴只读管控一并建立。"""
+
+    host = _Host()
+    tooltip_calls: list[tuple[object, int]] = []
+    builder = TimingPropertyPageBuilder(
+        host,
+        tooltip_installer=lambda widget, *, show_delay: tooltip_calls.append(
+            (widget, show_delay)
+        ),
+    )
+    builder.make_section()
+
+    section = builder.make_overlap_section()
+
+    assert section.header.text() == "重叠设置"
+    assert host._allow_inter_page_line_overlap_check.text() == "启用行间重叠"
+    tooltip = host._allow_inter_page_line_overlap_check.toolTip()
+    assert "「入场动画保护时间」" in tooltip
+    assert "「出场动画保护时间」" in tooltip
+    # tooltip 指明编辑对象为当前选中的字幕轴。
+    assert "编辑对象为顶部选中的字幕轴" in tooltip
+    # 胶囊（WorkspaceSwitcher）默认旧方案，两档与模型枚举一致，初始可用。
+    capsule = host._overlap_fallback_switch
+    assert capsule.currentRouteKey() == "lift"
+    assert set(capsule._items) == {"lift", "displace"}
+    assert capsule.isEnabled() is True
+    capsule_tooltip = capsule.toolTip()
+    assert "抬升避让" in capsule_tooltip
+    assert "吃掉走字时长" in capsule_tooltip
+    # 两个控件并入跟随态整体只读清单（14 个时间控件 + 重叠开关 + 胶囊）。
+    assert len(host._timing_scope_managed_controls) == 16
+    assert host._timing_scope_managed_controls[-2:] == (
+        host._allow_inter_page_line_overlap_check,
+        host._overlap_fallback_switch,
+    )
+    # make_section 的 6 个 + 重叠开关 1 个；最后一个必须是重叠开关本体。
+    assert len(tooltip_calls) == 7
+    assert tooltip_calls[-1][0] is host._allow_inter_page_line_overlap_check
+    assert tooltip_calls[-1][1] == 300
+
+
+def test_timing_overlap_builder_routes_switch_and_fallback_mode(qapp) -> None:
+    host = _Host()
+    builder = TimingPropertyPageBuilder(
+        host,
+        tooltip_installer=lambda *_args, **_kwargs: None,
+    )
+    builder.make_section()
+    builder.make_overlap_section()
+
+    host._overlap_fallback_switch._items["displace"].click()
+    host._allow_inter_page_line_overlap_check.setChecked(True)
+
+    assert host.updates == [
+        {"overlap_fallback_mode": "displace"},
+        {"allow_inter_page_line_overlap": True},
+    ]
+    # 勾选「启用行间重叠」后不存在跨页避让，收尾策略胶囊随之失效。
+    assert host._overlap_fallback_switch.isEnabled() is False
+    host._allow_inter_page_line_overlap_check.setChecked(False)
+    assert host._overlap_fallback_switch.isEnabled() is True
