@@ -1244,6 +1244,94 @@ def test_volume_auto_zoom_pulse_scales_active_bar(qapp):
     assert bar_row_span("zoom_pulse") > bar_row_span("none")
 
 
+def test_volume_auto_size_ratio_scales_geometry(qapp):
+    # 「相对字号」参数：auto 整体高度 = 字号 × ratio%（默认 50%），
+    # 柱宽/描边比例链随整体高度推导；比例变化反映到 union 布局量。
+    base = Style(
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        font_size_px=100,
+        stroke_width_px=0,
+    )
+    default = volume_style(base)
+    assert default.volume_size == 50
+    assert default.volume_column_width == 13
+    bigger = volume_style(replace(base, volume_auto_size_ratio_pct=100))
+    assert bigger.volume_size == 100
+    assert bigger.volume_column_width == 25
+    assert (
+        _signal_layout_metrics(bigger).group_width
+        > _signal_layout_metrics(default).group_width
+    )
+    tiny = volume_style(replace(base, volume_auto_size_ratio_pct=5))
+    assert tiny.volume_size == 5
+
+
+def test_volume_auto_decorations_follow_first_role(qapp):
+    # auto 档装饰源 = 段首行第一个角色：柱体用该角色的已唱填充色，
+    # 而不是全局 fill_color。
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000, role_label="赤"),
+                    TimingChar(text="い", start_ms=1300),
+                ],
+                end_ms=2000,
+            )
+        ]
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=64,
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        volume_flash_times=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=500,
+        stroke_width_px=0,
+        decoration_kind="none",
+        base_color="#FFFFFF",
+        fill_color="#2030FF",
+        custom_style_schemes={
+            "赤": SubtitleStyleScheme(
+                font_family="Arial",
+                font_family_latin="Arial",
+                font_size_px=64,
+                stroke_width_px=0,
+                decoration_kind="none",
+                fill_color="#20FF50",
+            ),
+        },
+    )
+    img = _blank(800, 450)
+    paint_frame(img, track, 1300, style)
+    layout = _sayatoo_layout_for(track, style, 1300, w=800, h=450)
+    x0 = max(int(layout.signal_x) - 4, 0)
+    x1 = int(layout.text_x)
+
+    def region_has(color: str) -> bool:
+        target = QColor(color)
+        for y in range(img.height()):
+            for x in range(x0, x1):
+                c = QColor(img.pixel(x, y))
+                if (
+                    abs(c.red() - target.red()) < 24
+                    and abs(c.green() - target.green()) < 24
+                    and abs(c.blue() - target.blue()) < 24
+                ):
+                    return True
+        return False
+
+    # 覆盖柱填充 = 角色的已唱色（绿），全局 fill_color（蓝）不出现在柱区。
+    assert region_has("#20FF50")
+    assert not region_has("#2030FF")
+
+
 def test_volume_auto_colors_reach_painting(qapp):
     # 覆盖柱填充跟随 fill_color：auto 模式下柱区出现「已唱填充色」像素。
     img = _blank(160, 90)
@@ -11498,11 +11586,9 @@ def test_mixed_row_layouts_judge_conflicts_by_visual_row(qapp):
     assert windows[2][1] + 300 == windows[4][0]
 
 
-def _shrinking_page_style(*layouts: LyricsLayout) -> Style:
-    """底部对齐、无动画的缩页切换测试样式（同步退场 + 每句同步全开）。"""
-    return replace(
-        Style(font_family="Arial", font_family_latin="Arial"),
-        layouts=list(layouts),
+def _shrinking_page_style(*layouts: LyricsLayout, **changes) -> Style:
+    """底部对齐、无动画的缩页切换测试样式（默认同步全开，可覆盖）。"""
+    defaults = dict(
         sync_entry=True,
         sync_ending=True,
         sync_each_page=True,
@@ -11513,6 +11599,12 @@ def _shrinking_page_style(*layouts: LyricsLayout) -> Style:
         line_tail_ms=1_000,
         line_lane_gap_ms=300,
     )
+    defaults.update(changes)
+    return replace(
+        Style(font_family="Arial", font_family_latin="Arial"),
+        layouts=list(layouts),
+        **defaults,
+    )
 
 
 def test_sync_ending_air_row_exits_with_the_page_turn(qapp):
@@ -11520,7 +11612,7 @@ def test_sync_ending_air_row_exits_with_the_page_turn(qapp):
 
     同步退场曾把顶行挂到页内最晚边界（A2 演唱结束 + tail = 5_400），
     而中 / 底行已被下一页顶掉——顶行「和空气同步」，在下一页上场后
-    还挂在屏幕上。修复后顶行与本页最后一行同时退场。
+    还挂在屏幕上。修复后顶行与本页第一波被顶掉的行（A1）同时退场。
     """
 
     three = LyricsLayout(
@@ -11568,8 +11660,67 @@ def test_sync_ending_air_row_exits_with_the_page_turn(qapp):
     # 中 / 底行被同视觉行的 B0 / B1 顶掉（同轨间隔 300）。
     assert windows[1][1] + 300 == windows[3][0]
     assert windows[2][1] + 300 == windows[4][0]
-    # 顶行与本页最后退场的行一起消失，不再活到同步终点 5_400。
-    assert windows[0][1] == max(windows[1][1], windows[2][1]) == 4_400
+    # 顶行与第一波被顶掉的 A1 一起消失（= B0 上屏 − 300），不再活到 5_400。
+    assert windows[0][1] == windows[1][1] == 3_200
+    assert windows[0][1] + 300 == windows[3][0]
+
+
+def test_row_shrink_air_row_exits_with_the_page_turn_without_sync(qapp):
+    """无同步的 3行→2行缩页同样受钳制：T2 被顶掉后 T1 不得停留在画面上。
+
+    A0 的自然退场（演唱结束 4_000 + tail 1_000 = 5_000）越过翻页点
+    （B0 上屏 4_500）；A1 在 4_200 被 B0 顶掉时，A0 曾一直挂到 5_000。
+    """
+
+    three = LyricsLayout(
+        name="三行",
+        layout_id="L3",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "center", "right"],
+    )
+    two = LyricsLayout(
+        name="两行",
+        layout_id="L2",
+        line_y_position="bottom",
+        line_y_margin_px=60,
+        line_gap_px=120,
+        line_alignments=["left", "right"],
+    )
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A0", 1_000, 4_000),  # 自然终点 5_000，越过翻页点
+            ("A1", 3_200, 4_200),
+            ("A2", 4_400, 5_400),
+            ("B0", 5_600, 6_600),
+            ("B1", 6_800, 7_800),
+        )
+    ]
+    for line in lines[:3]:
+        line.layout_index = 1
+    for line in lines[3:]:
+        line.layout_index = 2
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(3, "L3"), TrackPage(2, "L2")])]
+        ),
+    )
+    style = _shrinking_page_style(
+        three, two, sync_entry=False, sync_ending=False, sync_each_page=False
+    )
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+
+    # A1 被 B0 顶掉、A2 被 B1 顶掉（同轨间隔 300）。
+    assert windows[1][1] + 300 == windows[3][0]
+    assert windows[2][1] + 300 == windows[4][0]
+    # 空气行 A0 与第一波被顶掉的 A1 一起退场，不再挂到自然终点 5_000。
+    assert windows[0][1] == windows[1][1] == 4_200
 
 
 def test_sync_ending_air_rows_exit_with_the_page_turn_on_wider_shrink(qapp):
@@ -11618,8 +11769,8 @@ def test_sync_ending_air_rows_exit_with_the_page_turn_on_wider_shrink(qapp):
         track, style, logical_w=1280, logical_h=720
     )
 
-    # 顶两条空气行与最后退场的底行（A3）同时消失。
-    assert windows[0][1] == windows[1][1] == windows[3][1] == 5_600
+    # 顶部两条空气行与第一波翻页（A2 被 B0 顶掉）一起退场。
+    assert windows[0][1] == windows[1][1] == windows[2][1] == 4_400
     assert windows[2][1] + 300 == windows[4][0]
     assert windows[3][1] + 300 == windows[5][0]
 

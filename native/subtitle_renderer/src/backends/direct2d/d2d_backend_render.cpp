@@ -1395,12 +1395,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // 阴影/整字放大），与 Painter 的 _draw_volume_decorated_group 同口径。
         const bool volumeAutoDecorated = independentVolume
             && style.volumeAppearanceMode == "auto";
-        const float volumeDecorScale = style.fontSize > 0.0f
-            ? signalGeometry.size / style.fontSize
+        // 装饰源样式：段首行第一个有几何字符的角色方案（Painter 取第一
+        // 个非空白字符的 role，两端一致；无角色回退行样式）。
+        const TextStyle *volumeBarDecorStylePtr = &style;
+        for (const Impl::CachedChar &ch : line->chars) {
+            if ((ch.geometry != nullptr || ch.bitmapGuide.has_value())
+                && ch.styleIndex >= 0
+                && ch.styleIndex
+                    < static_cast<int>(scene.charStyles.size())) {
+                volumeBarDecorStylePtr = &scene.charStyles[
+                    static_cast<std::size_t>(ch.styleIndex)];
+                break;
+            }
+        }
+        const TextStyle &barDecor = *volumeBarDecorStylePtr;
+        const float volumeDecorScale = barDecor.fontSize > 0.0f
+            ? signalGeometry.size / barDecor.fontSize
             : 1.0f;
-        const float volumeDecorStrokeWidth = std::max(style.volumeStrokeWidth, 0.0f);
+        const float volumeDecorStrokeWidth = std::min(
+            std::max(barDecor.strokeWidth * volumeDecorScale, 0.0f),
+            std::floor(signalGeometry.columnWidth * 0.5f)
+        );
         const float volumeDecorStroke2Width = std::min(
-            std::max(style.stroke2Width * volumeDecorScale, 0.0f),
+            std::max(barDecor.stroke2Width * volumeDecorScale, 0.0f),
             std::floor(signalGeometry.columnWidth * 0.5f)
         );
         // 柱体逐字入退场动画：镜像 Painter 的
@@ -4570,7 +4587,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // padding 与 Painter glow_extent 同式（笔宽/2 + 3R + 2）。
         if (volumeAutoDecorated
             && signalState.visible
-            && style.decorationKind == "glow"
+            && barDecor.decorationKind == "glow"
             && signalState.opacity > 0.0f
             && style.volumeOpacity > 0.0f) {
             const float groupOpacityBase = std::clamp(
@@ -4588,8 +4605,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     std::max(
                         0.0f,
                         (covered
-                            ? style.glowAfterRadius
-                            : style.glowBeforeRadius)
+                            ? barDecor.glowAfterRadius
+                            : barDecor.glowBeforeRadius)
                             * volumeDecorScale
                     )
                 ));
@@ -4625,7 +4642,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 layer.source = acquireGlowScratch(layerW, layerH);
                 layer.blur = acquireGlowEffect();
                 const int passes
-                    = std::clamp(style.glowConcentrationLevel, 0, 2) + 1;
+                    = std::clamp(barDecor.glowConcentrationLevel, 0, 2) + 1;
                 for (int pass = 0; pass < passes; ++pass) {
                     layer.sigmas.push_back(
                         radius - pass * radius / passes
@@ -4638,11 +4655,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     -layer.layerRect.left, -layer.layerRect.top
                 ));
                 const PaintStyle &decorPaint = covered
-                    ? style.afterDecorPaint
-                    : style.beforeDecorPaint;
+                    ? barDecor.afterDecorPaint
+                    : barDecor.beforeDecorPaint;
                 const RgbaColor &decorColor = covered
-                    ? style.afterDecor
-                    : style.beforeDecor;
+                    ? barDecor.afterDecor
+                    : barDecor.beforeDecor;
                 D2D1_RECT_F groupRect = volumeBarRectAt(0);
                 for (int other = 1; other < signalGeometry.count; ++other) {
                     const D2D1_RECT_F otherRect = volumeBarRectAt(other);
@@ -5904,29 +5921,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     * barAnimation.opacity;
                 if (volumeAutoDecorated) {
                     const PaintStyle &fillPaint = overlay
-                        ? style.afterFillPaint
-                        : style.beforeFillPaint;
+                        ? barDecor.afterFillPaint
+                        : barDecor.beforeFillPaint;
                     const PaintStyle &strokePaint = overlay
-                        ? style.afterStrokePaint
-                        : style.beforeStrokePaint;
+                        ? barDecor.afterStrokePaint
+                        : barDecor.beforeStrokePaint;
                     const PaintStyle &stroke2Paint = overlay
-                        ? style.afterStroke2Paint
-                        : style.beforeStroke2Paint;
+                        ? barDecor.afterStroke2Paint
+                        : barDecor.beforeStroke2Paint;
                     const PaintStyle &decorPaint = overlay
-                        ? style.afterDecorPaint
-                        : style.beforeDecorPaint;
+                        ? barDecor.afterDecorPaint
+                        : barDecor.beforeDecorPaint;
                     const RgbaColor &fillColor = overlay
-                        ? style.afterFill
-                        : style.beforeFill;
+                        ? barDecor.afterFill
+                        : barDecor.beforeFill;
                     const RgbaColor &strokeColor = overlay
-                        ? style.afterStroke
-                        : style.beforeStroke;
+                        ? barDecor.afterStroke
+                        : barDecor.beforeStroke;
                     const RgbaColor &stroke2Color = overlay
-                        ? style.afterStroke2
-                        : style.beforeStroke2;
+                        ? barDecor.afterStroke2
+                        : barDecor.beforeStroke2;
                     const RgbaColor &decorColor = overlay
-                        ? style.afterDecor
-                        : style.beforeDecor;
+                        ? barDecor.afterDecor
+                        : barDecor.beforeDecor;
                     // 渐变/图片填充的画刷跨度 = 柱组外接框（与 Painter 的
                     // group_rect 同口径）。
                     D2D1_RECT_F groupRect = volumeBarRectAt(0);
@@ -5941,13 +5958,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     // 阴影装饰：偏移整影（外圈描边宽 + 填充），镜像
                     // drawShadowSilhouette。
-                    if (style.decorationKind == "shadow"
-                        && (style.shadowOffsetX != 0.0f
-                            || style.shadowOffsetY != 0.0f)) {
+                    if (barDecor.decorationKind == "shadow"
+                        && (barDecor.shadowOffsetX != 0.0f
+                            || barDecor.shadowOffsetY != 0.0f)) {
                         const float shadowDx
-                            = style.shadowOffsetX * volumeDecorScale;
+                            = barDecor.shadowOffsetX * volumeDecorScale;
                         const float shadowDy
-                            = style.shadowOffsetY * volumeDecorScale;
+                            = barDecor.shadowOffsetY * volumeDecorScale;
                         if (shadowDx != 0.0f || shadowDy != 0.0f) {
                             const float shadowOuter
                                 = volumeDecorStroke2Width > 0.0f

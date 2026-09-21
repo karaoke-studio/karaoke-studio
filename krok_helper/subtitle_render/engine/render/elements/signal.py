@@ -58,6 +58,7 @@ from krok_helper.subtitle_render.engine.render.effects.raster import (
 )
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
+    style_for_role,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
@@ -89,6 +90,9 @@ class SignalLitGroup:
     # 第 i 根柱 behaves 相当于该行第 i 个字符，与文字同窗口、同曲线、同
     # 交错节奏地入场/退场；None = 无激活的逐字动画（纯行级动画路径）。
     bar_animations: tuple[BarAnimationState, ...] | None = None
+    # auto 档的装饰源样式：段首行第一个角色（无角色时为该行样式）的有效
+    # 配色。几何/尺寸仍来自全局投影样式；None = 未解析（用组样式兜底）。
+    bar_style: Style | None = None
 
 
 @dataclass(frozen=True)
@@ -865,29 +869,34 @@ def _draw_volume_decorated_group(
 ) -> None:
     """auto 档柱体走主文字装饰管线。
 
-    填充（含渐变/图片填充）取文字配色矩阵的 before/after 状态，渐变跨度
-    为柱组自身外接框；描边/二重描边宽度 = 文字对应宽度 ×（柱高/字号），
-    描边已在 ``volume_auto_values`` 里按同一公式解析进几何（列距口径一致）；
-    发光/阴影半径与偏移同比缩放；「整字放大」唱字动画开启时，倒计时扫到
-    的那根柱按同一曲线在其覆盖窗口内放大-缩回。
+    装饰源是段首行第一个角色的有效样式（``group.bar_style``，无角色时
+    为该行样式）：填充（含渐变/图片填充）取其配色矩阵的 before/after
+    状态，渐变跨度为柱组自身外接框；描边/二重描边宽度、发光/阴影半径与
+    偏移按 柱高/该角色字号 同比缩放（描边几何预留仍来自全局解析，柱距
+    口径不受角色差异影响）；「整字放大」唱字动画开启时，倒计时扫到的
+    那根柱按同一曲线在其覆盖窗口内放大-缩回。
     """
-    colors = effective_karaoke_colors(style)
-    font_size = max(int(style.font_size_px), 1)
+    decor_style = group.bar_style if group.bar_style is not None else style
+    colors = effective_karaoke_colors(decor_style)
+    font_size = max(int(decor_style.font_size_px), 1)
     scale = geometry.size / float(font_size)
-    stroke_width = max(int(style.volume_stroke_width), 0)
-    stroke2_width = min(
-        max(int(main_stroke2_width(style) * scale + 0.5), 0),
+    stroke_width = min(
+        max(int(int(decor_style.stroke_width_px or 0) * scale + 0.5), 0),
         max(geometry.column_width // 2, 0),
     )
-    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
-    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    glow_before = int(glow_radius(style, after=False) * scale + 0.5)
-    glow_after = int(glow_radius(style, after=True) * scale + 0.5)
+    stroke2_width = min(
+        max(int(main_stroke2_width(decor_style) * scale + 0.5), 0),
+        max(geometry.column_width // 2, 0),
+    )
+    shadow_dx = _scaled_signed_px(decor_style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(decor_style.shadow_offset_y, scale)
+    glow_before = int(glow_radius(decor_style, after=False) * scale + 0.5)
+    glow_after = int(glow_radius(decor_style, after=True) * scale + 0.5)
     # 渐变/图片填充的画刷跨度：柱组自身外接框（未覆盖柱与覆盖柱共享）。
     group_rect = rects[0].united(rects[-1]) if rects else QRectF()
 
-    pulse_enabled = effective_karaoke_zoom_pulse(style)
-    pulse_level = zoom_pulse_curve_level(style)
+    pulse_enabled = effective_karaoke_zoom_pulse(decor_style)
+    pulse_level = zoom_pulse_curve_level(decor_style)
     duration = max(int(group.duration_ms), 0)
     times = max(int(style.volume_flash_times), 0)
     flash_ratio = max(float(style.volume_flash_duration_ratio), 0.0)
@@ -924,7 +933,7 @@ def _draw_volume_decorated_group(
                 animation,
                 decorated=(
                     state,
-                    style,
+                    decor_style,
                     stroke_width,
                     stroke2_width,
                     shadow_dx,
@@ -1218,6 +1227,17 @@ def resolve_signal_lit_groups(
                 count,
                 img_h,
             )
+            # 装饰源样式：段首行第一个非空白字符的角色方案叠加进行样式
+            # （native 端取第一个有几何字符的 styleIndex，两端口径一致）。
+            first_role = next(
+                (
+                    char.role_label
+                    for char in line.chars
+                    if char.text and not char.text.isspace()
+                ),
+                None,
+            )
+            bar_style = style_for_role(line_style, first_role)
         else:
             active_index, phase = shape_active_index_and_phase(
                 elapsed,
@@ -1287,6 +1307,7 @@ def resolve_signal_lit_groups(
                 phase=phase,
                 anim_opacity=anim_opacity,
                 bar_animations=bar_animations,
+                bar_style=bar_style,
             )
         )
     return groups

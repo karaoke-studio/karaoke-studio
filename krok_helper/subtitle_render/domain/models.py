@@ -1121,12 +1121,14 @@ class Style:
     volume_enabled: bool = False
     volume_appearance_mode: VolumeAppearanceMode = "custom"
     """音量柱外观联动：``auto`` 时整体高度/柱宽/描边宽按主文字字号推导，
-    且柱体改用主文字的完整装饰管线——填充/渐变取文字配色矩阵（未唱
-    ``before`` / 已唱 ``after``），描边/二重描边、发光/阴影、整字放大
-    唱字动画与文字同款并按 柱高/字号 同比缩放（见
-    ``signal._draw_volume_decorated_group``）；``custom`` 时全部使用下面
-    的独立字段。推导在渲染期实时进行，改字号/配色/输出高度后音量柱自动
-    跟随，工程里不落具体值。"""
+    且柱体改用主文字的完整装饰管线——填充/渐变/描边/发光/阴影取**段首行
+    第一个角色**的有效配色（无角色时为该行样式），整字放大唱字动画与文字
+    同款并按 柱高/字号 同比缩放（见 ``signal._draw_volume_decorated_group``）；
+    ``custom`` 时全部使用下面的独立字段。推导在渲染期实时进行，改字号/
+    配色/输出高度后音量柱自动跟随，工程里不落具体值。"""
+    volume_auto_size_ratio_pct: int = 50
+    """auto 档整体高度相对主文字字号的百分比（默认 50%）；柱宽/描边等
+    比例链随整体高度推导，仅 auto 模式生效。"""
     # Keep the serialized/default discriminator for source compatibility with
     # direct Style(lit_enabled=True) callers; the new UI always writes a shape.
     lit_style: LitStyle = "volume"
@@ -1571,7 +1573,8 @@ def volume_auto_values(style: "Style") -> dict[str, object]:
     口径相同），避免 banker's rounding 抖动。
     """
     font_size = max(int(style.font_size_px), 1)
-    size = max(4, int(font_size * 0.5 + 0.5))
+    ratio = max(int(getattr(style, "volume_auto_size_ratio_pct", 50) or 0), 1)
+    size = max(4, int(font_size * ratio / 100.0 + 0.5))
     column_width = max(1, int(size / 4.0 + 0.5))
     stroke_width = min(
         max(int(int(style.stroke_width_px or 0) * size / font_size + 0.5), 0),
@@ -1767,6 +1770,7 @@ def style_from_dict(payload: object) -> Style:
             "volume_column_count",
             "volume_column_spacing",
             "volume_align",
+            "volume_auto_size_ratio_pct",
             "volume_flash_times",
             "volume_transition_ratio_pct",
         }:

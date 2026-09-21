@@ -2441,8 +2441,11 @@ def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
         )
     )
 
-    # auto：被接管的控件停用，但回显推导值（字号 100 → 50/13/2）。
+    # auto：被接管的控件停用，但回显推导值（字号 100 → 50/13/6）；
+    # 「相对字号」是 auto 专属可调参数，保持可用。
     assert panel._volume_appearance_mode_combo.currentData() == "auto"
+    assert panel._volume_auto_size_ratio_spin.value() == 50
+    assert panel._volume_auto_size_ratio_spin.isEnabled()
     for control in (
         panel._volume_size_spin,
         panel._volume_column_width_spin,
@@ -2463,11 +2466,13 @@ def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
     # 未被接管的参数（柱数等）保持可编辑。
     assert panel._volume_column_count_spin.isEnabled()
 
-    # 切回自定义：控件恢复可用并回到手动值（默认 48/12/2 + 白蓝配色）。
+    # 切回自定义：控件恢复可用并回到手动值（默认 48/12/2 + 白蓝配色）；
+    # 相对字号只在 auto 档有意义，切回自定义时停用。
     panel._volume_appearance_mode_combo.setCurrentIndex(
         panel._volume_appearance_mode_combo.findData("custom")
     )
     assert panel._style.volume_appearance_mode == "custom"
+    assert not panel._volume_auto_size_ratio_spin.isEnabled()
     for control in (
         panel._volume_size_spin,
         panel._volume_column_width_spin,
@@ -2493,12 +2498,19 @@ def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
 
 
 def test_volume_auto_appearance_mode_roundtrips_through_payload():
-    style = Style(volume_enabled=True, volume_appearance_mode="auto")
+    style = Style(
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_auto_size_ratio_pct=120,
+    )
 
     payload = style_to_dict(style)
     assert payload["volume_appearance_mode"] == "auto"
+    assert payload["volume_auto_size_ratio_pct"] == 120
     restored = style_from_dict(payload)
     assert restored.volume_appearance_mode == "auto"
+    assert restored.volume_auto_size_ratio_pct == 120
+    assert style_from_dict({}).volume_auto_size_ratio_pct == 50
     # 旧工程载荷没有该字段时回退 custom，未知值也按 custom 处理。
     assert style_from_dict({}).volume_appearance_mode == "custom"
     assert (
