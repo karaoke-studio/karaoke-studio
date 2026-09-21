@@ -1178,6 +1178,145 @@ def test_volume_auto_colors_reach_painting(qapp):
     _assert_blue_pixels_in(img, left=int(layout.signal_x), right=int(layout.text_x) - 1)
 
 
+def _region_color_weight(
+    img: QImage,
+    left: int,
+    right: int,
+    bg: QColor = QColor("#101010"),
+    threshold: int = 9,
+) -> int:
+    """Sum per-pixel channel distance from ``bg`` inside the region.
+
+    与背景色距之和与不透明度成正比，可区分「淡出中」与「满亮度」——
+    纯墨迹计数会把 2% 透明度的残影也当成完全可见。
+    """
+    total = 0
+    for y in range(img.height()):
+        for x in range(max(left, 0), min(right, img.width() - 1) + 1):
+            color = QColor(img.pixel(x, y))
+            distance = (
+                abs(color.red() - bg.red())
+                + abs(color.green() - bg.green())
+                + abs(color.blue() - bg.blue())
+            )
+            if distance >= threshold:
+                total += distance
+    return total
+
+
+def _volume_exit_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000),
+                    TimingChar(text="い", start_ms=1300),
+                ],
+                end_ms=2000,
+            )
+        ]
+    )
+
+
+def test_volume_bars_follow_char_fade_exit_cadence(qapp):
+    # 柱体复用行内字符交错退场公式（count=柱数、同窗口同曲线）：
+    # 首柱先退、末柱与末字同时走完，不再满亮度扛到窗口终点瞬间消失。
+    from krok_helper.subtitle_render.engine.render.elements.signal import (
+        volume_bar_transition_states,
+    )
+
+    track = _volume_exit_track()
+    line = track.lines[0]
+    style = Style(
+        volume_enabled=True,
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=1000,
+        exit_anim="char_fade",
+        exit_fade_ms=600,
+        lit_shadow=False,
+    )
+    # 退场窗口 [max(2000, 3000-600)=2400, 3000)，step = 350/3：
+    # 柱 i 的 end = 3000 - step·(3-i)。
+    states = volume_bar_transition_states(style, line, 0, 3000, 2875, 4, 225)
+    assert states is not None
+    assert states[0][0] == pytest.approx(0.0)
+    assert states[1][0] == pytest.approx(0.0)
+    assert states[2][0] == pytest.approx((2884 - 2875) / 250.0)
+    assert states[3][0] == pytest.approx((3000 - 2875) / 250.0)
+    # 无逐字动画（纯 fade 行级）时保持 None 快路径。
+    plain = replace(style, exit_anim="fade")
+    assert (
+        volume_bar_transition_states(plain, line, 0, 3000, 2875, 4, 225) is None
+    )
+
+
+def test_volume_bars_follow_utopia_exit_cadence(qapp):
+    # utopia 退场：柱体不演唱，done 时刻均匀铺在 [line_start, line_end]，
+    # 按文字逐字离场的节奏逐根飞出。
+    from krok_helper.subtitle_render.engine.render.elements.signal import (
+        volume_bar_transition_states,
+    )
+
+    track = _volume_exit_track()
+    line = track.lines[0]
+    style = Style(
+        volume_enabled=True,
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=1000,
+        exit_anim="utopia",
+        exit_fade_ms=600,
+        lit_shadow=False,
+    )
+    states = volume_bar_transition_states(style, line, 0, 3000, 1600, 4, 225)
+    assert states is not None
+    # done = 1000 + 1000·i/3 → i=0:1000 i=1:1333 i=2:1667 i=3:2000
+    assert states[0][0] == pytest.approx(1.0 - 600 / 750.0)
+    assert states[1][0] == pytest.approx(1.0 - (1600 - 1333) / 750.0)
+    # 尚未轮到的柱保持恒等（opacity=1、无变换）。
+    assert states[2] == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
+    assert states[3] == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
+    # 飞行中的柱带位移与旋转（utopia 弧线）。
+    assert states[0][1] != 0.0 or states[0][2] != 0.0
+    assert states[0][3] != 0.0
+
+
+def test_volume_bars_fade_out_with_text_on_char_fade_exit(qapp):
+    # 像素级：char_fade 退场中柱区亮度单调下降，与文字同步归零。
+    track = _volume_exit_track()
+    style = Style(
+        font_family="Arial",
+        font_size_px=40,
+        volume_enabled=True,
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=1000,
+        exit_anim="char_fade",
+        exit_fade_ms=600,
+        lit_shadow=False,
+    )
+    layout = _sayatoo_layout_for(track, style, 500, w=800, h=450)
+    bar_left = max(int(layout.signal_x) - 4, 0)
+    bar_right = int(layout.text_x)
+    weights = []
+    for t_ms in (2400, 2875, 2999):
+        img = _blank(800, 450)
+        paint_frame(img, track, t_ms, style)
+        weights.append(_region_color_weight(img, bar_left, bar_right))
+    assert weights[0] > weights[1] > 0
+    assert weights[2] < weights[1] * 0.2
+
+
 def test_signal_union_window_follows_extended_display_end(qapp):
     # 回归：union 生效窗口必须跟随真实显示窗口终点。「拖过消失时间 / 同步
     # 退场延长」把 display_end 拉长后，旧行为在延长段里让文字先退回单独锚定，

@@ -30,8 +30,18 @@ from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature,
 )
 from krok_helper.subtitle_render.domain.models import Style, resolve_volume_appearance
+from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+    character_transform,
+    line_char_transition_context,
+    transition_char_state,
+)
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
+
+
+# 每根柱的逐字动画状态：与文字字符同构的
+# (opacity, dx, dy, rotation, scale_x, scale_y, skew_y)。
+BarAnimationState = tuple[float, float, float, float, float, float, float]
 
 
 @dataclass(frozen=True)
@@ -51,6 +61,10 @@ class SignalLitGroup:
     anim_dx: float = 0.0
     anim_dy: float = 0.0
     anim_opacity: float = 1.0
+    # 逐字入退场动画（utopia / char_fade / char_drip / spin_flip）按柱展开：
+    # 第 i 根柱 behaves 相当于该行第 i 个字符，与文字同窗口、同曲线、同
+    # 交错节奏地入场/退场；None = 无激活的逐字动画（纯行级动画路径）。
+    bar_animations: tuple[BarAnimationState, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -394,6 +408,70 @@ def volume_signal_state(
     return active_index, phase, 1.0
 
 
+def volume_bar_transition_states(
+    style: Style,
+    line: TimingLine,
+    display_start_ms: int | None,
+    display_end_ms: int | None,
+    t_ms: int,
+    count: int,
+    frame_height: int,
+) -> tuple[BarAnimationState, ...] | None:
+    """Resolve per-bar character-transition states for the volume group.
+
+    柱体复用正文逐字动画系统（``horizontal.transitions``）：同一行、同一
+    显示窗口，柱 index 映射到字符 index 的交错公式（``count`` 传柱数）。
+    utopia 退场的每「字」完成时刻文字取「后一个字唱完」，柱体不演唱，
+    改为把 done 时刻均匀铺在演唱窗口 ``[line_start, line_end]`` 上——文字
+    按演唱进度逐字离场，柱体按同一进度逐根离场，节奏一致。
+    全部柱状态静止（恒等）时返回 ``None``，保留组级绘制快路径。
+    """
+    if count <= 0:
+        return None
+    transition = line_char_transition_context(
+        style,
+        line,
+        t_ms,
+        display_start_ms,
+        display_end_ms,
+        count,
+    )
+    if transition is None:
+        return None
+    utopia_exit = transition.effect == "utopia" and style.exit_anim == "utopia"
+    line_start = line_start_ms(line)
+    line_end = line_end_ms(line)
+    span = max(line_end - line_start, 0)
+    states: list[BarAnimationState] = []
+    idle = True
+    identity: BarAnimationState = (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
+    for index in range(count):
+        if utopia_exit:
+            done = line_start + (span * index) / max(count - 1, 1)
+            state = transition_char_state(
+                style,
+                transition,
+                index,
+                count,
+                t_ms=t_ms,
+                frame_height=frame_height,
+                following_done_ms=int(done),
+            )
+        else:
+            state = transition_char_state(
+                style,
+                transition,
+                index,
+                count,
+                t_ms=t_ms,
+                frame_height=frame_height,
+            )
+        if state != identity:
+            idle = False
+        states.append(state)
+    return None if idle else tuple(states)
+
+
 def lit_transition_state(phase: float, style: Style) -> tuple[float, float, float]:
     mode = style.lit_transition_mode
     ratio = max(0, min(int(style.lit_transition_ratio_pct), 100)) / 100.0
@@ -603,7 +681,22 @@ class SignalLitsLayer:
         ):
             return None
         if self.is_volume:
-            return _volume_signal_vertical_bounds(self.group, self.style)
+            bounds = _volume_signal_vertical_bounds(self.group, self.style)
+            if bounds is None or not self.group.bar_animations:
+                return bounds
+            # 逐字退场把柱体甩出行盒（utopia 行程 = 画布高/15 + 形体尺寸），
+            # 静态柱盒必须按该上界外扩，导出条带/避让包络才不会裁掉飞行柱。
+            geometry = volume_signal_geometry(self.style)
+            excursion = (
+                ctx.logical_h / 15.0
+                + geometry.size
+                + geometry.column_width
+                + 2.0 * geometry.stroke_extent
+            )
+            return (
+                int(math.floor(bounds[0] - excursion)),
+                int(math.ceil(bounds[1] + excursion)),
+            )
         return _shape_signal_vertical_bounds(self)
 
 
@@ -705,16 +798,66 @@ def _draw_volume_lit_group(
         painter.setOpacity(painter.opacity() * group.opacity)
         rects = volume_signal_column_rects(group.x, group.y, geometry)
         active_index = group.active_index if group.active_index is not None else -1
+        bar_animations = group.bar_animations
         for index in range(active_index + 1, geometry.count):
-            _draw_volume_column(painter, rects[index], fill, stroke, stroke_width)
+            _draw_volume_column_animated(
+                painter,
+                rects[index],
+                fill,
+                stroke,
+                stroke_width,
+                bar_animations[index] if bar_animations is not None else None,
+            )
         for index in range(0, active_index + 1):
-            _draw_volume_column(
+            _draw_volume_column_animated(
                 painter,
                 rects[index],
                 overlay_fill,
                 overlay_stroke,
                 stroke_width,
+                bar_animations[index] if bar_animations is not None else None,
             )
+    finally:
+        painter.restore()
+
+
+def _draw_volume_column_animated(
+    painter: QPainter,
+    rect: QRectF,
+    fill: QColor,
+    stroke: QColor,
+    stroke_width: int,
+    animation: BarAnimationState | None,
+) -> None:
+    """Draw one volume bar, optionally through its character-animation state.
+
+    变换语义与文字字符一致（``character_transform``：柱中心为轴的
+    位移/旋转/剪切/缩放），透明度与组级行动画相乘。
+    """
+    if animation is None:
+        _draw_volume_column(painter, rect, fill, stroke, stroke_width)
+        return
+    opacity, dx, dy, rotation, scale_x, scale_y, skew_y = animation
+    if opacity <= 0.0:
+        return
+    center = rect.center()
+    transform = character_transform(
+        center_x=center.x(),
+        center_y=center.y(),
+        dx=dx,
+        dy=dy,
+        rotation=rotation,
+        scale_x=scale_x,
+        scale_y=scale_y,
+        skew_y=skew_y,
+    )
+    painter.save()
+    try:
+        if opacity < 1.0:
+            painter.setOpacity(painter.opacity() * opacity)
+        if not transform.isIdentity():
+            painter.setTransform(transform, combine=True)
+        _draw_volume_column(painter, rect, fill, stroke, stroke_width)
     finally:
         painter.restore()
 
@@ -899,6 +1042,7 @@ def resolve_signal_lit_groups(
             continue
 
         elapsed = max(t_ms - active_start, 0)
+        bar_animations = None
         if style.lit_style == "volume":
             elapsed = min(elapsed, max(active_duration - 1, 0))
             active_index, phase, opacity = volume_signal_state(
@@ -908,6 +1052,15 @@ def resolve_signal_lit_groups(
                 line_style,
             )
             active_opacity, dx, dy = 1.0, 0.0, 0.0
+            bar_animations = volume_bar_transition_states(
+                line_style,
+                line,
+                display_line.display_start_ms,
+                display_end,
+                t_ms,
+                count,
+                img_h,
+            )
         else:
             active_index, phase = shape_active_index_and_phase(
                 elapsed,
@@ -976,6 +1129,7 @@ def resolve_signal_lit_groups(
                 dy=dy,
                 phase=phase,
                 anim_opacity=anim_opacity,
+                bar_animations=bar_animations,
             )
         )
     return groups

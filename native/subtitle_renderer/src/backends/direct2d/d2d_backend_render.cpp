@@ -5380,26 +5380,222 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && (style.volumeEnabled ? style.volumeOpacity : style.litOpacity) > 0.0f
             && signalState.opacity > 0.0f) {
             context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(signalDx, dy)));
+            const float signalGroupOpacity = std::clamp(
+                (style.volumeEnabled ? style.volumeOpacity : style.litOpacity)
+                    * signalState.opacity
+                    // 行级 OpacityLayer 正常时该值为 1（透明度由图层
+                    // 统一承载）；图层不可用的逐笔刷兜底路径里它是
+                    // 入退场动画透明度，信号必须与正文同乘。
+                    * lineAnimationOpacity,
+                0.0f,
+                1.0f
+            );
             auto signalBrush = [&](const RgbaColor &color) {
                 PaintStyle paint;
                 paint.mode = "solid";
                 paint.color = color;
-                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
-                    paint, line->fillBounds, color
-                );
-                brush->SetOpacity(
-                    std::clamp(
-                        (style.volumeEnabled ? style.volumeOpacity : style.litOpacity)
-                            * signalState.opacity
-                            // 行级 OpacityLayer 正常时该值为 1（透明度由图层
-                            // 统一承载）；图层不可用的逐笔刷兜底路径里它是
-                            // 入退场动画透明度，信号必须与正文同乘。
-                            * lineAnimationOpacity,
+                return paintBrush(paint, line->fillBounds, color);
+            };
+            // 柱体逐字入退场动画：镜像 Painter 的
+            // volume_bar_transition_states —— 同一行、同一显示窗口，柱
+            // index 走字符交错公式（count = 柱数）。utopia 退场文字按
+            // 「后一字唱完」逐字离场，柱体不演唱，done 时刻均匀铺在演唱
+            // 窗口 [startMs, endMs] 上保持同节奏。柱以中心为轴（文字的
+            // utopia/drip 用字框角轴），两端都用中心轴即保持一致。
+            struct BarAnimationState {
+                float opacity = 1.0f;
+                D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Identity();
+            };
+            const int barCount = signalGeometry.count;
+            const bool hasBarCharFadeExit
+                = (independentVolume || legacyVolume)
+                && (line->exitAnimation == "char_fade"
+                    || line->exitAnimation == "char_drip"
+                    || line->exitAnimation == "spin_flip")
+                && line->exitDurationMs > 0;
+            const bool hasBarCharFadeEntry
+                = (independentVolume || legacyVolume)
+                && (line->entryAnimation == "char_fade"
+                    || line->entryAnimation == "char_drip"
+                    || line->entryAnimation == "spin_flip")
+                && line->entryDurationMs > 0;
+            const bool hasBarUtopia
+                = (independentVolume || legacyVolume)
+                && (line->entryAnimation == "utopia"
+                    || line->exitAnimation == "utopia");
+            const int barWindowStartMs = line->displayWindows.empty()
+                ? line->startMs
+                : line->displayWindows.front().startMs;
+            auto barCharFadeProgress = [&](int index) {
+                const int count = std::max(barCount, 1);
+                const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
+                if (line->displayWindows.empty()) {
+                    return 1.0f;
+                }
+                const DisplayWindow &window = line->displayWindows.front();
+                if (hasBarCharFadeExit) {
+                    const int exitStart = std::max(
+                        line->endMs, window.endMs - 600
+                    );
+                    if (tMs >= exitStart) {
+                        const int endMs = window.endMs
+                            - delayStep * (count - index - 1);
+                        return std::clamp(
+                            static_cast<float>(endMs - tMs) / 250.0f,
+                            0.0f,
+                            1.0f
+                        );
+                    }
+                }
+                if (hasBarCharFadeEntry && tMs <= window.startMs + 600) {
+                    const int startMs = window.startMs + delayStep * index;
+                    return std::clamp(
+                        static_cast<float>(tMs - startMs) / 250.0f,
                         0.0f,
                         1.0f
-                    )
+                    );
+                }
+                return 1.0f;
+            };
+            auto barCenteredMatrix = [&](
+                float dx, float dy, float rotation,
+                float scaleX, float scaleY, float skewY,
+                float cx, float cy
+            ) {
+                // Painter character_transform 无 scale-origin 分支的逐项
+                // 镜像。QTransform 的 translate/rotate/... 是前乘（坐标
+                // 系语义），因此最终矩阵是
+                // T(−c)·Scale·Shear·Rotate·T(c+dx)（行向量布局，D2D 的
+                // operator* 组合顺序与矩阵积一致）。
+                D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Translation(
+                    -cx, -cy
                 );
-                return brush;
+                if (scaleX != 1.0f || scaleY != 1.0f) {
+                    matrix = matrix * D2D1::Matrix3x2F::Scale(scaleX, scaleY);
+                }
+                if (skewY != 0.0f) {
+                    matrix = matrix * D2D1::Matrix3x2F(
+                        1.0f, skewY, 0.0f, 1.0f, 0.0f, 0.0f
+                    );
+                }
+                if (rotation != 0.0f) {
+                    matrix = matrix * D2D1::Matrix3x2F::Rotation(rotation);
+                }
+                matrix = matrix * D2D1::Matrix3x2F::Translation(
+                    cx + dx, cy + dy
+                );
+                return matrix;
+            };
+            auto barAnimationAt = [&](int index, float cx, float cy) {
+                BarAnimationState state;
+                if (!(independentVolume || legacyVolume)) {
+                    return state;
+                }
+                const int count = std::max(barCount, 1);
+                if (activeCharacterTransition == "char_fade"
+                    || activeCharacterTransition == "char_drip"
+                    || activeCharacterTransition == "spin_flip") {
+                    const float progress = barCharFadeProgress(index);
+                    if (progress <= 0.0f) {
+                        state.opacity = 0.0f;
+                        return state;
+                    }
+                    constexpr float pi = 3.14159265358979323846f;
+                    const float clamped = std::clamp(progress, 0.0f, 1.0f);
+                    const float angle = std::min(
+                        (pi * 0.5f) * (1.0f - clamped),
+                        pi * 89.0f / 180.0f
+                    );
+                    const float skew = std::tan(angle);
+                    if (activeCharacterTransition == "spin_flip") {
+                        // 与文字 spin_flip 同构：透明度=progress，缩放=progress
+                        // + 定向剪切。
+                        state.opacity = progress;
+                        const float direction = static_cast<float>(
+                            activeCharacterDirection
+                        );
+                        state.matrix = barCenteredMatrix(
+                            0.0f, 0.0f, 0.0f,
+                            clamped, clamped, direction * skew,
+                            cx, cy
+                        );
+                    } else if (activeCharacterTransition == "char_drip") {
+                        // N3 CharDrip 保持不透明、纯剪切垂落（progress 仅
+                        // 驱动剪切量），镜像 transitions.py 的二值透明度。
+                        state.opacity = 1.0f;
+                        const float direction = -static_cast<float>(
+                            activeCharacterDirection
+                        );
+                        state.matrix = barCenteredMatrix(
+                            0.0f, 0.0f, 0.0f,
+                            1.0f, 1.0f, direction * skew,
+                            cx, cy
+                        );
+                    } else {
+                        state.opacity = progress;
+                    }
+                    return state;
+                }
+                if (hasBarUtopia) {
+                    constexpr float pi = 3.14159265358979323846f;
+                    if (line->entryAnimation == "utopia"
+                        && tMs <= barWindowStartMs + 700) {
+                        const int delayStep = count <= 1
+                            ? 0
+                            : 200 / (count - 1);
+                        const int elapsed = tMs - barWindowStartMs
+                            - delayStep * index;
+                        if (elapsed < 0) {
+                            state.opacity = 0.0f;
+                            return state;
+                        }
+                        state.opacity = std::min(
+                            static_cast<float>(elapsed) / 400.0f, 1.0f
+                        );
+                        float scale = 1.0f;
+                        if (elapsed < 400) {
+                            scale = 1.3f * static_cast<float>(elapsed) / 400.0f;
+                        } else if (elapsed < 500) {
+                            const float remaining = static_cast<float>(500 - elapsed);
+                            scale = 1.0f + 0.3f * remaining / 100.0f;
+                        }
+                        state.matrix = barCenteredMatrix(
+                            0.0f, 0.0f, 0.0f, scale, scale, 0.0f, cx, cy
+                        );
+                        return state;
+                    }
+                    if (line->exitAnimation == "utopia") {
+                        const int span = std::max(line->endMs - line->startMs, 0);
+                        const int doneMs = line->startMs + static_cast<int>(
+                            static_cast<float>(span * index)
+                                / static_cast<float>(std::max(count - 1, 1))
+                        );
+                        if (tMs > doneMs) {
+                            const float local = std::clamp(
+                                static_cast<float>(tMs - doneMs) / 750.0f,
+                                0.0f,
+                                1.0f
+                            );
+                            state.opacity = 1.0f - local;
+                            if (state.opacity <= 0.0f) {
+                                return state;
+                            }
+                            const float shrink = 1.0f - local;
+                            const float amplitude = static_cast<float>(scene.height) / 15.0f;
+                            const float xTravel = local <= 0.5f
+                                ? std::sin(pi * local) * amplitude
+                                : amplitude + std::sin((local - 0.5f) * pi) * amplitude;
+                            const float yTravel = std::sin(pi * local * 0.5f) * amplitude;
+                            state.matrix = barCenteredMatrix(
+                                -xTravel, yTravel, -180.0f * local,
+                                shrink * std::cos(pi * local), shrink, 0.0f,
+                                cx, cy
+                            );
+                            return state;
+                        }
+                    }
+                }
+                return state;
             };
             auto normalFill = signalBrush(style.volumeFill);
             auto normalStroke = signalBrush(style.volumeStroke);
@@ -5433,19 +5629,46 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         1.0f
                     )
                 );
-                ID2D1Brush *fill = overlay ? overlayFill.Get() : normalFill.Get();
-                ID2D1Brush *stroke = overlay ? overlayStroke.Get() : normalStroke.Get();
-                context->FillRoundedRectangle(rect, fill);
+                const BarAnimationState barAnimation = barAnimationAt(
+                    index,
+                    left + signalGeometry.columnWidth * 0.5f,
+                    top + height * 0.5f
+                );
+                if (barAnimation.opacity <= 0.0f) {
+                    return;
+                }
+                Microsoft::WRL::ComPtr<ID2D1Brush> fill =
+                    overlay ? overlayFill : normalFill;
+                Microsoft::WRL::ComPtr<ID2D1Brush> stroke =
+                    overlay ? overlayStroke : normalStroke;
+                fill->SetOpacity(signalGroupOpacity * barAnimation.opacity);
+                stroke->SetOpacity(signalGroupOpacity * barAnimation.opacity);
                 const RgbaColor &strokeColor = overlay
                     ? style.volumeOverlayStroke
                     : style.volumeStroke;
                 const float volumeStrokeWidth = style.volumeEnabled
                     ? style.volumeStrokeWidth
                     : style.litStrokeWidth;
+                // 填充与描边都要在同一柱动画变换内绘制（utopia 翻转/飞行
+                // 时描边跟着柱体走）；绘制完恢复组级基准变换。
+                const D2D1_MATRIX_3X2_F base =
+                    D2D1::Matrix3x2F::Translation(signalDx, dy);
+                const bool transformed = !barAnimation.matrix.IsIdentity();
+                if (transformed) {
+                    // 柱矩阵定义在柱局部坐标（rect 坐标），必须先于组平移
+                    // 生效：v·barM·base·viewport（行向量，左到右依次应用）。
+                    context->SetTransform(
+                        withViewport(barAnimation.matrix * base)
+                    );
+                }
+                context->FillRoundedRectangle(rect, fill.Get());
                 if (volumeStrokeWidth > 0.0f && strokeColor.alpha > 0) {
                     context->DrawRoundedRectangle(
-                        rect, stroke, volumeStrokeWidth
+                        rect, stroke.Get(), volumeStrokeWidth
                     );
+                }
+                if (transformed) {
+                    context->SetTransform(withViewport(base));
                 }
             };
             for (int index = signalState.activeIndex + 1;

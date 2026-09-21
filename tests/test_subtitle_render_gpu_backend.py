@@ -5646,6 +5646,62 @@ def test_gpu_g4_per_row_alignment_includes_volume_signal_union(monkeypatch) -> N
         ), (gpu_bounds, painter_bounds)
 
 
+def test_gpu_g5_volume_bars_follow_char_exit_animations_painter(monkeypatch) -> None:
+    # 柱体逐字入退场动画两端同口径：char_fade 交错淡出与 utopia 逐柱飞行
+    # 都由 d2d_backend_render 的 barAnimationAt 镜像 Painter 的
+    # volume_bar_transition_states；alpha 包络对齐即几何/透明度一致。
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 1_000), TimingChar("詞", 1_400)],
+                end_ms=2_000,
+            )
+        ]
+    )
+    for exit_anim in ("char_fade", "utopia"):
+        style = _g1_style(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=64,
+            stroke_width_px=0,
+            stroke2_enabled=False,
+            decoration_kind="none",
+            dual_line_layout=False,
+            line_horizontal_layout="center",
+            line_lead_in_ms=0,
+            line_tail_ms=1_000,
+            exit_anim=exit_anim,
+            exit_fade_ms=600,
+            volume_enabled=True,
+            volume_duration_ms=1_500,
+            volume_waiting_time_ms=0,
+            volume_time_offset_ms=0,
+            volume_size=36,
+            volume_column_width=10,
+            volume_column_count=4,
+            volume_column_spacing=2,
+        )
+        timestamps = (1_200, 1_600, 2_600)
+        painter = [
+            _render_painter_oracle(style, t_ms=t_ms, track=track)
+            for t_ms in timestamps
+        ]
+        with NativeRendererProcess(
+            _renderer_path(), response_timeout_s=15.0
+        ) as renderer:
+            _, gpu = _render_g1_frames(
+                renderer, style, timestamps, force_warp=True, track=track
+            )
+        for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+            gpu_bounds = _payload_alpha_bounds(gpu_frame)
+            painter_bounds = _payload_alpha_bounds(painter_frame)
+            assert all(
+                abs(actual - expected) <= 14
+                for actual, expected in zip(gpu_bounds, painter_bounds)
+            ), (exit_anim, t_ms, gpu_bounds, painter_bounds)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_volume_column_ink_gaps_follow_painter(monkeypatch) -> None:
     """相邻柱的墨迹间隔必须与 Painter 同口径（pitch 含 2×stroke 预留）。
