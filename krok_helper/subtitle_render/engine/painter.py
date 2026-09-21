@@ -281,7 +281,8 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     apply_animation_time_guard,
     build_measured_collision_bands as _build_measured_collision_bands,
     clear_display_line_resolution_cache,
-    clamp_synced_air_rows_to_page_turn as _clamp_synced_air_rows_to_page_turn,
+    air_row_clamp_candidates,
+    clamp_air_rows_to_page_turn as _clamp_air_rows_to_page_turn,
     collision_squeeze_pairs as _collision_squeeze_pairs,
     display_line_collision_time_window as _display_line_collision_time_window,
     display_line_compute_kwargs,
@@ -2714,7 +2715,7 @@ def _apply_measured_section_time_fill(
     )
 
 
-def _clamp_synced_air_rows(
+def _clamp_air_rows(
     logical_w: int,
     logical_h: int,
     track: TimingTrack,
@@ -2725,7 +2726,8 @@ def _clamp_synced_air_rows(
 ) -> list[DisplayLine]:
     """Bind Painter geometry to the layout-owned air-row page-turn clamp."""
 
-    if not (style.sync_ending and style.sync_each_page) or not display_lines:
+    if not display_lines or not air_row_clamp_candidates(display_lines):
+        # 纯时间侧快查：没有「同段更矮的下一页」就没有空气行，免测几何。
         return display_lines
     time_window = (
         "stable" if style.allow_entry_exit_animation_overlap else "display"
@@ -2739,10 +2741,11 @@ def _clamp_synced_air_rows(
         time_window=time_window,
         geometry_cache=geometry_cache,
     )
-    return _clamp_synced_air_rows_to_page_turn(
+    return _clamp_air_rows_to_page_turn(
         display_lines,
         style,
         measured,
+        time_window=time_window,
     )
 
 
@@ -2845,7 +2848,7 @@ def display_lines_for_style(
                     enforce_inter_page_gap=enforce_gap,
                 )
             ),
-            clamp_synced_air_rows=lambda items: _clamp_synced_air_rows(
+            clamp_air_rows=lambda items: _clamp_air_rows(
                 width, height, track, style, items,
                 geometry_cache=geometry_cache,
             ),
