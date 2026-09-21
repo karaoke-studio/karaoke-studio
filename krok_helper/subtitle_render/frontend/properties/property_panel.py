@@ -185,6 +185,7 @@ from krok_helper.subtitle_render.domain.models import (
     effective_karaoke_animation,
     layout_display_name,
     rescale_scheme_font_sizes,
+    resolve_volume_appearance,
 )
 from krok_helper.subtitle_render.settings.property_controllers import (
     _BUILTIN_LAYOUT_PRESET_IDS,
@@ -363,6 +364,7 @@ _LIT_FIELDS = {
     "volume_duration_ms",
     "volume_waiting_time_ms",
     "volume_time_offset_ms",
+    "volume_appearance_mode",
     "volume_stroke_width",
     "volume_opacity_pct",
     "volume_size",
@@ -1135,6 +1137,10 @@ class PropertyPanel(QWidget):
                 self._scanline_glow_spin.setValue(
                     max(int(style.scanline_glow_px), 0)
                 )
+            if hasattr(self, "_volume_appearance_mode_combo"):
+                # auto 外观模式的音量柱大小随字号重算，回显要跟着刷新
+                # （其余音量柱字段不随高度变化，复用既有同步最省心）。
+                self._sync_lit_controls()
         finally:
             self._syncing = False
         self._style_synced = True
@@ -4179,15 +4185,27 @@ class PropertyPanel(QWidget):
         self._lit_transition_ratio_spin.setValue(self._style.lit_transition_ratio_pct)
         self._lit_transition_angle_spin.setValue(self._style.lit_transition_angle_deg)
         self._lit_transition_distance_spin.setValue(self._style.lit_transition_distance)
-        self._volume_size_spin.setValue(self._style.volume_size)
+        self._volume_appearance_mode_combo.setCurrentIndex(
+            max(
+                0,
+                self._volume_appearance_mode_combo.findData(
+                    self._style.volume_appearance_mode
+                ),
+            )
+        )
+        # auto 模式下大小/颜色由主文字推导：控件停用但回显推导值，让用户
+        # 看到「自动配合字体」实际产出的数字与颜色。
+        volume_display_style = resolve_volume_appearance(self._style)
+        volume_manual = self._style.volume_appearance_mode == "custom"
+        self._volume_size_spin.setValue(volume_display_style.volume_size)
         self._volume_duration_spin.setValue(self._style.volume_duration_ms)
         self._volume_waiting_time_spin.setValue(self._style.volume_waiting_time_ms)
         self._volume_time_offset_spin.setValue(self._style.volume_time_offset_ms)
-        self._volume_stroke_width_spin.setValue(self._style.volume_stroke_width)
+        self._volume_stroke_width_spin.setValue(volume_display_style.volume_stroke_width)
         self._volume_opacity_spin.setValue(self._style.volume_opacity_pct)
         self._volume_x_spin.setValue(self._style.volume_offset_x)
         self._volume_y_spin.setValue(self._style.volume_offset_y)
-        self._volume_column_width_spin.setValue(self._style.volume_column_width)
+        self._volume_column_width_spin.setValue(volume_display_style.volume_column_width)
         self._volume_column_count_spin.setValue(self._style.volume_column_count)
         self._volume_column_spacing_spin.setValue(self._style.volume_column_spacing)
         # 浮点比例仅作整数回显（半向上取整，避免 round 的银行家舍入把
@@ -4201,10 +4219,24 @@ class PropertyPanel(QWidget):
             int(round(self._style.volume_flash_duration_ratio * 100))
         )
         self._volume_transition_ratio_spin.setValue(self._style.volume_transition_ratio_pct)
-        self._volume_fill_btn.set_color(self._style.volume_fill_color)
-        self._volume_stroke_btn.set_color(self._style.volume_stroke_color)
-        self._volume_overlay_fill_btn.set_color(self._style.volume_overlay_fill_color)
-        self._volume_overlay_stroke_btn.set_color(self._style.volume_overlay_stroke_color)
+        self._volume_fill_btn.set_color(volume_display_style.volume_fill_color)
+        self._volume_stroke_btn.set_color(volume_display_style.volume_stroke_color)
+        self._volume_overlay_fill_btn.set_color(
+            volume_display_style.volume_overlay_fill_color
+        )
+        self._volume_overlay_stroke_btn.set_color(
+            volume_display_style.volume_overlay_stroke_color
+        )
+        for control in (
+            self._volume_size_spin,
+            self._volume_column_width_spin,
+            self._volume_stroke_width_spin,
+            self._volume_fill_btn,
+            self._volume_stroke_btn,
+            self._volume_overlay_fill_btn,
+            self._volume_overlay_stroke_btn,
+        ):
+            control.setEnabled(volume_manual)
 
     def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:

@@ -139,6 +139,9 @@ from krok_helper.subtitle_render.engine.render.core.layers import (  # noqa: E40
     SCOPE_GROUP,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine  # noqa: E402
+from krok_helper.subtitle_render.engine.render.elements.signal import (  # noqa: E402
+    volume_style,
+)
 from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     GuideSymbol,
     KaraokeColors,
@@ -1078,6 +1081,101 @@ def test_signal_volume_union_shifts_role_line_text_beside_bars(qapp):
     assert bars_right <= text_left + geometry.stroke_extent
     # 正文消费了 union 的 text_x（右移让位），而不是脱离 union 重新锚定。
     assert text_left >= layout.text_x - 2
+
+
+def test_volume_auto_appearance_derives_size_and_colors_from_font():
+    # auto 模式：大小按字号推导（高度 1/2、柱宽 1/4、描边 1/6，比例链与
+    # N3 默认 48:12:2 一致），颜色跟随主文字配色；工程字段本身不被改写。
+    style = Style(
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        font_size_px=100,
+        base_color="#010203",
+        fill_color="#040506",
+        stroke_color="#070809",
+    )
+    projected = volume_style(style)
+    assert (projected.volume_size, projected.volume_column_width, projected.volume_stroke_width) == (50, 13, 2)
+    assert projected.volume_fill_color == "#010203"
+    assert projected.volume_stroke_color == "#070809"
+    assert projected.volume_overlay_fill_color == "#040506"
+    assert projected.volume_overlay_stroke_color == "#070809"
+    # 原始样式保持手动字段原值（渲染期解析，不回写工程）
+    assert style.volume_size == 48
+    assert style.volume_fill_color == "#FFFFFF"
+    # custom 模式与未启用模块时原样返回
+    assert volume_style(replace(style, volume_appearance_mode="custom")).volume_size == 48
+    smaller = volume_style(replace(style, font_size_px=40))
+    assert (smaller.volume_size, smaller.volume_column_width, smaller.volume_stroke_width) == (20, 5, 1)
+
+
+def test_volume_auto_appearance_layout_follows_font_size(qapp):
+    # 字号变化必须反映到 union 布局量（painter 的 signal metrics 路径）。
+    base = Style(volume_enabled=True, volume_appearance_mode="auto")
+    small_metrics = _signal_layout_metrics(volume_style(replace(base, font_size_px=40)))
+    big_metrics = _signal_layout_metrics(volume_style(replace(base, font_size_px=80)))
+    assert big_metrics.size == 2 * small_metrics.size
+    assert big_metrics.group_width > small_metrics.group_width
+
+
+def test_volume_auto_appearance_paints_like_explicit_equivalent(qapp):
+    # auto 模式与「手动填入同等数值」的工程必须整帧同画（含 union 布局与
+    # 柱体颜色），这是 CPU/GPU 两后端同口径的基底。
+    auto_style = Style(
+        font_family="Arial",
+        font_size_px=64,
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_duration_ms=2000,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        base_color="#102030",
+        fill_color="#304050",
+        stroke_color="#607080",
+    )
+    projected = volume_style(auto_style)
+    manual_style = replace(
+        auto_style,
+        volume_appearance_mode="custom",
+        volume_size=projected.volume_size,
+        volume_column_width=projected.volume_column_width,
+        volume_stroke_width=projected.volume_stroke_width,
+        volume_fill_color=projected.volume_fill_color,
+        volume_stroke_color=projected.volume_stroke_color,
+        volume_overlay_fill_color=projected.volume_overlay_fill_color,
+        volume_overlay_stroke_color=projected.volume_overlay_stroke_color,
+    )
+    track = _track()
+    img_auto = _blank(800, 450)
+    img_manual = _blank(800, 450)
+    paint_frame(img_auto, track, 500, auto_style)
+    paint_frame(img_manual, track, 500, manual_style)
+    assert _pixel_hash(img_auto) == _pixel_hash(img_manual)
+    assert _ink_bounds(img_auto) is not None
+
+
+def test_volume_auto_colors_reach_painting(qapp):
+    # 覆盖柱填充跟随 fill_color：auto 模式下柱区出现「已唱填充色」像素。
+    img = _blank(160, 90)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_duration_ms=1000,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        volume_flash_times=0,
+        base_color="#FFFFFF",
+        fill_color="#0000FF",
+        stroke_color="#0000FF",
+    )
+    paint_frame(img, _singer_track(singer_id=0), 800, style)
+    layout = _sayatoo_layout_for(_singer_track(singer_id=0), style, 800)
+    assert layout.signal_x is not None
+    _assert_blue_pixels_in(img, left=int(layout.signal_x), right=int(layout.text_x) - 1)
 
 
 def test_signal_union_window_follows_extended_display_end(qapp):

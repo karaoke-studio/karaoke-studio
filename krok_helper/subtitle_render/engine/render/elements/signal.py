@@ -29,7 +29,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
 from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature,
 )
-from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.models import Style, resolve_volume_appearance
 from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
 from krok_helper.subtitle_render.domain.timing import TimingLine, TimingTrack
 
@@ -106,7 +106,13 @@ SignalLineMeasurer = Callable[
 
 
 def volume_style(style: Style) -> Style:
-    """Project independent volume controls onto the legacy signal renderer."""
+    """Project independent volume controls onto the legacy signal renderer.
+
+    auto 外观模式在这里先行物化（大小/颜色跟随主文字），保证布局 union、
+    绘制与 native IR（render_ir 同样经过 resolve_volume_appearance）三处
+    消费到同一组数值。
+    """
+    style = resolve_volume_appearance(style)
     return replace(
         style,
         lit_enabled=True,

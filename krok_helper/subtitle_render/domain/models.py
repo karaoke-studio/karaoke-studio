@@ -149,6 +149,9 @@ OverlapFallbackMode = Literal["lift", "displace"]
 演唱的下一句直接顶掉还在走字的上一句（截短其显示窗，允许吃掉走字时长）。
 """
 LitStyle = Literal["volume", "circle", "square", "rounded", "image"]
+VolumeAppearanceMode = Literal["custom", "auto"]
+"""音量柱外观模式：``custom`` 手动逐项设置；``auto`` 大小与颜色自动跟随
+主文字的字号与配色（见 :func:`resolve_volume_appearance`）。"""
 # 标题字幕（B7）：静态叠加文字的锚点 / 对齐 / 显示时段模式。
 TitleAnchor = Literal[
     "top_left",
@@ -1116,6 +1119,12 @@ class Style:
     # volume_enabled 控制会插入字幕行首、参与行宽布局的音量柱。
     lit_enabled: bool = False
     volume_enabled: bool = False
+    volume_appearance_mode: VolumeAppearanceMode = "custom"
+    """音量柱外观联动：``auto`` 时整体高度/柱宽/描边宽按主文字字号推导，
+    四个柱体颜色跟随主文字配色（未唱←``base_color``、已唱←``fill_color``、
+    描边←``stroke_color``）；``custom`` 时全部使用下面的独立字段。推导在
+    渲染期实时进行（``resolve_volume_appearance``），改字号/配色/输出高度
+    后音量柱自动跟随，工程里不落具体值。"""
     # Keep the serialized/default discriminator for source compatibility with
     # direct Style(lit_enabled=True) callers; the new UI always writes a shape.
     lit_style: LitStyle = "volume"
@@ -1550,6 +1559,40 @@ def style_for_track(style: Style, track: object) -> Style:
     return style.with_timing(**overrides)
 
 
+def volume_auto_values(style: "Style") -> dict[str, object]:
+    """Derive auto-mode volume metrics/colors from the main lyric font.
+
+    比例链与 N3 默认值（整体 48 : 柱宽 12 : 描边 2，字号 100）一致：
+    整体高度 = 字号 1/2，柱宽 = 高度 1/4，描边宽 = 柱宽 1/6。取整统一
+    半向上（与面板浮点回显口径相同），避免 banker's rounding 抖动。
+    """
+    font_size = max(int(style.font_size_px), 1)
+    size = max(4, int(font_size * 0.5 + 0.5))
+    column_width = max(1, int(size / 4.0 + 0.5))
+    stroke_width = min(max(int(column_width / 6.0 + 0.5), 0), 40)
+    return {
+        "volume_size": size,
+        "volume_column_width": column_width,
+        "volume_stroke_width": stroke_width,
+        "volume_fill_color": style.base_color,
+        "volume_stroke_color": style.stroke_color,
+        "volume_overlay_fill_color": style.fill_color,
+        "volume_overlay_stroke_color": style.stroke_color,
+    }
+
+
+def resolve_volume_appearance(style: "Style") -> "Style":
+    """Return the style with auto-mode volume values materialized.
+
+    仅在独立音量柱模块开启且模式为 ``auto`` 时替换字段；其余情况原样返回。
+    Python 绘制/布局（``signal.volume_style``）与 native IR 序列化
+    （``render_ir``）都必须经过本函数，两条后端才会拿到同一组数值。
+    """
+    if not style.volume_enabled or style.volume_appearance_mode != "auto":
+        return style
+    return replace(style, **volume_auto_values(style))
+
+
 def style_to_dict(style: Style) -> dict:
     """Serialize ``Style`` into JSON-friendly primitives."""
     data: dict = {}
@@ -1756,6 +1799,12 @@ def style_from_dict(payload: object) -> Style:
                 value
                 if value in {"volume", "circle", "square", "rounded", "image"}
                 else defaults.lit_style
+            )
+        elif key == "volume_appearance_mode":
+            changes[key] = (
+                value
+                if value in {"custom", "auto"}
+                else defaults.volume_appearance_mode
             )
         elif key == "lit_transition_mode":
             changes[key] = value if value in {"none", "fade", "slide"} else defaults.lit_transition_mode

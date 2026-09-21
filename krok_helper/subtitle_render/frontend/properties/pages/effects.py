@@ -94,6 +94,17 @@ class EffectsPropertyPageBuilder:
         self._add_spin(add, "_volume_time_offset_spin", "时间偏移", -60_000, 60_000, "volume_time_offset_ms", suffix=" ms")
 
         add = group("布局", min_column_width=220, max_columns=2)
+        host._volume_appearance_mode_combo = self._combo(
+            section,
+            (("自动配合字体", "auto"), ("自定义", "custom")),
+            "volume_appearance_mode",
+        )
+        host._volume_appearance_mode_combo.setToolTip(
+            "自动配合字体：整体高度、柱宽、描边宽按主文字字号推导，柱体颜色跟随"
+            "主文字配色（未唱/已唱填充与描边），下方对应控件停用并回显推导值，"
+            "改字号或输出高度后自动跟随；自定义：全部参数独立设置"
+        )
+        add("外观模式", host._volume_appearance_mode_combo)
         self._add_canvas_spin(add, "_volume_size_spin", "整体高度", 4, 240, "volume_size", "short_quarter", suffix=" px")
         self._add_canvas_spin(add, "_volume_column_width_spin", "柱宽", 1, 120, "volume_column_width", "short_twelfth", suffix=" px")
         self._add_canvas_spin(add, "_volume_column_count_spin", "柱数", 1, 16, "volume_column_count", "hard")

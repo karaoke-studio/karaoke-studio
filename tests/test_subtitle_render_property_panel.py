@@ -2428,6 +2428,85 @@ def test_volume_and_lit_sections_are_independently_switchable(qapp):
     assert panel._style.lit_enabled is True
 
 
+def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            volume_enabled=True,
+            volume_appearance_mode="auto",
+            font_size_px=100,
+            base_color="#010203",
+            fill_color="#040506",
+            stroke_color="#070809",
+        )
+    )
+
+    # auto：被接管的控件停用，但回显推导值（字号 100 → 50/13/2）。
+    assert panel._volume_appearance_mode_combo.currentData() == "auto"
+    for control in (
+        panel._volume_size_spin,
+        panel._volume_column_width_spin,
+        panel._volume_stroke_width_spin,
+        panel._volume_fill_btn,
+        panel._volume_stroke_btn,
+        panel._volume_overlay_fill_btn,
+        panel._volume_overlay_stroke_btn,
+    ):
+        assert not control.isEnabled()
+    assert panel._volume_size_spin.value() == 50
+    assert panel._volume_column_width_spin.value() == 13
+    assert panel._volume_stroke_width_spin.value() == 2
+    assert panel._volume_fill_btn.color == "#010203"
+    assert panel._volume_stroke_btn.color == "#070809"
+    assert panel._volume_overlay_fill_btn.color == "#040506"
+    assert panel._volume_overlay_stroke_btn.color == "#070809"
+    # 未被接管的参数（柱数等）保持可编辑。
+    assert panel._volume_column_count_spin.isEnabled()
+
+    # 切回自定义：控件恢复可用并回到手动值（默认 48/12/2 + 白蓝配色）。
+    panel._volume_appearance_mode_combo.setCurrentIndex(
+        panel._volume_appearance_mode_combo.findData("custom")
+    )
+    assert panel._style.volume_appearance_mode == "custom"
+    for control in (
+        panel._volume_size_spin,
+        panel._volume_column_width_spin,
+        panel._volume_stroke_width_spin,
+        panel._volume_fill_btn,
+    ):
+        assert control.isEnabled()
+    assert panel._volume_size_spin.value() == 48
+    assert panel._volume_column_width_spin.value() == 12
+    assert panel._volume_stroke_width_spin.value() == 2
+    assert panel._volume_fill_btn.color == "#FFFFFF"
+
+    # auto 模式随字号联动刷新回显（宿主回流 set_style 的全量同步路径）。
+    panel.set_style(
+        Style(
+            volume_enabled=True,
+            volume_appearance_mode="auto",
+            font_size_px=40,
+        )
+    )
+    assert panel._volume_size_spin.value() == 20
+    assert panel._volume_column_width_spin.value() == 5
+
+
+def test_volume_auto_appearance_mode_roundtrips_through_payload():
+    style = Style(volume_enabled=True, volume_appearance_mode="auto")
+
+    payload = style_to_dict(style)
+    assert payload["volume_appearance_mode"] == "auto"
+    restored = style_from_dict(payload)
+    assert restored.volume_appearance_mode == "auto"
+    # 旧工程载荷没有该字段时回退 custom，未知值也按 custom 处理。
+    assert style_from_dict({}).volume_appearance_mode == "custom"
+    assert (
+        style_from_dict({"volume_appearance_mode": "bogus"}).volume_appearance_mode
+        == "custom"
+    )
+
+
 def test_property_panel_does_not_shadow_qwidget_style(qapp):
     panel = PropertyPanel()
 
@@ -2531,6 +2610,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.lit_transition_angle_deg == 0
     assert style.lit_transition_distance == 0
     assert style.signals_duration_ms == 4000
+    assert style.volume_appearance_mode == "custom"
     assert style.volume_size == 48
     assert style.volume_offset_x == 0
     assert style.volume_offset_y == 0

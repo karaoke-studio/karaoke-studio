@@ -22,6 +22,7 @@ from krok_helper.subtitle_render.domain.models import (
     Style,
     TitleOverlay,
     normalize_title_char_role_labels,
+    resolve_volume_appearance,
     style_for_track,
     style_to_dict,
 )
@@ -166,7 +167,9 @@ def build_render_ir(
                 "fps": max(int(fps), 1),
                 "dpr": max(float(dpr or 1.0), 0.01),
             },
-            "style": style_to_dict(style),
+            # auto 外观模式的音量柱大小/颜色在序列化前物化成具体数值，
+            # native 端只消费数值（与 Painter 的 volume_style 投影同源）。
+            "style": style_to_dict(resolve_volume_appearance(style)),
             "track": track_to_ir(
                 track,
                 primary_style,
