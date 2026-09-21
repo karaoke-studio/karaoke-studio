@@ -1209,6 +1209,7 @@ def resolve_signal_lit_groups(
 
         elapsed = max(t_ms - active_start, 0)
         bar_animations = None
+        bar_style = None
         if style.lit_style == "volume":
             elapsed = min(elapsed, max(active_duration - 1, 0))
             active_index, phase, opacity = volume_signal_state(

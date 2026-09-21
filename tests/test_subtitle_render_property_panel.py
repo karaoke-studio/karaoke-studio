@@ -2623,6 +2623,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.lit_transition_distance == 0
     assert style.signals_duration_ms == 4000
     assert style.volume_appearance_mode == "custom"
+    assert style.volume_auto_size_ratio_pct == 50
     assert style.volume_size == 48
     assert style.volume_offset_x == 0
     assert style.volume_offset_y == 0
