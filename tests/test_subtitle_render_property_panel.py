@@ -2446,6 +2446,8 @@ def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
     assert panel._volume_appearance_mode_combo.currentData() == "auto"
     assert panel._volume_auto_size_ratio_spin.value() == 50
     assert panel._volume_auto_size_ratio_spin.isEnabled()
+    assert panel._volume_auto_column_ratio_spin.value() == 25
+    assert panel._volume_auto_column_ratio_spin.isEnabled()
     for control in (
         panel._volume_size_spin,
         panel._volume_column_width_spin,
@@ -2473,6 +2475,7 @@ def test_volume_auto_appearance_disables_and_displays_derived_controls(qapp):
     )
     assert panel._style.volume_appearance_mode == "custom"
     assert not panel._volume_auto_size_ratio_spin.isEnabled()
+    assert not panel._volume_auto_column_ratio_spin.isEnabled()
     for control in (
         panel._volume_size_spin,
         panel._volume_column_width_spin,
@@ -2502,15 +2505,19 @@ def test_volume_auto_appearance_mode_roundtrips_through_payload():
         volume_enabled=True,
         volume_appearance_mode="auto",
         volume_auto_size_ratio_pct=120,
+        volume_auto_column_ratio_pct=40,
     )
 
     payload = style_to_dict(style)
     assert payload["volume_appearance_mode"] == "auto"
     assert payload["volume_auto_size_ratio_pct"] == 120
+    assert payload["volume_auto_column_ratio_pct"] == 40
     restored = style_from_dict(payload)
     assert restored.volume_appearance_mode == "auto"
     assert restored.volume_auto_size_ratio_pct == 120
+    assert restored.volume_auto_column_ratio_pct == 40
     assert style_from_dict({}).volume_auto_size_ratio_pct == 50
+    assert style_from_dict({}).volume_auto_column_ratio_pct == 25
     # 旧工程载荷没有该字段时回退 custom，未知值也按 custom 处理。
     assert style_from_dict({}).volume_appearance_mode == "custom"
     assert (
@@ -2624,6 +2631,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.signals_duration_ms == 4000
     assert style.volume_appearance_mode == "custom"
     assert style.volume_auto_size_ratio_pct == 50
+    assert style.volume_auto_column_ratio_pct == 25
     assert style.volume_size == 48
     assert style.volume_offset_x == 0
     assert style.volume_offset_y == 0

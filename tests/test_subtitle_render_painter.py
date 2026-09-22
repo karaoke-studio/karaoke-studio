@@ -1265,6 +1265,19 @@ def test_volume_auto_size_ratio_scales_geometry(qapp):
     )
     tiny = volume_style(replace(base, volume_auto_size_ratio_pct=5))
     assert tiny.volume_size == 5
+    # 柱宽比例独立可调：柱宽 = 整体高度 × 比例（默认 25%），描边链随之。
+    wide = volume_style(replace(base, volume_auto_column_ratio_pct=60))
+    assert wide.volume_size == 50
+    assert wide.volume_column_width == 30
+    assert (
+        _signal_layout_metrics(wide).group_width
+        > _signal_layout_metrics(default).group_width
+    )
+    narrow = volume_style(
+        replace(base, volume_auto_size_ratio_pct=100, volume_auto_column_ratio_pct=10)
+    )
+    assert narrow.volume_size == 100
+    assert narrow.volume_column_width == 10
 
 
 def test_volume_auto_decorations_follow_first_role(qapp):

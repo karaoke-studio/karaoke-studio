@@ -119,7 +119,21 @@ class EffectsPropertyPageBuilder:
         )
         host._volume_auto_size_ratio_spin.setToolTip(
             "auto 模式下整体高度相对主文字字号的百分比（默认 50%）；"
-            "柱宽与描边比例链随整体高度推导。自定义模式下停用"
+            "自定义模式下停用"
+        )
+        self._add_canvas_spin(
+            add,
+            "_volume_auto_column_ratio_spin",
+            "柱宽比例",
+            5,
+            100,
+            "volume_auto_column_ratio_pct",
+            "hard",
+            suffix=" %",
+        )
+        host._volume_auto_column_ratio_spin.setToolTip(
+            "auto 模式下柱宽相对整体高度的百分比（默认 25%，"
+            "与 N3 默认比例一致）；描边上限随柱宽推导。自定义模式下停用"
         )
         self._add_canvas_spin(add, "_volume_size_spin", "整体高度", 4, 240, "volume_size", "short_quarter", suffix=" px")
         self._add_canvas_spin(add, "_volume_column_width_spin", "柱宽", 1, 120, "volume_column_width", "short_twelfth", suffix=" px")

@@ -366,6 +366,7 @@ _LIT_FIELDS = {
     "volume_time_offset_ms",
     "volume_appearance_mode",
     "volume_auto_size_ratio_pct",
+    "volume_auto_column_ratio_pct",
     "volume_stroke_width",
     "volume_opacity_pct",
     "volume_size",
@@ -4202,6 +4203,10 @@ class PropertyPanel(QWidget):
             self._style.volume_auto_size_ratio_pct
         )
         self._volume_auto_size_ratio_spin.setEnabled(not volume_manual)
+        self._volume_auto_column_ratio_spin.setValue(
+            self._style.volume_auto_column_ratio_pct
+        )
+        self._volume_auto_column_ratio_spin.setEnabled(not volume_manual)
         self._volume_size_spin.setValue(volume_display_style.volume_size)
         self._volume_duration_spin.setValue(self._style.volume_duration_ms)
         self._volume_waiting_time_spin.setValue(self._style.volume_waiting_time_ms)

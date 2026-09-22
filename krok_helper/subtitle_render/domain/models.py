@@ -1127,8 +1127,10 @@ class Style:
     ``custom`` 时全部使用下面的独立字段。推导在渲染期实时进行，改字号/
     配色/输出高度后音量柱自动跟随，工程里不落具体值。"""
     volume_auto_size_ratio_pct: int = 50
-    """auto 档整体高度相对主文字字号的百分比（默认 50%）；柱宽/描边等
-    比例链随整体高度推导，仅 auto 模式生效。"""
+    """auto 档整体高度相对主文字字号的百分比（默认 50%）；仅 auto 模式生效。"""
+    volume_auto_column_ratio_pct: int = 25
+    """auto 档柱宽相对整体高度的百分比（默认 25%，与 N3 默认 48:12 一致）；
+    描边上限等比例链随柱宽推导，仅 auto 模式生效。"""
     # Keep the serialized/default discriminator for source compatibility with
     # direct Style(lit_enabled=True) callers; the new UI always writes a shape.
     lit_style: LitStyle = "volume"
@@ -1566,16 +1568,23 @@ def style_for_track(style: Style, track: object) -> Style:
 def volume_auto_values(style: "Style") -> dict[str, object]:
     """Derive auto-mode volume metrics/colors from the main lyric font.
 
-    比例链与 N3 默认值（整体 48 : 柱宽 12，字号 100）一致：整体高度 =
-    字号 1/2，柱宽 = 高度 1/4。auto 档的绘制走文字装饰管线（描边宽 =
+    比例链默认与 N3 默认值（整体 48 : 柱宽 12，字号 100）一致：整体高度 =
+    字号 × ``volume_auto_size_ratio_pct``（默认 50%），柱宽 = 整体高度 ×
+    ``volume_auto_column_ratio_pct``（默认 25%）。auto 档的绘制走文字装饰
+    管线（描边宽 =
     文字描边宽 × 高度比、上限半个柱宽，颜色取自文字配色矩阵），见
     ``signal._draw_volume_lit_group``。取整统一半向上（与面板浮点回显
     口径相同），避免 banker's rounding 抖动。
     """
     font_size = max(int(style.font_size_px), 1)
-    ratio = max(int(getattr(style, "volume_auto_size_ratio_pct", 50) or 0), 1)
-    size = max(4, int(font_size * ratio / 100.0 + 0.5))
-    column_width = max(1, int(size / 4.0 + 0.5))
+    size_ratio = max(
+        int(getattr(style, "volume_auto_size_ratio_pct", 50) or 0), 1
+    )
+    column_ratio = max(
+        int(getattr(style, "volume_auto_column_ratio_pct", 25) or 0), 1
+    )
+    size = max(4, int(font_size * size_ratio / 100.0 + 0.5))
+    column_width = max(1, int(size * column_ratio / 100.0 + 0.5))
     stroke_width = min(
         max(int(int(style.stroke_width_px or 0) * size / font_size + 0.5), 0),
         column_width // 2,
@@ -1771,6 +1780,7 @@ def style_from_dict(payload: object) -> Style:
             "volume_column_spacing",
             "volume_align",
             "volume_auto_size_ratio_pct",
+            "volume_auto_column_ratio_pct",
             "volume_flash_times",
             "volume_transition_ratio_pct",
         }:
