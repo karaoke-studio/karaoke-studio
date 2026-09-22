@@ -1562,7 +1562,7 @@ def test_layout_resolver_owns_collision_window_and_pair_policies() -> None:
         "_apply_measured_section_time_fill": (
             "_fill_section_time_from_measurements"
         ),
-        "_clamp_air_rows": "_clamp_air_rows_to_page_turn",
+        "_clamp_page_exit_order": "_enforce_page_exit_order",
         "measure_collision_bands": "_build_measured_collision_bands",
         "pixel_collision_squeeze_pairs": "_collision_squeeze_pairs",
         "_secondary_displacement_squeeze_pairs": (

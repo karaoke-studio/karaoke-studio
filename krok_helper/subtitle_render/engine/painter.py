@@ -281,12 +281,11 @@ from krok_helper.subtitle_render.engine.layout.display.resolver import (
     apply_animation_time_guard,
     build_measured_collision_bands as _build_measured_collision_bands,
     clear_display_line_resolution_cache,
-    air_row_clamp_candidates,
-    clamp_air_rows_to_page_turn as _clamp_air_rows_to_page_turn,
     collision_squeeze_pairs as _collision_squeeze_pairs,
     display_line_collision_time_window as _display_line_collision_time_window,
     display_line_compute_kwargs,
     display_line_static_collision_window as _display_line_static_collision_window,
+    enforce_page_exit_order as _enforce_page_exit_order,
     fill_section_time_from_measurements as _fill_section_time_from_measurements,
     retime_measured_collision_bands as _retime_measured_collision_bands,
     resolve_display_lines_for_style,
@@ -2715,37 +2714,20 @@ def _apply_measured_section_time_fill(
     )
 
 
-def _clamp_air_rows(
-    logical_w: int,
-    logical_h: int,
-    track: TimingTrack,
+def _clamp_page_exit_order(
     style: Style,
     display_lines: list[DisplayLine],
-    *,
-    geometry_cache: CollisionGeometryCache | None = None,
 ) -> list[DisplayLine]:
-    """Bind Painter geometry to the layout-owned air-row page-turn clamp."""
+    """Bind the layout-owned page exit-order clamp to this style."""
 
-    if not display_lines or not air_row_clamp_candidates(display_lines):
-        # 纯时间侧快查：没有「同段更矮的下一页」就没有空气行，免测几何。
+    if not display_lines:
         return display_lines
-    time_window = (
-        "stable" if style.allow_entry_exit_animation_overlap else "display"
-    )
-    measured = measure_collision_bands(
-        logical_w,
-        logical_h,
-        track,
-        style,
-        display_lines,
-        time_window=time_window,
-        geometry_cache=geometry_cache,
-    )
-    return _clamp_air_rows_to_page_turn(
+    return _enforce_page_exit_order(
         display_lines,
         style,
-        measured,
-        time_window=time_window,
+        time_window=(
+            "stable" if style.allow_entry_exit_animation_overlap else "display"
+        ),
     )
 
 
@@ -2848,9 +2830,8 @@ def display_lines_for_style(
                     enforce_inter_page_gap=enforce_gap,
                 )
             ),
-            clamp_air_rows=lambda items: _clamp_air_rows(
-                width, height, track, style, items,
-                geometry_cache=geometry_cache,
+            clamp_page_exit_order=lambda items: _clamp_page_exit_order(
+                style, items
             ),
         )
 

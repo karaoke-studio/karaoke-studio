@@ -423,110 +423,70 @@ def fill_section_time_from_measurements(
     return changed
 
 
-def air_row_clamp_candidates(
-    display_lines: DisplayLines,
-) -> dict[tuple[int, int], tuple[int, int]]:
-    """同段相邻且下一页更矮的页：``{page_id: following_page_id}``。
-
-    只有「下一页行数更少」的页才可能有空气行——底部 / 顶部对齐时更矮页
-    占的视觉行是本页行的子集；下一页不更矮就不会有缺后继的行。调用方用
-    这个纯时间侧的快查决定是否值得跑几何测量。
-    """
-
-    page_order: list[tuple[int, int]] = []
-    page_counts: dict[tuple[int, int], int] = {}
-    for item in display_lines:
-        page_id = (int(item.section_index), int(item.page_index))
-        if page_id not in page_counts:
-            page_order.append(page_id)
-            page_counts[page_id] = 0
-        page_counts[page_id] += 1
-    candidates: dict[tuple[int, int], tuple[int, int]] = {}
-    for position, page_id in enumerate(page_order):
-        following = (
-            page_order[position + 1]
-            if position + 1 < len(page_order)
-            else None
-        )
-        if (
-            following is None
-            or following[0] != page_id[0]
-            or page_counts[following] >= page_counts[page_id]
-        ):
-            continue
-        candidates[page_id] = following
-    return candidates
-
-
-def clamp_air_rows_to_page_turn(
+def enforce_page_exit_order(
     display_lines: DisplayLines,
     style: Style,
-    measured: MeasuredCollisionBands,
     *,
     time_window: str = "display",
 ) -> DisplayLines:
-    """缩行页切换时收紧旧页没有后继的「空气行」，不让它活过翻页点。
+    """页内消失顺序：同一页里上面的行不得晚于它下面的行退场。
 
-    旧页比新页高时（3→2、4→3、4→2…），顶部若干行在下一页没有同视觉行
-    的后继：既不会被顶掉也不参与段内挂靠，于是停在自然退场（或同步退
-    场）的终点——同页 T2 已被下一页顶掉、T1 还挂在画面上。这里按 N3
-    TopLong 的口径（上行挂到下一页出现前）把空气行收到翻页点：显示至多
-    延续到「下一页上屏时刻 − 同轨间隔」，即与本页第一波被顶掉的行一起
-    退场。仍保住演唱中句子的走字与自动退场余量；手工消失时刻与段尾页
-    （无同段下一页，交给段内填充 / 段末清屏）不参与。
+    缩行切换时，旧页顶部没有同视觉行后继的行（空气行）不会被任何后继
+    顶掉——同页 T2 已被下一页提前顶掉、T1 还挂在画面上。修复不按「下一
+    页上屏时刻」统一钳制：那会把与下一页毫无时间 / 空间碰撞的行也无端
+    压短（2 行页后接被 ForceBottom 顶上去一行的单行页时，底行没有来者
+    却被迫随翻页提前退场）。这里改为纯页内不变量：自动行按页内顺序自
+    上而下依次退场，每行的显示终点收紧到下一行（最终）退场时刻——T2
+    被提前顶掉时 T1 跟着走，未被顶掉的行保持原终点。正在演唱的句子保
+    住走字与退场余量；手工消失时刻不改动。
     """
 
-    candidates = air_row_clamp_candidates(display_lines)
-    if not candidates or not measured:
-        return display_lines
-    bands = {
-        render_index: band
-        for render_index, _page_id, band, _gap in measured
-    }
-    if not bands:
+    if not display_lines:
         return display_lines
 
+    page_order: list[tuple[int, int]] = []
     page_indices: dict[tuple[int, int], list[int]] = {}
     for index, item in enumerate(display_lines):
-        page_indices.setdefault(
-            (int(item.section_index), int(item.page_index)), []
-        ).append(index)
+        page_id = (int(item.section_index), int(item.page_index))
+        if page_id not in page_indices:
+            page_order.append(page_id)
+            page_indices[page_id] = []
+        page_indices[page_id].append(index)
 
-    gap_ms = max(int(style.line_lane_gap_ms), 0)
+    def visible_end_ms(item: DisplayLine) -> int:
+        if item.takeover_end_ms is not None:
+            return min(int(item.display_end_ms), int(item.takeover_end_ms))
+        return int(item.display_end_ms)
+
     floor_ms = style_compression_floor_ms(style)
     exit_protect = max(int(style.exit_anim_protect_ms), 0)
 
     changed = list(display_lines)
-    for page_id, following in candidates.items():
-        following_bands = [
-            bands[index]
-            for index in page_indices[following]
-            if index in bands
-        ]
-        if not following_bands:
+    for page_id in page_order:
+        indices = page_indices[page_id]
+        if len(indices) < 2:
             continue
-        boundary = min(band.display_start_ms for band in following_bands) - gap_ms
-        for index in page_indices[page_id]:
+        # 自下而上传播：below 始终是下一行（更靠下）的最终退场时刻。
+        below = visible_end_ms(changed[indices[-1]])
+        for position in range(len(indices) - 2, -1, -1):
+            index = indices[position]
             item = changed[index]
-            if index not in bands or item.line.display_end_override_ms is not None:
+            if item.line.display_end_override_ms is not None:
+                below = visible_end_ms(item)
                 continue
-            if any(
-                bands_share_layout_axis(bands[index], band)
-                for band in following_bands
-            ):
-                continue  # 有同视觉行后继：由守卫 / 填充按各自轨道处理
             # 与守卫同源的退场余量下限：正在唱的句子不能被砍进走字。
             exit_duration = exit_animation_ms(style, item.line)
             exit_stop = max(min(exit_duration, exit_protect), floor_ms)
             if time_window == "stable":
                 exit_stop = max(exit_stop, exit_duration)
             new_end = max(
-                min(int(item.display_end_ms), int(boundary)),
+                min(int(item.display_end_ms), below),
                 int(item.display_start_ms),
                 line_end_ms(item.line) + exit_stop,
             )
             if new_end != item.display_end_ms:
                 changed[index] = replace(item, display_end_ms=new_end)
+            below = visible_end_ms(changed[index])
     return changed
 
 
@@ -592,8 +552,8 @@ class DisplayResolutionPorts:
     secondary_collision_pairs: Callable[[DisplayLines], CollisionPairs]
     fill_section_time: Callable[[DisplayLines], DisplayLines]
     apply_animation_guard: Callable[[DisplayLines, bool], DisplayLines]
-    clamp_air_rows: Callable[[DisplayLines], DisplayLines] | None = None
-    """可选的「空气行翻页钳制」；None = 该调用方不提供几何测量，跳过。"""
+    clamp_page_exit_order: Callable[[DisplayLines], DisplayLines] | None = None
+    """可选的「页内消失顺序钳制」；None = 该调用方不带样式，跳过。"""
 
 
 @dataclass(frozen=True)
@@ -1110,8 +1070,8 @@ def resolve_display_lines(
     无条件兜底守卫收口——填充造出的重叠当场兜掉，守卫内循环有趟数
     上限，密集冲突时最后一轮可能未完全收敛，输出前统一再兜一次底。
     （把填充提前进每轮曾引发实际工程的显示窗错误，已回退。）最后一步
-    是「空气行翻页钳制」：缩行页切换时旧页没有后继的行以同页其余行的
-    最终退场为上界收紧，钳制只依赖最终边界，因此必须收在末尾。
+    是「页内消失顺序」钳制：上面的行不晚于下面的行退场，缩行切换时
+    顶部没有后继的行跟着下面的行一起走。
 
     每个多趟步骤完成后按 ``display`` 阶段上报进度（步骤即真实工作量：
     逐趟碰撞测量占整轨重排的大头）。步骤开始前还会登记当前槽位，供
@@ -1188,11 +1148,11 @@ def resolve_display_lines(
         # 与填充无关的无条件兜底守卫：既兜填充造出的重叠，也兜守卫内循
         # 环未收敛的残余（含段末清屏钳制）。
         resolved = ports.apply_animation_guard(resolved, avoid_collisions)
-        # 缩行页切换的「空气行」翻页钳制挂在最后：钳制边界取下一页的上屏
-        # 时刻，必须等填充与兜底守卫都落定后再算；它只收紧显示窗口，
+        # 「页内消失顺序」钳制挂在最后：上面的行不晚于下面的行退场——T2
+        # 被顶掉时 T1 跟着走，未被顶掉的行保持原终点。它只收紧显示窗口，
         # 不会造出新的冲突。
-        if ports.clamp_air_rows is not None:
-            resolved = ports.clamp_air_rows(resolved)
+        if ports.clamp_page_exit_order is not None:
+            resolved = ports.clamp_page_exit_order(resolved)
         report_render_progress("display", 7, _DISPLAY_RESOLUTION_PHASES)
         return resolved
     finally:
@@ -1262,11 +1222,10 @@ __all__ = [
     "DisplayResolutionPorts",
     "StyleDisplayResolutionPorts",
     "apply_animation_time_guard",
-    "air_row_clamp_candidates",
     "cached_display_line_resolution",
-    "clamp_air_rows_to_page_turn",
     "clear_display_line_resolution_cache",
     "display_line_compute_kwargs",
+    "enforce_page_exit_order",
     "resolve_display_lines",
     "resolve_display_lines_for_style",
     "resolve_display_timing",

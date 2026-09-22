@@ -11775,6 +11775,54 @@ def test_sync_ending_air_rows_exit_with_the_page_turn_on_wider_shrink(qapp):
     assert windows[3][1] + 300 == windows[5][0]
 
 
+def test_row_shrink_keeps_uncollided_lower_row_exit(qapp):
+    """与下一页毫无碰撞的行不得被无端压缩。
+
+    2 行页后接单行页、且单行被 ForceBottom 抬到上行（与 A0 同视觉行）
+    时，底行 A1 与下一页没有任何碰撞——按「页内消失顺序」它的终点保持
+    自然退场（演唱结束 + tail）。早期按「下一页上屏时刻」统一钳制的
+    改法会把它压到翻页点前，属于无端压缩。
+    """
+
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A0", 1_000, 2_000),  # 上行：被抬上来的 B0 顶掉
+            ("A1", 2_200, 3_600),  # 底行：唱得晚，与 B0 无碰撞，自然终点 4_600
+            ("B0", 3_400, 4_400),  # 单行页：时间上分不开 → 抬到上行
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(1, "builtin-1")])]
+        ),
+    )
+    style = _shrinking_page_style(
+        sync_entry=False, sync_ending=False, sync_each_page=False
+    )
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+
+    # 前提：B0 确实落在上行（与 A0 同视觉行），底行 A1 与下一页无碰撞。
+    display = subtitle_painter.display_lines_for_style(
+        track, style, logical_w=1280, logical_h=720
+    )
+    measured = subtitle_painter.measure_collision_bands(
+        1280, 720, track, style, display, time_window="display"
+    )
+    bands = {index: band for index, _page, band, _gap in measured}
+    assert bands[2].axis_min < bands[0].axis_max
+    assert bands[2].axis_max > bands[0].axis_min
+    assert bands[2].axis_max <= bands[1].axis_min
+    # 上行 A0 被同视觉行的 B0 顶掉（同轨间隔 300）。
+    assert windows[0][1] + 300 == windows[2][0]
+    # 底行 A1 与下一页无碰撞：保持自然退场，不被压到翻页点前。
+    assert windows[1][1] == 4_600
+
+
 def test_sync_ending_air_row_keeps_manual_end_and_section_tail(qapp):
     """空气行的手工消失时刻不被钳制；段尾页没有同段下一页，保持段尾填充。"""
 
