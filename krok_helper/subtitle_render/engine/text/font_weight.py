@@ -53,7 +53,6 @@ _AXIS_TAG_WEIGHT = b"wght"
 
 # v7 阶跃膨胀档：激活时 embolden_delta 取该值，膨胀宽度 = 字号×2%
 # （v4.2.x 引擎合成粗体的实测强度：楷体 1.9%em、MS Gothic 2.3%em）。
-_EMBOLDEN_TRIGGER_DELTA = 200
 _EMBOLDEN_EM_RATIO = 0.02
 
 # 与 metrics.clamp_weight / native 侧 weightBucket 同表的整百桶化。
@@ -424,6 +423,10 @@ def _compute_weight_plan(
         base_weight = max(floors)
         base_weight, style_name, _face_italic = selected[weights.index(base_weight)]
         delta = bucket - base_weight
+        # 触发条件精确匹配旧版引擎合成粗体：请求 ≥600 且基 face 非粗
+        # （<600）。旧版对 {100} 字体 @400 无合成（400<600）、@600 有
+        # 合成（600≥600, 100<600）——与 Δ 大小无关。
+        embolden = delta if bucket >= 600 and base_weight < 600 else 0
         return FontWeightPlan(
             family=family,
             requested_weight=requested,
@@ -431,8 +434,8 @@ def _compute_weight_plan(
             base_weight=base_weight,
             enum_weight=bucket,
             italic=bool(italic),
-            embolden_delta=delta if delta >= _EMBOLDEN_TRIGGER_DELTA else 0,
-            mark="模拟" if delta >= _EMBOLDEN_TRIGGER_DELTA else None,
+            embolden_delta=embolden,
+            mark="模拟" if embolden > 0 else None,
         )
     # 比族内最轻 face 还轻：放大无法变轻，渲染最轻 face。
     base_weight = min(weights)
@@ -448,9 +451,9 @@ def _compute_weight_plan(
 
 
 def embolden_width_px(font_size_px: int, delta: int) -> float:
-    """阶跃膨胀的描边宽：Δ≥200（触发距离）→ 字号×2%（旧版引擎合成
-    粗体实测强度），否则 0。两后端同一公式（native 侧 textRealizationFor）。"""
-    if delta < _EMBOLDEN_TRIGGER_DELTA or font_size_px <= 0:
+    """膨胀激活时（delta>0）的描边宽 = 字号×2%（旧版引擎合成粗体
+    实测强度）。两后端同一公式（native 侧 textRealizationFor）。"""
+    if delta <= 0 or font_size_px <= 0:
         return 0.0
     return float(font_size_px) * _EMBOLDEN_EM_RATIO
 

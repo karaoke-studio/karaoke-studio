@@ -251,15 +251,18 @@ def test_bold_cut_family_steps_shifted_to_base(qapp):
         assert plan.base_weight == 700
         assert plan.embolden_delta == 0
         assert plan.mark is None
-    triggered = resolve_weight_plan("UD Digi Kyokasho NK-B", 900)
-    assert triggered.base_weight == 700
-    assert triggered.embolden_delta == 200
-    assert triggered.mark == "模拟"
-    # 阶跃膨胀公式：Δ≥200 触发 → 字号×2%。
+    # v7.2：触发条件 = 请求≥600 且基face<600。NK-B 基 face 700≥600，
+    # 任何请求都不膨胀（旧版引擎对已粗 face 不做合成——严格一致）。
+    for weight in (400, 500, 600, 700, 800, 900):
+        plan = resolve_weight_plan("UD Digi Kyokasho NK-B", weight)
+        assert plan.base_weight == 700
+        assert plan.embolden_delta == 0
+        assert plan.mark is None
+    # 膨胀公式：delta>0 时宽度 = 字号×2%。
     from krok_helper.subtitle_render.engine.text.font_weight import embolden_width_px
 
-    assert embolden_width_px(48, 200) == pytest.approx(0.96)
-    assert embolden_width_px(48, 199) == 0.0
+    assert embolden_width_px(48, 1) == pytest.approx(0.96)
+    assert embolden_width_px(48, 0) == 0.0
 
 
 def test_missing_metadata_family_falls_back_to_plain_weight(monkeypatch):

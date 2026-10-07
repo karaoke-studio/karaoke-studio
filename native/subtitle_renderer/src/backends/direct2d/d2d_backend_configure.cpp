@@ -731,7 +731,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             // v7 阶跃：Δ≥200 触发（Python 端判定），宽度 = 字号×2%
             // （旧版引擎合成粗体强度），两后端同一公式。
             const float emboldenWidth =
-                emboldenDelta >= 200
+                emboldenDelta > 0
                     ? static_cast<float>(unit) * 0.02f
                     : 0.0f;
             D2D1_STROKE_STYLE_PROPERTIES properties = D2D1::StrokeStyleProperties();

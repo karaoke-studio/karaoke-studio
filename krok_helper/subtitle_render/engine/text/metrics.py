@@ -123,19 +123,40 @@ def make_font_for(
     return font_for
 
 
+def _embolden_advance_bonus(font: QFont | None, text: str) -> int:
+    """膨胀激活时 advance 应加的宽度（匹配旧版引擎合成粗体的 advance 膨胀）。"""
+    if font is None or not text or text.isspace():
+        return 0
+    from krok_helper.subtitle_render.engine.text.font_weight import (
+        embolden_delta_of_font,
+        embolden_width_px,
+    )
+
+    delta = embolden_delta_of_font(font)
+    if delta <= 0:
+        return 0
+    return int(round(embolden_width_px(font.pixelSize(), delta)))
+
+
 def char_advance(
     text: str,
     metrics: QFontMetrics,
     latin_metrics: QFontMetrics,
     font_for: FontSelector | None,
+    base_font: QFont | None = None,
 ) -> int:
     cache = getattr(_LAYOUT_PASS, "char_advances", None)
     if cache is None:
         if font_for is not None and is_emoji_text(text):
-            return QFontMetrics(font_for(text)).horizontalAdvance(text)
+            font = font_for(text)
+            return QFontMetrics(font).horizontalAdvance(text) + _embolden_advance_bonus(font, text)
         if font_for is not None and is_n3_latin_text(text):
-            return latin_metrics.horizontalAdvance(text)
-        return metrics.horizontalAdvance(text)
+            return latin_metrics.horizontalAdvance(text) + _embolden_advance_bonus(
+                font_for(text), text
+            )
+        return metrics.horizontalAdvance(text) + _embolden_advance_bonus(
+            base_font, text
+        )
     use_emoji = False
     use_latin = False
     if font_for is not None:
@@ -150,7 +171,9 @@ def char_advance(
     cache_key = (text, source_key)
     hit = cache.get(cache_key)
     if hit is None:
-        hit = source.horizontalAdvance(text)
+        hit = source.horizontalAdvance(text) + _embolden_advance_bonus(
+            base_font, text
+        )
         cache[cache_key] = hit
         _LAYOUT_PASS.metrics.append(source)
     return hit
@@ -271,7 +294,7 @@ def _char_glyph_metrics(
     cached = _CHAR_GLYPH_CACHE.get(key)
     if cached is not None:
         return cached
-    advance = char_advance(text, metrics, latin_metrics, font_for)
+    advance = char_advance(text, metrics, latin_metrics, font_for, base_font=glyph_font)
     path = QPainterPath()
     if text:
         path.addText(0.0, 0.0, glyph_font, text)
