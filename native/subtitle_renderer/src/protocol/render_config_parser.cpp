@@ -950,6 +950,20 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     if (style.value(QStringLiteral("latin_font_weight")).isDouble()) {
         base.latinFontWeight = std::clamp(intValue(style, QStringLiteral("latin_font_weight"), base.fontWeight), 1, 999);
     }
+    // Unified weight decision for the main/latin slots (ruby slots are read
+    // further below).  The global style must carry it too, not only the
+    // scheme/line overrides: without it the GPU fell back to its autonomous
+    // bucket rules and dropped the bold simulation the CPU renderer applies.
+    base.fontFaceWeight = intValue(
+        style, QStringLiteral("font_face_weight"), base.fontFaceWeight
+    );
+    base.fontSimBold = style.value(QStringLiteral("font_sim_bold")).toBool(base.fontSimBold);
+    base.latinFontFaceWeight = intValue(
+        style, QStringLiteral("latin_font_face_weight"), base.latinFontFaceWeight
+    );
+    base.latinFontSimBold = style.value(
+        QStringLiteral("latin_font_sim_bold")
+    ).toBool(base.latinFontSimBold);
     base.latinFontStretchPct = std::clamp(
         intValue(style, QStringLiteral("latin_font_stretch_pct"), 100), 50, 200
     );

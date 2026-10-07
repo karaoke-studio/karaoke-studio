@@ -221,3 +221,45 @@ def test_missing_metadata_family_falls_back_to_plain_weight(monkeypatch):
     font = QFont("__no_such_family__")
     fw.apply_weight_plan(font, plan)
     assert int(font.weight()) == 700
+
+
+def test_ir_face_decision_resolves_family_like_cpu(monkeypatch):
+    # GPU 下发的 face 决策必须与 CPU 同口径：先把 N3/本地化族名（如
+    # 「HGP明朝E」→ HGPMinchoE）解析成 Qt 族名再测 face。原始本地化名在
+    # QFontDatabase 里查不到 face，会落进「字体缺失」分支下发 face=请求
+    # 字重、不模拟，单 face 字体的粗体请求在 GPU 上被渲染成常规体。
+    import krok_helper.subtitle_render.engine.text.font_weight as fw
+    import krok_helper.subtitle_render.n3.font_catalog as catalog
+    from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
+
+    aliases = {"本地化名E": "QtFamilyE", "Latin別名": "QtLatin"}
+    monkeypatch.setattr(
+        catalog, "resolve_qt_font_family", lambda name: aliases.get(name, name)
+    )
+    seen: list[tuple[str, int]] = []
+
+    def fake_plan(family: str, weight: int, italic: bool = False) -> fw.FontWeightPlan:
+        seen.append((family, weight))
+        if family in {"QtFamilyE", "QtLatin"} and weight >= 600:
+            return fw.FontWeightPlan(
+                family=family, requested_weight=weight, base_weight=400,
+                synthetic_bold=True, enum_weight=700, mark="模拟",
+            )
+        return fw.FontWeightPlan(
+            family=family, requested_weight=weight, base_weight=weight,
+            enum_weight=weight,
+        )
+
+    monkeypatch.setattr(fw, "resolve_weight_plan", fake_plan)
+    payload = {
+        "font_family": "本地化名E",
+        "font_weight": 700,
+        "latin_font_family": "Latin別名",
+    }
+    apply_resolved_font_faces(payload)
+
+    assert all(family in {"QtFamilyE", "QtLatin"} for family, _weight in seen)
+    assert (payload["font_face_weight"], payload["font_sim_bold"]) == (400, True)
+    assert (payload["latin_font_face_weight"], payload["latin_font_sim_bold"]) == (400, True)
+    # 原始请求字重不被改写（sidecar Qt 后端与行内覆盖启发式仍消费它）。
+    assert payload["font_weight"] == 700

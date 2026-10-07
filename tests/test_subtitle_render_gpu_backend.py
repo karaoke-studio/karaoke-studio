@@ -2880,6 +2880,83 @@ def test_gpu_configure_shares_repeated_text_glyph_and_stroke_geometry(monkeypatc
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    ("family", "font_file", "base_weight", "requested_weight", "real_bold_weight"),
+    [
+        # 单 face 族（N3 的「Bold」= 唯一 Regular face + DWrite 合成粗体，
+        # 如 HGP明朝E）：静态字体曾被误判为可变字体走轴值实例，模拟被丢弃。
+        ("MS Gothic", "msgothic.ttc", 400, 700, None),
+        # 多 face 族缺档：Medium + 合成粗体（≠ 真实 Bold）。全局 style 的
+        # face 决策曾未被解析，GPU 回退到自主规则改画了别的 face。
+        ("Yu Gothic", "YuGothM.ttc", 500, 600, 700),
+    ],
+)
+def test_gpu_global_style_applies_ir_bold_simulation(
+    monkeypatch,
+    family: str,
+    font_file: str,
+    base_weight: int,
+    requested_weight: int,
+    real_bold_weight: int | None,
+) -> None:
+    if not os.path.exists(os.path.join(r"C:\Windows\Fonts", font_file)):
+        pytest.skip(f"{family} font file not present")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import krok_helper.subtitle_render.engine.text.font_weight as fw
+    import krok_helper.subtitle_render.n3.font_catalog as catalog
+
+    # offscreen 下 Qt 字体库不含系统字体：族名解析恒等、face 决策直接
+    # 打桩为 CPU 侧在 Windows 平台实测得到的口径（基 face + 合成粗体）。
+    monkeypatch.setattr(catalog, "resolve_qt_font_family", lambda name: name)
+
+    def fake_plan(plan_family: str, weight: int, italic: bool = False) -> fw.FontWeightPlan:
+        simulated = plan_family == family and weight == requested_weight
+        return fw.FontWeightPlan(
+            family=plan_family,
+            requested_weight=weight,
+            base_weight=base_weight if plan_family == family else weight,
+            synthetic_bold=simulated,
+            enum_weight=weight,
+            mark="模拟" if simulated else None,
+        )
+
+    monkeypatch.setattr(fw, "resolve_weight_plan", fake_plan)
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("繰", 0), TimingChar("返", 250)], end_ms=500)]
+    )
+
+    def ink(weight: int) -> int:
+        style = _g1_style(
+            font_family=family,
+            font_family_latin=family,
+            font_weight=weight,
+            stroke_width_px=0,
+            stroke2_enabled=False,
+            stroke2_width_px=0,
+            decoration_kind="none",
+        )
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            renderer.configure_gpu(
+                track, style, width=640, height=360, fps=60, force_warp=True,
+                realization_enabled=False,
+            )
+            event = renderer.render_gpu_frame(250, force_warp=True)
+            with SharedFrameRingReader.from_event(event) as reader:
+                slot = reader.read_frame(event)
+        return sum(alpha > 128 for alpha in slot.payload[3::4])
+
+    plain = ink(base_weight)
+    simulated = ink(requested_weight)
+    assert plain > 0
+    # DWrite SIMULATIONS_BOLD 描粗笔画：实测墨迹增幅 25%+（不模拟时两者相等）。
+    assert simulated > plain * 1.15, (plain, simulated)
+    if real_bold_weight is not None:
+        # 必须是「基 face + 模拟」而非就近换成真实 Bold（与 CPU 口径一致）。
+        real_bold = ink(real_bold_weight)
+        assert abs(real_bold - simulated) > real_bold * 0.05, (simulated, real_bold)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("resource_cache", [True, False])
 def test_gpu_configure_reuses_text_geometry_across_scene_changes(
     monkeypatch, resource_cache: bool

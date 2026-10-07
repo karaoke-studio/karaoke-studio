@@ -222,6 +222,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     ruby_latin→ruby→main。
     """
     from krok_helper.subtitle_render.engine.text.font_weight import resolve_weight_plan
+    from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
     if "font_family" not in payload or "font_weight" not in payload:
         return
@@ -231,7 +232,14 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     def resolved(family: Any, weight: Any) -> tuple[int, bool]:
         if weight is None:
             weight = main_weight
-        plan = resolve_weight_plan(str(family or ""), int(weight), italic)
+        # 与 CPU 渲染同口径：先把 N3/本地化族名（如「HGP明朝E」）解析成 Qt
+        # 族名（HGPMinchoE）再测 face。原始本地化名在 QFontDatabase 里查不到
+        # face，会落进「字体缺失」分支下发 face=请求字重、不模拟——GPU 端随即
+        # 命中 DirectWrite 枚举出的模拟粗体条目并以 SIMULATIONS_NONE 重建，
+        # 单 face 字体的粗体请求被静默渲染成常规体。
+        plan = resolve_weight_plan(
+            resolve_qt_font_family(str(family or "")), int(weight), italic
+        )
         return plan.base_weight, bool(plan.synthetic_bold)
 
     main_family = payload.get("font_family")

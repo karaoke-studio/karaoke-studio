@@ -506,7 +506,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         int faceWeight = -1, bool simBold = false
     ) {
         const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
-        const Impl::FontFaceKey key{resolvedFamily, weight, italic};
+        const Impl::FontFaceKey key{
+            resolvedFamily, weight, italic, faceWeight > 0 ? faceWeight : -1,
+            faceWeight > 0 && simBold
+        };
         const auto found = impl_->fontFaces.find(key);
         if (found != impl_->fontFaces.end()) {
             const auto metricFound = impl_->metricFaces.find(key);

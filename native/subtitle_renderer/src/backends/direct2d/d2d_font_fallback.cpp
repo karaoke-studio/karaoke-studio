@@ -209,6 +209,15 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> axisWeightFace(
         if (defaults[index].axisTag != DWRITE_FONT_AXIS_TAG_WEIGHT) {
             continue;
         }
+        // DirectWrite also reports implicit (non-variable) axes for static
+        // fonts, derived from OS/2 values -- e.g. single-face HGPMinchoE
+        // exposes wght=400.  Only an fvar-backed axis is a real variable
+        // instance (mirrors font_weight.py's fvar detection); treating a
+        // static axis as variable skipped the static rules and silently
+        // dropped bold simulation for every static font.
+        if ((resource->GetFontAxisAttributes(index) & DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE) == 0) {
+            return {};
+        }
         DWRITE_FONT_AXIS_VALUE value{};
         value.axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
         value.value = static_cast<float>(std::clamp(weight, 1, 1000));

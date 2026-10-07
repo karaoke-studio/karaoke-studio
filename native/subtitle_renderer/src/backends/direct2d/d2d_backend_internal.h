@@ -228,7 +228,11 @@ struct Direct2DGpuBackend::Impl {
         std::uint64_t lastUse = 0;
     };
 
-    using FontFaceKey = std::tuple<std::wstring, int, bool>;
+    // (family, requested weight, italic, explicit face weight, sim bold):
+    // the explicit decision shipped in the IR must be part of the key, or a
+    // lookup without it (faceWeight=-1) poisons the cache for later lookups
+    // that ask for "face + bold simulation".
+    using FontFaceKey = std::tuple<std::wstring, int, bool, int, bool>;
     using TextGlyphKey = std::tuple<
         std::uintptr_t, int, std::uint32_t, int, std::vector<UINT16>
     >;
