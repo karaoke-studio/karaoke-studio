@@ -393,10 +393,32 @@ def _compute_weight_plan(
     # 一档轻度加粗；Yu Gothic@600 = Medium+2%；NK-B（基 700，已粗）
     # 任何字重都不变化——即「NK-B@700~800 的变化 = 400 基 @700~800
     # （都为 0）」。
-    # v7 阶跃膨胀（2026-10-07 用户拍板）：严格复刻 v4.2.x 的阶跃曲线
-    # 并按基 face 平移锚定。旧版（400 基）：500(Δ=100) 无变化、600
-    # (Δ=200) 触发合成粗体、600~900 同档不再递增。NK-B（基 700）：
-    # 800(Δ=100) 无变化、900(Δ=200) 触发 +2%em——对应 400 基 500/600。
+    # v7.1 双向匹配 + 阶跃膨胀（2026-10-07 用户拍板）：
+    # 严格复刻 v4.2.x 的 Qt 匹配器行为——实测规律是「<600 向下取，
+    # ≥600 向上取 bold face」（NK {400,700}@600 旧版直接用 Bold，
+    # 不是 Regular+合成）。没有向上的 face 时才落 floor+阶跃膨胀。
+    #
+    #   E < 600: floor（向下取最近 face），不做膨胀（旧版同样无变化）
+    #   E ≥ 600: 先找 ≥E 的最轻 face（snap up，旧版匹配器行为）；
+    #            没有 → floor + Δ≥200 触发阶跃膨胀（旧版引擎合成）
+    #
+    # NK {400,700}@600 → snap Bold(700)；MS Gothic {400}@600 → 无
+    # face≥600，floor 400+Δ200 膨胀；NK-B {700}@600 → snap Bold(700)；
+    # Yu Gothic UI {300..700}@600 → exact Semibold(600)。
+    if bucket >= 600:
+        ceilings = [value for value in weights if value >= bucket]
+        if ceilings:
+            snap = min(ceilings)
+            snap_weight, snap_style, _snap_italic = selected[weights.index(snap)]
+            return FontWeightPlan(
+                family=family,
+                requested_weight=requested,
+                style_name=snap_style,
+                base_weight=snap_weight,
+                enum_weight=bucket,
+                italic=bool(italic),
+            )
+
     floors = [value for value in weights if value < bucket]
     if floors:
         base_weight = max(floors)
@@ -412,8 +434,7 @@ def _compute_weight_plan(
             embolden_delta=delta if delta >= _EMBOLDEN_TRIGGER_DELTA else 0,
             mark="模拟" if delta >= _EMBOLDEN_TRIGGER_DELTA else None,
         )
-    # 比族内最轻 face 还轻：放大无法变轻，渲染最轻 face（不标「就近」，
-    # v6 起该概念取消）。
+    # 比族内最轻 face 还轻：放大无法变轻，渲染最轻 face。
     base_weight = min(weights)
     base_weight, style_name, _face_italic = selected[weights.index(base_weight)]
     return FontWeightPlan(
