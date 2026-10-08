@@ -30,9 +30,8 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
 )
 from krok_helper.subtitle_render.domain.models import PROJECT_FILE_SUFFIX
 
-PROJECT_SCHEMA_VERSION = 5
-"""v4：空格宽度/字间距归属布局域——保存时布局携带显式值，方案槽位不再存空格宽度。
-v5：单 face 字体字重从绝对字重归一化到 400 基准（加载时 migrate_single_face_font_weights）。"""
+PROJECT_SCHEMA_VERSION = 4
+"""v3：空格宽度/字间距归属布局域——保存时布局携带显式值，方案槽位不再存空格宽度。"""
 _RECOVERY_WRITE_LOCK = threading.Lock()
 _RECOVERY_SNAPSHOT_FLOORS: dict[Path, int] = {}
 

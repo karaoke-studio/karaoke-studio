@@ -209,14 +209,12 @@ def gpu_unsupported_feature_labels(reasons: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
-    """为单个样式字典追加统一字重解析的生效结果。
+    """为单个样式字典追加可变字体标记（顺应引擎，2026-10-07 拍板）。
 
-    不改动既有 ``*_font_weight`` 键（C++ 侧行内覆盖启发式与 sidecar 内置
-    Qt 后端继续消费原始请求值），只追加两类键：
-
-    - ``*_font_face_weight``：该槽实际渲染的 face 字重（静态=钉扎/模拟基
-      face；可变=轴值），GPU 端据此精确建 face；
-    - ``*_sim_bold``：该槽是否走合成粗体（Qt 实测指纹判定）。
+    字重回到绝对字重，模拟加粗交还 Qt/DirectWrite 引擎——不再下发任何
+    ``*_font_face_weight`` / ``*_sim_bold`` / ``*_font_embolden`` 映射，引擎
+    自行就近匹配 + 合成粗体。只追加 ``*_font_axis`` 一个标记：该槽字体
+    是否真可变（GPU 端据此走轴值实例而非静态就近匹配）。
 
     回退链与 C++ 解析端一一对应：latin→main、ruby→main、ruby_latin→
     ruby_latin→ruby→main。
@@ -228,78 +226,30 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     italic = bool(payload.get("italic"))
     main_weight = int(payload["font_weight"] or 400)
 
-    def resolved(family: Any, weight: Any) -> tuple[int, int]:
+    def is_variable(family: Any, weight: Any) -> bool:
         if weight is None:
             weight = main_weight
         plan = resolve_weight_plan(str(family or ""), int(weight), italic)
-        return plan.base_weight, plan.embolden_delta
+        return plan.render_mode == "axis"
 
     main_family = payload.get("font_family")
-    plan = resolve_weight_plan(str(main_family or ""), main_weight, italic)
-    payload["font_face_weight"] = plan.base_weight
-    payload["font_sim_bold"] = False
-    payload["font_axis"] = plan.render_mode == "axis"
-    payload["font_embolden"] = plan.embolden_delta
+    payload["font_axis"] = is_variable(main_family, main_weight)
 
     latin_family = payload.get("latin_font_family") or main_family
-    payload["latin_font_axis"] = (
-        resolve_weight_plan(
-            str(latin_family or ""),
-            int(payload.get("latin_font_weight") or main_weight),
-            italic,
-        ).axis_value
-        is not None
+    payload["latin_font_axis"] = is_variable(
+        latin_family, payload.get("latin_font_weight")
     )
-    latin_plan = resolve_weight_plan(
-        str(latin_family or ""),
-        int(payload.get("latin_font_weight") or main_weight),
-        italic,
-    )
-    payload["latin_font_embolden"] = latin_plan.embolden_delta
-    face_weight, _delta = resolved(latin_family, payload.get("latin_font_weight"))
-    payload["latin_font_face_weight"] = face_weight
-    payload["latin_font_sim_bold"] = False
 
     ruby_family = payload.get("ruby_font_family") or main_family
-    payload["ruby_font_axis"] = (
-        resolve_weight_plan(
-            str(ruby_family or ""),
-            int(payload.get("ruby_font_weight") or main_weight),
-            italic,
-        ).axis_value
-        is not None
+    payload["ruby_font_axis"] = is_variable(
+        ruby_family, payload.get("ruby_font_weight")
     )
-    ruby_plan = resolve_weight_plan(
-        str(ruby_family or ""),
-        int(payload.get("ruby_font_weight") or main_weight),
-        italic,
-    )
-    payload["ruby_font_embolden"] = ruby_plan.embolden_delta
-    face_weight, _delta = resolved(ruby_family, payload.get("ruby_font_weight"))
-    payload["ruby_font_face_weight"] = face_weight
-    payload["ruby_font_sim_bold"] = False
 
     ruby_latin_family = payload.get("ruby_latin_font_family") or ruby_family
     ruby_latin_weight = payload.get("ruby_latin_font_weight")
     if ruby_latin_weight is None:
         ruby_latin_weight = payload.get("ruby_font_weight")
-    payload["ruby_latin_font_axis"] = (
-        resolve_weight_plan(
-            str(ruby_latin_family or ""),
-            int(ruby_latin_weight or main_weight),
-            italic,
-        ).axis_value
-        is not None
-    )
-    ruby_latin_plan = resolve_weight_plan(
-        str(ruby_latin_family or ""),
-        int(ruby_latin_weight or main_weight),
-        italic,
-    )
-    payload["ruby_latin_font_embolden"] = ruby_latin_plan.embolden_delta
-    face_weight, _delta = resolved(ruby_latin_family, ruby_latin_weight)
-    payload["ruby_latin_font_face_weight"] = face_weight
-    payload["ruby_latin_font_sim_bold"] = False
+    payload["ruby_latin_font_axis"] = is_variable(ruby_latin_family, ruby_latin_weight)
 
 
 def apply_resolved_font_faces(node: Any) -> None:

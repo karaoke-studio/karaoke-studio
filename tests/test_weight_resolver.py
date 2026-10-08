@@ -1,7 +1,9 @@
 """Phase 1 + Phase 2 字体解析与匹配的独立测试。
 
 Phase 1（font_capabilities）：face 枚举、轴检测、别名规范化。
-Phase 2（weight_resolver）：v4.2.x 比例 + 紧邻放大语义的穷举验证。
+Phase 2（weight_resolver）：顺应引擎语义——可变=轴值（钳制到端点），
+静态=引擎就近匹配标注（精确命中 / 引擎合成粗体 / 引擎就近），不做任何
+「我们膨胀」。
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ def _vf(family: str, mn: float, mx: float, faces=(300, 700)) -> FontCapabilities
 
 
 # =========================================================================
-# Phase 2: 紧邻放大语义
+# Phase 2: 顺应引擎语义
 # =========================================================================
 
 
@@ -49,70 +51,80 @@ class TestVariableFont:
         assert r.axis_value == 600.0
         assert r.is_exact
 
-    def test_below_min_snaps(self):
+    def test_below_min_clamps(self):
         r = resolve(_vf("t", 300, 900), 100)
         assert r.render_mode == "axis"
         assert r.axis_value == 300.0
         assert not r.is_exact
+        assert r.mark == "越界"
 
-    def test_above_max_emboldens(self):
+    def test_above_max_clamps(self):
         r = resolve(_vf("t", 300, 900), 950)
-        assert r.render_mode == "embolden"
-        assert r.embolden_delta == 50
+        assert r.render_mode == "axis"
+        assert r.axis_value == 900.0
+        assert not r.is_exact
+        assert r.mark == "越界"
 
 
 class TestStaticSingleFace:
-    """单 face：无论实际字重都归一化为 400 档。"""
+    """单 face：不归一化，引擎就近 + 合成（face<600 且 W≥600 时）。"""
 
-    def test_regular_400_exact(self):
+    def test_exact_400(self):
         r = resolve(_cap("t", (400,)), 400)
         assert r.render_mode == "face"
         assert r.is_exact
 
-    def test_regular_500_embolden(self):
+    def test_500_snaps_to_400(self):
         r = resolve(_cap("t", (400,)), 500)
-        assert r.render_mode == "embolden"
-        assert r.embolden_delta == 100
+        assert r.render_mode == "snap"
+        assert r.base_face.weight == 400
+        assert not r.is_exact
 
-    def test_regular_700_embolden(self):
+    def test_700_engine_synthetic(self):
         r = resolve(_cap("t", (400,)), 700)
-        assert r.embolden_delta == 300
+        assert r.render_mode == "engine_synthetic"
+        assert r.base_face.weight == 400
+        assert r.mark == "模拟"
 
-    def test_regular_900_embolden(self):
+    def test_900_engine_synthetic(self):
         r = resolve(_cap("t", (400,)), 900)
-        assert r.embolden_delta == 500
+        assert r.render_mode == "engine_synthetic"
+        assert r.base_face.weight == 400
 
-    def test_regular_300_snaps(self):
+    def test_300_snaps(self):
         r = resolve(_cap("t", (400,)), 300)
         assert r.render_mode == "snap"
         assert not r.is_exact
 
-    def test_bold_700_normalized_to_400(self):
-        """NK-B {700} 视为 400 档：@700 = Δ300，@400 = 精确。"""
+    def test_bold_700_stays_700(self):
+        """NK-B {700}：700 就是 700（业界一致），不再归一化到 400。"""
         r700 = resolve(_cap("t", (700,)), 700)
-        assert r700.render_mode == "embolden"
-        assert r700.embolden_delta == 300
+        assert r700.render_mode == "face"
+        assert r700.is_exact
+        assert r700.base_face.weight == 700
         r400 = resolve(_cap("t", (700,)), 400)
-        assert r400.render_mode == "face"
-        assert r400.is_exact
+        assert r400.render_mode == "snap"
+        assert r400.base_face.weight == 700
 
-    def test_bold_700_at_900(self):
+    def test_bold_700_cannot_further_bold(self):
+        """粗 face（≥600）不可再加粗：@900 只就近到 700，无合成。"""
         r = resolve(_cap("t", (700,)), 900)
-        assert r.render_mode == "embolden"
-        assert r.embolden_delta == 500
+        assert r.render_mode == "snap"
+        assert r.base_face.weight == 700
 
-    def test_extralight_100_normalized_to_400(self):
-        """{100} 视为 400 档：@600 = Δ200，@400 = 精确。"""
+    def test_extralight_100_engine_synthetic_at_600(self):
+        """{100}：@600 引擎合成（100<600），@400 就近到 100。"""
         r600 = resolve(_cap("t", (100,)), 600)
-        assert r600.render_mode == "embolden"
-        assert r600.embolden_delta == 200
+        assert r600.render_mode == "engine_synthetic"
+        assert r600.base_face.weight == 100
         r400 = resolve(_cap("t", (100,)), 400)
-        assert r400.render_mode == "face"
-        assert r400.is_exact
+        assert r400.render_mode == "snap"
+        assert r400.base_face.weight == 100
 
 
 class TestStaticMultiFace:
-    """多 face：精确命中直接用；缺档从紧邻较小 face 放大。"""
+    """多 face：精确命中直接用；缺档引擎就近（平局取轻），face<600 且
+    请求≥600 时引擎合成粗体。"""
 
     def test_exact_400(self):
         r = resolve(_cap("t", (400, 700)), 400)
@@ -124,40 +136,40 @@ class TestStaticMultiFace:
         assert r.render_mode == "face"
         assert r.is_exact
 
-    def test_500_embolden_from_400(self):
+    def test_500_snaps_to_400(self):
         r = resolve(_cap("t", (400, 700)), 500)
-        assert r.render_mode == "embolden"
+        assert r.render_mode == "snap"
         assert r.base_face.weight == 400
-        assert r.embolden_delta == 100
 
-    def test_600_embolden_from_400(self):
-        """600 的紧邻较小是 400（不是 700），从 400 放大 Δ200。"""
+    def test_600_nearest_700_no_tie(self):
+        """600 对 {400,700} 无平局：就近 700（粗 face，不再合成）。"""
         r = resolve(_cap("t", (400, 700)), 600)
-        assert r.render_mode == "embolden"
-        assert r.base_face.weight == 400
-        assert r.embolden_delta == 200
-
-    def test_800_embolden_from_700(self):
-        r = resolve(_cap("t", (400, 700)), 800)
-        assert r.render_mode == "embolden"
+        assert r.render_mode == "snap"
         assert r.base_face.weight == 700
-        assert r.embolden_delta == 100
 
-    def test_900_embolden_from_700(self):
+    def test_800_snaps_to_700(self):
+        r = resolve(_cap("t", (400, 700)), 800)
+        assert r.render_mode == "snap"
+        assert r.base_face.weight == 700
+
+    def test_900_snaps_to_700(self):
         r = resolve(_cap("t", (400, 700)), 900)
-        assert r.embolden_delta == 200
+        assert r.render_mode == "snap"
+        assert r.base_face.weight == 700
 
     def test_300_snaps_to_400(self):
         r = resolve(_cap("t", (400, 700)), 300)
         assert r.render_mode == "snap"
         assert r.base_face.weight == 400
 
-    def test_yu_gothic_600_embolden_from_500(self):
-        """Yu Gothic {300,400,500,700}@600 → 紧邻较小 500，Δ100。"""
+    def test_yu_gothic_600_tie_prefers_lighter_with_synth(self):
+        """Yu Gothic {300,400,500,700}@600：500/700 平局取轻 → 500+合成。
+        2026-10-08 实测校准（v4.2.x 像素一致）：引擎对平局取更轻 face 并
+        施加 faux bold，而不是上吸到 700。"""
         r = resolve(_cap("t", (300, 400, 500, 700)), 600)
-        assert r.render_mode == "embolden"
+        assert r.render_mode == "engine_synthetic"
         assert r.base_face.weight == 500
-        assert r.embolden_delta == 100
+        assert r.mark == "模拟"
 
 
 class TestMissing:

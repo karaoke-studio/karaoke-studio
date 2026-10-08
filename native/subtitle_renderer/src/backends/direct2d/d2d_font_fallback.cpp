@@ -16,21 +16,11 @@ namespace {
 // Python side; the two implementations must stay in lockstep.
 //
 // Variable fonts (fvar wght axis): render the TRUE axis-value instance
-// clamped to the axis range; never simulate.  Static fonts: bucket the
-// request to a standard hundred weight, then (a) exact face, (b) single-face
-// family with a >=600 request above the face weight -> that face plus bold
-// simulation (the only deterministic synthetic case), (c) otherwise snap to
-// the nearest face (ties prefer the lighter one) with no simulation.
-int weightBucket(int weight) {
-    if (weight <= 250) return 100;
-    if (weight <= 350) return 300;
-    if (weight <= 450) return 400;
-    if (weight <= 550) return 500;
-    if (weight <= 650) return 600;
-    if (weight <= 750) return 700;
-    if (weight <= 850) return 800;
-    return 900;
-}
+// clamped to the axis range; never simulate.  Static fonts follow the
+// engine (Qt/DirectWrite observed) matching: (a) exact face, (b) nearest
+// face by |weight - request| with ties preferring the lighter face,
+// (c) bold simulation only when request >= 600 AND the matched face < 600
+// (coarse faces cannot be further bolded).
 
 bool localizedStringsContain(
     IDWriteLocalizedStrings *strings,
@@ -259,8 +249,6 @@ ResolvedFontFaces resolveUnifiedFaces(
     IDWriteFontFamily *family,
     int weight,
     bool italic,
-    int faceWeight,
-    bool simBold,
     bool axisHint
 ) {
     ResolvedFontFaces result;
@@ -269,13 +257,12 @@ ResolvedFontFaces resolveUnifiedFaces(
         return result;
     }
 
-    // 可变字体：faceWeight 即钳制后的轴值。axisHint 由 CPU 侧统一解析
-    // 下发——这台 Win11 的 DWrite 对静态字体也报告 wght 标准轴，凭
-    // GetFontAxisCount 判可变会把静态族全部劫持进恒定的轴实例；只有
-    // Python 侧实测（轴两端指纹不同）确认的真可变字体才走这里。
+    // 可变字体：轴值即请求字重（DirectWrite 会钳制到轴范围）。axisHint
+    // 由 Python 侧统一解析下发——这台 Win11 的 DWrite 对静态字体也报告
+    // wght 标准轴，凭 GetFontAxisCount 判可变会把静态族全部劫持进恒定的
+    // 轴实例；只有 Python 侧实测（轴两端指纹不同）确认的真可变字体才走这里。
     if (axisHint) {
-        if (auto axisFace = axisWeightFace(
-                probeFace.Get(), faceWeight > 0 ? faceWeight : weight)) {
+        if (auto axisFace = axisWeightFace(probeFace.Get(), weight)) {
             result.outline = axisFace;
             result.metrics = defaultAxisFace(probeFace.Get());
             if (!result.metrics) {
@@ -329,48 +316,33 @@ ResolvedFontFaces resolveUnifiedFaces(
         faces = std::move(matchingStyle);
     }
 
+    // 引擎镜像（与 CPU 侧 weight_resolver._engine_face 同一规则，2026-10-08
+    // QFontInfo/像素实测校准）：精确命中 → 该 face；缺档 → 就近匹配
+    // （|face−W| 最小，平局取更轻 face）；合成粗体 = 请求≥600 且匹配
+    // face<600（粗 face 不可再加粗）。
     const FaceEntry *chosen = nullptr;
     DWRITE_FONT_SIMULATIONS simulations = DWRITE_FONT_SIMULATIONS_NONE;
-    if (faceWeight > 0) {
-        // 显式决策（CPU 侧统一解析的权威结果）：按 face 字重精确选 face，
-        // simBold 时叠加 DWrite 合成粗体。
-        const auto explicitFace = std::find_if(
+    const auto exact = std::find_if(
+        faces.begin(), faces.end(),
+        [&](const FaceEntry &entry) { return entry.weight == weight; }
+    );
+    if (exact != faces.end()) {
+        chosen = &*exact;
+    } else {
+        chosen = &*std::min_element(
             faces.begin(), faces.end(),
-            [&](const FaceEntry &entry) { return entry.weight == faceWeight; }
-        );
-        if (explicitFace != faces.end()) {
-            chosen = &*explicitFace;
-            simulations = simBold
-                ? DWRITE_FONT_SIMULATIONS_BOLD
-                : DWRITE_FONT_SIMULATIONS_NONE;
-        }
-    }
-    if (chosen == nullptr) {
-        const int bucket = weightBucket(weight);
-        const auto exact = std::find_if(
-            faces.begin(), faces.end(),
-            [&](const FaceEntry &entry) { return entry.weight == bucket; }
-        );
-        if (exact != faces.end()) {
-            chosen = &*exact;
-        } else if (
-            faces.size() == 1 && bucket >= 600
-            && bucket > faces.front().weight) {
-            chosen = &faces.front();
-            simulations = DWRITE_FONT_SIMULATIONS_BOLD;
-        } else {
-            chosen = &*std::min_element(
-                faces.begin(), faces.end(),
-                [&](const FaceEntry &lhs, const FaceEntry &rhs) {
-                    const int lhsDistance = std::abs(lhs.weight - bucket);
-                    const int rhsDistance = std::abs(rhs.weight - bucket);
-                    if (lhsDistance != rhsDistance) {
-                        return lhsDistance < rhsDistance;
-                    }
-                    return lhs.weight < rhs.weight;
+            [&](const FaceEntry &lhs, const FaceEntry &rhs) {
+                const int lhsDistance = std::abs(lhs.weight - weight);
+                const int rhsDistance = std::abs(rhs.weight - weight);
+                if (lhsDistance != rhsDistance) {
+                    return lhsDistance < rhsDistance;
                 }
-            );
-        }
+                return lhs.weight < rhs.weight;
+            }
+        );
+    }
+    if (weight >= 600 && chosen->weight < 600) {
+        simulations = DWRITE_FONT_SIMULATIONS_BOLD;
     }
     result.outline = faceFromFont(chosen->font.Get(), simulations);
     // Vertical metrics always come from the unsimulated base face: DWrite's
@@ -393,8 +365,6 @@ ResolvedFontFaces resolveFontFaces(
     const std::wstring &familyName,
     int weight,
     bool italic,
-    int faceWeight,
-    bool simBold,
     bool axisHint
 ) {
     if (familyName.empty()) {
@@ -411,8 +381,7 @@ ResolvedFontFaces resolveFontFaces(
         if (auto font = tryFamilyFont(
                 typographicCollection, familyName, weight, italic, &family)) {
             return resolveUnifiedFaces(
-                font.Get(), family.Get(), weight, italic, faceWeight, simBold,
-                axisHint);
+                font.Get(), family.Get(), weight, italic, axisHint);
         }
     }
     {
@@ -420,13 +389,12 @@ ResolvedFontFaces resolveFontFaces(
         if (auto font = tryFamilyFont(
                 collection, familyName, weight, italic, &family)) {
             return resolveUnifiedFaces(
-                font.Get(), family.Get(), weight, italic, faceWeight, simBold,
-                axisHint);
+                font.Get(), family.Get(), weight, italic, axisHint);
         }
     }
     if (auto font = findFontByGdiFamilyName(collection, familyName)) {
         return resolveUnifiedFaces(
-            font.Get(), nullptr, weight, italic, faceWeight, simBold, axisHint);
+            font.Get(), nullptr, weight, italic, axisHint);
     }
     return {};
 }
@@ -437,13 +405,10 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     const std::wstring &familyName,
     int weight,
     bool italic,
-    int faceWeight,
-    bool simBold,
     bool axisHint
 ) {
     return resolveFontFaces(
-        collection, typographicCollection, familyName, weight, italic,
-        faceWeight, simBold, axisHint
+        collection, typographicCollection, familyName, weight, italic, axisHint
     ).outline;
 }
 

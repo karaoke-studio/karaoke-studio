@@ -1,26 +1,24 @@
-"""Phase 3: Font Weight — 渲染胶水（消费 Phase 1 + Phase 2 的结果）。
+"""Phase 3: Font Weight — 渲染胶水（顺应引擎，2026-10-07 拍板）。
 
-架构（2026-10-07 重做，替换 v6~v7.2 的全部决策代码）：
+架构：
 
   Phase 1  font_capabilities.get_capabilities(family) → FontCapabilities
            （纯数据：face 清单 + 轴信息，含别名规范化与缓存）
 
   Phase 2  weight_resolver.resolve(capabilities, weight) → ResolvedWeight
-           （W3C CSS §5.2 匹配算法，纯函数）
+           （可变=轴值，静态=引擎匹配标注）
 
-  Phase 3  本模块：把 ResolvedWeight 转成 QFont / IR 字段 / 膨胀量
-           （薄胶水，无决策逻辑）
+  Phase 3  本模块：把 ResolvedWeight 转成 QFont（薄胶水）。
 
-本模块不再包含任何字体匹配/选择规则——所有分支在 weight_resolver.py
-里，可独立穷举测试。
+**顺应引擎**：字重回到绝对字重，模拟加粗交还 Qt/DirectWrite 引擎。
+本模块不再做任何「自己膨胀」——静态字体直接 ``setWeight(请求字重)``
+让引擎匹配 + 合成粗体；可变字体用 ``setVariableAxis`` 设真实轴值。
 """
 
 from __future__ import annotations
 
-import threading
-
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QPainterPath, QPainterPathStroker
+from PyQt6.QtGui import QFont, QPainterPath
 
 from krok_helper.subtitle_render.engine.text.font_capabilities import (
     FontCapabilities,
@@ -37,133 +35,40 @@ from krok_helper.subtitle_render.engine.text.weight_resolver import (
 _AXIS_TAG_WEIGHT = b"wght"
 
 
-
-# ---------------------------------------------------------------------------
-# 公共 API（兼容旧调用方的函数签名）
-# ---------------------------------------------------------------------------
-
-
 def resolve_weight_plan(
     family: str, weight: int, italic: bool = False
 ) -> ResolvedWeight:
-    """(family, 请求字重, 请求斜体) → 渲染决策。
-
-    兼容旧 ``FontWeightPlan`` 的调用方：返回 ``ResolvedWeight``，字段
-    名不同但信息等价（``base_weight`` / ``style_name`` / ``render_mode``
-    / ``axis_value``）。旧的 ``synthetic_bold`` → ``needs_synthetic``，
-    ``embolden_delta`` → ``needs_synthetic``（阶跃语义）。
-    """
+    """(family, 请求字重, 请求斜体) → 解析决策。"""
     capabilities = get_capabilities(family)
     return resolve(capabilities, weight)
 
 
-def embolden_width_px(font_size_px: int, delta: int) -> float:
-    """模拟放大的膨胀描边宽 = 字号 × Δ / 10000。
+def winding_glyph_path(path: QPainterPath, _font: QFont | None = None) -> QPainterPath:
+    """字形轮廓统一用 NonZero(Winding) 填充。
 
-    比例与 v4.2.x 一致、以楷体为准（楷体 @600 即 Δ=200 → 约 2% em）。
+    OpenType 轮廓规范要求 NonZero 填充；Qt ``addText()`` 默认
+    OddEvenFill，可变字体 gvar 插值导致轮廓重叠时 OddEven 会在笔画
+    交叉处产生空洞。静态字体两种规则结果相同，统一设 Winding 无副作用。
+    第二参仅为兼容旧「我们膨胀」调用点，顺应引擎后忽略。
     """
-    if delta <= 0 or font_size_px <= 0:
-        return 0.0
-    # 比例与 v4.2.x 楷体 faux bold 一致（实测固定 +2.17%em，见
-    # probe_kaiti_ratio.py）：@700 即 Δ=300 → 字号×2.17%em。
-    return float(font_size_px) * float(delta) / 13800.0
-
-
-# ---------------------------------------------------------------------------
-# 膨胀量传递（apply 时登记签名 → 绘制时查表）
-# ---------------------------------------------------------------------------
-
-_EMBOLDEN_BY_SIGNATURE: dict[tuple, int] = {}
-_SIGNATURE_MAX = 4096
-_LOCK = threading.Lock()
-
-
-def font_signature(font: QFont) -> tuple:
-    """QFont 的解析签名。"""
-    axis_tag = QFont.Tag(b"wght")
-    axis_value = (
-        float(font.variableAxisValue(axis_tag))
-        if font.isVariableAxisSet(axis_tag)
-        else None
-    )
-    return (
-        font.family(),
-        font.pixelSize(),
-        int(font.weight()),
-        font.italic(),
-        font.stretch(),
-        font.styleName(),
-        axis_value,
-    )
-
-
-def embolden_delta_of_font(font: QFont) -> int:
-    """从 QFont 反查模拟放大的字重差 Δ（无放大返回 0）。"""
-    with _LOCK:
-        return int(_EMBOLDEN_BY_SIGNATURE.get(font_signature(font), 0))
-
-
-def embolden_glyph_path(path: QPainterPath, font: QFont) -> QPainterPath:
-    """模拟放大时对字形轮廓做圆形膨胀。"""
-    # OpenType 轮廓规范要求 NonZero(Winding) 填充；Qt addText() 默认
-    # OddEvenFill，可变字体 gvar 插值导致轮廓重叠时 OddEven 会在笔画
-    # 交叉处产生空洞。静态字体两种规则结果相同，统一设 Winding 无副作用。
     path.setFillRule(Qt.FillRule.WindingFill)
-    if path.isEmpty():
-        return path
-    delta = embolden_delta_of_font(font)
-    if delta <= 0:
-        return path
-    width = embolden_width_px(font.pixelSize(), delta)
-    if width <= 0.0:
-        return path
-    stroker = QPainterPathStroker()
-    stroker.setWidth(width)
-    stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-    stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    return path.united(stroker.createStroke(path))
+    return path
 
 
-# ---------------------------------------------------------------------------
-# QFont 构造
-# ---------------------------------------------------------------------------
+# 兼容旧调用名（曾用于「我们膨胀」，顺应引擎后仅保留 WindingFill 职责）。
+embolden_glyph_path = winding_glyph_path
 
 
 def apply_weight_plan(font: QFont, plan: ResolvedWeight) -> None:
-    """把渲染决策应用到 QFont（调用方已设 family/pixelSize）。"""
+    """把解析决策应用到 QFont（调用方已设 family/pixelSize）。"""
     if plan.render_mode == "axis":
         font.setVariableAxis(
             QFont.Tag(_AXIS_TAG_WEIGHT), float(plan.axis_value or 400)
         )
         font.setWeight(QFont.Weight(int(plan.axis_value or 400)))
-        _record_signature(font, 0)
         return
-
-    if plan.render_mode == "embolden":
-        # 钉住基准 face，weight 停在基准字重（不触发引擎合成），
-        # 膨胀量经签名旁路表交给 embolden_glyph_path。
-        if plan.base_face is not None:
-            font.setStyleName(plan.base_face.style_name)
-            font.setWeight(QFont.Weight(plan.base_face.weight))
-        else:
-            font.setWeight(QFont.Weight(plan.base_weight))
-        _record_signature(font, plan.embolden_delta)
-        return
-
-    # face / snap / missing：渲染基准 face 或按请求值让 Qt 匹配器解析。
-    if plan.base_face is not None:
-        font.setStyleName(plan.base_face.style_name)
-        font.setWeight(QFont.Weight(plan.base_face.weight))
-    else:
-        font.setWeight(QFont.Weight(bucket_weight(plan.requested_weight)))
-    _record_signature(font, 0)
-
-
-def _record_signature(font: QFont, delta: int) -> None:
-    with _LOCK:
-        if len(_EMBOLDEN_BY_SIGNATURE) >= _SIGNATURE_MAX:
-            _EMBOLDEN_BY_SIGNATURE.clear()
-        _EMBOLDEN_BY_SIGNATURE[font_signature(font)] = delta
+    # 静态字体：绝对字重交给引擎匹配 + 合成粗体。
+    font.setWeight(QFont.Weight(plan.requested_weight))
 
 
 def build_weight_font(
@@ -179,16 +84,9 @@ def build_weight_font(
     return font
 
 
-# ---------------------------------------------------------------------------
-# 缓存清理
-# ---------------------------------------------------------------------------
-
-
 def clear_font_weight_cache() -> None:
-    """字体装卸后清空全部进程级缓存。"""
+    """字体装卸后清空进程级缓存。"""
     clear_capabilities_cache()
-    with _LOCK:
-        _EMBOLDEN_BY_SIGNATURE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -216,25 +114,12 @@ def bucket_weight(weight: int) -> int:
     return 900
 
 
-# ---------------------------------------------------------------------------
-# 向下兼容（旧调用方逐步迁移到新 API）
-# ---------------------------------------------------------------------------
-
-
 def family_weight_axis(family: str):
     """兼容旧 API → get_capabilities(family).axis 信息。"""
     cap = get_capabilities(family)
     if cap is None or not cap.axis_effective:
         return None
-    from krok_helper.subtitle_render.engine.text.font_capabilities import (
-        FontCapabilities,
-    )
-
-    # 旧 API 返回 WeightAxis 对象，这里用简单命名空间替代
-    class _Axis:
-        pass
-
-    axis = _Axis()
+    axis = type("_Axis", (), {})()
     axis.minimum = cap.axis_min
     axis.maximum = cap.axis_max
     axis.default = cap.axis_default
@@ -261,105 +146,6 @@ def physical_weight_styles(family: str):
     return tuple(sorted(seen.items()))
 
 
-# ---------------------------------------------------------------------------
-# 数据迁移：v4.2.x 绝对字重 → v8 单 face 归一化 400 语义
-# ---------------------------------------------------------------------------
-
-_FONT_SLOT_PAIRS = (
-    ("font_family", "font_weight"),
-    ("font_family_latin", "latin_font_weight"),
-    ("ruby_font_family", "ruby_font_weight"),
-    ("ruby_font_family_latin", "ruby_latin_font_weight"),
-)
-
-
-def _migrate_single_face_weight(family: str | None, weight: int | None) -> int | None:
-    """单 face 字体的旧字重 → 新语义字重（非单 face / 无字体原样返回）。
-
-    旧版本（v4.2.x）单 face 字体按绝对字重匹配：face=700 的粗体存 700
-    就是 face 本身；face<600 存 ≥600 是引擎合成粗体（固定 2.17%em）。
-    新版本（v8）单 face 一律视为 400 档：400 = face 本身，>400 = 放大。
-    迁移映射：
-
-    - W ≥ 600 且 face < 600（旧 faux bold）→ 700（Δ300 ≈ faux bold 强度）
-    - 其余（旧 face 本身渲染）→ 400
-    """
-    if not family or weight is None:
-        return weight
-    capabilities = get_capabilities(str(family))
-    if capabilities is None or capabilities.is_variable:
-        return weight
-    weights = capabilities.face_weights
-    if len(weights) != 1:
-        return weight
-    face_weight = weights[0]
-    value = int(weight)
-    if value >= 600 and face_weight < 600:
-        return 700
-    return 400
-
-
-def migrate_single_face_font_weights(style):
-    """迁移一个 Style 的全部单 face 字体字重槽位（幂等：新数据不变）。
-
-    覆盖：Style 顶层 4 槽、title_overlays、custom_style_schemes、
-    singer_style_overrides。返回新 Style（无变化时字段相等）。
-    """
-    from dataclasses import replace as _replace
-
-    def _migrate_scheme(scheme):
-        changes = {}
-        for family_field, weight_field in _FONT_SLOT_PAIRS:
-            new_weight = _migrate_single_face_weight(
-                getattr(scheme, family_field, None),
-                getattr(scheme, weight_field, None),
-            )
-            if new_weight != getattr(scheme, weight_field, None):
-                changes[weight_field] = new_weight
-        return _replace(scheme, **changes) if changes else scheme
-
-    changes: dict = {}
-    for family_field, weight_field in _FONT_SLOT_PAIRS:
-        new_weight = _migrate_single_face_weight(
-            getattr(style, family_field, None),
-            getattr(style, weight_field, None),
-        )
-        if new_weight != getattr(style, weight_field, None):
-            changes[weight_field] = new_weight
-
-    titles = [
-        (
-            _replace(
-                title,
-                font_weight=_migrate_single_face_weight(
-                    title.font_family, title.font_weight
-                ),
-            )
-            if _migrate_single_face_weight(title.font_family, title.font_weight)
-            != title.font_weight
-            else title
-        )
-        for title in style.title_overlays
-    ]
-
-    schemes = {
-        name: _migrate_scheme(scheme)
-        for name, scheme in style.custom_style_schemes.items()
-    }
-    singers = {
-        singer_id: _migrate_scheme(scheme)
-        for singer_id, scheme in style.singer_style_overrides.items()
-    }
-
-    return _replace(
-        style,
-        **changes,
-        title_overlays=titles,
-        custom_style_schemes=schemes,
-        singer_style_overrides=singers,
-    )
-
-
 __all__ = [
     "FontCapabilities",
     "face_inventory",
@@ -372,12 +158,8 @@ __all__ = [
     "build_weight_font",
     "canonical_family",
     "clear_font_weight_cache",
-    "embolden_delta_of_font",
-    "embolden_glyph_path",
-    "embolden_width_px",
-    "font_signature",
     "get_capabilities",
-    "migrate_single_face_font_weights",
     "resolve",
     "resolve_weight_plan",
+    "winding_glyph_path",
 ]

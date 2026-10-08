@@ -188,18 +188,11 @@ struct ResolvedStyle {
     int fontSizePx = 100;
     std::optional<int> latinFontSizePx;
     int fontWeight = 400;
-    // 统一字重解析的生效结果（Python 侧 protocol.apply_resolved_font_faces
-    // 随 IR 下发）：faceWeight>0 = 实际渲染 face 的字重（可变字体=轴值），
-    // simBold = 该槽走合成粗体。缺省（-1/false）回落本地自治规则。
-    int fontFaceWeight = -1;
-    bool fontSimBold = false;
+    // 可变字体标记（顺应引擎）：字重回到绝对字重，模拟加粗交还引擎，
+    // 该标记仅指示渲染端是否走轴值实例（而非静态就近匹配）。
     bool fontAxis = false;
-    int fontEmbolden = 0;
     std::optional<int> latinFontWeight;
-    int latinFontFaceWeight = -1;
-    bool latinFontSimBold = false;
     bool latinFontAxis = false;
-    int latinFontEmbolden = 0;
     int latinFontStretchPct = 100;
     bool italic = false;
     bool allowBiting = false;
@@ -278,16 +271,10 @@ struct ResolvedStyle {
     QString rubyFontFamily;
     QString rubyFontFamilyLatin;
     std::optional<int> rubyFontWeight;
-    int rubyFontFaceWeight = -1;
-    bool rubyFontSimBold = false;
     bool rubyFontAxis = false;
-    int rubyFontEmbolden = 0;
     std::optional<int> rubyLatinFontSizePx;
     std::optional<int> rubyLatinFontWeight;
-    int rubyLatinFontFaceWeight = -1;
-    bool rubyLatinFontSimBold = false;
     bool rubyLatinFontAxis = false;
-    int rubyLatinFontEmbolden = 0;
     std::optional<int> rubyLatinFontStretchPct;
     bool rubyFontFollowMain = true;
     int rubyGapPx = 8;

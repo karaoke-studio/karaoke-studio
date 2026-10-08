@@ -27,18 +27,17 @@ struct ResolvedFontFaces {
 // informational-name scan, so both spellings the Qt font picker offers
 // resolve to the face the CPU renderer draws.
 //
-// ``faceWeight`` > 0 selects the explicitly resolved face (the CPU side's
-// authoritative outcome shipped with the render IR); ``simBold`` adds DWrite
-// bold simulation to that face.  ``faceWeight`` <= 0 falls back to the
-// autonomous bucket rules (legacy producers / tests).
+// ``axisHint`` true means the family is a real variable font: the matched
+// face's wght axis is instantiated at the requested weight (clamped to the
+// axis range).  ``axisHint`` false follows the engine-mirrored static rules
+// (exact face / nearest with ties preferring lighter / bold simulation only
+// when the request >= 600 and the matched face < 600).
 ResolvedFontFaces resolveFontFaces(
     IDWriteFontCollection *collection,
     IDWriteFontCollection *typographicCollection,
     const std::wstring &familyName,
     int weight,
     bool italic,
-    int faceWeight = -1,
-    bool simBold = false,
     bool axisHint = false
 );
 
@@ -50,8 +49,6 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     const std::wstring &familyName,
     int weight,
     bool italic,
-    int faceWeight = -1,
-    bool simBold = false,
     bool axisHint = false
 );
 

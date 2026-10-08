@@ -11,15 +11,9 @@ namespace krok::subtitle::native::legacy_qt {
 using protocol::ResolvedStyle;
 
 namespace {
-// 统一字重解析：合成粗体用原始请求字重（Qt 匹配器自会复现 CPU 侧的
-// 模拟结果），否则用下发的生效 face 字重精确实例。
+// 顺应引擎：字重回到绝对字重，Qt 匹配器自会就近匹配 + 合成粗体。
 int effectiveQtWeight(const ResolvedStyle &style) {
-    if (style.fontSimBold) {
-        return std::clamp(style.fontWeight, 1, 999);
-    }
-    return std::clamp(
-        style.fontFaceWeight > 0 ? style.fontFaceWeight : style.fontWeight, 1, 999
-    );
+    return std::clamp(style.fontWeight, 1, 999);
 }
 }  // namespace
 

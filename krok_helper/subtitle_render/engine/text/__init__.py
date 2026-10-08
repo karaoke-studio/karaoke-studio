@@ -2,7 +2,6 @@
 
 from krok_helper.subtitle_render.engine.text.font_weight import (
     embolden_glyph_path,
-    embolden_width_px,
 )
 from krok_helper.subtitle_render.engine.text.layout import (
     GlyphLayout,
@@ -56,7 +55,6 @@ __all__ = [
     "char_path_left_offset",
     "clamp_weight",
     "embolden_glyph_path",
-    "embolden_width_px",
     "clear_char_metric_cache",
     "is_emoji_text",
     "is_n3_latin_text",

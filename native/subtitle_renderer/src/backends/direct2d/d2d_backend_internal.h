@@ -228,14 +228,13 @@ struct Direct2DGpuBackend::Impl {
         std::uint64_t lastUse = 0;
     };
 
-    // (family, requested weight, italic, explicit face weight, sim bold):
-    // the explicit decision shipped in the IR must be part of the key, or a
-    // lookup without it (faceWeight=-1, e.g. the emoji/fallback chains)
-    // poisons the cache for later lookups that ask for a specific face
-    // (PR #13 的缓存键加固).
-    using FontFaceKey = std::tuple<std::wstring, int, bool, int, bool>;
+    // (family, requested weight, italic, axis hint): the variable-font axis
+    // flag must be part of the key, so a static lookup cannot poison the cache
+    // for a later variable-axis instance (and vice versa) sharing the same
+    // (family, weight, italic).
+    using FontFaceKey = std::tuple<std::wstring, int, bool, bool>;
     using TextGlyphKey = std::tuple<
-        std::uintptr_t, int, std::uint32_t, int, int, std::vector<UINT16>
+        std::uintptr_t, int, std::uint32_t, int, std::vector<UINT16>
     >;
     using VectorGlyphKey = std::tuple<std::string, int, std::uint32_t>;
     using RealizationCacheKey = std::tuple<

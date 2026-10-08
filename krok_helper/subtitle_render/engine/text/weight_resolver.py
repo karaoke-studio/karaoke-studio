@@ -1,20 +1,20 @@
-"""Phase 2: Weight Resolver — 字重→渲染决策的纯函数。
+"""Phase 2: Weight Resolver — 字体解析决策（顺应引擎，2026-10-07 拍板）。
 
-规则（2026-10-07 用户拍板，替换 W3C CSS §5.2 语义）：
+**顺应引擎**：字重回到绝对字重，模拟加粗交还给 Qt/DirectWrite 引擎
+（v4.2.x 语义）。本模块只负责：
 
-真可变字体（axis_effective）：
-  轴内 [min, max] → 轴值插值（真实）；轴外 < min → snap 到 min。
-静态单 face：
-  无论 face 实际字重是多少，一律归一化为 **400 档**；W > 400 →
-  从该 face 放大 Δ = W − 400；W ≤ 400 → 渲染 face 本身。
-静态多 face：
-  精确命中 → 直接使用；缺档 → 从**紧邻较小 face** 放大 Δ = W −
-  base.weight；无更小 face → snap 到最小 face。
-模拟放大：
-  仅放大（只能从比请求小的基准放大）；比例与 v4.2.x 一致，以楷体
-  为准（楷体 @600 即 Δ=200 → 约 2% em，系数 = Δ/10000）。
+1. 可变字体：识别轴值实例（轴内插值、轴外钳制到端点）。
+2. 静态字体：标注引擎行为——精确命中 / 引擎合成粗体 / 引擎就近。
+   **渲染不做任何"我们膨胀"**，引擎匹配 + 合成自然发生。
 
-本模块无副作用、无 I/O、无缓存——给定相同输入永远返回相同输出。
+引擎匹配口径（2026-10-08 实测 QFontInfo/像素校准，供标注）：
+  请求 W 精确命中 → 该 face；
+  缺档 → 就近匹配（|face−W| 最小，**平局取更轻 face**）；
+  匹配 face < 600 且 W ≥ 600 → 引擎合成粗体（faux bold，粗 face 不可再加粗）。
+  实测锚点：Yu Gothic{300,400,500,700}@600 → 500+合成（平局取轻），
+  NK{400,700}@600 → 700（无平局就近），思源{…,500,700,…}@600 → 500+合成。
+
+本模块无副作用、无 I/O、无缓存。
 """
 
 from __future__ import annotations
@@ -29,22 +29,19 @@ from krok_helper.subtitle_render.engine.text.font_capabilities import (
 
 @dataclass(frozen=True)
 class ResolvedWeight:
-    """一个 (capabilities, weight) 请求的渲染决策。"""
+    """一个 (capabilities, weight) 请求的解析决策。"""
 
     render_mode: str
-    """"axis" | "face" | "embolden" | "snap" | "missing"。"""
-
-    base_face: FontFace | None = None
-    """face / embolden / snap 模式的基准 face；axis / missing 为 None。"""
+    """"axis" | "face" | "engine_synthetic" | "snap" | "missing"。"""
 
     axis_value: float | None = None
-    """axis 模式的轴值；其他为 None。"""
+    """axis 模式的轴值。"""
 
-    embolden_delta: int = 0
-    """embolden 模式的放大字重差 Δ（其他为 0）。"""
+    base_face: FontFace | None = None
+    """face / engine_synthetic / snap 模式的引擎匹配到的 face。"""
 
     requested_weight: int = 400
-    """原始请求字重。"""
+    """原始请求字重（绝对）。"""
 
     is_exact: bool = False
     """请求是否被精确满足。"""
@@ -65,12 +62,11 @@ class ResolvedWeight:
 
     @property
     def needs_synthetic(self) -> bool:
-        return self.render_mode == "embolden"
+        return self.render_mode == "engine_synthetic"
 
     @property
     def mark(self) -> str | None:
-        """UI 下拉标注。"""
-        if self.render_mode == "embolden":
+        if self.render_mode == "engine_synthetic":
             return "模拟"
         if self.render_mode == "snap":
             return "就近"
@@ -92,14 +88,19 @@ def _upright(capabilities: FontCapabilities) -> list[FontFace]:
     return upright or list(capabilities.faces)
 
 
+def _engine_face(upright: list[FontFace], weight: int) -> FontFace:
+    """Qt/DirectWrite 引擎对缺档字重的就近匹配：|face−W| 最小，平局取轻。"""
+    return min(upright, key=lambda f: (abs(f.weight - weight), f.weight))
+
+
 def resolve(capabilities: FontCapabilities | None, weight: int) -> ResolvedWeight:
-    """字重匹配（v4.2.x 比例 + 紧邻放大语义）。"""
+    """顺应引擎的字体解析（可变=轴值，静态=引擎匹配标注）。"""
     W = int(weight)
 
     if capabilities is None or not capabilities.faces:
         return ResolvedWeight(render_mode="missing", requested_weight=W)
 
-    # ── 真可变字体 ──
+    # ── 真可变字体：轴值实例 ──
     if capabilities.is_variable:
         assert capabilities.axis_min is not None and capabilities.axis_max is not None
         if capabilities.axis_min <= W <= capabilities.axis_max:
@@ -107,43 +108,15 @@ def resolve(capabilities: FontCapabilities | None, weight: int) -> ResolvedWeigh
                 render_mode="axis", axis_value=float(W),
                 requested_weight=W, is_exact=True,
             )
-        if W < capabilities.axis_min:
-            return ResolvedWeight(
-                render_mode="axis", axis_value=capabilities.axis_min,
-                requested_weight=W, is_exact=False,
-            )
-        # W > max：从轴上限放大（连续模拟）
+        clamped = (
+            capabilities.axis_min if W < capabilities.axis_min else capabilities.axis_max
+        )
         return ResolvedWeight(
-            render_mode="embolden",
-            axis_value=capabilities.axis_max,
-            requested_weight=W,
-            embolden_delta=W - int(round(capabilities.axis_max)),
-            is_exact=False,
+            render_mode="axis", axis_value=float(clamped),
+            requested_weight=W, is_exact=False,
         )
 
     upright = _upright(capabilities)
-    weights = [f.weight for f in upright]
-
-    # ── 单 face：归一化为 400 档（优先于精确命中）──
-    # 用户规则：无论 face 实际字重是多少，一律视为 400 档；W > 400 →
-    # 放大 Δ = W − 400；W ≤ 400 → 渲染 face 本身（W == 400 视为精确）。
-    if len(upright) == 1:
-        face = upright[0]
-        if W > 400:
-            return ResolvedWeight(
-                render_mode="embolden", base_face=face,
-                requested_weight=W, embolden_delta=W - 400, is_exact=False,
-            )
-        if W == 400:
-            return ResolvedWeight(
-                render_mode="face", base_face=face,
-                requested_weight=W, is_exact=True,
-            )
-        # W < 400：无更小基准，放弃模拟取 snap（渲染 face 本身）。
-        return ResolvedWeight(
-            render_mode="snap", base_face=face,
-            requested_weight=W, is_exact=False,
-        )
 
     # ── 精确命中 ──
     for face in upright:
@@ -153,18 +126,14 @@ def resolve(capabilities: FontCapabilities | None, weight: int) -> ResolvedWeigh
                 requested_weight=W, is_exact=True,
             )
 
-    # ── 多 face：紧邻较小放大，无更小则 snap ──
-    smaller = [f for f in upright if f.weight < W]
-    if smaller:
-        base = max(smaller, key=lambda f: f.weight)
+    # ── 缺档：引擎就近匹配，标注「合成」或「就近」──
+    matched = _engine_face(upright, W)
+    if W >= 600 and matched.weight < 600:
         return ResolvedWeight(
-            render_mode="embolden", base_face=base,
-            requested_weight=W, embolden_delta=W - base.weight, is_exact=False,
+            render_mode="engine_synthetic", base_face=matched, requested_weight=W,
         )
-    # W 比所有 face 都小：snap 到最小 face
-    base = min(upright, key=lambda f: f.weight)
     return ResolvedWeight(
-        render_mode="snap", base_face=base, requested_weight=W, is_exact=False,
+        render_mode="snap", base_face=matched, requested_weight=W,
     )
 
 

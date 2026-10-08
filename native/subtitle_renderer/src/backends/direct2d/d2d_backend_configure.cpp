@@ -502,15 +502,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         }
     }
     auto resolveFaces = [&](
-        const std::wstring &family, int weight, bool italic,
-        int faceWeight = -1, bool simBold = false, bool axisHint = false
+        const std::wstring &family, int weight, bool italic, bool axisHint = false
     ) {
         const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
-        const Impl::FontFaceKey key{
-            resolvedFamily, weight, italic,
-            faceWeight > 0 ? faceWeight : -1,
-            faceWeight > 0 && simBold
-        };
+        const Impl::FontFaceKey key{resolvedFamily, weight, italic, axisHint};
         const auto found = impl_->fontFaces.find(key);
         if (found != impl_->fontFaces.end()) {
             const auto metricFound = impl_->metricFaces.find(key);
@@ -527,8 +522,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             resolvedFamily,
             weight,
             italic,
-            faceWeight,
-            simBold,
             axisHint
         );
         if (!faces.outline && resolvedFamily != L"Segoe UI") {
@@ -551,16 +544,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     // Outline face (axis-value instance / simulated) for glyph runs and
     // per-glyph metrics; vertical box math must use the metrics face below.
     auto resolveFace = [&](
-        const std::wstring &family, int weight, bool italic,
-        int faceWeight = -1, bool simBold = false, bool axisHint = false
+        const std::wstring &family, int weight, bool italic, bool axisHint = false
     ) {
-        return resolveFaces(family, weight, italic, faceWeight, simBold, axisHint).first;
+        return resolveFaces(family, weight, italic, axisHint).first;
     };
     auto resolveMetricsFace = [&](
-        const std::wstring &family, int weight, bool italic,
-        int faceWeight = -1, bool simBold = false, bool axisHint = false
+        const std::wstring &family, int weight, bool italic, bool axisHint = false
     ) {
-        return resolveFaces(family, weight, italic, faceWeight, simBold, axisHint).second;
+        return resolveFaces(family, weight, italic, axisHint).second;
     };
 
     auto extendBounds = [](D2D1_RECT_F &target, bool &hasBounds, const D2D1_RECT_F &value) {
@@ -669,15 +660,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         const Microsoft::WRL::ComPtr<IDWriteFontFace> &face,
         const std::vector<UINT16> &glyphs,
         int unit,
-        int stretchPct,
-        int emboldenDelta
+        int stretchPct
     ) -> GlyphGeometryResource & {
         const Impl::TextGlyphKey key{
             reinterpret_cast<std::uintptr_t>(face.Get()),
             unit,
             layoutScaleKey,
             stretchPct,
-            emboldenDelta,
             glyphs,
         };
         const auto found = textGlyphRealizations.find(key);
@@ -724,93 +713,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             1.0f,
             "ID2D1Factory::CreateTransformedGeometry(stretch Latin character)"
         );
-        if (emboldenDelta > 0 && unit > 0) {
-            // 粗上加粗：与 CPU 侧 font_weight.embolden_glyph_path 同一公式
-            // （字号 x 重量差 / 3000，圆帽圆角）对轮廓做 Widen+Union 膨胀，
-            // 下游描边/走字/墨迹盒全部消费膨胀后的几何。
-            // 连续模拟放大：宽度 = 字号 × Δ / 13800（Δ=300 → 2.17% em，
-            // 与 v4.2.x 楷体 faux bold 实测一致）。两后端同一公式。
-            const float emboldenWidth =
-                emboldenDelta > 0
-                    ? static_cast<float>(unit) * static_cast<float>(emboldenDelta) / 13800.0f
-                    : 0.0f;
-            D2D1_STROKE_STYLE_PROPERTIES properties = D2D1::StrokeStyleProperties();
-            properties.startCap = D2D1_CAP_STYLE_ROUND;
-            properties.endCap = D2D1_CAP_STYLE_ROUND;
-            properties.dashCap = D2D1_CAP_STYLE_ROUND;
-            properties.lineJoin = D2D1_LINE_JOIN_ROUND;
-            Microsoft::WRL::ComPtr<ID2D1StrokeStyle> emboldenStyle;
-            checkHr(
-                device_.d2dFactory()->CreateStrokeStyle(
-                    properties, nullptr, 0, emboldenStyle.ReleaseAndGetAddressOf()
-                ),
-                "Create embolden stroke style",
-                device_
-            );
-            Microsoft::WRL::ComPtr<ID2D1PathGeometry> widened;
-            checkHr(
-                device_.d2dFactory()->CreatePathGeometry(
-                    widened.ReleaseAndGetAddressOf()
-                ),
-                "Create embolden widened geometry",
-                device_
-            );
-            Microsoft::WRL::ComPtr<ID2D1GeometrySink> widenedSink;
-            checkHr(
-                widened->Open(widenedSink.ReleaseAndGetAddressOf()),
-                "Open embolden widened geometry",
-                device_
-            );
-            widenedSink->SetFillMode(D2D1_FILL_MODE_WINDING);
-            checkHr(
-                resource.path->Widen(
-                    emboldenWidth,
-                    emboldenStyle.Get(),
-                    nullptr,
-                    0.5f,
-                    widenedSink.Get()
-                ),
-                "Widen embolden body",
-                device_
-            );
-            checkHr(
-                widenedSink->Close(),
-                "Close embolden widened geometry",
-                device_
-            );
-            Microsoft::WRL::ComPtr<ID2D1PathGeometry> united;
-            checkHr(
-                device_.d2dFactory()->CreatePathGeometry(
-                    united.ReleaseAndGetAddressOf()
-                ),
-                "Create embolden united geometry",
-                device_
-            );
-            Microsoft::WRL::ComPtr<ID2D1GeometrySink> unitedSink;
-            checkHr(
-                united->Open(unitedSink.ReleaseAndGetAddressOf()),
-                "Open embolden united geometry",
-                device_
-            );
-            unitedSink->SetFillMode(D2D1_FILL_MODE_WINDING);
-            checkHr(
-                resource.path->CombineWithGeometry(
-                    widened.Get(),
-                    D2D1_COMBINE_MODE_UNION,
-                    nullptr,
-                    0.5f,
-                    unitedSink.Get()
-                ),
-                "Union embolden body",
-                device_
-            );
-            checkHr(
-                unitedSink->Close(),
-                "Close embolden united geometry",
-                device_
-            );
-            resource.path = united;
-        }
         checkHr(
             resource.path->GetBounds(nullptr, &resource.referenceBounds),
             "ID2D1Geometry::GetBounds(character)",
@@ -905,24 +807,22 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             ? scene.lineStyles[lineIndex]
             : scene.style;
         const auto mainFace = resolveFace(
-            style.fontFamily, style.fontWeight, style.italic,
-            style.fontFaceWeight, style.fontSimBold, style.fontAxis
+            style.fontFamily, style.fontWeight, style.italic, style.fontAxis
         );
         const auto mainMetricsFace = resolveMetricsFace(
-            style.fontFamily, style.fontWeight, style.italic,
-            style.fontFaceWeight, style.fontSimBold, style.fontAxis
+            style.fontFamily, style.fontWeight, style.italic, style.fontAxis
         );
         const auto latinFace = resolveFace(
             style.latinFontFamily.value_or(style.fontFamily),
             style.latinFontWeight.value_or(style.fontWeight),
             style.italic,
-            style.latinFontFaceWeight, style.latinFontSimBold, style.latinFontAxis
+            style.latinFontAxis
         );
         const auto rubyFace = resolveFace(
             style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
             style.rubyFontWeight,
             style.italic,
-            style.rubyFontFaceWeight, style.rubyFontSimBold, style.rubyFontAxis
+            style.rubyFontAxis
         );
         const auto rubyLatinFace = resolveFace(
             style.rubyLatinFontFamily.value_or(
@@ -930,7 +830,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             ),
             style.rubyLatinFontWeight.value_or(style.rubyFontWeight),
             style.italic,
-            style.rubyLatinFontFaceWeight, style.rubyLatinFontSimBold,
             style.rubyLatinFontAxis
         );
         Impl::CachedLine cached;
@@ -1067,15 +966,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         ? charStyle.latinFontWeight.value_or(charStyle.fontWeight)
                         : charStyle.fontWeight,
                     charStyle.italic,
-                    latin
-                        ? charStyle.latinFontFaceWeight
-                        : charStyle.fontFaceWeight,
-                    latin
-                        ? charStyle.latinFontSimBold
-                        : charStyle.fontSimBold,
-                    latin
-                        ? charStyle.latinFontAxis
-                        : charStyle.fontAxis
+                    latin ? charStyle.latinFontAxis : charStyle.fontAxis
                 );
             }
             const float fontSize = latin
@@ -1104,15 +995,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     ? charStyle.latinFontWeight.value_or(charStyle.fontWeight)
                     : charStyle.fontWeight,
                 charStyle.italic,
-                latin
-                    ? charStyle.latinFontFaceWeight
-                    : charStyle.fontFaceWeight,
-                latin
-                    ? charStyle.latinFontSimBold
-                    : charStyle.fontSimBold,
-                latin
-                    ? charStyle.latinFontAxis
-                    : charStyle.fontAxis
+                latin ? charStyle.latinFontAxis : charStyle.fontAxis
             )->GetMetrics(&fontMetrics);
             if (!hasFirstSlot) {
                 const int metricTotal = std::max(
@@ -1185,11 +1068,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     );
                 }
                 if (outlineFace && !glyphs.empty()) {
-                    const int emboldenDelta = hasCharStyle
-                        ? (latin ? charStyle.latinFontEmbolden : charStyle.fontEmbolden)
-                        : (latin ? style.latinFontEmbolden : style.fontEmbolden);
                     glyphResource = &textRealizationFor(
-                        outlineFace, glyphs, unit, stretchPct, emboldenDelta
+                        outlineFace, glyphs, unit, stretchPct
                     );
                     path = glyphResource->path;
                 }
@@ -1903,7 +1783,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : rubyStyle.rubyFontFamily,
                     rubyStyle.rubyFontWeight,
                     rubyStyle.italic,
-                    rubyStyle.rubyFontFaceWeight, rubyStyle.rubyFontSimBold,
                     rubyStyle.rubyFontAxis
                 )
                 : rubyFace;
@@ -1914,14 +1793,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : rubyStyle.rubyFontFamily,
                     rubyStyle.rubyFontWeight,
                     rubyStyle.italic,
-                    rubyStyle.rubyFontFaceWeight, rubyStyle.rubyFontSimBold,
                     rubyStyle.rubyFontAxis
                 )
                 : resolveMetricsFace(
                     style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
                     style.rubyFontWeight,
                     style.italic,
-                    style.rubyFontFaceWeight, style.rubyFontSimBold,
                     style.rubyFontAxis
                 );
             const auto selectedRubyLatinFace = hasRubyStyle
@@ -1986,12 +1863,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : rubyStyle.rubyFontWeight,
                     rubyStyle.italic,
                     latin
-                        ? rubyStyle.rubyLatinFontFaceWeight
-                        : rubyStyle.rubyFontFaceWeight,
-                    latin
-                        ? rubyStyle.rubyLatinFontSimBold
-                        : rubyStyle.rubyFontSimBold,
-                    latin
                         ? rubyStyle.rubyLatinFontAxis
                         : rubyStyle.rubyFontAxis
                 )->GetMetrics(&fontMetrics);
@@ -2017,11 +1888,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
                 GlyphGeometryResource *glyphResource = nullptr;
                 if (outlineFace && !glyphs.empty()) {
-                    const int emboldenDelta = latin
-                        ? rubyStyle.rubyLatinFontEmbolden
-                        : rubyStyle.rubyFontEmbolden;
                     glyphResource = &textRealizationFor(
-                        outlineFace, glyphs, drawingUnit, stretchPct, emboldenDelta
+                        outlineFace, glyphs, drawingUnit, stretchPct
                     );
                     path = glyphResource->path;
                 }
@@ -2225,12 +2093,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     ? rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight)
                     : rubyStyle.rubyFontWeight,
                 rubyStyle.italic,
-                rubyIsLatin
-                    ? rubyStyle.rubyLatinFontFaceWeight
-                    : rubyStyle.rubyFontFaceWeight,
-                rubyIsLatin
-                    ? rubyStyle.rubyLatinFontSimBold
-                    : rubyStyle.rubyFontSimBold,
                 rubyIsLatin
                     ? rubyStyle.rubyLatinFontAxis
                     : rubyStyle.rubyFontAxis
