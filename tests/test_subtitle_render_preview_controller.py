@@ -273,3 +273,44 @@ def test_preview_context_contract_rejects_hidden_export_or_non_preview() -> None
     assert allowed(host_visible=False, preview_tab_active=True, exporting=False) is False
     assert allowed(host_visible=True, preview_tab_active=False, exporting=False) is False
     assert allowed(host_visible=True, preview_tab_active=True, exporting=True) is False
+
+
+def test_prewarm_font_axis_capabilities_warms_on_app_thread(qapp, monkeypatch):
+    """set_state 预热：GUI 线程逐族焐热能力缓存；非 GUI 线程安全跳过。
+
+    渲染线程 configure 里的 ``apply_resolved_font_faces`` 依赖这份缓存，
+    冷缓存会让它在工作线程枚举 Qt 字体库（EMBEDDING §8 禁区，2026-10
+    打开工程「未响应」根因）。
+    """
+    import threading
+
+    from krok_helper.subtitle_render.engine.text import font_capabilities
+    from krok_helper.subtitle_render.frontend.preview import preview_async
+
+    warmed: list[str] = []
+    monkeypatch.setattr(
+        preview_async,
+        "collect_referenced_font_families",
+        lambda *roots: ["Yu Gothic", "MS Gothic"],
+    )
+    monkeypatch.setattr(
+        font_capabilities,
+        "get_capabilities",
+        lambda family: warmed.append(family),
+    )
+
+    preview_async._prewarm_font_axis_capabilities(None, None, None)
+    assert warmed == ["Yu Gothic", "MS Gothic"]
+
+    warmed.clear()
+    other_thread_result: list[list[str]] = []
+
+    def off_app_thread() -> None:
+        preview_async._prewarm_font_axis_capabilities(None, None, None)
+        other_thread_result.append(list(warmed))
+
+    thread = threading.Thread(target=off_app_thread)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert other_thread_result == [[]]

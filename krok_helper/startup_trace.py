@@ -29,6 +29,7 @@ __all__ = ["trace_path", "mark", "install_qt_message_capture"]
 _MAX_BYTES = 256 * 1024
 _ENV_OVERRIDE = "KARAOKE_STUDIO_STARTUP_TRACE"
 _started = time.monotonic()
+_ENSURED_DIRS: set[Path] = set()
 
 
 def trace_path() -> Path:
@@ -41,14 +42,22 @@ def trace_path() -> Path:
 def _append(line: str) -> None:
     try:
         path = trace_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        parent = path.parent
+        if parent not in _ENSURED_DIRS:
+            parent.mkdir(parents=True, exist_ok=True)
+            _ENSURED_DIRS.add(parent)
         # 只留最近一段：这是诊断文件，不值得为它做轮转机制，涨过头就从头再来。
         if path.exists() and path.stat().st_size > _MAX_BYTES:
             path.unlink()
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()
-            os.fsync(handle.fileno())
+        # 刻意不做 fsync：本文件经 qInstallMessageHandler 挂在 Qt 消息链上，
+        # 会在任意线程、且可能正持有 Qt 内部锁（如字体库互斥锁）时被调用。
+        # 持锁状态下同步 fsync，一次 DirectWrite 字体告警风暴就能把等同一把
+        # 锁的 GUI 线程拖成分钟级「未响应」（2026-10 实测定位）。flush 挺得
+        # 过进程 abort()——OS 页缓存在进程死后仍在，只有内核级崩溃/断电才丢
+        # 尾部几行，不值得为它赌 GUI。
     except Exception:  # noqa: BLE001 —— 诊断代码不许把应用带崩
         pass
 

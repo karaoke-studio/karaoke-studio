@@ -23,7 +23,7 @@ from collections import OrderedDict, deque
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
-from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtGui import QGuiApplication, QImage, QPainter
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.engine.render_progress import render_progress_scope
@@ -38,6 +38,7 @@ from krok_helper.subtitle_render.native.backend import (
     StaleSharedFrameSlotError,
 )
 from krok_helper.subtitle_render.native.protocol import (
+    collect_referenced_font_families,
     gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )
@@ -342,6 +343,39 @@ def _gpu_direct_present_preference() -> bool:
         return bool(output.get("gpu_direct_present", False))
     except Exception:  # noqa: BLE001 - 设置读取失败按关处理
         return False
+
+
+def _prewarm_font_axis_capabilities(
+    track: Optional[TimingTrack],
+    style: Optional[Style],
+    extra_tracks: Optional[list[TimingTrack]],
+) -> None:
+    """GUI 线程预热字体能力缓存，让渲染线程 configure 只读缓存、不碰 Qt 字体库。
+
+    ``apply_resolved_font_faces``（native.protocol）随 IR 下发 ``font_axis``
+    标记，内部对每个 ``*font_family`` 槽位调 ``get_capabilities``——那会枚举
+    QFontDatabase / QRawFont，必须留在 GUI 线程（EMBEDDING §8）。渲染线程
+    持 Qt 字体互斥锁建引擎时一旦引擎创建发出 Qt 告警，消息处理器还要抢
+    GIL / 写面包屑文件，等同一把锁的 GUI 线程（列表 setText→字体度量）就
+    被拖成分钟级「未响应」（2026-10 用户必现，py-spy 双线程栈定位）。
+    预热后 ``get_capabilities`` 走进程级缓存 dict 命中，渲染线程零 Qt 调用。
+    只在本线程即应用线程时执行；非 GUI 线程调用（测试等）安全跳过。
+    """
+    app = QGuiApplication.instance()
+    if app is None or QThread.currentThread() is not app.thread():
+        return
+    try:
+        from krok_helper.subtitle_render.engine.text.font_capabilities import (
+            get_capabilities,
+        )
+
+        families = collect_referenced_font_families(
+            track, style, *(extra_tracks or ())
+        )
+        for family in families:
+            get_capabilities(family)
+    except Exception:  # noqa: BLE001 — 预热失败不阻断预览，渲染线程回退原路径
+        _log.debug("字体能力缓存预热失败", exc_info=True)
 
 
 def gpu_native_preview_enabled() -> bool:
@@ -694,6 +728,7 @@ class AsyncSubtitleRenderer(QObject):
     ) -> None:
         if self._stopped:
             return
+        _prewarm_font_axis_capabilities(track, style, extra_tracks)
         self._track = track
         self._style = style
         self._state_changed.emit(
@@ -947,6 +982,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         duration_ms: int | None = None,
         relayout_scope: str | None = None,
     ) -> None:
+        _prewarm_font_axis_capabilities(track, style, extra_tracks)
         with self._condition:
             if self._stopped:
                 return
@@ -3097,6 +3133,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         duration_ms: int | None = None,
         relayout_scope: str | None = None,
     ) -> None:
+        _prewarm_font_axis_capabilities(track, style, extra_tracks)
         with self._condition:
             if self._stopped:
                 return

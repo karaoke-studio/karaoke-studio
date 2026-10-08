@@ -4990,3 +4990,98 @@ def test_build_render_ir_per_module_head_flags():
     assert [entry["lit_head"] for entry in patch["lines_style"]] == [
         True, True, True, True,
     ]
+
+
+def test_collect_referenced_font_families_from_dict_ir() -> None:
+    """收集器：按 ``*font_family`` 字段后缀收集 IR/源对象里的族名。"""
+    from krok_helper.subtitle_render.native.protocol import (
+        collect_referenced_font_families,
+    )
+
+    ir = {
+        "style": {
+            "font_family": "Yu Gothic",
+            "latin_font_family": "Segoe UI",
+            "ruby_font_family": None,
+            "font_weight": 700,
+        },
+        "lines": [
+            {"font_family": "MS Gothic", "font_weight": 400},
+            {"font_family": "Yu Gothic", "font_weight": 500},
+        ],
+        "unrelated": {"font": "不是槽位名"},
+    }
+
+    families = collect_referenced_font_families(ir)
+
+    assert families == ["Yu Gothic", "Segoe UI", "MS Gothic"]
+
+
+def test_collect_referenced_font_families_walks_objects_and_cycles() -> None:
+    """dataclass / 普通对象 / 嵌套容器 / 环引用都能走，Qt 对象跳过。"""
+    from dataclasses import dataclass
+
+    from krok_helper.subtitle_render.native.protocol import (
+        collect_referenced_font_families,
+    )
+
+    @dataclass
+    class Scheme:
+        font_family: str
+        latin_font_family: str | None = None
+
+    class Holder:
+        def __init__(self) -> None:
+            self.ruby_font_family = "MS Mincho"
+            self._private_font_family = "私有字段不该收"
+
+    cyclic: dict = {"schemes": []}
+    cyclic["schemes"].append({"font_family": "楷体", "back": cyclic})
+
+    families = collect_referenced_font_families(
+        Scheme("Meiryo", "Arial"),
+        Holder(),
+        [cyclic, ("游ゴシック", 42), {"font_family": "游ゴシック"}],
+    )
+
+    # 裸字符串（无字段名）不收集；同名字段去重；环引用不无限递归。
+    assert set(families) == {"Meiryo", "Arial", "MS Mincho", "楷体", "游ゴシック"}
+    assert len(families) == 5
+
+    from PyQt6.QtCore import QObject
+
+    qt_node = {"self": None, "font_family": "QObject"}
+    qt_node["self"] = QObject()
+
+    assert collect_referenced_font_families(qt_node) == ["QObject"]
+
+
+def test_font_face_slot_overrides_empty_family_never_queries_capabilities(monkeypatch):
+    """空字体族不得触发能力查询（渲染线程上会走默认字体引擎 → 死锁环）。
+
+    2026-10 打开工程「未响应」：IR 里未设置的槽位经 ``str(family or "")``
+    变空串，``QRawFont.fromFont(QFont(""))`` 创建 MS Sans Serif 默认引擎，
+    持 Qt 字体锁发 DirectWrite 告警→消息处理器抢 GIL，GUI 线程等锁即死。
+    """
+    from krok_helper.subtitle_render.engine.text import font_weight
+    from krok_helper.subtitle_render.native.protocol import (
+        _font_face_slot_overrides,
+    )
+
+    def _must_not_resolve(*args, **kwargs):
+        raise AssertionError("empty family must not reach resolve_weight_plan")
+
+    monkeypatch.setattr(font_weight, "resolve_weight_plan", _must_not_resolve)
+
+    payload = {
+        "font_family": "",
+        "latin_font_family": None,
+        "ruby_font_family": "",
+        "font_weight": 400,
+    }
+    _font_face_slot_overrides(payload)
+
+    assert payload["font_axis"] is False
+    assert payload["latin_font_axis"] is False
+    assert payload["ruby_font_axis"] is False
+    assert payload["ruby_latin_font_axis"] is False

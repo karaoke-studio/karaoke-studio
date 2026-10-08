@@ -222,3 +222,52 @@ def test_winding_fill_rule_for_glyph_path(qapp):
     path.addText(0.0, 0.0, QFont("MS Gothic", 48), "教")
     result = embolden_glyph_path(path)
     assert result.fillRule() == Qt.FillRule.WindingFill
+
+
+def test_get_capabilities_cache_hit_is_qt_free_from_worker_thread(qapp, monkeypatch):
+    """缓存命中路径必须零 Qt 调用（渲染线程只允许走这条路）。
+
+    ``apply_resolved_font_faces`` 在渲染线程里逐槽位取能力；冷缓存会枚举
+    QFontDatabase/QRawFont——跨线程 Qt 字体访问持字体库锁建引擎，触发 Qt
+    告警后还要抢 GIL/写面包屑，等锁的 GUI 线程随之「未响应」（2026-10
+    打开工程卡死）。GUI 线程 set_state 先预热缓存（见 preview_async），
+    渲染线程只剩这条纯 dict 路径。
+    """
+    import threading
+
+    from krok_helper.subtitle_render.engine.text import font_capabilities
+    from krok_helper.subtitle_render.engine.text.font_capabilities import (
+        FontCapabilities,
+        FontFace,
+    )
+
+    sentinel = FontCapabilities(
+        family="CacheHit",
+        faces=(FontFace(400, "Regular", False),),
+        axis_min=None,
+        axis_max=None,
+        axis_default=None,
+        axis_effective=False,
+    )
+    font_capabilities._CACHE["CacheHit"] = sentinel
+
+    class _QtMustNotBeTouched:
+        def __getattr__(self, name):  # noqa: N802
+            raise AssertionError(f"cache hit must not touch Qt: {name}")
+
+    for qt_name in ("QFontDatabase", "QRawFont", "QFont", "QFontInfo"):
+        monkeypatch.setattr(font_capabilities, qt_name, _QtMustNotBeTouched())
+
+    results: list = []
+    try:
+        thread = threading.Thread(
+            target=lambda: results.append(
+                font_capabilities.get_capabilities("CacheHit")
+            )
+        )
+        thread.start()
+        thread.join(timeout=5)
+    finally:
+        font_capabilities._CACHE.pop("CacheHit", None)
+
+    assert results == [sentinel]

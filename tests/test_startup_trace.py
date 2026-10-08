@@ -78,3 +78,35 @@ def test_default_location_is_outside_the_settings_dir(monkeypatch) -> None:
 
     assert path.name == "startup-trace.log"
     assert path.parent.name == "LinKLyrics"
+
+
+def test_append_does_not_fsync_per_line(trace_file, monkeypatch) -> None:
+    """面包屑可能在校持 Qt 内部锁的线程里被调（Qt 消息处理器）。
+
+    每行 fsync 会把持锁线程拖在同步落盘上，等同一把锁的 GUI 线程随之
+    「未响应」（2026-10 打开工程卡死根因放大器）。这里只允许 flush：
+    OS 页缓存挺得过进程 abort，内容仍立即落盘可读。
+    """
+    calls: list[int] = []
+    monkeypatch.setattr(startup_trace.os, "fsync", lambda fd: calls.append(fd))
+
+    startup_trace.mark("boot.enter")
+    startup_trace.mark("gui.event_loop_exited")
+
+    assert trace_file.read_text(encoding="utf-8").count("\n") == 2
+    assert calls == []
+
+
+def test_message_handler_survives_warning_storm(trace_file) -> None:
+    """告警风暴下处理器自身不崩、内容全落盘（放大器修复的端到端形态）。"""
+    from PyQt6.QtCore import qInstallMessageHandler, qWarning
+
+    assert startup_trace.install_qt_message_capture() is True
+    try:
+        for index in range(200):
+            qWarning(f"qt.qpa.fonts: CreateFontFaceFromHDC() failed #{index}".encode())
+    finally:
+        qInstallMessageHandler(None)
+
+    text = trace_file.read_text(encoding="utf-8")
+    assert text.count("CreateFontFaceFromHDC") == 200

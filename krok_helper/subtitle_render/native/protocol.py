@@ -9,8 +9,10 @@ work can migrate painter features without changing the process protocol shape.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -229,7 +231,15 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     def is_variable(family: Any, weight: Any) -> bool:
         if weight is None:
             weight = main_weight
-        plan = resolve_weight_plan(str(family or ""), int(weight), italic)
+        name = str(family or "").strip()
+        if not name:
+            # 空族 = 槽位未设置，GPU 端回落默认字体（静态）。
+            # 这里绝不能带着空串去查能力：``QRawFont.fromFont(QFont(""))``
+            # 会创建系统默认字体引擎（MS Sans Serif 一类），在渲染线程上
+            # 持 Qt 字体锁触发 DirectWrite 告警→消息处理器抢 GIL，等锁的
+            # GUI 线程随之「未响应」（2026-10 打开工程卡死，py-spy 定位）。
+            return False
+        plan = resolve_weight_plan(name, int(weight))
         return plan.render_mode == "axis"
 
     main_family = payload.get("font_family")
@@ -266,6 +276,79 @@ def apply_resolved_font_faces(node: Any) -> None:
     elif isinstance(node, list):
         for item in node:
             apply_resolved_font_faces(item)
+
+
+_FONT_AXIS_FAMILY_FIELD_SUFFIX = "font_family"
+
+
+def collect_referenced_font_families(*roots: Any) -> list[str]:
+    """收集即将随 configure 下发的 IR 里引用到的全部字体族名。
+
+    供 GUI 线程在派发渲染请求**之前**预热 :func:`font_capabilities.get_capabilities`
+    的缓存：:func:`apply_resolved_font_faces` 会在渲染线程对每个
+    ``*font_family`` 槽位调 ``resolve_weight_plan → get_capabilities``，后者
+    枚举 QFontDatabase / QRawFont——Qt 字体库访问必须留在 GUI 线程
+    （EMBEDDING §8）。渲染线程持 Qt 字体互斥锁建引擎时一旦发出 Qt 告警，
+    消息处理器还要抢 GIL / 落盘，等同一把锁的 GUI 线程就被拖成分钟级
+    「未响应」（2026-10 用户必现，py-spy 双线程栈定位）。缓存预热后渲染
+    线程纯 dict 命中，彻底不再碰 Qt 字体 API。
+
+    与 IR 序列化端共享同一「字段名后缀」口径（``*_font_family``），序列化
+    端新增槽位时这里自动跟上，不需要两处同步清单。
+    """
+    families: list[str] = []
+    seen_names: set[str] = set()
+    seen_ids: set[int] = set()
+
+    def collect(value: Any) -> None:
+        if not isinstance(value, str):
+            return
+        name = value.strip()
+        if name and name not in seen_names:
+            seen_names.add(name)
+            families.append(name)
+
+    def visit(node: Any) -> None:
+        if node is None or isinstance(node, (str, bytes, int, float, bool)):
+            return
+        if id(node) in seen_ids:
+            return
+        seen_ids.add(id(node))
+        if isinstance(node, Mapping):
+            for key, value in node.items():
+                if (
+                    isinstance(key, str)
+                    and key.endswith(_FONT_AXIS_FAMILY_FIELD_SUFFIX)
+                ):
+                    collect(value)
+                visit(value)
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            for item in node:
+                visit(item)
+        else:
+            module = type(node).__module__ or ""
+            if module.startswith("PyQt6"):
+                # Qt 对象树不可穷举（widget 场景图），也绝不该携带字体槽位。
+                return
+            if dataclasses.is_dataclass(node) and not isinstance(node, type):
+                for field in dataclasses.fields(node):
+                    value = getattr(node, field.name, None)
+                    if field.name.endswith(_FONT_AXIS_FAMILY_FIELD_SUFFIX):
+                        collect(value)
+                    visit(value)
+                return
+            state = getattr(node, "__dict__", None)
+            if isinstance(state, Mapping):
+                for key, value in state.items():
+                    if not isinstance(key, str) or key.startswith("_"):
+                        continue
+                    if key.endswith(_FONT_AXIS_FAMILY_FIELD_SUFFIX):
+                        collect(value)
+                    visit(value)
+
+    for root in roots:
+        visit(root)
+    return families
 
 
 def title_overlay_to_ir(
