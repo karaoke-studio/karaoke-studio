@@ -111,11 +111,7 @@ def _build_catalog(
     for record in records:
         if _DWRITE_FONT_STYLE_NORMAL not in record.styles or not record.names:
             continue
-        japanese_name = next(
-            (name for locale, name in record.names if locale.casefold() == "ja-jp"),
-            None,
-        )
-        canonical = japanese_name or record.names[0][1]
+        canonical, has_cjk = _pick_canonical_name(record.names)
         if not canonical:
             continue
         aliases = tuple(name for _locale, name in record.names if name)
@@ -124,7 +120,7 @@ def _build_catalog(
         if existing is None:
             merged[key] = _CatalogEntry(
                 canonical_name=canonical,
-                has_japanese_name=japanese_name is not None,
+                has_japanese_name=has_cjk,
                 aliases=aliases,
             )
         else:
@@ -340,7 +336,7 @@ def _directwrite_records() -> list[_FamilyRecord]:
         _release(factory)
 
 
-def _compare_ja_jp(left: str, right: str) -> int:
+def _compare_zh_cn(left: str, right: str) -> int:
     compare_string = ctypes.WinDLL("kernel32.dll").CompareStringEx
     compare_string.argtypes = (
         wintypes.LPCWSTR,
@@ -354,7 +350,7 @@ def _compare_ja_jp(left: str, right: str) -> int:
         ctypes.c_ssize_t,
     )
     compare_string.restype = ctypes.c_int
-    result = compare_string("ja-JP", 0, left, -1, right, -1, None, None, 0)
+    result = compare_string("zh-CN", 0, left, -1, right, -1, None, None, 0)
     if result == 0:
         raise OSError(ctypes.get_last_error(), "CompareStringEx failed")
     return result - 2
@@ -372,6 +368,34 @@ _LANGID_LOCALE = {
     0x1004: "zh-sg",
     0x0409: "en-us",
 }
+
+# Canonical 显示名的 locale 优先级：简体中文 > 简体新加坡 > 繁体 > 日文 >
+# 英文 > 兜底第一个。用户面向中文本地化（楷体而非 KaiTi）。
+_PREFERRED_NAME_LOCALES = (
+    "zh-cn",
+    "zh-sg",
+    "zh-tw",
+    "zh-hk",
+    "ja-jp",
+    "en-us",
+)
+
+_CJK_NAME_LOCALES = frozenset({"zh-cn", "zh-sg", "zh-tw", "zh-hk", "ja-jp"})
+
+
+def _pick_canonical_name(names: tuple[tuple[str, str], ...]) -> tuple[str, bool]:
+    """按 _PREFERRED_NAME_LOCALES 选 canonical 名，返回 (名, 是否有 CJK 名)。"""
+    by_locale = {locale.casefold(): name for locale, name in names if name}
+    has_cjk = any(locale.casefold() in _CJK_NAME_LOCALES for locale, _name in names)
+    for locale in _PREFERRED_NAME_LOCALES:
+        name = by_locale.get(locale)
+        if name:
+            return name, has_cjk
+    # 兜底：任意非空名（优先第一个）
+    for _locale, name in names:
+        if name:
+            return name, has_cjk
+    return "", False
 
 
 def _sug_alias_records() -> list[_FamilyRecord]:
@@ -475,7 +499,7 @@ def _get_n3_font_catalog(qt_application_key: int) -> N3FontCatalog:
             if qt_families:
                 return _build_catalog(
                     sug_records,
-                    compare=_compare_ja_jp,
+                    compare=_compare_zh_cn,
                     qt_families=qt_families,
                 )
             # Without a populated Qt font database (pre-GUI canonicalization,
@@ -488,7 +512,7 @@ def _get_n3_font_catalog(qt_application_key: int) -> N3FontCatalog:
             if records:
                 return _build_catalog(
                     records,
-                    compare=_compare_ja_jp,
+                    compare=_compare_zh_cn,
                     qt_families=_qt_families_for_catalog(qt_available),
                 )
             # A damaged/disabled Windows font cache service can yield an empty

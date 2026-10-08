@@ -132,7 +132,7 @@ def test_font_catalog_refreshes_qt_aliases_after_application_start(monkeypatch):
     monkeypatch.setattr(font_catalog.sys, "platform", "win32")
     monkeypatch.setattr(font_catalog, "_sug_alias_records", lambda: [])
     monkeypatch.setattr(font_catalog, "_directwrite_records", lambda: records)
-    monkeypatch.setattr(font_catalog, "_compare_ja_jp", _compare)
+    monkeypatch.setattr(font_catalog, "_compare_zh_cn", _compare)
     monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Meiryo"])
     font_catalog._get_n3_font_catalog.cache_clear()
     try:
@@ -356,7 +356,11 @@ def test_build_catalog_merges_duplicate_family_records():
     catalog = _build_catalog(
         [
             _FamilyRecord(
-                names=(("en-us", "Dup Font"), ("ja-jp", "重複フォント")),
+                names=(
+                    ("en-us", "Dup Font"),
+                    ("ja-jp", "重複フォント"),
+                    ("zh-cn", "重复字体"),
+                ),
                 styles=(0,),
             ),
             _FamilyRecord(
@@ -371,12 +375,13 @@ def test_build_catalog_merges_duplicate_family_records():
         compare=_compare,
     )
 
-    assert catalog.families == ("重複フォント",)
-    assert catalog.canonicalize("重复字体") == "重複フォント"
-    assert catalog.aliases_for("重複フォント") == (
-        "重複フォント",
-        "Dup Font",
+    assert catalog.families == ("重复字体",)
+    assert catalog.canonicalize("重复字体") == "重复字体"
+    assert catalog.canonicalize("重複フォント") == "重复字体"
+    assert catalog.aliases_for("重复字体") == (
         "重复字体",
+        "Dup Font",
+        "重複フォント",
     )
 
 
@@ -412,7 +417,7 @@ def test_catalog_prefers_sug_cached_records_over_directwrite(monkeypatch):
     monkeypatch.setattr(font_catalog.sys, "platform", "win32")
     monkeypatch.setattr(font_catalog, "_sug_alias_records", lambda: records)
     monkeypatch.setattr(font_catalog, "_directwrite_records", _directwrite_must_not_run)
-    monkeypatch.setattr(font_catalog, "_compare_ja_jp", _compare)
+    monkeypatch.setattr(font_catalog, "_compare_zh_cn", _compare)
     monkeypatch.setattr(font_catalog.QFontDatabase, "families", lambda: ["Meiryo"])
     font_catalog._get_n3_font_catalog.cache_clear()
     try:
@@ -448,8 +453,9 @@ def test_sug_alias_records_map_langids_to_catalog_locales(monkeypatch):
     assert names["zh-cn"] == "UD 数字教科书体 N-B"
 
     catalog = _build_catalog(records, compare=_compare)
-    assert catalog.canonicalize("UD Digi Kyokasho N-B") == "UD デジタル 教科書体 N-B"
-    assert catalog.canonicalize("UD 数字教科书体 N-B") == "UD デジタル 教科書体 N-B"
+    assert catalog.canonicalize("UD Digi Kyokasho N-B") == "UD 数字教科书体 N-B"
+    assert catalog.canonicalize("UD 数字教科书体 N-B") == "UD 数字教科书体 N-B"
+    assert catalog.canonicalize("UD デジタル 教科書体 N-B") == "UD 数字教科书体 N-B"
 
 
 def test_empty_directwrite_catalog_falls_back_to_qt(monkeypatch):
