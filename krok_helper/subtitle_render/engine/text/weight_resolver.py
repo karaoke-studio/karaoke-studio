@@ -71,6 +71,30 @@ class ResolvedWeight:
     def needs_synthetic(self) -> bool:
         return self.render_mode == "synthetic"
 
+    # ── 向下兼容（旧 v6~v7.2 调用方 / UI 层）──
+
+    @property
+    def mark(self) -> str | None:
+        """UI 下拉标注：模拟 / 越界 / None（真实）。"""
+        if self.render_mode == "synthetic":
+            return "模拟"
+        if self.render_mode == "axis" and not self.is_exact:
+            return "越界"
+        return None
+
+    @property
+    def synthetic_bold(self) -> bool:
+        return self.needs_synthetic
+
+    @property
+    def embolden_delta(self) -> int:
+        """旧调用方期望的重量差；新语义只有 0/非 0。"""
+        return 1 if self.needs_synthetic else 0
+
+    @property
+    def is_variable(self) -> bool:
+        return self.render_mode == "axis"
+
 
 def resolve(capabilities: FontCapabilities | None, weight: int) -> ResolvedWeight:
     """W3C CSS §5.2 字体匹配算法。"""
