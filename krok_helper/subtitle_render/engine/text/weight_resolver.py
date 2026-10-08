@@ -1,27 +1,20 @@
-"""Phase 2: Weight Resolver — W3C CSS Fonts Level 4 §5.2 字体匹配算法。
+"""Phase 2: Weight Resolver — 字重→渲染决策的纯函数。
 
-纯函数：输入 FontCapabilities + 请求字重，输出渲染决策。
-无副作用、无 I/O、无缓存——给定相同输入永远返回相同输出。
+规则（2026-10-07 用户拍板，替换 W3C CSS §5.2 语义）：
 
-算法来源：https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm
+真可变字体（axis_effective）：
+  轴内 [min, max] → 轴值插值（真实）；轴外 < min → snap 到 min。
+静态单 face：
+  无论 face 实际字重是多少，一律归一化为 **400 档**；W > 400 →
+  从该 face 放大 Δ = W − 400；W ≤ 400 → 渲染 face 本身。
+静态多 face：
+  精确命中 → 直接使用；缺档 → 从**紧邻较小 face** 放大 Δ = W −
+  base.weight；无更小 face → snap 到最小 face。
+模拟放大：
+  仅放大（只能从比请求小的基准放大）；比例与 v4.2.x 一致，以楷体
+  为准（楷体 @600 即 Δ=200 → 约 2% em，系数 = Δ/10000）。
 
-规则（翻译自 W3C spec）：
-
-1. 可变字体（axis_effective）：请求在 [min, max] 内 → 轴值插值；
-   超出范围 → 钳制到端点。
-2. 静态字体精确命中 → 直接使用该 face。
-3. 请求 ≤ 500 → 先从比请求低的 face 里选最重的（向下取）。
-4. 请求 > 500 → 先从比请求高的 face 里选最轻的（向上取）。
-5. 优先方向无 face → 换另一个方向取最近。
-6. 最终选到的 face < 600 且请求 ≥ 600 → 合成粗体（synthetic）。
-
-实测验证：这套规则自然产生与 v4.2.x Qt 引擎完全一致的选择——
-  {400,700}@600 → >500 向上取 → Bold(700)，无合成
-  {400}@600    → >500 向上无 → 向下取 Regular(400) + 合成
-  {400,700}@500 → ≤500 向下取 → Regular(400)，无合成
-  {700}@600   → >500 向上无 → 向下取 Bold(700)（exact），无合成
-  {100}@400   → ≤500 向下取 → ExtraLight(100)，无合成（400 < 600）
-  {100}@600   → >500 向上无 → 向下取 ExtraLight(100) + 合成
+本模块无副作用、无 I/O、无缓存——给定相同输入永远返回相同输出。
 """
 
 from __future__ import annotations
@@ -39,19 +32,22 @@ class ResolvedWeight:
     """一个 (capabilities, weight) 请求的渲染决策。"""
 
     render_mode: str
-    """"axis" | "face" | "synthetic" | "missing"。"""
+    """"axis" | "face" | "embolden" | "snap" | "missing"。"""
 
     base_face: FontFace | None = None
-    """face / synthetic 模式的基 face；axis / missing 模式为 None。"""
+    """face / embolden / snap 模式的基准 face；axis / missing 为 None。"""
 
     axis_value: float | None = None
-    """axis 模式的轴值；其他模式为 None。"""
+    """axis 模式的轴值；其他为 None。"""
+
+    embolden_delta: int = 0
+    """embolden 模式的放大字重差 Δ（其他为 0）。"""
 
     requested_weight: int = 400
-    """原始请求字重（用于 QFont.weight 属性与缓存签名）。"""
+    """原始请求字重。"""
 
     is_exact: bool = False
-    """请求是否被精确满足（exact face 或轴值 == 请求值）。"""
+    """请求是否被精确满足。"""
 
     # ── 便捷属性 ──
 
@@ -69,15 +65,15 @@ class ResolvedWeight:
 
     @property
     def needs_synthetic(self) -> bool:
-        return self.render_mode == "synthetic"
-
-    # ── 向下兼容（旧 v6~v7.2 调用方 / UI 层）──
+        return self.render_mode == "embolden"
 
     @property
     def mark(self) -> str | None:
-        """UI 下拉标注：模拟 / 越界 / None（真实）。"""
-        if self.render_mode == "synthetic":
+        """UI 下拉标注。"""
+        if self.render_mode == "embolden":
             return "模拟"
+        if self.render_mode == "snap":
+            return "就近"
         if self.render_mode == "axis" and not self.is_exact:
             return "越界"
         return None
@@ -87,81 +83,89 @@ class ResolvedWeight:
         return self.needs_synthetic
 
     @property
-    def embolden_delta(self) -> int:
-        """旧调用方期望的重量差；新语义只有 0/非 0。"""
-        return 1 if self.needs_synthetic else 0
-
-    @property
     def is_variable(self) -> bool:
         return self.render_mode == "axis"
 
 
+def _upright(capabilities: FontCapabilities) -> list[FontFace]:
+    upright = [f for f in capabilities.faces if not f.is_italic]
+    return upright or list(capabilities.faces)
+
+
 def resolve(capabilities: FontCapabilities | None, weight: int) -> ResolvedWeight:
-    """W3C CSS §5.2 字体匹配算法。"""
+    """字重匹配（v4.2.x 比例 + 紧邻放大语义）。"""
     W = int(weight)
 
     if capabilities is None or not capabilities.faces:
         return ResolvedWeight(render_mode="missing", requested_weight=W)
 
-    # ── Rule 1: 可变字体 ──
+    # ── 真可变字体 ──
     if capabilities.is_variable:
         assert capabilities.axis_min is not None and capabilities.axis_max is not None
         if capabilities.axis_min <= W <= capabilities.axis_max:
             return ResolvedWeight(
-                render_mode="axis",
-                axis_value=float(W),
-                requested_weight=W,
-                is_exact=True,
+                render_mode="axis", axis_value=float(W),
+                requested_weight=W, is_exact=True,
             )
-        clamped = capabilities.axis_min if W < capabilities.axis_min else capabilities.axis_max
+        if W < capabilities.axis_min:
+            return ResolvedWeight(
+                render_mode="axis", axis_value=capabilities.axis_min,
+                requested_weight=W, is_exact=False,
+            )
+        # W > max：从轴上限放大（连续模拟）
         return ResolvedWeight(
-            render_mode="axis",
-            axis_value=float(clamped),
+            render_mode="embolden",
+            axis_value=capabilities.axis_max,
             requested_weight=W,
+            embolden_delta=W - int(round(capabilities.axis_max)),
             is_exact=False,
         )
 
-    # ── Rule 2: 静态精确命中 ──
-    upright = [f for f in capabilities.faces if not f.is_italic] or list(capabilities.faces)
+    upright = _upright(capabilities)
+    weights = [f.weight for f in upright]
+
+    # ── 单 face：归一化为 400 档（优先于精确命中）──
+    # 用户规则：无论 face 实际字重是多少，一律视为 400 档；W > 400 →
+    # 放大 Δ = W − 400；W ≤ 400 → 渲染 face 本身（W == 400 视为精确）。
+    if len(upright) == 1:
+        face = upright[0]
+        if W > 400:
+            return ResolvedWeight(
+                render_mode="embolden", base_face=face,
+                requested_weight=W, embolden_delta=W - 400, is_exact=False,
+            )
+        if W == 400:
+            return ResolvedWeight(
+                render_mode="face", base_face=face,
+                requested_weight=W, is_exact=True,
+            )
+        # W < 400：无更小基准，放弃模拟取 snap（渲染 face 本身）。
+        return ResolvedWeight(
+            render_mode="snap", base_face=face,
+            requested_weight=W, is_exact=False,
+        )
+
+    # ── 精确命中 ──
     for face in upright:
         if face.weight == W:
             return ResolvedWeight(
                 render_mode="face", base_face=face,
-                requested_weight=W, is_exact=True)
+                requested_weight=W, is_exact=True,
+            )
 
-    # ── Rules 3-5: 方向偏好搜索 ──
-    below = [f for f in upright if f.weight < W]
-    above = [f for f in upright if f.weight > W]
-
-    if W <= 500:
-        # 先向下取（最重的低于请求的 face），再向上取
-        if below:
-            chosen = max(below, key=lambda f: f.weight)
-        elif above:
-            chosen = min(above, key=lambda f: f.weight)
-        else:
-            chosen = upright[0]
-    else:
-        # 先向上取（最轻的高于请求的 face），再向下取
-        if above:
-            chosen = min(above, key=lambda f: f.weight)
-        elif below:
-            chosen = max(below, key=lambda f: f.weight)
-        else:
-            chosen = upright[0]
-
-    # ── Rule 6: 合成粗体触发 ──
-    if W >= 600 and chosen.weight < 600:
+    # ── 多 face：紧邻较小放大，无更小则 snap ──
+    smaller = [f for f in upright if f.weight < W]
+    if smaller:
+        base = max(smaller, key=lambda f: f.weight)
         return ResolvedWeight(
-            render_mode="synthetic",
-            base_face=chosen,
-            requested_weight=W,
-            is_exact=False,
+            render_mode="embolden", base_face=base,
+            requested_weight=W, embolden_delta=W - base.weight, is_exact=False,
         )
-
+    # W 比所有 face 都小：snap 到最小 face
+    base = min(upright, key=lambda f: f.weight)
     return ResolvedWeight(
-        render_mode="face", base_face=chosen,
-        requested_weight=W, is_exact=False)
+        render_mode="snap", base_face=base, requested_weight=W, is_exact=False,
+    )
 
 
 __all__ = ["ResolvedWeight", "resolve"]

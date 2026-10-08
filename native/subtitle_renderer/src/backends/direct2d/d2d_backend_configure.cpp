@@ -728,11 +728,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             // 粗上加粗：与 CPU 侧 font_weight.embolden_glyph_path 同一公式
             // （字号 x 重量差 / 3000，圆帽圆角）对轮廓做 Widen+Union 膨胀，
             // 下游描边/走字/墨迹盒全部消费膨胀后的几何。
-            // v7 阶跃：Δ≥200 触发（Python 端判定），宽度 = 字号×2%
-            // （旧版引擎合成粗体强度），两后端同一公式。
+            // 连续模拟放大：宽度 = 字号 × Δ / 13800（Δ=300 → 2.17% em，
+            // 与 v4.2.x 楷体 faux bold 实测一致）。两后端同一公式。
             const float emboldenWidth =
                 emboldenDelta > 0
-                    ? static_cast<float>(unit) * 0.02f
+                    ? static_cast<float>(unit) * static_cast<float>(emboldenDelta) / 13800.0f
                     : 0.0f;
             D2D1_STROKE_STYLE_PROPERTIES properties = D2D1::StrokeStyleProperties();
             properties.startCap = D2D1_CAP_STYLE_ROUND;
