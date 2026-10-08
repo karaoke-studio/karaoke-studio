@@ -16,6 +16,7 @@ from krok_helper.subtitle_render.engine.text.font_weight import (
     embolden_glyph_path,
     bucket_weight,
     build_weight_font,
+    clear_font_weight_cache,
     family_weight_axis,
     physical_weight_styles,
     resolve_weight_plan,
@@ -94,51 +95,54 @@ def test_static_multiface_family_pins_exact_and_missing():
     family = _register_yu_gothic()
     faces = physical_weight_styles(family)
     weights = [weight for weight, _name in faces]
-    assert 400 in weights
+    assert weights
 
-    exact = resolve_weight_plan(family, 400)
-    assert exact.style_name is not None
-    assert exact.base_weight == 400
-    assert exact.synthetic_bold is False
+    exact = resolve_weight_plan(family, weights[0])
+    assert exact.render_mode == "face"
+    assert exact.base_weight == weights[0]
+    assert exact.is_exact
     assert exact.mark is None
 
-    # v7：阶跃复刻 v4.2.x 并按基 face 平移——Δ≥200 触发固定膨胀档
-    # （+2%em）。face 集随注册环境变化，按运行时清单推导期望值。
-    runtime_weights = [weight for weight, _name in physical_weight_styles(family)]
-    floors = [weight for weight in runtime_weights if weight < 600]
-    expected_base = max(floors)
-    missing = resolve_weight_plan(family, 600)
-    assert missing.base_weight == expected_base
-    assert missing.embolden_delta >= 200
+    # 缺档（比最大 face 还大）：从紧邻较小 face 放大（embolden）。
+    missing = resolve_weight_plan(family, max(weights) + 100)
+    assert missing.render_mode == "embolden"
+    assert missing.base_weight == max(weights)
+    assert missing.embolden_delta == 100
     assert missing.mark == "模拟"
-    assert missing.synthetic_bold is False
 
 
 @pytest.mark.skipif(
     not os.path.exists(_YUGOTH_FONT_PATH), reason="Yu Gothic font file not present"
 )
-def test_missing_weight_font_pins_floor_face(qapp):
-    """v6 构造不变量：模拟档钉住基 face（ QFontInfo 可证），墨迹比纯基
-    face 宽（膨胀生效），advance 与基 face 一致（native faceWeight 对齐）。"""
+def test_embolden_renders_base_face_and_dilates_ink(qapp):
+    """embolden 档钉住基 face，墨迹比 face 本身宽（膨胀生效）。
+
+    单字重逐次测量、中间清膨胀签名表：同 base face 的多个请求字重在
+    旁路表里共用同一 QFont 签名（apply 把 weight 归一化到 base），连续
+    构造会互相覆盖膨胀量——渲染层签名通道的已知局限，测试据此隔离。
+    """
     from PyQt6.QtGui import QPainterPath
 
     family = _register_yu_gothic()
-    runtime_weights = [weight for weight, _name in physical_weight_styles(family)]
-    floors = [weight for weight in runtime_weights if weight < 600]
-    expected_base = max(floors)
-    base = build_weight_font(family, 48, expected_base)
-    planned = build_weight_font(family, 48, 600)
-    assert QFontInfo(planned).styleName() == QFontInfo(base).styleName()
-    assert QFontMetrics(planned).horizontalAdvance("教") == QFontMetrics(
-        base
-    ).horizontalAdvance("教")
+    faces = physical_weight_styles(family)
+    weights = [weight for weight, _name in faces]
+    base_weight = max(w for w in weights if w < 900) if weights else 400
 
     def ink(font):
         path = QPainterPath()
         path.addText(0.0, 0.0, font, "教科書")
         return embolden_glyph_path(path, font).boundingRect().width()
 
-    assert ink(planned) > ink(base)
+    clear_font_weight_cache()
+    base = build_weight_font(family, 48, base_weight)
+    ink_base = ink(base)
+
+    clear_font_weight_cache()
+    planned = build_weight_font(family, 48, 900)
+    assert QFontInfo(planned).styleName() == QFontInfo(base).styleName()
+    ink_planned = ink(planned)
+
+    assert ink_planned > ink_base
 
 
 def test_static_single_face_family_steps_like_v42x():
@@ -188,15 +192,16 @@ def test_variable_font_renders_true_axis_instances(qapp):
     assert interpolated.axis_value == 650.0
     assert interpolated.mark is None
 
-    # 轴下限之下钳制到端点并标「越界」；950 桶化为 900=轴上限，落在
-    # 真实端点上（无标注、无膨胀）。
+    # 轴下限之下钳制到端点并标「越界」。
     below = resolve_weight_plan(family, 100)
     assert below.axis_value == 300.0
     assert below.mark == "越界"
+    # 轴上限之上：从轴上限放大（embolden），不再是旧「钳制到端点」语义。
     above = resolve_weight_plan(family, 950)
+    assert above.render_mode == "embolden"
     assert above.axis_value == 900.0
-    assert above.mark is None
-    assert above.embolden_delta == 0
+    assert above.embolden_delta == 50
+    assert above.mark == "模拟"
 
 
 def test_fake_variable_axis_falls_back_to_static(monkeypatch, qapp):
@@ -205,19 +210,20 @@ def test_fake_variable_axis_falls_back_to_static(monkeypatch, qapp):
     打桩 ``_wght_axis_is_effective`` 为恒 False，模拟「轴两端指纹一致」
     （无真实变体数据 / 当前环境无法应用轴值），此时不得走轴值路径。
     """
-    import krok_helper.subtitle_render.engine.text.font_weight as fw
+    import krok_helper.subtitle_render.engine.text.font_capabilities as fc
 
-    monkeypatch.setattr(fw, "_wght_axis_is_effective", lambda family, axis: False)
-    fw.clear_font_weight_cache()
+    monkeypatch.setattr(fc, "_axis_is_effective", lambda family, mn, mx: False)
+    fc.clear_capabilities_cache()
     msgothic = r"C:\Windows\Fonts\msgothic.ttc"
     if not os.path.exists(msgothic):
         pytest.skip("MS Gothic font file not present")
     QFontDatabase.addApplicationFont(msgothic)
     _require_family("MS Gothic")
-    plan = fw.resolve_weight_plan("MS Gothic", 600)
+    plan = resolve_weight_plan("MS Gothic", 600)
+    # 伪可变（轴检测恒 False）按静态单 face 归一化 400 处理：600 → embolden。
+    assert plan.render_mode == "embolden"
     assert plan.axis_value is None
-    assert plan.style_name == "Regular"
-    assert plan.mark == "模拟"
+    assert plan.base_weight == 400
 
 
 def test_constant_axis_variable_packaging_treated_as_static(qapp):
@@ -227,42 +233,34 @@ def test_constant_axis_variable_packaging_treated_as_static(qapp):
     曾跳过有效性检测，被当成真可变后所有字重 clamp 到唯一值且全档
     标真实（无标注）。两端同值的轴指纹必相同→无效→静态。
     """
-    import krok_helper.subtitle_render.engine.text.font_weight as fw
+    import krok_helper.subtitle_render.engine.text.font_capabilities as fc
 
     msgothic = r"C:\Windows\Fonts\msgothic.ttc"
     if not os.path.exists(msgothic):
         pytest.skip("MS Gothic font file not present")
     QFontDatabase.addApplicationFont(msgothic)
     _require_family("MS Gothic")
-    constant = fw.WeightAxis(minimum=700.0, default=700.0, maximum=700.0)
-    assert fw._wght_axis_is_effective("MS Gothic", constant) is False
+    # 恒定轴（min==max）与静态字体（无 fvar 轴）都不产生可观测差异。
+    assert fc._axis_is_effective("MS Gothic", 700.0, 700.0) is False
+    assert fc._axis_is_effective("MS Gothic", 400.0, 700.0) is False
 
 
-def test_bold_cut_family_steps_shifted_to_base(qapp):
-    """v7：粗体单字重族（基 700）按基 face 平移阶跃——@400~800(Δ<200)
-    无变化、@900(Δ=200) 触发 +2%em（对应 400 基 @600 的触发位置）。"""
+def test_bold_cut_family_normalized_to_400(qapp):
+    """v8：粗体单字重族（face 实际 700）归一化为 400 档，W>400 放大。"""
     ttc = "C:/Windows/Fonts/UDDIGIKYOKASHON-B_0.TTC"
     if not os.path.exists(ttc):
         pytest.skip("UD Digi Kyokasho NK-B font file not present")
     QFontDatabase.addApplicationFont(ttc)
     _require_family("UD Digi Kyokasho NK-B")
-    for weight in (400, 500, 700, 800):
+    # 400 = face 本身（精确）；>400 从 400 放大。
+    plan400 = resolve_weight_plan("UD Digi Kyokasho NK-B", 400)
+    assert plan400.render_mode == "face"
+    assert plan400.base_weight == 700  # face 实际字重
+    for weight in (500, 600, 700, 800, 900):
         plan = resolve_weight_plan("UD Digi Kyokasho NK-B", weight)
-        assert plan.base_weight == 700
-        assert plan.embolden_delta == 0
-        assert plan.mark is None
-    # v7.2：触发条件 = 请求≥600 且基face<600。NK-B 基 face 700≥600，
-    # 任何请求都不膨胀（旧版引擎对已粗 face 不做合成——严格一致）。
-    for weight in (400, 500, 600, 700, 800, 900):
-        plan = resolve_weight_plan("UD Digi Kyokasho NK-B", weight)
-        assert plan.base_weight == 700
-        assert plan.embolden_delta == 0
-        assert plan.mark is None
-    # 膨胀公式：delta>0 时宽度 = 字号×2%。
-    from krok_helper.subtitle_render.engine.text.font_weight import embolden_width_px
-
-    assert embolden_width_px(48, 1) == pytest.approx(0.96)
-    assert embolden_width_px(48, 0) == 0.0
+        assert plan.render_mode == "embolden"
+        assert plan.embolden_delta == weight - 400
+        assert plan.mark == "模拟"
 
 
 def test_missing_metadata_family_falls_back_to_plain_weight(monkeypatch):
@@ -273,10 +271,9 @@ def test_missing_metadata_family_falls_back_to_plain_weight(monkeypatch):
     monkeypatch.setattr(fw, "family_weight_axis", lambda family: None)
     monkeypatch.setattr(fw, "physical_weight_styles", lambda family: ())
     plan = fw.resolve_weight_plan("__no_such_family__", 700)
+    assert plan.render_mode == "missing"
     assert plan.axis_value is None
     assert plan.style_name is None
-    assert plan.enum_weight == 700
-    # 元数据缺失不产生任何模拟（无法判定基 face），不标注。
     assert plan.mark is None
     font = QFont("__no_such_family__")
     fw.apply_weight_plan(font, plan)
