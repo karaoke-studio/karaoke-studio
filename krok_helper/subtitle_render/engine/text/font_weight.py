@@ -36,8 +36,6 @@ from krok_helper.subtitle_render.engine.text.weight_resolver import (
 
 _AXIS_TAG_WEIGHT = b"wght"
 
-# 合成粗体的膨胀宽度比率（v4.2.x 引擎合成粗体实测强度）。
-
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +261,105 @@ def physical_weight_styles(family: str):
     return tuple(sorted(seen.items()))
 
 
+# ---------------------------------------------------------------------------
+# 数据迁移：v4.2.x 绝对字重 → v8 单 face 归一化 400 语义
+# ---------------------------------------------------------------------------
+
+_FONT_SLOT_PAIRS = (
+    ("font_family", "font_weight"),
+    ("font_family_latin", "latin_font_weight"),
+    ("ruby_font_family", "ruby_font_weight"),
+    ("ruby_font_family_latin", "ruby_latin_font_weight"),
+)
+
+
+def _migrate_single_face_weight(family: str | None, weight: int | None) -> int | None:
+    """单 face 字体的旧字重 → 新语义字重（非单 face / 无字体原样返回）。
+
+    旧版本（v4.2.x）单 face 字体按绝对字重匹配：face=700 的粗体存 700
+    就是 face 本身；face<600 存 ≥600 是引擎合成粗体（固定 2.17%em）。
+    新版本（v8）单 face 一律视为 400 档：400 = face 本身，>400 = 放大。
+    迁移映射：
+
+    - W ≥ 600 且 face < 600（旧 faux bold）→ 700（Δ300 ≈ faux bold 强度）
+    - 其余（旧 face 本身渲染）→ 400
+    """
+    if not family or weight is None:
+        return weight
+    capabilities = get_capabilities(str(family))
+    if capabilities is None or capabilities.is_variable:
+        return weight
+    weights = capabilities.face_weights
+    if len(weights) != 1:
+        return weight
+    face_weight = weights[0]
+    value = int(weight)
+    if value >= 600 and face_weight < 600:
+        return 700
+    return 400
+
+
+def migrate_single_face_font_weights(style):
+    """迁移一个 Style 的全部单 face 字体字重槽位（幂等：新数据不变）。
+
+    覆盖：Style 顶层 4 槽、title_overlays、custom_style_schemes、
+    singer_style_overrides。返回新 Style（无变化时字段相等）。
+    """
+    from dataclasses import replace as _replace
+
+    def _migrate_scheme(scheme):
+        changes = {}
+        for family_field, weight_field in _FONT_SLOT_PAIRS:
+            new_weight = _migrate_single_face_weight(
+                getattr(scheme, family_field, None),
+                getattr(scheme, weight_field, None),
+            )
+            if new_weight != getattr(scheme, weight_field, None):
+                changes[weight_field] = new_weight
+        return _replace(scheme, **changes) if changes else scheme
+
+    changes: dict = {}
+    for family_field, weight_field in _FONT_SLOT_PAIRS:
+        new_weight = _migrate_single_face_weight(
+            getattr(style, family_field, None),
+            getattr(style, weight_field, None),
+        )
+        if new_weight != getattr(style, weight_field, None):
+            changes[weight_field] = new_weight
+
+    titles = [
+        (
+            _replace(
+                title,
+                font_weight=_migrate_single_face_weight(
+                    title.font_family, title.font_weight
+                ),
+            )
+            if _migrate_single_face_weight(title.font_family, title.font_weight)
+            != title.font_weight
+            else title
+        )
+        for title in style.title_overlays
+    ]
+
+    schemes = {
+        name: _migrate_scheme(scheme)
+        for name, scheme in style.custom_style_schemes.items()
+    }
+    singers = {
+        singer_id: _migrate_scheme(scheme)
+        for singer_id, scheme in style.singer_style_overrides.items()
+    }
+
+    return _replace(
+        style,
+        **changes,
+        title_overlays=titles,
+        custom_style_schemes=schemes,
+        singer_style_overrides=singers,
+    )
+
+
 __all__ = [
     "FontCapabilities",
     "face_inventory",
@@ -280,6 +377,7 @@ __all__ = [
     "embolden_width_px",
     "font_signature",
     "get_capabilities",
+    "migrate_single_face_font_weights",
     "resolve",
     "resolve_weight_plan",
 ]

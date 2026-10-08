@@ -345,6 +345,9 @@ from krok_helper.subtitle_render.n3.font_catalog import (
     get_n3_font_catalog,
     normalize_style_font_families,
 )
+from krok_helper.subtitle_render.engine.text.font_weight import (
+    migrate_single_face_font_weights,
+)
 from krok_helper.subtitle_render.settings.preferences import (
     AppOutputPreferenceValues,
     AppPreferenceSaveInput,
@@ -2022,6 +2025,7 @@ class SubtitleRenderWindow(QWidget):
                 self._style,
                 self._timing_track.lines if self._timing_track is not None else (),
             )
+            migrated = migrate_single_face_font_weights(migrated)
             if migrated != self._style:
                 self._style = migrated
                 self._property_panel.set_style(self._style)
