@@ -232,14 +232,14 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         if weight is None:
             weight = main_weight
         plan = resolve_weight_plan(str(family or ""), int(weight), italic)
-        return plan.base_weight, bool(plan.synthetic_bold)
+        return plan.base_weight, plan.needs_synthetic
 
     main_family = payload.get("font_family")
     plan = resolve_weight_plan(str(main_family or ""), main_weight, italic)
     payload["font_face_weight"] = plan.base_weight
-    payload["font_sim_bold"] = bool(plan.synthetic_bold)
-    payload["font_axis"] = plan.axis_value is not None
-    payload["font_embolden"] = int(plan.embolden_delta)
+    payload["font_sim_bold"] = plan.needs_synthetic
+    payload["font_axis"] = plan.render_mode == "axis"
+    payload["font_embolden"] = 1 if plan.needs_synthetic else 0
 
     latin_family = payload.get("latin_font_family") or main_family
     payload["latin_font_axis"] = (
@@ -255,7 +255,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         int(payload.get("latin_font_weight") or main_weight),
         italic,
     )
-    payload["latin_font_embolden"] = int(latin_plan.embolden_delta)
+    payload["latin_font_embolden"] = 1 if latin_plan.needs_synthetic else 0
     face_weight, sim_bold = resolved(latin_family, payload.get("latin_font_weight"))
     payload["latin_font_face_weight"] = face_weight
     payload["latin_font_sim_bold"] = sim_bold
@@ -274,7 +274,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         int(payload.get("ruby_font_weight") or main_weight),
         italic,
     )
-    payload["ruby_font_embolden"] = int(ruby_plan.embolden_delta)
+    payload["ruby_font_embolden"] = 1 if ruby_plan.needs_synthetic else 0
     face_weight, sim_bold = resolved(ruby_family, payload.get("ruby_font_weight"))
     payload["ruby_font_face_weight"] = face_weight
     payload["ruby_font_sim_bold"] = sim_bold
@@ -296,7 +296,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         int(ruby_latin_weight or main_weight),
         italic,
     )
-    payload["ruby_latin_font_embolden"] = int(ruby_latin_plan.embolden_delta)
+    payload["ruby_latin_font_embolden"] = 1 if ruby_latin_plan.needs_synthetic else 0
     face_weight, sim_bold = resolved(ruby_latin_family, ruby_latin_weight)
     payload["ruby_latin_font_face_weight"] = face_weight
     payload["ruby_latin_font_sim_bold"] = sim_bold

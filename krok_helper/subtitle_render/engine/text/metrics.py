@@ -135,7 +135,7 @@ def _embolden_advance_bonus(font: QFont | None, text: str) -> int:
     delta = embolden_delta_of_font(font)
     if delta <= 0:
         return 0
-    return int(round(embolden_width_px(font.pixelSize(), delta)))
+    return int(round(embolden_width_px(font.pixelSize(), True)))
 
 
 def char_advance(
