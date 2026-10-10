@@ -910,7 +910,45 @@ class PropertyPanel(QWidget):
             )
             if index == 0 and self._font_preview_requested:
                 self._sync_font_preview()
+        if index == property_page_index("effects"):
+            # 特效页颜色条依赖 set_style 全量同步；任何只刷新子集的路径
+            # 漏掉它们时，用户首次切到特效页会看到默认白色，点一下才显示
+            # 项目颜色。切页时从当前样式重灌一遍，等值时 set_color 内部
+            # 判等跳过，无额外开销。
+            self._refresh_effects_page_color_buttons()
         self.pageChanged.emit(index)
+
+    def _refresh_effects_page_color_buttons(self) -> None:
+        """特效页全部颜色条的切页兜底：扫字线/粒子双色槽 + 指示灯/音量柱。
+
+        指示灯与音量柱在 auto/复用配色档下的颜色由推导样式给出，与
+        ``_sync_lit_controls`` 同源解析；这里只重灌颜色条，不动尺寸/时序
+        等输入控件，避免切页瞬间改写用户正在编辑的数值。
+        """
+        self._scanline_color_btn.set_color(self._style.scanline_color)
+        self._fx_color_btn.set_color(
+            getattr(self._style, "fx_particle_color", "#FFFFFF")
+        )
+        self._fx_color_btn2.set_color(
+            getattr(self._style, "fx_particle_color2", "#FFFFFF")
+        )
+        if not hasattr(self, "_lit_enabled_switch"):
+            return
+        auto_basis = auto_appearance_basis(self._style, self._auto_appearance_track)
+        lit_display_style = resolve_lit_appearance(self._style, auto_basis=auto_basis)
+        self._lit_fill_btn.set_color(lit_display_style.lit_fill_color)
+        self._lit_stroke_btn.set_color(lit_display_style.lit_stroke_color)
+        volume_display_style = resolve_volume_appearance(
+            self._style, auto_basis=auto_basis
+        )
+        self._volume_fill_btn.set_color(volume_display_style.volume_fill_color)
+        self._volume_stroke_btn.set_color(volume_display_style.volume_stroke_color)
+        self._volume_overlay_fill_btn.set_color(
+            volume_display_style.volume_overlay_fill_color
+        )
+        self._volume_overlay_stroke_btn.set_color(
+            volume_display_style.volume_overlay_stroke_color
+        )
 
     def count(self) -> int:
         return len(self._pages)
@@ -1325,6 +1363,16 @@ class PropertyPanel(QWidget):
             # 扫字线像素字段存 1080 基准:高度重算不改基准值,但编辑/显示值
             # 要按新输出高度重新映射(模式、颜色、亮度无量纲,不随画布变化)。
             self._sync_scanline_size_controls()
+            # 颜色不随高度重算，但该路径只刷新子集；补齐三颗特效页颜色条，
+            # 与 set_style 的全量同步保持 parity，避免依赖随后的等值回流
+            # 走快路径而漏显。
+            self._scanline_color_btn.set_color(self._style.scanline_color)
+            self._fx_color_btn.set_color(
+                getattr(self._style, "fx_particle_color", "#FFFFFF")
+            )
+            self._fx_color_btn2.set_color(
+                getattr(self._style, "fx_particle_color2", "#FFFFFF")
+            )
             if hasattr(self, "_volume_appearance_mode_combo"):
                 # auto 外观模式的音量柱大小随字号重算，回显要跟着刷新
                 # （其余音量柱字段不随高度变化，复用既有同步最省心）。

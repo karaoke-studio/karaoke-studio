@@ -6487,6 +6487,63 @@ def test_property_panel_particle_color_mode_controls(qapp):
     assert not panel._fx_color_slot.isHidden()
 
 
+def test_property_panel_effects_page_switch_refreshes_color_buttons(qapp):
+    """切到特效页时从当前样式重灌三颗颜色条，漏显路径兜底。
+
+    任何只刷新子集的样式更新路径漏掉特效页颜色条时，用户首次切到
+    特效页会看到默认白色，需要点一下才显示项目已设置的颜色。
+    """
+    panel = PropertyPanel()
+    style = Style(
+        scanline_color="#12AB34",
+        fx_particle_color="#FF0000",
+        fx_particle_color2="#00FF00",
+        lit_fill_color="#1234FF",
+        volume_fill_color="#FEDCBA",
+    )
+    panel.set_style(style)
+    effects_index = pp.property_page_index("effects")
+    assert effects_index is not None
+
+    # 人为把按钮置为过期值（模拟子集刷新路径漏掉它们）。
+    panel._scanline_color_btn.set_color("#FFFFFF")
+    panel._fx_color_btn.set_color("#FFFFFF")
+    panel._fx_color_btn2.set_color("#FFFFFF")
+    panel._lit_fill_btn.set_color("#FFFFFF")
+    panel._lit_stroke_btn.set_color("#FFFFFF")
+    panel._volume_fill_btn.set_color("#FFFFFF")
+    panel._volume_stroke_btn.set_color("#FFFFFF")
+    panel._volume_overlay_fill_btn.set_color("#FFFFFF")
+    panel._volume_overlay_stroke_btn.set_color("#FFFFFF")
+    panel.setCurrentIndex(effects_index)
+    assert panel._scanline_color_btn.color == "#12AB34"
+    assert panel._fx_color_btn.color == "#FF0000"
+    assert panel._fx_color_btn2.color == "#00FF00"
+    # 指示灯/音量柱颜色条同源重灌（custom 档 = 样式自带色）。
+    assert panel._lit_fill_btn.color == "#1234FF"
+    assert panel._volume_fill_btn.color == "#FEDCBA"
+
+
+def test_property_panel_rescaled_style_refreshes_effects_color_buttons(qapp):
+    """高度重算路径只刷新子集，特效页颜色条必须与 set_style 保持 parity。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            scanline_color="#12AB34",
+            fx_particle_color="#FF0000",
+            fx_particle_color2="#00FF00",
+            font_size_px=64,
+        )
+    )
+    rescaled = replace(
+        panel.subtitle_style, font_size_px=96, scanline_color="#333333"
+    )
+    panel.set_rescaled_style(rescaled)
+    assert panel._scanline_color_btn.color == "#333333"
+    assert panel._fx_color_btn.color == "#FF0000"
+    assert panel._fx_color_btn2.color == "#00FF00"
+
+
 def test_property_panel_scanline_spins_show_canvas_values_over_fixed_base(qapp):
     """扫字线像素 spin 显示当前画布换算值,存储恒为 1080 基准。"""
     panel = PropertyPanel()

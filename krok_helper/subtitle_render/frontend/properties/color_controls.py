@@ -120,12 +120,19 @@ class _ColorSwatchButton(QPushButton):
         self._color = normalized
         self._apply()
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # 控件常在所在页面被 QStackedWidget 隐藏期间灌入项目颜色；首次
+        # 切到该页时偶发停留在构造期白色不重绘。显示时强制重申一次样式，
+        # 保证「项目已设置的颜色」第一眼就显示，而不需要点一下。
+        self._apply()
+
     def _apply(self) -> None:
         color = QColor(self._color)
         text_color = "#111827" if color.lightness() > 150 else "#FFFFFF"
         self.setText(self._color)
         background = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})"
-        self.setStyleSheet(
+        stylesheet = (
             f"""
             QPushButton {{
                 background: {background};
@@ -142,6 +149,15 @@ class _ColorSwatchButton(QPushButton):
             }}
             """
         )
+        # setStyleSheet 对完全相同的字符串会判等跳过 repolish，这里手动
+        # 强制一次样式重算，确保显示时机上的重申真正触发重绘。
+        if self.styleSheet() == stylesheet:
+            style = self.style()
+            style.unpolish(self)
+            style.polish(self)
+            self.update()
+        else:
+            self.setStyleSheet(stylesheet)
 
 
 class _ColorHexEdit(FluentLineEdit):
