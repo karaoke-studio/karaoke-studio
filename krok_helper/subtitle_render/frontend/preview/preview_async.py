@@ -13,6 +13,7 @@ Background (§9 A4 诊断)：预览预览的真实帧率天花板**不是单帧�
 
 from __future__ import annotations
 
+import errno
 import logging
 import math
 import os
@@ -56,6 +57,16 @@ class _ConfigPhaseError(NativeRendererError):
 
 
 _log = logging.getLogger(__name__)
+
+
+def _preview_diagnostic(*args, **kwargs) -> None:
+    """诊断输出句柄失效不能让已成功的 GPU 帧进入失败恢复链。"""
+    try:
+        print(*args, **kwargs)
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.EBADF, errno.EPIPE):
+            raise
+
 
 
 def style_patch_base_key(
@@ -830,7 +841,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._realization_ready_generation: Optional[int] = None
         self._g6_present_count = 0
         if self._native_preview:
-            print(
+            _preview_diagnostic(
                 "[GPU 预览] 渲染器启动: G6 DirectComposition 直画模式",
                 flush=True,
             )
@@ -1080,6 +1091,8 @@ class GpuAsyncSubtitleRenderer(QObject):
         with self._condition:
             if self._stopped or bool(enabled) == self._native_preview:
                 return False
+            previous_generation = self._generation
+            self._generation += 1
             self._native_preview = bool(enabled)
             self._note("native_mode_switches")
             # 两个方向都强制走一次轻量 resize（1ms 量级）：G5 池化 configure
@@ -1107,6 +1120,10 @@ class GpuAsyncSubtitleRenderer(QObject):
                 )
             self._pending = None
             self._frame_cache.clear()
+            # A mode change also replaces the native worker/realization state.
+            # Reject results already queued by the previous transport even when
+            # both modes have exactly the same target dimensions and DPR.
+            self._cancel_native_generation_locked(previous_generation)
             # 读回环 key 必须随模式切换轮换：环按 (key, 槽位数, 物理宽高)
             # 创建，而 G6/G5 的物理几何不同（未钳制的显示缩放 vs 质量钳制
             # 的场景 DPR），切回 G5 后 sidecar 会对同 key 以新几何重建环。
@@ -1819,7 +1836,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             self._note_backend_mode("gpu")
                             self._g6_present_count += 1
                             if self._g6_present_count == 1:
-                                print(
+                                _preview_diagnostic(
                                     f"[GPU 预览] G6 首帧直画成功 "
                                     f"present={event.get('present_ms', '?')}ms "
                                     f"render={event.get('render_ms', '?')}ms",
@@ -1838,7 +1855,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                     _vram = f" 显存={_vram}MiB"
                                 except Exception:
                                     _vram = ""
-                                print(
+                                _preview_diagnostic(
                                     f"[GPU 预览] G6 已直画 "
                                     f"{self._g6_present_count} 帧{_vram}",
                                     flush=True,
@@ -1875,7 +1892,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     # 都会让 _run 线程直接死亡——GPU 与 CPU 预览此后永久停摆。
                     # 统一按渲染失败处理：回退本帧、稍后重试。
                     if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
-                        print(f"GPU preview failed: {exc}")
+                        _preview_diagnostic(f"GPU preview failed: {exc}")
                     if isinstance(exc, NativeQueueFullError):
                         # 流控信号：in-flight 池满（某 worker 短暂停顿期间的提交
                         # 堆积），不是渲染器故障。短暂退避后重发同一请求，不杀
@@ -1976,7 +1993,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             # 永久降级 G5（2026-10 用户拍板：连续失败
                             # 5 次确实要永久降级，不自动重试）。
                             self._native_preview = False
-                            print(
+                            _preview_diagnostic(
                                 f"[GPU 预览] G6 连续失败 "
                                 f"{self._native_preview_failures} 次，永久降级 G5",
                                 flush=True,
@@ -2014,7 +2031,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                         f"GPU 字幕预览异常，当前帧已回退 Painter，稍后会自动重试：{exc}"
                     )
                     if breaker_open:
-                        print(
+                        _preview_diagnostic(
                             f"[GPU 预览] {self._gpu_restart_breaker.window_s:.0f}s 内"
                             f"第 {self._gpu_restart_breaker.limit} 次失败重启，断路器"
                             "熔断：本会话停用 GPU 预览，固定回退 Painter",
@@ -2745,7 +2762,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._note_backend_mode("gpu")
             self._g6_present_count += 1
             if self._g6_present_count == 1:
-                print(
+                _preview_diagnostic(
                     f"[GPU 预览] G6 首帧直画成功 "
                     f"present={event.get('present_ms', '?')}ms",
                     flush=True,
@@ -2861,7 +2878,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 except NativeRendererError:
                     time.sleep(0.3)
             if event is None:
-                print("[native-dump] render retry exhausted", flush=True)
+                _preview_diagnostic("[native-dump] render retry exhausted", flush=True)
                 return
             event_key = str(event.get("shm_key") or "")
             if self._reader is None or self._reader.shm_key != event_key:
@@ -2873,10 +2890,10 @@ class GpuAsyncSubtitleRenderer(QObject):
             os.makedirs(out_dir, exist_ok=True)
             path = os.path.join(out_dir, f"g6_{int(t_ms)}.png")
             image.save(path)
-            print(f"[native-dump] {path}", flush=True)
+            _preview_diagnostic(f"[native-dump] {path}", flush=True)
             self._note("native_frame_png_dumped")
         except Exception as exc:  # pragma: no cover - 调试路径
-            print(f"[native-dump] failed: {exc}", flush=True)
+            _preview_diagnostic(f"[native-dump] failed: {exc}", flush=True)
 
     def _may_emit(self, t_ms: int, generation: int) -> bool:
         with self._condition:
@@ -3345,7 +3362,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             except NativeRendererError as exc:
                 self._stats.note_native_renderer_failure()
                 if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
-                    print(f"native preview failed: {exc}")
+                    _preview_diagnostic(f"native preview failed: {exc}")
                 self._report_fallback(
                     f"native 字幕预览异常，当前帧已回退 Painter：{exc}"
                 )

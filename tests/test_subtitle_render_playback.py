@@ -182,3 +182,44 @@ def test_preview_quality_cache_miss_keeps_current_source_while_preparing(
 
     assert selected == [source]
     assert requested == [(source, "medium")]
+
+@pytest.mark.parametrize("codec_name", ["VP9", "H264"])
+def test_vp9_decoder_workaround_reopens_once_and_preserves_transport(codec_name):
+    from types import SimpleNamespace
+    from PyQt6.QtMultimedia import QMediaFormat, QMediaMetaData, QPlaybackOptions
+
+    class Player:
+        def __init__(self):
+            self.options = QPlaybackOptions()
+            self.url = QUrl.fromLocalFile("C:/preview.mp4")
+            self.sources = []
+        def metaData(self):
+            metadata = QMediaMetaData()
+            metadata.insert(QMediaMetaData.Key.VideoCodec,
+                            getattr(QMediaFormat.VideoCodec, codec_name))
+            return metadata
+        def playbackOptions(self):
+            return QPlaybackOptions(self.options)
+        def setPlaybackOptions(self, options):
+            self.options = QPlaybackOptions(options)
+        def source(self):
+            return self.url
+        def setSource(self, source):
+            self.sources.append(source)
+            self.url = source
+
+    player = Player()
+    ctrl = SimpleNamespace(_player=player, _active_playback_path=Path("C:/preview.mp4"),
+                           _source_restore=None, position=lambda: 4321,
+                           is_playing=lambda: True)
+    changed = PlaybackController._apply_vp9_decoder_workaround(ctrl)
+    expected = os.name == "nt" and codec_name == "VP9"
+    assert changed is expected
+    if expected:
+        assert player.sources == [QUrl(), QUrl.fromLocalFile("C:/preview.mp4")]
+        assert ctrl._source_restore == (4321, True)
+        assert player.options.playbackIntent() == QPlaybackOptions.PlaybackIntent.LowLatencyStreaming
+        assert not PlaybackController._apply_vp9_decoder_workaround(ctrl)
+        assert len(player.sources) == 2
+    else:
+        assert not player.sources

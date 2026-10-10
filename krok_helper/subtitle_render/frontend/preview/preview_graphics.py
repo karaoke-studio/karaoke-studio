@@ -821,6 +821,8 @@ class PreviewGraphicsView(QGraphicsView):
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
+        if getattr(self._async_renderer, "uses_native_preview", False):
+            return
         accepts_image = getattr(self._async_renderer, "accepts_realization_image", None)
         if accepts_image is not None and not accepts_image(image):
             return
@@ -832,6 +834,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._subtitle_item.set_async_image(image)
 
     def _on_native_frame_presented(self, t_ms: int) -> None:
+        if not getattr(self._async_renderer, "uses_native_preview", False):
+            return
         # G6 下 DComp 子窗口是唯一的字幕层：任何成功 present 都要立刻清掉
         # Qt 侧可能残留的异步图。此前 t 不匹配的早退路径不清图，旧 QImage
         # 会与直画层双绘（两份字幕/错位叠加）。

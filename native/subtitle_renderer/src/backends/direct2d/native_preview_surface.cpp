@@ -126,6 +126,8 @@ NativePreviewSurface::~NativePreviewSurface() {
 }
 
 void NativePreviewSurface::ensureWindow(const NativePreviewTarget &target) {
+    // 先派发窗口销毁等消息，再校验句柄；绑定前不能再次泵消息。
+    pumpWindowMessages();
     auto *parent = reinterpret_cast<HWND>(target.parentWindow);
     if (parent == nullptr || !IsWindow(parent)) {
         throw BackendError("native preview parent HWND is invalid");
@@ -133,7 +135,9 @@ void NativePreviewSurface::ensureWindow(const NativePreviewTarget &target) {
     if (target.width <= 0 || target.height <= 0) {
         throw BackendError("native preview dimensions must be positive");
     }
-    if (window_ != nullptr && parentWindow_ != parent) {
+    if (window_ != nullptr && (!IsWindow(window_) || parentWindow_ != parent
+        || GetParent(window_) != parent
+        || GetWindowThreadProcessId(window_, nullptr) != GetCurrentThreadId())) {
         close();
     }
     if (window_ == nullptr) {
@@ -184,7 +188,6 @@ void NativePreviewSurface::ensureWindow(const NativePreviewTarget &target) {
         placedWidth_ = target.width;
         placedHeight_ = target.height;
     }
-    pumpWindowMessages();
 }
 
 void NativePreviewSurface::ensureSwapChain(ID3D11Device *device, int width, int height) {
@@ -282,8 +285,15 @@ NativePreviewResult NativePreviewSurface::present(
         || static_cast<UINT>(target.srcY + target.height) > sourceDescription.Height) {
         throw BackendError("native preview source region exceeds the GPU texture");
     }
-    ensureWindow(target);
-    ensureSwapChain(device, target.width, target.height);
+    try {
+        ensureWindow(target);
+        ensureSwapChain(device, target.width, target.height);
+    } catch (...) {
+        // 初始化失败可能留下 swap chain，却没有有效的合成目标。
+        // 下次必须完整重建，不能把部分初始化误当成成功状态。
+        close();
+        throw;
+    }
 
     const auto presentStart = std::chrono::steady_clock::now();
     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
@@ -348,8 +358,11 @@ void NativePreviewSurface::close() noexcept {
     width_ = 0;
     height_ = 0;
     if (window_ != nullptr) {
-        pumpWindowMessages();
-        DestroyWindow(window_);
+        // HWND 可被系统复用；不得销毁一个已不属于本线程/父窗口的句柄。
+        if (IsWindow(window_) && GetParent(window_) == parentWindow_
+            && GetWindowThreadProcessId(window_, nullptr) == GetCurrentThreadId()) {
+            DestroyWindow(window_);
+        }
         window_ = nullptr;
     }
     parentWindow_ = nullptr;

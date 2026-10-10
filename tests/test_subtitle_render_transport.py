@@ -5963,6 +5963,17 @@ def test_gpu_native_frame_store_default_matches_g5_cache_formula(qapp, monkeypat
         renderer.stop()
 
 
+@pytest.mark.parametrize("error_number", [22, 9, 32])
+def test_preview_diagnostic_invalid_output_handle_is_nonfatal(monkeypatch, error_number):
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+
+    def failed_print(*args, **kwargs):
+        raise OSError(error_number, "invalid output handle")
+
+    monkeypatch.setattr("builtins.print", failed_print)
+    pa._preview_diagnostic("GPU frame presented", flush=True)
+
+
 def test_gpu_native_frame_failure_keeps_sidecar_alive(qapp, monkeypatch):
     """G6 帧级瞬态失败不杀 sidecar（频闪三笔之三，2026-10）。
 
@@ -6050,3 +6061,55 @@ def test_clear_async_image_is_noop_without_residual_image():
     item.clear_async_image()
     assert updates["n"] == 1
     assert item._async_image is None  # noqa: SLF001
+
+
+def test_transport_resume_keeps_media_position_without_decoder_flush(qapp):
+    bar = _bar(qapp)
+    ctrl = _FakeController()
+    bar.attach_playback_controller(ctrl)
+    bar.set_time(1000)
+    bar.play()
+    ctrl._pos = 1047  # Media clock has advanced beyond the last slider update.
+    bar.pause()
+    ctrl.seeks.clear()
+    bar.play()
+    assert ctrl.position() == 1047
+    assert ctrl.seeks == []
+    assert bar._tick_anchor_ms == 1047
+    bar.pause()
+
+
+def test_gpu_mode_switch_rejects_old_baked_images_at_identical_size(qapp, monkeypatch):
+    renderer = _broken_sidecar_renderer(monkeypatch, qapp)
+    try:
+        first_generation = renderer._generation
+        image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        image.setText("gpu_generation", str(first_generation))
+        image.setText("gpu_realization_path", "baked")
+        assert renderer.accepts_realization_image(image)
+        original_mode = renderer.uses_native_preview
+        assert renderer.set_native_mode(not original_mode)
+        assert renderer._generation > first_generation
+        assert not renderer.accepts_realization_image(image)
+        assert renderer.set_native_mode(original_mode)
+        assert not renderer.accepts_realization_image(image)
+    finally:
+        renderer.stop()
+
+
+def test_preview_mode_switch_ignores_queued_callbacks_from_other_transport():
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
+
+    calls = []
+    renderer = SimpleNamespace(uses_native_preview=True)
+    view = SimpleNamespace(_async_renderer=renderer, _t_ms=0,
+                           _note_frame_delivered=lambda: calls.append("delivered"),
+                           _subtitle_item=SimpleNamespace(
+                               set_async_image=lambda image: calls.append("image"),
+                               clear_async_image=lambda: calls.append("clear")))
+    PreviewGraphicsView._on_async_frame(view, QImage(), 0)
+    renderer.uses_native_preview = False
+    PreviewGraphicsView._on_native_frame_presented(view, 0)
+    assert calls == []

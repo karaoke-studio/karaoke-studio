@@ -6814,6 +6814,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             + charStyle.stroke2Width,
                         true
                     );
+                } else if (!animated && ch.stroke2Outline != nullptr
+                           && animatedStroke2 != nullptr) {
+                    // Static vector strokes must use the same expanded outline
+                    // before and after baking, including its positioned geometry.
+                    fillStrokeWithRealization(
+                        ch.stroke2Realization.Get(), animatedStroke2, brush, true,
+                        ch.stroke2RealizationTransform, realizationEligible
+                    );
                 } else {
                     strokeWithRealization(
                         ch.stroke2Realization.Get(), geometry, brush,
@@ -6854,6 +6862,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             realizationEligible
                         );
                     }
+                } else if (!animated && ch.strokeOutline != nullptr
+                           && animatedStroke != nullptr) {
+                    fillStrokeWithRealization(
+                        ch.strokeRealization.Get(), animatedStroke, brush, false,
+                        ch.strokeRealizationTransform, realizationEligible
+                    );
                 } else {
                     strokeWithRealization(
                         ch.strokeRealization.Get(), geometry, brush,

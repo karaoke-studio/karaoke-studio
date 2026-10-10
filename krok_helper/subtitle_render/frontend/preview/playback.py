@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QProcess, QUrl, pyqtSignal as Signal
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimedia import (
+    QAudioOutput, QMediaFormat, QMediaMetaData, QMediaPlayer, QPlaybackOptions,
+)
 
 from krok_helper.qt_audio import follow_default_audio_output
 from krok_helper.subtitle_render.frontend.preview import preview_media
@@ -206,6 +208,9 @@ class PlaybackController(QObject):
             return
         self._source_restore = (target_position, bool(resume))
         self._active_playback_path = path
+        options = self._player.playbackOptions()
+        options.resetPlaybackIntent()
+        self._player.setPlaybackOptions(options)
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         self._player.setPosition(target_position)
         if resume:
@@ -327,6 +332,8 @@ class PlaybackController(QObject):
             QMediaPlayer.MediaStatus.BufferedMedia,
         ):
             return
+        if self._apply_vp9_decoder_workaround():
+            return
         restore = self._source_restore
         if restore is None:
             return
@@ -335,6 +342,35 @@ class PlaybackController(QObject):
         self._player.setPosition(position_ms)
         if resume:
             self._player.play()
+
+    def _apply_vp9_decoder_workaround(self) -> bool:
+        """Avoid VP9 frame-thread reference retention in bundled FFmpeg 7.1.
+
+        LOW_DELAY disables frame threading (slice threading and hardware decode
+        remain available). This avoids old next_refs being revived by VP9's
+        update_thread_context after a flush. Qt applies options on the next
+        source load, so reopen once after the codec metadata becomes available.
+        Other codecs keep their normal buffering/reordering policy.
+        """
+        if os.name != "nt" or self._active_playback_path is None:
+            return False
+        codec = self._player.metaData().value(QMediaMetaData.Key.VideoCodec)
+        if codec != QMediaFormat.VideoCodec.VP9:
+            return False
+        options = self._player.playbackOptions()
+        intent = QPlaybackOptions.PlaybackIntent.LowLatencyStreaming
+        if options.playbackIntent() == intent:
+            return False
+        restore = self._source_restore or (self.position(), self.is_playing())
+        source = self._player.source()
+        self._source_restore = restore
+        options.setPlaybackIntent(intent)
+        self._player.setPlaybackOptions(options)
+        # Emptying the source closes the decoder and releases its entire pool.
+        # Setting the same URL directly would be a QMediaPlayer no-op.
+        self._player.setSource(QUrl())
+        self._player.setSource(source)
+        return True
 
     def _on_state_changed(self, state) -> None:
         if (

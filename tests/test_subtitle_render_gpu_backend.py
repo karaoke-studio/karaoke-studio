@@ -280,6 +280,23 @@ def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypa
                 )
                 result.update(configured=configured, event=event)
                 result["sub_rect_event"] = sub_rect_event
+                # 长时覆盖 HWND 被关闭、合成目标释放/重绑；进程始终存活。
+                original_pid = process.process_id
+                lifecycle_deadline = time.monotonic() + 12.0
+                lifecycle_cycles = 0
+                while time.monotonic() < lifecycle_deadline:
+                    old_child = int(result["sub_rect_event"]["child_hwnd"])
+                    ctypes.windll.user32.PostMessageW(old_child, 0x0010, 0, 0)  # WM_CLOSE
+                    process.pump_native_preview(force_warp=True)
+                    result["sub_rect_event"] = process.present_gpu_frame(
+                        600, parent_hwnd=parent_hwnd, x=16, y=8,
+                        width=288, height=164, src_x=16, src_y=8, force_warp=True,
+                    )
+                    assert process.process_id == original_pid
+                    lifecycle_cycles += 1
+                    time.sleep(0.02)
+                result["event"] = result["sub_rect_event"]
+                result["lifecycle_cycles"] = lifecycle_cycles
                 presented.set()
                 # 空闲心跳：真实链路里 worker 每 ~30ms 泵一次 sidecar 消息
                 # 队列（pump_native_preview），暂停/无 present 时子窗口的
@@ -303,6 +320,7 @@ def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypa
         qapp.processEvents()
         time.sleep(0.005)
     assert presented.is_set()
+    assert result["lifecycle_cycles"] > 1
     child_hwnd = int(result["event"]["child_hwnd"])
     user32 = ctypes.windll.user32
     assert user32.IsWindow(child_hwnd)
@@ -706,6 +724,7 @@ def _render_g1_frames(
     worker_count: int = 1,
     realization_enabled: bool = True,
     shared_resources: bool = False,
+    wait_realizations: bool = False,
 ) -> tuple[dict, list[bytes]]:
     configured = renderer.configure_gpu(
         track or _g1_track(),
@@ -718,6 +737,7 @@ def _render_g1_frames(
         worker_count=worker_count,
         realization_enabled=realization_enabled,
         shared_resources=shared_resources,
+        wait_realizations=wait_realizations,
     )
     reader: SharedFrameRingReader | None = None
     frames: list[bytes] = []
@@ -728,6 +748,14 @@ def _render_g1_frames(
                 force_warp=force_warp,
                 frame_index=frame_index,
             )
+            if wait_realizations:
+                deadline = time.monotonic() + 10.0
+                while not event.get("realization_path_ready", False):
+                    assert time.monotonic() < deadline, event
+                    time.sleep(0.01)
+                    event = renderer.render_gpu_frame(
+                        t_ms, force_warp=force_warp, frame_index=frame_index,
+                    )
             if reader is None:
                 reader = SharedFrameRingReader.from_event(event)
                 reader.attach()
@@ -13276,3 +13304,51 @@ def test_gpu_particle_stroke_style_survives_backend_recreation() -> None:
                 event = renderer.render_gpu_frame(t_ms, force_warp=True)
                 assert event.get("ok"), f"round {round_no} t={t_ms}: {event}"
 
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("workers", [1, 4])
+@pytest.mark.parametrize("glyph_kind", ["text", "vector"])
+def test_gpu_unbaked_static_layers_keep_relative_positions(workers, glyph_kind):
+    symbol = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0),
+                       ("C", 250.0, -900.0, 750.0, -900.0, 1000.0, 0.0),
+                       ("L", 500.0, -300.0), ("Z",)),
+        units_per_em=1000, advance_width=1000.0,
+    )
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("\uFFFC", 0, vector_glyph=symbol)
+               if glyph_kind == "vector" else TimingChar("A", 0)], end_ms=6000,
+    )])
+    state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        stroke=PaintFill(mode="solid", color="#FF0000"),
+        stroke2=PaintFill(mode="solid", color="#0000FF"),
+    )
+    style = _g1_style(font_size_px=120, stroke_width_px=16,
+                      stroke2_enabled=True, stroke2_width_px=9,
+                      decoration_kind="none", entry_anim="none", exit_anim="none",
+                      karaoke_colors=KaraokeColors(before=state, after=state))
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60) as renderer:
+        _, raw = _render_g1_frames(renderer, style, (1000, 1000, 1000, 1000),
+                                  force_warp=False, track=track, worker_count=workers,
+                                  realization_enabled=False)
+        _, baked = _render_g1_frames(renderer, style, (1000,),
+                                    force_warp=False, track=track, worker_count=workers,
+                                    wait_realizations=True)
+    assert all(frame == raw[0] for frame in raw)
+    def relative_centers(frame):
+        rgba = np.frombuffer(frame, dtype=np.uint8).reshape(360, 640, 4).astype(float)
+        rgb = rgba[:, :, :3] * rgba[:, :, 3:] / 255.0
+        y, x = np.indices((360, 640))
+        def center(weight):
+            assert weight.sum() > 1000
+            return np.array([(x * weight).sum(), (y * weight).sum()]) / weight.sum()
+        body = center(rgb.min(axis=2))
+        return np.array([
+            center(np.maximum(rgb[:, :, 0] - rgb[:, :, 1:].max(axis=2), 0)) - body,
+            center(np.maximum(rgb[:, :, 2] - rgb[:, :, :2].max(axis=2), 0)) - body,
+        ])
+    # Compare both strokes relative to the body, not the whole-frame bounds.
+    # Different D2D AA paths can vary coverage at an edge, but must not move
+    # the stroke contour (the old direct-stroke fallback shifted it >1px).
+    assert np.abs(relative_centers(raw[0]) - relative_centers(baked[0])).max() < 0.3

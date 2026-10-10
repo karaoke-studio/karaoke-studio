@@ -948,12 +948,16 @@ class TransportBar(QWidget):
         self._tick_anchor_ms = self._slider.value()
         self._tick_anchor_real.start()
         if self._use_controller():
-            self._controller.seek(self._tick_anchor_ms)
+            # Slider edits already seek. On resume the media clock is the
+            # authority; the last UI tick may trail it by a few milliseconds.
+            if _audio_clock_enabled():
+                self._tick_anchor_ms = self._controller.position()
             self._controller.play()
             self._position_poll_timer.start()
         elif self._has_audio:
             player = self._ensure_audio_player()
-            player.setPosition(self._tick_anchor_ms)
+            if _audio_clock_enabled():
+                self._tick_anchor_ms = int(player.position())
             player.play()
             self._position_poll_timer.start()
         else:
