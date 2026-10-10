@@ -483,6 +483,12 @@ class SharedFrameRingReader:
                     + (packed_top + band_height) * stride
                 ].reshape(band_height, stride)[:, :row_bytes]
                 destination_rows[top : top + band_height, :row_bytes] = band_source
+            if "realization_path_ready" in frame_ready_event:
+                image.setText(
+                    "gpu_realization_path",
+                    "baked" if frame_ready_event["realization_path_ready"] else "raw",
+                )
+                image.setText("gpu_generation", str(generation))
             return image
         finally:
             self._shared.unlock()

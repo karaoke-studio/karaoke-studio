@@ -827,6 +827,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._retry_after = 0.0
         self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
         self._native_preview = gpu_native_preview_enabled()
+        self._realization_ready_generation: Optional[int] = None
         self._g6_present_count = 0
         if self._native_preview:
             print(
@@ -1739,6 +1740,8 @@ class GpuAsyncSubtitleRenderer(QObject):
                             # 帧仓未命中（渲染期间代际被作废）：丢帧收场，
                             # 不上屏也不记账。
                             self._note("stale_frames_dropped")
+                            self._accept_realization_event(event, generation)
+                            self._retry_after_realization_drop(event, t_ms, serial, generation)
                             continue
                         if event.get("render_ms") in (None, 0.0):
                             event["render_ms"] = render_event.get("render_ms", 0.0)
@@ -1781,11 +1784,16 @@ class GpuAsyncSubtitleRenderer(QObject):
                         with self._stats_lock:
                             self._stats["worker_count"] = ready_workers
                     self._frame_index += 1
-                    if event.get("event") == "gpu_frame_dropped":
+                    if (
+                        not self._accept_realization_event(event, generation)
+                        or event.get("event") == "gpu_frame_dropped"
+                    ):
                         # A target/style generation can be cancelled while its
                         # sole foreground frame is already in flight. Dropped
                         # responses deliberately carry no shared-memory slot.
                         self._note("stale_frames_dropped")
+                        if not speculative:
+                            self._retry_after_realization_drop(event, t_ms, serial, generation)
                         continue
                     completed_at = time.monotonic()
                     self._frame_error_streak = 0
@@ -2126,8 +2134,14 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._adapt_pipeline_lookahead()
         completed.sort(key=lambda event: int(event.get("t_ms", -1)))
         for event in completed:
-            if event.get("event") == "gpu_frame_dropped":
+            if (
+                not self._accept_realization_event(event, generation)
+                or event.get("event") == "gpu_frame_dropped"
+            ):
                 self._note("stale_frames_dropped")
+                item = metadata.get(int(event.get("request_serial", -1)))
+                if item is not None and not item[2]:
+                    self._retry_after_realization_drop(event, item[0], item[1], generation)
                 continue
             ready_workers = max(
                 1,
@@ -2633,7 +2647,10 @@ class GpuAsyncSubtitleRenderer(QObject):
             # 上一轮调度器遗留的在途响应（热切换/代际变化后冲刷）。
             self._note("stale_frames_dropped")
             return
-        if event.get("event") == "gpu_frame_dropped":
+        if (
+            not self._accept_realization_event(event, generation)
+            or event.get("event") == "gpu_frame_dropped"
+        ):
             self._note("stale_frames_dropped")
             return
         render_ms = float(event.get("render_ms") or 0.0)
@@ -2870,15 +2887,70 @@ class GpuAsyncSubtitleRenderer(QObject):
             delta = int(t_ms) - int(self._latest_t)
             return 0 <= delta <= self._STALE_TOLERANCE_MS
 
+    def _retry_after_realization_drop(
+        self, event: dict, t_ms: int, serial: int, generation: int
+    ) -> None:
+        """A paused foreground request still needs an image after a path drop."""
+        with self._condition:
+            if event.get("reason") != "realization_ready" and not (
+                event.get("realization_path_ready") is False
+                and self._realization_ready_generation == generation
+            ):
+                return
+            if (
+                not self._stopped
+                and not self._playing
+                and generation == self._generation
+                and serial == self._request_serial
+                and self._pending is None
+            ):
+                self._pending = (int(t_ms), serial, False, time.monotonic())
+                self._condition.notify_all()
+
+    def _accept_realization_event(self, event: dict, generation: int) -> bool:
+        """Advance the path floor for this generation, including dropped frames."""
+        with self._condition:
+            if (
+                generation != self._generation
+                or int(event.get("generation", generation)) != generation
+            ):
+                return False
+            if (
+                event.get("realization_ready") is True
+                or event.get("realization_path_ready") is True
+            ):
+                if self._realization_ready_generation != generation:
+                    self._realization_ready_generation = generation
+                    self._frame_cache.clear()
+            return not (
+                self._realization_ready_generation == generation
+                and event.get("realization_path_ready") is False
+            )
+
+    def accepts_realization_image(self, image: QImage) -> bool:
+        """Reject raw GPU images still queued in Qt after the path transition."""
+        with self._condition:
+            path = image.text("gpu_realization_path")
+            if not path:
+                return True
+            return image.text("gpu_generation") == str(self._generation) and not (
+                path == "raw" and self._realization_ready_generation == self._generation
+            )
+
     def _cache_speculative(self, image: QImage, t_ms: int, generation: int) -> None:
         with self._condition:
-            if self._stopped or generation != self._generation or self._latest_t is None:
+            if (
+                self._stopped
+                or generation != self._generation
+                or self._latest_t is None
+                or not self.accepts_realization_image(image)
+            ):
                 self._note("stale_frames_dropped")
                 return
             if self._frame_cache.key_for(t_ms) < self._frame_cache.key_for(self._latest_t):
                 self._note("stale_frames_dropped")
                 return
-        self._frame_cache.store(t_ms, image)
+            self._frame_cache.store(t_ms, image)
         self._note("future_frames_cached")
 
     def _schedule_lookahead(self, t_ms: int, serial: int, generation: int) -> None:

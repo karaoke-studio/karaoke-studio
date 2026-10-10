@@ -238,6 +238,16 @@ QJsonObject renderGpuFrameWithBackend(
                     : 0.0
             );
         }
+        // Pooled responses are checked under the pool's publication lock.
+        if (!request.contains(QStringLiteral("worker_index"))) {
+            const bool ready = backend->realizationPathReady();
+            out.insert(QStringLiteral("realization_ready"), ready);
+            if (ready && !result.frameDiagnostics.realizationPathReady) {
+                out.insert(QStringLiteral("event"), QStringLiteral("gpu_frame_dropped"));
+                out.insert(QStringLiteral("dropped"), true);
+                out.insert(QStringLiteral("reason"), QStringLiteral("realization_ready"));
+            }
+        }
         return out;
     } catch (const std::exception &exception) {
         QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
@@ -419,7 +429,14 @@ QJsonObject handlePresentGpuFrame(
         const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
         const int generation = intValue(request, QStringLiteral("generation"), 0);
         const auto result = backend->presentFrame(tMs, target, generation);
-        QJsonObject out = response(true, QStringLiteral("gpu_frame_presented"));
+        QJsonObject out = response(true, result.dropped
+            ? QStringLiteral("gpu_frame_dropped") : QStringLiteral("gpu_frame_presented"));
+        out.insert(QStringLiteral("dropped"), result.dropped);
+        if (result.realizationPathStale) {
+            out.insert(QStringLiteral("reason"), QStringLiteral("realization_ready"));
+            out.insert(QStringLiteral("realization_ready"), true);
+            out.insert(QStringLiteral("realization_path_ready"), false);
+        }
         out.insert(QStringLiteral("generation"), generation);
         out.insert(QStringLiteral("frame_index"), intValue(request, QStringLiteral("frame_index"), 0));
         out.insert(QStringLiteral("t_ms"), tMs);
@@ -532,6 +549,11 @@ QJsonObject handlePresentRenderedGpuFrame(
             out.insert(QStringLiteral("generation"), generation);
             out.insert(QStringLiteral("t_ms"), tMs);
             out.insert(QStringLiteral("dropped"), true);
+            if (result.realizationPathStale) {
+                out.insert(QStringLiteral("reason"), QStringLiteral("realization_ready"));
+                out.insert(QStringLiteral("realization_ready"), true);
+                out.insert(QStringLiteral("realization_path_ready"), false);
+            }
             return out;
         }
         QJsonObject out = response(true, QStringLiteral("gpu_frame_presented"));

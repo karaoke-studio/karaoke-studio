@@ -424,6 +424,7 @@ struct Direct2DGpuBackend::Impl {
     // 同代更早的帧按时间丢弃（登记清空、纹理留作复用）。槽懒分配：稳态
     // 只占实际在飞深度，25 是上界不是常态。env KROK_SUBTITLE_GPU_FRAME_STORE。
     struct FrameStoreSlot {
+        bool realizationPathReady = false;
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
         int generation = -1;

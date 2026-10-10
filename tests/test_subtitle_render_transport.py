@@ -5321,6 +5321,108 @@ def _broken_sidecar_renderer(monkeypatch, qapp):
     return preview_async.GpuAsyncSubtitleRenderer(320, 180)
 
 
+def test_gpu_realization_transition_purges_raw_cache_and_queued_images(qapp, monkeypatch):
+    renderer = _broken_sidecar_renderer(monkeypatch, qapp)
+    try:
+        generation = renderer._generation
+        with renderer._condition:
+            renderer._latest_t = 0
+        raw = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+        raw.fill(0)
+        raw.setText("gpu_realization_path", "raw")
+        raw.setText("gpu_generation", str(generation))
+        renderer._cache_speculative(raw, 200, generation)
+        assert renderer._frame_cache.size() == 1
+        assert renderer.accepts_realization_image(raw.copy())
+
+        # A raw frame discarded by native publication is itself sufficient to
+        # advance the floor, before any baked image has reached Qt.
+        assert not renderer._accept_realization_event({
+            "event": "gpu_frame_dropped", "generation": generation,
+            "realization_ready": True, "realization_path_ready": False,
+        }, generation)
+        assert renderer._frame_cache.size() == 0
+        assert not renderer.accepts_realization_image(raw.copy())
+        renderer._cache_speculative(raw, 200, generation)
+        assert renderer._frame_cache.size() == 0
+        assert not renderer._accept_realization_event({
+            "generation": generation, "realization_ready": False,
+            "realization_path_ready": False,
+        }, generation)
+
+        baked = raw.copy()
+        baked.setText("gpu_realization_path", "baked")
+        renderer._cache_speculative(baked, 200, generation)
+        assert renderer._frame_cache.size() == 1
+        assert renderer.accepts_realization_image(baked)
+        assert renderer.accepts_realization_image(QImage())  # CPU fallback
+
+        with renderer._condition:
+            renderer._generation += 1
+        assert not renderer.accepts_realization_image(baked)
+        assert not renderer._accept_realization_event({
+            "generation": generation, "realization_ready": True,
+        }, generation)
+        raw.setText("gpu_generation", str(renderer._generation))
+        assert renderer.accepts_realization_image(raw)
+    finally:
+        renderer.stop()
+
+
+def test_gpu_realization_display_gate_rejects_queued_raw_frame(qapp, monkeypatch):
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
+
+    renderer = _broken_sidecar_renderer(monkeypatch, qapp)
+    delivered = []
+    try:
+        generation = renderer._generation
+        image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        image.setText("gpu_generation", str(generation))
+        image.setText("gpu_realization_path", "raw")
+        view = SimpleNamespace(
+            _async_renderer=renderer, _t_ms=0,
+            _note_frame_delivered=lambda: delivered.append(True),
+            _subtitle_item=SimpleNamespace(set_async_image=lambda image: None),
+        )
+        renderer._accept_realization_event({"realization_ready": True}, generation)
+        PreviewGraphicsView._on_async_frame(view, image, 0)
+        assert not delivered
+        image.setText("gpu_realization_path", "baked")
+        PreviewGraphicsView._on_async_frame(view, image, 0)
+        assert delivered == [True]
+    finally:
+        renderer.stop()
+
+
+def test_gpu_realization_paused_drop_retries_foreground_without_replacing_new_request(qapp, monkeypatch):
+    renderer = _broken_sidecar_renderer(monkeypatch, qapp)
+    event = {"reason": "realization_ready"}
+    try:
+        # Hold the scheduler lock so its thread cannot consume the assertion's
+        # pending request, then clear it before releasing the lock.
+        with renderer._condition:
+            generation = renderer._generation
+            serial = renderer._request_serial
+            renderer._retry_after_realization_drop(event, 750, serial, generation)
+            assert renderer._pending[:3] == (750, serial, False)
+            renderer._retry_after_realization_drop(event, 500, serial, generation)
+            assert renderer._pending[0] == 750
+            renderer._pending = None
+            renderer._retry_after_realization_drop(event, 750, serial - 1, generation)
+            assert renderer._pending is None
+            renderer._retry_after_realization_drop(event, 750, serial, generation - 1)
+            assert renderer._pending is None
+            renderer._retry_after_realization_drop({"reason": "generation_cancelled"}, 750, serial, generation)
+            assert renderer._pending is None
+            renderer._playing = True
+            renderer._retry_after_realization_drop(event, 750, serial, generation)
+            assert renderer._pending is None
+    finally:
+        renderer.stop()
+
+
 def test_gpu_preview_request_snaps_to_frame_key_grid(qapp, monkeypatch):
     """request 的 t 必须吸附到 60fps 帧键网格再消费/下渲染请求。
 

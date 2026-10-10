@@ -175,6 +175,7 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             cancelFollowerConfigure_ = false;
             accepting_ = true;
+            realizationPublicationReady_ = false;
             restartFollowers = deferFollowers
                 && readyWorkerCount_ < workerCount_
                 && backends_.size() > 1;
@@ -199,6 +200,7 @@ public:
             cancelFollowerConfigure_ = false;
             readyWorkerCount_ = 0;
             firstFrameDelivered_ = false;
+            realizationPublicationReady_ = false;
         }
         if (sharedResources_ && scene.realizationEnabled) {
             backends_.front()->configure(scene);
@@ -260,10 +262,8 @@ public:
             );
             return false;
         }
-        // 全池同步门（b 方案）：每任务提交前按「所有在岗 worker 的预热是否
-        // 完成」刷新各 backend 的 realization 门。刷新发生在进队前，任务
-        // 渲染时读到的必是本次提交时刻的池状态——切换只发生在提交边界，
-        // 在途任务仍按各自提交时的门渲染（跨 worker 恒同值）。
+        // Each frame snapshots this gate when drawing. Publication checks the
+        // snapshot again so older raw frames cannot follow the transition.
         refreshRealizationPoolReadyLocked();
         queue_.push_back(std::move(work));
         ++outstanding_;
@@ -282,11 +282,12 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         return readyWorkerCount_;
     }
-    // 全池同步门刷新（调用方须持 mutex_）：仅覆盖在岗 worker（0..ready-1，
-    // 尚未装配完成的 follower 不参与也不渲染）；任一在岗 worker 预热未完成
-    // 即全池关闸。装配失败的后端因 readyWorkerCount 未递增而天然豁免。
+    // Called with mutex_ held. Wait for follower assembly and all active
+    // prewarmers; failed followers are excluded after assembly has finished.
     void refreshRealizationPoolReadyLocked() {
-        bool allReady = readyWorkerCount_ > 0;
+        // Pending followers must join before the gate can open; otherwise a
+        // newly configured raw worker could close an already opened gate.
+        bool allReady = readyWorkerCount_ > 0 && !followersPending_;
         for (int index = 0; index < readyWorkerCount_; ++index) {
             if (!backends_[static_cast<std::size_t>(index)]
                      ->realizationPrewarmComplete()) {
@@ -297,6 +298,9 @@ public:
         for (int index = 0; index < readyWorkerCount_; ++index) {
             backends_[static_cast<std::size_t>(index)]
                 ->setRealizationPoolReady(allReady);
+        }
+        if (allReady && backends_.front()->realizationPathReady()) {
+            realizationPublicationReady_ = true;
         }
         nativeTrace(
             "pool gate refresh ready=%d allReady=%d",
@@ -384,7 +388,19 @@ private:
     void startDeferredFollowers(
         const krok::subtitle::native::RenderScene &scene
     ) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            followersPending_ = true;
+            refreshRealizationPoolReadyLocked();
+        }
         followerConfigureThread_ = std::thread([this, scene]() {
+            struct AssemblyGuard {
+                Impl *pool;
+                ~AssemblyGuard() {
+                    std::lock_guard<std::mutex> lock(pool->mutex_);
+                    pool->followersPending_ = false;
+                }
+            } assemblyGuard{this};
             nativeTrace("follower wait first frame");
             {
                 std::unique_lock<std::mutex> lock(mutex_);
@@ -418,7 +434,7 @@ private:
                     // b 方案（2026-10）：follower 装配完立即上岗，不等待预热。
                     // 跨 worker 的像素一致性由「全池同步门」保证——任一在岗
                     // worker 预热未完成则全池（含主 worker）统一走原路径直描，
-                    // 全员完成后在提交边界一起切 realization 网格。清掉 defer
+                    // follower 装配结束且全员完成后一起切 realization 网格。清掉 defer
                     // 标志让 follower 的预热随 configure 立即启动（fresh
                     // backend 从未渲染、EMA 为 0，自适应调度不会因压力让路
                     // 卡死）；其预热的推进不影响上岗与吞吐。
@@ -435,6 +451,9 @@ private:
                         nativeTrace("follower configure aborted backend=%zu", index);
                         return;
                     }
+                    // Fresh backends default to an open local gate. Close
+                    // it before making this follower eligible for work.
+                    backends_[index]->setRealizationPoolReady(false);
                     readyWorkerCount_ = static_cast<int>(index + 1);
                 }
                 nativeTrace("follower ready backend=%zu readyWorkers=%d", index, index + 1);
@@ -446,6 +465,7 @@ private:
     void workerLoop(int workerIndex) {
         while (true) {
             Work work;
+            std::size_t queuedCount = 0;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 ready_.wait(lock, [this, workerIndex]() {
@@ -457,8 +477,9 @@ private:
                 }
                 work = std::move(queue_.front());
                 queue_.pop_front();
+                queuedCount = queue_.size();
             }
-            nativeTrace("worker %d task begin queued=%zu", workerIndex, queue_.size());
+            nativeTrace("worker %d task begin queued=%zu", workerIndex, queuedCount);
             const auto taskStarted = std::chrono::steady_clock::now();
             QJsonObject result = work(
                 *backends_[static_cast<std::size_t>(workerIndex)], workerIndex
@@ -468,6 +489,17 @@ private:
             ).count();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
+                refreshRealizationPoolReadyLocked();
+                if (result.value(QStringLiteral("event")) == QStringLiteral("gpu_frame_ready")) {
+                    result.insert(QStringLiteral("worker_count_ready"), readyWorkerCount_);
+                    result.insert(QStringLiteral("realization_ready"), realizationPublicationReady_);
+                    if (realizationPublicationReady_
+                        && !result.value(QStringLiteral("realization_path_ready")).toBool()) {
+                        result.insert(QStringLiteral("event"), QStringLiteral("gpu_frame_dropped"));
+                        result.insert(QStringLiteral("dropped"), true);
+                        result.insert(QStringLiteral("reason"), QStringLiteral("realization_ready"));
+                    }
+                }
                 --outstanding_;
                 lastCompletionMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()
@@ -477,12 +509,11 @@ private:
                 if (outstanding_ == 0) {
                     drained_.notify_all();
                 }
+                // Release credit before publishing, but serialize the gate
+                // check and publication against other workers/configuration.
+                publish_(result);
             }
-            // Publish only after releasing one in-flight credit.  An export
-            // consumer may immediately submit the next frame for the freed
-            // ring slot as soon as it receives this response.
             nativeTrace("worker %d task end %lldms", workerIndex, taskElapsedMs);
-            publish_(result);
             nativeTrace(
                 "worker %d published %s serial=%d",
                 workerIndex,
@@ -506,6 +537,8 @@ private:
     bool accepting_ = false;
     bool cancelFollowerConfigure_ = false;
     bool firstFrameDelivered_ = false;
+    bool followersPending_ = false;
+    bool realizationPublicationReady_ = false;
     bool pauseTimedOut_ = false;
     bool abandoned_ = false;
     int readyWorkerCount_ = 0;

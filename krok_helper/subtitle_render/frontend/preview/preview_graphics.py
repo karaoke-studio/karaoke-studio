@@ -821,6 +821,9 @@ class PreviewGraphicsView(QGraphicsView):
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
+        accepts_image = getattr(self._async_renderer, "accepts_realization_image", None)
+        if accepts_image is not None and not accepts_image(image):
+            return
         if int(t_ms) != int(self._t_ms):
             tolerance = self._async_frame_tolerance()
             if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:

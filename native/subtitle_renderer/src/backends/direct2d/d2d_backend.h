@@ -47,6 +47,7 @@ public:
     // 池侧调 refreshRealizationPoolReady 更新。
     bool realizationPrewarmComplete() const noexcept;
     bool realizationPoolReady() const noexcept;
+    bool realizationPathReady() const noexcept override;
     void setRealizationPoolReady(bool ready) noexcept;
 
 private:
@@ -63,7 +64,7 @@ private:
     // 池满丢最久未用的（时间策略，不做 frame_index 取模撞槽）。
     int acquireFrameStoreSlot(int generation, std::int64_t tMs);
     // 渲染成功后登记身份；acquire 时已把旧登记清掉（渲染中途抛错则槽空闲）。
-    void registerFrameStoreSlot(int index, int generation, std::int64_t tMs);
+    void registerFrameStoreSlot(int index, int generation, std::int64_t tMs, bool realizationPathReady);
     // configure 改场景/改色：登记全部作废（纹理按尺寸决定是否保留）。
     void clearFrameStoreRegistrations();
     void releaseFrameStoreTextures();

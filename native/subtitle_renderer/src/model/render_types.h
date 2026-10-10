@@ -57,6 +57,7 @@ struct NativePreviewResult {
     // 纹理时代 present 无视 t_ms 直接拷最新渲染结果，是慢机预览回退的
     // 根因（2026-10）。
     bool dropped = false;
+    bool realizationPathStale = false;
 };
 
 struct ProbeOptions {
@@ -90,6 +91,8 @@ struct ProbeResult {
     double readbackMs = 0.0;
     struct FrameDiagnostics {
         bool countersEnabled = true;
+        // Actual frame-wide path selection, independent of diagnostic counters.
+        bool realizationPathReady = false;
         std::uint64_t brushCreated = 0;
         std::uint64_t geometryCreatedStable = 0;
         std::uint64_t geometryCreatedDynamic = 0;

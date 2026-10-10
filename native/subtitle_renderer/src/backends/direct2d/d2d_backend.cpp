@@ -105,6 +105,11 @@ bool Direct2DGpuBackend::realizationPoolReady() const noexcept {
     return impl_->realizationPoolReady.load(std::memory_order_acquire);
 }
 
+bool Direct2DGpuBackend::realizationPathReady() const noexcept {
+    return impl_->realizationActive && realizationPrewarmComplete()
+        && realizationPoolReady();
+}
+
 void Direct2DGpuBackend::setRealizationPoolReady(bool ready) noexcept {
     impl_->realizationPoolReady.store(ready, std::memory_order_release);
 }

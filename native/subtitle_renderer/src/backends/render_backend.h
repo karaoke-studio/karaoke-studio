@@ -12,6 +12,7 @@ public:
     virtual BackendDiagnostics diagnostics() const = 0;
     virtual void configure(const RenderScene &scene) = 0;
     virtual ProbeResult renderFrame(int tMs, bool compactBands = false) = 0;
+    virtual bool realizationPathReady() const noexcept { return false; }
     virtual NativePreviewResult presentFrame(
         int tMs,
         const NativePreviewTarget &target,

@@ -3886,6 +3886,95 @@ def test_gpu_realization_prewarms_off_frame_and_hits_on_steady_frame(monkeypatch
     assert diagnostics["realization_prewarm_skipped"] == 0
     assert frame["realization_hit"] > 0
     assert frame["realization_miss"] == 0
+    assert frame["realization_path_ready"] is True
+    assert frame["realization_ready"] is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("worker_count", [1, 4])
+def test_gpu_realization_publication_never_returns_to_raw_path(monkeypatch, worker_count) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("KROK_GPU_COUNTERS", "0")
+    monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
+    shm_key = f"test-gpu-path-floor-{uuid.uuid4().hex}"
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(), _g1_style(), width=640, height=360, fps=60,
+            worker_count=worker_count, defer_followers=True,
+            defer_realizations_until_first_frame=True,
+        )
+        ready_seen = False
+        raw_seen = False
+        all_workers_seen = False
+        deadline = time.monotonic() + 12.0
+        index = 0
+        while time.monotonic() < deadline:
+            # Fill all in-flight credits; responses can finish out of order.
+            for offset in range(worker_count):
+                renderer.begin_render_gpu_frame(
+                    750, generation=19, frame_index=index + offset,
+                    request_serial=index + offset, shm_key=shm_key,
+                    slot_count=worker_count, include_checksum=False,
+                )
+            for _ in range(worker_count):
+                event = renderer.finish_render_gpu_frame()
+                assert event["generation"] == 19
+                assert event["counters_enabled"] is False
+                path_ready = event["realization_path_ready"]
+                global_ready = event["realization_ready"]
+                if event.get("worker_count_ready", 1) == worker_count:
+                    all_workers_seen = True
+                if global_ready:
+                    ready_seen = True
+                if worker_count > 1 and event["worker_count_ready"] < worker_count:
+                    assert not global_ready
+                if event["event"] == "gpu_frame_dropped":
+                    assert event["reason"] == "realization_ready"
+                    assert global_ready and not path_ready
+                    continue
+                assert event["event"] == "gpu_frame_ready"
+                if ready_seen:
+                    assert global_ready and path_ready
+                raw_seen |= not path_ready
+                with SharedFrameRingReader.from_event(event) as reader:
+                    image = reader.read_qimage(event)
+                assert image.text("gpu_realization_path") == ("baked" if path_ready else "raw")
+                assert image.text("gpu_generation") == "19"
+            index += worker_count
+            time.sleep(0.015)
+        assert raw_seen
+        assert ready_seen
+        assert all_workers_seen
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g6_drops_raw_stored_frame_after_baking(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(), _g1_style(), width=640, height=360, fps=60,
+            worker_count=1, defer_realizations_until_first_frame=True,
+        )
+        assert not configured["realization_prewarm_complete"]
+        renderer.render_gpu_frame_direct(750, generation=20)
+        _wait_for_realization_prewarm(renderer)
+        # A stale raw slot must be rejected before creating a DComp window.
+        # HWND 1 is deliberately unusable: reaching presentation would fail.
+        event = renderer.present_rendered_gpu_frame(
+            parent_hwnd=1, x=0, y=0, width=640, height=360,
+            t_ms=750, generation=20,
+        )
+        assert event["event"] == "gpu_frame_dropped"
+        assert event["dropped"] is True
+        assert event["reason"] == "realization_ready"
+        assert event["realization_ready"] is True
+        assert event["realization_path_ready"] is False
+        assert event["generation"] == 20 and event["t_ms"] == 750
+        frame = renderer.render_gpu_frame(750, generation=20)
+        assert frame["event"] == "gpu_frame_ready"
+        assert frame["realization_path_ready"] is True
+        assert frame["realization_ready"] is True
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -4030,6 +4119,9 @@ def test_gpu_realization_can_be_disabled_per_configuration(monkeypatch) -> None:
     assert configured["realization_count"] == 0
     assert frame["realization_hit"] == 0
     assert frame["realization_miss"] == 0
+    assert frame["event"] == "gpu_frame_ready"
+    assert frame["realization_ready"] is False
+    assert frame["realization_path_ready"] is False
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
