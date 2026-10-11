@@ -98,8 +98,9 @@ def test_static_multiface_family_exact_and_nearest():
     assert exact.render_mode == "face"
     assert exact.mark is None
 
-    # 缺档请求走引擎就近（平局取轻：650 对 600/700 等距 → 600）；600 face
-    # 不触发合成（拉丁实测 Segoe UI Semibold @600/700 与 @400 同尺寸）。
+    # 缺档请求走引擎就近（平局取更接近 Normal(400) 的 face：650 对 600/700
+    # 等距 → 600）；600 face 不触发合成（拉丁实测 Segoe UI Semibold
+    # @600/700 与 @400 同尺寸）。
     nearest = resolve_weight_plan(family, 650)
     assert nearest.render_mode == "snap"
     assert nearest.base_weight == 600

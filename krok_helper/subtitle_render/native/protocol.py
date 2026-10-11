@@ -211,24 +211,32 @@ def gpu_unsupported_feature_labels(reasons: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
-    """为单个样式字典追加可变字体标记（顺应引擎，2026-10-07 拍板）。
+    """为单个样式字典追加字体解析结果（顺应引擎 + 双后端同一份决策）。
 
-    字重回到绝对字重，模拟加粗交还 Qt/DirectWrite 引擎——不再下发任何
-    ``*_font_face_weight`` / ``*_sim_bold`` / ``*_font_embolden`` 映射，引擎
-    自行就近匹配 + 合成粗体。只追加 ``*_font_axis`` 一个标记：该槽字体
-    是否真可变（GPU 端据此走轴值实例而非静态就近匹配）。
+    GPU 端不再自行就近匹配、自行判可变：Python 侧（Qt 引擎实测口径）算好
+    每个槽位的**统一实例决策**随 IR 下发。
+
+    * ``*_font_axis``（既有键，保持兼容）：该槽字体是否真可变，GPU 据此走
+      轴值实例。
+    * ``*_font_resolved``（新键，仅「非平凡」决策才发）：``ResolvedFontInstance``
+      的关键字段——face style/字重、轴值、模拟加粗、模拟倾斜、回退原因。
+      决策恰为「精确命中静态 face 且 face 字重 = 请求字重」时不发：C++ 端
+      默认路径（按请求字重精确匹配）与该决策逐字节等价，控制 IR 体积。
 
     回退链与 C++ 解析端一一对应：latin→main、ruby→main、ruby_latin→
     ruby_latin→ruby→main。
     """
-    from krok_helper.subtitle_render.engine.text.font_weight import resolve_weight_plan
+    from krok_helper.subtitle_render.engine.text.font_weight import (
+        resolve_font_instance,
+    )
 
     if "font_family" not in payload or "font_weight" not in payload:
         return
     italic = bool(payload.get("italic"))
     main_weight = int(payload["font_weight"] or 400)
 
-    def is_variable(family: Any, weight: Any) -> bool:
+    def slot(family: Any, weight: Any) -> tuple[bool, dict[str, Any] | None]:
+        """槽位 → (是否真可变, 决策载荷 | None)。空族按静态默认处理。"""
         if weight is None:
             weight = main_weight
         name = str(family or "").strip()
@@ -238,28 +246,59 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
             # 会创建系统默认字体引擎（MS Sans Serif 一类），在渲染线程上
             # 持 Qt 字体锁触发 DirectWrite 告警→消息处理器抢 GIL，等锁的
             # GUI 线程随之「未响应」（2026-10 打开工程卡死，py-spy 定位）。
-            return False
-        plan = resolve_weight_plan(name, int(weight))
-        return plan.render_mode == "axis"
+            return False, None
+        instance = resolve_font_instance(name, int(weight), italic=italic)
+        trivial = (
+            not instance.synthetic_bold
+            and not instance.synthetic_italic
+            and not instance.is_variable
+            and instance.reason is None
+            and instance.face_style is not None
+        )
+        if trivial:
+            return False, None
+        if instance.reason == "missing_family":
+            # Python 侧枚举不到这个族（别名/本地化名 DirectWrite 认得而 Qt 不认
+            # 的少数情况）：不发半截决策——C++ 侧保持引擎镜像规则（含合成粗体
+            # 判定），与本改动前的行为逐字节一致。
+            return False, None
+        return instance.is_variable, {
+            "style": instance.face_style,
+            "weight": int(instance.face_weight),
+            "axis": instance.axis_value,
+            "sim_bold": bool(instance.synthetic_bold),
+            "sim_italic": bool(instance.synthetic_italic),
+            "reason": instance.reason,
+        }
 
     main_family = payload.get("font_family")
-    payload["font_axis"] = is_variable(main_family, main_weight)
+    payload["font_axis"], resolved = slot(main_family, main_weight)
+    if resolved is not None:
+        payload["font_resolved"] = resolved
 
     latin_family = payload.get("latin_font_family") or main_family
-    payload["latin_font_axis"] = is_variable(
+    payload["latin_font_axis"], resolved = slot(
         latin_family, payload.get("latin_font_weight")
     )
+    if resolved is not None:
+        payload["latin_font_resolved"] = resolved
 
     ruby_family = payload.get("ruby_font_family") or main_family
-    payload["ruby_font_axis"] = is_variable(
+    payload["ruby_font_axis"], resolved = slot(
         ruby_family, payload.get("ruby_font_weight")
     )
+    if resolved is not None:
+        payload["ruby_font_resolved"] = resolved
 
     ruby_latin_family = payload.get("ruby_latin_font_family") or ruby_family
     ruby_latin_weight = payload.get("ruby_latin_font_weight")
     if ruby_latin_weight is None:
         ruby_latin_weight = payload.get("ruby_font_weight")
-    payload["ruby_latin_font_axis"] = is_variable(ruby_latin_family, ruby_latin_weight)
+    payload["ruby_latin_font_axis"], resolved = slot(
+        ruby_latin_family, ruby_latin_weight
+    )
+    if resolved is not None:
+        payload["ruby_latin_font_resolved"] = resolved
 
 
 def apply_resolved_font_faces(node: Any) -> None:
@@ -521,6 +560,7 @@ def timing_char_to_ir(
     ch: TimingChar,
     glyph_table: VectorGlyphTable | None = None,
     anim_anchor_ms: int | None = None,
+    fallback_family: str | None = None,
 ) -> dict[str, Any]:
     # 「缺省即空」的字段值为默认时整个键不发（C++ 解析器对缺 key 本就按
     # 默认处理，scanline/zoom_pulse 等字段一直是这个惯例）：624 字里上千
@@ -537,6 +577,10 @@ def timing_char_to_ir(
         char["pause_release_ms"] = int(ch.pause_release_ms)
     if ch.role_label:
         char["role_label"] = ch.role_label
+    if fallback_family:
+        # 请求字体缺字时 Qt(CPU) 实际选中的回退族名（GUI 线程预热算出）。
+        # GPU 端优先用同一个族，不再按脚本硬编码候选链猜字。
+        char["fallback_family"] = str(fallback_family)
     guide = bitmap_guide_to_ir(ch.vector_glyph, anim_anchor_ms)
     if guide is not None:
         char["bitmap_guide"] = guide
@@ -610,6 +654,7 @@ def timing_line_to_ir(
     glyph_table: VectorGlyphTable | None = None,
     fx_table: "FxPayloadTable | None" = None,
     layout_table: "LineLayoutTable | None" = None,
+    char_fallbacks: list[str | None] | None = None,
 ) -> dict[str, Any]:
     render_line = render_line or line
     # 与 painter._paint_line_static 的动图锚点同一公式：行显示窗口起点，
@@ -622,8 +667,17 @@ def timing_line_to_ir(
     )
     return {
         "chars": [
-            timing_char_to_ir(ch, glyph_table, guide_anim_anchor_ms)
-            for ch in render_line.chars
+            timing_char_to_ir(
+                ch,
+                glyph_table,
+                guide_anim_anchor_ms,
+                fallback_family=(
+                    char_fallbacks[index]
+                    if char_fallbacks is not None and index < len(char_fallbacks)
+                    else None
+                ),
+            )
+            for index, ch in enumerate(render_line.chars)
         ],
         "end_ms": int(line.end_ms) if line.end_ms is not None else None,
         # 整行逆序已理顺的标记：sidecar 据此对齐 Painter 的反向走字
@@ -931,11 +985,50 @@ def track_to_ir(
                 glyph_table=glyph_table,
                 fx_table=fx_table,
                 layout_table=layout_table,
+                char_fallbacks=(
+                    _line_char_fallbacks(
+                        animation_styles[index], render_lines[index]
+                    )
+                    if style is not None
+                    else None
+                ),
             )
             for index, line in enumerate(track.lines)
         ],
         "rubies": [ruby_to_ir(ruby) for ruby in track.rubies],
     }
+
+
+def font_fallback_family(style: Style | None, text: str) -> str | None:
+    """文本缺字时 Qt(CPU) 实际选中的回退族名（渲染线程：纯查表）。
+
+    表在 GUI 线程由 :func:`preview_async._prewarm_font_axis_capabilities`
+    填充（``prewarm_fallback``）；未预热/已覆盖返回 None，native 侧保持
+    请求字体或改走系统字体回退。
+    """
+    if style is None or not text:
+        return None
+    from krok_helper.subtitle_render.engine.text.font_fallback import (
+        lookup_fallback,
+    )
+    from krok_helper.subtitle_render.engine.text.metrics import font_slot_for_text
+
+    slot = font_slot_for_text(style, text)
+    if slot is None:
+        return None
+    family, weight, italic = slot
+    return lookup_fallback(family, weight, italic, text)
+
+
+def _line_char_fallbacks(style: Style, render_line: TimingLine) -> list[str | None]:
+    """逐字符回退族名（与 ``chars`` 数组同序；无回退为 None）。"""
+    return [
+        font_fallback_family(
+            style_for_role(style, getattr(ch, "role_label", None)),
+            str(getattr(ch, "text", "") or ""),
+        )
+        for ch in render_line.chars
+    ]
 
 
 def lines_style_to_ir(

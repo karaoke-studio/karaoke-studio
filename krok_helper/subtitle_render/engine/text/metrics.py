@@ -123,6 +123,51 @@ def make_font_for(
     return font_for
 
 
+def latin_slot_differs(style: Style) -> bool:
+    """拉丁槽位是否与主槽位不同（``make_font_for`` 的 same_text_fonts 判据）。
+
+    与 ``make_font_for`` 的签名比较同口径：族/字号/字重/拉伸任一项不同即
+    认为渲染走独立拉丁字体。用于把「文本实际由哪个槽位承载」翻译成
+    (族, 字重, 斜体)，供覆盖/回退解析取用。
+    """
+    family_latin = str(style.font_family_latin or "").strip()
+    if not family_latin:
+        return False
+    if resolve_qt_font_family(family_latin) != resolve_qt_font_family(style.font_family):
+        return True
+    if latin_font_size(style) != int(style.font_size_px):
+        return True
+    if latin_font_weight(style) != int(style.font_weight):
+        return True
+    return int(style.latin_font_stretch_pct) != 100
+
+
+def font_slot_for_text(style: Style, text: str) -> tuple[str, int, bool] | None:
+    """文本实际使用的字体槽位 ``(族, 字重, 斜体)``；emoji/空文本返回 None。
+
+    与 ``make_font_for`` 同一分类口径（拉丁→拉丁槽、emoji→显式 Symbol
+    字体、其余→主槽），供覆盖检查与缺字回退解析按真实渲染字体取能力。
+    emoji 两边都走显式 ``Segoe UI Symbol``，无需回退解析。
+    """
+    if not text:
+        return None
+    is_latin, is_emoji = _text_class(text)
+    if is_emoji:
+        return None
+    italic = bool(style.italic)
+    if is_latin and latin_slot_differs(style):
+        return (
+            resolve_qt_font_family(style.font_family_latin),
+            latin_font_weight(style),
+            italic,
+        )
+    return (
+        resolve_qt_font_family(style.font_family),
+        int(style.font_weight),
+        italic,
+    )
+
+
 def char_advance(
     text: str,
     metrics: QFontMetrics,
@@ -546,10 +591,12 @@ __all__ = [
     "char_path_left_offset",
     "clamp_weight",
     "clear_char_metric_cache",
+    "font_slot_for_text",
     "is_emoji_text",
     "is_n3_latin_text",
     "latin_font_size",
     "latin_font_weight",
+    "latin_slot_differs",
     "letter_spacing",
     "line_text_width",
     "make_font_for",

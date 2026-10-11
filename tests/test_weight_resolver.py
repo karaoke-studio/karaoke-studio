@@ -123,8 +123,8 @@ class TestStaticSingleFace:
 
 
 class TestStaticMultiFace:
-    """多 face：精确命中直接用；缺档引擎就近（平局取轻），face<600 且
-    请求≥600 时引擎合成粗体。"""
+    """多 face：精确命中直接用；缺档引擎就近（平局取更接近 Normal(400) 的
+    face），face<600 且请求≥600 时引擎合成粗体。"""
 
     def test_exact_400(self):
         r = resolve(_cap("t", (400, 700)), 400)
@@ -162,14 +162,40 @@ class TestStaticMultiFace:
         assert r.render_mode == "snap"
         assert r.base_face.weight == 400
 
-    def test_yu_gothic_600_tie_prefers_lighter_with_synth(self):
-        """Yu Gothic {300,400,500,700}@600：500/700 平局取轻 → 500+合成。
-        2026-10-08 实测校准（v4.2.x 像素一致）：引擎对平局取更轻 face 并
-        施加 faux bold，而不是上吸到 700。"""
+    def test_yu_gothic_600_tie_prefers_normal_side_with_synth(self):
+        """Yu Gothic {300,400,500,700}@600：500/700 平局落 Normal(400) 侧。
+        2026-10-08 实测校准（v4.2.x 像素一致）：引擎对平局取更接近 400 的
+        face 并施加 faux bold，而不是上吸到 700。"""
         r = resolve(_cap("t", (300, 400, 500, 700)), 600)
         assert r.render_mode == "engine_synthetic"
         assert r.base_face.weight == 500
         assert r.mark == "模拟"
+
+    def test_tie_below_normal_prefers_heavier_face(self):
+        """平局取更接近 Normal(400) 的 face —— 400 以下档位平局取**重**。
+
+        2026-10-11 全档实测：Yu Gothic{300,400,500,700}@350 → Regular(400)
+        （不是 Light）、Malgun{300,400,700}@350 → Regular、Noto{100,300,...}
+        @200 → Light(300)。旧「平局取轻」口径在 400 以下会选错 face。
+        """
+        r = resolve(_cap("t", (300, 400, 500, 700)), 350)
+        assert r.base_face.weight == 400
+        assert r.render_mode == "snap"
+        assert r.synthetic_bold is False
+
+        r = resolve(_cap("t", (100, 300)), 200)
+        assert r.base_face.weight == 300
+
+        # 双平局（{300,500}@400）：两级平局后按更轻 face 兜底。
+        r = resolve(_cap("t", (300, 500)), 400)
+        assert r.base_face.weight == 300
+
+    def test_tie_above_normal_prefers_lighter_face(self):
+        """400 以上平局取更接近 400 的一侧（即更轻）：{400,600}@500 → 400。"""
+        r = resolve(_cap("t", (400, 600)), 500)
+        assert r.base_face.weight == 400
+        r = resolve(_cap("t", (400, 700)), 550)
+        assert r.base_face.weight == 400
 
     def test_semibold_single_face_never_synthesizes(self):
         """{600} 族（Segoe UI Semibold 型）：600 face 不合成——@600 精确、
