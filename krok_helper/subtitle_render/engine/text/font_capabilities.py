@@ -225,6 +225,84 @@ def _face_weight_axis(
     return axes.get(_WGHT)
 
 
+_AXIS_PROBE_TEXT = "Ag0Wg指あそ爽永"
+
+
+def _axis_cheap_signature(
+    family: str, style_name: str | None, value: float, size: int
+) -> tuple | None:
+    """轴值 → 廉价指纹（advance + 1/8 像素取整墨迹盒）；族不可解析返回 None。
+
+    只作快速路径：实测它对相邻轴档大量漏判（Noto Sans SC / Iwata /
+    Segoe UI Variable / Bahnschrift 各有 300–600 个相邻档「宽度与包围盒相同、
+    像素确有差异」——轴可能只改内部笔画粗细），因此它判「不同」即生效、
+    判「相同」还要像素指纹定谳。
+    """
+    font = QFont(family)
+    if style_name:
+        font.setStyleName(style_name)
+    font.setVariableAxis(QFont.Tag(_WGHT), float(value))
+    if QFontInfo(font).family().casefold() != family.casefold():
+        return None
+    from PyQt6.QtGui import QFontMetrics
+
+    font.setPixelSize(size)
+    metrics = QFontMetrics(font)
+    cheap: list = list(
+        metrics.horizontalAdvance(ch) for ch in _AXIS_PROBE_TEXT
+    )
+    path = QPainterPath()
+    path.addText(0.0, 0.0, font, _AXIS_PROBE_TEXT)
+    rect = path.boundingRect()
+    cheap.extend(
+        (round(rect.left() * 8), round(rect.top() * 8),
+         round(rect.right() * 8), round(rect.bottom() * 8))
+    )
+    return tuple(cheap)
+
+
+def _axis_raster_signature(
+    family: str, style_name: str | None, value: float, size: int
+) -> bytes | None:
+    """轴值 → 像素指纹（样本文字在固定画布上的光栅化字节）。"""
+    font = QFont(family)
+    if style_name:
+        font.setStyleName(style_name)
+    font.setVariableAxis(QFont.Tag(_WGHT), float(value))
+    font.setPixelSize(size)
+    return _raster_probe(font)
+
+
+def _axis_render_signature(
+    family: str, style_name: str | None, value: float, size: int
+) -> tuple[tuple | None, bytes | None]:
+    """轴值 → （廉价指纹，像素指纹）组合视图（测试/诊断用）。"""
+    return (
+        _axis_cheap_signature(family, style_name, value, size),
+        _axis_raster_signature(family, style_name, value, size),
+    )
+
+
+
+def _raster_probe(font: QFont) -> bytes | None:
+    """样本文字在固定画布上的光栅化字节（轴值像素指纹）。"""
+    from PyQt6.QtGui import QImage, QPainter
+
+    try:
+        image = QImage(260, 96, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        try:
+            painter.setFont(font)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            painter.drawText(4, 72, _AXIS_PROBE_TEXT)
+        finally:
+            painter.end()
+        return bytes(image.constBits().asstring(image.sizeInBytes()))
+    except (RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _axis_is_effective(
     family: str, mn: float, mx: float, style_name: str | None = None
 ) -> bool:
@@ -233,36 +311,31 @@ def _axis_is_effective(
     表里声明了轴但两端渲染完全相同（伪可变、或 Qt 把轴静默忽略）时，
     仅凭渲染指纹会误判为「静态」；因此调用方以 ``axis_present`` 记录
     表级事实，本函数只回答「这条轴值不值得交给渲染」。
+
+    判定顺序：**廉价指纹优先短路**（advance/bbox 在 min/中/max 任一档不同
+    即生效，不付光栅成本）→ 三档全同才上**像素指纹**逐字节比较，专治
+    「轴只改内部笔画、外轮廓与字宽不变」的漏判（2026-10-11 外部评估指出的风险）。
     """
     if mn >= mx:
         return False
-    signatures = []
-    for value in (mn, mx):
-        font = QFont(family)
-        if style_name:
-            font.setStyleName(style_name)
-        font.setVariableAxis(QFont.Tag(_WGHT), float(value))
-        if QFontInfo(font).family().casefold() != family.casefold():
-            return False
-        # 指纹：多字号 advance + 墨迹 bbox
-        sig = []
-        for size in (40, 41):
-            font.setPixelSize(size)
-            from PyQt6.QtGui import QFontMetrics
-
-            metrics = QFontMetrics(font)
-            sig.extend(
-                metrics.horizontalAdvance(ch) for ch in "Ag0Wg指あそ爽永"
-            )
-            path = QPainterPath()
-            path.addText(0.0, 0.0, font, "Ag0Wg指あそ爽永")
-            rect = path.boundingRect()
-            sig.extend(
-                (round(rect.left() * 8), round(rect.top() * 8),
-                 round(rect.right() * 8), round(rect.bottom() * 8))
-            )
-        signatures.append(tuple(sig))
-    return signatures[0] != signatures[1]
+    values = (float(mn), float((mn + mx) / 2.0), float(mx))
+    # 快速路径：advance/bbox 在 min/中/max 任一档不同即生效——可变字体的轴
+    # 实例创建是百毫秒级成本（Segoe UI Variable 实测 3 档光栅 ~736ms），
+    # 能短路就不付光栅。
+    cheap = [
+        _axis_cheap_signature(family, style_name, value, 40) for value in values
+    ]
+    if any(signature is None for signature in cheap):
+        return False
+    if len(set(cheap)) > 1:
+        return True
+    # 廉价指纹三档全同：像素指纹逐字节定谳（治「轴只改内部笔画」的漏判）。
+    rasters = [
+        _axis_raster_signature(family, style_name, value, 40) for value in values
+    ]
+    if any(raster is None for raster in rasters):
+        return False
+    return len(set(rasters)) > 1
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +395,17 @@ def get_capabilities(family: str) -> FontCapabilities | None:
         axis_min = variable_face.axis_min
         axis_max = variable_face.axis_max
         axis_default = variable_face.axis_default
-        assert axis_min is not None and axis_max is not None
+    elif faces:
+        # 逐 face 钉不住 styleName 时退回族级探测：Qt 的 style 名可能带光学
+        # 尺寸/条件前缀（Segoe UI Variable 的 'Small'/'Text'/'Display' 钉回去
+        # 解析成 'Regular'），逐 face 校验会一律判否——族默认 face 仍读得到
+        # fvar。族级只在逐 face 全部失败时兜底；「族内静态+可变共存」仍以
+        # 逐 face 结果为准（那是本次修正的主目标）。
+        family_axis = _face_weight_axis(canonical, None)
+        if family_axis is not None and family_axis[0] < family_axis[2]:
+            axis_present = True
+            axis_min, axis_default, axis_max = family_axis
+    if axis_present and axis_min is not None and axis_max is not None:
         axis_effective = _axis_is_effective(
             canonical, axis_min, axis_max, variable_style
         )

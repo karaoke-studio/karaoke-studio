@@ -191,6 +191,105 @@ result["ir"]["batch_equiv"] = {
     cluster: (_single[cluster], _batch.get(cluster)) for cluster in _batch_clusters
 }
 
+# 能力层：逐 face 可变判定 + 族级兜底 + 像素级轴指纹
+from krok_helper.subtitle_render.engine.text.font_capabilities import (  # noqa: E402
+    _axis_is_effective,
+    _axis_render_signature,
+    clear_capabilities_cache,
+    get_capabilities,
+)
+
+result["caps"] = {}
+for _family in ("Noto Sans SC", "MS Gothic", "Yu Gothic", "Segoe UI Variable",
+                "Bahnschrift"):
+    clear_capabilities_cache()
+    _cap = get_capabilities(_family)
+    result["caps"][_family] = None if _cap is None else {
+        "faces": len(_cap.faces),
+        "axis_present": bool(_cap.axis_present),
+        "axis_effective": bool(_cap.axis_effective),
+        "variable_style": _cap.variable_style,
+        "has_italic_face": bool(_cap.has_italic_face),
+    }
+
+# 像素指纹灵敏度：找一对「advance/bbox 相同、像素不同」的相邻轴档
+_blind_pair = None
+if "Noto Sans SC" in QFontDatabase.families():
+    for _w in range(100, 320):
+        _c1, _r1 = _axis_render_signature("Noto Sans SC", "Regular", float(_w), 40)
+        _c2, _r2 = _axis_render_signature("Noto Sans SC", "Regular", float(_w + 1), 40)
+        if _r1 and _r2 and _c1 == _c2 and _r1 != _r2:
+            _blind_pair = _w
+            break
+# 合成加粗阈值（W≥600 且 matched<600）与像素观测的对照表
+from krok_helper.subtitle_render.engine.text.font_capabilities import _raster_probe  # noqa: E402
+from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance  # noqa: E402
+from PyQt6.QtGui import QFont as _QFont, QFontInfo as _QFontInfo  # noqa: E402
+
+
+def _ink_mass(font) -> int:
+    font.setPixelSize(56)
+    data = _raster_probe(font) or b""
+    return sum(1 for i in range(3, len(data), 4) if data[i] > 32)
+
+
+_sim_rows = []
+for _family in ("MS Gothic", "Yu Gothic", "Meiryo", "Microsoft YaHei", "KaiTi",
+                "UD Digi Kyokasho N-B", "Arial", "Segoe UI", "Tahoma"):
+    if _family not in QFontDatabase.families():
+        continue
+    clear_capabilities_cache()
+    _cap = get_capabilities(_family)
+    if _cap is None or _cap.is_variable:
+        continue
+    for _w in (500, 550, 600, 650, 700, 800, 900):
+        _inst = resolve_font_instance(_family, _w)
+        if _inst.face_style is None:
+            continue
+        _req = _QFont(_family); _req.setWeight(_QFont.Weight(_w))
+        _face = _QFont(_family); _face.setStyleName(_inst.face_style)
+        _face.setWeight(_QFont.Weight(int(_inst.face_weight)))
+        _ink_req, _ink_face = _ink_mass(_req), _ink_mass(_face)
+        _observed = _ink_req > _ink_face * 1.03
+        _sim_rows.append({
+            "family": _family, "weight": _w,
+            "predicted": bool(_inst.synthetic_bold), "observed": bool(_observed),
+            "face_style": _inst.face_style, "face_weight": int(_inst.face_weight),
+            "ink_requested": _ink_req, "ink_face": _ink_face,
+        })
+# shaping 边界留证：Qt(QTextLayout) 会整形，GPU 的逐码点路径不会
+from krok_helper.subtitle_render.engine.text.font_fallback import (  # noqa: E402
+    _layout_run_families,
+)
+from krok_helper.subtitle_render.engine.text.font_fallback import slot_font  # noqa: E402
+from PyQt6.QtGui import QRawFont as _QRawFont  # noqa: E402
+
+_shaping_rows = []
+for _text in ("fi", "ffl", "Á", "が", "क्ष"):
+    _font = slot_font("Arial", 400, False)
+    _runs = _layout_run_families(_font, _text)
+    _shaped = sum(count for _fam, count in _runs)
+    _raw = _QRawFont.fromFont(_font)
+    _per_codepoint = len(list(_raw.glyphIndexesForString(_text)))
+    _shaping_rows.append({
+        "text": _text,
+        "shaped_glyphs": _shaped,
+        "per_codepoint_glyphs": _per_codepoint,
+    })
+result["shaping"] = _shaping_rows
+
+result["synthetic_bold_rule"] = _sim_rows
+
+result["axis_fingerprint"] = {
+    "blind_pair": _blind_pair,
+    "endpoints_effective": (
+        _axis_is_effective("Noto Sans SC", 100.0, 900.0, "Regular")
+        if "Noto Sans SC" in QFontDatabase.families()
+        else None
+    ),
+    "static_fake_axis_effective": _axis_is_effective("MS Gothic", 300.0, 900.0),
+}
+
 print(json.dumps(result))
 '''
 
@@ -340,4 +439,94 @@ def test_batched_fallback_matches_per_cluster(probe_result: dict) -> None:
     for cluster, (single, batch) in equivalence.items():
         assert single == batch, (
             f"{cluster!r}: per-cluster={single!r} batched={batch!r}"
+        )
+
+
+def test_capabilities_mark_variable_faces_and_family_level_fallback(
+    probe_result: dict,
+) -> None:
+    """逐 face 可变判定 + Qt style 名带前缀时的族级兜底。"""
+    caps = probe_result["caps"]
+    noto = caps.get("Noto Sans SC")
+    if noto is not None:
+        assert noto["axis_present"] is True
+        assert noto["axis_effective"] is True
+        assert noto["variable_style"] is not None  # 逐 face 命中
+    ms_gothic = caps.get("MS Gothic")
+    if ms_gothic is not None:
+        assert ms_gothic["axis_present"] is False
+        assert ms_gothic["axis_effective"] is False
+    yugothic = caps.get("Yu Gothic")
+    if yugothic is not None:
+        assert yugothic["axis_present"] is False
+    # Segoe UI Variable 的 Qt style 名带光学尺寸前缀（'Small'/'Text'/'Display'
+    # 钉回去解析成 'Regular'）→ 逐 face 校验全失败，必须由族级探测兜底。
+    seguivar = caps.get("Segoe UI Variable")
+    if seguivar is not None:
+        assert seguivar["axis_present"] is True, (
+            "族级兜底未生效：真可变字体被判静态（会退化成命名实例吸附）"
+        )
+        assert seguivar["axis_effective"] is True
+
+
+def test_axis_fingerprint_detects_internal_stroke_changes(probe_result: dict) -> None:
+    """像素指纹必须比 advance/bbox 更灵敏（轴只改内部笔画时不漏判）。"""
+    fingerprint = probe_result["axis_fingerprint"]
+    assert fingerprint["endpoints_effective"] is True
+    assert fingerprint["static_fake_axis_effective"] is False
+    assert fingerprint["blind_pair"] is not None, (
+        "未找到「advance/bbox 相同但像素不同」的相邻轴档——"
+        "该环境下无法证明像素指纹的额外灵敏度"
+    )
+
+
+def test_synthetic_bold_rule_matches_pixel_observation(probe_result: dict) -> None:
+    """合成加粗阈值（W≥600 且 matched<600）必须与本机引擎的像素表现一致。
+
+    报告口径（2026-10-11 外部评估）：该阈值是「本机 Qt 行为校准」而非行业
+    标准。本用例把它升级为**可复现的观测对照**——逐 (族, 字重) 用像素墨量
+    比较「请求字重的渲染」与「钉住 face 的渲染」：观测到变粗 ⇔ 规则预测合成。
+    （参考面必须同时钉 styleName 与 face 字重：只钉 styleName 时 Qt 会退回
+    Regular 参考，实测会造出 15 处假分歧。）
+    """
+    rows = probe_result.get("synthetic_bold_rule") or []
+    if not rows:
+        pytest.skip("no static probe fonts installed")
+    mismatches = [
+        row for row in rows if row["predicted"] != row["observed"]
+    ]
+    assert not mismatches, mismatches
+
+
+def test_shaping_boundary_is_recorded(probe_result: dict) -> None:
+    """shaping 边界：GPU 逐码点路径 vs Qt 整形路径的已知差异（留证，不是通过项）。
+
+    实测（2026-10-11，CPU painter vs sidecar 逐像素）：
+      拉丁连字对 'fi'/'ffl'/'fl'、拉丁组合符 'Á' —— CPU 与 GPU 墨迹盒
+      一致（Qt 的逐格 addText 路径同样不组连字）；
+      假名分解浊音 'が'（墨量 1638 vs 2058、盒宽 +26%）、
+      印度系 'क्ष'（1242 vs 4419）—— **不一致**：GPU 按码点
+      取字形（GetGlyphIndices），Qt 侧整形合成单字形并重排位置。
+
+    本用例只钉「整形路径确实存在差异」这一事实与范围：拉丁对齐、组合序列与
+    复杂文字列在边界清单里。修法（后续）＝ 逐格下发整形后的**字形编号＋位置**
+    （QRawFont.glyphIndexesForString 不整形，须走 QTextLayout glyph runs）。
+    """
+    rows = {row["text"]: row for row in probe_result.get("shaping") or []}
+    if not rows:
+        pytest.skip("no shaping probe rows")
+    fi = rows.get("fi")
+    if fi is not None:
+        # 拉丁连字对：整形与逐码点一致（Qt 未组连字）→ 两侧同口径
+        assert fi["shaped_glyphs"] == fi["per_codepoint_glyphs"] == 2
+    # 分解浊音 / 印度系簇：两条路径的字形数不同（Qt 整形把簇收敛成更少字形，
+    # 逐码点路径按码点取字形）→ 位置与墨迹随之分叉。
+    for key, codepoints in (("が", 2), ("क्ष", 3)):
+        row = rows.get(key)
+        if row is None:
+            continue
+        assert row["per_codepoint_glyphs"] == codepoints
+        assert row["shaped_glyphs"] != row["per_codepoint_glyphs"], (
+            f"{key!r}: 本环境下整形与逐码点字形数相同，"
+            "边界描述需按实际观测更新"
         )
