@@ -4303,10 +4303,13 @@ def test_gpu_realization_threshold_preserves_fine_stroke_pixels(monkeypatch) -> 
     # 实测分布（2026-10-05）：0.45% 字节有差，绝大多数 ≤60（AA 重估），
     # 仅 ~17 字节 >60（个别字形边缘的覆盖差，如 198→135）。真劣化（丢
     # 描边/错宽度）是千字节级全差——双约束隔开三个数量级。
+    # 2026-10-11 回退链对齐 Qt（CJK 回退 JhengHei→SimSun）后实测 55：
+    # 宋体细笔画在 realization/直画两条基元的边缘覆盖差略多于旧回退字
+    # 体，仍远低于千字节级真劣化，阈值放宽到 64。
     assert len(diffs) / len(enabled_pixels) < 0.01, (
         f"differing bytes: {len(diffs)}/{len(enabled_pixels)}"
     )
-    assert sum(1 for d in diffs if d > 60) <= 32, (
+    assert sum(1 for d in diffs if d > 60) <= 64, (
         f"bytes with delta>60: {sum(1 for d in diffs if d > 60)}"
     )
 
@@ -12546,7 +12549,9 @@ def test_gpu_g1_hardware_and_warp_are_pixel_bounded(monkeypatch) -> None:
     # small number of pixels. Gate the aggregate premultiplied image error,
     # which is stable and meaningful even where straight RGB has tiny alpha.
     assert sum(abs(a - b) for a, b in zip(hardware_alpha, warp_alpha)) / len(hardware_alpha) <= 0.05
-    assert sum(premultiplied_deltas) / len(premultiplied_deltas) <= 0.06
+    # 2026-10-11 回退链对齐 Qt（CJK 回退 SimSun）后实测 0.0646：宋体细
+    # 笔画在硬件/WARP 两侧光栅的 AA 差略升，阈值 0.06 → 0.08。
+    assert sum(premultiplied_deltas) / len(premultiplied_deltas) <= 0.08
     assert max_alpha_delta <= 96
 
 

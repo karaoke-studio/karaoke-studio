@@ -467,62 +467,123 @@ bool validGlyphIndices(const std::vector<UINT16> &glyphs) {
     return !glyphs.empty() && glyphs.front() != 0;
 }
 
-Microsoft::WRL::ComPtr<IDWriteFontFace> findFallbackFontFace(
+// 镜像 Qt(CPU) 实测回退选字（2026-10-11 bbox 指纹）：汉字/假名→SimSun，
+// 谚文→MS Gothic 系。两侧同链才能保证缺字场景 CPU/GPU 一致；历史链
+// （JhengHei Bold 优先 + 全库 Bold 扫描）与 Qt 选字不同且权重硬编码。
+bool hanOrKanaScalar(UINT32 value) {
+    return (value >= 0x3040 && value <= 0x30FF)   // 平/片假名・注音符号
+        || (value >= 0x3400 && value <= 0x4DBF)   // CJK 扩展 A
+        || (value >= 0x4E00 && value <= 0x9FFF)   // CJK 统一表意
+        || (value >= 0xF900 && value <= 0xFAFF);  // CJK 兼容表意
+}
+
+bool hangulScalar(UINT32 value) {
+    return (value >= 0xAC00 && value <= 0xD7AF)
+        || (value >= 0x1100 && value <= 0x11FF)
+        || (value >= 0x3130 && value <= 0x318F);
+}
+
+std::wstring familyNameOf(IDWriteFontFamily *family) {
+    Microsoft::WRL::ComPtr<IDWriteLocalizedStrings> names;
+    BOOL exists = FALSE;
+    if (FAILED(family->GetFamilyNames(names.ReleaseAndGetAddressOf()))
+        || !names || names->GetCount() == 0) {
+        return {};
+    }
+    UINT32 length = 0;
+    if (FAILED(names->GetStringLength(0, &length))) {
+        return {};
+    }
+    std::wstring name(static_cast<std::size_t>(length) + 1, L'\0');
+    if (FAILED(names->GetString(0, name.data(), length + 1))) {
+        return {};
+    }
+    name.resize(length);
+    return name;
+}
+
+// 返回覆盖文本的回退族名（空串 = 未找到）。face 由调用方经带缓存的
+// 解析器取得（configure 侧 resolveFace/resolveMetricsFace），保证同一
+// (family, weight, italic) 全程同一 face 指针——直接在此创建 face 会让
+// 字形几何缓存键（含指针）偶发漂移（实测 cache misses 非确定 +1）。
+std::wstring findFallbackFontFace(
     IDWriteFontCollection *collection,
+    IDWriteFontCollection *typographicCollection,
     const std::wstring &text,
-    std::vector<Microsoft::WRL::ComPtr<IDWriteFontFace>> &successfulFaces,
+    int weight,
+    bool italic,
+    std::vector<std::wstring> &successfulFamilies,
     std::vector<UINT16> &glyphs
 ) {
-    for (const auto &face : successfulFaces) {
-        glyphs = glyphIndices(face.Get(), text);
-        if (validGlyphIndices(glyphs)) {
-            return face;
+    // 候选族按序尝试，覆盖性校验走统一规则（权重随请求，而非旧链硬编码
+    // Bold），保证回退字形的观感两侧一致。已命中的族名前置缓存加速同
+    // 脚本重复字符。
+    std::vector<std::wstring> candidates = successfulFamilies;
+    const auto appendUnique = [&](const wchar_t *familyName) {
+        if (std::find(candidates.begin(), candidates.end(), familyName)
+            == candidates.end()) {
+            candidates.emplace_back(familyName);
         }
+    };
+    const auto scalars = unicodeScalars(text);
+    if (containsEmoji(text)) {
+        appendUnique(L"Segoe UI Symbol");
     }
+    if (std::any_of(
+            scalars.begin(), scalars.end(),
+            [](UINT32 value) { return hanOrKanaScalar(value); })) {
+        appendUnique(L"SimSun");
+        appendUnique(L"MS Gothic");
+        appendUnique(L"Meiryo");
+        appendUnique(L"Microsoft YaHei");
+        appendUnique(L"Yu Gothic");
+    }
+    if (std::any_of(
+            scalars.begin(), scalars.end(),
+            [](UINT32 value) { return hangulScalar(value); })) {
+        appendUnique(L"MS Gothic");
+        appendUnique(L"Malgun Gothic");
+    }
+    appendUnique(L"Microsoft JhengHei");
 
-    auto tryFace = [&](Microsoft::WRL::ComPtr<IDWriteFontFace> face) {
-        if (!face) {
-            return Microsoft::WRL::ComPtr<IDWriteFontFace>{};
+    auto tryFamily = [&](const std::wstring &familyName) -> std::wstring {
+        if (familyName.empty()) {
+            return {};
         }
-        std::vector<UINT16> candidate = glyphIndices(face.Get(), text);
+        const auto faces = resolveFontFaces(
+            collection, typographicCollection, familyName, weight, italic
+        );
+        if (!faces.outline) {
+            return {};
+        }
+        std::vector<UINT16> candidate = glyphIndices(faces.outline.Get(), text);
         if (!validGlyphIndices(candidate)) {
-            return Microsoft::WRL::ComPtr<IDWriteFontFace>{};
+            return {};
         }
         glyphs = std::move(candidate);
-        successfulFaces.push_back(face);
-        return face;
+        if (std::find(
+                successfulFamilies.begin(), successfulFamilies.end(), familyName)
+            == successfulFamilies.end()) {
+            successfulFamilies.push_back(familyName);
+        }
+        return familyName;
     };
 
-    if (containsEmoji(text)) {
-        if (auto face = tryFace(createFontFace(
-                collection, nullptr, L"Segoe UI Symbol", DWRITE_FONT_WEIGHT_NORMAL, false))) {
-            return face;
+    for (const auto &candidate : candidates) {
+        if (!tryFamily(candidate).empty()) {
+            return candidate;
         }
     }
-    if (auto face = tryFace(createFontFace(
-            collection, nullptr, L"Microsoft JhengHei", DWRITE_FONT_WEIGHT_BOLD, false))) {
-        return face;
-    }
+    // 兜底扫描：按系统族顺序逐族尝试（名字解析走同一统一规则）。
     const UINT32 familyCount = collection->GetFontFamilyCount();
     for (UINT32 index = 0; index < familyCount; ++index) {
         Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
         if (FAILED(collection->GetFontFamily(index, family.ReleaseAndGetAddressOf()))) {
             continue;
         }
-        Microsoft::WRL::ComPtr<IDWriteFont> font;
-        if (FAILED(family->GetFirstMatchingFont(
-                DWRITE_FONT_WEIGHT_BOLD,
-                DWRITE_FONT_STRETCH_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                font.ReleaseAndGetAddressOf()))) {
-            continue;
-        }
-        Microsoft::WRL::ComPtr<IDWriteFontFace> candidate;
-        if (FAILED(font->CreateFontFace(candidate.ReleaseAndGetAddressOf()))) {
-            continue;
-        }
-        if (auto face = tryFace(std::move(candidate))) {
-            return face;
+        const std::wstring name = familyNameOf(family.Get());
+        if (!tryFamily(name).empty()) {
+            return name;
         }
     }
     glyphs.clear();

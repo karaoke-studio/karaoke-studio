@@ -361,7 +361,9 @@ struct Direct2DGpuBackend::Impl {
     // Vertical-metrics faces (default instance / unsimulated) parallel to
     // ``fontFaces``; see resolveFontFaces in d2d_font_fallback.cpp.
     std::map<FontFaceKey, Microsoft::WRL::ComPtr<IDWriteFontFace>> metricFaces;
-    std::vector<Microsoft::WRL::ComPtr<IDWriteFontFace>> fallbackFaces;
+    // Fallback chain memory: family names that previously covered a missing
+    // character, replayed first on the next fallback (see findFallbackFontFace).
+    std::vector<std::wstring> fallbackFamilies;
     std::map<TextGlyphKey, GlyphGeometryResource> textGlyphResources;
     std::map<VectorGlyphKey, GlyphGeometryResource> vectorGlyphResources;
     std::uint64_t glyphGeometryUseSerial = 0;

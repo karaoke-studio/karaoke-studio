@@ -61,10 +61,21 @@ std::vector<UINT16> glyphIndices(
 
 bool validGlyphIndices(const std::vector<UINT16> &glyphs);
 
-Microsoft::WRL::ComPtr<IDWriteFontFace> findFallbackFontFace(
+// Fallback for characters the requested family cannot cover.  Mirrors the
+// Qt (CPU) fallback choices observed on Windows (Han/kana -> SimSun, Hangul
+// -> MS Gothic class) and validates every candidate through the same unified
+// weight rules as the main font, so missing-glyph rendering stays consistent
+// across the two backends.  Returns the covering family name (empty when not
+// found); the caller resolves the face through its cached resolver so the
+// pointer stays stable for the glyph-geometry cache.  ``successfulFamilies``
+// caches family names that previously covered a character.
+std::wstring findFallbackFontFace(
     IDWriteFontCollection *collection,
+    IDWriteFontCollection *typographicCollection,
     const std::wstring &text,
-    std::vector<Microsoft::WRL::ComPtr<IDWriteFontFace>> &successfulFaces,
+    int weight,
+    bool italic,
+    std::vector<std::wstring> &successfulFamilies,
     std::vector<UINT16> &glyphs
 );
 
