@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Hashable, Optional
 
-from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 
 from krok_helper.subtitle_render.engine.render.effects import (
@@ -814,6 +814,7 @@ def build_title_overlay_layer(
                         run_end += 1
                     run = glyphs[run_start:run_end]
                     path = QPainterPath()
+                    path.setFillRule(Qt.FillRule.WindingFill)
                     for glyph in run:
                         if glyph.guide_symbol is not None:
                             # 矢量导唱符：作为路径并入本 run，共享同一套

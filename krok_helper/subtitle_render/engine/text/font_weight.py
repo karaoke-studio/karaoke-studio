@@ -62,10 +62,13 @@ embolden_glyph_path = winding_glyph_path
 def apply_weight_plan(font: QFont, plan: ResolvedWeight) -> None:
     """把解析决策应用到 QFont（调用方已设 family/pixelSize）。"""
     if plan.render_mode == "axis":
+        # 可变字体：只设轴值，不调 setWeight——实测（Noto Sans SC@600，
+        # 2026-10-08）setWeight 会把 Qt 匹配吸附到最近命名实例/静态 face
+        # 并使轴值失效（@600 平局档吸附到 Bold 且非单调）；轴值本身即
+        # 权威实例。字体缺省 weight 字段不参与 VF 实例选择。
         font.setVariableAxis(
             QFont.Tag(_AXIS_TAG_WEIGHT), float(plan.axis_value or 400)
         )
-        font.setWeight(QFont.Weight(int(plan.axis_value or 400)))
         return
     # 静态字体：绝对字重交给引擎匹配 + 合成粗体。
     font.setWeight(QFont.Weight(plan.requested_weight))

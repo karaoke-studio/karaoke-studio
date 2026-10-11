@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Callable, Hashable, Optional
 
-from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 
 from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
@@ -913,6 +913,7 @@ def ruby_text_path_and_rect(
     """Build the visible ruby path and its authored horizontal layout box."""
 
     path = QPainterPath()
+    path.setFillRule(Qt.FillRule.WindingFill)
     if target_width is None:
         path.addText(float(x), float(baseline_y), ruby_font, reading)
         path = embolden_glyph_path(path, ruby_font)

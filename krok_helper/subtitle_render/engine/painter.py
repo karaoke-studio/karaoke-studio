@@ -5153,6 +5153,10 @@ def _line_text_path(
     char_path_offsets: list[float] | None = None,
 ) -> QPainterPath:
     path = QPainterPath()
+    # 组合字形路径必须 NonZero 填充：addPath 不传播子路径的填充规则，
+    # 目标默认 OddEven 会让 VF 插值实例的交叉轮廓镂空（Adobe Type/
+    # CFF/OpenType 轮廓标准均为 nonzero winding）。
+    path.setFillRule(Qt.FillRule.WindingFill)
     if char_lefts is None:
         char_lefts = _char_left_positions(char_widths, x, False)
     if char_path_offsets is None:
@@ -5309,6 +5313,7 @@ def _paint_line_with_character_transition(
             )
 
         path = QPainterPath()
+        path.setFillRule(Qt.FillRule.WindingFill)
         for char_index in indices:
             layout_glyph = glyphs_by_index[char_index] if char_index < len(glyphs_by_index) else None
             glyph = line.chars[char_index]

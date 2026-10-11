@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Hashable, Protocol
 
-from PyQt6.QtCore import QPointF, QRectF
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import (
     QFont,
     QFontMetrics,
@@ -276,6 +276,7 @@ def vertical_ruby_path_and_wipe(
         return QPainterPath(), (), float(base_top), float(base_top), ()
     count = len(timed_units)
     ruby_path = QPainterPath()
+    ruby_path.setFillRule(Qt.FillRule.WindingFill)
     segments: list[VerticalRubyWipeSegment] = []
     ink_bounds: list[tuple[float, float]] = []
     for unit_index, (unit, (start_ms, end_ms)) in enumerate(timed_units):
@@ -1451,6 +1452,7 @@ def layout_vertical_line(
     if line.wipe_reverse:
         intervals.reverse()
     text_path = QPainterPath()
+    text_path.setFillRule(Qt.FillRule.WindingFill)
     cells: list[tuple[int, int]] = []
     for index, char in enumerate(chars):
         cell_top = y_top + index * cell_h

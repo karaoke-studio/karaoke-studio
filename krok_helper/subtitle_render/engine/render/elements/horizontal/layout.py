@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from PyQt6.QtCore import QRectF
+from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QFontMetrics, QPainterPath
 
 from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
@@ -692,6 +692,7 @@ def bitmap_guide_glyphs(layout: TextLayout) -> list[GlyphLayout]:
 
 def glyph_run_path(glyphs: list[GlyphLayout], baseline_y: int) -> QPainterPath:
     path = QPainterPath()
+    path.setFillRule(Qt.FillRule.WindingFill)
     for glyph in glyphs:
         path.addPath(glyph_path(glyph, baseline_y))
     return path

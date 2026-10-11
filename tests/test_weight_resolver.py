@@ -171,6 +171,20 @@ class TestStaticMultiFace:
         assert r.base_face.weight == 500
         assert r.mark == "模拟"
 
+    def test_semibold_single_face_never_synthesizes(self):
+        """{600} 族（Segoe UI Semibold 型）：600 face 不合成——@600 精确、
+        其余就近，全档恒定（拉丁实测 152x113 不变；早先观测到的变粗实为
+        CJK 回退 face(400) 的合成）。"""
+        exact = resolve(_cap("t", (600,)), 600)
+        assert exact.render_mode == "face"
+        assert exact.is_exact
+        assert exact.mark is None
+        for w in (400, 500, 700, 900):
+            plan = resolve(_cap("t", (600,)), w)
+            assert plan.render_mode == "snap"
+            assert plan.base_face.weight == 600
+            assert plan.synthetic_bold is False
+
 
 class TestMissing:
     def test_no_faces(self):

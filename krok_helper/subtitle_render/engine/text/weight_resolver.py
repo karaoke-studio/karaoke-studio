@@ -10,9 +10,11 @@
 引擎匹配口径（2026-10-08 实测 QFontInfo/像素校准，供标注）：
   请求 W 精确命中 → 该 face；
   缺档 → 就近匹配（|face−W| 最小，**平局取更轻 face**）；
-  匹配 face < 600 且 W ≥ 600 → 引擎合成粗体（faux bold，粗 face 不可再加粗）。
+  匹配 face < 600 且 W ≥ 600 → 引擎合成粗体（faux bold，粗 face 豁免）。
   实测锚点：Yu Gothic{300,400,500,700}@600 → 500+合成（平局取轻），
-  NK{400,700}@600 → 700（无平局就近），思源{…,500,700,…}@600 → 500+合成。
+  NK{400,700}@600 → 700（无平局就近），思源@600 → 500+合成，
+  Segoe UI Semibold{600}@600/700 → 同 face 无合成（拉丁实测 152x113 恒定；
+  早先「600 face 会合成」的观测实为 CJK 回退 face(400) 的合成）。
 
 本模块无副作用、无 I/O、无缓存。
 """
@@ -118,19 +120,17 @@ def resolve(capabilities: FontCapabilities | None, weight: int) -> ResolvedWeigh
 
     upright = _upright(capabilities)
 
-    # ── 精确命中 ──
-    for face in upright:
-        if face.weight == W:
-            return ResolvedWeight(
-                render_mode="face", base_face=face,
-                requested_weight=W, is_exact=True,
-            )
-
-    # ── 缺档：引擎就近匹配，标注「合成」或「就近」──
+    # ── 静态：引擎就近匹配 + 合成标注 ──
+    # 合成条件（实测）：请求≥600 且匹配 face<600（600/700 face 均豁免）。
     matched = _engine_face(upright, W)
     if W >= 600 and matched.weight < 600:
         return ResolvedWeight(
             render_mode="engine_synthetic", base_face=matched, requested_weight=W,
+        )
+    if matched.weight == W:
+        return ResolvedWeight(
+            render_mode="face", base_face=matched,
+            requested_weight=W, is_exact=True,
         )
     return ResolvedWeight(
         render_mode="snap", base_face=matched, requested_weight=W,

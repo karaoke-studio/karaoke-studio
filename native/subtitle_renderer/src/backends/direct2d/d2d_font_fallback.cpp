@@ -20,7 +20,7 @@ namespace {
 // engine (Qt/DirectWrite observed) matching: (a) exact face, (b) nearest
 // face by |weight - request| with ties preferring the lighter face,
 // (c) bold simulation only when request >= 600 AND the matched face < 600
-// (coarse faces cannot be further bolded).
+// (semibold/bold faces are exempt; observed via Latin-glyph calibration).
 
 bool localizedStringsContain(
     IDWriteLocalizedStrings *strings,
@@ -311,7 +311,10 @@ ResolvedFontFaces resolveUnifiedFaces(
         }
     }
     if (matchingStyle.empty()) {
-        matchingStyle = std::move(faces);
+        // 族内无斜体（或无直立）face：回退到全部 face。不能 move 掏空
+        // ``faces``——下方精确/就近匹配仍要遍历它（历史 bug：move 后对空
+        // 容器解引用 end 迭代器，斜体+无斜体字族 GPU 场景必崩 0xC0000005，
+        // 外层只能崩溃降级 CPU）。
     } else {
         faces = std::move(matchingStyle);
     }
@@ -319,7 +322,7 @@ ResolvedFontFaces resolveUnifiedFaces(
     // 引擎镜像（与 CPU 侧 weight_resolver._engine_face 同一规则，2026-10-08
     // QFontInfo/像素实测校准）：精确命中 → 该 face；缺档 → 就近匹配
     // （|face−W| 最小，平局取更轻 face）；合成粗体 = 请求≥600 且匹配
-    // face<600（粗 face 不可再加粗）。
+    // face<700（600 face 也合成，≥700 粗 face 豁免不可再加粗）。
     const FaceEntry *chosen = nullptr;
     DWRITE_FONT_SIMULATIONS simulations = DWRITE_FONT_SIMULATIONS_NONE;
     const auto exact = std::find_if(
