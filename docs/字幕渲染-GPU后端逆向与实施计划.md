@@ -1039,6 +1039,9 @@ render/readback CSV，以及 geometry/layout cache 的 hit/miss/bytes 诊断。�
 - 缺字 fallback 同步 N3 策略：先复用已经成功的 fallback face，再尝试
   `Microsoft JhengHei Bold`，最后以 Bold 扫描系统字体集合；与 N3 一致，只以首个
   UTF-16 glyph index 判断有效性，fallback outline 仍用原请求 face 查询 design metrics；
+  （**2026-10-11 已改**：成功-face 复用、硬编码候选链与「首字形」判据整体下线，
+  改为「Python 决策族名（Qt 实测选字）→ DirectWrite 系统回退 MapCharacters」+ 按文本簇
+  全串覆盖判定，见下文 2026-10-11 条目）
 - 保留“双 oracle”边界：绝对 lane/基线/位置由现有 Painter 门禁负责，glyph 几何、描边和
   glow 由 N3 实帧负责。这样不会为了贴 N3 的独立布局锚点而破坏现有 Painter 产品输出；
 - 新增 `scripts/compare_gpu_n3_reference.py`：从 N3 输出帧减去原视频恢复字幕 mask，GPU
@@ -1783,3 +1786,37 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - 兼容性：旧宿主发的 IR 没有 `signal_head` 字段，native 按 `QJsonValue::toBool(true)` 解析，
   保持改动前「每行画灯」的旧行为；回归测试以删除字段的 IR 直喂 sidecar 钉住该约定
   （`test_gpu_g4_legacy_ir_without_signal_head_keeps_per_line_lamps`）。
+
+### 2026-10-11：字体解析统一——逐 face 能力、显式实例决策、双后端同一份回退
+
+背景：CPU（Qt）与 GPU（DirectWrite）各自维护「字重→face / 缺字→回退」规则，
+两侧靠手写镜像与像素校准维持一致；实测仍有分叉（斜体在 CPU 合成倾斜而 GPU 不
+倾斜、回退族名两侧不同、静态/可变同名族互相误伤）。
+
+- **能力层**（`engine/text/font_capabilities.py`）：改为**逐 face** 读 fvar 判可变
+  （`variable_style` / `axis_present`），`axis_effective` 仅作渲染指纹的辅助确认；
+  记录 `has_italic_face`；缓存带字体库代际（`clear_capabilities_cache` 递增）。
+- **决策层**（`engine/text/weight_resolver.py`）：新增 `ResolvedFontInstance`
+  （族 / face style / face 字重 / 轴值 / 模拟加粗 / 模拟倾斜 / 精确性 / 回退原因 /
+  无路径身份），字重与斜体联合匹配；`ResolvedWeight` 保留为兼容视图。
+- **就近匹配平局规则修正**（全档实测）：`|face−W|` 最小 → **平局取更接近 Normal(400)
+  的 face**（Yu Gothic@350 → Regular(400) 而非 Light；@600 → Medium+合成；Noto@200 →
+  Light；Yu Gothic UI@325 → Semilight；Meiryo@550 → Regular）。旧「平局取轻」在 400
+  以下档位选错 face（GPU 预测与 Qt 实际渲染分叉）。
+- **覆盖检查**：native 侧 `validGlyphIndices`（只查首字形）下线，改为
+  `textFullyCovered`——按文本簇全串判定，变体选择符 / 组合符 / 控制符 / 空白不误判。
+- **缺字回退**：native 侧硬编码候选链（SimSun / MS Gothic / Meiryo / YaHei /
+  Malgun/JhengHei）与「上一字符成功族」偏置整体删除；改为
+  「Python 决策族名（Qt 实测选字，随 IR 的 `fallback_family` 下发）→
+  `IDWriteFontFallback::MapCharacters`（系统回退，带语言/字重/斜体）」，按
+  (基族, 字重, 斜体, 文本) 缓存，同一请求恒得同一结果。
+- **IR 契约**：`<slot>_font_resolved`（face style / face 字重 / 轴值 / `sim_bold` /
+  `sim_italic` / 原因）随样式字典下发，GPU 按决策建 face（含 OBLIQUE 模拟），不再
+  自行就地匹配；平凡决策（精确静态命中）不发键。逐字符新增 `fallback_family`。
+- **线程/成本**：覆盖与回退解析全部留在 GUI 线程预热（与 `get_capabilities` 同一约定），
+  渲染线程只查纯 dict 表。稳态 ≈1–9ms/槽位；首个含缺字的预热含 Qt 回退设施一次性
+  初始化（实测 ≈0.8–1.4s，任何首次塑形都会付）。
+- 验证：`tests/test_subtitle_render_font_resolution.py`（纯逻辑 + face 级断言）、
+  `tests/test_subtitle_render_font_resolution_windows.py`（真实平台子进程探针，
+  决策↔引擎交叉验证）、GPU 侧 `test_gpu_draws_python_supplied_fallback_family` /
+  `test_gpu_applies_synthetic_oblique_from_python_decision`。

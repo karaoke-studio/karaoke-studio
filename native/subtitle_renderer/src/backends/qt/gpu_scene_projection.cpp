@@ -126,8 +126,10 @@ void applyGpuResolvedStyle(
         : std::nullopt;
     target.fontWeight = source.fontWeight;
     target.fontAxis = source.fontAxis;
+    target.fontHint = source.fontHint;
     target.latinFontWeight = source.latinFontWeight;
     target.latinFontAxis = source.latinFontAxis;
+    target.latinFontHint = source.latinFontHint;
     target.latinFontStretchPct = source.latinFontStretchPct;
     target.italic = source.italic;
     target.allowBiting = source.allowBiting;
@@ -239,8 +241,12 @@ void applyGpuResolvedStyle(
     target.rubyFontAxis = rubyUsesMainFont
         ? source.fontAxis
         : source.rubyFontAxis;
+    target.rubyFontHint = rubyUsesMainFont
+        ? source.fontHint
+        : source.rubyFontHint;
     target.rubyLatinFontWeight = source.rubyLatinFontWeight;
     target.rubyLatinFontAxis = source.rubyLatinFontAxis;
+    target.rubyLatinFontHint = source.rubyLatinFontHint;
     target.rubyLatinFontStretchPct = source.rubyLatinFontStretchPct.value_or(
         source.latinFontStretchPct
     );
@@ -858,6 +864,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sourceLine.chars[index].vectorGlyph,
                 sourceLine.chars[index].bitmapGuide,
             };
+            sceneChar.fallbackFamily =
+                sourceLine.chars[index].fallbackFamily.toStdWString();
             if (sceneChar.bitmapGuide.has_value()) {
                 // 动图锚点与 displayWindows 同口径：IR 侧是 track 时间，
                 // 渲染 tMs 含 timingOffset / sourceOffset，这里补齐偏移，

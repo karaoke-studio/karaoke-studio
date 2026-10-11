@@ -5,6 +5,7 @@
 
 #include <d2d1_2.h>
 #include <dwrite.h>
+#include <dwrite_2.h>
 
 #include <atomic>
 #include <cstdint>
@@ -228,11 +229,14 @@ struct Direct2DGpuBackend::Impl {
         std::uint64_t lastUse = 0;
     };
 
-    // (family, requested weight, italic, axis hint): the variable-font axis
-    // flag must be part of the key, so a static lookup cannot poison the cache
-    // for a later variable-axis instance (and vice versa) sharing the same
-    // (family, weight, italic).
-    using FontFaceKey = std::tuple<std::wstring, int, bool, bool>;
+    // (family, requested weight, italic, axis hint, face weight, synthetic
+    // bold, synthetic italic, axis value): the variable-font axis flag *and*
+    // the Python-resolved instance must be part of the key, so a static
+    // lookup cannot poison the cache for a later axis instance (and vice
+    // versa) sharing the same (family, weight, italic).
+    using FontFaceKey = std::tuple<
+        std::wstring, int, bool, bool, int, bool, bool, float
+    >;
     using TextGlyphKey = std::tuple<
         std::uintptr_t, int, std::uint32_t, int, std::vector<UINT16>
     >;
@@ -361,9 +365,14 @@ struct Direct2DGpuBackend::Impl {
     // Vertical-metrics faces (default instance / unsimulated) parallel to
     // ``fontFaces``; see resolveFontFaces in d2d_font_fallback.cpp.
     std::map<FontFaceKey, Microsoft::WRL::ComPtr<IDWriteFontFace>> metricFaces;
-    // Fallback chain memory: family names that previously covered a missing
-    // character, replayed first on the next fallback (see findFallbackFontFace).
-    std::vector<std::wstring> fallbackFamilies;
+    // DirectWrite system font fallback (IDWriteFactory2::GetSystemFontFallback),
+    // resolved lazily; the missing-glyph chain consults it with the user
+    // locale instead of a hardcoded per-script family list.
+    Microsoft::WRL::ComPtr<IDWriteFontFallback> systemFontFallback;
+    // (key, weight, italic, text) -> covering family name.  Pure function of
+    // the request: no "previous character succeeded with family X" bias.
+    std::map<std::tuple<std::wstring, int, bool, std::wstring>, std::wstring>
+        fallbackFamiliesByText;
     std::map<TextGlyphKey, GlyphGeometryResource> textGlyphResources;
     std::map<VectorGlyphKey, GlyphGeometryResource> vectorGlyphResources;
     std::uint64_t glyphGeometryUseSerial = 0;

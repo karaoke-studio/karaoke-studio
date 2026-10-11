@@ -14,6 +14,68 @@
 
 namespace krok::subtitle::native::protocol {
 
+namespace {
+
+// ``<slot>_font_resolved`` → FontInstanceHint（缺 key / 非对象 = present=false，
+// 渲染端回落到 fontAxis + 引擎镜像规则）。键名与 native/protocol.py 的
+// ``_font_face_slot_overrides`` 一一对应。
+FontInstanceHint parseFontInstanceHint(
+    const QJsonObject &object,
+    const QString &key
+) {
+    FontInstanceHint hint;
+    const QJsonValue value = object.value(key);
+    if (!value.isObject()) {
+        return hint;
+    }
+    const QJsonObject resolved = value.toObject();
+    hint.present = true;
+    hint.style = stringValue(resolved, QStringLiteral("style")).toStdWString();
+    hint.faceWeight = intValue(resolved, QStringLiteral("weight"), 0);
+    hint.syntheticBold = resolved.value(
+        QStringLiteral("sim_bold")
+    ).toBool(false);
+    hint.syntheticItalic = resolved.value(
+        QStringLiteral("sim_italic")
+    ).toBool(false);
+    const QJsonValue axis = resolved.value(QStringLiteral("axis"));
+    if (axis.isDouble()) {
+        hint.variable = true;
+        hint.axis = static_cast<float>(axis.toDouble());
+    }
+    return hint;
+}
+
+// 四个槽位的实例决策一起读；缺 key 的槽位保持既有值（差分重放语义与
+// font_axis 一致：不发该键 = 沿用上次全量 configure 的决策）。
+void applyFontInstanceHints(
+    ResolvedStyle &style,
+    const QJsonObject &object
+) {
+    if (object.value(QStringLiteral("font_resolved")).isObject()) {
+        style.fontHint = parseFontInstanceHint(
+            object, QStringLiteral("font_resolved")
+        );
+    }
+    if (object.value(QStringLiteral("latin_font_resolved")).isObject()) {
+        style.latinFontHint = parseFontInstanceHint(
+            object, QStringLiteral("latin_font_resolved")
+        );
+    }
+    if (object.value(QStringLiteral("ruby_font_resolved")).isObject()) {
+        style.rubyFontHint = parseFontInstanceHint(
+            object, QStringLiteral("ruby_font_resolved")
+        );
+    }
+    if (object.value(QStringLiteral("ruby_latin_font_resolved")).isObject()) {
+        style.rubyLatinFontHint = parseFontInstanceHint(
+            object, QStringLiteral("ruby_latin_font_resolved")
+        );
+    }
+}
+
+}  // namespace
+
 bool supportedFillMode(const QString &mode) {
     return mode == QStringLiteral("solid")
         || mode == QStringLiteral("gradient_horizontal")
@@ -485,6 +547,7 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
         cfg.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), cfg.fontWeight), 1, 999);
     }
     cfg.fontAxis = style.value(QStringLiteral("font_axis")).toBool(cfg.fontAxis);
+    applyFontInstanceHints(cfg, style);
     if (hasNonNull(style, QStringLiteral("latin_font_size_px"))) {
         cfg.latinFontSizePx = std::max(
             1, intValue(style, QStringLiteral("latin_font_size_px"), cfg.fontSizePx)
@@ -836,6 +899,7 @@ ResolvedStyle resolvedStyleFromTitle(
     cfg.fontAxis = title.value(
         QStringLiteral("font_axis")
     ).toBool(cfg.fontAxis);
+    applyFontInstanceHints(cfg, title);
     cfg.latinFontAxis = title.value(
         QStringLiteral("latin_font_axis")
     ).toBool(cfg.latinFontAxis);
@@ -930,6 +994,7 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     }
     base.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), base.fontWeight), 1, 999);
     base.fontAxis = style.value(QStringLiteral("font_axis")).toBool(base.fontAxis);
+    applyFontInstanceHints(base, style);
     if (style.value(QStringLiteral("latin_font_weight")).isDouble()) {
         base.latinFontWeight = std::clamp(intValue(style, QStringLiteral("latin_font_weight"), base.fontWeight), 1, 999);
     }
@@ -2015,6 +2080,9 @@ static void parseSourceTracks(
                     ch.pauseReleaseMs = charObject.value(QStringLiteral("pause_release_ms")).toInt();
                 }
                 ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
+                ch.fallbackFamily = stringValue(
+                    charObject, QStringLiteral("fallback_family")
+                );
                 ch.vectorGlyph = resolveVectorGlyph(charObject);
                 ch.bitmapGuide = parseBitmapGuide(
                     charObject.value(QStringLiteral("bitmap_guide"))

@@ -206,6 +206,11 @@ struct TextChar {
     std::shared_ptr<const VectorGlyph> vectorGlyph;
     std::optional<BitmapGuide> bitmapGuide;
     std::vector<WipePoint> wipePoints;
+    // Python-resolved missing-glyph fallback family for this cell (Qt's
+    // measured choice, so the GPU draws the same font as the CPU renderer).
+    // Empty = the requested face covers the cell or no decision was shipped.
+    // Kept last so positional aggregate initialization stays valid.
+    std::wstring fallbackFamily;
     bool operator==(const TextChar &other) const {
         const auto sameGlyph =
             (vectorGlyph == other.vectorGlyph)
@@ -214,6 +219,7 @@ struct TextChar {
             && startMs == other.startMs
             && endMs == other.endMs
             && styleIndex == other.styleIndex
+            && fallbackFamily == other.fallbackFamily
             && sameGlyph
             && bitmapGuide == other.bitmapGuide
             && wipePoints == other.wipePoints;
@@ -350,6 +356,28 @@ struct TextLine {
     bool operator==(const TextLine &) const = default;
 };
 
+// Python-resolved font instance for one style slot (single authority).
+//
+// engine/text/weight_resolver.py resolves (family, weight, italic) into an
+// explicit decision -- target face weight plus whether the engine synthesises
+// bold/oblique -- and native/protocol.py ships it as ``*_font_resolved``.
+// The GPU executes the decision instead of matching on its own, so both
+// backends draw the same face.  ``present`` false keeps the engine-mirrored
+// rules (old IR / slots Python resolved trivially).
+struct FontInstanceHint {
+    bool present = false;
+    std::wstring style;
+    int faceWeight = 0;
+    bool syntheticBold = false;
+    // Family has no real italic face: the requested italic is drawn by the
+    // DirectWrite oblique simulation, mirroring QFont's synthetic oblique.
+    bool syntheticItalic = false;
+    // True variable-font decision: instantiate the wght axis at ``axis``.
+    bool variable = false;
+    float axis = 0.0f;
+    bool operator==(const FontInstanceHint &) const = default;
+};
+
 struct TextStyle {
     std::string layoutSemantics = "legacy";
     std::string smartHorizontal = "none";
@@ -361,8 +389,12 @@ struct TextStyle {
     // 可变字体标记（顺应引擎）：字重回到绝对字重，模拟加粗交还引擎，
     // 该标记仅指示渲染端是否走轴值实例（而非静态就近匹配）。
     bool fontAxis = false;
+    // Python 侧统一解析出的字体实例决策（见 FontInstanceHint）；缺省时
+    // 渲染端按 fontAxis + 引擎镜像规则自行解析。
+    FontInstanceHint fontHint;
     std::optional<int> latinFontWeight;
     bool latinFontAxis = false;
+    FontInstanceHint latinFontHint;
     int latinFontStretchPct = 100;
     bool italic = false;
     bool allowBiting = false;
@@ -420,8 +452,10 @@ struct TextStyle {
     std::optional<float> rubyLatinFontSize;
     int rubyFontWeight = 400;
     bool rubyFontAxis = false;
+    FontInstanceHint rubyFontHint;
     std::optional<int> rubyLatinFontWeight;
     bool rubyLatinFontAxis = false;
+    FontInstanceHint rubyLatinFontHint;
     int rubyLatinFontStretchPct = 100;
     float rubyGap = 0.0f;
     float rubyInterval = 0.0f;

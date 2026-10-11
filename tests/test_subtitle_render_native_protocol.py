@@ -731,6 +731,13 @@ def test_native_text_semantics_is_backend_independent_contract():
 
 
 def test_native_direct2d_font_fallback_has_narrow_contract():
+    """native 缺字回退/覆盖检查的窄接口契约（2026-10-11 更新）。
+
+    更新原因（与 GPU 字体解析改造同批）：历史契约钉住的是「首个 glyph 判
+    覆盖」（``validGlyphIndices``）+「写死 SimSun/JhengHei 候选链」；新口径
+    要求按文本簇全串判覆盖，缺字回退改为「Python 决策族名（Qt 实测选字）
+    → DirectWrite 系统字体回退（MapCharacters）」，两侧不再各维护候选链。
+    """
     header_source = Path(
         "native/subtitle_renderer/src/backends/direct2d/d2d_font_fallback.h"
     ).read_text(encoding="utf-8")
@@ -749,10 +756,20 @@ def test_native_direct2d_font_fallback_has_narrow_contract():
     assert "createFontFace(" in header_source
     assert "containsEmoji(" in header_source
     assert "glyphIndices(" in header_source
-    assert "validGlyphIndices(" in header_source
+    # 覆盖检查按簇全串判定（std::wstring 版），首字形检查已下线。
+    assert "textFullyCovered(" in header_source
+    assert "validGlyphIndices" not in header_source
+    assert "validGlyphIndices" not in implementation_source
+    # 缺字回退：系统回退对象 + MapCharacters，且不再有「上一字符成功族」
+    # 的历史偏置（成功族列表会改变后续字符的匹配优先级）。
+    assert "IDWriteFontFallback" in header_source
+    assert "MapCharacters" in implementation_source
+    assert "successfulFamilies" not in header_source
+    assert "successfulFamilies" not in implementation_source
     assert "unicodeScalars(" not in header_source
     assert '#include "d2d_font_fallback.h"' in backend_source
-    assert "Microsoft JhengHei" in implementation_source
+    # 回退候选族名不再写死在 native 侧（JhengHei 是历史链的末位哨兵）。
+    assert "Microsoft JhengHei" not in implementation_source
     assert "Microsoft JhengHei" not in backend_source
     assert "src/backends/direct2d/d2d_font_fallback.cpp" in cmake_source
     assert "src/backends/direct2d/d2d_font_fallback.h" in cmake_source

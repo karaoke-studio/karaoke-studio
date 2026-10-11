@@ -24,6 +24,9 @@ struct TimingChar {
     bool explicitStart = false;
     bool explicitEnd = false;
     QString roleLabel;
+    // Python-resolved missing-glyph fallback family for this cell (Qt's
+    // measured choice); empty = requested face covers the cell.
+    QString fallbackFamily;
     // Shared pointer into RenderConfig::vectorGlyphs (schema 2 dedup table).
     std::shared_ptr<const krok::subtitle::native::VectorGlyph> vectorGlyph;
     std::optional<krok::subtitle::native::BitmapGuide> bitmapGuide;
@@ -191,8 +194,13 @@ struct ResolvedStyle {
     // 可变字体标记（顺应引擎）：字重回到绝对字重，模拟加粗交还引擎，
     // 该标记仅指示渲染端是否走轴值实例（而非静态就近匹配）。
     bool fontAxis = false;
+    // Python 侧统一解析出的字体实例（``*_font_resolved``）：face 字重 +
+    // 模拟加粗/倾斜 + 轴值。present=false（旧 IR / 平凡决策）时渲染端按
+    // fontAxis + 引擎镜像规则自行解析。
+    FontInstanceHint fontHint;
     std::optional<int> latinFontWeight;
     bool latinFontAxis = false;
+    FontInstanceHint latinFontHint;
     int latinFontStretchPct = 100;
     bool italic = false;
     bool allowBiting = false;
@@ -272,9 +280,11 @@ struct ResolvedStyle {
     QString rubyFontFamilyLatin;
     std::optional<int> rubyFontWeight;
     bool rubyFontAxis = false;
+    FontInstanceHint rubyFontHint;
     std::optional<int> rubyLatinFontSizePx;
     std::optional<int> rubyLatinFontWeight;
     bool rubyLatinFontAxis = false;
+    FontInstanceHint rubyLatinFontHint;
     std::optional<int> rubyLatinFontStretchPct;
     bool rubyFontFollowMain = true;
     int rubyGapPx = 8;

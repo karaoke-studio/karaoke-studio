@@ -13357,3 +13357,162 @@ def test_gpu_unbaked_static_layers_keep_relative_positions(workers, glyph_kind):
     # Different D2D AA paths can vary coverage at an edge, but must not move
     # the stroke contour (the old direct-stroke fallback shifted it >1px).
     assert np.abs(relative_centers(raw[0]) - relative_centers(baked[0])).max() < 0.3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_draws_python_supplied_fallback_family(monkeypatch) -> None:
+    """缺字回退用 Python 下发的族名（Qt 实测选字），而不是 GPU 自己的链。
+
+    ``fallback_family`` 由 GUI 线程预热的覆盖表产出（本会话 offscreen 平台
+    没有字体库，故这里 monkeypatch ``font_fallback_family`` 模拟预热结果）。
+    断言方式与历史回退校准同口径：比较墨量指纹——注入 SimSun 的渲染必须更
+    接近「直接请求 SimSun」而不是「直接请求 MS Gothic」。
+    """
+    import krok_helper.subtitle_render.native.protocol as native_protocol
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("漢", 0)], end_ms=1_000)]
+    )
+    probe = dict(
+        font_size_px=64,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+    )
+    requested = _g1_style(font_family="Segoe UI", font_family_latin="Segoe UI", **probe)
+    simsun = _g1_style(font_family="SimSun", font_family_latin="SimSun", **probe)
+    gothic = _g1_style(font_family="MS Gothic", font_family_latin="MS Gothic", **probe)
+
+    def _ink_mass(frame: bytes) -> int:
+        total = 0
+        for offset in range(3, len(frame), 4):
+            if frame[offset] > 32:
+                total += 1
+        return total
+
+    def _mass(style: Style) -> int:
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+            _, frames = _render_g1_frames(
+                renderer, style, (500,), force_warp=True, track=track
+            )
+        return _ink_mass(frames[0])
+
+    mass_simsun = _mass(simsun)
+    mass_gothic = _mass(gothic)
+    assert mass_simsun > 0 and mass_gothic > 0
+    assert mass_simsun != mass_gothic, "两字体墨量需可区分才能做指纹断言"
+
+    monkeypatch.setattr(
+        native_protocol,
+        "font_fallback_family",
+        lambda style, text: "SimSun" if text == "漢" else None,
+    )
+    mass_injected = _mass(requested)
+    assert abs(mass_injected - mass_simsun) < abs(mass_injected - mass_gothic), (
+        f"注入 SimSun 的回退渲染墨量 {mass_injected} 更接近另一字体"
+        f"（SimSun={mass_simsun}, MS Gothic={mass_gothic}）"
+    )
+
+    # 未下发族名时走 DirectWrite 系统回退（MapCharacters）：必须仍画出实心
+    # 汉字（墨量落在 CJK 字体的量级内），不能退化成 .notdef 空框或空白。
+    monkeypatch.setattr(
+        native_protocol, "font_fallback_family", lambda style, text: None
+    )
+    mass_system = _mass(requested)
+    lo, hi = min(mass_simsun, mass_gothic), max(mass_simsun, mass_gothic)
+    assert lo * 0.5 <= mass_system <= hi * 2.0, (
+        f"系统回退墨量 {mass_system} 不在 CJK 字形量级 "
+        f"[{lo}, {hi}] 内（疑似 .notdef 空框）"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_applies_synthetic_oblique_from_python_decision(monkeypatch) -> None:
+    """斜体请求 + 族内无斜体 face ⇒ GPU 施加 OBLIQUE 模拟（与 QFont 合成倾斜同源）。
+
+    Python 决策（``*_font_resolved.sim_italic``）在族内无真实斜体 face 时为
+    true；GPU 必须据此走 ``DWRITE_FONT_SIMULATIONS_OBLIQUE``，否则斜体在 GPU
+    画面上完全不倾斜（CPU 侧 QFont 会合成倾斜 → 两侧观感分叉）。
+    本会话 offscreen 平台没有字体库，故直接注入决策（真实平台的全链路由
+    tests/test_subtitle_render_font_resolution_windows.py 覆盖）。
+    """
+    import krok_helper.subtitle_render.engine.text.font_weight as font_weight
+    from krok_helper.subtitle_render.engine.text.weight_resolver import (
+        FontRequest,
+        ResolvedFontInstance,
+    )
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("l", 0)], end_ms=1_000)]
+    )
+    probe = dict(
+        font_family="MS Gothic",
+        font_family_latin="MS Gothic",
+        font_size_px=96,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+    )
+
+    def _ink_bounds(frame: bytes) -> tuple[int, int, int, int]:
+        xs: list[int] = []
+        ys: list[int] = []
+        for y in range(360):
+            row = y * 640 * 4
+            for x in range(640):
+                if frame[row + x * 4 + 3] > 32:
+                    xs.append(x)
+                    ys.append(y)
+        assert xs and ys
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def _render(style_kwargs: dict[str, object]) -> tuple[int, int, int, int]:
+        style = _g1_style(**{**probe, **style_kwargs})
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+            _, frames = _render_g1_frames(
+                renderer, style, (500,), force_warp=True, track=track
+            )
+        return _ink_bounds(frames[0])
+
+    upright = _render({"italic": False})
+    sheared = _render({"italic": True})
+    width_upright = upright[2] - upright[0]
+    height_upright = upright[3] - upright[1]
+    width_sheared = sheared[2] - sheared[0]
+    # 决策链在本会话真实跑通（模块 fixture 注册了 MS Gothic 应用字体）：
+    # 族内无斜体 face ⇒ sim_italic=true ⇒ GPU 施加 OBLIQUE 模拟。
+    # Qt 合成倾斜实测 tan≈0.34（MS Gothic / SimSun / Yu Gothic / YaHei /
+    # Noto 五族一致）→ 斜体墨迹盒比直立宽约 0.34×字高。历史行为是 GPU 完全
+    # 不倾斜（CPU 用 QFont 合成）→ 两侧斜体观感分叉。
+    assert width_sheared > width_upright + 0.2 * height_upright, (
+        f"斜体渲染未施加 OBLIQUE：直立宽 {width_upright}、斜体宽 {width_sheared}"
+        f"（字高 {height_upright}）"
+    )
+    assert abs((sheared[3] - sheared[1]) - height_upright) <= max(2, height_upright // 20)
+
+    # 反向对照：决策改成「族内有斜体 face」（sim_italic=false）后 GPU 不再
+    # 合成倾斜——证明上面的加宽确实来自决策而不是别的因素。
+    real_resolve = font_weight.resolve_font_instance
+
+    def _without_oblique(family, weight, italic=False, stretch_pct=100):
+        instance = real_resolve(family, weight, italic=italic, stretch_pct=stretch_pct)
+        if not italic or not instance.synthetic_italic:
+            return instance
+        return ResolvedFontInstance(
+            requested=instance.requested,
+            family=instance.family,
+            face_style=instance.face_style,
+            face_weight=instance.face_weight,
+            axis_value=instance.axis_value,
+            synthetic_bold=instance.synthetic_bold,
+            synthetic_italic=False,
+            exact=instance.exact,
+            reason=instance.reason,
+            is_variable=instance.is_variable,
+        )
+
+    monkeypatch.setattr(font_weight, "resolve_font_instance", _without_oblique)
+    plain = _render({"italic": True})
+    assert plain == upright, (
+        f"决策 sim_italic=false 时 GPU 仍倾斜：{plain} vs 直立 {upright}"
+    )

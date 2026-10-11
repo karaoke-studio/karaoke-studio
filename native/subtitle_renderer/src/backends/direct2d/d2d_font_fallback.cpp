@@ -1,8 +1,10 @@
 #include "d2d_font_fallback.h"
 
 #include <dwrite_3.h>
+#include <winnls.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cwchar>
 #include <unordered_map>
@@ -249,7 +251,8 @@ ResolvedFontFaces resolveUnifiedFaces(
     IDWriteFontFamily *family,
     int weight,
     bool italic,
-    bool axisHint
+    bool axisHint,
+    const ResolvedFaceHint &hint
 ) {
     ResolvedFontFaces result;
     Microsoft::WRL::ComPtr<IDWriteFontFace> probeFace;
@@ -257,11 +260,22 @@ ResolvedFontFaces resolveUnifiedFaces(
         return result;
     }
 
-    // 可变字体：轴值即请求字重（DirectWrite 会钳制到轴范围）。axisHint
-    // 由 Python 侧统一解析下发——这台 Win11 的 DWrite 对静态字体也报告
+    // 可变字体：轴值即请求字重（DirectWrite 会钳制到轴范围）。axisHint /
+    // hint 由 Python 侧统一解析下发——这台 Win11 的 DWrite 对静态字体也报告
     // wght 标准轴，凭 GetFontAxisCount 判可变会把静态族全部劫持进恒定的
     // 轴实例；只有 Python 侧实测（轴两端指纹不同）确认的真可变字体才走这里。
-    if (axisHint) {
+    if (hint.present && hint.variable) {
+        if (auto axisFace = axisWeightFace(
+                probeFace.Get(), static_cast<int>(std::lround(hint.axis))
+            )) {
+            result.outline = axisFace;
+            result.metrics = defaultAxisFace(probeFace.Get());
+            if (!result.metrics) {
+                result.metrics = axisFace;
+            }
+            return result;
+        }
+    } else if (axisHint) {
         if (auto axisFace = axisWeightFace(probeFace.Get(), weight)) {
             result.outline = axisFace;
             result.metrics = defaultAxisFace(probeFace.Get());
@@ -304,9 +318,12 @@ ResolvedFontFaces resolveUnifiedFaces(
     // Italic requests select among italic faces (and upright requests among
     // upright faces); a family without a matching face falls back to the
     // other set, mirroring QFontDatabase-driven selection on the CPU side.
+    // Python 决策说「族内无斜体 face，走合成倾斜」时按直立 face 选，倾斜由
+    // DirectWrite 的 OBLIQUE 模拟补（与 QFont 合成斜体同源）。
+    const bool wantItalic = hint.present && hint.syntheticItalic ? false : italic;
     std::vector<FaceEntry> matchingStyle;
     for (const FaceEntry &entry : faces) {
-        if (entry.italic == italic) {
+        if (entry.italic == wantItalic) {
             matchingStyle.push_back(entry);
         }
     }
@@ -319,15 +336,21 @@ ResolvedFontFaces resolveUnifiedFaces(
         faces = std::move(matchingStyle);
     }
 
-    // 引擎镜像（与 CPU 侧 weight_resolver._engine_face 同一规则，2026-10-08
-    // QFontInfo/像素实测校准）：精确命中 → 该 face；缺档 → 就近匹配
-    // （|face−W| 最小，平局取更轻 face）；合成粗体 = 请求≥600 且匹配
-    // face<700（600 face 也合成，≥700 粗 face 豁免不可再加粗）。
+    // 引擎镜像（与 CPU 侧 weight_resolver 同一规则，2026-10-08 QFontInfo/
+    // 像素实测校准 + 2026-10-11 全档重校准）：精确命中 → 该 face；缺档 →
+    // 就近匹配（|face−W| 最小，**平局取更接近 Normal(400) 的 face**——实测
+    // Yu Gothic@350 → Regular 而非 Light、@600 → Medium+合成、Noto@200 →
+    // Light、Yu Gothic UI@325 → Semilight、Meiryo@550 → Regular）；合成粗体
+    // = 请求≥600 且匹配 face<600（600/700 face 豁免）。Python 决策在手时，
+    // face 字重与两个合成标志直接取决策值。
     const FaceEntry *chosen = nullptr;
     DWRITE_FONT_SIMULATIONS simulations = DWRITE_FONT_SIMULATIONS_NONE;
+    const int targetWeight = hint.present && !hint.variable && hint.faceWeight > 0
+        ? hint.faceWeight
+        : weight;
     const auto exact = std::find_if(
         faces.begin(), faces.end(),
-        [&](const FaceEntry &entry) { return entry.weight == weight; }
+        [&](const FaceEntry &entry) { return entry.weight == targetWeight; }
     );
     if (exact != faces.end()) {
         chosen = &*exact;
@@ -335,16 +358,32 @@ ResolvedFontFaces resolveUnifiedFaces(
         chosen = &*std::min_element(
             faces.begin(), faces.end(),
             [&](const FaceEntry &lhs, const FaceEntry &rhs) {
-                const int lhsDistance = std::abs(lhs.weight - weight);
-                const int rhsDistance = std::abs(rhs.weight - weight);
+                const int lhsDistance = std::abs(lhs.weight - targetWeight);
+                const int rhsDistance = std::abs(rhs.weight - targetWeight);
                 if (lhsDistance != rhsDistance) {
                     return lhsDistance < rhsDistance;
+                }
+                const int lhsNormal = std::abs(lhs.weight - 400);
+                const int rhsNormal = std::abs(rhs.weight - 400);
+                if (lhsNormal != rhsNormal) {
+                    return lhsNormal < rhsNormal;
                 }
                 return lhs.weight < rhs.weight;
             }
         );
     }
-    if (weight >= 600 && chosen->weight < 600) {
+    if (hint.present && !hint.variable) {
+        if (hint.syntheticBold) {
+            simulations = static_cast<DWRITE_FONT_SIMULATIONS>(
+                simulations | DWRITE_FONT_SIMULATIONS_BOLD
+            );
+        }
+        if (hint.syntheticItalic) {
+            simulations = static_cast<DWRITE_FONT_SIMULATIONS>(
+                simulations | DWRITE_FONT_SIMULATIONS_OBLIQUE
+            );
+        }
+    } else if (weight >= 600 && chosen->weight < 600) {
         simulations = DWRITE_FONT_SIMULATIONS_BOLD;
     }
     result.outline = faceFromFont(chosen->font.Get(), simulations);
@@ -368,7 +407,8 @@ ResolvedFontFaces resolveFontFaces(
     const std::wstring &familyName,
     int weight,
     bool italic,
-    bool axisHint
+    bool axisHint,
+    const ResolvedFaceHint &hint
 ) {
     if (familyName.empty()) {
         return {};
@@ -384,7 +424,7 @@ ResolvedFontFaces resolveFontFaces(
         if (auto font = tryFamilyFont(
                 typographicCollection, familyName, weight, italic, &family)) {
             return resolveUnifiedFaces(
-                font.Get(), family.Get(), weight, italic, axisHint);
+                font.Get(), family.Get(), weight, italic, axisHint, hint);
         }
     }
     {
@@ -392,12 +432,12 @@ ResolvedFontFaces resolveFontFaces(
         if (auto font = tryFamilyFont(
                 collection, familyName, weight, italic, &family)) {
             return resolveUnifiedFaces(
-                font.Get(), family.Get(), weight, italic, axisHint);
+                font.Get(), family.Get(), weight, italic, axisHint, hint);
         }
     }
     if (auto font = findFontByGdiFamilyName(collection, familyName)) {
         return resolveUnifiedFaces(
-            font.Get(), nullptr, weight, italic, axisHint);
+            font.Get(), nullptr, weight, italic, axisHint, hint);
     }
     return {};
 }
@@ -408,10 +448,12 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     const std::wstring &familyName,
     int weight,
     bool italic,
-    bool axisHint
+    bool axisHint,
+    const ResolvedFaceHint &hint
 ) {
     return resolveFontFaces(
-        collection, typographicCollection, familyName, weight, italic, axisHint
+        collection, typographicCollection, familyName, weight, italic,
+        axisHint, hint
     ).outline;
 }
 
@@ -463,25 +505,97 @@ std::vector<UINT16> glyphIndices(IDWriteFontFace *face, const std::wstring &text
     return glyphs;
 }
 
-bool validGlyphIndices(const std::vector<UINT16> &glyphs) {
-    return !glyphs.empty() && glyphs.front() != 0;
+namespace {
+
+// Combining marks (Mn/Me) in the ranges that matter for lyric text: they
+// attach to the preceding base character instead of forming their own cluster.
+bool combiningScalar(UINT32 value) {
+    return (value >= 0x0300 && value <= 0x036F)
+        || (value >= 0x0483 && value <= 0x0489)
+        || (value >= 0x0591 && value <= 0x05BD)
+        || (value >= 0x0610 && value <= 0x061A)
+        || (value >= 0x064B && value <= 0x065F)
+        || (value >= 0x0670 && value <= 0x0670)
+        || (value >= 0x06D6 && value <= 0x06ED)
+        || (value >= 0x0900 && value <= 0x0903)
+        || (value >= 0x093C && value <= 0x094D)
+        || (value >= 0x0E31 && value <= 0x0E3A)
+        || (value >= 0x0E47 && value <= 0x0E4E)
+        || (value >= 0x1AB0 && value <= 0x1AFF)
+        || (value >= 0x1DC0 && value <= 0x1DFF)
+        || (value >= 0x20D0 && value <= 0x20FF)
+        || (value >= 0xFE20 && value <= 0xFE2F);
 }
 
-// 镜像 Qt(CPU) 实测回退选字（2026-10-11 bbox 指纹）：汉字/假名→SimSun，
-// 谚文→MS Gothic 系。两侧同链才能保证缺字场景 CPU/GPU 一致；历史链
-// （JhengHei Bold 优先 + 全库 Bold 扫描）与 Qt 选字不同且权重硬编码。
-bool hanOrKanaScalar(UINT32 value) {
-    return (value >= 0x3040 && value <= 0x30FF)   // 平/片假名・注音符号
-        || (value >= 0x3400 && value <= 0x4DBF)   // CJK 扩展 A
-        || (value >= 0x4E00 && value <= 0x9FFF)   // CJK 统一表意
-        || (value >= 0xF900 && value <= 0xFAFF);  // CJK 兼容表意
+// Scalars that legitimately map to glyph 0: combining marks, controls,
+// format characters (ZWJ/ZWNJ/BOM/bidi marks) and spaces.  A cluster only
+// fails coverage when its *base* scalar has no glyph.
+bool optionalBaseScalar(UINT32 value) {
+    if (value <= 0x0020 || (value >= 0x007F && value <= 0x009F)) {
+        return true;
+    }
+    if (value == 0x00AD || value == 0xFEFF) {
+        return true;
+    }
+    if (value >= 0x200B && value <= 0x200F) {
+        return true;
+    }
+    if (value >= 0x202A && value <= 0x202E) {
+        return true;
+    }
+    if (value >= 0x2060 && value <= 0x2064) {
+        return true;
+    }
+    return combiningScalar(value);
 }
 
-bool hangulScalar(UINT32 value) {
-    return (value >= 0xAC00 && value <= 0xD7AF)
-        || (value >= 0x1100 && value <= 0x11FF)
-        || (value >= 0x3130 && value <= 0x318F);
+}  // namespace
+
+bool textFullyCovered(
+    IDWriteFontFace *face,
+    const std::wstring &text,
+    std::vector<UINT16> *glyphsOut
+) {
+    if (face == nullptr) {
+        return false;
+    }
+    const std::vector<UINT32> scalars = unicodeScalars(text);
+    if (glyphsOut != nullptr) {
+        *glyphsOut = glyphIndices(face, text);
+    }
+    if (scalars.empty()) {
+        return false;
+    }
+    std::vector<UINT16> glyphs;
+    const std::vector<UINT16> *resolved = glyphsOut;
+    if (resolved == nullptr) {
+        glyphs = glyphIndices(face, text);
+        resolved = &glyphs;
+    }
+    if (resolved->size() != scalars.size()) {
+        return false;
+    }
+    // 逐簇判定：基础码点必须画得出字形；组合符/控制符/空白无字形属正常，
+    // 整串全是这类码点时无需绘图（视为覆盖，不触发回退）。
+    bool anyBase = false;
+    for (std::size_t index = 0; index < scalars.size(); ++index) {
+        const UINT32 value = scalars[index];
+        if (combiningScalar(value)) {
+            continue;
+        }
+        if (optionalBaseScalar(value)) {
+            continue;
+        }
+        anyBase = true;
+        if ((*resolved)[index] == 0) {
+            return false;
+        }
+    }
+    return anyBase;
 }
+
+// 缺字回退的候选族名不再写死在本文件：CPU(Qt) 实测选中的族名由 Python 侧
+// 随 IR 下发（见 findFallbackFontFace），其余交给 DirectWrite 系统字体回退。
 
 std::wstring familyNameOf(IDWriteFontFamily *family) {
     Microsoft::WRL::ComPtr<IDWriteLocalizedStrings> names;
@@ -502,50 +616,157 @@ std::wstring familyNameOf(IDWriteFontFamily *family) {
     return name;
 }
 
-// 返回覆盖文本的回退族名（空串 = 未找到）。face 由调用方经带缓存的
-// 解析器取得（configure 侧 resolveFace/resolveMetricsFace），保证同一
-// (family, weight, italic) 全程同一 face 指针——直接在此创建 face 会让
-// 字形几何缓存键（含指针）偶发漂移（实测 cache misses 非确定 +1）。
+namespace {
+
+// Minimal IDWriteTextAnalysisSource for a single in-memory string: what
+// IDWriteFontFallback::MapCharacters needs to pick a font for a range of it.
+// The locale comes from GetUserDefaultLocaleName so the system fallback is
+// language-aware (a zh-CN session prefers its own CJK face over a JP one).
+class TextSource final : public IDWriteTextAnalysisSource {
+public:
+    explicit TextSource(std::wstring text) : text_(std::move(text)) {
+        wchar_t locale[LOCALE_NAME_MAX_LENGTH]{};
+        if (GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH) > 0) {
+            locale_ = locale;
+        } else {
+            locale_ = L"en-us";
+        }
+    }
+
+    HRESULT STDMETHODCALLTYPE GetTextAtPosition(
+        UINT32 position,
+        const WCHAR **textString,
+        UINT32 *textLength
+    ) override {
+        if (textString == nullptr || textLength == nullptr) {
+            return E_POINTER;
+        }
+        if (position >= text_.size()) {
+            *textString = nullptr;
+            *textLength = 0;
+        } else {
+            *textString = text_.c_str() + position;
+            *textLength = static_cast<UINT32>(text_.size() - position);
+        }
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetTextBeforePosition(
+        UINT32 position,
+        const WCHAR **textString,
+        UINT32 *textLength
+    ) override {
+        if (textString == nullptr || textLength == nullptr) {
+            return E_POINTER;
+        }
+        if (position == 0 || position > text_.size()) {
+            *textString = nullptr;
+            *textLength = 0;
+        } else {
+            *textString = text_.c_str();
+            *textLength = position;
+        }
+        return S_OK;
+    }
+
+    DWRITE_READING_DIRECTION STDMETHODCALLTYPE GetParagraphReadingDirection() override {
+        return DWRITE_READING_DIRECTION_LEFT_TO_RIGHT;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetLocaleName(
+        UINT32 /*position*/,
+        UINT32 *textLength,
+        const WCHAR **localeName
+    ) override {
+        if (textLength == nullptr || localeName == nullptr) {
+            return E_POINTER;
+        }
+        *textLength = static_cast<UINT32>(text_.size());
+        *localeName = locale_.c_str();
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetNumberSubstitution(
+        UINT32 /*position*/,
+        UINT32 *textLength,
+        IDWriteNumberSubstitution **numberSubstitution
+    ) override {
+        if (textLength == nullptr || numberSubstitution == nullptr) {
+            return E_POINTER;
+        }
+        *textLength = static_cast<UINT32>(text_.size());
+        *numberSubstitution = nullptr;
+        return S_OK;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return 1;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        return 1;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **object) override {
+        if (object == nullptr) {
+            return E_POINTER;
+        }
+        if (iid == __uuidof(IDWriteTextAnalysisSource) || iid == __uuidof(IUnknown)) {
+            *object = this;
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+
+private:
+    std::wstring text_;
+    std::wstring locale_;
+};
+
+// Family name of a DirectWrite-selected fallback font, preferring the Win32
+// (GDI) family name so the caller's resolver finds it in either collection.
+std::wstring familyNameOfFont(IDWriteFont *font) {
+    Microsoft::WRL::ComPtr<IDWriteLocalizedStrings> win32Names;
+    BOOL exists = FALSE;
+    if (SUCCEEDED(font->GetInformationalStrings(
+            DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES,
+            win32Names.ReleaseAndGetAddressOf(),
+            &exists))
+        && exists && win32Names && win32Names->GetCount() > 0) {
+        UINT32 length = 0;
+        if (SUCCEEDED(win32Names->GetStringLength(0, &length))) {
+            std::wstring name(static_cast<std::size_t>(length) + 1, L'\0');
+            if (SUCCEEDED(win32Names->GetString(0, name.data(), length + 1))) {
+                name.resize(length);
+                return name;
+            }
+        }
+    }
+    Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+    if (SUCCEEDED(font->GetFontFamily(family.ReleaseAndGetAddressOf())) && family) {
+        return familyNameOf(family.Get());
+    }
+    return {};
+}
+
+}  // namespace
+
+// 缺字回退：优先级固定为「Python 决策族名（Qt 实测选字）→ DirectWrite
+// 系统字体回退（MapCharacters，带语言/字重/斜体）」。没有按脚本硬编码的
+// 候选表，也不复用「上一个字符成功过的族」——同一请求恒得同一结果，缺字
+// 观感不再随前一个字符漂移。
 std::wstring findFallbackFontFace(
+    IDWriteFontFallback *systemFallback,
     IDWriteFontCollection *collection,
     IDWriteFontCollection *typographicCollection,
+    const std::wstring &baseFamily,
     const std::wstring &text,
     int weight,
     bool italic,
-    std::vector<std::wstring> &successfulFamilies,
+    const std::wstring &preferredFamily,
     std::vector<UINT16> &glyphs
 ) {
-    // 候选族按序尝试，覆盖性校验走统一规则（权重随请求，而非旧链硬编码
-    // Bold），保证回退字形的观感两侧一致。已命中的族名前置缓存加速同
-    // 脚本重复字符。
-    std::vector<std::wstring> candidates = successfulFamilies;
-    const auto appendUnique = [&](const wchar_t *familyName) {
-        if (std::find(candidates.begin(), candidates.end(), familyName)
-            == candidates.end()) {
-            candidates.emplace_back(familyName);
-        }
-    };
-    const auto scalars = unicodeScalars(text);
-    if (containsEmoji(text)) {
-        appendUnique(L"Segoe UI Symbol");
-    }
-    if (std::any_of(
-            scalars.begin(), scalars.end(),
-            [](UINT32 value) { return hanOrKanaScalar(value); })) {
-        appendUnique(L"SimSun");
-        appendUnique(L"MS Gothic");
-        appendUnique(L"Meiryo");
-        appendUnique(L"Microsoft YaHei");
-        appendUnique(L"Yu Gothic");
-    }
-    if (std::any_of(
-            scalars.begin(), scalars.end(),
-            [](UINT32 value) { return hangulScalar(value); })) {
-        appendUnique(L"MS Gothic");
-        appendUnique(L"Malgun Gothic");
-    }
-    appendUnique(L"Microsoft JhengHei");
-
     auto tryFamily = [&](const std::wstring &familyName) -> std::wstring {
         if (familyName.empty()) {
             return {};
@@ -556,36 +777,47 @@ std::wstring findFallbackFontFace(
         if (!faces.outline) {
             return {};
         }
-        std::vector<UINT16> candidate = glyphIndices(faces.outline.Get(), text);
-        if (!validGlyphIndices(candidate)) {
+        std::vector<UINT16> candidate;
+        if (!textFullyCovered(faces.outline.Get(), text, &candidate)) {
             return {};
         }
         glyphs = std::move(candidate);
-        if (std::find(
-                successfulFamilies.begin(), successfulFamilies.end(), familyName)
-            == successfulFamilies.end()) {
-            successfulFamilies.push_back(familyName);
-        }
         return familyName;
     };
 
-    for (const auto &candidate : candidates) {
-        if (!tryFamily(candidate).empty()) {
-            return candidate;
+    if (const std::wstring preferred = tryFamily(preferredFamily);
+        !preferred.empty()) {
+        return preferred;
+    }
+
+    if (systemFallback != nullptr) {
+        TextSource source(text);
+        UINT32 mappedLength = 0;
+        FLOAT scale = 1.0f;
+        Microsoft::WRL::ComPtr<IDWriteFont> mapped;
+        const HRESULT hr = systemFallback->MapCharacters(
+            &source,
+            0,
+            static_cast<UINT32>(text.size()),
+            collection,
+            baseFamily.empty() ? nullptr : baseFamily.c_str(),
+            static_cast<DWRITE_FONT_WEIGHT>(std::clamp(weight, 1, 999)),
+            italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            &mappedLength,
+            mapped.ReleaseAndGetAddressOf(),
+            &scale
+        );
+        (void)scale;
+        if (SUCCEEDED(hr) && mapped) {
+            const std::wstring family = familyNameOfFont(mapped.Get());
+            if (const std::wstring resolved = tryFamily(family);
+                !resolved.empty()) {
+                return resolved;
+            }
         }
     }
-    // 兜底扫描：按系统族顺序逐族尝试（名字解析走同一统一规则）。
-    const UINT32 familyCount = collection->GetFontFamilyCount();
-    for (UINT32 index = 0; index < familyCount; ++index) {
-        Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
-        if (FAILED(collection->GetFontFamily(index, family.ReleaseAndGetAddressOf()))) {
-            continue;
-        }
-        const std::wstring name = familyNameOf(family.Get());
-        if (!tryFamily(name).empty()) {
-            return name;
-        }
-    }
+
     glyphs.clear();
     return {};
 }
