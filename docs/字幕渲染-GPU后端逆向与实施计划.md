@@ -1816,6 +1816,30 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - **线程/成本**：覆盖与回退解析全部留在 GUI 线程预热（与 `get_capabilities` 同一约定），
   渲染线程只查纯 dict 表。稳态 ≈1–9ms/槽位；首个含缺字的预热含 Qt 回退设施一次性
   初始化（实测 ≈0.8–1.4s，任何首次塑形都会付）。
+- **多轴（2026-10-11 第二轮，用户定为第一要点）**：
+  - 能力层记录**完整轴清单** `((tag, min, default, max), ...)`（wght 之外的
+    opsz / wdth / ital / slnt / 自定义轴都在内）；逐 face 探测失败（Qt 的
+    style 名带光学尺寸/条件前缀，如 Segoe UI Variable 的 `Small`/`Text`/`Display`
+    钉回去解析成 `Regular`）时退回族级探测，并把族级清单挂到这些 face 上。
+  - 决策层：斜体优先走**真实轴**——族内有斜体 face 用 face；否则有 `ital` 轴取
+    1、有 `slnt` 轴取 CSS `oblique 14deg` 的 -14°（按轴范围钳制）；两者皆无才
+    交引擎合成倾斜（`sim_italic`）。轴表达的斜体不再叠加 Qt 的 `setItalic`
+    （会二次倾斜），GPU 侧也不叠 OBLIQUE。
+  - 决策层输出**全轴最终值表** `axis_values`（默认值打底 + wght/斜体覆盖），随
+    IR 的 `axes` 下发。原因：未指定轴时两个引擎的默认实例不一定相同（实测
+    Segoe UI Variable：Qt 选 `Small` 实例、DirectWrite 用 fvar 默认 10.5，同一行
+    拉丁文本墨量差 ~9%）；显式钉住后 CPU/GPU 落在同一实例（实测差 0.4%）。
+  - native：`axisInstanceFace` 用 `DWRITE_MAKE_FONT_AXIS_TAG` 还原 tag 后一次
+    建全轴实例，未列出的轴维持字体默认；只保留字体确实拥有的轴。
+  - `metrics._font_signature` 改为签**全部已设轴**（原先只签 wght）：否则带
+    slnt/ital/opsz 的实例会与不带轴的实例撞同一份字形/度量缓存（实测
+    Bahnschrift wdth=75 与默认签名完全相同，缓存首项会污染另一档）。
+  - 验证：合成 VF（fontTools 两 master：直立 + 剪切，含汉字字形）端到端——
+    轴渲染与 fontTools 实例化静态字体**逐像素相同**（0 差异），且与 upright
+    不同（轴确实生效）；GPU 侧用系统多轴字体验证非 wght 轴的 tag 全链路
+    （Bahnschrift wdth=75 墨迹盒收窄、Segoe UI Variable opsz 生效）。
+  - 边界：`opsz` 不按字号自动取值（Qt 也不自动，两侧同为字体默认）；横向
+    拉伸仍走几何 scale（v4.2.x 语义），不映射 `wdth`。
 - 验证：`tests/test_subtitle_render_font_resolution.py`（纯逻辑 + face 级断言）、
   `tests/test_subtitle_render_font_resolution_windows.py`（真实平台子进程探针，
   决策↔引擎交叉验证）、GPU 侧 `test_gpu_draws_python_supplied_fallback_family` /

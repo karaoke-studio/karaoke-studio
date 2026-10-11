@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import struct
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QPainterPath, QPainterPathStroker, QRawFont
 from PyQt6.QtCore import Qt
@@ -45,6 +45,9 @@ class FontFace:
     axis_min: float | None = None
     axis_max: float | None = None
     axis_default: float | None = None
+    axes: tuple[tuple[str, float, float, float], ...] = ()
+    """该 face 的**完整轴清单** ``((tag, min, default, max), ...)``——wght 之外
+    的 wdth / opsz / ital / slnt / 自定义轴都在内；wght 便捷字段由它派生。"""
 
     @property
     def has_weight_axis(self) -> bool:
@@ -54,6 +57,13 @@ class FontFace:
             and self.axis_max is not None
             and self.axis_min < self.axis_max
         )
+
+    def axis_range(self, tag: str) -> tuple[float, float, float] | None:
+        """该 face 上某个轴的 (min, default, max)；无此轴返回 None。"""
+        for axis_tag, minimum, default, maximum in self.axes:
+            if axis_tag == tag:
+                return (minimum, default, maximum)
+        return None
 
 
 @dataclass(frozen=True)
@@ -85,7 +95,10 @@ class FontCapabilities:
     """带 wght 轴的 face 的 style 名（``axis_*`` 取自该 face）。"""
 
     has_italic_face: bool = False
-    """族内是否存在真实斜体/倾斜 face（False ⇒ 斜体请求走引擎合成）。"""
+    """族内是否存在真实斜体/倾斜 face（False ⇒ 斜体请求走引擎合成/轴）。"""
+
+    axes: tuple[tuple[str, float, float, float], ...] = ()
+    """族级完整轴清单（取自带轴 face / 族级兜底探测），wght 之外的轴也在此。"""
 
     @property
     def is_variable(self) -> bool:
@@ -198,10 +211,10 @@ def _parse_fvar_axes(raw: bytes) -> dict[bytes, tuple[float, float, float]]:
     return axes
 
 
-def _face_weight_axis(
+def _face_axes(
     family: str, style_name: str | None
-) -> tuple[float, float, float] | None:
-    """读**指定 face** 的 wght 轴 (min, default, max)；无轴/取不到返回 None。
+) -> dict[str, tuple[float, float, float]] | None:
+    """读**指定 face** 的完整轴表 ``{tag: (min, default, max)}``；取不到返回 None。
 
     styleName 钉住具体 face（Qt 的 styleName 匹配在权重不冲突时稳定命中），
     再用 QRawFont 读该 face 的 fvar。解析到的 face 与请求 style 不一致时
@@ -222,7 +235,17 @@ def _face_weight_axis(
     if not table:
         return None
     axes = _parse_fvar_axes(table)
-    return axes.get(_WGHT)
+    if not axes:
+        return None
+    return {tag.decode("latin-1"): value for tag, value in axes.items()}
+
+
+def _face_weight_axis(
+    family: str, style_name: str | None
+) -> tuple[float, float, float] | None:
+    """``_face_axes`` 的 wght 便捷视图（兼容旧调用方）。"""
+    axes = _face_axes(family, style_name)
+    return None if axes is None else axes.get("wght")
 
 
 _AXIS_PROBE_TEXT = "Ag0Wg指あそ爽永"
@@ -367,16 +390,21 @@ def get_capabilities(family: str) -> FontCapabilities | None:
             continue
         if not (1 <= weight <= 1000):
             continue
-        axis = _face_weight_axis(canonical, style)
+        face_axes = _face_axes(canonical, style)
+        weight_axis = None if face_axes is None else face_axes.get("wght")
         faces.append(
             FontFace(
                 weight,
                 str(style),
                 italic,
-                is_variable=axis is not None,
-                axis_min=axis[0] if axis else None,
-                axis_max=axis[2] if axis else None,
-                axis_default=axis[1] if axis else None,
+                is_variable=weight_axis is not None,
+                axis_min=weight_axis[0] if weight_axis else None,
+                axis_max=weight_axis[2] if weight_axis else None,
+                axis_default=weight_axis[1] if weight_axis else None,
+                axes=tuple(
+                    (tag, values[0], values[1], values[2])
+                    for tag, values in sorted((face_axes or {}).items())
+                ),
             )
         )
     faces.sort(key=lambda f: (f.weight, f.is_italic, f.style_name))
@@ -387,6 +415,7 @@ def get_capabilities(family: str) -> FontCapabilities | None:
     axis_min = axis_max = axis_default = None
     axis_present = bool(variable_faces)
     axis_effective = False
+    family_axis_inventory: tuple[tuple[str, float, float, float], ...] = ()
     if variable_faces:
         variable_face = min(
             variable_faces, key=lambda f: (abs(f.weight - 400), f.weight)
@@ -401,10 +430,22 @@ def get_capabilities(family: str) -> FontCapabilities | None:
         # 解析成 'Regular'），逐 face 校验会一律判否——族默认 face 仍读得到
         # fvar。族级只在逐 face 全部失败时兜底；「族内静态+可变共存」仍以
         # 逐 face 结果为准（那是本次修正的主目标）。
-        family_axis = _face_weight_axis(canonical, None)
+        family_axes = _face_axes(canonical, None) or {}
+        family_axis = family_axes.get("wght")
         if family_axis is not None and family_axis[0] < family_axis[2]:
             axis_present = True
             axis_min, axis_default, axis_max = family_axis
+        if family_axes:
+            family_axis_inventory = tuple(
+                (tag, values[0], values[1], values[2])
+                for tag, values in sorted(family_axes.items())
+            )
+            # 逐 face 探测失败（styleName 钉不住）时，把族级轴清单挂到这些
+            # face 上：决策层要按 face 拿「全轴最终值表」，空清单会让两侧
+            # 引擎各自用默认实例（实测 Segoe UI Variable 差 ~9% 墨量）。
+            faces = [replace(face, axes=family_axis_inventory) for face in faces]
+        else:
+            family_axis_inventory = ()
     if axis_present and axis_min is not None and axis_max is not None:
         axis_effective = _axis_is_effective(
             canonical, axis_min, axis_max, variable_style
@@ -423,6 +464,11 @@ def get_capabilities(family: str) -> FontCapabilities | None:
             axis_present=axis_present,
             variable_style=variable_style,
             has_italic_face=any(face.is_italic for face in faces),
+            axes=(
+                variable_face.axes
+                if variable_faces
+                else family_axis_inventory
+            ),
         )
 
     with _LOCK:

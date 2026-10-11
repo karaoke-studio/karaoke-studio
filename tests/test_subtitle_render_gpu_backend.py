@@ -13578,3 +13578,81 @@ def test_gpu_applies_synthetic_oblique_on_variable_axis_instance() -> None:
     finally:
         QFontDatabase.removeApplicationFont(font_id)
         clear_font_weight_cache()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_applies_non_weight_axis_from_decision(monkeypatch) -> None:
+    """GPU 按决策里**非 wght 轴**（wdth / opsz / ital / slnt / 自定义）建实例。
+
+    Python 决策把真实轴与值放进 ``*_font_resolved``；C++ 侧用
+    ``DWRITE_MAKE_FONT_AXIS_TAG`` 还原 tag 后一并设进轴实例（未列出的轴维持
+    字体默认，与 Qt.setVariableAxis 同口径）。本机可作为真实多轴载体的是
+    Bahnschrift（wdth 75–100）与 Segoe UI Variable（opsz 5–36）。
+
+    这里直接注入决策（真实链路要求 Python 侧能枚举该族，offscreen 会话没有
+    系统字体库），断言轴确实生效：wdth=75 的墨迹盒必须明显窄于默认。
+    """
+    import krok_helper.subtitle_render.engine.text.font_weight as font_weight
+    from krok_helper.subtitle_render.engine.text.weight_resolver import ResolvedFontInstance
+
+    family = "Bahnschrift"
+    from PyQt6.QtGui import QFontDatabase
+
+    if family not in QFontDatabase.families():
+        pytest.skip(f"{family} not installed")
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 0), TimingChar("b", 500)], end_ms=1_000)]
+    )
+    probe = dict(
+        font_family=family,
+        font_family_latin=family,
+        font_size_px=96,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+    )
+
+    def _bounds(frame: bytes) -> tuple[int, int, int, int]:
+        return _payload_alpha_bounds(frame)
+
+    def _render() -> tuple[int, int, int, int]:
+        style = _g1_style(**probe)
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+            _, frames = _render_g1_frames(
+                renderer, style, (500,), force_warp=True, track=track
+            )
+        return _bounds(frames[0])
+
+    real = font_weight.resolve_font_instance
+
+    def _with_axis(fam, weight, italic=False, stretch_pct=100):
+        instance = real(fam, weight, italic=italic, stretch_pct=stretch_pct)
+        if str(fam) != family:
+            return instance
+        values = dict(instance.axis_values) if instance.axis_values else {"wght": 400.0}
+        values["wdth"] = 75.0
+        return ResolvedFontInstance(
+            requested=instance.requested,
+            family=instance.family,
+            face_style=instance.face_style,
+            face_weight=instance.face_weight,
+            axis_value=instance.axis_value,
+            synthetic_bold=instance.synthetic_bold,
+            synthetic_italic=instance.synthetic_italic,
+            italic_axis_tag=instance.italic_axis_tag,
+            italic_axis_value=instance.italic_axis_value,
+            axis_values=tuple(sorted(values.items())),
+            exact=instance.exact,
+            reason=instance.reason,
+            is_variable=instance.is_variable,
+        )
+
+    default_bounds = _render()
+    monkeypatch.setattr(font_weight, "resolve_font_instance", _with_axis)
+    condensed_bounds = _render()
+    width_default = default_bounds[2] - default_bounds[0]
+    width_condensed = condensed_bounds[2] - condensed_bounds[0]
+    assert width_condensed < width_default * 0.92, (
+        f"wdth=75 未生效：默认宽 {width_default}、收窄后 {width_condensed}"
+    )

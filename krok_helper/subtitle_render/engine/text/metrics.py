@@ -278,13 +278,15 @@ def n3_char_box_descent(
 
 
 def _font_signature(font: QFont) -> tuple:
-    # styleName / wght 轴值与 setWeight 同样影响最终解析的 face，
-    # 绕过它们会与不同实例共享缓存条目。
-    weight_axis_tag = QFont.Tag(b"wght")
-    axis_value = (
-        float(font.variableAxisValue(weight_axis_tag))
-        if font.isVariableAxisSet(weight_axis_tag)
-        else None
+    # styleName 与**全部已设可变轴**（不只 wght）都影响最终解析的实例：
+    # 只签 wght 会让「带 slnt/ital/opsz 轴」的实例与不带轴的实例撞同一份
+    # 字形/度量缓存（实测 Bahnschrift wdth=75 与默认签名完全相同，草稿盒
+    # 108.3 与 76.9 会被缓存首项污染）。轴按 tag 排序保证顺序无关。
+    axes = tuple(
+        sorted(
+            (tag.toString(), float(font.variableAxisValue(tag)))
+            for tag in font.variableAxisTags()
+        )
     )
     return (
         font.family(),
@@ -293,7 +295,7 @@ def _font_signature(font: QFont) -> tuple:
         font.italic(),
         font.stretch(),
         font.styleName(),
-        axis_value,
+        axes,
     )
 
 

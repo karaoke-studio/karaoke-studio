@@ -83,6 +83,19 @@ class ResolvedFontInstance:
     synthetic_italic: bool = False
     """族内无真实斜体 face，斜体请求由引擎合成倾斜。"""
 
+    italic_axis_tag: str | None = None
+    """斜体由**真实轴**表达的标签（``ital`` / ``slnt``）；None = 非轴表达。"""
+
+    italic_axis_value: float | None = None
+    """``italic_axis_tag`` 对应的轴值（ital⇒1；slnt⇒CSS oblique 的 -14°，按轴范围钳制）。"""
+
+    axis_values: tuple[tuple[str, float], ...] = ()
+    """**最终轴值表**（该 face 的全轴：默认值打底，wght 与斜体轴按请求覆盖）。
+
+    两侧引擎对「未指定轴」的默认实例不一定相同（实测 Segoe UI Variable：
+    Qt 选 'Small' 实例、DirectWrite 用 fvar 默认 10.5，同一行拉丁文本墨量
+    差 ~9%）。把整表显式下发，两个后端才都建在**同一实例**上。"""
+
     exact: bool = False
     """请求是否被精确满足（face 字重/轴值命中且无合成）。"""
 
@@ -102,10 +115,20 @@ class ResolvedFontInstance:
     def identity(self) -> str:
         """可验证的实例身份（无路径）。"""
         axis = "" if self.axis_value is None else f"|axis={self.axis_value:g}"
+        italic_axis = (
+            ""
+            if self.italic_axis_tag is None
+            else f"|{self.italic_axis_tag}={self.italic_axis_value:g}"
+        )
+        extra_axes = (
+            ""
+            if not self.axis_values
+            else "|axes=" + ",".join(f"{tag}:{value:g}" for tag, value in self.axis_values)
+        )
         return (
             f"{self.family}|{self.face_style or '<default>'}"
             f"|w={self.face_weight}|italic={int(self.synthetic_italic or bool(self.requested.italic))}"
-            f"{axis}"
+            f"{axis}{italic_axis}{extra_axes}"
         )
 
     @property
@@ -179,7 +202,10 @@ def resolve_instance(
 
     faces = list(capabilities.faces)
 
-    # ── 斜体联合匹配：真实斜体 face 优先，缺则标注引擎合成倾斜 ──
+    # ── 斜体联合匹配：真实斜体 face → ital 轴 → slnt 轴 → 引擎合成倾斜 ──
+    # 轴优先级与 CSS Fonts 4 / OpenType 惯例一致：有真实斜体 face 用 face；
+    # 否则字体若带 ital 轴（0/1 开关）取 1，带 slnt 轴取 CSS `oblique 14deg`
+    # 的 -14°（按轴范围钳制）；两者皆无才交引擎合成倾斜。
     if request.italic:
         real_italic = _italic_faces(faces)
         if real_italic:
@@ -192,6 +218,32 @@ def resolve_instance(
     else:
         pool = _upright(faces)
         synthetic_italic = False
+
+    def _axis_values(
+        face: FontFace,
+        weight_axis: float | None,
+        italic_axis: tuple[str, float] | None,
+    ) -> tuple[tuple[str, float], ...]:
+        """face 的全轴最终值表：默认打底，wght 与斜体轴按请求覆盖。"""
+        values = {tag: default for tag, _min, default, _max in face.axes}
+        if weight_axis is not None and "wght" in values:
+            values["wght"] = float(weight_axis)
+        if italic_axis is not None:
+            values[italic_axis[0]] = float(italic_axis[1])
+        return tuple(sorted(values.items()))
+
+    def _italic_axis_for(face: FontFace) -> tuple[str, float] | None:
+        """目标 face 上用 ital / slnt 轴表达斜体的轴值（无轴返回 None）。"""
+        if not request.italic:
+            return None
+        ital = face.axis_range("ital")
+        if ital is not None and ital[0] <= 1.0:
+            return ("ital", min(1.0, ital[2]))
+        slnt = face.axis_range("slnt")
+        if slnt is not None and slnt[0] < slnt[2]:
+            # CSS `oblique 14deg` 对应 slnt = -14（负角=前倾），按轴范围钳制。
+            return ("slnt", max(slnt[0], min(-14.0, slnt[2])))
+        return None
 
     # ── 真可变 font：只在该 face 参与本次请求（斜体/直立集合内）时走轴实例 ──
     # 逐 face 能力（variable_style 非空）时要求带轴 face 落在本次请求的
@@ -215,6 +267,11 @@ def resolve_instance(
             )
             exact = False
             reason = "axis_clamped"
+        italic_axis = (
+            _italic_axis_for(variable_face)
+            if variable_face is not None
+            else _italic_axis_for(pool[0])
+        )
         return ResolvedFontInstance(
             requested=request,
             family=family,
@@ -222,7 +279,14 @@ def resolve_instance(
             face_weight=int(round(axis_value)),
             axis_value=axis_value,
             synthetic_bold=False,
-            synthetic_italic=synthetic_italic,
+            synthetic_italic=synthetic_italic and italic_axis is None,
+            italic_axis_tag=italic_axis[0] if italic_axis else None,
+            italic_axis_value=italic_axis[1] if italic_axis else None,
+            axis_values=_axis_values(
+                variable_face if variable_face is not None else pool[0],
+                axis_value,
+                italic_axis,
+            ),
             exact=exact,
             reason=reason,
             axis_ineffective=False,
@@ -239,6 +303,7 @@ def resolve_instance(
         reason = None
     else:
         reason = "nearest_face"
+    italic_axis = _italic_axis_for(matched)
     return ResolvedFontInstance(
         requested=request,
         family=family,
@@ -246,7 +311,10 @@ def resolve_instance(
         face_weight=matched.weight,
         axis_value=None,
         synthetic_bold=synthetic_bold,
-        synthetic_italic=synthetic_italic,
+        synthetic_italic=synthetic_italic and italic_axis is None,
+        italic_axis_tag=italic_axis[0] if italic_axis else None,
+        italic_axis_value=italic_axis[1] if italic_axis else None,
+        axis_values=_axis_values(matched, None, italic_axis),
         exact=(matched.weight == weight and not synthetic_bold),
         reason=reason,
         axis_ineffective=bool(

@@ -32,9 +32,121 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+_AXIS_VF_BASE_FONT = "C:/Windows/Fonts/simkai.ttf"
+_AXIS_VF_SLANT_DEG = 15.0
+
+
+def build_axis_test_font(
+    out_dir: Path, tag: str, min_value: float, max_value: float
+) -> Path | None:
+    """用 fontTools 造一个带 ``tag`` 轴的可变字体（直立 + 剪切两个 master）。
+
+    本机字体库没有 ital/slnt 轴的字体，无法用系统字体验证「斜体走真轴」。
+    两个 master 必须走同一条轮廓重建路径（拆掉复合字形），否则 varLib 因
+    点结构不兼容会静默跳过汉字字形的增量（实测：拉丁生效、汉字不动）。
+    fontTools 或基准字体缺失时返回 None（用例跳过）。
+    """
+    try:
+        from fontTools.designspaceLib import (
+            AxisDescriptor,
+            DesignSpaceDocument,
+            SourceDescriptor,
+        )
+        from fontTools.misc.transform import Transform
+        from fontTools.pens.transformPen import TransformPen
+        from fontTools.pens.ttGlyphPen import TTGlyphPen
+        from fontTools.subset import Options, Subsetter
+        from fontTools.ttLib import TTFont
+        from fontTools.varLib import build as varLibBuild
+    except ImportError:
+        return None
+    import math
+
+    if not Path(_AXIS_VF_BASE_FONT).exists():
+        return None
+
+    def rebuild(font, transform):
+        glyph_set = font.getGlyphSet()
+        glyphs = {}
+        for name in font.getGlyphOrder():
+            pen = TTGlyphPen(glyph_set)
+            glyph_set[name].draw(TransformPen(pen, transform))
+            glyphs[name] = pen.glyph()
+        for name, glyph in glyphs.items():
+            font["glyf"][name] = glyph
+        return font
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    subset = TTFont(_AXIS_VF_BASE_FONT)
+    options = Options()
+    options.glyph_names = True
+    options.notdef_outline = True
+    subsetter = Subsetter(options=options)
+    subsetter.populate(text="Ag\u6f22\u6c38\u5b57")
+    subsetter.subset(subset)
+    upright_path = out_dir / f"TestVF-{tag}.upright.ttf"
+    slanted_path = out_dir / f"TestVF-{tag}.slanted.ttf"
+    rebuild(subset, Transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)).save(str(upright_path))
+    slanted = TTFont(str(upright_path))
+    # fontTools 的 transformPoint 是 x' = xx·x + yx·y + dx → 横向剪切落 yx 槽。
+    rebuild(
+        slanted,
+        Transform(1.0, 0.0, math.tan(math.radians(_AXIS_VF_SLANT_DEG)), 1.0, 0.0, 0.0),
+    ).save(str(slanted_path))
+
+    doc = DesignSpaceDocument()
+    axis = AxisDescriptor()
+    axis.name = axis.tag = tag
+    axis.minimum, axis.default, axis.maximum = min_value, 0.0, max_value
+    doc.addAxis(axis)
+    default_source = SourceDescriptor()
+    default_source.path = str(upright_path)
+    default_source.name = "upright"
+    default_source.location = {tag: 0.0}
+    doc.addSource(default_source)
+    other_source = SourceDescriptor()
+    other_source.path = str(slanted_path)
+    other_source.name = "slanted"
+    other_source.location = {tag: min_value if tag == "slnt" else max_value}
+    doc.addSource(other_source)
+    vf, _model, _masters = varLibBuild(doc)
+    vf["name"].setName(f"TestVF {tag}", 1, 3, 1, 0x409)
+    vf["name"].setName("Regular", 2, 3, 1, 0x409)
+    out_path = out_dir / f"TestVF-{tag}.ttf"
+    vf.save(str(out_path))
+    return out_path
+
+
+def instance_axis_test_font(source: Path, out_dir: Path, tag: str, value: float) -> Path:
+    """把轴字体实例化成静态字体（「轴渲染 == 真实例渲染」的 ground truth）。"""
+    from fontTools.ttLib import TTFont
+    from fontTools.varLib import instancer
+
+    instanced = instancer.instantiateVariableFont(
+        TTFont(str(source)), {tag: value}, inplace=False, updateFontNames=False
+    )
+    family = f"TestVF {tag} Static"
+    for name_id in (1, 4, 6):
+        instanced["name"].setName(
+            family if name_id != 6 else family.replace(" ", ""), name_id, 3, 1, 0x409
+        )
+    out_path = out_dir / f"Static-{tag}.ttf"
+    instanced.save(str(out_path))
+    return out_path
+
 _PROBE = r'''
 import json
 import sys
+from pathlib import Path
+
+# 合成轴字体的生成器与常量定义在本测试模块里：探针进程按 cwd(=仓库根)/tests
+# 导入它们，避免同一份 fontTools 造字代码写两遍。
+sys.path.insert(0, str(Path.cwd() / "tests"))
+from test_subtitle_render_font_resolution_windows import (  # noqa: E402
+    _AXIS_VF_SLANT_DEG,
+    build_axis_test_font,
+    instance_axis_test_font,
+)
 
 from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QFontMetrics, QRawFont
 
@@ -277,6 +389,88 @@ for _text in ("fi", "ffl", "Á", "が", "क्ष"):
         "per_codepoint_glyphs": _per_codepoint,
     })
 result["shaping"] = _shaping_rows
+
+# 多轴：系统多轴字体的轴清单
+result["multi_axis_inventory"] = {}
+for _family in ("Segoe UI Variable", "Bahnschrift", "Sitka Small"):
+    if _family not in QFontDatabase.families():
+        continue
+    clear_capabilities_cache()
+    _cap = get_capabilities(_family)
+    if _cap is None:
+        continue
+    result["multi_axis_inventory"][_family] = [list(axis) for axis in _cap.axes]
+
+# 多轴：合成 slnt / ital 轴字体的端到端（本机无此轴字体，fontTools 造字）
+import shutil as _shutil
+import tempfile
+
+from PyQt6.QtGui import QFont as _QFont
+from PyQt6.QtGui import QImage, QPainter
+
+from krok_helper.subtitle_render.engine.text.font_weight import (
+    build_weight_font as _build_weight_font,
+)
+from krok_helper.subtitle_render.engine.text.font_weight import (
+    resolve_font_instance as _resolve_instance,
+)
+from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces as _apply_resolved
+
+result["axis_fonts"] = {"skipped": None, "cases": {}}
+_axis_dir = Path(tempfile.mkdtemp(prefix="krok_axisvf_"))
+try:
+    for _tag, _min, _max in (("slnt", -_AXIS_VF_SLANT_DEG, 0.0), ("ital", 0.0, 1.0)):
+        _vf_path = build_axis_test_font(_axis_dir, _tag, _min, _max)
+        if _vf_path is None:
+            result["axis_fonts"]["skipped"] = "fontTools or base font unavailable"
+            break
+        _fid = QFontDatabase.addApplicationFont(str(_vf_path))
+        if _fid < 0:
+            continue
+        _family = QFontDatabase.applicationFontFamilies(_fid)[0]
+        clear_capabilities_cache()
+        _cap = get_capabilities(_family)
+        _inst = _resolve_instance(_family, 400, italic=True)
+
+        def _raster(font, text="\u6c38"):
+            font.setPixelSize(96)
+            image = QImage(300, 160, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            painter = QPainter(image)
+            painter.setFont(font)
+            painter.drawText(30, 120, text)
+            painter.end()
+            return bytes(image.constBits().asstring(image.sizeInBytes()))
+
+        _upright = _raster(_QFont(_family))
+        _axis = _raster(_build_weight_font(_family, 96, 400, italic=True))
+        _static_path = instance_axis_test_font(
+            _vf_path, _axis_dir, _tag, -14.0 if _tag == "slnt" else 1.0
+        )
+        _fid_static = QFontDatabase.addApplicationFont(str(_static_path))
+        _family_static = QFontDatabase.applicationFontFamilies(_fid_static)[0]
+        _static = _raster(_QFont(_family_static))
+        _payload = {"font_family": _family, "font_weight": 400, "italic": True}
+        _apply_resolved(_payload)
+        result["axis_fonts"]["cases"][_tag] = {
+            "family": _family,
+            "axes": [list(axis) for axis in _cap.axes] if _cap else None,
+            "italic_axis": _inst.italic_axis_tag,
+            "italic_axis_value": _inst.italic_axis_value,
+            "synthetic_italic": bool(_inst.synthetic_italic),
+            "axis_values": [list(item) for item in _inst.axis_values],
+            "ir": _payload.get("font_resolved"),
+            "diff_axis_vs_upright": sum(
+                1 for i in range(0, len(_axis), 4) if _axis[i:i + 4] != _upright[i:i + 4]
+            ),
+            "diff_axis_vs_static_instance": sum(
+                1 for i in range(0, len(_axis), 4) if _axis[i:i + 4] != _static[i:i + 4]
+            ),
+        }
+        QFontDatabase.removeApplicationFont(_fid)
+        QFontDatabase.removeApplicationFont(_fid_static)
+finally:
+    _shutil.rmtree(_axis_dir, ignore_errors=True)
 
 result["synthetic_bold_rule"] = _sim_rows
 
@@ -530,3 +724,44 @@ def test_shaping_boundary_is_recorded(probe_result: dict) -> None:
             f"{key!r}: 本环境下整形与逐码点字形数相同，"
             "边界描述需按实际观测更新"
         )
+
+
+def test_multi_axis_inventory_lists_all_axes(probe_result: dict) -> None:
+    """能力层记录**完整**轴清单（wght 之外的 opsz / wdth 也要在）。"""
+    inventory = probe_result.get("multi_axis_inventory") or {}
+    if not inventory:
+        pytest.skip("no multi-axis system font available")
+    found = {axis[0] for axes in inventory.values() for axis in axes}
+    # 本机多轴字体（Segoe UI Variable 的 opsz / Bahnschrift 的 wdth）必须被记到；
+    # 注意 Sitka 这类族里默认 face 是真静态（VF 文件注册成别的族名），
+    # 清单为空是正确结果，不做「每族都必须有轴」的强断言。
+    assert found - {"wght"}, f"未记录任何 wght 之外的轴: {inventory}"
+    if "Bahnschrift" in inventory:
+        assert "wdth" in {axis[0] for axis in inventory["Bahnschrift"]}
+
+
+def test_axis_italic_end_to_end_matches_true_instance(probe_result: dict) -> None:
+    """斜体走 ital/slnt 轴：渲染必须等于 fontTools 按同值实例化的静态字体。
+
+    这是「模拟倾斜 vs 真实轴」的判据：轴渲染与 upright 不同（确实生效），
+    且与 ground-truth 实例**逐像素相同**（说明用的是轴，不是 Qt 合成倾斜，
+    也不是别的近似）。
+    """
+    axis_fonts = probe_result.get("axis_fonts") or {}
+    cases = axis_fonts.get("cases") or {}
+    if not cases:
+        pytest.skip(axis_fonts.get("skipped") or "axis test fonts unavailable")
+    expected = {"slnt": (-14.0, -14.0), "ital": (1.0, 1.0)}
+    for tag, case in cases.items():
+        assert case["axes"], f"{tag}: 能力层未记录轴清单"
+        assert case["italic_axis"] == tag, case
+        assert case["synthetic_italic"] is False, case
+        assert case["italic_axis_value"] == expected[tag][0], case
+        assert case["diff_axis_vs_upright"] > 0, f"{tag}: 轴未生效（渲染与直立相同）"
+        assert case["diff_axis_vs_static_instance"] == 0, (
+            f"{tag}: 轴渲染与 fontTools 实例化字体不一致（差 "
+            f"{case['diff_axis_vs_static_instance']} 像素）"
+        )
+        ir = case["ir"] or {}
+        assert ir.get("italic_axis", {}).get("tag") == tag, ir
+        assert ir.get("axes", {}).get(tag) == expected[tag][1], ir

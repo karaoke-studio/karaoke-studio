@@ -375,6 +375,17 @@ struct FontInstanceHint {
     // True variable-font decision: instantiate the wght axis at ``axis``.
     bool variable = false;
     float axis = 0.0f;
+    // Real italic axis (``ital`` / ``slnt``) when the family expresses italic
+    // through an axis instead of an italic face: applied together with wght on
+    // the same axis instance, with no oblique simulation on top.
+    std::wstring italicAxisTag;
+    float italicAxisValue = 0.0f;
+    // Full axis snapshot (every axis of the face at its value, wght included
+    // when variable).  Qt and DirectWrite can pick *different* default
+    // instances when an axis is unspecified (measured: Segoe UI Variable ->
+    // Qt 'Small' vs DWrite fvar default), so pinning the whole set is what
+    // keeps both backends on one instance.
+    std::vector<std::pair<std::wstring, float>> axes;
     bool operator==(const FontInstanceHint &) const = default;
 };
 

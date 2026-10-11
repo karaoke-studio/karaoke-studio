@@ -169,19 +169,22 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> faceFromFont(
     return {};
 }
 
-// Variable-font path: if the matched face's font resource exposes a wght
-// axis, create the true axis-value instance (DirectWrite clamps the value to
-// the axis range, matching QFont.setVariableAxis).  ``simulations`` carries
-// the synthetic oblique the Python decision asked for (a family without an
-// italic face still needs the shear on top of the axis instance; the axis
-// only covers weight).  Returns null for static fonts so the caller falls
-// through to the static rules.
-Microsoft::WRL::ComPtr<IDWriteFontFace> axisWeightFace(
+// Variable-font path: create the true axis-value instance from the requested
+// axis set (DirectWrite clamps to each axis range, matching
+// QFont.setVariableAxis).  Only the listed axes are overridden -- every other
+// axis (opsz / wdth / ...) keeps the font's default, exactly like Qt.
+// ``simulations`` carries the synthetic oblique the Python decision asked for
+// (a family without an italic face *and* without an ital/slnt axis still needs
+// the shear on top of the axis instance).  Returns null when the resource
+// exposes none of the requested axes, so the caller falls through to the
+// static rules.
+Microsoft::WRL::ComPtr<IDWriteFontFace> axisInstanceFace(
     IDWriteFontFace *probeFace,
-    int weight,
+    const DWRITE_FONT_AXIS_VALUE *requested,
+    UINT32 requestedCount,
     DWRITE_FONT_SIMULATIONS simulations = DWRITE_FONT_SIMULATIONS_NONE
 ) {
-    if (probeFace == nullptr) {
+    if (probeFace == nullptr || requested == nullptr || requestedCount == 0) {
         return {};
     }
     Microsoft::WRL::ComPtr<IDWriteFontFace5> face5;
@@ -201,26 +204,42 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> axisWeightFace(
     if (FAILED(resource->GetDefaultFontAxisValues(defaults, axisCount))) {
         return {};
     }
-    for (UINT32 index = 0; index < axisCount; ++index) {
-        if (defaults[index].axisTag != DWRITE_FONT_AXIS_TAG_WEIGHT) {
-            continue;
+    // 只保留字体确实拥有的轴（DWrite 对未知轴返回失败，白名单化更稳）。
+    DWRITE_FONT_AXIS_VALUE applied[32]{};
+    UINT32 appliedCount = 0;
+    for (UINT32 wanted = 0; wanted < requestedCount && appliedCount < axisCount; ++wanted) {
+        for (UINT32 index = 0; index < axisCount; ++index) {
+            if (defaults[index].axisTag != requested[wanted].axisTag) {
+                continue;
+            }
+            applied[appliedCount++] = requested[wanted];
+            break;
         }
-        DWRITE_FONT_AXIS_VALUE value{};
-        value.axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
-        value.value = static_cast<float>(std::clamp(weight, 1, 1000));
-        // Unspecified axes keep their defaults; the metrics face below uses
-        // the same resource with no axis overrides.
-        Microsoft::WRL::ComPtr<IDWriteFontFace5> axisFace;
-        if (SUCCEEDED(resource->CreateFontFace(
-                simulations,
-                &value,
-                1,
-                axisFace.ReleaseAndGetAddressOf()))) {
-            return axisFace;
-        }
+    }
+    if (appliedCount == 0) {
         return {};
     }
+    Microsoft::WRL::ComPtr<IDWriteFontFace5> axisFace;
+    if (SUCCEEDED(resource->CreateFontFace(
+            simulations,
+            applied,
+            appliedCount,
+            axisFace.ReleaseAndGetAddressOf()))) {
+        return axisFace;
+    }
     return {};
+}
+
+// wght-only convenience wrapper（无决策提示时的 axisHint 路径）。
+Microsoft::WRL::ComPtr<IDWriteFontFace> axisWeightFace(
+    IDWriteFontFace *probeFace,
+    int weight,
+    DWRITE_FONT_SIMULATIONS simulations = DWRITE_FONT_SIMULATIONS_NONE
+) {
+    DWRITE_FONT_AXIS_VALUE value{};
+    value.axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
+    value.value = static_cast<float>(std::clamp(weight, 1, 1000));
+    return axisInstanceFace(probeFace, &value, 1, simulations);
 }
 
 Microsoft::WRL::ComPtr<IDWriteFontFace> defaultAxisFace(IDWriteFontFace *probeFace) {
@@ -276,11 +295,55 @@ ResolvedFontFaces resolveUnifiedFaces(
         hint.present && hint.syntheticItalic
             ? DWRITE_FONT_SIMULATIONS_OBLIQUE
             : DWRITE_FONT_SIMULATIONS_NONE;
-    if (hint.present && hint.variable) {
-        if (auto axisFace = axisWeightFace(
-                probeFace.Get(),
-                static_cast<int>(std::lround(hint.axis)),
-                hintSimulations
+    // 决策可同时带 wght 与斜体轴（ital / slnt）：同一轴实例上一次设全，
+    // 其余轴（opsz / wdth / ...）保持字体默认——与 Qt.setVariableAxis 同口径。
+    const bool hintHasItalicAxis =
+        hint.present && !hint.italicAxisTag.empty();
+    const bool hintHasAxisSnapshot = hint.present && !hint.axes.empty();
+    if (hint.present && (hint.variable || hintHasItalicAxis || hintHasAxisSnapshot)) {
+        const auto tagToValue = [](const std::wstring &tag) -> DWRITE_FONT_AXIS_TAG {
+            if (tag.size() != 4) {
+                return static_cast<DWRITE_FONT_AXIS_TAG>(0);
+            }
+            return static_cast<DWRITE_FONT_AXIS_TAG>(DWRITE_MAKE_FONT_AXIS_TAG(
+                static_cast<char>(tag[0]),
+                static_cast<char>(tag[1]),
+                static_cast<char>(tag[2]),
+                static_cast<char>(tag[3])
+            ));
+        };
+        DWRITE_FONT_AXIS_VALUE requested[34]{};
+        UINT32 requestedCount = 0;
+        for (const auto &entry : hint.axes) {
+            if (requestedCount >= 34) {
+                break;
+            }
+            const DWRITE_FONT_AXIS_TAG tag = tagToValue(entry.first);
+            if (tag == static_cast<DWRITE_FONT_AXIS_TAG>(0)) {
+                continue;
+            }
+            requested[requestedCount].axisTag = tag;
+            requested[requestedCount].value = entry.second;
+            ++requestedCount;
+        }
+        // 轴表存在时它就是全表（含 wght 与斜体轴）；否则按 axis / italic_axis 逐项补。
+        if (!hintHasAxisSnapshot && hint.variable) {
+            requested[requestedCount].axisTag = DWRITE_FONT_AXIS_TAG_WEIGHT;
+            requested[requestedCount].value = static_cast<float>(
+                std::lround(hint.axis)
+            );
+            ++requestedCount;
+        }
+        if (hintHasItalicAxis && !hintHasAxisSnapshot) {
+            DWRITE_FONT_AXIS_VALUE &entry = requested[requestedCount];
+            entry.axisTag = static_cast<DWRITE_FONT_AXIS_TAG>(
+                tagToValue(hint.italicAxisTag)
+            );
+            entry.value = hint.italicAxisValue;
+            ++requestedCount;
+        }
+        if (auto axisFace = axisInstanceFace(
+                probeFace.Get(), requested, requestedCount, hintSimulations
             )) {
             result.outline = axisFace;
             result.metrics = defaultAxisFace(probeFace.Get());
@@ -334,7 +397,10 @@ ResolvedFontFaces resolveUnifiedFaces(
     // other set, mirroring QFontDatabase-driven selection on the CPU side.
     // Python 决策说「族内无斜体 face，走合成倾斜」时按直立 face 选，倾斜由
     // DirectWrite 的 OBLIQUE 模拟补（与 QFont 合成斜体同源）。
-    const bool wantItalic = hint.present && hint.syntheticItalic ? false : italic;
+    const bool wantItalic =
+        hint.present && (hint.syntheticItalic || hintHasItalicAxis)
+            ? false
+            : italic;
     std::vector<FaceEntry> matchingStyle;
     for (const FaceEntry &entry : faces) {
         if (entry.italic == wantItalic) {
@@ -392,7 +458,7 @@ ResolvedFontFaces resolveUnifiedFaces(
                 simulations | DWRITE_FONT_SIMULATIONS_BOLD
             );
         }
-        if (hint.syntheticItalic) {
+        if (hint.syntheticItalic && !hintHasItalicAxis) {
             simulations = static_cast<DWRITE_FONT_SIMULATIONS>(
                 simulations | DWRITE_FONT_SIMULATIONS_OBLIQUE
             );

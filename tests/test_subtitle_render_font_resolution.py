@@ -284,3 +284,94 @@ def test_static_snap_rule_matches_engine_pick():
                 f"{family}@{weight}: predicted face {instance.face_weight} "
                 f"but engine picked {engine_style}({real[engine_style]})"
             )
+
+# =========================================================================
+# 多轴：ital / slnt 轴表达斜体（而不是合成倾斜）+ 全轴最终值表
+# =========================================================================
+
+
+def _face_with_axes(style: str, weight: int, axes) -> FontFace:
+    weight_axis = None
+    for tag, _mn, default, _mx in axes:
+        if tag == "wght":
+            weight_axis = (min(a[1] for a in axes if a[0] == "wght"),
+                           default,
+                           max(a[3] for a in axes if a[0] == "wght"))
+    return FontFace(
+        weight,
+        style,
+        False,
+        is_variable=weight_axis is not None,
+        axis_min=weight_axis[0] if weight_axis else None,
+        axis_max=weight_axis[2] if weight_axis else None,
+        axis_default=weight_axis[1] if weight_axis else None,
+        axes=tuple(axes),
+    )
+
+
+def test_italic_uses_ital_axis_instead_of_synthesis():
+    """族内无斜体 face 但带 ital 轴：走轴（ital=1），不合成倾斜。"""
+    face = _face_with_axes("t", 400, (("ital", 0.0, 0.0, 1.0),))
+    cap = FontCapabilities(family="t", faces=(face,))
+    instance = resolve_instance(cap, FontRequest(family="t", weight=400, italic=True))
+    assert instance.italic_axis_tag == "ital"
+    assert instance.italic_axis_value == 1.0
+    assert instance.synthetic_italic is False
+    assert instance.axis_values == (("ital", 1.0),)
+
+
+def test_italic_uses_slnt_axis_with_css_oblique_angle():
+    """slnt 轴：取 CSS `oblique 14deg` 的 -14°，越界按轴范围钳制。"""
+    face = _face_with_axes("t", 400, (("slnt", -15.0, 0.0, 0.0),))
+    cap = FontCapabilities(family="t", faces=(face,))
+    instance = resolve_instance(cap, FontRequest(family="t", weight=400, italic=True))
+    assert (instance.italic_axis_tag, instance.italic_axis_value) == ("slnt", -14.0)
+    assert instance.synthetic_italic is False
+
+    narrow = _face_with_axes("t", 400, (("slnt", -8.0, 0.0, 0.0),))
+    clamped = resolve_instance(
+        FontCapabilities(family="t", faces=(narrow,)),
+        FontRequest(family="t", weight=400, italic=True),
+    )
+    assert clamped.italic_axis_value == -8.0  # 轴范围只有 -8，钳到端点
+
+
+def test_italic_axis_prefers_ital_over_slnt():
+    face = _face_with_axes("t", 400, (("ital", 0.0, 0.0, 1.0), ("slnt", -15.0, 0.0, 0.0)))
+    cap = FontCapabilities(family="t", faces=(face,))
+    instance = resolve_instance(cap, FontRequest(family="t", weight=400, italic=True))
+    assert instance.italic_axis_tag == "ital"
+
+
+def test_axis_table_pins_defaults_and_overrides():
+    """全轴最终值表：默认打底，wght 与斜体轴按请求覆盖。"""
+    face = _face_with_axes(
+        "t", 400, (("wght", 300.0, 400.0, 900.0), ("opsz", 5.0, 10.5, 36.0))
+    )
+    cap = FontCapabilities(
+        family="t", faces=(face,), axis_min=300.0, axis_max=900.0,
+        axis_default=400.0, axis_effective=True, axis_present=True,
+        variable_style="t",
+    )
+    instance = resolve_instance(cap, FontRequest(family="t", weight=650))
+    assert dict(instance.axis_values) == {"wght": 650.0, "opsz": 10.5}
+
+    with_italic = resolve_instance(
+        FontCapabilities(
+            family="u",
+            faces=(_face_with_axes("u", 400, (("ital", 0.0, 0.0, 1.0), ("opsz", 5.0, 10.5, 36.0))),),
+        ),
+        FontRequest(family="u", weight=400, italic=True),
+    )
+    assert dict(with_italic.axis_values) == {"ital": 1.0, "opsz": 10.5}
+
+
+def test_axis_italic_keeps_exactness_and_mark_clean():
+    face = _face_with_axes("t", 400, (("slnt", -15.0, 0.0, 0.0),))
+    instance = resolve_instance(
+        FontCapabilities(family="t", faces=(face,)),
+        FontRequest(family="t", weight=400, italic=True),
+    )
+    assert instance.exact is True
+    assert instance.mark is None
+    assert "slnt" in instance.identity

@@ -220,8 +220,9 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
       轴值实例。
     * ``*_font_resolved``（新键，仅「非平凡」决策才发）：``ResolvedFontInstance``
       的关键字段——face style/字重、轴值、模拟加粗、模拟倾斜、回退原因。
-      决策恰为「精确命中静态 face 且 face 字重 = 请求字重」时不发：C++ 端
-      默认路径（按请求字重精确匹配）与该决策逐字节等价，控制 IR 体积。
+      决策恰为「精确命中静态 face 且 face 字重 = 请求字重、无合成、无斜体轴」
+      时不发：C++ 端默认路径（按请求字重精确匹配）与该决策逐字节等价，
+      控制 IR 体积。``italic_axis`` 携带 ital / slnt 轴值（多轴字体）。
 
     回退链与 C++ 解析端一一对应：latin→main、ruby→main、ruby_latin→
     ruby_latin→ruby→main。
@@ -251,6 +252,8 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         trivial = (
             not instance.synthetic_bold
             and not instance.synthetic_italic
+            and instance.italic_axis_tag is None
+            and not instance.axis_values
             and not instance.is_variable
             and instance.reason is None
             and instance.face_style is not None
@@ -262,7 +265,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
             # 的少数情况）：不发半截决策——C++ 侧保持引擎镜像规则（含合成粗体
             # 判定），与本改动前的行为逐字节一致。
             return False, None
-        return instance.is_variable, {
+        resolved: dict[str, Any] = {
             "style": instance.face_style,
             "weight": int(instance.face_weight),
             "axis": instance.axis_value,
@@ -270,6 +273,19 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
             "sim_italic": bool(instance.synthetic_italic),
             "reason": instance.reason,
         }
+        if instance.italic_axis_tag is not None:
+            # 斜体由真实轴表达（ital / slnt）：GPU 一并设进轴实例，不合成。
+            resolved["italic_axis"] = {
+                "tag": instance.italic_axis_tag,
+                "value": instance.italic_axis_value,
+            }
+        if instance.axis_values:
+            # 最终轴值表（全轴：默认打底 + wght/斜体覆盖）：两侧引擎对未指定
+            # 轴的默认实例可能不同，显式钉住才能保证 CPU/GPU 建在同一实例上。
+            resolved["axes"] = {
+                tag: float(value) for tag, value in instance.axis_values
+            }
+        return instance.is_variable, resolved
 
     main_family = payload.get("font_family")
     payload["font_axis"], resolved = slot(main_family, main_weight)

@@ -119,7 +119,14 @@ def apply_font_instance(font: QFont, instance: ResolvedFontInstance) -> None:
     2026-10-08）setWeight 会把 Qt 匹配吸附到最近命名实例/静态 face
     并使轴值失效（@600 平局档吸附到 Bold 且非单调）；轴值本身即权威实例。
     静态字体：绝对字重交给引擎匹配 + 合成粗体/倾斜。
+
+    斜体轴（ital / slnt）：与 wght 同批设进实例；由轴表达的斜体**不再**
+    ``setItalic``（否则 Qt 会在已倾斜的设计上再叠一层合成倾斜）。
     """
+    # 最终轴值表（全轴：默认打底 + wght/斜体覆盖）：显式钉住，两个后端才建在
+    # 同一实例上（未指定轴时 Qt 与 DirectWrite 的默认实例可能不同）。
+    for tag, value in instance.axis_values:
+        font.setVariableAxis(QFont.Tag(tag.encode("latin-1")), float(value))
     if instance.axis_value is not None:
         font.setVariableAxis(
             QFont.Tag(_AXIS_TAG_WEIGHT), float(instance.axis_value)
@@ -146,7 +153,8 @@ def build_weight_font(
     font.setPixelSize(max(int(size_px), 1))
     instance = resolve_font_instance(family, weight, italic=italic)
     apply_font_instance(font, instance)
-    if italic:
+    if italic and instance.italic_axis_tag is None:
+        # 轴表达的斜体（ital/slnt）已经自带倾斜设计：再 setItalic 会二次倾斜。
         font.setItalic(True)
     return font
 

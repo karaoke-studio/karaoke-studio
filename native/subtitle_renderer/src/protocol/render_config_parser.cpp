@@ -43,6 +43,26 @@ FontInstanceHint parseFontInstanceHint(
         hint.variable = true;
         hint.axis = static_cast<float>(axis.toDouble());
     }
+    const QJsonObject axesObject = resolved.value(QStringLiteral("axes")).toObject();
+    for (auto entry = axesObject.constBegin(); entry != axesObject.constEnd(); ++entry) {
+        const QString tag = entry.key();
+        if (tag.size() != 4 || !entry.value().isDouble()) {
+            continue;
+        }
+        hint.axes.emplace_back(
+            tag.toStdWString(), static_cast<float>(entry.value().toDouble())
+        );
+    }
+    const QJsonValue italicAxis = resolved.value(QStringLiteral("italic_axis"));
+    if (italicAxis.isObject()) {
+        const QJsonObject entry = italicAxis.toObject();
+        hint.italicAxisTag = stringValue(
+            entry, QStringLiteral("tag")
+        ).toStdWString();
+        hint.italicAxisValue = static_cast<float>(
+            entry.value(QStringLiteral("value")).toDouble(0.0)
+        );
+    }
     return hint;
 }
 
