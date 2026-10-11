@@ -13516,3 +13516,65 @@ def test_gpu_applies_synthetic_oblique_from_python_decision(monkeypatch) -> None
     assert plain == upright, (
         f"决策 sim_italic=false 时 GPU 仍倾斜：{plain} vs 直立 {upright}"
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_applies_synthetic_oblique_on_variable_axis_instance() -> None:
+    """可变字体 + 斜体：轴实例上必须叠加 OBLIQUE 模拟。
+
+    决策是「轴值实例 + 合成倾斜」（族内无斜体 face 的可变字体，如 Noto Sans
+    SC）；轴只承载字重，倾斜必须由模拟补上。历史实现（轴分支提前 return，
+    simulations=NONE）会让斜体在 GPU 上完全不倾斜——逐像素对照实测墨迹盒
+    窄约 10px（CPU [186,230,455,321] vs GPU [195,231,445,322]）。
+    """
+    from PyQt6.QtGui import QFontDatabase
+
+    from krok_helper.subtitle_render.engine.text.font_weight import (
+        clear_font_weight_cache,
+    )
+
+    font_path = "C:/Windows/Fonts/NotoSansSC-VF.ttf"
+    if not os.path.exists(font_path):
+        pytest.skip("Noto Sans SC VF font file not present")
+    font_id = QFontDatabase.addApplicationFont(font_path)
+    if font_id < 0:
+        pytest.skip("Noto Sans SC VF could not be registered")
+    clear_font_weight_cache()
+    try:
+        family = QFontDatabase.applicationFontFamilies(font_id)[0]
+        track = TimingTrack(
+            lines=[TimingLine(chars=[TimingChar("永", 0)], end_ms=1_000)]
+        )
+        probe = dict(
+            font_family=family,
+            font_family_latin="",
+            font_size_px=96,
+            stroke_width_px=0,
+            stroke2_enabled=False,
+            decoration_kind="none",
+        )
+
+        def _bounds(italic: bool) -> tuple[int, int, int, int]:
+            style = _g1_style(**{**probe, "italic": italic})
+            with NativeRendererProcess(
+                _renderer_path(), response_timeout_s=60.0
+            ) as renderer:
+                _, frames = _render_g1_frames(
+                    renderer, style, (500,), force_warp=True, track=track
+                )
+            return _payload_alpha_bounds(frames[0])
+
+        upright = _bounds(False)
+        sheared = _bounds(True)
+        width_upright = upright[2] - upright[0]
+        height_upright = upright[3] - upright[1]
+        width_sheared = sheared[2] - sheared[0]
+        # 全角 CJK 字形（永）左右边缘的墨迹不满字高，剪切加宽约 0.14×字高
+        # （实测 12/87px）；未施加倾斜时宽差只剩 AA 噪声（≤2px）。
+        assert width_sheared > width_upright + 0.1 * height_upright, (
+            f"可变字体斜体未叠加 OBLIQUE：直立宽 {width_upright}、"
+            f"斜体宽 {width_sheared}（字高 {height_upright}）"
+        )
+    finally:
+        QFontDatabase.removeApplicationFont(font_id)
+        clear_font_weight_cache()

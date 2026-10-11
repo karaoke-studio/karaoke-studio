@@ -171,11 +171,15 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> faceFromFont(
 
 // Variable-font path: if the matched face's font resource exposes a wght
 // axis, create the true axis-value instance (DirectWrite clamps the value to
-// the axis range, matching QFont.setVariableAxis).  Returns null for static
-// fonts so the caller falls through to the static rules.
+// the axis range, matching QFont.setVariableAxis).  ``simulations`` carries
+// the synthetic oblique the Python decision asked for (a family without an
+// italic face still needs the shear on top of the axis instance; the axis
+// only covers weight).  Returns null for static fonts so the caller falls
+// through to the static rules.
 Microsoft::WRL::ComPtr<IDWriteFontFace> axisWeightFace(
     IDWriteFontFace *probeFace,
-    int weight
+    int weight,
+    DWRITE_FONT_SIMULATIONS simulations = DWRITE_FONT_SIMULATIONS_NONE
 ) {
     if (probeFace == nullptr) {
         return {};
@@ -208,7 +212,7 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> axisWeightFace(
         // the same resource with no axis overrides.
         Microsoft::WRL::ComPtr<IDWriteFontFace5> axisFace;
         if (SUCCEEDED(resource->CreateFontFace(
-                DWRITE_FONT_SIMULATIONS_NONE,
+                simulations,
                 &value,
                 1,
                 axisFace.ReleaseAndGetAddressOf()))) {
@@ -264,9 +268,19 @@ ResolvedFontFaces resolveUnifiedFaces(
     // hint 由 Python 侧统一解析下发——这台 Win11 的 DWrite 对静态字体也报告
     // wght 标准轴，凭 GetFontAxisCount 判可变会把静态族全部劫持进恒定的
     // 轴实例；只有 Python 侧实测（轴两端指纹不同）确认的真可变字体才走这里。
+    // 模拟倾斜要**叠加在轴实例上**（族内无斜体 face 时轴只管字重，倾斜来自
+    // PyQt 同源的 OBLIQUE 模拟）——决策是「轴 + 合成倾斜」时漏掉倾斜会让
+    // 斜体在 GPU 上不倾斜（CPU 侧 QFont 合成），逐像素对照实测差 10px 墨迹
+    // 盒宽度。
+    const DWRITE_FONT_SIMULATIONS hintSimulations =
+        hint.present && hint.syntheticItalic
+            ? DWRITE_FONT_SIMULATIONS_OBLIQUE
+            : DWRITE_FONT_SIMULATIONS_NONE;
     if (hint.present && hint.variable) {
         if (auto axisFace = axisWeightFace(
-                probeFace.Get(), static_cast<int>(std::lround(hint.axis))
+                probeFace.Get(),
+                static_cast<int>(std::lround(hint.axis)),
+                hintSimulations
             )) {
             result.outline = axisFace;
             result.metrics = defaultAxisFace(probeFace.Get());
