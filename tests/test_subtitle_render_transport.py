@@ -5626,6 +5626,8 @@ def _fake_heartbeat_renderer(**attrs):
     from krok_helper.subtitle_render.native.backend import NativeRendererProcess
 
     proc = object.__new__(NativeRendererProcess)
+    proc.executable_path = "fake-sidecar"
+    proc._progress_snapshot = None
     proc._stdout_queue = queue_mod.Queue()
     proc._event_backlog = collections.deque()
     proc._stderr_tail = collections.deque(maxlen=80)
@@ -6113,3 +6115,57 @@ def test_preview_mode_switch_ignores_queued_callbacks_from_other_transport():
     renderer.uses_native_preview = False
     PreviewGraphicsView._on_native_frame_presented(view, 0)
     assert calls == []
+
+
+def test_native_mode_displays_current_cpu_fallback_but_rejects_old_generation(qapp, monkeypatch):
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.frontend.preview.preview_graphics import PreviewGraphicsView
+
+    renderer = _broken_sidecar_renderer(monkeypatch, qapp)
+    calls = []
+    try:
+        renderer.set_native_mode(True)
+        view = SimpleNamespace(
+            _async_renderer=renderer, _t_ms=0,
+            _note_frame_delivered=lambda: calls.append("delivered"),
+            _subtitle_item=SimpleNamespace(set_async_image=lambda image: calls.append("image")),
+        )
+        image = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        image.setText("preview_backend", "cpu")
+        image.setText("gpu_generation", str(renderer._generation))
+        PreviewGraphicsView._on_async_frame(view, image, 0)
+        assert calls == ["delivered", "image"]
+        calls.clear()
+        renderer.set_native_mode(False)
+        renderer.set_native_mode(True)
+        PreviewGraphicsView._on_async_frame(view, image, 0)
+        assert calls == []
+    finally:
+        renderer.stop()
+
+
+def test_dcomp_target_failure_preserves_g5_without_opening_device_breaker(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview import preview_async as pa
+    from krok_helper.subtitle_render.native.backend import NativeRendererError
+
+    renderer = _broken_sidecar_renderer(monkeypatch, qapp)
+    try:
+        renderer.set_native_mode(True)
+        failure = NativeRendererError(
+            "IDCompositionDevice::CreateTargetForHwnd failed (HRESULT=0x80070057)"
+        )
+        for _ in range(renderer._consecutive_failure_limit):
+            assert renderer._retry_native_surface_failure(failure, renderer._generation)
+        assert not renderer.uses_native_preview
+        assert not renderer._gpu_restart_breaker.open
+        # A G5 failure must enter the ordinary device/process recovery path.
+        assert not renderer._retry_native_surface_failure(failure, renderer._generation)
+        assert not renderer._retry_native_surface_failure(
+            NativeRendererError("native renderer pipe write failed"), renderer._generation
+        )
+        assert not renderer._retry_native_surface_failure(
+            pa._ConfigPhaseError(str(failure)), renderer._generation
+        )
+    finally:
+        renderer.stop()

@@ -13,6 +13,11 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"KrokSubtitleNativePreview";
 
+class NativePreviewTargetError : public BackendError {
+public:
+    using BackendError::BackendError;
+};
+
 std::string hresultText(const char *operation, HRESULT value) {
     std::ostringstream stream;
     stream << operation << " failed (HRESULT=0x" << std::uppercase << std::hex
@@ -233,12 +238,22 @@ void NativePreviewSurface::ensureSwapChain(ID3D11Device *device, int width, int 
         ),
         "DCompositionCreateDevice"
     );
-    checkHr(
-        compositionDevice_->CreateTargetForHwnd(
-            window_, TRUE, compositionTarget_.ReleaseAndGetAddressOf()
-        ),
-        "IDCompositionDevice::CreateTargetForHwnd"
+    const HRESULT targetResult = compositionDevice_->CreateTargetForHwnd(
+        window_, TRUE, compositionTarget_.ReleaseAndGetAddressOf()
     );
+    if (FAILED(targetResult)) {
+        DWORD ownerProcess = 0;
+        const DWORD ownerThread = GetWindowThreadProcessId(window_, &ownerProcess);
+        std::ostringstream detail;
+        detail << hresultText("IDCompositionDevice::CreateTargetForHwnd", targetResult)
+               << " hwnd=" << window_ << " parent=" << parentWindow_
+               << " valid=" << IsWindow(window_)
+               << " parent_valid=" << IsWindow(parentWindow_)
+               << " owner_pid=" << ownerProcess << " owner_tid=" << ownerThread
+               << " current_pid=" << GetCurrentProcessId()
+               << " current_tid=" << GetCurrentThreadId();
+        throw NativePreviewTargetError(detail.str());
+    }
     checkHr(
         compositionDevice_->CreateVisual(compositionVisual_.ReleaseAndGetAddressOf()),
         "IDCompositionDevice::CreateVisual"
@@ -285,14 +300,24 @@ NativePreviewResult NativePreviewSurface::present(
         || static_cast<UINT>(target.srcY + target.height) > sourceDescription.Height) {
         throw BackendError("native preview source region exceeds the GPU texture");
     }
-    try {
-        ensureWindow(target);
-        ensureSwapChain(device, target.width, target.height);
-    } catch (...) {
-        // 初始化失败可能留下 swap chain，却没有有效的合成目标。
-        // 下次必须完整重建，不能把部分初始化误当成成功状态。
-        close();
-        throw;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        try {
+            ensureWindow(target);
+            ensureSwapChain(device, target.width, target.height);
+            break;
+        } catch (const NativePreviewTargetError &) {
+            // The parent can destroy/reparent its child while DXGI initializes.
+            // Release every partial object and retry with a fresh child once.
+            // Persistent DComp failures are returned to the G5 fallback policy.
+            close();
+            if (attempt != 0 || !IsWindow(reinterpret_cast<HWND>(target.parentWindow))) {
+                throw;
+            }
+        } catch (...) {
+            // Never reuse a swap chain without a successfully bound target.
+            close();
+            throw;
+        }
     }
 
     const auto presentStart = std::chrono::steady_clock::now();

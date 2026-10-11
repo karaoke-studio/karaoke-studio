@@ -47,6 +47,24 @@
 
 ---
 
+### 0.3 2026-10-11：G5 启动连续失败与 native 崩溃诊断待办
+
+- [x] 定位并修复用户机器上 GPU 场景配置阶段的 sidecar 退出。用户日志中
+  4.3.7.3 / 4.3.7.4 均出现；G5 预览和 GPU 导出都在等待 `gpu_configured`
+  时失去管道，导出 stderr 已识别 `NVIDIA GeForce RTX 5070 Laptop GPU`。
+  后续用用户工程确认根因：`d2d_font_fallback.cpp` 无原生斜体 face 时
+  `std::move(faces)` 掏空容器，后续匹配解引用 end，触发 `0xC0000005`。
+  字体修复已在工作区完成；不以 G6 窗口回退修复代替此问题的根因修复。
+- [x] 补齐管道故障信息：EOF 后有界等待退出状态，记录十六进制异常码、
+  sidecar PID/路径、最后进度与 stderr；读管道异常保留原始异常，区别于
+  正常 EOF；进程仍存活时不再误报已经退出。预览失败记录模式及调用栈。
+- [ ] 补齐 native 故障现场：记录 sidecar 构建版本，并关联
+  Windows Application Error（1000）/ Windows Error Reporting（1001）
+  的故障模块、异常偏移及必要的 minidump，避免以后只能让用户手动取证。
+- [x] 用用户工程定位并验证斜体修复（字体任务报告：六方案正常，native
+  GPU 回归 285 passed）。用户应用日志中未出现 `Errno 22` 或 `CreateTargetForHwnd`，不能
+  将这两条其他反馈与本次配置断开直接认定为同一根因。
+
 ## 1. 已核实的 N3 GPU 架构
 
 以下结论来自 `NicoKaraMaker3.dll` 的 .NET 反编译结果，并由本机 N3 日志交叉验证。

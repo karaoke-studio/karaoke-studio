@@ -821,7 +821,8 @@ class PreviewGraphicsView(QGraphicsView):
         return _ASYNC_PAUSED_STALE_TOLERANCE_MS
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
-        if getattr(self._async_renderer, "uses_native_preview", False):
+        if (getattr(self._async_renderer, "uses_native_preview", False)
+                and image.text("preview_backend") != "cpu"):
             return
         accepts_image = getattr(self._async_renderer, "accepts_realization_image", None)
         if accepts_image is not None and not accepts_image(image):

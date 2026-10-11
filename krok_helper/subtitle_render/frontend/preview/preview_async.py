@@ -1951,6 +1951,8 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 self._pending = (t_ms, serial, speculative, submitted_at)
                             self._condition.notify()
                         continue
+                    if self._retry_native_surface_failure(exc, generation):
+                        continue
                     if (
                         isinstance(exc, NativeRendererError)
                         # configure/resize 阶段的失败不做帧级温和重试：
@@ -1981,8 +1983,11 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 self._pending = (t_ms, serial, speculative, submitted_at)
                             self._condition.notify()
                         continue
-                    if not isinstance(exc, (NativeRendererError, RuntimeError)):
-                        _log.exception("GPU 预览路径出现非预期异常")
+                    _log.exception(
+                        "GPU 预览失败 mode=%s generation=%s configure=%s resize=%s",
+                        "G6" if self._native_preview else "G5", generation,
+                        needs_configure, needs_target_resize,
+                    )
                     if self._native_preview:
                         # G6 present 失败：与 G5 同一判定口径——成功出帧
                         # 即清零（见上方 streak=0 赋值处），连续 5 次才
@@ -2237,6 +2242,37 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._native_last_presented = None
             self._render_ms_ema = 0.0
         self._renderer_owner.close()
+
+    def _retry_native_surface_failure(self, exc: Exception, generation: int) -> bool:
+        """Keep a failed DComp window from tripping the GPU device breaker."""
+        if not isinstance(exc, NativeRendererError) or isinstance(exc, _ConfigPhaseError):
+            return False
+        if not str(exc).startswith((
+            "IDComposition", "DCompositionCreateDevice",
+            "IDXGIFactory2::CreateSwapChainForComposition",
+            "native preview parent HWND is invalid",
+            "CreateWindowExW(native preview)", "SetWindowPos(native preview)",
+        )):
+            return False
+        with self._condition:
+            if self._stopped or not self._native_preview or generation != self._generation:
+                return False
+            self._native_preview_failures += 1
+            switch_to_readback = self._native_preview_failures >= self._consecutive_failure_limit
+            self._note("native_surface_failures")
+            if switch_to_readback:
+                # Both transports render on the GPU; only DComp is unavailable.
+                # Do this before counting a device/process failure (limit 3),
+                # otherwise the five-failure G6 -> G5 fallback is unreachable.
+                self.set_native_mode(False)
+            else:
+                self._condition.wait(timeout=0.05)
+            if not self._stopped and self._pending is None and self._latest_t is not None:
+                self._replace_pending_locked(self._latest_t, self._request_serial, False)
+            self._condition.notify_all()
+        if switch_to_readback:
+            self._report_fallback(f"GPU 直画窗口连续创建失败，已切换到 G5 GPU 预览：{exc}")
+        return True
 
     def _project_playback_timestamp(
         self, t_ms: int, submitted_at: float, ema_ms: float
@@ -2530,6 +2566,8 @@ class GpuAsyncSubtitleRenderer(QObject):
                             fill_t = cache.timestamp_for_key(key)
                             image = cpu_render(fill_t)
                             if image is not None:
+                                image.setText("preview_backend", "cpu")
+                                image.setText("gpu_generation", str(generation))
                                 self._note("fallback_frames")
                                 self._cache_speculative(
                                     image, fill_t, generation
@@ -2947,6 +2985,9 @@ class GpuAsyncSubtitleRenderer(QObject):
     def accepts_realization_image(self, image: QImage) -> bool:
         """Reject raw GPU images still queued in Qt after the path transition."""
         with self._condition:
+            image_generation = image.text("gpu_generation")
+            if image_generation and image_generation != str(self._generation):
+                return False
             path = image.text("gpu_realization_path")
             if not path:
                 return True
@@ -3067,6 +3108,8 @@ class GpuAsyncSubtitleRenderer(QObject):
         finally:
             painter.end()
         if self._may_emit(t_ms, generation):
+            image.setText("preview_backend", "cpu")
+            image.setText("gpu_generation", str(generation))
             self._note("fallback_frames")
             self._note("frames_emitted")
             self.frame_ready.emit(image, int(t_ms))

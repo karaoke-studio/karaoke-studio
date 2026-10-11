@@ -828,7 +828,7 @@ class NativeRendererProcess:
         self.gpu_resize_timeout_s = min(self.gpu_configure_timeout_s, 10.0)
         self.close_timeout_s = max(0.1, float(close_timeout_s))
         self._process: subprocess.Popen[str] | None = None
-        self._stdout_queue: queue.Queue[str | None] = queue.Queue()
+        self._stdout_queue: queue.Queue[str | Exception | None] = queue.Queue()
         self._stderr_tail: deque[str] = deque(maxlen=80)
         self._stdout_noise_tail: deque[str] = deque(maxlen=20)
         self._event_backlog: deque[dict[str, Any]] = deque()
@@ -1504,11 +1504,22 @@ class NativeRendererProcess:
         return self._read_response()
 
     def _send(self, payload: dict[str, Any]) -> None:
-        process = self._require_process()
-        assert process.stdin is not None
         with self._send_lock:
-            process.stdin.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-            process.stdin.flush()
+            process = self._require_process()
+            assert process.stdin is not None
+            message = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+            try:
+                process.stdin.write(message)
+                process.stdin.flush()
+            except (OSError, ValueError) as exc:
+                # Windows can report EINVAL instead of BrokenPipeError after
+                # the sidecar exits. Preserve the actual failing operation and
+                # process status, and use the recoverable protocol error type.
+                raise NativeRendererError(
+                    f"native renderer pipe write failed for {payload.get('cmd')!r} "
+                    f"({type(exc).__name__}: {exc}); "
+                    + self._format_exit_error(process, waiting_for="pipe write")
+                ) from exc
 
     def _read_response(
         self,
@@ -1553,6 +1564,11 @@ class NativeRendererProcess:
                 raise NativeRendererError(
                     self._format_exit_error(process, waiting_for=waiting_for)
                 )
+            if isinstance(line, Exception):
+                raise NativeRendererError(
+                    f"native renderer stdout read failed ({type(line).__name__}: {line}); "
+                    + self._format_exit_error(process, waiting_for=waiting_for)
+                ) from line
 
             try:
                 payload = json.loads(line)
@@ -1633,8 +1649,12 @@ class NativeRendererProcess:
         raise NativeRendererError(str(response.get("error") or response))
 
     def _require_process(self) -> subprocess.Popen[str]:
-        if not self.is_running or self._process is None:
+        if self._process is None:
             raise NativeRendererError("native renderer process is not running")
+        if not self.is_running:
+            raise NativeRendererError(
+                self._format_exit_error(self._process, waiting_for="command write")
+            )
         return self._process
 
     def _current_process(self) -> subprocess.Popen[str]:
@@ -1651,7 +1671,7 @@ class NativeRendererProcess:
         self._pipe_threads = [
             threading.Thread(
                 target=self._enqueue_stdout,
-                args=(process.stdout,),
+                args=(process.stdout, self._stdout_queue),
                 name="native-renderer-stdout",
                 daemon=True,
             ),
@@ -1665,7 +1685,10 @@ class NativeRendererProcess:
         for thread in self._pipe_threads:
             thread.start()
 
-    def _enqueue_stdout(self, stream: Any) -> None:
+    def _enqueue_stdout(self, stream: Any, output_queue=None) -> None:
+        # A previous pipe thread can outlive close()'s bounded join. Its EOF
+        # must never enter the queue belonging to a newly started process.
+        output_queue = self._stdout_queue if output_queue is None else output_queue
         try:
             for line in iter(stream.readline, ""):
                 # progress 心跳是即发即弃遥测：只刷新存活时间戳，不进响
@@ -1689,15 +1712,15 @@ class NativeRendererProcess:
                             "at": self._last_heartbeat_monotonic,
                         }
                     continue
-                self._stdout_queue.put(line)
-        except (ValueError, OSError):
+                output_queue.put(line)
+        except (ValueError, OSError) as exc:
             # close() 在 join 超时后会直接关闭管道以解除 readline 阻塞；
-            # 此刻读到的是已关闭的文件对象。必须就地吞掉：未捕获的线程异常
+            # 此刻读到的是已关闭的文件对象。转送响应读端保留原因：未捕获的线程异常
             # 会送去 threading.excepthook，测试进程里 SUG crash guard 把它
             # 弹成模态错误框，无人点掉就卡死整个套件。
-            pass
+            output_queue.put(exc)
         finally:
-            self._stdout_queue.put(None)
+            output_queue.put(None)
 
     def _drain_stderr(self, stream: Any) -> None:
         try:
@@ -1736,6 +1759,8 @@ class NativeRendererProcess:
             f"native renderer response timed out after {timeout_s:.1f}s "
             f"while waiting for {waiting_for!r} "
             f"(returncode={process.poll()}); stderr_tail={self._stderr_excerpt()!r}; "
+            f"pid={getattr(process, 'pid', None)}; executable={str(self.executable_path)!r}; "
+            f"last_progress={self._progress_snapshot!r}; "
             f"stdout_noise={self._stdout_noise_excerpt()!r}"
         )
 
@@ -1745,9 +1770,28 @@ class NativeRendererProcess:
         *,
         waiting_for: str,
     ) -> str:
+        # On Windows pipe EOF can precede the process handle becoming signalled.
+        # Sampling poll() immediately loses the exception code (returncode=None).
+        # Wait only on the failure path, bounded even if a live child closed stdout.
+        returncode = process.poll()
+        if returncode is None:
+            try:
+                returncode = process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                pass
+        if returncode is not None:
+            for thread in self._pipe_threads:
+                if thread is not threading.current_thread():
+                    thread.join(timeout=0.05)
+        exit_status = str(returncode)
+        if returncode is not None:
+            exit_status += f", exit_hex=0x{returncode & 0xffffffff:08X}"
         return (
-            f"native renderer exited while waiting for {waiting_for!r} "
-            f"(returncode={process.poll()}); stderr_tail={self._stderr_excerpt()!r}; "
+            f"native renderer {'exited' if returncode is not None else 'connection closed while process is still running'} "
+            f"while waiting for {waiting_for!r} "
+            f"(returncode={exit_status}); stderr_tail={self._stderr_excerpt()!r}; "
+            f"pid={getattr(process, 'pid', None)}; executable={str(self.executable_path)!r}; "
+            f"last_progress={self._progress_snapshot!r}; "
             f"stdout_noise={self._stdout_noise_excerpt()!r}"
         )
 

@@ -11,6 +11,8 @@ import sys
 import textwrap
 import time
 import uuid
+import queue
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -59,6 +61,131 @@ from krok_helper.subtitle_render.native.protocol import (
     gpu_unsupported_features,
     track_to_ir,
 )
+
+
+def test_old_process_stdout_cannot_deliver_eof_to_restarted_process(tmp_path):
+    executable = tmp_path / "renderer.exe"
+    executable.touch()
+    renderer = NativeRendererProcess(executable_path=executable)
+    old_queue = renderer._stdout_queue
+    new_queue = queue.Queue()
+
+    class DelayedOldStream:
+        def readline(self):
+            renderer._stdout_queue = new_queue
+            return ""
+
+    renderer._enqueue_stdout(DelayedOldStream(), old_queue)
+    assert old_queue.get_nowait() is None
+    assert new_queue.empty()
+
+
+@pytest.mark.parametrize("operation", ["write", "flush"])
+def test_native_pipe_failure_preserves_command_and_process_evidence(tmp_path, operation):
+    executable = tmp_path / "renderer.exe"
+    executable.touch()
+    renderer = NativeRendererProcess(executable_path=executable)
+    failure = OSError(22, "Invalid argument")
+
+    class FailedPipe:
+        def write(self, value):
+            if operation == "write":
+                raise failure
+
+        def flush(self):
+            if operation == "flush":
+                raise failure
+
+    renderer._process = SimpleNamespace(
+        stdin=FailedPipe(), pid=4321, poll=lambda: None,
+        wait=lambda timeout: 0xC0000005,
+    )
+    renderer._stderr_tail.append("device initialization failed")
+    with pytest.raises(NativeRendererError) as caught:
+        renderer._send({"cmd": "configure_gpu"})
+    assert caught.value.__cause__ is failure
+    assert "configure_gpu" in str(caught.value)
+    assert "4321" in str(caught.value)
+    assert "device initialization failed" in str(caught.value)
+    renderer._process = None
+
+
+def test_native_eof_waits_for_windows_exception_status(tmp_path):
+    executable = tmp_path / "renderer.exe"
+    executable.touch()
+    renderer = NativeRendererProcess(executable_path=executable)
+    waits = []
+
+    def wait(timeout):
+        waits.append(timeout)
+        renderer._stderr_tail.append("last native diagnostic")
+        return 0xC0000005
+
+    process = SimpleNamespace(poll=lambda: None, wait=wait)
+    message = renderer._format_exit_error(process, waiting_for="gpu_configured")
+    assert waits == [0.25]
+    assert "0xC0000005" in message
+    assert "last native diagnostic" in message
+
+
+def test_native_eof_from_live_child_has_bounded_wait(tmp_path):
+    executable = tmp_path / "renderer.exe"
+    executable.touch()
+    renderer = NativeRendererProcess(executable_path=executable)
+
+    def wait(timeout):
+        raise subprocess.TimeoutExpired("renderer", timeout)
+
+    process = SimpleNamespace(poll=lambda: None, wait=wait)
+    message = renderer._format_exit_error(process, waiting_for="gpu_configured")
+    assert "returncode=None" in message
+    assert "still running" in message
+
+
+def test_native_stdout_read_error_is_not_reported_as_plain_eof(tmp_path):
+    executable = tmp_path / "renderer.exe"
+    executable.touch()
+    renderer = NativeRendererProcess(executable_path=executable)
+    failure = OSError(22, "Invalid argument")
+
+    class FailedReader:
+        def readline(self):
+            raise failure
+
+    renderer._process = SimpleNamespace(poll=lambda: 0xC0000005, pid=4321)
+    renderer._enqueue_stdout(FailedReader())
+    with pytest.raises(NativeRendererError, match="stdout read failed") as caught:
+        renderer._read_response(waiting_for="gpu_configured")
+    assert caught.value.__cause__ is failure
+    assert "0xC0000005" in str(caught.value)
+    renderer._process = None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native exception exit status")
+def test_native_process_exit_keeps_exception_code_and_final_stderr(tmp_path):
+    executable = tmp_path / "renderer.exe"
+    executable.touch()
+    renderer = NativeRendererProcess(executable_path=executable)
+    # A real pipe/handle race: EOF can become visible before ExitProcess finishes.
+    child = subprocess.Popen(
+        [sys.executable, "-u", "-c",
+         "import ctypes,sys; "
+         "print('last native diagnostic', file=sys.stderr, flush=True); "
+         "ctypes.windll.kernel32.ExitProcess(0xC0000005)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", **_sidecar_subprocess_kwargs(),
+    )
+    renderer._process = child
+    renderer._start_pipe_threads(child)
+    try:
+        with pytest.raises(NativeRendererError) as caught:
+            renderer._read_response(waiting_for="gpu_configured")
+        message = str(caught.value)
+        assert "exit_hex=0xC0000005" in message
+        assert "last native diagnostic" in message
+        assert f"pid={child.pid}" in message
+    finally:
+        renderer.close()
 
 
 def test_native_protocol_has_no_painter_dependency():
