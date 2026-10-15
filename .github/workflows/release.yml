@@ -95,7 +95,7 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstaller
+          python3 -m pip install pyinstaller cryptography
 
       - name: Build macOS package
         run: bash ./scripts/build_macos.command
@@ -105,11 +105,18 @@ jobs:
           cd dist/macos
           ditto -c -k --sequesterRsrc --keepParent "Lin-K Lyrics.app" "../../KaraokeStudio-macos.zip"
 
+      - name: Sign macOS update archive and generate appcast
+        env:
+          KROK_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: python3 scripts/build_macos_appcast.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: KaraokeStudio-macos
-          path: KaraokeStudio-macos.zip
+          path: |
+            KaraokeStudio-macos.zip
+            KaraokeStudio-macos-appcast.xml
 
   release:
     name: Publish Release
@@ -163,3 +170,4 @@ jobs:
             release-assets/windows/KaraokeStudio-windows-runtime.zip
             release-assets/windows/KaraokeStudio-windows-runtime.zip.sha256
             release-assets/macos/KaraokeStudio-macos.zip
+            release-assets/macos/KaraokeStudio-macos-appcast.xml

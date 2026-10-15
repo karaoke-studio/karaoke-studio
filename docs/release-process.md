@@ -207,7 +207,7 @@ git push origin vX.Y.Z[.N]
   | `KaraokeStudio-windows-app.zip` (+`.sha256`) | EXE + Updater + GPU sidecar + `_internal/{krok_helper,strange_uta_game}`，每版必变（约 65 MB） |
   | `KaraokeStudio-windows-runtime.zip` (+`.sha256`) | 其余 `_internal/`，依赖未变时跨版本复用同一文件（约 60 MB） |
 
-- **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量）。
+- **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量），再签署 ZIP 并生成 `KaraokeStudio-macos-appcast.xml`。两个资产一起发布，ZIP 名保持不变。
 - **Publish Release**：把全部文件上传到 GitHub Release（仅 tag 推送时执行）。
 
 **发布不变量（违反任何一条都会甩掉存量客户端）**：全量 zip / part / manifest 资产名不可改（保持改名前的 `KaraokeStudio-*` 前缀）；主程序改名后必须继续随包分发同内容的 `Karaoke Studio.exe` 兼容副本并保留在 `APP_TARGETS` 中，onedir 布局不可改结构（详见 [auto_update.md §8.1](auto_update.md)）；tag 保持 `vX.Y.Z[.N]`；runtime 依赖未变时必须复用上一版 zip 原文件（CI 已内置 `--require-runtime-reuse` 安全闸，重打会改变内容哈希令全部老用户重下 runtime）。
@@ -295,9 +295,32 @@ scripts\build_windows.bat
 
 macOS：
 
+首次启用前，用官方 Sparkle SDK 的 `bin/generate_keys --account lin-k-lyrics`
+生成专用密钥，再用 `bin/generate_keys --account lin-k-lyrics -x <安全路径>`
+导出私钥。将打印的公钥和导出文件中的 Base64 私钥分别配置为仓库 Actions
+secrets `SPARKLE_PUBLIC_ED_KEY`、`SPARKLE_PRIVATE_ED_KEY`。私钥不可提交进仓库。
+构建脚本校验公钥，最终 ZIP 签名脚本校验公私钥是否匹配并验签；缺少密钥或
+配置不匹配会阻断对应的构建或签名步骤。
+这些 Ed25519 密钥用于更新包认证。
+
+构建保留包内 multiprocessing 和 Sparkle 原生加载检查。安装和重启验收
+由开发者按需手工执行，不接入 release workflow。
+
+本地构建先设置 `KROK_SPARKLE_PUBLIC_ED_KEY`。签署发布清单还需设置
+`KROK_SPARKLE_PRIVATE_ED_KEY`，并安装 `cryptography`。应用代码签名沿用现有 ad-hoc
+方式，更新 ZIP 另用 Ed25519 签名。
+
 ```bash
 bash ./scripts/build_macos.command
-cd dist/macos && ditto -c -k --sequesterRsrc --keepParent "Lin-K Lyrics.app" "../../KaraokeStudio-macos.zip"
+ditto -c -k --sequesterRsrc --keepParent "dist/macos/Lin-K Lyrics.app" "KaraokeStudio-macos.zip"
+python3 scripts/build_macos_appcast.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6
+```
+
+可选的本地手工验收（不随发版自动执行）：
+
+```bash
+# 独立临时应用的真实安装/重启验证，不替换已安装的 Lin-K Lyrics：
+python3 scripts/smoke_macos_updater.py --sdk-dir build/sparkle-2.9.6
 ```
 
 手工上传到已有 release：
@@ -311,5 +334,6 @@ gh release upload vX.Y.Z[.N] `
   dist\windows\KaraokeStudio-windows-app.zip.sha256 `
   dist\windows\KaraokeStudio-windows-runtime.zip `
   dist\windows\KaraokeStudio-windows-runtime.zip.sha256 `
-  KaraokeStudio-macos.zip
+  KaraokeStudio-macos.zip `
+  KaraokeStudio-macos-appcast.xml
 ```
