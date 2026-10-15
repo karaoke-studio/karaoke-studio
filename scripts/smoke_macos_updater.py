@@ -62,11 +62,16 @@ status = controller.progress.set_status
 def trace_status(text):
     print(text, flush=True)
     status(text)
+    if config.get('cancel_fallback') and '正在下载更新包' in text:
+        QTimer.singleShot(0, controller.cancel)
 controller.progress.set_status = trace_status
 def finished(error):
     if error:
         Path(config['error']).write_text(error)
         app.exit(1)
+    elif config.get('cancel_fallback') and controller.cancelled:
+        Path(config['cancelled']).write_text('cancelled full fallback')
+        app.exit(0)
 controller.finished.connect(finished)
 result = SimpleNamespace(
     release=SimpleNamespace(tag='v1.0.1', version='1.0.1'),
@@ -201,6 +206,7 @@ def main():
     parser.add_argument("--workbench-exit", action="store_true", help="手工验证完整工作台更新退出，需设置独立数据目录")
     parser.add_argument("--delta", choices=("valid", "tampered", "baseline"), help="验证原生单补丁或失败后完整包回退")
     parser.add_argument("--container", action="store_true", help="从合并 ZIP 截段下载补丁，验证完整客户端路径")
+    parser.add_argument("--cancel-fallback", action="store_true", help="在完整包回退下载中取消，验证不安装且可正常退出")
     args = parser.parse_args()
     if args.workbench_exit:
         raise SystemExit(run_workbench_exit_smoke())
@@ -253,6 +259,7 @@ def main():
         feed = sign_archive(archive, sdk, "1.0.1", public, private)
 
         archive_requests, delta_requests = [], []
+        cancel_fallback = False
         container = directory / 'KaraokeStudio-macos-deltas.zip'
 
         class Handler(BaseHTTPRequestHandler):
@@ -278,7 +285,13 @@ def main():
                 else:
                     with archive.open("rb") as stream:
                         while chunk := stream.read(256 * 1024):
-                            self.wfile.write(chunk)
+                            try:
+                                self.wfile.write(chunk)
+                                self.wfile.flush()
+                                if cancel_fallback:
+                                    time.sleep(.1)
+                            except (BrokenPipeError, ConnectionResetError):
+                                break
             def log_message(self, *args):
                 pass
 
@@ -335,7 +348,7 @@ def main():
         print("PASS: failed recovery rejected installation before host resource release.", flush=True)
         error.unlink()
         config['reject_recovery'] = False
-        mode = args.delta or ('valid' if args.container else None)
+        mode = args.delta or ('tampered' if args.cancel_fallback else 'valid' if args.container else None)
         if mode:
             from dataclasses import asdict, replace
             from krok_helper.updater.macos_feed import MacDelta, render_feed
@@ -361,13 +374,27 @@ def main():
                 feed = render_feed(replace(parse_feed(valid_feed, tag='v1.0.1', version='1.0.1'),
                                            deltas=rows, delta_container_length=container.stat().st_size))
         control.write_text(json.dumps(config))
+        if args.cancel_fallback:
+            cancel_fallback = True
+            config.update(cancel_fallback=True, cancelled=str(directory / 'cancelled'))
+            control.write_text(json.dumps(config))
         initial_requests = len(archive_requests)
         # Read native progress continuously into a file. Undrained PIPE output
         # can block the GUI before it processes the install/termination callback.
         output = (directory / "client.log").open("w")
         process = subprocess.Popen([str(old_app / "Contents/MacOS" / app_name)], stdout=output, stderr=subprocess.STDOUT,
                                    env=runtime_env)
+        cancelled_ok = False
         try:
+            if args.cancel_fallback:
+                assert process.wait(timeout=30) == 0
+                assert Path(config['cancelled']).exists()
+                assert not error.exists() and not marker.exists() and not prepared.exists()
+                assert plistlib.loads(old_plist.read_bytes())['CFBundleVersion'] == '1.0.0'
+                assert len(archive_requests) - initial_requests == 1
+                cancelled_ok = True
+                print('PASS: cancelling full fallback retained the old app, did not install or restart, and exited cleanly.', flush=True)
+                return
             deadline = time.monotonic() + 100
             while time.monotonic() < deadline and not marker.exists() and not error.exists():
                 # Wait for the installer agent after the prepared host exits.
@@ -401,6 +428,8 @@ def main():
             output.close()
             server.shutdown()
             server.server_close()
+            if cancelled_ok:
+                shutil.rmtree(directory)
         shutil.rmtree(directory)
 
 

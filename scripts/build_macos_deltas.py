@@ -171,6 +171,7 @@ def main():
     public = os.environ.get('KROK_SPARKLE_PUBLIC_ED_KEY', '').strip()
     private = os.environ.get('KROK_SPARKLE_PRIVATE_ED_KEY', '').strip()
     if not public or not private:
+        archive.with_name(FEED_NAME).unlink(missing_ok=True)
         print('Sparkle keys are incomplete; skipping macOS delta generation.')
         return
     version = read_app_version()
@@ -178,6 +179,8 @@ def main():
     feed = parse_feed(feed_path.read_bytes(), tag=f'v{version}', version=version)
     # Fail before any expensive work if signing is misconfigured.
     sign_file(archive, args.sdk_dir, public, private)
+    feed = replace(feed, deltas=(), delta_container_length=0)
+    feed_path.write_bytes(render_feed(feed))
     releases = json.loads(args.releases_json.read_text()) if args.releases_json else None
     if releases is None:
         try:
@@ -202,7 +205,8 @@ def main():
                 except Exception as exc:
                     # Subprocess diagnostics may contain signing input; report
                     # only the exception class, never captured tool output.
-                    print(f'Skipped delta {tasks[task]}: {type(exc).__name__}; full update retained.', flush=True)
+                    reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                    print(f'Skipped delta {tasks[task]}: {reason}; full update retained.', flush=True)
         if not patches:
             print('No verified deltas; full update retained.')
             return

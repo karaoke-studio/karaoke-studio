@@ -98,7 +98,7 @@ def load_native_classes(bundle: Path):
             acknowledgement()
 
         def showUpdaterError_acknowledgement_(self, error, acknowledgement):
-            self.owner.error_text = "macOS 更新失败：\n" + str(error.localizedDescription())
+            self.owner.record_error(error)
             acknowledgement()
 
         def showDownloadInitiatedWithCancellation_(self, cancellation):
@@ -168,8 +168,8 @@ def load_native_classes(bundle: Path):
             self.owner.callbacks.schedule(self.owner.callbacks.quit_application)
 
         def updater_didFinishUpdateCycleForUpdateCheck_error_(self, updater, check, error):
-            if error and not self.owner.error_text and not self.owner.cancelled:
-                self.owner.error_text = "macOS 更新失败：\n" + str(error.localizedDescription())
+            if error:
+                self.owner.record_error(error)
             self.owner.callbacks.schedule(self.owner.finish)
 
     _native_classes = (objc.lookUpClass("SPUUpdater"), LKMacUserDriver, LKMacUpdaterDelegate)
@@ -225,6 +225,16 @@ class SparkleSession:
         if self.cancel_callback:
             callback, self.cancel_callback = self.cancel_callback, None
             callback()
+
+    def record_error(self, error) -> None:
+        # Sparkle 2.9.6 SUErrors.h: cancellation at the authorization prompt
+        # is a user decision, never a reason to download a different payload.
+        if str(error.domain()) == "SUSparkleErrorDomain" and int(error.code()) == 4007:
+            self.cancelled = True
+            self.retry_full = False
+            self.error_text = ""
+        elif not self.cancelled and not self.error_text:
+            self.error_text = "macOS 更新失败：\n" + str(error.localizedDescription())
 
     def verify_recovery(self) -> bool:
         """Reject installation before handoff if the host cannot save current edits."""

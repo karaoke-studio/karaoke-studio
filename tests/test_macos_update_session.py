@@ -51,6 +51,31 @@ def test_cancelled_native_cycle_completes_once_without_error():
     assert errors == [""]
 
 
+def test_authorization_cancellation_finishes_without_error_or_full_retry(monkeypatch):
+    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
+    parent = QWidget()
+    controller = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
+    errors = []
+    controller.finished.connect(errors.append)
+    native = session(controller._native_finished)
+    controller.native = native
+    controller.prepared = SimpleNamespace(delta=object(), close=lambda: None)
+    monkeypatch.setattr(controller, "_request_full", lambda: (_ for _ in ()).throw(AssertionError("No retry after cancellation")))
+    error = SimpleNamespace(domain=lambda: 'SUSparkleErrorDomain', code=lambda: 4007,
+                            localizedDescription=lambda: 'authorization cancelled')
+    native.record_error(error)
+    native.finish()
+    assert native.cancelled and not native.retry_full and controller.completed
+    assert errors == ['']
+
+
+def test_matching_error_number_in_another_domain_is_not_a_user_cancellation():
+    native = session(lambda _: None)
+    native.record_error(SimpleNamespace(domain=lambda: 'OtherDomain', code=lambda: 4007,
+                                        localizedDescription=lambda: 'real failure'))
+    assert native.retry_full and not native.cancelled and 'real failure' in native.error_text
+
+
 def test_completed_cycle_retains_error_and_releases_driver_owners():
     errors = []
     native = session(errors.append)

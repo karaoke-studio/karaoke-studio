@@ -59,12 +59,14 @@ def test_container_ranges_preserve_each_independent_signature(tmp_path):
 def test_missing_keys_remove_stale_container_without_fetching_history(tmp_path, monkeypatch):
     output = tmp_path / DELTA_ASSET_NAME
     output.write_bytes(b'stale')
+    (tmp_path / FEED_NAME).write_bytes(b'stale signed index')
     monkeypatch.delenv('KROK_SPARKLE_PUBLIC_ED_KEY', raising=False)
     monkeypatch.delenv('KROK_SPARKLE_PRIVATE_ED_KEY', raising=False)
     monkeypatch.setattr(sys, 'argv', ['build_macos_deltas.py', str(tmp_path / ASSET_NAME), '--sdk-dir', str(tmp_path)])
     monkeypatch.setattr(builder, 'fetch_releases', lambda: pytest.fail('Must not fetch without keys'))
     builder.main()
     assert not output.exists()
+    assert not (tmp_path / FEED_NAME).exists()
 
 
 def test_only_successfully_verified_patches_enter_index(tmp_path, monkeypatch):
@@ -91,3 +93,25 @@ def test_only_successfully_verified_patches_enter_index(tmp_path, monkeypatch):
     builder.main()
     index = ET.fromstring((tmp_path / FEED_NAME).read_bytes()).find(f'./channel/item/{{{DELTA_NS}}}deltas')
     assert [e.get('from') for e in index] == ['4.3.1']
+
+
+def test_history_failure_removes_stale_delta_index_and_retains_full_update(tmp_path, monkeypatch):
+    from krok_helper.updater.macos_feed import parse_feed
+    from krok_helper.updater.sources import build_download_url
+    signature = base64.b64encode(bytes(64)).decode()
+    feed = MacFeed('4.3.3', '4.3.3000', 4, signature, build_download_url('github', 'v4.3.3', ASSET_NAME),
+                   (MacDelta('4.3.2', 4, signature, sha256='0' * 64),), 4)
+    (tmp_path / FEED_NAME).write_bytes(render_feed(feed))
+    (tmp_path / DELTA_ASSET_NAME).write_bytes(b'stale')
+    monkeypatch.setattr(sys, 'argv', ['build_macos_deltas.py', str(tmp_path / ASSET_NAME), '--sdk-dir', str(tmp_path)])
+    monkeypatch.setenv('KROK_SPARKLE_PUBLIC_ED_KEY', 'test')
+    monkeypatch.setenv('KROK_SPARKLE_PRIVATE_ED_KEY', 'test')
+    monkeypatch.setattr(builder, 'read_app_version', lambda: '4.3.3')
+    monkeypatch.setattr(builder, 'sign_file', lambda *a: signature)
+    def fail():
+        raise OSError('GitHub unavailable')
+    monkeypatch.setattr(builder, 'fetch_releases', fail)
+    builder.main()
+    parsed = parse_feed((tmp_path / FEED_NAME).read_bytes(), tag='v4.3.3', version='4.3.3')
+    assert parsed.signature == signature and not parsed.deltas
+    assert not (tmp_path / DELTA_ASSET_NAME).exists()

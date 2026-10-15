@@ -47,17 +47,31 @@ Windows 使用独立 Updater；macOS 使用 Sparkle 2 安装完整 `.app`，仍�
 ### 2.1 macOS：缓存下载与 Sparkle 安装
 
 `macos_transport.py` 先通过现有 HTTP 客户端下载本次发布的
-`KaraokeStudio-macos-appcast.xml` 和 `KaraokeStudio-macos.zip`。下载支持代理、
-失败换源和同一源内的断点续传；换源时清空残片，成功后核对大小及 API 提供的
-SHA256。清单只接受用户已确认的版本、构建号和固定的 macOS 全量包名。
+`KaraokeStudio-macos-appcast.xml`，优先查找当前构建版本对应的直接 delta。
+发布端只为同一主版本、次版本的最近 20 个正式旧版本生成补丁，第四段版本也计入；
+不足 20 个则全部取。客户端一次只应用一个补丁，不串联历史版本。
+跨次版本、超出覆盖范围或没有有效补丁时，下载 `KaraokeStudio-macos.zip`。
+完整包支持代理、失败换源和同一源内的断点续传；换源时清空残片，成功后核对大小及 API 提供的
+SHA256。清单只接受用户已确认的版本、构建号和固定的 macOS 资源名。
+
+各 delta 先独立签署 Ed25519 签名，再原样写入 `ZIP_STORED` 容器
+`KaraokeStudio-macos-deltas.zip`；appcast 的 `lk:deltas` 扩展记录基线版本、
+容器大小及各补丁的偏移、长度、SHA256 和签名。旧客户端忽略扩展，继续全量更新。
+新客户端只用 HTTP Range 获取选中补丁的原始字节，要求返回准确的 `206`、
+`Content-Range` 和长度；忽略 Range 或返回错误数据的节点会被跳过，不下载整个容器。
+截段摘要用于发现传输损坏，最终真实性仍由 Sparkle 使用安装中的公钥验签。
+索引无效或所有节点均无法提供正确片段时改用完整包，不做补丁与完整包的体积比较。
 下载在 spawn 子进程内执行，由 Qt 线程监督。取消时主动终止并回收下载进程，
 关闭连接后删除父进程持有的缓存；无需等待 DNS、响应头、慢速数据或重试计时。
 
 完整文件就绪后，随机端口的本机 HTTP 服务只在 `127.0.0.1` 监听，并只提供
-随机令牌路径下的清单与缓存 ZIP。它没有目录浏览、外部转发或任意文件读取入口。
+随机令牌路径下的清单、缓存 ZIP 和选中的 `.delta`。它没有目录浏览、外部转发或任意文件读取入口。
 `macos_sparkle.py` 用 PyObjC 调用 Sparkle 的 `SPUUpdater`，适配原生 user driver
 和 delegate 协议。`macos_controller.py` 管理下载进程、进度窗与应用退出，
 通过回调接入原生层。Sparkle 下载请求会被改写为本机缓存地址。
+补丁和完整包使用不同地址；Sparkle 回退时，受监督下载子进程按原代理和源顺序准备完整包，
+本机服务等缓存就绪后再提供文件，不自行访问远端。原生会话直接报错时，只允许一次
+完整包重试。取消更新、取消系统管理员授权或恢复快照保存失败不触发回退，也不会为了取消再访问网络。
 
 Sparkle 用已安装应用 `Info.plist` 中的 `SUPublicEDKey` 验证 Ed25519 签名，
 `SUVerifyUpdateBeforeExtraction` 要求解压前验签。安装、必要的管理员授权、
