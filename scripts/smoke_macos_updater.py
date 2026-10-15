@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import plistlib
@@ -27,40 +28,48 @@ from krok_helper.updater.macos_feed import parse_feed
 from scripts.prepare_macos_updater import configure_bundle, sign_bundle
 
 CLIENT = '''
+from multiprocessing import freeze_support
+freeze_support()
 import json, plistlib, sys
 from pathlib import Path
+from types import SimpleNamespace
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QWidget
-from krok_helper.updater.macos_sparkle import SparkleCallbacks, SparkleSession
+from krok_helper.updater import macos_transport
+from krok_helper.updater.macos_controller import MacUpdateController
+from krok_helper.updater.settings import UpdaterSettings
 
 app = QApplication([])
 bundle = Path(sys.executable).parent.parent.parent
 metadata = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
-config = json.loads(Path(metadata['LKSmokeControl']).read_text())
+control = Path(metadata['LKSmokeControl'])
+config = json.loads(control.read_text())
 if metadata['CFBundleVersion'] == '1.0.1000':
     Path(config['marker']).write_text('restarted new version')
     raise SystemExit(0)
 parent = QWidget()
 parent.show()
 app.aboutToQuit.connect(lambda: print('Qt aboutToQuit', flush=True))
+macos_transport.build_release_urls = lambda *args: [('github', config['origin'] + '/feed')]
 def preparing():
     Path(config['prepared']).write_text('installer ready')
+controller = MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=preparing)
+status = controller.progress.set_status
+def trace_status(text):
+    print(text, flush=True)
+    status(text)
+controller.progress.set_status = trace_status
 def finished(error):
     if error:
         Path(config['error']).write_text(error)
-        session.close()
         app.exit(1)
-session = SparkleSession(
-    bundle, build_version='1.0.1000', feed_url=config['origin'] + '/feed',
-    archive_url=config['origin'] + '/archive',
-    callbacks=SparkleCallbacks(
-        status=lambda text: print(text, flush=True), cancellable=lambda _: None,
-        can_install=lambda: True, prepare_relaunch=preparing,
-        schedule=lambda action: QTimer.singleShot(0, action),
-        quit_application=app.quit, completed=finished,
-    ),
+controller.finished.connect(finished)
+result = SimpleNamespace(
+    release=SimpleNamespace(tag='v1.0.1', version='1.0.1'),
+    primary_asset_name='KaraokeStudio-macos.zip', primary_sha256=config['sha256'],
+    download_candidates=[('github', config['origin'] + '/archive')],
 )
-QTimer.singleShot(0, session.start)
+QTimer.singleShot(0, lambda: controller.start(result, UpdaterSettings(proxy_mode='off')))
 QTimer.singleShot(90000, lambda: app.exit(2))
 raise SystemExit(app.exec())
 '''
@@ -132,7 +141,9 @@ def main():
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
-        control.write_text(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}",
+        with archive.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        control.write_text(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}", "sha256": digest,
                                       "marker": str(marker), "prepared": str(prepared), "error": str(error)}))
         # A syntactically valid but incorrect signature must fail inside Sparkle
         # before host preparation, installation or relaunch.
@@ -183,7 +194,7 @@ def main():
             assert process.wait(timeout=15) == 0, "The old host must exit cleanly after installer handoff"
             installed = plistlib.loads(old_plist.read_bytes())
             assert installed["CFBundleVersion"] == "1.0.1000"
-            print("PASS: signed update installed and relaunched; host prepared before termination (host exit 0).")
+            print("PASS: signed cached update installed and relaunched; host prepared before termination (host exit 0).")
         finally:
             if process.poll() is None:
                 process.terminate()

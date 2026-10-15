@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from PyQt6.QtWidgets import QWidget
+
+from krok_helper.updater import macos_controller
 from krok_helper.updater.macos_sparkle import SparkleCallbacks, SparkleSession
 
 
@@ -68,3 +71,19 @@ def test_native_adapter_import_has_no_qt_dependency():
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_qt_cancellation_closes_cache_server_and_native_cycle_once(monkeypatch):
+    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
+    parent = QWidget()
+    controller = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
+    events, errors = [], []
+    controller.finished.connect(errors.append)
+    controller.native = SimpleNamespace(cancel=lambda: events.append("cancel"), close=lambda: events.append("native"))
+    controller.server = SimpleNamespace(close=lambda: events.append("server"))
+    controller.prepared = SimpleNamespace(close=lambda: events.append("cache"))
+    controller.cancel()
+    controller.finish("late network error")
+    controller.finish("duplicate callback")
+    assert events == ["cancel", "native", "server", "cache"]
+    assert errors == [""]
