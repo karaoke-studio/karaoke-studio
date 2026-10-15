@@ -10,6 +10,7 @@ APP_BUNDLE_ID="io.github.karaoke-studio.lin-k-lyrics"
 DIST_PATH="$PROJECT_ROOT/dist/macos"
 WORK_PATH="$PROJECT_ROOT/build/pyinstaller-macos"
 SPEC_PATH="$PROJECT_ROOT/build/spec-macos"
+SPARKLE_SDK_DIR="$PROJECT_ROOT/build/sparkle-2.9.6"
 APP_DIST="$DIST_PATH/$APP_NAME.app"
 SUG_SRC="$PROJECT_ROOT/krok_helper/lyrics_timing/src"
 SUG_PACKAGE="$SUG_SRC/strange_uta_game"
@@ -152,7 +153,13 @@ ensure_pkg fontTools fonttools
 ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets"
 ensure_pkg yt_dlp yt-dlp
 ensure_pkg requests requests
+ensure_pkg objc "pyobjc-core==12.2.2"
+ensure_pkg AppKit "pyobjc-framework-Cocoa==12.2.2"
 ensure_pkg psutil psutil
+
+export KROK_SPARKLE_PUBLIC_ED_KEY="$("$PYTHON_BIN" -c 'import os; print(os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", "").strip())')"
+echo "Preparing signed macOS updater support..."
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/prepare_macos_updater.py" --sdk-dir "$SPARKLE_SDK_DIR"
 ensure_pkg sounddevice sounddevice
 ensure_pkg soundfile soundfile
 ensure_pkg pedalboard pedalboard
@@ -253,6 +260,9 @@ PYINSTALLER_ARGS=(
   --hidden-import PyQt6.QtMultimedia
   --hidden-import PyQt6.QtMultimediaWidgets
   --hidden-import encodings.idna
+  --hidden-import objc
+  --hidden-import Foundation
+  --hidden-import AppKit
   --hidden-import colorsys
 )
 
@@ -401,12 +411,10 @@ echo "Package content validation passed."
 echo "Updating macOS package version and language metadata..."
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/update_macos_version.py" "$APP_DIST/Contents/Info.plist"
 
-# Re-sign after all package contents and metadata have been finalized.
-echo "Re-signing the final macOS package..."
-if ! /usr/bin/codesign --force --sign - "$APP_DIST"; then
-  echo "Failed to re-sign the macOS package."
-  exit 1
-fi
+# Embed Sparkle unchanged (including framework symlinks and installer helpers),
+# then sign inside out after all package contents/metadata have been finalized.
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/prepare_macos_updater.py" \
+  --sdk-dir "$SPARKLE_SDK_DIR" --app "$APP_DIST"
 
 echo "Validating packaged multiprocessing spawn..."
 if ! "$APP_DIST/Contents/MacOS/$APP_NAME" --package-spawn-smoke; then
@@ -414,6 +422,11 @@ if ! "$APP_DIST/Contents/MacOS/$APP_NAME" --package-spawn-smoke; then
   exit 1
 fi
 echo "Packaged multiprocessing spawn passed."
+
+if [ -n "$KROK_SPARKLE_PUBLIC_ED_KEY" ]; then
+  echo "Validating packaged Sparkle loading..."
+  "$APP_DIST/Contents/MacOS/$APP_NAME" --package-updater-smoke
+fi
 
 echo
 echo "Build complete:"

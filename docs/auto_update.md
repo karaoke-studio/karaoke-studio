@@ -4,7 +4,7 @@
 [`release-process.md`](./release-process.md) 为准；设计取舍与跨版本兼容性分析见
 [`工作台更新器完善计划.md`](./工作台更新器完善计划.md)。
 
-## 1. 用户视角流程
+## 1. Windows 用户视角流程
 
 1. 应用启动后按设置执行异步检查；防抖期内静默跳过，不阻塞主界面。
 2. 检查器按用户配置的更新源依次请求 GitHub Releases。API 全部遇到 403 时，
@@ -34,8 +34,74 @@
 | `krok_helper/updater/progress_window.py` | 主程序退出前的下载/准备进度和取消入口 |
 | `krok_helper/updater_app/` | 独立 Updater 包装层；核心实现复用 SUG updater_app |
 | `scripts/build_parts.py` | 构建 app/runtime parts、manifest 和出厂清单 |
+| `krok_helper/updater/macos_metadata.py` | 公钥校验与包内原生框架加载检查 |
+| `krok_helper/updater/macos_feed.py` | macOS 版本映射与签名清单校验 |
+| `krok_helper/updater/macos_transport.py` | 缓存下载与本机 HTTP 资源服务 |
+| `krok_helper/updater/macos_sparkle.py` | 原生 Sparkle 协议适配与安装回调 |
+| `krok_helper/updater/macos_controller.py` | 下载子进程监督、进度界面与退出交接 |
+| `scripts/prepare_macos_updater.py`、`scripts/build_macos_appcast.py` | Sparkle 打包、代码签名与更新包签名 |
 
-Windows 支持检查与自动安装；macOS 当前只支持检查和全量包发布，不走独立更新器。
+Windows 使用独立 Updater；macOS 使用 Sparkle 2 安装完整 `.app`，仍复用上述
+检查器、中文更新说明、代理与源顺序设置。macOS 实现见下节。
+
+### 2.1 macOS：缓存下载与 Sparkle 安装
+
+`macos_transport.py` 先通过现有 HTTP 客户端下载本次发布的
+`KaraokeStudio-macos-appcast.xml`，优先查找当前构建版本对应的直接 delta。
+发布端仅选择同时提供完整包和 macOS appcast 的正式旧版本，排除未接入自动更新及缺密钥发布的版本；
+筛选后取同一主版本、次版本下最近 20 个，第四段版本也计入，不足 20 个则全部取。
+首次启用自动更新时没有符合条件的历史基线，只发布完整包和签名清单。
+CI 通过 `--app` 直接复用本次构建的 `.app`，只解压下载的历史包；单独以 ZIP 运行脚本时仍可解压目标包。
+客户端一次只应用一个补丁，不串联历史版本。
+跨次版本、超出覆盖范围或没有有效补丁时，下载 `KaraokeStudio-macos.zip`。
+完整包支持代理、失败换源和同一源内的断点续传；换源时清空残片，成功后核对大小及 API 提供的
+SHA256。清单只接受用户已确认的版本、构建号和固定的 macOS 资源名。
+
+各 delta 先独立签署 Ed25519 签名，再原样写入 `ZIP_STORED` 容器
+`KaraokeStudio-macos-deltas.zip`；appcast 的 `lk:deltas` 扩展记录基线版本、
+容器大小及各补丁的偏移、长度、SHA256 和签名。旧客户端忽略扩展，继续全量更新。
+新客户端只用 HTTP Range 获取选中补丁的原始字节，要求返回准确的 `206`、
+`Content-Range` 和长度；忽略 Range 或返回错误数据的节点会被跳过，不下载整个容器。
+截段摘要用于发现传输损坏，最终真实性仍由 Sparkle 使用安装中的公钥验签。
+索引无效或所有节点均无法提供正确片段时改用完整包，不做补丁与完整包的体积比较。
+下载在 spawn 子进程内执行，由 Qt 线程监督。取消时主动终止并回收下载进程，
+关闭连接后删除父进程持有的缓存；无需等待 DNS、响应头、慢速数据或重试计时。
+
+完整文件就绪后，随机端口的本机 HTTP 服务只在 `127.0.0.1` 监听，并只提供
+随机令牌路径下的清单、缓存 ZIP 和选中的 `.delta`。它没有目录浏览、外部转发或任意文件读取入口。
+`macos_sparkle.py` 用 PyObjC 调用 Sparkle 的 `SPUUpdater`，适配原生 user driver
+和 delegate 协议。`macos_controller.py` 管理下载进程、进度窗与应用退出，
+通过回调接入原生层。Sparkle 下载请求会被改写为本机缓存地址。
+补丁和完整包使用不同地址；补丁会话请求尚未准备的完整包时，本机服务立即返回不可用，
+不挂起请求等待网络下载。补丁失败后，控制器先结束原生会话、关闭本机服务并清理补丁缓存，
+再由受监督下载子进程按原代理和源顺序准备完整包；下载完成后启动只提供完整包的新会话。
+补丁失败最多触发一次完整包回退。取消更新、取消系统管理员授权或恢复快照保存失败不触发回退，也不会为了取消再访问网络。
+
+Sparkle 用已安装应用 `Info.plist` 中的 `SUPublicEDKey` 验证 Ed25519 签名，
+`SUVerifyUpdateBeforeExtraction` 要求解压前验签。安装、必要的管理员授权、
+替换和重新启动由 Sparkle 的安装器负责。接受安装前，主程序确认最新 SUG 和字幕
+恢复快照写入成功；保存失败或超时会拒绝安装，保留工作台和未保存的修改。
+应用模态进度窗防止安装期间继续编辑。安装器准备好后，主程序停止 SUG、波形对齐、
+字幕预览及音频合成资源，保留恢复文件，再交还退出控制，不调用 Windows 的两秒强制
+退出计时器。Sparkle 确认交接后调用 Qt 正常退出；不在 Qt 退出回调中再次调用
+Cocoa 的 `terminate`，避免重入导致崩溃。更新结束或取消后清理临时缓存与本机服务。
+
+`prepare_macos_updater.py` 获取固定版本和 SHA256 的官方 Sparkle SDK，保留
+framework 的符号链接与辅助程序，再从内到外签署应用。构建末尾用实际
+冻结应用执行 `--package-updater-smoke`，验证框架和 PyObjC 能加载
+`SPUUpdater`。本地构建设置 `KROK_SPARKLE_PUBLIC_ED_KEY` 时启用更新器；
+未设置时不下载或内置 Sparkle，跳过其加载检查，应用仍提示更新并引导手动下载。
+CI 缺少公钥或私钥时同样发布普通包，不阻断 macOS 或 Windows 发布；
+两者齐全但格式错误或不匹配时仍报错。应用代码签名沿用现有 ad-hoc 方式。更新 ZIP 的
+Ed25519 发布签名配置见
+[`release-process.md` 的 macOS 构建段](./release-process.md#附录--本地手工构建)。
+
+`updater/__init__.py` 按需加载公共导出，版本映射和签名清单模块只依赖标准库。
+构建与 ZIP 签名脚本可读取元数据而不提前导入 Qt。Windows
+主程序和独立 Updater 的打包配置均排除 macOS 更新模块与 PyObjC。
+
+旧 macOS 客户端未包含 Sparkle，需要先手动安装带此实现的一版；之后才可自动
+更新。开发源码启动不执行安装，必须从包含公钥和 Sparkle 的 `.app` 运行。
 
 ## 3. 配置项
 
@@ -269,7 +335,8 @@ runtime 内容哈希、迫使所有用户重下运行库。
 6. 运行 `python scripts/release.py notes X.Y.Z[.N]`，检查
    `dist/release-notes-vX.Y.Z[.N].md` 为完整中文内容。
 7. 完成 release commit，推送 `main`，再创建并推送 `vX.Y.Z[.N]` tag。
-8. 监控 release workflow 三个 job 全绿，并核对 Windows 7 个资产及 macOS 全量 zip。
+8. 监控 release workflow 三个 job 全绿，并核对 Windows 7 个资产、macOS 全量
+   ZIP 及签名清单 `KaraokeStudio-macos-appcast.xml`。
 9. CI 的 Publish Release job 会从当前 tag 的 `CHANGELOG.md` 自动提取中文正文，
    并在创建 Release 时通过 `body_path` 直接写入；再用
    `gh release view ... --json body --jq .body` 验证中文 body。

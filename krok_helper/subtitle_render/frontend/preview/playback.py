@@ -186,8 +186,15 @@ class PlaybackController(QObject):
 
     # ------------------------------------------------------------------ internal
     def shutdown(self) -> None:
-        """Stop an in-progress preview transcode before the controller is destroyed."""
+        """Release media decoding and any preview transcode before host exit."""
         self._cancel_proxy_preparation()
+        self._player.stop()
+        self._player.setSource(QUrl())
+        self._player.setAudioOutput(None)
+        self._has_media = False
+        self._media_path = None
+        self._active_playback_path = None
+        self._source_restore = None
         if self._proxy_process is not None:
             self._proxy_process.deleteLater()
             self._proxy_process = None

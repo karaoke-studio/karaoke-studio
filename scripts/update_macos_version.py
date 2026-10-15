@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import plistlib
 import re
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from krok_helper.updater.macos_feed import macos_versions
 
 VERSION_FILE = Path(__file__).resolve().parents[1] / "krok_helper" / "config.py"
 
@@ -17,21 +20,6 @@ def read_app_version() -> str:
     if not match:
         raise ValueError(f"APP_VERSION was not found in {VERSION_FILE}")
     return match.group(1)
-
-
-def macos_versions(version: str) -> tuple[str, str]:
-    match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", version)
-    if not match:
-        raise ValueError(f"Invalid APP_VERSION: {version}")
-    major, minor, patch = (int(part) for part in match.groups()[:3])
-    revision = int(match.group(4) or 0)
-    if revision >= 1000:
-        raise ValueError("The fourth APP_VERSION component must be between 0 and 999.")
-
-    display_version = f"{major}.{minor}.{patch}"
-    # Pack the SUG revision into the third component to preserve version ordering.
-    build_version = f"{major}.{minor}.{patch * 1000 + revision}"
-    return display_version, build_version
 
 
 def update_version_metadata(plist_path: Path, version: str) -> tuple[str, str]:

@@ -55,6 +55,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--on-name-template", help="原唱输出模板，支持 {video_name}，不需要写 .mkv")
     parser.add_argument("--off-name-template", help="伴奏输出模板，支持 {video_name}，不需要写 .mkv")
     parser.add_argument("--gui", action="store_true", help="强制启动图形界面")
+    parser.add_argument("--package-updater-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--package-spawn-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--package-gpu-smoke", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
@@ -193,6 +194,12 @@ def run_gui(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    if args.package_updater_smoke:
+        from krok_helper.updater.macos_metadata import verify_bundled_sparkle
+
+        verify_bundled_sparkle()
+        print("macOS 更新框架加载检查通过。")
+        return 0
     if args.package_spawn_smoke:
         from krok_helper.package_smoke import run_spawn_smoke
 

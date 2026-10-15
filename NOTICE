@@ -48,6 +48,12 @@ aria2c 以官方 release 的未修改二进制形式分发，许可全文
 构建时由 `scripts/fetch_aria2.py` 从官方 release 拉取并按
 固定 SHA-256 校验，校验不通过则中断构建。
 
+macOS 发行包附带 Sparkle 2.9.6，用于更新包签名验证、安装与重新启动。
+上游：https://github.com/sparkle-project/Sparkle
+主体许可：MIT；完整版权声明及所含第三方组件许可随应用附在
+`Contents/Resources/Sparkle-LICENSE.txt`。框架从官方发布获取，并按
+固定 SHA-256 校验；未包含 Sparkle 的示例应用或签名私钥。
+
 源码内嵌的第三方库
 ==================
 

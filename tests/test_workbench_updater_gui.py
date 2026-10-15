@@ -168,3 +168,72 @@ def test_failed_window_exposes_diagnostic_folder_and_copy_actions(
     assert window._workbench_copy_diagnostics.text() == "复制诊断路径"
     window._workbench_copy_diagnostics.click()
     assert qapp.clipboard().text() == str(bundle)
+
+
+@pytest.mark.parametrize("dark", [False, True])
+@pytest.mark.parametrize("theme_unavailable", [False, True])
+def test_progress_text_remains_readable_with_or_without_host_theme(
+    qapp, monkeypatch, dark, theme_unavailable
+):
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtGui import QPalette
+    from krok_helper import theme_workbench
+    from krok_helper.updater import progress_window
+
+    if theme_unavailable:
+        monkeypatch.setitem(sys.modules, "krok_helper.theme_workbench", None)
+        monkeypatch.setattr(progress_window, "isDarkTheme", lambda: dark)
+    else:
+        monkeypatch.setattr(theme_workbench, "palette", lambda: theme_workbench.WorkbenchPalette(dark))
+
+    window = UpdateProgressWindow()
+    window.set_status("正在下载更新包：48%")
+    window.show()
+    qapp.processEvents()
+
+    def luminance(color):
+        channels = [color.redF(), color.greenF(), color.blueF()]
+        channels = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return sum(c * weight for c, weight in zip(channels, (0.2126, 0.7152, 0.0722)))
+
+    def contrast(color):
+        first, second = sorted((luminance(color), luminance(window._bg_color)))
+        return (second + 0.05) / (first + 0.05)
+
+    for label in (window._title_label, window._status):
+        assert contrast(label.palette().color(QPalette.ColorRole.WindowText)) >= 4.5
+    assert contrast(window._btn_cancel.palette().color(QPalette.ColorRole.ButtonText)) >= 4.5
+    assert window._bg_color.alpha() == 255
+
+    # Inspect painted percentage glyphs, inside the ring away from its accent arc.
+    image = window.grab().toImage()
+    scale = image.devicePixelRatio()
+    center = window._ring.mapTo(window, QPoint(24, 24))
+    pixels = [image.pixelColor(int(x * scale), int(y * scale))
+              for x in range(center.x() - 10, center.x() + 10)
+              for y in range(center.y() - 4, center.y() + 4)]
+    assert max(contrast(color) for color in pixels) >= 4.5
+    window.close()
+
+
+@pytest.mark.parametrize("dark", [False, True])
+def test_update_progress_ring_survives_workbench_stylesheet_refresh(qapp, monkeypatch, dark):
+    from krok_helper import theme_workbench
+
+    original_style = qapp.styleSheet()
+    monkeypatch.setattr(theme_workbench, "palette", lambda: theme_workbench.WorkbenchPalette(dark))
+    window = UpdateProgressWindow()
+    window.set_status("正在下载更新包：18%")
+    window.show()
+    qapp.processEvents()
+    try:
+        # The real workbench reapplies its application QSS after showing the
+        # dialog. A global QProgressBar height must not flatten this custom ring.
+        for _ in range(2):
+            qapp.setStyleSheet(theme_workbench.build_app_qss())
+            qapp.processEvents()
+            assert window._ring.width() == window._ring.height() == 48
+            assert window._ring.value() == 18
+    finally:
+        window.close()
+        qapp.setStyleSheet(original_style)

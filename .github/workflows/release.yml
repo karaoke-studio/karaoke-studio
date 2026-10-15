@@ -90,10 +90,29 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Configure macOS auto-update
+        env:
+          KROK_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+          KROK_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from krok_helper.updater.macos_metadata import validate_ed_key
+          public = os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", "").strip()
+          private = os.environ.get("KROK_SPARKLE_PRIVATE_ED_KEY", "").strip()
+          if public and private:
+              public = validate_ed_key(public)
+          else:
+              public = ""
+              print("::notice::Sparkle keys are incomplete; publishing a manual-only macOS package.")
+          with open(os.environ["GITHUB_ENV"], "a") as stream:
+              stream.write(f"KROK_SPARKLE_PUBLIC_ED_KEY={public}\n")
+          PY
+
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstaller
+          python3 -m pip install pyinstaller cryptography
 
       - name: Build macOS package
         run: bash ./scripts/build_macos.command
@@ -103,11 +122,27 @@ jobs:
           cd dist/macos
           ditto -c -k --sequesterRsrc --keepParent "Lin-K Lyrics.app" "../../KaraokeStudio-macos.zip"
 
+      - name: Sign macOS update archive and generate appcast
+        if: env.KROK_SPARKLE_PUBLIC_ED_KEY != ''
+        env:
+          KROK_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: python3 scripts/build_macos_appcast.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6
+
+      - name: Build and verify macOS direct deltas
+        if: env.KROK_SPARKLE_PUBLIC_ED_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KROK_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: python3 scripts/build_macos_deltas.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6 --app "dist/macos/Lin-K Lyrics.app"
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: KaraokeStudio-macos
-          path: KaraokeStudio-macos.zip
+          path: |
+            KaraokeStudio-macos.zip
+            KaraokeStudio-macos-appcast.xml
+            KaraokeStudio-macos-deltas.zip
 
   release:
     name: Publish Release
@@ -161,3 +196,5 @@ jobs:
             release-assets/windows/KaraokeStudio-windows-runtime.zip
             release-assets/windows/KaraokeStudio-windows-runtime.zip.sha256
             release-assets/macos/KaraokeStudio-macos.zip
+            release-assets/macos/KaraokeStudio-macos-appcast.xml
+            release-assets/macos/KaraokeStudio-macos-deltas.zip

@@ -12,7 +12,7 @@ import re
 from PyQt6.QtCore import QTimer, Qt, QRectF, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QPainter, QPainterPath
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
-from qfluentwidgets import ProgressRing, PushButton, themeColor
+from qfluentwidgets import ProgressRing, PushButton, isDarkTheme, themeColor
 
 
 class UpdateProgressWindow(QWidget):
@@ -46,7 +46,17 @@ class UpdateProgressWindow(QWidget):
         mid = QHBoxLayout()
         mid.setSpacing(16)
         self._ring = ProgressRing(self, useAni=False)
+        self._ring.setObjectName("UpdateProgressRing")
         self._ring.setFixedSize(48, 48)
+        # Workbench QSS constrains ordinary progress bars to 10px and reapplies
+        # after this window opens. Keep this painted ring square at QSS priority.
+        self._ring.setStyleSheet(
+            "QProgressBar#UpdateProgressRing {"
+            "min-width: 48px; max-width: 48px;"
+            "min-height: 48px; max-height: 48px;"
+            "border: 0; background: transparent;"
+            "}"
+        )
         self._ring.setTextVisible(True)
         self._ring.setValue(0)
         mid.addWidget(self._ring)
@@ -87,24 +97,36 @@ class UpdateProgressWindow(QWidget):
 
             p = palette()
         except Exception:
-            return
+            # Standalone/frozen updater clients may not have the SUG theme
+            # adapter. Always choose background and foreground as a pair.
+            dark = isDarkTheme()
+            background = "#252526" if dark else "#FFFFFF"
+            border_color = "#3E3E3E" if dark else "#E5EAF2"
+            primary = "#E6E6E6" if dark else "#1f2937"
+            secondary = "#A0A0A0" if dark else "#667085"
+        else:
+            dark = p.is_dark
+            background, border_color = p.card_bg, p.card_border
+            primary, secondary = p.text_primary, p.text_secondary
 
-        dark = p.is_dark
-        bg = QColor(p.card_bg)
-        bg.setAlpha(245)
+        bg = QColor(background)
+        bg.setAlpha(255)
         self._bg_color = bg
-        border = QColor(p.card_border)
+        border = QColor(border_color)
         border.setAlpha(120)
         self._border_color = border
 
         self._title_label.setStyleSheet(
-            f"color: {p.text_primary}; font-size: 16px; font-weight: 600;"
+            f"color: {primary}; font-size: 16px; font-weight: 600;"
         )
-        self._status.setStyleSheet(f"color: {p.text_secondary}; font-size: 13px;")
+        self._status.setStyleSheet(f"color: {secondary}; font-size: 13px;")
 
         accent = themeColor()
         self._ring.setCustomBarColor(accent, accent)
-        text_pen_color = QColor(p.text_primary)
+        self._ring.lightBackgroundColor = self._ring.darkBackgroundColor = (
+            QColor(255, 255, 255, 34) if dark else QColor(0, 0, 0, 34)
+        )
+        text_pen_color = QColor(primary)
         self._ring._drawText = lambda painter, text: (
             painter.setFont(self._ring.font()),
             painter.setPen(text_pen_color),
@@ -116,7 +138,7 @@ class UpdateProgressWindow(QWidget):
         pressed_bg = "rgba(255,255,255,0.05)" if dark else "rgba(0,0,0,0.03)"
         self._btn_cancel.setStyleSheet(
             "QPushButton {"
-            f"  color: {p.text_primary};"
+            f"  color: {primary};"
             f"  background: {base_bg};"
             f"  border: 1px solid {accent.name()};"
             "  border-radius: 6px;"
@@ -141,11 +163,18 @@ class UpdateProgressWindow(QWidget):
 
     def update_from_text(self, text: str) -> None:
         """根据进度文本更新状态；文本含 ``XX%`` 时同步进度环。"""
+        self.set_status(text)
+        QApplication.processEvents()
+
+    def set_status(self, text: str) -> None:
+        """Update without pumping events inside native updater callbacks."""
         self._status.setText(text)
         m = re.search(r"(\d+)%", text)
         if m:
             self._ring.setValue(min(100, int(m.group(1))))
-        QApplication.processEvents()
+
+    def set_cancellable(self, enabled: bool) -> None:
+        self._btn_cancel.setEnabled(enabled)
 
     def _on_cancel(self) -> None:
         self._btn_cancel.setEnabled(False)

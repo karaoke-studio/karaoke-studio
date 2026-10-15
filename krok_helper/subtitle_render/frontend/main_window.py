@@ -9835,10 +9835,10 @@ class SubtitleRenderWindow(QWidget):
         )
         return instance
 
-    def flush_unsaved(self) -> None:
+    def flush_unsaved(self) -> bool:
         """Persist the latest dirty snapshot with a bounded forced-exit wait."""
         if not self._project_dirty:
-            return
+            return True
         self._auto_save_timer.stop()
         self._auto_save_pending = False
         self._wait_for_recovery_worker()
@@ -9848,7 +9848,8 @@ class SubtitleRenderWindow(QWidget):
 
         def write_snapshot() -> None:
             try:
-                save_recovery_project(recovery_path, payload)
+                if not save_recovery_project(recovery_path, payload):
+                    errors.append(ValueError("恢复快照未写入"))
             except (OSError, TypeError, ValueError) as exc:
                 errors.append(exc)
 
@@ -9859,13 +9860,14 @@ class SubtitleRenderWindow(QWidget):
             logging.getLogger(__name__).warning(
                 "强制退出前写字幕恢复快照超时，保留上一次完整快照"
             )
-            return
+            return False
         if errors:
             logging.getLogger(__name__).warning(
                 "强制退出前写字幕恢复快照失败: %s", errors[0]
             )
-            return
+            return False
         self._refresh_project_title()
+        return True
 
     def has_pending_crash_recovery(self) -> bool:
         return self._project_recovery_controller.has_pending()
