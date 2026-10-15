@@ -18,7 +18,7 @@ from krok_helper.updater.sources import build_download_url
 from scripts.update_macos_version import read_app_version
 
 
-def sign_archive(archive: Path, sdk: Path, version: str, public_key: str, private_key: str) -> bytes:
+def validate_signing_keys(public_key: str, private_key: str) -> str:
     public_key = validate_ed_key(public_key)
     # Modern generate_keys exports a 32-byte seed. Older exports contain the
     # expanded 64-byte private key followed by the 32-byte public key.
@@ -39,13 +39,11 @@ def sign_archive(archive: Path, sdk: Path, version: str, public_key: str, privat
         derived = Ed25519PrivateKey.from_private_bytes(key_bytes).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         if base64.b64encode(derived).decode() != public_key:
             raise ValueError("Sparkle private/public keys do not match.")
-    _, build = macos_versions(version)
-    if archive.name != ASSET_NAME:
-        raise ValueError(f"Archive must be named {ASSET_NAME}")
-    with zipfile.ZipFile(archive) as package:
-        metadata = plistlib.loads(package.read("Lin-K Lyrics.app/Contents/Info.plist"))
-    if metadata.get("SUPublicEDKey") != public_key or metadata.get("CFBundleVersion") != build:
-        raise ValueError("The packaged public key or CFBundleVersion differs from this release.")
+    return public_key
+
+
+def sign_file(archive: Path, sdk: Path, public_key: str, private_key: str) -> str:
+    public_key = validate_signing_keys(public_key, private_key)
     signed = subprocess.run(
         [str(sdk / "bin/sign_update"), "--ed-key-file", "-", "-p", str(archive)],
         input=private_key.strip() + "\n", text=True, capture_output=True,
@@ -64,6 +62,19 @@ def sign_archive(archive: Path, sdk: Path, version: str, public_key: str, privat
             Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key)).verify(base64.b64decode(signature), contents)
     except InvalidSignature:
         raise ValueError("The signed archive failed verification with the packaged public key.") from None
+    return signature
+
+
+def sign_archive(archive: Path, sdk: Path, version: str, public_key: str, private_key: str) -> bytes:
+    public_key = validate_signing_keys(public_key, private_key)
+    _, build = macos_versions(version)
+    if archive.name != ASSET_NAME:
+        raise ValueError(f"Archive must be named {ASSET_NAME}")
+    with zipfile.ZipFile(archive) as package:
+        metadata = plistlib.loads(package.read("Lin-K Lyrics.app/Contents/Info.plist"))
+    if metadata.get("SUPublicEDKey") != public_key or metadata.get("CFBundleVersion") != build:
+        raise ValueError("The packaged public key or CFBundleVersion differs from this release.")
+    signature = sign_file(archive, sdk, public_key, private_key)
     return render_feed(MacFeed(version, build, archive.stat().st_size, signature, build_download_url("github", f"v{version}", ASSET_NAME)))
 
 

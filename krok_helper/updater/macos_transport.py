@@ -188,7 +188,7 @@ class LocalUpdateServer:
         self.feed_url = origin + feed_path
         self.archive_url = origin + archive_path
         self.delta_url = origin + delta_path if prepared.delta is not None else None
-        feed_data = render_feed(prepared.feed, delta=prepared.delta, delta_url=self.delta_url or "")
+        feed_data = render_feed(prepared.feed, delta=prepared.delta, delta_url=self.delta_url or "", include_index=False)
 
         class Handler(BaseHTTPRequestHandler):
             def do_HEAD(self):

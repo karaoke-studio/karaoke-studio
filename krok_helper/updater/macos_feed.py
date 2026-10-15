@@ -12,6 +12,9 @@ from krok_helper.updater.macos_metadata import validate_ed_key
 
 ASSET_NAME = "KaraokeStudio-macos.zip"
 FEED_NAME = "KaraokeStudio-macos-appcast.xml"
+DELTA_ASSET_NAME = "KaraokeStudio-macos-deltas.zip"
+DELTA_NS = "urn:lin-k-lyrics:macos-deltas:1"
+MAX_DELTAS = 20
 SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 MAX_FEED_SIZE = 1024 * 1024
 
@@ -46,6 +49,7 @@ class MacFeed:
     signature: str
     archive_url: str
     deltas: tuple[MacDelta, ...] = ()
+    delta_container_length: int = 0
 
     @classmethod
     def from_dict(cls, value: dict) -> MacFeed:
@@ -94,7 +98,7 @@ def parse_feed(data: bytes, *, tag: str, version: str) -> MacFeed:
     return MacFeed(version, build, length, signature, url)
 
 
-def render_feed(feed: MacFeed, *, delta: MacDelta | None = None, delta_url: str = "") -> bytes:
+def render_feed(feed: MacFeed, *, delta: MacDelta | None = None, delta_url: str = "", include_index: bool = True) -> bytes:
     ET.register_namespace("sparkle", SPARKLE_NS)
     root = ET.Element("rss", {"version": "2.0"})
     channel = ET.SubElement(root, "channel")
@@ -115,4 +119,16 @@ def render_feed(feed: MacFeed, *, delta: MacDelta | None = None, delta_url: str 
             f"{{{SPARKLE_NS}}}deltaFrom": macos_versions(delta.from_version)[1],
             f"{{{SPARKLE_NS}}}edSignature": delta.signature,
         })
+    if include_index and feed.deltas:
+        ET.register_namespace("lk", DELTA_NS)
+        index = ET.SubElement(item, f"{{{DELTA_NS}}}deltas", {
+            "url": build_download_url("github", f"v{feed.version}", DELTA_ASSET_NAME),
+            "length": str(feed.delta_container_length),
+        })
+        for entry in feed.deltas:
+            ET.SubElement(index, f"{{{DELTA_NS}}}delta", {
+                "from": entry.from_version, "offset": str(entry.offset),
+                "length": str(entry.length), "signature": entry.signature,
+                "sha256": entry.sha256,
+            })
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
