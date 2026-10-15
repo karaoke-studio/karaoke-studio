@@ -15,7 +15,7 @@ from scripts import build_macos_deltas as builder
 
 
 def release(version, **overrides):
-    return {'tag_name': 'v' + version, 'assets': [{'name': ASSET_NAME}], **overrides}
+    return {'tag_name': 'v' + version, 'assets': [{'name': ASSET_NAME}, {'name': FEED_NAME}], **overrides}
 
 
 def test_selects_latest_twenty_same_minor_using_numeric_four_component_versions():
@@ -29,6 +29,46 @@ def test_selects_latest_twenty_same_minor_using_numeric_four_component_versions(
     assert selected[-1]['version'] == '4.3.12'
     assert builder.select_baselines(releases, '4.5.0') == []
     assert [r['version'] for r in builder.select_baselines(releases, '4.3.2')] == ['4.3.1', '4.3.0']
+
+
+@pytest.mark.parametrize('assets', [
+    [{'name': ASSET_NAME}],  # Pre-Sparkle and missing-key releases are both manual-only.
+    [{'name': FEED_NAME}],
+    [{'name': ASSET_NAME}, {'name': 'KaraokeStudio-windows.json'}],
+    [],
+])
+def test_baseline_requires_both_macos_archive_and_signed_appcast(assets):
+    history = [release('4.3.1'), release('4.3.2', assets=assets)]
+    assert [r['version'] for r in builder.select_baselines(history, '4.3.3')] == ['4.3.1']
+
+
+def test_manual_only_releases_do_not_consume_twenty_baseline_slots():
+    history = [release(f'4.3.{i}') for i in range(25)]
+    history += [release(f'4.3.{i}', assets=[{'name': ASSET_NAME}]) for i in range(25, 50)]
+    selected = builder.select_baselines(history, '4.3.50')
+    assert [r['version'] for r in selected] == [f'4.3.{i}' for i in range(24, 4, -1)]
+
+
+def test_first_auto_update_release_keeps_full_feed_without_preparing_deltas(tmp_path, monkeypatch):
+    from krok_helper.updater.macos_feed import parse_feed
+    from krok_helper.updater.sources import build_download_url
+    signature = base64.b64encode(bytes(64)).decode()
+    feed = MacFeed('4.3.3', '4.3.3000', 4, signature, build_download_url('github', 'v4.3.3', ASSET_NAME))
+    (tmp_path / FEED_NAME).write_bytes(render_feed(feed))
+    (tmp_path / DELTA_ASSET_NAME).write_bytes(b'stale container')
+    history = tmp_path / 'history.json'
+    history.write_text(json.dumps([release('4.3.1', assets=[{'name': ASSET_NAME}]),
+                                   release('4.3.2', assets=[{'name': ASSET_NAME}])]))
+    monkeypatch.setattr(sys, 'argv', ['build_macos_deltas.py', str(tmp_path / ASSET_NAME), '--sdk-dir', str(tmp_path), '--releases-json', str(history)])
+    monkeypatch.setenv('KROK_SPARKLE_PUBLIC_ED_KEY', 'test')
+    monkeypatch.setenv('KROK_SPARKLE_PRIVATE_ED_KEY', 'test')
+    monkeypatch.setattr(builder, 'read_app_version', lambda: '4.3.3')
+    monkeypatch.setattr(builder, 'sign_file', lambda *a: signature)
+    monkeypatch.setattr(builder, 'extract', lambda *a: pytest.fail('No baseline should require unpacking'))
+    monkeypatch.setattr(builder, 'build_delta', lambda *a, **kw: pytest.fail('Manual-only baselines must not be downloaded'))
+    builder.main()
+    assert parse_feed((tmp_path / FEED_NAME).read_bytes(), tag='v4.3.3', version='4.3.3') == feed
+    assert not (tmp_path / DELTA_ASSET_NAME).exists()
 
 
 def test_container_ranges_preserve_each_independent_signature(tmp_path):

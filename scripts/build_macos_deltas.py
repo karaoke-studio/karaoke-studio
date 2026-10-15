@@ -51,8 +51,10 @@ def select_baselines(releases: list[dict], version: str) -> list[dict]:
             continue
         if key[:2] != target[:2] or key >= target:
             continue
-        asset = next((a for a in release.get('assets', []) if a['name'] == ASSET_NAME), None)
-        if asset:
+        assets = release.get('assets', [])
+        asset = next((a for a in assets if a['name'] == ASSET_NAME), None)
+        # Manual-only releases have no signed appcast and cannot use deltas.
+        if asset and any(a['name'] == FEED_NAME for a in assets):
             selected[key] = {'version': tag[1:], 'asset': asset}
     return [selected[key] for key in sorted(selected, reverse=True)[:MAX_DELTAS]]
 
@@ -190,6 +192,9 @@ def main():
             return
     baselines = select_baselines(releases, version)
     print(f'Selected {len(baselines)} same-minor baselines (maximum {MAX_DELTAS}).', flush=True)
+    if not baselines:
+        print('No auto-update baselines; full update retained.')
+        return
     with tempfile.TemporaryDirectory(prefix='lin-k-deltas-') as temporary:
         work = Path(temporary)
         target = extract(archive, work / 'target')
