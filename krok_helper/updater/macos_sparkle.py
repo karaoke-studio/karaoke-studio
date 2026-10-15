@@ -103,6 +103,7 @@ def load_native_classes(bundle: Path):
 
         def showDownloadInitiatedWithCancellation_(self, cancellation):
             self.owner.cancel_callback = cancellation
+            self.owner.callbacks.cancellable(True)
             self.owner.callbacks.status("正在将更新包交给 macOS 更新器…")
 
         def showDownloadDidReceiveExpectedContentLength_(self, length):
@@ -114,17 +115,20 @@ def load_native_classes(bundle: Path):
         def showDownloadDidStartExtractingUpdate(self):
             self.owner.cancel_callback = None
             self.owner.callbacks.cancellable(False)
-            self.owner.callbacks.status("签名校验通过，正在解压更新包…")
+            self.owner.callbacks.status("签名校验通过，正在应用增量更新…" if self.owner.downloading_delta else "签名校验通过，正在解压更新包…")
 
         def showExtractionReceivedProgress_(self, progress):
-            self.owner.callbacks.status(f"正在解压更新包：{int(progress * 100)}%")
+            action = "应用增量更新" if self.owner.downloading_delta else "解压更新包"
+            self.owner.callbacks.status(f"正在{action}：{int(progress * 100)}%")
 
         def showReadyToInstallAndRelaunch_(self, reply):
             if self.owner.cancelled or not self.owner.callbacks.can_install():
+                self.owner.retry_full = False
                 self.owner.error_text = "当前有任务正在运行，本次更新已取消。"
                 reply(0)
                 return
             if not self.owner.verify_recovery():
+                self.owner.retry_full = False
                 reply(0)
                 return
             self.owner.callbacks.status("正在准备安装并重新启动…")
@@ -144,7 +148,8 @@ def load_native_classes(bundle: Path):
             return self.owner.feed_url
 
         def updater_willDownloadUpdate_withRequest_(self, updater, item, request):
-            request.setURL_(NSURL.URLWithString_(self.owner.archive_url))
+            self.owner.downloading_delta = bool(item.isDeltaUpdate())
+            request.setURL_(NSURL.URLWithString_(self.owner.resource_url(self.owner.downloading_delta)))
 
         def updater_shouldPostponeRelaunchForUpdate_untilInvokingBlock_(self, updater, item, install_handler):
             # Called after Sparkle's installer has staged and validated the app.
@@ -177,15 +182,24 @@ class SparkleSession:
     def __init__(
         self, bundle: Path, *, build_version: str, feed_url: str,
         archive_url: str, callbacks: SparkleCallbacks,
+        delta_url: str | None = None,
     ):
         self.bundle = bundle
         self.build_version = build_version
         self.feed_url, self.archive_url = feed_url, archive_url
+        self.delta_url = delta_url
+        self.downloading_delta = False
+        self.retry_full = True
         self.callbacks = callbacks
         self.updater = self.driver = self.delegate = None
         self.cancel_callback = self.install_handler = None
         self.cancelled = self.installing = self.completed = False
         self.error_text = ""
+
+    def resource_url(self, delta: bool) -> str:
+        if delta and not self.delta_url:
+            raise ValueError("本次更新没有已准备的增量包。")
+        return self.delta_url if delta else self.archive_url
 
     def start(self) -> None:
         from Foundation import NSBundle

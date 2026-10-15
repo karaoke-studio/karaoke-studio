@@ -6,6 +6,7 @@ import threading
 import multiprocessing as mp
 import tempfile
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
@@ -13,7 +14,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from krok_helper.updater.macos_sparkle import SparkleCallbacks, SparkleSession, find_host_bundle
-from krok_helper.updater.macos_feed import ASSET_NAME, MacFeed
+from krok_helper.updater.macos_feed import ASSET_NAME, MacDelta, MacFeed
 from krok_helper.updater import macos_transport
 from krok_helper.updater.macos_transport import LocalUpdateServer, PreparedMacUpdate, prepare_in_process
 from krok_helper.updater.progress_window import UpdateProgressWindow
@@ -24,9 +25,10 @@ from krok_helper.updater.worker import CheckResult
 class _PrepareWorker(QThread):
     progress = pyqtSignal(str)
 
-    def __init__(self, result: CheckResult, settings: UpdaterSettings, parent: QObject):
+    def __init__(self, result: CheckResult, settings: UpdaterSettings, parent: QObject, *, feed: MacFeed | None = None):
         super().__init__(parent)
         self.result, self.settings = result, settings
+        self.feed = feed
         self.cancel_event = threading.Event()
         self.prepared = None
         self.error = ""
@@ -54,6 +56,7 @@ class _PrepareWorker(QThread):
                 "feeds": macos_transport.build_release_urls(
                     self.settings.source_order, release.tag, macos_transport.FEED_NAME,
                 ),
+                "feed": asdict(self.feed) if self.feed else None,
             }
             self.process = context.Process(
                 target=prepare_in_process, args=(spec, temporary.name, sender),
@@ -73,7 +76,9 @@ class _PrepareWorker(QThread):
                         kind, value = receiver.recv()
                         if kind == "prepared":
                             self.prepared = PreparedMacUpdate(
-                                temporary, Path(temporary.name) / ASSET_NAME, MacFeed(**value),
+                                temporary, Path(temporary.name) / ASSET_NAME, MacFeed.from_dict(value["feed"]),
+                                MacDelta(**value["delta"]) if value["delta"] else None,
+                                Path(temporary.name) / value["delta_archive"] if value["delta_archive"] else None,
                             )
                             done = True
                             break
@@ -117,6 +122,7 @@ class _PrepareWorker(QThread):
 
 class MacUpdateController(QObject):
     finished = pyqtSignal(str)
+    full_requested = pyqtSignal()
 
     def __init__(
         self, parent: QWidget, *, can_install: Callable[[], bool],
@@ -135,10 +141,15 @@ class MacUpdateController(QObject):
         self.progress.cancelled.connect(self.cancel)
         self.worker = None
         self.prepared = self.server = self.native = None
+        self.fallback_prepared = None
+        self.full_attempted = False
+        self.result = self.settings = None
+        self.full_requested.connect(self._request_full, Qt.ConnectionType.QueuedConnection)
         self.cancelled = self.installing = self.completed = False
         QApplication.instance().aboutToQuit.connect(self.on_quit)
 
     def start(self, result: CheckResult, settings: UpdaterSettings) -> None:
+        self.result, self.settings = result, settings
         self.progress.set_status("正在获取 macOS 更新签名…")
         self.progress.show()
         self.worker = _PrepareWorker(result, settings, self)
@@ -162,17 +173,29 @@ class MacUpdateController(QObject):
             self.progress.set_status(text)
 
     def download_finished(self) -> None:
+        if self.worker is None:
+            return
         worker, self.worker = self.worker, None
-        self.prepared, error = worker.prepared, worker.error
+        prepared, error = worker.prepared, worker.error
         worker.deleteLater()
-        if self.cancelled or self.prepared is None:
+        if self.cancelled or prepared is None:
+            if prepared:
+                prepared.close()
             self.finish(error)
             return
+        if self.server is not None:
+            self.fallback_prepared = prepared
+            self.server.supply_full(prepared.archive)
+            return
+        if self.prepared is not None:
+            self.prepared.close()
+        self.prepared = prepared
         try:
-            self.server = LocalUpdateServer(self.prepared)
+            self.server = LocalUpdateServer(self.prepared, request_full=self.full_requested.emit)
             self.native = SparkleSession(
                 self.bundle, build_version=self.prepared.feed.build_version,
                 feed_url=self.server.feed_url, archive_url=self.server.archive_url,
+                delta_url=self.server.delta_url,
                 callbacks=SparkleCallbacks(
                     status=self.progress.set_status,
                     cancellable=self.progress.set_cancellable,
@@ -180,13 +203,38 @@ class MacUpdateController(QObject):
                     prepare_relaunch=self._prepare_install,
                     schedule=lambda callback: QTimer.singleShot(0, callback),
                     quit_application=QApplication.instance().quit,
-                    completed=self.finish,
+                    completed=self._native_finished,
                     verify_recovery=self.verify_recovery,
                 ),
             )
             self.native.start()
         except Exception as exc:
             self.finish(str(exc))
+
+    def _request_full(self) -> None:
+        if self.completed or self.cancelled or self.full_attempted:
+            return
+        self.full_attempted = True
+        self.progress.set_cancellable(True)
+        self.progress.set_status("增量更新不可用，正在下载完整包…")
+        self.worker = _PrepareWorker(self.result, self.settings, self, feed=self.prepared.feed)
+        self.worker.progress.connect(self._update_status, Qt.ConnectionType.QueuedConnection)
+        self.worker.finished.connect(self.download_finished)
+        self.worker.start()
+
+    def _native_finished(self, error: str = "") -> None:
+        # Sparkle may end the cycle instead of requesting its full enclosure
+        # (e.g. signature rejection). Retry once without advertising any delta.
+        if (error and not self.cancelled and not self.installing and not self.full_attempted
+                and self.native.retry_full
+                and self.prepared is not None and self.prepared.delta is not None):
+            self._request_full()
+            self.native.close()
+            self.native = None
+            self.server.close()
+            self.server = None
+            return
+        self.finish(error)
 
     def _prepare_install(self) -> None:
         self.prepare_relaunch()
@@ -209,6 +257,13 @@ class MacUpdateController(QObject):
         if self.completed:
             return
         self.completed = True
+        if self.worker:
+            worker, self.worker = self.worker, None
+            worker.cancel_event.set()
+            worker.wait()
+            if worker.prepared:
+                worker.prepared.close()
+            worker.deleteLater()
         if self.native:
             self.native.close()
             self.native = None
@@ -218,6 +273,9 @@ class MacUpdateController(QObject):
         if self.prepared:
             self.prepared.close()
             self.prepared = None
+        if self.fallback_prepared:
+            self.fallback_prepared.close()
+            self.fallback_prepared = None
         QApplication.instance().aboutToQuit.disconnect(self.on_quit)
         self.progress.finish()
         self.finished.emit("" if self.cancelled else error)

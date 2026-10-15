@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Callable
 from krok_helper.network import requests_session_for_proxy
 from krok_helper.updater import http_client
 from krok_helper.updater.macos_feed import (
-    ASSET_NAME, FEED_NAME, MAX_FEED_SIZE, MacFeed, parse_feed, render_feed,
+    ASSET_NAME, FEED_NAME, MAX_FEED_SIZE, MacDelta, MacFeed, parse_feed, render_feed,
 )
 from krok_helper.updater.sources import build_release_urls
 
@@ -33,6 +33,8 @@ class PreparedMacUpdate:
     temporary: tempfile.TemporaryDirectory | None
     archive: Path
     feed: MacFeed
+    delta: MacDelta | None = None
+    delta_archive: Path | None = None
 
     def close(self) -> None:
         if self.temporary is not None:
@@ -47,6 +49,7 @@ def prepare_update(
     progress: Callable[[str], None],
     cache_dir: Path | None = None,
     feed_candidates: list[tuple[str, str]] | None = None,
+    feed: MacFeed | None = None,
 ) -> PreparedMacUpdate:
     release = result.release
     if release is None or result.primary_asset_name != ASSET_NAME:
@@ -62,9 +65,8 @@ def prepare_update(
 
     errors = []
     try:
-        feed = None
         feeds = feed_candidates if feed_candidates is not None else build_release_urls(settings.source_order, release.tag, FEED_NAME)
-        for source, url in feeds:
+        for source, url in ([] if feed is not None else feeds):
             check_cancel()
             progress(f"正在获取 macOS 更新签名（{source}）…")
             try:
@@ -146,8 +148,13 @@ def prepare_in_process(spec: dict, cache_dir: str, channel) -> None:
             progress=lambda status: channel.send(("progress", status)),
             cache_dir=Path(cache_dir),
             feed_candidates=spec["feeds"],
+            feed=MacFeed.from_dict(spec["feed"]) if spec.get("feed") else None,
         )
-        channel.send(("prepared", asdict(prepared.feed)))
+        channel.send(("prepared", {
+            "feed": asdict(prepared.feed),
+            "delta": asdict(prepared.delta) if prepared.delta else None,
+            "delta_archive": prepared.delta_archive.name if prepared.delta_archive else None,
+        }))
     except Exception as exc:
         try:
             channel.send(("error", str(exc)))
@@ -158,15 +165,30 @@ def prepare_in_process(spec: dict, cache_dir: str, channel) -> None:
 
 
 class LocalUpdateServer:
-    """Only two token-scoped resources, bound to IPv4 loopback, never a proxy."""
+    """Token-scoped cached resources; missing full archives are prepared by the host."""
 
-    def __init__(self, prepared: PreparedMacUpdate):
+    def __init__(self, prepared: PreparedMacUpdate, *, request_full: Callable[[], None] = lambda: None):
         token = secrets.token_urlsafe(32)
         self.feed_path = f"/{token}/{FEED_NAME}"
         self.archive_path = f"/{token}/{ASSET_NAME}"
-        feed_data = render_feed(prepared.feed)
-        archive = prepared.archive
+        self.delta_path = f"/{token}/update.delta"
+        self._ready = threading.Event()
+        self._closed = threading.Event()
+        self._archive = prepared.archive
+        self._requested = False
+        self._lock = threading.Lock()
+        if prepared.delta is None:
+            self._ready.set()
         feed_path, archive_path = self.feed_path, self.archive_path
+        delta_path = self.delta_path
+        owner = self
+        # Bind before rendering: native Sparkle must see the .delta extension.
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+        origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.feed_url = origin + feed_path
+        self.archive_url = origin + archive_path
+        self.delta_url = origin + delta_path if prepared.delta is not None else None
+        feed_data = render_feed(prepared.feed, delta=prepared.delta, delta_url=self.delta_url or "")
 
         class Handler(BaseHTTPRequestHandler):
             def do_HEAD(self):
@@ -176,13 +198,31 @@ class LocalUpdateServer:
                 self.serve(True)
 
             def serve(self, body):
-                if self.path not in (feed_path, archive_path):
+                if self.path not in (feed_path, archive_path, delta_path):
                     self.send_error(404)
                     return
                 is_feed = self.path == feed_path
+                is_delta = self.path == delta_path
+                if is_delta and (prepared.delta is None or prepared.delta_archive is None):
+                    self.send_error(404)
+                    return
+                if self.path == archive_path:
+                    with owner._lock:
+                        if not owner._ready.is_set() and not owner._requested:
+                            owner._requested = True
+                            request_full()
+                    while not owner._ready.wait(0.05):
+                        if owner._closed.is_set():
+                            self.send_error(503)
+                            return
+                    if owner._closed.is_set():
+                        self.send_error(503)
+                        return
+                archive = prepared.delta_archive if is_delta else owner._archive
+                length = len(feed_data) if is_feed else (prepared.delta.length if is_delta else prepared.feed.length)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/rss+xml" if is_feed else "application/octet-stream")
-                self.send_header("Content-Length", str(len(feed_data) if is_feed else prepared.feed.length))
+                self.send_header("Content-Length", str(length))
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 if body:
@@ -199,14 +239,16 @@ class LocalUpdateServer:
             def log_message(self, *args):
                 pass
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.RequestHandlerClass = Handler
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
-        origin = f"http://127.0.0.1:{self.server.server_port}"
-        self.feed_url = origin + self.feed_path
-        self.archive_url = origin + self.archive_path
+
+    def supply_full(self, archive: Path) -> None:
+        self._archive = archive
+        self._ready.set()
 
     def close(self):
+        self._closed.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)

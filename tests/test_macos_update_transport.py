@@ -167,3 +167,53 @@ def test_manual_proxy_session_is_used_for_feed_and_archive(source, monkeypatch):
     assert seen == [("manual", "http://127.0.0.1:7890")]
     assert [url for url, _ in calls] == [origin + "/feed", origin + "/archive"]
     assert all(proxies == {"https": "http://127.0.0.1:7890"} for _, proxies in calls)
+
+
+def test_native_delta_feed_and_lazy_full_resource_are_separate(tmp_path):
+    import xml.etree.ElementTree as ET
+    from concurrent.futures import ThreadPoolExecutor
+    from krok_helper.updater.macos_feed import MacDelta, SPARKLE_NS
+    from krok_helper.updater.macos_transport import PreparedMacUpdate
+
+    delta_file = tmp_path / "update.delta"
+    delta_file.write_bytes(b"signed delta")
+    archive = tmp_path / ASSET_NAME
+    delta = MacDelta("4.3.7.2", delta_file.stat().st_size, make_feed().signature)
+    prepared = PreparedMacUpdate(None, archive, make_feed(b"full archive"), delta, delta_file)
+    requested = threading.Event()
+    server = LocalUpdateServer(prepared, request_full=requested.set)
+    http = requests.Session()
+    http.trust_env = False
+    try:
+        item = ET.fromstring(http.get(server.feed_url).content).find("./channel/item")
+        enclosure = item.find(f"{{{SPARKLE_NS}}}deltas/enclosure")
+        assert enclosure.get("url") == server.delta_url
+        assert enclosure.get(f"{{{SPARKLE_NS}}}deltaFrom") == macos_versions("4.3.7.2")[1]
+        assert http.get(server.delta_url).content == b"signed delta"
+        assert not requested.is_set()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(http.get, server.archive_url, timeout=5)
+            assert requested.wait(2)
+            assert not result.done()
+            archive.write_bytes(b"full archive")
+            server.supply_full(archive)
+            assert result.result(timeout=2).content == b"full archive"
+    finally:
+        server.close()
+        http.close()
+
+
+def test_closing_server_unblocks_pending_native_full_request(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from krok_helper.updater.macos_feed import MacDelta
+    from krok_helper.updater.macos_transport import PreparedMacUpdate
+
+    requested = threading.Event()
+    prepared = PreparedMacUpdate(None, tmp_path / ASSET_NAME, make_feed(),
+                                MacDelta("4.3.7.2", 1, make_feed().signature), tmp_path / "a.delta")
+    server = LocalUpdateServer(prepared, request_full=requested.set)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(requests.get, server.archive_url, timeout=5, proxies={"http": None})
+        assert requested.wait(2)
+        server.close()
+        assert result.result(timeout=2).status_code == 503

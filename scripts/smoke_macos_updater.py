@@ -73,7 +73,22 @@ result = SimpleNamespace(
     primary_asset_name='KaraokeStudio-macos.zip', primary_sha256=config['sha256'],
     download_candidates=[('github', config['origin'] + '/archive')],
 )
-QTimer.singleShot(0, lambda: controller.start(result, UpdaterSettings(proxy_mode='off')))
+def start():
+    settings = UpdaterSettings(proxy_mode='off')
+    if not config.get('native_delta'):
+        controller.start(result, settings)
+        return
+    from krok_helper.updater.macos_feed import MacDelta, MacFeed
+    from krok_helper.updater.macos_transport import PreparedMacUpdate
+    feed = MacFeed.from_dict(config['feed'])
+    prepared = PreparedMacUpdate(None, control.parent / 'not-downloaded.zip', feed,
+                                MacDelta('1.0.0', config['delta_size'], config['delta_signature']),
+                                Path(config['delta_path']))
+    controller.result, controller.settings = result, settings
+    controller.progress.show()
+    controller.worker = SimpleNamespace(prepared=prepared, error='', deleteLater=lambda: None)
+    controller.download_finished()
+QTimer.singleShot(0, start)
 QTimer.singleShot(90000, lambda: app.exit(2))
 raise SystemExit(app.exec())
 '''
@@ -184,6 +199,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk-dir", type=Path)
     parser.add_argument("--workbench-exit", action="store_true", help="手工验证完整工作台更新退出，需设置独立数据目录")
+    parser.add_argument("--delta", choices=("valid", "tampered", "baseline"), help="验证原生单补丁或失败后完整包回退")
     args = parser.parse_args()
     if args.workbench_exit:
         raise SystemExit(run_workbench_exit_smoke())
@@ -235,8 +251,12 @@ def main():
         subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(new_app), str(archive)], check=True)
         feed = sign_archive(archive, sdk, "1.0.1", public, private)
 
+        archive_requests = []
+
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path != "/feed":
+                    archive_requests.append(self.path)
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(feed) if self.path == "/feed" else archive.stat().st_size))
                 self.end_headers()
@@ -302,7 +322,24 @@ def main():
         print("PASS: failed recovery rejected installation before host resource release.", flush=True)
         error.unlink()
         config['reject_recovery'] = False
+        if args.delta:
+            from dataclasses import asdict
+            delta = directory / "update.delta"
+            subprocess.run([str(sdk / 'bin/BinaryDelta'), 'create', '--version', '4',
+                            str(old_app), str(new_app), str(delta)], check=True)
+            signed = subprocess.run([str(sdk / 'bin/sign_update'), '--ed-key-file', '-', '-p', str(delta)],
+                                    input=private + '\n', text=True, capture_output=True, check=True)
+            config.update(native_delta=True, feed=asdict(parse_feed(valid_feed, tag='v1.0.1', version='1.0.1')),
+                          delta_path=str(delta), delta_size=delta.stat().st_size, delta_signature=signed.stdout.strip())
+            if args.delta == 'tampered':
+                data = bytearray(delta.read_bytes())
+                data[len(data) // 2] ^= 1
+                delta.write_bytes(data)
+            elif args.delta == 'baseline':
+                (old_app / 'Contents/Resources/changed-baseline').write_text('modified after delta creation')
+                subprocess.run(['codesign', '--force', '--sign', '-', str(old_app)], check=True)
         control.write_text(json.dumps(config))
+        initial_requests = len(archive_requests)
         # Read native progress continuously into a file. Undrained PIPE output
         # can block the GUI before it processes the install/termination callback.
         output = (directory / "client.log").open("w")
@@ -328,6 +365,10 @@ def main():
             assert process.wait(timeout=15) == 0, "The old host must exit cleanly after installer handoff"
             installed = plistlib.loads(old_plist.read_bytes())
             assert installed["CFBundleVersion"] == "1.0.1000"
+            if args.delta:
+                expected_requests = 0 if args.delta == 'valid' else 1
+                assert len(archive_requests) - initial_requests == expected_requests, archive_requests
+                print(f"PASS: native delta {args.delta}; full downloads={expected_requests}.", flush=True)
             print("PASS: signed cached update installed and relaunched; host prepared before termination (host exit 0).")
         finally:
             if process.poll() is None:

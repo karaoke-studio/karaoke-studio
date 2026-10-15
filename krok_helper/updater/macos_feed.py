@@ -30,12 +30,26 @@ def macos_versions(version: str) -> tuple[str, str]:
 
 
 @dataclass(frozen=True)
+class MacDelta:
+    from_version: str
+    length: int
+    signature: str
+    offset: int = 0
+    sha256: str = ""
+
+
+@dataclass(frozen=True)
 class MacFeed:
     version: str
     build_version: str
     length: int
     signature: str
     archive_url: str
+    deltas: tuple[MacDelta, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: dict) -> MacFeed:
+        return cls(**{**value, "deltas": tuple(MacDelta(**d) for d in value.get("deltas", ()))})
 
 
 def parse_feed(data: bytes, *, tag: str, version: str) -> MacFeed:
@@ -80,7 +94,7 @@ def parse_feed(data: bytes, *, tag: str, version: str) -> MacFeed:
     return MacFeed(version, build, length, signature, url)
 
 
-def render_feed(feed: MacFeed) -> bytes:
+def render_feed(feed: MacFeed, *, delta: MacDelta | None = None, delta_url: str = "") -> bytes:
     ET.register_namespace("sparkle", SPARKLE_NS)
     root = ET.Element("rss", {"version": "2.0"})
     channel = ET.SubElement(root, "channel")
@@ -94,4 +108,11 @@ def render_feed(feed: MacFeed) -> bytes:
         "type": "application/octet-stream",
         f"{{{SPARKLE_NS}}}edSignature": feed.signature,
     })
+    if delta is not None:
+        ET.SubElement(ET.SubElement(item, f"{{{SPARKLE_NS}}}deltas"), "enclosure", {
+            "url": delta_url, "length": str(delta.length),
+            "type": "application/octet-stream",
+            f"{{{SPARKLE_NS}}}deltaFrom": macos_versions(delta.from_version)[1],
+            f"{{{SPARKLE_NS}}}edSignature": delta.signature,
+        })
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)

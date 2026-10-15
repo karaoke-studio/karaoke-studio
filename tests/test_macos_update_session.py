@@ -73,6 +73,17 @@ def test_native_adapter_import_has_no_qt_dependency():
     assert result.returncode == 0, result.stderr
 
 
+def test_delta_and_full_downloads_have_distinct_native_resources():
+    native = session(lambda _: None)
+    native.delta_url = "http://127.0.0.1/token/update.delta"
+    assert native.resource_url(True) == native.delta_url
+    assert native.resource_url(False) == native.archive_url
+    native.delta_url = None
+    import pytest
+    with pytest.raises(ValueError):
+        native.resource_url(True)
+
+
 def test_recovery_failure_rejects_install_without_quitting():
     from dataclasses import replace
 
@@ -99,3 +110,29 @@ def test_qt_cancellation_closes_cache_server_and_native_cycle_once(monkeypatch):
     controller.finish("duplicate callback")
     assert events == ["cancel", "native", "server", "cache"]
     assert errors == [""]
+
+
+def test_native_delta_failure_retries_full_once_but_not_after_recovery_rejection(monkeypatch):
+    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
+    parent = QWidget()
+    controller = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
+    events = []
+    controller.prepared = SimpleNamespace(delta=object(), close=lambda: events.append("cache"))
+    controller.native = SimpleNamespace(retry_full=True, close=lambda: events.append("native"))
+    controller.server = SimpleNamespace(close=lambda: events.append("server"))
+    def full():
+        controller.full_attempted = True
+        events.append("full")
+    monkeypatch.setattr(controller, "_request_full", full)
+    controller._native_finished("signature failed")
+    assert events == ["full", "native", "server"]
+    assert not controller.completed and controller.native is None and controller.server is None
+    controller._native_finished("full download failed")
+    assert events.count("full") == 1 and controller.completed
+
+    second = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
+    second.prepared = SimpleNamespace(delta=object(), close=lambda: None)
+    second.native = SimpleNamespace(retry_full=False, close=lambda: None)
+    monkeypatch.setattr(second, "_request_full", lambda: events.append("unexpected full"))
+    second._native_finished("recovery disk full")
+    assert second.completed and "unexpected full" not in events
