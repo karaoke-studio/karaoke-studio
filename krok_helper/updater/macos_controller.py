@@ -6,6 +6,7 @@ import threading
 import multiprocessing as mp
 import tempfile
 import time
+import plistlib
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -25,10 +26,11 @@ from krok_helper.updater.worker import CheckResult
 class _PrepareWorker(QThread):
     progress = pyqtSignal(str)
 
-    def __init__(self, result: CheckResult, settings: UpdaterSettings, parent: QObject, *, feed: MacFeed | None = None):
+    def __init__(self, result: CheckResult, settings: UpdaterSettings, parent: QObject, *, feed: MacFeed | None = None, current_build: str = ""):
         super().__init__(parent)
         self.result, self.settings = result, settings
         self.feed = feed
+        self.current_build = current_build
         self.cancel_event = threading.Event()
         self.prepared = None
         self.error = ""
@@ -57,6 +59,10 @@ class _PrepareWorker(QThread):
                     self.settings.source_order, release.tag, macos_transport.FEED_NAME,
                 ),
                 "feed": asdict(self.feed) if self.feed else None,
+                "current_build": self.current_build,
+                "delta_candidates": macos_transport.build_release_urls(
+                    self.settings.source_order, release.tag, macos_transport.DELTA_ASSET_NAME,
+                ),
             }
             self.process = context.Process(
                 target=prepare_in_process, args=(spec, temporary.name, sender),
@@ -152,7 +158,9 @@ class MacUpdateController(QObject):
         self.result, self.settings = result, settings
         self.progress.set_status("正在获取 macOS 更新签名…")
         self.progress.show()
-        self.worker = _PrepareWorker(result, settings, self)
+        plist = self.bundle / "Contents/Info.plist"
+        current_build = plistlib.loads(plist.read_bytes()).get("CFBundleVersion", "") if plist.exists() else ""
+        self.worker = _PrepareWorker(result, settings, self, current_build=current_build)
         self.worker.progress.connect(self._update_status, Qt.ConnectionType.QueuedConnection)
         self.worker.finished.connect(self.download_finished)
         self.worker.start()

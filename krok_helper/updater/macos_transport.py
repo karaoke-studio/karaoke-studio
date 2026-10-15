@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Callable
 from krok_helper.network import requests_session_for_proxy
 from krok_helper.updater import http_client
 from krok_helper.updater.macos_feed import (
-    ASSET_NAME, FEED_NAME, MAX_FEED_SIZE, MacDelta, MacFeed, parse_feed, render_feed,
+    ASSET_NAME, DELTA_ASSET_NAME, FEED_NAME, MAX_FEED_SIZE, MacDelta, MacFeed, macos_versions, parse_feed, render_feed,
 )
 from krok_helper.updater.sources import build_release_urls
 
@@ -50,6 +50,8 @@ def prepare_update(
     cache_dir: Path | None = None,
     feed_candidates: list[tuple[str, str]] | None = None,
     feed: MacFeed | None = None,
+    current_build: str = "",
+    delta_candidates: list[tuple[str, str]] | None = None,
 ) -> PreparedMacUpdate:
     release = result.release
     if release is None or result.primary_asset_name != ASSET_NAME:
@@ -86,6 +88,29 @@ def prepare_update(
                 errors.append(f"{source}: {exc}")
         if feed is None:
             raise ValueError("无法获取 macOS 更新签名，请稍后重试。\n" + "\n".join(errors))
+
+        delta = next((d for d in feed.deltas if macos_versions(d.from_version)[1] == current_build), None)
+        if delta is not None:
+            patch = archive.with_name("update.delta")
+            candidates = delta_candidates if delta_candidates is not None else build_release_urls(settings.source_order, release.tag, DELTA_ASSET_NAME)
+            for source, url in candidates:
+                check_cancel()
+                progress(f"正在连接增量更新源（{source}）…")
+                downloaded = http_client.download_range(
+                    url, str(patch), offset=delta.offset, length=delta.length,
+                    resource_size=feed.delta_container_length, session=session, proxies=proxies,
+                    progress_cb=lambda done, total: progress(f"正在下载增量包：{min(100, done * 100 // total)}%"),
+                    cancel_check=cancelled,
+                )
+                check_cancel()
+                if downloaded.ok:
+                    with patch.open("rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    check_cancel()
+                    if digest == delta.sha256:
+                        return PreparedMacUpdate(temporary, archive, feed, delta, patch)
+            patch.unlink(missing_ok=True)
+            progress("增量包下载不可用，正在改用完整包…")
 
         def download_progress(done, total):
             progress(f"正在下载更新包：{min(100, done * 100 // feed.length)}%")
@@ -149,6 +174,8 @@ def prepare_in_process(spec: dict, cache_dir: str, channel) -> None:
             cache_dir=Path(cache_dir),
             feed_candidates=spec["feeds"],
             feed=MacFeed.from_dict(spec["feed"]) if spec.get("feed") else None,
+            current_build=spec.get("current_build", ""),
+            delta_candidates=spec.get("delta_candidates"),
         )
         channel.send(("prepared", {
             "feed": asdict(prepared.feed),

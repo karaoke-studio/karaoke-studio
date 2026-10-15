@@ -228,6 +228,54 @@ def download(
     return HttpResult(ok=False, error=last_error)
 
 
+def download_range(
+    url: str, dest_path: str, *, offset: int, length: int, resource_size: int,
+    session: requests.Session, proxies=None,
+    progress_cb=None, cancel_check=None, timeout=DEFAULT_TIMEOUT,
+) -> HttpResult:
+    """Fetch exactly one stored payload; never turn an ignored Range into a full download."""
+    if offset < 0 or length <= 0 or offset + length > resource_size:
+        return HttpResult(ok=False, error="增量包范围无效")
+    expected_range = f"bytes {offset}-{offset + length - 1}/{resource_size}"
+    headers = {**_headers(), "Range": f"bytes={offset}-{offset + length - 1}", "Accept-Encoding": "identity"}
+    last_error = ""
+    for attempt in range(DOWNLOAD_RETRY_COUNT):
+        if cancel_check and cancel_check():
+            return HttpResult(ok=False, error="用户取消")
+        try:
+            if os.path.exists(dest_path):
+                os.unlink(dest_path)
+            with session.get(url, headers=headers, proxies=proxies, timeout=timeout,
+                             allow_redirects=True, stream=True) as response:
+                if (response.status_code != 206 or response.headers.get("Content-Range") != expected_range
+                        or response.headers.get("Content-Encoding", "identity").lower() != "identity"
+                        or int(response.headers.get("Content-Length", length)) != length):
+                    return HttpResult(ok=False, status=response.status_code, error="更新源未返回准确的增量包范围")
+                done = 0
+                os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+                with open(dest_path, "wb") as output:
+                    for chunk in response.iter_content(CHUNK_SIZE):
+                        if cancel_check and cancel_check():
+                            return HttpResult(ok=False, error="用户取消")
+                        if not chunk:
+                            continue
+                        if done + len(chunk) > length:
+                            return HttpResult(ok=False, error="增量包超过指定范围")
+                        output.write(chunk)
+                        done += len(chunk)
+                        if progress_cb:
+                            progress_cb(done, length)
+                if done != length:
+                    last_error = "增量包下载不完整"
+                else:
+                    return HttpResult(ok=True, status=206, file_path=dest_path)
+        except (requests.RequestException, OSError, ValueError) as exc:
+            last_error = f"增量包下载失败: {exc}"
+        if attempt + 1 < DOWNLOAD_RETRY_COUNT:
+            time.sleep(DOWNLOAD_RETRY_INTERVAL)
+    return HttpResult(ok=False, error=last_error)
+
+
 @dataclass
 class SourceAttempt:
     """单一源的尝试结果，供 UI / 日志展示。"""

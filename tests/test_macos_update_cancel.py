@@ -6,6 +6,7 @@ import select
 import socket
 import threading
 import time
+import plistlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ from PyQt6 import sip
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from krok_helper.updater import macos_controller, macos_transport
-from krok_helper.updater.macos_feed import ASSET_NAME, MacFeed, render_feed
+from krok_helper.updater.macos_feed import ASSET_NAME, FEED_NAME, MacDelta, MacFeed, render_feed
 from krok_helper.updater.progress_window import UpdateProgressWindow
 from krok_helper.updater.settings import UpdaterSettings
 from krok_helper.updater.sources import build_download_url
@@ -32,12 +33,14 @@ def pump_until(predicate, timeout):
     raise AssertionError("Update did not reach the expected state")
 
 
-@pytest.mark.parametrize("stage", ["headers", "trickle"])
+@pytest.mark.parametrize("stage", ["headers", "trickle", "delta_headers", "delta_trickle"])
 def test_cancel_interrupts_blocked_network_and_reaps_objects(stage, monkeypatch, tmp_path):
     payload = bytes(1024 * 1024)
+    delta = MacDelta('1.0.0', len(payload), base64.b64encode(bytes(64)).decode(), 16, hashlib.sha256(payload).hexdigest())
     feed = render_feed(MacFeed(
         "1.0.1", "1.0.1000", len(payload), base64.b64encode(bytes(64)).decode(),
         build_download_url("github", "v1.0.1", ASSET_NAME),
+        (delta,) if stage.startswith('delta') else (), len(payload) + 32,
     ))
     started, disconnected, stop = threading.Event(), threading.Event(), threading.Event()
 
@@ -51,7 +54,7 @@ def test_cancel_interrupts_blocked_network_and_reaps_objects(stage, monkeypatch,
                 return
             started.set()
             try:
-                if stage == "headers":
+                if stage.endswith("headers"):
                     # No response headers: requests.get itself is blocked.
                     while not stop.is_set():
                         readable, _, _ = select.select([self.connection], [], [], 0.05)
@@ -59,8 +62,10 @@ def test_cancel_interrupts_blocked_network_and_reaps_objects(stage, monkeypatch,
                             disconnected.set()
                             return
                 else:
-                    self.send_response(200)
+                    self.send_response(206 if stage.startswith('delta') else 200)
                     self.send_header("Content-Length", str(len(payload)))
+                    if stage.startswith('delta'):
+                        self.send_header('Content-Range', f'bytes 16-{len(payload) + 15}/{len(payload) + 32}')
                     self.end_headers()
                     # Keep the read timeout alive but never produce a 64 KiB
                     # chunk. An Event-only cancellation could wait indefinitely.
@@ -76,8 +81,11 @@ def test_cancel_interrupts_blocked_network_and_reaps_objects(stage, monkeypatch,
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://127.0.0.1:{server.server_port}"
-    monkeypatch.setattr(macos_transport, "build_release_urls", lambda *args: [("github", origin + "/feed")])
-    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
+    monkeypatch.setattr(macos_transport, "build_release_urls", lambda *args: [("github", origin + ("/feed" if args[-1] == FEED_NAME else "/delta"))])
+    bundle = tmp_path / 'Test.app'
+    (bundle / 'Contents').mkdir(parents=True)
+    (bundle / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleVersion': '1.0.0'}))
+    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: bundle)
     original_temporary = macos_controller.tempfile.TemporaryDirectory
     directories = []
     def temporary(**kwargs):

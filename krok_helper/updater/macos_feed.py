@@ -95,7 +95,38 @@ def parse_feed(data: bytes, *, tag: str, version: str) -> MacFeed:
         raise ValueError("macOS 更新清单缺少有效的签名或文件大小。") from exc
     # Rebuild a minimal feed: do not let a mirror add install-on-quit, package
     # installers, release-notes downloads or other Sparkle policy overrides.
-    return MacFeed(version, build, length, signature, url)
+    deltas = ()
+    container_length = 0
+    index = item.find(f"{{{DELTA_NS}}}deltas")
+    if index is not None:
+        try:
+            if index.get("url") != build_download_url("github", tag, DELTA_ASSET_NAME):
+                raise ValueError("Unexpected delta container")
+            container_length = int(index.get("length", "0"))
+            entries = index.findall(f"{{{DELTA_NS}}}delta")
+            if container_length <= 0 or not 1 <= len(entries) <= MAX_DELTAS:
+                raise ValueError("Invalid delta index size")
+            rows, builds = [], set()
+            target = tuple(map(int, build.split(".")))
+            for entry in entries:
+                source = entry.get("from", "")
+                source_build = tuple(map(int, macos_versions(source)[1].split(".")))
+                if source_build[:2] != target[:2] or source_build >= target or source_build in builds:
+                    raise ValueError("Invalid or duplicate delta baseline")
+                row = MacDelta(source, int(entry.get("length", "0")), entry.get("signature", ""),
+                               int(entry.get("offset", "-1")), entry.get("sha256", ""))
+                if (row.offset < 0 or row.length <= 0 or row.offset + row.length > container_length
+                        or not re.fullmatch(r"[a-f0-9]{64}", row.sha256)
+                        or len(base64.b64decode(row.signature, validate=True)) != 64):
+                    raise ValueError("Invalid delta range or signature")
+                builds.add(source_build)
+                rows.append(row)
+            deltas = tuple(rows)
+        except ValueError:
+            # The optional optimization must not invalidate the signed full
+            # enclosure understood by existing clients.
+            deltas, container_length = (), 0
+    return MacFeed(version, build, length, signature, url, deltas, container_length)
 
 
 def render_feed(feed: MacFeed, *, delta: MacDelta | None = None, delta_url: str = "", include_index: bool = True) -> bytes:
