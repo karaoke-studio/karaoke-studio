@@ -29,3 +29,8 @@ def test_parse_args_accepts_hidden_package_spawn_smoke() -> None:
     args = parse_args(["--package-spawn-smoke"])
 
     assert args.package_spawn_smoke is True
+
+
+def test_parse_args_accepts_hidden_package_updater_smoke() -> None:
+    args = parse_args(["--package-updater-smoke"])
+    assert args.package_updater_smoke is True

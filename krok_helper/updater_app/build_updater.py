@@ -66,6 +66,10 @@ def pyinstaller_args(*, clean: bool = False) -> list[str]:
         "--exclude-module=matplotlib",
         "--exclude-module=scipy",
         "--exclude-module=tkinter",
+        "--exclude-module=krok_helper.updater.macos_metadata",
+        "--exclude-module=objc",
+        "--exclude-module=Foundation",
+        "--exclude-module=AppKit",
     ]
     icon = REPO_ROOT / "krok_helper" / "lyrics_timing" / "src" / "strange_uta_game" / "resource" / "icon.ico"
     if icon.exists():

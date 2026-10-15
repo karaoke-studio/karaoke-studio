@@ -153,6 +153,10 @@ echo Building Windows package...
     --hidden-import colorsys ^
     --hidden-import sudachipy ^
     --hidden-import sudachidict_small ^
+    --exclude-module krok_helper.updater.macos_metadata ^
+    --exclude-module objc ^
+    --exclude-module Foundation ^
+    --exclude-module AppKit ^
     --exclude-module winrt ^
     --exclude-module winrt.windows.globalization ^
     --exclude-module winrt.windows.foundation ^

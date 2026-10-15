@@ -78,6 +78,8 @@ jobs:
   build-macos:
     name: Build macOS
     runs-on: macos-latest
+    env:
+      KROK_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
 
     steps:
       - name: Checkout
