@@ -165,6 +165,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', type=Path)
     parser.add_argument('--sdk-dir', type=Path, required=True)
+    parser.add_argument('--app', type=Path, help='Reuse the built target .app instead of extracting the archive')
     parser.add_argument('--releases-json', type=Path, help='Use saved release metadata for reproducible local validation')
     args = parser.parse_args()
     archive = args.archive.resolve()
@@ -197,7 +198,15 @@ def main():
         return
     with tempfile.TemporaryDirectory(prefix='lin-k-deltas-') as temporary:
         work = Path(temporary)
-        target = extract(archive, work / 'target')
+        if args.app is not None:
+            target = args.app.resolve()
+            if not target.is_dir() or target.suffix != '.app':
+                raise ValueError('Target application must be an existing .app directory')
+            info = plistlib.loads((target / 'Contents/Info.plist').read_bytes())
+            if info.get('CFBundleVersion') != feed.build_version or info.get('SUPublicEDKey') != public:
+                raise ValueError('Target application version or public key differs from this release')
+        else:
+            target = extract(archive, work / 'target')
         target_inventory = inventory(target)
         patches = []
         with ThreadPoolExecutor(max_workers=2) as pool:

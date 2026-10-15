@@ -4,6 +4,7 @@ import base64
 from dataclasses import replace
 import hashlib
 import json
+import plistlib
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
@@ -109,21 +110,37 @@ def test_missing_keys_remove_stale_container_without_fetching_history(tmp_path, 
     assert not (tmp_path / FEED_NAME).exists()
 
 
-def test_only_successfully_verified_patches_enter_index(tmp_path, monkeypatch):
+@pytest.mark.parametrize('reuse_app', [False, True])
+def test_only_successfully_verified_patches_enter_index(tmp_path, monkeypatch, reuse_app):
     from krok_helper.updater.sources import build_download_url
     signature = base64.b64encode(bytes(64)).decode()
     feed = MacFeed('4.3.3', '4.3.3000', 4, signature, build_download_url('github', 'v4.3.3', ASSET_NAME))
     (tmp_path / FEED_NAME).write_bytes(render_feed(feed))
     history = tmp_path / 'history.json'
     history.write_text(json.dumps([release('4.3.1'), release('4.3.2')]))
-    monkeypatch.setattr(sys, 'argv', ['build_macos_deltas.py', str(tmp_path / ASSET_NAME), '--sdk-dir', str(tmp_path), '--releases-json', str(history)])
+    argv = ['build_macos_deltas.py', str(tmp_path / ASSET_NAME), '--sdk-dir', str(tmp_path), '--releases-json', str(history)]
+    target = tmp_path
+    if reuse_app:
+        target = tmp_path / 'dist/Lin-K Lyrics.app'
+        (target / 'Contents').mkdir(parents=True)
+        (target / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleVersion': feed.build_version, 'SUPublicEDKey': 'test'}))
+        argv += ['--app', str(target)]
+    original_inventory = builder.inventory
+    original = original_inventory(target) if reuse_app else None
+    monkeypatch.setattr(sys, 'argv', argv)
     monkeypatch.setenv('KROK_SPARKLE_PUBLIC_ED_KEY', 'test')
     monkeypatch.setenv('KROK_SPARKLE_PRIVATE_ED_KEY', 'test')
     monkeypatch.setattr(builder, 'read_app_version', lambda: '4.3.3')
     monkeypatch.setattr(builder, 'sign_file', lambda *a: signature)
-    monkeypatch.setattr(builder, 'extract', lambda *a: tmp_path)
+    extracted = []
+    def extract(archive, destination):
+        assert not reuse_app, 'The built application must not require archive extraction'
+        extracted.append(archive)
+        return target
+    monkeypatch.setattr(builder, 'extract', extract)
     monkeypatch.setattr(builder, 'inventory', lambda *a: {})
     def build(baseline, **kwargs):
+        assert kwargs['target'] == target
         if baseline['version'] == '4.3.2':
             raise ValueError('failed apply verification')
         patch = tmp_path / 'good.delta'
@@ -133,6 +150,35 @@ def test_only_successfully_verified_patches_enter_index(tmp_path, monkeypatch):
     builder.main()
     index = ET.fromstring((tmp_path / FEED_NAME).read_bytes()).find(f'./channel/item/{{{DELTA_NS}}}deltas')
     assert [e.get('from') for e in index] == ['4.3.1']
+    assert extracted == ([] if reuse_app else [tmp_path / ASSET_NAME])
+    if reuse_app:
+        assert original_inventory(target) == original
+
+
+@pytest.mark.parametrize('invalid', ['missing', 'not_app', 'version', 'key'])
+def test_reused_target_must_match_release_before_generating_patches(tmp_path, monkeypatch, invalid):
+    from krok_helper.updater.sources import build_download_url
+    signature = base64.b64encode(bytes(64)).decode()
+    feed = MacFeed('4.3.3', '4.3.3000', 4, signature, build_download_url('github', 'v4.3.3', ASSET_NAME))
+    (tmp_path / FEED_NAME).write_bytes(render_feed(feed))
+    target = tmp_path / ('target' if invalid == 'not_app' else 'Lin-K Lyrics.app')
+    if invalid != 'missing':
+        (target / 'Contents').mkdir(parents=True)
+        (target / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+            'CFBundleVersion': '4.3.2000' if invalid == 'version' else feed.build_version,
+            'SUPublicEDKey': 'other' if invalid == 'key' else 'test',
+        }))
+    monkeypatch.setattr(sys, 'argv', ['build_macos_deltas.py', str(tmp_path / ASSET_NAME), '--sdk-dir', str(tmp_path), '--app', str(target)])
+    monkeypatch.setenv('KROK_SPARKLE_PUBLIC_ED_KEY', 'test')
+    monkeypatch.setenv('KROK_SPARKLE_PRIVATE_ED_KEY', 'test')
+    monkeypatch.setattr(builder, 'read_app_version', lambda: feed.version)
+    monkeypatch.setattr(builder, 'sign_file', lambda *a: signature)
+    monkeypatch.setattr(builder, 'fetch_releases', lambda: [release('4.3.2')])
+    monkeypatch.setattr(builder, 'extract', lambda *a: pytest.fail('An invalid explicit target must not fall back to extraction'))
+    monkeypatch.setattr(builder, 'build_delta', lambda *a, **kw: pytest.fail('Invalid target must be rejected before patch generation'))
+    with pytest.raises(ValueError, match='Target application'):
+        builder.main()
+    assert not (tmp_path / DELTA_ASSET_NAME).exists()
 
 
 def test_history_failure_removes_stale_delta_index_and_retains_full_update(tmp_path, monkeypatch):

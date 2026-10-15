@@ -317,7 +317,7 @@ CI 缺少任一密钥时照常打包和发布，但不内置 Sparkle，也不生
 bash ./scripts/build_macos.command
 ditto -c -k --sequesterRsrc --keepParent "dist/macos/Lin-K Lyrics.app" "KaraokeStudio-macos.zip"
 python3 scripts/build_macos_appcast.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6
-python3 scripts/build_macos_deltas.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6
+python3 scripts/build_macos_deltas.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6 --app "dist/macos/Lin-K Lyrics.app"
 ```
 
 增量生成默认两路并行，按版本号数值排序，只选同一主版本、次版本的正式旧版，
