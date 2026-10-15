@@ -303,7 +303,7 @@ secrets `SPARKLE_PUBLIC_ED_KEY`、`SPARKLE_PRIVATE_ED_KEY`。私钥不可提交�
 配置不匹配会阻断对应的构建或签名步骤。
 这些 Ed25519 密钥用于更新包认证。
 
-构建保留包内 multiprocessing 和 Sparkle 原生加载检查。安装和重启验收
+构建保留包内 multiprocessing 和 Sparkle 原生加载检查。播放、安装及重启验收
 由开发者按需手工执行，不接入 release workflow。
 
 本地构建先设置 `KROK_SPARKLE_PUBLIC_ED_KEY`。签署发布清单还需设置
@@ -321,6 +321,12 @@ python3 scripts/build_macos_appcast.py KaraokeStudio-macos.zip --sdk-dir build/s
 ```bash
 # 独立临时应用的真实安装/重启验证，不替换已安装的 Lin-K Lyrics：
 python3 scripts/smoke_macos_updater.py --sdk-dir build/sparkle-2.9.6
+# 源码工作台播放 15 秒后验证资源关闭与项目恢复；数据隔离：
+smoke_dir="$(mktemp -d)"
+KARAOKE_STUDIO_SETTINGS_DIR="$smoke_dir/settings" \
+KARAOKE_STUDIO_LOG_DIR="$smoke_dir/logs" \
+KARAOKE_STUDIO_TEMP_DIR="$smoke_dir/temp" \
+python3 scripts/smoke_macos_updater.py --workbench-exit
 ```
 
 手工上传到已有 release：

@@ -73,6 +73,18 @@ def test_native_adapter_import_has_no_qt_dependency():
     assert result.returncode == 0, result.stderr
 
 
+def test_recovery_failure_rejects_install_without_quitting():
+    from dataclasses import replace
+
+    native = session(lambda _: None)
+    def failed_save():
+        raise OSError("disk full")
+    native.callbacks = replace(native.callbacks, verify_recovery=failed_save)
+    assert not native.verify_recovery()
+    assert "disk full" in native.error_text
+    assert not native.installing and native.install_handler is None
+
+
 def test_qt_cancellation_closes_cache_server_and_native_cycle_once(monkeypatch):
     monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
     parent = QWidget()

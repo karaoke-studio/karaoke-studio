@@ -22,6 +22,7 @@ class SparkleCallbacks:
     schedule: Callable[[Callable[[], None]], None]
     quit_application: Callable[[], None]
     completed: Callable[[str], None]
+    verify_recovery: Callable[[], None] = lambda: None
 
 
 def find_host_bundle() -> Path:
@@ -123,6 +124,9 @@ def load_native_classes(bundle: Path):
                 self.owner.error_text = "当前有任务正在运行，本次更新已取消。"
                 reply(0)
                 return
+            if not self.owner.verify_recovery():
+                reply(0)
+                return
             self.owner.callbacks.status("正在准备安装并重新启动…")
             reply(1)
 
@@ -207,6 +211,15 @@ class SparkleSession:
         if self.cancel_callback:
             callback, self.cancel_callback = self.cancel_callback, None
             callback()
+
+    def verify_recovery(self) -> bool:
+        """Reject installation before handoff if the host cannot save current edits."""
+        try:
+            self.callbacks.verify_recovery()
+        except Exception as exc:
+            self.error_text = f"更新已取消，工作台保持打开：\n{exc}"
+            return False
+        return True
 
     def continue_install(self) -> None:
         handler, self.install_handler = self.install_handler, None

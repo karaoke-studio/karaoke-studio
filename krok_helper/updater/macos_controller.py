@@ -121,11 +121,13 @@ class MacUpdateController(QObject):
     def __init__(
         self, parent: QWidget, *, can_install: Callable[[], bool],
         prepare_relaunch: Callable[[], None],
+        verify_recovery: Callable[[], None] = lambda: None,
     ):
         bundle = find_host_bundle()
         super().__init__(parent)
         self.bundle = bundle
         self.can_install, self.prepare_relaunch = can_install, prepare_relaunch
+        self.verify_recovery = verify_recovery
         self.progress = UpdateProgressWindow(parent)
         self.progress.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.progress.destroyed.connect(self.deleteLater)
@@ -179,6 +181,7 @@ class MacUpdateController(QObject):
                     schedule=lambda callback: QTimer.singleShot(0, callback),
                     quit_application=QApplication.instance().quit,
                     completed=self.finish,
+                    verify_recovery=self.verify_recovery,
                 ),
             )
             self.native.start()

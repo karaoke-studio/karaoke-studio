@@ -99,6 +99,19 @@ def test_set_volume_clamps(make_controller):
     assert ctrl._audio_out.volume() == pytest.approx(0.5)  # noqa: SLF001
 
 
+def test_shutdown_clears_decoder_source(make_controller, tmp_path):
+    ctrl = make_controller()
+    media = tmp_path / "preview.wav"
+    media.write_bytes(b"placeholder")
+    ctrl.set_media(media)
+    assert not ctrl.media_player.source().isEmpty()
+    ctrl.shutdown()
+    ctrl.shutdown()
+    assert ctrl.media_player.source().isEmpty()
+    assert ctrl.media_player.audioOutput() is None
+    assert not ctrl.has_media()
+
+
 def test_playback_state_maps_to_bool(make_controller):
     ctrl = make_controller()
     seen: list[bool] = []

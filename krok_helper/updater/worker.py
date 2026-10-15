@@ -49,6 +49,10 @@ class LatestRelease:
         for asset in self.assets:
             if asset.name == preferred_name:
                 return asset
+        if sys.platform == "darwin":
+            # The signed macOS appcast refers to this exact canonical archive.
+            # Never advertise a Windows or unrelated ZIP as a macOS update.
+            return next((asset for asset in self.assets if asset.name == "KaraokeStudio-macos.zip"), None)
         platform_key = "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else ""
         if platform_key:
             for asset in self.assets:

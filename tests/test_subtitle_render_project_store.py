@@ -2265,7 +2265,7 @@ def test_force_exit_flush_writes_subtitle_recovery(qapp, monkeypatch, tmp_path):
     win._project_path = tmp_path / "song.yurika"
     win._mark_project_dirty()
 
-    win.flush_unsaved()
+    assert win.flush_unsaved() is True
 
     state = win.project_state()
     assert state.recovery_path is not None
@@ -2273,6 +2273,17 @@ def test_force_exit_flush_writes_subtitle_recovery(qapp, monkeypatch, tmp_path):
     recovered = load_render_project(state.recovery_path)
     assert recovered["recovery"]["source_project_path"] == str(win._project_path)
     assert recovered["recovery"]["snapshot_id"] > 0
+
+
+def test_force_exit_flush_reports_failed_write(qapp, monkeypatch, tmp_path):
+    import krok_helper.subtitle_render.frontend.main_window as main_window
+
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._mark_project_dirty()
+    monkeypatch.setattr(main_window, "save_recovery_project", lambda *_: False)
+    assert win.flush_unsaved() is False
+    assert win.has_unsaved_changes()
 
 
 def test_background_auto_save_uses_snapshot_and_keeps_project_dirty(

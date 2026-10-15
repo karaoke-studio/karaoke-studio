@@ -2146,6 +2146,9 @@ class KrokHelperQtApp(QMainWindow):
         if not result.release or not result.download_candidates:
             show_fluent_error(self, "缺少更新下载信息，请到 GitHub Release 手动下载。")
             return
+        if sys.platform == "darwin":
+            self._launch_macos_updater(result)
+            return
         try:
             from krok_helper.updater import installer
             from krok_helper.updater.progress_window import UpdateProgressWindow
@@ -2202,6 +2205,63 @@ class KrokHelperQtApp(QMainWindow):
         worker.done.connect(_on_launch_done, Qt.ConnectionType.QueuedConnection)
         worker.start()
 
+    def _launch_macos_updater(self, result: CheckResult) -> None:
+        if getattr(self, "_macos_updater", None) is not None:
+            return
+        try:
+            from krok_helper.updater.macos_controller import MacUpdateController
+
+            controller = MacUpdateController(
+                self,
+                can_install=lambda: not self._active_update_task_labels(),
+                prepare_relaunch=self._prepare_macos_update_relaunch,
+                verify_recovery=lambda: KrokHelperQtApp._verify_macos_update_recovery(self),
+            )
+            self._macos_updater = controller
+
+            def finished(error: str) -> None:
+                self._macos_updater = None
+                if error:
+                    show_fluent_error(self, error)
+
+            controller.finished.connect(finished)
+            controller.start(result, UpdaterSettings.load(self.settings))
+        except Exception as exc:
+            self._macos_updater = None
+            show_fluent_error(self, f"无法启动 macOS 更新器：\n{exc}")
+
+    def _verify_macos_update_recovery(self) -> None:
+        """Require fresh recovery writes before accepting installation.
+
+        The application-modal progress window prevents further user edits until
+        handoff. SUG's best-effort flush hides errors, so use its raising parser
+        API without modifying submodule sources.
+        """
+        page = getattr(self, "lyrics_timing_page", None)
+        store = getattr(page, "_store", None)
+        if store is not None and store.dirty:
+            from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
+
+            for thread in (store._save_thread, store._bg_save_thread):
+                if thread is not None and thread.isRunning() and not thread.wait(3000):
+                    raise ProcessingError("歌词打轴项目仍在保存，请稍后重试更新。")
+            try:
+                SugProjectParser.save(
+                    store.project, str(store.get_temp_path()),
+                    nicokara_tags=store._get_nicokara_tags_for_save(),
+                    media_path=store.get_saveable_media_path(),
+                )
+            except Exception as exc:
+                raise ProcessingError(f"无法保存歌词打轴恢复数据：{exc}") from exc
+        subtitle = getattr(self, "subtitle_render_page", None)
+        if subtitle is not None and not subtitle.flush_unsaved():
+            raise ProcessingError("无法保存字幕项目恢复数据，请检查磁盘空间和写入权限。")
+
+    def _prepare_macos_update_relaunch(self) -> None:
+        """Sparkle owns termination; only persist and stop resources here."""
+        self._force_quitting_for_update = True
+        self._prepare_force_quit_for_update()
+
     def _resolve_output_name_mode(self) -> str:
         if self.output_name_mode_value not in {OUTPUT_NAME_MODE_FIXED, OUTPUT_NAME_MODE_TEMPLATE}:
             raise ProcessingError("输出命名模式无效，请重新选择。")
@@ -2253,6 +2313,7 @@ class KrokHelperQtApp(QMainWindow):
         align_page = getattr(self, "align_page", None)
         if align_page is not None:
             align_page.stop_preview()
+        KrokHelperQtApp._shutdown_audio_merge(self)
         if not self._shutdown_audio_separation(timeout_ms=3000):
             logging.getLogger(__name__).warning(
                 "更新强制退出前停止 PyMSS 服务失败"
@@ -2287,7 +2348,11 @@ class KrokHelperQtApp(QMainWindow):
                     "更新强制退出前关闭字幕预览资源失败", exc_info=True
                 )
 
-        KrokHelperQtApp._finalize_lyrics_timing_shutdown(self)
+        # Update handoff has no save/discard decision: flush_unsaved() wrote the
+        # only recoverable copy. Normal close cleanup would delete that copy.
+        lyrics_page = getattr(self, "lyrics_timing_page", None)
+        if lyrics_page is not None:
+            KrokHelperQtApp._release_lyrics_timing_resources(lyrics_page)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if getattr(self, "_force_quitting_for_update", False):

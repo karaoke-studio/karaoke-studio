@@ -53,7 +53,11 @@ app.aboutToQuit.connect(lambda: print('Qt aboutToQuit', flush=True))
 macos_transport.build_release_urls = lambda *args: [('github', config['origin'] + '/feed')]
 def preparing():
     Path(config['prepared']).write_text('installer ready')
-controller = MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=preparing)
+def verify_recovery():
+    if config.get('reject_recovery'):
+        raise OSError('simulated recovery disk full')
+controller = MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=preparing,
+                                 verify_recovery=verify_recovery)
 status = controller.progress.set_status
 def trace_status(text):
     print(text, flush=True)
@@ -75,10 +79,116 @@ raise SystemExit(app.exec())
 '''
 
 
+def run_workbench_exit_smoke() -> int:
+    """Manually exercise the source workbench's update exit with active media.
+
+    Run with isolated KARAOKE_STUDIO_SETTINGS_DIR, KARAOKE_STUDIO_LOG_DIR and
+    KARAOKE_STUDIO_TEMP_DIR on the native Qt platform, never offscreen: this
+    check includes interpreter and multimedia teardown.
+    """
+    import os
+    import tempfile
+    import traceback
+    import wave
+    from pathlib import Path
+
+    for name in ("SETTINGS", "LOG", "TEMP"):
+        if not os.environ.get(f"KARAOKE_STUDIO_{name}_DIR"):
+            raise ValueError(f"Set an isolated KARAOKE_STUDIO_{name}_DIR for this check.")
+    isolated = Path(os.environ["KARAOKE_STUDIO_SETTINGS_DIR"])
+    for name in ("CONFIG", "CACHE", "BACKUP", "LOGS"):
+        os.environ[f"SUG_{name}_DIR"] = str(isolated / f"sug-{name.lower()}")
+    from PyQt6.QtCore import QTimer, QUrl
+    from PyQt6.QtWidgets import QApplication
+    from krok_helper.gui_qt import KrokHelperQtApp
+    from strange_uta_game.backend.application import ProjectService
+
+    app = QApplication.instance() or QApplication([])
+    with tempfile.TemporaryDirectory(prefix="lin-k-update-exit-") as directory:
+        audio = Path(directory) / "silence.wav"
+        with wave.open(str(audio), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(44100)
+            stream.writeframes(bytes(44100 * 2 * 30))
+        window = KrokHelperQtApp()
+        window.show()
+        page = window.lyrics_timing_page
+        subtitle = window.subtitle_render_page
+        engine = page._audio_engine
+        playback = subtitle._playback
+        merge = window.audio_merge_page
+        observed: dict[str, bool] = {}
+
+        def fail() -> None:
+            traceback.print_exc()
+            window._prepare_macos_update_relaunch()
+            app.exit(1)
+
+        def start() -> None:
+            try:
+                page._store.load_project(ProjectService().create_project())
+                engine.load(str(audio))
+                engine.set_volume(0)
+                engine.play()
+                assert playback is not None, "Subtitle playback is unavailable"
+                playback.set_volume(0)
+                playback.set_media(audio)
+                playback.play()
+                merge_player = merge._ensure_player()
+                merge._audio_output.setVolume(0)
+                merge_player.setSource(QUrl.fromLocalFile(str(audio)))
+                merge_player.play()
+                QTimer.singleShot(3000, observe)
+                QTimer.singleShot(15000, finish)
+            except Exception:
+                fail()
+
+        def observe() -> None:
+            try:
+                observed["sug"] = engine.is_playing()
+                observed["qt"] = playback.is_playing()
+                observed["merge"] = merge._player_playback_active()
+                assert all(observed.values()), observed
+            except Exception:
+                fail()
+
+        def finish() -> None:
+            try:
+                assert observed == {"sug": True, "qt": True, "merge": True}, observed
+                # Mark dirty immediately before handoff so periodic autosave
+                # cannot conceal a missing or deleted synchronous exit snapshot.
+                page._store.mark_dirty()
+                subtitle._project_dirty = True
+                window._verify_macos_update_recovery()
+                window._prepare_macos_update_relaunch()
+                assert page._store.get_temp_path().is_file(), "SUG recovery was lost"
+                assert subtitle._recovery_path().is_file(), "Subtitle recovery was lost"
+                assert not engine.is_playing(), "SUG audio still plays after handoff"
+                assert not playback.is_playing(), "Qt media still plays after handoff"
+                assert playback.media_player.source().isEmpty(), "Decoder source retained"
+                assert subtitle._host_exit_shutdown
+                assert merge._player is None and merge._audio_output is None
+                window.close()
+                print("PASS: workbench update exit retained recovery and released SUG/subtitle/merge audio.")
+                app.quit()
+            except Exception:
+                fail()
+
+        QTimer.singleShot(0, start)
+        result = app.exec()
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sdk-dir", required=True, type=Path)
+    parser.add_argument("--sdk-dir", type=Path)
+    parser.add_argument("--workbench-exit", action="store_true", help="手工验证完整工作台更新退出，需设置独立数据目录")
     args = parser.parse_args()
+    if args.workbench_exit:
+        raise SystemExit(run_workbench_exit_smoke())
+    if args.sdk_dir is None:
+        parser.error("原生安装验证需要 --sdk-dir。")
     sdk = args.sdk_dir.resolve()
     root = Path(__file__).resolve().parents[1]
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -169,6 +279,30 @@ def main():
         print("PASS: invalid Ed25519 signature rejected; old app retained and host not terminated.", flush=True)
         error.unlink()
         feed = valid_feed
+        config = json.loads(control.read_text())
+        config['reject_recovery'] = True
+        control.write_text(json.dumps(config))
+        with (directory / "recovery-rejected.log").open("w") as recovery_log:
+            recovery_rejected = subprocess.Popen(
+                [str(old_app / "Contents/MacOS" / app_name)],
+                stdout=recovery_log, stderr=subprocess.STDOUT, env=runtime_env,
+            )
+            try:
+                recovery_rejected.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                recovery_rejected.terminate()
+                recovery_rejected.wait(timeout=15)
+                raise RuntimeError("Sparkle did not cancel after recovery failure") from None
+        retained_version = plistlib.loads(old_plist.read_bytes())["CFBundleVersion"]
+        if (recovery_rejected.returncode != 1 or not error.exists()
+                or 'simulated recovery disk full' not in error.read_text()
+                or prepared.exists() or marker.exists() or retained_version != "1.0.0"):
+            print((directory / "recovery-rejected.log").read_text(errors="replace")[-5000:])
+            raise RuntimeError("Recovery failure did not safely prevent installation")
+        print("PASS: failed recovery rejected installation before host resource release.", flush=True)
+        error.unlink()
+        config['reject_recovery'] = False
+        control.write_text(json.dumps(config))
         # Read native progress continuously into a file. Undrained PIPE output
         # can block the GUI before it processes the install/termination callback.
         output = (directory / "client.log").open("w")
