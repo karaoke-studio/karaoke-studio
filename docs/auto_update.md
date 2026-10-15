@@ -71,8 +71,10 @@ Cocoa 的 `terminate`，避免重入导致崩溃。更新结束或取消后清�
 `prepare_macos_updater.py` 获取固定版本和 SHA256 的官方 Sparkle SDK，保留
 framework 的符号链接与辅助程序，再从内到外签署应用。构建末尾用实际
 冻结应用执行 `--package-updater-smoke`，验证框架和 PyObjC 能加载
-`SPUUpdater`。构建必须设置
-`KROK_SPARKLE_PUBLIC_ED_KEY`；应用代码签名沿用现有 ad-hoc 方式。更新 ZIP 的
+`SPUUpdater`。本地构建设置 `KROK_SPARKLE_PUBLIC_ED_KEY` 时启用更新器；
+未设置时不下载或内置 Sparkle，跳过其加载检查，应用仍提示更新并引导手动下载。
+CI 缺少公钥或私钥时同样发布普通包，不阻断 macOS 或 Windows 发布；
+两者齐全但格式错误或不匹配时仍报错。应用代码签名沿用现有 ad-hoc 方式。更新 ZIP 的
 Ed25519 发布签名配置见
 [`release-process.md` 的 macOS 构建段](./release-process.md#附录--本地手工构建)。
 

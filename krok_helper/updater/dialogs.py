@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtCore import QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
@@ -155,6 +157,17 @@ class WorkbenchUpdateDialog(ModelessDialog):
         super().__init__(parent)
         self.user_choice = "later"
         self._release = release
+        self._auto_update_available = True
+        if sys.platform == "darwin":
+            from krok_helper.updater.macos_feed import FEED_NAME
+            from krok_helper.updater.macos_metadata import is_auto_update_available
+
+            self._auto_update_available = is_auto_update_available()
+            # Empty assets also occur with the existing HTML/API-limit fallback,
+            # where absence of a signed feed has not been established yet.
+            assets = getattr(release, "assets", [])
+            if assets and not any(asset.name == FEED_NAME for asset in assets):
+                self._auto_update_available = False
         self.setWindowTitle(APP_TITLE)
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -250,11 +263,17 @@ class WorkbenchUpdateDialog(ModelessDialog):
             open_release_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(html_url)))
             layout.addWidget(open_release_button, 0, Qt.AlignmentFlag.AlignHCenter)
 
+        if not self._auto_update_available:
+            hint = BodyLabel("此版本不支持自动安装，请前往发布页下载并手动安装。", self)
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+
         button_row = QHBoxLayout()
         button_row.setSpacing(12)
         skip_button = QPushButton("跳过此版本")
         later_button = QPushButton("稍后再说")
-        update_button = PrimaryPushButton("立即更新")
+        update_button = PrimaryPushButton("立即更新" if self._auto_update_available else "前往下载")
+        update_button.setEnabled(self._auto_update_available or bool(html_url))
         skip_button.clicked.connect(self._choose_skip)
         later_button.clicked.connect(self._choose_later)
         update_button.clicked.connect(self._choose_update)
@@ -265,7 +284,11 @@ class WorkbenchUpdateDialog(ModelessDialog):
         layout.addLayout(button_row)
 
     def _choose_update(self) -> None:
-        self.user_choice = "update"
+        if self._auto_update_available:
+            self.user_choice = "update"
+        else:
+            QDesktopServices.openUrl(QUrl(self._release.html_url))
+            self.user_choice = "later"
         self.accept()
 
     def _choose_later(self) -> None:

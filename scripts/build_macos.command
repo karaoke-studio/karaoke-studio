@@ -157,6 +157,7 @@ ensure_pkg objc "pyobjc-core==12.2.2"
 ensure_pkg AppKit "pyobjc-framework-Cocoa==12.2.2"
 ensure_pkg psutil psutil
 
+export KROK_SPARKLE_PUBLIC_ED_KEY="$("$PYTHON_BIN" -c 'import os; print(os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", "").strip())')"
 echo "Preparing signed macOS updater support..."
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/prepare_macos_updater.py" --sdk-dir "$SPARKLE_SDK_DIR"
 ensure_pkg sounddevice sounddevice
@@ -422,8 +423,10 @@ if ! "$APP_DIST/Contents/MacOS/$APP_NAME" --package-spawn-smoke; then
 fi
 echo "Packaged multiprocessing spawn passed."
 
-echo "Validating packaged Sparkle loading..."
-"$APP_DIST/Contents/MacOS/$APP_NAME" --package-updater-smoke
+if [ -n "$KROK_SPARKLE_PUBLIC_ED_KEY" ]; then
+  echo "Validating packaged Sparkle loading..."
+  "$APP_DIST/Contents/MacOS/$APP_NAME" --package-updater-smoke
+fi
 
 echo
 echo "Build complete:"

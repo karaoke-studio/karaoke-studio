@@ -78,8 +78,6 @@ jobs:
   build-macos:
     name: Build macOS
     runs-on: macos-latest
-    env:
-      KROK_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
 
     steps:
       - name: Checkout
@@ -91,6 +89,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Configure macOS auto-update
+        env:
+          KROK_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+          KROK_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from krok_helper.updater.macos_metadata import validate_ed_key
+          public = os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", "").strip()
+          private = os.environ.get("KROK_SPARKLE_PRIVATE_ED_KEY", "").strip()
+          if public and private:
+              public = validate_ed_key(public)
+          else:
+              public = ""
+              print("::notice::Sparkle keys are incomplete; publishing a manual-only macOS package.")
+          with open(os.environ["GITHUB_ENV"], "a") as stream:
+              stream.write(f"KROK_SPARKLE_PUBLIC_ED_KEY={public}\n")
+          PY
 
       - name: Install dependencies
         run: |
@@ -106,6 +123,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "Lin-K Lyrics.app" "../../KaraokeStudio-macos.zip"
 
       - name: Sign macOS update archive and generate appcast
+        if: env.KROK_SPARKLE_PUBLIC_ED_KEY != ''
         env:
           KROK_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
         run: python3 scripts/build_macos_appcast.py KaraokeStudio-macos.zip --sdk-dir build/sparkle-2.9.6

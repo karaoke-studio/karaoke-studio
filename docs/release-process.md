@@ -207,7 +207,7 @@ git push origin vX.Y.Z[.N]
   | `KaraokeStudio-windows-app.zip` (+`.sha256`) | EXE + Updater + GPU sidecar + `_internal/{krok_helper,strange_uta_game}`，每版必变（约 65 MB） |
   | `KaraokeStudio-windows-runtime.zip` (+`.sha256`) | 其余 `_internal/`，依赖未变时跨版本复用同一文件（约 60 MB） |
 
-- **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量），再签署 ZIP 并生成 `KaraokeStudio-macos-appcast.xml`。两个资产一起发布，ZIP 名保持不变。
+- **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量）。Sparkle 公私钥均已配置时，再签署 ZIP 并生成 `KaraokeStudio-macos-appcast.xml`，两个资产一起发布；缺任一密钥时发布不含 Sparkle 的普通包，仅支持手动安装。ZIP 名保持不变。
 - **Publish Release**：把全部文件上传到 GitHub Release（仅 tag 推送时执行）。
 
 **发布不变量（违反任何一条都会甩掉存量客户端）**：全量 zip / part / manifest 资产名不可改（保持改名前的 `KaraokeStudio-*` 前缀）；主程序改名后必须继续随包分发同内容的 `Karaoke Studio.exe` 兼容副本并保留在 `APP_TARGETS` 中，onedir 布局不可改结构（详见 [auto_update.md §8.1](auto_update.md)）；tag 保持 `vX.Y.Z[.N]`；runtime 依赖未变时必须复用上一版 zip 原文件（CI 已内置 `--require-runtime-reuse` 安全闸，重打会改变内容哈希令全部老用户重下 runtime）。
@@ -299,14 +299,17 @@ macOS：
 生成专用密钥，再用 `bin/generate_keys --account lin-k-lyrics -x <安全路径>`
 导出私钥。将打印的公钥和导出文件中的 Base64 私钥分别配置为仓库 Actions
 secrets `SPARKLE_PUBLIC_ED_KEY`、`SPARKLE_PRIVATE_ED_KEY`。私钥不可提交进仓库。
-构建脚本校验公钥，最终 ZIP 签名脚本校验公私钥是否匹配并验签；缺少密钥或
-配置不匹配会阻断对应的构建或签名步骤。
+CI 缺少任一密钥时照常打包和发布，但不内置 Sparkle，也不生成签名清单；
+应用仍检查更新并展示说明，「前往下载」按钮打开发布页供用户手动安装。
+公私钥均已配置时，构建脚本校验公钥，最终 ZIP 签名脚本校验公私钥是否匹配
+并验签；格式错误或不匹配仍会阻断对应步骤。
 这些 Ed25519 密钥用于更新包认证。
 
 构建保留包内 multiprocessing 和 Sparkle 原生加载检查。播放、安装及重启验收
 由开发者按需手工执行，不接入 release workflow。
 
-本地构建先设置 `KROK_SPARKLE_PUBLIC_ED_KEY`。签署发布清单还需设置
+本地构建可不配置密钥，此时产出仅支持手动安装的普通包。要内置更新器，先设置
+`KROK_SPARKLE_PUBLIC_ED_KEY`。签署发布清单还需设置
 `KROK_SPARKLE_PRIVATE_ED_KEY`，并安装 `cryptography`。应用代码签名沿用现有 ad-hoc
 方式，更新 ZIP 另用 Ed25519 签名。
 

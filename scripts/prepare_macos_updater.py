@@ -68,6 +68,22 @@ def configure_bundle(app: Path, sdk: Path, public_key: str):
     plist.write_bytes(plistlib.dumps(metadata))
 
 
+def disable_bundle_updates(app: Path):
+    """Remove updater resources and metadata when rebuilding without a key."""
+    framework = app / "Contents/Frameworks/Sparkle.framework"
+    if framework.is_symlink():
+        framework.unlink()
+    elif framework.exists():
+        shutil.rmtree(framework)
+    (app / "Contents/Resources/Sparkle-LICENSE.txt").unlink(missing_ok=True)
+    plist = app / "Contents/Info.plist"
+    metadata = plistlib.loads(plist.read_bytes())
+    for key in ("SUPublicEDKey", "SUEnableAutomaticChecks", "SUAutomaticallyUpdate",
+                "SUEnableInstallerLauncherService", "SUVerifyUpdateBeforeExtraction"):
+        metadata.pop(key, None)
+    plist.write_bytes(plistlib.dumps(metadata))
+
+
 def sign_bundle(app: Path):
     common = ["/usr/bin/codesign", "--force", "--sign", "-"]
     # Sign inside out. --deep is verification only, never signing.
@@ -91,10 +107,17 @@ def main():
     parser.add_argument("--sdk-dir", type=Path, required=True)
     parser.add_argument("--app", type=Path)
     args = parser.parse_args()
-    public_key = validate_ed_key(os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", ""))
-    sdk = prepare_sdk(args.sdk_dir)
+    public_key = os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", "").strip()
+    if public_key:
+        public_key = validate_ed_key(public_key)
+        sdk = prepare_sdk(args.sdk_dir)
+        if args.app:
+            configure_bundle(args.app, sdk, public_key)
+    else:
+        print("No Sparkle public key configured; building without macOS automatic installation.")
+        if args.app:
+            disable_bundle_updates(args.app)
     if args.app:
-        configure_bundle(args.app, sdk, public_key)
         sign_bundle(args.app)
 
 

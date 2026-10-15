@@ -19,6 +19,21 @@ def validate_ed_key(value: str) -> str:
     return value
 
 
+def is_auto_update_available() -> bool:
+    """Manual-only builds and source runs keep checking releases without Sparkle."""
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return False
+    bundle = Path(sys.executable).resolve().parent.parent.parent
+    if bundle.suffix != ".app":
+        return False
+    try:
+        metadata = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
+        validate_ed_key(metadata.get("SUPublicEDKey", ""))
+    except (OSError, ValueError):
+        return False
+    return (bundle / "Contents/Frameworks/Sparkle.framework").is_dir()
+
+
 def verify_bundled_sparkle() -> None:
     """Load the real framework from a frozen host without starting an update."""
     if sys.platform != "darwin" or not getattr(sys, "frozen", False):

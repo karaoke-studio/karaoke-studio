@@ -72,10 +72,15 @@ def main():
     parser.add_argument("archive", type=Path)
     parser.add_argument("--sdk-dir", type=Path, required=True)
     args = parser.parse_args()
+    public_key = os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", "").strip()
+    private_key = os.environ.get("KROK_SPARKLE_PRIVATE_ED_KEY", "").strip()
+    if not public_key or not private_key:
+        args.archive.with_name(FEED_NAME).unlink(missing_ok=True)
+        print("Sparkle keys are incomplete; skipping macOS update signing and appcast generation.")
+        return
     data = sign_archive(
         args.archive, args.sdk_dir, read_app_version(),
-        os.environ.get("KROK_SPARKLE_PUBLIC_ED_KEY", ""),
-        os.environ.get("KROK_SPARKLE_PRIVATE_ED_KEY", ""),
+        public_key, private_key,
     )
     args.archive.with_name(FEED_NAME).write_bytes(data)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -35,13 +36,66 @@ assert not any(name.split('.')[0] in ('PyQt6', 'requests', 'qfluentwidgets', 'ob
     assert result.returncode == 0, result.stderr
 
 
-def test_missing_key_stops_before_sdk_preparation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("value", [None, "", " \n"])
+def test_missing_key_skips_sdk_preparation(tmp_path, monkeypatch, value):
     sdk = tmp_path / "sdk"
     monkeypatch.delenv("KROK_SPARKLE_PUBLIC_ED_KEY", raising=False)
+    if value is not None:
+        monkeypatch.setenv("KROK_SPARKLE_PUBLIC_ED_KEY", value)
+    monkeypatch.setattr(sys, "argv", ["prepare_macos_updater.py", "--sdk-dir", str(sdk)])
+    monkeypatch.setattr(prepare_macos_updater, "prepare_sdk", lambda _: pytest.fail("Must not fetch Sparkle"))
+    prepare_macos_updater.main()
+    assert not sdk.exists()
+
+
+def test_invalid_configured_key_still_fails_before_sdk_preparation(tmp_path, monkeypatch):
+    sdk = tmp_path / "sdk"
+    monkeypatch.setenv("KROK_SPARKLE_PUBLIC_ED_KEY", base64.b64encode(bytes(31)).decode())
     monkeypatch.setattr(sys, "argv", ["prepare_macos_updater.py", "--sdk-dir", str(sdk)])
     with pytest.raises(ValueError, match="32 字节"):
         prepare_macos_updater.main()
     assert not sdk.exists()
+
+
+def test_rebuild_without_key_removes_old_updater_and_resigns_app(tmp_path, monkeypatch):
+    app = tmp_path / "Test.app"
+    framework = app / "Contents/Frameworks/Sparkle.framework"
+    framework.mkdir(parents=True)
+    (framework / "Sparkle").write_bytes(b"old framework")
+    resources = app / "Contents/Resources"
+    resources.mkdir()
+    (resources / "Sparkle-LICENSE.txt").write_text("old license")
+    plist = app / "Contents/Info.plist"
+    plist.write_bytes(plistlib.dumps({
+        "CFBundleVersion": "1.0.0", "SUPublicEDKey": base64.b64encode(bytes(32)).decode(),
+        "SUEnableInstallerLauncherService": True, "SUVerifyUpdateBeforeExtraction": True,
+    }))
+    monkeypatch.delenv("KROK_SPARKLE_PUBLIC_ED_KEY", raising=False)
+    monkeypatch.setattr(sys, "argv", ["prepare_macos_updater.py", "--sdk-dir", str(tmp_path / "sdk"), "--app", str(app)])
+    monkeypatch.setattr(prepare_macos_updater, "prepare_sdk", lambda _: pytest.fail("Must not fetch Sparkle"))
+    signed = []
+    monkeypatch.setattr(prepare_macos_updater, "sign_bundle", signed.append)
+    prepare_macos_updater.main()
+    assert signed == [app]
+    assert not framework.exists()
+    assert not (resources / "Sparkle-LICENSE.txt").exists()
+    assert plistlib.loads(plist.read_bytes()) == {"CFBundleVersion": "1.0.0"}
+
+
+@pytest.mark.parametrize("public,framework,expected", [("", False, False), ("", True, False),
+                         (base64.b64encode(bytes(32)).decode(), False, False),
+                         (base64.b64encode(bytes(32)).decode(), True, True)])
+def test_runtime_capability_requires_bundled_key_and_framework(tmp_path, monkeypatch, public, framework, expected):
+    from krok_helper.updater.macos_metadata import is_auto_update_available
+    app = tmp_path / "Test.app"
+    (app / "Contents/MacOS").mkdir(parents=True)
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"SUPublicEDKey": public}))
+    if framework:
+        (app / "Contents/Frameworks/Sparkle.framework").mkdir(parents=True)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(app / "Contents/MacOS/Test"))
+    assert is_auto_update_available() is expected
 
 
 def test_sdk_checksum_failure_stops_before_extraction(tmp_path, monkeypatch):

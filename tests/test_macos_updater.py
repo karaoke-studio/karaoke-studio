@@ -7,6 +7,38 @@ import pytest
 from krok_helper.updater.macos_feed import ASSET_NAME
 
 
+@pytest.mark.parametrize("platform,host_available,has_feed", [("darwin", False, True), ("darwin", True, False),
+                         ("darwin", False, False), ("darwin", True, True), ("win32", False, False)])
+def test_update_prompt_uses_installer_only_when_supported(monkeypatch, platform, host_available, has_feed):
+    import sys
+    from PyQt6.QtWidgets import QApplication, QPushButton
+    from krok_helper.updater import dialogs, macos_metadata
+    from krok_helper.updater.macos_feed import FEED_NAME
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(macos_metadata, "is_auto_update_available", lambda: host_available)
+    opened = []
+    monkeypatch.setattr(dialogs.QDesktopServices, "openUrl", lambda url: opened.append(url.toString()) or True)
+    release = SimpleNamespace(version="1.0.1", body="测试更新", published_at="", html_url="https://github.com/karaoke-studio/karaoke-studio/releases/tag/v1.0.1",
+                              assets=[SimpleNamespace(name=ASSET_NAME)] + ([SimpleNamespace(name=FEED_NAME)] if has_feed else []))
+    dialog = dialogs.WorkbenchUpdateDialog(release, local_version="1.0.0")
+    try:
+        buttons = {button.text(): button for button in dialog.findChildren(QPushButton)}
+        if platform != "darwin" or (host_available and has_feed):
+            assert "前往下载" not in buttons
+            buttons["立即更新"].click()
+            assert opened == []
+            assert dialog.user_choice == "update"
+        else:
+            assert "立即更新" not in buttons
+            buttons["前往下载"].click()
+            assert opened == [release.html_url]
+            assert dialog.user_choice == "later"
+    finally:
+        dialog.close()
+
+
 def test_macos_routes_to_native_backend_without_windows_launcher(monkeypatch):
     import sys
     from krok_helper.gui_qt import KrokHelperQtApp
