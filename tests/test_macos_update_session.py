@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -137,27 +138,83 @@ def test_qt_cancellation_closes_cache_server_and_native_cycle_once(monkeypatch):
     assert errors == [""]
 
 
-def test_native_delta_failure_retries_full_once_but_not_after_recovery_rejection(monkeypatch):
+def test_delta_failure_cleans_up_before_download_and_starts_full_cycle_only_when_ready(monkeypatch):
     monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
     parent = QWidget()
     controller = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
     events = []
-    controller.prepared = SimpleNamespace(delta=object(), close=lambda: events.append("cache"))
+    feed = object()
+    controller.prepared = SimpleNamespace(delta=object(), feed=feed, close=lambda: events.append("cache"))
     controller.native = SimpleNamespace(retry_full=True, close=lambda: events.append("native"))
     controller.server = SimpleNamespace(close=lambda: events.append("server"))
-    def full():
-        controller.full_attempted = True
-        events.append("full")
-    monkeypatch.setattr(controller, "_request_full", full)
+    worker = SimpleNamespace(
+        prepared=None, error="", deleteLater=lambda: None,
+        progress=SimpleNamespace(connect=lambda *args: None), finished=SimpleNamespace(connect=lambda *args: None),
+        start=lambda: events.append("download"), cancel_event=threading.Event(), wait=lambda: None,
+    )
+    def prepare(result, settings, parent, **kwargs):
+        assert kwargs == {"feed": feed}  # No current build: never select another delta.
+        assert controller.native is controller.server is controller.prepared is None
+        return worker
+    monkeypatch.setattr(macos_controller, "_PrepareWorker", prepare)
     controller._native_finished("signature failed")
-    assert events == ["full", "native", "server"]
-    assert not controller.completed and controller.native is None and controller.server is None
-    controller._native_finished("full download failed")
-    assert events.count("full") == 1 and controller.completed
+    assert events == ["native", "server", "cache", "download"]
+    assert controller.full_attempted and not controller.completed
+    assert controller.native is controller.server is controller.prepared is None
 
+    # Only completion of the independent full download may create a new native
+    # session. Until then there is no Sparkle request whose timeout can expire.
+    full = SimpleNamespace(delta=None, delta_archive=None, archive=Path("/cached/full.zip"),
+                           feed=SimpleNamespace(build_version="4.3.7003"), close=lambda: events.append("full cache"))
+    worker.prepared = full
+    def serve(prepared):
+        assert prepared is full
+        events.append("full server")
+        return SimpleNamespace(feed_url="feed", archive_url="archive", delta_url=None,
+                               close=lambda: events.append("full server closed"))
+    monkeypatch.setattr(macos_controller, "LocalUpdateServer", serve)
+    def native(bundle, **kwargs):
+        assert kwargs["delta_url"] is None
+        return SimpleNamespace(retry_full=True, start=lambda: events.append("full native"),
+                               close=lambda: events.append("full native closed"))
+    monkeypatch.setattr(macos_controller, "SparkleSession", native)
+    controller.download_finished()
+    assert events[-2:] == ["full server", "full native"]
+    controller._native_finished("full download failed")
+    assert events.count("download") == 1 and controller.completed
+
+
+def test_recovery_rejection_does_not_retry_full(monkeypatch):
+    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
+    parent = QWidget()
+    events = []
     second = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
     second.prepared = SimpleNamespace(delta=object(), close=lambda: None)
     second.native = SimpleNamespace(retry_full=False, close=lambda: None)
     monkeypatch.setattr(second, "_request_full", lambda: events.append("unexpected full"))
     second._native_finished("recovery disk full")
     assert second.completed and "unexpected full" not in events
+
+
+def test_cancel_during_full_fallback_does_not_start_another_native_cycle(monkeypatch):
+    monkeypatch.setattr(macos_controller, "find_host_bundle", lambda: Path("/unused/Test.app"))
+    parent = QWidget()
+    controller = macos_controller.MacUpdateController(parent, can_install=lambda: True, prepare_relaunch=lambda: None)
+    errors = []
+    controller.finished.connect(errors.append)
+    controller.prepared = SimpleNamespace(delta=object(), feed=object(), close=lambda: None)
+    controller.native = SimpleNamespace(retry_full=True, close=lambda: None)
+    controller.server = SimpleNamespace(close=lambda: None)
+    worker = SimpleNamespace(
+        prepared=None, error="", deleteLater=lambda: None, cancel_event=threading.Event(), wait=lambda: None,
+        progress=SimpleNamespace(connect=lambda *args: None), finished=SimpleNamespace(connect=lambda *args: None),
+        start=lambda: None,
+    )
+    monkeypatch.setattr(macos_controller, "_PrepareWorker", lambda *args, **kwargs: worker)
+    monkeypatch.setattr(macos_controller, "SparkleSession", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Cancelled fallback must not install")))
+    controller._native_finished("delta failed")
+    controller.cancel()
+    assert worker.cancel_event.is_set() and not controller.completed
+    controller.download_finished()
+    assert errors == [""] and controller.completed and worker.cancel_event.is_set()
+    assert controller.native is controller.server is controller.prepared is controller.worker is None

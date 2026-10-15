@@ -62,6 +62,9 @@ status = controller.progress.set_status
 def trace_status(text):
     print(text, flush=True)
     status(text)
+    if config.get('expect_full_fallback') and '正在下载更新包' in text:
+        assert controller.full_attempted
+        assert controller.native is controller.server is controller.prepared is None
     if config.get('cancel_fallback') and '正在下载更新包' in text:
         QTimer.singleShot(0, controller.cancel)
 controller.progress.set_status = trace_status
@@ -94,7 +97,7 @@ def start():
     controller.worker = SimpleNamespace(prepared=prepared, error='', deleteLater=lambda: None)
     controller.download_finished()
 QTimer.singleShot(0, start)
-QTimer.singleShot(90000, lambda: app.exit(2))
+QTimer.singleShot(config.get('timeout_ms', 90000), lambda: app.exit(2))
 raise SystemExit(app.exec())
 '''
 
@@ -207,11 +210,14 @@ def main():
     parser.add_argument("--delta", choices=("valid", "tampered", "baseline"), help="验证原生单补丁或失败后完整包回退")
     parser.add_argument("--container", action="store_true", help="从合并 ZIP 截段下载补丁，验证完整客户端路径")
     parser.add_argument("--cancel-fallback", action="store_true", help="在完整包回退下载中取消，验证不安装且可正常退出")
+    parser.add_argument("--full-download-seconds", type=float, default=0, help="模拟完整包持续慢速传输的最短秒数")
     args = parser.parse_args()
     if args.workbench_exit:
         raise SystemExit(run_workbench_exit_smoke())
     if args.sdk_dir is None:
         parser.error("原生安装验证需要 --sdk-dir。")
+    if args.full_download_seconds < 0:
+        parser.error("--full-download-seconds 不能为负数。")
     sdk = args.sdk_dir.resolve()
     root = Path(__file__).resolve().parents[1]
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -258,8 +264,9 @@ def main():
         subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(new_app), str(archive)], check=True)
         feed = sign_archive(archive, sdk, "1.0.1", public, private)
 
-        archive_requests, delta_requests = [], []
+        archive_requests, delta_requests, full_transfer_seconds = [], [], []
         cancel_fallback = False
+        full_download_seconds = 0
         container = directory / 'KaraokeStudio-macos-deltas.zip'
 
         class Handler(BaseHTTPRequestHandler):
@@ -283,15 +290,23 @@ def main():
                 if self.path == "/feed":
                     self.wfile.write(feed)
                 else:
+                    began = time.monotonic()
+                    sent = 0
                     with archive.open("rb") as stream:
                         while chunk := stream.read(256 * 1024):
                             try:
+                                sent += len(chunk)
+                                delay = began + full_download_seconds * sent / archive.stat().st_size - time.monotonic()
+                                if delay > 0:
+                                    time.sleep(delay)
                                 self.wfile.write(chunk)
                                 self.wfile.flush()
                                 if cancel_fallback:
                                     time.sleep(.1)
                             except (BrokenPipeError, ConnectionResetError):
                                 break
+                    if sent == archive.stat().st_size:
+                        full_transfer_seconds.append(time.monotonic() - began)
             def log_message(self, *args):
                 pass
 
@@ -373,6 +388,9 @@ def main():
                 rows = pack_deltas(container, [(delta, row)])
                 feed = render_feed(replace(parse_feed(valid_feed, tag='v1.0.1', version='1.0.1'),
                                            deltas=rows, delta_container_length=container.stat().st_size))
+        full_download_seconds = args.full_download_seconds
+        config.update(expect_full_fallback=bool(mode and mode != 'valid'),
+                      timeout_ms=int((90 + full_download_seconds) * 1000))
         control.write_text(json.dumps(config))
         if args.cancel_fallback:
             cancel_fallback = True
@@ -395,7 +413,7 @@ def main():
                 cancelled_ok = True
                 print('PASS: cancelling full fallback retained the old app, did not install or restart, and exited cleanly.', flush=True)
                 return
-            deadline = time.monotonic() + 100
+            deadline = time.monotonic() + 100 + full_download_seconds
             while time.monotonic() < deadline and not marker.exists() and not error.exists():
                 # Wait for the installer agent after the prepared host exits.
                 if process.poll() is not None and process.returncode != 0 and not prepared.exists():
@@ -414,6 +432,9 @@ def main():
             assert process.wait(timeout=15) == 0, "The old host must exit cleanly after installer handoff"
             installed = plistlib.loads(old_plist.read_bytes())
             assert installed["CFBundleVersion"] == "1.0.1000"
+            if full_download_seconds and (not mode or mode != 'valid'):
+                assert full_transfer_seconds[-1] >= full_download_seconds
+                print(f"PASS: full archive transfer took {full_transfer_seconds[-1]:.1f}s; no native session was waiting for it.", flush=True)
             if mode:
                 expected_requests = 0 if mode == 'valid' else 1
                 assert len(archive_requests) - initial_requests == expected_requests, archive_requests

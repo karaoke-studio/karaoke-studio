@@ -128,7 +128,6 @@ class _PrepareWorker(QThread):
 
 class MacUpdateController(QObject):
     finished = pyqtSignal(str)
-    full_requested = pyqtSignal()
 
     def __init__(
         self, parent: QWidget, *, can_install: Callable[[], bool],
@@ -147,10 +146,8 @@ class MacUpdateController(QObject):
         self.progress.cancelled.connect(self.cancel)
         self.worker = None
         self.prepared = self.server = self.native = None
-        self.fallback_prepared = None
         self.full_attempted = False
         self.result = self.settings = None
-        self.full_requested.connect(self._request_full, Qt.ConnectionType.QueuedConnection)
         self.cancelled = self.installing = self.completed = False
         QApplication.instance().aboutToQuit.connect(self.on_quit)
 
@@ -191,15 +188,11 @@ class MacUpdateController(QObject):
                 prepared.close()
             self.finish(error)
             return
-        if self.server is not None:
-            self.fallback_prepared = prepared
-            self.server.supply_full(prepared.archive)
-            return
         if self.prepared is not None:
             self.prepared.close()
         self.prepared = prepared
         try:
-            self.server = LocalUpdateServer(self.prepared, request_full=self.full_requested.emit)
+            self.server = LocalUpdateServer(self.prepared)
             self.native = SparkleSession(
                 self.bundle, build_version=self.prepared.feed.build_version,
                 feed_url=self.server.feed_url, archive_url=self.server.archive_url,
@@ -223,24 +216,27 @@ class MacUpdateController(QObject):
         if self.completed or self.cancelled or self.full_attempted:
             return
         self.full_attempted = True
+        feed = self.prepared.feed
+        self.native.close()
+        self.native = None
+        self.server.close()
+        self.server = None
+        self.prepared.close()
+        self.prepared = None
         self.progress.set_cancellable(True)
         self.progress.set_status("增量更新不可用，正在下载完整包…")
-        self.worker = _PrepareWorker(self.result, self.settings, self, feed=self.prepared.feed)
+        self.worker = _PrepareWorker(self.result, self.settings, self, feed=feed)
         self.worker.progress.connect(self._update_status, Qt.ConnectionType.QueuedConnection)
         self.worker.finished.connect(self.download_finished)
         self.worker.start()
 
     def _native_finished(self, error: str = "") -> None:
-        # Sparkle may end the cycle instead of requesting its full enclosure
-        # (e.g. signature rejection). Retry once without advertising any delta.
+        # Both a delta error and the local server rejecting Sparkle's automatic
+        # full request end this cycle. Download fully before creating another.
         if (error and not self.cancelled and not self.installing and not self.full_attempted
                 and self.native.retry_full
                 and self.prepared is not None and self.prepared.delta is not None):
             self._request_full()
-            self.native.close()
-            self.native = None
-            self.server.close()
-            self.server = None
             return
         self.finish(error)
 
@@ -281,9 +277,6 @@ class MacUpdateController(QObject):
         if self.prepared:
             self.prepared.close()
             self.prepared = None
-        if self.fallback_prepared:
-            self.fallback_prepared.close()
-            self.fallback_prepared = None
         QApplication.instance().aboutToQuit.disconnect(self.on_quit)
         self.progress.finish()
         self.finished.emit("" if self.cancelled else error)

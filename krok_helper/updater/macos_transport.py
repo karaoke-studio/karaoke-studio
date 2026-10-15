@@ -192,23 +192,15 @@ def prepare_in_process(spec: dict, cache_dir: str, channel) -> None:
 
 
 class LocalUpdateServer:
-    """Token-scoped cached resources; missing full archives are prepared by the host."""
+    """Serve only prepared resources; an unavailable full archive ends the delta cycle."""
 
-    def __init__(self, prepared: PreparedMacUpdate, *, request_full: Callable[[], None] = lambda: None):
+    def __init__(self, prepared: PreparedMacUpdate):
         token = secrets.token_urlsafe(32)
         self.feed_path = f"/{token}/{FEED_NAME}"
         self.archive_path = f"/{token}/{ASSET_NAME}"
         self.delta_path = f"/{token}/update.delta"
-        self._ready = threading.Event()
-        self._closed = threading.Event()
-        self._archive = prepared.archive
-        self._requested = False
-        self._lock = threading.Lock()
-        if prepared.delta is None:
-            self._ready.set()
         feed_path, archive_path = self.feed_path, self.archive_path
         delta_path = self.delta_path
-        owner = self
         # Bind before rendering: native Sparkle must see the .delta extension.
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
         origin = f"http://127.0.0.1:{self.server.server_port}"
@@ -233,19 +225,12 @@ class LocalUpdateServer:
                 if is_delta and (prepared.delta is None or prepared.delta_archive is None):
                     self.send_error(404)
                     return
-                if self.path == archive_path:
-                    with owner._lock:
-                        if not owner._ready.is_set() and not owner._requested:
-                            owner._requested = True
-                            request_full()
-                    while not owner._ready.wait(0.05):
-                        if owner._closed.is_set():
-                            self.send_error(503)
-                            return
-                    if owner._closed.is_set():
-                        self.send_error(503)
-                        return
-                archive = prepared.delta_archive if is_delta else owner._archive
+                if self.path == archive_path and prepared.delta is not None:
+                    # End Sparkle's automatic fallback promptly. The host
+                    # prepares the full archive before starting a new cycle.
+                    self.send_error(503)
+                    return
+                archive = prepared.delta_archive if is_delta else prepared.archive
                 length = len(feed_data) if is_feed else (prepared.delta.length if is_delta else prepared.feed.length)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/rss+xml" if is_feed else "application/octet-stream")
@@ -270,12 +255,7 @@ class LocalUpdateServer:
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self.thread.start()
 
-    def supply_full(self, archive: Path) -> None:
-        self._archive = archive
-        self._ready.set()
-
     def close(self):
-        self._closed.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
