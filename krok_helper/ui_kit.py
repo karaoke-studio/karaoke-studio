@@ -293,3 +293,32 @@ def apply_card_shadow(widget: QWidget, *, alpha: int = 20) -> None:
     shadow.setYOffset(2)
     shadow.setColor(QColor(16, 24, 40, alpha))
     widget.setGraphicsEffect(shadow)
+
+
+def pin_lyric_font_style(font: QFont) -> QFont:
+    """Resolve weight within the primary family, retaining missing-glyph fallback.
+
+    Pin a concrete face instead of leaving a weight-only request to the platform.
+    With no bold face, retain the closest face and request synthetic emboldening.
+    Do not cache: application/system font installation can change available faces.
+    """
+    families = font.families()
+    if not families:
+        return font
+    family = families[0]
+    styles = QFontDatabase.styles(family)
+    if not styles:
+        return font
+    requested_weight = font.weight()
+
+    def score(style):
+        candidate = QFontDatabase.font(family, style, font.pointSize())
+        return (
+            candidate.italic() != font.italic(),
+            abs(candidate.stretch() - 100) if candidate.stretch() else 0,
+            abs(QFontDatabase.weight(family, style) - requested_weight),
+            style.casefold(),
+        )
+
+    font.setStyleName(min(styles, key=score))
+    return font

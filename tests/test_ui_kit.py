@@ -93,3 +93,94 @@ def test_preview_bold_keeps_primary_and_default_fallback(qapp):
         assert preview._font_current.families() == [DEFAULT_FONT_FAMILY]
     finally:
         preview.close()
+
+
+@pytest.mark.parametrize("family", ["Microsoft YaHei", "Arial", "NanumBarunGothic"])
+def test_lyric_bold_resolves_ascii_in_selected_family(qapp, family):
+    from PyQt6.QtGui import QFont, QFontDatabase, QTextLayout
+    from krok_helper.sug_compat import _patch_preview_font_families
+    _patch_preview_font_families()
+    from strange_uta_game.frontend.font_utils import lyrics_font
+
+    if family not in QFontDatabase.families():
+        pytest.skip("test font is not installed")
+    for weight in (QFont.Weight.Normal, QFont.Weight.Bold):
+        font = lyrics_font(family, 22, weight)
+        assert font.styleName() in QFontDatabase.styles(family)
+        layout = QTextLayout("ABCxyz0123456789", font)
+        layout.beginLayout()
+        line = layout.createLine()
+        line.setLineWidth(10000)
+        layout.endLayout()
+        runs = line.glyphRuns()
+        assert runs
+        assert {run.rawFont().familyName() for run in runs} == {family}
+        assert all(0 not in run.glyphIndexes() for run in runs)
+        assert all(run.rawFont().weight() == weight.value for run in runs)
+
+
+def test_click_focus_paints_ascii_with_primary_bold(qapp, monkeypatch):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QFontDatabase, QPainter, QRawFont
+    from PyQt6.QtTest import QTest
+    from strange_uta_game.backend.domain import Project, Sentence
+    from strange_uta_game.frontend.editor.timing import karaoke_preview as module
+
+    if "Microsoft YaHei" not in QFontDatabase.families():
+        pytest.skip("Microsoft YaHei required")
+    from krok_helper.sug_compat import _patch_preview_font_families
+    _patch_preview_font_families()
+    painted = []
+
+    class RecordingPainter(QPainter):
+        def drawText(self, *args):
+            if self.font().pointSize() >= 18 and args and isinstance(args[-1], str) and args[-1] in ("A", "1", "A1"):
+                raw = QRawFont.fromFont(self.font())
+                painted.append((raw.familyName(), raw.weight()))
+            return super().drawText(*args)
+
+    monkeypatch.setattr(module, "QPainter", RecordingPainter)
+    preview = module.KaraokePreview()
+    try:
+        preview.resize(800, 500)
+        preview.set_font_sizes(18, main_font="Microsoft YaHei")
+        project = Project()
+        project.add_sentence(Sentence.from_text("test", project.get_default_singer().id))
+        project.add_sentence(Sentence.from_text("A1", project.get_default_singer().id))
+        preview.set_project(project)
+        preview.set_current_position(0, 0)
+        preview.show()
+        QTest.qWait(100)
+        preview.grab()
+        assert ("Microsoft YaHei", 400) in painted
+        rect = next(rect for rect, line, char in preview._char_hitboxes if line == 1 and char == 0)
+        painted.clear()
+        QTest.mouseClick(preview, Qt.MouseButton.LeftButton, pos=rect.center())
+        QTest.qWait(450)
+        preview.grab()
+        assert preview._focus_line_idx == 1
+        assert ("Microsoft YaHei", 700) in painted
+        assert all(family == "Microsoft YaHei" for family, _ in painted)
+    finally:
+        preview.close()
+
+
+def test_pinned_lyric_style_keeps_chinese_and_korean_fallback(qapp):
+    from krok_helper.sug_compat import _patch_preview_font_families
+    _patch_preview_font_families()
+    from strange_uta_game.frontend.font_utils import lyrics_font
+    if sys.platform != "win32" or not all(f in QFontDatabase.families() for f in ("Arial", "Microsoft YaHei", "Malgun Gothic")):
+        pytest.skip("Windows system fonts required")
+    script = QChar.Script.Script_Hangul
+    previous = QFontDatabase.applicationFallbackFontFamilies(script)
+    try:
+        configure_korean_font_fallback()
+        for weight in (QFont.Weight.Normal, QFont.Weight.Bold):
+            layout = QTextLayout("A1中文한글", lyrics_font("Arial", 22, weight))
+            layout.beginLayout()
+            line = layout.createLine()
+            line.setLineWidth(10000)
+            layout.endLayout()
+            assert {run.rawFont().familyName() for run in line.glyphRuns()} == {"Arial", "Microsoft YaHei", "Malgun Gothic"}
+    finally:
+        QFontDatabase.setApplicationFallbackFontFamilies(script, previous)

@@ -103,7 +103,19 @@ def _patch_preview_font_families() -> None:
     from strange_uta_game.frontend import font_utils
     from strange_uta_game.frontend.editor.timing.karaoke_preview import KaraokePreview
 
+    from krok_helper.ui_kit import pin_lyric_font_style
+
+    if hasattr(font_utils, "pin_lyric_font_style"):
+        return
     if hasattr(font_utils, "lyrics_font"):
+        original_font = font_utils.lyrics_font
+        if not getattr(original_font, "_krok_pinned_style", False):
+            @wraps(original_font)
+            def lyrics_font(*args, **kwargs):
+                return pin_lyric_font_style(original_font(*args, **kwargs))
+
+            lyrics_font._krok_pinned_style = True
+            font_utils.lyrics_font = lyrics_font
         return
     original = KaraokePreview.set_font_sizes
     if getattr(original, "_krok_font_fallback", False):
@@ -115,6 +127,11 @@ def _patch_preview_font_families() -> None:
         changed = False
         for name in ("current", "context", "ruby"):
             font = getattr(self, "_font_" + name)
+            old_style = font.styleName()
+            pin_lyric_font_style(font)
+            if font.styleName() != old_style:
+                setattr(self, "_fm_" + name, QFontMetrics(font))
+                changed = True
             families = font.families()
             default = font_utils.DEFAULT_FONT_FAMILY
             if not any(family.casefold() == default.casefold() for family in families):
