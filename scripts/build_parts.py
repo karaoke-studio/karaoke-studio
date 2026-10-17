@@ -92,7 +92,8 @@ LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 #     原样复用上一版 runtime zip，aria2c 会被静默丢掉。
 # v4: 主程序明确排除 torch；PyMSS 私有运行时在首次配置时单独安装 torch。禁止复用任何
 #     可能由旧构建环境意外收集了 torch 的 runtime zip。
-RUNTIME_PROFILE = "pymss-no-torch-v4"
+# v5: Bundle Deno and yt-dlp EJS scripts for YouTube JavaScript challenges.
+RUNTIME_PROFILE = "youtube-ejs-deno-v5"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {

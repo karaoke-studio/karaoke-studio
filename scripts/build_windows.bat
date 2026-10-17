@@ -36,7 +36,8 @@ call :ensure_pkg PyInstaller pyinstaller || exit /b 1
 call :ensure_pyqt6 || exit /b 1
 call :ensure_pkg fontTools fonttools || exit /b 1
 call :ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets" || exit /b 1
-call :ensure_pkg yt_dlp yt-dlp || exit /b 1
+%PYTHON_BIN% -m pip install "yt-dlp[default]" || exit /b 1
+%PYTHON_BIN% scripts\fetch_deno.py || exit /b 1
 call :ensure_pkg requests requests || exit /b 1
 call :ensure_pkg psutil psutil || exit /b 1
 call :ensure_pkg sounddevice sounddevice || exit /b 1
@@ -123,6 +124,10 @@ echo Building Windows package...
     --upx-exclude "aria2c.exe" ^
     --collect-all qfluentwidgets ^
     --collect-all yt_dlp ^
+    --collect-all yt_dlp_ejs ^
+    --add-binary "%CD%\build\vendor\deno\deno.exe;tools\deno" ^
+    --add-data "%CD%\build\vendor\deno\LICENSE;tools\deno" ^
+    --upx-exclude "deno.exe" ^
     --collect-all sounddevice ^
     --collect-all soundfile ^
     --collect-all pedalboard ^

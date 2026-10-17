@@ -33,6 +33,7 @@ def test_python_backend_receives_configured_ffmpeg_location(tmp_path: Path, make
     ffmpeg_path.write_text("", encoding="utf-8")
     service = YtDlpService(app_settings=AppSettings(ffmpeg_dir=str(ffmpeg_dir)))
     task = make_download_task()
+    task.url = "https://youtu.be/abc"
     options = DownloadOptions(save_dir=str(tmp_path))
 
     with pytest.raises(VideoDownloadError):
@@ -48,6 +49,7 @@ def test_python_backend_receives_configured_ffmpeg_location(tmp_path: Path, make
         )
 
     assert captured["ffmpeg_location"] == str(ffmpeg_path)
+    assert captured["js_runtimes"] == service._javascript_runtimes()
 
 
 def test_cli_backend_receives_configured_ffmpeg_location(

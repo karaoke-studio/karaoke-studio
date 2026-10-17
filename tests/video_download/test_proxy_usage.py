@@ -51,6 +51,7 @@ def test_ytdlp_cli_extract_uses_global_proxy(monkeypatch) -> None:
     assert isinstance(command, list)
     assert command[1:3] == ["--proxy", "http://127.0.0.1:7890"]
     assert "-f" not in command
+    assert "--js-runtimes" in command
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
@@ -107,3 +108,35 @@ def test_ytdlp_cli_extract_ignores_invalid_cookie_file(monkeypatch, tmp_path) ->
     assert isinstance(command, list)
     assert "--cookies" not in command
 
+
+
+def test_bundled_javascript_runtime_precedes_path(monkeypatch, tmp_path):
+    import os
+    import sys
+    runtime = tmp_path / "tools" / "deno" / ("deno.exe" if os.name == "nt" else "deno")
+    runtime.parent.mkdir(parents=True)
+    runtime.touch()
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr("shutil.which", lambda _: "other-runtime")
+    service = YtDlpService()
+    assert service._javascript_runtimes() == {"deno": {"path": str(runtime)}}
+    assert service._javascript_cli_args("https://youtu.be/abc") == ["--js-runtimes", f"deno:{runtime}"]
+    assert service._javascript_cli_args("https://www.bilibili.com/video/BV1abc") == []
+
+
+def test_python_extraction_receives_javascript_runtime(monkeypatch):
+    service = YtDlpService()
+    expected = {"deno": {"path": "C:/runtime with spaces/deno.exe"}}
+    monkeypatch.setattr(service, "_javascript_runtimes", lambda: expected)
+    captured = {}
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            captured.update(opts)
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def extract_info(self, url, download):
+            return {"title": "ok"}
+    service._extract_info_with_python_api(FakeYoutubeDL, "https://youtu.be/abc", None)
+    assert captured["js_runtimes"] == expected

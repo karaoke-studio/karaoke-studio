@@ -4,3 +4,4 @@ pytest-timeout
 psutil
 jieba==0.42.1
 pypinyin==0.55.0
+yt-dlp[default]

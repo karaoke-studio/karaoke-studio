@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import http.cookiejar
+import inspect
+import logging
 import json
 import os
 import re
@@ -12,6 +14,7 @@ import threading
 import time
 import urllib.request
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
@@ -105,6 +108,32 @@ class VideoDownloadError(RuntimeError):
 
 class DownloadCancelledError(VideoDownloadError):
     """Raised when the user cancels the current download."""
+
+
+def _with_legacy_javascript_fallback(method):
+    """Retry once with the original runtime defaults, without shared state."""
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        bound = signature.bind(self, *args, **kwargs)
+        task = bound.arguments.get("task")
+        url = task.url if task is not None else bound.arguments["url"]
+        try:
+            return method(self, *args, **kwargs)
+        except DownloadCancelledError:
+            raise
+        except (VideoDownloadError, OSError):
+            if task is not None and task.cancel_requested:
+                raise DownloadCancelledError("下载已取消。") from None
+            if bound.arguments.get("_legacy_javascript", False) or self.detect_source(url) != SOURCE_YOUTUBE:
+                raise
+            logging.getLogger(__name__).info("JavaScript 增强模式失败，回退到原有下载模式。")
+            # Existing cookie/client/HTTP fallback logic still handles failure
+            # of this final attempt. Do not retry cancellation or change cookies.
+            return method(self, *args, **{**kwargs, "_legacy_javascript": True})
+
+    return run
 
 
 class _QuietYtDlpLogger:
@@ -592,12 +621,14 @@ class YtDlpService:
                 )
             raise
 
+    @_with_legacy_javascript_fallback
     def _extract_info_with_python_api(
         self,
         youtube_dl,
         url: str,
         cookie_file: str | None,
         *,
+        _legacy_javascript: bool = False,
         extractor_args_hint: str = "",
         allow_playlist: bool = False,
     ) -> dict[str, Any]:
@@ -608,6 +639,8 @@ class YtDlpService:
             "skip_download": True,
             "logger": _QuietYtDlpLogger(),
         }
+        if not _legacy_javascript and self.detect_source(url) == SOURCE_YOUTUBE:
+            ydl_opts["js_runtimes"] = self._javascript_runtimes()
         usable_cookie_file = self._usable_cookie_file(cookie_file)
         if usable_cookie_file:
             ydl_opts["cookiefile"] = usable_cookie_file
@@ -672,11 +705,13 @@ class YtDlpService:
                 )
             raise
 
+    @_with_legacy_javascript_fallback
     def _extract_info_with_cli(
         self,
         url: str,
         cookie_file: str | None = None,
         *,
+        _legacy_javascript: bool = False,
         extractor_args_hint: str = "",
         allow_playlist: bool = False,
     ) -> dict[str, Any]:
@@ -689,6 +724,8 @@ class YtDlpService:
             "--no-update",
             url,
         ]
+        if not _legacy_javascript:
+            command[1:1] = self._javascript_cli_args(url)
         if extractor_args_hint:
             command[1:1] = ["--extractor-args", extractor_args_hint]
         usable_cookie_file = self._usable_cookie_file(cookie_file)
@@ -793,6 +830,7 @@ class YtDlpService:
                 return
             raise
 
+    @_with_legacy_javascript_fallback
     def _download_with_python_api(
         self,
         youtube_dl,
@@ -800,6 +838,7 @@ class YtDlpService:
         options: DownloadOptions,
         progress_callback: Callable[[dict[str, Any]], None],
         *,
+        _legacy_javascript: bool = False,
         save_dir: Path,
         output_stem: str,
         outtmpl: str,
@@ -819,6 +858,8 @@ class YtDlpService:
             "writesubtitles": bool(options.download_subtitle),
             "writeautomaticsub": bool(options.download_subtitle),
         }
+        if not _legacy_javascript and self.detect_source(task.url) == SOURCE_YOUTUBE:
+            ydl_opts["js_runtimes"] = self._javascript_runtimes()
         ydl_opts.update(self._download_resilience_opts(task.url, options))
         if extractor_args_hint:
             ydl_opts["extractor_args"] = self._build_python_extractor_args(extractor_args_hint)
@@ -926,12 +967,14 @@ class YtDlpService:
                 return
             raise
 
+    @_with_legacy_javascript_fallback
     def _download_with_cli(
         self,
         task: DownloadTask,
         options: DownloadOptions,
         progress_callback: Callable[[dict[str, Any]], None],
         *,
+        _legacy_javascript: bool = False,
         save_dir: Path,
         output_stem: str,
         outtmpl: str,
@@ -960,6 +1003,8 @@ class YtDlpService:
                 "%(progress.fragment_index)s|%(progress.fragment_count)s"
             ),
         ]
+        if not _legacy_javascript:
+            command.extend(self._javascript_cli_args(task.url))
         if extractor_args_hint:
             command.extend(["--extractor-args", extractor_args_hint])
         if options.download_thumbnail:
@@ -1064,6 +1109,32 @@ class YtDlpService:
         if "youtube.com" in normalized or "youtu.be" in normalized or "youtube" in extractor_key:
             return SOURCE_YOUTUBE
         return SOURCE_UNKNOWN
+
+    def _javascript_runtimes(self) -> dict[str, dict[str, str]]:
+        """Prefer the bundled runtime; also support source installations."""
+        name = "deno.exe" if os.name == "nt" else "deno"
+        bundle = getattr(sys, "_MEIPASS", None)
+        candidates = []
+        if bundle:
+            candidates.append(Path(bundle) / "tools" / "deno" / name)
+        candidates.append(Path(__file__).resolve().parents[2] / "build" / "vendor" / "deno" / name)
+        for candidate in candidates:
+            if candidate.is_file():
+                return {"deno": {"path": str(candidate)}}
+        for runtime in ("deno", "node"):
+            executable = shutil.which(runtime)
+            if executable:
+                return {runtime: {"path": executable}}
+        return {"deno": {}}
+
+    def _javascript_cli_args(self, url: str) -> list[str]:
+        if self.detect_source(url) != SOURCE_YOUTUBE:
+            return []
+        args = []
+        for runtime, config in self._javascript_runtimes().items():
+            path = config.get("path")
+            args.extend(["--js-runtimes", f"{runtime}:{path}" if path else runtime])
+        return args
 
     def _import_ytdlp(self):
         try:
@@ -1207,7 +1278,7 @@ class YtDlpService:
 
     def _update_ytdlp_python_package(self, python_executable: str | None = None) -> str:
         python = python_executable or sys.executable
-        return self._run_update_command([python, "-m", "pip", "install", "-U", "yt-dlp"])
+        return self._run_update_command([python, "-m", "pip", "install", "-U", "yt-dlp[default]"])
 
     def _python_executable_for_cli(self, cli: str) -> str:
         cli_path = Path(cli)
@@ -1994,7 +2065,7 @@ class YtDlpService:
         if "the page needs to be reloaded" in lower or "please reload this page" in lower:
             return "YouTube 播放客户端返回临时错误，已保留登录状态并切换客户端重试，请稍后再试。"
         if "not a bot" in lower:
-            return "YouTube 触发了机器人校验，已尝试兼容模式；如果仍失败，请稍后重试。"
+            return "YouTube 触发了机器人校验，已尝试兼容模式。请在 Firefox 中打开 YouTube，确认已登录并完成网页验证，然后点击「从 Firefox 导入 Cookie」刷新登录 Cookie，再重新解析下载；若仍失败，请稍后重试。"
         if "sign in to confirm your age" in lower or "login required" in lower:
             return "该视频需要登录后访问，请检查 Bilibili 登录状态是否有效。"
         if "http error 403" in lower:

@@ -151,7 +151,8 @@ ensure_pkg PIL pillow
 ensure_pyqt6
 ensure_pkg fontTools fonttools
 ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets"
-ensure_pkg yt_dlp yt-dlp
+"$PYTHON_BIN" -m pip install "yt-dlp[default]"
+"$PYTHON_BIN" scripts/fetch_deno.py
 ensure_pkg requests requests
 ensure_pkg objc "pyobjc-core==12.2.2"
 ensure_pkg AppKit "pyobjc-framework-Cocoa==12.2.2"
@@ -232,6 +233,9 @@ PYINSTALLER_ARGS=(
   --add-data "$SUG_PACKAGE/bass:strange_uta_game/bass"
   --collect-all qfluentwidgets
   --collect-all yt_dlp
+  --collect-all yt_dlp_ejs
+  --add-binary "$PROJECT_ROOT/build/vendor/deno/deno:tools/deno"
+  --add-data "$PROJECT_ROOT/build/vendor/deno/LICENSE:tools/deno"
   --collect-all sounddevice
   --collect-all soundfile
   --collect-all pedalboard
