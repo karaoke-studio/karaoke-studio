@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.sources.reload import (
     TrackReloadMerge,
@@ -99,15 +100,21 @@ class AxisReloadPlan:
         return bool(merges) and all(merge.timing_only for merge in merges)
 
 
-def _merge_slot(slot: AxisSlotState, candidate: TimingTrack) -> TrackReloadMerge:
+def _merge_slot(
+    slot: AxisSlotState,
+    candidate: TimingTrack,
+    style: Style | None = None,
+) -> TrackReloadMerge:
     baseline = slot.baseline if slot.baseline is not None else slot.track
-    return merge_reloaded_track(slot.track, baseline, candidate)
+    return merge_reloaded_track(slot.track, baseline, candidate, style=style)
 
 
 def _merge_if_changed(
-    slot: AxisSlotState, candidate: TimingTrack
+    slot: AxisSlotState,
+    candidate: TimingTrack,
+    style: Style | None = None,
 ) -> TrackReloadMerge | None:
-    merge = _merge_slot(slot, candidate)
+    merge = _merge_slot(slot, candidate, style)
     return merge if merge.track != slot.track else None
 
 
@@ -116,16 +123,19 @@ def plan_single_axis_reload(
     primary: AxisSlotState | None,
     candidate: TimingTrack,
     extra_slots: list[tuple[int, AxisSlotState]],
+    style: Style | None = None,
 ) -> AxisReloadPlan:
     """单轴重载：主槽位与所有共文件副槽位共用同一份完整解析。"""
 
     primary_merge = (
-        _merge_if_changed(primary, candidate) if primary is not None else None
+        _merge_if_changed(primary, candidate, style)
+        if primary is not None
+        else None
     )
     extra_updates = tuple(
         update
         for index, slot in extra_slots
-        if (merge := _merge_if_changed(slot, candidate)) is not None
+        if (merge := _merge_if_changed(slot, candidate, style)) is not None
         for update in (AxisExtraUpdate(index=index, merge=merge, candidate=candidate),)
     )
     merges = _plan_merges(primary_merge, extra_updates)
@@ -145,11 +155,12 @@ def plan_split_axis_reload(
     primary_axis: SugAxisTrack,
     axis_extra_slots: list[tuple[int, AxisSlotState]],
     axes: list[SugAxisTrack],
+    style: Style | None = None,
 ) -> AxisReloadPlan:
     """分轴重载：副源按名称/歌手集合匹配新分组，消失移除、新增追加。"""
 
     primary_merge = (
-        _merge_if_changed(primary, primary_axis.track)
+        _merge_if_changed(primary, primary_axis.track, style)
         if primary is not None
         else None
     )
@@ -165,7 +176,7 @@ def plan_split_axis_reload(
             removed_extra_indices.append(extra_index)
             continue
         matched_positions.add(position)
-        merge = _merge_if_changed(slot, candidates[position].track)
+        merge = _merge_if_changed(slot, candidates[position].track, style)
         if merge is not None:
             extra_updates.append(
                 AxisExtraUpdate(

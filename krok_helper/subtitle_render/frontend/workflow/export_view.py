@@ -1030,9 +1030,16 @@ def format_elapsed_seconds(seconds: float) -> str:
 
 
 def format_warning_lines(warnings: list) -> str:
-    """把余白警告压成「第 1、3 行」式的短文案，最多点名 4 行。"""
-    numbers = [str(w.line_index + 1) for w in warnings[:4]]
-    text = f"第 {'、'.join(numbers)} 行"
+    """把余白警告压成「S1 P2 T1（第 3 行）、…」式的短文案，最多点名 4 行。
+
+    每条都带完整定位（段 / 页 / 行位 + 歌词表行号），只报行号时用户
+    无法在分页排版里找到那一句。
+    """
+    labels = [
+        warning.label() if hasattr(warning, "label") else f"第 {warning.line_index + 1} 行"
+        for warning in warnings[:4]
+    ]
+    text = "、".join(labels)
     if len(warnings) > 4:
         text += f" 等 {len(warnings)} 行"
     return text

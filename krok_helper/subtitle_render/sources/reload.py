@@ -10,11 +10,13 @@ import hashlib
 from pathlib import Path
 from typing import Callable, Protocol
 
+from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import (
     TimingLine,
     TimingTrack,
     guide_symbol_replacement_anchored,
 )
+from krok_helper.subtitle_render.engine.layout.line_locator import line_locators
 
 
 @dataclass(frozen=True)
@@ -64,16 +66,17 @@ def plan_reloaded_tracks(
     *,
     primary_track: TimingTrack | None = None,
     extra_tracks: Iterable[tuple[int, TimingTrack]] = (),
+    style: Style | None = None,
 ) -> TrackReloadPlan:
     """Plan a source reload without mutating project or presentation state."""
 
     primary_merge = (
-        merge_reloaded_track(primary_track, baseline, candidate)
+        merge_reloaded_track(primary_track, baseline, candidate, style=style)
         if primary_track is not None
         else None
     )
     extra_merges = tuple(
-        (index, merge_reloaded_track(track, baseline, candidate))
+        (index, merge_reloaded_track(track, baseline, candidate, style=style))
         for index, track in extra_tracks
     )
     merges = (
@@ -100,6 +103,7 @@ def prepare_reloaded_tracks(
     load_candidate: Callable[[Path], TimingTrack],
     primary_track: TimingTrack | None = None,
     extra_tracks: Iterable[tuple[int, TimingTrack]] = (),
+    style: Style | None = None,
 ) -> PreparedTrackReload:
     """Read one stable source snapshot and build its project-wide merge plan.
 
@@ -128,6 +132,7 @@ def prepare_reloaded_tracks(
             candidate,
             primary_track=primary_track,
             extra_tracks=extra_tracks,
+            style=style,
         ),
     )
 
@@ -190,12 +195,27 @@ def source_content_signature(track: TimingTrack) -> tuple:
     )
 
 
+def _conflict_ref(track: TimingTrack, style: Style | None) -> Callable[[int], str]:
+    """``S2 P3 T1（第 17 行）`` reference for conflicts on ``track``."""
+
+    locators = line_locators(track, style) if style is not None else {}
+
+    def ref(line_index: int) -> str:
+        locator = locators.get(int(line_index))
+        if locator is None:
+            return f"第 {int(line_index) + 1} 行"
+        return locator.label()
+
+    return ref
+
+
 def merge_reloaded_track(
     current: TimingTrack,
     baseline: TimingTrack,
     candidate: TimingTrack,
     *,
     preserve_page_structure: bool = True,
+    style: Style | None = None,
 ) -> TrackReloadMerge:
     """Apply local renderer edits from ``current`` onto a fresh source parse.
 
@@ -218,6 +238,9 @@ def merge_reloaded_track(
     merged.loading_settings = deepcopy(current.loading_settings)
     merged.loading_settings_snapshot = deepcopy(current.loading_settings_snapshot)
     conflicts: list[str] = []
+    # 冲突按当前（编辑中的）轨道结构定位：用户看到的就是这份歌词表的
+    # S/P/T 与行号。没有排版样式时退化为「第 N 行」。
+    ref = _conflict_ref(current, style)
 
     line_matches = _match_lines(baseline, candidate)
     for old_index, new_index, exact_text, reliable in line_matches:
@@ -228,7 +251,7 @@ def merge_reloaded_track(
             baseline.lines[old_index],
             include_page_projection=preserve_page_structure,
         ):
-            conflicts.append(f"第 {old_index + 1} 行歌词重复，原有字幕设置无法唯一定位")
+            conflicts.append(f"{ref(old_index)}歌词重复，原有字幕设置无法唯一定位")
             continue
         _merge_line_overlays(
             current.lines[old_index],
@@ -236,6 +259,7 @@ def merge_reloaded_track(
             merged.lines[new_index],
             old_index=old_index,
             exact_text=exact_text,
+            ref=ref,
             conflicts=conflicts,
             preserve_page_projection=preserve_page_structure,
         )
@@ -249,7 +273,7 @@ def merge_reloaded_track(
             old_source,
             include_page_projection=preserve_page_structure,
         ):
-            conflicts.append(f"第 {old_index + 1} 行已被删除，原有字幕设置无法定位")
+            conflicts.append(f"{ref(old_index)}已被删除，原有字幕设置无法定位")
 
     return TrackReloadMerge(
         track=merged,
@@ -304,6 +328,7 @@ def _merge_line_overlays(
     *,
     old_index: int,
     exact_text: bool,
+    ref: Callable[[int], str],
     conflicts: list[str],
     preserve_page_projection: bool = True,
 ) -> None:
@@ -328,7 +353,7 @@ def _merge_line_overlays(
         if symbol.replacement_prefix and not guide_symbol_replacement_anchored(
             target, symbol
         ):
-            conflicts.append(f"第 {old_index + 1} 行的前缀导唱符与新歌词不匹配")
+            conflicts.append(f"{ref(old_index)}的前缀导唱符与新歌词不匹配")
         else:
             target.guide_symbol = symbol
 
@@ -350,7 +375,7 @@ def _merge_line_overlays(
             )
             target.inline_guide_symbols = merged
         else:
-            conflicts.append(f"第 {old_index + 1} 行的行内导唱符无法可靠定位")
+            conflicts.append(f"{ref(old_index)}的行内导唱符无法可靠定位")
 
     if exact_text:
         for char_index, (old_char, source_char, new_char) in enumerate(
@@ -373,7 +398,7 @@ def _merge_line_overlays(
         new_index = mapped.get(char_index)
         if new_index is None:
             conflicts.append(
-                f"第 {old_index + 1} 行第 {char_index + 1} 字的角色覆盖无法定位"
+                f"{ref(old_index)}第 {char_index + 1} 字的角色覆盖无法定位"
             )
             continue
         target.chars[new_index].role_label = old_char.role_label

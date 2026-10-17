@@ -183,12 +183,13 @@ class LayoutIssuesDialog(ModelessDialog):
                     else "左右余白无法确保"
                 )
                 text = " ".join(warning.text.split()) or "（空歌词）"
+                label = warning.label()
                 display = (
-                    f"{issue.source_name} · 第 {warning.line_index + 1} 行　"
+                    f"{issue.source_name} · {label}　"
                     f"{kind}　{text}"
                 )
                 detail = (
-                    f"{issue.source_name} · 第 {warning.line_index + 1} 行\n"
+                    f"{issue.source_name} · {label}\n"
                     f"{kind}\n{text}\n"
                     f"测得范围：left={warning.left:.1f}, right={warning.right:.1f}"
                 )

@@ -199,6 +199,7 @@ class SubtitleSourceWatchRuntime(QObject):
         load_candidate: Callable[[Path], TimingTrack],
         primary_track: Optional[TimingTrack] = None,
         extra_tracks: Iterable[tuple[int, TimingTrack]] = (),
+        style: object = None,
     ) -> Optional[SourceReloadPreparation]:
         """Resolve file state, retry policy, and stable reload preparation."""
 
@@ -223,6 +224,7 @@ class SubtitleSourceWatchRuntime(QObject):
                 load_candidate=load_candidate,
                 primary_track=primary_track,
                 extra_tracks=extra_tracks,
+                style=style,
             )
         except Exception as exc:  # noqa: BLE001 - partial writes are retried
             retrying = self.retry(key)

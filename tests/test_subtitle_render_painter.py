@@ -11858,6 +11858,8 @@ def test_check_layout_margins_flags_overflow(qapp):
     assert warnings
     assert warnings[0].level == "overflow"
     assert warnings[0].line_index == 0
+    # 余白警告必须带完整定位（段 / 页 / 行位 + 歌词表行号），不能只报行号。
+    assert warnings[0].label() == "S1 P1 T1（第 1 行）"
 
 
 def test_check_layout_margins_flags_margin_intrusion(qapp):
@@ -14993,6 +14995,10 @@ def test_force_bottom_lane_lift_is_reported_by_diagnostics(qapp):
     assert "ForceBottom" in lift.detail
     assert "第 2 行位 → 第 1 行位" in lift.detail
     assert "00:00.000 – 00:05.000" in lift.detail
+    # 触发行必须带完整定位：段 / 页 / 行位 + 歌词表行号。
+    assert "S1 P1 T1（第 1 行）「前页」" in lift.summary
+    assert "S1 P2 T1（第 2 行）「后页」" in lift.summary
+    assert "S1 P1 T1（第 1 行）「前页」" in lift.detail
 
 
 def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):

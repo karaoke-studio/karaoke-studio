@@ -2658,6 +2658,8 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
     qapp.processEvents()
 
     assert toast_calls
+    # 余白提示不能只报行号：手工构造的警告缺定位时按当前轨道补齐 S/P/T。
+    assert "S1 P1 T2（第 2 行）" in toast_calls[0]["content"]
     assert win._layout_issues_button.isVisible() is True
     assert (
         win._layout_issues_button.geometry().right()
@@ -2671,7 +2673,7 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
     assert dialog is not None
     assert dialog._list_widget.count() == 1
     item = dialog._list_widget.item(0)
-    assert "主字幕 · 第 2 行" in item.text()
+    assert "主字幕 · S1 P1 T2（第 2 行）" in item.text()
     assert "字幕溢出画面" in item.text()
     assert "测得范围" in dialog._detail.toPlainText()
 

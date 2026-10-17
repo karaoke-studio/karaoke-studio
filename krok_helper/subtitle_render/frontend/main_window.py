@@ -116,6 +116,7 @@ from krok_helper.subtitle_render.engine.layout.display.diagnostics import (
     LayoutTimingDiagnostic,
     layout_pass,
 )
+from krok_helper.subtitle_render.engine.layout.line_locator import line_locators
 from krok_helper.subtitle_render.engine.render.adapters.layout_diagnostics import (
     check_layout_margins,
     display_windows_for_style,
@@ -3936,6 +3937,7 @@ class SubtitleRenderWindow(QWidget):
                 for index, source in enumerate(self._extra_sources)
                 if self._subtitle_source_key(source.path) == key
             ),
+            style=self._style,
         )
         if preparation is None:
             return
@@ -4219,6 +4221,7 @@ class SubtitleRenderWindow(QWidget):
                 primary_axis=axes[0],
                 axis_extra_slots=axis_extra_slots,
                 axes=axes,
+                style=self._style,
             )
             plain_extra_slots = [
                 (
@@ -4247,6 +4250,7 @@ class SubtitleRenderWindow(QWidget):
                         primary=None,
                         candidate=whole_track,
                         extra_slots=plain_extra_slots,
+                        style=self._style,
                     ),
                 )
         else:
@@ -4270,6 +4274,7 @@ class SubtitleRenderWindow(QWidget):
                 primary=primary_slot,
                 candidate=axes[0].track,
                 extra_slots=plain_extra_slots,
+                style=self._style,
             )
 
         if not plan.changed:
@@ -6169,6 +6174,7 @@ class SubtitleRenderWindow(QWidget):
                 baseline,
                 parsed_source,
                 preserve_page_structure=preserve_page_structure,
+                style=self._style,
             )
             refreshed = merge.track
             conflicts = merge.conflicts
@@ -6714,6 +6720,23 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.start()
         self._mark_project_dirty()
 
+    def _format_layout_issue_lines(self, warnings: list) -> str:
+        """余白警告 →「S1 P2 T1（第 3 行）、…」；测量结果没带定位时按当前轨道补。
+
+        后台测量已带定位（与诊断缓存同源）；手搓 / 旧结果缺定位时才现算，
+        常规路径不重复做分页解析。
+        """
+
+        if not warnings or all(warning.location for warning in warnings):
+            return _format_warning_lines(warnings)
+        issues = self._with_issue_locations(
+            [
+                _LayoutIssue(track_index=0, source_name="", warning=warning)
+                for warning in warnings
+            ]
+        )
+        return _format_warning_lines([issue.warning for issue in issues])
+
     def _collect_layout_issues(
         self,
         *,
@@ -6792,9 +6815,37 @@ class SubtitleRenderWindow(QWidget):
             )
         return issues
 
+    def _with_issue_locations(
+        self, issues: list[_LayoutIssue | _TimingIssue]
+    ) -> list[_LayoutIssue | _TimingIssue]:
+        """补齐余白条目缺失的 S/P/T 定位（常规测量已自带，此处是兜底）。"""
+
+        track = self._track_by_index(0)
+        if track is None:
+            return issues
+        needs_fill = any(
+            isinstance(issue, _LayoutIssue) and not issue.warning.location
+            for issue in issues
+        )
+        if not needs_fill:
+            return issues
+        locators = line_locators(track, self._style)
+        resolved: list[_LayoutIssue | _TimingIssue] = []
+        for issue in issues:
+            if isinstance(issue, _LayoutIssue) and not issue.warning.location:
+                locator = locators.get(issue.warning.line_index)
+                if locator is not None:
+                    issue = replace(
+                        issue,
+                        warning=replace(issue.warning, location=locator.label()),
+                    )
+            resolved.append(issue)
+        return resolved
+
     def _set_layout_issues(
         self, issues: list[_LayoutIssue | _TimingIssue]
     ) -> None:
+        issues = self._with_issue_locations(issues)
         self._layout_issues = list(issues)
         self._layout_issues_ready = True
         if hasattr(self, "_layout_issues_button"):
@@ -6957,7 +7008,7 @@ class SubtitleRenderWindow(QWidget):
         if overflow:
             InfoBar.warning(
                 title="字幕溢出画面",
-                content=f"{_format_warning_lines(overflow)}超出画面范围，"
+                content=f"{self._format_layout_issue_lines(overflow)}超出画面范围，"
                 "请调小字号或缩短该行。",
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
@@ -6966,7 +7017,7 @@ class SubtitleRenderWindow(QWidget):
         elif margin:
             InfoBar.info(
                 title="左右余白无法确保",
-                content=f"{_format_warning_lines(margin)}侵入左右余白。",
+                content=f"{self._format_layout_issue_lines(margin)}侵入左右余白。",
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=4000,

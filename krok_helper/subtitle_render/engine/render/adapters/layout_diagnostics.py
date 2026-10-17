@@ -171,6 +171,7 @@ def layout_timing_diagnostics_for_style(
     diagnostics.extend(
         build_force_bottom_diagnostics(
             track,
+            style,
             collision_window_label=collision_window_label,
             before=collision_guarded,
             after=final,

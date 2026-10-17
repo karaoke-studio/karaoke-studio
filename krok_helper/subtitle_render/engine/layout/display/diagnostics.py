@@ -10,6 +10,7 @@ from krok_helper.subtitle_render.engine.layout.line.style import (
     line_end_ms,
     line_start_ms,
 )
+from krok_helper.subtitle_render.engine.layout.line_locator import line_locators
 from krok_helper.subtitle_render.engine.layout.page.placement import (
     LineVisualBand,
     bands_require_separation,
@@ -55,6 +56,13 @@ class LayoutMarginWarning:
     level: str
     left: int
     right: int
+    location: str = ""
+    """``S2 P3 T1（第 17 行）``; empty for callers that build the warning by
+    hand (tests / previews) — consumers fall back to ``第 N 行`` then."""
+
+    def label(self) -> str:
+        """User-facing line reference, always carrying the source line."""
+        return self.location or f"第 {self.line_index + 1} 行"
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,7 @@ def resolve_layout_margin_warnings(
             if not line.is_blank and line.chars
         ]
     line_indices = {id(line): index for index, line in enumerate(track.lines)}
+    locators = line_locators(track, style)
     warnings: list[LayoutMarginWarning] = []
     for display_line in display_lines:
         line = display_line.line
@@ -107,13 +116,16 @@ def resolve_layout_margin_warnings(
             level = "margin"
         else:
             continue
+        line_index = line_indices.get(id(line), -1)
+        locator = locators.get(line_index)
         warnings.append(
             LayoutMarginWarning(
-                line_index=line_indices.get(id(line), -1),
+                line_index=line_index,
                 text="".join(ch.text for ch in line_visible_chars(line)),
                 level=level,
                 left=box.left,
                 right=box.right,
+                location=locator.label() if locator is not None else "",
             )
         )
     return warnings
@@ -128,6 +140,24 @@ def diagnostic_line_text(line: TimingLine) -> str:
     return " ".join("".join(char.text for char in line.chars).split()) or "（空歌词）"
 
 
+def _line_refs(track: TimingTrack, style: Style) -> Callable[[int], str]:
+    """Locator label (``S2 P3 T1（第 17 行）``) for one ``track.lines`` index.
+
+    Blank / untimed lines carry no S/P/T position and fall back to the bare
+    source line number.  The page resolution runs once per builder call.
+    """
+
+    locators = line_locators(track, style)
+
+    def ref(track_index: int) -> str:
+        locator = locators.get(int(track_index))
+        if locator is None:
+            return f"第 {int(track_index) + 1} 行"
+        return locator.label()
+
+    return ref
+
+
 def build_timing_window_diagnostics(
     track: TimingTrack,
     style: Style,
@@ -140,8 +170,14 @@ def build_timing_window_diagnostics(
     entry_animation_ms_of: Callable[[Style, TimingLine], int],
     auto_exit_reserve_ms_of: Callable[[Style, TimingLine], int],
 ) -> list[LayoutTimingDiagnostic]:
-    """Explain automatic entry/exit compression from resolved timing snapshots."""
+    """Explain automatic entry/exit compression from resolved timing snapshots.
 
+    Every line reference carries the full locator (``S2 P3 T1（第 17 行）``),
+    resolved from the same page plan / implicit page assignment the renderer
+    uses, so diagnostics point at the exact sentence, page and row.
+    """
+
+    ref = _line_refs(track, style)
     track_index_of = {id(line): index for index, line in enumerate(track.lines)}
     final_by_track = {
         track_index_of[id(item.line)]: item
@@ -186,7 +222,7 @@ def build_timing_window_diagnostics(
                 continue
             final_boundary = int(final_item.display_end_ms)
             message = (
-                f"与第 {incoming + 1} 行「{incoming_text}」发生行盒时间碰撞，"
+                f"与{ref(incoming)}「{incoming_text}」发生行盒时间碰撞，"
                 f"按优先级先压缩本行退场：{format_diagnostic_ms(action.before_ms)}"
                 f" → {format_diagnostic_ms(final_boundary)}。"
             )
@@ -200,7 +236,7 @@ def build_timing_window_diagnostics(
                 continue
             final_boundary = int(final_item.display_start_ms)
             message = (
-                f"第 {previous + 1} 行「{previous_text}」的退场已无法继续压缩，"
+                f"{ref(previous)}「{previous_text}」的退场已无法继续压缩，"
                 f"因此推迟本行入场：{format_diagnostic_ms(action.before_ms)}"
                 f" → {format_diagnostic_ms(final_boundary)}。"
             )
@@ -229,7 +265,7 @@ def build_timing_window_diagnostics(
         if compressed_exit:
             changes.append("退场被提前")
         detail_lines = [
-            f"第 {track_index + 1} 行「{text}」",
+            f"{ref(track_index)}「{text}」",
             f"演唱区间：{format_diagnostic_ms(line_start_ms(line))} – "
             f"{format_diagnostic_ms(line_end_ms(line))}",
             "N3 初始排期窗口（已受换页约束）："
@@ -254,7 +290,7 @@ def build_timing_window_diagnostics(
                 kind="timing",
                 line_indices=(track_index,),
                 title="时间窗口自动压缩",
-                summary=f"第 {track_index + 1} 行「{text}」：{'、'.join(changes) or '窗口已调整'}",
+                summary=f"{ref(track_index)}「{text}」：{'、'.join(changes) or '窗口已调整'}",
                 detail="\n".join(detail_lines),
             )
         )
@@ -263,6 +299,7 @@ def build_timing_window_diagnostics(
 
 def build_force_bottom_diagnostics(
     track: TimingTrack,
+    style: Style,
     *,
     collision_window_label: str,
     before: list[DisplayLine],
@@ -272,6 +309,7 @@ def build_force_bottom_diagnostics(
 ) -> list[LayoutTimingDiagnostic]:
     """Explain one-line bottom-page lane changes from measured collision data."""
 
+    ref = _line_refs(track, style)
     track_index_of = {id(line): index for index, line in enumerate(track.lines)}
     before_render_to_track = {
         render_index: track_index_of[id(item.line)]
@@ -314,8 +352,8 @@ def build_force_bottom_diagnostics(
         previous_band = bands.get(previous_render)
         incoming_band = bands.get(incoming_render)
         detail_lines = [
-            f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
-            f"第 {incoming_track + 1} 行「{incoming_text}」",
+            f"触发行：{ref(previous_track)}「{previous_text}」与"
+            f"{ref(incoming_track)}「{incoming_text}」",
             "避让路径：ForceBottom 单行底部页行位切换",
             f"消费行位：第 {int(before_item.lane) + 1} 行位 → "
             f"第 {int(after_item.lane) + 1} 行位（画面上移）",
@@ -346,8 +384,8 @@ def build_force_bottom_diagnostics(
                 line_indices=(previous_track, incoming_track),
                 title="单行页发生避让抬升",
                 summary=(
-                    f"第 {previous_track + 1} 行「{previous_text}」 ↔ "
-                    f"第 {incoming_track + 1} 行「{incoming_text}」"
+                    f"{ref(previous_track)}「{previous_text}」 ↔ "
+                    f"{ref(incoming_track)}「{incoming_text}」"
                 ),
                 detail="\n".join(detail_lines),
             )
@@ -366,6 +404,7 @@ def build_page_shift_diagnostics(
 ) -> list[LayoutTimingDiagnostic]:
     """Explain rigid page displacement from resolved offsets and line bands."""
 
+    ref = _line_refs(track, style)
     track_index_of = {id(line): index for index, line in enumerate(track.lines)}
     render_to_track = {
         render_index: track_index_of[id(item.line)]
@@ -405,12 +444,12 @@ def build_page_shift_diagnostics(
                     line_indices=(previous_track, incoming_track),
                     title="页面发生横向避让" if style.vertical else "页面发生避让抬升",
                     summary=(
-                        f"第 {previous_track + 1} 行「{previous_text}」 ↔ "
-                        f"第 {incoming_track + 1} 行「{incoming_text}」"
+                        f"{ref(previous_track)}「{previous_text}」 ↔ "
+                        f"{ref(incoming_track)}「{incoming_text}」"
                     ),
                     detail=(
-                        f"触发行：第 {previous_track + 1} 行「{previous_text}」与"
-                        f"第 {incoming_track + 1} 行「{incoming_text}」\n"
+                        f"触发行：{ref(previous_track)}「{previous_text}」与"
+                        f"{ref(incoming_track)}「{incoming_text}」\n"
                         f"{collision_window_label}时间交集："
                         f"{format_diagnostic_ms(overlap_start)} – "
                         f"{format_diagnostic_ms(overlap_end)}\n"
