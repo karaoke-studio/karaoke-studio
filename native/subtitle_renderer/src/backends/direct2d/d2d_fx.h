@@ -66,6 +66,10 @@ struct FxParticle {
     float rotationDeg = 0.0f;
     float sizePx = 0.0f;
     float alpha = 0.0f;
+    // 火焰火舌的速度拉伸（sprite 双轴缩放倍率；其余 kind 恒 1）：
+    // 越升越窄越长，镜像 Python ParticleDraw.stretch_x/stretch_y。
+    float stretchX = 1.0f;
+    float stretchY = 1.0f;
 };
 
 /// 一个 ParticleBurst 在 tMs 的全部粒子（镜像 particles.burst_particles_at）。
@@ -91,6 +95,15 @@ inline const char *fxSpriteForKind(const std::string &kind) {
     }
     if (kind == "flame") {
         return "flame";
+    }
+    if (kind == "flame_alt") {
+        return "flame_alt";
+    }
+    if (kind == "flame_glow") {
+        return "flame";
+    }
+    if (kind == "ember") {
+        return "dot";
     }
     if (kind == "ash") {
         return "ash";

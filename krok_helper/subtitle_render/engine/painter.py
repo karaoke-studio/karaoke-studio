@@ -4153,8 +4153,9 @@ def _paint_line_fx_particles(
                             state.x + decor_dx, state.y + decor_dy
                         )
                         painter.rotate(state.rotation_deg)
-                        scale = state.size_px / 1000.0
-                        painter.scale(scale, scale)
+                        scale_x = state.size_px / 1000.0 * state.stretch_x
+                        scale_y = state.size_px / 1000.0 * state.stretch_y
+                        painter.scale(scale_x, scale_y)
                         painter.setRenderHint(
                             QPainter.RenderHint.Antialiasing, True
                         )
@@ -4188,8 +4189,9 @@ def _paint_line_fx_particles(
                         try:
                             painter.translate(state.x, state.y)
                             painter.rotate(state.rotation_deg)
-                            scale = state.size_px / 1000.0
-                            painter.scale(scale, scale)
+                            scale_x = state.size_px / 1000.0 * state.stretch_x
+                            scale_y = state.size_px / 1000.0 * state.stretch_y
+                            painter.scale(scale_x, scale_y)
                             painter.setRenderHint(
                                 QPainter.RenderHint.Antialiasing, True
                             )
@@ -4229,10 +4231,35 @@ def _paint_line_fx_particles(
                         finally:
                             painter.setOpacity(particle_opacity)
                             painter.restore()
+                if decor_fill is None and kind in ("flame", "flame_alt"):
+                    # 火舌边缘柔化：同剪影放大 1.55× 的低透明度副本叠在
+                    # 主剪影之下，近似 Aeg 模板的 \blur（矢量路径没有模糊
+                    # 渲染，双层半影把硬边防读成“树叶”的问题压下去）。
+                    painter.save()
+                    try:
+                        painter.translate(state.x, state.y)
+                        painter.rotate(state.rotation_deg)
+                        halo = state.size_px * (
+                            1.70 if kind == "flame" else 1.50
+                        ) / 1000.0
+                        painter.scale(
+                            halo * state.stretch_x,
+                            halo * state.stretch_y,
+                        )
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(fill_brush)
+                        painter.setOpacity(
+                            particle_opacity
+                            * (0.24 if kind == "flame" else 0.18)
+                        )
+                        painter.drawPath(sprite)
+                    finally:
+                        painter.restore()
                 painter.translate(state.x, state.y)
                 painter.rotate(state.rotation_deg)
-                scale = state.size_px / 1000.0
-                painter.scale(scale, scale)
+                scale_x = state.size_px / 1000.0 * state.stretch_x
+                scale_y = state.size_px / 1000.0 * state.stretch_y
+                painter.scale(scale_x, scale_y)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
                 if char_colors:
                     # 落点 → 字符：线性找包含 state.x 的字符区间（越界钳到

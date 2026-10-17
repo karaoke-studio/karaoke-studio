@@ -5874,15 +5874,22 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     // 行向量约定：左矩阵先作用。sprite em 空间先缩放到目标
                     // 尺寸、再旋转、再平移到 line 空间粒子位置、最后叠行级
                     // 变换；顺序写反会把粒子位置一并缩放，全部塌回行原点。
-                    context->SetTransform(
-                        D2D1::Matrix3x2F::Scale(
-                            particle.sizePx / 1000.0f,
+                    const auto particleTransform = [&](float scaleMul) {
+                        return D2D1::Matrix3x2F::Scale(
                             particle.sizePx / 1000.0f
+                                * particle.stretchX * scaleMul,
+                            particle.sizePx / 1000.0f
+                                * particle.stretchY * scaleMul
                         )
-                            * D2D1::Matrix3x2F::Rotation(particle.rotationDeg)
-                            * D2D1::Matrix3x2F::Translation(particle.x, particle.y)
-                            * previousTransform
-                    );
+                            * D2D1::Matrix3x2F::Rotation(
+                                particle.rotationDeg
+                            )
+                            * D2D1::Matrix3x2F::Translation(
+                                particle.x, particle.y
+                            )
+                            * previousTransform;
+                    };
+                    context->SetTransform(particleTransform(1.0f));
                     const float alpha = std::clamp(
                         particle.alpha * globalOpacity, 0.0f, 1.0f
                     );
@@ -5895,8 +5902,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         // 配方同源，浓度档决定叠加趟数）。
                         const auto decorTransform = [&](float dx, float dy) {
                             return D2D1::Matrix3x2F::Scale(
-                                particle.sizePx / 1000.0f,
                                 particle.sizePx / 1000.0f
+                                    * particle.stretchX,
+                                particle.sizePx / 1000.0f
+                                    * particle.stretchY
                             )
                                 * D2D1::Matrix3x2F::Rotation(
                                     particle.rotationDeg
@@ -6010,6 +6019,30 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     if (!burst.hasPaint) {
                         if (fillBrush) {
+                            // 火舌边缘柔化（镜像 painter 双层半影）：同剪影
+                            // 放大 1.55×、透明度 20% 画在主剪影之下，近似
+                            // Aeg 模板 \blur，压掉硬边“树叶”感。
+                            if (
+                                burst.kind == "flame"
+                                || burst.kind == "flame_alt"
+                            ) {
+                                const bool wideBody =
+                                    burst.kind == "flame";
+                                context->SetTransform(
+                                    particleTransform(
+                                        wideBody ? 1.70f : 1.50f
+                                    )
+                                );
+                                fillBrush->SetOpacity(
+                                    alpha * (wideBody ? 0.24f : 0.18f)
+                                );
+                                context->FillGeometry(
+                                    spriteIt->second.Get(), fillBrush.Get()
+                                );
+                                context->SetTransform(
+                                    particleTransform(1.0f)
+                                );
+                            }
                             fillBrush->SetOpacity(alpha);
                             context->FillGeometry(
                                 spriteIt->second.Get(), fillBrush.Get()

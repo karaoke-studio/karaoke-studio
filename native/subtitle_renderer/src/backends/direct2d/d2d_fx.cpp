@@ -192,14 +192,14 @@ GeoCharState geoCharState(
     }
     if (effect == "flame") {
         // 火焰档本体（2026-10-18 用户口径）：入场=烧的过程中的快速出现
-        //（8 倍速透明度）；退场=渐隐中缩小到 55%（烧没的余烬收缩感，
-        // 灰烬粒子由 planner 伴生）。
+        //（8 倍速透明度）；退场=渐隐中缩小——纵向比横向收得更狠
+        //（55% / 22%），字像被火从下往上烧塌；灰烬与余烬由 planner 伴生。
         const float p = staggerProgress;
         if (exitPhase) {
             const float q = smoothstep(p);
             state.opacity = 1.0f - q;
-            state.scaleX = 1.0f - 0.45f * q;
-            state.scaleY = state.scaleX;
+            state.scaleX = 1.0f - 0.22f * q;
+            state.scaleY = 1.0f - 0.55f * q;
         } else {
             state.opacity = std::min(p * 8.0f, 1.0f);
         }
@@ -462,35 +462,121 @@ std::vector<FxParticle> burstParticlesAt(
                     * (0.85f + 0.15f * std::sin(pi * p)),
                 1.0f - std::sqrt(p) * p,
             });
-        } else if (burst.kind == "flame") {
-            // 火焰（镜像 particles.burst_particles_at flame 分支，Aegisub
-            // Luc Van Tien「Burning」火粒层等效）：字框内随机出生 → 缓慢
-            // 上升 + 横向摇摆 + 尺寸随燃烧增大 → 快显长灭 + 高频闪烁。
+        } else if (burst.kind == "flame" || burst.kind == "flame_alt") {
+            // 火焰 v3（镜像 particles.burst_particles_at flame 分支）：
+            // 独立寿命 + 错峰出生形成连续火流；加速上腾 p^1.35（浮力）+
+            // 双频湍流横摆；尺寸快涨后收（Aeg \fscx 60→240→40 包络）；
+            // 高频闪烁 + 长灭；越升越窄越长（stretchX/Y 速度拉伸）。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float birth = u3 * life * 0.30f;
+            const float lifeI = std::min(
+                life * (0.62f + 0.38f * u5),
+                std::max(life - birth, 1.0f)
+            );
+            const float p = (tau - birth) / lifeI;
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            const float rise = travel * std::pow(p, 1.35f);
+            const float sway = (
+                std::sin((u2 + p * 1.7f) * 2.0f * pi) * 0.30f
+                + std::sin((u4 * 0.7f + p * 3.3f) * 2.0f * pi) * 0.12f
+            ) * size * (0.35f + 0.65f * p);
+            const float grow = 1.0f - std::pow(
+                1.0f - std::min(p / 0.16f, 1.0f), 2.0f
+            );
+            // std::max(..., 0) 避免负数进入 pow；p>0.5 后才开始“冷却收缩”。
+            const float cool = 1.0f - 0.50f * std::pow(
+                std::max((p - 0.50f) / 0.50f, 0.0f), 1.3f
+            );
+            const float flicker = 0.70f + 0.30f * std::sin(
+                (p * 5.5f + u4 * 3.0f) * 2.0f * pi
+            );
+            const float alpha = std::min(p / 0.08f, 1.0f)
+                * std::pow(1.0f - p, 0.45f) * flicker;
+            const float lean = std::cos((u2 + p * 1.7f) * 2.0f * pi) * 10.0f
+                + (u4 - 0.5f) * 8.0f;
+            out.push_back(FxParticle{
+                originX + (u1 - 0.5f) * boxW * 0.55f + sway,
+                originY + (0.12f + 0.30f * u2) * boxH - rise,
+                lean,
+                size * (0.45f + 0.65f * grow) * cool
+                    * (0.85f + 0.30f * u1),
+                alpha,
+                1.0f - 0.25f * p,
+                1.0f + 0.95f * p,
+            });
+        } else if (burst.kind == "flame_glow") {
+            // 火焰背光（镜像 particles flame_glow 分支）：大尺寸低透明度
+            // 火形慢升、缓闪，画在文字之下（front=False）做灼烧辉光。
             const float u1 = fxUnitHash(index, 1u);
             const float u2 = fxUnitHash(index, 2u);
             const float u3 = fxUnitHash(index, 3u);
             const float u4 = fxUnitHash(index, 4u);
             constexpr float pi = 3.14159265358979323846f;
-            const float delay = u3 * life * 0.25f;
-            const float p = std::clamp(
-                (tau - delay) / std::max(life - delay, 1.0f), 0.0f, 1.0f
+            const float birth = u3 * life * 0.25f;
+            const float lifeI = std::min(
+                life * (0.70f + 0.30f * u4),
+                std::max(life - birth, 1.0f)
             );
-            if (p <= 0.0f) {
+            const float p = (tau - birth) / lifeI;
+            if (p <= 0.0f || p >= 1.0f) {
                 continue;
             }
-            const float rise = travel * std::pow(p, 0.85f);
-            const float sway =
-                std::sin((u2 + p * 1.4f) * 2.0f * pi) * size * 0.25f;
-            const float flicker =
-                0.72f + 0.28f * std::sin((p * 4.0f + u4) * 2.0f * pi);
+            const float rise = travel * std::pow(p, 1.05f);
+            const float sway = std::sin((u2 + p * 1.2f) * 2.0f * pi)
+                * size * 0.18f;
+            const float glowPulse = 0.72f + 0.28f * std::sin(
+                (p * 2.5f + u2) * 2.0f * pi
+            );
             out.push_back(FxParticle{
-                originX + (u1 - 0.5f) * boxW * 0.7f + sway,
-                originY + (u2 - 0.4f) * boxH * 0.5f - rise,
-                (u4 - 0.5f) * 30.0f
-                    + std::sin((p * 2.0f + u1) * 2.0f * pi) * 12.0f,
-                size * (0.85f + 0.45f * u1) * (1.0f + 0.65f * p),
-                std::min(p * 8.0f, 1.0f)
-                    * std::pow(1.0f - p, 1.2f) * flicker,
+                originX + (u1 - 0.5f) * boxW * 0.70f + sway,
+                originY + (0.05f + 0.25f * u2) * boxH - rise,
+                (u4 - 0.5f) * 10.0f,
+                size * (0.82f + 0.18f * std::sin(pi * p))
+                    * (0.85f + 0.30f * u1),
+                std::min(p / 0.15f, 1.0f)
+                    * std::pow(1.0f - p, 1.2f) * glowPulse * 0.18f,
+                1.0f,
+                1.0f + 0.25f * p,
+            });
+        } else if (burst.kind == "ember") {
+            // 余烬火星（镜像 particles ember 分支）：小圆点快速上蹿、
+            // 受“重力”减速、横向漂移 + 双频摆动 + 高频闪烁。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float birth = u3 * life * 0.55f;
+            const float lifeI = std::min(
+                life * (0.50f + 0.50f * u5),
+                std::max(life - birth, 1.0f)
+            );
+            const float p = (tau - birth) / lifeI;
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            const float rise = travel * (1.0f - std::pow(1.0f - p, 2.0f));
+            const float drift = (u1 - 0.5f) * travel * 0.55f * p;
+            const float sway = std::sin((u2 + p * 2.2f) * 2.0f * pi)
+                * size * 1.3f;
+            const float twinkle = 0.55f + 0.45f * std::sin(
+                (p * 9.0f + u2 * 4.0f) * 2.0f * pi
+            );
+            out.push_back(FxParticle{
+                originX + (u1 - 0.5f) * boxW * 0.75f + drift + sway,
+                originY + (0.10f + 0.30f * u4) * boxH - rise,
+                p * 360.0f * (u4 - 0.5f),
+                size * (0.55f + 0.55f * u1) * (1.0f - 0.55f * p),
+                std::min(p / 0.08f, 1.0f)
+                    * std::pow(1.0f - p, 0.9f) * twinkle,
             });
         } else if (burst.kind == "ash") {
             // 灰烬（镜像 particles.burst_particles_at ash 分支）：自字框
