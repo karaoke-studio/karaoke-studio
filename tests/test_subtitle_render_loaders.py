@@ -3286,3 +3286,62 @@ def test_recovery_restore_defers_assembly_until_main_loop(
     win.close()
     win.deleteLater()
     qapp.processEvents()
+
+
+def test_per_slot_italic_round_trip_and_legacy_migration():
+    """三槽斜体序列化往返；旧工程缺键 = 三跟随 + 原值落在日文-主文字。"""
+    from krok_helper.subtitle_render.domain.models import style_from_dict
+
+    style = Style(italic=True, latin_italic=False, ruby_italic=True, ruby_latin_italic=None)
+    payload = style_to_dict(style)
+    assert payload["latin_italic"] is False
+    assert payload["ruby_italic"] is True
+    assert payload["ruby_latin_italic"] is None
+    restored = style_from_dict(payload)
+    assert restored.italic == style.italic
+    assert restored.latin_italic == style.latin_italic
+    assert restored.ruby_italic == style.ruby_italic
+    assert restored.ruby_latin_italic == style.ruby_latin_italic
+
+    # 旧工程 payload 没有新键：三槽解析为 None（跟随），italic 原样保留。
+    legacy_payload = {
+        key: value
+        for key, value in style_to_dict(Style(italic=True)).items()
+        if key not in {"latin_italic", "ruby_italic", "ruby_latin_italic"}
+    }
+    legacy = style_from_dict(legacy_payload)
+    assert legacy.italic is True
+    assert legacy.latin_italic is None
+    assert legacy.ruby_italic is None
+    assert legacy.ruby_latin_italic is None
+
+
+def test_per_slot_italic_effective_values_follow_stroke2_chain():
+    """生效值沿描边 2 同一条跟随链：latin/ruby→主文字，ruby_latin→注音日文。"""
+    from krok_helper.subtitle_render.engine.text.metrics import (
+        latin_italic as latin_italic_value,
+    )
+    from krok_helper.subtitle_render.engine.ruby.style import (
+        ruby_italic_value,
+        ruby_latin_italic_value,
+    )
+
+    style = Style(italic=True)
+    assert latin_italic_value(style) is True
+    assert ruby_italic_value(style) is True
+    assert ruby_latin_italic_value(style) is True
+
+    style = Style(
+        italic=True,
+        latin_italic=False,
+        ruby_italic=None,
+        ruby_latin_italic=True,
+    )
+    assert latin_italic_value(style) is False
+    # ruby 跟随主文字；ruby_latin 显式开。
+    assert ruby_italic_value(style) is True
+    assert ruby_latin_italic_value(style) is True
+
+    # ruby_latin 跟随时吃注音日文的生效值（而非原始主文字值）。
+    style = Style(italic=True, ruby_italic=False, ruby_latin_italic=None)
+    assert ruby_latin_italic_value(style) is False

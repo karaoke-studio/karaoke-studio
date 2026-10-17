@@ -5230,3 +5230,60 @@ def test_font_face_slot_overrides_empty_family_never_queries_capabilities(monkey
     assert payload["latin_font_axis"] is False
     assert payload["ruby_font_axis"] is False
     assert payload["ruby_latin_font_axis"] is False
+
+
+def test_font_face_slot_overrides_resolve_per_slot_italic(monkeypatch):
+    """逐槽斜体按描边 2 跟随链解析后各自送入字体实例决策。
+
+    italic=True 的工程里英数槽显式关斜体：latin 槽必须以 italic=False 求
+    解，而不是跟着 payload 的主文字 italic 走（GPU 端 C++ 侧同链解析，
+    Python 决策与之逐槽一致才能保证双后端同一 face）。
+    """
+    from krok_helper.subtitle_render.engine.text import font_weight
+    from krok_helper.subtitle_render.native.protocol import (
+        _font_face_slot_overrides,
+    )
+
+    seen = []
+
+    class _Instance:
+        def __init__(self, italic):
+            self.synthetic_bold = False
+            self.synthetic_italic = italic
+            self.italic_axis_tag = None
+            self.italic_axis_value = 0.0
+            self.axis_value = 0.0
+            self.axis_values = ()
+            self.is_variable = False
+            self.reason = None
+            self.face_style = "Regular" if not italic else "Italic"
+            self.face_weight = 400
+            self.resource_path = ""
+
+    def _fake_resolve(name, weight, italic=False):
+        seen.append((str(name), int(weight), bool(italic)))
+        return _Instance(italic)
+
+    monkeypatch.setattr(font_weight, "resolve_font_instance", _fake_resolve)
+
+    payload = {
+        "font_family": "F Main",
+        "font_family_latin": "F Latin",
+        "ruby_font_family": "F Ruby",
+        "ruby_font_family_latin": "F RubyLatin",
+        "font_weight": 400,
+        "italic": True,
+        "latin_italic": False,
+        "ruby_italic": None,
+        "ruby_latin_italic": None,
+    }
+    _font_face_slot_overrides(payload)
+
+    # (族, 字重, 斜体)：主文字 True；英数显式 False；注音日文跟随 True；
+    # 注音英数跟随注音日文的生效值 True。
+    assert seen == [
+        ("F Main", 400, True),
+        ("F Latin", 400, False),
+        ("F Ruby", 400, True),
+        ("F RubyLatin", 400, True),
+    ]

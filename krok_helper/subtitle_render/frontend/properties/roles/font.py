@@ -213,6 +213,43 @@ class RoleFontSettingsPageBuilder:
         setattr(host, f"_{attr_prefix}stroke2_enabled_check", stroke2_enabled_check)
         setattr(host, f"_{attr_prefix}stroke2_width_spin", stroke2_width_spin)
 
+        # 斜体按槽独立控制：日文-主文字是主组（普通勾选框），其余三个槽与
+        # 描边 2 开关同一套三态（开/跟随/关，半选 = 跟随上一级字体槽）。
+        # 与字号/字重同排第三列：字段标签「斜体」在上，勾选框本体与描边 2
+        # 开关一样不带文字。
+        italic_field = {
+            ("main", "japanese"): "italic",
+            ("main", "latin"): "latin_italic",
+            ("ruby", "japanese"): "ruby_italic",
+            ("ruby", "latin"): "ruby_latin_italic",
+        }[(subject, script)]
+        italic_check = CheckBox("", page)
+        italic_check.setFixedWidth(28)
+        italic_check.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        inherits_italic = slot != ("main", "japanese")
+        if inherits_italic:
+            italic_check.setTristate(True)
+            italic_check.setToolTip(
+                {
+                    ("main", "latin"): "半选表示跟随主文字日文（斜体）。",
+                    ("ruby", "japanese"): "半选表示跟随主文字（斜体）。",
+                    ("ruby", "latin"): "半选表示跟随注音日文（斜体）。",
+                }[(subject, script)]
+            )
+            italic_check.stateChanged.connect(
+                lambda state, field=italic_field:
+                host._on_font_italic_state_changed(field, state)
+            )
+            host._font_italic_checks[slot] = italic_check
+        else:
+            italic_check.setToolTip("主文字·日文槽的斜体；其他字体槽默认跟随这里。")
+            italic_check.toggled.connect(
+                lambda checked: host._update_style(italic=checked)
+            )
+            host._italic_check = italic_check
+
         layout.addWidget(property_field("字体", font_combo))
         row = QWidget(page)
         row_layout = QGridLayout(row)
@@ -220,6 +257,13 @@ class RoleFontSettingsPageBuilder:
         row_layout.setHorizontalSpacing(8)
         row_layout.addWidget(property_field("字号", size_spin), 0, 0)
         row_layout.addWidget(property_field("字重", weight_combo), 0, 1)
+        italic_control = QWidget(row)
+        italic_control_layout = QHBoxLayout(italic_control)
+        italic_control_layout.setContentsMargins(0, 0, 0, 0)
+        italic_control_layout.setSpacing(0)
+        italic_control_layout.addWidget(italic_check, 0)
+        italic_control_layout.addStretch(1)
+        row_layout.addWidget(property_field("斜体", italic_control), 0, 2)
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)

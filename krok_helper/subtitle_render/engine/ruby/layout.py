@@ -16,6 +16,8 @@ from krok_helper.subtitle_render.engine.ruby.style import (
     build_ruby_font,
     build_ruby_font_for_text,
     ruby_font_size,
+    ruby_italic_value,
+    ruby_latin_italic_value,
     ruby_script_stroke_style,
     ruby_stroke2_width,
     ruby_stroke_width,
@@ -366,7 +368,7 @@ def ruby_layout_draw_bounds(
 
 def _ruby_measure_key(style: Style) -> tuple:
     # 覆盖 build_ruby_font_for_text 解析逐单元字体所需的全部字段：拉丁单元
-    # 的宽度随拉丁族/字号/字重/stretch 变化，漏一项就会命中过期缓存。
+    # 的宽度随拉丁族/字号/字重/stretch/斜体变化，漏一项就会命中过期缓存。
     return (
         style.font_family,
         style.font_family_latin,
@@ -379,6 +381,8 @@ def _ruby_measure_key(style: Style) -> tuple:
         style.ruby_latin_font_weight,
         ruby_font_size(style),
         style.italic,
+        ruby_italic_value(style),
+        ruby_latin_italic_value(style),
         style.latin_font_stretch_pct,
         style.ruby_latin_font_stretch_pct,
         ruby_stroke_width(style),

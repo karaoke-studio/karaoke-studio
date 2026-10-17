@@ -922,14 +922,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         const auto latinFace = resolveFace(
             style.latinFontFamily.value_or(style.fontFamily),
             style.latinFontWeight.value_or(style.fontWeight),
-            style.italic,
+            style.latinItalic,
             style.latinFontAxis,
             style.latinFontHint
         );
         const auto rubyFace = resolveFace(
             style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
             style.rubyFontWeight,
-            style.italic,
+            style.rubyItalic,
             style.rubyFontAxis,
             style.rubyFontHint
         );
@@ -938,7 +938,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily
             ),
             style.rubyLatinFontWeight.value_or(style.rubyFontWeight),
-            style.italic,
+            style.rubyLatinItalic,
             style.rubyLatinFontAxis,
             style.rubyLatinFontHint
         );
@@ -1008,7 +1008,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             resolveMetricsFace(
                 style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
                 style.rubyFontWeight,
-                style.italic
+                style.rubyItalic
             )->GetMetrics(&rubyMetrics);
             const float rubyUnits = static_cast<float>(std::max<UINT16>(
                 rubyMetrics.designUnitsPerEm, 1
@@ -1055,6 +1055,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     || charStyle.fontWeight != style.fontWeight
                     || charStyle.latinFontWeight != style.latinFontWeight
                     || charStyle.italic != style.italic
+                    || charStyle.latinItalic != style.latinItalic
                     || charStyle.strokeWidth != style.strokeWidth
                     || charStyle.stroke2Width != style.stroke2Width
                 ));
@@ -1075,7 +1076,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     latin
                         ? charStyle.latinFontWeight.value_or(charStyle.fontWeight)
                         : charStyle.fontWeight,
-                    charStyle.italic,
+                    latin ? charStyle.latinItalic : charStyle.italic,
                     latin ? charStyle.latinFontAxis : charStyle.fontAxis,
                     latin ? charStyle.latinFontHint : charStyle.fontHint
                 );
@@ -1105,7 +1106,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 latin
                     ? charStyle.latinFontWeight.value_or(charStyle.fontWeight)
                     : charStyle.fontWeight,
-                charStyle.italic,
+                latin ? charStyle.latinItalic : charStyle.italic,
                 latin ? charStyle.latinFontAxis : charStyle.fontAxis,
                 latin ? charStyle.latinFontHint : charStyle.fontHint
             )->GetMetrics(&fontMetrics);
@@ -1175,7 +1176,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     : (latin
                            ? style.latinFontWeight.value_or(style.fontWeight)
                            : style.fontWeight);
-                const bool charItalic = hasCharStyle ? charStyle.italic : style.italic;
+                const bool charItalic = hasCharStyle
+                    ? (latin ? charStyle.latinItalic : charStyle.italic)
+                    : (latin ? style.latinItalic : style.italic);
                 const std::wstring preferredFallback = sourceChar.fallbackFamily;
                 if (containsEmoji(sourceChar.text) && preferredFallback.empty()) {
                     outlineFace = resolveFace(
@@ -1943,7 +1946,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         ? rubyStyle.fontFamily
                         : rubyStyle.rubyFontFamily,
                     rubyStyle.rubyFontWeight,
-                    rubyStyle.italic,
+                    rubyStyle.rubyItalic,
                     rubyStyle.rubyFontAxis
                 )
                 : rubyFace;
@@ -1953,13 +1956,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         ? rubyStyle.fontFamily
                         : rubyStyle.rubyFontFamily,
                     rubyStyle.rubyFontWeight,
-                    rubyStyle.italic,
+                    rubyStyle.rubyItalic,
                     rubyStyle.rubyFontAxis
                 )
                 : resolveMetricsFace(
                     style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
                     style.rubyFontWeight,
-                    style.italic,
+                    style.rubyItalic,
                     style.rubyFontAxis
                 );
             const auto selectedRubyLatinFace = hasRubyStyle
@@ -1970,7 +1973,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             : rubyStyle.rubyFontFamily
                     ),
                     rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight),
-                    rubyStyle.italic
+                    rubyStyle.rubyLatinItalic
                 )
                 : rubyLatinFace;
             struct RubyGlyph {
@@ -2022,7 +2025,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     latin
                         ? rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight)
                         : rubyStyle.rubyFontWeight,
-                    rubyStyle.italic,
+                    latin ? rubyStyle.rubyLatinItalic : rubyStyle.rubyItalic,
                     latin
                         ? rubyStyle.rubyLatinFontAxis
                         : rubyStyle.rubyFontAxis
@@ -2058,7 +2061,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         latin
                             ? rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight)
                             : rubyStyle.rubyFontWeight,
-                        rubyStyle.italic,
+                        latin ? rubyStyle.rubyLatinItalic : rubyStyle.rubyItalic,
                         {},
                         glyphs
                     );
@@ -2108,7 +2111,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                             latin
                                 ? rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight)
                                 : rubyStyle.rubyFontWeight,
-                            rubyStyle.italic,
+                            latin ? rubyStyle.rubyLatinItalic : rubyStyle.rubyItalic,
                             {},
                             measureGlyphs
                         );
@@ -2294,7 +2297,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 rubyIsLatin
                     ? rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight)
                     : rubyStyle.rubyFontWeight,
-                rubyStyle.italic,
+                rubyIsLatin ? rubyStyle.rubyLatinItalic : rubyStyle.rubyItalic,
                 rubyIsLatin
                     ? rubyStyle.rubyLatinFontAxis
                     : rubyStyle.rubyFontAxis

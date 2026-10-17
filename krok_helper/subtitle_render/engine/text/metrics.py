@@ -43,6 +43,12 @@ def latin_font_weight(style: Style) -> int:
     return int(value) if value is not None and int(value) > 0 else int(style.font_weight)
 
 
+def latin_italic(style: Style) -> bool:
+    """英数槽斜体的生效值：``None`` = 跟随主文字·日文（与描边 2 同链）。"""
+    value = style.latin_italic
+    return bool(style.italic if value is None else value)
+
+
 _TEXT_CLASS_CACHE: dict[str, tuple[bool, bool]] = {}
 _TEXT_CLASS_CACHE_MAX = 8192
 
@@ -99,7 +105,7 @@ def build_latin_font(style: Style) -> QFont:
         resolve_qt_font_family(family),
         size,
         latin_font_weight(style),
-        italic=bool(style.italic),
+        italic=latin_italic(style),
     )
     if int(style.latin_font_stretch_pct) != 100:
         font.setStretch(max(50, min(200, int(style.latin_font_stretch_pct))))
@@ -139,6 +145,8 @@ def latin_slot_differs(style: Style) -> bool:
         return True
     if latin_font_weight(style) != int(style.font_weight):
         return True
+    if latin_italic(style) != bool(style.italic):
+        return True
     return int(style.latin_font_stretch_pct) != 100
 
 
@@ -154,17 +162,16 @@ def font_slot_for_text(style: Style, text: str) -> tuple[str, int, bool] | None:
     is_latin, is_emoji = _text_class(text)
     if is_emoji:
         return None
-    italic = bool(style.italic)
     if is_latin and latin_slot_differs(style):
         return (
             resolve_qt_font_family(style.font_family_latin),
             latin_font_weight(style),
-            italic,
+            latin_italic(style),
         )
     return (
         resolve_qt_font_family(style.font_family),
         int(style.font_weight),
-        italic,
+        bool(style.italic),
     )
 
 
@@ -598,6 +605,7 @@ __all__ = [
     "is_n3_latin_text",
     "latin_font_size",
     "latin_font_weight",
+    "latin_italic",
     "latin_slot_differs",
     "letter_spacing",
     "line_text_width",

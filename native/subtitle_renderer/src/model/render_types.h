@@ -425,6 +425,12 @@ struct TextStyle {
     FontInstanceHint latinFontHint;
     int latinFontStretchPct = 100;
     bool italic = false;
+    // Per-slot italic (resolved by gpu_scene_projection from the stroke2-style
+    // inheritance chain; legacy IR without the fields keeps them equal to
+    // ``italic`` so old payloads render unchanged).
+    bool latinItalic = false;
+    bool rubyItalic = false;
+    bool rubyLatinItalic = false;
     bool allowBiting = false;
     bool affectsRubyAnchor = true;
     int spaceWidthPercent = 20;

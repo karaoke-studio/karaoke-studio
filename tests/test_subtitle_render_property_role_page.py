@@ -113,12 +113,13 @@ def test_role_font_builder_routes_role_flags(qapp) -> None:
     )
     builder.make_font_section()
 
-    host._italic_check.setChecked(True)
+    # 斜体勾选框已按槽下沉到字体页面（见 roles/font.py），卡片底部只剩
+    # 参与注音高度计算；页面构造在 fake host 里被跳过，这里只验底部旗标。
+    assert not hasattr(host, "_italic_check")
     host._ruby_anchor_check.setChecked(True)
     host._apply_font_to_roles_button.click()
 
     assert host.updates == [
-        {"italic": True},
         {"affects_ruby_anchor": True},
     ]
     assert host.apply_font_requests == 1

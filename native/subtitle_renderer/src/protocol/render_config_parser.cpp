@@ -594,6 +594,17 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("italic"))) {
         cfg.italic = style.value(QStringLiteral("italic")).toBool(cfg.italic);
     }
+    // Per-slot italic (None = follow the stroke2 inheritance chain).  Parsed
+    // here as raw optionals; gpu_scene_projection resolves them per slot.
+    if (style.value(QStringLiteral("latin_italic")).isBool()) {
+        cfg.latinItalic = style.value(QStringLiteral("latin_italic")).toBool();
+    }
+    if (style.value(QStringLiteral("ruby_italic")).isBool()) {
+        cfg.rubyItalic = style.value(QStringLiteral("ruby_italic")).toBool();
+    }
+    if (style.value(QStringLiteral("ruby_latin_italic")).isBool()) {
+        cfg.rubyLatinItalic = style.value(QStringLiteral("ruby_latin_italic")).toBool();
+    }
     if (hasNonNull(style, QStringLiteral("letter_spacing_px"))) {
         cfg.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx);
     }
@@ -1030,6 +1041,15 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         intValue(style, QStringLiteral("latin_font_stretch_pct"), 100), 50, 200
     );
     base.italic = style.value(QStringLiteral("italic")).toBool(base.italic);
+    if (style.value(QStringLiteral("latin_italic")).isBool()) {
+        base.latinItalic = style.value(QStringLiteral("latin_italic")).toBool();
+    }
+    if (style.value(QStringLiteral("ruby_italic")).isBool()) {
+        base.rubyItalic = style.value(QStringLiteral("ruby_italic")).toBool();
+    }
+    if (style.value(QStringLiteral("ruby_latin_italic")).isBool()) {
+        base.rubyLatinItalic = style.value(QStringLiteral("ruby_latin_italic")).toBool();
+    }
     base.allowBiting = style.value(QStringLiteral("allow_biting")).toBool(base.allowBiting);
     base.affectsRubyAnchor = style.value(
         QStringLiteral("affects_ruby_anchor")

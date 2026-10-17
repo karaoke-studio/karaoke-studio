@@ -34,6 +34,18 @@ def ruby_font_size(style: Style) -> int:
     return max(int(style.ruby_font_size_px), 1)
 
 
+def ruby_italic_value(style: Style) -> bool:
+    """注音·日文槽斜体的生效值：``None`` = 跟随主文字（与描边 2 同链）。"""
+    value = style.ruby_italic
+    return bool(style.italic if value is None else value)
+
+
+def ruby_latin_italic_value(style: Style) -> bool:
+    """注音·英数槽斜体的生效值：``None`` = 跟随注音·日文槽的生效值。"""
+    value = style.ruby_latin_italic
+    return bool(ruby_italic_value(style) if value is None else value)
+
+
 def ruby_scale(style: Style) -> float:
     return ruby_font_size(style) / max(style.font_size_px, 1)
 
@@ -69,7 +81,7 @@ def build_ruby_font(style: Style) -> QFont:
         resolve_qt_font_family(family),
         size,
         int(weight),
-        italic=bool(style.italic),
+        italic=ruby_italic_value(style),
     )
     return font
 
@@ -114,7 +126,7 @@ def build_ruby_font_for_text(style: Style, reading: str) -> QFont:
         resolve_qt_font_family(family),
         max(size, 1),
         weight,
-        italic=bool(style.italic),
+        italic=ruby_latin_italic_value(style),
     )
     stretch = (
         style.ruby_latin_font_stretch_pct
@@ -198,6 +210,8 @@ __all__ = [
     "build_ruby_font",
     "build_ruby_font_for_text",
     "ruby_font_size",
+    "ruby_italic_value",
+    "ruby_latin_italic_value",
     "ruby_scale",
     "ruby_script_stroke_style",
     "ruby_style_for_target_indices",

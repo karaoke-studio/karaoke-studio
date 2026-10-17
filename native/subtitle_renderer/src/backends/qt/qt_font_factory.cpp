@@ -53,6 +53,8 @@ QFont buildRubyFont(const ResolvedStyle &style) {
     QFont font(style.fontFamily);
     font.setPixelSize(style.rubyFontSizePx);
     font.setWeight(static_cast<QFont::Weight>(effectiveQtWeight(style)));
+    // Per-slot italic: follow the main text when unset (stroke2-style chain).
+    font.setItalic(style.rubyItalic.value_or(style.italic));
     return font;
 }
 

@@ -7566,7 +7566,7 @@ def test_property_panel_ruby_anchor_toggle_is_saved_per_role(qapp):
 def test_apply_font_to_roles_button_applies_four_slot_cards_to_selected_roles(
     qapp, monkeypatch
 ):
-    """「应用到其他角色」只搬字体卡四个槽；卡外的配色、斜体、注音锚点不动。"""
+    """「应用到其他角色」搬字体卡四个槽（含按槽斜体）；卡外的配色、注音锚点不动。"""
     panel = PropertyPanel()
     panel.set_roles(["A", "B", "C"])
     panel.set_current_scheme_key("custom:A")
@@ -7577,6 +7577,7 @@ def test_apply_font_to_roles_button_applies_four_slot_cards_to_selected_roles(
         stroke2_enabled=True,
         stroke2_width_px=6,
         italic=True,
+        latin_italic=False,
         affects_ruby_anchor=False,
     )
     panel._set_color("fill_color", "#00AAEE")
@@ -7607,8 +7608,10 @@ def test_apply_font_to_roles_button_applies_four_slot_cards_to_selected_roles(
         assert scheme.ruby_font_size_px == 45
         assert scheme.stroke2_enabled is True
         assert scheme.stroke2_width_px == 6
+        # 斜体已按槽纳入字体卡：主组与英数槽独立值一起搬过去
+        assert scheme.italic is True
+        assert scheme.latin_italic is False
         # 卡外项保持目标角色原值（自动配色），不随源角色改写
-        assert scheme.italic is not True
         assert scheme.affects_ruby_anchor is not False
         assert scheme.fill_color != "#00AAEE"
     # 源角色与当前选中不变
@@ -10917,3 +10920,42 @@ def test_switching_between_gradient_modes_keeps_real_stops(qapp):
     fill = panel.subtitle_style.karaoke_colors.after.text
     assert fill.mode == "gradient_vertical"
     assert (fill.start_color, fill.end_color) == ("#FF5A6F", "#0055FF")
+
+
+def test_font_italic_tri_state_slots_follow_and_override(qapp):
+    """斜体四组：日文-主文字为普通勾选框，其余三槽半选=跟随（None）。"""
+    panel = PropertyPanel()
+    panel.set_style(Style(italic=True))
+
+    assert panel._italic_check.isChecked()
+    for slot in (("main", "latin"), ("ruby", "japanese"), ("ruby", "latin")):
+        check = panel._font_italic_checks[slot]
+        assert check.checkState() == Qt.CheckState.PartiallyChecked
+
+    # 主文字斜体翻转：跟随中的三槽显示态保持半选，存储值仍是 None。
+    panel._italic_check.setChecked(False)
+    assert panel.subtitle_style.italic is False
+    assert panel.subtitle_style.latin_italic is None
+    assert panel.subtitle_style.ruby_italic is None
+    assert panel.subtitle_style.ruby_latin_italic is None
+
+    # 显式开/关写具体布尔值，回半选写 None。
+    latin_check = panel._font_italic_checks[("main", "latin")]
+    latin_check.setCheckState(Qt.CheckState.Checked)
+    assert panel.subtitle_style.latin_italic is True
+    latin_check.setCheckState(Qt.CheckState.Unchecked)
+    assert panel.subtitle_style.latin_italic is False
+    latin_check.setCheckState(Qt.CheckState.PartiallyChecked)
+    assert panel.subtitle_style.latin_italic is None
+
+    # 回显：显式独立值按勾选态显示。
+    panel.set_style(Style(italic=False, latin_italic=True, ruby_italic=False))
+    assert panel._font_italic_checks[("main", "latin")].checkState() == (
+        Qt.CheckState.Checked
+    )
+    assert panel._font_italic_checks[("ruby", "japanese")].checkState() == (
+        Qt.CheckState.Unchecked
+    )
+    assert panel._font_italic_checks[("ruby", "latin")].checkState() == (
+        Qt.CheckState.PartiallyChecked
+    )

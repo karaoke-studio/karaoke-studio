@@ -97,6 +97,7 @@ class RolePropertyPageBuilder:
         host._font_stroke_controls = {}
         host._font_controls = {}
         host._font_size_follow_checks = {}
+        host._font_italic_checks = {}
         for subject, script in (
             ("main", "japanese"),
             ("main", "latin"),
@@ -117,10 +118,8 @@ class RolePropertyPageBuilder:
         )
         layout.addWidget(host._font_tab_panel)
 
-        host._italic_check = CheckBox("斜体", section)
-        host._italic_check.toggled.connect(
-            lambda checked: host._update_style(italic=checked)
-        )
+        # 斜体勾选框已按字体槽纳入上方四个页面（日文-主文字为主组，其余三槽
+        # 与描边 2 同一套三态跟随），不再放在卡片底部。
         host._ruby_anchor_check = CheckBox("参与注音高度计算", section)
         host._ruby_anchor_check.setToolTip("该角色的注音参与高度计算")
         host._ruby_anchor_check.toggled.connect(
@@ -141,7 +140,6 @@ class RolePropertyPageBuilder:
         flags_row = QHBoxLayout()
         flags_row.setContentsMargins(0, 0, 0, 0)
         flags_row.setSpacing(12)
-        flags_row.addWidget(host._italic_check)
         flags_row.addWidget(host._ruby_anchor_check)
         flags_row.addStretch(1)
         layout.addLayout(flags_row)

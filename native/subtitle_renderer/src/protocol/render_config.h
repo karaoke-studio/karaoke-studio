@@ -204,6 +204,14 @@ struct ResolvedStyle {
     FontInstanceHint latinFontHint;
     int latinFontStretchPct = 100;
     bool italic = false;
+    // Per-slot italic overrides (Style.latin_italic / ruby_italic /
+    // ruby_latin_italic).  ``nullopt`` = follow the same chain as the stroke2
+    // switch: latin/ruby follow the main text, ruby-latin follows the
+    // resolved ruby value.  gpu_scene_projection resolves them into the
+    // per-slot bools on TextStyle.
+    std::optional<bool> latinItalic;
+    std::optional<bool> rubyItalic;
+    std::optional<bool> rubyLatinItalic;
     bool allowBiting = false;
     bool affectsRubyAnchor = true;
     int spaceWidthPercent = 20;

@@ -294,6 +294,7 @@ _FONT_CARD_FIELDS: tuple[str, ...] = (
     "font_family",
     "font_size_px",
     "font_weight",
+    "italic",
     "stroke_width_px",
     "stroke2_enabled",
     "stroke2_width_px",
@@ -302,6 +303,7 @@ _FONT_CARD_FIELDS: tuple[str, ...] = (
     "latin_font_size_px",
     "latin_font_weight",
     "latin_font_stretch_pct",
+    "latin_italic",
     "latin_stroke_width_px",
     "latin_stroke2_enabled",
     "latin_stroke2_width_px",
@@ -309,6 +311,7 @@ _FONT_CARD_FIELDS: tuple[str, ...] = (
     "ruby_font_family",
     "ruby_font_size_px",
     "ruby_font_weight",
+    "ruby_italic",
     "ruby_stroke_width_px",
     "ruby_stroke2_enabled",
     "ruby_stroke2_width_px",
@@ -317,13 +320,15 @@ _FONT_CARD_FIELDS: tuple[str, ...] = (
     "ruby_latin_font_size_px",
     "ruby_latin_font_weight",
     "ruby_latin_font_stretch_pct",
+    "ruby_latin_italic",
     "ruby_latin_stroke_width_px",
     "ruby_latin_stroke2_enabled",
     "ruby_latin_stroke2_width_px",
 )
 """字体卡四个槽页面（主文字/注音 × 日文/英数）内的全部属性字段。
 
-「应用到其他角色」只搬这些；斜体、参与注音高度计算与配色等卡外项不动。
+「应用到其他角色」只搬这些；斜体已按槽纳入各页面一起搬，参与注音高度
+计算与配色等卡外项不动。
 """
 
 # ── 方案控件分组同步的字段分类（批次1 局部减负）────────────────────────
@@ -338,7 +343,8 @@ _FONT_SYNC_FIELDS = frozenset({
     "ruby_font_size_px", "ruby_latin_font_size_px",
     "ruby_latin_font_stretch_pct",
     "ruby_font_weight", "ruby_latin_font_weight",
-    "italic", "affects_ruby_anchor",
+    "italic", "latin_italic", "ruby_italic", "ruby_latin_italic",
+    "affects_ruby_anchor",
     "ruby_font_follow_main",
 })
 _STROKE_SYNC_FIELDS = frozenset({
@@ -1534,6 +1540,17 @@ class PropertyPanel(QWidget):
             self._update_ruby_font_override(**changes)
         else:
             self._update_style(**changes)
+
+    def _on_font_italic_state_changed(self, field_name: str, state: int) -> None:
+        """三态斜体勾选框：半选 = 跟随上一级字体槽（写 ``None``）。"""
+        if self._syncing:
+            return
+        check_state = Qt.CheckState(state)
+        if check_state == Qt.CheckState.PartiallyChecked:
+            value: Optional[bool] = None
+        else:
+            value = check_state == Qt.CheckState.Checked
+        self._update_style(**{field_name: value})
 
     def _scheme_local_inheritance_changes(self, follow_field: str) -> dict[str, object]:
         """让角色方案里的空槽在**方案内**解析，而不是回头去继承全局。
@@ -4384,7 +4401,7 @@ class PropertyPanel(QWidget):
             ),
             candidates,
             icons=icons,
-            hint="只应用字体、字号、字重与描边；配色、斜体等设置保持不变。",
+            hint="应用字体、字号、字重、斜体与描边；配色等设置保持不变。",
         )
         if not ok or not selected:
             return
@@ -4619,6 +4636,27 @@ class PropertyPanel(QWidget):
         )
         latin_weight = self._scheme_value("latin_font_weight")
         self._italic_check.setChecked(bool(self._scheme_value("italic")))
+        for italic_slot, italic_check in self._font_italic_checks.items():
+            italic_field = {
+                ("main", "latin"): "latin_italic",
+                ("ruby", "japanese"): "ruby_italic",
+                ("ruby", "latin"): "ruby_latin_italic",
+            }[italic_slot]
+            italic_value = self._scheme_value(italic_field)
+            italic_state = (
+                Qt.CheckState.PartiallyChecked
+                if italic_value is None
+                else (
+                    Qt.CheckState.Checked
+                    if bool(italic_value)
+                    else Qt.CheckState.Unchecked
+                )
+            )
+            italic_check.blockSignals(True)
+            try:
+                italic_check.setCheckState(italic_state)
+            finally:
+                italic_check.blockSignals(False)
         self._ruby_anchor_check.setChecked(
             bool(self._scheme_value("affects_ruby_anchor"))
         )

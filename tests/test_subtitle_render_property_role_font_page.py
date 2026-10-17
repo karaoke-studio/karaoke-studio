@@ -13,6 +13,7 @@ class _Host:
         self._font_controls = {}
         self._font_stroke_controls = {}
         self._font_size_follow_checks = {}
+        self._font_italic_checks = {}
         self.updates = []
 
     def _refresh_font_weight_combo(self, slot, *, preferred_weight):
@@ -37,6 +38,9 @@ class _Host:
         pass
 
     def _on_font_size_follow_toggled(self, _slot, _checked):
+        pass
+
+    def _on_font_italic_state_changed(self, _field, _state):
         pass
 
 
@@ -74,6 +78,35 @@ def test_role_font_page_builder_preserves_four_slot_contracts(qapp) -> None:
     assert host._latin_stroke2_enabled_check.isTristate()
     assert host._ruby_stroke2_enabled_check.isTristate()
     assert not host._stroke2_enabled_check.isTristate()
+
+
+def test_role_font_page_builder_places_italic_per_slot(qapp) -> None:
+    """斜体按槽纳入四个页面：日文-主文字为普通勾选框，其余三槽三态。
+
+    勾选框与字号/字重同排（第三列「斜体」字段），本体与描边 2 开关一样
+    不带文字。
+    """
+    host = _Host()
+    parent = QWidget()
+    builder = RoleFontSettingsPageBuilder(host)
+    for subject, script in (
+        ("main", "japanese"),
+        ("main", "latin"),
+        ("ruby", "japanese"),
+        ("ruby", "latin"),
+    ):
+        builder.make_page(subject, script, parent)
+
+    assert host._italic_check.text() == ""
+    assert not host._italic_check.isTristate()
+    assert set(host._font_italic_checks) == {
+        ("main", "latin"),
+        ("ruby", "japanese"),
+        ("ruby", "latin"),
+    }
+    for check in host._font_italic_checks.values():
+        assert check.isTristate()
+        assert check.text() == ""
 
 
 def test_role_font_page_builder_preserves_inheritance_labels(qapp) -> None:

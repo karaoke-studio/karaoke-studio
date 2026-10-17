@@ -44,6 +44,7 @@ from krok_helper.subtitle_render.engine.text import (
     is_emoji_text,
     latin_font_size,
     latin_font_weight,
+    latin_italic,
     make_font_for,
 )
 from krok_helper.subtitle_render.engine.timing.timeline import (
@@ -701,6 +702,7 @@ def vertical_main_path_signature(
         latin_font_size(style),
         int(style.font_weight),
         latin_font_weight(style),
+        latin_italic(style),
         style.latin_font_stretch_pct,
         style.italic,
         layout.column_x,
