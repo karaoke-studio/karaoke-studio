@@ -5744,7 +5744,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         Microsoft::WRL::ComPtr<ID2D1Brush> created =
                             createPaintBrush(
                                 context, paint, emRect, burst.color,
-                                device_, nullptr, 0.0f, 0.0f, nullptr, 1.0f
+                                device_, imageForPaint(paint), 0.0f, 0.0f,
+                                nullptr, 1.0f
                             );
                         if (created) {
                             if (impl_->fxPaintBrushes.size() >= 64) {

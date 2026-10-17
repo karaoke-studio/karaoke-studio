@@ -89,8 +89,15 @@ def _default_color_pair(snow: bool) -> tuple[str, str]:
 # 后颜色与尺寸改吃粒子旋钮（数量仍固定）。
 ANIM_PARTICLE_SIZE_EM = 0.40
 ANIM_PARTICLE_COUNT = 14
-# sparkle 整句扫过的额外错峰时长（按粒子横向位置从一端排到另一端）。
+# 入退场星光（逐字错峰）的整行扫过时长：逐字符 burst 按字符序从一端
+# 排到另一端（入场左→右、退场反向），总时长按此值随编排时长等比缩放。
 SPARKLE_SWEEP_MS = 350
+# 星光族 sweep=0 的字内随机出生延迟上限与最短可见寿命：随机延迟在求值器
+# 里按「寿命 - 最短可见寿命」钳制（短退场窗口不再吞掉整组粒子），规划期
+# 错峰也按两者给最晚启动的字符预留时间（见 _sparkle_char_bursts）。改动
+# 需与 C++ 镜像（d2d_fx.cpp sparkle 分支 sweep=0）同步。
+SPARKLE_BIRTH_JITTER_MS = 130.0
+SPARKLE_MIN_VISIBLE_MS = 40.0
 # 星光族（sparkle/twinkle）纵向锚点分布：以锚点中心为原点的行高比例。
 # 上缘 -0.62（字形顶 = -0.5，只稍微溢出字上方 ≈12% 行高）、下缘 +0.30
 #（都在字框内）；线性映射 → 约 2/3 概率在字上侧（2026-10 用户口径：
@@ -165,7 +172,8 @@ def fill_to_solid_color(fill: PaintFill, fallback: str) -> str:
     """把一份 PaintFill 折算成粒子可用的实色（#RRGGBB）。
 
     solid 直接取色；渐变/拼色取全部停止色的平均（sprite 是小尺寸实心
-    剪影，平均色最接近整体观感）；图片填充取不到代表色，回退 fallback。
+    剪影，平均色最接近整体观感）；图片填充取不到代表色，回退 fallback
+    （图片走 ``paint`` 装饰规格的位图笔刷，实色仅作缺图回退）。
     """
 
     if fill.mode == "image":
@@ -271,28 +279,19 @@ def _state_paint_spec(
     装饰色取该态的 ``shadow`` 槽（文字发光/阴影同用此槽）。描边宽度按
     粒子尺寸/该来源字号 同比缩放（上限半个粒子边长）。``include_strokes
     =False``（涟漪光环）描边/二重描边/装饰全部不取——环体是发丝线，叠
-    装饰会显著变粗（2026-10 用户口径）。图片填充暂折为单独颜色（实色
-    回退，两端一致）。
+    装饰会显著变粗（2026-10 用户口径）。图片填充原样透传：两条后端都把
+    sprite 剪影按位图笔刷平铺绘制（锚点均为粒子中心的 em 空间原点，
+    旋转变换与粒子复合，两端同口径），``color`` 实色仅作缺图回退；
+    因此**来源主文字填充是图片模式时，即使取色层级为 ``solid`` 也产出
+    规格**（仅实色档没有可用的实色，图片本身就是「实色」层）。
     """
 
-    if layers not in PARTICLE_COLOR_LAYERS or layers == "solid":
+    if layers not in PARTICLE_COLOR_LAYERS:
+        return None
+    if layers == "solid" and state.text.mode != "image":
         return None
 
     def _layer_fill(fill: PaintFill) -> dict[str, object]:
-        if fill.mode == "image":
-            # 图片填充没有跨端一致的笔刷映射（位图平移与粒子旋转变换
-            # 复合两端不同），折成单独颜色实心。
-            solid = PaintFill(
-                mode="solid",
-                color=fallback,
-                start_color=fallback,
-                end_color=fallback,
-                gradient_stops=[(0, fallback), (100, fallback)],
-                split_top_color=fallback,
-                split_bottom_color=fallback,
-                split_stops=[(0, fallback), (100, fallback)],
-            )
-            return paint_fill_to_dict(solid)
         return paint_fill_to_dict(fill)
 
     want_strokes = include_strokes and layers in {"stroke", "all"}
@@ -368,22 +367,21 @@ def particle_paint_spec(
     """按颜色模式 + 取色层级解析**单态档**装饰规格（跟随前/后·复用方案）。
 
     ``color`` / ``sakura`` 档（无来源配色态）、悬空引用，以及
-    ``fx_particle_color_layers == "solid"``（默认仅实色，2026-10 用户口径）
+    ``fx_particle_color_layers == "solid"``（默认仅实色，2026-10 用户口径；
+    来源主文字填充为图片模式时例外——图片即「实色」层，仍产出规格）
     返回 ``None``——burst 只带实色 ``color``，走纯色剪影路径。双态档
     （前后各一 / 花瓣复用）的规格见 :func:`particle_variant_paints`。
     """
 
-    layers = str(
-        getattr(style, "fx_particle_color_layers", "solid") or "solid"
-    )
-    if layers == "solid":
-        return None
     mode = str(getattr(style, "fx_particle_color_mode", "color") or "color")
     resolved = _particle_color_state(style, char_style, mode)
     if resolved is None:
         return None
     source, state = resolved
     fallback = str(getattr(style, "fx_particle_color", "") or "#FFFFFF")
+    layers = str(
+        getattr(style, "fx_particle_color_layers", "solid") or "solid"
+    )
     return _state_paint_spec(
         source,
         state,
@@ -1097,11 +1095,9 @@ def plan_line_bursts(
     anim_count = ANIM_PARTICLE_COUNT
 
     def _char_style(char_index: int | None) -> Style | None:
-        # 行锚点 burst（入退场星光）取**首字符**的角色样式：逐字角色不进
-        # 行样式，直接回落行样式会退成全局默认（2026-10 用户实测——主文
-        # 字挂角色 A、唱字跟随正确、入退场却跟了全局默认）。无角色的首字
-        # 符解析结果即行样式，语义不变；与指示灯/音量柱「段首行第一个角
-        # 色」同款先例。
+        # 逐字解析当前字符的角色样式（调用方按 ``role_label`` 叠加好行
+        # 样式后传入）；``char_index is None`` 是历史行锚点星花的兼容
+        # 入参（2026-10 星光改逐字符后无生产调用方），回落首字符。
         if char_styles:
             if char_index is None:
                 char_index = 0
@@ -1115,7 +1111,6 @@ def plan_line_bursts(
         *,
         anim: bool,
         ring: bool = False,
-        line_anchor: bool = False,
         petal: bool = False,
         snow: bool = False,
     ) -> list[dict[str, object]]:
@@ -1131,12 +1126,9 @@ def plan_line_bursts(
         装饰层（不加描边，阴影/发光按方案）；全有 = 描边栈 + 装饰层（见
         :func:`_state_paint_spec`）。
 
-        ``line_anchor``（入退场星光）：跟随模式下附 ``char_colors`` 逐字
-        颜色表——动画仍是整行一条 burst（扫过轨迹不变），绘制端按每颗粒
-        子落点所在字符取该字角色的颜色（2026-10 用户口径：颜色逐字、动
-        画不动）。此时不带 paint 规格（逐粒子换色无法烘焙/静态笔刷，
-        取色层级装饰在逐字取色档不适用），``color`` 回退取首字符颜色
-        （旧 sidecar 兼容）。
+        入退场星光（2026-10 结构统一）同为逐字符 burst，走本函数的完整
+        解析——图片/跟随前后/follow_mix/指定方案与取色层级全部生效，
+        不再输出 ``char_colors`` 专用颜色表（后端保留读取兼容）。
         """
 
         if anim and not apply_to_anim:
@@ -1145,20 +1137,6 @@ def plan_line_bursts(
             # 口径，雪花按 kind 取雪白+冰蓝）。
             pair = _default_color_pair(snow)
             return [{"color": pair[0]}, {"color": pair[1]}]
-        mode = str(getattr(style, "fx_particle_color_mode", "color") or "color")
-        if (
-            line_anchor
-            and mode in {"follow_before", "follow_after"}
-            and char_styles
-        ):
-            char_colors = [
-                _cached_particle_solid(style, _char_style(index))
-                for index in range(char_count)
-            ]
-            return [{
-                "color": char_colors[0],
-                "char_colors": char_colors,
-            }]
         char_style = _char_style(char_index)
         variants = _cached_particle_variants(
             style,
@@ -1183,19 +1161,31 @@ def plan_line_bursts(
     def _variant_bursts(
         fields: dict[str, object],
         paints: list[dict[str, object]],
+        *,
+        variant_salt: int = 0,
     ) -> None:
         """按颜色变体发射 burst：单色一条原样下发；双色档拆两条同轨迹
         变体——数量对半（余数归第一条）、种子按变体序号偏移，保证两条
         变体的粒子伪随机位置互相独立（同 index 撞位）。「每颗粒子随机
-        取一色」由此实现，渲染端零特殊分支。"""
+        取一色」由此实现，渲染端零特殊分支。
+
+        ``total`` 为 1 时无法对半：按 ``variant_salt``（逐字星光传字符
+        序）确定性轮换保留哪个变体——第二种颜色/图片跨字符仍会出现，
+        而不是固定丢弃（salt=0 保持首变体，兼容非逐字调用方）。"""
 
         total = int(fields["count"])
         for variant, paint in enumerate(paints):
             burst = {**fields, **paint}
             if len(paints) > 1:
-                burst["count"] = (
-                    total - total // 2 if variant == 0 else total // 2
-                )
+                if total <= 1:
+                    if variant != variant_salt % len(paints):
+                        continue
+                else:
+                    count = total - total // 2 if variant == 0 else total // 2
+                    # 跳过空 burst：不下发无粒子窗口。
+                    if count <= 0:
+                        continue
+                    burst["count"] = count
                 burst["seed"] = (
                     int(fields["seed"]) + variant * 0x9E37
                 ) & 0xFFFFFFFF
@@ -1236,19 +1226,98 @@ def plan_line_bursts(
                 "sweep": 0,
             }, _burst_paint(char_index, px, anim=True, ring=True))
 
+    def _sparkle_char_bursts(
+        *,
+        base_ms: int,
+        window_end_ms: int,
+        scale: float,
+        seed_offset: int,
+        reverse: bool,
+    ) -> None:
+        """入/退场星光（2026-10 结构统一）：逐字符生成 ``anchor="char"``
+        的粒子组，外观复用 ``_burst_paint`` 完整解析（图片/跟随前后/
+        follow_mix/指定方案/取色层级与其余字符锚点粒子同一套规则，
+        多角色行每字跟自己的方案）；粒子出生即固定归属出生字符，漂移
+        到邻字附近也不换角色。
+
+        整行「左→右入场 / 右→左退场」的扫过编排由逐字错峰实现：总扫过
+        时长仍为 ``SPARKLE_SWEEP_MS * scale``，逐字间隔 = 总时长 /
+        (槽数-1)；但错峰总量受窗口钳制——必须给最晚启动的字符留出「随机
+        出生延迟上限 + 最短可见寿命」，短退场窗口宁可放弃扫过也不让粒子
+        整组无法出生（求值器对随机延迟另有同口径二次钳制，见 sparkle
+        分支 sweep=0）。窗口终点与旧行锚点档同一条（入场 = 显示窗起点 +
+        SPARKLE_ENTRY_LIFE_MS * scale，退场 = 显示窗终点），越晚启动的
+        字符窗口越短——与旧档「扫过延迟吃掉剩余寿命」的节奏同构，总
+        跨度不变。数量按整行预算 ``anim_count`` 以「粒子major」网格
+        均匀撒到整行字符槽（第 i 颗落在第 round(i·(n-1)/(k-1)) 槽）：
+        预算少于槽数时两端字符必有粒子、中间隔位轮空，不再集中分给
+        前几个字符（长行行尾/star、反向退场起点不再永久无星光）；预算
+        多于槽数时每槽 1~2 颗。双颜色变体在 ``_variant_bursts`` 内再
+        对半拆分（单颗时按字符序轮换变体），不重复加量。空格无字形
+        pivot，不参与（唱字粒子同口径）。
+        """
+        slots = (
+            [
+                index
+                for index in range(min(char_count, len(char_visible)))
+                if char_visible[index]
+            ]
+            if char_visible is not None
+            else list(range(char_count))
+        )
+        if not slots:
+            return
+        steps = max(len(slots) - 1, 1)
+        stagger = int(SPARKLE_SWEEP_MS * scale) // steps
+        # 预留出生+显示时间：错峰吃掉太多会让最晚字符的窗口容不下随机
+        # 出生延迟（三字行 120ms 退场曾压到只剩 2ms）。
+        stagger_budget = max(
+            int(window_end_ms) - int(base_ms)
+            - int(SPARKLE_BIRTH_JITTER_MS)
+            - int(SPARKLE_MIN_VISIBLE_MS),
+            0,
+        )
+        stagger = min(stagger, stagger_budget // steps)
+        budget = max(anim_count, 1)
+        counts = [0] * len(slots)
+        for i in range(budget):
+            counts[
+                round(i * (len(slots) - 1) / max(budget - 1, 1))
+            ] += 1
+        for position, char_index in enumerate(slots):
+            count = counts[position]
+            if count <= 0:
+                continue
+            order = (
+                len(slots) - 1 - position if reverse else position
+            )
+            start = int(base_ms) + stagger * order
+            _variant_bursts({
+                "kind": "sparkle", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start,
+                "end_ms": max(int(window_end_ms), start + 1),
+                "count": count,
+                "seed": (seed_base + seed_offset + char_index) & 0xFFFFFFFF,
+                # 星光画在主文字前（背后看不清——2026-10 用户复调；纵向
+                # 锚点已偏置到字上侧为主，遮挡有限）。
+                "size_px": anim_size, "travel_px": anim_size * 3.2,
+                "front": True, "sweep": 0,
+            }, _burst_paint(char_index, anim_size, anim=True),
+                variant_salt=char_index)
+
     entry_anim = str(getattr(style, "entry_anim", "none") or "none")
     if entry_anim == "sparkle" and entry_active and display_start_ms is not None:
-        _variant_bursts({
-            "kind": "sparkle", "anchor": "line", "char_index": -1,
-            "start_ms": int(display_start_ms),
-            "end_ms": int(display_start_ms)
+        # 星光入场：逐字符 burst（外观/角色归属与其余粒子同构），整行
+        # 左→右扫过由逐字错峰实现（总时长 SPARKLE_SWEEP_MS 等比）。
+        _sparkle_char_bursts(
+            base_ms=int(display_start_ms),
+            window_end_ms=int(display_start_ms)
             + int(SPARKLE_ENTRY_LIFE_MS * entry_scale),
-            "count": anim_count, "seed": (seed_base + 1) & 0xFFFFFFFF,
-            # 星光画在主文字前（背后看不清——2026-10 用户复调；纵向锚点
-            # 已偏置到字上侧为主，遮挡有限）。
-            "size_px": anim_size, "travel_px": anim_size * 3.2, "front": True,
-            "sweep": 1,
-        }, _burst_paint(None, anim_size, anim=True, line_anchor=True))
+            scale=entry_scale,
+            seed_offset=1,
+            reverse=False,
+        )
     elif entry_anim == "ripple" and entry_active and display_start_ms is not None:
         _char_ripples(
             int(display_start_ms), 2, stagger_ms=stagger, scale=entry_scale
@@ -1308,13 +1377,15 @@ def plan_line_bursts(
         )
         if int(display_end_ms) - exit_start < 120:
             exit_start = int(display_end_ms) - 120
-        _variant_bursts({
-            "kind": "sparkle", "anchor": "line", "char_index": -1,
-            "start_ms": exit_start, "end_ms": int(display_end_ms),
-            "count": anim_count, "seed": (seed_base + 3) & 0xFFFFFFFF,
-            "size_px": anim_size, "travel_px": anim_size * 3.2, "front": True,
-            "sweep": -1,
-        }, _burst_paint(None, anim_size, anim=True, line_anchor=True))
+        # 星光退场：逐字符 burst，整行右→左扫过（最右侧字符先启动），
+        # 窗口终点与旧档同为显示窗终点。
+        _sparkle_char_bursts(
+            base_ms=exit_start,
+            window_end_ms=int(display_end_ms),
+            scale=exit_scale,
+            seed_offset=3,
+            reverse=True,
+        )
     elif exit_anim == "ripple" and exit_active and display_end_ms is not None:
         exit_start = max(
             int(line_end_ms) if line_end_ms is not None else 0,
@@ -1610,13 +1681,15 @@ def burst_particles_at(
     star_prev_q = -1  # 星光族象限链：-1 = 尚无上一颗
     for i in range(int(burst["count"])):
         if kind in ("sparkle", "twinkle"):
-            # 整句扫过：粒子伪随机铺满整行宽度（box_w），入场从左到右、退场
-            # 反向，按横向位置错峰出生 → 连续顺滑地跟随扫过整句；每颗随机
-            # 初始/末了大小、随机向上漂移方向。唱字星光（twinkle）2026-10
-            # 起并入同一运动学（原地 sin 缩放的旧模式僵硬——用户口径），
-            # 在字框内做同款小扫过 + 漂移。纵向锚点按 star_y_fraction
-            # 偏置到主文字上侧（只稍微溢出字形顶），且连续两颗不落同象限
-            #（链式比较出生位置，与存活过滤无关、重放可复现）。
+            # 星光族运动：粒子伪随机铺满锚框宽度（box_w；行锚点=整行、
+            # 字符锚点=字框），``sweep`` 非零时按横向位置错峰出生形成顺滑
+            # 扫过（入退场星光 2026-10 起改逐字符 burst + 规划期错峰，
+            # 此处 sweep=0，字内随机延迟出生）；每颗随机初始/末了大小、
+            # 随机向上漂移方向。唱字星光（twinkle）2026-10 起并入同一运
+            # 动学（原地 sin 缩放的旧模式僵硬——用户口径），在字框内做
+            # 同款小扫过 + 漂移。纵向锚点按 star_y_fraction 偏置到主文字
+            # 上侧（只稍微溢出字形顶），且连续两颗不落同象限（链式比较
+            # 出生位置，与存活过滤无关、重放可复现）。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)
@@ -1638,7 +1711,12 @@ def burst_particles_at(
             elif sweep < 0:
                 delay = (1.0 - x_norm) * SPARKLE_SWEEP_MS + u5 * 90.0
             else:
-                delay = u5 * 130.0
+                # 短窗口（如 120ms 退场）不能让随机出生延迟吞掉整组粒子：
+                # 钳到「寿命 - 最短可见寿命」，每颗至少有可见时段。
+                delay = min(
+                    u5 * SPARKLE_BIRTH_JITTER_MS,
+                    max(life - SPARKLE_MIN_VISIBLE_MS, 0.0),
+                )
             denom = max(life - delay, 1.0)
             p = min(max((tau - delay) / denom, 0.0), 1.0)
             if p <= 0.0:

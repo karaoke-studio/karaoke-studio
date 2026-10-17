@@ -454,6 +454,49 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     for (const TextStyle &style : scene.charStyles) {
         cacheStyleImages(style);
     }
+    // ``role`` 外观档（复用配色方案）的固定装饰源（音量柱/指示灯）：
+    // 方案可以是任意名字、不出现在 lineStyles/charStyles 里，其图片
+    // 填充必须在此单独入缓存，否则 imageForPaint 查不到位图、柱体/
+    // 灯体退回实色（镜像 Painter 直接 brush_for_fill 的口径）。
+    if (scene.volumeDecorStyle.has_value()) {
+        cacheStyleImages(*scene.volumeDecorStyle);
+    }
+    if (scene.litDecorStyle.has_value()) {
+        cacheStyleImages(*scene.litDecorStyle);
+    }
+    // 粒子 burst 的装饰规格（跟随字体/复用配色方案）可携带图片填充
+    //（来源角色方案），同样按 path+mtime+size 入缓存。
+    for (const TextLine &line : scene.lines) {
+        for (const ParticleBurst &burst : line.bursts) {
+            if (!burst.hasPaint) {
+                continue;
+            }
+            const PaintStyle *paints[] = {
+                &burst.fill, &burst.stroke, &burst.stroke2,
+            };
+            for (const PaintStyle *paint : paints) {
+                if (paint->mode != "image" || paint->imagePath.empty()) {
+                    continue;
+                }
+                cacheImage(
+                    paint->imagePath,
+                    paint->imageModifiedMs,
+                    paint->imageSize,
+                    false
+                );
+            }
+            if (burst.hasDecor
+                && burst.decor.mode == "image"
+                && !burst.decor.imagePath.empty()) {
+                cacheImage(
+                    burst.decor.imagePath,
+                    burst.decor.imageModifiedMs,
+                    burst.decor.imageSize,
+                    false
+                );
+            }
+        }
+    }
     for (const TextLine &line : scene.lines) {
         for (const TextChar &ch : line.chars) {
             if (!ch.bitmapGuide.has_value()) {

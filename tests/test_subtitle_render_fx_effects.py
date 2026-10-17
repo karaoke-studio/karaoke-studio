@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 
+from dataclasses import replace
+
 import pytest
 
 from krok_helper.subtitle_render.domain.models import Style, TimingLine
@@ -222,17 +224,24 @@ def test_plan_line_bursts_kinds_and_windows():
         char_windows=[(1200, 1600), (1600, 1600), (1600, 3000)],
     )
     kinds = [burst["kind"] for burst in bursts]
-    # 入场动画：星光整行扫过（line 锚点、固定 14 颗拆樱花粉双色 7+7）。
-    assert kinds.count("sparkle") == 2
-    sparkle = bursts[0]
-    assert sparkle["anchor"] == "line"
-    assert sparkle["start_ms"] == 1000
-    assert sparkle["count"] == 7
-    assert sparkle["sweep"] == 1
-    assert {b["color"] for b in bursts if b["kind"] == "sparkle"} == {
-        "#FFB7C5", "#FFD7E0",
-    }
-    assert sparkle["size_px"] == pytest.approx(100 * 0.40)
+    # 入场动画：星光逐字符（2026-10 结构统一，3 字 × 双色拆分 = 6 条
+    # burst）；整行数量预算 14 颗均匀分到 3 字 = 4+6+4（双色各拆 2+2 /
+    # 3+3 / 2+2），左→右逐字错峰 = SPARKLE_SWEEP_MS/(n-1) = 175ms，窗口
+    # 终点与旧行锚点档同一条（显示窗起点 + 700ms）。
+    assert kinds.count("sparkle") == 6
+    sparkle = [b for b in bursts if b["kind"] == "sparkle"]
+    assert all(b["anchor"] == "char" for b in sparkle)
+    assert [b["char_index"] for b in sparkle] == [0, 0, 1, 1, 2, 2]
+    assert sum(b["count"] for b in sparkle) == 14
+    assert sorted(b["count"] for b in sparkle) == [2, 2, 2, 2, 3, 3]
+    first_start = {}
+    for burst in sparkle:
+        first_start.setdefault(burst["char_index"], burst["start_ms"])
+        assert burst["end_ms"] == 1700
+        assert burst["sweep"] == 0
+    assert first_start == {0: 1000, 1: 1175, 2: 1350}
+    assert {b["color"] for b in sparkle} == {"#FFB7C5", "#FFD7E0"}
+    assert sparkle[0]["size_px"] == pytest.approx(100 * 0.40)
     # 退场动画涟漪：逐字（3 字），尾窗钳制下同点发射，双色拆 2+1 环。
     assert kinds.count("ripple") == 6
     exit_ripples = [b for b in bursts if b["kind"] == "ripple"]
@@ -253,11 +262,239 @@ def test_plan_line_bursts_kinds_and_windows():
     other = plan_line_bursts(
         style, 3, 1000, 4000, 3900, [(1200, 1600), (1600, 1600), (1600, 3000)]
     )
-    assert other[0]["seed"] != sparkle["seed"]
+    assert other[0]["seed"] != sparkle[0]["seed"]
     again = plan_line_bursts(
         style, 2, 1000, 4000, 3900, [(1200, 1600), (1600, 1600), (1600, 3000)]
     )
-    assert again[0]["seed"] == sparkle["seed"]
+    assert again[0]["seed"] == sparkle[0]["seed"]
+
+
+def test_entry_exit_sparkle_per_char_roles_budget_and_sweep():
+    """入退场星光逐字符结构（2026-10 统一）：外观走完整解析——多角色行
+    每字跟自己的方案（图片、follow_mix 前后各一均生效）；整行 14 颗数量
+    预算按可见字符分配；入场左→右、退场右→左错峰；空格不参与；不再输
+    出 ``char_colors`` 专用颜色表。"""
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import (
+        KaraokeColorState,
+        KaraokeColors,
+        PaintFill,
+    )
+    from krok_helper.subtitle_render.engine.style.style_semantics import style_for_role
+
+    scheme_a = SubtitleStyleScheme(
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(mode="image", image_path="a.png")
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(mode="image", image_path="a.png")
+            ),
+        )
+    )
+    scheme_b = SubtitleStyleScheme(
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(mode="image", image_path="b.png")
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(mode="image", image_path="b.png")
+            ),
+        )
+    )
+    style = Style(
+        font_size_px=100,
+        entry_anim="sparkle",
+        entry_lead_ms=600,
+        exit_anim="sparkle",
+        exit_fade_ms=600,
+        fx_apply_to_entry_exit=True,
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="decor",
+        karaoke_anim="none",
+        custom_style_schemes={"主唱": scheme_a, "和声": scheme_b},
+        karaoke_colors=_karaoke_matrix("#111111", "#222222"),
+    )
+    # 4 字符，字 1 是空格（char_visible=False 不参与）；A/B/A 角色分布。
+    char_styles = [
+        style_for_role(style, "主唱"),
+        style_for_role(style, "主唱"),
+        style_for_role(style, "和声"),
+        style_for_role(style, "主唱"),
+    ]
+    visible = [True, False, True, True]
+    windows = [(1200, 1600), (1600, 1600), (1600, 2000), (2000, 2400)]
+    bursts = plan_line_bursts(
+        style,
+        0,
+        1000,
+        4000,
+        3900,
+        windows,
+        char_visible=visible,
+        char_styles=char_styles,
+    )
+    assert all("char_colors" not in b for b in bursts)
+    entry = [b for b in bursts if b["kind"] == "sparkle" and b["start_ms"] >= 1000 and b["start_ms"] < 1700]
+    # 预算 14 颗均匀分 3 槽 = 4+6+4（粒子major 网格）；单态档每字一条 burst。
+    assert [b["char_index"] for b in entry] == [0, 2, 3]
+    assert [b["count"] for b in entry] == [4, 6, 4]
+    # 每字跟自己的角色：字 0/3 = 主唱 a.png，字 2 = 和声 b.png。
+    assert entry[0]["paint"]["fill"]["mode"] == "image"
+    assert entry[0]["paint"]["fill"]["image_path"] == "a.png"
+    assert entry[1]["paint"]["fill"]["image_path"] == "b.png"
+    assert entry[2]["paint"]["fill"]["image_path"] == "a.png"
+    # 入场左→右：字 0 → 2 → 3，错峰 = 350/(3-1) = 175ms，终点同 1700。
+    assert [b["start_ms"] for b in entry] == [1000, 1175, 1350]
+    assert all(b["end_ms"] == 1700 for b in entry)
+    # 退场右→左：exit_start = max(3900, 4000-600) = 3900 → 窗口 100ms <
+    # 120 兜底 → 3880；120ms 窗口扣掉「出生延迟上限 130 + 最短可见 40」
+    # 后错峰预算为 0，三字同点发射（宁可放弃扫过也让粒子出生可见）。
+    exit_sparkle = sorted(
+        (
+            b
+            for b in bursts
+            if b["kind"] == "sparkle" and b["start_ms"] >= 3880
+        ),
+        key=lambda b: b["start_ms"],
+    )
+    assert {b["char_index"] for b in exit_sparkle} == {0, 2, 3}
+    assert {b["start_ms"] for b in exit_sparkle} == {3880}
+    assert all(b["end_ms"] == 4000 for b in exit_sparkle)
+
+    # follow_mix（前后各一）：多角色行星光同样逐字跟各自角色（此前
+    # 行锚点档取首字符方案覆盖整行）。
+    mix_style = replace(
+        style, fx_particle_color_mode="follow_mix"
+    )
+    mix_char_styles = [
+        style_for_role(mix_style, "主唱"),
+        style_for_role(mix_style, "和声"),
+    ]
+    mix_bursts = plan_line_bursts(
+        mix_style,
+        0,
+        1000,
+        4000,
+        3900,
+        [(1200, 1600), (1600, 2000)],
+        char_visible=[True, True],
+        char_styles=mix_char_styles,
+    )
+    mix_entry = [
+        b for b in mix_bursts
+        if b["kind"] == "sparkle" and b["start_ms"] < 1700
+    ]
+    # 每字拆「走字前/后」两条变体；字 0 全部 a.png，字 1 全部 b.png。
+    by_char = {0: [], 1: []}
+    for burst in mix_entry:
+        by_char[burst["char_index"]].append(
+            burst["paint"]["fill"]["image_path"]
+        )
+    assert set(by_char[0]) == {"a.png"}
+    assert set(by_char[1]) == {"b.png"}
+
+
+def test_entry_sparkle_count_budget_on_long_line():
+    """整行 14 颗数量预算：长行按可见字符**均匀**分配（每字 0~1 颗，
+    部分字符分不到，但行首/行尾必有粒子——不再集中给前几个字符），
+    单字行独占全部预算；空格不占预算。"""
+    style = Style(
+        font_size_px=100,
+        entry_anim="sparkle",
+        entry_lead_ms=600,
+        karaoke_anim="none",
+    )
+    windows = [(1000, 1100)] * 20
+    bursts = plan_line_bursts(
+        style,
+        0,
+        1000,
+        3000,
+        2900,
+        windows,
+        char_visible=[True] * 9 + [False] + [True] * 10,
+    )
+    sparkle = [b for b in bursts if b["kind"] == "sparkle"]
+    assert sum(b["count"] for b in sparkle) == 14
+    assert all(b["char_index"] != 9 for b in sparkle)  # 空格不参与
+    assert max(b["count"] for b in sparkle) <= 1
+    assert len(sparkle) == 14  # 19 槽 14 颗：14 个槽各 1 颗（每字单 burst）
+    # 粒子major 均匀网格：两端字符必有粒子（回归：曾只分给前 14 个字）。
+    char_indexes = {b["char_index"] for b in sparkle}
+    assert 0 in char_indexes and 19 in char_indexes
+    assert min(char_indexes) == 0
+    assert max(char_indexes) == 19
+
+    single = plan_line_bursts(
+        style, 0, 1000, 3000, 2900, [(1000, 1600)], char_visible=[True]
+    )
+    single_sparkle = [b for b in single if b["kind"] == "sparkle"]
+    assert len(single_sparkle) == 2  # 双色拆 7+7
+    assert sum(b["count"] for b in single_sparkle) == 14
+
+
+def test_entry_sparkle_single_particle_keeps_both_variants():
+    """回归（单颗预算丢弃第二变体）：预算分到每字 1 颗时长行，两种
+    默认颜色都要出现——按字符序轮换变体，而不是固定只发第一种。"""
+    style = Style(
+        font_size_px=100,
+        entry_anim="sparkle",
+        entry_lead_ms=600,
+        karaoke_anim="none",
+    )
+    bursts = plan_line_bursts(
+        style,
+        0,
+        1000,
+        3000,
+        2900,
+        [(1000, 1100)] * 20,
+        char_visible=[True] * 20,
+    )
+    sparkle = [b for b in bursts if b["kind"] == "sparkle"]
+    assert all(b["count"] == 1 for b in sparkle)
+    # 双色档：跨字符必须两种颜色都在（曾整行只剩第一种）。
+    assert {b["color"] for b in sparkle} == {"#FFB7C5", "#FFD7E0"}
+
+
+def test_short_exit_sparkle_every_char_visible():
+    """回归（短退场粒子无法出生）：三字行 120ms 退场窗口——错峰必须为
+    出生延迟与最短可见寿命让位，且求值器把随机出生延迟钳到窗口内，
+    每个字符的粒子在整个窗口内逐毫秒至少有一帧可见。"""
+    style = Style(
+        font_size_px=100,
+        entry_anim="none",
+        exit_anim="sparkle",
+        exit_fade_ms=120,
+        karaoke_anim="none",
+    )
+    bursts = plan_line_bursts(
+        style,
+        0,
+        1000,
+        4000,
+        3900,
+        [(1200, 1600), (1600, 2000), (2000, 2400)],
+        char_visible=[True] * 3,
+    )
+    sparkle = [b for b in bursts if b["kind"] == "sparkle"]
+    assert sparkle
+    for burst in sparkle:
+        span = burst["end_ms"] - burst["start_ms"]
+        # 求值期：随机出生延迟被钳到「寿命 - 最短可见寿命」，钳制上限
+        # 之后必须已可见、并一直可见到窗口末尾（回归：3998ms 启动的字符
+        # 曾因 130ms 延迟全程不可见）。
+        clamped_delay = min(130.0, max(float(span) - 40.0, 0.0))
+        first_visible = next(
+            t_ms
+            for t_ms in range(burst["start_ms"], burst["end_ms"] + 1)
+            if burst_particles_at(burst, t_ms, 500.0, 300.0, 120.0, 100.0)
+        )
+        assert first_visible <= burst["start_ms"] + clamped_delay + 1
+        assert burst_particles_at(
+            burst, burst["end_ms"] - 1, 500.0, 300.0, 120.0, 100.0
+        )
 
 
 def test_plan_line_bursts_twinkle_classic_keeps_legacy_shape():
@@ -1380,8 +1617,9 @@ def test_particle_paint_spec_stroke_widths_scale_with_source_font():
     assert off_spec["stroke2_width_px"] == 0.0
 
 
-def test_particle_paint_spec_image_fill_falls_back_to_solid():
-    """图片填充折为单独颜色实心（跨端一致回退）。"""
+def test_particle_paint_spec_image_fill_passes_through():
+    """图片填充按位图笔刷透传（两条后端共用 sprite 剪影平铺口径），
+    实色仅作缺图回退；取色层级为 solid 时图片也产出规格。"""
     from krok_helper.subtitle_render.domain.paint import (
         KaraokeColorState,
         KaraokeColors,
@@ -1402,8 +1640,163 @@ def test_particle_paint_spec_image_fill_falls_back_to_solid():
     )
     bursts = plan_line_bursts(style, 0, 1000, 4000, 3900, [(1200, 1600)])
     spec = next(b for b in bursts if b["kind"] == "twinkle")["paint"]
-    assert spec["fill"]["mode"] == "solid"
-    assert spec["fill"]["color"] == "#ABCDEF"
+    assert spec["fill"]["mode"] == "image"
+    assert spec["fill"]["image_path"] == "x.png"
+
+    # 默认取色层级（solid）下图片同样产出规格（仅实色层没有可用实色）。
+    solid_layers_style = replace(style, fx_particle_color_layers="solid")
+    solid_bursts = plan_line_bursts(
+        solid_layers_style, 0, 1000, 4000, 3900, [(1200, 1600)]
+    )
+    solid_spec = next(b for b in solid_bursts if b["kind"] == "twinkle")["paint"]
+    assert solid_spec["fill"]["mode"] == "image"
+    assert solid_spec["stroke_width_px"] == 0.0
+
+
+def test_painter_image_particle_uses_bitmap_fill(qapp, tmp_path):
+    """CPU painter：跟随字体·图片模式时粒子按位图剪影绘制（不是实色
+    回退）——整张纯绿素材应把 sprite 区域染成绿色。"""
+    from PyQt6.QtGui import QColor, QImage
+
+    from krok_helper.subtitle_render.domain.paint import (
+        KaraokeColorState,
+        KaraokeColors,
+        PaintFill,
+    )
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    bitmap = QImage(32, 32, QImage.Format.Format_ARGB32_Premultiplied)
+    bitmap.fill(QColor("#00CC44"))
+    bitmap_path = tmp_path / "fill.png"
+    assert bitmap.save(str(bitmap_path))
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(text="あ", start_ms=1000)],
+                end_ms=1600,
+            )
+        ]
+    )
+    style = Style(
+        sing_fx="twinkle",
+        karaoke_anim="utopia",
+        fx_particle_size_em=0.8,
+        fx_particle_count=16,
+        fx_particle_color="#ABCDEF",
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="decor",
+        karaoke_colors=KaraokeColors(
+            after=KaraokeColorState(
+                text=PaintFill(
+                    mode="image", image_path=str(bitmap_path)
+                )
+            )
+        ),
+    )
+    img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0xFF101010)
+    paint_frame(img, track, 1300, style)
+    green = 0
+    for y in range(0, img.height(), 2):
+        for x in range(0, img.width(), 2):
+            px = img.pixel(x, y)
+            r, g, b = (px >> 16) & 0xFF, (px >> 8) & 0xFF, px & 0xFF
+            if g > 120 and g > r + 40 and g > b + 40:
+                green += 1
+    assert green > 5, f"图片填充的粒子应染上素材绿色，实测 {green}"
+
+
+def _role_image_scheme(color: str, *, dark_before: str = "#202020"):
+    """构造「走字前=近黑实色、走字后=纯色图片」的角色方案：入场时刻
+    文字本体尚未走字（before 态近黑），画面上的彩色像素只能来自跟随
+    「走字后」图片的入退场粒子。"""
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import (
+        KaraokeColorState,
+        KaraokeColors,
+        PaintFill,
+    )
+
+    return SubtitleStyleScheme(
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(mode="solid", color=dark_before)
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(mode="image", image_path=color)
+            ),
+        )
+    )
+
+
+def test_painter_entry_sparkle_multi_role_image(qapp, tmp_path):
+    """CPU painter：入场星光多角色行逐字跟各自角色的图片（红/绿两种
+    素材都出现），不再退首字符颜色/实色回退。"""
+    from PyQt6.QtGui import QColor, QImage
+
+    from krok_helper.subtitle_render.domain.timing import (
+        TimingChar,
+        TimingLine,
+        TimingTrack,
+    )
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    def png(name: str, color: str) -> str:
+        image = QImage(32, 32, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(color))
+        path = tmp_path / name
+        assert image.save(str(path))
+        return str(path)
+
+    style = Style(
+        font_size_px=100,
+        entry_anim="sparkle",
+        entry_lead_ms=600,
+        fx_apply_to_entry_exit=True,
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="decor",
+        karaoke_anim="none",
+        base_color="#202020",
+        fill_color="#202020",
+        stroke_color="#101010",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        custom_style_schemes={
+            "主唱": _role_image_scheme(png("red.png", "#FF0000")),
+            "和声": _role_image_scheme(png("green.png", "#00FF00")),
+        },
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("あ", 1000, role_label="主唱"),
+                    TimingChar("い", 1500, role_label="和声"),
+                ],
+                end_ms=2500,
+            )
+        ]
+    )
+    img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0xFF101010)
+    # 阈值放宽到 90：粒子透明度随生命期 (1-p) 衰减，取两字窗口重叠的
+    # 中段（字 1 启动后不久、字 0 尚未淡尽）两色都应明显可见。
+    paint_frame(img, track, 400, style)
+    red = green = 0
+    for y in range(0, img.height(), 2):
+        for x in range(0, img.width(), 2):
+            px = img.pixel(x, y)
+            r, g, b = (px >> 16) & 0xFF, (px >> 8) & 0xFF, px & 0xFF
+            if r > 90 and r > g + 40 and r > b + 40:
+                red += 1
+            if g > 90 and g > r + 40 and g > b + 20:
+                green += 1
+    assert red > 50 and green > 50, (
+        f"多角色入场星光应分别染上红/绿素材，实测 r={red} g={green}"
+    )
 
 
 def test_painter_gradient_particle_and_radial_ring(qapp):

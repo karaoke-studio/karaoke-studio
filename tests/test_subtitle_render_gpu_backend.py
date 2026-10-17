@@ -924,6 +924,148 @@ def test_gpu_title_latin_stretch_changes_title_pixels() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_particle_image_follow_fill_uses_bitmap(tmp_path) -> None:
+    """粒子「跟随字体·走字后」+ 角色方案图片填充：GPU 侧按位图剪影
+    绘制（纯绿素材 → 绿色粒子），不是实色回退。"""
+    bitmap = QImage(32, 32, QImage.Format.Format_ARGB32_Premultiplied)
+    bitmap.fill(QColor("#00CC44"))
+    bitmap_path = tmp_path / "particle_fill.png"
+    assert bitmap.save(str(bitmap_path))
+
+    style = _g1_style(
+        sing_fx="twinkle",
+        karaoke_anim="utopia",
+        fx_particle_size_em=0.8,
+        fx_particle_count=16,
+        fx_particle_color="#ABCDEF",
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="decor",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(
+            after=KaraokeColorState(
+                text=PaintFill(mode="image", image_path=str(bitmap_path))
+            )
+        ),
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        _meta, frames = _render_g1_frames(
+            renderer, style, (1100,), force_warp=True
+        )
+    payload = frames[0]
+    green = 0
+    for offset in range(0, len(payload), 4):
+        r, g, b = payload[offset], payload[offset + 1], payload[offset + 2]
+        if g > 120 and g > r + 40 and g > b + 40:
+            green += 1
+    assert green > 20, f"图片填充粒子应染上素材绿色，实测 {green}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_volume_bar_role_image_fill_uses_bitmap(tmp_path) -> None:
+    """音量柱「复用配色方案」role 档 + 方案图片填充：GPU 侧柱体按位图
+    剪影绘制（方案不出现在行/字样式表里，configure 必须单独缓存其
+    素材），不是实色回退。"""
+    bitmap = QImage(32, 32, QImage.Format.Format_ARGB32_Premultiplied)
+    bitmap.fill(QColor("#00CC44"))
+    bitmap_path = tmp_path / "volume_fill.png"
+    assert bitmap.save(str(bitmap_path))
+
+    image_state = KaraokeColorState(
+        text=PaintFill(mode="image", image_path=str(bitmap_path))
+    )
+    scheme = SubtitleStyleScheme(
+        font_size_px=64,
+        karaoke_colors=KaraokeColors(
+            before=image_state, after=image_state
+        ),
+    )
+    style = _g1_style(
+        volume_enabled=True,
+        volume_appearance_mode="role",
+        volume_role_name="R1",
+        custom_style_schemes={"R1": scheme},
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        _meta, frames = _render_g1_frames(
+            renderer, style, (100,), force_warp=True
+        )
+    payload = frames[0]
+    green = 0
+    for offset in range(0, len(payload), 4):
+        r, g, b = payload[offset], payload[offset + 1], payload[offset + 2]
+        if g > 120 and g > r + 40 and g > b + 40:
+            green += 1
+    assert green > 50, f"role 档图片填充的柱体应染上素材绿色，实测 {green}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_entry_sparkle_multi_role_image_follow(tmp_path) -> None:
+    """GPU 侧入场星光（逐字符结构）：多角色行每字跟各自角色的图片填充
+    ——红/绿两种素材同帧出现，不退首字符颜色或实色回退。方案「走字前」
+    为近黑实色、入场时刻文字未走字，画面彩色只能来自跟随「走字后」
+    图片的星光粒子。"""
+    def png(name: str, color: str) -> str:
+        image = QImage(32, 32, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(color))
+        path = tmp_path / name
+        assert image.save(str(path))
+        return str(path)
+
+    def scheme(path: str) -> SubtitleStyleScheme:
+        state = KaraokeColorState(
+            text=PaintFill(mode="image", image_path=path)
+        )
+        return SubtitleStyleScheme(
+            karaoke_colors=KaraokeColors(
+                before=KaraokeColorState(
+                    text=PaintFill(mode="solid", color="#202020")
+                ),
+                after=state,
+            )
+        )
+
+    style = _g1_style(
+        entry_anim="sparkle",
+        entry_lead_ms=600,
+        fx_apply_to_entry_exit=True,
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="decor",
+        custom_style_schemes={
+            "主唱": scheme(png("red.png", "#FF0000")),
+            "和声": scheme(png("green.png", "#00FF00")),
+        },
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 1_000, role_label="主唱"),
+                    TimingChar("a", 1_500, role_label="和声"),
+                ],
+                end_ms=2_500,
+            )
+        ]
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        _meta, frames = _render_g1_frames(
+            renderer, style, (800,), force_warp=True, track=track
+        )
+    payload = frames[0]
+    red = green = 0
+    for offset in range(0, len(payload), 4):
+        r, g, b = payload[offset], payload[offset + 1], payload[offset + 2]
+        if r > 90 and r > g + 40 and r > b + 40:
+            red += 1
+        elif g > 90 and g > r + 40 and g > b + 20:
+            green += 1
+    assert red > 50 and green > 50, (
+        f"多角色入场星光应分别染上红/绿素材，实测 r={red} g={green}"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_title_guide_symbol_renders_before_image_only(tmp_path) -> None:
     """标题导唱符走 GPU 原生管线：永不走字 → 恒画「走字前」图片。"""
     def png(name: str, color: str) -> str:

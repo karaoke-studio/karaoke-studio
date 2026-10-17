@@ -313,7 +313,15 @@ std::vector<FxParticle> burstParticlesAt(
             } else if (burst.sweep < 0) {
                 delay = (1.0f - u1) * 350.0f + u5 * 90.0f;
             } else {
-                delay = u5 * 130.0f;
+                // 短窗口（如 120ms 退场）不能让随机出生延迟吞掉整组粒子：
+                // 钳到「寿命 - 最短可见寿命」（镜像 particles.py 的
+                // SPARKLE_BIRTH_JITTER_MS / SPARKLE_MIN_VISIBLE_MS）。
+                delay = std::min(
+                    u5 * 130.0f,
+                    std::max(
+                        static_cast<float>(life) - 40.0f, 0.0f
+                    )
+                );
             }
             const float denom = std::max(
                 static_cast<float>(life) - delay, 1.0f
