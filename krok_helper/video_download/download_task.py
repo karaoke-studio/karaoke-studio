@@ -77,6 +77,8 @@ class DownloadTask:
     downloaded_bytes: int = 0
     error_message: str = ""
     local_file: Path | None = None
+    # 不勾选「自动合并音视频」且所选格式需要合并时，音轨单独落盘的文件。
+    audio_file: Path | None = None
     cancel_requested: bool = False
     info: VideoInfo | None = None
     available_formats: list[FormatOption] = field(default_factory=list)

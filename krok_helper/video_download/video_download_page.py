@@ -2920,8 +2920,10 @@ class VideoDownloadPage(QWidget):
         task.downloaded_bytes = 0
         task.filesize = self._preferred_task_filesize(task)
         requires_merge = bool(task.selected_format and task.selected_format.requires_merge)
+        # 不勾选「自动合并音视频」时分轨下载：两个下载阶段，但没有合并阶段。
+        merge_expected = requires_merge and bool(task.merge_video_audio)
         download_phase_count = 2 if requires_merge else 1
-        task.progress_total_phases = download_phase_count + (1 if requires_merge else 0)
+        task.progress_total_phases = download_phase_count + (1 if merge_expected else 0)
         task.progress_phase_index = 0
         task.progress_phase_bytes = 0
         task.progress_phase_name = "正在下载视频…" if requires_merge else ""

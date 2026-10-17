@@ -414,6 +414,57 @@ class YtDlpService:
 
         youtube_dl = self._import_ytdlp()
         use_python_backend = youtube_dl is not None and not self._should_prefer_cli_backend(task.url)
+
+        # yt-dlp 的格式串带 "+" 就必然合并两条流（--merge-output-format 只决定容器）。
+        # 用户不勾选「自动合并音视频」时，把格式串拆开下两遍：视频轨沿用原名，
+        # 音轨另存为「原名_音频轨」，产物是两个独立文件。
+        if not options.merge_video_audio and "+" in selected_format:
+            video_format, audio_format = selected_format.split("+", 1)
+            audio_stem = f"{output_stem}_音频轨"
+            self._download_stream_with_retry(
+                youtube_dl, use_python_backend, task, options, progress_callback,
+                save_dir=save_dir, output_stem=output_stem, outtmpl=outtmpl,
+                selected_format=video_format, extractor_args_hint=extractor_args_hint,
+                preexisting_outputs=preexisting_outputs,
+            )
+            # 附属产物（封面/字幕）跟随视频轨命名，第二次下载不再重复抓取。
+            video_file = task.local_file
+            audio_options = replace(options, download_thumbnail=False, download_subtitle=False)
+            task.audio_file = None
+            self._download_stream_with_retry(
+                youtube_dl, use_python_backend, task, audio_options, progress_callback,
+                save_dir=save_dir, output_stem=audio_stem,
+                outtmpl=str(save_dir / f"{audio_stem}.%(ext)s"),
+                selected_format=audio_format, extractor_args_hint=extractor_args_hint,
+                preexisting_outputs=preexisting_outputs,
+            )
+            task.audio_file = self._resolve_split_output(save_dir, audio_stem)
+            task.local_file = video_file or self._resolve_split_output(save_dir, output_stem)
+        else:
+            self._download_stream_with_retry(
+                youtube_dl, use_python_backend, task, options, progress_callback,
+                save_dir=save_dir, output_stem=output_stem, outtmpl=outtmpl,
+                selected_format=selected_format, extractor_args_hint=extractor_args_hint,
+                preexisting_outputs=preexisting_outputs,
+            )
+
+        self._verify_downloaded_media(task)
+
+    def _download_stream_with_retry(
+        self,
+        youtube_dl,
+        use_python_backend: bool,
+        task: DownloadTask,
+        options: DownloadOptions,
+        progress_callback: Callable[[dict[str, Any]], None],
+        *,
+        save_dir: Path,
+        output_stem: str,
+        outtmpl: str,
+        selected_format: str,
+        extractor_args_hint: str,
+        preexisting_outputs: dict[Path, tuple[int, int]],
+    ) -> None:
         if not self._use_aria2c_for(task.url, options):
             self._prepare_native_resume(save_dir, output_stem)
         attempt = 0
@@ -451,8 +502,6 @@ class YtDlpService:
                         self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
                         raise DownloadCancelledError("下载已取消。")
                     time.sleep(0.1)
-
-        self._verify_downloaded_media(task)
 
     @staticmethod
     def _is_transient_download_error(message: str) -> bool:
@@ -1423,10 +1472,21 @@ class YtDlpService:
             if filepath:
                 return Path(filepath)
 
-        ext = "mp4" if options.merge_video_audio or (task.selected_format and task.selected_format.requires_merge) else ""
+        ext = "mp4" if options.merge_video_audio and (task.selected_format and task.selected_format.requires_merge) else ""
         if not ext:
             ext = str(info.get("ext") or (task.selected_format.ext if task.selected_format else "") or "mp4")
         return save_dir / f"{output_stem}.{ext}"
+
+    def _resolve_split_output(self, save_dir: Path, output_stem: str) -> Path | None:
+        """分轨下载后按 stem 前缀找最新产物；CLI 后端报不出精确路径。"""
+        candidates = [
+            path
+            for path in self._iter_output_candidates(save_dir, output_stem)
+            if not path.name.endswith((PART_SUFFIX, ARIA2C_CONTROL_SUFFIX))
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
     def _snapshot_output_candidates(self, save_dir: Path, output_stem: str) -> dict[Path, tuple[int, int]]:
         snapshot: dict[Path, tuple[int, int]] = {}
@@ -1471,7 +1531,8 @@ class YtDlpService:
         if not name.startswith(output_stem):
             return False
         suffix = name[len(output_stem) :]
-        return not suffix or suffix.startswith((".", "-"))
+        # "_" 前缀是分轨下载的「_音频轨」后缀文件名。
+        return not suffix or suffix.startswith((".", "-", "_"))
 
     def _terminate_process(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
@@ -1567,29 +1628,33 @@ class YtDlpService:
 
         只在能确定「预期时长」且 ffprobe 可用时才拦截。探测不了就放行——校验的
         职责是挡住已经证实损坏的文件，不是给正常下载添堵。
+        分轨下载时视频、音频两个文件都各自核对。
         """
-        path = task.local_file
         expected = float(task.info.duration) if task.info and task.info.duration else 0.0
-        if path is None or not path.is_file() or expected <= 0:
+        if expected <= 0:
             return
+        for attr in ("local_file", "audio_file"):
+            path = getattr(task, attr)
+            if path is None or not path.is_file():
+                continue
 
-        actual = self._probe_shortest_stream_duration(path)
-        if actual is None:
-            return
+            actual = self._probe_shortest_stream_duration(path)
+            if actual is None:
+                continue
 
-        tolerance = max(MIN_DURATION_TOLERANCE_SECONDS, expected * DURATION_TOLERANCE_RATIO)
-        if actual >= expected - tolerance:
-            return
+            tolerance = max(MIN_DURATION_TOLERANCE_SECONDS, expected * DURATION_TOLERANCE_RATIO)
+            if actual >= expected - tolerance:
+                continue
 
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        task.local_file = None
-        raise VideoDownloadError(
-            f"下载的文件不完整：实际时长仅 {actual:.0f} 秒，应为约 {expected:.0f} 秒。"
-            "损坏文件已删除，请重试；如果反复出现，可在下载设置里换一个清晰度。"
-        )
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            setattr(task, attr, None)
+            raise VideoDownloadError(
+                f"下载的文件不完整：实际时长仅 {actual:.0f} 秒，应为约 {expected:.0f} 秒。"
+                "损坏文件已删除，请重试；如果反复出现，可在下载设置里换一个清晰度。"
+            )
 
     def _probe_shortest_stream_duration(self, path: Path) -> float | None:
         """返回文件里最短的一条流的时长；探测失败返回 None。
