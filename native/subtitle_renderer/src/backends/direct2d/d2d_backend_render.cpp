@@ -720,7 +720,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         );
     };
     for (const Impl::CachedLine *line : activeLines) {
-      }
       if (line != nullptr && (
         !line->geometries.empty()
         || std::any_of(
@@ -753,7 +752,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // tails）：行透明度归零后，粒子档的退场粒子可能仍按标准寿命在播。
         bool particleExitTail = false;
         if (animation.opacity <= 0.0f) {
-            }
             bool litAutoLampVisible = false;
             if (litAutoDecorated && lineEntryAnimationAt(*line).opacity > 0.0f) {
                 int litGuardStartMs = line->startMs;
@@ -5678,7 +5676,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // 2026-09 装饰粒子（back=涟漪光环垫底 / front=星光·音符·闪烁）与
         // 唱字描边闪光。轨迹/时序与 Python particles.py / painter.py 镜像。
         // ------------------------------------------------------------------
-        }
         auto drawFxBursts = [&](bool front) {
             if (line->bursts.empty() || style.vertical) {
                 return;
@@ -6130,7 +6127,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             context->SetTransform(previousTransform);
         };
         if (particleExitTail) {
-            }
             // 行文字已隐（透明度 0），仅按各自图层序续播退场粒子到自然
             // 终点；全部文字管线（正文/注音/发光/描边闪光）跳过。
             context->SetTransform(
@@ -6281,8 +6277,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             context->SetTransform(previousTransform);
         };
-
-        }
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();

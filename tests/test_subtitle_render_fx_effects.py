@@ -28,6 +28,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
 from krok_helper.subtitle_render.engine.render.effects.particles import (
     FX_SPRITES,
     burst_particles_at,
+    exit_particle_tail_end_ms,
     plan_line_bursts,
     sprite_for_kind,
 )
@@ -242,10 +243,13 @@ def test_plan_line_bursts_kinds_and_windows():
     assert first_start == {0: 1000, 1: 1175, 2: 1350}
     assert {b["color"] for b in sparkle} == {"#FFB7C5", "#FFD7E0"}
     assert sparkle[0]["size_px"] == pytest.approx(100 * 0.40)
-    # 退场动画涟漪：逐字（3 字），尾窗钳制下同点发射，双色拆 2+1 环。
+    # 退场动画涟漪（2026-10 分离口径）：标准错峰（步距 175）+ 每环完整
+    # 寿命 600ms；锚点 = max(行末 3900, 显示末 4000 - 950) = 3900，
+    # 末环越过显示窗终点（渲染端尾奏通道续播）。
     assert kinds.count("ripple") == 6
     exit_ripples = [b for b in bursts if b["kind"] == "ripple"]
-    assert {b["start_ms"] for b in exit_ripples} == {3880}
+    assert {b["start_ms"] for b in exit_ripples} == {3900, 4075, 4250}
+    assert all(b["end_ms"] == b["start_ms"] + 600 for b in exit_ripples)
     assert [b["char_index"] for b in exit_ripples] == [0, 0, 1, 1, 2, 2]
     assert sorted({b["count"] for b in exit_ripples}) == [1, 2]
     assert all(b["anchor"] == "char" for b in exit_ripples)
@@ -347,20 +351,21 @@ def test_entry_exit_sparkle_per_char_roles_budget_and_sweep():
     # 入场左→右：字 0 → 2 → 3，错峰 = 350/(3-1) = 175ms，终点同 1700。
     assert [b["start_ms"] for b in entry] == [1000, 1175, 1350]
     assert all(b["end_ms"] == 1700 for b in entry)
-    # 退场右→左：exit_start = max(3900, 4000-600) = 3900 → 窗口 100ms <
-    # 120 兜底 → 3880；120ms 窗口扣掉「出生延迟上限 130 + 最短可见 40」
-    # 后错峰预算为 0，三字同点发射（宁可放弃扫过也让粒子出生可见）。
+    # 退场右→左（2026-10 分离口径）：120ms 退场旋钮不再压缩粒子——
+    # exit_start = max(3900, 4000-600) = 3900，标准错峰 175ms、每字
+    # 完整寿命 600ms，末字越过显示窗终点完整播放（旧「窗预算钳制/120
+    # 兜底」已随分离口径废除——旋钮只控制文字渐隐）。
     exit_sparkle = sorted(
         (
             b
             for b in bursts
-            if b["kind"] == "sparkle" and b["start_ms"] >= 3880
+            if b["kind"] == "sparkle" and b["start_ms"] >= 3900
         ),
         key=lambda b: b["start_ms"],
     )
     assert {b["char_index"] for b in exit_sparkle} == {0, 2, 3}
-    assert {b["start_ms"] for b in exit_sparkle} == {3880}
-    assert all(b["end_ms"] == 4000 for b in exit_sparkle)
+    assert {b["start_ms"] for b in exit_sparkle} == {3900, 4075, 4250}
+    assert all(b["end_ms"] == b["start_ms"] + 600 for b in exit_sparkle)
 
     # follow_mix（前后各一）：多角色行星光同样逐字跟各自角色（此前
     # 行锚点档取首字符方案覆盖整行）。
@@ -2289,12 +2294,13 @@ def test_plan_line_bursts_petal_entry_exit_sing():
     assert sorted({b["count"] for b in entry}) == [1, 2]
     assert {b["color"] for b in entry} == {"#FFB7C5", "#FFD7E0"}
     assert all(b["travel_px"] == 0.0 for b in entry)
-    # 退场花瓣：sweep=-1，自 max(行末, 显示末回溯) 起排布（与音符同款：
-    # 尾窗不足 120ms 时护栏推到 显示末-120，错峰压缩为 0，burst 窗口
-    # 规划到自然播完、画面随行消失截断）。
+    # 退场花瓣（2026-10 分离口径）：锚点 = max(行末 4100, 显示末 4200 -
+    # 1250) = 4100，标准错峰 175ms、每字完整寿命 900ms（越过显示窗
+    # 终点，尾奏通道续播；旧「120 兜底 + 错峰压缩」已废除）。
     exit_petals = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == -1]
     assert len(exit_petals) == 6
-    assert {b["start_ms"] for b in exit_petals} == {4080}
+    assert {b["start_ms"] for b in exit_petals} == {4100, 4275, 4450}
+    assert all(b["end_ms"] == b["start_ms"] + 900 for b in exit_petals)
     assert {b["color"] for b in exit_petals} == {"#FFB7C5", "#FFD7E0"}
     # 唱字花瓣：sweep=0、每字 max(3, 14//3)=4 颗、尺寸吃旋钮（40% 字号）。
     sing = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == 0]
@@ -3482,3 +3488,111 @@ def test_painter_heart_smoke(qapp):
     img2 = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
     img2.fill(0xFF101010)
     paint_frame(img2, track, 1100, entry)
+
+
+def test_entry_exit_particle_emission_decoupled_from_duration_knob():
+    """2026-10 分离口径：粒子发射恒按标准速率——「入场/退场动画时长」
+    旋钮（120ms~3000ms 全档位）不再改变粒子窗口；短旋钮下退场粒子越过
+    显示窗终点完整播放；尾端助手与规划分支同一算式。"""
+    def windows(exit_fade_ms: int):
+        style = Style(
+            entry_anim="note", entry_lead_ms=600,
+            exit_anim="note", exit_fade_ms=exit_fade_ms,
+            font_size_px=100, karaoke_anim="none",
+        )
+        bursts = plan_line_bursts(
+            style, 0, 1000, 4200, 4100,
+            [(1200, 1600), (1600, 2000), (2000, 3000)],
+        )
+        entry = sorted(
+            (b["start_ms"], b["end_ms"])
+            for b in bursts
+            if b["kind"] == "note" and b["start_ms"] < 1500
+        )
+        exit_ = sorted(
+            (b["start_ms"], b["end_ms"])
+            for b in bursts
+            if b["kind"] == "note" and b["start_ms"] >= 3000
+        )
+        return entry, exit_
+
+    entry_std = [
+        (1000, 1800), (1000, 1800),
+        (1175, 1975), (1175, 1975),
+        (1350, 2150), (1350, 2150),
+    ]
+    exit_std = [
+        (4100, 4900), (4100, 4900),
+        (4275, 5075), (4275, 5075),
+        (4450, 5250), (4450, 5250),
+    ]
+    for fade in (120, 300, 600, 1200, 3000):
+        entry, exit_ = windows(fade)
+        assert entry == entry_std, fade
+        assert exit_ == exit_std, fade
+    # 末字终点越过显示窗终点（4200）——完整播放口径。
+    assert exit_std[-1][1] == 5250 > 4200
+    # 尾端助手与规划同式（CPU 尾奏通道的淘汰界）。
+    assert exit_particle_tail_end_ms("note", 3, 4100, 4200) == 5250
+    assert exit_particle_tail_end_ms("sparkle", 3, 4100, 4200) == 4100 + 350 + 600
+    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 350 + 900
+    assert exit_particle_tail_end_ms("snow", 3, 4100, 4200) == 4500
+    assert exit_particle_tail_end_ms("dissolve_out", 3, 4100, 4200) is None
+
+
+def _bright_pixels(img) -> int:
+    n = 0
+    for y in range(0, img.height(), 3):
+        for x in range(0, img.width(), 3):
+            c = img.pixelColor(x, y)
+            if c.red() > 40 or c.green() > 40:
+                n += 1
+    return n
+
+
+def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
+    """2026-10 分离口径（CPU 渲染端）：退场粒子越过显示窗终点完整播放。
+
+    note 退场锚 = max(行末, 显示末-1150)，末字 burst 终点越过显示窗
+    （显示窗 ≈ [0, 2800]，末 burst [2150, 2950]）——[2800, 2950) 段只有
+    「退场尾奏通道」（_paint_exit_particle_tails）能画；fade 对照档在
+    显示窗外应全空。画布取 800×450（视口变换在 400×200 下内容出画）。"""
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="AB", start_ms=1000),
+                    TimingChar(text="CD", start_ms=1400),
+                ],
+                end_ms=1800,
+            )
+        ]
+    )
+
+    def frame(t: int, exit_anim: str) -> int:
+        style = Style(
+            font_size_px=80,
+            font_family="Arial",
+            karaoke_anim="none",
+            entry_anim="none",
+            exit_anim=exit_anim,
+            exit_fade_ms=200,
+            karaoke_colors=_karaoke_matrix("#FFFFFF", "#FFF0AA"),
+        )
+        img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(0xFF101010)
+        paint_frame(img, track, t, style)
+        return _bright_pixels(img)
+
+    # 窗内（正常路径：文字 + 粒子）与尾奏段（仅尾奏通道）都有内容。
+    assert frame(2400, "note") > 0
+    assert frame(2850, "note") > 0
+    # 末 burst [2150, 2950] 之后熄灭。
+    assert frame(2960, "note") == 0
+    # 非粒子退场档不进尾奏通道：显示窗外全空。
+    assert frame(2850, "fade") == 0

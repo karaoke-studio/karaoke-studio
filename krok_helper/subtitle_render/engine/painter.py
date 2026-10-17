@@ -1055,7 +1055,15 @@ def _paint_track_to_painter(
     )
     if not draw_title:
         title_states = ()
-    if not display_lines and not signal_lines and not title_states:
+    tail_items = _exit_particle_tail_items(
+        display_style, layout_plan, display_lines, track_t_ms
+    )
+    if (
+        not display_lines
+        and not signal_lines
+        and not title_states
+        and not tail_items
+    ):
         return
 
     # 标题字幕 overlay（B7）：静态文字，画在屏幕坐标系（不随「视图」变换 / 行布局），
@@ -1171,6 +1179,19 @@ def _paint_track_to_painter(
                 )
             finally:
                 painter.restore()
+        # 退场粒子尾奏（分离口径）：行窗已结束的行在此续播标准寿命粒子。
+        _paint_exit_particle_tails(
+            painter,
+            logical_w,
+            logical_h,
+            track,
+            display_style,
+            track_t_ms,
+            layout_plan,
+            display_lines,
+            baselines=baselines if not display_style.vertical else {},
+            layout_cache_sig=layout_cache_sig,
+        )
         if not display_style.vertical and signal_lines:
             _paint_signal_lits(
                 painter,
@@ -3747,6 +3768,124 @@ def _fx_baked_sprite_image(
     return entry
 
 
+def _exit_particle_tail_items(
+    style: Style,
+    layout_plan,
+    display_lines: list[DisplayLine],
+    t_ms: int,
+) -> list:
+    """t 时刻仍需续播退场粒子的行（显示窗已结束、粒子未到自然终点）。
+
+    2026-10 分离口径：粒子发射恒按标准速率且完整播放，行消失后由
+    退场尾奏通道续播；本函数同时服务 paint_frame 的空内容早退判定
+    （没有可见行但仍有尾奏粒子时不能提前返回）。
+    """
+    from krok_helper.subtitle_render.domain.timing import EXIT_PARTICLE_ANIMS
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        exit_particle_tail_end_ms,
+    )
+
+    if style.vertical or layout_plan is None:
+        return []
+    visible_ids = {id(display_line.line) for display_line in display_lines}
+    items = []
+    for item in layout_plan.lines:
+        line = item.line
+        if (
+            id(line) in visible_ids
+            or item.display_start_ms is None
+            or item.display_end_ms is None
+            or not (item.display_end_ms <= t_ms)
+        ):
+            continue
+        line_style = item.animation_style or style
+        exit_anim = str(getattr(line_style, "exit_anim", "none") or "none")
+        if exit_anim not in EXIT_PARTICLE_ANIMS:
+            continue
+        tail_end = exit_particle_tail_end_ms(
+            exit_anim, len(line.chars), _line_end_ms(line), int(item.display_end_ms)
+        )
+        if tail_end is None or t_ms >= tail_end:
+            continue
+        items.append(item)
+    return items
+
+
+def _paint_exit_particle_tails(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    style: Style,
+    t_ms: int,
+    layout_plan,
+    display_lines: list[DisplayLine],
+    *,
+    baselines: dict[int, int],
+    layout_cache_sig: tuple | None,
+) -> None:
+    """退场粒子尾奏（2026-10 分离口径）：行显示窗已结束、文字已隐，但
+    退场粒子按标准寿命可能仍在播——``visible_lines_from_layout_plan``
+    之外的行在此**仅续播粒子**（文字/注音/发光全部不画）。GPU 侧
+    d2d_backend_render 的 particleExitTail 分支同口径；拼接/消散的粒子
+    即文字形体（与时长耦合），不进本通道。竖排无粒子，直接跳过。"""
+    for item in _exit_particle_tail_items(style, layout_plan, display_lines, t_ms):
+        line = item.line
+        line_style = item.animation_style or style
+        lane = item.lane if style.dual_line_layout else None
+        if lane is not None and lane in baselines:
+            baseline_y = baselines[lane]
+        else:
+            alone = _resolve_display_baselines(
+                img_h,
+                track,
+                [DisplayLine(
+                    line=line,
+                    lane=item.lane,
+                    display_start_ms=item.display_start_ms,
+                    display_end_ms=item.display_end_ms,
+                )],
+                style,
+            )
+            baseline_y = alone.get(item.lane, img_h // 2)
+        layout = _layout_line(
+            track, line, line_style, img_w, img_h,
+            baseline_y=baseline_y, line_x=None, lane=lane,
+            cache_sig=layout_cache_sig,
+            line_plan=item,
+        )
+        if layout is None:
+            continue
+        render_line = layout.render_line or line
+        line_index = _track_line_index(track, line)
+        painter.save()
+        try:
+            _paint_line_fx_particles(
+                painter,
+                layout,
+                render_line,
+                line_style,
+                t_ms,
+                line_index,
+                item.display_start_ms,
+                item.display_end_ms,
+                front=False,
+            )
+            _paint_line_fx_particles(
+                painter,
+                layout,
+                render_line,
+                line_style,
+                t_ms,
+                line_index,
+                item.display_start_ms,
+                item.display_end_ms,
+                front=True,
+            )
+        finally:
+            painter.restore()
+
+
 def _paint_line_fx_particles(
     painter: QPainter,
     layout: _LineLayout,
@@ -4798,6 +4937,7 @@ class _GlyphRunBeforeGlowLayer(_HorizontalGlyphRunBeforeGlowLayer):
         fade_opacity: float = 1.0,
         transform: QTransform | None = None,
         fill_rect: QRectF | None = None,
+        shared: bool = False,
     ) -> None:
         super().__init__(
             glyphs=glyphs,
@@ -4857,7 +4997,6 @@ class _GlyphRunAfterGlowLayer(_HorizontalGlyphRunAfterGlowLayer):
         fade_opacity: float = 1.0,
         transform: QTransform | None = None,
         fill_rect: QRectF | None = None,
-        shared: bool = False,
     ) -> None:
         super().__init__(
             glyphs=glyphs,

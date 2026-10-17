@@ -66,6 +66,9 @@ SAKURA_PINK_B = "#FFD7E0"
 #（宽幅低频摇摆、慢自转、柔包络——AE CC Snowfall 等参考的共同观感）；
 # 寿命比花瓣长（下落更慢）。
 SNOW_LIFE_MS = 1100
+# 雪花出入场的标准整行窗（2026-10 分离口径：旧「入场/退场动画时长」
+# 旋钮默认 600ms 冻结为粒子发射标准；旋钮此后只控制文字逐字渐显/渐隐）。
+SNOW_STD_WINDOW_MS = 600
 # 「默认颜色」档的雪花双色（雪白 + 冰蓝）随机混发；固定默认档按 kind
 # 取默认对（雪花=雪色，花瓣与其余 kind=樱花粉，见 _default_color_pair）。
 SNOW_A = "#F2F8FF"
@@ -1082,6 +1085,40 @@ def clear_particle_paint_cache() -> None:
     _VARIANT_CACHE.clear()
 
 
+
+def exit_particle_tail_end_ms(
+    exit_anim: str,
+    char_count: int,
+    line_end_ms: int | None,
+    display_end_ms: int,
+) -> int | None:
+    """退场粒子（标准速率）最后一只 burst 的自然终点（ms）。
+
+    2026-10 分离口径：七个粒子档的退场发射恒按标准速率且完整播放，
+    终点可以越过显示窗终点 ``display_end_ms``——渲染端的「退场尾奏
+    通道」（行已消失、仅续播粒子）用它判定本行是否还有存活的粒子。
+    非粒子退场档（含拼接/消散——粒子即文字形体，与时长耦合）返回
+    ``None``。与 :func:`plan_line_bursts` 各退场分支同一算式。
+    """
+    line_end = int(line_end_ms) if line_end_ms is not None else 0
+    if exit_anim == "sparkle":
+        base = max(line_end, display_end_ms - SPARKLE_EXIT_LIFE_MS)
+        steps = max(char_count - 1, 1)
+        return base + (SPARKLE_SWEEP_MS // steps) * steps + SPARKLE_EXIT_LIFE_MS
+    if exit_anim == "ripple":
+        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS))
+        return base + RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS
+    if exit_anim in ("note", "heart"):
+        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS))
+        return base + RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS
+    if exit_anim == "petal":
+        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS))
+        return base + RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS
+    if exit_anim in SNOW_KINDS:
+        return display_end_ms + 300
+    return None
+
+
 def plan_line_bursts(
     style: Style,
     line_index: int,
@@ -1096,9 +1133,14 @@ def plan_line_bursts(
     """把 style 的粒子档位规划成逐行 burst 列表（IR-ready dict）。
 
     时间锚与入退场动画同源：入场自显示窗口起点，退场自
-    ``max(行末, 显示末-600)`` 回溯；涟漪光环逐字跟随（每字一枚同心水波
-    环，按 char_fade 的 350ms 错峰节奏）；唱字自各字符唱字窗起点发射、
-    但窗口延伸到轨迹自然播完（不受唱字窗约束）。
+    ``max(行末, 显示末-标准窗)`` 回溯。**粒子发射与文字出入场分离**
+    （2026-10 用户口径）：七个粒子档（星光/涟漪/音符/爱心/花瓣/雪花
+    两档）的发射**恒按标准速率**（错峰/寿命/窗口全部取标准常量，
+    = 旧 600ms 基准的时序），且退场粒子**完整播放**——终点可越过
+    显示窗终点（渲染端退场尾奏通道续播，见 :func:`exit_particle_tail_end_ms`）；
+    「入场/退场动画时长」旋钮此后只控制文字逐字渐显/渐隐（拼接/
+    消散的粒子即文字形体，维持与时长耦合）。唱字自各字符唱字窗起点
+    发射、窗口延伸到轨迹自然播完（不受唱字窗约束）。
     尺寸语义：``fx_particle_size_em`` 为相对主字号的 em 比例（0.40 =
     40% 字号），此处按全局字号折算成像素下发，两后端同值。
     颜色语义：``color`` 恒为实色回退（旧 sidecar 兼容）；颜色模式非
@@ -1272,6 +1314,7 @@ def plan_line_bursts(
         scale: float,
         seed_offset: int,
         reverse: bool,
+        char_life_ms: float | None = None,
     ) -> None:
         """入/退场星光（2026-10 结构统一）：逐字符生成 ``anchor="char"``
         的粒子组，外观复用 ``_burst_paint`` 完整解析（图片/跟随前后/
@@ -1308,15 +1351,16 @@ def plan_line_bursts(
             return
         steps = max(len(slots) - 1, 1)
         stagger = int(SPARKLE_SWEEP_MS * scale) // steps
-        # 预留出生+显示时间：错峰吃掉太多会让最晚字符的窗口容不下随机
-        # 出生延迟（三字行 120ms 退场曾压到只剩 2ms）。
-        stagger_budget = max(
-            int(window_end_ms) - int(base_ms)
-            - int(SPARKLE_BIRTH_JITTER_MS)
-            - int(SPARKLE_MIN_VISIBLE_MS),
-            0,
-        )
-        stagger = min(stagger, stagger_budget // steps)
+        if char_life_ms is None:
+            # 共享窗终点模式（入场标准窗）：预留出生+显示时间，错峰吃掉
+            # 太多会让最晚字符的窗口容不下随机出生延迟。
+            stagger_budget = max(
+                int(window_end_ms) - int(base_ms)
+                - int(SPARKLE_BIRTH_JITTER_MS)
+                - int(SPARKLE_MIN_VISIBLE_MS),
+                0,
+            )
+            stagger = min(stagger, stagger_budget // steps)
         budget = max(anim_count, 1)
         counts = [0] * len(slots)
         for i in range(budget):
@@ -1335,7 +1379,11 @@ def plan_line_bursts(
                 "kind": "sparkle", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": max(int(window_end_ms), start + 1),
+                "end_ms": (
+                    start + int(char_life_ms)
+                    if char_life_ms is not None
+                    else max(int(window_end_ms), start + 1)
+                ),
                 "count": count,
                 "seed": (seed_base + seed_offset + char_index) & 0xFFFFFFFF,
                 # 星光画在主文字前（背后看不清——2026-10 用户复调；纵向
@@ -1351,24 +1399,23 @@ def plan_line_bursts(
         # 左→右扫过由逐字错峰实现（总时长 SPARKLE_SWEEP_MS 等比）。
         _sparkle_char_bursts(
             base_ms=int(display_start_ms),
-            window_end_ms=int(display_start_ms)
-            + int(SPARKLE_ENTRY_LIFE_MS * entry_scale),
-            scale=entry_scale,
+            window_end_ms=int(display_start_ms) + SPARKLE_ENTRY_LIFE_MS,
+            scale=1.0,
             seed_offset=1,
             reverse=False,
         )
     elif entry_anim == "ripple" and entry_active and display_start_ms is not None:
         _char_ripples(
-            int(display_start_ms), 2, stagger_ms=stagger, scale=entry_scale
+            int(display_start_ms), 2, stagger_ms=stagger, scale=1.0
         )
     elif entry_anim == "note" and entry_active and display_start_ms is not None:
         for char_index in range(char_count):
-            start = int(display_start_ms) + int(stagger * entry_scale) * char_index
+            start = int(display_start_ms) + stagger * char_index
             _variant_bursts({
                 "kind": "note", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + int(SING_NOTE_TOTAL_MS * entry_scale),
+                "end_ms": start + SING_NOTE_TOTAL_MS,
                 "count": 3, "seed": (seed_base + 6 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": anim_size * 1.8,
                 "front": True, "sweep": 0,
@@ -1377,12 +1424,12 @@ def plan_line_bursts(
         # 爱心飘出（2026-10 用户口径：全面克隆音符飘出，只换形状与默认
         # 红/粉双色）——逐字错峰、行程 1.8×尺寸、字顶出生上升摆动全同款。
         for char_index in range(char_count):
-            start = int(display_start_ms) + int(stagger * entry_scale) * char_index
+            start = int(display_start_ms) + stagger * char_index
             _variant_bursts({
                 "kind": "heart", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + int(SING_NOTE_TOTAL_MS * entry_scale),
+                "end_ms": start + SING_NOTE_TOTAL_MS,
                 "count": 3, "seed": (seed_base + 14 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": anim_size * 1.8,
                 "front": True, "sweep": 0,
@@ -1391,12 +1438,12 @@ def plan_line_bursts(
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
         # 抵达后熄灭），随机摇摆 + 连续翻转（\moves4 四点飘移等效观感）。
         for char_index in range(char_count):
-            start = int(display_start_ms) + int(stagger * entry_scale) * char_index
+            start = int(display_start_ms) + stagger * char_index
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + int(PETAL_LIFE_MS * entry_scale),
+                "end_ms": start + PETAL_LIFE_MS,
                 "count": 3, "seed": (seed_base + 10 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": 1,
@@ -1406,11 +1453,8 @@ def plan_line_bursts(
         # 峰）；起点略早于逐字渐隐首字（规划窗前移——行窗打开的瞬间雪花
         # 已在半空，视觉上"雪先出现"），终点略晚于逐字渐隐结束（窗口 +
         # 余尾：文字全部显形后雪花仍有余韵在落）。
-        snow_window = min(
-            max(int(getattr(style, "entry_lead_ms", 0) or 0), 120), 3000
-        )
-        snow_start = int(display_start_ms) - int(200 * entry_scale)
-        snow_end = int(display_start_ms) + snow_window + int(250 * entry_scale)
+        snow_start = int(display_start_ms) - 200
+        snow_end = int(display_start_ms) + SNOW_STD_WINDOW_MS + 250
         for char_index in range(char_count):
             _variant_bursts({
                 "kind": entry_anim, "anchor": "char",
@@ -1426,57 +1470,37 @@ def plan_line_bursts(
     if exit_anim == "sparkle" and exit_active and display_end_ms is not None:
         exit_start = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms) - int(SPARKLE_EXIT_LIFE_MS * exit_scale),
+            int(display_end_ms) - SPARKLE_EXIT_LIFE_MS,
         )
-        if int(display_end_ms) - exit_start < 120:
-            exit_start = int(display_end_ms) - 120
-        # 星光退场：逐字符 burst，整行右→左扫过（最右侧字符先启动），
-        # 窗口终点与旧档同为显示窗终点。
+        # 星光退场：逐字符 burst，整行右→左扫过（最右侧字符先启动）。
+        # 每字完整寿命——行消失后由渲染端退场尾奏通道续播到自然终点。
         _sparkle_char_bursts(
             base_ms=exit_start,
             window_end_ms=int(display_end_ms),
-            scale=exit_scale,
+            scale=1.0,
             seed_offset=3,
             reverse=True,
+            char_life_ms=SPARKLE_EXIT_LIFE_MS,
         )
     elif exit_anim == "ripple" and exit_active and display_end_ms is not None:
         exit_start = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms)
-            - int((RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS) * exit_scale),
+            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS),
         )
-        if int(display_end_ms) - exit_start < 120:
-            exit_start = int(display_end_ms) - 120
-        # 尾窗不足时压缩逐字错峰，尽量让全部水波环在行消失前完整播完。
-        tail_ms = int(display_end_ms) - exit_start - int(RIPPLE_LIFE_MS * exit_scale)
-        stagger_exit = min(
-            int(stagger * exit_scale),
-            max(0, tail_ms) // max(1, char_count - 1),
-        )
-        _char_ripples(exit_start, 4, stagger_ms=stagger_exit, scale=exit_scale)
+        # 每环完整寿命、标准错峰——行消失后由退场尾奏通道续播。
+        _char_ripples(exit_start, 4, stagger_ms=stagger, scale=1.0)
     elif exit_anim == "note" and exit_active and display_end_ms is not None:
         exit_start = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms)
-            - int((RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS) * exit_scale),
-        )
-        if int(display_end_ms) - exit_start < 120:
-            exit_start = int(display_end_ms) - 120
-        tail_ms = (
-            int(display_end_ms) - exit_start
-            - int(SING_NOTE_TOTAL_MS * exit_scale)
-        )
-        stagger_exit = min(
-            int(stagger * exit_scale),
-            max(0, tail_ms) // max(1, char_count - 1),
+            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS),
         )
         for char_index in range(char_count):
-            start = exit_start + stagger_exit * char_index
+            start = exit_start + stagger * char_index
             _variant_bursts({
                 "kind": "note", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + int(SING_NOTE_TOTAL_MS * exit_scale),
+                "end_ms": start + SING_NOTE_TOTAL_MS,
                 "count": 3, "seed": (seed_base + 8 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": anim_size * 1.8,
                 "front": True, "sweep": 0,
@@ -1485,26 +1509,15 @@ def plan_line_bursts(
         # 爱心飘出（退场，克隆音符）——同窗反向错峰、行程/数量/寿命全同款。
         exit_start_heart = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms)
-            - int((RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS) * exit_scale),
-        )
-        if int(display_end_ms) - exit_start_heart < 120:
-            exit_start_heart = int(display_end_ms) - 120
-        tail_heart = (
-            int(display_end_ms) - exit_start_heart
-            - int(SING_NOTE_TOTAL_MS * exit_scale)
-        )
-        stagger_heart = min(
-            int(stagger * exit_scale),
-            max(0, tail_heart) // max(1, char_count - 1),
+            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS),
         )
         for char_index in range(char_count):
-            start = exit_start_heart + stagger_heart * char_index
+            start = exit_start_heart + stagger * char_index
             _variant_bursts({
                 "kind": "heart", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + int(SING_NOTE_TOTAL_MS * exit_scale),
+                "end_ms": start + SING_NOTE_TOTAL_MS,
                 "count": 3, "seed": (seed_base + 15 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": anim_size * 1.8,
                 "front": True, "sweep": 0,
@@ -1512,27 +1525,16 @@ def plan_line_bursts(
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms)
-            - int((RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS) * exit_scale),
-        )
-        if int(display_end_ms) - exit_start_petal < 120:
-            exit_start_petal = int(display_end_ms) - 120
-        tail_petal = (
-            int(display_end_ms) - exit_start_petal
-            - int(PETAL_LIFE_MS * exit_scale)
-        )
-        stagger_petal = min(
-            int(stagger * exit_scale),
-            max(0, tail_petal) // max(1, char_count - 1),
+            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS),
         )
         # 花瓣飘散：每字自字框内错峰剥落、边翻转边飘落到字底下方淡出。
         for char_index in range(char_count):
-            start = exit_start_petal + stagger_petal * char_index
+            start = exit_start_petal + stagger * char_index
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + int(PETAL_LIFE_MS * exit_scale),
+                "end_ms": start + PETAL_LIFE_MS,
                 "count": 3, "seed": (seed_base + 11 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": -1,
@@ -1541,14 +1543,11 @@ def plan_line_bursts(
         # 雪花飘散（2026-10 用户口径）：与逐字渐隐**同步开始**（同一起点
         # 整行同刻），终点略晚于逐字渐隐结束（显示末之后仍有余尾——画面
         # 随行消失截断，但淡出包络完整走到低透明度而非中途被掐）。
-        snow_exit_window = min(
-            max(int(getattr(style, "exit_fade_ms", 0) or 0), 120), 3000
-        )
         snow_exit_start = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms) - snow_exit_window,
+            int(display_end_ms) - SNOW_STD_WINDOW_MS,
         )
-        snow_exit_end = int(display_end_ms) + int(300 * exit_scale)
+        snow_exit_end = int(display_end_ms) + 300
         for char_index in range(char_count):
             _variant_bursts({
                 "kind": exit_anim, "anchor": "char",
