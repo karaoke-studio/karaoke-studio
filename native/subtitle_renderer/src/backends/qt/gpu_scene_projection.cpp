@@ -657,6 +657,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 || animation == QStringLiteral("ripple")
                 || animation == QStringLiteral("note")
                 || animation == QStringLiteral("heart")
+                || animation == QStringLiteral("flame")
                 || animation == QStringLiteral("petal")
                 || animation == QStringLiteral("snow")
                 || animation == QStringLiteral("snow_solid")

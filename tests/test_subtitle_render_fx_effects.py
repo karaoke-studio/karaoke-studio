@@ -3596,3 +3596,182 @@ def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
     assert frame(2960, "note") == 0
     # 非粒子退场档不进尾奏通道：显示窗外全空。
     assert frame(2850, "fade") == 0
+
+
+def test_flame_sprite_contract():
+    """火焰 sprite = **Twemoji 🔥（U+1F525，CC-BY 4.0）外焰层官方 path 归一化**
+    （2026-10 用户口径：联网取现成形状）：M + 12×C + Z 单轮廓，包络
+    x ±444.4 / y 顶 -470（焰尖朝上），h/w ≈ 1.06。"""
+    flame = FX_SPRITES["flame"]["path_commands"]
+    assert [c[0] for c in flame] == ["M"] + ["C"] * 12 + ["Z"]
+    assert sum(1 for c in flame if c[0] == "M") == 1
+
+    def flatten():
+        out = []
+        cur = None
+        for c in flame:
+            if c[0] == "M":
+                cur = (float(c[1]), float(c[2]))
+                out.append(cur)
+            elif c[0] == "C":
+                p0 = cur
+                p1 = (float(c[1]), float(c[2]))
+                p2 = (float(c[3]), float(c[4]))
+                p3 = (float(c[5]), float(c[6]))
+                for k in range(1, 33):
+                    t = k / 32
+                    mt = 1 - t
+                    out.append((
+                        mt**3*p0[0] + 3*mt*mt*t*p1[0] + 3*mt*t*t*p2[0] + t**3*p3[0],
+                        mt**3*p0[1] + 3*mt*mt*t*p1[1] + 3*mt*t*t*p2[1] + t**3*p3[1],
+                    ))
+                cur = p3
+        return out
+
+    pts = flatten()
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert max(xs) == pytest.approx(444.4, abs=0.5)
+    assert min(xs) == pytest.approx(-444.4, abs=0.5)
+    assert min(ys) == pytest.approx(-470.0, abs=0.5)
+    w = max(xs) - min(xs)
+    h = max(ys) - min(ys)
+    assert 1.0 <= h / w <= 1.12  # 火焰略高
+    # 焰尖在顶部近中线（顶部 2% 高度内有点且 |x| 远小于半宽）。
+    top_zone = [p for p in pts if p[1] < min(ys) + h * 0.02]
+    assert top_zone and max(abs(p[0]) for p in top_zone) < w * 0.2
+    # 底部圆钝：底部 10% 高度内的点覆盖半宽的 60% 以上（圆底不是尖底）。
+    bottom_zone = [p for p in pts if p[1] > max(ys) - h * 0.10]
+    assert max(abs(p[0]) for p in bottom_zone) > w * 0.28
+    assert sprite_for_kind("flame") == "flame"
+
+
+def test_flame_plans_entry_exit_only_standard_rate():
+    """火焰只做出入场（无唱字分支）；发射按分离口径恒标准速率——时长旋钮
+    不改粒子窗口；退场完整播放越过显示窗终点；默认双色=Twemoji 火焰对。"""
+    def windows(exit_fade_ms: int):
+        style = Style(
+            entry_anim="flame", entry_lead_ms=600,
+            exit_anim="flame", exit_fade_ms=exit_fade_ms,
+            font_size_px=100, karaoke_anim="none",
+        )
+        return plan_line_bursts(
+            style, 0, 1000, 4200, 4100,
+            [(1200, 1600), (1600, 2000), (2000, 3000)],
+        )
+
+    for fade in (120, 600, 3000):
+        bursts = windows(fade)
+        entry = sorted(
+            (b["start_ms"], b["end_ms"])
+            for b in bursts
+            if b["kind"] == "flame" and b["start_ms"] < 1500
+        )
+        exit_ = sorted(
+            (b["start_ms"], b["end_ms"])
+            for b in bursts
+            if b["kind"] == "flame" and b["start_ms"] >= 3000
+        )
+        # 入场：锚 1000、错峰 175、寿命 1100、每字 4 颗拆双色 2+2。
+        assert entry == [
+            (1000, 2100), (1000, 2100),
+            (1175, 2275), (1175, 2275),
+            (1350, 2450), (1350, 2450),
+        ], fade
+        # 退场：锚 max(4100, 4200-1450)=4100、末字越过 4200 完整燃尽。
+        assert exit_ == [
+            (4100, 5200), (4100, 5200),
+            (4275, 5375), (4275, 5375),
+            (4450, 5550), (4450, 5550),
+        ], fade
+        assert {b["color"] for b in bursts if b["kind"] == "flame"} == {
+            "#F4900C", "#FFCC4D",
+        }
+    # 无唱字分支：sing_fx=flame 不发射（未知唱字档回落 none）。
+    sing = Style(sing_fx="flame", karaoke_anim="none", font_size_px=100)
+    assert [
+        b for b in plan_line_bursts(sing, 0, 0, 3000, 2900, [(100, 400)])
+        if b["kind"] == "flame"
+    ] == []
+
+
+def test_flame_trajectory_rises_grows_and_flickers():
+    """火焰轨迹（Burning 模板火粒层等效）：单调上升、尺寸随燃烧增大、
+    快显长灭（alpha 前段已达峰、末段归零）、出生在字框内。"""
+    base = {
+        "kind": "flame", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 1100, "count": 6, "seed": 4242,
+        "size_px": 30.0, "travel_px": 60.0, "front": True, "sweep": 0,
+    }
+    early = burst_particles_at(base, 250, 0.0, 0.0, 120.0, 100.0)
+    late = burst_particles_at(base, 950, 0.0, 0.0, 120.0, 100.0)
+    assert early == burst_particles_at(base, 250, 0.0, 0.0, 120.0, 100.0)
+    assert len(early) > 0
+    for a, b in zip(early, late):
+        assert b.y < a.y  # 上升
+        assert b.size_px > a.size_px  # 燃烧增大（模板 fscx200→300 口径）
+        assert abs(a.x) <= 120.0 * 0.35 + 30.0 * 0.30 + 1.0  # 出生+摇摆不出字框太远
+        assert -60.0 <= a.y <= 60.0  # 出生在字框带内
+    for state in late:
+        assert 0.0 < state.alpha <= 1.0
+    # 快显：alpha 在 1/6 寿命处已接近峰值包络。
+    quarter = burst_particles_at(base, 200, 0.0, 0.0, 120.0, 100.0)
+    assert all(s.alpha > 0.0 for s in quarter)
+    # 窗口外为空。
+    assert burst_particles_at(base, -1, 0.0, 0.0, 120.0, 100.0) == []
+    assert burst_particles_at(base, 1101, 0.0, 0.0, 120.0, 100.0) == []
+
+
+def test_flame_gpu_support_and_override_roundtrip():
+    """火焰出入场档不触发 GPU 整帧回退；逐行覆盖可往返序列化（无唱字）。"""
+    track = type("Track", (), {"lines": []})()
+    style = Style(
+        entry_anim="flame",
+        exit_anim="flame",
+        karaoke_anim="inherit",
+        reverse_karaoke_anim="inherit",
+    )
+    assert gpu_unsupported_features(track, style) == ()
+    data = line_animation_override_to_dict(
+        LineAnimationOverride(entry_anim="flame", exit_anim="flame")
+    )
+    restored = line_animation_override_from_dict(data)
+    assert restored is not None
+    assert restored.entry_anim == "flame"
+    assert restored.exit_anim == "flame"
+
+
+def test_painter_flame_smoke(qapp):
+    """CPU painter 火焰两档冒烟：入场/退场各一帧不抛异常。"""
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000),
+                    TimingChar(text="い", start_ms=1600),
+                ],
+                end_ms=2200,
+            )
+        ]
+    )
+    entry = Style(
+        entry_anim="flame",
+        entry_lead_ms=600,
+        karaoke_anim="utopia",
+    )
+    img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0xFF101010)
+    paint_frame(img, track, 1100, entry)
+    exit_style = Style(
+        exit_anim="flame",
+        exit_fade_ms=600,
+        karaoke_anim="utopia",
+    )
+    img2 = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img2.fill(0xFF101010)
+    paint_frame(img2, track, 2100, exit_style)

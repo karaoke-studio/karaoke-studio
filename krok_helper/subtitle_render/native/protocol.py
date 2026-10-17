@@ -480,12 +480,12 @@ def gpu_unsupported_features(
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
         "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
-        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
     } or (
         style.exit_anim not in {
             "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
             "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
-            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
         }
     ):
         reasons.append("line_animation")
@@ -538,6 +538,7 @@ def gpu_unsupported_features(
                     "ripple",
                     "note",
                     "heart",
+                    "flame",
                     "petal",
                     "snow",
                     "snow_solid",

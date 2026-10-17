@@ -12,11 +12,13 @@ EntryAnimation = Literal[
     "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
     "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+    "flame",
 ]
 ExitAnimation = Literal[
     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
     "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+    "flame",
 ]
 
 # ---- 2026-09 新增线性特效注册表（增删特效只改这里 + transitions.py 求值器） ----
@@ -37,10 +39,10 @@ EXIT_ASSEMBLE_ANIMS: frozenset[str] = frozenset({"dissolve_out"})
 # 粒子类出入场动画（星光闪烁 / 涟漪光环 / 音符飘出 / 花瓣飘入·飘散）：
 # 文字逐字显形/淡出（粒子拼接同款编排）+ 固定默认档粒子叠加。
 ENTRY_PARTICLE_ANIMS: frozenset[str] = frozenset(
-    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid"}
+    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame"}
 )
 EXIT_PARTICLE_ANIMS: frozenset[str] = frozenset(
-    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid"}
+    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame"}
 )
 # 全部逐字过渡类（含 N3 既有 char_fade 家族 + utopia）：参与
 # line_char_transition_context 的入场/退场窗口判定。

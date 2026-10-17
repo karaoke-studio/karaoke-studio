@@ -191,8 +191,8 @@ GeoCharState geoCharState(
         return state;
     }
     if (effect == "sparkle" || effect == "ripple" || effect == "note"
-        || effect == "heart" || effect == "petal" || effect == "snow"
-        || effect == "snow_solid") {
+        || effect == "heart" || effect == "flame" || effect == "petal"
+        || effect == "snow" || effect == "snow_solid") {
         // 粒子类出入场动画的本体：文字逐字显形（入场 4 倍速透明度，
         // 粒子拼接同款编排），退场逐字淡出；粒子由 planner 叠加。
         const float p = staggerProgress;
@@ -446,6 +446,36 @@ std::vector<FxParticle> burstParticlesAt(
                 size * (0.70f + 0.60f * u1)
                     * (0.85f + 0.15f * std::sin(pi * p)),
                 1.0f - std::sqrt(p) * p,
+            });
+        } else if (burst.kind == "flame") {
+            // 火焰（镜像 particles.burst_particles_at flame 分支，Aegisub
+            // Luc Van Tien「Burning」火粒层等效）：字框内随机出生 → 缓慢
+            // 上升 + 横向摇摆 + 尺寸随燃烧增大 → 快显长灭 + 高频闪烁。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float delay = u3 * life * 0.30f;
+            const float p = std::clamp(
+                (tau - delay) / std::max(life - delay, 1.0f), 0.0f, 1.0f
+            );
+            if (p <= 0.0f) {
+                continue;
+            }
+            const float rise = travel * p;
+            const float sway =
+                std::sin((u2 + p * 1.2f) * 2.0f * pi) * size * 0.30f;
+            const float flicker =
+                0.85f + 0.15f * std::sin((p * 3.0f + u4) * 2.0f * pi);
+            out.push_back(FxParticle{
+                originX + (u1 - 0.5f) * boxW * 0.7f + sway,
+                originY + (u2 - 0.4f) * boxH * 0.5f - rise,
+                (u4 - 0.5f) * 40.0f
+                    + std::sin((p * 2.0f + u1) * 2.0f * pi) * 10.0f,
+                size * (0.75f + 0.50f * u1) * (1.0f + 0.50f * p),
+                std::min(p * 6.0f, 1.0f)
+                    * std::pow(1.0f - p, 1.5f) * flicker,
             });
         } else if (burst.kind == "petal") {
             // 花瓣飘落（镜像 particles.burst_particles_at petal 分支）：

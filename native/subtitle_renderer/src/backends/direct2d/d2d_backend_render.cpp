@@ -545,8 +545,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             if (
                 exitAnim == "sparkle" || exitAnim == "ripple"
                 || exitAnim == "note" || exitAnim == "heart"
-                || exitAnim == "petal" || exitAnim == "snow"
-                || exitAnim == "snow_solid"
+                || exitAnim == "flame" || exitAnim == "petal"
+                || exitAnim == "snow" || exitAnim == "snow_solid"
             ) {
                 for (const ParticleBurst &burst : candidate.bursts) {
                     if (tMs >= burst.startMs && tMs < burst.endMs) {
@@ -780,8 +780,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const std::string &exitAnim = line->exitAnimation;
                     if (exitAnim == "sparkle" || exitAnim == "ripple"
                         || exitAnim == "note" || exitAnim == "heart"
-                        || exitAnim == "petal" || exitAnim == "snow"
-                        || exitAnim == "snow_solid") {
+                        || exitAnim == "flame" || exitAnim == "petal"
+                        || exitAnim == "snow" || exitAnim == "snow_solid") {
                         for (const ParticleBurst &burst : line->bursts) {
                             if (tMs >= burst.startMs && tMs < burst.endMs) {
                                 particleExitTail = true;
@@ -832,16 +832,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 || animation == "glow_in" || animation == "stretch_in"
                 || animation == "assemble_in" || animation == "sparkle"
                 || animation == "ripple" || animation == "note"
-                || animation == "heart" || animation == "petal"
-                || animation == "snow" || animation == "snow_solid";
+                || animation == "heart" || animation == "flame"
+                || animation == "petal" || animation == "snow"
+                || animation == "snow_solid";
         };
         const auto isGeoExit = [](const std::string &animation) {
             return animation == "scatter_out" || animation == "converge_out"
                 || animation == "glow_out" || animation == "stretch_out"
                 || animation == "dissolve_out" || animation == "sparkle"
                 || animation == "ripple" || animation == "note"
-                || animation == "heart" || animation == "petal"
-                || animation == "snow" || animation == "snow_solid";
+                || animation == "heart" || animation == "flame"
+                || animation == "petal" || animation == "snow"
+                || animation == "snow_solid";
         };
         const auto isGeoTransition = [&](const std::string &animation) {
             return isGeoEntry(animation) || isGeoExit(animation);
