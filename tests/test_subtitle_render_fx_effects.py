@@ -4062,3 +4062,43 @@ def test_painter_flame_smoke(qapp):
     img2 = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
     img2.fill(0xFF101010)
     paint_frame(img2, track, 2100, exit_style)
+
+
+def test_front_particles_paint_after_ruby_layer():
+    """前层装饰粒子必须画在注音之后（2026-10-18 用户口径：粒子本体在
+    主文字前，生长时不应被注音压住——front 统一盖过正文与注音）。
+
+    这是双端图层顺序的源码级护栏：painter 三处 front 调用紧跟在
+    paint_rubies_on_top() 之后；D2D 的 drawFxBursts(true) 在 ruby 循环后。
+    """
+    import inspect
+    from pathlib import Path
+
+    from krok_helper.subtitle_render.engine import painter as painter_module
+
+    source = inspect.getsource(painter_module._paint_line_static)
+    lines = [line.strip() for line in source.splitlines()]
+    hits = 0
+    for index, line in enumerate(lines):
+        if not line.startswith("paint_fx_particles(front=True)"):
+            continue
+        probe = index - 1
+        while probe >= 0 and (
+            not lines[probe] or lines[probe].startswith("#")
+        ):
+            probe -= 1
+        assert lines[probe] == "paint_rubies_on_top()"
+        hits += 1
+    assert hits >= 3
+
+    gpu_source = (
+        Path(__file__).resolve().parents[1]
+        / "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
+    ).read_text(encoding="utf-8")
+    marker = "// 前层装饰粒子：画在注音之后"
+    front_call = gpu_source.index("drawFxBursts(true);", gpu_source.index(marker))
+    ruby_loop = gpu_source.index(
+        "for (std::size_t rubyIndex = 0;"
+        " rubyIndex < line->rubies.size(); ++rubyIndex)"
+    )
+    assert front_call > ruby_loop

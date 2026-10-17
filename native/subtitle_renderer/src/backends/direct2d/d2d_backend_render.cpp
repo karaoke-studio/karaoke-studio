@@ -7471,12 +7471,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         };
-        // 唱字描边闪光 + 前层装饰粒子：主文字之上、注音之下（painter 同序）。
-        if (line->strokeFlashEnabled || !line->bursts.empty()) {
+        // 唱字描边闪光：主文字之上、注音之下（painter 同序）。
+        if (line->strokeFlashEnabled) {
             context->SetTransform(realizationBaseTransform);
             sharedInstanceTransformActive = false;
             drawStrokeFlash();
-            drawFxBursts(true);
         }
         for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
             const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
@@ -7572,6 +7571,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     context->PopAxisAlignedClip();
                 }
             }
+        }
+
+        // 前层装饰粒子：画在注音之后（2026-10-18 用户口径：本体在主
+        // 文字前、生长时不应被注音压住；front 统一盖过正文与注音）。
+        if (!line->bursts.empty()) {
+            context->SetTransform(realizationBaseTransform);
+            sharedInstanceTransformActive = false;
+            drawFxBursts(true);
         }
 
         // Ruby uses the same inner-only feathering as the main text.

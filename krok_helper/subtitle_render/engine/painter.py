@@ -4510,8 +4510,10 @@ def _paint_line_static(
                 ),
             )
             paint_stroke_flash()
-            paint_fx_particles(front=True)
+            # 前层粒子画在注音之后（2026-10-18 用户口径：本体在主文字
+            # 前、生长时不应被注音压住；front 统一盖过正文与注音）。
             paint_rubies_on_top()
+            paint_fx_particles(front=True)
             return
         if layout.has_inline_styles:
             _paint_role_line_with_character_transition(
@@ -4547,8 +4549,9 @@ def _paint_line_static(
                 guide_anim_anchor_ms=guide_anim_anchor_ms,
             )
         paint_stroke_flash()
-        paint_fx_particles(front=True)
+        # 前层粒子画在注音之后（同上：front 层盖过正文与注音）。
         paint_rubies_on_top()
+        paint_fx_particles(front=True)
         return
 
     # paint 段：消费 layout。默认 blit 未唱层 + 已唱层；测试/调试可回退同 layout 直绘。
@@ -4559,8 +4562,9 @@ def _paint_line_static(
         _paint_line_direct(painter, layout, t_ms, guide_anim_anchor_ms)
     _paint_main_scanline_static(painter, layout, t_ms, style)
     paint_stroke_flash()
-    paint_fx_particles(front=True)
+    # 前层粒子画在注音之后（同上：front 层盖过正文与注音）。
     paint_rubies_on_top()
+    paint_fx_particles(front=True)
 
 
 def _track_line_index(track: TimingTrack, line: TimingLine) -> int:
