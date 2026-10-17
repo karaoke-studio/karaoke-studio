@@ -438,6 +438,9 @@ class SubtitleStyleScheme:
     allow_biting: Optional[bool] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
+    latin_italic: Optional[bool] = None
+    ruby_italic: Optional[bool] = None
+    ruby_latin_italic: Optional[bool] = None
     affects_ruby_anchor: Optional[bool] = None
     """Whether glyphs using this scheme contribute to the shared ruby baseline."""
     base_color: Optional[str] = None
@@ -495,17 +498,20 @@ N3_FONT_INHERITANCE_FIELDS: tuple[str, ...] = (
     "font_family_latin",
     "latin_font_size_px",
     "latin_font_weight",
+    "latin_italic",
     "latin_stroke_width_px",
     "latin_stroke2_enabled",
     "latin_stroke2_width_px",
     "ruby_font_family",
     "ruby_font_weight",
+    "ruby_italic",
     "ruby_stroke_width_px",
     "ruby_stroke2_enabled",
     "ruby_stroke2_width_px",
     "ruby_font_family_latin",
     "ruby_latin_font_size_px",
     "ruby_latin_font_weight",
+    "ruby_latin_italic",
     "ruby_latin_stroke_width_px",
     "ruby_latin_stroke2_enabled",
     "ruby_latin_stroke2_width_px",
@@ -867,6 +873,17 @@ class Style:
 
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
+    """主文字·日文槽的斜体（四个字体槽的主组）。
+
+    其余三个槽的斜体沿 ``latin_italic`` / ``ruby_italic`` /
+    ``ruby_latin_italic`` 独立控制；``None`` = 跟随上一级（与描边 2 开关
+    同一条跟随链：英数→主文字日文、注音日文→主文字、注音英数→注音日文）。
+    旧工程只存 ``italic``：三个新槽缺省 ``None`` = 三跟随，原值自然落在
+    日文-主文字组，画面逐字节不变。
+    """
+    latin_italic: Optional[bool] = None
+    ruby_italic: Optional[bool] = None
+    ruby_latin_italic: Optional[bool] = None
     affects_ruby_anchor: bool = True
     """该样式字符是否参与整行统一 ruby 基线的高度计算。"""
 
@@ -2222,7 +2239,7 @@ def style_from_dict(payload: object) -> Style:
                 value
                 if value in {
                     "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-                    "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+                    "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
                 }
                 else defaults.entry_anim
             )
@@ -2231,7 +2248,7 @@ def style_from_dict(payload: object) -> Style:
                 value
                 if value in {
                     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-                    "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+                    "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
                 }
                 else defaults.exit_anim
             )
@@ -2332,7 +2349,7 @@ def style_from_dict(payload: object) -> Style:
                 value
                 if value in {
                     "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-                    "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+                    "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
                 }
                 else defaults.section_head_anim
             )
@@ -2341,7 +2358,7 @@ def style_from_dict(payload: object) -> Style:
                 value
                 if value in {
                     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-                    "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+                    "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
                 }
                 else defaults.section_tail_anim
             )
@@ -2382,6 +2399,9 @@ def style_from_dict(payload: object) -> Style:
             "latin_stroke2_enabled",
             "ruby_stroke2_enabled",
             "ruby_latin_stroke2_enabled",
+            "latin_italic",
+            "ruby_italic",
+            "ruby_latin_italic",
         }:
             changes[key] = None if value is None else bool(value)
         elif value is not None:
@@ -3088,6 +3108,9 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
         elif key in {
             "ruby_colors_follow_main",
             "ruby_horizontal_gradient_with_main",
+            "latin_italic",
+            "ruby_italic",
+            "ruby_latin_italic",
         }:
             changes[key] = bool(value) if value is not None else None
         else:

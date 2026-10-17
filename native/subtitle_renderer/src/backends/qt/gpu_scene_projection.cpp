@@ -132,6 +132,12 @@ void applyGpuResolvedStyle(
     target.latinFontHint = source.latinFontHint;
     target.latinFontStretchPct = source.latinFontStretchPct;
     target.italic = source.italic;
+    // Per-slot italic: the same inheritance chain as the stroke2 switch
+    // (latin/ruby follow the main text; ruby-latin follows the resolved ruby
+    // value).  Resolved here once so every backend consumes plain bools.
+    target.latinItalic = source.latinItalic.value_or(source.italic);
+    target.rubyItalic = source.rubyItalic.value_or(source.italic);
+    target.rubyLatinItalic = source.rubyLatinItalic.value_or(target.rubyItalic);
     target.allowBiting = source.allowBiting;
     target.affectsRubyAnchor = source.affectsRubyAnchor;
     target.spaceWidthPercent = source.spaceWidthPercent;
@@ -650,6 +656,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 || animation == QStringLiteral("sparkle")
                 || animation == QStringLiteral("ripple")
                 || animation == QStringLiteral("note")
+                || animation == QStringLiteral("heart")
                 || animation == QStringLiteral("petal")
                 || animation == QStringLiteral("snow")
                 || animation == QStringLiteral("snow_solid")

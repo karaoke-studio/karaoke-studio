@@ -76,12 +76,21 @@ SNOW_B = "#BFDFFF"
 # 运动签名、配色与出入场时序完全同源，只有 sprite 不同——规划器/求值器里
 # 所有按 snow 分流的判断都必须用本集合，别写成单值比较。
 SNOW_KINDS = frozenset({"snow", "snow_solid"})
+# 「默认颜色」档的爱心双色（2026-10 用户口径：红 + 粉；爱心档全面克隆
+# 音符飘出的三档特效，只换形状与默认色）。取自 canvify 情人节配色表：
+# Classic Valentine Red #E63946 + Blush Pink #F9C2D1——小尺寸实心剪影下
+# 红/粉明度差最大、互不混色；深度红（#C8102E 一族）在深色视频上读暗，弃用。
+HEART_A = "#E63946"
+HEART_B = "#F9C2D1"
 
 
-def _default_color_pair(snow: bool) -> tuple[str, str]:
+def _default_color_pair(snow: bool, heart: bool = False) -> tuple[str, str]:
     """按 kind 的默认双色（固定默认档与「默认颜色」模式共用）：雪花=雪白
-    +冰蓝；花瓣与其余 kind 维持樱花粉（b5a1b7fb 用户口径不回归）。"""
+    +冰蓝；爱心=正红+浅粉；花瓣与其余 kind 维持樱花粉（b5a1b7fb 用户口径
+    不回归）。"""
 
+    if heart:
+        return (HEART_A, HEART_B)
     return (SNOW_A, SNOW_B) if snow else (SAKURA_PINK_A, SAKURA_PINK_B)
 # 出入场动画驱动的粒子（星光/涟漪/音符/花瓣/拼接/消散）默认用固定默认档：
 # 樱花粉双色随机混发 + 40% 字号（2026-10 用户口径：出入场粒子用「默认
@@ -401,6 +410,7 @@ def particle_variant_paints(
     *,
     petal: bool = False,
     snow: bool = False,
+    heart: bool = False,
     include_strokes: bool = True,
 ) -> list[dict[str, object]] | None:
     """双色随机模式的**变体实色/规格列表**（2026-10 花瓣特效口径）：
@@ -432,7 +442,7 @@ def particle_variant_paints(
             return [{"color": fallback}]
         return [{"color": fallback}, {"color": color2}]
     if mode == "sakura":
-        pair = _default_color_pair(snow)
+        pair = _default_color_pair(snow, heart)
         return [{"color": pair[0]}, {"color": pair[1]}]
 
     layers = str(
@@ -900,6 +910,26 @@ def _snow_solid_commands() -> list[list[object]]:
     return commands
 
 
+def _heart_commands() -> list[list[object]]:
+    """爱心剪影（kind ``heart``，2026-10 用户口径：全面克隆音符飘出的
+    三档特效，只换形状与默认红/粉双色）。经典心形 = 两圆 + 45° 方的构造
+    （画法参考 Inkscape/graphicdesign 两椭圆交并的经典作图）转成贝塞尔
+    单轮廓：顶部中央缺刻、双圆瓣、两侧下摆收尖底；宽 ±250、高约 640
+    （h/w ≈ 1.25，经典心形比例），M + 4×C + Z 单轮廓无自交叠。"""
+    return [
+        ["M", 0.0, -170.0],
+        # 顶部缺刻 → 左圆瓣外弧 → 左最宽点（-250, -148）
+        ["C", -62.0, -322.0, -250.0, -302.0, -250.0, -148.0],
+        # 左侧下摆汇拢到底尖
+        ["C", -250.0, -42.0, -122.0, 34.0, 0.0, 322.0],
+        # 右侧下摆（镜像）
+        ["C", 122.0, 34.0, 250.0, -42.0, 250.0, -148.0],
+        # 右圆瓣外弧回缺刻（镜像）
+        ["C", 250.0, -302.0, 62.0, -322.0, 0.0, -170.0],
+        ["Z"],
+    ]
+
+
 FX_SPRITES: dict[str, dict[str, object]] = {
     "star4": _sprite_ir(_star4_commands()),
     "ring": _sprite_ir(_ring_commands()),
@@ -908,6 +938,7 @@ FX_SPRITES: dict[str, dict[str, object]] = {
     "petal": _sprite_ir(_petal_commands()),
     "snow": _sprite_ir(_snow_commands()),
     "snow_solid": _sprite_ir(_snow_solid_commands()),
+    "heart": _sprite_ir(_heart_commands()),
 }
 
 _SPRITE_FOR_KIND = {
@@ -921,6 +952,7 @@ _SPRITE_FOR_KIND = {
     "petal": "petal",
     "snow": "snow",
     "snow_solid": "snow_solid",
+    "heart": "heart",
 }
 
 
@@ -1005,6 +1037,7 @@ def _cached_particle_variants(
     *,
     petal: bool,
     snow: bool = False,
+    heart: bool = False,
     include_strokes: bool,
 ) -> list[dict[str, object]] | None:
     key = (
@@ -1013,6 +1046,7 @@ def _cached_particle_variants(
         round(float(size_px), 3),
         bool(petal),
         bool(snow),
+        bool(heart),
         bool(include_strokes),
     )
     entry = _VARIANT_CACHE.get(key)
@@ -1029,6 +1063,7 @@ def _cached_particle_variants(
         size_px,
         petal=petal,
         snow=snow,
+        heart=heart,
         include_strokes=include_strokes,
     )
     if len(_VARIANT_CACHE) >= _VARIANT_CACHE_MAX:
@@ -1113,6 +1148,7 @@ def plan_line_bursts(
         ring: bool = False,
         petal: bool = False,
         snow: bool = False,
+        heart: bool = False,
     ) -> list[dict[str, object]]:
         """burst 的颜色规格**列表**：固定默认档（按 kind 的默认双色）/ 实色
         回退 (+ 取色层级的装饰规格) / 双色档的变体规格列表
@@ -1134,8 +1170,8 @@ def plan_line_bursts(
         if anim and not apply_to_anim:
             # 固定默认档 = 按 kind 的默认双色随机混发（2026-10 用户口径：
             # 出入场粒子用「默认颜色」而非单独颜色的默认白；樱花粉为既有
-            # 口径，雪花按 kind 取雪白+冰蓝）。
-            pair = _default_color_pair(snow)
+            # 口径，雪花按 kind 取雪白+冰蓝，爱心取正红+浅粉）。
+            pair = _default_color_pair(snow, heart)
             return [{"color": pair[0]}, {"color": pair[1]}]
         char_style = _char_style(char_index)
         variants = _cached_particle_variants(
@@ -1144,6 +1180,7 @@ def plan_line_bursts(
             burst_size,
             petal=petal,
             snow=snow,
+            heart=heart,
             include_strokes=not ring,
         )
         if variants is not None:
@@ -1334,6 +1371,20 @@ def plan_line_bursts(
                 "size_px": anim_size, "travel_px": anim_size * 1.8,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, anim_size, anim=True))
+    elif entry_anim == "heart" and entry_active and display_start_ms is not None:
+        # 爱心飘出（2026-10 用户口径：全面克隆音符飘出，只换形状与默认
+        # 红/粉双色）——逐字错峰、行程 1.8×尺寸、字顶出生上升摆动全同款。
+        for char_index in range(char_count):
+            start = int(display_start_ms) + int(stagger * entry_scale) * char_index
+            _variant_bursts({
+                "kind": "heart", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start,
+                "end_ms": start + int(SING_NOTE_TOTAL_MS * entry_scale),
+                "count": 3, "seed": (seed_base + 14 + char_index) & 0xFFFFFFFF,
+                "size_px": anim_size, "travel_px": anim_size * 1.8,
+                "front": True, "sweep": 0,
+            }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif entry_anim == "petal" and entry_active and display_start_ms is not None:
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
         # 抵达后熄灭），随机摇摆 + 连续翻转（\moves4 四点飘移等效观感）。
@@ -1428,6 +1479,34 @@ def plan_line_bursts(
                 "size_px": anim_size, "travel_px": anim_size * 1.8,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, anim_size, anim=True))
+    elif exit_anim == "heart" and exit_active and display_end_ms is not None:
+        # 爱心飘出（退场，克隆音符）——同窗反向错峰、行程/数量/寿命全同款。
+        exit_start_heart = max(
+            int(line_end_ms) if line_end_ms is not None else 0,
+            int(display_end_ms)
+            - int((RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS) * exit_scale),
+        )
+        if int(display_end_ms) - exit_start_heart < 120:
+            exit_start_heart = int(display_end_ms) - 120
+        tail_heart = (
+            int(display_end_ms) - exit_start_heart
+            - int(SING_NOTE_TOTAL_MS * exit_scale)
+        )
+        stagger_heart = min(
+            int(stagger * exit_scale),
+            max(0, tail_heart) // max(1, char_count - 1),
+        )
+        for char_index in range(char_count):
+            start = exit_start_heart + stagger_heart * char_index
+            _variant_bursts({
+                "kind": "heart", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start,
+                "end_ms": start + int(SING_NOTE_TOTAL_MS * exit_scale),
+                "count": 3, "seed": (seed_base + 15 + char_index) & 0xFFFFFFFF,
+                "size_px": anim_size, "travel_px": anim_size * 1.8,
+                "front": True, "sweep": 0,
+            }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
             int(line_end_ms) if line_end_ms is not None else 0,
@@ -1583,7 +1662,7 @@ def plan_line_bursts(
                 "size_px": size, "travel_px": 0.0,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, size, anim=False, snow=True))
-    elif style.sing_fx in ("twinkle", "twinkle_classic", "note"):
+    elif style.sing_fx in ("twinkle", "twinkle_classic", "note", "heart"):
         # 唱字星光并入出入场星光运动学后，密度对齐出入场观感（默认 7/字）；
         # 「旧版」档（twinkle_classic）保留 2026-10 运动学改造前的原地闪烁
         # 观感，颗数沿用旧口径（默认 3/字）。
@@ -1593,7 +1672,11 @@ def plan_line_bursts(
             per_char = max(3, count // 4)
         else:
             per_char = 3
-        total = SING_NOTE_TOTAL_MS if style.sing_fx == "note" else SING_TWINKLE_TOTAL_MS
+        total = (
+            SING_NOTE_TOTAL_MS
+            if style.sing_fx in ("note", "heart")
+            else SING_TWINKLE_TOTAL_MS
+        )
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
             if duration <= 0:
@@ -1616,7 +1699,10 @@ def plan_line_bursts(
                 # 旧版档原地闪烁（sweep=0，无扫过）。
                 "size_px": size, "travel_px": size * 1.8, "front": True,
                 "sweep": 1 if style.sing_fx == "twinkle" else 0,
-            }, _burst_paint(char_index, size, anim=False))
+            }, _burst_paint(
+                char_index, size, anim=False,
+                heart=style.sing_fx == "heart",
+            ))
     return bursts
 
 
@@ -1804,8 +1890,9 @@ def burst_particles_at(
                 size * (0.75 + 0.25 * (1.0 - eased)),
                 (1.0 - p) * (1.0 - p * 0.5),
             ))
-        elif kind == "note":
-            # 音符：出生点在字框顶部随机横移，上升带随机摆动，随机大小。
+        elif kind in ("note", "heart"):
+            # 音符/爱心（爱心克隆音符运动学，2026-10 用户口径）：出生点在
+            # 字框顶部随机横移，上升带随机摆动，随机大小。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)

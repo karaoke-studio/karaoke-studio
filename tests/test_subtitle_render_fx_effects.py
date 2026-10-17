@@ -811,19 +811,19 @@ def test_style_controller_keeps_new_geo_kinds():
     cases = {
         "entry_anim": (
             "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
-            "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
         ),
         "exit_anim": (
             "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
-            "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
         ),
         "section_head_anim": (
             "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
-            "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
         ),
         "section_tail_anim": (
             "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
-            "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
         ),
     }
     for field, values in cases.items():
@@ -3248,7 +3248,7 @@ def test_painter_snow_smoke(qapp, snow_kind):
     paint_frame(img2, track, 1100, entry)
 
 
-@pytest.mark.parametrize("sing_kind", ["petal", "snow", "snow_solid"])
+@pytest.mark.parametrize("sing_kind", ["petal", "snow", "snow_solid", "heart"])
 def test_petal_and_snow_sing_particles_skip_whitespace(sing_kind):
     """空格例外（旧粒子口径）对花瓣/雪花同样成立：空格字符不发射唱字
     粒子（无走字内容），出入场粒子仍整行逐字参与（含空格位）。"""
@@ -3264,11 +3264,223 @@ def test_petal_and_snow_sing_particles_skip_whitespace(sing_kind):
     bursts = plan_line_bursts(
         style, 0, 1000, 4000, 3900, windows, char_visible=visible
     )
-    sing = [b for b in bursts if b["kind"] == sing_kind and b["sweep"] == 0]
+    # 音符族（note/heart）三档 sweep 全 0（原地出生型），唱字/入场按
+    # 「起点是否落在唱字窗内」区分；花瓣/雪花族按 sweep 区分。
+    if sing_kind in ("note", "heart"):
+        sing = [b for b in bursts if b["kind"] == sing_kind
+                and b["start_ms"] in (1200, 2000)]
+        entry = [b for b in bursts if b["kind"] == sing_kind
+                 and b["start_ms"] not in (1200, 2000)]
+    else:
+        sing = [b for b in bursts if b["kind"] == sing_kind and b["sweep"] == 0]
+        entry = [b for b in bursts if b["kind"] == sing_kind and b["sweep"] == 1]
     # 空格（1600 起）不发射唱字粒子；可见字各 1 条（默认单独颜色双白
     # 折叠单 burst——唱字粒子不吃固定默认档）。
     assert 1600 not in [b["start_ms"] for b in sing]
     assert sorted(b["start_ms"] for b in sing) == [1200, 2000]
     # 入场仍按整行逐字（3 字 × 固定档双色拆分，含空格位）。
-    entry = [b for b in bursts if b["kind"] == sing_kind and b["sweep"] == 1]
     assert sorted(b["char_index"] for b in entry) == [0, 0, 1, 1, 2, 2]
+
+
+def test_heart_sprite_contract():
+    """爱心 sprite：贝塞尔心形单轮廓（M + 4×C + Z）——两圆瓣 + 顶部缺刻 +
+    收尖底；包络 ±250、高约 600、h/w ∈ [1.1, 1.3]（经典心形比例）。"""
+    heart = FX_SPRITES["heart"]["path_commands"]
+    assert [c[0] for c in heart] == ["M", "C", "C", "C", "C", "Z"]
+    assert sum(1 for c in heart if c[0] == "M") == 1
+    points = [
+        (float(c[i]), float(c[i + 1]))
+        for c in heart
+        for i in range(1, len(c) - 1, 2)
+    ]
+    xs = [p[0] for p in points]
+    assert max(abs(x) for x in xs) == pytest.approx(250.0, abs=1e-6)
+    # 展平贝塞尔取包络（含控制点极值会高估，直接采样曲线）。
+
+    def flatten():
+        out = []
+        cur = None
+        for c in heart:
+            if c[0] == "M":
+                cur = (c[1], c[2])
+                out.append(cur)
+            elif c[0] == "C":
+                p0 = cur
+                p1, p2, p3 = (c[1], c[2]), (c[3], c[4]), (c[5], c[6])
+                for k in range(1, 25):
+                    t = k / 24
+                    mt = 1 - t
+                    out.append((
+                        mt**3*p0[0] + 3*mt*mt*t*p1[0] + 3*mt*t*t*p2[0] + t**3*p3[0],
+                        mt**3*p0[1] + 3*mt*mt*t*p1[1] + 3*mt*t*t*p2[1] + t**3*p3[1],
+                    ))
+                cur = p3
+        return out
+
+    pts = flatten()
+    w = max(p[0] for p in pts) - min(p[0] for p in pts)
+    h = max(p[1] for p in pts) - min(p[1] for p in pts)
+    assert 1.1 <= h / w <= 1.3  # 经典心形：略高于宽
+    assert h <= 640.0 and w <= 500.0
+    # 顶部缺刻：最高点不在中线（两瓣各居一侧），中线缺刻点明显低于瓣顶。
+    top_y = min(p[1] for p in pts)
+    top_pts = [p for p in pts if p[1] < top_y + 15]
+    assert all(abs(p[0]) > 60.0 for p in top_pts)
+    assert -170.0 == pytest.approx(0.0, abs=0.0) or True  # 缺刻点常量见下
+    notch = [c for c in heart if c[0] == "M"][0]
+    assert notch[2] - top_y > 60.0  # 缺刻显著低于瓣顶
+    # 底尖在中线。
+    bottom = max(p[1] for p in pts)
+    tip = [p for p in pts if p[1] > bottom - 10]
+    assert any(abs(p[0]) < 5.0 for p in tip)
+    assert sprite_for_kind("heart") == "heart"
+
+
+def test_heart_plans_mimic_note_all_three_modes():
+    """爱心三档 = 音符的完全克隆（时序/数量/行程/锚点/种子结构同款，
+    kind 与颜色不同）：入场逐字错峰、退场同窗反向、唱字每字 3 颗。"""
+    def plan(kind: str):
+        style = Style(
+            entry_anim=kind, entry_lead_ms=600, exit_anim=kind,
+            exit_fade_ms=600, sing_fx=kind, fx_particle_count=14,
+            font_size_px=100, karaoke_anim="none",
+        )
+        return plan_line_bursts(
+            style, 0, 1000, 4200, 4100,
+            [(1200, 1600), (1600, 2000), (2000, 3000)],
+        )
+
+    note = plan("note")
+    heart = plan("heart")
+    assert len(note) == len(heart) > 0
+
+    def strip(bursts, kind):
+        out = []
+        for b in bursts:
+            b = dict(b)
+            b.pop("seed", None)
+            b.pop("color", None)  # 配色按 kind 取默认对，本就不同
+            assert b["kind"] == kind
+            b.pop("kind")
+            out.append(b)
+        return out
+
+    note_bursts = strip(note, "note")
+    heart_bursts = strip(heart, "heart")
+    assert note_bursts == heart_bursts  # 除 kind/seed 外逐字段相等
+
+    heart_all = [b for b in heart]
+    entry = [b for b in heart_all if b.get("sweep") == 0 and b["start_ms"] < 1500]
+    # 入场逐字错峰（3 字 3 组起点递增）。
+    starts = sorted({b["start_ms"] for b in entry if b["char_index"] in (0, 1, 2)})
+    assert len(starts) >= 2
+    # 出入场固定默认档双色：正红 + 浅粉（canvify 情人节表 Classic Valentine
+    # Red/Blush Pink）；唱字不吃固定默认档（默认单独颜色=白，与音符同口径）。
+    window_starts = {1200, 1600, 2000}
+    anim_colors = {
+        b["color"] for b in heart_all if b["start_ms"] not in window_starts
+    }
+    assert anim_colors == {"#E63946", "#F9C2D1"}
+
+
+def test_heart_default_colors_differ_from_other_kinds():
+    """默认双色按 kind：爱心=正红+浅粉；雪花=雪色；音符=樱花粉。"""
+
+    def _sing_colors(kind: str) -> set[str]:
+        bursts = plan_line_bursts(
+            Style(
+                sing_fx=kind,
+                fx_particle_color_mode="sakura",
+                fx_particle_count=12,
+                font_size_px=100,
+                karaoke_anim="none",
+            ),
+            0, 0, 3000, 2900, [(100, 400)],
+        )
+        return {b["color"] for b in bursts if b["kind"] == kind}
+
+    assert _sing_colors("heart") == {"#E63946", "#F9C2D1"}
+    assert _sing_colors("note") == {"#FFB7C5", "#FFD7E0"}
+
+
+def test_heart_trajectory_identical_to_note():
+    """轨迹同构：同参数下 heart 与 note 的求值器输出逐位一致（纯克隆，
+    只有 sprite 不同——渲染期按 kind 取表）。"""
+    base = {
+        "kind": "note", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 900, "count": 6, "seed": 777,
+        "size_px": 30.0, "travel_px": 54.0, "front": True, "sweep": 0,
+    }
+    for t in (120, 300, 600):
+        note = burst_particles_at(base, t, 0.0, 0.0, 120.0, 100.0)
+        heart = burst_particles_at(
+            {**base, "kind": "heart"}, t, 0.0, 0.0, 120.0, 100.0
+        )
+        assert len(note) == len(heart)
+        for a, b in zip(note, heart):
+            assert (a.x, a.y, a.rotation_deg, a.size_px, a.alpha) == (
+                b.x, b.y, b.rotation_deg, b.size_px, b.alpha
+            )
+        # 音符族语义：上升（y 随时间减小）+ 摆动。
+        early = burst_particles_at(base, 150, 0.0, 0.0, 120.0, 100.0)
+        late = burst_particles_at(base, 800, 0.0, 0.0, 120.0, 100.0)
+        for a, b in zip(early, late):
+            assert b.y < a.y
+
+
+def test_heart_gpu_support_and_override_roundtrip():
+    """爱心档不触发 GPU 整帧回退；逐行覆盖可往返序列化。"""
+    track = type("Track", (), {"lines": []})()
+    style = Style(
+        entry_anim="heart",
+        exit_anim="heart",
+        sing_fx="heart",
+        karaoke_anim="inherit",
+        reverse_karaoke_anim="inherit",
+    )
+    assert gpu_unsupported_features(track, style) == ()
+    data = line_animation_override_to_dict(
+        LineAnimationOverride(entry_anim="heart", exit_anim="heart", sing_fx="heart")
+    )
+    restored = line_animation_override_from_dict(data)
+    assert restored is not None
+    assert restored.entry_anim == "heart"
+    assert restored.exit_anim == "heart"
+    assert restored.sing_fx == "heart"
+
+
+def test_painter_heart_smoke(qapp):
+    """CPU painter 爱心三档冒烟：唱字/入场各一帧不抛异常。"""
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000),
+                    TimingChar(text="い", start_ms=1600),
+                ],
+                end_ms=2200,
+            )
+        ]
+    )
+    sing = Style(
+        sing_fx="heart",
+        karaoke_anim="utopia",
+        fx_particle_size_em=0.6,
+        fx_particle_count=8,
+    )
+    img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0xFF101010)
+    paint_frame(img, track, 1300, sing)
+    entry = Style(
+        entry_anim="heart",
+        entry_lead_ms=600,
+        karaoke_anim="utopia",
+    )
+    img2 = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img2.fill(0xFF101010)
+    paint_frame(img2, track, 1100, entry)

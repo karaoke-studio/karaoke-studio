@@ -788,16 +788,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 || animation == "glow_in" || animation == "stretch_in"
                 || animation == "assemble_in" || animation == "sparkle"
                 || animation == "ripple" || animation == "note"
-                || animation == "petal" || animation == "snow"
-                || animation == "snow_solid";
+                || animation == "heart" || animation == "petal"
+                || animation == "snow" || animation == "snow_solid";
         };
         const auto isGeoExit = [](const std::string &animation) {
             return animation == "scatter_out" || animation == "converge_out"
                 || animation == "glow_out" || animation == "stretch_out"
                 || animation == "dissolve_out" || animation == "sparkle"
                 || animation == "ripple" || animation == "note"
-                || animation == "petal" || animation == "snow"
-                || animation == "snow_solid";
+                || animation == "heart" || animation == "petal"
+                || animation == "snow" || animation == "snow_solid";
         };
         const auto isGeoTransition = [&](const std::string &animation) {
             return isGeoEntry(animation) || isGeoExit(animation);

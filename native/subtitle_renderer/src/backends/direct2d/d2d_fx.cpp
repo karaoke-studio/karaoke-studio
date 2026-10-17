@@ -191,7 +191,8 @@ GeoCharState geoCharState(
         return state;
     }
     if (effect == "sparkle" || effect == "ripple" || effect == "note"
-        || effect == "petal" || effect == "snow" || effect == "snow_solid") {
+        || effect == "heart" || effect == "petal" || effect == "snow"
+        || effect == "snow_solid") {
         // 粒子类出入场动画的本体：文字逐字显形（入场 4 倍速透明度，
         // 粒子拼接同款编排），退场逐字淡出；粒子由 planner 叠加。
         const float p = staggerProgress;
@@ -420,7 +421,7 @@ std::vector<FxParticle> burstParticlesAt(
                     (1.0f - p) * (1.0f - p * 0.5f),
                 });
             }
-        } else if (burst.kind == "note") {
+        } else if (burst.kind == "note" || burst.kind == "heart") {
             const float u1 = fxUnitHash(index, 1u);
             const float u2 = fxUnitHash(index, 2u);
             const float u3 = fxUnitHash(index, 3u);

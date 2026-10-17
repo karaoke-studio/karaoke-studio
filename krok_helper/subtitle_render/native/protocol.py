@@ -14,7 +14,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from krok_helper.subtitle_render.engine.layout.line.style import line_end_ms, line_start_ms
 from krok_helper.subtitle_render.engine.render.effects.particles import plan_line_bursts
@@ -233,10 +233,25 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
 
     if "font_family" not in payload or "font_weight" not in payload:
         return
-    italic = bool(payload.get("italic"))
+    base_italic = bool(payload.get("italic"))
     main_weight = int(payload["font_weight"] or 400)
 
-    def slot(family: Any, weight: Any) -> tuple[bool, dict[str, Any] | None]:
+    def optional_bool(value: Any) -> Optional[bool]:
+        return None if value is None else bool(value)
+
+    # 逐槽斜体（与描边 2 同一条跟随链）：latin→主文字日文、ruby→主文字、
+    # ruby_latin→注音日文的**生效值**。C++ 投影端同链解析（gpu_scene_
+    # projection.cpp），这里只为每个槽位解析出正确的字体实例决策。
+    latin_italic = optional_bool(payload.get("latin_italic"))
+    latin_italic = base_italic if latin_italic is None else latin_italic
+    ruby_italic = optional_bool(payload.get("ruby_italic"))
+    ruby_italic = base_italic if ruby_italic is None else ruby_italic
+    ruby_latin_italic = optional_bool(payload.get("ruby_latin_italic"))
+    ruby_latin_italic = (
+        ruby_italic if ruby_latin_italic is None else ruby_latin_italic
+    )
+
+    def slot(family: Any, weight: Any, italic: bool) -> tuple[bool, dict[str, Any] | None]:
         """槽位 → (是否真可变, 决策载荷 | None)。空族按静态默认处理。"""
         if weight is None:
             weight = main_weight
@@ -289,20 +304,20 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         return instance.is_variable, resolved
 
     main_family = payload.get("font_family")
-    payload["font_axis"], resolved = slot(main_family, main_weight)
+    payload["font_axis"], resolved = slot(main_family, main_weight, base_italic)
     if resolved is not None:
         payload["font_resolved"] = resolved
 
     latin_family = payload.get("font_family_latin") or main_family
     payload["latin_font_axis"], resolved = slot(
-        latin_family, payload.get("latin_font_weight")
+        latin_family, payload.get("latin_font_weight"), latin_italic
     )
     if resolved is not None:
         payload["latin_font_resolved"] = resolved
 
     ruby_family = payload.get("ruby_font_family") or main_family
     payload["ruby_font_axis"], resolved = slot(
-        ruby_family, payload.get("ruby_font_weight")
+        ruby_family, payload.get("ruby_font_weight"), ruby_italic
     )
     if resolved is not None:
         payload["ruby_font_resolved"] = resolved
@@ -312,7 +327,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
     if ruby_latin_weight is None:
         ruby_latin_weight = payload.get("ruby_font_weight")
     payload["ruby_latin_font_axis"], resolved = slot(
-        ruby_latin_family, ruby_latin_weight
+        ruby_latin_family, ruby_latin_weight, ruby_latin_italic
     )
     if resolved is not None:
         payload["ruby_latin_font_resolved"] = resolved
@@ -465,12 +480,12 @@ def gpu_unsupported_features(
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
         "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
-        "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
     } or (
         style.exit_anim not in {
             "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
             "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
-            "sparkle", "ripple", "note", "petal", "snow", "snow_solid",
+            "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
         }
     ):
         reasons.append("line_animation")
@@ -522,6 +537,7 @@ def gpu_unsupported_features(
                     "sparkle",
                     "ripple",
                     "note",
+                    "heart",
                     "petal",
                     "snow",
                     "snow_solid",

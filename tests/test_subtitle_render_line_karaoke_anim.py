@@ -293,8 +293,8 @@ class TestSingFxDialog:
             for i in range(dialog._sing_combo.count())
         }
         assert values == {
-            "inherit", "none", "twinkle", "twinkle_classic", "note", "ripple",
-            "petal", "snow", "snow_solid",
+            "inherit", "none", "twinkle", "twinkle_classic", "note", "heart",
+            "ripple", "petal", "snow", "snow_solid",
         }
 
     def test_it_round_trips_the_choice(self) -> None:
