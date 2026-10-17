@@ -632,10 +632,17 @@ def test_plan_line_bursts_anim_kinds_and_sing_ripple():
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
     kinds = [burst["kind"] for burst in bursts]
-    # 音符入场：逐字错峰（3 字 → 步距 175），每字 3 颗拆樱花粉双色 2+1。
+    # 音符入场：逐字错峰（3 字 → 步距 175）+ ±80ms 确定性时间抖动，
+    # 每字 3 颗拆樱花粉双色 2+1（同字两变体共享起点）。
     assert kinds.count("note") == 6
     notes = [b for b in bursts if b["kind"] == "note"]
-    assert [b["start_ms"] for b in notes] == [1000, 1000, 1175, 1175, 1350, 1350]
+    for char_index, base in enumerate((1000, 1175, 1350)):
+        starts = [
+            b["start_ms"] for b in notes if b["char_index"] == char_index
+        ]
+        assert len(starts) == 2
+        assert all(abs(start - base) <= 80 for start in starts)
+    assert len({b["start_ms"] for b in notes}) > 1  # 逐字不再严格等差错峰
     assert sorted({b["count"] for b in notes}) == [1, 2]
     assert {b["color"] for b in notes} == {"#FFB7C5", "#FFD7E0"}
     # 消散退场：像素方块、固定默认档（7 颗/字拆双色 4+3）。
@@ -2332,13 +2339,17 @@ def test_plan_line_bursts_petal_entry_exit_sing():
         style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
-    # 入场花瓣：逐字错峰（3 字 → 步距 175），每字 3 颗拆固定樱花粉双色
-    # 2+1；位置偏移全部 box 比例（不带字号行程，travel 恒 0）。
+    # 入场花瓣：逐字错峰（3 字 → 步距 175）+ ±80ms 确定性时间抖动，
+    # 每字 3 颗拆固定樱花粉双色 2+1；位置偏移全部 box 比例（travel 恒 0）。
     entry = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == 1]
     assert len(entry) == 6
-    assert [b["start_ms"] for b in entry] == [
-        1000, 1000, 1175, 1175, 1350, 1350,
-    ]
+    for char_index, base in enumerate((1000, 1175, 1350)):
+        starts = [
+            b["start_ms"] for b in entry if b["char_index"] == char_index
+        ]
+        assert len(starts) == 2
+        assert all(abs(start - base) <= 80 for start in starts)
+    assert len({b["start_ms"] for b in entry}) > 1
     assert sorted({b["count"] for b in entry}) == [1, 2]
     assert {b["color"] for b in entry} == {"#FFB7C5", "#FFD7E0"}
     assert all(b["travel_px"] == 0.0 for b in entry)
@@ -2347,7 +2358,13 @@ def test_plan_line_bursts_petal_entry_exit_sing():
     # 终点，尾奏通道续播；旧「120 兜底 + 错峰压缩」已废除）。
     exit_petals = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == -1]
     assert len(exit_petals) == 6
-    assert {b["start_ms"] for b in exit_petals} == {4100, 4275, 4450}
+    for char_index, base in enumerate((4100, 4275, 4450)):
+        starts = [
+            b["start_ms"] for b in exit_petals if b["char_index"] == char_index
+        ]
+        assert len(starts) == 2
+        assert all(abs(start - base) <= 80 for start in starts)
+    assert len({b["start_ms"] for b in exit_petals}) > 1
     assert all(b["end_ms"] == b["start_ms"] + 900 for b in exit_petals)
     assert {b["color"] for b in exit_petals} == {"#FFB7C5", "#FFD7E0"}
     # 唱字花瓣：sweep=0、每字 max(3, 14//3)=4 颗、尺寸吃旋钮（40% 字号）。
@@ -2898,8 +2915,9 @@ def test_painter_particle_shadow_layer_smoke(qapp):
 
 @pytest.mark.parametrize("snow_kind", ["snow", "snow_solid"])
 def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
-    """雪花两档（·镂空/·实心）规划同源：出入场整行同刻 + 早现晚收/
-    同步晚收时序 + 雪色 + 逐字唱字；两档只差 kind（决定 sprite）。"""
+    """雪花两档（·镂空/·实心）规划同源：出入场整行近似同刻 + 逐字
+    ±80ms 时间抖动 + 早现晚收/同步晚收时序 + 雪色 + 逐字唱字；两档只差
+    kind（决定 sprite）。"""
     style = Style(
         entry_anim=snow_kind,
         entry_lead_ms=600,
@@ -2914,20 +2932,23 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
         style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
-    # 入场雪花：整行同刻（无逐字错峰），起点早于逐字渐隐 200ms（行窗
-    # 打开瞬间雪花已在半空），终点晚于逐字渐隐结束 250ms（余尾）。
+    # 入场雪花：整行近似同刻（无逐字等差错峰，但每字 ±80ms 抖动），
+    # 起点早于逐字渐隐 200ms（行窗打开瞬间雪花已在半空），终点晚于
+    # 逐字渐隐结束 250ms（余尾）。
     entry = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == 1]
     assert len(entry) == 6
-    assert {b["start_ms"] for b in entry} == {800}  # 1000 - 200×scale
+    assert all(abs(b["start_ms"] - 800) <= 80 for b in entry)
+    assert len({b["start_ms"] for b in entry}) > 1
     assert {b["end_ms"] for b in entry} == {1850}  # 1000 + 600 + 250
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 拆雪色双色
     assert {b["color"] for b in entry} == {"#F2F8FF", "#BFDFFF"}
     assert all(b["travel_px"] == 0.0 for b in entry)
-    # 退场雪花：与逐字渐隐同步开始（同刻 max(行末, 显示末-窗口)），
-    # 终点晚于逐字渐隐结束 300ms。
+    # 退场雪花：与逐字渐隐同步开始（同刻 max(行末, 显示末-窗口)，
+    # 逐字 ±80ms 抖动），终点晚于逐字渐隐结束 300ms。
     exit_snow = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == -1]
     assert len(exit_snow) == 6
-    assert {b["start_ms"] for b in exit_snow} == {4100}
+    assert all(abs(b["start_ms"] - 4100) <= 80 for b in exit_snow)
+    assert len({b["start_ms"] for b in exit_snow}) > 1
     assert {b["end_ms"] for b in exit_snow} == {4500}  # 4200 + 300
     assert {b["color"] for b in exit_snow} == {"#F2F8FF", "#BFDFFF"}
     # 唱字雪花：逐字发射（唱字窗起点）、每字 4 颗、尺寸吃旋钮。
@@ -3584,37 +3605,41 @@ def test_entry_exit_particle_emission_decoupled_from_duration_knob():
             [(1200, 1600), (1600, 2000), (2000, 3000)],
         )
         entry = sorted(
-            (b["start_ms"], b["end_ms"])
+            (b["char_index"], b["start_ms"], b["end_ms"])
             for b in bursts
             if b["kind"] == "note" and b["start_ms"] < 1500
         )
         exit_ = sorted(
-            (b["start_ms"], b["end_ms"])
+            (b["char_index"], b["start_ms"], b["end_ms"])
             for b in bursts
             if b["kind"] == "note" and b["start_ms"] >= 3000
         )
         return entry, exit_
 
-    entry_std = [
-        (1000, 1800), (1000, 1800),
-        (1175, 1975), (1175, 1975),
-        (1350, 2150), (1350, 2150),
-    ]
-    exit_std = [
-        (4100, 4900), (4100, 4900),
-        (4275, 5075), (4275, 5075),
-        (4450, 5250), (4450, 5250),
-    ]
+    baseline_entry, baseline_exit = windows(600)
+    # 逐字 ±80ms 抖动：每字两色变体共享起点，起点不再严格等差错峰。
+    for char_index, base in enumerate((1000, 1175, 1350)):
+        rows = [row for row in baseline_entry if row[0] == char_index]
+        assert len(rows) == 2
+        assert all(abs(row[1] - base) <= 80 for row in rows)
+        assert all(row[2] == row[1] + 800 for row in rows)
+    assert len({row[1] for row in baseline_entry}) > 1
+    for char_index, base in enumerate((4100, 4275, 4450)):
+        rows = [row for row in baseline_exit if row[0] == char_index]
+        assert len(rows) == 2
+        assert all(abs(row[1] - base) <= 80 for row in rows)
+        assert all(row[2] == row[1] + 800 for row in rows)
+    # 发射窗口与时长旋钮完全解耦（各档位逐字段相等）。
     for fade in (120, 300, 600, 1200, 3000):
         entry, exit_ = windows(fade)
-        assert entry == entry_std, fade
-        assert exit_ == exit_std, fade
+        assert entry == baseline_entry, fade
+        assert exit_ == baseline_exit, fade
     # 末字终点越过显示窗终点（4200）——完整播放口径。
-    assert exit_std[-1][1] == 5250 > 4200
-    # 尾端助手与规划同式（CPU 尾奏通道的淘汰界）。
-    assert exit_particle_tail_end_ms("note", 3, 4100, 4200) == 5250
+    assert max(row[2] for row in baseline_exit) > 4200
+    # 尾端助手与规划同式（CPU 尾奏通道的淘汰界；含最大正向抖动）。
+    assert exit_particle_tail_end_ms("note", 3, 4100, 4200) == 5250 + 80
     assert exit_particle_tail_end_ms("sparkle", 3, 4100, 4200) == 4100 + 350 + 600
-    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 350 + 900
+    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 350 + 900 + 80
     assert exit_particle_tail_end_ms("snow", 3, 4100, 4200) == 4500
     assert exit_particle_tail_end_ms("dissolve_out", 3, 4100, 4200) is None
 
@@ -3632,10 +3657,10 @@ def _bright_pixels(img) -> int:
 def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
     """2026-10 分离口径（CPU 渲染端）：退场粒子越过显示窗终点完整播放。
 
-    note 退场锚 = max(行末, 显示末-1150)，末字 burst 终点越过显示窗
-    （显示窗 ≈ [0, 2800]，末 burst [2150, 2950]）——[2800, 2950) 段只有
-    「退场尾奏通道」（_paint_exit_particle_tails）能画；fade 对照档在
-    显示窗外应全空。画布取 800×450（视口变换在 400×200 下内容出画）。"""
+    note 退场锚 = max(行末 3000, 显示末-1150)，末字 burst 终点因
+    ±80ms 抖动可越过显示窗终点——显示窗外的一段只有「退场尾奏通道」
+    （_paint_exit_particle_tails）能画；fade 对照档在显示窗外应全空。
+    画布取 800×450（视口变换在 400×200 下内容出画）。"""
     from PyQt6.QtGui import QImage
 
     from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
@@ -3645,10 +3670,10 @@ def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
         lines=[
             TimingLine(
                 chars=[
-                    TimingChar(text="AB", start_ms=1000),
-                    TimingChar(text="CD", start_ms=1400),
+                    TimingChar(text="AB", start_ms=2000),
+                    TimingChar(text="CD", start_ms=2400),
                 ],
-                end_ms=1800,
+                end_ms=3000,
             )
         ]
     )
@@ -3669,12 +3694,13 @@ def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
         return _bright_pixels(img)
 
     # 窗内（正常路径：文字 + 粒子）与尾奏段（仅尾奏通道）都有内容。
-    assert frame(2400, "note") > 0
-    assert frame(2850, "note") > 0
-    # 末 burst [2150, 2950] 之后熄灭。
-    assert frame(2960, "note") == 0
+    # 逐字 ±80ms 时间抖动后末 burst 终点会略微平移：取两个相邻尾部采样
+    # 覆盖抖动范围，而不是逐帧扫描（pixelColor 采样很慢）。
+    assert frame(2800, "note") > 0
+    assert any(frame(t, "note") > 0 for t in (3400, 3600))
+    assert frame(4200, "note") == 0
     # 非粒子退场档不进尾奏通道：显示窗外全空。
-    assert frame(2850, "fade") == 0
+    assert frame(4200, "fade") == 0
 
 
 def test_flame_sprite_contract():

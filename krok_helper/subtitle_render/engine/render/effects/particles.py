@@ -119,6 +119,10 @@ FLAME_MAX_PUFFS = 8
 # 之下（front=False），不叠亮文字本体。
 FLAME_GLOW_LIFE_MS = 900
 FLAME_GLOW_SIZE_SCALE = 2.80
+# 逐字出入场粒子时间抖动（2026-10-18 用户口径：花瓣/音符/爱心/雪花
+# 逐字等差错峰太整齐）：每字起点叠加 [-J,+J) 的确定性哈希抖动，寿命
+# 不变——出现/消失时间逐字轻微错开；纯规划期实现，CPU/GPU 天然一致。
+CHAR_TIME_JITTER_MS = 80
 # 余烬（ember）：小圆点火星，快速上蹿后受“重力”减速、带横向漂移与
 # 闪烁；与灰烬（下坠的 ash）一升一落。
 EMBER_A = "#FFD873"
@@ -1250,7 +1254,12 @@ def exit_particle_tail_end_ms(
         return base + RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS
     if exit_anim in ("note", "heart"):
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS))
-        return base + RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS
+        return (
+            base
+            + RIPPLE_CHAR_STAGGER_MS
+            + SING_NOTE_TOTAL_MS
+            + CHAR_TIME_JITTER_MS
+        )
     if exit_anim == "flame":
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + FLAME_LIFE_MS))
         # v3：末字还有第二簇火焰 + 余烬（寿命 1300）越过显示窗，尾奏必须
@@ -1268,7 +1277,12 @@ def exit_particle_tail_end_ms(
         )
     if exit_anim == "petal":
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS))
-        return base + RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS
+        return (
+            base
+            + RIPPLE_CHAR_STAGGER_MS
+            + PETAL_LIFE_MS
+            + CHAR_TIME_JITTER_MS
+        )
     if exit_anim in SNOW_KINDS:
         return display_end_ms + 300
     return None
@@ -1433,6 +1447,18 @@ def plan_line_bursts(
                     int(fields["seed"]) + variant * 0x9E37
                 ) & 0xFFFFFFFF
             bursts.append(burst)
+
+    def _char_time_jitter(char_index: int, salt: int) -> int:
+        """逐字时间抖动（毫秒，[-J,+J)）：同一行/字符/效果可复现。
+
+        只抖 burst 起点，不抖寿命；note/heart 共用 entry/exit 盐以保持
+        “爱心 = 音符克隆”的时序同构，petal/snow 各自独立。
+        """
+        unit = fx_unit_hash(
+            (seed_base + salt * 0x71 + char_index * 0x2F) & 0xFFFFFFFF,
+            13,
+        )
+        return int(round((unit - 0.5) * 2.0 * CHAR_TIME_JITTER_MS))
 
     def _fire_layer_paints(
         char_index: int,
@@ -1722,7 +1748,11 @@ def plan_line_bursts(
         )
     elif entry_anim == "note" and entry_active and display_start_ms is not None:
         for char_index in range(char_count):
-            start = int(display_start_ms) + stagger * char_index
+            start = (
+                int(display_start_ms)
+                + stagger * char_index
+                + _char_time_jitter(char_index, 21)
+            )
             _variant_bursts({
                 "kind": "note", "anchor": "char",
                 "char_index": int(char_index),
@@ -1736,7 +1766,11 @@ def plan_line_bursts(
         # 爱心飘出（2026-10 用户口径：全面克隆音符飘出，只换形状与默认
         # 红/粉双色）——逐字错峰、行程 1.8×尺寸、字顶出生上升摆动全同款。
         for char_index in range(char_count):
-            start = int(display_start_ms) + stagger * char_index
+            start = (
+                int(display_start_ms)
+                + stagger * char_index
+                + _char_time_jitter(char_index, 21)
+            )
             _variant_bursts({
                 "kind": "heart", "anchor": "char",
                 "char_index": int(char_index),
@@ -1768,7 +1802,11 @@ def plan_line_bursts(
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
         # 抵达后熄灭），随机摇摆 + 连续翻转（\moves4 四点飘移等效观感）。
         for char_index in range(char_count):
-            start = int(display_start_ms) + stagger * char_index
+            start = (
+                int(display_start_ms)
+                + stagger * char_index
+                + _char_time_jitter(char_index, 23)
+            )
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
@@ -1789,7 +1827,7 @@ def plan_line_bursts(
             _variant_bursts({
                 "kind": entry_anim, "anchor": "char",
                 "char_index": int(char_index),
-                "start_ms": snow_start,
+                "start_ms": snow_start + _char_time_jitter(char_index, 25),
                 "end_ms": snow_end,
                 "count": 3, "seed": (seed_base + 12 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
@@ -1825,7 +1863,11 @@ def plan_line_bursts(
             int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS),
         )
         for char_index in range(char_count):
-            start = exit_start + stagger * char_index
+            start = (
+                exit_start
+                + stagger * char_index
+                + _char_time_jitter(char_index, 22)
+            )
             _variant_bursts({
                 "kind": "note", "anchor": "char",
                 "char_index": int(char_index),
@@ -1842,7 +1884,11 @@ def plan_line_bursts(
             int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS),
         )
         for char_index in range(char_count):
-            start = exit_start_heart + stagger * char_index
+            start = (
+                exit_start_heart
+                + stagger * char_index
+                + _char_time_jitter(char_index, 22)
+            )
             _variant_bursts({
                 "kind": "heart", "anchor": "char",
                 "char_index": int(char_index),
@@ -1890,7 +1936,11 @@ def plan_line_bursts(
         )
         # 花瓣飘散：每字自字框内错峰剥落、边翻转边飘落到字底下方淡出。
         for char_index in range(char_count):
-            start = exit_start_petal + stagger * char_index
+            start = (
+                exit_start_petal
+                + stagger * char_index
+                + _char_time_jitter(char_index, 24)
+            )
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
@@ -1913,7 +1963,8 @@ def plan_line_bursts(
             _variant_bursts({
                 "kind": exit_anim, "anchor": "char",
                 "char_index": int(char_index),
-                "start_ms": snow_exit_start,
+                "start_ms": snow_exit_start
+                + _char_time_jitter(char_index, 26),
                 "end_ms": snow_exit_end,
                 "count": 3, "seed": (seed_base + 13 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
