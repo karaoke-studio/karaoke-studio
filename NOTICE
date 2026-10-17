@@ -66,3 +66,16 @@ CPU 爆炸，多边形圆角偏置是线性算法）。
   Copyright (c) 2012-2025 Angus Johnson
   协议：Boost Software License 1.0（与 GPLv3 兼容）
   许可全文随附于 thirdparty/clipper2/LICENSE。
+
+内嵌素材来源（粒子 sprite 轮廓）
+==============================
+
+krok_helper/subtitle_render/engine/render/effects/particles.py 的
+爱心粒子剪影（kind ``heart``）轮廓取自 Twemoji 心形表情
+（U+2764，twemoji 15.1.0 assets/svg/2764.svg），坐标经中心平移
+与等比缩放归一化的纯几何引用（2026-10）。
+
+  Twemoji（github.com/jdecked/twemoji，原 twitter/twemoji）
+  Copyright 2019 Twitter, Inc. 及其他贡献者
+  图形许可：CC-BY 4.0（https://creativecommons.org/licenses/by/4.0/）
+  代码许可：MIT

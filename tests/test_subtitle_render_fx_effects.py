@@ -3283,32 +3283,28 @@ def test_petal_and_snow_sing_particles_skip_whitespace(sing_kind):
 
 
 def test_heart_sprite_contract():
-    """爱心 sprite：贝塞尔心形单轮廓（M + 4×C + Z）——两圆瓣 + 顶部缺刻 +
-    收尖底；包络 ±250、高约 600、h/w ∈ [1.1, 1.3]（经典心形比例）。"""
+    """爱心 sprite = **Twemoji ❤️（U+2764，CC-BY 4.0）官方 path 归一化**
+    （2026-10-18 用户口径：联网取现成软萌轮廓、不要自行设计）：M + 8×C
+    + Z 单轮廓，宽 ±470 / 高 ±421（h/w ≈ 0.90 略宽于高 = emoji 比例），
+    双瓣顶浅缺刻、底点在中线。"""
     heart = FX_SPRITES["heart"]["path_commands"]
-    assert [c[0] for c in heart] == ["M", "C", "C", "C", "C", "Z"]
+    assert [c[0] for c in heart] == ["M"] + ["C"] * 8 + ["Z"]
     assert sum(1 for c in heart if c[0] == "M") == 1
-    points = [
-        (float(c[i]), float(c[i + 1]))
-        for c in heart
-        for i in range(1, len(c) - 1, 2)
-    ]
-    xs = [p[0] for p in points]
-    assert max(abs(x) for x in xs) == pytest.approx(250.0, abs=1e-6)
-    # 展平贝塞尔取包络（含控制点极值会高估，直接采样曲线）。
 
     def flatten():
         out = []
         cur = None
         for c in heart:
             if c[0] == "M":
-                cur = (c[1], c[2])
+                cur = (float(c[1]), float(c[2]))
                 out.append(cur)
             elif c[0] == "C":
                 p0 = cur
-                p1, p2, p3 = (c[1], c[2]), (c[3], c[4]), (c[5], c[6])
-                for k in range(1, 25):
-                    t = k / 24
+                p1 = (float(c[1]), float(c[2]))
+                p2 = (float(c[3]), float(c[4]))
+                p3 = (float(c[5]), float(c[6]))
+                for k in range(1, 33):
+                    t = k / 32
                     mt = 1 - t
                     out.append((
                         mt**3*p0[0] + 3*mt*mt*t*p1[0] + 3*mt*t*t*p2[0] + t**3*p3[0],
@@ -3318,19 +3314,21 @@ def test_heart_sprite_contract():
         return out
 
     pts = flatten()
-    w = max(p[0] for p in pts) - min(p[0] for p in pts)
-    h = max(p[1] for p in pts) - min(p[1] for p in pts)
-    assert 1.1 <= h / w <= 1.3  # 经典心形：略高于宽
-    assert h <= 640.0 and w <= 500.0
-    # 顶部缺刻：最高点不在中线（两瓣各居一侧），中线缺刻点明显低于瓣顶。
-    top_y = min(p[1] for p in pts)
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert max(xs) == pytest.approx(470.0, abs=0.2)
+    assert min(xs) == pytest.approx(-470.0, abs=0.2)
+    w = max(xs) - min(xs)
+    h = max(ys) - min(ys)
+    assert 0.85 <= h / w <= 0.95  # emoji 比例：略宽于高
+    # 顶部缺刻：最高点在两瓣（|x|>100），中线缺刻点显著低于瓣顶。
+    top_y = min(ys)
     top_pts = [p for p in pts if p[1] < top_y + 15]
-    assert all(abs(p[0]) > 60.0 for p in top_pts)
-    assert -170.0 == pytest.approx(0.0, abs=0.0) or True  # 缺刻点常量见下
-    notch = [c for c in heart if c[0] == "M"][0]
-    assert notch[2] - top_y > 60.0  # 缺刻显著低于瓣顶
-    # 底尖在中线。
-    bottom = max(p[1] for p in pts)
+    assert all(abs(p[0]) > 100.0 for p in top_pts)
+    notch_y = min(p[1] for p in pts if abs(p[0]) < 1.0)
+    assert notch_y - top_y > 60.0
+    # 底点在中线（emoji 心形的钝圆底）。
+    bottom = max(ys)
     tip = [p for p in pts if p[1] > bottom - 10]
     assert any(abs(p[0]) < 5.0 for p in tip)
     assert sprite_for_kind("heart") == "heart"
