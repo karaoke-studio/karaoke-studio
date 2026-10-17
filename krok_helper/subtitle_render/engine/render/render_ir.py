@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_text,
     title_layout_source,
     title_row_alignments,
+    title_row_offsets_x,
     title_show_specs,
 )
 from krok_helper.subtitle_render.domain.timing import (
@@ -85,6 +86,7 @@ def title_to_ir(
     # （布局引用缺失）不下发：C++ 维持锚点水平位的既有回落，Painter 维持
     # 整块锚点 + 块内统一对齐的原语义。
     if title_layout_source(style, title.layout_index) is not None:
+        payload["row_offsets_x"] = title_row_offsets_x(style, title, len(text.split("\n")))
         payload["row_alignments"] = title_row_alignments(
             style, title, len(text.split("\n"))
         )

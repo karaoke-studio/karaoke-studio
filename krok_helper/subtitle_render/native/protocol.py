@@ -642,6 +642,7 @@ def _line_layout_dict(layout_style: Style) -> dict[str, Any]:
                 "smart_horizontal": layout_style.smart_horizontal,
                 "horizontal_margin_px": int(layout_style.horizontal_margin_px),
                 "line_alignments": list(layout_style.line_alignments),
+                "line_offsets_x": list(layout_style.line_offsets_x),
                 "dual_line_layout": bool(layout_style.dual_line_layout),
                 "line_horizontal_layout": layout_style.line_horizontal_layout,
                 "row1_align": layout_style.row1_align,

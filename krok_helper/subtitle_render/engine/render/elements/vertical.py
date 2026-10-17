@@ -1444,6 +1444,19 @@ def layout_vertical_line(
         if column_x is not None
         else int(round(img_w - style.line_y_margin_px - cell_w / 2))
     )
+    # Resolve the same page slot as horizontal layout, including short pages.
+    from krok_helper.subtitle_render.engine.layout.page.pagination import (
+        renderable_page_lines,
+    )
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning import (
+        bottom_short_page_alignment, lane_offset_x,
+    )
+
+    authored_line = source_line if source_line is not None else line
+    page = renderable_page_lines(track, authored_line, style)
+    lane = next((slot for item, slot in (page or []) if item is authored_line), 0)
+    page_count = len(page) if page and bottom_short_page_alignment(style) else None
+    resolved_column_x += lane_offset_x(style, lane, page_count)
     block_h = cell_h * len(chars)
     y_top = resolve_vertical_top(img_h, block_h, style)
     intervals = (

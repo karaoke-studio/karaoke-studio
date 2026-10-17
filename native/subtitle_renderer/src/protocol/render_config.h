@@ -41,6 +41,7 @@ struct ResolvedLineLayout {
     QString smartHorizontal = QStringLiteral("equal_margins");
     int horizontalMarginPx = 50;
     std::vector<QString> lineAlignments{QStringLiteral("left"), QStringLiteral("right")};
+    std::vector<int> lineOffsetsX;
     bool dualLineLayout = true;
     QString lineHorizontalLayout = QStringLiteral("asymmetric");
     QString row1Align = QStringLiteral("left");
@@ -426,6 +427,7 @@ struct RenderConfig {
     int horizontalMarginPx = 50;
     QString smartHorizontal = QStringLiteral("equal_margins");
     std::vector<QString> lineAlignments{QStringLiteral("left"), QStringLiteral("right")};
+    std::vector<int> lineOffsetsX;
     bool dualLineLayout = true;
     bool rightToLeft = false;
     bool vertical = false;

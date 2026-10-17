@@ -576,6 +576,14 @@ class _WheelFocusedSpinBox(WheelFocusedSpinBox):
         super().__init__(parent, commit_delay_ms=EDIT_COMMIT_DEBOUNCE_MS)
 
 
+class _LineOffsetSpinBox(_WheelFocusedSpinBox):
+    """Reserve room for a signed value and its unit in the compact row editor."""
+
+    def _sync_text_minimum(self) -> None:
+        super()._sync_text_minimum()
+        self.setMinimumWidth(max(96, self.minimumWidth() + 20))
+
+
 class _WheelFocusedDoubleSpinBox(WheelFocusedDoubleSpinBox):
     """Bind the shared decimal input to this panel's commit debounce."""
 
@@ -3285,20 +3293,40 @@ class PropertyPanel(QWidget):
             return [self._style.row1_align, self._style.row2_align]
         return alignments
 
-    def _update_direct_line_alignments(self, alignments: list[str]) -> None:
+    def _current_layout_offsets(self) -> list[int]:
+        count = len(self._current_layout_alignments())
+        offsets = list(self._current_layout_source().line_offsets_x)
+        return (offsets + [0] * count)[:count]
+
+    def _on_line_offset_changed(self, index: int, value: int) -> None:
+        if self._syncing:
+            return
+        offsets = self._current_layout_offsets()
+        if not 0 <= index < len(offsets) or offsets[index] == value:
+            return
+        offsets[index] = value
+        self._update_layout_field(line_offsets_x=offsets)
+
+    def _update_direct_line_alignments(
+        self, alignments: list[str], offsets: list[int] | None = None,
+    ) -> None:
         """行列表是新 UI 的唯一水平布局来源，写入时将旧模式归一化。"""
         normalized = [_normalize_horizontal_align(value) for value in alignments]
+        if offsets is None:
+            offsets = self._current_layout_offsets()
+        offsets = (list(offsets) + [0] * len(normalized))[:len(normalized)]
         index = self._current_layout_index()
         if index <= 0:
             self._update_style(
                 line_alignments=normalized,
+                line_offsets_x=offsets,
                 dual_line_layout=True,
                 line_horizontal_layout="asymmetric",
             )
             return
         layouts = list(self._style.layouts)
         layouts[index - 1] = replace(
-            layouts[index - 1], line_alignments=normalized
+            layouts[index - 1], line_alignments=normalized, line_offsets_x=offsets
         )
         self._update_style(
             layouts=layouts,
@@ -3313,6 +3341,7 @@ class PropertyPanel(QWidget):
             if widget is not None:
                 widget.deleteLater()
         alignments = self._current_layout_alignments()
+        offsets = self._current_layout_offsets()
         removable = len(alignments) > 1
         for index, align in enumerate(alignments):
             row = QWidget(self._line_alignment_rows_host)
@@ -3332,7 +3361,15 @@ class PropertyPanel(QWidget):
             remove_btn.clicked.connect(
                 lambda _checked=False, idx=index: self._on_remove_line_alignment(idx)
             )
+            offset_spin = _spin(-16_384, 16_384, suffix=" px", cls=_LineOffsetSpinBox)
+            offset_spin.setObjectName(f"line_offset_x_{index}")
+            offset_spin.setToolTip(f"第 {index + 1} 行额外水平偏移：正值向右，负值向左")
+            offset_spin.setValue(offsets[index])
+            offset_spin.valueChanged.connect(
+                lambda value, idx=index: self._on_line_offset_changed(idx, value)
+            )
             row_layout.addWidget(seg, 0)
+            row_layout.addWidget(offset_spin, 0)
             row_layout.addStretch(1)
             row_layout.addWidget(remove_btn, 0)
             self._line_alignment_rows.addWidget(row)
@@ -3351,19 +3388,24 @@ class PropertyPanel(QWidget):
         alignments = self._current_layout_alignments()
         if len(alignments) >= 8:
             return
+        offsets = self._current_layout_offsets()
         if self._current_layout_source().line_y_position == "bottom":
+            offsets.insert(0, 0)
             alignments.insert(0, alignments[0])
         else:
             alignments.append(alignments[-1])
-        self._update_direct_line_alignments(alignments)
+            offsets.append(0)
+        self._update_direct_line_alignments(alignments, offsets)
         self._rebuild_line_alignment_rows()
 
     def _on_remove_line_alignment(self, index: int) -> None:
         alignments = self._current_layout_alignments()
         if len(alignments) <= 1 or not (0 <= index < len(alignments)):
             return
+        offsets = self._current_layout_offsets()
+        del offsets[index]
         del alignments[index]
-        self._update_direct_line_alignments(alignments)
+        self._update_direct_line_alignments(alignments, offsets)
         self._rebuild_line_alignment_rows()
 
     def _refresh_layout_schematic(self) -> None:
@@ -3375,6 +3417,7 @@ class PropertyPanel(QWidget):
             mode="asymmetric",
             dual_line=True,
             alignments=self._current_layout_alignments(),
+            offsets_x=self._current_layout_offsets(),
             y_position=values["line_y_position"],
             y_margin=int(values["line_y_margin_px"]),
             gap=int(values["line_gap_px"]),

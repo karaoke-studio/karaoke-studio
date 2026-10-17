@@ -763,6 +763,7 @@ _LAYOUT_PRESENTATION_FIELDS: tuple[str, ...] = (
     # lane / 分页
     "dual_line_layout",
     "line_alignments",
+    "line_offsets_x",
     "section_gap_ms",
     # 内容列对齐
     "line_horizontal_layout",

@@ -10989,3 +10989,18 @@ def test_latin_weight_follow_checkbox_materializes_on_uncheck(qapp):
     panel.set_style(Style(latin_font_weight=600))
     assert not panel._font_weight_follow_checks[("main", "latin")].isChecked()
     assert panel._font_controls[("main", "latin")][1].isEnabled()
+
+
+def test_line_offset_edit_undo_redo_restores_model_and_control(qapp, monkeypatch):
+    win = _export_screen_window(monkeypatch)
+    panel = win._property_panel
+    original = panel._current_layout_offsets()
+    panel._on_line_offset_changed(0, -123)
+    assert win._style.line_offsets_x[0] == -123
+    win._undo_edit()
+    assert panel._current_layout_offsets() == original
+    win._redo_edit()
+    assert panel._current_layout_offsets()[0] == -123
+    row = panel._line_alignment_rows.itemAt(0).widget()
+    spin = row.findChild(QWidget, "line_offset_x_0")
+    assert spin.value() == -123

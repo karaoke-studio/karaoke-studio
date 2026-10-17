@@ -40,12 +40,12 @@ from krok_helper.subtitle_render.engine.text import (
 )
 
 
-def lane_alignment(
+def lane_slot(
     style: Style,
     lane: int | None,
     page_line_count: int | None = None,
-) -> str:
-    """Resolve N3's alignment slot for a page lane."""
+) -> int:
+    """Resolve the shared alignment/offset slot, including bottom short pages."""
     alignments = style.line_alignments or ["left"]
     count = len(alignments)
     index = 0 if lane is None else max(int(lane), 0)
@@ -55,7 +55,20 @@ def lane_alignment(
         and 0 < int(page_line_count) < count
     ):
         index = max(count - int(page_line_count) + index, 0)
-    return alignments[min(index, count - 1)]
+    return min(index, count - 1)
+
+
+def lane_alignment(
+    style: Style, lane: int | None, page_line_count: int | None = None,
+) -> str:
+    return (style.line_alignments or ["left"])[lane_slot(style, lane, page_line_count)]
+
+
+def lane_offset_x(
+    style: Style, lane: int | None, page_line_count: int | None = None,
+) -> int:
+    index = lane_slot(style, lane, page_line_count)
+    return int(style.line_offsets_x[index]) if index < len(style.line_offsets_x) else 0
 
 
 def line_lane_alignment(
@@ -333,7 +346,8 @@ def resolve_line_x_smart(
         center_override=center_override,
         page_line_count=len(page) if page else None,
     )
-    return x + smart_horizontal_dx(
+    offset = lane_offset_x(style, lane, len(page) if page else None)
+    return x + offset + smart_horizontal_dx(
         img_w,
         total_w,
         track,

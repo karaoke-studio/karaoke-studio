@@ -478,6 +478,14 @@ void applyGpuLineLayout(
     target.rubyInterval = static_cast<float>(layout.rubyIntervalPx * scale);
     target.rubyAlignment = layout.rubyAlignment.toStdString();
     target.rubyGap = static_cast<float>(layout.rubyGapPx * scale);
+    const int offsetIndex = alignmentIndexForLane(
+        lane, static_cast<int>(layout.lineAlignments.size()),
+        layout.dualLineLayout && layout.lineHorizontalLayout == QStringLiteral("asymmetric")
+            ? pageLineCount : 0,
+        layout.lineYPosition
+    );
+    target.laneOffsetX = offsetIndex < static_cast<int>(layout.lineOffsetsX.size())
+        ? static_cast<float>(layout.lineOffsetsX[offsetIndex] * scale) : 0.0f;
     target.layoutOffsetX = 0.0f;
     target.layoutOffsetY = 0.0f;
 
@@ -595,6 +603,14 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sourceLine.centerOverride, sourceLine.pageLineCount, scale
             );
         } else {
+            const int offsetIndex = alignmentIndexForLane(
+                sourceLine.lane, static_cast<int>(config.lineAlignments.size()),
+                config.dualLineLayout && config.lineHorizontalLayout == QStringLiteral("asymmetric")
+                    ? sourceLine.pageLineCount : 0,
+                config.lineYPosition
+            );
+            lineStyle.laneOffsetX = offsetIndex < static_cast<int>(config.lineOffsetsX.size())
+                ? static_cast<float>(config.lineOffsetsX[offsetIndex] * scale) : 0.0f;
             lineStyle.horizontalMargin = static_cast<float>(
                 config.horizontalMarginPx * scale
             );
@@ -1268,6 +1284,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             // 行级对齐：row_alignments 与 text 的原始行号一一对应（含空行），
             // 缺省回落锚点水平位；非法值同样回落，不让坏 IR 移动标题。
             TextStyle rowStyle = titleStyle;
+            const QJsonArray rowOffsets = title.value(QStringLiteral("row_offsets_x")).toArray();
+            rowStyle.laneOffsetX = rowIndex < rowOffsets.size()
+                ? static_cast<float>(rowOffsets.at(rowIndex).toInt() * scale) : 0.0f;
             if (rowIndex < rowAlignments.size()) {
                 const QString rowAlign = rowAlignments.at(rowIndex);
                 if (rowAlign == QStringLiteral("left")

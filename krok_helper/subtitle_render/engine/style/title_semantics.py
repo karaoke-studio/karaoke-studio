@@ -126,6 +126,21 @@ def title_row_alignments(
     return [title.align] * count
 
 
+def title_row_offsets_x(
+    style: Optional[Style], title: TitleOverlay, row_count: int,
+) -> list[int]:
+    """Titles consume layout slots top-down, just like their row alignments."""
+    source = title_layout_source(style, title.layout_index) if style is not None else None
+    if source is None:
+        return [0] * row_count
+    offsets = list(source.line_offsets_x)
+    last = max(len(source.line_alignments) - 1, 0)
+    return [
+        int(offsets[min(index, last)]) if min(index, last) < len(offsets) else 0
+        for index in range(row_count)
+    ]
+
+
 def resolve_title_role_overlay(
     style: Style, base: TitleOverlay, role_label: Optional[str]
 ) -> TitleOverlay:

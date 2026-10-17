@@ -1278,6 +1278,9 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             }
         }
     }
+    for (const auto &offset : style.value(QStringLiteral("line_offsets_x")).toArray()) {
+        cfg.lineOffsetsX.push_back(offset.toInt());
+    }
     cfg.dualLineLayout = style.value(QStringLiteral("dual_line_layout")).isBool()
         ? style.value(QStringLiteral("dual_line_layout")).toBool()
         : cfg.dualLineLayout;
@@ -1701,6 +1704,9 @@ static void applyLineLayoutSection(
             line.layout.lineAlignments.push_back(alignment.toString());
         }
             }
+        }
+        for (const auto &offset : layoutObject.value(QStringLiteral("line_offsets_x")).toArray()) {
+            line.layout.lineOffsetsX.push_back(offset.toInt());
         }
         line.layout.dualLineLayout = layoutObject.value(
             QStringLiteral("dual_line_layout")

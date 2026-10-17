@@ -383,6 +383,8 @@ class LyricsLayout:
     line_alignments: list[HorizontalAlign] = field(
         default_factory=lambda: ["left", "right"]
     )
+    line_offsets_x: list[int] = field(default_factory=list)
+    """各布局行位的额外水平偏移（px）；缺省为 0，正值向右。"""
     letter_spacing_px: Optional[int] = None
     space_width_percent: Optional[int] = None
     """空格宽度（占字号百分比）的布局级覆盖；``None`` 继承全局 ``Style``。"""
@@ -401,6 +403,7 @@ LYRICS_LAYOUT_GEOMETRY_FIELDS: tuple[str, ...] = (
     "smart_horizontal",
     "horizontal_margin_px",
     "line_alignments",
+    "line_offsets_x",
     "force_top_bottom_n3",
 )
 
@@ -1017,6 +1020,8 @@ class Style:
     """每行（lane）的水平对齐列表（N3 ``HorizontalAlignments``），仅 ``asymmetric``
     模式使用。列表长度即多行显示的行数，索引 0 = 最上行。显示行数恒等于列表
     长度，因此 Bottom 锚定的「从下往上取列表末尾」与正序索引等价。"""
+    line_offsets_x: list[int] = field(default_factory=list)
+    """各布局行位的额外水平偏移（px）；缺省为 0，正值向右。"""
 
     horizontal_margin_px: int = 50
     """左右余白（N3 ``HorizontalMargin``）：Left 行左缘贴此值，Right 行右缘贴
@@ -2232,6 +2237,8 @@ def style_from_dict(payload: object) -> Style:
             )
         elif key == "smart_horizontal":
             changes[key] = value if value in SMART_HORIZONTALS else defaults.smart_horizontal
+        elif key == "line_offsets_x":
+            changes[key] = _line_offsets_from_payload(value)
         elif key == "line_alignments":
             changes[key] = _line_alignments_from_payload(value)
         elif key == "entry_anim":
@@ -2645,6 +2652,7 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
             line_y_margin_px=scaled(layout.line_y_margin_px),
             line_gap_px=scaled(layout.line_gap_px),
             horizontal_margin_px=scaled(layout.horizontal_margin_px),
+            line_offsets_x=[scaled(value) for value in layout.line_offsets_x],
             letter_spacing_px=(
                 None
                 if layout.letter_spacing_px is None
@@ -2667,6 +2675,7 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
         line_y_margin_px=scaled(style.line_y_margin_px),
         line_gap_px=scaled(style.line_gap_px),
         horizontal_margin_px=margin,
+        line_offsets_x=[scaled(value) for value in style.line_offsets_x],
         letter_spacing_px=scaled(style.letter_spacing_px),
         ruby_interval_px=scaled(style.ruby_interval_px),
         ruby_gap_px=scaled(style.ruby_gap_px),
@@ -2891,6 +2900,7 @@ def lyrics_layout_to_dict(layout: LyricsLayout) -> dict:
         "smart_horizontal": layout.smart_horizontal,
         "horizontal_margin_px": layout.horizontal_margin_px,
         "line_alignments": list(layout.line_alignments),
+        "line_offsets_x": list(layout.line_offsets_x),
         "force_top_bottom_n3": layout.force_top_bottom_n3,
         "letter_spacing_px": layout.letter_spacing_px,
         "space_width_percent": layout.space_width_percent,
@@ -2922,6 +2932,7 @@ def lyrics_layout_from_dict(payload: object) -> LyricsLayout:
             payload.get("horizontal_margin_px"), defaults.horizontal_margin_px
         ),
         line_alignments=_line_alignments_from_payload(payload.get("line_alignments")),
+        line_offsets_x=_line_offsets_from_payload(payload.get("line_offsets_x")),
         letter_spacing_px=(
             _int_value(payload.get("letter_spacing_px"), 0)
             if payload.get("letter_spacing_px") is not None
@@ -3043,6 +3054,12 @@ def migrate_spacing_bindings_to_used_layouts(
             for singer_id, scheme in style.singer_style_overrides.items()
         },
     )
+
+
+def _line_offsets_from_payload(payload: object) -> list[int]:
+    if not isinstance(payload, list):
+        return []
+    return [_int_value(value, 0) for value in payload[:8]]
 
 
 def _line_alignments_from_payload(payload: object) -> list[HorizontalAlign]:

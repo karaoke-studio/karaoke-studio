@@ -2355,6 +2355,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             dy += animation.dy;
         }
+        // Keep authored offsets outside alignment/SmartHorizon and vertical placement.
+        dx += style.laneOffsetX;
+        signalDx += style.laneOffsetX;
+        shapeDx += style.laneOffsetX;
         if (!style.vertical) {
             dy += style.layoutOffsetY + placementOffsetY;
         }

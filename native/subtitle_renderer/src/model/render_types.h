@@ -447,6 +447,7 @@ struct TextStyle {
     float centerOffsetX = 0.0f;
     float centerOffsetY = 0.0f;
     float layoutOffsetX = 0.0f;
+    float laneOffsetX = 0.0f;  // Authored horizontal translation, after smart alignment.
     float layoutOffsetY = 0.0f;
     int leadInMs = 1800;
     int tailMs = 1000;

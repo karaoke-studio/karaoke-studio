@@ -47,6 +47,7 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     resolve_title_text,
     title_layout_source,
     title_row_alignments,
+    title_row_offsets_x,
 )
 from krok_helper.subtitle_render.engine.text import (
     char_layout_width,
@@ -513,9 +514,10 @@ def layout_title_overlay(
         # 的并集。统一对齐时与整块锚点定位逐像素等价（同 left/center/right
         # 的算式）。
         row_aligns = title_row_alignments(style, title, len(lines))
+        row_offsets = title_row_offsets_x(style, title, len(lines))
         row_x = [
-            title_row_screen_x(img_w, width, align, title.offset_x, half_edge)
-            for align, width in zip(row_aligns, widths)
+            title_row_screen_x(img_w, width, align, title.offset_x, half_edge) + offset
+            for align, width, offset in zip(row_aligns, widths, row_offsets)
         ]
         x0 = min(row_x)
         block_w = max(x + w for x, w in zip(row_x, widths)) - x0

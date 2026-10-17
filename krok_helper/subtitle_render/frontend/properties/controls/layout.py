@@ -633,7 +633,8 @@ class _LayoutSchematic(QWidget):
             ]
         if mode == "center":
             return [("center", 0.0, 0.0) for _ in alignments]
-        return [(align, 0.0, 0.0) for align in alignments]
+        offsets = list(state.get("offsets_x") or []) + [0] * len(alignments)
+        return [(align, float(offsets[index]), 0.0) for index, align in enumerate(alignments)]
 
     def paintEvent(self, event: Any) -> None:
         state = self._state
