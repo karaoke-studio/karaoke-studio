@@ -97,6 +97,7 @@ class RolePropertyPageBuilder:
         host._font_stroke_controls = {}
         host._font_controls = {}
         host._font_size_follow_checks = {}
+        host._font_weight_follow_checks = {}
         host._font_italic_checks = {}
         for subject, script in (
             ("main", "japanese"),

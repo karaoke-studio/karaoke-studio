@@ -303,6 +303,24 @@ class RoleFontSettingsPageBuilder:
             host._font_size_follow_checks[slot] = follow_check
             layout.addWidget(follow_check)
 
+        # 字重同理：英数字重下拉虽有"（0）= 跟随"档，但主文字字重变了它不会
+        # 自动跟上（藏在一个数字里）。跟随勾选框默认勾上，取消勾选时把当前
+        # 实际生效的字重写死，外观不跳变。
+        weight_follow_label = {
+            ("main", "latin"): "字重跟随主文字日文",
+            ("ruby", "latin"): "字重跟随注音日文",
+        }.get((subject, script))
+        if weight_follow_label is not None:
+            weight_follow_check = CheckBox(weight_follow_label, page)
+            weight_follow_check.setChecked(True)
+            weight_follow_check.setToolTip("勾选后，改日文字重时英数字重跟着一起变。")
+            weight_follow_check.toggled.connect(
+                lambda checked, current_slot=slot:
+                host._on_font_weight_follow_toggled(current_slot, checked)
+            )
+            host._font_weight_follow_checks[slot] = weight_follow_check
+            layout.addWidget(weight_follow_check)
+
         stroke_row = QWidget(page)
         stroke_layout = QGridLayout(stroke_row)
         stroke_layout.setContentsMargins(0, 0, 0, 0)

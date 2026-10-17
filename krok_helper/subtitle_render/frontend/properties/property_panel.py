@@ -1526,12 +1526,35 @@ class PropertyPanel(QWidget):
         ("ruby", "latin"): ("ruby_latin_font_size_px", "ruby_font_size_px"),
     }
 
+    #: 英数字重跟随谁：与字号同一套路，跟随关系写 ``None`` 进对应槽。
+    _FONT_WEIGHT_FOLLOW_FIELDS = {
+        ("main", "latin"): ("latin_font_weight", "font_weight"),
+        ("ruby", "latin"): ("ruby_latin_font_weight", "ruby_font_weight"),
+    }
+
     def _on_font_size_follow_toggled(self, slot: tuple[str, str], checked: bool) -> None:
         if self._syncing:
             return
         field, source_field = self._FONT_SIZE_FOLLOW_FIELDS[slot]
         # 取消跟随时把当前**实际生效**的字号写死，外观不跳变 —— 和注音配色那个
         # 跟随勾选框同一个套路。
+        value = None if checked else int(self._scheme_value(source_field))
+        changes: dict[str, object] = {field: value}
+        if checked:
+            changes.update(self._scheme_local_inheritance_changes(field))
+        if slot[0] == "ruby":
+            self._update_ruby_font_override(**changes)
+        else:
+            self._update_style(**changes)
+
+    def _on_font_weight_follow_toggled(
+        self, slot: tuple[str, str], checked: bool
+    ) -> None:
+        """英数字重跟随勾选框：与字号跟随同一套语义（``None`` = 跟随）。"""
+        if self._syncing:
+            return
+        field, source_field = self._FONT_WEIGHT_FOLLOW_FIELDS[slot]
+        # 取消跟随时把当前**实际生效**的字重写死，外观不跳变。
         value = None if checked else int(self._scheme_value(source_field))
         changes: dict[str, object] = {field: value}
         if checked:
@@ -1609,6 +1632,19 @@ class PropertyPanel(QWidget):
             # 跟随时输入框置灰、留在 0：整个面板里 0 都表示"跟随上一级"
             # （字体下拉写着"（0）"、字重与描边宽度同理），这里不另立一套。
             spin.setEnabled(not follows)
+
+    def _sync_font_weight_follow_controls(self) -> None:
+        """英数字重跟随勾选框：``None`` = 跟随，字重下拉置灰停在"（0）"档。"""
+        for slot, check in self._font_weight_follow_checks.items():
+            field, _source_field = self._FONT_WEIGHT_FOLLOW_FIELDS[slot]
+            follows = self._font_size_follows(field)
+            check.blockSignals(True)
+            try:
+                check.setChecked(follows)
+            finally:
+                check.blockSignals(False)
+            # 跟随时下拉置灰、停在"（0）"档（与字号输入框同一口径）。
+            self._font_controls[slot][1].setEnabled(not follows)
 
     def _sync_font_settings_page(self) -> None:
         subject_index = 0 if self._font_tab_panel.current_right() == "main" else 1
@@ -4683,6 +4719,7 @@ class PropertyPanel(QWidget):
                 or self._scheme_value("latin_font_stretch_pct") or 100)
         )
         self._sync_font_size_follow_controls()
+        self._sync_font_weight_follow_controls()
         self._refresh_font_weight_combos(
             {
                 ("main", "japanese"): int(self._scheme_value("font_weight")),

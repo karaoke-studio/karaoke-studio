@@ -13,6 +13,7 @@ class _Host:
         self._font_controls = {}
         self._font_stroke_controls = {}
         self._font_size_follow_checks = {}
+        self._font_weight_follow_checks = {}
         self._font_italic_checks = {}
         self.updates = []
 
@@ -38,6 +39,9 @@ class _Host:
         pass
 
     def _on_font_size_follow_toggled(self, _slot, _checked):
+        pass
+
+    def _on_font_weight_follow_toggled(self, _slot, _checked):
         pass
 
     def _on_font_italic_state_changed(self, _field, _state):
@@ -125,3 +129,24 @@ def test_role_font_page_builder_preserves_inheritance_labels(qapp) -> None:
     assert host._font_controls[("main", "latin")][2] == "跟随主文字日文（0）"
     assert host._font_controls[("ruby", "japanese")][2] == "跟随主文字（0）"
     assert host._font_controls[("ruby", "latin")][2] == "跟随注音日文（0）"
+
+
+def test_role_font_page_builder_places_weight_follow_checks(qapp) -> None:
+    """英数字重跟随勾选框只在两个英数页面出现，默认勾选。"""
+    host = _Host()
+    parent = QWidget()
+    builder = RoleFontSettingsPageBuilder(host)
+    for subject, script in (
+        ("main", "japanese"),
+        ("main", "latin"),
+        ("ruby", "japanese"),
+        ("ruby", "latin"),
+    ):
+        builder.make_page(subject, script, parent)
+
+    assert set(host._font_weight_follow_checks) == {
+        ("main", "latin"),
+        ("ruby", "latin"),
+    }
+    assert host._font_weight_follow_checks[("main", "latin")].isChecked()
+    assert host._font_weight_follow_checks[("ruby", "latin")].isChecked()

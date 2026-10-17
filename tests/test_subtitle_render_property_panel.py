@@ -10959,3 +10959,33 @@ def test_font_italic_tri_state_slots_follow_and_override(qapp):
     assert panel._font_italic_checks[("ruby", "latin")].checkState() == (
         Qt.CheckState.PartiallyChecked
     )
+
+
+def test_latin_weight_follow_checkbox_materializes_on_uncheck(qapp):
+    """英数字重跟随勾选框：默认跟随（None，下拉置灰停在 0 档）。"""
+    panel = PropertyPanel()
+    panel.set_style(Style(font_weight=700))
+
+    check = panel._font_weight_follow_checks[("main", "latin")]
+    combo = panel._font_controls[("main", "latin")][1]
+    assert check.isChecked()
+    assert not combo.isEnabled()
+    assert combo.currentData() == 0
+    assert panel.subtitle_style.latin_font_weight is None
+
+    # 取消跟随：把当前实际生效的字重（主文字 700）写死，外观不跳变。
+    check.setChecked(False)
+    assert panel.subtitle_style.latin_font_weight == 700
+    assert combo.isEnabled()
+    assert combo.currentData() == 700
+
+    # 重新勾选：回到 None 跟随。
+    check.setChecked(True)
+    assert panel.subtitle_style.latin_font_weight is None
+    assert not combo.isEnabled()
+    assert combo.currentData() == 0
+
+    # 旧工程（显式英数字重）不受影响：勾选框回显未勾选。
+    panel.set_style(Style(latin_font_weight=600))
+    assert not panel._font_weight_follow_checks[("main", "latin")].isChecked()
+    assert panel._font_controls[("main", "latin")][1].isEnabled()
