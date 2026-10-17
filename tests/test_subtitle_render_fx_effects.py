@@ -3254,7 +3254,7 @@ def test_painter_snow_smoke(qapp, snow_kind):
     paint_frame(img2, track, 1100, entry)
 
 
-@pytest.mark.parametrize("sing_kind", ["petal", "snow", "snow_solid", "heart"])
+@pytest.mark.parametrize("sing_kind", ["petal", "snow", "snow_solid", "heart", "flame"])
 def test_petal_and_snow_sing_particles_skip_whitespace(sing_kind):
     """空格例外（旧粒子口径）对花瓣/雪花同样成立：空格字符不发射唱字
     粒子（无走字内容），出入场粒子仍整行逐字参与（含空格位）。"""
@@ -3270,9 +3270,9 @@ def test_petal_and_snow_sing_particles_skip_whitespace(sing_kind):
     bursts = plan_line_bursts(
         style, 0, 1000, 4000, 3900, windows, char_visible=visible
     )
-    # 音符族（note/heart）三档 sweep 全 0（原地出生型），唱字/入场按
-    # 「起点是否落在唱字窗内」区分；花瓣/雪花族按 sweep 区分。
-    if sing_kind in ("note", "heart"):
+    # 音符族（note/heart）与火焰族三档 sweep 全 0（原地出生型），唱字/
+    # 入场按「起点是否落在唱字窗内」区分；花瓣/雪花族按 sweep 区分。
+    if sing_kind in ("note", "heart", "flame"):
         sing = [b for b in bursts if b["kind"] == sing_kind
                 and b["start_ms"] in (1200, 2000)]
         entry = [b for b in bursts if b["kind"] == sing_kind
@@ -3599,12 +3599,11 @@ def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
 
 
 def test_flame_sprite_contract():
-    """火焰 sprite = **Twemoji 🔥（U+1F525，CC-BY 4.0）外焰层官方 path 归一化**
-    （2026-10 用户口径：联网取现成形状）：M + 12×C + Z 单轮廓，包络
-    x ±444.4 / y 顶 -470（焰尖朝上），h/w ≈ 1.06。"""
+    """火焰 sprite v2 = **锐利火舌**（2026-10-18 用户口径：标准 Aeg 模板
+    风格的锐利火焰——简单几何+blur 是 Aeg 火粒惯例，弃 emoji 萌系轮廓）：
+    尖顶(0,-470) + 内凹侧腰 + 圆底，M + 5×C + Z，h/w ≈ 1.45 修长。"""
     flame = FX_SPRITES["flame"]["path_commands"]
-    assert [c[0] for c in flame] == ["M"] + ["C"] * 12 + ["Z"]
-    assert sum(1 for c in flame if c[0] == "M") == 1
+    assert [c[0] for c in flame] == ["M"] + ["C"] * 5 + ["Z"]
 
     def flatten():
         out = []
@@ -3631,28 +3630,40 @@ def test_flame_sprite_contract():
     pts = flatten()
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
-    assert max(xs) == pytest.approx(444.4, abs=0.5)
-    assert min(xs) == pytest.approx(-444.4, abs=0.5)
-    assert min(ys) == pytest.approx(-470.0, abs=0.5)
     w = max(xs) - min(xs)
     h = max(ys) - min(ys)
-    assert 1.0 <= h / w <= 1.12  # 火焰略高
-    # 焰尖在顶部近中线（顶部 2% 高度内有点且 |x| 远小于半宽）。
-    top_zone = [p for p in pts if p[1] < min(ys) + h * 0.02]
-    assert top_zone and max(abs(p[0]) for p in top_zone) < w * 0.2
-    # 底部圆钝：底部 10% 高度内的点覆盖半宽的 60% 以上（圆底不是尖底）。
-    bottom_zone = [p for p in pts if p[1] > max(ys) - h * 0.10]
-    assert max(abs(p[0]) for p in bottom_zone) > w * 0.28
+    assert 1.35 <= h / w <= 1.55  # 修长火舌
+    assert max(xs) <= 500.0 and -min(ys) <= 500.0
+    # 尖顶：顶部 3% 高度内的点都贴近中线（锐利尖端，非 emoji 圆顶）。
+    top_zone = [p for p in pts if p[1] < min(ys) + h * 0.03]
+    assert top_zone and max(abs(p[0]) for p in top_zone) < w * 0.10
+    # 内凹侧腰：上半段最宽 < 下半段最宽的 92%（上段收窄贴焰柱）。
+    upper = [p for p in pts if p[1] < min(ys) + h * 0.35]
+    lower = [p for p in pts if p[1] > min(ys) + h * 0.55]
+    assert max(abs(p[0]) for p in upper) < max(abs(p[0]) for p in lower) * 0.92
     assert sprite_for_kind("flame") == "flame"
+    # 灰烬 speck：小碎块单轮廓（五边直线）。
+    ash = FX_SPRITES["ash"]["path_commands"]
+    assert [c[0] for c in ash] == ["M", "L", "L", "L", "L", "Z"]
+    radii = [
+        math.hypot(float(c[i]), float(c[i + 1]))
+        for c in ash
+        for i in range(1, len(c) - 1, 2)
+    ]
+    assert max(radii) <= 200.0 and min(radii) >= 100.0
+    assert sprite_for_kind("ash") == "ash"
 
 
-def test_flame_plans_entry_exit_only_standard_rate():
-    """火焰只做出入场（无唱字分支）；发射按分离口径恒标准速率——时长旋钮
-    不改粒子窗口；退场完整播放越过显示窗终点；默认双色=Twemoji 火焰对。"""
-    def windows(exit_fade_ms: int):
+def test_flame_plans_entry_exit_and_sing():
+    """火焰三档规划（v2 口径）：发射恒标准速率（旋钮不改窗口）+ 完整播放；
+    特效级尺寸（60% 字号）/速度（3.6× 行程）；退场伴生灰烬（ash 双灰）；
+    唱字=火焰燃烧（逐字发射、吃粒子旋钮、每字至少 3 束）。"""
+    def plan(**kw):
         style = Style(
-            entry_anim="flame", entry_lead_ms=600,
-            exit_anim="flame", exit_fade_ms=exit_fade_ms,
+            entry_anim=kw.get("entry", "flame"), entry_lead_ms=600,
+            exit_anim=kw.get("exit", "flame"), exit_fade_ms=kw.get("fade", 600),
+            sing_fx=kw.get("sing", "none"),
+            fx_particle_count=kw.get("count", 14),
             font_size_px=100, karaoke_anim="none",
         )
         return plan_line_bursts(
@@ -3661,65 +3672,114 @@ def test_flame_plans_entry_exit_only_standard_rate():
         )
 
     for fade in (120, 600, 3000):
-        bursts = windows(fade)
+        bursts = plan(fade=fade)
+        flame = [b for b in bursts if b["kind"] == "flame"]
+        ash = [b for b in bursts if b["kind"] == "ash"]
         entry = sorted(
-            (b["start_ms"], b["end_ms"])
-            for b in bursts
-            if b["kind"] == "flame" and b["start_ms"] < 1500
+            (b["start_ms"], b["end_ms"]) for b in flame if b["start_ms"] < 1500
         )
         exit_ = sorted(
-            (b["start_ms"], b["end_ms"])
-            for b in bursts
-            if b["kind"] == "flame" and b["start_ms"] >= 3000
+            (b["start_ms"], b["end_ms"]) for b in flame if b["start_ms"] >= 3000
         )
-        # 入场：锚 1000、错峰 175、寿命 1100、每字 4 颗拆双色 2+2。
+        # 每字 5 颗拆双色 3+2（同刻两条 burst/字）。
         assert entry == [
             (1000, 2100), (1000, 2100),
             (1175, 2275), (1175, 2275),
             (1350, 2450), (1350, 2450),
         ], fade
-        # 退场：锚 max(4100, 4200-1450)=4100、末字越过 4200 完整燃尽。
         assert exit_ == [
             (4100, 5200), (4100, 5200),
             (4275, 5375), (4275, 5375),
             (4450, 5550), (4450, 5550),
         ], fade
-        assert {b["color"] for b in bursts if b["kind"] == "flame"} == {
-            "#F4900C", "#FFCC4D",
-        }
-    # 无唱字分支：sing_fx=flame 不发射（未知唱字档回落 none）。
-    sing = Style(sing_fx="flame", karaoke_anim="none", font_size_px=100)
-    assert [
-        b for b in plan_line_bursts(sing, 0, 0, 3000, 2900, [(100, 400)])
+        for b in flame:
+            assert b["size_px"] == pytest.approx(100 * 0.60)
+            assert b["travel_px"] == pytest.approx(100 * 0.60 * 3.6)
+        # 退场伴生灰烬：寿命 950、行程 0、双色灰白+炭黑；入场无灰烬。
+        ash_entry = [b for b in ash if b["start_ms"] < 1500]
+        ash_exit = sorted(
+            (b["start_ms"], b["end_ms"]) for b in ash if b["start_ms"] >= 3000
+        )
+        assert ash_entry == []
+        assert ash_exit == [
+            (4100, 5050), (4100, 5050),
+            (4275, 5225), (4275, 5225),
+            (4450, 5400), (4450, 5400),
+        ], fade
+        assert {b["color"] for b in ash} == {"#9C9C9C", "#555555"}
+        for b in ash:
+            assert b["size_px"] == pytest.approx(100 * 0.22)
+            assert b["travel_px"] == 0.0
+        assert {b["color"] for b in flame} == {"#F4900C", "#FFCC4D"}
+
+    # 唱字：逐字发射、每字 max(3, 14//3)=4 束、尺寸 1.2× 旋钮尺寸。
+    sing = [
+        b for b in plan(sing="flame", entry="none", exit="none")
         if b["kind"] == "flame"
-    ] == []
+    ]
+    # 唱字不吃固定默认档（默认单独颜色=白，折单 burst/字——与音符等同口径）。
+    assert len(sing) == 3
+    assert sorted(b["start_ms"] for b in sing) == [1200, 1600, 2000]
+    assert all(b["count"] == 4 for b in sing)  # max(3, 14//3)
+    knob_size = 100 * 0.40  # fx_particle_size_em 默认 0.40
+    for b in sing:
+        assert b["size_px"] == pytest.approx(knob_size * 1.2)
+        assert b["travel_px"] == pytest.approx(knob_size * 1.2 * 3.6)
+        assert b["end_ms"] - b["start_ms"] == 1100
 
 
 def test_flame_trajectory_rises_grows_and_flickers():
-    """火焰轨迹（Burning 模板火粒层等效）：单调上升、尺寸随燃烧增大、
-    快显长灭（alpha 前段已达峰、末段归零）、出生在字框内。"""
+    """火焰轨迹 v2：单调上升、尺寸随燃烧增大、快显长灭、出生在字框内。"""
     base = {
         "kind": "flame", "anchor": "char", "char_index": 0,
         "start_ms": 0, "end_ms": 1100, "count": 6, "seed": 4242,
-        "size_px": 30.0, "travel_px": 60.0, "front": True, "sweep": 0,
+        "size_px": 60.0, "travel_px": 216.0, "front": True, "sweep": 0,
     }
     early = burst_particles_at(base, 250, 0.0, 0.0, 120.0, 100.0)
     late = burst_particles_at(base, 950, 0.0, 0.0, 120.0, 100.0)
     assert early == burst_particles_at(base, 250, 0.0, 0.0, 120.0, 100.0)
-    assert len(early) > 0
     for a, b in zip(early, late):
-        assert b.y < a.y  # 上升
-        assert b.size_px > a.size_px  # 燃烧增大（模板 fscx200→300 口径）
-        assert abs(a.x) <= 120.0 * 0.35 + 30.0 * 0.30 + 1.0  # 出生+摇摆不出字框太远
-        assert -60.0 <= a.y <= 60.0  # 出生在字框带内
-    for state in late:
+        assert b.y < a.y  # 升腾
+        assert b.size_px > a.size_px  # 燃烧增大
+    for state in early + late:
         assert 0.0 < state.alpha <= 1.0
-    # 快显：alpha 在 1/6 寿命处已接近峰值包络。
-    quarter = burst_particles_at(base, 200, 0.0, 0.0, 120.0, 100.0)
-    assert all(s.alpha > 0.0 for s in quarter)
-    # 窗口外为空。
     assert burst_particles_at(base, -1, 0.0, 0.0, 120.0, 100.0) == []
     assert burst_particles_at(base, 1101, 0.0, 0.0, 120.0, 100.0) == []
+
+
+def test_ash_trajectory_falls_shrinks_and_fades():
+    """灰烬轨迹：飘落（y 随时间增大）、边落边缩小、快显长灭。"""
+    base = {
+        "kind": "ash", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 950, "count": 6, "seed": 777,
+        "size_px": 22.0, "travel_px": 0.0, "front": True, "sweep": 0,
+    }
+    early = burst_particles_at(base, 200, 0.0, 0.0, 120.0, 100.0)
+    late = burst_particles_at(base, 800, 0.0, 0.0, 120.0, 100.0)
+    assert len(early) > 0
+    for a, b in zip(early, late):
+        assert b.y > a.y  # 飘落（灰烬下坠，区别于火焰上升）
+        assert b.size_px < a.size_px  # 边落边缩小
+    for state in early + late:
+        assert 0.0 < state.alpha <= 1.0
+    assert burst_particles_at(base, -1, 0.0, 0.0, 120.0, 100.0) == []
+    assert burst_particles_at(base, 951, 0.0, 0.0, 120.0, 100.0) == []
+
+
+def test_flame_char_state_fast_entry_and_shrink_exit():
+    """火焰档文字本体（2026-10-18 用户口径）：入场=烧的过程中快速出现
+    （8 倍速）；退场=渐隐中缩小到 55%（scaleX/scaleY 同步收缩）。"""
+    style = Style(font_size_px=100, entry_lead_ms=600, exit_fade_ms=600)
+    entry = _entry_transition("flame")
+    mid = transition_char_state(style, entry, 0, 4, t_ms=entry.start_ms + 40)[0]
+    assert mid > 0.5  # 40ms（1/6 窗口）已过半显（8 倍速）
+    exit_t = _exit_transition("flame", 1000)
+    opacity, _dx, _dy, _rot, sx, sy, _skew = transition_char_state(
+        style, exit_t, 0, 4, t_ms=1000 + 500
+    )
+    assert opacity < 1.0
+    assert sx == pytest.approx(sy)
+    assert 0.5 < sx < 1.0  # 缩小进行中（终值 0.55）
 
 
 def test_flame_gpu_support_and_override_roundtrip():
@@ -3728,17 +3788,21 @@ def test_flame_gpu_support_and_override_roundtrip():
     style = Style(
         entry_anim="flame",
         exit_anim="flame",
+        sing_fx="flame",
         karaoke_anim="inherit",
         reverse_karaoke_anim="inherit",
     )
     assert gpu_unsupported_features(track, style) == ()
     data = line_animation_override_to_dict(
-        LineAnimationOverride(entry_anim="flame", exit_anim="flame")
+        LineAnimationOverride(
+            entry_anim="flame", exit_anim="flame", sing_fx="flame"
+        )
     )
     restored = line_animation_override_from_dict(data)
     assert restored is not None
     assert restored.entry_anim == "flame"
     assert restored.exit_anim == "flame"
+    assert restored.sing_fx == "flame"
 
 
 def test_painter_flame_smoke(qapp):

@@ -609,7 +609,18 @@ def _geo_char_state(
         q = p * p * (3.0 - 2.0 * p)
         return 1.0 - q, 0.0, 0.0, 0.0, 1.0 + 0.6 * q, 1.0, 0.0
 
-    if transition.effect in {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame"}:
+    if transition.effect == "flame":
+        # 火焰档本体（2026-10-18 用户口径）：入场=烧的过程中的**快速出现**
+        #（8 倍速透明度）；退场=渐隐中**缩小**（缩到 55%）——「烧没」的
+        # 余烬收缩感，灰烬粒子由 planner 伴生。
+        p = _stagger_progress()
+        if transition.phase == "exit":
+            q = p * p * (3.0 - 2.0 * p)
+            shrink = 1.0 - 0.45 * q
+            return 1.0 - q, 0.0, 0.0, 0.0, shrink, shrink, 0.0
+        return min(p * 8.0, 1.0), 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
+
+    if transition.effect in {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid"}:
         # 粒子类出入场动画的本体：文字逐字显形（入场 4 倍速透明度，
         # 粒子拼接同款编排），退场逐字淡出；粒子由 planner 叠加。
         p = _stagger_progress()

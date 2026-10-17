@@ -63,19 +63,19 @@ ExitFx = Literal["none", "sparkle", "ripple"]
 # 闪烁、对称铺满字框），与新版扫过+漂移运动学并存供用户选择。
 SingFx = Literal[
     "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow",
-    "snow_solid"
+    "snow_solid", "flame"
 ]
 # 逐行唱字装饰粒子覆盖比全局多一档「跟随全局」，语义与 KaraokeAnimation 的 inherit 对齐。
 LineSingFx = Literal[
     "inherit", "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal",
-    "snow", "snow_solid"
+    "snow", "snow_solid", "flame"
 ]
 # 入退场 fx 字段保留作工程兼容（UI 已并入入退场动画档，规划器不再消费）。
 ENTRY_FX_KINDS: frozenset[str] = frozenset({"none", "sparkle", "ripple"})
 EXIT_FX_KINDS: frozenset[str] = frozenset({"none", "sparkle", "ripple"})
 SING_FX_KINDS: frozenset[str] = frozenset(
     {"none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow",
-    "snow_solid"}
+    "snow_solid", "flame"}
 )
 KaraokeAnimation = Literal[
     "inherit", "none", "no_wipe", "utopia", "scanline", "utopia_scanline",

@@ -190,8 +190,23 @@ GeoCharState geoCharState(
         }
         return state;
     }
+    if (effect == "flame") {
+        // 火焰档本体（2026-10-18 用户口径）：入场=烧的过程中的快速出现
+        //（8 倍速透明度）；退场=渐隐中缩小到 55%（烧没的余烬收缩感，
+        // 灰烬粒子由 planner 伴生）。
+        const float p = staggerProgress;
+        if (exitPhase) {
+            const float q = smoothstep(p);
+            state.opacity = 1.0f - q;
+            state.scaleX = 1.0f - 0.45f * q;
+            state.scaleY = state.scaleX;
+        } else {
+            state.opacity = std::min(p * 8.0f, 1.0f);
+        }
+        return state;
+    }
     if (effect == "sparkle" || effect == "ripple" || effect == "note"
-        || effect == "heart" || effect == "flame" || effect == "petal"
+        || effect == "heart" || effect == "petal"
         || effect == "snow" || effect == "snow_solid") {
         // 粒子类出入场动画的本体：文字逐字显形（入场 4 倍速透明度，
         // 粒子拼接同款编排），退场逐字淡出；粒子由 planner 叠加。
@@ -456,26 +471,51 @@ std::vector<FxParticle> burstParticlesAt(
             const float u3 = fxUnitHash(index, 3u);
             const float u4 = fxUnitHash(index, 4u);
             constexpr float pi = 3.14159265358979323846f;
-            const float delay = u3 * life * 0.30f;
+            const float delay = u3 * life * 0.25f;
             const float p = std::clamp(
                 (tau - delay) / std::max(life - delay, 1.0f), 0.0f, 1.0f
             );
             if (p <= 0.0f) {
                 continue;
             }
-            const float rise = travel * p;
+            const float rise = travel * std::pow(p, 0.85f);
             const float sway =
-                std::sin((u2 + p * 1.2f) * 2.0f * pi) * size * 0.30f;
+                std::sin((u2 + p * 1.4f) * 2.0f * pi) * size * 0.25f;
             const float flicker =
-                0.85f + 0.15f * std::sin((p * 3.0f + u4) * 2.0f * pi);
+                0.72f + 0.28f * std::sin((p * 4.0f + u4) * 2.0f * pi);
             out.push_back(FxParticle{
                 originX + (u1 - 0.5f) * boxW * 0.7f + sway,
                 originY + (u2 - 0.4f) * boxH * 0.5f - rise,
-                (u4 - 0.5f) * 40.0f
-                    + std::sin((p * 2.0f + u1) * 2.0f * pi) * 10.0f,
-                size * (0.75f + 0.50f * u1) * (1.0f + 0.50f * p),
-                std::min(p * 6.0f, 1.0f)
-                    * std::pow(1.0f - p, 1.5f) * flicker,
+                (u4 - 0.5f) * 30.0f
+                    + std::sin((p * 2.0f + u1) * 2.0f * pi) * 12.0f,
+                size * (0.85f + 0.45f * u1) * (1.0f + 0.65f * p),
+                std::min(p * 8.0f, 1.0f)
+                    * std::pow(1.0f - p, 1.2f) * flicker,
+            });
+        } else if (burst.kind == "ash") {
+            // 灰烬（镜像 particles.burst_particles_at ash 分支）：自字框
+            // 出生后飘落 + 小幅摇摆 + 边落边缩小熄灭 + 慢自旋。
+            constexpr float pi = 3.14159265358979323846f;
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float delay = u3 * life * 0.20f;
+            const float p = std::clamp(
+                (tau - delay) / std::max(life - delay, 1.0f), 0.0f, 1.0f
+            );
+            if (p <= 0.0f) {
+                continue;
+            }
+            const float fall = (0.35f + 0.45f * u2) * boxH * p;
+            const float sway =
+                std::sin((u2 + p * 1.2f) * 2.0f * pi) * size * 0.80f;
+            out.push_back(FxParticle{
+                originX + (u1 - 0.5f) * boxW * 0.8f + sway,
+                originY + (u2 - 0.3f) * boxH * 0.4f + fall,
+                (u4 - 0.5f) * 120.0f + p * (u3 - 0.5f) * 180.0f,
+                size * (0.5f + 0.6f * u1) * (1.0f - 0.45f * p),
+                std::min(p * 5.0f, 1.0f) * std::pow(1.0f - p, 1.15f),
             });
         } else if (burst.kind == "petal") {
             // 花瓣飘落（镜像 particles.burst_particles_at petal 分支）：

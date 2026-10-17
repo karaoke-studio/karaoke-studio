@@ -177,6 +177,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
     sing_fx = value.get("sing_fx")
     if sing_fx not in {
         "inherit", "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow", "snow_solid",
+        "flame",
     }:
         sing_fx = "inherit"
     return LineAnimationOverride(

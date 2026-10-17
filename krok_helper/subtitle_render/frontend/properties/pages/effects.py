@@ -82,6 +82,7 @@ FX_SING_OPTIONS = (
     ("星光闪烁（旧版）", "twinkle_classic"),
     ("音符飘出", "note"),
     ("爱心飘出", "heart"),
+    ("火焰燃烧", "flame"),
     ("涟漪光环", "ripple"),
     ("花瓣飘动", "petal"),
     ("雪花飘动·镂空", "snow"),

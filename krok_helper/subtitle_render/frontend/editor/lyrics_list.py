@@ -212,6 +212,7 @@ _SING_FX_EFFECTS = (
     ("heart", "爱心飘出"),
     ("ripple", "涟漪光环"),
     ("petal", "花瓣飘动"),
+    ("flame", "火焰燃烧"),
     ("snow", "雪花飘动·镂空"),
     ("snow_solid", "雪花飘动·实心"),
 )
@@ -243,6 +244,7 @@ _PRESET_COMBO_ITEMS = (
     ("sing_heart", "唱字·爱心飘出"),
     ("sing_ripple", "唱字·涟漪光环"),
     ("sing_petal", "唱字·花瓣飘动"),
+    ("sing_flame", "唱字·火焰燃烧"),
     ("sing_snow", "唱字·雪花飘动·镂空"),
     ("sing_snow_solid", "唱字·雪花飘动·实心"),
 )
@@ -268,6 +270,7 @@ _PRESET_SING_FX = {
     "sing_heart": "heart",
     "sing_ripple": "ripple",
     "sing_petal": "petal",
+    "sing_flame": "flame",
     "sing_snow": "snow",
     "sing_snow_solid": "snow_solid",
 }

@@ -93,15 +93,23 @@ FIRE_B = "#FFCC4D"
 # 火焰粒子寿命：火苗有余韵，比音符长、与雪花同档（Burning 模板的火粒
 # 淡出窗口 2000ms 中实际可见约 1s）。
 FLAME_LIFE_MS = 1100
+# 灰烬（火焰烧尽的伴生粒子，kind ``ash`` 仅由 flame 退场发射，非独立档）：
+# 灰白 + 炭黑双色；寿命短于火焰（余烬飘落即熄）。
+ASH_A = "#9C9C9C"
+ASH_B = "#555555"
+ASH_LIFE_MS = 950
 
 
 def _default_color_pair(
-    snow: bool, heart: bool = False, fire: bool = False
+    snow: bool, heart: bool = False, fire: bool = False, ash: bool = False
 ) -> tuple[str, str]:
     """按 kind 的默认双色（固定默认档与「默认颜色」模式共用）：雪花=雪白
-    +冰蓝；爱心=正红+浅粉；火焰=外焰橙+内焰金（Twemoji 🔥 双层）；花瓣
-    与其余 kind 维持樱花粉（b5a1b7fb 用户口径不回归）。"""
+    +冰蓝；爱心=正红+浅粉；火焰=外焰橙+内焰金（Twemoji 🔥 双层配色）；
+    灰烬=灰白+炭黑；花瓣与其余 kind 维持樱花粉（b5a1b7fb 用户口径
+    不回归）。"""
 
+    if ash:
+        return (ASH_A, ASH_B)
     if fire:
         return (FIRE_A, FIRE_B)
     if heart:
@@ -427,6 +435,7 @@ def particle_variant_paints(
     snow: bool = False,
     heart: bool = False,
     fire: bool = False,
+    ash: bool = False,
     include_strokes: bool = True,
 ) -> list[dict[str, object]] | None:
     """双色随机模式的**变体实色/规格列表**（2026-10 花瓣特效口径）：
@@ -458,7 +467,7 @@ def particle_variant_paints(
             return [{"color": fallback}]
         return [{"color": fallback}, {"color": color2}]
     if mode == "sakura":
-        pair = _default_color_pair(snow, heart, fire)
+        pair = _default_color_pair(snow, heart, fire, ash)
         return [{"color": pair[0]}, {"color": pair[1]}]
 
     layers = str(
@@ -927,26 +936,36 @@ def _snow_solid_commands() -> list[list[object]]:
 
 
 def _flame_commands() -> list[list[object]]:
-    """火焰剪影（kind ``flame``，2026-10 用户口径：仅出入场——火焰燃起 /
-    烧尽，参考 Aegisub Luc Van Tien「Burning (Lead-in)」模板）。形状取自
-    **Twemoji 🔥（U+1F525，twemoji 15.1.0 assets/svg/1f525.svg 外焰层，
-    图形 CC-BY 4.0）** 官方 path 的归一化坐标（中心平移 + 等比缩放到
-    ±500 em 空间：宽 ±444 / 高 ±470，h/w ≈ 1.06 略高）；焰尖朝上、
-    底部圆钝带两侧火舌起伏；M + 12×C + Z 单轮廓。"""
+    """火焰剪影（kind ``flame``）——**锐利火舌**（2026-10-18 用户口径：
+    火焰是帅气类型，用标准 Aeg 模板风格的锐利火焰，弃 emoji 萌系轮廓；
+    Aeg 模板的火粒=简单锐利几何 + blur——Burning 模板用菱形、纹理模板
+    用圆点，本档取「尖顶 + 内凹侧腰 + 圆底」的经典火舌剪影）：焰尖
+    (0,-470) 朝上，两侧上段内凹（贴焰柱）、下段外鼓（±288 最宽）、
+    底部圆弧收拢；M + 5×C + Z 单轮廓，h/w ≈ 1.45 修长。"""
     return [
-        ["M", 444.4, 25.6],
-        ["C", 444.4, -28.3, 434.8, -80.0, 417.2, -127.8],
-        ["C", 405.2, 13.1, 330.1, 85.4, 251.6, 51.7],
-        ["C", 178.1, 20.2, 227.6, -102.9, 231.3, -161.7],
-        ["C", 237.5, -261.3, 231.0, -375.2, 50.1, -470.0],
-        ["C", 125.3, -326.2, 58.8, -236.9, -10.9, -231.5],
-        ["C", -88.2, -225.4, -159.0, -297.9, -132.9, -415.5],
-        ["C", -217.5, -353.2, -220.0, -248.2, -193.9, -180.3],
-        ["C", -166.6, -109.5, -195.0, -50.7, -261.4, -44.1],
-        ["C", -335.6, -36.8, -376.9, -123.6, -338.8, -262.0],
-        ["C", -404.7, -184.5, -444.4, -84.1, -444.4, 25.6],
-        ["C", -444.4, 271.0, -245.4, 470.0, 0.0, 470.0],
-        ["C", 245.4, 470.0, 444.4, 271.0, 444.4, 25.6],
+        ["M", 0.0, -470.0],
+        # 左缘上行（从底到尖读则为下行）：尖 → 内凹腰 → 左最宽
+        ["C", -24.0, -350.0, -230.0, -260.0, -275.0, -90.0],
+        # 左下段外鼓 → 底弧左端
+        ["C", -300.0, 60.0, -225.0, 210.0, -115.0, 320.0],
+        # 底部圆弧
+        ["C", -50.0, 378.0, 50.0, 378.0, 115.0, 320.0],
+        # 右侧镜像回尖
+        ["C", 225.0, 210.0, 300.0, 60.0, 275.0, -90.0],
+        ["C", 230.0, -260.0, 24.0, -350.0, 0.0, -470.0],
+        ["Z"],
+    ]
+
+
+def _ash_commands() -> list[list[object]]:
+    """灰烬 speck（kind ``ash``，flame 退场伴生）：不规则小碎块——五边
+    微歪四边形，±150 em（≈0.15em 视觉），小尺寸下读作飘散的灰烬碎屑。"""
+    return [
+        ["M", -148.0, -96.0],
+        ["L", 112.0, -142.0],
+        ["L", 150.0, 58.0],
+        ["L", 26.0, 148.0],
+        ["L", -138.0, 104.0],
         ["Z"],
     ]
 
@@ -983,6 +1002,7 @@ FX_SPRITES: dict[str, dict[str, object]] = {
     "snow_solid": _sprite_ir(_snow_solid_commands()),
     "heart": _sprite_ir(_heart_commands()),
     "flame": _sprite_ir(_flame_commands()),
+    "ash": _sprite_ir(_ash_commands()),
 }
 
 _SPRITE_FOR_KIND = {
@@ -998,6 +1018,7 @@ _SPRITE_FOR_KIND = {
     "snow_solid": "snow_solid",
     "heart": "heart",
     "flame": "flame",
+    "ash": "ash",
 }
 
 
@@ -1084,6 +1105,7 @@ def _cached_particle_variants(
     snow: bool = False,
     heart: bool = False,
     fire: bool = False,
+    ash: bool = False,
     include_strokes: bool,
 ) -> list[dict[str, object]] | None:
     key = (
@@ -1094,6 +1116,7 @@ def _cached_particle_variants(
         bool(snow),
         bool(heart),
         bool(fire),
+        bool(ash),
         bool(include_strokes),
     )
     entry = _VARIANT_CACHE.get(key)
@@ -1112,6 +1135,7 @@ def _cached_particle_variants(
         snow=snow,
         heart=heart,
         fire=fire,
+        ash=ash,
         include_strokes=include_strokes,
     )
     if len(_VARIANT_CACHE) >= _VARIANT_CACHE_MAX:
@@ -1240,6 +1264,7 @@ def plan_line_bursts(
         snow: bool = False,
         heart: bool = False,
         fire: bool = False,
+        ash: bool = False,
     ) -> list[dict[str, object]]:
         """burst 的颜色规格**列表**：固定默认档（按 kind 的默认双色）/ 实色
         回退 (+ 取色层级的装饰规格) / 双色档的变体规格列表
@@ -1262,7 +1287,7 @@ def plan_line_bursts(
             # 固定默认档 = 按 kind 的默认双色随机混发（2026-10 用户口径：
             # 出入场粒子用「默认颜色」而非单独颜色的默认白；樱花粉为既有
             # 口径，雪花/爱心/火焰按 kind 各取默认对）。
-            pair = _default_color_pair(snow, heart, fire)
+            pair = _default_color_pair(snow, heart, fire, ash)
             return [{"color": pair[0]}, {"color": pair[1]}]
         char_style = _char_style(char_index)
         variants = _cached_particle_variants(
@@ -1273,6 +1298,7 @@ def plan_line_bursts(
             snow=snow,
             heart=heart,
             fire=fire,
+            ash=ash,
             include_strokes=not ring,
         )
         if variants is not None:
@@ -1483,9 +1509,10 @@ def plan_line_bursts(
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif entry_anim == "flame" and entry_active and display_start_ms is not None:
-        # 火焰燃起（2026-10 用户口径：仅出入场、不做唱字；参考 Aegisub
-        # Luc Van Tien「Burning」模板的火粒层）——逐字错峰（标准速率）、
-        # 火苗自字框内升腾，文字本体沿用粒子族逐字显形。
+        # 火焰燃起（2026-10 用户口径：参考 Aegisub Burning 模板火粒层；
+        # 尺寸/速度对齐特效风格——60% 字号、3.6× 行程的特效级火舌；
+        # 文字本体在烧的过程中**快速出现**（char-state 专用分支）。
+        flame_size = font_px * 0.60
         for char_index in range(char_count):
             start = int(display_start_ms) + stagger * char_index
             _variant_bursts({
@@ -1493,10 +1520,10 @@ def plan_line_bursts(
                 "char_index": int(char_index),
                 "start_ms": start,
                 "end_ms": start + FLAME_LIFE_MS,
-                "count": 4, "seed": (seed_base + 16 + char_index) & 0xFFFFFFFF,
-                "size_px": anim_size, "travel_px": anim_size * 2.0,
+                "count": 5, "seed": (seed_base + 16 + char_index) & 0xFFFFFFFF,
+                "size_px": flame_size, "travel_px": flame_size * 3.6,
                 "front": True, "sweep": 0,
-            }, _burst_paint(char_index, anim_size, anim=True, fire=True))
+            }, _burst_paint(char_index, flame_size, anim=True, fire=True))
     elif entry_anim == "petal" and entry_active and display_start_ms is not None:
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
         # 抵达后熄灭），随机摇摆 + 连续翻转（\moves4 四点飘移等效观感）。
@@ -1586,12 +1613,15 @@ def plan_line_bursts(
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif exit_anim == "flame" and exit_active and display_end_ms is not None:
-        # 火焰烧尽（退场）：逐字错峰烧过（标准速率），火苗越过显示窗终点
-        # 完整燃尽（分离口径——尾奏通道续播）。
+        # 火焰烧尽（退场，2026-10 用户口径）：逐字错峰烧过（标准速率），
+        # 火苗越过显示窗终点完整燃尽（分离口径——尾奏通道续播）；**渐隐
+        # 中伴生灰烬**（ash 双色灰白+炭黑，自字框飘落熄灭）——文字本体
+        # char-state 分支同步缩小渐隐。
         exit_start_flame = max(
             int(line_end_ms) if line_end_ms is not None else 0,
             int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + FLAME_LIFE_MS),
         )
+        flame_size = font_px * 0.60
         for char_index in range(char_count):
             start = exit_start_flame + stagger * char_index
             _variant_bursts({
@@ -1599,10 +1629,19 @@ def plan_line_bursts(
                 "char_index": int(char_index),
                 "start_ms": start,
                 "end_ms": start + FLAME_LIFE_MS,
-                "count": 4, "seed": (seed_base + 17 + char_index) & 0xFFFFFFFF,
-                "size_px": anim_size, "travel_px": anim_size * 2.0,
+                "count": 5, "seed": (seed_base + 17 + char_index) & 0xFFFFFFFF,
+                "size_px": flame_size, "travel_px": flame_size * 3.6,
                 "front": True, "sweep": 0,
-            }, _burst_paint(char_index, anim_size, anim=True, fire=True))
+            }, _burst_paint(char_index, flame_size, anim=True, fire=True))
+            _variant_bursts({
+                "kind": "ash", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start,
+                "end_ms": start + ASH_LIFE_MS,
+                "count": 3, "seed": (seed_base + 18 + char_index) & 0xFFFFFFFF,
+                "size_px": font_px * 0.22, "travel_px": 0.0,
+                "front": True, "sweep": 0,
+            }, _burst_paint(char_index, font_px * 0.22, anim=True, ash=True))
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
             int(line_end_ms) if line_end_ms is not None else 0,
@@ -1744,6 +1783,28 @@ def plan_line_bursts(
                 "size_px": size, "travel_px": 0.0,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, size, anim=False, snow=True))
+    elif style.sing_fx == "flame":
+        # 火焰燃烧（唱字，2026-10 用户口径补齐）：唱到的字上持续冒起
+        # 特效级火舌（数量吃粒子旋钮，每字至少 3 束；窗口自然播完，
+        # 与花瓣/雪花唱字同口径）。
+        per_char = max(3, count // 3)
+        flame_sing_size = size * 1.2
+        for char_index, (start_ms, end_ms) in enumerate(char_windows):
+            duration = int(end_ms) - int(start_ms)
+            if duration <= 0:
+                continue
+            if char_visible is not None and not char_visible[char_index]:
+                continue
+            _variant_bursts({
+                "kind": "flame", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": int(start_ms),
+                "end_ms": int(start_ms) + FLAME_LIFE_MS,
+                "count": per_char,
+                "seed": (seed_base + 7 + char_index) & 0xFFFFFFFF,
+                "size_px": flame_sing_size, "travel_px": flame_sing_size * 3.6,
+                "front": True, "sweep": 0,
+            }, _burst_paint(char_index, flame_sing_size, anim=False, fire=True))
     elif style.sing_fx in ("twinkle", "twinkle_classic", "note", "heart"):
         # 唱字星光并入出入场星光运动学后，密度对齐出入场观感（默认 7/字）；
         # 「旧版」档（twinkle_classic）保留 2026-10 运动学改造前的原地闪烁
@@ -1992,26 +2053,47 @@ def burst_particles_at(
                 1.0 - p * math.sqrt(p),
             ))
         elif kind == "flame":
-            # 火焰（Aegisub Luc Van Tien「Burning」火粒层等效）：字框内
-            # 随机出生 → 缓慢上升 + 横向摇摆 + 尺寸随燃烧增大（模板
-            # \fscx200→300 口径）→ 快显长灭 + 高频闪烁。
+            # 火焰 v2（2026-10-18 用户口径：速度/大小对齐特效风格）：字框
+            # 内随机出生 → 快速升腾（行程 3.6× 尺寸，p^0.85 先快后缓）+
+            # 横向摇摆 + 尺寸随燃烧增大（Burning 模板 \fscx200→300 口径）
+            # → 快显长灭 + 强闪烁（0.72+0.28 高频）。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
-            delay = u3 * life * 0.30
+            delay = u3 * life * 0.25
             p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
             if p <= 0.0:
                 continue
-            rise = travel * p
-            sway = math.sin((u2 + p * 1.2) * 2.0 * math.pi) * size * 0.30
-            flicker = 0.85 + 0.15 * math.sin((p * 3.0 + u4) * 2.0 * math.pi)
+            rise = travel * p ** 0.85
+            sway = math.sin((u2 + p * 1.4) * 2.0 * math.pi) * size * 0.25
+            flicker = 0.72 + 0.28 * math.sin((p * 4.0 + u4) * 2.0 * math.pi)
             out.append(ParticleDraw(
                 origin_x + (u1 - 0.5) * box_w * 0.7 + sway,
                 origin_y + (u2 - 0.4) * box_h * 0.5 - rise,
-                (u4 - 0.5) * 40.0 + math.sin((p * 2.0 + u1) * 2.0 * math.pi) * 10.0,
-                size * (0.75 + 0.50 * u1) * (1.0 + 0.50 * p),
-                min(p * 6.0, 1.0) * (1.0 - p) ** 1.5 * flicker,
+                (u4 - 0.5) * 30.0 + math.sin((p * 2.0 + u1) * 2.0 * math.pi) * 12.0,
+                size * (0.85 + 0.45 * u1) * (1.0 + 0.65 * p),
+                min(p * 8.0, 1.0) * (1.0 - p) ** 1.2 * flicker,
+            ))
+        elif kind == "ash":
+            # 灰烬（flame 退场伴生）：自字框出生后**飘落**（灰烬下坠，
+            # 区别于火焰上升）+ 小幅摇摆 + 边落边缩小熄灭 + 慢自旋。
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            delay = u3 * life * 0.20
+            p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
+            if p <= 0.0:
+                continue
+            fall = (0.35 + 0.45 * u2) * box_h * p
+            sway = math.sin((u2 + p * 1.2) * 2.0 * math.pi) * size * 0.80
+            out.append(ParticleDraw(
+                origin_x + (u1 - 0.5) * box_w * 0.8 + sway,
+                origin_y + (u2 - 0.3) * box_h * 0.4 + fall,
+                (u4 - 0.5) * 120.0 + p * (u3 - 0.5) * 180.0,
+                size * (0.5 + 0.6 * u1) * (1.0 - 0.45 * p),
+                min(p * 5.0, 1.0) * (1.0 - p) ** 1.15,
             ))
         elif kind == "petal":
             # 花瓣飘落（Aegisub「\moves4 四点飘移」等效运动学）：sin 横向

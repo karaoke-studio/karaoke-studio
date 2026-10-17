@@ -92,6 +92,9 @@ inline const char *fxSpriteForKind(const std::string &kind) {
     if (kind == "flame") {
         return "flame";
     }
+    if (kind == "ash") {
+        return "ash";
+    }
     if (kind == "assemble" || kind == "dissolve") {
         return "pixel";
     }
