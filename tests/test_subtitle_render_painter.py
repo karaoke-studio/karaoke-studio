@@ -16755,3 +16755,226 @@ def test_title_overlay_space_uses_n3_space_width(qapp):
     assert layout.widths[0] == pytest.approx(
         sum(glyph.advance for glyph in glyphs), abs=0.001
     )
+
+
+# ---------------------------------------------------------------------------
+# 半透明配色的走字互斥回归（2026-10 用户反馈）
+# ---------------------------------------------------------------------------
+
+def _alpha_karaoke(color: str) -> KaraokeColors:
+    """前后同色、带 Alpha 的单色矩阵（用户在配色页设透明度后的形态）。"""
+    paint = _solid_fill(color)
+    state = KaraokeColorState(
+        text=paint,
+        stroke=_solid_fill("#00000000"),
+        stroke2=_solid_fill("#00000000"),
+        shadow=_solid_fill("#00000000"),
+    )
+    return KaraokeColors(before=state, after=state)
+
+
+def _max_gray(img: QImage, bg: QColor = QColor("#101010")) -> int:
+    result = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            color = QColor(img.pixel(x, y))
+            if color.rgb() == bg.rgb():
+                continue
+            result = max(result, color.red(), color.green(), color.blue())
+    return result
+
+
+def _squared_tint_pixels(img: QImage) -> int:
+    """统计彩色 α² 双层像素：单层 50% 的主通道 ≤136，双层 ≈195。"""
+    squared = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            color = QColor(img.pixel(x, y))
+            channels = (color.red(), color.green(), color.blue())
+            peak = max(channels)
+            floor = min(channels)
+            if peak - floor < 60:
+                continue
+            if peak >= 170:
+                squared += 1
+    return squared
+
+
+def test_semitransparent_karaoke_sung_region_composites_once(qapp):
+    # 回归（2026-10 用户反馈：唱字特效过程透明度不生效）：50% 白主文字在
+    # 走字全程（进行中/唱完）都只允许单层合成。before 层此前全量垫底、
+    # after 层裁剪叠加，已唱区呈 α²（136 → 196 灰）。
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="歌", start_ms=1000)], end_ms=3000)]
+    )
+    style = Style(
+        font_size_px=60,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        entry_anim="none",
+        exit_anim="none",
+        section_head_anim="none",
+        karaoke_anim="none",
+        base_color="#80FFFFFF",
+        karaoke_colors=_alpha_karaoke("#80FFFFFF"),
+    )
+    for t_ms in (1100, 2000, 2900, 3200):
+        img = _blank(240, 140)
+        paint_frame(img, track, t_ms, style)
+        # 单层 50% 白在 #101010 上的任何抗锯齿像素都 ≤136；α² 双层 ≈196。
+        assert _max_gray(img) <= 150, f"t={t_ms} 出现 α² 双层像素"
+
+
+def test_semitransparent_utopia_karaoke_composites_once(qapp):
+    # 同上，覆盖逐字变换（utopia / 整字放大族）的 fragment 路径：utopia
+    # 中途 before 栈此前未裁剪，已唱半边 α²；唱完后由 after 栈独占。
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="歌", start_ms=1000)], end_ms=3000)]
+    )
+    for anim in ("utopia", "zoom_pulse"):
+        style = Style(
+            font_size_px=60,
+            line_y_margin_px=10,
+            dual_line_layout=False,
+            line_lead_in_ms=0,
+            entry_anim="none",
+            exit_anim="none",
+            section_head_anim="none",
+            karaoke_anim=anim,
+            base_color="#80FFFFFF",
+            karaoke_colors=_alpha_karaoke("#80FFFFFF"),
+        )
+        for t_ms in (1100, 2000, 2900):
+            img = _blank(240, 140)
+            paint_frame(img, track, t_ms, style)
+            assert _max_gray(img) <= 150, f"anim={anim} t={t_ms} 出现 α² 双层像素"
+
+
+def test_semitransparent_ruby_text_stroke_composites_once(qapp):
+    # 回归（2026-10 用户反馈：注音文字/描边/描边2 透明度不生效，GPU/CPU
+    # 皆然）：注音独立配色 50% 红时，走字全程不允许出现 α² 红像素；主文
+    # 字保持不透明白以便区分（白色抗锯齿不带红色调）。
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="漢", start_ms=1000),
+                    TimingChar(text="字", start_ms=1500),
+                ],
+                end_ms=4000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢字",
+                reading="かんじ",
+                reading_part_ms=[400, 400],
+                pos_start_ms=1000,
+                pos_end_ms=4000,
+            )
+        ],
+    )
+
+    def ruby_style(
+        text: str,
+        stroke: str,
+        stroke2: str,
+        stroke_w: int,
+        stroke2_w: int,
+    ) -> Style:
+        paint = _solid_fill(text)
+        state = KaraokeColorState(
+            text=paint,
+            stroke=_solid_fill(stroke),
+            stroke2=_solid_fill(stroke2),
+            shadow=_solid_fill("#00000000"),
+        )
+        main = KaraokeColorState(
+            text=_solid_fill("#FFFFFFFF"),
+            stroke=_solid_fill("#00000000"),
+            stroke2=_solid_fill("#00000000"),
+            shadow=_solid_fill("#00000000"),
+        )
+        return Style(
+            font_size_px=48,
+            line_y_margin_px=10,
+            dual_line_layout=False,
+            line_lead_in_ms=0,
+            entry_anim="none",
+            exit_anim="none",
+            section_head_anim="none",
+            karaoke_anim="none",
+            base_color="#FFFFFFFF",
+            karaoke_colors=KaraokeColors(before=main, after=main),
+            ruby_karaoke_colors=KaraokeColors(before=state, after=state),
+            ruby_stroke_width_px=stroke_w,
+            ruby_stroke2_enabled=stroke2_w > 0,
+            ruby_stroke2_width_px=stroke2_w,
+        )
+
+    cases = (
+        ("text50", ruby_style("#80FF0000", "#00000000", "#00000000", 0, 0)),
+        ("stroke50", ruby_style("#00FFFFFF", "#80FF0000", "#00000000", 6, 0)),
+        ("stroke2_50", ruby_style("#00FFFFFF", "#00000000", "#800000FF", 0, 6)),
+    )
+    for label, style in cases:
+        for t_ms in (1200, 2500, 3900):
+            img = _blank(260, 200)
+            paint_frame(img, track, t_ms, style)
+            assert _squared_tint_pixels(img) == 0, (
+                f"{label} t={t_ms} 注音出现 α² 双层像素"
+            )
+
+
+def test_equal_state_glow_keeps_full_halo_across_wipe(qapp):
+    # 等态发光在走字全程保持整幅光晕：主体层不烘光后，共享光层必须独立
+    # 供给两侧光晕（GPU 逐侧独占裁剪在等色时的等价形态），否则已唱侧
+    # 光晕随主体互斥裁剪消失。
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="歌", start_ms=1000)], end_ms=3000)]
+    )
+
+    def ink_row_span(kind: str, t_ms: int) -> int:
+        # 光晕颜色走 shadow 槽：发光装饰必须给该槽一个不透明光色（文字
+        # 仍是 50% 白半透明，与用户场景一致）。
+        state = KaraokeColorState(
+            text=_solid_fill("#80FFFFFF"),
+            stroke=_solid_fill("#00000000"),
+            stroke2=_solid_fill("#00000000"),
+            shadow=_solid_fill("#FF00FF00"),
+        )
+        style = Style(
+            font_size_px=60,
+            line_y_margin_px=10,
+            dual_line_layout=False,
+            line_lead_in_ms=0,
+            entry_anim="none",
+            exit_anim="none",
+            section_head_anim="none",
+            karaoke_anim="none",
+            base_color="#80FFFFFF",
+            decoration_kind=kind,
+            glow_radius_px=12,
+            glow_before_radius_px=12,
+            glow_after_radius_px=12,
+            karaoke_colors=KaraokeColors(before=state, after=state),
+        )
+        img = _blank(240, 160)
+        paint_frame(img, track, t_ms, style)
+        rows = [
+            y
+            for y in range(img.height())
+            if any(
+                QColor(img.pixel(x, y)) != QColor("#101010")
+                for x in range(img.width())
+            )
+        ]
+        return (max(rows) - min(rows) + 1) if rows else 0
+
+    for t_ms in (1200, 2000, 3200):
+        glow_span = ink_row_span("glow", t_ms)
+        plain_span = ink_row_span("shadow", t_ms)
+        assert glow_span > plain_span + 6, (
+            f"t={t_ms} 走字中光晕被切断：glow={glow_span} plain={plain_span}"
+        )

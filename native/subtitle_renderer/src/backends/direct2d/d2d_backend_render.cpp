@@ -531,7 +531,32 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
                 && tMs < candidate.endMs + std::max(baseStyle.tailMs, 0)
             ));
-        if (visible) {
+        // 退场粒子尾奏（2026-10 分离口径）：显示窗已结束但退场粒子仍在
+        // 标准寿命内——保留进 activeLines，由行循环的 particleExitTail
+        // 分支仅画粒子（文字已隐）。
+        bool exitTailBursts = false;
+        if (
+            !visible
+            && !candidate.staticOverlay
+            && !candidate.bursts.empty()
+            && !candidate.style.vertical
+        ) {
+            const std::string &exitAnim = candidate.exitAnimation;
+            if (
+                exitAnim == "sparkle" || exitAnim == "ripple"
+                || exitAnim == "note" || exitAnim == "heart"
+                || exitAnim == "petal" || exitAnim == "snow"
+                || exitAnim == "snow_solid"
+            ) {
+                for (const ParticleBurst &burst : candidate.bursts) {
+                    if (tMs >= burst.startMs && tMs < burst.endMs) {
+                        exitTailBursts = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (visible || exitTailBursts) {
             const bool sourceLineAlreadyActive = std::any_of(
                 activeLines.begin(), activeLines.end(),
                 [&](const Impl::CachedLine *line) {
@@ -695,6 +720,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         );
     };
     for (const Impl::CachedLine *line : activeLines) {
+      }
       if (line != nullptr && (
         !line->geometries.empty()
         || std::any_of(
@@ -723,7 +749,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && line->style.litStyle != "volume"
             && (line->style.litAppearanceMode == "auto"
                 || line->style.litAppearanceMode == "role");
+        // 退场粒子尾奏（2026-10 分离口径，镜像 Painter _paint_exit_particle_
+        // tails）：行透明度归零后，粒子档的退场粒子可能仍按标准寿命在播。
+        bool particleExitTail = false;
         if (animation.opacity <= 0.0f) {
+            }
             bool litAutoLampVisible = false;
             if (litAutoDecorated && lineEntryAnimationAt(*line).opacity > 0.0f) {
                 int litGuardStartMs = line->startMs;
@@ -748,7 +778,23 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     litGuardState.visible && litGuardState.activeIndex >= 0;
             }
             if (!litAutoLampVisible) {
-                continue;
+                if (!line->bursts.empty() && !line->style.vertical) {
+                    const std::string &exitAnim = line->exitAnimation;
+                    if (exitAnim == "sparkle" || exitAnim == "ripple"
+                        || exitAnim == "note" || exitAnim == "heart"
+                        || exitAnim == "petal" || exitAnim == "snow"
+                        || exitAnim == "snow_solid") {
+                        for (const ParticleBurst &burst : line->bursts) {
+                            if (tMs >= burst.startMs && tMs < burst.endMs) {
+                                particleExitTail = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!particleExitTail) {
+                    continue;
+                }
             }
         }
         // Fade the composed line, not every brush inside it (see
@@ -5632,6 +5678,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // 2026-09 装饰粒子（back=涟漪光环垫底 / front=星光·音符·闪烁）与
         // 唱字描边闪光。轨迹/时序与 Python particles.py / painter.py 镜像。
         // ------------------------------------------------------------------
+        }
         auto drawFxBursts = [&](bool front) {
             if (line->bursts.empty() || style.vertical) {
                 return;
@@ -6082,6 +6129,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             context->SetTransform(previousTransform);
         };
+        if (particleExitTail) {
+            }
+            // 行文字已隐（透明度 0），仅按各自图层序续播退场粒子到自然
+            // 终点；全部文字管线（正文/注音/发光/描边闪光）跳过。
+            context->SetTransform(
+                withViewport(D2D1::Matrix3x2F::Translation(dx, dy))
+            );
+            drawFxBursts(false);
+            drawFxBursts(true);
+            continue;
+        }
         auto drawGlowHalo = [&]() {
             // 辉光浮现/消散（glow_in / glow_out）：多级圆角描边叠出近似高斯
             // 衰减的弥散白晕（镜像 painter._paint_transition_glow_halo），画在
@@ -6224,6 +6282,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             context->SetTransform(previousTransform);
         };
 
+        }
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
@@ -7211,37 +7270,65 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 stroke->SetOpacity(rubyOpacity);
                 stroke2->SetOpacity(rubyOpacity);
                 bool pushedUtopiaClip = false;
-                if (after && useUtopiaTransition) {
+                if (useUtopiaTransition) {
                     // Gate by unit wipe phase like the glow worker and the
                     // main-text body path. A not-yet-started unit must not
                     // paint its after side at all: its ratio-0 edge rests at
                     // the wipe-left (ink minus ruby primary edge / 2), which
                     // sits inside the unit's own stroke2 ring, so clipping
                     // there leaks a sliver of after colour on large stroked
-                    // ruby the moment an earlier unit starts wiping.
+                    // ruby the moment an earlier unit starts wiping. The
+                    // before side mirrors it: a finished unit must not paint
+                    // its before side (the after stack owns the sung side —
+                    // translucent fills would otherwise composite α²), and a
+                    // wiping unit keeps only its unsung half.
                     const N3WipePhase phase = rubyUnitWipePhaseAt(
                         ruby, index
                     );
-                    if (phase == N3WipePhase::Before) {
-                        continue;
-                    }
-                    if (phase == N3WipePhase::Wiping) {
-                        const auto [animatedBounds, animatedEdge] =
-                            utopiaRubyUnitWipe(
-                                ruby, rubyIndex, index, rubyStyle
+                    if (after) {
+                        if (phase == N3WipePhase::Before) {
+                            continue;
+                        }
+                        if (phase == N3WipePhase::Wiping) {
+                            const auto [animatedBounds, animatedEdge] =
+                                utopiaRubyUnitWipe(
+                                    ruby, rubyIndex, index, rubyStyle
+                                );
+                            const float pad = std::max(
+                                rubyStyle.rubyStrokeWidth
+                                    + rubyStyle.rubyStroke2Width,
+                                2.0f
+                            ) + 4.0f;
+                            pushAxisAlignedClip(
+                                directionalWipeClip(
+                                    animatedBounds, animatedEdge, pad, true
+                                ),
+                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                             );
-                        const float pad = std::max(
-                            rubyStyle.rubyStrokeWidth
-                                + rubyStyle.rubyStroke2Width,
-                            2.0f
-                        ) + 4.0f;
-                        pushAxisAlignedClip(
-                            directionalWipeClip(
-                                animatedBounds, animatedEdge, pad, true
-                            ),
-                            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-                        );
-                        pushedUtopiaClip = true;
+                            pushedUtopiaClip = true;
+                        }
+                    } else {
+                        if (phase == N3WipePhase::After) {
+                            continue;
+                        }
+                        if (phase == N3WipePhase::Wiping) {
+                            const auto [animatedBounds, animatedEdge] =
+                                utopiaRubyUnitWipe(
+                                    ruby, rubyIndex, index, rubyStyle
+                                );
+                            const float pad = std::max(
+                                rubyStyle.rubyStrokeWidth
+                                    + rubyStyle.rubyStroke2Width,
+                                2.0f
+                            ) + 4.0f;
+                            pushAxisAlignedClip(
+                                directionalWipeClip(
+                                    animatedBounds, animatedEdge, pad, false
+                                ),
+                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                            );
+                            pushedUtopiaClip = true;
+                        }
                     }
                 }
                 ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
@@ -7393,7 +7480,54 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         rubyWipeEdge,
                         fullWipeClipBottom
                     ));
-            drawRubyStack(rubyIndex, ruby, false);
+            // before 栈按相位走（主文字 pushMainWipeClip 双侧互斥裁剪的
+            // 同口径）：未开哨（Before）不裁剪；进行中（Wiping）只画未唱
+            // 侧、锋面处与 after 栈按像素分区；唱完（After）不画。此前
+            // before 全量垫底 + after 裁剪叠加，半透明注音在已唱区呈 α²
+            // 双层——2026-10 用户实测注音文字/描边/描边2 透明度不生效的
+            // 根因；不透明配色下 after 完全覆盖 before，观感不变。utopia
+            // 的逐单元相位门控在 drawRubyStack 内按 after 形参处理。
+            if (!useUtopiaTransition) {
+                const N3WipePhase rubyPhase = rubyWipePhaseAt(ruby);
+                if (rubyPhase == N3WipePhase::Before) {
+                    drawRubyStack(rubyIndex, ruby, false);
+                } else if (rubyPhase == N3WipePhase::Wiping) {
+                    const D2D1_RECT_F rubyBeforeClip = style.vertical
+                        ? (reverseVertical
+                            ? D2D1::RectF(
+                                ruby.bounds.left - rubyPad,
+                                ruby.bounds.top - rubyPad,
+                                ruby.bounds.right + rubyPad,
+                                rubyWipeEdge
+                            )
+                            : D2D1::RectF(
+                                ruby.bounds.left - rubyPad,
+                                rubyWipeEdge,
+                                ruby.bounds.right + rubyPad,
+                                ruby.bounds.bottom + rubyPad
+                            ))
+                        : (rtl
+                            ? D2D1::RectF(
+                                ruby.bounds.left - rubyPad,
+                                fullWipeClipTop,
+                                rubyWipeEdge,
+                                fullWipeClipBottom
+                            )
+                            : D2D1::RectF(
+                                rubyWipeEdge,
+                                fullWipeClipTop,
+                                ruby.bounds.right + rubyPad,
+                                fullWipeClipBottom
+                            ));
+                    pushAxisAlignedClip(
+                        rubyBeforeClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                    drawRubyStack(rubyIndex, ruby, false);
+                    context->PopAxisAlignedClip();
+                }
+            } else {
+                drawRubyStack(rubyIndex, ruby, false);
+            }
             if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {
                 if (!useUtopiaTransition && !rubyComplete) {
                     pushAxisAlignedClip(

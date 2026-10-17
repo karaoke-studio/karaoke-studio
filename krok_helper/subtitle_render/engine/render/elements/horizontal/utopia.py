@@ -37,6 +37,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
 )
 from krok_helper.subtitle_render.engine.render.effects import (
     brush_for_fill,
+    fill_brush_rect,
     fill_signature,
     glow_concentration_level,
     glow_extent,
@@ -1400,6 +1401,27 @@ def paint_char_karaoke_stack(
                 )
         elif use_cached_before_glow:
             _blit_glow(after=False)
+        elif (
+            glow_radius(style, after=False) > 0
+            and style.decoration_kind == "glow"
+        ):
+            # 等态发光、缓存路径不可用：光晕整幅画一次（GPU 逐侧独占裁剪
+            # 在前后光同色同半径时与整幅一次等价），下面的 before 主体层
+            # 不再携带光晕——否则主体按锋面裁剪会把已唱侧光晕一并切掉。
+            paint_glow_path(
+                painter,
+                path,
+                colors.before.shadow,
+                fill_brush_rect(
+                    colors.before.shadow,
+                    fill_rect if fill_rect is not None else rect,
+                    None,
+                ),
+                glow_radius(style, after=False),
+                style.stroke_width_px,
+                stroke2_width,
+                concentration_level=glow_concentration_level(style),
+            )
         utopia_shadow_split = (
             geometry_transform is not None
             and style.decoration_kind == "shadow"
@@ -1456,21 +1478,46 @@ def paint_char_karaoke_stack(
                         )
                     finally:
                         painter.restore()
-        paint_text_layer_stack(
-            painter,
-            path,
-            rect,
-            colors.before,
-            style,
-            stroke_width=style.stroke_width_px,
-            stroke2_width=stroke2_width,
-            shadow_dx=style.shadow_offset_x,
-            shadow_dy=style.shadow_offset_y,
-            glow_radius=glow_radius(style, after=False),
-            draw_glow=not use_cached_before_glow and not glow_states_differ,
-            fill_rect=fill_rect,
-            draw_shadow=not utopia_shadow_split,
-        )
+        # before 栈只画未唱侧（锋面右/左半），已唱半边由下方 after 栈独占
+        # ——与上方 shadow 分割和 GPU 的双侧互斥裁剪同口径。此前 before 全
+        # 量垫底，半透明配色在已唱半边呈 α² 双层（2026-10 用户实测唱字
+        # 特效过程透明度不生效的根因）。
+        painter.save()
+        try:
+            painter.setClipRect(
+                QRectF(
+                    front,
+                    -1_000_000.0,
+                    1_000_000.0,
+                    2_000_000.0,
+                )
+                if not rtl
+                else QRectF(
+                    -1_000_000.0,
+                    -1_000_000.0,
+                    front + 1_000_000.0,
+                    2_000_000.0,
+                )
+            )
+            paint_text_layer_stack(
+                painter,
+                path,
+                rect,
+                colors.before,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=stroke2_width,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=glow_radius(style, after=False),
+                # 光晕已在上方单独整幅画过（等态共享 / 分态逐侧 / 缓存
+                # blit 三种来源），主体层不再携带，避免随锋面裁剪被切断。
+                draw_glow=False,
+                fill_rect=fill_rect,
+                draw_shadow=not utopia_shadow_split,
+            )
+        finally:
+            painter.restore()
         stroke_pad = visual_text_padding(style)
         # RTL：单字内扫光从右向左，已唱区贴字符右缘。
         clip_x = char_x + (char_width * (1.0 - ratio) if rtl else 0.0)

@@ -1365,21 +1365,57 @@ def paint_ruby_karaoke_fragment(
         )
 
     if ratio < 1.0:
-        ports.paint_text_layer_stack(
-            painter,
-            path,
-            rect,
-            colors.before,
-            paint_style,
-            stroke_width=stroke_width,
-            stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx,
-            shadow_dy=shadow_dy,
-            glow_radius=before_glow_radius,
-            draw_glow=not clip_before_glow,
-            fill_rect=fill_rect,
-            horizontal_fill_rect=horizontal_fill_rect,
-        )
+        # before 栈只画未唱侧（0<ratio<1 时与 after 栈在锋面互斥，GPU 双侧
+        # 裁剪的镜像）；未开嗓（ratio<=0）无 after 层，保持全量。此前 before
+        # 全量垫底 + after 裁剪叠加，半透明注音在已唱区呈 α² 双层——
+        # 2026-10 用户实测注音文字/描边/描边2 透明度不生效的根因。
+        painter.save()
+        try:
+            if ratio > 0.0:
+                # 分区线取 after 裁剪矩形在走字轴上的扫过缘（LTR=右缘、
+                # RTL=左缘），两侧严格互补——after 的 pad 只外扩远端，不与
+                # before 重叠。
+                if after_clip_rect is not None:
+                    edge = (
+                        after_clip_rect.left() if rtl else after_clip_rect.right()
+                    )
+                else:
+                    edge = (
+                        rect.left()
+                        + rect.width() * (1.0 - ratio if rtl else ratio)
+                    )
+                painter.setClipRect(
+                    QRectF(
+                        -1_000_000.0,
+                        -1_000_000.0,
+                        edge + 1_000_000.0,
+                        2_000_000.0,
+                    )
+                    if rtl
+                    else QRectF(
+                        edge,
+                        -1_000_000.0,
+                        1_000_000.0,
+                        2_000_000.0,
+                    )
+                )
+            ports.paint_text_layer_stack(
+                painter,
+                path,
+                rect,
+                colors.before,
+                paint_style,
+                stroke_width=stroke_width,
+                stroke2_width=stroke2_width,
+                shadow_dx=shadow_dx,
+                shadow_dy=shadow_dy,
+                glow_radius=before_glow_radius,
+                draw_glow=not clip_before_glow,
+                fill_rect=fill_rect,
+                horizontal_fill_rect=horizontal_fill_rect,
+            )
+        finally:
+            painter.restore()
 
     if ratio <= 0.0:
         return
@@ -1871,6 +1907,26 @@ class RubyTextLayer:
                 return LayerAnimation(opacity=0.0)
             if not complete:
                 clip_rect = ruby_after_clip_rect_at_time(
+                    self.ruby_layout,
+                    self.ruby_metrics,
+                    self.style,
+                    self.rtl,
+                    self.t_ms,
+                )
+        else:
+            # before 只画未唱侧、唱完即隐藏，与 after 层在锋面处互斥（GPU
+            # 主文字双侧互斥裁剪的同口径）。此前 before 全量垫底 + after
+            # 裁剪叠加，半透明注音在已唱区呈 α² 双层——2026-10 用户实测
+            # 注音文字/描边/描边2 透明度不生效的根因。未开哨（visible=
+            # False）保持全量，避免锋面贴框时裁掉起端发光。
+            visible, complete, _front = ruby_wipe_state(
+                self.ruby_layout,
+                self.t_ms,
+            )
+            if complete:
+                return LayerAnimation(opacity=0.0)
+            if visible:
+                clip_rect = ruby_before_clip_rect_at_time(
                     self.ruby_layout,
                     self.ruby_metrics,
                     self.style,

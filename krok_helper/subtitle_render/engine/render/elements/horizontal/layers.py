@@ -218,12 +218,9 @@ def build_glyph_run_layer(
     run_h = max(run_ascent + run_descent, 1)
     stroke2_width = main_stroke2_width(role_style)
 
-    is_glow = role_style.decoration_kind == "glow"
-    bake_glow = (
-        is_glow
-        and not after
-        and not karaoke_glow_states_differ(role_style, colors)
-    )
+    # 光晕不再烘进主体层：等态光由独立的共享光层整幅绘制（与 GPU 逐侧
+    # 独占裁剪在等色同半径时等价），主体层必须无光才能按锋面互斥裁剪。
+    bake_glow = False
     has_shadow = (
         role_style.decoration_kind == "shadow"
         and bool(role_style.shadow_color)
@@ -562,15 +559,24 @@ def paint_line_direct(
 
     for run in runs:
         split_glow = glyph_run_needs_before_glow_split(run)
-        if not split_glow:
-            paint_glyph_run_direct(
+        # 等态发光不再烘进 before 主体：整幅光晕单独画一次（GPU 逐侧独占
+        # 裁剪在前后光同色同半径时与整幅一次等价），主体层永远无光、才能
+        # 按锋面互斥裁剪。分态（split/combined）仍走既有逐侧光层。
+        if (
+            not split_glow
+            and id(run) not in combined_run_ids
+            and run[0].style.decoration_kind == "glow"
+            and glow_radius(run[0].style, after=False) > 0
+        ):
+            glyph_ports.paint_glyph_run_before_glow_direct(
                 painter,
                 run,
                 baseline_y,
-                after=False,
+                None,
+                rtl=layout.rtl,
+                complete=False,
                 fill_rect=fill_rect_for(run),
             )
-            continue
         before_band = glyph_ports.fill_clip_band_for_glyphs(
             layout.fill_segments,
             run,
@@ -591,9 +597,12 @@ def paint_line_direct(
                 baseline_y,
                 after=False,
                 fill_rect=fill_rect_for(run),
-                draw_glow=not split_glow,
+                draw_glow=False,
             )
             continue
+        # 已唱区由 after 层独占：before 只画未唱侧（GPU pushMainWipeClip 的
+        # 镜像）。此前 before 全量垫底 + after 裁剪叠加，半透明配色在已唱
+        # 区呈 α² 双层（2026-10 用户实测透明度不生效的根因）。
         painter.save()
         try:
             painter.setClipRect(horizontal_before_clip_rect(before_band, layout.rtl))
@@ -603,7 +612,7 @@ def paint_line_direct(
                 baseline_y,
                 after=False,
                 fill_rect=fill_rect_for(run),
-                draw_glow=not split_glow,
+                draw_glow=False,
             )
         finally:
             painter.restore()
@@ -943,10 +952,20 @@ def line_layer_stack(
             t_ms,
             layout.rtl,
             fill_rect=fill_rect_for(run),
+            # 等态（前后光同色同半径）也发射光层，shared=True 整幅绘制、
+            # 不随锋面裁剪：主体层不再烘光（见 build_glyph_run_layer），
+            # 光晕必须由这层独立供给，否则主体互斥裁剪会切掉已唱侧光晕。
+            shared=not glyph_run_needs_before_glow_split(run),
         )
         for run in runs
         if id(run) not in combined_run_ids
-        and glyph_run_needs_before_glow_split(run)
+        and (
+            glyph_run_needs_before_glow_split(run)
+            or (
+                run[0].style.decoration_kind == "glow"
+                and glow_radius(run[0].style, after=False) > 0
+            )
+        )
     ]
     before_layers = [
         ports.glyph_run_layer(
@@ -1819,14 +1838,18 @@ class GlyphRunLayer:
         run_left = min(glyph.left for glyph in self.glyphs)
         clip_rect = None
         role_style = self.glyphs[0].style
-        if (
-            not self.after
-            and glow_radius(role_style, after=False) > 0
-            and karaoke_glow_states_differ(
-                role_style,
-                effective_karaoke_colors(role_style),
-            )
-        ):
+        if not self.after:
+            # before 只画未唱侧、整 run 唱完即隐藏（GPU pushMainWipeClip 双侧
+            # 互斥裁剪的镜像）。此前 before 全量垫底，半透明配色在已唱区被
+            # after 层再叠一层呈 α²（2026-10 用户实测透明度不生效的根因）；
+            # 不透明配色下 after 完全覆盖 before，观感不变。
+            indices = {glyph.index for glyph in self.glyphs}
+            if self.ports.run_fill_complete(
+                self.fill_segments,
+                indices,
+                self.t_ms,
+            ):
+                return LayerAnimation(opacity=0.0)
             band = self.ports.fill_clip_band_for_glyphs(
                 self.fill_segments,
                 self.glyphs,
@@ -1834,12 +1857,6 @@ class GlyphRunLayer:
                 self.rtl,
             )
             if band is not None:
-                if self.ports.run_fill_complete(
-                    self.fill_segments,
-                    {glyph.index for glyph in self.glyphs},
-                    self.t_ms,
-                ):
-                    return LayerAnimation(opacity=0.0)
                 clip_rect = horizontal_before_clip_rect(band, self.rtl)
         elif self.after:
             indices = {glyph.index for glyph in self.glyphs}
@@ -1901,7 +1918,13 @@ class GlyphRunLayer:
 
 @dataclass(frozen=True)
 class GlyphRunBeforeGlowLayer:
-    """N3 before-glow: split the outline source, then blur it."""
+    """N3 before-glow: split the outline source, then blur it.
+
+    ``shared=True``（前后光同色同半径的等态档）：整幅光晕一次性绘制、
+    不随锋面裁剪——等价于 GPU 逐侧独占裁剪在等色时的合成结果；此时
+    该层是两侧共享的唯一光晕来源（主体层不烘光，见
+    :func:`build_glyph_run_layer`）。
+    """
 
     glyphs: list[GlyphLayout]
     baseline_y: int
@@ -1914,6 +1937,7 @@ class GlyphRunBeforeGlowLayer:
     fade_opacity: float = 1.0
     transform: QTransform | None = None
     fill_rect: QRectF | None = None
+    shared: bool = False
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -1922,6 +1946,8 @@ class GlyphRunBeforeGlowLayer:
         return self
 
     def _state(self) -> tuple[tuple[int, int] | None, bool]:
+        if self.shared:
+            return None, False
         indices = {glyph.index for glyph in self.glyphs}
         following_band = self.ports.n3_following_wipe_band(
             self.fill_segments,

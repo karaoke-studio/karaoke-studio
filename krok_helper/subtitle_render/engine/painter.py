@@ -4811,8 +4811,8 @@ class _GlyphRunBeforeGlowLayer(_HorizontalGlyphRunBeforeGlowLayer):
             fade_opacity=fade_opacity,
             transform=transform,
             fill_rect=fill_rect,
+            shared=shared,
         )
-
 
 class _GlyphRunSplitGlowLayer(_HorizontalGlyphRunSplitGlowLayer):
     """Compatibility adapter that injects Painter raster ports."""
@@ -4857,6 +4857,7 @@ class _GlyphRunAfterGlowLayer(_HorizontalGlyphRunAfterGlowLayer):
         fade_opacity: float = 1.0,
         transform: QTransform | None = None,
         fill_rect: QRectF | None = None,
+        shared: bool = False,
     ) -> None:
         super().__init__(
             glyphs=glyphs,
