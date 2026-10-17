@@ -509,12 +509,15 @@ std::optional<krok::subtitle::native::BitmapGuide> parseBitmapGuide(
     }
     const QJsonObject object = value.toObject();
     const QString beforePath = stringValue(object, QStringLiteral("before_path"));
-    if (beforePath.isEmpty()) {
+    const QString afterPath = stringValue(object, QStringLiteral("after_path"));
+    // 只设「走字后图片」是合法配置：走字前完全透明，走字推进后才显示。
+    // 仅当两侧都没有图片时才丢弃导唱符。
+    if (beforePath.isEmpty() && afterPath.isEmpty()) {
         return std::nullopt;
     }
     krok::subtitle::native::BitmapGuide guide;
     guide.beforePath = beforePath.toStdWString();
-    guide.afterPath = stringValue(object, QStringLiteral("after_path")).toStdWString();
+    guide.afterPath = afterPath.toStdWString();
     guide.zoomPercent = static_cast<float>(std::clamp(
         object.value(QStringLiteral("zoom_percent")).toDouble(100.0),
         1.0,

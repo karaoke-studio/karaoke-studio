@@ -65,6 +65,20 @@ from krok_helper.subtitle_render.project.store import project_payload
 from krok_helper.subtitle_render.project.load import apply_track_project_data
 
 
+@pytest.fixture(autouse=True)
+def _isolated_bitmap_settings_memory():
+    """每个用例从空的导唱符对话框记忆开始。
+
+    ``guide_symbol_from_bitmap_dialog`` 确认后会写全局
+    ``_BITMAP_SETTINGS_MEMORY``（真实使用中跨对话框预填就是要这个行为）。
+    用例之间不隔离时，上一个用例设置过的图片路径会被下一个用例新建的
+    对话框预填，使依赖「初始为空」的断言随执行顺序失败。
+    """
+    guide_replacement_module.remember_bitmap_settings({})
+    yield
+    guide_replacement_module.remember_bitmap_settings({})
+
+
 def _symbol(tmp_path, *, duration_ms: int = 1000, count: int = 1) -> GuideSymbol:
     path = tmp_path / "lead.svg"
     path.write_text(
@@ -491,9 +505,13 @@ def test_bitmap_avatar_character_transition_matches_gpu_rules(
         inline_guide_symbols={0: symbol},
     )
     track = TimingTrack(lines=[line])
+    # 描边会让相邻的白色「a」在纯白前景上失去色度差：白描边直接画在白字上
+    # 等于把字往外扩，入场期头像按半透明绘制时，扩出来的字边会把头像的
+    # 测量像素框撑宽。这里测的是头像两态与透明度，不是文字描边。
     style = Style(
         font_family="Arial", font_size_px=48, line_y_position="center",
         dual_line_layout=False, line_lead_in_ms=1000, line_tail_ms=1000,
+        stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
         entry_anim=effect, entry_lead_ms=1000,
         exit_anim=effect, exit_fade_ms=600, karaoke_anim="utopia",
     )
