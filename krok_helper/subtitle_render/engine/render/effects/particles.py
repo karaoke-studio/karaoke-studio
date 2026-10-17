@@ -69,6 +69,16 @@ SNOW_LIFE_MS = 1100
 # 雪花出入场的标准整行窗（2026-10 分离口径：旧「入场/退场动画时长」
 # 旋钮默认 600ms 冻结为粒子发射标准；旋钮此后只控制文字逐字渐显/渐隐）。
 SNOW_STD_WINDOW_MS = 600
+# 雪花出入场下落窗（2026-10-18 用户口径：雪下得太快、过半字就看不见）：
+# 入场提前 350ms 起飘、整段落 1800ms；退场落窗同样 1800ms——慢速终端
+# 速度感，且淡出延后到接近字底，保证至少落到主文字最底部。
+SNOW_ENTRY_LEAD_MS = 350
+SNOW_ENTRY_FALL_MS = 1800
+SNOW_EXIT_FALL_MS = 1800
+# 雪花/花瓣“落到底再淡出”的包络：前 78%/75% 保持不透明，最后一段
+# 才收透明度（旧版 p=0.5 已 α≈0.4，视觉上像半途消失）。
+SNOW_FADE_START = 0.78
+PETAL_FADE_START = 0.75
 # 「默认颜色」档的雪花双色（雪白 + 冰蓝）随机混发；固定默认档按 kind
 # 取默认对（雪花=雪色，花瓣与其余 kind=樱花粉，见 _default_color_pair）。
 SNOW_A = "#F2F8FF"
@@ -1817,12 +1827,12 @@ def plan_line_bursts(
                 "front": True, "sweep": 1,
             }, _burst_paint(char_index, anim_size, anim=True, petal=True))
     elif entry_anim in SNOW_KINDS and entry_active and display_start_ms is not None:
-        # 雪花飘入（2026-10 用户口径）：整行雪花**同时出现**（无逐字错
-        # 峰）；起点略早于逐字渐隐首字（规划窗前移——行窗打开的瞬间雪花
-        # 已在半空，视觉上"雪先出现"），终点略晚于逐字渐隐结束（窗口 +
-        # 余尾：文字全部显形后雪花仍有余韵在落）。
-        snow_start = int(display_start_ms) - 200
-        snow_end = int(display_start_ms) + SNOW_STD_WINDOW_MS + 250
+        # 雪花飘入（2026-10-18 用户口径：雪要慢慢落、至少落到字底）：
+        # 提前 350ms 起飘、整段落 1800ms（旧 1050ms 太快，过半字就淡没）；
+        # 逐字 ±80ms 时间抖动；终点覆盖到主文字底部之后，文字显形时雪仍
+        # 在半空继续落。
+        snow_start = max(0, int(display_start_ms) - SNOW_ENTRY_LEAD_MS)
+        snow_end = snow_start + SNOW_ENTRY_FALL_MS
         for char_index in range(char_count):
             _variant_bursts({
                 "kind": entry_anim, "anchor": "char",
@@ -1951,14 +1961,14 @@ def plan_line_bursts(
                 "front": True, "sweep": -1,
             }, _burst_paint(char_index, anim_size, anim=True, petal=True))
     elif exit_anim in SNOW_KINDS and exit_active and display_end_ms is not None:
-        # 雪花飘散（2026-10 用户口径）：与逐字渐隐**同步开始**（同一起点
-        # 整行同刻），终点略晚于逐字渐隐结束（显示末之后仍有余尾——画面
-        # 随行消失截断，但淡出包络完整走到低透明度而非中途被掐）。
-        snow_exit_start = max(
-            int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms) - SNOW_STD_WINDOW_MS,
-        )
+        # 雪花飘散（2026-10-18 用户口径：慢落、至少到字底）：落窗固定
+        # 1800ms，从显示末前 1.5s 起飘（旧锚在行末只剩 400ms 的快速
+        # 坠落）；终点晚于显示窗 300ms，尾奏通道续播到自然熄灭。
         snow_exit_end = int(display_end_ms) + 300
+        snow_exit_start = max(
+            int(display_start_ms) if display_start_ms is not None else 0,
+            snow_exit_end - SNOW_EXIT_FALL_MS,
+        )
         for char_index in range(char_count):
             _variant_bursts({
                 "kind": exit_anim, "anchor": "char",
@@ -2519,34 +2529,50 @@ def burst_particles_at(
                 + p * (160.0 + 240.0 * u5) * (1.0 if u4 >= 0.5 else -1.0)
             )
             if sweep > 0:
-                # 花瓣飘入：自字形顶上方（溢出 0.10~0.40 box_h，星光同
-                # 量级）ease-out 减速飘落进字框，抵达后熄灭。
+                # 花瓣飘入：自字形顶上方 ease-out 减速飘落，落点压到字底
+                # （0.42~0.58 box_h，2026-10-18：至少到主文字最底部才消失）；
+                # 透明度前 75% 保持，最后一段才收。
                 eased = 1.0 - (1.0 - p) * (1.0 - p)
                 land_x = (u1 - 0.5) * box_w * 0.85
-                land_y = (u4 - 0.5) * box_h * 0.55
+                land_y = (0.42 + 0.16 * u4) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.7
                 start_y = -(0.60 + 0.30 * u2) * box_h
+                hold_fade = (
+                    1.0
+                    if p <= PETAL_FADE_START
+                    else max(
+                        0.0,
+                        (1.0 - p) / (1.0 - PETAL_FADE_START),
+                    ) ** 1.2
+                )
                 out.append(ParticleDraw(
                     origin_x + start_x + (land_x - start_x) * eased + sway,
                     origin_y + start_y + (land_y - start_y) * eased,
                     spin,
                     size_i * (0.85 + 0.15 * math.sin(math.pi * p)),
-                    min(p * 5.0, 1.0) * (1.0 - p) * (1.0 - p * 0.4),
+                    min(p * 4.0, 1.0) * hold_fade,
                 ))
             elif sweep < 0:
-                # 花瓣飘散：横向飘逸保持随机（sin 摇摆），只有**结束位置**
-                # 落在起点右侧（幅度随机，2026-10 用户口径：飘逸随机、
-                # 终点向右）；纵向落到字底下方（0.05~0.65 box_h）淡出。
+                # 花瓣飘散：横向飘逸保持随机，终点向右；纵向落到字底下方
+                # （0.55~0.85 box_h），透明度同样前 75% 保持、落到底才收。
                 eased = p * p * (3.0 - 2.0 * p)
                 start_x = (u1 - 0.5) * box_w * 0.85
                 end_x = start_x + (0.5 + 0.9 * u5) * box_w
                 start_y = (u4 - 0.5) * box_h * 0.55
+                hold_fade = (
+                    1.0
+                    if p <= PETAL_FADE_START
+                    else max(
+                        0.0,
+                        (1.0 - p) / (1.0 - PETAL_FADE_START),
+                    ) ** 1.2
+                )
                 out.append(ParticleDraw(
                     origin_x + start_x + (end_x - start_x) * eased + sway,
                     origin_y + start_y + (0.55 + 0.30 * u2) * box_h * eased,
                     spin,
                     size_i * (0.90 + 0.10 * (1.0 - p)),
-                    (1.0 - p) * (1.0 - p * 0.5),
+                    min(p * 4.0, 1.0) * hold_fade,
                 ))
             else:
                 # 花瓣飘动：字框上半出生（星光的偏上口径），小行程缓沉，
@@ -2563,12 +2589,12 @@ def burst_particles_at(
         elif kind in SNOW_KINDS:
             # 雪花飘落（AE CC Snowfall 运动签名 + 2026-10 用户口径）：
             # 出生高度统一锚在 **ruby 盒中心-底部二分之一处**（主文字顶
-            # 上方 ≈0.68~0.90 box_h 窄随机带，窄到 ruby 盒下半部——出生
-            # 点比初版更高且更齐）；下沉 = 匀速（终端速度感，eased=线性）
-            # + 宽幅低频摇摆 + 慢自转；**尺寸随播放由大变小**（近大远小
-            # 的透视感，1.05→0.65 线性递减）。sweep>0 飘入、sweep<0 飘散
-            #（终点向右，同花瓣口径）、sweep==0 唱字飘动。位置偏移全部
-            # box 比例。镜像 d2d_fx.cpp snow 分支。
+            # 上方 ≈0.68~0.90 box_h 窄随机带）；下沉 = 匀速（终端速度感，
+            # eased=线性）+ 宽幅低频摇摆 + 慢自转；**尺寸随播放由大变小**。
+            # 出入场落点压到字底（≥0.48 box_h），透明度前 78% 保持不透明、
+            # 最后 22% 才收——旧版 p=0.5 已 α≈0.4，像半途消失。
+            # sweep>0 飘入、sweep<0 飘散、sweep==0 唱字飘动。
+            # 镜像 d2d_fx.cpp snow 分支。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)
@@ -2590,33 +2616,40 @@ def burst_particles_at(
             # 出生锚：ruby 盒中心-底部二分之一处（字形顶 -0.5 之上）。
             birth_y = -(0.68 + 0.22 * u2) * box_h
             eased = p  # 匀速下沉（雪的终端速度感）
+            hold_fade = (
+                1.0
+                if p <= SNOW_FADE_START
+                else max(
+                    0.0,
+                    (1.0 - p) / (1.0 - SNOW_FADE_START),
+                ) ** 1.2
+            )
             if sweep > 0:
-                # 雪花飘入：自 ruby 锚一路落到**字底部**（2026-10 用户
-                # 口径：雪从天上落到地上，不落在字中间）。
+                # 雪花飘入：自 ruby 锚一路落到**字底或更低**
+                # （2026-10-18：至少到主文字最底部才消失）。
                 land_x = (u1 - 0.5) * box_w * 0.85
-                land_y = (0.35 + 0.20 * u4) * box_h
+                land_y = (0.48 + 0.14 * u4) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.6
                 out.append(ParticleDraw(
                     origin_x + start_x + (land_x - start_x) * eased + sway,
                     origin_y + birth_y + (land_y - birth_y) * eased,
                     spin,
                     size_i,
-                    min(p * 4.0, 1.0) * (1.0 - p) * (1.0 - p * 0.4),
+                    min(p * 3.0, 1.0) * hold_fade,
                 ))
             elif sweep < 0:
-                # 雪花飘散：同样**自 ruby 锚出生落到字底部**（2026-10
-                # 用户口径：不考虑与字面的连续性——雪就是从天上落到地上；
-                # 不再从字面中带剥落），横向随机摇摆、终点向右缓漂。
+                # 雪花飘散：同样自 ruby 锚出生落到字底或更低，横向随机
+                # 摇摆、终点向右缓漂；透明度同样落到底才收。
                 land_x = (u1 - 0.5) * box_w * 0.85
                 end_x = land_x + (0.35 + 0.6 * u5) * box_w
-                land_y = (0.45 + 0.30 * u2) * box_h
+                land_y = (0.50 + 0.24 * u2) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.5
                 out.append(ParticleDraw(
                     origin_x + start_x + (end_x - start_x) * eased + sway,
                     origin_y + birth_y + (land_y - birth_y) * eased,
                     spin,
                     size_i,
-                    (1.0 - p) * (1.0 - p * 0.5),
+                    min(p * 3.0, 1.0) * hold_fade,
                 ))
             else:
                 # 雪花飘动：同样自 ruby 锚出生，匀速缓沉穿过字框，

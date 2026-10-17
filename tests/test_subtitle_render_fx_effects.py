@@ -2394,6 +2394,13 @@ def test_petal_trajectory_windows_and_downward_drift():
         late = burst_particles_at(burst, 700, 0.0, 0.0, 120.0, 100.0)
         for before, after in zip(early, late):
             assert after.y >= before.y  # 无 y 向摇摆项：单调下沉
+        # 2026-10-18：透明度前 75% 保持、落到底才收；落点至少到字底
+        #（0.42+ box_h），不是过字中线就消失。
+        hold = burst_particles_at(burst, 600, 0.0, 0.0, 120.0, 100.0)
+        assert hold and min(state.alpha for state in hold) > 0.8
+        bottom = burst_particles_at(burst, 899, 0.0, 0.0, 120.0, 100.0)
+        if sweep > 0:
+            assert bottom and min(state.y for state in bottom) > 35.0
         if sweep < 0:
             # 飘逸随机、**终点向右**（2026-10 用户口径）：每颗粒子终点在
             # 起点右侧（幅度随机），整簇随时间右移（sin 摇摆是振荡项，
@@ -2933,21 +2940,20 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
     # 入场雪花：整行近似同刻（无逐字等差错峰，但每字 ±80ms 抖动），
-    # 起点早于逐字渐隐 200ms（行窗打开瞬间雪花已在半空），终点晚于
-    # 逐字渐隐结束 250ms（余尾）。
+    # 提前 350ms 起飘、整段落 1800ms（慢雪；旧 1050ms 被用户否为“太快”）。
     entry = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == 1]
     assert len(entry) == 6
-    assert all(abs(b["start_ms"] - 800) <= 80 for b in entry)
+    assert all(abs(b["start_ms"] - 650) <= 80 for b in entry)
     assert len({b["start_ms"] for b in entry}) > 1
-    assert {b["end_ms"] for b in entry} == {1850}  # 1000 + 600 + 250
+    assert {b["end_ms"] for b in entry} == {2450}  # 650 + 1800
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 拆雪色双色
     assert {b["color"] for b in entry} == {"#F2F8FF", "#BFDFFF"}
     assert all(b["travel_px"] == 0.0 for b in entry)
-    # 退场雪花：与逐字渐隐同步开始（同刻 max(行末, 显示末-窗口)，
-    # 逐字 ±80ms 抖动），终点晚于逐字渐隐结束 300ms。
+    # 退场雪花：落窗同样 1800ms，从显示末前 1.5s 起飘（不再锚行末只剩
+    # 400ms），逐字 ±80ms 抖动；终点晚于显示末 300ms。
     exit_snow = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == -1]
     assert len(exit_snow) == 6
-    assert all(abs(b["start_ms"] - 4100) <= 80 for b in exit_snow)
+    assert all(abs(b["start_ms"] - 2700) <= 80 for b in exit_snow)
     assert len({b["start_ms"] for b in exit_snow}) > 1
     assert {b["end_ms"] for b in exit_snow} == {4500}  # 4200 + 300
     assert {b["color"] for b in exit_snow} == {"#F2F8FF", "#BFDFFF"}
@@ -2986,13 +2992,13 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
     （高于字形顶）、尺寸随播放递减、飘散终点向右（同花瓣口径）。"""
     base = {
         "kind": snow_kind, "anchor": "char", "char_index": 0,
-        "start_ms": 0, "end_ms": 1050, "count": 6, "seed": 54321,
+        "start_ms": 0, "end_ms": 1800, "count": 6, "seed": 54321,
         "size_px": 30.0, "travel_px": 0.0, "front": True,
     }
     for sweep in (1, -1, 0):
         burst = {**base, "sweep": sweep}
         assert burst_particles_at(burst, -1, 0.0, 0.0, 120.0, 100.0) == []
-        assert burst_particles_at(burst, 1051, 0.0, 0.0, 120.0, 100.0) == []
+        assert burst_particles_at(burst, 1801, 0.0, 0.0, 120.0, 100.0) == []
         early = burst_particles_at(burst, 250, 0.0, 0.0, 120.0, 100.0)
         assert early == burst_particles_at(
             burst, 250, 0.0, 0.0, 120.0, 100.0
@@ -3021,8 +3027,15 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
                     assert abs(state.x) <= 140.0  # 字框 + 宽幅摇摆余量
                 assert -95.0 <= state.y <= 120.0
         if sweep > 0:
-            # 飘入落到**字底部**：晚期整簇已沉过行中心（+0.2 box_h）。
-            assert min(s.y for s in late) > -20.0
+            # 飘入落到**字底或更低**：末期整簇已沉到字底附近（慢雪，
+            # 1800ms 落程；不再过字中线就消失）。
+            bottom = burst_particles_at(
+                burst, 1790, 0.0, 0.0, 120.0, 100.0
+            )
+            assert bottom and min(s.y for s in bottom) > 40.0
+        # 透明度前 78% 保持：1400ms 时（p≈0.8）仍清晰可见。
+        hold = burst_particles_at(burst, 1400, 0.0, 0.0, 120.0, 100.0)
+        assert hold and min(s.alpha for s in hold) > 0.5
 
 
 def _sprite_loops(commands):

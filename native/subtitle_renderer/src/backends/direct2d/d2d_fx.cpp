@@ -635,12 +635,19 @@ std::vector<FxParticle> burstParticlesAt(
             const float sizeI = size * (0.72f + 0.55f * u4);
             const float spin = u3 * 360.0f
                 + p * (160.0f + 240.0f * u5) * (u4 >= 0.5f ? 1.0f : -1.0f);
+            // 花瓣“落到底再淡出”包络（镜像 particles PETAL_FADE_START）：
+            // 前 75% 保持，最后 25% 才收透明度；旧版 p=0.5 已 α≈0.25。
+            const float holdFade = p <= 0.75f
+                ? 1.0f
+                : std::pow(
+                    std::max((1.0f - p) / 0.25f, 0.0f), 1.2f
+                );
             if (burst.sweep > 0) {
-                // 花瓣飘入：自字形顶上方（溢出 0.10~0.40 box_h，星光同
-                // 量级）ease-out 减速飘落进字框，抵达后熄灭。
+                // 花瓣飘入：自字形顶上方 ease-out 减速飘落，落点压到字底
+                //（0.42~0.58 box_h，至少到主文字最底部才消失）。
                 const float eased = 1.0f - (1.0f - p) * (1.0f - p);
                 const float landX = (u1 - 0.5f) * boxW * 0.85f;
-                const float landY = (u4 - 0.5f) * boxH * 0.55f;
+                const float landY = (0.42f + 0.16f * u4) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.7f;
                 const float startY = -(0.60f + 0.30f * u2) * boxH;
                 out.push_back(FxParticle{
@@ -648,12 +655,11 @@ std::vector<FxParticle> burstParticlesAt(
                     originY + startY + (landY - startY) * eased,
                     spin,
                     sizeI * (0.85f + 0.15f * std::sin(pi * p)),
-                    std::min(p * 5.0f, 1.0f) * (1.0f - p) * (1.0f - p * 0.4f),
+                    std::min(p * 4.0f, 1.0f) * holdFade,
                 });
             } else if (burst.sweep < 0) {
-                // 花瓣飘散：横向飘逸保持随机（sin 摇摆），只有**结束
-                // 位置**落在起点右侧（幅度随机；2026-10 用户口径：飘逸
-                // 随机、终点向右），落到字底下方（0.05~0.65 box_h）淡出。
+                // 花瓣飘散：横向飘逸保持随机，终点向右；纵向落到字底
+                // 下方（0.55~0.85 box_h），落到底才收透明度。
                 const float eased = p * p * (3.0f - 2.0f * p);
                 const float startX = (u1 - 0.5f) * boxW * 0.85f;
                 const float endX = startX + (0.5f + 0.9f * u5) * boxW;
@@ -664,7 +670,7 @@ std::vector<FxParticle> burstParticlesAt(
                         + (0.55f + 0.30f * u2) * boxH * eased,
                     spin,
                     sizeI * (0.90f + 0.10f * (1.0f - p)),
-                    (1.0f - p) * (1.0f - p * 0.5f),
+                    std::min(p * 4.0f, 1.0f) * holdFade,
                 });
             } else {
                 // 花瓣飘动：字框上半出生（星光的偏上口径），小行程缓沉，
@@ -710,32 +716,39 @@ std::vector<FxParticle> burstParticlesAt(
                 + p * (80.0f + 140.0f * u5) * (u4 >= 0.5f ? 1.0f : -1.0f);
             const float birthY = -(0.68f + 0.22f * u2) * boxH;
             const float eased = p;  // 匀速下沉（雪的终端速度感）
+            // 雪花“落到底再淡出”包络（镜像 particles SNOW_FADE_START）：
+            // 前 78% 保持，最后 22% 才收；旧版 p=0.5 已 α≈0.4。
+            const float holdFade = p <= 0.78f
+                ? 1.0f
+                : std::pow(
+                    std::max((1.0f - p) / 0.22f, 0.0f), 1.2f
+                );
             if (burst.sweep > 0) {
-                // 雪花飘入：自 ruby 锚一路落到字底部（2026-10 用户口径：
-                // 雪从天上落到地上，不落在字中间）。
+                // 雪花飘入：自 ruby 锚一路落到字底或更低（0.48~0.62
+                // box_h，至少到主文字最底部才消失）。
                 const float landX = (u1 - 0.5f) * boxW * 0.85f;
-                const float landY = (0.35f + 0.20f * u4) * boxH;
+                const float landY = (0.48f + 0.14f * u4) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.6f;
                 out.push_back(FxParticle{
                     originX + startX + (landX - startX) * eased + sway,
                     originY + birthY + (landY - birthY) * eased,
                     spin,
                     sizeI,
-                    std::min(p * 4.0f, 1.0f) * (1.0f - p) * (1.0f - p * 0.4f),
+                    std::min(p * 3.0f, 1.0f) * holdFade,
                 });
             } else if (burst.sweep < 0) {
-                // 雪花飘散：同样自 ruby 锚出生落到字底部（不考虑与字面
-                // 的连续性——雪从天上落到地上），横向随机摇摆、终点向右。
+                // 雪花飘散：同样自 ruby 锚出生落到字底或更低，横向随机
+                // 摇摆、终点向右；落到底才收透明度。
                 const float landX = (u1 - 0.5f) * boxW * 0.85f;
                 const float endX = landX + (0.35f + 0.6f * u5) * boxW;
-                const float landY = (0.45f + 0.30f * u2) * boxH;
+                const float landY = (0.50f + 0.24f * u2) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.5f;
                 out.push_back(FxParticle{
                     originX + startX + (endX - startX) * eased + sway,
                     originY + birthY + (landY - birthY) * eased,
                     spin,
                     sizeI,
-                    (1.0f - p) * (1.0f - p * 0.5f),
+                    std::min(p * 3.0f, 1.0f) * holdFade,
                 });
             } else {
                 // 雪花飘动：自 ruby 锚出生，匀速缓沉穿过字框，
