@@ -329,7 +329,10 @@ def _state_paint_spec(
 
     ``layers``（``fx_particle_color_layers``，2026-10 用户口径）：
 
-    - ``solid`` 仅实色——只有主文字色（返回 ``None``，调用方退纯色剪影）；
+    - ``solid`` 仅实色——**只有主文字填充层**：无描边、无描边2、无装饰；
+      填充本身是渐变/图片时照样透传（2026-10-18 用户口径：仅实色 =
+      “仅文字配色”，不是退化成单一实色）。纯 ``solid`` 填充才返回
+      ``None`` 走纯色剪影；
     - ``stroke`` +描边——**按角色方案的描边栈**（方案启用二重描边时一起
       加），**不加装饰**；
     - ``decor`` +装饰——**不加描边**、仅加装饰层；
@@ -351,13 +354,14 @@ def _state_paint_spec(
     装饰会显著变粗（2026-10 用户口径）。图片填充原样透传：两条后端都把
     sprite 剪影按位图笔刷平铺绘制（锚点均为粒子中心的 em 空间原点，
     旋转变换与粒子复合，两端同口径），``color`` 实色仅作缺图回退；
-    因此**来源主文字填充是图片模式时，即使取色层级为 ``solid`` 也产出
-    规格**（仅实色档没有可用的实色，图片本身就是「实色」层）。
+    因此**来源主文字填充是渐变/图片模式时，即使取色层级为 ``solid``
+    也产出规格**（仅实色档没有可用的纯色，渐变/图片本身就是「实色」层；
+    2026-10-18 修复：此前只放行 image，gradient 被错误退化成平均实色）。
     """
 
     if layers not in PARTICLE_COLOR_LAYERS:
         return None
-    if layers == "solid" and state.text.mode != "image":
+    if layers == "solid" and state.text.mode == "solid":
         return None
 
     def _layer_fill(fill: PaintFill) -> dict[str, object]:
@@ -436,9 +440,10 @@ def particle_paint_spec(
     """按颜色模式 + 取色层级解析**单态档**装饰规格（跟随前/后·复用方案）。
 
     ``color`` / ``sakura`` 档（无来源配色态）、悬空引用，以及
-    ``fx_particle_color_layers == "solid"``（默认仅实色，2026-10 用户口径；
-    来源主文字填充为图片模式时例外——图片即「实色」层，仍产出规格）
-    返回 ``None``——burst 只带实色 ``color``，走纯色剪影路径。双态档
+    ``fx_particle_color_layers == "solid"`` 且来源填充本身是纯 ``solid``
+    时返回 ``None``——burst 只带实色 ``color``，走纯色剪影路径。仅实色
+    档遇到渐变/图片填充仍产出**只含填充层**的规格（无描边/装饰，2026-10
+    用户口径：“仅实色” = 仅文字配色，不是退化成平均实色）。双态档
     （前后各一 / 花瓣复用）的规格见 :func:`particle_variant_paints`。
     """
 

@@ -1566,6 +1566,54 @@ def test_particle_paint_spec_follows_each_chars_role():
     )
 
 
+def test_particle_solid_layer_keeps_gradient_fill_only():
+    """“仅实色” = 仅文字填充层：渐变/图片照样透传，只去掉描边1/描边2/
+    装饰；纯 solid 填充才走无 paint 的纯色快路径（2026-10-18 老 BUG）。"""
+    from krok_helper.subtitle_render.domain.paint import (
+        KaraokeColorState,
+        KaraokeColors,
+    )
+
+    gradient = _gradient_fill("gradient_horizontal", "#FF8800", "#00FF88")
+    style = Style(
+        font_size_px=100,
+        sing_fx="twinkle",
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="solid",
+        karaoke_anim="none",
+        stroke_width_px=8,
+        stroke2_enabled=True,
+        stroke2_width_px=4,
+        decoration_kind="shadow",
+        karaoke_colors=KaraokeColors(
+            after=KaraokeColorState(text=gradient),
+        ),
+    )
+    bursts = plan_line_bursts(style, 0, 1000, 4000, 3900, [(1200, 1600)])
+    spec = next(b for b in bursts if b["kind"] == "twinkle")["paint"]
+    assert spec["fill"]["mode"] == "gradient_horizontal"
+    assert spec["fill"]["start_color"] == "#FF8800"
+    assert spec["fill"]["end_color"] == "#00FF88"
+    assert spec["stroke_width_px"] == 0.0
+    assert spec["stroke2_width_px"] == 0.0
+    assert "decor" not in spec
+
+    solid_style = Style(
+        font_size_px=100,
+        sing_fx="twinkle",
+        fx_particle_color_mode="follow_after",
+        fx_particle_color_layers="solid",
+        karaoke_anim="none",
+        karaoke_colors=_karaoke_matrix("#111111", "#FF8800"),
+    )
+    solid_bursts = plan_line_bursts(
+        solid_style, 0, 1000, 4000, 3900, [(1200, 1600)]
+    )
+    assert "paint" not in next(
+        b for b in solid_bursts if b["kind"] == "twinkle"
+    )
+
+
 def test_particle_paint_spec_stroke_widths_scale_with_source_font():
     """描边/二重描边宽按 粒子尺寸/来源字号 缩放，上限半个粒子边长。"""
     style = Style(
@@ -2398,7 +2446,9 @@ def test_petal_two_color_variant_split():
     mix_petals = [b for b in mix_bursts if b["kind"] == "petal"]
     assert {b["color"] for b in mix_petals} == {"#123456", "#ABCDEF"}
     assert all("paint" not in b for b in mix_petals)
-    # 渐变走字后态：该侧变体折成停止色平均实色（(FF+00+00...)/3 → #555555）。
+    # 渐变走字后态：仅实色层现在携带**填充渐变规格**（2026-10-18 修复：
+    # 仅实色 = 仅文字配色，不是退化成平均实色）；burst.color 仍保留平均
+    # 实色作旧渲染端回退。
     gradient = PaintFill(
         mode="gradient_horizontal",
         start_color="#FF0000",
@@ -2419,7 +2469,12 @@ def test_petal_two_color_variant_split():
     grad_bursts = plan_line_bursts(grad_style, 0, 0, 3000, 2900, [(100, 400)])
     grad_petals = [b for b in grad_bursts if b["kind"] == "petal"]
     assert {b["color"] for b in grad_petals} == {"#2468AC", "#555555"}
-    assert all("paint" not in b for b in grad_petals)
+    before_variant = [b for b in grad_petals if b["color"] == "#2468AC"]
+    after_variant = [b for b in grad_petals if b["color"] == "#555555"]
+    assert all("paint" not in b for b in before_variant)
+    assert after_variant[0]["paint"]["fill"]["mode"] == "gradient_horizontal"
+    assert after_variant[0]["paint"]["stroke_width_px"] == 0.0
+    assert "decor" not in after_variant[0]["paint"]
 
     # 单独颜色档·双色槽：恒双色随机混发——颜色二默认白色（白色即颜色
     # 本身，无「未设置」态，2026-10 用户口径：必须设置双色）。
