@@ -3889,22 +3889,26 @@ def test_ash_trajectory_falls_shrinks_and_fades():
     assert burst_particles_at(base, 951, 0.0, 0.0, 120.0, 100.0) == []
 
 
-def test_flame_char_state_fast_entry_and_shrink_exit():
-    """火焰档文字本体（2026-10-18 用户口径）：入场=烧的过程中快速出现
-    （8 倍速）；退场=渐隐中**非等比**缩小（纵向 55% / 横向 22%），字像
-    被火从下往上烧塌，不是整体等比缩小。"""
+def test_flame_char_state_late_stretch_reveal_and_dissolve():
+    """火焰档文字本体（2026-10-18 用户口径）：参考既有 stretch_in/out 的
+    光条凝聚/弥散，但延后到火烧到后段（62%）——入场前 62% 完全隐形，
+    后 38% 由 3.2× 横向光条收束成字形；退场前 62% 保持清晰，后 38%
+    横向拉伸成光条淡出。"""
     style = Style(font_size_px=100, entry_lead_ms=600, exit_fade_ms=600)
     entry = _entry_transition("flame")
-    mid = transition_char_state(style, entry, 0, 4, t_ms=entry.start_ms + 40)[0]
-    assert mid > 0.5  # 40ms（1/6 窗口）已过半显（8 倍速）
+    early = transition_char_state(style, entry, 0, 4, t_ms=entry.start_ms + 40)
+    assert early[0] == pytest.approx(0.0)  # 前 62% 隐形
+    assert early[4] == pytest.approx(3.2)  # 3.2× 横向光条待凝聚
+    late = transition_char_state(style, entry, 0, 4, t_ms=entry.start_ms + 250)
+    assert late[0] == pytest.approx(1.0)
+    assert late[4] == pytest.approx(1.0)  # 收束完成
     exit_t = _exit_transition("flame", 1000)
-    opacity, _dx, _dy, _rot, sx, sy, _skew = transition_char_state(
-        style, exit_t, 0, 4, t_ms=1000 + 500
-    )
-    assert opacity < 1.0
-    assert sy < sx < 1.0  # 纵向收得更狠
-    assert sx == pytest.approx(0.78)  # 1 - 0.22
-    assert sy == pytest.approx(0.45)  # 1 - 0.55
+    keep = transition_char_state(style, exit_t, 0, 4, t_ms=1000 + 100)
+    assert keep[0] == pytest.approx(1.0)  # 前 62% 仍清晰
+    assert keep[4] == pytest.approx(1.0)
+    vanish = transition_char_state(style, exit_t, 0, 4, t_ms=1000 + 250)
+    assert vanish[0] == pytest.approx(0.0)  # 烧完才消失
+    assert vanish[4] == pytest.approx(3.2)  # 拉伸成光条
 
 
 def test_flame_gpu_support_and_override_roundtrip():

@@ -191,17 +191,20 @@ GeoCharState geoCharState(
         return state;
     }
     if (effect == "flame") {
-        // 火焰档本体（2026-10-18 用户口径）：入场=烧的过程中的快速出现
-        //（8 倍速透明度）；退场=渐隐中缩小——纵向比横向收得更狠
-        //（55% / 22%），字像被火从下往上烧塌；灰烬与余烬由 planner 伴生。
+        // 火焰档文字本体（镜像 transitions.py flame 分支）：参考既有
+        // stretch_in/out 的光条凝聚/弥散语言，但延后到火烧到后段（62%）
+        // 才发生——入场前 62% 隐形，后 38% 由 3.2× 横向光条收束成字形；
+        // 退场前 62% 清晰，后 38% 横向拉伸成光条淡出。不叠 stretch 的
+        // 辉光层（火焰粒子本身已是高亮层）。
         const float p = staggerProgress;
+        const float raw = std::clamp((p - 0.62f) / 0.38f, 0.0f, 1.0f);
+        const float q = smoothstep(raw);
         if (exitPhase) {
-            const float q = smoothstep(p);
             state.opacity = 1.0f - q;
-            state.scaleX = 1.0f - 0.22f * q;
-            state.scaleY = 1.0f - 0.55f * q;
+            state.scaleX = 1.0f + 2.2f * q;
         } else {
-            state.opacity = std::min(p * 8.0f, 1.0f);
+            state.opacity = std::min(raw * 4.0f, 1.0f);
+            state.scaleX = 1.0f + 2.2f * (1.0f - q);
         }
         return state;
     }
