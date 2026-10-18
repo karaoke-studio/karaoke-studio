@@ -99,6 +99,9 @@ class PreviewWindowController:
     def __init__(self) -> None:
         self.requested = False
         self.reposition_on_next_show = True
+        # 预览窗生命周期（切页 / 关窗 / 后端重启）里播放头可能被别处的复位
+        # 逻辑清零；记住离开时的位置，重新出现时补回去。
+        self._resume_position_ms = 0
 
     @staticmethod
     def context_allowed(
@@ -109,11 +112,47 @@ class PreviewWindowController:
     ) -> bool:
         return bool(host_visible and preview_tab_active and not exporting)
 
-    @staticmethod
-    def hide(preview_window: Any, transport: Any) -> None:
+    def hide(self, preview_window: Any, transport: Any) -> None:
         transport.pause()
+        self.remember_position(transport)
         if preview_window.isVisible():
             preview_window.hide()
+
+    def remember_position(self, transport: Any) -> None:
+        """Capture the preview playhead before a lifecycle hide or close."""
+        getter = getattr(transport, "current_time_ms", None)
+        if getter is None:
+            return
+        try:
+            self._resume_position_ms = max(int(getter), 0)
+        except (TypeError, ValueError):
+            return
+
+    def restore_position(self, transport: Any) -> bool:
+        """Re-seek a transport that a lifecycle reset zeroed while hidden.
+
+        Only an explicit zero is treated as a reset: a non-zero playhead means
+        the position survived (or the user moved it), so it is left alone.
+        """
+        remembered = self._resume_position_ms
+        if remembered <= 0:
+            return False
+        getter = getattr(transport, "current_time_ms", None)
+        setter = getattr(transport, "set_time", None)
+        if getter is None or setter is None:
+            return False
+        try:
+            current = int(getter)
+        except (TypeError, ValueError):
+            return False
+        if current != 0:
+            return False
+        setter(remembered)
+        return True
+
+    def forget_position(self) -> None:
+        """Drop the remembered playhead when the timeline itself changes."""
+        self._resume_position_ms = 0
 
     def sync(
         self,
@@ -128,6 +167,7 @@ class PreviewWindowController:
             return
         if preview_window.isVisible():
             return
+        self.restore_position(transport)
         if self.reposition_on_next_show:
             preview_window.show_near_workspace()
             self.reposition_on_next_show = False

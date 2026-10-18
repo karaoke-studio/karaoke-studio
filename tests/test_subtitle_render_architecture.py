@@ -4251,6 +4251,7 @@ def test_subtitle_render_window_delegates_preview_window_state() -> None:
         "activate_visible",
         "context_allowed",
         "hide",
+        "remember_position",
         "request",
         "sync",
         "user_closed",

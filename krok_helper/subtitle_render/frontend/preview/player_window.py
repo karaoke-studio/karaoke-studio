@@ -713,7 +713,10 @@ class PreviewPlayerWindow(QWidget):
 
     def closeEvent(self, event):  # noqa: N802
         self._hide_controls_timer.stop()
-        self._transport_bar.stop()
+        # Pause rather than stop: stopping resets the shared playhead to 0, so
+        # reopening the preview window would restart from the beginning.  The
+        # remembered position is restored by PreviewWindowController.
+        self._transport_bar.pause()
         self.userClosed.emit()
         super().closeEvent(event)
 

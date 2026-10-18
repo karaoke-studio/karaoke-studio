@@ -1467,6 +1467,9 @@ class SubtitleRenderWindow(QWidget):
     def _on_preview_window_user_closed(self) -> None:
         if self._closing_window:
             return
+        # Closing the floating window must not lose the playhead: remember the
+        # paused position so the next "预览窗口" open resumes there.
+        self._preview_window_controller.remember_position(self._transport_bar)
         self._preview_window_controller.user_closed()
 
     # ----------------------------------------------------------- 项目文件（A11）
@@ -2354,6 +2357,7 @@ class SubtitleRenderWindow(QWidget):
             self._video_settings_panel.set_populated(False)
             self._property_panel.set_roles([])
             # 播放条 + 字幕轨道复位
+            self._preview_window_controller.forget_position()
             self._transport_bar.set_audio_source(None)
             self._transport_bar.set_time(0)
             self._transport_bar.set_duration(0)
@@ -3832,6 +3836,8 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_track(track)
         self._sync_tracks_view()
         self._refresh_transport_duration()
+        # A new subtitle source resets the playhead to the start.
+        self._preview_window_controller.forget_position()
         self._transport_bar.set_time(0)
         self._prefill_export_output()
         self._margin_check_timer.start()
@@ -4437,6 +4443,9 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_background_source(self._background_source)
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
+        # A new media timeline starts at 0; the previous playhead must not be
+        # re-applied when the preview window is shown again.
+        self._preview_window_controller.forget_position()
         self._request_preview_window()
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
         if info.audio_streams > 0:
@@ -4608,6 +4617,8 @@ class SubtitleRenderWindow(QWidget):
         if not self._loading_project:
             self._resolve_unresolved_resource_labels({"独立音频"})
         self._audio_info = info
+        # New audio resets the transport to 0; drop the old resume point.
+        self._preview_window_controller.forget_position()
         self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
         self._sync_background_panel_state()

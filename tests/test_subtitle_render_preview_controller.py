@@ -53,9 +53,15 @@ class _PreviewWindow:
 class _Transport:
     def __init__(self) -> None:
         self.pauses = 0
+        self.current_time_ms = 0
+        self.seeks: list[int] = []
 
     def pause(self) -> None:
         self.pauses += 1
+
+    def set_time(self, ms: int) -> None:
+        self.current_time_ms = int(ms)
+        self.seeks.append(int(ms))
 
 
 class _PreviewPanel:
@@ -251,6 +257,70 @@ def test_preview_controller_user_close_clears_request_and_resets_position() -> N
 
     assert controller.requested is False
     assert controller.reposition_on_next_show is True
+
+
+def test_preview_controller_restores_playhead_after_close_and_reopen() -> None:
+    controller = PreviewWindowController()
+    window = _PreviewWindow()
+    transport = _Transport()
+    controller.request(window, transport, context_allowed=True)
+    transport.current_time_ms = 12_340
+
+    # Close event pauses (keeping the playhead), then reports the user close.
+    controller.remember_position(transport)
+    controller.user_closed()
+    window.visible = False
+    transport.current_time_ms = 0  # a later stop()/shutdown reset it
+
+    controller.show_and_activate(window, transport, context_allowed=True)
+
+    assert transport.current_time_ms == 12_340
+    assert transport.seeks == [12_340]
+
+
+def test_preview_controller_restores_playhead_zeroed_while_page_hidden() -> None:
+    controller = PreviewWindowController()
+    window = _PreviewWindow()
+    transport = _Transport()
+    controller.request(window, transport, context_allowed=True)
+    transport.current_time_ms = 8_000
+
+    controller.sync(window, transport, context_allowed=False)
+    transport.current_time_ms = 0  # backend restart zeroed it while hidden
+    controller.sync(window, transport, context_allowed=True)
+
+    assert transport.current_time_ms == 8_000
+
+
+def test_preview_controller_never_overrides_a_live_playhead() -> None:
+    controller = PreviewWindowController()
+    window = _PreviewWindow()
+    transport = _Transport()
+    controller.request(window, transport, context_allowed=True)
+    transport.current_time_ms = 5_000
+
+    controller.hide(window, transport)
+    transport.current_time_ms = 2_000  # user seeked while the preview was hidden
+    controller.sync(window, transport, context_allowed=True)
+
+    assert transport.current_time_ms == 2_000
+    assert transport.seeks == []
+
+
+def test_preview_controller_forgets_playhead_when_the_timeline_changes() -> None:
+    controller = PreviewWindowController()
+    window = _PreviewWindow()
+    transport = _Transport()
+    controller.request(window, transport, context_allowed=True)
+    transport.current_time_ms = 9_000
+
+    controller.hide(window, transport)
+    controller.forget_position()
+    transport.current_time_ms = 0
+    controller.sync(window, transport, context_allowed=True)
+
+    assert transport.current_time_ms == 0
+    assert transport.seeks == []
 
 
 def test_preview_controller_restores_collapsed_window_before_activation() -> None:

@@ -9414,10 +9414,12 @@ def test_preview_player_transport_bar_uses_overlay_style(qapp):
     assert "rgba(0, 0, 0, 0)" in bar.styleSheet()
 
 
-def test_preview_player_close_stops_playback(qapp, monkeypatch):
+def test_preview_player_close_pauses_and_keeps_playhead(qapp, monkeypatch):
     win = mw.SubtitleRenderWindow(embedded=False)
     preview = win._preview_window
+    paused: list[bool] = []
     stopped: list[bool] = []
+    monkeypatch.setattr(preview.transport_bar, "pause", lambda: paused.append(True))
     monkeypatch.setattr(preview.transport_bar, "stop", lambda: stopped.append(True))
     preview.show()
     qapp.processEvents()
@@ -9425,7 +9427,8 @@ def test_preview_player_close_stops_playback(qapp, monkeypatch):
     preview._close_button.click()
     qapp.processEvents()
 
-    assert stopped == [True]
+    assert paused == [True]
+    assert stopped == []
     assert preview.isVisible() is False
 
 
