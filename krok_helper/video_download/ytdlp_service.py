@@ -128,6 +128,8 @@ def _with_legacy_javascript_fallback(method):
                 raise DownloadCancelledError("下载已取消。") from None
             if bound.arguments.get("_legacy_javascript", False) or self.detect_source(url) != SOURCE_YOUTUBE:
                 raise
+            if task is not None:
+                self._clear_partial_downloads(bound.arguments["save_dir"], bound.arguments["output_stem"])
             logging.getLogger(__name__).info("JavaScript 增强模式失败，回退到原有下载模式。")
             # Existing cookie/client/HTTP fallback logic still handles failure
             # of this final attempt. Do not retry cancellation or change cookies.
@@ -479,6 +481,7 @@ class YtDlpService:
 
         self._verify_downloaded_media(task)
 
+    @_with_legacy_javascript_fallback
     def _download_stream_with_retry(
         self,
         youtube_dl,
@@ -487,6 +490,7 @@ class YtDlpService:
         options: DownloadOptions,
         progress_callback: Callable[[dict[str, Any]], None],
         *,
+        _legacy_javascript: bool = False,
         save_dir: Path,
         output_stem: str,
         outtmpl: str,
@@ -506,6 +510,7 @@ class YtDlpService:
                     youtube_dl, use_python_backend, task, options, progress_callback,
                     save_dir=save_dir, output_stem=output_stem, outtmpl=outtmpl,
                     selected_format=selected_format, extractor_args_hint=extractor_args_hint,
+                    _legacy_javascript=_legacy_javascript, _defer_network_fallback=True,
                 )
                 break
             except DownloadCancelledError:
@@ -517,7 +522,18 @@ class YtDlpService:
                     raise
                 if attempt >= retry_limit:
                     if not aria2_failed:
-                        raise
+                        if self.detect_source(task.url) != SOURCE_YOUTUBE:
+                            raise
+                        # Network retries kept their checkpoints. Only now allow
+                        # client/cookie fallbacks; JavaScript fallback wraps this
+                        # whole retry cycle rather than each individual attempt.
+                        self._run_download_attempt(
+                            youtube_dl, use_python_backend, task, options, progress_callback,
+                            save_dir=save_dir, output_stem=output_stem, outtmpl=outtmpl,
+                            selected_format=selected_format, extractor_args_hint=extractor_args_hint,
+                            _legacy_javascript=_legacy_javascript, _initial_error=exc,
+                        )
+                        return
                     self._prepare_native_resume(save_dir, output_stem)
                     options = replace(options, use_aria2c=False)
                     attempt = 0
@@ -766,6 +782,9 @@ class YtDlpService:
         options: DownloadOptions,
         progress_callback: Callable[[dict[str, Any]], None],
         *,
+        _legacy_javascript: bool = False,
+        _defer_network_fallback: bool = False,
+        _initial_error: VideoDownloadError | None = None,
         save_dir: Path,
         output_stem: str,
         outtmpl: str,
@@ -773,6 +792,8 @@ class YtDlpService:
         extractor_args_hint: str,
     ) -> None:
         try:
+            if _initial_error is not None:
+                raise _initial_error
             self._download_with_python_api(
                 youtube_dl,
                 task,
@@ -781,11 +802,17 @@ class YtDlpService:
                 save_dir=save_dir,
                 output_stem=output_stem,
                 outtmpl=outtmpl,
+                _legacy_javascript=_legacy_javascript,
                 selected_format=selected_format,
                 extractor_args_hint=extractor_args_hint,
             )
+        except DownloadCancelledError:
+            raise
         except VideoDownloadError as exc:
+            if _defer_network_fallback and self._is_transient_download_error(str(exc)):
+                raise
             if self._should_retry_youtube_with_fallback(task.url, str(exc), extractor_args_hint):
+                self._clear_partial_downloads(save_dir, output_stem)
                 try:
                     self._download_with_python_api(
                         youtube_dl,
@@ -795,6 +822,7 @@ class YtDlpService:
                         save_dir=save_dir,
                         output_stem=output_stem,
                         outtmpl=outtmpl,
+                        _legacy_javascript=_legacy_javascript,
                         selected_format=selected_format,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                     )
@@ -810,6 +838,7 @@ class YtDlpService:
                         save_dir=save_dir,
                         output_stem=output_stem,
                         outtmpl=outtmpl,
+                        _legacy_javascript=_legacy_javascript,
                         selected_format=selected_format,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                     )
@@ -824,13 +853,13 @@ class YtDlpService:
                     save_dir=save_dir,
                     output_stem=output_stem,
                     outtmpl=outtmpl,
+                    _legacy_javascript=_legacy_javascript,
                     selected_format=selected_format,
                     extractor_args_hint=extractor_args_hint,
                 )
                 return
             raise
 
-    @_with_legacy_javascript_fallback
     def _download_with_python_api(
         self,
         youtube_dl,
@@ -907,6 +936,9 @@ class YtDlpService:
         options: DownloadOptions,
         progress_callback: Callable[[dict[str, Any]], None],
         *,
+        _legacy_javascript: bool = False,
+        _defer_network_fallback: bool = False,
+        _initial_error: VideoDownloadError | None = None,
         save_dir: Path,
         output_stem: str,
         outtmpl: str,
@@ -914,6 +946,8 @@ class YtDlpService:
         extractor_args_hint: str,
     ) -> None:
         try:
+            if _initial_error is not None:
+                raise _initial_error
             self._download_with_cli(
                 task,
                 options,
@@ -921,11 +955,17 @@ class YtDlpService:
                 save_dir=save_dir,
                 output_stem=output_stem,
                 outtmpl=outtmpl,
+                _legacy_javascript=_legacy_javascript,
                 selected_format=selected_format,
                 extractor_args_hint=extractor_args_hint,
             )
+        except DownloadCancelledError:
+            raise
         except VideoDownloadError as exc:
+            if _defer_network_fallback and self._is_transient_download_error(str(exc)):
+                raise
             if self._should_retry_youtube_with_fallback(task.url, str(exc), extractor_args_hint):
+                self._clear_partial_downloads(save_dir, output_stem)
                 try:
                     self._download_with_cli(
                         task,
@@ -934,6 +974,7 @@ class YtDlpService:
                         save_dir=save_dir,
                         output_stem=output_stem,
                         outtmpl=outtmpl,
+                        _legacy_javascript=_legacy_javascript,
                         selected_format=selected_format,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                     )
@@ -948,6 +989,7 @@ class YtDlpService:
                         save_dir=save_dir,
                         output_stem=output_stem,
                         outtmpl=outtmpl,
+                        _legacy_javascript=_legacy_javascript,
                         selected_format=selected_format,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                     )
@@ -961,13 +1003,13 @@ class YtDlpService:
                     save_dir=save_dir,
                     output_stem=output_stem,
                     outtmpl=outtmpl,
+                    _legacy_javascript=_legacy_javascript,
                     selected_format=selected_format,
                     extractor_args_hint=extractor_args_hint,
                 )
                 return
             raise
 
-    @_with_legacy_javascript_fallback
     def _download_with_cli(
         self,
         task: DownloadTask,
@@ -1659,20 +1701,23 @@ class YtDlpService:
         return thread
 
     def _clear_partial_downloads(self, save_dir: Path, output_stem: str) -> None:
-        """删掉 aria2c 留下的半成品，让降级重试从零开始。
-
-        aria2c 是多分片并发写的，``.part`` 的文件大小等于「写到过的最大偏移」，
-        不是「已连续下好的字节数」——yt-dlp 内置下载器会拿这个大小当断点续传的
-        起点发 ``Range: bytes=<size>-``，分片一旦触到过文件末尾就直接 HTTP 416。
-        同名的 ``.aria2`` 控制文件也一并清掉，否则 aria2c 下次会拿它续传。
-        """
+        """Discard this stream's checkpoints only before changing download modes."""
         for path in self._iter_output_candidates(save_dir, output_stem):
-            if not path.name.endswith((PART_SUFFIX, ARIA2C_CONTROL_SUFFIX)):
+            suffix = path.name[len(output_stem):]
+            # Do not touch completed media or a sibling stream's output.
+            if not suffix.startswith("."):
+                continue
+            if not (
+                suffix.endswith((PART_SUFFIX, ARIA2C_CONTROL_SUFFIX, ".ytdl"))
+                or re.search(r"\.part-Frag\d+(?:\.part(?:\.aria2)?)?$", suffix)
+            ):
                 continue
             try:
                 path.unlink()
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError as exc:
+                raise VideoDownloadError(f"无法清理下载临时文件 {path.name}，已停止回退，请关闭占用该文件的程序后重试。") from exc
 
     def _prepare_native_resume(self, save_dir: Path, output_stem: str) -> None:
         """Keep only the verified contiguous prefix when switching from aria2 to HTTP."""
