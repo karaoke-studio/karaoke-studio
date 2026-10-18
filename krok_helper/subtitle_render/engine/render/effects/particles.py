@@ -125,14 +125,26 @@ FLAME_LIFE_MS = 1100
 # 15 颗的等效密度；长音不再只在字头喷一次）。
 FLAME_PUFF_MS = 280
 FLAME_MAX_PUFFS = 8
+# 火焰出入场窗口（2026-10-18 用户口径）：发射总长跟随「入场/退场动画
+# 时长」；文字全部出现/消失后再保留一小段（260ms）让火快速熄灭，不再
+# 固定喷 ~2s 的长尾。数量随窗口同比放大（600ms = 32 颗基准）。
+FLAME_TAIL_MS = 260
+FLAME_MIN_COUNT = 8
+FLAME_MAX_COUNT = 96
 # 背光（flame_glow）：字后大尺寸低透明度火形，营造灼烧辉光；画在文字
 # 之下（front=False），不叠亮文字本体。
 FLAME_GLOW_LIFE_MS = 900
 FLAME_GLOW_SIZE_SCALE = 2.80
-# 逐字出入场粒子时间抖动（2026-10-18 用户口径：花瓣/音符/爱心/雪花
-# 逐字等差错峰太整齐）：每字起点叠加 [-J,+J) 的确定性哈希抖动，寿命
-# 不变——出现/消失时间逐字轻微错开；纯规划期实现，CPU/GPU 天然一致。
-CHAR_TIME_JITTER_MS = 80
+# 逐字时间偏移表（2026-10-18 用户口径：不要每次哈希生成固定 ±80，而是
+# 固化一组 20 个 [-80,80] 随机整数；所有逐字粒子特效按字符序循环取用）。
+# 只偏移 burst 起点、不改寿命；表长 20，第 20 个字回到第 0 个偏移。
+CHAR_TIME_OFFSETS_MS = (
+    -29, 4, -64, 37, 48,
+    59, -51, -24, -66, 78,
+    -11, -15, 67, -33, 58,
+    50, -68, -19, -48, -52,
+)
+CHAR_TIME_OFFSET_MAX_MS = max(CHAR_TIME_OFFSETS_MS)
 # 余烬（ember）：小圆点火星，快速上蹿后受“重力”减速、带横向漂移与
 # 闪烁；与灰烬（下坠的 ash）一升一落。
 EMBER_A = "#FFD873"
@@ -165,13 +177,10 @@ def _default_color_pair(
 # 后颜色与尺寸改吃粒子旋钮（数量仍固定）。
 ANIM_PARTICLE_SIZE_EM = 0.40
 ANIM_PARTICLE_COUNT = 14
-# 火焰出入场固定档（v3）：每字 32 颗分 4 簇、簇间隔 280ms——Aeg 模板
-# 「每字每秒约 15 颗、持续约 1s」的等效发射密度（火粒更小、数量更多，
-# 叠出体积火而不是几张大贴纸）；不受粒子数量旋钮影响（与其余出入场
-# 固定档同口径），背光/余烬为伴生层不占该预算。
+# 火焰出入场基准档（v3）：600ms 窗口每字 32 颗（随动画时长同比放大，
+# 上限 FLAME_MAX_COUNT）；簇数/簇间隔也按窗口计算。不受粒子数量旋钮
+# 影响（与其余出入场固定档同口径），背光/余烬为伴生层不占该预算。
 ANIM_FLAME_COUNT = 32
-ANIM_FLAME_PUFFS = 4
-ANIM_FLAME_PUFF_MS = 280
 # 入退场星光（逐字错峰）的整行扫过时长：逐字符 burst 按字符序从一端
 # 排到另一端（入场左→右、退场反向），总时长按此值随编排时长等比缩放。
 SPARKLE_SWEEP_MS = 350
@@ -1258,40 +1267,39 @@ def exit_particle_tail_end_ms(
     if exit_anim == "sparkle":
         base = max(line_end, display_end_ms - SPARKLE_EXIT_LIFE_MS)
         steps = max(char_count - 1, 1)
-        return base + (SPARKLE_SWEEP_MS // steps) * steps + SPARKLE_EXIT_LIFE_MS
+        return (
+            base
+            + (SPARKLE_SWEEP_MS // steps) * steps
+            + SPARKLE_EXIT_LIFE_MS
+            + CHAR_TIME_OFFSET_MAX_MS
+        )
     if exit_anim == "ripple":
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS))
-        return base + RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS
+        return (
+            base
+            + RIPPLE_CHAR_STAGGER_MS
+            + RIPPLE_LIFE_MS
+            + CHAR_TIME_OFFSET_MAX_MS
+        )
     if exit_anim in ("note", "heart"):
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS))
         return (
             base
             + RIPPLE_CHAR_STAGGER_MS
             + SING_NOTE_TOTAL_MS
-            + CHAR_TIME_JITTER_MS
+            + CHAR_TIME_OFFSET_MAX_MS
         )
     if exit_anim == "flame":
-        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + FLAME_LIFE_MS))
-        # v3：末字还有第二簇火焰 + 余烬（寿命 1300）越过显示窗，尾奏必须
-        # 覆盖到最晚簇的余烬自然熄灭（否则尾奏通道提前收线、火星被截断）。
-        flame_tail_ms = max(
-            FLAME_LIFE_MS,
-            FLAME_GLOW_LIFE_MS,
-            40 + EMBER_LIFE_MS,
-        )
-        return (
-            base
-            + RIPPLE_CHAR_STAGGER_MS
-            + (ANIM_FLAME_PUFFS - 1) * ANIM_FLAME_PUFF_MS
-            + flame_tail_ms
-        )
+        # 火焰烧尽（2026-10-18 用户口径）：火粒窗口跟随退场时长，文字
+        # 全部消失后只保留 FLAME_TAIL_MS 短尾——尾奏界就是短尾终点。
+        return int(display_end_ms) + FLAME_TAIL_MS
     if exit_anim == "petal":
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS))
         return (
             base
             + RIPPLE_CHAR_STAGGER_MS
             + PETAL_LIFE_MS
-            + CHAR_TIME_JITTER_MS
+            + CHAR_TIME_OFFSET_MAX_MS
         )
     if exit_anim in SNOW_KINDS:
         return display_end_ms + 300
@@ -1458,17 +1466,16 @@ def plan_line_bursts(
                 ) & 0xFFFFFFFF
             bursts.append(burst)
 
-    def _char_time_jitter(char_index: int, salt: int) -> int:
-        """逐字时间抖动（毫秒，[-J,+J)）：同一行/字符/效果可复现。
+    def _char_time_offset(char_index: int) -> int:
+        """逐字时间偏移（毫秒）：固定 20 数表按字符序循环取用。
 
-        只抖 burst 起点，不抖寿命；note/heart 共用 entry/exit 盐以保持
-        “爱心 = 音符克隆”的时序同构，petal/snow 各自独立。
+        2026-10-18 用户口径：不要用哈希生成固定范围，而是把 20 个
+        [-80,80] 随机数固化在代码里；所有逐字粒子特效共用同一组偏移，
+        第 20 个字回到表首。
         """
-        unit = fx_unit_hash(
-            (seed_base + salt * 0x71 + char_index * 0x2F) & 0xFFFFFFFF,
-            13,
-        )
-        return int(round((unit - 0.5) * 2.0 * CHAR_TIME_JITTER_MS))
+        return CHAR_TIME_OFFSETS_MS[
+            char_index % len(CHAR_TIME_OFFSETS_MS)
+        ]
 
     def _fire_layer_paints(
         char_index: int,
@@ -1554,17 +1561,27 @@ def plan_line_bursts(
         puff_ms: int = FLAME_PUFF_MS,
         with_glow: bool = True,
         with_embers: bool = True,
+        end_limit_ms: int | None = None,
     ) -> None:
         """按“连续火流”发射火焰 v3：同一字符窗口内分 ``puffs`` 簇错峰，
         每簇覆盖四层色阶 + 背光 + 余烬。
 
-        出入场用 2 簇（约 340ms 间隔，覆盖 Aeg 模板 ~1s 的持续火粒窗）；
-        唱字按字窗长度补簇（长音持续喷发，短字一簇）。每簇的位置种子按
-        簇序偏移，避免同 index 叠位。
+        出入场由调用方按「入场/退场动画时长」计算 puffs/puff_ms，并传
+        ``end_limit_ms``（文字全部出现/消失后 260ms）——所有火粒/背光/
+        余烬的 burst 窗口在终点前自然走到 p=1，透明度归零，不会硬截断。
+        唱字按字窗长度补簇（不传 limit，长音持续喷发）。
         """
         puffs = max(1, int(puffs))
         total = max(1, int(count))
         base, extra = divmod(total, puffs)
+
+        def _clip_end(start: int, life_ms: int) -> int | None:
+            end = int(start) + int(life_ms)
+            if end_limit_ms is not None:
+                end = min(end, int(end_limit_ms))
+            # 太短的窗口连一次淡入淡出都走不完，直接不下发。
+            return end if end - int(start) >= 80 else None
+
         glow_color = (
             _fire_glow_color(
                 char_index, size, travel, fixed_default=fixed_default
@@ -1582,11 +1599,14 @@ def plan_line_bursts(
             seed = (
                 seed_base + seed_offset + char_index * 7 + puff * 0x51
             ) & 0xFFFFFFFF
+            flame_end = _clip_end(start, FLAME_LIFE_MS)
+            if flame_end is None:
+                continue
             _variant_bursts({
                 "kind": "flame", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + FLAME_LIFE_MS,
+                "end_ms": flame_end,
                 "count": puff_count, "seed": seed,
                 "size_px": size, "travel_px": travel,
                 "front": True, "sweep": 0,
@@ -1594,31 +1614,36 @@ def plan_line_bursts(
                 char_index, size, travel, fixed_default=fixed_default
             ))
             if with_glow:
-                _variant_bursts({
-                    "kind": "flame_glow", "anchor": "char",
-                    "char_index": int(char_index),
-                    "start_ms": start,
-                    "end_ms": start + FLAME_GLOW_LIFE_MS,
-                    "count": 1, "seed": (seed + 0x31) & 0xFFFFFFFF,
-                    "size_px": glow_size,
-                    "travel_px": size * 2.0,
-                    "front": False, "sweep": 0,
-                }, [{
-                    "color": glow_color,
-                    "size_px": glow_size,
-                    "travel_px": size * 2.0,
-                }])
+                glow_end = _clip_end(start, FLAME_GLOW_LIFE_MS)
+                if glow_end is not None:
+                    _variant_bursts({
+                        "kind": "flame_glow", "anchor": "char",
+                        "char_index": int(char_index),
+                        "start_ms": start,
+                        "end_ms": glow_end,
+                        "count": 1, "seed": (seed + 0x31) & 0xFFFFFFFF,
+                        "size_px": glow_size,
+                        "travel_px": size * 2.0,
+                        "front": False, "sweep": 0,
+                    }, [{
+                        "color": glow_color,
+                        "size_px": glow_size,
+                        "travel_px": size * 2.0,
+                    }])
             if with_embers:
-                _variant_bursts({
-                    "kind": "ember", "anchor": "char",
-                    "char_index": int(char_index),
-                    "start_ms": start + 40,
-                    "end_ms": start + 40 + EMBER_LIFE_MS,
-                    "count": 2, "seed": (seed + 0x57) & 0xFFFFFFFF,
-                    "size_px": ember_size,
-                    "travel_px": size * 2.6,
-                    "front": True, "sweep": 0,
-                }, [{"color": EMBER_A}, {"color": EMBER_B}])
+                ember_start = start + 40
+                ember_end = _clip_end(ember_start, EMBER_LIFE_MS)
+                if ember_end is not None:
+                    _variant_bursts({
+                        "kind": "ember", "anchor": "char",
+                        "char_index": int(char_index),
+                        "start_ms": ember_start,
+                        "end_ms": ember_end,
+                        "count": 2, "seed": (seed + 0x57) & 0xFFFFFFFF,
+                        "size_px": ember_size,
+                        "travel_px": size * 2.6,
+                        "front": True, "sweep": 0,
+                    }, [{"color": EMBER_A}, {"color": EMBER_B}])
 
     def _duration_scale(configured: int) -> float:
         total = min(max(int(configured), 120), 3000)
@@ -1642,7 +1667,11 @@ def plan_line_bursts(
     ) -> None:
         px = anim_size * 3.6 if ring_size is None else ring_size
         for char_index in range(char_count):
-            start = int(base_ms) + int(stagger_ms * scale) * char_index
+            start = (
+                int(base_ms)
+                + int(stagger_ms * scale) * char_index
+                + _char_time_offset(char_index)
+            )
             _variant_bursts({
                 "kind": "ripple", "anchor": "char",
                 "char_index": int(char_index),
@@ -1722,7 +1751,11 @@ def plan_line_bursts(
             order = (
                 len(slots) - 1 - position if reverse else position
             )
-            start = int(base_ms) + stagger * order
+            start = (
+                int(base_ms)
+                + stagger * order
+                + _char_time_offset(char_index)
+            )
             _variant_bursts({
                 "kind": "sparkle", "anchor": "char",
                 "char_index": int(char_index),
@@ -1761,7 +1794,7 @@ def plan_line_bursts(
             start = (
                 int(display_start_ms)
                 + stagger * char_index
-                + _char_time_jitter(char_index, 21)
+                + _char_time_offset(char_index)
             )
             _variant_bursts({
                 "kind": "note", "anchor": "char",
@@ -1779,7 +1812,7 @@ def plan_line_bursts(
             start = (
                 int(display_start_ms)
                 + stagger * char_index
-                + _char_time_jitter(char_index, 21)
+                + _char_time_offset(char_index)
             )
             _variant_bursts({
                 "kind": "heart", "anchor": "char",
@@ -1791,22 +1824,51 @@ def plan_line_bursts(
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif entry_anim == "flame" and entry_active and display_start_ms is not None:
-        # 火焰燃起（v3，2026-10-18）：Aeg 模板的**持续火粒层**密度
-        # （每字 4 簇 × 每簇 8 颗四层色阶）+ 背光 + 余烬；文字本体在
-        # 烧的过程中快速出现（char-state 专用分支）。
+        # 火焰燃起（v3，2026-10-18 用户口径更新）：火粒总长跟随「入场
+        # 动画时长」；逐字错峰与文字 char-state 同构（duration×7/12），
+        # 文字全部出现后再保留 260ms 让火快速熄灭。
         flame_size = font_px * 0.42
+        flame_duration = min(
+            max(int(getattr(style, "entry_lead_ms", 0) or 0), 120), 3000
+        )
+        flame_stagger = (
+            (flame_duration * 7 // 12) // max(char_count - 1, 1)
+            if char_count > 1
+            else 0
+        )
+        flame_puffs = max(
+            2,
+            min(
+                FLAME_MAX_PUFFS,
+                math.ceil(flame_duration / FLAME_PUFF_MS),
+            ),
+        )
+        flame_puff_ms = max(1, flame_duration // flame_puffs)
+        flame_count = max(
+            FLAME_MIN_COUNT,
+            min(
+                FLAME_MAX_COUNT,
+                round(ANIM_FLAME_COUNT * flame_duration / 600),
+            ),
+        )
+        fire_end = int(display_start_ms) + flame_duration + FLAME_TAIL_MS
         for char_index in range(char_count):
-            start = int(display_start_ms) + stagger * char_index
+            start = (
+                int(display_start_ms)
+                + flame_stagger * char_index
+                + _char_time_offset(char_index)
+            )
             _emit_flame_bursts(
                 char_index,
                 start,
                 size=flame_size,
                 travel=flame_size * 3.4,
-                count=ANIM_FLAME_COUNT,
-                puffs=ANIM_FLAME_PUFFS,
-                puff_ms=ANIM_FLAME_PUFF_MS,
+                count=flame_count,
+                puffs=flame_puffs,
+                puff_ms=flame_puff_ms,
                 fixed_default=not apply_to_anim,
                 seed_offset=16,
+                end_limit_ms=fire_end,
             )
     elif entry_anim == "petal" and entry_active and display_start_ms is not None:
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
@@ -1815,7 +1877,7 @@ def plan_line_bursts(
             start = (
                 int(display_start_ms)
                 + stagger * char_index
-                + _char_time_jitter(char_index, 23)
+                + _char_time_offset(char_index)
             )
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
@@ -1837,7 +1899,7 @@ def plan_line_bursts(
             _variant_bursts({
                 "kind": entry_anim, "anchor": "char",
                 "char_index": int(char_index),
-                "start_ms": snow_start + _char_time_jitter(char_index, 25),
+                "start_ms": snow_start + _char_time_offset(char_index),
                 "end_ms": snow_end,
                 "count": 3, "seed": (seed_base + 12 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
@@ -1876,7 +1938,7 @@ def plan_line_bursts(
             start = (
                 exit_start
                 + stagger * char_index
-                + _char_time_jitter(char_index, 22)
+                + _char_time_offset(char_index)
             )
             _variant_bursts({
                 "kind": "note", "anchor": "char",
@@ -1897,7 +1959,7 @@ def plan_line_bursts(
             start = (
                 exit_start_heart
                 + stagger * char_index
-                + _char_time_jitter(char_index, 22)
+                + _char_time_offset(char_index)
             )
             _variant_bursts({
                 "kind": "heart", "anchor": "char",
@@ -1909,36 +1971,70 @@ def plan_line_bursts(
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif exit_anim == "flame" and exit_active and display_end_ms is not None:
-        # 火焰烧尽（v3）：逐字错峰烧过（标准速率），火苗/余烬越过显示窗
-        # 终点完整燃尽（尾奏通道续播）；**渐隐中伴生灰烬**（ash 双色灰白+
-        # 炭黑，自字框飘落熄灭）——文字本体 char-state 分支同步缩小渐隐。
+        # 火焰烧尽（v3，2026-10-18 用户口径更新）：火粒总长跟随「退场
+        # 动画时长」，逐字错峰与文字 char-state 同构；文字全部消失后
+        # 只保留 260ms 短尾，火焰快速熄灭（不再续播 1s+）。
+        flame_size = font_px * 0.42
+        flame_duration = min(
+            max(int(getattr(style, "exit_fade_ms", 0) or 0), 120), 3000
+        )
+        flame_stagger = (
+            (flame_duration * 7 // 12) // max(char_count - 1, 1)
+            if char_count > 1
+            else 0
+        )
+        flame_puffs = max(
+            2,
+            min(
+                FLAME_MAX_PUFFS,
+                math.ceil(flame_duration / FLAME_PUFF_MS),
+            ),
+        )
+        flame_puff_ms = max(1, flame_duration // flame_puffs)
+        flame_count = max(
+            FLAME_MIN_COUNT,
+            min(
+                FLAME_MAX_COUNT,
+                round(ANIM_FLAME_COUNT * flame_duration / 600),
+            ),
+        )
         exit_start_flame = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + FLAME_LIFE_MS),
+            int(display_end_ms) - flame_duration,
         )
-        flame_size = font_px * 0.42
+        fire_end = int(display_end_ms) + FLAME_TAIL_MS
         for char_index in range(char_count):
-            start = exit_start_flame + stagger * char_index
+            start = (
+                exit_start_flame
+                + flame_stagger * char_index
+                + _char_time_offset(char_index)
+            )
             _emit_flame_bursts(
                 char_index,
                 start,
                 size=flame_size,
                 travel=flame_size * 3.4,
-                count=ANIM_FLAME_COUNT,
-                puffs=ANIM_FLAME_PUFFS,
-                puff_ms=ANIM_FLAME_PUFF_MS,
+                count=flame_count,
+                puffs=flame_puffs,
+                puff_ms=flame_puff_ms,
                 fixed_default=not apply_to_anim,
                 seed_offset=17,
+                end_limit_ms=fire_end,
             )
-            _variant_bursts({
-                "kind": "ash", "anchor": "char",
-                "char_index": int(char_index),
-                "start_ms": start,
-                "end_ms": start + ASH_LIFE_MS,
-                "count": 3, "seed": (seed_base + 18 + char_index) & 0xFFFFFFFF,
-                "size_px": font_px * 0.14, "travel_px": 0.0,
-                "front": True, "sweep": 0,
-            }, _burst_paint(char_index, font_px * 0.14, anim=True, ash=True))
+            ash_end = min(start + ASH_LIFE_MS, fire_end)
+            if ash_end - start >= 80:
+                _variant_bursts({
+                    "kind": "ash", "anchor": "char",
+                    "char_index": int(char_index),
+                    "start_ms": start,
+                    "end_ms": ash_end,
+                    "count": 3,
+                    "seed": (seed_base + 18 + char_index) & 0xFFFFFFFF,
+                    "size_px": font_px * 0.14, "travel_px": 0.0,
+                    "front": True, "sweep": 0,
+                }, _burst_paint(
+                    char_index, font_px * 0.14, anim=True, ash=True
+                ))
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
             int(line_end_ms) if line_end_ms is not None else 0,
@@ -1949,7 +2045,7 @@ def plan_line_bursts(
             start = (
                 exit_start_petal
                 + stagger * char_index
-                + _char_time_jitter(char_index, 24)
+                + _char_time_offset(char_index)
             )
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
@@ -1974,7 +2070,7 @@ def plan_line_bursts(
                 "kind": exit_anim, "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": snow_exit_start
-                + _char_time_jitter(char_index, 26),
+                + _char_time_offset(char_index),
                 "end_ms": snow_exit_end,
                 "count": 3, "seed": (seed_base + 13 + char_index) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
