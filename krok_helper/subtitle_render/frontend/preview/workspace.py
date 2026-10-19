@@ -126,6 +126,10 @@ class PreviewWorkspaceView(QWidget):
             ),
             empty_icon="🎬",
         )
+        # 属性卡片的最小宽度集合：角色页约 464、背景 434、布局双列约 425，
+        # 导航行约 444。Panel 自身保留 320 供独立嵌入使用，但工作区里的
+        # splitter 必须止步于 480，否则卡片右侧仍会被裁。
+        video_settings_panel.setMinimumWidth(480)
         self._add_background_empty_actions(video_settings_panel)
         video_settings_panel.set_content(property_panel)
         workspace.addWidget(video_settings_panel)

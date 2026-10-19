@@ -151,3 +151,60 @@ def test_responsive_role_header_stacks_when_navigation_and_preview_do_not_fit(qa
     header.resize(200, 100)
     header._sync_direction()
     assert header.is_stacked() is True
+
+
+def test_responsive_role_header_can_shrink_below_side_by_side_sum(qapp) -> None:
+    class HintWidget(QWidget):
+        def __init__(self, width: int) -> None:
+            super().__init__()
+            self._hint = QSize(width, 30)
+
+        def minimumSizeHint(self) -> QSize:  # noqa: N802
+            return self._hint
+
+        def sizeHint(self) -> QSize:  # noqa: N802
+            return self._hint
+
+    header = ResponsiveRoleHeader()
+    navigation = HintWidget(418)
+    preview = HintWidget(120)
+    header.set_widgets(navigation, preview)
+
+    # 父布局先看到的是“最宽子项”，而不是 418+120+间距；否则它永远
+    # 缩不到断点以下，预览只能被裁掉。
+    assert header.minimumSizeHint().width() == 418
+
+    header.resize(450, 200)
+    header._sync_direction()
+    header.layout().activate()
+    assert header.is_stacked() is True
+    assert navigation.width() <= 450
+    assert preview.width() <= 450
+
+
+def test_responsive_property_pair_allocates_side_widths_by_preferred(qapp) -> None:
+    class HintWidget(QWidget):
+        def __init__(self, minimum: int, preferred: int) -> None:
+            super().__init__()
+            self._minimum = minimum
+            self._preferred = preferred
+
+        def minimumSizeHint(self) -> QSize:  # noqa: N802
+            return QSize(self._minimum, 30)
+
+        def sizeHint(self) -> QSize:  # noqa: N802
+            return QSize(self._preferred, 30)
+
+    pair = ResponsivePropertyPair()
+    first = HintWidget(279, 324)
+    second = HintWidget(253, 253)
+    pair.set_widgets(first, None, second)
+    pair.resize(600, 100)
+    pair._sync_direction()
+    pair.layout().activate()
+
+    assert pair.is_stacked() is False
+    # 等分 stretch 会给 first 约 294px，低于它的 preferred 324，导致右侧
+    # 被裁；按 preferred 分配后两张卡都拿到自己的完整宽度。
+    assert first.width() >= 324
+    assert second.width() >= 253

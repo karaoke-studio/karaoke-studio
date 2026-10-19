@@ -187,6 +187,20 @@ class ResponsivePropertyPair(QWidget):
     def _spacing_count(self) -> int:
         return 2 if self._divider is not None else 1
 
+    def _stretch_width(self, widget: QWidget) -> int:
+        """Side-by-side stretch must follow the preferred width, not 1:1.
+
+        The color card and font card have very different preferred widths
+        (324 vs 253). Equal stretch starves the wider card even when the pair
+        is above the breakpoint computed from the sum of both preferred
+        widths; the narrower card then keeps the unused space.
+        """
+        return max(
+            1,
+            widget.minimumSizeHint().width(),
+            widget.sizeHint().width(),
+        )
+
     def horizontal_width_hint(self) -> int:
         if self._first is None or self._second is None:
             return 0
@@ -250,8 +264,12 @@ class ResponsivePropertyPair(QWidget):
                 )
         else:
             self._layout.setDirection(QBoxLayout.Direction.LeftToRight)
-            self._layout.setStretchFactor(self._first, 1)
-            self._layout.setStretchFactor(self._second, 1)
+            self._layout.setStretchFactor(
+                self._first, self._stretch_width(self._first)
+            )
+            self._layout.setStretchFactor(
+                self._second, self._stretch_width(self._second)
+            )
             if self._divider is not None:
                 self._divider.setMinimumHeight(0)
                 self._divider.setMaximumHeight(QWIDGETSIZE_MAX)
@@ -291,6 +309,12 @@ class ResponsiveControlPair(ResponsivePropertyPair):
 
     def set_widgets(self, first: QWidget, second: QWidget) -> None:  # type: ignore[override]
         super().set_widgets(first, None, second)
+
+    def _stretch_width(self, widget: QWidget) -> int:
+        # Compact controls carry a very wide preferred size; their side-by-side
+        # breakpoint already measures minimum widths, so stretch must do the
+        # same or a slider/colour slot would hog the row.
+        return max(1, widget.minimumSizeHint().width())
 
     def horizontal_width_hint(self) -> int:
         if self._first is None or self._second is None:
@@ -395,6 +419,30 @@ class ResponsiveRoleHeader(QWidget):
             preview, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
         )
         self._sync_direction(force=True)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        """Allow the parent to narrow us enough to trigger stacking.
+
+        The box layout's own minimum is navigation + preview + spacing (550),
+        so without this override the parent can never shrink the header to the
+        breakpoint and the right-hand preview is simply clipped.  Mirror the
+        ResponsivePropertyPair contract: report the widest visible child rather
+        than the side-by-side sum, even while currently horizontal.
+        """
+        if self._navigation is None or self._preview is None:
+            return super().minimumSizeHint()
+        navigation_width = (
+            0
+            if self._navigation.isHidden()
+            else max(0, self._navigation.minimumSizeHint().width())
+        )
+        preview_width = (
+            0
+            if self._preview.isHidden()
+            else max(0, self._preview.minimumSizeHint().width())
+        )
+        base = super().minimumSizeHint()
+        return QSize(max(navigation_width, preview_width), base.height())
 
     def is_stacked(self) -> bool:
         return bool(self._stacked)
@@ -786,7 +834,9 @@ class _LayoutSchematic(QWidget):
 
 class _SchematicBoard(QWidget):
     """N3 式空间编排：示意图居中，锚定贴左上，左右余白在左侧垂直
-    居中，上/下余白贴下边，行布局贴右边。窄面板退化为竖向堆叠。"""
+    居中，上/下余白贴下边，行布局贴右边。窄面板退化为双列紧凑布局。"""
+
+    _WIDE_HYSTERESIS_PX = 24
 
     def __init__(
         self,
@@ -815,6 +865,7 @@ class _SchematicBoard(QWidget):
         self._bottom_left = bottom_left
         self._bottom_right = bottom_right
         self._wide: Optional[bool] = None
+        self._narrow_signature: Optional[tuple[bool, bool, bool, bool]] = None
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(8)
@@ -901,11 +952,90 @@ class _SchematicBoard(QWidget):
         self._sync()
         super().resizeEvent(event)
 
+    def _narrow_layout_state(self) -> tuple[bool, bool, bool, bool]:
+        """Return the sub-layout decisions for the current narrow width.
+
+        ``_sync`` must react not only to wide↔narrow, but also to the three
+        inner breakpoints (header pair, compressed three-column block, and
+        side-by-side groups).  Without this signature the board kept the
+        first narrow arrangement after a later resize because ``self._wide``
+        did not change.
+        """
+        hspace = self._grid.horizontalSpacing()
+        center_w = max(
+            180,
+            self._center.minimumWidth(),
+            self._center.minimumSizeHint().width(),
+            self._center.sizeHint().width(),
+        )
+        left_w = (
+            self._side_width(self._top_left)
+            if self._top_left is not None
+            else 0
+        )
+        vertical_w = max(
+            self._side_width(self._top_center)
+            if self._top_center is not None
+            else 0,
+            self._side_width(self._bottom),
+        )
+        compressed = (
+            self._top_left is not None
+            and self._top_center is not None
+            and self.width() >= center_w + left_w + vertical_w + 2 * hspace
+        )
+        header_left_w = (
+            self._side_width(self._header_left)
+            if self._header_left is not None
+            else 0
+        )
+        header_right_w = (
+            self._side_width(self._header_right)
+            if self._header_right is not None
+            else 0
+        )
+        header_side = (
+            self._header_left is not None
+            and self._header_right is not None
+            and self.width() >= header_left_w + header_right_w + hspace
+        )
+        margins_side = compressed or (
+            self._top_left is not None
+            and self.width() >= left_w + vertical_w + hspace
+        )
+        char_w = (
+            self._side_width(self._bottom_left)
+            if self._bottom_left is not None
+            else 0
+        )
+        right_w = self._side_width(self._right)
+        layout_side = compressed or (
+            self._bottom_left is not None
+            and self.width() >= char_w + right_w + hspace
+        )
+        return (header_side, compressed, margins_side, layout_side)
+
     def _sync(self, *, force: bool = False) -> None:
-        wide = self.width() >= self._wide_width_hint()
-        if not force and wide == self._wide:
+        hint = self._wide_width_hint()
+        # 只给“退出宽布局”留迟滞：宽度一到 hint 就进入宽布局，避免窄布局
+        # 在断点附近反复切换；一旦进入，回缩到 hint-24 才退回双列。
+        if self._wide is True:
+            wide = self.width() >= hint - self._WIDE_HYSTERESIS_PX
+        else:
+            wide = self.width() >= hint
+        narrow_signature = None if wide else self._narrow_layout_state()
+        if (
+            not force
+            and wide == self._wide
+            and narrow_signature == self._narrow_signature
+        ):
             return
         self._wide = wide
+        self._narrow_signature = narrow_signature
+        # `left` is a wide-layout placeholder only.  The compact two-column
+        # branch does not re-add it, so hide it to avoid a stale geometry
+        # lingering over the new grid.
+        self._left.setVisible(wide)
         while self._grid.count():
             self._grid.takeAt(0)
         if wide:
@@ -982,49 +1112,174 @@ class _SchematicBoard(QWidget):
             self._grid.setColumnStretch(1, 0)
             self._grid.setColumnStretch(2, 1)
         else:
+            # 窄模式按宽模式的方位语义分组，而不是把控件随便塞进两列：
+            #   余白组 = 左右余白（智能水平 + 左右余白）+ 上下余白（上下配置 + 下余白）
+            #   行组   = 字符排版 + 行布局
+            #   页锚点 = 强制顶底 / 启用文字咬合
+            # 空间足够时示意图与余白组并排（类似宽模式），不够时整组下移；
+            # 行组够宽时并排，否则上下排列。
+            (
+                header_side,
+                compressed,
+                margins_side,
+                layout_side,
+            ) = self._narrow_signature or (False, False, False, False)
+            columns = 3 if compressed else 2
+
+            def add_full(widget: QWidget, row: int) -> None:
+                self._grid.addWidget(
+                    widget,
+                    row,
+                    0,
+                    1,
+                    columns,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+
             next_row = 0
-            if self._header_left is not None:
+            if header_side:
                 self._grid.addWidget(
                     self._header_left,
                     next_row,
                     0,
-                    Qt.AlignmentFlag.AlignLeft,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
                 )
-                next_row += 1
-            if self._header_right is not None:
                 self._grid.addWidget(
                     self._header_right,
                     next_row,
-                    0,
-                    Qt.AlignmentFlag.AlignLeft,
+                    1,
+                    1,
+                    columns - 1,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
                 )
                 next_row += 1
-            if self._top_center is not None:
+            else:
+                if self._header_left is not None:
+                    add_full(self._header_left, next_row)
+                    next_row += 1
+                if self._header_right is not None:
+                    add_full(self._header_right, next_row)
+                    next_row += 1
+
+            if compressed:
+                # 示意图在左，水平余白组居中，垂直余白组在右。
                 self._grid.addWidget(
-                    self._top_center, next_row, 0, Qt.AlignmentFlag.AlignHCenter
+                    self._center,
+                    next_row,
+                    0,
+                    2,
+                    1,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                )
+                self._grid.addWidget(
+                    self._top_left,
+                    next_row,
+                    1,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+                self._grid.addWidget(
+                    self._top_center,
+                    next_row,
+                    2,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+                self._grid.addWidget(
+                    self._bottom,
+                    next_row + 1,
+                    2,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+                next_row += 2
+            else:
+                self._grid.addWidget(
+                    self._center,
+                    next_row,
+                    0,
+                    1,
+                    2,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                 )
                 next_row += 1
-            self._grid.addWidget(self._center, next_row, 0)
-            next_row += 1
-            self._grid.addWidget(
-                self._bottom, next_row, 0, Qt.AlignmentFlag.AlignHCenter
-            )
-            next_row += 1
-            if self._top_left is not None:
-                self._grid.addWidget(self._top_left, next_row, 0)
+                if margins_side:
+                    self._grid.addWidget(
+                        self._top_left,
+                        next_row,
+                        0,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    )
+                    if self._top_center is not None:
+                        self._grid.addWidget(
+                            self._top_center,
+                            next_row,
+                            1,
+                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                        )
+                    self._grid.addWidget(
+                        self._bottom,
+                        next_row + 1,
+                        1,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    )
+                    next_row += 2
+                else:
+                    if self._top_left is not None:
+                        add_full(self._top_left, next_row)
+                        next_row += 1
+                    if self._top_center is not None:
+                        add_full(self._top_center, next_row)
+                        next_row += 1
+                    add_full(self._bottom, next_row)
+                    next_row += 1
+
+            if compressed:
+                if self._bottom_left is not None:
+                    self._grid.addWidget(
+                        self._bottom_left,
+                        next_row,
+                        0,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    )
+                self._grid.addWidget(
+                    self._right,
+                    next_row,
+                    1,
+                    1,
+                    2,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
                 next_row += 1
-            self._grid.addWidget(self._left, next_row, 0)
-            next_row += 1
-            if self._bottom_left is not None:
-                self._grid.addWidget(self._bottom_left, next_row, 0)
+            elif layout_side:
+                self._grid.addWidget(
+                    self._bottom_left,
+                    next_row,
+                    0,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+                self._grid.addWidget(
+                    self._right,
+                    next_row,
+                    1,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
                 next_row += 1
-            self._grid.addWidget(self._right, next_row, 0)
-            next_row += 1
+            else:
+                if self._bottom_left is not None:
+                    add_full(self._bottom_left, next_row)
+                    next_row += 1
+                add_full(self._right, next_row)
+                next_row += 1
+
             if self._bottom_right is not None:
-                self._grid.addWidget(self._bottom_right, next_row, 0)
-            self._grid.setColumnStretch(0, 1)
-            self._grid.setColumnStretch(1, 0)
-            self._grid.setColumnStretch(2, 0)
+                add_full(self._bottom_right, next_row)
+
+            if compressed:
+                self._grid.setColumnStretch(0, 0)
+                self._grid.setColumnStretch(1, 1)
+                self._grid.setColumnStretch(2, 1)
+            else:
+                self._grid.setColumnStretch(0, 1)
+                self._grid.setColumnStretch(1, 1)
+                self._grid.setColumnStretch(2, 0)
         self.updateGeometry()
         # 换行后子控件的 sizeHint 可能改变；Qt 不一定会再派发一次
         # resizeEvent。下一轮事件再核对一次，消除断点附近的迟滞。

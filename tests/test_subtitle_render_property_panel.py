@@ -3482,7 +3482,10 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     assert panel._font_section.geometry().top() == panel._color_section.geometry().top()
     # 颜色在左、字体在右（与 nicokara maker3 的编辑顺序一致）。
     assert panel._color_section.geometry().right() < panel._font_section.geometry().left()
-    assert abs(panel._font_section.width() - panel._color_section.width()) <= 1
+    # 两张卡的 preferred 宽度不同（颜色 324 / 字体 253），并排时按 preferred
+    # 分配而不是 1:1 等分；等分会让色卡右侧的注音 tab 与取色按钮被裁。
+    assert panel._color_section.width() >= panel._color_section.sizeHint().width()
+    assert panel._font_section.width() >= panel._font_section.sizeHint().width()
     # 描边尺寸进入字体页后字体卡片更高；两张卡片仍只做顶部对齐。
     assert panel._font_section.height() > panel._color_section.height()
     assert (
@@ -3646,6 +3649,7 @@ def test_layout_schematic_preserves_columns_until_controls_would_collide(qapp):
     qapp.processEvents()
 
     assert panel._schematic_board._wide is True
+    assert panel._schematic_board.height() < 300
     assert panel._layout_navigation.geometry().top() == (
         panel._layout_assignment_actions.geometry().top()
     )
@@ -3657,7 +3661,7 @@ def test_layout_schematic_preserves_columns_until_controls_would_collide(qapp):
     )
 
 
-def test_layout_schematic_stacks_cleanly_after_collision_breakpoint(qapp):
+def test_layout_schematic_reflows_into_semantic_groups(qapp):
     panel = PropertyPanel()
     panel.setCurrentIndex(1)
     panel.resize(700, 1000)
@@ -3667,7 +3671,33 @@ def test_layout_schematic_stacks_cleanly_after_collision_breakpoint(qapp):
     board = panel._schematic_board
     assert board.width() < board._wide_width_hint()
     assert board._wide is False
-    ordered = [
+    # 旧的单列堆叠把卡片撑到约 720px；分组压缩后应显著更低。
+    assert board.height() < 600
+
+    schematic = panel._layout_schematic.mapTo(board, QPoint())
+    line_position = panel._line_position_field.mapTo(board, QPoint())
+    vertical_margin = panel._vertical_margin_field.mapTo(board, QPoint())
+    left_controls = panel._left_layout_controls.mapTo(board, QPoint())
+    line_alignments = panel._line_alignments_box.mapTo(board, QPoint())
+    character_layout = panel._character_layout_group.mapTo(board, QPoint())
+    page_anchors = panel._page_anchor_checks.mapTo(board, QPoint())
+
+    # 余白组：示意图在左，水平余白组（智能水平 + 左右余白）居中，
+    # 垂直余白组（上下配置 + 下余白）在右。同类属性不拆散。
+    assert left_controls.x() >= schematic.x() + panel._layout_schematic.width()
+    assert line_position.x() > left_controls.x()
+    assert vertical_margin.x() == line_position.x()
+    assert vertical_margin.y() > line_position.y()
+
+    # 行组：字符排版在示意图下方，行布局在右；两组同一行。
+    assert character_layout.y() >= schematic.y() + panel._layout_schematic.height()
+    assert line_alignments.y() == character_layout.y()
+    assert line_alignments.x() > character_layout.x()
+
+    # 页锚点单独铺底。
+    assert page_anchors.y() > character_layout.y()
+
+    for widget in (
         panel._layout_navigation,
         panel._layout_assignment_actions,
         panel._line_position_field,
@@ -3676,14 +3706,76 @@ def test_layout_schematic_stacks_cleanly_after_collision_breakpoint(qapp):
         panel._left_layout_controls,
         panel._character_layout_group,
         panel._line_alignments_box,
-        panel._allow_biting_check,
-    ]
-    tops = [widget.mapTo(board, QPoint()).y() for widget in ordered]
-    assert tops == sorted(tops)
-    for widget in ordered:
+        panel._page_anchor_checks,
+    ):
         top_left = widget.mapTo(board, QPoint())
         assert top_left.x() >= 0
         assert top_left.x() + widget.width() <= board.width()
+
+
+def test_layout_schematic_stacks_semantic_groups_at_minimum_width(qapp):
+    panel = PropertyPanel()
+    panel.setCurrentIndex(1)
+    panel.resize(480, 1000)
+    panel.show()
+    qapp.processEvents()
+
+    board = panel._schematic_board
+    assert board._wide is False
+    assert board.height() < 700
+
+    schematic = panel._layout_schematic.mapTo(board, QPoint())
+    horizontal = panel._left_layout_controls.mapTo(board, QPoint())
+    line_position = panel._line_position_field.mapTo(board, QPoint())
+    vertical_margin = panel._vertical_margin_field.mapTo(board, QPoint())
+    character = panel._character_layout_group.mapTo(board, QPoint())
+    line = panel._line_alignments_box.mapTo(board, QPoint())
+    anchors = panel._page_anchor_checks.mapTo(board, QPoint())
+
+    # 示意图独占一行；余白组在下一行并排：水平余白在左、垂直余白在右。
+    assert horizontal.y() > schematic.y() + panel._layout_schematic.height()
+    assert line_position.y() == horizontal.y()
+    assert vertical_margin.x() == line_position.x()
+    assert vertical_margin.y() > line_position.y()
+    # 行组窄到放不下时上下排列：字符排版在上，行布局在下；锚点铺底。
+    assert character.y() > horizontal.y()
+    assert line.y() > character.y()
+    assert anchors.y() > line.y()
+
+    for widget in (
+        panel._layout_navigation,
+        panel._layout_assignment_actions,
+        panel._line_position_field,
+        panel._layout_schematic,
+        panel._vertical_margin_field,
+        panel._left_layout_controls,
+        panel._character_layout_group,
+        panel._line_alignments_box,
+        panel._page_anchor_checks,
+    ):
+        top_left = widget.mapTo(board, QPoint())
+        assert top_left.x() >= 0
+        assert top_left.x() + widget.width() <= board.width()
+
+
+def test_property_cards_keep_full_width_at_workspace_minimum_and_side_by_side(qapp):
+    panel = PropertyPanel()
+    panel.show()
+    panel.resize(480, 900)
+    panel.setCurrentIndex(0)
+    qapp.processEvents()
+
+    role_page = panel.widget(0)
+    assert role_page.widget().width() <= role_page.viewport().width()
+    assert panel._role_header.is_stacked()
+    assert panel._color_section.width() >= panel._color_section.minimumSizeHint().width()
+
+    pair = panel._font_color_row
+    panel.resize(pair.horizontal_width_hint() + 80, 900)
+    qapp.processEvents()
+    assert not pair.is_stacked()
+    assert pair._first.width() >= pair._first.sizeHint().width()
+    assert pair._second.width() >= pair._second.sizeHint().width()
 
 
 def test_vertical_margin_label_follows_line_anchor(qapp):
