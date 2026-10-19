@@ -12618,7 +12618,11 @@ def test_gpu_g3_ruby_uses_independent_before_and_after_glow_radii(monkeypatch) -
     style = _g1_style(
         font_family="Meiryo",
         decoration_kind="shadow",
-        shadow_color="#00000000",
+        # 注意不能把 shadow_color 清成 #00000000 来关主文字阴影：注音发光
+        # 的颜色同样取自配色矩阵的 shadow 槽（跟随主文字时即该标量），
+        # 清零会让光晕全透明、半径设定整体失效——本测试曾因此空转，只
+        # 靠 before 层双层叠加（2026-10 已修的 α²）撑过断言。主文字阴影
+        # 用 offsets=0 关闭即可，shadow_color 保持不透明。
         shadow_offset_x=0,
         shadow_offset_y=0,
         ruby_font_size_px=36,
@@ -12640,9 +12644,9 @@ def test_gpu_g3_ruby_uses_independent_before_and_after_glow_radii(monkeypatch) -
 
     before_alpha_mass = sum(frames[0][3::4])
     after_alpha_mass = sum(frames[1][3::4])
-    # Integer-half N3 edge placement makes the 3 px ruby stroke one physical
-    # pixel narrower than the prior float-half approximation. The larger after
-    # radius must still increase the total glow mass measurably.
+    # 走字前 r=2、走字后 r=12：大半径的光晕摊到字形外，可见 alpha 质量
+    # 显著增加（实测 ≈1.41x）；同半径对照组（2/2、12/12）约 1.003~1.009x，
+    # 1.01 阈值能可靠区分半径是否独立生效。
     assert after_alpha_mass > before_alpha_mass * 1.01
 
 

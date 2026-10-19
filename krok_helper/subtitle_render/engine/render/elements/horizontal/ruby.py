@@ -1104,9 +1104,14 @@ def ruby_after_clip_rect_at_time(
     wipe_left = layout.wipe_left if layout.wipe_segments else rect.left()
     wipe_right = layout.wipe_right if layout.wipe_segments else rect.right()
     if rtl:
+        # RTL 已唱区贴右缘、锋面向左推进：pad 只外扩远端（右），锋面边
+        # 硬切——与 LTR 分支及 GPU directionalWipeClip 同口径。此前 pad
+        # 误加在锋面侧（伸入未唱区），远端外扩缺失：before 层全量垫底时
+        # 被掩盖，互斥裁剪后表现为右侧 pad 带两端都不画（2026-10 GPU/
+        # painter 奇偶校验暴露）。
         left = min(max(front, wipe_left), wipe_right)
         return QRectF(
-            left - pad,
+            left,
             rect.top() - pad,
             max(wipe_right - left, 0.0) + pad,
             rect.height() + pad * 2,
@@ -1135,10 +1140,12 @@ def ruby_before_clip_rect_at_time(
     wipe_right = layout.wipe_right if layout.wipe_segments else rect.right()
     front = min(max(front, wipe_left), wipe_right)
     if rtl:
+        # 与 after 侧同口径修正：pad 只外扩远端（左），锋面边硬切，不再
+        # 伸入已唱区与 after 层重叠。
         return QRectF(
             wipe_left - pad,
             rect.top() - pad,
-            max(front - wipe_left, 0.0) + pad,
+            max(front - wipe_left, 0.0),
             rect.height() + pad * 2,
         )
     return QRectF(
