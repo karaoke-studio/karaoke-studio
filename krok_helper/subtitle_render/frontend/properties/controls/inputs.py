@@ -99,19 +99,56 @@ class GrowingPlainTextEdit(FluentPlainTextEdit):
 
 
 class DynamicStackedWidget(QStackedWidget):
-    """Report the current page height instead of the tallest page height."""
+    """Report the current page height instead of the tallest page height.
+
+    ``stable_width`` optionally pins the preferred width across pages.  The
+    fill editor uses it because the horizontal-gradient page asks for a much
+    wider layout than solid/vertical/image; a mode-dependent width would
+    change the surrounding colour/font pair's breakpoint and stretch as soon
+    as the user switches fill mode.
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        stable_width: Optional[int] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._stable_width = (
+            None if stable_width is None else max(1, int(stable_width))
+        )
+
+    def set_stable_width(self, width: int) -> None:
+        stable_width = max(1, int(width))
+        if stable_width == self._stable_width:
+            return
+        self._stable_width = stable_width
+        self.updateGeometry()
 
     def sizeHint(self) -> QSize:  # noqa: N802
         widget = self.currentWidget()
-        return widget.sizeHint() if widget is not None else super().sizeHint()
+        hint = widget.sizeHint() if widget is not None else super().sizeHint()
+        if self._stable_width is not None:
+            return QSize(self._stable_width, hint.height())
+        return hint
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         widget = self.currentWidget()
-        return (
+        hint = (
             widget.minimumSizeHint()
             if widget is not None
             else super().minimumSizeHint()
         )
+        if self._stable_width is not None:
+            # The stable width is the widest page minimum, so every page
+            # still fits; keep the current page's hard floor so a forced
+            # narrow layout can still shrink instead of clipping.
+            return QSize(
+                min(self._stable_width, max(0, hint.width())),
+                hint.height(),
+            )
+        return hint
 
 
 class WheelFocusedComboBox(FluentComboBox):

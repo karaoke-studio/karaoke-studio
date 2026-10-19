@@ -147,6 +147,8 @@ def inline_property_section(
 class ResponsivePropertyPair(QWidget):
     """Place two property cards side by side only while they genuinely fit."""
 
+    _UNSTACK_HYSTERESIS_PX = 6
+
     def __init__(
         self, parent: Optional[QWidget] = None, *, min_side_width: int = 0
     ) -> None:
@@ -161,6 +163,16 @@ class ResponsivePropertyPair(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(12)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def set_spacing(self, spacing: int) -> None:
+        """Set the inter-card gap before/after ``set_widgets``.
+
+        A tighter gap is used by the role colour/font row: at a 50/50
+        workspace split the pair is only a few pixels short of the preferred
+        width, and trimming the gap lets both cards stay side by side.
+        """
+        self._layout.setSpacing(max(0, int(spacing)))
+        self.updateGeometry()
 
     def set_widgets(
         self, first: QWidget, divider: Optional[QFrame], second: QWidget
@@ -245,7 +257,19 @@ class ResponsivePropertyPair(QWidget):
     def _sync_direction(self, *, force: bool = False) -> None:
         if self._first is None or self._second is None:
             return
-        stacked = self.width() < self.horizontal_width_hint()
+        required = self.horizontal_width_hint()
+        if not force and self._stacked is not None:
+            # Delay only the *unstacking* transition.  When the pair is
+            # stacked, a scrollbar/hover jitter of a few pixels must not make
+            # it jump back to side-by-side; once the cards are at minimum
+            # width, stacking must still happen immediately so they never
+            # clip.
+            if self._stacked:
+                stacked = self.width() < required + self._UNSTACK_HYSTERESIS_PX
+            else:
+                stacked = self.width() < required
+        else:
+            stacked = self.width() < required
         if not force and stacked == self._stacked:
             return
         self._stacked = stacked
@@ -397,6 +421,8 @@ class ResponsiveFieldGrid(QWidget):
 class ResponsiveRoleHeader(QWidget):
     """Keep role navigation left-aligned and its preview right-aligned."""
 
+    _UNSTACK_HYSTERESIS_PX = 24
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._navigation: Optional[QWidget] = None
@@ -459,7 +485,13 @@ class ResponsiveRoleHeader(QWidget):
             + self._preview.sizeHint().width()
             + self._layout.spacing()
         )
-        stacked = self.width() < required
+        if not force and self._stacked is not None:
+            if self._stacked:
+                stacked = self.width() < required + self._UNSTACK_HYSTERESIS_PX
+            else:
+                stacked = self.width() < required
+        else:
+            stacked = self.width() < required
         if not force and stacked == self._stacked:
             return
         self._stacked = stacked

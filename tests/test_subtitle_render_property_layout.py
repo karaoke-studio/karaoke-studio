@@ -182,6 +182,70 @@ def test_responsive_role_header_can_shrink_below_side_by_side_sum(qapp) -> None:
     assert preview.width() <= 450
 
 
+def test_responsive_property_pair_does_not_unstack_on_small_width_jitter(qapp) -> None:
+    class HintWidget(QWidget):
+        def minimumSizeHint(self) -> QSize:  # noqa: N802
+            return QSize(300, 30)
+
+        def sizeHint(self) -> QSize:  # noqa: N802
+            return QSize(300, 30)
+
+    pair = ResponsivePropertyPair()
+    pair.set_widgets(HintWidget(), None, HintWidget())
+    required = pair.horizontal_width_hint()
+
+    pair.resize(required, 100)
+    pair._sync_direction()
+    assert pair.is_stacked() is False
+
+    # A scrollbar / hover jitter of a few pixels must not make a stacked pair
+    # jump back to side-by-side; it must clear the 24px unstack band first.
+    pair.resize(required - 12, 100)
+    pair._sync_direction()
+    assert pair.is_stacked() is True
+
+    pair.resize(required + 4, 100)
+    pair._sync_direction()
+    assert pair.is_stacked() is True
+
+    pair.resize(required + 12, 100)
+    pair._sync_direction()
+    assert pair.is_stacked() is False
+
+
+def test_responsive_role_header_does_not_unstack_on_small_width_jitter(qapp) -> None:
+    class HintWidget(QWidget):
+        def __init__(self, width: int) -> None:
+            super().__init__()
+            self._hint = QSize(width, 30)
+
+        def minimumSizeHint(self) -> QSize:  # noqa: N802
+            return self._hint
+
+        def sizeHint(self) -> QSize:  # noqa: N802
+            return self._hint
+
+    header = ResponsiveRoleHeader()
+    header.set_widgets(HintWidget(200), HintWidget(120))
+    required = 200 + 120 + header.layout().spacing()
+
+    header.resize(required, 100)
+    header._sync_direction()
+    assert header.is_stacked() is False
+
+    header.resize(required - 12, 100)
+    header._sync_direction()
+    assert header.is_stacked() is True
+
+    header.resize(required + 12, 100)
+    header._sync_direction()
+    assert header.is_stacked() is True
+
+    header.resize(required + 30, 100)
+    header._sync_direction()
+    assert header.is_stacked() is False
+
+
 def test_responsive_property_pair_allocates_side_widths_by_preferred(qapp) -> None:
     class HintWidget(QWidget):
         def __init__(self, minimum: int, preferred: int) -> None:

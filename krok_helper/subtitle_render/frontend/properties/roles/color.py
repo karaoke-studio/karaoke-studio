@@ -190,10 +190,28 @@ class RoleColorPropertyPageBuilder:
         host._decoration_type_field = property_field("装饰类型", host._decoration_type_combo)
 
         host._fill_editor_stack = DynamicStackedWidget(section)
-        host._fill_editor_stack.addWidget(host._make_solid_fill_page())
-        host._fill_editor_stack.addWidget(host._make_gradient_fill_page())
-        host._fill_editor_stack.addWidget(host._make_split_fill_page())
-        host._fill_editor_stack.addWidget(host._make_image_fill_page())
+        fill_pages = (
+            host._make_solid_fill_page(),
+            host._make_gradient_fill_page(),
+            host._make_split_fill_page(),
+            host._make_image_fill_page(),
+        )
+        for page in fill_pages:
+            host._fill_editor_stack.addWidget(page)
+        for page in fill_pages:
+            page_layout = page.layout()
+            if page_layout is not None:
+                page_layout.activate()
+        # 填充页的 preferred width 必须与当前模式无关：横渐变页的渐变条
+        # 明显比全色/纵渐变/图片宽，若 sizeHint 跟着当前页走，颜色/字体并排
+        # 的断点与 stretch 会在切换填充方式时跳变。取所有页最小宽度的最大值，
+        # 保证每页都能放下，同时提供一个稳定的推荐宽度。
+        host._fill_editor_stack.set_stable_width(
+            max(
+                1,
+                max(page.minimumSizeHint().width() for page in fill_pages),
+            )
+        )
 
         detail_grid = QWidget(section)
         detail_layout = QGridLayout(detail_grid)

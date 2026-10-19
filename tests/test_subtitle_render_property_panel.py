@@ -5152,6 +5152,40 @@ def test_property_panel_fill_modes_use_compact_svg_icon_buttons(qapp):
     assert panel._fill_mode_pill.current() == "gradient_vertical"
 
 
+def test_color_fill_modes_keep_a_stable_preferred_width(qapp):
+    panel = PropertyPanel()
+    panel.show()
+    panel.resize(700, 1000)
+    panel.setCurrentIndex(0)
+    qapp.processEvents()
+
+    widths: list[int] = []
+    pair_hints: list[int] = []
+    for mode in (
+        "solid",
+        "gradient_horizontal",
+        "gradient_vertical",
+        "split_vertical",
+        "image",
+    ):
+        panel._fill_mode_combo.setCurrentIndex(
+            panel._fill_mode_combo.findData(mode)
+        )
+        qapp.processEvents()
+        widths.append(panel._color_section.sizeHint().width())
+        pair_hints.append(panel._font_color_row.horizontal_width_hint())
+
+    # 横渐变页不应把颜色卡的 preferred width 单独撑大；否则切模式会改变
+    # 颜色/字体 pair 的断点与 stretch。
+    assert len(set(widths)) == 1
+    assert len(set(pair_hints)) == 1
+
+    panel.resize(pair_hints[0] + 80, 1000)
+    qapp.processEvents()
+    assert panel._font_color_row.width() >= pair_hints[0]
+    assert not panel._font_color_row.is_stacked()
+
+
 def test_property_panel_gradient_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []

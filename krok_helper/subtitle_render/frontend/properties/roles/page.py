@@ -46,6 +46,7 @@ class RolePropertyPageBuilder:
         layout.addWidget(host._role_header)
 
         row = self._property_pair_factory(section)
+        row.set_spacing(6)
         host._font_color_row = row
         host._color_section = host._make_color_section(parent=row, inline=True)
         host._font_section = host._make_font_section(parent=row, inline=True)
