@@ -20,6 +20,7 @@ from krok_helper.subtitle_render.domain.paint import (
 )
 from krok_helper.subtitle_render.engine.render.effects import (
     brush_for_fill,
+    decoration_kind_for_state,
     fill_is_alpha,
     fill_signature,
     glow_blur_radii,
@@ -35,6 +36,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     paint_text_layer_stack,
     stroke2_pen_width,
     stroke_pen_width,
+    style_for_state,
     text_visual_padding,
     visual_stroke_extent,
 )
@@ -175,25 +177,27 @@ def paint_glyph_run_direct(
     """Paint one horizontal glyph run without the layer cache."""
 
     role_style = glyphs[0].style
+    state_style = style_for_state(role_style, after=after)
     colors = effective_karaoke_colors(role_style)
     state = colors.after if after else colors.before
     path = glyph_run_path(glyphs, baseline_y)
     rect = glyph_run_rect(glyphs, baseline_y)
     if draw_glow is None:
-        draw_glow = not (after and role_style.decoration_kind == "glow")
+        draw_glow = not (after and state_style.decoration_kind == "glow")
     paint_text_layer_stack(
         painter,
         path,
         rect,
         state,
-        role_style,
-        stroke_width=role_style.stroke_width_px,
-        stroke2_width=role_style.stroke2_width_px,
-        shadow_dx=role_style.shadow_offset_x,
-        shadow_dy=role_style.shadow_offset_y,
-        glow_radius=glow_radius(role_style, after=after),
+        state_style,
+        stroke_width=state_style.stroke_width_px,
+        stroke2_width=state_style.stroke2_width_px,
+        shadow_dx=state_style.shadow_offset_x,
+        shadow_dy=state_style.shadow_offset_y,
+        glow_radius=glow_radius(state_style, after=after),
         draw_glow=draw_glow,
         fill_rect=fill_rect,
+        after=after,
     )
 
 
@@ -206,43 +210,55 @@ def build_glyph_run_layer(
     supersample: float = 1.0,
     fill_rect: QRectF | None = None,
     baseline_y: int = 0,
+    bake_glow: bool = False,
 ) -> tuple[QImage, int, int]:
     """Bake one horizontal glyph-run state into a transparent image."""
 
     state = colors.after if after else colors.before
+    state_style = style_for_state(role_style, after=after)
     run_left = min(glyph.left for glyph in glyphs)
     run_right = max(glyph.left + glyph.width for glyph in glyphs)
     run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
     run_descent = max(glyph.metrics.descent() for glyph in glyphs)
     run_w = max(run_right - run_left, 1)
     run_h = max(run_ascent + run_descent, 1)
-    stroke2_width = main_stroke2_width(role_style)
+    stroke2_width = main_stroke2_width(state_style)
 
-    # 光晕不再烘进主体层：等态光由独立的共享光层整幅绘制（与 GPU 逐侧
-    # 独占裁剪在等色同半径时等价），主体层必须无光才能按锋面互斥裁剪。
-    bake_glow = False
+    # 光晕默认不烘进主体层：等态光由独立的共享光层整幅绘制（与 GPU
+    # 逐侧独占裁剪在等色同半径时等价），主体层必须无光才能按锋面互斥
+    # 裁剪。唯一例外是逐字转场（char_fade 等按字符透明度淡出的动画）：
+    # N3 语义是「整份字形栈先合成、再乘字符透明度」，光晕必须进淡出
+    # 单元内部（调用方以 bake_glow=True 请求），否则分离层各自乘 p 会
+    # 在字心留下 p·(1−p) 的光色渗色。烘光条件沿用旧口径：仅 before 态
+    # 且前后光同色同半径（等态共享光的唯一载体）。
+    if bake_glow:
+        bake_glow = (
+            state_style.decoration_kind == "glow"
+            and not after
+            and not karaoke_glow_states_differ(state_style, colors)
+        )
     has_shadow = (
-        role_style.decoration_kind == "shadow"
-        and bool(role_style.shadow_color)
-        and bool(role_style.shadow_offset_x or role_style.shadow_offset_y)
+        state_style.decoration_kind == "shadow"
+        and bool(state_style.shadow_color)
+        and bool(state_style.shadow_offset_x or state_style.shadow_offset_y)
     )
 
     stroke_extent = visual_stroke_extent(
-        role_style.stroke_width_px,
+        state_style.stroke_width_px,
         stroke2_width,
     )
     glow_extra = (
         glow_extent(
-            role_style.stroke_width_px,
+            state_style.stroke_width_px,
             stroke2_width,
-            glow_radius(role_style, after=False),
+            glow_radius(state_style, after=after),
         )
         if bake_glow
         else 0
     )
     extent = max(stroke_extent, glow_extra, 0) + 4
-    shadow_dx = role_style.shadow_offset_x if has_shadow else 0
-    shadow_dy = role_style.shadow_offset_y if has_shadow else 0
+    shadow_dx = state_style.shadow_offset_x if has_shadow else 0
+    shadow_dy = state_style.shadow_offset_y if has_shadow else 0
     pad_left = max(0, -shadow_dx) + extent
     pad_right = max(0, shadow_dx) + extent
     pad_top = max(0, -shadow_dy) + extent
@@ -288,10 +304,12 @@ def build_glyph_run_layer(
                 path,
                 state.shadow,
                 brush_rect,
-                glow_radius(role_style, after=False),
-                role_style.stroke_width_px,
+                glow_radius(state_style, after=after),
+                state_style.stroke_width_px,
                 stroke2_width,
-                concentration_level=glow_concentration_level(role_style),
+                concentration_level=glow_concentration_level(
+                    state_style, after=after
+                ),
             )
         elif has_shadow:
             paint_shadow_silhouette(
@@ -299,9 +317,9 @@ def build_glyph_run_layer(
                 path,
                 state.shadow,
                 brush_rect,
-                role_style.shadow_offset_x,
-                role_style.shadow_offset_y,
-                role_style.stroke_width_px,
+                state_style.shadow_offset_x,
+                state_style.shadow_offset_y,
+                state_style.stroke_width_px,
                 stroke2_width,
             )
         if stroke2_width > 0:
@@ -310,15 +328,15 @@ def build_glyph_run_layer(
                 path,
                 state.stroke2,
                 brush_rect,
-                stroke2_pen_width(role_style.stroke_width_px, stroke2_width),
+                stroke2_pen_width(state_style.stroke_width_px, stroke2_width),
             )
-        if role_style.stroke_color and role_style.stroke_width_px > 0:
+        if state_style.stroke_color and state_style.stroke_width_px > 0:
             paint_stroke_path(
                 painter,
                 path,
                 state.stroke,
                 brush_rect,
-                stroke_pen_width(role_style.stroke_width_px),
+                stroke_pen_width(state_style.stroke_width_px),
                 protect_body=fill_is_alpha(state.text),
             )
         paint_fill_path(painter, path, state.text, brush_rect)
@@ -340,16 +358,17 @@ def build_glyph_run_glow_layer(
     """Bake the full unclipped glow image for a horizontal glyph run."""
 
     state = colors.after if after else colors.before
+    state_style = style_for_state(role_style, after=after)
     run_left = min(glyph.left for glyph in glyphs)
     run_right = max(glyph.left + glyph.width for glyph in glyphs)
     run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
     run_descent = max(glyph.metrics.descent() for glyph in glyphs)
     run_w = max(run_right - run_left, 1)
     run_h = max(run_ascent + run_descent, 1)
-    radius = glow_radius(role_style, after=after)
-    stroke2_width = main_stroke2_width(role_style)
+    radius = glow_radius(state_style, after=after)
+    stroke2_width = main_stroke2_width(state_style)
     extent = glow_extent(
-        role_style.stroke_width_px,
+        state_style.stroke_width_px,
         stroke2_width,
         radius,
     ) + 4
@@ -386,9 +405,11 @@ def build_glyph_run_glow_layer(
             state.shadow,
             brush_rect,
             radius,
-            role_style.stroke_width_px,
+            state_style.stroke_width_px,
             stroke2_width,
-            concentration_level=glow_concentration_level(role_style),
+            concentration_level=glow_concentration_level(
+                state_style, after=after
+            ),
         )
     finally:
         painter.end()
@@ -429,22 +450,23 @@ def paint_glyph_run_after_glow_direct(
     """Paint one after-glow from a source clipped at the karaoke front."""
 
     role_style = glyphs[0].style
+    state_style = style_for_state(role_style, after=True)
     colors = effective_karaoke_colors(role_style)
     path = glyph_run_path(glyphs, baseline_y)
     rect = glyph_run_rect(glyphs, baseline_y)
     pad = glow_extent(
-        role_style.stroke_width_px,
-        role_style.stroke2_width_px,
-        glow_radius(role_style, after=True),
+        state_style.stroke_width_px,
+        state_style.stroke2_width_px,
+        glow_radius(state_style, after=True),
     )
     paint_glow_path(
         painter,
         path,
         colors.after.shadow,
         fill_rect if fill_rect is not None else rect,
-        glow_radius(role_style, after=True),
-        role_style.stroke_width_px,
-        role_style.stroke2_width_px,
+        glow_radius(state_style, after=True),
+        state_style.stroke_width_px,
+        state_style.stroke2_width_px,
         source_clip=after_glow_source_clip_rect(
             band,
             rect,
@@ -452,7 +474,7 @@ def paint_glyph_run_after_glow_direct(
             rtl,
             complete,
         ),
-        concentration_level=glow_concentration_level(role_style),
+        concentration_level=glow_concentration_level(state_style, after=True),
     )
 
 
@@ -565,7 +587,7 @@ def paint_line_direct(
         if (
             not split_glow
             and id(run) not in combined_run_ids
-            and run[0].style.decoration_kind == "glow"
+            and decoration_kind_for_state(run[0].style, after=False) == "glow"
             and glow_radius(run[0].style, after=False) > 0
         ):
             glyph_ports.paint_glyph_run_before_glow_direct(
@@ -755,6 +777,18 @@ def inflate_rect(rect: QRectF, pad: int | float) -> QRectF:
     return rect.adjusted(-pad_f, -pad_f, pad_f, pad_f)
 
 
+def _state_decoration_key(style: Style, *, after: bool) -> tuple:
+    """Cache signature for one karaoke state's decoration parameters."""
+    state_style = style_for_state(style, after=after)
+    return (
+        state_style.decoration_kind,
+        state_style.shadow_offset_x,
+        state_style.shadow_offset_y,
+        glow_radius(state_style, after=after),
+        glow_concentration_level(state_style, after=after),
+    )
+
+
 def glyph_run_layer_key(
     glyphs: list[GlyphLayout],
     role_style: Style,
@@ -783,13 +817,9 @@ def glyph_run_layer_key(
     return (
         glyph_sig,
         karaoke_state_signature(state),
-        role_style.shadow_offset_x,
-        role_style.shadow_offset_y,
         role_style.stroke_width_px,
         main_stroke2_width(role_style),
-        role_style.decoration_kind,
-        glow_radius(role_style, after=False),
-        glow_concentration_level(role_style),
+        *_state_decoration_key(role_style, after=after),
         after,
     )
 
@@ -861,20 +891,24 @@ def glyph_run_after_glow_key(
         fill_signature(colors.after.shadow),
         role_style.stroke_width_px,
         main_stroke2_width(role_style),
-        glow_radius(role_style, after=True),
-        glow_concentration_level(role_style),
-        role_style.decoration_kind,
+        *_state_decoration_key(role_style, after=True),
     )
 
 
 def karaoke_glow_states_differ(style: Style, colors: KaraokeColors) -> bool:
-    """Return whether before/after glow sources need split processing."""
-    if style.decoration_kind != "glow":
+    """Return whether before/after decoration needs split processing."""
+    before_kind = decoration_kind_for_state(style, after=False)
+    after_kind = decoration_kind_for_state(style, after=True)
+    if before_kind != "glow" and after_kind != "glow":
         return False
+    if before_kind != after_kind:
+        return True
     return (
         fill_signature(colors.before.shadow)
         != fill_signature(colors.after.shadow)
         or glow_radius(style, after=False) != glow_radius(style, after=True)
+        or glow_concentration_level(style, after=False)
+        != glow_concentration_level(style, after=True)
     )
 
 
@@ -882,6 +916,8 @@ def glyph_run_needs_after_glow(glyphs: list[GlyphLayout]) -> bool:
     if not glyphs:
         return False
     role_style = glyphs[0].style
+    if decoration_kind_for_state(role_style, after=True) != "glow":
+        return False
     if glow_radius(role_style, after=True) == 0:
         return False
     return karaoke_glow_states_differ(
@@ -894,6 +930,8 @@ def glyph_run_needs_before_glow_split(glyphs: list[GlyphLayout]) -> bool:
     if not glyphs:
         return False
     role_style = glyphs[0].style
+    if decoration_kind_for_state(role_style, after=False) != "glow":
+        return False
     if glow_radius(role_style, after=False) == 0:
         return False
     return karaoke_glow_states_differ(
@@ -903,9 +941,17 @@ def glyph_run_needs_before_glow_split(glyphs: list[GlyphLayout]) -> bool:
 
 
 def glyph_run_can_combine_split_glow(glyphs: list[GlyphLayout]) -> bool:
-    if not glyph_run_needs_before_glow_split(glyphs):
+    if not glyphs:
         return False
     style = glyphs[0].style
+    if not glyph_run_needs_before_glow_split(glyphs):
+        return False
+    if decoration_kind_for_state(style, after=True) != "glow":
+        return False
+    if glow_concentration_level(style, after=False) != glow_concentration_level(
+        style, after=True
+    ):
+        return False
     before_radius = glow_radius(style, after=False)
     return before_radius > 0 and before_radius == glow_radius(style, after=True)
 
@@ -962,7 +1008,7 @@ def line_layer_stack(
         and (
             glyph_run_needs_before_glow_split(run)
             or (
-                run[0].style.decoration_kind == "glow"
+                decoration_kind_for_state(run[0].style, after=False) == "glow"
                 and glow_radius(run[0].style, after=False) > 0
             )
         )
@@ -1134,7 +1180,18 @@ def char_transition_layer_stack(
         else:
             transform = None
         run = [glyph]
-        if glyph_run_needs_before_glow_split(run):
+        split_glow = glyph_run_needs_before_glow_split(run)
+        # 等态（前后光同色同半径）光晕在逐字转场下必须烘进 before 主体
+        # 层（carries_shared_glow）：转场按字符透明度整栈淡出，分离光层
+        # 各自乘 p 会在字心留下 p·(1−p) 的光色渗色；烘进位图即恢复
+        # 「先合成后淡出」的 N3 语义（2026-10 GPU/painter 奇偶校验与
+        # CPU 渗色回归共同钉住的口径）。分态仍走逐侧光层。
+        carries_glow = (
+            not split_glow
+            and run[0].style.decoration_kind == "glow"
+            and glow_radius(run[0].style, after=False) > 0
+        )
+        if split_glow:
             before_glow_layers.append(
                 ports.glyph_run_before_glow_layer(
                     run,
@@ -1160,6 +1217,7 @@ def char_transition_layer_stack(
                 fade_opacity=opacity,
                 transform=transform,
                 fill_rect=glyph_fill_rect,
+                carries_shared_glow=carries_glow,
             )
         )
         z += 1
@@ -1401,10 +1459,11 @@ def paint_bitmap_guide_decor(
     if symbol is None or symbol.bitmap_no_decor:
         return
     style = glyph.style
-    decoration = getattr(style, "decoration_kind", "none")
+    wiped = after and bool(symbol.bitmap_after_path)
+    state_style = style_for_state(style, after=wiped)
+    decoration = state_style.decoration_kind
     if decoration not in {"shadow", "glow"}:
         return
-    wiped = after and bool(symbol.bitmap_after_path)
     colors = effective_karaoke_colors(style)
     fill = (colors.after if wiped else colors.before).shadow
     if not fill.color:
@@ -1412,7 +1471,7 @@ def paint_bitmap_guide_decor(
     span = gradient_rect if gradient_rect is not None else rect
     cache_key = _guide_decor_cache_key(frame_identity, fill, rect, span)
     if decoration == "glow":
-        radius = glow_radius(style, after=wiped)
+        radius = glow_radius(state_style, after=wiped)
         if radius <= 0:
             return
         pad = glow_extent(0, 0, radius) + 2
@@ -1426,7 +1485,7 @@ def paint_bitmap_guide_decor(
         painter.save()
         try:
             for blur_value in glow_blur_radii(
-                radius, glow_concentration_level(style)
+                radius, glow_concentration_level(state_style, after=wiped)
             ):
                 painter.drawImage(
                     QPointF(rect.left() - pad, rect.top() - pad),
@@ -1443,8 +1502,8 @@ def paint_bitmap_guide_decor(
         finally:
             painter.restore()
         return
-    shadow_dx = int(getattr(style, "shadow_offset_x", 0) or 0)
-    shadow_dy = int(getattr(style, "shadow_offset_y", 0) or 0)
+    shadow_dx = int(getattr(state_style, "shadow_offset_x", 0) or 0)
+    shadow_dy = int(getattr(state_style, "shadow_offset_y", 0) or 0)
     if not (shadow_dx or shadow_dy):
         return
     silhouette = _cached_guide_silhouette(image, fill, rect, span, cache_key)
@@ -1790,6 +1849,10 @@ class GlyphRunLayer:
     fade_opacity: float = 1.0
     transform: QTransform | None = None
     fill_rect: QRectF | None = None
+    carries_shared_glow: bool = False
+    """等态光烘进本层位图（仅逐字转场路径使用）：该层是共享光的唯一
+    载体，不参与锋面互斥裁剪/唱完隐藏——转场的字符透明度语义要求
+    「先合成后淡出」，光晕必须留在淡出单元内部。"""
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -1831,6 +1894,7 @@ class GlyphRunLayer:
             after=self.after,
             fill_rect=self.fill_rect,
             baseline_y=self.baseline_y,
+            bake_glow=self.carries_shared_glow,
         )
         return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
@@ -1838,11 +1902,12 @@ class GlyphRunLayer:
         run_left = min(glyph.left for glyph in self.glyphs)
         clip_rect = None
         role_style = self.glyphs[0].style
-        if not self.after:
+        if not self.after and not self.carries_shared_glow:
             # before 只画未唱侧、整 run 唱完即隐藏（GPU pushMainWipeClip 双侧
             # 互斥裁剪的镜像）。此前 before 全量垫底，半透明配色在已唱区被
             # after 层再叠一层呈 α²（2026-10 用户实测透明度不生效的根因）；
-            # 不透明配色下 after 完全覆盖 before，观感不变。
+            # 不透明配色下 after 完全覆盖 before，观感不变。携带共享光的
+            # 转场层豁免：它是淡出单元的一部分，裁剪/隐藏会切掉光晕。
             indices = {glyph.index for glyph in self.glyphs}
             if self.ports.run_fill_complete(
                 self.fill_segments,
@@ -2056,10 +2121,11 @@ class GlyphRunBeforeGlowLayer:
     ) -> tuple[int, int] | None:
         rect = glyph_run_rect(self.glyphs, self.baseline_y)
         role_style = self.glyphs[0].style
+        state_style = style_for_state(role_style, after=False)
         pad = glow_extent(
-            role_style.stroke_width_px,
-            role_style.stroke2_width_px,
-            glow_radius(role_style, after=False),
+            state_style.stroke_width_px,
+            state_style.stroke2_width_px,
+            glow_radius(state_style, after=False),
         )
         return (
             int(math.floor(rect.top() - pad)),
@@ -2124,13 +2190,19 @@ class GlyphRunSplitGlowLayer:
     ) -> tuple[int, int] | None:
         rect = glyph_run_rect(self.glyphs, self.baseline_y)
         style = self.glyphs[0].style
+        before_style = style_for_state(style, after=False)
+        after_style = style_for_state(style, after=True)
         pad = max(
             glow_extent(
-                style.stroke_width_px,
-                style.stroke2_width_px,
-                glow_radius(style, after=after),
-            )
-            for after in (False, True)
+                before_style.stroke_width_px,
+                before_style.stroke2_width_px,
+                glow_radius(before_style, after=False),
+            ),
+            glow_extent(
+                after_style.stroke_width_px,
+                after_style.stroke2_width_px,
+                glow_radius(after_style, after=True),
+            ),
         )
         return (
             int(math.floor(rect.top() - pad)),
@@ -2168,17 +2240,11 @@ class GlyphRunAfterGlowLayer:
     ) -> tuple | None:
         role_style = self.glyphs[0].style
         colors = effective_karaoke_colors(role_style)
-        if role_style.decoration_kind != "glow":
+        if decoration_kind_for_state(role_style, after=True) != "glow":
             return None
-        before_radius = glow_radius(role_style, after=False)
-        after_radius = glow_radius(role_style, after=True)
-        if after_radius == 0:
+        if glow_radius(role_style, after=True) == 0:
             return None
-        need_after_glow = (
-            fill_signature(colors.before.shadow)
-            != fill_signature(colors.after.shadow)
-            or before_radius != after_radius
-        )
+        need_after_glow = karaoke_glow_states_differ(role_style, colors)
         band = self.clip_band or self.ports.fill_clip_band(
             self.fill_segments,
             self.t_ms,
@@ -2341,10 +2407,11 @@ class GlyphRunAfterGlowLayer:
     ) -> tuple[int, int] | None:
         rect = glyph_run_rect(self.glyphs, self.baseline_y)
         role_style = self.glyphs[0].style
+        state_style = style_for_state(role_style, after=True)
         pad = glow_extent(
-            role_style.stroke_width_px,
-            role_style.stroke2_width_px,
-            glow_radius(role_style, after=True),
+            state_style.stroke_width_px,
+            state_style.stroke2_width_px,
+            glow_radius(state_style, after=True),
         )
         return (
             int(math.floor(rect.top() - pad)),

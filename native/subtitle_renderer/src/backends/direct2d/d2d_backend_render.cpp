@@ -2368,21 +2368,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     + std::max(item.rubyStroke2Width, 0.0f)
                 : std::max(item.strokeWidth, 0.0f)
                     + std::max(item.stroke2Width, 0.0f);
-            const std::string &decoration = ruby
-                ? item.rubyDecorationKind
-                : item.decorationKind;
-            const float glow = ruby
-                ? std::max(item.rubyGlowBeforeRadius, item.rubyGlowAfterRadius)
-                : std::max(item.glowBeforeRadius, item.glowAfterRadius);
-            const float shadowY = ruby ? item.rubyShadowOffsetY : item.shadowOffsetY;
             float top = stroke * 0.5f + 3.0f;
             float bottom = top;
-            if (decoration == "glow") {
-                top += std::max(glow, 0.0f) * 3.0f;
-                bottom += std::max(glow, 0.0f) * 3.0f;
-            } else if (decoration == "shadow") {
-                top += std::max(-shadowY, 0.0f);
-                bottom += std::max(shadowY, 0.0f);
+            for (bool after : {false, true}) {
+                const std::string decoration = ruby
+                    ? item.rubyDecorationKindForState(after)
+                    : item.decorationKindForState(after);
+                const float glow = ruby
+                    ? (after
+                        ? item.rubyGlowAfterRadius
+                        : item.rubyGlowBeforeRadius)
+                    : (after
+                        ? item.glowAfterRadius
+                        : item.glowBeforeRadius);
+                const float shadowY = ruby
+                    ? item.rubyShadowOffsetYForState(after)
+                    : item.shadowOffsetYForState(after);
+                if (decoration == "glow") {
+                    top += std::max(glow, 0.0f) * 3.0f;
+                    bottom += std::max(glow, 0.0f) * 3.0f;
+                } else if (decoration == "shadow") {
+                    top += std::max(-shadowY, 0.0f);
+                    bottom += std::max(shadowY, 0.0f);
+                }
             }
             return std::pair<float, float>{top, bottom};
         };
@@ -2392,23 +2400,35 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     + std::max(item.rubyStroke2Width, 0.0f)
                 : std::max(item.strokeWidth, 0.0f)
                     + std::max(item.stroke2Width, 0.0f);
-            const std::string &decoration = ruby
-                ? item.rubyDecorationKind
-                : item.decorationKind;
             float padding = stroke * 0.5f + 3.0f;
-            if (decoration == "glow") {
-                const float glow = ruby
-                    ? std::max(item.rubyGlowBeforeRadius, item.rubyGlowAfterRadius)
-                    : std::max(item.glowBeforeRadius, item.glowAfterRadius);
-                padding += std::max(glow, 0.0f) * 3.0f;
-            } else if (decoration == "shadow") {
-                const float shadowX = ruby
-                    ? item.rubyShadowOffsetX
-                    : item.shadowOffsetX;
-                const float shadowY = ruby
-                    ? item.rubyShadowOffsetY
-                    : item.shadowOffsetY;
-                padding += std::max(std::abs(shadowX), std::abs(shadowY));
+            for (bool after : {false, true}) {
+                const std::string decoration = ruby
+                    ? item.rubyDecorationKindForState(after)
+                    : item.decorationKindForState(after);
+                if (decoration == "glow") {
+                    const float glow = ruby
+                        ? (after
+                            ? item.rubyGlowAfterRadius
+                            : item.rubyGlowBeforeRadius)
+                        : (after
+                            ? item.glowAfterRadius
+                            : item.glowBeforeRadius);
+                    padding = std::max(
+                        padding, stroke * 0.5f + 3.0f + std::max(glow, 0.0f) * 3.0f
+                    );
+                } else if (decoration == "shadow") {
+                    const float shadowX = ruby
+                        ? item.rubyShadowOffsetXForState(after)
+                        : item.shadowOffsetXForState(after);
+                    const float shadowY = ruby
+                        ? item.rubyShadowOffsetYForState(after)
+                        : item.shadowOffsetYForState(after);
+                    padding = std::max(
+                        padding,
+                        stroke * 0.5f + 3.0f
+                            + std::max(std::abs(shadowX), std::abs(shadowY))
+                    );
+                }
             }
             return padding;
         };
@@ -3510,14 +3530,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 && ch.styleIndex < static_cast<int>(scene.charStyles.size())
                 ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
                 : style;
-            const bool isGlow = charStyle.decorationKind == "glow";
-            const bool isShadow = charStyle.decorationKind == "shadow"
-                && (charStyle.shadowOffsetX != 0.0f
-                    || charStyle.shadowOffsetY != 0.0f);
+            const bool wiped = after && !guide.afterPath.empty();
+            const std::string decorationKind =
+                charStyle.decorationKindForState(wiped);
+            const bool isGlow = decorationKind == "glow";
+            const float guideShadowOffsetX =
+                charStyle.shadowOffsetXForState(wiped);
+            const float guideShadowOffsetY =
+                charStyle.shadowOffsetYForState(wiped);
+            const bool isShadow = decorationKind == "shadow"
+                && (guideShadowOffsetX != 0.0f
+                    || guideShadowOffsetY != 0.0f);
             if (!isGlow && !isShadow) {
                 return;
             }
-            const bool wiped = after && !guide.afterPath.empty();
             const PaintStyle &paint = wiped
                 ? charStyle.afterDecorPaint
                 : charStyle.beforeDecorPaint;
@@ -3547,10 +3573,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
                 brush->SetOpacity(opacity);
                 const D2D1_RECT_F shadowDest = D2D1::RectF(
-                    ch.bitmapRect.left + charStyle.shadowOffsetX,
-                    ch.bitmapRect.top + charStyle.shadowOffsetY,
-                    ch.bitmapRect.right + charStyle.shadowOffsetX,
-                    ch.bitmapRect.bottom + charStyle.shadowOffsetY
+                    ch.bitmapRect.left + guideShadowOffsetX,
+                    ch.bitmapRect.top + guideShadowOffsetY,
+                    ch.bitmapRect.right + guideShadowOffsetX,
+                    ch.bitmapRect.bottom + guideShadowOffsetY
                 );
                 const D2D1_RECT_F sourceRect = D2D1::RectF(
                     0.0f, 0.0f, pixelW, pixelH
@@ -3658,7 +3684,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float padDevice = std::ceil(radius * 3.5f) + 2.0f;
             const float padNative = padDevice / std::max(scaleX, 0.0001f);
             const int passes = std::clamp(
-                charStyle.glowConcentrationLevel, 0, 2
+                charStyle.glowConcentrationForState(wiped), 0, 2
             ) + 1;
             context->SetTransform(
                 D2D1::Matrix3x2F::Scale(scaleX, scaleY)
@@ -3905,33 +3931,45 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             D2D1_RECT_F effectRect{};
         };
         std::vector<MainGlowLayer> mainGlowLayers;
-        if (style.decorationKind == "glow"
+        const std::string beforeDecorationKind =
+            style.decorationKindForState(false);
+        const std::string afterDecorationKind =
+            style.decorationKindForState(true);
+        if ((beforeDecorationKind == "glow"
+                || afterDecorationKind == "glow")
             && !line->hasInlineStyles) {
-            // 走字前/走字后发光半径不同时按状态拆成两个 source：每层用自己
-            // 的轮廓笔宽与 sigma 阶梯（对应 Painter 经 karaoke_glow_states_differ
-            // 的拆层）。半径相等则保持 N3 DrawOneLineDecorBlurMulti 的合并单源
-            // ——N3 两色共用一个 DecorSize、一次模糊，此路径逐字节不变。
-            const int beforeRadius = std::max(
-                0, static_cast<int>(std::lround(style.glowBeforeRadius))
-            );
-            const int afterRadius = std::max(
-                0, static_cast<int>(std::lround(style.glowAfterRadius))
-            );
-            const bool splitGlowStates = beforeRadius != afterRadius;
+            // 走字前/走字后装饰类型、发光半径或浓度不同时按状态拆成两个
+            // source：每层用自己的人轮廓笔宽、半径与 sigma 阶梯（对应
+            // Painter 经 karaoke_glow_states_differ 的拆层）。完全一致则
+            // 保持 N3 DrawOneLineDecorBlurMulti 的合并单源。
+            const bool beforeGlow = beforeDecorationKind == "glow";
+            const bool afterGlow = afterDecorationKind == "glow";
+            const int beforeRadius = beforeGlow
+                ? std::max(0, static_cast<int>(std::lround(style.glowBeforeRadius)))
+                : 0;
+            const int afterRadius = afterGlow
+                ? std::max(0, static_cast<int>(std::lround(style.glowAfterRadius)))
+                : 0;
+            const int beforeConcentration =
+                style.glowConcentrationForState(false);
+            const int afterConcentration =
+                style.glowConcentrationForState(true);
+            const bool splitGlowStates =
+                beforeGlow != afterGlow
+                || beforeRadius != afterRadius
+                || beforeConcentration != afterConcentration;
             for (int stateIndex = 0; stateIndex < (splitGlowStates ? 2 : 1);
                  ++stateIndex) {
                 const bool stateAfter = splitGlowStates && stateIndex == 1;
+                const bool stateGlow = stateAfter ? afterGlow : beforeGlow;
                 const bool *stateOnly = splitGlowStates ? &stateAfter : nullptr;
-                const int radius = splitGlowStates
-                    ? (stateAfter ? afterRadius : beforeRadius)
-                    : std::max(
-                        1,
-                        static_cast<int>(std::lround(std::max(
-                            style.glowBeforeRadius, style.glowAfterRadius
-                        )))
-                    );
-                if (radius <= 0) {
-                    // 该状态半径为 0：完全没有光晕（与 Painter radius==0 跳层一致）。
+                const int radius = stateAfter ? afterRadius : beforeRadius;
+                const int concentration = stateAfter
+                    ? afterConcentration
+                    : beforeConcentration;
+                if (!stateGlow || radius <= 0 || concentration < 0) {
+                    // 该状态不是发光、半径为 0 或浓度关闭：完全没有光晕
+                    // （与 Painter 的 effective decoration kind 一致）。
                     continue;
                 }
                 if (stateOnly != nullptr) {
@@ -4089,7 +4127,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 // N3 DrawOneLineDecorBlurMulti: N = BlurLevel + 1 and
                 // sigma_i = R - floor(i * R / N). Equal radii keep the exact
                 // combined source; split states ladder from their own radius.
-                const int passes = std::clamp(style.glowConcentrationLevel, 0, 2) + 1;
+                const int passes = std::clamp(concentration, 0, 2) + 1;
                 for (int index = 0; index < passes; ++index) {
                     layer.sigmas.push_back(radius - index * radius / passes);
                 }
@@ -4114,6 +4152,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto appendRubyGlowLayer = [&](int styleIndex, bool after,
                                        int rubyOnly, int unitOnly) {
             const TextStyle &rubyStyle = rubyStyleFor(styleIndex);
+            const std::string rubyDecorationKind =
+                rubyStyle.rubyDecorationKindForState(after);
+            const int rubyConcentration =
+                rubyStyle.rubyGlowConcentrationForState(after);
             const float requestedRadius = after
                 ? rubyStyle.rubyGlowAfterRadius
                 : rubyStyle.rubyGlowBeforeRadius;
@@ -4149,8 +4191,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     return false;
                 }
             );
-            if (rubyStyle.rubyDecorationKind != "glow"
+            if (rubyDecorationKind != "glow"
                 || radius <= 0
+                || rubyConcentration < 0
                 || !hasVisibleSource) {
                 return;
             }
@@ -4311,7 +4354,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             );
             layer.blur->SetInput(0, layer.source);
             const int passes = std::clamp(
-                rubyStyle.rubyGlowConcentrationLevel, 0, 2
+                rubyConcentration, 0, 2
             ) + 1;
             for (int index = 0; index < passes; ++index) {
                 layer.sigmas.push_back(radius - index * radius / passes);
@@ -4435,7 +4478,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         : phase != N3WipePhase::After;
                 }
             );
-            if (charStyle.decorationKind != "glow" || radius <= 0 || !hasVisibleSource) {
+            if (charStyle.decorationKindForState(after) != "glow"
+                || radius <= 0
+                || charStyle.glowConcentrationForState(after) < 0
+                || !hasVisibleSource) {
                 return;
             }
             InlineGlowLayer layer;
@@ -4479,7 +4525,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             const int cachePasses = std::clamp(
-                charStyle.glowConcentrationLevel, 0, 2
+                charStyle.glowConcentrationForState(after), 0, 2
             ) + 1;
             const bool cacheHitEnabled = impl_->glowBlurCacheMode == 4
                 ? true
@@ -4720,7 +4766,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 frameDiagnostics.endDrawInlineGlowSourceCount
             );
             layer.blur->SetInput(0, layer.source);
-            const int passes = std::clamp(charStyle.glowConcentrationLevel, 0, 2) + 1;
+            const int passes = std::clamp(
+                charStyle.glowConcentrationForState(after), 0, 2
+            ) + 1;
             for (int index = 0; index < passes; ++index) {
                 layer.sigmas.push_back(radius - index * radius / passes);
             }
@@ -5344,7 +5392,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // padding 与 Painter glow_extent 同式（笔宽/2 + 3R + 2）。
         if (volumeAutoDecorated
             && signalState.visible
-            && barDecor.decorationKind == "glow"
+            && (barDecor.decorationKindForState(false) == "glow"
+                || barDecor.decorationKindForState(true) == "glow")
             && signalState.opacity > 0.0f
             && style.volumeOpacity > 0.0f) {
             const float groupOpacityBase = std::clamp(
@@ -5358,6 +5407,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : volumeDecorStrokeWidth;
             for (int index = 0; index < signalGeometry.count; ++index) {
                 const bool covered = index <= signalState.activeIndex;
+                if (barDecor.decorationKindForState(covered) != "glow"
+                    || barDecor.glowConcentrationForState(covered) < 0) {
+                    continue;
+                }
                 const int radius = static_cast<int>(std::lround(
                     std::max(
                         0.0f,
@@ -5399,7 +5452,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 layer.source = acquireGlowScratch(layerW, layerH);
                 layer.blur = acquireGlowEffect();
                 const int passes
-                    = std::clamp(barDecor.glowConcentrationLevel, 0, 2) + 1;
+                    = std::clamp(
+                        barDecor.glowConcentrationForState(covered), 0, 2
+                    ) + 1;
                 for (int pass = 0; pass < passes; ++pass) {
                     layer.sigmas.push_back(
                         radius - pass * radius / passes
@@ -5613,7 +5668,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         if (litAutoDecorated
             && shapeState.visible
             && shapeState.activeIndex >= 0
-            && litDecor.decorationKind == "glow"
+            && litDecor.decorationKindForState(true) == "glow"
             && style.litOpacity > 0.0f) {
             const float litGlowBase = litDecorStroke2Width > 0.0f
                 ? litDecorStrokeWidth + litDecorStroke2Width
@@ -5649,7 +5704,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 layer.source = acquireGlowScratch(layerW, layerH);
                 layer.blur = acquireGlowEffect();
                 const int passes
-                    = std::clamp(litDecor.glowConcentrationLevel, 0, 2) + 1;
+                    = std::clamp(
+                        litDecor.glowConcentrationForState(true), 0, 2
+                    ) + 1;
                 for (int pass = 0; pass < passes; ++pass) {
                     layer.sigmas.push_back(radius - pass * radius / passes);
                 }
@@ -6470,6 +6527,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             context->FillGeometry(geometry, brush);
         };
         auto drawLineShadowPhase = [&](bool after) {
+            const bool beforeOnlyShadow =
+                style.decorationKindForState(false) == "shadow"
+                && style.decorationKindForState(true) != "shadow";
+            bool pushedBeforeShadowClip = false;
+            if (!after && beforeOnlyShadow) {
+                // 走字前阴影/走字后非阴影：未唱侧才允许出现前态剪影，
+                // 否则它会垫在已唱文字后面污染走字后画面。
+                if (mainWipeComplete) {
+                    return;
+                }
+                const float pad = std::max(style.strokeWidth, 0.0f)
+                    + std::max(style.stroke2Width, 0.0f) + 4.0f;
+                pushAxisAlignedClip(
+                    directionalWipeClip(line->bounds, wipeEdge, pad, false),
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                );
+                pushedBeforeShadowClip = true;
+            }
             if (line->hasInlineStyles || hasCharacterTransition) {
                 for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                     const Impl::CachedChar &ch = line->chars[charIndex];
@@ -6481,9 +6556,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         && ch.styleIndex < static_cast<int>(scene.charStyles.size())
                         ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
                         : style;
-                    if (charStyle.decorationKind != "shadow") {
+                    if (charStyle.decorationKindForState(after) != "shadow") {
                         continue;
                     }
+                    const float charShadowOffsetX =
+                        charStyle.shadowOffsetXForState(after);
+                    const float charShadowOffsetY =
+                        charStyle.shadowOffsetYForState(after);
                     Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
                         after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
                         mainPaintBounds(
@@ -6492,21 +6571,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             ch.styleIndex
                         ),
                         after ? charStyle.afterDecor : charStyle.beforeDecor,
-                        charStyle.shadowOffsetX,
-                        charStyle.shadowOffsetY
+                        charShadowOffsetX,
+                        charShadowOffsetY
                     );
                     brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
                     const CharacterAnimationState animationState =
                         characterAnimationAt(charIndex);
                     const D2D1_MATRIX_3X2_F charMatrix = animationState.matrix;
                     const float shadowX = animationState.transformed
-                        ? charStyle.shadowOffsetX * charMatrix._11
-                            + charStyle.shadowOffsetY * charMatrix._21
-                        : charStyle.shadowOffsetX;
+                        ? charShadowOffsetX * charMatrix._11
+                            + charShadowOffsetY * charMatrix._21
+                        : charShadowOffsetX;
                     const float shadowY = animationState.transformed
-                        ? charStyle.shadowOffsetX * charMatrix._12
-                            + charStyle.shadowOffsetY * charMatrix._22
-                        : charStyle.shadowOffsetY;
+                        ? charShadowOffsetX * charMatrix._12
+                            + charShadowOffsetY * charMatrix._22
+                        : charShadowOffsetY;
                     context->SetTransform(withViewport(
                         D2D1::Matrix3x2F::Translation(
                             dx + shadowX,
@@ -6544,14 +6623,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 style.vertical
                                     ? D2D1::RectF(
                                         afterClip.left,
-                                        afterClip.top - charStyle.shadowOffsetY,
+                                        afterClip.top - charShadowOffsetY,
                                         afterClip.right,
-                                        afterClip.bottom - charStyle.shadowOffsetY
+                                        afterClip.bottom - charShadowOffsetY
                                     )
                                     : D2D1::RectF(
-                                        afterClip.left - charStyle.shadowOffsetX,
+                                        afterClip.left - charShadowOffsetX,
                                         afterClip.top,
-                                        afterClip.right - charStyle.shadowOffsetX,
+                                        afterClip.right - charShadowOffsetX,
                                         afterClip.bottom
                                     ),
                                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
@@ -6571,7 +6650,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         context->PopAxisAlignedClip();
                     }
                 }
-            } else if (style.decorationKind == "shadow") {
+            } else if (style.decorationKindForState(after) == "shadow") {
+                const float shadowOffsetX =
+                    style.shadowOffsetXForState(after);
+                const float shadowOffsetY =
+                    style.shadowOffsetYForState(after);
                 Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
                     after ? style.afterDecorPaint : style.beforeDecorPaint,
                     mainPaintBounds(
@@ -6579,13 +6662,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         -1
                     ),
                     after ? style.afterDecor : style.beforeDecor,
-                    style.shadowOffsetX,
-                    style.shadowOffsetY
+                    shadowOffsetX,
+                    shadowOffsetY
                 );
                 context->SetTransform(withViewport(
                     D2D1::Matrix3x2F::Translation(
-                        dx + style.shadowOffsetX,
-                        dy + style.shadowOffsetY
+                        dx + shadowOffsetX,
+                        dy + shadowOffsetY
                     )
                 ));
                 const bool pushedAfterClip = after && !mainWipeComplete;
@@ -6594,14 +6677,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         style.vertical
                             ? D2D1::RectF(
                                 afterClip.left,
-                                afterClip.top - style.shadowOffsetY,
+                                afterClip.top - shadowOffsetY,
                                 afterClip.right,
-                                afterClip.bottom - style.shadowOffsetY
+                                afterClip.bottom - shadowOffsetY
                             )
                             : D2D1::RectF(
-                                afterClip.left - style.shadowOffsetX,
+                                afterClip.left - shadowOffsetX,
                                 afterClip.top,
-                                afterClip.right - style.shadowOffsetX,
+                                afterClip.right - shadowOffsetX,
                                 afterClip.bottom
                             ),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
@@ -6617,6 +6700,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     context->PopAxisAlignedClip();
                 }
             }
+            if (pushedBeforeShadowClip) {
+                context->PopAxisAlignedClip();
+            }
             context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
         };
         drawLineShadowPhase(false);
@@ -6627,12 +6713,42 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
             const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
-            if (rubyStyle.rubyDecorationKind != "shadow") {
+            if (rubyStyle.rubyDecorationKindForState(false) != "shadow"
+                && rubyStyle.rubyDecorationKindForState(true) != "shadow") {
                 continue;
             }
             const float edge = rubyWipeEdgeAt(ruby);
             const bool complete = rubyWipeComplete(ruby);
             auto drawRubyShadowPhase = [&](bool after) {
+                if (rubyStyle.rubyDecorationKindForState(after) != "shadow") {
+                    return;
+                }
+                const bool beforeOnlyShadow =
+                    rubyStyle.rubyDecorationKindForState(false) == "shadow"
+                    && rubyStyle.rubyDecorationKindForState(true) != "shadow";
+                bool pushedBeforeShadowClip = false;
+                if (!after && beforeOnlyShadow) {
+                    // 注音走字前阴影只在未唱侧可见，避免垫到已唱侧。
+                    if (complete) {
+                        return;
+                    }
+                    const float pad = std::max(
+                        rubyStyle.rubyStrokeWidth
+                            + rubyStyle.rubyStroke2Width,
+                        2.0f
+                    ) + 4.0f;
+                    pushAxisAlignedClip(
+                        directionalWipeClip(
+                            ruby.bounds, edge, pad, false
+                        ),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                    pushedBeforeShadowClip = true;
+                }
+                const float shadowOffsetX =
+                    rubyStyle.rubyShadowOffsetXForState(after);
+                const float shadowOffsetY =
+                    rubyStyle.rubyShadowOffsetYForState(after);
                 Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
                     after
                         ? rubyStyle.rubyAfterDecorPaint
@@ -6645,8 +6761,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         ruby.horizontalFillBounds
                     ),
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor,
-                    rubyStyle.rubyShadowOffsetX,
-                    rubyStyle.rubyShadowOffsetY
+                    shadowOffsetX,
+                    shadowOffsetY
                 );
                 const bool pushedStaticClip = after
                     && !useUtopiaTransition
@@ -6660,23 +6776,23 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         style.vertical
                             ? D2D1::RectF(
                                 ruby.bounds.left - pad,
-                                ruby.bounds.top - pad - rubyStyle.rubyShadowOffsetY,
+                                ruby.bounds.top - pad - shadowOffsetY,
                                 ruby.bounds.right + pad,
-                                edge - rubyStyle.rubyShadowOffsetY
+                                edge - shadowOffsetY
                             )
                             : (rtl
                                 ? D2D1::RectF(
-                                    edge - rubyStyle.rubyShadowOffsetX,
+                                    edge - shadowOffsetX,
                                     fullWipeClipTop,
                                     ruby.bounds.right + pad
-                                        - rubyStyle.rubyShadowOffsetX,
+                                        - shadowOffsetX,
                                     fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
                                     ruby.bounds.left - pad
-                                        - rubyStyle.rubyShadowOffsetX,
+                                        - shadowOffsetX,
                                     fullWipeClipTop,
-                                    edge - rubyStyle.rubyShadowOffsetX,
+                                    edge - shadowOffsetX,
                                     fullWipeClipBottom
                                 )),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
@@ -6694,13 +6810,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         rubyUnitAnimationAt(ruby, geometryIndex);
                     brush->SetOpacity(globalOpacity * animationState.opacity);
                     const float shadowX = animationState.transformed
-                        ? rubyStyle.rubyShadowOffsetX * animationState.matrix._11
-                            + rubyStyle.rubyShadowOffsetY * animationState.matrix._21
-                        : rubyStyle.rubyShadowOffsetX;
+                        ? shadowOffsetX * animationState.matrix._11
+                            + shadowOffsetY * animationState.matrix._21
+                        : shadowOffsetX;
                     const float shadowY = animationState.transformed
-                        ? rubyStyle.rubyShadowOffsetX * animationState.matrix._12
-                            + rubyStyle.rubyShadowOffsetY * animationState.matrix._22
-                        : rubyStyle.rubyShadowOffsetY;
+                        ? shadowOffsetX * animationState.matrix._12
+                            + shadowOffsetY * animationState.matrix._22
+                        : shadowOffsetY;
                     context->SetTransform(withViewport(
                         D2D1::Matrix3x2F::Translation(
                             dx + shadowX, dy + shadowY
@@ -6757,6 +6873,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                 }
                 if (pushedStaticClip) {
+                    context->PopAxisAlignedClip();
+                }
+                if (pushedBeforeShadowClip) {
                     context->PopAxisAlignedClip();
                 }
             };
@@ -7913,13 +8032,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     // 阴影装饰：偏移整影（外圈描边宽 + 填充），镜像
                     // drawShadowSilhouette。
-                    if (barDecor.decorationKind == "shadow"
-                        && (barDecor.shadowOffsetX != 0.0f
-                            || barDecor.shadowOffsetY != 0.0f)) {
+                    if (barDecor.decorationKindForState(overlay) == "shadow"
+                        && (barDecor.shadowOffsetXForState(overlay) != 0.0f
+                            || barDecor.shadowOffsetYForState(overlay) != 0.0f)) {
                         const float shadowDx
-                            = barDecor.shadowOffsetX * volumeDecorScale;
+                            = barDecor.shadowOffsetXForState(overlay)
+                                * volumeDecorScale;
                         const float shadowDy
-                            = barDecor.shadowOffsetY * volumeDecorScale;
+                            = barDecor.shadowOffsetYForState(overlay)
+                                * volumeDecorScale;
                         if (shadowDx != 0.0f || shadowDy != 0.0f) {
                             const float shadowOuter
                                 = volumeDecorStroke2Width > 0.0f
@@ -8385,13 +8506,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 } else {
                     // 阴影装饰：偏移整影（外圈描边宽 + 填充），镜像柱体
                     // drawColumn 的 shadow 分支与 drawShadowSilhouette。
-                    if (litDecor.decorationKind == "shadow"
-                        && (litDecor.shadowOffsetX != 0.0f
-                            || litDecor.shadowOffsetY != 0.0f)) {
+                    if (litDecor.decorationKindForState(true) == "shadow"
+                        && (litDecor.shadowOffsetXForState(true) != 0.0f
+                            || litDecor.shadowOffsetYForState(true) != 0.0f)) {
                         const float shadowDx
-                            = litDecor.shadowOffsetX * litDecorScale;
+                            = litDecor.shadowOffsetXForState(true)
+                                * litDecorScale;
                         const float shadowDy
-                            = litDecor.shadowOffsetY * litDecorScale;
+                            = litDecor.shadowOffsetYForState(true)
+                                * litDecorScale;
                         if (shadowDx != 0.0f || shadowDy != 0.0f) {
                             const float shadowOuter
                                 = litDecorStroke2Width > 0.0f

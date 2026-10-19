@@ -47,8 +47,11 @@ QString layoutLineCacheKey(
         .arg(lineStyle.strokeWidthPx)
         .arg(lineStyle.stroke2WidthPx)
         .arg(lineStyle.decorationKind)
+        .arg(lineStyle.decorationKindBefore)
         .arg(lineStyle.shadowOffsetX)
         .arg(lineStyle.shadowOffsetY)
+        .arg(shadowOffsetXForState(lineStyle, false))
+        .arg(shadowOffsetYForState(lineStyle, false))
         .arg(glowRadius(lineStyle, false))
         .arg(lineStyle.letterSpacingPx);
 }

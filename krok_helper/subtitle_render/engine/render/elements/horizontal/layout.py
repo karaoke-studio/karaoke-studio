@@ -531,9 +531,13 @@ def glyph_run_signature(glyph: GlyphLayout) -> tuple:
         glyph.style.stroke_width_px,
         glyph.style.stroke2_width_px,
         glyph.style.decoration_kind,
+        glyph.style.decoration_kind_before,
+        glyph.style.shadow_before_offset_x,
+        glyph.style.shadow_before_offset_y,
         glow_radius(glyph.style, after=False),
         glow_radius(glyph.style, after=True),
-        glow_concentration_level(glyph.style),
+        glow_concentration_level(glyph.style, after=False),
+        glow_concentration_level(glyph.style, after=True),
     )
 
 

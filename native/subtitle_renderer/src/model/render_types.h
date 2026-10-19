@@ -476,11 +476,16 @@ struct TextStyle {
     float latinStrokeWidth = 0.0f;
     float latinStroke2Width = 0.0f;
     std::string decorationKind = "none";
+    std::string decorationKindBefore;
+    bool decorationBeforeSync = true;
     float glowBeforeRadius = 10.0f;
     float glowAfterRadius = 10.0f;
     int glowConcentrationLevel = 0;
+    int glowBeforeConcentrationLevel = 0;
     float shadowOffsetX = 5.0f;
     float shadowOffsetY = 5.0f;
+    float shadowBeforeOffsetX = 5.0f;
+    float shadowBeforeOffsetY = 5.0f;
     std::wstring rubyFontFamily;
     std::optional<std::wstring> rubyLatinFontFamily;
     float rubyFontSize = 45.0f;
@@ -522,11 +527,98 @@ struct TextStyle {
     float rubyLatinStrokeWidth = 0.0f;
     float rubyLatinStroke2Width = 0.0f;
     std::string rubyDecorationKind = "none";
+    std::string rubyDecorationKindBefore;
     float rubyGlowBeforeRadius = 0.0f;
     float rubyGlowAfterRadius = 0.0f;
     int rubyGlowConcentrationLevel = 0;
+    int rubyGlowBeforeConcentrationLevel = 0;
     float rubyShadowOffsetX = 0.0f;
     float rubyShadowOffsetY = 1.0f;
+    float rubyShadowBeforeOffsetX = 0.0f;
+    float rubyShadowBeforeOffsetY = 1.0f;
+
+    std::string decorationKindForState(bool after) const {
+        if (!after && decorationBeforeSync) {
+            after = true;
+        }
+        if (after) {
+            if (decorationKind == "glow"
+                && (glowConcentrationLevel < 0 || glowAfterRadius <= 0.0f)) {
+                return "none";
+            }
+            return decorationKind;
+        }
+        const std::string kind = decorationKindBefore.empty()
+            ? decorationKind
+            : decorationKindBefore;
+        if (kind == "glow"
+            && (glowBeforeConcentrationLevel < 0
+                || glowBeforeRadius <= 0.0f)) {
+            return "none";
+        }
+        return kind;
+    }
+
+    int glowConcentrationForState(bool after) const {
+        return (after || decorationBeforeSync)
+            ? glowConcentrationLevel
+            : glowBeforeConcentrationLevel;
+    }
+
+    float shadowOffsetXForState(bool after) const {
+        return (after || decorationBeforeSync)
+            ? shadowOffsetX
+            : shadowBeforeOffsetX;
+    }
+
+    float shadowOffsetYForState(bool after) const {
+        return (after || decorationBeforeSync)
+            ? shadowOffsetY
+            : shadowBeforeOffsetY;
+    }
+
+    std::string rubyDecorationKindForState(bool after) const {
+        if (!after && decorationBeforeSync) {
+            after = true;
+        }
+        std::string kind;
+        if (after) {
+            kind = rubyDecorationKind.empty()
+                ? decorationKindForState(true)
+                : rubyDecorationKind;
+        } else if (!rubyDecorationKindBefore.empty()) {
+            kind = rubyDecorationKindBefore;
+        } else if (!rubyDecorationKind.empty()) {
+            kind = rubyDecorationKind;
+        } else {
+            kind = decorationKindForState(false);
+        }
+        if (kind == "glow"
+            && (rubyGlowConcentrationForState(after) < 0
+                || (after ? rubyGlowAfterRadius : rubyGlowBeforeRadius) <= 0.0f)) {
+            return "none";
+        }
+        return kind;
+    }
+
+    int rubyGlowConcentrationForState(bool after) const {
+        return (after || decorationBeforeSync)
+            ? rubyGlowConcentrationLevel
+            : rubyGlowBeforeConcentrationLevel;
+    }
+
+    float rubyShadowOffsetXForState(bool after) const {
+        return (after || decorationBeforeSync)
+            ? rubyShadowOffsetX
+            : rubyShadowBeforeOffsetX;
+    }
+
+    float rubyShadowOffsetYForState(bool after) const {
+        return (after || decorationBeforeSync)
+            ? rubyShadowOffsetY
+            : rubyShadowBeforeOffsetY;
+    }
+
     bool litEnabled = false;
     std::string litStyle = "circle";
     // auto 外观模式：矢量灯走主文字装饰管线（全程取走字后配色、含

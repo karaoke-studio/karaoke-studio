@@ -108,6 +108,8 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "fx_particle_color_mode",
     "fx_particle_role_name",
     "fx_apply_to_entry_exit",
+    # 编辑器 UI 开关（不影响渲染/排版）。
+    "decoration_before_sync",
 })
 _LYRIC_LAYOUT_EXCLUDED_SCHEME_FIELDS = frozenset({
     "base_color",
@@ -126,19 +128,28 @@ _LYRIC_LAYOUT_EXCLUDED_SCHEME_FIELDS = frozenset({
     # 按纯主字形 path 测量（Ruby、描边、阴影、发光全部刻意排除），
     # 装饰参数不影响排版。
     "decoration_kind",
+    "decoration_kind_before",
+    "decoration_before_sync",
     "shadow_offset_x",
     "shadow_offset_y",
+    "shadow_before_offset_x",
+    "shadow_before_offset_y",
     "glow_radius_px",
     "glow_before_radius_px",
     "glow_after_radius_px",
     "glow_concentration_level",
+    "glow_before_concentration_level",
     "ruby_decoration_kind",
+    "ruby_decoration_kind_before",
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
+    "ruby_shadow_before_offset_x",
+    "ruby_shadow_before_offset_y",
     "ruby_glow_radius_px",
     "ruby_glow_before_radius_px",
     "ruby_glow_after_radius_px",
     "ruby_glow_concentration_level",
+    "ruby_glow_before_concentration_level",
     "ruby_horizontal_gradient_with_main",
 })
 """纯绘制字段：不参与歌词行的排版/分页/布局计划。

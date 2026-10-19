@@ -12,6 +12,7 @@ from PyQt6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPainterPath
 from krok_helper.subtitle_render.domain.models import Style, effective_karaoke_animation
 from krok_helper.subtitle_render.domain.timing import RubyAnnotation, TimingLine
 from krok_helper.subtitle_render.engine.render.effects import (
+    decoration_kind_for_state,
     fill_signature,
     fill_brush_rect,
     glow_concentration_level,
@@ -29,6 +30,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     ruby_vertical_extra,
     ruby_visual_padding,
     ruby_baseline_y,
+    style_for_state,
     visual_stroke_extent,
 )
 from krok_helper.subtitle_render.engine.render.core.layers import (
@@ -162,16 +164,17 @@ def build_ruby_text_layer(
 ) -> tuple[QImage, int, int]:
     colors = effective_ruby_karaoke_colors(style)
     state = colors.after if after else colors.before
-    paint_style = ruby_paint_style(style)
-    stroke_width = ruby_stroke_width(style)
-    stroke2_width = ruby_stroke2_width(style)
-    shadow_dx = ruby_shadow_dx(style)
-    shadow_dy = ruby_shadow_dy(style)
-    glow_radius = ruby_glow_radius(style, after=after)
+    state_style = style_for_state(style, after=after)
+    paint_style = ruby_paint_style(state_style, after=after)
+    stroke_width = ruby_stroke_width(state_style)
+    stroke2_width = ruby_stroke2_width(state_style)
+    shadow_dx = ruby_shadow_dx(state_style, after=after)
+    shadow_dy = ruby_shadow_dy(state_style, after=after)
+    glow_radius = ruby_glow_radius(state_style, after=after)
     stroke_extent = visual_stroke_extent(stroke_width, stroke2_width)
     glow_extra = (
         glow_extent(stroke_width, stroke2_width, glow_radius)
-        if ruby_decoration_kind(style) == "glow"
+        if ruby_decoration_kind(state_style, after=after) == "glow"
         else 0
     )
     extent = max(
@@ -250,6 +253,7 @@ def build_ruby_text_layer(
             draw_glow=draw_glow,
             fill_rect=fill_rect,
             horizontal_fill_rect=horizontal_fill_rect,
+            after=after,
         )
     finally:
         p.end()
@@ -268,9 +272,10 @@ def build_ruby_glow_layer(
 ) -> tuple[QImage, int, int]:
     colors = effective_ruby_karaoke_colors(style)
     state = colors.after if after else colors.before
-    stroke_width = ruby_stroke_width(style)
-    stroke2_width = ruby_stroke2_width(style)
-    glow_radius = ruby_glow_radius(style, after=after)
+    state_style = style_for_state(style, after=after)
+    stroke_width = ruby_stroke_width(state_style)
+    stroke2_width = ruby_stroke2_width(state_style)
+    glow_radius = ruby_glow_radius(state_style, after=after)
     extent = glow_extent(stroke_width, stroke2_width, glow_radius) + 4
     layout_overhang_left = int(math.ceil(ruby_layout_left_overhang(
         layout.ruby.reading,
@@ -335,7 +340,9 @@ def build_ruby_glow_layer(
             glow_radius,
             stroke_width,
             stroke2_width,
-            concentration_level=ruby_glow_concentration_level(style),
+            concentration_level=ruby_glow_concentration_level(
+                state_style, after=after
+            ),
         )
     finally:
         p.end()
@@ -965,16 +972,21 @@ def ruby_text_path_and_rect(
 
 
 def _ruby_clip_padding(style: Style, *, after: bool) -> int:
-    stroke_width = ruby_stroke_width(style)
-    stroke2_width = ruby_stroke2_width(style)
+    state_style = style_for_state(style, after=after)
+    stroke_width = ruby_stroke_width(state_style)
+    stroke2_width = ruby_stroke2_width(state_style)
     stroke_extent = visual_stroke_extent(stroke_width, stroke2_width)
     if not after:
         return max(
             stroke_extent,
-            glow_extent(
-                stroke_width,
-                stroke2_width,
-                ruby_glow_radius(style, after=False),
+            (
+                glow_extent(
+                    stroke_width,
+                    stroke2_width,
+                    ruby_glow_radius(state_style, after=False),
+                )
+                if ruby_decoration_kind(state_style, after=False) == "glow"
+                else 0
             ),
             2,
         )
@@ -984,13 +996,13 @@ def _ruby_clip_padding(style: Style, *, after: bool) -> int:
             glow_extent(
                 stroke_width,
                 stroke2_width,
-                ruby_glow_radius(style, after=True),
+                ruby_glow_radius(state_style, after=True),
             )
-            if ruby_decoration_kind(style) == "glow"
+            if ruby_decoration_kind(state_style, after=True) == "glow"
             else 0
         ),
-        stroke_extent + abs(ruby_shadow_dx(style)),
-        stroke_extent + abs(ruby_shadow_dy(style)),
+        stroke_extent + abs(ruby_shadow_dx(state_style, after=True)),
+        stroke_extent + abs(ruby_shadow_dy(state_style, after=True)),
         2,
     )
 
@@ -1203,11 +1215,11 @@ def ruby_text_layer_key(
         karaoke_state_signature(state),
         ruby_stroke_width(style),
         ruby_stroke2_width(style),
-        ruby_shadow_dx(style),
-        ruby_shadow_dy(style),
-        ruby_decoration_kind(style),
+        ruby_shadow_dx(style, after=after),
+        ruby_shadow_dy(style, after=after),
+        ruby_decoration_kind(style, after=after),
         ruby_glow_radius(style, after=after),
-        ruby_glow_concentration_level(style),
+        ruby_glow_concentration_level(style, after=after),
         after,
         draw_glow,
     )
@@ -1247,21 +1259,27 @@ def ruby_glow_layer_key(
         ruby_stroke_width(style),
         ruby_stroke2_width(style),
         ruby_glow_radius(style, after=after),
-        ruby_glow_concentration_level(style),
+        ruby_glow_concentration_level(style, after=after),
         after,
     )
 
 
 def ruby_glow_states_differ(style: Style) -> bool:
     """Return whether before/after ruby glow sources need split processing."""
-    if ruby_decoration_kind(style) != "glow":
+    before_kind = ruby_decoration_kind(style, after=False)
+    after_kind = ruby_decoration_kind(style, after=True)
+    if before_kind != "glow" and after_kind != "glow":
         return False
+    if before_kind != after_kind:
+        return True
     colors = effective_ruby_karaoke_colors(style)
     return (
         fill_signature(colors.before.shadow)
         != fill_signature(colors.after.shadow)
         or ruby_glow_radius(style, after=False)
         != ruby_glow_radius(style, after=True)
+        or ruby_glow_concentration_level(style, after=False)
+        != ruby_glow_concentration_level(style, after=True)
     )
 
 
@@ -1280,13 +1298,18 @@ def paint_ruby_karaoke_fragment(
     """Paint one before/after ruby fragment through the owned raster contract."""
     ports = HORIZONTAL_RUBY_LAYER_PORTS
     colors = effective_ruby_karaoke_colors(style)
-    paint_style = ruby_paint_style(style)
+    before_style = style_for_state(style, after=False)
+    after_style = style_for_state(style, after=True)
+    before_paint_style = ruby_paint_style(before_style, after=False)
+    after_paint_style = ruby_paint_style(after_style, after=True)
     stroke_width = ruby_stroke_width(style)
     stroke2_width = ruby_stroke2_width(style)
-    shadow_dx = ruby_shadow_dx(style)
-    shadow_dy = ruby_shadow_dy(style)
-    before_glow_radius = ruby_glow_radius(style, after=False)
-    after_glow_radius = ruby_glow_radius(style, after=True)
+    before_shadow_dx = ruby_shadow_dx(before_style, after=False)
+    before_shadow_dy = ruby_shadow_dy(before_style, after=False)
+    after_shadow_dx = ruby_shadow_dx(after_style, after=True)
+    after_shadow_dy = ruby_shadow_dy(after_style, after=True)
+    before_glow_radius = ruby_glow_radius(before_style, after=False)
+    after_glow_radius = ruby_glow_radius(after_style, after=True)
     glow_states_differ = ruby_glow_states_differ(style)
 
     # N3 clips before/after outline sources at WipeLeft and blurs afterwards.
@@ -1335,7 +1358,9 @@ def paint_ruby_karaoke_fragment(
             stroke_width,
             stroke2_width,
             source_clip=before_source_clip,
-            concentration_level=glow_concentration_level(paint_style),
+            concentration_level=ruby_glow_concentration_level(
+                before_style, after=False
+            ),
         )
         after_pad = glow_extent(
             stroke_width, stroke2_width, after_glow_radius
@@ -1368,7 +1393,9 @@ def paint_ruby_karaoke_fragment(
             stroke_width,
             stroke2_width,
             source_clip=after_source_clip,
-            concentration_level=glow_concentration_level(paint_style),
+            concentration_level=ruby_glow_concentration_level(
+                after_style, after=True
+            ),
         )
 
     if ratio < 1.0:
@@ -1411,15 +1438,16 @@ def paint_ruby_karaoke_fragment(
                 path,
                 rect,
                 colors.before,
-                paint_style,
+                before_paint_style,
                 stroke_width=stroke_width,
                 stroke2_width=stroke2_width,
-                shadow_dx=shadow_dx,
-                shadow_dy=shadow_dy,
+                shadow_dx=before_shadow_dx,
+                shadow_dy=before_shadow_dy,
                 glow_radius=before_glow_radius,
                 draw_glow=not clip_before_glow,
                 fill_rect=fill_rect,
                 horizontal_fill_rect=horizontal_fill_rect,
+                after=False,
             )
         finally:
             painter.restore()
@@ -1434,10 +1462,10 @@ def paint_ruby_karaoke_fragment(
             pad = max(
                 stroke_extent,
                 glow_extent(stroke_width, stroke2_width, after_glow_radius)
-                if ruby_decoration_kind(style) == "glow"
+                if ruby_decoration_kind(after_style, after=True) == "glow"
                 else 0,
-                stroke_extent + abs(shadow_dx),
-                stroke_extent + abs(shadow_dy),
+                stroke_extent + abs(after_shadow_dx),
+                stroke_extent + abs(after_shadow_dy),
                 2,
             )
             # RTL: the sung area hugs the reading's right edge while the wipe
@@ -1464,17 +1492,18 @@ def paint_ruby_karaoke_fragment(
             path,
             rect,
             colors.after,
-            paint_style,
+            after_paint_style,
             stroke_width=stroke_width,
             stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx,
-            shadow_dy=shadow_dy,
+            shadow_dx=after_shadow_dx,
+            shadow_dy=after_shadow_dy,
             glow_radius=after_glow_radius,
             # Matching before/after glow is already supplied by the unsung
             # layer; after a complete wipe the sung layer must supply it.
             draw_glow=ratio >= 1.0,
             fill_rect=fill_rect,
             horizontal_fill_rect=horizontal_fill_rect,
+            after=True,
         )
     finally:
         painter.restore()
@@ -1483,6 +1512,14 @@ def paint_ruby_karaoke_fragment(
 def ruby_glow_can_combine_split(style: Style) -> bool:
     """Return whether one source bitmap can represent both ruby glow colours."""
     if not ruby_glow_states_differ(style):
+        return False
+    if ruby_decoration_kind(style, after=False) != "glow":
+        return False
+    if ruby_decoration_kind(style, after=True) != "glow":
+        return False
+    if ruby_glow_concentration_level(style, after=False) != (
+        ruby_glow_concentration_level(style, after=True)
+    ):
         return False
     before_radius = ruby_glow_radius(style, after=False)
     return (
@@ -1644,7 +1681,9 @@ class RubySplitGlowLayer:
             stroke2_width,
             before_source_clip=before_source_clip,
             after_source_clip=after_source_clip,
-            concentration_level=ruby_glow_concentration_level(self.style),
+            concentration_level=ruby_glow_concentration_level(
+                self.style, after=True
+            ),
             target_clip=strip_clip,
             horizontal_fill_rect=self.ruby_layout.horizontal_gradient_rect,
         )
@@ -1709,7 +1748,7 @@ class RubyGlowLayer:
         ctx: LayerContext,
         layout: object,
     ) -> tuple | None:
-        if ruby_decoration_kind(self.style) != "glow":
+        if ruby_decoration_kind(self.style, after=self.after) != "glow":
             return None
         if ruby_glow_radius(self.style, after=self.after) == 0:
             return None
@@ -1827,7 +1866,9 @@ class RubyGlowLayer:
             ruby_stroke_width(self.style),
             ruby_stroke2_width(self.style),
             source_clip=source_clip,
-            concentration_level=ruby_glow_concentration_level(self.style),
+            concentration_level=ruby_glow_concentration_level(
+                self.style, after=self.after
+            ),
         )
 
     def vertical_bounds(

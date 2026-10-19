@@ -28,37 +28,54 @@ int glowRadius(const ResolvedStyle &style, bool after) {
     if (value == 10 && style.glowRadiusPx != 10) {
         value = style.glowRadiusPx;
     }
-    return std::max(value, 1);
+    return std::max(value, 0);
 }
 
 double glowPenWidth(const ResolvedStyle &style, bool after) {
+    const int radius = glowRadius(style, after);
+    if (radius <= 0) {
+        return 0.0;
+    }
     const double baseWidth = style.stroke2WidthPx > 0 ? stroke2PenWidth(style) : strokePenWidth(style);
-    return std::max(1.0, baseWidth + glowRadius(style, after));
+    return std::max(1.0, baseWidth + radius);
 }
 
 double glowExtent(const ResolvedStyle &style, bool after) {
     const int radius = glowRadius(style, after);
+    if (radius <= 0) {
+        return 0.0;
+    }
     return std::ceil(glowPenWidth(style, after) / 2.0 + radius * 3.0);
 }
 
 int glowPenWidthForWidths(int strokeWidth, int stroke2Width, int glowRadiusValue) {
+    if (glowRadiusValue <= 0) {
+        return 0;
+    }
     const int baseWidth = stroke2Width > 0
         ? std::max(strokeWidth, 0) + std::max(stroke2Width, 0)
         : std::max(strokeWidth, 0);
-    return std::max(1, baseWidth + std::max(glowRadiusValue, 1));
+    return std::max(1, baseWidth + glowRadiusValue);
 }
 
 double glowExtentForWidths(int strokeWidth, int stroke2Width, int glowRadiusValue) {
+    if (glowRadiusValue <= 0) {
+        return 0.0;
+    }
     return std::ceil(
         glowPenWidthForWidths(strokeWidth, stroke2Width, glowRadiusValue) / 2.0
-        + std::max(glowRadiusValue, 1) * 3.0
+        + glowRadiusValue * 3.0
     );
 }
 
 double afterClipVerticalExtent(const ResolvedStyle &style) {
     const double strokeExtent = visualStrokeExtent(style);
-    const double glowExtra = style.decorationKind == QStringLiteral("glow") ? glowExtent(style, true) : 0.0;
-    const double shadowExtra = style.decorationKind == QStringLiteral("shadow") ? std::abs(style.shadowOffsetY) : 0.0;
+    const double glowExtra = decorationKindForState(style, true) == QStringLiteral("glow")
+        ? glowExtent(style, true)
+        : 0.0;
+    const double shadowExtra = decorationKindForState(style, true) == QStringLiteral("shadow")
+        ? std::abs(shadowOffsetYForState(style, true))
+        : 0.0;
     return std::max({strokeExtent, glowExtra, shadowExtra, 2.0}) + 4.0;
 }
 
@@ -87,13 +104,16 @@ double rubyVisualPadding(const ResolvedStyle &style) {
     const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
     const double strokeExtent = std::ceil((std::max(strokeWidth, 0) + std::max(stroke2Width, 0)) / 2.0);
     double glowExtra = 0.0;
-    if (style.decorationKind == QStringLiteral("glow")) {
+    if (decorationKindForState(style, true) == QStringLiteral("glow")) {
         const int rubyGlowRadius = scaledPx(glowRadius(style, true), scale);
         const int baseWidth = stroke2Width > 0 ? strokeWidth + stroke2Width : strokeWidth;
-        glowExtra = std::ceil((std::max(1, baseWidth + rubyGlowRadius)) / 2.0 + std::max(rubyGlowRadius, 1) * 3.0);
+        if (rubyGlowRadius > 0) {
+            glowExtra = std::ceil((std::max(1, baseWidth + rubyGlowRadius)) / 2.0 + rubyGlowRadius * 3.0);
+        }
     }
-    const double shadowX = style.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(style.shadowOffsetX, scale)) : 0.0;
-    const double shadowY = style.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(style.shadowOffsetY, scale)) : 0.0;
+    const bool shadow = decorationKindForState(style, true) == QStringLiteral("shadow");
+    const double shadowX = shadow ? std::abs(scaledSignedPx(shadowOffsetXForState(style, true), scale)) : 0.0;
+    const double shadowY = shadow ? std::abs(scaledSignedPx(shadowOffsetYForState(style, true), scale)) : 0.0;
     return std::max({strokeExtent, glowExtra, shadowX, shadowY, 2.0});
 }
 

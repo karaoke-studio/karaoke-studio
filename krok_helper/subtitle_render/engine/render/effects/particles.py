@@ -28,6 +28,12 @@ from krok_helper.subtitle_render.domain.models import (
     normalize_glow_concentration_level,
 )
 from krok_helper.subtitle_render.domain.paint import KaraokeColorState, PaintFill
+from krok_helper.subtitle_render.engine.render.effects.metrics import (
+    decoration_kind_for_state,
+    glow_concentration_level,
+    shadow_offset_x,
+    shadow_offset_y,
+)
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     appearance_role_source,
     effective_karaoke_colors,
@@ -420,7 +426,7 @@ def _state_paint_spec(
         # 装饰层随来源角色方案的 decoration_kind 二选一（2026-10 用户口径：
         # 不是固定阴影）——shadow=偏移剪影；glow=多级描边弥散晕（半径按
         # 走字前/后取，跟随尺寸同比缩放）；none=不产出。
-        kind = str(getattr(source, "decoration_kind", "none") or "none")
+        kind = decoration_kind_for_state(source, after=after)
         if kind in {"shadow", "glow"}:
             decor: dict[str, object] = {
                 "kind": kind,
@@ -428,15 +434,13 @@ def _state_paint_spec(
             }
             if kind == "shadow":
                 decor["offset_x_px"] = round(
-                    float(source.shadow_offset_x or 0) * scale, 3
+                    float(shadow_offset_x(source, after=after)) * scale, 3
                 )
                 decor["offset_y_px"] = round(
-                    float(source.shadow_offset_y or 0) * scale, 3
+                    float(shadow_offset_y(source, after=after)) * scale, 3
                 )
             else:
-                concentration = normalize_glow_concentration_level(
-                    getattr(source, "glow_concentration_level", 0)
-                )
+                concentration = glow_concentration_level(source, after=after)
                 radius = 0
                 if concentration >= 0:
                     radius = int(

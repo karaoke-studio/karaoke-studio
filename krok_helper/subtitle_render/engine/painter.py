@@ -75,6 +75,9 @@ from krok_helper.subtitle_render.engine.render.effects import (
     fill_signature as _fill_signature,
     glow_blur_radii as _glow_blur_radii,
     glow_concentration_level as _glow_concentration_level,
+    decoration_kind_for_state as _decoration_kind_for_state,
+    shadow_offset_x as _shadow_offset_x,
+    shadow_offset_y as _shadow_offset_y,
     glow_extent as _glow_extent,
     glow_pen_width as _glow_pen_width,
     glow_radius as _glow_radius,
@@ -1934,47 +1937,58 @@ def _painted_path_ink_rect(
     if ruby:
         stroke_width = _ruby_stroke_width(style)
         stroke2_width = _ruby_stroke2_width(style)
-        decoration = _ruby_decoration_kind(style)
-        shadow_dx = _ruby_shadow_dx(style)
-        shadow_dy = _ruby_shadow_dy(style)
-        glow_extent = max(
-            _glow_extent(
-                stroke_width,
-                stroke2_width,
-                _ruby_glow_radius(style, after=after),
-            )
-            for after in (False, True)
-        )
+        glow_extent_value = 0
+        shadow_left = shadow_right = shadow_top = shadow_bottom = 0
+        for after in (False, True):
+            decoration = _ruby_decoration_kind(style, after=after)
+            if decoration == "glow":
+                glow_extent_value = max(
+                    glow_extent_value,
+                    _glow_extent(
+                        stroke_width,
+                        stroke2_width,
+                        _ruby_glow_radius(style, after=after),
+                    ),
+                )
+            elif decoration == "shadow":
+                shadow_dx = _ruby_shadow_dx(style, after=after)
+                shadow_dy = _ruby_shadow_dy(style, after=after)
+                shadow_left = min(shadow_left, shadow_dx)
+                shadow_right = max(shadow_right, shadow_dx)
+                shadow_top = min(shadow_top, shadow_dy)
+                shadow_bottom = max(shadow_bottom, shadow_dy)
     else:
         stroke_width = max(int(style.stroke_width_px), 0)
         stroke2_width = _main_stroke2_width(style)
-        decoration = style.decoration_kind
-        shadow_dx = int(style.shadow_offset_x)
-        shadow_dy = int(style.shadow_offset_y)
-        glow_extent = max(
-            _glow_extent(
-                stroke_width,
-                stroke2_width,
-                _glow_radius(style, after=after),
-            )
-            for after in (False, True)
-        )
+        glow_extent_value = 0
+        shadow_left = shadow_right = shadow_top = shadow_bottom = 0
+        for after in (False, True):
+            decoration = _decoration_kind_for_state(style, after=after)
+            if decoration == "glow":
+                glow_extent_value = max(
+                    glow_extent_value,
+                    _glow_extent(
+                        stroke_width,
+                        stroke2_width,
+                        _glow_radius(style, after=after),
+                    ),
+                )
+            elif decoration == "shadow":
+                shadow_dx = _shadow_offset_x(style, after=after)
+                shadow_dy = _shadow_offset_y(style, after=after)
+                shadow_left = min(shadow_left, shadow_dx)
+                shadow_right = max(shadow_right, shadow_dx)
+                shadow_top = min(shadow_top, shadow_dy)
+                shadow_bottom = max(shadow_bottom, shadow_dy)
 
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    extent = max(
-        stroke_extent,
-        glow_extent if include_glow and decoration == "glow" else 0,
+    extent = max(stroke_extent, glow_extent_value if include_glow else 0)
+    return (
+        float(rect.left()) - extent + shadow_left,
+        float(rect.top()) - extent + shadow_top,
+        float(rect.right()) + extent + shadow_right,
+        float(rect.bottom()) + extent + shadow_bottom,
     )
-    left = float(rect.left()) - extent
-    top = float(rect.top()) - extent
-    right = float(rect.right()) + extent
-    bottom = float(rect.bottom()) + extent
-    if decoration == "shadow":
-        left += min(shadow_dx, 0)
-        right += max(shadow_dx, 0)
-        top += min(shadow_dy, 0)
-        bottom += max(shadow_dy, 0)
-    return left, top, right, bottom
 
 
 def _painted_path_vertical_bounds(
@@ -1992,41 +2006,50 @@ def _painted_path_vertical_bounds(
     if ruby:
         stroke_width = _ruby_stroke_width(style)
         stroke2_width = _ruby_stroke2_width(style)
-        decoration = _ruby_decoration_kind(style)
-        shadow_dy = _ruby_shadow_dy(style)
-        glow_extent = max(
-            _glow_extent(
-                stroke_width,
-                stroke2_width,
-                _ruby_glow_radius(style, after=after),
-            )
-            for after in (False, True)
-        )
+        glow_extent_value = 0
+        shadow_top = shadow_bottom = 0
+        for after in (False, True):
+            decoration = _ruby_decoration_kind(style, after=after)
+            if decoration == "glow":
+                glow_extent_value = max(
+                    glow_extent_value,
+                    _glow_extent(
+                        stroke_width,
+                        stroke2_width,
+                        _ruby_glow_radius(style, after=after),
+                    ),
+                )
+            elif decoration == "shadow":
+                shadow_dy = _ruby_shadow_dy(style, after=after)
+                shadow_top = min(shadow_top, shadow_dy)
+                shadow_bottom = max(shadow_bottom, shadow_dy)
     else:
         stroke_width = max(int(style.stroke_width_px), 0)
         stroke2_width = _main_stroke2_width(style)
-        decoration = style.decoration_kind
-        shadow_dy = int(style.shadow_offset_y)
-        glow_extent = max(
-            _glow_extent(
-                stroke_width,
-                stroke2_width,
-                _glow_radius(style, after=after),
-            )
-            for after in (False, True)
-        )
+        glow_extent_value = 0
+        shadow_top = shadow_bottom = 0
+        for after in (False, True):
+            decoration = _decoration_kind_for_state(style, after=after)
+            if decoration == "glow":
+                glow_extent_value = max(
+                    glow_extent_value,
+                    _glow_extent(
+                        stroke_width,
+                        stroke2_width,
+                        _glow_radius(style, after=after),
+                    ),
+                )
+            elif decoration == "shadow":
+                shadow_dy = _shadow_offset_y(style, after=after)
+                shadow_top = min(shadow_top, shadow_dy)
+                shadow_bottom = max(shadow_bottom, shadow_dy)
 
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    extent = max(
-        stroke_extent,
-        glow_extent if include_glow and decoration == "glow" else 0,
+    extent = max(stroke_extent, glow_extent_value if include_glow else 0)
+    return (
+        float(rect.top()) - extent + shadow_top,
+        float(rect.bottom()) + extent + shadow_bottom,
     )
-    top = float(rect.top()) - extent
-    bottom = float(rect.bottom()) + extent
-    if decoration == "shadow" and shadow_dy:
-        top += min(shadow_dy, 0)
-        bottom += max(shadow_dy, 0)
-    return top, bottom
 
 
 def _display_line_horizontal_envelope(
@@ -2093,21 +2116,29 @@ def _line_effect_extent(
 ) -> int:
     stroke2 = _main_stroke2_width(style)
     extent = _visual_stroke_extent(style.stroke_width_px, stroke2)
-    if include_glow and style.decoration_kind == "glow":
-        extent = max(
-            extent,
-            _glow_extent(
-                style.stroke_width_px,
-                stroke2,
-                max(
-                    _glow_radius(style, after=False),
-                    _glow_radius(style, after=True),
+    glow_extent_value = 0
+    shadow_extent = 0
+    for after in (False, True):
+        kind = _decoration_kind_for_state(style, after=after)
+        if kind == "glow":
+            glow_extent_value = max(
+                glow_extent_value,
+                _glow_extent(
+                    style.stroke_width_px,
+                    stroke2,
+                    _glow_radius(style, after=after),
                 ),
-            ),
-        )
-    elif style.decoration_kind == "shadow":
-        shadow = style.shadow_offset_y if vertical_axis else style.shadow_offset_x
-        extent += abs(int(shadow))
+            )
+        elif kind == "shadow":
+            shadow = (
+                _shadow_offset_y(style, after=after)
+                if vertical_axis
+                else _shadow_offset_x(style, after=after)
+            )
+            shadow_extent = max(shadow_extent, abs(int(shadow)))
+    if include_glow:
+        extent = max(extent, glow_extent_value)
+    extent += shadow_extent
     return max(int(extent), 0)
 
 
@@ -4935,6 +4966,7 @@ class _GlyphRunLayer(_HorizontalGlyphRunLayer):
         fade_opacity: float = 1.0,
         transform: QTransform | None = None,
         fill_rect: QRectF | None = None,
+        carries_shared_glow: bool = False,
     ) -> None:
         super().__init__(
             glyphs=glyphs,
@@ -4950,6 +4982,7 @@ class _GlyphRunLayer(_HorizontalGlyphRunLayer):
             fade_opacity=fade_opacity,
             transform=transform,
             fill_rect=fill_rect,
+            carries_shared_glow=carries_shared_glow,
         )
 
 

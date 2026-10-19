@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.domain.models import (
     builtin_preset_layout_ids,
     migrate_title_char_role_labels,
     migrate_title_guide_symbols,
+    normalize_glow_concentration_level,
     rescale_scheme_font_sizes,
 )
 from krok_helper.subtitle_render.domain.timing import (
@@ -76,13 +77,18 @@ SCHEME_FIELDS = frozenset(
         "stroke2_enabled",
         "stroke2_width_px",
         "decoration_kind",
+        "decoration_kind_before",
+        "decoration_before_sync",
         "glow_radius_px",
         "glow_before_radius_px",
         "glow_after_radius_px",
         "glow_concentration_level",
+        "glow_before_concentration_level",
         "shadow_color",
         "shadow_offset_x",
         "shadow_offset_y",
+        "shadow_before_offset_x",
+        "shadow_before_offset_y",
         "ruby_font_size_px",
         "ruby_font_family",
         "ruby_font_family_latin",
@@ -100,12 +106,16 @@ SCHEME_FIELDS = frozenset(
         "ruby_latin_stroke2_enabled",
         "ruby_latin_stroke2_width_px",
         "ruby_decoration_kind",
+        "ruby_decoration_kind_before",
         "ruby_glow_radius_px",
         "ruby_glow_before_radius_px",
         "ruby_glow_after_radius_px",
         "ruby_glow_concentration_level",
+        "ruby_glow_before_concentration_level",
         "ruby_shadow_offset_x",
         "ruby_shadow_offset_y",
+        "ruby_shadow_before_offset_x",
+        "ruby_shadow_before_offset_y",
         "ruby_colors_follow_main",
         "ruby_horizontal_gradient_with_main",
         "karaoke_colors",
@@ -186,6 +196,10 @@ class PropertyStyleController:
         values["decoration_kind"] = normalize_decoration_kind(
             values["decoration_kind"]
         )
+        if values.get("decoration_kind_before") is not None:
+            values["decoration_kind_before"] = normalize_decoration_kind(
+                values["decoration_kind_before"]
+            )
         values["glow_radius_px"] = int(values["glow_before_radius_px"])
         values["karaoke_colors"] = self.current_karaoke_colors(style, role_name)
         current = (
@@ -317,12 +331,34 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         normalized["decoration_kind"] = normalize_decoration_kind(
             normalized["decoration_kind"]
         )
+    if "decoration_kind_before" in normalized:
+        normalized["decoration_kind_before"] = (
+            None
+            if normalized["decoration_kind_before"] is None
+            else normalize_decoration_kind(normalized["decoration_kind_before"])
+        )
     if "ruby_decoration_kind" in normalized:
         normalized["ruby_decoration_kind"] = (
             None
             if normalized["ruby_decoration_kind"] is None
             else normalize_decoration_kind(normalized["ruby_decoration_kind"])
         )
+    if "ruby_decoration_kind_before" in normalized:
+        normalized["ruby_decoration_kind_before"] = (
+            None
+            if normalized["ruby_decoration_kind_before"] is None
+            else normalize_decoration_kind(normalized["ruby_decoration_kind_before"])
+        )
+    for field_name in (
+        "glow_before_concentration_level",
+        "ruby_glow_before_concentration_level",
+    ):
+        if field_name in normalized:
+            normalized[field_name] = (
+                None
+                if normalized[field_name] is None
+                else normalize_glow_concentration_level(normalized[field_name])
+            )
     if "entry_anim" in normalized:
         normalized["entry_anim"] = normalize_entry_animation(
             normalized["entry_anim"]
@@ -358,6 +394,10 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
     if "section_edge_anim_enabled" in normalized:
         normalized["section_edge_anim_enabled"] = bool(
             normalized["section_edge_anim_enabled"]
+        )
+    if "decoration_before_sync" in normalized:
+        normalized["decoration_before_sync"] = bool(
+            normalized["decoration_before_sync"]
         )
     if "section_edge_both_animations" in normalized:
         normalized["section_edge_both_animations"] = bool(

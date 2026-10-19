@@ -457,13 +457,21 @@ class SubtitleStyleScheme:
     stroke2_enabled: Optional[bool] = None
     stroke2_width_px: Optional[int] = None
     decoration_kind: Optional[DecorationKind] = None
+    decoration_kind_before: Optional[DecorationKind] = None
+    decoration_before_sync: Optional[bool] = None
+    """走字前装饰同步开关；``None`` 继承全局 ``Style`` 设置。"""
     glow_radius_px: Optional[int] = None
     glow_before_radius_px: Optional[int] = None
     glow_after_radius_px: Optional[int] = None
     glow_concentration_level: Optional[int] = None
+    glow_before_concentration_level: Optional[int] = None
+    """走字前发光浓度；``None`` = 跟随 ``glow_concentration_level``。"""
     shadow_color: Optional[str] = None
     shadow_offset_x: Optional[int] = None
     shadow_offset_y: Optional[int] = None
+    shadow_before_offset_x: Optional[int] = None
+    shadow_before_offset_y: Optional[int] = None
+    """走字前阴影偏移；``None`` = 跟随 ``shadow_offset_x/y``。"""
     ruby_font_size_px: Optional[int] = None
     ruby_font_family: Optional[str] = None
     ruby_font_family_latin: Optional[str] = None
@@ -481,12 +489,17 @@ class SubtitleStyleScheme:
     ruby_latin_stroke2_enabled: Optional[bool] = None
     ruby_latin_stroke2_width_px: Optional[int] = None
     ruby_decoration_kind: Optional[DecorationKind] = None
+    ruby_decoration_kind_before: Optional[DecorationKind] = None
+    """走字前注音装饰类型；``None`` = 跟随主文字/注音走字后槽。"""
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
     ruby_glow_after_radius_px: Optional[int] = None
     ruby_glow_concentration_level: Optional[int] = None
+    ruby_glow_before_concentration_level: Optional[int] = None
     ruby_shadow_offset_x: Optional[int] = None
     ruby_shadow_offset_y: Optional[int] = None
+    ruby_shadow_before_offset_x: Optional[int] = None
+    ruby_shadow_before_offset_y: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
     ruby_colors_follow_main: Optional[bool] = None
     """注音配色是否实时跟随本角色方案的主文字配色。"""
@@ -907,15 +920,27 @@ class Style:
     stroke2_width_px: int = 5
 
     decoration_kind: DecorationKind = "shadow"
+    decoration_kind_before: Optional[DecorationKind] = None
+    """走字前装饰类型；``None`` = 跟随 ``decoration_kind``（同步开启/旧工程）。"""
+    decoration_before_sync: bool = True
+    """颜色卡「装饰 · 同步」开关：开启时走字前装饰类型/浓度/阴影跟随走字后。
+
+    仅影响编辑器行为，渲染始终读取上面各走字前槽位；旧工程加载时置 False。
+    """
     glow_radius_px: int = 10
     glow_before_radius_px: int = 10
     glow_after_radius_px: int = 10
     glow_concentration_level: int = 0
     """-1 disables glow; NicoKaraMaker3 ``BlurLevel`` 0/1/2 = low/medium/high."""
+    glow_before_concentration_level: Optional[int] = None
+    """走字前发光浓度；``None`` = 跟随 ``glow_concentration_level``。"""
     shadow_color: str = "#000000"
     shadow_offset_x: int = 5
     """阴影 X 偏移。N3 阴影偏移固定为 DecorSize（双轴同值），1080 下默认 5。"""
     shadow_offset_y: int = 5
+    shadow_before_offset_x: Optional[int] = None
+    shadow_before_offset_y: Optional[int] = None
+    """走字前阴影偏移；``None`` = 跟随 ``shadow_offset_x/y``。"""
     karaoke_colors: Optional[KaraokeColors] = None
 
     singer_style_overrides: dict[int, SubtitleStyleScheme] = field(default_factory=dict)
@@ -966,13 +991,18 @@ class Style:
     ruby_latin_stroke2_enabled: Optional[bool] = None
     ruby_latin_stroke2_width_px: Optional[int] = None
     ruby_decoration_kind: Optional[DecorationKind] = None
+    ruby_decoration_kind_before: Optional[DecorationKind] = None
+    """走字前注音装饰类型；``None`` = 跟随主文字走字前/注音走字后槽。"""
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
     ruby_glow_after_radius_px: Optional[int] = None
     ruby_glow_concentration_level: Optional[int] = None
     """Optional ruby override; ``None`` inherits ``glow_concentration_level``."""
+    ruby_glow_before_concentration_level: Optional[int] = None
     ruby_shadow_offset_x: Optional[int] = None
     ruby_shadow_offset_y: Optional[int] = None
+    ruby_shadow_before_offset_x: Optional[int] = None
+    ruby_shadow_before_offset_y: Optional[int] = None
     ruby_colors_follow_main: bool = True
     """注音整套配色默认实时跟随主文字；角色方案可独立覆盖。"""
     ruby_horizontal_gradient_with_main: bool = True
@@ -1915,12 +1945,16 @@ def style_to_dict(style: Style) -> dict:
 
 RUBY_DECORATION_OVERRIDE_FIELDS: tuple[str, ...] = (
     "ruby_decoration_kind",
+    "ruby_decoration_kind_before",
     "ruby_glow_radius_px",
     "ruby_glow_before_radius_px",
     "ruby_glow_after_radius_px",
     "ruby_glow_concentration_level",
+    "ruby_glow_before_concentration_level",
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
+    "ruby_shadow_before_offset_x",
+    "ruby_shadow_before_offset_y",
 )
 """注音装饰的独立覆盖槽。``None`` = 未设定，渲染时回退主文字对应值。"""
 
@@ -1953,9 +1987,31 @@ def materialize_ruby_decoration_changes(style: Style) -> dict[str, object]:
     链取值。
     """
     scale = max(int(style.ruby_font_size_px), 1) / max(int(style.font_size_px), 1)
+    main_before_kind = style.decoration_kind_before or style.decoration_kind
+    main_before_concentration = (
+        style.glow_before_concentration_level
+        if style.glow_before_concentration_level is not None
+        else style.glow_concentration_level
+    )
+    main_before_shadow_x = (
+        style.shadow_before_offset_x
+        if style.shadow_before_offset_x is not None
+        else style.shadow_offset_x
+    )
+    main_before_shadow_y = (
+        style.shadow_before_offset_y
+        if style.shadow_before_offset_y is not None
+        else style.shadow_offset_y
+    )
     changes: dict[str, object] = {}
     if style.ruby_decoration_kind is None:
         changes["ruby_decoration_kind"] = style.decoration_kind
+    if style.ruby_decoration_kind_before is None:
+        changes["ruby_decoration_kind_before"] = (
+            style.ruby_decoration_kind
+            if style.ruby_decoration_kind is not None
+            else main_before_kind
+        )
     if style.ruby_shadow_offset_x is None:
         changes["ruby_shadow_offset_x"] = _ruby_materialize_signed_px(
             style.shadow_offset_x, scale
@@ -1963,6 +2019,18 @@ def materialize_ruby_decoration_changes(style: Style) -> dict[str, object]:
     if style.ruby_shadow_offset_y is None:
         changes["ruby_shadow_offset_y"] = _ruby_materialize_signed_px(
             style.shadow_offset_y, scale
+        )
+    if style.ruby_shadow_before_offset_x is None:
+        changes["ruby_shadow_before_offset_x"] = (
+            int(style.ruby_shadow_offset_x)
+            if style.ruby_shadow_offset_x is not None
+            else _ruby_materialize_signed_px(main_before_shadow_x, scale)
+        )
+    if style.ruby_shadow_before_offset_y is None:
+        changes["ruby_shadow_before_offset_y"] = (
+            int(style.ruby_shadow_offset_y)
+            if style.ruby_shadow_offset_y is not None
+            else _ruby_materialize_signed_px(main_before_shadow_y, scale)
         )
     legacy_glow = (
         max(int(style.ruby_glow_radius_px), 0)
@@ -1973,7 +2041,13 @@ def materialize_ruby_decoration_changes(style: Style) -> dict[str, object]:
         changes["ruby_glow_before_radius_px"] = (
             legacy_glow
             if legacy_glow is not None
-            else _ruby_materialize_px(max(int(style.glow_before_radius_px), 0), scale)
+            else (
+                max(int(style.ruby_glow_after_radius_px), 0)
+                if style.ruby_glow_after_radius_px is not None
+                else _ruby_materialize_px(
+                    max(int(style.glow_before_radius_px), 0), scale
+                )
+            )
         )
     if style.ruby_glow_after_radius_px is None:
         changes["ruby_glow_after_radius_px"] = (
@@ -1984,6 +2058,14 @@ def materialize_ruby_decoration_changes(style: Style) -> dict[str, object]:
     if style.ruby_glow_concentration_level is None:
         changes["ruby_glow_concentration_level"] = normalize_glow_concentration_level(
             style.glow_concentration_level
+        )
+    if style.ruby_glow_before_concentration_level is None:
+        changes["ruby_glow_before_concentration_level"] = (
+            normalize_glow_concentration_level(
+                style.ruby_glow_concentration_level
+            )
+            if style.ruby_glow_concentration_level is not None
+            else normalize_glow_concentration_level(main_before_concentration)
         )
     return changes
 
@@ -2011,8 +2093,14 @@ def _migrate_ruby_follow_independence(style: Style) -> Style:
     return style
 
 
-def style_from_dict(payload: object) -> Style:
-    """Build ``Style`` from a dict, ignoring unknown or invalid fields."""
+def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
+    """Build ``Style`` from a dict, ignoring unknown or invalid fields.
+
+    ``legacy_project`` 标记「加载旧版 ``.yurika``」：旧工程没有装饰同步
+    开关，按用户要求默认不同步（外观不变，走字前槽位保持 ``None`` 实时
+    跟随走字后）。应用默认样式/撤销快照等其它入口缺字段时仍按新工程默认
+    开启同步。
+    """
     if not isinstance(payload, dict):
         return Style()
     defaults = Style()
@@ -2066,7 +2154,11 @@ def style_from_dict(payload: object) -> Style:
             ] if isinstance(value, list) else []
         elif key == "glow_concentration_level":
             changes[key] = normalize_glow_concentration_level(value)
-        elif key == "ruby_glow_concentration_level":
+        elif key in {
+            "glow_before_concentration_level",
+            "ruby_glow_concentration_level",
+            "ruby_glow_before_concentration_level",
+        }:
             changes[key] = (
                 normalize_glow_concentration_level(value) if value is not None else None
             )
@@ -2082,6 +2174,8 @@ def style_from_dict(payload: object) -> Style:
             "glow_after_radius_px",
             "shadow_offset_x",
             "shadow_offset_y",
+            "shadow_before_offset_x",
+            "shadow_before_offset_y",
             "ruby_font_size_px",
             "ruby_gap_px",
             "ruby_interval_px",
@@ -2090,6 +2184,8 @@ def style_from_dict(payload: object) -> Style:
             "ruby_glow_after_radius_px",
             "ruby_shadow_offset_x",
             "ruby_shadow_offset_y",
+            "ruby_shadow_before_offset_x",
+            "ruby_shadow_before_offset_y",
             "viewport_offset_x",
             "viewport_offset_y",
             "viewport_scale_pct",
@@ -2171,6 +2267,7 @@ def style_from_dict(payload: object) -> Style:
             "dual_line_layout",
             "right_to_left",
             "vertical",
+            "decoration_before_sync",
             "sync_entry",
             "sync_ending",
             "allow_entry_exit_animation_overlap",
@@ -2224,7 +2321,7 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in VIEWPORT_ALIGNS else defaults.viewport_align
         elif key == "decoration_kind":
             changes[key] = value if value in {"none", "shadow", "glow"} else defaults.decoration_kind
-        elif key == "ruby_decoration_kind":
+        elif key in {"decoration_kind_before", "ruby_decoration_kind", "ruby_decoration_kind_before"}:
             changes[key] = value if value in {"none", "shadow", "glow"} else None
         elif key == "ruby_alignment":
             changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
@@ -2426,6 +2523,10 @@ def style_from_dict(payload: object) -> Style:
         changes["ruby_colors_follow_main"] = (
             changes.get("ruby_karaoke_colors") is None
         )
+    if "decoration_before_sync" not in payload:
+        # 旧工程没有装饰同步开关：新工程默认开启；旧版 .yurika 默认关闭，
+        # 但走字前槽位仍为 None（实时跟随走字后），画面不变。
+        changes["decoration_before_sync"] = not legacy_project
     # 旧工程用 lit_enabled + lit_style=volume 表示音量柱。新版把两个模块
     # 分开；只有缺少新字段时才迁移，避免覆盖新版工程的显式组合。
     if "volume_enabled" not in payload and changes.get("lit_style") == "volume":
@@ -2698,6 +2799,8 @@ _FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
     "glow_after_radius_px",
     "shadow_offset_x",
     "shadow_offset_y",
+    "shadow_before_offset_x",
+    "shadow_before_offset_y",
     "ruby_font_size_px",
     "ruby_latin_font_size_px",
     "ruby_stroke_width_px",
@@ -2709,6 +2812,8 @@ _FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
     "ruby_glow_after_radius_px",
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
+    "ruby_shadow_before_offset_x",
+    "ruby_shadow_before_offset_y",
 )
 
 _TITLE_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
@@ -3099,6 +3204,20 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
                 normalize_glow_concentration_level(value) if value is not None else None
             )
         elif key in {
+            "glow_before_concentration_level",
+            "ruby_glow_before_concentration_level",
+        }:
+            changes[key] = (
+                normalize_glow_concentration_level(value) if value is not None else None
+            )
+        elif key in {
+            "decoration_kind_before",
+            "ruby_decoration_kind_before",
+        }:
+            changes[key] = (
+                value if value in {"none", "shadow", "glow"} else None
+            )
+        elif key in {
             "font_family_latin",
             "ruby_font_family",
             "ruby_font_family_latin",
@@ -3125,11 +3244,19 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
         elif key in {
             "ruby_colors_follow_main",
             "ruby_horizontal_gradient_with_main",
+            "decoration_before_sync",
             "latin_italic",
             "ruby_italic",
             "ruby_latin_italic",
         }:
             changes[key] = bool(value) if value is not None else None
+        elif key in {
+            "shadow_before_offset_x",
+            "shadow_before_offset_y",
+            "ruby_shadow_before_offset_x",
+            "ruby_shadow_before_offset_y",
+        }:
+            changes[key] = None if value is None else _int_value(value, 0)
         else:
             changes[key] = value
     has_ruby_override = (

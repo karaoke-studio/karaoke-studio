@@ -134,41 +134,126 @@ def glow_blur_radii(radius: int, concentration_level: int) -> tuple[int, ...]:
     return tuple(radius - (index * radius // passes) for index in range(passes))
 
 
-def glow_concentration_level(style: Style) -> int:
-    return normalize_glow_concentration_level(style.glow_concentration_level)
+def glow_concentration_level(style: Style, *, after: bool = True) -> int:
+    """Return the glow concentration for one karaoke state.
+
+    ``after=False`` reads the before-state override; ``None`` keeps the old
+    shared value (and therefore the legacy appearance).  The editor's
+    "同步" switch forces the before state onto the after value.
+    """
+    if after or style.decoration_before_sync:
+        value = style.glow_concentration_level
+    else:
+        value = (
+            style.glow_before_concentration_level
+            if style.glow_before_concentration_level is not None
+            else style.glow_concentration_level
+        )
+    return normalize_glow_concentration_level(value)
+
+
+def shadow_offset_x(style: Style, *, after: bool) -> int:
+    if after or style.decoration_before_sync:
+        return int(style.shadow_offset_x)
+    value = (
+        style.shadow_before_offset_x
+        if style.shadow_before_offset_x is not None
+        else style.shadow_offset_x
+    )
+    return int(value)
+
+
+def shadow_offset_y(style: Style, *, after: bool) -> int:
+    if after or style.decoration_before_sync:
+        return int(style.shadow_offset_y)
+    value = (
+        style.shadow_before_offset_y
+        if style.shadow_before_offset_y is not None
+        else style.shadow_offset_y
+    )
+    return int(value)
+
+
+def decoration_kind_for_state(style: Style, *, after: bool) -> DecorationKind:
+    """Resolve the effective decoration kind for one karaoke state.
+
+    A glow whose width or concentration resolves to zero is treated as
+    ``none``: the old renderers still painted a 1 px halo for width 0, which
+    users saw as an unwanted decoration instead of "no decoration".
+    """
+    if after:
+        kind = style.decoration_kind
+    elif style.decoration_before_sync:
+        kind = style.decoration_kind
+    else:
+        kind = style.decoration_kind_before or style.decoration_kind
+    if kind not in {"none", "shadow", "glow"}:
+        return "none"
+    if kind == "glow":
+        concentration = glow_concentration_level(style, after=after)
+        width = (
+            style.glow_after_radius_px
+            if after
+            else style.glow_before_radius_px
+        )
+        if concentration < 0 or max(int(width), 0) <= 0:
+            return "none"
+    return kind
 
 
 def glow_radius(style: Style, *, after: bool) -> int:
-    if glow_concentration_level(style) < 0:
+    if glow_concentration_level(style, after=after) < 0:
         return 0
     value = style.glow_after_radius_px if after else style.glow_before_radius_px
     return max(int(value), 0)
 
 
-def ruby_decoration_kind(style: Style) -> DecorationKind:
-    value = style.ruby_decoration_kind
-    return value if value in {"none", "shadow", "glow"} else style.decoration_kind
+def ruby_decoration_kind(style: Style, *, after: bool = True) -> DecorationKind:
+    if after or style.decoration_before_sync:
+        value = style.ruby_decoration_kind
+    else:
+        value = style.ruby_decoration_kind_before
+        if value is None:
+            value = style.ruby_decoration_kind
+    if value not in {"none", "shadow", "glow"}:
+        value = decoration_kind_for_state(style, after=after)
+    if value == "glow":
+        concentration = ruby_glow_concentration_level(style, after=after)
+        width = _ruby_glow_width(style, after=after)
+        if concentration < 0 or width <= 0:
+            return "none"
+    return value  # type: ignore[return-value]
 
 
-def ruby_shadow_dx(style: Style) -> int:
-    if ruby_decoration_kind(style) != "shadow":
+def ruby_shadow_dx(style: Style, *, after: bool = True) -> int:
+    if ruby_decoration_kind(style, after=after) != "shadow":
         return 0
-    if style.ruby_shadow_offset_x is not None:
-        return int(style.ruby_shadow_offset_x)
-    return scaled_signed_px(style.shadow_offset_x, ruby_scale(style))
+    if after or style.decoration_before_sync:
+        value = style.ruby_shadow_offset_x
+    else:
+        value = style.ruby_shadow_before_offset_x
+        if value is None:
+            value = style.ruby_shadow_offset_x
+    if value is not None:
+        return int(value)
+    return scaled_signed_px(shadow_offset_x(style, after=after), ruby_scale(style))
 
 
-def ruby_shadow_dy(style: Style) -> int:
-    if ruby_decoration_kind(style) != "shadow":
+def ruby_shadow_dy(style: Style, *, after: bool = True) -> int:
+    if ruby_decoration_kind(style, after=after) != "shadow":
         return 0
-    if style.ruby_shadow_offset_y is not None:
-        return int(style.ruby_shadow_offset_y)
-    return scaled_signed_px(style.shadow_offset_y, ruby_scale(style))
+    if after or style.decoration_before_sync:
+        value = style.ruby_shadow_offset_y
+    else:
+        value = style.ruby_shadow_before_offset_y
+        if value is None:
+            value = style.ruby_shadow_offset_y
+    if value is not None:
+        return int(value)
+    return scaled_signed_px(shadow_offset_y(style, after=after), ruby_scale(style))
 
 
-def ruby_glow_radius(style: Style, *, after: bool) -> int:
-    if ruby_glow_concentration_level(style) < 0:
-        return 0
+def _ruby_glow_width(style: Style, *, after: bool) -> int:
     value = (
         style.ruby_glow_after_radius_px
         if after
@@ -176,24 +261,39 @@ def ruby_glow_radius(style: Style, *, after: bool) -> int:
     )
     if value is None and style.ruby_glow_radius_px is not None:
         value = style.ruby_glow_radius_px
+    if value is None and not after and style.ruby_glow_after_radius_px is not None:
+        # 旧工程只存走字后侧或只在新版单侧设值时，未设的一侧继续沿用
+        # 共享半径语义，而不是突然回退到主文字半径。
+        value = style.ruby_glow_after_radius_px
     if value is not None:
         return max(int(value), 0)
     return scaled_glow_radius(style, ruby_scale(style), after=after)
 
 
-def ruby_glow_concentration_level(style: Style) -> int:
-    value = style.ruby_glow_concentration_level
+def ruby_glow_radius(style: Style, *, after: bool) -> int:
+    if ruby_glow_concentration_level(style, after=after) < 0:
+        return 0
+    return _ruby_glow_width(style, after=after)
+
+
+def ruby_glow_concentration_level(style: Style, *, after: bool = True) -> int:
+    if after or style.decoration_before_sync:
+        value = style.ruby_glow_concentration_level
+    else:
+        value = style.ruby_glow_before_concentration_level
+        if value is None:
+            value = style.ruby_glow_concentration_level
     if value is None:
-        return glow_concentration_level(style)
+        return glow_concentration_level(style, after=after)
     return normalize_glow_concentration_level(value)
 
 
-def ruby_paint_style(style: Style) -> Style:
-    decoration = ruby_decoration_kind(style)
-    concentration = ruby_glow_concentration_level(style)
+def ruby_paint_style(style: Style, *, after: bool = True) -> Style:
+    decoration = ruby_decoration_kind(style, after=after)
+    concentration = ruby_glow_concentration_level(style, after=after)
     if (
         decoration == style.decoration_kind
-        and concentration == glow_concentration_level(style)
+        and concentration == style.glow_concentration_level
     ):
         return style
     return replace(
@@ -203,10 +303,63 @@ def ruby_paint_style(style: Style) -> Style:
     )
 
 
+def style_for_state(style: Style, *, after: bool) -> Style:
+    """Project a style onto one karaoke state's decoration parameters.
+
+    Renderers consume a single ``Style`` per painted layer.  Projecting the
+    before/after decoration slots (kind, concentration, shadow offsets and the
+    effective ruby overrides) onto the legacy shared fields keeps every
+    existing paint primitive unchanged while making all four colour cards
+    truly independent.
+    """
+    kind = decoration_kind_for_state(style, after=after)
+    concentration = glow_concentration_level(style, after=after)
+    shadow_x = shadow_offset_x(style, after=after)
+    shadow_y = shadow_offset_y(style, after=after)
+    ruby_kind = ruby_decoration_kind(style, after=after)
+    ruby_concentration = ruby_glow_concentration_level(style, after=after)
+    ruby_shadow_x = ruby_shadow_dx(style, after=after)
+    ruby_shadow_y = ruby_shadow_dy(style, after=after)
+    changes: dict[str, object] = {}
+    if style.decoration_kind != kind:
+        changes["decoration_kind"] = kind
+    if style.decoration_kind_before != kind:
+        changes["decoration_kind_before"] = kind
+    if style.glow_concentration_level != concentration:
+        changes["glow_concentration_level"] = concentration
+    if style.glow_before_concentration_level != concentration:
+        changes["glow_before_concentration_level"] = concentration
+    if style.shadow_offset_x != shadow_x:
+        changes["shadow_offset_x"] = shadow_x
+    if style.shadow_offset_y != shadow_y:
+        changes["shadow_offset_y"] = shadow_y
+    if style.shadow_before_offset_x != shadow_x:
+        changes["shadow_before_offset_x"] = shadow_x
+    if style.shadow_before_offset_y != shadow_y:
+        changes["shadow_before_offset_y"] = shadow_y
+    if style.ruby_decoration_kind != ruby_kind:
+        changes["ruby_decoration_kind"] = ruby_kind
+    if style.ruby_decoration_kind_before != ruby_kind:
+        changes["ruby_decoration_kind_before"] = ruby_kind
+    if style.ruby_glow_concentration_level != ruby_concentration:
+        changes["ruby_glow_concentration_level"] = ruby_concentration
+    if style.ruby_glow_before_concentration_level != ruby_concentration:
+        changes["ruby_glow_before_concentration_level"] = ruby_concentration
+    if style.ruby_shadow_offset_x != ruby_shadow_x:
+        changes["ruby_shadow_offset_x"] = ruby_shadow_x
+    if style.ruby_shadow_offset_y != ruby_shadow_y:
+        changes["ruby_shadow_offset_y"] = ruby_shadow_y
+    if style.ruby_shadow_before_offset_x != ruby_shadow_x:
+        changes["ruby_shadow_before_offset_x"] = ruby_shadow_x
+    if style.ruby_shadow_before_offset_y != ruby_shadow_y:
+        changes["ruby_shadow_before_offset_y"] = ruby_shadow_y
+    return replace(style, **changes) if changes else style
+
+
 def text_visual_padding(style: Style, *, after: bool) -> int:
     stroke2_width = main_stroke2_width(style)
     pad = visual_stroke_extent(style.stroke_width_px, stroke2_width)
-    if style.decoration_kind == "glow":
+    if decoration_kind_for_state(style, after=after) == "glow":
         pad = max(
             pad,
             glow_extent(
@@ -215,8 +368,8 @@ def text_visual_padding(style: Style, *, after: bool) -> int:
                 glow_radius(style, after=after),
             ),
         )
-    elif style.decoration_kind == "shadow":
-        pad += abs(style.shadow_offset_y)
+    elif decoration_kind_for_state(style, after=after) == "shadow":
+        pad += abs(shadow_offset_y(style, after=after))
     return max(pad, 2)
 
 
@@ -224,7 +377,7 @@ def ruby_visual_padding(style: Style, *, after: bool) -> int:
     stroke_width = ruby_stroke_width(style)
     stroke2_width = ruby_stroke2_width(style)
     pad = visual_stroke_extent(stroke_width, stroke2_width)
-    if ruby_decoration_kind(style) == "glow":
+    if ruby_decoration_kind(style, after=after) == "glow":
         pad = max(
             pad,
             glow_extent(
@@ -234,7 +387,7 @@ def ruby_visual_padding(style: Style, *, after: bool) -> int:
             ),
         )
     else:
-        pad += abs(ruby_shadow_dy(style))
+        pad += abs(ruby_shadow_dy(style, after=after))
     return max(pad, 2)
 
 

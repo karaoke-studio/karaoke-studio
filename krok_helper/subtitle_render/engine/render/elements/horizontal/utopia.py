@@ -37,6 +37,7 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
 )
 from krok_helper.subtitle_render.engine.render.effects import (
     brush_for_fill,
+    decoration_kind_for_state,
     fill_brush_rect,
     fill_signature,
     glow_concentration_level,
@@ -48,6 +49,7 @@ from krok_helper.subtitle_render.engine.render.effects import (
     paint_split_glow_path,
     paint_text_layer_stack,
     ruby_visual_padding,
+    style_for_state,
     text_visual_padding,
     visual_text_padding,
 )
@@ -819,7 +821,7 @@ def paint_glyph_run_before_glow_direct(
             if band is not None
             else None
         ),
-        concentration_level=glow_concentration_level(role_style),
+        concentration_level=glow_concentration_level(role_style, after=False),
     )
 
 
@@ -835,10 +837,20 @@ def paint_full_glow_source_wipe(
     fill_rect: QRectF | None,
 ) -> None:
     """Paint an entire source-clipped glow after geometry transforms."""
+    before_kind = decoration_kind_for_state(role_style, after=False)
+    after_kind = decoration_kind_for_state(role_style, after=True)
     before_radius = glow_radius(role_style, after=False)
     after_radius = glow_radius(role_style, after=True)
+    before_concentration = glow_concentration_level(role_style, after=False)
+    after_concentration = glow_concentration_level(role_style, after=True)
     stroke2_width = main_stroke2_width(role_style)
-    if before_radius > 0 and before_radius == after_radius:
+    if (
+        before_kind == "glow"
+        and after_kind == "glow"
+        and before_radius > 0
+        and before_radius == after_radius
+        and before_concentration == after_concentration
+    ):
         pad = glow_extent(
             role_style.stroke_width_px, stroke2_width, before_radius
         )
@@ -865,12 +877,17 @@ def paint_full_glow_source_wipe(
             stroke2_width,
             before_source_clip=before_source_clip,
             after_source_clip=after_source_clip,
-            concentration_level=glow_concentration_level(role_style),
+            concentration_level=before_concentration,
         )
         return
 
     for after in (False, True):
-        radius = glow_radius(role_style, after=after)
+        kind = after_kind if after else before_kind
+        if kind != "glow":
+            continue
+        radius = after_radius if after else before_radius
+        if radius <= 0:
+            continue
         pad = glow_extent(
             role_style.stroke_width_px, stroke2_width, radius
         )
@@ -900,7 +917,9 @@ def paint_full_glow_source_wipe(
             role_style.stroke_width_px,
             stroke2_width,
             source_clip=source_clip,
-            concentration_level=glow_concentration_level(role_style),
+            concentration_level=(
+                after_concentration if after else before_concentration
+            ),
         )
 
 
@@ -971,7 +990,7 @@ def paint_cached_run_glow_source_wipe(
         role_style.stroke_width_px,
         stroke2_width,
         source_clip=source_clip,
-        concentration_level=glow_concentration_level(role_style),
+        concentration_level=glow_concentration_level(role_style, after=after),
         target_clip=strip_clip,
     )
     painter.save()
@@ -1067,7 +1086,7 @@ def paint_cached_run_split_glow_source_wipe(
         stroke2_width,
         before_source_clip=before_source_clip,
         after_source_clip=after_source_clip,
-        concentration_level=glow_concentration_level(role_style),
+        concentration_level=glow_concentration_level(role_style, after=False),
         target_clip=strip_clip,
     )
     for after, clip in (
@@ -1218,7 +1237,7 @@ def paint_glyph_run_after_glow_wipe(
             role_style.stroke_width_px,
             role_style.stroke2_width_px,
             source_clip=after_glow_source_clip_rect(band, rect, pad, rtl, complete),
-            concentration_level=glow_concentration_level(role_style),
+            concentration_level=glow_concentration_level(role_style, after=True),
             target_clip=strip_clip,
         )
     finally:
@@ -1287,7 +1306,6 @@ def paint_char_karaoke_stack(
     # 不再每帧 _paint_glow_path 重算高斯；body 仍逐帧矢量（锐利）。``glow_run`` 为 None
     # 时退回原逐帧 glow 路径（保留旧行为，可回退）。
     def _use_cached_glow(after: bool) -> bool:
-        del after
         # N3 transforms the glyph geometry before drawing the shared
         # decoration source and applying Gaussian blur.  Reusing an already
         # blurred upright bitmap would also scale/rotate the blur kernel,
@@ -1296,17 +1314,21 @@ def paint_char_karaoke_stack(
         # blur the transformed source.
         return (
             glow_run is not None
-            and style.decoration_kind == "glow"
+            and decoration_kind_for_state(style, after=after) == "glow"
             and (
                 geometry_transform is None
                 or geometry_transform.isIdentity()
             )
         )
     stroke2_width = main_stroke2_width(style)
+    before_style = style_for_state(style, after=False)
+    after_style = style_for_state(style, after=True)
 
     def _blit_glow(after: bool) -> None:
         blit_cached_run_glow(
-            painter, glow_run, baseline_y, style, colors,
+            painter, glow_run, baseline_y,
+            after_style if after else before_style,
+            colors,
             after=after, transform=glow_transform, fill_rect=fill_rect,
         )
 
@@ -1319,14 +1341,15 @@ def paint_char_karaoke_stack(
             path,
             rect,
             colors.before,
-            style,
-            stroke_width=style.stroke_width_px,
+            before_style,
+            stroke_width=before_style.stroke_width_px,
             stroke2_width=stroke2_width,
-            shadow_dx=style.shadow_offset_x,
-            shadow_dy=style.shadow_offset_y,
-            glow_radius=glow_radius(style, after=False),
+            shadow_dx=before_style.shadow_offset_x,
+            shadow_dy=before_style.shadow_offset_y,
+            glow_radius=glow_radius(before_style, after=False),
             draw_glow=not use_cached_glow,
             fill_rect=fill_rect,
+            after=False,
         )
         return
 
@@ -1402,8 +1425,8 @@ def paint_char_karaoke_stack(
         elif use_cached_before_glow:
             _blit_glow(after=False)
         elif (
-            glow_radius(style, after=False) > 0
-            and style.decoration_kind == "glow"
+            glow_radius(before_style, after=False) > 0
+            and before_style.decoration_kind == "glow"
         ):
             # 等态发光、缓存路径不可用：光晕整幅画一次（GPU 逐侧独占裁剪
             # 在前后光同色同半径时与整幅一次等价），下面的 before 主体层
@@ -1417,21 +1440,42 @@ def paint_char_karaoke_stack(
                     fill_rect if fill_rect is not None else rect,
                     None,
                 ),
-                glow_radius(style, after=False),
-                style.stroke_width_px,
+                glow_radius(before_style, after=False),
+                before_style.stroke_width_px,
                 stroke2_width,
-                concentration_level=glow_concentration_level(style),
+                concentration_level=glow_concentration_level(
+                    before_style, after=False
+                ),
             )
         utopia_shadow_split = (
             geometry_transform is not None
-            and style.decoration_kind == "shadow"
-            and bool(style.shadow_offset_x or style.shadow_offset_y)
+            and (
+                (
+                    before_style.decoration_kind == "shadow"
+                    and bool(
+                        before_style.shadow_offset_x
+                        or before_style.shadow_offset_y
+                    )
+                )
+                or (
+                    after_style.decoration_kind == "shadow"
+                    and bool(
+                        after_style.shadow_offset_x
+                        or after_style.shadow_offset_y
+                    )
+                )
+            )
         )
         if utopia_shadow_split:
-            shadow_front = front + style.shadow_offset_x
             shadow_states_differ = (
                 fill_signature(colors.before.shadow)
                 != fill_signature(colors.after.shadow)
+                or before_style.shadow_offset_x
+                != after_style.shadow_offset_x
+                or before_style.shadow_offset_y
+                != after_style.shadow_offset_y
+                or before_style.decoration_kind
+                != after_style.decoration_kind
             )
             if not shadow_states_differ:
                 paint_shadow_silhouette(
@@ -1439,13 +1483,17 @@ def paint_char_karaoke_stack(
                     path,
                     colors.before.shadow,
                     fill_rect if fill_rect is not None else rect,
-                    style.shadow_offset_x,
-                    style.shadow_offset_y,
-                    style.stroke_width_px,
+                    before_style.shadow_offset_x,
+                    before_style.shadow_offset_y,
+                    before_style.stroke_width_px,
                     stroke2_width,
                 )
             else:
                 for after in (False, True):
+                    state_style = after_style if after else before_style
+                    if state_style.decoration_kind != "shadow":
+                        continue
+                    shadow_front = front + state_style.shadow_offset_x
                     source_is_right = rtl == after
                     output_clip = (
                         QRectF(
@@ -1471,9 +1519,9 @@ def paint_char_karaoke_stack(
                             path,
                             state.shadow,
                             fill_rect if fill_rect is not None else rect,
-                            style.shadow_offset_x,
-                            style.shadow_offset_y,
-                            style.stroke_width_px,
+                            state_style.shadow_offset_x,
+                            state_style.shadow_offset_y,
+                            state_style.stroke_width_px,
                             stroke2_width,
                         )
                     finally:
@@ -1504,17 +1552,18 @@ def paint_char_karaoke_stack(
                 path,
                 rect,
                 colors.before,
-                style,
-                stroke_width=style.stroke_width_px,
+                before_style,
+                stroke_width=before_style.stroke_width_px,
                 stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
-                glow_radius=glow_radius(style, after=False),
+                shadow_dx=before_style.shadow_offset_x,
+                shadow_dy=before_style.shadow_offset_y,
+                glow_radius=glow_radius(before_style, after=False),
                 # 光晕已在上方单独整幅画过（等态共享 / 分态逐侧 / 缓存
                 # blit 三种来源），主体层不再携带，避免随锋面裁剪被切断。
                 draw_glow=False,
                 fill_rect=fill_rect,
                 draw_shadow=not utopia_shadow_split,
+                after=False,
             )
         finally:
             painter.restore()
@@ -1537,15 +1586,16 @@ def paint_char_karaoke_stack(
                 path,
                 rect,
                 colors.after,
-                style,
-                stroke_width=style.stroke_width_px,
+                after_style,
+                stroke_width=after_style.stroke_width_px,
                 stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
-                glow_radius=glow_radius(style, after=True),
+                shadow_dx=after_style.shadow_offset_x,
+                shadow_dy=after_style.shadow_offset_y,
+                glow_radius=glow_radius(after_style, after=True),
                 draw_glow=False,
                 fill_rect=fill_rect,
                 draw_shadow=not utopia_shadow_split,
+                after=True,
             )
         finally:
             painter.restore()
@@ -1559,12 +1609,13 @@ def paint_char_karaoke_stack(
         path,
         rect,
         colors.after,
-        style,
-        stroke_width=style.stroke_width_px,
+        after_style,
+        stroke_width=after_style.stroke_width_px,
         stroke2_width=stroke2_width,
-        shadow_dx=style.shadow_offset_x,
-        shadow_dy=style.shadow_offset_y,
-        glow_radius=glow_radius(style, after=True),
+        shadow_dx=after_style.shadow_offset_x,
+        shadow_dy=after_style.shadow_offset_y,
+        glow_radius=glow_radius(after_style, after=True),
         draw_glow=not use_cached_glow,
         fill_rect=fill_rect,
+        after=True,
     )

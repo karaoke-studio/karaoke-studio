@@ -43,7 +43,9 @@ void paintTransformedTextStackWithFills(
     const QTransform *uprightTransform = nullptr,
     const QString &glowScope = QStringLiteral("transformed_text")
 ) {
-    const bool useCachedGlow = style.decorationKind == QStringLiteral("glow")
+    const bool useCachedGlow =
+        (decorationKindForState(style, false) == QStringLiteral("glow")
+            || decorationKindForState(style, true) == QStringLiteral("glow"))
         && uprightPath != nullptr
         && uprightRect != nullptr
         && uprightTransform != nullptr
@@ -79,11 +81,12 @@ void paintTransformedTextStackWithFills(
             style,
             strokeWidth,
             stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
+            shadowOffsetXForState(style, false),
+            shadowOffsetYForState(style, false),
             beforeGlowRadius,
             !useCachedGlow,
-            glowScope + QStringLiteral(":before")
+            glowScope + QStringLiteral(":before"),
+            false
         );
         return;
     }
@@ -100,11 +103,12 @@ void paintTransformedTextStackWithFills(
             style,
             strokeWidth,
             stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
+            shadowOffsetXForState(style, true),
+            shadowOffsetYForState(style, true),
             afterGlowRadius,
             !useCachedGlow,
-            glowScope + QStringLiteral(":after")
+            glowScope + QStringLiteral(":after"),
+            true
         );
         return;
     }
@@ -123,10 +127,11 @@ void paintTransformedTextStackWithFills(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        beforeGlowRadius,
-        !useCachedGlow,
-        glowScope + QStringLiteral(":before")
-    );
+            beforeGlowRadius,
+            !useCachedGlow,
+            glowScope + QStringLiteral(":before"),
+            false
+        );
 
     const double strokePad = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
     const double clipX = rtl
@@ -157,10 +162,11 @@ void paintTransformedTextStackWithFills(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        afterGlowRadius,
-        !useCachedGlow,
-        glowScope + QStringLiteral(":after")
-    );
+            afterGlowRadius,
+            !useCachedGlow,
+            glowScope + QStringLiteral(":after"),
+            true
+        );
     painter.restore();
 }
 

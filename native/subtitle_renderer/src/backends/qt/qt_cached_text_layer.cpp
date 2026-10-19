@@ -22,13 +22,14 @@ void paintCachedTextLayerStackWithWidths(
     int stroke2Width,
     int shadowOffsetX,
     int shadowOffsetY,
-    int glowRadiusValue
+    int glowRadiusValue,
+    bool after
 ) {
     if (!textLayerCacheEnabled()) {
         const TextLayerImage layer = buildTextLayerStackWithWidths(
             path, rect, fill, stroke, stroke2, shadow, style,
             strokeWidth, stroke2Width, shadowOffsetX, shadowOffsetY,
-            glowRadiusValue
+            glowRadiusValue, after
         );
         painter.drawImage(layer.offset, layer.image);
         return;
@@ -40,7 +41,7 @@ void paintCachedTextLayerStackWithWidths(
     const TextLayerImage layer = buildTextLayerStackWithWidths(
         path, rect, fill, stroke, stroke2, shadow, style,
         strokeWidth, stroke2Width, shadowOffsetX, shadowOffsetY,
-        glowRadiusValue
+        glowRadiusValue, after
     );
     storeTextLayerCache(cacheKey, layer);
     painter.drawImage(layer.offset, layer.image);

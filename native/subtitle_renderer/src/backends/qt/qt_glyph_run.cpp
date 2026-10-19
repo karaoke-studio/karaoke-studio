@@ -232,6 +232,8 @@ void paintGlyphRunTextLayer(
     const PaintFillSpec &stroke2 = after ? style.afterStroke2Fill : style.beforeStroke2Fill;
     const PaintFillSpec &shadow = after ? style.afterShadowFill : style.beforeShadowFill;
     const int glow = glowRadius(style, after);
+    const int shadowOffsetX = shadowOffsetXForState(style, after);
+    const int shadowOffsetY = shadowOffsetYForState(style, after);
     paintCachedTextLayerStackWithWidths(
         painter,
         glyphRunTextLayerCacheKey(
@@ -247,8 +249,8 @@ void paintGlyphRunTextLayer(
             shadow,
             style.strokeWidthPx,
             style.stroke2WidthPx,
-            style.shadowOffsetX,
-            style.shadowOffsetY,
+            shadowOffsetX,
+            shadowOffsetY,
             glow
         ),
         path,
@@ -260,9 +262,10 @@ void paintGlyphRunTextLayer(
         style,
         style.strokeWidthPx,
         style.stroke2WidthPx,
-        style.shadowOffsetX,
-        style.shadowOffsetY,
-        glow
+        shadowOffsetX,
+        shadowOffsetY,
+        glow,
+        after
     );
 }
 

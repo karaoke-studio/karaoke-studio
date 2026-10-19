@@ -32,6 +32,7 @@ from krok_helper.subtitle_render.engine.render.effects.metrics import (
     glow_pen_width,
     stroke2_pen_width,
     stroke_pen_width,
+    style_for_state,
 )
 
 def paint_fill_path(
@@ -267,7 +268,9 @@ def paint_text_layer_stack(
     fill_rect: QRectF | None = None,
     horizontal_fill_rect: QRectF | None = None,
     draw_shadow: bool = True,
+    after: bool = True,
 ) -> None:
+    style = style_for_state(style, after=after)
     brush_rect = fill_rect if fill_rect is not None else rect
     if style.decoration_kind == "glow":
         # ``draw_glow=False`` 让调用方把发光单独按「发光级」宽松裁切处理（卡拉ok 走字
@@ -281,7 +284,7 @@ def paint_text_layer_stack(
                 glow_radius,
                 stroke_width,
                 stroke2_width,
-                concentration_level=glow_concentration_level(style),
+                concentration_level=glow_concentration_level(style, after=after),
             )
     elif (
         style.decoration_kind == "shadow"

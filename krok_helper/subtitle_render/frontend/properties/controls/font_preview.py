@@ -57,6 +57,11 @@ from krok_helper.subtitle_render.engine.style.style_preview import (
     ruby_stroke_width as _ruby_stroke_width,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
+from krok_helper.subtitle_render.engine.render.effects import (
+    decoration_kind_for_state as _decoration_kind_for_state,
+    shadow_offset_x as _shadow_offset_x,
+    shadow_offset_y as _shadow_offset_y,
+)
 from krok_helper.subtitle_render.engine.text.font_weight import build_weight_font
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
 
@@ -282,10 +287,25 @@ class _FontSampleCanvas(QWidget):
             ruby_path.translate(0, ruby_shift_y)
             ruby_rect.translate(0, ruby_shift_y)
             ruby_baseline += ruby_shift_y
-        shadow = QPoint(main_style.shadow_offset_x, main_style.shadow_offset_y)
+        shadow = QPoint(
+            max(
+                abs(_shadow_offset_x(main_style, after=False)),
+                abs(_shadow_offset_x(main_style, after=True)),
+            ),
+            max(
+                abs(_shadow_offset_y(main_style, after=False)),
+                abs(_shadow_offset_y(main_style, after=True)),
+            ),
+        )
         ruby_shadow = QPoint(
-            _ruby_shadow_dx(ruby_style),
-            _ruby_shadow_dy(ruby_style),
+            max(
+                abs(_ruby_shadow_dx(ruby_style, after=False)),
+                abs(_ruby_shadow_dx(ruby_style, after=True)),
+            ),
+            max(
+                abs(_ruby_shadow_dy(ruby_style, after=False)),
+                abs(_ruby_shadow_dy(ruby_style, after=True)),
+            ),
         )
         main_glow_extent = (
             max(
@@ -300,12 +320,14 @@ class _FontSampleCanvas(QWidget):
                     max(int(main_style.glow_after_radius_px), 0),
                 ),
             )
-            if main_style.decoration_kind == "glow"
+            if any(
+                _decoration_kind_for_state(main_style, after=after) == "glow"
+                for after in (False, True)
+            )
             else 0
         )
         ruby_glow_before = _ruby_glow_radius(ruby_style, after=False)
         ruby_glow_after = _ruby_glow_radius(ruby_style, after=True)
-        ruby_decoration = _ruby_decoration_kind(ruby_style)
         ruby_glow_extent = (
             max(
                 _glow_extent(
@@ -319,7 +341,10 @@ class _FontSampleCanvas(QWidget):
                     ruby_glow_after,
                 ),
             )
-            if ruby_decoration == "glow"
+            if any(
+                _ruby_decoration_kind(ruby_style, after=after) == "glow"
+                for after in (False, True)
+            )
             else 0
         )
         bounds = main_rect.united(ruby_rect)

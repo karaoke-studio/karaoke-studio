@@ -198,12 +198,13 @@ QString textStackStyleCacheKey(
     int shadowOffsetY,
     int glowRadiusValue
 ) {
-    return QStringLiteral("fill=%1|stroke=%2|stroke2=%3|shadow=%4|deco=%5|sw=%6|s2w=%7|sx=%8|sy=%9|glow=%10")
+    return QStringLiteral("fill=%1|stroke=%2|stroke2=%3|shadow=%4|deco=%5|decob=%6|sw=%7|s2w=%8|sx=%9|sy=%10|glow=%11")
         .arg(fillCacheKey(fill))
         .arg(fillCacheKey(stroke))
         .arg(fillCacheKey(stroke2))
         .arg(fillCacheKey(shadow))
         .arg(style.decorationKind)
+        .arg(style.decorationKindBefore)
         .arg(strokeWidth)
         .arg(stroke2Width)
         .arg(shadowOffsetX)

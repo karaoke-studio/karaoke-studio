@@ -277,14 +277,21 @@ struct ResolvedStyle {
     std::optional<bool> latinStroke2Enabled;
     std::optional<int> latinStroke2WidthPx;
     QString decorationKind = QStringLiteral("shadow");
+    QString decorationKindBefore;
+    bool decorationBeforeSync = true;
     int glowRadiusPx = 10;
     int glowBeforeRadiusPx = 10;
     int glowAfterRadiusPx = 10;
     int glowConcentrationLevel = 0;
+    std::optional<int> glowBeforeConcentrationLevel;
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
+    std::optional<int> shadowBeforeOffsetX;
+    std::optional<int> shadowBeforeOffsetY;
     std::optional<int> rubyShadowOffsetX;
     std::optional<int> rubyShadowOffsetY;
+    std::optional<int> rubyShadowBeforeOffsetX;
+    std::optional<int> rubyShadowBeforeOffsetY;
     int rubyFontSizePx = 30;
     QString rubyFontFamily;
     QString rubyFontFamilyLatin;
@@ -319,9 +326,11 @@ struct ResolvedStyle {
     std::optional<bool> rubyLatinStroke2Enabled;
     std::optional<int> rubyLatinStroke2WidthPx;
     QString rubyDecorationKind;
+    QString rubyDecorationKindBefore;
     std::optional<int> rubyGlowBeforeRadiusPx;
     std::optional<int> rubyGlowAfterRadiusPx;
     std::optional<int> rubyGlowConcentrationLevel;
+    std::optional<int> rubyGlowBeforeConcentrationLevel;
     bool litEnabled = false;
     QString litStyle = QStringLiteral("volume");
     // 指示灯 auto/role 外观模式：矢量灯走主文字装饰管线（镜像 Painter 的
@@ -395,6 +404,142 @@ struct ResolvedStyle {
     bool hasMainKaraokeColors = false;
     bool hasRubyKaraokeColors = false;
 };
+
+inline QString decorationKindForState(const ResolvedStyle &style, bool after) {
+    if (after) {
+        return style.decorationKind;
+    }
+    if (style.decorationBeforeSync) {
+        return style.decorationKind;
+    }
+    return style.decorationKindBefore.isEmpty()
+        ? style.decorationKind
+        : style.decorationKindBefore;
+}
+
+inline int rubyGlowConcentrationForState(const ResolvedStyle &style, bool after);
+
+inline int glowConcentrationForState(const ResolvedStyle &style, bool after) {
+    if (after || style.decorationBeforeSync) {
+        return style.glowConcentrationLevel;
+    }
+    return style.glowBeforeConcentrationLevel.value_or(
+        style.glowConcentrationLevel
+    );
+}
+
+inline int shadowOffsetXForState(const ResolvedStyle &style, bool after) {
+    if (after || style.decorationBeforeSync) {
+        return style.shadowOffsetX;
+    }
+    return style.shadowBeforeOffsetX.value_or(style.shadowOffsetX);
+}
+
+inline int shadowOffsetYForState(const ResolvedStyle &style, bool after) {
+    if (after || style.decorationBeforeSync) {
+        return style.shadowOffsetY;
+    }
+    return style.shadowBeforeOffsetY.value_or(style.shadowOffsetY);
+}
+
+inline int glowRadiusForState(const ResolvedStyle &style, bool after) {
+    if (glowConcentrationForState(style, after) < 0) {
+        return 0;
+    }
+    const int value = after ? style.glowAfterRadiusPx : style.glowBeforeRadiusPx;
+    return std::max(value, 0);
+}
+
+inline int rubyGlowRadiusForState(const ResolvedStyle &style, bool after) {
+    if (rubyGlowConcentrationForState(style, after) < 0) {
+        return 0;
+    }
+    const std::optional<int> &value = after
+        ? style.rubyGlowAfterRadiusPx
+        : style.rubyGlowBeforeRadiusPx;
+    if (value.has_value()) {
+        return std::max(*value, 0);
+    }
+    return std::max(
+        static_cast<int>(std::lround(
+            glowRadiusForState(style, after)
+            * (static_cast<double>(style.rubyFontSizePx)
+               / static_cast<double>(std::max(style.fontSizePx, 1)))
+        )),
+        0
+    );
+}
+
+inline QString rubyDecorationKindForState(const ResolvedStyle &style, bool after) {
+    if (!after && style.decorationBeforeSync) {
+        after = true;
+    }
+    QString kind;
+    if (after) {
+        kind = style.rubyDecorationKind;
+    } else if (!style.rubyDecorationKindBefore.isEmpty()) {
+        kind = style.rubyDecorationKindBefore;
+    } else if (!style.rubyDecorationKind.isEmpty()) {
+        kind = style.rubyDecorationKind;
+    }
+    if (kind.isEmpty()) {
+        kind = decorationKindForState(style, after);
+    }
+    if (kind == QStringLiteral("glow")
+        && (rubyGlowConcentrationForState(style, after) < 0
+            || rubyGlowRadiusForState(style, after) <= 0)) {
+        return QStringLiteral("none");
+    }
+    return kind;
+}
+
+inline int rubyGlowConcentrationForState(const ResolvedStyle &style, bool after) {
+    if (!after && style.decorationBeforeSync) {
+        after = true;
+    }
+    if (after) {
+        return style.rubyGlowConcentrationLevel.value_or(
+            style.glowConcentrationLevel
+        );
+    }
+    if (style.rubyGlowBeforeConcentrationLevel.has_value()) {
+        return *style.rubyGlowBeforeConcentrationLevel;
+    }
+    return style.rubyGlowConcentrationLevel.value_or(
+        glowConcentrationForState(style, false)
+    );
+}
+
+inline int rubyShadowOffsetXForState(const ResolvedStyle &style, bool after) {
+    if (!after && style.decorationBeforeSync) {
+        after = true;
+    }
+    if (after) {
+        return style.rubyShadowOffsetX.value_or(style.shadowOffsetX);
+    }
+    if (style.rubyShadowBeforeOffsetX.has_value()) {
+        return *style.rubyShadowBeforeOffsetX;
+    }
+    return style.rubyShadowOffsetX.value_or(
+        shadowOffsetXForState(style, false)
+    );
+}
+
+inline int rubyShadowOffsetYForState(const ResolvedStyle &style, bool after) {
+    if (!after && style.decorationBeforeSync) {
+        after = true;
+    }
+    if (after) {
+        return style.rubyShadowOffsetY.value_or(style.shadowOffsetY);
+    }
+    if (style.rubyShadowBeforeOffsetY.has_value()) {
+        return *style.rubyShadowBeforeOffsetY;
+    }
+    return style.rubyShadowOffsetY.value_or(
+        shadowOffsetYForState(style, false)
+    );
+}
+
 
 struct RenderConfig {
     int width = 1920;

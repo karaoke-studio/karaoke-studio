@@ -26,6 +26,9 @@ from krok_helper.subtitle_render.engine.render.core.layers import (
     LayerContext,
     SCOPE_LINE,
 )
+from krok_helper.subtitle_render.engine.render.effects.metrics import (
+    style_for_state,
+)
 from krok_helper.subtitle_render.engine.ruby import (
     active_rubies_for_line,
     build_ruby_font,
@@ -544,7 +547,12 @@ def build_baked_path_stack(
     shadow_dx: int,
     shadow_dy: int,
     glow_radius: int,
+    after: bool = True,
 ) -> tuple[QImage, int, int] | None:
+    style = style_for_state(style, after=after)
+    if not after:
+        shadow_dx = style.shadow_offset_x
+        shadow_dy = style.shadow_offset_y
     is_glow = style.decoration_kind == "glow"
     stroke_extent = ports.visual_stroke_extent(stroke_width, stroke2_width)
     glow_extra = (
@@ -589,6 +597,7 @@ def build_baked_path_stack(
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
             glow_radius=glow_radius,
+            after=after,
         )
     finally:
         painter.end()
@@ -611,6 +620,7 @@ class BakedPathStackLayer:
     clip_rect: QRectF | None = None
     z_index: int = 0
     scope: str = SCOPE_LINE
+    after: bool = True
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -633,6 +643,7 @@ class BakedPathStackLayer:
             shadow_dx=self.shadow_dx,
             shadow_dy=self.shadow_dy,
             glow_radius=self.glow_radius,
+            after=self.after,
         )
         if built is None:
             return BakedLayer(image=QImage(), offset=QPointF())
@@ -661,7 +672,7 @@ class BakedPathStackLayer:
         path_bounds = self.path.boundingRect()
         if path_bounds.isEmpty():
             return None
-        is_glow = self.style.decoration_kind == "glow"
+        is_glow = style_for_state(self.style, after=self.after).decoration_kind == "glow"
         extent = max(
             self.ports.visual_stroke_extent(
                 self.stroke_width,
@@ -757,21 +768,22 @@ def vertical_after_clip_pad(style: Style, *, ports: VerticalLayerPorts) -> int:
     绘制（与横排 CPU 的 ``fill_clip_band_for_glyphs`` 同构）。
     """
     stroke2_width = ports.main_stroke2_width(style)
+    after_style = style_for_state(style, after=True)
     stroke_extent = ports.raster.visual_stroke_extent(
-        style.stroke_width_px,
+        after_style.stroke_width_px,
         stroke2_width,
     )
     return max(
         stroke_extent,
         ports.raster.glow_extent(
-            style.stroke_width_px,
+            after_style.stroke_width_px,
             stroke2_width,
-            ports.glow_radius(style, after=True),
+            ports.glow_radius(after_style, after=True),
         )
-        if style.decoration_kind == "glow"
+        if after_style.decoration_kind == "glow"
         else 0,
-        stroke_extent + abs(style.shadow_offset_x),
-        stroke_extent + abs(style.shadow_offset_y),
+        stroke_extent + abs(after_style.shadow_offset_x),
+        stroke_extent + abs(after_style.shadow_offset_y),
         2,
     )
 
@@ -815,11 +827,16 @@ def vertical_ruby_layers(
         return []
     ruby_font = build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font)
-    paint_style = ports.paint_style(style)
+    before_style = style_for_state(style, after=False)
+    after_style = style_for_state(style, after=True)
+    before_paint_style = ports.paint_style(before_style)
+    after_paint_style = ports.paint_style(after_style)
     stroke_width = ruby_stroke_width(style)
     stroke2_width = ruby_stroke2_width(style)
-    shadow_dx = ports.shadow_dx(style)
-    shadow_dy = ports.shadow_dy(style)
+    before_shadow_dx = ports.shadow_dx(before_style)
+    before_shadow_dy = ports.shadow_dy(before_style)
+    after_shadow_dx = ports.shadow_dx(after_style)
+    after_shadow_dy = ports.shadow_dy(after_style)
     before_glow_radius = ports.glow_radius(style, after=False)
     after_glow_radius = ports.glow_radius(style, after=True)
     colors = ports.effective_colors(style)
@@ -892,7 +909,8 @@ def vertical_ruby_layers(
             karaoke_effect=effective_karaoke_animation(style),
         )
         glow_split = (
-            ports.decoration_kind(style) == "glow" and before_glow_radius > 0
+            ports.decoration_kind(before_style) == "glow"
+            and before_glow_radius > 0
         )
         before_clip = None
         if glow_split and visible and not complete:
@@ -904,8 +922,8 @@ def vertical_ruby_layers(
                     stroke_width,
                     stroke2_width,
                     before_glow_radius,
-                    shadow_dx,
-                    shadow_dy,
+                    before_shadow_dx,
+                    before_shadow_dy,
                     raster=ports.raster,
                 ),
             )
@@ -915,28 +933,29 @@ def vertical_ruby_layers(
                     path=ruby_path,
                     rect=ruby_rect,
                     state=colors.before,
-                    style=paint_style,
+                    style=before_paint_style,
                     cache_key=baked_stack_key(
                         ruby_signature,
                         ruby_rect,
                         colors.before,
-                        paint_style,
+                        before_paint_style,
                         ports=ports.cache,
                         stroke_width=stroke_width,
                         stroke2_width=stroke2_width,
-                        shadow_dx=shadow_dx,
-                        shadow_dy=shadow_dy,
+                        shadow_dx=before_shadow_dx,
+                        shadow_dy=before_shadow_dy,
                         glow_radius=before_glow_radius,
                         after=False,
                     ),
                     stroke_width=stroke_width,
                     stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx,
-                    shadow_dy=shadow_dy,
+                    shadow_dx=before_shadow_dx,
+                    shadow_dy=before_shadow_dy,
                     glow_radius=before_glow_radius,
                     ports=ports.raster,
                     clip_rect=before_clip,
                     z_index=z_index,
+                    after=False,
                 )
             )
         z_index += 1
@@ -953,10 +972,10 @@ def vertical_ruby_layers(
                 stroke2_width,
                 after_glow_radius,
             )
-            if ports.decoration_kind(style) == "glow"
+            if ports.decoration_kind(after_style) == "glow"
             else 0,
-            stroke_extent + abs(shadow_dx),
-            stroke_extent + abs(shadow_dy),
+            stroke_extent + abs(after_shadow_dx),
+            stroke_extent + abs(after_shadow_dy),
             2,
         )
         clip = (
@@ -974,28 +993,29 @@ def vertical_ruby_layers(
                 path=ruby_path,
                 rect=ruby_rect,
                 state=colors.after,
-                style=paint_style,
+                style=after_paint_style,
                 cache_key=baked_stack_key(
                     ruby_signature,
                     ruby_rect,
                     colors.after,
-                    paint_style,
+                    after_paint_style,
                     ports=ports.cache,
                     stroke_width=stroke_width,
                     stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx,
-                    shadow_dy=shadow_dy,
+                    shadow_dx=after_shadow_dx,
+                    shadow_dy=after_shadow_dy,
                     glow_radius=after_glow_radius,
                     after=True,
                 ),
                 stroke_width=stroke_width,
                 stroke2_width=stroke2_width,
-                shadow_dx=shadow_dx,
-                shadow_dy=shadow_dy,
+                shadow_dx=after_shadow_dx,
+                shadow_dy=after_shadow_dy,
                 glow_radius=after_glow_radius,
                 ports=ports.raster,
                 clip_rect=clip,
                 z_index=z_index,
+                after=True,
             )
         )
         z_index += 1
@@ -1020,11 +1040,16 @@ def paint_rubies_vertical(
     """Paint vertical ruby directly as the pixel-equivalence oracle."""
     if not cells:
         return
-    paint_style = ports.paint_style(style)
+    before_style = style_for_state(style, after=False)
+    after_style = style_for_state(style, after=True)
+    before_paint_style = ports.paint_style(before_style)
+    after_paint_style = ports.paint_style(after_style)
     stroke_width = ruby_stroke_width(style)
     stroke2_width = ruby_stroke2_width(style)
-    shadow_dx = ports.shadow_dx(style)
-    shadow_dy = ports.shadow_dy(style)
+    before_shadow_dx = ports.shadow_dx(before_style)
+    before_shadow_dy = ports.shadow_dy(before_style)
+    after_shadow_dx = ports.shadow_dx(after_style)
+    after_shadow_dy = ports.shadow_dy(after_style)
     before_glow_radius = ports.glow_radius(style, after=False)
     after_glow_radius = ports.glow_radius(style, after=True)
     colors = ports.effective_colors(style)
@@ -1079,7 +1104,8 @@ def paint_rubies_vertical(
             karaoke_effect=effective_karaoke_animation(style),
         )
         glow_split = (
-            ports.decoration_kind(style) == "glow" and before_glow_radius > 0
+            ports.decoration_kind(before_style) == "glow"
+            and before_glow_radius > 0
         )
         if not (glow_split and visible and complete):
             painter.save()
@@ -1094,8 +1120,8 @@ def paint_rubies_vertical(
                                 stroke_width,
                                 stroke2_width,
                                 before_glow_radius,
-                                shadow_dx,
-                                shadow_dy,
+                                before_shadow_dx,
+                                before_shadow_dy,
                                 raster=ports.raster,
                             ),
                         )
@@ -1105,12 +1131,13 @@ def paint_rubies_vertical(
                     ruby_path,
                     ruby_rect,
                     colors.before,
-                    paint_style,
+                    before_paint_style,
                     stroke_width=stroke_width,
                     stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx,
-                    shadow_dy=shadow_dy,
+                    shadow_dx=before_shadow_dx,
+                    shadow_dy=before_shadow_dy,
                     glow_radius=before_glow_radius,
+                    after=False,
                 )
             finally:
                 painter.restore()
@@ -1128,10 +1155,10 @@ def paint_rubies_vertical(
                 stroke2_width,
                 after_glow_radius,
             )
-            if ports.decoration_kind(style) == "glow"
+            if ports.decoration_kind(after_style) == "glow"
             else 0,
-            stroke_extent + abs(shadow_dx),
-            stroke_extent + abs(shadow_dy),
+            stroke_extent + abs(after_shadow_dx),
+            stroke_extent + abs(after_shadow_dy),
             2,
         )
         painter.save()
@@ -1150,12 +1177,13 @@ def paint_rubies_vertical(
                 ruby_path,
                 ruby_rect,
                 colors.after,
-                paint_style,
+                after_paint_style,
                 stroke_width=stroke_width,
                 stroke2_width=stroke2_width,
-                shadow_dx=shadow_dx,
-                shadow_dy=shadow_dy,
+                shadow_dx=after_shadow_dx,
+                shadow_dy=after_shadow_dy,
                 glow_radius=after_glow_radius,
+                after=True,
             )
         finally:
             painter.restore()
@@ -1170,6 +1198,8 @@ def vertical_layer_stack(
     ports: VerticalLayerPorts,
 ) -> list:
     layers: list = []
+    before_style = style_for_state(style, after=False)
+    after_style = style_for_state(style, after=True)
     stroke2_width = ports.main_stroke2_width(style)
     main_signature = vertical_main_path_signature(line, style, layout)
     reverse = line.wipe_reverse
@@ -1188,7 +1218,7 @@ def vertical_layer_stack(
     before_clip = None
     if (
         band is not None
-        and style.decoration_kind == "glow"
+        and before_style.decoration_kind == "glow"
         and before_glow_radius > 0
     ):
         before_clip = vertical_before_clip_rect(
@@ -1196,11 +1226,11 @@ def vertical_layer_stack(
             layout.cell_w,
             band[0] if reverse else band[1],
             vertical_before_clip_pad(
-                style.stroke_width_px,
+                before_style.stroke_width_px,
                 stroke2_width,
                 before_glow_radius,
-                style.shadow_offset_x,
-                style.shadow_offset_y,
+                before_style.shadow_offset_x,
+                before_style.shadow_offset_y,
                 raster=ports.raster,
             ),
             reverse=reverse,
@@ -1210,28 +1240,29 @@ def vertical_layer_stack(
             path=layout.text_path,
             rect=layout.line_rect,
             state=layout.colors.before,
-            style=style,
+            style=before_style,
             cache_key=baked_stack_key(
                 main_signature,
                 layout.line_rect,
                 layout.colors.before,
-                style,
+                before_style,
                 ports=ports.cache,
-                stroke_width=style.stroke_width_px,
+                stroke_width=before_style.stroke_width_px,
                 stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
+                shadow_dx=before_style.shadow_offset_x,
+                shadow_dy=before_style.shadow_offset_y,
                 glow_radius=before_glow_radius,
                 after=False,
             ),
-            stroke_width=style.stroke_width_px,
+            stroke_width=before_style.stroke_width_px,
             stroke2_width=stroke2_width,
-            shadow_dx=style.shadow_offset_x,
-            shadow_dy=style.shadow_offset_y,
+            shadow_dx=before_style.shadow_offset_x,
+            shadow_dy=before_style.shadow_offset_y,
             glow_radius=before_glow_radius,
             ports=ports.raster,
             clip_rect=before_clip,
             z_index=0,
+            after=False,
         )
     )
     if band is not None:
@@ -1242,24 +1273,24 @@ def vertical_layer_stack(
                 path=layout.text_path,
                 rect=layout.line_rect,
                 state=layout.colors.after,
-                style=style,
+                style=after_style,
                 cache_key=baked_stack_key(
                     main_signature,
                     layout.line_rect,
                     layout.colors.after,
-                    style,
+                    after_style,
                     ports=ports.cache,
-                    stroke_width=style.stroke_width_px,
+                    stroke_width=after_style.stroke_width_px,
                     stroke2_width=stroke2_width,
-                    shadow_dx=style.shadow_offset_x,
-                    shadow_dy=style.shadow_offset_y,
+                    shadow_dx=after_style.shadow_offset_x,
+                    shadow_dy=after_style.shadow_offset_y,
                     glow_radius=after_glow_radius,
                     after=True,
                 ),
-                stroke_width=style.stroke_width_px,
+                stroke_width=after_style.stroke_width_px,
                 stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
+                shadow_dx=after_style.shadow_offset_x,
+                shadow_dy=after_style.shadow_offset_y,
                 glow_radius=after_glow_radius,
                 ports=ports.raster,
                 clip_rect=vertical_after_clip_rect(
@@ -1267,10 +1298,11 @@ def vertical_layer_stack(
                     layout.cell_w,
                     y0,
                     y_scan,
-                    vertical_after_clip_pad(style, ports=ports),
+                    vertical_after_clip_pad(after_style, ports=ports),
                     reverse=reverse,
                 ),
                 z_index=1,
+                after=True,
             )
         )
     if layout.active_rubies:
@@ -1318,6 +1350,8 @@ def paint_line_vertical_direct(
     """Paint the vertical pixel-equivalence fallback without cached layers."""
 
     stroke2_width = ports.main_stroke2_width(style)
+    before_style = style_for_state(style, after=False)
+    after_style = style_for_state(style, after=True)
     reverse = line.wipe_reverse
     band = vertical_fill_band(
         layout.cells,
@@ -1334,7 +1368,7 @@ def paint_line_vertical_direct(
     before_glow_radius = ports.glow_radius(style, after=False)
     if (
         band is not None
-        and style.decoration_kind == "glow"
+        and before_style.decoration_kind == "glow"
         and before_glow_radius > 0
     ):
         before_clip = vertical_before_clip_rect(
@@ -1342,11 +1376,11 @@ def paint_line_vertical_direct(
             layout.cell_w,
             band[0] if reverse else band[1],
             vertical_before_clip_pad(
-                style.stroke_width_px,
+                before_style.stroke_width_px,
                 stroke2_width,
                 before_glow_radius,
-                style.shadow_offset_x,
-                style.shadow_offset_y,
+                before_style.shadow_offset_x,
+                before_style.shadow_offset_y,
                 raster=ports.raster,
             ),
             reverse=reverse,
@@ -1360,12 +1394,13 @@ def paint_line_vertical_direct(
             layout.text_path,
             layout.line_rect,
             layout.colors.before,
-            style,
-            stroke_width=style.stroke_width_px,
+            before_style,
+            stroke_width=before_style.stroke_width_px,
             stroke2_width=stroke2_width,
-            shadow_dx=style.shadow_offset_x,
-            shadow_dy=style.shadow_offset_y,
+            shadow_dx=before_style.shadow_offset_x,
+            shadow_dy=before_style.shadow_offset_y,
             glow_radius=before_glow_radius,
+            after=False,
         )
     finally:
         painter.restore()
@@ -1380,7 +1415,7 @@ def paint_line_vertical_direct(
                     layout.cell_w,
                     y0,
                     y_scan,
-                    vertical_after_clip_pad(style, ports=ports),
+                    vertical_after_clip_pad(after_style, ports=ports),
                     reverse=reverse,
                 )
             )
@@ -1389,12 +1424,13 @@ def paint_line_vertical_direct(
                 layout.text_path,
                 layout.line_rect,
                 layout.colors.after,
-                style,
-                stroke_width=style.stroke_width_px,
+                after_style,
+                stroke_width=after_style.stroke_width_px,
                 stroke2_width=stroke2_width,
-                shadow_dx=style.shadow_offset_x,
-                shadow_dy=style.shadow_offset_y,
-                glow_radius=ports.glow_radius(style, after=True),
+                shadow_dx=after_style.shadow_offset_x,
+                shadow_dy=after_style.shadow_offset_y,
+                glow_radius=ports.glow_radius(after_style, after=True),
+                after=True,
             )
         finally:
             painter.restore()

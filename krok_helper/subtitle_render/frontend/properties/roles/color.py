@@ -187,7 +187,26 @@ class RoleColorPropertyPageBuilder:
                 decoration_kind=str(host._decoration_type_combo.currentData())
             )
         )
-        host._decoration_type_field = property_field("装饰类型", host._decoration_type_combo)
+        host._decoration_sync_check = CheckBox("同步", section)
+        host._decoration_sync_check.setChecked(True)
+        host._decoration_sync_check.setToolTip(
+            "勾选时，走字前的装饰类型、发光浓度、发光宽度、阴影 X/Y 与走字后保持一致；"
+            "旧工程默认不勾选。"
+        )
+        host._decoration_sync_check.toggled.connect(
+            host._on_decoration_sync_toggled
+        )
+        host._decoration_type_row = QWidget(section)
+        decoration_type_layout = QHBoxLayout(host._decoration_type_row)
+        decoration_type_layout.setContentsMargins(0, 0, 0, 0)
+        decoration_type_layout.setSpacing(8)
+        decoration_type_layout.addWidget(host._decoration_type_combo, 1)
+        decoration_type_layout.addWidget(
+            host._decoration_sync_check, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        host._decoration_type_field = property_field(
+            "装饰类型", host._decoration_type_row
+        )
 
         host._fill_editor_stack = DynamicStackedWidget(section)
         fill_pages = (
@@ -240,13 +259,17 @@ class RoleColorPropertyPageBuilder:
             )
         )
         host._glow_radius_spin = host._glow_before_radius_spin
-        host._glow_radius_field = property_field("走字前发光", host._glow_before_radius_spin)
+        host._glow_radius_field = property_field(
+            "发光宽度", host._glow_before_radius_spin
+        )
 
         host._glow_after_radius_spin = self._spin_factory(0, 120, suffix=" px")
         host._glow_after_radius_spin.valueChanged.connect(
             lambda value: host._update_shared_decoration(glow_after_radius_px=value)
         )
-        host._glow_after_radius_field = property_field("走字后发光", host._glow_after_radius_spin)
+        host._glow_after_radius_field = property_field(
+            "发光宽度", host._glow_after_radius_spin
+        )
 
         host._glow_concentration_combo = self._combo_factory(section)
         compact_property_control(host._glow_concentration_combo)

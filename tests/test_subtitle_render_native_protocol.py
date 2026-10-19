@@ -2391,6 +2391,75 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
     assert ir["extra_tracks"] == []
 
 
+def test_build_render_ir_carries_before_decoration_slots():
+    """走字前装饰类型/浓度/阴影必须原样下发 native（四卡独立配置）。"""
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("あ", 0)], end_ms=500)]
+    )
+    style = Style(
+        decoration_kind="glow",
+        decoration_kind_before="shadow",
+        decoration_before_sync=False,
+        glow_before_radius_px=0,
+        glow_after_radius_px=12,
+        glow_concentration_level=0,
+        glow_before_concentration_level=2,
+        shadow_offset_x=7,
+        shadow_before_offset_x=-3,
+        shadow_before_offset_y=4,
+        ruby_decoration_kind="shadow",
+        ruby_decoration_kind_before="glow",
+        ruby_glow_concentration_level=1,
+        ruby_glow_before_concentration_level=-1,
+        ruby_shadow_offset_x=2,
+        ruby_shadow_before_offset_x=5,
+        ruby_shadow_before_offset_y=6,
+    )
+    ir = build_render_ir(track, style, width=640, height=360, fps=30)
+    expected = {
+        "decoration_kind": "glow",
+        "decoration_kind_before": "shadow",
+        "decoration_before_sync": False,
+        "glow_before_radius_px": 0,
+        "glow_after_radius_px": 12,
+        "glow_concentration_level": 0,
+        "glow_before_concentration_level": 2,
+        "shadow_offset_x": 7,
+        "shadow_before_offset_x": -3,
+        "shadow_before_offset_y": 4,
+        "ruby_decoration_kind": "shadow",
+        "ruby_decoration_kind_before": "glow",
+        "ruby_glow_concentration_level": 1,
+        "ruby_glow_before_concentration_level": -1,
+        "ruby_shadow_offset_x": 2,
+        "ruby_shadow_before_offset_x": 5,
+        "ruby_shadow_before_offset_y": 6,
+    }
+    for key, value in expected.items():
+        assert ir["style"][key] == value
+
+    parser_source = Path(
+        "native/subtitle_renderer/src/protocol/render_config_parser.cpp"
+    ).read_text(encoding="utf-8")
+    for key in (
+        "decoration_kind_before",
+        "decoration_before_sync",
+        "glow_before_concentration_level",
+        "shadow_before_offset_x",
+        "shadow_before_offset_y",
+        "ruby_decoration_kind_before",
+        "ruby_glow_before_concentration_level",
+        "ruby_shadow_before_offset_x",
+        "ruby_shadow_before_offset_y",
+    ):
+        assert f'QStringLiteral("{key}")' in parser_source
+    # 0px 发光宽度不能再被 native 钳成 1px。
+    assert (
+        'std::max(0, intValue(style, QStringLiteral("glow_before_radius_px")'
+        in parser_source
+    )
+
+
 def test_build_render_ir_materializes_volume_auto_appearance():
     # auto 外观模式的音量柱大小/颜色必须在 IR 序列化前物化成具体数值：
     # native 端只消费数值（render_config_parser 直接读 volume_size 等 key），

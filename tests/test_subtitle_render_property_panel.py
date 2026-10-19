@@ -101,6 +101,12 @@ from krok_helper.subtitle_render.domain.models import (  # noqa: E402
     style_from_dict,
     style_to_dict,
 )
+from krok_helper.subtitle_render.engine.render.effects import (  # noqa: E402
+    decoration_kind_for_state,
+    glow_concentration_level,
+    shadow_offset_x,
+    shadow_offset_y,
+)
 from krok_helper.subtitle_render.n3.template_import import (  # noqa: E402
     N3TemplateBatchResult,
     N3TemplateLoadResult,
@@ -6057,7 +6063,8 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert emitted[-1].decoration_kind == "glow"
     assert panel._shadow_x_field.isHidden()
     assert panel._shadow_y_field.isHidden()
-    assert not panel._glow_radius_field.isHidden()
+    # 每个走字状态页只显示一个“发光宽度”控件。
+    assert panel._glow_radius_field.isHidden()
     assert not panel._glow_after_radius_field.isHidden()
     assert not panel._glow_controls_row.isHidden()
     glow_layout = panel._glow_controls_row.layout()
@@ -6067,27 +6074,35 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
         panel._glow_concentration_field,
     ]
 
-    panel._glow_radius_spin.setValue(28)
-    assert emitted[-1].glow_radius_px == 10
-    assert emitted[-1].glow_before_radius_px == 28
-    assert emitted[-1].glow_after_radius_px == 10
-
+    # 同步开启时前后发光宽度保持一致。
     panel._glow_after_radius_spin.setValue(16)
-    assert emitted[-1].glow_before_radius_px == 28
-    assert emitted[-1].glow_after_radius_px == 16
-
-    panel._glow_radius_spin.setValue(0)
-    assert emitted[-1].glow_before_radius_px == 0
+    assert emitted[-1].glow_before_radius_px == 16
     assert emitted[-1].glow_after_radius_px == 16
 
     panel._glow_after_radius_spin.setValue(0)
     assert emitted[-1].glow_before_radius_px == 0
     assert emitted[-1].glow_after_radius_px == 0
 
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("before")
+    )
+    assert not panel._glow_radius_field.isHidden()
+    assert panel._glow_after_radius_field.isHidden()
+    panel._glow_radius_spin.setValue(28)
+    assert emitted[-1].glow_before_radius_px == 28
+    assert emitted[-1].glow_after_radius_px == 28
+
+    # 关闭同步后，两个走字状态各自独立。
+    panel._decoration_sync_check.setChecked(False)
+    panel._glow_radius_spin.setValue(7)
+    assert emitted[-1].glow_before_radius_px == 7
+    assert emitted[-1].glow_after_radius_px == 28
+
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("none")
     )
-    assert emitted[-1].decoration_kind == "none"
+    assert emitted[-1].decoration_kind_before == "none"
+    assert emitted[-1].decoration_kind == "glow"
     assert panel._shadow_x_field.isHidden()
     assert panel._shadow_y_field.isHidden()
     assert panel._glow_radius_field.isHidden()
@@ -6097,12 +6112,178 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("shadow")
     )
-    assert emitted[-1].decoration_kind == "shadow"
+    assert emitted[-1].decoration_kind_before == "shadow"
+    assert emitted[-1].decoration_kind == "glow"
     assert not panel._shadow_x_field.isHidden()
     assert not panel._shadow_y_field.isHidden()
     assert panel._glow_radius_field.isHidden()
     assert panel._glow_after_radius_field.isHidden()
     assert panel._glow_controls_row.isHidden()
+
+
+def test_decoration_sync_defaults_on_and_routes_before_edits_to_after(qapp):
+    """新工程默认同步：走字前编辑装饰类型/浓度/阴影时写走字后槽。"""
+    panel = PropertyPanel()
+    panel.set_style(Style(decoration_kind="glow"))
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("shadow")
+    )
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("before")
+    )
+    assert panel._decoration_sync_check.isChecked()
+
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("shadow")
+    )
+    assert emitted[-1].decoration_kind == "shadow"
+    assert emitted[-1].decoration_kind_before is None
+
+    panel._shadow_x_spin.setValue(11)
+    assert emitted[-1].shadow_offset_x == 11
+    assert emitted[-1].shadow_before_offset_x is None
+
+    panel._glow_concentration_combo.setCurrentIndex(
+        panel._glow_concentration_combo.findData(2)
+    )
+    assert emitted[-1].glow_concentration_level == 2
+    assert emitted[-1].glow_before_concentration_level is None
+
+
+def test_decoration_sync_off_keeps_before_slots_independent(qapp):
+    """关闭同步后，四张卡各自写入走字前/后槽，互不覆盖。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_kind="glow",
+            decoration_before_sync=True,
+            glow_before_radius_px=8,
+            glow_after_radius_px=12,
+        )
+    )
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("shadow")
+    )
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("before")
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._decoration_sync_check.setChecked(False)
+    assert emitted[-1].decoration_before_sync is False
+    # 物化当前生效值，外观不跳变。
+    assert emitted[-1].decoration_kind_before == "glow"
+    assert emitted[-1].glow_before_concentration_level == 0
+    assert emitted[-1].shadow_before_offset_x == 5
+    assert emitted[-1].shadow_before_offset_y == 5
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("shadow")
+    )
+    assert emitted[-1].decoration_kind_before == "shadow"
+    assert emitted[-1].decoration_kind == "glow"
+
+    panel._shadow_x_spin.setValue(-7)
+    assert emitted[-1].shadow_before_offset_x == -7
+    assert emitted[-1].shadow_offset_x == 5
+
+    panel._glow_concentration_combo.setCurrentIndex(
+        panel._glow_concentration_combo.findData(-1)
+    )
+    assert emitted[-1].glow_before_concentration_level == -1
+    assert emitted[-1].glow_concentration_level == 0
+
+
+def test_legacy_project_loads_with_decoration_sync_off():
+    """旧工程没有同步开关：默认不同步，但走字前槽位仍跟随走字后。"""
+    payload = style_to_dict(Style())
+    payload.pop("decoration_before_sync", None)
+    payload.pop("decoration_kind_before", None)
+    payload.pop("glow_before_concentration_level", None)
+    payload.pop("shadow_before_offset_x", None)
+    payload.pop("shadow_before_offset_y", None)
+
+    legacy = style_from_dict(payload, legacy_project=True)
+    assert legacy.decoration_before_sync is False
+    assert legacy.decoration_kind_before is None
+
+    fresh = style_from_dict(payload)
+    assert fresh.decoration_before_sync is True
+
+
+def test_zero_glow_width_resolves_to_no_decoration():
+    style = Style(
+        decoration_kind="glow",
+        glow_before_radius_px=0,
+        glow_after_radius_px=0,
+        decoration_before_sync=False,
+    )
+    assert decoration_kind_for_state(style, after=False) == "none"
+    assert decoration_kind_for_state(style, after=True) == "none"
+    assert decoration_kind_for_state(
+        replace(style, glow_after_radius_px=9), after=True
+    ) == "glow"
+
+
+def test_before_and_after_decoration_resolve_independently():
+    style = Style(
+        decoration_kind="glow",
+        decoration_kind_before="shadow",
+        decoration_before_sync=False,
+        shadow_offset_x=7,
+        shadow_before_offset_x=-3,
+        shadow_before_offset_y=9,
+        glow_before_concentration_level=-1,
+        glow_concentration_level=2,
+    )
+    assert decoration_kind_for_state(style, after=False) == "shadow"
+    assert decoration_kind_for_state(style, after=True) == "glow"
+    assert shadow_offset_x(style, after=False) == -3
+    assert shadow_offset_y(style, after=False) == 9
+    assert shadow_offset_x(style, after=True) == 7
+    assert glow_concentration_level(style, after=False) == -1
+    assert glow_concentration_level(style, after=True) == 2
+
+
+def test_ruby_before_decoration_is_independent_when_sync_off(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_before_sync=False,
+            decoration_kind="shadow",
+            ruby_colors_follow_main=False,
+            ruby_decoration_kind="glow",
+            ruby_glow_before_radius_px=4,
+            ruby_glow_after_radius_px=9,
+            ruby_glow_concentration_level=1,
+            ruby_glow_before_concentration_level=2,
+        )
+    )
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("shadow")
+    )
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("before")
+    )
+    assert panel._decoration_type_combo.currentData() == "glow"
+    assert panel._glow_radius_spin.value() == 4
+    assert panel._glow_after_radius_spin.value() == 9
+    assert panel._glow_concentration_combo.currentData() == 2
+
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("none")
+    )
+    assert emitted[-1].ruby_decoration_kind_before == "none"
+    assert emitted[-1].ruby_decoration_kind == "glow"
+    assert emitted[-1].ruby_colors_follow_main is False
 
 
 def test_property_panel_glow_concentration_routes_by_color_subject(qapp):
@@ -7126,6 +7307,7 @@ def test_ruby_subject_displays_scaled_effective_glow_values(qapp):
             font_size_px=100,
             ruby_font_size_px=50,
             decoration_kind="glow",
+            decoration_before_sync=False,
             glow_before_radius_px=20,
             glow_after_radius_px=24,
             glow_concentration_level=2,

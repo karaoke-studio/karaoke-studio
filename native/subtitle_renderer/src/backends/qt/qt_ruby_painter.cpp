@@ -34,8 +34,18 @@ void paintRubyDiagnostics(
     const double scale = rubyScale(style);
     const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
     const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
-    const int shadowOffsetX = scaledSignedPx(style.shadowOffsetX, scale);
-    const int shadowOffsetY = scaledSignedPx(style.shadowOffsetY, scale);
+    const int beforeShadowOffsetX = scaledSignedPx(
+        shadowOffsetXForState(style, false), scale
+    );
+    const int beforeShadowOffsetY = scaledSignedPx(
+        shadowOffsetYForState(style, false), scale
+    );
+    const int afterShadowOffsetX = scaledSignedPx(
+        shadowOffsetXForState(style, true), scale
+    );
+    const int afterShadowOffsetY = scaledSignedPx(
+        shadowOffsetYForState(style, true), scale
+    );
     for (const RubyDiagnostics &ruby : rubies) {
         const RubyLayerImage beforeLayer = cachedRubyTextLayer(
             ruby,
@@ -49,9 +59,10 @@ void paintRubyDiagnostics(
             style,
             strokeWidth,
             stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            scaledPx(glowRadius(style, false), scale)
+            beforeShadowOffsetX,
+            beforeShadowOffsetY,
+            scaledPx(glowRadius(style, false), scale),
+            false
         );
         painter.drawImage(QPointF(ruby.x, ruby.baselineY) + beforeLayer.offset, beforeLayer.image);
         if (ruby.progress <= 0.0) {
@@ -69,9 +80,10 @@ void paintRubyDiagnostics(
             style,
             strokeWidth,
             stroke2Width,
-            shadowOffsetX,
-            shadowOffsetY,
-            scaledPx(glowRadius(style, true), scale)
+            afterShadowOffsetX,
+            afterShadowOffsetY,
+            scaledPx(glowRadius(style, true), scale),
+            true
         );
         painter.save();
         painter.setClipRect(

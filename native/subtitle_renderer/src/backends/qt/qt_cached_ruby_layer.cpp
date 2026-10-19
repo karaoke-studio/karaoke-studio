@@ -32,10 +32,11 @@ RubyLayerImage buildRubyTextLayer(
     int stroke2Width,
     int shadowOffsetX,
     int shadowOffsetY,
-    int glowRadiusValue
+    int glowRadiusValue,
+    bool after
 ) {
     const double strokeExtent = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
-    const double glowExtra = style.decorationKind == QStringLiteral("glow")
+    const double glowExtra = glowRadiusValue > 0
         ? glowExtentForWidths(strokeWidth, stroke2Width, glowRadiusValue)
         : 0.0;
     const int extent = static_cast<int>(std::max({
@@ -98,7 +99,10 @@ RubyLayerImage buildRubyTextLayer(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        glowRadiusValue
+        glowRadiusValue,
+        true,
+        QStringLiteral("ruby"),
+        after
     );
     layerPainter.end();
 
@@ -162,7 +166,8 @@ RubyLayerImage cachedRubyTextLayer(
     int stroke2Width,
     int shadowOffsetX,
     int shadowOffsetY,
-    int glowRadiusValue
+    int glowRadiusValue,
+    bool after
 ) {
     const QString cacheKey = rubyTextLayerCacheKey(
         ruby,
@@ -199,7 +204,8 @@ RubyLayerImage cachedRubyTextLayer(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        glowRadiusValue
+        glowRadiusValue,
+        after
     );
     if (textLayerCacheEnabled()) {
         storeTextLayerCache(cacheKey, TextLayerImage{layer.image, layer.offset});

@@ -561,7 +561,7 @@ class ProjectLoadPlan:
         """Parse one project payload without loading files or touching widgets."""
         source = data if isinstance(data, dict) else {}
         style_payload = source.get("style")
-        style = style_from_dict(style_payload)
+        style = style_from_dict(style_payload, legacy_project=True)
         screen = screen_settings_from_dict(source.get("screen"))
         # Older projects stored resolved pixel sizes without a reference height.
         # Bind those values to the saved canvas before any later screen resize.

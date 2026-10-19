@@ -43,6 +43,9 @@ class _Host:
     def _update_shared_decoration(self, **changes):
         self.decoration_updates.append(changes)
 
+    def _on_decoration_sync_toggled(self, _checked):
+        pass
+
     def _make_solid_fill_page(self):
         return QWidget()
 

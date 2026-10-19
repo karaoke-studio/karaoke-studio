@@ -27,7 +27,8 @@ void paintTextLayerStackWithWidths(
     int strokeWidth, int stroke2Width,
     int shadowOffsetX, int shadowOffsetY, int glowRadiusValue,
     bool drawGlow = true,
-    const QString &glowScope = QStringLiteral("text")
+    const QString &glowScope = QStringLiteral("text"),
+    bool after = true
 );
 TextLayerImage buildTextLayerStackWithWidths(
     const QPainterPath &path, const QRectF &rect,
@@ -37,7 +38,8 @@ TextLayerImage buildTextLayerStackWithWidths(
     const protocol::PaintFillSpec &shadow,
     const protocol::ResolvedStyle &style,
     int strokeWidth, int stroke2Width,
-    int shadowOffsetX, int shadowOffsetY, int glowRadiusValue
+    int shadowOffsetX, int shadowOffsetY, int glowRadiusValue,
+    bool after = true
 );
 
 }  // namespace krok::subtitle::native::legacy_qt

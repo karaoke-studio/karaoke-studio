@@ -138,9 +138,11 @@ void paintTextLayerStackWithWidths(
     int shadowOffsetY,
     int glowRadiusValue,
     bool drawGlow,
-    const QString &glowScope
+    const QString &glowScope,
+    bool after
 ) {
-    if (style.decorationKind == QStringLiteral("glow") && drawGlow) {
+    const QString decorationKind = decorationKindForState(style, after);
+    if (glowRadiusValue > 0 && drawGlow) {
         paintGlowPathWithWidths(
             painter,
             path,
@@ -151,7 +153,7 @@ void paintTextLayerStackWithWidths(
             stroke2Width,
             glowScope
         );
-    } else if (style.decorationKind == QStringLiteral("shadow")
+    } else if (decorationKind == QStringLiteral("shadow")
                && (shadowOffsetX != 0 || shadowOffsetY != 0)) {
         QPainterPath shadowPath(path);
         shadowPath.translate(shadowOffsetX, shadowOffsetY);
@@ -182,14 +184,15 @@ TextLayerImage buildTextLayerStackWithWidths(
     int stroke2Width,
     int shadowOffsetX,
     int shadowOffsetY,
-    int glowRadiusValue
+    int glowRadiusValue,
+    bool after
 ) {
     const QRectF bounds = path.boundingRect().united(rect);
     if (bounds.isEmpty()) {
         return TextLayerImage{};
     }
     const double strokeExtent = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
-    const double glowExtra = style.decorationKind == QStringLiteral("glow")
+    const double glowExtra = glowRadiusValue > 0
         ? glowExtentForWidths(strokeWidth, stroke2Width, glowRadiusValue)
         : 0.0;
     const int extent = static_cast<int>(std::max({
@@ -235,7 +238,10 @@ TextLayerImage buildTextLayerStackWithWidths(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        glowRadiusValue
+        glowRadiusValue,
+        true,
+        QStringLiteral("text"),
+        after
     );
     layerPainter.end();
 

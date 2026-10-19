@@ -686,8 +686,18 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("decoration_kind"))) {
         cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
     }
+    if (hasNonNull(style, QStringLiteral("decoration_kind_before"))) {
+        cfg.decorationKindBefore = stringValue(
+            style, QStringLiteral("decoration_kind_before"), cfg.decorationKindBefore
+        );
+    }
+    if (style.value(QStringLiteral("decoration_before_sync")).isBool()) {
+        cfg.decorationBeforeSync = style.value(
+            QStringLiteral("decoration_before_sync")
+        ).toBool();
+    }
     if (hasNonNull(style, QStringLiteral("glow_radius_px"))) {
-        cfg.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx));
+        cfg.glowRadiusPx = std::max(0, intValue(style, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx));
         if (!hasNonNull(style, QStringLiteral("glow_before_radius_px"))) {
             cfg.glowBeforeRadiusPx = cfg.glowRadiusPx;
         }
@@ -696,10 +706,10 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
         }
     }
     if (hasNonNull(style, QStringLiteral("glow_before_radius_px"))) {
-        cfg.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), cfg.glowBeforeRadiusPx));
+        cfg.glowBeforeRadiusPx = std::max(0, intValue(style, QStringLiteral("glow_before_radius_px"), cfg.glowBeforeRadiusPx));
     }
     if (hasNonNull(style, QStringLiteral("glow_after_radius_px"))) {
-        cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
+        cfg.glowAfterRadiusPx = std::max(0, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
     }
     if (hasNonNull(style, QStringLiteral("allow_biting"))) {
         cfg.allowBiting = style.value(QStringLiteral("allow_biting")).toBool(cfg.allowBiting);
@@ -719,7 +729,18 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("glow_concentration_level"))) {
         cfg.glowConcentrationLevel = std::clamp(
             intValue(style, QStringLiteral("glow_concentration_level"), cfg.glowConcentrationLevel),
-            0,
+            -1,
+            2
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("glow_before_concentration_level"))) {
+        cfg.glowBeforeConcentrationLevel = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("glow_before_concentration_level"),
+                0
+            ),
+            -1,
             2
         );
     }
@@ -728,6 +749,16 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     }
     if (hasNonNull(style, QStringLiteral("shadow_offset_y"))) {
         cfg.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY);
+    }
+    if (hasNonNull(style, QStringLiteral("shadow_before_offset_x"))) {
+        cfg.shadowBeforeOffsetX = intValue(
+            style, QStringLiteral("shadow_before_offset_x"), cfg.shadowOffsetX
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("shadow_before_offset_y"))) {
+        cfg.shadowBeforeOffsetY = intValue(
+            style, QStringLiteral("shadow_before_offset_y"), cfg.shadowOffsetY
+        );
     }
     if (hasNonNull(style, QStringLiteral("ruby_font_size_px"))) {
         cfg.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), cfg.rubyFontSizePx));
@@ -822,6 +853,13 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             style, QStringLiteral("ruby_decoration_kind"), cfg.rubyDecorationKind
         );
     }
+    if (hasNonNull(style, QStringLiteral("ruby_decoration_kind_before"))) {
+        cfg.rubyDecorationKindBefore = stringValue(
+            style,
+            QStringLiteral("ruby_decoration_kind_before"),
+            cfg.rubyDecorationKindBefore
+        );
+    }
     if (hasNonNull(style, QStringLiteral("ruby_glow_radius_px"))) {
         const int radius = std::max(
             0, intValue(style, QStringLiteral("ruby_glow_radius_px"), 0)
@@ -856,7 +894,18 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
                 QStringLiteral("ruby_glow_concentration_level"),
                 0
             ),
-            0,
+            -1,
+            2
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_glow_before_concentration_level"))) {
+        cfg.rubyGlowBeforeConcentrationLevel = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("ruby_glow_before_concentration_level"),
+                0
+            ),
+            -1,
             2
         );
     }
@@ -868,6 +917,20 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("ruby_shadow_offset_y"))) {
         cfg.rubyShadowOffsetY = intValue(
             style, QStringLiteral("ruby_shadow_offset_y"), cfg.shadowOffsetY
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_shadow_before_offset_x"))) {
+        cfg.rubyShadowBeforeOffsetX = intValue(
+            style,
+            QStringLiteral("ruby_shadow_before_offset_x"),
+            cfg.shadowOffsetX
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_shadow_before_offset_y"))) {
+        cfg.rubyShadowBeforeOffsetY = intValue(
+            style,
+            QStringLiteral("ruby_shadow_before_offset_y"),
+            cfg.shadowOffsetY
         );
     }
 }
@@ -1111,21 +1174,60 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         );
     }
     base.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), base.decorationKind);
-    base.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), base.glowRadiusPx));
-    base.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), base.glowBeforeRadiusPx));
-    base.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), base.glowAfterRadiusPx));
+    base.decorationKindBefore = stringValue(
+        style, QStringLiteral("decoration_kind_before"), base.decorationKindBefore
+    );
+    if (style.value(QStringLiteral("decoration_before_sync")).isBool()) {
+        base.decorationBeforeSync = style.value(
+            QStringLiteral("decoration_before_sync")
+        ).toBool();
+    }
+    base.glowRadiusPx = std::max(0, intValue(style, QStringLiteral("glow_radius_px"), base.glowRadiusPx));
+    base.glowBeforeRadiusPx = std::max(0, intValue(style, QStringLiteral("glow_before_radius_px"), base.glowBeforeRadiusPx));
+    base.glowAfterRadiusPx = std::max(0, intValue(style, QStringLiteral("glow_after_radius_px"), base.glowAfterRadiusPx));
     base.glowConcentrationLevel = std::clamp(
         intValue(style, QStringLiteral("glow_concentration_level"), base.glowConcentrationLevel),
-        0,
+        -1,
         2
     );
+    if (style.value(QStringLiteral("glow_before_concentration_level")).isDouble()) {
+        base.glowBeforeConcentrationLevel = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("glow_before_concentration_level"),
+                base.glowConcentrationLevel
+            ),
+            -1,
+            2
+        );
+    }
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
+    if (style.value(QStringLiteral("shadow_before_offset_x")).isDouble()) {
+        base.shadowBeforeOffsetX = style.value(
+            QStringLiteral("shadow_before_offset_x")
+        ).toInt();
+    }
+    if (style.value(QStringLiteral("shadow_before_offset_y")).isDouble()) {
+        base.shadowBeforeOffsetY = style.value(
+            QStringLiteral("shadow_before_offset_y")
+        ).toInt();
+    }
     if (style.value(QStringLiteral("ruby_shadow_offset_x")).isDouble()) {
         base.rubyShadowOffsetX = style.value(QStringLiteral("ruby_shadow_offset_x")).toInt();
     }
     if (style.value(QStringLiteral("ruby_shadow_offset_y")).isDouble()) {
         base.rubyShadowOffsetY = style.value(QStringLiteral("ruby_shadow_offset_y")).toInt();
+    }
+    if (style.value(QStringLiteral("ruby_shadow_before_offset_x")).isDouble()) {
+        base.rubyShadowBeforeOffsetX = style.value(
+            QStringLiteral("ruby_shadow_before_offset_x")
+        ).toInt();
+    }
+    if (style.value(QStringLiteral("ruby_shadow_before_offset_y")).isDouble()) {
+        base.rubyShadowBeforeOffsetY = style.value(
+            QStringLiteral("ruby_shadow_before_offset_y")
+        ).toInt();
     }
     base.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), base.rubyFontSizePx));
     base.rubyFontFamily = stringValue(style, QStringLiteral("ruby_font_family"), base.rubyFontFamily);
@@ -1220,6 +1322,11 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             style, QStringLiteral("ruby_decoration_kind"), QString()
         );
     }
+    if (hasNonNull(style, QStringLiteral("ruby_decoration_kind_before"))) {
+        base.rubyDecorationKindBefore = stringValue(
+            style, QStringLiteral("ruby_decoration_kind_before"), QString()
+        );
+    }
     const int rubyGlowCommon = style.value(QStringLiteral("ruby_glow_radius_px")).isDouble()
         ? std::max(0, intValue(style, QStringLiteral("ruby_glow_radius_px"), 0))
         : -1;
@@ -1239,7 +1346,18 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     }
     if (style.value(QStringLiteral("ruby_glow_concentration_level")).isDouble()) {
         base.rubyGlowConcentrationLevel = std::clamp(
-            intValue(style, QStringLiteral("ruby_glow_concentration_level"), 0), 0, 2
+            intValue(style, QStringLiteral("ruby_glow_concentration_level"), 0), -1, 2
+        );
+    }
+    if (style.value(QStringLiteral("ruby_glow_before_concentration_level")).isDouble()) {
+        base.rubyGlowBeforeConcentrationLevel = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("ruby_glow_before_concentration_level"),
+                0
+            ),
+            -1,
+            2
         );
     }
     cfg.lineYMarginPx = intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx);

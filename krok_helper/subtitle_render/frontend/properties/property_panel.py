@@ -246,12 +246,23 @@ _CUSTOM_SCHEME_PREFIX = "custom:"
 #: ``None`` 表示未设定（渲染时按主文字值 × 注音字号比例回退）。
 _RUBY_DECORATION_SLOTS = {
     "decoration_kind": "ruby_decoration_kind",
+    "decoration_kind_before": "ruby_decoration_kind_before",
     "glow_radius_px": "ruby_glow_radius_px",
     "glow_before_radius_px": "ruby_glow_before_radius_px",
     "glow_after_radius_px": "ruby_glow_after_radius_px",
     "glow_concentration_level": "ruby_glow_concentration_level",
+    "glow_before_concentration_level": "ruby_glow_before_concentration_level",
     "shadow_offset_x": "ruby_shadow_offset_x",
     "shadow_offset_y": "ruby_shadow_offset_y",
+    "shadow_before_offset_x": "ruby_shadow_before_offset_x",
+    "shadow_before_offset_y": "ruby_shadow_before_offset_y",
+}
+#: 主文字装饰字段 → 对应的走字前槽位（用于「同步」路由）。
+_DECORATION_BEFORE_SLOTS = {
+    "decoration_kind": "decoration_kind_before",
+    "glow_concentration_level": "glow_before_concentration_level",
+    "shadow_offset_x": "shadow_before_offset_x",
+    "shadow_offset_y": "shadow_before_offset_y",
 }
 EDIT_COMMIT_DEBOUNCE_MS = 200
 """数值框 / 标题文字「还在连打」的判定窗口。
@@ -2061,21 +2072,54 @@ class PropertyPanel(QWidget):
     ) -> QWidget:
         return self._role_color_page_builder.make_section(parent, inline=inline)
 
+    def _decoration_sync_enabled(self) -> bool:
+        value = self._scheme_value("decoration_before_sync")
+        return True if value is None else bool(value)
+
+    def _route_decoration_changes(self, changes: dict) -> dict:
+        """按当前走字前后把装饰编辑路由到对应槽位。
+
+        「同步」开启时走字前编辑写走字后槽并清空走字前覆盖，使前后一致；
+        关闭时写走字前槽。发光宽度本来就是前后独立槽，不做同步。
+        """
+        state_before = self._current_color_state_key() == "before"
+        synced = self._decoration_sync_enabled()
+        routed: dict[str, object] = {}
+        for field, value in changes.items():
+            if field in {"glow_before_radius_px", "glow_after_radius_px"}:
+                if synced:
+                    routed["glow_before_radius_px"] = value
+                    routed["glow_after_radius_px"] = value
+                else:
+                    routed[field] = value
+                continue
+            before_field = _DECORATION_BEFORE_SLOTS.get(field)
+            if before_field is None:
+                routed[field] = value
+            elif state_before and not synced:
+                routed[before_field] = value
+            else:
+                routed[field] = value
+                if synced:
+                    routed[before_field] = None
+        return routed
+
     def _update_shared_decoration(self, **changes) -> None:
         """装饰编辑按配色主体路由：主文字槽位是权威存储；注音在独立模式
         下写自己的覆盖槽，跟随中编辑则先整卡快照退出跟随（与编辑注音填充
         颜色的行为一致）。"""
+        routed = self._route_decoration_changes(changes)
         if self._current_color_subject_key() == "ruby":
-            self._update_ruby_decoration(**changes)
+            self._update_ruby_decoration(**routed)
             return
-        shared = dict(changes)
+        shared = dict(routed)
         if bool(self._scheme_value("ruby_colors_follow_main")):
             # 跟随中：注音装饰实时读主文字，清掉遗留独立覆盖保持同步。
             shared.update(
                 {
                     ruby_field: None
                     for field, ruby_field in _RUBY_DECORATION_SLOTS.items()
-                    if field in changes
+                    if field in routed
                 }
             )
         self._update_style(**shared)
@@ -2092,6 +2136,88 @@ class PropertyPanel(QWidget):
             }
         )
         self._update_style(**snapshot)
+
+    def _on_decoration_sync_toggled(self, checked: bool) -> None:
+        if self._syncing:
+            return
+        if checked:
+            # 开启同步：清空当前目标的走字前覆盖，前后立即一致（画面由
+            # 走字后槽接管；发光宽度也统一到走字后宽度）。
+            changes: dict[str, object] = {
+                "decoration_before_sync": True,
+                "decoration_kind_before": None,
+                "glow_before_concentration_level": None,
+                "shadow_before_offset_x": None,
+                "shadow_before_offset_y": None,
+                "ruby_decoration_kind_before": None,
+                "ruby_glow_before_concentration_level": None,
+                "ruby_shadow_before_offset_x": None,
+                "ruby_shadow_before_offset_y": None,
+                "glow_before_radius_px": int(
+                    self._scheme_value("glow_after_radius_px")
+                ),
+            }
+            if not bool(self._scheme_value("ruby_colors_follow_main")):
+                changes["ruby_glow_before_radius_px"] = int(
+                    self._effective_ruby_decoration_values(after=True)[
+                        "ruby_glow_after_radius_px"
+                    ]
+                )
+            self._update_style(**changes)
+            return
+        # 关闭同步：把当前生效的走字前值物化到独立槽，外观不跳变。
+        kind = self._scheme_value("decoration_kind_before")
+        kind = (
+            str(kind)
+            if kind is not None
+            else str(self._scheme_value("decoration_kind"))
+        )
+        concentration = self._scheme_value("glow_before_concentration_level")
+        concentration = (
+            int(concentration)
+            if concentration is not None
+            else int(self._scheme_value("glow_concentration_level"))
+        )
+        shadow_x = self._scheme_value("shadow_before_offset_x")
+        shadow_x = (
+            int(shadow_x)
+            if shadow_x is not None
+            else int(self._scheme_value("shadow_offset_x"))
+        )
+        shadow_y = self._scheme_value("shadow_before_offset_y")
+        shadow_y = (
+            int(shadow_y)
+            if shadow_y is not None
+            else int(self._scheme_value("shadow_offset_y"))
+        )
+        changes: dict[str, object] = {
+            "decoration_before_sync": False,
+            "decoration_kind_before": kind,
+            "glow_before_concentration_level": concentration,
+            "shadow_before_offset_x": shadow_x,
+            "shadow_before_offset_y": shadow_y,
+            # 同步期间实际绘制的是走字后宽度；关闭同步时把它物化到走字前，
+            # 外观不跳变。
+            "glow_before_radius_px": int(
+                self._scheme_value("glow_after_radius_px")
+            ),
+        }
+        if not bool(self._scheme_value("ruby_colors_follow_main")):
+            # 注音独立模式：同步物化注音自己的走字前值；跟随模式继续镜像
+            # 主文字，不写入独立槽。
+            before_values = self._effective_ruby_decoration_values(after=False)
+            for field in (
+                "ruby_decoration_kind_before",
+                "ruby_glow_before_concentration_level",
+                "ruby_shadow_before_offset_x",
+                "ruby_shadow_before_offset_y",
+            ):
+                changes[field] = before_values[field]
+            after_values = self._effective_ruby_decoration_values(after=True)
+            changes["ruby_glow_before_radius_px"] = int(
+                after_values["ruby_glow_after_radius_px"]
+            )
+        self._update_style(**changes)
 
     def _make_solid_fill_page(self) -> QWidget:
         return self._role_fill_pages_builder.make_solid_page()
@@ -3809,6 +3935,7 @@ class PropertyPanel(QWidget):
             )
         finally:
             self._color_state_combo.blockSignals(False)
+        self._sync_color_subject_style_controls()
         self._sync_color_fill_controls()
 
     def _on_color_layer_pill_changed(self, layer: str) -> None:
@@ -3819,6 +3946,7 @@ class PropertyPanel(QWidget):
             )
         finally:
             self._color_layer_combo.blockSignals(False)
+        self._sync_color_subject_style_controls()
         self._sync_color_fill_controls()
 
     def _on_color_subject_changed(self) -> None:
@@ -3836,6 +3964,7 @@ class PropertyPanel(QWidget):
             self._color_tab_panel.set_left(self._current_color_state_key())
         if hasattr(self, "_color_layer_pill"):
             self._color_layer_pill.set_current(self._current_color_layer_key())
+        self._sync_color_subject_style_controls()
         self._sync_color_fill_controls()
 
     def _current_color_state_key(self) -> ColorStateKey:
@@ -3903,19 +4032,81 @@ class PropertyPanel(QWidget):
         changes.update(materialize_ruby_decoration_changes(merged))
         return changes
 
-    def _effective_ruby_decoration(self) -> dict[str, object]:
+    def _effective_ruby_decoration_values(self, *, after: bool) -> dict[str, object]:
         """注音装饰的生效值：覆盖槽有值取槽值，否则按渲染回退物化。"""
         merged = style_for_role(self._style, self._current_custom_scheme_name())
-        effective: dict[str, object] = dict(
+        defaults: dict[str, object] = dict(
             materialize_ruby_decoration_changes(merged)
         )
-        for field_name in RUBY_DECORATION_OVERRIDE_FIELDS:
-            if field_name == "ruby_glow_radius_px":
-                continue  # 旧字段只参与回退链，显示用 before/after 槽
+        fields = (
+            (
+                "ruby_decoration_kind",
+                "ruby_glow_before_radius_px",
+                "ruby_glow_after_radius_px",
+                "ruby_glow_concentration_level",
+                "ruby_shadow_offset_x",
+                "ruby_shadow_offset_y",
+            )
+            if after
+            else (
+                "ruby_decoration_kind_before",
+                "ruby_glow_before_radius_px",
+                "ruby_glow_after_radius_px",
+                "ruby_glow_before_concentration_level",
+                "ruby_shadow_before_offset_x",
+                "ruby_shadow_before_offset_y",
+            )
+        )
+        values: dict[str, object] = {}
+        for field_name in fields:
             value = getattr(merged, field_name)
-            if value is not None:
-                effective[field_name] = value
-        return effective
+            if value is None:
+                value = defaults.get(field_name)
+            values[field_name] = value
+        if not after and self._decoration_sync_enabled():
+            # 同步开启时注音走字前整组跟随走字后（含发光宽度）。
+            after_values = self._effective_ruby_decoration_values(after=True)
+            values["ruby_decoration_kind_before"] = after_values[
+                "ruby_decoration_kind"
+            ]
+            values["ruby_glow_before_radius_px"] = after_values[
+                "ruby_glow_after_radius_px"
+            ]
+            values["ruby_glow_before_concentration_level"] = after_values[
+                "ruby_glow_concentration_level"
+            ]
+            values["ruby_shadow_before_offset_x"] = after_values[
+                "ruby_shadow_offset_x"
+            ]
+            values["ruby_shadow_before_offset_y"] = after_values[
+                "ruby_shadow_offset_y"
+            ]
+        return values
+
+    def _effective_ruby_decoration(self) -> dict[str, object]:
+        """兼容旧调用：返回走字后注音装饰的生效值。"""
+        values = self._effective_ruby_decoration_values(after=True)
+        before_values = self._effective_ruby_decoration_values(after=False)
+        values.update(
+            {
+                "ruby_decoration_kind_before": before_values[
+                    "ruby_decoration_kind_before"
+                ],
+                "ruby_glow_before_radius_px": before_values[
+                    "ruby_glow_before_radius_px"
+                ],
+                "ruby_glow_before_concentration_level": before_values[
+                    "ruby_glow_before_concentration_level"
+                ],
+                "ruby_shadow_before_offset_x": before_values[
+                    "ruby_shadow_before_offset_x"
+                ],
+                "ruby_shadow_before_offset_y": before_values[
+                    "ruby_shadow_before_offset_y"
+                ],
+            }
+        )
+        return values
 
     def _current_paint_fill(self) -> PaintFill:
         colors = self._current_editing_karaoke_colors()
@@ -3994,44 +4185,108 @@ class PropertyPanel(QWidget):
         if not hasattr(self, "_decoration_type_field"):
             return
         is_decoration = self._current_color_layer_key() == "shadow"
+        after = self._current_color_state_key() == "after"
         if self._current_color_subject_key() == "ruby":
-            kind = self._scheme_value("ruby_decoration_kind")
+            values = self._effective_ruby_decoration_values(after=after)
             decoration_kind = str(
-                kind if kind is not None else self._scheme_value("decoration_kind")
+                values[
+                    "ruby_decoration_kind"
+                    if after
+                    else "ruby_decoration_kind_before"
+                ]
             )
         else:
-            decoration_kind = str(self._scheme_value("decoration_kind"))
+            kind = (
+                self._scheme_value("decoration_kind")
+                if after
+                else self._scheme_value("decoration_kind_before")
+            )
+            if kind is None:
+                kind = self._scheme_value("decoration_kind")
+            decoration_kind = str(kind)
         is_shadow = decoration_kind == "shadow"
         is_glow = decoration_kind == "glow"
         self._decoration_type_field.setVisible(is_decoration)
+        if hasattr(self, "_decoration_sync_check"):
+            self._decoration_sync_check.setVisible(is_decoration and not after)
         self._shadow_x_field.setVisible(is_decoration and is_shadow)
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
         self._glow_controls_row.setVisible(is_decoration and is_glow)
-        self._glow_radius_field.setVisible(is_decoration and is_glow)
-        self._glow_after_radius_field.setVisible(is_decoration and is_glow)
+        self._glow_radius_field.setVisible(
+            is_decoration and is_glow and not after
+        )
+        self._glow_after_radius_field.setVisible(
+            is_decoration and is_glow and after
+        )
         self._glow_concentration_field.setVisible(is_decoration and is_glow)
 
     def _sync_color_subject_style_controls(self) -> None:
         if not hasattr(self, "_decoration_type_combo"):
             return
+        after = self._current_color_state_key() == "after"
         was_syncing = self._syncing
         self._syncing = True
         try:
             if self._current_color_subject_key() == "ruby":
-                values = self._effective_ruby_decoration()
-                kind = str(values["ruby_decoration_kind"])
-                shadow_x = int(values["ruby_shadow_offset_x"])
-                shadow_y = int(values["ruby_shadow_offset_y"])
-                glow_before = int(values["ruby_glow_before_radius_px"])
-                glow_after = int(values["ruby_glow_after_radius_px"])
-                concentration = int(values["ruby_glow_concentration_level"])
+                values = self._effective_ruby_decoration_values(after=after)
+                if after:
+                    kind = str(values["ruby_decoration_kind"])
+                    shadow_x = int(values["ruby_shadow_offset_x"])
+                    shadow_y = int(values["ruby_shadow_offset_y"])
+                    glow_before = int(values["ruby_glow_before_radius_px"])
+                    glow_after = int(values["ruby_glow_after_radius_px"])
+                    concentration = int(
+                        values["ruby_glow_concentration_level"]
+                    )
+                else:
+                    kind = str(values["ruby_decoration_kind_before"])
+                    shadow_x = int(values["ruby_shadow_before_offset_x"])
+                    shadow_y = int(values["ruby_shadow_before_offset_y"])
+                    glow_before = int(values["ruby_glow_before_radius_px"])
+                    glow_after = int(values["ruby_glow_after_radius_px"])
+                    concentration = int(
+                        values["ruby_glow_before_concentration_level"]
+                    )
             else:
-                kind = str(self._scheme_value("decoration_kind"))
-                shadow_x = int(self._scheme_value("shadow_offset_x"))
-                shadow_y = int(self._scheme_value("shadow_offset_y"))
+                kind_after = str(self._scheme_value("decoration_kind"))
+                if after:
+                    kind = kind_after
+                    shadow_x = int(self._scheme_value("shadow_offset_x"))
+                    shadow_y = int(self._scheme_value("shadow_offset_y"))
+                    concentration = int(
+                        self._scheme_value("glow_concentration_level")
+                    )
+                else:
+                    kind_before = self._scheme_value("decoration_kind_before")
+                    kind = (
+                        str(kind_before)
+                        if kind_before is not None
+                        else kind_after
+                    )
+                    before_x = self._scheme_value("shadow_before_offset_x")
+                    shadow_x = int(
+                        before_x
+                        if before_x is not None
+                        else self._scheme_value("shadow_offset_x")
+                    )
+                    before_y = self._scheme_value("shadow_before_offset_y")
+                    shadow_y = int(
+                        before_y
+                        if before_y is not None
+                        else self._scheme_value("shadow_offset_y")
+                    )
+                    before_concentration = self._scheme_value(
+                        "glow_before_concentration_level"
+                    )
+                    concentration = int(
+                        before_concentration
+                        if before_concentration is not None
+                        else self._scheme_value("glow_concentration_level")
+                    )
                 glow_before = int(self._scheme_value("glow_before_radius_px"))
                 glow_after = int(self._scheme_value("glow_after_radius_px"))
-                concentration = int(self._scheme_value("glow_concentration_level"))
+            if self._decoration_sync_enabled():
+                glow_before = glow_after
             self._decoration_type_combo.setCurrentIndex(
                 max(0, self._decoration_type_combo.findData(kind))
             )
@@ -4045,6 +4300,14 @@ class PropertyPanel(QWidget):
             )
             self._shadow_x_spin.setValue(shadow_x)
             self._shadow_y_spin.setValue(shadow_y)
+            if hasattr(self, "_decoration_sync_check"):
+                self._decoration_sync_check.blockSignals(True)
+                try:
+                    self._decoration_sync_check.setChecked(
+                        self._decoration_sync_enabled()
+                    )
+                finally:
+                    self._decoration_sync_check.blockSignals(False)
             self._sync_decoration_visibility()
         finally:
             self._syncing = was_syncing

@@ -5840,6 +5840,44 @@ def test_zero_glow_radius_removes_glow_from_corresponding_state(
     assert _pixel_hash(actual) == _pixel_hash(expected)
 
 
+def test_before_and_after_decoration_kinds_render_independently(qapp):
+    """同步关闭时，四张卡的装饰类型互不影响：改走字前不改走字后，反之亦然。"""
+    base = Style(
+        decoration_kind="glow",
+        decoration_kind_before="glow",
+        decoration_before_sync=False,
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        line_y_position="center",
+    )
+    before_shadow = replace(
+        base,
+        decoration_kind_before="shadow",
+        shadow_before_offset_y=10,
+    )
+    after_shadow = replace(
+        base,
+        decoration_kind="shadow",
+        shadow_offset_y=10,
+    )
+    frames = {}
+    for name, style in (
+        ("base", base),
+        ("before_shadow", before_shadow),
+        ("after_shadow", after_shadow),
+    ):
+        before_img = _blank()
+        after_img = _blank()
+        paint_frame(before_img, _track(), 500, style)
+        paint_frame(after_img, _track(), 3000, style)
+        frames[name] = (before_img, after_img)
+
+    assert _pixel_hash(frames["base"][0]) != _pixel_hash(frames["before_shadow"][0])
+    assert _pixel_hash(frames["base"][1]) == _pixel_hash(frames["before_shadow"][1])
+    assert _pixel_hash(frames["base"][1]) != _pixel_hash(frames["after_shadow"][1])
+    assert _pixel_hash(frames["base"][0]) == _pixel_hash(frames["after_shadow"][0])
+
+
 def test_glow_before_and_after_radii_are_independent_of_legacy_field():
     style = Style(
         glow_radius_px=99,

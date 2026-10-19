@@ -632,6 +632,7 @@ _PAINT_ONLY_STYLE_FIELDS: frozenset[str] = frozenset({
     "volume_column_spacing", "volume_align", "volume_ratio", "volume_stroke_width",
     "volume_opacity_pct", "volume_flash_times", "volume_flash_duration_ratio",
     "volume_transition_ratio_pct",
+    "decoration_before_sync",
 })
 _PAINT_ONLY_SCHEME_FIELDS: frozenset[str] = frozenset({
     "base_color", "fill_color", "fill_gradient_enabled", "fill_gradient_start_color",
@@ -642,11 +643,15 @@ _PAINT_ONLY_SCHEME_FIELDS: frozenset[str] = frozenset({
     # path 测量（``_display_line_horizontal_ink_rect`` ——Ruby、描边、
     # 阴影、发光全部刻意排除），装饰参数不是布局输入。
     "decoration_kind", "shadow_offset_x", "shadow_offset_y",
+    "decoration_kind_before", "decoration_before_sync",
+    "shadow_before_offset_x", "shadow_before_offset_y",
     "glow_radius_px", "glow_before_radius_px", "glow_after_radius_px",
-    "glow_concentration_level",
+    "glow_concentration_level", "glow_before_concentration_level",
     "ruby_decoration_kind", "ruby_shadow_offset_x", "ruby_shadow_offset_y",
+    "ruby_decoration_kind_before", "ruby_shadow_before_offset_x",
+    "ruby_shadow_before_offset_y",
     "ruby_glow_radius_px", "ruby_glow_before_radius_px", "ruby_glow_after_radius_px",
-    "ruby_glow_concentration_level",
+    "ruby_glow_concentration_level", "ruby_glow_before_concentration_level",
 })
 
 

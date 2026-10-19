@@ -184,11 +184,27 @@ void applyGpuResolvedStyle(
         target.latinStroke2Width = static_cast<float>(latinStroke2Px * scale);
     }
     target.decorationKind = source.decorationKind.toStdString();
+    target.decorationKindBefore = source.decorationKindBefore.isEmpty()
+        ? target.decorationKind
+        : source.decorationKindBefore.toStdString();
+    target.decorationBeforeSync = source.decorationBeforeSync;
     target.glowBeforeRadius = static_cast<float>(source.glowBeforeRadiusPx * scale);
     target.glowAfterRadius = static_cast<float>(source.glowAfterRadiusPx * scale);
     target.glowConcentrationLevel = source.glowConcentrationLevel;
+    target.glowBeforeConcentrationLevel =
+        source.glowBeforeConcentrationLevel.value_or(
+            source.glowConcentrationLevel
+        );
+    const int beforeShadowX = source.shadowBeforeOffsetX.value_or(
+        source.shadowOffsetX
+    );
+    const int beforeShadowY = source.shadowBeforeOffsetY.value_or(
+        source.shadowOffsetY
+    );
     target.shadowOffsetX = static_cast<float>(source.shadowOffsetX * scale);
     target.shadowOffsetY = static_cast<float>(source.shadowOffsetY * scale);
+    target.shadowBeforeOffsetX = static_cast<float>(beforeShadowX * scale);
+    target.shadowBeforeOffsetY = static_cast<float>(beforeShadowY * scale);
     // 扫字线参数：随布局缩放；颜色走纯色画刷（gpuColor 的 paint/fallback 同源）。
     target.scanlineWidth = static_cast<float>(
         std::max(source.scanlineWidthPx, 1) * scale
@@ -352,9 +368,17 @@ void applyGpuResolvedStyle(
             ? source.decorationKind
             : source.rubyDecorationKind
     ).toStdString();
+    target.rubyDecorationKindBefore = source.rubyDecorationKindBefore.isEmpty()
+        ? (source.rubyDecorationKind.isEmpty()
+            ? target.decorationKindBefore
+            : source.rubyDecorationKind.toStdString())
+        : source.rubyDecorationKindBefore.toStdString();
     target.rubyGlowBeforeRadius = static_cast<float>(
-        source.rubyGlowBeforeRadiusPx.value_or(scaledFromMain(source.glowBeforeRadiusPx))
-        * scale
+        source.rubyGlowBeforeRadiusPx.value_or(
+            source.rubyGlowAfterRadiusPx.value_or(
+                scaledFromMain(source.glowBeforeRadiusPx)
+            )
+        ) * scale
     );
     target.rubyGlowAfterRadius = static_cast<float>(
         source.rubyGlowAfterRadiusPx.value_or(scaledFromMain(source.glowAfterRadiusPx))
@@ -363,11 +387,29 @@ void applyGpuResolvedStyle(
     target.rubyGlowConcentrationLevel = source.rubyGlowConcentrationLevel.value_or(
         source.glowConcentrationLevel
     );
+    target.rubyGlowBeforeConcentrationLevel =
+        source.rubyGlowBeforeConcentrationLevel.value_or(
+            source.rubyGlowConcentrationLevel.value_or(
+                source.glowBeforeConcentrationLevel.value_or(
+                    source.glowConcentrationLevel
+                )
+            )
+        );
     target.rubyShadowOffsetX = static_cast<float>(
         source.rubyShadowOffsetX.value_or(source.shadowOffsetX) * scale
     );
     target.rubyShadowOffsetY = static_cast<float>(
         source.rubyShadowOffsetY.value_or(source.shadowOffsetY) * scale
+    );
+    target.rubyShadowBeforeOffsetX = static_cast<float>(
+        source.rubyShadowBeforeOffsetX.value_or(
+            source.rubyShadowOffsetX.value_or(beforeShadowX)
+        ) * scale
+    );
+    target.rubyShadowBeforeOffsetY = static_cast<float>(
+        source.rubyShadowBeforeOffsetY.value_or(
+            source.rubyShadowOffsetY.value_or(beforeShadowY)
+        ) * scale
     );
     target.litEnabled = source.litEnabled;
     target.litStyle = source.litStyle.toStdString();
