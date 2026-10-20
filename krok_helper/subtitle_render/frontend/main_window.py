@@ -4983,9 +4983,30 @@ class SubtitleRenderWindow(QWidget):
             return False
         style = style_from_dict(payload)
         previous = self._style
+        # 撤销/重做会把方案表整体换回旧快照，但角色注册表不在快照里。
+        # 按方案表键差补删注册项：新建撤销后不留幽灵角色，删除撤销后
+        # 导航 / 歌词角色下拉也能重新看到恢复出来的角色。
+        current_schemes = set(previous.custom_style_schemes)
+        restored_schemes = set(style.custom_style_schemes)
+        self._property_panel.apply_role_registry_delta(
+            added=[
+                name
+                for name in style.custom_style_schemes
+                if name in restored_schemes - current_schemes
+                and name != TITLE_SCHEME_NAME
+            ],
+            removed=[
+                name
+                for name in previous.custom_style_schemes
+                if name in current_schemes - restored_schemes
+                and name != TITLE_SCHEME_NAME
+            ],
+        )
         self._style = style
         self._remember_style_preferences(previous, style)
         self._property_panel.set_style(style)
+        self._selected_scheme_key = self._property_panel.current_scheme_key()
+        self._lyrics_panel.set_role_options(self._merged_role_options())
         # 撤销/重做属于外部灌入：显式 sticky FULL，防抖窗口内后续局部
         # mark 不得把它掩盖成局部刷新。
         self._property_panel.mark_style_relayout_full()

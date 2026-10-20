@@ -11,7 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 import math
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from PyQt6.QtCore import (
     QEvent,
@@ -1072,6 +1072,27 @@ class PropertyPanel(QWidget):
     def set_project_generation(self, generation: int) -> None:
         """记录当前编辑的工程代号（宿主切换工程时推进）。"""
         self._project_generation = int(generation)
+
+    def apply_role_registry_delta(
+        self,
+        *,
+        added: Sequence[str] = (),
+        removed: Sequence[str] = (),
+    ) -> None:
+        """按方案表差异补删角色注册项（撤销/重做角色方案编辑时用）。
+
+        角色方案表的键只在新建 / 改名 / 删除 / 导入时变化；撤销这类操作
+        时方案表已经回到旧状态，但注册表还停在操作后的状态。按「新出现的
+        方案 → 补注册、消失的方案 → 注销」对齐，就能让导航下拉与内容引用
+        重新一致。调用方随后负责 `set_style` 重建控件。
+        """
+        previous = self._role_controller.names
+        for name in removed:
+            self._role_controller.remove(name)
+        for name in added:
+            self._role_controller.add(name)
+        if self._role_controller.names != previous:
+            self.rolesChanged.emit(self._role_controller.names)
 
     def set_preset_schemes(
         self, schemes: dict[str, StylePreset | SubtitleStyleScheme]

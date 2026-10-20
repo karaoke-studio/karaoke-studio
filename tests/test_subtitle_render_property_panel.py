@@ -8080,6 +8080,56 @@ def test_merge_roles_refreshes_title_card_scheme_combo(qapp):
     assert combo.findData("自动角色") >= 0
 
 
+def test_undoing_role_creation_and_deletion_reconciles_the_role_registry(
+    qapp, monkeypatch
+):
+    """撤销新建不留幽灵角色；撤销删除要把角色重新登记回导航与下拉。"""
+
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    win = mw.SubtitleRenderWindow(
+        embedded=True,
+        settings_provider=_FontMigrationSettingsProvider(
+            {"style": style_to_dict(Style())}
+        ),
+    )
+    panel = win._property_panel
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("主", 0)], end_ms=1_000)]
+    )
+    win._apply_timing_track(track, None)
+    win._undo_stack.clear()
+
+    panel._add_custom_scheme("角色A")
+    win._undo_edit()
+
+    assert "角色A" not in win._style.custom_style_schemes
+    assert panel.role_names == []
+    assert panel._singer_combo.findData("custom:角色A") == -1
+    assert win._selected_scheme_key == "global"
+
+    # 重新建角色并分配给歌词，等过样式撤销合并窗口后再删。
+    panel._add_custom_scheme("角色A")
+    win._lyrics_panel.roleChangeRequested.emit([0], "角色A")
+    time.sleep(1.3)
+    panel._confirm_role_deletion = lambda name: True
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
+    panel._delete_current_role()
+    assert panel.role_names == []
+    assert "角色A" not in win._style.custom_style_schemes
+
+    win._undo_edit()
+    assert "角色A" in win._style.custom_style_schemes
+    assert panel.role_names == ["角色A"]
+    assert panel._singer_combo.findData("custom:角色A") >= 0
+    assert "角色A" in win._merged_role_options()
+    assert win._timing_track.lines[0].chars[0].role_label == "角色A"
+
+    win._redo_edit()
+    assert panel.role_names == []
+    assert panel._singer_combo.findData("custom:角色A") == -1
+
+
 def test_property_panel_auto_created_role_scheme_is_not_saved_as_preset(qapp):
     panel = PropertyPanel()
 
