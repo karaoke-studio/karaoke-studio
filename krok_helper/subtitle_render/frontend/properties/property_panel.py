@@ -1489,11 +1489,18 @@ class PropertyPanel(QWidget):
 
     def _sync_role_registry(self, previous: list[str]) -> None:
         """Refresh role-backed controls and publish one model change."""
+        scheme_names_before = set(self._style.custom_style_schemes)
         self._ensure_role_schemes()
         current_key = self._current_scheme_key()
+        schemes_changed = set(self._style.custom_style_schemes) != scheme_names_before
         self._syncing = True
         try:
             self._refresh_scheme_combo(current_key)
+            if schemes_changed:
+                # 自动物化（导入 / 逐字编辑器「＋新建角色」）不经过
+                # _update_style：标题卡片的「基础配色方案」下拉要在这里
+                # 一并重建，否则新角色只出现在角色导航里。
+                self._sync_title_controls()
         finally:
             self._syncing = False
         self._sync_subtitle_scheme_controls()
@@ -4566,6 +4573,9 @@ class PropertyPanel(QWidget):
             self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{name}")
         finally:
             self._syncing = False
+        # 刷新下拉时屏蔽了 currentIndexChanged；补发选择变化，让宿主把
+        # _selected_scheme_key 记成新角色（工程 / 应用偏好下次打开仍停在这里）。
+        self.schemeSelectionChanged.emit(self.current_scheme_key())
         self._sync_subtitle_scheme_controls()
 
     def _open_preset_manager(self) -> None:
@@ -4928,6 +4938,8 @@ class PropertyPanel(QWidget):
             self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{new}")
         finally:
             self._syncing = False
+        # 与新建同一口径：把宿主的选中目标从 custom:旧名 改到 custom:新名。
+        self.schemeSelectionChanged.emit(self.current_scheme_key())
         self._sync_subtitle_scheme_controls()
 
     def _delete_current_role(self) -> None:

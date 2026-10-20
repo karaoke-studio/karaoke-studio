@@ -8037,6 +8037,49 @@ def test_property_panel_delete_role_recovers_when_style_update_is_gated(qapp):
     assert "角色A 2" not in panel.subtitle_style.custom_style_schemes
 
 
+def test_creating_or_renaming_a_role_updates_the_host_selected_scheme(
+    qapp, monkeypatch
+):
+    """新建 / 改名后宿主记住的选中方案必须跟着面板走（写进工程）。"""
+
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    panel = win._property_panel
+    assert win._selected_scheme_key == "global"
+
+    panel._add_custom_scheme("角色A")
+    assert win._selected_scheme_key == "custom:角色A"
+    # 应用级偏好只记 global / 标题（角色属于工程），工程快照才记角色目标。
+    assert win._current_project_data()["selected_scheme_key"] == "custom:角色A"
+
+    monkeypatch.setattr(
+        pp, "fluent_get_text", lambda *a, **k: ("角色B", True)
+    )
+    panel._rename_current_role()
+    assert win._selected_scheme_key == "custom:角色B"
+    assert win._current_project_data()["selected_scheme_key"] == "custom:角色B"
+
+
+def test_merge_roles_refreshes_title_card_scheme_combo(qapp):
+    """自动物化的角色也要出现在标题卡片的「基础配色方案」下拉里。"""
+
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            title_overlays=[
+                TitleOverlay(enabled=True, name="标题", text_template="AB")
+            ]
+        )
+    )
+    combo = panel._title_cards[0].scheme_combo
+    assert combo.findData("自动角色") < 0
+
+    panel.merge_roles(["自动角色"])
+
+    assert combo.findData("自动角色") >= 0
+
+
 def test_property_panel_auto_created_role_scheme_is_not_saved_as_preset(qapp):
     panel = PropertyPanel()
 
