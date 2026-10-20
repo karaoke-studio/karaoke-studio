@@ -5234,6 +5234,52 @@ def test_color_dialog_alpha_slider_is_visible_and_updates_color(qapp):
     dialog.close()
 
 
+def test_shared_color_dialog_is_owned_by_requesting_window_on_every_open(
+    qapp, monkeypatch
+):
+    host = QWidget()
+    host.resize(640, 480)
+    host.show()
+    qapp.processEvents()
+
+    color_controls_module.prewarm_color_dialog()
+    dialog = color_controls_module._shared_color_dialog
+    opened_with: list[QWidget | None] = []
+
+    def fake_exec(self):
+        opened_with.append(self.parentWidget())
+        return int(QDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(_ColorDialog, "exec", fake_exec)
+    result = color_controls_module._select_color(
+        QColor("#4093E9"), host, "选择颜色"
+    )
+
+    assert not result.isValid()
+    # 打开时必须挂在调用方的顶层窗口上：Windows 靠所有者关系把对话框
+    # 压在父窗口之上，无主顶层窗口可能出现在主窗口后面。
+    assert opened_with == [host]
+    # 关闭后释放所有者，缓存实例不会随窗口销毁而失效。
+    assert dialog.parentWidget() is None
+    host.close()
+
+
+def test_color_dialog_brings_itself_to_front_each_time_it_is_shown(qapp):
+    dialog = _ColorDialog(QColor("#4093E9"))
+    calls: list[str] = []
+    dialog.raise_ = lambda: calls.append("raise")
+    dialog.activateWindow = lambda: calls.append("activate")
+
+    dialog.show()
+    QTest.qWait(10)
+
+    # 显示时立即抬一次，事件循环起来后再抬一次，避免主窗口随后把桌面
+    # 焦点抢回去、调色板留在主窗口后面。
+    assert calls.count("raise") >= 2
+    assert calls.count("activate") >= 2
+    dialog.close()
+
+
 def test_property_panel_fill_modes_use_compact_svg_icon_buttons(qapp):
     panel = PropertyPanel()
     expected_labels = {

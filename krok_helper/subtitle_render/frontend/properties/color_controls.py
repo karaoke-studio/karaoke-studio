@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from PyQt6 import sip
 from PyQt6.QtCore import QPoint, QPointF, QRect, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import (
     QColor,
@@ -670,9 +671,18 @@ class _ColorDialog(QColorDialog):
         self._alpha_slider.show()
         self._alpha_slider.raise_()
 
+    def _ensure_active(self) -> None:
+        self.raise_()
+        self.activateWindow()
+
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self._position_alpha_slider()
+        # 共享对话框会被反复 hide/exec，Windows 不保证重新显示的顶层窗口
+        # 一定压住刚点过的那扇主窗口。显示时先抬一次，等事件循环跑起来再
+        # 抬一次，保证每次点开调色板都出现在最前面（不改全局置顶）。
+        self._ensure_active()
+        QTimer.singleShot(0, self._ensure_active)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -683,6 +693,14 @@ class _ColorDialog(QColorDialog):
 _shared_color_dialog: Optional[_ColorDialog] = None
 
 
+def _alive_color_dialog() -> Optional[_ColorDialog]:
+    """Return the cached dialog unless Qt already destroyed its C++ object."""
+    dialog = _shared_color_dialog
+    if dialog is None or sip.isdeleted(dialog):
+        return None
+    return dialog
+
+
 def prewarm_color_dialog() -> None:
     """Build the shared color dialog ahead of the first click.
 
@@ -691,13 +709,45 @@ def prewarm_color_dialog() -> None:
     off the first color click entirely.
     """
     global _shared_color_dialog
-    if _shared_color_dialog is not None:
+    if _alive_color_dialog() is not None:
         return
     dialog = _ColorDialog(QColor("#FFFFFF"))
     # sizeHint() forces the internal layout pass so the later exec() only
     # needs to show the already-built widget tree.
     dialog.sizeHint()
     _shared_color_dialog = dialog
+
+
+def _adopt_color_dialog_owner(
+    dialog: _ColorDialog, parent: Optional[QWidget]
+) -> None:
+    """Make the cached dialog transient for the window it is opened from.
+
+    Windows only keeps a dialog above the window that owns it. The shared
+    instance used to be shown without any owner, so it could come up behind
+    the main window; re-own it on every open because it outlives the panel
+    (and may be opened from a different top-level window next time).
+    """
+    anchor = parent.window() if parent is not None else None
+    if anchor is None or dialog.parentWidget() is anchor:
+        return
+    dialog.setParent(anchor, dialog.windowFlags())
+
+
+def _release_color_dialog_owner(dialog: _ColorDialog) -> None:
+    """Detach the cached dialog so a closed window cannot take it with it.
+
+    The dialog is reused across panels. Keeping the owner between opens would
+    let Qt destroy the cached instance together with that window and leave
+    the module-level cache pointing at a dead C++ object.
+    """
+    try:
+        if dialog.parentWidget() is None:
+            return
+        dialog.setParent(None, dialog.windowFlags())
+    except RuntimeError:
+        # exec() 期间父窗口被销毁时，对话框也已经被 Qt 连带删除了。
+        pass
 
 
 def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
@@ -708,14 +758,18 @@ def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
     every click puts that cost right on the click itself.
     """
     global _shared_color_dialog
-    dialog = _shared_color_dialog
+    dialog = _alive_color_dialog()
     if dialog is None:
-        dialog = _ColorDialog(current)
+        dialog = _ColorDialog(current, parent)
         _shared_color_dialog = dialog
+    _adopt_color_dialog_owner(dialog, parent)
     dialog.setWindowTitle(title)
     dialog.setCurrentColor(current)
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        return QColor()
-    return dialog.selectedColor()
+    try:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return QColor()
+        return dialog.selectedColor()
+    finally:
+        _release_color_dialog_owner(dialog)
 
 
