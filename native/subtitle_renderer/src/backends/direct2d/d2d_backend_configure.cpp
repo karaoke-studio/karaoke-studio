@@ -1340,13 +1340,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 layoutWidth = std::max(layoutWidth, 1.0f) * layoutScale;
             } else if (charHasBounds) {
                 std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
-                // N3 deliberately asks the originally requested face for
-                // ordinary fallback metrics. Emoji glyph IDs belong to the
-                // Symbol face, however, so querying them on the requested face
-                // produces unrelated widths (or E_INVALIDARG).
-                IDWriteFontFace *metricFace = containsEmoji(sourceChar.text)
-                    ? outlineFace.Get()
-                    : requestedFace.Get();
+                // Glyph IDs are local to the outline face. Querying fallback
+                // IDs on the requested face gives unrelated bearings/advances
+                // and can push an otherwise valid line outside the viewport.
+                IDWriteFontFace *metricFace = outlineFace.Get();
                 checkHr(
                     metricFace->GetDesignGlyphMetrics(
                         glyphs.data(),

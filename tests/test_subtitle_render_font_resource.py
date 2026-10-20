@@ -28,7 +28,7 @@ from krok_helper.subtitle_render.engine.text.font_weight import (
 )
 from krok_helper.subtitle_render.engine.text.font_capabilities import get_capabilities
 from krok_helper.subtitle_render.engine.text.font_fallback import (
-    prewarm_fallback, lookup_fallback_instance,
+    prewarm_fallback, lookup_fallback_instance, clear_font_caches,
 )
 from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
 samples = [
@@ -64,6 +64,16 @@ apply_resolved_font_faces(payload)
 prewarm_fallback("Arial", 400, False, ["한"])
 fallback = lookup_fallback_instance("Arial", 400, False, "한")
 fallback_covered = bool(fallback and all(QRawFont(fallback.resource_path, 64).glyphIndexesForString("한")))
+shared_fallback = []
+for texts in (["한", "한A", "한한"], ["한한", "한A", "한"]):
+    clear_font_caches()
+    count = prewarm_fallback("Arial", 400, False, texts)
+    instances = [lookup_fallback_instance("Arial", 400, False, text) for text in texts]
+    shared_fallback.append({
+        "count": count,
+        "covered": all(instance and all(QRawFont(instance.resource_path, 64)
+                       .glyphIndexesForString(text)) for instance, text in zip(instances, texts)),
+    })
 
 # Main, Latin/digit and ruby slots must render identically for both spellings.
 sys.path.insert(0, str(Path.cwd() / "tests"))
@@ -71,6 +81,7 @@ from test_subtitle_render_gpu_backend import _render_g1_frames, _g1_style
 from krok_helper.subtitle_render.native.backend import NativeRendererProcess, resolve_native_renderer_path
 from krok_helper.subtitle_render.domain.models import TimingTrack, TimingLine, TimingChar, RubyAnnotation
 gpu = []
+fallback_gpu = []
 if resolve_native_renderer_path() is not None:
     for alias, canonical, text in (samples[0], samples[3], samples[5]):
         if not get_capabilities(canonical):
@@ -93,9 +104,40 @@ if resolve_native_renderer_path() is not None:
                 frames.append(rendered)
         gpu.append({"alias": alias, "equal": frames[0] == frames[1],
                     "nonempty": any(frames[0][0][3::4])})
+    # Supply an explicit fallback face, as the protocol does after Qt resolves
+    # a missing glyph. Its glyph IDs must never be measured on Tahoma.
+    import krok_helper.subtitle_render.native.protocol as protocol
+    original_fallbacks = protocol._line_char_fallbacks
+    try:
+        for family, text in (("UD Digi Kyokasho NP-B", "例え運命が真逆に"),
+                             ("Malgun Gothic", "한글노래")):
+            if not get_capabilities(family):
+                continue
+            protocol._line_char_fallbacks = lambda style, line: [
+                {"family": family, "hint": {}} for ch in line.chars]
+            track = TimingTrack(lines=[TimingLine(
+                chars=[TimingChar(c, i * 100) for i, c in enumerate(text)], end_ms=5000)])
+            frames = []
+            for requested in ("Tahoma", family):
+                style = _g1_style(font_family=requested, font_family_latin=requested,
+                    font_size_px=40, stroke_width_px=0, stroke2_enabled=False,
+                    decoration_kind="none", custom_style_schemes={})
+                with NativeRendererProcess(response_timeout_s=60) as renderer:
+                    _, rendered = _render_g1_frames(renderer, style, (2000,),
+                        force_warp=True, track=track, width=1920)
+                    frames.append(rendered[0])
+            # Baseline metrics may differ vertically by requested font; compare
+            # occupied columns to check advances and horizontal clipping.
+            columns = [sorted({i % 1920 for i, a in enumerate(frame[3::4]) if a > 128})
+                       for frame in frames]
+            fallback_gpu.append({"family": family, "equal": columns[0] == columns[1],
+                                 "nonempty": bool(columns[0])})
+    finally:
+        protocol._line_char_fallbacks = original_fallbacks
 print(json.dumps({"samples": results, "missing_resource": missing.resource_path,
                   "missing_hint": "font_resolved" in payload,
-                  "fallback_covered": fallback_covered, "gpu": gpu}))
+                  "fallback_covered": fallback_covered, "gpu": gpu,
+                  "shared_fallback": shared_fallback, "fallback_gpu": fallback_gpu}))
 '''
     env = dict(os.environ, QT_QPA_PLATFORM="windows", PYTHONPATH=str(root),
                PYTHONIOENCODING="utf-8")
@@ -122,6 +164,20 @@ def test_missing_font_does_not_pin_unrelated_default_resource(localized_resource
 
 def test_korean_fallback_resource_covers_selected_character(localized_resource_probe):
     assert localized_resource_probe["fallback_covered"]
+
+
+def test_shared_missing_cluster_populates_every_text_resource(localized_resource_probe):
+    for row in localized_resource_probe["shared_fallback"]:
+        assert row["count"] == 3
+        assert row["covered"]
+
+
+def test_gpu_fallback_advances_match_actual_face(localized_resource_probe):
+    if not localized_resource_probe["fallback_gpu"]:
+        pytest.skip("sidecar or fonts unavailable")
+    for row in localized_resource_probe["fallback_gpu"]:
+        assert row["nonempty"], row
+        assert row["equal"], row
 
 
 def test_localized_font_gpu_main_latin_and_ruby_match_canonical(localized_resource_probe):

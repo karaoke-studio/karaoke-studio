@@ -321,7 +321,7 @@ def prewarm_fallback(
     """
     cache_key_base = _slot_key(family, weight, italic)
     written = 0
-    pending_missing: dict[str, str] = {}
+    pending_missing: dict[str, set[str]] = {}
     for text in texts:
         if not text:
             continue
@@ -337,7 +337,7 @@ def prewarm_fallback(
                 _FALLBACK_FONT_TABLE.clear()
             _RESOLUTION_CACHE[key] = missing
         for cluster in missing:
-            pending_missing.setdefault(cluster, text)
+            pending_missing.setdefault(cluster, set()).add(text)
     if not pending_missing:
         return written
     # 批量解析：一次 QTextLayout 覆盖全部缺字簇（逐簇建布局实测每簇 ~11ms）。
@@ -345,7 +345,8 @@ def prewarm_fallback(
         family, weight, italic, list(pending_missing)
     )
     generation = capabilities_generation()
-    for cluster, text in pending_missing.items():
+    written_texts: set[str] = set()
+    for cluster, owners in pending_missing.items():
         family_hit = resolved_by_cluster.get(cluster)
         if not family_hit:
             continue
@@ -355,16 +356,24 @@ def prewarm_fallback(
         line = layout.createLine()
         line.setLineWidth(1_000_000)
         layout.endLayout()
+        instance = None
         for run in line.glyphRuns():
             raw = run.rawFont()
             if raw.familyName().casefold() == family_hit.casefold():
                 instance = remember_fallback_face(family_hit, weight, italic, raw)
-                with _TABLE_LOCK:
-                    _FALLBACK_FONT_TABLE[(generation,) + (cache_key_base, text)] = instance
                 break
         with _TABLE_LOCK:
-            _FALLBACK_TABLE[(generation,) + (cache_key_base, text)] = family_hit
-        written += 1
+            # Cluster resolution is shared, but every owning text needs its
+            # own lookup entry: all have already been marked as resolved.
+            for text in owners:
+                key = (generation,) + (cache_key_base, text)
+                _FALLBACK_TABLE[key] = family_hit
+                if instance is not None:
+                    _FALLBACK_FONT_TABLE[key] = instance
+                else:
+                    _FALLBACK_FONT_TABLE.pop(key, None)
+                written_texts.add(text)
+    written = len(written_texts)
     return written
 
 
