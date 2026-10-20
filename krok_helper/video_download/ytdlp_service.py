@@ -60,6 +60,9 @@ BILIBILI_HTTP_CHUNK_SIZE = 4 * 1024 * 1024
 # 界面上的"重试次数"是任务级语义（用户理解成"整体重试几次"），不该被直接当作
 # yt-dlp 的 HTTP 级重试上限——抖动线路上 3 次太少。yt-dlp 自己的默认就是 10。
 MIN_HTTP_RETRIES = 10
+# Restore one task retry per 30 seconds of sustained forward progress.
+RETRY_RECOVERY_SECONDS = 30.0
+RETRY_RECOVERY_MAX_GAP_SECONDS = 10.0
 # 这些参数排在 yt-dlp 自带的 ``-x16 -j16 -s16`` 之后，同名项以这里为准。
 # 注意别加 ``--lowest-speed-limit``：实测它会把"慢但活着"的连接一并掐掉，而 aria2
 # 不会重新补上分片，连接数从 16 一路掉到 1，尾段反而更慢。只掐真正卡死的连接
@@ -502,12 +505,55 @@ class YtDlpService:
             self._prepare_native_resume(save_dir, output_stem)
         attempt = 0
         retry_limit = max(0, int(options.retry_count))
+        recovery_lock = threading.Lock()
+        high_water_bytes = 0
+        last_advance_at: float | None = None
+        advancing_seconds = 0.0
+
+        def recover_retries(payload: dict[str, Any]) -> None:
+            nonlocal attempt, high_water_bytes, last_advance_at, advancing_seconds
+            now = time.monotonic()
+            with recovery_lock:
+                downloaded = int(payload.get("downloaded_bytes") or 0)
+                if payload.get("status") != "downloading" or task.cancel_requested:
+                    last_advance_at = None
+                    advancing_seconds = 0.0
+                elif downloaded > high_water_bytes:
+                    # A resumed offset or redownloaded bytes are not fresh progress.
+                    high_water_bytes = downloaded
+                    if last_advance_at is not None:
+                        elapsed = now - last_advance_at
+                        if 0 <= elapsed <= RETRY_RECOVERY_MAX_GAP_SECONDS:
+                            advancing_seconds += elapsed
+                        else:
+                            advancing_seconds = 0.0
+                    last_advance_at = now
+                    if attempt > 0 and advancing_seconds >= RETRY_RECOVERY_SECONDS:
+                        attempt -= 1
+                        advancing_seconds = 0.0
+                        logging.getLogger(__name__).info(
+                            "下载持续恢复，补回 1 次重试机会，剩余 %s/%s 次。",
+                            retry_limit - attempt, retry_limit,
+                        )
+                    elif attempt == 0:
+                        # Do not bank credit before any failures have occurred.
+                        advancing_seconds = 0.0
+                elif last_advance_at is not None and now - last_advance_at > RETRY_RECOVERY_MAX_GAP_SECONDS:
+                    last_advance_at = None
+                    advancing_seconds = 0.0
+            progress_callback(payload)
+
         while True:
+            # Failed connection time must not count toward recovery. Keep the
+            # byte watermark across attempts so restarting cannot earn credit.
+            with recovery_lock:
+                last_advance_at = None
+                advancing_seconds = 0.0
             try:
                 if task.cancel_requested:
                     raise DownloadCancelledError("下载已取消。")
                 self._run_download_attempt(
-                    youtube_dl, use_python_backend, task, options, progress_callback,
+                    youtube_dl, use_python_backend, task, options, recover_retries,
                     save_dir=save_dir, output_stem=output_stem, outtmpl=outtmpl,
                     selected_format=selected_format, extractor_args_hint=extractor_args_hint,
                     _legacy_javascript=_legacy_javascript, _defer_network_fallback=True,
@@ -528,7 +574,7 @@ class YtDlpService:
                         # client/cookie fallbacks; JavaScript fallback wraps this
                         # whole retry cycle rather than each individual attempt.
                         self._run_download_attempt(
-                            youtube_dl, use_python_backend, task, options, progress_callback,
+                            youtube_dl, use_python_backend, task, options, recover_retries,
                             save_dir=save_dir, output_stem=output_stem, outtmpl=outtmpl,
                             selected_format=selected_format, extractor_args_hint=extractor_args_hint,
                             _legacy_javascript=_legacy_javascript, _initial_error=exc,
