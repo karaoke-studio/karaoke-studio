@@ -81,6 +81,7 @@ from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_get_text,
     fluent_info,
     fluent_question,
+    fluent_question_with_checkbox,
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.registry import (
@@ -241,6 +242,10 @@ from krok_helper.subtitle_render.engine.text.font_capabilities import (
 
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
+
+#: 删除角色确认框的「本次运行内不再提醒」开关。
+#: 只活在进程内：重启应用后恢复逐次确认，不写入任何设置文件。
+_ROLE_DELETE_CONFIRM_SUPPRESSED = False
 
 #: 主文字装饰字段 → 注音覆盖槽。注音独立模式下装饰编辑写右侧槽位；
 #: ``None`` 表示未设定（渲染时按主文字值 × 注音字号比例回退）。
@@ -798,6 +803,9 @@ class PropertyPanel(QWidget):
         self._title_text_change_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
         self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
         self._role_controller = RoleSchemeController()
+        #: 当前面板编辑的工程代号（宿主每次切换工程 +1）。非模态确认框打开
+        #: 期间用户可以换工程，回到删除流程前必须核对代号与删除目标。
+        self._project_generation = 0
         self._layout_controller = LayoutCatalogController()
         self._title_controller = TitleOverlaysController()
         self._style_controller = PropertyStyleController()
@@ -1060,6 +1068,10 @@ class PropertyPanel(QWidget):
     def role_names(self) -> list[str]:
         """当前角色导航中可分配给歌词的角色名（不含全局默认与标题）。"""
         return self._role_controller.names
+
+    def set_project_generation(self, generation: int) -> None:
+        """记录当前编辑的工程代号（宿主切换工程时推进）。"""
+        self._project_generation = int(generation)
 
     def set_preset_schemes(
         self, schemes: dict[str, StylePreset | SubtitleStyleScheme]
@@ -4922,6 +4934,8 @@ class PropertyPanel(QWidget):
         name = self._current_custom_scheme_name()
         if name is None or name == TITLE_SCHEME_NAME:
             return  # 全局默认 / 内置「标题」方案不能删
+        if not self._confirm_role_deletion(name):
+            return
         previous_roles = self._role_controller.names
         changes = self._role_controller.delete_changes(self._style, name)
         # 删除角色后，引用它的句子回到默认样式，而不是留下悬空名。
@@ -4935,6 +4949,54 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = False
         self._sync_subtitle_scheme_controls()
+
+    def _confirm_role_deletion(self, name: str) -> bool:
+        """删除角色的二次确认；勾选「本次运行内不再提醒」后进程内跳过。
+
+        确认框不是窗口模态：打开期间主窗口仍可切工程 / 换编辑目标。返回
+        前必须核对工程代号与删除目标仍是发起确认时的那个，否则取消这次
+        删除——特别是「切到另一个恰好有同名角色的工程」时，按名字删会把
+        新工程里的角色误删。
+        """
+        global _ROLE_DELETE_CONFIRM_SUPPRESSED
+        if _ROLE_DELETE_CONFIRM_SUPPRESSED:
+            return True
+        generation = self._project_generation
+        confirmed, dont_ask = fluent_question_with_checkbox(
+            self,
+            "删除角色",
+            f"确定删除角色「{name}」吗？\n"
+            "引用该角色的歌词、标题与导唱符会回到默认样式。",
+            "本次运行内不再提醒",
+            yes_text="删除",
+            no_text="取消",
+            default_cancel=True,
+        )
+        if not confirmed:
+            return False
+        if self._project_generation != generation:
+            InfoBar.warning(
+                title="删除已取消",
+                content=f"确认期间切换了工程，未删除「{name}」。",
+                parent=self,
+                duration=4000,
+            )
+            return False
+        if (
+            self._current_custom_scheme_name() != name
+            or name not in self._role_controller.names
+            or name not in self._style.custom_style_schemes
+        ):
+            InfoBar.warning(
+                title="删除已取消",
+                content=f"确认期间删除目标已变化，未删除「{name}」。",
+                parent=self,
+                duration=4000,
+            )
+            return False
+        if dont_ask:
+            _ROLE_DELETE_CONFIRM_SUPPRESSED = True
+        return True
 
     def _sync_subtitle_scheme_controls(
         self, groups: Optional[set[str]] = None

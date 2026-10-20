@@ -7806,11 +7806,113 @@ def test_property_panel_delete_role_keeps_same_named_preset(qapp):
 
     assert panel.subtitle_style.custom_style_schemes["fhana"].fill_color == "#123456"
 
+    panel._confirm_role_deletion = lambda name: True
     panel._delete_current_role()
 
     assert panel._singer_combo.findData("custom:fhana") == -1
     assert "fhana" not in panel.subtitle_style.custom_style_schemes
     assert panel.preset_schemes["fhana"].scheme.fill_color == "#123456"
+
+
+def test_property_panel_role_delete_confirmation_and_session_suppression(
+    qapp, monkeypatch
+):
+    """删除角色必须二次确认；「本次运行内不再提醒」只在确认成功后生效。"""
+
+    monkeypatch.setattr(pp, "_ROLE_DELETE_CONFIRM_SUPPRESSED", False)
+    panel = PropertyPanel()
+    panel.set_roles(["角色A", "角色B"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
+    calls: list[tuple[tuple, dict]] = []
+
+    def cancel_with_dont_ask(*args, **kwargs):
+        calls.append((args, kwargs))
+        return False, True
+
+    monkeypatch.setattr(pp, "fluent_question_with_checkbox", cancel_with_dont_ask)
+    panel._delete_current_role()
+
+    assert len(calls) == 1
+    assert "角色A" in panel.role_names
+    assert pp._ROLE_DELETE_CONFIRM_SUPPRESSED is False
+
+    monkeypatch.setattr(
+        pp, "fluent_question_with_checkbox", lambda *a, **k: (True, True)
+    )
+    panel._delete_current_role()
+
+    assert panel.role_names == ["角色B"]
+    assert pp._ROLE_DELETE_CONFIRM_SUPPRESSED is True
+
+    # 进程内后续删除不再弹窗。
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色B"))
+    monkeypatch.setattr(
+        pp,
+        "fluent_question_with_checkbox",
+        lambda *a, **k: pytest.fail("suppressed deletion must not ask again"),
+    )
+    panel._delete_current_role()
+
+    assert panel.role_names == []
+
+
+def test_property_panel_delete_role_aborts_when_project_changed_during_prompt(
+    qapp, monkeypatch
+):
+    """非模态确认框打开期间切工程，确认后不能误删新工程里的同名角色。"""
+
+    monkeypatch.setattr(pp, "_ROLE_DELETE_CONFIRM_SUPPRESSED", False)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        pp.InfoBar,
+        "warning",
+        lambda **kwargs: warnings.append(str(kwargs.get("content") or "")),
+    )
+    panel = PropertyPanel()
+    panel.set_roles(["角色A"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
+    panel.set_project_generation(7)
+
+    def switch_project_then_confirm(*_args, **_kwargs):
+        # 对话框打开期间宿主切到另一个工程（代号推进）。
+        panel.set_project_generation(8)
+        return True, True
+
+    monkeypatch.setattr(
+        pp, "fluent_question_with_checkbox", switch_project_then_confirm
+    )
+    panel._delete_current_role()
+
+    assert panel.role_names == ["角色A"]
+    assert "角色A" in panel.subtitle_style.custom_style_schemes
+    assert any("切换了工程" in text for text in warnings)
+    # 过期的确认不能顺带打开「不再提醒」。
+    assert pp._ROLE_DELETE_CONFIRM_SUPPRESSED is False
+
+
+def test_property_panel_delete_role_aborts_when_target_changed_during_prompt(
+    qapp, monkeypatch
+):
+    """确认期间把编辑目标切到别的角色，也不能按旧名字继续删除。"""
+
+    monkeypatch.setattr(pp, "_ROLE_DELETE_CONFIRM_SUPPRESSED", False)
+    monkeypatch.setattr(pp.InfoBar, "warning", lambda **_kwargs: None)
+    panel = PropertyPanel()
+    panel.set_roles(["角色A", "角色B"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
+
+    def switch_target_then_confirm(*_args, **_kwargs):
+        panel._singer_combo.setCurrentIndex(
+            panel._singer_combo.findData("custom:角色B")
+        )
+        return True, True
+
+    monkeypatch.setattr(
+        pp, "fluent_question_with_checkbox", switch_target_then_confirm
+    )
+    panel._delete_current_role()
+
+    assert panel.role_names == ["角色A", "角色B"]
 
 
 def test_property_panel_auto_created_role_scheme_is_not_saved_as_preset(qapp):

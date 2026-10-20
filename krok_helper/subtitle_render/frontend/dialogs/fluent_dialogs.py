@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    CheckBox,
     Dialog,
     EditableComboBox,
     LineEdit,
@@ -110,6 +111,36 @@ def fluent_question(
     if default_cancel:
         dialog.cancelButton.setFocus()
     return bool(dialog.exec())
+
+
+def fluent_question_with_checkbox(
+    parent: Optional[QWidget],
+    title: str,
+    content: str,
+    checkbox_text: str,
+    *,
+    yes_text: str = "确定",
+    no_text: str = "取消",
+    default_cancel: bool = False,
+) -> tuple[bool, bool]:
+    """Ask a yes/no question plus one inline checkbox option.
+
+    Returns ``(confirmed, checked)``. The checkbox lives under the message text
+    and is read after the dialog closes, so callers can offer "don't ask again"
+    style choices without persisting them.
+    """
+    dialog = FluentMessageDialog(title, content, parent)
+    dialog.yesButton.setText(yes_text)
+    dialog.cancelButton.setText(no_text)
+    checkbox = CheckBox(checkbox_text, dialog)
+    dialog.textLayout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignLeft)
+    # 加入控件后布局需要重新激活一次，Dialog 的 SetMinimumSize 约束才会把
+    # 固定尺寸长到能容下勾选框（qfluentwidgets 不会自动 propagate）。
+    dialog.textLayout.activate()
+    if default_cancel:
+        dialog.cancelButton.setFocus()
+    confirmed = bool(dialog.exec())
+    return confirmed, checkbox.isChecked()
 
 
 def fluent_choice(

@@ -1772,6 +1772,8 @@ class SubtitleRenderWindow(QWidget):
     def _begin_project_generation(self) -> None:
         """Invalidate recovery jobs belonging to the previously loaded project."""
         self._project_session.begin_generation()
+        if hasattr(self, "_property_panel"):
+            self._property_panel.set_project_generation(self._project_generation)
         self._project_deferred_loads = []
         if hasattr(self, "_project_deferred_load_timer"):
             self._project_deferred_load_timer.stop()
@@ -2907,6 +2909,8 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar = controls.transport_bar
         self._lyrics_panel = controls.lyrics_panel
         self._property_panel = controls.property_panel
+        # 非模态确认框打开期间允许切换工程；面板按代号丢弃过期操作。
+        self._property_panel.set_project_generation(self._project_generation)
         self._layout_issues_button = controls.layout_issues_button
         self._show_preview_btn = controls.show_preview_button
         self._video_settings_panel = controls.video_settings_panel
