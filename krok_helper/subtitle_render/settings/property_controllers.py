@@ -19,6 +19,7 @@ from krok_helper.subtitle_render.domain.models import (
     StylePreset,
     SubtitleStyleScheme,
     TITLE_LAYOUT_NAME,
+    TITLE_SCHEME_NAME,
     TITLE_SHOW_MODES,
     TitleOverlay,
     VIEWPORT_ALIGNS,
@@ -640,11 +641,26 @@ class RoleSchemeController:
         name: str,
         scheme: SubtitleStyleScheme,
     ) -> tuple[dict[str, object], str]:
-        """Add a uniquely named project role initialized from a detached scheme."""
+        """Add a uniquely named project role initialized from a detached scheme.
+
+        Uniqueness follows the **role registry** rather than the scheme table:
+        a scheme left behind by a previously deleted role is an orphan with no
+        owner, so re-creating the same name adopts and overwrites it. Requiring
+        uniqueness across schemes would silently turn that name into
+        ``名字 2`` and make the deleted role impossible to recreate verbatim.
+        """
         schemes = dict(style.custom_style_schemes)
         resolved = name
         suffix = 2
-        while resolved in schemes:
+        # 标题条目的基础配色引用也是按名字查表：同名的孤儿方案如果正被
+        # 某个标题用作 scheme_name，就不能拿来当新角色的初始化目标，否则
+        # 新建角色会顺手改掉标题外观。
+        reserved = (
+            set(self._names)
+            | {TITLE_SCHEME_NAME}
+            | {title.scheme_name for title in style.title_overlays if title.scheme_name}
+        )
+        while resolved in reserved:
             resolved = f"{name} {suffix}"
             suffix += 1
         schemes[resolved] = deepcopy(scheme)

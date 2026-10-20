@@ -3638,16 +3638,38 @@ def remap_particle_role_reference(
 def remap_title_char_role_labels(
     title: TitleOverlay, mapping: dict[str, Optional[str]]
 ) -> Optional[TitleOverlay]:
-    """Rename or clear the title overlay's role references.
+    """Rename or clear every role reference owned by one title overlay.
 
-    Returns ``None`` when nothing referenced any remapped role, so callers can
-    skip both the style write and its undo entry.
+    Covers the per-character matrix plus both guide-symbol slots (row-level
+    and inline), so deleting a role cannot leave a dangling name behind in
+    parts of the title that have no editor row of their own.
+
+    The matrix is normalized on the way through: persisted raw rows can carry
+    more cells than the current text (``{title}`` expansion, shortened lines),
+    and those unreachable cells would otherwise keep feeding the role dropdown
+    with a name that no longer has a scheme.
+
+    Returns ``None`` when nothing referenced any remapped role and the stored
+    matrix was already clean, so callers can skip both the style write and its
+    undo entry.
     """
 
     labels = normalize_title_char_role_labels(
         title.text_template, title.char_role_labels
     )
-    changed = False
+    raw_rows = [
+        [str(value) if value else None for value in row]
+        if isinstance(row, (list, tuple))
+        else []
+        for row in title.char_role_labels
+    ]
+    # 原始矩阵里有角色名、但规范化后对不上：多出来的格子是渲染/编辑器都看
+    # 不到的残留，必须趁这次改名/删除一起清掉（否则 _content_role_options
+    # 会继续把它反推成幽灵角色）。
+    needs_matrix_cleanup = any(
+        label for row in raw_rows for label in row
+    ) and raw_rows != labels
+    changed = needs_matrix_cleanup
     remapped: list[list[Optional[str]]] = []
     for row in labels:
         new_row: list[Optional[str]] = []
@@ -3658,9 +3680,36 @@ def remap_title_char_role_labels(
             else:
                 new_row.append(label)
         remapped.append(new_row)
+
+    def _remap_symbol(symbol: GuideSymbol) -> tuple[GuideSymbol, bool]:
+        symbol_labels = list(guide_symbol_role_labels(symbol))
+        touched = [label for label in symbol_labels if label in mapping]
+        if not touched:
+            return symbol, False
+        return (
+            guide_symbol_with_role_labels(
+                symbol,
+                [mapping[label] if label in mapping else label for label in symbol_labels],
+            ),
+            True,
+        )
+
+    guide_symbols: dict[int, GuideSymbol] = {}
+    for row, symbol in title.guide_symbols.items():
+        guide_symbols[row], symbol_changed = _remap_symbol(symbol)
+        changed |= symbol_changed
+    inline_guide_symbols: dict[tuple[int, int], GuideSymbol] = {}
+    for key, symbol in title.inline_guide_symbols.items():
+        inline_guide_symbols[key], symbol_changed = _remap_symbol(symbol)
+        changed |= symbol_changed
     if not changed:
         return None
-    return replace(title, char_role_labels=remapped)
+    return replace(
+        title,
+        char_role_labels=remapped,
+        guide_symbols=guide_symbols,
+        inline_guide_symbols=inline_guide_symbols,
+    )
 
 
 @dataclass(frozen=True)

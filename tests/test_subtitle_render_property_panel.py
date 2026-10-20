@@ -267,6 +267,34 @@ def test_role_scheme_controller_owns_registry_and_scheme_defaults():
     assert applied.custom_style_schemes["B"].fill_color == "#555555"
 
 
+def test_add_role_reclaims_an_orphaned_scheme_of_the_same_name():
+    """方案表里残留的同名孤儿方案不该把新建角色挤成「名字 2」。
+
+    删除角色的旧实现可能只清了注册表、没清方案表（_update_style 被
+    _syncing 挡掉）。用户随后输入同一个名字时，应当直接接管这份孤儿方案，
+    否则「删除后再建同名角色」永远只能得到带序号的副本。
+    """
+
+    controller = RoleSchemeController()
+    style = Style(
+        custom_style_schemes={"初音": SubtitleStyleScheme(fill_color="#111111")}
+    )
+
+    changes, name = controller.add_scheme_changes(
+        style, "初音", SubtitleStyleScheme(fill_color="#222222")
+    )
+
+    assert name == "初音"
+    assert changes["custom_style_schemes"]["初音"].fill_color == "#222222"
+    assert controller.names == ["初音"]
+
+    # 已注册的角色仍然要避让（不能覆盖别人正在用的方案）。
+    changes, name = controller.add_scheme_changes(
+        replace(style, **changes), "初音", SubtitleStyleScheme()
+    )
+    assert name == "初音 2"
+
+
 def test_ensure_style_schemes_rescales_named_preset_to_project_height():
     """按名物化角色方案时，预设库的基准高度值要换算到工程输出高度。"""
 
@@ -2112,6 +2140,79 @@ def test_deleting_a_role_returns_its_lines_to_the_default_style(qapp, tmp_path):
     assert chorus.lines[0].chars[0].role_label is None
     assert primary.role_options == []
     assert win._merged_role_options() == []
+
+
+def test_deleting_a_role_refreshes_the_lyrics_role_column(qapp, tmp_path):
+    """删除角色后，歌词表的「角色」列必须立刻回到默认，而不是留着旧名。
+
+    角色引用就地改写后，歌词表原本只在 set_track 时重写文字；配色窄刷新
+    只画色点。于是被删角色会继续显示在角色列里，看起来像还能选中。
+    """
+
+    win, primary, _chorus = _role_reference_window(
+        _FontMigrationSettingsProvider, tmp_path, "角色方案A"
+    )
+    panel = win._property_panel
+    win._lyrics_panel.set_track(primary)
+    display_row = win._lyrics_panel._display_row_for_track_line(0)
+    assert display_row is not None
+    assert win._lyrics_panel._table.item(display_row, 1).text() == "角色方案A"
+
+    panel._confirm_role_deletion = lambda name: True
+    panel._singer_combo.setCurrentIndex(
+        panel._singer_combo.findData("custom:角色方案A")
+    )
+    panel._delete_current_role()
+
+    role_item = win._lyrics_panel._table.item(display_row, 1)
+    assert role_item.text() == "（默认）"
+    assert role_item.data(Qt.ItemDataRole.UserRole) == ""
+    assert win._lyrics_panel._role_options == []
+    assert panel.role_names == []
+    assert win._selected_scheme_key == "global"
+    # 同名角色必须能原样重建，不能被残留方案挤成「角色方案A 2」。
+    panel._add_custom_scheme("角色方案A")
+    assert panel.role_names == ["角色方案A"]
+    assert "角色方案A 2" not in panel.subtitle_style.custom_style_schemes
+
+
+def test_role_remap_cleans_title_guides_and_out_of_range_label_cells():
+    """标题旁路也要跟着清理：导唱符角色与越界残留格子都不能留旧名。"""
+
+    from krok_helper.subtitle_render.domain.models import (
+        remap_title_char_role_labels,
+    )
+    from krok_helper.subtitle_render.domain.timing import (
+        GuideSymbol,
+        guide_symbol_role_labels,
+    )
+
+    title = TitleOverlay(
+        text_template="AB",
+        # 第三行超出文字范围；渲染/编辑都看不到，却会被角色下拉反推出来。
+        char_role_labels=[["角色方案A", "角色方案A"], ["角色方案A"], ["角色方案A"]],
+        guide_symbols={
+            0: GuideSymbol(count=2, role_labels=("角色方案A", "角色方案B"))
+        },
+        inline_guide_symbols={
+            (0, 1): GuideSymbol(count=1, role_labels=("角色方案A",))
+        },
+    )
+
+    remapped = remap_title_char_role_labels(title, {"角色方案A": None})
+
+    assert remapped is not None
+    assert remapped.char_role_labels == [[None, None]]
+    assert [
+        guide_symbol_role_labels(symbol)
+        for symbol in remapped.guide_symbols.values()
+    ] == [(None, "角色方案B")]
+    assert [
+        guide_symbol_role_labels(symbol)
+        for symbol in remapped.inline_guide_symbols.values()
+    ] == [(None,)]
+    # 幂等：清干净后不再产生新的样式写入 / 撤销条目。
+    assert remap_title_char_role_labels(remapped, {"角色方案A": None}) is None
 
 
 def test_role_rename_and_its_references_undo_as_one_step(qapp, tmp_path):
@@ -7913,6 +8014,27 @@ def test_property_panel_delete_role_aborts_when_target_changed_during_prompt(
     panel._delete_current_role()
 
     assert panel.role_names == ["角色A", "角色B"]
+
+
+def test_property_panel_delete_role_recovers_when_style_update_is_gated(qapp):
+    """_update_style 被 _syncing 挡掉时也要把方案表里的旧名清掉。
+
+    否则同名角色只能建成「角色A 2」，内容引用也永远得不到清理。
+    """
+
+    panel = PropertyPanel()
+    panel.set_roles(["角色A"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:角色A"))
+    panel._confirm_role_deletion = lambda name: True
+    panel._syncing = True
+
+    panel._delete_current_role()
+
+    assert panel.role_names == []
+    assert "角色A" not in panel.subtitle_style.custom_style_schemes
+    panel._add_custom_scheme("角色A")
+    assert panel.role_names == ["角色A"]
+    assert "角色A 2" not in panel.subtitle_style.custom_style_schemes
 
 
 def test_property_panel_auto_created_role_scheme_is_not_saved_as_preset(qapp):

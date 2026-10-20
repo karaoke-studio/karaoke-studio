@@ -1875,6 +1875,47 @@ class LyricsPanel(DropPanel):
         finally:
             self._table.blockSignals(False)
 
+    def refresh_role_labels(self) -> None:
+        """角色方案增删 / 改名后重刷角色列文字、色点与当前值。
+
+        角色引用是写在轨道数据上的，删除 / 改名会就地清空这些标签；但整表
+        只在 ``set_track`` 时重写过，``set_style`` 的配色窄刷新只画色点。
+        不补这一步，被删角色的名字会一直留在「角色」列里，看起来像还能选中。
+        """
+        if not self._populated:
+            return
+        self._table.blockSignals(True)
+        try:
+            for row in range(self._table.rowCount()):
+                if row >= len(self._row_meta) or self._row_meta[row][0]:
+                    continue
+                role_item = self._table.item(row, COL_ROLE)
+                if role_item is None:
+                    continue
+                line = self._presentation_row_line(row)
+                role = _dominant_role(line) if line is not None else ""
+                mixed = line is not None and _line_role_mixed(line)
+                if line is not None:
+                    role_item.setData(
+                        Qt.ItemDataRole.UserRole, "" if mixed else role
+                    )
+                if mixed:
+                    role_item.setText("混合")
+                    role_item.setToolTip(
+                        "该行包含逐字符角色分配（双击内容列或右键「逐字符分配角色…」编辑）。"
+                    )
+                elif line is not None:
+                    role_item.setText(
+                        role
+                        if role
+                        else ("标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT)
+                    )
+                    role_item.setToolTip("")
+                role_item.setIcon(self._role_swatch_icon_for(line, role))
+        finally:
+            self._table.blockSignals(False)
+        self._table.viewport().update()
+
     def _layout_name_for_id(self, layout_id: Optional[str]) -> str:
         return layout_display_name(self._style, str(layout_id or "default"))
 

@@ -4941,6 +4941,17 @@ class PropertyPanel(QWidget):
         # 删除角色后，引用它的句子回到默认样式，而不是留下悬空名。
         self.roleReferencesRemapped.emit(name, None)
         self._update_style(**changes)
+        # 兜底：_update_style 可能被自身的 _syncing 门挡掉（例如删除按钮在
+        # 别的同步流程里被间接触发）。那样方案表会留着旧名，内容引用也不会
+        # 被改写——同名角色只能建成「名字 2」，下拉里还会出现查不到方案的
+        # 幽灵条目。这里强制移除并补发一次样式，让宿主照常执行引用清理。
+        schemes = self._style.custom_style_schemes
+        if name in schemes:
+            remaining = dict(schemes)
+            remaining.pop(name, None)
+            self._style = replace(self._style, custom_style_schemes=remaining)
+            self.roleReferencesRemapped.emit(name, None)
+            self.styleChanged.emit(self._style)
         if self._role_controller.names != previous_roles:
             self.rolesChanged.emit(self._role_controller.names)
         self._syncing = True
@@ -4948,7 +4959,12 @@ class PropertyPanel(QWidget):
             self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)
         finally:
             self._syncing = False
+        # 刷新下拉时屏蔽了 currentIndexChanged；这里补发一次选择变化，
+        # 让宿主把 _selected_scheme_key 从已删除的 custom:旧名 收回 global，
+        # 不然偏好 / 工程里会一直记着一个查不到方案的目标。
+        self.schemeSelectionChanged.emit(self.current_scheme_key())
         self._sync_subtitle_scheme_controls()
+        self._sync_title_controls()
 
     def _confirm_role_deletion(self, name: str) -> bool:
         """删除角色的二次确认；勾选「本次运行内不再提醒」后进程内跳过。
@@ -5428,6 +5444,7 @@ class PropertyPanel(QWidget):
                 )
         # 常规样式编辑不清 scope（与 set_style 同理：防抖窗口内与先前编辑
         # 的 scope 并集合并，取走时多 scope 并存回落全量）。
+        previous_scheme_names = set(self._style.custom_style_schemes)
         result = self._style_controller.update(
             self._style,
             changes,
@@ -5437,6 +5454,9 @@ class PropertyPanel(QWidget):
         )
         self._style = result.style
         changes = result.changed_fields
+        scheme_names_changed = previous_scheme_names != set(
+            self._style.custom_style_schemes
+        )
         self._syncing = True
         try:
             if (
@@ -5479,6 +5499,10 @@ class PropertyPanel(QWidget):
                 self._sync_subtitle_scheme_controls(
                     self._scheme_sync_groups_for_changes(changes)
                 )
+            if "custom_style_schemes" in changes and scheme_names_changed:
+                # 角色方案表换了键（新建 / 改名 / 删除）：标题卡片的「基础
+                # 配色方案」下拉也要跟着重建，否则被删角色会一直留在列表里。
+                self._sync_title_controls()
             if set(changes).intersection(
                 {"ruby_colors_follow_main", "ruby_karaoke_colors"}
                 | set(_RUBY_DECORATION_SLOTS.values())

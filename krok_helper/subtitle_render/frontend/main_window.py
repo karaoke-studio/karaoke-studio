@@ -4874,6 +4874,11 @@ class SubtitleRenderWindow(QWidget):
             self._tracks_view.set_style(style)
         # 角色在属性面板中新建 / 重命名 / 删除时，同步逐字符编辑器的可选项。
         self._lyrics_panel.set_role_options(self._merged_role_options())
+        if role_remap_applied and not self._title_source_active:
+            # 改名 / 删除会把轨道里的角色标签就地改写，但歌词表的角色列只在
+            # set_track / 行刷新时重写文字。不补这一步，被删角色会一直留在
+            # 「角色」列里（色点窄刷新只重画图标，不碰文字）。
+            self._lyrics_panel.refresh_role_labels()
         # 标题条目数 / 名称变化（增删、改名、撤销重做）才需要刷新字幕源下拉；
         # 启用开关不再增删下拉行（禁用条目仍可选中编辑逐字角色）。
         if self._title_source_names(previous) != self._title_source_names(style):
@@ -7347,7 +7352,11 @@ class SubtitleRenderWindow(QWidget):
                     seen.add(name)
                     options.append(name)
         for title in self._style.title_overlays:
-            for row in title.char_role_labels:
+            # 按渲染/编辑同一套矩阵读取：原始数据里超出当前文字的残留格子
+            # 不算项目角色，否则删掉的角色会被反推回来。
+            for row in normalize_title_char_role_labels(
+                title.text_template, title.char_role_labels
+            ):
                 for label in row:
                     name = str(label or "").strip()
                     if name and name != TITLE_SCHEME_NAME and name not in seen:
