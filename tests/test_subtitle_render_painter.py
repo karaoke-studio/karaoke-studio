@@ -1440,6 +1440,74 @@ def test_volume_auto_decorations_follow_first_role(qapp):
     assert not region_has("#2030FF")
 
 
+def test_volume_auto_first_char_without_role_uses_line_style(qapp):
+    # 首字符口径：行首字符无角色、行中才有角色（主唱无标签 + 尾部和声的
+    # 常见排布）——装饰源取第一个非空白字符的 role_label（None）→ 行样式
+    # （全局默认），**不向后扫**到「和声」方案。柱区出现全局 fill_color，
+    # 和声色不出现（正文和声字符的绿色在正文区，不在采样柱区）。
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000),
+                    TimingChar(text="い", start_ms=1300),
+                    TimingChar(text="う", start_ms=1600, role_label="和声"),
+                    TimingChar(text="え", start_ms=1900, role_label="和声"),
+                ],
+                end_ms=2400,
+            )
+        ]
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=64,
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_duration_ms=1500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        volume_flash_times=0,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=500,
+        stroke_width_px=0,
+        decoration_kind="none",
+        base_color="#FFFFFF",
+        fill_color="#2030FF",
+        custom_style_schemes={
+            "和声": SubtitleStyleScheme(
+                font_family="Arial",
+                font_family_latin="Arial",
+                font_size_px=64,
+                stroke_width_px=0,
+                decoration_kind="none",
+                fill_color="#20FF50",
+            ),
+        },
+    )
+    img = _blank(800, 450)
+    paint_frame(img, track, 1600, style)
+    layout = _sayatoo_layout_for(track, style, 1600, w=800, h=450)
+    x0 = max(int(layout.signal_x) - 4, 0)
+    x1 = int(layout.text_x)
+
+    def region_has(color: str) -> bool:
+        target = QColor(color)
+        for y in range(img.height()):
+            for x in range(x0, x1):
+                c = QColor(img.pixel(x, y))
+                if (
+                    abs(c.red() - target.red()) < 24
+                    and abs(c.green() - target.green()) < 24
+                    and abs(c.blue() - target.blue()) < 24
+                ):
+                    return True
+        return False
+
+    assert region_has("#2030FF")
+    assert not region_has("#20FF50")
+
+
 def test_volume_role_appearance_sizing_matches_auto(qapp):
     # role 档（复用配色方案）大小推导与 auto 完全一致；来源悬空不改尺寸，
     # custom 仍用独立字段。
@@ -2331,6 +2399,49 @@ def test_lit_auto_colors_follow_first_role(qapp):
         cy = int(group.y + resolved.lit_size * 0.62)
         color = QColor(img.pixel(cx, cy))
         assert color.green() > 120 and color.blue() < 120, (index, color.name())
+
+
+def test_lit_auto_first_char_without_role_uses_line_style(qapp):
+    # 首字符口径（与音量柱同一装饰源解析）：行首字符无角色、行中才有
+    # 「和声」——灯体用行样式（全局默认）的走字后填充（蓝），不向后扫
+    # 到和声方案（绿）。与 volume 的同名测试共同锁定两端分歧修复的
+    # CPU 侧语义。
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000),
+                    TimingChar(text="い", start_ms=1300),
+                    TimingChar(text="う", start_ms=1600, role_label="和声"),
+                    TimingChar(text="え", start_ms=1900, role_label="和声"),
+                ],
+                end_ms=2400,
+            )
+        ]
+    )
+    style = Style(
+        fill_color="#2030FF",
+        custom_style_schemes={
+            "和声": SubtitleStyleScheme(
+                font_family="Arial",
+                font_family_latin="Arial",
+                font_size_px=32,
+                stroke_width_px=0,
+                decoration_kind="none",
+                fill_color="#20FF50",
+            ),
+        },
+        **_lit_auto_pixel_base(),
+    )
+    group, resolved = _lit_auto_group(track, style, 500)
+    img = _blank(160, 90)
+    paint_frame(img, track, 500, style)
+    pitch = resolved.lit_size * 1.5 + resolved.lit_tracking
+    for index in range(_lit_active_index(track, style, 500) + 1):
+        cx = int(group.x + index * pitch + resolved.lit_size * 0.5)
+        cy = int(group.y + resolved.lit_size * 0.62)
+        color = QColor(img.pixel(cx, cy))
+        assert color.blue() > 120 and color.green() < 120, (index, color.name())
 
 
 def _lit_role_scheme_track() -> TimingTrack:

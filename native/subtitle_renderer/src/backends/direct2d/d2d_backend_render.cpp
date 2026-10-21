@@ -1800,8 +1800,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const float flashBrushAlpha = volumeFlashLayerActive
             ? 1.0f
             : signalState.opacity;
-        // 装饰源样式（auto 档）：段首行第一个有几何字符的角色方案
-        // （Painter 取第一个非空白字符的 role，两端一致；无角色回退行样式）。
+        // 装饰源样式（auto 档）：段首行第一个有几何字符的角色方案；首个
+        // 有几何字符无角色（styleIndex=-1，无 roleLabel 的普通字符不进
+        // charStyles 表）→ **行样式并停止扫描**——镜像 Painter「取第一个
+        // 非空白字符的 role，None 落行样式」的首字符口径。继续向后扫会
+        // 错跟后续角色（主唱无标签 + 尾部和声的常见排布，2026-10 修复：
+        // 旧实现要求 styleIndex>=0 会跳过行首无角色字符取到和声方案，
+        // 与 Painter/正文首字不一致）。
         // role 档（复用配色方案）：装饰源换成 scene 级按名解析的固定方案
         // （悬空 nullopt 时维持 auto 扫描，两端同一回退口径）。
         // 指示灯与音量柱各持一份来源、各自独立回落首字符扫描：auto 档的
@@ -1809,10 +1814,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // Painter 按模块独立解析 bar_style 的口径）。
         const auto firstCharDecorStyle = [&]() -> const TextStyle & {
             for (const Impl::CachedChar &ch : line->chars) {
-                if ((ch.geometry != nullptr || ch.bitmapGuide.has_value())
-                    && ch.styleIndex >= 0
-                    && ch.styleIndex
-                        < static_cast<int>(scene.charStyles.size())) {
+                if (ch.geometry != nullptr || ch.bitmapGuide.has_value()) {
+                    if (ch.styleIndex < 0
+                        || ch.styleIndex
+                            >= static_cast<int>(scene.charStyles.size())) {
+                        return style;
+                    }
                     return scene.charStyles[
                         static_cast<std::size_t>(ch.styleIndex)];
                 }

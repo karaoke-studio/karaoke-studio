@@ -6584,7 +6584,7 @@ def test_gpu_g5_volume_auto_decorations_follow_painter(monkeypatch) -> None:
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g5_volume_auto_decorations_follow_first_role_painter(monkeypatch) -> None:
     # 装饰源取段首行第一个角色：角色配色（含渐变）驱动柱体，native 端取
-    # 第一个有几何字符的 styleIndex，两端 alpha 包络对齐。
+    # 第一个有几何字符的样式，两端 alpha 包络对齐。
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(
         lines=[
@@ -6655,6 +6655,110 @@ def test_gpu_g5_volume_auto_decorations_follow_first_role_painter(monkeypatch) -
             abs(actual - expected) <= 14
             for actual, expected in zip(gpu_bounds, painter_bounds)
         ), (t_ms, gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g5_volume_auto_first_char_without_role_matches_painter(
+    monkeypatch,
+) -> None:
+    # 首字符口径的两端对齐（2026-10 修复回归）：行首字符无角色、行中才有
+    # 角色方案——native 端旧实现要求 styleIndex>=0 会跳过无角色字符、错跟
+    # 后续「主」方案（已唱柱呈黄 #FFFF40，与 Painter 的全局红 #FF2030 通道
+    # 距离 ~223）；修复后两端都用行样式，柱体填充逐通道一致。
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("歌", 1_000),
+                    TimingChar("詞", 1_400, role_label="主"),
+                ],
+                end_ms=2_000,
+            )
+        ]
+    )
+
+    def role_state(color: str) -> KaraokeColorState:
+        return KaraokeColorState(text=PaintFill(mode="solid", color=color))
+
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        # 无描边/无装饰（_g1_style 默认 glow 的 shadow 色 #00FF40 会盖住柱
+        # 体采样点）：本测试只验证装饰源的填充色选择，柱体即纯填充。
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        base_color="#FFFFFF",
+        fill_color="#FF2030",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_lead_in_ms=0,
+        line_tail_ms=1_000,
+        volume_enabled=True,
+        volume_appearance_mode="auto",
+        volume_duration_ms=1_500,
+        volume_waiting_time_ms=0,
+        volume_time_offset_ms=0,
+        volume_flash_times=0,
+        volume_size=36,
+        volume_column_spacing=2,
+        custom_style_schemes={
+            "主": SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_family_latin="Meiryo",
+                font_size_px=64,
+                stroke_width_px=0,
+                decoration_kind="none",
+                karaoke_colors=KaraokeColors(
+                    before=role_state("#40FFFF"),
+                    after=role_state("#FFFF40"),
+                ),
+            ),
+        },
+    )
+    timestamps = (600, 1_200)
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+
+    def _channel_distance(a: bytes, b: bytes, x: int, y: int) -> int:
+        offset = (y * 640 + x) * 4
+        return max(
+            abs(a[offset + i] - b[offset + i]) for i in range(3)
+        )
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        # 柱组左缘 = 全帧最左墨迹；其所在列的墨迹行取中点为采样行。
+        leftmost = min(
+            x
+            for x in range(640)
+            for y in range(0, 360, 4)
+            if painter_frame[(y * 640 + x) * 4 + 3] > 60
+        )
+        rows = [
+            y
+            for y in range(360)
+            if painter_frame[(y * 640 + leftmost) * 4 + 3] > 60
+        ]
+        sample_y = (min(rows) + max(rows)) // 2
+        x = leftmost + 2
+        assert _channel_distance(gpu_frame, painter_frame, x, sample_y) <= 45, (
+            t_ms,
+            tuple(gpu_frame[(sample_y * 640 + x) * 4 : (sample_y * 640 + x) * 4 + 3]),
+            tuple(painter_frame[(sample_y * 640 + x) * 4 : (sample_y * 640 + x) * 4 + 3]),
+        )
+        # 两端一致地错也不允许：Painter 自身必须是全局红（非「主」的
+        # 黄/青系）——t=1200 时全部柱已唱完（elapsed ≥ duration）。
+        pixel = painter_frame[(sample_y * 640 + x) * 4 : (sample_y * 640 + x) * 4 + 3]
+        if t_ms == 1_200:
+            assert pixel[0] > 150 and pixel[2] < 110, tuple(pixel)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
