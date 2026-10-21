@@ -11784,3 +11784,99 @@ def test_style_preset_manager_click_row_blank_toggles_check(qapp, monkeypatch):
     dialog._on_preset_row_clicked(item)
     assert item.checkState() == state, "勾选框区域不应重复切换"
     dialog.close()
+
+
+def test_style_preset_manager_row_click_respects_non_checkable_items(
+    qapp, monkeypatch
+):
+    """回归：点「项目中已存在」的预设行不得产生清不掉的勾选。"""
+
+    from PyQt6.QtCore import QPoint
+
+    from krok_helper.subtitle_render.frontend.properties import (
+        preset_manager as pm,
+    )
+
+    dialog = StylePresetManagerDialog(
+        presets={
+            "preset-a": StylePreset(
+                name="方案 A",
+                preset_id="preset-a",
+                scheme=SubtitleStyleScheme(fill_color="#AA0000"),
+            )
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+        existing_role_names={"方案 A"},  # 与项目角色同名 → 不可勾选
+    )
+    item = dialog._preset_list.item(0)
+    assert not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    rect = dialog._preset_list.visualItemRect(item)
+    monkeypatch.setattr(
+        pm,
+        "QCursor",
+        type(
+            "Cursor",
+            (),
+            {
+                "pos": staticmethod(
+                    lambda: dialog._preset_list.viewport().mapToGlobal(
+                        QPoint(rect.center().x() + 120, rect.center().y())
+                    )
+                )
+            },
+        ),
+    )
+
+    dialog._on_preset_row_clicked(item)
+
+    assert item.checkState() == Qt.CheckState.Unchecked
+    assert dialog._checked_names() == []
+    assert not dialog._import_btn.isEnabled()
+    dialog.close()
+
+
+def test_layout_row_click_respects_non_checkable_items(qapp):
+    """布局库 delegate 同样遵守 ItemIsUserCheckable。"""
+
+    from PyQt6.QtCore import QPointF
+    from PyQt6.QtGui import QMouseEvent
+    from PyQt6.QtWidgets import QStyleOptionViewItem
+
+    from krok_helper.subtitle_render.frontend.properties.layout_library_dialog import (
+        LayoutLibraryDialog,
+    )
+    from krok_helper.subtitle_render.settings.layout_presets import (
+        default_layout_presets,
+    )
+
+    dialog = LayoutLibraryDialog(presets=default_layout_presets())
+    dialog.show()
+    item = dialog._items["builtin-3"]
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+    rect = dialog._list.visualItemRect(item)
+    option = QStyleOptionViewItem()
+    option.rect = rect
+    option.font = dialog._list.font()
+    option.palette = dialog._list.palette()
+    option.widget = dialog._list
+    point = QPointF(rect.center().x(), rect.center().y())
+    release = QMouseEvent(
+        QMouseEvent.Type.MouseButtonRelease,
+        point,
+        point,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    dialog._delegate.editorEvent(
+        release,
+        dialog._list.model(),
+        option,
+        dialog._list.indexFromItem(item),
+    )
+
+    assert item.checkState() == Qt.CheckState.Unchecked
+    assert dialog._selected_ids == set()
+    dialog.close()

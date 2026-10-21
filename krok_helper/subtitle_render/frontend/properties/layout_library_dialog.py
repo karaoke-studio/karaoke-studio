@@ -348,6 +348,10 @@ class _LayoutRowDelegate(ListItemDelegate):
     # ------------------------------------------------------------------ 交互
 
     def editorEvent(self, event, model, option, index):  # noqa: N802 - Qt 命名
+        # 与样式预设库同口径：不可勾选的条目不吃行点击（避免写出「全部取消」
+        # 清不掉的勾选）。
+        if not (index.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+            return super().editorEvent(event, model, option, index)
         if (
             event.type() == QEvent.Type.MouseButtonRelease
             and isinstance(event, QMouseEvent)

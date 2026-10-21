@@ -575,6 +575,11 @@ class StylePresetManagerDialog(ModelessDialog):
 
         if item is None:
             return
+        # 「项目中已存在」的条目明确不可勾选（无 ItemIsUserCheckable）：
+        # 行点击必须遵守该状态，否则会写出一个「全选/全部取消」都管不到的
+        # 勾选（它们只遍历可勾选条目），已选统计也会虚高。
+        if not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+            return
         pos = self._preset_list.viewport().mapFromGlobal(QCursor.pos())
         rect = self._preset_list.visualItemRect(item)
         checkbox_left = rect.left() + 15
