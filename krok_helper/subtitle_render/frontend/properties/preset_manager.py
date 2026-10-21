@@ -8,7 +8,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QCursor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -353,6 +353,8 @@ class StylePresetManagerDialog(ModelessDialog):
         self._preset_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._preset_list.currentItemChanged.connect(lambda _cur, _old: self._sync_buttons())
         self._preset_list.itemChanged.connect(self._on_preset_item_changed)
+        # 点行空白切换勾选（与布局预设库一致）；点勾选框本身由 Qt 原生处理。
+        self._preset_list.itemClicked.connect(self._on_preset_row_clicked)
         layout.addWidget(self._preset_list, 1)
 
         selection_row = QHBoxLayout()
@@ -562,6 +564,27 @@ class StylePresetManagerDialog(ModelessDialog):
         if item.checkState() == Qt.CheckState.Checked:
             self._preset_list.setCurrentItem(item)
         self._sync_buttons()
+
+    def _on_preset_row_clicked(self, item: QListWidgetItem) -> None:
+        """点行内空白/文字区域切换勾选（与布局预设库同理）。
+
+        点勾选框本身时 Qt 已原生切换，这里必须跳过，否则会切两次回到原状。
+        Fluent delegate 的勾选框固定在 ``rect.x()+15`` 起 19px（见
+        ``ListItemDelegate._drawCheckBox``）。
+        """
+
+        if item is None:
+            return
+        pos = self._preset_list.viewport().mapFromGlobal(QCursor.pos())
+        rect = self._preset_list.visualItemRect(item)
+        checkbox_left = rect.left() + 15
+        if checkbox_left - 4 <= pos.x() <= checkbox_left + 23:
+            return
+        item.setCheckState(
+            Qt.CheckState.Unchecked
+            if item.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
 
     def _selected_name(self) -> Optional[str]:
         item = self._preset_list.currentItem()

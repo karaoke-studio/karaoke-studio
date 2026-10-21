@@ -57,7 +57,6 @@ from qfluentwidgets import (
     LineEdit as FluentLineEdit,
     PushButton as FluentPushButton,
     RadioButton,
-    RoundMenu,
     ScrollArea as FluentScrollArea,
     SegmentedWidget,
     SpinBox as FluentSpinBox,
@@ -74,8 +73,10 @@ from krok_helper.subtitle_render.domain.paint import (
     PaintFill,
 )
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
+    dont_ask_active,
     fluent_button_row,
     fluent_choice,
+    fluent_confirm_dont_ask,
     fluent_get_editable_choice,
     fluent_get_multiple,
     fluent_get_text,
@@ -204,7 +205,6 @@ from krok_helper.subtitle_render.settings.property_controllers import (
     SCHEME_FIELDS as _SCHEME_FIELDS,
     SCHEME_ONLY_FIELDS as _SCHEME_ONLY_FIELDS,
     TitleOverlaysController,
-    builtin_preset_display_name,
     normalize_decoration_kind as _normalize_decoration_kind,
     normalize_entry_animation as _normalize_entry_animation,
     normalize_exit_animation as _normalize_exit_animation,
@@ -738,6 +738,8 @@ class PropertyPanel(QWidget):
     """预设库即将打开：宿主借此从磁盘刷新，拿到其他实例新增的预设。"""
     defaultSchemeSaveRequested = Signal(str)
     defaultLayoutSaveRequested = Signal(int)
+    layoutLibraryRequested = Signal()
+    """打开布局库管理对话框（宿主持有预设库与偏好读写）。"""
     layoutAssignAllRequested = Signal(int)
     """「应用到全部页」：参数为布局 index（0 = 默认布局）。"""
     layoutAutoAssignRequested = Signal()
@@ -820,6 +822,11 @@ class PropertyPanel(QWidget):
         self._title_entry_defaults_provider: Optional[Callable[[], TitleOverlay]] = None
         self._title_tag_provider: Optional[Callable[[], list]] = None
         self._title_duration_provider: Optional[Callable[[], int]] = None
+        #: 「当前工程各布局在用量」查询（名 → (页面数, 歌词行数)），删除
+        # 确认弹窗据此提示在用影响；缺省视为无在用。
+        self._layout_usage_provider: Optional[
+            Callable[[], dict[str, tuple[int, int]]]
+        ] = None
         self._timing_page_builder = TimingPropertyPageBuilder(
             self,
             spin_factory=_spin,
@@ -2609,6 +2616,29 @@ class PropertyPanel(QWidget):
         """注入「当前工程时长」查询（毫秒），用于自定义窗口的默认结束时间。"""
         self._title_duration_provider = provider
 
+    def set_layout_usage_provider(
+        self, provider: Optional[Callable[[], dict[str, tuple[int, int]]]]
+    ) -> None:
+        """注入「当前工程各布局在用量」查询（名 → (页面数, 歌词行数)）。"""
+        self._layout_usage_provider = provider
+
+    def _layout_usage_text(self, name: str) -> str:
+        """删除确认里的在用影响文案；无在用或无 provider 时为空。"""
+        if self._layout_usage_provider is None:
+            return ""
+        usage = (self._layout_usage_provider() or {}).get(name)
+        if not usage:
+            return ""
+        parts = []
+        pages, lines = usage
+        if pages:
+            parts.append(f"{pages} 个页面")
+        if lines:
+            parts.append(f"{lines} 行歌词")
+        if not parts:
+            return ""
+        return f"当前工程正在使用该布局（{'、'.join(parts)}）。"
+
     def _title_total_duration_ms(self) -> Optional[int]:
         if self._title_duration_provider is None:
             return None
@@ -3005,10 +3035,9 @@ class PropertyPanel(QWidget):
 
         self._add_layout_btn = FluentTransparentToolButton(FIF.ADD, nav)
         self._add_layout_btn.setToolTip(
-            "新建布局（以当前布局的值复制）；存在已删除的软件预设时，"
-            "可从此菜单逐个恢复。"
+            "新建布局（以当前布局的值复制），只加入当前工程的布局目录。"
         )
-        self._add_layout_btn.clicked.connect(lambda _checked=False: self._on_add_layout())
+        self._add_layout_btn.clicked.connect(lambda _checked=False: self._add_layout_now())
         self._rename_layout_btn = FluentTransparentToolButton(FIF.EDIT, nav)
         self._rename_layout_btn.setToolTip("重命名当前布局")
         self._rename_layout_btn.clicked.connect(
@@ -3019,10 +3048,20 @@ class PropertyPanel(QWidget):
         self._delete_layout_btn.clicked.connect(
             lambda _checked=False: self._on_delete_layout()
         )
+        # 与角色导航条同构：新建 → 重命名 → 删除 → 库入口 → 保存。
+        # 库入口紧邻删除键、位于保存键之前（角色条的「管理样式预设库」同位置）。
+        self._layout_library_btn = FluentTransparentToolButton(FIF.PALETTE, nav)
+        self._layout_library_btn.setToolTip(
+            "管理布局库：浏览 / 勾选默认加载 / 重命名 / 删除 / 恢复出厂"
+            "预设，或把库中布局载入当前工程。"
+        )
+        self._layout_library_btn.clicked.connect(
+            lambda _checked=False: self.layoutLibraryRequested.emit()
+        )
         self._save_layout_btn = FluentTransparentToolButton(FIF.SAVE, nav)
         self._save_layout_btn.setToolTip(
-            "将当前布局参数保存为软件级新建项目默认值，并让以后新建项目中"
-            "相同行数的页面默认使用该布局；不会应用到当前页面。"
+            "将当前布局保存到布局库并设为默认加载；以后新建的工程中，"
+            "相同行数的页面将默认使用该布局；不会应用到当前页面。"
         )
         self._save_layout_btn.clicked.connect(
             lambda _checked=False: self._save_current_layout_default()
@@ -3031,6 +3070,7 @@ class PropertyPanel(QWidget):
             self._add_layout_btn,
             self._rename_layout_btn,
             self._delete_layout_btn,
+            self._layout_library_btn,
             self._save_layout_btn,
         ):
             btn.setFixedSize(24, 24)
@@ -3176,6 +3216,18 @@ class PropertyPanel(QWidget):
             **self._layout_controller.field_changes(self._style, index, changes)
         )
 
+    def select_layout_index(self, index: int) -> None:
+        """选中某个布局条目（布局库「载入到当前工程」后的落位提示）。"""
+        resolved = int(index)
+        if not 0 <= resolved <= len(self._style.layouts):
+            return
+        self._refresh_layout_combo(selected=resolved)
+        self._sync_layout_editor_controls()
+
+    def current_layout_index(self) -> int:
+        """当前选中的布局条目（0 = 默认布局；布局库「保存当前」用）。"""
+        return self._current_layout_index()
+
     def _refresh_layout_combo(self, selected: Optional[int] = None) -> None:
         if selected is None:
             selected = self._current_layout_index()
@@ -3198,7 +3250,12 @@ class PropertyPanel(QWidget):
         self._refresh_title_layout_combo()
 
     def _sync_layout_combo_width(self) -> None:
-        """布局方案下拉框按最长方案名自然展开，不铺满行结构卡片。"""
+        """布局方案下拉框按最长方案名自然展开，不铺满行结构卡片。
+
+        Five management buttons share this row; the empirical budget inside
+        the supported 320px panel width caps the combo at 120px（超出按省略
+        号截断，完整名悬浮提示可见）。
+        """
         metrics = self._layout_combo.fontMetrics()
         text_width = max(
             (
@@ -3207,9 +3264,7 @@ class PropertyPanel(QWidget):
             ),
             default=0,
         )
-        # Four management buttons share this row.  A 110px floor keeps the
-        # complete navigation inside the supported 320px panel width.
-        self._layout_combo.setFixedWidth(max(110, min(280, text_width + 32)))
+        self._layout_combo.setFixedWidth(max(80, min(120, text_width + 32)))
 
     def _sync_layout_editor_controls(self) -> None:
         values = self._current_layout_values()
@@ -3247,74 +3302,13 @@ class PropertyPanel(QWidget):
         self._refresh_layout_combo()
         self._sync_layout_editor_controls()
 
-    def _on_add_layout(self) -> None:
-        hidden = sorted(
-            (
-                str(value)
-                for value in self._style.hidden_builtin_layout_ids
-                if str(value) in _BUILTIN_LAYOUT_PRESET_IDS
-            ),
-            key=self._hidden_preset_order,
-        )
-        if hidden:
-            self._show_add_layout_menu(hidden)
-            return
-        self._add_layout_now()
-
-    @staticmethod
-    def _hidden_preset_order(layout_id: str) -> tuple[int, int]:
-        """恢复菜单排序：标题预设在前，行布局按行数升序。"""
-        if layout_id == "title-default":
-            return (0, 0)
-        rows = layout_id.removeprefix("builtin-")
-        return (1, int(rows) if rows.isdigit() else 99)
-
     def _add_layout_now(self) -> None:
+        """新建布局（复制当前）：只进当前工程目录，不自动入布局库。"""
         changes, selected = self._layout_controller.add_changes(
             self._style,
             self._current_layout_index(),
         )
         self._update_style(**changes)
-        self._refresh_layout_combo(selected=selected)
-        self._sync_layout_editor_controls()
-
-    def _show_add_layout_menu(self, hidden: list[str]) -> None:
-        """存在已删除的出厂预设时，添加按钮弹出「新建 / 恢复」菜单。"""
-        menu = RoundMenu(parent=self)
-        menu.addAction(Action("新建布局（复制当前）", triggered=self._add_layout_now))
-        menu.addSeparator()
-        for layout_id in hidden:
-            menu.addAction(
-                Action(
-                    f"恢复『{builtin_preset_display_name(layout_id)}』",
-                    triggered=(
-                        lambda _checked=False, lid=layout_id: (
-                            self._restore_builtin_layout(lid)
-                        )
-                    ),
-                )
-            )
-        menu.exec(
-            self._add_layout_btn.mapToGlobal(
-                self._add_layout_btn.rect().bottomLeft()
-            )
-        )
-
-    def _restore_builtin_layout(self, layout_id: str) -> None:
-        changes = self._layout_controller.restore_changes(self._style, layout_id)
-        if not changes:
-            return
-        self._update_style(**changes)
-        # 补种发生在宿主应用样式后的 ensure_page_layout_defaults，回流后按
-        # id 选中恢复项，让用户立刻看到它。
-        selected = next(
-            (
-                index
-                for index, layout in enumerate(self._style.layouts, start=1)
-                if layout.layout_id == layout_id
-            ),
-            0,
-        )
         self._refresh_layout_combo(selected=selected)
         self._sync_layout_editor_controls()
 
@@ -3342,21 +3336,35 @@ class PropertyPanel(QWidget):
         fallback_name = layout_display_name(self._style, "default")
         layout_id = str(self._style.layouts[index - 1].layout_id or "")
         preset_hint = (
-            "\n这是软件预设布局：删除仅影响当前工程，之后可通过"
-            "「新建布局」菜单恢复。"
+            "\n这是软件预设布局：仅从当前工程移除，布局库中保留"
+            "（可在布局库中重新载入）。"
             if layout_id in _BUILTIN_LAYOUT_PRESET_IDS
-            else "\n这是自定义布局：将同时从软件级布局库中删除。"
+            else "\n这是自定义布局：仅从当前工程移除，布局库中保留"
+            "（可在布局库管理中删除库条目）。"
         )
-        confirmed = fluent_question(
+        usage_hint = self._layout_usage_text(name)
+        # 二次确认（与布局库删除同口径）：第一步列影响，第二步最终确认并
+        # 提供「本次运行不再提示」。
+        if not dont_ask_active("layout_project_delete") and not fluent_question(
             self,
-            "删除布局",
+            "删除布局（1/2）",
             f"确定要删除布局“{name}”吗？\n"
+            f"{usage_hint}"
             f"使用它的页面（和标题）会回到“{fallback_name}”。{preset_hint}",
-            yes_text="删除",
+            yes_text="下一步",
             no_text="取消",
             default_cancel=True,
-        )
-        if not confirmed:
+        ):
+            return
+        if not fluent_confirm_dont_ask(
+            self,
+            "删除布局（2/2）",
+            f"再次确认：从当前工程移除布局“{name}”？\n"
+            "工程内的页面会改用默认布局；布局库中的同名条目不受影响。",
+            key="layout_project_delete",
+            yes_text="删除",
+            no_text="取消",
+        ):
             return
         self._update_style(
             **self._layout_controller.delete_changes(self._style, index)
@@ -3366,20 +3374,33 @@ class PropertyPanel(QWidget):
         self._sync_layout_editor_controls()
 
     def _save_current_layout_default(self) -> None:
-        """Ask before persisting the selected project layout as an app default."""
+        """确认后把选中布局写入应用默认（index 0）或布局库（index>0）。"""
 
         index = self._current_layout_index()
-        name = (
-            layout_display_name(self._style, "default")
-            if index == 0
-            else self._style.layouts[index - 1].name
-        )
+        if index == 0:
+            # index 0 是「全局默认布局」（Style 自身），不是库条目：这里保存
+            # 的是新建工程的默认布局标量，不会在布局库里多出一条。
+            name = layout_display_name(self._style, "default")
+            if not fluent_question(
+                self,
+                "保存为软件默认布局",
+                f"是否把布局“{name}”的当前参数保存为新建工程的默认布局？\n"
+                "以后新建项目中相同行数的页面将默认使用该布局；"
+                "不会应用到当前页面，也不会在布局库中新增条目。",
+                yes_text="保存",
+                no_text="取消",
+                default_cancel=True,
+            ):
+                return
+            self.defaultLayoutSaveRequested.emit(index)
+            return
+        name = self._style.layouts[index - 1].name
         if not fluent_question(
             self,
-            "保存为软件默认布局",
-            f"是否将布局“{name}”的当前参数保存到软件级新建项目默认值？\n"
+            "保存到布局库",
+            f"是否将布局“{name}”保存到布局库并设为默认加载？\n"
             "以后新建的项目中，相同行数的页面将默认使用该布局；"
-            "不会应用到当前页面。",
+            "不会应用到当前页面。默认加载可随时在布局库中调整。",
             yes_text="保存",
             no_text="取消",
             default_cancel=True,

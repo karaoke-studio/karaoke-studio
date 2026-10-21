@@ -143,6 +143,55 @@ def fluent_question_with_checkbox(
     return confirmed, checkbox.isChecked()
 
 
+#: 会话级「本次运行不再提示」标记（按用途分键；不落盘，重启即恢复询问）。
+_DONT_ASK_SESSION_FLAGS: dict[str, bool] = {}
+
+
+def dont_ask_active(key: str) -> bool:
+    """该用途是否已被用户勾选「本次运行不再提示」。"""
+
+    return bool(_DONT_ASK_SESSION_FLAGS.get(key))
+
+
+def reset_dont_ask_flags() -> None:
+    """清空会话标记（测试与「恢复默认偏好」用）。"""
+
+    _DONT_ASK_SESSION_FLAGS.clear()
+
+
+def fluent_confirm_dont_ask(
+    parent: Optional[QWidget],
+    title: str,
+    content: str,
+    *,
+    key: str,
+    checkbox_text: str = "本次运行不再提示",
+    yes_text: str = "确定",
+    no_text: str = "取消",
+    default_cancel: bool = True,
+) -> bool:
+    """确认框 + 「本次运行不再提示」勾选（会话级生效）。
+
+    与 :func:`fluent_question_with_checkbox` 的区别：本函数自己记住勾选，
+    同一 ``key`` 后续直接返回 True，不再弹窗。删除类二次确认用它。
+    """
+
+    if dont_ask_active(key):
+        return True
+    confirmed, dont_ask = fluent_question_with_checkbox(
+        parent,
+        title,
+        content,
+        checkbox_text,
+        yes_text=yes_text,
+        no_text=no_text,
+        default_cancel=default_cancel,
+    )
+    if confirmed and dont_ask:
+        _DONT_ASK_SESSION_FLAGS[key] = True
+    return confirmed
+
+
 def fluent_choice(
     parent: Optional[QWidget],
     title: str,
