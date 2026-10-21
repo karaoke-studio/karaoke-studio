@@ -3790,6 +3790,131 @@ def test_flame_sprite_contract():
     assert sprite_for_kind("ash") == "ash"
 
 
+def test_flame_shape_presets_contract():
+    """四种主火团 + 两种细长焰芯都是独立单轮廓、无自交叠；映射齐全。"""
+    import math as _math
+
+    for name in (
+        "flame", "flame_tall", "flame_wide", "flame_curl",
+        "flame_alt", "flame_alt_b",
+    ):
+        commands = FX_SPRITES[name]["path_commands"]
+        assert commands[0][0] == "M" and commands[-1][0] == "Z"
+        points = _sprite_outline_points(commands)
+        assert _sprite_loop_intersections([points]) == 0, name
+        xs = [x for x, _y in points]
+        ys = [y for _x, y in points]
+        assert max(ys) - min(ys) > 700.0, name
+        assert max(xs) - min(xs) > 120.0, name
+        assert sprite_for_kind(name) == name
+        assert _math.isfinite(sum(xs) + sum(ys))
+    # 四张主火团的外形确实不同（顶点集合两两不等）。
+    bodies = ["flame", "flame_tall", "flame_wide", "flame_curl"]
+    signatures = {
+        tuple(
+            (round(float(c[i]), 3), round(float(c[i + 1]), 3))
+            for c in FX_SPRITES[name]["path_commands"]
+            for i in range(1, len(c) - 1, 2)
+        )
+        for name in bodies
+    }
+    assert len(signatures) == len(bodies)
+
+
+def test_flame_plans_shape_presets_and_impact():
+    """火焰规划：同簇四层用四种不同火形、下一簇轮换；点燃/熄灭叠火球、
+    白闪、冲击环与飞散火星。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        FLAME_BODY_SHAPES,
+        FLAME_CORE_SHAPES,
+    )
+
+    style = Style(
+        entry_anim="flame", entry_lead_ms=600,
+        exit_anim="flame", exit_fade_ms=600,
+        sing_fx="flame", fx_particle_count=14,
+        font_size_px=100, karaoke_anim="none",
+    )
+    bursts = plan_line_bursts(
+        style, 0, 1000, 4700, 4100,
+        [(1200, 1600), (1600, 2000), (2000, 3000)],
+    )
+    fire = [b for b in bursts if b["kind"] in ("flame", "flame_alt")]
+    assert {b["sprite"] for b in fire} == set(
+        FLAME_BODY_SHAPES
+    ) | set(FLAME_CORE_SHAPES)
+    # 同一簇（同 start + char）四层四形，不重复。
+    for start in {b["start_ms"] for b in fire}:
+        at = [b for b in fire if b["start_ms"] == start]
+        assert len(at) == 4
+        assert len({b["sprite"] for b in at}) == 4
+
+    fireball = [b for b in bursts if b["kind"] == "fireball"]
+    flash = [b for b in bursts if b["kind"] == "flash"]
+    wave = [b for b in bursts if b["kind"] == "shockwave"]
+    spark = [b for b in bursts if b["kind"] == "spark"]
+    assert len(fireball) == 12  # 入/退 × 3 字 × 2 色
+    assert len(flash) == len(wave) == 6
+    assert len(spark) == 12
+    assert all(b["front"] for b in fireball)
+    assert all(b["front"] for b in flash)
+    assert all(not b["front"] for b in wave)
+    assert all(b["front"] for b in spark)
+    assert {b["color"] for b in flash} == {"#FFF3C4"}
+    assert {b["sprite"] for b in fireball} <= set(FLAME_BODY_SHAPES)
+    # 每条冲击都对应一个火流簇起点（冲击不会凭空出现）。
+    fire_starts = {b["start_ms"] for b in fire}
+    impact_starts = {b["start_ms"] for b in fireball + flash + wave + spark}
+    assert impact_starts <= fire_starts
+
+
+def test_flame_impact_trajectories():
+    """火球膨胀、白闪衰减、冲击环扩散、火星向外飞散并下坠。"""
+    fireball = {
+        "kind": "fireball", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 260, "count": 6, "seed": 91,
+        "size_px": 60.0, "travel_px": 30.0, "front": True, "sweep": 0,
+    }
+    early = burst_particles_at(fireball, 40, 0.0, 0.0, 120.0, 100.0)
+    late = burst_particles_at(fireball, 200, 0.0, 0.0, 120.0, 100.0)
+    assert early and late
+    assert sum(p.size_px for p in late) > sum(p.size_px for p in early)
+    assert burst_particles_at(fireball, 261, 0.0, 0.0, 120.0, 100.0) == []
+
+    flash = {
+        "kind": "flash", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 110, "count": 1, "seed": 7,
+        "size_px": 120.0, "travel_px": 0.0, "front": True, "sweep": 0,
+    }
+    one = burst_particles_at(flash, 10, 0.0, 0.0, 120.0, 100.0)[0]
+    two = burst_particles_at(flash, 90, 0.0, 0.0, 120.0, 100.0)[0]
+    assert two.size_px > one.size_px
+    assert two.alpha < one.alpha
+
+    wave = {
+        "kind": "shockwave", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 240, "count": 1, "seed": 11,
+        "size_px": 100.0, "travel_px": 0.0, "front": False, "sweep": 0,
+    }
+    first = burst_particles_at(wave, 30, 0.0, 0.0, 120.0, 100.0)[0]
+    last = burst_particles_at(wave, 210, 0.0, 0.0, 120.0, 100.0)[0]
+    assert last.size_px > first.size_px * 1.5
+    assert last.alpha < first.alpha
+
+    spark = {
+        "kind": "spark", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 380, "count": 10, "seed": 23,
+        "size_px": 8.0, "travel_px": 100.0, "front": True, "sweep": 0,
+    }
+    early_spark = burst_particles_at(spark, 80, 0.0, 0.0, 120.0, 100.0)
+    late_spark = burst_particles_at(spark, 320, 0.0, 0.0, 120.0, 100.0)
+    assert early_spark and late_spark
+    assert max(
+        abs(p.x) + abs(p.y) for p in late_spark
+    ) > max(abs(p.x) + abs(p.y) for p in early_spark)
+    assert burst_particles_at(spark, 381, 0.0, 0.0, 120.0, 100.0) == []
+
+
 def test_flame_plans_duration_driven_entry_exit_and_sing():
     """火焰 v3 规划（2026-10-18 用户口径更新）：火粒总长跟随出入场
     时长；文字全部出现/消失后只留 FLAME_TAIL_MS 短尾；四层色阶、
@@ -4278,10 +4403,12 @@ def test_plan_lightning_entry_exit_sing():
     )
     core = [b for b in bursts if b["kind"] == "lightning"]
     glow = [b for b in bursts if b["kind"] == "lightning_glow"]
-    assert len(core) == len(glow) == 18
+    # 每字 3 套 bolt 预设 × 2 色变体：入/退各 18、唱字 12（单颗组不拆色）。
+    assert len(core) == len(glow) == 48
     assert all(b["front"] for b in core)
     assert all(not b["front"] for b in glow)
-    assert {b["color"] for b in core} == {"#F2FDFF", "#6FD3FF"}
+    assert {b["color"] for b in core} == {"#FFF7D6", "#FFD24A"}  # 黄白默认
+    assert {b["sprite"] for b in core} == {"bolt", "bolt_b", "bolt_c"}
 
     entry_core = [
         b for b in core
@@ -4289,8 +4416,15 @@ def test_plan_lightning_entry_exit_sing():
     ]
     assert {b["start_ms"] for b in entry_core} == {971, 1179, 1286}
     assert {b["end_ms"] for b in entry_core} == {1491, 1699, 1806}
-    assert all(b["size_px"] == pytest.approx(128.0) for b in entry_core)
-    assert all(b["count"] in {3, 4} for b in entry_core)  # 7 次重击拆双色
+    assert {
+        round(float(b["size_px"]), 2) for b in entry_core
+    } == {104.96, 128.0, 156.16}  # 三套 bolt 的三档尺寸
+    # 7 次重击拆 3 套预设（3/2/2），再各拆双色 → 每字 6 条、合计 7 颗。
+    for start in {b["start_ms"] for b in entry_core}:
+        at = [b for b in entry_core if b["start_ms"] == start]
+        assert len(at) == 6
+        assert sum(b["count"] for b in at) == 7
+        assert {b["sprite"] for b in at} == {"bolt", "bolt_b", "bolt_c"}
 
     glow_by_seed = {
         b["seed"]: b
@@ -4303,6 +4437,7 @@ def test_plan_lightning_entry_exit_sing():
         assert twin["count"] == burst["count"]
         assert twin["start_ms"] == burst["start_ms"]
         assert twin["end_ms"] == burst["end_ms"]
+        assert twin["sprite"] == burst["sprite"]
 
     exit_core = [
         b for b in core
@@ -4317,7 +4452,23 @@ def test_plan_lightning_entry_exit_sing():
         b["start_ms"]: b["end_ms"] - b["start_ms"] for b in sing_core
     }
     assert lifetimes == {1200: 400, 1600: 400, 2000: 1000}
-    assert all(b["count"] in {2, 2} for b in sing_core)  # 4 颗拆双色
+    for start in {b["start_ms"] for b in sing_core}:
+        at = [b for b in sing_core if b["start_ms"] == start]
+        assert len(at) == 4  # 4 颗拆 3 套预设；单颗组不拆双色
+        assert sum(b["count"] for b in at) == 4
+
+    # 出入场落雷冲击：每字一次白闪/冲击环，火花拆双色。
+    flash = [b for b in bursts if b["kind"] == "flash"]
+    wave = [b for b in bursts if b["kind"] == "shockwave"]
+    spark = [b for b in bursts if b["kind"] == "spark"]
+    assert len(flash) == len(wave) == 6  # 入/退 × 3 字
+    assert len(spark) == 12  # 入/退 × 3 字 × 2 色
+    assert all(b["front"] for b in flash)
+    assert all(not b["front"] for b in wave)
+    assert all(b["front"] for b in spark)
+    assert {b["color"] for b in flash} == {"#FFF7D6"}
+    assert {b["color"] for b in wave} == {"#FFD24A"}
+    assert {b["color"] for b in spark} == {"#FFF7D6", "#FFB300"}
     assert exit_particle_tail_end_ms("lightning", 3, 4100, 4200) == 5048
 
 
@@ -4374,6 +4525,35 @@ def test_lightning_core_and_glow_share_trajectory():
             assert 0.0 < one.alpha <= 1.0
             sampled = True
     assert sampled
+
+
+def test_lightning_growth_anchors_top_or_bottom():
+    """闪电生长（AE Trim Paths / Direction 关键帧）：单次放电内 stretch_y
+    从 0.18 拉到 1.10，且顶端（向下劈）或底端（向上劈）在生长过程中
+    固定不动，读作 bolt 逐段劈出而不是整根闪现。"""
+    burst = {
+        "kind": "lightning", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 520, "count": 1, "seed": 13579,
+        "size_px": 128.0, "travel_px": 0.0, "front": True, "sweep": 0,
+        "sprite": "bolt",
+    }
+    samples = []
+    for t_ms in range(0, 521, 10):
+        states = burst_particles_at(burst, t_ms, 0.0, 0.0, 120.0, 100.0)
+        if states:
+            samples.append(states[0])
+    assert len(samples) >= 4
+    stretches = [s.stretch_y for s in samples]
+    assert min(stretches) < 0.35
+    assert max(stretches) > 1.05
+    assert all(b >= a - 1e-9 for a, b in zip(stretches, stretches[1:]))
+    assert all(s.stretch_x == pytest.approx(1.15) for s in samples)
+    # 顶端/底端锚定：两种方向之一必须全程不动（容差 1e-6）。
+    tops = [s.y - s.size_px * s.stretch_y / 2.0 for s in samples]
+    bottoms = [s.y + s.size_px * s.stretch_y / 2.0 for s in samples]
+    top_fixed = max(tops) - min(tops) < 1e-6
+    bottom_fixed = max(bottoms) - min(bottoms) < 1e-6
+    assert top_fixed or bottom_fixed
 
 
 @pytest.mark.parametrize("kind", ["feather", "lightning"])

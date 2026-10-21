@@ -108,25 +108,71 @@ LIGHTNING_GLOW_ALPHA = 0.22
 # 出入场每字窗口内的重击次数（AE 闪电的多次放电感；双色变体会对半分）。
 # 7 次/520ms ≈ 13.5 次/秒：低于此值在 5 秒采样里会出现明显“空窗”。
 ANIM_LIGHTNING_STRIKES = 7
-# 默认双色：冷白青 + 电光蓝。
-LIGHTNING_A = "#F2FDFF"
-LIGHTNING_B = "#6FD3FF"
-# 闪电 bolt 的多边形元素半宽（1000 em 空间）：主干两端的收尖与中段加宽。
-_LIGHTNING_TRUNK = (
-    (0.0, -500.0),
-    (-72.0, -320.0),
-    (26.0, -170.0),
-    (-44.0, 20.0),
-    (58.0, 220.0),
-    (-8.0, 500.0),
+# 闪电造型预设（AE Advanced Lightning 的 Branching/Rebranching 随机化）：
+# 每字按固定伪随机表轮流取三种 bolt 轮廓，配合随机缩放/旋转/上下生长方向，
+# 避免整行都是同一张锯齿。
+LIGHTNING_SHAPES = ("bolt", "bolt_b", "bolt_c")
+# 三套 bolt 配三档尺寸（小/中/大），让同一次落雷里既有细长电弧也有
+# 粗大主雷——"几种大小 + 几种同风格粒子"的固定伪随机组合。
+LIGHTNING_SIZE_SCALES = (0.82, 1.00, 1.22)
+LIGHTNING_SHAPE_PATTERN = (
+    0, 2, 1, 1, 0, 2, 2, 1, 0, 1,
+    2, 0, 0, 2, 1, 2, 1, 0, 1, 2,
 )
-_LIGHTNING_HALF_WIDTHS = (14.0, 40.0, 38.0, 44.0, 40.0, 20.0)
-# 分叉：(起点, 终点, 起点半宽, 终点半宽)；起点落在主干内部保证并集连通。
-_LIGHTNING_BRANCHES = (
-    ((-52.0, -292.0), (-220.0, -210.0), 26.0, 8.0),
-    ((-58.0, -282.0), (-252.0, -330.0), 20.0, 6.0),
-    ((4.0, -96.0), (205.0, -25.0), 24.0, 7.0),
-    ((22.0, 140.0), (-205.0, 235.0), 22.0, 6.0),
+# 落雷冲击（AE 教程的 synced flash + expanding shockwave + debris）：
+# 白闪 120ms、冲击环 260ms、飞散电火花 420ms。
+LIGHTNING_FLASH_LIFE_MS = 120
+LIGHTNING_SHOCKWAVE_LIFE_MS = 260
+LIGHTNING_SPARK_LIFE_MS = 420
+LIGHTNING_SPARK_COUNT = 10
+# 默认双色：黄白（用户口径）。白黄芯 + 金黄副色；火花用暖琥珀。
+LIGHTNING_A = "#FFF7D6"
+LIGHTNING_B = "#FFD24A"
+LIGHTNING_SPARK = "#FFB300"
+# 闪电 bolt 的三套多边形预设（主干点列、半宽、分叉）：同一 1000 em
+# 空间里的三种锯齿方向/分叉位置，按固定伪随机表轮流使用。每套的
+# 分叉起点都落在主干内部，保证并集连通、单外环。
+_LIGHTNING_PRESETS = (
+    (
+        (
+            (0.0, -500.0), (-72.0, -320.0), (26.0, -170.0),
+            (-44.0, 20.0), (58.0, 220.0), (-8.0, 500.0),
+        ),
+        (14.0, 40.0, 38.0, 44.0, 40.0, 20.0),
+        (
+            ((-52.0, -292.0), (-220.0, -210.0), 26.0, 8.0),
+            ((-58.0, -282.0), (-252.0, -330.0), 20.0, 6.0),
+            ((4.0, -96.0), (205.0, -25.0), 24.0, 7.0),
+            ((22.0, 140.0), (-205.0, 235.0), 22.0, 6.0),
+        ),
+    ),
+    (
+        (
+            (20.0, -500.0), (92.0, -330.0), (-8.0, -180.0),
+            (74.0, 0.0), (-38.0, 200.0), (24.0, 500.0),
+        ),
+        (16.0, 38.0, 42.0, 36.0, 44.0, 18.0),
+        (
+            ((74.0, -312.0), (250.0, -240.0), 22.0, 7.0),
+            ((-2.0, -190.0), (-190.0, -280.0), 20.0, 6.0),
+            ((66.0, 8.0), (240.0, 86.0), 24.0, 7.0),
+            ((-18.0, 168.0), (-218.0, 120.0), 20.0, 6.0),
+        ),
+    ),
+    (
+        (
+            (-30.0, -500.0), (-96.0, -340.0), (44.0, -260.0),
+            (-20.0, -120.0), (88.0, -20.0), (10.0, 140.0),
+            (-62.0, 270.0), (30.0, 500.0),
+        ),
+        (13.0, 34.0, 38.0, 36.0, 40.0, 36.0, 34.0, 17.0),
+        (
+            ((-74.0, -330.0), (-248.0, -390.0), 20.0, 6.0),
+            ((72.0, -40.0), (250.0, -110.0), 22.0, 6.0),
+            ((44.0, 70.0), (210.0, 180.0), 20.0, 6.0),
+            ((-30.0, 230.0), (-220.0, 330.0), 18.0, 5.0),
+        ),
+    ),
 )
 # 雪花两档（2026-10 用户口径）：``snow`` = 教程并集轮廓带全部洞环（界面
 # 「雪花飘入/飘出/飘动·镂空」）；``snow_solid`` = **0890458d 时代的 ❄ 枝晶
@@ -163,6 +209,25 @@ FIRE_LAYERS = (
     (FIRE_INNER, 0.70, 0.88, "flame_alt"),
     (FIRE_CORE, 0.50, 0.80, "flame_alt"),
 )
+# 火形预设（AE Particular 火 presets 的多 sprite 思路）：四种同风格、
+# 不同轮廓的主火团 + 细长内焰。`FLAME_SHAPE_PATTERN` 是固化的 20 数伪
+# 随机表（与逐字时间偏移表同口径），按「字符 × 簇 × 层」循环取形——
+# 同一簇的四层色阶用四种不同火形，相邻簇再轮换，不再整行复制同一张。
+FLAME_BODY_SHAPES = ("flame", "flame_tall", "flame_wide", "flame_curl")
+FLAME_CORE_SHAPES = ("flame_alt", "flame_alt_b")
+FLAME_SHAPE_PATTERN = (
+    0, 2, 1, 3, 1, 0, 3, 2, 2, 1,
+    0, 3, 3, 1, 2, 0, 1, 3, 0, 2,
+)
+# 点燃/熄灭冲击（AE 火球起爆 + 冲击环 + 火星）：火球 260ms、白闪
+# 110ms、冲击环 240ms、飞散火星 380ms。
+FLAME_IMPACT_LIFE_MS = 260
+FLAME_FLASH_LIFE_MS = 110
+FLAME_SHOCKWAVE_LIFE_MS = 240
+FLAME_SPARK_LIFE_MS = 380
+FLAME_IMPACT_COUNT = 6
+FLAME_SPARK_COUNT = 10
+FLAME_FLASH_COLOR = "#FFF3C4"
 # 火焰粒子寿命：火苗有余韵，比音符长、与雪花同档（Burning 模板的火粒
 # 淡出窗口 2000ms 中实际可见约 1s）。
 FLAME_LIFE_MS = 1100
@@ -1080,6 +1145,71 @@ def _flame_commands() -> list[list[object]]:
     ]
 
 
+def _flame_tall_commands() -> list[list[object]]:
+    """高瘦火舌（kind/sprite ``flame_tall``）：比主火团窄 40%、更高，
+    左右腰轻微 S 摆、焰尖偏左——同簇里换用时可读作火势被拉高。"""
+    return [
+        ["M", 30.0, -480.0],
+        ["C", 40.0, -380.0, 100.0, -330.0, 130.0, -240.0],
+        ["C", 165.0, -140.0, 185.0, -40.0, 160.0, 60.0],
+        ["C", 135.0, 160.0, 80.0, 260.0, 0.0, 360.0],
+        ["C", -80.0, 260.0, -135.0, 160.0, -160.0, 60.0],
+        ["C", -185.0, -40.0, -165.0, -140.0, -130.0, -240.0],
+        ["C", -100.0, -330.0, -40.0, -380.0, -30.0, -480.0],
+        ["C", -25.0, -488.0, 25.0, -488.0, 30.0, -480.0],
+        ["Z"],
+    ]
+
+
+def _flame_wide_commands() -> list[list[object]]:
+    """宽焰（kind/sprite ``flame_wide``）：矮而宽、双峰焰尖（中间凹口），
+    像一团横向铺开的火——与外层火团交替出现时火焰体积更不规则。"""
+    return [
+        ["M", -120.0, -430.0],
+        ["C", -260.0, -300.0, -300.0, -140.0, -260.0, 20.0],
+        ["C", -220.0, 200.0, -120.0, 330.0, 0.0, 380.0],
+        ["C", 120.0, 330.0, 220.0, 200.0, 260.0, 20.0],
+        ["C", 300.0, -140.0, 260.0, -300.0, 120.0, -430.0],
+        ["C", 60.0, -370.0, -60.0, -370.0, -120.0, -430.0],
+        ["Z"],
+    ]
+
+
+def _flame_curl_commands() -> list[list[object]]:
+    """卷焰（kind/sprite ``flame_curl``）：整体右倾、右腰带一个向内卷的
+    缺口——AE 火焰模板里常见的“被风吹卷”轮廓，给同一簇火加方向感。"""
+    return [
+        ["M", 150.0, -430.0],
+        ["C", 165.0, -350.0, 210.0, -300.0, 220.0, -230.0],
+        ["L", 168.0, -205.0],
+        ["L", 232.0, -160.0],
+        ["C", 245.0, -60.0, 230.0, 60.0, 195.0, 160.0],
+        ["C", 150.0, 270.0, 70.0, 360.0, -20.0, 385.0],
+        ["C", -100.0, 400.0, -180.0, 320.0, -215.0, 230.0],
+        ["C", -255.0, 120.0, -250.0, 0.0, -225.0, -120.0],
+        ["C", -205.0, -230.0, -150.0, -320.0, -60.0, -380.0],
+        ["C", 10.0, -420.0, 90.0, -445.0, 150.0, -430.0],
+        ["Z"],
+    ]
+
+
+def _flame_alt_b_commands() -> list[list[object]]:
+    """第二张细长内焰（sprite ``flame_alt_b``）：与 ``flame_alt`` 同风格、
+    反向 S 摆（下部向左、上部向右），给火芯层增加第二种轮廓。"""
+    return [
+        ["M", -40.0, -460.0],
+        ["C", -10.0, -400.0, 50.0, -360.0, 60.0, -290.0],
+        ["C", 70.0, -220.0, 30.0, -180.0, 10.0, -130.0],
+        ["C", 60.0, -70.0, 90.0, 0.0, 70.0, 70.0],
+        ["C", 50.0, 150.0, 10.0, 230.0, -20.0, 300.0],
+        ["C", -40.0, 240.0, -70.0, 170.0, -80.0, 100.0],
+        ["C", -100.0, 20.0, -80.0, -60.0, -50.0, -120.0],
+        ["C", -90.0, -190.0, -80.0, -280.0, -50.0, -350.0],
+        ["C", -30.0, -410.0, -45.0, -440.0, -40.0, -460.0],
+        ["Z"],
+    ]
+
+
 def _flame_alt_commands() -> list[list[object]]:
     """细长内焰剪影（kind ``flame_alt``，火焰 v3 内两层专用）：比主火舌
     更窄（±180）、更直，带轻微 S 摆——叠在宽火舌中心时读作被包住的
@@ -1209,33 +1339,39 @@ def _segment_quad(
     ]
 
 
-def _lightning_element_polygons() -> list[list[tuple[float, float]]]:
+def _lightning_element_polygons(
+    preset: int = 0,
+) -> list[list[tuple[float, float]]]:
     """闪电 bolt 的宽度元素：锯齿主干 + 四条分叉，供并集轮廓使用。"""
+    trunk, half_widths, branches = _LIGHTNING_PRESETS[
+        preset % len(_LIGHTNING_PRESETS)
+    ]
     polygons: list[list[tuple[float, float]]] = []
-    for index in range(len(_LIGHTNING_TRUNK) - 1):
+    for index in range(len(trunk) - 1):
         polygons.append(
             _segment_quad(
-                _LIGHTNING_TRUNK[index],
-                _LIGHTNING_TRUNK[index + 1],
-                _LIGHTNING_HALF_WIDTHS[index],
-                _LIGHTNING_HALF_WIDTHS[index + 1],
+                trunk[index],
+                trunk[index + 1],
+                half_widths[index],
+                half_widths[index + 1],
                 extend=10.0,
             )
         )
-    for start, end, half_start, half_end in _LIGHTNING_BRANCHES:
+    for start, end, half_start, half_end in branches:
         polygons.append(
             _segment_quad(start, end, half_start, half_end, extend=6.0)
         )
     return polygons
 
 
-def _lightning_commands() -> list[list[object]]:
-    """闪电剪影（kind ``bolt``）：锯齿主干 + 左/右分叉的并集轮廓。
+def _lightning_commands(preset: int = 0) -> list[list[object]]:
+    """闪电剪影（sprite ``bolt`` / ``bolt_b`` / ``bolt_c``）：锯齿主干 +
+    左/右分叉的并集轮廓。
 
     并集保证「单外环、无洞」——QPainter even-odd 与 D2D winding 两种填充
     规则下形状一致（分叉单独画两条子路径在 even-odd 下重叠区会被挖空）。
     """
-    loops = _union_outline(_lightning_element_polygons())
+    loops = _union_outline(_lightning_element_polygons(preset))
     if len(loops) != 1:
         raise ValueError(
             f"闪电并集轮廓环数异常：{len(loops)}（期望单外环）"
@@ -1250,12 +1386,18 @@ FX_SPRITES: dict[str, dict[str, object]] = {
     "pixel": _sprite_ir(_pixel_commands()),
     "petal": _sprite_ir(_petal_commands()),
     "feather": _sprite_ir(_feather_commands()),
-    "bolt": _sprite_ir(_lightning_commands()),
+    "bolt": _sprite_ir(_lightning_commands(0)),
+    "bolt_b": _sprite_ir(_lightning_commands(1)),
+    "bolt_c": _sprite_ir(_lightning_commands(2)),
     "snow": _sprite_ir(_snow_commands()),
     "snow_solid": _sprite_ir(_snow_solid_commands()),
     "heart": _sprite_ir(_heart_commands()),
     "flame": _sprite_ir(_flame_commands()),
+    "flame_tall": _sprite_ir(_flame_tall_commands()),
+    "flame_wide": _sprite_ir(_flame_wide_commands()),
+    "flame_curl": _sprite_ir(_flame_curl_commands()),
     "flame_alt": _sprite_ir(_flame_alt_commands()),
+    "flame_alt_b": _sprite_ir(_flame_alt_b_commands()),
     "ash": _sprite_ir(_ash_commands()),
     # 火星圆点（ember 专用）：半径 500 的实心圆，四段贝塞尔近似。
     "dot": _sprite_ir(_circle_commands(0.0, 0.0, 500.0)),
@@ -1277,10 +1419,19 @@ _SPRITE_FOR_KIND = {
     "snow_solid": "snow_solid",
     "heart": "heart",
     "flame": "flame",
+    "flame_tall": "flame_tall",
+    "flame_wide": "flame_wide",
+    "flame_curl": "flame_curl",
     "flame_alt": "flame_alt",
+    "flame_alt_b": "flame_alt_b",
     "flame_glow": "flame",
     "ember": "dot",
     "ash": "ash",
+    # 火焰/闪电冲击的伴生内部 kind（无 UI 档位）：
+    "fireball": "flame",
+    "flash": "star4",
+    "shockwave": "ring",
+    "spark": "dot",
 }
 
 
@@ -1683,6 +1834,7 @@ def plan_line_bursts(
         travel: float,
         *,
         fixed_default: bool,
+        shape_salt: int = 0,
     ) -> list[dict[str, object]]:
         """火焰 v3 的四层色阶 paint 列表（外红边 → 橙 → 金 → 白热芯）。
 
@@ -1692,6 +1844,9 @@ def plan_line_bursts(
         读不出火）；用户自定义双色时按四层尺寸循环使用其两色；跟随字体
         等带 ``paint`` 规格的档保持既有完整解析，不逐层改尺寸（规格里的
         描边宽按 burst_size 预算，改尺寸会破坏描边比例）。
+
+        ``shape_salt``（字符序 × 簇序）决定每层用哪张火形：固定 20 数
+        伪随机表按 salt 轮换，同簇四层拿四种不同轮廓，下一簇再换一组。
         """
         mode = str(
             getattr(style, "fx_particle_color_mode", "color") or "color"
@@ -1706,32 +1861,51 @@ def plan_line_bursts(
             or mode == "sakura"
             or (mode == "color" and default_white)
         )
-        if use_palette:
-            return [
-                {
-                    "color": color,
+
+        def _flame_shape(slot: int, *, core: bool = False) -> str:
+            shapes = FLAME_CORE_SHAPES if core else FLAME_BODY_SHAPES
+            offset = FLAME_SHAPE_PATTERN[
+                (int(shape_salt) * 3) % len(FLAME_SHAPE_PATTERN)
+            ]
+            # 加组内序号保证同簇各层落在不同预设（主火团 2 层 → 2 种、
+            # 内焰 2 层 → 2 种），而不是随机碰撞成同一张。
+            return shapes[(offset + slot) % len(shapes)]
+
+        if use_palette or mode == "color":
+            colors = (
+                [entry[0] for entry in FIRE_LAYERS]
+                if use_palette
+                else [c1, c2]
+            )
+            paints: list[dict[str, object]] = []
+            body_slot = 0
+            core_slot = 0
+            for layer_index, (
+                _palette_color, size_scale, travel_scale, layer_kind
+            ) in enumerate(FIRE_LAYERS):
+                core = layer_kind == "flame_alt"
+                if core:
+                    sprite = _flame_shape(core_slot, core=True)
+                    core_slot += 1
+                else:
+                    sprite = _flame_shape(body_slot)
+                    body_slot += 1
+                paints.append({
+                    "color": colors[layer_index % len(colors)],
                     "size_px": burst_size * size_scale,
                     "travel_px": travel * travel_scale,
                     "kind": layer_kind,
-                }
-                for color, size_scale, travel_scale, layer_kind
-                in FIRE_LAYERS
-            ]
-        if mode == "color":
-            colors = (c1, c2)
-            return [
-                {
-                    "color": colors[index % 2],
-                    "size_px": burst_size * size_scale,
-                    "travel_px": travel * travel_scale,
-                    "kind": layer_kind,
-                }
-                for index, (_color, size_scale, travel_scale, layer_kind)
-                in enumerate(FIRE_LAYERS)
-            ]
-        return _burst_paint(
+                    "sprite": sprite,
+                })
+            return paints
+        paints = _burst_paint(
             char_index, burst_size, anim=not fixed_default, fire=True
         )
+        # 缓存返回的 dict 是共享对象：加火形必须复制，不能原地改。
+        return [
+            {**paint, "sprite": _flame_shape(index)}
+            for index, paint in enumerate(paints)
+        ]
 
     def _fire_glow_color(
         char_index: int,
@@ -1811,7 +1985,9 @@ def plan_line_bursts(
                 "size_px": size, "travel_px": travel,
                 "front": True, "sweep": 0,
             }, _fire_layer_paints(
-                char_index, size, travel, fixed_default=fixed_default
+                char_index, size, travel,
+                fixed_default=fixed_default,
+                shape_salt=char_index * 7 + puff,
             ))
             if with_glow:
                 glow_end = _clip_end(start, FLAME_GLOW_LIFE_MS)
@@ -1829,6 +2005,12 @@ def plan_line_bursts(
                         "color": glow_color,
                         "size_px": glow_size,
                         "travel_px": size * 2.0,
+                        "sprite": FLAME_BODY_SHAPES[
+                            FLAME_SHAPE_PATTERN[
+                                (char_index * 5 + puff)
+                                % len(FLAME_SHAPE_PATTERN)
+                            ] % len(FLAME_BODY_SHAPES)
+                        ],
                     }])
             if with_embers:
                 ember_start = start + 40
@@ -1845,6 +2027,86 @@ def plan_line_bursts(
                         "front": True, "sweep": 0,
                     }, [{"color": EMBER_A}, {"color": EMBER_B}])
 
+    def _emit_flame_impact(
+        char_index: int,
+        start_ms: int,
+        *,
+        size: float,
+        seed_offset: int,
+        end_limit_ms: int | None = None,
+    ) -> None:
+        """点燃/熄灭冲击（AE 火球起爆 + 白闪 + 冲击环 + 飞散火星）。
+
+        此前火焰只有持续火流，出入场缺一个“起势”的瞬间。这里在每字火流
+        起点叠四层冲击：大火球径向炸开（260ms）、近白闪光（110ms）、
+        橙色冲击环（240ms，垫在文字后）、火星向四周飞散（380ms）。所有
+        窗口同样受 ``end_limit_ms`` 短尾裁剪，不会越过文字消失后的火尾。
+        """
+        start = int(start_ms)
+
+        def _clip(life_ms: int) -> int | None:
+            end = start + int(life_ms)
+            if end_limit_ms is not None:
+                end = min(end, int(end_limit_ms))
+            return end if end - start >= 80 else None
+
+        shape = FLAME_BODY_SHAPES[
+            FLAME_SHAPE_PATTERN[
+                (char_index * 11 + seed_offset) % len(FLAME_SHAPE_PATTERN)
+            ] % len(FLAME_BODY_SHAPES)
+        ]
+        fireball_end = _clip(FLAME_IMPACT_LIFE_MS)
+        if fireball_end is not None:
+            _variant_bursts({
+                "kind": "fireball", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start, "end_ms": fireball_end,
+                "count": FLAME_IMPACT_COUNT,
+                "seed": (seed_base + seed_offset + char_index * 13)
+                & 0xFFFFFFFF,
+                "size_px": size * 2.2, "travel_px": size * 1.1,
+                "front": True, "sweep": 0,
+            }, [
+                {"color": FIRE_OUTER, "sprite": shape},
+                {"color": FIRE_CORE, "sprite": shape},
+            ])
+        flash_end = _clip(FLAME_FLASH_LIFE_MS)
+        if flash_end is not None:
+            _variant_bursts({
+                "kind": "flash", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start, "end_ms": flash_end,
+                "count": 1,
+                "seed": (seed_base + seed_offset + char_index * 17 + 1)
+                & 0xFFFFFFFF,
+                "size_px": size * 3.0, "travel_px": 0.0,
+                "front": True, "sweep": 0,
+            }, [{"color": FLAME_FLASH_COLOR}])
+        wave_end = _clip(FLAME_SHOCKWAVE_LIFE_MS)
+        if wave_end is not None:
+            _variant_bursts({
+                "kind": "shockwave", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start, "end_ms": wave_end,
+                "count": 1,
+                "seed": (seed_base + seed_offset + char_index * 19 + 2)
+                & 0xFFFFFFFF,
+                "size_px": size * 2.0, "travel_px": 0.0,
+                "front": False, "sweep": 0,
+            }, [{"color": FIRE_EDGE}])
+        spark_end = _clip(FLAME_SPARK_LIFE_MS)
+        if spark_end is not None:
+            _variant_bursts({
+                "kind": "spark", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start, "end_ms": spark_end,
+                "count": FLAME_SPARK_COUNT,
+                "seed": (seed_base + seed_offset + char_index * 23 + 3)
+                & 0xFFFFFFFF,
+                "size_px": size * 0.18, "travel_px": size * 2.4,
+                "front": True, "sweep": 0,
+            }, [{"color": EMBER_A}, {"color": EMBER_B}])
+
     def _emit_lightning_bursts(
         char_index: int,
         start_ms: int,
@@ -1859,9 +2121,9 @@ def plan_line_bursts(
         """发射一组闪电（AE Advanced Lightning 语言）：核心 bolt 画在文字
         前，同种子、同数量、放大 1.35× 的暗色 bolt 画在文字后当辉光。
 
-        核心与辉光使用同一 ``seed``/``count`` 与同一求值公式，逐颗粒子的
-        位置/旋转/时序完全重合；只有尺寸与透明度不同（求值器按 kind
-        分支），因此不会出现“辉光错位”。
+        重击次数按三套 bolt 预设拆分（固定伪随机表选形），每套预设两条
+        同 seed 的核心/辉光 burst；核心与辉光的位置/旋转/时序逐颗重合，
+        只有尺寸与透明度不同，不会出现“辉光错位”。
         """
         total = max(1, int(count))
         # 唱字/联动档的颜色默认是「单独颜色」的双白；白闪电会读成普通
@@ -1884,25 +2146,90 @@ def plan_line_bursts(
             paints = _burst_paint(
                 char_index, size, anim=fixed_default, lightning=True
             )
-        core = {
-            "kind": "lightning", "anchor": "char",
+        shape_total = len(LIGHTNING_SHAPES)
+        base, extra = divmod(total, shape_total)
+        for shape_index in range(shape_total):
+            group_count = base + (1 if shape_index < extra else 0)
+            if group_count <= 0:
+                continue
+            shape_code = LIGHTNING_SHAPE_PATTERN[
+                (char_index * 7 + seed_offset) % len(LIGHTNING_SHAPE_PATTERN)
+            ]
+            # 加 shape_index 保证同一字的 3 套预设一定各不相同；字间由
+            # 固定伪随机表轮换起始形（同字不重复、整行不固定）。
+            shape = LIGHTNING_SHAPES[(shape_code + shape_index) % shape_total]
+            group_size = size * LIGHTNING_SIZE_SCALES[
+                shape_index % len(LIGHTNING_SIZE_SCALES)
+            ]
+            seed = (
+                seed_base
+                + seed_offset
+                + char_index * 5
+                + shape_index * 0x51
+            ) & 0xFFFFFFFF
+            core = {
+                "kind": "lightning", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": int(start_ms),
+                "end_ms": int(start_ms) + max(int(window_ms), 120),
+                "count": group_count,
+                "seed": seed,
+                "size_px": group_size, "travel_px": 0.0,
+                "front": True, "sweep": 0,
+                "sprite": shape,
+            }
+            _variant_bursts(core, paints)
+            if with_glow:
+                glow_size = group_size * LIGHTNING_GLOW_SIZE_SCALE
+                _variant_bursts({
+                    **core,
+                    "kind": "lightning_glow",
+                    "size_px": glow_size,
+                    "front": False,
+                }, paints)
+
+    def _emit_lightning_impact(
+        char_index: int,
+        start_ms: int,
+        *,
+        size: float,
+        seed_offset: int,
+    ) -> None:
+        """落雷冲击（AE 教程的 synced flash + expanding shockwave + debris）：
+        近白爆闪 120ms、黄白冲击环 260ms（垫在文字后）、飞散电火花 420ms。
+        只在出入场落雷的首击处发射；唱字重击不叠闪，避免整行频闪过度。
+        """
+        start = int(start_ms)
+        _variant_bursts({
+            "kind": "flash", "anchor": "char",
             "char_index": int(char_index),
-            "start_ms": int(start_ms),
-            "end_ms": int(start_ms) + max(int(window_ms), 120),
-            "count": total,
-            "seed": (seed_base + seed_offset + char_index) & 0xFFFFFFFF,
-            "size_px": size, "travel_px": 0.0,
+            "start_ms": start, "end_ms": start + LIGHTNING_FLASH_LIFE_MS,
+            "count": 1,
+            "seed": (seed_base + seed_offset + char_index * 29)
+            & 0xFFFFFFFF,
+            "size_px": size * 1.9, "travel_px": 0.0,
             "front": True, "sweep": 0,
-        }
-        _variant_bursts(core, paints)
-        if with_glow:
-            glow_size = size * LIGHTNING_GLOW_SIZE_SCALE
-            _variant_bursts({
-                **core,
-                "kind": "lightning_glow",
-                "size_px": glow_size,
-                "front": False,
-            }, paints)
+        }, [{"color": LIGHTNING_A}])
+        _variant_bursts({
+            "kind": "shockwave", "anchor": "char",
+            "char_index": int(char_index),
+            "start_ms": start, "end_ms": start + LIGHTNING_SHOCKWAVE_LIFE_MS,
+            "count": 1,
+            "seed": (seed_base + seed_offset + char_index * 31 + 1)
+            & 0xFFFFFFFF,
+            "size_px": size * 1.5, "travel_px": 0.0,
+            "front": False, "sweep": 0,
+        }, [{"color": LIGHTNING_B}])
+        _variant_bursts({
+            "kind": "spark", "anchor": "char",
+            "char_index": int(char_index),
+            "start_ms": start, "end_ms": start + LIGHTNING_SPARK_LIFE_MS,
+            "count": LIGHTNING_SPARK_COUNT,
+            "seed": (seed_base + seed_offset + char_index * 37 + 2)
+            & 0xFFFFFFFF,
+            "size_px": size * 0.085, "travel_px": size * 1.9,
+            "front": True, "sweep": 0,
+        }, [{"color": LIGHTNING_A}, {"color": LIGHTNING_SPARK}])
 
     def _duration_scale(configured: int) -> float:
         total = min(max(int(configured), 120), 3000)
@@ -2129,6 +2456,13 @@ def plan_line_bursts(
                 seed_offset=16,
                 end_limit_ms=fire_end,
             )
+            _emit_flame_impact(
+                char_index,
+                start,
+                size=flame_size,
+                seed_offset=25,
+                end_limit_ms=fire_end,
+            )
     elif entry_anim == "feather" and entry_active and display_start_ms is not None:
         # 羽毛飘入（2026-10，AE 羽毛参考）：逐字错峰自字顶上方飘落，
         # 宽幅钟摆横摆 + 连续翻转 + 横向压扁（羽片侧对镜头），慢速降落
@@ -2168,6 +2502,12 @@ def plan_line_bursts(
                 window_ms=LIGHTNING_WINDOW_MS,
                 fixed_default=not apply_to_anim,
                 seed_offset=21,
+            )
+            _emit_lightning_impact(
+                char_index,
+                start,
+                size=lightning_size,
+                seed_offset=27,
             )
     elif entry_anim == "petal" and entry_active and display_start_ms is not None:
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
@@ -2320,6 +2660,13 @@ def plan_line_bursts(
                 seed_offset=17,
                 end_limit_ms=fire_end,
             )
+            _emit_flame_impact(
+                char_index,
+                start,
+                size=flame_size,
+                seed_offset=26,
+                end_limit_ms=fire_end,
+            )
             ash_end = min(start + ASH_LIFE_MS, fire_end)
             if ash_end - start >= 80:
                 _variant_bursts({
@@ -2381,6 +2728,12 @@ def plan_line_bursts(
                 window_ms=LIGHTNING_WINDOW_MS,
                 fixed_default=not apply_to_anim,
                 seed_offset=23,
+            )
+            _emit_lightning_impact(
+                char_index,
+                start,
+                size=lightning_size,
+                seed_offset=28,
             )
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
@@ -2860,13 +3213,16 @@ def burst_particles_at(
             # （p^1.35，浮力口径，不是 v2 的减速 p^0.85）；双频湍流横摆；
             # 尺寸「快涨后收」（Aeg 模板 \fscx 60→240→40 的缩放包络）；
             # 高频闪烁 + 长灭；**速度拉伸**——越升越窄越长，读作火舌
-            # 而不是同尺寸贴纸。出生点压在字框下半部（燃烧面在字身/字底）。
+            # 而不是同尺寸贴纸。2026-10-21 强化随机性（用户口径：粒子
+            # 过于固定）：出生横带加宽到 0.9 box_w、纵向 0.04~0.56
+            # box_h、逐颗尺寸 0.21~1.56×、旋转 ±40°，配合规划器的四种
+            # 火形预设，火团不再像同一张贴纸复制。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
             u5 = fx_unit_hash(seed + i, 5)
-            birth = u3 * life * 0.30
+            birth = u3 * life * 0.34
             # 每颗独立寿命（0.62~1.0 窗），但必须在本 burst 窗内自然播完。
             life_i = min(
                 life * (0.62 + 0.38 * u5),
@@ -2877,8 +3233,8 @@ def burst_particles_at(
                 continue
             rise = travel * p ** 1.35
             sway = (
-                math.sin((u2 + p * 1.7) * 2.0 * math.pi) * 0.30
-                + math.sin((u4 * 0.7 + p * 3.3) * 2.0 * math.pi) * 0.12
+                math.sin((u2 + p * 1.7) * 2.0 * math.pi) * 0.45
+                + math.sin((u4 * 0.7 + p * 3.3) * 2.0 * math.pi) * 0.18
             ) * size * (0.35 + 0.65 * p)
             grow = 1.0 - (1.0 - min(p / 0.16, 1.0)) ** 2
             cool = 1.0 - 0.50 * max((p - 0.50) / 0.50, 0.0) ** 1.3
@@ -2887,17 +3243,93 @@ def burst_particles_at(
             )
             alpha = min(p / 0.08, 1.0) * (1.0 - p) ** 0.45 * flicker
             lean = (
-                math.cos((u2 + p * 1.7) * 2.0 * math.pi) * 10.0
-                + (u4 - 0.5) * 8.0
+                math.cos((u2 + p * 1.7) * 2.0 * math.pi) * 16.0
+                + (u4 - 0.5) * 30.0
+                + math.sin((u5 + p * 2.1) * 2.0 * math.pi) * 8.0
             )
             out.append(ParticleDraw(
-                origin_x + (u1 - 0.5) * box_w * 0.55 + sway,
-                origin_y + (0.12 + 0.30 * u2) * box_h - rise,
+                origin_x + (u1 - 0.5) * box_w * 0.90 + sway,
+                origin_y + (0.04 + 0.52 * u2) * box_h - rise,
                 lean,
-                size * (0.45 + 0.65 * grow) * cool * (0.85 + 0.30 * u1),
+                size * (0.35 + 0.85 * grow) * cool
+                * (0.60 + 0.80 * u1),
                 alpha,
-                1.0 - 0.25 * p,
-                1.0 + 0.95 * p,
+                1.0 - 0.35 * p,
+                1.0 + 1.05 * p,
+            ))
+        elif kind == "fireball":
+            # 火球起爆（火焰点燃/熄灭冲击）：每颗自字心向随机方向炸开，
+            # 快速膨胀后收缩熄灭；配合 spark/shockwave 读作“轰”的一下。
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            u5 = fx_unit_hash(seed + i, 5)
+            birth = u3 * life * 0.10
+            p = min(
+                max((tau - birth) / max(life - birth, 1.0), 0.0), 1.0
+            )
+            if p <= 0.0 or p >= 1.0:
+                continue
+            eased = 1.0 - (1.0 - p) * (1.0 - p)
+            angle = u1 * 2.0 * math.pi
+            spread = travel * (0.35 + 0.55 * u2) * eased
+            out.append(ParticleDraw(
+                origin_x + math.cos(angle) * spread,
+                origin_y + math.sin(angle) * spread * 0.55
+                - travel * 0.80 * eased,
+                u4 * 360.0 + p * (120.0 + 160.0 * u5),
+                size * (0.35 + 0.95 * eased) * (1.0 - 0.15 * p),
+                min(p / 0.06, 1.0) * (1.0 - p) ** 1.6,
+            ))
+        elif kind == "flash":
+            # 冲击白闪（star4 sprite）：短促放大 + 快速衰减，只做“亮一下”。
+            u1 = fx_unit_hash(seed + i, 1)
+            p = tau / life
+            if p >= 1.0:
+                continue
+            out.append(ParticleDraw(
+                origin_x, origin_y,
+                u1 * 90.0 + p * 30.0,
+                size * (0.45 + 0.95 * p),
+                (1.0 - p) ** 1.5,
+            ))
+        elif kind == "shockwave":
+            # 冲击环（ring sprite）：自小圈快速扩到 2× 直径，接近满径时
+            # 淡出；画在文字后，不糊正文。
+            u1 = fx_unit_hash(seed + i, 1)
+            p = tau / life
+            if p >= 1.0:
+                continue
+            eased = 1.0 - (1.0 - p) * (1.0 - p)
+            out.append(ParticleDraw(
+                origin_x, origin_y,
+                (u1 - 0.5) * 20.0,
+                size * (0.25 + 1.25 * eased),
+                (1.0 - p) ** 2 * 0.65,
+            ))
+        elif kind == "spark":
+            # 飞散电火花/火星（dot sprite）：径向高速飞出 + 重力下坠 +
+            # 边飞边缩小，给冲击一个“碎屑四溅”的收尾。
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            delay = u3 * 60.0
+            p = min(
+                max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
+            )
+            if p <= 0.0 or p >= 1.0:
+                continue
+            angle = u1 * 2.0 * math.pi
+            speed = travel * (0.60 + 0.90 * u2)
+            out.append(ParticleDraw(
+                origin_x + math.cos(angle) * speed * p,
+                origin_y + math.sin(angle) * speed * p * 0.60
+                + travel * 0.55 * p * p,
+                p * 360.0 * (u4 - 0.5),
+                size * (0.70 + 0.60 * u4) * (1.0 - 0.40 * p),
+                min(p / 0.05, 1.0) * (1.0 - p) ** 1.2,
             ))
         elif kind == "flame_glow":
             # 火焰背光（flame_glow，flame 的伴生内部 kind）：字后一团大尺寸
@@ -2934,9 +3366,11 @@ def burst_particles_at(
             ))
         elif kind in ("lightning", "lightning_glow"):
             # 闪电（2026-10，AE Advanced Lightning 参考）：每颗粒子是一次
-            # 极短放电（90~220ms），在 burst 窗口内随机时刻重击；几乎不
-            # 位移、只做小角度倾斜，alpha 走「快速点亮 → 高频频闪 →
-            # 熄灭」。核心（lightning）画在文字前；同轨迹放大副本
+            # 极短放电（100~240ms），在 burst 窗口内随机时刻重击；**生长**
+            # 用 stretch_y 从 0.18 拉到 1.10，并按生长方向锚住顶端/底端
+            # （AE 的 Trim Paths / Direction 关键帧效果——bolt 从云层/地面
+            # 逐段劈出，而不是整根闪现）；alpha 走「快速点亮 → 高频频闪
+            # → 熄灭」。核心（lightning）画在文字前；同轨迹放大副本
             # （lightning_glow）画在文字后，低透明度当辉光。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
@@ -2951,19 +3385,33 @@ def burst_particles_at(
             p = (tau - birth) / life_i
             if p <= 0.0 or p >= 1.0:
                 continue
+            # 生长：前 45% 由短段拉到全长，之后保持；75% 向下劈、25%
+            # 向上劈（AE 闪电的 Direction 随机化）。
+            grow_p = min(p / 0.45, 1.0)
+            grow = 0.18 + 0.92 * grow_p
+            anchor = (
+                size / LIGHTNING_GLOW_SIZE_SCALE
+                if kind == "lightning_glow"
+                else size
+            )
+            direction = 1.0 if u5 >= 0.25 else -1.0
             # 频闪：2~3 个亮脉冲（AE 里 conductivity 抖动造成的重燃感）。
             strobe = 0.55 + 0.45 * abs(
                 math.sin((p * 2.6 + u5 * 2.0) * math.pi)
             )
-            alpha = min(p / 0.08, 1.0) * (1.0 - p) ** 0.65 * strobe
+            alpha = min(p / 0.06, 1.0) * (1.0 - p) ** 0.65 * strobe
             if kind == "lightning_glow":
                 alpha *= LIGHTNING_GLOW_ALPHA
             out.append(ParticleDraw(
                 origin_x + (u1 - 0.5) * box_w * 1.10,
-                origin_y - box_h * 0.08 + (u2 - 0.5) * box_h * 0.18,
-                (u4 - 0.5) * 14.0,
-                size * (0.90 + 0.10 * math.sin(math.pi * p)),
+                origin_y - box_h * 0.08
+                + (u2 - 0.5) * box_h * 0.10
+                + direction * 0.5 * anchor * (grow - 1.0),
+                (u4 - 0.5) * 20.0,
+                size,
                 alpha,
+                1.15,
+                grow,
             ))
         elif kind == "ember":
             # 余烬火星（ember，flame 伴生内部 kind）：小圆点快速上蹿，

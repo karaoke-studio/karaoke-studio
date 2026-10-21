@@ -5790,8 +5790,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     );
                     boxH = lineHeight;
                 }
+                const std::string spriteName = burst.sprite.empty()
+                    ? std::string(fxSpriteForKind(burst.kind))
+                    : burst.sprite;
                 const auto spriteIt = impl_->fxSpriteGeometries.find(
-                    fxSpriteForKind(burst.kind)
+                    spriteName
                 );
                 if (spriteIt == impl_->fxSpriteGeometries.end()
                     || !spriteIt->second) {

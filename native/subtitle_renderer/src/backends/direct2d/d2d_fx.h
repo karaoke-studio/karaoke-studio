@@ -97,8 +97,32 @@ inline const char *fxSpriteForKind(const std::string &kind) {
     if (kind == "flame") {
         return "flame";
     }
+    if (kind == "flame_tall") {
+        return "flame_tall";
+    }
+    if (kind == "flame_wide") {
+        return "flame_wide";
+    }
+    if (kind == "flame_curl") {
+        return "flame_curl";
+    }
     if (kind == "flame_alt") {
         return "flame_alt";
+    }
+    if (kind == "flame_alt_b") {
+        return "flame_alt_b";
+    }
+    if (kind == "fireball") {
+        return "flame";
+    }
+    if (kind == "flash") {
+        return "star4";
+    }
+    if (kind == "shockwave") {
+        return "ring";
+    }
+    if (kind == "spark") {
+        return "dot";
     }
     if (kind == "flame_glow") {
         return "flame";

@@ -127,6 +127,8 @@ struct TimingLine {
     // 装饰粒子（Python plan_line_bursts 规划；空表兼容旧 IR）。
     struct FxBurst {
         QString kind;
+        // 可选 sprite 覆盖（火形/雷形预设）；空 = 按 kind 取默认。
+        QString sprite;
         QString anchor;
         int charIndex = -1;
         int startMs = 0;

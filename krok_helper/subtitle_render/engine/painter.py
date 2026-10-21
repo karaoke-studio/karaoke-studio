@@ -4166,7 +4166,11 @@ def _paint_line_fx_particles(
             # sparkle 需要整行盒：粒子铺满整句并按横向位置扫过。
             box_w = line_box_w
             box_h = line_box_h
-        sprite = _fx_sprite_path(sprite_for_kind(str(burst["kind"])))
+        # 火形/雷形预设可随 burst 下发（规划器按固定伪随机表轮换）；
+        # 未指定时回落到 kind 的默认 sprite。
+        sprite = _fx_sprite_path(
+            str(burst.get("sprite") or sprite_for_kind(str(burst["kind"])))
+        )
         for state in burst_particles_at(burst, t_ms, origin_x, origin_y, box_w, box_h):
             if state.alpha <= 0.0 or state.size_px <= 0.0:
                 continue

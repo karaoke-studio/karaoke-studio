@@ -298,6 +298,8 @@ struct DisplayWindow {
 /// 轨迹在渲染时按 seed 确定性求值（与 Python particles.py 镜像）。
 struct ParticleBurst {
     std::string kind;  // sparkle / ripple / twinkle / twinkle_classic / note / assemble / dissolve
+    // 可选 sprite 覆盖（火形/雷形预设）：空 = 按 kind 取默认 sprite。
+    std::string sprite;
     std::string anchor;  // "line" | "char"
     int charIndex = -1;
     int startMs = 0;

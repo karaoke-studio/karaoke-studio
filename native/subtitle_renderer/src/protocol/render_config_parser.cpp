@@ -1634,6 +1634,11 @@ static void applyLineStyleSection(
                 burst.kind = stringValue(
                     burstObject, QStringLiteral("kind"), QString()
                 );
+                // 火形/雷形预设：Python 规划器按固定伪随机表轮换；空 = 用
+                // kind 的默认 sprite（旧 IR 兼容）。
+                burst.sprite = stringValue(
+                    burstObject, QStringLiteral("sprite"), QString()
+                );
                 burst.anchor = stringValue(
                     burstObject, QStringLiteral("anchor"),
                     QStringLiteral("line")

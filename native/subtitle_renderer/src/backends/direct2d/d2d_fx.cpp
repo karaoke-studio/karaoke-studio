@@ -22,6 +22,7 @@ constexpr int kCharFadeInOutTimeMs = 250;
 // LIGHTNING_GLOW_ALPHA）。
 constexpr float kFeatherFadeStart = 0.80f;
 constexpr float kLightningGlowAlpha = 0.22f;
+constexpr float kLightningGlowSizeScale = 1.35f;
 
 float clampedRatio(int elapsedMs, int durationMs) {
     if (durationMs <= 0) {
@@ -481,7 +482,7 @@ std::vector<FxParticle> burstParticlesAt(
             const float u4 = fxUnitHash(index, 4u);
             const float u5 = fxUnitHash(index, 5u);
             constexpr float pi = 3.14159265358979323846f;
-            const float birth = u3 * life * 0.30f;
+            const float birth = u3 * life * 0.34f;
             const float lifeI = std::min(
                 life * (0.62f + 0.38f * u5),
                 std::max(life - birth, 1.0f)
@@ -492,8 +493,8 @@ std::vector<FxParticle> burstParticlesAt(
             }
             const float rise = travel * std::pow(p, 1.35f);
             const float sway = (
-                std::sin((u2 + p * 1.7f) * 2.0f * pi) * 0.30f
-                + std::sin((u4 * 0.7f + p * 3.3f) * 2.0f * pi) * 0.12f
+                std::sin((u2 + p * 1.7f) * 2.0f * pi) * 0.45f
+                + std::sin((u4 * 0.7f + p * 3.3f) * 2.0f * pi) * 0.18f
             ) * size * (0.35f + 0.65f * p);
             const float grow = 1.0f - std::pow(
                 1.0f - std::min(p / 0.16f, 1.0f), 2.0f
@@ -507,17 +508,98 @@ std::vector<FxParticle> burstParticlesAt(
             );
             const float alpha = std::min(p / 0.08f, 1.0f)
                 * std::pow(1.0f - p, 0.45f) * flicker;
-            const float lean = std::cos((u2 + p * 1.7f) * 2.0f * pi) * 10.0f
-                + (u4 - 0.5f) * 8.0f;
+            const float lean = std::cos((u2 + p * 1.7f) * 2.0f * pi) * 16.0f
+                + (u4 - 0.5f) * 30.0f
+                + std::sin((u5 + p * 2.1f) * 2.0f * pi) * 8.0f;
             out.push_back(FxParticle{
-                originX + (u1 - 0.5f) * boxW * 0.55f + sway,
-                originY + (0.12f + 0.30f * u2) * boxH - rise,
+                originX + (u1 - 0.5f) * boxW * 0.90f + sway,
+                originY + (0.04f + 0.52f * u2) * boxH - rise,
                 lean,
-                size * (0.45f + 0.65f * grow) * cool
-                    * (0.85f + 0.30f * u1),
+                size * (0.35f + 0.85f * grow) * cool
+                    * (0.60f + 0.80f * u1),
                 alpha,
-                1.0f - 0.25f * p,
-                1.0f + 0.95f * p,
+                1.0f - 0.35f * p,
+                1.0f + 1.05f * p,
+            });
+        } else if (burst.kind == "fireball") {
+            // 火球起爆（镜像 particles fireball 分支）：径向炸开 + 快速
+            // 膨胀收缩，配合 spark/shockwave 做点燃/熄灭冲击。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float birth = u3 * life * 0.10f;
+            const float p = std::clamp(
+                (tau - birth) / std::max(life - birth, 1.0f),
+                0.0f, 1.0f
+            );
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            const float eased = 1.0f - (1.0f - p) * (1.0f - p);
+            const float angle = u1 * 2.0f * pi;
+            const float spread = travel * (0.35f + 0.55f * u2) * eased;
+            out.push_back(FxParticle{
+                originX + std::cos(angle) * spread,
+                originY + std::sin(angle) * spread * 0.55f
+                    - travel * 0.80f * eased,
+                u4 * 360.0f + p * (120.0f + 160.0f * u5),
+                size * (0.35f + 0.95f * eased) * (1.0f - 0.15f * p),
+                std::min(p / 0.06f, 1.0f) * std::pow(1.0f - p, 1.6f),
+            });
+        } else if (burst.kind == "flash") {
+            // 冲击白闪（镜像 particles flash 分支）。
+            const float u1 = fxUnitHash(index, 1u);
+            const float p = tau / life;
+            if (p >= 1.0f) {
+                continue;
+            }
+            out.push_back(FxParticle{
+                originX, originY,
+                u1 * 90.0f + p * 30.0f,
+                size * (0.45f + 0.95f * p),
+                std::pow(1.0f - p, 1.5f),
+            });
+        } else if (burst.kind == "shockwave") {
+            // 冲击环（镜像 particles shockwave 分支）。
+            const float u1 = fxUnitHash(index, 1u);
+            const float p = tau / life;
+            if (p >= 1.0f) {
+                continue;
+            }
+            const float eased = 1.0f - (1.0f - p) * (1.0f - p);
+            out.push_back(FxParticle{
+                originX, originY,
+                (u1 - 0.5f) * 20.0f,
+                size * (0.25f + 1.25f * eased),
+                std::pow(1.0f - p, 2.0f) * 0.65f,
+            });
+        } else if (burst.kind == "spark") {
+            // 飞散电火花/火星（镜像 particles spark 分支）。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float delay = u3 * 60.0f;
+            const float p = std::clamp(
+                (tau - delay) / std::max(life - delay, 1.0f),
+                0.0f, 1.0f
+            );
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            const float angle = u1 * 2.0f * pi;
+            const float speed = travel * (0.60f + 0.90f * u2);
+            out.push_back(FxParticle{
+                originX + std::cos(angle) * speed * p,
+                originY + std::sin(angle) * speed * p * 0.60f
+                    + travel * 0.55f * p * p,
+                p * 360.0f * (u4 - 0.5f),
+                size * (0.70f + 0.60f * u4) * (1.0f - 0.40f * p),
+                std::min(p / 0.05f, 1.0f) * std::pow(1.0f - p, 1.2f),
             });
         } else if (burst.kind == "flame_glow") {
             // 火焰背光（镜像 particles flame_glow 分支）：大尺寸低透明度
@@ -555,9 +637,10 @@ std::vector<FxParticle> burstParticlesAt(
             });
         } else if (burst.kind == "lightning" || burst.kind == "lightning_glow") {
             // 闪电（镜像 particles.burst_particles_at lightning 分支）：
-            // 每颗=一次 100~240ms 的短放电，窗口内随机时刻重击；几乎不
-            // 位移、小角度倾斜，alpha 快速点亮→高频频闪→熄灭。核心
-            // bolt 在前；同轨迹放大副本（lightning_glow）在后当辉光。
+            // 每颗=一次 100~240ms 的短放电，窗口内随机时刻重击；**生长**
+            // 用 stretchY 0.18→1.10 并锚住顶端/底端（AE Trim Paths /
+            // Direction 关键帧效果）。核心 bolt 在前；同轨迹放大副本
+            // （lightning_glow）在后当辉光。
             const float u1 = fxUnitHash(index, 1u);
             const float u2 = fxUnitHash(index, 2u);
             const float u3 = fxUnitHash(index, 3u);
@@ -573,20 +656,30 @@ std::vector<FxParticle> burstParticlesAt(
             if (p <= 0.0f || p >= 1.0f) {
                 continue;
             }
+            const float growP = std::min(p / 0.45f, 1.0f);
+            const float grow = 0.18f + 0.92f * growP;
+            const float anchor = burst.kind == "lightning_glow"
+                ? size / kLightningGlowSizeScale
+                : size;
+            const float direction = u5 >= 0.25f ? 1.0f : -1.0f;
             const float strobe = 0.55f + 0.45f * std::abs(
                 std::sin((p * 2.6f + u5 * 2.0f) * pi)
             );
-            float alpha = std::min(p / 0.08f, 1.0f)
+            float alpha = std::min(p / 0.06f, 1.0f)
                 * std::pow(1.0f - p, 0.65f) * strobe;
             if (burst.kind == "lightning_glow") {
                 alpha *= kLightningGlowAlpha;
             }
             out.push_back(FxParticle{
                 originX + (u1 - 0.5f) * boxW * 1.10f,
-                originY - boxH * 0.08f + (u2 - 0.5f) * boxH * 0.18f,
-                (u4 - 0.5f) * 14.0f,
-                size * (0.90f + 0.10f * std::sin(pi * p)),
+                originY - boxH * 0.08f
+                    + (u2 - 0.5f) * boxH * 0.10f
+                    + direction * 0.5f * anchor * (grow - 1.0f),
+                (u4 - 0.5f) * 20.0f,
+                size,
                 alpha,
+                1.15f,
+                grow,
             });
         } else if (burst.kind == "ember") {
             // 余烬火星（镜像 particles ember 分支）：小圆点快速上蹿、

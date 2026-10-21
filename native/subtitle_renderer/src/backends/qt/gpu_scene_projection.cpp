@@ -750,6 +750,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             for (const TimingLine::FxBurst &source : sourceLine.fxBursts) {
                 krok::subtitle::native::ParticleBurst burst;
                 burst.kind = source.kind.toStdString();
+                burst.sprite = source.sprite.toStdString();
                 burst.anchor = source.anchor.toStdString();
                 burst.charIndex = source.charIndex;
                 burst.startMs = source.startMs + sourceTimingOffset;
