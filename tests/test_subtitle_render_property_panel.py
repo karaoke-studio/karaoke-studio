@@ -6210,8 +6210,8 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert emitted[-1].decoration_kind == "glow"
     assert panel._shadow_x_field.isHidden()
     assert panel._shadow_y_field.isHidden()
-    # 每个走字状态页只显示一个“发光宽度”控件。
-    assert panel._glow_radius_field.isHidden()
+    # 两张走字卡片都同时保留“走字前发光/走字后发光”两个控件。
+    assert not panel._glow_radius_field.isHidden()
     assert not panel._glow_after_radius_field.isHidden()
     assert not panel._glow_controls_row.isHidden()
     glow_layout = panel._glow_controls_row.layout()
@@ -6221,35 +6221,27 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
         panel._glow_concentration_field,
     ]
 
-    # 同步开启时前后发光宽度保持一致。
+    panel._glow_radius_spin.setValue(28)
+    assert emitted[-1].glow_radius_px == 10
+    assert emitted[-1].glow_before_radius_px == 28
+    assert emitted[-1].glow_after_radius_px == 10
+
     panel._glow_after_radius_spin.setValue(16)
-    assert emitted[-1].glow_before_radius_px == 16
+    assert emitted[-1].glow_before_radius_px == 28
+    assert emitted[-1].glow_after_radius_px == 16
+
+    panel._glow_radius_spin.setValue(0)
+    assert emitted[-1].glow_before_radius_px == 0
     assert emitted[-1].glow_after_radius_px == 16
 
     panel._glow_after_radius_spin.setValue(0)
     assert emitted[-1].glow_before_radius_px == 0
     assert emitted[-1].glow_after_radius_px == 0
 
-    panel._color_state_combo.setCurrentIndex(
-        panel._color_state_combo.findData("before")
-    )
-    assert not panel._glow_radius_field.isHidden()
-    assert panel._glow_after_radius_field.isHidden()
-    panel._glow_radius_spin.setValue(28)
-    assert emitted[-1].glow_before_radius_px == 28
-    assert emitted[-1].glow_after_radius_px == 28
-
-    # 关闭同步后，两个走字状态各自独立。
-    panel._decoration_sync_check.setChecked(False)
-    panel._glow_radius_spin.setValue(7)
-    assert emitted[-1].glow_before_radius_px == 7
-    assert emitted[-1].glow_after_radius_px == 28
-
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("none")
     )
-    assert emitted[-1].decoration_kind_before == "none"
-    assert emitted[-1].decoration_kind == "glow"
+    assert emitted[-1].decoration_kind == "none"
     assert panel._shadow_x_field.isHidden()
     assert panel._shadow_y_field.isHidden()
     assert panel._glow_radius_field.isHidden()
@@ -6259,8 +6251,7 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("shadow")
     )
-    assert emitted[-1].decoration_kind_before == "shadow"
-    assert emitted[-1].decoration_kind == "glow"
+    assert emitted[-1].decoration_kind == "shadow"
     assert not panel._shadow_x_field.isHidden()
     assert not panel._shadow_y_field.isHidden()
     assert panel._glow_radius_field.isHidden()
@@ -6297,6 +6288,14 @@ def test_decoration_sync_defaults_on_and_routes_before_edits_to_after(qapp):
     )
     assert emitted[-1].glow_concentration_level == 2
     assert emitted[-1].glow_before_concentration_level is None
+
+    # 同步不绑定发光宽度：两个宽度控件始终各改各的。
+    panel._glow_after_radius_spin.setValue(21)
+    assert emitted[-1].glow_after_radius_px == 21
+    assert emitted[-1].glow_before_radius_px == 10
+    panel._glow_radius_spin.setValue(6)
+    assert emitted[-1].glow_before_radius_px == 6
+    assert emitted[-1].glow_after_radius_px == 21
 
 
 def test_decoration_sync_off_keeps_before_slots_independent(qapp):
@@ -7454,7 +7453,6 @@ def test_ruby_subject_displays_scaled_effective_glow_values(qapp):
             font_size_px=100,
             ruby_font_size_px=50,
             decoration_kind="glow",
-            decoration_before_sync=False,
             glow_before_radius_px=20,
             glow_after_radius_px=24,
             glow_concentration_level=2,

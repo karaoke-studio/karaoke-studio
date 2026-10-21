@@ -190,8 +190,8 @@ class RoleColorPropertyPageBuilder:
         host._decoration_sync_check = CheckBox("同步", section)
         host._decoration_sync_check.setChecked(True)
         host._decoration_sync_check.setToolTip(
-            "勾选时，走字前的装饰类型、发光浓度、发光宽度、阴影 X/Y 与走字后保持一致；"
-            "旧工程默认不勾选。"
+            "勾选时，走字前的装饰类型、发光浓度、阴影 X/Y 与走字后保持一致；"
+            "发光宽度始终前后独立。旧工程默认不勾选。"
         )
         host._decoration_sync_check.toggled.connect(
             host._on_decoration_sync_toggled
@@ -260,7 +260,7 @@ class RoleColorPropertyPageBuilder:
         )
         host._glow_radius_spin = host._glow_before_radius_spin
         host._glow_radius_field = property_field(
-            "发光宽度", host._glow_before_radius_spin
+            "走字前发光", host._glow_before_radius_spin
         )
 
         host._glow_after_radius_spin = self._spin_factory(0, 120, suffix=" px")
@@ -268,7 +268,7 @@ class RoleColorPropertyPageBuilder:
             lambda value: host._update_shared_decoration(glow_after_radius_px=value)
         )
         host._glow_after_radius_field = property_field(
-            "发光宽度", host._glow_after_radius_spin
+            "走字后发光", host._glow_after_radius_spin
         )
 
         host._glow_concentration_combo = self._combo_factory(section)

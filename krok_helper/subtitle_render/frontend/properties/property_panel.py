@@ -2126,13 +2126,6 @@ class PropertyPanel(QWidget):
         synced = self._decoration_sync_enabled()
         routed: dict[str, object] = {}
         for field, value in changes.items():
-            if field in {"glow_before_radius_px", "glow_after_radius_px"}:
-                if synced:
-                    routed["glow_before_radius_px"] = value
-                    routed["glow_after_radius_px"] = value
-                else:
-                    routed[field] = value
-                continue
             before_field = _DECORATION_BEFORE_SLOTS.get(field)
             if before_field is None:
                 routed[field] = value
@@ -2182,28 +2175,18 @@ class PropertyPanel(QWidget):
             return
         if checked:
             # 开启同步：清空当前目标的走字前覆盖，前后立即一致（画面由
-            # 走字后槽接管；发光宽度也统一到走字后宽度）。
-            changes: dict[str, object] = {
-                "decoration_before_sync": True,
-                "decoration_kind_before": None,
-                "glow_before_concentration_level": None,
-                "shadow_before_offset_x": None,
-                "shadow_before_offset_y": None,
-                "ruby_decoration_kind_before": None,
-                "ruby_glow_before_concentration_level": None,
-                "ruby_shadow_before_offset_x": None,
-                "ruby_shadow_before_offset_y": None,
-                "glow_before_radius_px": int(
-                    self._scheme_value("glow_after_radius_px")
-                ),
-            }
-            if not bool(self._scheme_value("ruby_colors_follow_main")):
-                changes["ruby_glow_before_radius_px"] = int(
-                    self._effective_ruby_decoration_values(after=True)[
-                        "ruby_glow_after_radius_px"
-                    ]
-                )
-            self._update_style(**changes)
+            # 走字后槽接管；发光宽度保持前后独立）。
+            self._update_style(
+                decoration_before_sync=True,
+                decoration_kind_before=None,
+                glow_before_concentration_level=None,
+                shadow_before_offset_x=None,
+                shadow_before_offset_y=None,
+                ruby_decoration_kind_before=None,
+                ruby_glow_before_concentration_level=None,
+                ruby_shadow_before_offset_x=None,
+                ruby_shadow_before_offset_y=None,
+            )
             return
         # 关闭同步：把当前生效的走字前值物化到独立槽，外观不跳变。
         kind = self._scheme_value("decoration_kind_before")
@@ -2236,11 +2219,6 @@ class PropertyPanel(QWidget):
             "glow_before_concentration_level": concentration,
             "shadow_before_offset_x": shadow_x,
             "shadow_before_offset_y": shadow_y,
-            # 同步期间实际绘制的是走字后宽度；关闭同步时把它物化到走字前，
-            # 外观不跳变。
-            "glow_before_radius_px": int(
-                self._scheme_value("glow_after_radius_px")
-            ),
         }
         if not bool(self._scheme_value("ruby_colors_follow_main")):
             # 注音独立模式：同步物化注音自己的走字前值；跟随模式继续镜像
@@ -2253,10 +2231,6 @@ class PropertyPanel(QWidget):
                 "ruby_shadow_before_offset_y",
             ):
                 changes[field] = before_values[field]
-            after_values = self._effective_ruby_decoration_values(after=True)
-            changes["ruby_glow_before_radius_px"] = int(
-                after_values["ruby_glow_after_radius_px"]
-            )
         self._update_style(**changes)
 
     def _make_solid_fill_page(self) -> QWidget:
@@ -4104,13 +4078,10 @@ class PropertyPanel(QWidget):
                 value = defaults.get(field_name)
             values[field_name] = value
         if not after and self._decoration_sync_enabled():
-            # 同步开启时注音走字前整组跟随走字后（含发光宽度）。
+            # 同步开启时注音走字前整组跟随走字后；发光宽度保持独立。
             after_values = self._effective_ruby_decoration_values(after=True)
             values["ruby_decoration_kind_before"] = after_values[
                 "ruby_decoration_kind"
-            ]
-            values["ruby_glow_before_radius_px"] = after_values[
-                "ruby_glow_after_radius_px"
             ]
             values["ruby_glow_before_concentration_level"] = after_values[
                 "ruby_glow_concentration_level"
@@ -4252,12 +4223,8 @@ class PropertyPanel(QWidget):
         self._shadow_x_field.setVisible(is_decoration and is_shadow)
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
         self._glow_controls_row.setVisible(is_decoration and is_glow)
-        self._glow_radius_field.setVisible(
-            is_decoration and is_glow and not after
-        )
-        self._glow_after_radius_field.setVisible(
-            is_decoration and is_glow and after
-        )
+        self._glow_radius_field.setVisible(is_decoration and is_glow)
+        self._glow_after_radius_field.setVisible(is_decoration and is_glow)
         self._glow_concentration_field.setVisible(is_decoration and is_glow)
 
     def _sync_color_subject_style_controls(self) -> None:
@@ -4325,8 +4292,6 @@ class PropertyPanel(QWidget):
                     )
                 glow_before = int(self._scheme_value("glow_before_radius_px"))
                 glow_after = int(self._scheme_value("glow_after_radius_px"))
-            if self._decoration_sync_enabled():
-                glow_before = glow_after
             self._decoration_type_combo.setCurrentIndex(
                 max(0, self._decoration_type_combo.findData(kind))
             )
