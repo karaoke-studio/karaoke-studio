@@ -1061,11 +1061,15 @@ def _paint_track_to_painter(
     tail_items = _exit_particle_tail_items(
         display_style, layout_plan, display_lines, track_t_ms
     )
+    prelude_items = _entry_particle_prelude_items(
+        display_style, layout_plan, display_lines, track_t_ms
+    )
     if (
         not display_lines
         and not signal_lines
         and not title_states
         and not tail_items
+        and not prelude_items
     ):
         return
 
@@ -1182,18 +1186,32 @@ def _paint_track_to_painter(
                 )
             finally:
                 painter.restore()
-        # 退场粒子尾奏（分离口径）：行窗已结束的行在此续播标准寿命粒子。
-        _paint_exit_particle_tails(
+        # 入场粒子预演（分离口径）：显示窗尚未开始的行，入场粒子已按
+        # 提前量开始播放——此处只画粒子，文字仍按原窗口渐显。
+        particle_only_kwargs = {
+            "baselines": baselines if not display_style.vertical else {},
+            "layout_cache_sig": layout_cache_sig,
+        }
+        _paint_particle_only_items(
             painter,
             logical_w,
             logical_h,
             track,
             display_style,
             track_t_ms,
-            layout_plan,
-            display_lines,
-            baselines=baselines if not display_style.vertical else {},
-            layout_cache_sig=layout_cache_sig,
+            prelude_items,
+            **particle_only_kwargs,
+        )
+        # 退场粒子尾奏（分离口径）：行窗已结束的行在此续播标准寿命粒子。
+        _paint_particle_only_items(
+            painter,
+            logical_w,
+            logical_h,
+            track,
+            display_style,
+            track_t_ms,
+            tail_items,
+            **particle_only_kwargs,
         )
         if not display_style.vertical and signal_lines:
             _paint_signal_lits(
@@ -3842,25 +3860,68 @@ def _exit_particle_tail_items(
     return items
 
 
-def _paint_exit_particle_tails(
+def _entry_particle_prelude_items(
+    style: Style,
+    layout_plan,
+    display_lines: list[DisplayLine],
+    t_ms: int,
+) -> list:
+    """t 时刻即将出现（显示窗尚未开始）且入场粒子已提前发射的行。
+
+    2026-10-22 用户口径：文字逐字渐显窗口不变，下落风格入场粒子整体
+    前移 20% 寿命发射——这段提前量由本通道在显示窗前播放粒子。与退场
+    尾奏对称；竖排无粒子，直接跳过。
+    """
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        CHAR_TIME_OFFSETS_MS,
+        fall_entry_lead_ms,
+    )
+
+    if style.vertical or layout_plan is None:
+        return []
+    visible_ids = {id(display_line.line) for display_line in display_lines}
+    items = []
+    for item in layout_plan.lines:
+        line = item.line
+        if (
+            id(line) in visible_ids
+            or item.display_start_ms is None
+            or item.display_end_ms is None
+        ):
+            continue
+        line_style = item.animation_style or style
+        entry_anim = str(getattr(line_style, "entry_anim", "none") or "none")
+        lead = fall_entry_lead_ms(entry_anim)
+        if lead <= 0 or int(getattr(line_style, "entry_lead_ms", 0) or 0) <= 0:
+            continue
+        start_ms = int(item.display_start_ms) - lead
+        # 行级相位 + 逐字抖动只会让 burst 更早或更晚，窗口取最早可能起点。
+        earliest_ms = start_ms + min(CHAR_TIME_OFFSETS_MS)
+        if not (earliest_ms <= int(t_ms) < int(item.display_start_ms)):
+            continue
+        items.append(item)
+    return items
+
+
+def _paint_particle_only_items(
     painter: QPainter,
     img_w: int,
     img_h: int,
     track: TimingTrack,
     style: Style,
     t_ms: int,
-    layout_plan,
-    display_lines: list[DisplayLine],
+    items,
     *,
     baselines: dict[int, int],
     layout_cache_sig: tuple | None,
 ) -> None:
-    """退场粒子尾奏（2026-10 分离口径）：行显示窗已结束、文字已隐，但
-    退场粒子按标准寿命可能仍在播——``visible_lines_from_layout_plan``
-    之外的行在此**仅续播粒子**（文字/注音/发光全部不画）。GPU 侧
-    d2d_backend_render 的 particleExitTail 分支同口径；拼接/消散的粒子
-    即文字形体（与时长耦合），不进本通道。竖排无粒子，直接跳过。"""
-    for item in _exit_particle_tail_items(style, layout_plan, display_lines, t_ms):
+    """行显示窗之外**仅续播粒子**（文字/注音/发光全部不画）。
+
+    入退场分离口径的两个通道共用：入场预演（显示窗开始前）与退场尾奏
+    （显示窗结束后）。GPU 侧 d2d_backend_render 的 particleEntryPrelude /
+    particleExitTail 分支同口径；竖排无粒子，直接跳过。
+    """
+    for item in items:
         line = item.line
         line_style = item.animation_style or style
         lane = item.lane if style.dual_line_layout else None

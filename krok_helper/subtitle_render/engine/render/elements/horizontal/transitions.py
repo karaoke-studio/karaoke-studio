@@ -55,17 +55,6 @@ ZOOM_PULSE_DEFAULT_CURVE_LEVEL = 1
 CHAR_FADE_INTRO_DELAY_MS = 350
 CHAR_FADE_IN_TIME_MS = 250
 CHAR_FADE_OUT_TIME_MS = 250
-# 下落风格入场（2026-10-22 用户口径）：粒子先于文字发射——入场粒子自
-# 显示起点正常生成，文字逐字渐显整体延后 20% 粒子寿命（花瓣/羽毛
-# 1700ms → 340ms，雪花 1500ms → 300ms），让文字在粒子生成过程中渐显。
-# 只作用于这几个下落档，其他粒子档保持原有时序；出口时序不变
-# （用户限定只改入场）。与 C++ d2d_fx.cpp / d2d_backend_render.cpp 镜像。
-FALL_ENTRY_TEXT_DELAY_MS: dict[str, int] = {
-    "petal": 340,
-    "feather": 340,
-    "snow": 300,
-    "snow_solid": 300,
-}
 # ---- 2026-09 逐字几何特效幅度参数（与 C++ d2d_fx.cpp 镜像，改动需双侧同步）----
 # 编排与 char_fade 完全同构：「入场/退场动画时长」旋钮仅作 >0 的播放门，
 # 窗口 600ms，逐字错峰步距 350ms//(字数-1)、每字行程 250ms（常量，不随旋钮缩放）。
@@ -166,11 +155,7 @@ def line_char_transition_context(
             window_ms = CHAR_FADE_INTRO_DELAY_MS + CHAR_FADE_IN_TIME_MS
         else:
             window_ms = min(max(style.entry_lead_ms, 120), 3000)
-        entry_end = (
-            start
-            + window_ms
-            + FALL_ENTRY_TEXT_DELAY_MS.get(str(style.entry_anim), 0)
-        )
+        entry_end = start + window_ms
         if t_ms <= entry_end:
             return LineCharTransition(
                 phase="entry",
@@ -548,24 +533,12 @@ def _geo_char_state(
     total = min(max(configured, 120), 3000)
     stagger_total = total * 7 // 12
     travel_total = max(total - stagger_total, 40)
-    # 下落风格入场：文字逐字渐显延后到粒子已开始下落之后（见
-    # FALL_ENTRY_TEXT_DELAY_MS）；退场与其余档位不加延迟。
-    text_delay_ms = (
-        FALL_ENTRY_TEXT_DELAY_MS.get(transition.effect, 0)
-        if transition.phase == "entry"
-        else 0
-    )
-
     def _stagger_progress() -> float:
         if t_ms is None or transition.start_ms is None:
             return transition.progress
         step = 0 if count <= 1 else stagger_total // (count - 1)
         return clamped_ratio(
-            t_ms
-            - transition.start_ms
-            - step * index
-            - text_delay_ms,
-            travel_total,
+            t_ms - transition.start_ms - step * index, travel_total
         )
 
     def _line_progress() -> float:

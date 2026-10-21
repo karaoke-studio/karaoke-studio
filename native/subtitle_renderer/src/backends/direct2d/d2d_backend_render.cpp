@@ -31,7 +31,7 @@ using direct2d::checkHr;
 using direct2d::createPaintBrush;
 using direct2d::createScanlineMaskBrush;
 using direct2d::elapsedMs;
-using direct2d::fallEntryTextDelayMs;
+using direct2d::fallEntryLeadMs;
 using direct2d::fxSpriteForKind;
 using direct2d::FxParticle;
 using direct2d::GlowHaloStroke;
@@ -558,7 +558,31 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
-        if (visible || exitTailBursts) {
+        // 入场粒子预演（2026-10-22 分离口径）：显示窗尚未开始，但下落风格
+        // 入场 burst 已整体前移 20% 寿命发射——保留进 activeLines，由行
+        // 循环的 particleEntryPrelude 分支仅画粒子（文字仍按原窗口渐显）。
+        bool entryPreludeBursts = false;
+        if (
+            !visible
+            && !candidate.staticOverlay
+            && !candidate.bursts.empty()
+            && !candidate.style.vertical
+            && !candidate.displayWindows.empty()
+        ) {
+            const int lead = fallEntryLeadMs(candidate.entryAnimation);
+            const int windowStart = candidate.displayWindows.front().startMs;
+            if (lead > 0 && tMs < windowStart
+                && tMs >= windowStart - lead - 100) {
+                for (const ParticleBurst &burst : candidate.bursts) {
+                    if (burst.sweep > 0 && tMs >= burst.startMs
+                        && tMs < burst.endMs) {
+                        entryPreludeBursts = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (visible || exitTailBursts || entryPreludeBursts) {
             const bool sourceLineAlreadyActive = std::any_of(
                 activeLines.begin(), activeLines.end(),
                 [&](const Impl::CachedLine *line) {
@@ -798,6 +822,28 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
+        // 入场粒子预演（2026-10-22，镜像 Painter _entry_particle_prelude_
+        // items）：显示窗尚未开始，下落风格入场粒子已提前发射——只画
+        // 粒子，文字仍按原窗口逐字渐显。
+        bool particleEntryPrelude = false;
+        if (
+            !line->bursts.empty()
+            && !line->style.vertical
+            && !line->displayWindows.empty()
+        ) {
+            const int lead = fallEntryLeadMs(line->entryAnimation);
+            const int windowStart = line->displayWindows.front().startMs;
+            if (lead > 0 && tMs < windowStart
+                && tMs >= windowStart - lead - 100) {
+                for (const ParticleBurst &burst : line->bursts) {
+                    if (burst.sweep > 0 && tMs >= burst.startMs
+                        && tMs < burst.endMs) {
+                        particleEntryPrelude = true;
+                        break;
+                    }
+                }
+            }
+        }
         // Fade the composed line, not every brush inside it (see
         // OpacityLayerScope).  If the layer cannot be created, fall back to the
         // legacy per-brush opacity rather than dropping the line.
@@ -897,11 +943,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             } else if (isGeoEntry(line->entryAnimation)
                 && line->entryDurationMs > 0
                 && tMs <= window.startMs
-                    + entryTransitionWindowMs(line->entryDurationMs)
-                    + fallEntryTextDelayMs(line->entryAnimation)) {
-                // 下落风格入场的文字渐显整体延后（粒子先发射，文字在
-                // 粒子生成过程中渐显），窗口同步延长（镜像 transitions.py
-                // line_char_transition_context）。
+                    + entryTransitionWindowMs(line->entryDurationMs)) {
                 activeCharacterTransition = line->entryAnimation;
                 activeCharacterDirection = -1;
             }
@@ -6241,14 +6283,28 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             context->SetTransform(previousTransform);
         };
-        if (particleExitTail) {
-            // 行文字已隐（透明度 0），仅按各自图层序续播退场粒子到自然
-            // 终点；全部文字管线（正文/注音/发光/描边闪光）跳过。
+        if (particleExitTail || particleEntryPrelude) {
+            // 显示窗之外只画粒子：退场尾奏（文字已隐、粒子续播到自然
+            // 终点）或入场预演（文字尚未出现、粒子已提前发射）；全部
+            // 文字管线（正文/注音/发光/描边闪光）跳过。空内容早退会清屏，
+            // 所以本通道自行 BeginDraw/EndDraw 并标记已渲染。
+            context->SetTarget(targetBitmap);
+            context->SetTransform(D2D1::Matrix3x2F::Identity());
+            context->BeginDraw();
+            if (!renderedAnyLine) {
+                context->Clear(D2D1::ColorF(0.0f, 0.0f));
+            }
             context->SetTransform(
                 withViewport(D2D1::Matrix3x2F::Translation(dx, dy))
             );
             drawFxBursts(false);
             drawFxBursts(true);
+            checkHr(
+                context->EndDraw(),
+                "ID2D1DeviceContext::EndDraw(particle only)",
+                device_
+            );
+            renderedAnyLine = true;
             continue;
         }
         auto drawGlowHalo = [&]() {

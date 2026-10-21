@@ -1093,59 +1093,110 @@ def test_particle_anim_core_is_staggered_char_transition():
     ).effect == "petal"
     petal_first = _geo_char_state(
         style, _entry_transition("petal", 0), 0, 5,
-        t_ms=400, char_center_x=None, line_center_x=None,
+        t_ms=100, char_center_x=None, line_center_x=None,
     )
     petal_second = _geo_char_state(
         style, _entry_transition("petal", 0), 1, 5,
-        t_ms=400, char_center_x=None, line_center_x=None,
+        t_ms=100, char_center_x=None, line_center_x=None,
     )
-    # 下落档文字渐显延后 340ms：t=400 时首字已显形、次字仍在错峰中。
     assert petal_first[0] > 0.8
-    assert petal_second[0] == 0.0
+    assert petal_second[0] < 0.5
 
 
-def test_falling_entry_text_fade_starts_after_particles():
-    """下落风格入场（2026-10-22 用户口径）：粒子自显示起点发射，文字逐字
-    渐显整体延后 20% 粒子寿命（花瓣/羽毛 340ms、雪花 300ms），文字在
-    粒子生成过程中渐显；其他粒子档与退场时序不变。"""
+def test_falling_entry_text_window_unchanged():
+    """下落风格入场（2026-10-22 用户口径）：文字逐字渐显窗口与以前完全
+    一致，提前量只加在粒子上——入场 burst 整体前移 20% 粒子寿命
+    （花瓣/羽毛 340ms、雪花 300ms）；退场与其他粒子档不变。"""
     style = Style(font_size_px=100, entry_lead_ms=600, exit_fade_ms=600)
-    for anim, delay in (
-        ("petal", 340), ("feather", 340), ("snow", 300), ("snow_solid", 300),
-    ):
+    for anim in ("petal", "feather", "snow", "snow_solid"):
+        first = _geo_char_state(
+            style, _entry_transition(anim, 0), 0, 5,
+            t_ms=100, char_center_x=None, line_center_x=None,
+        )
+        second = _geo_char_state(
+            style, _entry_transition(anim, 0), 1, 5,
+            t_ms=100, char_center_x=None, line_center_x=None,
+        )
+        assert first[0] > 0.8, anim
+        assert second[0] < 0.5, anim
+        # 入场过渡窗口仍是原旋钮值（600ms），不因粒子提前量延长。
         ctx_style = Style(
             entry_anim=anim, entry_lead_ms=600, karaoke_anim="none"
         )
-        # 显示起点文字仍未开始渐显（粒子已在此刻发射）。
-        hidden = _geo_char_state(
-            style, _entry_transition(anim, 0), 0, 5,
-            t_ms=delay - 10, char_center_x=None, line_center_x=None,
-        )
-        assert hidden[0] == 0.0, anim
-        # 延后量之后开始渐显。
-        shown = _geo_char_state(
-            style, _entry_transition(anim, 0), 0, 5,
-            t_ms=delay + 100, char_center_x=None, line_center_x=None,
-        )
-        assert shown[0] > 0.0, anim
-        # 过渡窗口同步延长，延后的字不会被硬切。
         assert line_char_transition_context(
-            ctx_style, TimingLine(), 600 + delay, 0, 6000, 3,
+            ctx_style, TimingLine(), 600, 0, 6000, 3,
         ) is not None, anim
         assert line_char_transition_context(
-            ctx_style, TimingLine(), 600 + delay + 1, 0, 6000, 3,
+            ctx_style, TimingLine(), 601, 0, 6000, 3,
         ) is None, anim
 
-    # 非下落档（星光）仍在显示起点立即逐字渐显；退场时序不受影响。
-    sparkle = _geo_char_state(
-        style, _entry_transition("sparkle", 0), 0, 5,
-        t_ms=100, char_center_x=None, line_center_x=None,
+    # 规划器：入场 burst 起点 = 显示起点 - 20% 寿命（首字相位 0）。
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        CHAR_TIME_OFFSETS_MS,
     )
-    assert sparkle[0] > 0.8
+
+    for anim, lead in (
+        ("petal", 340), ("feather", 340), ("snow", 300), ("snow_solid", 300),
+    ):
+        bursts = plan_line_bursts(
+            Style(
+                entry_anim=anim,
+                entry_lead_ms=600,
+                font_size_px=100,
+                karaoke_anim="none",
+            ),
+            0, 1000, 4200, 4100, [(1200, 1600)],
+        )
+        starts = {b["start_ms"] for b in bursts if b["sweep"] == 1}
+        assert 1000 - lead + CHAR_TIME_OFFSETS_MS[0] in starts, anim
+        assert all(
+            b["start_ms"] < 1000 for b in bursts if b["sweep"] == 1
+        ), anim
+
+    # 退场时序不受影响：花瓣退场仍从显示末前 1.5s 起、寿命 1200ms。
     petal_exit = _geo_char_state(
         style, _exit_transition("petal", 0), 0, 5,
         t_ms=100, char_center_x=None, line_center_x=None,
     )
     assert petal_exit[0] < 1.0
+
+
+def test_entry_particle_prelude_window_matches_lead():
+    """入场预演通道：显示窗开始前的 20% 寿命窗口内才代画粒子，已可见的
+    行不重复画，非下落档不进通道。"""
+    from types import SimpleNamespace
+
+    from krok_helper.subtitle_render.engine.painter import (
+        _entry_particle_prelude_items,
+    )
+    from krok_helper.subtitle_render.domain.timing import TimingChar
+    from krok_helper.subtitle_render.engine.timing.timeline import DisplayLine
+
+    line = TimingLine(chars=[TimingChar("あ", 2000)], end_ms=2400)
+    item = SimpleNamespace(
+        line=line,
+        display_start_ms=1000,
+        display_end_ms=3000,
+        animation_style=Style(entry_anim="petal", entry_lead_ms=600),
+    )
+    plan = SimpleNamespace(lines=[item])
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        CHAR_TIME_OFFSETS_MS,
+    )
+
+    earliest = 1000 - 340 + min(CHAR_TIME_OFFSETS_MS)  # 显示起点 - 20% 寿命 - 抖动
+    assert _entry_particle_prelude_items(Style(), plan, [], earliest) == [item]
+    assert _entry_particle_prelude_items(Style(), plan, [], earliest - 1) == []
+    assert _entry_particle_prelude_items(Style(), plan, [], 1000) == []
+    visible = DisplayLine(
+        line=line, lane=0, display_start_ms=1000, display_end_ms=3000
+    )
+    assert _entry_particle_prelude_items(
+        Style(), plan, [visible], 900
+    ) == []
+
+    item.animation_style = Style(entry_anim="sparkle", entry_lead_ms=600)
+    assert _entry_particle_prelude_items(Style(), plan, [], 900) == []
 
 
 def test_sing_particles_skip_whitespace_chars():
@@ -2391,11 +2442,11 @@ def test_plan_line_bursts_petal_entry_exit_sing():
         style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
-    # 入场花瓣：字内 0~45% 寿命错峰 + 行级固定伪随机相位（约 0/0.37/0.72
-    # × min(900ms, 55% 寿命)），不再按字符序只差几十毫秒地整排同落。
+    # 入场花瓣：整体前移 340ms（20% 寿命）先于文字发射，字内 0~45% 寿命
+    # 错峰 + 行级固定伪随机相位（约 0/0.37/0.72 × min(900ms, 55% 寿命)）。
     entry = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == 1]
     assert len(entry) == 6
-    expected_entry_starts = (971, 1337, 1584)
+    expected_entry_starts = (631, 997, 1244)
     for char_index, expected_start in enumerate(expected_entry_starts):
         starts = {
             b["start_ms"] for b in entry if b["char_index"] == char_index
@@ -2992,13 +3043,13 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
         style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
-    # 入场雪花：整行近似同刻（无逐字等差错峰，但每字 ±80ms 抖动），
-    # 提前 350ms 起飘、整段落 1500ms（2026-10-22 用户口径：略提速）。
+    # 入场雪花：整体前移 300ms（20% 寿命）先于文字发射，行级相位 + 每字
+    # ±80ms 抖动；每字完整 1500ms 下落窗。
     entry = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == 1]
     assert len(entry) == 6
-    assert {b["start_ms"] for b in entry} == {621, 959, 1180}
+    assert {b["start_ms"] for b in entry} == {671, 1009, 1230}
     assert len({b["start_ms"] for b in entry}) > 1
-    assert {b["end_ms"] for b in entry} == {2150}  # 650 + 1500
+    assert {b["end_ms"] for b in entry} == {2171, 2509, 2730}
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 拆雪色双色
     assert {b["color"] for b in entry} == {"#F2F8FF", "#BFDFFF"}
     assert all(b["travel_px"] == 0.0 for b in entry)
@@ -3041,8 +3092,9 @@ def test_snow_default_colors_differ_from_other_kinds(snow_kind):
 
 @pytest.mark.parametrize("snow_kind", ["snow", "snow_solid"])
 def test_snow_trajectory_windows_and_bounds(snow_kind):
-    """雪花两档轨迹同源：窗口外空、确定性、匀速单调下沉、ruby 锚出生
-    （高于字形顶）、尺寸随播放递减；三档都随走字风向右后方漂。"""
+    """雪花两档轨迹同源：窗口外空、确定性、单调下沉、ruby 锚出生
+    （高于字形顶）；尺寸全程稳定（去掉旧的缩小机制），三档都随走字风
+    向右后方漂。"""
     base = {
         "kind": snow_kind, "anchor": "char", "char_index": 0,
         "start_ms": 0, "end_ms": 1800, "count": 6, "seed": 54321,
@@ -3059,9 +3111,9 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
         assert len(early) == 6  # 连续出生窗 0~810ms < 900
         late = burst_particles_at(burst, 1200, 0.0, 0.0, 120.0, 100.0)
         for before, after in zip(early, late):
-            assert after.y >= before.y  # 无 y 向摇摆项：匀速单调下沉
-            # 尺寸随播放由大变小（2026-10 用户口径：近大远小）。
-            assert after.size_px < before.size_px
+            assert after.y >= before.y  # 无 y 向摇摆项：单调下沉
+            # 尺寸全程稳定：末段只按速度渐隐（不再随播放缩小）。
+            assert after.size_px == pytest.approx(before.size_px)
         # 2026-10-21 走字风：三档（飘入/飘散/唱字）都必须整体向右后方
         # 漂，而不是绕中心点的对称摆动——按簇和判方向。
         assert sum(s.x for s in late) > sum(s.x for s in early)
@@ -4418,8 +4470,8 @@ def test_plan_feather_entry_exit_sing():
     )
     entry = [b for b in bursts if b["sweep"] == 1]
     assert len(entry) == 6  # 3 字 × 2 色变体
-    assert {b["start_ms"] for b in entry} == {971, 1337, 1584}
-    assert {b["end_ms"] for b in entry} == {2671, 3037, 3284}
+    assert {b["start_ms"] for b in entry} == {631, 997, 1244}
+    assert {b["end_ms"] for b in entry} == {2331, 2697, 2944}
     assert {b["color"] for b in entry} == {"#FFFFFF", "#FFF1D6"}
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 3 颗拆双色
     assert all(b["size_px"] == 40.0 for b in entry)
