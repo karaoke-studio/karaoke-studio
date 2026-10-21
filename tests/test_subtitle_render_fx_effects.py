@@ -2408,22 +2408,24 @@ def test_petal_trajectory_windows_and_downward_drift():
         bottom = burst_particles_at(burst, 899, 0.0, 0.0, 120.0, 100.0)
         if sweep > 0:
             assert bottom and min(state.y for state in bottom) > 35.0
-        if sweep < 0:
-            # 飘逸随机、**终点向右**（2026-10 用户口径）：每颗粒子终点在
-            # 起点右侧（幅度随机），整簇随时间右移（sin 摇摆是振荡项，
-            # 逐粒子 x 非单调，按簇和判方向）。
-            assert sum(s.x for s in late) > sum(s.x for s in early)
-        # 贴近字框：横向 |x| ≤ 一个字宽（飘散档终点右移 ≤1.4 字宽 + 摇摆
-        # ±1.5×粒子尺寸，起点最左 -0.43 字宽）、纵向在 [-0.95, +1.2]
-        # box_h 内（溢出量与星光 -0.62 同量级，不再飘进行间距）。
-        for states in (early, late):
-            for state in states:
-                assert 0.0 < state.alpha <= 1.0
-                assert state.size_px > 0.0
-                if sweep < 0:
-                    assert -100.0 <= state.x <= 240.0
-                else:
-                    assert abs(state.x) <= 120.0
+            if sweep < 0:
+                # 飘逸随机、**终点向右**：每颗粒子终点在起点右侧（幅度
+                # 随机），再叠走字风；整簇随时间右移。
+                assert sum(s.x for s in late) > sum(s.x for s in early)
+            else:
+                # 走字风（2026-10-21）：入场/唱字也必须整体向右后方漂，
+                # 不再绕中心点对称摆动——按簇和判方向。
+                assert sum(s.x for s in late) > sum(s.x for s in early)
+            # 贴近字框：横向在「字宽 + 走字风漂移 + 小扑动」范围内；
+            # 纵向 [-0.95, +1.2] box_h（不再飘进行间距）。
+            for states in (early, late):
+                for state in states:
+                    assert 0.0 < state.alpha <= 1.0
+                    assert state.size_px > 0.0
+                    if sweep < 0:
+                        assert -100.0 <= state.x <= 320.0
+                    else:
+                        assert abs(state.x) <= 150.0
                 assert -95.0 <= state.y <= 120.0
 
 
@@ -2996,7 +2998,7 @@ def test_snow_default_colors_differ_from_other_kinds(snow_kind):
 @pytest.mark.parametrize("snow_kind", ["snow", "snow_solid"])
 def test_snow_trajectory_windows_and_bounds(snow_kind):
     """雪花两档轨迹同源：窗口外空、确定性、匀速单调下沉、ruby 锚出生
-    （高于字形顶）、尺寸随播放递减、飘散终点向右（同花瓣口径）。"""
+    （高于字形顶）、尺寸随播放递减；三档都随走字风向右后方漂。"""
     base = {
         "kind": snow_kind, "anchor": "char", "char_index": 0,
         "start_ms": 0, "end_ms": 1800, "count": 6, "seed": 54321,
@@ -3016,9 +3018,9 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
             assert after.y >= before.y  # 无 y 向摇摆项：匀速单调下沉
             # 尺寸随播放由大变小（2026-10 用户口径：近大远小）。
             assert after.size_px < before.size_px
-        if sweep < 0:
-            # 飘散终点向右：整簇随时间右移（摇摆是振荡项，按簇和判向）。
-            assert sum(s.x for s in late) > sum(s.x for s in early)
+        # 2026-10-21 走字风：三档（飘入/飘散/唱字）都必须整体向右后方
+        # 漂，而不是绕中心点的对称摆动——按簇和判方向。
+        assert sum(s.x for s in late) > sum(s.x for s in early)
         # ruby 锚出生：三档（含退场——雪统一从天上落到地上，2026-10
         # 用户口径：不考虑与字面的连续性）早期整簇都在字形顶之上
         #（-0.5 box_h；退场行程更长，阈值放宽到 -0.45）。
@@ -3029,9 +3031,9 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
                 assert 0.0 < state.alpha <= 1.0
                 assert state.size_px > 0.0
                 if sweep < 0:
-                    assert -80.0 <= state.x <= 200.0
+                    assert -80.0 <= state.x <= 260.0
                 else:
-                    assert abs(state.x) <= 140.0  # 字框 + 宽幅摇摆余量
+                    assert abs(state.x) <= 140.0  # 字框 + 走字风 + 小扑动
                 assert -95.0 <= state.y <= 120.0
         if sweep > 0:
             # 飘入落到**字底或更低**：末期整簇已沉到字底附近（慢雪，
@@ -4525,6 +4527,35 @@ def test_lightning_core_and_glow_share_trajectory():
             assert 0.0 < one.alpha <= 1.0
             sampled = True
     assert sampled
+
+
+def test_falling_effects_drift_right_all_phases():
+    """走字风（2026-10-21 用户口径）：雪花/花瓣/羽毛在飘入、飘散、唱字
+    三档都必须整体向右后方漂移，而不是绕中心点对称来回摆。"""
+    cases = (
+        ("petal", 900, 150, 800),
+        ("snow", 1800, 250, 1600),
+        ("feather", 1700, 200, 1550),
+    )
+    for kind, life, early_ms, late_ms in cases:
+        for sweep in (1, -1, 0):
+            burst = {
+                "kind": kind, "anchor": "char", "char_index": 0,
+                "start_ms": 0, "end_ms": life, "count": 6,
+                "seed": 2468, "size_px": 30.0, "travel_px": 0.0,
+                "front": True, "sweep": sweep,
+            }
+            early = burst_particles_at(
+                burst, early_ms, 0.0, 0.0, 120.0, 100.0
+            )
+            late = burst_particles_at(
+                burst, late_ms, 0.0, 0.0, 120.0, 100.0
+            )
+            assert early and late, (kind, sweep)
+            assert sum(s.x for s in late) > sum(s.x for s in early) + 10.0, (
+                kind,
+                sweep,
+            )
 
 
 def test_lightning_growth_anchors_top_or_bottom():
