@@ -201,6 +201,15 @@ LIGHTNING_GLOW_ALPHA = 0.22
 # 出入场每字窗口内的重击次数（AE 闪电的多次放电感；双色变体会对半分）。
 # 7 次/520ms ≈ 13.5 次/秒：低于此值在 5 秒采样里会出现明显“空窗”。
 ANIM_LIGHTNING_STRIKES = 7
+# 落雷重击时刻（窗口内的归一化出生位置，固定伪随机表，2026-10-22）：
+# 真实闪电是「两三连击 → 停顿 → 再补一两记」的簇状节奏，不是均匀撒点
+# （此前 birth = u3 × 0.72 寿命，7 记在窗口里等概率均匀分布，观感平）。
+# 每颗按 burst 内序号取表、超出表长整体后移 0.02，再叠 ±1.75% 哈希抖动；
+# 核心 bolt 与暗色辉光 burst 同种子同序号 → 逐记重合。镜像 C++ 同名常量。
+LIGHTNING_STRIKE_BIRTHS = (
+    0.00, 0.03, 0.10, 0.15, 0.38, 0.42, 0.51, 0.69, 0.73,
+)
+LIGHTNING_STRIKE_JITTER = 0.035
 # 闪电造型预设（AE Advanced Lightning 的 Branching/Rebranching 随机化）：
 # 每字按固定伪随机表轮流取三种 bolt 轮廓，配合随机缩放/旋转/上下生长方向，
 # 避免整行都是同一张锯齿。
@@ -297,6 +306,23 @@ def fall_entry_lead_ms(kind: str) -> int:
 # 红/粉明度差最大、互不混色；深度红（#C8102E 一族）在深色视频上读暗，弃用。
 HEART_A = "#E63946"
 HEART_B = "#F9C2D1"
+# 音符/爱心造型预设（2026-10-22 引入「粒子特效实现经验」§3.5 的多 sprite
+# 口径，同日按用户口径收敛：音符只留八分/附点两种、爱心保留原轮廓）。
+# 音符按 **1:2 权重**出现（八分 1 份、附点 2 份）——每字 3 颗即 1 颗八分 +
+# 2 颗附点；其余变化交给尺寸档（见 PARTICLE_DEPTH_TIERS）。
+NOTE_SHAPE_PRESETS = ("note", "note_dot")
+"""音符族造型：八分音符 / 附点音符（右侧多一个附点）。"""
+NOTE_SHAPE_WEIGHTS = (1, 2)
+"""造型出现权重：八分 : 附点 = 1 : 2。"""
+HEART_SHAPE_PRESETS = ("heart",)
+"""爱心族：只保留原始 Twemoji 心形（用户口径，不做多造型）。"""
+# 多尺寸档 / 景深（经验 §3.5：多尺寸档 + 逐字 seed 盐 + 深度档轮换）。
+# 音符/爱心原先「尺寸系数」与横向出生点共用 u1 通道——最大的那颗永远
+# 偏向同一侧（用户口径点名的「最大粒子总在同一位置」）。现改为独立哈希
+# 通道 + 四档固化尺寸轮换，并把档位拉开到 ~2.7 倍（用户口径：用大小变化
+# 提供丰富度，而不是继续增加造型）。
+PARTICLE_DEPTH_TIERS = (0.55, 0.82, 1.12, 1.50)
+"""音符/爱心的四档尺寸（远小近大），按 seed 轮换到不同粒子。"""
 # 火焰 v3 色阶（2026-10-18 用户口径：v2 仍不像「酷炫燃系」；联网研究
 # Aegisub 火焰模板 + 实时 VFX/UE5 三层火后重做）：
 #   - 单颗粒子只承担一层色；整束火由**四层色阶**叠出白热芯 → 金 → 橙 →
@@ -346,6 +372,39 @@ FLAME_LIFE_MS = 1100
 # 15 颗的等效密度；长音不再只在字头喷一次）。
 FLAME_PUFF_MS = 280
 FLAME_MAX_PUFFS = 8
+# 逐簇抖动（2026-10-22 随机性强化，经验 §3.5 固定伪随机表）：火簇不再
+# 严格等间隔、同尺寸——每簇按 20 数表取一个时间抖动（±30% puff 间隔）
+# 与一个尺寸倍数（0.86~1.16×），长音燃烧时火势忽强忽弱、簇与簇之间
+# 不再读成节拍器。
+FLAME_PUFF_OFFSETS = (
+    0, 62, -38, 21, -74, 45, 12, -55, 73, -18,
+    -66, 34, 58, -24, 7, -47, 81, -9, 29, -61,
+)
+FLAME_PUFF_SCALES = (1.00, 0.86, 1.08, 0.94, 1.16, 0.90, 1.04, 0.82)
+
+
+def flame_puff_start_ms(
+    base_ms: int,
+    char_index: int,
+    puff: int,
+    puff_ms: int,
+    seed_offset: int = 0,
+) -> int:
+    """火焰某一簇的起点（含固定表时间抖动）。
+
+    规划器的火粒/背光/余烬与「点燃冲击」共用本式——冲击必须落在第一簇
+    的抖动后起点上，否则会和火流错开；测试也直接复用该算式。
+    """
+    index = (
+        int(char_index) * 5 + int(puff) + int(seed_offset)
+    ) % len(FLAME_PUFF_OFFSETS)
+    return (
+        int(base_ms)
+        + int(puff_ms) * int(puff)
+        + int(round(
+            float(puff_ms) * 0.30 * FLAME_PUFF_OFFSETS[index] / 100.0
+        ))
+    )
 # 火焰出入场窗口（2026-10-18 用户口径）：发射总长跟随「入场/退场动画
 # 时长」；文字全部出现/消失后再保留一小段（260ms）让火快速熄灭，不再
 # 固定喷 ~2s 的长尾。数量随窗口同比放大（600ms = 32 颗基准）。
@@ -376,6 +435,20 @@ EMBER_LIFE_MS = 1300
 ASH_A = "#9C9C9C"
 ASH_B = "#555555"
 ASH_LIFE_MS = 950
+# 烟（走字火焰的次级系统，2026-10-22 按 AE 火焰预设的 smoke layer 口径）：
+# 暖灰双色、半透明、缓慢上浮并膨胀，垫在文字后；只由**唱字火焰**发射，
+# 出入场火焰保持原样（用户口径：出入场已经没问题）。
+SMOKE_A = "#7A7370"
+SMOKE_B = "#4A4442"
+SMOKE_LIFE_MS = 1500
+# 走字火焰的火星（AE fire presets 的 sparks/debris 层）：小圆点侧向飞散 +
+# 下坠，比余烬更快更碎；同样只挂在唱字火焰上。
+FLAME_SING_SPARK_COUNT = 5
+FLAME_SING_SPARK_LIFE_MS = 380
+# 走字火焰尺寸相对「原本的长火焰」缩小 40%（2026-10-22 用户口径：火太大
+# 几乎看不到走字）。只作用唱字档的基准尺寸；尺寸/行程/背光/余烬/烟/火星
+# 全部随该基准同比缩放，出入场火焰不受影响（用户口径：出入场没问题）。
+FLAME_SING_SIZE_SCALE = 0.60
 
 
 def _default_color_pair(
@@ -883,6 +956,49 @@ def _ring_commands() -> list[list[object]]:
         _circle_commands(0.0, 0.0, 490.0)
         + _circle_commands(0.0, 0.0, 462.0, flip=True)
     )
+
+
+def _ellipse_polygon(
+    cx: float, cy: float, rx: float, ry: float, segments: int = 28
+) -> list[tuple[float, float]]:
+    return [
+        (
+            cx + rx * math.cos(2.0 * math.pi * index / segments),
+            cy + ry * math.sin(2.0 * math.pi * index / segments),
+        )
+        for index in range(segments)
+    ]
+
+
+def _note_dot_commands() -> list[list[object]]:
+    """附点音符（sprite ``note_dot``）：八分音符 + 独立的附点圆。
+
+    附点与音符轮廓**不相交**（落在音头右下方空白处），两条子路径在
+    even-odd 与 winding 两种填充规则下都得到同样的两个实心区域（与
+    ring sprite 的「反向洞环」约定互不干扰）。与 ``note`` 的区别在小尺寸
+    下也一眼可辨：右侧多一个圆点。
+    """
+    return _note_commands() + _circle_commands(332.0, 250.0, 58.0)
+
+
+def _smoke_commands() -> list[list[object]]:
+    """烟团（sprite ``smoke``）：四团重叠椭圆求并集成云朵状软团。
+
+    走字火焰的次级系统（2026-10-22，AE 火焰预设的 smoke layer 口径）：
+    半透明暖灰、缓慢上浮并膨胀，垫在文字后，给火柱一个「烧完留下烟」的
+    收尾体积。并集保证单外环（even-odd / winding 一致）。
+    """
+    loops = _union_outline(
+        [
+            _ellipse_polygon(0.0, 80.0, 260.0, 170.0),
+            _ellipse_polygon(-190.0, -40.0, 180.0, 140.0),
+            _ellipse_polygon(190.0, -20.0, 170.0, 130.0),
+            _ellipse_polygon(40.0, -170.0, 150.0, 110.0),
+        ]
+    )
+    if len(loops) != 1:
+        raise ValueError(f"smoke 并集轮廓环数异常：{len(loops)}（期望单外环）")
+    return _loops_to_commands(loops)
 
 
 def _sprite_ir(commands: list[list[object]]) -> dict[str, object]:
@@ -1494,6 +1610,7 @@ FX_SPRITES: dict[str, dict[str, object]] = {
     "star4": _sprite_ir(_star4_commands()),
     "ring": _sprite_ir(_ring_commands()),
     "note": _sprite_ir(_note_commands()),
+    "note_dot": _sprite_ir(_note_dot_commands()),
     "pixel": _sprite_ir(_pixel_commands()),
     "petal": _sprite_ir(_petal_commands()),
     "feather": _sprite_ir(_feather_commands()),
@@ -1503,6 +1620,7 @@ FX_SPRITES: dict[str, dict[str, object]] = {
     "snow": _sprite_ir(_snow_commands()),
     "snow_solid": _sprite_ir(_snow_solid_commands()),
     "heart": _sprite_ir(_heart_commands()),
+    "smoke": _sprite_ir(_smoke_commands()),
     "flame": _sprite_ir(_flame_commands()),
     "flame_tall": _sprite_ir(_flame_tall_commands()),
     "flame_wide": _sprite_ir(_flame_wide_commands()),
@@ -1538,6 +1656,7 @@ _SPRITE_FOR_KIND = {
     "flame_glow": "flame",
     "ember": "dot",
     "ash": "ash",
+    "smoke": "smoke",
     # 火焰/闪电冲击的伴生内部 kind（无 UI 档位）：
     "fireball": "flame",
     "flash": "star4",
@@ -1971,6 +2090,84 @@ def plan_line_bursts(
             + _char_time_offset(char_index)
         )
 
+    def _fx_line_start(base_ms: int, char_index: int, spread_ms: int) -> int:
+        """非下落特效的行级错落起点（经验 §2.2 同款固定相位表）。
+
+        音符/爱心/火焰/闪电的逐字发射窗口总量不变（仍由「入场/退场动画
+        时长」或 350ms 错峰决定），但**不再按字符序均匀推进**——用同一
+        张 20 数伪随机相位表把各字发射时刻打散，长行不会读成规则波浪。
+        """
+        phase = FALL_LINE_PHASES[char_index % len(FALL_LINE_PHASES)]
+        return (
+            int(base_ms)
+            + int(round(max(int(spread_ms), 0) * phase))
+            + _char_time_offset(char_index)
+        )
+
+    def _emit_note_family(
+        kind: str,
+        char_index: int,
+        start_ms: int,
+        end_ms: int,
+        *,
+        count: int,
+        size: float,
+        travel: float,
+        anim: bool,
+        seed_offset: int,
+    ) -> None:
+        """音符/爱心按造型预设分组的 burst 发射（经验 §3.5：多 sprite 预设
+        + 固定权重）。
+
+        音符族按 ``NOTE_SHAPE_WEIGHTS``（八分:附点 = 1:2）分配每字颗数，
+        爱心族只有一个造型（全部颗数给原始心形）。种子再加逐字大奇数盐
+        （``FALL_CHAR_SEED_SALT``），避免相邻字哈希序列过于接近。
+        """
+        presets = NOTE_SHAPE_PRESETS if kind == "note" else HEART_SHAPE_PRESETS
+        weights = (
+            NOTE_SHAPE_WEIGHTS
+            if kind == "note"
+            else (1,) * len(HEART_SHAPE_PRESETS)
+        )
+        total = max(1, int(count))
+        weight_sum = sum(weights)
+        counts = [total * weight // weight_sum for weight in weights]
+        remainder = total - sum(counts)
+        if remainder:
+            # 最大余数法（同余按预设序），保证总数精确且 1:2 在小数量下
+            # 仍成立（3 颗 = 1 + 2）。
+            fractions = [
+                (total * weight / weight_sum) - counts[index]
+                for index, weight in enumerate(weights)
+            ]
+            order = sorted(
+                range(len(weights)),
+                key=lambda index: (-fractions[index], index),
+            )
+            for index in order[:remainder]:
+                counts[index] += 1
+        for group, sprite in enumerate(presets):
+            group_count = counts[group]
+            if group_count <= 0:
+                continue
+            _variant_bursts({
+                "kind": kind, "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": int(start_ms),
+                "end_ms": int(end_ms),
+                "count": group_count,
+                "seed": (
+                    seed_base + seed_offset
+                    + char_index * FALL_CHAR_SEED_SALT
+                    + group * 0x51
+                ) & 0xFFFFFFFF,
+                "size_px": size, "travel_px": travel,
+                "front": True, "sweep": 0,
+                "sprite": sprite,
+            }, _burst_paint(
+                char_index, size, anim=anim, heart=(kind == "heart")
+            ), variant_salt=char_index + group)
+
     def _fire_layer_paints(
         char_index: int,
         burst_size: float,
@@ -2078,6 +2275,9 @@ def plan_line_bursts(
         puff_ms: int = FLAME_PUFF_MS,
         with_glow: bool = True,
         with_embers: bool = True,
+        with_smoke: bool = False,
+        emit_span: float = 0.0,
+        sing_mode: bool = False,
         end_limit_ms: int | None = None,
     ) -> None:
         """按“连续火流”发射火焰 v3：同一字符窗口内分 ``puffs`` 簇错峰，
@@ -2087,6 +2287,17 @@ def plan_line_bursts(
         ``end_limit_ms``（文字全部出现/消失后 260ms）——所有火粒/背光/
         余烬的 burst 窗口在终点前自然走到 p=1，透明度归零，不会硬截断。
         唱字按字窗长度补簇（不传 limit，长音持续喷发）。
+
+        2026-10-22 唱字增富（AE 火焰预设的多系统口径，只对唱字生效，
+        出入场参数保持默认、观感不变）：
+
+        - ``with_smoke``：每簇追加一层烟（kind ``smoke``，暖灰半透明、
+          慢升膨胀、垫在文字后）；
+        - ``sing_mode``：火粒 burst 标 ``sweep=2``，求值器切到唱字专用的
+          更碎寿命、更宽尺寸差与额外湍流；同时每簇追加一撮飞散火星；
+        - ``emit_span``：按簇把发射点沿字符横向拉开（-0.5~+0.5 × span ×
+          box_w），让火跟着卡拉 OK 擦字方向扫过整字。``emit_x`` 随 burst
+          下发，两条后端同口径。
         """
         puffs = max(1, int(puffs))
         total = max(1, int(count))
@@ -2112,7 +2323,24 @@ def plan_line_bursts(
             puff_count = base + (1 if puff < extra else 0)
             if puff_count <= 0:
                 continue
-            start = int(start_ms) + int(puff_ms) * puff
+            jitter_index = (
+                int(char_index) * 5 + puff + int(seed_offset)
+            ) % len(FLAME_PUFF_OFFSETS)
+            start = flame_puff_start_ms(
+                start_ms, char_index, puff, puff_ms, seed_offset
+            )
+            puff_size = size * FLAME_PUFF_SCALES[
+                (int(char_index) * 3 + puff + int(seed_offset))
+                % len(FLAME_PUFF_SCALES)
+            ]
+            puff_travel = travel * (0.92 + 0.16 * (
+                (jitter_index % 5) / 4.0
+            ))
+            emit_x = (
+                emit_span * (puff / (puffs - 1) - 0.5)
+                if puffs > 1
+                else 0.0
+            )
             seed = (
                 seed_base + seed_offset + char_index * 7 + puff * 0x51
             ) & 0xFFFFFFFF
@@ -2125,12 +2353,13 @@ def plan_line_bursts(
                 "start_ms": start,
                 "end_ms": flame_end,
                 "count": puff_count, "seed": seed,
-                "size_px": size, "travel_px": travel,
-                "front": True, "sweep": 0,
+                "size_px": puff_size, "travel_px": puff_travel,
+                "front": True, "emit_x": emit_x,
+                "sweep": 2 if sing_mode else 0,
             }, _fire_layer_paints(
-                char_index, size, travel,
+                char_index, puff_size, puff_travel,
                 fixed_default=fixed_default,
-                shape_salt=char_index * 7 + puff,
+                shape_salt=char_index * 7 + puff + int(seed_offset),
             ))
             if with_glow:
                 glow_end = _clip_end(start, FLAME_GLOW_LIFE_MS)
@@ -2143,7 +2372,7 @@ def plan_line_bursts(
                         "count": 1, "seed": (seed + 0x31) & 0xFFFFFFFF,
                         "size_px": glow_size,
                         "travel_px": size * 2.0,
-                        "front": False, "sweep": 0,
+                        "front": False, "sweep": 0, "emit_x": emit_x,
                     }, [{
                         "color": glow_color,
                         "size_px": glow_size,
@@ -2167,7 +2396,37 @@ def plan_line_bursts(
                         "count": 2, "seed": (seed + 0x57) & 0xFFFFFFFF,
                         "size_px": ember_size,
                         "travel_px": size * 2.6,
-                        "front": True, "sweep": 0,
+                        "front": True, "sweep": 0, "emit_x": emit_x,
+                    }, [{"color": EMBER_A}, {"color": EMBER_B}])
+            if with_smoke:
+                # 烟在火团升起后出现（AE smoke 层比火晚一拍），慢升、膨胀。
+                smoke_start = start + int(FLAME_LIFE_MS * 0.30)
+                smoke_end = _clip_end(smoke_start, SMOKE_LIFE_MS)
+                if smoke_end is not None:
+                    _variant_bursts({
+                        "kind": "smoke", "anchor": "char",
+                        "char_index": int(char_index),
+                        "start_ms": smoke_start,
+                        "end_ms": smoke_end,
+                        "count": 1, "seed": (seed + 0x6D) & 0xFFFFFFFF,
+                        "size_px": size * 1.05,
+                        "travel_px": size * 2.10,
+                        "front": False, "sweep": 0, "emit_x": emit_x,
+                    }, [{"color": SMOKE_A}, {"color": SMOKE_B}])
+            if sing_mode:
+                # 火星（AE fire presets 的 sparks/debris）：自火团侧向飞散、
+                # 受重力下坠，比余烬更快更碎。
+                spark_end = _clip_end(start, FLAME_SING_SPARK_LIFE_MS)
+                if spark_end is not None:
+                    _variant_bursts({
+                        "kind": "spark", "anchor": "char",
+                        "char_index": int(char_index),
+                        "start_ms": start, "end_ms": spark_end,
+                        "count": FLAME_SING_SPARK_COUNT,
+                        "seed": (seed + 0x2B) & 0xFFFFFFFF,
+                        "size_px": size * 0.10,
+                        "travel_px": size * 1.60,
+                        "front": True, "sweep": 0, "emit_x": emit_x,
                     }, [{"color": EMBER_A}, {"color": EMBER_B}])
 
     def _emit_flame_impact(
@@ -2518,40 +2777,21 @@ def plan_line_bursts(
         _char_ripples(
             int(display_start_ms), 2, stagger_ms=stagger, scale=1.0
         )
-    elif entry_anim == "note" and entry_active and display_start_ms is not None:
+    elif entry_anim in ("note", "heart") and entry_active and display_start_ms is not None:
+        # 音符/爱心飘出（爱心仍与音符同编排，只换形状族与默认双色）：
+        # 逐字形错落起点走固定相位表（经验 §2.2），每字按造型预设拆成
+        # 多条 burst（八分/附点/横梁双音符、标准/圆润/修长心）。
+        note_entry_spread = stagger * max(char_count - 1, 0)
         for char_index in range(char_count):
-            start = (
-                int(display_start_ms)
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fx_line_start(
+                int(display_start_ms), char_index, note_entry_spread
             )
-            _variant_bursts({
-                "kind": "note", "anchor": "char",
-                "char_index": int(char_index),
-                "start_ms": start,
-                "end_ms": start + SING_NOTE_TOTAL_MS,
-                "count": 3, "seed": (seed_base + 6 + char_index) & 0xFFFFFFFF,
-                "size_px": anim_size, "travel_px": anim_size * 1.8,
-                "front": True, "sweep": 0,
-            }, _burst_paint(char_index, anim_size, anim=True))
-    elif entry_anim == "heart" and entry_active and display_start_ms is not None:
-        # 爱心飘出（2026-10 用户口径：全面克隆音符飘出，只换形状与默认
-        # 红/粉双色）——逐字错峰、行程 1.8×尺寸、字顶出生上升摆动全同款。
-        for char_index in range(char_count):
-            start = (
-                int(display_start_ms)
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            _emit_note_family(
+                entry_anim, char_index, start, start + SING_NOTE_TOTAL_MS,
+                count=3, size=anim_size, travel=anim_size * 1.8,
+                anim=True,
+                seed_offset=6 if entry_anim == "note" else 14,
             )
-            _variant_bursts({
-                "kind": "heart", "anchor": "char",
-                "char_index": int(char_index),
-                "start_ms": start,
-                "end_ms": start + SING_NOTE_TOTAL_MS,
-                "count": 3, "seed": (seed_base + 14 + char_index) & 0xFFFFFFFF,
-                "size_px": anim_size, "travel_px": anim_size * 1.8,
-                "front": True, "sweep": 0,
-            }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif entry_anim == "flame" and entry_active and display_start_ms is not None:
         # 火焰燃起（v3，2026-10-18 用户口径更新）：火粒总长跟随「入场
         # 动画时长」；逐字错峰与文字 char-state 同构（duration×7/12），
@@ -2581,11 +2821,10 @@ def plan_line_bursts(
             ),
         )
         fire_end = int(display_start_ms) + flame_duration + FLAME_TAIL_MS
+        flame_entry_spread = flame_stagger * max(char_count - 1, 0)
         for char_index in range(char_count):
-            start = (
-                int(display_start_ms)
-                + flame_stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fx_line_start(
+                int(display_start_ms), char_index, flame_entry_spread
             )
             _emit_flame_bursts(
                 char_index,
@@ -2601,7 +2840,9 @@ def plan_line_bursts(
             )
             _emit_flame_impact(
                 char_index,
-                start,
+                flame_puff_start_ms(
+                    start, char_index, 0, flame_puff_ms, seed_offset=16
+                ),
                 size=flame_size,
                 seed_offset=25,
                 end_limit_ms=fire_end,
@@ -2632,11 +2873,10 @@ def plan_line_bursts(
         # 闪电劈落（2026-10，AE Advanced Lightning 参考）：逐字错峰，
         # 每字窗口内多次随机重击；核心 bolt 前置、暗色放大副本垫后。
         lightning_size = anim_size * LIGHTNING_SIZE_SCALE
+        lightning_entry_spread = stagger * max(char_count - 1, 0)
         for char_index in range(char_count):
-            start = (
-                int(display_start_ms)
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fx_line_start(
+                int(display_start_ms), char_index, lightning_entry_spread
             )
             _emit_lightning_bursts(
                 char_index,
@@ -2716,47 +2956,24 @@ def plan_line_bursts(
         )
         # 每环完整寿命、标准错峰——行消失后由退场尾奏通道续播。
         _char_ripples(exit_start, 4, stagger_ms=stagger, scale=1.0)
-    elif exit_anim == "note" and exit_active and display_end_ms is not None:
+    elif exit_anim in ("note", "heart") and exit_active and display_end_ms is not None:
+        # 音符/爱心退场（爱心仍与音符同编排）：同窗错峰起点走固定相位表，
+        # 每字按造型预设拆条发射（与入场同口径）。
         exit_start = max(
             int(line_end_ms) if line_end_ms is not None else 0,
             int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS),
         )
+        note_exit_spread = stagger * max(char_count - 1, 0)
         for char_index in range(char_count):
-            start = (
-                exit_start
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fx_line_start(
+                exit_start, char_index, note_exit_spread
             )
-            _variant_bursts({
-                "kind": "note", "anchor": "char",
-                "char_index": int(char_index),
-                "start_ms": start,
-                "end_ms": start + SING_NOTE_TOTAL_MS,
-                "count": 3, "seed": (seed_base + 8 + char_index) & 0xFFFFFFFF,
-                "size_px": anim_size, "travel_px": anim_size * 1.8,
-                "front": True, "sweep": 0,
-            }, _burst_paint(char_index, anim_size, anim=True))
-    elif exit_anim == "heart" and exit_active and display_end_ms is not None:
-        # 爱心飘出（退场，克隆音符）——同窗反向错峰、行程/数量/寿命全同款。
-        exit_start_heart = max(
-            int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS),
-        )
-        for char_index in range(char_count):
-            start = (
-                exit_start_heart
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            _emit_note_family(
+                exit_anim, char_index, start, start + SING_NOTE_TOTAL_MS,
+                count=3, size=anim_size, travel=anim_size * 1.8,
+                anim=True,
+                seed_offset=8 if exit_anim == "note" else 15,
             )
-            _variant_bursts({
-                "kind": "heart", "anchor": "char",
-                "char_index": int(char_index),
-                "start_ms": start,
-                "end_ms": start + SING_NOTE_TOTAL_MS,
-                "count": 3, "seed": (seed_base + 15 + char_index) & 0xFFFFFFFF,
-                "size_px": anim_size, "travel_px": anim_size * 1.8,
-                "front": True, "sweep": 0,
-            }, _burst_paint(char_index, anim_size, anim=True, heart=True))
     elif exit_anim == "flame" and exit_active and display_end_ms is not None:
         # 火焰烧尽（v3，2026-10-18 用户口径更新）：火粒总长跟随「退场
         # 动画时长」，逐字错峰与文字 char-state 同构；文字全部消失后
@@ -2790,11 +3007,10 @@ def plan_line_bursts(
             int(display_end_ms) - flame_duration,
         )
         fire_end = int(display_end_ms) + FLAME_TAIL_MS
+        flame_exit_spread = flame_stagger * max(char_count - 1, 0)
         for char_index in range(char_count):
-            start = (
-                exit_start_flame
-                + flame_stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fx_line_start(
+                exit_start_flame, char_index, flame_exit_spread
             )
             _emit_flame_bursts(
                 char_index,
@@ -2810,17 +3026,22 @@ def plan_line_bursts(
             )
             _emit_flame_impact(
                 char_index,
-                start,
+                flame_puff_start_ms(
+                    start, char_index, 0, flame_puff_ms, seed_offset=17
+                ),
                 size=flame_size,
                 seed_offset=26,
                 end_limit_ms=fire_end,
             )
-            ash_end = min(start + ASH_LIFE_MS, fire_end)
-            if ash_end - start >= 80:
+            ash_start = flame_puff_start_ms(
+                start, char_index, 0, flame_puff_ms, seed_offset=17
+            )
+            ash_end = min(ash_start + ASH_LIFE_MS, fire_end)
+            if ash_end - ash_start >= 80:
                 _variant_bursts({
                     "kind": "ash", "anchor": "char",
                     "char_index": int(char_index),
-                    "start_ms": start,
+                    "start_ms": ash_start,
                     "end_ms": ash_end,
                     "count": 3,
                     "seed": (seed_base + 18 + char_index) & 0xFFFFFFFF,
@@ -2861,10 +3082,9 @@ def plan_line_bursts(
             - (RIPPLE_CHAR_STAGGER_MS + LIGHTNING_WINDOW_MS),
         )
         for char_index in range(char_count):
-            start = (
-                exit_start_lightning
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fx_line_start(
+                exit_start_lightning, char_index,
+                stagger * max(char_count - 1, 0),
             )
             _emit_lightning_bursts(
                 char_index,
@@ -3074,7 +3294,11 @@ def plan_line_bursts(
         # 火焰燃烧（唱字，v3）：字窗内**持续喷发**——按字长每 ~280ms 一簇
         # （长音最多 8 簇），每簇四层色阶 + 背光 + 余烬；总颗数吃粒子旋钮
         # 且随簇数抬升（长音不能只喷字头一次）。窗口自然播完。
-        flame_sing_size = size * 1.2
+        # 2026-10-22 按 AE 火焰预置的多系统口径继续加厚（只动走字，出入场
+        # 不变）：追加烟层、飞散火星、唱字专用火粒运动学，并让火团沿擦字
+        # 方向（左→右）扫过整字。
+        # 同日用户口径：走字火焰整体比原长火焰小 40%，否则遮住走字。
+        flame_sing_size = size * 1.2 * FLAME_SING_SIZE_SCALE
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
             if duration <= 0:
@@ -3089,7 +3313,7 @@ def plan_line_bursts(
                 ),
             )
             puff_ms = max(1, duration // puffs)
-            sing_total = min(40, max(count, puffs * 6))
+            sing_total = min(48, max(count, puffs * 8))
             _emit_flame_bursts(
                 char_index,
                 int(start_ms),
@@ -3100,22 +3324,34 @@ def plan_line_bursts(
                 puff_ms=puff_ms,
                 fixed_default=False,
                 seed_offset=7,
+                with_smoke=True,
+                sing_mode=True,
+                emit_span=0.9,
             )
-    elif style.sing_fx in ("twinkle", "twinkle_classic", "note", "heart"):
+    elif style.sing_fx in ("note", "heart"):
+        # 唱字音符/爱心：每字 3 颗、按造型预设拆条发射（多 sprite 预设，
+        # 经验 §3.5）；窗口延伸到轨迹自然播完，换字后余韵继续。
+        for char_index, (start_ms, end_ms) in enumerate(char_windows):
+            duration = int(end_ms) - int(start_ms)
+            if duration <= 0:
+                continue
+            if char_visible is not None and not char_visible[char_index]:
+                continue
+            _emit_note_family(
+                style.sing_fx, char_index, int(start_ms),
+                int(start_ms) + SING_NOTE_TOTAL_MS,
+                count=3, size=size, travel=size * 1.8,
+                anim=False, seed_offset=5,
+            )
+    elif style.sing_fx in ("twinkle", "twinkle_classic"):
         # 唱字星光并入出入场星光运动学后，密度对齐出入场观感（默认 7/字）；
         # 「旧版」档（twinkle_classic）保留 2026-10 运动学改造前的原地闪烁
         # 观感，颗数沿用旧口径（默认 3/字）。
         if style.sing_fx == "twinkle":
             per_char = max(5, count // 2)
-        elif style.sing_fx == "twinkle_classic":
-            per_char = max(3, count // 4)
         else:
-            per_char = 3
-        total = (
-            SING_NOTE_TOTAL_MS
-            if style.sing_fx in ("note", "heart")
-            else SING_TWINKLE_TOTAL_MS
-        )
+            per_char = max(3, count // 4)
+        total = SING_TWINKLE_TOTAL_MS
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
             if duration <= 0:
@@ -3138,10 +3374,7 @@ def plan_line_bursts(
                 # 旧版档原地闪烁（sweep=0，无扫过）。
                 "size_px": size, "travel_px": size * 1.8, "front": True,
                 "sweep": 1 if style.sing_fx == "twinkle" else 0,
-            }, _burst_paint(
-                char_index, size, anim=False,
-                heart=style.sing_fx == "heart",
-            ))
+            }, _burst_paint(char_index, size, anim=False))
     return bursts
 
 
@@ -3189,6 +3422,9 @@ def burst_particles_at(
     size = float(burst["size_px"])
     travel = float(burst["travel_px"])
     sweep = int(burst.get("sweep", 0) or 0)
+    # 发射点横向偏移（归一化 × 字框宽）：唱字火焰按簇扫过整字（擦字方向），
+    # 其余档位缺省 0。镜像 C++ ParticleBurst.emitX。
+    emit_x = float(burst.get("emit_x", 0.0) or 0.0) * box_w
     life = max(end_ms - start_ms, 1)
     tau = float(t_ms - start_ms)
     out: list[ParticleDraw] = []
@@ -3337,22 +3573,51 @@ def burst_particles_at(
                 (1.0 - p) * (1.0 - p * 0.5),
             ))
         elif kind in ("note", "heart"):
-            # 音符/爱心（爱心克隆音符运动学，2026-10 用户口径）：出生点在
-            # 字框顶部随机横移，上升带随机摆动，随机大小。
+            # 音符/爱心（爱心与音符共用运动学，2026-10 用户口径）：出生点
+            # 在字框顶部随机横移，上升带随机摆动。2026-10-22 按「粒子特效
+            # 实现经验」强化随机性：
+            #   - AE Box emitter 口径：**首颗粒子立即出生**（i==0），其余
+            #     在 0~42% 寿命内错峰，不会整簇同帧冒出来；
+            #   - 逐颗行程 0.72~1.27×、出生高度带、摆幅/频率独立哈希通道，
+            #     不再是同一颗的复制；
+            #   - 尺寸走四档景深表 + 独立哈希（此前尺寸系数与横向出生点共用
+            #     u1，最大的那颗永远偏向同一侧——用户点名过的「最大粒子总
+            #     在同一位置」）；
+            #   - 旋转 ±22° 基准 + 慢速摆动，读作飘上去的纸片而不是贴图。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)
-            delay = u3 * life * 0.35
-            p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
+            u4 = fx_unit_hash(seed + i, 4)
+            u5 = fx_unit_hash(seed + i, 5)
+            u6 = fx_unit_hash(seed + i, 6)
+            spawn = 0.0 if i == 0 else u3
+            delay = spawn * life * 0.42
+            p = min(
+                max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
+            )
             if p <= 0.0:
                 continue
-            rise = travel * (1.0 - (1.0 - p) * (1.0 - p))
-            sway = math.sin((u2 + p * 1.5) * 2.0 * math.pi) * size * 0.4
+            rise = travel * (0.72 + 0.55 * u4) * (
+                1.0 - (1.0 - p) * (1.0 - p)
+            )
+            sway_amp = size * (0.22 + 0.30 * u5)
+            sway = (
+                math.sin((u2 + p * (1.05 + 0.55 * u6)) * 2.0 * math.pi)
+                * sway_amp
+                * (0.55 + 0.45 * p)
+            )
+            drift = (u6 - 0.5) * travel * 0.18 * p
+            depth = PARTICLE_DEPTH_TIERS[
+                (i + (seed >> 5)) % len(PARTICLE_DEPTH_TIERS)
+            ] * (0.94 + 0.12 * u6)
             out.append(ParticleDraw(
-                origin_x + (u1 - 0.5) * box_w * 0.8 + sway,
-                origin_y - box_h * 0.35 - rise,
-                (u2 - 0.5) * 28.0,
-                size * (0.70 + 0.60 * u1) * (0.85 + 0.15 * math.sin(math.pi * p)),
+                origin_x + (u1 - 0.5) * box_w * 0.9 + sway + drift,
+                origin_y
+                - box_h * (0.24 + 0.16 * u4)
+                - rise,
+                (u2 - 0.5) * 44.0
+                + math.sin((u5 + p * 0.9) * 2.0 * math.pi) * 9.0,
+                size * depth * (0.88 + 0.12 * math.sin(math.pi * p)),
                 1.0 - p * math.sqrt(p),
             ))
         elif kind in ("flame", "flame_alt"):
@@ -3370,37 +3635,66 @@ def burst_particles_at(
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
             u5 = fx_unit_hash(seed + i, 5)
-            birth = u3 * life * 0.34
-            # 每颗独立寿命（0.62~1.0 窗），但必须在本 burst 窗内自然播完。
+            u6 = fx_unit_hash(seed + i, 6)
+            # 唱字火焰（``sweep == 2``，2026-10-22 AE 火焰预置口径）：更碎的
+            # 寿命（火流不断新旧交替）、更宽的逐颗尺寸差（0.28~1.38 包络 ×
+            # 0.55~1.55）、额外一层高频湍流，并向**擦字反方向**拖尾，读作
+            # 火跟着唱到的位置烧过去。出入场 burst 的 sweep 仍为 0，运动学
+            # 与之前逐位一致。
+            sing_mode = sweep == 2
+            birth = u3 * life * (0.28 if sing_mode else 0.34)
+            # 每颗独立寿命（唱字 0.45~1.0 窗、出入场 0.62~1.0 窗），但必须在
+            # 本 burst 窗内自然播完。
             life_i = min(
-                life * (0.62 + 0.38 * u5),
+                life * (
+                    (0.45 + 0.55 * u5) if sing_mode
+                    else (0.62 + 0.38 * u5)
+                ),
                 max(life - birth, 1.0),
             )
             p = (tau - birth) / life_i
             if p <= 0.0 or p >= 1.0:
                 continue
             rise = travel * p ** 1.35
-            sway = (
+            turbulence = (
                 math.sin((u2 + p * 1.7) * 2.0 * math.pi) * 0.45
                 + math.sin((u4 * 0.7 + p * 3.3) * 2.0 * math.pi) * 0.18
-            ) * size * (0.35 + 0.65 * p)
+            )
+            if sing_mode:
+                turbulence += (
+                    math.sin((u6 + p * 5.1) * 2.0 * math.pi) * 0.12
+                )
+            sway = turbulence * size * (
+                (0.42 + 0.85 * p) if sing_mode else (0.35 + 0.65 * p)
+            )
             grow = 1.0 - (1.0 - min(p / 0.16, 1.0)) ** 2
             cool = 1.0 - 0.50 * max((p - 0.50) / 0.50, 0.0) ** 1.3
             flicker = 0.70 + 0.30 * math.sin(
-                (p * 5.5 + u4 * 3.0) * 2.0 * math.pi
+                ((7.5 if sing_mode else 5.5) * p + u4 * 3.0)
+                * 2.0 * math.pi
             )
             alpha = min(p / 0.08, 1.0) * (1.0 - p) ** 0.45 * flicker
+            trail = -0.45 * size * p if sing_mode else 0.0
             lean = (
                 math.cos((u2 + p * 1.7) * 2.0 * math.pi) * 16.0
                 + (u4 - 0.5) * 30.0
                 + math.sin((u5 + p * 2.1) * 2.0 * math.pi) * 8.0
+                + ((u6 - 0.5) * 40.0 if sing_mode else 0.0)
+            )
+            size_factor = (
+                (0.30 + 0.95 * grow) * (0.55 + 0.85 * u6)
+                if sing_mode
+                else (0.35 + 0.85 * grow) * (0.60 + 0.80 * u1)
             )
             out.append(ParticleDraw(
-                origin_x + (u1 - 0.5) * box_w * 0.90 + sway,
-                origin_y + (0.04 + 0.52 * u2) * box_h - rise,
+                origin_x + emit_x + (u1 - 0.5) * box_w * 0.90
+                + sway + trail,
+                origin_y + (
+                    (0.00 + 0.66 * u2) if sing_mode
+                    else (0.04 + 0.52 * u2)
+                ) * box_h - rise,
                 lean,
-                size * (0.35 + 0.85 * grow) * cool
-                * (0.60 + 0.80 * u1),
+                size * size_factor * cool,
                 alpha,
                 1.0 - 0.35 * p,
                 1.0 + 1.05 * p,
@@ -3472,7 +3766,7 @@ def burst_particles_at(
             angle = u1 * 2.0 * math.pi
             speed = travel * (0.60 + 0.90 * u2)
             out.append(ParticleDraw(
-                origin_x + math.cos(angle) * speed * p,
+                origin_x + emit_x + math.cos(angle) * speed * p,
                 origin_y + math.sin(angle) * speed * p * 0.60
                 + travel * 0.55 * p * p,
                 p * 360.0 * (u4 - 0.5),
@@ -3503,7 +3797,7 @@ def burst_particles_at(
                 (p * 2.5 + u2) * 2.0 * math.pi
             )
             out.append(ParticleDraw(
-                origin_x + (u1 - 0.5) * box_w * 0.70 + sway,
+                origin_x + emit_x + (u1 - 0.5) * box_w * 0.70 + sway,
                 origin_y + (0.05 + 0.25 * u2) * box_h - rise,
                 (u4 - 0.5) * 10.0,
                 size * (0.82 + 0.18 * math.sin(math.pi * p))
@@ -3525,7 +3819,15 @@ def burst_particles_at(
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
             u5 = fx_unit_hash(seed + i, 5)
-            birth = u3 * life * 0.72
+            # 簇状重击节奏（经验 §3.5 固定伪随机表）：见
+            # LIGHTNING_STRIKE_BIRTHS，超出表长按轮次整体后移。
+            strike_index = i % len(LIGHTNING_STRIKE_BIRTHS)
+            birth_frac = (
+                LIGHTNING_STRIKE_BIRTHS[strike_index]
+                + 0.02 * (i // len(LIGHTNING_STRIKE_BIRTHS))
+                + (u3 - 0.5) * LIGHTNING_STRIKE_JITTER
+            )
+            birth = min(max(birth_frac, 0.0), 0.82) * life
             life_i = min(
                 100.0 + 140.0 * u4,
                 max(life - birth, 1.0),
@@ -3587,11 +3889,42 @@ def burst_particles_at(
                 (p * 9.0 + u2 * 4.0) * 2.0 * math.pi
             )
             out.append(ParticleDraw(
-                origin_x + (u1 - 0.5) * box_w * 0.75 + drift + sway,
+                origin_x + emit_x + (u1 - 0.5) * box_w * 0.75
+                + drift + sway,
                 origin_y + (0.10 + 0.30 * u4) * box_h - rise,
                 p * 360.0 * (u4 - 0.5),
                 size * (0.55 + 0.55 * u1) * (1.0 - 0.55 * p),
                 min(p / 0.08, 1.0) * (1.0 - p) ** 0.9 * twinkle,
+            ))
+        elif kind == "smoke":
+            # 烟（走字火焰的次级系统，2026-10-22 AE 火焰预置 smoke 口径）：
+            # 比火粒晚出生、慢速上浮（减速）、持续膨胀、低透明度；横向摆幅
+            # 比火更慢，读作火柱上方积起来的热烟而不是另一团火。
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            u5 = fx_unit_hash(seed + i, 5)
+            birth = u3 * life * 0.28
+            life_i = min(
+                life * (0.72 + 0.28 * u4),
+                max(life - birth, 1.0),
+            )
+            p = (tau - birth) / life_i
+            if p <= 0.0 or p >= 1.0:
+                continue
+            rise = travel * (1.0 - (1.0 - p) ** 1.7)
+            sway = math.sin(
+                (u2 + p * (0.55 + 0.25 * u5)) * 2.0 * math.pi
+            ) * size * (0.18 + 0.12 * u4)
+            expand = 0.55 + 0.75 * p
+            out.append(ParticleDraw(
+                origin_x + emit_x + (u1 - 0.5) * box_w * 0.80 + sway,
+                origin_y + (0.02 + 0.30 * u5) * box_h - rise,
+                (u2 - 0.5) * 16.0 + p * 18.0,
+                size * expand * (0.80 + 0.40 * u4),
+                min(p / 0.22, 1.0) * (1.0 - p) ** 1.35
+                * (0.55 + 0.35 * u5),
             ))
         elif kind == "ash":
             # 灰烬（flame 退场伴生）：自字框出生后**飘落**（灰烬下坠，

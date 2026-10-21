@@ -3749,7 +3749,7 @@ _FX_SPRITE_IMAGE_CACHE: "OrderedDict[tuple, tuple[float, QImage]]" = OrderedDict
 
 
 def _fx_baked_sprite_image(
-    kind: str,
+    sprite_name: str,
     fill,
     stroke_fill,
     stroke2_fill,
@@ -3763,7 +3763,7 @@ def _fx_baked_sprite_image(
     """
 
     key = (
-        kind,
+        sprite_name,
         _fill_signature(fill),
         _fill_signature(stroke_fill) if stroke_fill is not None else None,
         _fill_signature(stroke2_fill) if stroke2_fill is not None else None,
@@ -3775,10 +3775,6 @@ def _fx_baked_sprite_image(
         if cached is not None:
             _FX_SPRITE_IMAGE_CACHE.move_to_end(key)
             return cached
-    from krok_helper.subtitle_render.engine.render.effects.particles import (
-        sprite_for_kind,
-    )
-
     # 包络：sprite ±500 em + 描边笔宽的一半（±2em 余量）。
     extent = min(500.0 + (stroke_em + stroke2_em) * 0.5 + 2.0, 1024.0)
     size = 512
@@ -3789,7 +3785,7 @@ def _fx_baked_sprite_image(
         bake.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         bake.scale(size / (extent * 2.0), size / (extent * 2.0))
         bake.translate(extent, extent)
-        path = _fx_sprite_path(sprite_for_kind(kind))
+        path = _fx_sprite_path(sprite_name)
         if stroke2_em >= 1.0:
             pen2 = QPen(
                 _fx_particle_brush(stroke2_fill), stroke_em + stroke2_em
@@ -4106,6 +4102,10 @@ def _paint_line_fx_particles(
         spec = burst.get("paint")
         burst_size = float(burst["size_px"])
         kind = str(burst["kind"])
+        # 火形/雷形/音符族造型可随 burst 下发（规划器按固定伪随机表轮换）；
+        # 未指定时回落到 kind 的默认 sprite。烘焙精灵也必须按 sprite 名缓存
+        # ——按 kind 缓存会让同一 kind 的不同造型复用第一张烘焙图。
+        sprite_name = str(burst.get("sprite") or sprite_for_kind(kind))
         # 行锚点星光的逐字颜色表（跟随模式 + 联动入退场）：动画不动，
         # 每颗粒子按落点所在字符取该字角色的颜色。
         char_colors = burst.get("char_colors")
@@ -4178,7 +4178,7 @@ def _paint_line_fx_particles(
                 # 其余配方：整粒子精灵（含描边）只烘焙一次，逐粒子是一次
                 # 平移/旋转/缩放的平滑贴图。
                 sprite_extent, sprite_image = _fx_baked_sprite_image(
-                    kind,
+                    sprite_name,
                     fill,
                     stroke_fill if stroke_em >= 1.0 else None,
                     stroke2_fill if stroke2_em >= 1.0 else None,
@@ -4229,9 +4229,7 @@ def _paint_line_fx_particles(
             box_h = line_box_h
         # 火形/雷形预设可随 burst 下发（规划器按固定伪随机表轮换）；
         # 未指定时回落到 kind 的默认 sprite。
-        sprite = _fx_sprite_path(
-            str(burst.get("sprite") or sprite_for_kind(str(burst["kind"])))
-        )
+        sprite = _fx_sprite_path(sprite_name)
         for state in burst_particles_at(burst, t_ms, origin_x, origin_y, box_w, box_h):
             if state.alpha <= 0.0 or state.size_px <= 0.0:
                 continue

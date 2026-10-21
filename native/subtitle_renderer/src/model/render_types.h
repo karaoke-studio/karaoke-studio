@@ -308,6 +308,8 @@ struct ParticleBurst {
     std::uint32_t seed = 0;
     float sizePx = 28.0f;
     float travelPx = 120.0f;
+    // 唱字火焰按簇横向扫过的发射点偏移（归一化 × 字框宽；0 = 不偏移）。
+    float emitX = 0.0f;
     bool front = true;
     bool reverse = false;
     // sparkle 整句扫过方向：+1 入场（左→右）、-1 退场（右→左）、0 不扫。

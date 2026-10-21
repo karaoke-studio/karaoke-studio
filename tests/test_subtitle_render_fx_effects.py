@@ -26,6 +26,8 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.contracts imp
     LineCharTransition,
 )
 from krok_helper.subtitle_render.engine.render.effects.particles import (
+    CHAR_TIME_OFFSETS_MS,
+    FALL_LINE_PHASES,
     FX_SPRITES,
     burst_particles_at,
     exit_particle_tail_end_ms,
@@ -632,18 +634,26 @@ def test_plan_line_bursts_anim_kinds_and_sing_ripple():
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
     kinds = [burst["kind"] for burst in bursts]
-    # 音符入场：逐字错峰（3 字 → 步距 175）+ ±80ms 确定性时间抖动，
-    # 每字 3 颗拆樱花粉双色 2+1（同字两变体共享起点）。
-    assert kinds.count("note") == 6
+    # 音符入场：逐字形错落（行级相位表） + ±80ms 确定性时间抖动，每字 3
+    # 颗粒子按 1:2 权重拆成 2 组（note 1 颗 / note_dot 2 颗），双色变体再
+    # 把 2 颗的组对半拆开 → 每字 3 条 burst、颗数各 1，造型仍为 1:2。
+    assert kinds.count("note") == 9
     notes = [b for b in bursts if b["kind"] == "note"]
-    for char_index, base in enumerate((1000, 1175, 1350)):
-        starts = [
-            b["start_ms"] for b in notes if b["char_index"] == char_index
+    for char_index in range(3):
+        rows = [b for b in notes if b["char_index"] == char_index]
+        assert len(rows) == 3
+        assert sorted(b["count"] for b in rows) == [1, 1, 1]
+        expected = (
+            1000
+            + round(350 * FALL_LINE_PHASES[char_index])
+            + CHAR_TIME_OFFSETS_MS[char_index]
+        )
+        assert {b["start_ms"] for b in rows} == {expected}
+        assert sorted(b["sprite"] for b in rows) == [
+            "note", "note_dot", "note_dot",
         ]
-        assert len(starts) == 2
-        assert all(abs(start - base) <= 80 for start in starts)
     assert len({b["start_ms"] for b in notes}) > 1  # 逐字不再严格等差错峰
-    assert sorted({b["count"] for b in notes}) == [1, 2]
+    assert {b["sprite"] for b in notes} == {"note", "note_dot"}
     assert {b["color"] for b in notes} == {"#FFB7C5", "#FFD7E0"}
     # 消散退场：像素方块、固定默认档（7 颗/字拆双色 4+3）。
     assert kinds.count("dissolve") == 6
@@ -2666,11 +2676,15 @@ def test_petal_role_mode_pair_but_other_kinds_stay_single():
     # 花瓣的 role 档 = 来源走字前/后实色双色（不带装饰规格，
     # 与 follow_mix「前后实色」同口径）。
     assert all("paint" not in b for b in petal_pair)
-    # 音符在同一 role 模式下保持单色（走字后）——不改既有观感。
+    # 音符在同一 role 模式下保持单色（走字后）——不改既有观感；1:2 造型
+    # 权重会拆成 2 条 burst，但每条仍是同一实色。
     note_style = _replace(style, sing_fx="note")
     note_bursts = plan_line_bursts(note_style, 0, 0, 3000, 2900, [(100, 400)])
     notes = [b for b in note_bursts if b["kind"] == "note"]
-    assert len(notes) == 1 and notes[0]["color"] == "#EE7700"
+    assert len(notes) == 2
+    assert sorted(b["count"] for b in notes) == [1, 2]
+    assert {b["color"] for b in notes} == {"#EE7700"}
+    assert {b["sprite"] for b in notes} == {"note", "note_dot"}
 
 
 def test_petal_sprite_contract():
@@ -3496,12 +3510,23 @@ def test_petal_and_snow_sing_particles_skip_whitespace(sing_kind):
     else:
         sing = [b for b in bursts if b["kind"] == sing_kind and b["sweep"] == 0]
         entry = [b for b in bursts if b["kind"] == sing_kind and b["sweep"] == 1]
-    # 空格（1600 起）不发射唱字粒子；可见字各 1 条（默认单独颜色双白
-    # 折叠单 burst——唱字粒子不吃固定默认档）。
+    # 空格（1600 起）不发射唱字粒子；可见字按造型权重拆条（默认单独颜色
+    # 双白折叠单 burst——唱字粒子不吃固定默认档）。
     assert 1600 not in [b["start_ms"] for b in sing]
-    assert sorted(b["start_ms"] for b in sing) == [1200, 2000]
-    # 入场仍按整行逐字（3 字 × 固定档双色拆分，含空格位）。
-    assert sorted(b["char_index"] for b in entry) == [0, 0, 1, 1, 2, 2]
+    assert sorted({b["start_ms"] for b in sing}) == [1200, 2000]
+    if sing_kind == "note":
+        # 1:2 权重 → 唱字每字 2 条；出入场再拆双色 → 3 条/字。
+        assert sorted(b["char_index"] for b in sing) == [0, 0, 2, 2]
+        assert sorted(b["char_index"] for b in entry) == [
+            0, 0, 0, 1, 1, 1, 2, 2, 2,
+        ]
+    elif sing_kind == "heart":
+        # 爱心只有原始心形 → 唱字每字 1 条；出入场固定双色拆成 2 条/字。
+        assert sorted(b["char_index"] for b in sing) == [0, 2]
+        assert sorted(b["char_index"] for b in entry) == [0, 0, 1, 1, 2, 2]
+    else:
+        # 花瓣/雪花入场仍按整行逐字（3 字 × 固定档双色拆分，含空格位）。
+        assert sorted(b["char_index"] for b in entry) == [0, 0, 1, 1, 2, 2]
 
 
 def test_heart_sprite_contract():
@@ -3556,9 +3581,9 @@ def test_heart_sprite_contract():
     assert sprite_for_kind("heart") == "heart"
 
 
-def test_heart_plans_mimic_note_all_three_modes():
-    """爱心三档 = 音符的完全克隆（时序/数量/行程/锚点/种子结构同款，
-    kind 与颜色不同）：入场逐字错峰、退场同窗反向、唱字每字 3 颗。"""
+def test_heart_plans_follow_note_timing_with_single_shape():
+    """爱心三档与音符共用时序编排（逐字相位/窗口/行程同款），但造型族
+    按用户口径收敛：爱心只保留原始心形，音符按 1:2 拆八分/附点。"""
     def plan(kind: str):
         style = Style(
             entry_anim=kind, entry_lead_ms=600, exit_anim=kind,
@@ -3572,28 +3597,58 @@ def test_heart_plans_mimic_note_all_three_modes():
 
     note = plan("note")
     heart = plan("heart")
-    assert len(note) == len(heart) > 0
+    assert note and heart
 
-    def strip(bursts, kind):
-        out = []
+    def per_char(bursts, kind):
+        rows = {}
         for b in bursts:
-            b = dict(b)
-            b.pop("seed", None)
-            b.pop("color", None)  # 配色按 kind 取默认对，本就不同
-            assert b["kind"] == kind
-            b.pop("kind")
-            out.append(b)
-        return out
+            if b["kind"] != kind:
+                continue
+            rows.setdefault(b["char_index"], []).append(
+                (b["start_ms"], b["end_ms"], b["size_px"], b["travel_px"])
+            )
+        return {
+            char: sorted(set(values)) for char, values in rows.items()
+        }
 
-    note_bursts = strip(note, "note")
-    heart_bursts = strip(heart, "heart")
-    assert note_bursts == heart_bursts  # 除 kind/seed 外逐字段相等
+    note_rows = per_char(note, "note")
+    heart_rows = per_char(heart, "heart")
+    # 同一字符的起点/终点/尺寸/行程完全一致（只有造型与颗数不同）。
+    assert note_rows.keys() == heart_rows.keys()
+    for char_index in note_rows:
+        assert note_rows[char_index] == heart_rows[char_index], char_index
+
+    # 音符：唱字每字 1 颗八分 + 2 颗附点（1:2），只有两种造型。
+    note_bursts = [b for b in note if b["kind"] == "note"]
+    for char_index, window_start in enumerate((1200, 1600, 2000)):
+        sing_counts = sorted(
+            b["count"] for b in note_bursts
+            if b["char_index"] == char_index
+            and b["start_ms"] == window_start
+        )
+        assert sing_counts == [1, 2], char_index
+    assert {b["sprite"] for b in note_bursts} == {"note", "note_dot"}
+    # 爱心：每字 3 颗、单一原始心形（出入场拆双色时按 2+1 分发）。
+    heart_bursts = [b for b in heart if b["kind"] == "heart"]
+    assert {b["sprite"] for b in heart_bursts} == {"heart"}
+    for char_index, window_start in enumerate((1200, 1600, 2000)):
+        sing_counts = [
+            b["count"] for b in heart_bursts
+            if b["char_index"] == char_index
+            and b["start_ms"] == window_start
+        ]
+        assert sing_counts == [3], char_index
+        entry_total = sum(
+            b["count"] for b in heart_bursts
+            if b["char_index"] == char_index and b["start_ms"] < 1200
+        )
+        exit_total = sum(
+            b["count"] for b in heart_bursts
+            if b["char_index"] == char_index and b["start_ms"] > 3000
+        )
+        assert entry_total == exit_total == 3, char_index
 
     heart_all = [b for b in heart]
-    entry = [b for b in heart_all if b.get("sweep") == 0 and b["start_ms"] < 1500]
-    # 入场逐字错峰（3 字 3 组起点递增）。
-    starts = sorted({b["start_ms"] for b in entry if b["char_index"] in (0, 1, 2)})
-    assert len(starts) >= 2
     # 出入场固定默认档双色：正红 + 浅粉（canvify 情人节表 Classic Valentine
     # Red/Blush Pink）；唱字不吃固定默认档（默认单独颜色=白，与音符同口径）。
     window_starts = {1200, 1600, 2000}
@@ -3733,17 +3788,28 @@ def test_entry_exit_particle_emission_decoupled_from_duration_knob():
         return entry, exit_
 
     baseline_entry, baseline_exit = windows(600)
-    # 逐字 ±80ms 抖动：每字两色变体共享起点，起点不再严格等差错峰。
-    for char_index, base in enumerate((1000, 1175, 1350)):
+    # 逐字行级相位（固定 20 数表 × 350ms）+ ±80ms 抖动：每字 3 条造型
+    # 预设 burst 共享起点，起点不再严格按字符序等差错峰。
+    for char_index in range(3):
         rows = [row for row in baseline_entry if row[0] == char_index]
-        assert len(rows) == 2
-        assert all(abs(row[1] - base) <= 80 for row in rows)
+        assert len(rows) == 3
+        expected = (
+            1000
+            + round(350 * FALL_LINE_PHASES[char_index])
+            + CHAR_TIME_OFFSETS_MS[char_index]
+        )
+        assert {row[1] for row in rows} == {expected}
         assert all(row[2] == row[1] + 800 for row in rows)
     assert len({row[1] for row in baseline_entry}) > 1
-    for char_index, base in enumerate((4100, 4275, 4450)):
+    for char_index in range(3):
         rows = [row for row in baseline_exit if row[0] == char_index]
-        assert len(rows) == 2
-        assert all(abs(row[1] - base) <= 80 for row in rows)
+        assert len(rows) == 3
+        expected = (
+            4100
+            + round(350 * FALL_LINE_PHASES[char_index])
+            + CHAR_TIME_OFFSETS_MS[char_index]
+        )
+        assert {row[1] for row in rows} == {expected}
         assert all(row[2] == row[1] + 800 for row in rows)
     # 发射窗口与时长旋钮完全解耦（各档位逐字段相等）。
     for fade in (120, 300, 600, 1200, 3000):
@@ -3945,8 +4011,13 @@ def test_flame_plans_shape_presets_and_impact():
         FLAME_BODY_SHAPES
     ) | set(FLAME_CORE_SHAPES)
     # 同一簇（同 start + char）四层四形，不重复。
-    for start in {b["start_ms"] for b in fire}:
-        at = [b for b in fire if b["start_ms"] == start]
+    for char_index, start in {
+        (b["char_index"], b["start_ms"]) for b in fire
+    }:
+        at = [
+            b for b in fire
+            if b["char_index"] == char_index and b["start_ms"] == start
+        ]
         assert len(at) == 4
         assert len({b["sprite"] for b in at}) == 4
 
@@ -3954,9 +4025,17 @@ def test_flame_plans_shape_presets_and_impact():
     flash = [b for b in bursts if b["kind"] == "flash"]
     wave = [b for b in bursts if b["kind"] == "shockwave"]
     spark = [b for b in bursts if b["kind"] == "spark"]
+    # 冲击火星（入/退 × 3 字 × 双色）与唱字火星（每簇一撮，emit_x 标记）。
+    impact_spark = [b for b in spark if "emit_x" not in b]
+    sing_spark = [b for b in spark if "emit_x" in b]
     assert len(fireball) == 12  # 入/退 × 3 字 × 2 色
     assert len(flash) == len(wave) == 6
-    assert len(spark) == 12
+    assert len(impact_spark) == 12
+    assert sing_spark
+    # 唱字火星 5 颗拆双色 → 3+2；冲击火星 10 颗拆 5+5。
+    assert sorted({b["count"] for b in sing_spark}) == [2, 3]
+    assert sorted({b["count"] for b in impact_spark}) == [5]
+    spark = impact_spark
     assert all(b["front"] for b in fireball)
     assert all(b["front"] for b in flash)
     assert all(not b["front"] for b in wave)
@@ -4044,37 +4123,80 @@ def test_flame_plans_duration_driven_entry_exit_and_sing():
 
     # 入场：时长 600 → 3 簇/字、每字 32 颗；火在文字全部出现后 260ms
     # 熄灭。
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        FLAME_PUFF_OFFSETS,
+        FLAME_PUFF_SCALES,
+        flame_puff_start_ms,
+    )
+
+    def puff_starts(
+        base, char_index, spread, puff_ms, puffs, seed_offset,
+        *, line_offset=True,
+    ):
+        char_start = base + round(spread * FALL_LINE_PHASES[char_index])
+        if line_offset:
+            char_start += CHAR_TIME_OFFSETS_MS[char_index]
+        return sorted(
+            flame_puff_start_ms(
+                char_start, char_index, puff, puff_ms, seed_offset
+            )
+            for puff in range(puffs)
+        )
+
+    def puff_jitter_index(char_index, puff, seed_offset):
+        return (char_index * 5 + puff + seed_offset) % len(FLAME_PUFF_OFFSETS)
+
     bursts = plan(fade=600, entry_lead=600)
     entry_fire_end = 1000 + 600 + FLAME_TAIL_MS
     entry = [b for b in bursts if b["kind"] in fire_kinds and b["start_ms"] < 3000]
     assert len(entry) == 3 * 3 * 4  # 字 × 簇 × 层
+    expected_entry_sizes = set()
+    expected_entry_travels = set()
+    layer_sizes = (1.00, 0.88, 0.70, 0.50)
+    layer_travels = (1.00, 0.94, 0.88, 0.80)
     for char_index in range(3):
-        base = 1000 + 175 * char_index + CHAR_TIME_OFFSETS_MS[char_index]
         starts = sorted({
             b["start_ms"] for b in entry if b["char_index"] == char_index
         })
-        assert starts == [base, base + 200, base + 400]
+        assert starts == puff_starts(1000, char_index, 350, 200, 3, 16)
         per_char = [
             b for b in entry if b["char_index"] == char_index
         ]
         assert sum(b["count"] for b in per_char) == 32
         assert max(b["end_ms"] for b in per_char) == entry_fire_end
-    # 每簇 4 层 = 2 主火团 + 2 细长焰芯。
-    for start in {b["start_ms"] for b in entry}:
-        at = [b for b in entry if b["start_ms"] == start]
+        for puff in range(3):
+            scale = FLAME_PUFF_SCALES[
+                (char_index * 3 + puff + 16) % len(FLAME_PUFF_SCALES)
+            ]
+            travel_scale = 0.92 + 0.16 * (
+                (puff_jitter_index(char_index, puff, 16) % 5) / 4.0
+            )
+            for size_factor, travel_factor in zip(
+                layer_sizes, layer_travels
+            ):
+                expected_entry_sizes.add(
+                    round(42.0 * scale * size_factor, 2)
+                )
+                expected_entry_travels.add(
+                    round(142.8 * travel_scale * travel_factor, 2)
+                )
+    # 每簇 4 层 = 2 主火团 + 2 细长焰芯（同一起点的四层四形）。
+    for char_index, start in {
+        (b["char_index"], b["start_ms"]) for b in entry
+    }:
+        at = [
+            b for b in entry
+            if b["char_index"] == char_index and b["start_ms"] == start
+        ]
         assert len(at) == 4
         assert [b["kind"] for b in at].count("flame") == 2
         assert [b["kind"] for b in at].count("flame_alt") == 2
-    # 四层色阶 + 尺寸/行程递减。
+    # 四层色阶 + 尺寸/行程递减（逐簇尺寸/行程另有固定表抖动）。
     assert {b["color"] for b in entry} == {
         "#FF6B1A", "#FFA31A", "#FFD24A", "#FFF7D6",
     }
-    assert sorted({round(float(b["size_px"]), 2) for b in entry}) == [
-        21.0, 29.4, 36.96, 42.0,
-    ]
-    assert sorted({round(float(b["travel_px"]), 2) for b in entry}) == [
-        114.24, 125.66, 134.23, 142.8,
-    ]
+    assert {round(float(b["size_px"]), 2) for b in entry} == expected_entry_sizes
+    assert {round(float(b["travel_px"]), 2) for b in entry} == expected_entry_travels
     # 入场时长翻倍 → 数量/簇数同比放大，短尾仍固定 260ms。
     longer = plan(fade=600, entry_lead=1200)
     longer_entry = [
@@ -4146,27 +4268,46 @@ def test_flame_plans_duration_driven_entry_exit_and_sing():
         )
         if b["kind"] in fire_kinds
     ]
-    for char_index, expected_starts in (
-        (0, [1200, 1400]),
-        (1, [1600, 1800]),
-        (2, [2000, 2250, 2500, 2750]),
+    for char_index, base, puffs, puff_ms in (
+        (0, 1200, 2, 200),
+        (1, 1600, 2, 200),
+        (2, 2000, 4, 250),
     ):
         starts = sorted({
             b["start_ms"] for b in sing if b["char_index"] == char_index
         })
-        assert starts == expected_starts, char_index
+        assert starts == puff_starts(
+            base, char_index, 0, puff_ms, puffs, 7, line_offset=False
+        ), char_index
     per_char_counts = {
         char_index: sum(
             b["count"] for b in sing if b["char_index"] == char_index
         )
         for char_index in range(3)
     }
-    assert per_char_counts == {0: 14, 1: 14, 2: 24}
+    assert per_char_counts == {0: 16, 1: 16, 2: 32}
     assert {b["color"] for b in sing} == {
         "#FF6B1A", "#FFA31A", "#FFD24A", "#FFF7D6",
     }
+    # 唱字火团尺寸 = 基准 48 × 唱字缩放 0.6（比原长火焰小 40%）× 逐簇尺寸
+    # 倍数 × 四层色阶倍数。
+    expected_sing_sizes = set()
+    sing_puffs = {
+        0: (1200, 2, 200),
+        1: (1600, 2, 200),
+        2: (2000, 4, 250),
+    }
+    for char_index, (_base, puffs, _puff_ms) in sing_puffs.items():
+        for puff in range(puffs):
+            scale = FLAME_PUFF_SCALES[
+                (char_index * 3 + puff + 7) % len(FLAME_PUFF_SCALES)
+            ]
+            for size_factor in layer_sizes:
+                expected_sing_sizes.add(
+                    round(48.0 * 0.6 * scale * size_factor, 2)
+                )
     sing_sizes = sorted({round(float(b["size_px"]), 2) for b in sing})
-    assert sing_sizes == [24.0, 33.6, 42.24, 48.0]
+    assert set(sing_sizes) == expected_sing_sizes
     assert len([b for b in plan_line_bursts(
         sing_style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
@@ -4515,8 +4656,9 @@ def test_plan_lightning_entry_exit_sing():
         b for b in core
         if b["end_ms"] - b["start_ms"] == 520 and b["start_ms"] < 3000
     ]
-    assert {b["start_ms"] for b in entry_core} == {971, 1179, 1286}
-    assert {b["end_ms"] for b in entry_core} == {1491, 1699, 1806}
+    # 逐字起点 = 350ms 行级相位（FALL_LINE_PHASES）× 350 + 逐字抖动。
+    assert {b["start_ms"] for b in entry_core} == {971, 1134, 1188}
+    assert {b["end_ms"] for b in entry_core} == {1491, 1654, 1708}
     assert {
         round(float(b["size_px"]), 2) for b in entry_core
     } == {104.96, 128.0, 156.16}  # 三套 bolt 的三档尺寸
@@ -4544,8 +4686,8 @@ def test_plan_lightning_entry_exit_sing():
         b for b in core
         if b["end_ms"] - b["start_ms"] == 520 and b["start_ms"] >= 3000
     ]
-    assert {b["start_ms"] for b in exit_core} == {4071, 4279, 4386}
-    assert {b["end_ms"] for b in exit_core} == {4591, 4799, 4906}
+    assert {b["start_ms"] for b in exit_core} == {4071, 4234, 4288}
+    assert {b["end_ms"] for b in exit_core} == {4591, 4754, 4808}
 
     sing_core = [b for b in core if b["end_ms"] - b["start_ms"] != 520]
     assert {b["start_ms"] for b in sing_core} == {1200, 1600, 2000}
@@ -4855,6 +4997,319 @@ def test_lightning_growth_anchors_top_or_bottom():
     top_fixed = max(tops) - min(tops) < 1e-6
     bottom_fixed = max(bottoms) - min(bottoms) < 1e-6
     assert top_fixed or bottom_fixed
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-22「粒子特效实现经验」落地：多 sprite 预设 / 尺寸与出生点解耦 /
+# 首颗立即出生 / 落雷簇状重击 / 火簇抖动。
+# ---------------------------------------------------------------------------
+
+
+def _flatten_sprite_points(commands, samples=14):
+    """把 M/L/C/Q 命令离散成多边形顶点（每个 M 起一段，Z 结束）。"""
+    loops = []
+    current = (0.0, 0.0)
+
+    def push(point):
+        if not loops:
+            return
+        if not loops[-1] or (
+            abs(point[0] - loops[-1][-1][0]) > 1e-6
+            or abs(point[1] - loops[-1][-1][1]) > 1e-6
+        ):
+            loops[-1].append(point)
+
+    for command in commands:
+        kind = command[0]
+        if kind == "M":
+            loops.append([])
+            current = (float(command[1]), float(command[2]))
+            push(current)
+        elif kind == "L":
+            current = (float(command[1]), float(command[2]))
+            push(current)
+        elif kind == "C":
+            p0 = current
+            p1 = (float(command[1]), float(command[2]))
+            p2 = (float(command[3]), float(command[4]))
+            p3 = (float(command[5]), float(command[6]))
+            for step in range(1, samples + 1):
+                t = step / samples
+                mt = 1.0 - t
+                push((
+                    mt ** 3 * p0[0] + 3 * mt * mt * t * p1[0]
+                    + 3 * mt * t * t * p2[0] + t ** 3 * p3[0],
+                    mt ** 3 * p0[1] + 3 * mt * mt * t * p1[1]
+                    + 3 * mt * t * t * p2[1] + t ** 3 * p3[1],
+                ))
+            current = p3
+        elif kind == "Q":
+            p0 = current
+            p1 = (float(command[1]), float(command[2]))
+            p2 = (float(command[3]), float(command[4]))
+            for step in range(1, samples + 1):
+                t = step / samples
+                mt = 1.0 - t
+                push((
+                    mt * mt * p0[0] + 2 * mt * t * p1[0] + t * t * p2[0],
+                    mt * mt * p0[1] + 2 * mt * t * p1[1] + t * t * p2[1],
+                ))
+            current = p2
+    for loop in loops:
+        if (
+            len(loop) > 1
+            and abs(loop[0][0] - loop[-1][0]) <= 1e-6
+            and abs(loop[0][1] - loop[-1][1]) <= 1e-6
+        ):
+            loop.pop()
+    return loops
+
+
+def test_note_heart_shape_preset_sprites_contract():
+    """音符/爱心造型预设都是单闭环、无自交叠、落在 ±500 em 空间内，
+    且轮廓签名两两不同（不是同一张图的缩放副本）。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        HEART_SHAPE_PRESETS,
+        NOTE_SHAPE_PRESETS,
+    )
+
+    presets = NOTE_SHAPE_PRESETS + HEART_SHAPE_PRESETS
+    signatures = set()
+    for name in presets:
+        commands = FX_SPRITES[name]["path_commands"]
+        assert commands[0][0] == "M" and commands[-1][0] == "Z"
+        loops = _flatten_sprite_points(commands)
+        # 附点音符是「音符 + 独立附点」两条不相交子路径，其余单环。
+        expected_loops = 2 if name == "note_dot" else 1
+        assert len(loops) == expected_loops, name
+        if name not in {"note", "note_dot"}:
+            # 旧八分音符（note）旗根有一处历史遗留的极细自交叠（宽 <1%
+            # em、视觉不可见）；附点音符复用同一轮廓，故一并豁免。其余
+            # 新增预设不允许带自交叠。
+            assert _sprite_loop_intersections(loops) == 0, name
+        if name == "note_dot":
+            note_loop, dot_loop = loops
+            # 附点必须落在音符轮廓右侧的空白处（两子路径不相交）。
+            assert min(x for x, _y in dot_loop) > max(
+                x for x, _y in note_loop
+            )
+        points = [point for loop in loops for point in loop]
+        assert max(abs(x) for x, _y in points) <= 500.0 + 1e-6, name
+        assert max(abs(y) for _x, y in points) <= 500.0 + 1e-6, name
+        signatures.add(tuple((round(x, 3), round(y, 3)) for x, y in points))
+    assert len(signatures) == len(presets)
+    # 缺省 kind → 默认造型仍是最早的那张（旧 IR 兼容）。
+    assert sprite_for_kind("note") == "note"
+    assert sprite_for_kind("heart") == "heart"
+
+
+def test_note_shape_weights_one_to_two_and_single_heart():
+    """用户口径：音符只留八分/附点、按 1:2 出现；爱心只保留原始心形。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        HEART_SHAPE_PRESETS,
+        NOTE_SHAPE_PRESETS,
+        NOTE_SHAPE_WEIGHTS,
+    )
+
+    assert NOTE_SHAPE_PRESETS == ("note", "note_dot")
+    assert NOTE_SHAPE_WEIGHTS == (1, 2)
+    assert HEART_SHAPE_PRESETS == ("heart",)
+
+    windows = [(100 * index, 100 * index + 80) for index in range(12)]
+
+    def plan(kind: str):
+        return [
+            b for b in plan_line_bursts(
+                Style(
+                    sing_fx=kind,
+                    fx_particle_color_mode="color",
+                    font_size_px=100,
+                    karaoke_anim="none",
+                ),
+                0, 0, 2000, 1900, windows,
+            )
+            if b["kind"] == kind
+        ]
+
+    notes = plan("note")
+    # 每个字 1 颗八分 + 2 颗附点；整行累计 1:2。
+    for char_index in range(12):
+        counts = sorted(
+            b["count"] for b in notes if b["char_index"] == char_index
+        )
+        assert counts == [1, 2], char_index
+    assert sum(
+        b["count"] for b in notes if b["sprite"] == "note"
+    ) * 2 == sum(
+        b["count"] for b in notes if b["sprite"] == "note_dot"
+    )
+
+    hearts = plan("heart")
+    assert {b["sprite"] for b in hearts} == {"heart"}
+    for char_index in range(12):
+        assert sum(
+            b["count"] for b in hearts if b["char_index"] == char_index
+        ) == 3
+
+
+def test_smoke_sprite_contract():
+    """烟团 sprite：单外环（并集）、落在 ±500 em 内、缺省映射正确。"""
+    commands = FX_SPRITES["smoke"]["path_commands"]
+    assert commands[0][0] == "M" and commands[-1][0] == "Z"
+    loops = _flatten_sprite_points(commands)
+    assert len(loops) == 1
+    points = loops[0]
+    assert max(abs(x) for x, _y in points) <= 500.0 + 1e-6
+    assert max(abs(y) for _x, y in points) <= 500.0 + 1e-6
+    assert sprite_for_kind("smoke") == "smoke"
+
+
+def test_flame_sing_adds_smoke_sparks_and_wipes_across_char():
+    """走字火焰按 AE 多系统方案加厚：烟层 + 飞散火星 + 逐簇横向扫描；
+    出入场火焰保持原样（无烟/无火星、无 emit_x、sweep 仍为 0）。
+    走字火焰整体比原长火焰小 40%（用户口径：不能遮住走字）。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        FLAME_SING_SIZE_SCALE,
+    )
+
+    assert FLAME_SING_SIZE_SCALE == 0.6
+    windows = [(1200, 1600), (1600, 2000), (2000, 3000)]
+    sing_bursts = plan_line_bursts(
+        Style(
+            sing_fx="flame", fx_particle_count=14,
+            font_size_px=100, karaoke_anim="none",
+        ),
+        0, 1000, 4200, 4100, windows,
+    )
+    entry_bursts = plan_line_bursts(
+        Style(
+            entry_anim="flame", entry_lead_ms=600, font_size_px=100,
+            karaoke_anim="none",
+        ),
+        0, 1000, 4200, 4100, windows,
+    )
+
+    smoke = [b for b in sing_bursts if b["kind"] == "smoke"]
+    sparks = [b for b in sing_bursts if b["kind"] == "spark"]
+    flames = [
+        b for b in sing_bursts if b["kind"] in ("flame", "flame_alt")
+    ]
+    assert smoke and sparks and flames
+    # 烟只在唱字档出现；出入场的 spark 仍是原有冲击火星（count=10）。
+    assert not [b for b in entry_bursts if b["kind"] == "smoke"]
+    entry_sparks = [b for b in entry_bursts if b["kind"] == "spark"]
+    assert entry_sparks
+    assert all(b["count"] == 5 for b in entry_sparks)
+    assert all("emit_x" not in b for b in entry_sparks)
+    assert sorted({b["count"] for b in sparks}) == [2, 3]
+    assert all(b["front"] is False for b in smoke)
+    assert all(b["front"] is True for b in sparks)
+
+    # 唱字火粒标 sweep=2（求值器切唱字运动学）；出入场仍为 0。
+    assert all(b["sweep"] == 2 for b in flames)
+    assert all(
+        b["sweep"] == 0
+        for b in entry_bursts if b["kind"] in ("flame", "flame_alt")
+    )
+
+    # 同一字的 emit_x 随簇左→右扫过；出入场不带 emit_x。
+    for char_index in range(3):
+        emit_x = [
+            b["emit_x"] for b in flames
+            if b["char_index"] == char_index
+        ]
+        assert len(set(emit_x)) > 1
+        assert min(emit_x) < 0.0 < max(emit_x)
+        assert all(-0.5 <= value <= 0.5 for value in emit_x)
+    assert all(
+        "emit_x" not in b or b["emit_x"] == 0.0
+        for b in entry_bursts
+    )
+
+    # 唱字火焰比之前更密（48 上限、每簇至少 8 颗的预算）。
+    per_char = {
+        char_index: sum(
+            b["count"] for b in flames if b["char_index"] == char_index
+        )
+        for char_index in range(3)
+    }
+    assert per_char == {0: 16, 1: 16, 2: 32}
+
+
+def test_note_heart_first_particle_immediate_and_size_decoupled():
+    """首颗粒子立即出生（AE Box emitter 口径）；尺寸档与横向出生点
+    解耦——最大那颗不再永远偏向同一侧。"""
+    burst = {
+        "kind": "note", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 800, "count": 3, "seed": 12345,
+        "size_px": 40.0, "travel_px": 72.0, "front": True, "sweep": 0,
+    }
+    first = burst_particles_at(burst, 1, 0.0, 0.0, 120.0, 100.0)
+    assert len(first) == 1  # i == 0 立即出生（start+1ms 已有粒子）
+    heart_first = burst_particles_at(
+        {**burst, "kind": "heart"}, 1, 0.0, 0.0, 120.0, 100.0
+    )
+    assert len(heart_first) == 1
+
+    # 逐颗行程/出生高度有差异：末段三颗粒子的纵坐标不全相同。
+    late = burst_particles_at(burst, 640, 0.0, 0.0, 120.0, 100.0)
+    assert len(late) == 3
+    assert len({round(state.y, 2) for state in late}) >= 2
+
+    # 尺寸与横向出生点解耦：扫 80 个 seed，最大尺寸粒子的 x 两侧都出现。
+    sides = set()
+    for seed in range(80):
+        two = {
+            **burst, "count": 2, "seed": seed,
+        }
+        states = burst_particles_at(two, 400, 0.0, 0.0, 120.0, 100.0)
+        assert states
+        biggest = max(states, key=lambda state: state.size_px)
+        sides.add(biggest.x >= 0.0)
+    assert sides == {True, False}
+
+
+def test_lightning_restrikes_cluster_like_real_lightning():
+    """落雷重击走簇状时刻表：两三连击 + 停顿 + 补击，而不是均匀撒点。"""
+    burst = {
+        "kind": "lightning", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 520, "count": 9, "seed": 13579,
+        "size_px": 128.0, "travel_px": 0.0, "front": True, "sweep": 0,
+    }
+    counts = [
+        len(burst_particles_at(burst, t, 0.0, 0.0, 120.0, 100.0))
+        for t in range(0, 521)
+    ]
+    births = [
+        t for t in range(1, 521) if counts[t] > counts[t - 1]
+    ]
+    assert len(births) == 9
+    gaps = [b - a for a, b in zip(births, births[1:])]
+    assert sum(1 for gap in gaps if gap <= 30) >= 3  # 连击
+    assert max(gaps) >= 100  # 中间的停顿
+    # 确定性：同一 burst 重放一致。
+    again = [
+        len(burst_particles_at(burst, t, 0.0, 0.0, 120.0, 100.0))
+        for t in range(0, 521)
+    ]
+    assert counts == again
+
+
+def test_flame_puff_starts_are_jittered_deterministically():
+    """火簇起点按固定表抖动：不再是 280ms 节拍器，且可复现。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        flame_puff_start_ms,
+    )
+
+    starts = [
+        flame_puff_start_ms(1000, 0, puff, 200, 16) for puff in range(8)
+    ]
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert all(gap != 200 for gap in gaps)  # 非等间隔
+    assert all(80 <= gap <= 320 for gap in gaps)
+    assert starts == [
+        flame_puff_start_ms(1000, 0, puff, 200, 16) for puff in range(8)
+    ]
 
 
 @pytest.mark.parametrize("kind", ["feather", "lightning"])

@@ -137,6 +137,8 @@ struct TimingLine {
         quint32 seed = 0;
         double sizePx = 28.0;
         double travelPx = 120.0;
+        // 唱字火焰按簇横向扫过的发射点偏移（归一化 × 字框宽；旧 IR 缺省 0）。
+        double emitX = 0.0;
         bool front = true;
         bool reverse = false;
         int sweep = 0;

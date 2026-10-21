@@ -1665,6 +1665,10 @@ static void applyLineStyleSection(
                 burst.travelPx = burstObject.value(
                     QStringLiteral("travel_px")
                 ).toDouble(0.0);
+                // 唱字火焰按簇扫过的发射点偏移（2026-10-22；旧 IR 缺省 0）。
+                burst.emitX = burstObject.value(
+                    QStringLiteral("emit_x")
+                ).toDouble(0.0);
                 burst.front = burstObject.value(
                     QStringLiteral("front")
                 ).toBool(true);

@@ -759,6 +759,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 burst.seed = source.seed;
                 burst.sizePx = static_cast<float>(source.sizePx * scale);
                 burst.travelPx = static_cast<float>(source.travelPx * scale);
+                burst.emitX = static_cast<float>(source.emitX);
                 burst.front = source.front;
                 burst.reverse = source.reverse;
                 burst.sweep = source.sweep;

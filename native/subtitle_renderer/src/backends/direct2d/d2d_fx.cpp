@@ -69,6 +69,17 @@ constexpr float kSnowSizeMin = 0.40f;
 constexpr float kSnowSizeSpan = 0.88f;
 constexpr float kFeatherSizeMin = 0.45f;
 constexpr float kFeatherSizeSpan = 1.20f;
+// 音符/爱心四档尺寸景深（镜像 particles.PARTICLE_DEPTH_TIERS）：按
+// (i + seed>>5) 轮换到不同粒子，与横向出生点解耦（2026-10-22 经验 §3.5）。
+constexpr float kParticleDepthTiers[] = {
+    0.72f, 0.92f, 1.12f, 1.34f,
+};
+// 落雷簇状重击时刻（镜像 particles.LIGHTNING_STRIKE_BIRTHS /
+// LIGHTNING_STRIKE_JITTER）：真实闪电两三连击 + 停顿 + 补击。
+constexpr float kLightningStrikeBirths[] = {
+    0.00f, 0.03f, 0.10f, 0.15f, 0.38f, 0.42f, 0.51f, 0.69f, 0.73f,
+};
+constexpr float kLightningStrikeJitter = 0.035f;
 
 float clampedRatio(int elapsedMs, int durationMs) {
     if (durationMs <= 0) {
@@ -344,6 +355,9 @@ std::vector<FxParticle> burstParticlesAt(
     const float tau = static_cast<float>(tMs - burst.startMs);
     const float size = burst.sizePx;
     const float travel = burst.travelPx;
+    // 唱字火焰按簇横向扫过的发射点偏移（镜像 particles.burst_particles_at
+    // 的 emit_x；0 = 不偏移）。
+    const float emitX = burst.emitX * boxW;
 
     if (burst.kind == "ripple") {
         // 水波纹（镜像 particles.burst_particles_at）：3 枚细描边圆环错峰
@@ -503,10 +517,19 @@ std::vector<FxParticle> burstParticlesAt(
                 });
             }
         } else if (burst.kind == "note" || burst.kind == "heart") {
+            // 音符/爱心（镜像 particles.burst_particles_at，2026-10-22 按
+            // 「粒子特效实现经验」强化随机性）：首颗粒子立即出生、其余
+            // 0~42% 寿命错峰；逐颗行程/出生高度/摆幅频率独立哈希；尺寸走
+            // 四档景深表（与横向出生点解耦，最大那颗不再总在同一侧）。
             const float u1 = fxUnitHash(index, 1u);
             const float u2 = fxUnitHash(index, 2u);
             const float u3 = fxUnitHash(index, 3u);
-            const float delay = u3 * static_cast<float>(life) * 0.35f;
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            const float u6 = fxUnitHash(index, 6u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float spawn = i == 0 ? 0.0f : u3;
+            const float delay = spawn * static_cast<float>(life) * 0.42f;
             const float p = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
@@ -516,17 +539,29 @@ std::vector<FxParticle> burstParticlesAt(
             if (p <= 0.0f) {
                 continue;
             }
-            constexpr float pi = 3.14159265358979323846f;
-            const float rise = travel * (1.0f - (1.0f - p) * (1.0f - p));
-            const float sway = std::sin((u2 + p * 1.5f) * 2.0f * pi)
-                * size * 0.4f;
+            const float rise = travel * (0.72f + 0.55f * u4)
+                * (1.0f - (1.0f - p) * (1.0f - p));
+            const float swayAmp = size * (0.22f + 0.30f * u5);
+            const float sway = std::sin(
+                (u2 + p * (1.05f + 0.55f * u6)) * 2.0f * pi
+            ) * swayAmp * (0.55f + 0.45f * p);
+            const float drift = (u6 - 0.5f) * travel * 0.18f * p;
+            const auto depthCount = static_cast<std::uint32_t>(
+                sizeof(kParticleDepthTiers) / sizeof(kParticleDepthTiers[0])
+            );
+            // 无符号取模：seed 接近 2^32 时 (int) 强转会变负数、下标越界。
+            const auto depthIndex = (
+                static_cast<std::uint32_t>(i) + (burst.seed >> 5)
+            ) % depthCount;
+            const float depth = kParticleDepthTiers[depthIndex]
+                * (0.94f + 0.12f * u6);
             out.push_back(FxParticle{
-                originX + (u1 - 0.5f) * boxW * 0.8f + sway,
-                originY - boxH * 0.35f - rise,
-                (u2 - 0.5f) * 28.0f,
-                size * (0.70f + 0.60f * u1)
-                    * (0.85f + 0.15f * std::sin(pi * p)),
-                1.0f - std::sqrt(p) * p,
+                originX + (u1 - 0.5f) * boxW * 0.9f + sway + drift,
+                originY - boxH * (0.24f + 0.16f * u4) - rise,
+                (u2 - 0.5f) * 44.0f
+                    + std::sin((u5 + p * 0.9f) * 2.0f * pi) * 9.0f,
+                size * depth * (0.88f + 0.12f * std::sin(pi * p)),
+                1.0f - p * std::sqrt(p),
             });
         } else if (burst.kind == "flame" || burst.kind == "flame_alt") {
             // 火焰 v3（镜像 particles.burst_particles_at flame 分支）：
@@ -538,10 +573,17 @@ std::vector<FxParticle> burstParticlesAt(
             const float u3 = fxUnitHash(index, 3u);
             const float u4 = fxUnitHash(index, 4u);
             const float u5 = fxUnitHash(index, 5u);
+            const float u6 = fxUnitHash(index, 6u);
             constexpr float pi = 3.14159265358979323846f;
-            const float birth = u3 * life * 0.34f;
+            // 唱字档（sweep==2）：更碎寿命 + 更宽尺寸差 + 第三层湍流 +
+            // 擦字反方向拖尾（2026-10-22 AE 火焰预置口径，只影响走字）。
+            const bool singMode = burst.sweep == 2;
+            const float birth = u3 * life * (singMode ? 0.28f : 0.34f);
             const float lifeI = std::min(
-                life * (0.62f + 0.38f * u5),
+                life * (
+                    singMode ? (0.45f + 0.55f * u5)
+                             : (0.62f + 0.38f * u5)
+                ),
                 std::max(life - birth, 1.0f)
             );
             const float p = (tau - birth) / lifeI;
@@ -549,10 +591,15 @@ std::vector<FxParticle> burstParticlesAt(
                 continue;
             }
             const float rise = travel * std::pow(p, 1.35f);
-            const float sway = (
+            float turbulence = (
                 std::sin((u2 + p * 1.7f) * 2.0f * pi) * 0.45f
                 + std::sin((u4 * 0.7f + p * 3.3f) * 2.0f * pi) * 0.18f
-            ) * size * (0.35f + 0.65f * p);
+            );
+            if (singMode) {
+                turbulence += std::sin((u6 + p * 5.1f) * 2.0f * pi) * 0.12f;
+            }
+            const float sway = turbulence * size
+                * (singMode ? (0.42f + 0.85f * p) : (0.35f + 0.65f * p));
             const float grow = 1.0f - std::pow(
                 1.0f - std::min(p / 0.16f, 1.0f), 2.0f
             );
@@ -561,19 +608,28 @@ std::vector<FxParticle> burstParticlesAt(
                 std::max((p - 0.50f) / 0.50f, 0.0f), 1.3f
             );
             const float flicker = 0.70f + 0.30f * std::sin(
-                (p * 5.5f + u4 * 3.0f) * 2.0f * pi
+                ((singMode ? 7.5f : 5.5f) * p + u4 * 3.0f)
+                * 2.0f * pi
             );
             const float alpha = std::min(p / 0.08f, 1.0f)
                 * std::pow(1.0f - p, 0.45f) * flicker;
+            const float trail = singMode ? -0.45f * size * p : 0.0f;
             const float lean = std::cos((u2 + p * 1.7f) * 2.0f * pi) * 16.0f
                 + (u4 - 0.5f) * 30.0f
-                + std::sin((u5 + p * 2.1f) * 2.0f * pi) * 8.0f;
+                + std::sin((u5 + p * 2.1f) * 2.0f * pi) * 8.0f
+                + (singMode ? (u6 - 0.5f) * 40.0f : 0.0f);
+            const float sizeFactor = singMode
+                ? (0.30f + 0.95f * grow) * (0.55f + 0.85f * u6)
+                : (0.35f + 0.85f * grow) * (0.60f + 0.80f * u1);
             out.push_back(FxParticle{
-                originX + (u1 - 0.5f) * boxW * 0.90f + sway,
-                originY + (0.04f + 0.52f * u2) * boxH - rise,
+                originX + emitX + (u1 - 0.5f) * boxW * 0.90f
+                    + sway + trail,
+                originY + (
+                    singMode ? (0.00f + 0.66f * u2)
+                             : (0.04f + 0.52f * u2)
+                ) * boxH - rise,
                 lean,
-                size * (0.35f + 0.85f * grow) * cool
-                    * (0.60f + 0.80f * u1),
+                size * sizeFactor * cool,
                 alpha,
                 1.0f - 0.35f * p,
                 1.0f + 1.05f * p,
@@ -651,7 +707,7 @@ std::vector<FxParticle> burstParticlesAt(
             const float angle = u1 * 2.0f * pi;
             const float speed = travel * (0.60f + 0.90f * u2);
             out.push_back(FxParticle{
-                originX + std::cos(angle) * speed * p,
+                originX + emitX + std::cos(angle) * speed * p,
                 originY + std::sin(angle) * speed * p * 0.60f
                     + travel * 0.55f * p * p,
                 p * 360.0f * (u4 - 0.5f),
@@ -682,7 +738,7 @@ std::vector<FxParticle> burstParticlesAt(
                 (p * 2.5f + u2) * 2.0f * pi
             );
             out.push_back(FxParticle{
-                originX + (u1 - 0.5f) * boxW * 0.70f + sway,
+                originX + emitX + (u1 - 0.5f) * boxW * 0.70f + sway,
                 originY + (0.05f + 0.25f * u2) * boxH - rise,
                 (u4 - 0.5f) * 10.0f,
                 size * (0.82f + 0.18f * std::sin(pi * p))
@@ -704,7 +760,17 @@ std::vector<FxParticle> burstParticlesAt(
             const float u4 = fxUnitHash(index, 4u);
             const float u5 = fxUnitHash(index, 5u);
             constexpr float pi = 3.14159265358979323846f;
-            const float birth = u3 * life * 0.72f;
+            // 簇状重击节奏（镜像 particles.LIGHTNING_STRIKE_BIRTHS）：
+            // 两三连击 + 停顿 + 补击，超出表长按轮次整体后移。
+            const auto strikeCount = static_cast<int>(
+                sizeof(kLightningStrikeBirths) / sizeof(kLightningStrikeBirths[0])
+            );
+            const int strikeIndex = i % strikeCount;
+            const float strikeBirth = kLightningStrikeBirths[strikeIndex]
+                + 0.02f * static_cast<float>(i / strikeCount)
+                + (u3 - 0.5f) * kLightningStrikeJitter;
+            const float birth = std::clamp(strikeBirth, 0.0f, 0.82f)
+                * static_cast<float>(life);
             const float lifeI = std::min(
                 100.0f + 140.0f * u4,
                 std::max(static_cast<float>(life) - birth, 1.0f)
@@ -764,12 +830,44 @@ std::vector<FxParticle> burstParticlesAt(
                 (p * 9.0f + u2 * 4.0f) * 2.0f * pi
             );
             out.push_back(FxParticle{
-                originX + (u1 - 0.5f) * boxW * 0.75f + drift + sway,
+                originX + emitX + (u1 - 0.5f) * boxW * 0.75f
+                    + drift + sway,
                 originY + (0.10f + 0.30f * u4) * boxH - rise,
                 p * 360.0f * (u4 - 0.5f),
                 size * (0.55f + 0.55f * u1) * (1.0f - 0.55f * p),
                 std::min(p / 0.08f, 1.0f)
                     * std::pow(1.0f - p, 0.9f) * twinkle,
+            });
+        } else if (burst.kind == "smoke") {
+            // 烟（镜像 particles.burst_particles_at smoke 分支，2026-10-22
+            // AE 火焰预置 smoke 层）：比火粒晚出生、慢升、持续膨胀、低透明。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float birth = u3 * life * 0.28f;
+            const float lifeI = std::min(
+                life * (0.72f + 0.28f * u4),
+                std::max(life - birth, 1.0f)
+            );
+            const float p = (tau - birth) / lifeI;
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            const float rise = travel * (1.0f - std::pow(1.0f - p, 1.7f));
+            const float sway = std::sin(
+                (u2 + p * (0.55f + 0.25f * u5)) * 2.0f * pi
+            ) * size * (0.18f + 0.12f * u4);
+            const float expand = 0.55f + 0.75f * p;
+            out.push_back(FxParticle{
+                originX + emitX + (u1 - 0.5f) * boxW * 0.80f + sway,
+                originY + (0.02f + 0.30f * u5) * boxH - rise,
+                (u2 - 0.5f) * 16.0f + p * 18.0f,
+                size * expand * (0.80f + 0.40f * u4),
+                std::min(p / 0.22f, 1.0f)
+                    * std::pow(1.0f - p, 1.35f) * (0.55f + 0.35f * u5),
             });
         } else if (burst.kind == "ash") {
             // 灰烬（镜像 particles.burst_particles_at ash 分支）：自字框
