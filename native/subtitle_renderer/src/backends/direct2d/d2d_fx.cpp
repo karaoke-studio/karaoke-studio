@@ -65,8 +65,8 @@ constexpr float kFallSpawnSpreadSing = 0.18f;
 // 用 u4 固定 0.5~1.6× 的深度尺寸，远小近大。
 constexpr float kPetalSizeMin = 0.45f;
 constexpr float kPetalSizeSpan = 1.20f;
-constexpr float kSnowSizeMin = 0.35f;
-constexpr float kSnowSizeSpan = 0.80f;
+constexpr float kSnowSizeMin = 0.40f;
+constexpr float kSnowSizeSpan = 0.88f;
 constexpr float kFeatherSizeMin = 0.45f;
 constexpr float kFeatherSizeSpan = 1.20f;
 

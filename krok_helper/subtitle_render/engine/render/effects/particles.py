@@ -104,13 +104,25 @@ FEATHER_LEAN_DEG = -32.0
 # 同一颗在工作期内保持同一档（雪花再随寿命缩小），形成前后层次。
 PETAL_SIZE_MIN = 0.45
 PETAL_SIZE_SPAN = 1.20
-SNOW_SIZE_MIN = 0.35
-SNOW_SIZE_SPAN = 0.80
+SNOW_SIZE_MIN = 0.40
+SNOW_SIZE_SPAN = 0.88
 FEATHER_SIZE_MIN = 0.45
 FEATHER_SIZE_SPAN = 1.20
 # 逐字序列扰动：下落粒子的 seed 乘一个大奇数再按字符累加，避免相邻字
 # 的哈希序列过于接近（用户口径：每个字的最大粒子总落在同一位置）。
 FALL_CHAR_SEED_SALT = 0x9E37
+# 行级错落相位（2026-10-22 用户口径）：单字内的 0~45% 寿命错峰没问题，
+# 但行级原来只有固定 350ms 总错峰，长行每字只差几十毫秒，整排仍几乎
+# 同时下落。这里用固化的 20 数伪随机相位，把各字发射时刻铺满
+# min(900ms, 55% 寿命)，且不按字符顺序均匀推进，形成随机错落。
+FALL_LINE_PHASES = (
+    0.00, 0.37, 0.72, 0.15, 0.55,
+    0.88, 0.28, 0.63, 0.05, 0.46,
+    0.81, 0.21, 0.68, 0.10, 0.50,
+    0.93, 0.32, 0.77, 0.18, 0.59,
+)
+FALL_LINE_SPREAD_FRACTION = 0.55
+FALL_LINE_SPREAD_MAX_MS = 900
 # 汇聚式下落：仿 AE 的“加速下落 → 接近落点减速汇聚”曲线。
 # 三次 Hermite：s(0)=0, s(1)=1, 初速 0.2, 末速 0（落点速度趋近 0）。
 # 透明度在末段随速度一起衰减——速度越小越透明，落点不会堆积。
@@ -1695,13 +1707,17 @@ def exit_particle_tail_end_ms(
         # 全部消失后只保留 FLAME_TAIL_MS 短尾——尾奏界就是短尾终点。
         return int(display_end_ms) + FLAME_TAIL_MS
     if exit_anim == "feather":
+        spread = min(
+            FALL_LINE_SPREAD_MAX_MS,
+            int(FEATHER_LIFE_MS * FALL_LINE_SPREAD_FRACTION),
+        )
         base = max(
             line_end,
             display_end_ms - (RIPPLE_CHAR_STAGGER_MS + FEATHER_LIFE_MS),
         )
         return (
             base
-            + RIPPLE_CHAR_STAGGER_MS
+            + spread
             + FEATHER_LIFE_MS
             + CHAR_TIME_OFFSET_MAX_MS
         )
@@ -1717,10 +1733,17 @@ def exit_particle_tail_end_ms(
             + CHAR_TIME_OFFSET_MAX_MS
         )
     if exit_anim == "petal":
-        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_EXIT_LIFE_MS))
+        spread = min(
+            FALL_LINE_SPREAD_MAX_MS,
+            int(PETAL_EXIT_LIFE_MS * FALL_LINE_SPREAD_FRACTION),
+        )
+        base = max(
+            line_end,
+            display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_EXIT_LIFE_MS),
+        )
         return (
             base
-            + RIPPLE_CHAR_STAGGER_MS
+            + spread
             + PETAL_EXIT_LIFE_MS
             + CHAR_TIME_OFFSET_MAX_MS
         )
@@ -1905,6 +1928,27 @@ def plan_line_bursts(
         return CHAR_TIME_OFFSETS_MS[
             char_index % len(CHAR_TIME_OFFSETS_MS)
         ]
+
+    def _fall_line_start(
+        base_ms: int, char_index: int, life_ms: int
+    ) -> int:
+        """下落特效的行级错落起点：固定相位表 × min(900ms, 55% 寿命)。
+
+        只用于出入场（唱字仍跟各自唱字窗）；不按字符序均匀推进，避免
+        整行看起来像同一时刻一起落下。
+        """
+        spread = min(
+            FALL_LINE_SPREAD_MAX_MS,
+            int(int(life_ms) * FALL_LINE_SPREAD_FRACTION),
+        )
+        phase = FALL_LINE_PHASES[
+            char_index % len(FALL_LINE_PHASES)
+        ]
+        return (
+            int(base_ms)
+            + int(spread * phase)
+            + _char_time_offset(char_index)
+        )
 
     def _fire_layer_paints(
         char_index: int,
@@ -2546,10 +2590,8 @@ def plan_line_bursts(
         # 宽幅钟摆横摆 + 连续翻转 + 横向压扁（羽片侧对镜头），慢速降落
         # 到字底后淡出。用固定标准档（与花瓣/雪花同口径）。
         for char_index in range(char_count):
-            start = (
-                int(display_start_ms)
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fall_line_start(
+                int(display_start_ms), char_index, FEATHER_LIFE_MS
             )
             _variant_bursts({
                 "kind": "feather", "anchor": "char",
@@ -2591,10 +2633,8 @@ def plan_line_bursts(
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
         # 抵达后熄灭），随机摇摆 + 连续翻转（\moves4 四点飘移等效观感）。
         for char_index in range(char_count):
-            start = (
-                int(display_start_ms)
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fall_line_start(
+                int(display_start_ms), char_index, PETAL_ENTRY_LIFE_MS
             )
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
@@ -2616,7 +2656,9 @@ def plan_line_bursts(
             _variant_bursts({
                 "kind": entry_anim, "anchor": "char",
                 "char_index": int(char_index),
-                "start_ms": snow_start + _char_time_offset(char_index),
+                "start_ms": _fall_line_start(
+                    snow_start, char_index, SNOW_ENTRY_FALL_MS
+                ),
                 "end_ms": snow_end,
                 "count": 3, "seed": (seed_base + 12 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
@@ -2767,10 +2809,8 @@ def plan_line_bursts(
             int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + FEATHER_LIFE_MS),
         )
         for char_index in range(char_count):
-            start = (
-                feather_exit_start
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fall_line_start(
+                feather_exit_start, char_index, FEATHER_LIFE_MS
             )
             _variant_bursts({
                 "kind": "feather", "anchor": "char",
@@ -2818,12 +2858,10 @@ def plan_line_bursts(
             int(line_end_ms) if line_end_ms is not None else 0,
             int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + PETAL_EXIT_LIFE_MS),
         )
-        # 花瓣飘散：每字自字框内错峰剥落、边翻转边飘落到字底下方淡出。
+        # 花瓣飘散：每字自字框内错峰剥落、边翻转边飘落到字底附近淡出。
         for char_index in range(char_count):
-            start = (
-                exit_start_petal
-                + stagger * char_index
-                + _char_time_offset(char_index)
+            start = _fall_line_start(
+                exit_start_petal, char_index, PETAL_EXIT_LIFE_MS
             )
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
@@ -2847,8 +2885,9 @@ def plan_line_bursts(
             _variant_bursts({
                 "kind": exit_anim, "anchor": "char",
                 "char_index": int(char_index),
-                "start_ms": snow_exit_start
-                + _char_time_offset(char_index),
+                "start_ms": _fall_line_start(
+                    snow_exit_start, char_index, SNOW_EXIT_FALL_MS
+                ),
                 "end_ms": snow_exit_end,
                 "count": 3, "seed": (seed_base + 13 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,

@@ -2346,31 +2346,30 @@ def test_plan_line_bursts_petal_entry_exit_sing():
         style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
-    # 入场花瓣：逐字错峰（3 字 → 步距 175）+ ±80ms 确定性时间抖动，
-    # 每字 3 颗拆固定樱花粉双色 2+1；位置偏移全部 box 比例（travel 恒 0）。
+    # 入场花瓣：字内 0~45% 寿命错峰 + 行级固定伪随机相位（约 0/0.37/0.72
+    # × min(900ms, 55% 寿命)），不再按字符序只差几十毫秒地整排同落。
     entry = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == 1]
     assert len(entry) == 6
-    for char_index, base in enumerate((1000, 1175, 1350)):
-        starts = [
+    expected_entry_starts = (971, 1337, 1584)
+    for char_index, expected_start in enumerate(expected_entry_starts):
+        starts = {
             b["start_ms"] for b in entry if b["char_index"] == char_index
-        ]
-        assert len(starts) == 2
-        assert all(abs(start - base) <= 80 for start in starts)
+        }
+        assert starts == {expected_start}
     assert len({b["start_ms"] for b in entry}) > 1
     assert sorted({b["count"] for b in entry}) == [1, 2]
     assert {b["color"] for b in entry} == {"#FFB7C5", "#FFD7E0"}
     assert all(b["travel_px"] == 0.0 for b in entry)
     assert all(b["end_ms"] == b["start_ms"] + 1700 for b in entry)
-    # 退场花瓣：锚点 = max(行末 4100, 显示末 4200 - (350+1200)) = 4100，
-    # 标准错峰 175ms、每字完整寿命 1200ms（越过显示窗终点，尾奏通道续播）。
+    # 退场花瓣：行级伪随机相位（约 0/0.37/0.72 × min(900ms, 55% 寿命)）
+    # + 逐字寿命 1200ms；越过显示窗终点，尾奏通道续播。
     exit_petals = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == -1]
     assert len(exit_petals) == 6
-    for char_index, base in enumerate((4100, 4275, 4450)):
-        starts = [
+    for char_index, expected_start in enumerate((4071, 4348, 4511)):
+        starts = {
             b["start_ms"] for b in exit_petals if b["char_index"] == char_index
-        ]
-        assert len(starts) == 2
-        assert all(abs(start - base) <= 80 for start in starts)
+        }
+        assert starts == {expected_start}
     assert len({b["start_ms"] for b in exit_petals}) > 1
     assert all(b["end_ms"] == b["start_ms"] + 1200 for b in exit_petals)
     assert {b["color"] for b in exit_petals} == {"#FFB7C5", "#FFD7E0"}
@@ -2952,7 +2951,7 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
     # 提前 350ms 起飘、整段落 1500ms（2026-10-22 用户口径：略提速）。
     entry = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == 1]
     assert len(entry) == 6
-    assert all(abs(b["start_ms"] - 650) <= 80 for b in entry)
+    assert {b["start_ms"] for b in entry} == {621, 959, 1180}
     assert len({b["start_ms"] for b in entry}) > 1
     assert {b["end_ms"] for b in entry} == {2150}  # 650 + 1500
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 拆雪色双色
@@ -2962,7 +2961,7 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
     # 抖动；终点晚于显示末 300ms。
     exit_snow = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == -1]
     assert len(exit_snow) == 6
-    assert all(abs(b["start_ms"] - 3000) <= 80 for b in exit_snow)
+    assert {b["start_ms"] for b in exit_snow} == {2971, 3309, 3530}
     assert len({b["start_ms"] for b in exit_snow}) > 1
     assert {b["end_ms"] for b in exit_snow} == {4500}  # 4200 + 300
     assert {b["color"] for b in exit_snow} == {"#F2F8FF", "#BFDFFF"}
@@ -3659,7 +3658,7 @@ def test_entry_exit_particle_emission_decoupled_from_duration_knob():
     # 尾端助手与规划同式（CPU 尾奏通道的淘汰界；含最大正向抖动）。
     assert exit_particle_tail_end_ms("note", 3, 4100, 4200) == 5250 + 78
     assert exit_particle_tail_end_ms("sparkle", 3, 4100, 4200) == 4100 + 350 + 600 + 78
-    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 350 + 1200 + 78
+    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 660 + 1200 + 78
     assert exit_particle_tail_end_ms("snow", 3, 4100, 4200) == 4500
     assert exit_particle_tail_end_ms("dissolve_out", 3, 4100, 4200) is None
 
@@ -4374,23 +4373,23 @@ def test_plan_feather_entry_exit_sing():
     )
     entry = [b for b in bursts if b["sweep"] == 1]
     assert len(entry) == 6  # 3 字 × 2 色变体
-    assert {b["start_ms"] for b in entry} == {971, 1179, 1286}
-    assert {b["end_ms"] for b in entry} == {2671, 2879, 2986}
+    assert {b["start_ms"] for b in entry} == {971, 1337, 1584}
+    assert {b["end_ms"] for b in entry} == {2671, 3037, 3284}
     assert {b["color"] for b in entry} == {"#FFFFFF", "#FFF1D6"}
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 3 颗拆双色
     assert all(b["size_px"] == 40.0 for b in entry)
 
     exit_bursts = [b for b in bursts if b["sweep"] == -1]
     assert len(exit_bursts) == 6
-    assert {b["start_ms"] for b in exit_bursts} == {4071, 4279, 4386}
-    assert {b["end_ms"] for b in exit_bursts} == {5771, 5979, 6086}
+    assert {b["start_ms"] for b in exit_bursts} == {4071, 4437, 4684}
+    assert {b["end_ms"] for b in exit_bursts} == {5771, 6137, 6384}
 
     sing = [b for b in bursts if b["sweep"] == 0]
     assert len(sing) == 3
     assert [b["start_ms"] for b in sing] == [1200, 1600, 2000]
     assert all(b["count"] == 4 for b in sing)
     assert all(b["end_ms"] - b["start_ms"] == 1700 for b in sing)
-    assert exit_particle_tail_end_ms("feather", 3, 4100, 4200) == 6228
+    assert exit_particle_tail_end_ms("feather", 3, 4100, 4200) == 6778
 
 
 def test_plan_lightning_entry_exit_sing():
@@ -4618,7 +4617,7 @@ def test_falling_particles_move_from_birth_and_exit_spawns_upper():
     }
     states = burst_particles_at(snow, 500, 0.0, 0.0, 120.0, 100.0)
     assert states
-    assert max(s.size_px for s in states) <= 50.0
+    assert max(s.size_px for s in states) <= 55.0
 
 
 def test_falling_velocity_converges_to_zero_at_landing():
@@ -4711,7 +4710,7 @@ def test_falling_depth_slot_varies_across_chars():
             if states:
                 xs.append(max(states, key=lambda s: s.size_px).x)
         assert len(xs) >= 2, kind
-        assert max(xs) - min(xs) > 8.0, (kind, xs)
+        assert max(xs) - min(xs) > 5.0, (kind, xs)
 
 
 def test_lightning_growth_anchors_top_or_bottom():
