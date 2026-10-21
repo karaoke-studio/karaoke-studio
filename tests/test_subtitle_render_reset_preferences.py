@@ -2,8 +2,9 @@
 
 等价于清空 settings.json 的 ``subtitle_render`` 命名空间（保留最近打开列表
 与样式预设库）后重新装载：习惯记忆回出厂，当前工程的内容（样式、布局、
-标题、画面尺寸）不被修改。样式预设库与软件布局库是跨工程积累的内容库，
-不属于习惯：原样保留；按行数记住的「软件默认布局」指向恢复出厂。
+标题、画面尺寸）不被修改。样式预设库是跨工程积累的内容库，不属于习惯：
+原样保留；布局预设库随重置回出厂全集（2026-10 口径：出厂预设经「恢复
+默认设置」找回）；按行数记住的「软件默认布局」指向恢复出厂。
 """
 
 from __future__ import annotations
@@ -220,7 +221,7 @@ def test_reset_restores_every_memory_category(
     assert set(window._property_panel.preset_schemes) == {"preset-1"}
 
 
-def test_reset_restores_the_default_layout_choice_but_keeps_the_library(
+def test_reset_restores_layout_presets_to_factory(
     make_window, settings, confirm, tmp_path
 ) -> None:
     settings.data = _polluted_payload(str(tmp_path / "skip.yurika"))
@@ -228,28 +229,38 @@ def test_reset_restores_the_default_layout_choice_but_keeps_the_library(
     # 装载端会把行数映射补全为 1..8 全量字典；种子只改了 3 行那一档。
     assert window._app_default_style.default_layout_by_row_count[3] == "custom-3"
     assert window._app_default_style.layout_reference_height == 1440
+    # 首次装载触发一次性升级迁移：旧隐形库（含自定义「我的三行布局」）
+    # 全量转入预设库并全部默认加载。
+    assert any(
+        preset.layout.name == "我的三行布局" for preset in window._layout_presets
+    )
+    assert all(preset.default_load for preset in window._layout_presets)
 
     confirm(True)
     window._reset_app_preferences()
 
-    # 按行数记住的「软件默认布局」指向回出厂；库本身（含自定义布局与其
-    # 参考高度）原样保留。
+    # 按行数记住的「软件默认布局」指向回出厂；布局预设库随重置回出厂
+    # 全集 + 全默认加载（自定义条目移除），且迁移闸门不重放。
     assert window._app_default_style.default_layout_by_row_count == (
         DEFAULT_LAYOUT_BY_ROW_COUNT
     )
-    library_names = [
-        layout.name for layout in window._app_default_style.layouts
+    assert [preset.layout.layout_id for preset in window._layout_presets] == [
+        "title-default",
+        "builtin-1",
+        "builtin-2",
+        "builtin-3",
+        "builtin-4",
+        "builtin-5",
+        "builtin-6",
+        "builtin-7",
+        "builtin-8",
     ]
-    assert "我的三行布局" in library_names
-    assert window._app_default_style.layout_reference_height == 1440
-    persisted = settings.data["style"]
-    assert persisted["default_layout_by_row_count"] == {
-        str(key): value for key, value in DEFAULT_LAYOUT_BY_ROW_COUNT.items()
-    }
-    assert any(
-        layout.get("name") == "我的三行布局" for layout in persisted["layouts"]
+    assert all(preset.default_load for preset in window._layout_presets)
+    persisted = settings.data["layout_presets"]
+    assert not any(
+        row.get("layout", {}).get("name") == "我的三行布局" for row in persisted
     )
-    assert persisted["layout_reference_height"] == 1440
+    assert settings.data["layout_presets_migrated"] is True
 
 
 def test_a_new_instance_after_reset_starts_from_factory(
@@ -270,10 +281,11 @@ def test_a_new_instance_after_reset_starts_from_factory(
     assert second._export_dir_mode == "source_video"
     assert second._auto_save_enabled is True
     assert second._preview_splitter_ratio == pytest.approx(0.4)
-    # 内容库跨实例保留：预设与自定义布局在重置后的新实例里仍然可用。
+    # 内容库跨实例保留：样式预设库仍在；布局预设库按重置口径保持出厂
+    # 全集（自定义条目不随重置回来）。
     assert set(second._style_presets) == {"preset-1"}
-    assert "我的三行布局" in [
-        layout.name for layout in second._app_default_style.layouts
+    assert "我的三行布局" not in [
+        preset.layout.name for preset in second._layout_presets
     ]
     assert second._app_default_style.default_layout_by_row_count == (
         DEFAULT_LAYOUT_BY_ROW_COUNT
@@ -413,12 +425,12 @@ def test_reset_resolves_title_layout_against_preserved_library(
     confirm(True)
     window._reset_app_preferences()
 
-    # 出厂「タイトル左上」被 ensure 补进库（追加在尾部），应用默认标题
-    # 解析到它的**真实位置**，而不是恒为 1 的出厂表位置。
+    # 新增标题条目按名解析进**当前工程目录**（布局目录在重置中保留），
+    # 落到出厂「タイトル左上」的真实位置，而不是恒为 1 的出厂表位置。
     entry = window._new_title_entry_defaults()
     index = int(entry.layout_index or 0)
-    assert 1 <= index <= len(window._app_default_style.layouts)
-    assert window._app_default_style.layouts[index - 1].name == "タイトル左上"
+    assert 1 <= index <= len(window._style.layouts)
+    assert window._style.layouts[index - 1].name == "タイトル左上"
     assert entry.show_mode == TitleOverlay().show_mode
 
     # 工作区条目同样回到出厂：布局 = タイトル左上、显示时段 = 自定义。

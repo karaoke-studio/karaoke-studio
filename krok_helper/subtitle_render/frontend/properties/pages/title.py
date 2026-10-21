@@ -402,10 +402,7 @@ class TitleCard:
             row = combo.findData(int(target))
             if row < 0 and overlay.layout_index is not None:
                 # 悬空引用：与渲染同口径回退库里的出厂「タイトル左上」。
-                # 直连构造漏掉它时 set_style 的 ensure 已补进布局库，这里
-                # 按名字选中真实条目（可在布局页编辑）；工程显式删除
-                # （hidden）的极端场景退回第 0 行显示，渲染侧仍按代码
-                # 内置定义回退。
+                # 库里有同名条目就选中它（可在布局页编辑）。
                 fallback = title_fallback_layout(style)
                 row = next(
                     (
@@ -415,6 +412,12 @@ class TitleCard:
                     ),
                     -1,
                 )
+                if row < 0:
+                    # 目录里没有出厂标题布局（布局库取消默认加载/删除）：
+                    # 追加一条与引用一一对应的「出厂回退」条目，既如实显示
+                    # 渲染结果，也让用户能一眼看出标题不跟随工程布局目录。
+                    combo.addItem(f"{fallback.name}（出厂回退）", int(target))
+                    row = combo.count() - 1
             combo.setCurrentIndex(max(0, row))
         finally:
             combo.blockSignals(blocked)
