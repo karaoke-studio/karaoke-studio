@@ -65,6 +65,10 @@ ASSEMBLE_LIFE_MS = 320
 # box_w/box_h 比例（星光/音符同约定），不带字号倍数行程（2026-10 用户
 # 口径：初版 travel=1.6em 出生过高、飘进行间距）。
 PETAL_LIFE_MS = 900
+# 花瓣入场单独放慢（2026-10-22 用户口径：入场过快）；退场风格保持，
+# 但去掉“地面”后行程更长，寿命相应略增。
+PETAL_ENTRY_LIFE_MS = 1700
+PETAL_EXIT_LIFE_MS = 1200
 # 「默认颜色」档的两种樱花粉：规划器拆双 burst 随机混发（每颗粒子一色）。
 SAKURA_PINK_A = "#FFB7C5"
 SAKURA_PINK_B = "#FFD7E0"
@@ -75,16 +79,15 @@ SNOW_LIFE_MS = 1100
 # 雪花出入场的标准整行窗（2026-10 分离口径：旧「入场/退场动画时长」
 # 旋钮默认 600ms 冻结为粒子发射标准；旋钮此后只控制文字逐字渐显/渐隐）。
 SNOW_STD_WINDOW_MS = 600
-# 雪花出入场下落窗（2026-10-18 用户口径：雪下得太快、过半字就看不见）：
-# 入场提前 350ms 起飘、整段落 1800ms；退场落窗同样 1800ms——慢速终端
-# 速度感，且淡出延后到接近字底，保证至少落到主文字最底部。
+# 雪花出入场下落窗（2026-10-22 用户口径：整体速度略慢）：1800→1500ms。
 SNOW_ENTRY_LEAD_MS = 350
-SNOW_ENTRY_FALL_MS = 1800
-SNOW_EXIT_FALL_MS = 1800
+SNOW_ENTRY_FALL_MS = 1500
+SNOW_EXIT_FALL_MS = 1500
 # 雪花/花瓣“落到底再淡出”的包络：前 78%/75% 保持不透明，最后一段
 # 才收透明度（旧版 p=0.5 已 α≈0.4，视觉上像半途消失）。
-SNOW_FADE_START = 0.78
-PETAL_FADE_START = 0.75
+SNOW_FADE_START = 0.85
+PETAL_FADE_START = 0.85
+FEATHER_FADE_START = 0.85
 # 走字风（2026-10-21 用户口径）：卡拉 OK 走字自左向右，雪花/花瓣/羽毛
 # 不再绕中心点做对称正弦摆动；统一**向右后方**飘（水平漂移与走字同向），
 # 同时保持一个固定的后倾角（负角度=顶部向左），读作被右移的字幕拖着走。
@@ -93,7 +96,74 @@ PETAL_WIND_FRACTION = 0.55
 SNOW_WIND_FRACTION = 0.45
 FEATHER_WIND_FRACTION = 0.65
 FALL_LEAN_DEG = -22.0
-FALL_FLUTTER_SCALE = 0.22
+# 羽毛/雪花更轻、受风面积更大，后倾角比花瓣再大一点。
+SNOW_LEAN_DEG = -30.0
+FEATHER_LEAN_DEG = -32.0
+# AE 下落特效的景深（Particular 雪/花瓣教程：多层 far/mid/near + 随机
+# size，远小近大）。每颗粒子用 u4 固定一个深度档，尺寸 0.5~1.6×，
+# 同一颗在工作期内保持同一档（雪花再随寿命缩小），形成前后层次。
+PETAL_SIZE_MIN = 0.45
+PETAL_SIZE_SPAN = 1.20
+SNOW_SIZE_MIN = 0.35
+SNOW_SIZE_SPAN = 0.80
+FEATHER_SIZE_MIN = 0.45
+FEATHER_SIZE_SPAN = 1.20
+# 逐字序列扰动：下落粒子的 seed 乘一个大奇数再按字符累加，避免相邻字
+# 的哈希序列过于接近（用户口径：每个字的最大粒子总落在同一位置）。
+FALL_CHAR_SEED_SALT = 0x9E37
+# 汇聚式下落：仿 AE 的“加速下落 → 接近落点减速汇聚”曲线。
+# 三次 Hermite：s(0)=0, s(1)=1, 初速 0.2, 末速 0（落点速度趋近 0）。
+# 透明度在末段随速度一起衰减——速度越小越透明，落点不会堆积。
+FALL_INITIAL_V = 0.20
+# 起始高度：入场/退场/唱字统一为主文字上方 0.55~1.00 box_h。
+FALL_START_MIN = 0.55
+FALL_START_SPAN = 0.45
+# 末段速度渐隐：p>0.55 后按归一化速度平滑收透明度；速度到 0 时 α=0。
+FALL_SPEED_FADE_START = 0.55
+
+
+def _fall_depth(i: int, count: int, u4: float) -> float:
+    """下落粒子的深度档 0（远/小）~1（近/大）。
+
+    同一 burst 内按粒子序号铺开（两端必到），并掺入少量哈希抖动；
+    这样即使每字只有 2~3 颗，也一定同时有远小/近大两档，形成前后层次。
+    """
+    if count <= 1:
+        return 0.5
+    value = (float(i) + 0.30 * float(u4)) / float(count - 1)
+    return min(max(value, 0.0), 1.0)
+
+
+def _fall_progress(p: float) -> float:
+    """汇聚式下落进度：初速 0.2，先加速、接近落点减速到 0。
+
+    三次 Hermite 曲线：s(p) = (v0-2)p³ + (3-2v0)p² + v0 p。
+    s(1)=1、s'(0)=0.2、s'(1)=0，落点速度趋近 0，便于按速度渐隐。
+    """
+    p = min(max(float(p), 0.0), 1.0)
+    v0 = FALL_INITIAL_V
+    return (v0 - 2.0) * p ** 3 + (3.0 - 2.0 * v0) * p * p + v0 * p
+
+
+def _fall_velocity(p: float) -> float:
+    """s(p) 的导数（归一化速度）。"""
+    p = min(max(float(p), 0.0), 1.0)
+    v0 = FALL_INITIAL_V
+    return 3.0 * (v0 - 2.0) * p * p + 2.0 * (3.0 - 2.0 * v0) * p + v0
+
+
+def _fall_speed_fade(p: float) -> float:
+    """末段速度渐隐：速度越小透明度越低，落点速度 0 → α=0。
+
+    前半段（到速度峰值后一小段）保持全不透明；p>0.55 后按归一化速度
+    平滑收透明度，避免粒子在字底停住/堆积。
+    """
+    p = min(max(float(p), 0.0), 1.0)
+    if p <= FALL_SPEED_FADE_START:
+        return 1.0
+    v = _fall_velocity(p) / 1.45  # 0.2→峰值约 1.45→0
+    q = min(max(v / 0.55, 0.0), 1.0)
+    return q * q * (3.0 - 2.0 * q)
 # 「默认颜色」档的雪花双色（雪白 + 冰蓝）随机混发；固定默认档按 kind
 # 取默认对（雪花=雪色，花瓣与其余 kind=樱花粉，见 _default_color_pair）。
 SNOW_A = "#F2F8FF"
@@ -102,7 +172,6 @@ SNOW_B = "#BFDFFF"
 # 与运动区分——宽幅低频钟摆横摆 + 连续翻转 + 边缘朝相机时的横向压扁
 #（stretch_x 0.55~1.0），落点压到字底后淡出；寿命比花瓣长（飘得更慢）。
 FEATHER_LIFE_MS = 1700
-FEATHER_FADE_START = 0.80
 # 「默认颜色」档的羽毛双色：纯白 + 暖米白（深色视频上分层，且区别于
 # 雪花的冷冰蓝）。
 FEATHER_A = "#FFFFFF"
@@ -1648,11 +1717,11 @@ def exit_particle_tail_end_ms(
             + CHAR_TIME_OFFSET_MAX_MS
         )
     if exit_anim == "petal":
-        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS))
+        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_EXIT_LIFE_MS))
         return (
             base
             + RIPPLE_CHAR_STAGGER_MS
-            + PETAL_LIFE_MS
+            + PETAL_EXIT_LIFE_MS
             + CHAR_TIME_OFFSET_MAX_MS
         )
     if exit_anim in SNOW_KINDS:
@@ -2487,7 +2556,7 @@ def plan_line_bursts(
                 "char_index": int(char_index),
                 "start_ms": start,
                 "end_ms": start + FEATHER_LIFE_MS,
-                "count": 3, "seed": (seed_base + 20 + char_index) & 0xFFFFFFFF,
+                "count": 3, "seed": (seed_base + 20 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": 1,
             }, _burst_paint(
@@ -2531,8 +2600,8 @@ def plan_line_bursts(
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + PETAL_LIFE_MS,
-                "count": 3, "seed": (seed_base + 10 + char_index) & 0xFFFFFFFF,
+                "end_ms": start + PETAL_ENTRY_LIFE_MS,
+                "count": 3, "seed": (seed_base + 10 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": 1,
             }, _burst_paint(char_index, anim_size, anim=True, petal=True))
@@ -2549,7 +2618,7 @@ def plan_line_bursts(
                 "char_index": int(char_index),
                 "start_ms": snow_start + _char_time_offset(char_index),
                 "end_ms": snow_end,
-                "count": 3, "seed": (seed_base + 12 + char_index) & 0xFFFFFFFF,
+                "count": 3, "seed": (seed_base + 12 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": 1,
             }, _burst_paint(char_index, anim_size, anim=True, snow=True))
@@ -2708,7 +2777,7 @@ def plan_line_bursts(
                 "char_index": int(char_index),
                 "start_ms": start,
                 "end_ms": start + FEATHER_LIFE_MS,
-                "count": 3, "seed": (seed_base + 22 + char_index) & 0xFFFFFFFF,
+                "count": 3, "seed": (seed_base + 22 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": -1,
             }, _burst_paint(
@@ -2747,7 +2816,7 @@ def plan_line_bursts(
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
             int(line_end_ms) if line_end_ms is not None else 0,
-            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS),
+            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + PETAL_EXIT_LIFE_MS),
         )
         # 花瓣飘散：每字自字框内错峰剥落、边翻转边飘落到字底下方淡出。
         for char_index in range(char_count):
@@ -2760,8 +2829,8 @@ def plan_line_bursts(
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
                 "start_ms": start,
-                "end_ms": start + PETAL_LIFE_MS,
-                "count": 3, "seed": (seed_base + 11 + char_index) & 0xFFFFFFFF,
+                "end_ms": start + PETAL_EXIT_LIFE_MS,
+                "count": 3, "seed": (seed_base + 11 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": -1,
             }, _burst_paint(char_index, anim_size, anim=True, petal=True))
@@ -2781,7 +2850,7 @@ def plan_line_bursts(
                 "start_ms": snow_exit_start
                 + _char_time_offset(char_index),
                 "end_ms": snow_exit_end,
-                "count": 3, "seed": (seed_base + 13 + char_index) & 0xFFFFFFFF,
+                "count": 3, "seed": (seed_base + 13 + char_index * FALL_CHAR_SEED_SALT) & 0xFFFFFFFF,
                 "size_px": anim_size, "travel_px": 0.0,
                 "front": True, "sweep": -1,
             }, _burst_paint(char_index, anim_size, anim=True, snow=True))
@@ -2865,7 +2934,8 @@ def plan_line_bursts(
                 "start_ms": int(start_ms),
                 "end_ms": int(start_ms) + PETAL_LIFE_MS,
                 "count": per_char,
-                "seed": (seed_base + 5 + char_index) & 0xFFFFFFFF,
+                "seed": (seed_base + 25 + char_index * FALL_CHAR_SEED_SALT)
+                & 0xFFFFFFFF,
                 "size_px": size, "travel_px": 0.0,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, size, anim=False, petal=True))
@@ -2885,7 +2955,8 @@ def plan_line_bursts(
                 "start_ms": int(start_ms),
                 "end_ms": int(start_ms) + FEATHER_LIFE_MS,
                 "count": per_char,
-                "seed": (seed_base + 5 + char_index) & 0xFFFFFFFF,
+                "seed": (seed_base + 26 + char_index * FALL_CHAR_SEED_SALT)
+                & 0xFFFFFFFF,
                 "size_px": size, "travel_px": 0.0,
                 "front": True, "sweep": 0,
             }, _burst_paint(
@@ -2927,7 +2998,8 @@ def plan_line_bursts(
                 "start_ms": int(start_ms),
                 "end_ms": int(start_ms) + SNOW_LIFE_MS,
                 "count": per_char,
-                "seed": (seed_base + 5 + char_index) & 0xFFFFFFFF,
+                "seed": (seed_base + 27 + char_index * FALL_CHAR_SEED_SALT)
+                & 0xFFFFFFFF,
                 "size_px": size, "travel_px": 0.0,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, size, anim=False, snow=True))
@@ -3486,80 +3558,88 @@ def burst_particles_at(
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
             u5 = fx_unit_hash(seed + i, 5)
-            delay = u3 * 110.0
+            # AE 雪/花瓣的「Box emitter + 连续出生」（Particular 教程）：
+            # 出入场每颗在 0~45% 寿命内错峰出生，晚出生的从更低处开始，
+            # 整簇看起来像连续飘落而不是同一时刻从同一高度整块出现。
+            spawn = u3
+            # AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生
+            # （唱字 18%），全部从各自的起始高度开始运动，不做首帧预滚
+            # （预滚会让入场粒子直接出现在文字内部，用户口径：生成高度
+            # 不对）。晚出生的从更低/随机高度起飘，避免整块同时出现。
+            particle_count = max(int(burst.get("count", 1) or 1), 1)
+            # 序列扰动：最大尺寸/深度档按 burst seed 轮换到不同粒子，
+            # 防止每个字的最大粒子总落在同一个相对位置。
+            depth_slot = (i + int(seed)) % particle_count
+            delay = spawn * life * (0.18 if sweep == 0 else 0.45)
             p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
             if p <= 0.0:
                 continue
+            # AE 漂浮表达式的正弦摆：sp=2 rad/s → 一个 1.5s 行程约
+            # 0.5 个周期。这里锁在 0.4~0.65 周期/寿命，只留慢摆，去掉
+            # 之前 2~3 个周期的高频扑动。
             flutter = (
-                math.sin((u2 + p * (2.2 + 1.4 * u5)) * 2.0 * math.pi)
-                * size * FALL_FLUTTER_SCALE * (0.7 + 0.6 * u4)
+                math.sin((u2 + p * (0.40 + 0.25 * u5)) * 2.0 * math.pi)
+                * size * (0.22 + 0.10 * u4)
             )
             wind = PETAL_WIND_FRACTION * box_w * p
-            size_i = size * (0.72 + 0.55 * u4)
+            depth = _fall_depth(depth_slot, particle_count, u4)
+            size_i = size * (PETAL_SIZE_MIN + PETAL_SIZE_SPAN * depth)
             spin = (
                 u3 * 360.0
                 + p * (160.0 + 240.0 * u5) * (1.0 if u4 >= 0.5 else -1.0)
                 + FALL_LEAN_DEG
             )
             if sweep > 0:
-                # 花瓣飘入：自字形顶上方 ease-out 减速飘落，落点压到字底
-                # （0.42~0.58 box_h）；透明度前 75% 保持，最后一段才收。
-                eased = 1.0 - (1.0 - p) * (1.0 - p)
+                # 花瓣飘入：自字顶上方飘落，向字底汇聚；接近落点速度
+                # 趋近 0，透明度随速度逐渐消失（不在底部堆积）。
+                fall = _fall_progress(p)
                 land_x = (u1 - 0.5) * box_w * 0.85
                 land_y = (0.42 + 0.16 * u4) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.7
-                start_y = -(0.60 + 0.30 * u2) * box_h
-                hold_fade = (
-                    1.0
-                    if p <= PETAL_FADE_START
-                    else max(
-                        0.0,
-                        (1.0 - p) / (1.0 - PETAL_FADE_START),
-                    ) ** 1.2
-                )
+                start_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+                rel_y = start_y + (land_y - start_y) * fall
+                speed_fade = _fall_speed_fade(p)
                 out.append(ParticleDraw(
-                    origin_x + start_x + (land_x - start_x) * eased
+                    origin_x + start_x + (land_x - start_x) * fall
                     + wind + flutter,
-                    origin_y + start_y + (land_y - start_y) * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i * (0.85 + 0.15 * math.sin(math.pi * p)),
-                    min(p * 4.0, 1.0) * hold_fade,
+                    min(p * 4.0, 1.0) * speed_fade,
                 ))
             elif sweep < 0:
-                # 花瓣飘散：横向飘逸保持随机、终点向右，再叠走字风；
-                # 纵向落到字底下方（0.55~0.85 box_h），前 75% 保持不透明。
-                eased = p * p * (3.0 - 2.0 * p)
+                # 花瓣飘散：从主文字上方出发，向字底汇聚；末段随速度
+                # 渐隐，不堆积。
+                fall = _fall_progress(p)
                 start_x = (u1 - 0.5) * box_w * 0.85
                 end_x = start_x + (0.5 + 0.9 * u5) * box_w
-                start_y = (u4 - 0.5) * box_h * 0.55
-                hold_fade = (
-                    1.0
-                    if p <= PETAL_FADE_START
-                    else max(
-                        0.0,
-                        (1.0 - p) / (1.0 - PETAL_FADE_START),
-                    ) ** 1.2
-                )
+                start_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+                land_y = (0.50 + 0.20 * u4) * box_h
+                rel_y = start_y + (land_y - start_y) * fall
+                speed_fade = _fall_speed_fade(p)
                 out.append(ParticleDraw(
-                    origin_x + start_x + (end_x - start_x) * eased
+                    origin_x + start_x + (end_x - start_x) * fall
                     + wind + flutter,
-                    origin_y + start_y + (0.55 + 0.30 * u2) * box_h * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i * (0.90 + 0.10 * (1.0 - p)),
-                    min(p * 4.0, 1.0) * hold_fade,
+                    min(p * 4.0, 1.0) * speed_fade,
                 ))
             else:
-                # 花瓣飘动：字框上半出生，小行程缓沉 + 向右后方漂移，
-                # sin 包络淡入淡出。
-                eased = p * p * (3.0 - 2.0 * p)
+                # 花瓣飘动（唱字）：与出入场同一起始高度，向字底汇聚；
+                # 末段随速度渐隐。
+                fall = _fall_progress(p)
+                start_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+                land_y = (0.42 + 0.16 * u4) * box_h
+                rel_y = start_y + (land_y - start_y) * fall
+                speed_fade = _fall_speed_fade(p)
                 out.append(ParticleDraw(
                     origin_x + (u1 - 0.5) * box_w * 0.7
                     + wind * 0.8 + flutter,
-                    origin_y - (0.25 + 0.30 * u4) * box_h
-                    + (0.40 + 0.30 * u2) * box_h * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i * (0.85 + 0.15 * math.sin(math.pi * p)),
-                    min(p * 5.0, 1.0) * math.sin(math.pi * p),
+                    min(p * 5.0, 1.0) * math.sin(math.pi * p) * speed_fade,
                 ))
         elif kind == "feather":
             # 羽毛（2026-10，AE 漂浮表达式口径）：2026-10-21 用户口径改为
@@ -3573,162 +3653,182 @@ def burst_particles_at(
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
             u5 = fx_unit_hash(seed + i, 5)
-            delay = u3 * 140.0
+            # AE 漂浮表达式（Math.sin(time*2)*amp）：一个 1.5~1.7s 行程
+            # 约 0.5 个周期。这里用 0.32~0.60 周期/寿命的慢摆，去掉之前
+            # 2~3 周期的高频扑动；出入场同样按 0~45% 寿命错峰出生。
+            spawn = u3
+            # AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生
+            # （唱字 18%），全部从各自的起始高度开始运动，不做首帧预滚
+            # （预滚会让入场粒子直接出现在文字内部，用户口径：生成高度
+            # 不对）。晚出生的从更低/随机高度起飘，避免整块同时出现。
+            particle_count = max(int(burst.get("count", 1) or 1), 1)
+            # 序列扰动：最大尺寸/深度档按 burst seed 轮换到不同粒子，
+            # 防止每个字的最大粒子总落在同一个相对位置。
+            depth_slot = (i + int(seed)) % particle_count
+            delay = spawn * life * (0.18 if sweep == 0 else 0.45)
             p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
             if p <= 0.0:
                 continue
             wobble = (
-                math.sin((u2 + p * (2.4 + 1.6 * u5)) * 2.0 * math.pi)
-                * size * FALL_FLUTTER_SCALE * (0.8 + 0.5 * u4)
+                math.sin((u2 + p * (0.32 + 0.28 * u5)) * 2.0 * math.pi)
+                * size * (0.20 + 0.10 * u4)
             )
             wind = FEATHER_WIND_FRACTION * box_w * p
-            size_i = size * (0.85 + 0.40 * u4)
+            depth = _fall_depth(depth_slot, particle_count, u4)
+            size_i = size * (FEATHER_SIZE_MIN + FEATHER_SIZE_SPAN * depth)
             spin = (
                 u3 * 360.0
                 + p * (120.0 + 240.0 * u5) * (1.0 if u4 >= 0.5 else -1.0)
-                + FALL_LEAN_DEG
+                + FEATHER_LEAN_DEG
             )
             # 羽片翻转：横向压扁到 0.55~1.0（侧对镜头时最窄），周期 1.5 次。
             flutter = 0.55 + 0.45 * abs(
                 math.cos((p * 1.5 + u5) * math.pi)
             )
-            hold_fade = (
-                1.0
-                if p <= FEATHER_FADE_START
-                else max(
-                    0.0,
-                    (1.0 - p) / (1.0 - FEATHER_FADE_START),
-                ) ** 1.2
-            )
             if sweep > 0:
-                # 羽毛飘入：ease-out 减速降落，落点压到字底（0.42~0.60
-                # box_h），从字顶上方 0.75~1.05 box_h 处起飘。
-                eased = 1.0 - (1.0 - p) * (1.0 - p)
+                # 羽毛飘入：自字顶上方飘落，向字底汇聚；末段速度趋近 0，
+                # 透明度随速度渐隐，不在底部堆积。
+                fall = _fall_progress(p)
                 land_x = (u1 - 0.5) * box_w * 0.90
                 land_y = (0.42 + 0.18 * u4) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.80
-                start_y = -(0.75 + 0.30 * u2) * box_h
+                start_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+                rel_y = start_y + (land_y - start_y) * fall
+                speed_fade = _fall_speed_fade(p)
                 out.append(ParticleDraw(
-                    origin_x + start_x + (land_x - start_x) * eased
+                    origin_x + start_x + (land_x - start_x) * fall
                     + wind + wobble,
-                    origin_y + start_y + (land_y - start_y) * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i * (0.90 + 0.10 * math.sin(math.pi * p)),
-                    min(p * 4.0, 1.0) * hold_fade,
+                    min(p * 4.0, 1.0) * speed_fade,
                     flutter,
                     1.0,
                 ))
             elif sweep < 0:
-                # 羽毛飘散：自字框剥落，向右下方大行程飘走（smoothstep，
-                # 落点 0.55~0.85 box_h），再叠走字风；前 80% 不透明。
-                eased = p * p * (3.0 - 2.0 * p)
+                # 羽毛飘散：从主文字上方出发，向字底汇聚；末段随速度渐隐。
+                fall = _fall_progress(p)
                 start_x = (u1 - 0.5) * box_w * 0.90
                 end_x = start_x + (0.25 + 0.70 * u5) * box_w
-                start_y = (u4 - 0.5) * box_h * 0.45
+                start_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+                land_y = (0.50 + 0.20 * u4) * box_h
+                rel_y = start_y + (land_y - start_y) * fall
+                speed_fade = _fall_speed_fade(p)
                 out.append(ParticleDraw(
-                    origin_x + start_x + (end_x - start_x) * eased
+                    origin_x + start_x + (end_x - start_x) * fall
                     + wind + wobble,
-                    origin_y + start_y
-                    + (0.55 + 0.30 * u2) * box_h * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i * (0.90 + 0.10 * (1.0 - p)),
-                    min(p * 4.0, 1.0) * hold_fade,
+                    min(p * 4.0, 1.0) * speed_fade,
                     flutter,
                     1.0,
                 ))
             else:
-                # 羽毛飘动：字框上半出生，缓沉小行程 + 向右后方漂移，
-                # sin 包络淡入淡出。
-                eased = p * p * (3.0 - 2.0 * p)
+                # 羽毛飘动（唱字）：与出入场同一起始高度，向字底汇聚；
+                # 末段随速度渐隐。
+                fall = _fall_progress(p)
+                start_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+                land_y = (0.42 + 0.18 * u4) * box_h
+                rel_y = start_y + (land_y - start_y) * fall
+                speed_fade = _fall_speed_fade(p)
                 out.append(ParticleDraw(
                     origin_x + (u1 - 0.5) * box_w * 0.75
                     + wind * 0.8 + wobble,
-                    origin_y - (0.30 + 0.30 * u4) * box_h
-                    + (0.45 + 0.30 * u2) * box_h * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i * (0.88 + 0.12 * math.sin(math.pi * p)),
-                    min(p * 5.0, 1.0) * math.sin(math.pi * p),
+                    min(p * 5.0, 1.0) * math.sin(math.pi * p) * speed_fade,
                     flutter,
                     1.0,
                 ))
         elif kind in SNOW_KINDS:
-            # 雪花飘落（AE CC Snowfall 运动签名 + 2026-10 用户口径）：
-            # 出生高度锚在 ruby 盒中心-底部二分之一处（主文字顶上方
-            # ≈0.68~0.90 box_h 窄随机带）；下沉 = 匀速（终端速度感）；
-            # **尺寸随播放由大变小**。2026-10-21 用户口径：横向改为
-            # 走字风——持续向右后方漂移（SNOW_WIND_FRACTION × box_w × p）
-            # + 小扑动 + 固定 -22° 后倾，不再绕中心点对称摆。
-            # 出入场落点压到字底（≥0.48 box_h），透明度前 78% 保持不透明、
-            # 最后 22% 才收。sweep>0 飘入、sweep<0 飘散、sweep==0 唱字。
+            # 雪花飘落（AE CC Snowfall / Particular 雪 presets）：AE 的
+            # 做法是 Box emitter + 连续出生 + 风场 + 湍流，而不是一整块
+            # 同时出现。这里出/入场每颗在 0~45% 寿命内错峰出生，晚出生
+            # 的从更低处开始（连续飘落的柱状分布）；横向持续向右后方
+            # 漂移 + 一个 0.28~0.50 周期/寿命的慢摆 + 固定 -22° 后倾，
+            # 去掉之前 2~3 周期的高频扑动。尺寸随播放由大变小。
             u1 = fx_unit_hash(seed + i, 1)
             u2 = fx_unit_hash(seed + i, 2)
             u3 = fx_unit_hash(seed + i, 3)
             u4 = fx_unit_hash(seed + i, 4)
             u5 = fx_unit_hash(seed + i, 5)
-            delay = u3 * 160.0
+            spawn = u3
+            # AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生
+            # （唱字 18%），全部从各自的起始高度开始运动，不做首帧预滚
+            # （预滚会让入场粒子直接出现在文字内部，用户口径：生成高度
+            # 不对）。晚出生的从更低/随机高度起飘，避免整块同时出现。
+            particle_count = max(int(burst.get("count", 1) or 1), 1)
+            # 序列扰动：最大尺寸/深度档按 burst seed 轮换到不同粒子，
+            # 防止每个字的最大粒子总落在同一个相对位置。
+            depth_slot = (i + int(seed)) % particle_count
+            delay = spawn * life * (0.18 if sweep == 0 else 0.45)
             p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
             if p <= 0.0:
                 continue
             wobble = (
-                math.sin((u2 + p * (2.0 + 1.2 * u5)) * 2.0 * math.pi)
-                * size * FALL_FLUTTER_SCALE * (0.7 + 0.5 * u4)
+                math.sin((u2 + p * (0.28 + 0.22 * u5)) * 2.0 * math.pi)
+                * size * (0.18 + 0.10 * u4)
             )
             wind = SNOW_WIND_FRACTION * box_w * p
-            size_i = size * (0.70 + 0.50 * u4) * (1.05 - 0.40 * p)
+            depth = _fall_depth(depth_slot, particle_count, u4)
+            size_i = (
+                size
+                * (SNOW_SIZE_MIN + SNOW_SIZE_SPAN * depth)
+                * (1.05 - 0.40 * p)
+            )
             spin = (
                 u3 * 360.0
                 + p * (80.0 + 140.0 * u5) * (1.0 if u4 >= 0.5 else -1.0)
-                + FALL_LEAN_DEG
+                + SNOW_LEAN_DEG
             )
-            # 出生锚：ruby 盒中心-底部二分之一处（字形顶 -0.5 之上）。
-            birth_y = -(0.68 + 0.22 * u2) * box_h
-            eased = p  # 匀速下沉（雪的终端速度感）
-            hold_fade = (
-                1.0
-                if p <= SNOW_FADE_START
-                else max(
-                    0.0,
-                    (1.0 - p) / (1.0 - SNOW_FADE_START),
-                ) ** 1.2
-            )
+            # 入场/退场/唱字统一从主文字上方起飘。
+            birth_y = -(FALL_START_MIN + FALL_START_SPAN * u2) * box_h
+            fall = _fall_progress(p)
+            speed_fade = _fall_speed_fade(p)
             if sweep > 0:
-                # 雪花飘入：自 ruby 锚一路落到**字底或更低**。
+                # 雪花飘入：自字顶上方落入并向字底汇聚；末段速度趋近 0，
+                # 透明度随速度渐隐，不在底部堆积。
                 land_x = (u1 - 0.5) * box_w * 0.85
                 land_y = (0.48 + 0.14 * u4) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.6
+                rel_y = birth_y + (land_y - birth_y) * fall
                 out.append(ParticleDraw(
-                    origin_x + start_x + (land_x - start_x) * eased
+                    origin_x + start_x + (land_x - start_x) * fall
                     + wind + wobble,
-                    origin_y + birth_y + (land_y - birth_y) * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i,
-                    min(p * 3.0, 1.0) * hold_fade,
+                    min(p * 3.0, 1.0) * speed_fade,
                 ))
             elif sweep < 0:
-                # 雪花飘散：同样自 ruby 锚出生落到字底或更低，终点向右
-                # 缓漂，再叠走字风；透明度落到底才收。
+                # 雪花飘散：从主文字上方出发，向字底汇聚；终点向右，
+                # 末段随速度渐隐。
                 land_x = (u1 - 0.5) * box_w * 0.85
                 end_x = land_x + (0.35 + 0.6 * u5) * box_w
                 land_y = (0.50 + 0.24 * u2) * box_h
                 start_x = land_x + (u5 - 0.5) * box_w * 0.5
+                rel_y = birth_y + (land_y - birth_y) * fall
                 out.append(ParticleDraw(
-                    origin_x + start_x + (end_x - start_x) * eased
+                    origin_x + start_x + (end_x - start_x) * fall
                     + wind + wobble,
-                    origin_y + birth_y + (land_y - birth_y) * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i,
-                    min(p * 3.0, 1.0) * hold_fade,
+                    min(p * 3.0, 1.0) * speed_fade,
                 ))
             else:
-                # 雪花飘动：同样自 ruby 锚出生，匀速缓沉穿过字框 +
-                # 向右后方漂移，sin 包络淡入淡出。
-                land_y = (u4 - 0.5) * box_h * 0.6
+                # 雪花飘动（唱字）：与出入场同一起始高度，向字底汇聚；
+                # 末段随速度渐隐。
+                land_y = (0.48 + 0.14 * u4) * box_h
+                rel_y = birth_y + (land_y - birth_y) * fall
                 out.append(ParticleDraw(
                     origin_x + (u1 - 0.5) * box_w * 0.7
                     + wind * 0.8 + wobble,
-                    origin_y + birth_y + (land_y - birth_y) * eased,
+                    origin_y + rel_y,
                     spin,
                     size_i,
-                    min(p * 4.0, 1.0) * math.sin(math.pi * p),
+                    min(p * 4.0, 1.0) * math.sin(math.pi * p) * speed_fade,
                 ))
     return out

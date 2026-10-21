@@ -20,15 +20,55 @@ constexpr int kCharFadeIntroDelayMs = 350;
 constexpr int kCharFadeInOutTimeMs = 250;
 // 羽毛/闪电（镜像 particles.py FEATHER_FADE_START /
 // LIGHTNING_GLOW_ALPHA）。
-constexpr float kFeatherFadeStart = 0.80f;
+constexpr float kFeatherFadeStart = 0.85f;
 constexpr float kLightningGlowAlpha = 0.22f;
 constexpr float kLightningGlowSizeScale = 1.35f;
+// 汇聚式下落（镜像 particles._fall_progress）：三次 Hermite，
+// 初速 0.2、接近落点减速到 0；末段透明度随速度渐隐。
+constexpr float kFallInitialV = 0.20f;
+constexpr float kFallStartMin = 0.55f;
+constexpr float kFallStartSpan = 0.45f;
+constexpr float kFallSpeedFadeStart = 0.55f;
+inline float fallProgress(float p) {
+    const float v = std::clamp(p, 0.0f, 1.0f);
+    return (kFallInitialV - 2.0f) * v * v * v
+        + (3.0f - 2.0f * kFallInitialV) * v * v
+        + kFallInitialV * v;
+}
+inline float fallVelocity(float p) {
+    const float v = std::clamp(p, 0.0f, 1.0f);
+    return 3.0f * (kFallInitialV - 2.0f) * v * v
+        + 2.0f * (3.0f - 2.0f * kFallInitialV) * v
+        + kFallInitialV;
+}
+inline float fallSpeedFade(float p) {
+    const float v = std::clamp(p, 0.0f, 1.0f);
+    if (v <= kFallSpeedFadeStart) {
+        return 1.0f;
+    }
+    const float speed = fallVelocity(v) / 1.45f;
+    float q = std::clamp(speed / 0.55f, 0.0f, 1.0f);
+    return q * q * (3.0f - 2.0f * q);
+}
 // 走字风（镜像 particles.py）：下落粒子向右后方漂 + 固定后倾角。
 constexpr float kPetalWindFraction = 0.55f;
 constexpr float kSnowWindFraction = 0.45f;
 constexpr float kFeatherWindFraction = 0.65f;
 constexpr float kFallLeanDeg = -22.0f;
-constexpr float kFallFlutterScale = 0.22f;
+constexpr float kSnowLeanDeg = -30.0f;
+constexpr float kFeatherLeanDeg = -32.0f;
+// AE Box emitter + 连续出生（Particular 雪/花瓣教程）：出入场每颗在
+// 0~45% 寿命内错峰出生，晚出生的从更低处开始；唱字档只做小幅错峰。
+constexpr float kFallSpawnSpread = 0.45f;
+constexpr float kFallSpawnSpreadSing = 0.18f;
+// AE 下落特效景深（Particular 多层 far/mid/near + 随机 size）：每颗
+// 用 u4 固定 0.5~1.6× 的深度尺寸，远小近大。
+constexpr float kPetalSizeMin = 0.45f;
+constexpr float kPetalSizeSpan = 1.20f;
+constexpr float kSnowSizeMin = 0.35f;
+constexpr float kSnowSizeSpan = 0.80f;
+constexpr float kFeatherSizeMin = 0.45f;
+constexpr float kFeatherSizeSpan = 1.20f;
 
 float clampedRatio(int elapsedMs, int durationMs) {
     if (durationMs <= 0) {
@@ -757,7 +797,18 @@ std::vector<FxParticle> burstParticlesAt(
             const float u3 = fxUnitHash(index, 3u);
             const float u4 = fxUnitHash(index, 4u);
             const float u5 = fxUnitHash(index, 5u);
-            const float delay = u3 * 110.0f;
+            const float spawn = u3;
+            // AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生，
+            // 不做首帧预滚（避免入场粒子直接出现在文字内部）；最大尺寸
+            // 档按 burst seed 轮换到不同粒子（序列扰动）。
+            const int particleCount = std::max(burst.count, 1);
+            const int depthSlot = (
+                i + static_cast<int>(
+                    burst.seed % static_cast<std::uint32_t>(particleCount)
+                )
+            ) % particleCount;
+            const float delay = spawn * life
+                * (burst.sweep == 0 ? kFallSpawnSpreadSing : kFallSpawnSpread);
             const float p = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
@@ -769,64 +820,78 @@ std::vector<FxParticle> burstParticlesAt(
             }
             constexpr float pi = 3.14159265358979323846f;
             const float flutter = std::sin(
-                (u2 + p * (2.2f + 1.4f * u5)) * 2.0f * pi
-            ) * size * kFallFlutterScale * (0.7f + 0.6f * u4);
+                (u2 + p * (0.40f + 0.25f * u5)) * 2.0f * pi
+            ) * size * (0.22f + 0.10f * u4);
             const float wind = kPetalWindFraction * boxW * p;
-            const float sizeI = size * (0.72f + 0.55f * u4);
+            const float depth = particleCount <= 1
+                ? 0.5f
+                : std::clamp(
+                    (static_cast<float>(depthSlot) + 0.30f * u4)
+                        / static_cast<float>(particleCount - 1),
+                    0.0f,
+                    1.0f
+                );
+            const float sizeI = size
+                * (kPetalSizeMin + kPetalSizeSpan * depth);
             const float spin = u3 * 360.0f
                 + p * (160.0f + 240.0f * u5) * (u4 >= 0.5f ? 1.0f : -1.0f)
                 + kFallLeanDeg;
-            // 花瓣“落到底再淡出”包络（镜像 particles PETAL_FADE_START）：
-            // 前 75% 保持，最后 25% 才收透明度；旧版 p=0.5 已 α≈0.25。
-            const float holdFade = p <= 0.75f
+            // 不再落到字底：终点在字框下方 1.1~2.3 box_h 的不可观测区，
+            // 最后 15% 才淡出；位置随机、不汇聚。
+            const float holdFade = p <= 0.85f
                 ? 1.0f
                 : std::pow(
-                    std::max((1.0f - p) / 0.25f, 0.0f), 1.2f
+                    std::max((1.0f - p) / 0.15f, 0.0f), 1.2f
                 );
             if (burst.sweep > 0) {
-                // 花瓣飘入：自字形顶上方 ease-out 减速飘落，落点压到字底
-                //（0.42~0.58 box_h，至少到主文字最底部才消失）。
-                const float eased = 1.0f - (1.0f - p) * (1.0f - p);
+                // 花瓣飘入：非零初速 + 重力加速，穿过文字落到不可观测区。
+                const float fall = fallProgress(p);
                 const float landX = (u1 - 0.5f) * boxW * 0.85f;
                 const float landY = (0.42f + 0.16f * u4) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.7f;
-                const float startY = -(0.60f + 0.30f * u2) * boxH;
+                const float startY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+                const float relY = startY + (landY - startY) * fall;
+                const float speedFade = fallSpeedFade(p);
                 out.push_back(FxParticle{
-                    originX + startX + (landX - startX) * eased
+                    originX + startX + (landX - startX) * fall
                         + wind + flutter,
-                    originY + startY + (landY - startY) * eased,
+                    originY + relY,
                     spin,
                     sizeI * (0.85f + 0.15f * std::sin(pi * p)),
-                    std::min(p * 4.0f, 1.0f) * holdFade,
+                    std::min(p * 4.0f, 1.0f) * speedFade,
                 });
             } else if (burst.sweep < 0) {
-                // 花瓣飘散：横向飘逸保持随机，终点向右；纵向落到字底
-                // 下方（0.55~0.85 box_h），落到底才收透明度。
-                const float eased = p * p * (3.0f - 2.0f * p);
+                // 花瓣飘散：起始高度铺满字框上半部，落到不可观测区；
+                // 终点向右、非零初速 + 重力加速。
+                const float fall = fallProgress(p);
                 const float startX = (u1 - 0.5f) * boxW * 0.85f;
                 const float endX = startX + (0.5f + 0.9f * u5) * boxW;
-                const float startY = (u4 - 0.5f) * boxH * 0.55f;
+                const float startY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+                const float landY = (0.50f + 0.20f * u4) * boxH;
+                const float relY = startY + (landY - startY) * fall;
+                const float speedFade = fallSpeedFade(p);
                 out.push_back(FxParticle{
-                    originX + startX + (endX - startX) * eased
+                    originX + startX + (endX - startX) * fall
                         + wind + flutter,
-                    originY + startY
-                        + (0.55f + 0.30f * u2) * boxH * eased,
+                    originY + relY,
                     spin,
                     sizeI * (0.90f + 0.10f * (1.0f - p)),
-                    std::min(p * 4.0f, 1.0f) * holdFade,
+                    std::min(p * 4.0f, 1.0f) * speedFade,
                 });
             } else {
-                // 花瓣飘动：字框上半出生（星光的偏上口径），小行程缓沉，
-                // sin 包络淡入淡出。
-                const float eased = p * p * (3.0f - 2.0f * p);
+                // 花瓣飘动：字框上半出生，落到不可观测区再淡出。
+                const float fall = fallProgress(p);
+                const float startY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+                const float landY = (0.42f + 0.16f * u4) * boxH;
+                const float relY = startY + (landY - startY) * fall;
+                const float speedFade = fallSpeedFade(p);
                 out.push_back(FxParticle{
                     originX + (u1 - 0.5f) * boxW * 0.7f
                         + wind * 0.8f + flutter,
-                    originY - (0.25f + 0.30f * u4) * boxH
-                        + (0.40f + 0.30f * u2) * boxH * eased,
+                    originY + relY,
                     spin,
                     sizeI * (0.85f + 0.15f * std::sin(pi * p)),
-                    std::min(p * 5.0f, 1.0f) * std::sin(pi * p),
+                    std::min(p * 5.0f, 1.0f) * std::sin(pi * p) * speedFade,
                 });
             }
         } else if (burst.kind == "feather") {
@@ -840,7 +905,18 @@ std::vector<FxParticle> burstParticlesAt(
             const float u4 = fxUnitHash(index, 4u);
             const float u5 = fxUnitHash(index, 5u);
             constexpr float pi = 3.14159265358979323846f;
-            const float delay = u3 * 140.0f;
+            const float spawn = u3;
+            // AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生，
+            // 不做首帧预滚（避免入场粒子直接出现在文字内部）；最大尺寸
+            // 档按 burst seed 轮换到不同粒子（序列扰动）。
+            const int particleCount = std::max(burst.count, 1);
+            const int depthSlot = (
+                i + static_cast<int>(
+                    burst.seed % static_cast<std::uint32_t>(particleCount)
+                )
+            ) % particleCount;
+            const float delay = spawn * life
+                * (burst.sweep == 0 ? kFallSpawnSpreadSing : kFallSpawnSpread);
             const float p = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
@@ -851,14 +927,23 @@ std::vector<FxParticle> burstParticlesAt(
                 continue;
             }
             const float wobble = std::sin(
-                (u2 + p * (2.4f + 1.6f * u5)) * 2.0f * pi
-            ) * size * kFallFlutterScale * (0.8f + 0.5f * u4);
+                (u2 + p * (0.32f + 0.28f * u5)) * 2.0f * pi
+            ) * size * (0.20f + 0.10f * u4);
             const float wind = kFeatherWindFraction * boxW * p;
-            const float sizeI = size * (0.85f + 0.40f * u4);
+            const float depth = particleCount <= 1
+                ? 0.5f
+                : std::clamp(
+                    (static_cast<float>(depthSlot) + 0.30f * u4)
+                        / static_cast<float>(particleCount - 1),
+                    0.0f,
+                    1.0f
+                );
+            const float sizeI = size
+                * (kFeatherSizeMin + kFeatherSizeSpan * depth);
             const float spin = u3 * 360.0f
                 + p * (120.0f + 240.0f * u5)
                     * (u4 >= 0.5f ? 1.0f : -1.0f)
-                + kFallLeanDeg;
+                + kFeatherLeanDeg;
             const float flutter = 0.55f + 0.45f * std::abs(
                 std::cos((p * 1.5f + u5) * pi)
             );
@@ -871,51 +956,57 @@ std::vector<FxParticle> burstParticlesAt(
                     1.2f
                 );
             if (burst.sweep > 0) {
-                // 羽毛飘入：ease-out 减速降落，落点压到字底
-                //（0.42~0.60 box_h），自字顶上方 0.75~1.05 box_h 起飘。
-                const float eased = 1.0f - (1.0f - p) * (1.0f - p);
+                // 羽毛飘入：非零初速 + 重力加速，穿过文字落到不可观测区。
+                const float fall = fallProgress(p);
                 const float landX = (u1 - 0.5f) * boxW * 0.90f;
                 const float landY = (0.42f + 0.18f * u4) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.80f;
-                const float startY = -(0.75f + 0.30f * u2) * boxH;
+                const float startY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+                const float relY = startY + (landY - startY) * fall;
+                const float speedFade = fallSpeedFade(p);
                 out.push_back(FxParticle{
-                    originX + startX + (landX - startX) * eased
+                    originX + startX + (landX - startX) * fall
                         + wind + wobble,
-                    originY + startY + (landY - startY) * eased,
+                    originY + relY,
                     spin,
                     sizeI * (0.90f + 0.10f * std::sin(pi * p)),
-                    std::min(p * 4.0f, 1.0f) * holdFade,
+                    std::min(p * 4.0f, 1.0f) * speedFade,
                     flutter,
                     1.0f,
                 });
             } else if (burst.sweep < 0) {
-                // 羽毛飘散：自字框剥落向右下大行程飘走，前 80% 不透明。
-                const float eased = p * p * (3.0f - 2.0f * p);
+                // 羽毛飘散：起始高度铺满字框上半部，落到不可观测区。
+                const float fall = fallProgress(p);
                 const float startX = (u1 - 0.5f) * boxW * 0.90f;
                 const float endX = startX + (0.25f + 0.70f * u5) * boxW;
-                const float startY = (u4 - 0.5f) * boxH * 0.45f;
+                const float startY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+                const float landY = (0.50f + 0.20f * u4) * boxH;
+                const float relY = startY + (landY - startY) * fall;
+                const float speedFade = fallSpeedFade(p);
                 out.push_back(FxParticle{
-                    originX + startX + (endX - startX) * eased
+                    originX + startX + (endX - startX) * fall
                         + wind + wobble,
-                    originY + startY
-                        + (0.55f + 0.30f * u2) * boxH * eased,
+                    originY + relY,
                     spin,
                     sizeI * (0.90f + 0.10f * (1.0f - p)),
-                    std::min(p * 4.0f, 1.0f) * holdFade,
+                    std::min(p * 4.0f, 1.0f) * speedFade,
                     flutter,
                     1.0f,
                 });
             } else {
-                // 羽毛飘动：字框上半出生，缓沉小行程，sin 包络淡入淡出。
-                const float eased = p * p * (3.0f - 2.0f * p);
+                // 羽毛飘动：字框上半出生，落到不可观测区再淡出。
+                const float fall = fallProgress(p);
+                const float startY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+                const float landY = (0.42f + 0.18f * u4) * boxH;
+                const float relY = startY + (landY - startY) * fall;
+                const float speedFade = fallSpeedFade(p);
                 out.push_back(FxParticle{
                     originX + (u1 - 0.5f) * boxW * 0.75f
                         + wind * 0.8f + wobble,
-                    originY - (0.30f + 0.30f * u4) * boxH
-                        + (0.45f + 0.30f * u2) * boxH * eased,
+                    originY + relY,
                     spin,
                     sizeI * (0.88f + 0.12f * std::sin(pi * p)),
-                    std::min(p * 5.0f, 1.0f) * std::sin(pi * p),
+                    std::min(p * 5.0f, 1.0f) * std::sin(pi * p) * speedFade,
                     flutter,
                     1.0f,
                 });
@@ -930,7 +1021,18 @@ std::vector<FxParticle> burstParticlesAt(
             const float u3 = fxUnitHash(index, 3u);
             const float u4 = fxUnitHash(index, 4u);
             const float u5 = fxUnitHash(index, 5u);
-            const float delay = u3 * 160.0f;
+            const float spawn = u3;
+            // AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生，
+            // 不做首帧预滚（避免入场粒子直接出现在文字内部）；最大尺寸
+            // 档按 burst seed 轮换到不同粒子（序列扰动）。
+            const int particleCount = std::max(burst.count, 1);
+            const int depthSlot = (
+                i + static_cast<int>(
+                    burst.seed % static_cast<std::uint32_t>(particleCount)
+                )
+            ) % particleCount;
+            const float delay = spawn * life
+                * (burst.sweep == 0 ? kFallSpawnSpreadSing : kFallSpawnSpread);
             const float p = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
@@ -942,63 +1044,68 @@ std::vector<FxParticle> burstParticlesAt(
             }
             constexpr float pi = 3.14159265358979323846f;
             const float wobble = std::sin(
-                (u2 + p * (2.0f + 1.2f * u5)) * 2.0f * pi
-            ) * size * kFallFlutterScale * (0.7f + 0.5f * u4);
+                (u2 + p * (0.28f + 0.22f * u5)) * 2.0f * pi
+            ) * size * (0.18f + 0.10f * u4);
             const float wind = kSnowWindFraction * boxW * p;
+            const float depth = particleCount <= 1
+                ? 0.5f
+                : std::clamp(
+                    (static_cast<float>(depthSlot) + 0.30f * u4)
+                        / static_cast<float>(particleCount - 1),
+                    0.0f,
+                    1.0f
+                );
             const float sizeI =
-                size * (0.70f + 0.50f * u4) * (1.05f - 0.40f * p);
+                size * (kSnowSizeMin + kSnowSizeSpan * depth)
+                * (1.05f - 0.40f * p);
             const float spin = u3 * 360.0f
                 + p * (80.0f + 140.0f * u5) * (u4 >= 0.5f ? 1.0f : -1.0f)
-                + kFallLeanDeg;
-            const float birthY = -(0.68f + 0.22f * u2) * boxH;
-            const float eased = p;  // 匀速下沉（雪的终端速度感）
-            // 雪花“落到底再淡出”包络（镜像 particles SNOW_FADE_START）：
-            // 前 78% 保持，最后 22% 才收；旧版 p=0.5 已 α≈0.4。
-            const float holdFade = p <= 0.78f
-                ? 1.0f
-                : std::pow(
-                    std::max((1.0f - p) / 0.22f, 0.0f), 1.2f
-                );
+                + kSnowLeanDeg;
+            const float birthY = -(kFallStartMin + kFallStartSpan * u2) * boxH;
+            const float fall = fallProgress(p);
+            const float speedFade = fallSpeedFade(p);
             if (burst.sweep > 0) {
-                // 雪花飘入：自 ruby 锚一路落到字底或更低（0.48~0.62
-                // box_h，至少到主文字最底部才消失）。
+                // 雪花飘入：自字顶上方落入并向字底汇聚；末段随速度渐隐。
                 const float landX = (u1 - 0.5f) * boxW * 0.85f;
                 const float landY = (0.48f + 0.14f * u4) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.6f;
+                const float relY = birthY + (landY - birthY) * fall;
                 out.push_back(FxParticle{
-                    originX + startX + (landX - startX) * eased
+                    originX + startX + (landX - startX) * fall
                         + wind + wobble,
-                    originY + birthY + (landY - birthY) * eased,
+                    originY + relY,
                     spin,
                     sizeI,
-                    std::min(p * 3.0f, 1.0f) * holdFade,
+                    std::min(p * 3.0f, 1.0f) * speedFade,
                 });
             } else if (burst.sweep < 0) {
-                // 雪花飘散：同样自 ruby 锚出生落到字底或更低，横向随机
-                // 摇摆、终点向右；落到底才收透明度。
+                // 雪花飘散：从主文字上方出发，向字底汇聚；终点向右，
+                // 末段随速度渐隐。
                 const float landX = (u1 - 0.5f) * boxW * 0.85f;
                 const float endX = landX + (0.35f + 0.6f * u5) * boxW;
                 const float landY = (0.50f + 0.24f * u2) * boxH;
                 const float startX = landX + (u5 - 0.5f) * boxW * 0.5f;
+                const float relY = birthY + (landY - birthY) * fall;
                 out.push_back(FxParticle{
-                    originX + startX + (endX - startX) * eased
+                    originX + startX + (endX - startX) * fall
                         + wind + wobble,
-                    originY + birthY + (landY - birthY) * eased,
+                    originY + relY,
                     spin,
                     sizeI,
-                    std::min(p * 3.0f, 1.0f) * holdFade,
+                    std::min(p * 3.0f, 1.0f) * speedFade,
                 });
             } else {
-                // 雪花飘动：自 ruby 锚出生，匀速缓沉穿过字框，
-                // sin 包络淡入淡出。
-                const float landY = (u4 - 0.5f) * boxH * 0.6f;
+                // 雪花飘动（唱字）：与出入场同一起始高度，向字底汇聚；
+                // 末段随速度渐隐。
+                const float landY = (0.48f + 0.14f * u4) * boxH;
+                const float relY = birthY + (landY - birthY) * fall;
                 out.push_back(FxParticle{
                     originX + (u1 - 0.5f) * boxW * 0.7f
                         + wind * 0.8f + wobble,
-                    originY + birthY + (landY - birthY) * eased,
+                    originY + relY,
                     spin,
                     sizeI,
-                    std::min(p * 4.0f, 1.0f) * std::sin(pi * p),
+                    std::min(p * 4.0f, 1.0f) * std::sin(pi * p) * speedFade,
                 });
             }
         }

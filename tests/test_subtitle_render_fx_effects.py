@@ -2360,9 +2360,9 @@ def test_plan_line_bursts_petal_entry_exit_sing():
     assert sorted({b["count"] for b in entry}) == [1, 2]
     assert {b["color"] for b in entry} == {"#FFB7C5", "#FFD7E0"}
     assert all(b["travel_px"] == 0.0 for b in entry)
-    # 退场花瓣（2026-10 分离口径）：锚点 = max(行末 4100, 显示末 4200 -
-    # 1250) = 4100，标准错峰 175ms、每字完整寿命 900ms（越过显示窗
-    # 终点，尾奏通道续播；旧「120 兜底 + 错峰压缩」已废除）。
+    assert all(b["end_ms"] == b["start_ms"] + 1700 for b in entry)
+    # 退场花瓣：锚点 = max(行末 4100, 显示末 4200 - (350+1200)) = 4100，
+    # 标准错峰 175ms、每字完整寿命 1200ms（越过显示窗终点，尾奏通道续播）。
     exit_petals = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == -1]
     assert len(exit_petals) == 6
     for char_index, base in enumerate((4100, 4275, 4450)):
@@ -2372,7 +2372,7 @@ def test_plan_line_bursts_petal_entry_exit_sing():
         assert len(starts) == 2
         assert all(abs(start - base) <= 80 for start in starts)
     assert len({b["start_ms"] for b in exit_petals}) > 1
-    assert all(b["end_ms"] == b["start_ms"] + 900 for b in exit_petals)
+    assert all(b["end_ms"] == b["start_ms"] + 1200 for b in exit_petals)
     assert {b["color"] for b in exit_petals} == {"#FFB7C5", "#FFD7E0"}
     # 唱字花瓣：sweep=0、每字 max(3, 14//3)=4 颗、尺寸吃旋钮（40% 字号）。
     sing = [b for b in bursts if b["kind"] == "petal" and b["sweep"] == 0]
@@ -2394,17 +2394,17 @@ def test_petal_trajectory_windows_and_downward_drift():
         burst = {**base, "sweep": sweep}
         assert burst_particles_at(burst, -1, 0.0, 0.0, 120.0, 100.0) == []
         assert burst_particles_at(burst, 901, 0.0, 0.0, 120.0, 100.0) == []
-        early = burst_particles_at(burst, 200, 0.0, 0.0, 120.0, 100.0)
-        again = burst_particles_at(burst, 200, 0.0, 0.0, 120.0, 100.0)
+        early = burst_particles_at(burst, 500, 0.0, 0.0, 120.0, 100.0)
+        again = burst_particles_at(burst, 500, 0.0, 0.0, 120.0, 100.0)
         assert early == again  # 纯时间函数：重放逐位一致
-        assert len(early) == 6  # 出生延迟上限 110ms < 200
+        assert len(early) == 6  # 连续出生窗 0~405ms < 500
         late = burst_particles_at(burst, 700, 0.0, 0.0, 120.0, 100.0)
         for before, after in zip(early, late):
             assert after.y >= before.y  # 无 y 向摇摆项：单调下沉
         # 2026-10-18：透明度前 75% 保持、落到底才收；落点至少到字底
         #（0.42+ box_h），不是过字中线就消失。
-        hold = burst_particles_at(burst, 600, 0.0, 0.0, 120.0, 100.0)
-        assert hold and min(state.alpha for state in hold) > 0.8
+        hold = burst_particles_at(burst, 450, 0.0, 0.0, 120.0, 100.0)
+        assert hold and min(state.alpha for state in hold) > 0.7
         bottom = burst_particles_at(burst, 899, 0.0, 0.0, 120.0, 100.0)
         if sweep > 0:
             assert bottom and min(state.y for state in bottom) > 35.0
@@ -2426,7 +2426,7 @@ def test_petal_trajectory_windows_and_downward_drift():
                         assert -100.0 <= state.x <= 320.0
                     else:
                         assert abs(state.x) <= 150.0
-                assert -95.0 <= state.y <= 120.0
+                assert -95.0 <= state.y <= 260.0
 
 
 def test_petal_two_color_variant_split():
@@ -2949,20 +2949,20 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
     # 入场雪花：整行近似同刻（无逐字等差错峰，但每字 ±80ms 抖动），
-    # 提前 350ms 起飘、整段落 1800ms（慢雪；旧 1050ms 被用户否为“太快”）。
+    # 提前 350ms 起飘、整段落 1500ms（2026-10-22 用户口径：略提速）。
     entry = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == 1]
     assert len(entry) == 6
     assert all(abs(b["start_ms"] - 650) <= 80 for b in entry)
     assert len({b["start_ms"] for b in entry}) > 1
-    assert {b["end_ms"] for b in entry} == {2450}  # 650 + 1800
+    assert {b["end_ms"] for b in entry} == {2150}  # 650 + 1500
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 拆雪色双色
     assert {b["color"] for b in entry} == {"#F2F8FF", "#BFDFFF"}
     assert all(b["travel_px"] == 0.0 for b in entry)
-    # 退场雪花：落窗同样 1800ms，从显示末前 1.5s 起飘（不再锚行末只剩
-    # 400ms），逐字 ±80ms 抖动；终点晚于显示末 300ms。
+    # 退场雪花：落窗同样 1500ms，从显示末前 1.5s 起飘，逐字 ±80ms
+    # 抖动；终点晚于显示末 300ms。
     exit_snow = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == -1]
     assert len(exit_snow) == 6
-    assert all(abs(b["start_ms"] - 2700) <= 80 for b in exit_snow)
+    assert all(abs(b["start_ms"] - 3000) <= 80 for b in exit_snow)
     assert len({b["start_ms"] for b in exit_snow}) > 1
     assert {b["end_ms"] for b in exit_snow} == {4500}  # 4200 + 300
     assert {b["color"] for b in exit_snow} == {"#F2F8FF", "#BFDFFF"}
@@ -3008,12 +3008,12 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
         burst = {**base, "sweep": sweep}
         assert burst_particles_at(burst, -1, 0.0, 0.0, 120.0, 100.0) == []
         assert burst_particles_at(burst, 1801, 0.0, 0.0, 120.0, 100.0) == []
-        early = burst_particles_at(burst, 250, 0.0, 0.0, 120.0, 100.0)
+        early = burst_particles_at(burst, 900, 0.0, 0.0, 120.0, 100.0)
         assert early == burst_particles_at(
-            burst, 250, 0.0, 0.0, 120.0, 100.0
+            burst, 900, 0.0, 0.0, 120.0, 100.0
         )  # 纯时间函数：重放逐位一致
-        assert len(early) == 6  # 出生延迟上限 160ms < 250
-        late = burst_particles_at(burst, 800, 0.0, 0.0, 120.0, 100.0)
+        assert len(early) == 6  # 连续出生窗 0~810ms < 900
+        late = burst_particles_at(burst, 1200, 0.0, 0.0, 120.0, 100.0)
         for before, after in zip(early, late):
             assert after.y >= before.y  # 无 y 向摇摆项：匀速单调下沉
             # 尺寸随播放由大变小（2026-10 用户口径：近大远小）。
@@ -3021,11 +3021,14 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
         # 2026-10-21 走字风：三档（飘入/飘散/唱字）都必须整体向右后方
         # 漂，而不是绕中心点的对称摆动——按簇和判方向。
         assert sum(s.x for s in late) > sum(s.x for s in early)
-        # ruby 锚出生：三档（含退场——雪统一从天上落到地上，2026-10
-        # 用户口径：不考虑与字面的连续性）早期整簇都在字形顶之上
-        #（-0.5 box_h；退场行程更长，阈值放宽到 -0.45）。
+        # 连续出生（AE Box emitter）：进出场早期已有粒子，且整批在 t=900
+        # 全部出生后纵向高度被拉开，不再同一高度整块出现；唱字档仍按
+        # 字窗逐字触发，不做这个高度铺开。
         top = burst_particles_at(burst, 150, 0.0, 0.0, 120.0, 100.0)
-        assert top and max(s.y for s in top) < -45.0
+        assert top
+        if sweep != 0:
+            early_y = [s.y for s in early]
+            assert max(early_y) - min(early_y) > 40.0
         for states in (early, late):
             for state in states:
                 assert 0.0 < state.alpha <= 1.0
@@ -3034,7 +3037,7 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
                     assert -80.0 <= state.x <= 260.0
                 else:
                     assert abs(state.x) <= 140.0  # 字框 + 走字风 + 小扑动
-                assert -95.0 <= state.y <= 120.0
+                assert -95.0 <= state.y <= 260.0
         if sweep > 0:
             # 飘入落到**字底或更低**：末期整簇已沉到字底附近（慢雪，
             # 1800ms 落程；不再过字中线就消失）。
@@ -3043,8 +3046,8 @@ def test_snow_trajectory_windows_and_bounds(snow_kind):
             )
             assert bottom and min(s.y for s in bottom) > 40.0
         # 透明度前 78% 保持：1400ms 时（p≈0.8）仍清晰可见。
-        hold = burst_particles_at(burst, 1400, 0.0, 0.0, 120.0, 100.0)
-        assert hold and min(s.alpha for s in hold) > 0.5
+            hold = burst_particles_at(burst, 1000, 0.0, 0.0, 120.0, 100.0)
+            assert hold and min(s.alpha for s in hold) > 0.5
 
 
 def _sprite_loops(commands):
@@ -3656,7 +3659,7 @@ def test_entry_exit_particle_emission_decoupled_from_duration_knob():
     # 尾端助手与规划同式（CPU 尾奏通道的淘汰界；含最大正向抖动）。
     assert exit_particle_tail_end_ms("note", 3, 4100, 4200) == 5250 + 78
     assert exit_particle_tail_end_ms("sparkle", 3, 4100, 4200) == 4100 + 350 + 600 + 78
-    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 350 + 900 + 78
+    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 350 + 1200 + 78
     assert exit_particle_tail_end_ms("snow", 3, 4100, 4200) == 4500
     assert exit_particle_tail_end_ms("dissolve_out", 3, 4100, 4200) is None
 
@@ -4484,17 +4487,18 @@ def test_feather_trajectory_bounds_and_flutter():
     }
     assert burst_particles_at(burst, -1, 0.0, 0.0, 120.0, 100.0) == []
     assert burst_particles_at(burst, 1701, 0.0, 0.0, 120.0, 100.0) == []
-    early = burst_particles_at(burst, 300, 0.0, 0.0, 120.0, 100.0)
-    assert early == burst_particles_at(burst, 300, 0.0, 0.0, 120.0, 100.0)
-    late = burst_particles_at(burst, 1600, 0.0, 0.0, 120.0, 100.0)
+    early = burst_particles_at(burst, 850, 0.0, 0.0, 120.0, 100.0)
+    assert early == burst_particles_at(burst, 850, 0.0, 0.0, 120.0, 100.0)
+    late = burst_particles_at(burst, 1300, 0.0, 0.0, 120.0, 100.0)
     assert len(early) == len(late) == 6
     for before, after in zip(early, late):
         assert after.y > before.y  # 入场单调下落
         assert 0.55 <= before.stretch_x <= 1.0
         assert 0.55 <= after.stretch_x <= 1.0
-    assert min(s.y for s in late) > 40.0  # 已落到字底附近
+    assert max(s.y for s in late) > 30.0  # 已有一部分接近字底
     hold = burst_particles_at(burst, 1300, 0.0, 0.0, 120.0, 100.0)
-    assert hold and min(s.alpha for s in hold) > 0.5
+    inside = [s for s in hold if s.y < 40.0]
+    assert inside and min(s.alpha for s in inside) > 0.5
     for state in early + late:
         assert 0.0 < state.alpha <= 1.0
         assert state.size_px > 0.0
@@ -4533,9 +4537,9 @@ def test_falling_effects_drift_right_all_phases():
     """走字风（2026-10-21 用户口径）：雪花/花瓣/羽毛在飘入、飘散、唱字
     三档都必须整体向右后方漂移，而不是绕中心点对称来回摆。"""
     cases = (
-        ("petal", 900, 150, 800),
-        ("snow", 1800, 250, 1600),
-        ("feather", 1700, 200, 1550),
+        ("petal", 900, 500, 850),
+        ("snow", 1800, 900, 1700),
+        ("feather", 1700, 850, 1600),
     )
     for kind, life, early_ms, late_ms in cases:
         for sweep in (1, -1, 0):
@@ -4556,6 +4560,158 @@ def test_falling_effects_drift_right_all_phases():
                 kind,
                 sweep,
             )
+            # AE 景深：随机尺寸要拉开到约 2.5~3×，形成远小近大的层次。
+            sizes = [s.size_px for s in late]
+            assert max(sizes) / min(sizes) > 2.0, (kind, sweep)
+
+
+def test_falling_particles_move_from_birth_and_exit_spawns_upper():
+    """下落粒子从出生到死亡都在运动（无静止起手）；退场主要从字的中
+    上部生成（不再大部分从字底）；雪花最大尺寸收敛。"""
+    cases = (("petal", 900), ("snow", 1500), ("feather", 1700))
+    for kind, life in cases:
+        for sweep in (1, -1, 0):
+            burst = {
+                "kind": kind, "anchor": "char", "char_index": 0,
+                "start_ms": 0, "end_ms": life, "count": 1,
+                "seed": 1234, "size_px": 40.0, "travel_px": 0.0,
+                "front": True, "sweep": sweep,
+            }
+            first = None
+            for t_ms in range(0, life, 10):
+                states = burst_particles_at(
+                    burst, t_ms, 0.0, 0.0, 120.0, 100.0
+                )
+                if states:
+                    first = (t_ms, states[0])
+                    break
+            assert first is not None, (kind, sweep)
+            t0, state0 = first
+            later = burst_particles_at(
+                burst, min(t0 + 40, life - 1), 0.0, 0.0, 120.0, 100.0
+            )
+            assert later, (kind, sweep)
+            state1 = later[0]
+            moved = abs(state1.x - state0.x) + abs(state1.y - state0.y)
+            assert moved > 1.5, (kind, sweep, moved)
+
+    # 退场起始高度：大部分在字的中上部（y<0），最高不超过 +0.4 box_h。
+    for kind in ("petal", "snow", "feather"):
+        burst = {
+            "kind": kind, "anchor": "char", "char_index": 0,
+            "start_ms": 0, "end_ms": 1800, "count": 40, "seed": 98765,
+            "size_px": 40.0, "travel_px": 0.0, "front": True, "sweep": -1,
+        }
+        states = burst_particles_at(burst, 80, 0.0, 0.0, 120.0, 100.0)
+        assert states
+        assert sum(1 for s in states if s.y < 0.0) >= sum(
+            1 for s in states if s.y >= 0.0
+        ), kind
+        assert max(s.y for s in states) < 40.0, kind
+
+    # 雪花尺寸收敛：最大档不超过 base 的 ~1.2×（用户口径：默认/最大
+    # 雪花的尺寸有点过大）。
+    snow = {
+        "kind": "snow", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 1500, "count": 30, "seed": 24680,
+        "size_px": 40.0, "travel_px": 0.0, "front": True, "sweep": 1,
+    }
+    states = burst_particles_at(snow, 500, 0.0, 0.0, 120.0, 100.0)
+    assert states
+    assert max(s.size_px for s in states) <= 50.0
+
+
+def test_falling_velocity_converges_to_zero_at_landing():
+    """汇聚式下落曲线：初速 0.2、先加速，接近落点减速到 0；落点速度
+    为 0，便于按速度渐隐。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        _fall_progress,
+    )
+
+    def speed(p: float) -> float:
+        step = 0.002
+        return (_fall_progress(p + step) - _fall_progress(p)) / step
+
+    v_start = speed(0.0)
+    v_mid = speed(0.5)
+    v_end = speed(0.998)
+    assert v_start == pytest.approx(0.2, abs=0.02)
+    assert v_mid > v_start
+    assert v_end < v_mid
+    assert v_end < 0.05
+    assert _fall_progress(0.0) == pytest.approx(0.0)
+    assert _fall_progress(1.0) == pytest.approx(1.0)
+
+
+def test_falling_speed_fade_follows_velocity():
+    """末段透明度随速度衰减：速度越低越透明，落点速度 0 → α=0。"""
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        _fall_speed_fade,
+    )
+
+    assert _fall_speed_fade(0.3) == pytest.approx(1.0)
+    assert _fall_speed_fade(0.55) == pytest.approx(1.0)
+    values = [_fall_speed_fade(p) for p in (0.65, 0.75, 0.85, 0.95, 1.0)]
+    assert all(b <= a + 1e-9 for a, b in zip(values, values[1:]))
+    assert values[-1] == pytest.approx(0.0)
+    assert values[-2] < 0.5
+    # 真实 burst 到寿命末端全部透明，不会在字底堆出可见粒子。
+    for kind, life in (("petal", 1500), ("snow", 1500), ("feather", 1700)):
+        burst = {
+            "kind": kind, "anchor": "char", "char_index": 0,
+            "start_ms": 0, "end_ms": life, "count": 40, "seed": 98765,
+            "size_px": 30.0, "travel_px": 0.0, "front": True, "sweep": 1,
+        }
+        states = burst_particles_at(
+            burst, life - 1, 0.0, 0.0, 120.0, 100.0
+        )
+        assert states
+        assert max(s.alpha for s in states) <= 0.05, kind
+
+
+def test_falling_converges_to_bottom_but_fades_out():
+    """恢复向字底汇聚的旧观感，但落点速度趋近 0 时透明度也趋近 0，
+    不会在底部堆着；末期位置在字底附近、alpha 已接近 0。"""
+    for kind, life in (("petal", 1500), ("snow", 1500), ("feather", 1700)):
+        burst = {
+            "kind": kind, "anchor": "char", "char_index": 0,
+            "start_ms": 0, "end_ms": life, "count": 40, "seed": 54321,
+            "size_px": 30.0, "travel_px": 0.0, "front": True, "sweep": 1,
+        }
+        states = burst_particles_at(
+            burst, life - 1, 0.0, 0.0, 120.0, 100.0
+        )
+        assert states
+        ys = [s.y for s in states]
+        assert min(ys) > 25.0, kind  # 已汇聚到字底附近
+        assert max(ys) < 90.0, kind
+        assert max(s.alpha for s in states) <= 0.05, kind
+
+
+def test_falling_depth_slot_varies_across_chars():
+    """序列扰动：每字最大尺寸粒子的横向位置不能固定在同一点。"""
+    for kind in ("petal", "snow", "feather"):
+        style = Style(
+            entry_anim=kind, entry_lead_ms=600, sing_fx="none",
+            font_size_px=100, karaoke_anim="none",
+            fx_particle_color_mode="sakura",
+        )
+        bursts = plan_line_bursts(
+            style, 0, 1000, 4200, 4100,
+            [(1200, 1600), (1600, 2000), (2000, 3000)],
+        )
+        xs = []
+        for char_index in range(3):
+            states = []
+            for burst in bursts:
+                if burst["char_index"] == char_index and burst["sweep"] == 1:
+                    states += burst_particles_at(
+                        burst, 2000, 0.0, 0.0, 120.0, 100.0
+                    )
+            if states:
+                xs.append(max(states, key=lambda s: s.size_px).x)
+        assert len(xs) >= 2, kind
+        assert max(xs) - min(xs) > 8.0, (kind, xs)
 
 
 def test_lightning_growth_anchors_top_or_bottom():
