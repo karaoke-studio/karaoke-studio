@@ -132,6 +132,9 @@ FALL_START_MIN = 0.55
 FALL_START_SPAN = 0.45
 # 末段速度渐隐：p>0.55 后按归一化速度平滑收透明度；速度到 0 时 α=0。
 FALL_SPEED_FADE_START = 0.55
+# 入场粒子预滚：文字逐字渐显从显示起点开始，但粒子先以 20% 寿命的
+# 进度出场（视觉上约提前 300ms），看起来是粒子已经在落、文字才渐显。
+FALL_ENTRY_PREROLL = 0.20
 
 
 def _fall_depth(i: int, count: int, u4: float) -> float:
@@ -3610,7 +3613,17 @@ def burst_particles_at(
             # 防止每个字的最大粒子总落在同一个相对位置。
             depth_slot = (i + int(seed)) % particle_count
             delay = spawn * life * (0.18 if sweep == 0 else 0.45)
-            p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
+            if tau < delay:
+                continue
+            base = min(
+                max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
+            )
+            p = (
+                FALL_ENTRY_PREROLL
+                + (1.0 - FALL_ENTRY_PREROLL) * base
+                if sweep > 0
+                else base
+            )
             if p <= 0.0:
                 continue
             # AE 漂浮表达式的正弦摆：sp=2 rad/s → 一个 1.5s 行程约
@@ -3705,7 +3718,17 @@ def burst_particles_at(
             # 防止每个字的最大粒子总落在同一个相对位置。
             depth_slot = (i + int(seed)) % particle_count
             delay = spawn * life * (0.18 if sweep == 0 else 0.45)
-            p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
+            if tau < delay:
+                continue
+            base = min(
+                max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
+            )
+            p = (
+                FALL_ENTRY_PREROLL
+                + (1.0 - FALL_ENTRY_PREROLL) * base
+                if sweep > 0
+                else base
+            )
             if p <= 0.0:
                 continue
             wobble = (
@@ -3803,7 +3826,17 @@ def burst_particles_at(
             # 防止每个字的最大粒子总落在同一个相对位置。
             depth_slot = (i + int(seed)) % particle_count
             delay = spawn * life * (0.18 if sweep == 0 else 0.45)
-            p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
+            if tau < delay:
+                continue
+            base = min(
+                max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
+            )
+            p = (
+                FALL_ENTRY_PREROLL
+                + (1.0 - FALL_ENTRY_PREROLL) * base
+                if sweep > 0
+                else base
+            )
             if p <= 0.0:
                 continue
             wobble = (

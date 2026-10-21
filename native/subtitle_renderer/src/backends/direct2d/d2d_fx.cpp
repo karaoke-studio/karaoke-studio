@@ -29,6 +29,7 @@ constexpr float kFallInitialV = 0.20f;
 constexpr float kFallStartMin = 0.55f;
 constexpr float kFallStartSpan = 0.45f;
 constexpr float kFallSpeedFadeStart = 0.55f;
+constexpr float kFallEntryPreroll = 0.20f;
 inline float fallProgress(float p) {
     const float v = std::clamp(p, 0.0f, 1.0f);
     return (kFallInitialV - 2.0f) * v * v * v
@@ -809,12 +810,18 @@ std::vector<FxParticle> burstParticlesAt(
             ) % particleCount;
             const float delay = spawn * life
                 * (burst.sweep == 0 ? kFallSpawnSpreadSing : kFallSpawnSpread);
-            const float p = std::clamp(
+            if (tau < delay) {
+                continue;
+            }
+            const float base = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
                 0.0f,
                 1.0f
             );
+            const float p = burst.sweep > 0
+                ? kFallEntryPreroll + (1.0f - kFallEntryPreroll) * base
+                : base;
             if (p <= 0.0f) {
                 continue;
             }
@@ -917,12 +924,18 @@ std::vector<FxParticle> burstParticlesAt(
             ) % particleCount;
             const float delay = spawn * life
                 * (burst.sweep == 0 ? kFallSpawnSpreadSing : kFallSpawnSpread);
-            const float p = std::clamp(
+            if (tau < delay) {
+                continue;
+            }
+            const float base = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
                 0.0f,
                 1.0f
             );
+            const float p = burst.sweep > 0
+                ? kFallEntryPreroll + (1.0f - kFallEntryPreroll) * base
+                : base;
             if (p <= 0.0f) {
                 continue;
             }
@@ -1033,12 +1046,18 @@ std::vector<FxParticle> burstParticlesAt(
             ) % particleCount;
             const float delay = spawn * life
                 * (burst.sweep == 0 ? kFallSpawnSpreadSing : kFallSpawnSpread);
-            const float p = std::clamp(
+            if (tau < delay) {
+                continue;
+            }
+            const float base = std::clamp(
                 (tau - delay)
                     / std::max(static_cast<float>(life) - delay, 1.0f),
                 0.0f,
                 1.0f
             );
+            const float p = burst.sweep > 0
+                ? kFallEntryPreroll + (1.0f - kFallEntryPreroll) * base
+                : base;
             if (p <= 0.0f) {
                 continue;
             }

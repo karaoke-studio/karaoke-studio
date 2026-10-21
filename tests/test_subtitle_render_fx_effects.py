@@ -4620,6 +4620,28 @@ def test_falling_particles_move_from_birth_and_exit_spawns_upper():
     assert max(s.size_px for s in states) <= 55.0
 
 
+def test_falling_entry_prerolls_before_text_fade():
+    """入场粒子预滚 20% 寿命：同一时刻入场粒子已比唱字档下落更深，
+    看起来是粒子先动、文字再逐字渐显；唱字档不预滚。"""
+    for kind, life in (("petal", 1500), ("snow", 1500), ("feather", 1700)):
+        entry = {
+            "kind": kind, "anchor": "char", "char_index": 0,
+            "start_ms": 0, "end_ms": life, "count": 20, "seed": 2468,
+            "size_px": 30.0, "travel_px": 0.0, "front": True, "sweep": 1,
+        }
+        sing = {**entry, "sweep": 0}
+        early_entry = burst_particles_at(
+            entry, 100, 0.0, 0.0, 120.0, 100.0
+        )
+        early_sing = burst_particles_at(
+            sing, 100, 0.0, 0.0, 120.0, 100.0
+        )
+        assert early_entry and early_sing, kind
+        assert max(s.y for s in early_entry) > max(
+            s.y for s in early_sing
+        ) + 5.0, kind
+
+
 def test_falling_velocity_converges_to_zero_at_landing():
     """汇聚式下落曲线：初速 0.2、先加速，接近落点减速到 0；落点速度
     为 0，便于按速度渐隐。"""
