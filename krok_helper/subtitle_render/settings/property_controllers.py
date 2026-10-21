@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Callable, Optional
+from uuid import uuid4
 
 from krok_helper.subtitle_render.domain.models import (
     DecorationKind,
@@ -18,7 +19,6 @@ from krok_helper.subtitle_render.domain.models import (
     Style,
     StylePreset,
     SubtitleStyleScheme,
-    TITLE_LAYOUT_NAME,
     TITLE_SCHEME_NAME,
     TITLE_SHOW_MODES,
     TitleOverlay,
@@ -807,29 +807,53 @@ class LayoutCatalogController:
         return changes
 
     @staticmethod
-    def restore_changes(style: Style, layout_id: str) -> dict:
-        """把一个出厂预设移出隐藏清单，交由 ``ensure_page_layout_defaults`` 补种。"""
-        target = str(layout_id).strip()
-        hidden = [
-            str(value)
+    def import_changes(style: Style, layout: LyricsLayout) -> tuple[dict, int]:
+        """把一条布局库预设载入当前工程目录，返回 (changes, 选中 index)。
+
+        同名条目替换内容但**保留工程侧 ``layout_id``**——页面计划
+        （``page_plan``）与标题引用按 id / index 落位，换内容不换身份才能
+        不打断引用。异名追加时 id 冲突（或留空）改发新 id；载入的出厂
+        预设同时移出工程隐藏清单（恢复被删预设的同一条路径）。
+        """
+
+        incoming = deepcopy(layout)
+        name = str(incoming.name or "").strip() or "布局"
+        layouts = list(style.layouts)
+        matched = next(
+            (
+                position
+                for position, existing in enumerate(layouts)
+                if existing.name == name
+            ),
+            None,
+        )
+        if matched is not None:
+            kept_id = str(layouts[matched].layout_id or "").strip()
+            placed_id = kept_id or str(incoming.layout_id or "").strip()
+            layouts[matched] = replace(incoming, name=name, layout_id=placed_id)
+            selected = matched + 1
+        else:
+            used_ids = {str(existing.layout_id or "") for existing in layouts}
+            placed_id = str(incoming.layout_id or "").strip()
+            # 空 / 保留 id（``default`` 是 Style 自身）/ 已占用 → 改发新 id。
+            # 改发后落位 id 不再是出厂 id，下方也不动隐藏清单——否则 ensure
+            # 会把工程里仍隐藏的同 id 出厂预设补种回来。
+            if not placed_id or placed_id == "default" or placed_id in used_ids:
+                placed_id = f"layout-{uuid4().hex}"
+            layouts.append(replace(incoming, name=name, layout_id=placed_id))
+            selected = len(layouts)
+        changes: dict = {"layouts": layouts}
+        removed_hidden = [
+            value
             for value in style.hidden_builtin_layout_ids
-            if str(value) != target
+            if value != placed_id
         ]
-        if len(hidden) == len(style.hidden_builtin_layout_ids):
-            return {}
-        return {"hidden_builtin_layout_ids": hidden}
-
-
-def builtin_preset_display_name(layout_id: str) -> str:
-    """出厂预设 id 的显示名（恢复菜单等 UI 用）；未知 id 原样返回。"""
-    text = str(layout_id).strip()
-    if text == "title-default":
-        return TITLE_LAYOUT_NAME
-    if text.startswith("builtin-"):
-        rows = text.removeprefix("builtin-")
-        if rows.isdigit() and 1 <= int(rows) <= 8:
-            return f"{int(rows)} 行布局"
-    return text
+        if (
+            placed_id in _BUILTIN_LAYOUT_PRESET_IDS
+            and len(removed_hidden) != len(style.hidden_builtin_layout_ids)
+        ):
+            changes["hidden_builtin_layout_ids"] = removed_hidden
+        return changes, selected
 
 
 class TitleOverlaysController:

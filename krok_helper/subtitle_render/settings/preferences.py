@@ -18,6 +18,15 @@ from krok_helper.subtitle_render.engine.export.encoder_select import (
     normalize_video_bitrate_mbps,
 )
 from krok_helper.subtitle_render.serialization.compat import merge_extensible_value
+from krok_helper.subtitle_render.settings.layout_presets import (
+    LayoutPreset,
+    default_layout_presets,
+    layout_presets_from_dict,
+    layout_presets_to_dict,
+    merge_layout_preset_library,
+    migrated_layout_presets,
+    style_for_new_project,
+)
 from krok_helper.subtitle_render.domain.models import (
     LYRICS_LAYOUT_FIELDS,
     PRESET_REFERENCE_HEIGHT,
@@ -155,6 +164,12 @@ class LoadedAppStylePreferences:
     style: Style
     layout_assignment: Optional[dict]
     changed: bool
+    title_layout_name: Optional[str] = None
+    """记忆的新建工程标题布局名（``new_project_defaults.title_layout_name``）。
+
+    可指向仅存在于布局预设库的布局——index 空间解析不到它，物化新建工程
+    时按这个名字在预设库里解析。键缺失（旧版 / 全新安装）时为 ``None``。
+    """
 
 
 @dataclass(frozen=True)
@@ -191,6 +206,7 @@ class LoadedAppPreferences:
     auto_chorus_auto_apply: bool
     guide_replacement: dict
     style_presets: dict[str, StylePreset]
+    layout_presets: list[LayoutPreset]
     screen: ScreenSettings
     selected_scheme_key: str
     preview_splitter_ratio: float
@@ -198,6 +214,8 @@ class LoadedAppPreferences:
     auto_save_interval_minutes: int
     project_backup_count: int
     changed: bool
+    title_layout_name: Optional[str] = None
+    """记忆的新建工程标题布局名（透传自 ``new_project_defaults``）。"""
 
 
 @dataclass(frozen=True)
@@ -250,6 +268,25 @@ class AppPreferenceSaveInput:
     style_presets_baseline: Optional[dict] = None
     """本实例上次见到的磁盘预设库；给出后只提交自己的增量，见
     :func:`merge_style_preset_library`。``None`` 保持整份覆盖的旧行为。"""
+    layout_presets: Optional[list[LayoutPreset]] = None
+    """布局预设库当前内容；``None`` 保持磁盘现值不动。"""
+    layout_presets_baseline: Optional[list[LayoutPreset]] = None
+    """本实例上次见到的磁盘布局库；给出后只提交自己的增量（多实例共享库），
+    ``None`` 保持整份覆盖（旧行为）。"""
+    cleared_layout_rows: tuple[int, ...] = ()
+    """本实例刚把哪些行数档位显式保存为「全局默认布局」。
+
+    这些档位的行数接线要跨实例清空：别的实例新增的同档位接线本实例并不
+    知道，只清本地已知条目的话，物化时它仍会盖掉全局默认。"""
+    asserted_layout_rows: Optional[dict[int, str]] = None
+    """本实例刚在布局页显式指定的「行数 → 预设 id」默认布局。
+
+    与旧基线值可能相同，不能靠差异判断；给出后合并器无条件把该档位指向
+    该预设（并清掉同档位的其他接线）。"""
+    title_layout_name: Optional[str] = None
+    """记忆的新建工程标题布局名；给出时覆盖 index 推导的名字（可指向仅在
+    布局预设库中的布局），``None`` 时按 ``app_default_style`` 的标题 index
+    推导（旧行为）。"""
 
 
 @dataclass(frozen=True)
@@ -260,6 +297,9 @@ class PreparedAppPreferences:
     app_default_style: Style
     style_presets: dict = field(default_factory=dict)
     """磁盘与本实例增量合并后的预设库；调用方应据此更新自己的内存与基线。"""
+    layout_presets: Optional[list[LayoutPreset]] = None
+    """规范化后的布局预设库；输入为 ``None``（本次未提供）时为 ``None``，
+    调用方应保留自己的内存现值。"""
 
 
 def load_app_runtime_preferences(
@@ -466,10 +506,22 @@ def load_app_style_preferences(
         return seeded if seeded > 0 else int(TitleOverlay().layout_index or 0)
 
     if "title_layout_name" in defaults:
-        title_layout_index = _layout_index_for_name(
-            normalized_style,
-            defaults.get("title_layout_name"),
-        )
+        raw_title_name = defaults.get("title_layout_name")
+        if isinstance(raw_title_name, str) and raw_title_name:
+            title_layout_index = _layout_index_for_name(
+                normalized_style,
+                raw_title_name,
+            )
+            if title_layout_index <= 0:
+                # 记忆的布局名不在旧库（升级迁移冻结的目录）里：与悬空标题引用
+                # 同口径，回落出厂「タイトル左上」，而不是让标题挂到全局默认
+                # 布局（index 0）。记忆名本身经 title_layout_name 原样保留，
+                # 新建工程物化时按名在预设库里再解析一次。
+                title_layout_index = _default_title_layout_index(normalized_style)
+        else:
+            # 记忆为「全局默认布局」（index 0，保存时名字为 None）：显式保留
+            # index 0，不做出厂回落——否则用户选的默认布局习惯会被冲掉。
+            title_layout_index = 0
     elif had_persisted_title:
         title_layout_index = int(legacy_title.layout_index or 0)
     else:
@@ -520,10 +572,16 @@ def load_app_style_preferences(
         if isinstance(assignment, dict) and assignment.get("mode") in {"all", "auto"}
         else None
     )
+    remembered_title_layout = defaults.get("title_layout_name")
     return LoadedAppStylePreferences(
         style=app_default_style,
         layout_assignment=layout_assignment,
         changed=changed,
+        title_layout_name=(
+            remembered_title_layout
+            if isinstance(remembered_title_layout, str) and remembered_title_layout
+            else None
+        ),
     )
 
 
@@ -703,10 +761,12 @@ def prepare_app_preferences(
         else {}
     )
     new_project_defaults["title_enabled"] = bool(default_title.enabled)
-    new_project_defaults["title_layout_name"] = _layout_name_for_index(
-        app_default_style,
-        default_title.layout_index,
+    remembered_title_name = (
+        values.title_layout_name
+        if isinstance(values.title_layout_name, str) and values.title_layout_name
+        else _layout_name_for_index(app_default_style, default_title.layout_index)
     )
+    new_project_defaults["title_layout_name"] = remembered_title_name
     new_project_defaults["title_scheme_name"] = (
         default_title.scheme_name
         if isinstance(default_title.scheme_name, str) and default_title.scheme_name
@@ -750,6 +810,27 @@ def prepare_app_preferences(
         )
         data["style_presets"] = rows
         merged_presets = style_presets_from_dict(rows)
+    if values.layout_presets is not None:
+        if values.layout_presets_baseline is None:
+            data["layout_presets"] = layout_presets_to_dict(values.layout_presets)
+        else:
+            # 布局库是多实例共享的：与样式预设库同口径，只提交本实例的
+            # 增量，别把别的实例新增的条目整库覆盖掉。
+            data["layout_presets"] = merge_layout_preset_library(
+                data.get("layout_presets"),
+                values.layout_presets,
+                values.layout_presets_baseline,
+                cleared_rows=values.cleared_layout_rows,
+                asserted_rows=values.asserted_layout_rows,
+            )
+        # 迁移闸门一并落盘：之后即使 layout_presets 键被外部清掉，也不会
+        # 再回放升级迁移（缺键 + 闸门为真 = 出厂库）。
+        data["layout_presets_migrated"] = True
+    merged_layout_presets = (
+        layout_presets_from_dict(data.get("layout_presets"))
+        if values.layout_presets is not None
+        else None
+    )
     data["screen"] = merge_app_setting_field(
         data.get("screen"),
         values.screen,
@@ -795,6 +876,7 @@ def prepare_app_preferences(
         data=data,
         app_default_style=app_default_style,
         style_presets=merged_presets,
+        layout_presets=merged_layout_presets,
     )
 
 
@@ -985,8 +1067,6 @@ def load_app_preferences(
     loaded_style = load_app_style_preferences(data, font_catalog=catalog)
     app_default_style = deepcopy(loaded_style.style)
     screen = screen_settings_from_dict(data.get("screen"))
-    project_style = rescale_layout_sizes(deepcopy(loaded_style.style), screen.height)
-    project_style = rescale_font_sizes(project_style, screen.height)
 
     style_presets: dict[str, StylePreset] = {}
     presets_changed = False
@@ -994,6 +1074,33 @@ def load_app_preferences(
         scheme, changed = normalize_scheme_font_families(preset.scheme, catalog)
         style_presets[name] = replace(preset, scheme=scheme) if changed else preset
         presets_changed |= changed
+
+    # 布局预设库三态：正常读回 / 缺键但迁移闸门已置（重置等路径 → 出厂库，
+    # 不回放迁移）/ 缺键且未迁移（一次性升级迁移：旧隐形库全量转入并全部
+    # 默认加载）。迁移与出厂兜底都置 changed，让调用方落盘。
+    raw_layout_presets = data.get("layout_presets")
+    if isinstance(raw_layout_presets, list):
+        layout_presets = layout_presets_from_dict(raw_layout_presets)
+    elif data.get("layout_presets_migrated"):
+        layout_presets = default_layout_presets()
+        presets_changed = True
+    else:
+        layout_presets = migrated_layout_presets(app_default_style)
+        presets_changed = True
+
+    # 启动工作区种子与「新建工程」同一口径：从预设库物化（勾选默认加载的
+    # 条目 + 出厂隐藏清单 + 标题记忆名重定位），再按画布高度重缩放——
+    # 否则预设库清空/收敛后启动仍会出现旧库目录，与新建工程不一致。
+    workspace_style = style_for_new_project(
+        app_default_style,
+        layout_presets,
+        title_layout_name=loaded_style.title_layout_name,
+    )
+    project_style = rescale_layout_sizes(workspace_style, screen.height)
+    project_style = rescale_font_sizes(project_style, screen.height)
+    # 再过一次与工程装配相同的序列化往返（_migrate_title_references 等
+    # 装载迁移在此物化），保证启动工作区与「新建工程」的目录逐条一致。
+    project_style = style_from_dict(style_to_dict(project_style))
 
     return LoadedAppPreferences(
         subtitle_loading_defaults=subtitle_loading_settings_from_dict(
@@ -1014,6 +1121,7 @@ def load_app_preferences(
         auto_chorus_auto_apply=runtime.auto_chorus_auto_apply,
         guide_replacement=deepcopy(runtime.guide_replacement),
         style_presets=style_presets,
+        layout_presets=layout_presets,
         screen=screen,
         selected_scheme_key=runtime.selected_scheme_key,
         preview_splitter_ratio=runtime.preview_splitter_ratio,
@@ -1021,4 +1129,5 @@ def load_app_preferences(
         auto_save_interval_minutes=runtime.auto_save_interval_minutes,
         project_backup_count=runtime.project_backup_count,
         changed=loaded_style.changed or presets_changed,
+        title_layout_name=loaded_style.title_layout_name,
     )
