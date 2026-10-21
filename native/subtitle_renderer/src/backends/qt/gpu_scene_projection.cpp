@@ -719,6 +719,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 || animation == QStringLiteral("petal")
                 || animation == QStringLiteral("snow")
                 || animation == QStringLiteral("snow_solid")
+                || animation == QStringLiteral("feather")
+                || animation == QStringLiteral("lightning")
             );
         };
         line.entryAnimation = verticalCharacterAnimation(sourceLine.entryAnimation)

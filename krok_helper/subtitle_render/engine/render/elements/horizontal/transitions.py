@@ -623,7 +623,10 @@ def _geo_char_state(
             return 1.0 - q, 0.0, 0.0, 0.0, 1.0 + 2.2 * q, 1.0, 0.0
         return min(raw * 4.0, 1.0), 0.0, 0.0, 0.0, 1.0 + 2.2 * (1.0 - q), 1.0, 0.0
 
-    if transition.effect in {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid"}:
+    if transition.effect in {
+        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+        "feather", "lightning",
+    }:
         # 粒子类出入场动画的本体：文字逐字显形（入场 4 倍速透明度，
         # 粒子拼接同款编排），退场逐字淡出；粒子由 planner 叠加。
         p = _stagger_progress()

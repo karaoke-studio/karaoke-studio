@@ -4155,3 +4155,282 @@ def test_front_particles_paint_after_ruby_layer():
         " rubyIndex < line->rubies.size(); ++rubyIndex)"
     )
     assert front_call > ruby_loop
+
+
+# ---------------------------------------------------------------------------
+# 2026-10 羽毛（AE 漂浮表达式）与闪电（AE Advanced Lightning）：
+# 入场 / 退场 / 唱字三档，sprite 契约、规划时序与双端共用轨迹公式。
+# ---------------------------------------------------------------------------
+
+
+def _sprite_outline_points(commands):
+    """sprite 命令的轮廓顶点（含贝塞尔/二次曲线的端点）。"""
+    points = []
+    for command in commands:
+        if command[0] in {"M", "L"}:
+            points.append((float(command[1]), float(command[2])))
+        elif command[0] == "C":
+            points.append((float(command[5]), float(command[6])))
+        elif command[0] == "Q":
+            points.append((float(command[3]), float(command[4])))
+    return points
+
+
+def test_feather_sprite_contract():
+    """羽毛 sprite：单闭环、无自交叠；上尖下羽轴（窄），中段羽片（宽）。"""
+    commands = FX_SPRITES["feather"]["path_commands"]
+    assert commands[0][0] == "M" and commands[-1][0] == "Z"
+    loops = _sprite_loops(commands)
+    assert len(loops) == 1
+    # 曲线端点参与自交检查（弦近似对羽毛的凸轮廓足够）。
+    assert _sprite_loop_intersections([_sprite_outline_points(commands)]) == 0
+    points = _sprite_outline_points(commands)
+    assert min(y for _x, y in points) < -480
+    assert max(y for _x, y in points) > 490
+    quill = [x for x, y in points if y > 340]
+    assert quill and max(quill) - min(quill) < 120
+    vane = [x for x, y in points if -300 < y < 200]
+    assert max(vane) - min(vane) > 330
+    assert sprite_for_kind("feather") == "feather"
+
+
+def test_lightning_sprite_contract():
+    """闪电 sprite：并集后单外环、无自交叠；全长 ±500，左右均有分叉。"""
+    commands = FX_SPRITES["bolt"]["path_commands"]
+    loops = _sprite_loops(commands)
+    assert len(loops) == 1
+    assert _sprite_loop_intersections(loops) == 0
+    points = loops[0]
+    assert max(y for _x, y in points) - min(y for _x, y in points) >= 990.0
+    assert min(x for x, _y in points) < -220.0
+    assert max(x for x, _y in points) > 190.0
+
+    # even-odd（QPainter）与 winding（D2D）两种填充规则逐点一致。
+    for gx in range(-30, 31, 3):
+        for gy in range(-50, 51, 5):
+            point = (gx * 10.0, gy * 10.0)
+            parity = sum(1 for loop in loops if _sprite_loop_contains(point, loop))
+            winding = sum(
+                (1 if _sprite_loop_area(loop) > 0.0 else -1)
+                for loop in loops
+                if _sprite_loop_contains(point, loop)
+            )
+            assert (parity % 2 == 1) == (winding != 0), point
+
+    def filled(point):
+        return sum(
+            1 for loop in loops if _sprite_loop_contains(point, loop)
+        ) % 2 == 1
+
+    assert filled((-36.0, -410.0))  # 主干第一段
+    assert filled((26.0, -170.0))  # 折点附近
+    assert not filled((420.0, 420.0))
+    assert sprite_for_kind("lightning") == "bolt"
+    assert sprite_for_kind("lightning_glow") == "bolt"
+
+
+def test_plan_feather_entry_exit_sing():
+    """羽毛三档：固定标准窗（3 颗/字）、白+暖米白双色、1700ms 慢落；
+    退场尾奏终点覆盖完整寿命 + 逐字偏移。"""
+    style = Style(
+        entry_anim="feather", entry_lead_ms=600,
+        exit_anim="feather", exit_fade_ms=600,
+        sing_fx="feather", fx_particle_count=14,
+        font_size_px=100, karaoke_anim="none",
+    )
+    bursts = plan_line_bursts(
+        style, 0, 1000, 4200, 4100,
+        [(1200, 1600), (1600, 2000), (2000, 3000)],
+    )
+    entry = [b for b in bursts if b["sweep"] == 1]
+    assert len(entry) == 6  # 3 字 × 2 色变体
+    assert {b["start_ms"] for b in entry} == {971, 1179, 1286}
+    assert {b["end_ms"] for b in entry} == {2671, 2879, 2986}
+    assert {b["color"] for b in entry} == {"#FFFFFF", "#FFF1D6"}
+    assert sorted({b["count"] for b in entry}) == [1, 2]  # 3 颗拆双色
+    assert all(b["size_px"] == 40.0 for b in entry)
+
+    exit_bursts = [b for b in bursts if b["sweep"] == -1]
+    assert len(exit_bursts) == 6
+    assert {b["start_ms"] for b in exit_bursts} == {4071, 4279, 4386}
+    assert {b["end_ms"] for b in exit_bursts} == {5771, 5979, 6086}
+
+    sing = [b for b in bursts if b["sweep"] == 0]
+    assert len(sing) == 3
+    assert [b["start_ms"] for b in sing] == [1200, 1600, 2000]
+    assert all(b["count"] == 4 for b in sing)
+    assert all(b["end_ms"] - b["start_ms"] == 1700 for b in sing)
+    assert exit_particle_tail_end_ms("feather", 3, 4100, 4200) == 6228
+
+
+def test_plan_lightning_entry_exit_sing():
+    """闪电三档：每字窗口多次重击、核心前置 + 放大暗色辉光垫后，位置
+    由同一 seed/公式决定；唱字窗口随字长延伸（上限 1.2s）。"""
+    style = Style(
+        entry_anim="lightning", entry_lead_ms=600,
+        exit_anim="lightning", exit_fade_ms=600,
+        sing_fx="lightning", fx_particle_count=14,
+        font_size_px=100, karaoke_anim="none",
+    )
+    bursts = plan_line_bursts(
+        style, 0, 1000, 4200, 4100,
+        [(1200, 1600), (1600, 2000), (2000, 3000)],
+    )
+    core = [b for b in bursts if b["kind"] == "lightning"]
+    glow = [b for b in bursts if b["kind"] == "lightning_glow"]
+    assert len(core) == len(glow) == 18
+    assert all(b["front"] for b in core)
+    assert all(not b["front"] for b in glow)
+    assert {b["color"] for b in core} == {"#F2FDFF", "#6FD3FF"}
+
+    entry_core = [
+        b for b in core
+        if b["end_ms"] - b["start_ms"] == 520 and b["start_ms"] < 3000
+    ]
+    assert {b["start_ms"] for b in entry_core} == {971, 1179, 1286}
+    assert {b["end_ms"] for b in entry_core} == {1491, 1699, 1806}
+    assert all(b["size_px"] == pytest.approx(128.0) for b in entry_core)
+    assert all(b["count"] in {3, 4} for b in entry_core)  # 7 次重击拆双色
+
+    glow_by_seed = {
+        b["seed"]: b
+        for b in glow
+        if b["end_ms"] - b["start_ms"] == 520 and b["start_ms"] < 3000
+    }
+    for burst in entry_core:
+        twin = glow_by_seed[burst["seed"]]
+        assert twin["size_px"] == pytest.approx(burst["size_px"] * 1.35)
+        assert twin["count"] == burst["count"]
+        assert twin["start_ms"] == burst["start_ms"]
+        assert twin["end_ms"] == burst["end_ms"]
+
+    exit_core = [
+        b for b in core
+        if b["end_ms"] - b["start_ms"] == 520 and b["start_ms"] >= 3000
+    ]
+    assert {b["start_ms"] for b in exit_core} == {4071, 4279, 4386}
+    assert {b["end_ms"] for b in exit_core} == {4591, 4799, 4906}
+
+    sing_core = [b for b in core if b["end_ms"] - b["start_ms"] != 520]
+    assert {b["start_ms"] for b in sing_core} == {1200, 1600, 2000}
+    lifetimes = {
+        b["start_ms"]: b["end_ms"] - b["start_ms"] for b in sing_core
+    }
+    assert lifetimes == {1200: 400, 1600: 400, 2000: 1000}
+    assert all(b["count"] in {2, 2} for b in sing_core)  # 4 颗拆双色
+    assert exit_particle_tail_end_ms("lightning", 3, 4100, 4200) == 5048
+
+
+def test_feather_trajectory_bounds_and_flutter():
+    """羽毛轨迹：窗口外空、确定性；入场单调下落到底（≥字底），横向
+    钟摆 + 羽片压扁（stretch_x ∈ [0.55,1]），前 80% 不透明度保持。"""
+    burst = {
+        "kind": "feather", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 1700, "count": 6, "seed": 24680,
+        "size_px": 40.0, "travel_px": 0.0, "front": True, "sweep": 1,
+    }
+    assert burst_particles_at(burst, -1, 0.0, 0.0, 120.0, 100.0) == []
+    assert burst_particles_at(burst, 1701, 0.0, 0.0, 120.0, 100.0) == []
+    early = burst_particles_at(burst, 300, 0.0, 0.0, 120.0, 100.0)
+    assert early == burst_particles_at(burst, 300, 0.0, 0.0, 120.0, 100.0)
+    late = burst_particles_at(burst, 1600, 0.0, 0.0, 120.0, 100.0)
+    assert len(early) == len(late) == 6
+    for before, after in zip(early, late):
+        assert after.y > before.y  # 入场单调下落
+        assert 0.55 <= before.stretch_x <= 1.0
+        assert 0.55 <= after.stretch_x <= 1.0
+    assert min(s.y for s in late) > 40.0  # 已落到字底附近
+    hold = burst_particles_at(burst, 1300, 0.0, 0.0, 120.0, 100.0)
+    assert hold and min(s.alpha for s in hold) > 0.5
+    for state in early + late:
+        assert 0.0 < state.alpha <= 1.0
+        assert state.size_px > 0.0
+
+
+def test_lightning_core_and_glow_share_trajectory():
+    """核心 bolt 与辉光副本：同 seed/时间下位置、旋转、尺寸比例逐颗
+    重合；辉光透明度 = 核心 × 0.22（只差亮度，不会错位）。"""
+    core_burst = {
+        "kind": "lightning", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 520, "count": 6, "seed": 13579,
+        "size_px": 128.0, "travel_px": 0.0, "front": True, "sweep": 0,
+    }
+    glow_burst = {
+        **core_burst, "kind": "lightning_glow", "size_px": 172.8,
+        "front": False,
+    }
+    assert burst_particles_at(core_burst, 521, 0.0, 0.0, 120.0, 100.0) == []
+    sampled = False
+    for t_ms in (80, 160, 240, 320, 400):
+        core = burst_particles_at(core_burst, t_ms, 0.0, 0.0, 120.0, 100.0)
+        glow = burst_particles_at(glow_burst, t_ms, 0.0, 0.0, 120.0, 100.0)
+        assert len(core) == len(glow)
+        for one, two in zip(core, glow):
+            assert two.x == pytest.approx(one.x)
+            assert two.y == pytest.approx(one.y)
+            assert two.rotation_deg == pytest.approx(one.rotation_deg)
+            assert two.size_px == pytest.approx(one.size_px * 1.35)
+            assert two.alpha == pytest.approx(one.alpha * 0.22)
+            assert 0.0 < one.alpha <= 1.0
+            sampled = True
+    assert sampled
+
+
+@pytest.mark.parametrize("kind", ["feather", "lightning"])
+def test_feather_lightning_gpu_support_and_override_roundtrip(kind):
+    """新档位不触发 GPU 整帧回退；逐行覆盖可往返序列化。"""
+    track = type("Track", (), {"lines": []})()
+    style = Style(
+        entry_anim=kind,
+        exit_anim=kind,
+        sing_fx=kind,
+        karaoke_anim="inherit",
+        reverse_karaoke_anim="inherit",
+    )
+    assert gpu_unsupported_features(track, style) == ()
+    data = line_animation_override_to_dict(
+        LineAnimationOverride(entry_anim=kind, exit_anim=kind, sing_fx=kind)
+    )
+    restored = line_animation_override_from_dict(data)
+    assert restored is not None
+    assert restored.entry_anim == kind
+    assert restored.exit_anim == kind
+    assert restored.sing_fx == kind
+
+
+@pytest.mark.parametrize("kind", ["feather", "lightning"])
+def test_painter_feather_lightning_smoke(qapp, kind):
+    """CPU painter 新档位冒烟：唱字与入场各画一帧不抛异常。"""
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="あ", start_ms=1000),
+                    TimingChar(text="い", start_ms=1600),
+                ],
+                end_ms=2200,
+            )
+        ]
+    )
+    sing = Style(
+        sing_fx=kind,
+        karaoke_anim="utopia",
+        fx_particle_size_em=0.6,
+        fx_particle_count=8,
+    )
+    img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0xFF101010)
+    paint_frame(img, track, 1300, sing)
+    entry = Style(
+        entry_anim=kind,
+        entry_lead_ms=600,
+        karaoke_anim="utopia",
+    )
+    img2 = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    img2.fill(0xFF101010)
+    paint_frame(img2, track, 1100, entry)

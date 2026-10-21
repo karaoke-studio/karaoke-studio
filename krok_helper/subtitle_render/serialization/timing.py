@@ -152,11 +152,11 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
     exit_ = value.get("exit_anim")
     valid_entry = {
         "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-        "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
+        "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "feather", "lightning",
     }
     valid_exit = {
         "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
-        "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
+        "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "feather", "lightning",
     }
     if entry not in valid_entry or exit_ not in valid_exit:
         return None
@@ -177,7 +177,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
     sing_fx = value.get("sing_fx")
     if sing_fx not in {
         "inherit", "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow", "snow_solid",
-        "flame",
+        "flame", "feather", "lightning",
     }:
         sing_fx = "inherit"
     return LineAnimationOverride(

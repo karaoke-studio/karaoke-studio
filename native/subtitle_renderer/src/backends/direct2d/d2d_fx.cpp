@@ -18,6 +18,10 @@ constexpr float kConvergeShrink = 0.2f;
 //（专门的播放时间，窗口判定同 char_fade 的 600ms）。
 constexpr int kCharFadeIntroDelayMs = 350;
 constexpr int kCharFadeInOutTimeMs = 250;
+// 羽毛/闪电（镜像 particles.py FEATHER_FADE_START /
+// LIGHTNING_GLOW_ALPHA）。
+constexpr float kFeatherFadeStart = 0.80f;
+constexpr float kLightningGlowAlpha = 0.22f;
 
 float clampedRatio(int elapsedMs, int durationMs) {
     if (durationMs <= 0) {
@@ -210,7 +214,8 @@ GeoCharState geoCharState(
     }
     if (effect == "sparkle" || effect == "ripple" || effect == "note"
         || effect == "heart" || effect == "petal"
-        || effect == "snow" || effect == "snow_solid") {
+        || effect == "snow" || effect == "snow_solid"
+        || effect == "feather" || effect == "lightning") {
         // 粒子类出入场动画的本体：文字逐字显形（入场 4 倍速透明度，
         // 粒子拼接同款编排），退场逐字淡出；粒子由 planner 叠加。
         const float p = staggerProgress;
@@ -548,6 +553,41 @@ std::vector<FxParticle> burstParticlesAt(
                 1.0f,
                 1.0f + 0.25f * p,
             });
+        } else if (burst.kind == "lightning" || burst.kind == "lightning_glow") {
+            // 闪电（镜像 particles.burst_particles_at lightning 分支）：
+            // 每颗=一次 100~240ms 的短放电，窗口内随机时刻重击；几乎不
+            // 位移、小角度倾斜，alpha 快速点亮→高频频闪→熄灭。核心
+            // bolt 在前；同轨迹放大副本（lightning_glow）在后当辉光。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float birth = u3 * life * 0.72f;
+            const float lifeI = std::min(
+                100.0f + 140.0f * u4,
+                std::max(static_cast<float>(life) - birth, 1.0f)
+            );
+            const float p = (tau - birth) / lifeI;
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            const float strobe = 0.55f + 0.45f * std::abs(
+                std::sin((p * 2.6f + u5 * 2.0f) * pi)
+            );
+            float alpha = std::min(p / 0.08f, 1.0f)
+                * std::pow(1.0f - p, 0.65f) * strobe;
+            if (burst.kind == "lightning_glow") {
+                alpha *= kLightningGlowAlpha;
+            }
+            out.push_back(FxParticle{
+                originX + (u1 - 0.5f) * boxW * 1.10f,
+                originY - boxH * 0.08f + (u2 - 0.5f) * boxH * 0.18f,
+                (u4 - 0.5f) * 14.0f,
+                size * (0.90f + 0.10f * std::sin(pi * p)),
+                alpha,
+            });
         } else if (burst.kind == "ember") {
             // 余烬火星（镜像 particles ember 分支）：小圆点快速上蹿、
             // 受“重力”减速、横向漂移 + 双频摆动 + 高频闪烁。
@@ -683,6 +723,92 @@ std::vector<FxParticle> burstParticlesAt(
                     spin,
                     sizeI * (0.85f + 0.15f * std::sin(pi * p)),
                     std::min(p * 5.0f, 1.0f) * std::sin(pi * p),
+                });
+            }
+        } else if (burst.kind == "feather") {
+            // 羽毛（镜像 particles.burst_particles_at feather 分支）：
+            // AE 漂浮表达式同款钟摆横摆 + 缓慢下落 + 连续自转，并用
+            // stretchX 做 0.55~1.0 的周期性压扁（羽片侧对镜头）。
+            // sweep>0 飘入落到字底、sweep<0 飘散向右下、sweep==0 唱字缓沉。
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            constexpr float pi = 3.14159265358979323846f;
+            const float delay = u3 * 140.0f;
+            const float p = std::clamp(
+                (tau - delay)
+                    / std::max(static_cast<float>(life) - delay, 1.0f),
+                0.0f,
+                1.0f
+            );
+            if (p <= 0.0f) {
+                continue;
+            }
+            const float sway = std::sin(
+                (u2 + p * (0.55f + 0.50f * u5)) * 2.0f * pi
+            ) * size * (1.00f + 0.80f * u4);
+            const float sizeI = size * (0.85f + 0.40f * u4);
+            const float spin = u3 * 360.0f
+                + p * (120.0f + 240.0f * u5)
+                    * (u4 >= 0.5f ? 1.0f : -1.0f);
+            const float flutter = 0.55f + 0.45f * std::abs(
+                std::cos((p * 1.5f + u5) * pi)
+            );
+            const float holdFade = p <= kFeatherFadeStart
+                ? 1.0f
+                : std::pow(
+                    std::max(
+                        (1.0f - p) / (1.0f - kFeatherFadeStart), 0.0f
+                    ),
+                    1.2f
+                );
+            if (burst.sweep > 0) {
+                // 羽毛飘入：ease-out 减速降落，落点压到字底
+                //（0.42~0.60 box_h），自字顶上方 0.75~1.05 box_h 起飘。
+                const float eased = 1.0f - (1.0f - p) * (1.0f - p);
+                const float landX = (u1 - 0.5f) * boxW * 0.90f;
+                const float landY = (0.42f + 0.18f * u4) * boxH;
+                const float startX = landX + (u5 - 0.5f) * boxW * 0.80f;
+                const float startY = -(0.75f + 0.30f * u2) * boxH;
+                out.push_back(FxParticle{
+                    originX + startX + (landX - startX) * eased + sway,
+                    originY + startY + (landY - startY) * eased,
+                    spin,
+                    sizeI * (0.90f + 0.10f * std::sin(pi * p)),
+                    std::min(p * 4.0f, 1.0f) * holdFade,
+                    flutter,
+                    1.0f,
+                });
+            } else if (burst.sweep < 0) {
+                // 羽毛飘散：自字框剥落向右下大行程飘走，前 80% 不透明。
+                const float eased = p * p * (3.0f - 2.0f * p);
+                const float startX = (u1 - 0.5f) * boxW * 0.90f;
+                const float endX = startX + (0.25f + 0.70f * u5) * boxW;
+                const float startY = (u4 - 0.5f) * boxH * 0.45f;
+                out.push_back(FxParticle{
+                    originX + startX + (endX - startX) * eased + sway,
+                    originY + startY
+                        + (0.55f + 0.30f * u2) * boxH * eased,
+                    spin,
+                    sizeI * (0.90f + 0.10f * (1.0f - p)),
+                    std::min(p * 4.0f, 1.0f) * holdFade,
+                    flutter,
+                    1.0f,
+                });
+            } else {
+                // 羽毛飘动：字框上半出生，缓沉小行程，sin 包络淡入淡出。
+                const float eased = p * p * (3.0f - 2.0f * p);
+                out.push_back(FxParticle{
+                    originX + (u1 - 0.5f) * boxW * 0.75f + sway,
+                    originY - (0.30f + 0.30f * u4) * boxH
+                        + (0.45f + 0.30f * u2) * boxH * eased,
+                    spin,
+                    sizeI * (0.88f + 0.12f * std::sin(pi * p)),
+                    std::min(p * 5.0f, 1.0f) * std::sin(pi * p),
+                    flutter,
+                    1.0f,
                 });
             }
         } else if (burst.kind == "snow" || burst.kind == "snow_solid") {

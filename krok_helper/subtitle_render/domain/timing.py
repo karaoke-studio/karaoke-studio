@@ -12,13 +12,13 @@ EntryAnimation = Literal[
     "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
     "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
-    "flame",
+    "flame", "feather", "lightning",
 ]
 ExitAnimation = Literal[
     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia",
     "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
-    "flame",
+    "flame", "feather", "lightning",
 ]
 
 # ---- 2026-09 新增线性特效注册表（增删特效只改这里 + transitions.py 求值器） ----
@@ -39,10 +39,12 @@ EXIT_ASSEMBLE_ANIMS: frozenset[str] = frozenset({"dissolve_out"})
 # 粒子类出入场动画（星光闪烁 / 涟漪光环 / 音符飘出 / 花瓣飘入·飘散）：
 # 文字逐字显形/淡出（粒子拼接同款编排）+ 固定默认档粒子叠加。
 ENTRY_PARTICLE_ANIMS: frozenset[str] = frozenset(
-    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame"}
+    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
+     "feather", "lightning"}
 )
 EXIT_PARTICLE_ANIMS: frozenset[str] = frozenset(
-    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame"}
+    {"sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame",
+     "feather", "lightning"}
 )
 # 全部逐字过渡类（含 N3 既有 char_fade 家族 + utopia）：参与
 # line_char_transition_context 的入场/退场窗口判定。
@@ -63,19 +65,19 @@ ExitFx = Literal["none", "sparkle", "ripple"]
 # 闪烁、对称铺满字框），与新版扫过+漂移运动学并存供用户选择。
 SingFx = Literal[
     "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow",
-    "snow_solid", "flame"
+    "snow_solid", "flame", "feather", "lightning"
 ]
 # 逐行唱字装饰粒子覆盖比全局多一档「跟随全局」，语义与 KaraokeAnimation 的 inherit 对齐。
 LineSingFx = Literal[
     "inherit", "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal",
-    "snow", "snow_solid", "flame"
+    "snow", "snow_solid", "flame", "feather", "lightning"
 ]
 # 入退场 fx 字段保留作工程兼容（UI 已并入入退场动画档，规划器不再消费）。
 ENTRY_FX_KINDS: frozenset[str] = frozenset({"none", "sparkle", "ripple"})
 EXIT_FX_KINDS: frozenset[str] = frozenset({"none", "sparkle", "ripple"})
 SING_FX_KINDS: frozenset[str] = frozenset(
     {"none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow",
-    "snow_solid", "flame"}
+    "snow_solid", "flame", "feather", "lightning"}
 )
 KaraokeAnimation = Literal[
     "inherit", "none", "no_wipe", "utopia", "scanline", "utopia_scanline",

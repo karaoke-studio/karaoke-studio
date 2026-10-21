@@ -3944,10 +3944,12 @@ def _paint_line_fx_particles(
     # 只豁免拼接/消散，唱字特效=无时入退场星光/涟漪/音符整段被跳过
     #（CPU 与 GPU 预览也因此分歧）。
     particle_entry_anims = {
-        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "assemble_in",
+        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+        "flame", "feather", "lightning", "assemble_in",
     }
     particle_exit_anims = {
-        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "dissolve_out",
+        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
+        "flame", "feather", "lightning", "dissolve_out",
     }
     if (
         style.entry_fx == "none"

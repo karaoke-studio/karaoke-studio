@@ -89,6 +89,45 @@ PETAL_FADE_START = 0.75
 # 取默认对（雪花=雪色，花瓣与其余 kind=樱花粉，见 _default_color_pair）。
 SNOW_A = "#F2F8FF"
 SNOW_B = "#BFDFFF"
+# 羽毛（2026-10，AE 羽毛参考）：羽绒质感只靠轮廓（羽轴 + 两侧羽枝缺口）
+# 与运动区分——宽幅低频钟摆横摆 + 连续翻转 + 边缘朝相机时的横向压扁
+#（stretch_x 0.55~1.0），落点压到字底后淡出；寿命比花瓣长（飘得更慢）。
+FEATHER_LIFE_MS = 1700
+FEATHER_FADE_START = 0.80
+# 「默认颜色」档的羽毛双色：纯白 + 暖米白（深色视频上分层，且区别于
+# 雪花的冷冰蓝）。
+FEATHER_A = "#FFFFFF"
+FEATHER_B = "#FFF1D6"
+# 闪电（2026-10，AE Advanced Lightning 参考）：分叉锯齿 bolt + 极短
+# 单次放电（100~240ms）+ 窗口内多次随机重击 + 高频频闪；核心 bolt 前面
+# 绘制，同轨迹放大 1.35× 的暗色 glow 垫在文字后当作辉光。
+LIGHTNING_WINDOW_MS = 520
+LIGHTNING_SIZE_SCALE = 3.2
+LIGHTNING_GLOW_SIZE_SCALE = 1.35
+LIGHTNING_GLOW_ALPHA = 0.22
+# 出入场每字窗口内的重击次数（AE 闪电的多次放电感；双色变体会对半分）。
+# 7 次/520ms ≈ 13.5 次/秒：低于此值在 5 秒采样里会出现明显“空窗”。
+ANIM_LIGHTNING_STRIKES = 7
+# 默认双色：冷白青 + 电光蓝。
+LIGHTNING_A = "#F2FDFF"
+LIGHTNING_B = "#6FD3FF"
+# 闪电 bolt 的多边形元素半宽（1000 em 空间）：主干两端的收尖与中段加宽。
+_LIGHTNING_TRUNK = (
+    (0.0, -500.0),
+    (-72.0, -320.0),
+    (26.0, -170.0),
+    (-44.0, 20.0),
+    (58.0, 220.0),
+    (-8.0, 500.0),
+)
+_LIGHTNING_HALF_WIDTHS = (14.0, 40.0, 38.0, 44.0, 40.0, 20.0)
+# 分叉：(起点, 终点, 起点半宽, 终点半宽)；起点落在主干内部保证并集连通。
+_LIGHTNING_BRANCHES = (
+    ((-52.0, -292.0), (-220.0, -210.0), 26.0, 8.0),
+    ((-58.0, -282.0), (-252.0, -330.0), 20.0, 6.0),
+    ((4.0, -96.0), (205.0, -25.0), 24.0, 7.0),
+    ((22.0, 140.0), (-205.0, 235.0), 22.0, 6.0),
+)
 # 雪花两档（2026-10 用户口径）：``snow`` = 教程并集轮廓带全部洞环（界面
 # 「雪花飘入/飘出/飘动·镂空」）；``snow_solid`` = **0890458d 时代的 ❄ 枝晶
 # 星形**（「…·实心」，2026-10-07 用户指定保留当时形状，不是镂空档去洞环）。
@@ -164,11 +203,17 @@ ASH_LIFE_MS = 950
 
 
 def _default_color_pair(
-    snow: bool, heart: bool = False, fire: bool = False, ash: bool = False
+    snow: bool,
+    heart: bool = False,
+    fire: bool = False,
+    ash: bool = False,
+    feather: bool = False,
+    lightning: bool = False,
 ) -> tuple[str, str]:
     """按 kind 的默认双色（固定默认档与「默认颜色」模式共用）：雪花=雪白
     +冰蓝；爱心=正红+浅粉；火焰=v3 火色阶两端（红边+白热芯）；灰烬=
-    灰白+炭黑；花瓣与其余 kind 维持樱花粉（b5a1b7fb 用户口径不回归）。"""
+    灰白+炭黑；羽毛=纯白+暖米白；闪电=冷白青+电光蓝；花瓣与其余 kind
+    维持樱花粉（b5a1b7fb 用户口径不回归）。"""
 
     if ash:
         return (ASH_A, ASH_B)
@@ -176,6 +221,10 @@ def _default_color_pair(
         return (FIRE_A, FIRE_B)
     if heart:
         return (HEART_A, HEART_B)
+    if feather:
+        return (FEATHER_A, FEATHER_B)
+    if lightning:
+        return (LIGHTNING_A, LIGHTNING_B)
     return (SNOW_A, SNOW_B) if snow else (SAKURA_PINK_A, SAKURA_PINK_B)
 # 出入场动画驱动的粒子（星光/涟漪/音符/花瓣/拼接/消散）默认用固定默认档：
 # 樱花粉双色随机混发 + 40% 字号（2026-10 用户口径：出入场粒子用「默认
@@ -505,6 +554,8 @@ def particle_variant_paints(
     heart: bool = False,
     fire: bool = False,
     ash: bool = False,
+    feather: bool = False,
+    lightning: bool = False,
     include_strokes: bool = True,
 ) -> list[dict[str, object]] | None:
     """双色随机模式的**变体实色/规格列表**（2026-10 花瓣特效口径）：
@@ -536,7 +587,9 @@ def particle_variant_paints(
             return [{"color": fallback}]
         return [{"color": fallback}, {"color": color2}]
     if mode == "sakura":
-        pair = _default_color_pair(snow, heart, fire, ash)
+        pair = _default_color_pair(
+            snow, heart, fire, ash, feather, lightning
+        )
         return [{"color": pair[0]}, {"color": pair[1]}]
 
     layers = str(
@@ -1086,12 +1139,118 @@ def _heart_commands() -> list[list[object]]:
     ]
 
 
+def _feather_commands() -> list[list[object]]:
+    """羽毛剪影（kind ``feather``，2026-10）：细长羽片 + 裸露羽轴。
+
+    AE 羽毛参考里羽毛的可读性来自“羽片两侧的羽枝缺口 + 一根明显的裸
+    羽轴”，不是光滑叶片。轮廓为单闭环：顶部收尖，右侧 5 组、左侧 4 组
+    羽枝缺口（锯齿落在单调下降的边上，不自交），底部羽片收到 70 em 宽
+    的羽轴根后拉出一根 180 em 长、收尖的裸羽轴；宽高比 ≈ 0.4，小尺寸
+    （32px）下仍能读出羽毛而不是花瓣。M + 5×C + 20×L + Z。"""
+    return [
+        ["M", 0.0, -500.0],
+        # 顶部 → 右上缘
+        ["C", 55.0, -470.0, 125.0, -400.0, 168.0, -305.0],
+        # 右缘羽枝缺口（向外突出 → 内收，交替下行）
+        ["L", 126.0, -280.0],
+        ["L", 184.0, -240.0],
+        ["L", 140.0, -208.0],
+        ["L", 198.0, -162.0],
+        ["L", 146.0, -132.0],
+        ["L", 202.0, -78.0],
+        ["L", 146.0, -48.0],
+        ["L", 190.0, 18.0],
+        ["L", 118.0, 86.0],
+        ["L", 154.0, 158.0],
+        # 羽片右下缘 → 羽轴根
+        ["C", 122.0, 218.0, 74.0, 268.0, 40.0, 305.0],
+        ["L", 56.0, 330.0],
+        ["L", 24.0, 510.0],
+        ["L", -16.0, 330.0],
+        ["L", -2.0, 305.0],
+        # 左下缘 → 左缘羽枝缺口（上行）
+        ["C", -66.0, 276.0, -130.0, 226.0, -174.0, 146.0],
+        ["L", -132.0, 120.0],
+        ["L", -186.0, 78.0],
+        ["L", -142.0, 52.0],
+        ["L", -190.0, 5.0],
+        ["L", -146.0, -22.0],
+        ["L", -198.0, -70.0],
+        # 左上缘回到顶尖
+        ["C", -230.0, -130.0, -240.0, -220.0, -216.0, -300.0],
+        ["C", -190.0, -390.0, -115.0, -455.0, -30.0, -492.0],
+        ["Z"],
+    ]
+
+
+def _segment_quad(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    half_start: float,
+    half_end: float,
+    *,
+    extend: float = 0.0,
+) -> list[tuple[float, float]]:
+    """把一条有宽度的线段展成四边形（沿轴向两端各延长 ``extend``）。
+
+    延长量让相邻线段在折点处重叠，:func:`_union_outline` 才能把它们
+    并成一根连续的闪电主干（只在端点相触会造成边界串联失败）。
+    """
+    ax, ay = start
+    bx, by = end
+    length = math.hypot(bx - ax, by - ay) or 1.0
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    nx, ny = -uy, ux
+    return [
+        (ax - ux * extend + nx * half_start, ay - uy * extend + ny * half_start),
+        (bx + ux * extend + nx * half_end, by + uy * extend + ny * half_end),
+        (bx + ux * extend - nx * half_end, by + uy * extend - ny * half_end),
+        (ax - ux * extend - nx * half_start, ay - uy * extend - ny * half_start),
+    ]
+
+
+def _lightning_element_polygons() -> list[list[tuple[float, float]]]:
+    """闪电 bolt 的宽度元素：锯齿主干 + 四条分叉，供并集轮廓使用。"""
+    polygons: list[list[tuple[float, float]]] = []
+    for index in range(len(_LIGHTNING_TRUNK) - 1):
+        polygons.append(
+            _segment_quad(
+                _LIGHTNING_TRUNK[index],
+                _LIGHTNING_TRUNK[index + 1],
+                _LIGHTNING_HALF_WIDTHS[index],
+                _LIGHTNING_HALF_WIDTHS[index + 1],
+                extend=10.0,
+            )
+        )
+    for start, end, half_start, half_end in _LIGHTNING_BRANCHES:
+        polygons.append(
+            _segment_quad(start, end, half_start, half_end, extend=6.0)
+        )
+    return polygons
+
+
+def _lightning_commands() -> list[list[object]]:
+    """闪电剪影（kind ``bolt``）：锯齿主干 + 左/右分叉的并集轮廓。
+
+    并集保证「单外环、无洞」——QPainter even-odd 与 D2D winding 两种填充
+    规则下形状一致（分叉单独画两条子路径在 even-odd 下重叠区会被挖空）。
+    """
+    loops = _union_outline(_lightning_element_polygons())
+    if len(loops) != 1:
+        raise ValueError(
+            f"闪电并集轮廓环数异常：{len(loops)}（期望单外环）"
+        )
+    return _loops_to_commands(loops)
+
+
 FX_SPRITES: dict[str, dict[str, object]] = {
     "star4": _sprite_ir(_star4_commands()),
     "ring": _sprite_ir(_ring_commands()),
     "note": _sprite_ir(_note_commands()),
     "pixel": _sprite_ir(_pixel_commands()),
     "petal": _sprite_ir(_petal_commands()),
+    "feather": _sprite_ir(_feather_commands()),
+    "bolt": _sprite_ir(_lightning_commands()),
     "snow": _sprite_ir(_snow_commands()),
     "snow_solid": _sprite_ir(_snow_solid_commands()),
     "heart": _sprite_ir(_heart_commands()),
@@ -1111,6 +1270,9 @@ _SPRITE_FOR_KIND = {
     "assemble": "pixel",
     "dissolve": "pixel",
     "petal": "petal",
+    "feather": "feather",
+    "lightning": "bolt",
+    "lightning_glow": "bolt",
     "snow": "snow",
     "snow_solid": "snow_solid",
     "heart": "heart",
@@ -1206,6 +1368,8 @@ def _cached_particle_variants(
     heart: bool = False,
     fire: bool = False,
     ash: bool = False,
+    feather: bool = False,
+    lightning: bool = False,
     include_strokes: bool,
 ) -> list[dict[str, object]] | None:
     key = (
@@ -1217,6 +1381,8 @@ def _cached_particle_variants(
         bool(heart),
         bool(fire),
         bool(ash),
+        bool(feather),
+        bool(lightning),
         bool(include_strokes),
     )
     entry = _VARIANT_CACHE.get(key)
@@ -1236,6 +1402,8 @@ def _cached_particle_variants(
         heart=heart,
         fire=fire,
         ash=ash,
+        feather=feather,
+        lightning=lightning,
         include_strokes=include_strokes,
     )
     if len(_VARIANT_CACHE) >= _VARIANT_CACHE_MAX:
@@ -1297,6 +1465,28 @@ def exit_particle_tail_end_ms(
         # 火焰烧尽（2026-10-18 用户口径）：火粒窗口跟随退场时长，文字
         # 全部消失后只保留 FLAME_TAIL_MS 短尾——尾奏界就是短尾终点。
         return int(display_end_ms) + FLAME_TAIL_MS
+    if exit_anim == "feather":
+        base = max(
+            line_end,
+            display_end_ms - (RIPPLE_CHAR_STAGGER_MS + FEATHER_LIFE_MS),
+        )
+        return (
+            base
+            + RIPPLE_CHAR_STAGGER_MS
+            + FEATHER_LIFE_MS
+            + CHAR_TIME_OFFSET_MAX_MS
+        )
+    if exit_anim == "lightning":
+        base = max(
+            line_end,
+            display_end_ms - (RIPPLE_CHAR_STAGGER_MS + LIGHTNING_WINDOW_MS),
+        )
+        return (
+            base
+            + RIPPLE_CHAR_STAGGER_MS
+            + LIGHTNING_WINDOW_MS
+            + CHAR_TIME_OFFSET_MAX_MS
+        )
     if exit_anim == "petal":
         base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_LIFE_MS))
         return (
@@ -1386,6 +1576,8 @@ def plan_line_bursts(
         heart: bool = False,
         fire: bool = False,
         ash: bool = False,
+        feather: bool = False,
+        lightning: bool = False,
     ) -> list[dict[str, object]]:
         """burst 的颜色规格**列表**：固定默认档（按 kind 的默认双色）/ 实色
         回退 (+ 取色层级的装饰规格) / 双色档的变体规格列表
@@ -1408,7 +1600,9 @@ def plan_line_bursts(
             # 固定默认档 = 按 kind 的默认双色随机混发（2026-10 用户口径：
             # 出入场粒子用「默认颜色」而非单独颜色的默认白；樱花粉为既有
             # 口径，雪花/爱心/火焰按 kind 各取默认对）。
-            pair = _default_color_pair(snow, heart, fire, ash)
+            pair = _default_color_pair(
+                snow, heart, fire, ash, feather, lightning
+            )
             return [{"color": pair[0]}, {"color": pair[1]}]
         char_style = _char_style(char_index)
         variants = _cached_particle_variants(
@@ -1420,6 +1614,8 @@ def plan_line_bursts(
             heart=heart,
             fire=fire,
             ash=ash,
+            feather=feather,
+            lightning=lightning,
             include_strokes=not ring,
         )
         if variants is not None:
@@ -1649,6 +1845,65 @@ def plan_line_bursts(
                         "front": True, "sweep": 0,
                     }, [{"color": EMBER_A}, {"color": EMBER_B}])
 
+    def _emit_lightning_bursts(
+        char_index: int,
+        start_ms: int,
+        *,
+        size: float,
+        count: int,
+        window_ms: int,
+        fixed_default: bool,
+        seed_offset: int,
+        with_glow: bool = True,
+    ) -> None:
+        """发射一组闪电（AE Advanced Lightning 语言）：核心 bolt 画在文字
+        前，同种子、同数量、放大 1.35× 的暗色 bolt 画在文字后当辉光。
+
+        核心与辉光使用同一 ``seed``/``count`` 与同一求值公式，逐颗粒子的
+        位置/旋转/时序完全重合；只有尺寸与透明度不同（求值器按 kind
+        分支），因此不会出现“辉光错位”。
+        """
+        total = max(1, int(count))
+        # 唱字/联动档的颜色默认是「单独颜色」的双白；白闪电会读成普通
+        # 闪白，不像电——与火焰 v3 同口径：双槽仍是默认白时改用闪电色阶。
+        mode = str(
+            getattr(style, "fx_particle_color_mode", "color") or "color"
+        )
+        c1 = str(getattr(style, "fx_particle_color", "") or "#FFFFFF")
+        c2 = str(getattr(style, "fx_particle_color2", "") or "#FFFFFF")
+        if (
+            not fixed_default
+            and mode == "color"
+            and c1.upper() == "#FFFFFF"
+            and c2.upper() == "#FFFFFF"
+        ):
+            paints: list[dict[str, object]] = [
+                {"color": LIGHTNING_A}, {"color": LIGHTNING_B}
+            ]
+        else:
+            paints = _burst_paint(
+                char_index, size, anim=fixed_default, lightning=True
+            )
+        core = {
+            "kind": "lightning", "anchor": "char",
+            "char_index": int(char_index),
+            "start_ms": int(start_ms),
+            "end_ms": int(start_ms) + max(int(window_ms), 120),
+            "count": total,
+            "seed": (seed_base + seed_offset + char_index) & 0xFFFFFFFF,
+            "size_px": size, "travel_px": 0.0,
+            "front": True, "sweep": 0,
+        }
+        _variant_bursts(core, paints)
+        if with_glow:
+            glow_size = size * LIGHTNING_GLOW_SIZE_SCALE
+            _variant_bursts({
+                **core,
+                "kind": "lightning_glow",
+                "size_px": glow_size,
+                "front": False,
+            }, paints)
+
     def _duration_scale(configured: int) -> float:
         total = min(max(int(configured), 120), 3000)
         return total / 600.0
@@ -1874,6 +2129,46 @@ def plan_line_bursts(
                 seed_offset=16,
                 end_limit_ms=fire_end,
             )
+    elif entry_anim == "feather" and entry_active and display_start_ms is not None:
+        # 羽毛飘入（2026-10，AE 羽毛参考）：逐字错峰自字顶上方飘落，
+        # 宽幅钟摆横摆 + 连续翻转 + 横向压扁（羽片侧对镜头），慢速降落
+        # 到字底后淡出。用固定标准档（与花瓣/雪花同口径）。
+        for char_index in range(char_count):
+            start = (
+                int(display_start_ms)
+                + stagger * char_index
+                + _char_time_offset(char_index)
+            )
+            _variant_bursts({
+                "kind": "feather", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start,
+                "end_ms": start + FEATHER_LIFE_MS,
+                "count": 3, "seed": (seed_base + 20 + char_index) & 0xFFFFFFFF,
+                "size_px": anim_size, "travel_px": 0.0,
+                "front": True, "sweep": 1,
+            }, _burst_paint(
+                char_index, anim_size, anim=True, feather=True
+            ))
+    elif entry_anim == "lightning" and entry_active and display_start_ms is not None:
+        # 闪电劈落（2026-10，AE Advanced Lightning 参考）：逐字错峰，
+        # 每字窗口内多次随机重击；核心 bolt 前置、暗色放大副本垫后。
+        lightning_size = anim_size * LIGHTNING_SIZE_SCALE
+        for char_index in range(char_count):
+            start = (
+                int(display_start_ms)
+                + stagger * char_index
+                + _char_time_offset(char_index)
+            )
+            _emit_lightning_bursts(
+                char_index,
+                start,
+                size=lightning_size,
+                count=ANIM_LIGHTNING_STRIKES,
+                window_ms=LIGHTNING_WINDOW_MS,
+                fixed_default=not apply_to_anim,
+                seed_offset=21,
+            )
     elif entry_anim == "petal" and entry_active and display_start_ms is not None:
         # 花瓣飘入：每字自字形顶上方错峰飘落汇拢到字框（ease-out 减速
         # 抵达后熄灭），随机摇摆 + 连续翻转（\moves4 四点飘移等效观感）。
@@ -2039,6 +2334,54 @@ def plan_line_bursts(
                 }, _burst_paint(
                     char_index, font_px * 0.14, anim=True, ash=True
                 ))
+    elif exit_anim == "feather" and exit_active and display_end_ms is not None:
+        # 羽毛飘散：自字框内错峰剥落，钟摆式大幅横摆 + 翻转飘向字底
+        # 下方淡出（慢于花瓣，落点更低）。
+        feather_exit_start = max(
+            int(line_end_ms) if line_end_ms is not None else 0,
+            int(display_end_ms) - (RIPPLE_CHAR_STAGGER_MS + FEATHER_LIFE_MS),
+        )
+        for char_index in range(char_count):
+            start = (
+                feather_exit_start
+                + stagger * char_index
+                + _char_time_offset(char_index)
+            )
+            _variant_bursts({
+                "kind": "feather", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": start,
+                "end_ms": start + FEATHER_LIFE_MS,
+                "count": 3, "seed": (seed_base + 22 + char_index) & 0xFFFFFFFF,
+                "size_px": anim_size, "travel_px": 0.0,
+                "front": True, "sweep": -1,
+            }, _burst_paint(
+                char_index, anim_size, anim=True, feather=True
+            ))
+    elif exit_anim == "lightning" and exit_active and display_end_ms is not None:
+        # 闪电消散：文字消失前自每个字连劈数次，随后 bolt 与暗色辉光
+        # 一起熄灭（尾奏通道续播到窗口终点）。
+        lightning_size = anim_size * LIGHTNING_SIZE_SCALE
+        exit_start_lightning = max(
+            int(line_end_ms) if line_end_ms is not None else 0,
+            int(display_end_ms)
+            - (RIPPLE_CHAR_STAGGER_MS + LIGHTNING_WINDOW_MS),
+        )
+        for char_index in range(char_count):
+            start = (
+                exit_start_lightning
+                + stagger * char_index
+                + _char_time_offset(char_index)
+            )
+            _emit_lightning_bursts(
+                char_index,
+                start,
+                size=lightning_size,
+                count=ANIM_LIGHTNING_STRIKES,
+                window_ms=LIGHTNING_WINDOW_MS,
+                fixed_default=not apply_to_anim,
+                seed_offset=23,
+            )
     elif exit_anim == "petal" and exit_active and display_end_ms is not None:
         exit_start_petal = max(
             int(line_end_ms) if line_end_ms is not None else 0,
@@ -2164,6 +2507,47 @@ def plan_line_bursts(
                 "size_px": size, "travel_px": 0.0,
                 "front": True, "sweep": 0,
             }, _burst_paint(char_index, size, anim=False, petal=True))
+    elif style.sing_fx == "feather":
+        # 羽毛飘动（唱字）：唱到的字上羽毛缓摆缓沉（数量吃粒子旋钮，
+        # 默认 4/字），窗口不受唱字窗约束、自然播完（与花瓣同口径）。
+        per_char = max(3, count // 3)
+        for char_index, (start_ms, end_ms) in enumerate(char_windows):
+            duration = int(end_ms) - int(start_ms)
+            if duration <= 0:
+                continue
+            if char_visible is not None and not char_visible[char_index]:
+                continue
+            _variant_bursts({
+                "kind": "feather", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": int(start_ms),
+                "end_ms": int(start_ms) + FEATHER_LIFE_MS,
+                "count": per_char,
+                "seed": (seed_base + 5 + char_index) & 0xFFFFFFFF,
+                "size_px": size, "travel_px": 0.0,
+                "front": True, "sweep": 0,
+            }, _burst_paint(
+                char_index, size, anim=False, feather=True
+            ))
+    elif style.sing_fx == "lightning":
+        # 闪电闪烁（唱字）：自字窗起点连劈一阵（窗口最长 1.2s），数量
+        # 吃粒子旋钮；核心 bolt 前置、暗色辉光垫后，结束后自然熄灭。
+        per_char = max(3, min(10, count // 3))
+        for char_index, (start_ms, end_ms) in enumerate(char_windows):
+            duration = int(end_ms) - int(start_ms)
+            if duration <= 0:
+                continue
+            if char_visible is not None and not char_visible[char_index]:
+                continue
+            _emit_lightning_bursts(
+                char_index,
+                int(start_ms),
+                size=size * LIGHTNING_SIZE_SCALE,
+                count=per_char,
+                window_ms=min(max(duration, 360), 1200),
+                fixed_default=False,
+                seed_offset=24,
+            )
     elif style.sing_fx in SNOW_KINDS:
         # 雪花飘动：唱到的字上自 ruby 锚出生的雪花匀速缓沉穿过字框
         #（数量吃粒子旋钮，默认 4/字；尺寸随下落由大变小——轨迹口径），
@@ -2548,6 +2932,39 @@ def burst_particles_at(
                 1.0,
                 1.0 + 0.25 * p,
             ))
+        elif kind in ("lightning", "lightning_glow"):
+            # 闪电（2026-10，AE Advanced Lightning 参考）：每颗粒子是一次
+            # 极短放电（90~220ms），在 burst 窗口内随机时刻重击；几乎不
+            # 位移、只做小角度倾斜，alpha 走「快速点亮 → 高频频闪 →
+            # 熄灭」。核心（lightning）画在文字前；同轨迹放大副本
+            # （lightning_glow）画在文字后，低透明度当辉光。
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            u5 = fx_unit_hash(seed + i, 5)
+            birth = u3 * life * 0.72
+            life_i = min(
+                100.0 + 140.0 * u4,
+                max(life - birth, 1.0),
+            )
+            p = (tau - birth) / life_i
+            if p <= 0.0 or p >= 1.0:
+                continue
+            # 频闪：2~3 个亮脉冲（AE 里 conductivity 抖动造成的重燃感）。
+            strobe = 0.55 + 0.45 * abs(
+                math.sin((p * 2.6 + u5 * 2.0) * math.pi)
+            )
+            alpha = min(p / 0.08, 1.0) * (1.0 - p) ** 0.65 * strobe
+            if kind == "lightning_glow":
+                alpha *= LIGHTNING_GLOW_ALPHA
+            out.append(ParticleDraw(
+                origin_x + (u1 - 0.5) * box_w * 1.10,
+                origin_y - box_h * 0.08 + (u2 - 0.5) * box_h * 0.18,
+                (u4 - 0.5) * 14.0,
+                size * (0.90 + 0.10 * math.sin(math.pi * p)),
+                alpha,
+            ))
         elif kind == "ember":
             # 余烬火星（ember，flame 伴生内部 kind）：小圆点快速上蹿，
             # 受“重力”减速（1-(1-p)^2），带横向漂移 + 双频摆动 + 高频
@@ -2685,6 +3102,90 @@ def burst_particles_at(
                     spin,
                     size_i * (0.85 + 0.15 * math.sin(math.pi * p)),
                     min(p * 5.0, 1.0) * math.sin(math.pi * p),
+                ))
+        elif kind == "feather":
+            # 羽毛（2026-10，AE 漂浮表达式口径）：`x = sin(t*speed)*amp` 的
+            # 钟摆横摆 + 缓慢下落 + 连续自转；额外用 stretch_x 做 0.55~1.0
+            # 的周期性压扁（羽片侧对镜头），是羽毛区别于花瓣的关键观感。
+            # sweep>0 飘入（自字顶上方减速落到字底）、sweep<0 飘散（落到
+            # 字底下方并向右飘）、sweep==0 唱字（字框上半小行程缓沉）。
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            u5 = fx_unit_hash(seed + i, 5)
+            delay = u3 * 140.0
+            p = min(max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0)
+            if p <= 0.0:
+                continue
+            # 钟摆横摆：低频主摆 + 相位随机的倍频，幅度比花瓣大（羽毛轻、
+            # 受风面积大）。位置全部取 box_w/box_h 比例（与花瓣同约定）。
+            sway = math.sin(
+                (u2 + p * (0.55 + 0.50 * u5)) * 2.0 * math.pi
+            ) * size * (1.00 + 0.80 * u4)
+            size_i = size * (0.85 + 0.40 * u4)
+            spin = (
+                u3 * 360.0
+                + p * (120.0 + 240.0 * u5) * (1.0 if u4 >= 0.5 else -1.0)
+            )
+            # 羽片翻转：横向压扁到 0.55~1.0（侧对镜头时最窄），周期 1.5 次。
+            flutter = 0.55 + 0.45 * abs(
+                math.cos((p * 1.5 + u5) * math.pi)
+            )
+            hold_fade = (
+                1.0
+                if p <= FEATHER_FADE_START
+                else max(
+                    0.0,
+                    (1.0 - p) / (1.0 - FEATHER_FADE_START),
+                ) ** 1.2
+            )
+            if sweep > 0:
+                # 羽毛飘入：ease-out 减速降落，落点压到字底（0.42~0.60
+                # box_h），从字顶上方 0.75~1.05 box_h 处起飘。
+                eased = 1.0 - (1.0 - p) * (1.0 - p)
+                land_x = (u1 - 0.5) * box_w * 0.90
+                land_y = (0.42 + 0.18 * u4) * box_h
+                start_x = land_x + (u5 - 0.5) * box_w * 0.80
+                start_y = -(0.75 + 0.30 * u2) * box_h
+                out.append(ParticleDraw(
+                    origin_x + start_x + (land_x - start_x) * eased + sway,
+                    origin_y + start_y + (land_y - start_y) * eased,
+                    spin,
+                    size_i * (0.90 + 0.10 * math.sin(math.pi * p)),
+                    min(p * 4.0, 1.0) * hold_fade,
+                    flutter,
+                    1.0,
+                ))
+            elif sweep < 0:
+                # 羽毛飘散：自字框剥落，向右下方大行程飘走（smoothstep，
+                # 落点 0.55~0.85 box_h），前 80% 不透明度保持。
+                eased = p * p * (3.0 - 2.0 * p)
+                start_x = (u1 - 0.5) * box_w * 0.90
+                end_x = start_x + (0.25 + 0.70 * u5) * box_w
+                start_y = (u4 - 0.5) * box_h * 0.45
+                out.append(ParticleDraw(
+                    origin_x + start_x + (end_x - start_x) * eased + sway,
+                    origin_y + start_y
+                    + (0.55 + 0.30 * u2) * box_h * eased,
+                    spin,
+                    size_i * (0.90 + 0.10 * (1.0 - p)),
+                    min(p * 4.0, 1.0) * hold_fade,
+                    flutter,
+                    1.0,
+                ))
+            else:
+                # 羽毛飘动：字框上半出生，缓沉小行程，sin 包络淡入淡出。
+                eased = p * p * (3.0 - 2.0 * p)
+                out.append(ParticleDraw(
+                    origin_x + (u1 - 0.5) * box_w * 0.75 + sway,
+                    origin_y - (0.30 + 0.30 * u4) * box_h
+                    + (0.45 + 0.30 * u2) * box_h * eased,
+                    spin,
+                    size_i * (0.88 + 0.12 * math.sin(math.pi * p)),
+                    min(p * 5.0, 1.0) * math.sin(math.pi * p),
+                    flutter,
+                    1.0,
                 ))
         elif kind in SNOW_KINDS:
             # 雪花飘落（AE CC Snowfall 运动签名 + 2026-10 用户口径）：
