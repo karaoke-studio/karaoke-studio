@@ -31,6 +31,7 @@ using direct2d::checkHr;
 using direct2d::createPaintBrush;
 using direct2d::createScanlineMaskBrush;
 using direct2d::elapsedMs;
+using direct2d::fallEntryTextDelayMs;
 using direct2d::fxSpriteForKind;
 using direct2d::FxParticle;
 using direct2d::GlowHaloStroke;
@@ -896,7 +897,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             } else if (isGeoEntry(line->entryAnimation)
                 && line->entryDurationMs > 0
                 && tMs <= window.startMs
-                    + entryTransitionWindowMs(line->entryDurationMs)) {
+                    + entryTransitionWindowMs(line->entryDurationMs)
+                    + fallEntryTextDelayMs(line->entryAnimation)) {
+                // 下落风格入场的文字渐显整体延后（粒子先发射，文字在
+                // 粒子生成过程中渐显），窗口同步延长（镜像 transitions.py
+                // line_char_transition_context）。
                 activeCharacterTransition = line->entryAnimation;
                 activeCharacterDirection = -1;
             }

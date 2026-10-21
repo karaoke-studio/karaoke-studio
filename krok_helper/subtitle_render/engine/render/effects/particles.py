@@ -132,9 +132,10 @@ FALL_START_MIN = 0.55
 FALL_START_SPAN = 0.45
 # 末段速度渐隐：p>0.55 后按归一化速度平滑收透明度；速度到 0 时 α=0。
 FALL_SPEED_FADE_START = 0.55
-# 入场粒子预滚：文字逐字渐显从显示起点开始，但粒子先以 20% 寿命的
-# 进度出场（视觉上约提前 300ms），看起来是粒子已经在落、文字才渐显。
-FALL_ENTRY_PREROLL = 0.20
+# 入场先于文字（2026-10-22 用户口径）：不是让粒子一出生就跳到轨迹
+# 20% 处，而是粒子从显示起点开始正常发射、文字逐字渐显整体延后
+# 20% 粒子寿命（见 transitions.FALL_ENTRY_TEXT_DELAY_MS），文字渐显时
+# 粒子已经在落。
 
 
 def _fall_depth(i: int, count: int, u4: float) -> float:
@@ -3605,9 +3606,11 @@ def burst_particles_at(
             # 整簇看起来像连续飘落而不是同一时刻从同一高度整块出现。
             spawn = u3
             # AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生
-            # （唱字 18%），全部从各自的起始高度开始运动，不做首帧预滚
-            # （预滚会让入场粒子直接出现在文字内部，用户口径：生成高度
-            # 不对）。晚出生的从更低/随机高度起飘，避免整块同时出现。
+            # （唱字 18%），全部从各自的起始高度开始运动；不做轨迹预滚
+            # （预滚会让入场粒子一出生就出现在轨迹中段，用户口径：生成
+            # 高度不对）。「粒子先于文字」由文字渐显延后实现（见
+            # transitions.FALL_ENTRY_TEXT_DELAY_MS）。晚出生的从更低/
+            # 随机高度起飘，避免整块同时出现。
             particle_count = max(int(burst.get("count", 1) or 1), 1)
             # 序列扰动：最大尺寸/深度档按 burst seed 轮换到不同粒子，
             # 防止每个字的最大粒子总落在同一个相对位置。
@@ -3618,12 +3621,7 @@ def burst_particles_at(
             base = min(
                 max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
             )
-            p = (
-                FALL_ENTRY_PREROLL
-                + (1.0 - FALL_ENTRY_PREROLL) * base
-                if sweep > 0
-                else base
-            )
+            p = base
             if p <= 0.0:
                 continue
             # AE 漂浮表达式的正弦摆：sp=2 rad/s → 一个 1.5s 行程约
@@ -3710,9 +3708,11 @@ def burst_particles_at(
             # 2~3 周期的高频扑动；出入场同样按 0~45% 寿命错峰出生。
             spawn = u3
             # AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生
-            # （唱字 18%），全部从各自的起始高度开始运动，不做首帧预滚
-            # （预滚会让入场粒子直接出现在文字内部，用户口径：生成高度
-            # 不对）。晚出生的从更低/随机高度起飘，避免整块同时出现。
+            # （唱字 18%），全部从各自的起始高度开始运动；不做轨迹预滚
+            # （预滚会让入场粒子一出生就出现在轨迹中段，用户口径：生成
+            # 高度不对）。「粒子先于文字」由文字渐显延后实现（见
+            # transitions.FALL_ENTRY_TEXT_DELAY_MS）。晚出生的从更低/
+            # 随机高度起飘，避免整块同时出现。
             particle_count = max(int(burst.get("count", 1) or 1), 1)
             # 序列扰动：最大尺寸/深度档按 burst seed 轮换到不同粒子，
             # 防止每个字的最大粒子总落在同一个相对位置。
@@ -3723,12 +3723,7 @@ def burst_particles_at(
             base = min(
                 max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
             )
-            p = (
-                FALL_ENTRY_PREROLL
-                + (1.0 - FALL_ENTRY_PREROLL) * base
-                if sweep > 0
-                else base
-            )
+            p = base
             if p <= 0.0:
                 continue
             wobble = (
@@ -3818,9 +3813,11 @@ def burst_particles_at(
             u5 = fx_unit_hash(seed + i, 5)
             spawn = u3
             # AE Box emitter + 连续出生：每颗在 0~45% 寿命内错峰出生
-            # （唱字 18%），全部从各自的起始高度开始运动，不做首帧预滚
-            # （预滚会让入场粒子直接出现在文字内部，用户口径：生成高度
-            # 不对）。晚出生的从更低/随机高度起飘，避免整块同时出现。
+            # （唱字 18%），全部从各自的起始高度开始运动；不做轨迹预滚
+            # （预滚会让入场粒子一出生就出现在轨迹中段，用户口径：生成
+            # 高度不对）。「粒子先于文字」由文字渐显延后实现（见
+            # transitions.FALL_ENTRY_TEXT_DELAY_MS）。晚出生的从更低/
+            # 随机高度起飘，避免整块同时出现。
             particle_count = max(int(burst.get("count", 1) or 1), 1)
             # 序列扰动：最大尺寸/深度档按 burst seed 轮换到不同粒子，
             # 防止每个字的最大粒子总落在同一个相对位置。
@@ -3831,12 +3828,7 @@ def burst_particles_at(
             base = min(
                 max((tau - delay) / max(life - delay, 1.0), 0.0), 1.0
             )
-            p = (
-                FALL_ENTRY_PREROLL
-                + (1.0 - FALL_ENTRY_PREROLL) * base
-                if sweep > 0
-                else base
-            )
+            p = base
             if p <= 0.0:
                 continue
             wobble = (

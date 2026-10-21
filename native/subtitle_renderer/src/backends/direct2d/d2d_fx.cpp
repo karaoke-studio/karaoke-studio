@@ -29,7 +29,6 @@ constexpr float kFallInitialV = 0.20f;
 constexpr float kFallStartMin = 0.55f;
 constexpr float kFallStartSpan = 0.45f;
 constexpr float kFallSpeedFadeStart = 0.55f;
-constexpr float kFallEntryPreroll = 0.20f;
 inline float fallProgress(float p) {
     const float v = std::clamp(p, 0.0f, 1.0f);
     return (kFallInitialV - 2.0f) * v * v * v
@@ -134,6 +133,17 @@ inline float starYResample(
     return kStarYSplitU * alt7;
 }
 
+int fallEntryTextDelayMs(const std::string &effect) {
+    // 镜像 transitions.FALL_ENTRY_TEXT_DELAY_MS：文字渐显延后 20% 粒子寿命。
+    if (effect == "petal" || effect == "feather") {
+        return 340;
+    }
+    if (effect == "snow" || effect == "snow_solid") {
+        return 300;
+    }
+    return 0;
+}
+
 GeoCharState geoCharState(
     const std::string &effect,
     float fontPx,
@@ -154,9 +164,14 @@ GeoCharState geoCharState(
     const int totalMs = std::clamp(durationMs, 120, 3000);
     const int staggerMs = totalMs * 7 / 12;
     const int travelMs = std::max(totalMs - staggerMs, 40);
+    // 下落风格入场：文字逐字渐显整体延后到粒子已开始下落之后；退场与
+    // 其余档位不加延迟。
+    const int textDelayMs = exitPhase ? 0 : fallEntryTextDelayMs(effect);
     const auto staggerProgress = [&]() {
         const int step = count <= 1 ? 0 : staggerMs / (count - 1);
-        return clampedRatio(tMs - startMs - step * index, travelMs);
+        return clampedRatio(
+            tMs - startMs - step * index - textDelayMs, travelMs
+        );
     }();
     // 入场透明度 4 倍速上升 + smoothstep 运动包络：字符在行程前 1/4 即
     // 全不透明，位移仍有 8 成以上，保证「先清晰可见、再走完行程」。
@@ -819,9 +834,7 @@ std::vector<FxParticle> burstParticlesAt(
                 0.0f,
                 1.0f
             );
-            const float p = burst.sweep > 0
-                ? kFallEntryPreroll + (1.0f - kFallEntryPreroll) * base
-                : base;
+            const float p = base;
             if (p <= 0.0f) {
                 continue;
             }
@@ -933,9 +946,7 @@ std::vector<FxParticle> burstParticlesAt(
                 0.0f,
                 1.0f
             );
-            const float p = burst.sweep > 0
-                ? kFallEntryPreroll + (1.0f - kFallEntryPreroll) * base
-                : base;
+            const float p = base;
             if (p <= 0.0f) {
                 continue;
             }
@@ -1055,9 +1066,7 @@ std::vector<FxParticle> burstParticlesAt(
                 0.0f,
                 1.0f
             );
-            const float p = burst.sweep > 0
-                ? kFallEntryPreroll + (1.0f - kFallEntryPreroll) * base
-                : base;
+            const float p = base;
             if (p <= 0.0f) {
                 continue;
             }

@@ -1093,14 +1093,59 @@ def test_particle_anim_core_is_staggered_char_transition():
     ).effect == "petal"
     petal_first = _geo_char_state(
         style, _entry_transition("petal", 0), 0, 5,
-        t_ms=100, char_center_x=None, line_center_x=None,
+        t_ms=400, char_center_x=None, line_center_x=None,
     )
     petal_second = _geo_char_state(
         style, _entry_transition("petal", 0), 1, 5,
+        t_ms=400, char_center_x=None, line_center_x=None,
+    )
+    # 下落档文字渐显延后 340ms：t=400 时首字已显形、次字仍在错峰中。
+    assert petal_first[0] > 0.8
+    assert petal_second[0] == 0.0
+
+
+def test_falling_entry_text_fade_starts_after_particles():
+    """下落风格入场（2026-10-22 用户口径）：粒子自显示起点发射，文字逐字
+    渐显整体延后 20% 粒子寿命（花瓣/羽毛 340ms、雪花 300ms），文字在
+    粒子生成过程中渐显；其他粒子档与退场时序不变。"""
+    style = Style(font_size_px=100, entry_lead_ms=600, exit_fade_ms=600)
+    for anim, delay in (
+        ("petal", 340), ("feather", 340), ("snow", 300), ("snow_solid", 300),
+    ):
+        ctx_style = Style(
+            entry_anim=anim, entry_lead_ms=600, karaoke_anim="none"
+        )
+        # 显示起点文字仍未开始渐显（粒子已在此刻发射）。
+        hidden = _geo_char_state(
+            style, _entry_transition(anim, 0), 0, 5,
+            t_ms=delay - 10, char_center_x=None, line_center_x=None,
+        )
+        assert hidden[0] == 0.0, anim
+        # 延后量之后开始渐显。
+        shown = _geo_char_state(
+            style, _entry_transition(anim, 0), 0, 5,
+            t_ms=delay + 100, char_center_x=None, line_center_x=None,
+        )
+        assert shown[0] > 0.0, anim
+        # 过渡窗口同步延长，延后的字不会被硬切。
+        assert line_char_transition_context(
+            ctx_style, TimingLine(), 600 + delay, 0, 6000, 3,
+        ) is not None, anim
+        assert line_char_transition_context(
+            ctx_style, TimingLine(), 600 + delay + 1, 0, 6000, 3,
+        ) is None, anim
+
+    # 非下落档（星光）仍在显示起点立即逐字渐显；退场时序不受影响。
+    sparkle = _geo_char_state(
+        style, _entry_transition("sparkle", 0), 0, 5,
         t_ms=100, char_center_x=None, line_center_x=None,
     )
-    assert petal_first[0] > 0.8
-    assert petal_second[0] < 0.5
+    assert sparkle[0] > 0.8
+    petal_exit = _geo_char_state(
+        style, _exit_transition("petal", 0), 0, 5,
+        t_ms=100, char_center_x=None, line_center_x=None,
+    )
+    assert petal_exit[0] < 1.0
 
 
 def test_sing_particles_skip_whitespace_chars():
@@ -4620,26 +4665,22 @@ def test_falling_particles_move_from_birth_and_exit_spawns_upper():
     assert max(s.size_px for s in states) <= 55.0
 
 
-def test_falling_entry_prerolls_before_text_fade():
-    """入场粒子预滚 20% 寿命：同一时刻入场粒子已比唱字档下落更深，
-    看起来是粒子先动、文字再逐字渐显；唱字档不预滚。"""
+def test_falling_entry_particles_start_at_spawn_height():
+    """入场粒子不做轨迹预滚：burst 起点仍在各自的生成高度（文字上方），
+    不会一出生就出现在轨迹 20% 处。提前量由「文字渐显延后」实现，见
+    test_falling_entry_text_fade_starts_after_particles。"""
     for kind, life in (("petal", 1500), ("snow", 1500), ("feather", 1700)):
         entry = {
             "kind": kind, "anchor": "char", "char_index": 0,
             "start_ms": 0, "end_ms": life, "count": 20, "seed": 2468,
             "size_px": 30.0, "travel_px": 0.0, "front": True, "sweep": 1,
         }
-        sing = {**entry, "sweep": 0}
-        early_entry = burst_particles_at(
-            entry, 100, 0.0, 0.0, 120.0, 100.0
-        )
-        early_sing = burst_particles_at(
-            sing, 100, 0.0, 0.0, 120.0, 100.0
-        )
-        assert early_entry and early_sing, kind
-        assert max(s.y for s in early_entry) > max(
-            s.y for s in early_sing
-        ) + 5.0, kind
+        born = burst_particles_at(entry, 30, 0.0, 0.0, 120.0, 100.0)
+        assert born, kind
+        # 出生 30ms 时最早一批粒子刚从生成高度出发，仍在字框上方。
+        assert max(s.y for s in born) < 0.0, kind
+        later = burst_particles_at(entry, 900, 0.0, 0.0, 120.0, 100.0)
+        assert later and max(s.y for s in later) > max(s.y for s in born), kind
 
 
 def test_falling_velocity_converges_to_zero_at_landing():

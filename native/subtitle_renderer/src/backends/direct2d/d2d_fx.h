@@ -52,6 +52,11 @@ GeoCharState geoCharState(
     bool hasCenters
 );
 
+/// 下落风格入场的文字渐显延后量（镜像 transitions.FALL_ENTRY_TEXT_DELAY_MS）：
+/// 粒子自显示起点发射，文字逐字渐显整体延后 20% 粒子寿命（花瓣/羽毛
+/// 340ms、雪花 300ms）。其余档位返回 0。
+int fallEntryTextDelayMs(const std::string &effect);
+
 /// 字符中心原点的复合矩阵（镜像 Python character_transform 的 center 分支
 /// 点序：T(-c) → Scale → Rotation → T(c+dx)）。
 D2D1_MATRIX_3X2_F geoCharMatrix(
