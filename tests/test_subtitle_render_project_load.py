@@ -650,6 +650,26 @@ def test_post_emoji_project_replay_still_replaces_wholesale() -> None:
     assert [ch.role_label for ch in line.chars] == ["主唱"] * 4
 
 
+def test_stale_label_avatar_does_not_replace_lyric_or_hide_ruby() -> None:
+    from krok_helper.subtitle_render.serialization.timing import guide_symbol_to_dict
+    from krok_helper.subtitle_render.engine.guide import render_line_with_guide_symbols
+
+    line = TimingLine(chars=[TimingChar("【主唱】", 0), TimingChar("世", 100),
+                             TimingChar("界", 200)], end_ms=500)
+    track = TimingTrack(lines=[line])
+    apply_track_project_data(track, Style(), {
+        "line_inline_guide_symbols": [{
+            "0": guide_symbol_to_dict(_emoji_label_avatar()),
+            "1": guide_symbol_to_dict(_emoji_label_avatar("N3 Emoji 【58】")),
+        }],
+    })
+    assert set(line.inline_guide_symbols) == {0}
+    rendered = render_line_with_guide_symbols(line)
+    assert rendered.chars[1].text == "世"
+    assert rendered.chars[1].vector_glyph is None
+    assert rendered.chars[2].text == "界"
+
+
 def test_apply_track_project_data_applies_head_overrides() -> None:
     track = TimingTrack(
         lines=[

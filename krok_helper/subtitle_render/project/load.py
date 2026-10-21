@@ -457,6 +457,14 @@ def _apply_inline_guide_symbols(
             index: symbol
             for index, symbol in parsed
             if 0 <= index < len(line.chars)
+            and not (
+                # Imported label avatars belong to their trigger cell, never
+                # to whatever lyric happens to occupy an old saved index.
+                str(symbol.name).startswith(_EMOJI_SYMBOL_NAME_PREFIX + "【")
+                and str(symbol.name).endswith("】")
+                and line.chars[index].text
+                != str(symbol.name)[len(_EMOJI_SYMBOL_NAME_PREFIX):]
+            )
         }
 
 

@@ -7,6 +7,31 @@ from pathlib import Path
 from krok_helper.subtitle_render.project.session import SubtitleProjectSession
 
 
+def test_save_does_not_resurrect_removed_inline_guide_indices() -> None:
+    from krok_helper.subtitle_render.project.session import _merge_preserved_project_data
+
+    for stale in ("g11", {"name": "N3 Emoji 【58】", "future": True}):
+        source = {"line_inline_guide_symbols": [{"0": "g1", "11": stale}],
+                  "extra_subtitle_sources": [{"path": "chorus.sug",
+                      "line_inline_guide_symbols": [{"0": "g1", "7": stale}]}]}
+        current = {"line_inline_guide_symbols": [{"0": "g1"}],
+                   "extra_subtitle_sources": [{"path": "chorus.sug",
+                       "line_inline_guide_symbols": [{"0": "g1"}]}]}
+        saved = _merge_preserved_project_data(source, current)
+        assert saved["line_inline_guide_symbols"] == [{"0": "g1"}]
+        assert saved["extra_subtitle_sources"][0]["line_inline_guide_symbols"] == [{"0": "g1"}]
+
+
+def test_inline_guide_merge_preserves_unknown_fields_on_retained_symbols() -> None:
+    from krok_helper.subtitle_render.project.session import _merge_preserved_project_data
+
+    saved = _merge_preserved_project_data(
+        {"line_inline_guide_symbols": [{"0": {"name": "old", "future": 42}}]},
+        {"line_inline_guide_symbols": [{"0": {"name": "new"}}]},
+    )
+    assert saved["line_inline_guide_symbols"] == [{"0": {"name": "new", "future": 42}}]
+
+
 def test_project_session_remembers_and_resolves_missing_resources(
     tmp_path: Path,
 ) -> None:

@@ -24,7 +24,9 @@ def merge_extensible_value(
     """Merge unknown nested fields without reviving removed user-owned entries."""
 
     if isinstance(source, dict) and isinstance(current, dict):
-        if path in AUTHORITATIVE_MAPPING_PATHS:
+        if path in AUTHORITATIVE_MAPPING_PATHS or path[-2:] == (
+            "line_inline_guide_symbols", "[]"
+        ):
             merged: dict[Any, Any] = {}
         else:
             merged = deepcopy(source)
