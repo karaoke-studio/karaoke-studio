@@ -1116,7 +1116,7 @@ def test_particle_anim_core_is_staggered_char_transition():
 def test_falling_entry_text_window_unchanged():
     """下落风格入场（2026-10-22 用户口径）：文字逐字渐显窗口与以前完全
     一致，提前量只加在粒子上——入场 burst 整体前移 20% 粒子寿命
-    （花瓣/羽毛 340ms、雪花 300ms）；退场与其他粒子档不变。"""
+    （花瓣/羽毛 340ms、雪花 400ms）；退场与其他粒子档不变。"""
     style = Style(font_size_px=100, entry_lead_ms=600, exit_fade_ms=600)
     for anim in ("petal", "feather", "snow", "snow_solid"):
         first = _geo_char_state(
@@ -1146,7 +1146,7 @@ def test_falling_entry_text_window_unchanged():
     )
 
     for anim, lead in (
-        ("petal", 340), ("feather", 340), ("snow", 300), ("snow_solid", 300),
+        ("petal", 340), ("feather", 340), ("snow", 400), ("snow_solid", 400),
     ):
         bursts = plan_line_bursts(
             Style(
@@ -3057,21 +3057,21 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
         style, 0, 1000, 4200, 4100,
         [(1200, 1600), (1600, 2000), (2000, 3000)],
     )
-    # 入场雪花：整体前移 300ms（20% 寿命）先于文字发射，行级相位 + 每字
-    # ±80ms 抖动；每字完整 1500ms 下落窗。
+    # 入场雪花：整体前移 400ms（20% 寿命）先于文字发射，行级相位 + 每字
+    # ±80ms 抖动；每字完整 2000ms 下落窗。
     entry = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == 1]
     assert len(entry) == 6
-    assert {b["start_ms"] for b in entry} == {671, 1009, 1230}
+    assert {b["start_ms"] for b in entry} == {571, 937, 1184}
     assert len({b["start_ms"] for b in entry}) > 1
-    assert {b["end_ms"] for b in entry} == {2171, 2509, 2730}
+    assert {b["end_ms"] for b in entry} == {2571, 2937, 3184}
     assert sorted({b["count"] for b in entry}) == [1, 2]  # 拆雪色双色
     assert {b["color"] for b in entry} == {"#F2F8FF", "#BFDFFF"}
     assert all(b["travel_px"] == 0.0 for b in entry)
-    # 退场雪花：落窗同样 1500ms，从显示末前 1.5s 起飘，逐字 ±80ms
+    # 退场雪花：落窗同样 2000ms，从显示末前 2s 起飘，逐字 ±80ms
     # 抖动；终点晚于显示末 300ms。
     exit_snow = [b for b in bursts if b["kind"] == snow_kind and b["sweep"] == -1]
     assert len(exit_snow) == 6
-    assert {b["start_ms"] for b in exit_snow} == {2971, 3309, 3530}
+    assert {b["start_ms"] for b in exit_snow} == {2471, 2837, 3084}
     assert len({b["start_ms"] for b in exit_snow}) > 1
     assert {b["end_ms"] for b in exit_snow} == {4500}  # 4200 + 300
     assert {b["color"] for b in exit_snow} == {"#F2F8FF", "#BFDFFF"}
