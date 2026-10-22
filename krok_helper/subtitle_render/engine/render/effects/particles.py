@@ -64,7 +64,11 @@ ASSEMBLE_LIFE_MS = 320
 # 等效轨迹（sin 横向摇摆 + 单调竖直行程 + 连续翻转）。位置偏移全部取
 # box_w/box_h 比例（星光/音符同约定），不带字号倍数行程（2026-10 用户
 # 口径：初版 travel=1.6em 出生过高、飘进行间距）。
-PETAL_LIFE_MS = 900
+# 2026-10-23 用户口径：唱字档的下落速度是**常量**（与 wipe 唱字速度无关），
+# 但原 900ms 比入场的 1700ms 快近一倍，快速段落里读作“砸下去”。唱字档
+# 寿命对齐入场级（1500ms），同时用逐字颗数收敛控制每秒密度（见
+# FALL_SING_REFERENCE_CHAR_MS），快歌里保持飘动感。
+PETAL_LIFE_MS = 1500
 # 花瓣入场单独放慢（2026-10-22 用户口径：入场过快）；退场风格保持，
 # 但去掉“地面”后行程更长，寿命相应略增。
 PETAL_ENTRY_LIFE_MS = 1700
@@ -74,8 +78,11 @@ SAKURA_PINK_A = "#FFB7C5"
 SAKURA_PINK_B = "#FFD7E0"
 # 雪花（2026-10，与花瓣同管线）：六角星 sprite + 慢速匀速飘落的运动签名
 #（宽幅低频摇摆、慢自转、柔包络——AE CC Snowfall 等参考的共同观感）；
-# 寿命比花瓣长（下落更慢）。
-SNOW_LIFE_MS = 1100
+# 寿命比花瓣长（下落更慢）。唱字档同样按 2026-10-23 口径放慢到 1600ms。
+SNOW_LIFE_MS = 1600
+# 唱字下落粒子的「密度基准字窗」：快速段落按 duration / 该值收敛每字颗数，
+# 让每秒粒子量大致恒定，避免 80ms 级快字把整行变成密集下砸。
+FALL_SING_REFERENCE_CHAR_MS = 150
 # 雪花出入场的标准整行窗（2026-10 分离口径：旧「入场/退场动画时长」
 # 旋钮默认 600ms 冻结为粒子发射标准；旋钮此后只控制文字逐字渐显/渐隐）。
 SNOW_STD_WINDOW_MS = 600
@@ -300,6 +307,21 @@ def fall_entry_lead_ms(kind: str) -> int:
     else:
         return 0
     return int(round(float(life) * FALL_ENTRY_LEAD_FRACTION))
+
+
+def fall_sing_per_char(count: int, duration_ms: int) -> int:
+    """唱字下落粒子的逐字颗数（按字窗长度收敛，2026-10-23 用户口径）。
+
+    下落速度本身是常量（寿命固定，与 wipe 速度无关）；但快歌每字颗粒数
+    若仍固定，会出现「每秒粒子量随字速率暴涨」的密集下砸。这里以
+    ``FALL_SING_REFERENCE_CHAR_MS`` 为基准按 ``duration / 基准`` 收敛，
+    至少保留 1 颗，让快速段落的密度与慢速段落接近。
+    """
+    base = max(3, int(count) // 3)
+    if duration_ms <= 0:
+        return 0
+    scale = min(1.0, float(duration_ms) / float(FALL_SING_REFERENCE_CHAR_MS))
+    return max(1, int(round(base * scale)))
 # 「默认颜色」档的爱心双色（2026-10 用户口径：红 + 粉；爱心档全面克隆
 # 音符飘出的三档特效，只换形状与默认色）。取自 canvify 情人节配色表：
 # Classic Valentine Red #E63946 + Blush Pink #F9C2D1——小尺寸实心剪影下
@@ -3208,13 +3230,13 @@ def plan_line_bursts(
     elif style.sing_fx == "petal":
         # 花瓣飘动：唱到的字上花瓣轻摆缓沉（数量吃粒子旋钮，默认 4/字），
         # 窗口不受唱字窗约束、自然播完（与星光/音符同口径）。
-        per_char = max(3, count // 3)
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
             if duration <= 0:
                 continue
             if char_visible is not None and not char_visible[char_index]:
                 continue
+            per_char = fall_sing_per_char(count, duration)
             _variant_bursts({
                 "kind": "petal", "anchor": "char",
                 "char_index": int(char_index),
@@ -3229,13 +3251,13 @@ def plan_line_bursts(
     elif style.sing_fx == "feather":
         # 羽毛飘动（唱字）：唱到的字上羽毛缓摆缓沉（数量吃粒子旋钮，
         # 默认 4/字），窗口不受唱字窗约束、自然播完（与花瓣同口径）。
-        per_char = max(3, count // 3)
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
             if duration <= 0:
                 continue
             if char_visible is not None and not char_visible[char_index]:
                 continue
+            per_char = fall_sing_per_char(count, duration)
             _variant_bursts({
                 "kind": "feather", "anchor": "char",
                 "char_index": int(char_index),
@@ -3272,13 +3294,13 @@ def plan_line_bursts(
         # 雪花飘动：唱到的字上自 ruby 锚出生的雪花匀速缓沉穿过字框
         #（数量吃粒子旋钮，默认 4/字；尺寸随下落由大变小——轨迹口径），
         # 窗口不受唱字窗约束、自然播完（与花瓣同口径）。
-        per_char = max(3, count // 3)
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
             if duration <= 0:
                 continue
             if char_visible is not None and not char_visible[char_index]:
                 continue
+            per_char = fall_sing_per_char(count, duration)
             _variant_bursts({
                 "kind": style.sing_fx, "anchor": "char",
                 "char_index": int(char_index),

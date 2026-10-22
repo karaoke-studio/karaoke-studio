@@ -3080,7 +3080,7 @@ def test_plan_line_bursts_snow_entry_exit_sing(snow_kind):
     assert len(sing) == 3
     assert all(b["count"] == 4 for b in sing)
     assert sing[0]["size_px"] == pytest.approx(100 * 0.40)
-    assert sing[0]["end_ms"] - sing[0]["start_ms"] == 1100
+    assert sing[0]["end_ms"] - sing[0]["start_ms"] == 1600
 
 
 @pytest.mark.parametrize("snow_kind", ["snow", "snow_solid"])
@@ -4942,6 +4942,79 @@ def test_falling_converges_to_bottom_but_fades_out():
         assert min(ys) > 25.0, kind  # 已汇聚到字底附近
         assert max(ys) < 90.0, kind
         assert max(s.alpha for s in states) <= 0.05, kind
+
+
+def test_falling_sing_speed_is_independent_of_wipe_speed():
+    """2026-10-23 用户口径：唱字下落速度必须是常量，不受 wipe 字速影响。
+
+    快/慢字窗下，同一字、同一 seed 的粒子寿命与轨迹逐位一致；快速字窗
+    只收敛逐字颗数（保持每秒粒子量，避免快速段落变成密集下砸），不改变
+    下落速度。唱字档寿命同步放慢到入场级（花瓣 1500 / 雪花 1600 /
+    羽毛 1700）。
+    """
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        FEATHER_LIFE_MS,
+        PETAL_LIFE_MS,
+        SNOW_LIFE_MS,
+        fall_sing_per_char,
+    )
+
+    assert PETAL_LIFE_MS >= 1500
+    assert SNOW_LIFE_MS >= 1500
+    assert FEATHER_LIFE_MS >= 1500
+    assert fall_sing_per_char(14, 0) == 0
+    assert fall_sing_per_char(14, 80) < fall_sing_per_char(14, 600)
+
+    fast_windows = [(0, 80), (80, 160), (160, 900)]
+    slow_windows = [(0, 600), (600, 1200), (1200, 2400)]
+    for kind, life in (
+        ("petal", PETAL_LIFE_MS),
+        ("snow", SNOW_LIFE_MS),
+        ("feather", FEATHER_LIFE_MS),
+    ):
+        def plan(windows):
+            return [
+                b for b in plan_line_bursts(
+                    Style(
+                        sing_fx=kind, fx_particle_count=14,
+                        font_size_px=100, karaoke_anim="none",
+                    ),
+                    0, 0, 3000, 2900, windows,
+                )
+                if b["kind"] == kind and b["char_index"] == 0
+            ]
+
+        fast = sorted(plan(fast_windows), key=lambda b: b["start_ms"])
+        slow = sorted(plan(slow_windows), key=lambda b: b["start_ms"])
+        assert fast and slow
+        f0, s0 = fast[0], slow[0]
+        assert f0["start_ms"] == s0["start_ms"] == 0
+        assert f0["end_ms"] - f0["start_ms"] == life
+        assert s0["end_ms"] - s0["start_ms"] == life
+        # 快速字窗颗数更少（每秒密度收敛），但速度不变。
+        assert f0["count"] < s0["count"], kind
+
+        def first_fast(t_ms):
+            states = burst_particles_at(
+                f0, t_ms, 0.0, 0.0, 120.0, 100.0
+            )
+            assert states
+            return states[0]
+
+        def first_slow(t_ms):
+            states = burst_particles_at(
+                s0, t_ms, 0.0, 0.0, 120.0, 100.0
+            )
+            assert states
+            return states[0]
+
+        t1, t2 = int(life * 0.40), int(life * 0.50)
+        f1, f2 = first_fast(t1), first_fast(t2)
+        s1, s2 = first_slow(t1), first_slow(t2)
+        assert f1.y == pytest.approx(s1.y, abs=1e-9)
+        assert f2.y == pytest.approx(s2.y, abs=1e-9)
+        # 同一时间差内的位移（下落速度）一致。
+        assert (f2.y - f1.y) == pytest.approx(s2.y - s1.y, abs=1e-9)
 
 
 def test_falling_depth_slot_varies_across_chars():
