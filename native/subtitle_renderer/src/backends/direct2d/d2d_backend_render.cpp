@@ -7025,6 +7025,126 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
 
+        // Recolour the same geometry/realization used by the body so that
+        // the scan-line cannot expose a different outline at VF intersections.
+        const auto drawMainGlyphLayer = [&](std::size_t charIndex, int layer,
+                                             ID2D1Brush *brush, bool protect) {
+            const Impl::CachedChar &ch = line->chars[charIndex];
+            ID2D1Geometry *geometry = charGeometryAt(charIndex);
+            const TextStyle &charStyle = ch.styleIndex >= 0
+                && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                : style;
+            // Only glyphs whose matrix is non-identity need the pre-expanded
+            // stroke geometry.  Treating the whole Utopia line as animated
+            // makes every settled glyph fill a complex widened path on every
+            // frame, which is dramatically slower than Direct2D's native
+            // DrawGeometry stroke on long real-world lines.
+            const bool animated = charTransformedAt(charIndex);
+            // 放大矩阵下的矢量字形描边回落原路径直描（2026-10 用户实测
+            // 锯齿）：utopia 过冲（1.15/1.3×）与逐字放大 zoom_pulse
+            // （1.25×）都经逐字动画矩阵放大——此时预展开轮廓的多边形
+            // 逼近被放大暴露，DrawGeometry 原路径直描按设备精度展开、
+            // 基线已证平滑。非放大态保留轮廓填充（亚毫秒）。行列式 =
+            // 面积缩放因子，统一覆盖旋转/非均匀缩放。
+            bool magnified = false;
+            if (animated) {
+                const D2D1_MATRIX_3X2_F &anim =
+                    characterAnimationAt(charIndex).matrix;
+                magnified = std::abs(
+                    anim._11 * anim._22 - anim._12 * anim._21
+                ) > 1.02f;
+            }
+            // 存在即用 + 整体门控（2026-10 用户二次确认后修订）：usage
+            // 不设宽度门，且 realization 只在 prewarmComplete 后启用
+            // （见 realizationReady）——旧口径下预热窗口内存在 ±4 alpha
+            // 的基元差（原路径 vs 网格逐字符切换），多 worker 各自预热
+            // 进度不同时显形为描边/主文字层逐帧跳动；门控后窗口内一律
+            // 原路径，窗口外一律网格。仅动画字走动态几何。
+            const bool realizationEligible = !animated;
+            if (layer == 0) {
+                if (charStyle.stroke2Width <= 0.0f) {
+                    return;
+                }
+                ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
+                // 有预展开轮廓（矢量字形）且未放大时优先填充（亚毫秒），
+                // 没有或放大态才对原路径逐帧 DrawGeometry（密集 SVG
+                // ~4ms/帧；放大时是设备精度兜底，见 magnified 注释）。
+                if (animated && !magnified && animatedStroke2 != nullptr) {
+                    fillCountedStroke(animatedStroke2, brush, true);
+                } else if (animated && impl_->dynamicDirectStrokeEnabled) {
+                    drawCountedStroke(
+                        geometry, brush,
+                        std::max(0.0f, charStyle.strokeWidth)
+                            + charStyle.stroke2Width,
+                        true
+                    );
+                } else if (!animated && ch.stroke2Outline != nullptr
+                           && animatedStroke2 != nullptr) {
+                    // Static vector strokes must use the same expanded outline
+                    // before and after baking, including its positioned geometry.
+                    fillStrokeWithRealization(
+                        ch.stroke2Realization.Get(), animatedStroke2, brush, true,
+                        ch.stroke2RealizationTransform, realizationEligible
+                    );
+                } else {
+                    strokeWithRealization(
+                        ch.stroke2Realization.Get(), geometry, brush,
+                        std::max(0.0f, charStyle.strokeWidth)
+                            + charStyle.stroke2Width,
+                        true,
+                        ch.stroke2RealizationTransform,
+                        realizationEligible
+                    );
+                }
+                return;
+            }
+            if (layer == 1) {
+                if (charStyle.strokeWidth <= 0.0f) {
+                    return;
+                }
+                ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
+                ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
+                if (animated && !protect && !magnified
+                    && animatedStroke != nullptr) {
+                    fillCountedStroke(animatedStroke, brush, false);
+                } else if (animated && !protect
+                    && impl_->dynamicDirectStrokeEnabled) {
+                    drawCountedStroke(
+                        geometry, brush, charStyle.strokeWidth, false
+                    );
+                } else if (protect && protectedGeometry != nullptr) {
+                    if (animated) {
+                        fillCountedStroke(protectedGeometry, brush, false);
+                    } else {
+                        fillStrokeWithRealization(
+                            ch.protectedStrokeRealization.Get(),
+                            protectedGeometry, brush, false,
+                            ch.protectedStrokeRealizationTransform,
+                            realizationEligible
+                        );
+                    }
+                } else if (!animated && ch.strokeOutline != nullptr
+                           && animatedStroke != nullptr) {
+                    fillStrokeWithRealization(
+                        ch.strokeRealization.Get(), animatedStroke, brush, false,
+                        ch.strokeRealizationTransform, realizationEligible
+                    );
+                } else {
+                    strokeWithRealization(
+                        ch.strokeRealization.Get(), geometry, brush,
+                        charStyle.strokeWidth, false,
+                        ch.strokeRealizationTransform, realizationEligible
+                    );
+                }
+                return;
+            }
+            fillWithRealization(
+                ch.fillRealization.Get(), geometry, brush,
+                ch.fillRealizationTransform, realizationEligible
+            );
+        };
+
         // Route every line through the per-character N3 phase ordering. The
         // retired line-box "legacy stack" drew both colour states of the
         // whole line through one clip rect; its resting front could never
@@ -7122,116 +7242,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 brush = ownedBrush.Get();
             }
             brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
-            // Only glyphs whose matrix is non-identity need the pre-expanded
-            // stroke geometry.  Treating the whole Utopia line as animated
-            // makes every settled glyph fill a complex widened path on every
-            // frame, which is dramatically slower than Direct2D's native
-            // DrawGeometry stroke on long real-world lines.
-            const bool animated = charTransformedAt(charIndex);
-            // 放大矩阵下的矢量字形描边回落原路径直描（2026-10 用户实测
-            // 锯齿）：utopia 过冲（1.15/1.3×）与逐字放大 zoom_pulse
-            // （1.25×）都经逐字动画矩阵放大——此时预展开轮廓的多边形
-            // 逼近被放大暴露，DrawGeometry 原路径直描按设备精度展开、
-            // 基线已证平滑。非放大态保留轮廓填充（亚毫秒）。行列式 =
-            // 面积缩放因子，统一覆盖旋转/非均匀缩放。
-            bool magnified = false;
-            if (animated) {
-                const D2D1_MATRIX_3X2_F &anim =
-                    characterAnimationAt(charIndex).matrix;
-                magnified = std::abs(
-                    anim._11 * anim._22 - anim._12 * anim._21
-                ) > 1.02f;
-            }
-            // 存在即用 + 整体门控（2026-10 用户二次确认后修订）：usage
-            // 不设宽度门，且 realization 只在 prewarmComplete 后启用
-            // （见 realizationReady）——旧口径下预热窗口内存在 ±4 alpha
-            // 的基元差（原路径 vs 网格逐字符切换），多 worker 各自预热
-            // 进度不同时显形为描边/主文字层逐帧跳动；门控后窗口内一律
-            // 原路径，窗口外一律网格。仅动画字走动态几何。
-            const bool realizationEligible = !animated;
-            if (layer == 0) {
-                if (charStyle.stroke2Width <= 0.0f) {
-                    return;
-                }
-                ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
-                // 有预展开轮廓（矢量字形）且未放大时优先填充（亚毫秒），
-                // 没有或放大态才对原路径逐帧 DrawGeometry（密集 SVG
-                // ~4ms/帧；放大时是设备精度兜底，见 magnified 注释）。
-                if (animated && !magnified && animatedStroke2 != nullptr) {
-                    fillCountedStroke(animatedStroke2, brush, true);
-                } else if (animated && impl_->dynamicDirectStrokeEnabled) {
-                    drawCountedStroke(
-                        geometry, brush,
-                        std::max(0.0f, charStyle.strokeWidth)
-                            + charStyle.stroke2Width,
-                        true
-                    );
-                } else if (!animated && ch.stroke2Outline != nullptr
-                           && animatedStroke2 != nullptr) {
-                    // Static vector strokes must use the same expanded outline
-                    // before and after baking, including its positioned geometry.
-                    fillStrokeWithRealization(
-                        ch.stroke2Realization.Get(), animatedStroke2, brush, true,
-                        ch.stroke2RealizationTransform, realizationEligible
-                    );
-                } else {
-                    strokeWithRealization(
-                        ch.stroke2Realization.Get(), geometry, brush,
-                        std::max(0.0f, charStyle.strokeWidth)
-                            + charStyle.stroke2Width,
-                        true,
-                        ch.stroke2RealizationTransform,
-                        realizationEligible
-                    );
-                }
-                return;
-            }
-            if (layer == 1) {
-                if (charStyle.strokeWidth <= 0.0f) {
-                    return;
-                }
-                const bool protect = paintNeedsBodyProtection(
+            drawMainGlyphLayer(
+                charIndex, layer, brush,
+                paintNeedsBodyProtection(
                     after ? charStyle.afterFillPaint : charStyle.beforeFillPaint
-                );
-                ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
-                ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
-                if (animated && !protect && !magnified
-                    && animatedStroke != nullptr) {
-                    fillCountedStroke(animatedStroke, brush, false);
-                } else if (animated && !protect
-                    && impl_->dynamicDirectStrokeEnabled) {
-                    drawCountedStroke(
-                        geometry, brush, charStyle.strokeWidth, false
-                    );
-                } else if (protect && protectedGeometry != nullptr) {
-                    if (animated) {
-                        fillCountedStroke(protectedGeometry, brush, false);
-                    } else {
-                        fillStrokeWithRealization(
-                            ch.protectedStrokeRealization.Get(),
-                            protectedGeometry, brush, false,
-                            ch.protectedStrokeRealizationTransform,
-                            realizationEligible
-                        );
-                    }
-                } else if (!animated && ch.strokeOutline != nullptr
-                           && animatedStroke != nullptr) {
-                    fillStrokeWithRealization(
-                        ch.strokeRealization.Get(), animatedStroke, brush, false,
-                        ch.strokeRealizationTransform, realizationEligible
-                    );
-                } else {
-                    strokeWithRealization(
-                        ch.strokeRealization.Get(), geometry, brush,
-                        charStyle.strokeWidth, false,
-                        ch.strokeRealizationTransform, realizationEligible
-                    );
-                }
-                return;
-            }
-            fillWithRealization(
-                ch.fillRealization.Get(), geometry, brush,
-                ch.fillRealizationTransform, realizationEligible
+                )
             );
         };
         const auto drawMainLayer = [&](int layer) {
@@ -7345,19 +7360,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                     sliceRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                                 );
                                 pushScanlineStateClip(band->second, after);
-                                if (layer == 0) {
-                                    context->DrawGeometry(
-                                        geometry, brush.Get(),
-                                        std::max(charStyle.strokeWidth, 0.0f)
-                                            + charStyle.stroke2Width
-                                    );
-                                } else if (layer == 1) {
-                                    context->DrawGeometry(
-                                        geometry, brush.Get(), charStyle.strokeWidth
-                                    );
-                                } else {
-                                    context->FillGeometry(geometry, brush.Get());
-                                }
+                                drawMainGlyphLayer(
+                                    charIndex, layer, brush.Get(),
+                                    paintNeedsBodyProtection(scanlinePaintFor(
+                                        sourceAfter ? charStyle.afterFillPaint
+                                                    : charStyle.beforeFillPaint
+                                    ))
+                                );
                                 context->PopAxisAlignedClip();
                                 context->PopAxisAlignedClip();
                             }
@@ -7488,24 +7497,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                             after
                                         );
                                     }
-                                    if (layer == 0) {
-                                        context->DrawGeometry(
-                                            geometry, brush.Get(),
-                                            std::max(
-                                                charStyle.strokeWidth, 0.0f
-                                            )
-                                                + charStyle.stroke2Width
-                                        );
-                                    } else if (layer == 1) {
-                                        context->DrawGeometry(
-                                            geometry, brush.Get(),
-                                            charStyle.strokeWidth
-                                        );
-                                    } else {
-                                        context->FillGeometry(
-                                            geometry, brush.Get()
-                                        );
-                                    }
+                                    drawMainGlyphLayer(
+                                        charIndex, layer, brush.Get(),
+                                        paintNeedsBodyProtection(scanlinePaintFor(
+                                            sourceAfter ? charStyle.afterFillPaint
+                                                        : charStyle.beforeFillPaint
+                                        ))
+                                    );
                                     if (!scanlineUniform) {
                                         context->PopAxisAlignedClip();
                                     }
@@ -7517,6 +7515,115 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 context->PopLayer();
             }
         }
+        const auto drawRubyGlyphLayers = [&](std::size_t rubyIndex,
+                                               std::size_t index,
+                                               ID2D1Brush *fill,
+                                               ID2D1Brush *stroke,
+                                               ID2D1Brush *stroke2,
+                                               bool protect) {
+            const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
+            const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
+            ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
+            ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
+                rubyIndex, index
+            );
+            const Impl::CachedChar *rubyChar = index < ruby.chars.size()
+                ? &ruby.chars[index]
+                : nullptr;
+            const D2D1_MATRIX_3X2_F identityTransform =
+                D2D1::Matrix3x2F::Identity();
+            const bool rubyTransformed = rubyUnitTransformed(ruby, index);
+            // 与主字形同口径：存在即用（2026-10 用户二次确认）。
+            const bool realizationEligible = !rubyTransformed;
+            if (stroke2 != nullptr && rubyStyle.rubyStroke2Width > 0.0f) {
+                if (rubyTransformed && animatedStroke2 != nullptr) {
+                    fillCountedStroke(
+                        animatedStroke2, stroke2, true
+                    );
+                } else if (rubyTransformed
+                           && impl_->dynamicDirectStrokeEnabled) {
+                    drawCountedStroke(
+                        geometry, stroke2,
+                        std::max(0.0f, rubyStyle.rubyStrokeWidth)
+                            + rubyStyle.rubyStroke2Width,
+                        true
+                    );
+                } else {
+                    strokeWithRealization(
+                        rubyChar != nullptr
+                            ? rubyChar->stroke2Realization.Get()
+                            : nullptr,
+                        geometry, stroke2,
+                        std::max(0.0f, rubyStyle.rubyStrokeWidth)
+                            + rubyStyle.rubyStroke2Width,
+                        true,
+                        rubyChar != nullptr
+                            ? rubyChar->stroke2RealizationTransform
+                            : identityTransform,
+                        realizationEligible
+                    );
+                }
+            }
+            if (stroke != nullptr && rubyStyle.rubyStrokeWidth > 0.0f) {
+                ID2D1Geometry *protectedGeometry = rubyProtectedGeometryAt(
+                    rubyIndex, index
+                );
+                ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
+                    rubyIndex, index
+                );
+                if (rubyTransformed && !protect
+                    && animatedStroke != nullptr) {
+                    fillCountedStroke(
+                        animatedStroke, stroke, false
+                    );
+                } else if (rubyTransformed && !protect
+                    && impl_->dynamicDirectStrokeEnabled) {
+                    drawCountedStroke(
+                        geometry, stroke,
+                        rubyStyle.rubyStrokeWidth, false
+                    );
+                } else if (protect && protectedGeometry != nullptr) {
+                    if (rubyTransformed) {
+                        fillCountedStroke(
+                            protectedGeometry, stroke, false
+                        );
+                    } else {
+                        fillStrokeWithRealization(
+                            rubyChar != nullptr
+                                ? rubyChar->protectedStrokeRealization.Get()
+                                : nullptr,
+                            protectedGeometry, stroke, false,
+                            rubyChar != nullptr
+                                ? rubyChar->protectedStrokeRealizationTransform
+                                : identityTransform,
+                            realizationEligible
+                        );
+                    }
+                } else {
+                    strokeWithRealization(
+                        rubyChar != nullptr
+                            ? rubyChar->strokeRealization.Get()
+                            : nullptr,
+                        geometry, stroke, rubyStyle.rubyStrokeWidth,
+                        false,
+                        rubyChar != nullptr
+                            ? rubyChar->strokeRealizationTransform
+                            : identityTransform,
+                        realizationEligible
+                    );
+                }
+            }
+            if (fill != nullptr) {
+                fillWithRealization(
+                    rubyChar != nullptr ? rubyChar->fillRealization.Get() : nullptr,
+                    geometry, fill,
+                    rubyChar != nullptr
+                        ? rubyChar->fillRealizationTransform
+                        : identityTransform,
+                    realizationEligible
+                );
+            }
+        };
         auto drawRubyStack = [&](std::size_t rubyIndex, const Impl::CachedRuby &ruby, bool after) {
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             Microsoft::WRL::ComPtr<ID2D1Brush> fill = paintBrush(
@@ -7622,107 +7729,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         }
                     }
                 }
-                ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
-                    rubyIndex, index
-                );
-                const Impl::CachedChar *rubyChar = index < ruby.chars.size()
-                    ? &ruby.chars[index]
-                    : nullptr;
-                const D2D1_MATRIX_3X2_F identityTransform =
-                    D2D1::Matrix3x2F::Identity();
-                const bool rubyTransformed = rubyUnitTransformed(ruby, index);
-                // 与主字形同口径：存在即用（2026-10 用户二次确认）。
-                const bool realizationEligible = !rubyTransformed;
-                if (rubyStyle.rubyStroke2Width > 0.0f) {
-                    if (rubyTransformed && animatedStroke2 != nullptr) {
-                        fillCountedStroke(
-                            animatedStroke2, stroke2.Get(), true
-                        );
-                    } else if (rubyTransformed
-                               && impl_->dynamicDirectStrokeEnabled) {
-                        drawCountedStroke(
-                            geometry, stroke2.Get(),
-                            std::max(0.0f, rubyStyle.rubyStrokeWidth)
-                                + rubyStyle.rubyStroke2Width,
-                            true
-                        );
-                    } else {
-                        strokeWithRealization(
-                            rubyChar != nullptr
-                                ? rubyChar->stroke2Realization.Get()
-                                : nullptr,
-                            geometry, stroke2.Get(),
-                            std::max(0.0f, rubyStyle.rubyStrokeWidth)
-                                + rubyStyle.rubyStroke2Width,
-                            true,
-                            rubyChar != nullptr
-                                ? rubyChar->stroke2RealizationTransform
-                                : identityTransform,
-                            realizationEligible
-                        );
-                    }
-                }
-                if (rubyStyle.rubyStrokeWidth > 0.0f) {
-                    const bool protect = paintNeedsBodyProtection(
-                        after
-                            ? rubyStyle.rubyAfterFillPaint
-                            : rubyStyle.rubyBeforeFillPaint
-                    );
-                    ID2D1Geometry *protectedGeometry = rubyProtectedGeometryAt(
-                        rubyIndex, index
-                    );
-                    ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
-                        rubyIndex, index
-                    );
-                    if (rubyTransformed && !protect
-                        && animatedStroke != nullptr) {
-                        fillCountedStroke(
-                            animatedStroke, stroke.Get(), false
-                        );
-                    } else if (rubyTransformed && !protect
-                        && impl_->dynamicDirectStrokeEnabled) {
-                        drawCountedStroke(
-                            geometry, stroke.Get(),
-                            rubyStyle.rubyStrokeWidth, false
-                        );
-                    } else if (protect && protectedGeometry != nullptr) {
-                        if (rubyTransformed) {
-                            fillCountedStroke(
-                                protectedGeometry, stroke.Get(), false
-                            );
-                        } else {
-                            fillStrokeWithRealization(
-                                rubyChar != nullptr
-                                    ? rubyChar->protectedStrokeRealization.Get()
-                                    : nullptr,
-                                protectedGeometry, stroke.Get(), false,
-                                rubyChar != nullptr
-                                    ? rubyChar->protectedStrokeRealizationTransform
-                                    : identityTransform,
-                                realizationEligible
-                            );
-                        }
-                    } else {
-                        strokeWithRealization(
-                            rubyChar != nullptr
-                                ? rubyChar->strokeRealization.Get()
-                                : nullptr,
-                            geometry, stroke.Get(), rubyStyle.rubyStrokeWidth,
-                            false,
-                            rubyChar != nullptr
-                                ? rubyChar->strokeRealizationTransform
-                                : identityTransform,
-                            realizationEligible
-                        );
-                    }
-                }
-                fillWithRealization(
-                    rubyChar != nullptr ? rubyChar->fillRealization.Get() : nullptr,
-                    geometry, fill.Get(),
-                    rubyChar != nullptr
-                        ? rubyChar->fillRealizationTransform
-                        : identityTransform,
-                    realizationEligible
+                drawRubyGlyphLayers(
+                    rubyIndex, index, fill.Get(), stroke.Get(), stroke2.Get(),
+                    paintNeedsBodyProtection(
+                        after ? rubyStyle.rubyAfterFillPaint
+                              : rubyStyle.rubyBeforeFillPaint
+                    )
                 );
                 if (pushedUtopiaClip) {
                     context->PopAxisAlignedClip();
@@ -7940,19 +7952,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                     sliceRect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                                 );
                                 pushScanlineStateClip(edge, after);
-                                if (layer == 0) {
-                                    context->DrawGeometry(
-                                        geometry, brush.Get(),
-                                        std::max(rubyStyle.rubyStrokeWidth, 0.0f)
-                                            + rubyStyle.rubyStroke2Width
-                                    );
-                                } else if (layer == 1) {
-                                    context->DrawGeometry(
-                                        geometry, brush.Get(), rubyStyle.rubyStrokeWidth
-                                    );
-                                } else {
-                                    context->FillGeometry(geometry, brush.Get());
-                                }
+                                drawRubyGlyphLayers(
+                                    rubyIndex, unitIndex,
+                                    layer == 2 ? brush.Get() : nullptr,
+                                    layer == 1 ? brush.Get() : nullptr,
+                                    layer == 0 ? brush.Get() : nullptr,
+                                    paintNeedsBodyProtection(scanlinePaintFor(
+                                        sourceAfter ? rubyStyle.rubyAfterFillPaint
+                                                    : rubyStyle.rubyBeforeFillPaint
+                                    ))
+                                );
                                 context->PopAxisAlignedClip();
                                 context->PopAxisAlignedClip();
                             }

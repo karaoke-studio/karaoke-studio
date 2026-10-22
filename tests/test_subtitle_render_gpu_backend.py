@@ -15560,3 +15560,79 @@ def test_gpu_preview_playback_presents_recorded_frames(tmp_path, monkeypatch) ->
     assert max((record["present_ms"] or 0.0) for record in sustained) < 50.0, [
         record["present_ms"] for record in sustained
     ]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("with_ruby", [False, True])
+@pytest.mark.parametrize("weight", [300, 650, 900])
+@pytest.mark.parametrize("animation", ["scanline", "utopia_scanline"])
+def test_gpu_scanline_reuses_variable_font_body_geometry(weight, animation, with_ruby):
+    """An unchanged highlight must not punch dark pixels into baked VF strokes."""
+    from PyQt6.QtGui import QFontDatabase
+
+    candidates = (
+        Path.cwd().parent / "StrangeUtaGame" / "debugsource"
+        / "IwataUDGothic08StdNVFTTF-L" / "IwataUDGothic08StdNVFTTF-L.ttf",
+        Path("C:/Windows/Fonts/NotoSansSC-VF.ttf"),
+    )
+    font_path = next((path for path in candidates if path.is_file()), None)
+    if font_path is None:
+        pytest.skip("CJK variable font is not installed")
+    font_id = QFontDatabase.addApplicationFont(str(font_path))
+    assert font_id >= 0
+    family = QFontDatabase.applicationFontFamilies(font_id)[0]
+    clear_font_weight_cache()
+    try:
+        state = KaraokeColorState(
+            text=PaintFill(color="#FFFFFF"),
+            stroke=PaintFill(color="#000000"),
+            stroke2=PaintFill(color="#000000"),
+        )
+        style = _g1_style(
+            font_family=family, font_weight=weight,
+            stroke_width_px=8, stroke2_enabled=False, decoration_kind="none",
+            karaoke_colors=KaraokeColors(before=state, after=state),
+            scanline_width_px=1500, scanline_glow_px=6,
+            scanline_mode="follow_after", scanline_brightness_pct=0,
+            ruby_font_family=family, ruby_font_weight=weight,
+            ruby_font_follow_main=False, ruby_font_size_px=48,
+            ruby_stroke_width_px=5, ruby_stroke2_enabled=False,
+            ruby_karaoke_colors=KaraokeColors(before=state, after=state),
+        )
+        track = TimingTrack(lines=[TimingLine(
+            chars=[TimingChar("\u9b31\u6b4c\u611b\u6c38", 0)], end_ms=1000,
+        )])
+        if with_ruby:
+            track.rubies = [RubyAnnotation(
+                kanji="\u9b31\u6b4c\u611b\u6c38",
+                reading="\u6b4c\u611b", pos_start_ms=0, pos_end_ms=1000,
+            )]
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=60) as renderer:
+            configured, baseline = _render_g1_frames(
+                renderer,
+                replace(style, karaoke_anim="none" if animation == "scanline" else "utopia"),
+                (500,), force_warp=False, track=track, worker_count=2,
+                shared_resources=True,
+            )
+            if not configured.get("hardware"):
+                pytest.skip("hardware realizations are required for this regression")
+            _, baseline = _render_g1_frames(
+                renderer,
+                replace(style, karaoke_anim="none" if animation == "scanline" else "utopia"),
+                (500,), force_warp=False, track=track, worker_count=2,
+                shared_resources=True, wait_realizations=True,
+            )
+            _, highlighted = _render_g1_frames(
+                renderer, replace(style, karaoke_anim=animation),
+                (500,), force_warp=False, track=track, worker_count=2,
+                shared_resources=True, wait_realizations=True,
+            )
+        before = np.frombuffer(baseline[0], np.uint8).reshape(-1, 4).astype(int)
+        after = np.frombuffer(highlighted[0], np.uint8).reshape(-1, 4).astype(int)
+        solid_body = (before[:, 3] > 245) & (before[:, 0] > 240)
+        assert solid_body.sum() > 100
+        assert not np.any(solid_body & (after[:, 0] < 170))
+    finally:
+        QFontDatabase.removeApplicationFont(font_id)
+        clear_font_weight_cache()
+        invalidate_n3_font_caches()
