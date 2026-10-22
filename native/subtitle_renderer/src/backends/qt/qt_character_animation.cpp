@@ -321,7 +321,26 @@ AnimationState transitionCharState(
             return AnimationState{opacity, 0.0, 0.0, 0.0, scale, scale, 0.0};
         }
 
-        if (cfg.exitAnim == QStringLiteral("utopia") && tMs > followingDoneMs) {
+        // 整字放大与 utopia 退场并行：退场照原时间开始，缩回缩放继续
+        // 乘在退场自身的缩放/翻转上（镜像 transitions.py 的 exit 合成）。
+        double zoomOverlay = 1.0;
+        if (zoomPulseEnabled) {
+            if (overrideInterval.has_value()) {
+                zoomOverlay = zoomPulseScale(
+                    tMs, overrideInterval->first, overrideInterval->second,
+                    zoomPulseCurveLevel
+                );
+            } else if (index >= 0
+                && index < static_cast<int>(intervals.size())) {
+                const auto interval =
+                    intervals[static_cast<std::size_t>(index)];
+                zoomOverlay = zoomPulseScale(
+                    tMs, interval.first, interval.second, zoomPulseCurveLevel
+                );
+            }
+        }
+        if (cfg.exitAnim == QStringLiteral("utopia")
+            && tMs > followingDoneMs) {
             double local = static_cast<double>(tMs - followingDoneMs) / kUtopiaFadeOutTimeMs;
             local = std::clamp(local, 0.0, 1.0);
             const double opacity = std::max(0.0, 1.0 - local);
@@ -337,8 +356,8 @@ AnimationState transitionCharState(
                 -xTravel,
                 yTravel,
                 -180.0 * local,
-                shrink * xFlip,
-                shrink,
+                shrink * xFlip * zoomOverlay,
+                shrink * zoomOverlay,
                 0.0,
             };
         }

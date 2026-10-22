@@ -1133,6 +1133,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const double eased = level <= 0 ? 1.0 - q : 1.0 - zoomPulsePowi(q, level);
             return static_cast<float>(1.0 + (kPeak - 1.0) * eased);
         };
+        // 整字放大与退场并行：退场照原时间开始，缩回缩放继续乘在退场的
+        // 旋转/位移/缩水上（镜像 transitions.zoom_pulse_overlay_scale）。
+        const auto zoomShrinkOverlay = [&](int startMs, int endMs) {
+            if (!line->zoomPulseEnabled
+                || line->karaokeAnimation != "utopia"
+                || !zoomPulseActive(tMs, startMs, endMs)) {
+                return 1.0f;
+            }
+            return zoomPulseScale(
+                tMs, startMs, endMs, line->style.zoomPulseCurveLevel
+            );
+        };
         auto characterAnimationAt = [&](std::size_t charIndex) {
             CharacterAnimationState state;
             if (charIndex >= line->chars.size()) {
@@ -1164,7 +1176,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const float boundsRight = line->fillBounds.right;
                     const bool hasBounds =
                         boundsRight > boundsLeft;
-                    const GeoCharState geo = geoCharState(
+                    GeoCharState geo = geoCharState(
                         activeCharacterTransition,
                         line->style.fontSize,
                         static_cast<int>(charIndex),
@@ -1179,6 +1191,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         hasBounds ? (boundsLeft + boundsRight) * 0.5f : 0.0f,
                         hasBounds
                     );
+                    if (activeCharacterDirection > 0) {
+                        // 退场期间整字放大的缩回仍叠加：缩放按曲线继续，
+                        // 退场位移/旋转/透明度照常。
+                        const float overlay = zoomShrinkOverlay(
+                            ch.startMs, ch.endMs
+                        );
+                        geo.scaleX *= overlay;
+                        geo.scaleY *= overlay;
+                    }
                     state.opacity = geo.opacity;
                     state.utopiaExit = activeCharacterDirection > 0;
                     state.glowAlpha = geo.glowAlpha;
@@ -1205,6 +1226,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 } else {
                     state.matrix = spinMatrix(progress, ch.pivotX, ch.pivotY);
                     state.transformed = spinDirection != 0 && progress < 1.0f;
+                }
+                if (activeCharacterDirection > 0) {
+                    // 退场期间整字放大的缩回继续叠加（不重置为 1.0）。
+                    const float overlay = zoomShrinkOverlay(
+                        ch.startMs, ch.endMs
+                    );
+                    if (overlay != 1.0f) {
+                        state.matrix = D2D1::Matrix3x2F::Scale(
+                            overlay, overlay,
+                            D2D1::Point2F(ch.pivotX, ch.pivotY)
+                        ) * state.matrix;
+                        state.transformed = true;
+                    }
                 }
                 return state;
             }
@@ -1258,8 +1292,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 dxValue = -xTravel;
                 dyValue = yTravel;
                 rotation = -180.0f * local;
-                scaleX = shrink * std::cos(pi * local);
-                scaleY = shrink;
+                // 整字放大的缩回与 utopia 退场并行：缩放系数继续乘在
+                // 退场自身的缩放/翻转上，不把最后一个字重置回原大。
+                const float overlay = zoomShrinkOverlay(
+                    wipeStartMs(ch), wipeEndMs(ch)
+                );
+                scaleX = shrink * std::cos(pi * local) * overlay;
+                scaleY = shrink * overlay;
             } else if (line->karaokeAnimation == "utopia"
                 && line->zoomPulseEnabled
                 && zoomPulseActive(tMs, wipeStartMs(ch), wipeEndMs(ch))) {
@@ -1337,7 +1376,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const float boundsRight = line->fillBounds.right;
                     const bool hasBounds =
                         boundsRight > boundsLeft;
-                    const GeoCharState geo = geoCharState(
+                    GeoCharState geo = geoCharState(
                         activeCharacterTransition,
                         line->style.fontSize,
                         staggerIndex,
@@ -1352,6 +1391,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         hasBounds ? (boundsLeft + boundsRight) * 0.5f : 0.0f,
                         hasBounds
                     );
+                    if (activeCharacterDirection > 0) {
+                        const float overlay = zoomShrinkOverlay(
+                            baseChar.startMs, baseChar.endMs
+                        );
+                        geo.scaleX *= overlay;
+                        geo.scaleY *= overlay;
+                    }
                     state.opacity = geo.opacity;
                     state.utopiaExit = activeCharacterDirection > 0;
                     if (geo.opacity > 0.0f && unitIndex < ruby.chars.size()) {
@@ -1384,6 +1430,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     // classification as the main glyphs.
                     state.matrix = spinMatrix(progress, ruby.pivotX, ruby.pivotY);
                     state.transformed = spinDirection != 0 && progress < 1.0f;
+                }
+                if (activeCharacterDirection > 0
+                    && unitIndex < ruby.chars.size()) {
+                    const Impl::CachedChar &unitChar = ruby.chars[unitIndex];
+                    const float overlay = zoomShrinkOverlay(
+                        unitChar.startMs, unitChar.endMs
+                    );
+                    if (overlay != 1.0f) {
+                        state.matrix = D2D1::Matrix3x2F::Scale(
+                            overlay, overlay,
+                            D2D1::Point2F(ruby.pivotX, ruby.pivotY)
+                        ) * state.matrix;
+                        state.transformed = true;
+                    }
                 }
                 return state;
             }
@@ -1445,8 +1505,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 dxValue = -xTravel;
                 dyValue = std::sin(pi * local * 0.5f) * amplitude;
                 rotation = -180.0f * local;
-                scaleX = shrink * std::cos(pi * local);
-                scaleY = shrink;
+                // 注音单元同样叠加整字放大的缩回（与主文字同口径）。
+                const float overlay = zoomShrinkOverlay(
+                    unit.startMs, unit.endMs
+                );
+                scaleX = shrink * std::cos(pi * local) * overlay;
+                scaleY = shrink * overlay;
             } else if (line->karaokeAnimation == "utopia"
                 && line->zoomPulseEnabled
                 && zoomPulseActive(tMs, unit.startMs, unit.endMs)) {

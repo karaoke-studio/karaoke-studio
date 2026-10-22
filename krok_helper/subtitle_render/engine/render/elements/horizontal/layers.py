@@ -71,11 +71,13 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import
     text_glyph_runs,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+    character_transform,
     char_drip_char_transform,
     char_fade_opacity,
     spin_flip_char_transform,
     transition_char_state,
     utopia_following_done_time,
+    zoom_pulse_overlay_scale,
 )
 from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import segment_wipe_times
 from krok_helper.subtitle_render.engine.style.style_semantics import (
@@ -1179,6 +1181,33 @@ def char_transition_layer_stack(
             )
         else:
             transform = None
+        # 整字放大与逐字退场并行：退场照常开始，缩回缩放继续叠在退场的
+        # 旋转/剪切/缩放上（与 transition_char_state 的 exit 合成同口径）。
+        # char_fade / char_drip / spin_flip 走本图层路径，必须在此合成，
+        # 否则退场一开始最后两个字就跳回静态原大。
+        if transition.phase == "exit":
+            intervals = layout.intervals
+            if glyph.index < len(intervals):
+                char_start, char_end = intervals[glyph.index]
+                overlay = zoom_pulse_overlay_scale(
+                    glyph.style, t_ms, char_start, char_end
+                )
+                if overlay != 1.0:
+                    zoom_transform = character_transform(
+                        center_x=glyph.left + glyph.width / 2,
+                        center_y=(
+                            y
+                            - glyph.metrics.ascent()
+                            + glyph.metrics.height() / 2
+                        ),
+                        scale_x=overlay,
+                        scale_y=overlay,
+                    )
+                    transform = (
+                        zoom_transform
+                        if transform is None
+                        else zoom_transform * transform
+                    )
         run = [glyph]
         split_glow = glyph_run_needs_before_glow_split(run)
         # 等态（前后光同色同半径）光晕在逐字转场下必须烘进 before 主体

@@ -426,10 +426,35 @@ def test_utopia_wipe_unchanged_by_zoom_pulse_flag() -> None:
     assert scale_x == 1.0
 
 
-def test_utopia_exit_takes_precedence_over_zoom_pulse_tail() -> None:
+def test_utopia_exit_composes_with_zoom_pulse_shrink_tail() -> None:
     style = _zoom_pulse_style(exit_anim="utopia")
     transition = _utopia_transition()
-    # following_done_ms 早于尾窗结束：退场相位接管（正常退场，不返回 wipe 缩放）。
+    # following_done_ms 与行尾相同：退场从峰值这一帧开始，整字放大的缩回
+    # 同时继续叠乘在退场缩放上，交接帧连续（没有峰值→原大的跳变）。
+    peak = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1000,
+        following_done_ms=1000,
+    )
+    first_exit = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1001,
+        following_done_ms=1000,
+    )
+    assert peak[4] == pytest.approx(ZOOM_PULSE_PEAK_RATIO)
+    assert first_exit[3] < 0.0
+    assert abs(first_exit[4] - peak[4]) < 0.01
+    # 退场中段：旋转/淡出与缩回同时在走（缩放 = 退场 shrink × 缩回系数）。
     opacity, dx, dy, rotation, scale_x, scale_y, _ = transition_char_state(
         style,
         transition,
@@ -441,8 +466,54 @@ def test_utopia_exit_takes_precedence_over_zoom_pulse_tail() -> None:
         following_done_ms=1000,
     )
     assert rotation < 0.0
-    assert opacity <= 1.0
-    assert scale_x != pytest.approx(1.2407, abs=1e-3)
+    assert opacity < 1.0
+    assert 1.0 < scale_y < 1.05
+    # 缩回结束后只剩退场自身的缩水。
+    _, _, _, rotation_after, scale_after, _, _ = transition_char_state(
+        style,
+        transition,
+        0,
+        1,
+        char_start_ms=0,
+        char_end_ms=1000,
+        t_ms=1500,
+        following_done_ms=1000,
+    )
+    assert rotation_after < 0.0
+    assert scale_after < 0.5
+
+
+def test_char_transition_exit_starts_on_time_and_composes_zoom() -> None:
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+        line_char_transition_context,
+    )
+
+    line = TimingLine(
+        chars=[TimingChar("あ", 0), TimingChar("い", 500)],
+        end_ms=1000,
+    )
+    # 退场窗从行尾开始：退场仍按原时间启动（不延后），但整字放大的缩放
+    # 继续合成进退场状态里，最后一个字不会在峰值处跳回原大。
+    style = _zoom_pulse_style(
+        exit_anim="char_fade",
+        exit_fade_ms=250,
+        line_tail_ms=500,
+    )
+    at_end = line_char_transition_context(
+        style, line, 1100, 0, 1500, 2
+    )
+    assert at_end is not None and at_end.phase == "exit"
+    _, _, _, _, scale_x, scale_y, _ = transition_char_state(
+        style,
+        at_end,
+        1,
+        2,
+        char_start_ms=500,
+        char_end_ms=1000,
+        t_ms=1100,
+    )
+    assert scale_x > 1.1
+    assert scale_y > 1.1
 
 
 def test_character_scale_origin_switches_to_center_for_zoom_pulse() -> None:
@@ -510,6 +581,20 @@ def test_painter_zoom_pulse_differs_from_utopia_growth_direction(qapp) -> None:
     utopia_bounds = _alpha_bounds(track, utopia, 500)
     # 峰值更高（1.25 vs utopia 走字脉冲 1.15），且 utopia 从左缘向右上生长。
     assert (zoom_bounds[1] - zoom_bounds[0]) > (utopia_bounds[1] - utopia_bounds[0])
+
+
+def test_painter_zoom_pulse_composes_with_char_transition_exit(qapp) -> None:
+    track = _single_char_track()
+    # 退场从行尾开始（行尾显示窗 500ms）：退场照常播，但整字放大的缩回
+    # 仍叠加在 char_fade 退场状态上，最后一个字不会跳回静态原大。
+    style = _zoom_pulse_style(
+        exit_anim="char_fade",
+        exit_fade_ms=250,
+        line_tail_ms=500,
+    )
+    static = _alpha_bounds(track, style, 0)
+    during_tail = _alpha_bounds(track, style, 1100)
+    assert (during_tail[1] - during_tail[0]) > (static[1] - static[0]) * 1.05
 
 
 def _frame_bytes(track: TimingTrack, style: Style, t_ms: int) -> bytes:

@@ -229,7 +229,7 @@ def char_drip_char_transform(
     return None if transform.isIdentity() else transform
 
 
-def transition_char_state(
+def _transition_char_state_core(
     style: Style,
     transition: LineCharTransition,
     index: int,
@@ -441,6 +441,85 @@ def transition_char_state(
     if transition.effect == "utopia":
         return 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
     return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
+
+
+def zoom_pulse_overlay_scale(
+    style: Style,
+    t_ms: int | None,
+    char_start_ms: int | None,
+    char_end_ms: int | None,
+) -> float:
+    """缩回期间叠加在退场等其它逐字变换上的整字放大缩放系数。
+
+    整字放大与退场是**并行**的：退场照原时间开始，缩放曲线继续乘在退场的
+    旋转/位移/缩水上，直到 300ms 缩回走完；不再让退场把缩放重置为 1.0。
+    """
+
+    if (
+        t_ms is None
+        or char_start_ms is None
+        or char_end_ms is None
+        or not effective_karaoke_zoom_pulse(style)
+    ):
+        return 1.0
+    if not is_zoom_pulse_active(t_ms, char_start_ms, char_end_ms):
+        return 1.0
+    return zoom_pulse_wipe_scale(
+        t_ms,
+        char_start_ms,
+        char_end_ms,
+        zoom_pulse_curve_level(style),
+    )
+
+
+def transition_char_state(
+    style: Style,
+    transition: LineCharTransition,
+    index: int,
+    count: int,
+    *,
+    char_start_ms: int | None = None,
+    char_end_ms: int | None = None,
+    t_ms: int | None = None,
+    frame_height: int | None = None,
+    following_done_ms: int | None = None,
+    char_center_x: float | None = None,
+    line_center_x: float | None = None,
+) -> tuple[float, float, float, float, float, float, float]:
+    """Per-character transform state; zoom-pulse overlays exit transforms.
+
+    退场相位下整字放大不打断：缩放系数乘到退场自身的 scale 上（退场照常
+    开始、照常结束），行尾最后两个字因此不会再从放大峰值跳回静态原大。
+    """
+
+    state = _transition_char_state_core(
+        style,
+        transition,
+        index,
+        count,
+        char_start_ms=char_start_ms,
+        char_end_ms=char_end_ms,
+        t_ms=t_ms,
+        frame_height=frame_height,
+        following_done_ms=following_done_ms,
+        char_center_x=char_center_x,
+        line_center_x=line_center_x,
+    )
+    if transition.phase != "exit":
+        return state
+    overlay = zoom_pulse_overlay_scale(style, t_ms, char_start_ms, char_end_ms)
+    if overlay == 1.0:
+        return state
+    opacity, dx, dy, rotation, scale_x, scale_y, skew_y = state
+    return (
+        opacity,
+        dx,
+        dy,
+        rotation,
+        scale_x * overlay,
+        scale_y * overlay,
+        skew_y,
+    )
 
 
 def character_transform(
