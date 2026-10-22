@@ -75,7 +75,7 @@ def resolve_title_overlay(
                 int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
             ),
             decoration_kind=merged.decoration_kind,
-            glow_radius_px=int(merged.glow_before_radius_px),
+            glow_radius_px=int(merged.glow_after_radius_px),
             glow_concentration_level=int(merged.glow_concentration_level),
             shadow=colors.shadow,
             shadow_offset_x=int(merged.shadow_offset_x),
@@ -171,7 +171,7 @@ def resolve_title_role_overlay(
             int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
         ),
         decoration_kind=merged.decoration_kind,
-        glow_radius_px=int(merged.glow_before_radius_px),
+        glow_radius_px=int(merged.glow_after_radius_px),
         glow_concentration_level=int(merged.glow_concentration_level),
         shadow=colors.shadow,
         shadow_offset_x=int(merged.shadow_offset_x),

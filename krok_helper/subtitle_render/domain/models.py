@@ -921,11 +921,12 @@ class Style:
 
     decoration_kind: DecorationKind = "shadow"
     decoration_kind_before: Optional[DecorationKind] = None
-    """走字前装饰类型；``None`` = 跟随 ``decoration_kind``（同步开启/旧工程）。"""
+    """走字前装饰类型；``None`` = 跟随 ``decoration_kind``（旧工程/未设置）。"""
     decoration_before_sync: bool = True
-    """颜色卡「装饰 · 同步」开关：开启时走字前装饰类型/浓度/阴影跟随走字后。
+    """颜色卡「装饰 · 同步」开关：开启时前后共用装饰类型/浓度/阴影 X/Y。
 
-    仅影响编辑器行为，渲染始终读取上面各走字前槽位；旧工程加载时置 False。
+    打开时以走字前当前值为源复制到走字后，之后任一侧编辑同步两侧；
+    发光宽度不参与同步。旧工程加载时置 False。
     """
     glow_radius_px: int = 10
     glow_before_radius_px: int = 10

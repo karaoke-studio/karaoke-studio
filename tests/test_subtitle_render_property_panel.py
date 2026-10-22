@@ -6335,7 +6335,7 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
 
 
 def test_decoration_sync_defaults_on_and_routes_before_edits_to_after(qapp):
-    """新工程默认同步：走字前编辑装饰类型/浓度/阴影时写走字后槽。"""
+    """新工程默认同步：任一侧编辑装饰类型/浓度/阴影都写前后两侧。"""
     panel = PropertyPanel()
     panel.set_style(Style(decoration_kind="glow"))
     panel._color_layer_combo.setCurrentIndex(
@@ -6352,17 +6352,17 @@ def test_decoration_sync_defaults_on_and_routes_before_edits_to_after(qapp):
         panel._decoration_type_combo.findData("shadow")
     )
     assert emitted[-1].decoration_kind == "shadow"
-    assert emitted[-1].decoration_kind_before is None
+    assert emitted[-1].decoration_kind_before == "shadow"
 
     panel._shadow_x_spin.setValue(11)
     assert emitted[-1].shadow_offset_x == 11
-    assert emitted[-1].shadow_before_offset_x is None
+    assert emitted[-1].shadow_before_offset_x == 11
 
     panel._glow_concentration_combo.setCurrentIndex(
         panel._glow_concentration_combo.findData(2)
     )
     assert emitted[-1].glow_concentration_level == 2
-    assert emitted[-1].glow_before_concentration_level is None
+    assert emitted[-1].glow_before_concentration_level == 2
 
     # 同步不绑定发光宽度：两个宽度控件始终各改各的。
     panel._glow_after_radius_spin.setValue(21)
@@ -6371,6 +6371,49 @@ def test_decoration_sync_defaults_on_and_routes_before_edits_to_after(qapp):
     panel._glow_radius_spin.setValue(6)
     assert emitted[-1].glow_before_radius_px == 6
     assert emitted[-1].glow_after_radius_px == 21
+
+
+def test_enabling_decoration_sync_copies_before_values_to_after(qapp):
+    """打开同步时以走字前为源：类型/浓度/阴影全部复制到走字后。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            decoration_before_sync=False,
+            decoration_kind="glow",
+            decoration_kind_before="shadow",
+            glow_concentration_level=2,
+            glow_before_concentration_level=-1,
+            shadow_offset_x=7,
+            shadow_offset_y=8,
+            shadow_before_offset_x=-3,
+            shadow_before_offset_y=4,
+            glow_before_radius_px=9,
+            glow_after_radius_px=13,
+        )
+    )
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("shadow")
+    )
+    panel._color_state_combo.setCurrentIndex(
+        panel._color_state_combo.findData("before")
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._decoration_sync_check.setChecked(True)
+    style = emitted[-1]
+    assert style.decoration_before_sync is True
+    assert style.decoration_kind == "shadow"
+    assert style.decoration_kind_before == "shadow"
+    assert style.glow_concentration_level == -1
+    assert style.glow_before_concentration_level == -1
+    assert style.shadow_offset_x == -3
+    assert style.shadow_before_offset_x == -3
+    assert style.shadow_offset_y == 4
+    assert style.shadow_before_offset_y == 4
+    # 发光宽度不参与同步。
+    assert style.glow_before_radius_px == 9
+    assert style.glow_after_radius_px == 13
 
 
 def test_decoration_sync_off_keeps_before_slots_independent(qapp):

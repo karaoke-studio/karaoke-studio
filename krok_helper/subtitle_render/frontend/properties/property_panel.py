@@ -2126,8 +2126,9 @@ class PropertyPanel(QWidget):
     def _route_decoration_changes(self, changes: dict) -> dict:
         """按当前走字前后把装饰编辑路由到对应槽位。
 
-        「同步」开启时走字前编辑写走字后槽并清空走字前覆盖，使前后一致；
-        关闭时写走字前槽。发光宽度本来就是前后独立槽，不做同步。
+        「同步」开启时前后共用一组值：任一侧编辑都同时写入走字前与走字后
+        槽（以走字前为源再复制到走字后）。关闭时只写当前状态槽。发光宽度
+        本来就是前后独立槽，不做同步。
         """
         state_before = self._current_color_state_key() == "before"
         synced = self._decoration_sync_enabled()
@@ -2181,19 +2182,61 @@ class PropertyPanel(QWidget):
         if self._syncing:
             return
         if checked:
-            # 开启同步：清空当前目标的走字前覆盖，前后立即一致（画面由
-            # 走字后槽接管；发光宽度保持前后独立）。
-            self._update_style(
-                decoration_before_sync=True,
-                decoration_kind_before=None,
-                glow_before_concentration_level=None,
-                shadow_before_offset_x=None,
-                shadow_before_offset_y=None,
-                ruby_decoration_kind_before=None,
-                ruby_glow_before_concentration_level=None,
-                ruby_shadow_before_offset_x=None,
-                ruby_shadow_before_offset_y=None,
+            # 开启同步：以走字前当前生效值为源，物化并复制到走字后；之后
+            # 任一侧编辑都会同时写两侧。发光宽度保持前后独立。
+            kind = self._scheme_value("decoration_kind_before")
+            kind = (
+                str(kind)
+                if kind is not None
+                else str(self._scheme_value("decoration_kind"))
             )
+            concentration = self._scheme_value("glow_before_concentration_level")
+            concentration = (
+                int(concentration)
+                if concentration is not None
+                else int(self._scheme_value("glow_concentration_level"))
+            )
+            shadow_x = self._scheme_value("shadow_before_offset_x")
+            shadow_x = (
+                int(shadow_x)
+                if shadow_x is not None
+                else int(self._scheme_value("shadow_offset_x"))
+            )
+            shadow_y = self._scheme_value("shadow_before_offset_y")
+            shadow_y = (
+                int(shadow_y)
+                if shadow_y is not None
+                else int(self._scheme_value("shadow_offset_y"))
+            )
+            changes: dict[str, object] = {
+                "decoration_before_sync": True,
+                "decoration_kind_before": kind,
+                "decoration_kind": kind,
+                "glow_before_concentration_level": concentration,
+                "glow_concentration_level": concentration,
+                "shadow_before_offset_x": shadow_x,
+                "shadow_offset_x": shadow_x,
+                "shadow_before_offset_y": shadow_y,
+                "shadow_offset_y": shadow_y,
+            }
+            if not bool(self._scheme_value("ruby_colors_follow_main")):
+                # 注音独立模式同样以注音走字前值为源复制到走字后；发光
+                # 宽度不参与同步，保持各自槽位。
+                before_values = self._effective_ruby_decoration_values(
+                    after=False
+                )
+                after_field_by_before = {
+                    "ruby_decoration_kind_before": "ruby_decoration_kind",
+                    "ruby_glow_before_concentration_level": (
+                        "ruby_glow_concentration_level"
+                    ),
+                    "ruby_shadow_before_offset_x": "ruby_shadow_offset_x",
+                    "ruby_shadow_before_offset_y": "ruby_shadow_offset_y",
+                }
+                for before_field, after_field in after_field_by_before.items():
+                    changes[before_field] = before_values[before_field]
+                    changes[after_field] = before_values[before_field]
+            self._update_style(**changes)
             return
         # 关闭同步：把当前生效的走字前值物化到独立槽，外观不跳变。
         kind = self._scheme_value("decoration_kind_before")
@@ -4098,21 +4141,6 @@ class PropertyPanel(QWidget):
             if value is None:
                 value = defaults.get(field_name)
             values[field_name] = value
-        if not after and self._decoration_sync_enabled():
-            # 同步开启时注音走字前整组跟随走字后；发光宽度保持独立。
-            after_values = self._effective_ruby_decoration_values(after=True)
-            values["ruby_decoration_kind_before"] = after_values[
-                "ruby_decoration_kind"
-            ]
-            values["ruby_glow_before_concentration_level"] = after_values[
-                "ruby_glow_concentration_level"
-            ]
-            values["ruby_shadow_before_offset_x"] = after_values[
-                "ruby_shadow_offset_x"
-            ]
-            values["ruby_shadow_before_offset_y"] = after_values[
-                "ruby_shadow_offset_y"
-            ]
         return values
 
     def _effective_ruby_decoration(self) -> dict[str, object]:

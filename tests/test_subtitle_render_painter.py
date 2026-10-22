@@ -11081,6 +11081,42 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
     assert resolve_title_overlay(dangling).anchor == "top_left"
 
 
+def test_title_decoration_uses_after_glow_width(qapp):
+    """标题不走字，装饰应取走字后发光宽度而非走字前宽度。"""
+    from krok_helper.subtitle_render.engine.style.title_semantics import (
+        resolve_title_overlay,
+        resolve_title_role_overlay,
+    )
+
+    schemes = dict(Style().custom_style_schemes)
+    schemes["标题"] = replace(
+        schemes["标题"],
+        decoration_kind="glow",
+        glow_before_radius_px=2,
+        glow_after_radius_px=17,
+        glow_concentration_level=1,
+    )
+    schemes["角色A"] = SubtitleStyleScheme(
+        decoration_kind="glow",
+        glow_before_radius_px=3,
+        glow_after_radius_px=19,
+        glow_concentration_level=2,
+    )
+    style = Style(
+        title_overlays=[TitleOverlay(enabled=True, scheme_name="标题")],
+        custom_style_schemes=schemes,
+    )
+    resolved = resolve_title_overlay(style)
+    assert resolved.decoration_kind == "glow"
+    assert resolved.glow_radius_px == 17
+    assert resolved.glow_concentration_level == 1
+
+    role_title = resolve_title_role_overlay(style, resolved, "角色A")
+    assert role_title.decoration_kind == "glow"
+    assert role_title.glow_radius_px == 19
+    assert role_title.glow_concentration_level == 2
+
+
 def test_title_layout_letter_spacing_overrides_title_and_character_schemes(qapp):
     from krok_helper.subtitle_render.engine.painter import (
         _layout_title_overlay,
