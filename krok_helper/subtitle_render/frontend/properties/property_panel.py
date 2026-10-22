@@ -2137,12 +2137,13 @@ class PropertyPanel(QWidget):
             before_field = _DECORATION_BEFORE_SLOTS.get(field)
             if before_field is None:
                 routed[field] = value
-            elif state_before and not synced:
+            elif synced:
+                routed[before_field] = value
+                routed[field] = value
+            elif state_before:
                 routed[before_field] = value
             else:
                 routed[field] = value
-                if synced:
-                    routed[before_field] = None
         return routed
 
     def _update_shared_decoration(self, **changes) -> None:
@@ -4881,6 +4882,16 @@ class PropertyPanel(QWidget):
             self._singer_combo.setCurrentIndex(index)
         finally:
             self._scheme_announce_suppressed = False
+        # 标题不走字，渲染固定取走字前配色与装饰；打开标题方案时切到
+        # 「走字前」页，避免用户在走字后页改了半天却看不到标题变化。
+        if (
+            key == f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}"
+            and self._singer_combo.itemData(index) == key
+            and hasattr(self, "_color_state_combo")
+        ):
+            before_index = self._color_state_combo.findData("before")
+            if before_index >= 0:
+                self._color_state_combo.setCurrentIndex(before_index)
 
     def _on_scheme_combo_changed(self, _index: int) -> None:
         name = self._current_custom_scheme_name()

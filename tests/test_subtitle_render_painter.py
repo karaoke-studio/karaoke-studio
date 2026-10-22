@@ -11081,8 +11081,8 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
     assert resolve_title_overlay(dangling).anchor == "top_left"
 
 
-def test_title_decoration_uses_after_glow_width(qapp):
-    """标题不走字，装饰应取走字后发光宽度而非走字前宽度。"""
+def test_title_decoration_uses_before_snapshot(qapp):
+    """标题不走字：颜色和装饰全部取走字前快照，不混用走字后槽。"""
     from krok_helper.subtitle_render.engine.style.title_semantics import (
         resolve_title_overlay,
         resolve_title_role_overlay,
@@ -11092,29 +11092,74 @@ def test_title_decoration_uses_after_glow_width(qapp):
     schemes["标题"] = replace(
         schemes["标题"],
         decoration_kind="glow",
+        decoration_kind_before="shadow",
         glow_before_radius_px=2,
         glow_after_radius_px=17,
+        glow_before_concentration_level=-1,
         glow_concentration_level=1,
+        shadow_before_offset_x=-4,
+        shadow_before_offset_y=6,
+        shadow_offset_x=8,
+        shadow_offset_y=9,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=_solid_fill("#112233"),
+                stroke=_solid_fill("#223344"),
+                stroke2=_solid_fill("#334455"),
+                shadow=_solid_fill("#445566"),
+            ),
+            after=KaraokeColorState(
+                text=_solid_fill("#AABBCC"),
+                stroke=_solid_fill("#BBCCDD"),
+                stroke2=_solid_fill("#CCDDEE"),
+                shadow=_solid_fill("#DDEEFF"),
+            ),
+        ),
     )
     schemes["角色A"] = SubtitleStyleScheme(
         decoration_kind="glow",
+        decoration_kind_before="shadow",
         glow_before_radius_px=3,
         glow_after_radius_px=19,
-        glow_concentration_level=2,
+        glow_before_concentration_level=2,
+        glow_concentration_level=0,
+        shadow_before_offset_x=-5,
+        shadow_before_offset_y=7,
+        shadow_offset_x=10,
+        shadow_offset_y=11,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=_solid_fill("#010203"),
+                shadow=_solid_fill("#040506"),
+            ),
+            after=KaraokeColorState(
+                text=_solid_fill("#F0E0D0"),
+                shadow=_solid_fill("#D0C0B0"),
+            ),
+        ),
     )
     style = Style(
         title_overlays=[TitleOverlay(enabled=True, scheme_name="标题")],
         custom_style_schemes=schemes,
     )
     resolved = resolve_title_overlay(style)
-    assert resolved.decoration_kind == "glow"
-    assert resolved.glow_radius_px == 17
-    assert resolved.glow_concentration_level == 1
+    assert resolved.decoration_kind == "shadow"
+    assert resolved.glow_radius_px == 2
+    assert resolved.glow_concentration_level == -1
+    assert resolved.shadow_offset_x == -4
+    assert resolved.shadow_offset_y == 6
+    # 标题一直用走字前配色；装饰色与文字色同源，不能取走字后的值。
+    assert resolved.fill.color == "#112233"
+    assert resolved.shadow.color == "#445566"
 
     role_title = resolve_title_role_overlay(style, resolved, "角色A")
-    assert role_title.decoration_kind == "glow"
-    assert role_title.glow_radius_px == 19
+    assert role_title.decoration_kind == "shadow"
+    assert role_title.glow_radius_px == 3
     assert role_title.glow_concentration_level == 2
+    assert role_title.shadow_offset_x == -5
+    assert role_title.shadow_offset_y == 7
+    assert role_title.fill.color == "#010203"
+    assert role_title.shadow.color == "#040506"
 
 
 def test_title_layout_letter_spacing_overrides_title_and_character_schemes(qapp):

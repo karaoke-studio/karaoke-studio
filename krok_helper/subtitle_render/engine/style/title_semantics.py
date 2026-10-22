@@ -74,12 +74,26 @@ def resolve_title_overlay(
             stroke2_width_px=(
                 int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
             ),
-            decoration_kind=merged.decoration_kind,
-            glow_radius_px=int(merged.glow_after_radius_px),
-            glow_concentration_level=int(merged.glow_concentration_level),
+            decoration_kind=(
+                merged.decoration_kind_before or merged.decoration_kind
+            ),
+            glow_radius_px=int(merged.glow_before_radius_px),
+            glow_concentration_level=int(
+                merged.glow_before_concentration_level
+                if merged.glow_before_concentration_level is not None
+                else merged.glow_concentration_level
+            ),
             shadow=colors.shadow,
-            shadow_offset_x=int(merged.shadow_offset_x),
-            shadow_offset_y=int(merged.shadow_offset_y),
+            shadow_offset_x=int(
+                merged.shadow_before_offset_x
+                if merged.shadow_before_offset_x is not None
+                else merged.shadow_offset_x
+            ),
+            shadow_offset_y=int(
+                merged.shadow_before_offset_y
+                if merged.shadow_before_offset_y is not None
+                else merged.shadow_offset_y
+            ),
         )
     source = title_layout_source(style, title.layout_index)
     if source is not None:
@@ -170,12 +184,26 @@ def resolve_title_role_overlay(
         stroke2_width_px=(
             int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
         ),
-        decoration_kind=merged.decoration_kind,
-        glow_radius_px=int(merged.glow_after_radius_px),
-        glow_concentration_level=int(merged.glow_concentration_level),
+        decoration_kind=(
+            merged.decoration_kind_before or merged.decoration_kind
+        ),
+        glow_radius_px=int(merged.glow_before_radius_px),
+        glow_concentration_level=int(
+            merged.glow_before_concentration_level
+            if merged.glow_before_concentration_level is not None
+            else merged.glow_concentration_level
+        ),
         shadow=colors.shadow,
-        shadow_offset_x=int(merged.shadow_offset_x),
-        shadow_offset_y=int(merged.shadow_offset_y),
+        shadow_offset_x=int(
+            merged.shadow_before_offset_x
+            if merged.shadow_before_offset_x is not None
+            else merged.shadow_offset_x
+        ),
+        shadow_offset_y=int(
+            merged.shadow_before_offset_y
+            if merged.shadow_before_offset_y is not None
+            else merged.shadow_offset_y
+        ),
     )
 
 

@@ -6334,6 +6334,14 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert panel._glow_controls_row.isHidden()
 
 
+def test_title_scheme_opens_on_before_color_state(qapp):
+    """标题渲染固定取走字前快照，打开标题方案时颜色页也应停在走字前。"""
+    panel = PropertyPanel()
+    panel.set_style(Style())
+    panel.set_current_scheme_key("custom:标题")
+    assert panel._color_state_combo.currentData() == "before"
+
+
 def test_decoration_sync_defaults_on_and_routes_before_edits_to_after(qapp):
     """新工程默认同步：任一侧编辑装饰类型/浓度/阴影都写前后两侧。"""
     panel = PropertyPanel()
