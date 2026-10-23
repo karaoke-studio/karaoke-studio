@@ -504,6 +504,27 @@ _LIT_FIELDS = {
     "volume_transition_ratio_pct",
 }
 
+# 行背景带控件回填的字段集合：选预设/上传图会一次改多个字段（并顺手开总
+# 开关），这些改动必须立即回显到卡片，宿主回流 set_style 走等值快路径不会
+# 补这次同步。
+_LINE_BAND_FIELDS = {
+    "line_band_enabled",
+    "line_band_image",
+    "line_band_fill_mode",
+    "line_band_cap_left_px",
+    "line_band_cap_right_px",
+    "line_band_mid_mode",
+    "line_band_pad_top_px",
+    "line_band_pad_bottom_px",
+    "line_band_pad_left_px",
+    "line_band_pad_right_px",
+    "line_band_include_ruby",
+    "line_band_offset_y_px",
+    "line_band_opacity_pct",
+    "line_band_tint",
+    "line_band_tint_strength_pct",
+}
+
 
 from krok_helper.subtitle_render.frontend.properties.color_controls import (
     COLOR_COMMIT_DEBOUNCE_MS,
@@ -4240,6 +4261,8 @@ class PropertyPanel(QWidget):
         if preset is None:
             return
         self._update_style(
+            # 选预设即视为要用带子：顺手打开总开关，否则预览里什么都看不到。
+            line_band_enabled=True,
             line_band_image=spec,
             line_band_fill_mode="three_slice",
             line_band_cap_left_px=preset.cap_left_px,
@@ -4264,6 +4287,7 @@ class PropertyPanel(QWidget):
         if path:
             # 上传的图多半不是三段式素材：端点归零，退化为整条重复。
             self._update_style(
+                line_band_enabled=True,
                 line_band_image=path,
                 line_band_cap_left_px=0,
                 line_band_cap_right_px=0,
@@ -5919,6 +5943,8 @@ class PropertyPanel(QWidget):
                 self._sync_ruby_color_follow_controls()
             if set(changes).intersection(_LIT_FIELDS):
                 self._sync_lit_controls()
+            if set(changes).intersection(_LINE_BAND_FIELDS):
+                self._sync_line_band_controls()
         finally:
             self._syncing = False
         # 布局示意图跟随所有影响排版的修改（set_state 内部有变更判重）
