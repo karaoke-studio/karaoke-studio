@@ -11,7 +11,13 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath  # noqa: E402
+from PyQt6.QtGui import (  # noqa: E402
+    QColor,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.domain.models import (  # noqa: E402
@@ -37,7 +43,10 @@ from krok_helper.subtitle_render.serialization.timing import (  # noqa: E402
     line_animation_override_from_dict,
     line_animation_override_to_dict,
 )
-from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    paint_frame,
+    paint_frame_to_painter,
+)
 from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (  # noqa: E402
     ScanlineParams,
     _brighten_color_hsv,
@@ -851,6 +860,95 @@ def test_painter_scanline_highlights_the_moving_front(qapp) -> None:
     late_base = _frame_bytes(track, base, 1200)
     late_scan = _frame_bytes(track, scanline, 1200)
     assert _visible_diff(late_base, late_scan) == 0
+
+
+def _scanline_color_stats(
+    image: QImage, color: QColor
+) -> tuple[int, tuple[int, int, int, int] | None]:
+    """Count scan-line-coloured pixels and return their bounding box."""
+
+    image = image.convertToFormat(QImage.Format.Format_ARGB32)
+    target = (color.red(), color.green(), color.blue())
+    points: list[tuple[int, int]] = []
+    for y in range(image.height()):
+        for x in range(image.width()):
+            pixel = image.pixelColor(x, y)
+            if pixel.alpha() < 128:
+                continue
+            if max(
+                abs(pixel.red() - target[0]),
+                abs(pixel.green() - target[1]),
+                abs(pixel.blue() - target[2]),
+            ) <= 24:
+                points.append((x, y))
+    if not points:
+        return 0, None
+    return len(points), (
+        min(x for x, _ in points),
+        min(y for _, y in points),
+        max(x for x, _ in points),
+        max(y for _, y in points),
+    )
+
+
+def test_painter_scanline_handles_high_dpi_preview_images(qapp) -> None:
+    """高 DPI 预览 QImage 是物理像素，扫字线不能因错位 copy 变透明。"""
+
+    track = _wiping_track()
+    style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_color="#FF3300",
+        scanline_glow_px=6,
+    )
+    color = QColor("#FF3300")
+    width, height = 1280, 720
+
+    def render(dpr: float) -> QImage:
+        image = QImage(
+            int(round(width * dpr)),
+            int(round(height * dpr)),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        image.setDevicePixelRatio(dpr)
+        image.fill(0)
+        paint_frame(image, track, 500, style)
+        return image
+
+    base_count, base_box = _scanline_color_stats(render(1.0), color)
+    assert base_box is not None
+    assert base_count > 100
+    base_center_x = (base_box[0] + base_box[2]) / 2.0
+    # 预览栅格倍率可能小于 1（4K 工程缩到窗口）也可能大于 1（高 DPI）。
+    # 两种情况都必须按物理区域读回，否则带会错位/整条 alpha 归零。
+    for dpr, min_ratio in ((0.5, 0.15), (2.0, 2.0)):
+        count, box = _scanline_color_stats(render(dpr), color)
+        assert box is not None, dpr
+        assert count >= base_count * min_ratio, dpr
+        center_x = (box[0] + box[2]) / 2.0
+        assert center_x / dpr == pytest.approx(base_center_x, abs=4.0), dpr
+
+
+def test_painter_scanline_renders_on_qpixmap_preview_device(qapp) -> None:
+    """同步 QPainter 预览画在 QPixmap/QWidget 上，扫字线必须仍可见。"""
+
+    track = _wiping_track()
+    style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_color="#FF3300",
+        scanline_glow_px=6,
+    )
+    pixmap = QPixmap(800, 450)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    try:
+        paint_frame_to_painter(painter, 800, 450, track, 500, style)
+    finally:
+        painter.end()
+    count, box = _scanline_color_stats(
+        pixmap.toImage(), QColor("#FF3300")
+    )
+    assert box is not None
+    assert count > 20
 
 
 def test_painter_scanline_effect_particles_add_a_visible_trail(qapp) -> None:

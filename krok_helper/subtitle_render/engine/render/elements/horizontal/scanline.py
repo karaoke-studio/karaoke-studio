@@ -1355,6 +1355,23 @@ def _paint_adjustment_strip(
 
     device = painter.device()
     if not isinstance(device, QImage):
+        # 同步 QPainter 预览把字幕直接画在 QWidget / QPixmap 上。这里不能
+        # 读回目标像素做「保留 alpha 的 RGB crossfade」，但可以用 SourceAtop
+        # 达到同一效果：源图自身带羽化 alpha，合成时目标 alpha 原样保留，
+        # 字形外的像素完全不动。旧实现遇到非 QImage 直接 return，导致
+        # CPU 同步预览（以及 widget.grab()）整条扫字线透明。
+        _paint_adjustment_strip_widget(
+            painter,
+            path,
+            rect,
+            front=front,
+            params=params,
+            style=style,
+            vertical=vertical,
+            opacity=opacity,
+            layer_states=layer_states,
+            rtl=rtl,
+        )
         return
     stroke_width = style.stroke_width_px
     stroke2_width = main_stroke2_width(style)
@@ -1418,9 +1435,28 @@ def _paint_adjustment_strip(
 
     # D：同区域的已合成原画面（含原始字形与下层内容）。混合模式只在
     # 预乘格式上定义良好，目标画布（RGBA8888 直通）必须先转换。
-    original = device.copy(layer_rect).convertToFormat(
+    # ``layer_rect`` 是逻辑坐标；高 DPI 预览的 QImage 是物理像素
+    # （``setDevicePixelRatio``），直接按逻辑矩形 copy 会取到错位/空白
+    # 区域，RGB crossfade 后整条带 alpha 变 0——4K + Windows 150%/200%
+    # 缩放下 CPU 预览扫字线完全透明的根因。这里用 painter 的逻辑→设备
+    # 变换取真实区域，再缩回逻辑尺寸与 adjusted 对齐。
+    transform = painter.deviceTransform()
+    if transform.isIdentity():
+        copy_rect = layer_rect
+    else:
+        copy_rect = transform.mapRect(QRectF(layer_rect)).toAlignedRect()
+    copy_rect = copy_rect.intersected(device.rect())
+    if copy_rect.isEmpty():
+        return
+    original = device.copy(copy_rect).convertToFormat(
         QImage.Format.Format_ARGB32_Premultiplied
     )
+    if original.size() != adjusted.size():
+        original = original.scaled(
+            adjusted.size(),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
     # 颜色 crossfade、alpha 保持原画面（半透明配色不会把带内压得更透明）。
     composite = _crossfade_keep_alpha(
@@ -1437,6 +1473,146 @@ def _paint_adjustment_strip(
         painter.drawImage(QPointF(offset_x, offset_y), composite)
     finally:
         painter.restore()
+
+
+def _paint_adjustment_strip_widget(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    *,
+    front: float,
+    params: ScanlineParams,
+    style: Style,
+    vertical: bool,
+    opacity: float,
+    layer_states: list[tuple[bool, KaraokeColorState]] | None,
+    rtl: bool,
+) -> None:
+    """Non-QImage devices: recolour the glyph stack with SourceAtop.
+
+    SourceAtop keeps the destination alpha exactly (anti-aliased edges and
+    translucent glyph colours are untouched) while replacing the source RGB
+    inside the glyph silhouette. That is the same visual contract as the
+    image-device crossfade path, without requiring a readback of the target.
+    """
+
+    stroke_width = style.stroke_width_px
+    stroke2_width = main_stroke2_width(style)
+    stroke_pad = float(max(stroke_width, stroke2_width) + 2)
+    bounds = path.boundingRect()
+    band = scanline_band_rect(rect, front, params, vertical=vertical)
+    layer_rect = band.intersected(
+        bounds.adjusted(-stroke_pad, -stroke_pad, stroke_pad, stroke_pad)
+    ).toAlignedRect()
+    if layer_rect.isEmpty():
+        return
+    width = max(layer_rect.width(), 1)
+    height = max(layer_rect.height(), 1)
+    adjusted = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+    adjusted.fill(Qt.GlobalColor.transparent)
+    offset_x = float(layer_rect.left())
+    offset_y = float(layer_rect.top())
+    local_path = QPainterPath(path)
+    local_path.translate(-offset_x, -offset_y)
+    local_rect = rect.translated(-offset_x, -offset_y)
+    local_front = front - (offset_y if vertical else offset_x)
+    source_painter = QPainter(adjusted)
+    try:
+        source_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if layer_states is not None:
+            for after, state in layer_states:
+                source_painter.save()
+                try:
+                    source_painter.setClipRect(
+                        _state_clip(
+                            local_rect,
+                            local_front,
+                            vertical=vertical,
+                            rtl=rtl,
+                            after=after,
+                        )
+                    )
+                    if stroke2_width > 0:
+                        paint_stroke_path(
+                            source_painter,
+                            local_path,
+                            state.stroke2,
+                            local_rect,
+                            stroke2_pen_width(stroke_width, stroke2_width),
+                        )
+                    if stroke_width > 0:
+                        paint_stroke_path(
+                            source_painter,
+                            local_path,
+                            state.stroke,
+                            local_rect,
+                            stroke_pen_width(stroke_width),
+                        )
+                    paint_fill_path(source_painter, local_path, state.text, local_rect)
+                finally:
+                    source_painter.restore()
+    finally:
+        source_painter.end()
+
+    strength = _feather_strength_2d(
+        width, height, local_front, params, vertical, opacity
+    )
+    feathered = _scale_premultiplied_alpha(adjusted, strength)
+    painter.save()
+    try:
+        painter.setClipRect(layer_rect)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceAtop
+        )
+        painter.drawImage(QPointF(offset_x, offset_y), feathered)
+    finally:
+        painter.restore()
+
+
+def _feather_strength_2d(
+    width: int,
+    height: int,
+    front: float,
+    params: ScanlineParams,
+    vertical: bool,
+    opacity: float,
+) -> np.ndarray:
+    """Per-pixel feather strength with the shared ordered dither."""
+
+    count = height if vertical else width
+    columns = _feather_strength(count, front, params) * opacity
+    np.clip(columns, 0.0, 1.0, out=columns)
+    strength = (
+        np.repeat(columns.astype(np.float32), width).reshape(height, width)
+        if vertical
+        else np.broadcast_to(columns.astype(np.float32), (height, width))
+    )
+    tile = _DITHER_MATRIX.shape[0]
+    dither = np.tile(
+        _DITHER_MATRIX, ((height + tile - 1) // tile, (width + tile - 1) // tile)
+    )[:height, :width]
+    return np.clip(strength + dither / 255.0, 0.0, 1.0)
+
+
+def _scale_premultiplied_alpha(image: QImage, strength: np.ndarray) -> QImage:
+    """Multiply premultiplied RGBA by a feather mask (SourceAtop source)."""
+
+    width, height = image.width(), image.height()
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    stride = image.bytesPerLine() // 4
+    pixels = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        image.height(), stride, 4
+    )[:, :width].astype(np.float32)
+    pixels *= strength[:, :, None]
+    out = np.clip(pixels + 0.5, 0.0, 255.0).astype(np.uint8)
+    return QImage(
+        out.tobytes(),
+        width,
+        height,
+        width * 4,
+        QImage.Format.Format_ARGB32_Premultiplied,
+    ).copy()
 
 
 def _bayer_matrix(size: int) -> np.ndarray:
@@ -1513,21 +1689,9 @@ def _crossfade_keep_alpha(
 
     adjust_rgb, adjust_alpha = straight(adjusted)
     original_rgb, original_alpha = straight(original)
-    count = height if vertical else width
-    columns = _feather_strength(count, front, params) * opacity
-    np.clip(columns, 0.0, 1.0, out=columns)
-    strength = (
-        np.repeat(columns.astype(np.float32), width).reshape(height, width)
-        if vertical
-        else np.broadcast_to(columns.astype(np.float32), (height, width))
-    )
     # 有序抖动：羽化低斜率区的 8bit 量化平台会显成一条条竖线，抖动把
     # 平台打散成人眼不敏感的高频纹理。
-    tile = _DITHER_MATRIX.shape[0]
-    dither = np.tile(
-        _DITHER_MATRIX, ((height + tile - 1) // tile, (width + tile - 1) // tile)
-    )[:height, :width]
-    strength = np.clip(strength + dither / 255.0, 0.0, 1.0)
+    strength = _feather_strength_2d(width, height, front, params, vertical, opacity)
     # 重绘层未覆盖的像素（其 alpha 为 0）保持原画面。
     effective = strength * (adjust_alpha > 0.0)
     out_rgb = (
