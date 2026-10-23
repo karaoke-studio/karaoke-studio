@@ -223,10 +223,11 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandComposite(
     // 位图目标必须在 BeginDraw/EndDraw 之间绘制，否则 D2D 直接丢命令。
     context->BeginDraw();
     context->Clear(nullptr);
-    context->DrawBitmap(base);
+    // 图层顺序：谱线层（谱号/五线/终止线）在下，素材本体（彩色音符）在上。
     if (lines != nullptr) {
         context->DrawBitmap(lines);
     }
+    context->DrawBitmap(base);
     const HRESULT result = context->EndDraw();
     context->SetTarget(previous.Get());
     if (FAILED(result)) {

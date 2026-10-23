@@ -191,10 +191,12 @@ def band_source(spec: BandSpec) -> Optional[QImage]:
         composite.fill(0)
         painter = QPainter(composite)
         try:
+            # 图层顺序：谱线层（含谱号/终止线）在下，素材本体（彩色音符）
+            # 在上——用户口径 2026-10-24：音符要在五线谱**图层上方**。
+            painter.drawImage(0, 0, lines)
             painter.drawImage(0, 0, base.convertToFormat(
                 QImage.Format.Format_ARGB32_Premultiplied
             ))
-            painter.drawImage(0, 0, lines)
         finally:
             painter.end()
         base = composite
@@ -245,10 +247,12 @@ def band_artwork(spec: BandSpec) -> Optional[QImage]:
         composite.fill(0)
         painter = QPainter(composite)
         try:
+            # 图层顺序：谱线层（含谱号/终止线）在下，素材本体（彩色音符）
+            # 在上——用户口径 2026-10-24：音符要在五线谱**图层上方**。
+            painter.drawImage(0, 0, lines)
             painter.drawImage(0, 0, base.convertToFormat(
                 QImage.Format.Format_ARGB32_Premultiplied
             ))
-            painter.drawImage(0, 0, lines)
         finally:
             painter.end()
         base = composite

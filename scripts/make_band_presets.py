@@ -311,19 +311,19 @@ def build_staff_scroll():
     content = new(w)
     commands = load_note_commands() or []
 
-    # 左端点：两个彩色音符，全部位于五线谱上方（用户口径 2026-10-24）
+    # 左端点：两个彩色音符（位置保持素材原样；图层顺序由运行时保证——
+    # 谱线层在下、音符在上，用户口径 2026-10-24）
     cap = new(L)
     if commands:
-        paste_note(cap, 108, 52, 56, NOTE_COLORS[0], commands)
-        paste_note(cap, 146, 40, 44, NOTE_COLORS[1], commands)
+        paste_note(cap, 108, 176, 92, NOTE_COLORS[0], commands)
+        paste_note(cap, 146, 132, 76, NOTE_COLORS[1], commands)
     content.alpha_composite(cap, (0, 0))
 
-    # 右端点：两个彩色音符（同样在谱线上方）；终止竖线移到谱线层，
-    # 跟着谱线颜色一起变（用户口径 2026-10-24）。
+    # 右端点：两个彩色音符；终止竖线属于谱线层（跟着谱线颜色变）。
     cap = new(R)
     if commands:
-        paste_note(cap, 40, 52, 56, NOTE_COLORS[2], commands)
-        paste_note(cap, 82, 40, 44, NOTE_COLORS[3], commands)
+        paste_note(cap, 40, 176, 92, NOTE_COLORS[2], commands)
+        paste_note(cap, 82, 132, 76, NOTE_COLORS[3], commands)
     content.alpha_composite(cap, (w - R, 0))
 
     # 只保留阴影
