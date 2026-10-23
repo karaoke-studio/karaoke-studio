@@ -118,6 +118,19 @@ def default_line_color_for(image: str) -> str:
     return preset.default_line_color if preset is not None else ""
 
 
+def preset_caps(image: str) -> tuple[int, int] | None:
+    """预设素材的端点边界（源图像素）；非预设返回 ``None``。
+
+    端点滑条不能把切割点挪进素材端点内部：中段切片从 ``cap_left`` 开始，
+    一旦小于素材的端点宽度，中段就会把高音谱号/装饰再铺一遍——成片表现为
+    「左侧的图出现两遍」。所以渲染前用这里的下界把端点夹住。
+    """
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return None
+    return max(int(preset.cap_left_px), 0), max(int(preset.cap_right_px), 0)
+
+
 __all__ = [
     "BAND_PRESETS",
     "BAND_PRESET_DIR",

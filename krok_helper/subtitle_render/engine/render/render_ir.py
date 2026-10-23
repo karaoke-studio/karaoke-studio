@@ -19,6 +19,7 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
 )
 from krok_helper.subtitle_render.domain.band_presets import (
     default_line_color_for,
+    preset_caps,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -180,6 +181,26 @@ def titles_to_ir(
     return payloads
 
 
+def _clamp_preset_band_caps(payload: dict[str, Any], image_spec: str) -> None:
+    """预设素材的端点不得小于素材端点宽度，否则中段会重复端点图案。
+
+    与 CPU 的 ``band_spec`` 同一口径：预设按素材夹住，自定义图不限制。
+    """
+    caps = preset_caps(image_spec)
+    if caps is None:
+        return
+    try:
+        left = int(payload.get("line_band_cap_left_px") or 0)
+    except (TypeError, ValueError):
+        left = 0
+    try:
+        right = int(payload.get("line_band_cap_right_px") or 0)
+    except (TypeError, ValueError):
+        right = 0
+    payload["line_band_cap_left_px"] = max(left, caps[0])
+    payload["line_band_cap_right_px"] = max(right, caps[1])
+
+
 def build_render_ir(
     track: TimingTrack,
     style: Style,
@@ -280,6 +301,7 @@ def build_render_ir(
             style_payload["line_band_line_color"] = default_line_color_for(
                 str(style.line_band_image or "")
             )
+        _clamp_preset_band_caps(style_payload, str(style.line_band_image or ""))
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -438,6 +460,9 @@ def build_style_patch_ir(
             patch_style_payload["line_band_line_color"] = default_line_color_for(
                 str(style.line_band_image or "")
             )
+        _clamp_preset_band_caps(
+            patch_style_payload, str(style.line_band_image or "")
+        )
         return {
             "schema": RENDER_IR_SCHEMA,
             "screen": {

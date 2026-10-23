@@ -95,6 +95,35 @@ def test_missing_image_resolves_to_no_spec(tmp_path):
     assert band_spec(_style(line_band_enabled=False)) is None
 
 
+def test_preset_caps_cannot_cut_into_the_preset_art():
+    """预设端点不得小于素材端点宽度，否则中段会把端点图案再铺一遍。
+
+    用户实测：把左端点拖到 60 后，高音谱号在带子左侧出现两遍——端点切片
+    从 60 开始，中段又把谱号铺了一次。
+    """
+    preset = band_preset("staff_scroll")
+    spec = band_spec(
+        _style(
+            line_band_image="preset:staff_scroll",
+            line_band_cap_left_px=60,
+            line_band_cap_right_px=40,
+        )
+    )
+    assert spec is not None
+    assert spec.cap_left == preset.cap_left_px
+    assert spec.cap_right == preset.cap_right_px
+    # 自定义图不受限制：用户可以随意切。
+    custom = band_spec(
+        _style(
+            line_band_image=str(preset.path),
+            line_band_cap_left_px=60,
+            line_band_cap_right_px=40,
+        )
+    )
+    assert custom is not None
+    assert (custom.cap_left, custom.cap_right) == (60, 40)
+
+
 # ----------------------------------------------------------------- geometry
 def test_band_rect_uses_four_independent_paddings():
     text = QRectF(100.0, 200.0, 300.0, 60.0)

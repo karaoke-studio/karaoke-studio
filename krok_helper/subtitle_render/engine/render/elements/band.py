@@ -24,6 +24,7 @@ from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QTransform
 
 from krok_helper.subtitle_render.domain.band_presets import (
     default_line_color_for,
+    preset_caps,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -75,11 +76,20 @@ def band_spec(style) -> Optional[BandSpec]:
     line_color = str(getattr(style, "line_band_line_color", "") or "")
     if not line_color:
         line_color = default_line_color_for(image_spec)
+    cap_left = max(int(style.line_band_cap_left_px), 0)
+    cap_right = max(int(style.line_band_cap_right_px), 0)
+    # 预设素材的端点是图案的一部分：切割点一旦挪进端点内部，中段会把高音
+    # 谱号等端点图案再铺一遍（用户实测「左侧的图出现两遍」）。预设按素材
+    # 端点宽度夹住；自定义图不限制，用户可以随意切。
+    caps = preset_caps(image_spec)
+    if caps is not None:
+        cap_left = max(cap_left, caps[0])
+        cap_right = max(cap_right, caps[1])
     return BandSpec(
         image_path=str(path),
         fill_mode=str(style.line_band_fill_mode),
-        cap_left=max(int(style.line_band_cap_left_px), 0),
-        cap_right=max(int(style.line_band_cap_right_px), 0),
+        cap_left=cap_left,
+        cap_right=cap_right,
         mid_mode=str(style.line_band_mid_mode),
         tint=str(style.line_band_tint or ""),
         tint_strength_pct=max(min(int(style.line_band_tint_strength_pct), 100), 0),

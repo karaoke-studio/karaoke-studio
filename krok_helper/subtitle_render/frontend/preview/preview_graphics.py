@@ -568,7 +568,9 @@ class PreviewGraphicsView(QGraphicsView):
         if not renderer.set_native_mode(enabled):
             return False
         # 渲染目标口径随模式变化（G6 用未钳制的屏幕物理口径）。
+        self._native_cpu_fallback_active = False
         self._refresh_async_target()
+        self._sync_native_subtitle_visibility()
         return True
 
     def set_gpu_preview_enabled(self, enabled: bool) -> None:
@@ -614,7 +616,30 @@ class PreviewGraphicsView(QGraphicsView):
     def _connect_gpu_fallback_signal(self) -> None:
         signal = getattr(self._async_renderer, "fallback_occurred", None)
         if signal is not None:
-            signal.connect(self.gpuFallback.emit, Qt.ConnectionType.QueuedConnection)
+            signal.connect(
+                self._on_gpu_fallback, Qt.ConnectionType.QueuedConnection
+            )
+
+    def _on_gpu_fallback(self, reason: str) -> None:
+        # GPU 整帧回落后字幕由 CPU 图接管：Qt 字幕项要重新显示。
+        self._native_cpu_fallback_active = True
+        self._sync_native_subtitle_visibility()
+        self.gpuFallback.emit(reason)
+
+    def _sync_native_subtitle_visibility(self) -> None:
+        """G6 直画时 DComp 子窗口是唯一字幕层：Qt 字幕项必须隐藏。
+
+        两份字幕叠加时文字几乎重合、不易察觉，但行背景带的端点会因两套
+        字体度量差出十几 px——表现为「左侧的谱号/装饰出现两遍」。
+        """
+        renderer = self._async_renderer
+        native = bool(getattr(renderer, "uses_native_preview", False))
+        fallback = bool(getattr(self, "_native_cpu_fallback_active", False))
+        if native and not fallback:
+            self._subtitle_item.clear_async_image()
+            self._subtitle_item.setVisible(False)
+            return
+        self._subtitle_item.setVisible(True)
 
     def _connect_backend_mode_signal(self) -> None:
         signal = getattr(self._async_renderer, "backendModeChanged", None)

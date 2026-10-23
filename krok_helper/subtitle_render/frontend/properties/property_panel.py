@@ -5716,13 +5716,22 @@ class PropertyPanel(QWidget):
     def _line_band_cap_left_value(self, value: int) -> int:
         width = self._line_band_image_size()[0]
         limit = max(width - int(self._style.line_band_cap_right_px), 0) if width else 4096
-        return max(0, min(int(value), limit))
+        # 预设素材的端点图案不能被切进中段（否则谱号/装饰会重复出现）。
+        preset = band_preset(
+            preset_id_for_image(self._style.line_band_image or "") or ""
+        )
+        floor = max(int(preset.cap_left_px), 0) if preset is not None else 0
+        return max(floor, min(int(value), limit))
 
     def _line_band_cap_right_value(self, value: int) -> int:
         # 滑条是负值：向右拖 = 边界向右移（手感跟手）。
         width = self._line_band_image_size()[0]
         limit = max(width - int(self._style.line_band_cap_left_px), 0) if width else 4096
-        return max(0, min(-int(value), limit))
+        preset = band_preset(
+            preset_id_for_image(self._style.line_band_image or "") or ""
+        )
+        floor = max(int(preset.cap_right_px), 0) if preset is not None else 0
+        return max(floor, min(-int(value), limit))
 
     def _sync_line_band_controls(self) -> None:
         """把行背景带的样式值回填到控件（调用方负责 _syncing 门）。"""
@@ -5746,8 +5755,9 @@ class PropertyPanel(QWidget):
             combo.setCurrentIndex(max(0, combo.findData(value)))
         # 端点：右侧控件是负值（滑条向右 = 边界向右）。
         width, _height = self._line_band_image_size()
-        cap_left = int(style.line_band_cap_left_px)
-        cap_right = int(style.line_band_cap_right_px)
+        # 显示也走同一套夹取：预设的端点不能切进素材图案（否则谱号会重复）。
+        cap_left = self._line_band_cap_left_value(style.line_band_cap_left_px)
+        cap_right = self._line_band_cap_right_value(-style.line_band_cap_right_px)
         self._line_band_cap_left_spin.setValue(cap_left)
         self._line_band_cap_right_spin.setValue(-cap_right)
         for spin, value in (
