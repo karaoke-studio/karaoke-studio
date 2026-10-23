@@ -24,7 +24,6 @@ from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QTransform
 
 from krok_helper.subtitle_render.domain.band_presets import (
     default_line_color_for,
-    preset_caps,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -60,13 +59,22 @@ class BandSpec:
     # 独立谱线层（如五线谱）：路径 + 上色颜色。
     line_image_path: str = ""
     line_color: str = ""
-    # 图片非透明部分的投影/发光。
-    edge_kind: str = "none"
-    edge_color: str = "#000000"
-    edge_size_px: int = 12
-    edge_offset_x_px: int = 8
-    edge_offset_y_px: int = 8
-    edge_opacity_pct: int = 70
+    # 图层效果（PS 图层样式口径）：每一种都有独立开关与配置，可以同时开。
+    shadow: Optional["BandEffect"] = None
+    stroke: Optional["BandEffect"] = None
+    glow: Optional["BandEffect"] = None
+
+
+@dataclass(frozen=True)
+class BandEffect:
+    """一种图层效果：作用于合成后的整张带子图（含 alpha）。"""
+
+    kind: str
+    color: str = "#000000"
+    size_px: int = 12
+    opacity_pct: int = 70
+    offset_x_px: int = 0
+    offset_y_px: int = 0
 
 
 def band_spec(style) -> Optional[BandSpec]:
@@ -83,16 +91,70 @@ def band_spec(style) -> Optional[BandSpec]:
         line_color = default_line_color_for(image_spec)
     cap_left = max(int(style.line_band_cap_left_px), 0)
     cap_right = max(int(style.line_band_cap_right_px), 0)
-    # 三段式：0/2 直接画在带子左右两端，中间 1 填缝。**切点与显示端点分开**：
-    # 预设素材有它的设计端点（谱号占 0..190），中段永远从设计端点开始切；
-    # 端点滑条只把端点裁窄，不会把谱号喂进中段再铺一遍（用户 2026-10-24 实测
-    # 截图：端点切进谱号时，左侧谱号出现两遍）。自定义图没有设计端点 → 相同。
-    caps = preset_caps(image_spec)
-    src_cap_left, src_cap_right = (
-        (max(int(caps[0]), 0), max(int(caps[1]), 0))
-        if caps is not None
-        else (cap_left, cap_right)
-    )
+    # 三段式切点 = 用户端点：0/1/2 三份按滑条切，切掉的部分会出现在中段
+    # 开头（用户 2026-10-24 口径：故意把音符切进中段时要能看到它）。
+    src_cap_left, src_cap_right = cap_left, cap_right
+
+    def effect(prefix: str, *, offsets: bool = False) -> Optional[BandEffect]:
+        if not bool(getattr(style, f"line_band_{prefix}_enabled", False)):
+            return None
+        return BandEffect(
+            kind=prefix,
+            color=str(getattr(style, f"line_band_{prefix}_color", "") or "#000000"),
+            size_px=max(int(getattr(style, f"line_band_{prefix}_size_px", 12)), 0),
+            opacity_pct=max(
+                min(int(getattr(style, f"line_band_{prefix}_opacity_pct", 70)), 100),
+                0,
+            ),
+            offset_x_px=(
+                int(getattr(style, "line_band_shadow_offset_x_px", 8))
+                if offsets
+                else 0
+            ),
+            offset_y_px=(
+                int(getattr(style, "line_band_shadow_offset_y_px", 8))
+                if offsets
+                else 0
+            ),
+        )
+
+    shadow = effect("shadow", offsets=True)
+    stroke = effect("stroke")
+    glow = effect("glow")
+    if shadow is None and stroke is None and glow is None:
+        # 兼容旧字段（直接构造 Style 的调用方 / 旧会话内存态）：只有一个
+        # line_band_edge_kind 时按它合出一种效果。
+        legacy = str(getattr(style, "line_band_edge_kind", "none") or "none")
+        if legacy in {"shadow", "stroke", "glow"}:
+            legacy_effect = BandEffect(
+                kind=legacy,
+                color=str(
+                    getattr(style, "line_band_edge_color", "#000000")
+                    or "#000000"
+                ),
+                size_px=max(
+                    int(getattr(style, "line_band_edge_size_px", 12)), 0
+                ),
+                opacity_pct=max(
+                    min(
+                        int(getattr(style, "line_band_edge_opacity_pct", 70)),
+                        100,
+                    ),
+                    0,
+                ),
+                offset_x_px=int(
+                    getattr(style, "line_band_edge_offset_x_px", 8)
+                ),
+                offset_y_px=int(
+                    getattr(style, "line_band_edge_offset_y_px", 8)
+                ),
+            )
+            if legacy == "shadow":
+                shadow = legacy_effect
+            elif legacy == "stroke":
+                stroke = legacy_effect
+            else:
+                glow = legacy_effect
     return BandSpec(
         image_path=str(path),
         fill_mode=str(style.line_band_fill_mode),
@@ -106,14 +168,9 @@ def band_spec(style) -> Optional[BandSpec]:
         src_cap_right=src_cap_right,
         line_image_path=str(lines_path) if lines_path is not None else "",
         line_color=line_color if lines_path is not None else "",
-        edge_kind=str(getattr(style, "line_band_edge_kind", "none") or "none"),
-        edge_color=str(getattr(style, "line_band_edge_color", "#000000") or "#000000"),
-        edge_size_px=max(int(getattr(style, "line_band_edge_size_px", 12)), 0),
-        edge_offset_x_px=int(getattr(style, "line_band_edge_offset_x_px", 8)),
-        edge_offset_y_px=int(getattr(style, "line_band_edge_offset_y_px", 8)),
-        edge_opacity_pct=max(
-            min(int(getattr(style, "line_band_edge_opacity_pct", 70)), 100), 0
-        ),
+        shadow=shadow,
+        stroke=stroke,
+        glow=glow,
     )
 
 
@@ -305,64 +362,59 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
     painter.save()
     try:
         painter.setOpacity(painter.opacity() * spec.opacity_pct / 100.0)
-        if spec.edge_kind in {"shadow", "glow", "stroke"}:
-            edge = _edge_source(spec, image)
-            if edge is not None:
-                base_opacity = painter.opacity()
-                if spec.edge_kind == "shadow":
+        for effect in (spec.shadow, spec.glow, spec.stroke):
+            if effect is None:
+                continue
+            edge = _edge_source(spec, image, effect)
+            if edge is None:
+                continue
+            base_opacity = painter.opacity()
+            if effect.kind == "shadow":
+                painter.save()
+                try:
+                    painter.setOpacity(
+                        base_opacity * effect.opacity_pct / 100.0
+                    )
+                    painter.translate(effect.offset_x_px, effect.offset_y_px)
+                    _paint_mode(painter, rect, edge, spec)
+                finally:
+                    painter.restore()
+            elif effect.kind == "stroke":
+                # 图层描边（PS Stroke）：未模糊剪影绕圆周整片铺开，合成图随后
+                # 盖住内部，只剩外圈一圈实心描边。
+                radius = max(float(effect.size_px), 1.0)
+                steps = 24
+                for index in range(steps):
+                    angle = math.tau * index / float(steps)
                     painter.save()
                     try:
                         painter.setOpacity(
-                            base_opacity * spec.edge_opacity_pct / 100.0
+                            min(base_opacity * effect.opacity_pct / 100.0, 1.0)
                         )
                         painter.translate(
-                            spec.edge_offset_x_px, spec.edge_offset_y_px
+                            math.cos(angle) * radius,
+                            math.sin(angle) * radius,
                         )
                         _paint_mode(painter, rect, edge, spec)
                     finally:
                         painter.restore()
-                elif spec.edge_kind == "stroke":
-                    # 图层描边（类似 PS 的 Stroke）：把剪影绕圆周整片铺开，
-                    # 合成图随后盖住内部，只剩外圈一圈实心描边。
-                    radius = max(float(spec.edge_size_px), 1.0)
-                    steps = 24
-                    for index in range(steps):
-                        angle = math.tau * index / float(steps)
-                        painter.save()
-                        try:
-                            painter.setOpacity(
-                                min(base_opacity * spec.edge_opacity_pct / 100.0, 1.0)
-                            )
-                            painter.translate(
-                                math.cos(angle) * radius,
-                                math.sin(angle) * radius,
-                            )
-                            _paint_mode(painter, rect, edge, spec)
-                        finally:
-                            painter.restore()
-                else:
-                    # 发光要长到带子轮廓之外：剪影绕圆周多次轻叠（模糊后的
-                    # 剪影本身不会越出画布，靠偏移把它扩出去）。
-                    radius = max(float(spec.edge_size_px), 1.0)
-                    steps = 16 if radius >= 8.0 else 8
-                    per_step = (
-                        spec.edge_opacity_pct / 100.0 / float(steps) * 2.0
-                    )
-                    for index in range(steps):
-                        angle = math.tau * index / float(steps)
-                        painter.save()
-                        try:
-                            painter.setOpacity(
-                                min(base_opacity * per_step, 1.0)
-                            )
-                            painter.translate(
-                                math.cos(angle) * radius,
-                                math.sin(angle) * radius,
-                            )
-                            _paint_mode(painter, rect, edge, spec)
-                        finally:
-                            painter.restore()
-        # 素材本体与谱线层已经合成在 `image` 里（`band_source`）：整条带子
+            else:
+                # 发光：模糊剪影绕圆周多次轻叠，向外扩出轮廓。
+                radius = max(float(effect.size_px), 1.0)
+                steps = 16 if radius >= 8.0 else 8
+                per_step = effect.opacity_pct / 100.0 / float(steps) * 2.0
+                for index in range(steps):
+                    angle = math.tau * index / float(steps)
+                    painter.save()
+                    try:
+                        painter.setOpacity(min(base_opacity * per_step, 1.0))
+                        painter.translate(
+                            math.cos(angle) * radius,
+                            math.sin(angle) * radius,
+                        )
+                        _paint_mode(painter, rect, edge, spec)
+                    finally:
+                        painter.restore()        # 素材本体与谱线层已经合成在 `image` 里（`band_source`）：整条带子
         # 作为**一张图**参与切片与描边，避免两层各自切片/各自描边。
         _paint_mode(painter, rect, image, spec)
     finally:
@@ -382,13 +434,15 @@ def _paint_mode(
         painter.drawImage(rect, image, QRectF(image.rect()))
 
 
-def _edge_source(spec: BandSpec, image: QImage) -> Optional[QImage]:
-    """把素材 alpha 压成单色剪影；``glow``/``shadow`` 再按半径做降采样模糊。"""
+def _edge_source(
+    spec: BandSpec, image: QImage, effect: "BandEffect"
+) -> Optional[QImage]:
+    """把整张带子图的 alpha 压成该效果色的剪影；阴影/发光再按半径模糊。"""
     key = (
         int(image.cacheKey()),
-        spec.edge_kind,
-        spec.edge_color,
-        int(spec.edge_size_px),
+        effect.kind,
+        effect.color,
+        int(effect.size_px),
     )
     cached = _EDGE_CACHE.get(key)
     if cached is not None:
@@ -402,14 +456,14 @@ def _edge_source(spec: BandSpec, image: QImage) -> Optional[QImage]:
         painter.setCompositionMode(
             QPainter.CompositionMode.CompositionMode_SourceIn
         )
-        color = QColor(spec.edge_color)
+        color = QColor(effect.color)
         if not color.isValid():
             color = QColor("#000000")
         painter.fillRect(silhouette.rect(), color)
     finally:
         painter.end()
-    radius = max(int(spec.edge_size_px), 0)
-    if radius > 0 and spec.edge_kind in {"glow", "shadow"}:
+    radius = max(int(effect.size_px), 0)
+    if radius > 0 and effect.kind in {"glow", "shadow"}:
         # 降采样再放大 ≈ 可分离模糊；比逐像素卷积快得多，效果对发光足够。
         step = max(2, min(radius, max(image.width() // 4, 2)))
         for _ in range(2):
@@ -635,6 +689,7 @@ def _paint_cover(painter, rect: QRectF, image: QImage) -> None:
 
 
 __all__ = [
+    "BandEffect",
     "BandSpec",
     "band_rect",
     "band_artwork",

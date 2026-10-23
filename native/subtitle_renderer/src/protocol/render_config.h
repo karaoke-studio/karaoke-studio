@@ -590,6 +590,18 @@ struct LineBandConfig {
     int edgeOffsetXPx = 8;
     int edgeOffsetYPx = 8;
     int edgeOpacityPct = 70;
+    // 图层效果（PS 图层样式口径）：三种效果各自独立开关 + 配置，可同时开启。
+    struct EffectConfig {
+        bool enabled = false;
+        QString color;
+        int sizePx = 0;
+        int offsetXPx = 0;
+        int offsetYPx = 0;
+        int opacityPct = 0;
+    };
+    EffectConfig shadow;
+    EffectConfig stroke;
+    EffectConfig glow;
 };
 
 struct RenderConfig {

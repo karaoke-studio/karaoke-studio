@@ -10,6 +10,7 @@ from qfluentwidgets import (
     LineEdit as FluentLineEdit,
     PushButton as FluentPushButton,
     SegmentedWidget,
+    SwitchButton,
 )
 
 from krok_helper.subtitle_render.domain.band_presets import BAND_PRESETS
@@ -1141,22 +1142,6 @@ class EffectsPropertyPageBuilder:
         )
         layout.addWidget(host._line_band_real_preview)
 
-        preview_row = QWidget(section)
-        preview_layout = QHBoxLayout(preview_row)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(4)
-        host._line_band_real_preview_btn = FluentPushButton("真实预览…", section)
-        host._line_band_real_preview_btn.setMinimumHeight(32)
-        host._line_band_real_preview_btn.setToolTip(
-            "按成片比例尺打开最终效果窗口（端点/中段/上色/整图投影发光）。"
-        )
-        host._line_band_real_preview_btn.clicked.connect(
-            host._open_line_band_preview
-        )
-        preview_layout.addWidget(host._line_band_real_preview_btn)
-        preview_layout.addStretch(1)
-        layout.addWidget(preview_row)
-
         # 端点：右端点滑条取反值——向右拖 = 切割边界向右移，手感跟手。
         add = group("端点", max_columns=2)
         self._add_canvas_spin(
@@ -1216,30 +1201,62 @@ class EffectsPropertyPageBuilder:
         )
 
         # 图片非透明部分的投影 / 发光（作用于合成后的整张带子图）。
-        add = group("外观 · 图层效果", max_columns=2)
-        host._line_band_edge_kind_combo = self._combo(
-            section,
-            (("无", "none"), ("阴影", "shadow"), ("描边", "stroke"), ("发光", "glow")),
-            "line_band_edge_kind",
-            force_global=True,
-        )
-        host._line_band_edge_kind_combo.setToolTip(
-            "像 PS 图层样式一样作用于合成后的整张带子图（含 alpha）："
-            "阴影=偏移模糊，描边=外圈实心，发光=向外扩散。"
-        )
-        add("效果类型", host._line_band_edge_kind_combo)
-        self._add_color(
-            add, "_line_band_edge_color_btn", "效果颜色", "line_band_edge_color",
-            force_global=True,
-        )
-        self._add_canvas_spin(add, "_line_band_edge_size_spin", "效果半径", 0, 160,
-                              "line_band_edge_size_px", "hard", suffix=" px", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_opacity_spin", "效果强度", 0, 100,
-                              "line_band_edge_opacity_pct", "hard", suffix=" %", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_offset_x_spin", "阴影 X", -300, 300,
-                              "line_band_edge_offset_x_px", "hard", suffix=" px", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_offset_y_spin", "阴影 Y", -300, 300,
-                              "line_band_edge_offset_y_px", "hard", suffix=" px", force_global=True)
+        # 图层效果（PS 图层样式口径）：三种效果各自独立开关 + 各自配置，
+        # 作用于合成后的整张带子图（含 alpha），可以同时开启。
+        def effect_group(title: str, prefix: str, *, offsets: bool = False):
+            box = SubGroup(title, collapsed=True, parent=section)
+            layout.addWidget(box)
+            fields = ResponsiveFieldGrid(
+                box, min_column_width=135, max_columns=2
+            )
+            box.grid.addWidget(fields, 0, 0, 1, 2)
+            switch = SwitchButton(box)
+            switch.setChecked(
+                bool(getattr(host._style, f"line_band_{prefix}_enabled", False))
+            )
+            switch.checkedChanged.connect(
+                lambda checked, key=f"line_band_{prefix}_enabled": (
+                    host._update_style(_force_global=True, **{key: bool(checked)})
+                )
+            )
+            setattr(host, f"_line_band_{prefix}_switch", switch)
+            fields.add_widget(property_field("启用", switch))
+
+            def add(label: str | None, control: QWidget) -> None:
+                fields.add_widget(
+                    property_field(label, control) if label is not None else control
+                )
+
+            self._add_color(
+                add, f"_line_band_{prefix}_color_btn", "颜色",
+                f"line_band_{prefix}_color", force_global=True,
+            )
+            self._add_canvas_spin(
+                add, f"_line_band_{prefix}_size_spin", "半径", 0, 160,
+                f"line_band_{prefix}_size_px", "hard", suffix=" px",
+                force_global=True,
+            )
+            self._add_canvas_spin(
+                add, f"_line_band_{prefix}_opacity_spin", "强度", 0, 100,
+                f"line_band_{prefix}_opacity_pct", "hard", suffix=" %",
+                force_global=True,
+            )
+            if offsets:
+                self._add_canvas_spin(
+                    add, f"_line_band_{prefix}_offset_x_spin", "偏移 X", -300, 300,
+                    f"line_band_{prefix}_offset_x_px", "hard", suffix=" px",
+                    force_global=True,
+                )
+                self._add_canvas_spin(
+                    add, f"_line_band_{prefix}_offset_y_spin", "偏移 Y", -300, 300,
+                    f"line_band_{prefix}_offset_y_px", "hard", suffix=" px",
+                    force_global=True,
+                )
+            return box
+
+        effect_group("图层效果 · 阴影", "shadow", offsets=True)
+        effect_group("图层效果 · 描边", "stroke")
+        effect_group("图层效果 · 发光", "glow")
         section.set_expanded(False)
         return section
 

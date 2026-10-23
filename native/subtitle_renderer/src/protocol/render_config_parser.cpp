@@ -1194,7 +1194,43 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             || edgeKind == QStringLiteral("glow")
             || edgeKind == QStringLiteral("stroke")
         ) ? edgeKind : QStringLiteral("none");
-        band.edgeColor = stringValue(
+        // 三种独立图层效果（阴影/描边/发光），各自开关与配置。
+        for (const auto &pair : {
+                 std::pair<const char *, LineBandConfig::EffectConfig *>{
+                     "shadow", &band.shadow},
+                 std::pair<const char *, LineBandConfig::EffectConfig *>{
+                     "stroke", &band.stroke},
+                 std::pair<const char *, LineBandConfig::EffectConfig *>{
+                     "glow", &band.glow},
+             }) {
+            LineBandConfig::EffectConfig &effect = *pair.second;
+            const QString prefix = QStringLiteral("line_band_%1_").arg(
+                QString::fromUtf8(pair.first)
+            );
+            effect.enabled = style.value(prefix + QStringLiteral("enabled"))
+                .toBool(effect.enabled);
+            effect.color = stringValue(
+                style, prefix + QStringLiteral("color"), effect.color
+            );
+            effect.sizePx = std::max(
+                0, intValue(
+                    style, prefix + QStringLiteral("size_px"), effect.sizePx
+                )
+            );
+            effect.offsetXPx = intValue(
+                style, prefix + QStringLiteral("offset_x_px"), effect.offsetXPx
+            );
+            effect.offsetYPx = intValue(
+                style, prefix + QStringLiteral("offset_y_px"), effect.offsetYPx
+            );
+            effect.opacityPct = std::clamp(
+                intValue(
+                    style, prefix + QStringLiteral("opacity_pct"),
+                    effect.opacityPct
+                ),
+                0, 100
+            );
+        }        band.edgeColor = stringValue(
             style, QStringLiteral("line_band_edge_color"), band.edgeColor
         );
         band.edgeSizePx = std::max(

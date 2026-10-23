@@ -1465,6 +1465,25 @@ class Style:
     line_band_line_color: str = ""
     """谱线颜色（仅带独立谱线层的预设生效，如五线谱）；空串用预设默认。"""
 
+    # 图层效果（PS 图层样式口径）：三种效果各自独立开关 + 各自配置，作用于
+    # 合成后的整张带子图（含 alpha）。旧字段 line_band_edge_* 保留用于兼容
+    # 旧工程（读取时迁移到这三种效果之一）。
+    line_band_shadow_enabled: bool = False
+    line_band_shadow_color: str = "#000000"
+    line_band_shadow_size_px: int = 12
+    line_band_shadow_offset_x_px: int = 8
+    line_band_shadow_offset_y_px: int = 8
+    line_band_shadow_opacity_pct: int = 70
+
+    line_band_stroke_enabled: bool = False
+    line_band_stroke_color: str = "#000000"
+    line_band_stroke_size_px: int = 6
+    line_band_stroke_opacity_pct: int = 100
+
+    line_band_glow_enabled: bool = False
+    line_band_glow_color: str = "#FFD24A"
+    line_band_glow_size_px: int = 16
+    line_band_glow_opacity_pct: int = 80
     line_band_edge_kind: str = "none"
     """图片非透明部分的描边效果：``none`` / ``shadow`` 投影 / ``glow`` 发光。"""
 
@@ -2378,6 +2397,33 @@ def _migrate_ruby_follow_independence(style: Style) -> Style:
     return style
 
 
+def _migrate_line_band_edge_effects(style: "Style", payload: dict) -> "Style":
+    """旧工程的 `line_band_edge_kind` 迁移到三种独立图层效果开关。"""
+    if not isinstance(payload, dict):
+        return style
+    if any(
+        key in payload
+        for key in (
+            "line_band_shadow_enabled",
+            "line_band_stroke_enabled",
+            "line_band_glow_enabled",
+        )
+    ):
+        return style
+    kind = str(payload.get("line_band_edge_kind") or "none")
+    if kind not in {"shadow", "stroke", "glow"}:
+        return style
+    updates: dict[str, object] = {
+        f"line_band_{kind}_enabled": True,
+        f"line_band_{kind}_color": style.line_band_edge_color,
+        f"line_band_{kind}_size_px": style.line_band_edge_size_px,
+        f"line_band_{kind}_opacity_pct": style.line_band_edge_opacity_pct,
+    }
+    if kind == "shadow":
+        updates["line_band_shadow_offset_x_px"] = style.line_band_edge_offset_x_px
+        updates["line_band_shadow_offset_y_px"] = style.line_band_edge_offset_y_px
+    return replace(style, **updates)
+
 def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
     """Build ``Style`` from a dict, ignoring unknown or invalid fields.
 
@@ -2547,6 +2593,14 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "line_band_edge_offset_x_px",
             "line_band_edge_offset_y_px",
             "line_band_edge_opacity_pct",
+            "line_band_shadow_size_px",
+            "line_band_shadow_offset_x_px",
+            "line_band_shadow_offset_y_px",
+            "line_band_shadow_opacity_pct",
+            "line_band_stroke_size_px",
+            "line_band_stroke_opacity_pct",
+            "line_band_glow_size_px",
+            "line_band_glow_opacity_pct",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
         elif key in {
@@ -2580,6 +2634,9 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "lit_shadow",
             "line_band_enabled",
             "line_band_include_ruby",
+            "line_band_shadow_enabled",
+            "line_band_stroke_enabled",
+            "line_band_glow_enabled",
         }:
             changes[key] = _bool_value(value)
         elif key == "line_band_fill_mode":
@@ -2601,7 +2658,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                 else defaults.line_band_edge_kind
             )
         elif key in {"line_band_image", "line_band_tint", "line_band_line_color",
-                     "line_band_edge_color"}:
+                     "line_band_edge_color", "line_band_shadow_color",
+                     "line_band_stroke_color", "line_band_glow_color"}:
             changes[key] = value if isinstance(value, str) else ""
         elif key == "lit_style":
             changes[key] = (
@@ -3012,7 +3070,9 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
     _migrate_scanline_toggle(changes, payload)
     _migrate_scanline_px_base(changes, payload)
     _migrate_signal_offset_px_base(changes, payload)
-    return _migrate_ruby_follow_independence(ensure_page_layout_defaults(Style(**changes)))
+    style = ensure_page_layout_defaults(Style(**changes))
+    style = _migrate_line_band_edge_effects(style, payload)
+    return _migrate_ruby_follow_independence(style)
 
 
 def _migrate_scanline_toggle(changes: dict, payload: dict) -> None:

@@ -394,7 +394,7 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         size = (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32)
             | attributes.nFileSizeLow;
     }
-    const int edgeSizePx = static_cast<int>(std::lround(band.edgeSize));
+
     if (cached.bitmap
         && cached.path == band.imagePath
         && cached.modifiedMs == modifiedMs
@@ -405,15 +405,23 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         && cached.linePath == band.linesPath
         && cached.hasLineColor == band.hasLineColor
         && (!band.hasLineColor || cached.lineColor == band.lineColor)
-        && cached.edgeKind == band.edgeKind
-        && cached.hasEdgeColor == band.hasEdgeColor
-        && (!band.hasEdgeColor || cached.edgeColor == band.edgeColor)
-        && cached.edgeSizePx == edgeSizePx
-        // 端点变化必须重建中段预拼条：预拼条是按旧端点裁的。端点调小后
-        // 条子仍从旧端点位置开始铺，左端点的谱号/装饰就会在中段开头再
-        // 出现一遍——用户实测「左侧的图出现两遍」的根因。
         && cached.midCapLeftSrc == band.srcCapLeft
-        && cached.midCapRightSrc == band.srcCapRight) {
+        && cached.midCapRightSrc == band.srcCapRight
+        && cached.shadow.enabled == band.shadow.enabled
+        && cached.shadow.hasColor == band.shadow.hasColor
+        && (!band.shadow.hasColor || cached.shadow.color == band.shadow.color)
+        && cached.shadow.sizePx
+            == static_cast<int>(std::lround(band.shadow.size))
+        && cached.stroke.enabled == band.stroke.enabled
+        && cached.stroke.hasColor == band.stroke.hasColor
+        && (!band.stroke.hasColor || cached.stroke.color == band.stroke.color)
+        && cached.stroke.sizePx
+            == static_cast<int>(std::lround(band.stroke.size))
+        && cached.glow.enabled == band.glow.enabled
+        && cached.glow.hasColor == band.glow.hasColor
+        && (!band.glow.hasColor || cached.glow.color == band.glow.color)
+        && cached.glow.sizePx
+            == static_cast<int>(std::lround(band.glow.size))) {
         return;
     }
     ID2D1DeviceContext *context = device_.d2dContext();
@@ -423,7 +431,7 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         band.hasTint ? &band.tint : nullptr,
         band.tintStrengthPct
     );
-    // 谱线层（含高音谱号）：multiply 上色，白色→用户颜色、近黑描边保持。
+    // 谱线层（含高音谱号、终止线）：multiply 上色后合成进整张带子图。
     cached.lineBitmap.Reset();
     cached.lineMidStrip.Reset();
     if (!band.linesPath.empty()) {
@@ -435,8 +443,6 @@ void Direct2DGpuBackend::ensureLineBandImage() {
             /*multiplyTint=*/true
         );
     }
-    // 合成整条带子的图案：投影/发光与切片都以这一张为准（用户口径：整图
-    // 渲染完成后再作为一个整体做含 alpha 的描边）。
     cached.bitmap = makeBandComposite(
         context, cached.baseBitmap.Get(), cached.lineBitmap.Get()
     );
@@ -444,18 +450,32 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         context, cached.bitmap.Get(),
         band.srcCapLeft, band.srcCapRight
     );
-    // 图片描边（投影/发光）剪影层：基于合成图，覆盖谱线与谱号。
-    cached.edgeBitmap.Reset();
-    cached.edgeMidStrip.Reset();
-    if (cached.bitmap && band.edgeKind != "none") {
-        // 描边要的是**未模糊**的剪影（实心外圈）；阴影/发光按半径模糊。
-        const int edgeBlurPx = (band.edgeKind == "shadow"
-            || band.edgeKind == "glow") ? edgeSizePx : 0;
-        cached.edgeBitmap = makeBandEdgeBitmap(
-            context, cached.bitmap.Get(), band.edgeColor, edgeBlurPx
+    // 三种图层效果各自烘焙剪影：描边不模糊，阴影/发光按半径模糊。
+    struct EffectPair {
+        const LineBandStyle::Effect &style;
+        Impl::CachedBandImage::CachedEffect &cached;
+        bool blur;
+    };
+    for (const EffectPair &pair : {
+             EffectPair{band.shadow, cached.shadow, true},
+             EffectPair{band.stroke, cached.stroke, false},
+             EffectPair{band.glow, cached.glow, true},
+         }) {
+        pair.cached.bitmap.Reset();
+        pair.cached.strip.Reset();
+        pair.cached.enabled = pair.style.enabled;
+        pair.cached.hasColor = pair.style.hasColor;
+        pair.cached.color = pair.style.color;
+        pair.cached.sizePx = static_cast<int>(std::lround(pair.style.size));
+        if (!pair.style.enabled || !cached.bitmap) {
+            continue;
+        }
+        const int blurPx = pair.blur ? pair.cached.sizePx : 0;
+        pair.cached.bitmap = makeBandEdgeBitmap(
+            context, cached.bitmap.Get(), pair.style.color, blurPx
         );
-        cached.edgeMidStrip = makeBandMidStrip(
-            context, cached.edgeBitmap.Get(),
+        pair.cached.strip = makeBandMidStrip(
+            context, pair.cached.bitmap.Get(),
             band.srcCapLeft, band.srcCapRight
         );
     }
@@ -470,12 +490,7 @@ void Direct2DGpuBackend::ensureLineBandImage() {
     cached.linePath = band.linesPath;
     cached.hasLineColor = band.hasLineColor;
     cached.lineColor = band.lineColor;
-    cached.edgeKind = band.edgeKind;
-    cached.hasEdgeColor = band.hasEdgeColor;
-    cached.edgeColor = band.edgeColor;
-    cached.edgeSizePx = edgeSizePx;
 }
-
 void Direct2DGpuBackend::configure(const RenderScene &scene) {
     if (scene.width <= 0 || scene.height <= 0 || scene.width > 8192 || scene.height > 8192) {
         throw BackendError("GPU scene dimensions must be within 1..8192");

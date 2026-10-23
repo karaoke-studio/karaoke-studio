@@ -61,13 +61,18 @@ struct Direct2DGpuBackend::Impl {
         std::wstring linePath;
         bool hasLineColor = false;
         RgbaColor lineColor{};
-        // 非透明部分的投影/发光剪影位图 + 中段预拼条。
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> edgeBitmap;
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> edgeMidStrip;
-        std::string edgeKind = "none";
-        bool hasEdgeColor = false;
-        RgbaColor edgeColor{};
-        int edgeSizePx = 0;
+        // 图层效果（阴影/描边/发光）：每种一个剪影位图 + 中段预拼条。
+        struct CachedEffect {
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> strip;
+            bool enabled = false;
+            bool hasColor = false;
+            RgbaColor color{};
+            int sizePx = 0;
+        };
+        CachedEffect shadow;
+        CachedEffect stroke;
+        CachedEffect glow;
     };
     // 装饰粒子 sprite 轮廓几何（em 空间、中心原点；随场景重建，绘制期经
     // matrix 缩放平移）。key = sprite 名（star4 / ring / note）。

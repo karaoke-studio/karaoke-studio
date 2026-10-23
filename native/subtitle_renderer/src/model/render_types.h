@@ -719,7 +719,26 @@ struct LineBandStyle {
     int capLeftSrc = 0;
     int capRightSrc = 0;
     // 中段预拼条的源图裁切边界（预设设计端点），与显示端点解耦。
-    int srcCapLeft = 0;
+    // 图层效果（PS 图层样式口径）：阴影/描边/发光各自独立开关与配置。
+    struct Effect {
+        bool enabled = false;
+        bool hasColor = false;
+        RgbaColor color{};
+        float size = 0.0f;
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        float opacity = 0.0f;
+
+        bool operator==(const Effect &other) const {
+            return enabled == other.enabled && hasColor == other.hasColor
+                && color == other.color && size == other.size
+                && offsetX == other.offsetX && offsetY == other.offsetY
+                && opacity == other.opacity;
+        }
+    };
+    Effect shadow;
+    Effect stroke;
+    Effect glow;    int srcCapLeft = 0;
     int srcCapRight = 0;
     float padTop = 20.0f;
     float padBottom = 20.0f;

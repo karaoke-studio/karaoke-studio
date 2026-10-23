@@ -612,12 +612,20 @@ _LINE_BAND_FIELDS = {
     "line_band_tint",
     "line_band_tint_strength_pct",
     "line_band_line_color",
-    "line_band_edge_kind",
-    "line_band_edge_color",
-    "line_band_edge_size_px",
-    "line_band_edge_offset_x_px",
-    "line_band_edge_offset_y_px",
-    "line_band_edge_opacity_pct",
+    "line_band_shadow_enabled",
+    "line_band_shadow_color",
+    "line_band_shadow_size_px",
+    "line_band_shadow_offset_x_px",
+    "line_band_shadow_offset_y_px",
+    "line_band_shadow_opacity_pct",
+    "line_band_stroke_enabled",
+    "line_band_stroke_color",
+    "line_band_stroke_size_px",
+    "line_band_stroke_opacity_pct",
+    "line_band_glow_enabled",
+    "line_band_glow_color",
+    "line_band_glow_size_px",
+    "line_band_glow_opacity_pct",
 }
 
 
@@ -1339,9 +1347,6 @@ class PropertyPanel(QWidget):
         if width <= 0 or height <= 0:
             return
         self._output_height = height
-        dialog = getattr(self, "_line_band_preview_dialog", None)
-        if dialog is not None and dialog.isVisible():
-            dialog.set_output_height(height)
         self.set_n3_template_target_height(height)
         if hasattr(self, '_line_band_enabled_switch'):
             self._sync_line_band_controls()
@@ -5753,7 +5758,6 @@ class PropertyPanel(QWidget):
         for combo, value in (
             (self._line_band_fill_combo, style.line_band_fill_mode),
             (self._line_band_mid_combo, style.line_band_mid_mode),
-            (self._line_band_edge_kind_combo, style.line_band_edge_kind),
         ):
             combo.setCurrentIndex(max(0, combo.findData(value)))
         # 端点：右侧控件是负值（滑条向右 = 边界向右）。
@@ -5770,10 +5774,6 @@ class PropertyPanel(QWidget):
             (self._line_band_offset_y_spin, style.line_band_offset_y_px),
             (self._line_band_opacity_spin, style.line_band_opacity_pct),
             (self._line_band_tint_strength_spin, style.line_band_tint_strength_pct),
-            (self._line_band_edge_size_spin, style.line_band_edge_size_px),
-            (self._line_band_edge_offset_x_spin, style.line_band_edge_offset_x_px),
-            (self._line_band_edge_offset_y_spin, style.line_band_edge_offset_y_px),
-            (self._line_band_edge_opacity_spin, style.line_band_edge_opacity_pct),
         ):
             spin.setValue(int(value))
         self._line_band_include_ruby_check.setChecked(
@@ -5791,20 +5791,43 @@ class PropertyPanel(QWidget):
         # 独立谱线层只随预设提供。
         has_lines = preset is not None and preset.lines_path is not None
         self._line_band_line_color_btn.setEnabled(has_lines)
-        edge_active = style.line_band_edge_kind in {"shadow", "glow", "stroke"}
-        shadow = style.line_band_edge_kind == "shadow"
-        self._line_band_edge_color_btn.setEnabled(edge_active)
-        self._line_band_edge_size_spin.setEnabled(edge_active)
-        self._line_band_edge_opacity_spin.setEnabled(edge_active)
-        self._line_band_edge_offset_x_spin.setEnabled(shadow)
-        self._line_band_edge_offset_y_spin.setEnabled(shadow)
+        # 三种图层效果各自独立：回填开关/颜色/半径/强度，配置控件随开关启停。
+        for prefix in ("shadow", "stroke", "glow"):
+            enabled = bool(
+                getattr(style, f"line_band_{prefix}_enabled", False)
+            )
+            switch = getattr(self, f"_line_band_{prefix}_switch", None)
+            if switch is not None:
+                switch.setChecked(enabled)
+            color_btn = getattr(self, f"_line_band_{prefix}_color_btn", None)
+            if color_btn is not None:
+                color_btn.set_color(
+                    getattr(style, f"line_band_{prefix}_color", "#000000")
+                )
+                color_btn.setEnabled(enabled)
+            for suffix, field in (
+                ("size_spin", f"line_band_{prefix}_size_px"),
+                ("opacity_spin", f"line_band_{prefix}_opacity_pct"),
+            ):
+                spin = getattr(self, f"_line_band_{prefix}_{suffix}", None)
+                if spin is not None:
+                    spin.setValue(int(getattr(style, field, 0)))
+                    spin.setEnabled(enabled)
+            if prefix == "shadow":
+                for suffix, field in (
+                    ("offset_x_spin", "line_band_shadow_offset_x_px"),
+                    ("offset_y_spin", "line_band_shadow_offset_y_px"),
+                ):
+                    spin = getattr(self, f"_line_band_shadow_{suffix}", None)
+                    if spin is not None:
+                        spin.setValue(int(getattr(style, field, 8)))
+                        spin.setEnabled(enabled)
         self._line_band_tint_btn.set_color(style.line_band_tint or "#FFFFFF")
         self._line_band_line_color_btn.set_color(
             style.line_band_line_color
             or (preset.default_line_color if has_lines else "")
             or "#1A1A1C"
         )
-        self._line_band_edge_color_btn.set_color(style.line_band_edge_color)
         real_preview = getattr(self, "_line_band_real_preview", None)
         if real_preview is not None:
             real_preview.setPixmap(
@@ -5824,25 +5847,6 @@ class PropertyPanel(QWidget):
                     )
                 )
             )
-        dialog = getattr(self, "_line_band_preview_dialog", None)
-        if dialog is not None and dialog.isVisible():
-            dialog.refresh(style, int(getattr(self, "_output_height", 1080)))
-
-    def _open_line_band_preview(self) -> None:
-        """打开行背景带真实预览窗口（模型态，跟随样式刷新）。"""
-        dialog = getattr(self, "_line_band_preview_dialog", None)
-        if dialog is None:
-            from krok_helper.subtitle_render.frontend.properties.band_preview_dialog import (
-                LineBandPreviewDialog,
-            )
-
-            dialog = LineBandPreviewDialog(self)
-            self._line_band_preview_dialog = dialog
-        dialog.refresh(self._style, int(getattr(self, "_output_height", 1080)))
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):

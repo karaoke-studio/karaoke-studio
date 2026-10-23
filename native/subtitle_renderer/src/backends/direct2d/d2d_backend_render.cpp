@@ -1306,74 +1306,78 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 continue;
             }
             drawnBands.emplace_back(base, alpha);
-            const bool shadow = band.edgeKind == "shadow";
-            if (band.edgeKind != "none"
-                && impl_->lineBandImage.edgeBitmap) {
-                ID2D1Bitmap1 *edgeBitmap
-                    = impl_->lineBandImage.edgeBitmap.Get();
-                ID2D1Bitmap1 *edgeStrip
-                    = impl_->lineBandImage.edgeMidStrip.Get();
-                if (shadow) {
-                    const float offsetX = band.edgeOffsetX;
-                    const float offsetY = band.edgeOffsetY;
+            // 三种图层效果（阴影/发光/描边）都画在带子下面，可同时开启；
+            // 各自的颜色/半径/强度/偏移互不影响。与 CPU 同口径。
+            struct EffectDraw {
+                const LineBandStyle::Effect &style;
+                const Impl::CachedBandImage::CachedEffect &cached;
+                int kind;  // 0=shadow 1=glow 2=stroke
+            };
+            for (const EffectDraw &effect : {
+                     EffectDraw{band.shadow, impl_->lineBandImage.shadow, 0},
+                     EffectDraw{band.glow, impl_->lineBandImage.glow, 1},
+                     EffectDraw{band.stroke, impl_->lineBandImage.stroke, 2},
+                 }) {
+                if (!effect.style.enabled || !effect.cached.bitmap) {
+                    continue;
+                }
+                ID2D1Bitmap1 *bitmap = effect.cached.bitmap.Get();
+                ID2D1Bitmap1 *strip = effect.cached.strip.Get();
+                const float radius = std::max(effect.style.size, 1.0f);
+                if (effect.kind == 0) {
+                    const float dx = effect.style.offsetX;
+                    const float dy = effect.style.offsetY;
                     drawLayer(
-                        edgeBitmap,
-                        edgeStrip,
+                        bitmap, strip,
                         D2D1::RectF(
-                            base.left + offsetX, base.top + offsetY,
-                            base.right + offsetX, base.bottom + offsetY
+                            base.left + dx, base.top + dy,
+                            base.right + dx, base.bottom + dy
                         ),
-                        alpha * band.edgeOpacity
+                        alpha * effect.style.opacity
                     );
-                } else if (band.edgeKind == "stroke") {
-                    // 图层描边（PS Stroke）：未模糊剪影绕圆周整片铺一圈，带子
-                    // 随后盖住内部，只剩外圈实心描边。与 CPU 同口径。
-                    const float radius = std::max(band.edgeSize, 1.0f);
+                } else if (effect.kind == 2) {
                     const int steps = 24;
+                    const float opacity = std::min(
+                        alpha * effect.style.opacity, 1.0f
+                    );
                     for (int index = 0; index < steps; ++index) {
                         const float angle = 6.2831853f
                             * static_cast<float>(index)
                             / static_cast<float>(steps);
-                        const float offsetX = std::cos(angle) * radius;
-                        const float offsetY = std::sin(angle) * radius;
+                        const float dx = std::cos(angle) * radius;
+                        const float dy = std::sin(angle) * radius;
                         drawLayer(
-                            edgeBitmap,
-                            edgeStrip,
+                            bitmap, strip,
                             D2D1::RectF(
-                                base.left + offsetX, base.top + offsetY,
-                                base.right + offsetX, base.bottom + offsetY
+                                base.left + dx, base.top + dy,
+                                base.right + dx, base.bottom + dy
                             ),
-                            std::min(alpha * band.edgeOpacity, 1.0f)
+                            opacity
                         );
                     }
                 } else {
-                    // 发光要长到轮廓之外：剪影绕圆周多次轻叠（模糊后的剪影
-                    // 不会越出画布，靠偏移把它扩出去）。与 CPU 同口径。
-                    const float radius = std::max(band.edgeSize, 1.0f);
                     const int steps = radius >= 8.0f ? 16 : 8;
                     const float perStep = std::min(
-                        band.edgeOpacity / static_cast<float>(steps) * 2.0f,
+                        effect.style.opacity / static_cast<float>(steps) * 2.0f,
                         1.0f
                     );
                     for (int index = 0; index < steps; ++index) {
                         const float angle = 6.2831853f
                             * static_cast<float>(index)
                             / static_cast<float>(steps);
-                        const float offsetX = std::cos(angle) * radius;
-                        const float offsetY = std::sin(angle) * radius;
+                        const float dx = std::cos(angle) * radius;
+                        const float dy = std::sin(angle) * radius;
                         drawLayer(
-                            edgeBitmap,
-                            edgeStrip,
+                            bitmap, strip,
                             D2D1::RectF(
-                                base.left + offsetX, base.top + offsetY,
-                                base.right + offsetX, base.bottom + offsetY
+                                base.left + dx, base.top + dy,
+                                base.right + dx, base.bottom + dy
                             ),
                             alpha * perStep
                         );
                     }
                 }
-            }
-            // 素材本体与谱线层已在 configure 期合成为一张图：整条带子一次
+            }            // 素材本体与谱线层已在 configure 期合成为一张图：整条带子一次
             // 画完，投影/发光也基于这张合成图（不再分层各画各的）。
             drawLayer(
                 impl_->lineBandImage.bitmap.Get(),

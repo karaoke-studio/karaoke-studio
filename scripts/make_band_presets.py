@@ -305,9 +305,9 @@ def build_staff_scroll():
       上色后仍压得住谱线；
     * 图层顺序：谱线层（含谱号）在下、音符与终止线在上；素材本体不再画
       谱号和谱线，避免重复/压字；
-    * 中段 4096px：16:9 画布正常歌词行不会触发第二次平铺。
+    * 成图 1920x240（用户口径 2026-10-24）：中段 = 1920 - 左右端点。
     """
-    w, L, R = 190 + 4096 + 160, 190, 160
+    w, L, R = 1920, 190, 160
     content = new(w)
     commands = load_note_commands() or []
 
@@ -376,7 +376,7 @@ def _stars_mid(big, tw):
 
 
 def build_stars():
-    w, L, R = 120 + 4096 + 120, 120, 120
+    w, L, R = 1920, 120, 120
     img = new(w)
     body = vgrad(w, H, [(0, (20, 24, 40, 130)), (0.5, (14, 17, 30, 96)),
                         (1, (8, 10, 20, 150))])
@@ -402,9 +402,9 @@ def build_stars():
 
 # ------------------------------------- 3. neutral satin ribbon (tintable)
 def build_diagonal():
-    w, L, R = 96 + 4080 + 96, 96, 96
-    tw = w - L - R                      # 4080; stripe period MUST divide it
-    period = 40
+    w, L, R = 1920, 96, 96
+    tw = w - L - R                      # 1728; stripe period MUST divide it
+    period = 48
     assert tw % period == 0, "middle tile width must be a multiple of the stripe period"
 
     body = vgrad(w, H, [(0, (252, 252, 255, 253)), (0.14, (214, 218, 226, 253)),
@@ -506,7 +506,7 @@ def _bubbles_mid(big, tw):
 
 def build_bubbles():
     """海水：深青渐变 + 焦散亮线 + 水面光柱 + 气泡（《凪のあすから》那种感觉）。"""
-    w, L, R = 160 + 4080 + 160, 160, 160
+    w, L, R = 1920, 160, 160
     tw = w - L - R
     img = new(w)
 
@@ -566,7 +566,7 @@ def build_bubbles():
 
 # -------------------------------------- 5. neutral glass pill (tintable)
 def build_plain_round():
-    w, L, R = 64 + 4096 + 64, 64, 64
+    w, L, R = 1920, 64, 64
     body = vgrad(w, H, [(0, (250, 251, 255, 236)), (0.2, (206, 210, 220, 240)),
                         (0.62, (146, 150, 162, 244)), (1, (96, 100, 110, 248))])
     mask = round_mask(w, H, 30)

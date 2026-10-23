@@ -705,7 +705,31 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         );
         target.edgeOffsetX = static_cast<float>(band.edgeOffsetXPx * scale);
         target.edgeOffsetY = static_cast<float>(band.edgeOffsetYPx * scale);
-        target.edgeOpacity = static_cast<float>(
+        auto projectEffect = [&](const LineBandConfig::EffectConfig &source,
+                                 LineBandStyle::Effect &target) {
+            target.enabled = source.enabled;
+            const QColor effectColor(source.color);
+            target.hasColor = effectColor.isValid();
+            if (target.hasColor) {
+                target.color = RgbaColor{
+                    static_cast<std::uint8_t>(effectColor.red()),
+                    static_cast<std::uint8_t>(effectColor.green()),
+                    static_cast<std::uint8_t>(effectColor.blue()),
+                    255,
+                };
+            }
+            target.size = static_cast<float>(
+                std::max(source.sizePx, 0) * scale
+            );
+            target.offsetX = static_cast<float>(source.offsetXPx * scale);
+            target.offsetY = static_cast<float>(source.offsetYPx * scale);
+            target.opacity = static_cast<float>(
+                std::clamp(source.opacityPct, 0, 100)
+            ) / 100.0f;
+        };
+        projectEffect(band.shadow, target.shadow);
+        projectEffect(band.stroke, target.stroke);
+        projectEffect(band.glow, target.glow);        target.edgeOpacity = static_cast<float>(
             std::clamp(band.edgeOpacityPct, 0, 100)
         ) / 100.0f;
     }
