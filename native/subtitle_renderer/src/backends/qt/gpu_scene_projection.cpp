@@ -687,6 +687,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         }
         target.edgeKind = band.edgeKind == QStringLiteral("shadow")
                 || band.edgeKind == QStringLiteral("glow")
+                || band.edgeKind == QStringLiteral("stroke")
             ? band.edgeKind.toStdString()
             : "none";
         const QColor edgeColor(band.edgeColor);

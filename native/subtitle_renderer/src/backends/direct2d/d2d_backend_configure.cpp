@@ -448,8 +448,11 @@ void Direct2DGpuBackend::ensureLineBandImage() {
     cached.edgeBitmap.Reset();
     cached.edgeMidStrip.Reset();
     if (cached.bitmap && band.edgeKind != "none") {
+        // 描边要的是**未模糊**的剪影（实心外圈）；阴影/发光按半径模糊。
+        const int edgeBlurPx = (band.edgeKind == "shadow"
+            || band.edgeKind == "glow") ? edgeSizePx : 0;
         cached.edgeBitmap = makeBandEdgeBitmap(
-            context, cached.bitmap.Get(), band.edgeColor, edgeSizePx
+            context, cached.bitmap.Get(), band.edgeColor, edgeBlurPx
         );
         cached.edgeMidStrip = makeBandMidStrip(
             context, cached.edgeBitmap.Get(),

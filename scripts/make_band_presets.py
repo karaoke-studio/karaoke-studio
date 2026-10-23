@@ -340,9 +340,9 @@ def build_staff_scroll():
     ld = ImageDraw.Draw(lines)
     for y in (64, 92, 120, 148, 176):
         ld.line([(0, y), (w, y)], fill=(255, 255, 255, 255), width=3)
-    clef = clef_sprite(
-        140, (255, 255, 255), outline=(18, 18, 20), outline_width=9
-    )
+    # 原始高音谱号不加描边（用户口径 2026-10-24）：纯白，multiply 后就是
+    # 谱线颜色本身。
+    clef = clef_sprite(140, (255, 255, 255))
     if clef is not None:
         lines.alpha_composite(clef, (10, 120 - clef.height // 2))
     # 终止竖线（双小节线）属于五线谱：白色画进谱线层，multiply 后随谱线色。

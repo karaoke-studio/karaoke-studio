@@ -5791,7 +5791,7 @@ class PropertyPanel(QWidget):
         # 独立谱线层只随预设提供。
         has_lines = preset is not None and preset.lines_path is not None
         self._line_band_line_color_btn.setEnabled(has_lines)
-        edge_active = style.line_band_edge_kind in {"shadow", "glow"}
+        edge_active = style.line_band_edge_kind in {"shadow", "glow", "stroke"}
         shadow = style.line_band_edge_kind == "shadow"
         self._line_band_edge_color_btn.setEnabled(edge_active)
         self._line_band_edge_size_spin.setEnabled(edge_active)

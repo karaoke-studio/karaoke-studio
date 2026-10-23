@@ -1192,6 +1192,7 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         band.edgeKind = (
             edgeKind == QStringLiteral("shadow")
             || edgeKind == QStringLiteral("glow")
+            || edgeKind == QStringLiteral("stroke")
         ) ? edgeKind : QStringLiteral("none");
         band.edgeColor = stringValue(
             style, QStringLiteral("line_band_edge_color"), band.edgeColor

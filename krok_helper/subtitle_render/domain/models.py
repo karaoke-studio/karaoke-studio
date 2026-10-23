@@ -2597,7 +2597,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         elif key == "line_band_edge_kind":
             changes[key] = (
                 value
-                if value in {"none", "shadow", "glow"}
+                if value in {"none", "shadow", "glow", "stroke"}
                 else defaults.line_band_edge_kind
             )
         elif key in {"line_band_image", "line_band_tint", "line_band_line_color",

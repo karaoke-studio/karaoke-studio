@@ -1325,6 +1325,27 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         ),
                         alpha * band.edgeOpacity
                     );
+                } else if (band.edgeKind == "stroke") {
+                    // 图层描边（PS Stroke）：未模糊剪影绕圆周整片铺一圈，带子
+                    // 随后盖住内部，只剩外圈实心描边。与 CPU 同口径。
+                    const float radius = std::max(band.edgeSize, 1.0f);
+                    const int steps = 24;
+                    for (int index = 0; index < steps; ++index) {
+                        const float angle = 6.2831853f
+                            * static_cast<float>(index)
+                            / static_cast<float>(steps);
+                        const float offsetX = std::cos(angle) * radius;
+                        const float offsetY = std::sin(angle) * radius;
+                        drawLayer(
+                            edgeBitmap,
+                            edgeStrip,
+                            D2D1::RectF(
+                                base.left + offsetX, base.top + offsetY,
+                                base.right + offsetX, base.bottom + offsetY
+                            ),
+                            std::min(alpha * band.edgeOpacity, 1.0f)
+                        );
+                    }
                 } else {
                     // 发光要长到轮廓之外：剪影绕圆周多次轻叠（模糊后的剪影
                     // 不会越出画布，靠偏移把它扩出去）。与 CPU 同口径。

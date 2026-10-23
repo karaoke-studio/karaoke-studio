@@ -305,7 +305,7 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
     painter.save()
     try:
         painter.setOpacity(painter.opacity() * spec.opacity_pct / 100.0)
-        if spec.edge_kind in {"shadow", "glow"}:
+        if spec.edge_kind in {"shadow", "glow", "stroke"}:
             edge = _edge_source(spec, image)
             if edge is not None:
                 base_opacity = painter.opacity()
@@ -321,6 +321,25 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
                         _paint_mode(painter, rect, edge, spec)
                     finally:
                         painter.restore()
+                elif spec.edge_kind == "stroke":
+                    # 图层描边（类似 PS 的 Stroke）：把剪影绕圆周整片铺开，
+                    # 合成图随后盖住内部，只剩外圈一圈实心描边。
+                    radius = max(float(spec.edge_size_px), 1.0)
+                    steps = 24
+                    for index in range(steps):
+                        angle = math.tau * index / float(steps)
+                        painter.save()
+                        try:
+                            painter.setOpacity(
+                                min(base_opacity * spec.edge_opacity_pct / 100.0, 1.0)
+                            )
+                            painter.translate(
+                                math.cos(angle) * radius,
+                                math.sin(angle) * radius,
+                            )
+                            _paint_mode(painter, rect, edge, spec)
+                        finally:
+                            painter.restore()
                 else:
                     # 发光要长到带子轮廓之外：剪影绕圆周多次轻叠（模糊后的
                     # 剪影本身不会越出画布，靠偏移把它扩出去）。

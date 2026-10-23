@@ -1216,28 +1216,29 @@ class EffectsPropertyPageBuilder:
         )
 
         # 图片非透明部分的投影 / 发光（作用于合成后的整张带子图）。
-        add = group("外观 · 投影/发光", max_columns=2)
+        add = group("外观 · 图层效果", max_columns=2)
         host._line_band_edge_kind_combo = self._combo(
             section,
-            (("无", "none"), ("投影", "shadow"), ("发光", "glow")),
+            (("无", "none"), ("阴影", "shadow"), ("描边", "stroke"), ("发光", "glow")),
             "line_band_edge_kind",
             force_global=True,
         )
         host._line_band_edge_kind_combo.setToolTip(
-            "对合成后的整张带子图（含谱线层）做投影（可偏移）或发光（向外扩散）。"
+            "像 PS 图层样式一样作用于合成后的整张带子图（含 alpha）："
+            "阴影=偏移模糊，描边=外圈实心，发光=向外扩散。"
         )
-        add("描边效果", host._line_band_edge_kind_combo)
+        add("效果类型", host._line_band_edge_kind_combo)
         self._add_color(
-            add, "_line_band_edge_color_btn", "描边颜色", "line_band_edge_color",
+            add, "_line_band_edge_color_btn", "效果颜色", "line_band_edge_color",
             force_global=True,
         )
-        self._add_canvas_spin(add, "_line_band_edge_size_spin", "描边半径", 0, 160,
+        self._add_canvas_spin(add, "_line_band_edge_size_spin", "效果半径", 0, 160,
                               "line_band_edge_size_px", "hard", suffix=" px", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_opacity_spin", "描边强度", 0, 100,
+        self._add_canvas_spin(add, "_line_band_edge_opacity_spin", "效果强度", 0, 100,
                               "line_band_edge_opacity_pct", "hard", suffix=" %", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_offset_x_spin", "投影 X", -300, 300,
+        self._add_canvas_spin(add, "_line_band_edge_offset_x_spin", "阴影 X", -300, 300,
                               "line_band_edge_offset_x_px", "hard", suffix=" px", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_offset_y_spin", "投影 Y", -300, 300,
+        self._add_canvas_spin(add, "_line_band_edge_offset_y_spin", "阴影 Y", -300, 300,
                               "line_band_edge_offset_y_px", "hard", suffix=" px", force_global=True)
         section.set_expanded(False)
         return section
