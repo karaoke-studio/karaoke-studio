@@ -166,11 +166,13 @@ class TestDialog:
             "none",
             "no_wipe",
             "utopia",
-            "scanline",
-            "utopia_scanline",
             "zoom_pulse",
-            "zoom_pulse_scanline",
         }
+        scanline_values = {
+            dialog._scanline_host_combo.itemData(i)
+            for i in range(dialog._scanline_host_combo.count())
+        }
+        assert scanline_values == {None, True, False}
 
     def test_it_round_trips_the_choice(self) -> None:
         override = LineAnimationOverride(

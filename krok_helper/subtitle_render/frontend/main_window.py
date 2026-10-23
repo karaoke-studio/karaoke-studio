@@ -705,6 +705,7 @@ _RENDER_ONLY_ANIM_STYLE_FIELDS: frozenset[str] = frozenset({
     "reverse_karaoke_anim",
     "scanline_enabled",
     "scanline_reverse_enabled",
+    "scanline_forward_enabled",
     "scanline_width_px",
     "scanline_mode",
     "scanline_color",

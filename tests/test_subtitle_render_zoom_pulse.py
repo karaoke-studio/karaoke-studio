@@ -124,11 +124,13 @@ def test_zoom_pulse_scanline_combines_both_overlays() -> None:
 def test_zoom_pulse_scanline_serializes_and_bakes_per_line() -> None:
     style = _zoom_pulse_style(karaoke_anim="zoom_pulse_scanline")
     restored = style_from_dict(style_to_dict(style))
-    assert restored.karaoke_anim == "zoom_pulse_scanline"
+    assert restored.karaoke_anim == "zoom_pulse"
+    assert restored.scanline_enabled is True
     override = line_animation_override_from_dict(
         {"entry_anim": "none", "exit_anim": "none", "karaoke_anim": "zoom_pulse_scanline"}
     )
-    assert override is not None and override.karaoke_anim == "zoom_pulse_scanline"
+    assert override is not None and override.karaoke_anim == "zoom_pulse"
+    assert override.scanline_enabled is True
     reverse = TimingLine(
         chars=[TimingChar("歌", 0)], end_ms=500, wipe_reverse=True
     )

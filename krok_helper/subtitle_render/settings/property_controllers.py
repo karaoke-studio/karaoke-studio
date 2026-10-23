@@ -382,6 +382,10 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         normalized["scanline_reverse_enabled"] = bool(
             normalized["scanline_reverse_enabled"]
         )
+    if "scanline_forward_enabled" in normalized:
+        normalized["scanline_forward_enabled"] = bool(
+            normalized["scanline_forward_enabled"]
+        )
     if "scanline_mode" in normalized:
         normalized["scanline_mode"] = normalize_scanline_mode(
             normalized["scanline_mode"]

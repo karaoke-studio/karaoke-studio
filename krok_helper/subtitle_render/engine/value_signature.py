@@ -89,6 +89,7 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "reverse_karaoke_anim",
     "scanline_enabled",
     "scanline_reverse_enabled",
+    "scanline_forward_enabled",
     "scanline_width_px",
     "scanline_mode",
     "scanline_color",

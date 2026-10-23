@@ -200,10 +200,7 @@ _KARAOKE_EFFECTS = (
     ("none", "无"),
     ("no_wipe", "无 Wipe"),
     ("utopia", "Utopia"),
-    ("scanline", "扫字线"),
-    ("utopia_scanline", "Utopia+扫字线"),
     ("zoom_pulse", "整字放大"),
-    ("zoom_pulse_scanline", "整字放大+扫字线"),
 )
 #: 唱字装饰粒子逐行只切档位，与属性面板「动画」页同一套语义；粒子尺寸/数量/
 #: 颜色仍只看全局，避免弹窗塞满与逐行无关的参数。
@@ -306,6 +303,10 @@ def _animation_summary(
     # 唱字只在这一行真的改了它时才标出来，免得每行都拖一截重复文字。
     if override is not None and override.karaoke_anim != "inherit":
         summary += f" · 唱字{_KARAOKE_LABELS.get(override.karaoke_anim, override.karaoke_anim)}"
+    if override is not None and override.scanline_enabled is True:
+        summary += " · 扫字线强制开"
+    elif override is not None and override.scanline_enabled is False:
+        summary += " · 扫字线强制关"
     if override is not None and override.sing_fx != "inherit":
         summary += f" · 装饰粒子{_SING_FX_LABELS.get(override.sing_fx, override.sing_fx)}"
     if wipe_reverse:
@@ -358,6 +359,7 @@ class _LineAnimationDialog(ModelessDialog):
         wipe_reverse: bool = False,
         volume_host: object = None,
         lit_host: object = None,
+        scanline_host: object = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("逐行特效")
@@ -394,6 +396,7 @@ class _LineAnimationDialog(ModelessDialog):
         )
         self._volume_host_combo = _StableFluentComboBox(self)
         self._lit_host_combo = _StableFluentComboBox(self)
+        self._scanline_host_combo = _StableFluentComboBox(self)
         for combo in (self._volume_host_combo, self._lit_host_combo):
             for value, label in _HOST_SWITCH_ITEMS:
                 combo.addItem(label, userData=value)
@@ -402,8 +405,24 @@ class _LineAnimationDialog(ModelessDialog):
                 "（段首）= 只挂每段第一行；强制开启 = 非段首行也挂；"
                 "强制关闭 = 段首行也不挂"
             )
+        for value, label in (
+            (None, "跟随全局"),
+            (True, "强制开启"),
+            (False, "强制关闭"),
+        ):
+            self._scanline_host_combo.addItem(label, userData=value)
+        self._scanline_host_combo.setToolTip(
+            "本行扫字线覆盖：跟随全局按总开关与应用范围；"
+            "强制开启/关闭则只改本行"
+        )
         self._select_by_data(self._volume_host_combo, volume_host)
         self._select_by_data(self._lit_host_combo, lit_host)
+        self._select_by_data(
+            self._scanline_host_combo,
+            scanline_host if scanline_host is not None else (
+                None if override is None else override.scanline_enabled
+            ),
+        )
         self._wipe_check = CheckBox("反向走字", self)
         self._wipe_check.setChecked(bool(wipe_reverse))
         self._wipe_check.setToolTip(
@@ -445,6 +464,7 @@ class _LineAnimationDialog(ModelessDialog):
         switch_form.setSpacing(10)
         switch_form.addRow("音量柱特效", self._volume_host_combo)
         switch_form.addRow("指示灯特效", self._lit_host_combo)
+        switch_form.addRow("扫字线", self._scanline_host_combo)
         switch_form.addRow("反向走字", self._wipe_check)
         root.addLayout(switch_form)
 
@@ -483,6 +503,10 @@ class _LineAnimationDialog(ModelessDialog):
         """指示灯特效挂载行的目标值（None/True/False）。"""
         return self._lit_host_combo.currentData()
 
+    def scanline_value(self) -> object:
+        """本行扫字线覆盖值（None/True/False）。"""
+        return self._scanline_host_combo.currentData()
+
     def wipe_reverse_value(self) -> object:
         """反向走字目标值（True/False）。"""
         return bool(self._wipe_check.isChecked())
@@ -496,6 +520,7 @@ class _LineAnimationDialog(ModelessDialog):
             self._exit_duration,
             self._karaoke_combo,
             self._sing_combo,
+            self._scanline_host_combo,
         ):
             widget.setEnabled(not inherit)
 
@@ -520,6 +545,7 @@ class _LineAnimationDialog(ModelessDialog):
             exit_duration_ms=self._exit_duration.value(),
             karaoke_anim=str(self._karaoke_combo.currentData() or "inherit"),
             sing_fx=str(self._sing_combo.currentData() or "inherit"),
+            scanline_enabled=self.scanline_value(),
         )
 
 
@@ -3573,6 +3599,14 @@ class LyricsPanel(DropPanel):
             wipe_reverse=uniform(lambda line: line.wipe_reverse, False),
             volume_host=uniform(lambda line: line.volume_head_override, None),
             lit_host=uniform(lambda line: line.lit_head_override, None),
+            scanline_host=uniform(
+                lambda line: (
+                    None
+                    if line.animation_override is None
+                    else line.animation_override.scanline_enabled
+                ),
+                None,
+            ),
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             target_rows = list(valid_rows)

@@ -221,6 +221,10 @@ class LineAnimationOverride:
     """唱字装饰粒子（星光闪烁 / 音符飘出 / 涟漪光环）。``inherit`` 沿用全局
     ``Style.sing_fx``；粒子参数（尺寸/数量/颜色）仍只看全局，逐行只切档位。"""
 
+    scanline_enabled: Optional[bool] = None
+    """逐行扫字线覆盖：``None`` 跟随全局，``True`` 本行强制开启，
+    ``False`` 本行强制关闭。"""
+
 
 @dataclass
 class TimingLine:

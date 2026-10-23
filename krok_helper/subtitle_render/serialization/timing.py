@@ -139,9 +139,25 @@ def line_animation_override_to_dict(
     # inherit 不落盘：它不带信息，而且没用这个功能的项目重新保存后文件不该平白多
     # 出一个键（读回时缺键本来就按 inherit 处理）。
     if override.karaoke_anim != "inherit":
-        data["karaoke_anim"] = override.karaoke_anim
+        karaoke = override.karaoke_anim
+        legacy_scanline = karaoke in {
+            "scanline", "utopia_scanline", "zoom_pulse_scanline",
+        }
+        if legacy_scanline:
+            karaoke = {
+                "scanline": "none",
+                "utopia_scanline": "utopia",
+                "zoom_pulse_scanline": "zoom_pulse",
+            }[karaoke]
+        data["karaoke_anim"] = karaoke
+    else:
+        legacy_scanline = False
     if override.sing_fx != "inherit":
         data["sing_fx"] = override.sing_fx
+    if override.scanline_enabled is not None:
+        data["scanline_enabled"] = bool(override.scanline_enabled)
+    elif legacy_scanline:
+        data["scanline_enabled"] = True
     return data
 
 
@@ -174,6 +190,18 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
     }:
         # 旧项目没有这一项，按继承处理——渲染结果与加这个字段之前一致。
         karaoke = "inherit"
+    legacy_scanline = karaoke in {
+        "scanline", "utopia_scanline", "zoom_pulse_scanline",
+    }
+    if legacy_scanline:
+        karaoke = {
+            "scanline": "none",
+            "utopia_scanline": "utopia",
+            "zoom_pulse_scanline": "zoom_pulse",
+        }[karaoke]
+    scanline_override = value.get("scanline_enabled")
+    if not isinstance(scanline_override, bool):
+        scanline_override = True if legacy_scanline else None
     sing_fx = value.get("sing_fx")
     if sing_fx not in {
         "inherit", "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow", "snow_solid",
@@ -187,6 +215,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
         exit_duration_ms=duration("exit_duration_ms", 300),
         karaoke_anim=karaoke,
         sing_fx=sing_fx,
+        scanline_enabled=scanline_override,
     )
 
 

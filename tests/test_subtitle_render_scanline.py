@@ -132,20 +132,43 @@ def test_scanline_style_fields_round_trip() -> None:
     restored = style_from_dict(style_to_dict(style))
     assert restored.karaoke_anim == "utopia"
     assert restored.scanline_enabled is True
-    assert restored.scanline_reverse_enabled is True
+    assert restored.scanline_reverse_enabled is False
+    assert restored.scanline_forward_enabled is True
     assert restored.scanline_width_px == 33
     assert restored.scanline_mode == "brighten"
     assert restored.scanline_color == "#123456"
     assert restored.scanline_brightness_pct == 45
     assert restored.scanline_glow_px == 12
-    legacy_payload = style_to_dict(
-        _scanline_style(karaoke_anim="utopia_scanline")
-    )
+    legacy_payload = dict(style_to_dict(style))
+    legacy_payload["karaoke_anim"] = "utopia_scanline"
     legacy_payload.pop("scanline_enabled", None)
     legacy_payload.pop("scanline_reverse_enabled", None)
+    legacy_payload.pop("scanline_forward_enabled", None)
     legacy = style_from_dict(legacy_payload)
     assert legacy.karaoke_anim == "utopia"
     assert legacy.scanline_enabled is True
+    assert legacy.scanline_reverse_enabled is True
+    # 旧项目只有反向档位时，迁移后普通行不应被顺带打开。
+    reverse_only_payload = style_to_dict(_scanline_style(karaoke_anim="utopia"))
+    reverse_only_payload["reverse_karaoke_anim"] = "scanline"
+    reverse_only_payload.pop("scanline_enabled", None)
+    reverse_only_payload.pop("scanline_forward_enabled", None)
+    reverse_only_payload.pop("scanline_reverse_enabled", None)
+    reverse_only = style_from_dict(reverse_only_payload)
+    assert reverse_only.scanline_enabled is True
+    assert reverse_only.scanline_forward_enabled is False
+    assert reverse_only.scanline_reverse_enabled is True
+    # 旧项目正向开、反向明确关：迁移后反向保持关闭。
+    forward_only_payload = dict(style_to_dict(style))
+    forward_only_payload["karaoke_anim"] = "utopia_scanline"
+    forward_only_payload["reverse_karaoke_anim"] = "none"
+    forward_only_payload.pop("scanline_enabled", None)
+    forward_only_payload.pop("scanline_forward_enabled", None)
+    forward_only_payload.pop("scanline_reverse_enabled", None)
+    forward_only = style_from_dict(forward_only_payload)
+    assert forward_only.scanline_enabled is True
+    assert forward_only.scanline_forward_enabled is True
+    assert forward_only.scanline_reverse_enabled is False
     # 非法模式回落 color，亮度越界钳制在 style 层由参数面板/渲染端兜底。
     assert style_from_dict({"scanline_mode": "wat"}).scanline_mode == "color"
 
@@ -375,6 +398,30 @@ def test_scanline_px_base_migration_on_load() -> None:
     assert restored.scanline_glow_px == 9
 
 
+def test_line_scanline_override_can_disable_global(qapp=None) -> None:
+    style = _scanline_style(
+        karaoke_anim="utopia",
+        scanline_enabled=True,
+        scanline_forward_enabled=True,
+        scanline_reverse_enabled=True,
+    )
+    line = TimingLine(
+        chars=[TimingChar("歌", 0)],
+        end_ms=500,
+        animation_override=LineAnimationOverride(scanline_enabled=False),
+    )
+    assert not effective_karaoke_scanline(style_with_line_animation(style, line))
+    forced = TimingLine(
+        chars=[TimingChar("歌", 0)],
+        end_ms=500,
+        animation_override=LineAnimationOverride(scanline_enabled=True),
+    )
+    disabled_global = replace(style, scanline_enabled=False)
+    assert effective_karaoke_scanline(
+        style_with_line_animation(disabled_global, forced)
+    )
+
+
 def test_reverse_karaoke_scanline_bakes_per_line() -> None:
     style = _scanline_style(
         karaoke_anim="utopia",
@@ -397,6 +444,7 @@ def test_reverse_karaoke_scanline_bakes_per_line() -> None:
     follow = _scanline_style(
         karaoke_anim="utopia",
         scanline_enabled=True,
+        scanline_reverse_enabled=True,
         reverse_karaoke_anim="inherit",
     )
     assert effective_karaoke_scanline(style_with_line_animation(follow, reverse))
@@ -405,15 +453,18 @@ def test_reverse_karaoke_scanline_bakes_per_line() -> None:
 def test_scanline_line_override_serialization_round_trip() -> None:
     override = LineAnimationOverride(karaoke_anim="utopia_scanline")
     data = line_animation_override_to_dict(override)
-    assert data["karaoke_anim"] == "utopia_scanline"
+    assert data["karaoke_anim"] == "utopia"
+    assert data["scanline_enabled"] is True
     restored = line_animation_override_from_dict(
         {"entry_anim": "none", "exit_anim": "none", "karaoke_anim": "scanline"}
     )
-    assert restored is not None and restored.karaoke_anim == "scanline"
+    assert restored is not None and restored.karaoke_anim == "none"
+    assert restored.scanline_enabled is True
     legacy = line_animation_override_from_dict(
         {"entry_anim": "none", "exit_anim": "none"}
     )
     assert legacy is not None and legacy.karaoke_anim == "inherit"
+    assert legacy.scanline_enabled is None
     invalid = line_animation_override_from_dict(
         {"entry_anim": "none", "exit_anim": "none", "karaoke_anim": "wat"}
     )

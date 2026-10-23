@@ -1219,8 +1219,14 @@ class Style:
     scanline_enabled: bool = False
     """扫字线总开关（音量柱/指示灯同语义）：开启后普通唱字行叠加锋面高亮。"""
 
-    scanline_reverse_enabled: bool = True
-    """扫字线是否同样应用于反向唱字行；仅在 ``scanline_enabled`` 开启时生效。"""
+    scanline_reverse_enabled: bool = False
+    """扫字线是否应用于反向唱字行；仅在 ``scanline_enabled`` 开启时生效。
+
+    与 :attr:`scanline_forward_enabled` 组合成三态：仅正向 / 仅反向 / 全部。
+    """
+
+    scanline_forward_enabled: bool = True
+    """扫字线是否应用于普通（正向）唱字行。"""
 
     scanline_width_px: int = 16
     """扫字线粗细（像素，``SCANLINE_BASE_HEIGHT``=1080 基准）：以走字锋面为
@@ -1402,6 +1408,54 @@ class Style:
 
     section_tail_anim: ExitAnimation = "fade"
     """段边缘页替换用的退场动画。"""
+
+    # 行背景带（三段式背景条）：每条歌词行背后铺一条随行宽的图片带。
+    # 只参与绘制，不参与排版 —— 不加进行宽、行网格与防重叠包络。
+    line_band_enabled: bool = False
+    """行背景带总开关。"""
+
+    line_band_image: str = ""
+    """图源：``preset:<id>`` 或绝对路径（用户上传）。空串表示未选图。"""
+
+    line_band_fill_mode: str = "three_slice"
+    """填充模式：``stretch`` 拉伸 / ``repeat`` 重复 / ``cover`` 裁切 /
+    ``three_slice`` 三段式（左右端点不缩放、中段循环）。"""
+
+    line_band_cap_left_px: int = 0
+    """三段式左端点宽（**源图像素**，不是屏幕像素）；左右独立。"""
+
+    line_band_cap_right_px: int = 0
+    """三段式右端点宽（源图像素）。"""
+
+    line_band_mid_mode: str = "repeat"
+    """三段式下中段的行为：``repeat`` 平铺 / ``stretch`` 拉伸。"""
+
+    line_band_pad_top_px: int = 20
+    """上边距：文字顶（开启注音基准时取注音顶）到带子上缘。"""
+
+    line_band_pad_bottom_px: int = 20
+    """下边距：主文字底到带子下缘。"""
+
+    line_band_pad_left_px: int = 40
+    """左边距：文字左缘到带子左缘。"""
+
+    line_band_pad_right_px: int = 40
+    """右边距：文字右缘到带子右缘。"""
+
+    line_band_include_ruby: bool = False
+    """``line_band_pad_top_px`` 的量取基准：True=注音顶，False=主文字顶。"""
+
+    line_band_offset_y_px: int = 0
+    """整条带子上下微调。"""
+
+    line_band_opacity_pct: int = 100
+    """带子整体透明度百分比。"""
+
+    line_band_tint: str = ""
+    """用户颜色（仅可调色预设生效）；空串表示用预设默认色。"""
+
+    line_band_tint_strength_pct: int = 100
+    """上色强度百分比：0=保持素材原本的中性灰。"""
 
     # 指示灯（Sayatoo SignalsLits.sx：lit.* / signals.duration）
     # 形状指示灯与音量柱是两个独立模块。lit_enabled 只控制悬浮形状灯；
@@ -1609,7 +1663,9 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
             "exit_anim": override.exit_anim,
             "exit_fade_ms": max(int(override.exit_duration_ms), 0),
         })
-    scanline_forced = False
+    scanline_line_override: Optional[bool] = (
+        override.scanline_enabled if override is not None else None
+    )
     if override is not None and override.karaoke_anim != "inherit":
         # inherit 表示「保持全局那一档」，必须原样留下 style.karaoke_anim。
         # 若把 "inherit" 写进行样式，effective_karaoke_animation 会转而去看这一行
@@ -1623,7 +1679,7 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
                 "utopia_scanline": "utopia",
                 "zoom_pulse_scanline": "zoom_pulse",
             }[override_anim]
-            scanline_forced = True
+            scanline_line_override = True
         else:
             changes["karaoke_anim"] = override_anim
     if line.wipe_reverse and style.reverse_karaoke_anim != "inherit":
@@ -1636,23 +1692,22 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
                 "utopia_scanline": "utopia",
                 "zoom_pulse_scanline": "zoom_pulse",
             }[reverse_anim]
-            scanline_forced = True
+            scanline_line_override = True
         else:
             changes["karaoke_anim"] = reverse_anim
     merged = style.with_timing(**changes) if changes else style
-    if scanline_forced:
-        merged = replace(
-            merged,
-            scanline_enabled=True,
-            scanline_reverse_enabled=True,
+    if scanline_line_override is True:
+        scanline_active = True
+    elif scanline_line_override is False:
+        scanline_active = False
+    else:
+        direction_enabled = (
+            merged.scanline_reverse_enabled
+            if line.wipe_reverse
+            else merged.scanline_forward_enabled
         )
-    if line.wipe_reverse:
-        merged = replace(
-            merged,
-            scanline_enabled=bool(
-                merged.scanline_enabled and merged.scanline_reverse_enabled
-            ),
-        )
+        scanline_active = bool(merged.scanline_enabled and direction_enabled)
+    merged = replace(merged, scanline_enabled=scanline_active)
     if override is not None and override.sing_fx != "inherit":
         # 唱字装饰粒子与唱字动画同语义：inherit 留全局档，其余档写进行样式。
         # sing_fx 不属于 StyleTimingConfig（非时间字段），flat 字段直接替换。
@@ -2105,6 +2160,37 @@ def style_to_dict(style: Style) -> dict:
             }
         else:
             data[item.name] = value
+    # 兼容对象（直接 Style(karaoke_anim="..._scanline")）序列化时也写成
+    # 新语义：基础动画 + 总开关 + 方向范围，避免保存重载后丢扫字线。
+    legacy_forward = data.get("karaoke_anim") in {
+        "scanline", "utopia_scanline", "zoom_pulse_scanline",
+    }
+    legacy_reverse = data.get("reverse_karaoke_anim") in {
+        "scanline", "utopia_scanline", "zoom_pulse_scanline",
+    }
+    if legacy_forward or legacy_reverse:
+        data["scanline_enabled"] = True
+        if legacy_forward:
+            data["karaoke_anim"] = {
+                "scanline": "none",
+                "utopia_scanline": "utopia",
+                "zoom_pulse_scanline": "zoom_pulse",
+            }[data["karaoke_anim"]]
+            data["scanline_forward_enabled"] = True
+        if legacy_reverse:
+            data["reverse_karaoke_anim"] = {
+                "scanline": "none",
+                "utopia_scanline": "utopia",
+                "zoom_pulse_scanline": "zoom_pulse",
+            }[data["reverse_karaoke_anim"]]
+            data["scanline_reverse_enabled"] = True
+        if legacy_forward and not legacy_reverse:
+            if data.get("reverse_karaoke_anim") == "inherit":
+                data["scanline_reverse_enabled"] = True
+            else:
+                data["scanline_reverse_enabled"] = False
+        if legacy_reverse and not legacy_forward:
+            data["scanline_forward_enabled"] = False
     # 扫字线像素字段的存储基准标记:值恒为 SCANLINE_BASE_HEIGHT(1080)下的
     # 基准值。读取端据此区分新旧格式(见 ``style_from_dict`` 的一次性迁移)。
     data["scanline_px_base"] = SCANLINE_BASE_HEIGHT
@@ -2420,6 +2506,15 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "volume_auto_column_ratio_pct",
             "volume_flash_times",
             "volume_transition_ratio_pct",
+            "line_band_cap_left_px",
+            "line_band_cap_right_px",
+            "line_band_pad_top_px",
+            "line_band_pad_bottom_px",
+            "line_band_pad_left_px",
+            "line_band_pad_right_px",
+            "line_band_offset_y_px",
+            "line_band_opacity_pct",
+            "line_band_tint_strength_pct",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
         elif key in {
@@ -2451,8 +2546,24 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "lit_enabled",
             "volume_enabled",
             "lit_shadow",
+            "line_band_enabled",
+            "line_band_include_ruby",
         }:
             changes[key] = bool(value)
+        elif key == "line_band_fill_mode":
+            changes[key] = (
+                value
+                if value in {"stretch", "repeat", "cover", "three_slice"}
+                else defaults.line_band_fill_mode
+            )
+        elif key == "line_band_mid_mode":
+            changes[key] = (
+                value
+                if value in {"repeat", "stretch"}
+                else defaults.line_band_mid_mode
+            )
+        elif key in {"line_band_image", "line_band_tint"}:
+            changes[key] = value if isinstance(value, str) else ""
         elif key == "lit_style":
             changes[key] = (
                 value
@@ -2752,6 +2863,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "ruby_latin_italic",
             "scanline_enabled",
             "scanline_reverse_enabled",
+            "scanline_forward_enabled",
+            "fill_gradient_enabled",
         }:
             changes[key] = None if value is None else bool(value)
         elif value is not None:
@@ -2883,13 +2996,16 @@ def _migrate_scanline_toggle(changes: dict, payload: dict) -> None:
         changes["reverse_karaoke_anim"] = base_by_mode[raw_reverse]
     if "scanline_enabled" not in payload:
         changes["scanline_enabled"] = forward_old or reverse_old
+    if "scanline_forward_enabled" not in payload:
+        if forward_old:
+            changes["scanline_forward_enabled"] = True
+        elif reverse_old:
+            changes["scanline_forward_enabled"] = False
     if "scanline_reverse_enabled" not in payload:
         if reverse_old:
             changes["scanline_reverse_enabled"] = True
-        elif raw_reverse == "inherit":
+        elif raw_reverse == "inherit" and forward_old:
             changes["scanline_reverse_enabled"] = True
-        else:
-            changes["scanline_reverse_enabled"] = False
 
 
 def _migrate_scanline_px_base(changes: dict, payload: dict) -> None:
