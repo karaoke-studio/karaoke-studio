@@ -22,6 +22,7 @@ def real_band_pixmap(
     style: Style,
     output_height: int = 1080,
     max_width: int = 900,
+    max_height: int | None = None,
 ) -> QPixmap:
     """按成片比例尺画出带子的最终效果（含端点/中段/上色/描边）。"""
     output_scale = max(float(output_height), 1.0) / 1080.0
@@ -30,7 +31,7 @@ def real_band_pixmap(
         + float(style.line_band_pad_top_px) * output_scale
         + float(style.line_band_pad_bottom_px) * output_scale
     )
-    band_height = max(24.0, min(band_height, 360.0))
+    band_height = max(24.0, min(band_height, float(max_height or 360)))
     width = int(max(min(band_height * 4.5, float(max_width)), 260.0))
     height = int(round(band_height))
     image = QPixmap(width, height)

@@ -1133,6 +1133,14 @@ class EffectsPropertyPageBuilder:
         )
         layout.addWidget(host._line_band_preview)
 
+        host._line_band_real_preview = QLabel(section)
+        host._line_band_real_preview.setMinimumHeight(96)
+        host._line_band_real_preview.setToolTip(
+            "真实效果（与成片同一比例尺：端点缩放、中段铺法、上色、整图投影"
+            "发光），随参数实时刷新。"
+        )
+        layout.addWidget(host._line_band_real_preview)
+
         preview_row = QWidget(section)
         preview_layout = QHBoxLayout(preview_row)
         preview_layout.setContentsMargins(0, 0, 0, 0)
