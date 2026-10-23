@@ -18,6 +18,10 @@
 #include <d2d1helper.h>
 #include <dwrite.h>
 #include <dwrite_3.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #include <optional>
 
 #include <algorithm>
@@ -136,6 +140,48 @@ bool sceneDiffersOnlyInRgb(const RenderScene &left, const RenderScene &right) {
 
 }  // namespace
 
+void Direct2DGpuBackend::ensureLineBandImage() {
+    const LineBandStyle &band = impl_->scene.lineBand;
+    Impl::CachedBandImage &cached = impl_->lineBandImage;
+    if (!band.enabled || band.imagePath.empty()) {
+        cached = Impl::CachedBandImage{};
+        return;
+    }
+    std::uint64_t modifiedMs = 0;
+    std::uint64_t size = 0;
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (GetFileAttributesExW(
+            band.imagePath.c_str(), GetFileExInfoStandard, &attributes)) {
+        ULARGE_INTEGER stamp{};
+        stamp.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
+        stamp.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
+        modifiedMs = stamp.QuadPart / 10000ull;
+        size = (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32)
+            | attributes.nFileSizeLow;
+    }
+    if (cached.bitmap
+        && cached.path == band.imagePath
+        && cached.modifiedMs == modifiedMs
+        && cached.size == size
+        && cached.hasTint == band.hasTint
+        && cached.tintStrengthPct == band.tintStrengthPct
+        && (!band.hasTint || cached.tint == band.tint)) {
+        return;
+    }
+    cached.bitmap = loadWicBitmap(
+        device_.d2dContext(),
+        band.imagePath,
+        band.hasTint ? &band.tint : nullptr,
+        band.tintStrengthPct
+    );
+    cached.path = band.imagePath;
+    cached.modifiedMs = modifiedMs;
+    cached.size = size;
+    cached.tint = band.tint;
+    cached.hasTint = band.hasTint;
+    cached.tintStrengthPct = band.tintStrengthPct;
+}
+
 void Direct2DGpuBackend::configure(const RenderScene &scene) {
     if (scene.width <= 0 || scene.height <= 0 || scene.width > 8192 || scene.height > 8192) {
         throw BackendError("GPU scene dimensions must be within 1..8192");
@@ -152,6 +198,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         impl_->scene = scene;
         // 帧仓登记的像素是旧色画的，随画笔一起作废（纹理同尺寸可复用）。
         clearFrameStoreRegistrations();
+        ensureLineBandImage();
         // 仅改色也会换掉 glow 画笔颜色：稳态模糊缓存条目按旧色烘焙，作废。
         impl_->glowBlurCache.clear();
         for (std::size_t index = 0; index < impl_->lines.size(); ++index) {
@@ -229,6 +276,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->scene = scene;
     // 全量重建（含同尺寸）：行集/几何全部换血，仓里任何登记帧都已过期。
     clearFrameStoreRegistrations();
+    ensureLineBandImage();
     // 稳态 glow 模糊缓存随场景整体失效：行向量即将清空重建，缓存条目
     // 持有的行指针全部悬空。
     impl_->glowBlurCache.clear();

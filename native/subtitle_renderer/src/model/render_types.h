@@ -705,6 +705,29 @@ struct TextStyle {
     bool operator==(const TextStyle &) const = default;
 };
 
+// 行背景带（行装饰层）的渲染规格：几何已按 layoutReferenceScale 缩放成
+// 场景像素；空 imagePath 或 enabled=false 时渲染端整段跳过。镜像
+// Python 的 ``Style.line_band_*`` 与 CPU painter 的 elements/band.py。
+struct LineBandStyle {
+    bool enabled = false;
+    std::wstring imagePath;
+    std::string fillMode = "three_slice";
+    std::string midMode = "repeat";
+    float capLeft = 0.0f;
+    float capRight = 0.0f;
+    float padTop = 20.0f;
+    float padBottom = 20.0f;
+    float padLeft = 40.0f;
+    float padRight = 40.0f;
+    bool includeRuby = false;
+    float offsetY = 0.0f;
+    float opacity = 1.0f;
+    bool hasTint = false;
+    RgbaColor tint{255, 255, 255, 255};
+    int tintStrengthPct = 100;
+    bool operator==(const LineBandStyle &) const = default;
+};
+
 struct RenderScene {
     int width = 1920;
     int height = 1080;
@@ -734,6 +757,8 @@ struct RenderScene {
     // 个角色）。
     std::optional<TextStyle> litDecorStyle;
     std::optional<TextStyle> volumeDecorStyle;
+    // 行背景带（全局装饰层，不参与布局/碰撞）。见 LineBandStyle。
+    LineBandStyle lineBand;
     std::vector<TextLine> lines;
     // 装饰粒子 sprite 轮廓表（scene IR ``fx_sprites``；Python 单一事实源，
     // 常量内容、值语义参与相等性比较）。

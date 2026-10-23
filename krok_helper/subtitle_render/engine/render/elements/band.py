@@ -108,17 +108,27 @@ def clear_band_image_cache() -> None:
 
 
 def _tinted(image: QImage, color: str, strength_pct: int) -> QImage:
-    """Multiply-tint an image while keeping its alpha and shading."""
+    """Tint an image toward a flat colour while keeping its alpha.
+
+    强度 100% 时等于把素材压成单色剪影（保留原始透明边缘）；部分强度按
+    ``C_out = (1-k)C + k*tint`` 向目标色混合，alpha 始终不变——与 native
+    sidecar 在解码期的染色公式逐像素一致。
+    """
     tinted = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    base = QColor(color)
+    if not base.isValid():
+        return image
     painter = QPainter(tinted)
     try:
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-        base = QColor(color)
-        if not base.isValid():
-            return image
-        if strength_pct < 100:
-            base.setAlphaF(strength_pct / 100.0)
         painter.fillRect(tinted.rect(), base)
+        strength = max(0, min(int(strength_pct), 100))
+        if strength < 100:
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver
+            )
+            painter.setOpacity(1.0 - strength / 100.0)
+            painter.drawImage(0, 0, image)
     finally:
         painter.end()
     return tinted

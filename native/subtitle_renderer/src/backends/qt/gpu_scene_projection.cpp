@@ -25,6 +25,7 @@
 
 namespace krok::subtitle::native::legacy_qt {
 
+using protocol::LineBandConfig;
 using protocol::PaintFillSpec;
 using protocol::RenderConfig;
 using protocol::ResolvedLineLayout;
@@ -635,6 +636,38 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         scene.style.alignment = config.lineAlignments.front().toStdString();
     } else {
         scene.style.alignment = "left";
+    }
+    // 行背景带：px 全部换算成场景像素，染色值在这里解析成 RgbaColor。
+    {
+        const LineBandConfig &band = config.lineBand;
+        LineBandStyle &target = scene.lineBand;
+        target.enabled = band.enabled && !band.imagePath.isEmpty();
+        target.imagePath = band.imagePath.toStdWString();
+        target.fillMode = band.fillMode.toStdString();
+        target.midMode = band.midMode.toStdString();
+        target.capLeft = static_cast<float>(band.capLeftPx * scale);
+        target.capRight = static_cast<float>(band.capRightPx * scale);
+        target.padTop = static_cast<float>(band.padTopPx * scale);
+        target.padBottom = static_cast<float>(band.padBottomPx * scale);
+        target.padLeft = static_cast<float>(band.padLeftPx * scale);
+        target.padRight = static_cast<float>(band.padRightPx * scale);
+        target.includeRuby = band.includeRuby;
+        target.offsetY = static_cast<float>(band.offsetYPx * scale);
+        target.opacity = static_cast<float>(
+            std::clamp(band.opacityPct, 0, 100)
+        ) / 100.0f;
+        const QColor tint(band.tint);
+        // 与 painter 的 QColor 解析同口径：非法/空值 = 不染色。
+        target.hasTint = tint.isValid();
+        if (target.hasTint) {
+            target.tint = RgbaColor{
+                static_cast<std::uint8_t>(tint.red()),
+                static_cast<std::uint8_t>(tint.green()),
+                static_cast<std::uint8_t>(tint.blue()),
+                255,
+            };
+        }
+        target.tintStrengthPct = std::clamp(band.tintStrengthPct, 0, 100);
     }
     scene.lines.reserve(config.lines.size());
     scene.lineStyles.reserve(config.lines.size());

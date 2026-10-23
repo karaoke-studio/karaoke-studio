@@ -552,6 +552,33 @@ inline int rubyShadowOffsetYForState(const ResolvedStyle &style, bool after) {
 }
 
 
+// 行背景带（每行一条装饰底带）：纯装饰层，不参与布局与碰撞，几何 = 行文本
+// 盒 + 四边独立留白，图像按 fillMode 铺进这条带子。镜像 Python 的
+// ``Style.line_band_*`` 与 CPU painter 的 elements/band.py。
+// 上下留白可以大于行距，所以渲染端必须在画字之前整帧先铺一遍带子。
+struct LineBandConfig {
+    bool enabled = false;
+    // 绝对路径：IR 侧已把 ``preset:<id>`` 解析成素材文件路径。
+    QString imagePath;
+    QString fillMode = QStringLiteral("three_slice");
+    QString midMode = QStringLiteral("repeat");
+    // 端点像素宽（源图像素；实际宽度按带高/图高等比缩放）。
+    int capLeftPx = 0;
+    int capRightPx = 0;
+    // 行文本盒到带子四条边的距离（逻辑像素，投影期乘 dpr）。
+    int padTopPx = 20;
+    int padBottomPx = 20;
+    int padLeftPx = 40;
+    int padRightPx = 40;
+    // 上边距的量取基准：true = 注音盒顶，false = 主文字盒顶。
+    bool includeRuby = false;
+    int offsetYPx = 0;
+    int opacityPct = 100;
+    // 空 = 不染色；染色色值 "#RRGGBB"（镜像 CPU 的 SourceIn 叠色语义）。
+    QString tint;
+    int tintStrengthPct = 100;
+};
+
 struct RenderConfig {
     int width = 1920;
     int height = 1080;
@@ -563,6 +590,8 @@ struct RenderConfig {
     int physicalWidth() const { return std::max(1, static_cast<int>(std::lround(width * dpr))); }
     int physicalHeight() const { return std::max(1, static_cast<int>(std::lround(height * dpr))); }
     ResolvedStyle baseStyle;
+    // 行背景带为全局样式字段（不按角色/歌手分层）。
+    LineBandConfig lineBand;
     QString layoutSemantics = QStringLiteral("legacy");
     int lineYMarginPx = 80;
     int lineGapPx = 90;

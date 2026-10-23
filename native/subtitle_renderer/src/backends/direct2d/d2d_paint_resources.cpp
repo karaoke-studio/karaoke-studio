@@ -314,7 +314,9 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap> createScanlineColumnBitmap(
 
 Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     ID2D1DeviceContext *context,
-    const std::wstring &path
+    const std::wstring &path,
+    const RgbaColor *tint,
+    int tintStrengthPct
 ) {
     if (path.empty()) {
         return {};
@@ -366,6 +368,30 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     if (FAILED(converter->CopyPixels(
             nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data()))) {
         return {};
+    }
+    // 染色：预乘像素朝 (tint * alpha) 混合，alpha 保持不变。强度 100% 时
+    // 等于纯色剪影，与 Python painter._tinted 的 SourceIn 叠色结果一致。
+    if (tint != nullptr && tintStrengthPct > 0) {
+        const float k = static_cast<float>(std::clamp(tintStrengthPct, 0, 100))
+            / 100.0f;
+        const float tintChannels[3] = {
+            static_cast<float>(tint->blue),
+            static_cast<float>(tint->green),
+            static_cast<float>(tint->red),
+        };
+        for (std::size_t offset = 0; offset + 3 < pixels.size(); offset += 4) {
+            // 预乘通道 P = C * alpha：目标 C_out = (1-k)C + k*tint，故
+            // P_out = (1-k)P + k*tint*alpha。
+            const float alpha = static_cast<float>(pixels[offset + 3]) / 255.0f;
+            const float scaled = k * alpha;
+            for (int channel = 0; channel < 3; ++channel) {
+                const float blended = pixels[offset + channel] * (1.0f - k)
+                    + tintChannels[channel] * scaled;
+                pixels[offset + channel] = static_cast<std::uint8_t>(
+                    std::lround(std::clamp(blended, 0.0f, 255.0f))
+                );
+            }
+        }
     }
     const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_NONE,

@@ -35,6 +35,17 @@ struct Direct2DGpuBackend::Impl {
         bool animationChecked = false;
         std::uint64_t lastUse = 0;
     };
+    // 行背景带素材：染色在解码期烘焙进像素，按 (path, mtime, size, tint,
+    // strength) 键控缓存；只有 configure 会重解，渲染期只读。
+    struct CachedBandImage {
+        std::wstring path;
+        std::uint64_t modifiedMs = 0;
+        std::uint64_t size = 0;
+        RgbaColor tint{};
+        int tintStrengthPct = 0;
+        bool hasTint = false;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+    };
     // 装饰粒子 sprite 轮廓几何（em 空间、中心原点；随场景重建，绘制期经
     // matrix 缩放平移）。key = sprite 名（star4 / ring / note）。
     std::map<std::string, Microsoft::WRL::ComPtr<ID2D1PathGeometry>> fxSpriteGeometries;
@@ -355,6 +366,8 @@ struct Direct2DGpuBackend::Impl {
     RenderScene scene;
     std::vector<CachedLine> lines;
     std::vector<CachedImage> images;
+    // 行背景带素材（scene.lineBand 解码后的染色位图）。
+    CachedBandImage lineBandImage;
     std::uint64_t imageUseSerial = 0;
     static constexpr std::size_t defaultImageCapacity = 64;
     std::size_t imageCapacity = direct2d::environmentSize(

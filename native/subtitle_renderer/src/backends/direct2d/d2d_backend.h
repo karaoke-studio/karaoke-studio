@@ -54,6 +54,9 @@ public:
     void setRealizationPoolReady(bool ready) noexcept;
 
 private:
+    // 行背景带素材：按 (path, mtime, size, tint, strength) 键控，仅在
+    // configure 的两个入口调用（整场景重配 / 仅换色快路径），渲染期只读。
+    void ensureLineBandImage();
     // 从当前 lines 重算 realization 任务并启动预热线程（configure 与
     // resumeRealizationPrewarm 共用；后者靠 realizationResources 复用已完成任务）。
     void startRealizationPrewarm(bool deferUntilFirstFrame);

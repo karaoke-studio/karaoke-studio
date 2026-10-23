@@ -1085,6 +1085,87 @@ void applyScreenSection(RenderConfig &cfg, const QJsonObject &screen) {
 void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     ResolvedStyle &base = cfg.baseStyle;
     applySignalStyleOverrides(base, style);
+    // 行背景带：全局装饰层，几何/端点/染色都在这里读；缺 key 沿用缺省值
+    // （旧 IR 不发行背景带字段时整段关闭）。
+    {
+        LineBandConfig &band = cfg.lineBand;
+        band.enabled = style.value(
+            QStringLiteral("line_band_enabled")
+        ).toBool(band.enabled);
+        band.imagePath = stringValue(
+            style, QStringLiteral("line_band_image"), band.imagePath
+        );
+        const QString fillMode = stringValue(
+            style, QStringLiteral("line_band_fill_mode"), band.fillMode
+        );
+        band.fillMode = (
+            fillMode == QStringLiteral("stretch")
+            || fillMode == QStringLiteral("repeat")
+            || fillMode == QStringLiteral("cover")
+            || fillMode == QStringLiteral("three_slice")
+        ) ? fillMode : QStringLiteral("three_slice");
+        const QString midMode = stringValue(
+            style, QStringLiteral("line_band_mid_mode"), band.midMode
+        );
+        band.midMode = midMode == QStringLiteral("stretch")
+            ? midMode
+            : QStringLiteral("repeat");
+        band.capLeftPx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_cap_left_px"), band.capLeftPx
+            )
+        );
+        band.capRightPx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_cap_right_px"), band.capRightPx
+            )
+        );
+        band.padTopPx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_pad_top_px"), band.padTopPx
+            )
+        );
+        band.padBottomPx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_pad_bottom_px"), band.padBottomPx
+            )
+        );
+        band.padLeftPx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_pad_left_px"), band.padLeftPx
+            )
+        );
+        band.padRightPx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_pad_right_px"), band.padRightPx
+            )
+        );
+        band.includeRuby = style.value(
+            QStringLiteral("line_band_include_ruby")
+        ).toBool(band.includeRuby);
+        band.offsetYPx = intValue(
+            style, QStringLiteral("line_band_offset_y_px"), band.offsetYPx
+        );
+        band.opacityPct = std::clamp(
+            intValue(
+                style, QStringLiteral("line_band_opacity_pct"), band.opacityPct
+            ),
+            0,
+            100
+        );
+        band.tint = stringValue(
+            style, QStringLiteral("line_band_tint"), band.tint
+        );
+        band.tintStrengthPct = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("line_band_tint_strength_pct"),
+                band.tintStrengthPct
+            ),
+            0,
+            100
+        );
+    }
     base.fontFamily = stringValue(style, QStringLiteral("font_family"), base.fontFamily);
     base.fontFamilyLatin = stringValue(style, QStringLiteral("font_family_latin"), base.fontFamilyLatin);
     base.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), base.fontSizePx));

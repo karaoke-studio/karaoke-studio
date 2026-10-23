@@ -67,7 +67,11 @@ void updatePaintBrush(
 
 Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     ID2D1DeviceContext *context,
-    const std::wstring &path
+    const std::wstring &path,
+    // 可选染色：非空时按 strength 把图像像素向 tint 混合（alpha 不变），
+    // 镜像 Python painter 的 _tinted（SourceIn 叠色）语义。
+    const RgbaColor *tint = nullptr,
+    int tintStrengthPct = 100
 );
 
 // 动图（GIF）解码结果：逐帧全尺寸合成位图 + 每帧时长（ms，已钳 ≥10）。

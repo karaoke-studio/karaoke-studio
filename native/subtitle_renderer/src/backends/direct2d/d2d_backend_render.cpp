@@ -748,6 +748,456 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : frameDiagnostics.strokeDraw
         );
     };
+    // ---- 行背景带：整帧预扫，先于所有文字 ----
+    // 上下留白可以远大于行距（预设 26/26，用户可拉到 110/120），若随行绘制，
+    // 后画的下一行带子会盖住上一行的字。这里在行循环之前一次铺完带子，再走
+    // 原来的行循环画字；入场位移/淡出取同一份 lineAnimationAt，带子和它的
+    // 那一句同步动。镜像 Painter 的 _paint_line_bands。
+    bool frameCleared = false;
+    if (scene.lineBand.enabled
+        && !scene.style.vertical
+        && impl_->lineBandImage.bitmap != nullptr) {
+        const LineBandStyle &band = scene.lineBand;
+        // 行盒偏移：与行循环里的对齐/firstBaseline 同口径（带子按文本盒
+        // 对齐，不吃音量柱 union——与 Painter 用 line_rect 一致）。
+        const auto bandOffsetAt = [&](
+            const Impl::CachedLine &line,
+            const LineAnimationState &animation,
+            float placementOffsetX,
+            float placementOffsetY
+        ) {
+            const TextStyle &style = line.style;
+            const bool n3Layout = style.layoutSemantics == "n3_1074";
+            float lyricLeft = line.bounds.left;
+            float lyricRight = line.bounds.right;
+            if (n3Layout) {
+                lyricLeft = line.fillBounds.left;
+                lyricRight = line.fillBounds.right;
+                for (const Impl::CachedRuby &ruby : line.rubies) {
+                    for (const Impl::CachedChar &unit : ruby.chars) {
+                        lyricLeft = std::min(lyricLeft, unit.layoutLeft);
+                        lyricRight = std::max(lyricRight, unit.layoutRight);
+                    }
+                }
+            }
+            float dx = (
+                static_cast<float>(scene.width) - (lyricRight - lyricLeft)
+            ) * 0.5f - lyricLeft + style.centerOffsetX;
+            if (style.alignment == "left") {
+                dx = style.horizontalMargin - lyricLeft;
+            } else if (style.alignment == "right") {
+                dx = static_cast<float>(scene.width)
+                    - style.horizontalMargin - lyricRight;
+            }
+            dx += style.layoutOffsetX + animation.dx;
+            if (style.dualLineLayout
+                && style.smartHorizontal != "none"
+                && style.alignment != "center"
+                && line.pageIndex >= 0) {
+                const auto layoutWidth = [](const Impl::CachedLine &candidate) {
+                    float left = candidate.fillBounds.left;
+                    float right = candidate.fillBounds.right;
+                    for (const Impl::CachedRuby &ruby : candidate.rubies) {
+                        for (const Impl::CachedChar &unit : ruby.chars) {
+                            left = std::min(left, unit.layoutLeft);
+                            right = std::max(right, unit.layoutRight);
+                        }
+                    }
+                    return std::max(right - left, 1.0f);
+                };
+                const auto firstCharFontSize = [&](
+                    const Impl::CachedLine &candidate
+                ) {
+                    if (!candidate.chars.empty()) {
+                        const int styleIndex = candidate.chars.front().styleIndex;
+                        if (styleIndex >= 0
+                            && styleIndex < static_cast<int>(
+                                scene.charStyles.size()
+                            )) {
+                            return std::max(
+                                scene.charStyles[static_cast<std::size_t>(
+                                    styleIndex
+                                )].fontSize,
+                                1.0f
+                            );
+                        }
+                    }
+                    return std::max(candidate.style.fontSize, 1.0f);
+                };
+                const float ownWidth = layoutWidth(line);
+                const float ownFontSize = firstCharFontSize(line);
+                float smartDx = 0.0f;
+                if (style.smartHorizontal == "center_position") {
+                    const float threshold = std::floor(
+                        static_cast<float>(scene.width) * 0.5f
+                        + ownFontSize * 0.5f
+                        - ownWidth
+                    );
+                    if (threshold > style.horizontalMargin) {
+                        if (style.alignment == "right") {
+                            const float currentLeft = static_cast<float>(scene.width)
+                                - style.horizontalMargin - ownWidth;
+                            smartDx = std::floor(
+                                static_cast<float>(scene.width) * 0.5f
+                                - ownFontSize * 0.5f
+                            ) - currentLeft;
+                        } else {
+                            smartDx = threshold - style.horizontalMargin;
+                        }
+                    }
+                } else if (style.smartHorizontal == "equal_margins") {
+                    float maxLeft = 0.0f;
+                    float maxCenter = 0.0f;
+                    float maxRight = 0.0f;
+                    float pageHeadFontSize = style.fontSize;
+                    bool foundPageHead = false;
+                    for (const Impl::CachedLine &candidate : impl_->lines) {
+                        if (candidate.sourceIndex != line.sourceIndex
+                            || candidate.pageIndex != line.pageIndex) {
+                            continue;
+                        }
+                        if (!foundPageHead) {
+                            pageHeadFontSize = firstCharFontSize(candidate);
+                            foundPageHead = true;
+                        }
+                        const float width = layoutWidth(candidate);
+                        if (candidate.style.alignment == "right") {
+                            maxRight = std::max(maxRight, width);
+                        } else if (candidate.style.alignment == "center") {
+                            maxCenter = std::max(maxCenter, width);
+                        } else {
+                            maxLeft = std::max(maxLeft, width);
+                        }
+                    }
+                    if (maxLeft > 0.0f && maxRight > 0.0f) {
+                        const float slack = static_cast<float>(scene.width)
+                            - style.horizontalMargin * 2.0f
+                            - maxLeft - maxCenter - maxRight
+                            + pageHeadFontSize;
+                        if (slack > 0.0f) {
+                            const float halfSlack = std::floor(slack * 0.5f);
+                            smartDx = style.alignment == "right"
+                                ? -halfSlack
+                                : halfSlack;
+                        }
+                    }
+                }
+                dx += smartDx;
+            }
+            dx += style.laneOffsetX + placementOffsetX;
+            const float mainHeight = n3Layout
+                ? line.n3DrawHeight
+                : line.legacyLaneHeight;
+            const float descent = n3Layout
+                ? line.n3Descent
+                : line.legacyLaneDescent;
+            const float ascent = mainHeight - descent;
+            const int lanes = style.dualLineLayout
+                ? std::max(style.laneCount, 1)
+                : 1;
+            const float rubyExtra = n3Layout
+                ? 0.0f
+                : std::max(
+                    style.rubyGap + style.rubyFontSize
+                        + std::max(style.rubyStrokeWidth, 0.0f),
+                    0.0f
+                );
+            const float step = mainHeight + style.lineGap;
+            float firstBaseline = static_cast<float>(scene.height)
+                - style.bottomMargin - descent
+                - step * static_cast<float>(lanes - 1);
+            if (style.verticalPosition == "top") {
+                firstBaseline = style.bottomMargin + rubyExtra + ascent;
+            } else if (style.verticalPosition == "center") {
+                const float totalHeight = mainHeight * static_cast<float>(lanes)
+                    + style.lineGap * static_cast<float>(lanes - 1);
+                firstBaseline = (
+                    static_cast<float>(scene.height) - totalHeight
+                ) * 0.5f + ascent + style.centerOffsetY;
+            }
+            const float dy = firstBaseline
+                + step * static_cast<float>(line.lane)
+                + animation.dy + style.layoutOffsetY + placementOffsetY;
+            return D2D1::Point2F(dx, dy);
+        };
+        struct BandGroup {
+            int sourceIndex = 0;
+            int sourceLineIndex = 0;
+            int pageIndex = -1;
+            D2D1_RECT_F rect{};
+            bool hasRect = false;
+            float opacity = 1.0f;
+        };
+        std::vector<BandGroup> groups;
+        for (const Impl::CachedLine *line : activeLines) {
+            if (line == nullptr || line->staticOverlay || line->style.vertical) {
+                continue;
+            }
+            float placementOffsetX = 0.0f;
+            float placementOffsetY = 0.0f;
+            for (const PlacementWindow &window : line->placementWindows) {
+                if (tMs >= window.startMs && tMs < window.endMs) {
+                    placementOffsetX = window.offsetX;
+                    placementOffsetY = window.offsetY;
+                    break;
+                }
+            }
+            const LineAnimationState animation = lineAnimationAt(*line);
+            const float opacity = std::clamp(animation.opacity, 0.0f, 1.0f);
+            if (opacity <= 0.0f) {
+                continue;
+            }
+            const D2D1_POINT_2F offset = bandOffsetAt(
+                *line, animation, placementOffsetX, placementOffsetY
+            );
+            // 文本盒取「字体上下沿」而不是墨迹盒：整行都是「ー」或标点时 ink
+            // 盒几乎为零，带子会被压扁。Painter 同样按 TextLayout 的
+            // ascent/descent（line_rect）量取，两边口径一致。
+            const float textTop = -(line->ascent > 0.0f
+                ? line->ascent
+                : line->laneFontAscent);
+            const float textBottom = line->descent > 0.0f
+                ? line->descent
+                : line->laneFontDescent;
+            float topRef = textTop;
+            if (band.includeRuby) {
+                for (const Impl::CachedRuby &ruby : line->rubies) {
+                    // 注音盒顶（em 盒顶，非墨迹）：空盒退回布局盒。
+                    const bool hasBox = ruby.fillBounds.right > ruby.fillBounds.left
+                        && ruby.fillBounds.bottom > ruby.fillBounds.top;
+                    const float rubyTop = hasBox
+                        ? ruby.fillBounds.top
+                        : ruby.bounds.top;
+                    topRef = std::min(topRef, rubyTop);
+                }
+            }
+            const D2D1_RECT_F entryRect = D2D1::RectF(
+                line->fillBounds.left + offset.x - band.padLeft,
+                topRef + offset.y - band.padTop + band.offsetY,
+                line->fillBounds.right + offset.x + band.padRight,
+                textBottom + offset.y + band.padBottom + band.offsetY
+            );
+            auto found = std::find_if(
+                groups.begin(),
+                groups.end(),
+                [&](const BandGroup &group) {
+                    return group.sourceIndex == line->sourceIndex
+                        && group.sourceLineIndex == line->sourceLineIndex
+                        && group.pageIndex == line->pageIndex;
+                }
+            );
+            if (found == groups.end()) {
+                BandGroup group;
+                group.sourceIndex = line->sourceIndex;
+                group.sourceLineIndex = line->sourceLineIndex;
+                group.pageIndex = line->pageIndex;
+                group.rect = entryRect;
+                group.hasRect = true;
+                group.opacity = opacity;
+                groups.push_back(group);
+            } else if (found->hasRect) {
+                found->rect = D2D1::RectF(
+                    std::min(found->rect.left, entryRect.left),
+                    std::min(found->rect.top, entryRect.top),
+                    std::max(found->rect.right, entryRect.right),
+                    std::max(found->rect.bottom, entryRect.bottom)
+                );
+                found->opacity = std::max(found->opacity, opacity);
+            }
+        }
+        ID2D1Bitmap1 *bandBitmap = impl_->lineBandImage.bitmap.Get();
+        const D2D1_SIZE_F imageSize = bandBitmap->GetSize();
+        const auto drawBandPiece = [&](
+            const D2D1_RECT_F &dest,
+            float opacity,
+            const D2D1_RECT_F &source
+        ) {
+            if (dest.right - dest.left <= 0.0f
+                || dest.bottom - dest.top <= 0.0f
+                || source.right - source.left <= 0.0f
+                || source.bottom - source.top <= 0.0f) {
+                return;
+            }
+            context->DrawBitmap(
+                bandBitmap,
+                &dest,
+                opacity,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                &source
+            );
+        };
+        const float imageWidth = imageSize.width;
+        const float imageHeight = imageSize.height;
+        context->SetTarget(targetBitmap);
+        context->SetTransform(viewportTransform);
+        context->BeginDraw();
+        // 本帧由带子先清一次底色：行循环里首个可见行不再重复 Clear。
+        context->Clear(D2D1::ColorF(0.0f, 0.0f));
+        frameCleared = true;
+        if (imageWidth > 0.0f && imageHeight > 0.0f) {
+            for (const BandGroup &group : groups) {
+                if (!group.hasRect) {
+                    continue;
+                }
+                const D2D1_RECT_F &rect = group.rect;
+                const float width = rect.right - rect.left;
+                const float height = rect.bottom - rect.top;
+                const float opacity = std::clamp(
+                    group.opacity * band.opacity, 0.0f, 1.0f
+                );
+                if (width <= 0.0f || height <= 0.0f || opacity <= 0.0f) {
+                    continue;
+                }
+                const D2D1_RECT_F imageRect = D2D1::RectF(
+                    0.0f, 0.0f, imageWidth, imageHeight
+                );
+                if (band.fillMode == "repeat") {
+                    const float scale = height / imageHeight;
+                    const float tileWidth = imageWidth * scale;
+                    if (tileWidth <= 0.5f) {
+                        drawBandPiece(rect, opacity, imageRect);
+                        continue;
+                    }
+                    float x = rect.left;
+                    while (x < rect.right - 0.5f) {
+                        const float tileRight = std::min(
+                            x + tileWidth, rect.right
+                        );
+                        drawBandPiece(
+                            D2D1::RectF(x, rect.top, tileRight, rect.bottom),
+                            opacity,
+                            D2D1::RectF(
+                                0.0f, 0.0f, (tileRight - x) / scale, imageHeight
+                            )
+                        );
+                        x += tileWidth;
+                    }
+                } else if (band.fillMode == "cover") {
+                    const float scale = std::max(
+                        width / imageWidth, height / imageHeight
+                    );
+                    const float sourceWidth = std::min(
+                        width / scale, imageWidth
+                    );
+                    const float sourceHeight = std::min(
+                        height / scale, imageHeight
+                    );
+                    drawBandPiece(
+                        rect,
+                        opacity,
+                        D2D1::RectF(
+                            (imageWidth - sourceWidth) * 0.5f,
+                            (imageHeight - sourceHeight) * 0.5f,
+                            (imageWidth + sourceWidth) * 0.5f,
+                            (imageHeight + sourceHeight) * 0.5f
+                        )
+                    );
+                } else if (band.fillMode == "three_slice") {
+                    float scale = height / imageHeight;
+                    float leftWidth = band.capLeft * scale;
+                    float rightWidth = band.capRight * scale;
+                    if (leftWidth + rightWidth > width) {
+                        scale = width / std::max(
+                            band.capLeft + band.capRight, 1.0f
+                        );
+                        leftWidth = band.capLeft * scale;
+                        rightWidth = band.capRight * scale;
+                    }
+                    if (band.capLeft > 0.0f) {
+                        drawBandPiece(
+                            D2D1::RectF(
+                                rect.left, rect.top,
+                                rect.left + leftWidth, rect.bottom
+                            ),
+                            opacity,
+                            D2D1::RectF(
+                                0.0f, 0.0f, band.capLeft, imageHeight
+                            )
+                        );
+                    }
+                    if (band.capRight > 0.0f) {
+                        drawBandPiece(
+                            D2D1::RectF(
+                                rect.right - rightWidth, rect.top,
+                                rect.right, rect.bottom
+                            ),
+                            opacity,
+                            D2D1::RectF(
+                                imageWidth - band.capRight, 0.0f,
+                                imageWidth, imageHeight
+                            )
+                        );
+                    }
+                    const float midWidth = std::max(
+                        width - leftWidth - rightWidth, 0.0f
+                    );
+                    const float sourceMidWidth = imageWidth
+                        - band.capLeft - band.capRight;
+                    if (midWidth > 0.0f && sourceMidWidth > 0.0f) {
+                        const float midLeft = rect.left + leftWidth;
+                        const D2D1_RECT_F midSource = D2D1::RectF(
+                            band.capLeft, 0.0f,
+                            imageWidth - band.capRight, imageHeight
+                        );
+                        if (band.midMode == "stretch") {
+                            drawBandPiece(
+                                D2D1::RectF(
+                                    midLeft, rect.top,
+                                    midLeft + midWidth, rect.bottom
+                                ),
+                                opacity,
+                                midSource
+                            );
+                        } else {
+                            const float tileWidth = sourceMidWidth * scale;
+                            if (tileWidth <= 0.5f) {
+                                drawBandPiece(
+                                    D2D1::RectF(
+                                        midLeft, rect.top,
+                                        midLeft + midWidth, rect.bottom
+                                    ),
+                                    opacity,
+                                    midSource
+                                );
+                            } else {
+                                float x = midLeft;
+                                while (x < midLeft + midWidth - 0.5f) {
+                                    const float tileRight = std::min(
+                                        x + tileWidth, midLeft + midWidth
+                                    );
+                                    drawBandPiece(
+                                        D2D1::RectF(
+                                            x, rect.top, tileRight, rect.bottom
+                                        ),
+                                        opacity,
+                                        D2D1::RectF(
+                                            band.capLeft,
+                                            0.0f,
+                                            std::min(
+                                                band.capLeft
+                                                    + (tileRight - x) / scale,
+                                                imageWidth - band.capRight
+                                            ),
+                                            imageHeight
+                                        )
+                                    );
+                                    x += tileWidth;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    drawBandPiece(rect, opacity, imageRect);
+                }
+            }
+        }
+        checkHr(
+            context->EndDraw(),
+            "ID2D1DeviceContext::EndDraw(line band)",
+            device_
+        );
+        context->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
     for (const Impl::CachedLine *line : activeLines) {
       if (line != nullptr && (
         !line->geometries.empty()
@@ -6384,8 +6834,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             context->SetTarget(targetBitmap);
             context->SetTransform(D2D1::Matrix3x2F::Identity());
             context->BeginDraw();
-            if (!renderedAnyLine) {
+            if (!renderedAnyLine && !frameCleared) {
+                // 行背景带已在帧首清过底：这里再清会把带子一起擦掉。
                 context->Clear(D2D1::ColorF(0.0f, 0.0f));
+                frameCleared = true;
             }
             context->SetTransform(
                 withViewport(D2D1::Matrix3x2F::Translation(dx, dy))
@@ -6544,8 +6996,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
-        if (!renderedAnyLine) {
+        if (!renderedAnyLine && !frameCleared) {
+            // 行背景带已在帧首清过底：这里再清会把带子一起擦掉。
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
+            frameCleared = true;
         }
         // Everything the line puts on the final target belongs inside the
         // opacity layer; Clear must stay outside it.
@@ -9322,7 +9776,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
       }
     }
 
-    if (!renderedAnyLine) {
+    if (!renderedAnyLine && !frameCleared) {
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();

@@ -169,9 +169,10 @@ def test_three_slice_survives_a_band_narrower_than_its_caps(qapp):
 
 
 # ---------------------------------------------------------------- gpu guard
-def test_gpu_fallback_requests_cpu_when_band_is_enabled():
+def test_gpu_band_does_not_force_cpu_fallback():
+    """行背景带已由 D2D sidecar 原生绘制：开启后不再整帧回落 CPU。"""
     track = _track()
-    assert "line_band" in gpu_unsupported_features(track, _style())
+    assert "line_band" not in gpu_unsupported_features(track, _style())
     assert "line_band" not in gpu_unsupported_features(
         track, _style(line_band_enabled=False)
     )
