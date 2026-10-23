@@ -385,6 +385,34 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         context, cached.bitmap.Get(),
         band.capLeftSrc, band.capRightSrc
     );
+    // 谱线层（含高音谱号）：multiply 上色，白色→用户颜色、近黑描边保持。
+    cached.lineBitmap.Reset();
+    cached.lineMidStrip.Reset();
+    if (!band.linesPath.empty()) {
+        cached.lineBitmap = loadWicBitmap(
+            context,
+            band.linesPath,
+            band.hasLineColor ? &band.lineColor : nullptr,
+            100,
+            /*multiplyTint=*/true
+        );
+        cached.lineMidStrip = makeBandMidStrip(
+            context, cached.lineBitmap.Get(),
+            band.capLeftSrc, band.capRightSrc
+        );
+    }
+    // 图片描边（投影/发光）剪影层。
+    cached.edgeBitmap.Reset();
+    cached.edgeMidStrip.Reset();
+    if (cached.bitmap && band.edgeKind != "none") {
+        cached.edgeBitmap = makeBandEdgeBitmap(
+            context, cached.bitmap.Get(), band.edgeColor, edgeSizePx
+        );
+        cached.edgeMidStrip = makeBandMidStrip(
+            context, cached.edgeBitmap.Get(),
+            band.capLeftSrc, band.capRightSrc
+        );
+    }
     cached.midCapLeftSrc = band.capLeftSrc;
     cached.midCapRightSrc = band.capRightSrc;
     cached.path = band.imagePath;
