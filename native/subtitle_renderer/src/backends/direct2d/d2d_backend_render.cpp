@@ -1184,13 +1184,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const float midWidth = std::max(
                         width - leftWidth - rightWidth, 0.0f
                     );
+                    // 中段取图区间用**源图设计边界**（srcCap*），与端点显示宽度
+                    // 解耦：端点调小只裁窄端点，不能把端点图案喂进中段重复。
                     const float sourceMidWidth = imageWidth
-                        - band.capLeft - band.capRight;
+                        - band.srcCapLeft - band.srcCapRight;
                     if (midWidth > 0.0f && sourceMidWidth > 0.0f) {
                         const float midLeft = rect.left + leftWidth;
                         const D2D1_RECT_F midSource = D2D1::RectF(
-                            band.capLeft, 0.0f,
-                            imageWidth - band.capRight, imageHeight
+                            band.srcCapLeft, 0.0f,
+                            imageWidth - band.srcCapRight, imageHeight
                         );
                         if (band.midMode == "stretch") {
                             drawBandPiece(bitmap, 
@@ -1242,12 +1244,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                         ),
                                         opacity,
                                         D2D1::RectF(
-                                            band.capLeft,
+                                            band.srcCapLeft,
                                             0.0f,
                                             std::min(
-                                                band.capLeft
+                                                band.srcCapLeft
                                                     + (tileRight - x) / scale,
-                                                imageWidth - band.capRight
+                                                imageWidth - band.srcCapRight
                                             ),
                                             imageHeight
                                         )

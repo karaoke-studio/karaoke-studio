@@ -4721,6 +4721,18 @@ def _paint_line_fx_particles(
                 painter.restore()
 
 
+def _band_rect_overlap_ratio(first: QRectF, second: QRectF) -> float:
+    """两矩形交集面积 / 较小矩形面积（判断"几乎重合"）。"""
+    inter = first.intersected(second)
+    if inter.width() <= 0 or inter.height() <= 0:
+        return 0.0
+    smaller = min(
+        max(first.width() * first.height(), 1.0),
+        max(second.width() * second.height(), 1.0),
+    )
+    return (inter.width() * inter.height()) / smaller
+
+
 def _band_ruby_top(layout: _LineLayout) -> float | None:
     """注音墨迹顶（绝对坐标）；该行没有注音时返回 ``None``。"""
     tops: list[float] = []
@@ -4764,6 +4776,7 @@ def _paint_line_bands(
     groups: dict[int, list] = {}
     for display_line in display_lines:
         groups.setdefault(id(display_line.line), []).append(display_line)
+    drawn_bands: list[tuple[QRectF, float]] = []
     for entries in groups.values():
         head = entries[0]
         line = head.line
@@ -4853,6 +4866,23 @@ def _paint_line_bands(
         if rect is None:
             continue
         offset_x, offset_y = line_offsets.get(id(line), (0.0, 0.0))
+        # 防双绘：同一块区域只允许一条带子。页面切换/布局异常时可能出现两
+        # 条几乎重合的带子（用户实测「左侧谱号出现两遍」——两条带子横向错开
+        # 十几 px，横线重合看不出来，谱号和音符却各画一次）。这里保留不透明
+        # 度更高的那条，其余跳过。
+        if any(
+            _band_rect_overlap_ratio(rect, drawn_rect) > 0.55
+            and opacity <= drawn_opacity + 0.02
+            for drawn_rect, drawn_opacity in drawn_bands
+        ):
+            if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
+                _preview_diagnostic(
+                    "line band skipped (overlaps an already drawn band): "
+                    f"{rect.x():.1f},{rect.y():.1f},{rect.width():.1f}x"
+                    f"{rect.height():.1f}"
+                )
+            continue
+        drawn_bands.append((rect, opacity))
         painter.save()
         try:
             if opacity < 1.0:
