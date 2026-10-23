@@ -311,21 +311,19 @@ def build_staff_scroll():
     content = new(w)
     commands = load_note_commands() or []
 
-    # 左端点：两个彩色音符（谱号在谱线层里，见下）
+    # 左端点：两个彩色音符，全部位于五线谱上方（用户口径 2026-10-24）
     cap = new(L)
     if commands:
-        paste_note(cap, 108, 176, 92, NOTE_COLORS[0], commands)
-        paste_note(cap, 146, 132, 76, NOTE_COLORS[1], commands)
+        paste_note(cap, 108, 52, 56, NOTE_COLORS[0], commands)
+        paste_note(cap, 146, 40, 44, NOTE_COLORS[1], commands)
     content.alpha_composite(cap, (0, 0))
 
-    # 右端点：两个彩色音符 + 终止线
+    # 右端点：两个彩色音符（同样在谱线上方）；终止竖线移到谱线层，
+    # 跟着谱线颜色一起变（用户口径 2026-10-24）。
     cap = new(R)
     if commands:
-        paste_note(cap, 40, 176, 92, NOTE_COLORS[2], commands)
-        paste_note(cap, 82, 132, 76, NOTE_COLORS[3], commands)
-    cd = ImageDraw.Draw(cap)
-    cd.line([(148, 50), (148, 190)], fill=INK, width=3)
-    cd.line([(158, 50), (158, 190)], fill=INK, width=7)
+        paste_note(cap, 40, 52, 56, NOTE_COLORS[2], commands)
+        paste_note(cap, 82, 40, 44, NOTE_COLORS[3], commands)
     content.alpha_composite(cap, (w - R, 0))
 
     # 只保留阴影
@@ -347,6 +345,9 @@ def build_staff_scroll():
     )
     if clef is not None:
         lines.alpha_composite(clef, (10, 120 - clef.height // 2))
+    # 终止竖线（双小节线）属于五线谱：白色画进谱线层，multiply 后随谱线色。
+    ld.line([(w - 13, 50), (w - 13, 190)], fill=(255, 255, 255, 255), width=3)
+    ld.line([(w - 3, 50), (w - 3, 190)], fill=(255, 255, 255, 255), width=7)
     return img, L, R, lines
 
 

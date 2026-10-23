@@ -519,14 +519,16 @@ def line_band_preview_pixmap(
     output_height: int = 1080,
     max_width: int = 420,
 ) -> QPixmap:
-    """切割检查预览：整张原图 + 左右端点放大，用来确认切点位置。
+    """切割检查预览：按**上 / 中 / 下**三行分别显示左端点、中段、右端点切片。
 
-    用户口径（2026-10-24）：这里只看**切割前的原图**和端点边界，不看最终
-    效果；真实效果由单独的「真实预览」窗口负责。
+    用户口径（2026-10-24）：这里只看切割前的原图和三块切片本身，不看最终
+    效果；真实效果由「真实预览」窗口负责。
     """
     _ = output_height
     width = max(int(max_width), 160)
-    height = 150
+    row_h = 54
+    gap = 6
+    height = row_h * 3 + gap * 2
     image = QPixmap(width, height)
     image.fill(QColor("#242A33"))
     painter = QPainter(image)
@@ -546,77 +548,50 @@ def line_band_preview_pixmap(
             )
             return image
 
-        art_w = max(float(artwork.width()), 1.0)
-        art_h = max(float(artwork.height()), 1.0)
+        art_w = int(artwork.width())
+        art_h = int(artwork.height())
+        left_px = max(int(spec.cap_left), 0)
+        right_px = max(int(spec.cap_right), 0)
+        mid_px = max(art_w - left_px - right_px, 0)
+        slices = (
+            ("上", "左端点", 0, left_px),
+            ("中", "中段", left_px, mid_px),
+            ("下", "右端点", max(art_w - right_px, 0), right_px),
+        )
         label_font = painter.font()
         label_font.setPixelSize(10)
         painter.setFont(label_font)
-
-        # 上半：整张原图（等比缩到卡片宽），叠端点分界线。
-        bar_h = int(round(min(art_h * (width / art_w), 40.0)))
-        bar_h = max(bar_h, 12)
-        painter.drawImage(
-            QRectF(0.0, 2.0, float(width), float(bar_h)), artwork
-        )
-        scale = width / art_w
-        cap_left = min(float(spec.cap_left) * scale, float(width))
-        cap_right = min(float(spec.cap_right) * scale, float(width))
-        pen = QPen(QColor(255, 196, 64, 235))
-        pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.drawLine(int(cap_left), 0, int(cap_left), bar_h + 4)
-        painter.drawLine(
-            int(width - cap_right), 0, int(width - cap_right), bar_h + 4
-        )
-        painter.setPen(QColor(255, 196, 64, 235))
-        painter.drawText(
-            QRect(2, bar_h + 2, width - 4, 12),
-            Qt.AlignmentFlag.AlignLeft,
-            f"原图 {int(art_w)}x{int(art_h)} ｜ 左端点 {int(spec.cap_left)} px ｜ "
-            f"右端点 {int(spec.cap_right)} px",
-        )
-
-        # 下半：左右端点区域放大（真实比例，只缩不放）。
-        inset_top = bar_h + 18
-        inset_h = max(height - inset_top - 16, 24)
-        inset_w = (width - 12) // 2
-        left_px = max(int(spec.cap_left), 0)
-        right_px = max(int(spec.cap_right), 0)
-        for index, (px, label, align) in enumerate(
-            (
-                (left_px, "左端点区域", Qt.AlignmentFlag.AlignLeft),
-                (right_px, "右端点区域", Qt.AlignmentFlag.AlignRight),
-            )
-        ):
-            panel_x = 4 + index * (inset_w + 4)
-            painter.setPen(QColor(90, 98, 110))
-            painter.drawRect(panel_x, inset_top, inset_w, inset_h)
-            if px <= 0:
+        for index, (tag, name, source_x, source_w) in enumerate(slices):
+            top = index * (row_h + gap)
+            if source_w <= 0:
                 painter.setPen(QColor("#8A8F98"))
                 painter.drawText(
-                    QRect(panel_x, inset_top, inset_w, inset_h),
+                    QRect(6, top, width - 12, row_h),
                     Qt.AlignmentFlag.AlignCenter,
-                    "端点 0",
+                    f"{tag} · {name}：端点/中段宽度为 0，不绘制",
                 )
-            else:
-                source_x = 0 if index == 0 else max(int(art_w) - px, 0)
-                source_w = min(px, int(art_w))
-                tile = artwork.copy(
-                    QRect(source_x, 0, source_w, int(art_h))
-                )
-                if not tile.isNull() and tile.width() > 0:
-                    target = QRectF(
-                        float(panel_x + 2),
-                        float(inset_top + 2),
-                        float(inset_w - 4),
-                        float(inset_h - 4),
-                    )
-                    painter.drawImage(target, tile)
-            painter.setPen(QColor(255, 196, 64, 220))
+                continue
+            tile = artwork.copy(QRect(source_x, 0, source_w, art_h))
+            if tile.isNull():
+                continue
+            fit = min(
+                (width - 8.0) / float(max(source_w, 1)),
+                (row_h - 12.0) / float(max(art_h, 1)),
+            )
+            draw_w = max(source_w * fit, 1.0)
+            draw_h = max(art_h * fit, 1.0)
+            left = (width - draw_w) / 2.0
+            painter.drawImage(
+                QRectF(left, float(top + 2), draw_w, draw_h), tile
+            )
+            painter.setPen(QColor(255, 196, 64, 235))
+            suffix = ""
+            if index == 1:
+                suffix = "（平铺）" if spec.mid_mode != "stretch" else "（拉伸）"
             painter.drawText(
-                QRect(panel_x + 2, inset_top + inset_h - 12, inset_w - 4, 12),
-                align,
-                label,
+                QRect(2, top + row_h - 12, width - 4, 12),
+                Qt.AlignmentFlag.AlignLeft,
+                f"{tag} · {name} {source_w}px{suffix}",
             )
     finally:
         painter.end()
