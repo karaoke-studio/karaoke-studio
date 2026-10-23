@@ -380,6 +380,14 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         normalized["scanline_mode"] = normalize_scanline_mode(
             normalized["scanline_mode"]
         )
+    if "scanline_effect" in normalized:
+        normalized["scanline_effect"] = normalize_scanline_effect(
+            normalized["scanline_effect"]
+        )
+    if "scanline_shape" in normalized:
+        normalized["scanline_shape"] = normalize_scanline_shape(
+            normalized["scanline_shape"]
+        )
     if "fx_particle_color_mode" in normalized:
         normalized["fx_particle_color_mode"] = normalize_particle_color_mode(
             normalized["fx_particle_color_mode"]
@@ -387,6 +395,32 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
     if "fx_particle_color_layers" in normalized:
         normalized["fx_particle_color_layers"] = normalize_particle_color_layers(
             normalized["fx_particle_color_layers"]
+        )
+    if "anim_fx_color_mode" in normalized:
+        normalized["anim_fx_color_mode"] = normalize_anim_particle_color_mode(
+            normalized["anim_fx_color_mode"]
+        )
+    if "anim_fx_color_layers" in normalized:
+        normalized["anim_fx_color_layers"] = normalize_particle_color_layers(
+            normalized["anim_fx_color_layers"]
+        )
+    if "anim_fx_size_em" in normalized:
+        try:
+            anim_size = float(normalized["anim_fx_size_em"])
+        except (TypeError, ValueError):
+            anim_size = 0.40
+        normalized["anim_fx_size_em"] = min(max(anim_size, 0.05), 2.0)
+    if "scanline_effect_color_mode" in normalized:
+        normalized["scanline_effect_color_mode"] = (
+            normalize_scanline_particle_color_mode(
+                normalized["scanline_effect_color_mode"]
+            )
+        )
+    if "scanline_effect_color_layers" in normalized:
+        normalized["scanline_effect_color_layers"] = (
+            normalize_particle_color_layers(
+                normalized["scanline_effect_color_layers"]
+            )
         )
     if "fx_apply_to_entry_exit" in normalized:
         normalized["fx_apply_to_entry_exit"] = bool(
@@ -550,9 +584,25 @@ def normalize_karaoke_animation(value: object) -> KaraokeAnimation:
 
 
 def normalize_scanline_mode(value: object) -> str:
-    if value in {"color", "brighten", "follow_before", "follow_after", "role"}:
+    if value in {
+        "default", "color", "brighten", "follow_before", "follow_after", "role",
+    }:
         return str(value)
     return "color"
+
+
+def normalize_scanline_effect(value: object) -> str:
+    if value in {
+        "none", "sakura", "feather", "snow", "snow_solid", "star", "note",
+    }:
+        return str(value)
+    return "none"
+
+
+def normalize_scanline_shape(value: object) -> str:
+    if value in {"band", "flame", "bubble"}:
+        return str(value)
+    return "band"
 
 
 def normalize_particle_color_mode(value: object) -> str:
@@ -561,6 +611,25 @@ def normalize_particle_color_mode(value: object) -> str:
     }:
         return str(value)
     return "color"
+
+
+def normalize_anim_particle_color_mode(value: object) -> str:
+    """入退场粒子颜色模式：无主题色档，非法值回退默认「默认颜色」。"""
+
+    if value in {
+        "color", "sakura", "follow_mix", "follow_before", "follow_after", "role",
+    }:
+        return str(value)
+    return "sakura"
+
+
+def normalize_scanline_particle_color_mode(value: object) -> str:
+    if value in {
+        "theme", "color", "sakura", "follow_mix", "follow_before",
+        "follow_after", "role",
+    }:
+        return str(value)
+    return "theme"
 
 
 def normalize_particle_color_layers(value: object) -> str:

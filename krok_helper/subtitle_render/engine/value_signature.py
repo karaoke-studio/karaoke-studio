@@ -93,6 +93,15 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "scanline_role_name",
     "scanline_brightness_pct",
     "scanline_glow_px",
+    "scanline_effect",
+    "scanline_effect_size_pct",
+    "scanline_effect_count",
+    "scanline_shape",
+    "scanline_effect_color_mode",
+    "scanline_effect_color",
+    "scanline_effect_color2",
+    "scanline_effect_color_layers",
+    "scanline_effect_role_name",
     "zoom_pulse_curve_level",
     # 2026-09 描边闪光与装饰粒子：纯绘制参数（IR 里随行 fx_bursts 下发），
     # 不影响显示窗口 / 分页 / 排版任何输入。
@@ -108,6 +117,12 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "fx_particle_color_mode",
     "fx_particle_role_name",
     "fx_apply_to_entry_exit",
+    "anim_fx_size_em",
+    "anim_fx_color",
+    "anim_fx_color2",
+    "anim_fx_color_mode",
+    "anim_fx_color_layers",
+    "anim_fx_role_name",
     # 编辑器 UI 开关（不影响渲染/排版）。
     "decoration_before_sync",
 })

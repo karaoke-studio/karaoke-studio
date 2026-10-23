@@ -25,7 +25,9 @@ from dataclasses import dataclass
 
 from krok_helper.subtitle_render.domain.models import (
     Style,
+    effective_karaoke_scanline,
     normalize_glow_concentration_level,
+    particle_color_style,
 )
 from krok_helper.subtitle_render.domain.paint import KaraokeColorState, PaintFill
 from krok_helper.subtitle_render.engine.render.effects.metrics import (
@@ -498,11 +500,113 @@ def _default_color_pair(
     if lightning:
         return (LIGHTNING_A, LIGHTNING_B)
     return (SNOW_A, SNOW_B) if snow else (SAKURA_PINK_A, SAKURA_PINK_B)
-# 出入场动画驱动的粒子（星光/涟漪/音符/花瓣/拼接/消散）默认用固定默认档：
-# 樱花粉双色随机混发 + 40% 字号（2026-10 用户口径：出入场粒子用「默认
-# 颜色」的樱花色，而不是单独颜色的默认白）；开启 ``fx_apply_to_entry_exit``
-# 后颜色与尺寸改吃粒子旋钮（数量仍固定）。
-ANIM_PARTICLE_SIZE_EM = 0.40
+
+
+# ---------------------------------------------------------------------------
+# 扫字线特效（2026-10）：沿走字锋面发射装饰粒子
+#
+# 规划器把每个字符的唱字窗拆成一条 ``kind="scanline"`` 的 burst；求值器用
+# ``emit_ms`` 把「出生时刻」换算成锋面在字框内的横向进度——越晚出生的粒子
+# 出生点越靠右（RTL 反过来），粒子再朝锋面后方（左上）飘走，形成跟着扫字线
+# 走的速度感拖尾。``end_ms`` 超出字符窗的部分就是粒子寿命
+# （``end - start - emit_ms``），保证换字后余韵继续，不被字符窗硬截断。
+# 颜色/尺寸复用唱字装饰粒子的旋钮与配色模式；默认白色时按档位给一套
+# 主题色（樱花粉/羽毛白/星光金/音符白粉）。
+# C++ 镜像：d2d_fx.cpp ``burst.kind == "scanline"`` 分支。
+# ---------------------------------------------------------------------------
+SCANLINE_FX_SPRITES: dict[str, str] = {
+    "sakura": "petal",
+    "feather": "feather",
+    "snow": "snow",
+    "snow_solid": "snow_solid",
+    "star": "star4",
+    "note": "note",
+}
+"""扫字线粒子造型。"""
+
+SCANLINE_FX_TAIL_MS: dict[str, int] = {
+    "sakura": 620,
+    "feather": 760,
+    "snow": 700,
+    "snow_solid": 700,
+    "star": 420,
+    "note": 560,
+}
+"""粒子寿命（ms）：字符窗结束后的拖尾时长。"""
+
+SCANLINE_FX_TRAVEL_SCALE: dict[str, float] = {
+    "sakura": 2.4,
+    "feather": 2.2,
+    "snow": 2.3,
+    "snow_solid": 2.3,
+    "star": 1.8,
+    "note": 2.2,
+}
+"""粒子尺寸 → 行程的换算倍率（求值器用它算漂移距离）。"""
+
+SCANLINE_FX_DEFAULT_PALETTES: dict[str, tuple[str, ...]] = {
+    "sakura": (SAKURA_PINK_A, SAKURA_PINK_B),
+    "feather": (FEATHER_A, FEATHER_B),
+    "snow": (SNOW_A, SNOW_B),
+    "snow_solid": (SNOW_A, SNOW_B),
+    "star": ("#FFF7D6", "#FFD24A"),
+    "note": ("#FFFFFF", "#FFD7E0"),
+}
+"""粒子颜色模式为「单独颜色」且仍是默认白时的主题色（樱花/羽毛/星光/音符）。
+
+用户改过颜色或选了其它颜色模式（默认颜色/跟随字体/复用配色方案）时，
+一律走 :func:`_burst_paint` 的完整解析，本表不生效。
+"""
+
+SCANLINE_FX_REFERENCE_CHAR_MS = 300
+"""每字符基准颗数对应的唱字窗长度（ms）；长音符按比例加密、短字收敛。"""
+
+SCANLINE_FX_DENSITY_CAP = 2
+"""长音符的颗数最多放大到基准档的倍数（避免长音粒子爆量）。"""
+
+SCANLINE_FX_DEPTH_TIERS = (0.60, 0.85, 1.15, 1.45)
+"""扫字线特效的四档尺寸（远小近大）；C++ 用同名常量镜像，独立于音符/
+爱心那套景深表（两端的既有档位值本就不同，扫字线新档统一取这一份）。"""
+
+
+def scanline_particles_per_char(count: int, duration_ms: int) -> int:
+    """把「每字符基准颗数」按唱字窗长度折算成实际颗数。
+
+    扫字线的粒子密度按**每秒**观感统一：300ms 的字窗发基准颗数，短字按
+    比例减少（至少 1 颗），长音按比例加密但不超过基准的 2 倍。默认基准
+    档很小（4 颗/字），避免长句被粒子铺满。
+    """
+
+    base = max(1, min(32, int(count)))
+    duration = max(int(duration_ms), 1)
+    scaled = int(round(base * duration / SCANLINE_FX_REFERENCE_CHAR_MS))
+    return max(1, min(base * SCANLINE_FX_DENSITY_CAP, scaled))
+
+
+def scanline_default_paints(effect: str) -> list[dict[str, object]] | None:
+    """扫字线「特效主题色」档：按特效档位返回固定主题色变体。"""
+
+    palette = SCANLINE_FX_DEFAULT_PALETTES.get(effect)
+    if not palette:
+        return None
+    return [{"color": color} for color in palette]
+
+
+def scanline_effect_from_style(style: Style) -> str:
+    """返回样式上启用且当前扫字线档位成立的扫字线粒子特效（否则 ``none``）。"""
+
+    effect = str(getattr(style, "scanline_effect", "none") or "none")
+    if effect not in SCANLINE_FX_SPRITES:
+        return "none"
+    if getattr(style, "vertical", False):
+        return "none"
+    if not effective_karaoke_scanline(style):
+        return "none"
+    return effect
+
+# 出入场动画驱动的粒子（星光/涟漪/音符/花瓣/拼接/消散）数量恒固定 14；
+# 颜色与尺寸走独立的 ``anim_fx_*`` 设置（默认樱花粉双色 + 40% 字号），
+# 与唱字装饰粒子彻底解耦（2026-10 用户口径）。
 ANIM_PARTICLE_COUNT = 14
 # 火焰出入场基准档（v3）：600ms 窗口每字 32 颗（随动画时长同比放大，
 # 上限 FLAME_MAX_COUNT）；簇数/簇间隔也按窗口计算。不受粒子数量旋钮
@@ -1658,6 +1762,8 @@ FX_SPRITES: dict[str, dict[str, object]] = {
 _SPRITE_FOR_KIND = {
     "sparkle": "star4",
     "ripple": "ring",
+    # 扫字线粒子特效（造型由 burst 的 sprite 覆盖）。
+    "scanline": "star4",
     "twinkle": "star4",
     "twinkle_classic": "star4",
     "note": "note",
@@ -1925,6 +2031,7 @@ def plan_line_bursts(
     *,
     char_visible: list[bool] | None = None,
     char_styles: list[Style | None] | None = None,
+    reverse: bool = False,
 ) -> list[dict[str, object]]:
     """把 style 的粒子档位规划成逐行 burst 列表（IR-ready dict）。
 
@@ -1944,14 +2051,17 @@ def plan_line_bursts(
     + 已按粒子尺寸缩放的描边宽，见 :func:`particle_paint_spec`），两条
     后端优先按 ``paint`` 绘制；双色档（单独颜色双槽 / ``sakura`` /
     ``follow_mix`` 前后各一 / ``role``+花瓣）改拆两条实色变体 burst
-    （数量对半、种子错开）。入退场动画粒子默认固定樱花粉双色档，开启
-    ``fx_apply_to_entry_exit`` 后改吃粒子旋钮的颜色与尺寸（数量恒固定）。
+    （数量对半、种子错开）。入退场动画粒子用 ``anim_fx_*`` 独立颜色/尺寸，
+    唱字装饰粒子用 ``fx_particle_*``，扫字线粒子用 ``scanline_effect_color_*``；
+    三者互不影响，入退场数量恒固定。
     ``line_index`` 参与种子，保证同曲目每行轨迹不同且重开可复现。
     ``char_visible``（与 char_windows 等长）：False = 空白字符（空格等
     无字形内容）——唱字粒子跳过（无走字内容），出入场仍整行参与。
     ``char_styles``（可选，与 char_windows 等长）：逐字符的角色样式
     （调用方按 ``role_label`` 解析后传入）——「跟随字体」按**当前字符**
     自己的角色配色取色；未提供时回落行样式（歌手行已合并歌手方案）。
+    ``reverse``：整行走字方向（RTL/镜像行）——仅扫字线特效消费，用来把
+    粒子出生点从字框左缘映射到右缘（见 ``style.scanline_effect``）。
     """
     bursts: list[dict[str, object]] = []
     count = max(2, min(64, int(style.fx_particle_count)))
@@ -1962,11 +2072,14 @@ def plan_line_bursts(
     stagger = (
         RIPPLE_CHAR_STAGGER_MS // (char_count - 1) if char_count > 1 else 0
     )
-    # 出入场动画粒子：默认固定档（数量恒固定）；开启「联动入退场」后
-    # 颜色与尺寸改吃粒子旋钮（颜色模式同样生效）。编排窗口仍随「入场/
-    # 退场动画时长」旋钮等比缩放（0 = 默认 600ms 基准）。
-    apply_to_anim = bool(getattr(style, "fx_apply_to_entry_exit", False))
-    anim_size = size if apply_to_anim else font_px * ANIM_PARTICLE_SIZE_EM
+    # 入退场 / 唱字 / 扫字线三类粒子颜色设置彻底解耦：入退场与扫字线各用
+    # 一份「只替换 fx_particle_color_* 的 Style 视图」做颜色解析，轨迹、
+    # 尺寸、角色样式仍读原样式。入退场数量恒固定，尺寸独立。
+    entry_style = particle_color_style(style, "anim")
+    scanline_color_style = particle_color_style(style, "scanline")
+    anim_size = font_px * max(
+        0.05, min(2.0, float(getattr(style, "anim_fx_size_em", 0.40)))
+    )
     anim_count = ANIM_PARTICLE_COUNT
 
     def _char_style(char_index: int | None) -> Style | None:
@@ -1985,6 +2098,7 @@ def plan_line_bursts(
         burst_size: float,
         *,
         anim: bool,
+        color_style: Style | None = None,
         ring: bool = False,
         petal: bool = False,
         snow: bool = False,
@@ -1994,34 +2108,19 @@ def plan_line_bursts(
         feather: bool = False,
         lightning: bool = False,
     ) -> list[dict[str, object]]:
-        """burst 的颜色规格**列表**：固定默认档（按 kind 的默认双色）/ 实色
+        """burst 的颜色规格**列表**：默认颜色（按 kind 的默认双色）/ 实色
         回退 (+ 取色层级的装饰规格) / 双色档的变体规格列表
         （见 :func:`particle_variant_paints`）。
 
-        规格按「样式 × 角色方案 × 尺寸 × 是否涟漪」缓存——同一组合全帧
-        复用一份（见 :func:`_cached_particle_paint`）。涟漪光环不带描边
-        （``include_strokes=False``）：环体是发丝线，叠描边显著变粗。
-        取色层级（``fx_particle_color_layers``，仅来源配色四档生效）：默认
-        仅实色 = 纯色剪影；+描边 = 按方案描边栈（不加装饰）；+装饰 = 仅
-        装饰层（不加描边，阴影/发光按方案）；全有 = 描边栈 + 装饰层（见
-        :func:`_state_paint_spec`）。
-
-        入退场星光（2026-10 结构统一）同为逐字符 burst，走本函数的完整
-        解析——图片/跟随前后/follow_mix/指定方案与取色层级全部生效，
-        不再输出 ``char_colors`` 专用颜色表（后端保留读取兼容）。
+        ``anim=True`` 用入退场目标（``anim_fx_*``）的颜色字段；``color_style``
+        可显式指定颜色视图（扫字线粒子）；缺省用唱字装饰粒子的
+        ``fx_particle_*``。轨迹/尺寸参数仍由调用方传入。
         """
 
-        if anim and not apply_to_anim:
-            # 固定默认档 = 按 kind 的默认双色随机混发（2026-10 用户口径：
-            # 出入场粒子用「默认颜色」而非单独颜色的默认白；樱花粉为既有
-            # 口径，雪花/爱心/火焰按 kind 各取默认对）。
-            pair = _default_color_pair(
-                snow, heart, fire, ash, feather, lightning
-            )
-            return [{"color": pair[0]}, {"color": pair[1]}]
+        active_style = color_style or (entry_style if anim else style)
         char_style = _char_style(char_index)
         variants = _cached_particle_variants(
-            style,
+            active_style,
             char_style,
             burst_size,
             petal=petal,
@@ -2036,10 +2135,10 @@ def plan_line_bursts(
         if variants is not None:
             return variants
         fields: dict[str, object] = {
-            "color": _cached_particle_solid(style, char_style)
+            "color": _cached_particle_solid(active_style, char_style)
         }
         spec = _cached_particle_paint(
-            style, char_style, burst_size, include_strokes=not ring
+            active_style, char_style, burst_size, include_strokes=not ring
         )
         if spec is not None:
             fields["paint"] = spec
@@ -2196,34 +2295,30 @@ def plan_line_bursts(
         burst_size: float,
         travel: float,
         *,
-        fixed_default: bool,
+        color_style: Style,
         shape_salt: int = 0,
     ) -> list[dict[str, object]]:
         """火焰 v3 的四层色阶 paint 列表（外红边 → 橙 → 金 → 白热芯）。
 
-        ``fixed_default``：出入场固定默认档（未开「联动入退场」）——恒用
-        火色阶，不吃单独颜色槽；唱字/联动档按用户配色模式解析。模式为
-        ``color`` 且双槽仍是默认白时也用火色阶（否则唱字默认喷白粒子，
-        读不出火）；用户自定义双色时按四层尺寸循环使用其两色；跟随字体
-        等带 ``paint`` 规格的档保持既有完整解析，不逐层改尺寸（规格里的
-        描边宽按 burst_size 预算，改尺寸会破坏描边比例）。
+        ``color_style``：颜色视图（入退场目标用 ``anim_fx_*`` 投影；唱字
+        用本行 ``fx_particle_*``）。``sakura`` 档恒用火色阶；``color`` 档且
+        双槽仍是默认白时也用火色阶（否则默认喷白粒子，读不出火）；用户
+        自定义双色时按四层尺寸循环使用其两色；跟随字体等带 ``paint`` 规格
+        的档保持既有完整解析，不逐层改尺寸（规格里的描边宽按 burst_size
+        预算，改尺寸会破坏描边比例）。
 
         ``shape_salt``（字符序 × 簇序）决定每层用哪张火形：固定 20 数
         伪随机表按 salt 轮换，同簇四层拿四种不同轮廓，下一簇再换一组。
         """
         mode = str(
-            getattr(style, "fx_particle_color_mode", "color") or "color"
+            getattr(color_style, "fx_particle_color_mode", "color") or "color"
         )
-        c1 = str(getattr(style, "fx_particle_color", "") or "#FFFFFF")
-        c2 = str(getattr(style, "fx_particle_color2", "") or "#FFFFFF")
+        c1 = str(getattr(color_style, "fx_particle_color", "") or "#FFFFFF")
+        c2 = str(getattr(color_style, "fx_particle_color2", "") or "#FFFFFF")
         default_white = (
             c1.upper() == "#FFFFFF" and c2.upper() == "#FFFFFF"
         )
-        use_palette = (
-            fixed_default
-            or mode == "sakura"
-            or (mode == "color" and default_white)
-        )
+        use_palette = mode == "sakura" or (mode == "color" and default_white)
 
         def _flame_shape(slot: int, *, core: bool = False) -> str:
             shapes = FLAME_CORE_SHAPES if core else FLAME_BODY_SHAPES
@@ -2262,7 +2357,8 @@ def plan_line_bursts(
                 })
             return paints
         paints = _burst_paint(
-            char_index, burst_size, anim=not fixed_default, fire=True
+            char_index, burst_size, anim=False, fire=True,
+            color_style=color_style,
         )
         # 缓存返回的 dict 是共享对象：加火形必须复制，不能原地改。
         return [
@@ -2275,11 +2371,11 @@ def plan_line_bursts(
         burst_size: float,
         travel: float,
         *,
-        fixed_default: bool,
+        color_style: Style,
     ) -> str:
         """背光取火色阶第二层（橙）——比红边亮、比白芯柔，压字后不刺眼。"""
         paints = _fire_layer_paints(
-            char_index, burst_size, travel, fixed_default=fixed_default
+            char_index, burst_size, travel, color_style=color_style
         )
         if len(paints) > 1:
             return str(paints[1].get("color") or FIRE_OUTER)
@@ -2293,7 +2389,7 @@ def plan_line_bursts(
         travel: float,
         count: int,
         puffs: int,
-        fixed_default: bool,
+        color_style: Style,
         seed_offset: int,
         puff_ms: int = FLAME_PUFF_MS,
         with_glow: bool = True,
@@ -2335,7 +2431,7 @@ def plan_line_bursts(
 
         glow_color = (
             _fire_glow_color(
-                char_index, size, travel, fixed_default=fixed_default
+                char_index, size, travel, color_style=color_style
             )
             if with_glow
             else FIRE_OUTER
@@ -2381,7 +2477,7 @@ def plan_line_bursts(
                 "sweep": 2 if sing_mode else 0,
             }, _fire_layer_paints(
                 char_index, puff_size, puff_travel,
-                fixed_default=fixed_default,
+                color_style=color_style,
                 shape_salt=char_index * 7 + puff + int(seed_offset),
             ))
             if with_glow:
@@ -2539,7 +2635,7 @@ def plan_line_bursts(
         size: float,
         count: int,
         window_ms: int,
-        fixed_default: bool,
+        color_style: Style,
         seed_offset: int,
         with_glow: bool = True,
     ) -> None:
@@ -2554,13 +2650,12 @@ def plan_line_bursts(
         # 唱字/联动档的颜色默认是「单独颜色」的双白；白闪电会读成普通
         # 闪白，不像电——与火焰 v3 同口径：双槽仍是默认白时改用闪电色阶。
         mode = str(
-            getattr(style, "fx_particle_color_mode", "color") or "color"
+            getattr(color_style, "fx_particle_color_mode", "color") or "color"
         )
-        c1 = str(getattr(style, "fx_particle_color", "") or "#FFFFFF")
-        c2 = str(getattr(style, "fx_particle_color2", "") or "#FFFFFF")
+        c1 = str(getattr(color_style, "fx_particle_color", "") or "#FFFFFF")
+        c2 = str(getattr(color_style, "fx_particle_color2", "") or "#FFFFFF")
         if (
-            not fixed_default
-            and mode == "color"
+            mode == "color"
             and c1.upper() == "#FFFFFF"
             and c2.upper() == "#FFFFFF"
         ):
@@ -2569,7 +2664,8 @@ def plan_line_bursts(
             ]
         else:
             paints = _burst_paint(
-                char_index, size, anim=fixed_default, lightning=True
+                char_index, size, anim=True, lightning=True,
+                color_style=color_style,
             )
         shape_total = len(LIGHTNING_SHAPES)
         base, extra = divmod(total, shape_total)
@@ -2857,7 +2953,7 @@ def plan_line_bursts(
                 count=flame_count,
                 puffs=flame_puffs,
                 puff_ms=flame_puff_ms,
-                fixed_default=not apply_to_anim,
+                color_style=entry_style,
                 seed_offset=16,
                 end_limit_ms=fire_end,
             )
@@ -2907,7 +3003,7 @@ def plan_line_bursts(
                 size=lightning_size,
                 count=ANIM_LIGHTNING_STRIKES,
                 window_ms=LIGHTNING_WINDOW_MS,
-                fixed_default=not apply_to_anim,
+                color_style=entry_style,
                 seed_offset=21,
             )
             _emit_lightning_impact(
@@ -3043,7 +3139,7 @@ def plan_line_bursts(
                 count=flame_count,
                 puffs=flame_puffs,
                 puff_ms=flame_puff_ms,
-                fixed_default=not apply_to_anim,
+                color_style=entry_style,
                 seed_offset=17,
                 end_limit_ms=fire_end,
             )
@@ -3115,7 +3211,7 @@ def plan_line_bursts(
                 size=lightning_size,
                 count=ANIM_LIGHTNING_STRIKES,
                 window_ms=LIGHTNING_WINDOW_MS,
-                fixed_default=not apply_to_anim,
+                color_style=entry_style,
                 seed_offset=23,
             )
             _emit_lightning_impact(
@@ -3288,7 +3384,7 @@ def plan_line_bursts(
                 size=size * LIGHTNING_SIZE_SCALE,
                 count=per_char,
                 window_ms=min(max(duration, 360), 1200),
-                fixed_default=False,
+                color_style=style,
                 seed_offset=24,
             )
     elif style.sing_fx in SNOW_KINDS:
@@ -3345,7 +3441,7 @@ def plan_line_bursts(
                 count=sing_total,
                 puffs=puffs,
                 puff_ms=puff_ms,
-                fixed_default=False,
+                color_style=style,
                 seed_offset=7,
                 with_smoke=True,
                 sing_mode=True,
@@ -3398,12 +3494,87 @@ def plan_line_bursts(
                 "size_px": size, "travel_px": size * 1.8, "front": True,
                 "sweep": 1 if style.sing_fx == "twinkle" else 0,
             }, _burst_paint(char_index, size, anim=False))
+    # 扫字线特效（2026-10）：沿走字锋面发射装饰粒子。只认显式扫字线档位；
+    # 竖排与唱字装饰粒子一样不走这条通道（GPU 侧扫字线本身也只做横排）。
+    scanline_effect = scanline_effect_from_style(style)
+    if scanline_effect != "none":
+        effect_size = font_px * (
+            max(5, min(200, int(getattr(style, "scanline_effect_size_pct", 30))))
+            / 100.0
+        )
+        base_count = max(
+            1, min(32, int(getattr(style, "scanline_effect_count", 4)))
+        )
+        tail_ms = SCANLINE_FX_TAIL_MS.get(scanline_effect, 520)
+        travel = effect_size * SCANLINE_FX_TRAVEL_SCALE.get(
+            scanline_effect, 2.0
+        )
+        sprite = SCANLINE_FX_SPRITES[scanline_effect]
+        # 扫字线粒子有独立颜色设置：``theme`` 按档位主题色；其余模式走
+        # 扫字线目标投影的完整配色解析（单独颜色/跟随字体/复用配色方案）。
+        scanline_color_mode = str(
+            getattr(style, "scanline_effect_color_mode", "theme") or "theme"
+        )
+        themed_paints = (
+            scanline_default_paints(scanline_effect)
+            if scanline_color_mode == "theme"
+            else None
+        )
+        for char_index, (start_ms, end_ms) in enumerate(char_windows):
+            duration = int(end_ms) - int(start_ms)
+            if duration <= 0:
+                continue
+            if char_visible is not None and not char_visible[char_index]:
+                continue
+            paints = (
+                themed_paints
+                if themed_paints is not None
+                else _burst_paint(
+                    char_index,
+                    effect_size,
+                    anim=False,
+                    color_style=scanline_color_style,
+                )
+            )
+            _variant_bursts({
+                "kind": "scanline", "anchor": "char",
+                "char_index": int(char_index),
+                "start_ms": int(start_ms),
+                "end_ms": int(start_ms) + duration + tail_ms,
+                # 出生窗口 = 字符唱字窗；求值器用 birth/emit_ms 还原锋面
+                # 横向进度。窗口尾部的 tail_ms 是粒子寿命（拖尾）。
+                "emit_ms": duration,
+                "count": scanline_particles_per_char(base_count, duration),
+                "seed": (
+                    seed_base + 0x5A17 + char_index * FALL_CHAR_SEED_SALT
+                ) & 0xFFFFFFFF,
+                "size_px": effect_size,
+                "travel_px": travel,
+                "front": True, "sweep": 0,
+                "sprite": sprite,
+                # RTL 行锋面自右向左，粒子出生点镜像。
+                "reverse": bool(reverse),
+            }, paints, variant_salt=char_index)
     return bursts
 
 
 # ---------------------------------------------------------------------------
 # 轨迹求值：t 的纯函数（Python/C++ 镜像；全部 double 运算）
 # ---------------------------------------------------------------------------
+
+def _scanline_smoothstep(value: float) -> float:
+    """扫字线特效共用的 smoothstep（钳到 [0,1]）。"""
+
+    t = min(max(value, 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _scanline_fade_out(p: float, start: float) -> float:
+    """扫字线特效的尾部淡出：``start`` 之前全不透明，到 p=1 降到 0。"""
+
+    span = max(1.0 - float(start), 1e-6)
+    return 1.0 - _scanline_smoothstep((p - float(start)) / span)
+
 
 @dataclass(frozen=True)
 class ParticleDraw:
@@ -3467,6 +3638,123 @@ def burst_particles_at(
             out.append(ParticleDraw(
                 origin_x, origin_y, 0.0, scale, (1.0 - p) * (1.0 - p),
             ))
+        return out
+
+    if kind == "scanline":
+        # 扫字线特效（2026-10）：沿走字锋面发射的装饰粒子。``emit_ms`` 是
+        # 锋面行进窗口（= 字符唱字窗），窗口尾部剩余部分（``life - emit``）
+        # 是每颗粒子的固定寿命。出生时刻越晚 → 锋面越靠右（RTL 反过来），
+        # 粒子出生在锋面当前位置，再向锋面后方飘走；换字后旧粒子继续拖尾。
+        # 与 C++ d2d_fx.cpp 的 "scanline" 分支逐项镜像。
+        sprite = str(burst.get("sprite") or "star4")
+        emit = int(burst.get("emit_ms", 0) or 0)
+        emit = max(1, min(emit if emit > 0 else int(life), int(life)))
+        tail = float(max(int(life) - emit, 1))
+        emit_f = float(emit)
+        reverse = bool(burst.get("reverse", False))
+        behind = 1.0 if reverse else -1.0
+        count_i = max(1, int(burst["count"]))
+        for i in range(count_i):
+            u1 = fx_unit_hash(seed + i, 1)
+            u2 = fx_unit_hash(seed + i, 2)
+            u3 = fx_unit_hash(seed + i, 3)
+            u4 = fx_unit_hash(seed + i, 4)
+            u5 = fx_unit_hash(seed + i, 5)
+            birth = (i + 0.15 + 0.70 * u4) / count_i * emit_f
+            p = (tau - birth) / tail
+            if p <= 0.0 or p >= 1.0:
+                continue
+            frac = birth / emit_f
+            if reverse:
+                frac = 1.0 - frac
+            spawn_x = origin_x + (frac - 0.5) * box_w
+            spawn_y = origin_y + (u1 - 0.5) * box_h * 0.92
+            eased = 1.0 - (1.0 - p) * (1.0 - p)
+            depth = SCANLINE_FX_DEPTH_TIERS[
+                (i + (seed >> 5)) % len(SCANLINE_FX_DEPTH_TIERS)
+            ]
+            base_size = size * depth * (0.90 + 0.20 * u2)
+            fade_in = min(p / 0.10, 1.0)
+            if sprite == "petal":
+                # 樱花：与星光同向的左上飞行（用户口径：要有走字速度感），
+                # 保留花瓣自旋与小扑动；不再向下飘落。
+                drift = behind * travel * (0.45 + 0.35 * u3) * eased
+                rise = box_h * (0.20 + 0.40 * u2) * eased
+                sway = math.sin(
+                    (u3 + p * (0.55 + 0.25 * u5)) * 2.0 * math.pi
+                ) * size * (0.20 + 0.10 * u1)
+                out.append(ParticleDraw(
+                    spawn_x + drift + sway,
+                    spawn_y - rise - abs(sway) * 0.35,
+                    u3 * 360.0 + p * (140.0 + 200.0 * u5)
+                    * (1.0 if u4 >= 0.5 else -1.0)
+                    + FALL_LEAN_DEG,
+                    base_size * (0.85 + 0.15 * math.sin(math.pi * p)),
+                    fade_in * _scanline_fade_out(p, 0.78),
+                ))
+            elif sprite == "feather":
+                drift = behind * travel * (0.55 + 0.35 * u3) * eased
+                rise = box_h * (0.18 + 0.45 * u2) * eased
+                flutter = math.sin(
+                    (u3 + p * (0.45 + 0.25 * u5)) * 2.0 * math.pi
+                ) * size * (0.26 + 0.12 * u1)
+                out.append(ParticleDraw(
+                    spawn_x + drift + flutter,
+                    spawn_y - rise - abs(flutter) * 0.35,
+                    u3 * 360.0 + p * (120.0 + 200.0 * u5)
+                    * (1.0 if u4 >= 0.5 else -1.0)
+                    + FEATHER_LEAN_DEG,
+                    base_size * (0.88 + 0.12 * math.sin(math.pi * p)),
+                    fade_in * _scanline_fade_out(p, 0.82),
+                ))
+            elif sprite in {"snow", "snow_solid"}:
+                # 雪花：同样朝左上飞；比羽毛轻，摆幅稍小、翻转更慢。
+                drift = behind * travel * (0.50 + 0.30 * u3) * eased
+                rise = box_h * (0.20 + 0.42 * u2) * eased
+                sway = math.sin(
+                    (u3 + p * (0.50 + 0.22 * u5)) * 2.0 * math.pi
+                ) * size * (0.24 + 0.10 * u1)
+                out.append(ParticleDraw(
+                    spawn_x + drift + sway,
+                    spawn_y - rise - abs(sway) * 0.30,
+                    u3 * 360.0 + p * (100.0 + 180.0 * u5)
+                    * (1.0 if u4 >= 0.5 else -1.0)
+                    + SNOW_LEAN_DEG,
+                    base_size * (0.90 + 0.10 * math.sin(math.pi * p)),
+                    fade_in * _scanline_fade_out(p, 0.80),
+                ))
+            elif sprite == "note":
+                drift = behind * travel * (0.35 + 0.30 * u3) * eased
+                rise = box_h * (0.25 + 0.45 * u2) * eased
+                sway = math.sin(
+                    (u3 + p * 1.1) * 2.0 * math.pi
+                ) * size * 0.30
+                out.append(ParticleDraw(
+                    spawn_x + drift + sway,
+                    spawn_y - rise,
+                    (u4 - 0.5) * 40.0
+                    + math.sin((u5 + p * 0.8) * 2.0 * math.pi) * 8.0,
+                    base_size * (0.85 + 0.15 * math.sin(math.pi * p)),
+                    fade_in * (1.0 - p) ** 1.1,
+                ))
+            else:
+                # 星光：锋面后向左上飞散 + 闪烁。
+                drift = behind * travel * (0.40 + 0.35 * u3) * eased
+                rise = box_h * (0.18 + 0.37 * u2) * eased
+                sway = math.sin(
+                    (u3 + p * 0.9) * 2.0 * math.pi
+                ) * size * 0.20
+                pulse = math.sin(math.pi * min(p / 0.75, 1.0))
+                out.append(ParticleDraw(
+                    spawn_x + drift + sway,
+                    spawn_y - rise,
+                    u3 * 90.0 + p * 80.0,
+                    base_size * (0.45 + 0.65 * pulse),
+                    fade_in * (1.0 - p) ** 0.9
+                    * (0.60 + 0.40 * math.sin(
+                        (p * 3.0 + u5) * 2.0 * math.pi
+                    )),
+                ))
         return out
 
     star_prev_q = -1  # 星光族象限链：-1 = 尚无上一颗

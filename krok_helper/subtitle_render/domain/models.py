@@ -165,6 +165,27 @@ VolumeAppearanceMode = Literal["custom", "auto", "role"]
 主文字的字号与配色（见 :func:`resolve_volume_appearance`）；``role`` 大小
 同 auto 按字号推导，装饰管线改用 ``volume_role_name`` 指定来源的配色
 （与扫字线「复用配色方案」同口径）。"""
+ScanlineEffect = Literal[
+    "none", "sakura", "feather", "snow", "snow_solid", "star", "note",
+]
+"""扫字线粒子特效档位：沿走字锋面发射装饰粒子。
+
+``none`` 无粒子；``sakura`` 樱花、``feather`` 羽毛、``snow`` 雪花（镂空）/
+``snow_solid`` 雪花（实心）、``star`` 星光、``note`` 音符——自锋面后方朝
+左上飘出。仅扫字线档位生效。
+"""
+SCANLINE_EFFECT_KINDS: frozenset[str] = frozenset(
+    {"none", "sakura", "feather", "snow", "snow_solid", "star", "note"}
+)
+ScanlineShape = Literal["band", "flame", "bubble"]
+"""扫字线形态：``band`` 普通高亮带；``flame`` 烈焰棒；``bubble`` 水泡。
+
+烈焰棒/水泡是**独立形态**，不是普通高亮带的颜色变体：烈焰棒把扫字线本体
+变成一根发光火棒并向两侧喷火舌；水泡从锋面底部发射镂空水泡、围绕扫字线
+上浮。两者都会替换普通高亮带；烈焰棒颜色取扫字线本身的颜色方案，水泡
+固定水蓝/白水感。
+"""
+SCANLINE_SHAPE_KINDS: frozenset[str] = frozenset({"band", "flame", "bubble"})
 LitAppearanceMode = Literal["custom", "auto", "role"]
 """指示灯外观模式：``custom`` 手动逐项设置；``auto`` 大小自动跟随主文字
 字号，矢量灯走主文字装饰管线（见 :func:`resolve_lit_appearance`）；
@@ -1200,7 +1221,9 @@ class Style:
     都按当前输出高度从基准值映射（见 ``scanline_px_for_output``）。"""
 
     scanline_mode: str = "color"
-    """扫字线模式：``color`` 单独颜色（``scanline_color`` 填充）；
+    """扫字线模式：``default`` 稳定回到出厂默认（火焰=标准火色阶、水泡=
+    水蓝高光，不受``scanline_color``残留影响）；``color`` 单独颜色
+    （``scanline_color`` 填充）；
     ``brighten`` 底色发光——分别保留锋面两侧原有前后色的 HSV 色相与饱和度，
     只提高明度；提升幅度由 ``scanline_brightness_pct`` 控制；
     ``follow_before`` / ``follow_after`` 跟随字体——与底色发光同一条通路
@@ -1226,6 +1249,43 @@ class Style:
     scanline_glow_px: int = 8
     """扫字线字形内柔化范围（像素，``SCANLINE_BASE_HEIGHT``=1080 基准，语义
     同 ``scanline_width_px``）；只改变带内透明度，不向字形外扩散。"""
+
+    scanline_effect: ScanlineEffect = "none"
+    """扫字线粒子特效：沿走字锋面发射装饰粒子（见 :data:`SCANLINE_EFFECT_KINDS`）。
+
+    樱花 / 羽毛 / 星光 / 音符自锋面后方朝左上飘出（与走字同向的速度感）。
+    颜色与尺寸复用「唱字装饰粒子」的旋钮/配色方案；仅在
+    ``karaoke_anim`` / ``reverse_karaoke_anim`` 为扫字线档位时渲染。"""
+
+    scanline_effect_size_pct: int = 30
+    """扫字线特效粒子尺寸（相对主文字字号的百分比，30 = 30% 字号）。"""
+
+    scanline_effect_count: int = 4
+    """扫字线特效粒子密度：每个字符的基准颗数（长音符按持续时间
+    折算，见 ``particles.scanline_particles_per_char``）。"""
+
+    scanline_effect_color_mode: str = "theme"
+    """扫字线粒子特效颜色模式：``theme`` 按特效档位主题色（樱花粉/羽毛白/
+    雪花蓝白/星光金/音符白粉）；其余与唱字装饰粒子同语义（color /
+    sakura / follow_mix / follow_before / follow_after / role）。"""
+
+    scanline_effect_color: str = "#FFB7C5"
+    """扫字线粒子颜色一（``scanline_effect_color_mode == "color"``）。"""
+
+    scanline_effect_color2: str = "#FFD7E0"
+    """扫字线粒子颜色二（单独颜色档双色随机混发）。"""
+
+    scanline_effect_role_name: Optional[str] = None
+    """扫字线粒子 ``role`` 模式引用的配色来源名。"""
+
+    scanline_effect_color_layers: str = "solid"
+    """扫字线粒子的取色层级（仅来源配色四档生效）。"""
+
+    scanline_shape: ScanlineShape = "band"
+    """扫字线形态：普通高亮带 / 烈焰棒 / 水泡（见 :data:`SCANLINE_SHAPE_KINDS`）。
+
+    烈焰棒/水泡是独立形态并**替换**普通高亮带；烈焰棒颜色沿用扫字线颜色
+    方案，水泡从锋面底部发射、固定水蓝白水感。纯绘制参数，不参与布局推导。"""
 
     zoom_pulse_curve_level: int = 1
     """整字放大缓动档位（0~5）：0=线性；1~5 为缓出/缓入多项式阶数，越大峰值
@@ -1295,10 +1355,33 @@ class Style:
     同口径）。偏好记忆：改一次一直沿用（应用级习惯，不随打开工程回退，
     见 ``PARTICLE_MODULE_STYLE_FIELDS``）。"""
 
+    anim_fx_size_em: float = 0.40
+    """入退场动画粒子尺寸（相对主字号比例，0.40 = 40% 字号）。
+
+    2026-10 用户口径：入退场粒子颜色/尺寸与唱字装饰粒子、扫字线特效彻底
+    解耦，各有独立设置；药丸切换当前编辑对象。"""
+
+    anim_fx_color: str = "#FFB7C5"
+    """入退场粒子颜色一（仅在 ``anim_fx_color_mode == "color"`` 时生效）。"""
+
+    anim_fx_color2: str = "#FFD7E0"
+    """入退场粒子颜色二（单独颜色档双色随机混发）。"""
+
+    anim_fx_color_mode: str = "sakura"
+    """入退场粒子颜色模式：与唱字装饰粒子的模式同语义（sakura 默认颜色 /
+    color 单独颜色 / follow_mix / follow_before / follow_after / role）。"""
+
+    anim_fx_role_name: Optional[str] = None
+    """入退场粒子 ``role`` 模式引用的配色来源名。"""
+
+    anim_fx_color_layers: str = "solid"
+    """入退场粒子的取色层级（仅来源配色四档生效）。"""
+
     fx_apply_to_entry_exit: bool = False
-    """粒子参数联动入退场动画：开启后粒子的**颜色与尺寸**也应用于入场/
-    退场动画携带的粒子（星光/涟漪/音符/拼接/消散）；默认关闭，入退场
-    动画粒子用固定默认档（白色、40% 字号），数量恒为固定档不受联动。"""
+    """已废弃：旧版「仅唱字 / 入退场同用」开关。
+
+    2026-10 起入退场粒子改用 ``anim_fx_*`` 独立设置；本字段只用于读取旧
+    工程时把旧设置迁移到 ``anim_fx_*``，渲染端不再消费。"""
 
     section_edge_anim_enabled: bool = False
     """段首尾独立动画：开启后段首页/段尾页各行按下面两个动画替换入退场。"""
@@ -1586,6 +1669,49 @@ def effective_karaoke_scanline(style: Style) -> bool:
         "utopia_scanline",
         "zoom_pulse_scanline",
     }
+
+
+PARTICLE_COLOR_TARGETS = ("anim", "sing", "scanline")
+"""粒子颜色设置的三个独立编辑对象（药丸切换）：
+
+``anim`` 入退场动画粒子（``anim_fx_*``）；``sing`` 唱字装饰粒子
+（``fx_particle_*``）；``scanline`` 扫字线粒子特效（``scanline_effect_*``）。
+"""
+
+
+def particle_color_style(style: Style, target: str) -> Style:
+    """把某个目标的颜色字段投影成 ``fx_particle_*`` 视图。
+
+    渲染端的颜色解析（``particles.py`` 的 burst 规划）只认
+    ``fx_particle_color_mode/color/...`` 一组字段；三个目标解耦后，规划
+    入退场/扫字线粒子时用本函数构造一个只替换颜色字段的 Style 视图，轨迹/
+    尺寸/角色解析全部沿用原样式，因此无需复制整套颜色解析逻辑。
+    """
+
+    if target == "anim":
+        return replace(
+            style,
+            fx_particle_color_mode=style.anim_fx_color_mode,
+            fx_particle_color=style.anim_fx_color,
+            fx_particle_color2=style.anim_fx_color2,
+            fx_particle_color_layers=style.anim_fx_color_layers,
+            fx_particle_role_name=style.anim_fx_role_name,
+        )
+    if target == "scanline":
+        mode = style.scanline_effect_color_mode
+        # theme 由规划器按档位主题色处理；这里给一个合法的兜底模式。
+        if mode == "theme":
+            mode = "sakura"
+        return replace(
+            style,
+            fx_particle_color_mode=mode,
+            fx_particle_color=style.scanline_effect_color,
+            fx_particle_color2=style.scanline_effect_color2,
+            fx_particle_color_layers=style.scanline_effect_color_layers,
+            fx_particle_role_name=style.scanline_effect_role_name,
+        )
+    return style
+
 
 
 @dataclass
@@ -2215,6 +2341,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "scanline_width_px",
             "scanline_glow_px",
             "scanline_brightness_pct",
+            "scanline_effect_size_pct",
+            "scanline_effect_count",
             "zoom_pulse_curve_level",
             "lit_number",
             "lit_size",
@@ -2418,6 +2546,58 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                 if value in {"solid", "stroke", "decor", "all"}
                 else defaults.fx_particle_color_layers
             )
+        elif key in {"anim_fx_color", "anim_fx_color2",
+                     "scanline_effect_color", "scanline_effect_color2"}:
+            changes[key] = (
+                value
+                if isinstance(value, str)
+                and value.startswith("#")
+                and len(value) in {7, 9}
+                and all(
+                    character in "0123456789abcdefABCDEF"
+                    for character in value[1:]
+                )
+                else getattr(defaults, key)
+            )
+        elif key == "anim_fx_size_em":
+            try:
+                anim_em = float(value)
+            except (TypeError, ValueError):
+                anim_em = defaults.anim_fx_size_em
+            changes[key] = max(0.05, min(2.0, anim_em))
+        elif key == "anim_fx_color_mode":
+            changes[key] = (
+                value
+                if value in {
+                    "color", "sakura", "follow_mix", "follow_before",
+                    "follow_after", "role",
+                }
+                else defaults.anim_fx_color_mode
+            )
+        elif key in {"anim_fx_role_name", "scanline_effect_role_name"}:
+            parsed_role_name = str(value).strip() if value else ""
+            changes[key] = parsed_role_name or None
+        elif key == "anim_fx_color_layers":
+            changes[key] = (
+                value
+                if value in {"solid", "stroke", "decor", "all"}
+                else defaults.anim_fx_color_layers
+            )
+        elif key == "scanline_effect_color_mode":
+            changes[key] = (
+                value
+                if value in {
+                    "theme", "color", "sakura", "follow_mix",
+                    "follow_before", "follow_after", "role",
+                }
+                else defaults.scanline_effect_color_mode
+            )
+        elif key == "scanline_effect_color_layers":
+            changes[key] = (
+                value
+                if value in {"solid", "stroke", "decor", "all"}
+                else defaults.scanline_effect_color_layers
+            )
         elif key == "fx_apply_to_entry_exit":
             changes[key] = bool(value)
         elif key == "karaoke_stroke_flash":
@@ -2435,6 +2615,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             changes[key] = (
                 value
                 if value in {
+                    "default",
                     "color",
                     "brighten",
                     "follow_before",
@@ -2442,6 +2623,24 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                     "role",
                 }
                 else defaults.scanline_mode
+            )
+        elif key == "scanline_effect":
+            if value in {"flame", "bubble"}:
+                # 旧试行档位（粒子形态的火焰/气泡）升级为「形态」：读到旧值
+                # 时清空粒子特效并映射成对应的柱状形态，不丢用户设定。
+                changes[key] = "none"
+                changes.setdefault("scanline_shape", value)
+            else:
+                changes[key] = (
+                    value
+                    if isinstance(value, str) and value in SCANLINE_EFFECT_KINDS
+                    else defaults.scanline_effect
+                )
+        elif key == "scanline_shape":
+            changes[key] = (
+                value
+                if isinstance(value, str) and value in SCANLINE_SHAPE_KINDS
+                else defaults.scanline_shape
             )
         elif key == "scanline_role_name":
             parsed_role_name = str(value).strip() if value else ""
@@ -2528,6 +2727,78 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         # 旧工程没有装饰同步开关：新工程默认开启；旧版 .yurika 默认关闭，
         # 但走字前槽位仍为 None（实时跟随走字后），画面不变。
         changes["decoration_before_sync"] = not legacy_project
+    # 旧版「入退场联动」：开启时入退场粒子曾直接复用唱字粒子的颜色/尺寸。
+    # 分离设置后一次性搬进 anim_fx_*，旧工程画面不变；未开启则保持
+    # anim_fx_* 默认档（旧固定默认 = 樱花粉/40%，与旧画面一致）。
+    if (
+        not any(str(key).startswith("anim_fx_") for key in payload)
+        and bool(payload.get("fx_apply_to_entry_exit"))
+    ):
+        changes.setdefault(
+            "anim_fx_color_mode",
+            changes.get("fx_particle_color_mode", defaults.fx_particle_color_mode),
+        )
+        changes.setdefault(
+            "anim_fx_color",
+            changes.get("fx_particle_color", defaults.fx_particle_color),
+        )
+        changes.setdefault(
+            "anim_fx_color2",
+            changes.get("fx_particle_color2", defaults.fx_particle_color2),
+        )
+        changes.setdefault(
+            "anim_fx_color_layers",
+            changes.get(
+                "fx_particle_color_layers", defaults.fx_particle_color_layers
+            ),
+        )
+        changes.setdefault(
+            "anim_fx_role_name",
+            changes.get("fx_particle_role_name", defaults.fx_particle_role_name),
+        )
+        changes.setdefault(
+            "anim_fx_size_em",
+            changes.get("fx_particle_size_em", defaults.fx_particle_size_em),
+        )
+    # 旧版扫字线粒子与唱字装饰粒子共用 fx_particle_*：只有用户确实改过
+    # 颜色模式/双色槽时才把旧设置搬进 scanline_effect_color_*；全默认白
+    # 对应旧「主题色」档，保持新默认 theme 即可，不覆盖。
+    if (
+        "scanline_effect_color_mode" not in payload
+        and "scanline_effect_color" not in payload
+    ):
+        effect = str(changes.get("scanline_effect", defaults.scanline_effect))
+        old_mode = str(
+            changes.get("fx_particle_color_mode", defaults.fx_particle_color_mode)
+        )
+        old_color = str(
+            changes.get("fx_particle_color", defaults.fx_particle_color)
+        )
+        old_color2 = str(
+            changes.get("fx_particle_color2", defaults.fx_particle_color2)
+        )
+        customized = not (
+            old_mode == "color"
+            and old_color.upper() == "#FFFFFF"
+            and old_color2.upper() == "#FFFFFF"
+        )
+        if effect not in {"none", "flame", "bubble"} and customized:
+            changes.setdefault("scanline_effect_color_mode", old_mode)
+            changes.setdefault("scanline_effect_color", old_color)
+            changes.setdefault("scanline_effect_color2", old_color2)
+            changes.setdefault(
+                "scanline_effect_color_layers",
+                changes.get(
+                    "fx_particle_color_layers",
+                    defaults.scanline_effect_color_layers,
+                ),
+            )
+            changes.setdefault(
+                "scanline_effect_role_name",
+                changes.get(
+                    "fx_particle_role_name", defaults.scanline_effect_role_name
+                ),
+            )
     # 旧工程用 lit_enabled + lit_style=volume 表示音量柱。新版把两个模块
     # 分开；只有缺少新字段时才迁移，避免覆盖新版工程的显式组合。
     if "volume_enabled" not in payload and changes.get("lit_style") == "volume":
@@ -3580,13 +3851,23 @@ def remap_scanline_role_reference(
     so callers can skip the style write.
     """
 
-    name = style.scanline_role_name
-    if name is None or name not in mapping:
+    changes: dict[str, object] = {}
+    for name_field, mode_field, fallback_mode in (
+        ("scanline_role_name", "scanline_mode", "color"),
+        ("scanline_effect_role_name", "scanline_effect_color_mode", "theme"),
+    ):
+        name = getattr(style, name_field, None)
+        if name is None or name not in mapping:
+            continue
+        target = mapping.get(name)
+        if target is None:
+            changes[name_field] = None
+            changes[mode_field] = fallback_mode
+        else:
+            changes[name_field] = target
+    if not changes:
         return None
-    target = mapping.get(name)
-    if target is None:
-        return replace(style, scanline_mode="color", scanline_role_name=None)
-    return replace(style, scanline_role_name=target)
+    return replace(style, **changes)
 
 
 def remap_appearance_role_references(
@@ -3627,13 +3908,23 @@ def remap_particle_role_reference(
     is absent or untouched, so callers can skip the style write.
     """
 
-    name = style.fx_particle_role_name
-    if name is None or name not in mapping:
+    changes: dict[str, object] = {}
+    for name_field, mode_field, fallback_mode in (
+        ("fx_particle_role_name", "fx_particle_color_mode", "color"),
+        ("anim_fx_role_name", "anim_fx_color_mode", "sakura"),
+    ):
+        name = getattr(style, name_field, None)
+        if name is None or name not in mapping:
+            continue
+        target = mapping.get(name)
+        if target is None:
+            changes[name_field] = None
+            changes[mode_field] = fallback_mode
+        else:
+            changes[name_field] = target
+    if not changes:
         return None
-    target = mapping.get(name)
-    if target is None:
-        return replace(style, fx_particle_color_mode="color", fx_particle_role_name=None)
-    return replace(style, fx_particle_role_name=target)
+    return replace(style, **changes)
 
 
 def remap_title_char_role_labels(
