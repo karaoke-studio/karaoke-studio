@@ -24,6 +24,7 @@ from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QTransform
 
 from krok_helper.subtitle_render.domain.band_presets import (
     default_line_color_for,
+    preset_caps,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -82,10 +83,16 @@ def band_spec(style) -> Optional[BandSpec]:
         line_color = default_line_color_for(image_spec)
     cap_left = max(int(style.line_band_cap_left_px), 0)
     cap_right = max(int(style.line_band_cap_right_px), 0)
-    # 三段式口径（用户 2026-10-24 定）：先把图片按端点切成 0/1/2 三份，0 和 2
-    # 直接画在带子左右两端，中间 1 填补剩下的空隙。所以中段取图区间就是
-    # `[cap_left, 图宽 - cap_right]`——端点设成多少就切到哪，不做隐藏夹取。
-    src_cap_left, src_cap_right = cap_left, cap_right
+    # 三段式：0/2 直接画在带子左右两端，中间 1 填缝。**切点与显示端点分开**：
+    # 预设素材有它的设计端点（谱号占 0..190），中段永远从设计端点开始切；
+    # 端点滑条只把端点裁窄，不会把谱号喂进中段再铺一遍（用户 2026-10-24 实测
+    # 截图：端点切进谱号时，左侧谱号出现两遍）。自定义图没有设计端点 → 相同。
+    caps = preset_caps(image_spec)
+    src_cap_left, src_cap_right = (
+        (max(int(caps[0]), 0), max(int(caps[1]), 0))
+        if caps is not None
+        else (cap_left, cap_right)
+    )
     return BandSpec(
         image_path=str(path),
         fill_mode=str(style.line_band_fill_mode),
