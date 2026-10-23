@@ -17,6 +17,7 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     title_row_offsets_x,
     title_show_specs,
 )
+from krok_helper.subtitle_render.domain.band_presets import resolve_band_image
 from krok_helper.subtitle_render.domain.timing import (
     TimingTrack,
     guide_symbol_has_visual,
@@ -245,6 +246,22 @@ def build_render_ir(
             )
             for source, source_style in zip(extra_sources, extra_styles, strict=True)
         ]
+        # 行背景带：``preset:`` 说法在 Python 侧解析成绝对路径再下发（sidecar
+        # 只认文件路径）；解析不到就清空，native 侧整段跳过。
+        style_payload = style_to_dict(
+            resolve_lit_appearance(
+                resolve_volume_appearance(
+                    style, auto_basis=signal_auto_basis(style)
+                ),
+                auto_basis=signal_auto_basis(style),
+            )
+        )
+        band_path = resolve_band_image(
+            str(style_payload.get("line_band_image") or "")
+        )
+        style_payload["line_band_image"] = (
+            str(band_path) if band_path is not None else ""
+        )
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -256,14 +273,7 @@ def build_render_ir(
             # auto 外观模式的音量柱/指示灯大小/颜色在序列化前物化成具体
             # 数值，native 端只消费数值（与 Painter 的 volume_style /
             # resolve_lit_appearance 投影同源）。
-            "style": style_to_dict(
-                resolve_lit_appearance(
-                    resolve_volume_appearance(
-                        style, auto_basis=signal_auto_basis(style)
-                    ),
-                    auto_basis=signal_auto_basis(style),
-                )
-            ),
+            "style": style_payload,
             # 装饰粒子 sprite 轮廓常量表（Python 单一事实源，native 不内置副本）。
             "fx_sprites": dict(FX_SPRITES),
             "track": track_to_ir(
@@ -384,6 +394,20 @@ def build_style_patch_ir(
                 )
         # 推导基准同 build_render_ir：主轨信号宿主行口径（pass 顶部登记），
         # 差分载荷与全量 configure 物化出同一组数值。
+        patch_style_payload = style_to_dict(
+            resolve_lit_appearance(
+                resolve_volume_appearance(
+                    style, auto_basis=signal_auto_basis(style)
+                ),
+                auto_basis=signal_auto_basis(style),
+            )
+        )
+        patch_band_path = resolve_band_image(
+            str(patch_style_payload.get("line_band_image") or "")
+        )
+        patch_style_payload["line_band_image"] = (
+            str(patch_band_path) if patch_band_path is not None else ""
+        )
         return {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -392,14 +416,7 @@ def build_style_patch_ir(
                 "fps": max(int(fps), 1),
                 "dpr": max(float(dpr or 1.0), 0.01),
             },
-            "style": style_to_dict(
-                resolve_lit_appearance(
-                    resolve_volume_appearance(
-                        style, auto_basis=signal_auto_basis(style)
-                    ),
-                    auto_basis=signal_auto_basis(style),
-                )
-            ),
+            "style": patch_style_payload,
             "titles": titles_to_ir(track, style, duration_ms=duration_ms),
             "fx_sprites": dict(FX_SPRITES),
             **({"lines_style": lines_style} if include_lines_style else {}),
