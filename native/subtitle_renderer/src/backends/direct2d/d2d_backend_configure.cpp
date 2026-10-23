@@ -194,6 +194,47 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandMidStrip(
     return strip;
 }
 
+// 把素材本体与谱线层合成成一张图：切片、预拼条与投影/发光都基于它。
+Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandComposite(
+    ID2D1DeviceContext *context,
+    ID2D1Bitmap1 *base,
+    ID2D1Bitmap1 *lines
+) {
+    if (context == nullptr || base == nullptr) {
+        return {};
+    }
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> composite;
+    if (FAILED(context->CreateBitmap(
+            base->GetPixelSize(), nullptr, 0,
+            &properties, composite.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<ID2D1Image> previous;
+    context->GetTarget(previous.GetAddressOf());
+    context->SetTarget(composite.Get());
+    // 位图目标必须在 BeginDraw/EndDraw 之间绘制，否则 D2D 直接丢命令。
+    context->BeginDraw();
+    context->Clear(nullptr);
+    context->DrawBitmap(base);
+    if (lines != nullptr) {
+        context->DrawBitmap(lines);
+    }
+    const HRESULT result = context->EndDraw();
+    context->SetTarget(previous.Get());
+    if (FAILED(result)) {
+        return {};
+    }
+    return composite;
+}
+
 // 把位图 alpha 压成单色剪影（预乘），blurPx > 0 时做三次盒式模糊。
 Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandEdgeBitmap(
     ID2D1DeviceContext *context,
@@ -375,15 +416,11 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         return;
     }
     ID2D1DeviceContext *context = device_.d2dContext();
-    cached.bitmap = loadWicBitmap(
+    cached.baseBitmap = loadWicBitmap(
         context,
         band.imagePath,
         band.hasTint ? &band.tint : nullptr,
         band.tintStrengthPct
-    );
-    cached.midBitmap = makeBandMidStrip(
-        context, cached.bitmap.Get(),
-        band.srcCapLeft, band.srcCapRight
     );
     // 谱线层（含高音谱号）：multiply 上色，白色→用户颜色、近黑描边保持。
     cached.lineBitmap.Reset();
@@ -396,12 +433,17 @@ void Direct2DGpuBackend::ensureLineBandImage() {
             100,
             /*multiplyTint=*/true
         );
-        cached.lineMidStrip = makeBandMidStrip(
-            context, cached.lineBitmap.Get(),
-            band.srcCapLeft, band.srcCapRight
-        );
     }
-    // 图片描边（投影/发光）剪影层。
+    // 合成整条带子的图案：投影/发光与切片都以这一张为准（用户口径：整图
+    // 渲染完成后再作为一个整体做含 alpha 的描边）。
+    cached.bitmap = makeBandComposite(
+        context, cached.baseBitmap.Get(), cached.lineBitmap.Get()
+    );
+    cached.midBitmap = makeBandMidStrip(
+        context, cached.bitmap.Get(),
+        band.srcCapLeft, band.srcCapRight
+    );
+    // 图片描边（投影/发光）剪影层：基于合成图，覆盖谱线与谱号。
     cached.edgeBitmap.Reset();
     cached.edgeMidStrip.Reset();
     if (cached.bitmap && band.edgeKind != "none") {

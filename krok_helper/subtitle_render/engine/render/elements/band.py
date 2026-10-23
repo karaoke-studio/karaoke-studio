@@ -134,30 +134,128 @@ def band_rect(text_rect: QRectF, style, ruby_top: Optional[float] = None) -> QRe
     return QRectF(left, top, max(right - left, 1.0), max(bottom - top, 1.0))
 
 
+def _band_layers(spec: BandSpec) -> tuple[Optional[QImage], Optional[QImage]]:
+    """加载素材本体（已上色）与谱线层（已按谱线色 multiply），带缓存。"""
+    path = Path(spec.image_path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None, None
+    base = QImage(str(path))
+    if base.isNull():
+        return None, None
+    strength = spec.tint_strength_pct if spec.tint else 0
+    if spec.tint and strength > 0:
+        base = _tinted(base, spec.tint, strength)
+    lines = _line_source(spec)
+    return base, lines
+
+
 def band_source(spec: BandSpec) -> Optional[QImage]:
-    """Load (and cache) the band image with the user tint already applied."""
+    """整条带子的完整图案（缓存）：素材本体 + 谱线层合成一张。
+
+    投影/发光按「整张图作为整体」计算，所以合成必须发生在描边之前——调用
+    方拿到的就是最终会画到画面上的那一张。
+    """
     path = Path(spec.image_path)
     try:
         stat = path.stat()
     except OSError:
         return None
+    lines_path = Path(spec.line_image_path) if spec.line_image_path else None
+    lines_key = None
+    if lines_path is not None:
+        try:
+            lines_stat = lines_path.stat()
+        except OSError:
+            lines_path = None
+        else:
+            lines_key = (str(lines_path), int(lines_stat.st_mtime_ns),
+                         int(lines_stat.st_size))
     strength = spec.tint_strength_pct if spec.tint else 0
     key = (str(path), int(stat.st_mtime_ns), int(stat.st_size),
-           spec.tint, strength)
+           spec.tint, strength, lines_key,
+           spec.line_color if lines_path is not None else "")
     cached = _IMAGE_CACHE.get(key)
     if cached is not None:
         _IMAGE_CACHE.move_to_end(key)
         return cached
 
-    image = QImage(str(path))
-    if image.isNull():
+    base, lines = _band_layers(spec)
+    if base is None:
         return None
-    if spec.tint and strength > 0:
-        image = _tinted(image, spec.tint, strength)
-    _IMAGE_CACHE[key] = image
+    if lines is not None:
+        composite = QImage(
+            base.size(), QImage.Format.Format_ARGB32_Premultiplied
+        )
+        composite.fill(0)
+        painter = QPainter(composite)
+        try:
+            painter.drawImage(0, 0, base.convertToFormat(
+                QImage.Format.Format_ARGB32_Premultiplied
+            ))
+            painter.drawImage(0, 0, lines)
+        finally:
+            painter.end()
+        base = composite
+    _IMAGE_CACHE[key] = base
     while len(_IMAGE_CACHE) > _IMAGE_CACHE_MAX:
         _IMAGE_CACHE.popitem(last=False)
-    return image
+    return base
+
+
+def band_artwork(spec: BandSpec) -> Optional[QImage]:
+    """切割检查用的「原图」：素材本体不上色 + 谱线层按当前谱线色合成。
+
+    属性卡预览要看到切割前的图案本身（上色/描边是效果，会掩盖端点边界），
+    所以这里不复用 `band_source`（它带 tint）。
+    """
+    path = Path(spec.image_path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    lines_path = Path(spec.line_image_path) if spec.line_image_path else None
+    lines_key = None
+    if lines_path is not None:
+        try:
+            lines_stat = lines_path.stat()
+        except OSError:
+            lines_path = None
+        else:
+            lines_key = (str(lines_path), int(lines_stat.st_mtime_ns),
+                         int(lines_stat.st_size))
+    key = ("artwork", str(path), int(stat.st_mtime_ns), int(stat.st_size),
+           lines_key,
+           spec.line_color if lines_path is not None else "")
+    cached = _IMAGE_CACHE.get(key)
+    if cached is not None:
+        _IMAGE_CACHE.move_to_end(key)
+        return cached
+    base = QImage(str(path))
+    if base.isNull():
+        return None
+    if lines_path is not None:
+        lines = _multiplied(
+            QImage(str(lines_path)), spec.line_color or "#000000"
+        )
+        composite = QImage(
+            base.size(), QImage.Format.Format_ARGB32_Premultiplied
+        )
+        composite.fill(0)
+        painter = QPainter(composite)
+        try:
+            painter.drawImage(0, 0, base.convertToFormat(
+                QImage.Format.Format_ARGB32_Premultiplied
+            ))
+            painter.drawImage(0, 0, lines)
+        finally:
+            painter.end()
+        base = composite
+    _IMAGE_CACHE[key] = base
+    while len(_IMAGE_CACHE) > _IMAGE_CACHE_MAX:
+        _IMAGE_CACHE.popitem(last=False)
+    return base
 
 
 def clear_band_image_cache() -> None:
@@ -241,11 +339,8 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
                             _paint_mode(painter, rect, edge, spec)
                         finally:
                             painter.restore()
-        # 谱线层（含高音谱号）在下，音符/终止线在上：谱线不得压在谱号上，
-        # 谱号用自己的描边和谱线分开。
-        lines = _line_source(spec)
-        if lines is not None:
-            _paint_mode(painter, rect, lines, spec)
+        # 素材本体与谱线层已经合成在 `image` 里（`band_source`）：整条带子
+        # 作为**一张图**参与切片与描边，避免两层各自切片/各自描边。
         _paint_mode(painter, rect, image, spec)
     finally:
         painter.restore()
@@ -519,6 +614,7 @@ def _paint_cover(painter, rect: QRectF, image: QImage) -> None:
 __all__ = [
     "BandSpec",
     "band_rect",
+    "band_artwork",
     "band_source",
     "band_spec",
     "clear_band_image_cache",

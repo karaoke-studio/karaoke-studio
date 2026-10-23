@@ -44,7 +44,12 @@ struct Direct2DGpuBackend::Impl {
         RgbaColor tint{};
         int tintStrengthPct = 0;
         bool hasTint = false;
+        // 画面上真正使用的那一张：素材本体 + 谱线层合成后的**整条带子图案**。
+        // 切片、中段预拼条、投影/发光全部基于它，保证「整图作为一个整体」
+        // 做描边，而不是每层各自描边。
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        // 合成前的素材本体（已上色）与谱线层（已按谱线色 multiply）。
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> baseBitmap;
         // 三段式中段裁片：平铺时用位图画刷 WRAP 一次铺满，块与块之间没有
         // 逐块采样缝（逐 DrawBitmap 平铺会在每块边缘各留一条半像素竖线）。
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> midBitmap;
