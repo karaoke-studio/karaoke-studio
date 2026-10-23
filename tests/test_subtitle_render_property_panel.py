@@ -6837,7 +6837,7 @@ def test_property_panel_animation_controls_emit_style(qapp):
     # 扫字线是独立总开关：关闭时参数灰显。
     assert not panel._scanline_mode_combo.isEnabled()
     assert not panel._scanline_width_spin.isEnabled()
-    panel._scanline_enabled_check.setChecked(True)
+    panel._scanline_enabled_switch.setChecked(True)
     assert emitted[-1].scanline_enabled is True
     assert panel._scanline_mode_combo.isEnabled()
     assert panel._scanline_width_spin.isEnabled()
@@ -6881,10 +6881,12 @@ def test_property_panel_animation_controls_emit_style(qapp):
     )
     assert not panel._scanline_color_btn.isHidden()
     assert panel._scanline_brightness_spin.isHidden()
-    # 反向唱字应用开关独立于总开关。
-    panel._scanline_reverse_check.setChecked(False)
-    assert emitted[-1].scanline_reverse_enabled is False
-    panel._scanline_reverse_check.setChecked(True)
+    # 三态应用范围：仅正向 / 仅反向 / 全部。
+    panel._scanline_scope_pill.setCurrentItem("reverse")
+    assert emitted[-1].scanline_forward_enabled is False
+    assert emitted[-1].scanline_reverse_enabled is True
+    panel._scanline_scope_pill.setCurrentItem("both")
+    assert emitted[-1].scanline_forward_enabled is True
     assert emitted[-1].scanline_reverse_enabled is True
     panel._reverse_karaoke_anim_combo.setCurrentIndex(
         panel._reverse_karaoke_anim_combo.findData("utopia")
@@ -7084,6 +7086,47 @@ def test_property_panel_particle_color_mode_controls(qapp):
     assert panel._fx_color_slot.isHidden()
     assert panel._fx_particle_role_combo.isHidden()
     assert panel._fx_particle_layers_combo.isEnabled()
+    # 入退场/扫字线首次切到复用配色同样补默认来源，不能留 None。
+    panel._fx_target_pill.setCurrentItem("anim")
+    panel._fx_particle_mode_combo.setCurrentIndex(
+        panel._fx_particle_mode_combo.findData("role")
+    )
+    assert emitted[-1].anim_fx_color_mode == "role"
+    assert emitted[-1].anim_fx_role_name == "__global__"
+    panel._fx_target_pill.setCurrentItem("scanline")
+    panel._fx_particle_mode_combo.setCurrentIndex(
+        panel._fx_particle_mode_combo.findData("role")
+    )
+    assert emitted[-1].scanline_effect_role_name == "__global__"
+    # 取色层级回显到当前目标，切目标后也显示该目标自己的值。
+    panel.set_style(
+        Style(
+            anim_fx_color_layers="all",
+            fx_particle_color_layers="stroke",
+            scanline_effect_color_layers="decor",
+        )
+    )
+    panel._fx_target_pill.setCurrentItem("anim")
+    assert panel._fx_particle_layers_combo.currentData() == "all"
+    panel._fx_target_pill.setCurrentItem("sing")
+    assert panel._fx_particle_layers_combo.currentData() == "stroke"
+    panel._fx_target_pill.setCurrentItem("scanline")
+    assert panel._fx_particle_layers_combo.currentData() == "decor"
+    # 切页/画布刷新颜色条时必须按当前目标取色，不能回落到唱字粒子。
+    panel.set_style(
+        Style(
+            fx_particle_color="#111111",
+            anim_fx_color="#222222",
+            scanline_effect_color="#333333",
+        )
+    )
+    panel._fx_target_pill.setCurrentItem("scanline")
+    panel._refresh_effects_page_color_buttons()
+    assert panel._fx_color_btn.color == "#333333"
+    panel._fx_target_pill.setCurrentItem("anim")
+    panel._refresh_effects_page_color_buttons()
+    assert panel._fx_color_btn.color == "#222222"
+    panel._fx_target_pill.setCurrentItem("sing")
     # 复用配色方案：第三列换来源下拉；无引用时切入自动补第一个角色。
     panel.set_roles(["主唱", "和声"])
     panel._fx_particle_mode_combo.setCurrentIndex(

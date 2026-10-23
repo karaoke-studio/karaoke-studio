@@ -1030,11 +1030,12 @@ class PropertyPanel(QWidget):
         等输入控件，避免切页瞬间改写用户正在编辑的数值。
         """
         self._scanline_color_btn.set_color(self._style.scanline_color)
+        fields = PARTICLE_TARGET_FIELDS.get(self._fx_target, {})
         self._fx_color_btn.set_color(
-            getattr(self._style, "fx_particle_color", "#FFFFFF")
+            getattr(self._style, fields.get("color", "fx_particle_color"), "#FFFFFF")
         )
         self._fx_color_btn2.set_color(
-            getattr(self._style, "fx_particle_color2", "#FFFFFF")
+            getattr(self._style, fields.get("color2", "fx_particle_color2"), "#FFFFFF")
         )
         if not hasattr(self, "_lit_enabled_switch"):
             return
@@ -1451,11 +1452,20 @@ class PropertyPanel(QWidget):
             # 与 set_style 的全量同步保持 parity，避免依赖随后的等值回流
             # 走快路径而漏显。
             self._scanline_color_btn.set_color(self._style.scanline_color)
+            fields = PARTICLE_TARGET_FIELDS.get(self._fx_target, {})
             self._fx_color_btn.set_color(
-                getattr(self._style, "fx_particle_color", "#FFFFFF")
+                getattr(
+                    self._style,
+                    fields.get("color", "fx_particle_color"),
+                    "#FFFFFF",
+                )
             )
             self._fx_color_btn2.set_color(
-                getattr(self._style, "fx_particle_color2", "#FFFFFF")
+                getattr(
+                    self._style,
+                    fields.get("color2", "fx_particle_color2"),
+                    "#FFFFFF",
+                )
             )
             if hasattr(self, "_volume_appearance_mode_combo"):
                 # auto 外观模式的音量柱大小随字号重算，回显要跟着刷新
@@ -1718,15 +1728,15 @@ class PropertyPanel(QWidget):
             or self._style.timing.karaoke_anim
             in {"scanline", "utopia_scanline", "zoom_pulse_scanline"}
         )
-        self._scanline_enabled_check.blockSignals(True)
-        self._scanline_enabled_check.setChecked(enabled)
-        self._scanline_enabled_check.blockSignals(False)
-        self._scanline_reverse_check.blockSignals(True)
-        self._scanline_reverse_check.setChecked(
-            bool(self._style.scanline_reverse_enabled)
-        )
-        self._scanline_reverse_check.blockSignals(False)
-        self._scanline_reverse_check.setEnabled(enabled)
+        self._scanline_enabled_switch.blockSignals(True)
+        self._scanline_enabled_switch.setChecked(enabled)
+        self._scanline_enabled_switch.blockSignals(False)
+        forward = bool(getattr(self._style, "scanline_forward_enabled", True))
+        reverse = bool(getattr(self._style, "scanline_reverse_enabled", False))
+        scope = "both" if forward and reverse else ("reverse" if reverse else "forward")
+        self._scanline_scope_pill.blockSignals(True)
+        self._scanline_scope_pill.setCurrentItem(scope)
+        self._scanline_scope_pill.blockSignals(False)
         default_color = mode == "default"
         brighten = mode in {"brighten", "follow_before", "follow_after"}
         role = mode == "role"
@@ -1807,6 +1817,18 @@ class PropertyPanel(QWidget):
                 combo.setCurrentIndex(max(0, combo.findData(mode)))
             finally:
                 combo.blockSignals(False)
+
+            layers = str(
+                getattr(self._style, fields["layers"], "solid") or "solid"
+            )
+            layers_combo = self._fx_particle_layers_combo
+            layers_combo.blockSignals(True)
+            try:
+                layers_combo.setCurrentIndex(
+                    max(0, layers_combo.findData(layers))
+                )
+            finally:
+                layers_combo.blockSignals(False)
 
             size_field = fields["size"]
             if scanline_target:
@@ -5663,21 +5685,26 @@ class PropertyPanel(QWidget):
             changes["scanline_role_name"] = (
                 role_names[0] if role_names else SCANLINE_GLOBAL_ROLE_KEY
             )
-        # 粒子颜色「复用配色方案」同理补默认来源（悬空时渲染端回退单独
-        # 颜色，但 UI 不留空选择更直观）。
-        if (
-            changes.get("fx_particle_color_mode") == "role"
-            and "fx_particle_role_name" not in changes
-            and not getattr(self._style, "fx_particle_role_name", None)
-        ):
-            role_names = [
-                name
-                for name in self._role_controller.names
-                if name not in {TITLE_SCHEME_NAME, SCANLINE_GLOBAL_ROLE_KEY}
-            ]
-            changes["fx_particle_role_name"] = (
-                role_names[0] if role_names else SCANLINE_GLOBAL_ROLE_KEY
-            )
+        # 三类粒子颜色「复用配色方案」同理补默认来源（悬空时渲染端回退
+        # 备用颜色，但 UI 不留空选择）。
+        role_names = [
+            name
+            for name in self._role_controller.names
+            if name not in {TITLE_SCHEME_NAME, SCANLINE_GLOBAL_ROLE_KEY}
+        ]
+        for target_fields in PARTICLE_TARGET_FIELDS.values():
+            mode_field = target_fields.get("mode")
+            name_field = target_fields.get("role")
+            if not mode_field or not name_field:
+                continue
+            if (
+                changes.get(mode_field) == "role"
+                and name_field not in changes
+                and not getattr(self._style, name_field, None)
+            ):
+                changes[name_field] = (
+                    role_names[0] if role_names else SCANLINE_GLOBAL_ROLE_KEY
+                )
         # 指示灯/音量柱切到「复用配色方案」同理补默认来源（悬空时渲染端
         # 回退 auto 口径，但 UI 不留空选择更直观）。
         for mode_field, name_field in (
@@ -5731,6 +5758,7 @@ class PropertyPanel(QWidget):
                 "reverse_karaoke_anim",
                 "scanline_enabled",
                 "scanline_reverse_enabled",
+                "scanline_forward_enabled",
                 "scanline_mode",
                 "scanline_role_name",
                 "scanline_effect",

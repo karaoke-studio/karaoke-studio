@@ -513,8 +513,18 @@ class EffectsPropertyPageBuilder:
         # 该卡片同时承载入退场动画与唱字特效（唱字/反向唱字档位、扫字线、
         # 整字放大、装饰粒子），标题按用户口径改名，避免只看到「入退场」。
         section, layout = property_section("入退场/唱字动画")
-        host._scanline_section, host._scanline_layout = property_section("扫字线")
-        host._particle_section, host._particle_layout = property_section("粒子")
+        host._scanline_section, host._scanline_layout = property_section(
+            "扫字线", switch=True
+        )
+        host._scanline_enabled_switch = host._scanline_section.header_switch
+        host._scanline_enabled_switch.setToolTip(
+            "扫字线总开关：开启后按下方范围在唱字锋面叠加高亮；"
+            "与音量柱/形状指示灯一样独立于唱字动画档位"
+        )
+        host._scanline_enabled_switch.toggled.connect(
+            lambda checked: host._update_style(scanline_enabled=checked)
+        )
+        host._particle_section, host._particle_layout = property_section("粒子设置")
         host._animation_grid = ResponsiveFieldGrid(
             section,
             min_column_width=260,
@@ -607,22 +617,24 @@ class EffectsPropertyPageBuilder:
         )
         host._animation_grid.add_field("唱字 / 反向唱字特效", host._karaoke_pair_row)
 
-        host._scanline_enabled_check = CheckBox("启用扫字线", host._scanline_section)
-        host._scanline_enabled_check.setToolTip(
-            "扫字线总开关：开启后普通唱字行在锋面处叠加高亮；"
-            "与音量柱/形状指示灯一样独立于唱字动画档位"
+        host._scanline_scope_pill = SegmentedWidget(host._scanline_section)
+        for label, scope in (
+            ("仅正向", "forward"),
+            ("仅反向", "reverse"),
+            ("全部", "both"),
+        ):
+            host._scanline_scope_pill.addItem(scope, label)
+        host._scanline_scope_pill.setCurrentItem("forward")
+        host._scanline_scope_pill.setFixedWidth(270)
+        host._scanline_scope_pill.setToolTip(
+            "扫字线应用范围：仅正向=普通唱字行；仅反向=只给反向唱字行；"
+            "全部=两者都应用"
         )
-        host._scanline_enabled_check.toggled.connect(
-            lambda checked: host._update_style(scanline_enabled=checked)
-        )
-        host._scanline_reverse_check = CheckBox(
-            "应用于反向唱字特效", host._scanline_section
-        )
-        host._scanline_reverse_check.setToolTip(
-            "开启后反向唱字行也使用扫字线；关闭时反向行只播放其唱字动画"
-        )
-        host._scanline_reverse_check.toggled.connect(
-            lambda checked: host._update_style(scanline_reverse_enabled=checked)
+        host._scanline_scope_pill.currentItemChanged.connect(
+            lambda scope: host._update_style(
+                scanline_forward_enabled=scope in {"forward", "both"},
+                scanline_reverse_enabled=scope in {"reverse", "both"},
+            )
         )
         host._scanline_mode_combo = WheelFocusedComboBox(host._scanline_section)
         compact_property_control(host._scanline_mode_combo)
@@ -907,8 +919,15 @@ class EffectsPropertyPageBuilder:
         host._animation_grid.add_widget(host._section_edge_row)
         # 扫字线单独成栏：参数行、形态、特效都归入上面的「扫字线」卡片，
         # 不再挤在入退场/唱字动画网格里。
-        host._scanline_layout.addWidget(host._scanline_enabled_check)
-        host._scanline_layout.addWidget(host._scanline_reverse_check)
+        host._scanline_scope_row = QWidget(host._scanline_section)
+        scope_layout = QHBoxLayout(host._scanline_scope_row)
+        scope_layout.setContentsMargins(0, 0, 0, 0)
+        scope_layout.setSpacing(8)
+        scope_layout.addWidget(host._scanline_scope_pill)
+        scope_layout.addStretch(1)
+        host._scanline_layout.addWidget(
+            property_field("应用范围", host._scanline_scope_row)
+        )
         host._scanline_layout.addWidget(
             property_field(
                 "模式 · 粗细 · 颜色/亮度/角色 · 柔化半径",
@@ -916,16 +935,14 @@ class EffectsPropertyPageBuilder:
                 wrap_label=True,
             )
         )
-        host._scanline_layout.addWidget(
-            property_field("扫字线形态", host._scanline_shape_combo)
+        host._scanline_shape_effect_row = ResponsiveControlPair(
+            host._scanline_section
         )
-        host._scanline_layout.addWidget(
-            property_field(
-                "扫字线特效",
-                host._scanline_effect_row,
-                wrap_label=True,
-            )
+        host._scanline_shape_effect_row.set_widgets(
+            property_field("扫字线形态", host._scanline_shape_combo),
+            property_field("扫字线特效", host._scanline_effect_combo),
         )
+        host._scanline_layout.addWidget(host._scanline_shape_effect_row)
         host._animation_grid.add_field("整字放大速度等级", host._zoom_pulse_curve_combo)
         host._stroke_flash_row = QWidget(section)
         stroke_flash_layout = QHBoxLayout(host._stroke_flash_row)
@@ -936,8 +953,12 @@ class EffectsPropertyPageBuilder:
         host._animation_grid.add_widget(
             property_field("唱字闪光", host._stroke_flash_row)
         )
+        # 唱字粒子样式只作用于唱字装饰粒子，归入唱字动画卡片。
+        host._animation_grid.add_widget(
+            property_field("唱字粒子样式", host._fx_sing_combo)
+        )
         layout.addWidget(host._animation_grid)
-        # 粒子设置对象药丸：与「唱字粒子样式」同排，宽度略收窄。
+        # 粒子设置对象药丸单独成行。
         host._fx_target_row = QWidget(section)
         fx_target_layout = QHBoxLayout(host._fx_target_row)
         fx_target_layout.setContentsMargins(0, 0, 0, 0)
@@ -945,15 +966,9 @@ class EffectsPropertyPageBuilder:
         host._fx_target_pill.setFixedWidth(300)
         fx_target_layout.addWidget(host._fx_target_pill)
         fx_target_layout.addStretch(1)
-        # 唱字粒子样式只作用于唱字装饰粒子，不是随“粒子设置对象”切换的
-        # 三态字段；与对象药丸放在同一行，窄窗时由响应式容器自动改竖排。
-        host._fx_top_row = ResponsiveControlPair(host._particle_section)
-        host._fx_top_row.set_widgets(
-            property_field("唱字粒子样式", host._fx_sing_combo),
-            property_field("粒子设置对象", host._fx_target_row),
+        host._particle_layout.addWidget(
+            property_field("粒子设置对象", host._fx_target_row)
         )
-        # 粒子相关设置独立成卡片；唱字闪光已归入唱字动画卡片。
-        host._particle_layout.addWidget(host._fx_top_row)
         # 下方粒子/闪光单独一张 3 列网格：与扫字线参数分栏，避免单张
         # 2 列网格里控件越塞越挤；窄窗仍按 3→2→1 列自适应。
         host._fx_grid = ResponsiveFieldGrid(

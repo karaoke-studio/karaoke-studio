@@ -143,9 +143,18 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     ] == ["普通高亮", "烈焰棒", "水泡"]
     # 下方粒子/闪光单独 3 列网格，和扫字线参数分栏。
     assert host._fx_grid._max_columns == 3
-    labels = [label.text() for label in host._particle_section.findChildren(QLabel)]
-    assert "唱字粒子样式" in labels
-    assert "粒子样式" not in labels
+    particle_labels = [
+        label.text() for label in host._particle_section.findChildren(QLabel)
+    ]
+    assert "唱字粒子样式" not in particle_labels
+    assert "唱字闪光" not in particle_labels
+    assert host._particle_section.header.text() == "粒子设置"
+    animation_labels = [label.text() for label in section.findChildren(QLabel)]
+    assert "唱字粒子样式" in animation_labels
+    assert "唱字闪光" in animation_labels
+    assert host._scanline_section.header.text() == "扫字线"
+    assert host._scanline_enabled_switch.isChecked() is False
+    assert host._scanline_scope_pill.currentRouteKey() == "forward"
     # 整字放大速度等级：0（线性）~5 六档下拉，每档带速度说明；默认 1。
     assert [
         host._zoom_pulse_curve_combo.itemData(index)
