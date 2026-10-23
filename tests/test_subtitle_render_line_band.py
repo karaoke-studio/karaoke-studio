@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -392,3 +393,18 @@ def test_invalid_band_enum_falls_back_to_defaults():
     )
     assert restored.line_band_fill_mode == Style().line_band_fill_mode
     assert restored.line_band_mid_mode == Style().line_band_mid_mode
+
+def test_native_mid_strip_is_drawn_from_the_strip_not_the_source_bitmap():
+    """sidecar 中段必须画预拼条本身。
+
+    预拼条已按设计边界裁剪；若误传源 bitmap，会从 x=0 取样，把谱号等端点
+    图案在中段开头再画一遍（用户实测「左侧谱号出现两遍」的根因）。
+    """
+    source = Path(
+        "native/subtitle_renderer/src/backends/direct2d/d2d_backend_render.cpp"
+    ).read_text(encoding="utf-8")
+    marker = "} else if (midStrip) {"
+    start = source.index(marker)
+    branch = source[start:start + 1200]
+    assert "drawBandPiece(midStrip," in branch
+    assert "drawBandPiece(bitmap," not in branch

@@ -1211,7 +1211,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 midWidth / std::max(scale, 1e-6f),
                                 8191.0f
                             );
-                            drawBandPiece(bitmap, 
+                            // 必须画**预拼条本身**：条子已按源图设计边界裁剪。
+                            // 误传 bitmap 会从源图 x=0 取样，把端点图案（谱号）
+                            // 在中段开头再画一遍——用户实测「左侧谱号出现两遍」。
+                            drawBandPiece(midStrip,
                                 D2D1::RectF(
                                     midLeft, rect.top,
                                     midLeft + midWidth, rect.bottom
