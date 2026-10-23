@@ -17,6 +17,7 @@ from PyQt6.QtCore import (
     QEvent,
     QPoint,
     QRect,
+    QRectF,
     QSize,
     Qt,
     QTimer,
@@ -28,6 +29,9 @@ from PyQt6.QtGui import (
     QFont,
     QFontDatabase,
     QIcon,
+    QPainter,
+    QPen,
+    QPixmap,
 )
 from PyQt6.QtWidgets import (
     QBoxLayout,
@@ -69,6 +73,11 @@ from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.domain.band_presets import (
     band_preset,
     preset_id_for_image,
+)
+from krok_helper.subtitle_render.engine.render.elements.band import (
+    band_source,
+    band_spec,
+    paint_band,
 )
 from krok_helper.subtitle_render.domain.paint import (
     ColorLayerKey,
@@ -503,6 +512,45 @@ _LIT_FIELDS = {
     "volume_flash_duration_ratio",
     "volume_transition_ratio_pct",
 }
+
+def line_band_preview_pixmap(style: Style, width: int = 520, height: int = 72) -> QPixmap:
+    """三段式切片预览：原图 + 端点分界线 + 中段平铺示例。
+
+    与渲染端共用 ``band_spec``/``band_source``/``paint_band``，所以预览里
+    看到的切分、缩放和平铺就是成片里的那一次绘制。
+    """
+    image = QPixmap(width, height)
+    image.fill(QColor("#1B1F26"))
+    painter = QPainter(image)
+    try:
+        spec = band_spec(style)
+        source = band_source(spec) if spec is not None else None
+        if spec is None or source is None:
+            painter.setPen(QColor("#8A8F98"))
+            painter.drawText(
+                image.rect(), Qt.AlignmentFlag.AlignCenter,
+                "未选择图片",
+            )
+            return image
+        paint_band(painter, QRectF(0, 0, width, height), spec)
+        scale = height / max(float(source.height()), 1.0)
+        cap_left = min(spec.cap_left * scale, width)
+        cap_right = min(spec.cap_right * scale, width)
+        pen = QPen(QColor(255, 196, 64, 220))
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(int(cap_left), 0, int(cap_left), height)
+        painter.drawLine(int(width - cap_right), 0, int(width - cap_right), height)
+        painter.setPen(QColor(255, 196, 64, 235))
+        painter.drawText(
+            QRect(int(cap_left) + 4, 2, max(int(width - cap_left - cap_right) - 8, 10), 14),
+            Qt.AlignmentFlag.AlignLeft,
+            "中段平铺" if spec.mid_mode != "stretch" else "中段拉伸",
+        )
+    finally:
+        painter.end()
+    return image
+
 
 # 行背景带控件回填的字段集合：选预设/上传图会一次改多个字段（并顺手开总
 # 开关），这些改动必须立即回显到卡片，宿主回流 set_style 走等值快路径不会
@@ -5602,6 +5650,9 @@ class PropertyPanel(QWidget):
         self._line_band_tint_btn.setEnabled(tintable)
         self._line_band_tint_strength_spin.setEnabled(tintable)
         self._line_band_tint_reset_btn.setEnabled(tintable)
+        preview = getattr(self, "_line_band_preview", None)
+        if preview is not None:
+            preview.setPixmap(line_band_preview_pixmap(style))
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):

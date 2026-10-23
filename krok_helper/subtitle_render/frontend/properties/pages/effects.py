@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CheckBox,
     LineEdit as FluentLineEdit,
@@ -1097,6 +1097,14 @@ class EffectsPropertyPageBuilder:
         image_layout.addWidget(host._line_band_clear_btn)
         add("图片", image_row)
 
+        host._line_band_preview = QLabel(section)
+        host._line_band_preview.setMinimumHeight(72)
+        host._line_band_preview.setToolTip(
+            "虚线是左右端点边界；中间就是中段实际平铺出来的样子。"
+            "改端点/填充方式会立刻重画。"
+        )
+        add(None, host._line_band_preview)
+
         host._line_band_fill_combo = self._combo(
             section,
             (
@@ -1122,10 +1130,10 @@ class EffectsPropertyPageBuilder:
         add("中段", host._line_band_mid_combo)
 
         add = group("端点", max_columns=4)
-        self._add_spin(add, "_line_band_cap_left_spin", "左端点", 0, 2000,
-                       "line_band_cap_left_px", suffix=" px")
-        self._add_spin(add, "_line_band_cap_right_spin", "右端点", 0, 2000,
-                       "line_band_cap_right_px", suffix=" px")
+        self._add_canvas_spin(add, "_line_band_cap_left_spin", "左端点", 0, 2000,
+                              "line_band_cap_left_px", "short_quarter", suffix=" px")
+        self._add_canvas_spin(add, "_line_band_cap_right_spin", "右端点", 0, 2000,
+                              "line_band_cap_right_px", "short_quarter", suffix=" px")
 
         add = group("几何", max_columns=4)
         for attribute, label, field_name in (
@@ -1134,9 +1142,10 @@ class EffectsPropertyPageBuilder:
             ("_line_band_pad_left_spin", "左边距", "line_band_pad_left_px"),
             ("_line_band_pad_right_spin", "右边距", "line_band_pad_right_px"),
         ):
-            self._add_spin(add, attribute, label, 0, 2000, field_name, suffix=" px")
-        self._add_spin(add, "_line_band_offset_y_spin", "垂直偏移", -500, 500,
-                       "line_band_offset_y_px", suffix=" px")
+            self._add_canvas_spin(add, attribute, label, 0, 2000, field_name,
+                                  "short_quarter", suffix=" px")
+        self._add_canvas_spin(add, "_line_band_offset_y_spin", "垂直偏移", -500, 500,
+                              "line_band_offset_y_px", "offset_y", suffix=" px")
         host._line_band_include_ruby_check = CheckBox("上边距按注音顶计算", section)
         host._line_band_include_ruby_check.setToolTip(
             "勾选后上边距从注音顶量起（带子会把注音一起包住）；关闭时从主文字顶量起。"
@@ -1148,10 +1157,10 @@ class EffectsPropertyPageBuilder:
         add(None, host._line_band_include_ruby_check)
 
         add = group("外观", max_columns=4)
-        self._add_spin(add, "_line_band_opacity_spin", "透明度", 0, 100,
-                       "line_band_opacity_pct", suffix=" %")
-        self._add_spin(add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
-                       "line_band_tint_strength_pct", suffix=" %")
+        self._add_canvas_spin(add, "_line_band_opacity_spin", "透明度", 0, 100,
+                              "line_band_opacity_pct", "hard", suffix=" %")
+        self._add_canvas_spin(add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
+                              "line_band_tint_strength_pct", "hard", suffix=" %")
         self._add_color(add, "_line_band_tint_btn", "上色", "line_band_tint")
         host._line_band_tint_reset_btn = FluentPushButton("用预设默认色", section)
         host._line_band_tint_reset_btn.setMinimumHeight(32)

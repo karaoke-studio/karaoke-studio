@@ -943,9 +943,54 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             const LineAnimationState animation = lineAnimationAt(*line);
-            const float opacity = std::clamp(animation.opacity, 0.0f, 1.0f);
+            float opacity = std::clamp(animation.opacity, 0.0f, 1.0f);
             if (opacity <= 0.0f) {
                 continue;
+            }
+            // 带子的可见窗与正文一致：退场尾奏 / 入场预演只有粒子，带子必须
+            // 跟着正文一起消失/出现（2026-10-23 用户口径）。
+            if (!line->displayWindows.empty()) {
+                const DisplayWindow &window = line->displayWindows.front();
+                if (window.endMs > window.startMs
+                    && (tMs < window.startMs || tMs > window.endMs)) {
+                    continue;
+                }
+                // 逐字/几何特效（雪、花瓣、粒子等）没有行级透明度曲线，
+                // 正文靠逐字过渡出现/消失；带子按同一过渡窗口整体淡入淡出
+                // ——不加额外粒子，只跟同一风格（用户口径）。
+                const auto eased = [](float progress) {
+                    const float p = std::clamp(progress, 0.0f, 1.0f);
+                    return p * p * (3.0f - 2.0f * p);
+                };
+                const bool lineLevelEntry = line->entryAnimation == "fade"
+                    || line->entryAnimation == "slide_in"
+                    || line->entryAnimation == "rise";
+                if (!lineLevelEntry && line->entryAnimation != "none"
+                    && window.endMs > window.startMs) {
+                    const int entryMs = line->entryDurationMs > 0
+                        ? line->entryDurationMs
+                        : 600;
+                    opacity *= eased(
+                        static_cast<float>(tMs - window.startMs)
+                        / static_cast<float>(std::max(entryMs, 1))
+                    );
+                }
+                const bool lineLevelExit = line->exitAnimation == "fade"
+                    || line->exitAnimation == "slide_out"
+                    || line->exitAnimation == "rise";
+                if (!lineLevelExit && line->exitAnimation != "none"
+                    && window.endMs > window.startMs) {
+                    const int exitMs = line->exitDurationMs > 0
+                        ? line->exitDurationMs
+                        : 600;
+                    opacity *= eased(
+                        static_cast<float>(window.endMs - tMs)
+                        / static_cast<float>(std::max(exitMs, 1))
+                    );
+                }
+                if (opacity <= 0.0f) {
+                    continue;
+                }
             }
             const D2D1_POINT_2F offset = bandOffsetAt(
                 *line, animation, placementOffsetX, placementOffsetY

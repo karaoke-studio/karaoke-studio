@@ -4779,22 +4779,49 @@ def _paint_line_bands(
                 head.display_end_ms,
             )
         )
+        start_ms = (
+            head.display_start_ms
+            if head.display_start_ms is not None
+            else _line_start_ms(line)
+        )
+        end_ms = (
+            head.display_end_ms
+            if head.display_end_ms is not None
+            else _line_end_ms(line)
+        )
         animation = line_animation_state(
             effective_style,
             t_ms=t_ms,
-            display_start_ms=(
-                head.display_start_ms
-                if head.display_start_ms is not None
-                else _line_start_ms(line)
-            ),
-            display_end_ms=(
-                head.display_end_ms
-                if head.display_end_ms is not None
-                else _line_end_ms(line)
-            ),
+            display_start_ms=start_ms,
+            display_end_ms=end_ms,
             lane=None,
         )
-        if animation.opacity <= 0.0:
+        # 带子的可见窗与正文一致：退场尾奏 / 入场预演只有粒子，带子必须跟
+        # 着正文一起消失/出现。
+        if end_ms > start_ms and not (start_ms <= t_ms <= end_ms):
+            continue
+        opacity = max(0.0, min(1.0, animation.opacity))
+        if opacity <= 0.0:
+            continue
+        # 逐字/几何特效（雪、花瓣、粒子等）没有行级透明度曲线，正文靠逐字
+        # 过渡出现/消失；带子按同一过渡窗口整体淡入淡出——不加额外粒子，
+        # 只跟同一风格（mirror native band pre-pass）。
+        def eased(progress: float) -> float:
+            p = max(0.0, min(1.0, progress))
+            return p * p * (3.0 - 2.0 * p)
+        if (
+            effective_style.entry_anim not in {"none", "fade", "slide_in", "rise"}
+            and end_ms > start_ms
+        ):
+            entry_ms = max(int(effective_style.entry_lead_ms), 0) or 600
+            opacity *= eased((t_ms - start_ms) / entry_ms)
+        if (
+            effective_style.exit_anim not in {"none", "fade", "slide_out", "rise"}
+            and end_ms > start_ms
+        ):
+            exit_ms = max(int(effective_style.exit_fade_ms), 0) or 600
+            opacity *= eased((end_ms - t_ms) / exit_ms)
+        if opacity <= 0.0:
             continue
         rect = None
         for entry in entries:
@@ -4828,6 +4855,8 @@ def _paint_line_bands(
         offset_x, offset_y = line_offsets.get(id(line), (0.0, 0.0))
         painter.save()
         try:
+            if opacity < 1.0:
+                painter.setOpacity(painter.opacity() * opacity)
             if offset_x or offset_y:
                 painter.translate(offset_x, offset_y)
             if animation.dx or animation.dy:
