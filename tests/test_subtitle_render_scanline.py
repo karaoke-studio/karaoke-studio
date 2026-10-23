@@ -398,7 +398,74 @@ def test_scanline_px_base_migration_on_load() -> None:
     assert restored.scanline_glow_px == 9
 
 
+def test_legacy_line_override_migrates_explicit_scanline_off() -> None:
+    from krok_helper.subtitle_render.serialization.timing import (
+        line_animation_override_from_dict,
+        line_animation_override_to_dict,
+    )
+
+    old_none = line_animation_override_from_dict(
+        {"entry_anim": "none", "exit_anim": "none", "karaoke_anim": "none"}
+    )
+    assert old_none is not None
+    assert old_none.scanline_enabled is False
+    assert line_animation_override_to_dict(old_none)["scanline_enabled"] is False
+    # 新格式显式继承不会被误判成旧格式强制关闭。
+    modern = line_animation_override_from_dict(
+        {
+            "entry_anim": "none",
+            "exit_anim": "none",
+            "karaoke_anim": "none",
+            "scanline_enabled": None,
+        }
+    )
+    assert modern is not None and modern.scanline_enabled is None
+
+
+def test_legacy_line_scanline_respects_explicit_reverse_animation() -> None:
+    from krok_helper.subtitle_render.serialization.timing import (
+        line_animation_override_from_dict,
+    )
+
+    payload = dict(
+        style_to_dict(
+            _scanline_style(
+                karaoke_anim="utopia",
+                scanline_enabled=True,
+                reverse_karaoke_anim="none",
+                scanline_reverse_enabled=False,
+            )
+        )
+    )
+    payload["karaoke_anim"] = "utopia_scanline"
+    payload.pop("scanline_enabled", None)
+    payload.pop("scanline_forward_enabled", None)
+    payload.pop("scanline_reverse_enabled", None)
+    style = style_from_dict(payload)
+    override = line_animation_override_from_dict(
+        {
+            "entry_anim": "none",
+            "exit_anim": "none",
+            "karaoke_anim": "scanline",
+        }
+    )
+    reverse = TimingLine(
+        chars=[TimingChar("歌", 0)],
+        end_ms=500,
+        wipe_reverse=True,
+        animation_override=override,
+    )
+    assert not effective_karaoke_scanline(
+        style_with_line_animation(style, reverse)
+    )
+
+
 def test_line_scanline_override_can_disable_global(qapp=None) -> None:
+    from krok_helper.subtitle_render.engine.layout.layout_context import (
+        layout_pass,
+    )
+    from krok_helper.subtitle_render.engine.layout.line.style import style_for_line
+
     style = _scanline_style(
         karaoke_anim="utopia",
         scanline_enabled=True,
@@ -420,6 +487,17 @@ def test_line_scanline_override_can_disable_global(qapp=None) -> None:
     assert effective_karaoke_scanline(
         style_with_line_animation(disabled_global, forced)
     )
+    # 同一 layout pass 内两行仅扫字线覆盖不同，不能串用行样式缓存。
+    other = TimingLine(
+        chars=[TimingChar("词", 0)],
+        end_ms=500,
+        animation_override=LineAnimationOverride(scanline_enabled=False),
+    )
+    with layout_pass():
+        first = style_for_line(style, forced)
+        second = style_for_line(style, other)
+    assert effective_karaoke_scanline(first)
+    assert not effective_karaoke_scanline(second)
 
 
 def test_reverse_karaoke_scanline_bakes_per_line() -> None:

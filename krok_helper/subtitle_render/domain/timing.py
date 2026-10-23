@@ -225,6 +225,9 @@ class LineAnimationOverride:
     """逐行扫字线覆盖：``None`` 跟随全局，``True`` 本行强制开启，
     ``False`` 本行强制关闭。"""
 
+    scanline_legacy: bool = field(default=False, repr=False, compare=False)
+    """内部迁移标记：来自旧逐行扫字线档位，供反向覆盖优先级还原。"""
+
 
 @dataclass
 class TimingLine:

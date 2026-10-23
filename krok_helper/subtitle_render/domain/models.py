@@ -1696,6 +1696,17 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
         else:
             changes["karaoke_anim"] = reverse_anim
     merged = style.with_timing(**changes) if changes else style
+    if (
+        scanline_line_override is True
+        and override is not None
+        and override.scanline_legacy
+        and line.wipe_reverse
+        and style.reverse_karaoke_anim != "inherit"
+        and not style.scanline_reverse_enabled
+    ):
+        # 旧逐行 scanline 先于旧反向明确档位求出；反向明确选了非扫字线
+        # 时，不能把旧逐行标记当成新的强制开启。
+        scanline_line_override = None
     if scanline_line_override is True:
         scanline_active = True
     elif scanline_line_override is False:
@@ -2549,7 +2560,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "line_band_enabled",
             "line_band_include_ruby",
         }:
-            changes[key] = bool(value)
+            changes[key] = _bool_value(value)
         elif key == "line_band_fill_mode":
             changes[key] = (
                 value
@@ -2866,7 +2877,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "scanline_forward_enabled",
             "fill_gradient_enabled",
         }:
-            changes[key] = None if value is None else bool(value)
+            changes[key] = None if value is None else _bool_value(value)
         elif value is not None:
             changes[key] = str(value)
     if "glow_radius_px" in changes:
@@ -4456,6 +4467,16 @@ def _custom_schemes_from_dict(payload: object) -> dict[str, SubtitleStyleScheme]
         for key, value in payload.items()
         if str(key)
     }
+
+
+def _bool_value(value: object) -> bool:
+    """Parse persisted booleans; historical payloads wrote ``"False"`` strings."""
+
+    if isinstance(value, str):
+        return value.strip().lower() not in {
+            "", "0", "false", "no", "off", "none", "null",
+        }
+    return bool(value)
 
 
 def _int_value(value: object, fallback: int) -> int:

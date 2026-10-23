@@ -22,6 +22,9 @@ def test_style_disabled_gradient_flag_survives_round_trip() -> None:
         style_to_dict(Style(fill_gradient_enabled=False))
     )
     assert restored.fill_gradient_enabled is False
+    legacy = style_to_dict(Style())
+    legacy["fill_gradient_enabled"] = "False"
+    assert style_from_dict(legacy).fill_gradient_enabled is False
 
 
 def test_paint_model_preserves_nicokara_defaults() -> None:

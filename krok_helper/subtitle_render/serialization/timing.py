@@ -150,14 +150,21 @@ def line_animation_override_to_dict(
                 "zoom_pulse_scanline": "zoom_pulse",
             }[karaoke]
         data["karaoke_anim"] = karaoke
-    else:
-        legacy_scanline = False
     if override.sing_fx != "inherit":
         data["sing_fx"] = override.sing_fx
-    if override.scanline_enabled is not None:
-        data["scanline_enabled"] = bool(override.scanline_enabled)
-    elif legacy_scanline:
-        data["scanline_enabled"] = True
+    # 新格式在改了唱字动画时显式落盘（含 None），以区分「显式继承」与
+    # 旧格式缺键；纯入退场覆盖不写空键，避免旧测试/旧文件多出噪声。
+    scanline_value = (
+        True
+        if (
+            override.scanline_enabled is None
+            and override.karaoke_anim
+            in {"scanline", "utopia_scanline", "zoom_pulse_scanline"}
+        )
+        else override.scanline_enabled
+    )
+    if scanline_value is not None or override.karaoke_anim != "inherit":
+        data["scanline_enabled"] = scanline_value
     return data
 
 
@@ -199,9 +206,20 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
             "utopia_scanline": "utopia",
             "zoom_pulse_scanline": "zoom_pulse",
         }[karaoke]
+    has_scanline_field = "scanline_enabled" in value
     scanline_override = value.get("scanline_enabled")
-    if not isinstance(scanline_override, bool):
-        scanline_override = True if legacy_scanline else None
+    if has_scanline_field:
+        scanline_override = (
+            scanline_override if isinstance(scanline_override, bool) else None
+        )
+    elif legacy_scanline:
+        scanline_override = True
+    elif karaoke != "inherit":
+        # 旧逐行选择了非扫字线档位：当时该行不可能出现扫字线，迁移成
+        # 显式关闭，避免继承全局后平白多出高亮。
+        scanline_override = False
+    else:
+        scanline_override = None
     sing_fx = value.get("sing_fx")
     if sing_fx not in {
         "inherit", "none", "twinkle", "twinkle_classic", "note", "heart", "ripple", "petal", "snow", "snow_solid",
@@ -216,6 +234,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
         karaoke_anim=karaoke,
         sing_fx=sing_fx,
         scanline_enabled=scanline_override,
+        scanline_legacy=bool(legacy_scanline and not has_scanline_field),
     )
 
 
