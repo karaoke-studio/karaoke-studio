@@ -128,6 +128,23 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "anim_fx_role_name",
     # 编辑器 UI 开关（不影响渲染/排版）。
     "decoration_before_sync",
+    # 2026-10 行背景带：纯装饰层，几何由行文本框 + 四边留白在渲染期求值，
+    # 不参与显示窗口 / 分页 / 排版任何输入（带子永远跟着行盒走）。
+    "line_band_enabled",
+    "line_band_image",
+    "line_band_fill_mode",
+    "line_band_cap_left_px",
+    "line_band_cap_right_px",
+    "line_band_mid_mode",
+    "line_band_pad_top_px",
+    "line_band_pad_bottom_px",
+    "line_band_pad_left_px",
+    "line_band_pad_right_px",
+    "line_band_include_ruby",
+    "line_band_offset_y_px",
+    "line_band_opacity_pct",
+    "line_band_tint",
+    "line_band_tint_strength_pct",
 })
 _LYRIC_LAYOUT_EXCLUDED_SCHEME_FIELDS = frozenset({
     "base_color",

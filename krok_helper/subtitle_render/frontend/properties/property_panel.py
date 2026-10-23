@@ -3206,6 +3206,9 @@ class PropertyPanel(QWidget):
     def _make_lit_section(self) -> QFrame:
         return self._effects_page_builder.make_lit_section()
 
+    def _make_line_band_section(self) -> QFrame:
+        return self._effects_page_builder.make_line_band_section()
+
     def _make_volume_section(self) -> QFrame:
         return self._effects_page_builder.make_volume_section()
 
@@ -5578,7 +5581,8 @@ class PropertyPanel(QWidget):
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):
-            return        self._lit_enabled_switch.setChecked(self._style.lit_enabled)
+            return
+        self._lit_enabled_switch.setChecked(self._style.lit_enabled)
         self._volume_enabled_switch.setChecked(self._style.volume_enabled)
         # legacy "volume" 只可能来自 API 直构样式（工程加载时已迁移）；
         # 下拉没有该项，显式回退到「圆形」显示，开灯/换形状时会写入实际值。
