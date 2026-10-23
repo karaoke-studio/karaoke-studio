@@ -366,7 +366,12 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         && cached.edgeKind == band.edgeKind
         && cached.hasEdgeColor == band.hasEdgeColor
         && (!band.hasEdgeColor || cached.edgeColor == band.edgeColor)
-        && cached.edgeSizePx == edgeSizePx) {
+        && cached.edgeSizePx == edgeSizePx
+        // 端点变化必须重建中段预拼条：预拼条是按旧端点裁的。端点调小后
+        // 条子仍从旧端点位置开始铺，左端点的谱号/装饰就会在中段开头再
+        // 出现一遍——用户实测「左侧的图出现两遍」的根因。
+        && cached.midCapLeftSrc == band.capLeftSrc
+        && cached.midCapRightSrc == band.capRightSrc) {
         return;
     }
     ID2D1DeviceContext *context = device_.d2dContext();
@@ -380,32 +385,6 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         context, cached.bitmap.Get(),
         band.capLeftSrc, band.capRightSrc
     );
-    cached.lineBitmap.Reset();
-    cached.lineMidStrip.Reset();
-    if (!band.linesPath.empty()) {
-        cached.lineBitmap = loadWicBitmap(
-            context,
-            band.linesPath,
-            band.hasLineColor ? &band.lineColor : nullptr,
-            100,
-            /*multiplyTint=*/true
-        );
-        cached.lineMidStrip = makeBandMidStrip(
-            context, cached.lineBitmap.Get(),
-            band.capLeftSrc, band.capRightSrc
-        );
-    }
-    cached.edgeBitmap.Reset();
-    cached.edgeMidStrip.Reset();
-    if (cached.bitmap && band.edgeKind != "none") {
-        cached.edgeBitmap = makeBandEdgeBitmap(
-            context, cached.bitmap.Get(), band.edgeColor, edgeSizePx
-        );
-        cached.edgeMidStrip = makeBandMidStrip(
-            context, cached.edgeBitmap.Get(),
-            band.capLeftSrc, band.capRightSrc
-        );
-    }
     cached.midCapLeftSrc = band.capLeftSrc;
     cached.midCapRightSrc = band.capRightSrc;
     cached.path = band.imagePath;
