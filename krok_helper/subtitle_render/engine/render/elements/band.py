@@ -13,16 +13,20 @@ Four fill modes are supported (mirrors CSS ``border-image-repeat``):
 
 from __future__ import annotations
 
+import math
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtCore import QRect, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QTransform
 
 from krok_helper.subtitle_render.domain.band_presets import resolve_band_image
 
+_TILE_CACHE_MAX = 16
+_TILE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+_STRIP_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_CACHE_MAX = 16
 _IMAGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 
@@ -154,6 +158,46 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
         painter.restore()
 
 
+def _mid_tile(image: QImage, cap_left: int, cap_right: int) -> QImage:
+    """中段切片（按原图像素裁一次，重复绘制复用同一张）。"""
+    key = (int(image.cacheKey()), int(cap_left), int(cap_right))
+    cached = _TILE_CACHE.get(key)
+    if cached is not None:
+        _TILE_CACHE.move_to_end(key)
+        return cached
+    width = max(int(image.width()) - int(cap_left) - int(cap_right), 1)
+    tile = image.copy(QRect(int(cap_left), 0, width, int(image.height())))
+    _TILE_CACHE[key] = tile
+    while len(_TILE_CACHE) > _TILE_CACHE_MAX:
+        _TILE_CACHE.popitem(last=False)
+    return tile
+
+
+def _mid_strip(tile: QImage, needed_width: int) -> QImage:
+    """把中段瓦片按整数像素拼成一条长条（按需要的块数缓存）。"""
+    tile_w = max(int(tile.width()), 1)
+    tiles = max(1, int(math.ceil(max(needed_width, 1) / tile_w)))
+    key = (int(tile.cacheKey()), tiles)
+    cached = _STRIP_CACHE.get(key)
+    if cached is not None:
+        _STRIP_CACHE.move_to_end(key)
+        return cached
+    strip = QImage(
+        tiles * tile_w, tile.height(), QImage.Format.Format_ARGB32_Premultiplied
+    )
+    strip.fill(0)
+    strip_painter = QPainter(strip)
+    try:
+        for index in range(tiles):
+            strip_painter.drawImage(index * tile_w, 0, tile)
+    finally:
+        strip_painter.end()
+    _STRIP_CACHE[key] = strip
+    while len(_STRIP_CACHE) > _TILE_CACHE_MAX:
+        _STRIP_CACHE.popitem(last=False)
+    return strip
+
+
 def _draw_slice(painter, dest: QRectF, image: QImage, src: QRectF) -> None:
     if dest.width() <= 0 or dest.height() <= 0 or src.width() <= 0:
         return
@@ -203,34 +247,38 @@ def _paint_three_slice(painter, rect: QRectF, image: QImage, spec: BandSpec) -> 
     if tile_w <= 0.5:
         _draw_slice(painter, mid_dest, image, mid_src)
         return
-    x = mid_dest.left()
-    while x < mid_dest.right() - 0.5:
-        width = min(tile_w, mid_dest.right() - x)
-        _draw_slice(
-            painter,
-            QRectF(x, rect.top(), width, rect.height()),
-            image,
-            QRectF(mid_src.left(), 0.0, width / scale, img_h),
-        )
-        x += tile_w
+    # 中段一次取样预拼条：逐块 drawImage 会在每块边缘各留一条半像素竖缝
+    # （用户实测「每个预设拼接痕迹都很明显」）。预拼条是同一张连续纹理，
+    # 一次绘制取样，没有块边界。与 native 侧 8192px 预拼条同口径。
+    needed = int(math.ceil(mid_dest.width() / max(scale, 1e-6)))
+    strip = _mid_strip(
+        _mid_tile(image, spec.cap_left, spec.cap_right), needed
+    )
+    _draw_slice(
+        painter,
+        mid_dest,
+        strip,
+        QRectF(0.0, 0.0, min(float(strip.width()), mid_dest.width() / max(scale, 1e-6)), float(strip.height())),
+    )
 
 
 def _paint_repeat(painter, rect: QRectF, image: QImage) -> None:
     scale = rect.height() / max(float(image.height()), 1.0)
-    tile_w = image.width() * scale
-    if tile_w <= 0.5:
+    if image.width() * scale <= 0.5:
         painter.drawImage(rect, image, QRectF(image.rect()))
         return
-    x = rect.left()
-    while x < rect.right() - 0.5:
-        width = min(tile_w, rect.right() - x)
-        _draw_slice(
-            painter,
-            QRectF(x, rect.top(), width, rect.height()),
-            image,
-            QRectF(0.0, 0.0, width / scale, float(image.height())),
-        )
-        x += tile_w
+    needed = int(math.ceil(rect.width() / max(scale, 1e-6)))
+    strip = _mid_strip(image, needed)
+    _draw_slice(
+        painter,
+        rect,
+        strip,
+        QRectF(
+            0.0, 0.0,
+            min(float(strip.width()), rect.width() / max(scale, 1e-6)),
+            float(strip.height()),
+        ),
+    )
 
 
 def _paint_cover(painter, rect: QRectF, image: QImage) -> None:

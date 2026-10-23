@@ -45,6 +45,11 @@ struct Direct2DGpuBackend::Impl {
         int tintStrengthPct = 0;
         bool hasTint = false;
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        // 三段式中段裁片：平铺时用位图画刷 WRAP 一次铺满，块与块之间没有
+        // 逐块采样缝（逐 DrawBitmap 平铺会在每块边缘各留一条半像素竖线）。
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> midBitmap;
+        int midCapLeftSrc = 0;
+        int midCapRightSrc = 0;
     };
     // 装饰粒子 sprite 轮廓几何（em 空间、中心原点；随场景重建，绘制期经
     // matrix 缩放平移）。key = sprite 名（star4 / ring / note）。

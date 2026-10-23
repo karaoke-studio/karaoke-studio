@@ -174,6 +174,53 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         band.hasTint ? &band.tint : nullptr,
         band.tintStrengthPct
     );
+    cached.midBitmap.Reset();
+    if (cached.bitmap) {
+        const D2D1_SIZE_U pixels = cached.bitmap->GetPixelSize();
+        const int left = std::max(band.capLeftSrc, 0);
+        const int right = std::max(band.capRightSrc, 0);
+        const int midWidth = static_cast<int>(pixels.width) - left - right;
+        // 中段预拼条：把中段按整数像素重复铺成一条长位图，绘制时一次
+        // DrawBitmap 取样。逐块平铺会在每块边缘各留一条半像素竖线；位图
+        // 画刷的 WRAP 在非整数缩放下同样会在回绕处断一拍——只有「一次
+        // 取样一段连续纹理」才是无缝的。
+        constexpr int kMidStripWidth = 8192;
+        if (midWidth > 0) {
+            const D2D1_BITMAP_PROPERTIES1 midProperties = D2D1::BitmapProperties1(
+                D2D1_BITMAP_OPTIONS_NONE,
+                D2D1::PixelFormat(
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    D2D1_ALPHA_MODE_PREMULTIPLIED
+                ),
+                96.0f,
+                96.0f
+            );
+            if (SUCCEEDED(device_.d2dContext()->CreateBitmap(
+                    D2D1::SizeU(kMidStripWidth, pixels.height),
+                    nullptr,
+                    0,
+                    &midProperties,
+                    cached.midBitmap.ReleaseAndGetAddressOf()))) {
+                const D2D1_RECT_U source = D2D1::RectU(
+                    static_cast<UINT32>(left),
+                    0,
+                    static_cast<UINT32>(left + midWidth),
+                    pixels.height
+                );
+                for (int offset = 0; offset < kMidStripWidth;
+                     offset += midWidth) {
+                    const D2D1_POINT_2U destination = D2D1::Point2U(
+                        static_cast<UINT32>(offset), 0
+                    );
+                    cached.midBitmap->CopyFromBitmap(
+                        &destination, cached.bitmap.Get(), &source
+                    );
+                }
+            }
+        }
+    }
+    cached.midCapLeftSrc = band.capLeftSrc;
+    cached.midCapRightSrc = band.capRightSrc;
     cached.path = band.imagePath;
     cached.modifiedMs = modifiedMs;
     cached.size = size;

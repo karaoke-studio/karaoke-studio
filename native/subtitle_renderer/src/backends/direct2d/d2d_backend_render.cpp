@@ -1193,6 +1193,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 opacity,
                                 midSource
                             );
+                        } else if (impl_->lineBandImage.midBitmap) {
+                            // 中段一次取样预拼条（8192px 宽、整数像素重复）：
+                            // 逐块 DrawBitmap 在每块边缘各留半像素竖线，位图
+                            // 画刷 WRAP 在非整数缩放下回绕处也会断一拍。
+                            const float sourceWidth = std::min(
+                                midWidth / std::max(scale, 1e-6f),
+                                8191.0f
+                            );
+                            drawBandPiece(
+                                D2D1::RectF(
+                                    midLeft, rect.top,
+                                    midLeft + midWidth, rect.bottom
+                                ),
+                                opacity,
+                                D2D1::RectF(
+                                    0.0f, 0.0f, sourceWidth, imageHeight
+                                )
+                            );
                         } else {
                             const float tileWidth = sourceMidWidth * scale;
                             if (tileWidth <= 0.5f) {

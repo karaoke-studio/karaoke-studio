@@ -198,6 +198,35 @@ BAND_FIELDS = (
 )
 
 
+def test_preset_middle_tiles_wrap_without_a_visible_seam():
+    """中段瓦片必须首尾相接：拼接处的列差不能明显大于内部相邻列差。
+
+    预设素材一旦不可循环，平铺时每个块边界都会出现一条竖线——这是 2026-10-23
+    用户实测反馈的「每个预设拼接痕迹都很明显」。渲染端已改成一次取样预拼条，
+    这里守住素材本身的自洽性。
+    """
+    import numpy as np
+
+    for preset in BAND_PRESETS:
+        image = QImage(str(preset.path)).convertToFormat(
+            QImage.Format.Format_RGBA8888
+        )
+        bits = image.constBits()
+        bits.setsize(image.sizeInBytes())
+        pixels = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+            image.height(), image.bytesPerLine() // 4, 4
+        )[:, : image.width(), :].astype(np.float32)
+        left = preset.cap_left_px
+        right = preset.cap_right_px
+        tile = pixels[:, left : image.width() - right, :]
+        seam = float(np.abs(tile[:, 0, :] - tile[:, -1, :]).mean())
+        interior = float(np.abs(np.diff(tile, axis=1)).mean())
+        assert seam <= max(interior * 8.0, 12.0), (
+            f"{preset.preset_id}: 中段首尾列差 {seam:.2f} 远大于内部 "
+            f"{interior:.2f}，平铺会出现明显竖缝"
+        )
+
+
 def test_band_fields_survive_project_roundtrip():
     from krok_helper.subtitle_render.domain.models import (
         style_from_dict,

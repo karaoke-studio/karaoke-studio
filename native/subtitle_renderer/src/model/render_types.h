@@ -715,6 +715,9 @@ struct LineBandStyle {
     std::string midMode = "repeat";
     float capLeft = 0.0f;
     float capRight = 0.0f;
+    // 源图像素为单位的端点宽（裁中段位图用；capLeft/capRight 是场景像素）。
+    int capLeftSrc = 0;
+    int capRightSrc = 0;
     float padTop = 20.0f;
     float padBottom = 20.0f;
     float padLeft = 40.0f;
