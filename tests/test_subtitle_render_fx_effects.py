@@ -314,9 +314,8 @@ def test_entry_exit_sparkle_per_char_roles_budget_and_sweep():
         entry_lead_ms=600,
         exit_anim="sparkle",
         exit_fade_ms=600,
-        fx_apply_to_entry_exit=True,
-        fx_particle_color_mode="follow_after",
-        fx_particle_color_layers="decor",
+        anim_fx_color_mode="follow_after",
+        anim_fx_color_layers="decor",
         karaoke_anim="none",
         custom_style_schemes={"主唱": scheme_a, "和声": scheme_b},
         karaoke_colors=_karaoke_matrix("#111111", "#222222"),
@@ -1373,8 +1372,8 @@ def test_particle_color_mode_role_source_and_dangling_fallback():
     ) == "#00FF00"
 
 
-def test_fx_apply_to_entry_exit_switch_plans():
-    """「入退场同用」：开启后入退场动画粒子的颜色/尺寸吃旋钮；数量恒固定。"""
+def test_anim_fx_settings_are_independent_from_sing_particles():
+    """入退场粒子颜色/尺寸独立于唱字装饰粒子；数量恒固定。"""
 
     def _style(**extra):
         base = dict(
@@ -1393,38 +1392,42 @@ def test_fx_apply_to_entry_exit_switch_plans():
         return Style(**base)
 
     windows = [(1200, 1600), (1600, 3000)]
-    off = plan_line_bursts(_style(), 0, 1000, 4000, 3900, windows)
-    # 默认关：入退场动画粒子固定默认档 = 樱花粉双色（14//2=7 拆 4+3）
-    # + 固定尺寸（40% × 0.75），唱字吃旋钮。
-    assemble_off = [b for b in off if b["kind"] == "assemble"]
-    assert sorted(b["count"] for b in assemble_off) == [3, 3, 4, 4]  # 2 字 × (4+3)
-    assert {b["color"] for b in assemble_off} == {"#FFB7C5", "#FFD7E0"}
-    for burst in assemble_off:
+    base = plan_line_bursts(_style(), 0, 1000, 4000, 3900, windows)
+    # 入退场默认档：樱花粉双色 + 40% 字号（不随唱字旋钮）。
+    assemble = [b for b in base if b["kind"] == "assemble"]
+    assert sorted(b["count"] for b in assemble) == [3, 3, 4, 4]
+    assert {b["color"] for b in assemble} == {"#FFB7C5", "#FFD7E0"}
+    for burst in assemble:
         assert burst["size_px"] == pytest.approx(100 * 0.40 * 0.75)
-    twinkle = next(b for b in off if b["kind"] == "twinkle")
+    twinkle = next(b for b in base if b["kind"] == "twinkle")
     assert twinkle["color"] == "#FF8800"
     assert twinkle["size_px"] == pytest.approx(50.0)
 
-    on = plan_line_bursts(
-        _style(fx_apply_to_entry_exit=True), 0, 1000, 4000, 3900, windows
+    # 只改入退场目标：颜色/尺寸独立生效，唱字设置不变。
+    custom = plan_line_bursts(
+        _style(
+            anim_fx_color_mode="color",
+            anim_fx_color="#FF8800",
+            anim_fx_color2="#FFFFFF",
+            anim_fx_size_em=0.5,
+        ),
+        0,
+        1000,
+        4000,
+        3900,
+        windows,
     )
-    # 开启后：颜色与尺寸跟随旋钮；数量仍固定。自定义颜色一与默认白色
-    # 颜色二按「必须双色」口径混发（拆双色后总量守恒：4+3=7）。
-    assemble_pair = [b for b in on if b["kind"] == "assemble"][:2]
-    twinkle_pair = [b for b in on if b["kind"] == "twinkle"][:2]
-    assert {b["color"] for b in assemble_pair} == {"#FF8800", "#FFFFFF"}
-    for burst in assemble_pair:
+    assemble_custom = [b for b in custom if b["kind"] == "assemble"][:2]
+    assert {b["color"] for b in assemble_custom} == {"#FF8800", "#FFFFFF"}
+    for burst in assemble_custom:
         assert burst["size_px"] == pytest.approx(50.0 * 0.75)
-    assert sorted(b["count"] for b in assemble_pair) == [3, 4]
-    assert {b["color"] for b in twinkle_pair} == {"#FF8800", "#FFFFFF"}
-    for burst in twinkle_pair:
-        assert burst["size_px"] == pytest.approx(50.0)
+    assert sorted(b["count"] for b in assemble_custom) == [3, 4]
+    assert next(b for b in custom if b["kind"] == "twinkle")["color"] == "#FF8800"
 
-    # 颜色模式对入退场动画粒子同样生效（开启联动时）。
+    # 入退场颜色模式独立：跟随字体只影响入退场目标。
     follow = plan_line_bursts(
         _style(
-            fx_apply_to_entry_exit=True,
-            fx_particle_color_mode="follow_after",
+            anim_fx_color_mode="follow_after",
             karaoke_colors=_karaoke_matrix("#000000", "#EE7700"),
         ),
         0,
@@ -1434,8 +1437,8 @@ def test_fx_apply_to_entry_exit_switch_plans():
         windows,
     )
     assert next(b for b in follow if b["kind"] == "assemble")["color"] == "#EE7700"
-    # 关闭联动时模式只影响唱字粒子，入退场动画粒子仍是固定樱花粉默认档。
-    follow_off = plan_line_bursts(
+    # 唱字颜色模式切换不会带动入退场。
+    follow_sing = plan_line_bursts(
         _style(
             fx_particle_color_mode="follow_after",
             karaoke_colors=_karaoke_matrix("#000000", "#EE7700"),
@@ -1447,30 +1450,77 @@ def test_fx_apply_to_entry_exit_switch_plans():
         windows,
     )
     assert {
-        b["color"] for b in follow_off if b["kind"] == "assemble"
+        b["color"] for b in follow_sing if b["kind"] == "assemble"
     } == {"#FFB7C5", "#FFD7E0"}
-    assert next(b for b in follow_off if b["kind"] == "twinkle")["color"] == "#EE7700"
+    assert next(
+        b for b in follow_sing if b["kind"] == "twinkle"
+    )["color"] == "#EE7700"
 
 
 def test_particle_color_mode_serialization_roundtrip():
-    """颜色模式/来源/联动开关三字段的工程序列化往返与非法值回退。"""
+    """三类粒子颜色字段的工程序列化往返、非法值回退与旧开关迁移。"""
     from krok_helper.subtitle_render.domain.models import style_from_dict, style_to_dict
 
     style = Style(
         fx_particle_color_mode="follow_after",
         fx_particle_role_name="主唱",
-        fx_apply_to_entry_exit=True,
+        anim_fx_color_mode="color",
+        anim_fx_color="#112233",
+        anim_fx_color2="#445566",
+        anim_fx_size_em=0.7,
+        scanline_effect_color_mode="role",
+        scanline_effect_role_name="和声",
+        scanline_effect_color="#778899",
     )
     restored = style_from_dict(style_to_dict(style))
     assert restored.fx_particle_color_mode == "follow_after"
     assert restored.fx_particle_role_name == "主唱"
-    assert restored.fx_apply_to_entry_exit is True
-    # 旧工程 payload（无新字段）：回落默认，不炸。
+    assert restored.anim_fx_color_mode == "color"
+    assert restored.anim_fx_color == "#112233"
+    assert restored.anim_fx_color2 == "#445566"
+    assert restored.anim_fx_size_em == pytest.approx(0.7)
+    assert restored.scanline_effect_color_mode == "role"
+    assert restored.scanline_effect_role_name == "和声"
+    assert restored.scanline_effect_color == "#778899"
+    # 旧工程 payload（无新字段）：三类目标各自默认，不炸。
     legacy = style_from_dict({})
     assert legacy.fx_particle_color_mode == "color"
     assert legacy.fx_particle_role_name is None
-    assert legacy.fx_apply_to_entry_exit is False
     assert legacy.fx_particle_color2 == "#FFFFFF"  # 双色槽默认白（恒双色）
+    assert legacy.anim_fx_color_mode == "sakura"
+    assert legacy.anim_fx_size_em == pytest.approx(0.40)
+    assert legacy.scanline_effect_color_mode == "theme"
+    # 旧版「入退场同用」开关：一次性把老粒子设置搬进 anim_fx_*。
+    migrated = style_from_dict(
+        {
+            "fx_apply_to_entry_exit": True,
+            "fx_particle_color_mode": "color",
+            "fx_particle_color": "#AABBCC",
+            "fx_particle_color2": "#DDEEFF",
+            "fx_particle_size_em": 0.8,
+        }
+    )
+    assert migrated.anim_fx_color_mode == "color"
+    assert migrated.anim_fx_color == "#AABBCC"
+    assert migrated.anim_fx_color2 == "#DDEEFF"
+    assert migrated.anim_fx_size_em == pytest.approx(0.8)
+    # 旧版扫字线粒子共用 fx_particle_*：改过颜色时搬进独立字段。
+    scanline_legacy = style_from_dict(
+        {
+            "scanline_effect": "snow",
+            "fx_particle_color_mode": "color",
+            "fx_particle_color": "#123456",
+            "fx_particle_color2": "#654321",
+        }
+    )
+    assert scanline_legacy.scanline_effect_color_mode == "color"
+    assert scanline_legacy.scanline_effect_color == "#123456"
+    assert scanline_legacy.scanline_effect_color2 == "#654321"
+    # 旧版默认白对应旧「主题色」口径：保持新默认 theme。
+    scanline_theme = style_from_dict(
+        {"scanline_effect": "snow", "fx_particle_color_mode": "color"}
+    )
+    assert scanline_theme.scanline_effect_color_mode == "theme"
     # 双色槽往返。
     dual = style_from_dict(
         style_to_dict(
@@ -1492,11 +1542,13 @@ def test_particle_color_mode_serialization_roundtrip():
     payload = style_to_dict(Style())
     payload["fx_particle_color_mode"] = "brighten"  # 粒子无此档
     payload["fx_particle_role_name"] = "  "
-    payload["fx_apply_to_entry_exit"] = 0
+    payload["anim_fx_color_mode"] = "theme"  # 入退场无主题色档
+    payload["scanline_effect_color_mode"] = "brighten"  # 扫字线粒子无亮化档
     degraded = style_from_dict(payload)
     assert degraded.fx_particle_color_mode == "color"
     assert degraded.fx_particle_role_name is None
-    assert degraded.fx_apply_to_entry_exit is False
+    assert degraded.anim_fx_color_mode == "sakura"
+    assert degraded.scanline_effect_color_mode == "theme"
 
 
 def test_particle_role_reference_remap_chain():
@@ -1517,6 +1569,16 @@ def test_particle_role_reference_remap_chain():
     # 引用未触及返回 None（调用方跳过样式写回）。
     assert remap_particle_role_reference(style, {"和声": "伴唱"}) is None
     assert remap_particle_role_reference(Style(), {"主唱": None}) is None
+    # 入退场目标独立引用：改名同步、删除回退默认颜色档。
+    anim_style = Style(anim_fx_color_mode="role", anim_fx_role_name="主唱")
+    anim_renamed = remap_particle_role_reference(anim_style, {"主唱": "领唱"})
+    assert anim_renamed is not None
+    assert anim_renamed.anim_fx_role_name == "领唱"
+    assert anim_renamed.anim_fx_color_mode == "role"
+    anim_deleted = remap_particle_role_reference(anim_style, {"主唱": None})
+    assert anim_deleted is not None
+    assert anim_deleted.anim_fx_color_mode == "sakura"
+    assert anim_deleted.anim_fx_role_name is None
 
 
 def test_painter_paints_per_burst_particle_color(qapp):
@@ -1927,9 +1989,8 @@ def test_painter_entry_sparkle_multi_role_image(qapp, tmp_path):
         font_size_px=100,
         entry_anim="sparkle",
         entry_lead_ms=600,
-        fx_apply_to_entry_exit=True,
-        fx_particle_color_mode="follow_after",
-        fx_particle_color_layers="decor",
+        anim_fx_color_mode="follow_after",
+        anim_fx_color_layers="decor",
         karaoke_anim="none",
         base_color="#202020",
         fill_color="#202020",
@@ -2320,7 +2381,6 @@ def test_entry_exit_sparkle_follows_first_char_role():
         exit_fade_ms=600,
         karaoke_anim="none",
         fx_particle_color_mode="follow_after",
-        fx_apply_to_entry_exit=True,
         custom_style_schemes={"A": role_a},
         karaoke_colors=KaraokeColors(
             after=KaraokeColorState(
@@ -2333,18 +2393,14 @@ def test_entry_exit_sparkle_follows_first_char_role():
     bursts = plan_line_bursts(
         style, 0, 1000, 4000, 3900, windows, char_styles=char_styles
     )
-    sparkle = next(b for b in bursts if b["kind"] == "sparkle")
     note = next(b for b in bursts if b["kind"] == "note")
-    assert sparkle["color"] == "#40E0FF", sparkle["color"]
+    # 唱字音符跟随角色 A；入退场星光独立默认档（不再被唱字设置带动）。
     assert note["color"] == "#40E0FF"
-    # 联动关闭（默认）：入退场维持固定樱花粉默认档。
-    off = plan_line_bursts(
-        Style(
-            **{
-                **style.__dict__,
-                "fx_apply_to_entry_exit": False,
-            }
-        ),
+    assert {
+        b["color"] for b in bursts if b["kind"] == "sparkle"
+    } == {"#FFB7C5", "#FFD7E0"}
+    followed = plan_line_bursts(
+        Style(**{**style.__dict__, "anim_fx_color_mode": "follow_after"}),
         0,
         1000,
         4000,
@@ -2352,11 +2408,11 @@ def test_entry_exit_sparkle_follows_first_char_role():
         windows,
         char_styles=char_styles,
     )
-    assert {
-        b["color"] for b in off if b["kind"] == "sparkle"
-    } == {"#FFB7C5", "#FFD7E0"}
+    assert next(
+        b for b in followed if b["kind"] == "sparkle"
+    )["color"] == "#40E0FF"
     # 星光画在主文字前（2026-10 用户复调：背后看不清），音符在前。
-    assert sparkle["front"] is True
+    assert next(b for b in followed if b["kind"] == "sparkle")["front"] is True
     assert note["front"] is True
     clear_particle_paint_cache()
 
@@ -4504,7 +4560,12 @@ def test_front_particles_paint_after_ruby_layer():
             continue
         probe = index - 1
         while probe >= 0 and (
-            not lines[probe] or lines[probe].startswith("#")
+            not lines[probe]
+            or lines[probe].startswith("#")
+            or lines[probe].startswith("_paint_scanline_shape_overlay(")
+            or lines[probe] == ")"
+            or lines[probe].startswith("display_")
+            or lines[probe] in {"painter,", "layout,", "t_ms,", "style,"}
         ):
             probe -= 1
         assert lines[probe] == "paint_rubies_on_top()"

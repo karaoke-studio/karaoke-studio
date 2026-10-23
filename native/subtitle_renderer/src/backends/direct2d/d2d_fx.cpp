@@ -74,6 +74,11 @@ constexpr float kFeatherSizeSpan = 1.20f;
 constexpr float kParticleDepthTiers[] = {
     0.72f, 0.92f, 1.12f, 1.34f,
 };
+// 扫字线特效四档尺寸（镜像 particles.SCANLINE_FX_DEPTH_TIERS）：与上面
+// 音符/爱心那套既有档位刻意分开——两端旧档值不同，新档统一取这一份。
+constexpr float kScanlineDepthTiers[] = {
+    0.60f, 0.85f, 1.15f, 1.45f,
+};
 // 落雷簇状重击时刻（镜像 particles.LIGHTNING_STRIKE_BIRTHS /
 // LIGHTNING_STRIKE_JITTER）：真实闪电两三连击 + 停顿 + 补击。
 constexpr float kLightningStrikeBirths[] = {
@@ -382,6 +387,153 @@ std::vector<FxParticle> burstParticlesAt(
     }
 
     const std::uint32_t seed = burst.seed;
+
+    if (burst.kind == "scanline") {
+        // 扫字线特效（2026-10）：镜像 particles.burst_particles_at 的同名
+        // 分支。``emitMs`` 是锋面行进窗口（= 字符唱字窗），窗口尾部剩余
+        // 部分是每颗粒子的固定寿命；出生时刻越晚 → 锋面越靠右（RTL 反
+        // 过来），粒子从锋面当前位置向后方飘走，换字后旧粒子继续拖尾。
+        const int window = std::max(burst.endMs - burst.startMs, 1);
+        const int emitRaw = burst.emitMs > 0 ? burst.emitMs : window;
+        const int emit = std::clamp(emitRaw, 1, window);
+        const float tail = static_cast<float>(std::max(window - emit, 1));
+        const float emitF = static_cast<float>(emit);
+        const float behind = burst.reverse ? 1.0f : -1.0f;
+        const int total = std::max(burst.count, 1);
+        const std::string &sprite = burst.sprite;
+        constexpr float pi = 3.14159265358979323846f;
+        const auto smoothstep = [](float value) {
+            const float t = std::clamp(value, 0.0f, 1.0f);
+            return t * t * (3.0f - 2.0f * t);
+        };
+        const auto fadeOut = [&](float p, float start) {
+            return 1.0f - smoothstep(
+                (p - start) / std::max(1.0f - start, 1e-6f)
+            );
+        };
+        const auto depthCount = static_cast<std::uint32_t>(
+            sizeof(kScanlineDepthTiers) / sizeof(kScanlineDepthTiers[0])
+        );
+        out.reserve(static_cast<std::size_t>(total));
+        for (int i = 0; i < total; ++i) {
+            const std::uint32_t index = seed + static_cast<std::uint32_t>(i);
+            const float u1 = fxUnitHash(index, 1u);
+            const float u2 = fxUnitHash(index, 2u);
+            const float u3 = fxUnitHash(index, 3u);
+            const float u4 = fxUnitHash(index, 4u);
+            const float u5 = fxUnitHash(index, 5u);
+            const float birth = (
+                static_cast<float>(i) + 0.15f + 0.70f * u4
+            ) / static_cast<float>(total) * emitF;
+            const float p = (tau - birth) / tail;
+            if (p <= 0.0f || p >= 1.0f) {
+                continue;
+            }
+            float frac = birth / emitF;
+            if (burst.reverse) {
+                frac = 1.0f - frac;
+            }
+            const float spawnX = originX + (frac - 0.5f) * boxW;
+            const float spawnY = originY + (u1 - 0.5f) * boxH * 0.92f;
+            const float eased = 1.0f - (1.0f - p) * (1.0f - p);
+            const auto depthIndex = (
+                static_cast<std::uint32_t>(i) + (seed >> 5)
+            ) % depthCount;
+            const float baseSize = size * kScanlineDepthTiers[depthIndex]
+                * (0.90f + 0.20f * u2);
+            const float fadeIn = std::min(p / 0.10f, 1.0f);
+            if (sprite == "petal") {
+                // 樱花：与星光同向的左上飞行（2026-10 用户口径：要有走字
+                // 速度感），保留花瓣自旋与小扑动；不再向下飘落。
+                const float drift = behind * travel
+                    * (0.45f + 0.35f * u3) * eased;
+                const float rise = boxH * (0.20f + 0.40f * u2) * eased;
+                const float sway = std::sin(
+                    (u3 + p * (0.55f + 0.25f * u5)) * 2.0f * pi
+                ) * size * (0.20f + 0.10f * u1);
+                out.push_back(FxParticle{
+                    spawnX + drift + sway,
+                    spawnY - rise - std::abs(sway) * 0.35f,
+                    u3 * 360.0f + p * (140.0f + 200.0f * u5)
+                        * (u4 >= 0.5f ? 1.0f : -1.0f)
+                        + kFallLeanDeg,
+                    baseSize * (0.85f + 0.15f * std::sin(pi * p)),
+                    fadeIn * fadeOut(p, 0.78f),
+                });
+            } else if (sprite == "feather") {
+                const float drift = behind * travel
+                    * (0.55f + 0.35f * u3) * eased;
+                const float rise = boxH * (0.18f + 0.45f * u2) * eased;
+                const float flutter = std::sin(
+                    (u3 + p * (0.45f + 0.25f * u5)) * 2.0f * pi
+                ) * size * (0.26f + 0.12f * u1);
+                out.push_back(FxParticle{
+                    spawnX + drift + flutter,
+                    spawnY - rise - std::abs(flutter) * 0.35f,
+                    u3 * 360.0f + p * (120.0f + 200.0f * u5)
+                        * (u4 >= 0.5f ? 1.0f : -1.0f)
+                        + kFeatherLeanDeg,
+                    baseSize * (0.88f + 0.12f * std::sin(pi * p)),
+                    fadeIn * fadeOut(p, 0.82f),
+                });
+            } else if (sprite == "snow" || sprite == "snow_solid") {
+                // 雪花：同样朝左上飞；比羽毛轻，摆幅稍小、翻转更慢。
+                const float drift = behind * travel
+                    * (0.50f + 0.30f * u3) * eased;
+                const float rise = boxH * (0.20f + 0.42f * u2) * eased;
+                const float sway = std::sin(
+                    (u3 + p * (0.50f + 0.22f * u5)) * 2.0f * pi
+                ) * size * (0.24f + 0.10f * u1);
+                out.push_back(FxParticle{
+                    spawnX + drift + sway,
+                    spawnY - rise - std::abs(sway) * 0.30f,
+                    u3 * 360.0f + p * (100.0f + 180.0f * u5)
+                        * (u4 >= 0.5f ? 1.0f : -1.0f)
+                        + kSnowLeanDeg,
+                    baseSize * (0.90f + 0.10f * std::sin(pi * p)),
+                    fadeIn * fadeOut(p, 0.80f),
+                });
+            } else if (sprite == "note") {
+                const float drift = behind * travel
+                    * (0.35f + 0.30f * u3) * eased;
+                const float rise = boxH * (0.25f + 0.45f * u2) * eased;
+                const float sway = std::sin(
+                    (u3 + p * 1.1f) * 2.0f * pi
+                ) * size * 0.30f;
+                out.push_back(FxParticle{
+                    spawnX + drift + sway,
+                    spawnY - rise,
+                    (u4 - 0.5f) * 40.0f
+                        + std::sin((u5 + p * 0.8f) * 2.0f * pi) * 8.0f,
+                    baseSize * (0.85f + 0.15f * std::sin(pi * p)),
+                    fadeIn * std::pow(1.0f - p, 1.1f),
+                });
+            } else {
+                // 星光：锋面后向左上飞散 + 闪烁。
+                const float drift = behind * travel
+                    * (0.40f + 0.35f * u3) * eased;
+                const float rise = boxH * (0.18f + 0.37f * u2) * eased;
+                const float sway = std::sin(
+                    (u3 + p * 0.9f) * 2.0f * pi
+                ) * size * 0.20f;
+                const float pulse = std::sin(
+                    pi * std::min(p / 0.75f, 1.0f)
+                );
+                out.push_back(FxParticle{
+                    spawnX + drift + sway,
+                    spawnY - rise,
+                    u3 * 90.0f + p * 80.0f,
+                    baseSize * (0.45f + 0.65f * pulse),
+                    fadeIn * std::pow(1.0f - p, 0.9f)
+                        * (0.60f + 0.40f * std::sin(
+                            (p * 3.0f + u5) * 2.0f * pi
+                        )),
+                });
+            }
+        }
+        return out;
+    }
+
     int starPrevQ = -1;  // 星光族象限链：-1 = 尚无上一颗
     out.reserve(static_cast<std::size_t>(std::max(burst.count, 0)));
     for (int i = 0; i < burst.count; ++i) {
@@ -1234,6 +1386,335 @@ std::vector<FxParticle> burstParticlesAt(
         }
     }
     return out;
+}
+
+namespace {
+
+struct ColumnUnitRgb {
+    float red = 1.0f;
+    float green = 1.0f;
+    float blue = 1.0f;
+};
+
+ColumnUnitRgb columnUnitRgb(const RgbaColor &color) {
+    return ColumnUnitRgb{
+        static_cast<float>(color.red) / 255.0f,
+        static_cast<float>(color.green) / 255.0f,
+        static_cast<float>(color.blue) / 255.0f,
+    };
+}
+
+inline float smoothStep01(float value) {
+    const float v = std::clamp(value, 0.0f, 1.0f);
+    return v * v * (3.0f - 2.0f * v);
+}
+
+void writeColumnPixel(
+    std::vector<std::uint8_t> &pixels,
+    std::size_t offset,
+    float red,
+    float green,
+    float blue,
+    float alpha
+) {
+    const float safeAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    const auto channel = [](float value) {
+        return static_cast<std::uint8_t>(std::lround(
+            std::clamp(value, 0.0f, 1.0f) * 255.0f
+        ));
+    };
+    // BGRA 预乘（DXGI_FORMAT_B8G8R8A8_UNORM + PREMULTIPLIED）。
+    pixels[offset + 0] = channel(blue);
+    pixels[offset + 1] = channel(green);
+    pixels[offset + 2] = channel(red);
+    pixels[offset + 3] = channel(safeAlpha);
+}
+
+struct ColumnBubble {
+    float centerX = 0.0f;
+    float centerY = 0.0f;
+    float radiusPx = 1.0f;
+    float fade = 0.0f;
+};
+
+}  // namespace
+
+std::vector<std::uint8_t> scanlineColumnPixels(
+    const std::string &shape,
+    const RgbaColor &outer,
+    const RgbaColor &inner,
+    const RgbaColor &core,
+    const PaintStyle *fill,
+    int timeMs,
+    unsigned width,
+    unsigned height,
+    float gradientLeft,
+    float gradientWidth
+) {
+    const unsigned rasterWidth = std::max(width, 1u);
+    const unsigned rasterHeight = std::max(height, 1u);
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(rasterWidth) * rasterHeight * 4, 0
+    );
+    // 水泡改为 backends 里逐帧椭圆粒子；这里只负责「烈焰棒」。
+    if (shape != "flame") {
+        return pixels;
+    }
+    const ColumnUnitRgb outerRgb = columnUnitRgb(outer);
+    const ColumnUnitRgb innerRgb = columnUnitRgb(inner);
+    const ColumnUnitRgb coreRgb = columnUnitRgb(core);
+    const float t = static_cast<float>(timeMs) / 1000.0f;
+    const float widthF = static_cast<float>(rasterWidth);
+    const float heightF = static_cast<float>(rasterHeight);
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    bool hasGradient = false;
+    bool gradientHorizontal = false;
+    std::vector<std::pair<float, ColumnUnitRgb>> gradientStops;
+    if (fill != nullptr
+        && (fill->mode == "gradient_horizontal"
+            || fill->mode == "gradient_vertical"
+            || fill->mode == "split_vertical")
+        && fill->stops.size() >= 2) {
+        gradientHorizontal = fill->mode == "gradient_horizontal";
+        gradientStops.reserve(fill->stops.size());
+        for (const PaintStop &stop : fill->stops) {
+            gradientStops.emplace_back(
+                std::clamp(stop.position, 0.0f, 1.0f),
+                columnUnitRgb(stop.color)
+            );
+        }
+        std::sort(
+            gradientStops.begin(), gradientStops.end(),
+            [](const auto &left, const auto &right) {
+                return left.first < right.first;
+            }
+        );
+        hasGradient = gradientStops.size() >= 2;
+    }
+    const auto gradientColorAt = [&](float coord) {
+        coord = std::clamp(coord, 0.0f, 1.0f);
+        if (fill->mode == "split_vertical") {
+            std::size_t index = 0;
+            for (std::size_t i = 0; i < gradientStops.size(); ++i) {
+                if (gradientStops[i].first <= coord) {
+                    index = i;
+                }
+            }
+            return gradientStops[index].second;
+        }
+        if (coord <= gradientStops.front().first) {
+            return gradientStops.front().second;
+        }
+        if (coord >= gradientStops.back().first) {
+            return gradientStops.back().second;
+        }
+        for (std::size_t i = 1; i < gradientStops.size(); ++i) {
+            if (coord > gradientStops[i].first) {
+                continue;
+            }
+            const auto &left = gradientStops[i - 1];
+            const auto &right = gradientStops[i];
+            const float span = std::max(right.first - left.first, 1.0e-6f);
+            const float mix = (coord - left.first) / span;
+            return ColumnUnitRgb{
+                left.second.red * (1.0f - mix) + right.second.red * mix,
+                left.second.green * (1.0f - mix) + right.second.green * mix,
+                left.second.blue * (1.0f - mix) + right.second.blue * mix
+            };
+        }
+        return gradientStops.back().second;
+    };
+    const auto lightenUnit = [](const ColumnUnitRgb &color, float amount) {
+        return ColumnUnitRgb{
+            color.red + (1.0f - color.red) * amount,
+            color.green + (1.0f - color.green) * amount,
+            color.blue + (1.0f - color.blue) * amount
+        };
+    };
+
+    struct RibbonSpec {
+        int edgeLayer;
+        int centerLayer;
+        float turns;
+        float phase;
+        float amplitude;
+        float half;
+        float strength;
+    };
+    const RibbonSpec specs[4] = {
+        {0, 1, 1.85f, 0.00f, 0.46f, 0.180f, 0.92f},
+        {0, 1, 2.12f, 0.52f, 0.42f, 0.145f, 0.82f},
+        {1, 2, 1.72f, 0.24f, 0.39f, 0.105f, 0.92f},
+        {2, 2, 1.55f, 0.55f, 0.32f, 0.048f, 0.70f},
+    };
+    struct RibbonRow {
+        float center = 0.0f;
+        float half = 0.01f;
+        float front = 0.0f;
+        float back = 0.0f;
+        float flicker = 1.0f;
+        float burn = 1.0f;
+    };
+
+    for (unsigned y = 0; y < rasterHeight; ++y) {
+        const float v = (static_cast<float>(y) + 0.5f) / heightF;
+        const float vertical = smoothStep01((v - 0.03f) / 0.07f)
+            * (1.0f - smoothStep01((v - 0.94f) / 0.05f));
+        const float breath = 0.5f + 0.5f * std::sin(t * 2.8f);
+        const float ribbonScale = 0.96f + 0.08f * breath;
+        RibbonRow rows[4];
+        for (int i = 0; i < 4; ++i) {
+            const RibbonSpec &spec = specs[i];
+            const float angle = v * spec.turns * kTwoPi
+                + spec.phase * kTwoPi
+                + t * (2.0f + 0.60f * spec.turns);
+            const float depth = std::cos(angle);
+            const float turb = std::sin(v * 13.0f + t * 5.0f + spec.phase * 6.0f)
+                * std::sin(v * 7.0f - t * 2.5f + spec.phase * 3.0f);
+            rows[i].center = spec.amplitude * ribbonScale * std::sin(angle)
+                + 0.02f * turb;
+            rows[i].front = std::clamp(depth * 2.6f, 0.0f, 1.0f);
+            rows[i].back = std::clamp(-depth * 2.6f, 0.0f, 1.0f);
+            rows[i].flicker = 0.88f
+                + 0.12f * std::sin(angle * 2.0f - t * 3.1f + spec.phase * 5.0f);
+            rows[i].burn = 0.85f
+                + 0.15f * std::sin(v * 55.0f - t * 12.0f + spec.phase * 8.0f);
+            const float swell = std::sin(
+                angle * 2.0f + t * 2.3f + spec.phase * 7.0f
+            );
+            rows[i].half = std::max(
+                spec.half * ribbonScale
+                    * (0.45f + 0.55f * swell * swell)
+                    * (0.85f + 0.25f * std::abs(turb)),
+                0.008f
+            );
+        }
+
+        const float rodHalf = 0.130f + 0.018f * std::sin(v * 18.0f + t * 6.0f);
+
+        for (unsigned x = 0; x < rasterWidth; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / widthF
+                * 2.0f - 1.0f;
+            ColumnUnitRgb outerColor = outerRgb;
+            ColumnUnitRgb innerColor = innerRgb;
+            ColumnUnitRgb coreColor = coreRgb;
+            if (hasGradient) {
+                const float coord = gradientHorizontal
+                    ? gradientLeft
+                        + (u + 1.0f) * 0.5f * gradientWidth
+                    : v;
+                outerColor = gradientColorAt(coord);
+                innerColor = lightenUnit(outerColor, 0.20f);
+                coreColor = lightenUnit(outerColor, 0.50f);
+            }
+            const auto layerColor = [&](int layer) -> const ColumnUnitRgb & {
+                return layer == 0 ? outerColor
+                    : (layer == 1 ? innerColor : coreColor);
+            };
+            float rgb[3] = {0.0f, 0.0f, 0.0f};
+            float alpha = 0.0f;
+            const auto apply = [&](const ColumnUnitRgb &color, float a) {
+                const float layer = std::clamp(a, 0.0f, 1.0f);
+                rgb[0] = color.red * layer + rgb[0] * (1.0f - layer);
+                rgb[1] = color.green * layer + rgb[1] * (1.0f - layer);
+                rgb[2] = color.blue * layer + rgb[2] * (1.0f - layer);
+                alpha = layer + alpha * (1.0f - layer);
+            };
+
+            // 后半圈缎带：先画，随后被柱身遮住。
+            for (int i = 0; i < 4; ++i) {
+                if (rows[i].back <= 0.0f) {
+                    continue;
+                }
+                const float dx = (u - rows[i].center) / rows[i].half;
+                const float band = std::exp(-std::pow(dx, 4.0f));
+                const float glow = std::exp(
+                    -std::pow(std::abs(dx) / 1.5f, 2.0f)
+                ) * 0.12f;
+                const float a = std::clamp(
+                    (band + glow) * rows[i].back * rows[i].flicker
+                        * rows[i].burn * vertical * specs[i].strength * 0.38f,
+                    0.0f,
+                    1.0f
+                );
+                const float mix = std::pow(
+                    std::clamp(1.0f - std::abs(dx), 0.0f, 1.0f), 1.4f
+                );
+                const ColumnUnitRgb &edge = layerColor(specs[i].edgeLayer);
+                const ColumnUnitRgb &center = layerColor(specs[i].centerLayer);
+                const ColumnUnitRgb color{
+                    (edge.red * (1.0f - mix)
+                        + center.red * mix) * 0.40f
+                        + innerColor.red * 0.60f,
+                    (edge.green * (1.0f - mix)
+                        + center.green * mix) * 0.40f
+                        + innerColor.green * 0.60f,
+                    (edge.blue * (1.0f - mix)
+                        + center.blue * mix) * 0.40f
+                        + innerColor.blue * 0.60f
+                };
+                apply(color, a);
+            }
+
+            // 中心高亮棒由 Direct2D 的普通扫字线按字形绘制；
+            // 这里补一层无硬边的软实体光晕，给外围火圈体积感。
+            const float haloHalf = 0.210f + 0.030f * std::sin(t * 3.1f);
+            const float haloCore = std::exp(
+                -std::pow(std::abs(u) / haloHalf, 2.2f)
+            ) * vertical;
+            const float haloWide = std::exp(
+                -std::pow(std::abs(u) / (haloHalf * 2.6f), 2.0f)
+            ) * vertical;
+            const float haloAlpha = std::clamp(
+                0.32f * haloCore + 0.14f * haloWide, 0.0f, 0.70f
+            );
+            const ColumnUnitRgb haloColor{
+                innerColor.red * 0.85f + coreColor.red * 0.15f,
+                innerColor.green * 0.85f + coreColor.green * 0.15f,
+                innerColor.blue * 0.85f + coreColor.blue * 0.15f
+            };
+            apply(haloColor, haloAlpha);
+
+            // 前半圈缎带：压在柱身上。
+            for (int i = 0; i < 4; ++i) {
+                if (rows[i].front <= 0.0f) {
+                    continue;
+                }
+                const float dx = (u - rows[i].center) / rows[i].half;
+                const float band = std::exp(-std::pow(dx, 4.0f));
+                const float glow = std::exp(
+                    -std::pow(std::abs(dx) / 1.5f, 2.0f)
+                ) * 0.12f;
+                const float a = std::clamp(
+                    (band + glow) * rows[i].front * rows[i].flicker
+                        * rows[i].burn * vertical * specs[i].strength,
+                    0.0f,
+                    1.0f
+                );
+                const float mix = std::pow(
+                    std::clamp(1.0f - std::abs(dx), 0.0f, 1.0f), 1.4f
+                );
+                const ColumnUnitRgb &edge = layerColor(specs[i].edgeLayer);
+                const ColumnUnitRgb &center = layerColor(specs[i].centerLayer);
+                const ColumnUnitRgb color{
+                    edge.red * (1.0f - mix) + center.red * mix,
+                    edge.green * (1.0f - mix) + center.green * mix,
+                    edge.blue * (1.0f - mix) + center.blue * mix
+                };
+                apply(color, a);
+            }
+
+            writeColumnPixel(
+                pixels,
+                (static_cast<std::size_t>(y) * rasterWidth + x) * 4,
+                rgb[0],
+                rgb[1],
+                rgb[2],
+                alpha
+            );
+        }
+    }
+    return pixels;
 }
 
 }  // namespace krok::subtitle::native::direct2d

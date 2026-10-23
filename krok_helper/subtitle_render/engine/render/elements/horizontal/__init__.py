@@ -126,6 +126,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline impo
     band_touches_rect,
     main_scanline_front,
     map_front_through_transform,
+    paint_scanline_column,
     paint_scanline_strip,
     scanline_band_rect,
     scanline_params_for_style,

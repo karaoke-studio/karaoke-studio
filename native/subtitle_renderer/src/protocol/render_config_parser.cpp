@@ -1436,19 +1436,29 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         1,
         intValue(style, QStringLiteral("scanline_width_px"), base.scanlineWidthPx)
     );
-    base.scanlineMode = stringValue(
+    const QString requestedScanlineMode = stringValue(
         style, QStringLiteral("scanline_mode"), base.scanlineMode
     );
+    base.scanlineMode = requestedScanlineMode;
     if (base.scanlineMode != QStringLiteral("brighten")
         && base.scanlineMode != QStringLiteral("color")
         && base.scanlineMode != QStringLiteral("follow_before")
         && base.scanlineMode != QStringLiteral("follow_after")
-        && base.scanlineMode != QStringLiteral("role")) {
+        && base.scanlineMode != QStringLiteral("role")
+        && base.scanlineMode != QStringLiteral("default")) {
         base.scanlineMode = QStringLiteral("color");
+    }
+    if (base.scanlineMode == QStringLiteral("default")) {
+        // 默认颜色：保留档位，GPU 形状用它选择出厂火色/水蓝；普通高亮带
+        // 仍按纯白色带绘制。
+        base.scanlineColor = QStringLiteral("#FFFFFF");
     }
     base.scanlineColor = stringValue(
         style, QStringLiteral("scanline_color"), base.scanlineColor
     );
+    if (requestedScanlineMode == QStringLiteral("default")) {
+        base.scanlineColor = QStringLiteral("#FFFFFF");
+    }
     base.scanlineRoleName = stringValue(
         style, QStringLiteral("scanline_role_name"), QString()
     ).trimmed();
@@ -1465,6 +1475,15 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         0,
         intValue(style, QStringLiteral("scanline_glow_px"), base.scanlineGlowPx)
     );
+    const QString scanlineShape = stringValue(
+        style, QStringLiteral("scanline_shape"), base.scanlineShape
+    );
+    base.scanlineShape = (
+        scanlineShape == QStringLiteral("flame")
+        || scanlineShape == QStringLiteral("bubble")
+    )
+        ? scanlineShape
+        : QStringLiteral("band");
     base.zoomPulseCurveLevel = std::clamp(
         intValue(
             style,
@@ -1669,6 +1688,10 @@ static void applyLineStyleSection(
                 burst.emitX = burstObject.value(
                     QStringLiteral("emit_x")
                 ).toDouble(0.0);
+                // 扫字线特效的锋面发射窗口（2026-10；旧 IR 缺省 0）。
+                burst.emitMs = intValue(
+                    burstObject, QStringLiteral("emit_ms"), 0
+                );
                 burst.front = burstObject.value(
                     QStringLiteral("front")
                 ).toBool(true);

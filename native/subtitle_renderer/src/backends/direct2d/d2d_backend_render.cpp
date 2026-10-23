@@ -29,10 +29,12 @@ using Clock = direct2d::RuntimeClock;
 using direct2d::burstParticlesAt;
 using direct2d::checkHr;
 using direct2d::createPaintBrush;
+using direct2d::createScanlineColumnBitmap;
 using direct2d::createScanlineMaskBrush;
 using direct2d::elapsedMs;
 using direct2d::fallEntryLeadMs;
 using direct2d::fxSpriteForKind;
+using direct2d::fxUnitHash;
 using direct2d::FxParticle;
 using direct2d::GlowHaloStroke;
 using direct2d::kGlowEchoCopies;
@@ -43,6 +45,7 @@ using direct2d::GeoCharState;
 using direct2d::geoCharMatrix;
 using direct2d::geoCharState;
 using direct2d::kStrokeFlashAlpha;
+using direct2d::scanlineColumnPixels;
 using direct2d::kStrokeFlashMinWidthEm;
 using direct2d::kStrokeFlashMs;
 using direct2d::kStrokeFlashWidthBoost;
@@ -5033,9 +5036,35 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const bool scanlineFollowAfter = style.scanlineMode == "follow_after";
         const bool scanlineFollows = scanlineFollowBefore || scanlineFollowAfter;
         const bool scanlineRole = style.scanlineMode == "role";
-        const float scanlineAlpha = scanlineBrighten
+        float scanlineAlpha = scanlineBrighten
             ? (style.scanlineBrightness > 0.0f ? 1.0f : 0.0f)
             : 1.0f;
+        if (style.scanlineShape != "band"
+            && !line->displayWindows.empty()) {
+            const DisplayWindow &window = line->displayWindows.front();
+            int lastCharEnd = line->endMs;
+            for (const auto &ch : line->chars) {
+                lastCharEnd = std::max(lastCharEnd, ch.endMs);
+            }
+            const auto smooth = [](float value) {
+                const float progress = std::clamp(value, 0.0f, 1.0f);
+                return progress * progress * (3.0f - 2.0f * progress);
+            };
+            const float fadeIn = smooth(
+                (static_cast<float>(tMs) - window.startMs) / 160.0f
+            );
+            const int fadeOutStart = std::max(lastCharEnd, window.endMs - 220);
+            float fadeOut = 1.0f;
+            if (fadeOutStart < window.endMs && tMs > fadeOutStart) {
+                fadeOut = smooth(
+                    (window.endMs - static_cast<float>(tMs))
+                        / static_cast<float>(
+                            std::max(window.endMs - fadeOutStart, 1)
+                        )
+                );
+            }
+            scanlineAlpha *= std::min(fadeIn, fadeOut);
+        }
         const RgbaColor scanlineColorValue = style.scanlineColor;
         const float scanlineBrightness = std::clamp(
             style.scanlineBrightness, 0.0f, 1.0f
@@ -7297,7 +7326,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // (continuous feather crossfade, same contract as the Painter);
         // utopia lines keep the per-slice overlay -- a line-level mask cannot
         // follow each glyph's transformed front.
-        if (scanlineActive && scanlineAlpha > 0.0f) {
+        if (scanlineActive && scanlineAlpha > 0.0f
+            ) {
             if (scanlineMainGlow.blur != nullptr) {
                 drawScanlineGlowLayer(scanlineMainGlow);
             }
@@ -7515,6 +7545,501 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 context->PopLayer();
             }
         }
+        // 扫字线形态（烈焰棒/水泡）：独立形态替换普通高亮带。烈焰棒在
+        // 锋面处画一根发光火棒 + 火舌；水泡从锋面底部发射镂空粒子。
+        // 颜色沿用扫字线颜色方案（复用配色方案/跟随字体/提亮/单独颜色）。
+        // 烈焰棒/水泡在文字与注音全部画完后再补画，避免被 ruby 盖住。
+        const auto drawScanlineShapes = [&]() {
+        if (scanlineActive && style.scanlineShape != "band") {
+            const bool isFlame = style.scanlineShape == "flame";
+            const auto paintSolidColor = [](const PaintStyle &paint) {
+                if ((paint.mode == "gradient_horizontal"
+                     || paint.mode == "gradient_vertical"
+                     || paint.mode == "split_vertical")
+                    && !paint.stops.empty()) {
+                    std::uint64_t red = 0;
+                    std::uint64_t green = 0;
+                    std::uint64_t blue = 0;
+                    for (const PaintStop &stop : paint.stops) {
+                        red += stop.color.red;
+                        green += stop.color.green;
+                        blue += stop.color.blue;
+                    }
+                    const auto count = static_cast<std::uint64_t>(
+                        paint.stops.size()
+                    );
+                    return RgbaColor{
+                        static_cast<std::uint8_t>(red / count),
+                        static_cast<std::uint8_t>(green / count),
+                        static_cast<std::uint8_t>(blue / count),
+                        255
+                    };
+                }
+                return paint.color;
+            };
+            const auto sampleFillColor = [](const PaintStyle *fill,
+                                            float xNorm,
+                                            float yNorm,
+                                            const RgbaColor &fallback) {
+                if (fill == nullptr
+                    || (fill->mode != "gradient_horizontal"
+                        && fill->mode != "gradient_vertical"
+                        && fill->mode != "split_vertical")
+                    || fill->stops.size() < 2) {
+                    return fallback;
+                }
+                const float coord = std::clamp(
+                    fill->mode == "gradient_horizontal" ? xNorm : yNorm,
+                    0.0f,
+                    1.0f
+                );
+                const PaintStop *left = &fill->stops.front();
+                const PaintStop *right = &fill->stops.back();
+                for (const PaintStop &stop : fill->stops) {
+                    if (stop.position <= coord) {
+                        left = &stop;
+                    }
+                }
+                for (auto it = fill->stops.rbegin(); it != fill->stops.rend(); ++it) {
+                    if (it->position >= coord) {
+                        right = &*it;
+                    }
+                }
+                if (fill->mode == "split_vertical" || right->position <= left->position) {
+                    return left->color;
+                }
+                const float mix = (coord - left->position)
+                    / (right->position - left->position);
+                const auto channel = [&](std::uint8_t a, std::uint8_t b) {
+                    return static_cast<std::uint8_t>(std::lround(
+                        static_cast<float>(a) * (1.0f - mix)
+                        + static_cast<float>(b) * mix
+                    ));
+                };
+                return RgbaColor{
+                    channel(left->color.red, right->color.red),
+                    channel(left->color.green, right->color.green),
+                    channel(left->color.blue, right->color.blue),
+                    255
+                };
+            };
+            RgbaColor baseColor = style.scanlineColor;
+            const TextStyle *edgeStyle = &style;
+            int charStartMs = tMs;
+            int charEndMs = tMs;
+            bool charFound = false;
+            for (const auto &ch : line->chars) {
+                if (wipeEdge >= ch.left && wipeEdge <= ch.right) {
+                    if (ch.styleIndex >= 0
+                        && ch.styleIndex
+                            < static_cast<int>(scene.charStyles.size())) {
+                        edgeStyle = &scene.charStyles[
+                            static_cast<std::size_t>(ch.styleIndex)
+                        ];
+                    }
+                    charStartMs = ch.startMs;
+                    charEndMs = ch.endMs;
+                    charFound = true;
+                    break;
+                }
+            }
+            if (!charFound && !line->chars.empty()) {
+                // 字符间空隙沿用上一字/下一字的角色样式，避免配色跳到行样式。
+                const Impl::CachedChar *nearest = nullptr;
+                for (const auto &ch : line->chars) {
+                    if (ch.endMs <= tMs) {
+                        nearest = &ch;
+                    }
+                }
+                if (nearest == nullptr) {
+                    nearest = &line->chars.front();
+                }
+                if (nearest->styleIndex >= 0
+                    && nearest->styleIndex
+                        < static_cast<int>(scene.charStyles.size())) {
+                    edgeStyle = &scene.charStyles[
+                        static_cast<std::size_t>(nearest->styleIndex)
+                    ];
+                }
+            }
+            if (style.scanlineMode == "role") {
+                baseColor = style.scanlineRolePaint.color;
+            } else if (style.scanlineMode == "follow_before") {
+                baseColor = brightenHsvValue(
+                    paintSolidColor(edgeStyle->beforeFillPaint),
+                    style.scanlineBrightness
+                );
+            } else if (style.scanlineMode == "follow_after"
+                       || style.scanlineMode == "brighten") {
+                baseColor = brightenHsvValue(
+                    paintSolidColor(edgeStyle->afterFillPaint),
+                    style.scanlineBrightness
+                );
+            }
+            const PaintStyle *shapeFill = nullptr;
+            if (style.scanlineMode == "role") {
+                shapeFill = &style.scanlineRolePaint;
+            } else if (style.scanlineMode == "follow_before") {
+                shapeFill = &edgeStyle->beforeFillPaint;
+            } else if (style.scanlineMode == "follow_after"
+                       || style.scanlineMode == "brighten") {
+                shapeFill = &edgeStyle->afterFillPaint;
+            }
+            const auto lighten = [](const RgbaColor &color, float amount) {
+                const auto mix = [amount](std::uint8_t channel) {
+                    const float unit = static_cast<float>(channel) / 255.0f;
+                    return static_cast<std::uint8_t>(std::lround(
+                        std::clamp(unit + (1.0f - unit) * amount, 0.0f, 1.0f)
+                            * 255.0f
+                    ));
+                };
+                return RgbaColor{
+                    mix(color.red), mix(color.green), mix(color.blue),
+                    color.alpha
+                };
+            };
+            bool rolePalette = false;
+            RgbaColor roleOuter{};
+            RgbaColor roleInner{};
+            if (style.scanlineMode == "role") {
+                const std::string &fillMode = style.scanlineRolePaint.mode;
+                if ((fillMode == "gradient_horizontal"
+                     || fillMode == "gradient_vertical"
+                     || fillMode == "split_vertical")
+                    && style.scanlineRolePaint.stops.size() >= 2) {
+                    const PaintStop *first = &style.scanlineRolePaint.stops[0];
+                    const PaintStop *last = first;
+                    for (const PaintStop &stop : style.scanlineRolePaint.stops) {
+                        if (stop.position < first->position) {
+                            first = &stop;
+                        }
+                        if (stop.position > last->position) {
+                            last = &stop;
+                        }
+                    }
+                    roleOuter = first->color;
+                    roleInner = last->color;
+                    rolePalette = true;
+                }
+            }
+            RgbaColor outerColor = rolePalette ? roleOuter : baseColor;
+            RgbaColor innerColor = rolePalette
+                ? roleInner
+                : lighten(baseColor, isFlame ? 0.40f : 0.55f);
+            RgbaColor coreColor = rolePalette
+                ? lighten(roleInner, 0.70f)
+                : (isFlame
+                    ? lighten(baseColor, 0.80f)
+                    : RgbaColor{255, 255, 255, 255});
+            if (!rolePalette && style.scanlineMode == "default") {
+                if (isFlame) {
+                    outerColor = RgbaColor{232, 58, 18, 255};
+                    innerColor = RgbaColor{255, 176, 46, 255};
+                    coreColor = RgbaColor{255, 241, 184, 255};
+                } else {
+                    outerColor = RgbaColor{143, 211, 255, 255};
+                    innerColor = RgbaColor{242, 248, 255, 255};
+                    coreColor = RgbaColor{255, 255, 255, 255};
+                }
+            }
+            const float fontPx = std::max(edgeStyle->fontSize, 1.0f);
+            const float lineHeight = std::max(
+                line->bounds.bottom - line->bounds.top, 1.0f
+            );
+            const auto shapeSmoothStep = [](float value) {
+                const float progress = std::clamp(value, 0.0f, 1.0f);
+                return progress * progress * (3.0f - 2.0f * progress);
+            };
+            float shapeFade = 1.0f;
+            int shapeStartMs = line->startMs;
+            int shapeEndMs = line->endMs;
+            if (!line->displayWindows.empty()) {
+                shapeStartMs = line->displayWindows.front().startMs;
+                shapeEndMs = line->displayWindows.front().endMs;
+            }
+            int lastCharEndMs = line->endMs;
+            for (const auto &ch : line->chars) {
+                lastCharEndMs = std::max(lastCharEndMs, ch.endMs);
+            }
+            if (shapeEndMs > shapeStartMs) {
+                const float fadeIn = shapeSmoothStep(
+                    (static_cast<float>(tMs) - shapeStartMs) / 160.0f
+                );
+                const int fadeOutStart = std::max(
+                    lastCharEndMs, shapeEndMs - 220
+                );
+                float fadeOut = 1.0f;
+                if (fadeOutStart < shapeEndMs
+                    && tMs > fadeOutStart) {
+                    fadeOut = shapeSmoothStep(
+                        (shapeEndMs - static_cast<float>(tMs))
+                            / static_cast<float>(
+                                std::max(shapeEndMs - fadeOutStart, 1)
+                            )
+                    );
+                }
+                shapeFade = std::min(fadeIn, fadeOut);
+            }
+            const float shapeOpacity = std::clamp(
+                globalOpacity * shapeFade, 0.0f, 1.0f
+            );
+            float rubyTop = 1.0e30f;
+            for (const Impl::CachedRuby &ruby : line->rubies) {
+                if (ruby.bounds.bottom > ruby.bounds.top) {
+                    rubyTop = std::min(rubyTop, ruby.bounds.top);
+                }
+            }
+            const float targetTop = rubyTop < 1.0e29f
+                ? rubyTop - lineHeight * 0.18f
+                : 0.0f;
+            if (style.scanlineShape == "bubble") {
+                // 水泡：从锋面底部连续冒泡；中心一条浅蓝光柱延伸到注音层，
+                // 偶数号水泡在光柱后、奇数号在前，形成前后遮挡。
+                const float bubbleT = static_cast<float>(tMs) / 1000.0f;
+                const float bottom = line->bounds.bottom + lineHeight * 0.01f;
+                float rise = lineHeight * 1.55f;
+                const float spread = std::max(
+                    lineHeight * 0.24f, fontPx * 0.22f
+                );
+                float pillarHeight = lineHeight * 1.65f;
+                const float centerY0 = (
+                    line->bounds.top + line->bounds.bottom
+                ) * 0.5f;
+                float pillarTop = centerY0 - pillarHeight * 0.5f
+                    - pillarHeight * 0.12f;
+                const float pillarBottom = pillarTop + pillarHeight;
+                if (targetTop < pillarTop && targetTop < 1.0e29f) {
+                    pillarTop = targetTop;
+                    pillarHeight = std::max(
+                        pillarBottom - pillarTop, lineHeight * 1.65f
+                    );
+                }
+                rise = std::max(rise, bottom - pillarTop + fontPx * 0.10f);
+                const float pillarWidth = std::max(
+                    fontPx * 0.42f, lineHeight * 0.22f
+                );
+                const auto unit = [](std::uint8_t channel) {
+                    return static_cast<float>(channel) / 255.0f;
+                };
+                const D2D1_COLOR_F bubbleBase = D2D1::ColorF(
+                    unit(outerColor.red), unit(outerColor.green),
+                    unit(outerColor.blue), 1.0f
+                );
+                const D2D1_COLOR_F bubbleEdge = D2D1::ColorF(
+                    unit(innerColor.red), unit(innerColor.green),
+                    unit(innerColor.blue), 1.0f
+                );
+                const D2D1_COLOR_F bubbleHighlight = D2D1::ColorF(
+                    unit(coreColor.red), unit(coreColor.green),
+                    unit(coreColor.blue), 1.0f
+                );
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleFill;
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleRim;
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleHi;
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bubbleCore;
+                Microsoft::WRL::ComPtr<ID2D1GradientStopCollection>
+                    pillarStops;
+                Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> pillarBrush;
+                context->CreateSolidColorBrush(bubbleBase, &bubbleFill);
+                context->CreateSolidColorBrush(bubbleEdge, &bubbleRim);
+                context->CreateSolidColorBrush(bubbleHighlight, &bubbleHi);
+                context->CreateSolidColorBrush(bubbleEdge, &bubbleCore);
+                const D2D1_GRADIENT_STOP pillarGradientStops[5] = {
+                    {0.00f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.0f)},
+                    {0.14f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.18f)},
+                    {0.50f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.50f)},
+                    {0.86f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.18f)},
+                    {1.00f, D2D1::ColorF(bubbleBase.r, bubbleBase.g, bubbleBase.b, 0.0f)},
+                };
+                context->CreateGradientStopCollection(
+                    pillarGradientStops, 5, &pillarStops
+                );
+                D2D1_MATRIX_3X2_F previousTransform =
+                    D2D1::Matrix3x2F::Identity();
+                context->GetTransform(&previousTransform);
+                context->SetTransform(realizationBaseTransform);
+                context->CreateLinearGradientBrush(
+                    D2D1::LinearGradientBrushProperties(
+                        D2D1::Point2F(wipeEdge, pillarTop),
+                        D2D1::Point2F(wipeEdge, pillarTop + pillarHeight)
+                    ),
+                    pillarStops.Get(),
+                    &pillarBrush
+                );
+
+                const auto drawBubble = [&](int i, bool inFront) {
+                    const auto index = static_cast<std::uint32_t>(i);
+                    const float phase = fxUnitHash(index, 601u);
+                    const float speed = 0.80f
+                        + 0.50f * fxUnitHash(index, 602u);
+                    const float cycle = std::fmod(
+                        phase + bubbleT * speed, 1.0f
+                    );
+                    const float fade = std::min(cycle / 0.08f, 1.0f)
+                        * std::min((1.0f - cycle) / 0.20f, 1.0f);
+                    if (fade <= 0.0f) {
+                        return;
+                    }
+                    const float depthAlpha = inFront ? 1.0f : 0.58f;
+                    const float depthSize = inFront ? 1.0f : 0.88f;
+                    const float x = wipeEdge
+                        + (fxUnitHash(index, 603u) - 0.5f) * spread * 2.0f
+                        + std::sin(
+                            bubbleT * 2.6f + phase * 6.2831853f
+                        ) * fontPx * 0.045f;
+                    const float y = bottom - cycle * rise;
+                    const float size = fontPx * (
+                        0.060f + 0.060f * fxUnitHash(index, 604u)
+                    ) * (0.65f + 0.45f * cycle) * depthSize;
+                    if (size <= 0.5f) {
+                        return;
+                    }
+                    const float lineWidth = std::max(
+                        line->bounds.right - line->bounds.left, 1.0f
+                    );
+                    const float lineHeightValue = std::max(
+                        line->bounds.bottom - line->bounds.top, 1.0f
+                    );
+                    const RgbaColor bubbleSample = sampleFillColor(
+                        shapeFill,
+                        (x - line->bounds.left) / lineWidth,
+                        (y - line->bounds.top) / lineHeightValue,
+                        outerColor
+                    );
+                    const RgbaColor bubbleSampleRim = lighten(bubbleSample, 0.30f);
+                    const RgbaColor bubbleSampleHi = lighten(bubbleSample, 0.60f);
+                    const float alpha = std::clamp(
+                        shapeOpacity * fade * depthAlpha, 0.0f, 1.0f
+                    );
+                    bubbleFill->SetColor(D2D1::ColorF(
+                        unit(bubbleSample.red), unit(bubbleSample.green),
+                        unit(bubbleSample.blue), alpha * 0.27f
+                    ));
+                    bubbleRim->SetColor(D2D1::ColorF(
+                        unit(bubbleSampleRim.red), unit(bubbleSampleRim.green),
+                        unit(bubbleSampleRim.blue), alpha
+                    ));
+                    context->FillEllipse(
+                        D2D1::Ellipse(D2D1::Point2F(x, y), size, size),
+                        bubbleFill.Get()
+                    );
+                    context->DrawEllipse(
+                        D2D1::Ellipse(D2D1::Point2F(x, y), size, size),
+                        bubbleRim.Get(), std::max(0.8f, size * 0.10f)
+                    );
+                    bubbleHi->SetColor(D2D1::ColorF(
+                        unit(bubbleSampleHi.red), unit(bubbleSampleHi.green),
+                        unit(bubbleSampleHi.blue), alpha
+                    ));
+                    context->FillEllipse(
+                        D2D1::Ellipse(
+                            D2D1::Point2F(
+                                x - size * 0.32f, y - size * 0.32f
+                            ),
+                            size * 0.18f, size * 0.18f
+                        ),
+                        bubbleHi.Get()
+                    );
+                };
+
+                const auto drawPillar = [&]() {
+                    const float layerOpacities[3] = {0.35f, 0.55f, 0.45f};
+                    const float layerScales[3] = {1.0f, 0.58f, 0.24f};
+                    const float pillarPulse = 0.90f
+                        + 0.10f * std::sin(bubbleT * 3.2f);
+                    for (int layer = 0; layer < 3; ++layer) {
+                        const float width = std::max(
+                            pillarWidth * layerScales[layer] * pillarPulse,
+                            2.0f
+                        );
+                        pillarBrush->SetOpacity(std::clamp(
+                            shapeOpacity * layerOpacities[layer],
+                            0.0f, 1.0f
+                        ));
+                        const D2D1_RECT_F rect = D2D1::RectF(
+                            wipeEdge - width * 0.5f,
+                            pillarTop,
+                            wipeEdge + width * 0.5f,
+                            pillarTop + pillarHeight
+                        );
+                        context->FillRoundedRectangle(
+                            D2D1::RoundedRect(
+                                rect, width * 0.5f, width * 0.5f
+                            ),
+                            pillarBrush.Get()
+                        );
+                    }
+                };
+
+                for (int i = 0; i < 18; i += 2) {
+                    drawBubble(i, false);
+                }
+                drawPillar();
+                // 中心高亮棒由普通扫字线带按字形绘制；这里只保留外围水泡/光柱。
+                for (int i = 1; i < 18; i += 2) {
+                    drawBubble(i, true);
+                }
+                context->SetTransform(previousTransform);
+            } else {
+                // 烈焰棒：细长发光棒 + 两侧火舌；棒心在扫字线锋面。
+                const float baseWidth = std::max(
+                    style.scanlineWidth * 4.0f, lineHeight * 0.70f
+                );
+                const float baseHeight = std::max(
+                    lineHeight * 1.65f, baseWidth * 2.7f
+                );
+                // 呼吸只改缎带绕柱半径；柱体向上覆盖注音最外沿。
+                const float columnWidth = baseWidth;
+                float columnHeight = baseHeight;
+                const float centerY = (
+                    line->bounds.top + line->bounds.bottom
+                ) * 0.5f;
+                float top = centerY - columnHeight * 0.5f
+                    - columnHeight * 0.12f;
+                const float bottom = top + columnHeight;
+                if (targetTop < top && targetTop < 1.0e29f) {
+                    top = targetTop;
+                    columnHeight = std::max(bottom - top, baseHeight);
+                }
+                const float left = wipeEdge - columnWidth * 0.5f;
+                constexpr std::uint32_t kColumnRasterWidth = 72;
+                constexpr std::uint32_t kColumnRasterHeight = 108;
+                const std::vector<std::uint8_t> columnPixels =
+                    scanlineColumnPixels(
+                        style.scanlineShape, outerColor, innerColor, coreColor,
+                        shapeFill, tMs, kColumnRasterWidth, kColumnRasterHeight,
+                        (left - line->bounds.left) / std::max(
+                            line->bounds.right - line->bounds.left, 1.0f
+                        ),
+                        columnWidth / std::max(
+                            line->bounds.right - line->bounds.left, 1.0f
+                        )
+                    );
+                if (!columnPixels.empty()) {
+                    auto columnBitmap = createScanlineColumnBitmap(
+                        context, columnPixels.data(), kColumnRasterWidth,
+                        kColumnRasterHeight, device_
+                    );
+                    if (columnBitmap) {
+                        D2D1_MATRIX_3X2_F previousTransform =
+                            D2D1::Matrix3x2F::Identity();
+                        context->GetTransform(&previousTransform);
+                        context->SetTransform(realizationBaseTransform);
+                        const D2D1_RECT_F destination = D2D1::RectF(
+                            left, top, left + columnWidth, top + columnHeight
+                        );
+                        context->DrawBitmap(
+                            columnBitmap.Get(),
+                            &destination,
+                            std::clamp(shapeOpacity, 0.0f, 1.0f),
+                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
+                        );
+                        context->SetTransform(previousTransform);
+                    }
+                }
+            }
+        }
+        };
         const auto drawRubyGlyphLayers = [&](std::size_t rubyIndex,
                                                std::size_t index,
                                                ID2D1Brush *fill,
@@ -7852,7 +8377,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
 
         // Ruby uses the same inner-only feathering as the main text.
-        if (scanlineActive && scanlineAlpha > 0.0f) {
+        if (scanlineActive && scanlineAlpha > 0.0f
+            ) {
             if (scanlineRubyGlow.blur != nullptr) {
                 drawScanlineGlowLayer(scanlineRubyGlow);
             }
@@ -7970,6 +8496,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
+        // 文字与注音全部画完后再补画烈焰棒/水泡，确保盖在 ruby 之上。
+        drawScanlineShapes();
         restoreRealizationBaseTransform();
         if (signalState.visible
             && (style.volumeEnabled ? style.volumeOpacity : style.litOpacity) > 0.0f

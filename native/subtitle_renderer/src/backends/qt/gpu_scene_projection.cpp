@@ -220,6 +220,8 @@ void applyGpuResolvedStyle(
         target.scanlineRolePaint = gpuPaint(
             source.scanlineRolePaint, source.scanlineColor
         );
+    } else if (source.scanlineMode == QStringLiteral("default")) {
+        target.scanlineMode = "default";
     } else {
         target.scanlineMode = "color";
     }
@@ -230,6 +232,12 @@ void applyGpuResolvedStyle(
     target.scanlineGlowRadius = static_cast<float>(
         std::max(source.scanlineGlowPx, 0) * scale
     );
+    target.scanlineShape = (
+        source.scanlineShape == QStringLiteral("flame")
+        || source.scanlineShape == QStringLiteral("bubble")
+    )
+        ? source.scanlineShape.toStdString()
+        : "band";
     // 整字放大缓动档位：无量纲，不随布局缩放。
     target.zoomPulseCurveLevel = std::clamp(source.zoomPulseCurveLevel, 0, 5);
 
@@ -760,6 +768,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 burst.sizePx = static_cast<float>(source.sizePx * scale);
                 burst.travelPx = static_cast<float>(source.travelPx * scale);
                 burst.emitX = static_cast<float>(source.emitX);
+                burst.emitMs = source.emitMs;
                 burst.front = source.front;
                 burst.reverse = source.reverse;
                 burst.sweep = source.sweep;

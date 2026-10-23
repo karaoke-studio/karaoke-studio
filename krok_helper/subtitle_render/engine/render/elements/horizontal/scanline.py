@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import numpy as np
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QTransform
+from PyQt6.QtGui import (
+    QColor,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QTransform,
+)
 
 from krok_helper.subtitle_render.domain.models import (
     SCANLINE_GLOBAL_ROLE_KEY,
@@ -24,6 +32,9 @@ from krok_helper.subtitle_render.engine.style.style_semantics import (
 from krok_helper.subtitle_render.engine.render.elements.horizontal.wipe import (
     fill_clip_band,
     segment_fill_ratio,
+)
+from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+    fx_unit_hash,
 )
 from krok_helper.subtitle_render.engine.render.effects import (
     main_stroke2_width,
@@ -46,6 +57,28 @@ class ScanlineParams:
     role_fill: PaintFill | None = None
     """``role`` 模式解析出的来源「走字后-主文字」填充；整条带（含描边）
     都用这一份填充重绘。``None`` = 回退单色。"""
+
+    shape_fill: PaintFill | None = None
+    """柱体形态实际使用的填充（跟随字体/复用配色方案时可能是渐变/拼色）。
+
+    普通高亮带按 fill 重绘；柱体把渐变烘成逐像素颜色场，而不是取平均色。"""
+
+    shape: str = "band"
+    """锋面形态：``band`` 普通高亮带；``flame`` 烈焰棒；``bubble`` 水泡。
+
+    烈焰棒把扫字线本体变成发光火棒并从两侧喷火舌；水泡从锋面底部发射
+    镂空水泡。两者都是独立形态并替换普通高亮带。"""
+
+    time_ms: int = 0
+    """当前帧时间（ms）：烈焰棒图样/水泡粒子动画用；普通高亮带忽略。"""
+
+    column_growth: float = 1.0
+    """柱体生长进度（0~1）：按当前字符唱字窗已过 180ms 计算，柱体从中心
+    由小长大；普通高亮带忽略。"""
+
+    @property
+    def is_column_shape(self) -> bool:
+        return self.shape in {"flame", "bubble"}
 
     @property
     def half_width(self) -> float:
@@ -101,6 +134,19 @@ def scanline_role_fill(style: Style) -> PaintFill | None:
     return effective_karaoke_colors(scheme).after.text
 
 
+def scanline_shape_fill(style: Style) -> PaintFill | None:
+    """柱体要使用的实际填充（保留渐变/拼色，不折平均色）。"""
+
+    mode = str(getattr(style, "scanline_mode", "") or "")
+    if mode == "role":
+        return scanline_role_fill(style)
+    if mode in {"follow_before", "follow_after", "brighten"}:
+        colors = effective_karaoke_colors(style)
+        state = colors.before if mode == "follow_before" else colors.after
+        return state.text
+    return None
+
+
 def scanline_params_for_style(style: Style) -> ScanlineParams:
     """Return the scan-line parameters carried by one style."""
 
@@ -108,6 +154,7 @@ def scanline_params_for_style(style: Style) -> ScanlineParams:
         style.scanline_mode
         if style.scanline_mode
         in {
+            "default",
             "color",
             "brighten",
             "follow_before",
@@ -116,13 +163,25 @@ def scanline_params_for_style(style: Style) -> ScanlineParams:
         }
         else "color"
     )
+    color = (
+        "#FFFFFF"
+        if style.scanline_mode == "default"
+        else (style.scanline_color or "#FFFFFF")
+    )
+    shape = (
+        style.scanline_shape
+        if getattr(style, "scanline_shape", "band") in {"band", "flame", "bubble"}
+        else "band"
+    )
     return ScanlineParams(
         width_px=max(float(style.scanline_width_px), 1.0),
-        color=style.scanline_color or "#FFFFFF",
+        color=color,
         glow_px=max(int(style.scanline_glow_px), 0),
         mode=mode,
         brightness=min(max(int(style.scanline_brightness_pct), 0), 100) / 100.0,
         role_fill=scanline_role_fill(style),
+        shape_fill=scanline_shape_fill(style),
+        shape=shape,
     )
 
 
@@ -292,6 +351,875 @@ def _state_clip(
     )
 
 
+SCANLINE_COLUMN_WIDTH = 72
+"""烈焰棒程序化图样的内部栅格宽度（px，绘制时等比缩放到锋面尺寸）。
+
+72×108 在目标尺寸下已足够细腻；降低栅格是为了让 60fps 预览/导出时
+逐帧生成与纹理上传的 CPU/GPU 成本可控（128×192 的逐帧 numpy 生成
+在单行上就要 ~15ms，几乎吃掉整帧预算）。
+"""
+
+SCANLINE_COLUMN_HEIGHT = 108
+"""烈焰棒程序化图样的内部栅格高度（px）。"""
+
+SCANLINE_BUBBLE_COUNT = 18
+"""旧柱状图样里的气泡数（兼容保留；生产水泡改为逐帧椭圆粒子）。"""
+
+
+def _qcolor_rgb(value: str) -> tuple[float, float, float]:
+    color = QColor(value)
+    if not color.isValid():
+        color = QColor("#FFFFFF")
+    return (color.redF(), color.greenF(), color.blueF())
+
+
+def _lighten_rgb(
+    rgb: tuple[float, float, float], amount: float
+) -> tuple[float, float, float]:
+    amount = min(max(float(amount), 0.0), 1.0)
+    return tuple(channel + (1.0 - channel) * amount for channel in rgb)
+
+
+def _rgb_to_hex(rgb: tuple[float, float, float]) -> str:
+    return QColor.fromRgbF(
+        min(max(rgb[0], 0.0), 1.0),
+        min(max(rgb[1], 0.0), 1.0),
+        min(max(rgb[2], 0.0), 1.0),
+    ).name()
+
+
+def _representative_fill_color(fill: PaintFill) -> str:
+    """把渐变/拼色/图片填充折算成一个代表色（烈焰棒/水泡的基色）。"""
+
+    stops = fill.gradient_stops or fill.split_stops
+    if len(stops) >= 2:
+        red = sum(QColor(color).redF() for _position, color in stops) / len(stops)
+        green = sum(QColor(color).greenF() for _position, color in stops) / len(stops)
+        blue = sum(QColor(color).blueF() for _position, color in stops) / len(stops)
+        return _rgb_to_hex((red, green, blue))
+    return fill.color or "#FFFFFF"
+
+
+def _fill_endpoint_palette(
+    fill: PaintFill,
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]] | None:
+    """把渐变/拼色的首尾色映射成柱体的外沿/内焰/火芯三色。
+
+    单色和图片填充返回 None，继续走代表色逻辑；图片暂不支持把纹理
+    采样进程序化柱体，只能取平均色。
+    """
+
+    if fill.mode not in {
+        "gradient_horizontal",
+        "gradient_vertical",
+        "split_vertical",
+    }:
+        return None
+    stops = [
+        (float(position), str(color))
+        for position, color in (fill.gradient_stops or fill.split_stops)
+        if QColor(str(color)).isValid()
+    ]
+    if len(stops) < 2:
+        return None
+    stops.sort(key=lambda item: item[0])
+    outer = _qcolor_rgb(stops[0][1])
+    inner = _qcolor_rgb(stops[-1][1])
+    return (outer, inner, _lighten_rgb(inner, 0.70))
+
+
+def scanline_column_base_color(
+    params: ScanlineParams,
+    colors: KaraokeColors | None = None,
+) -> str:
+    """解析烈焰棒/水泡的基色（沿用扫字线的颜色方案）。
+
+    ``role`` 取来源「走字后-主文字」填充的代表色；``brighten`` / 跟随字体
+    取当前行实际配色的走字后/走字前文字色并应用亮度提升；``color`` 用单独
+    颜色。与普通高亮带的取色口径一致。
+    """
+
+    if params.is_role and params.role_fill is not None:
+        return _representative_fill_color(params.role_fill)
+    state: KaraokeColorState | None = None
+    if colors is not None:
+        if params.mode == "follow_before":
+            state = colors.before
+        elif params.mode in {"follow_after", "brighten"}:
+            state = colors.after
+    if state is not None:
+        # 与普通粒子同口径：渐变/拼色折算成平均实色，而不是只读
+        # PaintFill.color（那只是渐变的一个端点/旧字段）。
+        fill = state.text
+        base_color = (
+            _representative_fill_color(fill)
+            if fill.mode
+            in {"gradient_horizontal", "gradient_vertical", "split_vertical"}
+            else fill.color
+        )
+        return _brighten_color_hsv(base_color, params.brightness)
+    return params.color
+
+
+def _scanline_column_palette(
+    params: ScanlineParams,
+    colors: KaraokeColors | None = None,
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    """返回 (外沿/环, 内焰/填充, 火芯/高光) 三个 RGB 浮点色。
+
+    单独颜色且仍是默认白时使用主题默认（火焰=标准火色阶、气泡=水蓝高光）；
+    其它情况从扫字线颜色方案解析出的基色推导，保证「复用配色方案」等档位
+    能直接改柱体颜色。
+    """
+
+    base = scanline_column_base_color(params, colors)
+    if params.mode == "default":
+        if params.shape == "flame":
+            return (
+                _qcolor_rgb("#E83A12"),
+                _qcolor_rgb("#FFB02E"),
+                _qcolor_rgb("#FFF1B8"),
+            )
+        return (
+            _qcolor_rgb("#8FD3FF"),
+            _qcolor_rgb("#F2F8FF"),
+            _qcolor_rgb("#FFFFFF"),
+        )
+    if params.is_role and params.role_fill is not None:
+        endpoint_palette = _fill_endpoint_palette(params.role_fill)
+        if endpoint_palette is not None:
+            return endpoint_palette
+    base_rgb = _qcolor_rgb(base)
+    if params.shape == "flame":
+        return (
+            base_rgb,
+            _lighten_rgb(base_rgb, 0.40),
+            _lighten_rgb(base_rgb, 0.80),
+        )
+    return (
+        base_rgb,
+        _lighten_rgb(base_rgb, 0.55),
+        _lighten_rgb(base_rgb, 0.85),
+    )
+
+
+def render_scanline_column_image(
+    params: ScanlineParams,
+    colors: KaraokeColors | None = None,
+) -> QImage:
+    """旧柱状图样（兼容保留）。
+
+    生产路径已改为：烈焰棒用 :func:`render_scanline_rod_image`，水泡用
+    :func:`paint_scanline_bubbles` 逐帧发射椭圆粒子。本函数仅供旧测试/
+    外部调用回看历史图样，不再参与实际绘制。
+    """
+
+    width = SCANLINE_COLUMN_WIDTH
+    height = SCANLINE_COLUMN_HEIGHT
+    outer, inner, core = _scanline_column_palette(params, colors)
+    outer_rgb = np.asarray(outer, dtype=np.float32)
+    inner_rgb = np.asarray(inner, dtype=np.float32)
+    core_rgb = np.asarray(core, dtype=np.float32)
+    u = (np.arange(width, dtype=np.float32) + 0.5) / width * 2.0 - 1.0
+    v = (np.arange(height, dtype=np.float32) + 0.5) / height
+    uu = np.broadcast_to(u, (height, width))
+    vv = np.broadcast_to(v[:, None], (height, width))
+    t = float(params.time_ms) / 1000.0
+
+    def smoothstep_array(value):
+        progress = np.clip(value, 0.0, 1.0)
+        return progress * progress * (3.0 - 2.0 * progress)
+
+    if params.shape == "flame":
+        body_width = 0.50 + 0.06 * math.sin(t * 1.9)
+        envelope = smoothstep_array((vv - 0.06) / 0.22) * (
+            1.0 - smoothstep_array((vv - 0.86) / 0.16)
+        )
+        body = np.clip(1.0 - np.abs(uu) / body_width, 0.0, 1.0) ** 1.1
+        body = body * envelope * (0.72 + 0.28 * np.sin(t * 5.0 + vv * 7.0))
+        outer_alpha = np.clip(body * 0.55, 0.0, 1.0)
+        # 5 条火舌：各自有出生相位/速度/宽度，逐帧生长并左右摆动。
+        for index in range(5):
+            phase = fx_unit_hash(index, 201)
+            base_x = (fx_unit_hash(index, 203) - 0.5) * 0.85
+            wobble = 0.045 * math.sin(
+                t * (1.3 + 0.6 * fx_unit_hash(index, 206))
+                + phase * 2.0 * math.pi
+            )
+            center_x = base_x + wobble
+            lobe_height = (
+                0.34 + 0.38 * fx_unit_hash(index, 204)
+            ) * (
+                0.78
+                + 0.22 * math.sin(
+                    t * (0.8 + 0.5 * fx_unit_hash(index, 202))
+                    + phase * 2.0 * math.pi
+                )
+            )
+            lobe_width = 0.28 + 0.16 * fx_unit_hash(index, 205)
+            tip = 0.72 - lobe_height
+            progress = np.clip(
+                (0.72 - vv) / max(lobe_height, 1e-3), 0.0, 1.0
+            )
+            half_width = lobe_width * np.sqrt(progress) + 0.008
+            distance = np.abs(uu - center_x) / half_width
+            lobe = np.clip(1.0 - distance, 0.0, 1.0) ** 1.35
+            lobe = lobe * np.clip((vv - tip) / 0.04, 0.0, 1.0) * (
+                1.0 - np.clip((vv - 0.72) / 0.05, 0.0, 1.0)
+            )
+            lobe = lobe * (
+                0.82
+                + 0.18 * np.sin(
+                    t * (5.0 + 3.0 * fx_unit_hash(index, 207))
+                    + phase * 2.0 * math.pi
+                    + vv * 9.0
+                )
+            )
+            outer_alpha = np.maximum(outer_alpha, lobe * 0.85)
+        core_width = 0.24 + 0.03 * math.sin(t * 2.3)
+        core_mask = np.clip(1.0 - np.abs(uu) / core_width, 0.0, 1.0) ** 1.2
+        core_mask = core_mask * envelope
+        inner_alpha = np.maximum(body * 0.75, core_mask * 0.90)
+        core_alpha = np.maximum(body * 0.50, core_mask * 0.95) * np.clip(
+            (0.86 - vv) / 0.25, 0.0, 1.0
+        )
+        rgb = np.broadcast_to(outer_rgb, (height, width, 3)).copy()
+        alpha = np.clip(outer_alpha, 0.0, 1.0)
+        for layer_color, layer_alpha in (
+            (inner_rgb, inner_alpha),
+            (core_rgb, core_alpha),
+        ):
+            layer = np.clip(layer_alpha, 0.0, 1.0)
+            rgb = layer_color * layer[..., None] + rgb * (1.0 - layer[..., None])
+            alpha = layer + alpha * (1.0 - layer)
+    else:
+        body_width = 0.34 + 0.04 * math.sin(t * 2.4)
+        envelope = np.clip((vv - 0.02) / 0.12, 0.0, 1.0) * (
+            1.0 - np.clip((vv - 0.90) / 0.10, 0.0, 1.0)
+        )
+        body = np.clip(1.0 - np.abs(uu) / body_width, 0.0, 1.0) ** 1.2
+        body = body * envelope * (0.18 + 0.06 * np.sin(t * 4.0))
+        core_width = 0.07 + 0.02 * math.sin(t * 3.1)
+        core_mask = np.clip(1.0 - np.abs(uu) / core_width, 0.0, 1.0) ** 1.5
+        core_mask = core_mask * envelope * (0.35 + 0.15 * np.sin(t * 5.0))
+        rgb = np.broadcast_to(inner_rgb, (height, width, 3)).copy()
+        alpha = np.clip(body, 0.0, 1.0)
+        for index in range(SCANLINE_BUBBLE_COUNT):
+            phase = fx_unit_hash(index, 301)
+            speed = 0.30 + 0.30 * fx_unit_hash(index, 302)
+            base_x = (fx_unit_hash(index, 303) - 0.5) * 0.60
+            age = math.fmod(phase + t * speed, 1.0)
+            center_y = 0.72 - age * 0.68
+            center_x = base_x + 0.035 * math.sin(
+                t * 1.8 + phase * 2.0 * math.pi
+            )
+            fade = min(age / 0.08, 1.0) * min((1.0 - age) / 0.18, 1.0)
+            if fade <= 0.0:
+                continue
+            radius = 0.09 + 0.10 * fx_unit_hash(index, 304)
+            grow = 0.7 + 0.5 * min(age / 0.25, 1.0)
+            radius_px = max(radius * width * grow, 1.0)
+            dx = (uu - center_x) * (width * 0.5)
+            dy = (vv - center_y) * height
+            distance = np.sqrt(dx * dx + dy * dy) / radius_px
+            ring = np.exp(-(((distance - 0.82) / 0.11) ** 2))
+            fill = np.clip(1.0 - distance, 0.0, 1.0) ** 1.5 * 0.22
+            highlight = (
+                np.exp(
+                    -(
+                        (
+                            (dx + 0.32 * radius_px) ** 2
+                            + (dy + 0.32 * radius_px) ** 2
+                        )
+                        / (0.18 * radius_px) ** 2
+                    )
+                )
+                * 0.90
+            )
+            weights = (ring * 0.90 + fill + highlight) * fade
+            bubble_alpha = np.clip(weights, 0.0, 1.0)
+            if bubble_alpha.max() <= 0.0:
+                continue
+            weighted = (
+                outer_rgb * (ring * 0.90 * fade)[..., None]
+                + inner_rgb * (fill * fade)[..., None]
+                + core_rgb * (highlight * fade)[..., None]
+            )
+            bubble_rgb = np.divide(
+                weighted,
+                np.maximum(weights, 1e-6)[..., None],
+                out=np.zeros_like(weighted),
+                where=np.maximum(weights, 1e-6)[..., None] > 0.0,
+            )
+            new_alpha = bubble_alpha + alpha * (1.0 - bubble_alpha)
+            safe = np.maximum(new_alpha, 1e-6)
+            rgb = (
+                bubble_rgb * bubble_alpha[..., None]
+                + rgb * alpha[..., None] * (1.0 - bubble_alpha[..., None])
+            ) / safe[..., None]
+            alpha = new_alpha
+        core_layer = np.clip(core_mask, 0.0, 1.0)
+        rgb = core_rgb * core_layer[..., None] + rgb * (
+            1.0 - core_layer[..., None]
+        )
+        alpha = core_layer + alpha * (1.0 - core_layer)
+    out = np.empty((height, width, 4), dtype=np.uint8)
+    safe_alpha = np.maximum(alpha, 1e-6)
+    straight_rgb = rgb / safe_alpha[..., None]
+    out[:, :, :3] = np.clip(
+        straight_rgb * 255.0 + 0.5, 0.0, 255.0
+    ).astype(np.uint8)
+    out[:, :, 3] = np.clip(alpha * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+    image = QImage(
+        out.tobytes(),
+        width,
+        height,
+        width * 4,
+        QImage.Format.Format_RGBA8888,
+    )
+    return image.copy()
+
+
+def _fill_color_field(
+    fill: PaintFill | None,
+    uu: np.ndarray,
+    vv: np.ndarray,
+    horizontal_coord: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """把横向/纵向渐变（或拼色）烘成逐像素颜色场；实色/图片返回 None。"""
+
+    if fill is None or fill.mode not in {
+        "gradient_horizontal",
+        "gradient_vertical",
+        "split_vertical",
+    }:
+        return None
+    raw_stops = fill.gradient_stops or fill.split_stops
+    stops = [
+        (float(position) / 100.0, _qcolor_rgb(str(color)))
+        for position, color in raw_stops
+        if QColor(str(color)).isValid()
+    ]
+    if len(stops) < 2:
+        return None
+    stops.sort(key=lambda item: item[0])
+    positions = np.asarray([item[0] for item in stops], dtype=np.float32)
+    colors = np.asarray([item[1] for item in stops], dtype=np.float32)
+    if fill.mode == "split_vertical":
+        # 拼色是硬边色带：取坐标落在的色带起点颜色，不做插值。
+        coord = np.clip(vv, 0.0, 1.0)
+        indices = np.clip(
+            np.searchsorted(positions, coord, side="right") - 1,
+            0,
+            len(colors) - 1,
+        )
+        return colors[indices]
+    coord = np.clip(
+        (
+            horizontal_coord
+            if horizontal_coord is not None
+            else (uu + 1.0) * 0.5
+        )
+        if fill.mode == "gradient_horizontal"
+        else vv,
+        0.0,
+        1.0,
+    )
+    channels = [
+        np.interp(coord, positions, colors[:, channel])
+        for channel in range(3)
+    ]
+    return np.stack(channels, axis=-1).astype(np.float32)
+
+
+def _lighten_color_field(field: np.ndarray, amount: float) -> np.ndarray:
+    return np.clip(field + (1.0 - field) * amount, 0.0, 1.0)
+
+
+def render_scanline_rod_image(
+    params: ScanlineParams,
+    colors: KaraokeColors | None = None,
+    *,
+    gradient_target: QRectF | None = None,
+    gradient_line: QRectF | None = None,
+) -> QImage:
+    """生成一帧「烈焰棒」RGBA 图样。
+
+    中心是一根金色发光柱，五条火焰缎带以螺旋方式**环绕**柱体：前半圈压在
+    柱身前，后半圈被柱身遮住，只从两侧露出。缎带参数按行预计算，逐像素只
+    做带状距离与衰减，保证 60fps 预览/导出时 CPU 生成成本足够低。
+    """
+
+    width = SCANLINE_COLUMN_WIDTH
+    height = SCANLINE_COLUMN_HEIGHT
+    outer, inner, core = _scanline_column_palette(params, colors)
+    outer_rgb = np.asarray(outer, dtype=np.float32)
+    inner_rgb = np.asarray(inner, dtype=np.float32)
+    core_rgb = np.asarray(core, dtype=np.float32)
+    u = (np.arange(width, dtype=np.float32) + 0.5) / width * 2.0 - 1.0
+    v = (np.arange(height, dtype=np.float32) + 0.5) / height
+    uu = np.broadcast_to(u, (height, width))
+    vv = np.broadcast_to(v[:, None], (height, width))
+    t = float(params.time_ms) / 1000.0
+
+    def smoothstep_array(value):
+        progress = np.clip(value, 0.0, 1.0)
+        return progress * progress * (3.0 - 2.0 * progress)
+
+    vertical_row = smoothstep_array((v - 0.03) / 0.07) * (
+        1.0 - smoothstep_array((v - 0.94) / 0.05)
+    )
+    vertical = vertical_row[:, None]
+    breath = 0.5 + 0.5 * math.sin(t * 2.8)
+    ribbon_scale = 0.96 + 0.08 * breath
+    horizontal_coord = None
+    if (
+        gradient_target is not None
+        and gradient_line is not None
+        and gradient_line.width() > 0.0
+    ):
+        scene_x = (
+            gradient_target.left()
+            + (uu + 1.0) * 0.5 * gradient_target.width()
+        )
+        horizontal_coord = (
+            scene_x - gradient_line.left()
+        ) / gradient_line.width()
+    gradient_field = _fill_color_field(
+        params.shape_fill, uu, vv, horizontal_coord
+    )
+    if gradient_field is None:
+        outer_field = np.broadcast_to(outer_rgb, (height, width, 3))
+        inner_field = np.broadcast_to(inner_rgb, (height, width, 3))
+        core_field = np.broadcast_to(core_rgb, (height, width, 3))
+    else:
+        outer_field = gradient_field
+        inner_field = _lighten_color_field(gradient_field, 0.20)
+        core_field = _lighten_color_field(gradient_field, 0.50)
+
+    specs = (
+        (outer_field, inner_field, 1.85, 0.00, 0.46, 0.180, 0.92),
+        (outer_field, inner_field, 2.12, 0.52, 0.42, 0.145, 0.82),
+        (inner_field, core_field, 1.72, 0.24, 0.39, 0.105, 0.92),
+        (core_field, core_field, 1.55, 0.55, 0.32, 0.048, 0.70),
+    )
+    rows = []
+    for _edge, _center, turns, phase, amplitude, base_half, strength in specs:
+        angle = (
+            v * turns * 2.0 * math.pi
+            + phase * 2.0 * math.pi
+            + t * (2.0 + 0.60 * turns)
+        )
+        depth = np.cos(angle)
+        swell = np.sin(angle * 2.0 + t * 2.3 + phase * 7.0)
+        turb = np.sin(v * 13.0 + t * 5.0 + phase * 6.0) * np.sin(
+            v * 7.0 - t * 2.5 + phase * 3.0
+        )
+        burn = 0.85 + 0.15 * np.sin(v * 55.0 - t * 12.0 + phase * 8.0)
+        rows.append((
+            amplitude * ribbon_scale * np.sin(angle) + 0.02 * turb,
+            np.maximum(
+                base_half * ribbon_scale
+                * (0.45 + 0.55 * swell * swell)
+                * (0.85 + 0.25 * np.abs(turb)),
+                0.008,
+            ),
+            np.clip(depth * 2.6, 0.0, 1.0),
+            np.clip(-depth * 2.6, 0.0, 1.0),
+            0.88 + 0.12 * np.sin(angle * 2.0 - t * 3.1 + phase * 5.0),
+            strength,
+            burn,
+        ))
+
+    def ribbon_layers(*, back: bool):
+        rgb = np.zeros((height, width, 3), dtype=np.float32)
+        alpha = np.zeros((height, width), dtype=np.float32)
+        for spec, row in zip(specs, rows):
+            edge_color, center_color = spec[0], spec[1]
+            center, half, front, back_facing, flicker, strength, burn = row
+            dx = (uu - center[:, None]) / half[:, None]
+            band = np.exp(-(dx ** 4))
+            glow = np.exp(-((np.abs(dx) / 1.5) ** 2)) * 0.12
+            facing = back_facing if back else front
+            layer_alpha = (
+                (band + glow)
+                * facing[:, None]
+                * flicker[:, None]
+                * burn[:, None]
+                * vertical
+                * strength
+            )
+            if back:
+                layer_alpha *= 0.38
+            layer_alpha = np.clip(layer_alpha, 0.0, 1.0)
+            core_mix = np.clip(1.0 - np.abs(dx), 0.0, 1.0)[..., None] ** 1.4
+            color = edge_color * (1.0 - core_mix) + center_color * core_mix
+            if back:
+                # 后半圈只做暗部体积，不要暗红近黑，否则会像脏阴影。
+                color = color * 0.40 + inner_field * 0.60
+            rgb = color * layer_alpha[..., None] + rgb * (
+                1.0 - layer_alpha[..., None]
+            )
+            alpha = layer_alpha + alpha * (1.0 - layer_alpha)
+        return rgb, alpha
+
+    back_rgb, back_alpha = ribbon_layers(back=True)
+
+    # 软实体光晕：不是硬边柱体，给外围火圈一个连续的发光体/体积感。
+    halo_half = 0.210 + 0.030 * math.sin(t * 3.1)
+    halo_core = np.exp(
+        -((np.abs(uu) / halo_half) ** 2.2)
+    ) * vertical
+    halo_wide = np.exp(
+        -((np.abs(uu) / (halo_half * 2.6)) ** 2.0)
+    ) * vertical
+    halo_alpha = np.clip(
+        0.32 * halo_core + 0.14 * halo_wide, 0.0, 0.70
+    )
+    halo_rgb = inner_field * 0.85 + core_field * 0.15
+
+    # 中央金色柱：固定细柱 + 竖向流光 + 白热芯。
+    rod_half = 0.130 + 0.018 * np.sin(v * 18.0 + t * 6.0)
+    rod_half_col = rod_half[:, None]
+    rod_body = np.exp(-((np.abs(uu) / rod_half_col) ** 2.4)) * vertical
+    rod_glow = np.exp(
+        -((np.abs(uu) / (rod_half_col * 3.2)) ** 2)
+    ) * vertical * 0.32
+    rod_alpha = np.clip(rod_glow + rod_body * 0.92, 0.0, 1.0)
+    streak = 0.86 + 0.14 * np.sin(vv * 62.0 + uu * 7.0 + t * 9.0)
+    rod_rgb = outer_field * streak[..., None]
+    inner_mask = np.clip(
+        np.exp(-((np.abs(uu) / (rod_half_col * 0.68)) ** 2.2)) * vertical,
+        0.0,
+        1.0,
+    )
+    core_mask = np.clip(
+        np.exp(-((np.abs(uu) / (rod_half_col * 0.28)) ** 2.2)) * vertical,
+        0.0,
+        1.0,
+    )
+    rod_rgb = inner_field * inner_mask[..., None] + rod_rgb * (
+        1.0 - inner_mask[..., None]
+    )
+    rod_rgb = core_field * core_mask[..., None] + rod_rgb * (
+        1.0 - core_mask[..., None]
+    )
+    rod_alpha = np.maximum(rod_alpha, np.maximum(inner_mask, core_mask))
+
+    front_rgb, front_alpha = ribbon_layers(back=False)
+
+    # 合成：后半圈 → 柱体 → 前半圈。
+    rgb = np.zeros((height, width, 3), dtype=np.float32)
+    alpha = np.zeros((height, width), dtype=np.float32)
+    for layer_rgb, layer_alpha in (
+        (back_rgb, back_alpha),
+        (halo_rgb, halo_alpha),
+        (front_rgb, front_alpha),
+    ):
+        a = np.clip(layer_alpha, 0.0, 1.0)
+        rgb = layer_rgb * a[..., None] + rgb * (1.0 - a[..., None])
+        alpha = a + alpha * (1.0 - a)
+
+    out = np.empty((height, width, 4), dtype=np.uint8)
+    safe_alpha = np.maximum(alpha, 1e-6)
+    straight_rgb = rgb / safe_alpha[..., None]
+    out[:, :, :3] = np.clip(
+        straight_rgb * 255.0 + 0.5, 0.0, 255.0
+    ).astype(np.uint8)
+    out[:, :, 3] = np.clip(alpha * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+    image = QImage(
+        out.tobytes(),
+        width,
+        height,
+        width * 4,
+        QImage.Format.Format_RGBA8888,
+    )
+    return image.copy()
+
+
+def _fill_color_at(
+    fill: PaintFill | None,
+    u_norm: float,
+    v_norm: float,
+    horizontal_coord: float | None = None,
+) -> tuple[float, float, float] | None:
+    """Sampling a gradient fill at one normalized point (bubble centers)."""
+
+    if fill is None:
+        return None
+    uu = np.asarray([[(float(u_norm) * 2.0) - 1.0]], dtype=np.float32)
+    vv = np.asarray([[float(v_norm)]], dtype=np.float32)
+    hcoord = (
+        np.asarray([[float(horizontal_coord)]], dtype=np.float32)
+        if horizontal_coord is not None
+        else None
+    )
+    field = _fill_color_field(fill, uu, vv, hcoord)
+    if field is None:
+        return None
+    return (float(field[0, 0, 0]), float(field[0, 0, 1]), float(field[0, 0, 2]))
+
+
+def paint_scanline_bubbles(
+    painter: QPainter,
+    rect: QRectF,
+    *,
+    front: float,
+    params: ScanlineParams,
+    colors: KaraokeColors | None = None,
+    opacity: float = 1.0,
+    font_px: float = 100.0,
+    target_top: float | None = None,
+    gradient_line: QRectF | None = None,
+) -> None:
+    """在锋面底部发射水泡，并用浅蓝光柱营造前后层次。
+
+    光柱在锋面中心（延伸到注音层），偶数号水泡画在光柱后、奇数号画在
+    光柱前；每颗水泡仍是低透明填充 + 高光圆环 + 左上高光。
+    """
+
+    if params.shape != "bubble":
+        return
+    if rect.height() <= 0.0 or rect.width() <= 0.0:
+        return
+    if front < rect.left() or front > rect.right():
+        return
+    font = max(float(font_px), 1.0)
+    outer_rgb, inner_rgb, core_rgb = _scanline_column_palette(params, colors)
+    base = QColor.fromRgbF(*outer_rgb)
+    rim = QColor.fromRgbF(*inner_rgb)
+    highlight = QColor.fromRgbF(*core_rgb)
+    pillar_color = QColor.fromRgbF(*inner_rgb)
+    t = float(params.time_ms) / 1000.0
+    bottom = rect.bottom() + rect.height() * 0.01
+    rise = rect.height() * 1.55
+    spread = max(rect.height() * 0.24, font * 0.22)
+    pillar_height = rect.height() * 1.65
+    pillar_top = (
+        rect.center().y() - pillar_height * 0.5 - pillar_height * 0.12
+    )
+    pillar_bottom = pillar_top + pillar_height
+    if target_top is not None and target_top < pillar_top:
+        pillar_top = float(target_top)
+        pillar_height = max(pillar_bottom - pillar_top, rect.height() * 1.65)
+    rise = max(rise, bottom - pillar_top + font * 0.10)
+    pillar_width = max(font * 0.42, rect.height() * 0.22)
+    count = 18
+
+    def draw_bubble(index: int, *, in_front: bool) -> None:
+        phase = fx_unit_hash(index, 601)
+        speed = 0.80 + 0.50 * fx_unit_hash(index, 602)
+        cycle = math.fmod(phase + t * speed, 1.0)
+        fade = min(cycle / 0.08, 1.0) * min((1.0 - cycle) / 0.20, 1.0)
+        if fade <= 0.0:
+            return
+        depth_alpha = 1.0 if in_front else 0.58
+        depth_size = 1.0 if in_front else 0.88
+        x = (
+            front
+            + (fx_unit_hash(index, 603) - 0.5) * spread * 2.0
+            + math.sin(t * 2.6 + phase * 2.0 * math.pi) * font * 0.045
+        )
+        y = bottom - cycle * rise
+        size = (
+            font
+            * (0.060 + 0.060 * fx_unit_hash(index, 604))
+            * (0.65 + 0.45 * cycle)
+            * depth_size
+        )
+        if size <= 0.5:
+            return
+        local_base = base
+        local_rim = rim
+        local_highlight = highlight
+        sampled = _fill_color_at(
+            params.shape_fill,
+            (x - rect.left()) / max(rect.width(), 1.0),
+            (y - rect.top()) / max(rect.height(), 1.0),
+            (
+                (x - gradient_line.left()) / gradient_line.width()
+                if gradient_line is not None and gradient_line.width() > 0.0
+                else None
+            ),
+        )
+        if sampled is not None:
+            local_base = QColor.fromRgbF(*sampled)
+            local_rim = QColor.fromRgbF(
+                *np.clip(
+                    np.asarray(sampled)
+                    + (1.0 - np.asarray(sampled)) * 0.30,
+                    0.0,
+                    1.0,
+                )
+            )
+            local_highlight = QColor.fromRgbF(
+                *np.clip(
+                    np.asarray(sampled)
+                    + (1.0 - np.asarray(sampled)) * 0.60,
+                    0.0,
+                    1.0,
+                )
+            )
+        fill = QColor(local_base)
+        fill.setAlpha(int(70 * fade * depth_alpha))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawEllipse(QPointF(x, y), size, size)
+        rim_color = QColor(local_rim)
+        rim_color.setAlpha(int(205 * fade * depth_alpha))
+        pen = painter.pen()
+        pen.setColor(rim_color)
+        pen.setWidthF(max(0.8, size * 0.10))
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(x, y), size, size)
+        highlight_color = QColor(local_highlight)
+        highlight_color.setAlpha(int(215 * fade * depth_alpha))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(highlight_color)
+        painter.drawEllipse(
+            QPointF(x - size * 0.32, y - size * 0.32),
+            size * 0.18,
+            size * 0.18,
+        )
+
+    def draw_light_pillar() -> None:
+        # 浅蓝光柱：竖向透明→亮→透明渐变，叠加宽/中/窄三层模拟柔边。
+        pillar_pulse = 0.90 + 0.10 * math.sin(t * 3.2)
+        for scale, alpha_scale in ((1.0, 0.40), (0.58, 0.65), (0.24, 0.50)):
+            width = max(pillar_width * scale * pillar_pulse, 2.0)
+            gradient = QLinearGradient(
+                0.0, pillar_top, 0.0, pillar_top + pillar_height
+            )
+            for stop, alpha in (
+                (0.00, 0),
+                (0.14, 18),
+                (0.50, 48),
+                (0.86, 18),
+                (1.00, 0),
+            ):
+                color = QColor(pillar_color)
+                color.setAlpha(int(alpha * alpha_scale))
+                gradient.setColorAt(stop, color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(
+                QRectF(
+                    front - width * 0.5,
+                    pillar_top,
+                    width,
+                    pillar_height,
+                ),
+                width * 0.5,
+                width * 0.5,
+            )
+
+    def draw_scanline_core() -> None:
+        # 水泡形态仍保留一条水蓝色高亮扫字线，位于锋面正中、正文高度，
+        # 光柱只做背景，不能取代这条扫字线。
+        core_width = max(1.6, font * 0.035)
+        top = rect.top()
+        height = rect.height()
+        for scale, alpha, color in (
+            (4.6, 34, base),
+            (2.2, 92, highlight),
+            (1.0, 232, highlight),
+        ):
+            width = max(core_width * scale, 1.0)
+            layer = QColor(color)
+            layer.setAlpha(alpha)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(layer)
+            painter.drawRoundedRect(
+                QRectF(front - width * 0.5, top, width, height),
+                width * 0.5,
+                width * 0.5,
+            )
+
+    painter.save()
+    try:
+        painter.setOpacity(max(0.0, min(painter.opacity() * opacity, 1.0)))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # 后层水泡 → 光柱 → 前层水泡，形成前后遮挡的立体感。
+        for index in range(0, count, 2):
+            draw_bubble(index, in_front=False)
+        draw_light_pillar()
+        # 中心高亮棒由普通扫字线带按字形绘制；这里不再画直线芯。
+        for index in range(1, count, 2):
+            draw_bubble(index, in_front=True)
+    finally:
+        painter.restore()
+
+
+def paint_scanline_column(
+    painter: QPainter,
+    rect: QRectF,
+    *,
+    front: float,
+    params: ScanlineParams,
+    colors: KaraokeColors | None = None,
+    opacity: float = 1.0,
+    font_px: float = 100.0,
+    target_top: float | None = None,
+    gradient_line: QRectF | None = None,
+) -> None:
+    """在锋面处绘制「烈焰棒」或发射水泡（替换普通高亮带）。
+
+    烈焰棒是扫字线本体变成一根细长发光棒，两侧逐帧喷出火舌；水泡是从
+    锋面底部向上冒出的镂空水泡粒子。两者都不画普通高亮带。
+    """
+
+    if params.shape not in {"flame", "bubble"}:
+        return
+    if rect.height() <= 0.0 or rect.width() <= 0.0:
+        return
+    if front < rect.left() or front > rect.right():
+        return
+    if params.shape == "bubble":
+        paint_scanline_bubbles(
+            painter,
+            rect,
+            front=front,
+            params=params,
+            colors=colors,
+            opacity=opacity,
+            font_px=font_px,
+            target_top=target_top,
+            gradient_line=gradient_line,
+        )
+        return
+    font = max(float(font_px), 1.0)
+    # 烈焰棒：柱体高度覆盖正文与注音最外沿；呼吸只改外圈半径。
+    base_width = max(
+        params.width_px * 4.0, rect.height() * 0.70
+    )
+    base_height = max(rect.height() * 1.65, base_width * 2.7)
+    column_width = base_width
+    column_height = base_height
+    left = front - column_width * 0.5
+    # 向上延伸覆盖注音层；target_top 由 ruby 最外沿决定，避免差一截。
+    top = rect.center().y() - column_height * 0.5 - column_height * 0.12
+    bottom = top + column_height
+    if target_top is not None and target_top < top:
+        top = float(target_top)
+        column_height = max(bottom - top, base_height)
+        bottom = top + column_height
+    image = render_scanline_rod_image(
+        params,
+        colors,
+        gradient_target=QRectF(left, top, column_width, column_height),
+        gradient_line=gradient_line or rect,
+    )
+    painter.save()
+    try:
+        painter.setOpacity(max(0.0, min(painter.opacity() * opacity, 1.0)))
+        painter.drawImage(
+            QRectF(left, top, column_width, column_height), image
+        )
+    finally:
+        painter.restore()
+
+
 def paint_scanline_strip(
     painter: QPainter,
     path: QPainterPath,
@@ -304,9 +1232,13 @@ def paint_scanline_strip(
     rtl: bool = False,
     colors: KaraokeColors | None = None,
     opacity: float = 1.0,
+    allow_column: bool = True,
 ) -> None:
     """Paint one glyph path's scan-line highlight band centred at ``front``.
 
+    普通高亮带会在字形内部重绘；``params.shape`` 为烈焰棒/水泡时**不画
+    高亮带**，改为在锋面处画一幅程序化柱状图样（``allow_column=False`` 的
+    注音调用不画，避免与主文字柱重复）。
     With a feather radius (``scanline_glow_px``) the band is painted from a
     blurred silhouette of the glyph stack: the highlight eases out of the
     stroke outline by the blur radius while closed counters stay transparent
@@ -318,15 +1250,20 @@ def paint_scanline_strip(
     :func:`map_front_through_transform`).
     """
 
+    opacity = max(0.0, min(opacity, 1.0))
+    if opacity <= 0.0:
+        return
+    if params.is_column_shape:
+        # 柱体形态的中心高亮仍由普通扫字线带绘制：完全走字形 geometry /
+        # feather / 角色配色。外围火圈/水泡由 painter 在 ruby 之后补画，
+        # 这里不能直接 return，否则中心棒会丢掉字形裁剪。
+        pass
     stroke_width = style.stroke_width_px
     stroke2_width = main_stroke2_width(style)
     band = scanline_band_rect(rect, front, params, vertical=vertical)
     if not band_touches_rect(band, path.boundingRect(), 0.0):
         return
     if params.is_brighten and params.brightness <= 0.0:
-        return
-    opacity = max(0.0, min(opacity, 1.0))
-    if opacity <= 0.0:
         return
     follow_state = params.follow_state
     if params.is_brighten and colors is not None:
@@ -698,9 +1635,14 @@ __all__ = [
     "band_touches_rect",
     "main_scanline_front",
     "map_front_through_transform",
+    "paint_scanline_column",
+    "paint_scanline_bubbles",
     "paint_scanline_strip",
-    "scanline_feather_slices",
+    "render_scanline_column_image",
+    "render_scanline_rod_image",
     "scanline_band_rect",
+    "scanline_column_base_color",
+    "scanline_feather_slices",
     "scanline_params_for_style",
     "scanline_role_fill",
 ]

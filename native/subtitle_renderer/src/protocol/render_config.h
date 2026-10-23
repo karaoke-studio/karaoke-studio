@@ -139,6 +139,10 @@ struct TimingLine {
         double travelPx = 120.0;
         // 唱字火焰按簇横向扫过的发射点偏移（归一化 × 字框宽；旧 IR 缺省 0）。
         double emitX = 0.0;
+        // 扫字线特效（kind="scanline"）的锋面发射窗口（ms）：粒子出生时刻
+        // 换算成锋面横向进度；窗口尾部剩余部分是粒子寿命。0 = 整个窗口
+        // 都是发射窗（旧 IR / 其余 kind 缺省，行为不变）。
+        int emitMs = 0;
         bool front = true;
         bool reverse = false;
         int sweep = 0;
@@ -397,6 +401,9 @@ struct ResolvedStyle {
     QString scanlineColor = QStringLiteral("#FFFFFF");
     int scanlineBrightnessPct = 60;
     int scanlineGlowPx = 8;
+    // 扫字线形态（"band" / "flame" / "bubble"）：烈焰棒/水泡替换普通
+    // 高亮带，由渲染端生成程序化柱状图样；缺省 band 兼容旧 IR。
+    QString scanlineShape = QStringLiteral("band");
     // ``role`` 模式：``scanlineRoleName`` 指向来源的「走字后-主文字」填充
     // （customStyleSchemes 解析）。整条带（含描边）都用这一份填充重绘。
     // 名字解析失败时 scanlineMode 归一回 ``color``。

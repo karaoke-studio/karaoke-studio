@@ -310,6 +310,10 @@ struct ParticleBurst {
     float travelPx = 120.0f;
     // 唱字火焰按簇横向扫过的发射点偏移（归一化 × 字框宽；0 = 不偏移）。
     float emitX = 0.0f;
+    // 扫字线特效（kind="scanline"）的锋面发射窗口（ms）：出生时刻换算成
+    // 锋面横向进度；窗口尾部剩余部分是粒子寿命。0 = 整个窗口都是发射窗
+    //（旧 IR / 其余 kind 缺省，行为不变）。
+    int emitMs = 0;
     bool front = true;
     bool reverse = false;
     // sparkle 整句扫过方向：+1 入场（左→右）、-1 退场（右→左）、0 不扫。
@@ -692,6 +696,9 @@ struct TextStyle {
     PaintStyle scanlineRolePaint;
     float scanlineBrightness = 0.6f;
     float scanlineGlowRadius = 8.0f;
+    // Scan-line shape: "band" draws the highlight band; "flame" / "bubble"
+    // replace it with a procedural fire / bubble column at the wipe front.
+    std::string scanlineShape = "band";
     // Whole-char zoom pulse easing order (0..5; 0 = linear).  Whether the
     // effect is active is a per-line flag (TextLine::zoomPulseEnabled).
     int zoomPulseCurveLevel = 1;

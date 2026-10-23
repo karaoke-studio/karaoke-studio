@@ -39,6 +39,17 @@ Microsoft::WRL::ComPtr<ID2D1BitmapBrush> createScanlineMaskBrush(
     const D2DDevice &device
 );
 
+// 扫字线烈焰棒图样位图（BGRA 预乘、行距 = width*4）：逐帧生成后
+// 交给 DrawBitmap 等比缩放到锋面目标矩形。像素生成留在 d2d_fx.cpp，这里
+// 只负责 D2D 资源构造。
+Microsoft::WRL::ComPtr<ID2D1Bitmap> createScanlineColumnBitmap(
+    ID2D1DeviceContext *context,
+    const std::uint8_t *pixels,
+    UINT32 width,
+    UINT32 height,
+    const D2DDevice &device
+);
+
 D2D1_RECT_F rubyPaintBounds(
     const PaintStyle &paint,
     const D2D1_RECT_F &localBounds,

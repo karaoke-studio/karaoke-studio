@@ -1029,9 +1029,8 @@ def test_gpu_entry_sparkle_multi_role_image_follow(tmp_path) -> None:
     style = _g1_style(
         entry_anim="sparkle",
         entry_lead_ms=600,
-        fx_apply_to_entry_exit=True,
-        fx_particle_color_mode="follow_after",
-        fx_particle_color_layers="decor",
+        anim_fx_color_mode="follow_after",
+        anim_fx_color_layers="decor",
         custom_style_schemes={
             "主唱": scheme(png("red.png", "#FF0000")),
             "和声": scheme(png("green.png", "#00FF00")),

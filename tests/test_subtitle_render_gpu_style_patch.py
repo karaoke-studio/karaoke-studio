@@ -407,9 +407,8 @@ def test_fx_tables_expand_to_inline_bursts(qapp):
         entry_anim="sparkle",
         exit_anim="note",
         sing_fx="note",
-        fx_particle_color_mode="follow_after",
-        fx_particle_color_layers="decor",
-        fx_apply_to_entry_exit=True,
+        anim_fx_color_mode="follow_after",
+        anim_fx_color_layers="decor",
     )
 
     full = build_render_ir(

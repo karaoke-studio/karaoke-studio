@@ -15,6 +15,10 @@
 
 #include <d2d1_2.h>
 
+namespace krok::subtitle::native {
+struct PaintStyle;
+}
+
 namespace krok::subtitle::native::direct2d {
 
 /// 与 transitions.fx_unit_hash 逐位一致的整数哈希 → [0,1)。
@@ -85,6 +89,22 @@ std::vector<FxParticle> burstParticlesAt(
     float originY,
     float boxW,
     float boxH
+);
+
+/// 扫字线烈焰棒的一帧程序化图样（BGRA 预乘，镜像 Python
+/// scanline.render_scanline_column_image）。``width``/``height`` 为内部
+/// 栅格尺寸，绘制端按目标矩形缩放。
+std::vector<std::uint8_t> scanlineColumnPixels(
+    const std::string &shape,
+    const RgbaColor &outer,
+    const RgbaColor &inner,
+    const RgbaColor &core,
+    const PaintStyle *fill,
+    int timeMs,
+    unsigned width,
+    unsigned height,
+    float gradientLeft,
+    float gradientWidth
 );
 
 /// 粒子 sprite 名（star4 / ring / note / pixel / petal / feather / bolt /

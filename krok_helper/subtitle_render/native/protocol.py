@@ -1020,6 +1020,15 @@ def track_to_ir(
                             )
                             for ch in render_lines[index].chars
                         ],
+                        # 扫字线特效的锋面方向：与 CPU painter 的 layout.rtl
+                        # 同式（样式 RTL 与整行逆序镜像后才是实际走字方向）。
+                        reverse=(
+                            style is not None
+                            and (
+                                style.right_to_left
+                                != bool(render_lines[index].wipe_reverse)
+                            )
+                        ),
                     )
                     if style is not None
                     else []
@@ -1232,6 +1241,10 @@ def lines_style_to_ir(
                             )
                             for ch in render_lines[index].chars
                         ],
+                        reverse=bool(
+                            style.right_to_left
+                            != render_lines[index].wipe_reverse
+                        ),
                     ),
                     fx_table,
                 ),

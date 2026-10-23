@@ -139,6 +139,153 @@ def test_scanline_style_fields_round_trip() -> None:
     assert style_from_dict({"scanline_mode": "wat"}).scanline_mode == "color"
 
 
+def test_scanline_effect_fields_round_trip_and_normalize() -> None:
+    style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_effect="snow_solid",
+        scanline_effect_size_pct=42,
+        scanline_effect_count=12,
+        scanline_shape="flame",
+    )
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.scanline_effect == "snow_solid"
+    assert restored.scanline_effect_size_pct == 42
+    assert restored.scanline_effect_count == 12
+    assert restored.scanline_shape == "flame"
+    assert restored.scanline_effect_color_mode == "theme"
+    assert restored.anim_fx_color_mode == "sakura"
+    # 非法档位回落「无」/普通高亮，不把未知字符串带进渲染端。
+    assert style_from_dict({"scanline_effect": "wat"}).scanline_effect == "none"
+    assert style_from_dict({"scanline_shape": "wat"}).scanline_shape == "band"
+    assert Style().scanline_effect == "none"
+    assert Style().scanline_shape == "band"
+    # 上一版试行的粒子火焰/气泡档位：读入时升级为「形态」，不丢设定。
+    legacy_flame = style_from_dict(
+        {"scanline_effect": "flame", "scanline_shape": "flame"}
+    )
+    assert legacy_flame.scanline_effect == "none"
+    assert legacy_flame.scanline_shape == "flame"
+    legacy_bubble = style_from_dict({"scanline_effect": "bubble"})
+    assert legacy_bubble.scanline_effect == "none"
+    assert legacy_bubble.scanline_shape == "bubble"
+
+
+def test_scanline_effect_plans_front_tracking_bursts() -> None:
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        burst_particles_at,
+        plan_line_bursts,
+        scanline_particles_per_char,
+    )
+
+    style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_effect="sakura",
+        scanline_effect_count=4,
+    )
+    windows = [(0, 400), (400, 800)]
+    bursts = plan_line_bursts(
+        style, 0, 0, 2000, 1200, windows, char_visible=[True, True]
+    )
+    # 每个字符拆双色变体：2 字符 × 2 色。
+    assert len(bursts) == 4
+    assert {burst["kind"] for burst in bursts} == {"scanline"}
+    assert {burst["sprite"] for burst in bursts} == {"petal"}
+    # 出生窗口 = 唱字窗；窗口尾部 = 拖尾寿命（樱花 620ms）。
+    assert {burst["emit_ms"] for burst in bursts} == {400}
+    assert {burst["end_ms"] for burst in bursts} == {1020, 1420}
+    assert all(burst["reverse"] is False for burst in bursts)
+    assert all(burst["front"] is True for burst in bursts)
+    # 双色变体的颗数对半：总颗数 = 按 400ms 折算出的单字颗数（5）。
+    per_char = sum(
+        int(burst["count"]) for burst in bursts if burst["char_index"] == 0
+    )
+    assert per_char == scanline_particles_per_char(4, 400) == 5
+
+    # 雪花两档都走同一套锋面拖尾，只是 sprite 不同。
+    for effect, sprite in (
+        ("snow", "snow"),
+        ("snow_solid", "snow_solid"),
+    ):
+        snow_bursts = plan_line_bursts(
+            replace(style, scanline_effect=effect),
+            0, 0, 2000, 1200, windows, char_visible=[True, True],
+        )
+        assert {burst["sprite"] for burst in snow_bursts} == {sprite}
+
+    # 只有扫字线档位才发射：utopia / 竖排都不产生粒子 burst。
+    assert plan_line_bursts(
+        replace(style, karaoke_anim="utopia"),
+        0, 0, 2000, 1200, windows, char_visible=[True, True],
+    ) == []
+    assert plan_line_bursts(
+        replace(style, vertical=True),
+        0, 0, 2000, 1200, windows, char_visible=[True, True],
+    ) == []
+
+    # RTL：锋面自右向左，reverse 标记随行方向下发。
+    reversed_bursts = plan_line_bursts(
+        style, 0, 0, 2000, 1200, windows,
+        char_visible=[True, True], reverse=True,
+    )
+    assert all(burst["reverse"] is True for burst in reversed_bursts)
+
+    # 求值器：出生点跟随锋面——窗口末尾时 LTR 的最新粒子靠近字框右缘，
+    # RTL 的最新粒子靠近左缘；同一 t 的求值结果确定可复现。
+    burst = {
+        "kind": "scanline", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 1020, "emit_ms": 400,
+        "count": 12, "seed": 1234, "size_px": 40.0, "travel_px": 90.0,
+        "front": True, "sweep": 0, "sprite": "star4", "reverse": False,
+    }
+    late = burst_particles_at(burst, 395, 100.0, 200.0, 100.0, 80.0)
+    assert late
+    assert max(particle.x for particle in late) > 130.0
+    assert late == burst_particles_at(burst, 395, 100.0, 200.0, 100.0, 80.0)
+    mirrored = burst_particles_at(
+        {**burst, "reverse": True}, 395, 100.0, 200.0, 100.0, 80.0
+    )
+    assert mirrored
+    assert min(particle.x for particle in mirrored) < 70.0
+    # 窗口外不产生粒子（拖尾到 end_ms 为止）。
+    assert burst_particles_at(burst, 1021, 100.0, 200.0, 100.0, 80.0) == []
+
+
+@pytest.mark.parametrize("sprite", ["petal", "feather", "snow", "snow_solid"])
+def test_scanline_falling_effects_fly_upper_left(sprite) -> None:
+    """樱花/羽毛/雪花与星光同向：随走字速度朝左上飞（y 递减）。"""
+
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        burst_particles_at,
+        fx_unit_hash,
+    )
+
+    emit = 400
+    burst = {
+        "kind": "scanline", "anchor": "char", "char_index": 0,
+        "start_ms": 0, "end_ms": 1020, "emit_ms": emit,
+        "count": 1, "seed": 7, "size_px": 40.0, "travel_px": 90.0,
+        "front": True, "sweep": 0, "sprite": sprite, "reverse": False,
+    }
+    birth = (0.15 + 0.70 * fx_unit_hash(7, 4)) * emit
+    early = burst_particles_at(burst, int(birth) + 10, 100.0, 200.0, 100.0, 80.0)
+    late = burst_particles_at(burst, int(birth) + 200, 100.0, 200.0, 100.0, 80.0)
+    assert early and late
+    assert late[0].y < early[0].y
+    assert late[0].x < early[0].x
+
+
+def test_scanline_particles_per_char_scales_with_duration() -> None:
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        scanline_particles_per_char,
+    )
+
+    assert scanline_particles_per_char(4, 300) == 4
+    assert scanline_particles_per_char(4, 110) == 1
+    # 长音符按比例加密，但最多到基准的 2 倍。
+    assert scanline_particles_per_char(4, 1000) == 8
+    assert scanline_particles_per_char(1, 100) == 1
+
+
 def test_scanline_pixel_fields_use_fixed_1080_base() -> None:
     """扫字线像素字段固定 1080 基准:渲染按画布映射,存储不随高度重写。"""
     from krok_helper.subtitle_render.domain.models import (
@@ -298,6 +445,16 @@ def test_anim_type_delta_window_check() -> None:
     # 唱字/扫字线字段属于渲染专属集合；混入非动画字段则不成立。
     scan = replace(base, karaoke_anim="scanline", scanline_width_px=40)
     assert _style_delta_only_in(base, scan, _RENDER_ONLY_ANIM_STYLE_FIELDS)
+    scan_effect = replace(
+        base,
+        scanline_effect="sakura",
+        scanline_effect_size_pct=48,
+        scanline_effect_count=16,
+        scanline_shape="flame",
+    )
+    assert _style_delta_only_in(
+        base, scan_effect, _RENDER_ONLY_ANIM_STYLE_FIELDS
+    )
     mixed = replace(base, karaoke_anim="scanline", font_size_px=80)
     assert not _style_delta_only_in(base, mixed, _RENDER_ONLY_ANIM_STYLE_FIELDS)
 
@@ -470,6 +627,767 @@ def test_painter_scanline_highlights_the_moving_front(qapp) -> None:
     late_base = _frame_bytes(track, base, 1200)
     late_scan = _frame_bytes(track, scanline, 1200)
     assert _visible_diff(late_base, late_scan) == 0
+
+
+def test_painter_scanline_effect_particles_add_a_visible_trail(qapp) -> None:
+    track = _wiping_track()
+    plain = _frame_bytes(track, _scanline_style(karaoke_anim="scanline"), 500)
+    petal = _frame_bytes(
+        track,
+        _scanline_style(karaoke_anim="scanline", scanline_effect="sakura"),
+        500,
+    )
+    # 走字进行中：锋面粒子带来可见差异，且同帧重复渲染逐字节一致。
+    assert _visible_diff(plain, petal) > 30
+    assert petal == _frame_bytes(
+        track,
+        _scanline_style(karaoke_anim="scanline", scanline_effect="sakura"),
+        500,
+    )
+    # 非扫字线档位：特效字段不产生任何画面（避免静默画到普通 Wipe 上）。
+    no_scan = _frame_bytes(track, _scanline_style(karaoke_anim="utopia"), 500)
+    no_scan_effect = _frame_bytes(
+        track,
+        _scanline_style(karaoke_anim="utopia", scanline_effect="sakura"),
+        500,
+    )
+    assert _visible_diff(no_scan, no_scan_effect) == 0
+
+
+@pytest.mark.parametrize(
+    "effect",
+    ["sakura", "feather", "snow", "snow_solid", "star", "note"],
+)
+def test_painter_scanline_effect_kinds_render(qapp, effect) -> None:
+    """六档粒子特效都能在锋面上画出可见粒子。"""
+
+    track = _wiping_track()
+    plain = _frame_bytes(track, _scanline_style(karaoke_anim="scanline"), 500)
+    styled = _frame_bytes(
+        track,
+        _scanline_style(karaoke_anim="scanline", scanline_effect=effect),
+        500,
+    )
+    assert _visible_diff(plain, styled) > 10, effect
+
+
+def test_painter_scanline_shape_replaces_band(qapp) -> None:
+    """烈焰棒/水泡替换普通高亮带，且同帧重复渲染逐字节一致。"""
+
+    track = _wiping_track()
+    band = _frame_bytes(track, _scanline_style(karaoke_anim="scanline"), 500)
+    for shape in ("flame", "bubble"):
+        style = _scanline_style(
+            karaoke_anim="scanline",
+            scanline_shape=shape,
+            scanline_color="#FF7A1A",
+        )
+        shaped = _frame_bytes(track, style, 500)
+        assert _visible_diff(band, shaped) > 30, shape
+        assert shaped == _frame_bytes(track, style, 500)
+    # 非扫字线档位：形态字段不产生任何画面。
+    for shape in ("flame", "bubble"):
+        base = _frame_bytes(track, _scanline_style(karaoke_anim="utopia"), 500)
+        idle = _frame_bytes(
+            track,
+            _scanline_style(karaoke_anim="utopia", scanline_shape=shape),
+            500,
+        )
+        assert _visible_diff(base, idle) == 0
+
+
+def test_scanline_rod_image_and_scheme_colors() -> None:
+    """烈焰棒图样非空，且颜色方案能改变棒体配色。"""
+
+    from krok_helper.subtitle_render.domain.paint import _paint_fill
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        render_scanline_rod_image,
+        scanline_column_base_color,
+    )
+
+    def rgba_bytes(image) -> np.ndarray:
+        pixels = np.frombuffer(
+            image.bits().asstring(image.sizeInBytes()), dtype=np.uint8
+        )
+        return pixels.reshape(image.height(), image.width(), 4)
+
+    white_flame = ScanlineParams(
+        width_px=24, color="#FFFFFF", glow_px=8,
+        shape="flame", time_ms=500,
+    )
+    flame = rgba_bytes(render_scanline_rod_image(white_flame))
+    assert np.count_nonzero(flame[:, :, 3] > 8) > 500
+
+    # 旧图样函数保留兼容，但水泡形态已改为逐帧粒子，不再读取图样。
+    # role 模式：基色取来源填充的平均色，棒体图样随之改变。
+    role_params = ScanlineParams(
+        width_px=24, color="#FFFFFF", glow_px=8, shape="flame",
+        mode="role",
+        role_fill=_paint_fill(
+            "#FF0040", mode="gradient_horizontal", end="#0040FF"
+        ),
+        time_ms=500,
+    )
+    base = scanline_column_base_color(role_params)
+    assert base.upper() != "#FFFFFF"
+    role_flame = rgba_bytes(render_scanline_rod_image(role_params))
+    assert not np.array_equal(flame, role_flame)
+
+    # 跟随字体走字后：基色取 after 文字色（可再提亮）。
+    follow_params = ScanlineParams(
+        width_px=24, color="#FFFFFF", glow_px=8, shape="flame",
+        mode="follow_after", brightness=0.0, time_ms=500,
+    )
+    follow_base = scanline_column_base_color(
+        follow_params,
+        KaraokeColors(
+            before=KaraokeColorState(text=_paint_fill("#101010")),
+            after=KaraokeColorState(text=_paint_fill("#20C040")),
+        ),
+    )
+    assert follow_base.upper() == "#20C040"
+    gradient_follow = scanline_column_base_color(
+        ScanlineParams(
+            width_px=24,
+            color="#FFFFFF",
+            glow_px=8,
+            shape="flame",
+            mode="follow_after",
+            brightness=0.0,
+            time_ms=500,
+        ),
+        KaraokeColors(
+            before=KaraokeColorState(text=_paint_fill("#101010")),
+            after=KaraokeColorState(
+                text=_paint_fill(
+                    "#FF0000", mode="gradient_horizontal", end="#0000FF"
+                )
+            ),
+        ),
+    )
+    assert gradient_follow.upper() == "#800080"
+
+
+def test_scanline_particle_colors_are_independent_from_other_particles() -> None:
+    """扫字线粒子颜色独立于唱字装饰 / 入退场粒子设置。"""
+
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        plan_line_bursts,
+    )
+
+    style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_effect="snow",
+        scanline_effect_color_mode="color",
+        scanline_effect_color="#123456",
+        scanline_effect_color2="#ABCDEF",
+        fx_particle_color_mode="color",
+        fx_particle_color="#111111",
+        fx_particle_color2="#222222",
+        anim_fx_color_mode="color",
+        anim_fx_color="#333333",
+        anim_fx_color2="#444444",
+    )
+    bursts = plan_line_bursts(
+        style, 0, 0, 2000, 1200, [(0, 400)], char_visible=[True]
+    )
+    assert {b["color"] for b in bursts} == {"#123456", "#ABCDEF"}
+
+    # 默认「特效主题色」：雪花使用雪白/冰蓝主题色。
+    themed = plan_line_bursts(
+        replace(style, scanline_effect_color_mode="theme"),
+        0, 0, 2000, 1200, [(0, 400)], char_visible=[True],
+    )
+    assert {b["color"] for b in themed} == {"#F2F8FF", "#BFDFFF"}
+
+
+def test_scanline_shape_animation_evolves_over_time(qapp) -> None:
+    """烈焰棒图样与水泡粒子都逐帧变化（不是静止图样）。"""
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        render_scanline_rod_image,
+    )
+
+    def rgba(image) -> np.ndarray:
+        pixels = np.frombuffer(
+            image.bits().asstring(image.sizeInBytes()), dtype=np.uint8
+        )
+        return pixels.reshape(image.height(), image.width(), 4)
+
+    early = rgba(
+        render_scanline_rod_image(
+            ScanlineParams(
+                width_px=24, color="#FF7A1A", glow_px=8,
+                shape="flame", time_ms=300,
+            )
+        )
+    )
+    late = rgba(
+        render_scanline_rod_image(
+            ScanlineParams(
+                width_px=24, color="#FF7A1A", glow_px=8,
+                shape="flame", time_ms=900,
+            )
+        )
+    )
+    assert np.count_nonzero(early[:, :, 3] > 8) > 300
+    assert not np.array_equal(early, late)
+
+    # 水泡没有静态图样：同一帧时间不同，画面必须不同。
+    track = _wiping_track()
+    bubble_style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_shape="bubble",
+        scanline_color="#FF7A1A",
+    )
+    b300 = _frame_bytes(track, bubble_style, 300)
+    b900 = _frame_bytes(track, bubble_style, 900)
+    assert _visible_diff(b300, b900) > 0
+
+
+def test_scanline_shape_allows_separate_effect_particles() -> None:
+    """烈焰棒/水泡本体不发射粒子，但「扫字线特效」仍可独立叠加。"""
+
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        plan_line_bursts,
+    )
+
+    style = _scanline_style(
+        karaoke_anim="scanline",
+        scanline_shape="flame",
+        scanline_effect="note",
+    )
+    bursts = plan_line_bursts(
+        style, 0, 0, 2000, 1200, [(0, 400)], char_visible=[True]
+    )
+    assert [b for b in bursts if b["kind"] == "scanline"]
+
+
+def test_painter_bubble_light_pillar_is_blue_and_translucent(qapp) -> None:
+    """水泡形态中心有浅蓝光柱（不是灰色实心柱）。"""
+
+    from PyQt6.QtGui import QColor, QImage, QPainter
+    from PyQt6.QtCore import QRectF
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        paint_scanline_column,
+    )
+
+    image = QImage(400, 420, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        paint_scanline_column(
+            painter,
+            QRectF(50, 120, 300, 160),
+            front=200.0,
+            params=ScanlineParams(
+                width_px=24,
+                color="#FF7A1A",
+                glow_px=8,
+                shape="bubble",
+                mode="default",
+                time_ms=700,
+                column_growth=1.0,
+            ),
+            font_px=100,
+        )
+    finally:
+        painter.end()
+    center = image.pixelColor(200, 210)
+    assert center.alpha() > 20
+    assert center.blue() > center.red()
+    assert center.green() >= center.red()
+
+
+def test_bubble_keeps_water_blue_scanline_core(qapp) -> None:
+    """水泡形态中心仍保留一条水蓝色高亮扫字线。"""
+
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QImage, QPainter
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        paint_scanline_column,
+    )
+
+    image = QImage(400, 420, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        paint_scanline_column(
+            painter,
+            QRectF(50, 120, 300, 160),
+            front=200.0,
+            params=ScanlineParams(
+                width_px=24,
+                color="#FF7A1A",
+                glow_px=8,
+                shape="bubble",
+                mode="default",
+                time_ms=700,
+                column_growth=1.0,
+            ),
+            font_px=100,
+        )
+    finally:
+        painter.end()
+    core = image.pixelColor(200, 130)
+    assert core.alpha() > 80
+    assert core.blue() > core.red()
+
+
+def test_bubble_follows_single_color(qapp) -> None:
+    """水泡也跟随单独颜色，不再固定水蓝。"""
+
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QImage, QPainter
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        paint_scanline_column,
+    )
+
+    image = QImage(400, 420, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        paint_scanline_column(
+            painter,
+            QRectF(50, 120, 300, 160),
+            front=200.0,
+            params=ScanlineParams(
+                width_px=24,
+                color="#E83A12",
+                glow_px=8,
+                shape="bubble",
+                time_ms=700,
+                column_growth=1.0,
+            ),
+            font_px=100,
+        )
+    finally:
+        painter.end()
+    core = image.pixelColor(200, 130)
+    assert core.alpha() > 80
+    assert core.red() > core.blue() + 20
+
+
+def test_scanline_shapes_extend_above_main_line(qapp) -> None:
+    """烈焰棒/水泡光柱向上延伸，覆盖注音层区域。"""
+
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QImage, QPainter
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        paint_scanline_column,
+    )
+
+    def paint(shape: str) -> QImage:
+        image = QImage(400, 500, QImage.Format.Format_RGBA8888)
+        image.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(image)
+        try:
+            paint_scanline_column(
+                painter,
+                QRectF(50, 180, 300, 100),
+                front=200.0,
+                params=ScanlineParams(
+                    width_px=24,
+                    color="#FF7A1A",
+                    glow_px=8,
+                    shape=shape,
+                    time_ms=700,
+                    column_growth=1.0,
+                ),
+                font_px=100,
+            )
+        finally:
+            painter.end()
+        return image
+
+    # 主文字 rect.top = 180；样点 140 在主文字上方，应落进注音层范围。
+    for shape in ("flame", "bubble"):
+        image = paint(shape)
+        assert image.pixelColor(200, 140).alpha() > 0, shape
+
+
+def test_scanline_shapes_are_visible_with_ruby(qapp) -> None:
+    """烈焰棒/水泡在注音行里仍然可见（不再被 ruby 层吞掉）。"""
+
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 0), TimingChar("詞", 600)],
+                end_ms=1200,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="歌",
+                reading="うた",
+                reading_parts=["う", "た"],
+                reading_part_ms=[300],
+                pos_start_ms=0,
+                pos_end_ms=600,
+            ),
+            RubyAnnotation(
+                kanji="詞",
+                reading="し",
+                reading_parts=["し"],
+                reading_part_ms=[],
+                pos_start_ms=600,
+                pos_end_ms=1200,
+            ),
+        ],
+    )
+    base = _frame_bytes(
+        track, _scanline_style(karaoke_anim="none", font_size_px=100), 300
+    )
+    for shape in ("flame", "bubble"):
+        shape_style = _scanline_style(
+            karaoke_anim="scanline",
+            scanline_shape=shape,
+            font_size_px=100,
+            scanline_color="#FF7A1A",
+            scanline_effect="none",
+        )
+        shaped = _frame_bytes(track, shape_style, 300)
+        assert _visible_diff(base, shaped) > 12, shape
+
+
+def test_scanline_default_mode_ignores_custom_color() -> None:
+    """默认颜色档稳定回到出厂火色，不受单独颜色残留影响。"""
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        render_scanline_rod_image,
+        scanline_params_for_style,
+    )
+
+    style = Style(
+        karaoke_anim="scanline",
+        scanline_mode="default",
+        scanline_color="#00FF00",
+        scanline_shape="flame",
+    )
+    params = scanline_params_for_style(style)
+    assert params.mode == "default"
+    assert params.color == "#FFFFFF"
+    default_image = render_scanline_rod_image(
+        ScanlineParams(
+            width_px=24,
+            color=params.color,
+            glow_px=8,
+            shape="flame",
+            mode="default",
+            time_ms=500,
+            column_growth=1.0,
+        )
+    )
+    explicit_image = render_scanline_rod_image(
+        ScanlineParams(
+            width_px=24,
+            color="#FFFFFF",
+            glow_px=8,
+            shape="flame",
+            mode="color",
+            time_ms=500,
+            column_growth=1.0,
+        )
+    )
+    assert default_image != explicit_image
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        _scanline_column_palette,
+    )
+
+    white_palette = _scanline_column_palette(
+        ScanlineParams(
+            width_px=24,
+            color="#FFFFFF",
+            glow_px=8,
+            shape="flame",
+            mode="color",
+            time_ms=500,
+        )
+    )
+    assert white_palette[0][1] > 0.9 and white_palette[0][2] > 0.9
+
+
+def test_scanline_role_gradient_uses_endpoint_colors() -> None:
+    """复用配色方案的渐变首尾分别成为外焰/内焰，而不是平均成灰色。"""
+
+    from krok_helper.subtitle_render.domain.paint import _paint_fill
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        _scanline_column_palette,
+    )
+
+    params = ScanlineParams(
+        width_px=24,
+        color="#FFFFFF",
+        glow_px=8,
+        shape="flame",
+        mode="role",
+        role_fill=_paint_fill(
+            "#FF0040", mode="gradient_horizontal", end="#0040FF"
+        ),
+        time_ms=500,
+    )
+    outer, inner, _core = _scanline_column_palette(params)
+    assert outer[0] > 0.9 and outer[2] < 0.4
+    assert inner[2] > 0.9 and inner[0] < 0.4
+
+
+def test_scanline_column_extends_to_ruby_target_top(qapp) -> None:
+    """柱体按 ruby 最外沿抬高，不再比注音顶部差一截。"""
+
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QImage, QPainter
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        paint_scanline_column,
+    )
+
+    image = QImage(400, 420, QImage.Format.Format_RGBA8888)
+    image.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(image)
+    try:
+        paint_scanline_column(
+            painter,
+            QRectF(50, 120, 300, 160),
+            front=200.0,
+            params=ScanlineParams(
+                width_px=24,
+                color="#FF7A1A",
+                glow_px=8,
+                shape="flame",
+                time_ms=500,
+                column_growth=1.0,
+            ),
+            font_px=100,
+            target_top=40.0,
+        )
+    finally:
+        painter.end()
+    assert image.pixelColor(200, 60).alpha() > 0
+
+
+def test_scanline_rod_uses_real_gradient_field() -> None:
+    """柱体按逐像素渐变着色，而不是把渐变折成一个平均色。"""
+
+    from krok_helper.subtitle_render.domain.paint import _paint_fill
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        render_scanline_rod_image,
+    )
+
+    image = render_scanline_rod_image(
+        ScanlineParams(
+            width_px=24,
+            color="#FFFFFF",
+            glow_px=8,
+            shape="flame",
+            time_ms=500,
+            column_growth=1.0,
+            shape_fill=_paint_fill(
+                "#FF0000", mode="gradient_horizontal", end="#0000FF"
+            ),
+        )
+    )
+    pixels = np.frombuffer(
+        image.bits().asstring(image.sizeInBytes()), dtype=np.uint8
+    ).reshape(image.height(), image.width(), 4).astype(np.int16)
+    visible = pixels[:, :, 3] > 120
+    left = pixels[:, : image.width() // 3, :]
+    right = pixels[:, -image.width() // 3 :, :]
+    left_mask = visible[:, : image.width() // 3]
+    right_mask = visible[:, -image.width() // 3 :]
+    assert left_mask.any() and right_mask.any()
+    left_rgb = left[left_mask][:, :3].mean(axis=0)
+    right_rgb = right[right_mask][:, :3].mean(axis=0)
+    assert left_rgb[0] > left_rgb[2]
+    assert right_rgb[2] > right_rgb[0]
+
+
+def test_horizontal_gradient_consumes_whole_line() -> None:
+    """横向渐变按整行取色：同一柱体在行首/行尾会取到不同颜色。"""
+
+    from PyQt6.QtCore import QRectF
+
+    from krok_helper.subtitle_render.domain.paint import _paint_fill
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        render_scanline_rod_image,
+    )
+
+    fill = _paint_fill("#FF0000", mode="gradient_horizontal", end="#0000FF")
+    params = ScanlineParams(
+        width_px=24,
+        color="#FFFFFF",
+        glow_px=8,
+        shape="flame",
+        time_ms=500,
+        column_growth=1.0,
+        shape_fill=fill,
+    )
+    line_rect = QRectF(100, 0, 400, 120)
+
+    def mean_rgb(target: QRectF) -> np.ndarray:
+        image = render_scanline_rod_image(
+            params, gradient_target=target, gradient_line=line_rect
+        )
+        pixels = np.frombuffer(
+            image.bits().asstring(image.sizeInBytes()), dtype=np.uint8
+        ).reshape(image.height(), image.width(), 4)
+        visible = pixels[:, :, 3] > 120
+        return pixels[:, :, :3][visible].mean(axis=0)
+
+    left = mean_rgb(QRectF(100, 0, 80, 108))
+    right = mean_rgb(QRectF(420, 0, 80, 108))
+    assert left[0] > left[2]
+    assert right[2] > right[0]
+
+
+def test_column_shape_still_paints_glyph_shaped_band(qapp) -> None:
+    """烈焰棒/水泡的中心棒仍是普通扫字线带，受字形路径裁剪。"""
+
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath
+
+    from krok_helper.subtitle_render.domain.paint import KaraokeColors
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        paint_scanline_strip,
+    )
+
+    for shape in ("flame", "bubble"):
+        image = QImage(400, 260, QImage.Format.Format_RGBA8888)
+        image.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(image)
+        try:
+            path = QPainterPath()
+            path.addRect(QRectF(50, 80, 300, 140))
+            painter.fillPath(path, QColor(20, 20, 20, 255))
+            paint_scanline_strip(
+                painter,
+                path,
+                QRectF(50, 80, 300, 140),
+                front=200.0,
+                params=ScanlineParams(
+                    width_px=24,
+                    color="#FF0000",
+                    glow_px=8,
+                    shape=shape,
+                    time_ms=500,
+                    column_growth=1.0,
+                ),
+                style=Style(font_size_px=100),
+                colors=KaraokeColors(),
+            )
+        finally:
+            painter.end()
+        band = image.pixelColor(200, 140)
+        assert band.alpha() > 60, shape
+        assert band.red() > band.blue(), shape
+
+
+def test_scanline_shape_fades_in_and_out(qapp) -> None:
+    """柱体不再瞬现瞬隐：开场淡入、结尾淡出。"""
+
+    from krok_helper.subtitle_render.engine.painter import (
+        _scanline_shape_fade,
+    )
+
+    track = _wiping_track()
+    base = _scanline_style(karaoke_anim="none")
+    shape = _scanline_style(karaoke_anim="scanline", scanline_shape="flame")
+
+    assert _scanline_shape_fade(0, start_ms=0, end_ms=1200) == 0.0
+    assert 0.0 < _scanline_shape_fade(80, start_ms=0, end_ms=1200) < 1.0
+    assert _scanline_shape_fade(500, start_ms=0, end_ms=1200) == 1.0
+    assert _scanline_shape_fade(
+        1000, start_ms=0, end_ms=1200, hold_until_ms=1100
+    ) == 1.0
+    assert 0.0 < _scanline_shape_fade(
+        1150, start_ms=0, end_ms=1200, hold_until_ms=1100
+    ) < 1.0
+    assert _scanline_shape_fade(1200, start_ms=0, end_ms=1200) == 0.0
+
+    def diff_at(t_ms: int) -> int:
+        return _visible_diff(
+            _frame_bytes(track, base, t_ms),
+            _frame_bytes(track, shape, t_ms),
+        )
+
+    assert diff_at(0) == 0
+    assert diff_at(80) > 0
+    assert diff_at(500) > 0
+
+
+def test_flame_rod_outer_width_breathes(qapp) -> None:
+    """烈焰棒外圈半径必须随时间轻微呼吸（不再夸张地改变整柱宽度）。"""
+
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.scanline import (
+        ScanlineParams,
+        render_scanline_rod_image,
+    )
+
+    def width_at(t_ms: int) -> int:
+        image = render_scanline_rod_image(
+            ScanlineParams(
+                width_px=24,
+                color="#FF7A1A",
+                glow_px=8,
+                shape="flame",
+                time_ms=t_ms,
+                column_growth=1.0,
+            )
+        )
+        alpha = np.frombuffer(
+            image.bits().asstring(image.sizeInBytes()), dtype=np.uint8
+        ).reshape(image.height(), image.width(), 4)[:, :, 3]
+        columns = np.where((alpha > 8).any(axis=0))[0]
+        return int(columns.max() - columns.min() + 1)
+
+    narrow = width_at(1100)
+    wide = width_at(500)
+    assert wide >= narrow * 1.02, (wide, narrow)
+
+
+def test_render_ir_carries_scanline_effect_bursts() -> None:
+    from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+
+    ir = build_render_ir(
+        _wiping_track(),
+        _scanline_style(karaoke_anim="scanline", scanline_effect="note"),
+        width=640,
+        height=360,
+        fps=60,
+    )
+    bursts = ir["track"]["lines"][0]["fx_bursts"]
+    assert bursts
+    assert {burst["kind"] for burst in bursts} == {"scanline"}
+    assert {burst["sprite"] for burst in bursts} == {"note"}
+    assert {burst["emit_ms"] for burst in bursts} == {400}
+    assert all("color_id" in burst for burst in bursts)
+
+    shaped = build_render_ir(
+        _wiping_track(),
+        _scanline_style(karaoke_anim="scanline", scanline_shape="bubble"),
+        width=640,
+        height=360,
+        fps=60,
+    )
+    assert shaped["style"]["scanline_shape"] == "bubble"
 
 
 def test_painter_utopia_scanline_varies_with_width(qapp) -> None:
@@ -926,6 +1844,24 @@ def test_remap_scanline_role_reference_follows_rename_and_delete() -> None:
     dangling = _role_scheme_style(scanline_role_name=None)
     assert remap_scanline_role_reference(dangling, {"锋面": None}) is None
 
+    # 扫字线粒子特效的独立来源引用同样维护；删除回退特效主题色档。
+    effect_style = _role_scheme_style(
+        scanline_effect_color_mode="role",
+        scanline_effect_role_name="锋面",
+    )
+    effect_renamed = remap_scanline_role_reference(
+        effect_style, {"锋面": "新锋面"}
+    )
+    assert effect_renamed is not None
+    assert effect_renamed.scanline_effect_role_name == "新锋面"
+    assert effect_renamed.scanline_effect_color_mode == "role"
+    effect_deleted = remap_scanline_role_reference(
+        effect_style, {"锋面": None}
+    )
+    assert effect_deleted is not None
+    assert effect_deleted.scanline_effect_color_mode == "theme"
+    assert effect_deleted.scanline_effect_role_name is None
+
 
 def test_remap_appearance_role_references_follow_rename_and_delete() -> None:
     from krok_helper.subtitle_render.domain.models import remap_appearance_role_references
@@ -1014,6 +1950,108 @@ def test_gpu_scanline_role_mode_uses_role_fill(monkeypatch) -> None:
     assert _visible_diff(color, role) > 50
     # 悬空名字：sidecar 端归一回 color 模式，与单独颜色逐像素一致。
     assert _visible_diff(color, dangling) == 0
+
+
+def test_gpu_scanline_effect_particles_are_drawn(monkeypatch) -> None:
+    """GPU 口径：扫字线特效粒子随锋面出现，且同帧重渲染逐像素一致。"""
+
+    pytest.importorskip("PyQt6.QtWidgets")
+    from krok_helper.subtitle_render.native.backend import (
+        NativeRendererProcess,
+        SharedFrameRingReader,
+        resolve_native_renderer_path,
+    )
+
+    renderer_path = resolve_native_renderer_path()
+    if renderer_path is None:
+        pytest.skip("native renderer sidecar not built")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QApplication.instance() or QApplication([])
+
+    track = _wiping_track()
+
+    def gpu_frame(style: Style, t_ms: int) -> bytes:
+        with NativeRendererProcess(renderer_path, response_timeout_s=60.0) as renderer:
+            renderer.configure_gpu(
+                track, style, width=640, height=360, fps=60, force_warp=True
+            )
+            event = renderer.render_gpu_frame(
+                t_ms, force_warp=True, frame_index=0
+            )
+            reader = SharedFrameRingReader.from_event(event)
+            try:
+                reader.attach()
+                image = reader.read_qimage(event).convertToFormat(
+                    QImage.Format.Format_RGBA8888
+                )
+                bits = image.constBits()
+                bits.setsize(image.sizeInBytes())
+                return bytes(bits)
+            finally:
+                reader.close()
+
+    plain = gpu_frame(_scanline_style(karaoke_anim="scanline"), 500)
+    petal_style = _scanline_style(
+        karaoke_anim="scanline", scanline_effect="sakura"
+    )
+    petal = gpu_frame(petal_style, 500)
+    assert _visible_diff(plain, petal) > 20
+    assert petal == gpu_frame(petal_style, 500)
+    # 雪花走同一套锋面拖尾：sidecar 按 IR 轮廓表构建，端到端可绘。
+    snow = gpu_frame(
+        _scanline_style(karaoke_anim="scanline", scanline_effect="snow"), 500
+    )
+    assert _visible_diff(plain, snow) > 20
+
+
+def test_gpu_scanline_column_shapes_are_drawn(monkeypatch) -> None:
+    """GPU 口径：烈焰棒/水泡替换高亮带，且同帧重渲染逐像素一致。"""
+
+    pytest.importorskip("PyQt6.QtWidgets")
+    from krok_helper.subtitle_render.native.backend import (
+        NativeRendererProcess,
+        SharedFrameRingReader,
+        resolve_native_renderer_path,
+    )
+
+    renderer_path = resolve_native_renderer_path()
+    if renderer_path is None:
+        pytest.skip("native renderer sidecar not built")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QApplication.instance() or QApplication([])
+
+    track = _wiping_track()
+
+    def gpu_frame(style: Style, t_ms: int) -> bytes:
+        with NativeRendererProcess(renderer_path, response_timeout_s=60.0) as renderer:
+            renderer.configure_gpu(
+                track, style, width=640, height=360, fps=60, force_warp=True
+            )
+            event = renderer.render_gpu_frame(
+                t_ms, force_warp=True, frame_index=0
+            )
+            reader = SharedFrameRingReader.from_event(event)
+            try:
+                reader.attach()
+                image = reader.read_qimage(event).convertToFormat(
+                    QImage.Format.Format_RGBA8888
+                )
+                bits = image.constBits()
+                bits.setsize(image.sizeInBytes())
+                return bytes(bits)
+            finally:
+                reader.close()
+
+    band = gpu_frame(_scanline_style(karaoke_anim="scanline"), 500)
+    for shape in ("flame", "bubble"):
+        style = _scanline_style(
+            karaoke_anim="scanline",
+            scanline_shape=shape,
+            scanline_color="#FF7A1A",
+        )
+        shaped = gpu_frame(style, 500)
+        assert _visible_diff(band, shaped) > 20, shape
+        assert shaped == gpu_frame(style, 500)
 
 
 def test_painter_scanline_follow_modes_paint_fixed_state(qapp) -> None:

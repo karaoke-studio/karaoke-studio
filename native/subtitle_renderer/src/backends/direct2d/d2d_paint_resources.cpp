@@ -284,6 +284,34 @@ Microsoft::WRL::ComPtr<ID2D1BitmapBrush> createScanlineMaskBrush(
     return brush;
 }
 
+Microsoft::WRL::ComPtr<ID2D1Bitmap> createScanlineColumnBitmap(
+    ID2D1DeviceContext *context,
+    const std::uint8_t *pixels,
+    UINT32 width,
+    UINT32 height,
+    const D2DDevice &device
+) {
+    const D2D1_BITMAP_PROPERTIES bitmapProps = D2D1::BitmapProperties(
+        D2D1_PIXEL_FORMAT{
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            D2D1_ALPHA_MODE_PREMULTIPLIED,
+        }
+    );
+    Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+    checkHr(
+        context->CreateBitmap(
+            D2D1::SizeU(width, height),
+            pixels,
+            width * 4,
+            bitmapProps,
+            &bitmap
+        ),
+        "ID2D1DeviceContext::CreateBitmap(scanline column)",
+        device
+    );
+    return bitmap;
+}
+
 Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     ID2D1DeviceContext *context,
     const std::wstring &path

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections import OrderedDict
 from threading import Lock, local as thread_local
 from typing import Hashable, Optional
@@ -540,6 +540,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     main_scanline_front as _main_scanline_front,
     map_front_through_transform as _map_scanline_front,
     paint_scanline_strip as _paint_scanline_strip,
+    paint_scanline_column as _paint_scanline_column,
     scanline_params_for_style as _scanline_params_for_style,
     lane_alignment as _lane_alignment,
     karaoke_fill_segments as _build_horizontal_karaoke_fill_segments,
@@ -3460,7 +3461,24 @@ def _scanline_context(
     front = _main_scanline_front(fill_segments, t_ms, rtl)
     if front is None:
         return None
-    return _scanline_params_for_style(style), front
+    growth = 1.0
+    for segment in fill_segments:
+        start = int(segment.start_ms)
+        end = int(segment.end_ms)
+        if start <= t_ms <= end:
+            duration = max(end - start, 1)
+            grow_ms = min(180.0, max(float(duration) * 0.6, 40.0))
+            raw = min(max((t_ms - start) / grow_ms, 0.0), 1.0)
+            growth = raw * raw * (3.0 - 2.0 * raw)
+            break
+    return (
+        replace(
+            _scanline_params_for_style(style),
+            time_ms=int(t_ms),
+            column_growth=growth,
+        ),
+        front,
+    )
 
 
 def _paint_main_scanline_static(
@@ -3468,6 +3486,8 @@ def _paint_main_scanline_static(
     layout: _LineLayout,
     t_ms: int,
     style: Style,
+    *,
+    shape_fade: float = 1.0,
 ) -> None:
     """静态（非逐字过渡）路径的主文字扫字线：走字锋面处叠加高亮发光带。"""
 
@@ -3487,7 +3507,204 @@ def _paint_main_scanline_static(
             style=run[0].style,
             rtl=layout.rtl,
             colors=_effective_karaoke_colors(run[0].style),
+            opacity=shape_fade,
         )
+
+
+SCANLINE_SHAPE_FADE_IN_MS = 160
+SCANLINE_SHAPE_FADE_OUT_MS = 220
+
+
+def _scanline_shape_fade(
+    t_ms: int,
+    *,
+    start_ms: int | None,
+    end_ms: int | None,
+    hold_until_ms: int | None = None,
+) -> float:
+    """柱体出现/消失的透明度包络：开场淡入、最后一个字唱完后再淡出。"""
+
+    if start_ms is None or end_ms is None or end_ms <= start_ms:
+        return 1.0
+
+    def smoothstep(value: float) -> float:
+        progress = min(max(value, 0.0), 1.0)
+        return progress * progress * (3.0 - 2.0 * progress)
+
+    fade_in = smoothstep((float(t_ms) - start_ms) / SCANLINE_SHAPE_FADE_IN_MS)
+    fade_out_start = max(
+        int(hold_until_ms) if hold_until_ms is not None else start_ms,
+        end_ms - SCANLINE_SHAPE_FADE_OUT_MS,
+    )
+    if t_ms <= fade_out_start or end_ms <= fade_out_start:
+        return min(fade_in, 1.0)
+    fade_out = smoothstep(
+        (end_ms - float(t_ms)) / float(max(end_ms - fade_out_start, 1))
+    )
+    return min(fade_in, fade_out)
+
+
+def _scanline_shape_colors(
+    layout: _LineLayout,
+    t_ms: int,
+    front: float,
+):
+    """取锋面所在字符自己的角色配色，供跟随字体·走字前/后使用。
+
+    普通高亮带逐 glyph run 取 ``effective_karaoke_colors(run[0].style)``；
+    柱体是行级 overlay，不能直接用 ``layout.colors``（行样式），否则多角色
+    行会一直取到行级/第一个角色的配色。
+    """
+
+    render_line = layout.render_line
+    if render_line is None or not layout.char_x_ranges:
+        return layout.colors
+    index: int | None = None
+    for position, (start, end) in enumerate(layout.intervals):
+        if end > start and start <= t_ms <= end:
+            index = position
+            break
+    if index is None:
+        for position, (start, end) in enumerate(layout.intervals):
+            if end > start and start <= t_ms:
+                index = position
+        if index is None and layout.intervals:
+            index = 0
+    if index is not None:
+        glyphs = _role_glyphs_by_index(render_line, layout.text_layout)
+        if 0 <= index < len(glyphs):
+            glyph = glyphs[index]
+            if glyph is not None:
+                return _effective_karaoke_colors(glyph.style)
+    # text layout 缺失（注音/缓存层路径）时按锋面找最近的字符。
+    for position, (left, right) in enumerate(layout.char_x_ranges):
+        if left <= front <= right:
+            glyphs = _role_glyphs_by_index(render_line, layout.text_layout)
+            if position < len(glyphs) and glyphs[position] is not None:
+                return _effective_karaoke_colors(glyphs[position].style)
+    return layout.colors
+
+
+def _paint_scanline_shape_overlay(
+    painter: QPainter,
+    layout: _LineLayout,
+    t_ms: int,
+    style: Style,
+    *,
+    display_start_ms: int | None = None,
+    display_end_ms: int | None = None,
+) -> None:
+    """把烈焰棒/水泡统一画在文字与注音之后（行级 overlay）。
+
+    柱体不是字形内部的高亮带，而是覆盖在文字层/文字动画层/注音层之上的
+    独立物体；必须在 ruby 画完后再落笔。这里用整行 rect 而不是逐 glyph
+    run，避免注音行/text layer 路径拿不到主文字 runs 时柱体丢失。
+    """
+
+    shape = str(getattr(style, "scanline_shape", "band") or "band")
+    if shape not in {"flame", "bubble"}:
+        return
+    if not effective_karaoke_scanline(style):
+        return
+    if getattr(layout, "vertical", False):
+        return
+    context = _scanline_context(style, layout.fill_segments, t_ms, layout.rtl)
+    if context is not None:
+        params, front = context
+    else:
+        # 注音行/文本层路径的 fill_segments 可能是 ruby 专用的零时长段，
+        # 主扫字线上下文会返回 None；改用字符实际区间推锋面，保证柱体仍画。
+        params = replace(
+            _scanline_params_for_style(style),
+            time_ms=int(t_ms),
+            column_growth=1.0,
+        )
+        front = None
+        for index, (start, end) in enumerate(layout.intervals):
+            if end <= start or not (start <= t_ms <= end):
+                continue
+            if index >= len(layout.char_x_ranges):
+                break
+            left, right = layout.char_x_ranges[index]
+            ratio = (t_ms - start) / (end - start)
+            if layout.rtl:
+                ratio = 1.0 - ratio
+            front = float(left) + (float(right) - float(left)) * ratio
+            break
+        if front is None:
+            # 字符间空隙/行尾保持柱体可见：用上一字结束边或下一字起始边，
+            # 避免柱体在字与字之间突然消失再出现；整行进出仍由 fade 包络控制。
+            previous_edge: float | None = None
+            next_edge: float | None = None
+            for index, (start, end) in enumerate(layout.intervals):
+                if end <= start or index >= len(layout.char_x_ranges):
+                    continue
+                left, right = layout.char_x_ranges[index]
+                if end <= t_ms:
+                    previous_edge = float(left if layout.rtl else right)
+                elif start >= t_ms and next_edge is None:
+                    next_edge = float(right if layout.rtl else left)
+            front = previous_edge if previous_edge is not None else next_edge
+        if front is None:
+            return
+    rect = layout.line_rect
+    if rect is None or rect.height() <= 0.0 or rect.width() <= 0.0:
+        return
+    if display_start_ms is None and layout.intervals:
+        display_start_ms = int(layout.intervals[0][0])
+    if display_end_ms is None and layout.intervals:
+        display_end_ms = int(layout.intervals[-1][1])
+    fade = _scanline_shape_fade(
+        int(t_ms),
+        start_ms=display_start_ms,
+        end_ms=display_end_ms,
+        hold_until_ms=(
+            int(layout.intervals[-1][1]) if layout.intervals else None
+        ),
+    )
+    if fade <= 0.0:
+        return
+    target_top: float | None = None
+    if layout.ruby_layouts:
+        for ruby_layout in layout.ruby_layouts:
+            ruby_metrics = ruby_layout.metrics or layout.ruby_metrics
+            if ruby_metrics is None:
+                continue
+            ruby_top = float(ruby_layout.baseline_y - ruby_metrics.ascent())
+            target_top = (
+                ruby_top
+                if target_top is None
+                else min(target_top, ruby_top)
+            )
+        if target_top is not None:
+            target_top -= float(style.font_size_px or rect.height()) * 0.20
+    shape_colors = _scanline_shape_colors(layout, t_ms, front)
+    if params.mode in {"follow_before", "follow_after", "brighten"}:
+        state = (
+            shape_colors.before
+            if params.mode == "follow_before"
+            else shape_colors.after
+        )
+        params = replace(params, shape_fill=state.text)
+    gradient_line = QRectF(rect)
+    if layout.signal_band_left is not None:
+        gradient_line = QRectF(
+            float(layout.signal_band_left),
+            rect.top(),
+            max(rect.right() - float(layout.signal_band_left), 1.0),
+            rect.height(),
+        )
+    _paint_scanline_column(
+        painter,
+        rect,
+        front=front,
+        params=params,
+        colors=shape_colors,
+        opacity=fade,
+        font_px=float(style.font_size_px or rect.height()),
+        target_top=target_top,
+        gradient_line=gradient_line,
+    )
 
 
 STROKE_FLASH_MS = 240
@@ -4014,6 +4231,12 @@ def _paint_line_fx_particles(
         and style.sing_fx == "none"
         and style.entry_anim not in particle_entry_anims
         and style.exit_anim not in particle_exit_anims
+        # 扫字线特效（2026-10）：高亮带本身不经过粒子通道，这里单独放行，
+        # 否则整条扫字线粒子会被「无粒子组合」早退跳过。
+        and not (
+            str(getattr(style, "scanline_effect", "none") or "none") != "none"
+            and effective_karaoke_scanline(style)
+        )
     ):
         return
     from krok_helper.subtitle_render.engine.render.effects.particles import (
@@ -4060,6 +4283,7 @@ def _paint_line_fx_particles(
                 for ch in render_line.chars
             ],
             char_styles=char_styles,
+            reverse=bool(layout.rtl),
         )
         # LineLayout 是 frozen dataclass：绕过 __setattr__ 挂缓存。
         object.__setattr__(
@@ -4609,6 +4833,14 @@ def _paint_line_static(
             # 前层粒子画在注音之后（2026-10-18 用户口径：本体在主文字
             # 前、生长时不应被注音压住；front 统一盖过正文与注音）。
             paint_rubies_on_top()
+            _paint_scanline_shape_overlay(
+                painter,
+                layout,
+                t_ms,
+                style,
+                display_start_ms=display_start_ms,
+                display_end_ms=display_end_ms,
+            )
             paint_fx_particles(front=True)
             return
         if layout.has_inline_styles:
@@ -4647,6 +4879,14 @@ def _paint_line_static(
         paint_stroke_flash()
         # 前层粒子画在注音之后（同上：front 层盖过正文与注音）。
         paint_rubies_on_top()
+        _paint_scanline_shape_overlay(
+            painter,
+            layout,
+            t_ms,
+            style,
+            display_start_ms=display_start_ms,
+            display_end_ms=display_end_ms,
+        )
         paint_fx_particles(front=True)
         return
 
@@ -4656,10 +4896,35 @@ def _paint_line_static(
         _paint_line_layers(painter, layout, t_ms, guide_anim_anchor_ms)
     else:
         _paint_line_direct(painter, layout, t_ms, guide_anim_anchor_ms)
-    _paint_main_scanline_static(painter, layout, t_ms, style)
+    _paint_main_scanline_static(
+        painter,
+        layout,
+        t_ms,
+        style,
+        shape_fade=(
+            _scanline_shape_fade(
+                int(t_ms),
+                start_ms=display_start_ms,
+                end_ms=display_end_ms,
+                hold_until_ms=(
+                    int(layout.intervals[-1][1]) if layout.intervals else None
+                ),
+            )
+            if style.scanline_shape in {"flame", "bubble"}
+            else 1.0
+        ),
+    )
     paint_stroke_flash()
     # 前层粒子画在注音之后（同上：front 层盖过正文与注音）。
     paint_rubies_on_top()
+    _paint_scanline_shape_overlay(
+        painter,
+        layout,
+        t_ms,
+        style,
+        display_start_ms=display_start_ms,
+        display_end_ms=display_end_ms,
+    )
     paint_fx_particles(front=True)
 
 
@@ -6593,6 +6858,7 @@ def _paint_ruby_scanline_static(
             style=layout.style,
             rtl=rtl,
             colors=_effective_ruby_karaoke_colors(layout.style),
+            allow_column=False,
         )
 
 
@@ -6658,6 +6924,7 @@ def _paint_ruby_text_fragment(
             style=style,
             rtl=rtl,
             colors=_effective_ruby_karaoke_colors(style),
+            allow_column=False,
         )
 
 
