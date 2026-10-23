@@ -3350,7 +3350,7 @@ def test_property_panel_sections_are_collapsible(qapp):
     header = first_section.header
     content = first_section.layout().itemAt(1).widget()
 
-    assert header.text() == "入退场动画"
+    assert header.text() == "入退场/唱字动画"
     assert not content.isHidden()
     assert header.arrowType() == Qt.ArrowType.DownArrow
 
@@ -6844,6 +6844,17 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert emitted[-1].karaoke_anim == "scanline"
     assert panel._scanline_mode_combo.isEnabled()
     assert panel._scanline_width_spin.isEnabled()
+    assert panel._scanline_mode_combo.currentData() == "color"
+    assert not panel._scanline_color_btn.isHidden()
+    panel._scanline_mode_combo.setCurrentIndex(
+        panel._scanline_mode_combo.findData("default")
+    )
+    assert emitted[-1].scanline_mode == "default"
+    assert panel._scanline_color_btn.isHidden()
+    panel._scanline_mode_combo.setCurrentIndex(
+        panel._scanline_mode_combo.findData("color")
+    )
+    assert emitted[-1].scanline_mode == "color"
     assert panel._scanline_color_btn.isEnabled()
     assert not panel._scanline_color_btn.isHidden()
     assert panel._scanline_brightness_spin.isHidden()
@@ -6879,6 +6890,49 @@ def test_property_panel_animation_controls_emit_style(qapp):
     )
     assert emitted[-1].reverse_karaoke_anim == "utopia_scanline"
     assert panel._scanline_width_spin.isEnabled()
+    # 粒子设置对象药丸：切到扫字线后颜色/尺寸/数量编辑扫字线独立字段。
+    assert panel._fx_target_pill.currentRouteKey() == "sing"
+    panel._fx_target_pill.setCurrentItem("scanline")
+    assert panel._fx_particle_mode_combo.currentData() == "theme"
+    assert panel._fx_count_spin.isEnabled()
+    assert panel._scanline_effect_combo.currentData() == "none"
+    assert panel._scanline_shape_combo.currentData() == "band"
+    panel._scanline_effect_combo.setCurrentIndex(
+        panel._scanline_effect_combo.findData("snow")
+    )
+    assert emitted[-1].scanline_effect == "snow"
+    panel._fx_size_spin.setValue(55)
+    assert emitted[-1].scanline_effect_size_pct == 55
+    panel._fx_count_spin.setValue(16)
+    assert emitted[-1].scanline_effect_count == 16
+    # 扫字线形态：普通高亮 → 烈焰棒/水泡；形态与扫字线粒子特效互不干扰。
+    panel._scanline_shape_combo.setCurrentIndex(
+        panel._scanline_shape_combo.findData("flame")
+    )
+    assert emitted[-1].scanline_shape == "flame"
+    assert panel._scanline_effect_combo.isEnabled()
+    # 外部灌入样式：档位/数值/形态回显。
+    panel.set_style(
+        Style(
+            karaoke_anim="scanline",
+            scanline_effect="snow",
+            scanline_effect_size_pct=40,
+            scanline_effect_count=6,
+            scanline_shape="bubble",
+            scanline_effect_color_mode="color",
+            scanline_effect_color="#123456",
+        )
+    )
+    assert panel._scanline_effect_combo.currentData() == "snow"
+    assert panel._scanline_shape_combo.currentData() == "bubble"
+    assert panel._scanline_effect_combo.isEnabled()
+    assert panel._fx_size_spin.value() == 40
+    assert panel._fx_count_spin.value() == 6
+    assert panel._fx_particle_mode_combo.currentData() == "color"
+    assert panel._fx_color_btn.color == "#123456"
+    panel.set_style(Style(karaoke_anim="scanline", scanline_effect="none"))
+    assert panel._scanline_effect_combo.currentData() == "none"
+    assert panel._scanline_effect_combo.isEnabled()
     # 回显：外部灌入样式后参数仍激活、值跟随、可见性按模式同步。
     panel.set_style(Style(karaoke_anim="utopia", scanline_width_px=30))
     assert panel._karaoke_anim_combo.currentData() == "utopia"
@@ -7001,12 +7055,20 @@ def test_property_panel_particle_color_mode_controls(qapp):
     ] == ["仅实色", "+描边", "+装饰", "全有"]
     # 取色层级仅对来源配色四档启用：默认单独颜色灰显。
     assert not panel._fx_particle_layers_combo.isEnabled()
-    # 默认单独颜色：显示双色槽（两颗颜色按钮）、隐藏来源下拉；
-    # 「仅唱字」默认勾选。
+    # 默认单独颜色：显示双色槽（两颗颜色按钮）、隐藏来源下拉。
     assert not panel._fx_color_slot.isHidden()
     assert not panel._fx_color_btn2.isHidden()
     assert panel._fx_particle_role_combo.isHidden()
-    assert panel._fx_apply_check.isChecked()
+    # 药丸默认编辑唱字装饰粒子；扫字线目标额外有「特效主题色」档。
+    assert panel._fx_target_pill.currentRouteKey() == "sing"
+    assert "theme" not in [
+        panel._fx_particle_mode_combo.itemData(index)
+        for index in range(panel._fx_particle_mode_combo.count())
+    ]
+    panel._fx_target_pill.setCurrentItem("scanline")
+    assert panel._fx_particle_mode_combo.currentData() == "theme"
+    assert panel._fx_particle_mode_combo.itemData(0) == "theme"
+    panel._fx_target_pill.setCurrentItem("sing")
     # 跟随字体档：双色槽与来源都隐藏（粒子无亮度参数）；取色层级启用。
     panel._fx_particle_mode_combo.setCurrentIndex(
         panel._fx_particle_mode_combo.findData("follow_before")
@@ -7043,21 +7105,11 @@ def test_property_panel_particle_color_mode_controls(qapp):
         )
     )
     assert panel._fx_particle_role_combo.currentData() == "幽灵"
-    # 「仅唱字」开关（语义反转：勾选 = 不联动入退场）：发出样式变更并回显。
-    assert panel._fx_apply_check.isChecked()  # 默认勾选
-    panel._fx_apply_check.setChecked(False)
-    assert emitted[-1].fx_apply_to_entry_exit is True  # 取消勾选 = 联动入退场
-    panel._fx_apply_check.setChecked(True)
-    assert emitted[-1].fx_apply_to_entry_exit is False
-    # 回显：外部灌入样式后模式下拉/开关跟随、可见性按模式同步。
+    # 回显：外部灌入样式后模式下拉跟随、可见性按模式同步。
     panel.set_style(
-        Style(
-            fx_particle_color_mode="follow_after",
-            fx_apply_to_entry_exit=True,
-        )
+        Style(fx_particle_color_mode="follow_after")
     )
     assert panel._fx_particle_mode_combo.currentData() == "follow_after"
-    assert not panel._fx_apply_check.isChecked()
     assert panel._fx_color_slot.isHidden()
     assert panel._fx_particle_role_combo.isHidden()
     # 未知模式回落单独颜色。
@@ -11931,3 +11983,79 @@ def test_layout_row_click_respects_non_checkable_items(qapp):
     assert item.checkState() == Qt.CheckState.Unchecked
     assert dialog._selected_ids == set()
     dialog.close()
+
+
+def test_fx_particle_target_pill_keeps_settings_separate(qapp):
+    """药丸切换三类粒子：颜色/尺寸/数量写各自字段，互不覆盖。"""
+
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel.set_style(Style(karaoke_anim="scanline"))
+
+    # 唱字装饰粒子。
+    panel._fx_target_pill.setCurrentItem("sing")
+    panel._fx_particle_mode_combo.setCurrentIndex(
+        panel._fx_particle_mode_combo.findData("color")
+    )
+    panel._set_fx_color("color", "#111111")
+    panel._set_fx_color("color2", "#222222")
+    panel._fx_size_spin.setValue(60)
+    panel._fx_count_spin.setValue(20)
+    style = emitted[-1]
+    assert style.fx_particle_color_mode == "color"
+    assert style.fx_particle_color == "#111111"
+    assert style.fx_particle_color2 == "#222222"
+    assert style.fx_particle_size_em == pytest.approx(0.60)
+    assert style.fx_particle_count == 20
+
+    # 入退场动画：独立颜色/尺寸，数量控件保持可见但停用且不写字段。
+    panel._fx_target_pill.setCurrentItem("anim")
+    assert panel._fx_particle_mode_combo.currentData() == "sakura"
+    assert not panel._fx_count_spin.isHidden()
+    assert not panel._fx_count_spin.isEnabled()
+    assert panel._fx_count_spin.value() == 14
+    panel._fx_particle_mode_combo.setCurrentIndex(
+        panel._fx_particle_mode_combo.findData("color")
+    )
+    panel._set_fx_color("color", "#333333")
+    panel._set_fx_color("color2", "#444444")
+    panel._fx_size_spin.setValue(70)
+    style = emitted[-1]
+    assert style.anim_fx_color_mode == "color"
+    assert style.anim_fx_color == "#333333"
+    assert style.anim_fx_color2 == "#444444"
+    assert style.anim_fx_size_em == pytest.approx(0.70)
+    assert style.fx_particle_color == "#111111"
+    assert style.fx_particle_size_em == pytest.approx(0.60)
+
+    # 扫字线粒子：独立设置 + 主题色档。
+    panel._fx_target_pill.setCurrentItem("scanline")
+    assert panel._fx_particle_mode_combo.currentData() == "theme"
+    assert "theme" in [
+        panel._fx_particle_mode_combo.itemData(index)
+        for index in range(panel._fx_particle_mode_combo.count())
+    ]
+    panel._fx_particle_mode_combo.setCurrentIndex(
+        panel._fx_particle_mode_combo.findData("color")
+    )
+    panel._set_fx_color("color", "#555555")
+    panel._set_fx_color("color2", "#666666")
+    panel._fx_size_spin.setValue(45)
+    panel._fx_count_spin.setValue(8)
+    style = emitted[-1]
+    assert style.scanline_effect_color_mode == "color"
+    assert style.scanline_effect_color == "#555555"
+    assert style.scanline_effect_color2 == "#666666"
+    assert style.scanline_effect_size_pct == 45
+    assert style.scanline_effect_count == 8
+    assert style.anim_fx_color == "#333333"
+    assert style.fx_particle_color == "#111111"
+
+    # 切回唱字：控件回显原设置，不被后两类改写。
+    panel._fx_target_pill.setCurrentItem("sing")
+    assert panel._fx_particle_mode_combo.currentData() == "color"
+    assert panel._fx_color_btn.color == "#111111"
+    assert panel._fx_color_btn2.color == "#222222"
+    assert panel._fx_size_spin.value() == 60
+    assert panel._fx_count_spin.value() == 20

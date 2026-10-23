@@ -126,6 +126,9 @@ from krok_helper.subtitle_render.frontend.properties.pages.background import (
 )
 from krok_helper.subtitle_render.frontend.properties.pages.effects import (
     EffectsPropertyPageBuilder,
+    FX_PARTICLE_COLOR_MODE_OPTIONS,
+    PARTICLE_TARGET_FIELDS,
+    SCANLINE_PARTICLE_COLOR_MODE_OPTIONS,
 )
 from krok_helper.subtitle_render.frontend.properties.pages.layout import (
     LayoutPropertyPageBuilder,
@@ -768,6 +771,9 @@ class PropertyPanel(QWidget):
         super().__init__(parent)
         self._style = Style()
         self._syncing = False
+        # 粒子设置对象（药丸切换）：anim / sing / scanline。三类粒子的
+        # 颜色/尺寸/数量独立保存，这里只是当前编辑目标，不写进样式。
+        self._fx_target = "sing"
         # 字重下拉最近一次重建对应的（字体库代际, 字体族），按槽位。
         # 代际或字体族变化才整表 clear+重填；选项不变时只调整选中项。
         # 改字号/颜色等操作会高频走到这里，全部发生在 UI 线程。
@@ -1311,13 +1317,21 @@ class PropertyPanel(QWidget):
                     ),
                 )
             )
+            _scanline_mode = self._style.scanline_mode
             self._scanline_mode_combo.setCurrentIndex(
                 max(
                     0,
                     self._scanline_mode_combo.findData(
-                        self._style.scanline_mode
-                        if self._style.scanline_mode
-                        in {"color", "brighten", "role"}
+                        _scanline_mode
+                        if _scanline_mode
+                        in {
+                            "default",
+                            "color",
+                            "brighten",
+                            "follow_before",
+                            "follow_after",
+                            "role",
+                        }
                         else "color"
                     ),
                 )
@@ -1341,63 +1355,6 @@ class PropertyPanel(QWidget):
                     self._fx_sing_combo.findData(
                         getattr(self._style, "sing_fx", "none")
                     ),
-                )
-            )
-            self._fx_particle_mode_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._fx_particle_mode_combo.findData(
-                        self._style.fx_particle_color_mode
-                        if self._style.fx_particle_color_mode in {
-                            "color", "sakura", "follow_mix", "follow_before",
-                            "follow_after", "role",
-                        }
-                        else "color"
-                    ),
-                )
-            )
-            self._fx_particle_layers_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._fx_particle_layers_combo.findData(
-                        self._style.fx_particle_color_layers
-                        if self._style.fx_particle_color_layers in {
-                            "solid", "stroke", "decor", "all",
-                        }
-                        else "solid"
-                    ),
-                )
-            )
-            self._fx_size_spin.setValue(
-                min(
-                    max(
-                        int(
-                            round(
-                                float(
-                                    getattr(self._style, "fx_particle_size_em", 0.40)
-                                )
-                                * 100.0
-                            )
-                        ),
-                        5,
-                    ),
-                    200,
-                )
-            )
-            self._fx_count_spin.setValue(
-                min(max(int(getattr(self._style, "fx_particle_count", 14)), 2), 64)
-            )
-            self._fx_color_btn.set_color(
-                getattr(self._style, "fx_particle_color", "#FFFFFF")
-            )
-            # 双色槽：颜色二恒为真实颜色（默认白色，无「未设置」态）。
-            self._fx_color_btn2.set_color(
-                getattr(self._style, "fx_particle_color2", "#FFFFFF")
-            )
-            # 「仅唱字」勾选 = 不联动入退场（fx_apply_to_entry_exit=False）。
-            self._fx_apply_check.setChecked(
-                not bool(
-                    getattr(self._style, "fx_apply_to_entry_exit", False)
                 )
             )
             self._zoom_pulse_curve_combo.setCurrentIndex(
@@ -1751,10 +1708,12 @@ class PropertyPanel(QWidget):
     def _sync_scanline_controls(self) -> None:
         """扫字线参数永久可编辑；模式决定第三列（颜色/亮度/来源）的显示切换。
 
+        默认颜色：隐藏第三列的自定义色/亮度/来源，稳定回到出厂火色/水蓝；
         单独颜色：显示颜色；底色发光与跟随字体两档：显示亮度提升（共用
         参数）；复用配色方案：显示来源下拉。三者共用同一列位，行宽不变。
         """
         mode = self._style.scanline_mode
+        default_color = mode == "default"
         brighten = mode in {"brighten", "follow_before", "follow_after"}
         role = mode == "role"
         for control in (
@@ -1766,41 +1725,212 @@ class PropertyPanel(QWidget):
             self._scanline_glow_spin,
         ):
             control.setEnabled(True)
-        self._scanline_color_btn.setVisible(not brighten and not role)
+        self._scanline_color_btn.setVisible(
+            not brighten and not role and not default_color
+        )
         self._scanline_brightness_spin.setVisible(brighten)
         self._scanline_role_combo.setVisible(role)
         if role:
             self._refresh_scanline_role_combo()
+        # 扫字线形态与粒子特效：形态常驻（普通高亮/烈焰棒/水泡）；粒子
+        # 档位为「无」时两个数值控件灰显。档位/数值都按样式回显，外部灌入
+        # 样式同样走这里。
+        shape = str(
+            getattr(self._style, "scanline_shape", "band") or "band"
+        )
+        self._scanline_shape_combo.setCurrentIndex(
+            max(0, self._scanline_shape_combo.findData(shape))
+        )
+        effect = str(
+            getattr(self._style, "scanline_effect", "none") or "none"
+        )
+        self._scanline_effect_combo.setCurrentIndex(
+            max(0, self._scanline_effect_combo.findData(effect))
+        )
 
     def _sync_fx_particle_controls(self) -> None:
-        """粒子参数按颜色模式互换第三列：单独颜色显示双色槽（颜色一/二），
-        复用配色方案显示来源下拉，跟随字体档与默认颜色（樱花粉双色）隐藏
-        颜色与来源（颜色自动解析，粒子无亮度参数可复用，与扫字线第三列
-        「按模式互换」同款约定）。取色层级下拉仅对从配色方案取色的四档
-        （走字前/走字后/前后各一/复用配色方案）启用，其余档灰显。"""
+        """按药丸当前目标回显粒子颜色/尺寸/数量。
 
-        mode = self._style.fx_particle_color_mode
-        follow = mode in {"sakura", "follow_mix", "follow_before", "follow_after"}
-        role = mode == "role"
-        for control in (
-            self._fx_particle_mode_combo,
-            self._fx_size_spin,
-            self._fx_count_spin,
-            self._fx_color_slot,
-            self._fx_particle_role_combo,
-            self._fx_particle_layers_combo,
-            self._fx_apply_check,
-        ):
-            control.setEnabled(True)
-        self._fx_color_slot.setVisible(not follow and not role)
-        self._fx_particle_role_combo.setVisible(role)
-        # 取色层级只对「从配色方案取色」的档位有意义（默认颜色/单独颜色
-        # 无来源态可裁层）。
-        self._fx_particle_layers_combo.setEnabled(
-            mode in {"follow_before", "follow_after", "follow_mix", "role"}
+        三类目标字段彻底解耦：入退场 ``anim_fx_*``、唱字装饰
+        ``fx_particle_*``、扫字线粒子 ``scanline_effect_*``。颜色模式决定
+        第三列显示双色槽还是来源下拉；取色层级只对来源配色四档启用；
+        入退场粒子数量固定，目标为入退场时数量控件隐藏。
+        """
+
+        target = self._fx_target if self._fx_target in PARTICLE_TARGET_FIELDS else "sing"
+        fields = PARTICLE_TARGET_FIELDS[target]
+        scanline_target = target == "scanline"
+        default_mode = "theme" if scanline_target else "color"
+        mode = str(getattr(self._style, fields["mode"], default_mode) or default_mode)
+        valid_modes = (
+            {"theme", "color", "sakura", "follow_mix", "follow_before",
+             "follow_after", "role"}
+            if scanline_target
+            else {"color", "sakura", "follow_mix", "follow_before",
+                  "follow_after", "role"}
         )
-        if role:
-            self._refresh_fx_particle_role_combo()
+        if mode not in valid_modes:
+            mode = default_mode
+        options = (
+            SCANLINE_PARTICLE_COLOR_MODE_OPTIONS
+            if scanline_target
+            else FX_PARTICLE_COLOR_MODE_OPTIONS
+        )
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            combo = self._fx_particle_mode_combo
+            combo.blockSignals(True)
+            try:
+                if [
+                    combo.itemData(index) for index in range(combo.count())
+                ] != [value for _label, value in options]:
+                    combo.clear()
+                    for label, value in options:
+                        combo.addItem(label, value)
+                combo.setCurrentIndex(max(0, combo.findData(mode)))
+            finally:
+                combo.blockSignals(False)
+
+            size_field = fields["size"]
+            if scanline_target:
+                self._fx_size_spin.setRange(5, 200)
+                size_value = int(
+                    getattr(self._style, size_field, 30)
+                )
+            else:
+                self._fx_size_spin.setRange(5, 200)
+                size_value = int(
+                    round(
+                        float(getattr(self._style, size_field, 0.40)) * 100.0
+                    )
+                )
+            self._fx_size_spin.blockSignals(True)
+            self._fx_size_spin.setValue(min(max(size_value, 5), 200))
+            self._fx_size_spin.blockSignals(False)
+
+            count_field = fields["count"]
+            self._fx_count_spin.blockSignals(True)
+            try:
+                if count_field is None:
+                    # 入退场数量固定 14：控件保持可见但停用（用户口径：
+                    # 不可调不等于隐藏）。
+                    self._fx_count_spin.setVisible(True)
+                    self._fx_count_spin.setEnabled(False)
+                    self._fx_count_spin.setRange(1, 64)
+                    self._fx_count_spin.setValue(14)
+                else:
+                    self._fx_count_spin.setVisible(True)
+                    self._fx_count_spin.setEnabled(True)
+                    if scanline_target:
+                        self._fx_count_spin.setRange(1, 32)
+                        count_value = int(
+                            getattr(self._style, count_field, 4)
+                        )
+                    else:
+                        self._fx_count_spin.setRange(2, 64)
+                        count_value = int(
+                            getattr(self._style, count_field, 14)
+                        )
+                    self._fx_count_spin.setValue(count_value)
+            finally:
+                self._fx_count_spin.blockSignals(False)
+
+            color1 = str(
+                getattr(self._style, fields["color"], "#FFFFFF") or "#FFFFFF"
+            )
+            color2 = str(
+                getattr(self._style, fields["color2"], "#FFFFFF") or "#FFFFFF"
+            )
+            self._fx_color_btn.set_color(color1)
+            self._fx_color_btn2.set_color(color2)
+
+            follow = mode in {
+                "sakura", "follow_mix", "follow_before", "follow_after",
+            }
+            role = mode == "role"
+            theme = mode == "theme"
+            self._fx_color_slot.setVisible(mode == "color")
+            self._fx_particle_role_combo.setVisible(role)
+            if hasattr(self, "_fx_color_field"):
+                self._fx_color_field.setVisible(mode == "color" or role)
+            self._fx_particle_layers_combo.setEnabled(
+                mode in {"follow_before", "follow_after", "follow_mix", "role"}
+            )
+            if role:
+                self._refresh_fx_particle_role_combo()
+            else:
+                self._fx_particle_role_combo.blockSignals(True)
+                try:
+                    self._fx_particle_role_combo.hide()
+                finally:
+                    self._fx_particle_role_combo.blockSignals(False)
+            self._fx_particle_mode_combo.setEnabled(True)
+            self._fx_size_spin.setEnabled(True)
+            self._fx_color_slot.setEnabled(True)
+            self._fx_particle_layers_combo.setEnabled(
+                mode in {"follow_before", "follow_after", "follow_mix", "role"}
+            )
+        finally:
+            self._syncing = was_syncing
+
+    def _on_fx_target_changed(self, target: str) -> None:
+        """药丸切换当前编辑的粒子对象（不写样式）。"""
+
+        if target not in PARTICLE_TARGET_FIELDS or target == self._fx_target:
+            return
+        self._fx_target = target
+        self._sync_fx_particle_controls()
+
+    def _fx_field(self, slot: str) -> str:
+        fields = PARTICLE_TARGET_FIELDS.get(self._fx_target, {})
+        field = fields.get(slot)
+        if not field:
+            raise KeyError(f"未知粒子目标字段: {self._fx_target}/{slot}")
+        return str(field)
+
+    def _on_fx_color_mode_changed(self, mode: object) -> None:
+        if self._syncing or mode is None:
+            return
+        self._update_style(**{self._fx_field("mode"): str(mode)})
+
+    def _on_fx_role_name_changed(self, name: object) -> None:
+        if self._syncing:
+            return
+        self._update_style(**{self._fx_field("role"): name})
+
+    def _on_fx_layers_changed(self, layers: object) -> None:
+        if self._syncing or layers is None:
+            return
+        self._update_style(**{self._fx_field("layers"): str(layers)})
+
+    def _on_fx_size_changed(self, value: int) -> None:
+        if self._syncing:
+            return
+        field = self._fx_field("size")
+        if self._fx_target == "scanline":
+            self._update_style(**{field: int(value)})
+        else:
+            self._update_style(**{field: float(value) / 100.0})
+
+    def _on_fx_count_changed(self, value: int) -> None:
+        if self._syncing:
+            return
+        field = PARTICLE_TARGET_FIELDS.get(self._fx_target, {}).get("count")
+        if field is None:
+            return
+        self._update_style(**{str(field): int(value)})
+
+    def _refresh_fx_particle_role_combo(self) -> None:
+        """粒子颜色「复用配色方案」的来源下拉（当前目标独立引用）。"""
+        if hasattr(self, "_fx_particle_role_combo"):
+            name_field = PARTICLE_TARGET_FIELDS.get(
+                self._fx_target, {}
+            ).get("role", "fx_particle_role_name")
+            self._refresh_role_source_combo(
+                self._fx_particle_role_combo,
+                str(getattr(self._style, str(name_field), None) or ""),
+            )
 
     def _refresh_scanline_role_combo(self) -> None:
         """按当前方案表重建扫字线/指示灯/音量柱/粒子颜色的「配色来源」下拉。
@@ -1811,21 +1941,13 @@ class PropertyPanel(QWidget):
             ("_scanline_role_combo", "scanline_role_name"),
             ("_lit_role_combo", "lit_role_name"),
             ("_volume_role_combo", "volume_role_name"),
-            ("_fx_particle_role_combo", "fx_particle_role_name"),
         ):
             if hasattr(self, attribute):
                 self._refresh_role_source_combo(
                     getattr(self, attribute),
                     str(getattr(self._style, field, None) or ""),
                 )
-
-    def _refresh_fx_particle_role_combo(self) -> None:
-        """粒子颜色「复用配色方案」的来源下拉（同扫字线口径）。"""
-        if hasattr(self, "_fx_particle_role_combo"):
-            self._refresh_role_source_combo(
-                self._fx_particle_role_combo,
-                str(getattr(self._style, "fx_particle_role_name", None) or ""),
-            )
+        self._refresh_fx_particle_role_combo()
 
     def _refresh_role_source_combo(
         self, combo: _WheelFocusedComboBox, selected: str
@@ -3047,6 +3169,9 @@ class PropertyPanel(QWidget):
     def _make_animation_section(self) -> QFrame:
         return self._effects_page_builder.make_animation_section()
 
+    def _make_scanline_section(self) -> QFrame:
+        return self._effects_page_builder.make_scanline_section()
+
     def _make_viewport_section(self) -> QFrame:
         return self._layout_page_builder.make_viewport_section()
 
@@ -3851,6 +3976,59 @@ class PropertyPanel(QWidget):
             )
         )
         return button
+
+    def _fx_color_button(self, slot: str, color: str) -> ColorButton:
+        """粒子目标颜色按钮（槽位在当前药丸目标里解析真实字段）。"""
+
+        button = ColorButton(color)
+        self._wire_color_edit_session(button)
+        button.clicked.connect(
+            lambda _checked=False, key=slot: self._choose_fx_color(key)
+        )
+        button.colorEntered.connect(
+            lambda value, key=slot: self._set_fx_color(key, value)
+        )
+        button.screenPickRequested.connect(
+            lambda key=slot, target=button: self._choose_fx_color(
+                key, screen_pick=True, preview_button=target
+            )
+        )
+        return button
+
+    def _fx_color_value(self, slot: str) -> str:
+        field = PARTICLE_TARGET_FIELDS.get(self._fx_target, {}).get(slot)
+        if not field:
+            return "#FFFFFF"
+        return str(getattr(self._style, str(field), "#FFFFFF") or "#FFFFFF")
+
+    def _set_fx_color(self, slot: str, color: str) -> None:
+        field = PARTICLE_TARGET_FIELDS.get(self._fx_target, {}).get(slot)
+        if not field:
+            return
+        normalized = _normalize_hex(color, self._fx_color_value(slot))
+        self._update_style(**{str(field): normalized})
+
+    def _choose_fx_color(
+        self,
+        slot: str,
+        *,
+        screen_pick: bool = False,
+        preview_button: Optional[ColorButton] = None,
+    ) -> None:
+        if screen_pick:
+            if preview_button is None:
+                return
+            self._begin_screen_color_pick(
+                preview_button,
+                lambda color: self._set_fx_color(
+                    slot, color.name(QColor.NameFormat.HexArgb)
+                ),
+            )
+            return
+        current = QColor(self._fx_color_value(slot))
+        color = _select_color(current, self, "选择颜色")
+        if color.isValid():
+            self._set_fx_color(slot, color.name(QColor.NameFormat.HexArgb))
 
     def _wire_color_edit_session(self, button: ColorButton) -> None:
         button.editStarted.connect(self._begin_color_edit_session)
@@ -5534,11 +5712,33 @@ class PropertyPanel(QWidget):
                 "reverse_karaoke_anim",
                 "scanline_mode",
                 "scanline_role_name",
+                "scanline_effect",
+                "scanline_effect_size_pct",
+                "scanline_effect_count",
+                "scanline_shape",
             }.intersection(changes):
                 self._sync_scanline_controls()
             if {
                 "fx_particle_color_mode",
+                "fx_particle_color",
+                "fx_particle_color2",
+                "fx_particle_color_layers",
                 "fx_particle_role_name",
+                "fx_particle_size_em",
+                "fx_particle_count",
+                "anim_fx_color_mode",
+                "anim_fx_color",
+                "anim_fx_color2",
+                "anim_fx_color_layers",
+                "anim_fx_role_name",
+                "anim_fx_size_em",
+                "scanline_effect_color_mode",
+                "scanline_effect_color",
+                "scanline_effect_color2",
+                "scanline_effect_color_layers",
+                "scanline_effect_role_name",
+                "scanline_effect_size_pct",
+                "scanline_effect_count",
                 "fx_apply_to_entry_exit",
             }.intersection(changes):
                 self._sync_fx_particle_controls()
@@ -5546,11 +5746,6 @@ class PropertyPanel(QWidget):
                 # 扫字线颜色不在方案/指示灯的再同步集合里：选色后按钮必须
                 # 立即回显新值（宿主回流 set_style 会走等值快路径跳过）。
                 self._scanline_color_btn.set_color(self._style.scanline_color)
-            if "fx_particle_color" in changes:
-                # 粒子颜色同上：调色盘选色后立即回显可输入控件。
-                self._fx_color_btn.set_color(self._style.fx_particle_color)
-            if "fx_particle_color2" in changes:
-                self._fx_color_btn2.set_color(self._style.fx_particle_color2)
             if set(changes).intersection(
                 _SCHEME_FIELDS | {"singer_style_overrides", "custom_style_schemes"}
             ):

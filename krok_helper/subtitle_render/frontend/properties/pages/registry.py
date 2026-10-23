@@ -58,6 +58,7 @@ def _build_timing_page(host: Any, scroll_page: Callable, _section_pair: Callable
 def _build_effects_page(host: Any, scroll_page: Callable, _section_pair: Callable) -> Any:
     scroll, layout = scroll_page()
     layout.addWidget(host._make_animation_section())
+    layout.addWidget(host._make_scanline_section())
     layout.addWidget(host._make_volume_section())
     layout.addWidget(host._make_lit_section())
     layout.addStretch(1)

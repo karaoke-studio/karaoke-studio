@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from PyQt6.QtWidgets import QPushButton
+from PyQt6.QtWidgets import QLabel, QPushButton
 
 from krok_helper.subtitle_render.frontend.properties.pages.effects import (
     EffectsPropertyPageBuilder,
@@ -47,6 +47,29 @@ class _Host:
     def _on_section_edge_both_toggled(self, checked: bool) -> None:
         self._update_style(section_edge_both_animations=checked)
 
+    def _on_fx_target_changed(self, target: str) -> None:
+        self.updates.append({"_fx_target": target})
+
+    def _on_fx_color_mode_changed(self, mode) -> None:
+        self._update_style(fx_target_color_mode=mode)
+
+    def _on_fx_role_name_changed(self, name) -> None:
+        self._update_style(fx_target_role_name=name)
+
+    def _on_fx_layers_changed(self, layers) -> None:
+        self._update_style(fx_target_layers=layers)
+
+    def _on_fx_size_changed(self, value: int) -> None:
+        self._update_style(fx_target_size=value)
+
+    def _on_fx_count_changed(self, value: int) -> None:
+        self._update_style(fx_target_count=value)
+
+    def _fx_color_button(self, slot: str, color: str):
+        button = QPushButton(color)
+        button.setObjectName(slot)
+        return button
+
     def _color_button(self, field: str, color: str):
         button = QPushButton(color)
         button.setObjectName(field)
@@ -56,7 +79,7 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     host = _Host()
     section = EffectsPropertyPageBuilder(host).make_animation_section()
 
-    assert section.header.text() == "入退场动画"
+    assert section.header.text() == "入退场/唱字动画"
     assert host._animation_grid._max_columns == 2
     assert host._entry_anim_combo.count() == 23
     assert host._entry_anim_combo.itemData(5) == "char_drip"
@@ -90,12 +113,40 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
         host._scanline_mode_combo.itemData(index)
         for index in range(host._scanline_mode_combo.count())
     ] == [
+        "default",
         "color",
         "brighten",
         "follow_before",
         "follow_after",
         "role",
     ]
+    # 扫字线特效：沿锋面发射的装饰粒子档位。
+    assert [
+        host._scanline_effect_combo.itemData(index)
+        for index in range(host._scanline_effect_combo.count())
+    ] == [
+        "none", "sakura", "feather", "snow", "snow_solid", "star", "note",
+    ]
+    # 粒子设置对象药丸：入退场 / 唱字装饰 / 扫字线三类独立配色。
+    assert [
+        host._fx_target_pill.items[key].text()
+        for key in host._fx_target_pill.items
+    ] == ["入退场动画", "唱字装饰粒子", "扫字线特效"]
+    assert host._fx_target_pill.currentRouteKey() == "sing"
+    # 扫字线形态：普通高亮/烈焰棒/水泡（独立形态替换高亮带）。
+    assert [
+        host._scanline_shape_combo.itemData(index)
+        for index in range(host._scanline_shape_combo.count())
+    ] == ["band", "flame", "bubble"]
+    assert [
+        host._scanline_shape_combo.itemText(index)
+        for index in range(host._scanline_shape_combo.count())
+    ] == ["普通高亮", "烈焰棒", "水泡"]
+    # 下方粒子/闪光单独 3 列网格，和扫字线参数分栏。
+    assert host._fx_grid._max_columns == 3
+    labels = [label.text() for label in section.findChildren(QLabel)]
+    assert "唱字粒子样式" in labels
+    assert "粒子样式" not in labels
     # 整字放大速度等级：0（线性）~5 六档下拉，每档带速度说明；默认 1。
     assert [
         host._zoom_pulse_curve_combo.itemData(index)
@@ -135,8 +186,12 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     assert (
         grid_index(host._karaoke_pair_row)
         < grid_index(host._section_edge_row)
-        < grid_index(host._scanline_row)
     )
+    assert host._scanline_section.header.text() == "扫字线"
+    node = host._scanline_row
+    while node is not None and node is not host._scanline_section:
+        node = node.parent()
+    assert node is host._scanline_section
 
 
 def test_effects_section_edge_builder_defaults_and_order(qapp) -> None:
@@ -203,10 +258,24 @@ def test_effects_animation_builder_routes_controls_to_style_fields(qapp) -> None
     host._exit_fade_spin.setValue(300)
     host._karaoke_anim_combo.setCurrentIndex(1)
     host._reverse_karaoke_anim_combo.setCurrentIndex(2)
-    host._scanline_mode_combo.setCurrentIndex(1)
+    host._scanline_mode_combo.setCurrentIndex(
+        host._scanline_mode_combo.findData("brighten")
+    )
     host._scanline_width_spin.setValue(24)
     host._scanline_glow_spin.setValue(9)
     host._scanline_brightness_spin.setValue(75)
+    host._scanline_shape_combo.setCurrentIndex(
+        host._scanline_shape_combo.findData("flame")
+    )
+    host._scanline_effect_combo.setCurrentIndex(
+        host._scanline_effect_combo.findData("snow")
+    )
+    host._fx_target_pill.setCurrentItem("scanline")
+    host._fx_particle_mode_combo.setCurrentIndex(
+        host._fx_particle_mode_combo.findData("sakura")
+    )
+    host._fx_size_spin.setValue(45)
+    host._fx_count_spin.setValue(16)
 
     assert host.updates == [
         {"entry_anim": "fade"},
@@ -219,6 +288,11 @@ def test_effects_animation_builder_routes_controls_to_style_fields(qapp) -> None
         {"scanline_width_px": 24},
         {"scanline_glow_px": 9},
         {"scanline_brightness_pct": 75},
+        {"scanline_shape": "flame"},
+        {"scanline_effect": "snow"},
+        {"_fx_target": "scanline"},
+        {"fx_target_size": 45},
+        {"fx_target_count": 16},
     ]
 
 
