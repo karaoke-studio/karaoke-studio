@@ -79,7 +79,9 @@ def apply_track_project_data(
         resolve_guide_row,
     )
     _apply_display_overrides(track, data.get("line_display_overrides"))
-    _apply_animation_overrides(track, data.get("line_animation_overrides"))
+    _apply_animation_overrides(
+        track, data.get("line_animation_overrides"), style
+    )
     _apply_wipe_reverse_overrides(track, data.get("line_wipe_reverse_overrides"))
     _apply_head_overrides(
         track, data.get("line_volume_host_overrides"), "volume_head_override"
@@ -531,11 +533,24 @@ def _sug_axis_name(value: object) -> Optional[str]:
     return text or None
 
 
-def _apply_animation_overrides(track: TimingTrack, payload: object) -> None:
+def _apply_animation_overrides(
+    track: TimingTrack, payload: object, style: Style
+) -> None:
     if not isinstance(payload, list):
         return
+    legacy_global = bool(getattr(style, "scanline_legacy_global", False))
     for line, row in zip(track.lines, payload):
-        line.animation_override = line_animation_override_from_dict(row)
+        override = line_animation_override_from_dict(row)
+        if (
+            override is not None
+            and override.scanline_legacy
+            and override.scanline_enabled is False
+            and not legacy_global
+        ):
+            # 旧全局本来没有扫字线：逐行旧覆盖只表示原来的唱字动画，
+            # 不应永久锁死扫字线；改回继承，之后打开总开关即可生效。
+            override = replace(override, scanline_enabled=None)
+        line.animation_override = override
 
 
 @dataclass(frozen=True)

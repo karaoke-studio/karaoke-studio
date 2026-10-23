@@ -398,6 +398,61 @@ def test_scanline_px_base_migration_on_load() -> None:
     assert restored.scanline_glow_px == 9
 
 
+def test_project_load_unlocks_legacy_line_override_for_new_scanline() -> None:
+    from krok_helper.subtitle_render.project.load import apply_track_project_data
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("歌", 0)], end_ms=500)]
+    )
+    style = _scanline_style(
+        karaoke_anim="utopia",
+        scanline_enabled=True,
+        scanline_forward_enabled=True,
+    )
+    apply_track_project_data(
+        track,
+        style,
+        {
+            "line_animation_overrides": [
+                {
+                    "entry_anim": "snow",
+                    "exit_anim": "snow",
+                    "karaoke_anim": "utopia",
+                }
+            ]
+        },
+    )
+    assert track.lines[0].animation_override is not None
+    assert track.lines[0].animation_override.scanline_enabled is None
+    assert effective_karaoke_scanline(
+        style_with_line_animation(style, track.lines[0])
+    )
+
+    legacy_style = style_from_dict(
+        {
+            "karaoke_anim": "utopia_scanline",
+            "scanline_forward_enabled": True,
+        }
+    )
+    legacy_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("歌", 0)], end_ms=500)]
+    )
+    apply_track_project_data(
+        legacy_track,
+        legacy_style,
+        {
+            "line_animation_overrides": [
+                {
+                    "entry_anim": "snow",
+                    "exit_anim": "snow",
+                    "karaoke_anim": "utopia",
+                }
+            ]
+        },
+    )
+    assert legacy_track.lines[0].animation_override.scanline_enabled is False
+
+
 def test_gpu_accepts_line_override_particle_entry_exit() -> None:
     from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
 

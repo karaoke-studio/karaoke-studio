@@ -1228,6 +1228,11 @@ class Style:
     scanline_forward_enabled: bool = True
     """扫字线是否应用于普通（正向）唱字行。"""
 
+    scanline_legacy_global: bool = field(
+        default=False, repr=False, compare=False
+    )
+    """内部迁移标记：本样式读自旧扫字线档位，供逐行关闭迁移判定。"""
+
     scanline_width_px: int = 16
     """扫字线粗细（像素，``SCANLINE_BASE_HEIGHT``=1080 基准）：以走字锋面为
     中心的高亮带宽度。存储恒为 1080 画布下的值；编辑 spin 显示与渲染消费
@@ -2149,6 +2154,8 @@ def style_to_dict(style: Style) -> dict:
         value = getattr(style, item.name)
         if item.name in {"karaoke_colors", "ruby_karaoke_colors"}:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
+        elif item.name == "scanline_legacy_global":
+            continue
         elif item.name == "layouts":
             data[item.name] = [lyrics_layout_to_dict(layout) for layout in value]
         elif item.name == "default_layout_by_row_count":
@@ -3007,6 +3014,7 @@ def _migrate_scanline_toggle(changes: dict, payload: dict) -> None:
         changes["reverse_karaoke_anim"] = base_by_mode[raw_reverse]
     if "scanline_enabled" not in payload:
         changes["scanline_enabled"] = forward_old or reverse_old
+    changes["scanline_legacy_global"] = bool(forward_old or reverse_old)
     if "scanline_forward_enabled" not in payload:
         if forward_old:
             changes["scanline_forward_enabled"] = True

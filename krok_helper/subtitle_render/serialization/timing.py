@@ -215,8 +215,8 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
     elif legacy_scanline:
         scanline_override = True
     elif karaoke != "inherit":
-        # 旧逐行选择了非扫字线档位：当时该行不可能出现扫字线，迁移成
-        # 显式关闭，避免继承全局后平白多出高亮。
+        # 旧逐行选择了非扫字线档位：显式关闭；若全局本来也没开扫字线，
+        # project load 会改回继承，让以后打开总开关能正常生效。
         scanline_override = False
     else:
         scanline_override = None
@@ -234,7 +234,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
         karaoke_anim=karaoke,
         sing_fx=sing_fx,
         scanline_enabled=scanline_override,
-        scanline_legacy=bool(legacy_scanline and not has_scanline_field),
+        scanline_legacy=bool(not has_scanline_field and karaoke != "inherit"),
     )
 
 
