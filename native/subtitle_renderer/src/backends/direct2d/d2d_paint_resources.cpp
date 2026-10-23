@@ -316,7 +316,8 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     ID2D1DeviceContext *context,
     const std::wstring &path,
     const RgbaColor *tint,
-    int tintStrengthPct
+    int tintStrengthPct,
+    bool multiplyTint
 ) {
     if (path.empty()) {
         return {};
@@ -371,7 +372,19 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     }
     // 染色：预乘像素朝 (tint * alpha) 混合，alpha 保持不变。强度 100% 时
     // 等于纯色剪影，与 Python painter._tinted 的 SourceIn 叠色结果一致。
-    if (tint != nullptr && tintStrengthPct > 0) {
+    if (tint != nullptr && multiplyTint) {
+        for (std::size_t offset = 0; offset + 3 < pixels.size(); offset += 4) {
+            pixels[offset + 0] = static_cast<std::uint8_t>(
+                pixels[offset + 0] * tint->blue / 255
+            );
+            pixels[offset + 1] = static_cast<std::uint8_t>(
+                pixels[offset + 1] * tint->green / 255
+            );
+            pixels[offset + 2] = static_cast<std::uint8_t>(
+                pixels[offset + 2] * tint->red / 255
+            );
+        }
+    } else if (tint != nullptr && tintStrengthPct > 0) {
         const float k = static_cast<float>(std::clamp(tintStrengthPct, 0, 100))
             / 100.0f;
         const float tintChannels[3] = {

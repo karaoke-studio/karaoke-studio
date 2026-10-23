@@ -129,10 +129,11 @@ def test_band_rect_offset_shifts_both_edges():
 
 # ------------------------------------------------------------------ painting
 def test_staff_lines_layer_follows_line_color(qapp):
-    """五线谱的独立谱线层必须按用户颜色上色（默认近黑、可改红）。"""
+    """谱线层要同时染五线和**高音谱号**，并保留谱号自带的深色描边。"""
 
-    def red_pixels(color: str) -> int:
-        image = _blank()
+    def counts(color: str) -> tuple[int, int]:
+        image = QImage(900, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0, 0))
         style = _style(
             line_band_image="preset:staff_scroll",
             line_band_cap_left_px=190,
@@ -141,16 +142,32 @@ def test_staff_lines_layer_follows_line_color(qapp):
             line_band_fill_mode="stretch",
         )
         paint_frame(image, _track(), 1800, style)
-        count = 0
+        xs: list[int] = []
+        ys: list[int] = []
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).alpha() > 8:
+                    xs.append(x)
+                    ys.append(y)
+        assert xs
+        left, right = min(xs), max(xs)
+        # 只看左端点区域：谱号在那里。
+        limit = left + int((right - left) * 0.3)
+        red = 0
+        dark = 0
         for y in range(0, image.height(), 2):
-            for x in range(0, image.width(), 2):
+            for x in range(left, limit, 2):
                 pixel = image.pixelColor(x, y)
-                if pixel.red() > 200 and pixel.green() < 70 and pixel.blue() < 70:
-                    count += 1
-        return count
+                if pixel.red() > 180 and pixel.green() < 70 and pixel.blue() < 70:
+                    red += 1
+                elif pixel.alpha() > 180 and pixel.red() < 60 and pixel.green() < 60:
+                    dark += 1
+        return red, dark
 
-    assert red_pixels("#FF0000") > 40
-    assert red_pixels("#000000") == 0
+    red, dark = counts("#E01B24")
+    assert red > 40, "谱号和谱线都应被染成用户颜色"
+    assert dark > 20, "谱号必须保留深色描边"
+    assert counts("#000000")[0] == 0
 
 
 def test_band_edge_glow_grows_beyond_the_band_rect(qapp):

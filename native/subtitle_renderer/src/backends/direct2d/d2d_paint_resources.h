@@ -71,7 +71,10 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     // 可选染色：非空时按 strength 把图像像素向 tint 混合（alpha 不变），
     // 镜像 Python painter 的 _tinted（SourceIn 叠色）语义。
     const RgbaColor *tint = nullptr,
-    int tintStrengthPct = 100
+    int tintStrengthPct = 100,
+    // true: 逐通道乘色（保留素材内部明暗/描边，谱线层用）；
+    // false: 压向目标色的混合（普通上色用）。
+    bool multiplyTint = false
 );
 
 // 动图（GIF）解码结果：逐帧全尺寸合成位图 + 每帧时长（ms，已钳 ≥10）。

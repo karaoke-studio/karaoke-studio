@@ -221,10 +221,12 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
                             _paint_mode(painter, rect, edge, spec)
                         finally:
                             painter.restore()
-        _paint_mode(painter, rect, image, spec)
+        # 谱线层（含高音谱号）在下，音符/终止线在上：谱线不得压在谱号上，
+        # 谱号用自己的描边和谱线分开。
         lines = _line_source(spec)
         if lines is not None:
             _paint_mode(painter, rect, lines, spec)
+        _paint_mode(painter, rect, image, spec)
     finally:
         painter.restore()
 
@@ -292,7 +294,12 @@ def _edge_source(spec: BandSpec, image: QImage) -> Optional[QImage]:
 
 
 def _line_source(spec: BandSpec) -> Optional[QImage]:
-    """五线谱等预设的独立谱线层，按用户颜色整体上色。"""
+    """五线谱等预设的独立谱线层：**multiply** 上色。
+
+    multiply 而不是压成单色剪影，是为了让同一层里的高音谱号保持自己的深色
+    描边：白色部分被染成用户颜色，描边的近黑永远保持近黑（用户口径：谱线
+    颜色要把高音谱号一并改掉，且谱号要有描边）。
+    """
     path = spec.line_image_path
     if not path:
         return None
@@ -309,11 +316,44 @@ def _line_source(spec: BandSpec) -> Optional[QImage]:
     image = QImage(path)
     if image.isNull():
         return None
-    image = _tinted(image, color, 100)
+    image = _multiplied(image, color)
     _LINE_CACHE[key] = image
     while len(_LINE_CACHE) > _LINE_CACHE_MAX:
         _LINE_CACHE.popitem(last=False)
     return image
+
+
+def _multiplied(image: QImage, color: str) -> QImage:
+    """逐像素乘色（保留 alpha 与素材内部的明暗/描边）。"""
+    try:
+        import numpy as np
+    except Exception:  # pragma: no cover - numpy 是应用依赖
+        return image
+    base = QColor(color)
+    if not base.isValid():
+        base = QColor("#000000")
+    converted = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    width, height = converted.width(), converted.height()
+    bits = converted.constBits()
+    bits.setsize(converted.sizeInBytes())
+    pixels = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        height, converted.bytesPerLine() // 4, 4
+    )[:, :width, :].copy()
+    for channel, value in (
+        (0, base.blue()),
+        (1, base.green()),
+        (2, base.red()),
+    ):
+        pixels[:, :, channel] = (
+            pixels[:, :, channel].astype(np.uint16) * value // 255
+        ).astype(np.uint8)
+    return QImage(
+        pixels.tobytes(),
+        width,
+        height,
+        width * 4,
+        QImage.Format.Format_ARGB32_Premultiplied,
+    ).copy()
 
 
 def _mid_tile(image: QImage, cap_left: int, cap_right: int) -> QImage:

@@ -266,7 +266,7 @@ def paste_note(target, head_x, head_y, em_px, color, commands):
     target.alpha_composite(sprite, (int(head_x - anchor[0]), int(head_y - anchor[1])))
 
 
-def clef_sprite(height, color):
+def clef_sprite(height, color, *, outline=None, outline_width=0):
     """真高音谱号：抓 Segoe UI Symbol 的 U+1D11E，裁到墨迹后缩放到目标高度。"""
     for path in CLEF_FONTS:
         if not os.path.exists(path):
@@ -276,8 +276,16 @@ def clef_sprite(height, color):
         except Exception:
             continue
         canvas = Image.new("RGBA", (900, 900), (0, 0, 0, 0))
-        ImageDraw.Draw(canvas).text((200, 200), "\U0001D11E", font=font_obj,
-                                    fill=color + (255,))
+        drawer = ImageDraw.Draw(canvas)
+        if outline is not None and outline_width > 0:
+            drawer.text(
+                (200, 200), "\U0001D11E", font=font_obj,
+                fill=color + (255,), stroke_width=outline_width,
+                stroke_fill=outline + (255,),
+            )
+        else:
+            drawer.text((200, 200), "\U0001D11E", font=font_obj,
+                        fill=color + (255,))
         box = canvas.getbbox()
         if not box:
             continue
@@ -290,21 +298,21 @@ def clef_sprite(height, color):
 def build_staff_scroll():
     """全透明五线：真高音谱号开篇 + 项目音符轮廓（彩色）+ 柔和投影。
 
-    2026-10-23：5 条谱线单独出 ``staff_scroll_lines.png``（纯白），运行时按
-    ``line_band_line_color`` 上色；素材本体只剩谱号/音符/终止线/阴影。
-    中段 4096px：16:9 画布正常歌词行不会触发第二次平铺。
+    2026-10-23 第二轮（用户口径）：
+    * **谱线与高音谱号同属一层**（``staff_scroll_lines.png``，白色），运行时
+      multiply 上色——谱线颜色改了，谱号一起改；
+    * 谱号自带**深色描边**（描边烘焙成近黑，multiply 时黑永远是黑），所以
+      上色后仍压得住谱线；
+    * 图层顺序：谱线层（含谱号）在下、音符与终止线在上；素材本体不再画
+      谱号和谱线，避免重复/压字；
+    * 中段 4096px：16:9 画布正常歌词行不会触发第二次平铺。
     """
     w, L, R = 190 + 4096 + 160, 190, 160
     content = new(w)
     commands = load_note_commands() or []
 
-    d = ImageDraw.Draw(content)
-
-    # 左端点：真高音谱号（开篇）+ 两个彩色音符
+    # 左端点：两个彩色音符（谱号在谱线层里，见下）
     cap = new(L)
-    clef = clef_sprite(140, INK[:3])
-    if clef is not None:
-        cap.alpha_composite(clef, (10, 120 - clef.height // 2))
     if commands:
         paste_note(cap, 108, 176, 92, NOTE_COLORS[0], commands)
         paste_note(cap, 146, 132, 76, NOTE_COLORS[1], commands)
@@ -328,11 +336,17 @@ def build_staff_scroll():
     img.alpha_composite(sh, (2, 3))
     img.alpha_composite(content)
 
-    # 独立谱线层：纯白，运行时上色。
+    # 谱线层：5 条白线 + 白色谱号（带近黑描边）。运行时 multiply 用户颜色：
+    # 白 → 颜色，近黑描边保持近黑。
     lines = new(w)
     ld = ImageDraw.Draw(lines)
     for y in (64, 92, 120, 148, 176):
         ld.line([(0, y), (w, y)], fill=(255, 255, 255, 255), width=3)
+    clef = clef_sprite(
+        140, (255, 255, 255), outline=(18, 18, 20), outline_width=9
+    )
+    if clef is not None:
+        lines.alpha_composite(clef, (10, 120 - clef.height // 2))
     return img, L, R, lines
 
 

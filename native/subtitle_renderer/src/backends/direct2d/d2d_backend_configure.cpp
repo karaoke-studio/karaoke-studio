@@ -387,7 +387,8 @@ void Direct2DGpuBackend::ensureLineBandImage() {
             context,
             band.linesPath,
             band.hasLineColor ? &band.lineColor : nullptr,
-            100
+            100,
+            /*multiplyTint=*/true
         );
         cached.lineMidStrip = makeBandMidStrip(
             context, cached.lineBitmap.Get(),

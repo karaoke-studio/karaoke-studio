@@ -1318,12 +1318,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                 }
             }
-            drawLayer(
-                impl_->lineBandImage.bitmap.Get(),
-                impl_->lineBandImage.midBitmap.Get(),
-                base,
-                alpha
-            );
+            // 谱线层（含高音谱号）在下，音符/终止线在上：谱线不得压在
+            // 谱号上；谱号用自己的深色描边与谱线分开（用户口径）。
             if (impl_->lineBandImage.lineBitmap) {
                 drawLayer(
                     impl_->lineBandImage.lineBitmap.Get(),
@@ -1332,6 +1328,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     alpha
                 );
             }
+            drawLayer(
+                impl_->lineBandImage.bitmap.Get(),
+                impl_->lineBandImage.midBitmap.Get(),
+                base,
+                alpha
+            );
         }
         }
         checkHr(

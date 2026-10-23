@@ -645,8 +645,10 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         target.imagePath = band.imagePath.toStdWString();
         target.fillMode = band.fillMode.toStdString();
         target.midMode = band.midMode.toStdString();
-        target.capLeft = static_cast<float>(band.capLeftPx * scale);
-        target.capRight = static_cast<float>(band.capRightPx * scale);
+        // 端点以**源图像素**计：绘制端自己乘 (带高 / 图高)，这里再乘 dpr
+        // 会二次缩放（dpr=2 时端点宽变 4 倍，谱号会被画两遍）。
+        target.capLeft = static_cast<float>(band.capLeftPx);
+        target.capRight = static_cast<float>(band.capRightPx);
         target.capLeftSrc = band.capLeftPx;
         target.capRightSrc = band.capRightPx;
         target.padTop = static_cast<float>(band.padTopPx * scale);
