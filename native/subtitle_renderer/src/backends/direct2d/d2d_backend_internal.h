@@ -50,6 +50,19 @@ struct Direct2DGpuBackend::Impl {
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> midBitmap;
         int midCapLeftSrc = 0;
         int midCapRightSrc = 0;
+        // 独立谱线层（五线谱）：白色素材按用户颜色染色后的位图 + 中段预拼条。
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> lineBitmap;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> lineMidStrip;
+        std::wstring linePath;
+        bool hasLineColor = false;
+        RgbaColor lineColor{};
+        // 非透明部分的投影/发光剪影位图 + 中段预拼条。
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> edgeBitmap;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> edgeMidStrip;
+        std::string edgeKind = "none";
+        bool hasEdgeColor = false;
+        RgbaColor edgeColor{};
+        int edgeSizePx = 0;
     };
     // 装饰粒子 sprite 轮廓几何（em 空间、中心原点；随场景重建，绘制期经
     // matrix 缩放平移）。key = sprite 名（star4 / ring / note）。

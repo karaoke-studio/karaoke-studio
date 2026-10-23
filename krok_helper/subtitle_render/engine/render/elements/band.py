@@ -22,13 +22,21 @@ from typing import Optional
 from PyQt6.QtCore import QRect, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QTransform
 
-from krok_helper.subtitle_render.domain.band_presets import resolve_band_image
+from krok_helper.subtitle_render.domain.band_presets import (
+    default_line_color_for,
+    resolve_band_image,
+    resolve_band_lines_image,
+)
 
 _TILE_CACHE_MAX = 16
 _TILE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _STRIP_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_CACHE_MAX = 16
 _IMAGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+_EDGE_CACHE_MAX = 8
+_EDGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+_LINE_CACHE_MAX = 8
+_LINE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 
 
 @dataclass(frozen=True)
@@ -43,15 +51,30 @@ class BandSpec:
     tint: str
     tint_strength_pct: int
     opacity_pct: int
+    # 独立谱线层（如五线谱）：路径 + 上色颜色。
+    line_image_path: str = ""
+    line_color: str = ""
+    # 图片非透明部分的投影/发光。
+    edge_kind: str = "none"
+    edge_color: str = "#000000"
+    edge_size_px: int = 12
+    edge_offset_x_px: int = 8
+    edge_offset_y_px: int = 8
+    edge_opacity_pct: int = 70
 
 
 def band_spec(style) -> Optional[BandSpec]:
     """Build a drawable spec, or ``None`` when the band is off / unusable."""
     if not getattr(style, "line_band_enabled", False):
         return None
-    path = resolve_band_image(style.line_band_image)
+    image_spec = str(style.line_band_image or "")
+    path = resolve_band_image(image_spec)
     if path is None:
         return None
+    lines_path = resolve_band_lines_image(image_spec)
+    line_color = str(getattr(style, "line_band_line_color", "") or "")
+    if not line_color:
+        line_color = default_line_color_for(image_spec)
     return BandSpec(
         image_path=str(path),
         fill_mode=str(style.line_band_fill_mode),
@@ -61,6 +84,16 @@ def band_spec(style) -> Optional[BandSpec]:
         tint=str(style.line_band_tint or ""),
         tint_strength_pct=max(min(int(style.line_band_tint_strength_pct), 100), 0),
         opacity_pct=max(min(int(style.line_band_opacity_pct), 100), 0),
+        line_image_path=str(lines_path) if lines_path is not None else "",
+        line_color=line_color if lines_path is not None else "",
+        edge_kind=str(getattr(style, "line_band_edge_kind", "none") or "none"),
+        edge_color=str(getattr(style, "line_band_edge_color", "#000000") or "#000000"),
+        edge_size_px=max(int(getattr(style, "line_band_edge_size_px", 12)), 0),
+        edge_offset_x_px=int(getattr(style, "line_band_edge_offset_x_px", 8)),
+        edge_offset_y_px=int(getattr(style, "line_band_edge_offset_y_px", 8)),
+        edge_opacity_pct=max(
+            min(int(getattr(style, "line_band_edge_opacity_pct", 70)), 100), 0
+        ),
     )
 
 
@@ -109,6 +142,10 @@ def band_source(spec: BandSpec) -> Optional[QImage]:
 
 def clear_band_image_cache() -> None:
     _IMAGE_CACHE.clear()
+    _TILE_CACHE.clear()
+    _STRIP_CACHE.clear()
+    _EDGE_CACHE.clear()
+    _LINE_CACHE.clear()
 
 
 def _tinted(image: QImage, color: str, strength_pct: int) -> QImage:
@@ -146,16 +183,137 @@ def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
     painter.save()
     try:
         painter.setOpacity(painter.opacity() * spec.opacity_pct / 100.0)
-        if spec.fill_mode == "three_slice":
-            _paint_three_slice(painter, rect, image, spec)
-        elif spec.fill_mode == "repeat":
-            _paint_repeat(painter, rect, image)
-        elif spec.fill_mode == "cover":
-            _paint_cover(painter, rect, image)
-        else:
-            painter.drawImage(rect, image, QRectF(image.rect()))
+        if spec.edge_kind in {"shadow", "glow"}:
+            edge = _edge_source(spec, image)
+            if edge is not None:
+                base_opacity = painter.opacity()
+                if spec.edge_kind == "shadow":
+                    painter.save()
+                    try:
+                        painter.setOpacity(
+                            base_opacity * spec.edge_opacity_pct / 100.0
+                        )
+                        painter.translate(
+                            spec.edge_offset_x_px, spec.edge_offset_y_px
+                        )
+                        _paint_mode(painter, rect, edge, spec)
+                    finally:
+                        painter.restore()
+                else:
+                    # 发光要长到带子轮廓之外：剪影绕圆周多次轻叠（模糊后的
+                    # 剪影本身不会越出画布，靠偏移把它扩出去）。
+                    radius = max(float(spec.edge_size_px), 1.0)
+                    steps = 16 if radius >= 8.0 else 8
+                    per_step = (
+                        spec.edge_opacity_pct / 100.0 / float(steps) * 2.0
+                    )
+                    for index in range(steps):
+                        angle = math.tau * index / float(steps)
+                        painter.save()
+                        try:
+                            painter.setOpacity(
+                                min(base_opacity * per_step, 1.0)
+                            )
+                            painter.translate(
+                                math.cos(angle) * radius,
+                                math.sin(angle) * radius,
+                            )
+                            _paint_mode(painter, rect, edge, spec)
+                        finally:
+                            painter.restore()
+        _paint_mode(painter, rect, image, spec)
+        lines = _line_source(spec)
+        if lines is not None:
+            _paint_mode(painter, rect, lines, spec)
     finally:
         painter.restore()
+
+
+def _paint_mode(
+    painter: QPainter, rect: QRectF, image: QImage, spec: BandSpec
+) -> None:
+    if spec.fill_mode == "three_slice":
+        _paint_three_slice(painter, rect, image, spec)
+    elif spec.fill_mode == "repeat":
+        _paint_repeat(painter, rect, image)
+    elif spec.fill_mode == "cover":
+        _paint_cover(painter, rect, image)
+    else:
+        painter.drawImage(rect, image, QRectF(image.rect()))
+
+
+def _edge_source(spec: BandSpec, image: QImage) -> Optional[QImage]:
+    """把素材 alpha 压成单色剪影；``glow``/``shadow`` 再按半径做降采样模糊。"""
+    key = (
+        int(image.cacheKey()),
+        spec.edge_kind,
+        spec.edge_color,
+        int(spec.edge_size_px),
+    )
+    cached = _EDGE_CACHE.get(key)
+    if cached is not None:
+        _EDGE_CACHE.move_to_end(key)
+        return cached
+    silhouette = QImage(image.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    silhouette.fill(0)
+    painter = QPainter(silhouette)
+    try:
+        painter.drawImage(0, 0, image)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceIn
+        )
+        color = QColor(spec.edge_color)
+        if not color.isValid():
+            color = QColor("#000000")
+        painter.fillRect(silhouette.rect(), color)
+    finally:
+        painter.end()
+    radius = max(int(spec.edge_size_px), 0)
+    if radius > 0 and spec.edge_kind in {"glow", "shadow"}:
+        # 降采样再放大 ≈ 可分离模糊；比逐像素卷积快得多，效果对发光足够。
+        step = max(2, min(radius, max(image.width() // 4, 2)))
+        for _ in range(2):
+            small = silhouette.scaled(
+                max(int(silhouette.width() / step), 1),
+                max(int(silhouette.height() / step), 1),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            silhouette = small.scaled(
+                image.width(),
+                image.height(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+    _EDGE_CACHE[key] = silhouette
+    while len(_EDGE_CACHE) > _EDGE_CACHE_MAX:
+        _EDGE_CACHE.popitem(last=False)
+    return silhouette
+
+
+def _line_source(spec: BandSpec) -> Optional[QImage]:
+    """五线谱等预设的独立谱线层，按用户颜色整体上色。"""
+    path = spec.line_image_path
+    if not path:
+        return None
+    color = spec.line_color or "#000000"
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    key = (path, int(stat.st_mtime_ns), int(stat.st_size), color)
+    cached = _LINE_CACHE.get(key)
+    if cached is not None:
+        _LINE_CACHE.move_to_end(key)
+        return cached
+    image = QImage(path)
+    if image.isNull():
+        return None
+    image = _tinted(image, color, 100)
+    _LINE_CACHE[key] = image
+    while len(_LINE_CACHE) > _LINE_CACHE_MAX:
+        _LINE_CACHE.popitem(last=False)
+    return image
 
 
 def _mid_tile(image: QImage, cap_left: int, cap_right: int) -> QImage:

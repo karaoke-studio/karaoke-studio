@@ -34,6 +34,8 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+#include <cstring>
+#include <vector>
 
 namespace krok::subtitle::native {
 
@@ -140,6 +142,197 @@ bool sceneDiffersOnlyInRgb(const RenderScene &left, const RenderScene &right) {
 
 }  // namespace
 
+namespace {
+
+// 中段预拼条：把中段按整数像素重复铺成一条长位图。逐块 DrawBitmap 会在
+// 每块边缘各留一条半像素竖线；位图画刷 WRAP 在非整数缩放下回绕处也会断
+// 一拍——一次取样一段连续纹理才是无缝的。
+Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandMidStrip(
+    ID2D1DeviceContext *context,
+    ID2D1Bitmap1 *source,
+    int capLeft,
+    int capRight
+) {
+    if (context == nullptr || source == nullptr) {
+        return {};
+    }
+    const D2D1_SIZE_U pixels = source->GetPixelSize();
+    const int left = std::max(capLeft, 0);
+    const int right = std::max(capRight, 0);
+    const int midWidth = static_cast<int>(pixels.width) - left - right;
+    if (midWidth <= 0) {
+        return {};
+    }
+    constexpr int kStripWidth = 8192;
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> strip;
+    if (FAILED(context->CreateBitmap(
+            D2D1::SizeU(kStripWidth, pixels.height),
+            nullptr,
+            0,
+            &properties,
+            strip.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    const D2D1_RECT_U rect = D2D1::RectU(
+        static_cast<UINT32>(left), 0,
+        static_cast<UINT32>(left + midWidth), pixels.height
+    );
+    for (int offset = 0; offset < kStripWidth; offset += midWidth) {
+        const D2D1_POINT_2U destination = D2D1::Point2U(
+            static_cast<UINT32>(offset), 0
+        );
+        strip->CopyFromBitmap(&destination, source, &rect);
+    }
+    return strip;
+}
+
+// 把位图 alpha 压成单色剪影（预乘），blurPx > 0 时做三次盒式模糊。
+Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandEdgeBitmap(
+    ID2D1DeviceContext *context,
+    ID2D1Bitmap1 *source,
+    const RgbaColor &color,
+    int blurPx
+) {
+    if (context == nullptr || source == nullptr) {
+        return {};
+    }
+    const D2D1_SIZE_U size = source->GetPixelSize();
+    const UINT32 width = size.width;
+    const UINT32 height = size.height;
+    if (width == 0 || height == 0) {
+        return {};
+    }
+    const UINT32 stride = width * 4;
+    // ID2D1Bitmap 不能直接读像素：拷进一张 CPU_READ 位图再 Map。
+    const D2D1_BITMAP_PROPERTIES1 readProperties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> readable;
+    if (FAILED(context->CreateBitmap(
+            size, nullptr, 0, &readProperties,
+            readable.ReleaseAndGetAddressOf()))
+        || FAILED(readable->CopyFromBitmap(nullptr, source, nullptr))) {
+        return {};
+    }
+    D2D1_MAPPED_RECT mapped{};
+    if (FAILED(readable->Map(D2D1_MAP_OPTIONS_READ, &mapped))) {
+        return {};
+    }
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(stride) * height
+    );
+    for (UINT32 y = 0; y < height; ++y) {
+        std::memcpy(
+            pixels.data() + static_cast<std::size_t>(y) * stride,
+            mapped.bits + static_cast<std::size_t>(y) * mapped.pitch,
+            stride
+        );
+    }
+    readable->Unmap();
+    std::vector<float> alpha(static_cast<std::size_t>(width) * height);
+    for (std::size_t index = 0; index < alpha.size(); ++index) {
+        alpha[index] = static_cast<float>(pixels[index * 4 + 3]);
+    }
+    const int radius = std::max(blurPx, 0);
+    if (radius > 0) {
+        const int window = radius * 2 + 1;
+        std::vector<float> temp(alpha.size());
+        for (int pass = 0; pass < 3; ++pass) {
+            for (UINT32 y = 0; y < height; ++y) {
+                float sum = 0.0f;
+                for (int k = -radius; k <= radius; ++k) {
+                    const int x = std::clamp(k, 0, static_cast<int>(width) - 1);
+                    sum += alpha[static_cast<std::size_t>(y) * width + x];
+                }
+                for (UINT32 x = 0; x < width; ++x) {
+                    temp[static_cast<std::size_t>(y) * width + x]
+                        = sum / static_cast<float>(window);
+                    const int add = std::clamp(
+                        static_cast<int>(x) + radius + 1,
+                        0,
+                        static_cast<int>(width) - 1
+                    );
+                    const int sub = std::clamp(
+                        static_cast<int>(x) - radius,
+                        0,
+                        static_cast<int>(width) - 1
+                    );
+                    sum += alpha[static_cast<std::size_t>(y) * width + add]
+                        - alpha[static_cast<std::size_t>(y) * width + sub];
+                }
+            }
+            for (UINT32 x = 0; x < width; ++x) {
+                float sum = 0.0f;
+                for (int k = -radius; k <= radius; ++k) {
+                    const int y = std::clamp(k, 0, static_cast<int>(height) - 1);
+                    sum += temp[static_cast<std::size_t>(y) * width + x];
+                }
+                for (UINT32 y = 0; y < height; ++y) {
+                    alpha[static_cast<std::size_t>(y) * width + x]
+                        = sum / static_cast<float>(window);
+                    const int add = std::clamp(
+                        static_cast<int>(y) + radius + 1,
+                        0,
+                        static_cast<int>(height) - 1
+                    );
+                    const int sub = std::clamp(
+                        static_cast<int>(y) - radius,
+                        0,
+                        static_cast<int>(height) - 1
+                    );
+                    sum += temp[static_cast<std::size_t>(add) * width + x]
+                        - temp[static_cast<std::size_t>(sub) * width + x];
+                }
+            }
+        }
+    }
+    for (std::size_t index = 0; index < alpha.size(); ++index) {
+        const float value = std::clamp(alpha[index], 0.0f, 255.0f) / 255.0f;
+        pixels[index * 4 + 0] = static_cast<std::uint8_t>(
+            std::lround(color.blue * value)
+        );
+        pixels[index * 4 + 1] = static_cast<std::uint8_t>(
+            std::lround(color.green * value)
+        );
+        pixels[index * 4 + 2] = static_cast<std::uint8_t>(
+            std::lround(color.red * value)
+        );
+        pixels[index * 4 + 3] = static_cast<std::uint8_t>(
+            std::lround(255.0f * value)
+        );
+    }
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+    if (FAILED(context->CreateBitmap(
+            size, pixels.data(), stride, &properties,
+            bitmap.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    return bitmap;
+}
+
+}  // namespace
+
 void Direct2DGpuBackend::ensureLineBandImage() {
     const LineBandStyle &band = impl_->scene.lineBand;
     Impl::CachedBandImage &cached = impl_->lineBandImage;
@@ -159,65 +352,58 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         size = (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32)
             | attributes.nFileSizeLow;
     }
+    const int edgeSizePx = static_cast<int>(std::lround(band.edgeSize));
     if (cached.bitmap
         && cached.path == band.imagePath
         && cached.modifiedMs == modifiedMs
         && cached.size == size
         && cached.hasTint == band.hasTint
         && cached.tintStrengthPct == band.tintStrengthPct
-        && (!band.hasTint || cached.tint == band.tint)) {
+        && (!band.hasTint || cached.tint == band.tint)
+        && cached.linePath == band.linesPath
+        && cached.hasLineColor == band.hasLineColor
+        && (!band.hasLineColor || cached.lineColor == band.lineColor)
+        && cached.edgeKind == band.edgeKind
+        && cached.hasEdgeColor == band.hasEdgeColor
+        && (!band.hasEdgeColor || cached.edgeColor == band.edgeColor)
+        && cached.edgeSizePx == edgeSizePx) {
         return;
     }
+    ID2D1DeviceContext *context = device_.d2dContext();
     cached.bitmap = loadWicBitmap(
-        device_.d2dContext(),
+        context,
         band.imagePath,
         band.hasTint ? &band.tint : nullptr,
         band.tintStrengthPct
     );
-    cached.midBitmap.Reset();
-    if (cached.bitmap) {
-        const D2D1_SIZE_U pixels = cached.bitmap->GetPixelSize();
-        const int left = std::max(band.capLeftSrc, 0);
-        const int right = std::max(band.capRightSrc, 0);
-        const int midWidth = static_cast<int>(pixels.width) - left - right;
-        // 中段预拼条：把中段按整数像素重复铺成一条长位图，绘制时一次
-        // DrawBitmap 取样。逐块平铺会在每块边缘各留一条半像素竖线；位图
-        // 画刷的 WRAP 在非整数缩放下同样会在回绕处断一拍——只有「一次
-        // 取样一段连续纹理」才是无缝的。
-        constexpr int kMidStripWidth = 8192;
-        if (midWidth > 0) {
-            const D2D1_BITMAP_PROPERTIES1 midProperties = D2D1::BitmapProperties1(
-                D2D1_BITMAP_OPTIONS_NONE,
-                D2D1::PixelFormat(
-                    DXGI_FORMAT_B8G8R8A8_UNORM,
-                    D2D1_ALPHA_MODE_PREMULTIPLIED
-                ),
-                96.0f,
-                96.0f
-            );
-            if (SUCCEEDED(device_.d2dContext()->CreateBitmap(
-                    D2D1::SizeU(kMidStripWidth, pixels.height),
-                    nullptr,
-                    0,
-                    &midProperties,
-                    cached.midBitmap.ReleaseAndGetAddressOf()))) {
-                const D2D1_RECT_U source = D2D1::RectU(
-                    static_cast<UINT32>(left),
-                    0,
-                    static_cast<UINT32>(left + midWidth),
-                    pixels.height
-                );
-                for (int offset = 0; offset < kMidStripWidth;
-                     offset += midWidth) {
-                    const D2D1_POINT_2U destination = D2D1::Point2U(
-                        static_cast<UINT32>(offset), 0
-                    );
-                    cached.midBitmap->CopyFromBitmap(
-                        &destination, cached.bitmap.Get(), &source
-                    );
-                }
-            }
-        }
+    cached.midBitmap = makeBandMidStrip(
+        context, cached.bitmap.Get(),
+        band.capLeftSrc, band.capRightSrc
+    );
+    cached.lineBitmap.Reset();
+    cached.lineMidStrip.Reset();
+    if (!band.linesPath.empty()) {
+        cached.lineBitmap = loadWicBitmap(
+            context,
+            band.linesPath,
+            band.hasLineColor ? &band.lineColor : nullptr,
+            100
+        );
+        cached.lineMidStrip = makeBandMidStrip(
+            context, cached.lineBitmap.Get(),
+            band.capLeftSrc, band.capRightSrc
+        );
+    }
+    cached.edgeBitmap.Reset();
+    cached.edgeMidStrip.Reset();
+    if (cached.bitmap && band.edgeKind != "none") {
+        cached.edgeBitmap = makeBandEdgeBitmap(
+            context, cached.bitmap.Get(), band.edgeColor, edgeSizePx
+        );
+        cached.edgeMidStrip = makeBandMidStrip(
+            context, cached.edgeBitmap.Get(),
+            band.capLeftSrc, band.capRightSrc
+        );
     }
     cached.midCapLeftSrc = band.capLeftSrc;
     cached.midCapRightSrc = band.capRightSrc;
@@ -227,6 +413,13 @@ void Direct2DGpuBackend::ensureLineBandImage() {
     cached.tint = band.tint;
     cached.hasTint = band.hasTint;
     cached.tintStrengthPct = band.tintStrengthPct;
+    cached.linePath = band.linesPath;
+    cached.hasLineColor = band.hasLineColor;
+    cached.lineColor = band.lineColor;
+    cached.edgeKind = band.edgeKind;
+    cached.hasEdgeColor = band.hasEdgeColor;
+    cached.edgeColor = band.edgeColor;
+    cached.edgeSizePx = edgeSizePx;
 }
 
 void Direct2DGpuBackend::configure(const RenderScene &scene) {

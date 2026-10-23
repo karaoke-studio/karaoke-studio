@@ -670,6 +670,39 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             };
         }
         target.tintStrengthPct = std::clamp(band.tintStrengthPct, 0, 100);
+        target.linesPath = band.linesPath.toStdWString();
+        const QColor lineColor(band.lineColor);
+        target.hasLineColor = !band.linesPath.isEmpty() && lineColor.isValid();
+        if (target.hasLineColor) {
+            target.lineColor = RgbaColor{
+                static_cast<std::uint8_t>(lineColor.red()),
+                static_cast<std::uint8_t>(lineColor.green()),
+                static_cast<std::uint8_t>(lineColor.blue()),
+                255,
+            };
+        }
+        target.edgeKind = band.edgeKind == QStringLiteral("shadow")
+                || band.edgeKind == QStringLiteral("glow")
+            ? band.edgeKind.toStdString()
+            : "none";
+        const QColor edgeColor(band.edgeColor);
+        target.hasEdgeColor = edgeColor.isValid();
+        if (target.hasEdgeColor) {
+            target.edgeColor = RgbaColor{
+                static_cast<std::uint8_t>(edgeColor.red()),
+                static_cast<std::uint8_t>(edgeColor.green()),
+                static_cast<std::uint8_t>(edgeColor.blue()),
+                255,
+            };
+        }
+        target.edgeSize = static_cast<float>(
+            std::max(band.edgeSizePx, 0) * scale
+        );
+        target.edgeOffsetX = static_cast<float>(band.edgeOffsetXPx * scale);
+        target.edgeOffsetY = static_cast<float>(band.edgeOffsetYPx * scale);
+        target.edgeOpacity = static_cast<float>(
+            std::clamp(band.edgeOpacityPct, 0, 100)
+        ) / 100.0f;
     }
     scene.lines.reserve(config.lines.size());
     scene.lineStyles.reserve(config.lines.size());

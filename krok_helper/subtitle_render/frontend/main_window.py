@@ -651,6 +651,9 @@ _PAINT_ONLY_STYLE_FIELDS: frozenset[str] = frozenset({
     "line_band_pad_left_px", "line_band_pad_right_px",
     "line_band_include_ruby", "line_band_offset_y_px",
     "line_band_opacity_pct", "line_band_tint", "line_band_tint_strength_pct",
+    "line_band_line_color", "line_band_edge_kind", "line_band_edge_color",
+    "line_band_edge_size_px", "line_band_edge_offset_x_px",
+    "line_band_edge_offset_y_px", "line_band_edge_opacity_pct",
     "decoration_before_sync",
 })
 _PAINT_ONLY_SCHEME_FIELDS: frozenset[str] = frozenset({

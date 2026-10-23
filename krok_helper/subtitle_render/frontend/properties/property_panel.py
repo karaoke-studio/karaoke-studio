@@ -513,42 +513,73 @@ _LIT_FIELDS = {
     "volume_transition_ratio_pct",
 }
 
-def line_band_preview_pixmap(style: Style, width: int = 520, height: int = 72) -> QPixmap:
-    """三段式切片预览：原图 + 端点分界线 + 中段平铺示例。
+def line_band_preview_pixmap(
+    style: Style,
+    output_height: int = 1080,
+    max_width: int = 420,
+) -> QPixmap:
+    """三段式切片预览：棋盘透明底 + 端点分界线 + 中段平铺。
 
-    与渲染端共用 ``band_spec``/``band_source``/``paint_band``，所以预览里
-    看到的切分、缩放和平铺就是成片里的那一次绘制。
+    先按**成片比例尺**画出真实带高（字号 × 输出缩放 + 上下留白），再整体等比
+    缩到卡片宽度——所以中段的重复次数/比例与成片一致。重复单元就是切掉左右
+    端点后的中段。
     """
+    output_scale = max(float(output_height), 1.0) / 1080.0
+    band_height = (
+        float(style.font_size_px) * output_scale
+        + float(style.line_band_pad_top_px) * output_scale
+        + float(style.line_band_pad_bottom_px) * output_scale
+    )
+    band_height = max(24.0, min(band_height, 320.0))
+    width = int(max(min(band_height * 4.0, 1600.0), 240.0))
+    height = int(round(band_height))
     image = QPixmap(width, height)
-    image.fill(QColor("#1B1F26"))
+    image.fill(QColor("#242A33"))
     painter = QPainter(image)
     try:
+        # 棋盘透明底：纯黑或纯白都会让某些素材看不见。
+        cell = 10
+        painter.fillRect(image.rect(), QColor("#3A414C"))
+        for row in range(0, height, cell):
+            for col in range(0, width, cell):
+                if (row // cell + col // cell) % 2 == 0:
+                    painter.fillRect(col, row, cell, cell, QColor("#2B313A"))
         spec = band_spec(style)
         source = band_source(spec) if spec is not None else None
         if spec is None or source is None:
             painter.setPen(QColor("#8A8F98"))
             painter.drawText(
-                image.rect(), Qt.AlignmentFlag.AlignCenter,
-                "未选择图片",
+                image.rect(), Qt.AlignmentFlag.AlignCenter, "未选择图片"
             )
-            return image
-        paint_band(painter, QRectF(0, 0, width, height), spec)
-        scale = height / max(float(source.height()), 1.0)
-        cap_left = min(spec.cap_left * scale, width)
-        cap_right = min(spec.cap_right * scale, width)
-        pen = QPen(QColor(255, 196, 64, 220))
-        pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.drawLine(int(cap_left), 0, int(cap_left), height)
-        painter.drawLine(int(width - cap_right), 0, int(width - cap_right), height)
-        painter.setPen(QColor(255, 196, 64, 235))
-        painter.drawText(
-            QRect(int(cap_left) + 4, 2, max(int(width - cap_left - cap_right) - 8, 10), 14),
-            Qt.AlignmentFlag.AlignLeft,
-            "中段平铺" if spec.mid_mode != "stretch" else "中段拉伸",
-        )
+        else:
+            paint_band(painter, QRectF(0, 0, width, height), spec)
+            scale = height / max(float(source.height()), 1.0)
+            cap_left = min(spec.cap_left * scale, width)
+            cap_right = min(spec.cap_right * scale, width)
+            pen = QPen(QColor(255, 196, 64, 230))
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(int(cap_left), 0, int(cap_left), height)
+            painter.drawLine(
+                int(width - cap_right), 0, int(width - cap_right), height
+            )
+            painter.setPen(QColor(255, 196, 64, 235))
+            painter.drawText(
+                QRect(
+                    int(cap_left) + 4,
+                    2,
+                    max(int(width - cap_left - cap_right) - 8, 10),
+                    14,
+                ),
+                Qt.AlignmentFlag.AlignLeft,
+                "中段平铺" if spec.mid_mode != "stretch" else "中段拉伸",
+            )
     finally:
         painter.end()
+    if image.width() > max_width:
+        image = image.scaledToWidth(
+            max_width, Qt.TransformationMode.SmoothTransformation
+        )
     return image
 
 
@@ -571,6 +602,13 @@ _LINE_BAND_FIELDS = {
     "line_band_opacity_pct",
     "line_band_tint",
     "line_band_tint_strength_pct",
+    "line_band_line_color",
+    "line_band_edge_kind",
+    "line_band_edge_color",
+    "line_band_edge_size_px",
+    "line_band_edge_offset_x_px",
+    "line_band_edge_offset_y_px",
+    "line_band_edge_opacity_pct",
 }
 
 
@@ -1291,7 +1329,10 @@ class PropertyPanel(QWidget):
         height = int(height)
         if width <= 0 or height <= 0:
             return
+        self._output_height = height
         self.set_n3_template_target_height(height)
+        if hasattr(self, '_line_band_enabled_switch'):
+            self._sync_line_band_controls()
         if hasattr(self, "_layout_schematic"):
             self._layout_schematic.set_output_size(width, height)
         if hasattr(self, "_schematic_board"):
@@ -4238,6 +4279,45 @@ class PropertyPanel(QWidget):
                     changes["ruby_karaoke_colors"] = None
         self._update_style(**changes)
 
+    def _set_global_color(self, field_name: str, color: str) -> None:
+        """全局样式专属的颜色字段（行背景带等）：不落进当前配色方案。"""
+        normalized = _normalize_hex(
+            color, str(getattr(self._style, field_name, "#FFFFFF") or "#FFFFFF")
+        )
+        self._update_style(_force_global=True, **{field_name: normalized})
+
+    def _choose_global_color(self, field_name: str) -> None:
+        current = QColor(
+            str(getattr(self._style, field_name, "") or "#FFFFFF")
+        )
+        color = _select_color(current, self, "选择颜色")
+        if color.isValid():
+            self._set_global_color(
+                field_name, color.name(QColor.NameFormat.HexArgb)
+            )
+
+    def _global_color_button(self, field_name: str, color: str) -> ColorButton:
+        """全局颜色按钮：取色/屏幕取色都直接写进全局样式。"""
+        button = ColorButton(color)
+        self._wire_color_edit_session(button)
+        button.clicked.connect(
+            lambda _checked=False, field=field_name: self._choose_global_color(
+                field
+            )
+        )
+        button.colorEntered.connect(
+            lambda color, field=field_name: self._set_global_color(field, color)
+        )
+        button.screenPickRequested.connect(
+            lambda field=field_name, preview=button: self._begin_screen_color_pick(
+                preview,
+                lambda color, field=field: self._set_global_color(
+                    field, color.name(QColor.NameFormat.HexArgb)
+                ),
+            )
+        )
+        return button
+
     def _choose_paint_color(
         self,
         field_name: str,
@@ -4311,6 +4391,7 @@ class PropertyPanel(QWidget):
         self._update_style(
             # 选预设即视为要用带子：顺手打开总开关，否则预览里什么都看不到。
             line_band_enabled=True,
+            line_band_line_color="",
             line_band_image=spec,
             line_band_fill_mode="three_slice",
             line_band_cap_left_px=preset.cap_left_px,
@@ -4329,7 +4410,7 @@ class PropertyPanel(QWidget):
             self,
             "选择行背景图",
             start,
-            "图像文件 (*.bmp *.jpeg *.jpg *.png *.tif *.tiff *.webp);;"
+            "图像文件 (*.png *.gif *.apng *.webp *.jpg *.jpeg *.bmp *.tif *.tiff);;"
             "所有文件 (*.*)",
         )
         if path:
@@ -4337,6 +4418,7 @@ class PropertyPanel(QWidget):
             self._update_style(
                 line_band_enabled=True,
                 line_band_image=path,
+                line_band_line_color="",
                 line_band_cap_left_px=0,
                 line_band_cap_right_px=0,
             )
@@ -5607,6 +5689,41 @@ class PropertyPanel(QWidget):
             width2_spin.setValue(width2)
             width2_spin.setEnabled(inherited or enabled)
 
+    def _line_band_image_size(self) -> tuple[int, int]:
+        """当前带子素材的源像素尺寸（未知时返回 0,0）。"""
+        image = (self._style.line_band_image or "").strip()
+        preset = band_preset(preset_id_for_image(image) or "")
+        path = preset.path if preset is not None else Path(image) if image else None
+        cache = getattr(self, "_line_band_size_cache", None)
+        if cache is None:
+            cache = {}
+            self._line_band_size_cache = cache
+        key = str(path) if path is not None else ""
+        if key in cache:
+            return cache[key]
+        size = (0, 0)
+        try:
+            if path is not None and path.is_file():
+                from PyQt6.QtGui import QImage
+
+                header = QImage(str(path))
+                size = (int(header.width()), int(header.height()))
+        except Exception:
+            size = (0, 0)
+        cache[key] = size
+        return size
+
+    def _line_band_cap_left_value(self, value: int) -> int:
+        width = self._line_band_image_size()[0]
+        limit = max(width - int(self._style.line_band_cap_right_px), 0) if width else 4096
+        return max(0, min(int(value), limit))
+
+    def _line_band_cap_right_value(self, value: int) -> int:
+        # 滑条是负值：向右拖 = 边界向右移（手感跟手）。
+        width = self._line_band_image_size()[0]
+        limit = max(width - int(self._style.line_band_cap_left_px), 0) if width else 4096
+        return max(0, min(-int(value), limit))
+
     def _sync_line_band_controls(self) -> None:
         """把行背景带的样式值回填到控件（调用方负责 _syncing 门）。"""
         if not hasattr(self, "_line_band_enabled_switch"):
@@ -5624,11 +5741,16 @@ class PropertyPanel(QWidget):
         for combo, value in (
             (self._line_band_fill_combo, style.line_band_fill_mode),
             (self._line_band_mid_combo, style.line_band_mid_mode),
+            (self._line_band_edge_kind_combo, style.line_band_edge_kind),
         ):
             combo.setCurrentIndex(max(0, combo.findData(value)))
+        # 端点：右侧控件是负值（滑条向右 = 边界向右）。
+        width, _height = self._line_band_image_size()
+        cap_left = int(style.line_band_cap_left_px)
+        cap_right = int(style.line_band_cap_right_px)
+        self._line_band_cap_left_spin.setValue(cap_left)
+        self._line_band_cap_right_spin.setValue(-cap_right)
         for spin, value in (
-            (self._line_band_cap_left_spin, style.line_band_cap_left_px),
-            (self._line_band_cap_right_spin, style.line_band_cap_right_px),
             (self._line_band_pad_top_spin, style.line_band_pad_top_px),
             (self._line_band_pad_bottom_spin, style.line_band_pad_bottom_px),
             (self._line_band_pad_left_spin, style.line_band_pad_left_px),
@@ -5636,6 +5758,10 @@ class PropertyPanel(QWidget):
             (self._line_band_offset_y_spin, style.line_band_offset_y_px),
             (self._line_band_opacity_spin, style.line_band_opacity_pct),
             (self._line_band_tint_strength_spin, style.line_band_tint_strength_pct),
+            (self._line_band_edge_size_spin, style.line_band_edge_size_px),
+            (self._line_band_edge_offset_x_spin, style.line_band_edge_offset_x_px),
+            (self._line_band_edge_offset_y_spin, style.line_band_edge_offset_y_px),
+            (self._line_band_edge_opacity_spin, style.line_band_edge_opacity_pct),
         ):
             spin.setValue(int(value))
         self._line_band_include_ruby_check.setChecked(
@@ -5650,9 +5776,32 @@ class PropertyPanel(QWidget):
         self._line_band_tint_btn.setEnabled(tintable)
         self._line_band_tint_strength_spin.setEnabled(tintable)
         self._line_band_tint_reset_btn.setEnabled(tintable)
+        # 独立谱线层只随预设提供。
+        has_lines = preset is not None and preset.lines_path is not None
+        self._line_band_line_color_btn.setEnabled(has_lines)
+        edge_active = style.line_band_edge_kind in {"shadow", "glow"}
+        shadow = style.line_band_edge_kind == "shadow"
+        self._line_band_edge_color_btn.setEnabled(edge_active)
+        self._line_band_edge_size_spin.setEnabled(edge_active)
+        self._line_band_edge_opacity_spin.setEnabled(edge_active)
+        self._line_band_edge_offset_x_spin.setEnabled(shadow)
+        self._line_band_edge_offset_y_spin.setEnabled(shadow)
+        self._line_band_tint_btn.set_color(style.line_band_tint or "#FFFFFF")
+        self._line_band_line_color_btn.set_color(
+            style.line_band_line_color
+            or (preset.default_line_color if has_lines else "")
+            or "#1A1A1C"
+        )
+        self._line_band_edge_color_btn.set_color(style.line_band_edge_color)
         preview = getattr(self, "_line_band_preview", None)
         if preview is not None:
-            preview.setPixmap(line_band_preview_pixmap(style))
+            preview.setPixmap(
+                line_band_preview_pixmap(
+                    style, output_height=int(
+                        getattr(self, "_output_height", 1080)
+                    )
+                )
+            )
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):

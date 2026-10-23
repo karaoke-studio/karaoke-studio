@@ -17,7 +17,11 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     title_row_offsets_x,
     title_show_specs,
 )
-from krok_helper.subtitle_render.domain.band_presets import resolve_band_image
+from krok_helper.subtitle_render.domain.band_presets import (
+    default_line_color_for,
+    resolve_band_image,
+    resolve_band_lines_image,
+)
 from krok_helper.subtitle_render.domain.timing import (
     TimingTrack,
     guide_symbol_has_visual,
@@ -262,6 +266,20 @@ def build_render_ir(
         style_payload["line_band_image"] = (
             str(band_path) if band_path is not None else ""
         )
+        # 预设的独立谱线层（五线谱）：sidecar 只认文件路径。注意用原始
+        # ``preset:`` 说法解析——上面已经把 line_band_image 换成绝对路径了。
+        band_lines_path = resolve_band_lines_image(
+            str(style.line_band_image or "")
+        )
+        style_payload["line_band_lines_image"] = (
+            str(band_lines_path) if band_lines_path is not None else ""
+        )
+        if band_lines_path is not None and not style_payload.get(
+            "line_band_line_color"
+        ):
+            style_payload["line_band_line_color"] = default_line_color_for(
+                str(style.line_band_image or "")
+            )
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -408,6 +426,18 @@ def build_style_patch_ir(
         patch_style_payload["line_band_image"] = (
             str(patch_band_path) if patch_band_path is not None else ""
         )
+        patch_lines_path = resolve_band_lines_image(
+            str(style.line_band_image or "")
+        )
+        patch_style_payload["line_band_lines_image"] = (
+            str(patch_lines_path) if patch_lines_path is not None else ""
+        )
+        if patch_lines_path is not None and not patch_style_payload.get(
+            "line_band_line_color"
+        ):
+            patch_style_payload["line_band_line_color"] = default_line_color_for(
+                str(style.line_band_image or "")
+            )
         return {
             "schema": RENDER_IR_SCHEMA,
             "screen": {

@@ -128,6 +128,73 @@ def test_band_rect_offset_shifts_both_edges():
 
 
 # ------------------------------------------------------------------ painting
+def test_staff_lines_layer_follows_line_color(qapp):
+    """五线谱的独立谱线层必须按用户颜色上色（默认近黑、可改红）。"""
+
+    def red_pixels(color: str) -> int:
+        image = _blank()
+        style = _style(
+            line_band_image="preset:staff_scroll",
+            line_band_cap_left_px=190,
+            line_band_cap_right_px=160,
+            line_band_line_color=color,
+            line_band_fill_mode="stretch",
+        )
+        paint_frame(image, _track(), 1800, style)
+        count = 0
+        for y in range(0, image.height(), 2):
+            for x in range(0, image.width(), 2):
+                pixel = image.pixelColor(x, y)
+                if pixel.red() > 200 and pixel.green() < 70 and pixel.blue() < 70:
+                    count += 1
+        return count
+
+    assert red_pixels("#FF0000") > 40
+    assert red_pixels("#000000") == 0
+
+
+def test_band_edge_glow_grows_beyond_the_band_rect(qapp):
+    """发光/投影要长到带子轮廓之外，否则会被不透明白底完全盖住。"""
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(ch, index * 100) for index, ch in enumerate("あいうえおか")],
+                end_ms=2_000,
+            )
+        ]
+    )
+    canvas = _blank(1200, 400)
+
+    def alpha_bbox(style):
+        image = QImage(1200, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0, 0))
+        paint_frame(image, track, 1_200, style)
+        xs: list[int] = []
+        ys: list[int] = []
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).alpha() > 8:
+                    xs.append(x)
+                    ys.append(y)
+        assert xs
+        return min(xs), min(ys), max(xs), max(ys)
+
+    base = alpha_bbox(_style(line_band_image="preset:plain_round"))
+    glow = alpha_bbox(
+        _style(
+            line_band_image="preset:plain_round",
+            line_band_edge_kind="glow",
+            line_band_edge_color="#00FF00",
+            line_band_edge_size_px=18,
+            line_band_edge_opacity_pct=90,
+        )
+    )
+    assert glow[0] < base[0] - 6
+    assert glow[1] < base[1] - 6
+    assert glow[2] > base[2] + 6
+    assert glow[3] > base[3] + 6
+
+
 def test_band_is_painted_beside_the_text_and_absent_when_disabled(qapp):
     track = _track()
     enabled = _style()

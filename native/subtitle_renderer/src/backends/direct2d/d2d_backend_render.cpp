@@ -1053,6 +1053,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         ID2D1Bitmap1 *bandBitmap = impl_->lineBandImage.bitmap.Get();
         const D2D1_SIZE_F imageSize = bandBitmap->GetSize();
         const auto drawBandPiece = [&](
+            ID2D1Bitmap1 *bitmap,
             const D2D1_RECT_F &dest,
             float opacity,
             const D2D1_RECT_F &source
@@ -1064,7 +1065,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return;
             }
             context->DrawBitmap(
-                bandBitmap,
+                bitmap,
                 &dest,
                 opacity,
                 D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
@@ -1080,35 +1081,42 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         context->Clear(D2D1::ColorF(0.0f, 0.0f));
         frameCleared = true;
         if (imageWidth > 0.0f && imageHeight > 0.0f) {
-            for (const BandGroup &group : groups) {
-                if (!group.hasRect) {
-                    continue;
-                }
-                const D2D1_RECT_F &rect = group.rect;
-                const float width = rect.right - rect.left;
-                const float height = rect.bottom - rect.top;
-                const float opacity = std::clamp(
-                    group.opacity * band.opacity, 0.0f, 1.0f
-                );
-                if (width <= 0.0f || height <= 0.0f || opacity <= 0.0f) {
-                    continue;
-                }
-                const D2D1_RECT_F imageRect = D2D1::RectF(
-                    0.0f, 0.0f, imageWidth, imageHeight
-                );
+        const auto drawLayer = [&](
+            ID2D1Bitmap1 *bitmap,
+            ID2D1Bitmap1 *midStrip,
+            const D2D1_RECT_F &rect,
+            float opacity
+        ) {
+            if (bitmap == nullptr) {
+                return;
+            }
+            const float width = rect.right - rect.left;
+            const float height = rect.bottom - rect.top;
+            if (width <= 0.0f || height <= 0.0f || opacity <= 0.0f) {
+                return;
+            }
+            const D2D1_SIZE_F layerSize = bitmap->GetSize();
+            const float imageWidth = layerSize.width;
+            const float imageHeight = layerSize.height;
+            if (imageWidth <= 0.0f || imageHeight <= 0.0f) {
+                return;
+            }
+            const D2D1_RECT_F imageRect = D2D1::RectF(
+                0.0f, 0.0f, imageWidth, imageHeight
+            );
                 if (band.fillMode == "repeat") {
                     const float scale = height / imageHeight;
                     const float tileWidth = imageWidth * scale;
                     if (tileWidth <= 0.5f) {
-                        drawBandPiece(rect, opacity, imageRect);
-                        continue;
+                        drawBandPiece(bitmap, rect, opacity, imageRect);
+                        return;
                     }
                     float x = rect.left;
                     while (x < rect.right - 0.5f) {
                         const float tileRight = std::min(
                             x + tileWidth, rect.right
                         );
-                        drawBandPiece(
+                        drawBandPiece(bitmap, 
                             D2D1::RectF(x, rect.top, tileRight, rect.bottom),
                             opacity,
                             D2D1::RectF(
@@ -1127,7 +1135,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const float sourceHeight = std::min(
                         height / scale, imageHeight
                     );
-                    drawBandPiece(
+                    drawBandPiece(bitmap, 
                         rect,
                         opacity,
                         D2D1::RectF(
@@ -1149,7 +1157,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         rightWidth = band.capRight * scale;
                     }
                     if (band.capLeft > 0.0f) {
-                        drawBandPiece(
+                        drawBandPiece(bitmap, 
                             D2D1::RectF(
                                 rect.left, rect.top,
                                 rect.left + leftWidth, rect.bottom
@@ -1161,7 +1169,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         );
                     }
                     if (band.capRight > 0.0f) {
-                        drawBandPiece(
+                        drawBandPiece(bitmap, 
                             D2D1::RectF(
                                 rect.right - rightWidth, rect.top,
                                 rect.right, rect.bottom
@@ -1185,7 +1193,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             imageWidth - band.capRight, imageHeight
                         );
                         if (band.midMode == "stretch") {
-                            drawBandPiece(
+                            drawBandPiece(bitmap, 
                                 D2D1::RectF(
                                     midLeft, rect.top,
                                     midLeft + midWidth, rect.bottom
@@ -1193,7 +1201,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 opacity,
                                 midSource
                             );
-                        } else if (impl_->lineBandImage.midBitmap) {
+                        } else if (midStrip) {
                             // 中段一次取样预拼条（8192px 宽、整数像素重复）：
                             // 逐块 DrawBitmap 在每块边缘各留半像素竖线，位图
                             // 画刷 WRAP 在非整数缩放下回绕处也会断一拍。
@@ -1201,7 +1209,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 midWidth / std::max(scale, 1e-6f),
                                 8191.0f
                             );
-                            drawBandPiece(
+                            drawBandPiece(bitmap, 
                                 D2D1::RectF(
                                     midLeft, rect.top,
                                     midLeft + midWidth, rect.bottom
@@ -1214,7 +1222,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         } else {
                             const float tileWidth = sourceMidWidth * scale;
                             if (tileWidth <= 0.5f) {
-                                drawBandPiece(
+                                drawBandPiece(bitmap, 
                                     D2D1::RectF(
                                         midLeft, rect.top,
                                         midLeft + midWidth, rect.bottom
@@ -1228,7 +1236,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                     const float tileRight = std::min(
                                         x + tileWidth, midLeft + midWidth
                                     );
-                                    drawBandPiece(
+                                    drawBandPiece(bitmap, 
                                         D2D1::RectF(
                                             x, rect.top, tileRight, rect.bottom
                                         ),
@@ -1250,9 +1258,81 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         }
                     }
                 } else {
-                    drawBandPiece(rect, opacity, imageRect);
+                    drawBandPiece(bitmap, rect, opacity, imageRect);
+                }
+        };
+        for (const BandGroup &group : groups) {
+            if (!group.hasRect) {
+                continue;
+            }
+            const D2D1_RECT_F base = group.rect;
+            const float alpha = std::clamp(
+                group.opacity * band.opacity, 0.0f, 1.0f
+            );
+            if (alpha <= 0.0f) {
+                continue;
+            }
+            const bool shadow = band.edgeKind == "shadow";
+            if (band.edgeKind != "none"
+                && impl_->lineBandImage.edgeBitmap) {
+                ID2D1Bitmap1 *edgeBitmap
+                    = impl_->lineBandImage.edgeBitmap.Get();
+                ID2D1Bitmap1 *edgeStrip
+                    = impl_->lineBandImage.edgeMidStrip.Get();
+                if (shadow) {
+                    const float offsetX = band.edgeOffsetX;
+                    const float offsetY = band.edgeOffsetY;
+                    drawLayer(
+                        edgeBitmap,
+                        edgeStrip,
+                        D2D1::RectF(
+                            base.left + offsetX, base.top + offsetY,
+                            base.right + offsetX, base.bottom + offsetY
+                        ),
+                        alpha * band.edgeOpacity
+                    );
+                } else {
+                    // 发光要长到轮廓之外：剪影绕圆周多次轻叠（模糊后的剪影
+                    // 不会越出画布，靠偏移把它扩出去）。与 CPU 同口径。
+                    const float radius = std::max(band.edgeSize, 1.0f);
+                    const int steps = radius >= 8.0f ? 16 : 8;
+                    const float perStep = std::min(
+                        band.edgeOpacity / static_cast<float>(steps) * 2.0f,
+                        1.0f
+                    );
+                    for (int index = 0; index < steps; ++index) {
+                        const float angle = 6.2831853f
+                            * static_cast<float>(index)
+                            / static_cast<float>(steps);
+                        const float offsetX = std::cos(angle) * radius;
+                        const float offsetY = std::sin(angle) * radius;
+                        drawLayer(
+                            edgeBitmap,
+                            edgeStrip,
+                            D2D1::RectF(
+                                base.left + offsetX, base.top + offsetY,
+                                base.right + offsetX, base.bottom + offsetY
+                            ),
+                            alpha * perStep
+                        );
+                    }
                 }
             }
+            drawLayer(
+                impl_->lineBandImage.bitmap.Get(),
+                impl_->lineBandImage.midBitmap.Get(),
+                base,
+                alpha
+            );
+            if (impl_->lineBandImage.lineBitmap) {
+                drawLayer(
+                    impl_->lineBandImage.lineBitmap.Get(),
+                    impl_->lineBandImage.lineMidStrip.Get(),
+                    base,
+                    alpha
+                );
+            }
+        }
         }
         checkHr(
             context->EndDraw(),

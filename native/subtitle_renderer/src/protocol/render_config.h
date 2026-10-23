@@ -577,6 +577,16 @@ struct LineBandConfig {
     // 空 = 不染色；染色色值 "#RRGGBB"（镜像 CPU 的 SourceIn 叠色语义）。
     QString tint;
     int tintStrengthPct = 100;
+    // 预设的独立谱线层（五线谱）：路径 + 谱线颜色。
+    QString linesPath;
+    QString lineColor;
+    // 图片非透明部分的投影/发光："none" / "shadow" / "glow"。
+    QString edgeKind = QStringLiteral("none");
+    QString edgeColor = QStringLiteral("#000000");
+    int edgeSizePx = 12;
+    int edgeOffsetXPx = 8;
+    int edgeOffsetYPx = 8;
+    int edgeOpacityPct = 70;
 };
 
 struct RenderConfig {

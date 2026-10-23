@@ -1037,7 +1037,9 @@ class EffectsPropertyPageBuilder:
         host._line_band_section = section
         host._line_band_enabled_switch = section.header_switch
         host._line_band_enabled_switch.toggled.connect(
-            lambda checked: host._update_style(line_band_enabled=checked)
+            lambda checked: host._update_style(
+            _force_global=True, line_band_enabled=checked
+        )
         )
 
         def group(
@@ -1077,7 +1079,33 @@ class EffectsPropertyPageBuilder:
             host._on_line_band_preset_changed
         )
         add("预设", host._line_band_preset_combo)
+        host._line_band_fill_combo = self._combo(
+            section,
+            (
+                ("三段式（端点 + 中段循环）", "three_slice"),
+                ("拉伸", "stretch"),
+                ("重复", "repeat"),
+                ("裁切（覆盖）", "cover"),
+            ),
+            "line_band_fill_mode",
+            force_global=True,
+        )
+        host._line_band_fill_combo.setToolTip(
+            "三段式：左右端点原样缩放、中段按需平铺，适合带装饰的横幅；"
+            "拉伸：整图非等比铺满；重复：按带子高度等比缩放后横向平铺；"
+            "裁切：等比覆盖后居中裁掉溢出。"
+        )
+        add("填充方式", host._line_band_fill_combo)
+        host._line_band_mid_combo = self._combo(
+            section,
+            (("重复", "repeat"), ("拉伸", "stretch")),
+            "line_band_mid_mode",
+            force_global=True,
+        )
+        host._line_band_mid_combo.setToolTip("三段式下中段的行为。")
+        add("中段", host._line_band_mid_combo)
 
+        # 图片行独占一行：和预设下拉挤在同一排时路径会被压没。
         host._line_band_image_label = FluentLineEdit(section)
         compact_property_control(host._line_band_image_label)
         host._line_band_image_label.setReadOnly(True)
@@ -1095,45 +1123,31 @@ class EffectsPropertyPageBuilder:
         image_layout.addWidget(host._line_band_image_label, 1)
         image_layout.addWidget(host._line_band_pick_btn)
         image_layout.addWidget(host._line_band_clear_btn)
-        add("图片", image_row)
+        layout.addWidget(image_row)
 
         host._line_band_preview = QLabel(section)
-        host._line_band_preview.setMinimumHeight(72)
+        host._line_band_preview.setMinimumHeight(84)
         host._line_band_preview.setToolTip(
-            "虚线是左右端点边界；中间就是中段实际平铺出来的样子。"
-            "改端点/填充方式会立刻重画。"
+            "棋盘格是透明底；黄色虚线是左右端点边界，中间就是中段实际平铺"
+            "出来的样子（与成片同一套几何、同一比例尺）。"
         )
-        add(None, host._line_band_preview)
+        layout.addWidget(host._line_band_preview)
 
-        host._line_band_fill_combo = self._combo(
-            section,
-            (
-                ("三段式（端点 + 中段循环）", "three_slice"),
-                ("拉伸", "stretch"),
-                ("重复", "repeat"),
-                ("裁切（覆盖）", "cover"),
-            ),
-            "line_band_fill_mode",
-        )
-        host._line_band_fill_combo.setToolTip(
-            "三段式：左右端点原样缩放、中段按需平铺，适合带装饰的横幅；"
-            "拉伸：整图非等比铺满；重复：按带子高度等比缩放后横向平铺；"
-            "裁切：等比覆盖后居中裁掉溢出。"
-        )
-        add("填充方式", host._line_band_fill_combo)
-        host._line_band_mid_combo = self._combo(
-            section,
-            (("重复", "repeat"), ("拉伸", "stretch")),
-            "line_band_mid_mode",
-        )
-        host._line_band_mid_combo.setToolTip("三段式下中段的行为。")
-        add("中段", host._line_band_mid_combo)
-
+        # 端点：右端点滑条取反值——向右拖 = 切割边界向右移，手感跟手。
         add = group("端点", max_columns=4)
-        self._add_canvas_spin(add, "_line_band_cap_left_spin", "左端点", 0, 2000,
-                              "line_band_cap_left_px", "short_quarter", suffix=" px")
-        self._add_canvas_spin(add, "_line_band_cap_right_spin", "右端点", 0, 2000,
-                              "line_band_cap_right_px", "short_quarter", suffix=" px")
+        self._add_canvas_spin(
+            add, "_line_band_cap_left_spin", "左端点", 0, 4096,
+            "line_band_cap_left_px", "short_quarter", suffix=" px", force_global=True,
+            transform=host._line_band_cap_left_value,
+        )
+        self._add_canvas_spin(
+            add, "_line_band_cap_right_spin", "右端点", -4096, 0,
+            "line_band_cap_right_px", "short_quarter", suffix=" px", force_global=True,
+            transform=host._line_band_cap_right_value,
+        )
+        host._line_band_cap_right_spin.setToolTip(
+            "方向已取反：向右拖 = 右端点边界向右移动。左右端点不会相交。"
+        )
 
         add = group("几何", max_columns=4)
         for attribute, label, field_name in (
@@ -1145,27 +1159,61 @@ class EffectsPropertyPageBuilder:
             self._add_canvas_spin(add, attribute, label, 0, 2000, field_name,
                                   "short_quarter", suffix=" px")
         self._add_canvas_spin(add, "_line_band_offset_y_spin", "垂直偏移", -500, 500,
-                              "line_band_offset_y_px", "offset_y", suffix=" px")
+                              "line_band_offset_y_px", "offset_y", suffix=" px", force_global=True)
         host._line_band_include_ruby_check = CheckBox("上边距按注音顶计算", section)
         host._line_band_include_ruby_check.setToolTip(
             "勾选后上边距从注音顶量起（带子会把注音一起包住）；关闭时从主文字顶量起。"
             "下缘始终跟主文字底走。"
         )
         host._line_band_include_ruby_check.toggled.connect(
-            lambda checked: host._update_style(line_band_include_ruby=checked)
+            lambda checked: host._update_style(
+            _force_global=True, line_band_include_ruby=checked
+        )
         )
         add(None, host._line_band_include_ruby_check)
 
         add = group("外观", max_columns=4)
         self._add_canvas_spin(add, "_line_band_opacity_spin", "透明度", 0, 100,
-                              "line_band_opacity_pct", "hard", suffix=" %")
+                              "line_band_opacity_pct", "hard", suffix=" %", force_global=True)
         self._add_canvas_spin(add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
-                              "line_band_tint_strength_pct", "hard", suffix=" %")
-        self._add_color(add, "_line_band_tint_btn", "上色", "line_band_tint")
+                              "line_band_tint_strength_pct", "hard", suffix=" %", force_global=True)
+        self._add_color(add, "_line_band_tint_btn", "上色", "line_band_tint",
+                        force_global=True)
         host._line_band_tint_reset_btn = FluentPushButton("用预设默认色", section)
         host._line_band_tint_reset_btn.setMinimumHeight(32)
         host._line_band_tint_reset_btn.clicked.connect(host._reset_line_band_tint)
         add(None, host._line_band_tint_reset_btn)
+        self._add_color(
+            add, "_line_band_line_color_btn", "谱线颜色", "line_band_line_color",
+            force_global=True,
+        )
+        host._line_band_line_color_btn.setToolTip(
+            "五线谱等带独立谱线层的预设才生效；其余预设无谱线层，控件停用。"
+        )
+
+        # 图片非透明部分的投影 / 发光。
+        host._line_band_edge_kind_combo = self._combo(
+            section,
+            (("无", "none"), ("投影", "shadow"), ("发光", "glow")),
+            "line_band_edge_kind",
+            force_global=True,
+        )
+        host._line_band_edge_kind_combo.setToolTip(
+            "给图片的非透明部分加投影（可偏移）或发光（向外扩散）。"
+        )
+        add("描边效果", host._line_band_edge_kind_combo)
+        self._add_color(
+            add, "_line_band_edge_color_btn", "描边颜色", "line_band_edge_color",
+            force_global=True,
+        )
+        self._add_canvas_spin(add, "_line_band_edge_size_spin", "描边半径", 0, 160,
+                              "line_band_edge_size_px", "hard", suffix=" px", force_global=True)
+        self._add_canvas_spin(add, "_line_band_edge_offset_x_spin", "投影 X", -300, 300,
+                              "line_band_edge_offset_x_px", "hard", suffix=" px", force_global=True)
+        self._add_canvas_spin(add, "_line_band_edge_offset_y_spin", "投影 Y", -300, 300,
+                              "line_band_edge_offset_y_px", "hard", suffix=" px", force_global=True)
+        self._add_canvas_spin(add, "_line_band_edge_opacity_spin", "描边强度", 0, 100,
+                              "line_band_edge_opacity_pct", "hard", suffix=" %", force_global=True)
 
         section.set_expanded(False)
         return section
@@ -1177,6 +1225,7 @@ class EffectsPropertyPageBuilder:
         model_field: str,
         *,
         transform: Callable[[Any], Any] = lambda value: value,
+        force_global: bool = False,
     ) -> WheelFocusedComboBox:
         host = self._host
         combo = WheelFocusedComboBox(parent)
@@ -1184,8 +1233,12 @@ class EffectsPropertyPageBuilder:
         for label, value in options:
             combo.addItem(label, value)
         combo.currentIndexChanged.connect(
-            lambda _index, field=model_field, control=combo, convert=transform: (
-                host._update_style(**{field: convert(control.currentData())})
+            lambda _index, field=model_field, control=combo, convert=transform,
+            global_scope=force_global: (
+                host._update_style(
+                    _force_global=global_scope,
+                    **{field: convert(control.currentData())},
+                )
             )
         )
         return combo
@@ -1202,6 +1255,7 @@ class EffectsPropertyPageBuilder:
         *,
         suffix: str = "",
         transform: Callable[[int], Any] = lambda value: value,
+        force_global: bool = False,
     ) -> None:
         host = self._host
         control = CanvasSliderSpinBox(
@@ -1219,8 +1273,10 @@ class EffectsPropertyPageBuilder:
             else:
                 control.set_slider_range(minimum, maximum)
         control.valueChanged.connect(
-            lambda value, field=model_field, convert=transform: host._update_style(
-                **{field: convert(value)}
+            lambda value, field=model_field, convert=transform, global_scope=(
+                force_global
+            ): host._update_style(
+                _force_global=global_scope, **{field: convert(value)}
             )
         )
         add(label, control)
@@ -1236,13 +1292,16 @@ class EffectsPropertyPageBuilder:
         *,
         suffix: str = "",
         transform: Callable[[int], Any] = lambda value: value,
+        force_global: bool = False,
     ) -> None:
         host = self._host
         spin = self._spin_factory(minimum, maximum, suffix=suffix)
         setattr(host, attribute, spin)
         spin.valueChanged.connect(
-            lambda value, field=model_field, convert=transform: host._update_style(
-                **{field: convert(value)}
+            lambda value, field=model_field, convert=transform, global_scope=(
+                force_global
+            ): host._update_style(
+                _force_global=global_scope, **{field: convert(value)}
             )
         )
         add(label, spin)
@@ -1253,9 +1312,14 @@ class EffectsPropertyPageBuilder:
         attribute: str,
         label: str,
         model_field: str,
+        *,
+        force_global: bool = False,
     ) -> None:
         host = self._host
-        button = host._color_button(model_field, getattr(host._style, model_field))
+        factory = (
+            host._global_color_button if force_global else host._color_button
+        )
+        button = factory(model_field, getattr(host._style, model_field))
         setattr(host, attribute, button)
         add(label, button)
 

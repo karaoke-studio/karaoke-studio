@@ -145,6 +145,13 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     "line_band_opacity_pct",
     "line_band_tint",
     "line_band_tint_strength_pct",
+    "line_band_line_color",
+    "line_band_edge_kind",
+    "line_band_edge_color",
+    "line_band_edge_size_px",
+    "line_band_edge_offset_x_px",
+    "line_band_edge_offset_y_px",
+    "line_band_edge_opacity_pct",
 })
 _LYRIC_LAYOUT_EXCLUDED_SCHEME_FIELDS = frozenset({
     "base_color",

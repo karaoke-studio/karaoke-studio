@@ -1165,6 +1165,46 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             0,
             100
         );
+        band.linesPath = stringValue(
+            style, QStringLiteral("line_band_lines_image"), band.linesPath
+        );
+        band.lineColor = stringValue(
+            style, QStringLiteral("line_band_line_color"), band.lineColor
+        );
+        const QString edgeKind = stringValue(
+            style, QStringLiteral("line_band_edge_kind"), band.edgeKind
+        );
+        band.edgeKind = (
+            edgeKind == QStringLiteral("shadow")
+            || edgeKind == QStringLiteral("glow")
+        ) ? edgeKind : QStringLiteral("none");
+        band.edgeColor = stringValue(
+            style, QStringLiteral("line_band_edge_color"), band.edgeColor
+        );
+        band.edgeSizePx = std::max(
+            0, intValue(
+                style, QStringLiteral("line_band_edge_size_px"), band.edgeSizePx
+            )
+        );
+        band.edgeOffsetXPx = intValue(
+            style,
+            QStringLiteral("line_band_edge_offset_x_px"),
+            band.edgeOffsetXPx
+        );
+        band.edgeOffsetYPx = intValue(
+            style,
+            QStringLiteral("line_band_edge_offset_y_px"),
+            band.edgeOffsetYPx
+        );
+        band.edgeOpacityPct = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("line_band_edge_opacity_pct"),
+                band.edgeOpacityPct
+            ),
+            0,
+            100
+        );
     }
     base.fontFamily = stringValue(style, QStringLiteral("font_family"), base.fontFamily);
     base.fontFamilyLatin = stringValue(style, QStringLiteral("font_family_latin"), base.fontFamilyLatin);

@@ -3,6 +3,10 @@
 The five shipped PNGs live under ``assets/subtitle_render/band_presets``.
 Their metadata is kept here so the property panel, the QPainter renderer and
 the native IR serializer all read the same numbers.
+
+2026-10-23：素材改为**宽幅不循环**版本——中段 4096px（斜纹 4080px，保证条纹
+周期整除），16:9 画布上正常歌词行不会触发第二次平铺。五线谱的 5 条谱线单独
+出 ``staff_scroll_lines.png``（纯白），运行时按用户颜色上色。
 """
 
 from __future__ import annotations
@@ -33,10 +37,19 @@ class BandPreset:
     pad_right_px: int
     tintable: bool = False
     default_tint: str = ""
+    # 独立谱线层（白色，运行时按 line_band_line_color 上色）；空 = 没有分层。
+    lines_file_name: str = ""
+    default_line_color: str = ""
 
     @property
     def path(self) -> Path:
         return BAND_PRESET_DIR / self.file_name
+
+    @property
+    def lines_path(self) -> Optional[Path]:
+        if not self.lines_file_name:
+            return None
+        return BAND_PRESET_DIR / self.lines_file_name
 
     @property
     def image_spec(self) -> str:
@@ -46,7 +59,9 @@ class BandPreset:
 
 BAND_PRESETS: tuple[BandPreset, ...] = (
     BandPreset("staff_scroll", "五线谱 · 卷轴", "staff_scroll.png",
-               190, 160, 26, 26, 110, 120),
+               190, 160, 26, 26, 110, 120,
+               lines_file_name="staff_scroll_lines.png",
+               default_line_color="#1A1A1C"),
     BandPreset("stars", "星火点阵", "stars.png",
                120, 120, 14, 14, 54, 54),
     BandPreset("diagonal", "斜纹缎带", "diagonal.png",
@@ -82,10 +97,25 @@ def resolve_band_image(image: str) -> Optional[Path]:
     return path if path.is_file() else None
 
 
+def resolve_band_lines_image(image: str) -> Optional[Path]:
+    """Resolve the preset's independent line layer (empty for uploads)."""
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return None
+    lines_path = preset.lines_path
+    return lines_path if lines_path is not None and lines_path.is_file() else None
+
+
 def default_tint_for(image: str) -> str:
     """Default user colour for a tintable preset (empty otherwise)."""
     preset = band_preset(preset_id_for_image(image) or "")
     return preset.default_tint if preset is not None else ""
+
+
+def default_line_color_for(image: str) -> str:
+    """Default staff-line colour for presets with a line layer."""
+    preset = band_preset(preset_id_for_image(image) or "")
+    return preset.default_line_color if preset is not None else ""
 
 
 __all__ = [
@@ -94,7 +124,9 @@ __all__ = [
     "BandPreset",
     "PRESET_SCHEME",
     "band_preset",
+    "default_line_color_for",
     "default_tint_for",
     "preset_id_for_image",
     "resolve_band_image",
+    "resolve_band_lines_image",
 ]

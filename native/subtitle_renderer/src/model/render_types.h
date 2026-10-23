@@ -728,6 +728,18 @@ struct LineBandStyle {
     bool hasTint = false;
     RgbaColor tint{255, 255, 255, 255};
     int tintStrengthPct = 100;
+    // 独立谱线层（五线谱）：白色素材 + 用户谱线颜色。
+    std::wstring linesPath;
+    bool hasLineColor = false;
+    RgbaColor lineColor{0, 0, 0, 255};
+    // 非透明部分的投影 / 发光。
+    std::string edgeKind = "none";
+    bool hasEdgeColor = false;
+    RgbaColor edgeColor{0, 0, 0, 255};
+    float edgeSize = 12.0f;
+    float edgeOffsetX = 8.0f;
+    float edgeOffsetY = 8.0f;
+    float edgeOpacity = 0.7f;
     bool operator==(const LineBandStyle &) const = default;
 };
 

@@ -1462,6 +1462,27 @@ class Style:
     line_band_tint_strength_pct: int = 100
     """上色强度百分比：0=保持素材原本的中性灰。"""
 
+    line_band_line_color: str = ""
+    """谱线颜色（仅带独立谱线层的预设生效，如五线谱）；空串用预设默认。"""
+
+    line_band_edge_kind: str = "none"
+    """图片非透明部分的描边效果：``none`` / ``shadow`` 投影 / ``glow`` 发光。"""
+
+    line_band_edge_color: str = "#000000"
+    """投影/发光颜色。"""
+
+    line_band_edge_size_px: int = 12
+    """发光半径（``glow``）或投影模糊半径（``shadow``，逻辑像素）。"""
+
+    line_band_edge_offset_x_px: int = 8
+    """投影水平偏移（``shadow`` 生效）。"""
+
+    line_band_edge_offset_y_px: int = 8
+    """投影垂直偏移（``shadow`` 生效）。"""
+
+    line_band_edge_opacity_pct: int = 70
+    """投影/发光的强度百分比。"""
+
     # 指示灯（Sayatoo SignalsLits.sx：lit.* / signals.duration）
     # 形状指示灯与音量柱是两个独立模块。lit_enabled 只控制悬浮形状灯；
     # volume_enabled 控制会插入字幕行首、参与行宽布局的音量柱。
@@ -2533,6 +2554,10 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "line_band_offset_y_px",
             "line_band_opacity_pct",
             "line_band_tint_strength_pct",
+            "line_band_edge_size_px",
+            "line_band_edge_offset_x_px",
+            "line_band_edge_offset_y_px",
+            "line_band_edge_opacity_pct",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
         elif key in {
@@ -2580,7 +2605,14 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                 if value in {"repeat", "stretch"}
                 else defaults.line_band_mid_mode
             )
-        elif key in {"line_band_image", "line_band_tint"}:
+        elif key == "line_band_edge_kind":
+            changes[key] = (
+                value
+                if value in {"none", "shadow", "glow"}
+                else defaults.line_band_edge_kind
+            )
+        elif key in {"line_band_image", "line_band_tint", "line_band_line_color",
+                     "line_band_edge_color"}:
             changes[key] = value if isinstance(value, str) else ""
         elif key == "lit_style":
             changes[key] = (

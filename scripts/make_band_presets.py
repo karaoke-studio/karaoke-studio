@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """行背景带预设素材生成器（开发用，不参与打包）。
 
 产出：
@@ -288,14 +288,17 @@ def clef_sprite(height, color):
 
 
 def build_staff_scroll():
-    """全透明五线：真高音谱号开篇 + 项目音符轮廓（彩色）+ 柔和投影。"""
-    w, L, R = 670, 190, 160
+    """全透明五线：真高音谱号开篇 + 项目音符轮廓（彩色）+ 柔和投影。
+
+    2026-10-23：5 条谱线单独出 ``staff_scroll_lines.png``（纯白），运行时按
+    ``line_band_line_color`` 上色；素材本体只剩谱号/音符/终止线/阴影。
+    中段 4096px：16:9 画布正常歌词行不会触发第二次平铺。
+    """
+    w, L, R = 190 + 4096 + 160, 190, 160
     content = new(w)
     commands = load_note_commands() or []
 
     d = ImageDraw.Draw(content)
-    for y in (64, 92, 120, 148, 176):
-        d.line([(0, y), (w, y)], fill=INK, width=3)
 
     # 左端点：真高音谱号（开篇）+ 两个彩色音符
     cap = new(L)
@@ -324,7 +327,13 @@ def build_staff_scroll():
     img = new(w)
     img.alpha_composite(sh, (2, 3))
     img.alpha_composite(content)
-    return img, L, R
+
+    # 独立谱线层：纯白，运行时上色。
+    lines = new(w)
+    ld = ImageDraw.Draw(lines)
+    for y in (64, 92, 120, 148, 176):
+        ld.line([(0, y), (w, y)], fill=(255, 255, 255, 255), width=3)
+    return img, L, R, lines
 
 
 # --------------------------------------------------------- 2. minimal stars
@@ -344,14 +353,15 @@ def clean_star(r, alpha):
 
 def _stars_mid(big, tw):
     rnd = random.Random(17)
-    for _ in range(16):
+    count = max(1, int(round(tw * 16 / 320)))
+    for _ in range(count):
         r = 1.6 + rnd.random() ** 2 * 3.2
         put_wrapped(big, tw, rnd.random() * tw, 30 + rnd.random() * (H - 60),
                     clean_star(r, int(130 + rnd.random() * 110)))
 
 
 def build_stars():
-    w, L, R = 560, 120, 120
+    w, L, R = 120 + 4096 + 120, 120, 120
     img = new(w)
     body = vgrad(w, H, [(0, (20, 24, 40, 130)), (0.5, (14, 17, 30, 96)),
                         (1, (8, 10, 20, 150))])
@@ -377,8 +387,8 @@ def build_stars():
 
 # ------------------------------------- 3. neutral satin ribbon (tintable)
 def build_diagonal():
-    w, L, R = 512, 96, 96
-    tw = w - L - R                      # 320; stripe period MUST divide it
+    w, L, R = 96 + 4080 + 96, 96, 96
+    tw = w - L - R                      # 4080; stripe period MUST divide it
     period = 40
     assert tw % period == 0, "middle tile width must be a multiple of the stripe period"
 
@@ -390,7 +400,7 @@ def build_diagonal():
 
     stripes = new(w)
     sd = ImageDraw.Draw(stripes)
-    for k in range(-14, 44):
+    for k in range(-14, w // period + 20):
         x0 = k * period
         sd.polygon([(x0, 0), (x0 + 18, 0), (x0 + 18 - H, H), (x0 - H, H)],
                    fill=(255, 255, 255, 64))
@@ -472,7 +482,8 @@ def _caustics(big, tw):
 
 def _bubbles_mid(big, tw):
     rnd = random.Random(29)
-    for _ in range(18):
+    count = max(1, int(round(tw * 18 / 320)))
+    for _ in range(count):
         r = 4 + rnd.random() ** 1.6 * 18
         put_wrapped(big, tw, rnd.random() * tw, 26 + rnd.random() * (H - 52),
                     bubble_sprite(r, rnd.choice(BLUES)))
@@ -480,7 +491,7 @@ def _bubbles_mid(big, tw):
 
 def build_bubbles():
     """海水：深青渐变 + 焦散亮线 + 水面光柱 + 气泡（《凪のあすから》那种感觉）。"""
-    w, L, R = 640, 160, 160
+    w, L, R = 160 + 4080 + 160, 160, 160
     tw = w - L - R
     img = new(w)
 
@@ -540,7 +551,7 @@ def build_bubbles():
 
 # -------------------------------------- 5. neutral glass pill (tintable)
 def build_plain_round():
-    w, L, R = 448, 64, 64
+    w, L, R = 64 + 4096 + 64, 64, 64
     body = vgrad(w, H, [(0, (250, 251, 255, 236)), (0.2, (206, 210, 220, 240)),
                         (0.62, (146, 150, 162, 244)), (1, (96, 100, 110, 248))])
     mask = round_mask(w, H, 30)
@@ -571,11 +582,22 @@ PRESETS = []
 
 
 def register(preset_id, label, builder, height_pct, tintable=False, default_tint=None):
-    image, L, R = builder()
+    built = builder()
+    if len(built) == 4:
+        image, L, R, lines = built
+        lines.save(str(ASSET_DIR / (preset_id + "_lines.png")))
+        lines_name = preset_id + "_lines.png"
+    else:
+        image, L, R = built
+        lines_name = ""
+        stale = ASSET_DIR / (preset_id + "_lines.png")
+        if stale.exists():
+            stale.unlink()
     image.save(str(ASSET_DIR / (preset_id + ".png")))
     PRESETS.append({"id": preset_id, "label": label, "image": image,
                     "cap_l": L, "cap_r": R, "height_pct": height_pct,
-                    "tintable": tintable, "tint": default_tint})
+                    "tintable": tintable, "tint": default_tint,
+                    "lines_name": lines_name})
 
 
 def asset(preset):
