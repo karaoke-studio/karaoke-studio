@@ -1133,8 +1133,24 @@ class EffectsPropertyPageBuilder:
         )
         layout.addWidget(host._line_band_preview)
 
+        preview_row = QWidget(section)
+        preview_layout = QHBoxLayout(preview_row)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(4)
+        host._line_band_real_preview_btn = FluentPushButton("真实预览…", section)
+        host._line_band_real_preview_btn.setMinimumHeight(32)
+        host._line_band_real_preview_btn.setToolTip(
+            "按成片比例尺打开最终效果窗口（端点/中段/上色/整图投影发光）。"
+        )
+        host._line_band_real_preview_btn.clicked.connect(
+            host._open_line_band_preview
+        )
+        preview_layout.addWidget(host._line_band_real_preview_btn)
+        preview_layout.addStretch(1)
+        layout.addWidget(preview_row)
+
         # 端点：右端点滑条取反值——向右拖 = 切割边界向右移，手感跟手。
-        add = group("端点", max_columns=4)
+        add = group("端点", max_columns=2)
         self._add_canvas_spin(
             add, "_line_band_cap_left_spin", "左端点", 0, 4096,
             "line_band_cap_left_px", "short_quarter", suffix=" px", force_global=True,
@@ -1149,7 +1165,7 @@ class EffectsPropertyPageBuilder:
             "方向已取反：向右拖 = 右端点边界向右移动。左右端点不会相交。"
         )
 
-        add = group("几何", max_columns=4)
+        add = group("几何", max_columns=2)
         for attribute, label, field_name in (
             ("_line_band_pad_top_spin", "上边距", "line_band_pad_top_px"),
             ("_line_band_pad_bottom_spin", "下边距", "line_band_pad_bottom_px"),
@@ -1172,7 +1188,7 @@ class EffectsPropertyPageBuilder:
         )
         add(None, host._line_band_include_ruby_check)
 
-        add = group("外观", max_columns=4)
+        add = group("外观 · 颜色", max_columns=2)
         self._add_canvas_spin(add, "_line_band_opacity_spin", "透明度", 0, 100,
                               "line_band_opacity_pct", "hard", suffix=" %", force_global=True)
         self._add_canvas_spin(add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
@@ -1191,7 +1207,8 @@ class EffectsPropertyPageBuilder:
             "五线谱等带独立谱线层的预设才生效；其余预设无谱线层，控件停用。"
         )
 
-        # 图片非透明部分的投影 / 发光。
+        # 图片非透明部分的投影 / 发光（作用于合成后的整张带子图）。
+        add = group("外观 · 投影/发光", max_columns=2)
         host._line_band_edge_kind_combo = self._combo(
             section,
             (("无", "none"), ("投影", "shadow"), ("发光", "glow")),
@@ -1199,7 +1216,7 @@ class EffectsPropertyPageBuilder:
             force_global=True,
         )
         host._line_band_edge_kind_combo.setToolTip(
-            "给图片的非透明部分加投影（可偏移）或发光（向外扩散）。"
+            "对合成后的整张带子图（含谱线层）做投影（可偏移）或发光（向外扩散）。"
         )
         add("描边效果", host._line_band_edge_kind_combo)
         self._add_color(
@@ -1208,13 +1225,12 @@ class EffectsPropertyPageBuilder:
         )
         self._add_canvas_spin(add, "_line_band_edge_size_spin", "描边半径", 0, 160,
                               "line_band_edge_size_px", "hard", suffix=" px", force_global=True)
+        self._add_canvas_spin(add, "_line_band_edge_opacity_spin", "描边强度", 0, 100,
+                              "line_band_edge_opacity_pct", "hard", suffix=" %", force_global=True)
         self._add_canvas_spin(add, "_line_band_edge_offset_x_spin", "投影 X", -300, 300,
                               "line_band_edge_offset_x_px", "hard", suffix=" px", force_global=True)
         self._add_canvas_spin(add, "_line_band_edge_offset_y_spin", "投影 Y", -300, 300,
                               "line_band_edge_offset_y_px", "hard", suffix=" px", force_global=True)
-        self._add_canvas_spin(add, "_line_band_edge_opacity_spin", "描边强度", 0, 100,
-                              "line_band_edge_opacity_pct", "hard", suffix=" %", force_global=True)
-
         section.set_expanded(False)
         return section
 

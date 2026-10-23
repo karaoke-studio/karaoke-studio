@@ -75,6 +75,7 @@ from krok_helper.subtitle_render.domain.band_presets import (
     preset_id_for_image,
 )
 from krok_helper.subtitle_render.engine.render.elements.band import (
+    band_artwork,
     band_source,
     band_spec,
     paint_band,
@@ -518,70 +519,108 @@ def line_band_preview_pixmap(
     output_height: int = 1080,
     max_width: int = 420,
 ) -> QPixmap:
-    """三段式切片预览：棋盘透明底 + 端点分界线 + 中段平铺。
+    """切割检查预览：整张原图 + 左右端点放大，用来确认切点位置。
 
-    先按**成片比例尺**画出真实带高（字号 × 输出缩放 + 上下留白），再整体等比
-    缩到卡片宽度——所以中段的重复次数/比例与成片一致。重复单元就是切掉左右
-    端点后的中段。
+    用户口径（2026-10-24）：这里只看**切割前的原图**和端点边界，不看最终
+    效果；真实效果由单独的「真实预览」窗口负责。
     """
-    output_scale = max(float(output_height), 1.0) / 1080.0
-    band_height = (
-        float(style.font_size_px) * output_scale
-        + float(style.line_band_pad_top_px) * output_scale
-        + float(style.line_band_pad_bottom_px) * output_scale
-    )
-    band_height = max(24.0, min(band_height, 320.0))
-    width = int(max(min(band_height * 4.0, 1600.0), 240.0))
-    height = int(round(band_height))
+    _ = output_height
+    width = max(int(max_width), 160)
+    height = 150
     image = QPixmap(width, height)
     image.fill(QColor("#242A33"))
     painter = QPainter(image)
     try:
-        # 棋盘透明底：纯黑或纯白都会让某些素材看不见。
         cell = 10
-        painter.fillRect(image.rect(), QColor("#3A414C"))
+        painter.fillRect(0, 0, width, height, QColor("#3A414C"))
         for row in range(0, height, cell):
             for col in range(0, width, cell):
                 if (row // cell + col // cell) % 2 == 0:
                     painter.fillRect(col, row, cell, cell, QColor("#2B313A"))
         spec = band_spec(style)
-        source = band_source(spec) if spec is not None else None
-        if spec is None or source is None:
+        artwork = band_artwork(spec) if spec is not None else None
+        if spec is None or artwork is None:
             painter.setPen(QColor("#8A8F98"))
             painter.drawText(
                 image.rect(), Qt.AlignmentFlag.AlignCenter, "未选择图片"
             )
-        else:
-            paint_band(painter, QRectF(0, 0, width, height), spec)
-            scale = height / max(float(source.height()), 1.0)
-            cap_left = min(spec.cap_left * scale, width)
-            cap_right = min(spec.cap_right * scale, width)
-            pen = QPen(QColor(255, 196, 64, 230))
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.drawLine(int(cap_left), 0, int(cap_left), height)
-            painter.drawLine(
-                int(width - cap_right), 0, int(width - cap_right), height
+            return image
+
+        art_w = max(float(artwork.width()), 1.0)
+        art_h = max(float(artwork.height()), 1.0)
+        label_font = painter.font()
+        label_font.setPixelSize(10)
+        painter.setFont(label_font)
+
+        # 上半：整张原图（等比缩到卡片宽），叠端点分界线。
+        bar_h = int(round(min(art_h * (width / art_w), 40.0)))
+        bar_h = max(bar_h, 12)
+        painter.drawImage(
+            QRectF(0.0, 2.0, float(width), float(bar_h)), artwork
+        )
+        scale = width / art_w
+        cap_left = min(float(spec.cap_left) * scale, float(width))
+        cap_right = min(float(spec.cap_right) * scale, float(width))
+        pen = QPen(QColor(255, 196, 64, 235))
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(int(cap_left), 0, int(cap_left), bar_h + 4)
+        painter.drawLine(
+            int(width - cap_right), 0, int(width - cap_right), bar_h + 4
+        )
+        painter.setPen(QColor(255, 196, 64, 235))
+        painter.drawText(
+            QRect(2, bar_h + 2, width - 4, 12),
+            Qt.AlignmentFlag.AlignLeft,
+            f"原图 {int(art_w)}x{int(art_h)} ｜ 左端点 {int(spec.cap_left)} px ｜ "
+            f"右端点 {int(spec.cap_right)} px",
+        )
+
+        # 下半：左右端点区域放大（真实比例，只缩不放）。
+        inset_top = bar_h + 18
+        inset_h = max(height - inset_top - 16, 24)
+        inset_w = (width - 12) // 2
+        left_px = max(int(spec.cap_left), 0)
+        right_px = max(int(spec.cap_right), 0)
+        for index, (px, label, align) in enumerate(
+            (
+                (left_px, "左端点区域", Qt.AlignmentFlag.AlignLeft),
+                (right_px, "右端点区域", Qt.AlignmentFlag.AlignRight),
             )
-            painter.setPen(QColor(255, 196, 64, 235))
+        ):
+            panel_x = 4 + index * (inset_w + 4)
+            painter.setPen(QColor(90, 98, 110))
+            painter.drawRect(panel_x, inset_top, inset_w, inset_h)
+            if px <= 0:
+                painter.setPen(QColor("#8A8F98"))
+                painter.drawText(
+                    QRect(panel_x, inset_top, inset_w, inset_h),
+                    Qt.AlignmentFlag.AlignCenter,
+                    "端点 0",
+                )
+            else:
+                source_x = 0 if index == 0 else max(int(art_w) - px, 0)
+                source_w = min(px, int(art_w))
+                tile = artwork.copy(
+                    QRect(source_x, 0, source_w, int(art_h))
+                )
+                if not tile.isNull() and tile.width() > 0:
+                    target = QRectF(
+                        float(panel_x + 2),
+                        float(inset_top + 2),
+                        float(inset_w - 4),
+                        float(inset_h - 4),
+                    )
+                    painter.drawImage(target, tile)
+            painter.setPen(QColor(255, 196, 64, 220))
             painter.drawText(
-                QRect(
-                    int(cap_left) + 4,
-                    2,
-                    max(int(width - cap_left - cap_right) - 8, 10),
-                    14,
-                ),
-                Qt.AlignmentFlag.AlignLeft,
-                "中段平铺" if spec.mid_mode != "stretch" else "中段拉伸",
+                QRect(panel_x + 2, inset_top + inset_h - 12, inset_w - 4, 12),
+                align,
+                label,
             )
     finally:
         painter.end()
-    if image.width() > max_width:
-        image = image.scaledToWidth(
-            max_width, Qt.TransformationMode.SmoothTransformation
-        )
     return image
-
 
 # 行背景带控件回填的字段集合：选预设/上传图会一次改多个字段（并顺手开总
 # 开关），这些改动必须立即回显到卡片，宿主回流 set_style 走等值快路径不会
@@ -1330,6 +1369,9 @@ class PropertyPanel(QWidget):
         if width <= 0 or height <= 0:
             return
         self._output_height = height
+        dialog = getattr(self, "_line_band_preview_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.set_output_height(height)
         self.set_n3_template_target_height(height)
         if hasattr(self, '_line_band_enabled_switch'):
             self._sync_line_band_controls()
@@ -5802,6 +5844,25 @@ class PropertyPanel(QWidget):
                     )
                 )
             )
+        dialog = getattr(self, "_line_band_preview_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.refresh(style, int(getattr(self, "_output_height", 1080)))
+
+    def _open_line_band_preview(self) -> None:
+        """打开行背景带真实预览窗口（模型态，跟随样式刷新）。"""
+        dialog = getattr(self, "_line_band_preview_dialog", None)
+        if dialog is None:
+            from krok_helper.subtitle_render.frontend.properties.band_preview_dialog import (
+                LineBandPreviewDialog,
+            )
+
+            dialog = LineBandPreviewDialog(self)
+            self._line_band_preview_dialog = dialog
+        dialog.refresh(self._style, int(getattr(self, "_output_height", 1080)))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):
