@@ -370,8 +370,8 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         // 端点变化必须重建中段预拼条：预拼条是按旧端点裁的。端点调小后
         // 条子仍从旧端点位置开始铺，左端点的谱号/装饰就会在中段开头再
         // 出现一遍——用户实测「左侧的图出现两遍」的根因。
-        && cached.midCapLeftSrc == band.capLeftSrc
-        && cached.midCapRightSrc == band.capRightSrc) {
+        && cached.midCapLeftSrc == band.srcCapLeft
+        && cached.midCapRightSrc == band.srcCapRight) {
         return;
     }
     ID2D1DeviceContext *context = device_.d2dContext();
@@ -383,7 +383,7 @@ void Direct2DGpuBackend::ensureLineBandImage() {
     );
     cached.midBitmap = makeBandMidStrip(
         context, cached.bitmap.Get(),
-        band.capLeftSrc, band.capRightSrc
+        band.srcCapLeft, band.srcCapRight
     );
     // 谱线层（含高音谱号）：multiply 上色，白色→用户颜色、近黑描边保持。
     cached.lineBitmap.Reset();
@@ -398,7 +398,7 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         );
         cached.lineMidStrip = makeBandMidStrip(
             context, cached.lineBitmap.Get(),
-            band.capLeftSrc, band.capRightSrc
+            band.srcCapLeft, band.srcCapRight
         );
     }
     // 图片描边（投影/发光）剪影层。
@@ -410,11 +410,11 @@ void Direct2DGpuBackend::ensureLineBandImage() {
         );
         cached.edgeMidStrip = makeBandMidStrip(
             context, cached.edgeBitmap.Get(),
-            band.capLeftSrc, band.capRightSrc
+            band.srcCapLeft, band.srcCapRight
         );
     }
-    cached.midCapLeftSrc = band.capLeftSrc;
-    cached.midCapRightSrc = band.capRightSrc;
+    cached.midCapLeftSrc = band.srcCapLeft;
+    cached.midCapRightSrc = band.srcCapRight;
     cached.path = band.imagePath;
     cached.modifiedMs = modifiedMs;
     cached.size = size;

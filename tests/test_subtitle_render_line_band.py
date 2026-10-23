@@ -95,12 +95,18 @@ def test_missing_image_resolves_to_no_spec(tmp_path):
     assert band_spec(_style(line_band_enabled=False)) is None
 
 
-def test_preset_caps_cannot_cut_into_the_preset_art():
-    """预设端点不得小于素材端点宽度，否则中段会把端点图案再铺一遍。
+def test_display_caps_can_shrink_below_the_preset_design_caps():
+    """显示端点可自由调小，但中段仍从素材设计边界切——不会重复端点图案。
 
-    用户实测：把左端点拖到 60 后，高音谱号在带子左侧出现两遍——端点切片
-    从 60 开始，中段又把谱号铺了一次。
+    用户实测：左端点拖到 60 时谱号出现两遍（中段从 60 开始把谱号又铺一
+    次）。修复口径是显示端点与源图裁切边界解耦：显示 60/40，源图仍是
+    190/160，谱号只出现在端点里（被裁窄），中段不含谱号。
     """
+    from krok_helper.subtitle_render.engine.render.elements.band import (
+        _mid_tile,
+        band_source,
+    )
+
     preset = band_preset("staff_scroll")
     spec = band_spec(
         _style(
@@ -110,9 +116,24 @@ def test_preset_caps_cannot_cut_into_the_preset_art():
         )
     )
     assert spec is not None
-    assert spec.cap_left == preset.cap_left_px
-    assert spec.cap_right == preset.cap_right_px
-    # 自定义图不受限制：用户可以随意切。
+    assert (spec.cap_left, spec.cap_right) == (60, 40)
+    assert (spec.src_cap_left, spec.src_cap_right) == (
+        preset.cap_left_px,
+        preset.cap_right_px,
+    )
+    # 中段瓦片起点在素材设计边界：瓦片宽度 = 图宽 - 设计端点之和，且左缘
+    # 那 40 列只有 5 条 3px 谱线（谱号墨迹不在其中）。
+    image = band_source(spec)
+    tile = _mid_tile(image, spec.src_cap_left, spec.src_cap_right)
+    assert tile.width() == image.width() - preset.cap_left_px - preset.cap_right_px
+    opaque = sum(
+        1
+        for x in range(min(40, tile.width()))
+        for y in range(tile.height())
+        if tile.pixelColor(x, y).alpha() > 200
+    )
+    assert opaque < 40 * tile.height() * 0.2
+    # 自定义图没有设计边界：源图边界跟随显示端点。
     custom = band_spec(
         _style(
             line_band_image=str(preset.path),
@@ -122,6 +143,7 @@ def test_preset_caps_cannot_cut_into_the_preset_art():
     )
     assert custom is not None
     assert (custom.cap_left, custom.cap_right) == (60, 40)
+    assert (custom.src_cap_left, custom.src_cap_right) == (60, 40)
 
 
 # ----------------------------------------------------------------- geometry

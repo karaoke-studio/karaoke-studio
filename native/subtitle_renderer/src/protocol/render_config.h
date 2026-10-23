@@ -565,6 +565,9 @@ struct LineBandConfig {
     // 端点像素宽（源图像素；实际宽度按带高/图高等比缩放）。
     int capLeftPx = 0;
     int capRightPx = 0;
+    // 中段切片的源图边界（预设素材的设计端点）；显示端点由 capLeftPx 控制。
+    int srcCapLeftPx = 0;
+    int srcCapRightPx = 0;
     // 行文本盒到带子四条边的距离（逻辑像素，投影期乘 dpr）。
     int padTopPx = 20;
     int padBottomPx = 20;

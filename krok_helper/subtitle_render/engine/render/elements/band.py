@@ -52,6 +52,11 @@ class BandSpec:
     tint: str
     tint_strength_pct: int
     opacity_pct: int
+    # 源图裁切边界（预设素材的"设计端点"）：中段永远从 ``src_cap_left`` 到
+    # ``width - src_cap_right``，与用户拖动的显示端点解耦。显示端点只决定
+    # 端点显示多宽，不会让中段把谱号等端点图案再铺一遍。自定义图等于 0。
+    src_cap_left: int = 0
+    src_cap_right: int = 0
     # 独立谱线层（如五线谱）：路径 + 上色颜色。
     line_image_path: str = ""
     line_color: str = ""
@@ -78,13 +83,15 @@ def band_spec(style) -> Optional[BandSpec]:
         line_color = default_line_color_for(image_spec)
     cap_left = max(int(style.line_band_cap_left_px), 0)
     cap_right = max(int(style.line_band_cap_right_px), 0)
-    # 预设素材的端点是图案的一部分：切割点一旦挪进端点内部，中段会把高音
-    # 谱号等端点图案再铺一遍（用户实测「左侧的图出现两遍」）。预设按素材
-    # 端点宽度夹住；自定义图不限制，用户可以随意切。
+    # 显示端点（用户滑条）与源图裁切边界分开：预设素材的端点图案有设计边界，
+    # 中段永远从设计边界开始切，用户把端点调小只是把端点裁窄，绝不会让中段
+    # 把谱号等端点图案再铺一遍。自定义图没有设计边界，两者相同。
     caps = preset_caps(image_spec)
-    if caps is not None:
-        cap_left = max(cap_left, caps[0])
-        cap_right = max(cap_right, caps[1])
+    src_cap_left, src_cap_right = (
+        (max(int(caps[0]), 0), max(int(caps[1]), 0))
+        if caps is not None
+        else (cap_left, cap_right)
+    )
     return BandSpec(
         image_path=str(path),
         fill_mode=str(style.line_band_fill_mode),
@@ -94,6 +101,8 @@ def band_spec(style) -> Optional[BandSpec]:
         tint=str(style.line_band_tint or ""),
         tint_strength_pct=max(min(int(style.line_band_tint_strength_pct), 100), 0),
         opacity_pct=max(min(int(style.line_band_opacity_pct), 100), 0),
+        src_cap_left=src_cap_left,
+        src_cap_right=src_cap_right,
         line_image_path=str(lines_path) if lines_path is not None else "",
         line_color=line_color if lines_path is not None else "",
         edge_kind=str(getattr(style, "line_band_edge_kind", "none") or "none"),
@@ -439,12 +448,16 @@ def _paint_three_slice(painter, rect: QRectF, image: QImage, spec: BandSpec) -> 
             image,
             QRectF(img_w - spec.cap_right, 0.0, float(spec.cap_right), img_h),
         )
-    if mid_w <= 0 or img_w <= spec.cap_left + spec.cap_right:
+    # 中段按**源图设计边界**切，不按显示端点：显示端点调小只是把端点裁窄，
+    # 不会把端点图案喂给中段（否则谱号会在中段开头再出现一遍）。
+    src_left = min(max(int(spec.src_cap_left), 0), int(img_w))
+    src_right = min(max(int(spec.src_cap_right), 0), int(img_w))
+    if mid_w <= 0 or img_w <= src_left + src_right:
         return
 
     mid_src = QRectF(
-        float(spec.cap_left), 0.0,
-        img_w - spec.cap_left - spec.cap_right, img_h,
+        float(src_left), 0.0,
+        img_w - src_left - src_right, img_h,
     )
     mid_dest = QRectF(rect.left() + left_w, rect.top(), mid_w, rect.height())
     if spec.mid_mode == "stretch":
@@ -459,9 +472,7 @@ def _paint_three_slice(painter, rect: QRectF, image: QImage, spec: BandSpec) -> 
     # （用户实测「每个预设拼接痕迹都很明显」）。预拼条是同一张连续纹理，
     # 一次绘制取样，没有块边界。与 native 侧 8192px 预拼条同口径。
     needed = int(math.ceil(mid_dest.width() / max(scale, 1e-6)))
-    strip = _mid_strip(
-        _mid_tile(image, spec.cap_left, spec.cap_right), needed
-    )
+    strip = _mid_strip(_mid_tile(image, src_left, src_right), needed)
     _draw_slice(
         painter,
         mid_dest,

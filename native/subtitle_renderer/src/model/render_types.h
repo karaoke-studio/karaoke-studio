@@ -718,6 +718,9 @@ struct LineBandStyle {
     // 源图像素为单位的端点宽（裁中段位图用；capLeft/capRight 是场景像素）。
     int capLeftSrc = 0;
     int capRightSrc = 0;
+    // 中段预拼条的源图裁切边界（预设设计端点），与显示端点解耦。
+    int srcCapLeft = 0;
+    int srcCapRight = 0;
     float padTop = 20.0f;
     float padBottom = 20.0f;
     float padLeft = 40.0f;

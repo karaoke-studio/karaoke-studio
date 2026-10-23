@@ -1120,6 +1120,21 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
                 style, QStringLiteral("line_band_cap_right_px"), band.capRightPx
             )
         );
+        // 中段切片用源图设计边界；缺省时与显示端点相同（自定义图口径）。
+        band.srcCapLeftPx = std::max(
+            0, intValue(
+                style,
+                QStringLiteral("line_band_src_cap_left_px"),
+                band.capLeftPx
+            )
+        );
+        band.srcCapRightPx = std::max(
+            0, intValue(
+                style,
+                QStringLiteral("line_band_src_cap_right_px"),
+                band.capRightPx
+            )
+        );
         band.padTopPx = std::max(
             0, intValue(
                 style, QStringLiteral("line_band_pad_top_px"), band.padTopPx

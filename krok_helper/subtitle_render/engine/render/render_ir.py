@@ -181,13 +181,19 @@ def titles_to_ir(
     return payloads
 
 
-def _clamp_preset_band_caps(payload: dict[str, Any], image_spec: str) -> None:
-    """预设素材的端点不得小于素材端点宽度，否则中段会重复端点图案。
+def _apply_preset_band_src_caps(
+    payload: dict[str, Any], image_spec: str
+) -> None:
+    """写入中段的**源图裁切边界**（预设素材的设计端点）。
 
-    与 CPU 的 ``band_spec`` 同一口径：预设按素材夹住，自定义图不限制。
+    显示端点（``line_band_cap_left_px`` 等）仍由用户滑条自由控制；中段从
+    ``line_band_src_cap_left_px`` 开始切，保证端点调小只是裁窄端点，不会把
+    谱号等端点图案喂给中段重复一遍。自定义图没有设计边界 → 取显示端点。
     """
     caps = preset_caps(image_spec)
-    if caps is None:
+    if caps is not None:
+        payload["line_band_src_cap_left_px"] = max(int(caps[0]), 0)
+        payload["line_band_src_cap_right_px"] = max(int(caps[1]), 0)
         return
     try:
         left = int(payload.get("line_band_cap_left_px") or 0)
@@ -197,8 +203,8 @@ def _clamp_preset_band_caps(payload: dict[str, Any], image_spec: str) -> None:
         right = int(payload.get("line_band_cap_right_px") or 0)
     except (TypeError, ValueError):
         right = 0
-    payload["line_band_cap_left_px"] = max(left, caps[0])
-    payload["line_band_cap_right_px"] = max(right, caps[1])
+    payload["line_band_src_cap_left_px"] = max(left, 0)
+    payload["line_band_src_cap_right_px"] = max(right, 0)
 
 
 def build_render_ir(
@@ -301,7 +307,7 @@ def build_render_ir(
             style_payload["line_band_line_color"] = default_line_color_for(
                 str(style.line_band_image or "")
             )
-        _clamp_preset_band_caps(style_payload, str(style.line_band_image or ""))
+        _apply_preset_band_src_caps(style_payload, str(style.line_band_image or ""))
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -460,7 +466,7 @@ def build_style_patch_ir(
             patch_style_payload["line_band_line_color"] = default_line_color_for(
                 str(style.line_band_image or "")
             )
-        _clamp_preset_band_caps(
+        _apply_preset_band_src_caps(
             patch_style_payload, str(style.line_band_image or "")
         )
         return {

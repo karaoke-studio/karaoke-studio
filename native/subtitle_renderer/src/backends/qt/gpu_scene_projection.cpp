@@ -651,6 +651,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         target.capRight = static_cast<float>(band.capRightPx);
         target.capLeftSrc = band.capLeftPx;
         target.capRightSrc = band.capRightPx;
+        target.srcCapLeft = band.srcCapLeftPx;
+        target.srcCapRight = band.srcCapRightPx;
         target.padTop = static_cast<float>(band.padTopPx * scale);
         target.padBottom = static_cast<float>(band.padBottomPx * scale);
         target.padLeft = static_cast<float>(band.padLeftPx * scale);
