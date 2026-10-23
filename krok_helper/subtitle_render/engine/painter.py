@@ -654,6 +654,11 @@ from krok_helper.subtitle_render.engine.render.elements.vertical import (
     vertical_layer_stack as _vertical_layer_stack_with_ports,
     vertical_ruby_allowance as _vertical_ruby_allowance,
 )
+from krok_helper.subtitle_render.engine.render.elements.band import (
+    band_rect as _band_rect,
+    band_spec as _band_spec,
+    paint_band as _paint_band,
+)
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors as _effective_karaoke_colors,
     effective_ruby_karaoke_colors as _effective_ruby_karaoke_colors,
@@ -1144,6 +1149,23 @@ def _paint_track_to_painter(
             id(line): track_offsets.get(index, (0.0, 0.0))
             for index, line in enumerate(track.lines)
         }
+        # 两遍绘制的第一遍：先铺完所有行背景带，再画字。带子按上下边距可能
+        # 高过行距，逐行随字画会让下一行的带子盖住上一行的文字。
+        _paint_line_bands(
+            painter,
+            logical_w,
+            logical_h,
+            track,
+            display_lines,
+            track_t_ms,
+            display_style,
+            line_plans=line_plans,
+            line_layouts=line_layouts,
+            baselines=baselines,
+            per_line_axes=per_line_axes,
+            line_offsets=line_offsets,
+            layout_cache_sig=layout_cache_sig,
+        )
         for display_line in display_lines:
             line_plan = line_plans.get(id(display_line.line))
             line_layout = line_layouts.get(id(display_line.line))
@@ -4697,6 +4719,122 @@ def _paint_line_fx_particles(
                 painter.drawPath(sprite)
             finally:
                 painter.restore()
+
+
+def _band_ruby_top(layout: _LineLayout) -> float | None:
+    """注音墨迹顶（绝对坐标）；该行没有注音时返回 ``None``。"""
+    tops: list[float] = []
+    for ruby_layout in getattr(layout, "ruby_layouts", ()) or ():
+        metrics = getattr(ruby_layout, "metrics", None)
+        ascent = metrics.ascent() if metrics is not None else 0
+        tops.append(float(ruby_layout.baseline_y) - float(ascent))
+    return min(tops) if tops else None
+
+
+def _paint_line_bands(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    display_lines: list,
+    t_ms: int,
+    style: Style,
+    *,
+    line_plans: dict,
+    line_layouts: dict,
+    baselines: dict,
+    per_line_axes: dict,
+    line_offsets: dict,
+    layout_cache_sig: tuple | None,
+) -> None:
+    """行背景带预扫：所有带子先于所有文字画完。
+
+    带子的上下边距可能远大于行距，若随字逐行绘制，下一行的带子会盖住上一
+    行的文字。这里统一先铺一遍，再走原来的行循环画字；入场位移与淡出从
+    ``line_animation_state`` 取同一份，保证带子和它那一句同步动。
+    """
+    if style.vertical:
+        return
+    spec = _band_spec(style)
+    if spec is None or not display_lines:
+        return
+    dual = bool(style.dual_line_layout)
+    # 双行布局下同一句会拆成两条 display_line（两个 lane）：带子按两排并集
+    # 只画一条，否则同一句会出现上下两条独立的带子。
+    groups: dict[int, list] = {}
+    for display_line in display_lines:
+        groups.setdefault(id(display_line.line), []).append(display_line)
+    for entries in groups.values():
+        head = entries[0]
+        line = head.line
+        line_plan = line_plans.get(id(line))
+        line_layout = line_layouts.get(id(line))
+        effective_style = (
+            line_plan.animation_style
+            if line_plan is not None
+            else _style_for_line_display_window(
+                style,
+                line,
+                head.display_start_ms,
+                head.display_end_ms,
+            )
+        )
+        animation = line_animation_state(
+            effective_style,
+            t_ms=t_ms,
+            display_start_ms=(
+                head.display_start_ms
+                if head.display_start_ms is not None
+                else _line_start_ms(line)
+            ),
+            display_end_ms=(
+                head.display_end_ms
+                if head.display_end_ms is not None
+                else _line_end_ms(line)
+            ),
+            lane=None,
+        )
+        if animation.opacity <= 0.0:
+            continue
+        rect = None
+        for entry in entries:
+            layout = _layout_line(
+                track,
+                line,
+                style,
+                img_w,
+                img_h,
+                baseline_y=(
+                    line_layout.baseline_y
+                    if line_layout is not None
+                    else baselines.get(
+                        entry.lane,
+                        next(iter(baselines.values()), img_h // 2),
+                    )
+                ),
+                line_x=line_layout.text_x if line_layout is not None else None,
+                lane=entry.lane if dual else None,
+                cache_sig=layout_cache_sig,
+                line_plan=line_plan,
+            )
+            if layout is None:
+                continue
+            entry_rect = _band_rect(
+                layout.text_layout.line_rect, style, _band_ruby_top(layout)
+            )
+            rect = entry_rect if rect is None else rect.united(entry_rect)
+        if rect is None:
+            continue
+        offset_x, offset_y = line_offsets.get(id(line), (0.0, 0.0))
+        painter.save()
+        try:
+            if offset_x or offset_y:
+                painter.translate(offset_x, offset_y)
+            if animation.dx or animation.dy:
+                painter.translate(animation.dx, animation.dy)
+            _paint_band(painter, rect, spec)
+        finally:
+            painter.restore()
 
 
 def _paint_line_static(

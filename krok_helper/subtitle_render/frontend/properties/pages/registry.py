@@ -62,6 +62,8 @@ def _build_effects_page(host: Any, scroll_page: Callable, _section_pair: Callabl
     layout.addWidget(host._make_particle_section())
     layout.addWidget(host._make_volume_section())
     layout.addWidget(host._make_lit_section())
+    # 行背景带排在音量柱/指示灯之后（2026-10-23 用户口径）。
+    layout.addWidget(host._make_line_band_section())
     layout.addStretch(1)
     return scroll
 

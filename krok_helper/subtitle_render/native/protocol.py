@@ -203,6 +203,7 @@ GPU_UNSUPPORTED_FEATURE_LABELS = {
     "karaoke_animation": "\u672a\u77e5\u5531\u5b57\u7279\u6548",
     "line_animation_override": "\u672a\u77e5\u9010\u884c\u7279\u6548",
     "bitmap_guide_symbol": "\u56fe\u7247\u5bfc\u5531\u7b26 / N3 Emoji \u5934\u50cf",
+    "line_band": "\u884c\u80cc\u666f\u5e26",
 }
 
 
@@ -474,6 +475,10 @@ def gpu_unsupported_features(
     """Return project features that require whole-frame Painter fallback."""
     reasons: list[str] = []
     sources = [track, *(extra_tracks or ())]
+    # 行背景带目前只有 QPainter 实现；开启时整帧回落 CPU，避免 GPU 出片缺层。
+    # 第二刀把带子矩形随 IR 下发、D2D 补绘之后再删掉这段。
+    if getattr(style, "line_band_enabled", False):
+        reasons.append("line_band")
     # 2026-09 新增逐字几何特效（tracking_in / wave_in / scatter_out /
     # converge_out）与粒子/描边闪光由 GPU sidecar 原生渲染（C++ 镜像实现），
     # 不触发整帧 Painter 回退。

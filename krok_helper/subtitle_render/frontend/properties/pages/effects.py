@@ -12,6 +12,7 @@ from qfluentwidgets import (
     SegmentedWidget,
 )
 
+from krok_helper.subtitle_render.domain.band_presets import BAND_PRESETS
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     CanvasSliderSpinBox,
     WheelFocusedComboBox,
@@ -1028,6 +1029,137 @@ class EffectsPropertyPageBuilder:
             )
         )
         return combo
+
+    def make_line_band_section(self) -> QFrame:
+        """行背景带卡片：图源 / 端点 / 几何 / 外观四组。"""
+        host = self._host
+        section, layout = property_section("行背景带", switch=True)
+        host._line_band_section = section
+        host._line_band_enabled_switch = section.header_switch
+        host._line_band_enabled_switch.toggled.connect(
+            lambda checked: host._update_style(line_band_enabled=checked)
+        )
+
+        def group(
+            title: str,
+            *,
+            collapsed: bool = False,
+            min_column_width: int = 135,
+            max_columns: int = 4,
+        ):
+            box = SubGroup(title, collapsed=collapsed, parent=section)
+            layout.addWidget(box)
+            fields = ResponsiveFieldGrid(
+                box,
+                min_column_width=min_column_width,
+                max_columns=max_columns,
+            )
+            box.grid.addWidget(fields, 0, 0, 1, 2)
+
+            def add(label: str | None, control: QWidget) -> None:
+                fields.add_widget(
+                    property_field(label, control) if label is not None else control
+                )
+
+            return add
+
+        add = group("图源", min_column_width=220, max_columns=2)
+        host._line_band_preset_combo = WheelFocusedComboBox(section)
+        compact_property_control(host._line_band_preset_combo)
+        host._line_band_preset_combo.setToolTip(
+            "内置预设会同时写入左右端点与四边建议边距；选「自定义图片」后"
+            "再挑自己的图。上传的图默认按整张重复，端点归零。"
+        )
+        host._line_band_preset_combo.addItem("自定义图片…", "")
+        for preset in BAND_PRESETS:
+            host._line_band_preset_combo.addItem(preset.label, preset.image_spec)
+        host._line_band_preset_combo.currentIndexChanged.connect(
+            host._on_line_band_preset_changed
+        )
+        add("预设", host._line_band_preset_combo)
+
+        host._line_band_image_label = FluentLineEdit(section)
+        compact_property_control(host._line_band_image_label)
+        host._line_band_image_label.setReadOnly(True)
+        host._line_band_image_label.setPlaceholderText("未选择图片")
+        host._line_band_pick_btn = FluentPushButton("选择图片...", section)
+        host._line_band_pick_btn.setMinimumHeight(32)
+        host._line_band_pick_btn.clicked.connect(host._choose_line_band_image)
+        host._line_band_clear_btn = FluentPushButton("清除", section)
+        host._line_band_clear_btn.setMinimumHeight(32)
+        host._line_band_clear_btn.clicked.connect(host._clear_line_band_image)
+        image_row = QWidget(section)
+        image_layout = QHBoxLayout(image_row)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.setSpacing(4)
+        image_layout.addWidget(host._line_band_image_label, 1)
+        image_layout.addWidget(host._line_band_pick_btn)
+        image_layout.addWidget(host._line_band_clear_btn)
+        add("图片", image_row)
+
+        host._line_band_fill_combo = self._combo(
+            section,
+            (
+                ("三段式（端点 + 中段循环）", "three_slice"),
+                ("拉伸", "stretch"),
+                ("重复", "repeat"),
+                ("裁切（覆盖）", "cover"),
+            ),
+            "line_band_fill_mode",
+        )
+        host._line_band_fill_combo.setToolTip(
+            "三段式：左右端点原样缩放、中段按需平铺，适合带装饰的横幅；"
+            "拉伸：整图非等比铺满；重复：按带子高度等比缩放后横向平铺；"
+            "裁切：等比覆盖后居中裁掉溢出。"
+        )
+        add("填充方式", host._line_band_fill_combo)
+        host._line_band_mid_combo = self._combo(
+            section,
+            (("重复", "repeat"), ("拉伸", "stretch")),
+            "line_band_mid_mode",
+        )
+        host._line_band_mid_combo.setToolTip("三段式下中段的行为。")
+        add("中段", host._line_band_mid_combo)
+
+        add = group("端点", max_columns=4)
+        self._add_spin(add, "_line_band_cap_left_spin", "左端点", 0, 2000,
+                       "line_band_cap_left_px", suffix=" px")
+        self._add_spin(add, "_line_band_cap_right_spin", "右端点", 0, 2000,
+                       "line_band_cap_right_px", suffix=" px")
+
+        add = group("几何", max_columns=4)
+        for attribute, label, field_name in (
+            ("_line_band_pad_top_spin", "上边距", "line_band_pad_top_px"),
+            ("_line_band_pad_bottom_spin", "下边距", "line_band_pad_bottom_px"),
+            ("_line_band_pad_left_spin", "左边距", "line_band_pad_left_px"),
+            ("_line_band_pad_right_spin", "右边距", "line_band_pad_right_px"),
+        ):
+            self._add_spin(add, attribute, label, 0, 2000, field_name, suffix=" px")
+        self._add_spin(add, "_line_band_offset_y_spin", "垂直偏移", -500, 500,
+                       "line_band_offset_y_px", suffix=" px")
+        host._line_band_include_ruby_check = CheckBox("上边距按注音顶计算", section)
+        host._line_band_include_ruby_check.setToolTip(
+            "勾选后上边距从注音顶量起（带子会把注音一起包住）；关闭时从主文字顶量起。"
+            "下缘始终跟主文字底走。"
+        )
+        host._line_band_include_ruby_check.toggled.connect(
+            lambda checked: host._update_style(line_band_include_ruby=checked)
+        )
+        add(None, host._line_band_include_ruby_check)
+
+        add = group("外观", max_columns=4)
+        self._add_spin(add, "_line_band_opacity_spin", "透明度", 0, 100,
+                       "line_band_opacity_pct", suffix=" %")
+        self._add_spin(add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
+                       "line_band_tint_strength_pct", suffix=" %")
+        self._add_color(add, "_line_band_tint_btn", "上色", "line_band_tint")
+        host._line_band_tint_reset_btn = FluentPushButton("用预设默认色", section)
+        host._line_band_tint_reset_btn.setMinimumHeight(32)
+        host._line_band_tint_reset_btn.clicked.connect(host._reset_line_band_tint)
+        add(None, host._line_band_tint_reset_btn)
+
+        section.set_expanded(False)
+        return section
 
     def _combo(
         self,

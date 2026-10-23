@@ -66,6 +66,10 @@ from qfluentwidgets import (
 from krok_helper.qfluent_compat import install_fluent_tooltip
 
 from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.band_presets import (
+    band_preset,
+    preset_id_for_image,
+)
 from krok_helper.subtitle_render.domain.paint import (
     ColorLayerKey,
     ColorStateKey,
@@ -1402,6 +1406,7 @@ class PropertyPanel(QWidget):
             )
             self._sync_section_edge_controls()
             self._sync_lit_controls()
+            self._sync_line_band_controls()
             self._sync_subtitle_scheme_controls()
             self._sync_title_controls()
         finally:
@@ -4218,6 +4223,58 @@ class PropertyPanel(QWidget):
         self._lit_image_path_edit.clear()
         self._update_style(lit_image_path="")
 
+    # ---------------------------------------------------- 行背景带（图源/几何）
+    def _on_line_band_preset_changed(self, index: int) -> None:
+        """选内置预设：一次写入图源 + 端点 + 四边建议边距 + 默认色。"""
+        combo = getattr(self, "_line_band_preset_combo", None)
+        if combo is None or index < 0:
+            return
+        spec = combo.itemData(index) or ""
+        if not spec:
+            # 「自定义图片…」：不动图源，等用户自己挑文件。
+            return
+        preset = band_preset(preset_id_for_image(spec) or "")
+        if preset is None:
+            return
+        self._update_style(
+            line_band_image=spec,
+            line_band_fill_mode="three_slice",
+            line_band_cap_left_px=preset.cap_left_px,
+            line_band_cap_right_px=preset.cap_right_px,
+            line_band_pad_top_px=preset.pad_top_px,
+            line_band_pad_bottom_px=preset.pad_bottom_px,
+            line_band_pad_left_px=preset.pad_left_px,
+            line_band_pad_right_px=preset.pad_right_px,
+            line_band_tint=preset.default_tint,
+        )
+
+    def _choose_line_band_image(self) -> None:
+        current = (self._style.line_band_image or "").strip()
+        start = "" if current.startswith("preset:") else current
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "选择行背景图",
+            start,
+            "图像文件 (*.bmp *.jpeg *.jpg *.png *.tif *.tiff *.webp);;"
+            "所有文件 (*.*)",
+        )
+        if path:
+            # 上传的图多半不是三段式素材：端点归零，退化为整条重复。
+            self._update_style(
+                line_band_image=path,
+                line_band_cap_left_px=0,
+                line_band_cap_right_px=0,
+            )
+
+    def _clear_line_band_image(self) -> None:
+        self._update_style(line_band_image="")
+
+    def _reset_line_band_tint(self) -> None:
+        preset = band_preset(
+            preset_id_for_image(self._style.line_band_image or "") or ""
+        )
+        self._update_style(line_band_tint=preset.default_tint if preset else "")
+
     def _on_color_subject_tab_changed(self, subject: str) -> None:
         # 不阻塞信号：combo 变化要驱动 _on_color_subject_changed 的完整同步
         # （注音按钮显隐 + 宽度/装饰/填充重灌）
@@ -5475,10 +5532,53 @@ class PropertyPanel(QWidget):
             width2_spin.setValue(width2)
             width2_spin.setEnabled(inherited or enabled)
 
+    def _sync_line_band_controls(self) -> None:
+        """把行背景带的样式值回填到控件（调用方负责 _syncing 门）。"""
+        if not hasattr(self, "_line_band_enabled_switch"):
+            return
+        style = self._style
+        self._line_band_enabled_switch.setChecked(bool(style.line_band_enabled))
+        image = (style.line_band_image or "").strip()
+        preset = band_preset(preset_id_for_image(image) or "")
+        index = self._line_band_preset_combo.findData(image) if preset else -1
+        self._line_band_preset_combo.setCurrentIndex(max(0, index))
+        label = preset.label if preset is not None else ""
+        if not label and image:
+            label = Path(image).name
+        self._line_band_image_label.setText(label)
+        for combo, value in (
+            (self._line_band_fill_combo, style.line_band_fill_mode),
+            (self._line_band_mid_combo, style.line_band_mid_mode),
+        ):
+            combo.setCurrentIndex(max(0, combo.findData(value)))
+        for spin, value in (
+            (self._line_band_cap_left_spin, style.line_band_cap_left_px),
+            (self._line_band_cap_right_spin, style.line_band_cap_right_px),
+            (self._line_band_pad_top_spin, style.line_band_pad_top_px),
+            (self._line_band_pad_bottom_spin, style.line_band_pad_bottom_px),
+            (self._line_band_pad_left_spin, style.line_band_pad_left_px),
+            (self._line_band_pad_right_spin, style.line_band_pad_right_px),
+            (self._line_band_offset_y_spin, style.line_band_offset_y_px),
+            (self._line_band_opacity_spin, style.line_band_opacity_pct),
+            (self._line_band_tint_strength_spin, style.line_band_tint_strength_pct),
+        ):
+            spin.setValue(int(value))
+        self._line_band_include_ruby_check.setChecked(
+            bool(style.line_band_include_ruby)
+        )
+        three_slice = style.line_band_fill_mode == "three_slice"
+        self._line_band_mid_combo.setEnabled(three_slice)
+        self._line_band_cap_left_spin.setEnabled(three_slice)
+        self._line_band_cap_right_spin.setEnabled(three_slice)
+        # 只有可调色预设吃用户颜色；其余预设保持素材原色。
+        tintable = preset.tintable if preset is not None else True
+        self._line_band_tint_btn.setEnabled(tintable)
+        self._line_band_tint_strength_spin.setEnabled(tintable)
+        self._line_band_tint_reset_btn.setEnabled(tintable)
+
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):
-            return
-        self._lit_enabled_switch.setChecked(self._style.lit_enabled)
+            return        self._lit_enabled_switch.setChecked(self._style.lit_enabled)
         self._volume_enabled_switch.setChecked(self._style.volume_enabled)
         # legacy "volume" 只可能来自 API 直构样式（工程加载时已迁移）；
         # 下拉没有该项，显式回退到「圆形」显示，开灯/换形状时会写入实际值。
