@@ -398,6 +398,22 @@ def test_scanline_px_base_migration_on_load() -> None:
     assert restored.scanline_glow_px == 9
 
 
+def test_gpu_accepts_line_override_particle_entry_exit() -> None:
+    from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
+
+    line = TimingLine(
+        chars=[TimingChar("歌", 0)],
+        end_ms=500,
+        animation_override=LineAnimationOverride(
+            entry_anim="snow",
+            exit_anim="snow",
+            scanline_enabled=True,
+        ),
+    )
+    track = TimingTrack(lines=[line])
+    assert gpu_unsupported_features(track, _scanline_style()) == ()
+
+
 def test_legacy_line_override_migrates_explicit_scanline_off() -> None:
     from krok_helper.subtitle_render.serialization.timing import (
         line_animation_override_from_dict,
