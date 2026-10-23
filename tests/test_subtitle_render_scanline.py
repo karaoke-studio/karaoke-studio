@@ -121,7 +121,8 @@ def test_per_line_override_controls_scanline_enablement() -> None:
 
 def test_scanline_style_fields_round_trip() -> None:
     style = _scanline_style(
-        karaoke_anim="utopia_scanline",
+        karaoke_anim="utopia",
+        scanline_enabled=True,
         scanline_width_px=33,
         scanline_mode="brighten",
         scanline_color="#123456",
@@ -129,12 +130,22 @@ def test_scanline_style_fields_round_trip() -> None:
         scanline_glow_px=12,
     )
     restored = style_from_dict(style_to_dict(style))
-    assert restored.karaoke_anim == "utopia_scanline"
+    assert restored.karaoke_anim == "utopia"
+    assert restored.scanline_enabled is True
+    assert restored.scanline_reverse_enabled is True
     assert restored.scanline_width_px == 33
     assert restored.scanline_mode == "brighten"
     assert restored.scanline_color == "#123456"
     assert restored.scanline_brightness_pct == 45
     assert restored.scanline_glow_px == 12
+    legacy_payload = style_to_dict(
+        _scanline_style(karaoke_anim="utopia_scanline")
+    )
+    legacy_payload.pop("scanline_enabled", None)
+    legacy_payload.pop("scanline_reverse_enabled", None)
+    legacy = style_from_dict(legacy_payload)
+    assert legacy.karaoke_anim == "utopia"
+    assert legacy.scanline_enabled is True
     # 非法模式回落 color，亮度越界钳制在 style 层由参数面板/渲染端兜底。
     assert style_from_dict({"scanline_mode": "wat"}).scanline_mode == "color"
 
@@ -367,14 +378,27 @@ def test_scanline_px_base_migration_on_load() -> None:
 def test_reverse_karaoke_scanline_bakes_per_line() -> None:
     style = _scanline_style(
         karaoke_anim="utopia",
-        reverse_karaoke_anim="scanline",
+        scanline_enabled=True,
+        scanline_reverse_enabled=False,
     )
     forward = TimingLine(chars=[TimingChar("歌", 0)], end_ms=500)
     reverse = TimingLine(chars=[TimingChar("歌", 0)], end_ms=500, wipe_reverse=True)
-    assert not effective_karaoke_scanline(style_with_line_animation(style, forward))
-    assert effective_karaoke_scanline(style_with_line_animation(style, reverse))
+    assert effective_karaoke_scanline(style_with_line_animation(style, forward))
+    assert not effective_karaoke_scanline(style_with_line_animation(style, reverse))
+    enabled_reverse = _scanline_style(
+        karaoke_anim="utopia",
+        scanline_enabled=True,
+        scanline_reverse_enabled=True,
+    )
+    assert effective_karaoke_scanline(
+        style_with_line_animation(enabled_reverse, reverse)
+    )
     # inherit 沿用正向档位。
-    follow = _scanline_style(karaoke_anim="scanline", reverse_karaoke_anim="inherit")
+    follow = _scanline_style(
+        karaoke_anim="utopia",
+        scanline_enabled=True,
+        reverse_karaoke_anim="inherit",
+    )
     assert effective_karaoke_scanline(style_with_line_animation(follow, reverse))
 
 
@@ -1458,8 +1482,12 @@ def test_painter_reverse_line_scanline_follows_reverse_front(qapp) -> None:
     )
     normalize_reversed_wipe_lines(track)
     assert track.lines[0].wipe_reverse
-    base = _scanline_style(karaoke_anim="none", reverse_karaoke_anim="inherit")
-    reverse = _scanline_style(karaoke_anim="none", reverse_karaoke_anim="scanline")
+    base = _scanline_style(karaoke_anim="none", scanline_enabled=False)
+    reverse = _scanline_style(
+        karaoke_anim="none",
+        scanline_enabled=True,
+        scanline_reverse_enabled=True,
+    )
     base_frame = _frame_bytes(track, base, 3)
     reverse_frame = _frame_bytes(track, reverse, 3)
     assert _visible_diff(base_frame, reverse_frame) > 30

@@ -87,6 +87,8 @@ _LYRIC_LAYOUT_EXCLUDED_STYLE_FIELDS = _LYRIC_LAYOUT_TITLE_ONLY_EXCLUDED_STYLE_FI
     # 剔除表——fill_segments 内嵌 karaoke_effect，唱字档位变更必须作废。
     "karaoke_anim",
     "reverse_karaoke_anim",
+    "scanline_enabled",
+    "scanline_reverse_enabled",
     "scanline_width_px",
     "scanline_mode",
     "scanline_color",

@@ -1203,18 +1203,25 @@ class Style:
     """退场动画时长；在显示窗口结束前开始。"""
 
     karaoke_anim: KaraokeAnimation = "utopia"
-    """唱字动画：inherit（兼容旧 Utopia）/ none / utopia / scanline / utopia_scanline
-    / zoom_pulse / zoom_pulse_scanline。
+    """唱字动画：inherit（兼容旧 Utopia）/ none / utopia / zoom_pulse。
 
-    ``scanline`` 与 ``utopia_scanline`` 分别在基础 Wipe / Utopia 动画之上叠加
-    「扫字线」锋面高亮，参数见 :attr:`scanline_width_px` 等字段。
-    ``zoom_pulse`` 整字放大：唱字期间持续缓出放大、唱字结束后缓入缩回。"""
+    扫字线是独立叠加特效，由 :attr:`scanline_enabled` 总开关控制，
+    不再占用唱字动画档位。``zoom_pulse`` 整字放大：唱字期间持续缓出放大、
+    唱字结束后缓入缩回。"""
 
     reverse_karaoke_anim: KaraokeAnimation = "inherit"
-    """反向走字行的唱字动画；inherit 表示沿用普通唱字特效（也可选扫字线档位）。"""
+    """反向走字行的唱字动画；inherit 表示沿用普通唱字特效。
 
-    # 扫字线（Sayatoo 式走字锋面高亮）：仅在 karaoke_anim / reverse_karaoke_anim
-    # 为 scanline / utopia_scanline 档位时生效；纯绘制参数，不参与布局推导。
+    是否叠加扫字线由 :attr:`scanline_reverse_enabled` 单独控制。"""
+
+    # 扫字线（Sayatoo 式走字锋面高亮）：由独立总开关控制，是叠加在基础
+    # 唱字动画上的绘制参数，不再占用 karaoke_anim 档位。
+    scanline_enabled: bool = False
+    """扫字线总开关（音量柱/指示灯同语义）：开启后普通唱字行叠加锋面高亮。"""
+
+    scanline_reverse_enabled: bool = True
+    """扫字线是否同样应用于反向唱字行；仅在 ``scanline_enabled`` 开启时生效。"""
+
     scanline_width_px: int = 16
     """扫字线粗细（像素，``SCANLINE_BASE_HEIGHT``=1080 基准）：以走字锋面为
     中心的高亮带宽度。存储恒为 1080 画布下的值；编辑 spin 显示与渲染消费
@@ -1254,8 +1261,8 @@ class Style:
     """扫字线粒子特效：沿走字锋面发射装饰粒子（见 :data:`SCANLINE_EFFECT_KINDS`）。
 
     樱花 / 羽毛 / 星光 / 音符自锋面后方朝左上飘出（与走字同向的速度感）。
-    颜色与尺寸复用「唱字装饰粒子」的旋钮/配色方案；仅在
-    ``karaoke_anim`` / ``reverse_karaoke_anim`` 为扫字线档位时渲染。"""
+    颜色与尺寸复用「唱字装饰粒子」的旋钮/配色方案；仅在扫字线总开关开启
+    且该行应用扫字线时渲染。"""
 
     scanline_effect_size_pct: int = 30
     """扫字线特效粒子尺寸（相对主文字字号的百分比，30 = 30% 字号）。"""
@@ -1602,14 +1609,50 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
             "exit_anim": override.exit_anim,
             "exit_fade_ms": max(int(override.exit_duration_ms), 0),
         })
+    scanline_forced = False
     if override is not None and override.karaoke_anim != "inherit":
         # inherit 表示「保持全局那一档」，必须原样留下 style.karaoke_anim。
         # 若把 "inherit" 写进行样式，effective_karaoke_animation 会转而去看这一行
         # 被覆盖后的入退场——全局显式设的 utopia 就这么丢了。
-        changes["karaoke_anim"] = override.karaoke_anim
+        override_anim = override.karaoke_anim
+        if override_anim in {
+            "scanline", "utopia_scanline", "zoom_pulse_scanline",
+        }:
+            changes["karaoke_anim"] = {
+                "scanline": "none",
+                "utopia_scanline": "utopia",
+                "zoom_pulse_scanline": "zoom_pulse",
+            }[override_anim]
+            scanline_forced = True
+        else:
+            changes["karaoke_anim"] = override_anim
     if line.wipe_reverse and style.reverse_karaoke_anim != "inherit":
-        changes["karaoke_anim"] = style.reverse_karaoke_anim
+        reverse_anim = style.reverse_karaoke_anim
+        if reverse_anim in {
+            "scanline", "utopia_scanline", "zoom_pulse_scanline",
+        }:
+            changes["karaoke_anim"] = {
+                "scanline": "none",
+                "utopia_scanline": "utopia",
+                "zoom_pulse_scanline": "zoom_pulse",
+            }[reverse_anim]
+            scanline_forced = True
+        else:
+            changes["karaoke_anim"] = reverse_anim
     merged = style.with_timing(**changes) if changes else style
+    if scanline_forced:
+        merged = replace(
+            merged,
+            scanline_enabled=True,
+            scanline_reverse_enabled=True,
+        )
+    if line.wipe_reverse:
+        merged = replace(
+            merged,
+            scanline_enabled=bool(
+                merged.scanline_enabled and merged.scanline_reverse_enabled
+            ),
+        )
     if override is not None and override.sing_fx != "inherit":
         # 唱字装饰粒子与唱字动画同语义：inherit 留全局档，其余档写进行样式。
         # sing_fx 不属于 StyleTimingConfig（非时间字段），flat 字段直接替换。
@@ -1661,14 +1704,15 @@ def effective_karaoke_zoom_pulse(style: Style) -> bool:
 def effective_karaoke_scanline(style: Style) -> bool:
     """Return whether the karaoke scan-line highlight overlay is active.
 
-    只认显式选择的扫字线档位；``inherit`` 的旧项目推导（入退场含 Utopia）不可能
-    产生扫字线，保持 False。
+    以 ``scanline_enabled`` 总开关为准；旧工程未迁移时兼容旧档位。反向行在
+    :func:`style_with_line_animation` 里已按 ``scanline_reverse_enabled`` 关掉。
     """
-    return style.timing.karaoke_anim in {
-        "scanline",
-        "utopia_scanline",
-        "zoom_pulse_scanline",
-    }
+
+    return bool(
+        style.scanline_enabled
+        or style.timing.karaoke_anim
+        in {"scanline", "utopia_scanline", "zoom_pulse_scanline"}
+    )
 
 
 PARTICLE_COLOR_TARGETS = ("anim", "sing", "scanline")
@@ -2706,6 +2750,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "latin_italic",
             "ruby_italic",
             "ruby_latin_italic",
+            "scanline_enabled",
+            "scanline_reverse_enabled",
         }:
             changes[key] = None if value is None else bool(value)
         elif value is not None:
@@ -2811,9 +2857,39 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         changes["volume_stroke_width"] = changes.get("lit_stroke_width", 2)
         changes["volume_opacity_pct"] = changes.get("lit_opacity_pct", 100)
     _migrate_title_references(changes)
+    _migrate_scanline_toggle(changes, payload)
     _migrate_scanline_px_base(changes, payload)
     _migrate_signal_offset_px_base(changes, payload)
     return _migrate_ruby_follow_independence(ensure_page_layout_defaults(Style(**changes)))
+
+
+def _migrate_scanline_toggle(changes: dict, payload: dict) -> None:
+    """旧工程把扫字线档位迁到独立总开关 + 反向应用开关。"""
+
+    base_by_mode = {
+        "scanline": "none",
+        "utopia_scanline": "utopia",
+        "zoom_pulse_scanline": "zoom_pulse",
+    }
+    raw_forward = str(changes.get("karaoke_anim", "inherit") or "inherit")
+    raw_reverse = str(
+        changes.get("reverse_karaoke_anim", "inherit") or "inherit"
+    )
+    forward_old = raw_forward in base_by_mode
+    reverse_old = raw_reverse in base_by_mode
+    if forward_old:
+        changes["karaoke_anim"] = base_by_mode[raw_forward]
+    if reverse_old:
+        changes["reverse_karaoke_anim"] = base_by_mode[raw_reverse]
+    if "scanline_enabled" not in payload:
+        changes["scanline_enabled"] = forward_old or reverse_old
+    if "scanline_reverse_enabled" not in payload:
+        if reverse_old:
+            changes["scanline_reverse_enabled"] = True
+        elif raw_reverse == "inherit":
+            changes["scanline_reverse_enabled"] = True
+        else:
+            changes["scanline_reverse_enabled"] = False
 
 
 def _migrate_scanline_px_base(changes: dict, payload: dict) -> None:

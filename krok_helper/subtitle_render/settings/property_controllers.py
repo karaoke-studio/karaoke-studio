@@ -376,6 +376,12 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         normalized["reverse_karaoke_anim"] = normalize_karaoke_animation(
             normalized["reverse_karaoke_anim"]
         )
+    if "scanline_enabled" in normalized:
+        normalized["scanline_enabled"] = bool(normalized["scanline_enabled"])
+    if "scanline_reverse_enabled" in normalized:
+        normalized["scanline_reverse_enabled"] = bool(
+            normalized["scanline_reverse_enabled"]
+        )
     if "scanline_mode" in normalized:
         normalized["scanline_mode"] = normalize_scanline_mode(
             normalized["scanline_mode"]

@@ -703,6 +703,8 @@ def _paint_only_style_delta(previous: Style, current: Style) -> bool:
 _RENDER_ONLY_ANIM_STYLE_FIELDS: frozenset[str] = frozenset({
     "karaoke_anim",
     "reverse_karaoke_anim",
+    "scanline_enabled",
+    "scanline_reverse_enabled",
     "scanline_width_px",
     "scanline_mode",
     "scanline_color",
