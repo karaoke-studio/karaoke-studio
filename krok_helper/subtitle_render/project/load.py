@@ -79,10 +79,12 @@ def apply_track_project_data(
         resolve_guide_row,
     )
     _apply_display_overrides(track, data.get("line_display_overrides"))
+    # Legacy reverse animation took precedence over the line animation. Restore
+    # the persisted direction before resolving that precedence into new fields.
+    _apply_wipe_reverse_overrides(track, data.get("line_wipe_reverse_overrides"))
     _apply_animation_overrides(
         track, data.get("line_animation_overrides"), style
     )
-    _apply_wipe_reverse_overrides(track, data.get("line_wipe_reverse_overrides"))
     _apply_head_overrides(
         track, data.get("line_volume_host_overrides"), "volume_head_override"
     )
@@ -541,15 +543,22 @@ def _apply_animation_overrides(
     legacy_global = bool(getattr(style, "scanline_legacy_global", False))
     for line, row in zip(track.lines, payload):
         override = line_animation_override_from_dict(row)
-        if (
-            override is not None
-            and override.scanline_legacy
-            and override.scanline_enabled is False
-            and not legacy_global
-        ):
-            # 旧全局本来没有扫字线：逐行旧覆盖只表示原来的唱字动画，
-            # 不应永久锁死扫字线；改回继承，之后打开总开关即可生效。
-            override = replace(override, scanline_enabled=None)
+        if override is not None and override.scanline_legacy:
+            scanline = override.scanline_enabled
+            if line.wipe_reverse and style.reverse_karaoke_anim != "inherit":
+                # The old explicit reverse mode won over BOTH kinds of line
+                # override. Its scanline state is now the global direction scope,
+                # so this line must inherit that scope, not force on/off.
+                scanline = None
+            elif scanline is False and not legacy_global:
+                # No old global scanline to suppress: preserve inheritance so a
+                # later user toggle can enable scanlines on this line as well.
+                scanline = None
+            # Finish migration here. Rendering, saving and editor equality must
+            # all see the same durable state, without a hidden legacy exception.
+            override = replace(
+                override, scanline_enabled=scanline, scanline_legacy=False,
+            )
         line.animation_override = override
 
 

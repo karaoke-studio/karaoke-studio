@@ -226,7 +226,7 @@ class LineAnimationOverride:
     ``False`` 本行强制关闭。"""
 
     scanline_legacy: bool = field(default=False, repr=False, compare=False)
-    """内部迁移标记：来自旧逐行扫字线档位，供反向覆盖优先级还原。"""
+    """解析期迁移标记：项目加载结合行方向与全局设置消解后清除，不参与渲染。"""
 
 
 @dataclass

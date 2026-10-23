@@ -1722,17 +1722,6 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
         else:
             changes["karaoke_anim"] = reverse_anim
     merged = style.with_timing(**changes) if changes else style
-    if (
-        scanline_line_override is True
-        and override is not None
-        and override.scanline_legacy
-        and line.wipe_reverse
-        and style.reverse_karaoke_anim != "inherit"
-        and not style.scanline_reverse_enabled
-    ):
-        # 旧逐行 scanline 先于旧反向明确档位求出；反向明确选了非扫字线
-        # 时，不能把旧逐行标记当成新的强制开启。
-        scanline_line_override = None
     if scanline_line_override is True:
         scanline_active = True
     elif scanline_line_override is False:

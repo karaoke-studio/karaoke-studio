@@ -503,9 +503,7 @@ def test_legacy_line_override_migrates_explicit_scanline_off() -> None:
 
 
 def test_legacy_line_scanline_respects_explicit_reverse_animation() -> None:
-    from krok_helper.subtitle_render.serialization.timing import (
-        line_animation_override_from_dict,
-    )
+    from krok_helper.subtitle_render.project.load import apply_track_project_data
 
     payload = dict(
         style_to_dict(
@@ -522,18 +520,17 @@ def test_legacy_line_scanline_respects_explicit_reverse_animation() -> None:
     payload.pop("scanline_forward_enabled", None)
     payload.pop("scanline_reverse_enabled", None)
     style = style_from_dict(payload)
-    override = line_animation_override_from_dict(
-        {
-            "entry_anim": "none",
-            "exit_anim": "none",
-            "karaoke_anim": "scanline",
-        }
-    )
     reverse = TimingLine(
         chars=[TimingChar("歌", 0)],
         end_ms=500,
-        wipe_reverse=True,
-        animation_override=override,
+    )
+    apply_track_project_data(
+        TimingTrack(lines=[reverse]), style, {
+            "line_animation_overrides": [{
+                "entry_anim": "none", "exit_anim": "none", "karaoke_anim": "scanline",
+            }],
+            "line_wipe_reverse_overrides": [True],
+        },
     )
     assert not effective_karaoke_scanline(
         style_with_line_animation(style, reverse)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from itertools import product
 from pathlib import Path
 
 from krok_helper.subtitle_render.domain.models import Style
@@ -10,6 +12,126 @@ from krok_helper.subtitle_render.project.load import (
     ProjectLoadPlan,
     apply_track_project_data,
 )
+
+
+def test_legacy_scanline_migration_preserves_all_animation_combinations():
+    from krok_helper.subtitle_render.domain.models import (
+        effective_karaoke_scanline, style_with_line_animation,
+    )
+    from krok_helper.subtitle_render.project.session import SubtitleProjectDocument
+
+    modes = (
+        "inherit", "none", "no_wipe", "utopia", "scanline",
+        "utopia_scanline", "zoom_pulse", "zoom_pulse_scanline",
+    )
+    scanline_modes = {"scanline", "utopia_scanline", "zoom_pulse_scanline"}
+    for forward, reverse, local, backwards in product(
+        modes, modes, (None, *modes), (False, True)
+    ):
+        # Old precedence: global -> explicit line -> explicit reverse animation.
+        effective = local if local not in (None, "inherit") else forward
+        if backwards and reverse != "inherit":
+            effective = reverse
+        expected = effective in scanline_modes
+        payload = {
+            "style": {"karaoke_anim": forward, "reverse_karaoke_anim": reverse},
+            "line_animation_overrides": [None if local is None else {
+                "entry_anim": "none", "exit_anim": "none", "karaoke_anim": local,
+            }],
+            "line_wipe_reverse_overrides": [backwards],
+        }
+        for generation in range(3):
+            plan = ProjectLoadPlan.from_data(payload)
+            track = TimingTrack(lines=[TimingLine(
+                chars=[TimingChar("A", 0)], end_ms=1000,
+            )])
+            apply_track_project_data(track, plan.style, payload)
+            line = track.lines[0]
+            assert effective_karaoke_scanline(
+                style_with_line_animation(plan.style, line)
+            ) is expected, (forward, reverse, local, backwards, generation)
+            if line.animation_override is not None:
+                assert not line.animation_override.scanline_legacy
+            payload = SubtitleProjectDocument(
+                style=plan.style, timing_track=track,
+            ).to_project_data(screen={}, selected_scheme_key="", output={})
+
+
+def test_legacy_reverse_scanline_disk_roundtrip_for_main_and_extra_sources(tmp_path):
+    from krok_helper.subtitle_render.domain.models import (
+        effective_karaoke_scanline, style_with_line_animation,
+    )
+    from krok_helper.subtitle_render.project.session import (
+        ExtraSubtitleSource, SubtitleProjectDocument,
+    )
+    from krok_helper.subtitle_render.project.store import (
+        load_render_project, save_render_project,
+    )
+
+    for reverse, local, expected in (("scanline", "none", True), ("none", "scanline", False)):
+        rows = {
+            "line_animation_overrides": [{
+                "entry_anim": "none", "exit_anim": "none", "karaoke_anim": local,
+            }],
+            "line_wipe_reverse_overrides": [True],
+        }
+        payload = {
+            "style": {"karaoke_anim": "none", "reverse_karaoke_anim": reverse},
+            **rows,
+            "extra_subtitle_sources": [{"name": "副字幕", "path": "extra.lrc", **rows}],
+        }
+        path = tmp_path / f"{reverse}.yurika"
+        for generation in range(3):
+            save_render_project(path, payload)
+            payload = load_render_project(path)
+            plan = ProjectLoadPlan.from_data(payload)
+            tracks = []
+            for source in (payload, payload["extra_subtitle_sources"][0]):
+                track = TimingTrack(lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=1000)])
+                apply_track_project_data(track, plan.style, source)
+                assert track.lines[0].animation_override is not None
+                assert effective_karaoke_scanline(
+                    style_with_line_animation(plan.style, track.lines[0])
+                ) is expected, (reverse, generation, len(tracks))
+                tracks.append(track)
+            payload = SubtitleProjectDocument(
+                style=plan.style, timing_track=tracks[0],
+                extra_sources=[ExtraSubtitleSource("副字幕", Path("extra.lrc"), tracks[1])],
+            ).to_project_data(screen={}, selected_scheme_key="", output={})
+
+
+def test_migrated_reverse_scanline_can_be_explicitly_enabled():
+    from types import SimpleNamespace
+    from krok_helper.subtitle_render.domain.models import (
+        effective_karaoke_scanline, style_with_line_animation,
+    )
+    from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
+
+    payload = {
+        "style": {"karaoke_anim": "none", "reverse_karaoke_anim": "none"},
+        "line_animation_overrides": [{
+            "entry_anim": "none", "exit_anim": "none", "karaoke_anim": "scanline",
+        }],
+        "line_wipe_reverse_overrides": [True],
+    }
+    plan = ProjectLoadPlan.from_data(payload)
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=1000)])
+    apply_track_project_data(track, plan.style, payload)
+    old = track.lines[0].animation_override
+    requested = replace(old, scanline_enabled=True, scanline_legacy=False)
+    host = SimpleNamespace(
+        _active_source_index=0, _track_by_index=lambda _: track,
+        _undo_stack=[], _redo_stack=[],
+        _refresh_after_display_edit=lambda _: None,
+        _lyrics_panel=SimpleNamespace(refresh_row_effect=lambda _: None),
+    )
+    SubtitleRenderWindow._on_line_animation_override_requested(host, [0], requested)
+    assert len(host._undo_stack) == 1
+    assert effective_karaoke_scanline(style_with_line_animation(plan.style, track.lines[0]))
+    assert SubtitleRenderWindow._restore_animation_overrides(host, 0, (0,), (old,))
+    assert not effective_karaoke_scanline(style_with_line_animation(plan.style, track.lines[0]))
+    assert SubtitleRenderWindow._restore_animation_overrides(host, 0, (0,), (requested,))
+    assert effective_karaoke_scanline(style_with_line_animation(plan.style, track.lines[0]))
 
 
 def test_project_load_plan_resolves_legacy_style_reference_height() -> None:
