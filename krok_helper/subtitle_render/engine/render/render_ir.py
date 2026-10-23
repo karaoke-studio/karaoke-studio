@@ -19,7 +19,6 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
 )
 from krok_helper.subtitle_render.domain.band_presets import (
     default_line_color_for,
-    preset_caps,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -181,20 +180,13 @@ def titles_to_ir(
     return payloads
 
 
-def _apply_preset_band_src_caps(
-    payload: dict[str, Any], image_spec: str
-) -> None:
-    """写入中段的**源图裁切边界**（预设素材的设计端点）。
+def _apply_band_src_caps(payload: dict[str, Any]) -> None:
+    """把**中段取图区间**下发给 sidecar（三份切法，切点=用户端点）。
 
-    显示端点（``line_band_cap_left_px`` 等）仍由用户滑条自由控制；中段从
-    ``line_band_src_cap_left_px`` 开始切，保证端点调小只是裁窄端点，不会把
-    谱号等端点图案喂给中段重复一遍。自定义图没有设计边界 → 取显示端点。
+    三段式口径：图片按端点切成 0/1/2 三份，0、2 画在带子左右两端，1 填缝。
+    所以 ``line_band_src_cap_left_px`` 就是 ``line_band_cap_left_px``；单独
+    下发是为了让 sidecar 不必自己推断，端点改了下发值跟着变（预拼条重建）。
     """
-    caps = preset_caps(image_spec)
-    if caps is not None:
-        payload["line_band_src_cap_left_px"] = max(int(caps[0]), 0)
-        payload["line_band_src_cap_right_px"] = max(int(caps[1]), 0)
-        return
     try:
         left = int(payload.get("line_band_cap_left_px") or 0)
     except (TypeError, ValueError):
@@ -307,7 +299,7 @@ def build_render_ir(
             style_payload["line_band_line_color"] = default_line_color_for(
                 str(style.line_band_image or "")
             )
-        _apply_preset_band_src_caps(style_payload, str(style.line_band_image or ""))
+        _apply_band_src_caps(style_payload)
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -466,9 +458,7 @@ def build_style_patch_ir(
             patch_style_payload["line_band_line_color"] = default_line_color_for(
                 str(style.line_band_image or "")
             )
-        _apply_preset_band_src_caps(
-            patch_style_payload, str(style.line_band_image or "")
-        )
+        _apply_band_src_caps(patch_style_payload)
         return {
             "schema": RENDER_IR_SCHEMA,
             "screen": {

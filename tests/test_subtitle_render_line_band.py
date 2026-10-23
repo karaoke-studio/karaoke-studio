@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
+from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
 
 from krok_helper.subtitle_render.domain.band_presets import (  # noqa: E402
     BAND_PRESETS,
@@ -95,56 +96,57 @@ def test_missing_image_resolves_to_no_spec(tmp_path):
     assert band_spec(_style(line_band_enabled=False)) is None
 
 
-def test_display_caps_can_shrink_below_the_preset_design_caps():
-    """显示端点可自由调小，但中段仍从素材设计边界切——不会重复端点图案。
+def test_three_slice_cuts_at_the_configured_caps_and_fills_the_hole(qapp, tmp_path):
+    """三段式口径（用户 2026-10-24 定）：
 
-    用户实测：左端点拖到 60 时谱号出现两遍（中段从 60 开始把谱号又铺一
-    次）。修复口径是显示端点与源图裁切边界解耦：显示 60/40，源图仍是
-    190/160，谱号只出现在端点里（被裁窄），中段不含谱号。
+    先把图片按端点切成 0/1/2 三份，0 和 2 **直接画**在带子左右两端，中间 1
+    填补剩下的空隙。切点就是用户设定的端点，不做任何隐藏夹取。
     """
-    from krok_helper.subtitle_render.engine.render.elements.band import (
-        _mid_tile,
-        band_source,
-    )
 
-    preset = band_preset("staff_scroll")
-    spec = band_spec(
-        _style(
-            line_band_image="preset:staff_scroll",
-            line_band_cap_left_px=60,
-            line_band_cap_right_px=40,
-        )
+    # 300x100 的测试图：左 100 红、中 100 绿、右 100 蓝。
+    image = QImage(300, 100, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor("#000000"))
+    painter = QPainter(image)
+    painter.fillRect(0, 0, 100, 100, QColor("#FF0000"))
+    painter.fillRect(100, 0, 100, 100, QColor("#00FF00"))
+    painter.fillRect(200, 0, 100, 100, QColor("#0000FF"))
+    painter.end()
+    path = tmp_path / "slice.png"
+    image.save(str(path))
+
+    style = _style(
+        line_band_image=str(path),
+        line_band_cap_left_px=100,
+        line_band_cap_right_px=100,
+        line_band_fill_mode="three_slice",
+        line_band_mid_mode="repeat",
     )
+    spec = band_spec(style)
     assert spec is not None
-    assert (spec.cap_left, spec.cap_right) == (60, 40)
-    assert (spec.src_cap_left, spec.src_cap_right) == (
-        preset.cap_left_px,
-        preset.cap_right_px,
-    )
-    # 中段瓦片起点在素材设计边界：瓦片宽度 = 图宽 - 设计端点之和，且左缘
-    # 那 40 列只有 5 条 3px 谱线（谱号墨迹不在其中）。
-    image = band_source(spec)
-    tile = _mid_tile(image, spec.src_cap_left, spec.src_cap_right)
-    assert tile.width() == image.width() - preset.cap_left_px - preset.cap_right_px
-    opaque = sum(
-        1
-        for x in range(min(40, tile.width()))
-        for y in range(tile.height())
-        if tile.pixelColor(x, y).alpha() > 200
-    )
-    assert opaque < 40 * tile.height() * 0.2
-    # 自定义图没有设计边界：源图边界跟随显示端点。
-    custom = band_spec(
-        _style(
-            line_band_image=str(preset.path),
-            line_band_cap_left_px=60,
-            line_band_cap_right_px=40,
-        )
-    )
-    assert custom is not None
-    assert (custom.cap_left, custom.cap_right) == (60, 40)
-    assert (custom.src_cap_left, custom.src_cap_right) == (60, 40)
+    assert (spec.cap_left, spec.cap_right) == (100, 100)
+    # 中段取图区间就是端点切出来的那一份。
+    assert (spec.src_cap_left, spec.src_cap_right) == (100, 100)
 
+    canvas = QImage(500, 100, QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(QColor(0, 0, 0, 0))
+    target = QPainter(canvas)
+    paint_band(target, QRectF(0.0, 0.0, 500.0, 100.0), spec)
+    target.end()
+
+    # 带高=图高 → scale=1：左端点 100px 红、右端点 100px 蓝、中间 300px 绿。
+    assert canvas.pixelColor(50, 50).red() > 200
+    assert canvas.pixelColor(50, 50).green() < 60
+    assert canvas.pixelColor(450 - 0, 50).blue() > 200
+    for x in (150, 250, 350):
+        pixel = canvas.pixelColor(x, 50)
+        assert pixel.green() > 200 and pixel.red() < 60, f"x={x} 不是中段绿"
+
+    # 端点调小 → 切点跟着变，中段变成「0..100 之外」的那一块（换图验证）。
+    smaller = band_spec(
+        replace(style, line_band_cap_left_px=40, line_band_cap_right_px=20)
+    )
+    assert smaller is not None
+    assert (smaller.src_cap_left, smaller.src_cap_right) == (40, 20)
 
 # ----------------------------------------------------------------- geometry
 def test_band_rect_uses_four_independent_paddings():
