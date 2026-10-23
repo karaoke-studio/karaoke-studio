@@ -6827,21 +6827,18 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert [
         panel._karaoke_anim_combo.itemText(index)
         for index in range(panel._karaoke_anim_combo.count())
-    ] == ["无", "无 Wipe", "utopia", "扫字线", "utopia+扫字线", "整字放大", "整字放大+扫字线"]
+    ] == ["无", "无 Wipe", "utopia", "整字放大"]
     assert [
         panel._reverse_karaoke_anim_combo.itemText(index)
         for index in range(panel._reverse_karaoke_anim_combo.count())
     ] == [
-        "跟随唱字特效", "Wipe", "无 Wipe", "Utopia", "扫字线", "utopia+扫字线", "整字放大",
-        "整字放大+扫字线"
+        "跟随唱字特效", "Wipe", "无 Wipe", "Utopia", "整字放大"
     ]
-    # 扫字线参数永久激活；单独颜色模式显示颜色、隐藏亮度提升。
-    assert panel._scanline_mode_combo.isEnabled()
-    assert panel._scanline_width_spin.isEnabled()
-    panel._karaoke_anim_combo.setCurrentIndex(
-        panel._karaoke_anim_combo.findData("scanline")
-    )
-    assert emitted[-1].karaoke_anim == "scanline"
+    # 扫字线是独立总开关：关闭时参数灰显。
+    assert not panel._scanline_mode_combo.isEnabled()
+    assert not panel._scanline_width_spin.isEnabled()
+    panel._scanline_enabled_check.setChecked(True)
+    assert emitted[-1].scanline_enabled is True
     assert panel._scanline_mode_combo.isEnabled()
     assert panel._scanline_width_spin.isEnabled()
     assert panel._scanline_mode_combo.currentData() == "color"
@@ -6884,11 +6881,15 @@ def test_property_panel_animation_controls_emit_style(qapp):
     )
     assert not panel._scanline_color_btn.isHidden()
     assert panel._scanline_brightness_spin.isHidden()
-    # 反向唱字单独选扫字线：参数保持永久激活。
+    # 反向唱字应用开关独立于总开关。
+    panel._scanline_reverse_check.setChecked(False)
+    assert emitted[-1].scanline_reverse_enabled is False
+    panel._scanline_reverse_check.setChecked(True)
+    assert emitted[-1].scanline_reverse_enabled is True
     panel._reverse_karaoke_anim_combo.setCurrentIndex(
-        panel._reverse_karaoke_anim_combo.findData("utopia_scanline")
+        panel._reverse_karaoke_anim_combo.findData("utopia")
     )
-    assert emitted[-1].reverse_karaoke_anim == "utopia_scanline"
+    assert emitted[-1].reverse_karaoke_anim == "utopia"
     assert panel._scanline_width_spin.isEnabled()
     # 粒子设置对象药丸：切到扫字线后颜色/尺寸/数量编辑扫字线独立字段。
     assert panel._fx_target_pill.currentRouteKey() == "sing"
@@ -6934,7 +6935,13 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert panel._scanline_effect_combo.currentData() == "none"
     assert panel._scanline_effect_combo.isEnabled()
     # 回显：外部灌入样式后参数仍激活、值跟随、可见性按模式同步。
-    panel.set_style(Style(karaoke_anim="utopia", scanline_width_px=30))
+    panel.set_style(
+        Style(
+            karaoke_anim="utopia",
+            scanline_enabled=True,
+            scanline_width_px=30,
+        )
+    )
     assert panel._karaoke_anim_combo.currentData() == "utopia"
     assert panel._scanline_width_spin.isEnabled()
     assert panel._scanline_width_spin.value() == 30

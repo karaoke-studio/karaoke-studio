@@ -1713,6 +1713,20 @@ class PropertyPanel(QWidget):
         参数）；复用配色方案：显示来源下拉。三者共用同一列位，行宽不变。
         """
         mode = self._style.scanline_mode
+        enabled = bool(
+            self._style.scanline_enabled
+            or self._style.timing.karaoke_anim
+            in {"scanline", "utopia_scanline", "zoom_pulse_scanline"}
+        )
+        self._scanline_enabled_check.blockSignals(True)
+        self._scanline_enabled_check.setChecked(enabled)
+        self._scanline_enabled_check.blockSignals(False)
+        self._scanline_reverse_check.blockSignals(True)
+        self._scanline_reverse_check.setChecked(
+            bool(self._style.scanline_reverse_enabled)
+        )
+        self._scanline_reverse_check.blockSignals(False)
+        self._scanline_reverse_check.setEnabled(enabled)
         default_color = mode == "default"
         brighten = mode in {"brighten", "follow_before", "follow_after"}
         role = mode == "role"
@@ -1723,8 +1737,10 @@ class PropertyPanel(QWidget):
             self._scanline_brightness_spin,
             self._scanline_role_combo,
             self._scanline_glow_spin,
+            self._scanline_shape_combo,
+            self._scanline_effect_combo,
         ):
-            control.setEnabled(True)
+            control.setEnabled(enabled)
         self._scanline_color_btn.setVisible(
             not brighten and not role and not default_color
         )
@@ -3171,6 +3187,9 @@ class PropertyPanel(QWidget):
 
     def _make_scanline_section(self) -> QFrame:
         return self._effects_page_builder.make_scanline_section()
+
+    def _make_particle_section(self) -> QFrame:
+        return self._effects_page_builder.make_particle_section()
 
     def _make_viewport_section(self) -> QFrame:
         return self._layout_page_builder.make_viewport_section()
@@ -5710,6 +5729,8 @@ class PropertyPanel(QWidget):
             if {
                 "karaoke_anim",
                 "reverse_karaoke_anim",
+                "scanline_enabled",
+                "scanline_reverse_enabled",
                 "scanline_mode",
                 "scanline_role_name",
                 "scanline_effect",

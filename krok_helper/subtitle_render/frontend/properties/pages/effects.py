@@ -514,6 +514,7 @@ class EffectsPropertyPageBuilder:
         # 整字放大、装饰粒子），标题按用户口径改名，避免只看到「入退场」。
         section, layout = property_section("入退场/唱字动画")
         host._scanline_section, host._scanline_layout = property_section("扫字线")
+        host._particle_section, host._particle_layout = property_section("粒子")
         host._animation_grid = ResponsiveFieldGrid(
             section,
             min_column_width=260,
@@ -566,16 +567,13 @@ class EffectsPropertyPageBuilder:
             ("无", "none"),
             ("无 Wipe", "no_wipe"),
             ("utopia", "utopia"),
-            ("扫字线", "scanline"),
-            ("utopia+扫字线", "utopia_scanline"),
             ("整字放大", "zoom_pulse"),
-            ("整字放大+扫字线", "zoom_pulse_scanline"),
         ):
             host._karaoke_anim_combo.addItem(label, value)
         host._karaoke_anim_combo.setToolTip(
             "控制歌词正在着色时的逐字动画；旧项目的 Utopia 入退场会自动兼容。"
-            "扫字线在走字锋面处按设定粗细高亮发光（主文字与注音同效）；"
-            "整字放大在唱字期间持续放大、唱字结束后缓慢缩回，可再叠加扫字线"
+            "扫字线由下方独立扫字线总开关控制，可叠加在任意唱字动画上；"
+            "整字放大在唱字期间持续放大、唱字结束后缓慢缩回"
         )
         host._karaoke_anim_combo.currentIndexChanged.connect(
             lambda _index: host._update_style(
@@ -590,15 +588,12 @@ class EffectsPropertyPageBuilder:
             ("Wipe", "none"),
             ("无 Wipe", "no_wipe"),
             ("Utopia", "utopia"),
-            ("扫字线", "scanline"),
-            ("utopia+扫字线", "utopia_scanline"),
             ("整字放大", "zoom_pulse"),
-            ("整字放大+扫字线", "zoom_pulse_scanline"),
         ):
             host._reverse_karaoke_anim_combo.addItem(label, value)
         host._reverse_karaoke_anim_combo.setToolTip(
-            "仅对标记为反向唱字的歌词行生效；无 Wipe 会在区间结束时整字瞬切，"
-            "扫字线档位同样叠加锋面高亮"
+            "仅对标记为反向唱字的歌词行生效；扫字线在下方扫字线配置里用"
+            "「应用于反向唱字特效」控制"
         )
         host._reverse_karaoke_anim_combo.currentIndexChanged.connect(
             lambda _index: host._update_style(
@@ -612,6 +607,23 @@ class EffectsPropertyPageBuilder:
         )
         host._animation_grid.add_field("唱字 / 反向唱字特效", host._karaoke_pair_row)
 
+        host._scanline_enabled_check = CheckBox("启用扫字线", host._scanline_section)
+        host._scanline_enabled_check.setToolTip(
+            "扫字线总开关：开启后普通唱字行在锋面处叠加高亮；"
+            "与音量柱/形状指示灯一样独立于唱字动画档位"
+        )
+        host._scanline_enabled_check.toggled.connect(
+            lambda checked: host._update_style(scanline_enabled=checked)
+        )
+        host._scanline_reverse_check = CheckBox(
+            "应用于反向唱字特效", host._scanline_section
+        )
+        host._scanline_reverse_check.setToolTip(
+            "开启后反向唱字行也使用扫字线；关闭时反向行只播放其唱字动画"
+        )
+        host._scanline_reverse_check.toggled.connect(
+            lambda checked: host._update_style(scanline_reverse_enabled=checked)
+        )
         host._scanline_mode_combo = WheelFocusedComboBox(host._scanline_section)
         compact_property_control(host._scanline_mode_combo)
         for label, value in (
@@ -745,7 +757,9 @@ class EffectsPropertyPageBuilder:
             lambda checked: host._update_style(karaoke_stroke_flash=checked)
         )
 
-        host._fx_sing_combo = self._combo(section, FX_SING_OPTIONS, "sing_fx")
+        host._fx_sing_combo = self._combo(
+            host._particle_section, FX_SING_OPTIONS, "sing_fx"
+        )
         host._fx_sing_combo.setToolTip(
             "唱字装饰粒子：唱到哪个字就在那个字上生效——星光闪烁=按伪随机"
             "位置冒星、音符飘出=自字框升起、涟漪光环=每字两圈细环扩散"
@@ -893,6 +907,8 @@ class EffectsPropertyPageBuilder:
         host._animation_grid.add_widget(host._section_edge_row)
         # 扫字线单独成栏：参数行、形态、特效都归入上面的「扫字线」卡片，
         # 不再挤在入退场/唱字动画网格里。
+        host._scanline_layout.addWidget(host._scanline_enabled_check)
+        host._scanline_layout.addWidget(host._scanline_reverse_check)
         host._scanline_layout.addWidget(
             property_field(
                 "模式 · 粗细 · 颜色/亮度/角色 · 柔化半径",
@@ -916,6 +932,10 @@ class EffectsPropertyPageBuilder:
         stroke_flash_layout.setContentsMargins(0, 0, 0, 0)
         stroke_flash_layout.setSpacing(6)
         stroke_flash_layout.addWidget(host._stroke_flash_check)
+        # 唱字闪光属于唱字动画，不是粒子；留在动画卡片。
+        host._animation_grid.add_widget(
+            property_field("唱字闪光", host._stroke_flash_row)
+        )
         layout.addWidget(host._animation_grid)
         # 粒子设置对象药丸：与「唱字粒子样式」同排，宽度略收窄。
         host._fx_target_row = QWidget(section)
@@ -927,16 +947,17 @@ class EffectsPropertyPageBuilder:
         fx_target_layout.addStretch(1)
         # 唱字粒子样式只作用于唱字装饰粒子，不是随“粒子设置对象”切换的
         # 三态字段；与对象药丸放在同一行，窄窗时由响应式容器自动改竖排。
-        host._fx_top_row = ResponsiveControlPair(section)
+        host._fx_top_row = ResponsiveControlPair(host._particle_section)
         host._fx_top_row.set_widgets(
             property_field("唱字粒子样式", host._fx_sing_combo),
             property_field("粒子设置对象", host._fx_target_row),
         )
-        layout.addWidget(host._fx_top_row)
+        # 粒子相关设置独立成卡片；唱字闪光已归入唱字动画卡片。
+        host._particle_layout.addWidget(host._fx_top_row)
         # 下方粒子/闪光单独一张 3 列网格：与扫字线参数分栏，避免单张
         # 2 列网格里控件越塞越挤；窄窗仍按 3→2→1 列自适应。
         host._fx_grid = ResponsiveFieldGrid(
-            section, min_column_width=170, max_columns=3
+            host._particle_section, min_column_width=170, max_columns=3
         )
         host._fx_grid.add_field("颜色模式", host._fx_particle_mode_combo)
         host._fx_grid.add_field("取色层级", host._fx_particle_layers_combo)
@@ -947,16 +968,16 @@ class EffectsPropertyPageBuilder:
             host._fx_color_row,
         )
         host._fx_grid.add_widget(host._fx_color_field)
-        host._fx_grid.add_widget(
-            property_field("唱字闪光", host._stroke_flash_row)
-        )
-        layout.addWidget(host._fx_grid)
+        host._particle_layout.addWidget(host._fx_grid)
         return section
 
     def make_scanline_section(self) -> QFrame:
         """扫字线独立分栏（参数/形态/特效），排在入退场动画卡片之后。"""
 
         return self._host._scanline_section
+
+    def make_particle_section(self) -> QFrame:
+        return self._host._particle_section
 
     @staticmethod
     def _fx_color_row(
