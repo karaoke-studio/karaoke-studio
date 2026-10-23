@@ -1263,6 +1263,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     drawBandPiece(bitmap, rect, opacity, imageRect);
                 }
         };
+        // 防双绘：两条几乎重合的带子只画不透明度更高的那条。页面切换/布局
+        // 异常时会出现两条带子横向错开十几 px（横线重合看不见，谱号和音符各
+        // 画一次，表现为「左侧谱号出现两遍」）。与 CPU 预扫同口径。
+        std::vector<std::pair<D2D1_RECT_F, float>> drawnBands;
         for (const BandGroup &group : groups) {
             if (!group.hasRect) {
                 continue;
@@ -1274,6 +1278,31 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             if (alpha <= 0.0f) {
                 continue;
             }
+            bool overlapping = false;
+            for (const auto &drawn : drawnBands) {
+                const D2D1_RECT_F &other = drawn.first;
+                const float interW = std::min(base.right, other.right)
+                    - std::max(base.left, other.left);
+                const float interH = std::min(base.bottom, other.bottom)
+                    - std::max(base.top, other.top);
+                if (interW <= 0.0f || interH <= 0.0f) {
+                    continue;
+                }
+                const float inter = interW * interH;
+                const float smaller = std::min(
+                    (base.right - base.left) * (base.bottom - base.top),
+                    (other.right - other.left) * (other.bottom - other.top)
+                );
+                if (smaller > 0.0f && inter / smaller > 0.55f
+                    && alpha <= drawn.second + 0.02f) {
+                    overlapping = true;
+                    break;
+                }
+            }
+            if (overlapping) {
+                continue;
+            }
+            drawnBands.emplace_back(base, alpha);
             const bool shadow = band.edgeKind == "shadow";
             if (band.edgeKind != "none"
                 && impl_->lineBandImage.edgeBitmap) {
