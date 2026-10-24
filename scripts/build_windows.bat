@@ -233,6 +233,8 @@ if not "%BUILD_RC%"=="0" (
 REM 精简 Qt 插件时注意：imageformats\qwebp.dll 必须留着。YouTube 2026-08 起把
 REM 封面给成 vi_webp/*.webp，删掉这个插件 QPixmap 就只能拿到空图，视频下载页的
 REM 封面直接消失（日志里是 QPixmap::scaled: Pixmap is a null pixmap）。
+REM 行背景带的动图预设是 animated WebP（qwebp.dll），用户导入的动图背景是 GIF
+REM （qgif.dll）：两个 imageformats 插件都必须留着，删掉会让动图带子退化成静帧。
 echo Trimming Windows package...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$root = Resolve-Path '%BUILD_DIST%\_internal';" ^
@@ -243,7 +245,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$translations = Join-Path $qt6 'translations';" ^
     "if (Test-Path $translations) { Get-ChildItem $translations -File | Where-Object { $_.Name -notin @('qtbase_zh_CN.qm','qtbase_zh_TW.qm','qtbase_ja.qm','qt_zh_CN.qm','qt_zh_TW.qm','qt_ja.qm') } | Remove-Item -Force };" ^
     "$plugins = Join-Path $qt6 'plugins';" ^
-    "$removeFiles = @('platforms\qdirect2d.dll','platforms\qminimal.dll','platforms\qoffscreen.dll','imageformats\qtiff.dll','imageformats\qicns.dll','imageformats\qgif.dll','imageformats\qpdf.dll','imageformats\qtga.dll','imageformats\qwbmp.dll','iconengines\qsvgicon.dll','tls\qopensslbackend.dll','tls\qcertonlybackend.dll','generic\qtuiotouchplugin.dll','networkinformation\qnetworklistmanager.dll','platforminputcontexts\qtvirtualkeyboardplugin.dll');" ^
+    "$removeFiles = @('platforms\qdirect2d.dll','platforms\qminimal.dll','platforms\qoffscreen.dll','imageformats\qtiff.dll','imageformats\qicns.dll','imageformats\qpdf.dll','imageformats\qtga.dll','imageformats\qwbmp.dll','iconengines\qsvgicon.dll','tls\qopensslbackend.dll','tls\qcertonlybackend.dll','generic\qtuiotouchplugin.dll','networkinformation\qnetworklistmanager.dll','platforminputcontexts\qtvirtualkeyboardplugin.dll');" ^
     "foreach ($rel in $removeFiles) { $path = Join-Path $plugins $rel; if (Test-Path $path) { Remove-Item -LiteralPath $path -Force } };" ^
     "$removeDirs = @('generic','networkinformation','platforminputcontexts');" ^
     "foreach ($rel in $removeDirs) { $path = Join-Path $plugins $rel; if ((Test-Path $path -PathType Container) -and -not (Get-ChildItem $path -Force)) { Remove-Item -LiteralPath $path -Force } };" ^

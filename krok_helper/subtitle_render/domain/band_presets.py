@@ -1,12 +1,13 @@
 """Built-in presets for the per-line background strip (行背景带).
 
-The five shipped PNGs live under ``assets/subtitle_render/band_presets``.
-Their metadata is kept here so the property panel, the QPainter renderer and
-the native IR serializer all read the same numbers.
+The shipped assets live under ``assets/subtitle_render/band_presets``. Their
+metadata is kept here so the property panel, the QPainter renderer and the native
+IR serializer all read the same numbers.
 
-2026-10-23：素材改为**宽幅不循环**版本——中段 4096px（斜纹 4080px，保证条纹
-周期整除），16:9 画布上正常歌词行不会触发第二次平铺。五线谱的 5 条谱线单独
-出 ``staff_scroll_lines.png``（纯白），运行时按用户颜色上色。
+静态预设是 PNG；动图预设（五线谱/星火/水泡）是**循环 animated WebP**——GIF 只有
+1 bit 透明，水泡那层 alpha≈70 的淡填充、星火的柔光只能靠点阵近似，还会撞上
+调色板/透明下标的老坑；WebP 是真 8 bit alpha，CPU 预览与 sidecar 都用
+``QImageReader`` 解码，两边像素一致。用户导入的素材仍然可以是 GIF/PNG。
 """
 
 from __future__ import annotations
@@ -40,6 +41,15 @@ class BandPreset:
     # 独立谱线层（白色，运行时按 line_band_line_color 上色）；空 = 没有分层。
     lines_file_name: str = ""
     default_line_color: str = ""
+    # 独立谱号层（白色，运行时按 line_band_clef_color 上色）。
+    clef_file_name: str = ""
+    default_clef_color: str = ""
+    # 预设自带的上色强度（100 = 满强度）。
+    default_tint_strength_pct: int = 100
+    # 预设默认填充方式：花纹类用 cover（裁切），避免平铺让中段变密。
+    default_fill_mode: str = "three_slice"
+    # 预设默认不透明度（五线谱/星火保持不透明，其余 50%）。
+    default_opacity_pct: int = 50
 
     @property
     def path(self) -> Path:
@@ -52,22 +62,34 @@ class BandPreset:
         return BAND_PRESET_DIR / self.lines_file_name
 
     @property
+    def clef_path(self) -> Optional[Path]:
+        if not self.clef_file_name:
+            return None
+        return BAND_PRESET_DIR / self.clef_file_name
+
+    @property
     def image_spec(self) -> str:
         """Value stored in ``Style.line_band_image`` for this preset."""
         return PRESET_SCHEME + self.preset_id
 
 
 BAND_PRESETS: tuple[BandPreset, ...] = (
-    BandPreset("staff_scroll", "五线谱 · 卷轴", "staff_scroll.png",
+    BandPreset("staff_scroll", "五线谱 · 卷轴", "staff_scroll.webp",
                190, 160, 26, 26, 110, 120,
                lines_file_name="staff_scroll_lines.png",
-               default_line_color="#1A1A1C"),
-    BandPreset("stars", "星火点阵", "stars.png",
-               120, 120, 14, 14, 54, 54),
-    BandPreset("diagonal", "斜纹缎带", "diagonal.png",
-               96, 96, 10, 10, 42, 42, tintable=True, default_tint="#3EC6E0"),
-    BandPreset("bubbles", "水泡", "bubbles.png",
-               160, 160, 18, 18, 78, 78),
+               default_line_color="#FFFFFF",
+               clef_file_name="staff_scroll_clef.png",
+               default_clef_color="#5FD8E6",
+               default_opacity_pct=100),
+    BandPreset("stars", "星火点阵", "stars.webp",
+               120, 120, 14, 14, 54, 54, default_fill_mode="cover",
+               default_opacity_pct=100),
+    BandPreset("diagonal", "斜纹", "diagonal.png",
+               96, 96, 10, 10, 42, 42, tintable=True, default_tint="#3EC6E0",
+               default_tint_strength_pct=50, default_fill_mode="cover"),
+    BandPreset("bubbles", "水泡", "bubbles.webp",
+               160, 160, 18, 18, 78, 78, default_fill_mode="cover",
+               default_opacity_pct=100),
     BandPreset("plain_round", "纯色圆角条", "plain_round.png",
                64, 64, 12, 12, 30, 30, tintable=True, default_tint="#2B3A55"),
 )
@@ -106,6 +128,21 @@ def resolve_band_lines_image(image: str) -> Optional[Path]:
     return lines_path if lines_path is not None and lines_path.is_file() else None
 
 
+def resolve_band_clef_image(image: str) -> Optional[Path]:
+    """Resolve the preset's independent clef layer (empty for uploads)."""
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return None
+    clef_path = preset.clef_path
+    return clef_path if clef_path is not None and clef_path.is_file() else None
+
+
+def default_clef_color_for(image: str) -> str:
+    """Default clef colour for presets with a clef layer."""
+    preset = band_preset(preset_id_for_image(image) or "")
+    return preset.default_clef_color if preset is not None else ""
+
+
 def default_tint_for(image: str) -> str:
     """Default user colour for a tintable preset (empty otherwise)."""
     preset = band_preset(preset_id_for_image(image) or "")
@@ -141,5 +178,7 @@ __all__ = [
     "default_tint_for",
     "preset_id_for_image",
     "resolve_band_image",
+    "default_clef_color_for",
+    "resolve_band_clef_image",
     "resolve_band_lines_image",
 ]

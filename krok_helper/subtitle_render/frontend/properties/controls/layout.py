@@ -379,6 +379,10 @@ class ResponsiveFieldGrid(QWidget):
         self._items.append(widget)
         self._relayout(force=True)
 
+    def refresh_layout(self) -> None:
+        """Re-flow after a field was explicitly hidden or shown again."""
+        self._relayout(force=True)
+
     def clear(self) -> None:
         while self._grid.count():
             self._grid.takeAt(0)
@@ -387,16 +391,26 @@ class ResponsiveFieldGrid(QWidget):
         self._items.clear()
         self._columns = 0
 
+    def _visible_items(self) -> list[QWidget]:
+        """Fields currently shown: explicitly hidden ones may not leave a hole.
+
+        2026-10-24 用户口径：不适用的控件直接隐藏（不是灰掉）。隐藏后网格要
+        重排，否则会按原下标留出空格。
+        """
+        return [item for item in self._items if not item.isHidden()]
+
     def _target_columns(self) -> int:
         spacing = self._grid.horizontalSpacing()
         fit = (max(self.width(), 1) + spacing) // (self._min_column_width + spacing)
-        return int(max(1, min(fit, self._max_columns, max(1, len(self._items)))))
+        visible = len(self._visible_items())
+        return int(max(1, min(fit, self._max_columns, max(1, visible))))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         base = super().minimumSizeHint()
-        if not self._items:
+        items = self._visible_items()
+        if not items:
             return base
-        width = max(item.minimumSizeHint().width() for item in self._items)
+        width = max(item.minimumSizeHint().width() for item in items)
         return QSize(width, base.height())
 
     def resizeEvent(self, event: Any) -> None:  # noqa: N802
@@ -404,6 +418,11 @@ class ResponsiveFieldGrid(QWidget):
         super().resizeEvent(event)
 
     def _relayout(self, *, force: bool = False) -> None:
+        # 隐藏的字段排到可见字段之后：它们本身不占空间（Qt 不给隐藏控件分配
+        # 尺寸），所以既不会有空洞，也不会因为被移出布局而在重新显示时丢失位置。
+        visible = self._visible_items()
+        hidden = [item for item in self._items if item.isHidden()]
+        items = visible + hidden
         columns = self._target_columns()
         if not force and columns == self._columns:
             return
@@ -411,7 +430,7 @@ class ResponsiveFieldGrid(QWidget):
         self._columns = columns
         while self._grid.count():
             self._grid.takeAt(0)
-        for index, widget in enumerate(self._items):
+        for index, widget in enumerate(items):
             self._grid.addWidget(widget, index // columns, index % columns)
         for column in range(previous):
             self._grid.setColumnStretch(column, 1 if column < columns else 0)

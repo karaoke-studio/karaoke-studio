@@ -583,6 +583,9 @@ struct LineBandConfig {
     // 预设的独立谱线层（五线谱）：路径 + 谱线颜色。
     QString linesPath;
     QString lineColor;
+    // 独立谱号层（含升降号）：路径 + 谱号颜色。
+    QString clefPath;
+    QString clefColor;
     // 图片非透明部分的投影/发光："none" / "shadow" / "glow"。
     QString edgeKind = QStringLiteral("none");
     QString edgeColor = QStringLiteral("#000000");
@@ -594,10 +597,17 @@ struct LineBandConfig {
     struct EffectConfig {
         bool enabled = false;
         QString color;
+        // 0 = 关闭；阴影/发光是模糊半径，描边是向外宽度。
         int sizePx = 0;
+        // PS/AE 标准：扩展（膨胀百分比）、距离/角度（阴影偏移）、
+        // 描边位置（outside/center/inside）、发光范围（衰减曲线）。
+        int spreadPct = 0;
+        int distancePx = 0;
+        int angleDeg = 135;
+        int rangePct = 50;
+        QString position = QStringLiteral("outside");
         int offsetXPx = 0;
         int offsetYPx = 0;
-        int opacityPct = 0;
     };
     EffectConfig shadow;
     EffectConfig stroke;

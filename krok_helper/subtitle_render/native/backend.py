@@ -791,6 +791,36 @@ def _sidecar_qt_bin_dir(executable_path: Path) -> Path | None:
     return None
 
 
+def _sidecar_plugin_roots(qt_bin: Path) -> list[Path]:
+    """Qt plugin dirs for the sidecar, in search order.
+
+    第一个是 sidecar 实际链接的那套 Qt 的 plugins（平台插件必须从这里来）。
+    构建树里那套 aqt Qt 只装了 ``--archives qtbase``，**没有 qtimageformats
+    模块**，也就没有 ``imageformats/qwebp.dll``——行背景带的动图预设是
+    animated WebP，缺了它就退化成静帧。这里把 PyQt6 自带的（同版本、同工具链
+    的）插件目录追加到搜索路径，补上 qwebp；打包形态下两者本来就是同一个目录，
+    追加会被去重。
+    """
+    roots: list[Path] = []
+    for plugin_root in (qt_bin.parent / "plugins", qt_bin / "plugins"):
+        if (plugin_root / "platforms" / "qwindows.dll").is_file():
+            roots.append(plugin_root)
+            break
+    try:
+        import PyQt6
+
+        pyqt_plugins = Path(PyQt6.__file__).resolve().parent / "Qt6" / "plugins"
+    except Exception:                                        # pragma: no cover
+        pyqt_plugins = None
+    if (
+        pyqt_plugins is not None
+        and (pyqt_plugins / "imageformats" / "qwebp.dll").is_file()
+        and pyqt_plugins not in roots
+    ):
+        roots.append(pyqt_plugins)
+    return roots
+
+
 def _sidecar_environment(executable_path: Path) -> dict[str, str] | None:
     """Build the child environment for local and PyInstaller Qt layouts."""
     if os.name != "nt":
@@ -801,15 +831,9 @@ def _sidecar_environment(executable_path: Path) -> dict[str, str] | None:
     if qt_bin is not None:
         env["PATH"] = str(qt_bin) + os.pathsep + env.get("PATH", "")
         changed = True
-        plugin_candidates = [
-            qt_bin.parent / "plugins",
-            qt_bin / "plugins",
-        ]
-        for plugin_root in plugin_candidates:
-            if (plugin_root / "platforms" / "qwindows.dll").is_file():
-                env["QT_PLUGIN_PATH"] = str(plugin_root)
-                changed = True
-                break
+        plugin_roots = _sidecar_plugin_roots(qt_bin)
+        if plugin_roots:
+            env["QT_PLUGIN_PATH"] = os.pathsep.join(str(root) for root in plugin_roots)
     return env if changed else None
 
 

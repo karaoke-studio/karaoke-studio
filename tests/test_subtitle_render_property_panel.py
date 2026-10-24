@@ -12109,3 +12109,58 @@ def test_fx_particle_target_pill_keeps_settings_separate(qapp):
     assert panel._fx_color_btn2.color == "#222222"
     assert panel._fx_size_spin.value() == 60
     assert panel._fx_count_spin.value() == 20
+
+
+def test_line_band_color_rows_hide_instead_of_disable():
+    """外观 · 颜色里不适用的控件要**整行隐藏**（用户口径 2026-10-24）。
+
+    水泡/星火不可调色、也没有谱线/谱号层：那几行色板不该以「灰掉」的形式留着，
+    否则用户会以为能点、只是没生效。可用的「不透明度」必须一直在。
+    """
+    from krok_helper.subtitle_render.domain.models import Style
+
+    panel = PropertyPanel()
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:bubbles",
+        line_band_fill_mode="cover",
+    ))
+    tint_rows = panel._line_band_color_rows["tint"]
+    line_rows = panel._line_band_color_rows["line"]
+    clef_rows = panel._line_band_color_rows["clef"]
+    assert tint_rows and line_rows and clef_rows
+    assert all(row.isHidden() for row in tint_rows)
+    assert all(row.isHidden() for row in line_rows)
+    assert all(row.isHidden() for row in clef_rows)
+    # 不透明度与预设无关，始终显示。
+    assert not panel._line_band_opacity_spin.parentWidget().isHidden()
+
+    # 五线谱：谱线/谱号颜色出现，上色那几行仍然隐藏。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_fill_mode="three_slice",
+    ))
+    assert all(not row.isHidden() for row in line_rows)
+    assert all(not row.isHidden() for row in clef_rows)
+    assert all(row.isHidden() for row in tint_rows)
+
+    # 可调色预设：上色强度/上色/用预设默认色出现，谱线/谱号行隐藏。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:diagonal",
+        line_band_fill_mode="cover",
+    ))
+    assert all(not row.isHidden() for row in tint_rows)
+    assert all(row.isHidden() for row in line_rows)
+    assert all(row.isHidden() for row in clef_rows)
+
+    # 隐藏过的行再出现时，响应式网格要把它们重新排进去（不能留空位）：
+    # 布局顺序里前 N 个必须正好是可见字段，隐藏的排在它们后面，一个都不能丢。
+    grid = panel._line_band_color_grid
+    visible_fields = [item for item in grid._items if not item.isHidden()]
+    assert len(visible_fields) == 4
+    order = [grid._grid.itemAt(index).widget() for index in range(grid._grid.count())]
+    assert len(order) == len(grid._items)
+    assert order[: len(visible_fields)] == visible_fields
+    panel.deleteLater()

@@ -700,14 +700,24 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 255,
             };
         }
-        target.edgeSize = static_cast<float>(
+        target.clefPath = band.clefPath.toStdWString();
+        const QColor clefColor(band.clefColor);
+        target.hasClefColor = !band.clefPath.isEmpty() && clefColor.isValid();
+        if (target.hasClefColor) {
+            target.clefColor = RgbaColor{
+                static_cast<std::uint8_t>(clefColor.red()),
+                static_cast<std::uint8_t>(clefColor.green()),
+                static_cast<std::uint8_t>(clefColor.blue()),
+                255,
+            };
+        }        target.edgeSize = static_cast<float>(
             std::max(band.edgeSizePx, 0) * scale
         );
         target.edgeOffsetX = static_cast<float>(band.edgeOffsetXPx * scale);
         target.edgeOffsetY = static_cast<float>(band.edgeOffsetYPx * scale);
         auto projectEffect = [&](const LineBandConfig::EffectConfig &source,
                                  LineBandStyle::Effect &target) {
-            target.enabled = source.enabled;
+            target.enabled = source.enabled && source.sizePx > 0;
             const QColor effectColor(source.color);
             target.hasColor = effectColor.isValid();
             if (target.hasColor) {
@@ -721,11 +731,27 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             target.size = static_cast<float>(
                 std::max(source.sizePx, 0) * scale
             );
-            target.offsetX = static_cast<float>(source.offsetXPx * scale);
-            target.offsetY = static_cast<float>(source.offsetYPx * scale);
-            target.opacity = static_cast<float>(
-                std::clamp(source.opacityPct, 0, 100)
-            ) / 100.0f;
+            // PS 标准：阴影偏移由 距离 + 角度 合成（135° = 右下）
+            const double radians = source.angleDeg * 3.14159265358979323846 / 180.0;
+            const double distance = source.distancePx > 0
+                ? source.distancePx
+                : (source.offsetXPx || source.offsetYPx
+                    ? std::hypot(source.offsetXPx, source.offsetYPx) : 0.0);
+            const double angle = source.distancePx > 0
+                ? radians
+                : (source.offsetXPx || source.offsetYPx
+                    ? std::atan2(
+                        static_cast<double>(source.offsetYPx),
+                        static_cast<double>(source.offsetXPx)
+                      )
+                    : radians);
+            target.offsetX = static_cast<float>(std::cos(angle) * distance * scale);
+            target.offsetY = static_cast<float>(std::sin(angle) * distance * scale);
+            target.spreadPx = static_cast<float>(
+                source.spreadPct / 100.0 * std::max(source.sizePx, 0) * scale
+            );
+            target.range = static_cast<float>(source.rangePct) / 100.0f;
+            target.position = source.position.toStdString();
         };
         projectEffect(band.shadow, target.shadow);
         projectEffect(band.stroke, target.stroke);

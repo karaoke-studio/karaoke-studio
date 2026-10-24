@@ -38,6 +38,9 @@ struct Direct2DGpuBackend::Impl {
     // 行背景带素材：染色在解码期烘焙进像素，按 (path, mtime, size, tint,
     // strength) 键控缓存；只有 configure 会重解，渲染期只读。
     struct CachedBandImage {
+        LineBandStyle style;
+        float effectWidth = 0.0f;
+        float effectHeight = 0.0f;
         std::wstring path;
         std::uint64_t modifiedMs = 0;
         std::uint64_t size = 0;
@@ -61,18 +64,29 @@ struct Direct2DGpuBackend::Impl {
         std::wstring linePath;
         bool hasLineColor = false;
         RgbaColor lineColor{};
-        // 图层效果（阴影/描边/发光）：每种一个剪影位图 + 中段预拼条。
+        // 独立谱号层（含升降号）。
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> clefBitmap;
+        std::wstring clefPath;
+        bool hasClefColor = false;
+        RgbaColor clefColor{};
+        // Padded effects of the displayed frame; no second slicing is allowed.
         struct CachedEffect {
             Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
-            Microsoft::WRL::ComPtr<ID2D1Bitmap1> strip;
             bool enabled = false;
-            bool hasColor = false;
-            RgbaColor color{};
-            int sizePx = 0;
+            int padPx = 0;
         };
-        CachedEffect shadow;
-        CachedEffect stroke;
-        CachedEffect glow;
+        // 动图行背景（GIF）：逐帧位图 + 每帧时长；非动图时为空。
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> animFrames;
+        std::vector<int> animDelaysMs;
+        std::wstring animPath;
+        std::uint64_t animModifiedMs = 0;
+
+        // 当前显示尺寸的合成图和效果；动图与静态图共用，只保留最新一份。
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> animComposite;
+        CachedEffect animShadow;
+        CachedEffect animGlow;
+        CachedEffect animStroke;
+        int animEffectFrame = -1;
     };
     // 装饰粒子 sprite 轮廓几何（em 空间、中心原点；随场景重建，绘制期经
     // matrix 缩放平移）。key = sprite 名（star4 / ring / note）。

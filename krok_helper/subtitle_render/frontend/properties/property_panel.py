@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional, Sequence
 from PyQt6.QtCore import (
     QEvent,
     QPoint,
+    QPointF,
     QRect,
     QRectF,
     QSize,
@@ -29,6 +30,7 @@ from PyQt6.QtGui import (
     QFont,
     QFontDatabase,
     QIcon,
+    QImage,
     QPainter,
     QPen,
     QPixmap,
@@ -517,6 +519,172 @@ _LIT_FIELDS = {
     "volume_transition_ratio_pct",
 }
 
+class LineBandCapPreview(QWidget):
+    """原图 + 可拖拽端点把手（参考音频合成步骤的裁剪把手样式）。
+
+    上半区就是整张原图（棋盘格透明底），左右两条端点边界各有一个
+    实心圆角把手（主题色 + 白描边 + 引线）。拖动把手直接改
+    ``line_band_cap_left_px`` / ``line_band_cap_right_px``（源图像素）。
+    """
+
+    capsChanged = Signal(int, int)
+    # 与音频合成步骤的裁剪把手同款配色（左右各用其中一色，便于区分）。
+    _LEFT_COLOR = "#2F6BFF"
+    _RIGHT_COLOR = "#F04452"
+    _HANDLE_W = 12
+    _HANDLE_H = 22
+    _GRAB_PAD = 6
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._artwork: Optional[QImage] = None
+        self._cap_left = 0
+        self._cap_right = 0
+        self._art_w = 1.0
+        self._drag = ""
+        self.setMinimumHeight(84)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setToolTip(
+            "拖动两侧把手设置左/右端点宽度（源图像素）；"
+            "中间是会被平铺/裁切/拉伸的中段。"
+        )
+
+    # ---- data
+    def set_style(self, style: Style) -> None:
+        spec = band_spec(style)
+        artwork = band_artwork(spec) if spec is not None else None
+        self._artwork = artwork
+        self._cap_left = int(getattr(style, "line_band_cap_left_px", 0) or 0)
+        self._cap_right = int(getattr(style, "line_band_cap_right_px", 0) or 0)
+        self._art_w = float(artwork.width()) if artwork is not None else 1.0
+        self.update()
+
+    # ---- geometry helpers
+    def _image_rect(self) -> QRectF:
+        return QRectF(0.0, 0.0, float(self.width()), float(self.height()))
+
+    def _cap_x(self, cap_px: float) -> float:
+        return float(cap_px) / max(self._art_w, 1.0) * float(self.width())
+
+    def _handle_rect(self, cap_px: float, *, right: bool = False) -> QRectF:
+        x = self._cap_x(cap_px)
+        if right:
+            x = float(self.width()) - x
+        top = (self.height() - self._HANDLE_H) / 2.0
+        return QRectF(x - self._HANDLE_W / 2.0, top, self._HANDLE_W, self._HANDLE_H)
+
+    def _hit(self, pos) -> str:
+        for kind, cap in (("left", self._cap_left), ("right", self._cap_right)):
+            rect = self._handle_rect(cap, right=(kind == "right"))
+            if rect.adjusted(
+                -self._GRAB_PAD, -self._GRAB_PAD,
+                self._GRAB_PAD, self._GRAB_PAD,
+            ).contains(QPointF(pos)):
+                return kind
+        return ""
+
+    # ---- painting
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = self._image_rect()
+            # 棋盘格透明底
+            cell = 10
+            painter.fillRect(rect, QColor("#3A414C"))
+            for row in range(0, int(rect.height()), cell):
+                for col in range(0, int(rect.width()), cell):
+                    if (row // cell + col // cell) % 2 == 0:
+                        painter.fillRect(col, row, cell, cell, QColor("#2B313A"))
+            if self._artwork is None:
+                painter.setPen(QColor("#8A8F98"))
+                painter.drawText(
+                    self.rect(), Qt.AlignmentFlag.AlignCenter, "未选择图片"
+                )
+                return
+            painter.drawImage(rect, self._artwork)
+            left_color = QColor(self._LEFT_COLOR)
+            right_color = QColor(self._RIGHT_COLOR)
+            left_x = self._cap_x(self._cap_left)
+            right_x = self.width() - self._cap_x(self._cap_right)
+            # 端点区域淡色遮罩，明确"这两块是端点"
+            left_shade = QColor(left_color)
+            left_shade.setAlpha(56)
+            right_shade = QColor(right_color)
+            right_shade.setAlpha(56)
+            painter.fillRect(QRectF(0, 0, left_x, rect.height()), left_shade)
+            painter.fillRect(
+                QRectF(right_x, 0, rect.width() - right_x, rect.height()),
+                right_shade,
+            )
+            for x, color in ((left_x, left_color), (right_x, right_color)):
+                pen = QPen(QColor(color.red(), color.green(), color.blue(), 230), 2)
+                painter.setPen(pen)
+                painter.drawLine(int(x), 0, int(x), self.height())
+            # 把手：与音频合成步骤同款（实心圆角块 + 白描边 + 引线）
+            for cap, color, is_right in (
+                (self._cap_left, left_color, False),
+                (self._cap_right, right_color, True),
+            ):
+                handle = self._handle_rect(cap, right=is_right)
+                painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+                painter.setBrush(color)
+                painter.drawRoundedRect(handle, 3.0, 3.0)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+            font = painter.font()
+            font.setPixelSize(10)
+            painter.setFont(font)
+            painter.setPen(left_color)
+            painter.drawText(
+                QRectF(4, 2, 110, 14),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                f"左 {self._cap_left}",
+            )
+            painter.setPen(right_color)
+            painter.drawText(
+                QRectF(self.width() - 114, 2, 110, 14),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+                f"右 {self._cap_right}",
+            )
+        finally:
+            painter.end()
+
+    # ---- interaction
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        kind = self._hit(event.position())
+        if kind:
+            self._drag = kind
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if not self._drag:
+            self.setCursor(
+                Qt.CursorShape.SizeHorCursor
+                if self._hit(event.position())
+                else Qt.CursorShape.ArrowCursor
+            )
+            return
+        value = int(round(
+            event.position().x() / max(float(self.width()), 1.0) * self._art_w
+        ))
+        if self._drag == "left":
+            limit = int(max(self._art_w - self._cap_right - 1, 0))
+            self._cap_left = max(0, min(value, limit))
+        else:
+            limit = int(max(self._art_w - self._cap_left - 1, 0))
+            self._cap_right = max(0, min(int(self._art_w) - value, limit))
+        self.update()
+        self.capsChanged.emit(self._cap_left, self._cap_right)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._drag = ""
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+
 def line_band_preview_pixmap(
     style: Style,
     output_height: int = 1080,
@@ -612,20 +780,22 @@ _LINE_BAND_FIELDS = {
     "line_band_tint",
     "line_band_tint_strength_pct",
     "line_band_line_color",
+    "line_band_clef_color",
     "line_band_shadow_enabled",
     "line_band_shadow_color",
     "line_band_shadow_size_px",
-    "line_band_shadow_offset_x_px",
-    "line_band_shadow_offset_y_px",
-    "line_band_shadow_opacity_pct",
+    "line_band_shadow_spread_pct",
+    "line_band_shadow_distance_px",
+    "line_band_shadow_angle_deg",
     "line_band_stroke_enabled",
     "line_band_stroke_color",
     "line_band_stroke_size_px",
-    "line_band_stroke_opacity_pct",
+    "line_band_stroke_position",
     "line_band_glow_enabled",
     "line_band_glow_color",
     "line_band_glow_size_px",
-    "line_band_glow_opacity_pct",
+    "line_band_glow_spread_pct",
+    "line_band_glow_range_pct",
 }
 
 
@@ -4304,18 +4474,55 @@ class PropertyPanel(QWidget):
         self._update_style(_force_global=True, **{field_name: normalized})
 
     def _choose_global_color(self, field_name: str) -> None:
-        current = QColor(
-            str(getattr(self._style, field_name, "") or "#FFFFFF")
-        )
+        # 字段为空时用按钮**当前显示**的颜色打开对话框：否则对话框（含左侧
+        # 调色板）会退回白色/黑色，和按钮上的色板对不上。
+        raw = str(getattr(self._style, field_name, "") or "")
+        if not raw:
+            button = getattr(self, "_global_color_buttons", {}).get(field_name)
+            if button is not None:
+                raw = button.color()
+        current = QColor(raw or "#FFFFFF")
         color = _select_color(current, self, "选择颜色")
         if color.isValid():
             self._set_global_color(
                 field_name, color.name(QColor.NameFormat.HexArgb)
             )
 
+    def _band_effective_color(self, field_name: str) -> str:
+        """行背景带颜色字段的**有效**颜色（空字段回落到预设默认色）。
+
+        按钮上的色板必须显示真实颜色，对话框/调色板才会与它一致；否则
+        空字段会退化成假的 000000 或白色。
+        """
+        from krok_helper.subtitle_render.domain.band_presets import (
+            default_clef_color_for,
+            default_line_color_for,
+            default_tint_for,
+        )
+
+        raw = str(getattr(self._style, field_name, "") or "")
+        if raw:
+            return raw
+        image = str(getattr(self._style, "line_band_image", "") or "")
+        if field_name == "line_band_line_color":
+            return default_line_color_for(image) or "#FFFFFF"
+        if field_name == "line_band_clef_color":
+            return default_clef_color_for(image) or "#5FD8E6"
+        if field_name == "line_band_tint":
+            return default_tint_for(image) or "#FFFFFF"
+        return "#FFFFFF"
     def _global_color_button(self, field_name: str, color: str) -> ColorButton:
         """全局颜色按钮：取色/屏幕取色都直接写进全局样式。"""
+        if not str(color or ""):
+            # 空字段（谱线/谱号/色调等未显式选过的）用预设默认色，保证按钮
+            # 上的色板就是真实颜色，而不是假的 000000。
+            color = self._band_effective_color(field_name)
         button = ColorButton(color)
+        registry = getattr(self, "_global_color_buttons", None)
+        if registry is None:
+            registry = {}
+            self._global_color_buttons = registry
+        registry[field_name] = button
         self._wire_color_edit_session(button)
         button.clicked.connect(
             lambda _checked=False, field=field_name: self._choose_global_color(
@@ -4408,9 +4615,8 @@ class PropertyPanel(QWidget):
         self._update_style(
             # 选预设即视为要用带子：顺手打开总开关，否则预览里什么都看不到。
             line_band_enabled=True,
-            line_band_line_color="",
             line_band_image=spec,
-            line_band_fill_mode="three_slice",
+            line_band_fill_mode=preset.default_fill_mode,
             line_band_cap_left_px=preset.cap_left_px,
             line_band_cap_right_px=preset.cap_right_px,
             line_band_pad_top_px=preset.pad_top_px,
@@ -4418,6 +4624,11 @@ class PropertyPanel(QWidget):
             line_band_pad_left_px=preset.pad_left_px,
             line_band_pad_right_px=preset.pad_right_px,
             line_band_tint=preset.default_tint,
+            line_band_tint_strength_pct=preset.default_tint_strength_pct,
+            line_band_opacity_pct=preset.default_opacity_pct,
+            line_band_line_color=preset.default_line_color or "",
+            line_band_clef_color=preset.default_clef_color or "",
+            line_band_include_ruby=True,
         )
 
     def _choose_line_band_image(self) -> None:
@@ -4447,7 +4658,12 @@ class PropertyPanel(QWidget):
         preset = band_preset(
             preset_id_for_image(self._style.line_band_image or "") or ""
         )
-        self._update_style(line_band_tint=preset.default_tint if preset else "")
+        self._update_style(
+            line_band_tint=preset.default_tint if preset else "",
+            line_band_tint_strength_pct=(
+                preset.default_tint_strength_pct if preset else 100
+            ),
+        )
 
     def _on_color_subject_tab_changed(self, subject: str) -> None:
         # 不阻塞信号：combo 变化要驱动 _on_color_subject_changed 的完整同步
@@ -5741,6 +5957,27 @@ class PropertyPanel(QWidget):
         limit = max(width - int(self._style.line_band_cap_left_px), 0) if width else 4096
         return max(0, min(-int(value), limit))
 
+    def _show_line_band_color_rows(self, key: str, visible: bool) -> None:
+        """「外观 · 颜色」里按预设可用性隐藏/显示一整行（不是置灰）。
+
+        2026-10-24 用户口径：不可用的控件要隐藏掉。行是
+        ``property_field`` 包出来的整块（标签 + 控件），所以按行显隐，
+        再让响应式网格重排，避免留下空格。
+        """
+        rows = getattr(self, "_line_band_color_rows", {}).get(key, ())
+        should_hide = not visible
+        changed = False
+        for widget in rows:
+            if widget is None or widget.isHidden() == should_hide:
+                continue
+            widget.setVisible(visible)
+            changed = True
+        if changed:
+            grid = getattr(self, "_line_band_color_grid", None)
+            refresh = getattr(grid, "refresh_layout", None)
+            if callable(refresh):
+                refresh()
+
     def _sync_line_band_controls(self) -> None:
         """把行背景带的样式值回填到控件（调用方负责 _syncing 门）。"""
         if not hasattr(self, "_line_band_enabled_switch"):
@@ -5764,8 +6001,12 @@ class PropertyPanel(QWidget):
         width, _height = self._line_band_image_size()
         cap_left = self._line_band_cap_left_value(style.line_band_cap_left_px)
         cap_right = self._line_band_cap_right_value(-style.line_band_cap_right_px)
-        self._line_band_cap_left_spin.setValue(cap_left)
-        self._line_band_cap_right_spin.setValue(-cap_right)
+        cap_left_spin = getattr(self, "_line_band_cap_left_spin", None)
+        if cap_left_spin is not None:
+            cap_left_spin.setValue(cap_left)
+        cap_right_spin = getattr(self, "_line_band_cap_right_spin", None)
+        if cap_right_spin is not None:
+            cap_right_spin.setValue(-cap_right)
         for spin, value in (
             (self._line_band_pad_top_spin, style.line_band_pad_top_px),
             (self._line_band_pad_bottom_spin, style.line_band_pad_bottom_px),
@@ -5780,54 +6021,92 @@ class PropertyPanel(QWidget):
             bool(style.line_band_include_ruby)
         )
         three_slice = style.line_band_fill_mode == "three_slice"
-        self._line_band_mid_combo.setEnabled(three_slice)
-        self._line_band_cap_left_spin.setEnabled(three_slice)
-        self._line_band_cap_right_spin.setEnabled(three_slice)
+        # 中段下拉始终可用：只在三段式下生效，裁切模式下也可以先选好。
+        self._line_band_mid_combo.setEnabled(True)
+        for attribute in ("_line_band_cap_left_spin", "_line_band_cap_right_spin"):
+            spin = getattr(self, attribute, None)
+            if spin is not None:
+                spin.setEnabled(three_slice)
         # 只有可调色预设吃用户颜色；其余预设保持素材原色。
         tintable = preset.tintable if preset is not None else True
-        self._line_band_tint_btn.setEnabled(tintable)
-        self._line_band_tint_strength_spin.setEnabled(tintable)
-        self._line_band_tint_reset_btn.setEnabled(tintable)
-        # 独立谱线层只随预设提供。
-        has_lines = preset is not None and preset.lines_path is not None
-        self._line_band_line_color_btn.setEnabled(has_lines)
-        # 三种图层效果各自独立：回填开关/颜色/半径/强度，配置控件随开关启停。
-        for prefix in ("shadow", "stroke", "glow"):
-            enabled = bool(
-                getattr(style, f"line_band_{prefix}_enabled", False)
-            )
-            switch = getattr(self, f"_line_band_{prefix}_switch", None)
-            if switch is not None:
-                switch.setChecked(enabled)
-            color_btn = getattr(self, f"_line_band_{prefix}_color_btn", None)
-            if color_btn is not None:
-                color_btn.set_color(
-                    getattr(style, f"line_band_{prefix}_color", "#000000")
-                )
-                color_btn.setEnabled(enabled)
-            for suffix, field in (
-                ("size_spin", f"line_band_{prefix}_size_px"),
-                ("opacity_spin", f"line_band_{prefix}_opacity_pct"),
-            ):
-                spin = getattr(self, f"_line_band_{prefix}_{suffix}", None)
-                if spin is not None:
-                    spin.setValue(int(getattr(style, field, 0)))
-                    spin.setEnabled(enabled)
-            if prefix == "shadow":
-                for suffix, field in (
-                    ("offset_x_spin", "line_band_shadow_offset_x_px"),
-                    ("offset_y_spin", "line_band_shadow_offset_y_px"),
-                ):
-                    spin = getattr(self, f"_line_band_shadow_{suffix}", None)
-                    if spin is not None:
-                        spin.setValue(int(getattr(style, field, 8)))
-                        spin.setEnabled(enabled)
-        self._line_band_tint_btn.set_color(style.line_band_tint or "#FFFFFF")
+        # 色值必须显示**真实生效值**：样式为空时回落到预设默认色，切换预设/
+        # 切换卡片后都能看到实际颜色（用户口径 2026-10-24）。
+        self._line_band_tint_btn.set_color(
+            style.line_band_tint
+            or (preset.default_tint if preset is not None else "")
+            or "#FFFFFF"
+        )
         self._line_band_line_color_btn.set_color(
             style.line_band_line_color
-            or (preset.default_line_color if has_lines else "")
-            or "#1A1A1C"
+            or (
+                preset.default_line_color
+                if preset is not None and preset.lines_path is not None
+                else ""
+            )
+            or "#FFFFFF"
         )
+        # 不适用就整行隐藏（用户口径 2026-10-24）：灰掉的色板会被当成「能点，
+        # 只是没生效」，比不显示更容易误解。色值仍然照常回填，预设换回来
+        # 第一眼就是真实颜色。
+        self._show_line_band_color_rows("tint", tintable)
+        # 独立谱线层只随预设提供。
+        has_lines = preset is not None and preset.lines_path is not None
+        clef_btn = getattr(self, "_line_band_clef_color_btn", None)
+        has_clef = preset is not None and preset.clef_path is not None
+        if clef_btn is not None:
+            clef_btn.set_color(
+                style.line_band_clef_color
+                or (preset.default_clef_color if has_clef else "")
+                or "#FFFFFF"
+            )
+        self._show_line_band_color_rows("line", has_lines)
+        self._show_line_band_color_rows("clef", has_clef and clef_btn is not None)
+        # 图层效果：胶囊选中的效果 + 各自颜色/尺寸（0 = 关闭），阴影追加偏移。
+        pill = getattr(self, '_line_band_fx_pill', None)
+        pages = getattr(self, '_line_band_fx_pages', {})
+        active = 'shadow'
+        for key in ('shadow', 'stroke', 'glow'):
+            enabled = bool(getattr(style, f'line_band_{key}_enabled', False))
+            switch = getattr(self, f'_line_band_{key}_switch', None)
+            if switch is not None:
+                switch.setChecked(enabled)
+            color_btn = getattr(self, f'_line_band_{key}_color_btn', None)
+            if color_btn is not None:
+                color_btn.set_color(
+                    getattr(style, f'line_band_{key}_color', '#000000')
+                )
+            size_spin = getattr(self, f'_line_band_{key}_size_spin', None)
+            if size_spin is not None:
+                size_spin.setValue(int(getattr(style, f'line_band_{key}_size_px', 0)))
+            if enabled and int(getattr(style, f'line_band_{key}_size_px', 0)) > 0:
+                active = key
+        if pill is not None:
+            current = pill.currentRouteKey() or active
+            if not current:
+                pill.setCurrentItem(active)
+                current = active
+        else:
+            current = active
+        for name, page in pages.items():
+            page.setVisible(name == current)
+        # PS/AE 标准参数回填（阴影 扩展/距离/角度、描边 位置、发光 扩展/范围）
+        for attribute, field in (
+            ("_line_band_shadow_spread_spin", "line_band_shadow_spread_pct"),
+            ("_line_band_shadow_distance_spin", "line_band_shadow_distance_px"),
+            ("_line_band_shadow_angle_spin", "line_band_shadow_angle_deg"),
+            ("_line_band_glow_spread_spin", "line_band_glow_spread_pct"),
+            ("_line_band_glow_range_spin", "line_band_glow_range_pct"),
+        ):
+            spin = getattr(self, attribute, None)
+            if spin is not None:
+                spin.setValue(int(getattr(style, field, 0)))
+        stroke_pos_combo = getattr(self, "_line_band_stroke_position_combo", None)
+        if stroke_pos_combo is not None:
+            index = stroke_pos_combo.findData(
+                getattr(style, "line_band_stroke_position", "outside")
+            )
+            if index >= 0:
+                stroke_pos_combo.setCurrentIndex(index)
         real_preview = getattr(self, "_line_band_real_preview", None)
         if real_preview is not None:
             real_preview.setPixmap(
@@ -5840,13 +6119,18 @@ class PropertyPanel(QWidget):
             )
         preview = getattr(self, "_line_band_preview", None)
         if preview is not None:
-            preview.setPixmap(
-                line_band_preview_pixmap(
-                    style, output_height=int(
-                        getattr(self, "_output_height", 1080)
+            panel_preview = getattr(preview, "set_style", None)
+            if callable(panel_preview):
+                # 可拖拽端点把手预览：直接吃样式，把手位置跟着端点走。
+                panel_preview(style)
+            else:
+                preview.setPixmap(
+                    line_band_preview_pixmap(
+                        style, output_height=int(
+                            getattr(self, "_output_height", 1080)
+                        )
                     )
                 )
-            )
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):

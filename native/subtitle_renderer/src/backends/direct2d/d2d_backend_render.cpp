@@ -1,4 +1,7 @@
 #include "d2d_backend.h"
+
+#include <cstdio>
+#include <cstdlib>
 #include "../../diagnostics/native_trace.h"
 #include "d2d_backend_internal.h"
 #include "d2d_fx.h"
@@ -1074,12 +1077,42 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         const float imageWidth = imageSize.width;
         const float imageHeight = imageSize.height;
+        // 动图逐帧效果：在带子 BeginDraw 之前按当前帧重建三张效果位图
+        // （方法内部只做 CPU 读像素 + CreateBitmap，不需要 BeginDraw）。
+        int bandAnimFrame = -1;
+        if (!impl_->lineBandImage.animFrames.empty()) {
+            const auto &delays = impl_->lineBandImage.animDelaysMs;
+            int totalMs = 0;
+            for (int delay : delays) {
+                totalMs += delay;
+            }
+            bandAnimFrame = 0;
+            if (totalMs > 0) {
+                int position = static_cast<int>(tMs % totalMs);
+                if (position < 0) {
+                    position += totalMs;
+                }
+                int cumulative = 0;
+                for (std::size_t i = 0; i < delays.size(); ++i) {
+                    cumulative += delays[i];
+                    bandAnimFrame = static_cast<int>(i);
+                    if (position < cumulative) {
+                        break;
+                    }
+                }
+            }
+        }
+        // 带子自己的一次绘制会话（SetTarget + BeginDraw ... EndDraw）。
+        // 保存并恢复原目标：否则后续 pass（粒子等）会在错误的 target 上
+        // BeginDraw，报 EndDraw(particle only) WRONG_STATE。
+        Microsoft::WRL::ComPtr<ID2D1Image> previousBandTarget;
+        context->GetTarget(previousBandTarget.GetAddressOf());
         context->SetTarget(targetBitmap);
-        context->SetTransform(viewportTransform);
         context->BeginDraw();
         // 本帧由带子先清一次底色：行循环里首个可见行不再重复 Clear。
         context->Clear(D2D1::ColorF(0.0f, 0.0f));
         frameCleared = true;
+        checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(band clear)", device_);
         if (imageWidth > 0.0f && imageHeight > 0.0f) {
         const auto drawLayer = [&](
             ID2D1Bitmap1 *bitmap,
@@ -1194,7 +1227,40 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             band.srcCapLeft, 0.0f,
                             imageWidth - band.srcCapRight, imageHeight
                         );
-                        if (band.midMode == "stretch") {
+                        if (band.midMode == "cover") {
+                            // 中段裁切（覆盖）：中段源图等比覆盖整段，居中
+                            // 裁掉溢出（与 Python _draw_slice 同口径）。
+                            const float coverScale = std::max(
+                                midWidth / sourceMidWidth,
+                                (rect.bottom - rect.top)
+                                    / std::max(imageHeight, 1.0f)
+                            );
+                            const float coverWidth = std::min(
+                                midWidth / std::max(coverScale, 1e-6f),
+                                sourceMidWidth
+                            );
+                            const float coverHeight = std::min(
+                                (rect.bottom - rect.top)
+                                    / std::max(coverScale, 1e-6f),
+                                imageHeight
+                            );
+                            const float sourceX = band.srcCapLeft
+                                + (sourceMidWidth - coverWidth) * 0.5f;
+                            const float sourceY
+                                = (imageHeight - coverHeight) * 0.5f;
+                            drawBandPiece(bitmap,
+                                D2D1::RectF(
+                                    midLeft, rect.top,
+                                    midLeft + midWidth, rect.bottom
+                                ),
+                                opacity,
+                                D2D1::RectF(
+                                    sourceX, sourceY,
+                                    sourceX + coverWidth,
+                                    sourceY + coverHeight
+                                )
+                            );
+                        } else if (band.midMode == "stretch") {
                             drawBandPiece(bitmap, 
                                 D2D1::RectF(
                                     midLeft, rect.top,
@@ -1306,92 +1372,88 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 continue;
             }
             drawnBands.emplace_back(base, alpha);
-            // 三种图层效果（阴影/发光/描边）都画在带子下面，可同时开启；
-            // 各自的颜色/半径/强度/偏移互不影响。与 CPU 同口径。
-            struct EffectDraw {
-                const LineBandStyle::Effect &style;
-                const Impl::CachedBandImage::CachedEffect &cached;
-                int kind;  // 0=shadow 1=glow 2=stroke
-            };
-            for (const EffectDraw &effect : {
-                     EffectDraw{band.shadow, impl_->lineBandImage.shadow, 0},
-                     EffectDraw{band.glow, impl_->lineBandImage.glow, 1},
-                     EffectDraw{band.stroke, impl_->lineBandImage.stroke, 2},
-                 }) {
-                if (!effect.style.enabled || !effect.cached.bitmap) {
-                    continue;
-                }
-                ID2D1Bitmap1 *bitmap = effect.cached.bitmap.Get();
-                ID2D1Bitmap1 *strip = effect.cached.strip.Get();
-                const float radius = std::max(effect.style.size, 1.0f);
-                if (effect.kind == 0) {
-                    const float dx = effect.style.offsetX;
-                    const float dy = effect.style.offsetY;
-                    drawLayer(
-                        bitmap, strip,
-                        D2D1::RectF(
-                            base.left + dx, base.top + dy,
-                            base.right + dx, base.bottom + dy
-                        ),
-                        alpha * effect.style.opacity
-                    );
-                } else if (effect.kind == 2) {
-                    const int steps = 24;
-                    const float opacity = std::min(
-                        alpha * effect.style.opacity, 1.0f
-                    );
-                    for (int index = 0; index < steps; ++index) {
-                        const float angle = 6.2831853f
-                            * static_cast<float>(index)
-                            / static_cast<float>(steps);
-                        const float dx = std::cos(angle) * radius;
-                        const float dy = std::sin(angle) * radius;
-                        drawLayer(
-                            bitmap, strip,
-                            D2D1::RectF(
-                                base.left + dx, base.top + dy,
-                                base.right + dx, base.bottom + dy
-                            ),
-                            opacity
-                        );
-                    }
+            auto &bandCache = impl_->lineBandImage;
+            const bool animated = !bandCache.animFrames.empty();
+            const auto drawSource = [&](const D2D1_RECT_F &rect, float opacity) {
+                if (animated) {
+                    drawLayer(bandCache.lineBitmap.Get(), nullptr, rect, opacity);
+                    drawLayer(bandCache.clefBitmap.Get(), nullptr, rect, opacity);
+                    drawLayer(bandCache.animFrames[bandAnimFrame].Get(), nullptr, rect, opacity);
                 } else {
-                    const int steps = radius >= 8.0f ? 16 : 8;
-                    const float perStep = std::min(
-                        effect.style.opacity / static_cast<float>(steps) * 2.0f,
-                        1.0f
-                    );
-                    for (int index = 0; index < steps; ++index) {
-                        const float angle = 6.2831853f
-                            * static_cast<float>(index)
-                            / static_cast<float>(steps);
-                        const float dx = std::cos(angle) * radius;
-                        const float dy = std::sin(angle) * radius;
-                        drawLayer(
-                            bitmap, strip,
-                            D2D1::RectF(
-                                base.left + dx, base.top + dy,
-                                base.right + dx, base.bottom + dy
-                            ),
-                            alpha * perStep
-                        );
-                    }
+                    drawLayer(bandCache.bitmap.Get(), bandCache.midBitmap.Get(), rect, opacity);
                 }
-            }            // 素材本体与谱线层已在 configure 期合成为一张图：整条带子一次
-            // 画完，投影/发光也基于这张合成图（不再分层各画各的）。
-            drawLayer(
-                impl_->lineBandImage.bitmap.Get(),
-                impl_->lineBandImage.midBitmap.Get(),
-                base,
-                alpha
-            );
+            };
+            const bool hasEffects = band.shadow.enabled || band.glow.enabled || band.stroke.enabled;
+            const float width = base.right - base.left;
+            const float height = base.bottom - base.top;
+            if (hasEffects && (!bandCache.animComposite
+                || bandCache.animEffectFrame != bandAnimFrame
+                || bandCache.effectWidth != width || bandCache.effectHeight != height)) {
+                // Rasterize the actual visible layer once, including every static
+                // overlay and the current GIF frame. Effects see precisely this alpha.
+                const auto properties = D2D1::BitmapProperties1(
+                    D2D1_BITMAP_OPTIONS_TARGET,
+                    D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+                    96.0f, 96.0f
+                );
+                checkHr(context->CreateBitmap(
+                    D2D1::SizeU(static_cast<UINT32>(std::max(1.0f, std::ceil(width))),
+                                static_cast<UINT32>(std::max(1.0f, std::ceil(height)))),
+                    nullptr, 0, &properties, bandCache.animComposite.ReleaseAndGetAddressOf()),
+                    "ID2D1DeviceContext::CreateBitmap(line band alpha)", device_);
+                context->SetTarget(bandCache.animComposite.Get());
+                context->SetTransform(D2D1::Matrix3x2F::Identity());
+                context->BeginDraw();
+                context->Clear(nullptr);
+                drawSource(D2D1::RectF(0, 0, width, height), 1.0f);
+                checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(line band alpha)", device_);
+                context->SetTarget(targetBitmap);
+                ensureLineBandEffects(bandCache.animComposite.Get(), height / imageHeight);
+                bandCache.animEffectFrame = bandAnimFrame;
+                bandCache.effectWidth = width;
+                bandCache.effectHeight = height;
+            }
+            context->SetTarget(targetBitmap);
+            context->SetTransform(viewportTransform);
+            context->BeginDraw();
+            const auto drawEffects = [&](bool above) {
+                struct EffectDraw {
+                    const LineBandStyle::Effect &style;
+                    const Impl::CachedBandImage::CachedEffect &cached;
+                    bool shadow;
+                    bool stroke;
+                };
+                for (const auto &effect : {
+                    EffectDraw{band.shadow, bandCache.animShadow, true, false},
+                    EffectDraw{band.glow, bandCache.animGlow, false, false},
+                    EffectDraw{band.stroke, bandCache.animStroke, false, true},
+                }) {
+                    const bool over = effect.stroke && effect.style.position != "outside";
+                    if (over != above || !effect.style.enabled || !effect.cached.bitmap) {
+                        continue;
+                    }
+                    const float pad = static_cast<float>(effect.cached.padPx);
+                    const float x = base.left - pad + (effect.shadow ? effect.style.offsetX : 0.0f);
+                    const float y = base.top - pad + (effect.shadow ? effect.style.offsetY : 0.0f);
+                    const auto size = effect.cached.bitmap->GetSize();
+                    // Already laid out: never slice or cover-crop the padded mask again.
+                    context->DrawBitmap(effect.cached.bitmap.Get(),
+                        D2D1::RectF(x, y, x + size.width, y + size.height), alpha);
+                }
+            };
+            if (hasEffects) {
+                drawEffects(false);
+                const auto size = bandCache.animComposite->GetSize();
+                context->DrawBitmap(bandCache.animComposite.Get(),
+                    D2D1::RectF(base.left, base.top, base.left + size.width, base.top + size.height), alpha);
+                drawEffects(true);
+            } else {
+                drawSource(base, alpha);
+            }
+            checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(line band)", device_);
         }
         }
-        checkHr(
-            context->EndDraw(),
-            "ID2D1DeviceContext::EndDraw(line band)",
-            device_
-        );
+        context->SetTarget(previousBandTarget.Get());
         context->SetTransform(D2D1::Matrix3x2F::Identity());
     }
     for (const Impl::CachedLine *line : activeLines) {

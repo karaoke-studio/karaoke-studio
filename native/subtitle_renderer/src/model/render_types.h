@@ -727,13 +727,17 @@ struct LineBandStyle {
         float size = 0.0f;
         float offsetX = 0.0f;
         float offsetY = 0.0f;
-        float opacity = 0.0f;
+        // PS/AE 标准参数：扩展（像素）、范围（0..1）、描边位置。
+        float spreadPx = 0.0f;
+        float range = 0.5f;
+        std::string position = "outside";
 
         bool operator==(const Effect &other) const {
             return enabled == other.enabled && hasColor == other.hasColor
                 && color == other.color && size == other.size
                 && offsetX == other.offsetX && offsetY == other.offsetY
-                && opacity == other.opacity;
+                && spreadPx == other.spreadPx && range == other.range
+                && position == other.position;
         }
     };
     Effect shadow;
@@ -754,6 +758,10 @@ struct LineBandStyle {
     std::wstring linesPath;
     bool hasLineColor = false;
     RgbaColor lineColor{0, 0, 0, 255};
+    // 独立谱号层（含升降号）：白色素材 + 用户谱号颜色。
+    std::wstring clefPath;
+    bool hasClefColor = false;
+    RgbaColor clefColor{255, 255, 255, 255};
     // 非透明部分的投影 / 发光。
     std::string edgeKind = "none";
     bool hasEdgeColor = false;

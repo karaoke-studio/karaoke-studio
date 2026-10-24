@@ -15,6 +15,12 @@
 #include "../text_semantics.h"
 
 #include <d2d1_2.h>
+
+#include <cstdio>
+#include <cstdlib>
+
+#include <QImage>
+#include <QImageReader>
 #include <d2d1helper.h>
 #include <dwrite.h>
 #include <dwrite_3.h>
@@ -56,6 +62,11 @@ using direct2d::vectorGlyphGeometry;
 using direct2d::widenedStrokeGeometry;
 
 namespace {
+
+// 动图行背景帧上限（与 Python 侧 BAND_ANIM_MAX_FRAMES 一致）。
+// 水泡/五线谱补帧后是 240 帧级，上限必须覆盖，否则只播前 60 帧、
+// 循环点落在动作中途 —— 用户实测「循环点跳变」的根因。
+constexpr int BAND_ANIM_MAX_FRAMES = 4096;   // 保险丝，不截断用户 GIF
 
 void eraseRgb(RgbaColor &color) {
     color.red = 0;
@@ -198,7 +209,8 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandMidStrip(
 Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandComposite(
     ID2D1DeviceContext *context,
     ID2D1Bitmap1 *base,
-    ID2D1Bitmap1 *lines
+    ID2D1Bitmap1 *lines,
+    ID2D1Bitmap1 *clef
 ) {
     if (context == nullptr || base == nullptr) {
         return {};
@@ -227,6 +239,9 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandComposite(
     if (lines != nullptr) {
         context->DrawBitmap(lines);
     }
+    if (clef != nullptr) {
+        context->DrawBitmap(clef);
+    }
     context->DrawBitmap(base);
     const HRESULT result = context->EndDraw();
     context->SetTarget(previous.Get());
@@ -241,17 +256,26 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandEdgeBitmap(
     ID2D1DeviceContext *context,
     ID2D1Bitmap1 *source,
     const RgbaColor &color,
-    int blurPx
+    int blurPx,
+    int padPx,
+    int expandPx,
+    bool erodeRing,
+    float rangePct,
+    bool centered = false
 ) {
     if (context == nullptr || source == nullptr) {
         return {};
     }
     const D2D1_SIZE_U size = source->GetPixelSize();
-    const UINT32 width = size.width;
-    const UINT32 height = size.height;
-    if (width == 0 || height == 0) {
+    const int sourceWidth = static_cast<int>(size.width);
+    const int sourceHeight = static_cast<int>(size.height);
+    if (sourceWidth == 0 || sourceHeight == 0) {
         return {};
     }
+    // 四周留出 pad：模糊/膨胀可以长到轮廓之外（与 CPU 同口径）。
+    const int pad = std::max(padPx, 0);
+    const UINT32 width = static_cast<UINT32>(sourceWidth + pad * 2);
+    const UINT32 height = static_cast<UINT32>(sourceHeight + pad * 2);
     const UINT32 stride = width * 4;
     // ID2D1Bitmap 不能直接读像素：拷进一张 CPU_READ 位图再 Map。
     const D2D1_BITMAP_PROPERTIES1 readProperties = D2D1::BitmapProperties1(
@@ -274,19 +298,90 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandEdgeBitmap(
         return {};
     }
     std::vector<std::uint8_t> pixels(
-        static_cast<std::size_t>(stride) * height
+        static_cast<std::size_t>(stride) * height, 0
     );
-    for (UINT32 y = 0; y < height; ++y) {
-        std::memcpy(
-            pixels.data() + static_cast<std::size_t>(y) * stride,
-            mapped.bits + static_cast<std::size_t>(y) * mapped.pitch,
-            stride
-        );
+    std::vector<float> alpha(static_cast<std::size_t>(width) * height, 0.0f);
+    for (int y = 0; y < sourceHeight; ++y) {
+        const std::uint8_t *row = mapped.bits
+            + static_cast<std::size_t>(y) * mapped.pitch;
+        for (int x = 0; x < sourceWidth; ++x) {
+            const int dx = x + pad;
+            const int dy = y + pad;
+            alpha[static_cast<std::size_t>(dy) * width + dx]
+                = static_cast<float>(row[x * 4 + 3]);
+        }
     }
     readable->Unmap();
-    std::vector<float> alpha(static_cast<std::size_t>(width) * height);
-    for (std::size_t index = 0; index < alpha.size(); ++index) {
-        alpha[index] = static_cast<float>(pixels[index * 4 + 3]);
+    // PS「扩展」：模糊前先做形态学膨胀（可分离 max 滤波器）；
+    // 内描边：用腐蚀后的轮廓与原轮廓相减，只留内侧一圈。
+    const int expand = std::max(expandPx, 0);
+    const std::vector<float> original = centered ? alpha : std::vector<float>{};
+    if (expand > 0 && !erodeRing) {
+        std::vector<float> temp(alpha.size());
+        for (UINT32 y = 0; y < height; ++y) {
+            for (UINT32 x = 0; x < width; ++x) {
+                float best = 0.0f;
+                for (int k = -expand; k <= expand; ++k) {
+                    const int xx = std::clamp(
+                        static_cast<int>(x) + k, 0, static_cast<int>(width) - 1
+                    );
+                    best = std::max(
+                        best, alpha[static_cast<std::size_t>(y) * width + xx]
+                    );
+                }
+                temp[static_cast<std::size_t>(y) * width + x] = best;
+            }
+        }
+        for (UINT32 y = 0; y < height; ++y) {
+            for (UINT32 x = 0; x < width; ++x) {
+                float best = 0.0f;
+                for (int k = -expand; k <= expand; ++k) {
+                    const int yy = std::clamp(
+                        static_cast<int>(y) + k, 0, static_cast<int>(height) - 1
+                    );
+                    best = std::max(
+                        best, temp[static_cast<std::size_t>(yy) * width + x]
+                    );
+                }
+                alpha[static_cast<std::size_t>(y) * width + x] = best;
+            }
+        }
+    }
+    if ((erodeRing || centered) && expand > 0) {
+        const auto &innerAlpha = centered ? original : alpha;
+        std::vector<float> eroded(alpha.size());
+        std::vector<float> temp(alpha.size());
+        for (UINT32 y = 0; y < height; ++y) {
+            for (UINT32 x = 0; x < width; ++x) {
+                float low = 255.0f;
+                for (int k = -expand; k <= expand; ++k) {
+                    const int xx = std::clamp(
+                        static_cast<int>(x) + k, 0, static_cast<int>(width) - 1
+                    );
+                    low = std::min(
+                        low, innerAlpha[static_cast<std::size_t>(y) * width + xx]
+                    );
+                }
+                temp[static_cast<std::size_t>(y) * width + x] = low;
+            }
+        }
+        for (UINT32 y = 0; y < height; ++y) {
+            for (UINT32 x = 0; x < width; ++x) {
+                float low = 255.0f;
+                for (int k = -expand; k <= expand; ++k) {
+                    const int yy = std::clamp(
+                        static_cast<int>(y) + k, 0, static_cast<int>(height) - 1
+                    );
+                    low = std::min(
+                        low, temp[static_cast<std::size_t>(yy) * width + x]
+                    );
+                }
+                eroded[static_cast<std::size_t>(y) * width + x] = low;
+            }
+        }
+        for (std::size_t i = 0; i < alpha.size(); ++i) {
+            alpha[i] = std::max(alpha[i] - eroded[i], 0.0f);
+        }
     }
     const int radius = std::max(blurPx, 0);
     if (radius > 0) {
@@ -341,8 +436,13 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandEdgeBitmap(
             }
         }
     }
+    const float rangeGamma = 0.5f / std::clamp(rangePct, 0.01f, 1.0f);
     for (std::size_t index = 0; index < alpha.size(); ++index) {
-        const float value = std::clamp(alpha[index], 0.0f, 255.0f) / 255.0f;
+        float value = std::clamp(alpha[index], 0.0f, 255.0f) / 255.0f;
+        if (rangeGamma != 1.0f) {
+            value = std::pow(value, rangeGamma);
+        }
+        value *= static_cast<float>(color.alpha) / 255.0f;
         pixels[index * 4 + 0] = static_cast<std::uint8_t>(
             std::lround(color.blue * value)
         );
@@ -366,7 +466,7 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap1> makeBandEdgeBitmap(
     );
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
     if (FAILED(context->CreateBitmap(
-            size, pixels.data(), stride, &properties,
+            D2D1::SizeU(width, height), pixels.data(), stride, &properties,
             bitmap.ReleaseAndGetAddressOf()))) {
         return {};
     }
@@ -395,42 +495,80 @@ void Direct2DGpuBackend::ensureLineBandImage() {
             | attributes.nFileSizeLow;
     }
 
-    if (cached.bitmap
-        && cached.path == band.imagePath
-        && cached.modifiedMs == modifiedMs
-        && cached.size == size
-        && cached.hasTint == band.hasTint
-        && cached.tintStrengthPct == band.tintStrengthPct
-        && (!band.hasTint || cached.tint == band.tint)
-        && cached.linePath == band.linesPath
-        && cached.hasLineColor == band.hasLineColor
-        && (!band.hasLineColor || cached.lineColor == band.lineColor)
-        && cached.midCapLeftSrc == band.srcCapLeft
-        && cached.midCapRightSrc == band.srcCapRight
-        && cached.shadow.enabled == band.shadow.enabled
-        && cached.shadow.hasColor == band.shadow.hasColor
-        && (!band.shadow.hasColor || cached.shadow.color == band.shadow.color)
-        && cached.shadow.sizePx
-            == static_cast<int>(std::lround(band.shadow.size))
-        && cached.stroke.enabled == band.stroke.enabled
-        && cached.stroke.hasColor == band.stroke.hasColor
-        && (!band.stroke.hasColor || cached.stroke.color == band.stroke.color)
-        && cached.stroke.sizePx
-            == static_cast<int>(std::lround(band.stroke.size))
-        && cached.glow.enabled == band.glow.enabled
-        && cached.glow.hasColor == band.glow.hasColor
-        && (!band.glow.hasColor || cached.glow.color == band.glow.color)
-        && cached.glow.sizePx
-            == static_cast<int>(std::lround(band.glow.size))) {
+    if (cached.bitmap && cached.style == band
+        && cached.modifiedMs == modifiedMs && cached.size == size) {
         return;
     }
+    // A paused frame must also refresh after style edits or source replacement.
+    cached.animEffectFrame = -2;
+    cached.animComposite.Reset();
+    cached.style = band;
     ID2D1DeviceContext *context = device_.d2dContext();
+    // 动图行背景：用 **Qt 解码器**逐帧解码（与 CPU 预览/导出同一个
+    // QImageReader，alpha 与帧内容保证一致；WIC 的 GIF 解码会丢透明索引，
+    // 曾导致 GPU 上 GIF 背景渲染成不透明底板）。
+    if (cached.animPath != band.imagePath
+        || cached.animModifiedMs != modifiedMs) {
+        cached.animFrames.clear();
+        cached.animDelaysMs.clear();
+        QImageReader reader(QString::fromStdWString(band.imagePath));
+        // 不依赖 imageCount（部分格式/后端返回 -1）：直接顺序读到空为止。
+        {
+            const int limit = BAND_ANIM_MAX_FRAMES;
+            const D2D1_BITMAP_PROPERTIES1 frameProperties =
+                D2D1::BitmapProperties1(
+                    D2D1_BITMAP_OPTIONS_NONE,
+                    D2D1::PixelFormat(
+                        DXGI_FORMAT_B8G8R8A8_UNORM,
+                        // BGRA8 Direct2D 位图使用预乘 alpha；同时转换像素，
+                        // 不能只改声明。STRAIGHT 会使 CreateBitmap 失败，
+                        // 随后整段 GIF 被静默降成 WIC 首帧。
+                        D2D1_ALPHA_MODE_PREMULTIPLIED
+                    ),
+                    96.0f,
+                    96.0f
+                );
+            for (int index = 0; index < limit; ++index) {
+                QImage frame = reader.read();
+                if (frame.isNull()) {
+                    break;
+                }
+                frame = frame.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+                checkHr(context->CreateBitmap(
+                        D2D1::SizeU(
+                            static_cast<UINT32>(frame.width()),
+                            static_cast<UINT32>(frame.height())
+                        ),
+                        frame.constBits(),
+                        static_cast<UINT32>(frame.bytesPerLine()),
+                        &frameProperties,
+                        bitmap.ReleaseAndGetAddressOf()),
+                    "ID2D1DeviceContext::CreateBitmap(line band frame)", device_);
+                cached.animFrames.push_back(std::move(bitmap));
+                cached.animDelaysMs.push_back(
+                    std::max(reader.nextImageDelay(), 10)
+                );
+            }
+        }
+        if (cached.animFrames.size() <= 1) {
+            cached.animFrames.clear();
+            cached.animDelaysMs.clear();
+        }
+        cached.animPath = band.imagePath;
+        cached.animModifiedMs = modifiedMs;
+    }
     cached.baseBitmap = loadWicBitmap(
         context,
         band.imagePath,
         band.hasTint ? &band.tint : nullptr,
         band.tintStrengthPct
     );
+    // 动图：WIC 解 GIF 首帧会丢透明通道（表现为整条不透明底板），
+    // 这里用 Qt 解出来的第 1 帧替换，保证静态合成图与动图帧同源同 alpha。
+    if (!cached.animFrames.empty()) {
+        cached.baseBitmap = cached.animFrames.front();
+    }
     // 谱线层（含高音谱号、终止线）：multiply 上色后合成进整张带子图。
     cached.lineBitmap.Reset();
     cached.lineMidStrip.Reset();
@@ -443,42 +581,25 @@ void Direct2DGpuBackend::ensureLineBandImage() {
             /*multiplyTint=*/true
         );
     }
+    // 谱号层（含升降号）：multiply 成谱号颜色，与谱线层一起合成。
+    cached.clefBitmap.Reset();
+    if (!band.clefPath.empty()) {
+        cached.clefBitmap = loadWicBitmap(
+            context,
+            band.clefPath,
+            band.hasClefColor ? &band.clefColor : nullptr,
+            100,
+            /*multiplyTint=*/true
+        );
+    }
     cached.bitmap = makeBandComposite(
-        context, cached.baseBitmap.Get(), cached.lineBitmap.Get()
+        context, cached.baseBitmap.Get(), cached.lineBitmap.Get(),
+        cached.clefBitmap.Get()
     );
     cached.midBitmap = makeBandMidStrip(
         context, cached.bitmap.Get(),
         band.srcCapLeft, band.srcCapRight
     );
-    // 三种图层效果各自烘焙剪影：描边不模糊，阴影/发光按半径模糊。
-    struct EffectPair {
-        const LineBandStyle::Effect &style;
-        Impl::CachedBandImage::CachedEffect &cached;
-        bool blur;
-    };
-    for (const EffectPair &pair : {
-             EffectPair{band.shadow, cached.shadow, true},
-             EffectPair{band.stroke, cached.stroke, false},
-             EffectPair{band.glow, cached.glow, true},
-         }) {
-        pair.cached.bitmap.Reset();
-        pair.cached.strip.Reset();
-        pair.cached.enabled = pair.style.enabled;
-        pair.cached.hasColor = pair.style.hasColor;
-        pair.cached.color = pair.style.color;
-        pair.cached.sizePx = static_cast<int>(std::lround(pair.style.size));
-        if (!pair.style.enabled || !cached.bitmap) {
-            continue;
-        }
-        const int blurPx = pair.blur ? pair.cached.sizePx : 0;
-        pair.cached.bitmap = makeBandEdgeBitmap(
-            context, cached.bitmap.Get(), pair.style.color, blurPx
-        );
-        pair.cached.strip = makeBandMidStrip(
-            context, pair.cached.bitmap.Get(),
-            band.srcCapLeft, band.srcCapRight
-        );
-    }
     cached.midCapLeftSrc = band.srcCapLeft;
     cached.midCapRightSrc = band.srcCapRight;
     cached.path = band.imagePath;
@@ -490,7 +611,49 @@ void Direct2DGpuBackend::ensureLineBandImage() {
     cached.linePath = band.linesPath;
     cached.hasLineColor = band.hasLineColor;
     cached.lineColor = band.lineColor;
+    cached.clefPath = band.clefPath;
+    cached.hasClefColor = band.hasClefColor;
+    cached.clefColor = band.clefColor;
 }
+void Direct2DGpuBackend::ensureLineBandEffects(ID2D1Bitmap1 *source, float scale) {
+    // Source is the current frame AFTER compositing, slicing, tiling and cropping.
+    // Called outside BeginDraw: GPU readback must not interrupt a draw session.
+    const LineBandStyle &band = impl_->scene.lineBand;
+    auto &cached = impl_->lineBandImage;
+    ID2D1DeviceContext *context = device_.d2dContext();
+    struct Pair {
+        const LineBandStyle::Effect &style;
+        Impl::CachedBandImage::CachedEffect &cached;
+        bool blur;
+        bool glow;
+    };
+    for (const Pair &pair : {
+             Pair{band.shadow, cached.animShadow, true, false},
+             Pair{band.stroke, cached.animStroke, false, false},
+             Pair{band.glow, cached.animGlow, true, true},
+         }) {
+        pair.cached = Impl::CachedBandImage::CachedEffect{};
+        if (!pair.style.enabled || pair.style.size <= 0.0f) {
+            continue;
+        }
+        const int size = std::max(1, static_cast<int>(std::lround(pair.style.size * scale)));
+        const bool inside = !pair.blur && pair.style.position == "inside";
+        const bool center = !pair.blur && pair.style.position == "center";
+        const int spread = pair.blur
+            ? std::max(0, static_cast<int>(std::lround(pair.style.spreadPx * scale))) : 0;
+        const int radius = center ? std::max(1, size / 2) : size;
+        const int pad = pair.blur ? radius * 3 + spread : radius + 1;
+        pair.cached.enabled = true;
+        pair.cached.padPx = pad;
+        pair.cached.bitmap = makeBandEdgeBitmap(
+            context, source, pair.style.color, pair.blur ? size : 0,
+            pad, pair.blur ? spread : radius, inside,
+            pair.glow ? pair.style.range : 0.5f, center
+        );
+
+    }
+}
+
 void Direct2DGpuBackend::configure(const RenderScene &scene) {
     if (scene.width <= 0 || scene.height <= 0 || scene.width > 8192 || scene.height > 8192) {
         throw BackendError("GPU scene dimensions must be within 1..8192");

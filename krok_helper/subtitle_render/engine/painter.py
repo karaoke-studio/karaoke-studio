@@ -4891,7 +4891,7 @@ def _paint_line_bands(
                 painter.translate(offset_x, offset_y)
             if animation.dx or animation.dy:
                 painter.translate(animation.dx, animation.dy)
-            _paint_band(painter, rect, spec)
+            _paint_band(painter, rect, spec, t_ms)
         finally:
             painter.restore()
 

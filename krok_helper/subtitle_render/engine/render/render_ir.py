@@ -18,7 +18,9 @@ from krok_helper.subtitle_render.engine.style.title_semantics import (
     title_show_specs,
 )
 from krok_helper.subtitle_render.domain.band_presets import (
+    default_clef_color_for,
     default_line_color_for,
+    resolve_band_clef_image,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -293,6 +295,18 @@ def build_render_ir(
         style_payload["line_band_lines_image"] = (
             str(band_lines_path) if band_lines_path is not None else ""
         )
+        band_clef_path = resolve_band_clef_image(
+            str(style.line_band_image or "")
+        )
+        style_payload["line_band_clef_image"] = (
+            str(band_clef_path) if band_clef_path is not None else ""
+        )
+        if band_clef_path is not None and not style_payload.get(
+            "line_band_clef_color"
+        ):
+            style_payload["line_band_clef_color"] = default_clef_color_for(
+                str(style.line_band_image or "")
+            )
         if band_lines_path is not None and not style_payload.get(
             "line_band_line_color"
         ):
@@ -452,6 +466,18 @@ def build_style_patch_ir(
         patch_style_payload["line_band_lines_image"] = (
             str(patch_lines_path) if patch_lines_path is not None else ""
         )
+        patch_clef_path = resolve_band_clef_image(
+            str(style.line_band_image or "")
+        )
+        patch_style_payload["line_band_clef_image"] = (
+            str(patch_clef_path) if patch_clef_path is not None else ""
+        )
+        if patch_clef_path is not None and not patch_style_payload.get(
+            "line_band_clef_color"
+        ):
+            patch_style_payload["line_band_clef_color"] = default_clef_color_for(
+                str(style.line_band_image or "")
+            )
         if patch_lines_path is not None and not patch_style_payload.get(
             "line_band_line_color"
         ):

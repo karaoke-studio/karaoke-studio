@@ -13697,6 +13697,121 @@ def test_gpu_particle_stroke_style_survives_backend_recreation() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("band_enabled", [False, True])
+def test_gpu_animated_band_with_particle_prelude_and_tail(band_enabled):
+    """Particle-only passes must own exactly one draw session, also after GIF bands."""
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("A", 2000), TimingChar("B", 2500)], end_ms=3000,
+    )])
+    style = _g1_style(
+        entry_anim="snow", exit_anim="snow", entry_lead_ms=500,
+        exit_fade_ms=500, line_band_enabled=band_enabled,
+        line_band_image="preset:staff_scroll",
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        # Cross prelude, text, tail, empty frame and seek backwards repeatedly.
+        _, frames = _render_g1_frames(
+            renderer, style, (1200, 1800, 2200, 2900, 3100, 3300, 5000) * 3,
+            force_warp=True, track=track,
+        )
+    assert any(any(frame[3::4]) for frame in frames)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("preset", ["plain_round", "staff_scroll", "stars", "bubbles"])
+@pytest.mark.parametrize("force_warp", [False, True])
+def test_gpu_band_presets_advance_frames(preset, force_warp):
+    from krok_helper.subtitle_render.domain.band_presets import band_preset
+    from krok_helper.subtitle_render.engine.render.elements.band import animated_band_frames
+
+    asset = band_preset(preset)
+    animation = animated_band_frames(str(asset.path))
+    # Keep the text fully sung and stationary: differences must come from GIFs.
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("AAAA", 0)], end_ms=1000,
+    )])
+    style = _g1_style(
+        line_tail_ms=20000, line_band_enabled=True,
+        line_band_image=f"preset:{preset}",
+        line_band_fill_mode=asset.default_fill_mode,
+        line_band_pad_top_px=40, line_band_pad_bottom_px=40,
+    )
+    cycle_ms = sum(animation[1]) if animation else 1000
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (2000, 2500, 3100, 14000, 2000 + cycle_ms, 2000),
+            force_warp=force_warp, track=track,
+        )
+    assert any(frames[0][3::4]), "Expected a visible band and text"
+    if preset == "plain_round":
+        assert len(set(frames)) == 1
+    else:
+        assert animation is not None
+        assert len(set(frames)) > 1, f"{preset}: GIF is frozen on its first frame"
+        assert frames[0] == frames[-2] == frames[-1], "Loop/seek must select the same frame"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("effect", ["shadow", "glow", "stroke", "inside", "center"])
+@pytest.mark.parametrize("fill_mode", ["stretch", "three_slice", "cover", "repeat"])
+def test_gpu_gif_effects_follow_current_alpha(tmp_path, effect, fill_mode):
+    from PIL import Image, ImageDraw
+
+    images = []
+    for x in (15, 65, None):
+        image = Image.new("RGBA", (100, 64), (0, 0, 0, 0))
+        if x is not None:
+            ImageDraw.Draw(image).rectangle((x, 15, x + 18, 45), fill="white")
+        images.append(image)
+    path = tmp_path / "moving-alpha.gif"
+    images[0].save(path, save_all=True, append_images=images[1:],
+                   duration=400, loop=0, disposal=2)
+    kind = "stroke" if effect in ("inside", "center") else effect
+    style = _g1_style(
+        base_color="#FFFFFF", fill_color="#FFFFFF",
+        line_tail_ms=20000, line_band_enabled=True, line_band_image=str(path),
+        line_band_fill_mode=fill_mode, line_band_cap_left_px=10,
+        line_band_cap_right_px=10, line_band_mid_mode="stretch",
+        line_band_pad_top_px=40, line_band_pad_bottom_px=40,
+        line_band_shadow_distance_px=0, line_band_glow_range_pct=100,
+        line_band_stroke_position=effect if effect in ("inside", "center") else "outside",
+        **{f"line_band_{kind}_enabled": True, f"line_band_{kind}_size_px": 6,
+           f"line_band_{kind}_color": "#FF0000"},
+    )
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("AAAA", 0)], end_ms=1000)])
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25) as renderer:
+        _, frames = _render_g1_frames(renderer, style, (2400, 2800, 3200, 3600),
+                                      force_warp=True, track=track)
+        if effect == "glow" and fill_mode == "stretch":
+            # Reconfigure while paused on the same GIF frame, first through the
+            # RGB-only fast path, then through changes to mask geometry/curve.
+            previous = frames[0]
+            for changes in ({"line_band_glow_color": "#0000FF"},
+                            {"line_band_glow_size_px": 12},
+                            {"line_band_glow_spread_pct": 80},
+                            {"line_band_glow_range_pct": 25}):
+                style = replace(style, **changes)
+                _, edited = _render_g1_frames(renderer, style, (2400,),
+                                               force_warp=True, track=track)
+                assert edited[0] != previous, f"Paused effect cache ignored {changes}"
+                with NativeRendererProcess(_renderer_path(), response_timeout_s=25) as fresh:
+                    _, expected = _render_g1_frames(fresh, style, (2400,),
+                                                    force_warp=True, track=track)
+                assert edited == expected, "Paused edits must match a fresh backend"
+                previous = edited[0]
+    masks = []
+    for frame in frames:
+        rgba = np.frombuffer(frame, np.uint8).reshape(360, 640, 4).astype(int)
+        masks.append((rgba[:, :, 0] > rgba[:, :, 1] + 30)
+                     & (rgba[:, :, 0] > rgba[:, :, 2] + 30) & (rgba[:, :, 3] > 20))
+    assert masks[0].sum() > 20, "Effect must be visible around the first alpha shape"
+    assert masks[1].sum() > 20, "Effect must follow the second alpha shape"
+    assert not masks[2].any(), "Fully transparent GIF frame must leave no first-frame effect"
+    assert not np.array_equal(masks[0], masks[1]), "Effect must move with alpha"
+    assert frames[0] == frames[3], "Loop must reproduce the first frame without accumulated effects"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("workers", [1, 4])
 @pytest.mark.parametrize("glyph_kind", ["text", "vector"])
 def test_gpu_unbaked_static_layers_keep_relative_positions(workers, glyph_kind):

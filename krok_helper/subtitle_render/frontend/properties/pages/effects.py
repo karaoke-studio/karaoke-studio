@@ -1059,14 +1059,16 @@ class EffectsPropertyPageBuilder:
             )
             box.grid.addWidget(fields, 0, 0, 1, 2)
 
-            def add(label: str | None, control: QWidget) -> None:
-                fields.add_widget(
+            def add(label: str | None, control: QWidget) -> QWidget:
+                widget = (
                     property_field(label, control) if label is not None else control
                 )
+                fields.add_widget(widget)
+                return widget
 
-            return add
+            return add, fields
 
-        add = group("图源", min_column_width=220, max_columns=2)
+        add, _source_grid = group("图源", min_column_width=220, max_columns=2)
         host._line_band_preset_combo = WheelFocusedComboBox(section)
         compact_property_control(host._line_band_preset_combo)
         host._line_band_preset_combo.setToolTip(
@@ -1099,11 +1101,14 @@ class EffectsPropertyPageBuilder:
         add("填充方式", host._line_band_fill_combo)
         host._line_band_mid_combo = self._combo(
             section,
-            (("重复", "repeat"), ("拉伸", "stretch")),
+            (("重复", "repeat"), ("拉伸", "stretch"), ("裁切（覆盖）", "cover")),
             "line_band_mid_mode",
             force_global=True,
         )
-        host._line_band_mid_combo.setToolTip("三段式下中段的行为。")
+        host._line_band_mid_combo.setToolTip(
+            "三段式下中段的行为：重复=按带子高度等比后横向平铺；"
+            "拉伸=整段非等比铺满；裁切=等比覆盖整段并居中裁掉溢出。"
+        )
         add("中段", host._line_band_mid_combo)
 
         # 图片行独占一行：和预设下拉挤在同一排时路径会被压没。
@@ -1126,11 +1131,21 @@ class EffectsPropertyPageBuilder:
         image_layout.addWidget(host._line_band_clear_btn)
         layout.addWidget(image_row)
 
-        host._line_band_preview = QLabel(section)
+        from krok_helper.subtitle_render.frontend.properties.property_panel import (
+            LineBandCapPreview,
+        )
+
+        host._line_band_preview = LineBandCapPreview(section)
         host._line_band_preview.setMinimumHeight(84)
+        host._line_band_preview.capsChanged.connect(
+            lambda left, right: host._update_style(
+                line_band_cap_left_px=int(left),
+                line_band_cap_right_px=int(right),
+            )
+        )
         host._line_band_preview.setToolTip(
-            "棋盘格是透明底；黄色虚线是左右端点边界，中间就是中段实际平铺"
-            "出来的样子（与成片同一套几何、同一比例尺）。"
+            "棋盘格是透明底；拖左右两个把手设置端点（左蓝右红），"
+            "中间就是中段实际铺出来的样子。"
         )
         layout.addWidget(host._line_band_preview)
 
@@ -1142,23 +1157,10 @@ class EffectsPropertyPageBuilder:
         )
         layout.addWidget(host._line_band_real_preview)
 
-        # 端点：右端点滑条取反值——向右拖 = 切割边界向右移，手感跟手。
-        add = group("端点", max_columns=2)
-        self._add_canvas_spin(
-            add, "_line_band_cap_left_spin", "左端点", 0, 4096,
-            "line_band_cap_left_px", "short_quarter", suffix=" px", force_global=True,
-            transform=host._line_band_cap_left_value,
-        )
-        self._add_canvas_spin(
-            add, "_line_band_cap_right_spin", "右端点", -4096, 0,
-            "line_band_cap_right_px", "short_quarter", suffix=" px", force_global=True,
-            transform=host._line_band_cap_right_value,
-        )
-        host._line_band_cap_right_spin.setToolTip(
-            "方向已取反：向右拖 = 右端点边界向右移动。左右端点不会相交。"
-        )
+        # 端点不再单独给数字输入框：直接在预览图上拖把手（用户口径
+        # 2026-10-24）。保留属性名占位，同步代码按存在性判断，缺控件也不会崩。
 
-        add = group("几何", max_columns=2)
+        add, _geometry_grid = group("几何", max_columns=2)
         for attribute, label, field_name in (
             ("_line_band_pad_top_spin", "上边距", "line_band_pad_top_px"),
             ("_line_band_pad_bottom_spin", "下边距", "line_band_pad_bottom_px"),
@@ -1181,82 +1183,165 @@ class EffectsPropertyPageBuilder:
         )
         add(None, host._line_band_include_ruby_check)
 
-        add = group("外观 · 颜色", max_columns=2)
-        self._add_canvas_spin(add, "_line_band_opacity_spin", "透明度", 0, 100,
+        add, color_grid = group("外观 · 颜色", max_columns=2)
+        self._add_canvas_spin(add, "_line_band_opacity_spin", "不透明度", 0, 100,
                               "line_band_opacity_pct", "hard", suffix=" %", force_global=True)
-        self._add_canvas_spin(add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
-                              "line_band_tint_strength_pct", "hard", suffix=" %", force_global=True)
-        self._add_color(add, "_line_band_tint_btn", "上色", "line_band_tint",
-                        force_global=True)
+        # 下面这几行只对部分预设成立（可调色 / 有谱线层 / 有谱号层）。不适用的
+        # 时候整行隐藏，不留灰掉的色板（用户口径 2026-10-24）。宿主按 key 控制
+        # 显隐，见 ``PropertyPanel._show_line_band_color_rows``。
+        host._line_band_color_grid = color_grid
+        host._line_band_color_rows: dict[str, tuple[QWidget, ...]] = {}
+        host._line_band_color_rows["tint"] = (
+            self._add_canvas_spin(
+                add, "_line_band_tint_strength_spin", "上色强度", 0, 100,
+                "line_band_tint_strength_pct", "hard", suffix=" %",
+                force_global=True,
+            ),
+            self._add_color(
+                add, "_line_band_tint_btn", "上色", "line_band_tint",
+                force_global=True,
+            ),
+        )
         host._line_band_tint_reset_btn = FluentPushButton("用预设默认色", section)
         host._line_band_tint_reset_btn.setMinimumHeight(32)
         host._line_band_tint_reset_btn.clicked.connect(host._reset_line_band_tint)
-        add(None, host._line_band_tint_reset_btn)
-        self._add_color(
-            add, "_line_band_line_color_btn", "谱线颜色", "line_band_line_color",
-            force_global=True,
+        host._line_band_color_rows["tint"] += (
+            add(None, host._line_band_tint_reset_btn),
+        )
+        host._line_band_color_rows["line"] = (
+            self._add_color(
+                add, "_line_band_line_color_btn", "谱线颜色",
+                "line_band_line_color", force_global=True,
+            ),
+        )
+        host._line_band_color_rows["clef"] = (
+            self._add_color(
+                add, "_line_band_clef_color_btn", "谱号颜色",
+                "line_band_clef_color", force_global=True,
+            ),
         )
         host._line_band_line_color_btn.setToolTip(
-            "五线谱等带独立谱线层的预设才生效；其余预设无谱线层，控件停用。"
+            "五线谱等带独立谱线层的预设才生效；其余预设没有谱线层，这一行隐藏。"
+        )
+        host._line_band_clef_color_btn.setToolTip(
+            "独立谱号层（高音谱号 + 升降号）的颜色，仅 staff 预设生效。"
         )
 
         # 图片非透明部分的投影 / 发光（作用于合成后的整张带子图）。
-        # 图层效果（PS 图层样式口径）：三种效果各自独立开关 + 各自配置，
-        # 作用于合成后的整张带子图（含 alpha），可以同时开启。
-        def effect_group(title: str, prefix: str, *, offsets: bool = False):
-            box = SubGroup(title, collapsed=True, parent=section)
-            layout.addWidget(box)
-            fields = ResponsiveFieldGrid(
-                box, min_column_width=135, max_columns=2
-            )
-            box.grid.addWidget(fields, 0, 0, 1, 2)
-            switch = SwitchButton(box)
-            switch.setChecked(
-                bool(getattr(host._style, f"line_band_{prefix}_enabled", False))
-            )
-            switch.checkedChanged.connect(
-                lambda checked, key=f"line_band_{prefix}_enabled": (
-                    host._update_style(_force_global=True, **{key: bool(checked)})
-                )
-            )
-            setattr(host, f"_line_band_{prefix}_switch", switch)
-            fields.add_widget(property_field("启用", switch))
+        # 图层效果：胶囊式分段控件（与其它特效同款），点选后显示该效果自己
+        # 的配置；尺寸 0 = 关闭，没有独立的开关与强度。
+        host._line_band_fx_pill = SegmentedWidget(section)
+        for key, label in (
+            ("shadow", "阴影"), ("stroke", "描边"), ("glow", "发光"),
+        ):
+            host._line_band_fx_pill.addItem(key, label)
+        host._line_band_fx_pill.setCurrentItem("shadow")
+        host._line_band_fx_pill.setFixedWidth(270)
+        host._line_band_fx_pill.setToolTip(
+            "像 PS 图层样式一样作用于合成后的整张带子图（含 alpha）。"
+            "每个效果尺寸为 0 即关闭。"
+        )
+        layout.addWidget(host._line_band_fx_pill)
 
-            def add(label: str | None, control: QWidget) -> None:
-                fields.add_widget(
+        host._line_band_fx_pages: dict[str, QWidget] = {}
+        host._line_band_fx_fields: dict[str, ResponsiveFieldGrid] = {}
+        for key in ("shadow", "stroke", "glow"):
+            page = QWidget(section)
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 4, 0, 0)
+            page_layout.setSpacing(6)
+            fields = ResponsiveFieldGrid(
+                page, min_column_width=135, max_columns=2
+            )
+            page_layout.addWidget(fields)
+            layout.addWidget(page)
+            host._line_band_fx_pages[key] = page
+            host._line_band_fx_fields[key] = fields
+
+            def add(label: str | None, control: QWidget, grid=fields) -> None:
+                grid.add_widget(
                     property_field(label, control) if label is not None else control
                 )
 
-            self._add_color(
-                add, f"_line_band_{prefix}_color_btn", "颜色",
-                f"line_band_{prefix}_color", force_global=True,
+            switch = SwitchButton(page)
+            switch.setChecked(
+                bool(getattr(host._style, f"line_band_{key}_enabled", False))
             )
-            self._add_canvas_spin(
-                add, f"_line_band_{prefix}_size_spin", "半径", 0, 160,
-                f"line_band_{prefix}_size_px", "hard", suffix=" px",
-                force_global=True,
-            )
-            self._add_canvas_spin(
-                add, f"_line_band_{prefix}_opacity_spin", "强度", 0, 100,
-                f"line_band_{prefix}_opacity_pct", "hard", suffix=" %",
-                force_global=True,
-            )
-            if offsets:
-                self._add_canvas_spin(
-                    add, f"_line_band_{prefix}_offset_x_spin", "偏移 X", -300, 300,
-                    f"line_band_{prefix}_offset_x_px", "hard", suffix=" px",
-                    force_global=True,
+            switch.checkedChanged.connect(
+                lambda checked, name=f"line_band_{key}_enabled": (
+                    host._update_style(_force_global=True, **{name: bool(checked)})
                 )
-                self._add_canvas_spin(
-                    add, f"_line_band_{prefix}_offset_y_spin", "偏移 Y", -300, 300,
-                    f"line_band_{prefix}_offset_y_px", "hard", suffix=" px",
-                    force_global=True,
-                )
-            return box
+            )
+            setattr(host, f"_line_band_{key}_switch", switch)
+            add("启用", switch)
 
-        effect_group("图层效果 · 阴影", "shadow", offsets=True)
-        effect_group("图层效果 · 描边", "stroke")
-        effect_group("图层效果 · 发光", "glow")
+            self._add_color(
+                add, f"_line_band_{key}_color_btn", "颜色",
+                f"line_band_{key}_color", force_global=True,
+            )
+            if key == "shadow":
+                # PS 图层样式 · 投影：模糊(大小) / 扩展 / 距离 / 角度
+                self._add_canvas_spin(
+                    add, "_line_band_shadow_size_spin", "模糊", 0, 80,
+                    "line_band_shadow_size_px", "hard", suffix=" px",
+                    force_global=True,
+                )
+                self._add_canvas_spin(
+                    add, "_line_band_shadow_spread_spin", "扩展", 0, 100,
+                    "line_band_shadow_spread_pct", "hard", suffix=" %",
+                    force_global=True,
+                )
+                self._add_canvas_spin(
+                    add, "_line_band_shadow_distance_spin", "距离", 0, 200,
+                    "line_band_shadow_distance_px", "hard", suffix=" px",
+                    force_global=True,
+                )
+                self._add_canvas_spin(
+                    add, "_line_band_shadow_angle_spin", "角度", 0, 360,
+                    "line_band_shadow_angle_deg", "hard", suffix=" °",
+                    force_global=True,
+                )
+                host._line_band_shadow_size_spin.setToolTip("0 = 关闭投影")
+            elif key == "stroke":
+                # PS 图层样式 · 描边：宽度 / 位置（外/中/内）
+                self._add_canvas_spin(
+                    add, "_line_band_stroke_size_spin", "宽度", 0, 40,
+                    "line_band_stroke_size_px", "hard", suffix=" px",
+                    force_global=True,
+                )
+                host._line_band_stroke_size_spin.setToolTip("0 = 关闭描边")
+                host._line_band_stroke_position_combo = self._combo(
+                    page,
+                    (("外侧", "outside"), ("居中", "center"), ("内侧", "inside")),
+                    "line_band_stroke_position",
+                    force_global=True,
+                )
+                add("位置", host._line_band_stroke_position_combo)
+            else:
+                # PS 图层样式 · 外发光：大小 / 扩展 / 范围
+                self._add_canvas_spin(
+                    add, "_line_band_glow_size_spin", "大小", 0, 120,
+                    "line_band_glow_size_px", "hard", suffix=" px",
+                    force_global=True,
+                )
+                self._add_canvas_spin(
+                    add, "_line_band_glow_spread_spin", "扩展", 0, 100,
+                    "line_band_glow_spread_pct", "hard", suffix=" %",
+                    force_global=True,
+                )
+                self._add_canvas_spin(
+                    add, "_line_band_glow_range_spin", "范围", 0, 100,
+                    "line_band_glow_range_pct", "hard", suffix=" %",
+                    force_global=True,
+                )
+                host._line_band_glow_size_spin.setToolTip("0 = 关闭发光")
+
+        def show_fx_page(key: str) -> None:
+            for name, widget in host._line_band_fx_pages.items():
+                widget.setVisible(name == key)
+
+        host._line_band_fx_pill.currentItemChanged.connect(show_fx_page)
+        show_fx_page("shadow")
         section.set_expanded(False)
         return section
 
@@ -1287,7 +1372,7 @@ class EffectsPropertyPageBuilder:
 
     def _add_canvas_spin(
         self,
-        add: Callable[[str | None, QWidget], None],
+        add: Callable[[str | None, QWidget], Any],
         attribute: str,
         label: str,
         minimum: int,
@@ -1298,7 +1383,7 @@ class EffectsPropertyPageBuilder:
         suffix: str = "",
         transform: Callable[[int], Any] = lambda value: value,
         force_global: bool = False,
-    ) -> None:
+    ) -> QWidget:
         host = self._host
         control = CanvasSliderSpinBox(
             self._spin_factory(minimum, maximum, suffix=suffix)
@@ -1321,11 +1406,11 @@ class EffectsPropertyPageBuilder:
                 _force_global=global_scope, **{field: convert(value)}
             )
         )
-        add(label, control)
+        return add(label, control)
 
     def _add_spin(
         self,
-        add: Callable[[str | None, QWidget], None],
+        add: Callable[[str | None, QWidget], Any],
         attribute: str,
         label: str,
         minimum: int,
@@ -1350,20 +1435,20 @@ class EffectsPropertyPageBuilder:
 
     def _add_color(
         self,
-        add: Callable[[str | None, QWidget], None],
+        add: Callable[[str | None, QWidget], Any],
         attribute: str,
         label: str,
         model_field: str,
         *,
         force_global: bool = False,
-    ) -> None:
+    ) -> QWidget:
         host = self._host
         factory = (
             host._global_color_button if force_global else host._color_button
         )
         button = factory(model_field, getattr(host._style, model_field))
         setattr(host, attribute, button)
-        add(label, button)
+        return add(label, button)
 
     @staticmethod
     def _section_edge_block(

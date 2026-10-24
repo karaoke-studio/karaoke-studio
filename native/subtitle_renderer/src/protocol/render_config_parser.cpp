@@ -1107,7 +1107,8 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         const QString midMode = stringValue(
             style, QStringLiteral("line_band_mid_mode"), band.midMode
         );
-        band.midMode = midMode == QStringLiteral("stretch")
+        band.midMode = (midMode == QStringLiteral("stretch")
+            || midMode == QStringLiteral("cover"))
             ? midMode
             : QStringLiteral("repeat");
         band.capLeftPx = std::max(
@@ -1186,6 +1187,12 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
         band.lineColor = stringValue(
             style, QStringLiteral("line_band_line_color"), band.lineColor
         );
+        band.clefPath = stringValue(
+            style, QStringLiteral("line_band_clef_image"), band.clefPath
+        );
+        band.clefColor = stringValue(
+            style, QStringLiteral("line_band_clef_color"), band.clefColor
+        );
         const QString edgeKind = stringValue(
             style, QStringLiteral("line_band_edge_kind"), band.edgeKind
         );
@@ -1207,8 +1214,9 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             const QString prefix = QStringLiteral("line_band_%1_").arg(
                 QString::fromUtf8(pair.first)
             );
-            effect.enabled = style.value(prefix + QStringLiteral("enabled"))
-                .toBool(effect.enabled);
+            effect.enabled = style.value(
+                prefix + QStringLiteral("enabled")
+            ).toBool(effect.enabled);
             effect.color = stringValue(
                 style, prefix + QStringLiteral("color"), effect.color
             );
@@ -1217,19 +1225,25 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
                     style, prefix + QStringLiteral("size_px"), effect.sizePx
                 )
             );
-            effect.offsetXPx = intValue(
-                style, prefix + QStringLiteral("offset_x_px"), effect.offsetXPx
+            effect.spreadPct = std::clamp(
+                intValue(style, prefix + QStringLiteral("spread_pct"), 0), 0, 100
             );
-            effect.offsetYPx = intValue(
-                style, prefix + QStringLiteral("offset_y_px"), effect.offsetYPx
+            effect.rangePct = std::clamp(
+                intValue(style, prefix + QStringLiteral("range_pct"), 50), 1, 100
             );
-            effect.opacityPct = std::clamp(
-                intValue(
-                    style, prefix + QStringLiteral("opacity_pct"),
-                    effect.opacityPct
-                ),
-                0, 100
+            effect.distancePx = std::max(
+                0, intValue(style, prefix + QStringLiteral("distance_px"), 0)
             );
+            effect.angleDeg = intValue(
+                style, prefix + QStringLiteral("angle_deg"), 135
+            );
+            const QString position = stringValue(
+                style, prefix + QStringLiteral("position"),
+                QStringLiteral("outside")
+            );
+            effect.position = (position == QStringLiteral("center")
+                || position == QStringLiteral("inside"))
+                ? position : QStringLiteral("outside");
         }        band.edgeColor = stringValue(
             style, QStringLiteral("line_band_edge_color"), band.edgeColor
         );

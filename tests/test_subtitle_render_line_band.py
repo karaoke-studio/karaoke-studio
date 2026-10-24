@@ -76,7 +76,8 @@ def test_every_preset_resolves_to_an_existing_png():
         assert preset.image_spec == "preset:" + preset.preset_id
         path = resolve_band_image(preset.image_spec)
         assert path is not None and path.is_file(), preset.preset_id
-        assert path.suffix.lower() == ".png"
+        # 静态预设是 PNG，动图预设（星火/水泡/五线谱）是循环 animated WebP。
+        assert path.suffix.lower() in {".png", ".webp"}, preset.preset_id
 
 
 def test_preset_lookup_and_tint_metadata():
@@ -260,10 +261,12 @@ def test_band_edge_glow_grows_beyond_the_band_rect(qapp):
             line_band_edge_opacity_pct=90,
         )
     )
-    assert glow[0] < base[0] - 6
-    assert glow[1] < base[1] - 6
-    assert glow[2] > base[2] + 6
-    assert glow[3] > base[3] + 6
+    # 发光/描边/阴影的尺寸按素材像素给（带子按高度等比缩放），这里只守
+    # 「四边都往外长」这个语义；具体像素数随带高缩放。
+    assert glow[0] < base[0]
+    assert glow[1] < base[1]
+    assert glow[2] > base[2]
+    assert glow[3] > base[3]
 
 
 def test_band_is_painted_beside_the_text_and_absent_when_disabled(qapp):
@@ -346,6 +349,10 @@ def test_preset_middle_tiles_wrap_without_a_visible_seam():
     import numpy as np
 
     for preset in BAND_PRESETS:
+        # 只有默认「三段式」的预设才靠中段平铺：花纹类预设默认「裁切（覆盖）」，
+        # 整图等比覆盖不平铺，素材不需要自我循环（用户口径 2026-10-24）。
+        if preset.default_fill_mode != "three_slice":
+            continue
         image = QImage(str(preset.path)).convertToFormat(
             QImage.Format.Format_RGBA8888
         )
@@ -363,6 +370,115 @@ def test_preset_middle_tiles_wrap_without_a_visible_seam():
             f"{preset.preset_id}: 中段首尾列差 {seam:.2f} 远大于内部 "
             f"{interior:.2f}，平铺会出现明显竖缝"
         )
+
+
+def test_animated_band_gif_picks_frames_by_time(qapp, tmp_path):
+    """GIF 行背景要真的动起来：按累积帧时长选帧，CPU 与 sidecar 同契约。"""
+    from PIL import Image, ImageDraw
+
+    from krok_helper.subtitle_render.domain.models import Style
+    from krok_helper.subtitle_render.engine.render.elements.band import (
+        BAND_ANIM_MAX_FRAMES,
+        animated_band_frames,
+        band_spec,
+        paint_band,
+    )
+
+    frames = []
+    for color in ((255, 40, 40, 255), (40, 255, 80, 255), (40, 120, 255, 255)):
+        frame = Image.new("RGBA", (480, 60), (0, 0, 0, 0))
+        ImageDraw.Draw(frame).rectangle([0, 10, 480, 50], fill=color)
+        frames.append(frame)
+    gif_path = tmp_path / "band.gif"
+    frames[0].save(
+        str(gif_path), save_all=True, append_images=frames[1:],
+        duration=100, loop=0, disposal=2,
+    )
+
+    animated = animated_band_frames(str(gif_path))
+    assert animated is not None
+    decoded, delays = animated
+    assert len(decoded) == 3
+    assert len(decoded) <= BAND_ANIM_MAX_FRAMES
+    assert delays == (100, 100, 100)
+
+    style = Style(
+        line_band_enabled=True,
+        line_band_image=str(gif_path),
+        line_band_fill_mode="cover",
+    )
+    spec = band_spec(style)
+    sampled = []
+    for t_ms in (0, 150, 250):
+        canvas = QImage(240, 60, QImage.Format.Format_ARGB32_Premultiplied)
+        canvas.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(canvas)
+        try:
+            paint_band(painter, QRectF(0, 0, 240, 60), spec, t_ms)
+        finally:
+            painter.end()
+        sampled.append(canvas.pixelColor(120, 30).name())
+    assert len(set(sampled)) >= 2, sampled
+
+
+def _transparent_pixels(image: QImage) -> int:
+    import numpy as np
+
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    alpha = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        image.height(), image.bytesPerLine() // 4, 4
+    )[:, : image.width(), 3]
+    return int((alpha < 255).sum())
+
+
+def _translucent_pixels(image: QImage) -> int:
+    import numpy as np
+
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    alpha = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        image.height(), image.bytesPerLine() // 4, 4
+    )[:, : image.width(), 3]
+    return int(((alpha > 0) & (alpha < 255)).sum())
+
+
+def test_shipped_animated_presets_loop_on_the_first_frame():
+    """随包动图预设必须**首尾严格同帧**、60 帧 × 20ms，而且带真半透明。
+
+    2026-10-24 用户实测「循环不完整、第一帧不是最后一帧」。当时素材是 GIF：
+    每帧单独配调色板，个别帧的透明下标没落到任何像素上——解码出来整帧不透明，
+    每个循环闪一块实心色板；首帧用全局调色板、末帧用局部调色板，同样的内容也
+    会量化出不同像素。现在动图预设改成 animated WebP（8 bit alpha），这条守住
+    「首尾同帧 + 时长 + 半透明确实是半透明（不是被压成 0/255）」。
+    """
+    from krok_helper.subtitle_render.engine.render.elements.band import (
+        animated_band_frames,
+    )
+
+    animated_presets = [
+        preset for preset in BAND_PRESETS
+        if preset.path.suffix.lower() == ".webp"
+    ]
+    assert animated_presets, "至少要有星火/水泡/五线谱三个动图预设"
+    for preset in animated_presets:
+        animated = animated_band_frames(str(preset.path))
+        assert animated is not None, preset.preset_id
+        frames, delays = animated
+        assert len(frames) == 60, preset.preset_id
+        assert set(delays) == {20}, preset.preset_id
+        assert sum(delays) == 1200, preset.preset_id
+        # 首尾严格同帧（像素级，透明区也一致）
+        assert frames[0] == frames[-1], preset.preset_id
+        # 真的在动（不能整段静止）
+        assert frames[0] != frames[1], preset.preset_id
+        for index, frame in enumerate(frames):
+            assert _transparent_pixels(frame) > 0, (
+                f"{preset.preset_id}[{index}] 整帧不透明，播放时会闪一块色板"
+            )
+        if preset.preset_id == "bubbles":
+            # 水泡的淡填充必须是真半透明，不能退化成 0/255
+            assert _translucent_pixels(frames[0]) > 1000, preset.preset_id
 
 
 def test_band_fields_survive_project_roundtrip():
@@ -408,3 +524,54 @@ def test_native_mid_strip_is_drawn_from_the_strip_not_the_source_bitmap():
     branch = source[start:start + 1200]
     assert "drawBandPiece(midStrip," in branch
     assert "drawBandPiece(bitmap," not in branch
+
+@pytest.mark.parametrize("kind", ["shadow", "glow", "stroke"])
+@pytest.mark.parametrize("fill_mode", ["stretch", "three_slice", "cover", "repeat"])
+def test_painter_effects_follow_displayed_gif_alpha(qapp, tmp_path, kind, fill_mode):
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    frames = []
+    for x in (12, 65, None):
+        frame = Image.new("RGBA", (100, 64), (0, 0, 0, 0))
+        if x is not None:
+            ImageDraw.Draw(frame).rectangle((x, 15, x + 18, 45), fill="white")
+        frames.append(frame)
+    path = tmp_path / "alpha.gif"
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=400, disposal=2, loop=0)
+    spec = band_spec(_style(
+        line_band_image=str(path), line_band_fill_mode=fill_mode,
+        line_band_cap_left_px=10, line_band_cap_right_px=10,
+        line_band_mid_mode="stretch", line_band_shadow_distance_px=0,
+        **{f"line_band_{kind}_enabled": True, f"line_band_{kind}_size_px": 6,
+           f"line_band_{kind}_color": "#FF0000"},
+    ))
+    masks = []
+    for t in (0, 400, 800, 1200):
+        canvas = QImage(300, 180, QImage.Format.Format_RGBA8888)
+        canvas.fill(0)
+        painter = QPainter(canvas)
+        try:
+            paint_band(painter, QRectF(30, 30, 240, 100), spec, t)
+        finally:
+            painter.end()
+        bits = canvas.constBits()
+        bits.setsize(canvas.sizeInBytes())
+        rgba = np.frombuffer(bytes(bits), np.uint8).reshape(180, 300, 4).astype(int)
+        masks.append((rgba[:, :, 0] > rgba[:, :, 1] + 30) & (rgba[:, :, 3] > 10))
+    assert masks[0].sum() > 20 and masks[1].sum() > 20
+    assert not masks[2].any()
+    assert not np.array_equal(masks[0], masks[1])
+    assert np.array_equal(masks[0], masks[3])
+
+
+def test_band_effect_keeps_faint_alpha_and_color_opacity(qapp):
+    from krok_helper.subtitle_render.engine.render.elements.band import BandEffect, _edge_source
+
+    image = QImage(40, 40, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(255, 255, 255, 32))
+    spec = band_spec(_style())
+    edge, pad = _edge_source(spec, image, BandEffect("stroke", "#80FF0000", 2))
+    # Do not binarize faint alpha away; the effect color's alpha must also apply.
+    assert 14 <= edge.pixelColor(20 + pad, 20 + pad).alpha() <= 18

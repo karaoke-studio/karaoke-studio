@@ -15,15 +15,24 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QRect, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QTransform
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QImage,
+    QImageReader,
+    QPainter,
+    QTransform,
+)
 
 from krok_helper.subtitle_render.domain.band_presets import (
+    default_clef_color_for,
     default_line_color_for,
+    resolve_band_clef_image,
     resolve_band_image,
     resolve_band_lines_image,
 )
@@ -33,6 +42,7 @@ _TILE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _STRIP_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_CACHE_MAX = 16
 _IMAGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+_RASTER_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _EDGE_CACHE_MAX = 8
 _EDGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _LINE_CACHE_MAX = 8
@@ -56,9 +66,12 @@ class BandSpec:
     # 端点显示多宽，不会让中段把谱号等端点图案再铺一遍。自定义图等于 0。
     src_cap_left: int = 0
     src_cap_right: int = 0
-    # 独立谱线层（如五线谱）：路径 + 上色颜色。
+    # 独立谱线层 / 谱号层（如五线谱）：路径 + 各自上色颜色。
     line_image_path: str = ""
     line_color: str = ""
+    clef_image_path: str = ""
+    clef_color: str = ""
+    base_image_path: str = ""
     # 图层效果（PS 图层样式口径）：每一种都有独立开关与配置，可以同时开。
     shadow: Optional["BandEffect"] = None
     stroke: Optional["BandEffect"] = None
@@ -71,10 +84,12 @@ class BandEffect:
 
     kind: str
     color: str = "#000000"
-    size_px: int = 12
-    opacity_pct: int = 70
+    size_px: int = 0
     offset_x_px: int = 0
     offset_y_px: int = 0
+    spread_pct: int = 0
+    range_pct: int = 50
+    position: str = "outside"
 
 
 def band_spec(style) -> Optional[BandSpec]:
@@ -89,6 +104,10 @@ def band_spec(style) -> Optional[BandSpec]:
     line_color = str(getattr(style, "line_band_line_color", "") or "")
     if not line_color:
         line_color = default_line_color_for(image_spec)
+    clef_path = resolve_band_clef_image(image_spec)
+    clef_color = str(getattr(style, "line_band_clef_color", "") or "")
+    if not clef_color:
+        clef_color = default_clef_color_for(image_spec)
     cap_left = max(int(style.line_band_cap_left_px), 0)
     cap_right = max(int(style.line_band_cap_right_px), 0)
     # 三段式切点 = 用户端点：0/1/2 三份按滑条切，切掉的部分会出现在中段
@@ -96,26 +115,27 @@ def band_spec(style) -> Optional[BandSpec]:
     src_cap_left, src_cap_right = cap_left, cap_right
 
     def effect(prefix: str, *, offsets: bool = False) -> Optional[BandEffect]:
+        distance = float(getattr(style, "line_band_shadow_distance_px", 3))
+        angle = float(getattr(style, "line_band_shadow_angle_deg", 135))
+        # 独立开关 + 尺寸：开关关闭或尺寸为 0 都等于不画（用户口径 2026-10-24）。
         if not bool(getattr(style, f"line_band_{prefix}_enabled", False)):
+            return None
+        size = max(int(getattr(style, f"line_band_{prefix}_size_px", 0)), 0)
+        if size <= 0:
             return None
         return BandEffect(
             kind=prefix,
+            spread_pct=int(getattr(style, f"line_band_{prefix}_spread_pct", 0)),
+            range_pct=int(getattr(style, "line_band_glow_range_pct", 50)),
+            position=str(getattr(style, "line_band_stroke_position", "outside")),
             color=str(getattr(style, f"line_band_{prefix}_color", "") or "#000000"),
-            size_px=max(int(getattr(style, f"line_band_{prefix}_size_px", 12)), 0),
-            opacity_pct=max(
-                min(int(getattr(style, f"line_band_{prefix}_opacity_pct", 70)), 100),
-                0,
-            ),
-            offset_x_px=(
-                int(getattr(style, "line_band_shadow_offset_x_px", 8))
-                if offsets
-                else 0
-            ),
-            offset_y_px=(
-                int(getattr(style, "line_band_shadow_offset_y_px", 8))
-                if offsets
-                else 0
-            ),
+            size_px=size,
+            offset_x_px=int(round(
+                math.cos(math.radians(angle)) * distance
+            )) if offsets else 0,
+            offset_y_px=int(round(
+                math.sin(math.radians(angle)) * distance
+            )) if offsets else 0,
         )
 
     shadow = effect("shadow", offsets=True)
@@ -128,19 +148,15 @@ def band_spec(style) -> Optional[BandSpec]:
         if legacy in {"shadow", "stroke", "glow"}:
             legacy_effect = BandEffect(
                 kind=legacy,
+                # 旧字段没有「扩展」，按旧行为把剪影先膨胀一个 size，
+                # 保证发光/投影确实长到轮廓之外。
+                spread_pct=100 if legacy in {"glow", "shadow"} else 0,
                 color=str(
                     getattr(style, "line_band_edge_color", "#000000")
                     or "#000000"
                 ),
                 size_px=max(
-                    int(getattr(style, "line_band_edge_size_px", 12)), 0
-                ),
-                opacity_pct=max(
-                    min(
-                        int(getattr(style, "line_band_edge_opacity_pct", 70)),
-                        100,
-                    ),
-                    0,
+                    int(getattr(style, "line_band_edge_size_px", 12)), 1
                 ),
                 offset_x_px=int(
                     getattr(style, "line_band_edge_offset_x_px", 8)
@@ -168,6 +184,8 @@ def band_spec(style) -> Optional[BandSpec]:
         src_cap_right=src_cap_right,
         line_image_path=str(lines_path) if lines_path is not None else "",
         line_color=line_color if lines_path is not None else "",
+        clef_image_path=str(clef_path) if clef_path is not None else "",
+        clef_color=clef_color if clef_path is not None else "",
         shadow=shadow,
         stroke=stroke,
         glow=glow,
@@ -191,14 +209,102 @@ def band_rect(text_rect: QRectF, style, ruby_top: Optional[float] = None) -> QRe
     return QRectF(left, top, max(right - left, 1.0), max(bottom - top, 1.0))
 
 
-def _band_layers(spec: BandSpec) -> tuple[Optional[QImage], Optional[QImage]]:
-    """加载素材本体（已上色）与谱线层（已按谱线色 multiply），带缓存。"""
+# 动图行背景（GIF/动画 WebP）：帧上限与最小帧时长必须与 sidecar 一致，
+# 否则预览与导出的选帧会来回跳。
+BAND_ANIM_MAX_FRAMES = 4096   # 仅防损坏文件的保险丝：用户 GIF 必须完整保留
+BAND_ANIM_MIN_FRAME_MS = 10
+_ANIMATED_BAND_CACHE_MAX = 4
+_ANIMATED_BAND_CACHE: "OrderedDict[tuple, Optional[tuple]]" = OrderedDict()
+
+
+def animated_band_frames(
+    path: str,
+) -> Optional[tuple[tuple[QImage, ...], tuple[int, ...]]]:
+    """解码动图行背景的全部帧（上限 ``BAND_ANIM_MAX_FRAMES``）。
+
+    返回 ``(frames, delays_ms)``；静态图或解码失败返回 ``None``（并记住
+    「不是动图」，避免每帧都重新问一次 ``imageCount``）。
+    """
+    if not path:
+        return None
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    cached = _ANIMATED_BAND_CACHE.get(key)
+    if cached is not None or key in _ANIMATED_BAND_CACHE:
+        _ANIMATED_BAND_CACHE.move_to_end(key)
+        return cached
+    frames: list[QImage] = []
+    delays: list[int] = []
+    try:
+        reader = QImageReader(path)
+        count = int(reader.imageCount())
+        if count > 1:
+            # 不截断用户 GIF：帧数完整保留 → 总时长/循环点与文件一致。
+            # 上限只用于拦损坏文件（声明几万帧的那种）。
+            limit = min(count, BAND_ANIM_MAX_FRAMES)
+            while len(frames) < limit:
+                image = reader.read()
+                if image.isNull():
+                    break
+                frames.append(
+                    image.convertToFormat(
+                        QImage.Format.Format_ARGB32_Premultiplied
+                    )
+                )
+                delays.append(
+                    max(int(reader.nextImageDelay() or 0), BAND_ANIM_MIN_FRAME_MS)
+                )
+    except Exception:
+        frames = []
+    result = None
+    if len(frames) > 1:
+        result = (tuple(frames), tuple(delays))
+    _ANIMATED_BAND_CACHE[key] = result
+    while len(_ANIMATED_BAND_CACHE) > _ANIMATED_BAND_CACHE_MAX:
+        _ANIMATED_BAND_CACHE.popitem(last=False)
+    return result
+
+
+def band_frame_index(delays_ms: tuple[int, ...], t_ms: int) -> int:
+    """按累积延时表循环取帧下标（与 sidecar 的 WIC 选帧同契约）。"""
+    if not delays_ms:
+        return 0
+    total = sum(delays_ms)
+    if total <= 0:
+        return 0
+    position = max(int(t_ms), 0) % total
+    cumulative = 0
+    for index, delay in enumerate(delays_ms):
+        cumulative += delay
+        if position < cumulative:
+            return index
+    return len(delays_ms) - 1
+
+
+def _band_layers(
+    spec: BandSpec, frame_index: int = 0
+) -> tuple[Optional[QImage], Optional[QImage]]:
+    """加载素材本体（已上色）与谱线层（已按谱线色 multiply），带缓存。
+
+    ``frame_index`` 对动图（GIF）生效：取对应帧作为素材本体。
+    """
     path = Path(spec.image_path)
     try:
-        stat = path.stat()
+        path.stat()
     except OSError:
         return None, None
-    base = QImage(str(path))
+    animated = animated_band_frames(str(path))
+    if animated is not None:
+        frames, _delays = animated
+        if 0 <= frame_index < len(frames):
+            base = frames[frame_index].copy()
+        else:
+            base = frames[0].copy()
+    else:
+        base = QImage(str(path))
     if base.isNull():
         return None, None
     strength = spec.tint_strength_pct if spec.tint else 0
@@ -208,7 +314,7 @@ def _band_layers(spec: BandSpec) -> tuple[Optional[QImage], Optional[QImage]]:
     return base, lines
 
 
-def band_source(spec: BandSpec) -> Optional[QImage]:
+def band_source(spec: BandSpec, t_ms: int = 0) -> Optional[QImage]:
     """整条带子的完整图案（缓存）：素材本体 + 谱线层合成一张。
 
     投影/发光按「整张图作为整体」计算，所以合成必须发生在描边之前——调用
@@ -230,27 +336,35 @@ def band_source(spec: BandSpec) -> Optional[QImage]:
             lines_key = (str(lines_path), int(lines_stat.st_mtime_ns),
                          int(lines_stat.st_size))
     strength = spec.tint_strength_pct if spec.tint else 0
+    animated = animated_band_frames(str(path))
+    frame_index = 0
+    if animated is not None:
+        frame_index = band_frame_index(animated[1], t_ms)
     key = (str(path), int(stat.st_mtime_ns), int(stat.st_size),
            spec.tint, strength, lines_key,
-           spec.line_color if lines_path is not None else "")
+           spec.line_color if lines_path is not None else "",
+           frame_index)
     cached = _IMAGE_CACHE.get(key)
     if cached is not None:
         _IMAGE_CACHE.move_to_end(key)
         return cached
 
-    base, lines = _band_layers(spec)
+    base, lines = _band_layers(spec, frame_index)
     if base is None:
         return None
-    if lines is not None:
+    clef = _clef_source(spec)
+    if lines is not None or clef is not None:
         composite = QImage(
             base.size(), QImage.Format.Format_ARGB32_Premultiplied
         )
         composite.fill(0)
         painter = QPainter(composite)
         try:
-            # 图层顺序：谱线层（含谱号/终止线）在下，素材本体（彩色音符）
-            # 在上——用户口径 2026-10-24：音符要在五线谱**图层上方**。
-            painter.drawImage(0, 0, lines)
+            # 图层顺序：谱线 → 谱号/升号 → 素材本体（音符在上）。
+            if lines is not None:
+                painter.drawImage(0, 0, lines)
+            if clef is not None:
+                painter.drawImage(0, 0, clef)
             painter.drawImage(0, 0, base.convertToFormat(
                 QImage.Format.Format_ARGB32_Premultiplied
             ))
@@ -304,9 +418,11 @@ def band_artwork(spec: BandSpec) -> Optional[QImage]:
         composite.fill(0)
         painter = QPainter(composite)
         try:
-            # 图层顺序：谱线层（含谱号/终止线）在下，素材本体（彩色音符）
-            # 在上——用户口径 2026-10-24：音符要在五线谱**图层上方**。
+            # 图层顺序：谱线 → 谱号/升号 → 素材本体。
             painter.drawImage(0, 0, lines)
+            clef_art = _clef_source(spec)
+            if clef_art is not None:
+                painter.drawImage(0, 0, clef_art)
             painter.drawImage(0, 0, base.convertToFormat(
                 QImage.Format.Format_ARGB32_Premultiplied
             ))
@@ -324,6 +440,7 @@ def clear_band_image_cache() -> None:
     _TILE_CACHE.clear()
     _STRIP_CACHE.clear()
     _EDGE_CACHE.clear()
+    _RASTER_CACHE.clear()
     _LINE_CACHE.clear()
 
 
@@ -354,69 +471,55 @@ def _tinted(image: QImage, color: str, strength_pct: int) -> QImage:
     return tinted
 
 
-def paint_band(painter: QPainter, rect: QRectF, spec: BandSpec) -> None:
-    """Draw one band into ``rect`` (already in line-local coordinates)."""
-    image = band_source(spec)
+def paint_band(
+    painter: QPainter, rect: QRectF, spec: BandSpec, t_ms: int = 0
+) -> None:
+    """Effects consume the displayed current-frame alpha, after all layout modes."""
+    image = band_source(spec, t_ms)
     if image is None or rect.width() <= 0 or rect.height() <= 0:
         return
     painter.save()
     try:
         painter.setOpacity(painter.opacity() * spec.opacity_pct / 100.0)
-        for effect in (spec.shadow, spec.glow, spec.stroke):
-            if effect is None:
-                continue
-            edge = _edge_source(spec, image, effect)
-            if edge is None:
-                continue
-            base_opacity = painter.opacity()
-            if effect.kind == "shadow":
-                painter.save()
-                try:
-                    painter.setOpacity(
-                        base_opacity * effect.opacity_pct / 100.0
-                    )
-                    painter.translate(effect.offset_x_px, effect.offset_y_px)
-                    _paint_mode(painter, rect, edge, spec)
-                finally:
-                    painter.restore()
-            elif effect.kind == "stroke":
-                # 图层描边（PS Stroke）：未模糊剪影绕圆周整片铺开，合成图随后
-                # 盖住内部，只剩外圈一圈实心描边。
-                radius = max(float(effect.size_px), 1.0)
-                steps = 24
-                for index in range(steps):
-                    angle = math.tau * index / float(steps)
-                    painter.save()
-                    try:
-                        painter.setOpacity(
-                            min(base_opacity * effect.opacity_pct / 100.0, 1.0)
-                        )
-                        painter.translate(
-                            math.cos(angle) * radius,
-                            math.sin(angle) * radius,
-                        )
-                        _paint_mode(painter, rect, edge, spec)
-                    finally:
-                        painter.restore()
-            else:
-                # 发光：模糊剪影绕圆周多次轻叠，向外扩出轮廓。
-                radius = max(float(effect.size_px), 1.0)
-                steps = 16 if radius >= 8.0 else 8
-                per_step = effect.opacity_pct / 100.0 / float(steps) * 2.0
-                for index in range(steps):
-                    angle = math.tau * index / float(steps)
-                    painter.save()
-                    try:
-                        painter.setOpacity(min(base_opacity * per_step, 1.0))
-                        painter.translate(
-                            math.cos(angle) * radius,
-                            math.sin(angle) * radius,
-                        )
-                        _paint_mode(painter, rect, edge, spec)
-                    finally:
-                        painter.restore()        # 素材本体与谱线层已经合成在 `image` 里（`band_source`）：整条带子
-        # 作为**一张图**参与切片与描边，避免两层各自切片/各自描边。
-        _paint_mode(painter, rect, image, spec)
+        effects = [effect for effect in (spec.shadow, spec.glow, spec.stroke)
+                   if effect is not None]
+        if not effects:
+            _paint_mode(painter, rect, image, spec)
+            return
+        scale = rect.height() / max(float(image.height()), 1.0)
+        key = (int(image.cacheKey()), rect.width(), rect.height(), spec.fill_mode,
+               spec.cap_left, spec.cap_right, spec.src_cap_left, spec.src_cap_right,
+               spec.mid_mode)
+        raster = _RASTER_CACHE.get(key)
+        if raster is None:
+            raster = QImage(math.ceil(rect.width()), math.ceil(rect.height()),
+                            QImage.Format.Format_ARGB32_Premultiplied)
+            raster.fill(0)
+            layer = QPainter(raster)
+            try:
+                _paint_mode(layer, QRectF(0, 0, rect.width(), rect.height()), image, spec)
+            finally:
+                layer.end()
+            _RASTER_CACHE[key] = raster
+            while len(_RASTER_CACHE) > 8:
+                _RASTER_CACHE.popitem(last=False)
+        _RASTER_CACHE.move_to_end(key)
+        for above in (False, True):
+            if above:
+                painter.drawImage(rect.topLeft(), raster)
+            for effect in effects:
+                over = effect.kind == "stroke" and effect.position != "outside"
+                if above != over:
+                    continue
+                scaled = replace(effect, size_px=max(1, round(effect.size_px * scale)))
+                result = _edge_source(spec, raster, scaled)
+                if result is None:
+                    continue
+                edge, pad = result
+                dx = effect.offset_x_px if effect.kind == "shadow" else 0
+                dy = effect.offset_y_px if effect.kind == "shadow" else 0
+                painter.drawImage(QRectF(rect.left() - pad + dx, rect.top() - pad + dy,
+                                        edge.width(), edge.height()), edge)
     finally:
         painter.restore()
 
@@ -434,55 +537,119 @@ def _paint_mode(
         painter.drawImage(rect, image, QRectF(image.rect()))
 
 
+def _qimage_alpha(image: QImage):
+    """QImage → numpy alpha 平面（0..255）。"""
+    import numpy as np
+
+    width, height = image.width(), image.height()
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    array = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        height, image.bytesPerLine() // 4, 4
+    )[:, :width, :]
+    return array[:, :, 3].copy()
+
+
+def _alpha_to_image(alpha, color: str) -> QImage:
+    """alpha 平面 + 颜色 → 预乘 ARGB32 的 QImage。"""
+    import numpy as np
+
+    height, width = alpha.shape
+    rgba = np.zeros((height, width, 4), np.uint8)
+    rgba[:, :, 0] = QColor(color).blue()
+    rgba[:, :, 1] = QColor(color).green()
+    rgba[:, :, 2] = QColor(color).red()
+    rgba[:, :, 3] = (alpha.astype("float32") * QColor(color).alphaF()).round().astype("uint8")
+    buffer = np.ascontiguousarray(rgba)
+    image = QImage(
+        buffer.data, width, height, width * 4,
+        QImage.Format.Format_ARGB32,
+    ).copy()
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+
+
 def _edge_source(
     spec: BandSpec, image: QImage, effect: "BandEffect"
-) -> Optional[QImage]:
-    """把整张带子图的 alpha 压成该效果色的剪影；阴影/发光再按半径模糊。"""
+) -> Optional[tuple[QImage, int]]:
+    """按 PS 图层样式的标准算法生成效果位图。
+
+    * 剪影：当前显示图的原始 alpha，保留半透明边缘；
+    * 扩展 spread：先做形态学膨胀（`spread% × size`），再做模糊/描边；
+    * 阴影/发光：真高斯模糊（`ImageFilter.GaussianBlur`，σ≈size/2）；
+    * 描边：不模糊，按位置（外/中/内）膨胀/收缩；
+    * 发光 range：控制衰减曲线（PS「范围」）。
+    """
+    from PIL import Image, ImageFilter
+
+    size = max(int(effect.size_px), 0)
+    if size <= 0:
+        return None
+    spread_px = int(round(size * max(min(effect.spread_pct, 100), 0) / 100.0))
     key = (
         int(image.cacheKey()),
         effect.kind,
         effect.color,
-        int(effect.size_px),
+        size,
+        spread_px,
+        int(effect.range_pct),
+        effect.position,
     )
     cached = _EDGE_CACHE.get(key)
     if cached is not None:
         _EDGE_CACHE.move_to_end(key)
         return cached
-    silhouette = QImage(image.size(), QImage.Format.Format_ARGB32_Premultiplied)
-    silhouette.fill(0)
-    painter = QPainter(silhouette)
-    try:
-        painter.drawImage(0, 0, image)
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_SourceIn
+
+    alpha = _qimage_alpha(image)
+    # pad：模糊/膨胀都要长到轮廓之外
+    pad = size * 3 if effect.kind in {"glow", "shadow"} else size + spread_px
+    if pad > 0:
+        import numpy as np
+
+        alpha = np.pad(alpha, pad, mode="constant", constant_values=0)
+    plane = Image.fromarray(alpha)
+    if spread_px > 0:
+        # 形态学膨胀：MaxFilter 的窗口必须是奇数
+        plane = plane.filter(
+            ImageFilter.MaxFilter(2 * spread_px + 1)
         )
-        color = QColor(effect.color)
-        if not color.isValid():
-            color = QColor("#000000")
-        painter.fillRect(silhouette.rect(), color)
-    finally:
-        painter.end()
-    radius = max(int(effect.size_px), 0)
-    if radius > 0 and effect.kind in {"glow", "shadow"}:
-        # 降采样再放大 ≈ 可分离模糊；比逐像素卷积快得多，效果对发光足够。
-        step = max(2, min(radius, max(image.width() // 4, 2)))
-        for _ in range(2):
-            small = silhouette.scaled(
-                max(int(silhouette.width() / step), 1),
-                max(int(silhouette.height() / step), 1),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            silhouette = small.scaled(
-                image.width(),
-                image.height(),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-    _EDGE_CACHE[key] = silhouette
+    if effect.kind in {"glow", "shadow"}:
+        plane = plane.filter(ImageFilter.GaussianBlur(max(size * 0.7, 0.6)))
+    elif effect.kind == "stroke":
+        # 外侧：膨胀后直接盖在带子下面，露出的就是外圈；
+        # 居中/内侧：先只保留「原轮廓之外/之内」的部分。
+        import numpy as np
+
+        if effect.position == "center":
+            half = max(size // 2, 1)
+            outer = np.asarray(plane.filter(ImageFilter.MaxFilter(2 * half + 1)), np.int16)
+            inner = np.asarray(plane.filter(ImageFilter.MinFilter(2 * half + 1)), np.int16)
+            plane = Image.fromarray(np.clip(outer - inner, 0, 255).astype(np.uint8))
+        elif effect.position == "outside":
+            plane = plane.filter(ImageFilter.MaxFilter(2 * size + 1))
+        elif effect.position == "inside":
+            # 内描边：原轮廓 - 腐蚀(原轮廓)，即轮廓内侧一圈
+            solid = Image.fromarray(alpha)
+            if size > 0:
+                eroded = solid.filter(ImageFilter.MinFilter(2 * size + 1))
+            else:
+                eroded = solid
+            ring = np.clip(
+                np.asarray(solid, np.int16) - np.asarray(eroded, np.int16),
+                0, 255,
+            ).astype(np.uint8)
+            plane = Image.fromarray(ring)
+    result_alpha = np.asarray(plane, dtype=np.uint8)
+    if effect.kind == "glow" and effect.range_pct != 50:
+        import numpy as np
+
+        gamma = 50.0 / max(min(effect.range_pct, 100), 1)
+        curve = [round(255 * (v / 255.0) ** gamma) for v in range(256)]
+        result_alpha = np.asarray(plane.point(curve), dtype=np.uint8)
+    out = _alpha_to_image(result_alpha, effect.color)
+    _EDGE_CACHE[key] = (out, pad)
     while len(_EDGE_CACHE) > _EDGE_CACHE_MAX:
         _EDGE_CACHE.popitem(last=False)
-    return silhouette
+    return out, pad
 
 
 def _line_source(spec: BandSpec) -> Optional[QImage]:
@@ -514,6 +681,30 @@ def _line_source(spec: BandSpec) -> Optional[QImage]:
         _LINE_CACHE.popitem(last=False)
     return image
 
+
+def _clef_source(spec: BandSpec) -> Optional[QImage]:
+    """独立谱号层（含升降号）：白色素材 multiply 成谱号颜色。"""
+    path = spec.clef_image_path
+    if not path:
+        return None
+    color = spec.clef_color or "#FFFFFF"
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    key = (path, int(stat.st_mtime_ns), int(stat.st_size), color)
+    cached = _LINE_CACHE.get(key)
+    if cached is not None:
+        _LINE_CACHE.move_to_end(key)
+        return cached
+    image = QImage(path)
+    if image.isNull():
+        return None
+    image = _multiplied(image, color)
+    _LINE_CACHE[key] = image
+    while len(_LINE_CACHE) > _LINE_CACHE_MAX:
+        _LINE_CACHE.popitem(last=False)
+    return image
 
 def _multiplied(image: QImage, color: str) -> QImage:
     """逐像素乘色（保留 alpha 与素材内部的明暗/描边）。"""
@@ -633,6 +824,26 @@ def _paint_three_slice(painter, rect: QRectF, image: QImage, spec: BandSpec) -> 
         img_w - src_left - src_right, img_h,
     )
     mid_dest = QRectF(rect.left() + left_w, rect.top(), mid_w, rect.height())
+    if spec.mid_mode == "cover":
+        # 中段也用裁切（覆盖）：中段源图等比覆盖整段，居中裁掉溢出。
+        cover_scale = max(
+            mid_dest.width() / max(mid_src.width(), 1.0),
+            mid_dest.height() / max(mid_src.height(), 1.0),
+        )
+        cover_w = min(mid_dest.width() / cover_scale, mid_src.width())
+        cover_h = min(mid_dest.height() / cover_scale, mid_src.height())
+        _draw_slice(
+            painter,
+            mid_dest,
+            image,
+            QRectF(
+                mid_src.left() + (mid_src.width() - cover_w) / 2.0,
+                mid_src.top() + (mid_src.height() - cover_h) / 2.0,
+                cover_w,
+                cover_h,
+            ),
+        )
+        return
     if spec.mid_mode == "stretch":
         _draw_slice(painter, mid_dest, image, mid_src)
         return

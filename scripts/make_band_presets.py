@@ -2,7 +2,8 @@
 """行背景带预设素材生成器（开发用，不参与打包）。
 
 产出：
-  1. 五张预设 PNG -> krok_helper/assets/subtitle_render/band_presets/
+  1. 预设素材 -> krok_helper/assets/subtitle_render/band_presets/
+     静态预设是 PNG；动图预设（五线谱/星火/水泡）是循环 animated WebP。
   2. 评审用预览图（7 张）-> %TEMP%/lin-k-band-preview/
 
 依赖：Pillow + numpy（仅开发机需要，运行时不用）。
@@ -14,12 +15,14 @@
 
 import math
 import os
+import pathlib
 import random
 import tempfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import (Image, ImageChops, ImageDraw, ImageFilter, ImageFont,
+                 ImageSequence)
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "krok_helper" / "assets" / "subtitle_render" / "band_presets"
@@ -116,6 +119,21 @@ def put_wrapped(big, tw, cx, cy, sprite):
         big.alpha_composite(sprite, (int(x + off + tw), int(y)))
 
 
+def _tile_blit(canvas, x, y, sprite, left, tw):
+    """按循环单元平铺颗粒：x-tw / x / x+tw 各画一次，跨界处自动绕回。
+
+    中段（``left`` 起、宽 ``tw``）在运行时是横向重复的；颗粒只画一次的话，
+    跨界那颗会在平铺缝被切成两半，缝上出现「半个气泡/半颗星」。同口径的
+    静态预设用的是 ``put_wrapped``。
+    """
+    for offset in (-tw, 0, tw):
+        canvas.alpha_composite(
+            sprite,
+            (int(round(x + offset - sprite.width / 2)),
+             int(round(y - sprite.height / 2))),
+        )
+
+
 def tint(img, color):
     r, g, b, a = img.split()
     rgb = Image.merge("RGB", (r, g, b))
@@ -129,6 +147,17 @@ def bevel(img, top=44, bottom=88, height=7):
                                      (height / H, (255, 255, 255, 0))]))
     img.alpha_composite(vgrad(w, H, [(1 - height / H, (0, 0, 0, 0)),
                                      (1, (0, 0, 0, bottom))]))
+
+
+def add_glow(layer, radius=7, alpha=110):
+    """给一层素材加柔和外发光（镂空预设共用）。"""
+    blur = layer.split()[3].filter(ImageFilter.GaussianBlur(radius))
+    glow = Image.new("RGBA", layer.size, (255, 255, 255, 0))
+    glow.putalpha(blur.point(lambda v: int(v * alpha / 255)))
+    out = Image.new("RGBA", layer.size, (0, 0, 0, 0))
+    out.alpha_composite(glow)
+    out.alpha_composite(layer)
+    return out
 
 
 # ------------------------------------------------------- 1. anime-ish staff
@@ -261,10 +290,183 @@ def note_sprite(em_px, color, commands, supersample=4):
     return layer, (NOTE_HEAD_ANCHOR[0] * em_px, NOTE_HEAD_ANCHOR[1] * em_px)
 
 
+# ------------------------------------------------ Bravura（SMuFL, OFL 1.1）
+MUSIC_FONT = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "krok_helper" / "assets" / "subtitle_render" / "fonts" / "Bravura.otf"
+)
+_NOTEHEAD = "\uE0A4"      # SMuFL noteheadBlack
+_STEM_RATIO = 0.12         # 符干宽 = 0.12 个五线间距
+_STEM_SPACES = 3.5         # 符干长 = 3.5 个间距
+_BEAM_RATIO = 0.5          # 横梁厚 = 0.5 个间距
+_font_cache: dict[int, object] = {}
+_ink_cache: dict[int, tuple[int, int]] = {}
+
+
+def music_font(ss):
+    """按五线间距取 Bravura 字体（1 em = 4 个间距）。"""
+    em = int(ss * 4)
+    font = _font_cache.get(em)
+    if font is None:
+        font = ImageFont.truetype(str(MUSIC_FONT), em)
+        _font_cache[em] = font
+    return font
+
+
+def notehead_ink(ss):
+    """实测 noteheadBlack 的墨迹：(中线最右 x, 上沿 y)，相对谱头中心。"""
+    cached = _ink_cache.get(ss)
+    if cached is not None:
+        return cached
+    probe = Image.new("L", (400, 400), 0)
+    ImageDraw.Draw(probe).text((200, 200), _NOTEHEAD, font=music_font(ss),
+                               fill=255, anchor="mm")
+    px = probe.load()
+    right = max(x for x in range(400) if px[x, 200] > 40) - 200
+    top = min(y for y in range(400) for x in range(400) if px[x, y] > 40) - 200
+    _ink_cache[ss] = (right, top)
+    return right, top
+
+
+def bravura_note_sprite(ss, color, kind, tilt_deg=0.0):
+    """一颗完整的雕版音符（含符干/横梁）精灵，按 tilt_deg 整体倾斜。
+
+    kind: quarter / half / eighth_pair / sixteenth_pair
+    """
+    pad = int(ss * 2)
+    if kind in {"eighth_pair", "sixteenth_pair"}:
+        width = int(ss * 5.0)
+    else:
+        width = int(ss * 2.2)
+    height = int(ss * 5.2)
+    sprite = new(width + pad, height + pad)
+    d = ImageDraw.Draw(sprite)
+    ink_right, ink_top = notehead_ink(ss)
+    stem_w = max(2, int(round(ss * _STEM_RATIO)))
+    stem_right = ink_right
+    stem_left = stem_right - stem_w
+    stem_len = int(ss * _STEM_SPACES)
+    cx = pad + int(ss * 0.6)
+    cy = pad + height - int(ss * 1.6)          # 谱头中心
+    bottom = cy - int(abs(ink_top) * 0.55)
+    head = _NOTEHEAD if kind != "half" else "\uE0A3"   # noteheadHalf
+    font = music_font(ss)
+    if kind in {"eighth_pair", "sixteenth_pair"}:
+        gap = int(ss * 2.3)
+        for x in (cx, cx + gap):
+            d.rectangle([x + stem_left, cy - stem_len,
+                         x + stem_right, bottom], fill=color + (255,))
+        beam_h = max(4, int(round(ss * _BEAM_RATIO)))
+        beams = 2 if kind == "sixteenth_pair" else 1
+        for k in range(beams):
+            by = cy - stem_len + k * int(beam_h * 1.6)
+            d.rectangle([cx + stem_left, by,
+                         cx + gap + stem_right, by + beam_h], fill=color + (255,))
+        for x in (cx, cx + gap):
+            d.text((x, cy), head, font=font, fill=color + (255,), anchor="mm")
+    else:
+        # 四分/二分音符：向上符干（二分音符符干同长）
+        d.rectangle([cx + stem_left, cy - stem_len,
+                     cx + stem_right, bottom], fill=color + (255,))
+        d.text((cx, cy), head, font=font, fill=color + (255,), anchor="mm")
+    if tilt_deg:
+        sprite = sprite.rotate(float(tilt_deg), resample=Image.BICUBIC, expand=True)
+    return sprite
+
+
+def draw_bravura_note(target, head_x, head_y, ss, color, rotation=0.0, beam=False):
+    """画一个主音符：谱头 + 符干（第七版口径：符干下端止于谱头中线）。
+
+    返回 (符干右沿 x, 符干顶端 y)，供横梁对齐使用。
+    """
+    ink_right, ink_top = notehead_ink(ss)
+    stem_w = max(2, int(round(ss * _STEM_RATIO)))
+    stem_right = ink_right                     # 符干右沿 = 谱头墨迹右沿
+    stem_left = stem_right - stem_w
+    stem_len = int(ss * _STEM_SPACES)
+    bottom = head_y - int(abs(ink_top) * 0.55)  # 收在墨迹内部，直角边不露
+    d = ImageDraw.Draw(target)
+    if not beam:
+        d.rectangle([head_x + stem_left, head_y - stem_len,
+                     head_x + stem_right, bottom], fill=color + (255,))
+    # 谱头最后画，压住符干下端
+    d.text((head_x, head_y), _NOTEHEAD, font=music_font(ss),
+           fill=color + (255,), anchor="mm")
+    return head_x + stem_right, head_y - stem_len
+
+
+def draw_bravura_beamed(target, head_x, head_y, ss, color, gap_spaces=2.3, beams=1):
+    """连音符：两个主音符 + 符干顶端横梁（beams=2 为十六分音符）。"""
+    ink_right, ink_top = notehead_ink(ss)
+    stem_w = max(2, int(round(ss * _STEM_RATIO)))
+    stem_right = ink_right
+    stem_left = stem_right - stem_w
+    stem_len = int(ss * _STEM_SPACES)
+    bottom = head_y - int(abs(ink_top) * 0.55)
+    x2 = head_x + int(ss * gap_spaces)
+    d = ImageDraw.Draw(target)
+    for x in (head_x, x2):
+        d.rectangle([x + stem_left, head_y - stem_len,
+                     x + stem_right, bottom], fill=color + (255,))
+    for x in (head_x, x2):
+        d.text((x, head_y), _NOTEHEAD, font=music_font(ss),
+               fill=color + (255,), anchor="mm")
+    beam_h = max(4, int(ss * _BEAM_RATIO))
+    for k in range(beams):
+        by = head_y - stem_len + k * int(beam_h * 1.6)
+        d.rectangle([head_x + stem_left, by, x2 + stem_right, by + beam_h],
+                    fill=color + (255,))
+    return x2
+
+
 def paste_note(target, head_x, head_y, em_px, color, commands):
     sprite, anchor = note_sprite(em_px, color, commands)
     target.alpha_composite(sprite, (int(head_x - anchor[0]), int(head_y - anchor[1])))
 
+
+def _paste_rotated_note(target, head_x, head_y, em_px, color, commands, rotation):
+    """按谱头位置贴一个旋转过的音符（装饰用，角度随机更自然）。"""
+    sprite, anchor = note_sprite(em_px, color, commands)
+    if rotation:
+        sprite = sprite.rotate(
+            float(rotation), resample=Image.BICUBIC, expand=True
+        )
+        # 旋转后以中心对齐原锚点
+        target.alpha_composite(
+            sprite,
+            (
+                int(head_x - sprite.width / 2),
+                int(head_y - sprite.height / 2),
+            ),
+        )
+        return
+    target.alpha_composite(
+        sprite, (int(head_x - anchor[0]), int(head_y - anchor[1]))
+    )
+
+
+def text_sprite(text, height, color, font_paths=None):
+    """把一段文本渲染成指定高度的白色精灵（用于升降号等乐理符号）。"""
+    for path in (font_paths or CLEF_FONTS):
+        if not os.path.exists(path):
+            continue
+        try:
+            font_obj = ImageFont.truetype(path, 400)
+        except Exception:
+            continue
+        canvas = Image.new("RGBA", (1600, 900), (0, 0, 0, 0))
+        ImageDraw.Draw(canvas).text(
+            (60, 200), text, font=font_obj, fill=color + (255,)
+        )
+        box = canvas.getbbox()
+        if not box:
+            continue
+        glyph = canvas.crop(box)
+        scale = height / max(glyph.height, 1)
+        return glyph.resize(
+            (max(int(glyph.width * scale), 1), height), Image.LANCZOS
+        )
+    return None
 
 def clef_sprite(height, color, *, outline=None, outline_width=0):
     """真高音谱号：抓 Segoe UI Symbol 的 U+1D11E，裁到墨迹后缩放到目标高度。"""
@@ -296,60 +498,90 @@ def clef_sprite(height, color, *, outline=None, outline_width=0):
 
 
 def build_staff_scroll():
-    """全透明五线：真高音谱号开篇 + 项目音符轮廓（彩色）+ 柔和投影。
+    """五线谱（用户口径 2026-10-24）：
 
-    2026-10-23 第二轮（用户口径）：
-    * **谱线与高音谱号同属一层**（``staff_scroll_lines.png``，白色），运行时
-      multiply 上色——谱线颜色改了，谱号一起改；
-    * 谱号自带**深色描边**（描边烘焙成近黑，multiply 时黑永远是黑），所以
-      上色后仍压得住谱线；
-    * 图层顺序：谱线层（含谱号）在下、音符与终止线在上；素材本体不再画
-      谱号和谱线，避免重复/压字；
-    * 成图 1920x240（用户口径 2026-10-24）：中段 = 1920 - 左右端点。
+    * 全透明无底板；
+    * **谱线层**：5 条白线 + 终止双竖线，带一层柔和外发光（参考图那种柔光）；
+    * **谱号层**：白色高音谱号，带柔和外发光；
+    * **素材本体**：四个彩色音符（用户的独有设计，保留），运行时压在最上层；
+    * 成图 1920x240，中段 1570px。
     """
     w, L, R = 1920, 190, 160
-    content = new(w)
     commands = load_note_commands() or []
 
-    # 左端点：两个彩色音符（位置保持素材原样；图层顺序由运行时保证——
-    # 谱线层在下、音符在上，用户口径 2026-10-24）
-    cap = new(L)
-    if commands:
-        paste_note(cap, 108, 176, 92, NOTE_COLORS[0], commands)
-        paste_note(cap, 146, 132, 76, NOTE_COLORS[1], commands)
-    content.alpha_composite(cap, (0, 0))
-
-    # 右端点：两个彩色音符；终止竖线属于谱线层（跟着谱线颜色变）。
-    cap = new(R)
-    if commands:
-        paste_note(cap, 40, 176, 92, NOTE_COLORS[2], commands)
-        paste_note(cap, 82, 132, 76, NOTE_COLORS[3], commands)
-    content.alpha_composite(cap, (w - R, 0))
-
-    # 只保留阴影
-    shadow = content.split()[3].filter(ImageFilter.GaussianBlur(3.2))
-    sh = Image.new("RGBA", (w, H), (12, 12, 16, 0))
-    sh.putalpha(shadow.point(lambda v: int(v * 0.62)))
-    img = new(w)
-    img.alpha_composite(sh, (2, 3))
-    img.alpha_composite(content)
-
-    # 谱线层：5 条白线 + 白色谱号（带近黑描边）。运行时 multiply 用户颜色：
-    # 白 → 颜色，近黑描边保持近黑。
+    # 谱线层：五线 + 终止双竖线。
     lines = new(w)
     ld = ImageDraw.Draw(lines)
     for y in (64, 92, 120, 148, 176):
         ld.line([(0, y), (w, y)], fill=(255, 255, 255, 255), width=3)
-    # 原始高音谱号不加描边（用户口径 2026-10-24）：纯白，multiply 后就是
-    # 谱线颜色本身。
-    clef = clef_sprite(140, (255, 255, 255))
-    if clef is not None:
-        lines.alpha_composite(clef, (10, 120 - clef.height // 2))
-    # 终止竖线（双小节线）属于五线谱：白色画进谱线层，multiply 后随谱线色。
     ld.line([(w - 13, 50), (w - 13, 190)], fill=(255, 255, 255, 255), width=3)
     ld.line([(w - 3, 50), (w - 3, 190)], fill=(255, 255, 255, 255), width=7)
-    return img, L, R, lines
+    lines = add_glow(lines)
 
+    # 谱号层：高音谱号（运行时乘谱号色）。
+    clef_layer = new(w)
+    clef = clef_sprite(140, (255, 255, 255))
+    if clef is not None:
+        clef_layer.alpha_composite(clef, (10, 120 - clef.height // 2))
+    clef_layer = add_glow(clef_layer)
+
+    # 素材本体（动图）：四个彩色音符 + 中段缓慢漂浮的小音符（用户的独有
+    # 设计，压在谱线/谱号之上）。2026-10-24 第二轮用户口径：「音符漂移太快」
+    # → 中段音符改成每循环只走一圈很小的椭圆（横向 ±1.2~2.2px、纵向
+    # ±0.8~1.4px，匀速、没有来回折返），再加一点极轻的摇曳。
+    drift = []
+    rnd = random.Random(41)
+    tw = w - L - R
+    # 每种音符各一个：四分音符 / 八分连音符 / 十六分连音符 / 二分音符（空心）
+    kinds = ("quarter", "eighth_pair", "sixteenth_pair", "half")
+    for index, kind in enumerate(kinds):
+        drift.append((
+            L + (index + 0.5) * tw / len(kinds) + rnd.uniform(-50, 50),
+            96 + rnd.random() * (H - 176),
+            21 + rnd.random() * 4,           # 五线间距 ss（主音符大小，不压歌词）
+            NOTE_COLORS[index % len(NOTE_COLORS)],
+            rnd.random(),                    # 相位（占一整圈的比例）
+            1.2 + rnd.random() * 1.0,        # 横向漂移半径（px，每循环一圈）
+            0.8 + rnd.random() * 0.6,        # 纵向漂移半径（px，每循环一圈）
+            kind,
+            rnd.uniform(-90.0, 90.0),        # 整颗音符随机倒伏角（度，±90）
+            rnd.uniform(0.8, 1.6),           # 摇曳幅度（度，每循环一个来回）
+        ))
+    # 60 帧 / 20ms 不变（不拉长帧时长）：整帧按 2 倍超采样作画再降采样，
+    # 漂移量只有半像素级也不会「一帧跳一格」，播放依然顺滑。
+    ss_frame = 2
+    frames = []
+    static = new(w * ss_frame, H * ss_frame)
+    if commands:
+        cap = new(L * ss_frame, H * ss_frame)
+        paste_note(cap, 108 * ss_frame, 176 * ss_frame, 92 * ss_frame,
+                   NOTE_COLORS[0], commands)
+        paste_note(cap, 146 * ss_frame, 132 * ss_frame, 76 * ss_frame,
+                   NOTE_COLORS[1], commands)
+        static.alpha_composite(cap, (0, 0))
+        cap = new(R * ss_frame, H * ss_frame)
+        paste_note(cap, 40 * ss_frame, 176 * ss_frame, 92 * ss_frame,
+                   NOTE_COLORS[2], commands)
+        paste_note(cap, 82 * ss_frame, 132 * ss_frame, 76 * ss_frame,
+                   NOTE_COLORS[3], commands)
+        static.alpha_composite(cap, ((w - R) * ss_frame, 0))
+    for frame in range(FRAME_COUNT):
+        t = frame / max(FRAME_COUNT - 1, 1)
+        big = static.copy()
+        for x, y, ss, color, phase, radius_x, radius_y, kind, tilt, rock in drift:
+            arc = math.tau * (t + phase)
+            dx = math.cos(arc) * radius_x
+            dy = math.sin(arc) * radius_y
+            angle = tilt + math.sin(arc) * rock
+            sprite = bravura_note_sprite(ss * ss_frame, color, kind, angle)
+            big.alpha_composite(
+                sprite,
+                (int(round((x + dx) * ss_frame - sprite.width / 2)),
+                 int(round((y + dy) * ss_frame - sprite.height / 2))),
+            )
+        frames.append(big.resize((w, H), Image.LANCZOS))
+
+    return frames, L, R, lines, clef_layer
 
 # --------------------------------------------------------- 2. minimal stars
 def clean_star(r, alpha):
@@ -370,249 +602,388 @@ def _stars_mid(big, tw):
     rnd = random.Random(17)
     count = max(1, int(round(tw * 16 / 320)))
     for _ in range(count):
-        r = 1.6 + rnd.random() ** 2 * 3.2
+        r = 2.2 + rnd.random() ** 2 * 3.6
         put_wrapped(big, tw, rnd.random() * tw, 30 + rnd.random() * (H - 60),
-                    clean_star(r, int(130 + rnd.random() * 110)))
+                    clean_star(r, 255))
+
+
+def _star4_points(radius, inner_ratio=0.11, samples=14):
+    """与项目内星光粒子同款：四角星 + 四段二次贝塞尔凹边。"""
+    outer = 500.0
+    inner = outer * inner_ratio
+    # (起点, 控制点, 终点) 四段
+    segments = [
+        ((0.0, -outer), (inner, -inner), (outer, 0.0)),
+        ((outer, 0.0), (inner, inner), (0.0, outer)),
+        ((0.0, outer), (-inner, inner), (-outer, 0.0)),
+        ((-outer, 0.0), (-inner, -inner), (0.0, -outer)),
+    ]
+    pts = []
+    for start, control, end in segments:
+        for index in range(samples):
+            t = index / samples
+            x = (1 - t) ** 2 * start[0] + 2 * (1 - t) * t * control[0] + t ** 2 * end[0]
+            y = (1 - t) ** 2 * start[1] + 2 * (1 - t) * t * control[1] + t ** 2 * end[1]
+            pts.append((x / outer * radius, y / outer * radius))
+    return pts
+
+
+def _star_glow(r, alpha):
+    """四角星光：star4 凹边星形（4 倍超采样保住细星臂）+ 背后径向柔光。
+
+    动图是 8 bit alpha 的 WebP，柔光就是真柔光，不需要点阵近似。
+    """
+    size = int(max(r * 3.4 * 2.6, 15)) | 1
+    ss = 4                                   # 超采样倍率
+    big = size * ss
+    c = big / 2.0
+    im = new(big, big)
+    # 星臂要明显长于光核，否则会糊成圆点（用户实测"星星变圆球"）
+    pts = [(c + x * ss, c + y * ss) for x, y in _star4_points(r * 1.6)]
+    ImageDraw.Draw(im).polygon(pts, fill=(255, 255, 255, alpha))
+    im = im.resize((size, size), Image.LANCZOS)
+    glow = radial(int(max(r * 3.4, 11)) | 1, (255, 255, 255, int(alpha * 0.45)), 2.0)
+    out = new(size, size)
+    out.alpha_composite(glow, (int(size / 2 - glow.width / 2),
+                               int(size / 2 - glow.height / 2)))
+    out.alpha_composite(im)
+    return out.filter(ImageFilter.GaussianBlur(max(0.15, r * 0.03)))
 
 
 def build_stars():
+    """星火点阵（动图）：按项目星光粒子的生命周期实现。
+
+    每颗星有出生相位与寿命：出生 → 放大到满 → 淡出，错峰循环
+    （同 `particles.py` 的 star4 粒子思路），60 帧 / 1.2s 内闪一次。
+    """
     w, L, R = 1920, 120, 120
-    img = new(w)
-    body = vgrad(w, H, [(0, (20, 24, 40, 130)), (0.5, (14, 17, 30, 96)),
-                        (1, (8, 10, 20, 150))])
-    mask = round_mask(w, H, 32)
-    tmp = new(w)
-    tmp.paste(body, (0, 0))
-    img.alpha_composite(Image.composite(tmp, new(w), mask))
-    img.alpha_composite(draw_tile(w - L - R, _stars_mid), (L, 0))
-    for side, seed in ((0, 3), (1, 4)):
-        rnd = random.Random(seed)
-        cap = new(L if side == 0 else R)
-        for _ in range(7):
-            r = 1.8 + rnd.random() ** 1.8 * 4.4
-            spr = clean_star(r, int(150 + rnd.random() * 100))
-            cap.alpha_composite(spr, (int(rnd.random() * (cap.width - spr.width)),
-                                      int(30 + rnd.random() * (H - 60 - spr.height))))
-        if side:
-            cap = cap.transpose(Image.FLIP_LEFT_RIGHT)
-        img.alpha_composite(cap, (0 if side == 0 else w - R, 0))
-    bevel(img, top=30, bottom=54, height=6)
-    return img, L, R
+    tw = w - L - R
+    rnd = random.Random(17)
+    stars = []
+    count = max(1, int(round(tw * 22 / 320)))
+    for _ in range(count):
+        stars.append((
+            L + rnd.random() * tw,              # 循环单元内 x（跨界自动绕回）
+            26 + rnd.random() * (H - 52),
+            2.4 + rnd.random() ** 2 * 4.6,     # 星臂半径
+            rnd.random(),                       # 出生相位
+            0.45 + rnd.random() * 0.55,         # 寿命（占一个循环的比例）
+        ))
+    frames = []
+    for frame in range(FRAME_COUNT):
+        t = frame / max(FRAME_COUNT - 1, 1)
+        img = new(w)
+        for x, y, r, birth, life in stars:
+            local = ((t - birth) % 1.0) / life
+            if local >= 1.0:
+                continue
+            # 出生→放大、消失→淡出：sin 包络两端为 0
+            envelope = math.sin(math.pi * local) ** 1.25
+            if envelope <= 0.02:
+                continue
+            scale = 0.55 + 0.45 * local
+            _tile_blit(img, x, y,
+                       _star_glow(r * scale, int(255 * envelope)), L, tw)
+        frames.append(img)
+    return frames, L, R
 
 
 # ------------------------------------- 3. neutral satin ribbon (tintable)
 def build_diagonal():
+    """斜纹（镂空轻盈版）：只有斜向细条纹，半透明 + 柔光，没有底板/折边。"""
     w, L, R = 1920, 96, 96
     tw = w - L - R                      # 1728; stripe period MUST divide it
     period = 48
     assert tw % period == 0, "middle tile width must be a multiple of the stripe period"
 
-    body = vgrad(w, H, [(0, (252, 252, 255, 253)), (0.14, (214, 218, 226, 253)),
-                        (0.45, (168, 174, 186, 253)), (0.78, (126, 132, 144, 253)),
-                        (1, (92, 96, 106, 255))])
     img = new(w)
-    img.paste(body, (0, 0))
-
-    stripes = new(w)
-    sd = ImageDraw.Draw(stripes)
+    stripes = ImageDraw.Draw(img)
+    # 实体条纹：不透明度拉满（用户口径 2026-10-24），只用一条实心斜纹
+    # 加一条更亮的细芯，不再靠半透明叠色制造"雾感"。
     for k in range(-14, w // period + 20):
         x0 = k * period
-        sd.polygon([(x0, 0), (x0 + 18, 0), (x0 + 18 - H, H), (x0 - H, H)],
-                   fill=(255, 255, 255, 64))
-        sd.polygon([(x0, 0), (x0 + 4, 0), (x0 + 4 - H, H), (x0 - H, H)],
-                   fill=(255, 255, 255, 104))
-    img.alpha_composite(stripes)
-
-    mask = round_mask(w, H, 28)
-    img = Image.composite(img, new(w), mask)
-
-    # 端点折边：中段是"整块重复"，最后一块必然是半块，条纹会在端点边界相位跳。
-    # 与其掩盖，不如两边各加一道折边（高光 + 暗线），让条纹在那里"收口"。
-    fold = new(w)
-    fd = ImageDraw.Draw(fold)
-    # 折边必须落在"端点里"，不能压到中段的循环单元上，否则每铺一块就多一道线。
-    fd.rectangle([L - 12, 0, L - 3, H], fill=(20, 20, 24, 90))
-    fd.rectangle([L - 3, 0, L - 1, H], fill=(255, 255, 255, 130))
-    fd.rectangle([w - R, 0, w - R + 2, H], fill=(255, 255, 255, 130))
-    fd.rectangle([w - R + 2, 0, w - R + 12, H], fill=(20, 20, 24, 90))
-    fold = fold.filter(ImageFilter.GaussianBlur(1.2))
-    fold.putalpha(ImageChops.multiply(fold.split()[3], mask))
-    img.alpha_composite(fold)
-
-    shade = hgrad(w, H, [(0, (40, 44, 52, 150)), (0.12, (40, 44, 52, 0)),
-                         (0.88, (40, 44, 52, 0)), (1, (40, 44, 52, 150))])
-    img.alpha_composite(Image.composite(shade, new(w), mask))
-    bevel(img, top=72, bottom=96, height=6)
-    edge = new(w)
-    ImageDraw.Draw(edge).line([(0, 2), (w, 2)], fill=(255, 255, 255, 110), width=2)
-    edge.putalpha(ImageChops.multiply(edge.split()[3], mask))
-    img.alpha_composite(edge)
+        stripes.polygon([(x0, 0), (x0 + 14, 0), (x0 + 14 - H, H), (x0 - H, H)],
+                        fill=(255, 255, 255, 255))
+    img = add_glow(img.filter(ImageFilter.GaussianBlur(0.5)), 3, 60)
     return img, L, R
+
 
 
 # ------------------------------------------------------ 4. clean blue bubbles
 BLUES = [(150, 226, 255), (196, 240, 255), (118, 196, 236), (168, 255, 240)]
 
+# ------------------------------------------------------ 4. clean blue bubbles
+BLUES = [(150, 226, 255), (196, 240, 255), (118, 196, 236), (168, 255, 240)]
+
+
+def _lighten(color, amount):
+    return tuple(int(value + (255 - value) * amount) for value in color)
+
 
 def bubble_sprite(r, color):
-    n = int(r * 3.2) | 1
-    yy, xx = np.mgrid[0:n, 0:n]
-    c = (n - 1) / 2
-    dist = np.sqrt((xx - c) ** 2 + (yy - c) ** 2) / max(r, 1e-3)
-    rim = np.exp(-((dist - 0.9) / 0.11) ** 2)
-    inner = np.clip(1 - dist, 0, 1) * 0.20
-    a = np.clip((rim * 0.88 + inner) * 255, 0, 255)
-    arr = np.zeros((n, n, 4), np.uint8)
-    arr[..., 0], arr[..., 1], arr[..., 2] = color
-    arr[..., 3] = a.astype(np.uint8)
+    """一颗水泡：淡填充 + 近白亮环 + 左上高光，画法照搬扫字线「气泡柱」。
 
-    halo = radial(int(n * 1.8), color + (58,), 2.2)
-    out = new(int(n * 1.8), int(n * 1.8))
-    out.alpha_composite(halo)
-    ox = (out.width - n) // 2
-    oy = (out.height - n) // 2
-    out.alpha_composite(Image.fromarray(arr, "RGBA"), (ox, oy))
-    d = ImageDraw.Draw(out)
-    d.ellipse([ox + c - r * 0.54, oy + c - r * 0.60,
-               ox + c - r * 0.30, oy + c - r * 0.36], fill=(255, 255, 255, 235))
-    return out.filter(ImageFilter.GaussianBlur(0.6))
+    `paint_scanline_bubbles` 的口径（用户 2026-10-24「好看的气泡要参考气泡柱的
+    画法」）：
 
+    * 填充 alpha 70/255，几乎是透明的；
+    * 亮环 alpha 205/255、线宽≈半径的 10%，颜色往白色提 0.55；
+    * 高光 alpha 215/255，半径 0.18R，圆心在左上 (−0.32R, −0.32R)，往白色提 0.85。
 
-def _caustics(big, tw):
-    """焦散：水面折光在地板上那种摇曳的亮线（跨接缝连续）。"""
-    rnd = random.Random(88)
-    d = ImageDraw.Draw(big)
-    for _ in range(9):
-        y0 = 18 + rnd.random() * (H - 36)
-        amp = 5 + rnd.random() * 13
-        wave = 50 + rnd.random() * 70
-        phase = rnd.random() * math.tau
-        width = 2 if rnd.random() < 0.7 else 3
-        alpha = int(26 + rnd.random() * 34)
-        pts = [(x, y0 + amp * math.sin(x / wave * math.tau + phase))
-               for x in range(-40, tw * 3 + 40, 5)]
-        d.line(pts, fill=(198, 244, 255, alpha), width=width)
-    return big.filter(ImageFilter.GaussianBlur(1.4))
-
-
-def _bubbles_mid(big, tw):
-    rnd = random.Random(29)
-    count = max(1, int(round(tw * 18 / 320)))
-    for _ in range(count):
-        r = 4 + rnd.random() ** 1.6 * 18
-        put_wrapped(big, tw, rnd.random() * tw, 26 + rnd.random() * (H - 52),
-                    bubble_sprite(r, rnd.choice(BLUES)))
+    轮廓半径 2.7r（加上亮环≈用户验收过的 2.8r）。动图是 8 bit alpha 的 WebP，
+    半透明就是**真**半透明。精灵按 1× 出（不做超采样）：动图素材是逐帧位图，
+    带抗锯齿的边缘会让 alpha 出现几十级灰度，无损 WebP 体积直接翻十倍；运行
+    时带子本来就会按 0.5 倍左右平滑降采样，边缘的抗锯齿由那一步提供。
+    """
+    radius = 2.7 * r
+    ss = 1
+    size = int(radius * 2 + 4)
+    big = size * ss
+    centre = (big - 1) / 2.0
+    ring_radius = radius * ss
+    box = [centre - ring_radius, centre - ring_radius,
+           centre + ring_radius, centre + ring_radius]
+    fill_layer = Image.new("RGBA", (big, big), color + (0,))
+    ImageDraw.Draw(fill_layer).ellipse(box, fill=color + (70,))
+    rim_color = _lighten(color, 0.55)
+    ring_layer = Image.new("RGBA", (big, big), rim_color + (0,))
+    ImageDraw.Draw(ring_layer).ellipse(
+        box,
+        outline=rim_color + (205,),
+        width=max(int(round(ring_radius * 0.10)), 2),
+    )
+    core_color = _lighten(color, 0.85)
+    hx = centre - ring_radius * 0.32
+    hr = max(ring_radius * 0.18, 2.0)
+    core_layer = Image.new("RGBA", (big, big), core_color + (0,))
+    ImageDraw.Draw(core_layer).ellipse(
+        [hx - hr, hx - hr, hx + hr, hx + hr], fill=core_color + (215,)
+    )
+    sprite = Image.alpha_composite(
+        Image.alpha_composite(fill_layer, ring_layer), core_layer
+    )
+    return sprite.resize((size, size), Image.LANCZOS)
 
 
 def build_bubbles():
-    """海水：深青渐变 + 焦散亮线 + 水面光柱 + 气泡（《凪のあすから》那种感觉）。"""
+    """水泡（动图）：粒子式缓慢上浮 + 缓慢左右摆动，首尾严格同帧。
+
+    2026-10-24 第二轮用户口径（「上升速度过快、抖动速度过快过密」）：
+    * 上浮速度：每循环只上浮 ``H * 0.14``（原来 0.25，且一半颗粒跑两个循环）；
+    * 摆动：**每循环只摆一个来回**、幅度 ±1.8~4.4px（原来每循环 2~4 个来回、
+      最大 ±18px，峰值横向速度是现在的十几倍）；
+    * 密度：颗粒数降到原来的 45%（每 320px 60 颗 → 中段 1600px 约 300 颗）；
+      「抖动过密」也一并缓解，不再糊成一片；
+    * 颗粒按循环单元取模平铺，跨界那颗在另一侧补画，平铺缝上不会出现半个泡。
+    """
     w, L, R = 1920, 160, 160
     tw = w - L - R
-    img = new(w)
-
-    ends = round_mask(w, H, 30)
-    feather = vgrad(w, H, [(0, (255, 255, 255, 0)), (0.08, (255, 255, 255, 255)),
-                           (0.92, (255, 255, 255, 255)), (1, (255, 255, 255, 0))])
-    fcol = np.array(feather.split()[3]).astype(np.float32)[:, 0] / 255.0
-
-    def shaped_full(layer):
-        arr = np.array(layer.split()[3]).astype(np.float32) * fcol[:, None]
-        out = layer.copy()
-        out.putalpha(Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)))
-        out.putalpha(ImageChops.multiply(out.split()[3], ends))
-        return out
-
-    def shaped_tile(layer):
-        arr = np.array(layer.split()[3]).astype(np.float32) * fcol[:, None]
-        out = layer.copy()
-        out.putalpha(Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)))
-        return out
-
-    water = vgrad(w, H, [(0, (104, 198, 212, 150)), (0.24, (40, 136, 164, 158)),
-                         (0.62, (14, 74, 104, 176)), (1, (4, 24, 42, 200))])
-    img.alpha_composite(shaped_full(water))
-
-    # 水面光柱：只放端点，避免中段平铺重复
-    for side, seed in ((0, 21), (1, 22)):
-        rays = new(L if side == 0 else R)
-        rd = ImageDraw.Draw(rays)
-        rnd = random.Random(seed)
-        for _ in range(5):
-            x0 = rnd.random() * rays.width
-            spread = 26 + rnd.random() * 54
-            lean = 18 + rnd.random() * 26
-            rd.polygon([(x0, 0), (x0 + spread, 0),
-                        (x0 + spread - lean, H), (x0 - lean, H)],
-                       fill=(214, 248, 255, int(16 + rnd.random() * 18)))
-        rays = shaped_full(rays.filter(ImageFilter.GaussianBlur(9)))
-        img.alpha_composite(rays, (0 if side == 0 else w - R, 0))
-
-    img.alpha_composite(shaped_tile(draw_tile(tw, _caustics)), (L, 0))
-    img.alpha_composite(shaped_tile(draw_tile(tw, _bubbles_mid)), (L, 0))
-
-    for side, seed in ((0, 8), (1, 9)):
-        rnd = random.Random(seed)
-        cap = new(L if side == 0 else R)
-        for _ in range(9):
-            r = 4 + rnd.random() ** 1.4 * 19
-            spr = bubble_sprite(r, rnd.choice(BLUES))
-            cap.alpha_composite(spr, (int(rnd.random() * (cap.width - spr.width)),
-                                      int(22 + rnd.random() * (H - 44 - spr.height))))
-        if side:
-            cap = cap.transpose(Image.FLIP_LEFT_RIGHT)
-        img.alpha_composite(cap, (0 if side == 0 else w - R, 0))
-    return img, L, R
+    rnd = random.Random(29)
+    bubbles = []
+    count = max(1, int(round(tw * 60 / 320)))
+    for _ in range(count):
+        bubbles.append((
+            L + rnd.random() * tw,              # 循环单元内的 x
+            rnd.random(),                       # 相位（生命进度）
+            2.5 + rnd.random() ** 1.8 * 8.5,    # 半径（沿用旧素材尺寸）
+            rnd.choice(BLUES),
+            rnd.random(),                       # 摆动相位（一圈的比例）
+            1.8 + rnd.random() * 2.6,           # 摆动幅度（±px）
+            H * (0.05 + rnd.random() * 0.9),    # 出生 y
+            H * 0.14,                            # 每循环上浮高度
+        ))
+    sprites = [bubble_sprite(item[2], item[3]) for item in bubbles]
+    fade = 0.12                                  # 出生/消失各占生命的比例
+    frames = []
+    for frame in range(FRAME_COUNT):
+        t = frame / max(FRAME_COUNT - 1, 1)
+        img = new(w)
+        for item, sprite in zip(bubbles, sprites):
+            x, start, _r, _color, sway, swing, lane_y, travel = item
+            progress = (start + t) % 1.0
+            # 出生/消失各留 12% 的渐变，循环点两侧都收到 alpha 0。
+            envelope = min(1.0, progress / fade, (1.0 - progress) / fade)
+            if envelope <= 0.0:
+                continue
+            lut = [int(value * envelope) for value in range(256)]
+            visible = sprite.copy()
+            visible.putalpha(sprite.getchannel("A").point(lut))
+            dx = math.sin(math.tau * (t + sway)) * swing
+            _tile_blit(img, x + dx, lane_y - progress * travel, visible, L, tw)
+        frames.append(img)
+    return frames, L, R
 
 
 # -------------------------------------- 5. neutral glass pill (tintable)
 def build_plain_round():
+    """纯色圆角条：像 galgame 对话框那样的圆板。
+
+    用户口径 2026-10-24：这是一块**有厚度的圆角面板**——接近不透明的白色
+    底（上浅下深一点点的渐变）+ 收边描边 + 柔和外发光，压在任意背景上都
+    像一个对话框，而不是一条半透明玻璃条。
+    """
     w, L, R = 1920, 64, 64
-    body = vgrad(w, H, [(0, (250, 251, 255, 236)), (0.2, (206, 210, 220, 240)),
-                        (0.62, (146, 150, 162, 244)), (1, (96, 100, 110, 248))])
-    mask = round_mask(w, H, 30)
     img = new(w)
+    body = vgrad(w, H, [(0, (255, 255, 255, 238)),
+                        (0.55, (250, 251, 253, 232)),
+                        (1, (236, 239, 244, 228))])
+    mask = round_mask(w, H, 30)
     img.paste(body, (0, 0), mask)
-    sheen = vgrad(w, H, [(0, (255, 255, 255, 120)), (0.07, (255, 255, 255, 40)),
-                         (0.2, (255, 255, 255, 0))])
-    img.alpha_composite(Image.composite(sheen, new(w), mask))
+    # 顶部高光 + 内侧一圈亮边，做出"面板"的厚度。
+    sheen = vgrad(w, H, [(0, (255, 255, 255, 120)),
+                         (0.18, (255, 255, 255, 0))])
+    sheen.putalpha(ImageChops.multiply(sheen.split()[3], mask))
+    img.alpha_composite(sheen)
     border = new(w)
-    ImageDraw.Draw(border).rounded_rectangle([0, 0, w - 1, H - 1], radius=30,
-                                             outline=(255, 255, 255, 255), width=2)
-    arr = np.array(border).astype(np.float32)
-    ys = np.arange(arr.shape[0])[:, None] / (arr.shape[0] - 1)
-    arr[..., 3] = np.clip(arr[..., 3] * (0.30 + 0.45 * (1 - ys)), 0, 255)
-    img.alpha_composite(Image.fromarray(arr.astype(np.uint8), "RGBA"))
-    shadow = new(w)
-    ImageDraw.Draw(shadow).rounded_rectangle([0, 0, w - 1, H - 1], radius=30,
-                                             fill=(0, 0, 0, 255))
-    arr = np.array(shadow).astype(np.float32)
-    arr[..., 3] = np.clip(arr[..., 3] * np.clip((ys - 0.86) / 0.14, 0, 1) * 0.5, 0, 255)
-    img.alpha_composite(Image.fromarray(arr.astype(np.uint8), "RGBA")
-                        .filter(ImageFilter.GaussianBlur(4)))
-    return img, L, R
+    ImageDraw.Draw(border).rounded_rectangle(
+        [1, 1, w - 2, H - 2], radius=30,
+        outline=(255, 255, 255, 235), width=2,
+    )
+    img.alpha_composite(border)
+    # 外沿一圈很淡的暗边，避免白底在亮背景上糊掉。
+    edge = new(w)
+    ImageDraw.Draw(edge).rounded_rectangle(
+        [0, 0, w - 1, H - 1], radius=30,
+        outline=(60, 66, 78, 60), width=1,
+    )
+    img.alpha_composite(edge)
+    return add_glow(img, 5, 80), L, R
 
 
 # ---------------------------------------------------------------- assembly
 PRESETS = []
 
 
-def register(preset_id, label, builder, height_pct, tintable=False, default_tint=None):
+FRAME_MS = 20          # 动图预设每帧时长（20ms ≈ 50fps）
+FRAME_COUNT = 60       # 动图预设帧数（60 × 20ms = 1200ms 一个循环）
+
+ANIM_EXT = ".webp"     # 动图预设用 animated WebP：带 8 bit alpha
+
+
+def save_animated_asset(frames, path, frame_ms=None):
+    """写循环动图素材（animated WebP）：**严格第一帧 = 最后一帧**。
+
+    用 WebP 而不是 GIF，是因为 GIF 只有 1 bit 透明：水泡那层 alpha≈70 的淡填充、
+    星火的柔光都只能靠点阵近似，放大看是噪点/网点，整段动图还会被调色板/透明
+    下标坑（曾出现个别帧整帧不透明、首尾帧量化不一致）。WebP 是真 8 bit alpha，
+    扫字线「气泡柱」那套半透明画法可以原样搬进素材；CPU 预览与 sidecar 都用
+    `QImageReader` 解码，两边像素完全一致。
+    """
+    frames = list(frames)
+    if not frames:
+        return
+    frames[-1] = frames[0].copy()                  # 首尾严格同帧（循环点）
+    frames[0].save(
+        str(path),
+        save_all=True,
+        append_images=frames[1:],
+        duration=int(frame_ms or FRAME_MS),
+        loop=0,
+        format="WEBP",
+        lossless=True,          # 细亮环/柔光用有损会起毛刺，素材体积本来就不大
+        quality=100,
+        method=4,
+    )
+
+
+def check_animated_asset(path, total_ms=None, expect_translucent=False):
+    """回读校验：首尾同帧、总时长对得上、（可选）确实带半透明像素。"""
+    with Image.open(path) as image:
+        frames = []
+        delays = []
+        for frame in ImageSequence.Iterator(image):
+            frames.append(frame.convert("RGBA").copy())
+            delays.append(int(frame.info.get("duration") or 0))
+    if not frames:
+        raise AssertionError("%s has no frames" % path)
+    first = np.asarray(frames[0])
+    same = np.array_equal(first, np.asarray(frames[-1]))
+    alpha = first[..., 3]
+    translucent = bool(((alpha > 0) & (alpha < 255)).any())
+    print("  loop-check %-36s frames=%3d first==last=%-5s alpha=%s total=%dms"
+          % (path.name, len(frames), same,
+             "8bit" if translucent else "binary", sum(delays)))
+    if not same:
+        raise AssertionError("%s: first frame != last frame" % path)
+    if expect_translucent and not translucent:
+        raise AssertionError("%s: no translucent pixels (alpha is binary)" % path)
+    if total_ms is not None and sum(delays) != total_ms:
+        raise AssertionError("%s: loop length %dms != %dms"
+                             % (path, sum(delays), total_ms))
+
+
+def register(preset_id, label, builder, height_pct, tintable=False, default_tint=None,
+             feather_px=0.0, animated=False, frame_ms=None):
     built = builder()
-    if len(built) == 4:
+    clef_name = ""
+    if animated:
+        # 动图预设：builder 返回 (frames, L, R[, lines, clef])，输出循环动图。
+        frames = built[0]
+        rest = list(built[1:])
+        anim_path = ASSET_DIR / (preset_id + ANIM_EXT)
+        save_animated_asset(frames, anim_path, frame_ms)
+        check_animated_asset(
+            anim_path,
+            total_ms=len(frames) * int(frame_ms or FRAME_MS),
+            expect_translucent=preset_id != "staff_scroll",
+        )
+        lines_name = ""
+        if len(rest) >= 5:
+            rest[3].save(str(ASSET_DIR / (preset_id + "_lines.png")))
+            lines_name = preset_id + "_lines.png"
+            rest[4].save(str(ASSET_DIR / (preset_id + "_clef.png")))
+            clef_name = preset_id + "_clef.png"
+        for stale_name in (preset_id + ".png", preset_id + ".gif"):
+            stale = ASSET_DIR / stale_name
+            if stale.exists():
+                stale.unlink()
+        PRESETS.append({"id": preset_id, "label": label, "image": frames[0],
+                        "cap_l": rest[0], "cap_r": rest[1],
+                        "height_pct": height_pct,
+                        "tintable": tintable, "tint": default_tint,
+                        "lines_name": lines_name, "clef_name": clef_name,
+                        "animated": True})
+        return
+    if len(built) == 5:
+        image, L, R, lines, clef_layer = built
+        lines.save(str(ASSET_DIR / (preset_id + "_lines.png")))
+        lines_name = preset_id + "_lines.png"
+        clef_layer.save(str(ASSET_DIR / (preset_id + "_clef.png")))
+        clef_name = preset_id + "_clef.png"
+    elif len(built) == 4:
         image, L, R, lines = built
         lines.save(str(ASSET_DIR / (preset_id + "_lines.png")))
         lines_name = preset_id + "_lines.png"
+        stale_clef = ASSET_DIR / (preset_id + "_clef.png")
+        if stale_clef.exists():
+            stale_clef.unlink()
     else:
         image, L, R = built
         lines_name = ""
         stale = ASSET_DIR / (preset_id + "_lines.png")
         if stale.exists():
             stale.unlink()
+    if feather_px > 0:
+        # 边缘羽化（用户口径 2026-10-24）：素材外缘不要硬描边，用透明度过渡。
+        # 只羽化 alpha、不碰颜色；水平方向先做环形填充，保证羽化不破坏
+        # 平铺的首尾衔接（否则每个块边界会多一条暗缝）。
+        w, h = image.size
+        pad = max(int(math.ceil(feather_px * 2)), 1)
+        wrap = Image.new("RGBA", (w + 2 * pad, h), (0, 0, 0, 0))
+        wrap.paste(image, (pad, 0))
+        wrap.paste(image.crop((w - pad, 0, w, h)), (0, 0))
+        wrap.paste(image.crop((0, 0, pad, h)), (pad + w, 0))
+        alpha = wrap.split()[3].filter(
+            ImageFilter.GaussianBlur(float(feather_px))
+        ).crop((pad, 0, pad + w, h))
+        image = image.copy()
+        image.putalpha(alpha)
     image.save(str(ASSET_DIR / (preset_id + ".png")))
     PRESETS.append({"id": preset_id, "label": label, "image": image,
                     "cap_l": L, "cap_r": R, "height_pct": height_pct,
                     "tintable": tintable, "tint": default_tint,
-                    "lines_name": lines_name})
+                    "lines_name": lines_name, "clef_name": clef_name,
+                    "animated": False})
 
 
 def asset(preset):
@@ -926,11 +1297,11 @@ def sheet_mock():
     canvas.convert("RGB").save(out_png("04_mock_frame"))
 
 
-register("staff_scroll", "五线谱 · 卷轴", build_staff_scroll, 160)
-register("stars", "星火点阵", build_stars, 110)
-register("diagonal", "斜纹缎带", build_diagonal, 100, True, "#3EC6E0")
-register("bubbles", "水泡", build_bubbles, 125)
-register("plain_round", "纯色圆角条", build_plain_round, 100, True, "#2B3A55")
+register("staff_scroll", "五线谱 · 卷轴", build_staff_scroll, 160, animated=True)
+register("stars", "星火点阵", build_stars, 110, animated=True)
+register("diagonal", "斜纹缎带", build_diagonal, 100, True, "#3EC6E0", feather_px=4.0)
+register("bubbles", "水泡", build_bubbles, 125, animated=True)
+register("plain_round", "纯色圆角条", build_plain_round, 100, True, "#2B3A55", feather_px=4.0)
 
 sheet_assets()
 sheet_gallery()

@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import math
+
 import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
@@ -1447,13 +1449,13 @@ class Style:
     line_band_pad_right_px: int = 40
     """右边距：文字右缘到带子右缘。"""
 
-    line_band_include_ruby: bool = False
+    line_band_include_ruby: bool = True
     """``line_band_pad_top_px`` 的量取基准：True=注音顶，False=主文字顶。"""
 
     line_band_offset_y_px: int = 0
     """整条带子上下微调。"""
 
-    line_band_opacity_pct: int = 100
+    line_band_opacity_pct: int = 50
     """带子整体透明度百分比。"""
 
     line_band_tint: str = ""
@@ -1465,25 +1467,30 @@ class Style:
     line_band_line_color: str = ""
     """谱线颜色（仅带独立谱线层的预设生效，如五线谱）；空串用预设默认。"""
 
+    line_band_clef_color: str = ""
+    """谱号/升降号颜色（仅带独立谱号层的预设生效）；空串用预设默认。"""
+
     # 图层效果（PS 图层样式口径）：三种效果各自独立开关 + 各自配置，作用于
     # 合成后的整张带子图（含 alpha）。旧字段 line_band_edge_* 保留用于兼容
     # 旧工程（读取时迁移到这三种效果之一）。
+    # 每种效果有独立开关；尺寸 0 与关闭等效；尺寸默认 1px（最轻的非零值）。
     line_band_shadow_enabled: bool = False
     line_band_shadow_color: str = "#000000"
-    line_band_shadow_size_px: int = 12
-    line_band_shadow_offset_x_px: int = 8
-    line_band_shadow_offset_y_px: int = 8
-    line_band_shadow_opacity_pct: int = 70
+    line_band_shadow_size_px: int = 1
+    line_band_shadow_spread_pct: int = 0
+    line_band_shadow_distance_px: int = 3
+    line_band_shadow_angle_deg: int = 135
 
     line_band_stroke_enabled: bool = False
     line_band_stroke_color: str = "#000000"
-    line_band_stroke_size_px: int = 6
-    line_band_stroke_opacity_pct: int = 100
+    line_band_stroke_size_px: int = 1
+    line_band_stroke_position: str = "outside"
 
     line_band_glow_enabled: bool = False
-    line_band_glow_color: str = "#FFD24A"
-    line_band_glow_size_px: int = 16
-    line_band_glow_opacity_pct: int = 80
+    line_band_glow_color: str = "#FFFFFF"
+    line_band_glow_size_px: int = 1
+    line_band_glow_spread_pct: int = 0
+    line_band_glow_range_pct: int = 50
     line_band_edge_kind: str = "none"
     """图片非透明部分的描边效果：``none`` / ``shadow`` 投影 / ``glow`` 发光。"""
 
@@ -2404,9 +2411,6 @@ def _migrate_line_band_edge_effects(style: "Style", payload: dict) -> "Style":
     if any(
         key in payload
         for key in (
-            "line_band_shadow_enabled",
-            "line_band_stroke_enabled",
-            "line_band_glow_enabled",
         )
     ):
         return style
@@ -2414,14 +2418,19 @@ def _migrate_line_band_edge_effects(style: "Style", payload: dict) -> "Style":
     if kind not in {"shadow", "stroke", "glow"}:
         return style
     updates: dict[str, object] = {
-        f"line_band_{kind}_enabled": True,
         f"line_band_{kind}_color": style.line_band_edge_color,
-        f"line_band_{kind}_size_px": style.line_band_edge_size_px,
-        f"line_band_{kind}_opacity_pct": style.line_band_edge_opacity_pct,
+        f"line_band_{kind}_size_px": max(style.line_band_edge_size_px, 1),
     }
     if kind == "shadow":
-        updates["line_band_shadow_offset_x_px"] = style.line_band_edge_offset_x_px
-        updates["line_band_shadow_offset_y_px"] = style.line_band_edge_offset_y_px
+        # 旧工程的 X/Y 偏移 → 距离 + 角度（135° 为 PS 默认光源方向）
+        dx = float(style.line_band_edge_offset_x_px)
+        dy = float(style.line_band_edge_offset_y_px)
+        updates["line_band_shadow_distance_px"] = int(
+            round(max((dx * dx + dy * dy) ** 0.5, 0.0))
+        )
+        updates["line_band_shadow_angle_deg"] = int(
+            round(math.degrees(math.atan2(dy, dx)) % 360.0)
+        )
     return replace(style, **updates)
 
 def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
@@ -2594,13 +2603,13 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "line_band_edge_offset_y_px",
             "line_band_edge_opacity_pct",
             "line_band_shadow_size_px",
-            "line_band_shadow_offset_x_px",
-            "line_band_shadow_offset_y_px",
-            "line_band_shadow_opacity_pct",
+            "line_band_shadow_spread_pct",
+            "line_band_shadow_distance_px",
+            "line_band_shadow_angle_deg",
+            "line_band_glow_spread_pct",
+            "line_band_glow_range_pct",
             "line_band_stroke_size_px",
-            "line_band_stroke_opacity_pct",
             "line_band_glow_size_px",
-            "line_band_glow_opacity_pct",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
         elif key in {
@@ -2648,8 +2657,14 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         elif key == "line_band_mid_mode":
             changes[key] = (
                 value
-                if value in {"repeat", "stretch"}
+                if value in {"repeat", "stretch", "cover"}
                 else defaults.line_band_mid_mode
+            )
+        elif key == "line_band_stroke_position":
+            changes[key] = (
+                value
+                if value in {"outside", "center", "inside"}
+                else defaults.line_band_stroke_position
             )
         elif key == "line_band_edge_kind":
             changes[key] = (
@@ -2658,7 +2673,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                 else defaults.line_band_edge_kind
             )
         elif key in {"line_band_image", "line_band_tint", "line_band_line_color",
-                     "line_band_edge_color", "line_band_shadow_color",
+                     "line_band_edge_color", "line_band_clef_color",
+                     "line_band_shadow_color",
                      "line_band_stroke_color", "line_band_glow_color"}:
             changes[key] = value if isinstance(value, str) else ""
         elif key == "lit_style":
