@@ -68,7 +68,6 @@ EXCLUDED_MODULES=(
   pymss
   pymss_core
   pip
-  PIL
 )
 
 KEEP_TRANSLATIONS=(

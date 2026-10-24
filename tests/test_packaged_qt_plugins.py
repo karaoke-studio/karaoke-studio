@@ -39,6 +39,7 @@ def test_webp_image_plugin_stays_in_the_package() -> None:
         "imageformats/qjpeg.dll",  # 封面、缩略图
         "imageformats/qico.dll",  # 窗口与任务栏图标
         "imageformats/qsvg.dll",  # 导唱符等矢量素材
+        "imageformats/qgif.dll",  # 用户上传的行背景动图
     ],
 )
 def test_essential_plugins_are_never_trimmed(plugin: str) -> None:

@@ -93,7 +93,8 @@ LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 # v4: 主程序明确排除 torch；PyMSS 私有运行时在首次配置时单独安装 torch。禁止复用任何
 #     可能由旧构建环境意外收集了 torch 的 runtime zip。
 # v5: Bundle Deno and yt-dlp EJS scripts for YouTube JavaScript challenges.
-RUNTIME_PROFILE = "youtube-ejs-deno-v5"
+# v6: Retain Qt GIF support and Pillow for animated line-band alpha effects.
+RUNTIME_PROFILE = "animated-band-imageformats-v6"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {

@@ -44,6 +44,7 @@ call :ensure_pkg sounddevice sounddevice || exit /b 1
 call :ensure_pkg soundfile soundfile || exit /b 1
 call :ensure_pkg pedalboard pedalboard || exit /b 1
 call :ensure_pkg numpy numpy || exit /b 1
+call :ensure_pkg PIL pillow || exit /b 1
 call :ensure_pkg pykakasi pykakasi || exit /b 1
 call :ensure_pkg jaconv jaconv || exit /b 1
 call :ensure_pkg pyphen pyphen || exit /b 1
@@ -180,7 +181,6 @@ echo Building Windows package...
     --exclude-module pymss ^
     --exclude-module pymss_core ^
     --exclude-module pip ^
-    --exclude-module PIL ^
     --exclude-module PySide6 ^
     --exclude-module PyQt5 ^
     --exclude-module PyQt6.Qt3DAnimation ^

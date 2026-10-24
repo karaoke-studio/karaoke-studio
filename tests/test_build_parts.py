@@ -180,12 +180,16 @@ def test_reuse_without_prev_manifest_is_fresh_build(tmp_path) -> None:
     assert build_parts.try_reuse_runtime(tmp_path / "prev", out, {"n": "1"}, "abc", require_reuse=True) is None
 
 
-def test_rebuild_runtime_when_profile_is_missing(tmp_path) -> None:
+@pytest.mark.parametrize("previous_profile", [None, "youtube-ejs-deno-v5"])
+def test_rebuild_runtime_when_profile_is_missing_or_outdated(tmp_path, previous_profile) -> None:
     prev = tmp_path / "prev"
     _write_prev(prev, {"a": b"1"}, {"numpy": "2.4.6"}, "abc")
     manifest_path = prev / "KaraokeStudio-windows.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    del manifest["build"]["runtime_profile"]
+    if previous_profile is None:
+        del manifest["build"]["runtime_profile"]
+    else:
+        manifest["build"]["runtime_profile"] = previous_profile
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     assert build_parts.try_reuse_runtime(
         prev, tmp_path / "rt.zip", {"numpy": "2.4.6"}, "abc", require_reuse=True
