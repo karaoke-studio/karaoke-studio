@@ -137,9 +137,28 @@ def test_capabilities_cache_invalidates_on_generation_bump():
 
 
 def test_font_library_change_invalidates_fallback_and_coverage_caches(monkeypatch):
+    from types import SimpleNamespace
+
     from krok_helper.subtitle_render.engine.text import font_fallback as fallback
+    from krok_helper.subtitle_render.engine.text import font_weight
     from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
 
+    # This test exercises cache generations, not Qt shaping. Mock the face
+    # capture too: offscreen's box font can report isValid() yet crash inside
+    # QRawFont.familyName() when no fonts are available.
+    current = {"family": "First", "instance": object()}
+    raw = SimpleNamespace(familyName=lambda: current["family"])
+    line = SimpleNamespace(
+        setLineWidth=lambda width: None,
+        glyphRuns=lambda: [SimpleNamespace(rawFont=lambda: raw)],
+    )
+    monkeypatch.setattr(fallback, "slot_font", lambda *args: None)
+    monkeypatch.setattr(fallback, "QTextLayout", lambda *args: SimpleNamespace(
+        beginLayout=lambda: None, createLine=lambda: line, endLayout=lambda: None,
+    ))
+    monkeypatch.setattr(
+        font_weight, "remember_fallback_face", lambda *args: current["instance"]
+    )
     monkeypatch.setattr(fallback, "canonical_family", lambda family: family)
     monkeypatch.setattr(fallback, "missing_clusters", lambda *args: ("漢",))
     monkeypatch.setattr(
@@ -149,17 +168,21 @@ def test_font_library_change_invalidates_fallback_and_coverage_caches(monkeypatc
     try:
         fallback.prewarm_fallback("Test", 400, False, ["漢"])
         assert fallback.lookup_fallback("Test", 400, False, "漢") == "First"
+        assert fallback.lookup_fallback_instance("Test", 400, False, "漢") is current["instance"]
         assert fallback.missing_clusters_lookup("Test", 400, False, "漢") == ("漢",)
 
         clear_font_weight_cache()
         assert fallback.lookup_fallback("Test", 400, False, "漢") is None
+        assert fallback.lookup_fallback_instance("Test", 400, False, "漢") is None
         assert fallback.missing_clusters_lookup("Test", 400, False, "漢") is None
 
         monkeypatch.setattr(
             fallback, "resolve_fallback_families", lambda *args: {"漢": "Second"}
         )
+        current.update(family="Second", instance=object())
         fallback.prewarm_fallback("Test", 400, False, ["漢"])
         assert fallback.lookup_fallback("Test", 400, False, "漢") == "Second"
+        assert fallback.lookup_fallback_instance("Test", 400, False, "漢") is current["instance"]
     finally:
         fallback.clear_font_fallback_cache()
 
