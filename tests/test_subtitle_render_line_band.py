@@ -575,3 +575,45 @@ def test_band_effect_keeps_faint_alpha_and_color_opacity(qapp):
     edge, pad = _edge_source(spec, image, BandEffect("stroke", "#80FF0000", 2))
     # Do not binarize faint alpha away; the effect color's alpha must also apply.
     assert 14 <= edge.pixelColor(20 + pad, 20 + pad).alpha() <= 18
+
+
+@pytest.mark.parametrize("alignment", ["left", "center", "right"])
+@pytest.mark.parametrize("offset", [-40, 0, 100])
+def test_band_covers_inline_volume_bounds(qapp, monkeypatch, alignment, offset):
+    from krok_helper.subtitle_render.engine import painter as engine
+    captured = []
+    monkeypatch.setattr(engine, "_paint_band", lambda painter, rect, spec, t: captured.append(QRectF(rect)))
+    style = _style(
+        volume_enabled=True, volume_appearance_mode="custom",
+        volume_size=80, volume_column_count=4, volume_column_width=18,
+        volume_offset_x=offset, volume_duration_ms=2000,
+        line_horizontal_layout=alignment,
+    )
+    track = _track()
+    image = _blank()
+    paint_frame(image, track, 1800, style)
+    assert captured
+    full = captured[-1]
+    captured.clear()
+    paint_frame(image, track, 1800, replace(style, volume_enabled=False))
+    assert captured
+    assert full.width() > captured[-1].width()
+
+
+@pytest.mark.parametrize("enabled,host", [(False, None), (True, False), (True, True)])
+def test_inline_content_width_respects_module_and_host(qapp, enabled, host):
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.positioning import line_total_width
+    from krok_helper.subtitle_render.engine.render.elements.signal import inline_volume_geometry
+    track = _track()
+    line = track.lines[0]
+    line.volume_head_override = host
+    style = _style(volume_enabled=enabled, volume_appearance_mode="custom")
+    text = line_total_width(line, style)
+    content = line_total_width(line, style, track=track)
+    inline = inline_volume_geometry(track, line, style)
+    if enabled and host:
+        assert inline is not None
+        assert content == round(text + inline[1].group_width)
+    else:
+        assert inline is None
+        assert content == text

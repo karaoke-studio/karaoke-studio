@@ -153,6 +153,8 @@ def line_total_width(
     line: TimingLine,
     style: Style,
     rubies: list[RubyAnnotation] | None = None,
+    *,
+    track: TimingTrack | None = None,
 ) -> int:
     """Measure the N3 horizontal line box, optionally including ruby.
 
@@ -164,16 +166,18 @@ def line_total_width(
 
     cache = getattr(_LAYOUT_PASS, "line_widths", None)
     if cache is None:
-        return _line_total_width_uncached(line, style, rubies)
-    key = (id(line), id(style), id(rubies))
+        return _line_total_width_uncached(line, style, rubies, track=track)
+    key = (id(line), id(style), id(rubies), id(track))
     hit = cache.get(key)
     if hit is None:
-        hit = _line_total_width_uncached(line, style, rubies)
+        hit = _line_total_width_uncached(line, style, rubies, track=track)
         cache[key] = hit
         # 键里有 id()：存住入参，避免回收后地址被复用。
         _LAYOUT_PASS.lines.append(line)
         _LAYOUT_PASS.styles.append(style)
         _LAYOUT_PASS.ruby_lists.append(rubies)
+        if track is not None:
+            _LAYOUT_PASS.tracks.append(track)
     return hit
 
 
@@ -181,6 +185,8 @@ def _line_total_width_uncached(
     line: TimingLine,
     style: Style,
     rubies: list[RubyAnnotation] | None = None,
+    *,
+    track: TimingTrack | None = None,
 ) -> int:
     source_line = line
     line = render_line_with_guide_symbols(line)
@@ -229,6 +235,13 @@ def _line_total_width_uncached(
             gap_total = sum(gaps)
             left_ext = ruby_left
             right_ext = ruby_right
+    if track is not None:
+        from krok_helper.subtitle_render.engine.render.elements.signal import (
+            inline_volume_geometry,
+        )
+        inline = inline_volume_geometry(track, source_line, style)
+        if inline is not None:
+            left_ext = max(left_ext, inline[1].group_width)
     return max(
         int(round(text_width + gap_total + left_ext + right_ext)),
         1,
@@ -297,7 +310,7 @@ def smart_horizontal_dx(
         width = (
             total_w
             if page_line is line
-            else line_total_width(page_line, page_style, track.rubies)
+            else line_total_width(page_line, page_style, track.rubies, track=track)
         )
         max_widths[align] = max(max_widths[align], width)
     if max_widths["left"] == 0 or max_widths["right"] == 0:

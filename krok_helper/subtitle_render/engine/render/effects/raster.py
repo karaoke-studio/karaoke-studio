@@ -6,6 +6,8 @@ import math
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import (
+    QBrush,
+    QColor,
     QImage,
     QPainter,
     QPainterPath,
@@ -325,3 +327,75 @@ def paint_text_layer_stack(
         colors.text,
         fill_brush_rect(colors.text, brush_rect, horizontal_fill_rect),
     )
+
+
+def paint_transition_glow_halo(
+    painter: QPainter,
+    path: QPainterPath,
+    font_px: float,
+    glow_alpha: float,
+    radius_em: float,
+    *,
+    bright: bool = False,
+) -> None:
+    """拉伸/辉光类特效的多级圆角描边光晕（镜像 C++ kGlow*Strokes）。
+
+    5 级描边宽度递增、强度递减，叠出近似高斯衰减的弥散晕；画在字符
+    主体之下。``bright`` 用辉光浮现/消散的高强度表（整行强辉光）。
+    """
+    if glow_alpha <= 0.0 or path.isEmpty():
+        return
+    if radius_em <= 0.0 and not bright:
+        return
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
+        GLOW_ECHO_COPIES,
+        GLOW_ECHO_DECAY,
+        GLOW_ECHO_PITCH_EM,
+        GLOW_HALO_STROKES,
+    )
+
+    # 辉光浮现/消散（bright）：光晕即出场主体，不乘 core 透明度——出生
+    # 帧 core=0 时整行应呈现纯辉光；拉伸类的光晕仍跟随 core。
+    base_opacity = 1.0 if bright else painter.opacity()
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if bright:
+            # 细密横向回声：每侧 N 个字形重影副本，固定间距、亮度几何
+            # 衰减，叠出可分辨残像结构的横向光痕（参考图口径）。
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            decay = 1.0
+            for k in range(1, GLOW_ECHO_COPIES + 1):
+                decay *= GLOW_ECHO_DECAY
+                offset = GLOW_ECHO_PITCH_EM * radius_em * font_px * k
+                if offset < 0.5:
+                    continue
+                alpha = min(glow_alpha * decay, 1.0)
+                if alpha <= 0.008:
+                    break
+                painter.setOpacity(alpha)
+                painter.save()
+                painter.translate(offset, 0.0)
+                painter.drawPath(path)
+                painter.restore()
+                painter.save()
+                painter.translate(-offset, 0.0)
+                painter.drawPath(path)
+                painter.restore()
+        else:
+            pen = QPen()
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setColor(QColor(255, 255, 255))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for width_em, strength in GLOW_HALO_STROKES:
+                width = radius_em * width_em * font_px
+                if width < 0.5:
+                    continue
+                pen.setWidthF(width)
+                painter.setOpacity(min(base_opacity * glow_alpha * strength, 1.0))
+                painter.setPen(pen)
+                painter.drawPath(path)
+    finally:
+        painter.restore()

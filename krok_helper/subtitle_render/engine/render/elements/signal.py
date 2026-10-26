@@ -49,6 +49,7 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions i
     character_transform,
     line_char_transition_context,
     transition_char_state,
+    transition_char_glow,
     zoom_pulse_curve_level,
     zoom_pulse_wipe_scale,
 )
@@ -59,6 +60,7 @@ from krok_helper.subtitle_render.engine.render.effects.metrics import (
 )
 from krok_helper.subtitle_render.engine.render.effects.raster import (
     paint_text_layer_stack,
+    paint_transition_glow_halo,
 )
 from krok_helper.subtitle_render.engine.layout.layout_context import _LAYOUT_PASS
 from krok_helper.subtitle_render.engine.style.style_semantics import (
@@ -101,6 +103,7 @@ class SignalLitGroup:
     # 配色；role 档换成按名解析的固定方案。几何/尺寸仍来自全局投影样式；
     # None = 未解析（用组样式兜底）。
     bar_style: Style | None = None
+    bar_glows: tuple[tuple[float, float, bool] | None, ...] = ()
     # 「真一组」横向渐变跨度（画布坐标）：柱组外接框 ∪ 段首行第一角色
     # 墨迹跨度的并集，auto/role 档柱体横向渐变画刷取此跨度——柱与正文
     # 第一角色共用同一条渐变带（正文侧由行布局把第一角色跨度左缘拓宽
@@ -264,6 +267,27 @@ def volume_signal_geometry(style: Style) -> VolumeSignalGeometry:
         align_base_shift=align_base_shift,
         align_delta_shift=align_delta_shift,
     )
+
+
+def inline_volume_geometry(
+    track: TimingTrack, line: TimingLine, style: Style,
+) -> tuple[Style, VolumeSignalGeometry] | None:
+    """Resolve the stable inline module once, independent of frame opacity."""
+    if style.vertical or not (
+        style.volume_enabled or (style.lit_enabled and style.lit_style == "volume")
+    ):
+        return None
+    heads = volume_signal_head_context(track, style)
+    index = next((i for i, candidate in enumerate(track.lines) if candidate is line), None)
+    if heads is None or index not in heads:
+        return None
+    active = (
+        volume_style(style, auto_basis=signal_auto_basis(style))
+        if style.volume_enabled else style
+    )
+    if active.signals_duration_ms - max(active.lit_waiting_time_ms, 0) <= 0:
+        return None
+    return active, volume_signal_geometry(active)
 
 
 def volume_signal_column_rects(
@@ -496,6 +520,9 @@ def volume_bar_transition_states(
     t_ms: int,
     count: int,
     frame_height: int,
+    *,
+    centers: tuple[float, ...] | None = None,
+    line_center_x: float | None = None,
 ) -> tuple[BarAnimationState, ...] | None:
     """Resolve per-bar character-transition states for the volume group.
 
@@ -535,6 +562,8 @@ def volume_bar_transition_states(
                 count,
                 t_ms=t_ms,
                 frame_height=frame_height,
+                char_center_x=centers[index] if centers is not None else None,
+                line_center_x=line_center_x,
                 following_done_ms=int(done),
             )
         else:
@@ -545,6 +574,8 @@ def volume_bar_transition_states(
                 count,
                 t_ms=t_ms,
                 frame_height=frame_height,
+                char_center_x=centers[index] if centers is not None else None,
+                line_center_x=line_center_x,
             )
         if state != identity:
             idle = False
@@ -1314,6 +1345,31 @@ def _draw_volume_lit_group(
     active_index = group.active_index if group.active_index is not None else -1
     bar_animations = group.bar_animations
 
+    # All inline paths use the same halo rasterizer as text.
+    for index, glow in enumerate(group.bar_glows):
+        if glow is None:
+            continue
+        path = QPainterPath()
+        rect = rects[index]
+        radius = max(min(rect.width(), rect.height()) * 0.22, 1.0)
+        path.addRoundedRect(rect, radius, radius)
+        painter.save()
+        try:
+            if bar_animations is not None:
+                opacity, dx, dy, rotation, sx, sy, skew = bar_animations[index]
+                path = character_transform(
+                    center_x=rect.center().x(), center_y=rect.center().y(),
+                    dx=dx, dy=dy, rotation=rotation,
+                    scale_x=sx, scale_y=sy, skew_y=skew,
+                ).map(path)
+                painter.setOpacity(painter.opacity() * opacity)
+            paint_transition_glow_halo(
+                painter, path, float(style.font_size_px),
+                glow[0], glow[1], bright=glow[2],
+            )
+        finally:
+            painter.restore()
+
     # auto/role 装饰管线只属于独立音量柱模块：旧版 lit_style="volume"
     # 兼容路径不经 resolve_volume_appearance 物化（render_ir 同门），这里若
     # 只看模式字段会让 Painter 走推导、native 读物化前的原始值，两后端岔开。
@@ -1850,6 +1906,7 @@ def resolve_signal_lit_groups(
 
         elapsed = max(t_ms - active_start, 0)
         bar_animations = None
+        bar_glows = ()
         # 装饰源样式（auto 档）：段首行第一个非空白字符的角色方案叠加进行
         # 样式（native 端取第一个有几何字符的 styleIndex，两端口径一致）。
         # 音量柱 auto 装饰与形状灯 auto 装饰共用该源。
@@ -1891,6 +1948,20 @@ def resolve_signal_lit_groups(
                 line_style,
             )
             active_opacity, dx, dy = 1.0, 0.0, 0.0
+            transition = line_char_transition_context(
+                line_style, line, t_ms, display_line.display_start_ms, display_end, count
+            )
+            if transition is not None:
+                bar_glows = tuple(
+                    transition_char_glow(
+                        transition, i, count, t_ms=t_ms,
+                        configured_ms=(
+                            line_style.exit_fade_ms if transition.phase == "exit"
+                            else line_style.entry_lead_ms
+                        ),
+                    )
+                    for i in range(count)
+                )
             bar_animations = volume_bar_transition_states(
                 line_style,
                 line,
@@ -1899,6 +1970,16 @@ def resolve_signal_lit_groups(
                 t_ms,
                 count,
                 img_h,
+                centers=tuple(
+                    line_style.volume_offset_x - volume_geometry.group_width
+                    + volume_geometry.stroke_extent + i * volume_geometry.pitch
+                    + volume_geometry.column_width * 0.5
+                    for i in range(count)
+                ) if volume_geometry is not None else None,
+                line_center_x=(
+                    (min(0.0, line_style.volume_offset_x - volume_geometry.group_width)
+                     + max(float(total_w), float(line_style.volume_offset_x))) * 0.5
+                ) if volume_geometry is not None else None,
             )
         else:
             active_index, phase = shape_active_index_and_phase(
@@ -1989,6 +2070,7 @@ def resolve_signal_lit_groups(
                 anim_opacity=anim_opacity,
                 bar_animations=bar_animations,
                 bar_style=bar_style,
+                bar_glows=bar_glows,
                 fill_band_rect=fill_band_rect,
             )
         )

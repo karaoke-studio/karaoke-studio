@@ -10,6 +10,9 @@ from pathlib import Path
 import threading
 import time
 import uuid
+from typing import get_args
+
+from krok_helper.subtitle_render.domain.timing import EntryAnimation, ExitAnimation
 
 import numpy as np
 import pytest
@@ -15750,3 +15753,69 @@ def test_gpu_scanline_reuses_variable_font_body_geometry(weight, animation, with
         QFontDatabase.removeApplicationFont(font_id)
         clear_font_weight_cache()
         invalidate_n3_font_caches()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("animation,phase", [
+    (effect, phase)
+    for phase, effects in (
+        ("entry", get_args(EntryAnimation)),
+        ("exit", get_args(ExitAnimation)),
+    )
+    for effect in effects
+    if effect not in {"none", "fade", "rise", "slide_in", "slide_out", "utopia", "char_fade", "char_drip", "spin_flip"}
+])
+@pytest.mark.parametrize("force_warp", [True, False])
+def test_gpu_inline_volume_uses_registered_geometry_transition(animation, phase, force_warp):
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("A", 2000), TimingChar("B", 2500)], end_ms=3000,
+    )])
+    # Red bars and white text allow observation of bars alone, including motion.
+    style = _g1_style(
+        volume_enabled=True, volume_appearance_mode="custom", volume_duration_ms=2000,
+        volume_size=60, volume_column_width=12, volume_column_count=4,
+        volume_fill_color="#FF0000", volume_overlay_fill_color="#FF0000", volume_stroke_width=0,
+        base_color="#FFFFFF", fill_color="#FFFFFF", stroke_width_px=0,
+        stroke2_enabled=False, decoration_kind="none", line_tail_ms=600,
+        **{phase + "_anim": animation, "entry_lead_ms": 600, "exit_fade_ms": 600},
+    )
+    times = (50, 150, 300, 500) if phase == "entry" else (3050, 3150, 3300, 3500)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, animated = _render_g1_frames(renderer, style, times, force_warp=force_warp, track=track)
+        _, static = _render_g1_frames(renderer, replace(style, **{phase + "_anim": "none"}), times, force_warp=force_warp, track=track)
+    def red_mask(frame):
+        pixels = np.frombuffer(frame, dtype=np.uint8).reshape(-1, 4)
+        return (pixels[:, 0] > 50) & (pixels[:, 1] < 20) & (pixels[:, 2] < 20) & (pixels[:, 3] > 20)
+    assert any(red_mask(frame).any() for frame in static)
+    assert any(not np.array_equal(red_mask(a), red_mask(b)) for a, b in zip(animated, static))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("alignment", ["left", "center", "right"])
+def test_gpu_band_covers_inline_volume(alignment, tmp_path):
+    path = tmp_path / "band.png"
+    image = QImage(8, 8, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(path))
+    style = _g1_style(
+        volume_enabled=True, volume_appearance_mode="custom", volume_duration_ms=2000,
+        volume_size=50, volume_column_width=12, volume_column_count=4,
+        volume_fill_color="#FF0000", volume_overlay_fill_color="#FF0000",
+        volume_stroke_width=0, volume_offset_x=-20,
+        line_band_enabled=True, line_band_image=str(path), line_band_fill_mode="cover",
+        line_band_pad_top_px=10, line_band_pad_bottom_px=10,
+        line_band_pad_left_px=10, line_band_pad_right_px=10,
+        line_horizontal_layout=alignment,
+    )
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("AB", 2000)], end_ms=3000)])
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, frames = _render_g1_frames(renderer, style, (1800, 2300), force_warp=True, track=track)
+    for frame in frames:
+        pixels = np.frombuffer(frame, dtype=np.uint8).reshape(360, 640, 4)
+        red = (pixels[:, :, 0] > 150) & (pixels[:, :, 1] < 30) & (pixels[:, :, 2] < 30)
+        green = (pixels[:, :, 0] < 30) & (pixels[:, :, 1] > 150) & (pixels[:, :, 2] < 30)
+        ry, rx = np.where(red)
+        gy, gx = np.where(green)
+        assert len(rx) and len(gx)
+        assert gx.min() < rx.min() and gx.max() > rx.max()
+        assert gy.min() < ry.min() and gy.max() > ry.max()

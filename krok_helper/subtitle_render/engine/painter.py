@@ -414,6 +414,10 @@ from krok_helper.subtitle_render.engine.render.core.raster_blur import (
     _gaussian_blur_image,
     _n3_gaussian_kernel_1d,
 )
+from krok_helper.subtitle_render.engine.render.effects.raster import (
+    paint_transition_glow_halo as _paint_transition_glow_halo,
+)
+
 from krok_helper.subtitle_render.engine.render.elements.signal import (
     SignalLayoutMetrics as _SignalLayoutMetrics,
     SignalLineMeasurement,
@@ -3786,77 +3790,6 @@ def _paint_stroke_flash_overlay(
 _FX_SPRITE_PATH_CACHE: dict[str, QPainterPath] = {}
 
 
-def _paint_transition_glow_halo(
-    painter: QPainter,
-    path: QPainterPath,
-    font_px: float,
-    glow_alpha: float,
-    radius_em: float,
-    *,
-    bright: bool = False,
-) -> None:
-    """拉伸/辉光类特效的多级圆角描边光晕（镜像 C++ kGlow*Strokes）。
-
-    5 级描边宽度递增、强度递减，叠出近似高斯衰减的弥散晕；画在字符
-    主体之下。``bright`` 用辉光浮现/消散的高强度表（整行强辉光）。
-    """
-    if glow_alpha <= 0.0 or path.isEmpty():
-        return
-    if radius_em <= 0.0 and not bright:
-        return
-    from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
-        GLOW_ECHO_COPIES,
-        GLOW_ECHO_DECAY,
-        GLOW_ECHO_PITCH_EM,
-        GLOW_HALO_STROKES,
-    )
-
-    # 辉光浮现/消散（bright）：光晕即出场主体，不乘 core 透明度——出生
-    # 帧 core=0 时整行应呈现纯辉光；拉伸类的光晕仍跟随 core。
-    base_opacity = 1.0 if bright else painter.opacity()
-    painter.save()
-    try:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        if bright:
-            # 细密横向回声：每侧 N 个字形重影副本，固定间距、亮度几何
-            # 衰减，叠出可分辨残像结构的横向光痕（参考图口径）。
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(255, 255, 255)))
-            decay = 1.0
-            for k in range(1, GLOW_ECHO_COPIES + 1):
-                decay *= GLOW_ECHO_DECAY
-                offset = GLOW_ECHO_PITCH_EM * radius_em * font_px * k
-                if offset < 0.5:
-                    continue
-                alpha = min(glow_alpha * decay, 1.0)
-                if alpha <= 0.008:
-                    break
-                painter.setOpacity(alpha)
-                painter.save()
-                painter.translate(offset, 0.0)
-                painter.drawPath(path)
-                painter.restore()
-                painter.save()
-                painter.translate(-offset, 0.0)
-                painter.drawPath(path)
-                painter.restore()
-        else:
-            pen = QPen()
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setColor(QColor(255, 255, 255))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            for width_em, strength in GLOW_HALO_STROKES:
-                width = radius_em * width_em * font_px
-                if width < 0.5:
-                    continue
-                pen.setWidthF(width)
-                painter.setOpacity(min(base_opacity * glow_alpha * strength, 1.0))
-                painter.setPen(pen)
-                painter.drawPath(path)
-    finally:
-        painter.restore()
-
 
 def _fx_sprite_path(name: str) -> QPainterPath:
     """按名称构建（并缓存）中心原点、±500 em 空间的粒子 sprite 轮廓。"""
@@ -4327,8 +4260,8 @@ def _paint_line_fx_particles(
         return
     char_x_ranges = layout.char_x_ranges
     metrics = layout.metrics
-    line_left = min(ranges[0] for ranges in char_x_ranges)
-    line_right = max(ranges[1] for ranges in char_x_ranges)
+    line_left = layout.content_bounds.left()
+    line_right = layout.content_bounds.right()
     line_center_x = (line_left + line_right) / 2.0
     line_center_y = (
         layout.baseline_y - metrics.ascent() + metrics.height() / 2.0
@@ -4860,7 +4793,7 @@ def _paint_line_bands(
             if layout is None:
                 continue
             entry_rect = _band_rect(
-                layout.text_layout.line_rect, style, _band_ruby_top(layout)
+                layout.content_bounds, style, _band_ruby_top(layout)
             )
             rect = entry_rect if rect is None else rect.united(entry_rect)
         if rect is None:
@@ -5048,6 +4981,7 @@ def _paint_line_static(
                 fill_segments=layout.fill_segments,
                 guide_anim_anchor_ms=guide_anim_anchor_ms,
                 signal_band_left=layout.signal_band_left,
+                content_center_x=layout.content_bounds.center().x(),
             )
         else:
             transition_fill_rect = _n3_main_fill_rect(
@@ -5072,6 +5006,7 @@ def _paint_line_static(
                 fill_rect=transition_fill_rect,
                 fill_segments=layout.fill_segments,
                 guide_anim_anchor_ms=guide_anim_anchor_ms,
+                content_center_x=layout.content_bounds.center().x(),
             )
         paint_stroke_flash()
         # 前层粒子画在注音之后（同上：front 层盖过正文与注音）。
@@ -5645,6 +5580,7 @@ def _paint_role_line_with_character_transition(
     fill_segments: list[_FillSegment] | None = None,
     guide_anim_anchor_ms: int = 0,
     signal_band_left: float | None = None,
+    content_center_x: float | None = None,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -5724,7 +5660,7 @@ def _paint_role_line_with_character_transition(
             frame_height=painter.device().height(),
             following_done_ms=following_done_ms,
             char_center_x=left + width / 2,
-            line_center_x=_line_ranges_center_x(char_x_ranges),
+            line_center_x=(content_center_x if content_center_x is not None else _line_ranges_center_x(char_x_ranges)),
         )
         if opacity <= 0.0:
             continue
@@ -5930,6 +5866,7 @@ def _paint_line_with_character_transition(
     fill_rect: QRectF | None = None,
     fill_segments: list[_FillSegment] | None = None,
     guide_anim_anchor_ms: int = 0,
+    content_center_x: float | None = None,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -6001,7 +5938,7 @@ def _paint_line_with_character_transition(
             frame_height=painter.device().height(),
             following_done_ms=following_done_ms,
             char_center_x=left + width / 2,
-            line_center_x=line_rect.center().x(),
+            line_center_x=(content_center_x if content_center_x is not None else line_rect.center().x()),
         )
         if opacity <= 0.0:
             continue

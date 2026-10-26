@@ -119,3 +119,9 @@ class LineLayout:
     # 的横向渐变跨度左缘拓宽到这里，柱与文字共用同一条渐变带（role 档
     # 解析到固定方案时为 None：柱体仍取并集跨度，正文渐变不动）。
     signal_band_left: float | None = None
+    content_rect: QRectF | None = None
+
+    @property
+    def content_bounds(self) -> QRectF:
+        """Stable bounds of all inline content, independent of animation/blinking."""
+        return QRectF(self.content_rect if self.content_rect is not None else self.line_rect)

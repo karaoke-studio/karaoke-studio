@@ -94,6 +94,30 @@ from krok_helper.subtitle_render.sources.guide_symbols import (
 )
 
 
+def line_content_rect(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    text_rect: QRectF,
+    baseline_y: int,
+    metrics: QFontMetrics,
+) -> QRectF:
+    """Compose inline primitive bounds once; fill/ruby geometry stays text-only."""
+    from krok_helper.subtitle_render.engine.render.elements.signal import (
+        inline_volume_geometry, signal_lit_y,
+    )
+    rect = QRectF(text_rect)
+    inline = inline_volume_geometry(track, line, style)
+    if inline is None:
+        return rect
+    active, geometry = inline
+    x = rect.left() + active.volume_offset_x - geometry.group_width
+    y = signal_lit_y(baseline_y, metrics, geometry.size, active, geometry.stroke_extent)
+    return rect.united(QRectF(
+        x, y, geometry.group_width, geometry.size + 2 * geometry.stroke_extent
+    ))
+
+
 def signal_band_left_local(
     track: TimingTrack, line: TimingLine, style: Style
 ) -> float | None:
@@ -197,7 +221,7 @@ def measure_display_line_horizontal_bounds(
 
     line = display_line.line
     line_style = style_for_line(style, line)
-    total_w = line_total_width(line, line_style, track.rubies)
+    total_w = line_total_width(line, line_style, track.rubies, track=track)
     lane = display_line.lane if line_style.dual_line_layout else None
     x0 = resolve_line_x_smart(
         logical_w,
@@ -1145,6 +1169,7 @@ def layout_plain_line(
         char_x_ranges=char_x_ranges,
         fill_segments=fill_segments,
         line_rect=line_rect,
+        content_rect=line_content_rect(track, source_line, style, line_rect, y, metrics),
         colors=colors,
         rtl=text_rtl != line.wipe_reverse,
         has_inline_styles=False,
@@ -1330,6 +1355,10 @@ def layout_role_line(
         char_x_ranges=char_x_ranges,
         fill_segments=fill_segments,
         line_rect=text_layout.line_rect,
+        content_rect=line_content_rect(
+            track, source_line, style, text_layout.line_rect, y,
+            text_layout.glyphs[0].metrics,
+        ),
         colors=effective_karaoke_colors(style),
         rtl=style.right_to_left != line.wipe_reverse,
         has_inline_styles=True,

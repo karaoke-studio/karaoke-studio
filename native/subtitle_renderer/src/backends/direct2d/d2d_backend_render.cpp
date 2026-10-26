@@ -751,6 +751,52 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : frameDiagnostics.strokeDraw
         );
     };
+    // Shared inline-content contract. Anchoring reserves offset-free cells;
+    // visual consumers include user offsets, but never blink/animation state.
+    const auto hasInlineVolume = [](const Impl::CachedLine &line) {
+        const auto &style = line.style;
+        const bool enabled = style.volumeEnabled
+            || (style.litEnabled && style.litStyle == "volume");
+        const int duration = style.volumeEnabled
+            ? style.volumeDurationMs - std::max(style.volumeWaitingTimeMs, 0)
+            : style.signalsDurationMs - std::max(style.litWaitingTimeMs, 0);
+        return enabled && !style.vertical && line.volumeHead && duration > 0;
+    };
+    const auto lineContentBounds = [&](const Impl::CachedLine &line) {
+        auto bounds = line.fillBounds;
+        bounds.top = -(line.ascent > 0.0f ? line.ascent : line.laneFontAscent);
+        bounds.bottom = line.descent > 0.0f ? line.descent : line.laneFontDescent;
+        if (hasInlineVolume(line)) {
+            const auto geometry = volumeSignalGeometry(line.style);
+            const float left = line.style.volumeOffsetX - geometry.groupWidth;
+            const float centerY = (bounds.top + bounds.bottom) * 0.5f
+                + line.style.volumeOffsetY;
+            bounds.left = std::min(bounds.left, left);
+            bounds.right = std::max(bounds.right, left + geometry.groupWidth);
+            bounds.top = std::min(bounds.top, centerY - geometry.size * 0.5f
+                - geometry.strokeExtent);
+            bounds.bottom = std::max(bounds.bottom, centerY + geometry.size * 0.5f
+                + geometry.strokeExtent);
+        }
+        return bounds;
+    };
+    const auto lineAnchorBounds = [&](const Impl::CachedLine &line) {
+        auto bounds = line.bounds;
+        if (line.style.layoutSemantics == "n3_1074" && !line.style.vertical) {
+            bounds = line.fillBounds;
+            for (const auto &ruby : line.rubies) {
+                for (const auto &unit : ruby.chars) {
+                    bounds.left = std::min(bounds.left, unit.layoutLeft);
+                    bounds.right = std::max(bounds.right, unit.layoutRight);
+                }
+            }
+        }
+        if (hasInlineVolume(line)) {
+            bounds.left = std::min(bounds.left, -volumeSignalGeometry(line.style).groupWidth);
+            bounds.right = std::max(bounds.right, 0.0f);
+        }
+        return bounds;
+    };
     // ---- 行背景带：整帧预扫，先于所有文字 ----
     // 上下留白可以远大于行距（预设 26/26，用户可拉到 110/120），若随行绘制，
     // 后画的下一行带子会盖住上一行的字。这里在行循环之前一次铺完带子，再走
@@ -762,7 +808,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         && impl_->lineBandImage.bitmap != nullptr) {
         const LineBandStyle &band = scene.lineBand;
         // 行盒偏移：与行循环里的对齐/firstBaseline 同口径（带子按文本盒
-        // 对齐，不吃音量柱 union——与 Painter 用 line_rect 一致）。
+        // 对齐，背景与正文使用同一个完整行盒）。
         const auto bandOffsetAt = [&](
             const Impl::CachedLine &line,
             const LineAnimationState &animation,
@@ -771,18 +817,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         ) {
             const TextStyle &style = line.style;
             const bool n3Layout = style.layoutSemantics == "n3_1074";
-            float lyricLeft = line.bounds.left;
-            float lyricRight = line.bounds.right;
-            if (n3Layout) {
-                lyricLeft = line.fillBounds.left;
-                lyricRight = line.fillBounds.right;
-                for (const Impl::CachedRuby &ruby : line.rubies) {
-                    for (const Impl::CachedChar &unit : ruby.chars) {
-                        lyricLeft = std::min(lyricLeft, unit.layoutLeft);
-                        lyricRight = std::max(lyricRight, unit.layoutRight);
-                    }
-                }
-            }
+            const auto anchor = lineAnchorBounds(line);
+            const float lyricLeft = anchor.left;
+            const float lyricRight = anchor.right;
             float dx = (
                 static_cast<float>(scene.width) - (lyricRight - lyricLeft)
             ) * 0.5f - lyricLeft + style.centerOffsetX;
@@ -797,16 +834,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 && style.smartHorizontal != "none"
                 && style.alignment != "center"
                 && line.pageIndex >= 0) {
-                const auto layoutWidth = [](const Impl::CachedLine &candidate) {
-                    float left = candidate.fillBounds.left;
-                    float right = candidate.fillBounds.right;
-                    for (const Impl::CachedRuby &ruby : candidate.rubies) {
-                        for (const Impl::CachedChar &unit : ruby.chars) {
-                            left = std::min(left, unit.layoutLeft);
-                            right = std::max(right, unit.layoutRight);
-                        }
-                    }
-                    return std::max(right - left, 1.0f);
+                const auto layoutWidth = [&](const Impl::CachedLine &candidate) {
+                    const auto bounds = lineAnchorBounds(candidate);
+                    return std::max(bounds.right - bounds.left, 1.0f);
                 };
                 const auto firstCharFontSize = [&](
                     const Impl::CachedLine &candidate
@@ -1007,7 +1037,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float textBottom = line->descent > 0.0f
                 ? line->descent
                 : line->laneFontDescent;
-            float topRef = textTop;
+            const auto content = lineContentBounds(*line);
+            float topRef = content.top;
             if (band.includeRuby) {
                 for (const Impl::CachedRuby &ruby : line->rubies) {
                     // 注音盒顶（em 盒顶，非墨迹）：空盒退回布局盒。
@@ -1020,10 +1051,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             const D2D1_RECT_F entryRect = D2D1::RectF(
-                line->fillBounds.left + offset.x - band.padLeft,
+                content.left + offset.x - band.padLeft,
                 topRef + offset.y - band.padTop + band.offsetY,
-                line->fillBounds.right + offset.x + band.padRight,
-                textBottom + offset.y + band.padBottom + band.offsetY
+                content.right + offset.x + band.padRight,
+                content.bottom + offset.y + band.padBottom + band.offsetY
             );
             auto found = std::find_if(
                 groups.begin(),
@@ -1856,6 +1887,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 tMs, startMs, endMs, line->style.zoomPulseCurveLevel
             );
         };
+        const auto inlineGeometryAt = [&](int index, int count, float centerX) {
+            const auto &window = line->displayWindows.front();
+            const bool exit = activeCharacterDirection > 0;
+            const int duration = exit ? line->exitDurationMs : line->entryDurationMs;
+            const int start = exit
+                ? maxExitTransitionStart(line->endMs, window.endMs, duration)
+                : window.startMs;
+            const auto bounds = lineContentBounds(*line);
+            return geoCharState(activeCharacterTransition, line->style.fontSize,
+                index, count, tMs, start, duration, exit, centerX,
+                (bounds.left + bounds.right) * 0.5f, bounds.right > bounds.left);
+        };
         auto characterAnimationAt = [&](std::size_t charIndex) {
             CharacterAnimationState state;
             if (charIndex >= line->chars.size()) {
@@ -1869,39 +1912,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     // 2026-09 逐字几何特效（与 transitions._geo_char_state 镜像）。
                     // 退场相位置 utopiaExit：位移/旋转后的字形与水平走字带脱钩，
                     // 整字按已唱状态淡出（与 painter 的 in_utopia_exit 同口径）。
-                    const DisplayWindow &window = line->displayWindows.front();
-                    const int transitionDurationMs = activeCharacterDirection > 0
-                        ? line->exitDurationMs
-                        : line->entryDurationMs;
-                    const int transitionStart = activeCharacterDirection > 0
-                        ? maxExitTransitionStart(
-                            line->endMs, window.endMs, transitionDurationMs
-                        )
-                        : window.startMs;
                     const int count = std::max(
                         static_cast<int>(line->chars.size()), 1
                     );
-                    // 行中心取 fillBounds（对齐/智能水平同款行盒，与
-                    // drawFxBursts 的行锚点同源）。
-                    const float boundsLeft = line->fillBounds.left;
-                    const float boundsRight = line->fillBounds.right;
-                    const bool hasBounds =
-                        boundsRight > boundsLeft;
-                    GeoCharState geo = geoCharState(
-                        activeCharacterTransition,
-                        line->style.fontSize,
-                        static_cast<int>(charIndex),
-                        count,
-                        tMs,
-                        transitionStart,
-                        activeCharacterDirection > 0
-                            ? line->exitDurationMs
-                            : line->entryDurationMs,
-                        activeCharacterDirection > 0,
-                        ch.pivotX,
-                        hasBounds ? (boundsLeft + boundsRight) * 0.5f : 0.0f,
-                        hasBounds
-                    );
+                    GeoCharState geo = inlineGeometryAt(static_cast<int>(charIndex), count, ch.pivotX);
                     if (activeCharacterDirection > 0) {
                         // 退场期间整字放大的缩回仍叠加：缩放按曲线继续，
                         // 退场位移/旋转/透明度照常。
@@ -2063,15 +2077,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     && isGeoTransition(activeCharacterTransition)) {
                     // 注音单元跟随其基础字符的几何变换（与 painter 的
                     // _paint_ruby_text_units... 同口径：transition 用基础字 index）。
-                    const DisplayWindow &window = line->displayWindows.front();
-                    const int transitionDurationMs = activeCharacterDirection > 0
-                        ? line->exitDurationMs
-                        : line->entryDurationMs;
-                    const int transitionStart = activeCharacterDirection > 0
-                        ? maxExitTransitionStart(
-                            line->endMs, window.endMs, transitionDurationMs
-                        )
-                        : window.startMs;
                     const int count = std::max(
                         static_cast<int>(line->chars.size()), 1
                     );
@@ -2081,27 +2086,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const Impl::CachedChar &baseChar = line->chars[
                         static_cast<std::size_t>(staggerIndex)
                     ];
-                    // 行中心取 fillBounds（对齐/智能水平同款行盒，与
-                    // drawFxBursts 的行锚点同源）。
-                    const float boundsLeft = line->fillBounds.left;
-                    const float boundsRight = line->fillBounds.right;
-                    const bool hasBounds =
-                        boundsRight > boundsLeft;
-                    GeoCharState geo = geoCharState(
-                        activeCharacterTransition,
-                        line->style.fontSize,
-                        staggerIndex,
-                        count,
-                        tMs,
-                        transitionStart,
-                        activeCharacterDirection > 0
-                            ? line->exitDurationMs
-                            : line->entryDurationMs,
-                        activeCharacterDirection > 0,
-                        baseChar.pivotX,
-                        hasBounds ? (boundsLeft + boundsRight) * 0.5f : 0.0f,
-                        hasBounds
-                    );
+                    GeoCharState geo = inlineGeometryAt(staggerIndex, count, baseChar.pivotX);
                     if (activeCharacterDirection > 0) {
                         const float overlay = zoomShrinkOverlay(
                             baseChar.startMs, baseChar.endMs
@@ -2788,6 +2773,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return state;
             }
             const int count = std::max(barCount, 1);
+            if (!activeCharacterTransition.empty()
+                && isGeoTransition(activeCharacterTransition)) {
+                const auto geo = inlineGeometryAt(index, count, cx);
+                state.opacity = geo.opacity;
+                state.matrix = barCenteredMatrix(geo.dx, geo.dy, geo.rotation,
+                    geo.scaleX, geo.scaleY, 0.0f, cx, cy);
+                return state;
+            }
             if (activeCharacterTransition == "char_fade"
                 || activeCharacterTransition == "char_drip"
                 || activeCharacterTransition == "spin_flip") {
@@ -2904,57 +2897,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         std::vector<VolumeBarGlowLayer> litGlowLayers;
         const int signalActiveDuration = std::max(
             (independentVolume ? style.volumeDurationMs : style.signalsDurationMs)
-                - std::max(
-                    independentVolume ? style.volumeWaitingTimeMs : style.litWaitingTimeMs,
-                    0
-                ),
-            0
-        );
-        const int signalEndMs = line->startMs + (
-            independentVolume ? style.volumeTimeOffsetMs : style.litTimeOffsetMs
-        );
-        // Only the volume bars participate in the line-width union (shape
-        // lamps float above the text), so the layout gate follows the bar's
-        // own per-line host flag (volume_head, Python 特效行开关).
-        const bool signalLayoutActive = (independentVolume || legacyVolume)
-            && !style.vertical
-            && signalActiveDuration > 0
-            && line->volumeHead
-            && tMs >= displayStartMs
-            && tMs < displayEndMs;
-        float lyricLeft = line->bounds.left;
-        float lyricRight = line->bounds.right;
+                - std::max(independentVolume ? style.volumeWaitingTimeMs : style.litWaitingTimeMs, 0), 0);
+        const int signalEndMs = line->startMs
+            + (independentVolume ? style.volumeTimeOffsetMs : style.litTimeOffsetMs);
+        const bool signalLayoutActive = hasInlineVolume(*line);
+        const auto anchorBounds = lineAnchorBounds(*line);
+        const float unionLeft = anchorBounds.left;
+        const float unionRight = anchorBounds.right;
         const bool n3Layout = style.layoutSemantics == "n3_1074";
-        if (n3Layout && !style.vertical) {
-            lyricLeft = line->fillBounds.left;
-            lyricRight = line->fillBounds.right;
-            // N3 anchors the complete line box, including a reading that
-            // overhangs its base-text target.  Painter folds the same ruby
-            // layout boxes into _line_total_width even for centered rows.
-            for (const Impl::CachedRuby &ruby : line->rubies) {
-                for (const Impl::CachedChar &unit : ruby.chars) {
-                    lyricLeft = std::min(lyricLeft, unit.layoutLeft);
-                    lyricRight = std::max(lyricRight, unit.layoutRight);
-                }
-            }
-        }
-        // Guide-symbol lines must keep anchoring this complete layout box:
-        // fillBounds spans [0, cursor] over every layout cell (vector guide
-        // glyphs included) and the branches above add ruby overhang.  A
-        // source-text-only anchor box would push right-aligned lines one
-        // guide advance past the right margin.
-        // The Painter no longer pads the horizontal line box with the stroke
-        // extent under legacy semantics either -- both now anchor N3's logical
-        // DrawLineLeft/Right, so mixed-role lines keep the glyph box as well.
-        float unionLeft = lyricLeft;
-        float unionRight = lyricRight;
-        if (signalLayoutActive) {
-            // Painter aligns the offset-free union of the text and signal
-            // module throughout the guide window, including flash-off frames.
-            // The volume offset moves only the bars afterwards.
-            unionLeft = std::min(unionLeft, -signalGeometry.groupWidth);
-            unionRight = std::max(unionRight, 0.0f);
-        }
         // Shape lamps ride above the text start, so they reserve no horizontal
         // room: the Painter keeps their span outside the anchored union and
         // lets them overhang freely at their offset.
@@ -2991,17 +2941,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && style.smartHorizontal != "none"
             && style.alignment != "center"
             && line->pageIndex >= 0) {
-            const auto layoutWidth = [](const Impl::CachedLine &candidate) {
-                float left = candidate.fillBounds.left;
-                float right = candidate.fillBounds.right;
-                for (const Impl::CachedRuby &ruby : candidate.rubies) {
-                    for (const Impl::CachedChar &unit : ruby.chars) {
-                        left = std::min(left, unit.layoutLeft);
-                        right = std::max(right, unit.layoutRight);
-                    }
-                }
-                return std::max(right - left, 1.0f);
-            };
+            const auto layoutWidth = [&](const Impl::CachedLine &candidate) {
+                    const auto bounds = lineAnchorBounds(candidate);
+                    return std::max(bounds.right - bounds.left, 1.0f);
+                };
             const auto firstCharFontSize = [&](const Impl::CachedLine &candidate) {
                 if (!candidate.chars.empty()) {
                     const int styleIndex = candidate.chars.front().styleIndex;
@@ -6630,11 +6573,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     boxH = lineHeight;
                 } else {
                     // 行锚点用 fillBounds（对齐/智能水平同款行盒）。
-                    originX = (line->fillBounds.left + line->fillBounds.right) * 0.5f;
+                    const auto content = lineContentBounds(*line);
+                    originX = (content.left + content.right) * 0.5f;
                     originY = (line->descent - line->ascent) * 0.5f;
                     // sparkle 需要整行盒：粒子铺满整句并按横向位置扫过。
                     boxW = std::max(
-                        line->fillBounds.right - line->fillBounds.left, 1.0f
+                        content.right - content.left, 1.0f
                     );
                     boxH = lineHeight;
                 }
@@ -7129,15 +7073,39 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 D2D1::Matrix3x2F::Identity();
             context->GetTransform(&previousTransform);
             const float font = std::max(line->style.fontSize, 1.0f);
-            for (std::size_t index = 0; index < line->chars.size(); ++index) {
-                const CharacterAnimationState animation =
-                    characterAnimationAt(index);
+            const std::size_t textCount = line->chars.size();
+            const std::size_t inlineCount = textCount
+                + (signalState.visible ? static_cast<std::size_t>(barCount) : 0);
+            for (std::size_t index = 0; index < inlineCount; ++index) {
+                CharacterAnimationState animation;
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> inlineGeometry;
+                ID2D1Geometry *geometry = nullptr;
+                if (index < textCount) {
+                    animation = characterAnimationAt(index);
+                    geometry = frameCharGeometries[index].Get();
+                } else {
+                    const int bar = static_cast<int>(index - textCount);
+                    const auto rect = volumeBarRoundedRectAt(bar);
+                    const float cx = (rect.rect.left + rect.rect.right) * 0.5f;
+                    const float cy = (rect.rect.top + rect.rect.bottom) * 0.5f;
+                    const auto geo = inlineGeometryAt(bar, barCount, cx);
+                    animation.opacity = geo.opacity;
+                    animation.glowAlpha = geo.glowAlpha * signalState.opacity;
+                    animation.glowRadiusEm = geo.glowRadiusEm;
+                    Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> shape;
+                    checkHr(device_.d2dFactory()->CreateRoundedRectangleGeometry(
+                        rect, shape.ReleaseAndGetAddressOf()), "inline halo shape", device_);
+                    const auto matrix = geoCharMatrix(geo, cx, cy);
+                    checkHr(device_.d2dFactory()->CreateTransformedGeometry(
+                        shape.Get(), &matrix,
+                        inlineGeometry.ReleaseAndGetAddressOf()), "inline halo transform", device_);
+                    geometry = inlineGeometry.Get();
+                }
                 if (animation.glowAlpha <= 0.0f
                     || animation.glowRadiusEm <= 0.0f) {
                     continue;
                 }
                 // 用带逐字变换（横向拉伸）的本帧几何，光晕随光条一起被拉伸。
-                ID2D1Geometry *geometry = frameCharGeometries[index].Get();
                 if (geometry == nullptr) {
                     continue;
                 }
