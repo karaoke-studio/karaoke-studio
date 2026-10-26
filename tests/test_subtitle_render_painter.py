@@ -73,6 +73,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _after_glow_source_clip_rect,
     _fill_clip_band,
     _fill_extent_end,
+    _main_scanline_front,
     _run_fill_complete,
     _layout_vertical_line,
     _linear_gradient_brush,
@@ -7975,6 +7976,115 @@ def test_reading_unit_mode_maps_ruby_units_across_multiple_base_chars(qapp):
         ruby_main_progress_mode="reading_units",
     ) == pytest.approx(0.5)
     assert _fill_extent_end(reading_units, 3_000) == 150
+
+
+def test_checkpoint_ruby_group_segment_carries_real_phase_window(qapp):
+    """checkpoint 合并段灌上回退链时间窗后，注音组演唱中扫字线锋面恢复。
+
+    历史 bug：合并段 ``start_ms``/``end_ms`` 留 dataclass 默认 0/0，
+    ``main_scanline_front`` 的相控判定读裸字段，注音组独唱期间永远拿不到
+    锋面，扫字线在这部分汉字上整段消失（走字填色不受影响）。
+    """
+    line = TimingLine(
+        chars=[
+            TimingChar(text="空", start_ms=1_000),
+            TimingChar(text="漢", start_ms=1_500),
+            TimingChar(text="字", start_ms=2_000),
+            TimingChar(text="に", start_ms=2_500),
+        ],
+        end_ms=3_000,
+    )
+    intervals = [
+        (1_000, 1_500),
+        (1_500, 2_000),
+        (2_000, 2_500),
+        (2_500, 3_000),
+    ]
+    ranges = [(0, 100), (100, 200), (200, 300), (300, 400)]
+    ruby = RubyAnnotation(
+        kanji="漢字",
+        reading="かんじ",
+        reading_part_ms=[300, 500, 700],
+        pos_start_ms=1_500,
+        pos_end_ms=2_500,
+        target_char_start=1,
+        target_char_end=3,
+    )
+
+    segments = _karaoke_fill_segments(
+        [100] * 4, intervals, ranges, [ruby], line
+    )
+    assert len(segments) == 3
+    merged = segments[1]
+    assert merged.indices == (1, 2)
+    # 回退链第一级：有效注音自身的走字窗口（与 segment_wipe_times 同口径）。
+    assert (merged.start_ms, merged.end_ms) == (1_500, 2_500)
+    # 注音组演唱中：锋面持续存在，扫字线不再失效。
+    for t_ms in (1_500, 1_600, 2_000, 2_400, 2_500):
+        assert _main_scanline_front(segments, t_ms, rtl=False) is not None
+    # 组外字符依旧正常。
+    assert _main_scanline_front(segments, 1_200, rtl=False) is not None
+    assert _main_scanline_front(segments, 2_800, rtl=False) is not None
+
+
+def test_checkpoint_ruby_group_phase_window_stays_gated_in_gap(qapp):
+    """灌上时间窗不改变相控语义：组唱完到下一字开始之间的间隔仍不画。"""
+    line = TimingLine(
+        chars=[
+            TimingChar(text="空", start_ms=1_000),
+            TimingChar(text="漢", start_ms=1_500),
+            TimingChar(text="字", start_ms=2_000),
+            TimingChar(text="に", start_ms=2_600),
+        ],
+        end_ms=3_000,
+    )
+    intervals = [
+        (1_000, 1_500),
+        (1_500, 2_000),
+        (2_000, 2_500),
+        (2_600, 3_000),
+    ]
+    ranges = [(0, 100), (100, 200), (200, 300), (300, 400)]
+    ruby = RubyAnnotation(
+        kanji="漢字",
+        reading="かんじ",
+        reading_part_ms=[300, 500, 700],
+        pos_start_ms=1_500,
+        pos_end_ms=2_500,
+        target_char_start=1,
+        target_char_end=3,
+    )
+
+    segments = _karaoke_fill_segments(
+        [100] * 4, intervals, ranges, [ruby], line
+    )
+    assert _main_scanline_front(segments, 2_550, rtl=False) is None
+    # 已唱完整行 / 未开始：相控语义不变。
+    assert _main_scanline_front(segments, 500, rtl=False) is None
+    assert _main_scanline_front(segments, 3_200, rtl=False) is None
+
+
+def test_checkpoint_ruby_segment_window_fallback_chain(qapp):
+    """回退链单元：注音窗口 → 目标区间并集 → 维持 0/0。"""
+    from krok_helper.subtitle_render.engine.render.elements.horizontal.layout import (
+        checkpoint_ruby_segment_window,
+    )
+
+    healthy = RubyAnnotation(
+        kanji="漢字", reading="かんじ", pos_start_ms=1_500, pos_end_ms=2_500
+    )
+    assert checkpoint_ruby_segment_window(healthy, [], []) == (1_500, 2_500)
+    degenerate = RubyAnnotation(
+        kanji="漢字", reading="かんじ", pos_start_ms=0, pos_end_ms=0
+    )
+    assert checkpoint_ruby_segment_window(
+        degenerate, [1, 2], [(0, 100), (100, 300), (300, 500)]
+    ) == (100, 500)
+    assert checkpoint_ruby_segment_window(degenerate, [], []) == (0, 0)
+    # 区间并集退化（零宽）时同样落到末级。
+    assert checkpoint_ruby_segment_window(
+        degenerate, [1], [(0, 100), (250, 250)]
+    ) == (0, 0)
 
 
 @pytest.mark.parametrize("mode", ["checkpoint_segments", "reading_units"])

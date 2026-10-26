@@ -216,6 +216,37 @@ def bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
         getattr(symbol, "bitmap_after_path", None)
     )
 
+def checkpoint_ruby_segment_window(
+    ruby: RubyAnnotation,
+    indices: list[int],
+    intervals: list[tuple[int, int]],
+) -> tuple[int, int]:
+    """Resolve the merged checkpoint segment's phase window via a fallback chain.
+
+    checkpoint 模式把注音组合并成一个 FillSegment，fill 时钟来自
+    ``segment.ruby``，但扫字线相控与柱体生长读的是裸 ``start_ms`` /
+    ``end_ms`` 字段；历史上留 dataclass 默认 0/0，导致注音组演唱中
+    锋面明明在推进却整段不画扫字线。回退链按权威度逐级取真实时间窗：
+
+    1. 有效注音自身的走字窗口（与 ``segment_wipe_times`` /
+       ``_main_text_ruby_progress_ratio`` 同口径，锋面恰好在进度
+       (0, 1) 开区间行进的时间域）；
+    2. 目标正文字符区间的并集（注音窗口退化为 0/0 时的防御层，
+       ``effective_ruby_for_target`` 正常会把窗口钳到这里）；
+    3. 仍取不到时维持 0/0（与历史行为一致，相控自然不命中）。
+    """
+
+    if ruby.pos_end_ms > ruby.pos_start_ms:
+        return int(ruby.pos_start_ms), int(ruby.pos_end_ms)
+    valid = [index for index in indices if 0 <= index < len(intervals)]
+    if valid:
+        start = min(intervals[index][0] for index in valid)
+        end = max(intervals[index][1] for index in valid)
+        if end > start:
+            return int(start), int(end)
+    return 0, 0
+
+
 def karaoke_fill_segments(
     char_widths: list[int],
     intervals: list[tuple[int, int]],
@@ -341,6 +372,9 @@ def karaoke_fill_segments(
             release_right = max(release_x_ranges[i][1] for i in indices)
             layout_left = min(layout_x_ranges[i][0] for i in indices)
             layout_right = max(layout_x_ranges[i][1] for i in indices)
+            seg_start, seg_end = checkpoint_ruby_segment_window(
+                effective_ruby, indices, intervals
+            )
             segments.append(
                 FillSegment(
                     left=left,
@@ -349,6 +383,8 @@ def karaoke_fill_segments(
                     release_right=release_right,
                     layout_left=layout_left,
                     layout_right=layout_right,
+                    start_ms=seg_start,
+                    end_ms=seg_end,
                     ruby=effective_ruby,
                     indices=tuple(indices),
                 )
