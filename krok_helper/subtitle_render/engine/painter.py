@@ -3985,22 +3985,53 @@ def _fx_baked_sprite_image(
     return entry
 
 
+def _line_particle_tail_end_ms(item, style: Style) -> int | None:
+    """行 `LineLayoutPlan` 的粒子终点（按传入样式对象身份缓存）。
+
+    ``plan_line_bursts`` 对整行规划一次即可得到与渲染完全一致的 burst 时间
+    窗；plan 重绑（样式变化）会产出新的 item / 样式对象，缓存自然失效。
+    同一 plan 内每行只会真正规划一次，随后每帧的尾奏判定是 O(1)。
+    """
+
+    from krok_helper.subtitle_render.engine.render.effects.particles import (
+        line_particle_tail_end_ms,
+    )
+
+    cached = getattr(item, "_particle_tail_cache", None)
+    if cached is not None and cached[0] is style:
+        return cached[1]
+    tail_end = line_particle_tail_end_ms(
+        style,
+        int(item.track_index),
+        item.display_start_ms,
+        item.display_end_ms,
+        _line_end_ms(item.line),
+        item.resolved_intervals,
+    )
+    object.__setattr__(item, "_particle_tail_cache", (style, tail_end))
+    return tail_end
+
+
 def _exit_particle_tail_items(
     style: Style,
     layout_plan,
     display_lines: list[DisplayLine],
     t_ms: int,
 ) -> list:
-    """t 时刻仍需续播退场粒子的行（显示窗已结束、粒子未到自然终点）。
+    """t 时刻仍需续播粒子的行（显示窗已结束、粒子未到自然终点）。
 
     2026-10 分离口径：粒子发射恒按标准速率且完整播放，行消失后由
     退场尾奏通道续播；本函数同时服务 paint_frame 的空内容早退判定
     （没有可见行但仍有尾奏粒子时不能提前返回）。
+
+    淘汰界直接取本行**全部** burst 的自然终点（``line_particle_tail_end_ms``，
+    与 GPU 侧扫描行 bursts 的判定同源）——「粒子速度调整」减速后入场/唱字/
+    扫字线粒子也可能越过显示窗终点，原先按退场档位常量推算的解析式跟不上。
+    退场动画必须属于粒子档（GPU ``particleExitTail`` 的同一条件），否则
+    行文本消失后 GPU 也不会再画粒子。
     """
+
     from krok_helper.subtitle_render.domain.timing import EXIT_PARTICLE_ANIMS
-    from krok_helper.subtitle_render.engine.render.effects.particles import (
-        exit_particle_tail_end_ms,
-    )
 
     if style.vertical or layout_plan is None:
         return []
@@ -4019,9 +4050,7 @@ def _exit_particle_tail_items(
         exit_anim = str(getattr(line_style, "exit_anim", "none") or "none")
         if exit_anim not in EXIT_PARTICLE_ANIMS:
             continue
-        tail_end = exit_particle_tail_end_ms(
-            exit_anim, len(line.chars), _line_end_ms(line), int(item.display_end_ms)
-        )
+        tail_end = _line_particle_tail_end_ms(item, line_style)
         if tail_end is None or t_ms >= tail_end:
             continue
         items.append(item)
@@ -4168,37 +4197,17 @@ def _paint_line_fx_particles(
     """
     if style.vertical:
         return
-    # 早退护栏只豁免「无粒子」组合：sparkle/ripple/note 既是入退场动画也
-    # 携带粒子（2026-09 从 fx 档位晋升），assemble/dissolve 同理——旧口径
-    # 只豁免拼接/消散，唱字特效=无时入退场星光/涟漪/音符整段被跳过
-    #（CPU 与 GPU 预览也因此分歧）。
-    particle_entry_anims = {
-        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
-        "flame", "feather", "lightning", "assemble_in",
-    }
-    particle_exit_anims = {
-        "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
-        "flame", "feather", "lightning", "dissolve_out",
-    }
-    if (
-        style.entry_fx == "none"
-        and style.exit_fx == "none"
-        and style.sing_fx == "none"
-        and style.entry_anim not in particle_entry_anims
-        and style.exit_anim not in particle_exit_anims
-        # 扫字线特效（2026-10）：高亮带本身不经过粒子通道，这里单独放行，
-        # 否则整条扫字线粒子会被「无粒子组合」早退跳过。
-        and not (
-            str(getattr(style, "scanline_effect", "none") or "none") != "none"
-            and effective_karaoke_scanline(style)
-        )
-    ):
-        return
+    # 早退护栏与退场尾奏淘汰界共用 particles.line_has_fx_particles：sparkle/
+    # ripple/note 既是入退场动画也携带粒子，assemble/dissolve 同理，扫字线
+    # 特效也走粒子通道。名单只在 particles.py 维护一份。
     from krok_helper.subtitle_render.engine.render.effects.particles import (
         burst_particles_at,
+        line_has_fx_particles,
         plan_line_bursts,
         sprite_for_kind,
     )
+    if not line_has_fx_particles(style):
+        return
 
     display_start = (
         int(display_start_ms) if display_start_ms is not None else _line_start_ms(render_line)

@@ -1284,6 +1284,14 @@ class Style:
     """扫字线特效粒子密度：每个字符的基准颗数（长音符按持续时间
     折算，见 ``particles.scanline_particles_per_char``）。"""
 
+    scanline_effect_speed_pct: int = 0
+    """扫字线粒子特效的速度调整（百分比，-1000~1000，0 = 原速）。
+
+    负值减速、正值加速；倍率同对数轴 ``10 ** (pct / 1000)``。只缩放粒子
+    自身的拖尾寿命（``tail_ms``），锋面出生窗口 ``emit_ms`` 不动——粒子
+    仍然沿真实走字锋面发射，只是飞散/淡出的快慢不同。
+    """
+
     scanline_effect_color_mode: str = "theme"
     """扫字线粒子特效颜色模式：``theme`` 按特效档位主题色（樱花粉/羽毛白/
     雪花蓝白/星光金/音符白粉）；其余与唱字装饰粒子同语义（color /
@@ -1333,6 +1341,14 @@ class Style:
     fx_particle_count: int = 14
     """粒子数量：星光闪烁一次发射的 sprite 数；闪烁/音符按比例折算为每字数量。"""
 
+    fx_particle_speed_pct: int = 0
+    """唱字装饰粒子的速度调整（百分比，-1000~1000，0 = 原速）。
+
+    负值减速、正值加速；倍率按对数轴 ``10 ** (pct / 1000)``（±1000% =
+    0.1×/10×）。渲染端在 burst 规划期把每个粒子的时间窗按倍率缩放
+    （``particles.plan_line_bursts`` 末端的统一变速），GPU 与 CPU 消费同一
+    份 burst 时间窗，预览与导出同口径。"""
+
     fx_particle_color: str = "#FFFFFF"
     """粒子颜色一（#RRGGBB）；``fx_particle_color_mode == "color"`` 时与
     ``fx_particle_color2`` 双色随机混发。"""
@@ -1380,6 +1396,13 @@ class Style:
 
     2026-10 用户口径：入退场粒子颜色/尺寸与唱字装饰粒子、扫字线特效彻底
     解耦，各有独立设置；药丸切换当前编辑对象。"""
+
+    anim_fx_speed_pct: int = 0
+    """入退场动画粒子的速度调整（百分比，-1000~1000，0 = 原速）。
+
+    负值减速、正值加速；倍率同对数轴 ``10 ** (pct / 1000)``。入退场七个
+    下落/粒子档与拼接/消散档都吃这个倍率：飞行/淡出时长按倍率缩放，粒子
+    发射时刻（逐字错峰、入场预演提前量）保持不变。"""
 
     anim_fx_color: str = "#FFB7C5"
     """入退场粒子颜色一（仅在 ``anim_fx_color_mode == "color"`` 时生效）。"""
@@ -1831,6 +1854,34 @@ PARTICLE_COLOR_TARGETS = ("anim", "sing", "scanline")
 ``anim`` 入退场动画粒子（``anim_fx_*``）；``sing`` 唱字装饰粒子
 （``fx_particle_*``）；``scanline`` 扫字线粒子特效（``scanline_effect_*``）。
 """
+
+PARTICLE_SPEED_PCT_MIN = -1000
+PARTICLE_SPEED_PCT_MAX = 1000
+PARTICLE_SPEED_PCT_DEFAULT = 0
+"""「粒子速度调整」百分比的输入范围与默认值（0 = 原速）。
+
+速度倍率走**对数轴**：``factor = 10 ** (pct / 1000)``——0% = 1×，负值减速
+（-1000% = 0.1×），正值加速（+1000% = 10×）。滑块等距移动即速度等比变化，
+0% 恰在滑条正中。三类粒子设置对象各自独立：``anim_fx_speed_pct`` /
+``fx_particle_speed_pct`` / ``scanline_effect_speed_pct``。
+"""
+
+PARTICLE_SPEED_STYLE_FIELDS: dict[str, str] = {
+    "anim": "anim_fx_speed_pct",
+    "sing": "fx_particle_speed_pct",
+    "scanline": "scanline_effect_speed_pct",
+}
+"""粒子速度目标 → Style 字段名（与 :data:`PARTICLE_COLOR_TARGETS` 同序）。"""
+
+
+def clamp_particle_speed_pct(value: object) -> int:
+    """把粒子速度百分比钳成 [-1000, 1000] 的整数（非法值回落 0 = 原速）。"""
+
+    try:
+        pct = int(round(float(value)))
+    except (TypeError, ValueError):
+        return PARTICLE_SPEED_PCT_DEFAULT
+    return max(PARTICLE_SPEED_PCT_MIN, min(PARTICLE_SPEED_PCT_MAX, pct))
 
 
 def particle_color_style(style: Style, target: str) -> Style:
@@ -2870,6 +2921,13 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                 if value in {"solid", "stroke", "decor", "all"}
                 else defaults.scanline_effect_color_layers
             )
+        elif key in {
+            "fx_particle_speed_pct",
+            "anim_fx_speed_pct",
+            "scanline_effect_speed_pct",
+        }:
+            # 三类粒子速度调整：百分比统一钳到 [-1000, 1000]，0 = 原速。
+            changes[key] = clamp_particle_speed_pct(value)
         elif key == "fx_apply_to_entry_exit":
             changes[key] = bool(value)
         elif key == "karaoke_stroke_flash":

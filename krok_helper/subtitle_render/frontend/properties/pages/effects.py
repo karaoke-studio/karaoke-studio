@@ -14,6 +14,10 @@ from qfluentwidgets import (
 )
 
 from krok_helper.subtitle_render.domain.band_presets import BAND_PRESETS
+from krok_helper.subtitle_render.domain.models import (
+    PARTICLE_SPEED_PCT_MAX,
+    PARTICLE_SPEED_PCT_MIN,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     CanvasSliderSpinBox,
     WheelFocusedComboBox,
@@ -149,6 +153,7 @@ PARTICLE_TARGET_FIELDS: dict[str, dict[str, str | None]] = {
         "role": "anim_fx_role_name",
         "size": "anim_fx_size_em",
         "count": None,
+        "speed": "anim_fx_speed_pct",
     },
     "sing": {
         "mode": "fx_particle_color_mode",
@@ -158,6 +163,7 @@ PARTICLE_TARGET_FIELDS: dict[str, dict[str, str | None]] = {
         "role": "fx_particle_role_name",
         "size": "fx_particle_size_em",
         "count": "fx_particle_count",
+        "speed": "fx_particle_speed_pct",
     },
     "scanline": {
         "mode": "scanline_effect_color_mode",
@@ -167,6 +173,7 @@ PARTICLE_TARGET_FIELDS: dict[str, dict[str, str | None]] = {
         "role": "scanline_effect_role_name",
         "size": "scanline_effect_size_pct",
         "count": "scanline_effect_count",
+        "speed": "scanline_effect_speed_pct",
     },
 }
 
@@ -855,6 +862,30 @@ class EffectsPropertyPageBuilder:
         host._fx_count_spin.valueChanged.connect(
             lambda value: host._on_fx_count_changed(value)
         )
+        # 粒子速度调整：项目内通用的 slider + 输入框复合控件。输入范围
+        # -1000%~1000%，0 为原速；滑条按百分比等距、速度按对数轴等比变化
+        # （负值减速、正值加速），与 style 字段 1:1 对应，不做额外换算。
+        host._fx_speed_control = CanvasSliderSpinBox(
+            self._spin_factory(
+                PARTICLE_SPEED_PCT_MIN,
+                PARTICLE_SPEED_PCT_MAX,
+                suffix=" %",
+            )
+        )
+        host._fx_speed_control.set_slider_range(
+            PARTICLE_SPEED_PCT_MIN, PARTICLE_SPEED_PCT_MAX
+        )
+        host._fx_speed_control.setToolTip(
+            "当前粒子设置对象的速度调整：负值减速、0 为原速、正值加速。"
+            "百分比走对数轴（速度倍率 = 10^(百分比/1000)）："
+            "±250% ≈ 1.78×/0.56×，±500% ≈ 3.16×/0.32×，"
+            "±1000% = 10×/0.1×，0% 恰在滑条正中。"
+            "只改粒子运动/淡出的快慢（飞行与拖尾时长按倍率缩放），"
+            "发射时刻、逐字错峰与入场提前量不变；"
+            "入退场动画 / 唱字装饰粒子 / 扫字线特效各自独立保存，"
+            "GPU 预览与 CPU/GPU 导出同口径"
+        )
+        host._fx_speed_control.valueChanged.connect(host._on_fx_speed_changed)
         host._fx_color_btn = host._fx_color_button(
             "color", getattr(host._style, "fx_particle_color", "#FFFFFF")
         )
@@ -970,6 +1001,11 @@ class EffectsPropertyPageBuilder:
         fx_target_layout.addStretch(1)
         host._particle_layout.addWidget(
             property_field("粒子设置对象", host._fx_target_row)
+        )
+        # 速度调整独占一整行：滑条需要横向空间，塞进 3 列网格会把窄窗下的
+        # 最小宽度顶爆；全宽滑条也好拖（0% 在正中，左右各半对应减速/加速）。
+        host._particle_layout.addWidget(
+            property_field("粒子速度调整", host._fx_speed_control)
         )
         # 下方粒子/闪光单独一张 3 列网格：与扫字线参数分栏，避免单张
         # 2 列网格里控件越塞越挤；窄窗仍按 3→2→1 列自适应。

@@ -197,6 +197,7 @@ from krok_helper.subtitle_render.n3.font_catalog import (
 from krok_helper.subtitle_render.domain.models import (
     N3_FONT_INHERITANCE_FIELDS,
     PRESET_REFERENCE_HEIGHT,
+    clamp_particle_speed_pct,
     ensure_page_layout_defaults,
     RUBY_DECORATION_OVERRIDE_FIELDS,
     StylePreset,
@@ -2177,6 +2178,21 @@ class PropertyPanel(QWidget):
             finally:
                 self._fx_count_spin.blockSignals(False)
 
+            # 速度调整：三类目标各自独立（-1000~1000，0 = 原速），滑条与
+            # 输入框共用同一个值，回显期间屏蔽信号防止写回样式。
+            speed_field = fields.get("speed")
+            if speed_field and hasattr(self, "_fx_speed_control"):
+                speed_control = self._fx_speed_control
+                speed_control.blockSignals(True)
+                try:
+                    speed_control.setValue(
+                        clamp_particle_speed_pct(
+                            getattr(self._style, str(speed_field), 0)
+                        )
+                    )
+                finally:
+                    speed_control.blockSignals(False)
+
             color1 = str(
                 getattr(self._style, fields["color"], "#FFFFFF") or "#FFFFFF"
             )
@@ -2261,6 +2277,16 @@ class PropertyPanel(QWidget):
         if field is None:
             return
         self._update_style(**{str(field): int(value)})
+
+    def _on_fx_speed_changed(self, value: int) -> None:
+        if self._syncing:
+            return
+        field = PARTICLE_TARGET_FIELDS.get(self._fx_target, {}).get("speed")
+        if not field:
+            return
+        self._update_style(
+            **{str(field): clamp_particle_speed_pct(value)}
+        )
 
     def _refresh_fx_particle_role_combo(self) -> None:
         """粒子颜色「复用配色方案」的来源下拉（当前目标独立引用）。"""
@@ -6457,12 +6483,14 @@ class PropertyPanel(QWidget):
                 "fx_particle_role_name",
                 "fx_particle_size_em",
                 "fx_particle_count",
+                "fx_particle_speed_pct",
                 "anim_fx_color_mode",
                 "anim_fx_color",
                 "anim_fx_color2",
                 "anim_fx_color_layers",
                 "anim_fx_role_name",
                 "anim_fx_size_em",
+                "anim_fx_speed_pct",
                 "scanline_effect_color_mode",
                 "scanline_effect_color",
                 "scanline_effect_color2",
@@ -6470,6 +6498,7 @@ class PropertyPanel(QWidget):
                 "scanline_effect_role_name",
                 "scanline_effect_size_pct",
                 "scanline_effect_count",
+                "scanline_effect_speed_pct",
                 "fx_apply_to_entry_exit",
             }.intersection(changes):
                 self._sync_fx_particle_controls()

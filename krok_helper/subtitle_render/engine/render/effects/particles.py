@@ -15,6 +15,9 @@
   双色档由规划器拆成两条同轨迹、不同种子/半数量的 burst 实现「每颗粒
   子随机取一色」，渲染端无特殊分支；单色跟随档（走字前/后、role）另带
   完整 PaintFill 装饰规格（与音符「跟随字体」同源）。
+- 「粒子速度调整」（入退场 / 唱字 / 扫字线三类各自独立，百分比对数轴）
+  在规划期只缩放 burst 时长：``start_ms``（发射时刻）不动，时间窗随 IR
+  下发，CPU/GPU 消费同一份起止时间即天然同口径。
 """
 
 from __future__ import annotations
@@ -24,10 +27,18 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from krok_helper.subtitle_render.domain.models import (
+    PARTICLE_SPEED_STYLE_FIELDS,
     Style,
+    clamp_particle_speed_pct,
     effective_karaoke_scanline,
     normalize_glow_concentration_level,
     particle_color_style,
+)
+from krok_helper.subtitle_render.domain.timing import (
+    ENTRY_ASSEMBLE_ANIMS,
+    ENTRY_PARTICLE_ANIMS,
+    EXIT_ASSEMBLE_ANIMS,
+    EXIT_PARTICLE_ANIMS,
 )
 from krok_helper.subtitle_render.domain.paint import KaraokeColorState, PaintFill
 from krok_helper.subtitle_render.engine.render.effects.metrics import (
@@ -292,6 +303,100 @@ _LIGHTNING_PRESETS = (
 # 运动签名、配色与出入场时序完全同源，只有 sprite 不同——规划器/求值器里
 # 所有按 snow 分流的判断都必须用本集合，别写成单值比较。
 SNOW_KINDS = frozenset({"snow", "snow_solid"})
+
+
+# ---------------------------------------------------------------------------
+# 粒子速度调整（2026-10）：三类目标的百分比 → burst 时间窗缩放
+#
+# 百分比走对数轴：factor = 10 ** (pct / 1000)，0% = 原速、负值减速、正值
+# 加速（±1000% = 0.1×/10×）。变速发生在**规划期**——每个 burst 的 end_ms
+# 按 1/factor 缩放、start_ms（发射时刻）不动，因此 CPU Painter 与 GPU IR
+# 消费的是同一份时间窗，预览/导出天然同口径；评价器（burst_particles_at
+# 与 C++ d2d_fx.burstParticlesAt）都只按窗口求值，不需要第二套变速逻辑。
+# ---------------------------------------------------------------------------
+
+
+def particle_speed_factor(speed_pct: object) -> float:
+    """「粒子速度调整」百分比 → 速度倍率（对数轴，0% = 1×）。"""
+
+    pct = clamp_particle_speed_pct(speed_pct)
+    return 10.0 ** (pct / 1000.0)
+
+
+def _scaled_life_ms(life_ms: int, factor: float) -> int:
+    """一段粒子寿命 ÷ 速度倍率（至少 1ms）。"""
+
+    return max(1, int(round(max(int(life_ms), 1) / factor)))
+
+
+def scaled_particle_duration_ms(duration_ms: int, speed_pct: object) -> int:
+    """把一段粒子时长按速度倍率缩放（≤0 原样返回 0；原速时原样返回）。"""
+
+    duration = max(int(duration_ms), 0)
+    if duration <= 0:
+        return 0
+    factor = particle_speed_factor(speed_pct)
+    if factor == 1.0:
+        return duration
+    return _scaled_life_ms(duration, factor)
+
+
+def line_has_fx_particles(style: Style) -> bool:
+    """该样式是否可能发射装饰粒子（行级「无粒子组合」早退条件）。
+
+    sparkle / ripple / note 等档位既是入退场动画也携带粒子（2026-09 从
+    fx 档位晋升），assemble / dissolve 同理；扫字线高亮带本身不走粒子
+    通道，但扫字线**特效**走（2026-10）。渲染端早退护栏与退场尾奏/入场
+    余韵的淘汰界共用本判定，避免两处名单漂移（竖排由调用方各自跳过）。
+    """
+
+    entry_anim = str(getattr(style, "entry_anim", "none") or "none")
+    exit_anim = str(getattr(style, "exit_anim", "none") or "none")
+    return (
+        str(getattr(style, "entry_fx", "none") or "none") != "none"
+        or str(getattr(style, "exit_fx", "none") or "none") != "none"
+        or str(getattr(style, "sing_fx", "none") or "none") != "none"
+        or entry_anim in ENTRY_PARTICLE_ANIMS
+        or exit_anim in EXIT_PARTICLE_ANIMS
+        # 粒子拼接/消散：粒子即文字形体（sweep=0），也走本通道。
+        or entry_anim in ENTRY_ASSEMBLE_ANIMS
+        or exit_anim in EXIT_ASSEMBLE_ANIMS
+        or scanline_effect_from_style(style) != "none"
+    )
+
+
+def line_particle_tail_end_ms(
+    style: Style,
+    line_index: int,
+    display_start_ms: int | None,
+    display_end_ms: int | None,
+    line_end_ms: int | None,
+    char_windows: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+) -> int | None:
+    """该行**全部**粒子 burst 的自然终点（退场尾奏/慢速余韵的淘汰界）。
+
+    2026-10 速度调整：减速后的粒子可以显著越过显示窗终点，原先按固定
+    常量推算的解析式无法跟随（入退场/唱字/扫字线三类还要分别维护）。这里
+    直接复用 :func:`plan_line_bursts` 取最大 ``end_ms``——与 CPU 绘制和
+    GPU IR 下发的是同一份 burst 时间窗，边界天然同口径。空格字符按「可见」
+    参与规划，得到的只是**上界**（空字不会多出 burst），对尾奏无害。
+
+    无粒子源或规划不出 burst 时返回 ``None``。
+    """
+
+    if not line_has_fx_particles(style):
+        return None
+    bursts = plan_line_bursts(
+        style,
+        int(line_index),
+        display_start_ms,
+        display_end_ms,
+        line_end_ms,
+        [tuple(window) for window in (char_windows or ())],
+    )
+    if not bursts:
+        return None
+    return max(int(burst["end_ms"]) for burst in bursts)
 
 
 def fall_entry_lead_ms(kind: str) -> int:
@@ -1930,95 +2035,46 @@ def clear_particle_paint_cache() -> None:
     _VARIANT_CACHE.clear()
 
 
+def _apply_particle_speed(
+    bursts: list[dict[str, object]], style: Style
+) -> None:
+    """按三类目标的「粒子速度调整」原地缩放 burst 时间窗。
 
-def exit_particle_tail_end_ms(
-    exit_anim: str,
-    char_count: int,
-    line_end_ms: int | None,
-    display_end_ms: int,
-) -> int | None:
-    """退场粒子（标准速率）最后一只 burst 的自然终点（ms）。
+    只缩放**时长**：``start_ms`` 保持不动（发射时刻 / 逐字错峰 / 入场
+    提前量都不变），速度倍率 k 下新时长 = 旧时长 / k。扫字线 burst 只缩放
+    锋面之后的拖尾寿命（``emit_ms`` 不动），粒子仍然沿真实走字锋面出生。
 
-    2026-10 分离口径：七个粒子档的退场发射恒按标准速率且完整播放，
-    终点可以越过显示窗终点 ``display_end_ms``——渲染端的「退场尾奏
-    通道」（行已消失、仅续播粒子）用它判定本行是否还有存活的粒子。
-    非粒子退场档（含拼接/消散——粒子即文字形体，与时长耦合）返回
-    ``None``。与 :func:`plan_line_bursts` 各退场分支同一算式。
+    规划期用 ``scope`` 标记归属（渲染 IR 不携带，这里统一弹出）；同一目标
+    的倍率只算一次。评价器只按 ``start_ms``/``end_ms`` 求值，因此 CPU 与
+    GPU 拿到的时间窗逐字段一致。
     """
-    line_end = int(line_end_ms) if line_end_ms is not None else 0
-    if exit_anim == "sparkle":
-        base = max(line_end, display_end_ms - SPARKLE_EXIT_LIFE_MS)
-        steps = max(char_count - 1, 1)
-        return (
-            base
-            + (SPARKLE_SWEEP_MS // steps) * steps
-            + SPARKLE_EXIT_LIFE_MS
-            + CHAR_TIME_OFFSET_MAX_MS
-        )
-    if exit_anim == "ripple":
-        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + RIPPLE_LIFE_MS))
-        return (
-            base
-            + RIPPLE_CHAR_STAGGER_MS
-            + RIPPLE_LIFE_MS
-            + CHAR_TIME_OFFSET_MAX_MS
-        )
-    if exit_anim in ("note", "heart"):
-        base = max(line_end, display_end_ms - (RIPPLE_CHAR_STAGGER_MS + SING_NOTE_TOTAL_MS))
-        return (
-            base
-            + RIPPLE_CHAR_STAGGER_MS
-            + SING_NOTE_TOTAL_MS
-            + CHAR_TIME_OFFSET_MAX_MS
-        )
-    if exit_anim == "flame":
-        # 火焰烧尽（2026-10-18 用户口径）：火粒窗口跟随退场时长，文字
-        # 全部消失后只保留 FLAME_TAIL_MS 短尾——尾奏界就是短尾终点。
-        return int(display_end_ms) + FLAME_TAIL_MS
-    if exit_anim == "feather":
-        spread = min(
-            FALL_LINE_SPREAD_MAX_MS,
-            int(FEATHER_LIFE_MS * FALL_LINE_SPREAD_FRACTION),
-        )
-        base = max(
-            line_end,
-            display_end_ms - (RIPPLE_CHAR_STAGGER_MS + FEATHER_LIFE_MS),
-        )
-        return (
-            base
-            + spread
-            + FEATHER_LIFE_MS
-            + CHAR_TIME_OFFSET_MAX_MS
-        )
-    if exit_anim == "lightning":
-        base = max(
-            line_end,
-            display_end_ms - (RIPPLE_CHAR_STAGGER_MS + LIGHTNING_WINDOW_MS),
-        )
-        return (
-            base
-            + RIPPLE_CHAR_STAGGER_MS
-            + LIGHTNING_WINDOW_MS
-            + CHAR_TIME_OFFSET_MAX_MS
-        )
-    if exit_anim == "petal":
-        spread = min(
-            FALL_LINE_SPREAD_MAX_MS,
-            int(PETAL_EXIT_LIFE_MS * FALL_LINE_SPREAD_FRACTION),
-        )
-        base = max(
-            line_end,
-            display_end_ms - (RIPPLE_CHAR_STAGGER_MS + PETAL_EXIT_LIFE_MS),
-        )
-        return (
-            base
-            + spread
-            + PETAL_EXIT_LIFE_MS
-            + CHAR_TIME_OFFSET_MAX_MS
-        )
-    if exit_anim in SNOW_KINDS:
-        return display_end_ms + 300
-    return None
+
+    factors: dict[str, float] = {}
+    for burst in bursts:
+        scope = str(burst.pop("scope", "sing"))
+        factor = factors.get(scope)
+        if factor is None:
+            field = PARTICLE_SPEED_STYLE_FIELDS.get(
+                scope, "fx_particle_speed_pct"
+            )
+            factor = particle_speed_factor(getattr(style, field, 0))
+            factors[scope] = factor
+        if factor == 1.0:
+            continue
+        start = int(burst["start_ms"])
+        end = int(burst["end_ms"])
+        life = end - start
+        if life <= 1:
+            continue
+        tail = life
+        if scope == "scanline":
+            # 锋面出生窗口是走字速度的一部分，不随粒子速度变化；只缩拖尾。
+            emit = int(burst.get("emit_ms", 0) or 0)
+            if emit > 0:
+                emit = min(emit, life)
+                start = start + emit
+                tail = max(life - emit, 1)
+        burst["end_ms"] = start + _scaled_life_ms(tail, factor)
 
 
 def plan_line_bursts(
@@ -2040,7 +2096,8 @@ def plan_line_bursts(
     （2026-10 用户口径）：七个粒子档（星光/涟漪/音符/爱心/花瓣/雪花
     两档）的发射**恒按标准速率**（错峰/寿命/窗口全部取标准常量，
     = 旧 600ms 基准的时序），且退场粒子**完整播放**——终点可越过
-    显示窗终点（渲染端退场尾奏通道续播，见 :func:`exit_particle_tail_end_ms`）；
+    显示窗终点（渲染端退场尾奏通道续播，淘汰界见
+    :func:`line_particle_tail_end_ms`）；
     「入场/退场动画时长」旋钮此后只控制文字逐字渐显/渐隐（拼接/
     消散的粒子即文字形体，维持与时长耦合）。唱字自各字符唱字窗起点
     发射、窗口延伸到轨迹自然播完（不受唱字窗约束）。
@@ -2054,6 +2111,10 @@ def plan_line_bursts(
     （数量对半、种子错开）。入退场动画粒子用 ``anim_fx_*`` 独立颜色/尺寸，
     唱字装饰粒子用 ``fx_particle_*``，扫字线粒子用 ``scanline_effect_color_*``；
     三者互不影响，入退场数量恒固定。
+    速度语义：三类目标的 ``anim_fx_speed_pct`` / ``fx_particle_speed_pct`` /
+    ``scanline_effect_speed_pct`` 在规划末端按各自倍率缩放 burst 时长
+    （``start_ms`` 不动 = 发射时刻不变；扫字线只缩拖尾寿命，见
+    :func:`_apply_particle_speed`）。
     ``line_index`` 参与种子，保证同曲目每行轨迹不同且重开可复现。
     ``char_visible``（与 char_windows 等长）：False = 空白字符（空格等
     无字形内容）——唱字粒子跳过（无走字内容），出入场仍整行参与。
@@ -2064,6 +2125,9 @@ def plan_line_bursts(
     粒子出生点从字框左缘映射到右缘（见 ``style.scanline_effect``）。
     """
     bursts: list[dict[str, object]] = []
+    # 当前 burst 归属的粒子设置对象（入退场 / 唱字 / 扫字线）：规划期内部
+    # 标记，供函数末尾按各自的「粒子速度调整」统一缩放时间窗。
+    scope = "anim"
     count = max(2, min(64, int(style.fx_particle_count)))
     font_px = max(float(getattr(style, "font_size_px", 0.0) or 0.0), 1.0)
     size = font_px * max(0.05, min(2.0, float(getattr(style, "fx_particle_size_em", 0.40))))
@@ -2161,7 +2225,7 @@ def plan_line_bursts(
 
         total = int(fields["count"])
         for variant, paint in enumerate(paints):
-            burst = {**fields, **paint}
+            burst = {**fields, **paint, "scope": scope}
             if len(paints) > 1:
                 if total <= 1:
                     if variant != variant_salt % len(paints):
@@ -3306,6 +3370,7 @@ def plan_line_bursts(
             }, _burst_paint(char_index, anim_size * 0.75, anim=True))
 
     # 唱字装饰粒子：默认唯一吃粒子旋钮（尺寸/数量/颜色）的档位。
+    scope = "sing"
     if style.sing_fx == "ripple":
         for char_index, (start_ms, end_ms) in enumerate(char_windows):
             duration = int(end_ms) - int(start_ms)
@@ -3496,6 +3561,7 @@ def plan_line_bursts(
             }, _burst_paint(char_index, size, anim=False))
     # 扫字线特效（2026-10）：沿走字锋面发射装饰粒子。只认显式扫字线档位；
     # 竖排与唱字装饰粒子一样不走这条通道（GPU 侧扫字线本身也只做横排）。
+    scope = "scanline"
     scanline_effect = scanline_effect_from_style(style)
     if scanline_effect != "none":
         effect_size = font_px * (
@@ -3555,6 +3621,9 @@ def plan_line_bursts(
                 # RTL 行锋面自右向左，粒子出生点镜像。
                 "reverse": bool(reverse),
             }, paints, variant_salt=char_index)
+    # 三类目标的「粒子速度调整」在规划末端统一生效：三类 burst 都已按
+    # scope 标记归属，缩放后时间窗随 IR 一起下发，CPU/GPU 同口径。
+    _apply_particle_speed(bursts, style)
     return bursts
 
 

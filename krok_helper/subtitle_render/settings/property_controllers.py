@@ -25,6 +25,7 @@ from krok_helper.subtitle_render.domain.models import (
     VIEWPORT_ALIGNS,
     ViewportAlign,
     builtin_preset_layout_ids,
+    clamp_particle_speed_pct,
     migrate_title_char_role_labels,
     migrate_title_guide_symbols,
     normalize_glow_concentration_level,
@@ -420,6 +421,15 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         except (TypeError, ValueError):
             anim_size = 0.40
         normalized["anim_fx_size_em"] = min(max(anim_size, 0.05), 2.0)
+    for speed_field in (
+        "fx_particle_speed_pct",
+        "anim_fx_speed_pct",
+        "scanline_effect_speed_pct",
+    ):
+        if speed_field in normalized:
+            normalized[speed_field] = clamp_particle_speed_pct(
+                normalized[speed_field]
+            )
     if "scanline_effect_color_mode" in normalized:
         normalized["scanline_effect_color_mode"] = (
             normalize_scanline_particle_color_mode(

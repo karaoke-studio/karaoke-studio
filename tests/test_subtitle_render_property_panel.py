@@ -12052,12 +12052,14 @@ def test_fx_particle_target_pill_keeps_settings_separate(qapp):
     panel._set_fx_color("color2", "#222222")
     panel._fx_size_spin.setValue(60)
     panel._fx_count_spin.setValue(20)
+    panel._fx_speed_control.setValue(-250)
     style = emitted[-1]
     assert style.fx_particle_color_mode == "color"
     assert style.fx_particle_color == "#111111"
     assert style.fx_particle_color2 == "#222222"
     assert style.fx_particle_size_em == pytest.approx(0.60)
     assert style.fx_particle_count == 20
+    assert style.fx_particle_speed_pct == -250
 
     # 入退场动画：独立颜色/尺寸，数量控件保持可见但停用且不写字段。
     panel._fx_target_pill.setCurrentItem("anim")
@@ -12071,13 +12073,16 @@ def test_fx_particle_target_pill_keeps_settings_separate(qapp):
     panel._set_fx_color("color", "#333333")
     panel._set_fx_color("color2", "#444444")
     panel._fx_size_spin.setValue(70)
+    panel._fx_speed_control.setValue(500)
     style = emitted[-1]
     assert style.anim_fx_color_mode == "color"
     assert style.anim_fx_color == "#333333"
     assert style.anim_fx_color2 == "#444444"
     assert style.anim_fx_size_em == pytest.approx(0.70)
+    assert style.anim_fx_speed_pct == 500
     assert style.fx_particle_color == "#111111"
     assert style.fx_particle_size_em == pytest.approx(0.60)
+    assert style.fx_particle_speed_pct == -250
 
     # 扫字线粒子：独立设置 + 主题色档。
     panel._fx_target_pill.setCurrentItem("scanline")
@@ -12093,12 +12098,16 @@ def test_fx_particle_target_pill_keeps_settings_separate(qapp):
     panel._set_fx_color("color2", "#666666")
     panel._fx_size_spin.setValue(45)
     panel._fx_count_spin.setValue(8)
+    panel._fx_speed_control.setValue(1000)
     style = emitted[-1]
     assert style.scanline_effect_color_mode == "color"
     assert style.scanline_effect_color == "#555555"
     assert style.scanline_effect_color2 == "#666666"
     assert style.scanline_effect_size_pct == 45
     assert style.scanline_effect_count == 8
+    assert style.scanline_effect_speed_pct == 1000
+    assert style.anim_fx_speed_pct == 500
+    assert style.fx_particle_speed_pct == -250
     assert style.anim_fx_color == "#333333"
     assert style.fx_particle_color == "#111111"
 
@@ -12109,6 +12118,13 @@ def test_fx_particle_target_pill_keeps_settings_separate(qapp):
     assert panel._fx_color_btn2.color == "#222222"
     assert panel._fx_size_spin.value() == 60
     assert panel._fx_count_spin.value() == 20
+    assert panel._fx_speed_control.value() == -250
+
+    # 再切入退场：速度回显各自的值（不串档）。
+    panel._fx_target_pill.setCurrentItem("anim")
+    assert panel._fx_speed_control.value() == 500
+    panel._fx_target_pill.setCurrentItem("scanline")
+    assert panel._fx_speed_control.value() == 1000
 
 
 def test_line_band_color_rows_hide_instead_of_disable():

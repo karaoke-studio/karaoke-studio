@@ -6,6 +6,9 @@ from types import SimpleNamespace
 
 from PyQt6.QtWidgets import QLabel, QPushButton
 
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
+    CanvasSliderSpinBox,
+)
 from krok_helper.subtitle_render.frontend.properties.pages.effects import (
     EffectsPropertyPageBuilder,
 )
@@ -23,7 +26,8 @@ class _Host:
             lit_stroke_color="#606060",
         )
 
-    def _update_style(self, **changes) -> None:
+    def _update_style(self, _force_global: bool = False, **changes) -> None:
+        # 与真实宿主同签名：``_force_global`` 是编辑作用域开关，不算样式字段。
         self.updates.append(changes)
 
     def _scanline_base_px(self, value: int) -> int:
@@ -64,6 +68,9 @@ class _Host:
 
     def _on_fx_count_changed(self, value: int) -> None:
         self._update_style(fx_target_count=value)
+
+    def _on_fx_speed_changed(self, value: int) -> None:
+        self._update_style(fx_target_speed=value)
 
     def _fx_color_button(self, slot: str, color: str):
         button = QPushButton(color)
@@ -143,6 +150,12 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     ] == ["普通高亮", "烈焰棒", "水泡"]
     # 下方粒子/闪光单独 3 列网格，和扫字线参数分栏。
     assert host._fx_grid._max_columns == 3
+    # 粒子速度调整：项目通用 slider+输入框复合控件，-1000~1000%，默认 0。
+    assert isinstance(host._fx_speed_control, CanvasSliderSpinBox)
+    assert host._fx_speed_control.input_range() == (-1000, 1000)
+    assert host._fx_speed_control.slider_range() == (-1000, 1000)
+    assert host._fx_speed_control.value() == 0
+    assert host._fx_speed_control.toolTip()
     particle_labels = [
         label.text() for label in host._particle_section.findChildren(QLabel)
     ]
@@ -284,6 +297,7 @@ def test_effects_animation_builder_routes_controls_to_style_fields(qapp) -> None
     )
     host._fx_size_spin.setValue(45)
     host._fx_count_spin.setValue(16)
+    host._fx_speed_control.setValue(250)
 
     assert host.updates == [
         {"entry_anim": "fade"},
@@ -301,6 +315,7 @@ def test_effects_animation_builder_routes_controls_to_style_fields(qapp) -> None
         {"_fx_target": "scanline"},
         {"fx_target_size": 45},
         {"fx_target_count": 16},
+        {"fx_target_speed": 250},
     ]
 
 

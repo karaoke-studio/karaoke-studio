@@ -30,8 +30,11 @@ from krok_helper.subtitle_render.engine.render.effects.particles import (
     FALL_LINE_PHASES,
     FX_SPRITES,
     burst_particles_at,
-    exit_particle_tail_end_ms,
+    line_has_fx_particles,
+    line_particle_tail_end_ms,
+    particle_speed_factor,
     plan_line_bursts,
+    scaled_particle_duration_ms,
     sprite_for_kind,
 )
 from krok_helper.subtitle_render.native.protocol import gpu_unsupported_features
@@ -3820,7 +3823,7 @@ def test_painter_heart_smoke(qapp):
 def test_entry_exit_particle_emission_decoupled_from_duration_knob():
     """2026-10 分离口径：粒子发射恒按标准速率——「入场/退场动画时长」
     旋钮（120ms~3000ms 全档位）不再改变粒子窗口；短旋钮下退场粒子越过
-    显示窗终点完整播放；尾端助手与规划分支同一算式。"""
+    显示窗终点完整播放；尾端淘汰界直接取规划 burst 的最大终点。"""
     def windows(exit_fade_ms: int):
         style = Style(
             entry_anim="note", entry_lead_ms=600,
@@ -3874,12 +3877,21 @@ def test_entry_exit_particle_emission_decoupled_from_duration_knob():
         assert exit_ == baseline_exit, fade
     # 末字终点越过显示窗终点（4200）——完整播放口径。
     assert max(row[2] for row in baseline_exit) > 4200
-    # 尾端助手与规划同式（CPU 尾奏通道的淘汰界；含最大正向抖动）。
-    assert exit_particle_tail_end_ms("note", 3, 4100, 4200) == 5250 + 78
-    assert exit_particle_tail_end_ms("sparkle", 3, 4100, 4200) == 4100 + 350 + 600 + 78
-    assert exit_particle_tail_end_ms("petal", 3, 4100, 4200) == 4100 + 660 + 1200 + 78
-    assert exit_particle_tail_end_ms("snow", 3, 4100, 4200) == 4500
-    assert exit_particle_tail_end_ms("dissolve_out", 3, 4100, 4200) is None
+    # 尾端助手与规划同源：直接取规划 burst 的最大终点（不是保守解析式）。
+    note_style = Style(
+        entry_anim="note", entry_lead_ms=600,
+        exit_anim="note", exit_fade_ms=600,
+        font_size_px=100, karaoke_anim="none",
+    )
+    note_windows = [(1200, 1600), (1600, 2000), (2000, 3000)]
+    note_bursts = plan_line_bursts(note_style, 0, 1000, 4200, 4100, note_windows)
+    assert line_particle_tail_end_ms(
+        note_style, 0, 1000, 4200, 4100, note_windows
+    ) == max(b["end_ms"] for b in note_bursts)
+    assert line_particle_tail_end_ms(
+        Style(exit_anim="fade", karaoke_anim="none"), 0, 1000, 4200, 4100,
+        note_windows,
+    ) is None
 
 
 def _bright_pixels(img) -> int:
@@ -3939,6 +3951,67 @@ def test_painter_exit_particle_tail_plays_beyond_display_end(qapp):
     assert frame(4200, "note") == 0
     # 非粒子退场档不进尾奏通道：显示窗外全空。
     assert frame(4200, "fade") == 0
+
+
+def test_painter_particle_speed_and_tail_follow_style(qapp):
+    """「粒子速度调整」在 CPU 端同样作用于窗内轨迹与窗后退场尾奏。
+
+    - 窗内：原速唱字音符在 t=1200 已播完、减速 10× 的仍在播（亮像素更多）；
+    - 窗后：原速退场粒子在 t=4200 已结束、减速后仍在尾奏通道里绘制。
+    """
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+
+    def bright(style: Style, track: TimingTrack, t: int) -> int:
+        img = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(0xFF101010)
+        paint_frame(img, track, t, style)
+        return _bright_pixels(img)
+
+    sing_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="AB", start_ms=200)], end_ms=3000)]
+    )
+    fast_sing = Style(
+        font_size_px=80,
+        font_family="Arial",
+        karaoke_anim="none",
+        entry_anim="none",
+        sing_fx="note",
+        fx_particle_size_em=0.6,
+        fx_particle_count=16,
+        karaoke_colors=_karaoke_matrix("#FFFFFF", "#FFF0AA"),
+    )
+    slow_sing = replace(fast_sing, fx_particle_speed_pct=-1000)
+    # t=1200：原速音符 burst（200 + 800）已结束，减速后（+8000）仍在画。
+    assert bright(slow_sing, sing_track, 1200) > bright(fast_sing, sing_track, 1200)
+
+    exit_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="AB", start_ms=2000),
+                    TimingChar(text="CD", start_ms=2400),
+                ],
+                end_ms=3000,
+            )
+        ]
+    )
+    fast_exit = Style(
+        font_size_px=80,
+        font_family="Arial",
+        karaoke_anim="none",
+        entry_anim="none",
+        exit_anim="note",
+        exit_fade_ms=200,
+        fx_particle_size_em=0.6,
+        karaoke_colors=_karaoke_matrix("#FFFFFF", "#FFF0AA"),
+    )
+    slow_exit = replace(fast_exit, anim_fx_speed_pct=-1000)
+    # 显示窗终点 4000：t=4200 原速退场粒子已自然结束，减速后仍在尾奏通道。
+    assert bright(fast_exit, exit_track, 4200) == 0
+    assert bright(slow_exit, exit_track, 4200) > 0
 
 
 def test_flame_sprite_contract():
@@ -4688,7 +4761,11 @@ def test_plan_feather_entry_exit_sing():
     assert [b["start_ms"] for b in sing] == [1200, 1600, 2000]
     assert all(b["count"] == 4 for b in sing)
     assert all(b["end_ms"] - b["start_ms"] == 1700 for b in sing)
-    assert exit_particle_tail_end_ms("feather", 3, 4100, 4200) == 6778
+    # 尾端淘汰界 = 规划 burst 的最大终点（与 GPU 扫描行 bursts 同源）。
+    assert line_particle_tail_end_ms(
+        style, 0, 1000, 4200, 4100,
+        [(1200, 1600), (1600, 2000), (2000, 3000)],
+    ) == max(b["end_ms"] for b in bursts) == 6384
 
 
 def test_plan_lightning_entry_exit_sing():
@@ -4773,7 +4850,10 @@ def test_plan_lightning_entry_exit_sing():
     assert {b["color"] for b in flash} == {"#FFF7D6"}
     assert {b["color"] for b in wave} == {"#FFD24A"}
     assert {b["color"] for b in spark} == {"#FFF7D6", "#FFB300"}
-    assert exit_particle_tail_end_ms("lightning", 3, 4100, 4200) == 5048
+    assert line_particle_tail_end_ms(
+        style, 0, 1000, 4200, 4100,
+        [(1200, 1600), (1600, 2000), (2000, 3000)],
+    ) == max(b["end_ms"] for b in bursts)
 
 
 def test_feather_trajectory_bounds_and_flutter():
@@ -5504,3 +5584,207 @@ def test_painter_feather_lightning_smoke(qapp, kind):
     img2 = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
     img2.fill(0xFF101010)
     paint_frame(img2, track, 1100, entry)
+
+
+# ---------------------------------------------------------------------------
+# 粒子速度调整（2026-10）：百分比 → 对数轴倍率；三类目标各自缩放 burst 时长
+# ---------------------------------------------------------------------------
+
+_SPEED_WINDOWS = [(1200, 1600), (1600, 2000), (2000, 3000)]
+
+
+def _speed_style(**changes) -> Style:
+    """三类粒子同时启用、但各自可独立调速的样式。"""
+
+    return Style(
+        entry_anim="sparkle",
+        entry_lead_ms=600,
+        exit_anim="ripple",
+        exit_fade_ms=600,
+        sing_fx="twinkle",
+        scanline_enabled=True,
+        scanline_effect="sakura",
+        fx_particle_count=10,
+        font_size_px=100,
+        karaoke_anim="none",
+        **changes,
+    )
+
+
+def _speed_scope(burst: dict[str, object]) -> str:
+    kind = str(burst.get("kind"))
+    if kind == "scanline":
+        return "scanline"
+    if kind in {"twinkle", "twinkle_classic"}:
+        return "sing"
+    return "anim"
+
+
+def test_particle_speed_factor_is_log_axis_and_clamped():
+    assert particle_speed_factor(0) == pytest.approx(1.0)
+    assert particle_speed_factor(1000) == pytest.approx(10.0)
+    assert particle_speed_factor(-1000) == pytest.approx(0.1)
+    assert particle_speed_factor(500) == pytest.approx(10 ** 0.5)
+    assert particle_speed_factor(-500) == pytest.approx(10 ** -0.5)
+    # 对数轴以 0 为中点：正负同幅度的倍率互为倒数。
+    for pct in (1, 100, 250, 333, 750, 999):
+        assert particle_speed_factor(pct) * particle_speed_factor(-pct) == (
+            pytest.approx(1.0)
+        )
+    # 越界钳到端点，非法值回落原速。
+    assert particle_speed_factor(5000) == pytest.approx(10.0)
+    assert particle_speed_factor(-5000) == pytest.approx(0.1)
+    assert particle_speed_factor("bad") == pytest.approx(1.0)
+    # 时长缩放：0 = 原速；±1000% = 0.1×/10× 倍率对应 10 倍长/短。
+    assert scaled_particle_duration_ms(700, 0) == 700
+    assert scaled_particle_duration_ms(700, 1000) == 70
+    assert scaled_particle_duration_ms(700, -1000) == 7000
+    assert scaled_particle_duration_ms(0, 500) == 0
+
+
+def test_particle_speed_scales_only_its_own_target_windows():
+    base = plan_line_bursts(
+        _speed_style(), 0, 1000, 4200, 4100, _SPEED_WINDOWS
+    )
+    scopes = {_speed_scope(burst) for burst in base}
+    assert scopes == {"anim", "sing", "scanline"}
+    # 规划期的 scope 标记是内部字段，不能泄漏进渲染 IR。
+    assert all("scope" not in burst for burst in base)
+
+    for field, target in (
+        ("anim_fx_speed_pct", "anim"),
+        ("fx_particle_speed_pct", "sing"),
+        ("scanline_effect_speed_pct", "scanline"),
+    ):
+        changed = plan_line_bursts(
+            _speed_style(**{field: -500}), 0, 1000, 4200, 4100, _SPEED_WINDOWS
+        )
+        assert len(changed) == len(base)
+        for before, after in zip(base, changed):
+            # 发射时刻 / 逐字错峰 / 提前量不受速度影响：所有目标起点不变。
+            assert after["start_ms"] == before["start_ms"]
+            if _speed_scope(before) != target:
+                # 未选中的目标逐字段完全不变。
+                assert after == before, (field, before["kind"])
+                continue
+            duration = before["end_ms"] - before["start_ms"]
+            if target == "scanline":
+                # 扫字线只缩拖尾寿命，锋面出生窗口 emit_ms 不动。
+                assert after["emit_ms"] == before["emit_ms"]
+                tail = duration - int(before["emit_ms"])
+                assert after["end_ms"] == (
+                    before["start_ms"]
+                    + int(before["emit_ms"])
+                    + scaled_particle_duration_ms(tail, -500)
+                )
+            else:
+                assert after["end_ms"] == (
+                    before["start_ms"]
+                    + scaled_particle_duration_ms(duration, -500)
+                )
+
+
+def test_particle_speed_retimes_particle_motion():
+    """同一时间戳：减速后的粒子仍在播（轨迹进度更小），原速已播完。"""
+
+    base_burst = next(
+        burst
+        for burst in plan_line_bursts(
+            _speed_style(), 0, 1000, 4200, 4100, _SPEED_WINDOWS
+        )
+        if burst["kind"] == "sparkle"
+    )
+    slow_burst = next(
+        burst
+        for burst in plan_line_bursts(
+            _speed_style(anim_fx_speed_pct=-500),
+            0, 1000, 4200, 4100, _SPEED_WINDOWS,
+        )
+        if burst["kind"] == "sparkle"
+    )
+    assert slow_burst["start_ms"] == base_burst["start_ms"]
+    after_base_window = int(base_burst["start_ms"]) + 900
+    assert burst_particles_at(
+        base_burst, after_base_window, 0.0, 0.0, 120.0, 100.0
+    ) == []
+    assert burst_particles_at(
+        slow_burst, after_base_window, 0.0, 0.0, 120.0, 100.0
+    )
+
+
+def test_particle_tail_end_follows_speed_adjustment():
+    """退场尾奏淘汰界与规划同源：减速把尾奏界一起推后。"""
+
+    base_end = line_particle_tail_end_ms(
+        _speed_style(), 0, 1000, 4200, 4100, _SPEED_WINDOWS
+    )
+    slow_style = _speed_style(
+        anim_fx_speed_pct=-1000,
+        fx_particle_speed_pct=-1000,
+        scanline_effect_speed_pct=-1000,
+    )
+    slow_end = line_particle_tail_end_ms(
+        slow_style, 0, 1000, 4200, 4100, _SPEED_WINDOWS
+    )
+    assert base_end is not None and slow_end is not None
+    assert slow_end > base_end
+    assert slow_end == max(
+        burst["end_ms"]
+        for burst in plan_line_bursts(
+            slow_style, 0, 1000, 4200, 4100, _SPEED_WINDOWS
+        )
+    )
+    # 非粒子退场档不进入尾奏通道。
+    assert line_particle_tail_end_ms(
+        Style(exit_anim="fade", karaoke_anim="none"), 0, 1000, 4200, 4100,
+        _SPEED_WINDOWS,
+    ) is None
+
+
+def test_line_has_fx_particles_matches_particle_sources():
+    assert not line_has_fx_particles(
+        Style(entry_anim="fade", exit_anim="fade", karaoke_anim="none")
+    )
+    assert line_has_fx_particles(Style(entry_anim="sparkle"))
+    assert line_has_fx_particles(Style(entry_anim="assemble_in"))
+    assert line_has_fx_particles(Style(exit_anim="dissolve_out"))
+    assert line_has_fx_particles(Style(sing_fx="twinkle"))
+    assert line_has_fx_particles(
+        Style(scanline_enabled=True, scanline_effect="sakura")
+    )
+    assert not line_has_fx_particles(
+        Style(scanline_enabled=False, scanline_effect="sakura")
+    )
+
+
+def test_particle_speed_persists_and_clamps():
+    from krok_helper.subtitle_render.domain.models import (
+        style_from_dict,
+        style_to_dict,
+    )
+
+    style = Style(
+        anim_fx_speed_pct=250,
+        fx_particle_speed_pct=-1000,
+        scanline_effect_speed_pct=1000,
+    )
+    payload = style_to_dict(style)
+    assert payload["anim_fx_speed_pct"] == 250
+    assert payload["fx_particle_speed_pct"] == -1000
+    assert payload["scanline_effect_speed_pct"] == 1000
+    restored = style_from_dict(payload)
+    assert restored.anim_fx_speed_pct == 250
+    assert restored.fx_particle_speed_pct == -1000
+    assert restored.scanline_effect_speed_pct == 1000
+
+    clamped = style_from_dict(
+        {
+            "anim_fx_speed_pct": 5000,
+            "fx_particle_speed_pct": -5000,
+            "scanline_effect_speed_pct": "oops",
+        }
+    )
+    assert clamped.anim_fx_speed_pct == 1000
+    assert clamped.fx_particle_speed_pct == -1000
+    assert clamped.scanline_effect_speed_pct == 0
+

@@ -165,6 +165,55 @@ def test_style_patch_ir_sections_match_full_ir(qapp):
     assert patch["fx_sprites"] == full["fx_sprites"]
 
 
+def test_style_patch_retimes_particle_bursts_by_speed(qapp):
+    """「粒子速度调整」只改行级 fx_bursts 时间窗：差分载荷必须带上新窗口。
+
+    布局签名不含纯绘制字段，速度变化走 ``gpu_configure_style`` 差分区；若
+    差分不重算 bursts，GPU 预览会一直用旧窗口（CPU 已按新窗口绘制）。
+    """
+
+    def windows(payload):
+        return [
+            (
+                entry["source_index"],
+                entry["source_line_index"],
+                [(b["start_ms"], b["end_ms"]) for b in entry["fx_bursts"]],
+            )
+            for entry in payload["lines_style"]
+        ]
+
+    track = _patch_track()
+    fast = windows(
+        build_style_patch_ir(
+            track,
+            _patch_style(sing_fx="twinkle"),
+            width=_WIDTH,
+            height=_HEIGHT,
+            fps=_FPS,
+            duration_ms=4000,
+        )
+    )
+    slow = windows(
+        build_style_patch_ir(
+            track,
+            _patch_style(sing_fx="twinkle", fx_particle_speed_pct=-500),
+            width=_WIDTH,
+            height=_HEIGHT,
+            fps=_FPS,
+            duration_ms=4000,
+        )
+    )
+    assert fast and slow
+    assert any(spans for _source, _line, spans in fast)
+    assert fast != slow
+    for (_source, _line, fast_spans), (_s, _l, slow_spans) in zip(fast, slow):
+        assert len(fast_spans) == len(slow_spans)
+        for (start_a, end_a), (start_b, end_b) in zip(fast_spans, slow_spans):
+            # 发射时刻不变，减速只把终点推后。
+            assert start_a == start_b
+            assert end_b > end_a
+
+
 _LINE_STYLE_FIELDS = (
     "signal_head",
     "signal_band_join",
@@ -291,8 +340,14 @@ def test_configure_style_gpu_frame_matches_full_configure(qapp):
         pytest.skip("native subtitle renderer executable is not built")
 
     track = _patch_track()
-    style_a = _patch_style()
-    style_b = _patch_style(fill_color="#3366FF", fx_particle_count=12)
+    style_a = _patch_style(sing_fx="twinkle")
+    style_b = _patch_style(
+        sing_fx="twinkle",
+        fill_color="#3366FF",
+        fx_particle_count=12,
+        # 速度调整同样只走行级 bursts 差分：慢速粒子的窗口必须随载荷更新。
+        fx_particle_speed_pct=-500,
+    )
     shm_key = f"test-gpu-style-patch-{uuid.uuid4().hex}"
 
     def render_checksum(renderer: NativeRendererProcess, frame_index: int) -> str:
