@@ -5297,6 +5297,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         cacheable = false;
                         break;
                     }
+                    // 编组源的几何是逐帧动画后的（utopia 入场过冲 / 整字放大
+                    // 缩放等），而缓存签名里没有变换矩阵：正在缩放的字若命中
+                    // 上一帧的光晕位图，光晕会冻结在峰值大小（文字缩回、发光
+                    // 不缩）。含变换字符的帧跳过跨帧缓存，等缩放落定再缓存。
+                    if (charTransformedAt(charIndex)) {
+                        cacheable = false;
+                        break;
+                    }
                     mixFloat(characterOpacityAt(charIndex));
                 }
             }

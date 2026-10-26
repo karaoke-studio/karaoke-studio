@@ -10132,6 +10132,89 @@ def test_gpu_zoom_pulse_wipe_follows_painter(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_zoom_pulse_inline_glow_shrinks_with_glyph(monkeypatch) -> None:
+    """整字放大缩回时，行内分色（inline style）的发光必须跟着一起缩。
+
+    编组 glow 的跨帧模糊缓存签名只含阶段/透明度，不含逐字动画矩阵；带
+    变换字符的帧一旦命中缓存，光晕会冻结在放大峰值大小（文字缩回、发光
+    不缩）。用洋红发光隔离光晕，断言包围盒随缩回单调变小。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    glow = PaintFill(mode="solid", color="#FF00FF")
+    state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        stroke=PaintFill(mode="solid", color="#000000"),
+        shadow=glow,
+    )
+    role = SubtitleStyleScheme(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_radius_px=14,
+        glow_before_radius_px=14,
+        glow_after_radius_px=14,
+        glow_concentration_level=1,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+    )
+    style = Style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="zoom_pulse",
+        line_lead_in_ms=0,
+        line_tail_ms=1_000,
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        dual_line_layout=False,
+        custom_style_schemes={"A": role},
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("M", 0, role_label="A"),
+                    TimingChar("M", 400, role_label="A"),
+                    TimingChar("M", 800, role_label="A"),
+                ],
+                end_ms=1_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            )
+        ]
+    )
+    stamps = (1_000, 1_075, 1_150, 1_225, 1_300)
+
+    def glow_span(payload: bytes) -> tuple[int, int]:
+        arr = np.frombuffer(payload, np.uint8).reshape(360, 640, 4).astype(int)
+        mask = (
+            (arr[:, :, 3] > 30)
+            & (arr[:, :, 0] > 120)
+            & (arr[:, :, 2] > 120)
+            & (arr[:, :, 1] < 120)
+        )
+        ys, xs = np.nonzero(mask)
+        assert xs.size, "no glow pixels"
+        return int(xs.max() - xs.min()), int(ys.max() - ys.min())
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, stamps, force_warp=True, track=track
+        )
+    spans = [glow_span(frame) for frame in frames]
+    assert spans[0][0] >= spans[-1][0] + 4, spans
+    assert spans[0][1] >= spans[-1][1] + 4, spans
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_utopia_karaoke_bounce_uses_ruby_main_wipe_points(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(
