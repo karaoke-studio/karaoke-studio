@@ -504,6 +504,8 @@ def build_staff_scroll():
     * **谱线层**：5 条白线 + 终止双竖线，带一层柔和外发光（参考图那种柔光）；
     * **谱号层**：白色高音谱号，带柔和外发光；
     * **素材本体**：四个彩色音符（用户的独有设计，保留），运行时压在最上层；
+    * **静态变体**：同一张图去掉中段漂浮的小音符（只保留四个静态音符），
+      供「中间动态音符」开关关闭时使用；与动图同尺寸、同端点。
     * 成图 1920x240，中段 1570px。
     """
     w, L, R = 1920, 190, 160
@@ -581,7 +583,9 @@ def build_staff_scroll():
             )
         frames.append(big.resize((w, H), Image.LANCZOS))
 
-    return frames, L, R, lines, clef_layer
+    # 静态变体：与每帧同源、同缩放，只是没有中段漂浮的小音符。
+    static_frame = static.resize((w, H), Image.LANCZOS)
+    return frames, L, R, lines, clef_layer, static_frame
 
 # --------------------------------------------------------- 2. minimal stars
 def clean_star(r, alpha):
@@ -917,7 +921,7 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
     built = builder()
     clef_name = ""
     if animated:
-        # 动图预设：builder 返回 (frames, L, R[, lines, clef])，输出循环动图。
+        # 动图预设：builder 返回 (frames, L, R[, lines, clef[, static]])。
         frames = built[0]
         rest = list(built[1:])
         anim_path = ASSET_DIR / (preset_id + ANIM_EXT)
@@ -928,11 +932,20 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
             expect_translucent=preset_id != "staff_scroll",
         )
         lines_name = ""
-        if len(rest) >= 5:
-            rest[3].save(str(ASSET_DIR / (preset_id + "_lines.png")))
+        static_name = ""
+        if len(rest) >= 4:
+            rest[2].save(str(ASSET_DIR / (preset_id + "_lines.png")))
             lines_name = preset_id + "_lines.png"
-            rest[4].save(str(ASSET_DIR / (preset_id + "_clef.png")))
+            rest[3].save(str(ASSET_DIR / (preset_id + "_clef.png")))
             clef_name = preset_id + "_clef.png"
+            if len(rest) >= 5:
+                # 静态变体（五线谱）：去掉中段动态音符，供属性卡开关使用。
+                rest[4].save(str(ASSET_DIR / (preset_id + "_static.png")))
+                static_name = preset_id + "_static.png"
+        if not static_name:
+            stale_static = ASSET_DIR / (preset_id + "_static.png")
+            if stale_static.exists():
+                stale_static.unlink()
         for stale_name in (preset_id + ".png", preset_id + ".gif"):
             stale = ASSET_DIR / stale_name
             if stale.exists():
@@ -942,6 +955,7 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
                         "height_pct": height_pct,
                         "tintable": tintable, "tint": default_tint,
                         "lines_name": lines_name, "clef_name": clef_name,
+                        "static_name": static_name,
                         "animated": True})
         return
     if len(built) == 5:
@@ -1297,21 +1311,6 @@ def sheet_mock():
     canvas.convert("RGB").save(out_png("04_mock_frame"))
 
 
-register("staff_scroll", "五线谱 · 卷轴", build_staff_scroll, 160, animated=True)
-register("stars", "星火点阵", build_stars, 110, animated=True)
-register("diagonal", "斜纹缎带", build_diagonal, 100, True, "#3EC6E0", feather_px=4.0)
-register("bubbles", "水泡", build_bubbles, 125, animated=True)
-register("plain_round", "纯色圆角条", build_plain_round, 100, True, "#2B3A55", feather_px=4.0)
-
-sheet_assets()
-sheet_gallery()
-sheet_variation()
-sheet_explained()
-sheet_tints()
-sheet_detail()
-sheet_mock()
-
-
 def seam_report(preset):
     img = preset["image"]
     a = np.array(img.split()[3]).astype(np.float32)
@@ -1323,15 +1322,35 @@ def seam_report(preset):
     return ratio
 
 
-for preset in PRESETS:
-    ratio = seam_report(preset)
-    # 随机散布类预设（星火/水泡）的"边缘列"本来就稀疏，这个指标对它们没有意义
-    structured = preset["id"] in {"staff_scroll", "diagonal", "plain_round"}
-    flag = "  <-- 相位不连续，平铺会跳" if (structured and ratio > 1.6) else ""
-    print("%-13s %s caps %d/%d  seam-phase %.2f%s" % (
-        preset["id"], preset["image"].size, preset["cap_l"], preset["cap_r"],
-        ratio, flag))
-print("done:", OUT)
+def main() -> None:
+    """生成全部预设素材与评审图（直接运行本脚本时执行）。"""
+    register("staff_scroll", "五线谱 · 卷轴", build_staff_scroll, 160, animated=True)
+    register("stars", "星火点阵", build_stars, 110, animated=True)
+    register("diagonal", "斜纹缎带", build_diagonal, 100, True, "#3EC6E0", feather_px=4.0)
+    register("bubbles", "水泡", build_bubbles, 125, animated=True)
+    register("plain_round", "纯色圆角条", build_plain_round, 100, True, "#2B3A55", feather_px=4.0)
+
+    sheet_assets()
+    sheet_gallery()
+    sheet_variation()
+    sheet_explained()
+    sheet_tints()
+    sheet_detail()
+    sheet_mock()
+
+    for preset in PRESETS:
+        ratio = seam_report(preset)
+        # 随机散布类预设（星火/水泡）的"边缘列"本来就稀疏，这个指标对它们没有意义
+        structured = preset["id"] in {"staff_scroll", "diagonal", "plain_round"}
+        flag = "  <-- 相位不连续，平铺会跳" if (structured and ratio > 1.6) else ""
+        print("%-13s %s caps %d/%d  seam-phase %.2f%s" % (
+            preset["id"], preset["image"].size, preset["cap_l"], preset["cap_r"],
+            ratio, flag))
+    print("done:", OUT)
+
+
+if __name__ == "__main__":
+    main()
 
 
 

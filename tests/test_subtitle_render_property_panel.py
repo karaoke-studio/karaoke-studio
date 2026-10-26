@@ -12164,3 +12164,58 @@ def test_line_band_color_rows_hide_instead_of_disable():
     assert len(order) == len(grid._items)
     assert order[: len(visible_fields)] == visible_fields
     panel.deleteLater()
+
+
+def test_line_band_dynamic_notes_switch_is_staff_only():
+    """「中间动态音符」开关只对五线谱显示，关闭后写回样式。"""
+    from krok_helper.subtitle_render.domain.models import Style
+
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    check = panel._line_band_dynamic_notes_check
+    row = panel._line_band_dynamic_notes_row
+    assert check is not None and row is check
+
+    # 没有静态变体的预设：整行隐藏，不留灰掉的开关。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:bubbles",
+        line_band_fill_mode="cover",
+    ))
+    assert check.isHidden()
+
+    # 五线谱：出现并默认勾选（保持原来的动图行为）。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_fill_mode="three_slice",
+    ))
+    assert not check.isHidden()
+    assert check.isChecked()
+
+    check.setChecked(False)
+    assert emitted[-1].line_band_dynamic_notes_enabled is False
+
+    # 样式回流（工程加载/撤销）要把关闭状态回填到开关，不能弹回勾选。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_dynamic_notes_enabled=False,
+    ))
+    assert not check.isChecked()
+
+    # 切回其他预设：重新隐藏，但样式值保留给下次切回五线谱。
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:stars",
+        line_band_dynamic_notes_enabled=False,
+    ))
+    assert check.isHidden()
+    assert not check.isChecked()
+
+    # 重新选预设 = 回到预设默认外观：五线谱默认带中段动态音符。
+    staff_index = panel._line_band_preset_combo.findData("preset:staff_scroll")
+    panel._line_band_preset_combo.setCurrentIndex(staff_index)
+    assert emitted[-1].line_band_dynamic_notes_enabled is True
+    panel.deleteLater()

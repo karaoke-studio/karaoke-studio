@@ -1424,6 +1424,9 @@ class Style:
     line_band_image: str = ""
     """图源：``preset:<id>`` 或绝对路径（用户上传）。空串表示未选图。"""
 
+    line_band_dynamic_notes_enabled: bool = True
+    """五线谱预设中段的动态音符开关；关闭后改用静态变体，只保留两端静态音符。"""
+
     line_band_fill_mode: str = "three_slice"
     """填充模式：``stretch`` 拉伸 / ``repeat`` 重复 / ``cover`` 裁切 /
     ``three_slice`` 三段式（左右端点不缩放、中段循环）。"""
@@ -2642,6 +2645,7 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "volume_enabled",
             "lit_shadow",
             "line_band_enabled",
+            "line_band_dynamic_notes_enabled",
             "line_band_include_ruby",
             "line_band_shadow_enabled",
             "line_band_stroke_enabled",

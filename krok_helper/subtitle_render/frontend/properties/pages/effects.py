@@ -1068,7 +1068,8 @@ class EffectsPropertyPageBuilder:
 
             return add, fields
 
-        add, _source_grid = group("图源", min_column_width=220, max_columns=2)
+        add, source_grid = group("图源", min_column_width=220, max_columns=2)
+        host._line_band_source_grid = source_grid
         host._line_band_preset_combo = WheelFocusedComboBox(section)
         compact_property_control(host._line_band_preset_combo)
         host._line_band_preset_combo.setToolTip(
@@ -1110,6 +1111,25 @@ class EffectsPropertyPageBuilder:
             "拉伸=整段非等比铺满；裁切=等比覆盖整段并居中裁掉溢出。"
         )
         add("中段", host._line_band_mid_combo)
+
+        # 五线谱预设：中段漂浮的动态小音符可以关闭，只保留两端静态音符。
+        # 只对该预设显示（同步时按预设是否有静态变体整行显隐）。
+        host._line_band_dynamic_notes_check = CheckBox("中间动态音符", section)
+        host._line_band_dynamic_notes_check.setToolTip(
+            "五线谱预设中段漂浮的小音符（会随时间缓慢移动）；关闭后中段只保留"
+            "谱线，两端的静态音符不变。"
+        )
+        host._line_band_dynamic_notes_check.setChecked(
+            bool(getattr(host._style, "line_band_dynamic_notes_enabled", True))
+        )
+        host._line_band_dynamic_notes_check.toggled.connect(
+            lambda checked: host._update_style(
+                _force_global=True, line_band_dynamic_notes_enabled=checked
+            )
+        )
+        host._line_band_dynamic_notes_row = add(
+            None, host._line_band_dynamic_notes_check
+        )
 
         # 图片行独占一行：和预设下拉挤在同一排时路径会被压没。
         host._line_band_image_label = FluentLineEdit(section)

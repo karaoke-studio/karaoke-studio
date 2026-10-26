@@ -44,6 +44,8 @@ class BandPreset:
     # 独立谱号层（白色，运行时按 line_band_clef_color 上色）。
     clef_file_name: str = ""
     default_clef_color: str = ""
+    # 静态变体（不带中段动态音符）：与主素材同尺寸、同端点；空 = 没有变体。
+    static_file_name: str = ""
     # 预设自带的上色强度（100 = 满强度）。
     default_tint_strength_pct: int = 100
     # 预设默认填充方式：花纹类用 cover（裁切），避免平铺让中段变密。
@@ -68,6 +70,12 @@ class BandPreset:
         return BAND_PRESET_DIR / self.clef_file_name
 
     @property
+    def static_path(self) -> Optional[Path]:
+        if not self.static_file_name:
+            return None
+        return BAND_PRESET_DIR / self.static_file_name
+
+    @property
     def image_spec(self) -> str:
         """Value stored in ``Style.line_band_image`` for this preset."""
         return PRESET_SCHEME + self.preset_id
@@ -80,6 +88,7 @@ BAND_PRESETS: tuple[BandPreset, ...] = (
                default_line_color="#FFFFFF",
                clef_file_name="staff_scroll_clef.png",
                default_clef_color="#5FD8E6",
+               static_file_name="staff_scroll_static.png",
                default_opacity_pct=100),
     BandPreset("stars", "星火点阵", "stars.webp",
                120, 120, 14, 14, 54, 54, default_fill_mode="cover",
@@ -117,6 +126,26 @@ def resolve_band_image(image: str) -> Optional[Path]:
         return preset.path if preset.path.is_file() else None
     path = Path(image)
     return path if path.is_file() else None
+
+
+def resolve_band_static_image(image: str) -> Optional[Path]:
+    """静态变体路径（不带中段动态音符，如五线谱）；没有变体返回 ``None``。"""
+    preset = band_preset(preset_id_for_image(image) or "")
+    if preset is None:
+        return None
+    static_path = preset.static_path
+    return static_path if static_path is not None and static_path.is_file() else None
+
+
+def resolve_band_render_image(
+    image: str, *, dynamic_notes_enabled: bool = True
+) -> Optional[Path]:
+    """渲染用素材：关闭「中间动态音符」时优先用预设的静态变体。"""
+    if not dynamic_notes_enabled:
+        static_path = resolve_band_static_image(image)
+        if static_path is not None:
+            return static_path
+    return resolve_band_image(image)
 
 
 def resolve_band_lines_image(image: str) -> Optional[Path]:
@@ -178,6 +207,8 @@ __all__ = [
     "default_tint_for",
     "preset_id_for_image",
     "resolve_band_image",
+    "resolve_band_render_image",
+    "resolve_band_static_image",
     "default_clef_color_for",
     "resolve_band_clef_image",
     "resolve_band_lines_image",

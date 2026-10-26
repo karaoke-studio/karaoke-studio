@@ -35,6 +35,7 @@ from krok_helper.subtitle_render.domain.band_presets import (
     resolve_band_clef_image,
     resolve_band_image,
     resolve_band_lines_image,
+    resolve_band_static_image,
 )
 
 _TILE_CACHE_MAX = 16
@@ -72,6 +73,8 @@ class BandSpec:
     clef_image_path: str = ""
     clef_color: str = ""
     base_image_path: str = ""
+    # 使用预设的静态变体（关闭「中间动态音符」时）：只保留两端静态音符。
+    static_notes_only: bool = False
     # 图层效果（PS 图层样式口径）：每一种都有独立开关与配置，可以同时开。
     shadow: Optional["BandEffect"] = None
     stroke: Optional["BandEffect"] = None
@@ -97,9 +100,18 @@ def band_spec(style) -> Optional[BandSpec]:
     if not getattr(style, "line_band_enabled", False):
         return None
     image_spec = str(style.line_band_image or "")
-    path = resolve_band_image(image_spec)
+    dynamic_notes_enabled = bool(
+        getattr(style, "line_band_dynamic_notes_enabled", True)
+    )
+    static_path = (
+        resolve_band_static_image(image_spec)
+        if not dynamic_notes_enabled
+        else None
+    )
+    path = static_path if static_path is not None else resolve_band_image(image_spec)
     if path is None:
         return None
+    static_notes_only = static_path is not None
     lines_path = resolve_band_lines_image(image_spec)
     line_color = str(getattr(style, "line_band_line_color", "") or "")
     if not line_color:
@@ -186,6 +198,7 @@ def band_spec(style) -> Optional[BandSpec]:
         line_color=line_color if lines_path is not None else "",
         clef_image_path=str(clef_path) if clef_path is not None else "",
         clef_color=clef_color if clef_path is not None else "",
+        static_notes_only=static_notes_only,
         shadow=shadow,
         stroke=stroke,
         glow=glow,

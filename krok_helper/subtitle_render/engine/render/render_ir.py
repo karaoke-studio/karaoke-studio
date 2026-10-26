@@ -21,8 +21,8 @@ from krok_helper.subtitle_render.domain.band_presets import (
     default_clef_color_for,
     default_line_color_for,
     resolve_band_clef_image,
-    resolve_band_image,
     resolve_band_lines_image,
+    resolve_band_render_image,
 )
 from krok_helper.subtitle_render.domain.timing import (
     TimingTrack,
@@ -281,8 +281,11 @@ def build_render_ir(
                 auto_basis=signal_auto_basis(style),
             )
         )
-        band_path = resolve_band_image(
-            str(style_payload.get("line_band_image") or "")
+        band_path = resolve_band_render_image(
+            str(style_payload.get("line_band_image") or ""),
+            dynamic_notes_enabled=bool(
+                getattr(style, "line_band_dynamic_notes_enabled", True)
+            ),
         )
         style_payload["line_band_image"] = (
             str(band_path) if band_path is not None else ""
@@ -454,8 +457,11 @@ def build_style_patch_ir(
                 auto_basis=signal_auto_basis(style),
             )
         )
-        patch_band_path = resolve_band_image(
-            str(patch_style_payload.get("line_band_image") or "")
+        patch_band_path = resolve_band_render_image(
+            str(patch_style_payload.get("line_band_image") or ""),
+            dynamic_notes_enabled=bool(
+                getattr(style, "line_band_dynamic_notes_enabled", True)
+            ),
         )
         patch_style_payload["line_band_image"] = (
             str(patch_band_path) if patch_band_path is not None else ""

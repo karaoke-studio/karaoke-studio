@@ -91,6 +91,99 @@ def test_preset_lookup_and_tint_metadata():
     assert band_preset("staff_scroll").tintable is False
 
 
+def test_only_staff_preset_ships_a_static_variant():
+    """五线谱带静态变体（关闭中间动态音符用）；其余预设没有变体。"""
+    from krok_helper.subtitle_render.domain.band_presets import (
+        resolve_band_static_image,
+    )
+
+    for preset in BAND_PRESETS:
+        has_variant = preset.static_path is not None
+        assert has_variant == (preset.preset_id == "staff_scroll")
+        if has_variant:
+            assert preset.static_path is not None and preset.static_path.is_file()
+            assert resolve_band_static_image(preset.image_spec) == preset.static_path
+        else:
+            assert resolve_band_static_image(preset.image_spec) is None
+
+
+def test_staff_static_variant_keeps_only_end_notes(qapp):
+    """关闭「中间动态音符」：中段不再有漂移音符，两端静态音符保留。"""
+    import numpy as np
+
+    static_style = _style(
+        line_band_image="preset:staff_scroll",
+        line_band_cap_left_px=190,
+        line_band_cap_right_px=160,
+        line_band_dynamic_notes_enabled=False,
+    )
+    spec = band_spec(static_style)
+    assert spec is not None
+    assert spec.static_notes_only is True
+    assert Path(spec.image_path).name == "staff_scroll_static.png"
+
+    image = QImage(spec.image_path).convertToFormat(
+        QImage.Format.Format_RGBA8888
+    )
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    alpha = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        image.height(), image.bytesPerLine() // 4, 4
+    )[:, : image.width(), 3]
+    # 设计端点之间（中段）完全透明；左右端点内保留静态音符。
+    assert not alpha[:, 190 : image.width() - 160].any()
+    assert alpha[:, :190].any()
+    assert alpha[:, image.width() - 160 :].any()
+
+    # 静态变体不随时间变化（没有中段漂移帧）。
+    from krok_helper.subtitle_render.engine.render.elements.band import (
+        band_source,
+    )
+
+    assert band_source(spec, 0) == band_source(spec, 700)
+
+    # 默认（开关打开）仍用动图素材，行为不变。
+    animated = band_spec(
+        replace(static_style, line_band_dynamic_notes_enabled=True)
+    )
+    assert animated is not None
+    assert animated.static_notes_only is False
+    assert Path(animated.image_path).suffix.lower() == ".webp"
+
+    # 没有静态变体的预设忽略这个开关。
+    plain = band_spec(
+        _style(line_band_image="preset:stars",
+               line_band_dynamic_notes_enabled=False)
+    )
+    assert plain is not None
+    assert plain.static_notes_only is False
+    assert Path(plain.image_path).suffix.lower() == ".webp"
+
+
+def test_render_ir_hands_gpu_the_static_band_variant(qapp):
+    """GPU 导出走 IR：关闭动态音符时必须下发静态 PNG，不能仍下发动图。"""
+    from krok_helper.subtitle_render.engine.render.render_ir import (
+        build_render_ir,
+    )
+
+    ir = build_render_ir(
+        _track(),
+        _style(
+            line_band_image="preset:staff_scroll",
+            line_band_dynamic_notes_enabled=False,
+        ),
+        width=640,
+        height=360,
+        fps=60,
+    )
+    assert str(ir["style"]["line_band_image"]).endswith(
+        "staff_scroll_static.png"
+    )
+    assert ir["style"]["line_band_lines_image"].endswith(
+        "staff_scroll_lines.png"
+    )
+
+
 def test_missing_image_resolves_to_no_spec(tmp_path):
     missing = tmp_path / "nope.png"
     assert band_spec(_style(line_band_image=str(missing))) is None
@@ -323,6 +416,7 @@ def test_gpu_band_does_not_force_cpu_fallback():
 BAND_FIELDS = (
     "line_band_enabled",
     "line_band_image",
+    "line_band_dynamic_notes_enabled",
     "line_band_fill_mode",
     "line_band_cap_left_px",
     "line_band_cap_right_px",
@@ -490,6 +584,7 @@ def test_band_fields_survive_project_roundtrip():
     style = _style(
         line_band_fill_mode="cover",
         line_band_mid_mode="stretch",
+        line_band_dynamic_notes_enabled=False,
         line_band_include_ruby=True,
         line_band_offset_y_px=-7,
         line_band_opacity_pct=42,

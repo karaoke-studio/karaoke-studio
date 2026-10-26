@@ -766,6 +766,7 @@ def line_band_preview_pixmap(
 _LINE_BAND_FIELDS = {
     "line_band_enabled",
     "line_band_image",
+    "line_band_dynamic_notes_enabled",
     "line_band_fill_mode",
     "line_band_cap_left_px",
     "line_band_cap_right_px",
@@ -4601,7 +4602,7 @@ class PropertyPanel(QWidget):
 
     # ---------------------------------------------------- 行背景带（图源/几何）
     def _on_line_band_preset_changed(self, index: int) -> None:
-        """选内置预设：一次写入图源 + 端点 + 四边建议边距 + 默认色。"""
+        """选内置预设：写入图源 + 端点 + 四边建议边距 + 默认色与开关默认值。"""
         combo = getattr(self, "_line_band_preset_combo", None)
         if combo is None or index < 0:
             return
@@ -4629,6 +4630,8 @@ class PropertyPanel(QWidget):
             line_band_line_color=preset.default_line_color or "",
             line_band_clef_color=preset.default_clef_color or "",
             line_band_include_ruby=True,
+            # 选预设回到预设默认外观：五线谱先显示中段动态音符，需要时再关。
+            line_band_dynamic_notes_enabled=True,
         )
 
     def _choose_line_band_image(self) -> None:
@@ -5992,6 +5995,28 @@ class PropertyPanel(QWidget):
         if not label and image:
             label = Path(image).name
         self._line_band_image_label.setText(label)
+        # 「中间动态音符」只对带静态变体的预设（五线谱）显示；其余预设整行隐藏。
+        dynamic_notes_check = getattr(
+            self, "_line_band_dynamic_notes_check", None
+        )
+        if dynamic_notes_check is not None:
+            dynamic_notes_check.setChecked(
+                bool(getattr(style, "line_band_dynamic_notes_enabled", True))
+            )
+            row = getattr(
+                self, "_line_band_dynamic_notes_row", dynamic_notes_check
+            )
+            supports_static = (
+                preset is not None
+                and preset.static_path is not None
+                and preset.static_path.is_file()
+            )
+            if row is not None and row.isHidden() == supports_static:
+                row.setVisible(supports_static)
+                grid = getattr(self, "_line_band_source_grid", None)
+                refresh = getattr(grid, "refresh_layout", None)
+                if callable(refresh):
+                    refresh()
         for combo, value in (
             (self._line_band_fill_combo, style.line_band_fill_mode),
             (self._line_band_mid_combo, style.line_band_mid_mode),
