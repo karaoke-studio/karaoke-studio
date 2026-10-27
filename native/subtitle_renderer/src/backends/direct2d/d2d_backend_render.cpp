@@ -2540,8 +2540,27 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // that combined line once. Keep the dedicated blur-then-transform
         // layers for the other character animations, but never split Utopia
         // between two glow representations.
+        // 纯透明度类逐字过渡（char_fade / 粒子出入场 / 拼接·消散）自身不改变
+        // 字形几何：退场期间出现的 transformed 只可能来自与退场并行的整字
+        // 放大叠加。这类字符必须留在编组源（源用逐帧变换后的几何），否则
+        // 会同时被编组排除、又没有逐字 glow 兜底，行尾光晕直接消失。
+        const bool opacityOnlyTransitionGroupsGlow =
+            activeCharacterTransition == "char_fade"
+            || activeCharacterTransition == "assemble_in"
+            || activeCharacterTransition == "dissolve_out"
+            || activeCharacterTransition == "sparkle"
+            || activeCharacterTransition == "ripple"
+            || activeCharacterTransition == "note"
+            || activeCharacterTransition == "heart"
+            || activeCharacterTransition == "petal"
+            || activeCharacterTransition == "snow"
+            || activeCharacterTransition == "snow_solid"
+            || activeCharacterTransition == "feather"
+            || activeCharacterTransition == "lightning";
         auto charUsesGroupedGlowAt = [&](std::size_t index) {
-            return useUtopiaTransition || !charTransformedAt(index);
+            return opacityOnlyTransitionGroupsGlow
+                || useUtopiaTransition
+                || !charTransformedAt(index);
         };
         auto rubyUnitTransformed = [&](const Impl::CachedRuby &ruby,
                                        std::size_t unitIndex) {
@@ -2549,7 +2568,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         auto rubyUnitUsesGroupedGlowAt = [&](const Impl::CachedRuby &ruby,
                                              std::size_t unitIndex) {
-            return useUtopiaTransition
+            return opacityOnlyTransitionGroupsGlow
+                || useUtopiaTransition
                 || !rubyUnitTransformed(ruby, unitIndex);
         };
         const auto expandedRect = [](const D2D1_RECT_F &rect, float amount) {

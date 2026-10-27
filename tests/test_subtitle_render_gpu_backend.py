@@ -10215,6 +10215,117 @@ def test_gpu_zoom_pulse_inline_glow_shrinks_with_glyph(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("inline", [False, True])
+@pytest.mark.parametrize("exit_anim", ["char_fade", "snow"])
+def test_gpu_zoom_pulse_glow_survives_opacity_exit(
+    monkeypatch, inline, exit_anim
+) -> None:
+    """纯透明度逐字退场与整字放大缩回重叠时，光晕必须仍在且跟着字形缩。
+
+    char_fade / 粒子出入场自身不变形，叠加整字放大后字符变成 transformed；
+    旧分类会把它同时踢出编组 glow 和逐字 glow 兜底，退场期间整个光晕消失
+    （阴影正常）。snow 覆盖粒子类退出档。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    glow = PaintFill(mode="solid", color="#FF00FF")
+    state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        stroke=PaintFill(mode="solid", color="#000000"),
+        shadow=glow,
+    )
+    role = SubtitleStyleScheme(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_radius_px=14,
+        glow_before_radius_px=14,
+        glow_after_radius_px=14,
+        glow_concentration_level=1,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+    )
+    common = dict(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        entry_anim="none",
+        exit_anim=exit_anim,
+        exit_fade_ms=600,
+        karaoke_anim="zoom_pulse",
+        line_lead_in_ms=0,
+        line_tail_ms=600,
+        sync_entry=False,
+        sync_ending=False,
+        sync_each_page=False,
+        dual_line_layout=False,
+    )
+    style = Style(
+        **common,
+        decoration_kind="none" if inline else "glow",
+        glow_radius_px=14,
+        glow_before_radius_px=14,
+        glow_after_radius_px=14,
+        glow_concentration_level=1,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+        custom_style_schemes={"A": role} if inline else {},
+    )
+    labels = {"role_label": "A"} if inline else {}
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("M", 0, **labels),
+                    TimingChar("M", 500, **labels),
+                ],
+                end_ms=1_000,
+                display_start_override_ms=0,
+                display_end_override_ms=1_600,
+            )
+        ]
+    )
+    stamps = (1_000, 1_200, 1_250, 1_300)
+
+    def glow_stats(payload: bytes) -> tuple[int, tuple[int, int, int, int] | None]:
+        arr = np.frombuffer(payload, np.uint8).reshape(360, 640, 4).astype(int)
+        mask = (
+            (arr[:, :, 3] > 20)
+            & (arr[:, :, 0] > 100)
+            & (arr[:, :, 2] > 100)
+            & (arr[:, :, 1] < 120)
+        )
+        ys, xs = np.nonzero(mask)
+        if xs.size == 0:
+            return 0, None
+        return int(mask.sum()), (
+            int(xs.min()),
+            int(xs.max()),
+            int(ys.min()),
+            int(ys.max()),
+        )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, stamps, force_warp=True, track=track
+        )
+    stats = [glow_stats(frame) for frame in frames]
+    # 退场全程必须一直有光晕（旧实现 t=1250 时只剩个位数杂散像素）。
+    assert stats[0][0] > 0
+    assert all(
+        count >= stats[0][0] * 0.25 for count, _bounds in stats
+    ), stats
+    first_bounds = stats[0][1]
+    last_bounds = stats[-1][1]
+    assert first_bounds is not None and last_bounds is not None
+    assert (first_bounds[1] - first_bounds[0]) >= (
+        (last_bounds[1] - last_bounds[0]) + 4
+    ), stats
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_utopia_karaoke_bounce_uses_ruby_main_wipe_points(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(
