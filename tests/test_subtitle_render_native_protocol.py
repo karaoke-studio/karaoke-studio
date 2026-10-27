@@ -2849,20 +2849,26 @@ def _scoped_ir_track() -> TimingTrack:
 
 
 def _count_plan_rebuilds(monkeypatch):
-    """数真实重建次数：store 只在重建路径发生（缓存命中不会 store）。
+    """数**真实整轨重建**次数（``assemble_track_layout_plan`` 调用）。
+
+    不能用 ``store_track_layout_plan`` 计数：paint-only 编辑后缓存命中、逐行
+    样式需要重绑时，重绑结果也会写回缓存（避免逐帧 rebind 击穿行级缓存），
+    但那不是全量装配。拦截装配函数才能区分「重建」与「重绑写回」。
 
     返回重建过的轨道 id 列表（按重建顺序，含重复）。
     """
     import krok_helper.subtitle_render.engine.layout.plan.orchestrator as orchestrator
 
     rebuilds: list[int] = []
-    real_store = orchestrator.store_track_layout_plan
+    real_assemble = orchestrator.assemble_track_layout_plan
 
-    def counting_store(key, track, style, plan):
+    def counting_assemble(track, style, **kwargs):
         rebuilds.append(id(track))
-        return real_store(key, track, style, plan)
+        return real_assemble(track, style, **kwargs)
 
-    monkeypatch.setattr(orchestrator, "store_track_layout_plan", counting_store)
+    monkeypatch.setattr(
+        orchestrator, "assemble_track_layout_plan", counting_assemble
+    )
     return rebuilds
 
 

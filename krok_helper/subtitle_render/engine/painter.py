@@ -3991,6 +3991,10 @@ def _line_particle_tail_end_ms(item, style: Style) -> int | None:
     ``plan_line_bursts`` 对整行规划一次即可得到与渲染完全一致的 burst 时间
     窗；plan 重绑（样式变化）会产出新的 item / 样式对象，缓存自然失效。
     同一 plan 内每行只会真正规划一次，随后每帧的尾奏判定是 O(1)。
+
+    入参必须与 ``_paint_line_fx_particles`` 同口径（``item.render_line``、
+    ``item.resolved_intervals``、空格可见掩码）：星光/扫字线的逐字错峰按
+    可见槽位分配，掩码不同会让淘汰界小于真实绘制终点，CPU 提前裁掉粒子。
     """
 
     from krok_helper.subtitle_render.engine.render.effects.particles import (
@@ -4000,13 +4004,19 @@ def _line_particle_tail_end_ms(item, style: Style) -> int | None:
     cached = getattr(item, "_particle_tail_cache", None)
     if cached is not None and cached[0] is style:
         return cached[1]
+    render_line = item.render_line or item.line
+    char_visible = [
+        not str(getattr(char, "text", "") or "").isspace()
+        for char in render_line.chars
+    ]
     tail_end = line_particle_tail_end_ms(
         style,
         int(item.track_index),
         item.display_start_ms,
         item.display_end_ms,
-        _line_end_ms(item.line),
+        _line_end_ms(render_line),
         item.resolved_intervals,
+        char_visible=char_visible,
     )
     object.__setattr__(item, "_particle_tail_cache", (style, tail_end))
     return tail_end

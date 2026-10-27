@@ -5620,6 +5620,12 @@ def _speed_scope(burst: dict[str, object]) -> str:
     return "anim"
 
 
+def _expected_scaled_duration(duration_ms: int, speed_pct: int) -> int:
+    """独立于实现的期望式：新时长 = round(旧时长 / 10**(pct/1000))。"""
+
+    return max(1, round(duration_ms / (10 ** (speed_pct / 1000.0))))
+
+
 def test_particle_speed_factor_is_log_axis_and_clamped():
     assert particle_speed_factor(0) == pytest.approx(1.0)
     assert particle_speed_factor(1000) == pytest.approx(10.0)
@@ -5640,6 +5646,9 @@ def test_particle_speed_factor_is_log_axis_and_clamped():
     assert scaled_particle_duration_ms(700, 1000) == 70
     assert scaled_particle_duration_ms(700, -1000) == 7000
     assert scaled_particle_duration_ms(0, 500) == 0
+    # 1ms 的边界窗口同样按倍率缩放（生产路径与公开 helper 同一实现）。
+    assert scaled_particle_duration_ms(1, -1000) == 10
+    assert scaled_particle_duration_ms(1, 0) == 1
 
 
 def test_particle_speed_scales_only_its_own_target_windows():
@@ -5675,12 +5684,12 @@ def test_particle_speed_scales_only_its_own_target_windows():
                 assert after["end_ms"] == (
                     before["start_ms"]
                     + int(before["emit_ms"])
-                    + scaled_particle_duration_ms(tail, -500)
+                    + _expected_scaled_duration(tail, -500)
                 )
             else:
                 assert after["end_ms"] == (
                     before["start_ms"]
-                    + scaled_particle_duration_ms(duration, -500)
+                    + _expected_scaled_duration(duration, -500)
                 )
 
 
@@ -5739,6 +5748,164 @@ def test_particle_tail_end_follows_speed_adjustment():
         Style(exit_anim="fade", karaoke_anim="none"), 0, 1000, 4200, 4100,
         _SPEED_WINDOWS,
     ) is None
+
+
+def test_particle_tail_end_matches_paint_plan_with_leading_spaces():
+    """尾奏淘汰界必须与绘制路径同掩码（前导空格会改变逐字错峰的 max 起点）。"""
+
+    texts = [" "] * 9 + ["A", "B", "C"]
+    style = Style(
+        exit_anim="sparkle",
+        exit_fade_ms=600,
+        font_size_px=80,
+        karaoke_anim="none",
+    )
+    windows = [(1200 + index * 50, 1600 + index * 50) for index in range(12)]
+    visible = [text != " " for text in texts]
+    paint_end = max(
+        burst["end_ms"]
+        for burst in plan_line_bursts(
+            style, 0, 1200, 4200, 3600, windows, char_visible=visible
+        )
+    )
+    masked_end = line_particle_tail_end_ms(
+        style, 0, 1200, 4200, 3600, windows, char_visible=visible
+    )
+    unmasked_end = line_particle_tail_end_ms(
+        style, 0, 1200, 4200, 3600, windows
+    )
+    # 与绘制同掩码时精确相等；漏传掩码会低估（CPU 会提前裁掉最后一组星光）。
+    assert masked_end == paint_end
+    assert unmasked_end is not None and unmasked_end < paint_end
+
+
+def test_exit_particle_tail_items_use_paint_char_mask(qapp):
+    """尾奏选行走真实 plan：前导空格行在「无掩码界之后」仍必须入选。"""
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.layout.plan.cache import (
+        clear_track_layout_plan_cache,
+    )
+    from krok_helper.subtitle_render.engine.painter import (
+        _exit_particle_tail_items,
+        _line_end_ms,
+        build_track_layout_plan,
+    )
+
+    texts = [" "] * 9 + ["A", "B", "C"]
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text=text, start_ms=1200 + index * 50)
+                    for index, text in enumerate(texts)
+                ],
+                end_ms=3600,
+            )
+        ]
+    )
+    style = Style(
+        exit_anim="sparkle",
+        exit_fade_ms=600,
+        font_size_px=80,
+        karaoke_anim="none",
+        line_lead_in_ms=0,
+        line_tail_ms=600,
+    )
+    clear_track_layout_plan_cache()
+    plan = build_track_layout_plan(track, style, logical_w=800, logical_h=450)
+    item = plan.lines[0]
+    windows = [tuple(window) for window in item.resolved_intervals]
+    visible = [
+        not str(getattr(char, "text", "") or "").isspace()
+        for char in item.render_line.chars
+    ]
+    paint_end = max(
+        burst["end_ms"]
+        for burst in plan_line_bursts(
+            item.animation_style,
+            int(item.track_index),
+            item.display_start_ms,
+            item.display_end_ms,
+            _line_end_ms(item.render_line),
+            windows,
+            char_visible=visible,
+        )
+    )
+    unmasked_end = line_particle_tail_end_ms(
+        item.animation_style,
+        int(item.track_index),
+        item.display_start_ms,
+        item.display_end_ms,
+        _line_end_ms(item.render_line),
+        windows,
+    )
+    assert unmasked_end is not None and unmasked_end < paint_end
+    # 在旧（无掩码）界之后、真实绘制终点之前：仍应进入尾奏通道。
+    assert _exit_particle_tail_items(
+        style, plan, [], paint_end - 1
+    ) == [item]
+
+
+def test_particle_tail_plan_is_cached_after_paint_only_style_edit(qapp):
+    """paint-only 编辑后尾奏规划不能每帧重跑（plan 重绑必须写回缓存）。
+
+    只数**尾奏通道**的规划（``line_particle_tail_end_ms``）：窗口外的行没有
+    可见行布局缓存，绘制通道每帧各规划一次是既有行为，不参与本断言。
+    """
+
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingTrack
+    from krok_helper.subtitle_render.engine.layout.plan.cache import (
+        clear_track_layout_plan_cache,
+    )
+    from krok_helper.subtitle_render.engine.painter import paint_frame
+    from krok_helper.subtitle_render.engine.render.effects import particles
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(text="A", start_ms=0),
+                    TimingChar(text="B", start_ms=400),
+                ],
+                end_ms=1000,
+            )
+        ]
+    )
+    base_style = Style(
+        exit_anim="sparkle",
+        exit_fade_ms=600,
+        font_size_px=48,
+        karaoke_anim="none",
+    )
+    edited = replace(base_style, base_color="#123456")
+
+    def paint_one(style: Style) -> None:
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0xFF101010)
+        paint_frame(image, track, 2100, style)
+
+    clear_track_layout_plan_cache()
+    paint_one(base_style)  # 预热计划缓存（样式 A）
+
+    calls = {"count": 0}
+    real_tail_end = particles.line_particle_tail_end_ms
+
+    def counting_tail_end(*args, **kwargs):
+        calls["count"] += 1
+        return real_tail_end(*args, **kwargs)
+
+    particles.line_particle_tail_end_ms = counting_tail_end
+    try:
+        # 纯绘制字段变化 → 布局签名不变、走缓存；首帧重绑后必须写回，
+        # 之后各帧复用同一 plan / item，尾奏界只规划一次。
+        for _ in range(5):
+            paint_one(edited)
+    finally:
+        particles.line_particle_tail_end_ms = real_tail_end
+    assert calls["count"] == 1, calls["count"]
 
 
 def test_line_has_fx_particles_matches_particle_sources():

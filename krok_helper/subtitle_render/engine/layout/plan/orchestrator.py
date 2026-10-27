@@ -166,7 +166,16 @@ def resolve_track_layout_plan(
     if use_cache and layout_cache_enabled():
         cached = cached_track_layout_plan(cache_key)
         if cached is not None:
-            return _rebind_plan_line_styles(cached, track, style)
+            rebound = _rebind_plan_line_styles(cached, track, style)
+            if rebound is not cached:
+                # 重绑结果必须写回缓存：否则任何 paint-only 编辑之后，每帧都会
+                # 重新 rebind 出一批新的 LineLayoutPlan 对象，挂在行计划上的
+                # 缓存（如退场尾奏淘汰界 painter._particle_tail_cache）每帧被
+                # 击穿，退化为「每行每帧重跑一次整行粒子规划」。
+                # 写回值仍满足缓存键：键只含布局签名，而逐行样式本来就是缓存
+                # 命中后按当前样式重解析的结果。
+                store_track_layout_plan(cache_key, track, style, rebound)
+            return rebound
 
     # 段首/段尾页标记必须先于逐行样式解析注册；包一层 layout_pass 保证
     # 无外层 pass 的调用方（IR 构建等）也能拿到同样的替换结果。

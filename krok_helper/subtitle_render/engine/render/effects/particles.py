@@ -372,14 +372,21 @@ def line_particle_tail_end_ms(
     display_end_ms: int | None,
     line_end_ms: int | None,
     char_windows: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+    *,
+    char_visible: list[bool] | None = None,
 ) -> int | None:
     """该行**全部**粒子 burst 的自然终点（退场尾奏/慢速余韵的淘汰界）。
 
     2026-10 速度调整：减速后的粒子可以显著越过显示窗终点，原先按固定
     常量推算的解析式无法跟随（入退场/唱字/扫字线三类还要分别维护）。这里
     直接复用 :func:`plan_line_bursts` 取最大 ``end_ms``——与 CPU 绘制和
-    GPU IR 下发的是同一份 burst 时间窗，边界天然同口径。空格字符按「可见」
-    参与规划，得到的只是**上界**（空字不会多出 burst），对尾奏无害。
+    GPU IR 下发的是同一份 burst 时间窗，边界天然同口径。
+
+    ``char_visible`` **必须与绘制路径传入的掩码一致**（``_paint_line_fx_
+    particles`` 用 ``not text.isspace()``）：星光/扫字线的逐字错峰按可见
+    槽位数量分配，空格是否参与会改变各字起点与最大终点（前导空格行实测
+    可差 100ms 以上）。不传只能得到近似值，可能小于真实绘制终点，从而在
+    CPU 端提前裁掉粒子而 GPU 仍在画——不要把缺省值当安全上界。
 
     无粒子源或规划不出 burst 时返回 ``None``。
     """
@@ -393,6 +400,7 @@ def line_particle_tail_end_ms(
         display_end_ms,
         line_end_ms,
         [tuple(window) for window in (char_windows or ())],
+        char_visible=char_visible,
     )
     if not bursts:
         return None
@@ -2045,26 +2053,33 @@ def _apply_particle_speed(
     锋面之后的拖尾寿命（``emit_ms`` 不动），粒子仍然沿真实走字锋面出生。
 
     规划期用 ``scope`` 标记归属（渲染 IR 不携带，这里统一弹出）；同一目标
-    的倍率只算一次。评价器只按 ``start_ms``/``end_ms`` 求值，因此 CPU 与
-    GPU 拿到的时间窗逐字段一致。
+    的百分比只算一次，时长换算与 :func:`scaled_particle_duration_ms` 同一
+    份实现。评价器只按 ``start_ms``/``end_ms`` 求值，因此 CPU 与 GPU 拿到
+    的时间窗逐字段一致。
+
+    注意：求值器内部的**绝对**错峰常量（涟漪环间隔 ``RIPPLE_RING_STAGGER_
+    MS``、拼接 90ms、消散 70ms、火花 60ms）不在 burst 时间窗里，不随倍率
+    缩放——缩放它们要同时改 Python 求值器与 C++ ``d2d_fx`` 镜像。正向高速
+    档因此会截断部分延迟子粒子（+750% 起涟漪环 2→1、消散 4→3/2），这是
+    已接受的限制，见 docs/粒子特效实现经验.md §3.9。
     """
 
-    factors: dict[str, float] = {}
+    speeds: dict[str, int] = {}
     for burst in bursts:
         scope = str(burst.pop("scope", "sing"))
-        factor = factors.get(scope)
-        if factor is None:
+        speed_pct = speeds.get(scope)
+        if speed_pct is None:
             field = PARTICLE_SPEED_STYLE_FIELDS.get(
                 scope, "fx_particle_speed_pct"
             )
-            factor = particle_speed_factor(getattr(style, field, 0))
-            factors[scope] = factor
-        if factor == 1.0:
+            speed_pct = clamp_particle_speed_pct(getattr(style, field, 0))
+            speeds[scope] = speed_pct
+        if speed_pct == 0:
             continue
         start = int(burst["start_ms"])
         end = int(burst["end_ms"])
         life = end - start
-        if life <= 1:
+        if life <= 0:
             continue
         tail = life
         if scope == "scanline":
@@ -2074,7 +2089,9 @@ def _apply_particle_speed(
                 emit = min(emit, life)
                 start = start + emit
                 tail = max(life - emit, 1)
-        burst["end_ms"] = start + _scaled_life_ms(tail, factor)
+        burst["end_ms"] = start + scaled_particle_duration_ms(
+            tail, speed_pct
+        )
 
 
 def plan_line_bursts(
