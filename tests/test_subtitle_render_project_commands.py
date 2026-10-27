@@ -9,6 +9,7 @@ import pytest
 from krok_helper.subtitle_render.frontend.project.project_commands import (
     ProjectCommandController,
     ProjectSaveAction,
+    project_file_is_present,
 )
 
 
@@ -155,6 +156,16 @@ def test_save_as_escape_a_deleted_project_directory(tmp_path: Path) -> None:
     )
 
     assert calls[0][2] == str(tmp_path / "song.yurika")
+
+
+def test_project_file_presence_skips_network_locations(tmp_path: Path) -> None:
+    """本地路径按实际存在判定；网络位置不探测（SMB 断开时会卡住）。"""
+    existing = tmp_path / "saved.yurika"
+    existing.write_text("{}", encoding="utf-8")
+
+    assert project_file_is_present(existing) is True
+    assert project_file_is_present(tmp_path / "removed.yurika") is False
+    assert project_file_is_present(Path(r"\\server\share\song.yurika")) is True
 
 
 def test_project_save_preflight_skips_inspection_for_a_new_path(tmp_path: Path) -> None:

@@ -7,16 +7,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from krok_helper.subtitle_render.engine.export.io_paths import is_remote_path
+
 
 ChoicePrompt = Callable[..., int]
 FilePicker = Callable[..., tuple[str, str]]
 Command = Callable[[], Any]
-
-
-def _is_network_location(path: Path) -> bool:
-    """UNC 路径不做存在性探测：SMB 断开时 ``is_dir()`` 会卡住几十秒。"""
-
-    return str(path).startswith(("\\\\", "//"))
 
 
 def _safe_current_directory() -> Path:
@@ -38,10 +34,10 @@ def _existing_directory(directory: Path) -> Path:
     """
 
     directory = Path(directory)
-    if _is_network_location(directory):
+    if is_remote_path(directory):
         return directory
     for candidate in (directory, *directory.parents):
-        if _is_network_location(candidate):
+        if is_remote_path(candidate):
             return candidate
         try:
             if candidate.is_dir():
@@ -49,6 +45,52 @@ def _existing_directory(directory: Path) -> Path:
         except OSError:
             continue
     return Path.home()
+
+
+_LOCATION_UNAVAILABLE_WINERRORS = frozenset(
+    {
+        2,  # ERROR_FILE_NOT_FOUND 文件不存在
+        3,  # ERROR_PATH_NOT_FOUND 路径不存在（盘符/目录被删）
+        21,  # ERROR_NOT_READY 设备未就绪（移动盘拔出）
+        53,  # ERROR_BAD_NETPATH 找不到网络路径
+        64,  # ERROR_NETNAME_DELETED 网络名不再可用
+        67,  # ERROR_BAD_NET_NAME 找不到网络名
+        123,  # ERROR_INVALID_NAME 路径语法无效
+        161,  # ERROR_BAD_PATHNAME 路径无效
+        206,  # ERROR_FILENAME_EXCED_RANGE 路径过长
+    }
+)
+
+
+def project_location_unavailable(exc: BaseException) -> bool:
+    """保存失败是不是「位置用不了」，而不是磁盘满、被占用或数据写不出。
+
+    只有位置问题换成另一个目录才有意义；磁盘满/占用/序列化错误另存多少次
+    都一样，照旧直接报错。文件不存在的 ``FileNotFoundError`` 在 Windows 上
+    正是 ``[WinError 3] 系统找不到指定的路径``。
+    """
+
+    winerror = getattr(exc, "winerror", None)
+    if winerror is not None:
+        return int(winerror) in _LOCATION_UNAVAILABLE_WINERRORS
+    return isinstance(exc, (FileNotFoundError, NotADirectoryError, PermissionError))
+
+
+def project_file_is_present(path: Path) -> bool:
+    """工程文件现在还在盘上吗（网络位置不探测，交给保存流程兜底）。
+
+    「保存过」只是内存里的 ``_project_path``；文件被外部删掉、随移动盘拔走
+    之后它仍然非空，导出前的保存判定会误以为工程还在，成片导完却没有
+    ``.yurika``。网络位置不在这里探测：SMB 断开时 ``is_file()`` 会卡住。
+    """
+
+    path = Path(path)
+    if is_remote_path(path):
+        return True
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 class ProjectSaveAction(str, Enum):
@@ -209,4 +251,6 @@ __all__ = [
     "ProjectCommandController",
     "ProjectSaveAction",
     "ProjectSavePreflight",
+    "project_file_is_present",
+    "project_location_unavailable",
 ]

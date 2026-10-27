@@ -1968,6 +1968,7 @@ def _capture_question(monkeypatch, answer: bool) -> dict:
 def test_export_does_not_ask_when_the_project_is_already_saved(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     win._project_path = tmp_path / "demo.yurika"
+    win._project_path.write_text("{}", encoding="utf-8")
     win._project_dirty = False
     captured = _capture_question(monkeypatch, False)
 
@@ -1998,12 +1999,26 @@ def test_export_saves_a_never_saved_project_first(qapp, monkeypatch, save_result
 def test_export_asks_again_when_a_saved_project_has_new_changes(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     win._project_path = tmp_path / "demo.yurika"
+    win._project_path.write_text("{}", encoding="utf-8")
     win._project_dirty = True
     captured = _capture_question(monkeypatch, True)
     monkeypatch.setattr(win, "_save_project", lambda: True)
 
     assert win._confirm_project_saved_before_export() is True
     assert "未保存的改动" in captured["args"][2]
+
+
+def test_export_resaves_when_the_project_file_went_missing(qapp, monkeypatch, tmp_path):
+    """保存过 ≠ 文件还在：工程文件被外部删掉后导出前要重新落盘。"""
+    win = _make_window(qapp, monkeypatch)
+    project = tmp_path / "deleted-by-user.yurika"
+    win._project_path = project
+    win._project_dirty = False
+    captured = _capture_question(monkeypatch, True)
+
+    assert win._confirm_project_saved_before_export() is True
+    assert "已不在原位置" in captured["args"][2]
+    assert project.is_file()
 
 
 def test_cancelling_the_save_prompt_cancels_the_export(qapp, monkeypatch):
@@ -2024,7 +2039,9 @@ def _fail_saving_to(monkeypatch, unavailable: Path) -> None:
 
     def fake_save(path, data, *, backup_root, backup_count):
         if Path(path) == Path(unavailable):
-            raise OSError("[WinError 3] 系统找不到指定的路径: 'Q:\\\\'")
+            raise FileNotFoundError(
+                3, "系统找不到指定的路径", str(Path(unavailable).anchor)
+            )
         return real_save(
             path,
             data,
@@ -2071,8 +2088,26 @@ def test_export_can_relocate_a_project_whose_location_is_gone(
     assert win._project_path == relocated
     assert prompts[0][0][1] == "导出前先保存项目"
     assert prompts[-1][0][1] == "工程保存位置不可用"
-    assert "WinError 3" in prompts[-1][0][2]
+    assert "系统找不到指定的路径" in prompts[-1][0][2]
     assert prompts[-1][1]["yes_text"] == "另选位置保存"
+
+
+def test_disk_full_does_not_offer_relocating_the_project(qapp, monkeypatch, tmp_path):
+    """磁盘满换个目录也救不了：只报错，不再弹「另选位置保存」。"""
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "song.yurika"
+    win._mark_project_dirty()
+    captured = _capture_question(monkeypatch, True)
+    monkeypatch.setattr(
+        project_controller_module.SubtitleProjectController,
+        "save",
+        staticmethod(
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("磁盘已满"))
+        ),
+    )
+
+    assert win._save_project() is False
+    assert captured == {}
 
 
 def test_cancelling_the_relocation_prompt_cancels_the_export(

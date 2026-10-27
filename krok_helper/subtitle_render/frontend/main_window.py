@@ -257,6 +257,8 @@ from krok_helper.subtitle_render.frontend.preview.preview_controller import (
 from krok_helper.subtitle_render.frontend.project.project_commands import (
     ProjectCommandController,
     ProjectSaveAction,
+    project_file_is_present,
+    project_location_unavailable,
 )
 from krok_helper.subtitle_render.frontend.project.project_autosave import (
     ProjectAutoSaveRuntime,
@@ -2898,12 +2900,13 @@ class SubtitleRenderWindow(QWidget):
         return self._write_project(path)
 
     def _write_project(self, path: Path, *, allow_relocate: bool = False) -> bool:
-        """把工程写到 ``path``；``allow_relocate`` 时写不进去就引导另存。
+        """把工程写到 ``path``；``allow_relocate`` 时位置不可用就引导另存。
 
         ``allow_relocate`` 只给「保存当前工程」用：原位置（盘符、网络共享、
         目录）不可用时直接报错会让导出前的保存走进死路——用户点了「保存并
-        导出」，工程却怎么也建不出来。另选位置本身是用户刚挑的路径，失败
-        就只报错，不再二次弹窗（否则会形成弹窗循环）。
+        导出」，工程却怎么也建不出来。磁盘满、文件被占用这类换个位置也救不
+        了的失败照旧只报错；另选位置本身是用户刚挑的路径，失败也不再二次弹
+        窗（否则会形成弹窗循环）。
         """
         path = Path(path)
         preflight = self._project_command_controller.preflight_save(
@@ -2951,10 +2954,9 @@ class SubtitleRenderWindow(QWidget):
                 self._project_path is not None,
                 type(exc).__name__,
             )
-            if allow_relocate and isinstance(exc, OSError):
-                # 原工程位置不可写（磁盘拔除、网络共享断开、目录被删或没权限）
-                # 时不要只剩一个 WinError：给用户换个位置把工程存下来，导出
-                # 才能继续。
+            if allow_relocate and project_location_unavailable(exc):
+                # 原工程位置不可写（磁盘拔除、网络共享断开、目录被删）时不要
+                # 只剩一个 WinError：给用户换个位置把工程存下来，导出才能继续。
                 if fluent_question(
                     self,
                     "工程保存位置不可用",
@@ -10020,13 +10022,17 @@ class SubtitleRenderWindow(QWidget):
         成片一旦导出，用户回头多半要照着同一版工程改字幕或配色。这里不给
         「不保存直接导出」那条路：要么存，要么这次不导。
         """
-        if self._project_path is not None and not self._project_dirty:
+        path = self._project_path
+        present = path is not None and project_file_is_present(path)
+        if present and not self._project_dirty:
             return True
-        detail = (
-            "当前项目有未保存的改动。"
-            if self._project_path is not None
-            else f"当前项目还没有保存成工程文件（{PROJECT_FILE_SUFFIX}）。"
-        )
+        if path is None:
+            detail = f"当前项目还没有保存成工程文件（{PROJECT_FILE_SUFFIX}）。"
+        elif not present:
+            # 保存过 ≠ 文件还在：被外部删除或随移动盘拔走后，只剩内存里的路径。
+            detail = f"当前项目的工程文件已不在原位置（{path}）。"
+        else:
+            detail = "当前项目有未保存的改动。"
         if not fluent_question(
             self,
             "导出前先保存项目",
