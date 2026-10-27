@@ -104,6 +104,9 @@ class SignalLitGroup:
     # None = 未解析（用组样式兜底）。
     bar_style: Style | None = None
     bar_glows: tuple[tuple[float, float, bool] | None, ...] = ()
+    entry_animations: tuple[BarAnimationState, ...] | None = None
+    entry_glows: tuple[tuple[float, float, bool] | None, ...] = ()
+    lamp_index: int | None = None
     # 「真一组」横向渐变跨度（画布坐标）：柱组外接框 ∪ 段首行第一角色
     # 墨迹跨度的并集，auto/role 档柱体横向渐变画刷取此跨度——柱与正文
     # 第一角色共用同一条渐变带（正文侧由行布局把第一角色跨度左缘拓宽
@@ -512,7 +515,7 @@ def volume_signal_state(
     return active_index, phase, 1.0
 
 
-def volume_bar_transition_states(
+def signal_character_transition_states(
     style: Style,
     line: TimingLine,
     display_start_ms: int | None,
@@ -524,9 +527,9 @@ def volume_bar_transition_states(
     centers: tuple[float, ...] | None = None,
     line_center_x: float | None = None,
 ) -> tuple[BarAnimationState, ...] | None:
-    """Resolve per-bar character-transition states for the volume group.
+    """Resolve shared character transitions for signal primitives.
 
-    柱体复用正文逐字动画系统（``horizontal.transitions``）：同一行、同一
+    指示灯传入仅保留入场的样式，柱体保留完整入退场；两者复用正文逐字动画系统（``horizontal.transitions``）：同一行、同一
     显示窗口，柱 index 映射到字符 index 的交错公式（``count`` 传柱数）。
     utopia 退场的每「字」完成时刻文字取「后一个字唱完」，柱体不演唱，
     改为把 done 时刻均匀铺在演唱窗口 ``[line_start, line_end]`` 上——文字
@@ -581,6 +584,10 @@ def volume_bar_transition_states(
             idle = False
         states.append(state)
     return None if idle else tuple(states)
+
+
+# Compatibility name; volume and floating lamps share one primitive evaluator.
+volume_bar_transition_states = signal_character_transition_states
 
 
 def lit_transition_state(phase: float, style: Style) -> tuple[float, float, float]:
@@ -773,10 +780,8 @@ class SignalLitsLayer:
                 painter.setOpacity(painter.opacity() * self.group.opacity)
                 if self.is_volume:
                     _draw_volume_lit_group(painter, self.group, self.style)
-                elif _lit_auto_decorated(self.style):
-                    _draw_lit_decorated_group(painter, self, self.group)
                 else:
-                    _paint_shape_signal_group(painter, self)
+                    _paint_shape_signal_entry(painter, self)
             finally:
                 painter.restore()
         finally:
@@ -827,12 +832,69 @@ def _lit_shape_ink_rect(rect: QRectF, layer: SignalLitsLayer) -> QRectF:
     return ink.adjusted(-pad, -pad, pad, pad)
 
 
+def _lamp_transform(rect: QRectF, state: BarAnimationState):
+    _, dx, dy, rotation, sx, sy, skew = state
+    return character_transform(
+        center_x=rect.center().x(), center_y=rect.center().y(),
+        dx=dx, dy=dy, rotation=rotation, scale_x=sx, scale_y=sy, skew_y=skew,
+    )
+
+
+def _paint_shape_signal_entry(painter: QPainter, layer: SignalLitsLayer) -> None:
+    """Apply the shared entry transform to each complete lamp, including its decor."""
+    group = layer.group
+
+    def draw(current: SignalLitsLayer) -> None:
+        if _lit_auto_decorated(current.style):
+            _draw_lit_decorated_group(painter, current, current.group)
+        else:
+            _paint_shape_signal_group(painter, current)
+    if group.entry_animations is None and not any(group.entry_glows):
+        draw(layer)
+        return
+    active_count = (group.active_index if group.active_index is not None else -1) + 1
+    for index in range(active_count):
+        active = index == group.active_index
+        rect = QRectF(
+            group.x + index * (layer.size * 1.5 + layer.tracking) + (group.dx if active else 0),
+            group.y + (group.dy if active else 0), layer.size, layer.size,
+        )
+        state = (
+            group.entry_animations[index] if group.entry_animations
+            else (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
+        )
+        transform = _lamp_transform(rect, state)
+        glow = group.entry_glows[index] if group.entry_glows else None
+        painter.save()
+        try:
+            # Halo uses the same path renderer as text and bars. It may precede
+            # the opaque core on glow-in's first frame.
+            if glow is not None:
+                halo_alpha = glow[0] * (group.active_opacity if active else 1.0)
+                if glow[2]:
+                    halo_alpha *= painter.opacity()
+                else:
+                    halo_alpha *= state[0]
+                paint_transition_glow_halo(
+                    painter, transform.map(_lit_shape_path(rect, layer.style.lit_style)),
+                    float(layer.style.font_size_px), halo_alpha, glow[1], bright=glow[2],
+                )
+            if state[0] > 0:
+                painter.setTransform(transform, combine=True)
+                painter.setOpacity(painter.opacity() * state[0])
+                draw(replace(layer, group=replace(group, lamp_index=index)))
+        finally:
+            painter.restore()
+
+
 def _paint_shape_signal_group(
     painter: QPainter,
     layer: SignalLitsLayer,
 ) -> None:
     group = layer.group
     for index in range(layer.count):
+        if group.lamp_index is not None and group.lamp_index != index:
+            continue
         if group.active_index is None or index > group.active_index:
             continue
         is_active = index == group.active_index
@@ -1121,6 +1183,8 @@ def _draw_lit_decorated_group(
     entries: list[tuple[QRectF, bool, float]] = []
     if group.active_index is not None and group.active_index >= 0:
         for index in range(group.active_index + 1):
+            if group.lamp_index is not None and group.lamp_index != index:
+                continue
             is_active = index == group.active_index
             dx = group.dx if is_active else 0.0
             dy = group.dy if is_active else 0.0
@@ -1272,6 +1336,7 @@ def _shape_signal_vertical_bounds(
     if group.active_index is None or group.active_index < 0:
         return None
     rects: list[QRectF] = []
+    indices: list[int] = []
     for index in range(layer.count):
         if index > group.active_index:
             continue
@@ -1281,7 +1346,9 @@ def _shape_signal_vertical_bounds(
         x = group.x + dx + index * (layer.size * 1.5 + layer.tracking)
         rect = QRectF(x, group.y + dy, float(layer.size), float(layer.size))
         rects.append(rect)
+        indices.append(index)
         if layer.style.lit_shadow:
+            indices.append(index)
             rects.append(
                 rect.translated(
                     max(rect.width() * 0.08, 1.0),
@@ -1322,6 +1389,18 @@ def _shape_signal_vertical_bounds(
         shadow_dy = abs(_scaled_signed_px(decor_style.shadow_offset_y, scale))
         decor_pad = max(glow_pad, half_pen + shadow_dy) + 2.0
         pad = max(pad, decor_pad)
+    halo_pad = max(
+        (glow[1] * layer.style.font_size_px for glow in group.entry_glows if glow is not None),
+        default=0.0,
+    )
+    pad += halo_pad
+    if group.entry_animations:
+        rects = [
+            _lamp_transform(rect, group.entry_animations[index]).mapRect(
+                rect.adjusted(-pad, -pad, pad, pad)
+            )
+            for rect, index in zip(rects, indices)
+        ]
     top = min(rect.top() for rect in rects) - pad
     bottom = max(rect.bottom() for rect in rects) + pad
     return int(math.floor(top)), int(math.ceil(bottom))
@@ -1907,6 +1986,8 @@ def resolve_signal_lit_groups(
         elapsed = max(t_ms - active_start, 0)
         bar_animations = None
         bar_glows = ()
+        entry_animations = None
+        entry_glows = ()
         # 装饰源样式（auto 档）：段首行第一个非空白字符的角色方案叠加进行
         # 样式（native 端取第一个有几何字符的 styleIndex，两端口径一致）。
         # 音量柱 auto 装饰与形状灯 auto 装饰共用该源。
@@ -1982,6 +2063,18 @@ def resolve_signal_lit_groups(
                 ) if volume_geometry is not None else None,
             )
         else:
+            entry_style = replace(line_style, exit_anim="none", karaoke_anim="none")
+            entry_animations = signal_character_transition_states(
+                entry_style, line, display_line.display_start_ms, display_end,
+                t_ms, count, img_h,
+            )
+            entry = line_char_transition_context(
+                entry_style, line, t_ms, display_line.display_start_ms, display_end, count
+            )
+            if entry is not None:
+                entry_glows = tuple(transition_char_glow(
+                    entry, i, count, t_ms=t_ms, configured_ms=entry_style.entry_lead_ms
+                ) for i in range(count))
             active_index, phase = shape_active_index_and_phase(
                 elapsed,
                 active_duration,
@@ -2071,6 +2164,8 @@ def resolve_signal_lit_groups(
                 bar_animations=bar_animations,
                 bar_style=bar_style,
                 bar_glows=bar_glows,
+                entry_animations=entry_animations,
+                entry_glows=entry_glows,
                 fill_band_rect=fill_band_rect,
             )
         )

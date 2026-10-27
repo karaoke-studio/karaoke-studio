@@ -2705,36 +2705,34 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // utopia/drip 用字框角轴），两端都用中心轴即保持一致。
         struct BarAnimationState {
             float opacity = 1.0f;
+            float glowAlpha = 0.0f;
+            float glowRadiusEm = 0.0f;
             D2D1::Matrix3x2F matrix = D2D1::Matrix3x2F::Identity();
         };
         const int barCount = signalGeometry.count;
         const bool hasBarCharFadeExit
-            = (independentVolume || legacyVolume)
-            && (line->exitAnimation == "char_fade"
+            = (line->exitAnimation == "char_fade"
                 || line->exitAnimation == "char_drip"
                 || line->exitAnimation == "spin_flip")
             && line->exitDurationMs > 0;
         const bool hasBarCharFadeEntry
-            = (independentVolume || legacyVolume)
-            && (line->entryAnimation == "char_fade"
+            = (line->entryAnimation == "char_fade"
                 || line->entryAnimation == "char_drip"
                 || line->entryAnimation == "spin_flip")
             && line->entryDurationMs > 0;
         const bool hasBarUtopia
-            = (independentVolume || legacyVolume)
-            && (line->entryAnimation == "utopia"
+            = (line->entryAnimation == "utopia"
                 || line->exitAnimation == "utopia");
         const int barWindowStartMs = line->displayWindows.empty()
             ? line->startMs
             : line->displayWindows.front().startMs;
-        auto barCharFadeProgress = [&](int index) {
-            const int count = std::max(barCount, 1);
+        auto barCharFadeProgress = [&](int index, int count, bool entryOnly) {
             const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
             if (line->displayWindows.empty()) {
                 return 1.0f;
             }
             const DisplayWindow &window = line->displayWindows.front();
-            if (hasBarCharFadeExit) {
+            if (!entryOnly && hasBarCharFadeExit) {
                 const int exitStart = std::max(
                     line->endMs, window.endMs - 600
                 );
@@ -2787,24 +2785,42 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             );
             return matrix;
         };
-        auto barAnimationAt = [&](int index, float cx, float cy) {
+        auto signalAnimationAt = [&](int index, float cx, float cy, int count, bool entryOnly) {
             BarAnimationState state;
-            if (!(independentVolume || legacyVolume)) {
+            if (!entryOnly && !(independentVolume || legacyVolume)) {
                 return state;
             }
-            const int count = std::max(barCount, 1);
-            if (!activeCharacterTransition.empty()
-                && isGeoTransition(activeCharacterTransition)) {
-                const auto geo = inlineGeometryAt(index, count, cx);
+            count = std::max(count, 1);
+            std::string effect = activeCharacterTransition;
+            int transitionDirection = activeCharacterDirection;
+            if (entryOnly) {
+                effect.clear();
+                transitionDirection = -1;
+                const bool classic = line->entryAnimation == "char_fade"
+                    || line->entryAnimation == "char_drip" || line->entryAnimation == "spin_flip";
+                const int windowMs = classic ? 600 : entryTransitionWindowMs(line->entryDurationMs);
+                if (line->entryDurationMs > 0 && tMs <= barWindowStartMs + windowMs
+                    && (classic || isGeoTransition(line->entryAnimation))) {
+                    effect = line->entryAnimation;
+                }
+            }
+            if (!effect.empty()
+                && isGeoTransition(effect)) {
+                const auto geo = entryOnly
+                    ? geoCharState(effect, line->style.fontSize, index, count, tMs,
+                        barWindowStartMs, line->entryDurationMs, false, 0.0f, 0.0f, false)
+                    : inlineGeometryAt(index, count, cx);
                 state.opacity = geo.opacity;
+                state.glowAlpha = geo.glowAlpha;
+                state.glowRadiusEm = geo.glowRadiusEm;
                 state.matrix = barCenteredMatrix(geo.dx, geo.dy, geo.rotation,
                     geo.scaleX, geo.scaleY, 0.0f, cx, cy);
                 return state;
             }
-            if (activeCharacterTransition == "char_fade"
-                || activeCharacterTransition == "char_drip"
-                || activeCharacterTransition == "spin_flip") {
-                const float progress = barCharFadeProgress(index);
+            if (effect == "char_fade"
+                || effect == "char_drip"
+                || effect == "spin_flip") {
+                const float progress = barCharFadeProgress(index, count, entryOnly);
                 if (progress <= 0.0f) {
                     state.opacity = 0.0f;
                     return state;
@@ -2816,20 +2832,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     pi * 89.0f / 180.0f
                 );
                 const float skew = std::tan(angle);
-                if (activeCharacterTransition == "spin_flip") {
+                if (effect == "spin_flip") {
                     state.opacity = progress;
                     const float direction = static_cast<float>(
-                        activeCharacterDirection
+                        transitionDirection
                     );
                     state.matrix = barCenteredMatrix(
                         0.0f, 0.0f, 0.0f,
                         clamped, clamped, direction * skew,
                         cx, cy
                     );
-                } else if (activeCharacterTransition == "char_drip") {
+                } else if (effect == "char_drip") {
                     state.opacity = 1.0f;
                     const float direction = -static_cast<float>(
-                        activeCharacterDirection
+                        transitionDirection
                     );
                     state.matrix = barCenteredMatrix(
                         0.0f, 0.0f, 0.0f,
@@ -2869,7 +2885,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     );
                     return state;
                 }
-                if (line->exitAnimation == "utopia") {
+                if (!entryOnly && line->exitAnimation == "utopia") {
                     const int span = std::max(line->endMs - line->startMs, 0);
                     const int doneMs = line->startMs + static_cast<int>(
                         static_cast<float>(span * index)
@@ -2901,6 +2917,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             return state;
+        };
+        const auto barAnimationAt = [&](int index, float cx, float cy) {
+            return signalAnimationAt(index, cx, cy, barCount, false);
+        };
+        const auto lampEntryAt = [&](int index, float cx, float cy) {
+            return signalAnimationAt(index, cx, cy, shapeGeometry.count, true);
         };
         // auto 档柱体发光层：源位图在最终批次前烘好（含每柱动画透明度），
         // 模糊后于柱体绘制点套柱动画矩阵合成（blur-then-transform，与
@@ -3389,6 +3411,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 const float shadowOffset = style.litShadow
                     ? std::max(shapeGeometry.size * 0.08f, 1.0f)
                     : 0.0f;
+                const float left = style.litOffsetX + index
+                    * (shapeGeometry.size * 1.5f + shapeGeometry.tracking)
+                    + (active ? shapeState.dx : 0.0f);
+                const auto entry = lampEntryAt(index, left + shapeGeometry.size * 0.5f,
+                    top + shapeGeometry.size * 0.5f);
+                const float haloPad = entry.glowRadiusEm * line->style.fontSize;
+                const float pad = shapeGeometry.strokeExtent + shadowOffset + haloPad + 2.0f;
+                for (float x : {left - pad, left + shapeGeometry.size + pad}) {
+                    for (float y : {top - pad, top + shapeGeometry.size + pad}) {
+                        const auto point = entry.matrix.TransformPoint(D2D1::Point2F(x, y));
+                        contentTop = std::min(contentTop, point.y);
+                        contentBottom = std::max(contentBottom, point.y);
+                    }
+                }
                 contentTop = std::min(
                     contentTop,
                     top - shapeGeometry.strokeExtent - 2.0f
@@ -7082,6 +7118,81 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             renderedAnyLine = true;
             continue;
         }
+        const auto drawTransitionHalo = [&](const auto &animation, bool bright,
+            float groupAlpha, auto fill, auto strokePath) {
+            if (animation.glowAlpha <= 0.0f || animation.glowRadiusEm <= 0.0f) {
+                return;
+            }
+            D2D1_MATRIX_3X2_F previousTransform;
+            context->GetTransform(&previousTransform);
+            const float font = std::max(line->style.fontSize, 1.0f);
+            if (bright) {
+                // 辉光浮现/消散：细密横向回声——每侧 N 个字形重影
+                // 副本、固定间距、亮度几何衰减（镜像 painter）。
+                // 光晕独立于 core 透明度（出生帧呈现纯辉光）。
+                float decay = 1.0f;
+                for (int k = 1; k <= kGlowEchoCopies; ++k) {
+                    decay *= kGlowEchoDecay;
+                    const float offset = kGlowEchoPitchEm
+                        * animation.glowRadiusEm * font
+                        * static_cast<float>(k);
+                    if (offset < 0.5f) {
+                        continue;
+                    }
+                    const float alpha = std::clamp(
+                        animation.glowAlpha * decay * groupAlpha,
+                        0.0f,
+                        1.0f
+                    );
+                    if (alpha <= 0.008f) {
+                        break;
+                    }
+                    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+                    if (SUCCEEDED(context->CreateSolidColorBrush(
+                            D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha),
+                            brush.ReleaseAndGetAddressOf()
+                        ))) {
+                        context->SetTransform(
+                            previousTransform
+                                * D2D1::Matrix3x2F::Translation(offset, 0.0f)
+                        );
+                        fill(brush.Get());
+                        context->SetTransform(
+                            previousTransform
+                                * D2D1::Matrix3x2F::Translation(-offset, 0.0f)
+                        );
+                        fill(brush.Get());
+                    }
+                }
+                context->SetTransform(previousTransform);
+                return;
+            }
+            for (const GlowHaloStroke &stroke : kGlowHaloStrokes) {
+                const float width = animation.glowRadiusEm
+                    * stroke.widthEm * font;
+                if (width < 0.5f) {
+                    continue;
+                }
+                const float alpha = std::clamp(
+                    animation.opacity * animation.glowAlpha
+                        * stroke.strength * groupAlpha,
+                    0.0f,
+                    1.0f
+                );
+                if (alpha <= 0.0f) {
+                    continue;
+                }
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+                if (SUCCEEDED(context->CreateSolidColorBrush(
+                        D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha),
+                        brush.ReleaseAndGetAddressOf()
+                    ))) {
+                    context->SetTransform(previousTransform);
+                    strokePath(brush.Get(), width);
+                }
+            }
+            context->SetTransform(previousTransform);
+        };
         auto drawGlowHalo = [&]() {
             // 辉光浮现/消散（glow_in / glow_out）：多级圆角描边叠出近似高斯
             // 衰减的弥散白晕（镜像 painter._paint_transition_glow_halo），画在
@@ -7137,70 +7248,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (geometry == nullptr) {
                     continue;
                 }
-                if (bright) {
-                    // 辉光浮现/消散：细密横向回声——每侧 N 个字形重影
-                    // 副本、固定间距、亮度几何衰减（镜像 painter）。
-                    // 光晕独立于 core 透明度（出生帧呈现纯辉光）。
-                    float decay = 1.0f;
-                    for (int k = 1; k <= kGlowEchoCopies; ++k) {
-                        decay *= kGlowEchoDecay;
-                        const float offset = kGlowEchoPitchEm
-                            * animation.glowRadiusEm * font
-                            * static_cast<float>(k);
-                        if (offset < 0.5f) {
-                            continue;
-                        }
-                        const float alpha = std::clamp(
-                            animation.glowAlpha * decay * globalOpacity,
-                            0.0f,
-                            1.0f
-                        );
-                        if (alpha <= 0.008f) {
-                            break;
-                        }
-                        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-                        if (SUCCEEDED(context->CreateSolidColorBrush(
-                                D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha),
-                                brush.ReleaseAndGetAddressOf()
-                            ))) {
-                            context->SetTransform(
-                                previousTransform
-                                    * D2D1::Matrix3x2F::Translation(offset, 0.0f)
-                            );
-                            context->FillGeometry(geometry, brush.Get());
-                            context->SetTransform(
-                                previousTransform
-                                    * D2D1::Matrix3x2F::Translation(-offset, 0.0f)
-                            );
-                            context->FillGeometry(geometry, brush.Get());
-                        }
-                    }
-                    continue;
-                }
-                for (const GlowHaloStroke &stroke : kGlowHaloStrokes) {
-                    const float width = animation.glowRadiusEm
-                        * stroke.widthEm * font;
-                    if (width < 0.5f) {
-                        continue;
-                    }
-                    const float alpha = std::clamp(
-                        animation.opacity * animation.glowAlpha
-                            * stroke.strength * globalOpacity,
-                        0.0f,
-                        1.0f
-                    );
-                    if (alpha <= 0.0f) {
-                        continue;
-                    }
-                    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-                    if (SUCCEEDED(context->CreateSolidColorBrush(
-                            D2D1::ColorF(1.0f, 1.0f, 1.0f, alpha),
-                            brush.ReleaseAndGetAddressOf()
-                        ))) {
-                        context->SetTransform(previousTransform);
-                        context->DrawGeometry(geometry, brush.Get(), width);
-                    }
-                }
+                drawTransitionHalo(animation, bright, globalOpacity,
+                    [&](ID2D1Brush *brush) { context->FillGeometry(geometry, brush); },
+                    [&](ID2D1Brush *brush, float width) { context->DrawGeometry(geometry, brush, width); });
             }
             context->SetTransform(previousTransform);
         };
@@ -9616,13 +9666,26 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             for (int index = 0; index <= shapeState.activeIndex; ++index) {
                 const bool active = index == shapeState.activeIndex;
+                const auto entryRect = litLampRectAt(index);
+                const auto entryState = lampEntryAt(index,
+                    (entryRect.left + entryRect.right) * 0.5f,
+                    (entryRect.top + entryRect.bottom) * 0.5f);
+                const auto shapeBase = D2D1::Matrix3x2F::Translation(shapeDx, dy);
+                context->SetTransform(withViewport(entryState.matrix * shapeBase));
+                drawTransitionHalo(entryState, line->entryAnimation == "glow_in",
+                    style.litOpacity * lineAnimationOpacity * (active ? shapeState.activeOpacity : 1.0f),
+                    [&](ID2D1Brush *brush) { fillLitDecorShape(entryRect, brush); },
+                    [&](ID2D1Brush *brush, float width) { strokeLitDecorShape(entryRect, brush, width); });
+                if (entryState.opacity <= 0.0f) {
+                    context->SetTransform(withViewport(shapeBase));
+                    continue;
+                }
                 // 正在熄灭的灯整灯（阴影+柔化+灯体+高光）先进不透明图层、
                 // 出层一次乘 alpha：高光/阴影是半透明层，逐笔刷各自乘会让
                 // 灯体在渐入渐出中段提前透出背景（镜像 Painter 的整灯离屏
                 // 合成；图层创建失败回退逐笔刷乘法）。
-                const float lampAlpha = active
-                    ? shapeState.activeOpacity
-                    : 1.0f;
+                const float lampAlpha = (active ? shapeState.activeOpacity : 1.0f)
+                    * entryState.opacity;
                 OpacityLayerScope lampFadeLayer;
                 const bool lampFadeLayerActive = lampAlpha < 1.0f
                     && lampFadeLayer.prepare(context, lampAlpha);
@@ -9731,6 +9794,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                 }
                 lampFadeLayer.pop();
+                context->SetTransform(withViewport(shapeBase));
             }
         }
         // The layer must close before EndDraw; a Direct2D layer cannot outlive
@@ -9797,11 +9861,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 const D2D1_RECT_F rect = litLampRectAt(index);
                 const float centerX = (rect.left + rect.right) * 0.5f;
                 const float centerY = (rect.top + rect.bottom) * 0.5f;
+                const auto entryState = lampEntryAt(index, centerX, centerY);
+                context->SetTransform(withViewport(entryState.matrix * litBase));
+                drawTransitionHalo(entryState, line->entryAnimation == "glow_in",
+                    litBrushAlpha * (active ? shapeState.activeOpacity : 1.0f),
+                    [&](ID2D1Brush *brush) { fillLitDecorShape(rect, brush); },
+                    [&](ID2D1Brush *brush, float width) { strokeLitDecorShape(rect, brush, width); });
+                if (entryState.opacity <= 0.0f) {
+                    context->SetTransform(withViewport(litBase));
+                    continue;
+                }
                 // 正在熄灭的灯整灯（发光+描边+填充+高光）先进不透明图层、
                 // 出层一次乘转场 alpha（镜像 Painter 的逐灯缓冲）。
-                const float lampAlpha = active
-                    ? shapeState.activeOpacity
-                    : 1.0f;
+                const float lampAlpha = (active ? shapeState.activeOpacity : 1.0f)
+                    * entryState.opacity;
                 OpacityLayerScope lampFadeLayer;
                 const bool lampFadeLayerActive = lampAlpha < 1.0f
                     && lampFadeLayer.prepare(context, lampAlpha);
@@ -9838,7 +9911,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                               centerY
                           )
                         : D2D1::Matrix3x2F::Identity();
-                context->SetTransform(withViewport(lampMatrix * litBase));
+                context->SetTransform(withViewport(lampMatrix * entryState.matrix * litBase));
                 // 发光（blur-then-transform；源恒满强度，透明度由图层承载）。
                 if (VolumeBarGlowLayer *glowLayer = litGlowLayerAt(index)) {
                     for (int sigma : glowLayer->sigmas) {

@@ -16057,3 +16057,73 @@ def test_gpu_band_covers_inline_volume(alignment, tmp_path):
         assert len(rx) and len(gx)
         assert gx.min() < rx.min() and gx.max() > rx.max()
         assert gy.min() < ry.min() and gy.max() > ry.max()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("appearance", ["custom", "auto"])
+@pytest.mark.parametrize("effect", [effect for effect in get_args(EntryAnimation)
+    if effect not in {"none", "fade", "rise", "slide_in"}])
+def test_floating_lamp_entry_uses_shared_transitions(effect, appearance, tmp_path, force_warp=True):
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("A", 2000), TimingChar("B", 2500)], end_ms=3000,
+    )])
+    image_path = tmp_path / "lamp.png"
+    image = QImage(16, 16, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#FF0000"))
+    assert image.save(str(image_path))
+    style = _g1_style(
+        lit_enabled=True, lit_appearance_mode="auto" if appearance == "image" else appearance,
+        lit_style="image" if appearance == "image" else "circle",
+        lit_image_path=str(image_path), lit_role_name="__global__",
+        lit_number=4, lit_size=32, lit_offset_y=-90, lit_transition_mode="none",
+        signals_duration_ms=2000, lit_waiting_time_ms=0, lit_time_offset_ms=0,
+        lit_fill_color="#FF0000", lit_stroke_width=0, lit_shadow=False,
+        lit_stroke_soften=0, lit_edge_brightness_pct=0,
+        fill_color="#FF0000", stroke_width_px=0, stroke2_enabled=False,
+        decoration_kind="none", entry_anim=effect, section_head_anim=effect,
+        entry_lead_ms=600, line_lead_in_ms=2000, exit_anim="none", karaoke_anim="none",
+    )
+    static_style = replace(style, entry_anim="none", section_head_anim="none")
+    # Sample settled lamps before late petals cross them; other particle
+    # families need longer to clear the lamp region.
+    times = (50, 150, 300, 500, 900 if effect == "petal" else 1900)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, animated = _render_g1_frames(renderer, style, times, force_warp=force_warp, track=track)
+        _, static = _render_g1_frames(renderer, static_style, times, force_warp=force_warp, track=track)
+    # Lamps are red; the unsung text and entry particles are white at these times.
+    def lamp_pixels(frame):
+        pixels = np.frombuffer(frame, dtype=np.uint8).reshape(360, 640, 4).copy()
+        red = (pixels[:, :, 0] > 60) & (pixels[:, :, 1] < 30) & (pixels[:, :, 2] < 30)
+        pixels[~red] = 0
+        return pixels
+    assert any(lamp_pixels(frame)[:, :, 3].any() for frame in static), [_payload_alpha_bounds(frame) for frame in static]
+    assert any(not np.array_equal(lamp_pixels(a), lamp_pixels(b)) for a, b in zip(animated, static))
+    cpu_animated = [_render_painter_oracle(style, t_ms=t, track=track) for t in times]
+    cpu_static = [_render_painter_oracle(static_style, t_ms=t, track=track) for t in times]
+    assert any(lamp_pixels(frame)[:, :, 3].any() for frame in cpu_static)
+    assert any(not np.array_equal(lamp_pixels(a), lamp_pixels(b)) for a, b in zip(cpu_animated, cpu_static))
+
+    assert np.array_equal(lamp_pixels(animated[-1]), lamp_pixels(static[-1]))
+    assert np.array_equal(lamp_pixels(cpu_animated[-1]), lamp_pixels(cpu_static[-1]))
+    if effect == "glow_in":
+        for animated_frames, static_frames in ((animated, static), (cpu_animated, cpu_static)):
+            ys, _ = np.where(lamp_pixels(static_frames[0])[:, :, 3] > 0)
+            def white_count(frame):
+                pixels = np.frombuffer(frame, dtype=np.uint8).reshape(360, 640, 4)[ys.min():ys.max()+1]
+                white = (pixels[:, :, :3].min(axis=2) > 60) & (pixels[:, :, 3] > 10)
+                return int(white.sum())
+            assert white_count(animated_frames[0]) > white_count(static_frames[0]) + 10
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("appearance", ["role", "image"])
+@pytest.mark.parametrize("effect", ["wave_in", "glow_in"])
+def test_floating_lamp_entry_role_and_image(effect, appearance, tmp_path):
+    test_floating_lamp_entry_uses_shared_transitions(effect, appearance, tmp_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("appearance", ["custom", "auto"])
+@pytest.mark.parametrize("effect", ["wave_in", "glow_in"])
+def test_floating_lamp_entry_hardware(effect, appearance, tmp_path):
+    test_floating_lamp_entry_uses_shared_transitions(effect, appearance, tmp_path, force_warp=False)
