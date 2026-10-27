@@ -339,6 +339,23 @@ def timing_track_from_sug_project(
         line_end_ms = _group_end_ms(
             chars, len(chars), offset_ms, project, sentence_index
         )
+        kept_positions = kept_axis_char_positions(
+            chars,
+            getattr(sentence, "singer_id", ""),
+            default_singer_id,
+            singer_by_id,
+            axis_singer_ids,
+        )
+        if line_end_ms is None and kept_positions:
+            # 分轴剔除行尾字符后，被剔除的字符仍须像未拆分轨道里那样终止
+            # 本行：全项目探不到行末锚点（行尾无停顿点且后续无时间戳）时，
+            # 用最后一个保留字符的半开区间末再探一次。否则渲染层的行末回退
+            # 塌缩到末字起点，注音窗口起点与之相重的注音会整条失效。
+            last_kept_end = max(kept_positions) + 1
+            if last_kept_end < len(chars):
+                line_end_ms = _group_end_ms(
+                    chars, last_kept_end, offset_ms, project, sentence_index
+                )
 
         rubies.extend(
             _ruby_annotations_for_sentence(
@@ -350,13 +367,7 @@ def timing_track_from_sug_project(
                 # The line this sentence is about to occupy.  Blank sentences
                 # append a placeholder line too, so this stays in step.
                 line_index=len(lines),
-                kept_char_positions=kept_axis_char_positions(
-                    chars,
-                    getattr(sentence, "singer_id", ""),
-                    default_singer_id,
-                    singer_by_id,
-                    axis_singer_ids,
-                ),
+                kept_char_positions=kept_positions,
             )
         )
         lines.append(

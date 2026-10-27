@@ -21,6 +21,7 @@ from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjec
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.domain.timing import SubtitleLoadingSettings
 from krok_helper.subtitle_render.engine.layout.page.plan import build_page_plan
+from krok_helper.subtitle_render.engine.ruby.selection import active_rubies_for_line
 from krok_helper.subtitle_render.project.load import ProjectLoadPlan
 from krok_helper.subtitle_render.project.session import (
     ExtraSubtitleSource,
@@ -235,6 +236,83 @@ def test_split_axes_drop_and_remap_ruby_targets() -> None:
     assert [(ruby.target_char_start, ruby.target_char_end) for ruby in chorus_rubies] == [
         (0, 1)
     ]
+
+
+def _tail_mixed_project(b_pause_ms: int | None) -> Project:
+    """『君B』混合行（句歌手 a，B 属和声 b）+ 尾随空行，全曲再无时间戳。
+
+    ``b_pause_ms`` 给行尾的 B 一个停顿点（``sentence_end_ts``）；``None``
+    时全曲没有任何停顿点时间戳。行是最后的时间戳来源，行末锚点只能来自
+    B 的时间戳或停顿点。
+    """
+    main = _singer("a", "主唱", default=True)
+    chorus = _singer("b", "和声")
+    return Project(
+        metadata=ProjectMetadata(title="注音分轴", artist="作者"),
+        singers=[main, chorus],
+        sentences=[
+            Sentence(
+                singer_id="a",
+                characters=[
+                    _timed_char("君", 5000, "a", ruby_parts=["きみ"]),
+                    _timed_char("B", 5200, "b", end_ms=b_pause_ms),
+                ],
+            ),
+            Sentence(singer_id="a", characters=[]),
+        ],
+        audio_duration_ms=8000,
+        axis_groups=[
+            AxisGroup(name="主轴", singer_ids=["a"], is_primary=True),
+            AxisGroup(name="副轴", singer_ids=["b"]),
+        ],
+    )
+
+
+def test_split_axis_tail_line_without_pause_keeps_ruby_active() -> None:
+    """回归：无停顿点时间戳的行在分轴读取下注音不消失。
+
+    主轴剔除行尾的 B 后，被剔除的字符仍须终止本行（end=5200，与未拆分
+    轨道里『君』的走字终点一致）。否则渲染层的行末回退塌缩到『君』自己的
+    起点，注音窗口 [5000, 5200) 与之相重，きみ 注音整条失效。
+    """
+    project = _tail_mixed_project(b_pause_ms=None)
+
+    full = timing_track_from_sug_project(project)
+    axes = sug_axis_tracks_from_project(project)
+
+    full_line = next(line for line in full.lines if not line.is_blank)
+    main_line = next(line for line in axes[0].track.lines if not line.is_blank)
+
+    # 修复只作用于分轴路径：未过滤轨道保持旧行为（end 为 None）。
+    assert full_line.end_ms is None
+    assert main_line.end_ms == 5200
+    assert main_line.chars[0].start_ms == 5000
+
+    assert [
+        ruby.reading for ruby in active_rubies_for_line(full.rubies, full_line)
+    ] == ["きみ"]
+    assert [
+        ruby.reading
+        for ruby in active_rubies_for_line(axes[0].track.rubies, main_line)
+    ] == ["きみ"]
+
+
+def test_split_axis_tail_line_with_pause_keeps_ruby_active() -> None:
+    """对照：行尾 B 带停顿点时行末锚点本就存在，分轴注音不受影响。"""
+    project = _tail_mixed_project(b_pause_ms=5600)
+
+    full = timing_track_from_sug_project(project)
+    axes = sug_axis_tracks_from_project(project)
+
+    full_line = next(line for line in full.lines if not line.is_blank)
+    main_line = next(line for line in axes[0].track.lines if not line.is_blank)
+
+    assert full_line.end_ms == 5600
+    assert main_line.end_ms == 5600
+    assert [
+        ruby.reading
+        for ruby in active_rubies_for_line(axes[0].track.rubies, main_line)
+    ] == ["きみ"]
 
 
 def test_split_axes_unknown_singer_normalizes_to_default() -> None:
