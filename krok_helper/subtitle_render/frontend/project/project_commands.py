@@ -13,6 +13,44 @@ FilePicker = Callable[..., tuple[str, str]]
 Command = Callable[[], Any]
 
 
+def _is_network_location(path: Path) -> bool:
+    """UNC 路径不做存在性探测：SMB 断开时 ``is_dir()`` 会卡住几十秒。"""
+
+    return str(path).startswith(("\\\\", "//"))
+
+
+def _safe_current_directory() -> Path:
+    """启动目录被删除 / 所在盘符消失时 ``Path.cwd()`` 本身会抛 ``WinError 3``。"""
+
+    try:
+        return Path.cwd()
+    except OSError:
+        return Path.home()
+
+
+def _existing_directory(directory: Path) -> Path:
+    """离 ``directory`` 最近的现存目录，找不到时退回用户主目录。
+
+    默认另存位置如果落在已删除的文件夹、已拔出的盘符或断开的网络共享上，
+    系统会在写盘时抛 ``[WinError 3] 系统找不到指定的路径``——导出前的保存
+    会因此在弹完「保存并导出」后中断，工程也建不出来。这里把起始目录退到
+    还能写的位置。网络位置不探测（SMB 断开时卡住），保持原样交给对话框。
+    """
+
+    directory = Path(directory)
+    if _is_network_location(directory):
+        return directory
+    for candidate in (directory, *directory.parents):
+        if _is_network_location(candidate):
+            return candidate
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    return Path.home()
+
+
 class ProjectSaveAction(str, Enum):
     """Result of checking whether an existing project can be overwritten."""
 
@@ -92,14 +130,30 @@ class ProjectCommandController:
         current_directory: Optional[Path] = None,
         choose_file: FilePicker,
     ) -> Optional[Path]:
-        """Return a suffixed path selected by the existing save-file dialog."""
+        """Return a suffixed path selected by the existing save-file dialog.
+
+        起始位置逐级退回现存目录：工程原路径或素材所在目录被删除、盘符被
+        拔除时不把对话框开在一个写不进去的位置（用户顺手一点「保存」就会
+        撞上 ``[WinError 3] 系统找不到指定的路径``）。
+        """
         if current_project_path is not None:
-            start = str(current_project_path)
+            current = Path(current_project_path)
+            start = str(_existing_directory(current.parent) / current.name)
         else:
-            source = subtitle_path or video_path
-            if source is None:
-                source = Path.cwd() if current_directory is None else current_directory
-            start = str(Path(source).with_suffix("")) + self.project_suffix
+            media = subtitle_path or video_path
+            if media is None:
+                fallback = (
+                    _safe_current_directory()
+                    if current_directory is None
+                    else Path(current_directory)
+                )
+                directory = _existing_directory(fallback)
+                name = fallback.name or "未命名项目"
+            else:
+                media = Path(media)
+                directory = _existing_directory(media.parent)
+                name = media.stem
+            start = str(directory / f"{name}{self.project_suffix}")
         path_text, _selected_filter = choose_file(
             parent,
             "保存字幕渲染项目",

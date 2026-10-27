@@ -40,7 +40,6 @@ if TYPE_CHECKING:  # 只为类型标注，运行时不引入宿主包，保持�
     from krok_helper.workflow_host import SubtitleVideoSink
 
 from PyQt6.QtCore import (
-    QEventLoop,
     QObject,
     QThread,
     QTimer,
@@ -226,6 +225,7 @@ from krok_helper.subtitle_render.frontend.workflow.export_view import (
     sync_export_preset_enabled,
     sync_export_quality_controls,
 )
+from krok_helper.subtitle_render.engine.export.io_paths import is_remote_path
 from krok_helper.subtitle_render.frontend.editor.edit_history import (
     redo_edit,
     undo_edit,
@@ -456,6 +456,29 @@ _RECENT_PROJECTS_SETTINGS_KEY = "recent_projects"
 _MAX_RECENT_PROJECTS = 10
 RENDER_WORKER_OPTIONS = (0, 4, 8, 12, 16)
 """0 = 自动（最多 8）；其余值为用户显式选择的渲染进程数。"""
+
+
+def _local_disk_free_gb(directory: Path) -> float | None:
+    """Free space for the export footer, or ``None`` for network locations."""
+
+    if is_remote_path(directory):
+        return None
+    try:
+        probe = directory if directory.exists() else Path(directory.anchor or ".")
+        return shutil.disk_usage(probe).free / 1024**3
+    except OSError:
+        return None
+
+
+def _pump_paint_events() -> None:
+    """Repaint the export status before a long GUI-thread preparation step."""
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    # 不用 ExcludeUserInputEvents：Qt6 下同一标志也会压住定时器/窗口刷新
+    # （见 _await_pending_prefetch 的 2026-10 记录），而这里要的正是重绘。
+    app.processEvents()
 
 
 def _tracks_window_async_refresh_supported() -> bool:
@@ -2860,7 +2883,7 @@ class SubtitleRenderWindow(QWidget):
     def _save_project(self) -> bool:
         if self._project_path is None:
             return self._save_project_as()
-        return self._write_project(self._project_path)
+        return self._write_project(self._project_path, allow_relocate=True)
 
     def _save_project_as(self) -> bool:
         path = self._project_command_controller.choose_save_path(
@@ -2874,7 +2897,14 @@ class SubtitleRenderWindow(QWidget):
             return False
         return self._write_project(path)
 
-    def _write_project(self, path: Path) -> bool:
+    def _write_project(self, path: Path, *, allow_relocate: bool = False) -> bool:
+        """把工程写到 ``path``；``allow_relocate`` 时写不进去就引导另存。
+
+        ``allow_relocate`` 只给「保存当前工程」用：原位置（盘符、网络共享、
+        目录）不可用时直接报错会让导出前的保存走进死路——用户点了「保存并
+        导出」，工程却怎么也建不出来。另选位置本身是用户刚挑的路径，失败
+        就只报错，不再二次弹窗（否则会形成弹窗循环）。
+        """
         path = Path(path)
         preflight = self._project_command_controller.preflight_save(
             self,
@@ -2921,6 +2951,21 @@ class SubtitleRenderWindow(QWidget):
                 self._project_path is not None,
                 type(exc).__name__,
             )
+            if allow_relocate and isinstance(exc, OSError):
+                # 原工程位置不可写（磁盘拔除、网络共享断开、目录被删或没权限）
+                # 时不要只剩一个 WinError：给用户换个位置把工程存下来，导出
+                # 才能继续。
+                if fluent_question(
+                    self,
+                    "工程保存位置不可用",
+                    f"无法写入项目文件：\n{path}\n\n{exc}\n\n"
+                    "该位置可能已被删除、磁盘未连接或网络共享已断开。"
+                    "是否另选位置保存工程？",
+                    yes_text="另选位置保存",
+                    no_text="取消",
+                    default_cancel=True,
+                ):
+                    return self._save_project_as()
             fluent_error(
                 self,
                 "保存项目失败",
@@ -10008,6 +10053,12 @@ class SubtitleRenderWindow(QWidget):
         # success/cancelled/failed 三个 finish 回调恢复。
         self._export_start_pending = True
         self._export_start_button.setEnabled(False)
+        # 导出前置检查/字体预热都在 GUI 线程；先把状态画出来再干活，
+        # 否则用户点完「开始导出」会看到窗口原样不动，误判成卡死。
+        previous_status = self._export_status_label.text()
+        self._export_status_label.setText("正在检查导出设置…")
+        self._export_stop_button.setEnabled(False)
+        _pump_paint_events()
         launching = False
         try:
             try:
@@ -10024,13 +10075,15 @@ class SubtitleRenderWindow(QWidget):
             self._export_start_pending = False
             if not launching:
                 self._export_start_button.setEnabled(True)
+                # 早退（构建失败 / 用户取消保存）不能把「正在检查」永久留在
+                # 页脚；恢复点击前的状态文案。
+                self._export_status_label.setText(previous_status)
 
-        self._export_stop_button.setEnabled(True)
         self._export_progress.setPaused(False)
         self._export_progress.setError(False)
         self._export_progress.setRange(0, 0)
         self._export_status_label.setText("正在准备导出…")
-
+        _pump_paint_events()
         # 导出预览：临时目录承接 ffmpeg 持续覆盖写入的合成帧
         self._cleanup_export_preview_dir()
         try:
@@ -10052,6 +10105,11 @@ class SubtitleRenderWindow(QWidget):
             job.width,
             job.height,
         )
+        # prepare_fonts() 必须在 GUI 线程做字体能力预热；工程字体多时会有
+        # 几秒空档，先明确告诉用户在预热而不是卡死（导出线程尚未启动，
+        # 这时心跳还没开始）。
+        self._export_status_label.setText("正在预热字体与渲染环境…")
+        _pump_paint_events()
         runtime = self._export_runtime_controller.prepare(
             parent=self,
             job=job,
@@ -10071,6 +10129,9 @@ class SubtitleRenderWindow(QWidget):
         self._render_worker = runtime.worker
         self._sync_preview_window_visibility()
         self._export_runtime_controller.start(runtime)
+        # 线程真正起来后才允许「停止导出」：准备阶段泵事件时按钮若已启用，
+        # 用户点了会在 _render_thread 赋值之前被静默忽略。
+        self._export_stop_button.setEnabled(True)
         self._refresh_project_title()
 
     def _stop_render_export(self) -> None:
@@ -10217,16 +10278,9 @@ class SubtitleRenderWindow(QWidget):
         )
         if output_directory is None:
             return text
-        try:
-            probe = (
-                output_directory
-                if output_directory.exists()
-                else Path(output_directory.anchor or ".")
-            )
-            free_gb = shutil.disk_usage(probe).free / 1024**3
+        free_gb = _local_disk_free_gb(output_directory)
+        if free_gb is not None:
             text += f" · 磁盘可用 {free_gb:.0f} GB"
-        except OSError:
-            pass
         return text
 
     def _poll_export_preview(self) -> None:

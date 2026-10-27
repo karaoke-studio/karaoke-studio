@@ -14,6 +14,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from krok_helper.subtitle_render.native.backend import (  # noqa: E402
     NativeRendererProcess,
+    NativeRendererStallError,
 )
 
 
@@ -116,6 +118,56 @@ def test_close_swallows_dead_pipe_handle_errors(tmp_path):
     # 收尸流程不能被死句柄异常打断。
     renderer.close()
     assert renderer.is_running is False
+
+
+def test_abort_stalled_marks_writes_as_restartable_stall(tmp_path):
+    sidecar = _write_min_sidecar(tmp_path)
+    renderer = NativeRendererProcess(
+        sidecar, response_timeout_s=2.0, close_timeout_s=1.0
+    )
+    renderer.start()
+    try:
+        renderer.abort(reason="frame wait stalled", stalled=True)
+        assert renderer.stall_aborted is True
+        with pytest.raises(NativeRendererStallError):
+            renderer._send({"cmd": "ping"})  # noqa: SLF001
+    finally:
+        renderer.close()
+
+    assert not any(
+        thread.name == "native-renderer-send-watchdog" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+
+
+def test_send_supervisor_aborts_blocked_write_as_stall(tmp_path, monkeypatch):
+    """JSON 请求正常微秒级；写不出去超过额度就 abort 并标记为可重启停滞。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_SEND_STALL_S", "0.2")
+    sidecar = _write_min_sidecar(tmp_path)
+    renderer = NativeRendererProcess(
+        sidecar, response_timeout_s=2.0, close_timeout_s=1.0
+    )
+    renderer.start()
+    calls: list[tuple[str, bool]] = []
+
+    def fake_abort(*, reason: str = "", stalled: bool = False) -> None:
+        calls.append((reason, stalled))
+
+    monkeypatch.setattr(renderer, "abort", fake_abort)
+    with renderer._send_state_lock:  # noqa: SLF001 — simulate a blocked send
+        renderer._send_started_monotonic = time.monotonic() - 5.0
+    deadline = time.monotonic() + 4.0
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.05)
+    renderer.close()
+
+    assert calls
+    assert calls[0][1] is True
+    assert not any(
+        thread.name == "native-renderer-send-watchdog" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
 
 
 def test_close_does_not_leak_reader_thread_exceptions(tmp_path, monkeypatch):

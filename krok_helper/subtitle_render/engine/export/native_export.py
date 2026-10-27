@@ -9,6 +9,7 @@ until the full-frame path is proven stable.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -17,11 +18,18 @@ from contextlib import contextmanager
 from krok_helper.errors import ExportCancelled
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.engine.export.progress_watchdog import (
+    active_export_monitor,
+    export_frame_stall_grace_s,
+    export_heartbeat_lease_s,
+)
 from krok_helper.subtitle_render.native.backend import (
     NativeRendererError,
     NativeRendererProcess,
+    NativeRendererStallError,
     SharedFrameRingReader,
     SharedFrameSlot,
+    heartbeat_lease_s,
 )
 
 _DEFAULT_TARGET_CHUNK_BYTES = 128 * 1024 * 1024
@@ -44,6 +52,150 @@ _DEFAULT_GPU_EXPORT_VRAM_GROWTH = 2.0
 _GPU_EXPORT_CLOSE_TIMEOUT_S = 5.0
 _GPU_EXPORT_VRAM_NEAR_BUDGET_RATIO = 0.9
 _GIB = 1024 * 1024 * 1024
+_DEFAULT_GPU_RESTART_ATTEMPTS = 3
+GPU_RESTART_RECOVERY_FRAMES = 30
+
+
+def gpu_restart_attempts() -> int:
+    """Per-run GPU sidecar restart allowance (``KROK_SUBTITLE_GPU_RESTART_ATTEMPTS``)."""
+
+    raw = os.environ.get("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS")
+    if raw is None or not raw.strip():
+        return _DEFAULT_GPU_RESTART_ATTEMPTS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_GPU_RESTART_ATTEMPTS
+    return max(0, min(value, 10))
+
+
+def gpu_max_restarts_per_export() -> int:
+    """Absolute per-export restart ceiling (``KROK_SUBTITLE_GPU_MAX_RESTARTS_PER_EXPORT``).
+
+    The adaptive budget is refilled by healthy 30-frame streaks.  Without a
+    separate ceiling, a sidecar that crashes every ~30 frames can refill the
+    budget forever and turn a long export into thousands of restarts.  This
+    ceiling only bounds one export; healthy streaks still refill the
+    process-wide budget for later exports.
+    """
+
+    default = max(4, gpu_restart_attempts() * 2)
+    raw = os.environ.get("KROK_SUBTITLE_GPU_MAX_RESTARTS_PER_EXPORT")
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, min(value, 100))
+
+
+class GpuRestartBudget:
+    """Process-wide adaptive restart allowance for wedged GPU sidecars.
+
+    每次真停滞消耗一次额度；**连续**正常收到 30 帧 GPU 渲染结果后额度
+    +1（缓慢恢复到上限，发生停滞/重启时连续计数清零）。额度只限制
+    “重启”，不限制首次 GPU 尝试：额度为 0 时下一单仍会先试 GPU，失败
+    才回退 CPU。``max_retries == 0`` 表示显式禁用重启（环境变量设 0 时
+    不会自行恢复）。
+    """
+
+    def __init__(self, max_retries: int) -> None:
+        self._max = max(int(max_retries), 0)
+        self._remaining = self._max
+        self._lock = threading.Lock()
+
+    @property
+    def max_retries(self) -> int:
+        with self._lock:
+            return self._max
+
+    @property
+    def remaining(self) -> int:
+        with self._lock:
+            return self._remaining
+
+    def consume(self) -> bool:
+        with self._lock:
+            if self._remaining <= 0:
+                return False
+            self._remaining -= 1
+            return True
+
+    def refund(self) -> int:
+        """Return an allowance consumed for a retry that was cancelled."""
+
+        with self._lock:
+            if self._remaining < self._max:
+                self._remaining += 1
+            return self._remaining
+
+    def reward_healthy_streak(self) -> int:
+        """One sustained healthy GPU frame streak restores one attempt."""
+
+        return self.refund()
+
+
+_BUDGET_LOCK = threading.Lock()
+_GPU_RESTART_BUDGET: GpuRestartBudget | None = None
+
+_GPU_RESTARTABLE_MARKERS = (
+    # 真停滞 / 请求写不出去 / 等帧超时
+    "request write stalled",
+    "frame wait stall",
+    "gpu_pool_stalled",
+    "pool stalled",
+    # 设备级失效：重建 sidecar 通常能恢复
+    "device removed",
+    "device reset",
+    "device hung",
+    "dxgi_error_device",
+    "0x887a0005",
+    "0x887a0006",
+    "0x887a0007",
+    # sidecar 启动/握手超时或异常退出
+    "response timed out",
+    "did not become ready",
+    "connection closed while process is still running",
+    # 进程直接崩溃（TDR / access violation / stack buffer overrun）：
+    # 新进程是最可能恢复的路径，不能直接判 CPU。
+    "native renderer exited while waiting for",
+    "native renderer exited",
+    "exit_hex=0xc0000",
+    "native renderer pipe write failed for 'gpu_render_frame'",
+    'native renderer pipe write failed for "gpu_render_frame"',
+    # sidecar 崩溃后帧消费路径暴露出的共享内存/环形槽错误：新 sidecar 会
+    # 用新的 shm_key/reader，按续渲处理更划算。
+    "failed to attach native shared memory",
+    "failed to consume gpu subtitle frame",
+    "shared frame",
+    "stale shared frame slot",
+)
+
+
+def gpu_export_error_is_restartable(exc: BaseException) -> bool:
+    """Whether restarting the GPU sidecar can plausibly recover this failure."""
+
+    if isinstance(exc, NativeRendererStallError):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _GPU_RESTARTABLE_MARKERS)
+
+
+def gpu_restart_budget() -> GpuRestartBudget:
+    global _GPU_RESTART_BUDGET
+    with _BUDGET_LOCK:
+        if _GPU_RESTART_BUDGET is None:
+            _GPU_RESTART_BUDGET = GpuRestartBudget(gpu_restart_attempts())
+        return _GPU_RESTART_BUDGET
+
+
+def reset_gpu_restart_budget() -> None:
+    """Test/diagnostic hook: rebuild the process-wide budget from the env."""
+
+    global _GPU_RESTART_BUDGET
+    with _BUDGET_LOCK:
+        _GPU_RESTART_BUDGET = None
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
@@ -221,6 +373,11 @@ def _configure_gpu_export_with_preflight(
     preflight = gpu_export_preflight_enabled()
     candidates = degraded_gpu_worker_candidates(worker_count)
     fallback_worker_limit: int | None = None
+    monitor = active_export_monitor()
+
+    def _detach_sidecar() -> None:
+        if monitor is not None:
+            monitor.set_sidecar(None)
 
     for attempt_index, attempt_workers in enumerate(candidates):
         # 首次 configure 已确认 DXGI 动态预算不可用时，直接跳过
@@ -237,6 +394,9 @@ def _configure_gpu_export_with_preflight(
             close_timeout_s=_GPU_EXPORT_CLOSE_TIMEOUT_S,
         )
         configure_invoked = False
+        if monitor is not None:
+            monitor.set_sidecar(renderer)
+            monitor.set_stage("GPU 准备", f"{attempt_workers} 个 worker")
         try:
             renderer.start()
             # Query immutable adapter capacity before allocating a worker pool.
@@ -263,6 +423,7 @@ def _configure_gpu_export_with_preflight(
                             f"{fallback_worker_limit} 个 worker"
                         )
                     renderer.close()
+                    _detach_sidecar()
                     continue
             configure_started = time.perf_counter()
             configure_kwargs = {
@@ -283,18 +444,53 @@ def _configure_gpu_export_with_preflight(
             if duration_ms is not None:
                 configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
             configure_invoked = True
-            configured = dict(
-                renderer.configure_gpu(
-                    track,
-                    style,
-                    **configure_kwargs,
+            # configure 是阻塞调用，中途不检查取消；用旁路线程在看用户
+            # 点「停止导出」时直接 abort sidecar，让阻塞的协议读立即返回。
+            watcher_stop = threading.Event()
+            watcher: threading.Thread | None = None
+            if should_cancel is not None:
+                def _watch_cancel(
+                    active_renderer=renderer, stop_event=watcher_stop
+                ) -> None:
+                    while not stop_event.wait(0.5):
+                        try:
+                            if should_cancel():
+                                _abort_gpu_renderer(active_renderer, "导出已取消")
+                                return
+                        except Exception:  # noqa: BLE001 - watcher must stay quiet
+                            return
+                watcher = threading.Thread(
+                    target=_watch_cancel,
+                    name="subtitle-gpu-cancel-watch",
+                    daemon=True,
                 )
-            )
+                watcher.start()
+            try:
+                configured = dict(
+                    renderer.configure_gpu(
+                        track,
+                        style,
+                        **configure_kwargs,
+                    )
+                )
+            finally:
+                watcher_stop.set()
+                if watcher is not None:
+                    watcher.join(timeout=1.0)
             configured["prepare_layout_ms"] = (
                 time.perf_counter() - configure_started
             ) * 1000.0
+            if should_cancel is not None and should_cancel():
+                # 取消可能恰好落在 configure 响应已入队、旁路 watcher 已 abort
+                # 之后；此时不能再把 sidecar 交给帧循环重新拉起。
+                renderer.close()
+                _detach_sidecar()
+                raise ExportCancelled("已停止导出。")
         except NativeRendererError as exc:
             renderer.close()
+            _detach_sidecar()
+            if should_cancel is not None and should_cancel():
+                raise ExportCancelled("已停止导出。") from exc
             if (
                 configure_invoked
                 and attempt_workers > 1
@@ -309,6 +505,7 @@ def _configure_gpu_export_with_preflight(
             raise
         except BaseException:
             renderer.close()
+            _detach_sidecar()
             raise
 
         headroom = gpu_export_vram_headroom(configured) if preflight else None
@@ -324,6 +521,7 @@ def _configure_gpu_export_with_preflight(
                     f"{fallback_worker_limit} 个 worker 重新配置"
                 )
             renderer.close()
+            _detach_sidecar()
             continue
         if headroom is not None:
             usage, budget = headroom
@@ -337,9 +535,11 @@ def _configure_gpu_export_with_preflight(
                             f"{candidates[attempt_index + 1]} 个 worker 重新配置"
                         )
                     renderer.close()
+                    _detach_sidecar()
                     continue
                 if usage > budget * _GPU_EXPORT_VRAM_NEAR_BUDGET_RATIO:
                     renderer.close()
+                    _detach_sidecar()
                     raise NativeRendererError(
                         f"GPU 显存不足：单 worker configure 后已用 "
                         f"{usage / 1048576:.0f} MiB / 预算 "
@@ -629,6 +829,128 @@ def _detach_reader_before_shutdown(
             reader.close()
 
 
+def _abort_gpu_renderer(renderer: object, reason: str, *, stalled: bool = False) -> None:
+    """Best-effort abort for a wedged sidecar (tests may use plain doubles)."""
+
+    abort = getattr(renderer, "abort", None)
+    if not callable(abort):
+        return
+    try:
+        abort(reason=reason, stalled=stalled)
+        return
+    except TypeError:
+        pass
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        abort(reason=reason)
+        return
+    except TypeError:
+        pass
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        abort()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _await_gpu_frame(
+    renderer: object,
+    *,
+    frame_index: int,
+    should_cancel: Callable[[], bool] | None,
+    logger: Callable[[str], None] | None = None,
+    heartbeat_expected: bool = False,
+    before_abort: Callable[[], None] | None = None,
+) -> dict[str, object]:
+    """Wait for one GPU frame without a wall-clock per-frame timeout.
+
+    Short 0.5s polls keep cancellation responsive and let the export heartbeat
+    report "waiting for GPU frame N for Xs".  With a multi-worker pool the main
+    loop keeps emitting progress heartbeats while workers render, so a heartbeat
+    that stops for one lease means the main loop itself is wedged and the
+    sidecar is restarted immediately.  Single-worker exports render
+    synchronously on the main loop (no heartbeats during a frame), so they only
+    use the generous no-frame backstop; a genuinely long frame must not be
+    killed just because no heartbeat can be emitted.
+    """
+
+    monitor = active_export_monitor()
+    grace_s = export_frame_stall_grace_s(heartbeat_expected)
+    lease_s = export_heartbeat_lease_s() if heartbeat_expected else None
+    started = time.monotonic()
+
+    def _detach_reader() -> None:
+        # 先 detach 共享内存再杀 sidecar，避免跨进程信号量被强杀后永久占用
+        # 导致 5s detach 超时/映射泄漏；调用方传入的是幂等 close。
+        if before_abort is not None:
+            try:
+                before_abort()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+
+    while True:
+        if should_cancel is not None and should_cancel():
+            _detach_reader()
+            _abort_gpu_renderer(renderer, "导出已取消")
+            if monitor is not None:
+                monitor.note_repair("导出已取消，正在终止 GPU 字幕渲染器")
+            raise ExportCancelled("已停止导出。")
+        if lease_s is not None:
+            now = time.monotonic()
+            age_getter = getattr(renderer, "last_heartbeat_age_s", None)
+            try:
+                heartbeat_age = (
+                    float(age_getter()) if callable(age_getter) else None
+                )
+            except Exception:  # noqa: BLE001
+                heartbeat_age = None
+            if heartbeat_age is not None:
+                # 只认「本次等待期间没有新心跳」：configure 末尾可能已经
+                # 静默了一段时间，不能拿着旧时间戳在第一次轮询就误杀。
+                last_heartbeat_at = now - heartbeat_age
+                if now - max(started, last_heartbeat_at) >= lease_s:
+                    message = (
+                        f"GPU 字幕渲染器心跳已停止 {heartbeat_age:.0f}s"
+                        "（主循环楔死），正在终止它"
+                    )
+                    _detach_reader()
+                    _abort_gpu_renderer(renderer, "heartbeat stall", stalled=True)
+                    if monitor is not None:
+                        monitor.note_repair(message)
+                    elif logger is not None:
+                        logger(message)
+                    raise NativeRendererStallError(message)
+        try_finish = getattr(renderer, "try_finish_render_gpu_frame", None)
+        if callable(try_finish):
+            try:
+                event = try_finish(0.5)
+            except NativeRendererStallError:
+                raise
+            except NativeRendererError as exc:
+                if bool(getattr(renderer, "stall_aborted", False)):
+                    raise NativeRendererStallError(str(exc)) from exc
+                raise
+        else:  # pragma: no cover - very old doubles only
+            return renderer.finish_render_gpu_frame()
+        if event is not None:
+            return event
+        elapsed = time.monotonic() - started
+        if elapsed >= grace_s:
+            message = (
+                f"GPU 字幕渲染器已 {elapsed:.0f}s 没有返回第 {frame_index} 帧"
+                "（sidecar 无任何帧/心跳，判定楔死），正在终止它"
+            )
+            _detach_reader()
+            _abort_gpu_renderer(renderer, "frame wait stall", stalled=True)
+            if monitor is not None:
+                monitor.note_repair(message)
+            elif logger is not None:
+                logger(message)
+            raise NativeRendererStallError(message)
+
+
 def iter_gpu_rgba_frames(
     track: TimingTrack,
     style: Style,
@@ -639,6 +961,7 @@ def iter_gpu_rgba_frames(
     total_frames: int,
     duration_ms: int | None = None,
     start_t_ms: int = 0,
+    start_frame: int | None = None,
     renderer_path: str | os.PathLike[str] | None = None,
     extra_tracks: list[TimingTrack] | None = None,
     force_warp: bool = False,
@@ -703,6 +1026,11 @@ def iter_gpu_rgba_frames(
         else crop_height
     )
     reader: SharedFrameRingReader | None = None
+
+    def _close_reader() -> None:
+        if reader is not None:
+            reader.close()
+
     gpu_renderer, configured, shm_key = _configure_gpu_export_with_preflight(
         renderer_path=renderer_path,
         track=track,
@@ -723,22 +1051,62 @@ def iter_gpu_rgba_frames(
         logger=logger,
         should_cancel=should_cancel,
     )
+    # 帧阶段也可能卡在「写请求」或「等帧」里；旁路线程让「停止导出」能直接
+    # abort sidecar，而不是等 60s 的请求看门狗或下一轮帧检查。
+    frame_cancel_stop = threading.Event()
+    frame_cancel_thread: threading.Thread | None = None
+    if should_cancel is not None:
+        def _watch_frame_cancel(
+            active_renderer=gpu_renderer, stop_event=frame_cancel_stop
+        ) -> None:
+            while not stop_event.wait(0.5):
+                try:
+                    if should_cancel():
+                        # 只 abort，不在旁路线程 detach reader：导出线程可能正在
+                        # read_qimage/写 packed view，close() 会把 _shared 置空
+                        # 造成 AttributeError 或 use-after-unmap。真正需要
+                        # detach 的路径由导出线程在 _await 里先 close 再 abort。
+                        _abort_gpu_renderer(active_renderer, "导出已取消")
+                        return
+                except Exception:  # noqa: BLE001 - watcher must stay quiet
+                    return
+
+        frame_cancel_thread = threading.Thread(
+            target=_watch_frame_cancel,
+            name="subtitle-gpu-frame-cancel",
+            daemon=True,
+        )
+        frame_cancel_thread.start()
     try:
         with gpu_renderer as renderer, _detach_reader_before_shutdown(lambda: reader):
             if on_diagnostics is not None:
                 on_diagnostics(configured)
-
+            monitor = active_export_monitor()
+            if monitor is not None:
+                monitor.set_stage("GPU 渲染")
             active_workers = max(
                 1, min(int(configured.get("worker_count", 1) or 1), 4)
             )
+            frame_offset = int(start_frame) if start_frame is not None else 0
             slot_count = 2 if active_workers == 1 else active_workers
 
             request_started: dict[int, float] = {}
 
             def begin_frame(frame_index: int) -> None:
-                t_ms = max(int(start_t_ms), 0) + int(
-                    round(frame_index * 1000 / max(int(fps), 1))
-                )
+                if start_frame is None:
+                    t_ms = max(int(start_t_ms), 0) + int(
+                        round(frame_index * 1000 / max(int(fps), 1))
+                    )
+                else:
+                    # 续渲：用绝对帧号算时间戳，避免「取整起点 + 取整偏移」
+                    # 在 60/120fps 下出现 ±1ms 的内容漂移。
+                    t_ms = int(
+                        round(
+                            (int(start_frame) + frame_index)
+                            * 1000
+                            / max(int(fps), 1)
+                        )
+                    )
                 request_started[frame_index] = time.perf_counter()
                 renderer.begin_render_gpu_frame(
                     t_ms,
@@ -901,7 +1269,20 @@ def iter_gpu_rgba_frames(
                 for frame_index in range(frame_total):
                     if should_cancel is not None and should_cancel():
                         raise ExportCancelled("已停止导出。")
-                    event = renderer.finish_render_gpu_frame()
+                    if monitor is not None:
+                        monitor.begin_gpu_frame(frame_offset + frame_index)
+                    try:
+                        event = _await_gpu_frame(
+                            renderer,
+                            frame_index=frame_offset + frame_index,
+                            should_cancel=should_cancel,
+                            logger=logger,
+                            heartbeat_expected=active_workers > 1,
+                            before_abort=_close_reader,
+                        )
+                    finally:
+                        if monitor is not None:
+                            monitor.end_gpu_frame()
                     if frame_index + 1 < frame_total:
                         begin_frame(frame_index + 1)
                     if packed:
@@ -944,7 +1325,20 @@ def iter_gpu_rgba_frames(
                 while next_emit < frame_total:
                     if should_cancel is not None and should_cancel():
                         raise ExportCancelled("已停止导出。")
-                    event = renderer.finish_render_gpu_frame()
+                    if monitor is not None:
+                        monitor.begin_gpu_frame(frame_offset + next_emit)
+                    try:
+                        event = _await_gpu_frame(
+                            renderer,
+                            frame_index=frame_offset + next_emit,
+                            should_cancel=should_cancel,
+                            logger=logger,
+                            heartbeat_expected=active_workers > 1,
+                            before_abort=_close_reader,
+                        )
+                    finally:
+                        if monitor is not None:
+                            monitor.end_gpu_frame()
                     frame_index = int(event.get("frame_index", -1) or 0)
                     if frame_index not in in_flight or frame_index in pending:
                         raise NativeRendererError(
@@ -999,7 +1393,18 @@ def iter_gpu_rgba_frames(
                         submit_slot(free_slot)
                         free_slots.remove(free_slot)
             if on_diagnostics is not None:
-                on_diagnostics(renderer.gpu_diagnostics(force_warp=force_warp))
+                # 诊断是可选遥测：帧已经渲完，诊断查询失败绝不能把整单
+                # 导出判失败再回退 CPU 重渲一遍。
+                try:
+                    on_diagnostics(renderer.gpu_diagnostics(force_warp=force_warp))
+                except NativeRendererError:
+                    pass
     finally:
+        frame_cancel_stop.set()
+        if frame_cancel_thread is not None:
+            frame_cancel_thread.join(timeout=1.0)
         if reader is not None:
             reader.close()
+        _monitor = active_export_monitor()
+        if _monitor is not None:
+            _monitor.set_sidecar(None)

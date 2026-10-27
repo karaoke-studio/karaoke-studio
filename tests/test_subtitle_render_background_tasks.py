@@ -109,6 +109,35 @@ def test_render_worker_preserves_callbacks_and_result(monkeypatch, tmp_path: Pat
     assert calls[0]["on_process_started"] is not None
 
 
+def test_render_worker_stops_monitor_before_terminal_signal(
+    monkeypatch, tmp_path: Path
+) -> None:
+    order: list[str] = []
+
+    class _SpyMonitor:
+        def __init__(self, logger=None) -> None:
+            order.append("init")
+
+        def start(self) -> None:
+            order.append("start")
+
+        def stop(self) -> None:
+            order.append("stop")
+
+    output = tmp_path / "output.mp4"
+    job = SimpleNamespace(output_path=output, width=1, height=1, fps=60)
+    monkeypatch.setattr(background_tasks, "ExportProgressMonitor", _SpyMonitor)
+    monkeypatch.setattr(
+        background_tasks, "render_subtitle_video", lambda *_a, **_k: output
+    )
+    worker = background_tasks._RenderWorker(job, None)
+    worker.finished.connect(lambda _path: order.append("finished"))
+
+    worker.run()
+
+    assert order == ["init", "start", "stop", "finished"]
+
+
 def test_render_worker_cancel_terminates_active_process(monkeypatch) -> None:
     job = SimpleNamespace(output_path=Path("out.mp4"), width=1, height=1, fps=60)
     process = object()

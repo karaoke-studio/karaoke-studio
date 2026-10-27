@@ -2018,6 +2018,104 @@ def test_cancelling_the_save_prompt_cancels_the_export(qapp, monkeypatch):
     assert calls == []
 
 
+def _fail_saving_to(monkeypatch, unavailable: Path) -> None:
+    """让真实保存对 ``unavailable`` 抛盘符/共享断开时的 WinError 3。"""
+    real_save = project_controller_module.SubtitleProjectController.save
+
+    def fake_save(path, data, *, backup_root, backup_count):
+        if Path(path) == Path(unavailable):
+            raise OSError("[WinError 3] 系统找不到指定的路径: 'Q:\\\\'")
+        return real_save(
+            path,
+            data,
+            backup_root=backup_root,
+            backup_count=backup_count,
+        )
+
+    monkeypatch.setattr(
+        project_controller_module.SubtitleProjectController,
+        "save",
+        staticmethod(fake_save),
+    )
+
+
+def test_export_can_relocate_a_project_whose_location_is_gone(
+    qapp, monkeypatch, tmp_path
+):
+    """工程原位置不可用（盘符拔除/共享断开）时导出前保存要能改存别处。
+
+    直接写会抛 ``[WinError 3]``，用户点完「保存并导出」后既没有工程、导出
+    也中断；这里必须弹出「另选位置保存」并真的把 .yurika 建出来。
+    """
+    win = _make_window(qapp, monkeypatch)
+    unavailable = tmp_path / "unplugged-drive" / "song.yurika"
+    win._project_path = unavailable
+    win._project_dirty = True
+    prompts: list[tuple] = []
+
+    def fake_question(*args, **kwargs):
+        prompts.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(mw, "fluent_question", fake_question)
+    relocated = tmp_path / "relocated" / "song.yurika"
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(relocated), ""),
+    )
+    _fail_saving_to(monkeypatch, unavailable)
+
+    assert win._confirm_project_saved_before_export() is True
+    assert relocated.is_file()
+    assert win._project_path == relocated
+    assert prompts[0][0][1] == "导出前先保存项目"
+    assert prompts[-1][0][1] == "工程保存位置不可用"
+    assert "WinError 3" in prompts[-1][0][2]
+    assert prompts[-1][1]["yes_text"] == "另选位置保存"
+
+
+def test_cancelling_the_relocation_prompt_cancels_the_export(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    unavailable = tmp_path / "unplugged-drive" / "song.yurika"
+    win._project_path = unavailable
+    win._project_dirty = True
+    dialogs: list[tuple] = []
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (dialogs.append(args), ("", ""))[1],
+    )
+    _fail_saving_to(monkeypatch, unavailable)
+
+    # 「导出前先保存」要被「工程保存位置不可用」的取消结果覆盖。
+    answers = iter((True, False))
+    monkeypatch.setattr(mw, "fluent_question", lambda *a, **k: next(answers))
+
+    assert win._confirm_project_saved_before_export() is False
+    assert dialogs == []
+    assert win._project_path == unavailable
+
+
+def test_save_as_failure_does_not_reask_to_relocate(qapp, monkeypatch, tmp_path):
+    """另存为的路径是用户刚挑的：写不进去只报错，不能再弹一次另存为。"""
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = None
+    captured = _capture_question(monkeypatch, True)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("占位", encoding="utf-8")
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(blocker / "broken.yurika"), ""),
+    )
+
+    assert win._save_project_as() is False
+    assert captured == {}
+
+
 def test_export_thread_never_starts_when_the_save_prompt_is_cancelled(qapp, monkeypatch):
     """光有确认还不够 —— 取消之后导出线程一定不能起来。"""
     from types import SimpleNamespace
@@ -2029,11 +2127,14 @@ def test_export_thread_never_starts_when_the_save_prompt_is_cancelled(qapp, monk
         lambda: SimpleNamespace(output_format="mp4"),
     )
     monkeypatch.setattr(win, "_confirm_project_saved_before_export", lambda: False)
+    win._export_status_label.setText("空闲状态")
 
     win._start_render_export()
 
     assert win._render_thread is None
     assert win._export_start_button.isEnabled()
+    # 早退不能把「正在检查导出设置…」永久留在页脚。
+    assert win._export_status_label.text() == "空闲状态"
 
 
 def test_start_button_is_disabled_while_the_save_prompt_is_open(qapp, monkeypatch):
@@ -2068,10 +2169,12 @@ def test_start_button_recovers_when_the_job_build_fails(qapp, monkeypatch):
         raise mw.ProcessingError("请先加载字幕文件。")
 
     monkeypatch.setattr(win, "_build_render_job", build_error)
+    win._export_status_label.setText("空闲状态")
 
     win._start_render_export()
 
     assert win._export_start_button.isEnabled() is True
+    assert win._export_status_label.text() == "空闲状态"
 
 
 def test_reentrant_start_during_the_save_prompt_is_ignored(qapp, monkeypatch):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from contextlib import contextmanager
+import time
 
 import pytest
 from PyQt6.QtGui import QColor, QImage
@@ -454,6 +455,161 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert all(row["copies_per_frame"] == 4 for row in frame_diagnostics)
 
 
+def test_iter_gpu_rgba_frames_start_frame_uses_absolute_timestamps(monkeypatch) -> None:
+    """续渲从绝对帧号算时间戳，避免 60/120fps 下 ±1ms 的取整漂移。"""
+
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    frames = list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=2,
+            start_frame=3,
+            force_warp=True,
+        )
+    )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert [item[0] for item in process.frames] == [1500, 2000]
+    assert len(frames) == 2
+
+
+def test_iter_gpu_rgba_frames_heartbeat_stall_restarts_immediately(monkeypatch) -> None:
+    """多 worker 池主循环心跳停了就是真楔死，不必等 600s 无帧兜底。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_EXPORT_HEARTBEAT_LEASE_S", "0.2")
+
+    class _HeartbeatDead(_FakeGpuRendererProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.aborted: list[tuple[str, bool]] = []
+
+        def last_heartbeat_age_s(self):
+            return 60.0
+
+        def try_finish_render_gpu_frame(self, timeout_s):
+            time.sleep(0.01)
+            return None
+
+        def abort(self, *, reason: str = "", stalled: bool = False) -> None:
+            self.aborted.append((reason, stalled))
+
+        def __exit__(self, *exc):
+            self.close()
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _HeartbeatDead)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    with pytest.raises(ne.NativeRendererStallError, match="心跳已停止"):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=2,
+                total_frames=2,
+                force_warp=True,
+                worker_count=2,
+            )
+        )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.aborted
+    assert process.aborted[0][1] is True  # stalled=True，供上层按重启处理
+    assert process.closed is True
+
+
+def test_iter_gpu_rgba_frames_single_worker_ignores_stale_heartbeat(monkeypatch) -> None:
+    """单 worker 同步渲一帧时主循环发不出心跳，陈旧心跳不能误杀慢帧。"""
+
+    class _StaleHeartbeat(_FakeGpuRendererProcess):
+        def last_heartbeat_age_s(self):
+            return 600.0
+
+    _FakeGpuRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _StaleHeartbeat)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    frames = list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=2,
+            force_warp=True,
+            worker_count=1,
+        )
+    )
+
+    assert len(frames) == 2
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert not hasattr(process, "aborted")
+
+
+def test_iter_gpu_rgba_frames_multiworker_fresh_heartbeat_survives_slow_frame(
+    monkeypatch,
+) -> None:
+    """多 worker 健康但单帧慢：心跳新鲜时不提前 abort。"""
+
+    class _SlowFrame(_FakeGpuRendererProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.aborted: list[str] = []
+            self.wait_calls = 0
+
+        def last_heartbeat_age_s(self):
+            return 0.0
+
+        def try_finish_render_gpu_frame(self, timeout_s):
+            self.wait_calls += 1
+            if self.wait_calls < 4:
+                time.sleep(0.01)
+                return None
+            return self.pending.pop(0)
+
+        def abort(self, *, reason: str = "", stalled: bool = False) -> None:
+            self.aborted.append(reason)
+
+        def __exit__(self, *exc):
+            self.close()
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _SlowFrame)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    frames = list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=1,
+            force_warp=True,
+            worker_count=2,
+        )
+    )
+
+    assert len(frames) == 1
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.wait_calls >= 4
+    assert process.aborted == []
+    assert process.closed is True
+
+
 def test_iter_gpu_rgba_frames_detaches_reader_before_sidecar_shutdown(
     monkeypatch,
 ) -> None:
@@ -530,7 +686,9 @@ def test_iter_gpu_rgba_frames_detaches_reader_before_shutdown_on_cancel(
     def _should_cancel() -> bool:
         nonlocal seen
         seen += 1
-        return seen > 2
+        # configure 前 + configure 后 + 帧循环首检 + 首帧 _await 内部；
+        # 第 5 次时首帧已经被消费（reader 已建立），才验证 detach 顺序。
+        return seen > 4
 
     with pytest.raises(ExportCancelled):
         list(
@@ -757,7 +915,9 @@ def test_iter_gpu_rgba_frames_multiworker_cancel_closes_transport(monkeypatch) -
         )
 
     process = _FakeGpuRendererProcess.instances[-1]
-    assert process.max_pending == 4
+    # configure 后的取消发生在首帧提交之前，不创建 reader；sidecar 仍需关闭。
+    assert process.max_pending == 0
+    assert process.closed is True
     assert _FakeGpuRingReader.instances == []
 
 
@@ -1204,3 +1364,198 @@ def test_iter_gpu_rgba_frames_cancels_between_degradation_attempts(monkeypatch) 
     instance = _FakeVramGpuRendererProcess.instances[0]
     assert [c["worker_count"] for c in instance.configures] == [3]
     assert instance.closed is True
+
+
+def test_iter_gpu_rgba_frames_cancel_in_frame_wait_closes_reader_before_abort(
+    monkeypatch,
+) -> None:
+    """帧等待中取消：导出线程先 detach reader，再 abort sidecar。"""
+
+    order: list[str] = []
+
+    class _OrderedReader(_FakeGpuRingReader):
+        def close(self):
+            if self.closed:
+                return
+            order.append("reader")
+            super().close()
+
+    class _CancelInWait(_FakeGpuRendererProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def abort(self, *, reason: str = "", stalled: bool = False) -> None:
+            order.append("abort")
+
+        def __exit__(self, *_exc):
+            self.close()
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _CancelInWait)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _OrderedReader)
+    seen = 0
+
+    def should_cancel() -> bool:
+        nonlocal seen
+        seen += 1
+        # 1 预检 + 2 configure 后 + 3 首帧循环 + 4 首帧等待（放行）+
+        # 5 次帧循环（放行）+ 6 第二帧等待（取消，此时 reader 已建立）。
+        return seen > 5
+
+    with pytest.raises(ExportCancelled):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=2,
+                total_frames=2,
+                force_warp=True,
+                should_cancel=should_cancel,
+            )
+        )
+
+    assert order == ["reader", "abort"]
+
+
+def test_iter_gpu_rgba_frames_cancel_aborts_sidecar(monkeypatch) -> None:
+    """取消要能打断「等 GPU 帧」：旁路 abort sidecar，而不是一直等 60s 响应。"""
+
+    class _Cancellable(_FakeGpuRendererProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.aborted: list[str] = []
+
+        def abort(self, *, reason: str = "") -> None:
+            self.aborted.append(reason)
+
+        def __exit__(self, *exc):
+            self.close()
+            return None
+
+        def try_finish_render_gpu_frame(self, timeout_s):
+            time.sleep(0.01)
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _Cancellable)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    seen = {"n": 0}
+
+    def should_cancel() -> bool:
+        seen["n"] += 1
+        return seen["n"] > 2
+
+    with pytest.raises(ExportCancelled):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=2,
+                total_frames=2,
+                force_warp=True,
+                should_cancel=should_cancel,
+            )
+        )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    # 帧循环首检就取消时不会进入 _await，也就无需 abort；关键是不能挂住，
+    # sidecar 必须被关闭（close 由 with 退出路径负责）。
+    assert process.closed is True
+
+
+def test_pooled_frame_wait_without_heartbeat_uses_no_frame_backstop(
+    monkeypatch,
+) -> None:
+    """池化模式拿不到心跳时仍靠 120s（env 缩短）无帧兜底，不无限等。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_FRAME_STALL_S", "0.2")
+
+    class _NoHeartbeat(_FakeGpuRendererProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.aborted: list[str] = []
+
+        def last_heartbeat_age_s(self):
+            return None
+
+        def try_finish_render_gpu_frame(self, timeout_s):
+            time.sleep(0.01)
+            return None
+
+        def abort(self, *, reason: str = "", stalled: bool = False) -> None:
+            self.aborted.append(reason)
+
+        def __exit__(self, *exc):
+            self.close()
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _NoHeartbeat)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    with pytest.raises(ne.NativeRendererStallError, match="没有返回第 0 帧"):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=2,
+                total_frames=2,
+                force_warp=True,
+                worker_count=2,
+            )
+        )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.aborted
+    assert process.closed is True
+
+
+def test_gpu_frame_wait_stall_aborts_and_raises_restartable_error(monkeypatch) -> None:
+    """单帧长时间无返回按楔死处理（默认 600s，这里用环境变量缩短）。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_FRAME_STALL_S", "0.2")
+
+    class _Stalled(_FakeGpuRendererProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.aborted: list[str] = []
+
+        def abort(self, *, reason: str = "") -> None:
+            self.aborted.append(reason)
+
+        def __exit__(self, *exc):
+            self.close()
+            return None
+
+        def try_finish_render_gpu_frame(self, timeout_s):
+            time.sleep(0.01)
+            return None
+
+    _FakeGpuRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _Stalled)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    with pytest.raises(ne.NativeRendererStallError, match="没有返回第 0 帧"):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=2,
+                total_frames=2,
+                force_warp=True,
+            )
+        )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.aborted
+    assert process.closed is True

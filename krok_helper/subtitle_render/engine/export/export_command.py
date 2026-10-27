@@ -218,6 +218,11 @@ def build_render_command(
         "-hide_banner",
         "-loglevel",
         "warning",
+        # 机器可读心跳：每 ~0.5s 一行 key=value，交给导出看门狗判断
+        # “在慢跑”还是“真停了”。-nostats 关掉 \r 刷屏的统计行。
+        "-progress",
+        "pipe:2",
+        "-nostats",
         "-f",
         "rawvideo",
         "-pix_fmt",

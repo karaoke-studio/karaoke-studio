@@ -39,10 +39,19 @@ from krok_helper.subtitle_render.engine.export.export_command import (
     build_render_command,
     resolved_preview_width as _resolved_preview_width,
 )
+from krok_helper.subtitle_render.engine.export.io_paths import is_remote_path
 from krok_helper.subtitle_render.engine.export.native_export import (
+    GPU_RESTART_RECOVERY_FRAMES,
+    gpu_export_error_is_restartable,
     gpu_export_packed_enabled,
+    gpu_max_restarts_per_export,
+    gpu_restart_budget,
     iter_gpu_rgba_frames,
     iter_native_rgba_frames,
+)
+from krok_helper.subtitle_render.engine.export.progress_watchdog import (
+    active_export_monitor,
+    parse_ffmpeg_progress_line,
 )
 from krok_helper.subtitle_render.engine.export.parallel_schedule import (
     _available_system_memory_bytes,
@@ -315,6 +324,22 @@ def render_subtitle_video(
             + ", ".join(gpu_unsupported_feature_labels(gpu_fallback_reasons))
         )
 
+    monitor = active_export_monitor()
+    if monitor is not None:
+        io_is_remote = is_remote_path(job.output_path) or any(
+            is_remote_path(path) for path in _job_input_paths(job)
+        )
+        monitor.configure(
+            total_frames=total_frames,
+            fps=job.fps,
+            output_path=job.output_path,
+            io_is_remote=io_is_remote,
+        )
+        if gpu_export_active:
+            monitor.set_stage("GPU 准备", "启动 Direct2D sidecar")
+        else:
+            monitor.set_stage("准备")
+
     # A2：预扫字幕纵向范围只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
     # 优先方案 B（多条分离带），不适用时退回方案 A（单条并集）。
     cancelled = should_cancel is not None and should_cancel()
@@ -327,6 +352,8 @@ def render_subtitle_video(
         and (not gpu_export_active or gpu_packed_active)
     ):
         # 条带/多带预扫与歌曲时长成正比、可能耗时数十秒，让用户知道在等什么。
+        if monitor is not None:
+            monitor.set_stage("预扫字幕范围")
         logger("准备：预扫字幕渲染范围（条带渲染优化用）…")
         if _bands_enabled():
             bands = _compute_content_bands(
@@ -380,6 +407,8 @@ def render_subtitle_video(
     logger("执行命令:")
     logger(" ".join(f'"{part}"' if " " in part else part for part in command))
 
+    if monitor is not None:
+        monitor.set_stage("启动 ffmpeg")
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -389,6 +418,11 @@ def render_subtitle_video(
     )
     if on_process_started is not None:
         on_process_started(process)
+    if monitor is not None:
+        monitor.set_ffmpeg_process(
+            process,
+            hardware_encoder=any(part in _HW_ENCODER_NAMES for part in command),
+        )
 
     # ffmpeg can emit recurring decoder warnings while it is still consuming
     # rawvideo from stdin.  Drain its merged stdout/stderr concurrently;
@@ -397,7 +431,7 @@ def render_subtitle_video(
     ffmpeg_output_tail: deque[str] = deque(maxlen=80)
     output_drain_thread = threading.Thread(
         target=_drain_process_output,
-        args=(process, logger, ffmpeg_output_tail),
+        args=(process, logger, ffmpeg_output_tail, monitor),
         name="subtitle-ffmpeg-output",
         daemon=True,
     )
@@ -417,6 +451,8 @@ def render_subtitle_video(
         worker_count = _resolve_worker_count(total_frames, job.render_workers)
         if gpu_export_active:
             logger(f"GPU 字幕导出: {gpu_renderer_path}（Direct2D 条带回读）")
+            if monitor is not None:
+                monitor.set_stage("GPU 渲染")
             _write_frames_gpu(
                 process,
                 job,
@@ -430,12 +466,16 @@ def render_subtitle_video(
             )
         elif native_export_active:
             logger(f"native 导出: {native_renderer_path}")
+            if monitor is not None:
+                monitor.set_stage("native 渲染")
             _write_frames_native(
                 process, job, total_frames, native_renderer_path,
                 should_cancel, on_progress,
             )
         elif worker_count > 1:
             logger(f"多进程导出: {worker_count} 个 worker")
+            if monitor is not None:
+                monitor.set_stage("多进程渲染", f"{worker_count} 个 worker")
             if bands is not None:
                 _write_frames_multiprocess_bands(
                     process, job, bands, packed_h, total_frames,
@@ -448,17 +488,23 @@ def render_subtitle_video(
                 )
         elif bands is not None:
             logger(f"单进程多带渲染: {len(bands)} 条带 / 共 {total_frames} 帧")
+            if monitor is not None:
+                monitor.set_stage("帧渲染")
             _write_frames_single_bands(
                 process, job, bands, packed_h, total_frames,
                 should_cancel, on_progress,
             )
         else:
             logger(f"单进程渲染: 共 {total_frames} 帧")
+            if monitor is not None:
+                monitor.set_stage("帧渲染")
             _write_frames_single(
                 process, job, strip_top, render_h, total_frames,
                 should_cancel, on_progress,
             )
         process.stdin.close()
+        if monitor is not None:
+            monitor.set_stage("编码收尾")
         # 帧全部写完后 ffmpeg 还要编码落盘（慢编码器如 ProRes 的收尾可达
         # 数十秒且进度条已满格），明确告知用户在等什么。
         logger("帧已全部提交，等待编码器完成编码与写盘…")
@@ -477,12 +523,22 @@ def render_subtitle_video(
     except NativeRendererError as exc:
         terminate_process(process)
         _remove_incomplete_output(job, logger)
-        if gpu_export_active and not (should_cancel is not None and should_cancel()):
+        if should_cancel is not None and should_cancel():
+            # 取消时 sidecar 可能被 abort，协议层抛的是 NativeRendererError；
+            # 对用户必须仍然是「已停止」而不是「导出失败」。
+            raise ExportCancelled("已停止导出。") from exc
+        if gpu_export_active:
+            reason = " ".join(str(exc).split())
+            if len(reason) > 300:
+                reason = reason[:297] + "..."
             logger(
                 "GPU 字幕导出失败，已自动回退到 CPU Painter 从头渲染"
                 "（进度会重新从 0 开始计数，导出仍会正常完成），原因："
-                f"{exc}"
+                f"{reason}"
             )
+            if monitor is not None:
+                monitor.clear_stall_action()
+                monitor.note_retry("GPU 回退 CPU")
             return render_subtitle_video(
                 replace(job, gpu_export_enabled=False),
                 ffmpeg_dir=ffmpeg_dir,
@@ -503,7 +559,15 @@ def render_subtitle_video(
         # 比最终 return_code 更早到达。等日志线程读完后判断；
         # CPU 重试放在 finally 之后，避免新旧 ffmpeg 进程重叠。
         output_drain_thread.join(timeout=1.0)
-        if _should_retry_encoder_with_cpu(command, ffmpeg_output_tail):
+        if (
+            monitor is not None
+            and monitor.stall_action == "restart_cpu"
+            and any(part in _HW_ENCODER_NAMES for part in command)
+        ):
+            # 看门狗检测到「写管道阻塞 + ffmpeg 进度计数长时间不动」，
+            # 已终止硬编进程；下面按硬编失败路径切 CPU 重来。
+            hw_encoder_pipe_failure = True
+        elif _should_retry_encoder_with_cpu(command, ffmpeg_output_tail):
             hw_encoder_pipe_failure = True
         else:
             raise ProcessingError(
@@ -527,16 +591,32 @@ def render_subtitle_video(
         _remove_incomplete_output(job, logger)
         raise ExportCancelled("已停止导出。")
     retry_hw_encoder_with_cpu = hw_encoder_pipe_failure or (
+        monitor is not None
+        and monitor.stall_action == "restart_cpu"
+        and return_code is not None
+        and return_code != 0
+    ) or (
         return_code is not None
         and return_code != 0
         and _should_retry_encoder_with_cpu(command, ffmpeg_output_tail)
     )
     if retry_hw_encoder_with_cpu:
         _remove_incomplete_output(job, logger)
-        logger(
-            "硬件编码器初始化失败或资源不足，已自动切换 CPU 编码"
-            "，从头重试（进度会重新从 0 开始计数）"
-        )
+        if monitor is not None and monitor.stall_action == "restart_cpu":
+            logger(
+                "硬件编码器长时间没有消费新帧（看门狗判定停滞），"
+                "已自动切换 CPU 编码，从头重试（进度会重新从 0 开始计数）"
+            )
+            monitor.note_retry("硬件编码器停滞 → CPU")
+        else:
+            logger(
+                "硬件编码器初始化失败或资源不足，已自动切换 CPU 编码"
+                "，从头重试（进度会重新从 0 开始计数）"
+            )
+            if monitor is not None:
+                monitor.note_retry("硬件编码器初始化失败 → CPU")
+        if monitor is not None:
+            monitor.clear_stall_action()
         return render_subtitle_video(
             replace(job, encoder_mode="cpu"),
             ffmpeg_dir=ffmpeg_dir,
@@ -567,6 +647,9 @@ def render_subtitle_video(
         if not job.output_path.is_file() or os.path.getsize(job.output_path) == 0:
             raise ProcessingError(f"导出失败，未生成有效文件: {job.output_path}")
         logger(f"字幕视频导出完成: {job.output_path}")
+    if monitor is not None:
+        monitor.set_stage("完成")
+        monitor.mark_finished()
     return job.output_path
 
 
@@ -757,6 +840,9 @@ def _compute_subtitle_strip(
         return None
     total_samples = len(times)
     last_bucket = -1
+    monitor = active_export_monitor()
+    if monitor is not None:
+        monitor.set_stage("预扫字幕范围")
 
     extras = list(job.extra_tracks)
     scratch: QImage | None = None
@@ -766,6 +852,8 @@ def _compute_subtitle_strip(
     for index, t_ms in enumerate(times):
         if should_cancel is not None and should_cancel():
             return None
+        if monitor is not None:
+            monitor.set_prescan(index + 1, total_samples)
         if logger is not None:
             percent = index * 100 // total_samples
             bucket = percent // 10
@@ -868,12 +956,17 @@ def _compute_content_bands(
         return None
     total_samples = len(times)
     last_bucket = -1
+    monitor = active_export_monitor()
+    if monitor is not None:
+        monitor.set_stage("预扫字幕范围")
 
     extras = list(job.extra_tracks)
     collected: list[tuple[int, int]] = []
     for index, t_ms in enumerate(times):
         if should_cancel is not None and should_cancel():
             return None
+        if monitor is not None:
+            monitor.set_prescan(index + 1, total_samples)
         if logger is not None:
             percent = index * 100 // total_samples
             bucket = percent // 10
@@ -1073,6 +1166,7 @@ def _write_frames_native(
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
     """Write full-frame RGBA frames rendered by the native sidecar."""
+    monitor = active_export_monitor()
     written = 0
     for frame in iter_native_rgba_frames(
         job.track,
@@ -1087,8 +1181,16 @@ def _write_frames_native(
     ):
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
-        process.stdin.write(frame)
+        if monitor is not None:
+            monitor.begin_write(written)
+        try:
+            process.stdin.write(frame)
+        finally:
+            if monitor is not None:
+                monitor.end_write(written)
         written += 1
+        if monitor is not None:
+            monitor.frame_written(written, total_frames)
         if on_progress is not None:
             on_progress(written, total_frames)
 
@@ -1104,8 +1206,18 @@ def _write_frames_gpu(
     crop: tuple[int, int] | None = None,
     bands: list[tuple[int, int]] | None = None,
 ) -> None:
-    """Write Direct2D band-readback frames to the existing ffmpeg pipe."""
+    """Write Direct2D band-readback frames to the existing ffmpeg pipe.
+
+    Every ``GPU_RESTART_RECOVERY_FRAMES`` consecutive healthy frames restore
+    one restart allowance; a sidecar failure resets the streak.
+    """
+    monitor = active_export_monitor()
     written = 0
+    base_written = 0
+    restart_attempts = 0
+    consecutive_healthy_frames = 0
+    budget = gpu_restart_budget()
+    max_restarts_per_export = gpu_max_restarts_per_export()
     last_prepare_bucket = -1
     force_warp = _gpu_force_warp()
     packed_rgba = gpu_export_packed_enabled()
@@ -1134,42 +1246,164 @@ def _write_frames_gpu(
         gpu_diagnostics.update(values)
 
     def on_frame_diagnostics(values: dict[str, object]) -> None:
-        frame_diagnostics_by_index[int(values.get("frame_index", -1) or 0)] = dict(
-            values
-        )
+        local_index = int(values.get("frame_index", -1) or 0)
+        row = dict(values)
+        row["frame_index"] = base_written + local_index
+        frame_diagnostics_by_index[base_written + local_index] = row
 
-    for frame in iter_gpu_rgba_frames(
-        job.track,
-        job.style,
-        width=job.width,
-        height=job.height,
-        fps=job.fps,
-        total_frames=total_frames,
-        duration_ms=job.duration_ms,
-        renderer_path=renderer_path,
-        extra_tracks=list(job.extra_tracks),
-        force_warp=force_warp,
-        worker_count=worker_count,
-        packed_rgba=packed_rgba,
-        crop=crop,
-        bands=bands,
-        should_cancel=should_cancel,
-        on_prepare_progress=on_prepare_progress,
-        on_diagnostics=on_diagnostics if diagnostics_enabled else None,
-        on_frame_diagnostics=on_frame_diagnostics if diagnostics_enabled else None,
-        logger=logger,
-    ):
-        if should_cancel is not None and should_cancel():
-            raise ExportCancelled("已停止导出。")
-        write_started = time.perf_counter()
-        process.stdin.write(frame)
-        stdin_block_ms = (time.perf_counter() - write_started) * 1000.0
-        ffmpeg_wait_seconds += stdin_block_ms / 1000.0
-        if diagnostics_enabled and written in frame_diagnostics_by_index:
-            frame_diagnostics_by_index[written]["stdin_block_ms"] = stdin_block_ms
-        written += 1
-        if on_progress is not None:
-            on_progress(written, total_frames)
+    def notify_repair(message: str) -> None:
+        # 有 monitor 时它本身就是日志 sink（emit_log），不能再 logger() 一次，
+        # 否则导出日志/状态栏会出现两条同样的修复消息。
+        if monitor is not None:
+            monitor.note_repair(message)
+        else:
+            logger(message)
+
+    retry_in_progress = False
+    last_stall_frame: int | None = None
+    same_frame_stalls = 0
+    while written < total_frames:
+        base_written = written
+        remaining = total_frames - written
+        start_frame = written
+        # 重启后重新打印准备进度；原先的预扫/准备/流水线进度行保持不动。
+        last_prepare_bucket = -1
+        try:
+            for frame in iter_gpu_rgba_frames(
+                job.track,
+                job.style,
+                width=job.width,
+                height=job.height,
+                fps=job.fps,
+                total_frames=remaining,
+                duration_ms=job.duration_ms,
+                start_frame=start_frame,
+                renderer_path=renderer_path,
+                extra_tracks=list(job.extra_tracks),
+                force_warp=force_warp,
+                worker_count=worker_count,
+                packed_rgba=packed_rgba,
+                crop=crop,
+                bands=bands,
+                should_cancel=should_cancel,
+                on_prepare_progress=on_prepare_progress,
+                on_diagnostics=on_diagnostics if diagnostics_enabled else None,
+                on_frame_diagnostics=(
+                    on_frame_diagnostics if diagnostics_enabled else None
+                ),
+                logger=logger,
+            ):
+                if should_cancel is not None and should_cancel():
+                    raise ExportCancelled("已停止导出。")
+                # 先按「sidecar 已交出一帧」累计，再写管道：额度恢复衡量的是
+                # GPU 进程是否持续健康，不把 ffmpeg 写盘慢/阻塞算到 GPU 头上。
+                consecutive_healthy_frames += 1
+                if consecutive_healthy_frames >= GPU_RESTART_RECOVERY_FRAMES:
+                    consecutive_healthy_frames = 0
+                    before_reward = budget.remaining
+                    restored = budget.reward_healthy_streak()
+                    if restored > before_reward:
+                        notify_repair(
+                            f"GPU 已连续渲染 {GPU_RESTART_RECOVERY_FRAMES} 帧正常，"
+                            f"重启额度恢复为 {restored}/{budget.max_retries}"
+                        )
+                write_started = time.perf_counter()
+                if monitor is not None:
+                    monitor.begin_write(written)
+                try:
+                    process.stdin.write(frame)
+                finally:
+                    if monitor is not None:
+                        monitor.end_write(written)
+                stdin_block_ms = (time.perf_counter() - write_started) * 1000.0
+                ffmpeg_wait_seconds += stdin_block_ms / 1000.0
+                if diagnostics_enabled and written in frame_diagnostics_by_index:
+                    frame_diagnostics_by_index[written]["stdin_block_ms"] = (
+                        stdin_block_ms
+                    )
+                written += 1
+                retry_in_progress = False
+                if monitor is not None:
+                    monitor.frame_written(written, total_frames)
+                if on_progress is not None:
+                    on_progress(written, total_frames)
+            if written < total_frames:
+                raise NativeRendererError(
+                    f"GPU 渲染器提前结束：只写入了 {written}/{total_frames} 帧"
+                )
+            break
+        except ExportCancelled:
+            if retry_in_progress:
+                # 取消打断的是“还没真正开始的续渲”，不该永久吃掉一次额度。
+                budget.refund()
+            raise
+        except NativeRendererError as exc:
+            # 本次失效打断连续健康帧计数；重启后从 0 重新累计 30 帧。
+            consecutive_healthy_frames = 0
+            if should_cancel is not None and should_cancel():
+                if retry_in_progress:
+                    budget.refund()
+                raise ExportCancelled("已停止导出。") from exc
+            if not gpu_export_error_is_restartable(exc):
+                raise
+            if last_stall_frame == written:
+                same_frame_stalls += 1
+            else:
+                last_stall_frame = written
+                same_frame_stalls = 1
+            if same_frame_stalls >= 3:
+                message = (
+                    f"GPU 渲染进程在同一帧（第 {written} 帧）连续 "
+                    f"{same_frame_stalls} 次停滞，判定为确定性失败，"
+                    "回退 CPU Painter 从头渲染"
+                )
+                notify_repair(message)
+                raise
+            if budget.max_retries <= 0:
+                message = (
+                    "GPU 重启额度为 0（已禁用），"
+                    "GPU 渲染进程失效后直接回退 CPU Painter 从头渲染"
+                )
+                notify_repair(message)
+                raise
+            if restart_attempts >= max_restarts_per_export:
+                # 30 帧一次的额度恢复不能让单次导出无限续命：周期性失效的
+                # sidecar 会在“30 帧→崩溃→再 30 帧”里一直重启下去。
+                message = (
+                    f"本单 GPU 渲染进程重启已达 "
+                    f"{max_restarts_per_export} 次上限，"
+                    "回退 CPU Painter 从头渲染"
+                )
+                notify_repair(message)
+                raise NativeRendererError(message) from exc
+            if not budget.consume():
+                message = (
+                    f"GPU 渲染进程连续失效，{budget.max_retries} 次重启额度已用完，"
+                    "回退 CPU Painter 从头渲染"
+                )
+                notify_repair(message)
+                raise
+            retry_in_progress = True
+            if should_cancel is not None and should_cancel():
+                budget.refund()
+                raise ExportCancelled("已停止导出。")
+            restart_attempts += 1
+            reason = " ".join(str(exc).split())
+            if len(reason) > 200:
+                reason = reason[:197] + "..."
+            logger(
+                f"GPU 渲染进程停滞/失效（{reason}），正在重启 GPU 进程并继续："
+                f"第 {restart_attempts} 次重试，已写 {written}/{total_frames} 帧，"
+                f"从第 {written} 帧继续"
+                f"（剩余重启额度 {budget.remaining}/{budget.max_retries}）"
+            )
+            if monitor is not None:
+                monitor.note_sidecar_restart(
+                    restart_attempts, written, total_frames, reason
+                )
+
+    if restart_attempts:
+        logger(f"GPU 渲染进程重启后已恢复并完成（本单共重试 {restart_attempts} 次）")
     if diagnostics_enabled:
         local_usage_mb = int(
             gpu_diagnostics.get("local_video_memory_usage_bytes", 0) or 0
@@ -1182,21 +1416,25 @@ def _write_frames_gpu(
             f"ffmpeg 管道等待 {ffmpeg_wait_seconds:.3f}s；"
             f"本地显存 {local_usage_mb:.1f}/{local_budget_mb:.1f} MiB"
         )
-        _persist_gpu_export_diagnostics(
-            job,
-            export_run_id=export_run_id,
-            total_wall_ms=(time.perf_counter() - export_started) * 1000.0,
-            worker_count=worker_count,
-            force_warp=force_warp,
-            gpu_diagnostics=gpu_diagnostics,
-            frame_diagnostics=[
-                frame_diagnostics_by_index[index]
-                for index in sorted(frame_diagnostics_by_index)
-            ],
-            crop=crop,
-            bands=bands,
-            logger=logger,
-        )
+        try:
+            _persist_gpu_export_diagnostics(
+                job,
+                export_run_id=export_run_id,
+                total_wall_ms=(time.perf_counter() - export_started) * 1000.0,
+                worker_count=worker_count,
+                force_warp=force_warp,
+                gpu_diagnostics=gpu_diagnostics,
+                frame_diagnostics=[
+                    frame_diagnostics_by_index[index]
+                    for index in sorted(frame_diagnostics_by_index)
+                ],
+                crop=crop,
+                bands=bands,
+                logger=logger,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            # 诊断落盘失败不能把已经渲完的导出判失败。
+            logger(f"GPU 导出诊断写入失败，已忽略: {exc}")
 
 
 def _persist_gpu_export_diagnostics(
@@ -1304,6 +1542,7 @@ def _write_frames_single(
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
     """单进程逐帧渲染并按序写入 ffmpeg stdin。"""
+    monitor = active_export_monitor()
     buffer = QImage(job.width, render_h, QImage.Format.Format_RGBA8888)
     transparent = QColor(0, 0, 0, 0)
     empty_frame = bytes(job.width * render_h * 4)
@@ -1312,15 +1551,63 @@ def _write_frames_single(
             terminate_process(process)
             raise ExportCancelled("已停止导出。")
         t_ms = int(round(index * 1000 / job.fps))
-        process.stdin.write(_frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame))
+        if monitor is not None:
+            monitor.begin_frame(index)
+        frame = _frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame)
+        if monitor is not None:
+            monitor.end_frame(index)
+            monitor.begin_write(index)
+        try:
+            process.stdin.write(frame)
+        finally:
+            if monitor is not None:
+                monitor.end_write(index)
+        if monitor is not None:
+            monitor.frame_written(index + 1, total_frames)
         if on_progress is not None:
             on_progress(index + 1, total_frames)
 
 
 # 改用 apply_async + 有界在飞窗口：同时未消费的 chunk 结果条数与字节数都封顶。
 _MULTIPROC_POLL_INTERVAL_S = 0.5  # 等待结果的单次轮询时长（期间响应取消）
+# worker 逐帧共享心跳的存活判据下限：单帧再重也不至于 3 分钟渲不出来，
+# 避免按旧「chunk 字节数」公式在超慢机器上误杀。
+_MULTIPROC_MIN_LIVENESS_GRACE_S = 180.0
 
 
+def _multiprocess_liveness_grace_s(chunk_frames: int, frame_bytes: int) -> float:
+    """Per-chunk liveness grace; an explicit env override wins over the floor.
+
+    The 180s floor protects slow machines from the old byte-based formula, but
+    support/debug must still be able to set a tighter
+    ``KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S`` intentionally.
+    """
+
+    base = _resolve_stall_timeout_s(chunk_frames, frame_bytes)
+    raw = os.environ.get("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "").strip()
+    if raw:
+        try:
+            if float(raw) > 0:
+                return base
+        except ValueError:
+            pass
+    return max(base, _MULTIPROC_MIN_LIVENESS_GRACE_S)
+
+
+def _shared_counter_value(counter) -> int:
+    """Read a multiprocessing shared counter without ever blocking on its lock.
+
+    计数器只用于“还在推进”的存活判断，不是精确帧账本；锁无关读取即使偶发
+    读到更新中的值也只影响一拍心跳。绝不能在 worker 被系统杀死后卡在
+    ``get_lock()``（那会让导出线程永久挂住、取消也观察不到）。
+    """
+
+    if counter is None:
+        return 0
+    try:
+        return max(int(counter.value), 0)
+    except Exception:  # noqa: BLE001 - diagnostics must never abort an export
+        return 0
 
 
 def _drain_pending_head(
@@ -1328,20 +1615,28 @@ def _drain_pending_head(
     stall_timeout_s: float,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    monitor=None,
+    progress_counter=None,
 ) -> bytes:
-    """按序取队头 chunk 结果；等待期间以短轮询响应取消，并维护绝对截止时间。
+    """按序取队头 chunk 结果；等待期间以短轮询响应取消，并维护存活判据。
 
     单次 ``AsyncResult.get`` 长阻塞期间既无法取消也探测不到停滞，这里每
     ``_MULTIPROC_POLL_INTERVAL_S`` 秒醒来一次：用户停止导出立即抛
-    ``ExportCancelled``；超过绝对截止仍无结果则抛 ``ProcessingError``。
+    ``ExportCancelled``；有 worker 共享心跳时按「多久没有新帧」判停滞
+    （慢机器渲一帧很久也不会被误杀），没有心跳时退回旧的绝对截止时间。
     """
     import multiprocessing as mp
 
     result = pending.popleft()
-    deadline = time.monotonic() + max(stall_timeout_s, _MULTIPROC_POLL_INTERVAL_S)
+    poll_s = _MULTIPROC_POLL_INTERVAL_S
+    grace_s = max(stall_timeout_s, poll_s)
+    now = time.monotonic()
+    deadline = now + grace_s
+    last_progress = now
+    last_count = _shared_counter_value(progress_counter)
     while True:
         try:
-            return result.get(timeout=_MULTIPROC_POLL_INTERVAL_S)
+            return result.get(timeout=poll_s)
         except mp.TimeoutError:
             pass
         except (ExportCancelled, ProcessingError):
@@ -1356,11 +1651,32 @@ def _drain_pending_head(
             ) from exc
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if progress_counter is None:
+            if now >= deadline:
+                raise ProcessingError(
+                    f"渲染 worker 超过 {stall_timeout_s:.0f}s 无响应"
+                    "（可能被系统因内存不足终止），导出中止；"
+                    "可尝试调低导出分辨率或在环境变量 KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
+                )
+            continue
+        # worker 每渲一帧就推进共享计数——这是真正的存活心跳，不是总时长。
+        count = _shared_counter_value(progress_counter)
+        if count != last_count:
+            last_count = count
+            last_progress = now
+        if monitor is not None:
+            monitor.set_rendered_frames(count)
+            monitor.set_stage(
+                "等待渲染 worker",
+                f"已渲染 {count} 帧，最近推进 {now - last_progress:.0f}s 前",
+            )
+        if now - last_progress >= grace_s:
             raise ProcessingError(
-                f"渲染 worker 超过 {stall_timeout_s:.0f}s 无响应"
-                "（可能被系统因内存不足终止），导出中止；"
-                "可尝试调低导出分辨率或在环境变量 KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
+                f"渲染 worker 已 {now - last_progress:.0f}s 没有渲出新帧"
+                f"（最近进度：{count} 帧；可能被系统因内存不足终止或卡在某个特效），"
+                "导出中止；可尝试调低导出分辨率或在环境变量 "
+                "KROK_SUBTITLE_RENDER_WORKERS 中减少进程数"
             )
 
 
@@ -1372,6 +1688,8 @@ def _iter_ordered_pool_results(
     window: int,
     stall_timeout_s: float,
     should_cancel: Callable[[], bool] | None = None,
+    monitor=None,
+    progress_counter=None,
 ):
     """apply_async 按序产出 chunk 结果，同时在飞条数不超过 ``window``。
 
@@ -1383,12 +1701,20 @@ def _iter_ordered_pool_results(
         for task in tasks:
             while len(pending) >= window:
                 yield _drain_pending_head(
-                    pending, stall_timeout_s, should_cancel=should_cancel
+                    pending,
+                    stall_timeout_s,
+                    should_cancel=should_cancel,
+                    monitor=monitor,
+                    progress_counter=progress_counter,
                 )
             pending.append(pool.apply_async(task_fn, (task,)))
         while pending:
             yield _drain_pending_head(
-                pending, stall_timeout_s, should_cancel=should_cancel
+                pending,
+                stall_timeout_s,
+                should_cancel=should_cancel,
+                monitor=monitor,
+                progress_counter=progress_counter,
             )
     finally:
         # 提前退出（取消 / 异常）时丢弃剩余句柄；池由调用方 terminate。
@@ -1399,7 +1725,12 @@ def _iter_ordered_pool_results(
 _W_CTX: dict = {}
 
 
-def _render_worker_init(job: RenderJob, strip_top: int, render_h: int) -> None:
+def _render_worker_init(
+    job: RenderJob,
+    strip_top: int,
+    render_h: int,
+    progress_counter=None,
+) -> None:
     """worker 初始化：建本进程 QApplication（继承父 QT_QPA_PLATFORM，字体一致）+ 复用缓冲。"""
     from PyQt6.QtWidgets import QApplication
 
@@ -1409,6 +1740,7 @@ def _render_worker_init(job: RenderJob, strip_top: int, render_h: int) -> None:
     _W_CTX["buffer"] = QImage(job.width, render_h, QImage.Format.Format_RGBA8888)
     _W_CTX["transparent"] = QColor(0, 0, 0, 0)
     _W_CTX["empty_frame"] = bytes(job.width * render_h * 4)
+    _W_CTX["progress_counter"] = progress_counter
 
 
 def _render_worker_chunk(task: tuple[int, int]) -> bytes:
@@ -1419,10 +1751,15 @@ def _render_worker_chunk(task: tuple[int, int]) -> bytes:
     buffer = _W_CTX["buffer"]
     transparent = _W_CTX["transparent"]
     empty_frame = _W_CTX["empty_frame"]
+    counter = _W_CTX.get("progress_counter")
     out = bytearray()
     for index in range(start, start + count):
         t_ms = int(round(index * 1000 / job.fps))
         out += _frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame)
+        if counter is not None:
+            # 逐帧心跳：父进程据此判断「还在渲」而不是按总时长拍脑袋超时。
+            # 锁无关递增（只用于存活信号，偶发丢一拍不影响判断）。
+            counter.value += 1
     return bytes(out)
 
 
@@ -1442,10 +1779,12 @@ def _write_frames_multiprocess(
     apply_async + 有界在飞窗口保序消费（替代 imap 的无界结果积压），4K 下
     已完成未消费的 chunk 结果内存峰值封顶在 _MULTIPROC_MAX_PENDING_BYTES；
     单帧巨大时按预算降低实际 worker 数（不放大窗口）。取消 / 异常时
-    terminate 整池。
+    terminate 整池；停滞判据用 worker 逐帧推进的共享计数（心跳），不是
+    固定总时长。
     """
     import multiprocessing as mp
 
+    monitor = active_export_monitor()
     chunk = _resolve_chunk_size(job, render_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
     frame_bytes = job.width * render_h * 4
@@ -1469,12 +1808,13 @@ def _write_frames_multiprocess(
         frame_bytes,
         pending_budget_bytes=pending_budget,
     )
-    stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
+    stall_timeout_s = _multiprocess_liveness_grace_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
+    progress_counter = ctx.Value("q", 0, lock=False)
     pool = ctx.Pool(
         effective_workers,
         initializer=_render_worker_init,
-        initargs=(job, strip_top, render_h),
+        initargs=(job, strip_top, render_h, progress_counter),
     )
     written = 0
     try:
@@ -1485,6 +1825,8 @@ def _write_frames_multiprocess(
             window=window,
             stall_timeout_s=stall_timeout_s,
             should_cancel=should_cancel,
+            monitor=monitor,
+            progress_counter=progress_counter,
         )
         # 不用 zip：CPython 的 zip 会复用结果元组，旧 blob 在生成器推进补交
         # 任务期间仍被元组持有；手动配对 + del 让已完成结果的存活峰值严格
@@ -1496,8 +1838,17 @@ def _write_frames_multiprocess(
                 if should_cancel is not None and should_cancel():
                     terminate_process(process)
                     raise ExportCancelled("已停止导出。")
-                process.stdin.write(blob)
+                if monitor is not None:
+                    monitor.set_stage("多进程渲染")
+                    monitor.begin_write(written)
+                try:
+                    process.stdin.write(blob)
+                finally:
+                    if monitor is not None:
+                        monitor.end_write(written)
                 written += count
+                if monitor is not None:
+                    monitor.frame_written(written, total_frames)
                 if on_progress is not None:
                     on_progress(written, total_frames)
             finally:
@@ -1520,6 +1871,7 @@ def _write_frames_single_bands(
     on_progress: Callable[[int, int], None] | None,
 ) -> None:
     """单进程逐帧渲染（方案 B 打包多带）并按序写入 ffmpeg stdin。"""
+    monitor = active_export_monitor()
     buffer = QImage(job.width, packed_h, QImage.Format.Format_RGBA8888)
     transparent = QColor(0, 0, 0, 0)
     empty_frame = bytes(job.width * packed_h * 4)
@@ -1528,9 +1880,21 @@ def _write_frames_single_bands(
             terminate_process(process)
             raise ExportCancelled("已停止导出。")
         t_ms = int(round(index * 1000 / job.fps))
-        process.stdin.write(
-            _frame_bytes_bands(job, t_ms, bands, transparent, buffer, empty_frame)
+        if monitor is not None:
+            monitor.begin_frame(index)
+        frame = _frame_bytes_bands(
+            job, t_ms, bands, transparent, buffer, empty_frame
         )
+        if monitor is not None:
+            monitor.end_frame(index)
+            monitor.begin_write(index)
+        try:
+            process.stdin.write(frame)
+        finally:
+            if monitor is not None:
+                monitor.end_write(index)
+        if monitor is not None:
+            monitor.frame_written(index + 1, total_frames)
         if on_progress is not None:
             on_progress(index + 1, total_frames)
 
@@ -1540,7 +1904,10 @@ _WB_CTX: dict = {}
 
 
 def _render_worker_init_bands(
-    job: RenderJob, bands: list[tuple[int, int]], packed_h: int
+    job: RenderJob,
+    bands: list[tuple[int, int]],
+    packed_h: int,
+    progress_counter=None,
 ) -> None:
     from PyQt6.QtWidgets import QApplication
 
@@ -1550,6 +1917,7 @@ def _render_worker_init_bands(
     _WB_CTX["buffer"] = QImage(job.width, packed_h, QImage.Format.Format_RGBA8888)
     _WB_CTX["transparent"] = QColor(0, 0, 0, 0)
     _WB_CTX["empty_frame"] = bytes(job.width * packed_h * 4)
+    _WB_CTX["progress_counter"] = progress_counter
 
 
 def _render_worker_chunk_bands(task: tuple[int, int]) -> bytes:
@@ -1559,10 +1927,13 @@ def _render_worker_chunk_bands(task: tuple[int, int]) -> bytes:
     buffer = _WB_CTX["buffer"]
     transparent = _WB_CTX["transparent"]
     empty_frame = _WB_CTX["empty_frame"]
+    counter = _WB_CTX.get("progress_counter")
     out = bytearray()
     for index in range(start, start + count):
         t_ms = int(round(index * 1000 / job.fps))
         out += _frame_bytes_bands(job, t_ms, bands, transparent, buffer, empty_frame)
+        if counter is not None:
+            counter.value += 1
     return bytes(out)
 
 
@@ -1580,9 +1951,10 @@ def _write_frames_multiprocess_bands(
     """多进程并行渲染（方案 B 打包多带），主进程按序收回写入 ffmpeg stdin。
 
     与 _write_frames_multiprocess 相同的有界在飞窗口 + 预算内降 worker +
-    停滞超时护栏。"""
+    逐帧心跳存活判据。"""
     import multiprocessing as mp
 
+    monitor = active_export_monitor()
     chunk = _resolve_chunk_size(job, packed_h, total_frames, worker_count)
     tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
     frame_bytes = job.width * packed_h * 4
@@ -1606,12 +1978,13 @@ def _write_frames_multiprocess_bands(
         frame_bytes,
         pending_budget_bytes=pending_budget,
     )
-    stall_timeout_s = _resolve_stall_timeout_s(chunk, frame_bytes)
+    stall_timeout_s = _multiprocess_liveness_grace_s(chunk, frame_bytes)
     ctx = mp.get_context("spawn")
+    progress_counter = ctx.Value("q", 0, lock=False)
     pool = ctx.Pool(
         effective_workers,
         initializer=_render_worker_init_bands,
-        initargs=(job, bands, packed_h),
+        initargs=(job, bands, packed_h, progress_counter),
     )
     written = 0
     try:
@@ -1622,6 +1995,8 @@ def _write_frames_multiprocess_bands(
             window=window,
             stall_timeout_s=stall_timeout_s,
             should_cancel=should_cancel,
+            monitor=monitor,
+            progress_counter=progress_counter,
         )
         # 同 _write_frames_multiprocess：手动配对 + del，避免 zip 元组在生成器
         # 推进期间持有旧 blob。
@@ -1632,8 +2007,17 @@ def _write_frames_multiprocess_bands(
                 if should_cancel is not None and should_cancel():
                     terminate_process(process)
                     raise ExportCancelled("已停止导出。")
-                process.stdin.write(blob)
+                if monitor is not None:
+                    monitor.set_stage("多进程多带渲染")
+                    monitor.begin_write(written)
+                try:
+                    process.stdin.write(blob)
+                finally:
+                    if monitor is not None:
+                        monitor.end_write(written)
                 written += count
+                if monitor is not None:
+                    monitor.frame_written(written, total_frames)
                 if on_progress is not None:
                     on_progress(written, total_frames)
             finally:
@@ -1662,6 +2046,7 @@ def _drain_process_output(
     process: subprocess.Popen,
     logger: Logger,
     output_tail: deque[str] | None = None,
+    monitor=None,
 ) -> None:
     if process.stdout is None:
         return
@@ -1670,10 +2055,22 @@ def _drain_process_output(
             line = raw.decode("utf-8", errors="replace").strip()
         else:
             line = str(raw).strip()
-        if line:
-            if output_tail is not None:
-                output_tail.append(line)
-            logger(line)
+        if not line:
+            continue
+        parsed = parse_ffmpeg_progress_line(line)
+        if parsed is not None:
+            # -progress 是机器心跳，不进 UI/日志、也不进失败提示尾巴；
+            # 由看门狗按批次汇总成可读状态。遥测钩子异常绝不能把排水线程
+            # 弄死（否则 ffmpeg 的 stderr 管道填满会把导出卡死）。
+            if monitor is not None:
+                try:
+                    monitor.observe_ffmpeg_progress(*parsed)
+                except Exception:  # noqa: BLE001 - telemetry only
+                    pass
+            continue
+        if output_tail is not None:
+            output_tail.append(line)
+        logger(line)
 
 
 # 硬件编码器初始化失败自动回退 CPU 的适配范围：auto 模式按 ffmpeg -encoders

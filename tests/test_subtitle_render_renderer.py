@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import threading
+import time
 
 import pytest
 
@@ -43,6 +44,14 @@ from krok_helper.subtitle_render.engine.export.render_job_policy import (  # noq
 from krok_helper.subtitle_render.engine.render.render_bands import (  # noqa: E402
     merge_intervals,
     packed_offsets,
+)
+from krok_helper.subtitle_render.engine.export import (  # noqa: E402
+    native_export as native_export_module,
+    progress_watchdog as progress_watchdog_module,
+)
+from krok_helper.subtitle_render.native.backend import (  # noqa: E402
+    NativeRendererError,
+    NativeRendererStallError,
 )
 from krok_helper.subtitle_render.engine.render.frame_analysis import (  # noqa: E402
     FrameAnalysisPorts,
@@ -270,6 +279,15 @@ def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
     assert command[command.index("-crf") + 1] == "18"
     assert command.count("-r") == 2
     assert command[command.index("-fps_mode") + 1] == "cfr"
+
+
+def test_build_render_command_requests_ffmpeg_progress_heartbeat(tmp_path):
+    """导出看门狗靠 ffmpeg 自己的 -progress 计数判断“在慢跑”还是“真停了”。"""
+
+    command = build_render_command("ffmpeg", _job(tmp_path))
+
+    assert command[command.index("-progress") + 1] == "pipe:2"
+    assert "-nostats" in command
 
 
 def test_build_render_command_can_skip_audio(tmp_path):
@@ -985,7 +1003,7 @@ def test_render_drains_ffmpeg_output_while_writing_frames(monkeypatch, tmp_path)
     drain_started = threading.Event()
     allow_drain_to_finish = threading.Event()
 
-    def fake_drain(_process, _logger, _output_tail=None):
+    def fake_drain(_process, _logger, _output_tail=None, _monitor=None):
         drain_started.set()
         assert allow_drain_to_finish.wait(timeout=1.0)
 
@@ -1153,6 +1171,643 @@ def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, t
     assert render_subtitle_video(job) == job.output_path
     assert writes == [("cpu", 2, gpu_path, (0, 1), None)]
     assert bytes(fake_process.stdin.data) == b"g" * 32
+
+
+def test_shared_counter_value_reads_lockless_counter():
+    import multiprocessing as mp
+
+    counter = mp.get_context("spawn").Value("q", 0, lock=False)
+    counter.value = 7
+    assert renderer._shared_counter_value(counter) == 7
+    assert renderer._shared_counter_value(None) == 0
+
+
+def test_gpu_writer_refunds_allowance_when_cancel_interrupts_retry(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "1")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=600)
+    process = _CollectProcess()
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise NativeRendererStallError("frame wait stall")
+        raise ExportCancelled("已停止导出。")
+        yield b""  # pragma: no cover - keep this a generator
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        with pytest.raises(ExportCancelled):
+            renderer._write_frames_gpu(
+                process,
+                job,
+                6,
+                tmp_path / "krok_subtitle_renderer.exe",
+                None,
+                None,
+                lambda _message: None,
+            )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert calls == 2
+    assert budget.remaining == 1  # 重启消耗 1 次，取消后原额退回
+
+
+def test_drain_pending_head_counter_advance_extends_liveness():
+    import multiprocessing as mp
+
+    class _Counter:
+        value = 0
+
+    class _AdvancingResult:
+        def __init__(self, counter):
+            self.counter = counter
+            self.calls = 0
+
+        def get(self, timeout=None):
+            self.calls += 1
+            if self.calls >= 3:
+                self.counter.value += 1
+                return b"ok"
+            # 每次等待都超过一半的 0.5s 轮询宽限，总耗时超过最初的 0.5s
+            # 绝对截止点；只有 counter 前进不断刷新 last_progress 才能成功。
+            time.sleep(0.3)
+            self.counter.value += 1
+            raise mp.TimeoutError
+
+    counter = _Counter()
+    result = _AdvancingResult(counter)
+    started = time.monotonic()
+    assert (
+        renderer._drain_pending_head(
+            deque([result]), 0.1, progress_counter=counter
+        )
+        == b"ok"
+    )
+    assert time.monotonic() - started > 0.5
+    assert result.calls == 3
+
+
+def test_drain_pending_head_frozen_counter_reports_stall():
+    import multiprocessing as mp
+
+    class _Counter:
+        value = 0
+
+    class _FrozenResult:
+        def get(self, timeout=None):
+            raise mp.TimeoutError
+
+    counter = _Counter()
+    with pytest.raises(ProcessingError, match="没有渲出新帧"):
+        renderer._drain_pending_head(
+            deque([_FrozenResult()]), 0.1, progress_counter=counter
+        )
+
+
+def test_multiprocess_liveness_grace_floor_and_override(monkeypatch) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", raising=False)
+    assert renderer._multiprocess_liveness_grace_s(1, 1) >= 180.0
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "5")
+    assert renderer._multiprocess_liveness_grace_s(1, 1) == pytest.approx(5.0)
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STALL_TIMEOUT_S", "bad")
+    assert renderer._multiprocess_liveness_grace_s(1, 1) >= 180.0
+
+
+def test_hardware_stall_watchdog_switches_to_cpu_encoder(monkeypatch, tmp_path):
+    """monitor.stall_action=restart_cpu 必须走完整“杀 ffmpeg→切 CPU 编码”链。"""
+
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=2,
+        fps=2,
+        duration_ms=1000,
+        gpu_export_enabled=False,
+        encoder_mode="nvenc",
+        codec="h264",
+    )
+    processes = [_FakeRenderProcess(job.output_path), _FakeRenderProcess(job.output_path)]
+    logs: list[str] = []
+    calls: list[str] = []
+    monitor = progress_watchdog_module.ExportProgressMonitor(logger=logs.append)
+    progress_watchdog_module.set_active_export_monitor(monitor)
+    monitor._stall_action = "restart_cpu"  # noqa: SLF001 — simulate watchdog verdict
+
+    def fake_single(
+        process,
+        active_job,
+        _strip_top,
+        render_h,
+        total,
+        _should_cancel,
+        _on_progress,
+    ):
+        calls.append(active_job.encoder_mode)
+        if active_job.encoder_mode != "cpu":
+            raise BrokenPipeError("simulated hardware encoder stall")
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda *_a, **_k: "ffmpeg")
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_single)
+    monkeypatch.setattr(
+        renderer.subprocess, "Popen", lambda *_a, **_k: processes.pop(0)
+    )
+    try:
+        assert render_subtitle_video(job, logger=logs.append) == job.output_path
+    finally:
+        progress_watchdog_module.clear_active_export_monitor(monitor)
+        monitor.stop()
+
+    assert calls == ["nvenc", "cpu"]
+    assert any("硬件编码器长时间没有消费新帧" in line for line in logs)
+    assert any("libx264" in line for line in logs)
+
+
+def test_gpu_cancel_between_consume_and_retry_refunds_only_once(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    assert budget.consume() is True  # 先消耗 1，剩余 2；再区分单次/双次退款
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=600)
+    process = _CollectProcess()
+    calls = 0
+
+    def should_cancel() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls >= 2  # 第一次（失效分支）不取消；consume 后的检查取消
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        raise NativeRendererStallError("frame wait stall")
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        with pytest.raises(ExportCancelled):
+            renderer._write_frames_gpu(
+                process,
+                job,
+                6,
+                tmp_path / "krok_subtitle_renderer.exe",
+                should_cancel,
+                None,
+                lambda _message: None,
+            )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    # 预耗 1 + 重启消耗 1 = 2，取消退回 1 → 应为 2；退 2 次会到 3。
+    assert budget.remaining == 2
+
+
+def test_gpu_restart_budget_recovers_gradually():
+    budget = native_export_module.GpuRestartBudget(3)
+
+    assert [budget.consume() for _ in range(4)] == [True, True, True, False]
+    assert budget.remaining == 0
+    assert budget.reward_healthy_streak() == 1
+    assert budget.reward_healthy_streak() == 2
+    assert budget.reward_healthy_streak() == 3
+    assert budget.reward_healthy_streak() == 3  # 上限封顶
+
+
+def test_gpu_restartable_error_classification():
+    assert native_export_module.gpu_export_error_is_restartable(
+        NativeRendererStallError("frame wait stall")
+    )
+    assert native_export_module.gpu_export_error_is_restartable(
+        NativeRendererError("DXGI_ERROR_DEVICE_REMOVED")
+    )
+    assert native_export_module.gpu_export_error_is_restartable(
+        NativeRendererError("native renderer response timed out after 180.0s")
+    )
+    assert native_export_module.gpu_export_error_is_restartable(
+        NativeRendererError(
+            "native renderer exited while waiting for 'gpu_frame_ready' "
+            "(returncode=3221225477, exit_hex=0xC0000409)"
+        )
+    )
+    assert native_export_module.gpu_export_error_is_restartable(
+        NativeRendererError(
+            "native renderer pipe write failed for 'gpu_render_frame' "
+            "(BrokenPipeError: [Errno 32])"
+        )
+    )
+    assert not native_export_module.gpu_export_error_is_restartable(
+        NativeRendererError("out of memory")
+    )
+
+
+def test_gpu_writer_restarts_sidecar_and_resumes_from_written_frame(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=600)
+    process = _CollectProcess()
+    logs: list[str] = []
+    progress: list[tuple[int, int]] = []
+    calls: list[tuple[int, int]] = []
+    written_blobs = [
+        b"a" * 8,
+        b"b" * 8,
+        b"c" * 8,
+        b"d" * 8,
+        b"e" * 8,
+        b"f" * 8,
+    ]
+
+    def fake_gpu_frames(*_args, **kwargs):
+        attempt = len(calls) + 1
+        calls.append((kwargs["total_frames"], kwargs["start_frame"]))
+        if attempt == 1:
+            yield written_blobs[0]
+            yield written_blobs[1]
+            raise NativeRendererStallError("frame wait stall")
+        if attempt == 2:
+            yield written_blobs[2]
+            yield written_blobs[3]
+            raise NativeRendererStallError("frame wait stall")
+        yield written_blobs[4]
+        yield written_blobs[5]
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        renderer._write_frames_gpu(
+            process,
+            job,
+            6,
+            tmp_path / "krok_subtitle_renderer.exe",
+            None,
+            lambda done, total: progress.append((done, total)),
+            logs.append,
+        )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert bytes(process.stdin.data) == b"".join(written_blobs)
+    # 重启从已写帧继续：剩余帧数与起始帧号逐次推进，不重渲、不跳帧。
+    assert calls == [(6, 0), (4, 2), (2, 4)]
+    assert progress == [(1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6)]
+    assert sum("第 1 次重试" in line for line in logs) == 1
+    assert any("从第 2 帧继续" in line for line in logs)
+    assert sum("第 2 次重试" in line for line in logs) == 1
+    assert any("本单共重试 2 次" in line for line in logs)
+    # 本单只写 6 帧，不足连续 30 帧，不恢复额度；只验证两次重启消耗。
+    assert budget.remaining == 1
+
+
+def test_gpu_max_restarts_per_export_defaults_and_override(monkeypatch):
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_MAX_RESTARTS_PER_EXPORT", raising=False)
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    assert native_export_module.gpu_max_restarts_per_export() == 6
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_MAX_RESTARTS_PER_EXPORT", "2")
+    assert native_export_module.gpu_max_restarts_per_export() == 2
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_MAX_RESTARTS_PER_EXPORT", "bad")
+    assert native_export_module.gpu_max_restarts_per_export() == 6
+
+
+def test_gpu_writer_stops_at_per_export_restart_cap(monkeypatch, tmp_path):
+    """边崩边补不能让单次导出无限续命；每单总重启次数有硬上限。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_MAX_RESTARTS_PER_EXPORT", "2")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=30, duration_ms=5000)
+    process = _CollectProcess()
+    logs: list[str] = []
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        yield b"a" * 8  # 每次先推进 1 帧，避免触发同一帧停滞保护
+        raise NativeRendererStallError("frame wait stall")
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        with pytest.raises(NativeRendererError, match="重启已达 2 次上限"):
+            renderer._write_frames_gpu(
+                process,
+                job,
+                100,
+                tmp_path / "krok_subtitle_renderer.exe",
+                None,
+                None,
+                logs.append,
+            )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert calls == 3  # 首次 + 2 次重启，第三次失效命中上限
+    assert any("重启已达 2 次上限" in line for line in logs)
+    assert budget.remaining == 1  # 3 - 2 次重启；每段 1 帧不足 30，无恢复
+
+
+def test_gpu_writer_restores_budget_after_30_consecutive_frames(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    assert budget.consume() is True  # 预耗 1，剩余 2
+    job = replace(_job(tmp_path), width=2, height=2, fps=30, duration_ms=1000)
+    process = _CollectProcess()
+    frames = [b"g" * 8 for _ in range(30)]
+    logs: list[str] = []
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        yield from frames
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        renderer._write_frames_gpu(
+            process,
+            job,
+            30,
+            tmp_path / "krok_subtitle_renderer.exe",
+            None,
+            None,
+            logs.append,
+        )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert bytes(process.stdin.data) == b"".join(frames)
+    assert budget.remaining == 3  # 连续 30 帧正常 → 恢复 1
+    assert any("连续渲染 30 帧" in line for line in logs)
+
+
+def test_gpu_writer_does_not_restore_budget_before_30_consecutive_frames(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    assert budget.consume() is True  # 预耗 1，剩余 2
+    job = replace(_job(tmp_path), width=2, height=2, fps=30, duration_ms=1000)
+    process = _CollectProcess()
+    logs: list[str] = []
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        for _ in range(29):
+            yield b"g" * 8
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        renderer._write_frames_gpu(
+            process,
+            job,
+            29,
+            tmp_path / "krok_subtitle_renderer.exe",
+            None,
+            None,
+            logs.append,
+        )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert budget.remaining == 2  # 29 帧还不够，不恢复
+    assert not any("连续渲染 30 帧" in line for line in logs)
+
+
+def test_gpu_writer_restart_resets_healthy_frame_streak(monkeypatch, tmp_path):
+    """失效前行 20 帧 + 重启后 10 帧，不按总数 30 帧恢复额度。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=30, duration_ms=2000)
+    process = _CollectProcess()
+    logs: list[str] = []
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            for _ in range(20):
+                yield b"a" * 8
+            raise NativeRendererStallError("frame wait stall")
+        for _ in range(10):
+            yield b"b" * 8
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        renderer._write_frames_gpu(
+            process,
+            job,
+            30,
+            tmp_path / "krok_subtitle_renderer.exe",
+            None,
+            None,
+            logs.append,
+        )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert calls == 2
+    assert budget.remaining == 2  # 3 - 1 次重启；没有连续 30 帧，不恢复
+    assert not any("连续渲染 30 帧" in line for line in logs)
+
+
+def test_gpu_writer_stops_retrying_after_budget_exhausted(monkeypatch, tmp_path):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "1")
+    native_export_module.reset_gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=600)
+    process = _CollectProcess()
+    logs: list[str] = []
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise NativeRendererStallError("frame wait stall")
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        with pytest.raises(NativeRendererStallError):
+            renderer._write_frames_gpu(
+                process,
+                job,
+                6,
+                tmp_path / "krok_subtitle_renderer.exe",
+                None,
+                None,
+                logs.append,
+            )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert calls == 2  # 首次 + 1 次重启
+    assert any("1 次重启额度已用完" in line for line in logs)
+
+
+def test_gpu_writer_stops_after_repeated_same_frame_stalls(monkeypatch, tmp_path):
+    """同一帧连续停滞 3 次是确定性失败，再多额度也不无限重开 sidecar。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "5")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=600)
+    process = _CollectProcess()
+    logs: list[str] = []
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise NativeRendererStallError("frame wait stall")
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        with pytest.raises(NativeRendererStallError):
+            renderer._write_frames_gpu(
+                process,
+                job,
+                6,
+                tmp_path / "krok_subtitle_renderer.exe",
+                None,
+                None,
+                logs.append,
+            )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert calls == 3  # 首次 + 2 次重启；第 3 次同帧停滞直接停
+    assert any("同一帧" in line for line in logs)
+    assert budget.remaining == 3  # 5 - 2 次重启（第 3 次未再消耗）
+
+
+def test_gpu_writer_restarts_after_sidecar_crash(monkeypatch, tmp_path):
+    """0xC0000409 / 0xC0000005 崩溃要重启 sidecar，而不是直接回退 CPU。"""
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=200)
+    process = _CollectProcess()
+    logs: list[str] = []
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise NativeRendererError(
+                "native renderer exited while waiting for 'gpu_frame_ready' "
+                "(returncode=3221225477, exit_hex=0xC0000409)"
+            )
+        yield b"a" * 8
+        yield b"b" * 8
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        renderer._write_frames_gpu(
+            process,
+            job,
+            2,
+            tmp_path / "krok_subtitle_renderer.exe",
+            None,
+            None,
+            logs.append,
+        )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert bytes(process.stdin.data) == b"a" * 8 + b"b" * 8
+    assert calls == 2
+    assert any("第 1 次重试" in line for line in logs)
+    assert budget.remaining == 2
+
+
+def test_gpu_writer_does_not_retry_non_restartable_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "3")
+    native_export_module.reset_gpu_restart_budget()
+    budget = native_export_module.gpu_restart_budget()
+    job = replace(_job(tmp_path), width=2, height=2, fps=10, duration_ms=600)
+    process = _CollectProcess()
+    calls = 0
+
+    def fake_gpu_frames(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise NativeRendererError("out of memory while allocating 4K texture")
+
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fake_gpu_frames)
+    try:
+        with pytest.raises(NativeRendererError, match="out of memory"):
+            renderer._write_frames_gpu(
+                process,
+                job,
+                6,
+                tmp_path / "krok_subtitle_renderer.exe",
+                None,
+                None,
+                lambda _message: None,
+            )
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert calls == 1
+    assert budget.remaining == 3
+
+
+def test_gpu_stall_exhausts_restarts_then_falls_back_to_cpu(monkeypatch, tmp_path):
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_RESTART_ATTEMPTS", "1")
+    native_export_module.reset_gpu_restart_budget()
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=2,
+        fps=2,
+        duration_ms=1000,
+        gpu_export_enabled=True,
+    )
+    gpu_path = tmp_path / "krok_subtitle_renderer.exe"
+    gpu_path.write_bytes(b"exe")
+    processes = [_FakeRenderProcess(job.output_path), _FakeRenderProcess(job.output_path)]
+    gpu_calls: list[tuple[int | None, int | None]] = []
+    painter_writes: list[tuple[bool, int, int]] = []
+
+    def fail_gpu(*_args, **kwargs):
+        gpu_calls.append((kwargs.get("total_frames"), kwargs.get("start_frame")))
+        raise NativeRendererStallError("frame wait stall")
+
+    def fake_painter(process, active_job, strip_top, render_h, total, should_cancel, on_progress):
+        painter_writes.append((active_job.gpu_export_enabled, strip_top, render_h))
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda *_a, **_k: "ffmpeg")
+    monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: gpu_path)
+    monkeypatch.setattr(renderer, "iter_gpu_rgba_frames", fail_gpu)
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_painter)
+    monkeypatch.setattr(
+        renderer.subprocess, "Popen", lambda *_a, **_k: processes.pop(0)
+    )
+    logs: list[str] = []
+    try:
+        assert render_subtitle_video(job, logger=logs.append) == job.output_path
+    finally:
+        native_export_module.reset_gpu_restart_budget()
+
+    assert gpu_calls == [(2, 0), (2, 0)]  # 首次 + 1 次重启（都在第 0 帧停滞）
+    assert painter_writes == [(False, 0, 2)]
+    assert any("1 次重启额度已用完" in line for line in logs)
+    assert any("已自动回退到 CPU Painter" in line for line in logs)
 
 
 def test_gpu_export_runtime_failure_restarts_with_painter(monkeypatch, tmp_path):
@@ -2187,7 +2842,17 @@ def test_multiprocess_writer_releases_blob_before_next_dispatch(monkeypatch, tmp
         alive[index] = weakref.ref(blob)
         return blob
 
-    def fake_iter(pool, task_fn, tasks, *, window, stall_timeout_s, should_cancel=None):
+    def fake_iter(
+        pool,
+        task_fn,
+        tasks,
+        *,
+        window,
+        stall_timeout_s,
+        should_cancel=None,
+        monitor=None,
+        progress_counter=None,
+    ):
         for index, _task in enumerate(tasks):
             if index:
                 gc.collect()

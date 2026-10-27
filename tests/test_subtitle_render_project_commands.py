@@ -125,6 +125,38 @@ def test_project_command_controller_keeps_named_path_and_cancel(tmp_path: Path) 
     assert calls[0][2] == str(current)
 
 
+def test_save_default_escape_a_deleted_source_directory(tmp_path: Path) -> None:
+    """素材所在目录已被删除时，默认另存位置要退到还存在的目录。"""
+    controller = ProjectCommandController("project filter", ".yurika")
+    calls: list[tuple] = []
+
+    controller.choose_save_path(
+        None,
+        current_project_path=None,
+        subtitle_path=tmp_path / "deleted-folder" / "lyrics.sug",
+        video_path=None,
+        choose_file=lambda *args: (calls.append(args), ("", ""))[1],
+    )
+
+    assert calls[0][2] == str(tmp_path / "lyrics.yurika")
+
+
+def test_save_as_escape_a_deleted_project_directory(tmp_path: Path) -> None:
+    """工程原路径所在目录没了：保留文件名，把目录换到最近的现存位置。"""
+    controller = ProjectCommandController("project filter", ".yurika")
+    calls: list[tuple] = []
+
+    controller.choose_save_path(
+        None,
+        current_project_path=tmp_path / "removed-drive" / "song.yurika",
+        subtitle_path=None,
+        video_path=None,
+        choose_file=lambda *args: (calls.append(args), ("", ""))[1],
+    )
+
+    assert calls[0][2] == str(tmp_path / "song.yurika")
+
+
 def test_project_save_preflight_skips_inspection_for_a_new_path(tmp_path: Path) -> None:
     inspections: list[Path] = []
     result = ProjectCommandController.preflight_save(

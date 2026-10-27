@@ -25,6 +25,9 @@ from typing import Any, Callable
 import numpy as np
 
 from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
+from krok_helper.subtitle_render.engine.export.progress_watchdog import (
+    sidecar_send_stall_grace_s,
+)
 from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.domain.models import Style
@@ -111,6 +114,14 @@ def _sidecar_subprocess_kwargs(platform: str | None = None) -> dict[str, Any]:
 
 class NativeRendererError(RuntimeError):
     """Raised when the native sidecar reports an error or exits unexpectedly."""
+
+
+class NativeRendererStallError(NativeRendererError):
+    """Sidecar stopped making progress (frame wait / request write / heartbeat).
+
+    与普通协议错误区分：这类失败通常是 GPU 进程楔死，重启 sidecar 并从
+    已写帧继续有机会恢复；只有重启额度耗尽才应回退 CPU。
+    """
 
 
 class NativeQueueFullError(NativeRendererError):
@@ -884,6 +895,15 @@ class NativeRendererProcess:
         self._stdout_noise_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pipe_threads: list[threading.Thread] = []
+        # 请求写出（正常微秒级）的存活看门狗：sidecar 主循环楔死时管道会写满，
+        # 这里从旁路 abort 掉进程，让阻塞的 write/read 立即返回并走 CPU 回退。
+        self._send_state_lock = threading.Lock()
+        self._send_started_monotonic = 0.0
+        self._send_stall_reported = False
+        self._aborted = False
+        self._stall_aborted = False
+        self._supervisor_stop = threading.Event()
+        self._supervisor: threading.Thread | None = None
 
     @property
     def is_running(self) -> bool:
@@ -898,6 +918,14 @@ class NativeRendererProcess:
         """
         return self._progress_snapshot
 
+    def last_heartbeat_age_s(self) -> float | None:
+        """Seconds since the last sidecar progress heartbeat (None = never)."""
+
+        last = self._last_heartbeat_monotonic
+        if not last:
+            return None
+        return max(time.monotonic() - last, 0.0)
+
     @property
     def process_id(self) -> int | None:
         """Return the live sidecar PID for diagnostics and stability probes."""
@@ -906,6 +934,15 @@ class NativeRendererProcess:
     def start(self) -> dict[str, Any]:
         if self.is_running:
             return {"ok": True, "event": "already_running"}
+        if self._aborted:
+            raise NativeRendererError(
+                "native renderer was aborted; start() refuses to resurrect it"
+            )
+        with self._send_state_lock:
+            self._aborted = False
+            self._stall_aborted = False
+            self._send_stall_reported = False
+            self._send_started_monotonic = 0.0
         env = _sidecar_environment(self.executable_path)
         self._process = subprocess.Popen(
             [str(self.executable_path)],
@@ -920,17 +957,116 @@ class NativeRendererProcess:
             **_sidecar_subprocess_kwargs(),
         )
         self._start_pipe_threads(self._process)
-        ready = self._read_response(
-            timeout_s=self.startup_timeout_s,
-            waiting_for="ready",
-        )
+        self._start_supervisor()
+        try:
+            ready = self._read_response(
+                timeout_s=self.startup_timeout_s,
+                waiting_for="ready",
+            )
+        except BaseException:
+            self._stop_supervisor()
+            raise
         if not ready.get("ok"):
             raise NativeRendererError(f"native renderer did not become ready: {ready}")
         return ready
 
+    def _start_supervisor(self) -> None:
+        stop = threading.Event()
+        self._supervisor_stop = stop
+        thread = threading.Thread(
+            target=self._supervisor_loop,
+            args=(stop,),
+            name="native-renderer-send-watchdog",
+            daemon=True,
+        )
+        self._supervisor = thread
+        thread.start()
+
+    def _stop_supervisor(self) -> None:
+        stop = self._supervisor_stop
+        stop.set()
+        thread = self._supervisor
+        self._supervisor = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+    def _supervisor_loop(self, stop: threading.Event) -> None:
+        """Abort a sidecar whose JSON request cannot even be written out.
+
+        JSON requests are tiny (a few hundred bytes); the only way one can stay
+        in flight for a long time is a wedged sidecar that no longer drains its
+        stdin.  Aborting unblocks the writer and lets the export retry/fall back.
+        """
+
+        grace_s = sidecar_send_stall_grace_s()
+        while not stop.wait(1.0):
+            process = self._process
+            if process is None or process.poll() is not None:
+                return
+            age_s = self.send_in_flight_age_s()
+            if age_s < grace_s:
+                continue
+            with self._send_state_lock:
+                if self._send_stall_reported:
+                    return
+                self._send_stall_reported = True
+            _log.warning(
+                "native renderer request write has been blocked for %.0fs; "
+                "aborting sidecar so the export can restart it or fall back",
+                age_s,
+            )
+            self.abort(
+                reason=f"request write stalled {age_s:.0f}s", stalled=True
+            )
+            return
+
+    def send_in_flight_age_s(self) -> float:
+        """How long the current JSON request write has been blocking (0 = idle)."""
+
+        with self._send_state_lock:
+            started = self._send_started_monotonic
+        if not started:
+            return 0.0
+        return max(time.monotonic() - started, 0.0)
+
+    @property
+    def stall_aborted(self) -> bool:
+        """Whether this sidecar was stopped by a liveness watchdog (restartable)."""
+
+        with self._send_state_lock:
+            return bool(self._stall_aborted)
+
+    def abort(self, *, reason: str = "", stalled: bool = False) -> None:
+        """Idempotent hard stop used by export watchdogs / user cancellation."""
+
+        with self._send_state_lock:
+            if self._aborted:
+                return
+            self._aborted = True
+            self._stall_aborted = bool(stalled)
+        _log.warning("native renderer abort: %s", reason or "requested")
+        process = self._process
+        if process is None:
+            self._stop_supervisor()
+            return
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1.0)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        try:
+            process.kill()
+        except OSError:
+            pass
+
     def close(self) -> None:
         process = self._process
         if process is None:
+            self._stop_supervisor()
             return
         pipe_threads = list(self._pipe_threads)
         try:
@@ -949,6 +1085,7 @@ class NativeRendererProcess:
                         pass
         finally:
             self._await_exit(process)
+            self._stop_supervisor()
             self._process = None
             for thread in pipe_threads:
                 if thread is not threading.current_thread():
@@ -1566,6 +1703,17 @@ class NativeRendererProcess:
             process = self._require_process()
             assert process.stdin is not None
             message = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+            with self._send_state_lock:
+                if self._aborted:
+                    if self._stall_aborted:
+                        raise NativeRendererStallError(
+                            "native renderer was stopped by the liveness watchdog; "
+                            "command not sent"
+                        )
+                    raise NativeRendererError(
+                        "native renderer was aborted; command not sent"
+                    )
+                self._send_started_monotonic = time.monotonic()
             try:
                 process.stdin.write(message)
                 process.stdin.flush()
@@ -1573,11 +1721,19 @@ class NativeRendererProcess:
                 # Windows can report EINVAL instead of BrokenPipeError after
                 # the sidecar exits. Preserve the actual failing operation and
                 # process status, and use the recoverable protocol error type.
-                raise NativeRendererError(
+                with self._send_state_lock:
+                    stalled = bool(self._stall_aborted)
+                error_type = (
+                    NativeRendererStallError if stalled else NativeRendererError
+                )
+                raise error_type(
                     f"native renderer pipe write failed for {payload.get('cmd')!r} "
                     f"({type(exc).__name__}: {exc}); "
                     + self._format_exit_error(process, waiting_for="pipe write")
                 ) from exc
+            finally:
+                with self._send_state_lock:
+                    self._send_started_monotonic = 0.0
 
     def _read_response(
         self,
@@ -1590,7 +1746,12 @@ class NativeRendererProcess:
         )
         if payload is None:
             process = self._current_process()
-            raise NativeRendererError(
+            error_type = (
+                NativeRendererStallError
+                if self.stall_aborted
+                else NativeRendererError
+            )
+            raise error_type(
                 self._format_timeout_error(
                     process,
                     timeout_s=self._resolved_timeout(timeout_s),
@@ -1619,11 +1780,21 @@ class NativeRendererProcess:
                 return None
 
             if line is None:
-                raise NativeRendererError(
+                error_type = (
+                    NativeRendererStallError
+                    if self.stall_aborted
+                    else NativeRendererError
+                )
+                raise error_type(
                     self._format_exit_error(process, waiting_for=waiting_for)
                 )
             if isinstance(line, Exception):
-                raise NativeRendererError(
+                error_type = (
+                    NativeRendererStallError
+                    if self.stall_aborted
+                    else NativeRendererError
+                )
+                raise error_type(
                     f"native renderer stdout read failed ({type(line).__name__}: {line}); "
                     + self._format_exit_error(process, waiting_for=waiting_for)
                 ) from line
@@ -1781,7 +1952,12 @@ class NativeRendererProcess:
         if self._process is None:
             raise NativeRendererError("native renderer process is not running")
         if not self.is_running:
-            raise NativeRendererError(
+            error_type = (
+                NativeRendererStallError
+                if self.stall_aborted
+                else NativeRendererError
+            )
+            raise error_type(
                 self._format_exit_error(self._process, waiting_for="command write")
             )
         return self._process

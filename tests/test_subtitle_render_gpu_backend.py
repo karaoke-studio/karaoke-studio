@@ -13552,6 +13552,50 @@ def test_gpu_export_pipeline_matches_serial_frames(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_export_resume_from_frame_matches_uninterrupted(monkeypatch) -> None:
+    """A restart at frame k must splice byte-identical frames into the stream."""
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine.export.native_export import (
+        iter_gpu_rgba_frames,
+    )
+
+    track = _g1_track()
+    style = _g1_style(
+        decoration_kind="glow",
+        glow_before_radius_px=6,
+        glow_after_radius_px=6,
+        glow_concentration_level=1,
+    )
+    width, height, fps, total = 320, 180, 30, 8
+    resume_at = 3
+
+    def render(*, total_frames: int, start_frame: int) -> list[bytes]:
+        return list(
+            iter_gpu_rgba_frames(
+                track,
+                style,
+                width=width,
+                height=height,
+                fps=fps,
+                total_frames=total_frames,
+                start_frame=start_frame,
+                renderer_path=_renderer_path(),
+                force_warp=True,
+            )
+        )
+
+    reference = render(total_frames=total, start_frame=0)
+    first = render(total_frames=resume_at, start_frame=0)
+    second = render(total_frames=total - resume_at, start_frame=resume_at)
+
+    assert len(reference) == total
+    assert len(first) == resume_at
+    assert len(second) == total - resume_at
+    assert first + second == reference
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_negative_margins_move_like_painter(monkeypatch) -> None:
     """Negative margins remain effective and consistent across both backends."""
 

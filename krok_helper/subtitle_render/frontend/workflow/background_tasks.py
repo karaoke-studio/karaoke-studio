@@ -12,6 +12,11 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal
 from krok_helper.errors import ExportCancelled
 from krok_helper.ffmpeg import probe_media, terminate_process
 from krok_helper.models import MediaInfo
+from krok_helper.subtitle_render.engine.export.progress_watchdog import (
+    ExportProgressMonitor,
+    clear_active_export_monitor,
+    set_active_export_monitor,
+)
 from krok_helper.subtitle_render.engine.export.render_job import RenderJob
 from krok_helper.subtitle_render.engine.renderer import render_subtitle_video
 from krok_helper.subtitle_render.project.store import save_recovery_project
@@ -149,6 +154,13 @@ class _RenderWorker(QObject):
             worker_log.info("字幕视频导出: %s", message)
             self.logMessage.emit(message)
 
+        # 心跳/看门狗：导出期间每 ~10 秒一条批次状态（阶段、帧数、最近吞吐、
+        # ffmpeg -progress、sidecar 心跳），真停滞时才自动修复；导出结束先
+        # 停掉它再发终态信号，避免心跳把「导出失败/已停止」文案覆盖掉。
+        monitor = ExportProgressMonitor(logger=emit_log)
+        set_active_export_monitor(monitor)
+        monitor.start()
+        outcome: tuple[str, object] | None = None
         try:
             output = render_subtitle_video(
                 self._job,
@@ -160,16 +172,28 @@ class _RenderWorker(QObject):
                 preview_image_path=self._preview_image_path,
                 preview_width=self._preview_width,
             )
+            outcome = ("finished", output)
         except ExportCancelled as exc:
             worker_log.info("字幕视频导出取消: %s", exc)
-            self.cancelled.emit(str(exc))
-            return
+            outcome = ("cancelled", str(exc))
         except Exception as exc:  # noqa: BLE001
             worker_log.exception("字幕视频导出失败")
-            self.failed.emit(str(exc))
+            outcome = ("failed", str(exc))
+        finally:
+            monitor.stop()
+            clear_active_export_monitor(monitor)
+
+        if outcome is None:  # pragma: no cover - defensive; try covers all paths
+            outcome = ("failed", "导出未正常结束")
+        kind, payload = outcome
+        if kind == "finished":
+            worker_log.info("字幕视频导出完成 output=%s", payload)
+            self.finished.emit(payload)
             return
-        worker_log.info("字幕视频导出完成 output=%s", output)
-        self.finished.emit(output)
+        if kind == "cancelled":
+            self.cancelled.emit(str(payload))
+            return
+        self.failed.emit(str(payload))
 
     def cancel(self) -> None:
         self._cancel_requested = True
