@@ -12235,3 +12235,34 @@ def test_line_band_dynamic_notes_switch_is_staff_only():
     panel._line_band_preset_combo.setCurrentIndex(staff_index)
     assert emitted[-1].line_band_dynamic_notes_enabled is True
     panel.deleteLater()
+
+
+def test_line_band_image_size_follows_static_variant(qapp, tmp_path, monkeypatch):
+    """端点尺寸要按当前生效素材读取（关闭动态音符后是静态变体）。"""
+    from krok_helper.subtitle_render.frontend.properties import (
+        property_panel as panel_module,
+    )
+
+    fake_static = tmp_path / "fake_staff_static.png"
+    image = QImage(320, 48, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(0, 0, 0, 0))
+    assert image.save(str(fake_static))
+
+    panel = PropertyPanel()
+    panel.set_style(Style(
+        line_band_enabled=True,
+        line_band_image="preset:staff_scroll",
+        line_band_dynamic_notes_enabled=False,
+    ))
+
+    calls: list[tuple[str, bool]] = []
+
+    def fake_resolve(image_spec, *, dynamic_notes_enabled=True):
+        calls.append((image_spec, bool(dynamic_notes_enabled)))
+        return fake_static
+
+    monkeypatch.setattr(panel_module, "resolve_band_render_image", fake_resolve)
+    panel._line_band_size_cache = {}
+    assert panel._line_band_image_size() == (320, 48)
+    assert calls == [("preset:staff_scroll", False)]
+    panel.deleteLater()

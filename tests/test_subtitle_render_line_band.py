@@ -184,6 +184,32 @@ def test_render_ir_hands_gpu_the_static_band_variant(qapp):
     )
 
 
+def test_style_patch_ir_switches_between_static_and_animated_band(qapp):
+    """GPU style patch（sidecar 已运行）也要在开关切换时换素材。"""
+    from krok_helper.subtitle_render.engine.render.render_ir import (
+        build_style_patch_ir,
+    )
+
+    for enabled, expected in (
+        (False, "staff_scroll_static.png"),
+        (True, "staff_scroll.webp"),
+    ):
+        ir = build_style_patch_ir(
+            _track(),
+            _style(
+                line_band_image="preset:staff_scroll",
+                line_band_dynamic_notes_enabled=enabled,
+            ),
+            width=640,
+            height=360,
+            fps=60,
+        )
+        assert str(ir["style"]["line_band_image"]).endswith(expected)
+        assert str(ir["style"]["line_band_lines_image"]).endswith(
+            "staff_scroll_lines.png"
+        )
+
+
 def test_missing_image_resolves_to_no_spec(tmp_path):
     missing = tmp_path / "nope.png"
     assert band_spec(_style(line_band_image=str(missing))) is None

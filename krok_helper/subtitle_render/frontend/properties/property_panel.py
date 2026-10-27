@@ -75,6 +75,7 @@ from krok_helper.subtitle_render.domain.background import BackgroundSource
 from krok_helper.subtitle_render.domain.band_presets import (
     band_preset,
     preset_id_for_image,
+    resolve_band_render_image,
 )
 from krok_helper.subtitle_render.frontend.properties.band_preview_dialog import (
     real_band_pixmap,
@@ -5952,10 +5953,16 @@ class PropertyPanel(QWidget):
             width2_spin.setEnabled(inherited or enabled)
 
     def _line_band_image_size(self) -> tuple[int, int]:
-        """当前带子素材的源像素尺寸（未知时返回 0,0）。"""
+        """当前生效素材的源像素尺寸（静态变体优先；未知时返回 0,0）。"""
         image = (self._style.line_band_image or "").strip()
-        preset = band_preset(preset_id_for_image(image) or "")
-        path = preset.path if preset is not None else Path(image) if image else None
+        # 与 band_spec 走同一套解析：关闭「中间动态音符」后端点滑条/裁剪
+        # 预览必须按静态变体的源尺寸计算，不能固定读动图素材。
+        path = resolve_band_render_image(
+            image,
+            dynamic_notes_enabled=bool(
+                getattr(self._style, "line_band_dynamic_notes_enabled", True)
+            ),
+        )
         cache = getattr(self, "_line_band_size_cache", None)
         if cache is None:
             cache = {}

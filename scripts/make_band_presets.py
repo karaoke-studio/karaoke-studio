@@ -510,6 +510,13 @@ def build_staff_scroll():
     """
     w, L, R = 1920, 190, 160
     commands = load_note_commands() or []
+    if not commands:
+        # 音符轮廓缺失时静态层/动图会只剩谱线，绝不能静默覆盖素材。
+        raise RuntimeError(
+            "staff_scroll: 找不到项目音符轮廓 "
+            "(krok_helper/subtitle_render/engine/render/effects/particles.py::"
+            "_note_commands())；拒绝生成空音符素材"
+        )
 
     # 谱线层：五线 + 终止双竖线。
     lines = new(w)
@@ -523,8 +530,14 @@ def build_staff_scroll():
     # 谱号层：高音谱号（运行时乘谱号色）。
     clef_layer = new(w)
     clef = clef_sprite(140, (255, 255, 255))
-    if clef is not None:
-        clef_layer.alpha_composite(clef, (10, 120 - clef.height // 2))
+    if clef is None:
+        # 缺 Segoe UI Symbol（或兼容字体）时 clef_sprite 返回 None；若继续
+        # 保存，会把全透明谱号层覆盖进仓库，成片里的谱号会永久消失。
+        raise RuntimeError(
+            "staff_scroll: 找不到可用的高音谱号字体（需要 Segoe UI Symbol "
+            "或 CLEF_FONTS 里的兼容字体）；拒绝生成空白谱号层"
+        )
+    clef_layer.alpha_composite(clef, (10, 120 - clef.height // 2))
     clef_layer = add_glow(clef_layer)
 
     # 素材本体（动图）：四个彩色音符 + 中段缓慢漂浮的小音符（用户的独有
@@ -585,6 +598,12 @@ def build_staff_scroll():
 
     # 静态变体：与每帧同源、同缩放，只是没有中段漂浮的小音符。
     static_frame = static.resize((w, H), Image.LANCZOS)
+    _require_non_empty_asset(static_frame, "staff_scroll_static")
+    if static_frame.crop((L, 0, w - R, H)).getbbox() is not None:
+        raise RuntimeError(
+            "staff_scroll: 静态层跨过了设计端点（中段应为全透明）；"
+            "请检查音符位置/大小，拒绝覆盖素材"
+        )
     return frames, L, R, lines, clef_layer, static_frame
 
 # --------------------------------------------------------- 2. minimal stars
@@ -916,6 +935,15 @@ def check_animated_asset(path, total_ms=None, expect_translucent=False):
                              % (path, sum(delays), total_ms))
 
 
+def _require_non_empty_asset(image, name):
+    """拒绝把空白层写进仓库（通常是缺字体/音符轮廓导致的静默失败）。"""
+    if image.getbbox() is None:
+        raise RuntimeError(
+            "%s 层是空白的（缺少字体或项目音符轮廓？），拒绝覆盖已提交素材"
+            % name
+        )
+
+
 def register(preset_id, label, builder, height_pct, tintable=False, default_tint=None,
              feather_px=0.0, animated=False, frame_ms=None):
     built = builder()
@@ -934,12 +962,15 @@ def register(preset_id, label, builder, height_pct, tintable=False, default_tint
         lines_name = ""
         static_name = ""
         if len(rest) >= 4:
+            _require_non_empty_asset(rest[2], preset_id + "_lines")
+            _require_non_empty_asset(rest[3], preset_id + "_clef")
             rest[2].save(str(ASSET_DIR / (preset_id + "_lines.png")))
             lines_name = preset_id + "_lines.png"
             rest[3].save(str(ASSET_DIR / (preset_id + "_clef.png")))
             clef_name = preset_id + "_clef.png"
             if len(rest) >= 5:
                 # 静态变体（五线谱）：去掉中段动态音符，供属性卡开关使用。
+                _require_non_empty_asset(rest[4], preset_id + "_static")
                 rest[4].save(str(ASSET_DIR / (preset_id + "_static.png")))
                 static_name = preset_id + "_static.png"
         if not static_name:
