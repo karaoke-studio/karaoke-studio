@@ -95,17 +95,20 @@ PARTICLE_MODULE_STYLE_FIELDS: frozenset[str] = frozenset(
         "fx_particle_color_layers",
         "anim_fx_color_layers",
         "scanline_effect_color_layers",
+        "fx_particle_speed_pct",
+        "anim_fx_speed_pct",
+        "scanline_effect_speed_pct",
     }
 )
 """粒子装饰模块的「改一次一直沿用」习惯字段（2026-10 用户口径）。
 
-粒子「取色层级」（仅实色 / +描边 / +装饰 / 全有）是跨工程的口味偏好，
-与指示灯/音量柱同口径：只经 ``_remember_style_preferences`` 的编辑差分
-写进应用默认样式，不随随手打开的工程经
-:func:`merge_common_style_preferences` 覆盖。唱字装饰 / 入退场 / 扫字线
-三类目标各有独立取色层级，分别记住。其余 ``fx_particle_*`` /
-``anim_fx_*`` / ``scanline_effect_color_*``（颜色模式/双色槽/角色来源）
-仍逐工程随行样式走，不进本集合。
+粒子「取色层级」（仅实色 / +描边 / +装饰 / 全有）与「速度调整」三类目标
+各自的滑条值都是跨工程的口味偏好，与指示灯/音量柱同口径：只经
+``_remember_style_preferences`` 的编辑差分写进应用默认样式，不随随手打开
+的工程经 :func:`merge_common_style_preferences` 覆盖。唱字装饰 / 入退场 /
+扫字线三类目标各有独立的取色层级与速度，分别记住。其余
+``fx_particle_*`` / ``anim_fx_*`` / ``scanline_effect_color_*``（颜色模式/
+双色槽/角色来源/尺寸/数量）仍逐工程随行样式走，不进本集合。
 """
 APP_STYLE_EXPLICIT_DEFAULT_FIELDS = (
     BUILTIN_SCHEME_STYLE_FIELDS

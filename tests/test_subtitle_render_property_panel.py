@@ -12236,10 +12236,10 @@ def test_line_band_dynamic_notes_switch_is_staff_only():
     assert check.isHidden()
     assert not check.isChecked()
 
-    # 重新选预设 = 回到预设默认外观：五线谱默认带中段动态音符。
+    # 重新选预设不重置中段动态音符开关（2026-10 用户口径）：沿用当前值。
     staff_index = panel._line_band_preset_combo.findData("preset:staff_scroll")
     panel._line_band_preset_combo.setCurrentIndex(staff_index)
-    assert emitted[-1].line_band_dynamic_notes_enabled is True
+    assert emitted[-1].line_band_dynamic_notes_enabled is False
     panel.deleteLater()
 
 

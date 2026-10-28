@@ -4813,8 +4813,8 @@ class PropertyPanel(QWidget):
             line_band_line_color=preset.default_line_color or "",
             line_band_clef_color=preset.default_clef_color or "",
             line_band_include_ruby=True,
-            # 选预设回到预设默认外观：五线谱先显示中段动态音符，需要时再关。
-            line_band_dynamic_notes_enabled=True,
+            # 中段动态音符开关不随选预设重置（2026-10 用户口径）：沿用当前
+            # 值，关掉的用户重选五线谱不必每次再关一遍。
         )
 
     def _choose_line_band_image(self) -> None:

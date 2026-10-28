@@ -244,3 +244,50 @@ def test_merge_common_style_preferences_skips_particle_layers() -> None:
     # 非习惯字段：跟随工程（merge 语义不变）。
     assert merged.fx_particle_color_mode == "follow_after"
     assert merged.fx_particle_count == 20
+
+
+def test_particle_speed_is_remembered(make_window) -> None:
+    """三类粒子的速度滑条改一次一直沿用（与取色层级同口径，2026-10）。"""
+    window = make_window()
+
+    _edit_style(
+        window,
+        fx_particle_speed_pct=300,
+        anim_fx_speed_pct=-200,
+        scanline_effect_speed_pct=500,
+    )
+
+    assert window._app_default_style.fx_particle_speed_pct == 300
+    assert window._app_default_style.anim_fx_speed_pct == -200
+    assert window._app_default_style.scanline_effect_speed_pct == 500
+
+
+def test_opening_another_project_does_not_reset_particle_speed(
+    make_window, settings
+) -> None:
+    """打开速度为 0% 的旧工程后落盘，记忆的速度不被冲回原速。"""
+    window = make_window()
+    _edit_style(window, fx_particle_speed_pct=250)
+    window._save_persisted_state()
+
+    window._style = replace(window._style, fx_particle_speed_pct=0)
+    window._save_persisted_state()
+
+    assert settings.data["style"]["fx_particle_speed_pct"] == 250
+    assert window._app_default_style.fx_particle_speed_pct == 250
+
+
+def test_merge_common_style_preferences_skips_particle_speed() -> None:
+    """纯函数口径：工程侧的速度不进应用默认样式（尺寸/数量照进）。"""
+    app_default = Style(fx_particle_speed_pct=300)
+    project = Style(
+        fx_particle_speed_pct=-1000,
+        fx_particle_size_em=0.8,
+        fx_particle_count=20,
+    )
+
+    merged = merge_common_style_preferences(app_default, project)
+
+    assert merged.fx_particle_speed_pct == 300
+    assert merged.fx_particle_size_em == 0.8
+    assert merged.fx_particle_count == 20
