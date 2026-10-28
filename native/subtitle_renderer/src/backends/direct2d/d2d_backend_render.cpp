@@ -8640,9 +8640,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         const float centerY = (
                             line->bounds.top + line->bounds.bottom
                         ) * 0.5f;
-                        // 屏幕 Y 轴向下：正值向上 = 减 Y（负下正上）。
+                        // 屏幕坐标 Y 轴向下：正值向下 = 加 Y
+                        // （2026-10 用户复验后改回屏幕自然方向）。
                         const float anchorY =
-                            centerY - style.scanlineImageOffsetY;
+                            centerY + style.scanlineImageOffsetY;
                         // 锚点量化（2 场景像素）：横向渐变的采样色随锋面
                         // 移动，量化后装饰缓存才不会逐帧重建。
                         const int quantX = static_cast<int>(

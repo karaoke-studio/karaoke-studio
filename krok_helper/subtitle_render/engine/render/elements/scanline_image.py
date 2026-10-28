@@ -607,8 +607,9 @@ def paint_scanline_image(
     if frame is None or frame.width() <= 0 or frame.height() <= 0:
         return False
     anchor_x = float(anchor_x) + float(params.image_offset_x_px)
-    # 屏幕 Y 轴向下：正值向上 = 减 Y（2026-10 用户口径：负下正上）。
-    anchor_y = float(anchor_y) - float(params.image_offset_y_px)
+    # 屏幕坐标 Y 轴向下：正值向下 = 加 Y（2026-10 用户复验后改回：
+    # 与屏幕自然方向一致，负上正下；仅垂直偏移，水平仍负左正右）。
+    anchor_y = float(anchor_y) + float(params.image_offset_y_px)
     scale = max(float(canvas_scale) * float(params.image_scale), 0.01)
     target_w = max(int(round(frame.width() * scale)), 1)
     target_h = max(int(round(frame.height() * scale)), 1)

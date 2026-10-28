@@ -440,8 +440,8 @@ def test_paint_scanline_image_centers_on_anchor_and_applies_offsets(
     cx2 = (box2[0] + box2[2]) / 2.0
     cy2 = (box2[1] + box2[3]) / 2.0
     assert cx2 == pytest.approx(170.0, abs=2.0)
-    # Y 正值向上（屏幕 Y 轴向下，+25 → 中心上移到 95）。
-    assert cy2 == pytest.approx(95.0, abs=2.0)
+    # Y 正值向下（屏幕坐标自然方向，+25 → 中心下移到 145）。
+    assert cy2 == pytest.approx(145.0, abs=2.0)
 
 
 def test_paint_scanline_image_scale_pct(tmp_path) -> None:
@@ -1004,13 +1004,13 @@ def test_gpu_scanline_image_visible_and_tracks_front(qapp, tmp_path) -> None:
             scanline_image_band_enabled=False,
         )
         utopia_frames = _render_gpu_frames(renderer, utopia, (500,))
-        # 上下偏移：+50 上移（720 画布上 50×720/1080≈33）。
-        up_style = _gpu_style(
+        # 上下偏移：+50 下移（720 画布上 50×720/1080≈33）。
+        down_style = _gpu_style(
             scanline_image_path=str(marker),
             scanline_image_band_enabled=False,
             scanline_image_offset_y_px=50,
         )
-        up_frames = _render_gpu_frames(renderer, up_style, (200,))
+        down_frames = _render_gpu_frames(renderer, down_style, (200,))
 
     assert _gpu_color_stats(baseline[0], "#FF3C3C")[0] == 0
     early_count, early_box = _gpu_color_stats(plain_frames[0], "#FF3C3C")
@@ -1026,12 +1026,12 @@ def test_gpu_scanline_image_visible_and_tracks_front(qapp, tmp_path) -> None:
     assert offset_box is not None
     offset_center = (offset_box[0] + offset_box[2]) / 2.0
     assert offset_center == pytest.approx(early_center + 40.0, abs=4.0)
-    # 上下偏移：+50 上移。
-    _u2, up_box = _gpu_color_stats(up_frames[0], "#FF3C3C")
-    assert up_box is not None and early_box is not None
-    up_cy = (up_box[1] + up_box[3]) / 2.0
+    # 上下偏移：+50 下移（屏幕坐标自然方向）。
+    _u2, down_box = _gpu_color_stats(down_frames[0], "#FF3C3C")
+    assert down_box is not None and early_box is not None
+    down_cy = (down_box[1] + down_box[3]) / 2.0
     base_cy = (early_box[1] + early_box[3]) / 2.0
-    assert up_cy == pytest.approx(base_cy - 33.0, abs=5.0)
+    assert down_cy == pytest.approx(base_cy + 33.0, abs=5.0)
     # utopia 逐字放大不影响图片层：包围盒尺寸一致（抗锯齿容差 3px）。
     _u_count, utopia_box = _gpu_color_stats(utopia_frames[0], "#FF3C3C")
     assert utopia_box is not None

@@ -1637,7 +1637,7 @@ class EffectsPropertyPageBuilder:
         host._scanline_image_offset_y_control = offset_control(
             "scanline_image_offset_y_px",
             "上下偏移",
-            "图片相对默认锚点的上下偏移：正值向上、负值向下、0 = 不偏移",
+            "图片相对默认锚点的上下偏移：正值向下、负值向上、0 = 不偏移",
         )
 
         def pct_control(field: str, label: str, lo: int, hi: int, tip: str):
