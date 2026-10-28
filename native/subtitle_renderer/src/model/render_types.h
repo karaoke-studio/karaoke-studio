@@ -697,8 +697,39 @@ struct TextStyle {
     float scanlineBrightness = 0.6f;
     float scanlineGlowRadius = 8.0f;
     // Scan-line shape: "band" draws the highlight band; "flame" / "bubble"
-    // replace it with a procedural fire / bubble column at the wipe front.
+    // replace it with a procedural fire / bubble column at the wipe front;
+    // "image" overlays a user image asset (see scanlineImage* below).
     std::string scanlineShape = "band";
+    // 自定义图片形态（scanlineShape == "image"）：素材绝对路径（Python 侧
+    // 已做「绝对路径 → 工程目录回退」解析，解析不到发空串=素材缺失，
+    // 渲染端回退普通高亮带）。(mtime, size) 失效签名同 litImage* 口径，
+    // 在 gpuSceneFromConfig 里用 QFileInfo 探测。
+    std::wstring scanlineImagePath;
+    std::uint64_t scanlineImageModifiedMs = 0;
+    std::uint64_t scanlineImageSize = 0;
+    // 是否同时绘制普通文字高亮带；素材缺失时渲染端恒回退绘制。
+    bool scanlineImageBandEnabled = true;
+    // 图片锚点（走字锋面 + 主文字垂直中心）偏移，场景像素；正右/上，负左/下。
+    float scanlineImageOffsetX = 0.0f;
+    float scanlineImageOffsetY = 0.0f;
+    // 取色层级（排列组合）：实色上色 / 描边 / 装饰，三个开关任意组合。
+    bool scanlineImageTint = false;
+    bool scanlineImageStroke = false;
+    bool scanlineImageDecor = false;
+    // 显示尺寸倍率（1.0 = 自然像素 × 画布高/1080）与上色强度（0~100，
+    // 部分强度按预乘混合保留原色，与 Python _tinted 同公式）。
+    float scanlineImageScale = 1.0f;
+    int scanlineImageTintStrength = 50;
+    // ``role`` 模式的装饰几何来自来源方案（Python 侧已物化成数值；-1 =
+    // 未下发，沿用行样式）。与 Painter scanline_image._decor_plan 同口径：
+    // 方案未显式指定的槽位按 0 处理（不继承全局），镜像 CPU 的取值。
+    float scanlineImageRoleStrokeWidth = -1.0f;
+    float scanlineImageRoleStroke2Width = -1.0f;
+    float scanlineImageRoleGlowRadius = -1.0f;
+    float scanlineImageRoleShadowOffsetX = -1.0f;
+    float scanlineImageRoleShadowOffsetY = -1.0f;
+    float scanlineImageRoleFontSize = -1.0f;
+    std::string scanlineImageRoleDecorationKind;
     // Whole-char zoom pulse easing order (0..5; 0 = linear).  Whether the
     // effect is active is a per-line flag (TextLine::zoomPulseEnabled).
     int zoomPulseCurveLevel = 1;

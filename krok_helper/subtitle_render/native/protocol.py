@@ -505,6 +505,8 @@ def gpu_unsupported_features(
         or style.reverse_karaoke_anim not in karaoke_effects
     ):
         reasons.append("karaoke_animation")
+    # 自定义图片扫字线形态（2026-10）已由 GPU sidecar 原生渲染（Qt 逐帧
+    # 解码 + 取色层级装饰，d2d_backend_render 的 image 分支），不回退。
     for source in sources:
         for line in source.lines:
             if line.animation_override is not None:

@@ -225,6 +225,29 @@ git submodule status
     冒烟的退出码当回归信号**（构造期断言仍可信）。若未来在真实平台复现，
     再按 §9 的销毁顺序思路深挖。
 
+13. **sidecar 的 d2d_fx / d2d_backend_internal / d2d_backend_render 禁止新增
+    Qt 头文件**——Qt 头（未定义 `QT_NO_KEYWORDS` 时）会把 `emit` / `slots` /
+    `signals` **关键字宏**带进编译单元，而这些文件里有既有的同名局部变量
+    （`const int emit = ...`、`const float slots = ...`），宏展开为空后声明
+    变成 `const int = ...`，在别人的老代码行上报 C2513，极具误导性（2026-10
+    扫字线图片形态首踩：在 d2d_fx.cpp 加 `#include <QImage>` 触发）。需要
+    图像像素时传原始预乘 BGRA 缓冲（参考 `scanlineImageCompositePixels` 的
+    裸指针 API），Qt 侧解码放在 d2d_backend_configure.cpp（它本来就含
+    `<QImage>`）。
+
+14. **sidecar 构建环境用错一次后，增量构建会复用坏 .obj 造成运行期崩溃**——
+    本机构建树（`build/native-renderer`）配置的是 **Community 版 MSVC 14.51**
+    （cl 绝对路径烙在 ninja 规则里），用 BuildTools 版 vcvars 起环境会导致
+    STL 头找不到而部分 TU 编译失败；换回正确环境后**增量构建只重编失败的
+    TU，之前用错误 STL 头编出的 .obj 被留用**，混链出的 exe 在
+    `gpu_configure` 100% 崩 0xC0000005（2026-10 首踩，曾被误判为源码缺陷）。
+    预防：构建 sidecar 统一用 `buildull_clean_rebuild.bat`（Community
+    vcvars + `--target clean` + 全量重建）；凡怀疑构建环境出过错，先
+    `cmake --build build
+ative-renderer --target clean` 全清再编，不要相信
+    增量产物。定位此类崩溃可用「录制 stdin 协议直接重放到 exe」的办法
+    （绕开 pytest/Python 变量；`buildeplay_check.py` 参考实现）。
+
 ---
 
 ## 9. 字幕渲染模块

@@ -29,6 +29,7 @@ from krok_helper.subtitle_render.domain.models import (
     migrate_title_char_role_labels,
     migrate_title_guide_symbols,
     normalize_glow_concentration_level,
+    normalize_scanline_image_layers,
     rescale_scheme_font_sizes,
 )
 from krok_helper.subtitle_render.domain.timing import (
@@ -399,6 +400,40 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
         normalized["scanline_shape"] = normalize_scanline_shape(
             normalized["scanline_shape"]
         )
+    if "scanline_image_path" in normalized:
+        normalized["scanline_image_path"] = (
+            str(normalized["scanline_image_path"])
+            if isinstance(normalized["scanline_image_path"], str)
+            else ""
+        )
+    if "scanline_image_band_enabled" in normalized:
+        normalized["scanline_image_band_enabled"] = bool(
+            normalized["scanline_image_band_enabled"]
+        )
+    for _offset_field in ("scanline_image_offset_x_px",
+                          "scanline_image_offset_y_px"):
+        if _offset_field in normalized:
+            try:
+                _offset = int(normalized[_offset_field])
+            except (TypeError, ValueError):
+                _offset = 0
+            normalized[_offset_field] = max(-2000, min(2000, _offset))
+    if "scanline_image_color_layers" in normalized:
+        normalized["scanline_image_color_layers"] = (
+            normalize_scanline_image_layers(
+                normalized["scanline_image_color_layers"]
+            )
+        )
+    for _pct_field, _lo, _hi in (
+        ("scanline_image_scale_pct", 10, 400),
+        ("scanline_image_tint_strength_pct", 0, 100),
+    ):
+        if _pct_field in normalized:
+            try:
+                _pct = int(normalized[_pct_field])
+            except (TypeError, ValueError):
+                _pct = 100 if "scale" in _pct_field else 50
+            normalized[_pct_field] = max(_lo, min(_hi, _pct))
     if "fx_particle_color_mode" in normalized:
         normalized["fx_particle_color_mode"] = normalize_particle_color_mode(
             normalized["fx_particle_color_mode"]
@@ -620,7 +655,7 @@ def normalize_scanline_effect(value: object) -> str:
 
 
 def normalize_scanline_shape(value: object) -> str:
-    if value in {"band", "flame", "bubble"}:
+    if value in {"band", "flame", "bubble", "image"}:
         return str(value)
     return "band"
 

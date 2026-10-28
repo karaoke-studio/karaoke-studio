@@ -401,9 +401,33 @@ struct ResolvedStyle {
     QString scanlineColor = QStringLiteral("#FFFFFF");
     int scanlineBrightnessPct = 60;
     int scanlineGlowPx = 8;
-    // 扫字线形态（"band" / "flame" / "bubble"）：烈焰棒/水泡替换普通
-    // 高亮带，由渲染端生成程序化柱状图样；缺省 band 兼容旧 IR。
+    // 扫字线形态（"band" / "flame" / "bubble" / "image"）：烈焰棒/水泡替换
+    // 普通高亮带，由渲染端生成程序化柱状图样；自定义图片在锋面叠加用户
+    // 素材（见下方 scanline_image_* 字段组）；缺省 band 兼容旧 IR。
     QString scanlineShape = QStringLiteral("band");
+    // 自定义图片形态：素材绝对路径（Python 侧已做「绝对路径 → 工程目录
+    // 回退」解析，解析不到发空串 = 素材缺失，渲染端回退普通高亮带）。
+    QString scanlineImagePath;
+    // 是否同时绘制普通文字高亮带（默认 true）；素材缺失时恒回退绘制。
+    bool scanlineImageBandEnabled = true;
+    // 图片锚点偏移（输出像素，投影按 dpr 缩放）：正右/上，负左/下。
+    int scanlineImageOffsetXPx = 0;
+    int scanlineImageOffsetYPx = 0;
+    // 取色层级 token 串（"solid,stroke,decor" 任意子集，逗号分隔）。
+    QString scanlineImageColorLayers;
+    // 显示尺寸百分比（10~400，100 = 自然像素 × 画布高/1080）与实色
+    // 上色强度（0~100，默认 50：100 = 纯目标色剪影，部分强度保留原色）。
+    int scanlineImageScalePct = 100;
+    int scanlineImageTintStrengthPct = 50;
+    // ``role`` 模式装饰几何（Python 已按「方案值，None 继承全局」合并并
+    // 换算成输出像素；-1 = 未下发，渲染端沿用行样式）。
+    double scanlineImageRoleStrokeWidthPx = -1.0;
+    double scanlineImageRoleStroke2WidthPx = -1.0;
+    double scanlineImageRoleFontSizePx = -1.0;
+    double scanlineImageRoleGlowRadiusPx = -1.0;
+    double scanlineImageRoleShadowOffsetXPx = -1.0;
+    double scanlineImageRoleShadowOffsetYPx = -1.0;
+    QString scanlineImageRoleDecorationKind;
     // ``role`` 模式：``scanlineRoleName`` 指向来源的「走字后-主文字」填充
     // （customStyleSchemes 解析）。整条带（含描边）都用这一份填充重绘。
     // 名字解析失败时 scanlineMode 归一回 ``color``。

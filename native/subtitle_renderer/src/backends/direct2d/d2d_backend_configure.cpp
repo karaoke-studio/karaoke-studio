@@ -654,6 +654,85 @@ void Direct2DGpuBackend::ensureLineBandEffects(ID2D1Bitmap1 *source, float scale
     }
 }
 
+void Direct2DGpuBackend::ensureScanlineImage() {
+    // 自定义图片扫字线素材：与 ensureLineBandImage 同生命周期（仅
+    // configure 的两个入口调用，渲染期只读）。动图用 **Qt 解码器**逐帧
+    // 解码（与 CPU 预览/导出同一 QImageReader：GIF 的 dispose/透明索引
+    // 与动图 WebP 都与 CPU 一致；WIC 会丢 GIF 透明索引）。
+    const TextStyle &style = impl_->scene.style;
+    Impl::CachedScanlineImage &cached = impl_->scanlineImage;
+    if (style.scanlineShape != "image" || style.scanlineImagePath.empty()) {
+        cached = Impl::CachedScanlineImage{};
+        return;
+    }
+    if (cached.valid && cached.path == style.scanlineImagePath
+        && cached.modifiedMs == style.scanlineImageModifiedMs
+        && cached.size == style.scanlineImageSize) {
+        return;
+    }
+    cached = Impl::CachedScanlineImage{};
+    cached.path = style.scanlineImagePath;
+    cached.modifiedMs = style.scanlineImageModifiedMs;
+    cached.size = style.scanlineImageSize;
+    ID2D1DeviceContext *context = device_.d2dContext();
+    QImageReader reader(QString::fromStdWString(cached.path));
+    // 不依赖 imageCount（部分格式/后端返回 -1）：顺序读到空为止；上限与
+    // 行背景带同保险丝（不截断用户素材，仅拦损坏文件）。
+    const D2D1_BITMAP_PROPERTIES1 frameProperties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    for (int index = 0; index < BAND_ANIM_MAX_FRAMES; ++index) {
+        QImage frame = reader.read();
+        if (frame.isNull()) {
+            break;
+        }
+        QImage premultiplied = frame.convertToFormat(
+            QImage::Format_ARGB32_Premultiplied
+        );
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        if (FAILED(context->CreateBitmap(
+                D2D1::SizeU(
+                    static_cast<UINT32>(premultiplied.width()),
+                    static_cast<UINT32>(premultiplied.height())
+                ),
+                premultiplied.constBits(),
+                static_cast<UINT32>(premultiplied.bytesPerLine()),
+                &frameProperties,
+                bitmap.ReleaseAndGetAddressOf()))) {
+            break;
+        }
+        cached.frames.push_back(std::move(bitmap));
+        const std::uint8_t *bits = premultiplied.constBits();
+        cached.sourceFrames.emplace_back(
+            bits, bits + static_cast<std::size_t>(
+                       premultiplied.bytesPerLine()
+                   ) * static_cast<std::size_t>(premultiplied.height())
+        );
+        cached.sourceStrides.push_back(premultiplied.bytesPerLine());
+        cached.delaysMs.push_back(std::max(reader.nextImageDelay(), 10));
+    }
+    if (cached.frames.size() <= 1) {
+        // 静态图：单帧退化为 staticBitmap（sourceFrames[0] 供装饰计算）。
+        if (!cached.frames.empty()) {
+            cached.staticBitmap = cached.frames.front();
+            cached.frames.clear();
+            cached.delaysMs.clear();
+        }
+    }
+    cached.valid = cached.staticBitmap != nullptr || !cached.frames.empty();
+    if (!cached.valid) {
+        // 素材缺失/解码失败：保留空缓存；渲染端按「素材缺失」回退普通
+        // 高亮带（与 Painter suppress_strip 同口径）。
+        cached = Impl::CachedScanlineImage{};
+    }
+}
+
 void Direct2DGpuBackend::configure(const RenderScene &scene) {
     if (scene.width <= 0 || scene.height <= 0 || scene.width > 8192 || scene.height > 8192) {
         throw BackendError("GPU scene dimensions must be within 1..8192");
@@ -671,6 +750,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         // 帧仓登记的像素是旧色画的，随画笔一起作废（纹理同尺寸可复用）。
         clearFrameStoreRegistrations();
         ensureLineBandImage();
+        ensureScanlineImage();
         // 仅改色也会换掉 glow 画笔颜色：稳态模糊缓存条目按旧色烘焙，作废。
         impl_->glowBlurCache.clear();
         for (std::size_t index = 0; index < impl_->lines.size(); ++index) {
@@ -749,6 +829,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     // 全量重建（含同尺寸）：行集/几何全部换血，仓里任何登记帧都已过期。
     clearFrameStoreRegistrations();
     ensureLineBandImage();
+    ensureScanlineImage();
     // 稳态 glow 模糊缓存随场景整体失效：行向量即将清空重建，缓存条目
     // 持有的行指针全部悬空。
     impl_->glowBlurCache.clear();
@@ -3443,7 +3524,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         if (!lineHasBounds) {
             cached.bounds = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
         }
-        impl_->lines.push_back(std::move(cached));
+    impl_->lines.push_back(std::move(cached));
     }
     // Ruby drawing keeps geometry arrays for historical phase ordering. Mirror
     // their final post-layout/post-interference geometry into CachedChar so the

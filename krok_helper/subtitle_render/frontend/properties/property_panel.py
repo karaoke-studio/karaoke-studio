@@ -86,6 +86,9 @@ from krok_helper.subtitle_render.engine.render.elements.band import (
     band_spec,
     paint_band,
 )
+from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
+    scanline_image_available,
+)
 from krok_helper.subtitle_render.domain.paint import (
     ColorLayerKey,
     ColorStateKey,
@@ -1510,6 +1513,24 @@ class PropertyPanel(QWidget):
             self._scanline_glow_spin.setValue(
                 max(self._scanline_display_px(self._style.scanline_glow_px), 0)
             )
+            if hasattr(self, "_scanline_image_offset_x_control"):
+                offset_max = max(2000, int(round(2000 * scale)))
+                for control, field in (
+                    (
+                        self._scanline_image_offset_x_control,
+                        "scanline_image_offset_x_px",
+                    ),
+                    (
+                        self._scanline_image_offset_y_control,
+                        "scanline_image_offset_y_px",
+                    ),
+                ):
+                    control.set_slider_range(-offset_max, offset_max)
+                    control.setValue(
+                        self._scanline_display_px(
+                            int(getattr(self._style, field, 0) or 0)
+                        )
+                    )
         finally:
             self._syncing = False
 
@@ -2063,9 +2084,9 @@ class PropertyPanel(QWidget):
         self._scanline_role_combo.setVisible(role)
         if role:
             self._refresh_scanline_role_combo()
-        # 扫字线形态与粒子特效：形态常驻（普通高亮/烈焰棒/水泡）；粒子
-        # 档位为「无」时两个数值控件灰显。档位/数值都按样式回显，外部灌入
-        # 样式同样走这里。
+        # 扫字线形态与粒子特效：形态常驻（普通高亮/烈焰棒/水泡/自定义
+        # 图片）；粒子档位为「无」时两个数值控件灰显。档位/数值都按样式
+        # 回显，外部灌入样式同样走这里。
         shape = str(
             getattr(self._style, "scanline_shape", "band") or "band"
         )
@@ -2078,6 +2099,112 @@ class PropertyPanel(QWidget):
         self._scanline_effect_combo.setCurrentIndex(
             max(0, self._scanline_effect_combo.findData(effect))
         )
+        self._sync_scanline_image_controls(enabled)
+
+    def _sync_scanline_image_controls(self, enabled: bool) -> None:
+        """自定义图片形态专属组：仅该形态显示，并回显素材/偏移/层级。
+
+        素材缺失只改提示行（红字 + 工程目录回退说明），不动其它 UI——
+        渲染端自动回退普通高亮带（2026-10 用户口径：仅回退不改 UI）。
+        """
+
+        if not hasattr(self, "_scanline_image_group"):
+            return
+        shape = str(
+            getattr(self._style, "scanline_shape", "band") or "band"
+        )
+        image_mode = shape == "image"
+        self._scanline_image_group.setVisible(image_mode)
+        if not image_mode:
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            path = str(
+                getattr(self._style, "scanline_image_path", "") or ""
+            ).strip()
+            self._scanline_image_path_edit.setText(path)
+            missing = bool(path) and not scanline_image_available(path)
+            self._scanline_image_missing_label.setVisible(missing)
+            self._scanline_image_missing_label.setText(
+                "未找到图片文件：已回退普通高亮扫字线。请把素材放回原路径，"
+                "或放到当前工程（.yurika）所在目录后重试。"
+                if missing
+                else ""
+            )
+            self._scanline_image_band_check.blockSignals(True)
+            self._scanline_image_band_check.setChecked(
+                bool(
+                    getattr(
+                        self._style, "scanline_image_band_enabled", True
+                    )
+                )
+            )
+            self._scanline_image_band_check.blockSignals(False)
+            tokens = {
+                token.strip()
+                for token in str(
+                    getattr(
+                        self._style, "scanline_image_color_layers", ""
+                    )
+                    or ""
+                ).split(",")
+                if token.strip()
+            }
+            for token, check in self._scanline_image_layer_checks.items():
+                check.blockSignals(True)
+                check.setChecked(token in tokens)
+                check.blockSignals(False)
+            self._scanline_image_offset_x_control.setValue(
+                self._scanline_display_px(
+                    int(
+                        getattr(
+                            self._style, "scanline_image_offset_x_px", 0
+                        )
+                        or 0
+                    )
+                )
+            )
+            self._scanline_image_offset_y_control.setValue(
+                self._scanline_display_px(
+                    int(
+                        getattr(
+                            self._style, "scanline_image_offset_y_px", 0
+                        )
+                        or 0
+                    )
+                )
+            )
+            self._scanline_image_scale_control.setValue(
+                int(
+                    getattr(self._style, "scanline_image_scale_pct", 100)
+                    or 100
+                )
+            )
+            self._scanline_image_tint_strength_control.setValue(
+                int(
+                    getattr(
+                        self._style,
+                        "scanline_image_tint_strength_pct",
+                        50,
+                    )
+                    or 0
+                )
+            )
+        finally:
+            self._syncing = was_syncing
+        for control in (
+            self._scanline_image_path_edit,
+            self._scanline_image_pick_btn,
+            self._scanline_image_clear_btn,
+            self._scanline_image_band_check,
+            self._scanline_image_offset_x_control,
+            self._scanline_image_offset_y_control,
+            self._scanline_image_scale_control,
+            self._scanline_image_tint_strength_control,
+            *self._scanline_image_layer_checks.values(),
+        ):
+            control.setEnabled(enabled)
 
     def _sync_fx_particle_controls(self) -> None:
         """按药丸当前目标回显粒子颜色/尺寸/数量。
@@ -4684,6 +4811,44 @@ class PropertyPanel(QWidget):
     def _clear_line_band_image(self) -> None:
         self._update_style(line_band_image="")
 
+    # ------------------------------------------------ 扫字线·自定义图片形态
+    def _choose_scanline_image(self) -> None:
+        current = str(
+            getattr(self._style, "scanline_image_path", "") or ""
+        ).strip()
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "选择扫字线图片",
+            current,
+            "图像文件 (*.png *.gif *.apng *.webp *.jpg *.jpeg *.bmp *.tif *.tiff);;"
+            "所有文件 (*.*)",
+        )
+        if path:
+            # 绝对路径原样入工程；形态由「扫字线形态」下拉控制（本组只在
+            # 自定义图片形态下可见，无需在这里再切形态）。
+            self._update_style(scanline_image_path=path)
+
+    def _clear_scanline_image(self) -> None:
+        self._update_style(scanline_image_path="")
+
+    def _on_scanline_image_layers_changed(self) -> None:
+        checks = getattr(self, "_scanline_image_layer_checks", None)
+        if not checks:
+            return
+        tokens = [
+            token for token in ("solid", "stroke", "decor")
+            if checks[token].isChecked()
+        ]
+        self._update_style(scanline_image_color_layers=",".join(tokens))
+
+    def _scanline_image_missing(self) -> bool:
+        """素材是否处于「两级查找都失败」状态（仅提示用）。"""
+
+        path = str(getattr(self._style, "scanline_image_path", "") or "").strip()
+        if not path:
+            return False
+        return not scanline_image_available(path)
+
     def _reset_line_band_tint(self) -> None:
         preset = band_preset(
             preset_id_for_image(self._style.line_band_image or "") or ""
@@ -6480,6 +6645,13 @@ class PropertyPanel(QWidget):
                 "scanline_effect_size_pct",
                 "scanline_effect_count",
                 "scanline_shape",
+                "scanline_image_path",
+                "scanline_image_band_enabled",
+                "scanline_image_offset_x_px",
+                "scanline_image_offset_y_px",
+                "scanline_image_color_layers",
+                "scanline_image_scale_pct",
+                "scanline_image_tint_strength_pct",
             }.intersection(changes):
                 self._sync_scanline_controls()
             if {

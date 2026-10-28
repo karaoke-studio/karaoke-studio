@@ -30,6 +30,10 @@ from krok_helper.subtitle_render.domain.timing import (
     guide_symbol_role_labels,
 )
 from krok_helper.subtitle_render.engine.render.effects.particles import FX_SPRITES
+from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
+    resolve_scanline_image_path,
+    scanline_image_role_geometry,
+)
 from krok_helper.subtitle_render.engine.render.elements.signal import (
     set_signal_auto_basis,
     signal_auto_basis,
@@ -59,6 +63,50 @@ from krok_helper.subtitle_render.native.protocol import (
     title_overlay_to_ir,
     track_to_ir,
 )
+
+
+def _apply_scanline_image_payload(style_payload: dict, style: Style) -> None:
+    """自定义图片扫字线（2026-10）：路径两级回退解析 + role 模式几何物化。
+
+    路径解析不到就清空（native 侧整段跳过图片层、回退普通高亮带）；
+    role 模式把来源方案的装饰几何按「方案值，None 继承全局」物化成数值
+    下发——native 端只有行样式，拿不到方案几何（与 lit/volume 的物化
+    口径一致）。
+    """
+
+    style_payload["scanline_image_path"] = (
+        resolve_scanline_image_path(
+            str(style_payload.get("scanline_image_path") or "")
+        )
+        or ""
+    )
+    if (
+        str(style_payload.get("scanline_shape") or "") == "image"
+        and str(style_payload.get("scanline_mode") or "") == "role"
+    ):
+        geometry = scanline_image_role_geometry(style)
+        if geometry is not None:
+            style_payload["scanline_image_role_stroke_width_px"] = float(
+                geometry["stroke_width_px"]
+            )
+            style_payload["scanline_image_role_stroke2_width_px"] = float(
+                geometry["stroke2_width_px"]
+            )
+            style_payload["scanline_image_role_font_size_px"] = float(
+                geometry["font_size_px"]
+            )
+            style_payload["scanline_image_role_glow_radius_px"] = float(
+                geometry["glow_radius_px"]
+            )
+            style_payload["scanline_image_role_shadow_offset_x_px"] = float(
+                geometry["shadow_offset_x_px"]
+            )
+            style_payload["scanline_image_role_shadow_offset_y_px"] = float(
+                geometry["shadow_offset_y_px"]
+            )
+            style_payload["scanline_image_role_decoration_kind"] = str(
+                geometry["decoration_kind"]
+            )
 
 
 def title_to_ir(
@@ -317,6 +365,7 @@ def build_render_ir(
                 str(style.line_band_image or "")
             )
         _apply_band_src_caps(style_payload, str(style.line_band_image or ""))
+        _apply_scanline_image_payload(style_payload, style)
         ir = {
             "schema": RENDER_IR_SCHEMA,
             "screen": {
@@ -493,6 +542,7 @@ def build_style_patch_ir(
         _apply_band_src_caps(
             patch_style_payload, str(style.line_band_image or "")
         )
+        _apply_scanline_image_payload(patch_style_payload, style)
         return {
             "schema": RENDER_IR_SCHEMA,
             "screen": {

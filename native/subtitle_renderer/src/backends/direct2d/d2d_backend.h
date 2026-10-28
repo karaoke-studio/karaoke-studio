@@ -59,6 +59,9 @@ private:
     void ensureLineBandImage();
     // 动图行背景：按当前帧重建合成图与三张效果位图（PS 标准参数）。
     void ensureLineBandEffects(ID2D1Bitmap1 *source, float scale);
+    // 自定义图片扫字线素材（2026-10）：按 (path, mtime, size) 键控，Qt
+    // 逐帧解码（含动图 WebP/GIF），与 ensureLineBandImage 同两个入口调用。
+    void ensureScanlineImage();
     // 从当前 lines 重算 realization 任务并启动预热线程（configure 与
     // resumeRealizationPrewarm 共用；后者靠 realizationResources 复用已完成任务）。
     void startRealizationPrewarm(bool deferUntilFirstFrame);

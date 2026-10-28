@@ -629,6 +629,9 @@ from krok_helper.subtitle_render.engine.render.elements.horizontal import (
     utopia_ruby_scope_rect as _utopia_ruby_scope_rect,
     utopia_scope_id as _utopia_scope_id,
 )
+from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
+    paint_scanline_image as _paint_scanline_image,
+)
 from krok_helper.subtitle_render.domain.timing import (
     EXIT_GEO_ANIMS as _EXIT_GEO_ANIMS,
 )
@@ -3570,21 +3573,25 @@ def _scanline_shape_fade(
     return min(fade_in, fade_out)
 
 
-def _scanline_shape_colors(
+def _scanline_shape_source(
     layout: _LineLayout,
     t_ms: int,
     front: float,
+    fallback_style: Style,
 ):
-    """取锋面所在字符自己的角色配色，供跟随字体·走字前/后使用。
+    """取锋面所在字符自己的角色配色与样式，供柱体/图片形态取色。
 
     普通高亮带逐 glyph run 取 ``effective_karaoke_colors(run[0].style)``；
-    柱体是行级 overlay，不能直接用 ``layout.colors``（行样式），否则多角色
-    行会一直取到行级/第一个角色的配色。
+    柱体/图片是行级 overlay，不能直接用 ``layout.colors``（行样式），
+    否则多角色行会一直取到行级/第一个角色的配色。返回
+    ``(KaraokeColors, Style)``：后者是几何参数（描边/装饰）的来源样式，
+    解析不到具体字符时回落行样式。
     """
 
     render_line = layout.render_line
+    line_colors = layout.colors
     if render_line is None or not layout.char_x_ranges:
-        return layout.colors
+        return line_colors, fallback_style
     index: int | None = None
     for position, (start, end) in enumerate(layout.intervals):
         if end > start and start <= t_ms <= end:
@@ -3601,14 +3608,20 @@ def _scanline_shape_colors(
         if 0 <= index < len(glyphs):
             glyph = glyphs[index]
             if glyph is not None:
-                return _effective_karaoke_colors(glyph.style)
+                return (
+                    _effective_karaoke_colors(glyph.style),
+                    glyph.style,
+                )
     # text layout 缺失（注音/缓存层路径）时按锋面找最近的字符。
     for position, (left, right) in enumerate(layout.char_x_ranges):
         if left <= front <= right:
             glyphs = _role_glyphs_by_index(render_line, layout.text_layout)
             if position < len(glyphs) and glyphs[position] is not None:
-                return _effective_karaoke_colors(glyphs[position].style)
-    return layout.colors
+                return (
+                    _effective_karaoke_colors(glyphs[position].style),
+                    glyphs[position].style,
+                )
+    return line_colors, fallback_style
 
 
 def _paint_scanline_shape_overlay(
@@ -3619,8 +3632,9 @@ def _paint_scanline_shape_overlay(
     *,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
+    canvas_scale: float = 1.0,
 ) -> None:
-    """把烈焰棒/水泡统一画在文字与注音之后（行级 overlay）。
+    """把烈焰棒/水泡/自定义图片统一画在文字与注音之后（行级 overlay）。
 
     柱体不是字形内部的高亮带，而是覆盖在文字层/文字动画层/注音层之上的
     独立物体；必须在 ruby 画完后再落笔。这里用整行 rect 而不是逐 glyph
@@ -3628,7 +3642,7 @@ def _paint_scanline_shape_overlay(
     """
 
     shape = str(getattr(style, "scanline_shape", "band") or "band")
-    if shape not in {"flame", "bubble"}:
+    if shape not in {"flame", "bubble", "image"}:
         return
     if not effective_karaoke_scanline(style):
         return
@@ -3704,7 +3718,9 @@ def _paint_scanline_shape_overlay(
             )
         if target_top is not None:
             target_top -= float(style.font_size_px or rect.height()) * 0.20
-    shape_colors = _scanline_shape_colors(layout, t_ms, front)
+    shape_colors, shape_style = _scanline_shape_source(
+        layout, t_ms, front, style
+    )
     if params.mode in {"follow_before", "follow_after", "brighten"}:
         state = (
             shape_colors.before
@@ -3720,6 +3736,23 @@ def _paint_scanline_shape_overlay(
             max(rect.right() - float(layout.signal_band_left), 1.0),
             rect.height(),
         )
+    if shape == "image":
+        # 自定义图片：锚点 = 走字锋面 x + 主文字垂直中心（line_rect 不含
+        # 注音）；用户偏移在 paint_scanline_image 内部叠加。图片层不参与
+        # utopia/整字放大变换（这里在逐字变换之外直接落笔）。
+        _paint_scanline_image(
+            painter,
+            params=params,
+            style=style,
+            shape_colors=shape_colors,
+            shape_style=shape_style,
+            anchor_x=front,
+            anchor_y=rect.center().y(),
+            gradient_line=gradient_line,
+            opacity=fade,
+            canvas_scale=canvas_scale,
+        )
+        return
     _paint_scanline_column(
         painter,
         rect,
@@ -4989,6 +5022,7 @@ def _paint_line_static(
                 style,
                 display_start_ms=display_start_ms,
                 display_end_ms=display_end_ms,
+                canvas_scale=(img_h / 1080.0 if img_h else 1.0),
             )
             paint_fx_particles(front=True)
             return
@@ -5037,6 +5071,7 @@ def _paint_line_static(
             style,
             display_start_ms=display_start_ms,
             display_end_ms=display_end_ms,
+            canvas_scale=(img_h / 1080.0 if img_h else 1.0),
         )
         paint_fx_particles(front=True)
         return
@@ -5061,7 +5096,7 @@ def _paint_line_static(
                     int(layout.intervals[-1][1]) if layout.intervals else None
                 ),
             )
-            if style.scanline_shape in {"flame", "bubble"}
+            if style.scanline_shape in {"flame", "bubble", "image"}
             else 1.0
         ),
     )
@@ -5075,6 +5110,7 @@ def _paint_line_static(
         style,
         display_start_ms=display_start_ms,
         display_end_ms=display_end_ms,
+        canvas_scale=(img_h / 1080.0 if img_h else 1.0),
     )
     paint_fx_particles(front=True)
 

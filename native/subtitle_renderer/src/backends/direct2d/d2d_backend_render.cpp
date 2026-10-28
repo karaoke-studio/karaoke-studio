@@ -5780,6 +5780,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             scanlineAlpha *= std::min(fadeIn, fadeOut);
         }
+        // 自定义图片形态关闭「文字高亮」时不再画普通高亮带（主文字/角色
+        // 行/注音三处共用本闸门）；素材未成功解码时恒回退绘制普通高亮带
+        // ——镜像 Painter scanline.ScanlineParams.suppress_strip 的口径。
+        const bool scanlineStripSuppressed = style.scanlineShape == "image"
+            && !style.scanlineImageBandEnabled
+            && impl_->scanlineImage.valid;
         const RgbaColor scanlineColorValue = style.scanlineColor;
         const float scanlineBrightness = std::clamp(
             style.scanlineBrightness, 0.0f, 1.0f
@@ -6067,7 +6073,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 );
             }
         };
-        if (scanlineActive && scanlineRadius > 0 && scanlineAlpha > 0.0f) {
+        if (scanlineActive && !scanlineStripSuppressed && scanlineRadius > 0 && scanlineAlpha > 0.0f) {
             const float mainGlowStroke = std::max(style.strokeWidth, 0.0f)
                 + std::max(style.stroke2Width, 0.0f)
                 + static_cast<float>(scanlineRadius);
@@ -8084,7 +8090,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // (continuous feather crossfade, same contract as the Painter);
         // utopia lines keep the per-slice overlay -- a line-level mask cannot
         // follow each glyph's transformed front.
-        if (scanlineActive && scanlineAlpha > 0.0f
+        if (scanlineActive && !scanlineStripSuppressed && scanlineAlpha > 0.0f
             ) {
             if (scanlineMainGlow.blur != nullptr) {
                 drawScanlineGlowLayer(scanlineMainGlow);
@@ -8550,7 +8556,387 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float targetTop = rubyTop < 1.0e29f
                 ? rubyTop - lineHeight * 0.18f
                 : 0.0f;
-            if (style.scanlineShape == "bubble") {
+            if (style.scanlineShape == "image") {
+                // 自定义图片：素材由 configure 期 ensureScanlineImage 用 Qt
+                // 解码（与 CPU 同解码器，含动图 WebP/GIF）；这里按轨道时间
+                // 选帧、解析取色层级并绘制。装饰合成图纯 CPU 生成后直接
+                // CreateBitmap 上传，可在 BeginDraw 会话内重建。竖排不生效
+                // （与 CPU overlay 同口径）；图片层不参与逐字变换
+                // （utopia/整字放大），行级直接落笔。
+                const Impl::CachedScanlineImage &imageCache =
+                    impl_->scanlineImage;
+                if (imageCache.valid && !style.vertical) {
+                    int frameIndex = 0;
+                    if (imageCache.frames.size() > 1) {
+                        int totalMs = 0;
+                        for (int delay : imageCache.delaysMs) {
+                            totalMs += delay;
+                        }
+                        if (totalMs > 0) {
+                            int position = tMs % totalMs;
+                            if (position < 0) {
+                                position += totalMs;
+                            }
+                            int cumulative = 0;
+                            for (std::size_t i = 0;
+                                 i < imageCache.delaysMs.size(); ++i) {
+                                cumulative += imageCache.delaysMs[i];
+                                frameIndex = static_cast<int>(i);
+                                if (position < cumulative) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    ID2D1Bitmap1 *bodyBitmap = imageCache.frames.empty()
+                        ? imageCache.staticBitmap.Get()
+                        : imageCache.frames[static_cast<std::size_t>(
+                              frameIndex
+                          )].Get();
+                    const std::size_t sourceIndex =
+                        static_cast<std::size_t>(
+                            imageCache.frames.empty() ? 0 : frameIndex
+                        );
+                    const std::uint8_t *sourceFrame =
+                        sourceIndex < imageCache.sourceFrames.size()
+                        ? imageCache.sourceFrames[sourceIndex].data()
+                        : nullptr;
+                    const int sourceStride =
+                        sourceIndex < imageCache.sourceStrides.size()
+                        ? imageCache.sourceStrides[sourceIndex]
+                        : 0;
+                    const int sourceWidth =
+                        bodyBitmap != nullptr
+                        ? static_cast<int>(
+                              bodyBitmap->GetPixelSize().width
+                          )
+                        : 0;
+                    const int sourceHeight =
+                        bodyBitmap != nullptr
+                        ? static_cast<int>(
+                              bodyBitmap->GetPixelSize().height
+                          )
+                        : 0;
+                    if (bodyBitmap != nullptr && sourceFrame != nullptr
+                        && sourceWidth > 0 && sourceHeight > 0) {
+                        const float naturalW =
+                            static_cast<float>(sourceWidth);
+                        const float naturalH =
+                            static_cast<float>(sourceHeight);
+                        // 图片自然像素 × (画布高 / 1080)，与 CPU
+                        // paint_scanline_image 的 canvas_scale 同口径（场景
+                        // 像素 = 画布像素 × dpr）。
+                        const float sceneScale = std::max(
+                            static_cast<float>(impl_->scene.height) / 1080.0f
+                                * std::max(style.scanlineImageScale, 0.1f),
+                            0.01f
+                        );
+                        const float targetW = std::max(naturalW * sceneScale, 1.0f);
+                        const float targetH = std::max(naturalH * sceneScale, 1.0f);
+                        const float drawScale =
+                            targetW / std::max(naturalW, 1.0f);
+                        const float anchorX =
+                            wipeEdge + style.scanlineImageOffsetX;
+                        const float centerY = (
+                            line->bounds.top + line->bounds.bottom
+                        ) * 0.5f;
+                        // 屏幕 Y 轴向下：正值向上 = 减 Y（负下正上）。
+                        const float anchorY =
+                            centerY - style.scanlineImageOffsetY;
+                        // 锚点量化（2 场景像素）：横向渐变的采样色随锋面
+                        // 移动，量化后装饰缓存才不会逐帧重建。
+                        const int quantX = static_cast<int>(
+                            std::lround(anchorX * 0.5f)
+                        );
+                        const int quantY = static_cast<int>(
+                            std::lround(anchorY * 0.5f)
+                        );
+                        const float sampledX =
+                            static_cast<float>(quantX) * 2.0f;
+                        const float sampledY =
+                            static_cast<float>(quantY) * 2.0f;
+                        const float lineSpanX = std::max(
+                            line->bounds.right - line->bounds.left, 1.0f
+                        );
+                        const float anchorNormX = std::clamp(
+                            (sampledX - line->bounds.left) / lineSpanX,
+                            0.0f,
+                            1.0f
+                        );
+                        const float anchorNormY = std::clamp(
+                            (sampledY - line->bounds.top)
+                                / std::max(lineHeight, 1.0f),
+                            0.0f,
+                            1.0f
+                        );
+                        // 各槽颜色：单独颜色/默认 = 扫字线单色（parser 对
+                        // default 档已归一成 #FFFFFF）；跟随/提亮 = 锋面字符
+                        // 配色态（HSV 提亮）；role = 来源「走字后-主文字」
+                        // 填充（全槽统一）。渐变在锚点处按行跨度采样。
+                        PaintStyle tintFill;
+                        PaintStyle strokeFill;
+                        PaintStyle stroke2Fill;
+                        PaintStyle decorFill;
+                        const PaintStyle *tintPtr = nullptr;
+                        const PaintStyle *strokePtr = nullptr;
+                        const PaintStyle *stroke2Ptr = nullptr;
+                        const PaintStyle *decorPtr = nullptr;
+                        if (scanlineRole) {
+                            tintPtr = &style.scanlineRolePaint;
+                            strokePtr = &style.scanlineRolePaint;
+                            stroke2Ptr = &style.scanlineRolePaint;
+                            decorPtr = &style.scanlineRolePaint;
+                        } else if (scanlineFollows || scanlineBrighten) {
+                            const bool afterState = !scanlineFollowBefore;
+                            tintFill = brightenPaintHsvValue(
+                                afterState ? edgeStyle->afterFillPaint
+                                           : edgeStyle->beforeFillPaint,
+                                scanlineBrightness
+                            );
+                            strokeFill = brightenPaintHsvValue(
+                                afterState ? edgeStyle->afterStrokePaint
+                                           : edgeStyle->beforeStrokePaint,
+                                scanlineBrightness
+                            );
+                            stroke2Fill = brightenPaintHsvValue(
+                                afterState ? edgeStyle->afterStroke2Paint
+                                           : edgeStyle->beforeStroke2Paint,
+                                scanlineBrightness
+                            );
+                            decorFill = brightenPaintHsvValue(
+                                afterState ? edgeStyle->afterDecorPaint
+                                           : edgeStyle->beforeDecorPaint,
+                                scanlineBrightness
+                            );
+                            tintPtr = &tintFill;
+                            strokePtr = &strokeFill;
+                            stroke2Ptr = &stroke2Fill;
+                            decorPtr = &decorFill;
+                        }
+                        const auto slotColor = [&](
+                            const PaintStyle *fill,
+                            const RgbaColor &fallback
+                        ) {
+                            if (fill == nullptr) {
+                                return fallback;
+                            }
+                            const std::string &mode = fill->mode;
+                            if (mode == "gradient_horizontal"
+                                || mode == "gradient_vertical"
+                                || mode == "split_vertical") {
+                                return sampleFillColor(
+                                    fill, anchorNormX, anchorNormY, fallback
+                                );
+                            }
+                            return paintSolidColor(*fill);
+                        };
+                        // 几何来源：跟随/提亮 → 锋面字符样式；role → Python
+                        // 物化值；其余 → 行样式。尺寸换算到源图像素：
+                        // srcPx = scenePx × naturalH / (fontScene × dpr)，与
+                        // CPU「效果宽度 × (图高/字号)」逐项等价。
+                        const bool useRoleGeometry = scanlineRole
+                            && style.scanlineImageRoleFontSize >= 0.0f;
+                        const TextStyle *geometryStyle = &style;
+                        float geometryStroke = 0.0f;
+                        float geometryStroke2 = 0.0f;
+                        float geometryGlowRadius = 0.0f;
+                        float geometryShadowX = 0.0f;
+                        float geometryShadowY = 0.0f;
+                        float geometryFont = 1.0f;
+                        std::string geometryDecoration = "none";
+                        if (useRoleGeometry) {
+                            geometryStroke =
+                                style.scanlineImageRoleStrokeWidth;
+                            geometryStroke2 =
+                                style.scanlineImageRoleStroke2Width;
+                            geometryGlowRadius =
+                                style.scanlineImageRoleGlowRadius;
+                            geometryShadowX =
+                                style.scanlineImageRoleShadowOffsetX;
+                            geometryShadowY =
+                                style.scanlineImageRoleShadowOffsetY;
+                            geometryFont = style.scanlineImageRoleFontSize;
+                            geometryDecoration =
+                                style.scanlineImageRoleDecorationKind;
+                        } else {
+                            if (scanlineFollows || scanlineBrighten) {
+                                geometryStyle = edgeStyle;
+                            }
+                            geometryStroke = geometryStyle->strokeWidth;
+                            geometryStroke2 = geometryStyle->stroke2Width;
+                            geometryGlowRadius =
+                                geometryStyle->glowConcentrationLevel >= 0
+                                ? geometryStyle->glowAfterRadius
+                                : 0.0f;
+                            geometryShadowX = geometryStyle->shadowOffsetX;
+                            geometryShadowY = geometryStyle->shadowOffsetY;
+                            geometryFont = geometryStyle->fontSize;
+                            geometryDecoration = geometryStyle->decorationKind;
+                        }
+                        // 效果几何换算（2026-10 用户口径，与 Python
+                        // _decor_plan 同口径）：按图片显示后长边与画布的
+                        // 无量纲比值 effectRatio = max(自然宽,自然高) ×
+                        // 尺寸% / 1080 折算，宽度/发光半径向上取整；不再按
+                        // 字号折算。先折算成场景像素再除 drawScale 进源图。
+                        const float effectRatio =
+                            std::max(naturalW, naturalH)
+                            * std::max(style.scanlineImageScale, 0.1f)
+                            / 1080.0f;
+                        const float srcCap = std::max(naturalH * 0.5f, 4.0f);
+                        const auto srcWidth = [&](float scenePx) {
+                            const float converted =
+                                std::ceil(scenePx * effectRatio);
+                            if (converted <= 0.0f) {
+                                return 0;
+                            }
+                            const int srcPx = static_cast<int>(
+                                std::lround(converted / drawScale)
+                            );
+                            return std::clamp(srcPx, 1, static_cast<int>(srcCap));
+                        };
+                        direct2d::ScanlineImageDecor decor;
+                        decor.tint = style.scanlineImageTint;
+                        decor.tintColor = slotColor(tintPtr, baseColor);
+                        decor.tintStrength = std::clamp(
+                            style.scanlineImageTintStrength, 0, 100
+                        );
+                        if (style.scanlineImageStroke) {
+                            decor.strokeWidth = srcWidth(geometryStroke);
+                            decor.strokeColor =
+                                slotColor(strokePtr, baseColor);
+                            decor.stroke2Width = srcWidth(geometryStroke2);
+                            decor.stroke2Color =
+                                slotColor(stroke2Ptr, baseColor);
+                        }
+                        if (style.scanlineImageDecor) {
+                            if (geometryDecoration == "glow") {
+                                decor.glow = true;
+                                decor.glowRadius =
+                                    srcWidth(geometryGlowRadius);
+                                decor.glowColor =
+                                    slotColor(decorPtr, baseColor);
+                            } else if (geometryDecoration == "shadow") {
+                                decor.shadow = true;
+                                // 阴影偏移按同一比值浮点缩放（不取整）。
+                                decor.shadowOffsetX =
+                                    geometryShadowX * effectRatio / drawScale;
+                                decor.shadowOffsetY =
+                                    geometryShadowY * effectRatio / drawScale;
+                                decor.shadowColor =
+                                    slotColor(decorPtr, baseColor);
+                            }
+                        }
+                        const bool hasDecor = decor.tint || decor.shadow
+                            || decor.glow || decor.strokeWidth > 0
+                            || decor.stroke2Width > 0;
+                        D2D1_MATRIX_3X2_F previousImageTransform =
+                            D2D1::Matrix3x2F::Identity();
+                        context->GetTransform(&previousImageTransform);
+                        context->SetTransform(realizationBaseTransform);
+                        const float imageOpacity =
+                            std::clamp(shapeOpacity, 0.0f, 1.0f);
+                        if (hasDecor) {
+                            Impl::CachedScanlineImage &mutableCache =
+                                impl_->scanlineImage;
+                            if (mutableCache.decorFrame != frameIndex
+                                || mutableCache.decorAnchorX != quantX
+                                || mutableCache.decorAnchorY != quantY
+                                || !(mutableCache.decorParams == decor)
+                                || !mutableCache.decorBitmap) {
+                                mutableCache.decorBitmap.Reset();
+                                const direct2d::ScanlineImageComposite
+                                    composite =
+                                        direct2d::scanlineImageCompositePixels(
+                                            sourceFrame, sourceStride,
+                                            sourceWidth, sourceHeight, decor
+                                        );
+                                if (!composite.pixels.empty()) {
+                                    const D2D1_BITMAP_PROPERTIES1
+                                        compositeProperties =
+                                            D2D1::BitmapProperties1(
+                                                D2D1_BITMAP_OPTIONS_NONE,
+                                                D2D1::PixelFormat(
+                                                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                                                    D2D1_ALPHA_MODE_PREMULTIPLIED
+                                                ),
+                                                96.0f,
+                                                96.0f
+                                            );
+                                    checkHr(
+                                        context->CreateBitmap(
+                                            D2D1::SizeU(
+                                                static_cast<UINT32>(
+                                                    composite.width
+                                                ),
+                                                static_cast<UINT32>(
+                                                    composite.height
+                                                )
+                                            ),
+                                            composite.pixels.data(),
+                                            static_cast<UINT32>(
+                                                composite.width * 4
+                                            ),
+                                            &compositeProperties,
+                                            mutableCache.decorBitmap
+                                                .ReleaseAndGetAddressOf()),
+                                        "ID2D1DeviceContext::CreateBitmap"
+                                        "(scanline image decor)",
+                                        device_
+                                    );
+                                    mutableCache.decorMargin =
+                                        composite.margin;
+                                    mutableCache.decorFrame = frameIndex;
+                                    mutableCache.decorAnchorX = quantX;
+                                    mutableCache.decorAnchorY = quantY;
+                                    mutableCache.decorParams = decor;
+                                }
+                            }
+                            if (mutableCache.decorBitmap) {
+                                const float marginScene =
+                                    static_cast<float>(
+                                        mutableCache.decorMargin
+                                    ) * drawScale;
+                                const D2D1_SIZE_F decorSize =
+                                    mutableCache.decorBitmap->GetSize();
+                                const float decorLeft =
+                                    anchorX - targetW * 0.5f - marginScene;
+                                const float decorTop =
+                                    anchorY - targetH * 0.5f - marginScene;
+                                const D2D1_RECT_F decorDestination =
+                                    D2D1::RectF(
+                                        decorLeft,
+                                        decorTop,
+                                        decorLeft
+                                            + decorSize.width * drawScale,
+                                        decorTop
+                                            + decorSize.height * drawScale
+                                    );
+                                context->DrawBitmap(
+                                    mutableCache.decorBitmap.Get(),
+                                    &decorDestination,
+                                    imageOpacity,
+                                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
+                                );
+                            }
+                        } else {
+                            const D2D1_RECT_F imageDestination =
+                                D2D1::RectF(
+                                    anchorX - targetW * 0.5f,
+                                    anchorY - targetH * 0.5f,
+                                    anchorX + targetW * 0.5f,
+                                    anchorY + targetH * 0.5f
+                                );
+                            context->DrawBitmap(
+                                bodyBitmap,
+                                &imageDestination,
+                                imageOpacity,
+                                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
+                            );
+                        }
+                        context->SetTransform(previousImageTransform);
+                    }
+                }
+            } else if (style.scanlineShape == "bubble") {
                 // 水泡：从锋面底部连续冒泡；中心一条浅蓝光柱延伸到注音层，
                 // 偶数号水泡在光柱后、奇数号在前，形成前后遮挡。
                 const float bubbleT = static_cast<float>(tMs) / 1000.0f;
@@ -9135,7 +9521,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
 
         // Ruby uses the same inner-only feathering as the main text.
-        if (scanlineActive && scanlineAlpha > 0.0f
+        if (scanlineActive && !scanlineStripSuppressed && scanlineAlpha > 0.0f
             ) {
             if (scanlineRubyGlow.blur != nullptr) {
                 drawScanlineGlowLayer(scanlineRubyGlow);

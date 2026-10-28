@@ -64,10 +64,33 @@ class ScanlineParams:
     普通高亮带按 fill 重绘；柱体把渐变烘成逐像素颜色场，而不是取平均色。"""
 
     shape: str = "band"
-    """锋面形态：``band`` 普通高亮带；``flame`` 烈焰棒；``bubble`` 水泡。
+    """锋面形态：``band`` 普通高亮带；``flame`` 烈焰棒；``bubble`` 水泡；
+    ``image`` 自定义图片。
 
     烈焰棒把扫字线本体变成发光火棒并从两侧喷火舌；水泡从锋面底部发射
-    镂空水泡。两者都是独立形态并替换普通高亮带。"""
+    镂空水泡。自定义图片在锋面上叠加用户素材（动图逐帧），由
+    :mod:`..scanline_image` 绘制。"""
+
+    image_path: str = ""
+    """自定义图片形态的素材绝对路径（渲染期带工程目录回退解析）。"""
+
+    image_band_enabled: bool = True
+    """自定义图片形态下是否仍绘制普通文字高亮带；素材缺失时恒回退绘制。"""
+
+    image_offset_x_px: float = 0.0
+    """自定义图片左右偏移（输出像素，正右负左）。"""
+
+    image_offset_y_px: float = 0.0
+    """自定义图片上下偏移（输出像素，正上负下）。"""
+
+    image_layers: tuple[str, ...] = ()
+    """自定义图片取色层级组合（solid/stroke/decor 的任意子集）。"""
+
+    image_scale: float = 1.0
+    """自定义图片显示尺寸倍率（1.0 = 自然像素 × 画布高/1080）。"""
+
+    image_tint_strength: int = 50
+    """实色上色强度（0~100；100 = 纯目标色剪影）。"""
 
     time_ms: int = 0
     """当前帧时间（ms）：烈焰棒图样/水泡粒子动画用；普通高亮带忽略。"""
@@ -78,7 +101,24 @@ class ScanlineParams:
 
     @property
     def is_column_shape(self) -> bool:
-        return self.shape in {"flame", "bubble"}
+        return self.shape in {"flame", "bubble", "image"}
+
+    @property
+    def suppress_strip(self) -> bool:
+        """自定义图片形态关闭「文字高亮」时不再画普通高亮带。
+
+        仅当素材**可用**才抑制：素材缺失时保持普通高亮带（用户口径的
+        回退普通高光模式）。路径解析在 :mod:`..scanline_image`，这里
+        延迟导入避免模块环。
+        """
+
+        if self.shape != "image" or self.image_band_enabled:
+            return False
+        from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
+            scanline_image_available,
+        )
+
+        return scanline_image_available(self.image_path)
 
     @property
     def half_width(self) -> float:
@@ -170,7 +210,8 @@ def scanline_params_for_style(style: Style) -> ScanlineParams:
     )
     shape = (
         style.scanline_shape
-        if getattr(style, "scanline_shape", "band") in {"band", "flame", "bubble"}
+        if getattr(style, "scanline_shape", "band")
+        in {"band", "flame", "bubble", "image"}
         else "band"
     )
     return ScanlineParams(
@@ -182,6 +223,35 @@ def scanline_params_for_style(style: Style) -> ScanlineParams:
         role_fill=scanline_role_fill(style),
         shape_fill=scanline_shape_fill(style),
         shape=shape,
+        image_path=str(getattr(style, "scanline_image_path", "") or ""),
+        image_band_enabled=bool(
+            getattr(style, "scanline_image_band_enabled", True)
+        ),
+        image_offset_x_px=float(
+            getattr(style, "scanline_image_offset_x_px", 0) or 0
+        ),
+        image_offset_y_px=float(
+            getattr(style, "scanline_image_offset_y_px", 0) or 0
+        ),
+        image_layers=tuple(
+            token
+            for token in str(
+                getattr(style, "scanline_image_color_layers", "") or ""
+            ).split(",")
+            if token in {"solid", "stroke", "decor"}
+        ),
+        image_scale=max(
+            float(getattr(style, "scanline_image_scale_pct", 100) or 100)
+            / 100.0,
+            0.1,
+        ),
+        image_tint_strength=max(
+            0,
+            min(
+                int(getattr(style, "scanline_image_tint_strength_pct", 50) or 50),
+                100,
+            ),
+        ),
     )
 
 
@@ -1252,6 +1322,11 @@ def paint_scanline_strip(
 
     opacity = max(0.0, min(opacity, 1.0))
     if opacity <= 0.0:
+        return
+    if params.suppress_strip:
+        # 自定义图片形态关闭「文字高亮」：普通高亮带整体不画（主文字与
+        # 注音的所有调用点共用本闸门）；素材缺失时 suppress 为 False，
+        # 高亮带自动回归（回退普通高光模式）。
         return
     if params.is_column_shape:
         # 柱体形态的中心高亮仍由普通扫字线带绘制：完全走字形 geometry /

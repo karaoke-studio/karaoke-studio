@@ -236,9 +236,80 @@ void applyGpuResolvedStyle(
     target.scanlineShape = (
         source.scanlineShape == QStringLiteral("flame")
         || source.scanlineShape == QStringLiteral("bubble")
+        || source.scanlineShape == QStringLiteral("image")
     )
         ? source.scanlineShape.toStdString()
         : "band";
+    // 自定义图片形态：路径为空 = 素材缺失（渲染端回退普通高亮带）；
+    // (mtime, size) 失效签名与 PaintStyle.image* / litImage* 同口径，
+    // configure 据此缓存解码位图。偏移随 dpr 缩放成场景像素。
+    target.scanlineImagePath = source.scanlineImagePath.toStdWString();
+    if (!source.scanlineImagePath.isEmpty()) {
+        const QFileInfo info(source.scanlineImagePath);
+        if (info.exists() && info.isFile()) {
+            target.scanlineImageModifiedMs = static_cast<std::uint64_t>(
+                std::max<qint64>(info.lastModified().toMSecsSinceEpoch(), 0)
+            );
+            target.scanlineImageSize = static_cast<std::uint64_t>(
+                std::max<qint64>(info.size(), 0)
+            );
+        }
+    }
+    target.scanlineImageBandEnabled = source.scanlineImageBandEnabled;
+    target.scanlineImageOffsetX = static_cast<float>(
+        source.scanlineImageOffsetXPx * scale
+    );
+    target.scanlineImageOffsetY = static_cast<float>(
+        source.scanlineImageOffsetYPx * scale
+    );
+    {
+        const QStringList tokens = source.scanlineImageColorLayers.split(
+            ',', Qt::SkipEmptyParts
+        );
+        target.scanlineImageTint = tokens.contains(
+            QStringLiteral("solid"), Qt::CaseSensitive
+        );
+        target.scanlineImageStroke = tokens.contains(
+            QStringLiteral("stroke"), Qt::CaseSensitive
+        );
+        target.scanlineImageDecor = tokens.contains(
+            QStringLiteral("decor"), Qt::CaseSensitive
+        );
+    }
+    target.scanlineImageScale = static_cast<float>(
+        std::clamp(source.scanlineImageScalePct, 10, 400)
+    ) / 100.0f;
+    target.scanlineImageTintStrength = std::clamp(
+        source.scanlineImageTintStrengthPct, 0, 100
+    );
+    // role 模式装饰几何（Python 物化值，输出像素 → 场景像素；< 0 未下发）。
+    if (source.scanlineImageRoleFontSizePx >= 0.0) {
+        target.scanlineImageRoleStrokeWidth = static_cast<float>(
+            std::max(source.scanlineImageRoleStrokeWidthPx, 0.0) * scale
+        );
+        target.scanlineImageRoleStroke2Width = static_cast<float>(
+            std::max(source.scanlineImageRoleStroke2WidthPx, 0.0) * scale
+        );
+        target.scanlineImageRoleFontSize = static_cast<float>(
+            std::max(source.scanlineImageRoleFontSizePx, 1.0) * scale
+        );
+        target.scanlineImageRoleGlowRadius = static_cast<float>(
+            std::max(source.scanlineImageRoleGlowRadiusPx, 0.0) * scale
+        );
+        target.scanlineImageRoleShadowOffsetX = static_cast<float>(
+            source.scanlineImageRoleShadowOffsetXPx * scale
+        );
+        target.scanlineImageRoleShadowOffsetY = static_cast<float>(
+            source.scanlineImageRoleShadowOffsetYPx * scale
+        );
+        target.scanlineImageRoleDecorationKind = (
+            source.scanlineImageRoleDecorationKind == QStringLiteral("shadow")
+            || source.scanlineImageRoleDecorationKind
+                == QStringLiteral("glow")
+        )
+            ? source.scanlineImageRoleDecorationKind.toStdString()
+            : "none";
+    }
     // 整字放大缓动档位：无量纲，不随布局缩放。
     target.zoomPulseCurveLevel = std::clamp(source.zoomPulseCurveLevel, 0, 5);
 

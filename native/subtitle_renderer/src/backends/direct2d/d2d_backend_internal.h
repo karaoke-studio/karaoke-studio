@@ -3,6 +3,7 @@
 #include "d2d_backend.h"
 #include "d2d_runtime_support.h"
 #include "d2d_font_fallback.h"
+#include "d2d_fx.h"
 
 #include <d2d1_2.h>
 #include <dwrite.h>
@@ -87,6 +88,33 @@ struct Direct2DGpuBackend::Impl {
         CachedEffect animGlow;
         CachedEffect animStroke;
         int animEffectFrame = -1;
+    };
+    // 自定义图片扫字线素材（scanline_shape == "image"，2026-10）：configure
+    // 期用 Qt 解码器逐帧解码（与 CPU 预览/导出同一 QImageReader，含动图
+    // WebP/GIF）；渲染期只读。sourceFrames 保留原始预乘 BGRA 像素供取色
+    // 层级装饰的形态学计算（免 GPU 回读，可在 BeginDraw 会话内重建装饰
+    // 图）。刻意不在这里引 Qt 头（emit/slots 关键字宏会破坏本头其它
+    // 消费方里既有的同名局部变量）。
+    struct CachedScanlineImage {
+        bool valid = false;  // 素材已成功解码（false = 缺失，回退普通高亮带）
+        std::wstring path;
+        std::uint64_t modifiedMs = 0;
+        std::uint64_t size = 0;
+        // 动图（>1 帧）位图序列 + 帧时长；静态图走 staticBitmap。
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> frames;
+        std::vector<int> delaysMs;
+        // 每帧的原始预乘 BGRA 拷贝（与 frames/staticBitmap 下标对齐）。
+        std::vector<std::vector<std::uint8_t>> sourceFrames;
+        std::vector<int> sourceStrides;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> staticBitmap;
+        // 当前 (帧, 装饰参数, 量化锚点) 的装饰合成缓存；参数或动图换帧
+        // 才重建（实色方案稳态零重建）。
+        int decorFrame = -1;
+        int decorAnchorX = -1;
+        int decorAnchorY = -1;
+        direct2d::ScanlineImageDecor decorParams;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> decorBitmap;
+        int decorMargin = 0;
     };
     // 装饰粒子 sprite 轮廓几何（em 空间、中心原点；随场景重建，绘制期经
     // matrix 缩放平移）。key = sprite 名（star4 / ring / note）。
@@ -410,6 +438,7 @@ struct Direct2DGpuBackend::Impl {
     std::vector<CachedImage> images;
     // 行背景带素材（scene.lineBand 解码后的染色位图）。
     CachedBandImage lineBandImage;
+    CachedScanlineImage scanlineImage;
     std::uint64_t imageUseSerial = 0;
     static constexpr std::size_t defaultImageCapacity = 64;
     std::size_t imageCapacity = direct2d::environmentSize(

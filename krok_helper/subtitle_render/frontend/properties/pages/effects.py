@@ -136,6 +136,7 @@ SCANLINE_SHAPE_OPTIONS = (
     ("普通高亮", "band"),
     ("烈焰棒", "flame"),
     ("水泡", "bubble"),
+    ("自定义图片", "image"),
 )
 
 PARTICLE_TARGET_OPTIONS = (
@@ -731,8 +732,12 @@ class EffectsPropertyPageBuilder:
             "替换普通高亮带的锋面形态（只在唱字/反向唱字选择扫字线档位时"
             "显示，竖排不生效）：烈焰棒=扫字线本体变成高度固定的发光火棒，"
             "呼吸只改外圈绕柱半径，火舌围绕柱体旋转；水泡=从锋面底部冒出"
-            "镂空水泡，中心浅蓝光柱把水泡分成前后两层，并保留一条高亮扫字线。"
-            "两种形态都沿用上方扫字线颜色方案：默认颜色=出厂火色/水蓝，"
+            "镂空水泡，中心浅蓝光柱把水泡分成前后两层，并保留一条高亮扫字线；"
+            "自定义图片=在走字锋面叠加自己的图片素材（支持 GIF/动图 WebP 等"
+            "含透明的动图，逐帧播放；默认锚点为锋面 + 主文字垂直中心，可用"
+            "下方偏移微调；是否保留普通高亮带、取色层级装饰在该形态的专属"
+            "配置组里设置，素材缺失自动回退普通高亮）。"
+            "烈焰棒/水泡沿用上方扫字线颜色方案：默认颜色=出厂火色/水蓝，"
             "单独颜色=外沿取所选色、内焰/火芯自动提亮，复用配色方案=取来源"
             "渐变/拼色首尾色，图片填充取平均色。形态与下方「扫字线特效」粒子"
             "可同时使用。上方「柔化半径」只对普通高亮生效"
@@ -976,6 +981,9 @@ class EffectsPropertyPageBuilder:
             property_field("扫字线特效", host._scanline_effect_combo),
         )
         host._scanline_layout.addWidget(host._scanline_shape_effect_row)
+        host._scanline_layout.addWidget(
+            self._make_scanline_image_group(host._scanline_section)
+        )
         host._animation_grid.add_field("整字放大速度等级", host._zoom_pulse_curve_combo)
         host._stroke_flash_row = QWidget(section)
         stroke_flash_layout = QHBoxLayout(host._stroke_flash_row)
@@ -1546,6 +1554,164 @@ class EffectsPropertyPageBuilder:
         row_layout.addWidget(karaoke_combo, 1)
         row_layout.addWidget(reverse_combo, 1)
         return row
+
+    def _make_scanline_image_group(self, parent: QWidget) -> QWidget:
+        """自定义图片形态的专属配置组：仅形态选「自定义图片」时显示。
+
+        素材行参考行背景带（只读路径框 + 选择/清除），但按 2026-10 用户
+        口径**显示绝对路径**；素材缺失只在组内提示，不弹窗不改形态。
+        偏移为 1080 基准存储、按当前输出高度换算显示（与粗细/柔化同口径）；
+        取色层级是三个可任意组合的勾选（排列组合，与粒子的四档累进制不同）。
+        """
+
+        host = self._host
+        group = QWidget(parent)
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        host._scanline_image_path_edit = FluentLineEdit(group)
+        compact_property_control(host._scanline_image_path_edit)
+        host._scanline_image_path_edit.setReadOnly(True)
+        host._scanline_image_path_edit.setPlaceholderText("未选择图片（支持 png / gif / webp 等含透明通道素材）")
+        host._scanline_image_pick_btn = FluentPushButton("选择图片...", group)
+        host._scanline_image_pick_btn.setMinimumHeight(32)
+        host._scanline_image_pick_btn.clicked.connect(host._choose_scanline_image)
+        host._scanline_image_clear_btn = FluentPushButton("清除", group)
+        host._scanline_image_clear_btn.setMinimumHeight(32)
+        host._scanline_image_clear_btn.clicked.connect(host._clear_scanline_image)
+        image_row = QWidget(group)
+        image_layout = QHBoxLayout(image_row)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.setSpacing(4)
+        image_layout.addWidget(host._scanline_image_path_edit, 1)
+        image_layout.addWidget(host._scanline_image_pick_btn)
+        image_layout.addWidget(host._scanline_image_clear_btn)
+        layout.addWidget(property_field("扫字线图片", image_row))
+
+        host._scanline_image_missing_label = QLabel(group)
+        host._scanline_image_missing_label.setStyleSheet("color: #d64545;")
+        host._scanline_image_missing_label.setWordWrap(True)
+        host._scanline_image_missing_label.setToolTip(
+            "仅提示，不改变设置：渲染会回退普通高亮扫字线；"
+            "把素材放回原路径或放到工程（.yurika）所在目录即可恢复"
+        )
+        layout.addWidget(host._scanline_image_missing_label)
+
+        host._scanline_image_band_check = CheckBox(
+            "同时绘制文字高亮扫字线", group
+        )
+        host._scanline_image_band_check.setToolTip(
+            "自定义图片形态下是否保留普通高亮带（颜色沿用上方扫字线颜色"
+            "方案，与旧模式完全相同）；默认开启。素材缺失时无论开关如何都"
+            "自动回退绘制普通高亮"
+        )
+        host._scanline_image_band_check.toggled.connect(
+            lambda checked: host._update_style(
+                scanline_image_band_enabled=checked
+            )
+        )
+        layout.addWidget(host._scanline_image_band_check)
+
+        def offset_control(field: str, label: str, tooltip: str):
+            # 编辑框硬范围给足 4×基准的余量：显示值随输出高度换算（2160p
+            # 下 2000 基准 ≈ 4000 显示 px），存储端仍按 ±2000 基准钳制。
+            spin = self._spin_factory(-8000, 8000, suffix=" px")
+            control = CanvasSliderSpinBox(spin)
+            control.set_slider_range(-2000, 2000)
+            control.setToolTip(tooltip)
+            control.valueChanged.connect(
+                lambda value: host._update_style(
+                    **{field: host._scanline_base_px(value)}
+                )
+            )
+            layout.addWidget(property_field(label, control))
+            return control
+
+        host._scanline_image_offset_x_control = offset_control(
+            "scanline_image_offset_x_px",
+            "左右偏移",
+            "图片相对默认锚点（走字锋面 + 主文字垂直中心）的左右偏移："
+            "正值向右、负值向左、0 = 不偏移",
+        )
+        host._scanline_image_offset_y_control = offset_control(
+            "scanline_image_offset_y_px",
+            "上下偏移",
+            "图片相对默认锚点的上下偏移：正值向上、负值向下、0 = 不偏移",
+        )
+
+        def pct_control(field: str, label: str, lo: int, hi: int, tip: str):
+            spin = self._spin_factory(lo, hi, suffix=" %")
+            control = CanvasSliderSpinBox(spin)
+            control.set_slider_range(lo, hi)
+            control.setToolTip(tip)
+            control.valueChanged.connect(
+                lambda value: host._update_style(**{field: value})
+            )
+            layout.addWidget(property_field(label, control))
+            return control
+
+        host._scanline_image_scale_control = pct_control(
+            "scanline_image_scale_pct",
+            "图片尺寸",
+            10,
+            400,
+            "图片显示尺寸（百分比，100 = 原始大小按画布换算后的基准）；"
+            "10%~400%",
+        )
+        host._scanline_image_tint_strength_control = pct_control(
+            "scanline_image_tint_strength_pct",
+            "上色强度",
+            0,
+            100,
+            "实色上色的混合强度：0 = 不上色（原图），100 = 完全压成目标色"
+            "剪影，默认 50 保留一半原图颜色",
+        )
+
+        host._scanline_image_layer_checks: dict[str, CheckBox] = {}
+        layers_row = QWidget(group)
+        layers_layout = QHBoxLayout(layers_row)
+        layers_layout.setContentsMargins(0, 0, 0, 0)
+        layers_layout.setSpacing(10)
+        for token, label, tooltip in (
+            (
+                "solid",
+                "实色上色",
+                "按扫字线颜色方案把图片压成实色剪影（保留 alpha 边缘）；"
+                "渐变在图片所在位置采样取色",
+            ),
+            (
+                "stroke",
+                "描边",
+                "按颜色方案的描边槽与描边宽度沿图片轮廓描一圈",
+            ),
+            (
+                "decor",
+                "装饰",
+                "按颜色方案的装饰槽给图片加阴影/发光（装饰样式随方案"
+                "decoration_kind 二选一）",
+            ),
+        ):
+            check = CheckBox(label, layers_row)
+            check.setToolTip(tooltip)
+            check.toggled.connect(
+                lambda _checked, _token=token: host._on_scanline_image_layers_changed()
+            )
+            host._scanline_image_layer_checks[token] = check
+            layers_layout.addWidget(check)
+        layers_layout.addStretch(1)
+        layout.addWidget(property_field("取色层级", layers_row))
+        hint = QLabel(
+            "取色层级可任意组合；动图（GIF/WebP）的上色/描边/装饰会跟随"
+            "每一帧轮廓变化", group
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: rgba(128, 128, 128, 200);")
+        layout.addWidget(hint)
+
+        host._scanline_image_group = group
+        group.setVisible(False)
+        return group
 
     @staticmethod
     def _scanline_param_row(

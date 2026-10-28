@@ -1668,9 +1668,104 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     base.scanlineShape = (
         scanlineShape == QStringLiteral("flame")
         || scanlineShape == QStringLiteral("bubble")
+        || scanlineShape == QStringLiteral("image")
     )
         ? scanlineShape
         : QStringLiteral("band");
+    // 自定义图片形态（2026-10）：路径/偏移/高亮开关/取色层级 + role 模式
+    // 的装饰几何物化值。路径为空 = 素材缺失（渲染端回退普通高亮带）。
+    base.scanlineImagePath = stringValue(
+        style, QStringLiteral("scanline_image_path"), QString()
+    ).trimmed();
+    base.scanlineImageBandEnabled = style.value(
+        QStringLiteral("scanline_image_band_enabled")
+    ).toBool(base.scanlineImageBandEnabled);
+    base.scanlineImageOffsetXPx = std::clamp(
+        intValue(
+            style,
+            QStringLiteral("scanline_image_offset_x_px"),
+            base.scanlineImageOffsetXPx
+        ),
+        -20000,
+        20000
+    );
+    base.scanlineImageOffsetYPx = std::clamp(
+        intValue(
+            style,
+            QStringLiteral("scanline_image_offset_y_px"),
+            base.scanlineImageOffsetYPx
+        ),
+        -20000,
+        20000
+    );
+    {
+        const QString layers = stringValue(
+            style,
+            QStringLiteral("scanline_image_color_layers"),
+            base.scanlineImageColorLayers
+        );
+        // token 子集规范化（顺序固定，与 Python normalize 一致）。
+        QString normalized;
+        for (const auto &token : {QStringLiteral("solid"),
+                                  QStringLiteral("stroke"),
+                                  QStringLiteral("decor")}) {
+            if (layers.split(',', Qt::SkipEmptyParts)
+                    .contains(token, Qt::CaseSensitive)) {
+                if (!normalized.isEmpty()) {
+                    normalized += QStringLiteral(",");
+                }
+                normalized += token;
+            }
+        }
+        base.scanlineImageColorLayers = normalized;
+    }
+    base.scanlineImageScalePct = std::clamp(
+        intValue(
+            style,
+            QStringLiteral("scanline_image_scale_pct"),
+            base.scanlineImageScalePct
+        ),
+        10,
+        400
+    );
+    base.scanlineImageTintStrengthPct = std::clamp(
+        intValue(
+            style,
+            QStringLiteral("scanline_image_tint_strength_pct"),
+            base.scanlineImageTintStrengthPct
+        ),
+        0,
+        100
+    );
+    base.scanlineImageRoleStrokeWidthPx = style.value(
+        QStringLiteral("scanline_image_role_stroke_width_px")
+    ).toDouble(base.scanlineImageRoleStrokeWidthPx);
+    base.scanlineImageRoleStroke2WidthPx = style.value(
+        QStringLiteral("scanline_image_role_stroke2_width_px")
+    ).toDouble(base.scanlineImageRoleStroke2WidthPx);
+    base.scanlineImageRoleFontSizePx = style.value(
+        QStringLiteral("scanline_image_role_font_size_px")
+    ).toDouble(base.scanlineImageRoleFontSizePx);
+    base.scanlineImageRoleGlowRadiusPx = style.value(
+        QStringLiteral("scanline_image_role_glow_radius_px")
+    ).toDouble(base.scanlineImageRoleGlowRadiusPx);
+    base.scanlineImageRoleShadowOffsetXPx = style.value(
+        QStringLiteral("scanline_image_role_shadow_offset_x_px")
+    ).toDouble(base.scanlineImageRoleShadowOffsetXPx);
+    base.scanlineImageRoleShadowOffsetYPx = style.value(
+        QStringLiteral("scanline_image_role_shadow_offset_y_px")
+    ).toDouble(base.scanlineImageRoleShadowOffsetYPx);
+    const QString roleDecorationKind = stringValue(
+        style,
+        QStringLiteral("scanline_image_role_decoration_kind"),
+        base.scanlineImageRoleDecorationKind
+    );
+    base.scanlineImageRoleDecorationKind = (
+        roleDecorationKind == QStringLiteral("shadow")
+        || roleDecorationKind == QStringLiteral("glow")
+    )
+        ? roleDecorationKind
+        : QStringLiteral("none");
     base.zoomPulseCurveLevel = std::clamp(
         intValue(
             style,

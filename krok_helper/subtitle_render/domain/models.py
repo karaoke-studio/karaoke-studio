@@ -179,15 +179,18 @@ ScanlineEffect = Literal[
 SCANLINE_EFFECT_KINDS: frozenset[str] = frozenset(
     {"none", "sakura", "feather", "snow", "snow_solid", "star", "note"}
 )
-ScanlineShape = Literal["band", "flame", "bubble"]
-"""扫字线形态：``band`` 普通高亮带；``flame`` 烈焰棒；``bubble`` 水泡。
+ScanlineShape = Literal["band", "flame", "bubble", "image"]
+"""扫字线形态：``band`` 普通高亮带；``flame`` 烈焰棒；``bubble`` 水泡；
+``image`` 自定义图片（2026-10 新增，见 ``scanline_image_*`` 字段组）。
 
 烈焰棒/水泡是**独立形态**，不是普通高亮带的颜色变体：烈焰棒把扫字线本体
 变成一根发光火棒并向两侧喷火舌；水泡从锋面底部发射镂空水泡、围绕扫字线
 上浮。两者都会替换普通高亮带；烈焰棒颜色取扫字线本身的颜色方案，水泡
 固定水蓝/白水感。
 """
-SCANLINE_SHAPE_KINDS: frozenset[str] = frozenset({"band", "flame", "bubble"})
+SCANLINE_SHAPE_KINDS: frozenset[str] = frozenset(
+    {"band", "flame", "bubble", "image"}
+)
 LitAppearanceMode = Literal["custom", "auto", "role"]
 """指示灯外观模式：``custom`` 手动逐项设置；``auto`` 大小自动跟随主文字
 字号，矢量灯走主文字装饰管线（见 :func:`resolve_lit_appearance`）；
@@ -1310,10 +1313,49 @@ class Style:
     """扫字线粒子的取色层级（仅来源配色四档生效）。"""
 
     scanline_shape: ScanlineShape = "band"
-    """扫字线形态：普通高亮带 / 烈焰棒 / 水泡（见 :data:`SCANLINE_SHAPE_KINDS`）。
+    """扫字线形态：普通高亮带 / 烈焰棒 / 水泡 / 自定义图片（见
+    :data:`SCANLINE_SHAPE_KINDS`）。
 
     烈焰棒/水泡是独立形态并**替换**普通高亮带；烈焰棒颜色沿用扫字线颜色
-    方案，水泡从锋面底部发射、固定水蓝白水感。纯绘制参数，不参与布局推导。"""
+    方案，水泡从锋面底部发射、固定水蓝白水感。纯绘制参数，不参与布局推导。
+    自定义图片在走字锋面上叠加用户图片（动图逐帧播放），叠加层不参与
+    utopia/整字放大变换与布局防重叠统计。"""
+
+    scanline_image_path: str = ""
+    """自定义图片形态的素材**绝对路径**（支持 png/gif/apng/webp 等含
+    alpha 的静态/动图）。存盘恒为用户选择的绝对路径；渲染期找不到文件时
+    自动回退到工程（.yurika）所在目录按文件名查找，仍找不到则回退普通
+    高亮带。空串 = 未选择。"""
+
+    scanline_image_band_enabled: bool = True
+    """自定义图片形态下是否同时绘制普通文字高亮扫字线（沿用扫字线颜色
+    方案）。默认开启；图片素材缺失时无论本开关如何都回退绘制普通高亮。"""
+
+    scanline_image_offset_x_px: int = 0
+    """自定义图片相对默认锚点（走字锋面 + 主文字垂直中心）的左右偏移
+    （像素，``SCANLINE_BASE_HEIGHT``=1080 基准）：正值向右、负值向左、
+    0 = 不偏移。"""
+
+    scanline_image_offset_y_px: int = 0
+    """自定义图片相对默认锚点的上下偏移（像素，1080 基准）：正值向上、
+    负值向下、0 = 不偏移。"""
+
+    scanline_image_scale_pct: int = 100
+    """自定义图片显示尺寸（百分比，100 = 自然像素 × 画布高/1080）。
+    10~400；纯绘制参数，不参与布局推导。"""
+
+    scanline_image_tint_strength_pct: int = 50
+    """实色上色强度（百分比，默认 50）：100 = 压成纯目标色剪影，
+    0 = 不上色；按 ``C_out = (1-k)C_src + k*tint`` 混合，alpha 始终
+    保留素材原值（2026-10 用户口径：避免整图变成目标色）。"""
+
+    scanline_image_color_layers: str = ""
+    """自定义图片的取色层级（排列组合，逗号分隔 token）：
+    ``solid`` 实色上色（按扫字线颜色方案把图片压成实色剪影）、
+    ``stroke`` 描边（按方案描边槽在图片轮廓外描一圈）、
+    ``decor`` 装饰（按方案装饰槽给图片加阴影/发光）。
+    三个 token 任意组合（与粒子的四档累进制不同）；空串 = 原样绘制图片。
+    动图时上色/描边/装饰随每一帧的 alpha 重新生成。"""
 
     zoom_pulse_curve_level: int = 1
     """整字放大缓动档位（0~5）：0=线性；1~5 为缓出/缓入多项式阶数，越大峰值
@@ -2972,6 +3014,20 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
                 if isinstance(value, str) and value in SCANLINE_SHAPE_KINDS
                 else defaults.scanline_shape
             )
+        elif key == "scanline_image_path":
+            changes[key] = str(value) if isinstance(value, str) else ""
+        elif key == "scanline_image_band_enabled":
+            changes[key] = bool(value)
+        elif key in {"scanline_image_offset_x_px", "scanline_image_offset_y_px"}:
+            changes[key] = max(
+                -2000, min(2000, _int_value(value, 0))
+            )
+        elif key == "scanline_image_color_layers":
+            changes[key] = normalize_scanline_image_layers(value)
+        elif key == "scanline_image_scale_pct":
+            changes[key] = max(10, min(400, _int_value(value, 100)))
+        elif key == "scanline_image_tint_strength_pct":
+            changes[key] = max(0, min(100, _int_value(value, 50)))
         elif key == "scanline_role_name":
             parsed_role_name = str(value).strip() if value else ""
             changes[key] = parsed_role_name or None
@@ -3512,6 +3568,35 @@ def style_with_output_scanline(style: Style, output_height: int) -> Style:
         style,
         scanline_width_px=scanline_px_for_output(style.scanline_width_px, height),
         scanline_glow_px=scanline_px_for_output(style.scanline_glow_px, height),
+        scanline_image_offset_x_px=scanline_px_for_output(
+            style.scanline_image_offset_x_px, height
+        ),
+        scanline_image_offset_y_px=scanline_px_for_output(
+            style.scanline_image_offset_y_px, height
+        ),
+    )
+
+
+SCANLINE_IMAGE_LAYER_TOKENS: tuple[str, ...] = ("solid", "stroke", "decor")
+"""自定义图片取色层级的合法 token（排列组合，任意子集）。"""
+
+
+def normalize_scanline_image_layers(value: object) -> str:
+    """把取色层级组合规范化为按固定顺序的去重逗号串；非法 token 丢弃。
+
+    例：``"decor,solid,solid" → "solid,decor"``；全部非法/空 → ``""``
+    （原样绘制图片）。
+    """
+
+    if not isinstance(value, str):
+        return ""
+    tokens = {
+        token.strip()
+        for token in value.split(",")
+        if token.strip() in SCANLINE_IMAGE_LAYER_TOKENS
+    }
+    return ",".join(
+        token for token in SCANLINE_IMAGE_LAYER_TOKENS if token in tokens
     )
 
 

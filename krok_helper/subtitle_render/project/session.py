@@ -34,6 +34,23 @@ from krok_helper.subtitle_render.serialization.timing import (
 )
 
 
+def _sync_scanline_image_search_roots(project_path: Optional[Path]) -> None:
+    """把工程所在目录登记为自定义图片扫字线的渲染期回退搜索根。
+
+    .yurika 移动/换机后素材绝对路径失效时按该目录 basename 兜底查找
+    （2026-10 用户口径）；无工程身份时清空搜索根。
+    """
+
+    from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
+        set_scanline_image_search_roots,
+    )
+
+    if project_path is None:
+        set_scanline_image_search_roots([])
+        return
+    set_scanline_image_search_roots([Path(project_path).parent])
+
+
 _PROJECT_OWNED_KEYS = frozenset(
     {
         "schema_version",
@@ -548,6 +565,7 @@ class SubtitleProjectSession:
         self.saved_revision = int(saved_revision)
         self.saving = False
         self.save_error = None
+        _sync_scanline_image_search_roots(self.path)
 
     def begin_generation(self) -> None:
         """Invalidate state tied to the previously loaded project."""
@@ -575,6 +593,7 @@ class SubtitleProjectSession:
             missing_resources,
             source_data if isinstance(source_data, dict) else {},
         )
+        _sync_scanline_image_search_roots(self.path)
 
     def remember_missing_resources(
         self,
