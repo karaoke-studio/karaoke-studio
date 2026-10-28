@@ -2864,6 +2864,9 @@ class SubtitleRenderWindow(QWidget):
                 self._property_panel.mark_style_relayout_full()
                 self._preview_panel.set_style(self._style)
                 self._lyrics_panel.set_style(self._style)
+            self._screen_settings = replace(
+                self._screen_settings, resolution_mode="source"
+            )
             self._sync_output_size_to_video(self._video_info)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
         missing_resources = self._missing_project_resources(result.project_data)

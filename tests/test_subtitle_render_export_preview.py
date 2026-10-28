@@ -181,6 +181,44 @@ def test_legacy_project_screen_does_not_follow_replacement_video(qapp, monkeypat
         qapp.processEvents()
 
 
+@pytest.mark.parametrize("n3_import", [True, False], ids=["n3", "yurika"])
+def test_project_import_canvas_policy_preserves_font_pixels(qapp, monkeypatch, tmp_path, n3_import):
+    from krok_helper.models import MediaInfo
+    from krok_helper.subtitle_render.domain.models import Style, style_to_dict
+
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"fake")
+    info = MediaInfo(path, 1, 1, 0, 0, video_width=3840, video_height=2160, video_fps=24)
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    monkeypatch.setattr(SubtitleRenderWindow, "_probe", lambda self, *_args: info)
+    data = {
+        "screen": {"width": 1920, "height": 1080, "fps": 60},
+        "style": style_to_dict(Style(
+            font_size_px=180, font_reference_height=1080, layout_reference_height=1080,
+        )),
+        "background": {"kind": "video", "path": str(path)},
+    }
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        if n3_import:
+            window._finish_n3_import(
+                SimpleNamespace(project_data=data, warnings=[]), tmp_path / "song.n3proj",
+            )
+        else:
+            window._apply_project_data(data)
+        expected_size = (3840, 2160) if n3_import else (1920, 1080)
+        assert (window._screen_settings.width, window._screen_settings.height) == expected_size
+        assert window._screen_settings.fps == 60
+        assert window._style.font_size_px == 180
+        assert window._style.font_reference_height == expected_size[1]
+        assert window._style.layout_reference_height == expected_size[1]
+        assert (window._export_width_spin.value(), window._export_height_spin.value()) == expected_size
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
 def test_default_screen_still_allows_transparent_export_without_video(qapp, tmp_path):
     from krok_helper.errors import ProcessingError
     from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
