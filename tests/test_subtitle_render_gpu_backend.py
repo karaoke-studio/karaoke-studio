@@ -16060,6 +16060,53 @@ def test_gpu_band_covers_inline_volume(alignment, tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_band_pads_follow_layout_box_for_multi_char_chunk(tmp_path):
+    """行背景带的四边距按行布局盒：多字符 TimingChar 不能把左右撑出配置值。"""
+    path = tmp_path / "band.png"
+    image = QImage(8, 8, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(path))
+    style = _g1_style(
+        font_family="MS Gothic", font_family_latin="MS Gothic",
+        base_color="#FFFFFF", fill_color="#FFFFFF",
+        stroke_width_px=0, stroke2_enabled=False, decoration_kind="none",
+        line_tail_ms=1200, entry_anim="none", exit_anim="none",
+        karaoke_anim="none", reverse_karaoke_anim="none",
+        line_band_enabled=True, line_band_image=str(path),
+        line_band_fill_mode="stretch",
+        line_band_pad_top_px=20, line_band_pad_bottom_px=20,
+        line_band_pad_left_px=20, line_band_pad_right_px=20,
+        line_band_opacity_pct=100, line_band_include_ruby=False,
+    )
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("あいうえお", 0)], end_ms=2000,
+    )])
+
+    def band_bbox(frame: bytes) -> tuple[int, int, int, int]:
+        pixels = np.frombuffer(frame, dtype=np.uint8).reshape(360, 640, 4)
+        green = (
+            (pixels[:, :, 0] < 80)
+            & (pixels[:, :, 1] > 120)
+            & (pixels[:, :, 2] < 80)
+            & (pixels[:, :, 3] > 20)
+        )
+        ys, xs = np.where(green)
+        assert len(xs), "band is not visible"
+        return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+    cpu = band_bbox(_render_painter_oracle(style, t_ms=1000, track=track))
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1000,), force_warp=True, track=track
+        )
+    gpu = band_bbox(frames[0])
+    # 修前 GPU 用「整段墨迹宽 + 首字 advance」算行宽，左右各多出 20+px。
+    assert abs((cpu[2] - cpu[0]) - (gpu[2] - gpu[0])) <= 4, (cpu, gpu)
+    for cpu_edge, gpu_edge in zip(cpu, gpu):
+        assert abs(cpu_edge - gpu_edge) <= 4, (cpu, gpu)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("appearance", ["custom", "auto"])
 @pytest.mark.parametrize("effect", [effect for effect in get_args(EntryAnimation)
     if effect not in {"none", "fade", "rise", "slide_in"}])

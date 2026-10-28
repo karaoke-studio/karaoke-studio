@@ -1958,13 +1958,25 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 const int inkWidth = std::max(static_cast<int>(
                     referenceCharBounds.right - referenceCharBounds.left
                 ), 0);
+                // A TimingChar may hold several glyphs (word/chunk).  The
+                // Painter measures the whole string: advance is the sum of
+                // every glyph's advance and bearings come from the first /
+                // last glyph.  Using only metrics.front() with the whole
+                // run's ink width inflated the layout cell and pushed the
+                // row-band left/right edges far outside the configured pads.
+                int advance = 0;
+                for (const auto &glyphMetric : metrics) {
+                    advance += std::max(
+                        static_cast<int>(glyphMetric.advanceWidth), 0
+                    );
+                }
+                advance = std::max(advance, 1);
                 int leftBearing = metrics.front().leftSideBearing;
-                int rightBearing = metrics.front().rightSideBearing;
+                int rightBearing = metrics.back().rightSideBearing;
                 if (!charStyle.allowBiting) {
                     leftBearing = std::max(leftBearing, 0);
                     rightBearing = std::max(rightBearing, 0);
                 }
-                const int advance = std::max(static_cast<int>(metrics.front().advanceWidth), 1);
                 const int bodyWidth = inkWidth * (leftBearing + advance + rightBearing) / advance;
                 layoutWidth = static_cast<float>(
                     std::max(bodyWidth, 0) + edgeSize
