@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from math import isfinite
 from pathlib import Path
 
 from krok_helper.errors import ProcessingError
@@ -199,7 +200,7 @@ def validate_render_job(job: RenderJob) -> None:
             f"输出宽度和高度必须是偶数（当前 {job.width}×{job.height}）："
             "H.264/H.265 编码的 yuv420p 像素格式不支持奇数尺寸。"
         )
-    if job.fps <= 0:
+    if not isfinite(job.fps) or job.fps <= 0:
         raise ProcessingError("输出 fps 无效。")
     if job.output_format == OUTPUT_FORMAT_MP4:
         # 编码器相关字段只在 MP4 输出时参与导出；其余格式由 ffmpeg 内置的

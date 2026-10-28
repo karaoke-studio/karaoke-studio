@@ -31,6 +31,7 @@ from qfluentwidgets import (
     RadioButton as FluentRadioButton,
     SimpleCardWidget,
     SpinBox as FluentSpinBox,
+    DoubleSpinBox as FluentDoubleSpinBox,
     StrongBodyLabel,
     ToolButton as FluentToolButton,
 )
@@ -525,6 +526,21 @@ class ExportMonitorView(QLabel):
         self._rescale()
 
 
+class ExportMonitorFrame(AspectRatioBox):
+    """Top-align the image and report width changes for fitting its card."""
+
+    widthChanged = Signal()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self.widthChanged.emit()
+
+    def _update_child_geometry(self) -> None:
+        super()._update_child_geometry()
+        self._child.move(self._child.x(), 0)
+
+
 @dataclass(frozen=True)
 class ExportWorkspaceControls:
     """Explicit widget contract consumed by the application coordinator."""
@@ -542,6 +558,7 @@ class ExportWorkspaceControls:
     width_spin: ExportSizeEdit
     height_spin: ExportSizeEdit
     fps_combo: FluentComboBox
+    fps_spin: FluentDoubleSpinBox
     encoder_combo: FluentComboBox
     codec_combo: FluentComboBox
     preset_combo: FluentComboBox
@@ -764,15 +781,27 @@ class ExportWorkspaceView(QWidget):
         size_preset_combo = FluentComboBox()
         size_preset_combo.setMinimumHeight(32)
         size_preset_controller = CanvasSizePresetController(
-            size_preset_combo, width_spin, height_spin
+            size_preset_combo, width_spin, height_spin, source_modes=True
         )
         fps_combo = FluentComboBox()
         fps_combo.setMinimumHeight(32)
+        fps_combo.addItem("跟随原视频", userData="source")
+        fps_combo.addItem("原视频 2×", userData="source_2x")
         for fps in fps_options:
             fps_combo.addItem(f"{fps} fps", userData=fps)
+        fps_combo.addItem("自定义", userData="custom")
+        fps_combo.setCurrentIndex(fps_combo.findData(60))
+        fps_spin = FluentDoubleSpinBox()
+        fps_spin.setRange(0.01, 1000)
+        fps_spin.setDecimals(2)
+        fps_spin.setValue(60)
+        fps_spin.setSuffix(" fps")
+        fps_spin.setKeyboardTracking(False)
+        fps_spin.setMinimumHeight(32)
+        fps_combo.setToolTip("2× 按原视频帧率计算；背景复制帧，字幕按输出帧率渲染。")
         # 常用格式与宽高同行；输入框保持窄宽度，由下拉项短文案控制整体宽度。
         params_row.addWidget(
-            make_labeled_export_control("常用格式", size_preset_combo, theme_labels)
+            make_labeled_export_control("分辨率", size_preset_combo, theme_labels)
         )
         params_row.addWidget(
             make_labeled_export_control("宽度", width_spin, theme_labels), 1
@@ -780,10 +809,12 @@ class ExportWorkspaceView(QWidget):
         params_row.addWidget(
             make_labeled_export_control("高度", height_spin, theme_labels), 1
         )
-        params_row.addWidget(
-            make_labeled_export_control("帧率", fps_combo, theme_labels), 1
-        )
         params_layout.addLayout(params_row)
+        fps_row = QHBoxLayout()
+        fps_row.setSpacing(8)
+        fps_row.addWidget(make_labeled_export_control("帧率", fps_combo, theme_labels), 1)
+        fps_row.addWidget(make_labeled_export_control("自定义 / 当前值", fps_spin, theme_labels), 1)
+        params_layout.addLayout(fps_row)
 
         encode_row = QHBoxLayout()
         encode_row.setContentsMargins(0, 0, 0, 0)
@@ -920,7 +951,7 @@ class ExportWorkspaceView(QWidget):
         monitor_header.addWidget(eta_label)
         monitor_layout.addLayout(monitor_header)
         monitor_view = ExportMonitorView()
-        monitor_frame = AspectRatioBox(
+        monitor_frame = ExportMonitorFrame(
             monitor_view,
             aspect_ratio=width_spin.value() / height_spin.value(),
         )
@@ -984,6 +1015,7 @@ class ExportWorkspaceView(QWidget):
             width_spin=width_spin,
             height_spin=height_spin,
             fps_combo=fps_combo,
+            fps_spin=fps_spin,
             encoder_combo=encoder_combo,
             codec_combo=codec_combo,
             preset_combo=preset_combo,

@@ -75,7 +75,7 @@ class RenderJob:
     audio_path: Path | None = None
     width: int = 1920
     height: int = 1080
-    fps: int = 60
+    fps: int | float = 60
     duration_ms: int | None = None
     include_audio: bool = True
     """MP4 与透明 MOV 携带音频（背景视频内嵌音轨或独立音频）；PNG 序列无音频。"""

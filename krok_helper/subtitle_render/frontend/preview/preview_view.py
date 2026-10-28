@@ -873,9 +873,9 @@ class TransportBar(QWidget):
         ms = max(ms, 1000)
         self._slider.setMaximum(ms)
 
-    def set_preview_fps(self, fps: int) -> None:
-        """设置预览播放时钟帧率；当前只允许 60 / 120fps。"""
-        normalized = 120 if int(fps) == 120 else 60
+    def set_preview_fps(self, fps: int | float) -> None:
+        """设置预览播放时钟帧率；预览定时器只控制刷新请求频率。"""
+        normalized = max(float(fps), 0.001)
         self._preview_fps = normalized
         interval = max(1, int(1000 / normalized))
         self._tick_timer.setInterval(interval)

@@ -3171,21 +3171,24 @@ class PropertyPanel(QWidget):
             return
         self.screenSizeChanged.emit()
 
-    def screen_size(self) -> tuple[int, int, int]:
+    def screen_size(self) -> tuple[int, int, int | float]:
         data = self._screen_size_fps_combo.currentData()
-        fps = int(data) if data in SCREEN_FPS_OPTIONS else 60
+        fps = data if isinstance(data, (int, float)) and data > 0 else 60
         return (
             self._screen_size_width_spin.value(),
             self._screen_size_height_spin.value(),
             fps,
         )
 
-    def set_screen_size(self, width: int, height: int, fps: int) -> None:
+    def set_screen_size(self, width: int, height: int, fps: int | float) -> None:
         self._syncing = True
         try:
             self._screen_size_width_spin.setValue(max(int(width), 1))
             self._screen_size_height_spin.setValue(max(int(height), 1))
-            index = self._screen_size_fps_combo.findData(int(fps))
+            index = self._screen_size_fps_combo.findData(fps)
+            if index < 0:
+                self._screen_size_fps_combo.addItem(f"{fps:g} fps", userData=fps)
+                index = self._screen_size_fps_combo.findData(fps)
             self._screen_size_fps_combo.setCurrentIndex(
                 index if index >= 0 else 0
             )

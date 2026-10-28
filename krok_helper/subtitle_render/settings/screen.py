@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
+
+from krok_helper.subtitle_render.domain.frame_rate import frame_rate
 
 
 @dataclass(frozen=True)
@@ -25,10 +28,13 @@ class ScreenSettings:
     par: str = "1:1"
     width: int = 1920
     height: int = 1080
-    fps: int = 60
+    fps: int | float = 60
+    resolution_mode: str = "source"
+    fps_mode: str = "source"
 
 
 SCREEN_FPS_OPTIONS = (60, 120)
+SOURCE_SCREEN_MODES = ("source", "source_2x")
 SCREEN_PRESETS: tuple[ScreenPreset, ...] = (
     ScreenPreset("hd_540", "HD 540", 960, 540),
     ScreenPreset("hdv_720", "HDV 720", 1280, 720),
@@ -97,6 +103,8 @@ def screen_settings_to_dict(settings: ScreenSettings) -> dict[str, Any]:
         "width": settings.width,
         "height": settings.height,
         "fps": settings.fps,
+        "resolution_mode": settings.resolution_mode,
+        "fps_mode": settings.fps_mode,
     }
 
 
@@ -118,6 +126,8 @@ def screen_settings_from_dict(payload: object) -> ScreenSettings:
         width=width,
         height=height,
         fps=fps,
+        resolution_mode=_screen_mode(payload.get("resolution_mode"), resolution=True),
+        fps_mode=_screen_mode(payload.get("fps_mode")),
     )
 
 
@@ -129,12 +139,46 @@ def _int_setting(value: object, minimum: int, maximum: int, fallback: int) -> in
     return min(max(number, minimum), maximum)
 
 
-def _normalize_screen_fps(value: object) -> int:
+def _normalize_screen_fps(value: object) -> int | float:
     try:
-        fps = int(value)
+        fps = float(value)
     except (TypeError, ValueError):
         return ScreenSettings.fps
-    return fps if fps in SCREEN_FPS_OPTIONS else ScreenSettings.fps
+    if not isfinite(fps) or fps <= 0:
+        return ScreenSettings.fps
+    return int(fps) if fps.is_integer() else fps
+
+
+def _screen_mode(value: object, *, resolution: bool = False) -> str:
+    modes = {"custom", *SOURCE_SCREEN_MODES}
+    modes.update(_CANVAS_SIZE_BY_KEY if resolution else {"fixed"})
+    return str(value) if isinstance(value, str) and value in modes else "custom"
+
+
+def resolve_source_screen(settings: ScreenSettings, video_info: Any) -> ScreenSettings:
+    """Resolve the two independent source modes without changing fixed values."""
+    from dataclasses import replace
+
+    values = {}
+    if settings.resolution_mode in SOURCE_SCREEN_MODES:
+        width = int(getattr(video_info, "video_width", 0) or 0)
+        height = int(getattr(video_info, "video_height", 0) or 0)
+        if width <= 0 or height <= 0:
+            raise ValueError("无法读取原视频分辨率，请选择自定义分辨率。")
+        multiplier = 2 if settings.resolution_mode == "source_2x" else 1
+        # Keep the existing even-dimension policy for yuv420p encoders.
+        width, height = width * multiplier, height * multiplier
+        width, height = width - width % 2, height - height % 2
+        if not 160 <= width <= 7680 or not 90 <= height <= 4320:
+            raise ValueError(f"输出分辨率 {width}×{height} 超出支持范围。")
+        values.update(width=width, height=height)
+    if settings.fps_mode in SOURCE_SCREEN_MODES:
+        fps = getattr(video_info, "video_fps", None)
+        if fps is None or not isfinite(fps) or fps <= 0:
+            raise ValueError("无法读取原视频帧率，请选择固定或自定义帧率。")
+        rate = frame_rate(fps) * (2 if settings.fps_mode == "source_2x" else 1)
+        values["fps"] = rate.numerator if rate.denominator == 1 else float(rate)
+    return replace(settings, **values)
 
 
 def match_screen_preset_key(width: int, height: int, par: str) -> str:

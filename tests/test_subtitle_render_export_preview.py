@@ -41,6 +41,207 @@ class _SettingsProvider:
         self.data = dict(data)
 
 
+@pytest.mark.parametrize("remembered", [None, 720, 2160])
+def test_empty_controls_are_usable_and_new_video_defaults_to_source(qapp, monkeypatch, tmp_path, remembered):
+    from dataclasses import replace
+    from krok_helper.models import MediaInfo
+
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    provider = _SettingsProvider()
+    if remembered:
+        provider.data["screen"] = {"width": remembered * 16 // 9, "height": remembered, "fps": 120, "resolution_mode": "custom", "fps_mode": "fixed"}
+    window = SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    try:
+        controls = window._export_controls
+        assert controls.size_preset_combo.currentData() == "1080p"
+        assert controls.fps_combo.currentData() == 60
+        assert (controls.width_spin.value(), controls.height_spin.value()) == (1920, 1080)
+        assert window._style.font_reference_height == window._style.layout_reference_height == 1080
+        assert window._style.font_size_px == window._app_default_style.font_size_px
+        assert not controls.width_spin.isEnabled() and not controls.height_spin.isEnabled()
+        assert (controls.width_spin._maximum, controls.height_spin._maximum) == (7680, 4320)
+        for combo in (controls.size_preset_combo, controls.fps_combo):
+            assert not combo.items[combo.findData("source")].isEnabled
+            assert not combo.items[combo.findData("source_2x")].isEnabled
+
+        path = tmp_path / "video.mp4"
+        path.write_bytes(b"fake")
+        info = MediaInfo(path, 1, 1, 0, 0, video_width=1280, video_height=720, video_fps=30000 / 1001)
+        window.load_video(path, info)
+        assert controls.size_preset_combo.currentData() == "source"
+        assert controls.fps_combo.currentData() == "source"
+        assert (window._screen_settings.width, window._screen_settings.height, window._export_fps_value()) == (1280, 720, 30000 / 1001)
+
+        window.set_solid_background("#000000")
+        assert controls.size_preset_combo.currentData() == "720p"
+        assert controls.fps_combo.currentData() == "custom"
+        window.load_video(path, replace(info, video_fps=24))
+        assert controls.size_preset_combo.currentData() == controls.fps_combo.currentData() == "source"
+        assert window._export_fps_value() == 24
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_editing_one_empty_axis_keeps_other_axis_default_to_source(qapp, monkeypatch, tmp_path):
+    from krok_helper.models import MediaInfo
+
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        controls = window._export_controls
+        controls.size_preset_combo.setCurrentIndex(controls.size_preset_combo.findData("720p"))
+        path = tmp_path / "video.mp4"
+        path.write_bytes(b"fake")
+        window.load_video(path, MediaInfo(path, 1, 1, 0, 0, video_width=1920, video_height=1080, video_fps=25))
+        assert controls.size_preset_combo.currentData() == "720p"
+        assert controls.fps_combo.currentData() == "source"
+        assert window._export_fps_value() == 25
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_source_modes_custom_values_and_project_round_trip(qapp, monkeypatch, tmp_path):
+    from dataclasses import replace
+    from krok_helper.models import MediaInfo
+    from krok_helper.subtitle_render.settings.screen import screen_settings_from_dict
+
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        path = tmp_path / "video.mp4"
+        path.write_bytes(b"fake")
+        info = MediaInfo(path, 1, 1, 0, 0, video_width=1920, video_height=1080, video_fps=30000 / 1001)
+        window.load_video(path, info)
+        controls = window._export_controls
+        controls.size_preset_combo.setCurrentIndex(controls.size_preset_combo.findData("source_2x"))
+        controls.fps_combo.setCurrentIndex(controls.fps_combo.findData("source_2x"))
+        assert (window._screen_settings.width, window._screen_settings.height) == (3840, 2160)
+        assert window._export_fps_value() == 60000 / 1001
+        assert controls.fps_spin.decimals() == 2
+        assert controls.fps_spin.value() == 59.94
+        assert window._property_panel.screen_size() == (3840, 2160, 60000 / 1001)
+        assert not controls.width_spin.isEnabled()
+        assert not controls.fps_spin.isEnabled()
+
+        # The persisted screen is shared by .yurika, undo and user settings.
+        saved = window._current_project_data()["screen"]
+        assert screen_settings_from_dict(saved) == window._screen_settings
+        window._restore_screen(saved, window._current_project_data()["style"])
+        assert controls.size_preset_combo.currentData() == "source_2x"
+        assert controls.fps_combo.currentData() == "source_2x"
+        assert window._export_fps_value() == 60000 / 1001
+
+        window.load_video(path, replace(info, video_width=1280, video_height=720, video_fps=25))
+        assert (window._screen_settings.width, window._screen_settings.height, window._export_fps_value()) == (2560, 1440, 50)
+        controls.size_preset_combo.setCurrentIndex(controls.size_preset_combo.findData("custom"))
+        controls.width_spin.setValue(2048)
+        controls.fps_combo.setCurrentIndex(controls.fps_combo.findData("custom"))
+        controls.fps_spin.setValue(47.567)
+        assert controls.width_spin.isEnabled()
+        assert controls.fps_spin.isEnabled()
+        window.load_video(path, info)
+        assert window._screen_settings.width == 2048
+        assert window._export_fps_value() == 47.57
+        window.set_solid_background("#000000")
+        assert controls.size_preset_combo.currentData() == "custom"
+        assert window._export_fps_value() == 47.57
+        window.load_video(path, replace(info, video_fps=600))
+        controls.fps_combo.setCurrentIndex(controls.fps_combo.findData("source_2x"))
+        assert window._export_fps_value() == 1200
+        assert controls.fps_spin.value() == 1200
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_legacy_project_screen_does_not_follow_replacement_video(qapp, monkeypatch, tmp_path):
+    from krok_helper.models import MediaInfo
+    from krok_helper.subtitle_render.settings.screen import screen_settings_from_dict
+
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        legacy = screen_settings_from_dict({"width": 2560, "height": 1440, "fps": 120})
+        window._screen_settings = legacy
+        window._set_export_screen_controls(legacy)
+        path = tmp_path / "video.mp4"
+        path.write_bytes(b"fake")
+        window.load_video(path, MediaInfo(path, 1, 1, 0, 0, video_width=1920, video_height=1080, video_fps=24))
+        assert (window._screen_settings.width, window._screen_settings.height, window._export_fps_value()) == (2560, 1440, 120)
+        assert window._export_controls.size_preset_combo.currentData() == "custom"
+        assert window._export_fps_combo.currentData() == "custom"
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+@pytest.mark.parametrize("n3_import", [True, False], ids=["n3", "yurika"])
+def test_project_import_canvas_policy_preserves_font_pixels(qapp, monkeypatch, tmp_path, n3_import):
+    from krok_helper.models import MediaInfo
+    from krok_helper.subtitle_render.domain.models import Style, style_to_dict
+
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"fake")
+    info = MediaInfo(path, 1, 1, 0, 0, video_width=3840, video_height=2160, video_fps=24)
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    monkeypatch.setattr(SubtitleRenderWindow, "_probe", lambda self, *_args: info)
+    data = {
+        "screen": {"width": 1920, "height": 1080, "fps": 60},
+        "style": style_to_dict(Style(
+            font_size_px=180, font_reference_height=1080, layout_reference_height=1080,
+        )),
+        "background": {"kind": "video", "path": str(path)},
+    }
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        if n3_import:
+            window._finish_n3_import(
+                SimpleNamespace(project_data=data, warnings=[]), tmp_path / "song.n3proj",
+            )
+        else:
+            window._apply_project_data(data)
+        expected_size = (3840, 2160) if n3_import else (1920, 1080)
+        assert (window._screen_settings.width, window._screen_settings.height) == expected_size
+        assert window._screen_settings.fps == 60
+        assert window._style.font_size_px == 180
+        assert window._style.font_reference_height == expected_size[1]
+        assert window._style.layout_reference_height == expected_size[1]
+        assert (window._export_width_spin.value(), window._export_height_spin.value()) == expected_size
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_default_screen_still_allows_transparent_export_without_video(qapp, tmp_path):
+    from krok_helper.errors import ProcessingError
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
+
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        window._timing_track = TimingTrack(lines=[TimingLine(chars=[TimingChar("a", 0)], end_ms=1000)])
+        combo = window._export_format_combo
+        combo.setCurrentIndex(combo.findData("png_transparent"))
+        window._export_dir_edit.setText(str(tmp_path))
+        window._export_name_edit.setText("transparent")
+        job = window._build_render_job()
+        assert (job.width, job.height, job.fps) == (1920, 1080, 60)
+        assert job.output_format == "png_transparent"
+        combo.setCurrentIndex(combo.findData("mp4"))
+        with pytest.raises(ProcessingError, match="请先选择背景源"):
+            window._build_render_job()
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
@@ -150,26 +351,23 @@ def test_sync_preview_output_size_updates_export_monitor_ratio():
     ]
 
 
-def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
+def test_export_monitor_card_fits_image_and_tracks_window_width(qapp):
     window = SubtitleRenderWindow(embedded=True)
     try:
-        window.resize(1280, 800)
         window._stack.setCurrentWidget(window._export_tab)
         window.show()
-        qapp.processEvents()
-
-        settings_column = window.findChild(QWidget, "SrExportSettingsCol")
-        assert settings_column is not None
-        monitor_card = window._export_monitor_card
-        assert monitor_card.height() == pytest.approx(
-            settings_column.sizeHint().height(), abs=1
-        )
-        frame_width = window._export_monitor_frame.width()
-        view_geometry = window._export_monitor_view.geometry()
-        assert view_geometry.width() >= frame_width * 0.95
-        assert view_geometry.width() / view_geometry.height() == pytest.approx(
-            16 / 9, rel=0.005
-        )
+        for width, height in ((1280, 800), (1100, 760), (1400, 1000)):
+            window.resize(width, height)
+            for _ in range(3):
+                qapp.processEvents()
+            frame_width = window._export_monitor_frame.width()
+            view_geometry = window._export_monitor_view.geometry()
+            assert view_geometry.y() == 0
+            assert view_geometry.width() >= frame_width * 0.95
+            assert view_geometry.width() / view_geometry.height() == pytest.approx(16 / 9, rel=0.005)
+            image_bottom = window._export_monitor_view.mapTo(window._export_monitor_card, QPoint()).y() + view_geometry.height()
+            footer_top = window._export_format_label.y()
+            assert footer_top - image_bottom == pytest.approx(window._export_monitor_layout.spacing(), abs=2)
     finally:
         window.close()
         window.deleteLater()
@@ -346,11 +544,12 @@ def test_export_cards_are_vertically_centered_above_actions(qapp):
 
         column = window.findChild(QWidget, "SrExportColumn")
         assert column is not None
-        settings_top = window._export_settings_col.mapTo(column, QPoint()).y()
+        settings_viewport = window._export_settings_col.parentWidget()
+        settings_top = settings_viewport.mapTo(column, QPoint()).y()
         monitor_top = window._export_monitor_card.mapTo(column, QPoint()).y()
         progress_top = window._export_progress.mapTo(column, QPoint()).y()
         gap_below_cards = progress_top - (
-            settings_top + window._export_settings_col.height()
+            settings_top + settings_viewport.height()
         )
 
         # 「输出格式」下拉加入输出卡片后设置列更高，800px 窗口下上下留白收窄；
