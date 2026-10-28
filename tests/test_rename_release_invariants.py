@@ -62,6 +62,31 @@ def test_app_targets_follow_the_legacy_gate_for_the_current_version() -> None:
     )
 
 
+def test_windows_package_validation_follows_the_legacy_gate() -> None:
+    """包内容校验必须与旧名停发闸同源，否则停发版本在 CI 必然失败。
+
+    2026-10 v4.4.0 发布首踩：``build_windows.bat`` 已按 ``SHIP_LEGACY_APP_EXE``
+    跳过旧名副本复制，但校验清单仍无条件要求 ``Karaoke Studio.exe``，Windows
+    构建在最后一步报 "Missing package files" 且 release 任务被整体跳过。校验
+    侧因此也由 ``LEGACY_APP_REQUIRED`` 驱动，禁止再硬编码旧名条目。
+    """
+
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "build_windows.bat"
+    ).read_text(encoding="utf-8")
+    assert 'set "LEGACY_APP_REQUIRED=0"' in script
+    assert 'set "LEGACY_APP_REQUIRED=1"' in script
+    # 旧名 EXE 只能经闸变量追加，不能直接写进 $required / $rootLevel 字面量。
+    assert "  '%LEGACY_APP_NAME%.exe'" not in script
+    assert (
+        "if ('%LEGACY_APP_REQUIRED%' -eq '1') { $legacyFiles = @('%LEGACY_APP_NAME%.exe') };"
+        in script
+    )
+    assert ") + $legacyFiles;" in script
+
+
 def test_release_notes_cutoff_matches_the_packaging_gate() -> None:
     """手动更新提示的截止版本必须与打包停发闸一致，改一处漏一处会让提示与包内容错位。"""
 

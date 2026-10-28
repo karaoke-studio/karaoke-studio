@@ -313,8 +313,12 @@ if errorlevel 1 (
 rem 与 build_parts 的停发判定同一事实源：迁移期（< 4.4.0）复制旧名副本，
 rem 之后只打 Lin-K Lyrics.exe。探测失败（非零退出码）按「停发」处理——
 rem 若判定与实际不符，后续 build_parts 的 SystemExit 护栏会让构建响亮失败。
+rem LEGACY_APP_REQUIRED 同时驱动下方包内容校验：停发期不能再要求旧名 EXE，
+rem 否则 4.4.0+ 的构建会在校验阶段必然失败（2026-10 v4.4.0 发布首踩）。
+set "LEGACY_APP_REQUIRED=0"
 %PYTHON_BIN% -c "import sys; import scripts.build_parts as bp; sys.exit(0 if bp.SHIP_LEGACY_APP_EXE else 1)"
 if errorlevel 1 goto SkipLegacyCopy
+set "LEGACY_APP_REQUIRED=1"
 
 echo Creating legacy-name EXE copy for existing installs...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -387,6 +391,8 @@ echo Validating Windows package contents...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$targetDir = Resolve-Path '%APP_DIST%';" ^
     "$internal = Join-Path $targetDir '_internal';" ^
+    "$legacyFiles = @();" ^
+    "if ('%LEGACY_APP_REQUIRED%' -eq '1') { $legacyFiles = @('%LEGACY_APP_NAME%.exe') };" ^
     "$required = @(" ^
     "  'krok_helper\assets\logo\logo.jpg'," ^
     "  'krok_helper\assets\logo\logo.ico'," ^
@@ -408,10 +414,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\bass\x64\bass_fx.dll'," ^
     "  'Updater.exe'," ^
     "  'krok_subtitle_renderer.exe'," ^
-    "  '%APP_NAME%.exe'," ^
-    "  '%LEGACY_APP_NAME%.exe'" ^
-    ");" ^
-    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','%APP_NAME%.exe','%LEGACY_APP_NAME%.exe');" ^
+    "  '%APP_NAME%.exe'" ^
+    ") + $legacyFiles;" ^
+    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','%APP_NAME%.exe') + $legacyFiles;" ^
     "$missing = @();" ^
     "foreach ($rel in $required) { $base = if ($rel -in $rootLevel) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
     "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^

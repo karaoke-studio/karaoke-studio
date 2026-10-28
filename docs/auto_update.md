@@ -159,7 +159,7 @@ manifest 协议。
 | `KaraokeStudio-windows.zip` | 完整 onedir 包，全量兜底；内含出厂 `.installed_manifest.json` |
 | `KaraokeStudio-windows.zip.sha256` | 全量 zip 校验 |
 | `KaraokeStudio-windows.json` | schema 1 manifest；名字由存量 Updater 从 zip 名派生，不可改 |
-| `KaraokeStudio-windows-app.zip` | `Lin-K Lyrics.exe`、`Karaoke Studio.exe`（兼容副本）、`Updater.exe`、`krok_subtitle_renderer.exe`、`_internal/krok_helper`、`_internal/strange_uta_game` |
+| `KaraokeStudio-windows-app.zip` | `Lin-K Lyrics.exe`、`Updater.exe`、`krok_subtitle_renderer.exe`、`_internal/krok_helper`、`_internal/strange_uta_game`；4.3.x 及更早另含 `Karaoke Studio.exe` 兼容副本（4.4.0 起停发） |
 | `KaraokeStudio-windows-app.zip.sha256` | app part 文件校验 |
 | `KaraokeStudio-windows-runtime.zip` | `_internal/` 中除应用代码和本地清单外的运行库 |
 | `KaraokeStudio-windows-runtime.zip.sha256` | runtime part 文件校验 |
@@ -301,8 +301,10 @@ runtime 内容哈希、迫使所有用户重下运行库。
    `SHIP_LEGACY_APP_EXE` 在导入期按当前 `APP_VERSION` 求值（四段语义，
    `4.3.9.9` 仍属迁移期、`4.4.0.1` 已停发）；`APP_TARGETS`、`main()` 的存在性
    护栏（迁移期缺副本 / 停发期 dist 里多出副本都 `SystemExit`）与
-   `build_windows.bat` 的「Creating legacy-name EXE copy」步骤全部跟随它，
-   两端口径不可能分叉。护栏见 `tests/test_rename_release_invariants.py`。
+   `build_windows.bat` 的「Creating legacy-name EXE copy」步骤和包内容校验
+   （`LEGACY_APP_REQUIRED`）全部跟随它，两端口径不可能分叉。护栏见
+   `tests/test_rename_release_invariants.py`。（2026-10 v4.4.0 首推时校验清单
+   漏跟版本闸、仍强制要求旧名 EXE，导致 Windows 构建在最后一步失败；现已同源。）
 2. **放宽必须先行**（随 4.3.0 提前发出）：`_apply_workbench_update` 的必备根目录
    EXE 前置校验只要求新名主程序 + GPU sidecar，旧名可选——执行 4.3.x → 4.4.0
    全量回退的正是 4.3.x 期间发出的 Updater，放宽晚于首个无旧名版本就会把它当
