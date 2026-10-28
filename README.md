@@ -313,7 +313,7 @@ venv\Scripts\activate
 # 安装依赖 / Install dependencies
 pip install -r krok_helper/lyrics_timing/requirements.txt
 pip install -r krok_helper/lyrics_timing/requirements-winrt.txt   # Windows 日语注音，可选 / optional
-pip install -r requirements-dev.txt                                # 跑测试才需要 / tests only
+pip install -r requirements-dev.txt                            # 工作台补充依赖与测试工具，源码运行也需要
 
 # 启动 / Launch
 python -m krok_helper
@@ -329,8 +329,35 @@ Or just double-click `启动桌面版.bat`.
 > 没有子模块的话第 4 步「歌词打轴」会直接起不来。
 > Without the submodule, step 4 (timing) will not load.
 
-> **依赖文件说明 / Dependency files.** 运行依赖的真源是子模块里锁定版本的 `krok_helper/lyrics_timing/requirements*.txt`（发布流程会对其做内容哈希用于增量更新，**改动需谨慎**）；仓库根目录的 `requirements-dev.txt` 只放测试与中文分词相关的开发依赖。
-> Runtime dependencies come from the submodule's pinned `krok_helper/lyrics_timing/requirements*.txt` files (their contents are hashed by the release pipeline for incremental updates—change them with care); the root `requirements-dev.txt` contains only test and Chinese word-segmentation development dependencies.
+> **依赖文件说明 / Dependency files.** 源码运行需要同时安装子模块的 `requirements.txt` 和根目录的 `requirements-dev.txt`。后者沿用既有文件名，除了测试工具，也包含工作台需要的 `psutil`、`yt-dlp`、`fonttools`、`pillow` 等依赖，不能跳过。子模块的 `requirements*.txt` 被发布流程做内容哈希用于增量更新，**改动需谨慎**。
+> Source runs require both the submodule's `requirements.txt` and the root `requirements-dev.txt`. Despite its historical name, the latter includes workbench dependencies as well as test tools. The submodule's requirement files are content-hashed by the release pipeline—change them with care.
+
+#### Windows 源码运行：构建 GPU 渲染 sidecar
+
+Windows 的 GPU 字幕预览和导出使用独立的 C++ 程序 `krok_subtitle_renderer.exe`，仅安装 Python 依赖不会生成它。需要 GPU 渲染时，请在首次运行前完成以下构建；不可用时程序会回退到 Python QPainter。
+
+1. 安装 Visual Studio 或 Build Tools，勾选「使用 C++ 的桌面开发」，包含 MSVC x64 工具和 Windows SDK；确保 Git 已安装。
+2. 打开对应 Visual Studio 的 **x64 Native Tools Command Prompt**（以下命令使用 cmd 语法），进入仓库根目录并激活前面创建的虚拟环境。
+3. 安装构建工具及与 PyQt6 一致的 Qt SDK，然后编译。当前依赖固定为 Qt **6.11.0**，不要混用 6.11.1。`aqtinstall` 使用项目已验证的提交：
+
+```bat
+venv\Scripts\activate
+python -m pip install cmake ninja "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
+python -m aqt install-qt windows desktop 6.11.0 win64_msvc2022_64 --archives qtbase --outputdir "%LOCALAPPDATA%\krok-helper\qt"
+cmake -S native\subtitle_renderer -B build\native-renderer -G Ninja -DCMAKE_PREFIX_PATH="%LOCALAPPDATA%\krok-helper\qt\6.11.0\msvc2022_64" -DCMAKE_BUILD_TYPE=Release -DKROK_EXPECTED_QT_VERSION=6.11.0
+cmake --build build\native-renderer --config Release --clean-first
+```
+
+产物为 `build\native-renderer\krok_subtitle_renderer.exe`，源码运行会自动查找它，无需复制到 Python 包目录。上述 Qt SDK 默认位置也会被自动用于查找所需 DLL。
+
+可继续在同一个命令提示符中运行现有冒烟脚本，验证 sidecar 配置、渲染和共享内存读回；成功后再启动应用：
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_native_renderer_smoke.ps1 -QtRoot "%LOCALAPPDATA%\krok-helper\qt\6.11.0\msvc2022_64"
+python -m krok_helper
+```
+
+修改 C++ 共享头文件后也应使用 `--clean-first` 全量重建。始终使用同一套 MSVC 工具链；如果更换 Visual Studio 安装或工具链，请先移走旧的 `build\native-renderer` 构建目录，再重新配置和编译，避免复用旧缓存与对象文件。
 
 ---
 
@@ -391,7 +418,7 @@ The script verifies deps, builds and smoke-tests the Direct2D renderer sidecar, 
 karaoke-studio/
 ├── app.py                        # 兼容入口 / Compat entry point
 ├── 启动桌面版.bat                 # 一键启动 / One-click launcher
-├── requirements-dev.txt          # 开发依赖 / Dev deps
+├── requirements-dev.txt          # 工作台补充依赖与测试工具 / Workbench deps and test tools
 ├── AGENTS.md                     # 协作与开发约定 / Contributor conventions
 ├── CHANGELOG.md / LICENSE / NOTICE / AUTHORS.md
 │
