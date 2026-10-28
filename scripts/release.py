@@ -150,14 +150,15 @@ def _with_announcement_banner(body: str) -> str:
 #: 连同 build_parts 的版本闸一起改。
 LEGACY_FREE_SINCE_VERSION = "4.4.0"
 
-#: 旧版手动更新提示：改名前安装、长期未更新而错过迁移版（4.2.8.9+）的用户，
-#: 自动更新到无旧名包会失败（全量被拒）或更新后无法启动（增量删了旧名 EXE），
-#: 提示他们手动下载完整包。渲染口径与 ANNOUNCEMENT_BANNER 相同：HTML span 在
-#: 更新弹窗里是真红字，GitHub 网页降级为黑色粗体。
+#: 旧版更新提示：改名前安装、长期未更新而错过迁移版（4.2.8.9+）的用户，
+#: 自动更新到无旧名包会失败（全量被拒）或更新后无法启动（增量删了旧名 EXE）。
+#: 两条可走的路：重新下载完整包，或直接打开安装目录里已装好的 Lin-K Lyrics.exe
+#: （增量路径其实已经装上了新名主程序，只是旧名入口失效）。渲染口径与
+#: ANNOUNCEMENT_BANNER 相同：HTML span 在更新弹窗里是真红字，GitHub 网页降级为黑色粗体。
 MANUAL_UPDATE_NOTICE = (
     '<span style="color:#d64545"><b>老版本用户请注意：若自动更新失败或更新后无法'
-    '启动，请手动下载下方完整包重新解压使用（新版安装包已不再包含旧主程序名 '
-    'Karaoke Studio.exe）。</b></span>'
+    '启动，可重新下载下方完整包，或直接打开安装目录里的 Lin-K Lyrics.exe'
+    '（新版安装包已不再包含旧主程序名 Karaoke Studio.exe）。</b></span>'
 )
 
 

@@ -309,8 +309,9 @@ runtime 内容哈希、迫使所有用户重下运行库。
    损坏包拒绝。`_cleanup_legacy_main_exe` / `_migrate_legacy_shortcuts` 长期
    保留：存量安装里的旧名副本要靠它们回收。
 3. **release body 头部提示**：`scripts/release.py` 自首个无旧名版本（4.4.0，含）
-   起（`LEGACY_FREE_SINCE_VERSION` 同源闸）在横幅下方自动插入「老版本用户请
-   手动下载完整包」提示；本地 `notes` 与 CI 的 release body 走同一出口生成，
+   起（`LEGACY_FREE_SINCE_VERSION` 同源闸）在横幅下方自动插入「老版本用户可
+   重新下载完整包，或直接打开安装目录里的 Lin-K Lyrics.exe」提示；本地 `notes`
+   与 CI 的 release body 走同一出口生成，
    两处截止版本有护栏测试对齐，CI 发布前另有 `check-notes` 校验步骤。
 4. **残余风险**（接受的代价）：
    - 改名前安装、且在迁移版为最新版期间（4.2.8.9 自 2026-09-14 起）从未检查过

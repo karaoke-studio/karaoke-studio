@@ -136,7 +136,7 @@ def test_notes_from_the_first_legacy_free_version_add_the_notice(release_mod, tm
 
     assert lines[0] == release_mod.ANNOUNCEMENT_BANNER
     assert lines[2] == release_mod.MANUAL_UPDATE_NOTICE
-    assert "手动下载" in lines[2]
+    assert "Lin-K Lyrics.exe" in lines[2]
     assert "停发旧名主程序副本" in "\n".join(lines)
 
 
@@ -162,9 +162,13 @@ def test_adding_the_manual_update_notice_twice_does_not_duplicate_it(release_mod
     twice = release_mod._with_manual_update_notice(once)
 
     assert once == twice
-    assert once.count("手动下载") == 1
+    assert once.count(release_mod.MANUAL_UPDATE_NOTICE) == 1
     # 提示必须位于横幅之下、正文之上。
-    assert once.index("1108437280") < once.index("手动下载") < once.index("## 更新")
+    assert (
+        once.index("1108437280")
+        < once.index(release_mod.MANUAL_UPDATE_NOTICE)
+        < once.index("## 更新")
+    )
 
 
 def test_check_notes_enforces_the_notice_policy(release_mod, tmp_path):
