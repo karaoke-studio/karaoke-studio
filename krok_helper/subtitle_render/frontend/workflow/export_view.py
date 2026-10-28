@@ -526,7 +526,19 @@ class ExportMonitorView(QLabel):
         self._rescale()
 
 
+class ExportMonitorFrame(AspectRatioBox):
+    """Top-align the image and report width changes for fitting its card."""
 
+    widthChanged = Signal()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self.widthChanged.emit()
+
+    def _update_child_geometry(self) -> None:
+        super()._update_child_geometry()
+        self._child.move(self._child.x(), 0)
 
 
 @dataclass(frozen=True)
@@ -781,7 +793,7 @@ class ExportWorkspaceView(QWidget):
         fps_combo.setCurrentIndex(fps_combo.findData(60))
         fps_spin = FluentDoubleSpinBox()
         fps_spin.setRange(0.01, 1000)
-        fps_spin.setDecimals(6)
+        fps_spin.setDecimals(2)
         fps_spin.setValue(60)
         fps_spin.setSuffix(" fps")
         fps_spin.setKeyboardTracking(False)
@@ -939,7 +951,7 @@ class ExportWorkspaceView(QWidget):
         monitor_header.addWidget(eta_label)
         monitor_layout.addLayout(monitor_header)
         monitor_view = ExportMonitorView()
-        monitor_frame = AspectRatioBox(
+        monitor_frame = ExportMonitorFrame(
             monitor_view,
             aspect_ratio=width_spin.value() / height_spin.value(),
         )

@@ -121,6 +121,8 @@ def test_export_source_modes_custom_values_and_project_round_trip(qapp, monkeypa
         controls.fps_combo.setCurrentIndex(controls.fps_combo.findData("source_2x"))
         assert (window._screen_settings.width, window._screen_settings.height) == (3840, 2160)
         assert window._export_fps_value() == 60000 / 1001
+        assert controls.fps_spin.decimals() == 2
+        assert controls.fps_spin.value() == 59.94
         assert window._property_panel.screen_size() == (3840, 2160, 60000 / 1001)
         assert not controls.width_spin.isEnabled()
         assert not controls.fps_spin.isEnabled()
@@ -138,15 +140,15 @@ def test_export_source_modes_custom_values_and_project_round_trip(qapp, monkeypa
         controls.size_preset_combo.setCurrentIndex(controls.size_preset_combo.findData("custom"))
         controls.width_spin.setValue(2048)
         controls.fps_combo.setCurrentIndex(controls.fps_combo.findData("custom"))
-        controls.fps_spin.setValue(47.5)
+        controls.fps_spin.setValue(47.567)
         assert controls.width_spin.isEnabled()
         assert controls.fps_spin.isEnabled()
         window.load_video(path, info)
         assert window._screen_settings.width == 2048
-        assert window._export_fps_value() == 47.5
+        assert window._export_fps_value() == 47.57
         window.set_solid_background("#000000")
         assert controls.size_preset_combo.currentData() == "custom"
-        assert window._export_fps_value() == 47.5
+        assert window._export_fps_value() == 47.57
         window.load_video(path, replace(info, video_fps=600))
         controls.fps_combo.setCurrentIndex(controls.fps_combo.findData("source_2x"))
         assert window._export_fps_value() == 1200
@@ -311,31 +313,27 @@ def test_sync_preview_output_size_updates_export_monitor_ratio():
     ]
 
 
-def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
+def test_export_monitor_card_fits_image_and_tracks_window_width(qapp):
     window = SubtitleRenderWindow(embedded=True)
     try:
-        window.resize(1280, 800)
         window._stack.setCurrentWidget(window._export_tab)
         window.show()
-        qapp.processEvents()
-
-        settings_column = window.findChild(QWidget, "SrExportSettingsCol")
-        assert settings_column is not None
-        monitor_card = window._export_monitor_card
-        assert monitor_card.height() == pytest.approx(
-            settings_column.sizeHint().height(), abs=1
-        )
-        frame_width = window._export_monitor_frame.width()
-        view_geometry = window._export_monitor_view.geometry()
-        assert view_geometry.width() >= frame_width * 0.95
-        assert view_geometry.width() / view_geometry.height() == pytest.approx(
-            16 / 9, rel=0.005
-        )
+        for width, height in ((1280, 800), (1100, 760), (1400, 1000)):
+            window.resize(width, height)
+            for _ in range(3):
+                qapp.processEvents()
+            frame_width = window._export_monitor_frame.width()
+            view_geometry = window._export_monitor_view.geometry()
+            assert view_geometry.y() == 0
+            assert view_geometry.width() >= frame_width * 0.95
+            assert view_geometry.width() / view_geometry.height() == pytest.approx(16 / 9, rel=0.005)
+            image_bottom = window._export_monitor_view.mapTo(window._export_monitor_card, QPoint()).y() + view_geometry.height()
+            footer_top = window._export_format_label.y()
+            assert footer_top - image_bottom == pytest.approx(window._export_monitor_layout.spacing(), abs=2)
     finally:
         window.close()
         window.deleteLater()
         qapp.processEvents()
-
 
 
 def test_export_workspace_reports_user_actions_through_its_contract(qapp):
@@ -508,11 +506,12 @@ def test_export_cards_are_vertically_centered_above_actions(qapp):
 
         column = window.findChild(QWidget, "SrExportColumn")
         assert column is not None
-        settings_top = window._export_settings_col.mapTo(column, QPoint()).y()
+        settings_viewport = window._export_settings_col.parentWidget()
+        settings_top = settings_viewport.mapTo(column, QPoint()).y()
         monitor_top = window._export_monitor_card.mapTo(column, QPoint()).y()
         progress_top = window._export_progress.mapTo(column, QPoint()).y()
         gap_below_cards = progress_top - (
-            settings_top + window._export_settings_col.height()
+            settings_top + settings_viewport.height()
         )
 
         # 「输出格式」下拉加入输出卡片后设置列更高，800px 窗口下上下留白收窄；
@@ -526,7 +525,6 @@ def test_export_cards_are_vertically_centered_above_actions(qapp):
         window.close()
         window.deleteLater()
         qapp.processEvents()
-
 
 
 def test_export_progress_tracks_frame_updates_without_animation(qapp):

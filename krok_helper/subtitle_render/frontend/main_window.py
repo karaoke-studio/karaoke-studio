@@ -3329,6 +3329,13 @@ class SubtitleRenderWindow(QWidget):
         self._export_monitor_header = controls.monitor_header
         self._export_monitor_view = controls.monitor_view
         self._export_monitor_frame = controls.monitor_frame
+        # Do not resize the card while its parent layout is placing children.
+        controls.monitor_frame.widthChanged.connect(
+            lambda: self._sync_export_monitor_card_size(
+                self._export_width_spin.value(), self._export_height_spin.value()
+            ),
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._export_format_label = controls.format_label
         self._export_progress = controls.progress
         self._export_status_label = controls.status_label
@@ -9909,7 +9916,7 @@ class SubtitleRenderWindow(QWidget):
     def _sync_export_monitor_card_size(self, width: int, height: int) -> None:
         if width <= 0 or height <= 0 or not hasattr(self, "_export_monitor_card"):
             return
-        target_height = max(self._export_settings_col.sizeHint().height(), 1)
+        settings_height = max(self._export_settings_col.sizeHint().height(), 1)
         margins = self._export_monitor_layout.contentsMargins()
         spacing = max(self._export_monitor_layout.spacing(), 0)
         chrome_height = (
@@ -9919,12 +9926,14 @@ class SubtitleRenderWindow(QWidget):
             + self._export_format_label.sizeHint().height()
             + spacing * 2
         )
-        frame_height = max(target_height - chrome_height, 1)
-        frame_width = int(round(frame_height * width / height))
-        target_width = max(frame_width + margins.left() + margins.right(), 1)
-        self._export_monitor_card.setFixedHeight(target_height)
+        max_frame_height = max(settings_height - chrome_height, 1)
+        target_width = max(
+            int(round(max_frame_height * width / height)) + margins.left() + margins.right(), 1
+        )
         self._export_monitor_card.setMaximumWidth(target_width)
-
+        frame_width = max(self._export_monitor_frame.width(), 1)
+        frame_height = min(max_frame_height, max(int(round(frame_width * height / width)), 1))
+        self._export_monitor_card.setFixedHeight(frame_height + chrome_height)
 
     def _export_output_base(self) -> Optional[Path]:
         """默认输出目录 / 文件名的来源素材：视频 > 背景素材 > 字幕文件。"""
