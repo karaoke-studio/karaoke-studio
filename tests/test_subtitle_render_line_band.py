@@ -89,6 +89,14 @@ def test_preset_lookup_and_tint_metadata():
     assert default_tint_for("preset:plain_round") == "#2B3A55"
     assert default_tint_for("preset:bubbles") == ""
     assert band_preset("staff_scroll").tintable is False
+    plain = band_preset("plain_round")
+    assert plain is not None
+    assert (
+        plain.pad_top_px,
+        plain.pad_bottom_px,
+        plain.pad_left_px,
+        plain.pad_right_px,
+    ) == (50, 50, 50, 50)
 
 
 def test_only_staff_preset_ships_a_static_variant():

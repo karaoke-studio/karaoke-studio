@@ -100,7 +100,7 @@ BAND_PRESETS: tuple[BandPreset, ...] = (
                160, 160, 18, 18, 78, 78, default_fill_mode="cover",
                default_opacity_pct=100),
     BandPreset("plain_round", "纯色圆角条", "plain_round.png",
-               64, 64, 12, 12, 30, 30, tintable=True, default_tint="#2B3A55"),
+               64, 64, 50, 50, 50, 50, tintable=True, default_tint="#2B3A55"),
 )
 
 _BY_ID = {preset.preset_id: preset for preset in BAND_PRESETS}
