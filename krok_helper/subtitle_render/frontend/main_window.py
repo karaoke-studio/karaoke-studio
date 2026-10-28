@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import fields as dataclass_fields, replace
+from math import isfinite
 import logging
 import os
 from pathlib import Path
@@ -288,8 +289,11 @@ from krok_helper.subtitle_render.settings.screen import (
     ScreenSettings,
     SCREEN_FPS_OPTIONS,
     match_screen_preset_key,
+    match_canvas_size_key,
     screen_settings_from_dict,
     screen_settings_to_dict,
+    resolve_source_screen,
+    SOURCE_SCREEN_MODES,
 )
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.domain.timing import (
@@ -1467,12 +1471,17 @@ class SubtitleRenderWindow(QWidget):
         self._export_width_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_height_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_fps_combo.currentIndexChanged.connect(self._on_export_screen_changed)
+        self._export_controls.size_preset_combo.currentIndexChanged.connect(
+            self._on_export_screen_changed
+        )
+        self._export_controls.fps_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_width_spin.valueChanged.connect(self._refresh_export_format_label)
         self._export_height_spin.valueChanged.connect(self._refresh_export_format_label)
         self._export_fps_combo.currentIndexChanged.connect(
             self._refresh_export_format_label
         )
         self._refresh_export_format_label()
+        self._sync_source_screen_options()
 
         self._bottom_navigation.setCurrentItem("preview")
         self._stack.setCurrentIndex(0)
@@ -3498,6 +3507,15 @@ class SubtitleRenderWindow(QWidget):
             width=width,
             height=height,
             fps=fps,
+            resolution_mode=(
+                self._screen_settings.resolution_mode
+                if (width, height) == (self._screen_settings.width, self._screen_settings.height)
+                else "custom"
+            ),
+            fps_mode=(
+                self._screen_settings.fps_mode
+                if fps == self._screen_settings.fps else "fixed"
+            ),
         )
         self._set_export_screen_controls(settings)
         self._sync_preview_output_size()
@@ -3505,6 +3523,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _sync_background_panel_state(self) -> None:
         """把当前背景源 / 独立音频状态回填到「背景/音频」卡片。"""
+        self._sync_source_screen_options()
         if not hasattr(self, "_property_panel"):
             return
         self._property_panel.set_background_state(
@@ -4615,33 +4634,15 @@ class SubtitleRenderWindow(QWidget):
         return info
 
     def _sync_output_size_to_video(self, info: MediaInfo) -> None:
-        """Make a newly imported video's dimensions the current output size."""
-        width = int(info.video_width or 0)
-        height = int(info.video_height or 0)
-        if width <= 0 or height <= 0:
-            return
-        # H.264/H.265 的 yuv420p 输出要求偶数尺寸；源视频本身带奇数时
-        # 向内收敛，避免导出渲染完整轮后才在编码器处失败。
-        width -= width % 2
-        height -= height % 2
-        settings = ScreenSettings(
-            preset_key=match_screen_preset_key(width, height, self._screen_settings.par),
-            par=self._screen_settings.par,
-            width=width,
-            height=height,
-            fps=self._export_fps_value(),
-        )
-        size_changed = (
-            width != self._screen_settings.width or height != self._screen_settings.height
-        )
-        self._set_export_screen_controls(settings)
-        self._sync_preview_output_size()
-        self._refresh_export_format_label()
-        self._on_export_screen_changed()
-        if size_changed:
+        """Re-evaluate source modes; fixed/custom project settings stay intact."""
+        old_size = (self._screen_settings.width, self._screen_settings.height)
+        self._set_export_screen_controls(self._screen_settings, video_info=info)
+        self._on_export_screen_changed(video_info=info)
+        width, height = self._screen_settings.width, self._screen_settings.height
+        if (width, height) != old_size:
             InfoBar.info(
                 title="输出尺寸已跟随背景视频",
-                content=f"宽度和高度已改为 {width}×{height}；如需其他尺寸请在导出页重新填写。",
+                content=f"宽度和高度已改为 {width}×{height}；如需其他尺寸请在导出页选择「自定义」。",
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=3500,
@@ -7317,46 +7318,63 @@ class SubtitleRenderWindow(QWidget):
             self._lyrics_panel.set_role_options(self._merged_role_options())
         self._save_persisted_state()
 
-    def _on_export_screen_changed(self) -> None:
-        if self._syncing_screen_controls:
+    def _on_export_screen_changed(self, *_args, video_info=None) -> None:
+        if (
+            self._syncing_screen_controls
+            or self._export_controls.size_preset_controller.applying_preset
+        ):
             return
         # 画面尺寸（宽/高/帧率）与随之重算的样式快照一起入撤销栈：
         # 误触改动可以用 Ctrl+Z 整体撤回（_rescale_layout_for_height 本身
         # 不入样式撤销栈，快照在这里统一补）。
         old_screen = screen_settings_to_dict(self._screen_settings)
         old_style = style_to_dict(self._style)
-        self._screen_settings = ScreenSettings(
+        fps_data = self._export_fps_combo.currentData()
+        settings = ScreenSettings(
             preset_key="custom",
             par=self._screen_settings.par,
             width=self._export_width_spin.value(),
             height=self._export_height_spin.value(),
             fps=self._export_fps_value(),
+            resolution_mode=str(self._export_controls.size_preset_combo.currentData()),
+            fps_mode=str(fps_data) if isinstance(fps_data, str) else "fixed",
         )
-        self._screen_settings = ScreenSettings(
+        try:
+            source = video_info if video_info is not None else self._video_info
+            if source is not None:
+                settings = resolve_source_screen(settings, source)
+            else:
+                # Empty-state controls show usable values, while untouched axes
+                # retain the default to follow a video when one is loaded.
+                old = self._screen_settings
+                if (
+                    old.resolution_mode in SOURCE_SCREEN_MODES
+                    and settings.resolution_mode == match_canvas_size_key(old.width, old.height)
+                    and (settings.width, settings.height) == (old.width, old.height)
+                ):
+                    settings = replace(settings, resolution_mode=old.resolution_mode)
+                fallback_fps_mode = "fixed" if old.fps in SCREEN_FPS_OPTIONS else "custom"
+                if (
+                    old.fps_mode in SOURCE_SCREEN_MODES
+                    and settings.fps_mode == fallback_fps_mode
+                    and settings.fps == old.fps
+                ):
+                    settings = replace(settings, fps_mode=old.fps_mode)
+        except ValueError as exc:
+            self._set_export_screen_controls(self._screen_settings)
+            fluent_warning(self, "画面配置不可用", str(exc))
+            return
+        self._screen_settings = replace(
+            settings,
             preset_key=match_screen_preset_key(
-                self._screen_settings.width,
-                self._screen_settings.height,
-                self._screen_settings.par,
+                settings.width, settings.height, settings.par,
             ),
-            par=self._screen_settings.par,
-            width=self._screen_settings.width,
-            height=self._screen_settings.height,
-            fps=self._screen_settings.fps,
         )
-        if hasattr(self, "_property_panel"):
-            # 「背景/音频」卡片里的画面尺寸与导出页双向联动
-            # （panel 侧自身的 _syncing guard 拦住回环）。
-            self._property_panel.set_screen_size(
-                self._screen_settings.width,
-                self._screen_settings.height,
-                self._screen_settings.fps,
-            )
+        self._set_export_screen_controls(self._screen_settings, video_info=source)
+        self._sync_preview_output_size()
+        self._refresh_export_format_label()
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._rescale_layout_for_height(self._screen_settings.height)
-        self._property_panel.set_output_size(
-            self._screen_settings.width,
-            self._screen_settings.height,
-        )
         self._margin_check_timer.start()
         self._schedule_persisted_state_save()
         self._mark_project_dirty()
@@ -7404,12 +7422,39 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
         return self._restore_style(style_payload)
 
-    def _set_export_screen_controls(self, settings: ScreenSettings) -> None:
+    def _set_export_screen_controls(
+        self, settings: ScreenSettings, *, video_info: Optional[MediaInfo] = None
+    ) -> None:
         self._syncing_screen_controls = True
         try:
+            info = video_info if video_info is not None else self._video_info
+            size_available = bool(info and info.video_width and info.video_height)
+            fps_available = bool(info and info.video_fps and isfinite(info.video_fps) and info.video_fps > 0)
+            resolution_mode = settings.resolution_mode
+            fps_mode = settings.fps_mode
+            if resolution_mode in SOURCE_SCREEN_MODES and not size_available:
+                resolution_mode = match_canvas_size_key(settings.width, settings.height)
+            if fps_mode in SOURCE_SCREEN_MODES and not fps_available:
+                fps_mode = "fixed" if settings.fps in SCREEN_FPS_OPTIONS else "custom"
             self._export_width_spin.setValue(settings.width)
             self._export_height_spin.setValue(settings.height)
             self._set_export_fps_value(settings.fps)
+            controls = self._export_controls
+            for combo, available in (
+                (controls.size_preset_combo, size_available),
+                (self._export_fps_combo, fps_available),
+            ):
+                for key in SOURCE_SCREEN_MODES:
+                    combo.setItemEnabled(combo.findData(key), available)
+            controls.size_preset_controller.set_mode(resolution_mode)
+            fps_key = settings.fps if fps_mode == "fixed" else fps_mode
+            index = self._export_fps_combo.findData(fps_key)
+            self._export_fps_combo.setCurrentIndex(
+                index if index >= 0 else self._export_fps_combo.findData("custom")
+            )
+            self._export_width_spin.setEnabled(resolution_mode == "custom")
+            self._export_height_spin.setEnabled(resolution_mode == "custom")
+            controls.fps_spin.setEnabled(self._export_fps_combo.currentData() == "custom")
         finally:
             self._syncing_screen_controls = False
         if hasattr(self, "_property_panel"):
@@ -7428,14 +7473,35 @@ class SubtitleRenderWindow(QWidget):
         """
         self._export_width_spin.flush_editing()
         self._export_height_spin.flush_editing()
+        self._export_controls.fps_spin.interpretText()
 
-    def _export_fps_value(self) -> int:
+    def _export_fps_value(self) -> int | float:
         data = self._export_fps_combo.currentData()
-        return int(data) if data in SCREEN_FPS_OPTIONS else 60
+        if data in SCREEN_FPS_OPTIONS:
+            return int(data)
+        if data in SOURCE_SCREEN_MODES:
+            # Retain the full-precision rate; the spin box is only its display.
+            return self._screen_settings.fps
+        value = self._export_controls.fps_spin.value()
+        if value == round(self._screen_settings.fps, self._export_controls.fps_spin.decimals()):
+            return self._screen_settings.fps
+        return int(value) if value.is_integer() else value
 
-    def _set_export_fps_value(self, fps: int) -> None:
+    def _set_export_fps_value(self, fps: int | float) -> None:
+        spin = self._export_controls.fps_spin
+        blocked = spin.blockSignals(True)
+        spin.setMinimum(0.01)
+        spin.setMaximum(max(1000, fps))
+        spin.setValue(fps)
+        spin.blockSignals(blocked)
         index = self._export_fps_combo.findData(fps)
-        self._export_fps_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._export_fps_combo.setCurrentIndex(
+            index if index >= 0 else self._export_fps_combo.findData("custom")
+        )
+
+    def _sync_source_screen_options(self) -> None:
+        if hasattr(self, "_export_controls"):
+            self._set_export_screen_controls(self._screen_settings)
 
     def _on_output_settings_changed(self) -> None:
         if self._loading_project:
@@ -9287,8 +9353,10 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_persisted_state(self) -> None:
         raw_settings = self._load_subtitle_settings()
+        # Fresh workspaces use 1080p/60 until a video is available. Resolve the
+        # style at that height once; opened projects restore their own canvas.
         loaded = load_app_preferences(
-            raw_settings,
+            {**raw_settings, "screen": screen_settings_to_dict(ScreenSettings())},
             chorus_begin_default=DEFAULT_CHORUS_BEGIN_CHARS,
             chorus_end_default=DEFAULT_CHORUS_END_CHARS,
             font_catalog=get_n3_font_catalog(),
@@ -9857,6 +9925,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_monitor_card.setFixedHeight(target_height)
         self._export_monitor_card.setMaximumWidth(target_width)
 
+
     def _export_output_base(self) -> Optional[Path]:
         """默认输出目录 / 文件名的来源素材：视频 > 背景素材 > 字幕文件。"""
         background_path = (
@@ -9962,6 +10031,13 @@ class SubtitleRenderWindow(QWidget):
     def _build_render_job(self) -> RenderJob:
         if hasattr(self, "_export_width_spin"):
             self._flush_export_spin_edits()
+        if self._video_info is not None:
+            try:
+                resolved = resolve_source_screen(self._screen_settings, self._video_info)
+            except ValueError as exc:
+                raise ProcessingError(str(exc)) from exc
+            if resolved != self._screen_settings:
+                self._on_export_screen_changed()
         directory = self._export_dir_edit.text().strip()
         name = self._normalized_export_name()
         default_name = self._default_export_name() if not name else ""
@@ -10269,7 +10345,7 @@ class SubtitleRenderWindow(QWidget):
         codec: str,
         width: int,
         height: int,
-        fps: int,
+        fps: int | float,
         output_directory: Optional[Path],
         output_format: str = OUTPUT_FORMAT_MP4,
     ) -> str:
@@ -10280,7 +10356,7 @@ class SubtitleRenderWindow(QWidget):
         )
         text = (
             f"输出格式: {format_name}"
-            f" · {width}×{height} @ {fps}fps"
+            f" · {width}×{height} @ {fps:g}fps"
         )
         if output_directory is None:
             return text

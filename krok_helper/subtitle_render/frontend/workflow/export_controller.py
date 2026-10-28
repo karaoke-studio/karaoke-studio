@@ -44,7 +44,7 @@ class ExportJobInputs:
     extra_tracks: tuple[TimingTrack, ...]
     width: int
     height: int
-    fps: int
+    fps: int | float
     duration_ms: int
     include_audio: bool
     encoder_mode: str

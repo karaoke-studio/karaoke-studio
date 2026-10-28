@@ -10612,6 +10612,8 @@ def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch
         "width": 3840,
         "height": 2160,
         "fps": 60,
+        "resolution_mode": "4k",
+        "fps_mode": "source",
     }
 
     win._export_width_spin.setValue(4000)
@@ -10652,6 +10654,8 @@ def test_export_height_typing_rescales_once_from_final_value(qapp, monkeypatch):
     """
     typed = _export_screen_window(monkeypatch)
     direct = _export_screen_window(monkeypatch)
+    combo = typed._export_controls.size_preset_combo
+    combo.setCurrentIndex(combo.findData("custom"))
 
     spin = typed._export_height_spin
     editor = spin
@@ -10677,6 +10681,8 @@ def test_export_height_typing_rescales_once_from_final_value(qapp, monkeypatch):
 def test_flush_export_spin_edits_skips_partial_text(qapp, monkeypatch):
     """flush 只收敛完整可解析文本；半成品留给用户继续输入或失焦处理。"""
     win = _export_screen_window(monkeypatch)
+    combo = win._export_controls.size_preset_combo
+    combo.setCurrentIndex(combo.findData("custom"))
     spin = win._export_height_spin
     editor = spin
 

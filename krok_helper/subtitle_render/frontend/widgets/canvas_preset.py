@@ -34,6 +34,8 @@ class CanvasSizePresetController:
         combo: QComboBox,
         width_field: _ValueField,
         height_field: _ValueField,
+        *,
+        source_modes: bool = False,
     ) -> None:
         self._combo = combo
         self._width = width_field
@@ -41,6 +43,9 @@ class CanvasSizePresetController:
         self._applying_preset = False
         self._matching_combo = False
 
+        if source_modes:
+            combo.addItem("跟随原视频", userData="source")
+            combo.addItem("原视频 2×", userData="source_2x")
         for key, label, width, height in CANVAS_SIZE_PRESETS:
             combo.addItem(label, userData=key)
         combo.addItem("自定义", userData=CANVAS_SIZE_CUSTOM_KEY)
@@ -51,6 +56,12 @@ class CanvasSizePresetController:
                 for _key, label, width, height in CANVAS_SIZE_PRESETS
             )
         )
+        if source_modes:
+            combo.setToolTip(
+                "跟随原视频使用背景视频宽高；原视频 2× 将宽高各乘 2。\n"
+                "奇数尺寸向下对齐为偶数，以满足视频编码要求。\n"
+                + combo.toolTip()
+            )
         self._select_key(match_canvas_size_key(width_field.value(), height_field.value()))
 
         combo.currentIndexChanged.connect(self._on_combo_changed)
@@ -72,6 +83,14 @@ class CanvasSizePresetController:
             self._height.setValue(height)
         finally:
             self._applying_preset = False
+
+    @property
+    def applying_preset(self) -> bool:
+        return self._applying_preset
+
+    def set_mode(self, key: str) -> None:
+        """Restore a saved selection without reapplying its dimensions."""
+        self._select_key(key)
 
     def _sync_combo_from_values(self, *_args) -> None:
         if self._applying_preset:
