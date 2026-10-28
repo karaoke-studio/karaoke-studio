@@ -21,6 +21,24 @@ def test_native_export_timestamps_match_python_frame_cadence() -> None:
     assert ne.native_export_timestamps(start_frame=2, count=3, fps=60) == [33, 50, 67]
 
 
+@pytest.mark.parametrize("start", [0, 999_999])
+def test_gpu_fractional_fps_and_resume_keep_exact_frame_times(monkeypatch, start):
+    from fractions import Fraction
+
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    fps = 60000 / 1001
+    frames = list(ne.iter_gpu_rgba_frames(
+        _track(), Style(), width=1, height=1, fps=fps,
+        total_frames=3, start_frame=start, force_warp=True,
+    ))
+    expected = [round(i * 1000 / Fraction(60000, 1001)) for i in range(start, start + 3)]
+    assert len(frames) == 3
+    assert [t for t, _ in _FakeGpuRendererProcess.instances[-1].frames] == expected
+
+
 def test_native_export_chunk_frames_respects_memory_target() -> None:
     assert ne.native_export_chunk_frames(width=100, height=100, total_frames=100, target_bytes=80_000) == 2
     assert ne.native_export_chunk_frames(width=100, height=100, total_frames=1, target_bytes=1) == 1

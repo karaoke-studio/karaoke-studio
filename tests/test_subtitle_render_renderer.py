@@ -223,6 +223,15 @@ def _job(tmp_path: Path, *, include_audio: bool = True) -> RenderJob:
     )
 
 
+@pytest.mark.parametrize("fps,rate", [(30000 / 1001, "30000/1001"), (60000 / 1001, "60000/1001"), (48, "48"), (1200, "1200")])
+def test_export_command_preserves_fractional_frame_rate(tmp_path, fps, rate):
+    job = replace(_job(tmp_path), fps=fps)
+    command = build_render_command("ffmpeg", job)
+    assert command[command.index("-r") + 1] == rate
+    graph = command[command.index("-filter_complex") + 1]
+    assert f"fps={rate}," in graph
+
+
 def test_renderer_keeps_render_job_compatibility_export() -> None:
     assert RenderJob is RenderJobContract
     assert renderer._job_tracks is job_tracks

@@ -26,6 +26,7 @@ import numpy as np
 from PyQt6.QtGui import QColor, QImage, QPainter
 
 from krok_helper.errors import ExportCancelled, ProcessingError
+from krok_helper.subtitle_render.domain.frame_rate import frame_count, frame_timestamp
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
 from krok_helper.subtitle_render.engine.export.encoder_select import (
     ENCODER_VIDEOTOOLBOX,
@@ -653,8 +654,8 @@ def render_subtitle_video(
     return job.output_path
 
 
-def _frame_count(duration_ms: int, fps: int) -> int:
-    return max(1, int(math.ceil(duration_ms * fps / 1000)))
+def _frame_count(duration_ms: int, fps: int | float) -> int:
+    return frame_count(duration_ms, fps)
 
 
 def _image_bytes(image: QImage) -> bytes:
@@ -1550,7 +1551,7 @@ def _write_frames_single(
         if should_cancel is not None and should_cancel():
             terminate_process(process)
             raise ExportCancelled("已停止导出。")
-        t_ms = int(round(index * 1000 / job.fps))
+        t_ms = frame_timestamp(index, job.fps)
         if monitor is not None:
             monitor.begin_frame(index)
         frame = _frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame)
@@ -1754,7 +1755,7 @@ def _render_worker_chunk(task: tuple[int, int]) -> bytes:
     counter = _W_CTX.get("progress_counter")
     out = bytearray()
     for index in range(start, start + count):
-        t_ms = int(round(index * 1000 / job.fps))
+        t_ms = frame_timestamp(index, job.fps)
         out += _frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame)
         if counter is not None:
             # 逐帧心跳：父进程据此判断「还在渲」而不是按总时长拍脑袋超时。
@@ -1879,7 +1880,7 @@ def _write_frames_single_bands(
         if should_cancel is not None and should_cancel():
             terminate_process(process)
             raise ExportCancelled("已停止导出。")
-        t_ms = int(round(index * 1000 / job.fps))
+        t_ms = frame_timestamp(index, job.fps)
         if monitor is not None:
             monitor.begin_frame(index)
         frame = _frame_bytes_bands(
@@ -1930,7 +1931,7 @@ def _render_worker_chunk_bands(task: tuple[int, int]) -> bytes:
     counter = _WB_CTX.get("progress_counter")
     out = bytearray()
     for index in range(start, start + count):
-        t_ms = int(round(index * 1000 / job.fps))
+        t_ms = frame_timestamp(index, job.fps)
         out += _frame_bytes_bands(job, t_ms, bands, transparent, buffer, empty_frame)
         if counter is not None:
             counter.value += 1

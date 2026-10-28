@@ -17,6 +17,7 @@ from contextlib import contextmanager
 
 from krok_helper.errors import ExportCancelled
 from krok_helper.subtitle_render.domain.timing import TimingTrack
+from krok_helper.subtitle_render.domain.frame_rate import frame_timestamp
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.engine.export.progress_watchdog import (
     active_export_monitor,
@@ -341,7 +342,7 @@ def _configure_gpu_export_with_preflight(
     style: Style,
     width: int,
     height: int,
-    fps: int,
+    fps: int | float,
     force_warp: bool,
     extra_tracks: list[TimingTrack] | None,
     worker_count: int,
@@ -957,7 +958,7 @@ def iter_gpu_rgba_frames(
     *,
     width: int,
     height: int,
-    fps: int,
+    fps: int | float,
     total_frames: int,
     duration_ms: int | None = None,
     start_t_ms: int = 0,
@@ -1094,19 +1095,11 @@ def iter_gpu_rgba_frames(
 
             def begin_frame(frame_index: int) -> None:
                 if start_frame is None:
-                    t_ms = max(int(start_t_ms), 0) + int(
-                        round(frame_index * 1000 / max(int(fps), 1))
-                    )
+                    t_ms = max(int(start_t_ms), 0) + frame_timestamp(frame_index, fps)
                 else:
                     # 续渲：用绝对帧号算时间戳，避免「取整起点 + 取整偏移」
                     # 在 60/120fps 下出现 ±1ms 的内容漂移。
-                    t_ms = int(
-                        round(
-                            (int(start_frame) + frame_index)
-                            * 1000
-                            / max(int(fps), 1)
-                        )
-                    )
+                    t_ms = frame_timestamp(int(start_frame) + frame_index, fps)
                 request_started[frame_index] = time.perf_counter()
                 renderer.begin_render_gpu_frame(
                     t_ms,

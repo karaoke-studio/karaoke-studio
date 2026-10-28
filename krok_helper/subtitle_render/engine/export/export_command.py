@@ -9,6 +9,7 @@ from PyQt6.QtGui import QColor
 
 from krok_helper.errors import ProcessingError
 from krok_helper.subtitle_render.domain.background import BackgroundSource
+from krok_helper.subtitle_render.domain.frame_rate import frame_rate_text
 from krok_helper.subtitle_render.engine.export.encoder_select import video_encoder_options
 from krok_helper.subtitle_render.engine.render.render_bands import packed_offsets
 from krok_helper.subtitle_render.engine.export.render_job import (
@@ -73,7 +74,7 @@ def transparent_background_chain(job: RenderJob, duration_seconds: float) -> str
     """
 
     return (
-        f"color=c=black@0.0:s={job.width}x{job.height}:r={job.fps}"
+        f"color=c=black@0.0:s={job.width}x{job.height}:r={frame_rate_text(job.fps)}"
         f":d={duration_seconds:.6f}[bg];"
     )
 
@@ -93,13 +94,13 @@ def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
             f"[1:v:0]scale={job.width}:{job.height}"
             ":force_original_aspect_ratio=increase:force_divisible_by=2,"
             f"crop={job.width}:{job.height},"
-            f"fps={job.fps},trim=duration={duration_seconds:.6f},"
+            f"fps={frame_rate_text(job.fps)},trim=duration={duration_seconds:.6f},"
             "setpts=PTS-STARTPTS[bg];"
         )
     return (
         f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"fps={job.fps},{tail}trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
+        f"fps={frame_rate_text(job.fps)},{tail}trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
     )
 
 
@@ -139,10 +140,10 @@ def background_input_args(
             "-f",
             "lavfi",
             "-i",
-            f"color=c={color.name()}:s={job.width}x{job.height}:r={job.fps}:d={duration_seconds:.6f}",
+            f"color=c={color.name()}:s={job.width}x{job.height}:r={frame_rate_text(job.fps)}:d={duration_seconds:.6f}",
         ]
     if source.kind == "image":
-        return ["-loop", "1", "-framerate", str(job.fps), "-i", str(source.path)]
+        return ["-loop", "1", "-framerate", frame_rate_text(job.fps), "-i", str(source.path)]
     if source.kind == "image_sequence":
         fps = max(int(source.source_fps or job.fps), 1)
         return [
@@ -199,7 +200,7 @@ def build_render_command(
             # 一层中灰底，明确表达「这是透明字幕层、画面里没有背景」。
             filter_graph += (
                 ";[v]split=2[venc][vpin];"
-                f"color=c=0x3F444C:s={job.width}x{job.height}:r={job.fps}"
+                f"color=c=0x3F444C:s={job.width}x{job.height}:r={frame_rate_text(job.fps)}"
                 f":d={duration_seconds:.6f}[vpbg];"
                 "[vpbg][vpin]overlay=0:0:format=auto[vpcomp];"
                 f"[vpcomp]fps={_PREVIEW_FPS},scale={preview_width}:-2[vprev]"
@@ -230,7 +231,7 @@ def build_render_command(
         "-s:v",
         f"{pipe_w}x{pipe_h}",
         "-r",
-        str(job.fps),
+        frame_rate_text(job.fps),
         "-i",
         "pipe:0",
         *(
@@ -265,7 +266,7 @@ def build_render_command(
         # silence after EOF; the output -t bounds both streams to the job.
         command.extend(["-af", "apad"])
     command.extend(
-        ["-t", f"{duration_seconds:.6f}", "-r", str(job.fps), "-fps_mode", "cfr"]
+        ["-t", f"{duration_seconds:.6f}", "-r", frame_rate_text(job.fps), "-fps_mode", "cfr"]
     )
     if job.output_format == OUTPUT_FORMAT_MP4:
         command.extend(
