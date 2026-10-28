@@ -3167,31 +3167,57 @@ class PropertyPanel(QWidget):
 
     def _on_panel_screen_size_changed(self, *_args) -> None:
         self._refresh_canvas_slider_ranges()
-        if self._syncing:
+        if self._syncing or self._screen_size_preset_controller.applying_preset:
             return
         self.screenSizeChanged.emit()
 
     def screen_size(self) -> tuple[int, int, int | float]:
         data = self._screen_size_fps_combo.currentData()
-        fps = data if isinstance(data, (int, float)) and data > 0 else 60
+        fps = data if isinstance(data, (int, float)) and data > 0 else self._screen_size_fps_spin.value()
+        exact = getattr(self, "_screen_size_exact_fps", fps)
+        if not isinstance(data, (int, float)) and fps == round(exact, 2):
+            fps = exact
         return (
             self._screen_size_width_spin.value(),
             self._screen_size_height_spin.value(),
             fps,
         )
 
-    def set_screen_size(self, width: int, height: int, fps: int | float) -> None:
+    def screen_modes(self) -> tuple[str, str]:
+        data = self._screen_size_fps_combo.currentData()
+        return str(self._screen_size_preset_combo.currentData()), (data if isinstance(data, str) else "fixed")
+
+    def flush_screen_edits(self) -> None:
+        """保存或导出前提交尚未失焦的画布输入。"""
+        for spin in (self._screen_size_width_spin, self._screen_size_height_spin, self._screen_size_fps_spin):
+            spin.interpretText()
+
+    def set_screen_size(
+        self, width: int, height: int, fps: int | float, *,
+        resolution_mode: str | None = None, fps_mode: str | None = None,
+        size_available: bool = False, fps_available: bool = False,
+    ) -> None:
         self._syncing = True
         try:
             self._screen_size_width_spin.setValue(max(int(width), 1))
             self._screen_size_height_spin.setValue(max(int(height), 1))
-            index = self._screen_size_fps_combo.findData(fps)
-            if index < 0:
-                self._screen_size_fps_combo.addItem(f"{fps:g} fps", userData=fps)
-                index = self._screen_size_fps_combo.findData(fps)
+            self._screen_size_exact_fps = fps
+            self._screen_size_fps_spin.setMaximum(max(1000, fps))
+            self._screen_size_fps_spin.setValue(fps)
+            if resolution_mode is not None:
+                self._screen_size_preset_controller.set_mode(resolution_mode)
+            key = fps if fps_mode in (None, "fixed") else fps_mode
+            index = self._screen_size_fps_combo.findData(key)
             self._screen_size_fps_combo.setCurrentIndex(
-                index if index >= 0 else 0
+                index if index >= 0 else self._screen_size_fps_combo.findData("custom")
             )
+            for combo, available in ((self._screen_size_preset_combo, size_available), (self._screen_size_fps_combo, fps_available)):
+                for mode in ("source", "source_2x"):
+                    combo.setItemEnabled(combo.findData(mode), available)
+            custom_size = self._screen_size_preset_combo.currentData() == "custom"
+            self._screen_size_width_spin.setEnabled(custom_size)
+            self._screen_size_height_spin.setEnabled(custom_size)
+            self._screen_size_fps_spin.setEnabled(self._screen_size_fps_combo.currentData() == "custom")
         finally:
             self._syncing = False
         self._refresh_canvas_slider_ranges()

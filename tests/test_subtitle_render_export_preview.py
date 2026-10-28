@@ -794,3 +794,48 @@ def test_video_bitrate_round_trips_through_preferences_and_project(qapp):
         window.close()
         window.deleteLater()
         qapp.processEvents()
+
+
+def test_background_canvas_source_modes_sync_export_and_restore(qapp, monkeypatch, tmp_path):
+    from krok_helper.models import MediaInfo
+
+    monkeypatch.setattr(SubtitleRenderWindow, "_request_preview_window", lambda self: None)
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        panel = window._property_panel
+        size = panel._screen_size_preset_combo
+        fps = panel._screen_size_fps_combo
+        assert not size.items[size.findData("source")].isEnabled
+        path = tmp_path / "video.mp4"
+        path.write_bytes(b"fake")
+        window.load_video(path, MediaInfo(path, 1, 1, 0, 0, video_width=1920, video_height=1080, video_fps=30000 / 1001))
+        assert panel.screen_modes() == ("source", "source")
+        size.setCurrentIndex(size.findData("source_2x"))
+        fps.setCurrentIndex(fps.findData("source_2x"))
+        assert panel.screen_size() == (3840, 2160, 60000 / 1001)
+        assert window._export_controls.size_preset_combo.currentData() == "source_2x"
+        assert window._export_fps_value() == 60000 / 1001
+        saved = window._current_project_data()
+        size.setCurrentIndex(size.findData("720p"))
+        assert panel.screen_size() == (1280, 720, 60000 / 1001)
+        assert window._screen_settings.resolution_mode == "720p"
+        window._restore_screen(saved["screen"], saved["style"])
+        assert panel.screen_modes() == ("source_2x", "source_2x")
+        size.setCurrentIndex(size.findData("custom"))
+        panel._screen_size_width_spin.setValue(2048)
+        fps.setCurrentIndex(fps.findData("custom"))
+        panel._screen_size_fps_spin.setValue(47.57)
+        assert window._screen_settings.width == 2048
+        assert window._export_fps_value() == 47.57
+        assert panel._screen_size_fps_spin.isEnabled()
+        panel._screen_size_fps_spin.lineEdit().setText("48.25 fps")
+        assert window._current_project_data()["screen"]["fps"] == 48.25
+        window._export_fps_combo.setCurrentIndex(window._export_fps_combo.findData(120))
+        assert panel.screen_size()[2] == 120
+        window.set_solid_background("#000000")
+        assert not size.items[size.findData("source")].isEnabled
+        assert not fps.items[fps.findData("source")].isEnabled
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()

@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidg
 from qfluentwidgets import (
     CaptionLabel,
     ComboBox as FluentComboBox,
+    DoubleSpinBox as FluentDoubleSpinBox,
     FluentIcon as FIF,
     LineEdit as FluentLineEdit,
     PushButton as FluentPushButton,
@@ -257,24 +258,37 @@ class BackgroundPropertyPageBuilder:
         host._screen_size_height_spin.setKeyboardTracking(False)
 
         host._screen_size_fps_combo = self._fps_combo_factory(section)
+        host._screen_size_fps_combo.addItem("跟随原视频", userData="source")
+        host._screen_size_fps_combo.addItem("原视频 2×", userData="source_2x")
         for fps in self._fps_options:
             host._screen_size_fps_combo.addItem(f"{fps} fps", userData=fps)
+        host._screen_size_fps_combo.addItem("自定义", userData="custom")
+        host._screen_size_fps_combo.setCurrentIndex(host._screen_size_fps_combo.findData(60))
+        host._screen_size_fps_spin = FluentDoubleSpinBox(section)
+        host._screen_size_fps_spin.setRange(0.01, 1000)
+        host._screen_size_fps_spin.setDecimals(2)
+        host._screen_size_fps_spin.setValue(60)
+        host._screen_size_fps_spin.setSuffix(" fps")
+        host._screen_size_fps_spin.setKeyboardTracking(False)
+        host._screen_size_fps_combo.setToolTip("2× 按原视频帧率计算；背景复制帧，字幕按输出帧率渲染。")
 
         host._screen_size_preset_combo = self._fps_combo_factory(section)
         preset_controller = (self._preset_controller_factory or CanvasSizePresetController)(
             host._screen_size_preset_combo,
             host._screen_size_width_spin,
             host._screen_size_height_spin,
+            source_modes=True,
         )
         host._screen_size_preset_controller = preset_controller
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
-        grid.addWidget(property_field("常用格式", host._screen_size_preset_combo), 0, 0)
+        grid.addWidget(property_field("分辨率", host._screen_size_preset_combo), 0, 0)
         grid.addWidget(property_field("宽度", host._screen_size_width_spin), 0, 1)
         grid.addWidget(property_field("高度", host._screen_size_height_spin), 0, 2)
         grid.addWidget(property_field("帧率", host._screen_size_fps_combo), 1, 0)
+        grid.addWidget(property_field("自定义 / 当前值", host._screen_size_fps_spin), 1, 1, 1, 2)
         layout.addLayout(grid)
 
         host._screen_size_width_spin.valueChanged.connect(
@@ -286,4 +300,6 @@ class BackgroundPropertyPageBuilder:
         host._screen_size_fps_combo.currentIndexChanged.connect(
             host._on_panel_screen_size_changed
         )
+        host._screen_size_preset_combo.currentIndexChanged.connect(host._on_panel_screen_size_changed)
+        host._screen_size_fps_spin.valueChanged.connect(host._on_panel_screen_size_changed)
         return section

@@ -3511,21 +3511,15 @@ class SubtitleRenderWindow(QWidget):
     def _on_panel_screen_size_changed(self) -> None:
         """面板宽/高/帧率 → 导出页 spin（触发既有联动）与预览同步。"""
         width, height, fps = self._property_panel.screen_size()
+        resolution_mode, fps_mode = self._property_panel.screen_modes()
         settings = ScreenSettings(
             preset_key=match_screen_preset_key(width, height, self._screen_settings.par),
             par=self._screen_settings.par,
             width=width,
             height=height,
             fps=fps,
-            resolution_mode=(
-                self._screen_settings.resolution_mode
-                if (width, height) == (self._screen_settings.width, self._screen_settings.height)
-                else "custom"
-            ),
-            fps_mode=(
-                self._screen_settings.fps_mode
-                if fps == self._screen_settings.fps else "fixed"
-            ),
+            resolution_mode=resolution_mode,
+            fps_mode=fps_mode,
         )
         self._set_export_screen_controls(settings)
         self._sync_preview_output_size()
@@ -7470,7 +7464,9 @@ class SubtitleRenderWindow(QWidget):
         if hasattr(self, "_property_panel"):
             self._property_panel.set_output_size(settings.width, settings.height)
             self._property_panel.set_screen_size(
-                settings.width, settings.height, settings.fps
+                settings.width, settings.height, settings.fps,
+                resolution_mode=resolution_mode, fps_mode=fps_mode,
+                size_available=size_available, fps_available=fps_available,
             )
 
     def _flush_export_spin_edits(self) -> None:
@@ -7484,6 +7480,8 @@ class SubtitleRenderWindow(QWidget):
         self._export_width_spin.flush_editing()
         self._export_height_spin.flush_editing()
         self._export_controls.fps_spin.interpretText()
+        if hasattr(self, "_property_panel"):
+            self._property_panel.flush_screen_edits()
 
     def _export_fps_value(self) -> int | float:
         data = self._export_fps_combo.currentData()
