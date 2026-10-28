@@ -424,6 +424,7 @@ from krok_helper.subtitle_render.engine.render.elements.signal import (
     SignalLitGroup as _SignalLitGroup,
     VolumeSignalGeometry as _VolumeSignalGeometry,
     active_lit_indices as _resolve_active_lit_indices,
+    inline_volume_geometry as _inline_volume_geometry,
     line_has_active_signal as _line_has_active_signal,
     lit_extinguish_transition_state as _lit_extinguish_transition_state,
     lit_transition_state as _lit_transition_state,
@@ -4718,6 +4719,50 @@ def _band_rect_overlap_ratio(first: QRectF, second: QRectF) -> float:
     return (inter.width() * inter.height()) / smaller
 
 
+def _band_anchor_rect(
+    track: TimingTrack,
+    line,
+    layout: _LineLayout,
+    style: Style,
+) -> QRectF:
+    """行背景带的四边锚点：可见文字盒（主字形墨迹 + 描边），空/扁平墨迹回退字体盒。
+
+    与碰撞避让使用同一份 ``GlyphLayout.ink_box`` 墨迹合成结果，只额外加入
+    当前行实际生效的描边/二重描边外扩量，避免第一句那种「字体 ascent/descent
+    与可见字形差很大」时顶部/底部留白明显偏离设定值。整行墨迹过扁（全是
+    「ー」/标点）时仍用字体盒，防止带子被压成一条细线。
+    """
+
+    content = QRectF(layout.content_bounds)
+    # 音量柱参与行内容盒：保留原有「带子包住柱体」行为，不按文字墨迹收窄。
+    if _inline_volume_geometry(track, line, style) is not None:
+        return content
+    # 与碰撞避让同一份「主文字墨迹」实测（不含 bitmap 导唱符占位图）。
+    ink = _line_main_text_ink_rect(layout)
+    if ink is None:
+        return content
+    ink_left, ink_top, ink_right, ink_bottom = ink
+    visual_pad = 0.0
+    for glyph in layout.text_layout.glyphs:
+        glyph_style = getattr(glyph, "style", None)
+        if glyph_style is None:
+            continue
+        stroke = max(int(getattr(glyph_style, "stroke_width_px", 0) or 0), 0)
+        stroke2 = max(int(getattr(glyph_style, "stroke2_width_px", 0) or 0), 0)
+        if not bool(getattr(glyph_style, "stroke2_enabled", False)):
+            stroke2 = 0
+        visual_pad = max(visual_pad, math.ceil((stroke + stroke2) / 2.0))
+    rect = QRectF(
+        float(ink_left) - visual_pad,
+        float(ink_top) - visual_pad,
+        max(float(ink_right - ink_left) + visual_pad * 2.0, 1.0),
+        max(float(ink_bottom - ink_top) + visual_pad * 2.0, 1.0),
+    )
+    if content.height() > 0.0 and rect.height() < content.height() * 0.5:
+        return content
+    return rect
+
+
 def _band_ruby_top(layout: _LineLayout) -> float | None:
     """注音墨迹顶（绝对坐标）；该行没有注音时返回 ``None``。"""
     tops: list[float] = []
@@ -4845,7 +4890,9 @@ def _paint_line_bands(
             if layout is None:
                 continue
             entry_rect = _band_rect(
-                layout.content_bounds, style, _band_ruby_top(layout)
+                _band_anchor_rect(track, line, layout, style),
+                style,
+                _band_ruby_top(layout),
             )
             rect = entry_rect if rect is None else rect.united(entry_rect)
         if rect is None:

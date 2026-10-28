@@ -210,6 +210,72 @@ def test_style_patch_ir_switches_between_static_and_animated_band(qapp):
         )
 
 
+def test_band_anchor_uses_visible_ink_plus_stroke(qapp, monkeypatch):
+    """四边距从可见文字（主字形墨迹 + 描边）量起，不再用字体盒留白。"""
+    import numpy as np
+
+    from krok_helper.subtitle_render.engine import painter as engine
+
+    style = _style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        stroke_width_px=20,
+        stroke2_width_px=10,
+        stroke2_enabled=True,
+        decoration_kind="none",
+        karaoke_anim="none",
+        reverse_karaoke_anim="none",
+        entry_anim="none",
+        exit_anim="none",
+        line_band_enabled=True,
+        line_band_image="preset:plain_round",
+        line_band_fill_mode="three_slice",
+        line_band_pad_top_px=20,
+        line_band_pad_bottom_px=20,
+        line_band_pad_left_px=20,
+        line_band_pad_right_px=20,
+        line_band_include_ruby=False,
+        line_band_opacity_pct=100,
+    )
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("AVA", 0)], end_ms=2500,
+    )])
+    captured = []
+    monkeypatch.setattr(
+        engine, "_paint_band",
+        lambda painter, rect, spec, t: captured.append(QRectF(rect)),
+    )
+    image = _blank()
+    paint_frame(image, track, 1200, style)
+    assert len(captured) == 1
+    band = captured[0]
+
+    # 同一时间点关掉带子，取可见文字（含描边）的实际像素范围。
+    text_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    text_image.fill(QColor(0, 0, 0, 0))
+    paint_frame(text_image, track, 1200, replace(style, line_band_enabled=False))
+    bits = text_image.constBits()
+    bits.setsize(text_image.sizeInBytes())
+    pixels = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(
+        text_image.height(), text_image.bytesPerLine() // 4, 4
+    )[:, : text_image.width(), :]
+    ys, xs = np.where(pixels[:, :, 3] > 20)
+    assert len(xs)
+    ink = QRectF(
+        float(xs.min()), float(ys.min()),
+        float(xs.max() - xs.min() + 1), float(ys.max() - ys.min() + 1),
+    )
+    # 带子四边到可见文字的距离应等于配置的 20px（允许 2px 抗锯齿）。
+    for actual, expected in (
+        (ink.left() - band.left(), 20.0),
+        (band.right() - ink.right(), 20.0),
+        (ink.top() - band.top(), 20.0),
+        (band.bottom() - ink.bottom(), 20.0),
+    ):
+        assert abs(actual - expected) <= 2.0, (actual, expected, band, ink)
+
+
 def test_missing_image_resolves_to_no_spec(tmp_path):
     missing = tmp_path / "nope.png"
     assert band_spec(_style(line_band_image=str(missing))) is None

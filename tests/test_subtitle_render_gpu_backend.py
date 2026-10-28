@@ -16060,8 +16060,8 @@ def test_gpu_band_covers_inline_volume(alignment, tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
-def test_gpu_band_pads_follow_layout_box_for_multi_char_chunk(tmp_path):
-    """行背景带的四边距按行布局盒：多字符 TimingChar 不能把左右撑出配置值。"""
+def test_gpu_band_pads_follow_visible_text_box_for_multi_char_chunk(tmp_path):
+    """行背景带的四边距按可见文字盒：多字符 TimingChar 不能把左右撑出配置值。"""
     path = tmp_path / "band.png"
     image = QImage(8, 8, QImage.Format.Format_RGBA8888)
     image.fill(QColor("#00FF00"))
@@ -16104,6 +16104,80 @@ def test_gpu_band_pads_follow_layout_box_for_multi_char_chunk(tmp_path):
     assert abs((cpu[2] - cpu[0]) - (gpu[2] - gpu[0])) <= 4, (cpu, gpu)
     for cpu_edge, gpu_edge in zip(cpu, gpu):
         assert abs(cpu_edge - gpu_edge) <= 4, (cpu, gpu)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_band_anchor_includes_text_stroke(tmp_path):
+    """带子四边距从可见文字（墨迹 + 描边）量起，CPU/GPU 同口径。"""
+    path = tmp_path / "band.png"
+    image = QImage(8, 8, QImage.Format.Format_RGBA8888)
+    image.fill(QColor("#00FF00"))
+    assert image.save(str(path))
+    style = _g1_style(
+        font_family="Arial", font_family_latin="Arial",
+        base_color="#FFFFFF", fill_color="#FFFFFF",
+        stroke_width_px=20, stroke2_width_px=10, stroke2_enabled=True,
+        decoration_kind="none",
+        line_tail_ms=1200, entry_anim="none", exit_anim="none",
+        karaoke_anim="none", reverse_karaoke_anim="none",
+        line_band_enabled=True, line_band_image=str(path),
+        line_band_fill_mode="stretch",
+        line_band_pad_top_px=20, line_band_pad_bottom_px=20,
+        line_band_pad_left_px=20, line_band_pad_right_px=20,
+        line_band_opacity_pct=100, line_band_include_ruby=False,
+    )
+    track = TimingTrack(lines=[TimingLine(
+        chars=[TimingChar("AVA", 0)], end_ms=2000,
+    )])
+
+    def mask_bbox(frame: bytes, green: bool) -> tuple[int, int, int, int]:
+        pixels = np.frombuffer(frame, dtype=np.uint8).reshape(360, 640, 4)
+        if green:
+            mask = (
+                (pixels[:, :, 0] < 80)
+                & (pixels[:, :, 1] > 120)
+                & (pixels[:, :, 2] < 80)
+                & (pixels[:, :, 3] > 20)
+            )
+        else:
+            mask = pixels[:, :, 3] > 20
+        ys, xs = np.where(mask)
+        assert len(xs), "mask is not visible"
+        return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+    cpu_band = mask_bbox(
+        _render_painter_oracle(style, t_ms=1000, track=track), True
+    )
+    cpu_text = mask_bbox(
+        _render_painter_oracle(
+            replace(style, line_band_enabled=False), t_ms=1000, track=track
+        ),
+        False,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=25.0) as renderer:
+        _, band_frames = _render_g1_frames(
+            renderer, style, (1000,), force_warp=True, track=track
+        )
+        _, text_frames = _render_g1_frames(
+            renderer,
+            replace(style, line_band_enabled=False),
+            (1000,),
+            force_warp=True,
+            track=track,
+        )
+    gpu_band = mask_bbox(band_frames[0], True)
+    gpu_text = mask_bbox(text_frames[0], False)
+    for cpu_edge, gpu_edge in zip(cpu_band, gpu_band):
+        # Qt/DirectWrite 的 Arial 墨迹边界有数像素差异，只要求同口径近似。
+        assert abs(cpu_edge - gpu_edge) <= 8, (cpu_band, gpu_band)
+    for band, text in ((cpu_band, cpu_text), (gpu_band, gpu_text)):
+        gaps = (
+            text[0] - band[0],
+            band[2] - text[2],
+            text[1] - band[1],
+            band[3] - text[3],
+        )
+        assert all(abs(gap - 20) <= 3 for gap in gaps), (band, text, gaps)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

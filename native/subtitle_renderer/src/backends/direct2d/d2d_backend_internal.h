@@ -275,6 +275,11 @@ struct Direct2DGpuBackend::Impl {
         bool centerOverride = false;
         D2D1_RECT_F bounds{};
         D2D1_RECT_F fillBounds{};
+        // Main-text glyph ink union (bitmap guide cells excluded), mirroring
+        // Painter's _line_main_text_ink_rect.  Used by the row-band anchor so
+        // font ascent/descent empty space does not inflate the band padding.
+        D2D1_RECT_F textInkBounds{};
+        bool hasTextInk = false;
         // Visible main-glyph ink union per resolved role style.  Key -1 is
         // the line/default role; SVG and bitmap guide geometry participates.
         std::map<int, D2D1_RECT_F> horizontalFillBoundsByStyle;

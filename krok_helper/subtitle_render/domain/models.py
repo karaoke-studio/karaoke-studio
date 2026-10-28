@@ -1506,19 +1506,22 @@ class Style:
     """三段式下中段的行为：``repeat`` 平铺 / ``stretch`` 拉伸。"""
 
     line_band_pad_top_px: int = 20
-    """上边距：文字顶（开启注音基准时取注音顶）到带子上缘。"""
+    """上边距：可见主文字（墨迹 + 描边）顶到带子上缘；开启注音基准时取注音顶。
+
+    整行墨迹过扁（全是「ー」/标点）时回退字体 ascent/descent 盒，避免带子被压扁。
+    """
 
     line_band_pad_bottom_px: int = 20
-    """下边距：主文字底到带子下缘。"""
+    """下边距：可见主文字（墨迹 + 描边）底到带子下缘。"""
 
     line_band_pad_left_px: int = 40
-    """左边距：文字左缘到带子左缘。"""
+    """左边距：可见主文字（墨迹 + 描边）左缘到带子左缘。"""
 
     line_band_pad_right_px: int = 40
-    """右边距：文字右缘到带子右缘。"""
+    """右边距：可见主文字（墨迹 + 描边）右缘到带子右缘。"""
 
     line_band_include_ruby: bool = True
-    """``line_band_pad_top_px`` 的量取基准：True=注音顶，False=主文字顶。"""
+    """``line_band_pad_top_px`` 的量取基准：True=注音盒顶，False=可见主文字顶。"""
 
     line_band_offset_y_px: int = 0
     """整条带子上下微调。"""

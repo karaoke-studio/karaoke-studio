@@ -780,6 +780,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         return bounds;
     };
+    const auto lineBandAnchorBounds = [&](const Impl::CachedLine &line) {
+        const auto content = lineContentBounds(line);
+        // Inline volume bars stay on the old content box: the band must keep
+        // covering the bars, and the bars already extend the box.
+        if (hasInlineVolume(line) || !line.hasTextInk) {
+            return content;
+        }
+        const float pad = std::max(line.maxVisualPad, 0.0f);
+        const D2D1_RECT_F visual = D2D1::RectF(
+            line.textInkBounds.left - pad,
+            line.textInkBounds.top - pad,
+            line.textInkBounds.right + pad,
+            line.textInkBounds.bottom + pad
+        );
+        // Flat ink (a line of "ー"/punctuation) would collapse the band to a
+        // thin strip; fall back to the font box in that case.
+        const float contentH = content.bottom - content.top;
+        if (contentH > 0.0f
+            && (visual.bottom - visual.top) < contentH * 0.5f) {
+            return content;
+        }
+        return visual;
+    };
     const auto lineAnchorBounds = [&](const Impl::CachedLine &line) {
         auto bounds = line.bounds;
         if (line.style.layoutSemantics == "n3_1074" && !line.style.vertical) {
@@ -1028,16 +1051,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const D2D1_POINT_2F offset = bandOffsetAt(
                 *line, animation, placementOffsetX, placementOffsetY
             );
-            // 文本盒取「字体上下沿」而不是墨迹盒：整行都是「ー」或标点时 ink
-            // 盒几乎为零，带子会被压扁。Painter 同样按 TextLayout 的
-            // ascent/descent（line_rect）量取，两边口径一致。
-            const float textTop = -(line->ascent > 0.0f
-                ? line->ascent
-                : line->laneFontAscent);
-            const float textBottom = line->descent > 0.0f
-                ? line->descent
-                : line->laneFontDescent;
-            const auto content = lineContentBounds(*line);
+            // 四边距锚点 = 可见主文字盒（主字形墨迹 + 描边外扩），扁平行
+            // 回退字体 ascent/descent。镜像 Painter 的 _band_anchor_rect。
+            const auto content = lineBandAnchorBounds(*line);
             float topRef = content.top;
             if (band.includeRuby) {
                 for (const Impl::CachedRuby &ruby : line->rubies) {

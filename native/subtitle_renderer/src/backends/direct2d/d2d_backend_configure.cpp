@@ -3533,6 +3533,43 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     : localHorizontalBounds;
             }
         }
+        // Main-text ink union for the row-band anchor.  Bitmap guide cells are
+        // excluded (Painter does the same for _line_main_text_ink_rect);
+        // otherwise a 1x1 transparent @Emoji placeholder would inflate the
+        // band's top/bottom padding.
+        cached.textInkBounds = {};
+        cached.hasTextInk = false;
+        for (const Impl::CachedChar &ch : cached.chars) {
+            if (ch.bitmapGuide.has_value() || !ch.geometry) {
+                continue;
+            }
+            D2D1_RECT_F bounds{};
+            checkHr(
+                ch.geometry->GetBounds(nullptr, &bounds),
+                "ID2D1Geometry::GetBounds(text ink)",
+                device_
+            );
+            if (!(bounds.right > bounds.left && bounds.bottom > bounds.top)) {
+                continue;
+            }
+            if (!cached.hasTextInk) {
+                cached.textInkBounds = bounds;
+                cached.hasTextInk = true;
+            } else {
+                cached.textInkBounds.left = std::min(
+                    cached.textInkBounds.left, bounds.left
+                );
+                cached.textInkBounds.top = std::min(
+                    cached.textInkBounds.top, bounds.top
+                );
+                cached.textInkBounds.right = std::max(
+                    cached.textInkBounds.right, bounds.right
+                );
+                cached.textInkBounds.bottom = std::max(
+                    cached.textInkBounds.bottom, bounds.bottom
+                );
+            }
+        }
         if (!lineHasBounds) {
             cached.bounds = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
         }
