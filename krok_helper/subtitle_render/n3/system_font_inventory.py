@@ -302,11 +302,22 @@ def installed_font_files() -> tuple[InstalledFontFile, ...]:
 
 @contextmanager
 def _quiet_fonttools() -> Iterator[None]:
-    """fontTools 对 1970 附近的时间戳会 warn，与本次修复无关。"""
+    """fontTools 对 1970 附近时间戳的告警与本次修复无关，不刷控制台。
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*timestamp seems very low.*")
-        yield
+    这条告警走的是 ``logging``（``fontTools.ttLib.tables._h_e_a_d``）而不是
+    ``warnings``，所以得临时抬高该 logger 的级别；退出时恢复，避免影响其它
+    调用方。``warnings`` 过滤保留，兜住 fontTools 其它走 warnings 的提示。
+    """
+
+    head_logger = logging.getLogger("fontTools.ttLib.tables._h_e_a_d")
+    previous_level = head_logger.level
+    head_logger.setLevel(logging.ERROR)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*timestamp seems very low.*")
+            yield
+    finally:
+        head_logger.setLevel(previous_level)
 
 
 def _is_collection(path: Path) -> bool:
