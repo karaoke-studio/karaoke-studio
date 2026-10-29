@@ -1093,7 +1093,7 @@ def _paint_track_to_painter(
     # 列表顺序依次叠放。
     for overlay, opacity in title_states:
         _paint_title_overlay(
-            painter, logical_w, logical_h, track, style, overlay, opacity
+            painter, logical_w, logical_h, track, style, overlay, opacity, track_t_ms
         )
 
     painter.save()
@@ -1287,6 +1287,7 @@ def _paint_title_overlay(
     style: Style,
     overlay: TitleOverlay,
     opacity: float,
+    t_ms: int = 0,
 ) -> None:
     _paint_title_overlay_with_ports(
         painter,
@@ -1297,6 +1298,7 @@ def _paint_title_overlay(
         overlay,
         opacity,
         compositor=_TEXT_RUN_COMPOSITOR,
+        t_ms=t_ms,
         ports=_TITLE_RENDER_PORTS,
     )
 

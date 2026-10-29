@@ -461,3 +461,49 @@ def test_gpu_caps_animated_guide_frames_at_shared_limit(qapp):
             reader.attach()
             gpu_image = reader.read_qimage(event)
         assert _dominant_avatar_color(gpu_image) == "B" == painter_color
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("extension", ["gif", "webp"])
+@pytest.mark.parametrize("title_guide", [False, "inline", "prefix"])
+def test_animated_formats_and_title_replacements(qapp, tmp_path, extension, title_guide):
+    from PIL import Image
+    from krok_helper.subtitle_render.domain.models import TitleOverlay
+    from krok_helper.subtitle_render.native.backend import (
+        NativeRendererProcess, SharedFrameRingReader, resolve_native_renderer_path,
+    )
+    path = tmp_path / ("guide." + extension)
+    frames = [Image.new("RGBA", (16, 16), color) for color in ("red", "lime", "blue")]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=[100, 170, 230], loop=0, lossless=True)
+    decoded = animated_bitmap_guide(str(path))
+    assert decoded is not None
+    assert decoded.delays_ms == (100, 170, 230)
+    track = _animated_track(path)
+    track.lines[0].end_ms = 30000
+    style = _avatar_only_style()
+    if title_guide:
+        track.lines[0].inline_guide_symbols = {}
+        style = _avatar_only_style(custom_style_schemes={}, title_overlays=[TitleOverlay(
+            enabled=True, layout_index=None, text_template="X", font_size_px=48,
+            fade_in_ms=0, fade_out_ms=0, show_mode="whole",
+            inline_guide_symbols={(0, 0): _animated_symbol(path)} if title_guide == "inline" else {},
+            guide_symbols={0: _animated_symbol(path)} if title_guide == "prefix" else {},
+        )])
+    anchor = 0 if title_guide else 700
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+    with NativeRendererProcess(str(renderer_path), response_timeout_s=30.0) as renderer:
+        assert renderer.configure_gpu(track, style, width=320, height=180, fps=60, force_warp=True).get("ok")
+        reader = None
+        # Include prolonged playback and backwards seeks to exercise cached title layers.
+        for index, elapsed in enumerate([50, 150, 300, 12050, 12150, 12300, 150, 50]):
+            expected = "R" if elapsed % 500 < 100 else "G" if elapsed % 500 < 270 else "B"
+            image = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            paint_frame(image, track, anchor + elapsed, style)
+            assert _dominant_avatar_color(image) == expected
+            event = renderer.render_gpu_frame(anchor + elapsed, force_warp=True, frame_index=index)
+            if reader is None:
+                reader = SharedFrameRingReader.from_event(event)
+                reader.attach()
+            assert _dominant_avatar_color(reader.read_qimage(event)) == expected

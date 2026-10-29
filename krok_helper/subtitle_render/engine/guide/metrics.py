@@ -181,7 +181,7 @@ def _decode_animated_guide(signature: tuple[str, int, int]) -> AnimatedGuideImag
         if image.isNull():
             break
         frames.append(image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied))
-        raw = delays_raw[len(frames) - 1] if len(frames) <= len(delays_raw) else 0
+        raw = delays_raw[len(frames) - 1] if len(frames) <= len(delays_raw) else reader.nextImageDelay()
         delays.append(max(int(raw), GUIDE_ANIM_MIN_FRAME_MS))
     if len(frames) <= 1:
         return None

@@ -759,6 +759,7 @@ def build_title_overlay_layer(
     *,
     ports: TitleRenderPorts,
     device_pixel_ratio: float = 1.0,
+    anim_ms: int = 0,
 ) -> tuple[QImage, int, int]:
     glyph_titles = [glyph.title for row in layout.glyph_rows for glyph in row] or [
         title
@@ -852,12 +853,12 @@ def build_title_overlay_layer(
                     run_start = run_end
             line_top += line_height + layout.gap
         # 位图导唱符叠在文字之上（与歌词「先文字、后导唱符图片」的次序一致）；
-        # 标题静态烘焙 → 动图固定取首帧。
+        # 按时间轴选帧，缓存身份包含实际动画帧。
         for glyph, rect in bitmap_units:
             symbol = glyph.guide_symbol
             frame = bitmap_guide_frame_at(
                 symbol.bitmap_before_path if symbol is not None else None,
-                None,
+                anim_ms,
             )
             if frame is None or frame.image.isNull():
                 continue
@@ -894,6 +895,13 @@ class TitleOverlayLayer:
                 fill_signature=self.ports.fill_signature,
             ),
             self.ports.raster_scale_key(ctx.device_pixel_ratio),
+            tuple(
+                frame.identity if frame is not None else None
+                for glyph, _rect in _title_bitmap_guide_rects(self.title_layout)
+                for frame in [bitmap_guide_frame_at(
+                    glyph.guide_symbol.bitmap_before_path, ctx.t_ms
+                )]
+            ),
         )
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
@@ -902,6 +910,7 @@ class TitleOverlayLayer:
             self.title,
             ports=self.ports,
             device_pixel_ratio=ctx.device_pixel_ratio,
+            anim_ms=ctx.t_ms,
         )
         return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
@@ -954,6 +963,7 @@ def paint_title_overlay(
     opacity: float,
     *,
     compositor: LayerCompositor,
+    t_ms: int = 0,
     ports: TitleRenderPorts,
 ) -> None:
     title = resolve_title_overlay(style, overlay)
@@ -964,7 +974,7 @@ def paint_title_overlay(
         return
     compositor.paint_ordered(
         painter,
-        LayerContext(t_ms=0, logical_w=img_w, logical_h=img_h),
+        LayerContext(t_ms=t_ms, logical_w=img_w, logical_h=img_h),
         [make_title_overlay_layer(layout, title, opacity, ports=ports)],
     )
 

@@ -180,9 +180,8 @@ def title_to_ir(
     return payload
 
 
-# 标题位图导唱符的动图锚点：INT_MAX 让 sidecar 的「渲染时间 − 锚点」恒 ≤0、
-# 钳到 0 后永远选首帧——与 Python 标题层的静态烘焙（恒取首帧）同一画面。
-_TITLE_GUIDE_STATIC_ANCHOR_MS = 2147483647
+# 标题动图以轨道时间零点为锚点，与 Python 标题层保持同步。
+_TITLE_GUIDE_ANCHOR_MS = 0
 
 
 def _title_guide_to_ir(symbol: object) -> dict[str, Any] | None:
@@ -199,7 +198,7 @@ def _title_guide_to_ir(symbol: object) -> dict[str, Any] | None:
     ][:count]
     if guide_symbol_is_bitmap(symbol):
         payload = dict(
-            bitmap_guide_to_ir(symbol, anim_anchor_ms=_TITLE_GUIDE_STATIC_ANCHOR_MS)
+            bitmap_guide_to_ir(symbol, anim_anchor_ms=_TITLE_GUIDE_ANCHOR_MS)
         )
         payload["kind"] = "bitmap"
         payload["count"] = count

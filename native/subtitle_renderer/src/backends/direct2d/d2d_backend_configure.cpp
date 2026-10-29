@@ -938,6 +938,32 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         impl_->imageUseSerial = 0;
     }
     using ImageKey = std::tuple<std::wstring, std::uint64_t, std::uint64_t>;
+    // Share the QImageReader decoding contract used by bands and scanlines.
+    // Qt composites GIF/WebP disposal and exposes each decoded frame's delay.
+    auto loadGuideFrames = [&](const std::wstring &path) {
+        direct2d::AnimatedBitmapFrames result;
+        QImageReader reader(QString::fromStdWString(path));
+        if (reader.imageCount() <= 1) {
+            return result;
+        }
+        const auto properties = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_NONE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f, 96.0f
+        );
+        for (int index = 0; index < 60; ++index) {
+            const QImage frame = reader.read().convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            if (frame.isNull()) break;
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+            checkHr(device_.d2dContext()->CreateBitmap(
+                D2D1::SizeU(frame.width(), frame.height()), frame.constBits(),
+                static_cast<UINT32>(frame.bytesPerLine()), &properties,
+                bitmap.ReleaseAndGetAddressOf()), "Create guide animation frame", device_);
+            result.bitmaps.push_back(std::move(bitmap));
+            result.delaysMs.push_back(std::max(reader.nextImageDelay(), 10));
+        }
+        return result;
+    };
     std::set<ImageKey> activeImages;
     auto cacheImage = [&] (
         const std::wstring &path,
@@ -967,9 +993,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             if (animatedGuide && !found->animationChecked) {
                 const auto buildStart = Clock::now();
                 direct2d::AnimatedBitmapFrames animated =
-                    direct2d::loadWicAnimatedBitmaps(
-                        device_.d2dContext(), path, 60
-                    );
+                    loadGuideFrames(path);
                 if (!animated.bitmaps.empty()) {
                     found->bitmap = animated.bitmaps.front();
                     found->frames = std::move(animated.bitmaps);
@@ -990,9 +1014,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         image.animationChecked = animatedGuide;
         if (animatedGuide) {
             direct2d::AnimatedBitmapFrames animated =
-                direct2d::loadWicAnimatedBitmaps(
-                    device_.d2dContext(), path, 60
-                );
+                loadGuideFrames(path);
             if (!animated.bitmaps.empty()) {
                 image.bitmap = animated.bitmaps.front();
                 image.frames = std::move(animated.bitmaps);
