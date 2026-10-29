@@ -521,16 +521,37 @@ def _face_visible(face: FontFaceNames, names: frozenset[str]) -> bool:
     return any(text.casefold() in names for text in face.family_texts)
 
 
-def _declared_name_visible(name: str, names: frozenset[str]) -> bool:
-    """单个注册表声明名是否已被 Qt 解析（允许去掉尾部修饰词）。
+#: 注册表全名尾部可去掉的样式词（只允许白名单，避免把 ``Arial Nova`` /
+#: ``Arial Narrow`` / ``SF Pro Display`` 这类「真族名以可见族名开头」的字体
+#: 误判为已可见）。只收字重/倾斜这类几乎总是修饰词的词，不收 Condensed /
+#: Display / Text 等可能本身就是族名一部分的设计词。
+_STYLE_WORDS = frozenset(
+    {
+        "regular", "normal", "roman", "book", "medium", "light", "extralight",
+        "ultralight", "semilight", "demilight", "thin", "hairline", "bold",
+        "semibold", "demibold", "demi", "black", "heavy", "ultra", "extra",
+        "italic", "oblique",
+    }
+)
 
-    ``Arial Bold`` 这类「全名」不是族名，逐词截断后再比：
-    ``Arial Bold`` → ``Arial`` 命中即算可见。
+
+def _declared_name_visible(name: str, names: frozenset[str]) -> bool:
+    """单个注册表声明名是否已被 Qt 解析（允许去掉尾部样式词）。
+
+    注册表值名往往是「全名」（``Arial Bold`` / ``Arial Bold Italic``），不是族名：
+    从尾部逐个去掉白名单里的样式词后再比。只去白名单词，不做任意截断——
+    ``Arial Nova`` 这种「以可见族名开头但自己是另一个族」的字体必须留给文件解析
+    判断，否则会漏掉不叫 FG 的同类字体。
     """
 
     parts = str(name).strip().split()
-    for length in range(len(parts), 0, -1):
-        if " ".join(parts[:length]).casefold() in names:
+    if not parts:
+        return False
+    if " ".join(parts).casefold() in names:
+        return True
+    while parts and parts[-1].casefold().strip("()（）") in _STYLE_WORDS:
+        parts.pop()
+        if parts and " ".join(parts).casefold() in names:
             return True
     return False
 

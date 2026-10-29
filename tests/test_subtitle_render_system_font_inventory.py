@@ -46,11 +46,14 @@ def _base_font() -> Path:
     pytest.skip("找不到可用于构造测试字体的系统字体")
 
 
-def _legacy_font_bytes(source: Path, family: str) -> bytes:
-    """造一个「名字表只有 ja-JP 旧编码记录」的字体，模拟旧日文字体。
+def _font_with_names(
+    source: Path, family: str, encodings: tuple[tuple[int, int, int], ...]
+) -> bytes:
+    """造一个名字表只含指定编码记录的字体（模拟 Qt 看不见的「外来」字体）。
 
-    与调试用的 FG平成明朝体一致：platform 3 标成 Shift-JIS（encoding 2），
-    字节实际是 UTF-16BE——Qt 因此完全看不见这个族。
+    ``encodings`` 为 ``(platformID, encodingID, languageID)`` 三元组；
+    platform 3 / encoding 2 按 UTF-16BE 写入字节——与旧日文字体「标错编码」
+    的存储方式一致。
     """
 
     from fontTools.ttLib import TTFont
@@ -65,12 +68,25 @@ def _legacy_font_bytes(source: Path, family: str) -> bytes:
         (4, family),
         (6, "LegacyFixture-Regular"),
     ):
-        # setName 接受已编码的 bytes（platform 3 / encoding 2 按 UTF-16BE 存储，
-        # 正是旧日文字体「标错编码」的样子）。
-        table.setName(text.encode("utf-16-be"), name_id, 3, 2, 0x0411)
+        for platform, encoding, language in encodings:
+            if (platform, encoding) == (3, 2):
+                # setName 接受已编码的 bytes（旧字体就是把 UTF-16BE 塞进 encoding 2）
+                table.setName(text.encode("utf-16-be"), name_id, platform, encoding, language)
+            else:
+                table.setName(text, name_id, platform, encoding, language)
     buffer = io.BytesIO()
     font.save(buffer)
     return buffer.getvalue()
+
+
+def _legacy_font_bytes(source: Path, family: str) -> bytes:
+    """造一个「名字表只有 ja-JP 旧编码记录」的字体，模拟旧日文字体。
+
+    与调试用的 FG平成明朝体一致：platform 3 标成 Shift-JIS（encoding 2），
+    字节实际是 UTF-16BE——Qt 因此完全看不见这个族。
+    """
+
+    return _font_with_names(source, family, ((3, 2, 0x0411),))
 
 
 def _name_records(data: bytes) -> dict[tuple[int, int, int, int], bytes]:
@@ -285,17 +301,107 @@ def test_registration_is_idempotent(tmp_path: Path, clean_registry_state) -> Non
     assert second.app_font_ids == ()
 
 
-def test_declared_names_visible_uses_prefix_and_requires_all() -> None:
+def test_declared_names_visible_strips_only_style_words() -> None:
     names = frozenset({"arial", "华康圆体 std w3"})
     assert inventory.declared_names_visible(("Arial",), names)
-    # 全名去掉尾部修饰词后再比
+    # 全名去掉尾部**样式词**后再比
     assert inventory.declared_names_visible(("Arial Bold",), names)
+    assert inventory.declared_names_visible(("Arial Bold Italic",), names)
     assert inventory.declared_names_visible(("华康圆体 Std W3 Regular",), names)
+    # 只白名单词可去：以可见族名开头、但自己是另一个族的名字不能被误判
+    assert not inventory.declared_names_visible(("Arial Nova",), names)
+    assert not inventory.declared_names_visible(("Arial Narrow",), names)
+    assert not inventory.declared_names_visible(("Arial Display",), names)
     # TTC 经 parse_registry_value_name 拆成两个名字：只要有一个族不可见就必须
     # 打开文件确认（真机上的名字不会带 " & "，拆分发生在解析注册表时）
     assert not inventory.declared_names_visible(("Arial", "Foo"), names)
     # 空声明名不能当作可见
     assert not inventory.declared_names_visible((), names)
+
+
+# 非本地 locale / 旧编码的「外来」字体一律要能补注册（FG 只是其中一种形状）。
+_HIDDEN_NAME_SHAPES = [
+    pytest.param(((3, 1, 0x0411),), id="ja-unicode"),
+    pytest.param(((3, 1, 0x0404),), id="zh-tw-unicode"),
+    pytest.param(((3, 1, 0x0412),), id="ko-unicode"),
+    pytest.param(((3, 2, 0x0411),), id="legacy-ja"),
+]
+
+
+@pytest.mark.parametrize("encodings", _HIDDEN_NAME_SHAPES)
+def test_register_covers_any_non_native_locale_only_font(
+    tmp_path: Path, clean_registry_state, encodings
+) -> None:
+    platform, encoding, language = encodings[0]
+    family = f"HiddenE{encoding}L{language:04X}"
+    path = tmp_path / "hidden.ttf"
+    path.write_bytes(_font_with_names(_base_font(), family, encodings))
+    assert family not in QFontDatabase.families()
+
+    report = inventory.register_missing_system_fonts(
+        entries=(inventory.InstalledFontFile(path, (family,)),)
+    )
+
+    assert family in report.registered, (platform, encoding, language)
+    assert family in QFontDatabase.families()
+    assert QFontInfo(QFont(family)).family() == family
+
+
+def test_declared_name_sharing_prefix_with_visible_family_is_registered(
+    tmp_path: Path, clean_registry_state
+) -> None:
+    """``Arial Nova`` 这种「以可见族名开头」的字体不能被前缀规则误跳过。"""
+
+    visible_id = QFontDatabase.addApplicationFont(str(_base_font()))
+    assert visible_id >= 0
+    try:
+        family = "Arial Nova Hidden"
+        path = tmp_path / "nova.ttf"
+        path.write_bytes(_font_with_names(_base_font(), family, ((3, 1, 0x0411),)))
+
+        report = inventory.register_missing_system_fonts(
+            entries=(inventory.InstalledFontFile(path, (family,)),)
+        )
+
+        assert family in report.registered
+        assert family in QFontDatabase.families()
+    finally:
+        QFontDatabase.removeApplicationFont(visible_id)
+
+
+def test_partially_visible_ttc_registers_only_hidden_face(
+    tmp_path: Path, clean_registry_state
+) -> None:
+    """TTC 里一个 face 可见、另一个不可见：只注册缺的那个，不重复登记整包。"""
+
+    from fontTools.ttLib import TTCollection
+
+    visible_id = QFontDatabase.addApplicationFont(str(_base_font()))
+    assert visible_id >= 0
+    try:
+        collection = TTCollection(str(_system_ttc()), lazy=False)
+        hidden = "HiddenTTCFace"
+        # 前面的 face 都改成 Qt 已能解析的 Arial，只有最后一个保持旧编码名字
+        for font in collection.fonts[:-1]:
+            _set_family(font["name"], "Arial", unicode_names=True)
+        _set_family(collection.fonts[-1]["name"], hidden, unicode_names=False)
+        path = tmp_path / "partial.ttc"
+        collection.save(str(path))
+
+        report = inventory.register_missing_system_fonts(
+            entries=(inventory.InstalledFontFile(path, ("Arial", hidden)),)
+        )
+
+        assert hidden in report.registered
+        assert "Arial" not in report.registered
+        assert len(report.app_font_ids) == 1
+        # 同一族名可能按「当前 locale 名 / en-US 名」各登记一次，去重后应只有它
+        registered_names = set(
+            QFontDatabase.applicationFontFamilies(report.app_font_ids[0])
+        )
+        assert registered_names == {hidden}
+    finally:
+        QFontDatabase.removeApplicationFont(visible_id)
 
 
 def test_register_does_not_open_files_whose_names_qt_already_resolves(
