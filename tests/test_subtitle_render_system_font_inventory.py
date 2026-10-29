@@ -285,12 +285,54 @@ def test_registration_is_idempotent(tmp_path: Path, clean_registry_state) -> Non
     assert second.app_font_ids == ()
 
 
+def test_declared_names_visible_uses_prefix_and_requires_all() -> None:
+    names = frozenset({"arial", "华康圆体 std w3"})
+    assert inventory.declared_names_visible(("Arial",), names)
+    # 全名去掉尾部修饰词后再比
+    assert inventory.declared_names_visible(("Arial Bold",), names)
+    assert inventory.declared_names_visible(("华康圆体 Std W3 Regular",), names)
+    # TTC 经 parse_registry_value_name 拆成两个名字：只要有一个族不可见就必须
+    # 打开文件确认（真机上的名字不会带 " & "，拆分发生在解析注册表时）
+    assert not inventory.declared_names_visible(("Arial", "Foo"), names)
+    # 空声明名不能当作可见
+    assert not inventory.declared_names_visible((), names)
+
+
+def test_register_does_not_open_files_whose_names_qt_already_resolves(
+    tmp_path: Path, clean_registry_state, monkeypatch
+) -> None:
+    """第一层名字比对命中后不再解析文件（347 个文件只打开差集）。"""
+
+    source = _base_font()
+    font_id = QFontDatabase.addApplicationFont(str(source))
+    assert font_id >= 0
+    calls: list[Path] = []
+
+    def _must_not_parse(path):
+        calls.append(Path(path))
+        raise AssertionError(f"不应该解析已经可见的字体的文件：{path}")
+
+    try:
+        monkeypatch.setattr(inventory, "parse_font_faces", _must_not_parse)
+        report = inventory.register_missing_system_fonts(
+            entries=(
+                inventory.InstalledFontFile(source, ("Arial",)),
+                inventory.InstalledFontFile(source, ("Arial Bold",)),
+            )
+        )
+        assert calls == []
+        assert report.registered == ()
+        assert report.failed == ()
+    finally:
+        QFontDatabase.removeApplicationFont(font_id)
+
+
 def test_register_skips_font_family_qt_already_sees(
     tmp_path: Path, clean_registry_state
 ) -> None:
     source = _base_font()
     # offscreen 平台不枚举系统字体，先把这份字体注册成应用字体，模拟
-    # 「Qt 已经能看见它」的状态。
+    # 「Qt 已经能看见它」的状态。声明名留空，走「解析后确认已可见」这条路径。
     font_id = QFontDatabase.addApplicationFont(str(source))
     assert font_id >= 0
     try:

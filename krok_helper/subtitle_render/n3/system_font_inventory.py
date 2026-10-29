@@ -12,16 +12,26 @@ GDI 本身完全能渲染这些 face（``QRawFont`` 直接从文件读得到字�
 本模块把这类字体补成应用字体：
 
 1. 从注册表（HKLM + HKCU）收集已安装字体文件——安装语义的权威来源，也覆盖
-   Win10 1809+ 的每用户安装；不再盲扫字体目录，避免几百个文件的无谓解析；
-2. 逐个文件解析 ``name`` 表判断它是否真的对 Qt 不可见（注册表声明的名字只作
-   读不到 name 时的兜底）；旧字体常见两种编码错标：
-   platform 3 标成 Shift-JIS 但字节其实是 UTF-16BE（如本仓库调试用的
-   FG平成明朝体），以及字节确实是 Shift-JIS/GBK——两种都要能读；
+   Win10 1809+ 的每用户安装。字体枚举本身复用仓库既有口径：Qt 快照取
+   ``QFontDatabase.families()``（与 ``font_cache.installed_families()`` 同源），
+   注册表声明名用来做第一层比对；
+2. **先用名字比对，再开文件**：注册表声明名（含去掉 ``Bold``/``Italic`` 等尾部
+   修饰词后的前缀）全部已能被 Qt 解析的文件直接跳过——常见机器上 347 个文件
+   只剩几十个需要打开。只有活下来的文件才解析 ``name`` 表确认是否真不可见。
+   旧字体常见两种编码错标：platform 3 标成 Shift-JIS 但字节其实是 UTF-16BE
+   （如调试用的 FG平成明朝体），以及字节确实是 Shift-JIS/GBK——两种都要能读；
 3. 对不可见的 face 补写 Windows Unicode（platform 3 / encoding 1）名字记录。
    保留原族名、原记录与全部轮廓表：fontTools 懒加载只反编译 ``name``，
    其余表保存时按原始字节复制（``glyf`` 逐字节不变）；
 4. ``QFontDatabase.addApplicationFontFromData`` 注册，最后失效字体目录 /
    字形能力 / 缺字回退三层缓存。
+
+为什么不直接复用 SUG 的 ``font_names.localized_alias_map``：那份统一扫描只把
+**有英文名**的字体收进映射（``_merge_records`` 以英文名为键），本文要救的
+FG平成明朝体正好没有英文名，会被整条丢弃；而且它不返回文件路径，无法据此
+注册应用字体。所以这里沿用同一套「注册表 + name 表」口径，只补它没覆盖的
+两个能力（路径与无英文名字体），并把解析量压到名字比对后的差集。
+
 
 注册后的字体对 Qt 是一等公民：``families()`` 可见、``QFontInfo`` 精确命中、
 ``QRawFont`` 拿得到真实 face，字幕渲染的 ``font_capabilities``、字重解析、
@@ -511,6 +521,32 @@ def _face_visible(face: FontFaceNames, names: frozenset[str]) -> bool:
     return any(text.casefold() in names for text in face.family_texts)
 
 
+def _declared_name_visible(name: str, names: frozenset[str]) -> bool:
+    """单个注册表声明名是否已被 Qt 解析（允许去掉尾部修饰词）。
+
+    ``Arial Bold`` 这类「全名」不是族名，逐词截断后再比：
+    ``Arial Bold`` → ``Arial`` 命中即算可见。
+    """
+
+    parts = str(name).strip().split()
+    for length in range(len(parts), 0, -1):
+        if " ".join(parts[:length]).casefold() in names:
+            return True
+    return False
+
+
+def declared_names_visible(declared_names: Sequence[str], names: frozenset[str]) -> bool:
+    """注册表声明的名字是否**全部**已被 Qt 解析（第一层廉价比对）。
+
+    全命中才跳过文件解析。TTC 的 ``A & B`` 只要有一个族 Qt 解析不到，就必须
+    打开文件确认——否则会漏掉「一个 face 可见、另一个 face 不可见」的集合。
+    """
+
+    return bool(declared_names) and all(
+        _declared_name_visible(name, names) for name in declared_names
+    )
+
+
 @dataclass(frozen=True)
 class _RegistrationResult:
     families: tuple[str, ...] = ()
@@ -646,6 +682,10 @@ def register_missing_system_fonts(
         path = Path(entry.path)
         if not path.is_file():
             continue
+        if declared_names_visible(entry.declared_names, qt_names):
+            # 名字已经全部能被 Qt 解析：不值得为它打开文件。本机 347 个注册表
+            # 条目在这一步只剩 34 个需要解析。
+            continue
         try:
             faces = parse_font_faces(path)
         except Exception as exc:  # noqa: BLE001 - 单个坏字体不影响其它字体
@@ -718,6 +758,7 @@ __all__ = [
     "FontFaceNames",
     "InstalledFontFile",
     "RegistrationReport",
+    "declared_names_visible",
     "decode_name_text",
     "installed_font_files",
     "parse_font_faces",
