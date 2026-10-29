@@ -971,6 +971,24 @@ class KrokHelperQtApp(QMainWindow):
             settings_provider=lyrics_timing_settings,
             ai_timing_host=ai_timing_host,
         )
+        # Qt 6 的 Windows 字体库只登记「当前 locale + en-US」名字的族：名字表里
+        # 只有 ja-JP 等其它 locale 的字体（典型是旧日文字体）整族不可见，字体
+        # 列表、CPU 与 GPU 都会静默回退。这里把它们补注册成应用字体——注册后
+        # Qt 会建真实引擎，渲染链路（含 GPU 内容寻址快照）与系统字体完全一致。
+        # 必须排在下面 SUG 字体缓存预热之前，快照才会包含补进来的族。
+        try:
+            from krok_helper.subtitle_render.n3.system_font_inventory import (
+                register_missing_system_fonts,
+            )
+
+            self._report_startup(60, "正在检查系统字体")
+            font_report = register_missing_system_fonts()
+            if font_report.registered:
+                logging.getLogger(__name__).info(
+                    "已补注册系统字体：%s", "、".join(font_report.registered)
+                )
+        except Exception:
+            logging.getLogger(__name__).warning("系统字体补注册失败", exc_info=True)
         # EMBEDDING §8：SUG 字体缓存后台预热（幂等）。embedded 构造路径不会
         # 自行预热，宿主补调一次，把字体枚举成本从首次打开字体选择器挪到
         # 启动空闲期。
