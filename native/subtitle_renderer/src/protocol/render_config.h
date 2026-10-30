@@ -143,6 +143,11 @@ struct TimingLine {
         // 换算成锋面横向进度；窗口尾部剩余部分是粒子寿命。0 = 整个窗口
         // 都是发射窗（旧 IR / 其余 kind 缺省，行为不变）。
         int emitMs = 0;
+        // 粒子速度调整（2026-10）：burst 局部时间缩放。窗口已按速度缩放，
+        // 求值器把 tau/life 除以 timeScale 映射回标准速率，使内部绝对发射
+        // 间隔（涟漪环 150ms 等）与寿命同比缩放。旧 IR / 原速缺省 1。
+        // 扫字线的 emit_ms 是真实锋面时间，Python 规划器不对它写本字段。
+        double timeScale = 1.0;
         bool front = true;
         bool reverse = false;
         int sweep = 0;

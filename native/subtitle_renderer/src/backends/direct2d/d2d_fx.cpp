@@ -357,8 +357,17 @@ std::vector<FxParticle> burstParticlesAt(
     if (tMs < burst.startMs || tMs > burst.endMs) {
         return out;
     }
-    const int life = std::max(burst.endMs - burst.startMs, 1);
-    const float tau = static_cast<float>(tMs - burst.startMs);
+    // 粒子速度调整（2026-10，镜像 particles.burst_particles_at）：burst 窗口
+    // 已按速度缩放，这里把 tau/life 映射回标准速率，让求值器内部的**绝对**
+    // 发射间隔（涟漪环 150ms / 拼接 90ms / 星光抖动 130ms 等）与寿命同比
+    // 缩放，密度观感不随速度突变。timeScale=1（旧 IR / 原速）时逐位等价。
+    // scanline 的 emitMs 是真实锋面时间，Python 规划器不对它写 timeScale。
+    const float timeScale = burst.timeScale > 0.0f ? burst.timeScale : 1.0f;
+    const float life = std::max(
+        static_cast<float>(burst.endMs - burst.startMs) / timeScale,
+        1.0f
+    );
+    const float tau = static_cast<float>(tMs - burst.startMs) / timeScale;
     const float size = burst.sizePx;
     const float travel = burst.travelPx;
     // 唱字火焰按簇横向扫过的发射点偏移（镜像 particles.burst_particles_at

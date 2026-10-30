@@ -5657,8 +5657,9 @@ def test_particle_speed_scales_only_its_own_target_windows():
     )
     scopes = {_speed_scope(burst) for burst in base}
     assert scopes == {"anim", "sing", "scanline"}
-    # 规划期的 scope 标记是内部字段，不能泄漏进渲染 IR。
+    # 规划期的 scope 标记是内部字段，不能泄漏进渲染 IR；原速不写 time_scale。
     assert all("scope" not in burst for burst in base)
+    assert all("time_scale" not in burst for burst in base)
 
     for field, target in (
         ("anim_fx_speed_pct", "anim"),
@@ -5678,8 +5679,9 @@ def test_particle_speed_scales_only_its_own_target_windows():
                 continue
             duration = before["end_ms"] - before["start_ms"]
             if target == "scanline":
-                # 扫字线只缩拖尾寿命，锋面出生窗口 emit_ms 不动。
+                # 扫字线只缩拖尾寿命，锋面出生窗口 emit_ms 与真实时间不动。
                 assert after["emit_ms"] == before["emit_ms"]
+                assert "time_scale" not in after
                 tail = duration - int(before["emit_ms"])
                 assert after["end_ms"] == (
                     before["start_ms"]
@@ -5690,6 +5692,11 @@ def test_particle_speed_scales_only_its_own_target_windows():
                 assert after["end_ms"] == (
                     before["start_ms"]
                     + _expected_scaled_duration(duration, -500)
+                )
+                # 局部时间缩放 = 1/倍率：求值器据此把内部绝对发射间隔
+                # 与寿命同比缩放（扫字线除外）。
+                assert after["time_scale"] == pytest.approx(
+                    1.0 / (10 ** (-500 / 1000.0))
                 )
 
 
@@ -5719,6 +5726,82 @@ def test_particle_speed_retimes_particle_motion():
     assert burst_particles_at(
         slow_burst, after_base_window, 0.0, 0.0, 120.0, 100.0
     )
+
+
+def test_particle_speed_scales_internal_emission_intervals():
+    """涟漪三圈环的 150ms 绝对错峰必须随时长同比缩放（密度观感恒定）。
+
+    旧实现只拉长 burst 窗口、环间隔固定 150ms：减速时三环挤在开头（密度
+    突增），加速时后两环落在窗口外（粒子缺失）。改为局部时间映射后，
+    三环按 150ms × time_scale 的真实间隔出现。
+    """
+
+    def ripple_burst(speed_pct: int) -> dict[str, object]:
+        style = Style(
+            sing_fx="ripple",
+            karaoke_anim="none",
+            fx_particle_count=14,
+            font_size_px=100,
+            fx_particle_speed_pct=speed_pct,
+        )
+        bursts = plan_line_bursts(
+            style, 0, 1000, 2000, 1900, [(1200, 1600)]
+        )
+        return next(b for b in bursts if b["kind"] == "ripple")
+
+    def rings(burst: dict[str, object], real_ms: int) -> int:
+        return len(
+            burst_particles_at(burst, real_ms, 0.0, 0.0, 120.0, 100.0)
+        )
+
+    base = ripple_burst(0)
+    slow = ripple_burst(-500)
+    fast = ripple_burst(1000)
+    start = int(base["start_ms"])
+    assert int(slow["start_ms"]) == start
+    assert int(fast["start_ms"]) == start
+    # 原速：200ms 时第 2 圈已在播。
+    assert rings(base, start + 200) == 2
+    # 减速 3.16×：环间隔同步变成 ~474ms——200ms 时只有第 1 圈。
+    assert rings(slow, start + 200) == 1
+    assert rings(slow, start + 600) == 2
+    assert rings(slow, start + 1200) == 3
+    # 加速 10×：三圈压缩在 60ms 窗口内全部出现（旧实现后两环会被截断）。
+    assert rings(fast, start + 50) == 3
+
+
+def test_particle_speed_remaps_local_time_exactly():
+    """减速 10×：真实时间 start+10·x 的粒子状态 == 原速 start+x 逐字段一致。"""
+
+    base_bursts = plan_line_bursts(
+        _speed_style(), 0, 1000, 4200, 4100, _SPEED_WINDOWS
+    )
+    slow_style = _speed_style(
+        anim_fx_speed_pct=-1000,
+        fx_particle_speed_pct=-1000,
+    )
+    slow_bursts = plan_line_bursts(
+        slow_style, 0, 1000, 4200, 4100, _SPEED_WINDOWS
+    )
+    assert len(base_bursts) == len(slow_bursts)
+    tested = 0
+    for before, after in zip(base_bursts, slow_bursts):
+        if _speed_scope(before) == "scanline":
+            # 扫字线出生时刻绑定真实锋面，不做局部时间映射。
+            continue
+        assert after["time_scale"] == pytest.approx(10.0)
+        start = int(before["start_ms"])
+        assert after["start_ms"] == start
+        duration = before["end_ms"] - start
+        for local_ms in (1, 50, 150, max(duration // 2, 1), max(duration - 1, 1)):
+            real_ms = start + 10 * local_ms
+            assert burst_particles_at(
+                after, real_ms, 0.0, 0.0, 120.0, 100.0
+            ) == burst_particles_at(
+                before, start + local_ms, 0.0, 0.0, 120.0, 100.0
+            ), (before["kind"], local_ms)
+        tested += 1
+    assert tested > 0
 
 
 def test_particle_tail_end_follows_speed_adjustment():

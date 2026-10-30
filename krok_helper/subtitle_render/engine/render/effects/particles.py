@@ -2046,22 +2046,21 @@ def clear_particle_paint_cache() -> None:
 def _apply_particle_speed(
     bursts: list[dict[str, object]], style: Style
 ) -> None:
-    """按三类目标的「粒子速度调整」原地缩放 burst 时间窗。
+    """按三类目标的「粒子速度调整」原地缩放 burst 时间窗与局部时间。
 
     只缩放**时长**：``start_ms`` 保持不动（发射时刻 / 逐字错峰 / 入场
     提前量都不变），速度倍率 k 下新时长 = 旧时长 / k。扫字线 burst 只缩放
     锋面之后的拖尾寿命（``emit_ms`` 不动），粒子仍然沿真实走字锋面出生。
 
+    非扫字线 burst 另写 ``time_scale = 1/k``：求值器把 ``tau``/``life``
+    除以它映射回标准速率，于是求值器内部的**绝对**发射间隔（涟漪环
+    150ms、拼接 90ms、消散 70ms、星光抖动 130ms 等）与寿命同比缩放，
+    密度观感不随速度突变。``time_scale`` 只随 IR 下发给两条后端，不是
+    样式字段、不改布局签名；原速时不写，旧 IR / 旧 sidecar 缺省 1 兼容。
+
     规划期用 ``scope`` 标记归属（渲染 IR 不携带，这里统一弹出）；同一目标
     的百分比只算一次，时长换算与 :func:`scaled_particle_duration_ms` 同一
-    份实现。评价器只按 ``start_ms``/``end_ms`` 求值，因此 CPU 与 GPU 拿到
-    的时间窗逐字段一致。
-
-    注意：求值器内部的**绝对**错峰常量（涟漪环间隔 ``RIPPLE_RING_STAGGER_
-    MS``、拼接 90ms、消散 70ms、火花 60ms）不在 burst 时间窗里，不随倍率
-    缩放——缩放它们要同时改 Python 求值器与 C++ ``d2d_fx`` 镜像。正向高速
-    档因此会截断部分延迟子粒子（+750% 起涟漪环 2→1、消散 4→3/2），这是
-    已接受的限制，见 docs/粒子特效实现经验.md §3.9。
+    份实现。
     """
 
     speeds: dict[str, int] = {}
@@ -2092,6 +2091,9 @@ def _apply_particle_speed(
         burst["end_ms"] = start + scaled_particle_duration_ms(
             tail, speed_pct
         )
+        if scope != "scanline":
+            # 扫字线的 emit_ms / 出生时刻必须保持真实锋面时间，不能压缩。
+            burst["time_scale"] = 1.0 / particle_speed_factor(speed_pct)
 
 
 def plan_line_bursts(
@@ -2131,7 +2133,9 @@ def plan_line_bursts(
     速度语义：三类目标的 ``anim_fx_speed_pct`` / ``fx_particle_speed_pct`` /
     ``scanline_effect_speed_pct`` 在规划末端按各自倍率缩放 burst 时长
     （``start_ms`` 不动 = 发射时刻不变；扫字线只缩拖尾寿命，见
-    :func:`_apply_particle_speed`）。
+    :func:`_apply_particle_speed`）。非扫字线 burst 另带 ``time_scale``，
+    求值器据此把局部时间映射回标准速率——burst 内部的绝对发射间隔（涟漪环
+    / 拼接 / 消散等）与寿命同比缩放，密度观感不随速度突变。
     ``line_index`` 参与种子，保证同曲目每行轨迹不同且重开可复现。
     ``char_visible``（与 char_windows 等长）：False = 空白字符（空格等
     无字形内容）——唱字粒子跳过（无走字内容），出入场仍整行参与。
@@ -3692,6 +3696,13 @@ def burst_particles_at(
 
     ``origin_x/origin_y``：burst 锚点（行中心或字符中心，调用方布局解析）。
     ``box_w/box_h``：锚点盒（twinkle 的散布范围 / note 的上升行程参照）。
+
+    2026-10 粒子速度：burst 时间窗已由规划器按速度缩放，``time_scale``
+    （= 1/速度倍率，缺省 1）把 ``tau``/``life`` 映射回**标准速率**的局部
+    时间——求值器内部所有**绝对**发射间隔（涟漪环 150ms、拼接 90ms、消散
+    70ms、星光抖动 130ms 等）与寿命同比缩放，密度观感不随速度突变；
+    ``time_scale == 1``（原速 / 旧 IR）时与之前逐位一致。扫字线的
+    ``emit_ms`` 是真实锋面时间，规划器对它不写 ``time_scale``。
     """
     start_ms = int(burst["start_ms"])
     end_ms = int(burst["end_ms"])
@@ -3705,8 +3716,11 @@ def burst_particles_at(
     # 发射点横向偏移（归一化 × 字框宽）：唱字火焰按簇扫过整字（擦字方向），
     # 其余档位缺省 0。镜像 C++ ParticleBurst.emitX。
     emit_x = float(burst.get("emit_x", 0.0) or 0.0) * box_w
-    life = max(end_ms - start_ms, 1)
-    tau = float(t_ms - start_ms)
+    time_scale = float(burst.get("time_scale", 1.0) or 1.0)
+    if time_scale <= 0.0:
+        time_scale = 1.0
+    life = max((end_ms - start_ms) / time_scale, 1.0)
+    tau = float(t_ms - start_ms) / time_scale
     out: list[ParticleDraw] = []
 
     if kind == "ripple":

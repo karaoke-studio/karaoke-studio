@@ -1974,6 +1974,14 @@ static void applyLineStyleSection(
                 burst.emitMs = intValue(
                     burstObject, QStringLiteral("emit_ms"), 0
                 );
+                // 粒子速度调整（2026-10）：burst 局部时间缩放（旧 IR 缺省 1）；
+                // 下限钳制避免除零 / 极端窗口。
+                burst.timeScale = std::max(
+                    burstObject.value(
+                        QStringLiteral("time_scale")
+                    ).toDouble(1.0),
+                    0.01
+                );
                 burst.front = burstObject.value(
                     QStringLiteral("front")
                 ).toBool(true);

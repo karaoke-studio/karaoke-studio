@@ -314,6 +314,11 @@ struct ParticleBurst {
     // 锋面横向进度；窗口尾部剩余部分是粒子寿命。0 = 整个窗口都是发射窗
     //（旧 IR / 其余 kind 缺省，行为不变）。
     int emitMs = 0;
+    // 粒子速度调整（2026-10，镜像 particles.burst_particles_at）：burst 窗口
+    // 已按速度缩放，求值器把 tau/life 除以 timeScale 映射回标准速率，使内部
+    // 绝对发射间隔（涟漪环 150ms / 拼接 90ms 等）与寿命同比缩放。旧 IR /
+    // 原速 = 1，逐位等价于改造前。
+    float timeScale = 1.0f;
     bool front = true;
     bool reverse = false;
     // sparkle 整句扫过方向：+1 入场（左→右）、-1 退场（右→左）、0 不扫。
